@@ -1,0 +1,1134 @@
+{
+  "_comment": "EVERY CLAUSE THE FLOW HAS DECLARED, by identity and not by count. `liar_census.clause_floor_shortfall` compares this against `flow/phase1_phase2_phase3.yaml` and `test_liar_census::test_nothing_the_flow_declares_is_left_unswept` blocks on the result.",
+  "_what_fails": "MISSING -- an entry here that the flow no longer declares. That is the silent shrink this record exists to catch, and the failure names the clause rather than a number.",
+  "_what_does_not_fail": "SURPLUS -- a clause the flow declares that is not yet recorded. A GROW never reopens the test. That is deliberate and it is the whole reason this file replaced a literal: the number it replaced went stale SEVEN times, every one of them a grow, because the flow's own author had to remember a count living in a test file.",
+  "_how_to_authorise_a_shrink": "Delete the entry BY HAND, in the same change that removes the clause from the flow, and say why in that commit. `liar_census.record_clause_floor` REFUSES to do it for you: it only ever adds, because dropping an entry is exactly how a shrink would be authorised by accident.",
+  "_how_to_refresh_after_a_grow": "python3 -c \"import sys; sys.path.insert(0,'tools'); import liar_census as lc; lc.record_clause_floor()\"  -- additive only, safe to run without judgement, and it refuses if anything is MISSING.",
+  "clauses": [
+    {
+      "step": "0.5ic",
+      "kind": "program_exit_zero",
+      "cmd": "submission_template_check . --json reports/phase1/submission_template.json"
+    },
+    {
+      "step": "0.5ic",
+      "kind": "program_exit_zero",
+      "cmd": "tapeout_declaration_check . --json reports/phase1/tapeout_declaration.json"
+    },
+    {
+      "step": "10",
+      "kind": "program_exit_zero",
+      "cmd": "sta_report_check . --mode sta --under phase3/stage3/sta/pre_pnr_timing.rpt --under phase3/stage3/sta/per_corner --json reports/phase3/sta/pre_pnr_summary.json"
+    },
+    {
+      "step": "11",
+      "kind": "program_exit_zero",
+      "cmd": "bsdl_emit . --json reports/phase2/dft/bsdl_plan.json"
+    },
+    {
+      "step": "11",
+      "kind": "program_exit_zero",
+      "cmd": "dft_atpg_coverage_check . --json reports/phase2/dft/atpg_coverage_gate.json"
+    },
+    {
+      "step": "11",
+      "kind": "program_exit_zero",
+      "cmd": "dft_signoff_check . --json reports/phase2/dft/dft_signoff.json"
+    },
+    {
+      "step": "12",
+      "kind": "program_exit_zero",
+      "cmd": "dft_post_optimization_scan_survival_check . --json reports/phase2/gates/dft_post_optimization_scan_survival.json"
+    },
+    {
+      "step": "13",
+      "kind": "program_exit_zero",
+      "cmd": "lec_equivalence_check . --json reports/lec_equivalence_check.json"
+    },
+    {
+      "step": "14",
+      "kind": "advisory_program_exit_zero",
+      "cmd": "yosys_tiecell_recipe_order_check . --json reports/phase2/gates/yosys_tiecell_recipe_order.json"
+    },
+    {
+      "step": "14",
+      "kind": "optional_program_exit_zero",
+      "cmd": "yosys_hilomap_required_check . --json reports/phase2/gates/yosys_hilomap.json"
+    },
+    {
+      "step": "14",
+      "kind": "optional_program_exit_zero",
+      "cmd": "yosys_script_template_check . --json reports/phase2/gates/yosys_script_template.json"
+    },
+    {
+      "step": "15",
+      "kind": "advisory_program_exit_zero",
+      "cmd": "stage2_compliance ."
+    },
+    {
+      "step": "15",
+      "kind": "optional_program_exit_zero",
+      "cmd": "ip_integration_check . --json reports/phase2/gates/ip_integration.json"
+    },
+    {
+      "step": "15",
+      "kind": "program_exit_zero",
+      "cmd": "floorplan_pdn_check . --json reports/phase3/pnr/floorplan_pdn.json"
+    },
+    {
+      "step": "15",
+      "kind": "program_exit_zero",
+      "cmd": "macro_obs_load_parity_check . --json reports/phase3/pnr/macro_obs_load_parity.json"
+    },
+    {
+      "step": "15.5ic",
+      "kind": "program_exit_zero",
+      "cmd": "pad_assignment_gen . --json reports/phase3/pad_assignment.json"
+    },
+    {
+      "step": "15.5ic",
+      "kind": "program_exit_zero",
+      "cmd": "pad_ring_check . --json reports/phase3/padring.json"
+    },
+    {
+      "step": "16",
+      "kind": "program_exit_zero",
+      "cmd": "clock_plan_check . --json reports/phase2/gates/clock_plan.json"
+    },
+    {
+      "step": "17",
+      "kind": "program_exit_zero",
+      "cmd": "placement_legality_check . --json reports/phase3/placement_legality.json"
+    },
+    {
+      "step": "17",
+      "kind": "program_exit_zero",
+      "cmd": "pnr_timing_repair_completeness_check phase3/stage3/pnr --json reports/phase3/pnr/timing_repair_completeness.json"
+    },
+    {
+      "step": "18",
+      "kind": "optional_program_exit_zero",
+      "cmd": "spare_cell_coverage_check . --json reports/phase2/gates/spare_cell_coverage.json"
+    },
+    {
+      "step": "19",
+      "kind": "program_exit_zero",
+      "cmd": "cts_quality_check . --json reports/phase3/gates/cts_quality.json"
+    },
+    {
+      "step": "2",
+      "kind": "advisory_program_exit_zero",
+      "cmd": "arith_ss_corner_risk_check --strict phase2/stage1/rtl --json reports/phase2/gates/arith_ss_corner_risk.json"
+    },
+    {
+      "step": "2",
+      "kind": "advisory_program_exit_zero",
+      "cmd": "fresh_agent_rtl_bug_density_metric . --no-learning-log"
+    },
+    {
+      "step": "2",
+      "kind": "advisory_program_exit_zero",
+      "cmd": "l9_submodule_conformance_check ."
+    },
+    {
+      "step": "2",
+      "kind": "advisory_program_exit_zero",
+      "cmd": "spec_conformance_check --rtl-dir phase2/stage1/rtl --spec phase1/generated_docs/L9_INTEGRATION_SPEC.json --json reports/phase2/gates/spec_conformance.json"
+    },
+    {
+      "step": "2",
+      "kind": "optional_program_exit_zero",
+      "cmd": "fpga_wrapper_input_polluter_check --rtl phase2/stage1/rtl --json reports/phase2/gates/fpga_input_polluter.json"
+    },
+    {
+      "step": "2",
+      "kind": "optional_program_exit_zero",
+      "cmd": "internal_vs_external_timing_check phase1/generated_docs/L8_TIMING_WAVEFORM.json --layer phase1/generated_docs/L8_RTL_CONSTANTS.json --json reports/phase2/gates/int_vs_ext_timing.json"
+    },
+    {
+      "step": "2",
+      "kind": "optional_program_exit_zero",
+      "cmd": "memory_read_pipeline_check phase2/stage1/rtl --json reports/phase2/gates/memory_read_pipeline.json"
+    },
+    {
+      "step": "2",
+      "kind": "optional_program_exit_zero",
+      "cmd": "nba_addr_read_race_check phase2/stage1/rtl --json reports/phase2/gates/nba_addr_race.json"
+    },
+    {
+      "step": "2",
+      "kind": "optional_program_exit_zero",
+      "cmd": "periodic_timer_vs_rx_activity_check phase2/stage1/rtl --json reports/phase2/gates/periodic_timer.json"
+    },
+    {
+      "step": "2",
+      "kind": "optional_program_exit_zero",
+      "cmd": "rsp_example_otp_consistency_check phase1/generated_docs/L3_CMD_PROTOCOL.json --otp phase1/generated_docs/L11_OTP_CONTENT.json --json reports/phase2/gates/rsp_otp_consistency.json"
+    },
+    {
+      "step": "2",
+      "kind": "optional_program_exit_zero",
+      "cmd": "rtl_bug_report_schema_check . --json reports/phase2/gates/rtl_bug_schema.json"
+    },
+    {
+      "step": "2",
+      "kind": "optional_program_exit_zero",
+      "cmd": "spec_response_delay_check phase2/stage1/rtl --spec phase1/generated_docs/L8_TIMING_WAVEFORM.json --spec phase1/generated_docs/L8_RTL_CONSTANTS.json --json reports/phase2/gates/spec_response_delay.json"
+    },
+    {
+      "step": "2",
+      "kind": "optional_program_exit_zero",
+      "cmd": "threshold_range_contiguity_check phase1/generated_docs/L8_RTL_CONSTANTS.json --json reports/phase2/gates/threshold_contiguity.json"
+    },
+    {
+      "step": "2",
+      "kind": "program_exit_zero",
+      "cmd": "crosslayer_rewrite_equivalence_check . --report reports/crosslayer/rewrite_equivalence.json --baseline-marker reports/crosslayer/baseline_rtl --search-space reports/crosslayer/search_space.json --json reports/crosslayer/rewrite_equivalence_check.json"
+    },
+    {
+      "step": "2",
+      "kind": "program_exit_zero",
+      "cmd": "rom_init_lint phase2/stage1/rtl/*.sv phase2/stage1/rtl/*.v --json reports/phase2/lint/rom_init_lint.json"
+    },
+    {
+      "step": "2",
+      "kind": "program_exit_zero",
+      "cmd": "rtl_hygiene_lint phase2/stage1/rtl/*.sv phase2/stage1/rtl/*.v --severity ERROR --json reports/phase2/lint/rtl_hygiene.json"
+    },
+    {
+      "step": "2",
+      "kind": "program_exit_zero",
+      "cmd": "slot_pad_budget_check . --json reports/phase2/gates/slot_pad_budget.json"
+    },
+    {
+      "step": "20",
+      "kind": "advisory_program_exit_zero",
+      "cmd": "hold_area_budget_check . --json reports/phase3/pnr/hold_area_budget.json"
+    },
+    {
+      "step": "20",
+      "kind": "program_exit_zero",
+      "cmd": "hold_closure_check . --json reports/phase3/pnr/hold_closure.json"
+    },
+    {
+      "step": "21",
+      "kind": "advisory_program_exit_zero",
+      "cmd": "route_congestion_trade_disclosure ."
+    },
+    {
+      "step": "21",
+      "kind": "program_exit_zero",
+      "cmd": "def_stage_progression_check . --json reports/phase3/pnr/def_progression.json"
+    },
+    {
+      "step": "21",
+      "kind": "program_exit_zero",
+      "cmd": "drc_report_check . --mode drc --under phase3/stage3/pnr --under reports/phase3/drc_router.rpt --json reports/phase3/drc_router.json"
+    },
+    {
+      "step": "21",
+      "kind": "program_exit_zero",
+      "cmd": "macro_obs_geometry_intersect_check . --json reports/phase3/pnr/macro_obs_geometry.json"
+    },
+    {
+      "step": "21",
+      "kind": "program_exit_zero",
+      "cmd": "provenance_check . --output phase3/stage3/pnr/routed.def --tool openroad --require-measured"
+    },
+    {
+      "step": "22",
+      "kind": "program_exit_zero",
+      "cmd": "provenance_check . --output phase3/stage3/extracted/*.spef --tool magic,openroad --require-measured"
+    },
+    {
+      "step": "22",
+      "kind": "program_exit_zero",
+      "cmd": "spef_extraction_check . --json reports/phase2/gates/spef_extraction.json"
+    },
+    {
+      "step": "23",
+      "kind": "advisory_program_exit_zero",
+      "cmd": "achieved_period_recorded_check . --json reports/phase2/gates/achieved_period_recorded.json"
+    },
+    {
+      "step": "23",
+      "kind": "optional_program_exit_zero",
+      "cmd": "post_route_signoff_corner_check . --json reports/phase3/sta/post_route_signoff_corner.json"
+    },
+    {
+      "step": "23",
+      "kind": "program_exit_zero",
+      "cmd": "drv_promotion_corroboration_check . --json reports/phase3/sta/drv_promotion_corroboration.json"
+    },
+    {
+      "step": "23",
+      "kind": "program_exit_zero",
+      "cmd": "hold_corner_coverage_check . --json reports/phase3/sta/hold_corner_coverage.json"
+    },
+    {
+      "step": "23",
+      "kind": "program_exit_zero",
+      "cmd": "sta_corner_record_completeness_check . --json reports/phase3/sta/sta_corner_record_completeness.json"
+    },
+    {
+      "step": "23",
+      "kind": "program_exit_zero",
+      "cmd": "sta_report_check . --mode sta --under phase3/stage3/sta/post_route_timing.rpt --json reports/phase3/sta/post_route_summary.json"
+    },
+    {
+      "step": "24",
+      "kind": "program_exit_zero",
+      "cmd": "dynamic_ir_drop_check reports/phase3/dynamic_ir.json --budget-pct 10"
+    },
+    {
+      "step": "24",
+      "kind": "program_exit_zero",
+      "cmd": "ir_drop_report_check . --mode ir_drop --json reports/phase3/ir_drop_signoff.json"
+    },
+    {
+      "step": "25",
+      "kind": "program_exit_zero",
+      "cmd": "em_peak_current_authority_check . --json reports/phase3/em_current_authority.json"
+    },
+    {
+      "step": "25",
+      "kind": "program_exit_zero",
+      "cmd": "em_report_check . --mode em --json reports/phase3/em_signoff.json"
+    },
+    {
+      "step": "26",
+      "kind": "optional_program_exit_zero",
+      "cmd": "gds_antenna_deck_check . --json reports/phase2/gates/gate_oxide_geom_deck.json"
+    },
+    {
+      "step": "26",
+      "kind": "program_exit_zero",
+      "cmd": "antenna_report_check . --mode antenna --json reports/phase3/antenna_signoff.json"
+    },
+    {
+      "step": "26.5ic",
+      "kind": "program_exit_zero",
+      "cmd": "die_finishing_check . --json reports/phase3/die_finishing.json"
+    },
+    {
+      "step": "27",
+      "kind": "optional_program_exit_zero",
+      "cmd": "si_crosstalk_check . --json reports/phase2/gates/si_crosstalk.json"
+    },
+    {
+      "step": "27",
+      "kind": "optional_program_exit_zero",
+      "cmd": "si_mcf_sta_check . --json reports/phase3/si_mcf_sta_check.json"
+    },
+    {
+      "step": "28",
+      "kind": "program_exit_zero",
+      "cmd": "perc_signoff_check . --json reports/phase2/gates/perc_signoff.json"
+    },
+    {
+      "step": "29",
+      "kind": "advisory_program_exit_zero",
+      "cmd": "synth_wrapper_check ."
+    },
+    {
+      "step": "29",
+      "kind": "program_exit_zero",
+      "cmd": "post_layout_sim_check . --json reports/phase2/gates/post_layout_sim.json"
+    },
+    {
+      "step": "3",
+      "kind": "program_exit_zero",
+      "cmd": "cdc_async_input_check . --json reports/phase2/gates/cdc_async_input.json"
+    },
+    {
+      "step": "3",
+      "kind": "program_exit_zero",
+      "cmd": "cdc_crossing_check . --json reports/phase2/gates/cdc_crossing.json"
+    },
+    {
+      "step": "3",
+      "kind": "program_exit_zero",
+      "cmd": "clock_domain_reg_crossing_check . --json reports/phase2/gates/cdc_reg_crossing.json"
+    },
+    {
+      "step": "3",
+      "kind": "program_exit_zero",
+      "cmd": "reset_dependency_check . --json reports/phase2/gates/cdc_reset_dep.json"
+    },
+    {
+      "step": "30",
+      "kind": "program_exit_zero",
+      "cmd": "spice_correlation_check . --json reports/phase2/gates/spice_correlation.json"
+    },
+    {
+      "step": "31",
+      "kind": "advisory_program_exit_zero",
+      "cmd": "lvs_triage_classify --report reports/phase3/lvs.rpt"
+    },
+    {
+      "step": "31",
+      "kind": "advisory_program_exit_zero",
+      "cmd": "mcp_execution_verify --manifest latest_results.jsonl --require-steps drc,lvs"
+    },
+    {
+      "step": "31",
+      "kind": "advisory_program_exit_zero",
+      "cmd": "perc_corpus_sweep . --report reports/phase3/perc_sweep.json"
+    },
+    {
+      "step": "31",
+      "kind": "advisory_program_exit_zero",
+      "cmd": "pnr_via_stack_completeness_check ."
+    },
+    {
+      "step": "31",
+      "kind": "advisory_program_exit_zero",
+      "cmd": "sweep_reach_check --report reports/phase3/perc_sweep.json"
+    },
+    {
+      "step": "31",
+      "kind": "advisory_program_exit_zero",
+      "cmd": "waiver_growth_check ."
+    },
+    {
+      "step": "31",
+      "kind": "program_exit_zero",
+      "cmd": "drc_report_check . --mode drc --signoff --under reports/phase3/drc_signoff.rpt --json reports/phase3/drc_signoff.json"
+    },
+    {
+      "step": "31",
+      "kind": "program_exit_zero",
+      "cmd": "drc_vacuous_pass_check . --under reports/phase3/drc_signoff.rpt --json reports/phase3/drc_vacuous.json"
+    },
+    {
+      "step": "31",
+      "kind": "program_exit_zero",
+      "cmd": "erc_density_check . --json reports/phase2/gates/erc_density.json"
+    },
+    {
+      "step": "31",
+      "kind": "program_exit_zero",
+      "cmd": "lvs_report_check . --mode lvs --json reports/phase3/lvs.json"
+    },
+    {
+      "step": "31",
+      "kind": "program_exit_zero",
+      "cmd": "lvs_signoff_guard . --verdict-file reports/phase3/lvs.rpt"
+    },
+    {
+      "step": "31",
+      "kind": "program_exit_zero",
+      "cmd": "magic_illegal_overlap_check . --json reports/phase3/magic_illegal_overlap.json"
+    },
+    {
+      "step": "31",
+      "kind": "program_exit_zero",
+      "cmd": "pg_rail_geometry_check . --json reports/phase3/pg_rail_geometry.json"
+    },
+    {
+      "step": "31",
+      "kind": "program_exit_zero",
+      "cmd": "provenance_check . --output reports/phase3/drc_signoff.rpt --tool klayout,magic,svrfdrc --require-measured"
+    },
+    {
+      "step": "31",
+      "kind": "program_exit_zero",
+      "cmd": "provenance_check . --output reports/phase3/lvs.rpt --tool netgen,magic,klayout --require-measured"
+    },
+    {
+      "step": "32",
+      "kind": "optional_program_exit_zero",
+      "cmd": "postroute_timing_repair_audit . --json reports/phase2/gates/postroute_timing_repair_audit.json"
+    },
+    {
+      "step": "33",
+      "kind": "advisory_program_exit_zero",
+      "cmd": "upf_syntax_check . --json reports/phase2/gates/upf_syntax.json"
+    },
+    {
+      "step": "33",
+      "kind": "program_exit_zero",
+      "cmd": "power_report_check . --mode power --json reports/phase2/gates/power_report.json"
+    },
+    {
+      "step": "33",
+      "kind": "program_exit_zero",
+      "cmd": "power_total_vs_budget_check . --json reports/phase2/gates/power_budget.json"
+    },
+    {
+      "step": "34",
+      "kind": "optional_program_exit_zero",
+      "cmd": "metal_fill_emit . --verify-only --json reports/phase2/gates/cmp_fill_emit.json"
+    },
+    {
+      "step": "34",
+      "kind": "optional_program_exit_zero",
+      "cmd": "spare_cell_preservation_check . --json reports/phase2/gates/spare_preservation_postfill.json"
+    },
+    {
+      "step": "34",
+      "kind": "program_exit_zero",
+      "cmd": "metal_fill_density_check . --json reports/phase2/gates/metal_fill_density.json"
+    },
+    {
+      "step": "35",
+      "kind": "advisory_program_exit_zero",
+      "cmd": "dfm_screen_check . --json reports/phase2/gates/dfm_screen.json"
+    },
+    {
+      "step": "36",
+      "kind": "advisory_program_exit_zero",
+      "cmd": "report_belongs_to_project_check . --json reports/audit/report_belongs_to_project.json"
+    },
+    {
+      "step": "36",
+      "kind": "optional_program_exit_zero",
+      "cmd": "ppa_head_to_head_check --corpus ."
+    },
+    {
+      "step": "36",
+      "kind": "program_exit_zero",
+      "cmd": "declared_pdk_is_the_pdk_used_check ."
+    },
+    {
+      "step": "36",
+      "kind": "program_exit_zero",
+      "cmd": "step_internal_fail_bubble_up_check ."
+    },
+    {
+      "step": "36",
+      "kind": "program_exit_zero",
+      "cmd": "tapeout_signoff_check . --mode tapeout --json reports/audit/tapeout_checklist.json"
+    },
+    {
+      "step": "37",
+      "kind": "advisory_program_exit_zero",
+      "cmd": "flow_stage_check ."
+    },
+    {
+      "step": "37",
+      "kind": "advisory_program_exit_zero",
+      "cmd": "gate_evidence_completeness_check ."
+    },
+    {
+      "step": "37",
+      "kind": "advisory_program_exit_zero",
+      "cmd": "gds_ip_attribution build-text ."
+    },
+    {
+      "step": "37",
+      "kind": "advisory_program_exit_zero",
+      "cmd": "reported_figure_artifact_backing_check . --report FINAL_REPORT.md"
+    },
+    {
+      "step": "37",
+      "kind": "advisory_program_exit_zero",
+      "cmd": "stage3_compliance ."
+    },
+    {
+      "step": "37",
+      "kind": "program_exit_zero",
+      "cmd": "gds_port_label_check . --json reports/phase3/gds_port_labels.json"
+    },
+    {
+      "step": "37",
+      "kind": "program_exit_zero",
+      "cmd": "gds_size_check --gds-file phase3/stage4/gds/*.gds --json reports/phase3/gds_size.json"
+    },
+    {
+      "step": "37",
+      "kind": "program_exit_zero",
+      "cmd": "gds_substance_check . --json reports/phase3/gds_substance.json"
+    },
+    {
+      "step": "37",
+      "kind": "program_exit_zero",
+      "cmd": "provenance_check . --output=phase3/stage4/gds/*.gds --tool=klayout,magic,openroad --require-measured"
+    },
+    {
+      "step": "37.5ic",
+      "kind": "advisory_program_exit_zero",
+      "cmd": "closed_loop_metric_reaches_its_producer . --json reports/phase3/closed_loop_metric_reach.json"
+    },
+    {
+      "step": "37.5ic",
+      "kind": "advisory_program_exit_zero",
+      "cmd": "every_required_metric_key_has_a_producer ."
+    },
+    {
+      "step": "37.5ic",
+      "kind": "program_exit_zero",
+      "cmd": "tapeout_docs_gen --project . --out-dir reports/phase3/docs"
+    },
+    {
+      "step": "37.5ic",
+      "kind": "program_exit_zero",
+      "cmd": "tapeout_precheck . --json reports/phase3/tapeout_precheck.json"
+    },
+    {
+      "step": "37.5ip",
+      "kind": "program_exit_zero",
+      "cmd": "digital_hardmacro_check . --json reports/phase3/digital_hardmacro.json"
+    },
+    {
+      "step": "38",
+      "kind": "program_exit_zero",
+      "cmd": "foundry_handoff_package_check . --json reports/phase3/foundry_handoff_audit.json"
+    },
+    {
+      "step": "39",
+      "kind": "advisory_program_exit_zero",
+      "cmd": "hw_vs_rtl_verdict_check --responses-dir reports/phase2/fpga/hw_blame --layout reports/phase2/fpga/frame_layout.json"
+    },
+    {
+      "step": "39",
+      "kind": "program_exit_zero",
+      "cmd": "fpga_on_board_attestation_check . --json reports/phase2/fpga/on_board_attestation.json --min-scenarios 1"
+    },
+    {
+      "step": "4",
+      "kind": "advisory_program_exit_zero",
+      "cmd": "behavioral_evidence_per_spec_item_check ."
+    },
+    {
+      "step": "4",
+      "kind": "advisory_program_exit_zero",
+      "cmd": "coverage_closure ."
+    },
+    {
+      "step": "4",
+      "kind": "advisory_program_exit_zero",
+      "cmd": "dispatcher_awake_gate_check ."
+    },
+    {
+      "step": "4",
+      "kind": "advisory_program_exit_zero",
+      "cmd": "functional_state_transition_coverage_check phase2/stage1/sim/tb --coverage reports/phase2/coverage/coverage_actual.json"
+    },
+    {
+      "step": "4",
+      "kind": "advisory_program_exit_zero",
+      "cmd": "protocol_turnaround_audit --rtl-dir phase2/stage1/rtl --l2-json phase1/generated_docs/L2_FRS.json"
+    },
+    {
+      "step": "4",
+      "kind": "advisory_program_exit_zero",
+      "cmd": "rtl_unit_test_coverage_check ."
+    },
+    {
+      "step": "4",
+      "kind": "optional_program_exit_zero",
+      "cmd": "cpu_functional_oracle_waiver_check . --json reports/phase2/gates/cpu_functional_oracle_waiver.json"
+    },
+    {
+      "step": "4",
+      "kind": "optional_program_exit_zero",
+      "cmd": "l10_tb_conformance_check --l10 phase1/generated_docs/L10_TEST_CASES.json --tb-dir phase2/stage1/sim/tb --out reports/phase2/gates/l10_tb_conformance.json"
+    },
+    {
+      "step": "4",
+      "kind": "optional_program_exit_zero",
+      "cmd": "l12_tb_coverage_check . --json reports/phase2/gates/l12_tb_coverage.json"
+    },
+    {
+      "step": "4",
+      "kind": "program_exit_zero",
+      "cmd": "professional_tb_check . --json reports/phase2/gates/professional_tb_check.json"
+    },
+    {
+      "step": "4",
+      "kind": "program_exit_zero",
+      "cmd": "vacuous_testbench_check . --json reports/phase2/gates/vacuous_testbench.json"
+    },
+    {
+      "step": "4",
+      "kind": "program_exit_zero",
+      "cmd": "verilator_coverage_measure check --coverage-json reports/phase2/coverage/coverage_verilator.json"
+    },
+    {
+      "step": "40",
+      "kind": "advisory_program_exit_zero",
+      "cmd": "stage4_compliance ."
+    },
+    {
+      "step": "40",
+      "kind": "program_exit_zero",
+      "cmd": "manufacturing_fab_intake_check . --json reports/manufacturing/fab_intake.json"
+    },
+    {
+      "step": "41",
+      "kind": "program_exit_zero",
+      "cmd": "wafer_sort_yield_check . --json reports/manufacturing/wafer_sort.json"
+    },
+    {
+      "step": "42",
+      "kind": "program_exit_zero",
+      "cmd": "packaging_intake_check . --json reports/manufacturing/packaging.json"
+    },
+    {
+      "step": "43",
+      "kind": "program_exit_zero",
+      "cmd": "final_test_attestation_check . --json reports/manufacturing/final_test.json"
+    },
+    {
+      "step": "44",
+      "kind": "program_exit_zero",
+      "cmd": "htol_attestation_check . --json reports/manufacturing/htol.json"
+    },
+    {
+      "step": "5",
+      "kind": "program_exit_zero",
+      "cmd": "assertion_property_check . --json reports/phase2/gates/assertion_property.json"
+    },
+    {
+      "step": "5",
+      "kind": "program_exit_zero",
+      "cmd": "bit_level_full_stack_tb_check . --json reports/phase2/gates/bit_level_full_stack.json"
+    },
+    {
+      "step": "5",
+      "kind": "program_exit_zero",
+      "cmd": "formal_proof_evidence_check . --json reports/phase2/gates/formal_evidence.json"
+    },
+    {
+      "step": "6",
+      "kind": "advisory_program_exit_zero",
+      "cmd": "auto_diagnostic_led_synth . --out-dir reports/phase2/fpga/led_synth"
+    },
+    {
+      "step": "6",
+      "kind": "advisory_program_exit_zero",
+      "cmd": "fpga_led_probe_lint phase2/stage1/fpga --qsf phase2/stage1/fpga/*.qsf --json reports/phase2/gates/fpga_led_probe_lint.json"
+    },
+    {
+      "step": "6",
+      "kind": "optional_program_exit_zero",
+      "cmd": "fpga_verification_audit --report reports/fpga_verification_report.md --summary phase2/stage1/sim/work/summary.txt --coverage reports/phase2/coverage/coverage_verilator.json --out reports/phase2/gates/fpga_verification_audit.json"
+    },
+    {
+      "step": "6",
+      "kind": "program_exit_zero",
+      "cmd": "quartus_map_audit --project . --json reports/phase2/gates/quartus_map_audit.json"
+    },
+    {
+      "step": "7",
+      "kind": "advisory_program_exit_zero",
+      "cmd": "l21_to_upf_emit . --top chip_top"
+    },
+    {
+      "step": "7",
+      "kind": "advisory_program_exit_zero",
+      "cmd": "macro_non_seq_arc_contract_check . --json reports/phase2/gates/macro_non_seq_arcs.json"
+    },
+    {
+      "step": "7",
+      "kind": "advisory_program_exit_zero",
+      "cmd": "stage1_compliance ."
+    },
+    {
+      "step": "7",
+      "kind": "program_exit_zero",
+      "cmd": "pvt_matrix_check . --json reports/phase2/gates/pvt_matrix.json"
+    },
+    {
+      "step": "7",
+      "kind": "program_exit_zero",
+      "cmd": "sdc_syntax_check . --json reports/phase2/gates/sdc_syntax.json"
+    },
+    {
+      "step": "8",
+      "kind": "optional_program_exit_zero",
+      "cmd": "derived_clock_sdc_required_check phase2/stage1/rtl --sdc phase2/stage2/constraints --json reports/phase2/gates/derived_clock_sdc.json"
+    },
+    {
+      "step": "8",
+      "kind": "optional_program_exit_zero",
+      "cmd": "sdc_exception_correlation_check . --json reports/phase2/gates/sdc_exceptions.json"
+    },
+    {
+      "step": "8",
+      "kind": "optional_program_exit_zero",
+      "cmd": "sdc_validator_check . --l8 phase1/generated_docs/L8_TIMING_WAVEFORM.json --json reports/sdc_validator.json"
+    },
+    {
+      "step": "8",
+      "kind": "program_exit_zero",
+      "cmd": "sdc_syntax_check . --json reports/phase2/sdc_check.json"
+    },
+    {
+      "step": "9",
+      "kind": "advisory_program_exit_zero",
+      "cmd": "pdk_consistency_check --netlist phase2/stage2/synth/netlist.v --project-json input/project.json --pdk-lib input/pdk/liberty/*.lib"
+    },
+    {
+      "step": "9",
+      "kind": "program_exit_zero",
+      "cmd": "area_total_vs_budget_check . --json reports/phase2/gates/area_budget.json"
+    },
+    {
+      "step": "9",
+      "kind": "program_exit_zero",
+      "cmd": "provenance_check . --output phase2/stage2/synth/netlist.v --tool yosys,yosys-abc --require-measured"
+    },
+    {
+      "step": "9",
+      "kind": "program_exit_zero",
+      "cmd": "synth_netlist_check --netlist phase2/stage2/synth/netlist.v --json reports/phase2/synth_netlist.json"
+    },
+    {
+      "step": "A1",
+      "kind": "program_exit_zero",
+      "cmd": "analog_a1_spec_extract_check . --json reports/analog/a1_spec.json"
+    },
+    {
+      "step": "A2",
+      "kind": "program_exit_zero",
+      "cmd": "analog_a2_topology_select_check . --json reports/analog/a2_topology.json"
+    },
+    {
+      "step": "A3",
+      "kind": "program_exit_zero",
+      "cmd": "analog_a3_netlist_gen_check . --json reports/analog/a3_netlist.json"
+    },
+    {
+      "step": "A3",
+      "kind": "program_exit_zero",
+      "cmd": "analog_netlist_pdk_check . --json reports/phase2/gates/analog_netlist_pdk.json"
+    },
+    {
+      "step": "A4",
+      "kind": "advisory_program_exit_zero",
+      "cmd": "analog_adc_enob_corner_check ."
+    },
+    {
+      "step": "A4",
+      "kind": "advisory_program_exit_zero",
+      "cmd": "analog_corner_lib_realism_lint ."
+    },
+    {
+      "step": "A4",
+      "kind": "advisory_program_exit_zero",
+      "cmd": "analog_sigma_delta_gain_floor_check ."
+    },
+    {
+      "step": "A4",
+      "kind": "program_exit_zero",
+      "cmd": "analog_a4_corner_sweep_check . --json reports/phase2/gates/analog_corner_sweep.json"
+    },
+    {
+      "step": "A5",
+      "kind": "program_exit_zero",
+      "cmd": "analog_a5_layout_check . --json reports/analog/a5_layout.json"
+    },
+    {
+      "step": "A6",
+      "kind": "program_exit_zero",
+      "cmd": "analog_a6_block_pv_check . --json reports/phase2/gates/analog_block_pv.json"
+    },
+    {
+      "step": "A7",
+      "kind": "program_exit_zero",
+      "cmd": "analog_pre_vs_post_layout_check . --json reports/phase2/gates/pre_vs_post.json"
+    },
+    {
+      "step": "A8",
+      "kind": "program_exit_zero",
+      "cmd": "analog_hardmacro_check . --json reports/phase2/gates/hardmacro.json"
+    },
+    {
+      "step": "A8",
+      "kind": "program_exit_zero",
+      "cmd": "analog_lef_gds_outline_check . --json reports/phase2/gates/a8_lef_gds_outline.json"
+    },
+    {
+      "step": "A9",
+      "kind": "advisory_program_exit_zero",
+      "cmd": "analog_hil_convergence_log_check ."
+    },
+    {
+      "step": "A9",
+      "kind": "advisory_program_exit_zero",
+      "cmd": "analog_hil_iteration_cap_check . --json reports/phase2/gates/hil_iteration_cap.json"
+    },
+    {
+      "step": "A9",
+      "kind": "advisory_program_exit_zero",
+      "cmd": "analog_hil_report_schema_check . --json reports/phase2/gates/hil_report_schema.json"
+    },
+    {
+      "step": "A9",
+      "kind": "advisory_program_exit_zero",
+      "cmd": "analog_hil_single_knob_check . --json reports/phase2/gates/hil_single_knob.json"
+    },
+    {
+      "step": "A9",
+      "kind": "advisory_program_exit_zero",
+      "cmd": "analog_hw_tb_de10lite_budget_check phase3/analog --json reports/phase2/gates/a9_de10lite_budget.json"
+    },
+    {
+      "step": "A9",
+      "kind": "optional_program_exit_zero",
+      "cmd": "analog_hw_spice_correlation_check . --json reports/phase2/gates/hw_spice_corr.json"
+    },
+    {
+      "step": "A9",
+      "kind": "program_exit_zero",
+      "cmd": "analog_a9_hw_verify_check . --json reports/phase2/gates/a9_hw_verify.json"
+    },
+    {
+      "step": "A9",
+      "kind": "program_exit_zero",
+      "cmd": "mixed_signal_cosim_check . --json reports/phase2/gates/cosim.json"
+    },
+    {
+      "step": "D1",
+      "kind": "advisory_program_exit_zero",
+      "cmd": "constants_validation phase1/generated_docs"
+    },
+    {
+      "step": "D1",
+      "kind": "advisory_program_exit_zero",
+      "cmd": "cross_layer_reference_check ."
+    },
+    {
+      "step": "D1",
+      "kind": "advisory_program_exit_zero",
+      "cmd": "extraction_credited_by_prose_only_check . --json reports/phase1/extraction_credited_by_prose_only.json"
+    },
+    {
+      "step": "D1",
+      "kind": "advisory_program_exit_zero",
+      "cmd": "input_docs_coverage_check ."
+    },
+    {
+      "step": "D1",
+      "kind": "advisory_program_exit_zero",
+      "cmd": "integration_spec_audit ."
+    },
+    {
+      "step": "D1",
+      "kind": "advisory_program_exit_zero",
+      "cmd": "l10_test_case_oracle_anchor_check ."
+    },
+    {
+      "step": "D1",
+      "kind": "advisory_program_exit_zero",
+      "cmd": "l11_otp_content_consumer_contract_check ."
+    },
+    {
+      "step": "D1",
+      "kind": "advisory_program_exit_zero",
+      "cmd": "l12_sequences_in_consumed_layer_check ."
+    },
+    {
+      "step": "D1",
+      "kind": "advisory_program_exit_zero",
+      "cmd": "l13_bringup_contract_check ."
+    },
+    {
+      "step": "D1",
+      "kind": "advisory_program_exit_zero",
+      "cmd": "l14_protocol_versioning_contract_check ."
+    },
+    {
+      "step": "D1",
+      "kind": "advisory_program_exit_zero",
+      "cmd": "l15_encoding_tables_contract_check ."
+    },
+    {
+      "step": "D1",
+      "kind": "advisory_program_exit_zero",
+      "cmd": "l16_compliance_properties_actionable_check ."
+    },
+    {
+      "step": "D1",
+      "kind": "advisory_program_exit_zero",
+      "cmd": "l17_channel_catalog_consumer_contract_check ."
+    },
+    {
+      "step": "D1",
+      "kind": "advisory_program_exit_zero",
+      "cmd": "l18_interconnect_topology_factuality_check ."
+    },
+    {
+      "step": "D1",
+      "kind": "advisory_program_exit_zero",
+      "cmd": "l21_macro_supply_rail_declared_check ."
+    },
+    {
+      "step": "D1",
+      "kind": "advisory_program_exit_zero",
+      "cmd": "l6_fsm_scaffold_actionable_check ."
+    },
+    {
+      "step": "D1",
+      "kind": "advisory_program_exit_zero",
+      "cmd": "l7_debug_access_grounding_check ."
+    },
+    {
+      "step": "D1",
+      "kind": "advisory_program_exit_zero",
+      "cmd": "l8_clock_period_actionability_check ."
+    },
+    {
+      "step": "D1",
+      "kind": "advisory_program_exit_zero",
+      "cmd": "l8_sta_clock_period_design_owned_check ."
+    },
+    {
+      "step": "D1",
+      "kind": "advisory_program_exit_zero",
+      "cmd": "l9_floorplan_contract_check ."
+    },
+    {
+      "step": "D1",
+      "kind": "advisory_program_exit_zero",
+      "cmd": "l_doc_cross_consistency_check ."
+    },
+    {
+      "step": "D1",
+      "kind": "advisory_program_exit_zero",
+      "cmd": "l_doc_parity_diff --program-dir phase1/generated_docs --agent-dir phase1/agent_docs --strict"
+    },
+    {
+      "step": "D1",
+      "kind": "advisory_program_exit_zero",
+      "cmd": "oracle_vector_gen ."
+    },
+    {
+      "step": "D1",
+      "kind": "advisory_program_exit_zero",
+      "cmd": "phase1_expert_track_evidence_check ."
+    },
+    {
+      "step": "D1",
+      "kind": "advisory_program_exit_zero",
+      "cmd": "phase1_planned_consumer_starved_check ."
+    },
+    {
+      "step": "D1",
+      "kind": "advisory_program_exit_zero",
+      "cmd": "phase1_provenance_presence_check phase1/generated_docs"
+    },
+    {
+      "step": "D1",
+      "kind": "advisory_program_exit_zero",
+      "cmd": "spec_review_lint --strict input/docs/*.md input/docs/*.rst input/*.md"
+    },
+    {
+      "step": "D1",
+      "kind": "program_exit_zero",
+      "cmd": "analog_a0_skip_forbidden_check ."
+    },
+    {
+      "step": "D1",
+      "kind": "program_exit_zero",
+      "cmd": "l_doc_todo_stub_count_check ."
+    },
+    {
+      "step": "D1",
+      "kind": "program_exit_zero",
+      "cmd": "phase1_all_l_docs_present_check ."
+    },
+    {
+      "step": "D1",
+      "kind": "program_exit_zero",
+      "cmd": "phase1_coverage_report_present_check ."
+    },
+    {
+      "step": "D1",
+      "kind": "program_exit_zero",
+      "cmd": "phase1_expert_parse_track ."
+    },
+    {
+      "step": "DT1",
+      "kind": "program_exit_zero",
+      "cmd": "transition_coverage_check . --json reports/phase2/dft/transition_coverage_gate.json"
+    },
+    {
+      "step": "DT2",
+      "kind": "program_exit_zero",
+      "cmd": "path_delay_coverage_check . --json reports/phase2/dft/path_delay_coverage_gate.json"
+    },
+    {
+      "step": "DT3",
+      "kind": "program_exit_zero",
+      "cmd": "sdd_coverage_check . --json reports/phase2/dft/sdd_coverage_gate.json"
+    },
+    {
+      "step": "FS1",
+      "kind": "program_exit_zero",
+      "cmd": "fmeda_coverage_check . --json reports/phase2/safety/fmeda_coverage_gate.json"
+    },
+    {
+      "step": "FS1",
+      "kind": "program_exit_zero",
+      "cmd": "fmeda_fault_injection_coverage . --rtl-dir phase2/stage1/rtl --asil D --json reports/phase2/safety/fmeda_coverage.json"
+    },
+    {
+      "step": "M1",
+      "kind": "advisory_program_exit_zero",
+      "cmd": "mixed_signal_top_lvs_run . --json reports/analog/mixed_signal/top_lvs_run.json"
+    },
+    {
+      "step": "M1",
+      "kind": "program_exit_zero",
+      "cmd": "mixed_signal_merge_check . --json reports/analog/mixed_signal/merge.json"
+    },
+    {
+      "step": "M2",
+      "kind": "program_exit_zero",
+      "cmd": "isolation_cell_required_check . --json reports/analog/mixed_signal/isolation_audit.json"
+    },
+    {
+      "step": "M2",
+      "kind": "program_exit_zero",
+      "cmd": "level_shifter_required_check . --json reports/analog/mixed_signal/level_shifter_audit.json"
+    },
+    {
+      "step": "M2",
+      "kind": "program_exit_zero",
+      "cmd": "power_domain_crossing_check . --json reports/analog/mixed_signal/power_domain_crossing_audit.json"
+    },
+    {
+      "step": "M2",
+      "kind": "program_exit_zero",
+      "cmd": "power_domain_signal_crossing_check . --json reports/phase2/gates/power_domain_signal_crossing.json"
+    },
+    {
+      "step": "M3",
+      "kind": "program_exit_zero",
+      "cmd": "mixed_signal_cosim_check . --json reports/analog/mixed_signal/cosim_audit.json"
+    },
+    {
+      "step": "M3",
+      "kind": "program_exit_zero",
+      "cmd": "mixed_signal_interface_si_check . --json reports/analog/mixed_signal/interface_si_audit.json"
+    },
+    {
+      "step": "M4",
+      "kind": "program_exit_zero",
+      "cmd": "mixed_signal_signoff_check . --json reports/analog/mixed_signal/signoff_audit.json"
+    },
+    {
+      "step": "stage1",
+      "kind": "program_exit_zero",
+      "cmd": "stage_on_pass_review . --stage stage1 --json reports/phase2/gates/stage1_on_pass_review.json"
+    },
+    {
+      "step": "stage2",
+      "kind": "program_exit_zero",
+      "cmd": "stage_on_pass_review . --stage stage2 --json reports/phase2/gates/stage2_on_pass_review.json"
+    },
+    {
+      "step": "stage3",
+      "kind": "program_exit_zero",
+      "cmd": "stage_on_pass_review . --stage stage3 --json reports/phase3/gates/stage3_on_pass_review.json"
+    },
+    {
+      "step": "stage_analog",
+      "kind": "program_exit_zero",
+      "cmd": "stage_on_pass_review . --stage stage_analog --json reports/analog/stage_analog_on_pass_review.json"
+    }
+  ]
+}
