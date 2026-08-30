@@ -1247,7 +1247,8 @@ def parse_equiv_output(text: str) -> Dict:
 
 
 def build_report(parsed: Dict, top: str, gate_netlist: str,
-                 liberty: Optional[str]) -> Dict:
+                 liberty: Optional[str],
+                 liberty_source: Optional[str] = None) -> Dict:
     """Shape a parse result into the reports/lec.json schema the gate reads."""
     proven = parsed["proven"]
     unproven = parsed["unproven"]
@@ -1291,6 +1292,10 @@ def build_report(parsed: Dict, top: str, gate_netlist: str,
         "unproven_cells": parsed["unproven_cells"],
         "verdict_explanation": parsed["verdict_explanation"],
         "liberty": liberty,
+        # WHICH of the four resolution paths produced that library. Recorded so
+        # a reader never has to infer it: "default" means the built-in constant,
+        # which belongs to one PDK and is wrong for every other one.
+        "liberty_source": liberty_source,
         "program": PROGRAM,
     }
 
@@ -1981,6 +1986,101 @@ def _discover_project_liberty(project: Path) -> Optional[Path]:
     return candidates[0]
 
 
+# The Liberty a mapping tool RECORDS having loaded. `read_liberty <path>` is
+# OpenSTA/Yosys script syntax and `-liberty <path>` is the yosys `abc`/`dfflibmap`
+# flag; both are TOOL syntax, not a design, PDK or vendor literal. Whatever path
+# the run happened to record is the path that comes back.
+_LIBERTY_IN_EVIDENCE_RE = re.compile(
+    r"(?:read_liberty|-liberty)[ \t=]+(/\S+?\.lib)\b")
+
+# Where a run records the mapping it performed, in the order a Step-13 caller
+# can rely on them existing. Kept to the synthesis stage: the netlist under test
+# is the one synthesis produced, so the library synthesis mapped it against is
+# the only one an equivalence check may legitimately read.
+_SYNTH_EVIDENCE_RELS = (
+    "phase2/stage2/synth",
+    "phase2/stage1/synth",
+    "reports/phase2/synth",
+)
+
+
+def _discover_run_liberty(project: Path) -> Optional[str]:
+    """The Liberty THIS RUN's own synthesis loaded, read off its own evidence.
+
+    WHY THIS EXISTS, MEASURED. `_discover_project_liberty` searches the PROJECT
+    for a staged Liberty. That is the right answer for a design that VENDORS its
+    PDK under `input/pdk/`. It returns None for a design whose PDK is MOUNTED in
+    the container — which is this flow's normal shape — and the caller then fell
+    back to the sky130 `DEFAULT_LIBERTY` on a design that is not sky130. Yosys
+    then cannot resolve the gate netlist's cells, `hierarchy -check` aborts
+    before `equiv_make`, and the run records INCONCLUSIVE over ZERO compared
+    points while blaming an unstaged hard macro. The cell was never a macro; it
+    was an ordinary standard cell, defined in the Liberty the run itself used.
+
+    Correct BY CONSTRUCTION rather than by preference: a gate netlist is only
+    meaningful against the library it was MAPPED to, and the run says which that
+    was. No PDK name, no corner name, no vendor string is consulted — the
+    returned path is whatever the run recorded.
+
+    PURE and filesystem-only: no container, no network. Returns None when the
+    run recorded nothing, so the caller's existing order is unchanged."""
+    for rel in _SYNTH_EVIDENCE_RELS:
+        d = project / rel
+        if not d.is_dir():
+            continue
+        for f in sorted(d.glob("*.log")) + sorted(d.glob("*.ys")) \
+                + sorted(d.glob("*.tcl")) + sorted(d.glob("*.json")):
+            try:
+                text = f.read_text(errors="replace")
+            except OSError:
+                continue
+            hits = _LIBERTY_IN_EVIDENCE_RE.findall(text)
+            if hits:
+                # Last write wins: a script that reads several corners maps
+                # against the one it mapped with last.
+                return hits[-1]
+    return None
+
+
+def resolve_liberty(project: Path, cli_liberty: Optional[str],
+                    container_has) -> "Tuple[Optional[str], str]":
+    """`(liberty, source)` — the Liberty this LEC will read, and WHY (PURE).
+
+    DEGRADE LOUDLY: the source is returned, recorded in `reports/lec.json` as
+    `liberty_source`, and printed, so a reader never has to infer which of four
+    paths produced the library a verdict was computed over.
+
+        cli          the caller passed --liberty and it is visible
+        staged       the design vendored one under input/pdk/
+        run_synth    the run's own synthesis recorded loading it
+        default      the built-in constant, which belongs to ONE PDK and is
+                     therefore wrong for every other one
+
+    Order is deliberate and preserves today's behaviour everywhere it already
+    worked: `run_synth` is consulted ONLY where the constant `default` would
+    otherwise have been used. `container_has` is a predicate so this stays pure
+    and testable without a container."""
+    if cli_liberty and cli_liberty != DEFAULT_LIBERTY and container_has(cli_liberty):
+        return cli_liberty, "cli"
+    staged = _discover_project_liberty(project)
+    if staged is not None and (cli_liberty == DEFAULT_LIBERTY
+                               or not cli_liberty
+                               or not container_has(cli_liberty)):
+        return str(staged), "staged"
+    if cli_liberty and cli_liberty != DEFAULT_LIBERTY:
+        return cli_liberty, "cli"
+    from_run = _discover_run_liberty(project)
+    # A recorded path that is not VISIBLE where yosys will run is not an answer.
+    # Without this guard, a run whose synthesis evidence names a library the
+    # container cannot open would end up with no Liberty at all, where today it
+    # would at least have had the constant — a corner this fix must not make
+    # worse. Checked here so the caller's existing "not found in-container" WARN
+    # keeps meaning what it meant.
+    if from_run is not None and container_has(from_run):
+        return from_run, "run_synth"
+    return cli_liberty, "default"
+
+
 def _resolve_gold_files(gold_dir: Path) -> List[str]:
     """The .v/.sv gold sources to read, as absolute paths.
 
@@ -2305,17 +2405,25 @@ def main(argv: Optional[List[str]] = None) -> int:
     # Verify the Liberty file exists in-container; omit it if absent (generic
     # $_-primitive netlists need no Liberty; Liberty-mapped netlists will then
     # honestly hit unmodelable cells → SKIPPED-CONDITION, never a fake pass).
-    liberty: Optional[str] = args.liberty
-    # Prefer the PROJECT's own PDK Liberty over the (sky130) CLI default: the
-    # runner passes no --liberty, and a commercial-PDK design's cells are only
-    # SAT-modelable from ITS Liberty. Discovery wins whenever the caller did not
-    # override the default, OR the given Liberty is not visible in-container.
-    proj_lib = _discover_project_liberty(project)
-    if proj_lib is not None and (
-            args.liberty == DEFAULT_LIBERTY
-            or not _container_file_exists(container, args.liberty)):
-        liberty = str(proj_lib)
-        print(f"[lec_run] auto-discovered project Liberty: {liberty}",
+    # Prefer the PROJECT's own PDK Liberty over the (single-PDK) CLI default:
+    # the runner passes no --liberty, and a design's cells are only
+    # SAT-modelable from ITS Liberty. When the design VENDORS none — a PDK
+    # mounted in the container is the flow's normal shape — fall to the Liberty
+    # THIS RUN's own synthesis recorded loading, because a gate netlist is only
+    # meaningful against the library it was mapped to. The built-in constant is
+    # the last resort and is named as such in the record.
+    liberty, liberty_source = resolve_liberty(
+        project, args.liberty,
+        lambda pth: _container_file_exists(container, pth))
+    if liberty_source in ("staged", "run_synth"):
+        print(f"[lec_run] Liberty resolved from {liberty_source}: {liberty}",
+              file=sys.stderr)
+    elif liberty_source == "default":
+        print(f"[lec_run] WARN: falling back to the built-in default Liberty "
+              f"{liberty} — this design staged none and its own synthesis "
+              f"recorded none. If the gate netlist was mapped against a "
+              f"different library, `hierarchy -check` will abort and this run "
+              f"will report INCONCLUSIVE over 0 compared points.",
               file=sys.stderr)
     liberty_present = bool(liberty) and _container_file_exists(container, liberty)
     if liberty and not liberty_present:
@@ -2349,7 +2457,7 @@ def main(argv: Optional[List[str]] = None) -> int:
                 "valid --top or resolve the RTL top."),
         }
         report = build_report(parsed, args.top, str(gate_netlist.resolve()),
-                              liberty)
+                              liberty, liberty_source)
         rpt_out.write_text(
             f"[lec_run] {top_note}\nLEC not run; honest SKIPPED-CONDITION.\n",
             encoding="utf-8")
@@ -2670,7 +2778,7 @@ def main(argv: Optional[List[str]] = None) -> int:
              "verdict_explanation": (
                  "Yosys/Docker could not run — no equivalence evidence "
                  "produced. See reports/lec.rpt.")},
-            resolved_top, gate_abs, liberty)
+            resolved_top, gate_abs, liberty, liberty_source)
         diag = annotate_step_budget(diag, budget)
         json_out.write_text(json.dumps(diag, indent=2, ensure_ascii=False))
         return 1
@@ -2681,7 +2789,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     # the capable SV-2017 frontend cannot elaborate is not a free non-blocking
     # pass. No-op when slang was not attempted or succeeded.
     parsed = finalize_after_slang_retry(parsed, slang_retry_failed)
-    report = build_report(parsed, resolved_top, gate_abs, liberty)
+    report = build_report(parsed, resolved_top, gate_abs, liberty,
+                          liberty_source)
     report["elapsed_sec"] = elapsed
     # WHAT was attempted, WHICH resource ran out, HOW MANY attempts. Additive:
     # never changes verdict/equivalent.
