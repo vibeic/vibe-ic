@@ -57,14 +57,14 @@ def _mod():
     return mod
 
 
-def _effective(mod, project: Path, cli=None):
+def _effective(mod, project: Path, cli=None, visible=lambda _p: True):
     """(liberty, source) this program WOULD read — post-fix from its own resolver,
     pre-fix reproduced from the symbols that existed then, so the control observes
     a value instead of an ImportError."""
     cli = mod.DEFAULT_LIBERTY if cli is None else cli
     fn = getattr(mod, "resolve_liberty", None)
     if fn is not None:
-        return fn(project, cli, lambda _p: True)
+        return fn(project, cli, visible)
     staged = mod._discover_project_liberty(project)
     if staged is not None:
         return str(staged), "staged"
@@ -204,3 +204,16 @@ def test_the_record_discloses_which_path_produced_the_library(tmp_path):
     assert rep.get("liberty_source") == "run_synth", (
         f"record carried liberty_source={rep.get('liberty_source')!r}; the chosen "
         "resolution path must be recorded, not inferred")
+
+
+def test_a_recorded_library_the_container_cannot_open_is_not_an_answer(tmp_path):
+    """A path the run recorded but the tool cannot OPEN is not a resolution. Without
+    this guard the run would end with no Liberty at all, where before it had the
+    constant — this fix may not make any corner worse."""
+    mod = _mod()
+    proj = _project(tmp_path, synth_line="  abc -liberty /opt/gone/missing.lib")
+    got, source = _effective(mod, proj, visible=lambda p: p != "/opt/gone/missing.lib")
+    assert got == mod.DEFAULT_LIBERTY, (
+        f"resolved {got!r}; a recorded library that is not visible where the tool "
+        "runs must fall back, not be handed on")
+    assert source == "default", f"source was {source!r}"

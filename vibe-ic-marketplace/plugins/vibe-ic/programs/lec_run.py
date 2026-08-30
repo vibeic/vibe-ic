@@ -2070,7 +2070,13 @@ def resolve_liberty(project: Path, cli_liberty: Optional[str],
     if cli_liberty and cli_liberty != DEFAULT_LIBERTY:
         return cli_liberty, "cli"
     from_run = _discover_run_liberty(project)
-    if from_run is not None:
+    # A recorded path that is not VISIBLE where yosys will run is not an answer.
+    # Without this guard, a run whose synthesis evidence names a library the
+    # container cannot open would end up with no Liberty at all, where today it
+    # would at least have had the constant — a corner this fix must not make
+    # worse. Checked here so the caller's existing "not found in-container" WARN
+    # keeps meaning what it meant.
+    if from_run is not None and container_has(from_run):
         return from_run, "run_synth"
     return cli_liberty, "default"
 
