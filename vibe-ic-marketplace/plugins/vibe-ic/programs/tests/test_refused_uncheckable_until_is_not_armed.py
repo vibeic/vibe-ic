@@ -159,29 +159,12 @@ def test_a_properly_bought_exemption_is_still_accepted(tmp_path):
         "refused arms above are not measuring the exemption\n" + text)
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "MEASURED DEFECT 2026-08-22, found by sweeping tools/ci/_gate_dispatch.sh "
-    "for the shape vibe-ic#1770 reports. `uncheckable_until` raises the wiring "
-    "error for a malformed date and for a missing reason and then arms "
-    "GATE_PENDING_UNTIL/GATE_PENDING_WHY anyway, because the assignment sits "
-    "outside every `if`. The record is byte-identical to a properly bought "
-    "exemption: exempt_until is set, the row leaves not_checked_unexempted, "
-    "and for a non-ISO string the lexicographic expiry compare can never fire, "
-    "so the exemption is immortal. Nothing is unsafe TODAY only because the "
-    "run still exits 2 on wiring_errors -- see "
-    "test_a_properly_bought_exemption_is_still_accepted for that dependency "
-    "measured rather than asserted. The fix is the same one line in shape as "
-    "#1770's (clear the value in the branch that refused it), but "
-    "tools/ci/_gate_dispatch.sh is inside REQUIRED_AUTHORITY_PATHS in "
-    "protected_landing_transition.py, so it can only move through a "
-    "base-authorised PREPARE/ACTIVATE transition -- and at ae78abb28 no "
-    "transition can be built at all: build_receipt refuses a NULL transition "
-    "(base == candidate == main) because the live 47-tuple matches neither "
-    "authorised state on 12 paths. #1770's own fix does NOT close this: it "
-    "clears _dispatch's mode-2 arm, measured to leave both records here "
-    "unchanged. STRICT: when it is fixed this XPASSes and this marker must be "
-    "deleted. See "
-    "docs/findings/2026-08-22-a-refused-exemption-is-recorded-as-a-granted-one.md."))
+# THE MARKER THAT WAS HERE IS DELETED, as its own text instructed: "STRICT:
+# when it is fixed this XPASSes and this marker must be deleted." The defect it
+# described -- `uncheckable_until` raising the wiring error and then arming
+# GATE_PENDING_UNTIL/GATE_PENDING_WHY anyway -- is repaired in
+# `tools/ci/_gate_dispatch.sh`, which now CLEARS the pending exemption on a
+# refusal and returns. Both parameters pass against the live dispatcher.
 @pytest.mark.parametrize("declaration,refusal", [
     ('uncheckable_until never "a stated reason"', "must be ISO-8601"),
     ('uncheckable_until 2999-01-01 ""', "must state WHY"),

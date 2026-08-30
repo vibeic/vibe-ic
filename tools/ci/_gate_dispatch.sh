@@ -346,7 +346,7 @@ _gate_wiring_error() {
 # `uncheckable_until <YYYY-MM-DD> <why>` — buy the right for the NEXT gate to
 # report NOT_CHECKED, until a date, for a stated reason. See the header.
 uncheckable_until() {
-  local until="${1:-}" why="${2:-}"
+  local until="${1:-}" why="${2:-}" refused=0
   if [ -n "$GATE_PENDING_UNTIL" ]; then
     _gate_wiring_error "an exemption (until $GATE_PENDING_UNTIL) was declared \
 and never attached to a gate before 'uncheckable_until ${until}'"
@@ -359,6 +359,7 @@ and never attached to a gate before 'uncheckable_until ${until}'"
   if ! [[ "$until" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]]; then
     _gate_wiring_error "'uncheckable_until ${until:-<empty>}': the review date \
 must be ISO-8601 YYYY-MM-DD"
+    refused=1
   fi
   # An exemption with no reason is a skip button with a date printed on it: the
   # reader it exists for cannot then tell a benign missing prerequisite from a
@@ -366,6 +367,29 @@ must be ISO-8601 YYYY-MM-DD"
   if [ -z "$why" ]; then
     _gate_wiring_error "'uncheckable_until ${until:-<empty>}': an exemption \
 must state WHY the gate can be unable to run"
+    refused=1
+  fi
+  # A REFUSAL IS NOT A GRANT. `_gate_wiring_error` COLLECTS and returns -- it
+  # does not exit -- so until now the assignment below was reached on every
+  # path, and a date this function had just declared unusable was handed to the
+  # next gate as though it had been accepted. The resulting row is byte-
+  # identical to a properly bought exemption: `exempt_until` is set and the
+  # label leaves `not_checked_unexempted`, which is the list `gatekeeper_review`,
+  # `repo_hygiene_parallel` and `hygiene_finding_delta` each read to decide
+  # whether an unbought refusal blocks. Worse, the ISO-8601 rule exists so the
+  # expiry compare can be a plain string compare, so a refused non-ISO string
+  # like `never` sorts ABOVE every real YYYY-MM-DD and the exemption is
+  # IMMORTAL -- it can appear in neither `exemptions_expired` nor
+  # `not_checked_unexempted`, on any future date.
+  #
+  # CLEARED, not merely "not set". Leaving whatever was pending would let a
+  # leftover exemption from an earlier declaration be inherited by the next
+  # gate, which is the same defect one wiring site along. The wiring error
+  # already recorded above is what makes the run exit 2; this makes the RECORD
+  # agree with the sentence the dispatcher printed.
+  if [ "$refused" -ne 0 ]; then
+    GATE_PENDING_UNTIL=""; GATE_PENDING_WHY=""
+    return 0
   fi
   GATE_PENDING_UNTIL="$until"; GATE_PENDING_WHY="$why"
 }
