@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "_comment": "AUTHORITATIVE AI-skill inventory — generated from the skills/ folders by programs/gen_skill_inventory.py. Do NOT hand-edit; the website skill count must read `total` from here.",
+  "_comment": "AUTHORITATIVE AI-skill inventory \u2014 generated from the skills/ folders by programs/gen_skill_inventory.py. Do NOT hand-edit; the website skill count must read `total` from here.",
   "total": 70,
   "by_tier": {
     "debug": 13,
