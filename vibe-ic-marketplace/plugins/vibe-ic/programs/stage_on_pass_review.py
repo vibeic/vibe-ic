@@ -467,6 +467,22 @@ _DEFAULT_REJECTION_REQUIRES = ("intent", "artefact", "contradiction", "test")
 #: `emit_test_dir:`. Inside the run tree, beside the stage's other evidence.
 _DEFAULT_EMIT_DIR = "reports/phase2/gates/on_pass_review"
 
+#: The one value of `fires_on:` this engine implements. MEASURED on v1.13.54
+#: and again on v1.13.66: the field was read by NOTHING — set to "never" the
+#: review went on rejecting, byte for byte, at rc 1. A field the engine does not
+#: read is worse than an absent one, because the flow author believes it and
+#: writes to it. It is read in `main` now, and the only accepted value is the
+#: one this program actually implements: it reviews a stage that PASSED.
+#:
+#: THE FIELD WAS NOT DELETED, and the choice matters. Deleting it would also
+#: have to delete `on_pass_review_declared_command_runs_check`'s P4, which is a
+#: BLOCKING declaration-time gate that already refuses any other value in the
+#: shipped flow. So the pair is: the declaration gate refuses a block that
+#: declares something else, and the engine refuses to RUN one — and neither can
+#: be satisfied by editing the other.
+_SUPPORTED_FIRES_ON = "stage_pass"
+
+
 #: The intent field L9 uses to disclose that it could not read a top out of the
 #: design input, and the strategy value that goes with it.
 _SENTINEL_STRATEGY = "canonical_chip_top_sentinel"
@@ -4306,6 +4322,30 @@ def main(argv: Optional[List[str]] = None) -> int:
             print(f"    {d['path']}  (denied segment {d['denied_segment']!r})")
         print("    The review reads the design INPUT. A reviewer allowed to "
               "read the oracle, the harness or the golden is grading itself.")
+        return 2
+
+    # ── the declaration's OWN firing condition, read before any review ──
+    #
+    # It was DECORATIVE and was measured so on v1.13.66. It is refused here, up
+    # front, rather than mid-review: a review the declaration did not ask for
+    # is not made better by running it well.
+    declared_fires_on = decl.get("fires_on")
+    if str(declared_fires_on) != _SUPPORTED_FIRES_ON:
+        emit({"program": _NAME, "stage": a.stage, "verdict": "NOT_CHECKED",
+              "why": "unsupported fires_on", "fires_on": declared_fires_on})
+        print(f"{_NAME}: rc=2 NOT CHECKED — stage {a.stage!r} declares "
+              f"`fires_on: {declared_fires_on!r}` and this engine implements "
+              f"only {_SUPPORTED_FIRES_ON!r}. It reviews a stage that PASSED; "
+              f"it has no other firing condition to offer, so it declines "
+              f"rather than perform a review the declaration did not ask for.")
+        print(f"    Until v1.13.66 nothing read this field: set to \"never\" "
+              f"the review went on rejecting, byte for byte, at rc 1. A field "
+              f"the engine does not read is worse than an absent one, because "
+              f"the flow author believes it.")
+        print(f"    This is a DISCLOSED SKIP (rc 2), never a pass — and it "
+              f"cannot be used to silence a review: "
+              f"`on_pass_review_declared_command_runs_check` P4 is BLOCKING "
+              f"and refuses any block declaring another value.")
         return 2
 
     fired = stage_passed(a.compliance, a.stage, a.stage_verdict)
