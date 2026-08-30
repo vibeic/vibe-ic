@@ -275,7 +275,8 @@ def _assert_runner_tier_citations_resolve(rec):
             assert c["eligible"] is False
 
 
-def _mutant_root(tmp_path: Path, *, loop: bool, repair: bool) -> Path:
+def _mutant_root(tmp_path: Path, *, loop: bool, repair: bool,
+                 area: bool = True) -> Path:
     """A plugin root holding stubs of exactly the files the registry cites.
 
     `loop=False` removes the `while` around the regeneration call — the call is
@@ -286,7 +287,7 @@ def _mutant_root(tmp_path: Path, *, loop: bool, repair: bool) -> Path:
     fails to parse demotes EVERY edge citing it, which reads exactly like the
     defect under test and would make the control meaningless.
     """
-    root = tmp_path / f"root_loop{int(loop)}_repair{int(repair)}"
+    root = tmp_path / f"root_loop{int(loop)}_repair{int(repair)}_area{int(area)}"
     progs = root / "programs"
     progs.mkdir(parents=True)
     (progs / "crosslayer_rewrite_equivalence_check.py").write_text("x = 1\n")
@@ -333,8 +334,28 @@ def _mutant_root(tmp_path: Path, *, loop: bool, repair: bool) -> Path:
                + ("        _run_postroute_timing_repair()\n"
                   "        _measure_postrepair_mcorner_ocv()\n"
                   if repair else "        pass\n"))
-    compile(repair_src, "<stub>", "exec")
-    (progs / "phase3_one_shot_runner.py").write_text(repair_src)
+    # STEP 9's actuation shape, modelled in the SAME file because the registry
+    # cites the same runner for it. `area=False` removes the re-entry while
+    # leaving the gate spawn and the rc guard in place — a substring-matching
+    # verifier would still say yes, which is why this citation kind is
+    # structural too.
+    #
+    # The `_area_prog` hop is modelled deliberately: the citation names the GATE
+    # (`area_total_vs_budget_check`), never the local that holds its path, and a
+    # stub that inlined the path would not exercise that resolution at all.
+    area_src = ("import subprocess\n"
+                "def step_synth(project, relax=1.0):\n"
+                "    _area_prog = 'area_total_vs_budget_check.py'\n"
+                "    _acp = subprocess.run([_area_prog, project])\n"
+                "    if _acp.returncode == 1:\n"
+                + ("        _before = _synth_chip_area(project)\n"
+                   "        step_synth(project, relax=1.5)\n"
+                   "        _after = _synth_chip_area(project)\n"
+                   if area else "        pass\n")
+                + "def _synth_chip_area(project): ...\n")
+    stub_src = repair_src + area_src
+    compile(stub_src, "<stub>", "exec")
+    (progs / "phase3_one_shot_runner.py").write_text(stub_src)
     return root
 
 
@@ -347,11 +368,34 @@ def test_the_stub_root_is_a_faithful_stand_in(tmp_path):
     assert by["4"]["class"] == "REMEASURED"
     assert by["23"]["class"] == "REMEASURED"
     assert by["32"]["class"] == "REMEASURED"
+    # Step 9 earns its tier from the SAME stub runner. It reads REMEASURED on
+    # the shipped tree too — the rollback role is not claimed for this edge at
+    # all, so unlike 23/32 this is not one tier below what it earns for real.
+    assert by["9"]["class"] == "REMEASURED"
     # Rewrite fidelity is now a blocking clause of Step 2. The judge can stop
     # the candidate, but no runner re-executes Step 1, so the Step-2 fallback
     # edge remains honestly DECLARED_ONLY rather than inheriting the former
     # standalone step's over-broad EXECUTABLE label.
     assert by["2"]["class"] == "DECLARED_ONLY"
+
+
+def test_removing_step_9s_re_entry_demotes_step_9_and_nothing_else(tmp_path):
+    """The stub keeps the gate spawn and the rc guard and drops only the
+    re-entry. A verifier that matched on the presence of `step_synth` in the
+    file, or on the gate being spawned at all, would still say REMEASURED."""
+    healthy = _mutant_root(tmp_path, loop=True, repair=True, area=True)
+    _, ok = _report(tmp_path, "--root", str(healthy), expect=RC_OK)
+    assert {e["step"]: e["class"] for e in ok["edges"]}["9"] == "REMEASURED"
+
+    broken = _mutant_root(tmp_path, loop=True, repair=True, area=False)
+    _, rep = _report(tmp_path, "--root", str(broken), expect=RC_FINDINGS)
+    by = {e["step"]: e["class"] for e in rep["edges"]}
+    assert by["9"] == "DECLARED_ONLY"
+    # ...and the controls that share the same stub file do not move.
+    assert by["4"] == "REMEASURED"
+    assert by["23"] == "REMEASURED"
+    assert by["32"] == "REMEASURED"
+    assert {f["step"] for f in rep["findings"]} == {"9"}
 
 
 def test_refusing_a_candidate_cannot_be_laundered_as_executable(

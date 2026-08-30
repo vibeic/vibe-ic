@@ -11974,7 +11974,7 @@ def step_synth(project: Path, top: str, pdk: PdkConfig,
         else:
             _atail = ((_acp.stdout or "") + (_acp.stderr or "")).strip()[-600:]
             if _acp.returncode == 1:
-                # ── THE AREA LOOP, step 9 -> 1 ──────────────────────────────
+                # ── THE AREA LOOP, step 9 -> 9 ──────────────────────────────
                 #
                 # The flow has declared this edge since the closed-loop census
                 # existed, and NOTHING re-entered: `closed_loop_executable_
@@ -11992,16 +11992,36 @@ def step_synth(project: Path, top: str, pdk: PdkConfig,
                 # recursion: the retry cannot re-enter itself, so there is no
                 # counter to leak and no `--max-rtl-repair-retries` to tune.
                 #
-                # AND IT IS NOT THE FLOW'S 9 -> 1 EDGE. The census refused that
-                # registration and was right to: 9 -> 1 means go back to
-                # Spec-to-RTL, and this re-runs synthesis.
+                # THIS IS THE FLOW'S EDGE 9 -> 9, AND IT WAS NOT UNTIL THE
+                # DECLARATION MOVED. For as long as the flow said
+                # `fallback_to: 1` the census refused this registration, and was
+                # right to: 9 -> 1 means go back to Spec-to-RTL, and this
+                # re-runs synthesis. The refusal is kept here verbatim, because
+                # it is the evidence that the target moved to follow the
+                # actuator rather than the actuator being claimed for a target:
                 #
                 #     CLC-ACTUATION-NOT-FALLBACK-REENTRY: edge 9 falls
                 #     back to step 1, but its actuator calls step_synth;
                 #     expected one of [step_rtl_gen]
                 #
-                # Why 9 -> 1 cannot be closed today, three independent
-                # measurements, none of which this retry changes:
+                # The flow now declares `fallback_to: 9` (v1.13.66) and
+                # `closed_loop_executable_coverage_check` registers step 9's
+                # entrypoint as `step_synth`, so the edge reads REMEASURED off
+                # THIS branch: the actuate citation is the re-entry below and
+                # the remeasure citation is the `_after` read that follows it.
+                # Deleting either demotes the edge — proven by mutation in
+                # `tests/test_step9_registration_is_not_a_list_entry.py`, whose
+                # arms break the re-entry, the branch binding and the ORDER, one
+                # at a time, with three control edges held still.
+                #
+                # ROLLBACK IS NOT CLAIMED and the reason is right here: by the
+                # time `_after` is read, re-synthesis has already OVERWRITTEN
+                # the first netlist. What follows refuses a bad result as a
+                # VERDICT; it cannot give the good one back.
+                #
+                # Why 9 -> 1 was never the reachable target — three independent
+                # measurements, none of which this retry changes, and all three
+                # still true:
                 #   1. No RTL producer can see an area budget — grep
                 #      die_area_budget|area_budget|chip_area in
                 #      deterministic_emit_chain.py, ic_class_registry.json,
@@ -12016,9 +12036,11 @@ def step_synth(project: Path, top: str, pdk: PdkConfig,
                 #      Neither is area.
                 # Together: re-entering `step_rtl_gen` on an area overflow
                 # returns BYTE-IDENTICAL RTL, which the RTL retry loop already
-                # detects and calls FAIL_RTL_REPAIR_INERT. EXECUTABLE stays 0,
-                # and `closed_loop_metric_reaches_its_producer` is the program
-                # that says so without three attempts by hand.
+                # detects and calls FAIL_RTL_REPAIR_INERT. That is why the fix
+                # was to point the edge at the step this code re-enters, and NOT
+                # to write a metric name into a trigger — which would have
+                # converted UNSTATED to UNREACHABLE and changed nothing about
+                # the design.
                 _area_retry = None
                 if period_relax == 1.0:
                     _budget = _area_budget_um2(project)

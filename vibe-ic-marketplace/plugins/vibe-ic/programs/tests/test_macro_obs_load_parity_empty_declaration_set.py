@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """A gate cannot convict a layer of being undeclared when it read no declarations.
 
-THE MEASURED DEFECT, on a real routed tree at v1.13.68. `macro_obs_load_parity_check`
+THE MEASURED DEFECT, on a real routed tree at v1.13.69. `macro_obs_load_parity_check`
 resolves an OBS layer by asking whether any LEF it read DECLARES that layer. The file
 that declares layers is the TECH LEF; a macro abstract declares none. When the PDK is
 MOUNTED in the container — the normal case for this flow, where the tech LEF lives at

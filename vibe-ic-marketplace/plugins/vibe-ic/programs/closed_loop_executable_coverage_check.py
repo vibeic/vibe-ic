@@ -203,9 +203,11 @@ EVIDENCE_ROLES: Tuple[str, ...] = ("actuate", "remeasure", "rollback",
 #: actuator, measurement, or undo is actually invoked.
 ROLE_CITATION_KINDS: Dict[str, Tuple[str, ...]] = {
     "actuate": ("fallback_after_trigger_in_loop",
-                "fallback_guarded_by_trigger"),
+                "fallback_guarded_by_trigger",
+                "gate_spawn_rc_guarded_fallback"),
     "remeasure": ("remeasure_after_fallback_in_loop",
-                  "remeasure_after_fallback_guarded_by_trigger"),
+                  "remeasure_after_fallback_guarded_by_trigger",
+                  "remeasure_after_gate_spawn_rc_guarded_fallback"),
     "rollback": ("calls", "call_in_loop"),
     "rollback_test": ("calls", "call_in_loop"),
 }
@@ -265,6 +267,8 @@ REMEASURE_ACTUATION_KIND: Dict[str, str] = {
     "remeasure_after_fallback_in_loop": "fallback_after_trigger_in_loop",
     "remeasure_after_fallback_guarded_by_trigger":
         "fallback_guarded_by_trigger",
+    "remeasure_after_gate_spawn_rc_guarded_fallback":
+        "gate_spawn_rc_guarded_fallback",
 }
 
 # Bounded structural proof, not a symbolic executor. Refuse promotion before
@@ -277,6 +281,13 @@ MAX_FLOW_STATES = 256
 #: by spelling `actuation_form: re_execute` beside an unrelated call.
 STEP_EXECUTION_ENTRYPOINTS: Dict[str, Tuple[str, ...]] = {
     "1": ("step_rtl_gen",),
+    # Step 9 is the SYNTHESIS step and its entrypoint is the function that
+    # re-enters it — `step_synth` calling `step_synth`. Registering it does not
+    # by itself promote anything: `bound_to_fallback` only decides whether a
+    # citation is ALLOWED to speak for this edge, and the citation still has to
+    # resolve against the AST. A row here for a step whose actuator does not
+    # exist buys DECLARED_ONLY, which is what this table is for.
+    "9": ("step_synth",),
     "32": ("_run_postroute_timing_repair",),
 }
 
@@ -286,6 +297,13 @@ STEP_EXECUTION_ENTRYPOINTS: Dict[str, Tuple[str, ...]] = {
 #: `step_reference_tb -> step_rtl_gen` retry merely because both edges target 1.
 STEP_TRIGGER_ENTRYPOINTS: Dict[str, Tuple[str, ...]] = {
     "2": ("step_crosslayer_rewrite_fidelity",),
+    # Step 9's observation is not a python call — it is a GATE the runner
+    # spawns, `area_total_vs_budget_check`, whose rc 1 IS the trigger the flow
+    # declares ("design__instance__area above the design's DECLARED ceiling").
+    # Naming the gate rather than the local that holds its path is what keeps
+    # this binding alive across a rename and what stops any other subprocess in
+    # the same 760-line function from being read as this one.
+    "9": ("area_total_vs_budget_check",),
     "4": ("step_reference_tb",),
     "23": ("_repair_dec.decide",),
     "32": ("_repair_dec.decide",),
@@ -341,6 +359,71 @@ REGISTRY: Dict[str, Dict[str, Any]] = {
             "rollback": ("the loop has no undo — a regeneration that makes the "
                          "design worse is kept; it stops on byte-identity "
                          "(FAIL_RTL_REPAIR_INERT), not on a worse measurement"),
+        },
+    },
+
+    # Step 9 (Synthesis) -> step 9. THE EDGE THE FLOW DECLARED AND THE RUNNER
+    # HAD BEEN EXECUTING ALL ALONG, under a fallback target that named the wrong
+    # step. `step_synth` spawns `area_total_vs_budget_check`; on its rc 1 —
+    # "the synthesised cell area exceeds the die area this design declares" — it
+    # re-enters ITSELF at `AREA_RETRY_PERIOD_RELAX` and re-reads `chip_area`.
+    #
+    # The runner had already written down why this could not be registered, at
+    # the site: `CLC-ACTUATION-NOT-FALLBACK-REENTRY: edge 9 falls back to step 1,
+    # but its actuator calls step_synth; expected one of [step_rtl_gen]`. The
+    # flow now declares `fallback_to: 9` (v1.13.66), so the actuator and the
+    # declaration finally name the same step.
+    "9": {
+        "class": REMEASURED,
+        "actuation_form": "re_execute",
+        "why": ("phase3_one_shot_runner.step_synth re-enters step_synth at "
+                "AREA_RETRY_PERIOD_RELAX on area_total_vs_budget_check rc 1 and "
+                "re-reads chip_area from the re-synthesised stats afterwards"),
+        "evidence": {
+            "actuate": [
+                {"kind": "gate_spawn_rc_guarded_fallback",
+                 "file": "programs/phase3_one_shot_runner.py",
+                 "caller": "step_synth",
+                 "trigger_callee": "area_total_vs_budget_check",
+                 "trigger_rc": 1,
+                 "callee": "step_synth"},
+            ],
+            "remeasure": [
+                {"kind": "remeasure_after_gate_spawn_rc_guarded_fallback",
+                 "file": "programs/phase3_one_shot_runner.py",
+                 "caller": "step_synth",
+                 "trigger_callee": "area_total_vs_budget_check",
+                 "trigger_rc": 1,
+                 "actuator_callee": "step_synth",
+                 "callee": "_synth_chip_area"},
+            ],
+        },
+        # ROLLBACK IS NOT CLAIMED, AND THE REASON IS A PROPERTY OF THE ACTUATOR
+        # RATHER THAN A MISSING TEST. `area_retry_is_worth_adopting` exists, has
+        # an address, and IS proven in the test tier — `tests/
+        # test_area_over_budget_reenters_synthesis.py` calls it directly across
+        # five arms. So the citation this tier wants could be written and would
+        # resolve.
+        #
+        # It is withheld because the tier means the program can UNDO ITS
+        # ACTUATION, and this one cannot. Re-synthesis has already OVERWRITTEN
+        # the first netlist by the time the comparison happens; the runner says
+        # so itself ("declining to adopt cannot be done by leaving files alone
+        # — it is done by REFUSING THE VERDICT"). What it prevents is the
+        # ADOPTION of a bad result, not the LOSS of the good one: a relaxed
+        # netlist that did not repair is left on disk while the step stays FAIL.
+        #
+        # Step 23's rollback RETAINS the pre-repair artefacts. Calling both of
+        # those ROLLBACK_PROVEN would make the top tier mean two different
+        # things, and a reader deciding whether a failed retry costs them their
+        # netlist would get the wrong answer from the census. REMEASURED is the
+        # tier this edge earns.
+        "not_claimed": {
+            "rollback": ("re-synthesis overwrites the first netlist before the "
+                         "comparison, so a retry that did not repair cannot be "
+                         "undone — it is refused as a VERDICT (the step stays "
+                         "FAIL and says the relaxed netlist is not adopted) "
+                         "while the worse artefact remains on disk"),
         },
     },
 
@@ -1755,6 +1838,227 @@ def _guarded_fallback_branch(fn: ast.AST, trigger: str, callee: str,
     return None
 
 
+
+# ─────────────────────────────────────────────────────────────────────────────
+# THE FIFTH ACTUATION SHAPE — a runner that branches on a GATE'S EXIT CODE
+#
+# The four kinds above all name the trigger by a PYTHON FUNCTION. Step 9's
+# trigger is not one. Its trigger is a GATE: `step_synth` spawns
+# `area_total_vs_budget_check` as a subprocess and branches on `returncode == 1`,
+# which is that gate's own "the synthesised cell area exceeds the declared die".
+#
+# WHY THIS IS A NEW KIND AND NOT A CITATION SOMEBODY FORGOT TO WRITE. Measured
+# on the shipped runner: the actuator sits four statements deep —
+#
+#     if _area_stats is not None and _area_prog.is_file():      # L11967
+#         try:                                                  # L11968
+#             _acp = subprocess.run([... area_total_vs_budget_check.py ...])
+#         else:
+#             if _acp.returncode == 1:                          # L11976
+#                 if period_relax == 1.0:                       # L12023
+#                     _area_retry = step_synth(...)             # L12029
+#
+# and `_guarded_fallback_branch` reads `_reachable_prefix(fn.body)` — the
+# function's TOP-LEVEL statements only — then requires a BOOLEAN
+# `trigger_value`. Neither holds here. So the registry could not have been made
+# to cover this edge by typing a row into it: the row would have resolved
+# `ok=False` and the edge would have stayed DECLARED_ONLY, which is the correct
+# refusal and the reason the register had two entries rather than three.
+#
+# THE TRIGGER IS IDENTIFIED BY THE PROGRAM IT SPAWNS, never by the local that
+# holds the path. `_area_prog` is a name; `area_total_vs_budget_check` is the
+# gate the flow declares at step 9, and binding the citation to the gate is what
+# stops a future rename of the local from silently unbinding the edge — and what
+# stops any OTHER subprocess in the same function from being read as this one.
+# ─────────────────────────────────────────────────────────────────────────────
+
+#: What a runner spawns a gate through. Narrow on purpose: a name outside this
+#: set is not a process launch, and crediting one would let an ordinary helper
+#: call stand in for a gate's verdict.
+_SPAWN_CALLEES: FrozenSet[str] = frozenset({
+    "run", "check_call", "check_output", "Popen", "call",
+})
+
+
+def _gate_spawn_results(fn: ast.AST, gate_stem: str) -> Set[str]:
+    """Names bound from a process spawn whose argv names `gate_stem`.
+
+    Two hops, because a runner never inlines the path: a local is bound to an
+    expression whose SOURCE names the gate module, and the spawn's argv names
+    that local. Both hops are read off the AST of this one function, so a local
+    of the same name in another function cannot contribute.
+    """
+    holders: Set[str] = {gate_stem, f"{gate_stem}.py"}
+    for node in ast.walk(fn):
+        if not isinstance(node, (ast.Assign, ast.AnnAssign)):
+            continue
+        value = node.value
+        if value is None:
+            continue
+        try:
+            text = ast.unparse(value)
+        except Exception:                                    # noqa: BLE001
+            continue
+        if f"{gate_stem}.py" not in text and gate_stem not in text:
+            continue
+        targets = (list(node.targets) if isinstance(node, ast.Assign)
+                   else [node.target])
+        for t in targets:
+            for sub in ast.walk(t):
+                if isinstance(sub, ast.Name):
+                    holders.add(sub.id)
+
+    out: Set[str] = set()
+    for node in ast.walk(fn):
+        if not isinstance(node, (ast.Assign, ast.AnnAssign)):
+            continue
+        call = node.value
+        if not isinstance(call, ast.Call):
+            continue
+        name = (call.func.attr if isinstance(call.func, ast.Attribute)
+                else getattr(call.func, "id", None))
+        if name not in _SPAWN_CALLEES:
+            continue
+        try:
+            argv = ast.unparse(call)
+        except Exception:                                    # noqa: BLE001
+            continue
+        if not any(h in argv for h in holders):
+            continue
+        targets = (list(node.targets) if isinstance(node, ast.Assign)
+                   else [node.target])
+        for t in targets:
+            for sub in ast.walk(t):
+                if isinstance(sub, ast.Name):
+                    out.add(sub.id)
+    return out
+
+
+def _rc_guard_branches(fn: ast.AST, result: str, rc_value: int
+                       ) -> List[Tuple[List[ast.stmt], List[ast.stmt]]]:
+    """Every `if <result>.returncode == <rc_value>:` and its two arms.
+
+    Returned as (selected, opposite) so the caller can require the actuator on
+    ONE side and its ABSENCE on the other — the same polarity contract
+    `_guarded_fallback_branch` enforces, and the reason a citation cannot be
+    satisfied by an actuator that runs whatever the gate said.
+    """
+    out: List[Tuple[List[ast.stmt], List[ast.stmt]]] = []
+    for node in ast.walk(fn):
+        if not isinstance(node, ast.If):
+            continue
+        test = node.test
+        if not isinstance(test, ast.Compare) or len(test.ops) != 1:
+            continue
+        left, op, right = test.left, test.ops[0], test.comparators[0]
+        if not isinstance(op, (ast.Eq, ast.NotEq)):
+            continue
+        if not (isinstance(left, ast.Attribute)
+                and left.attr == "returncode"
+                and isinstance(left.value, ast.Name)
+                and left.value.id == result):
+            continue
+        if not (isinstance(right, ast.Constant) and right.value == rc_value):
+            continue
+        if isinstance(op, ast.Eq):
+            out.append((list(node.body), list(node.orelse)))
+        else:
+            out.append((list(node.orelse), list(node.body)))
+    return out
+
+
+def _child_blocks(stmt: ast.stmt) -> List[List[ast.stmt]]:
+    """Every statement list a compound statement owns."""
+    if isinstance(stmt, ast.If):
+        return [list(stmt.body), list(stmt.orelse)]
+    if isinstance(stmt, ast.Try):
+        return ([list(stmt.body), list(stmt.orelse), list(stmt.finalbody)]
+                + [list(h.body) for h in stmt.handlers])
+    if isinstance(stmt, (ast.With, ast.AsyncWith)):
+        return [list(stmt.body)]
+    if isinstance(stmt, (ast.For, ast.AsyncFor, ast.While)):
+        return [list(stmt.body), list(stmt.orelse)]
+    return []
+
+
+def _block_containing_call(statements: List[ast.stmt], callee: str
+                           ) -> Optional[List[ast.stmt]]:
+    """The innermost block whose OWN statements contain a call to `callee`.
+
+    WHY THE PROOF IS SCOPED AND NOT WIDENED. `_update_written_predicates`
+    refuses a path when a name carrying a recorded boolean fact is rewritten by
+    something it cannot evaluate — "exploring both values would manufacture an
+    existential path, so fail this path closed". On the shipped area branch that
+    fires on `_area_retry = None` followed by `_area_retry = step_synth(...)`,
+    and the refusal is CORRECT: the analyser will not carry a stale fact and
+    will not invent a polarity.
+
+    So this walks DOWN to the block that owns the actuator instead of asking the
+    analyser to reason across the assignment that precedes its guard. That is a
+    STRICTER scope, never a looser one — the statements considered are a subset
+    of the branch's, so a claim proven here is proven there, and nothing about
+    the refused fact is guessed. Descent stops the moment a level owns the call
+    directly, or when more than one child block does: an actuator that appears
+    on two sibling paths is not one site, and this returns None rather than pick.
+    """
+    direct = any(callee in _called_names(st) for st in statements
+                 if not _child_blocks(st))
+    if direct:
+        return statements
+    owners = [(st, blk) for st in statements for blk in _child_blocks(st)
+              if callee in _called_names_in_block(blk)]
+    if len(owners) != 1:
+        return statements if any(
+            callee in _called_names(st) for st in statements) else None
+    return _block_containing_call(owners[0][1], callee) or owners[0][1]
+
+
+def _called_names_in_block(statements: List[ast.stmt]) -> Set[str]:
+    out: Set[str] = set()
+    for st in statements:
+        out.update(_called_names(st))
+    return out
+
+
+def _gate_spawn_rc_guarded_fallback(fn: ast.AST, gate_stem: str, callee: str,
+                                    rc_value: int) -> bool:
+    """The actuator runs on the gate's rc branch, and only on that branch."""
+    for result in sorted(_gate_spawn_results(fn, gate_stem)):
+        for selected, opposite in _rc_guard_branches(fn, result, rc_value):
+            if (_call_executes_on_a_path(selected, callee)
+                    and not _call_executes_on_a_path(opposite, callee)):
+                return True
+    return False
+
+
+def _remeasure_after_gate_spawn_rc_guarded_fallback(
+        fn: ast.AST, gate_stem: str, actuator: str, callee: str,
+        rc_value: int) -> bool:
+    """The measurement follows the actuator on the path the actuator runs.
+
+    ORDER IS THE CLAIM. A measurement taken BEFORE the re-entry measures the
+    thing the re-entry was supposed to change, which is how "it ran" gets
+    recorded as "it helped" — the substitution the REMEASURED tier exists to
+    prevent, and the one `postroute_timing_repair_audit` learnt the expensive
+    way. The shipped area branch reads `_before` BEFORE the re-entry and
+    `_after` AFTER it, through the SAME function; only the ordering tells them
+    apart, so nothing here may fall back to "the callee appears somewhere".
+
+    Tried at the branch first and, only if the analyser refuses that scope, at
+    the block that owns the actuator — never wider, and see
+    `_block_containing_call` for why narrowing is not a loosening.
+    """
+    for result in sorted(_gate_spawn_results(fn, gate_stem)):
+        for selected, _opposite in _rc_guard_branches(fn, result, rc_value):
+            if _ordered_calls_on_a_path(selected, actuator, callee):
+                return True
+            owner = _block_containing_call(selected, actuator)
+            if owner is not None and owner is not selected \
+                    and _ordered_calls_on_a_path(owner, actuator, callee):
+                return True
+    return False
+
+
 def _fallback_guarded_by_trigger(fn: ast.AST, trigger: str, callee: str,
                                  field: Optional[str],
                                  expected_value: Optional[bool]) -> bool:
@@ -1795,8 +2099,10 @@ def _resolve_citation(cit: Dict[str, Any], root: Path
     if kind in ("calls", "call_in_loop", "defines",
                 "fallback_after_trigger_in_loop",
                 "fallback_guarded_by_trigger",
+                "gate_spawn_rc_guarded_fallback",
                 "remeasure_after_fallback_in_loop",
-                "remeasure_after_fallback_guarded_by_trigger"):
+                "remeasure_after_fallback_guarded_by_trigger",
+                "remeasure_after_gate_spawn_rc_guarded_fallback"):
         tree = _parse(path)
         if tree is None:
             return False, f"{rel} could not be parsed"
@@ -1810,6 +2116,26 @@ def _resolve_citation(cit: Dict[str, Any], root: Path
         fn = _find_function(tree, caller)
         if fn is None:
             return False, f"{rel} does not define {caller}"
+        if kind in ("gate_spawn_rc_guarded_fallback",
+                    "remeasure_after_gate_spawn_rc_guarded_fallback"):
+            gate = str(cit.get("trigger_callee") or "")
+            rc = cit.get("trigger_rc")
+            if not isinstance(rc, int) or isinstance(rc, bool):
+                return False, (f"{rel}:{caller} citation declares no integer "
+                               "trigger_rc; the gate's verdict polarity is "
+                               "unknown, and a branch on an unnamed exit code "
+                               "is not a proof that the trigger fired")
+            if kind == "gate_spawn_rc_guarded_fallback":
+                ok = _gate_spawn_rc_guarded_fallback(fn, gate, callee, rc)
+            else:
+                actuator = str(cit.get("actuator_callee") or "")
+                ok = _remeasure_after_gate_spawn_rc_guarded_fallback(
+                    fn, gate, actuator, callee, rc)
+            return ok, (
+                f"{rel}:{caller} proves {kind}: it spawns {gate} and reaches "
+                f"{callee} on the rc=={rc} branch and not on the other" if ok
+                else f"{rel}:{caller} has no live {kind} proof for {gate} "
+                f"rc=={rc} -> {callee}")
         if kind in ("fallback_after_trigger_in_loop",
                     "fallback_guarded_by_trigger",
                     "remeasure_after_fallback_in_loop",
@@ -1880,6 +2206,15 @@ def _remeasure_extends_actuation(remeasure: Dict[str, Any],
     if expected_kind == "fallback_after_trigger_in_loop":
         return tuple(remeasure.get("terminal_values") or ()) == tuple(
             actuation.get("terminal_values") or ())
+    if expected_kind == "gate_spawn_rc_guarded_fallback":
+        # This shape has no boolean field; its polarity IS the exit code, so
+        # the join is on `trigger_rc`. Requiring a `trigger_value` here would
+        # have refused every citation of this kind — silently, and while
+        # reporting the ACTUATION as eligible, which reads as "the actuator is
+        # proven and the measurement is missing" for a runner that measures.
+        rc = remeasure.get("trigger_rc")
+        return (isinstance(rc, int) and not isinstance(rc, bool)
+                and rc == actuation.get("trigger_rc"))
     return (isinstance(remeasure.get("trigger_value"), bool)
             and remeasure.get("trigger_value")
             is actuation.get("trigger_value"))

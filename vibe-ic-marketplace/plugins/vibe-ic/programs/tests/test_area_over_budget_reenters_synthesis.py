@@ -46,19 +46,32 @@ def _adopt(before, after, budget):
     return area_retry_is_worth_adopting(before, after, budget)
 
 
-def _area_loop_branch(width: int) -> str:
-    """The area-loop branch's own source, anchored on its banner.
+def _area_loop_branch(width: int = 0) -> str:
+    """The area-loop branch's own source, anchored at BOTH ends.
 
-    The width is a BOUND, not a tolerance: the branch is 5634 characters and
-    the next statement (`_area_verdict = ...`) begins immediately after it, so
-    a window that overruns lands in a sibling of the same `if`, never in an
-    unrelated step. Read whitespace-normalised because the sentences wrap
-    across lines AND across adjacent string literals — a literal substring test
-    would be asserting the line width rather than the behaviour.
+    THE WIDTH USED TO BE A HAND-TYPED CHARACTER COUNT (2400 / 3000 / 3200 /
+    3600 / 5700) and every one of them was a hostage to the comment above the
+    code. Registering this loop as flow edge 9 -> 9 added twenty lines of
+    reasoning to that comment and FOUR of these tests went red at once — not one
+    of them because the behaviour they guard had changed. A window measured in
+    characters is asserting the prose length, which is the same defect as an
+    evidence window cut by a fixed tail.
+
+    So the end anchor is now STRUCTURAL: the branch ends where its enclosing
+    `if` ends, and `_area_verdict = ` is the first statement after it at the
+    outer indent. `width` is accepted and ignored so the call sites read the
+    same; it is no longer a bound anyone has to maintain.
+
+    Read whitespace-normalised because the sentences wrap across lines AND
+    across adjacent string literals — a literal substring test would be
+    asserting the line width rather than the behaviour.
     """
+    del width  # kept for call-site compatibility; the window is anchored now
     src = (_PROGRAMS / "phase3_one_shot_runner.py").read_text(errors="replace")
-    i = src.index("THE AREA LOOP, step 9 -> 1")
-    return " ".join(src[i:i + width].split())
+    i = src.index("THE AREA LOOP, step 9 -> 9")
+    j = src.index("_area_verdict = ", i)
+    assert j > i, "the branch's closing anchor moved above its opening one"
+    return " ".join(src[i:j].split())
 
 
 # ── the adoption decision ───────────────────────────────────────────────────
@@ -167,22 +180,42 @@ def test_a_retry_that_did_not_repair_keeps_the_step_FAILING():
 
 
 # ── the measurement that says this is NOT the flow's 9 -> 1 edge ────────────
-def test_the_branch_records_that_it_is_NOT_the_flows_9_to_1_edge():
+def test_the_branch_records_that_it_IS_the_flows_9_to_9_edge_and_why():
     """THE LOAD-BEARING HALF, and the reason this retry is honest rather than
-    merely bounded. The census refused the registration of this loop as edge 9
-    — 9 -> 1 means re-enter Spec-to-RTL, and this re-enters synthesis — and the
-    refusal is recorded AT THE LOOP, in the census's own words, so a reader who
-    finds the retry cannot mistake it for the declared edge being closed."""
-    branch = _area_loop_branch(2400)
+    merely bounded.
+
+    It used to assert the opposite, and correctly: while the flow said
+    `fallback_to: 1` the census REFUSED to register this loop as edge 9, because
+    9 -> 1 means re-enter Spec-to-RTL and this re-enters synthesis. The
+    declaration has since moved to the step the actuator re-enters, so the
+    branch now records that it IS the edge — and it keeps the old refusal
+    verbatim, which is the part that matters: the refusal is the evidence that
+    the TARGET followed the ACTUATOR, and not the other way round."""
+    branch = _area_loop_branch(3200)
+    assert "THIS IS THE FLOW'S EDGE 9 -> 9" in branch
+    # the refusal that used to stand, kept so the direction of the fix is
+    # readable from the code rather than only from a commit message
     assert "CLC-ACTUATION-NOT-FALLBACK-REENTRY" in branch
     assert "expected one of [step_rtl_gen]" in branch
-    assert "NOT THE FLOW'S 9 -> 1 EDGE" in branch
+    # ...and the anti-cheat, named at the site: the edge was NOT made reachable
+    # by editing the trigger text.
+    assert "NOT" in branch and "write a metric name into a trigger" in branch
 
 
-def test_the_three_measurements_for_why_9_to_1_stays_closed_are_recorded():
+def test_the_branch_records_that_rollback_is_not_claimed():
+    """The tier stops at REMEASURED, and the reason is a property of this code:
+    re-synthesis overwrites the first netlist before the comparison happens."""
+    branch = _area_loop_branch(3200)
+    assert "ROLLBACK IS NOT CLAIMED" in branch
+    assert "OVERWRITTEN" in branch
+
+
+def test_the_three_measurements_for_why_9_to_1_was_never_reachable_are_recorded():
     """A bounded retry whose bound nobody can see is the timeout-as-verdict
     defect in another costume. The claim "9 -> 1 cannot be closed today" is
-    falsifiable only if the three measurements behind it travel with it: no RTL
+    falsifiable only if the three measurements behind it travel with it. They
+    are why the FALLBACK TARGET moved rather than the actuator, so they are
+    still load-bearing after the move: no RTL
     producer reads an area budget, `step_rtl_gen` is deterministic, and the one
     remediation path takes two hint kinds and neither is area. Break any one of
     those and the conclusion changes — which is what makes it a measurement
