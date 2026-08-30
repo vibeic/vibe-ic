@@ -21,6 +21,7 @@ guard.
 """
 from __future__ import annotations
 
+import json
 import subprocess
 import sys
 from pathlib import Path
@@ -39,6 +40,46 @@ from _nda_fixture_tokens import FICTIONAL_NDA_TOKENS  # noqa: E402
 import commit_msg_nda_check as guard  # noqa: E402
 
 _CHECKER = _PROGRAMS / "commit_msg_nda_check.py"
+
+
+# ---------------------------------------------------------------------------
+# THIS MODULE OWNS THE TOKEN STORE IT MEASURES AGAINST.
+#
+# Every leak string below is built from `FICTIONAL_NDA_TOKENS`, so the guard
+# under test has to be looking for THAT set or the experiment is not the one
+# the assertions describe. `programs/tests/conftest.py` publishes exactly that
+# set — but with `os.environ.setdefault`, and deliberately so: "a host that
+# genuinely has the real tokens configured keeps them, so the suite measures
+# that host as it is." That is right for the suite and WRONG for this file: on
+# a configured host — which the landing tier is, because `_commercial_pdk`
+# hands `VIBEIC_NDA_TOKENS` "to a gate subprocess through the environment" —
+# `setdefault` loses, the guard hunts the real tokens, and every negative case
+# here presents a fictional one it was never told to look for.
+#
+# MEASURED, and it is the whole of vibe-ic#1181-style NORECORD on this file.
+# With any ambient `VIBEIC_NDA_TOKENS` exported, on unmodified main:
+#
+#     10 failed, 16 passed
+#     PROGRESS_PROTOCOL_INCOMPLETE: session finished before every selected
+#         item completed (26/90)
+#     NORECORD  programs/tests/test_commit_msg_nda_check.py — UNKNOWN, not clean
+#
+# The 16 positives pass (a clean message is clean under any store), the first
+# 10 negatives fail, `--maxfail=10` stops the session at item 26 of 90, and a
+# truncated session is not a record. So the file's verdict was UNKNOWN, and the
+# cause was never the driver: it was this module disagreeing with its own
+# fixture about which tokens exist.
+#
+# SCOPED, not global. A function-scoped autouse `monkeypatch` sets the variable
+# for THIS module's tests and restores it afterwards, so the conftest's policy
+# is untouched for every other file and nothing here depends on collection
+# order. `_nda_token_map()` re-reads the environment on every call and never
+# caches at import, so the override reaches both the in-process `guard.*` calls
+# and every checker subprocess `_run` spawns, which inherit this environment.
+# ---------------------------------------------------------------------------
+@pytest.fixture(autouse=True)
+def _fictional_token_store(monkeypatch):
+    monkeypatch.setenv("VIBEIC_NDA_TOKENS", json.dumps(FICTIONAL_NDA_TOKENS))
 
 
 # ---------------------------------------------------------------------------

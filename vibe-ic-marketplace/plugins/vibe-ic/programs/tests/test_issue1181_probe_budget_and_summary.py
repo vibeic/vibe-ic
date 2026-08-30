@@ -57,6 +57,8 @@ work inside a bound it fits keeps every result.
 """
 from __future__ import annotations
 
+import os
+import signal
 import subprocess
 import sys
 import textwrap
@@ -97,14 +99,45 @@ def test_a_session_killed_for_outliving_its_bound_loses_the_earned_result(
             subprocess.run(["sleep", "30"])
     """))
     killed = False
+    # THE KILL MUST OWN THE WHOLE TREE IT CREATED, and `subprocess.run(timeout=)`
+    # does not. On TimeoutExpired it kills the DIRECT child — the inner pytest —
+    # and nothing else; the fixture's `sleep 30` is a GRANDCHILD, so it survives
+    # the kill, is reparented to init, and outlives this session by ~25 s.
+    #
+    # MEASURED on unmodified main: the landing driver, which owns the complete
+    # descendant process tree by design, then reported
+    #
+    #     4 passed in 11.06s
+    #     LIVE_DESCENDANTS_CLEANED: pytest exited with unfinished descendant
+    #         process(es); ... cleaned pids=[507152]
+    #     NORECORD  ...test_issue1181_probe_budget_and_summary.py
+    #         pytest exited with unfinished live descendants — UNKNOWN, not clean
+    #
+    # and `ps -eo pid,ppid` showed that pid as `sleep 30` with PPID 1. Every
+    # test in this file PASSED and the file's verdict was still UNKNOWN, because
+    # a session that leaves work running cannot certify what it measured.
+    #
+    # `start_new_session=True` puts the child in its own process group, which
+    # the grandchild inherits, so ONE `killpg` reaches everything this test
+    # started. The assertions are unchanged and so is what they prove: the
+    # session is still killed for outliving its bound, and it still loses the
+    # record `test_a` had already earned. What changes is that this test now
+    # cleans up after itself instead of charging the cost to the next reader.
+    proc = subprocess.Popen(
+        [sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider",
+         "-o", "junit_family=xunit1", f"--junitxml={junit}", str(t)],
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+        env={"PATH": "/usr/bin:/bin", "PYTEST_DISABLE_PLUGIN_AUTOLOAD": "1"},
+        start_new_session=True)
     try:
-        subprocess.run(
-            [sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider",
-             "-o", "junit_family=xunit1", f"--junitxml={junit}", str(t)],
-            capture_output=True, text=True, timeout=_KILL_S,
-            env={"PATH": "/usr/bin:/bin", "PYTEST_DISABLE_PLUGIN_AUTOLOAD": "1"})
+        proc.communicate(timeout=_KILL_S)
     except subprocess.TimeoutExpired:
         killed = True
+        try:
+            os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+        except (ProcessLookupError, PermissionError):   # already gone
+            pass
+        proc.communicate()
     assert killed, (
         f"the session finished inside {_KILL_S} s — the slow fixture is no "
         "longer slow and this test proves nothing")
