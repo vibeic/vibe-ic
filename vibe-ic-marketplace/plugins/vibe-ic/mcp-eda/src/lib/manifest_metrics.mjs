@@ -67,8 +67,12 @@ export const REQUIRED_METRICS = {
   synthesis: [{ key: "cells" }],
   // OpenROAD slack; `timing_met` null means the slack line was never found.
   place_and_route: [{ key: "slack_ns" }, { key: "timing_met" }],
-  // KLayout cell count of the written stream.
-  gds_generation: [{ key: "cells" }],
+  // KLayout cell count of the written stream -- AND the placed-instance count of
+  // the design's own top cell. `cells` alone is ~98% PDK library (456 for a real
+  // 28-instance chip, 447 for the same DEF with COMPONENTS emptied), so it was
+  // satisfied by an EMPTY DIE. `top_insts` is the design-sized quantity; absent
+  // it, a gds_generation PASS proves only that KLayout ran.
+  gds_generation: [{ key: "cells" }, { key: "top_insts" }],
   // ATPG numbers — a PASS with no coverage number proves no ATPG.
   dft: [{ key: "coverage_pct" }, { key: "scan_chain_length" }, { key: "test_vectors" }],
   // cocotb test count — a run with no tests is not a passing run.

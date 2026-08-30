@@ -2152,6 +2152,36 @@ ly.write('${output_gds}')
 cell_count_after = ly.cells()
 print('GDS_CELLS=' + str(cell_count_after))
 print('MERGE_OK: ' + str(cell_count_before) + ' lib cells + DEF -> ' + str(cell_count_after) + ' total cells')
+
+# A-3: measure the DESIGN, not the library. cell_count_after counts cell
+# DEFINITIONS in the merged layout, ~98% of which come from the PDK; it moves
+# 456 -> 447 between a real chip and a die with every component deleted, so it
+# cannot tell them apart. Count the placed INSTANCES of the DEF's own top cell
+# instead. The top cell is taken from the DEF's 'DESIGN <name> ;' line -- an
+# exact anchor, NOT a heuristic: "the top cell with the most instances" picks
+# the PDK's sky130_fd_sc_hd__macro_sparecell (7 instances) on an emptied DEF and
+# reports a plausible non-zero number for an empty die.
+import re as _re
+_design = None
+with open(def_path) as _f:
+    for _line in _f:
+        _m = _re.match(r'\\s*DESIGN\\s+(\\S+)\\s*;', _line)
+        if _m:
+            _design = _m.group(1)
+            break
+if _design is None:
+    print('GDS_TOP_CELL_UNKNOWN=1')
+else:
+    print('GDS_TOP_CELL=' + _design)
+    _ci = ly.cell_by_name(_design)
+    if _ci is None or _ci < 0:
+        print('GDS_TOP_CELL_UNKNOWN=1')
+    else:
+        _n = 0
+        for _i in ly.cell(_ci).each_inst():
+            _n += 1
+        print('GDS_TOP_INSTS=' + str(_n))
+        print('GDS_DESIGN_CELLS=' + str(cell_count_after - cell_count_before))
 `;
 
     const gdsCmd = `echo '${pyScript.replace(/'/g, "'\\''")}' > /tmp/gen_gds.py && QT_QPA_PLATFORM=offscreen ${TOOLS}/klayout/klayout -z -r /tmp/gen_gds.py 2>&1`;
@@ -2163,14 +2193,42 @@ print('MERGE_OK: ' + str(cell_count_before) + ' lib cells + DEF -> ' + str(cell_
     const libMatch = result.output.match(/CELL_GDS_LOADED=(\d+)/);
     const mergeOk = result.output.includes('MERGE_OK');
 
+    // A-3. `cells` is the count of cell DEFINITIONS in the merged layout, ~98% of
+    // which come from the PDK library: it reads 456 for a real 28-instance chip
+    // and 447 for the same DEF with its COMPONENTS block emptied. Both satisfied
+    // REQUIRED_METRICS.gds_generation=[{key:"cells"}], so an EMPTY DIE was
+    // written to GDS and recorded success:true / status:"PASS". `cells` is a
+    // library size, not a design size, and MERGE_OK is printed unconditionally by
+    // the script itself — a self-echoed marker, not a measurement.
+    //
+    // The measurement that discriminates is the number of placed INSTANCES of the
+    // DEF's own top cell: 28 for the real design, 0 for the emptied one.
+    const topCellMatch  = result.output.match(/GDS_TOP_CELL=(\S+)/);
+    const topInstsMatch = result.output.match(/GDS_TOP_INSTS=(\d+)/);
+    const designCellsMatch = result.output.match(/GDS_DESIGN_CELLS=(-?\d+)/);
+    const topCellUnknown = result.output.includes("GDS_TOP_CELL_UNKNOWN=1");
+    const topInsts = topInstsMatch ? parseInt(topInstsMatch[1]) : null;
+    const designCells = designCellsMatch ? parseInt(designCellsMatch[1]) : null;
+    // An empty die is a FAIL: the layout was produced and provably holds no
+    // design. A top cell that could not be identified is NOT_MEASURED — absent
+    // must never be rendered as either good or bad.
+    const emptyDie = topInsts === 0;
+    const instsMeasured = topInsts !== null && !topCellUnknown;
+    const gdsOk = cellsMatch != null && mergeOk && instsMeasured && !emptyDie;
+
     if (cellsMatch != null) {
       const dir = output_gds.substring(0, output_gds.lastIndexOf("/"));
       writeManifest(dir || "/tmp", {
         step: "gds_generation",
-        status: "PASS",
         tool: "KLayout",
+        status: gdsOk ? "PASS" : (emptyDie ? "FAIL" : "PASS"),
         cells: parseInt(cellsMatch[1]),
         lib_cells: libMatch ? parseInt(libMatch[1]) : null,
+        // The design-sized metrics. `top_insts` is REQUIRED for gds_generation,
+        // so a run that could not measure it is recorded INCONCLUSIVE, never PASS.
+        top_cell: topCellMatch ? topCellMatch[1] : null,
+        top_insts: instsMeasured ? topInsts : null,
+        design_cells: designCells,
         cell_gds_source: resolvedCellGds,
         gds_file: output_gds,
       });
@@ -2188,17 +2246,21 @@ print('MERGE_OK: ' + str(cell_count_before) + ' lib cells + DEF -> ' + str(cell_
       outputs: { [output_gds]: sha256File(output_gds.replace("/work/", projGds + "/")) },
       measurement: measurementRecord({
         operation: "gds_generation",
-        measured: cellsMatch != null && mergeOk,
+        measured: gdsOk,
         reasonClass: "TOOL_DID_NOT_RUN",
-        reason: "klayout did not report MERGE_OK with a cell count, so no "
-              + "merged layout was produced and its cell count is not known",
+        reason: emptyDie
+              ? "the merged layout's top cell contains ZERO placed instances - an "
+                + "empty die was written; no design was measured"
+              : "klayout did not report MERGE_OK with a cell count and the top "
+                + "cell's placed-instance count, so no merged layout holding a "
+                + "design was produced",
         read: [def_file],
-        wrote: (cellsMatch != null && mergeOk) ? [output_gds] : [],
+        wrote: gdsOk ? [output_gds] : [],
         toolLabel: "klayout",
         version: getToolVersionSafe("klayout"),
         image: containerImageIdentity().image_ref,
       }),
-      exitCode: (cellsMatch != null && mergeOk) ? 0 : 1,
+      exitCode: gdsOk ? 0 : 1,
       durationMs: durationGdsMs,
       stdoutTail: result.output || "",
       stderrTail: result.error || "",
@@ -2209,9 +2271,23 @@ print('MERGE_OK: ' + str(cell_count_before) + ' lib cells + DEF -> ' + str(cell_
         {
           type: "text",
           text: JSON.stringify({
-            success: cellsMatch != null && mergeOk,
+            success: gdsOk,
             cells: cellsMatch ? parseInt(cellsMatch[1]) : null,
             lib_cells: libMatch ? parseInt(libMatch[1]) : null,
+            top_cell: topCellMatch ? topCellMatch[1] : null,
+            top_insts: instsMeasured ? topInsts : null,
+            design_cells: designCells,
+            error: emptyDie
+              ? `EMPTY DIE: the merged layout's top cell ${topCellMatch ? topCellMatch[1] : "?"} `
+                + `contains 0 placed instances. ${cellsMatch ? cellsMatch[1] : "?"} cell `
+                + `definitions were written but ${libMatch ? libMatch[1] : "?"} of those come `
+                + `from the PDK library, so the cell count cannot tell a chip from an empty `
+                + `die. No design was laid out.`
+              : (!instsMeasured && cellsMatch != null && mergeOk
+                  ? `NOT_MEASURED: could not identify the DEF's top cell (its DESIGN name) in `
+                    + `the merged layout, so the placed-instance count is unknown. The GDS was `
+                    + `written but is not certified to hold a design.`
+                  : undefined),
             cell_gds_source: resolvedCellGds,
             gds_file: output_gds,
             output: result.output.slice(-1500),
