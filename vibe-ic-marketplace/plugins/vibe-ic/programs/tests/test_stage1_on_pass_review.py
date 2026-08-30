@@ -543,19 +543,31 @@ def test_the_declaration_agrees_with_what_the_FLOW_actually_wires():
 
 
 def _declaration_block(src: str) -> str:
-    """The ENFORCEMENT paragraph ONLY, cut at the next section heading.
+    """The ENFORCEMENT PARAGRAPH only -- to the first blank line.
 
-    Scoped deliberately. The docstring below the declaration quotes the stale
-    sentence this guard exists to refuse, as history; a guard that read the
-    whole docstring would read that quotation as a live claim and could never
-    be satisfied. The claim under test is the one the declaration itself makes.
+    Scoped deliberately, and the scope is the whole point, so it is stated
+    exactly. Cutting at the next `===` SECTION HEADING instead -- which is what
+    this did when it landed -- swept in the paragraphs BELOW the declaration.
+    Those paragraphs narrate the sentence's own history: the retired claim in
+    quotation marks (`"both wirings -- stage1 and stage2"`) and the two dated
+    corrections that name `stage3` and `stage_analog` as things PAST versions
+    wired. The guard then read four stage names nobody was claiming.
+
+    MEASURED: on main at v1.13.25 it was RED, reporting an enumeration of
+    ['stage1','stage2','stage3','stage_analog'] against a flow wiring
+    ['stage1','stage2','stage3','stage4','stage_analog'] -- every one of those
+    four names came from the citation, and the live declaration names none.
+    #1850 wiring `stage4` is what exposed it; the misread was there from the
+    moment the guard landed.
+
+    A declaration is ONE paragraph. The prose after it is commentary ABOUT the
+    declaration, and commentary that cannot quote the mistake it explains is
+    commentary nobody can write.
     """
     import flow_gate_enforcement_audit as A
     m = A._DECL_RE.search(src[:A.DECL_WINDOW_BYTES])
     assert m, "no ENFORCEMENT declaration to scope to"
-    rest = src[m.start():]
-    nxt = re.search(r"\n([^\n]+)\n={3,}\n", rest)
-    return rest[:nxt.start()] if nxt else rest[:3000]
+    return re.split(r"\n[ \t]*\n", src[m.start():], maxsplit=1)[0]
 
 
 def test_the_declaration_does_not_ENUMERATE_the_wirings():
@@ -592,6 +604,62 @@ def test_the_declaration_does_not_ENUMERATE_the_wirings():
         f"v1.13.4 wired stage3 in between, and would have been false again "
         f"within a day when v1.13.11 wired stage_analog. Name them ALL or name "
         f"NONE; do not write a subset.")
+
+
+_CARDINAL = {"one": 1, "a single": 1, "both": 2, "two": 2, "three": 3,
+             "four": 4, "five": 5, "six": 6, "seven": 7, "eight": 8,
+             "nine": 9, "ten": 10}
+
+# A cardinal that QUANTIFIES wirings: "both wirings", "all three wirings",
+# "2 `on_pass_review:` blocks", "four stages wire". Deliberately NOT `no|zero`:
+# "a stage with no `on_pass_review:` block is NOT CHECKED" describes an ABSENT
+# block; it does not count the present ones.
+_WIRING_COUNT = re.compile(
+    r"\b(one|a single|both|two|three|four|five|six|seven|eight|nine|ten|\d+)\b"
+    r"((?:\s+(?:\w+|`[^`]+`)){0,3}?\s+)"
+    r"(wirings?|`?on_pass_review:?`?\s+blocks?|stages?\s+wire)",
+    re.I)
+
+
+def test_the_declaration_states_no_wiring_COUNT_the_flow_falsifies():
+    """The half its neighbour returns early on.
+
+    `test_the_declaration_does_not_ENUMERATE_the_wirings` compares the stage
+    names the declaration lists against the stage names the flow wires, and
+    when the declaration lists NONE it returns early -- correctly, because a
+    declaration that names nobody has no roster to go stale.
+
+    A COUNT is not a roster and survives that early return. MEASURED on this
+    tree: replace the live sentence with "it agrees with all three wirings that
+    exist" -- no stage named, so `named` is empty -- and the enumeration guard
+    passes, 1 passed rc=0, while the flow wires five. That is the same defect
+    in its other spelling, and it is the spelling the retired sentence's own
+    post-mortem predicted: "Correcting it to `three` would have been false
+    again inside a day."
+
+    THE PROPERTY, and it matches its neighbour's: state no count, or state one
+    the flow agrees with. Both are fine. A number the flow falsifies is not.
+    Same paragraph scope as the roster guard, so the commentary below the
+    declaration -- which says "making four" about what v1.13.11 did -- is not
+    read as a claim about now.
+    """
+    stages = _wired_stages()
+    actual = len(stages)
+    block = _declaration_block(PROG.read_text(encoding="utf-8"))
+
+    stale = []
+    for m in _WIRING_COUNT.finditer(block):
+        stated = _CARDINAL.get(m.group(1).lower())
+        if stated is None:
+            stated = int(m.group(1))
+        if stated != actual:
+            stale.append((" ".join(m.group(0).split()), stated))
+    assert not stale, (
+        f"the ENFORCEMENT declaration states a wiring count the flow "
+        f"falsifies: {stale!r} -- the flow wires {actual} "
+        f"({sorted(stages)}). A hand-typed count is a copy of the flow's size "
+        f"that nothing keeps true. Say what is true of EVERY wiring, or state "
+        f"a count this test can confirm.")
 
 
 def _wired_stages() -> dict:
