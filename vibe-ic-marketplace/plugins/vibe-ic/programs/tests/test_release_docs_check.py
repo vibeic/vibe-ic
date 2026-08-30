@@ -397,6 +397,24 @@ def test_an_unresolved_placeholder_is_refused(tmp_path):
     assert verdict_of(data, CONTROL) is True
 
 
+def test_a_name_that_merely_contains_a_placeholder_token_is_not_refused(tmp_path):
+    """The negative control for R8. A design name is arbitrary text this flow
+    does not choose, and `block_XXXa` is a legal one; a rule that reddens a
+    correct document over the letters inside a name gets switched off rather
+    than obeyed."""
+    project = released(tmp_path)
+    errata = docs_dir(project, SUBJECT) / "ERRATA.md"
+    errata.write_text(
+        errata.read_text(encoding="utf-8")
+        + "\n- The macro `block_XXXa` is unaffected; see also TODOS_ARE_FINE.\n",
+        encoding="utf-8")
+    result, data = report(project)
+    assert "UNRESOLVED_PLACEHOLDER" not in rules_for(data, SUBJECT), (
+        [f["message"] for f in data["findings"]
+         if f["rule"] == "UNRESOLVED_PLACEHOLDER"])
+    assert result.returncode == RC_PASS, result.stdout
+
+
 # ══════════════════ F6 — a manifest count nobody re-derived ════════════════
 
 def test_a_manifest_count_that_drifted_is_refused(tmp_path):

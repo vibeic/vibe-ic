@@ -105,7 +105,7 @@ from _release_docs_contract import (
     MANIFEST_NAME,
     NOT_MEASURED,
     PIN_COUNT_LABEL,
-    PLACEHOLDER_TOKENS,
+    PLACEHOLDER_RE,
     SIGNAL_PIN_LABEL,
     SUPPLY_PIN_LABEL,
     REASON_PREFIX,
@@ -278,13 +278,12 @@ def _check_placeholders(document: str, text: str, release: str,
     """R8 — no unresolved placeholder survives into a shipped document."""
     hits = 0
     for lineno, line in enumerate(text.splitlines(), 1):
-        for token in PLACEHOLDER_TOKENS:
-            if token in line:
-                hits += 1
-                findings.append(Finding(
-                    "UNRESOLVED_PLACEHOLDER", "ERROR", release,
-                    f"{document}:{lineno} still carries the placeholder "
-                    f"{token!r}: {line.strip()!r}"))
+        for match in PLACEHOLDER_RE.finditer(line):
+            hits += 1
+            findings.append(Finding(
+                "UNRESOLVED_PLACEHOLDER", "ERROR", release,
+                f"{document}:{lineno} still carries the placeholder "
+                f"{match.group(0)!r}: {line.strip()!r}"))
     return hits
 
 
