@@ -162,6 +162,17 @@ _UNPROVEN_LIST_RE = re.compile(r"Unproven\s+\$equiv\s+cells:\s*([^\n]+)")
 _TIMEOUT_MARKER = "[lec_run] ERROR: yosys equiv exceeded its time budget"
 _TIMEOUT_RE = re.compile(re.escape(_TIMEOUT_MARKER))
 
+# A progress-stall kill is a different resource outcome from exhausting the
+# caller's total wall budget.  Both mean "the proof did not complete" and both
+# must block frontend retries / false non-equivalence, but the report must say
+# which one happened.  `_progress_run.RC_STALLED` is deliberately distinct
+# from GNU timeout's 124/137, so preserve that distinction all the way to the
+# raw evidence instead of collapsing it into a misleading timeout.
+_STALL_MARKER = "[lec_run] ERROR: yosys equiv stopped making forward progress"
+_STALL_RE = re.compile(re.escape(_STALL_MARKER))
+_EXECUTION_STOP_RE = re.compile(
+    f"(?:{re.escape(_TIMEOUT_MARKER)}|{re.escape(_STALL_MARKER)})")
+
 # A wall-budget kill reaches run_yosys_equiv by TWO paths that must be treated
 # identically:
 #   (1) the HOST `subprocess.run(timeout=…)` raises subprocess.TimeoutExpired; or
@@ -180,6 +191,7 @@ _TIMEOUT_RE = re.compile(re.escape(_TIMEOUT_MARKER))
 # sky130A: 27904 $equiv cells, killed at 7200s, booked verdict=FAIL "may
 # genuinely differ" — a false non-equivalence that halted the whole flow).
 _CONTAINER_TIMEOUT_RCS = (124, 137)
+_PROGRESS_STALL_RCS = (_pr.RC_STALLED,)
 
 # EVIDENCE-BASED timeout split (merge of local FAIL vs origin #155
 # SKIPPED-CONDITION). A wall-budget kill (parse_error + _TIMEOUT_RE) is a pure
@@ -626,10 +638,10 @@ def gold_requires_sv2017(gold_files: List[str]) -> bool:
 # outcome; only a larger budget or a cheaper proof strategy could, and neither
 # is what the retry does.
 #
-# `_TIMEOUT_MARKER` is written ONLY by this program's own two budget-kill paths
-# (host `TimeoutExpired` and the container `timeout` rc in
-# `_CONTAINER_TIMEOUT_RCS`) - it is never tool output a design could emit - so
-# this discriminator cannot fire on any run that was not killed by OUR bound.
+# `_EXECUTION_STOP_RE` matches ONLY markers written by this program's own
+# budget-kill and progress-stall paths; neither is tool output a design could
+# emit.  This discriminator therefore cannot fire on a naturally completed
+# run.
 #
 # DIRECTION OF RISK: declining the retry can only make the recorded outcome
 # LESS conclusive, never more. It cannot manufacture a PASS (only a completed
@@ -639,21 +651,26 @@ def gold_requires_sv2017(gold_files: List[str]) -> bool:
 # is one way to spend hours and record nothing. chip/PDK/tool-AGNOSTIC: keys
 # only on this program's own marker.
 def budget_kill_blocks_frontend_retry(gold_log: str) -> Tuple[bool, str]:
-    """(blocked, evidence) - True iff <gold_log> was cut short by OUR OWN wall
-    budget, which makes a gold-FRONTEND retry incapable of changing the answer.
+    """(blocked, evidence) - True iff OUR supervisor cut <gold_log> short,
+    which makes a gold-FRONTEND retry incapable of changing the answer.
 
     PURE. Returns False (retry stays available) for every log that does not
-    carry `_TIMEOUT_MARKER`, so no run that ends on its own is moved."""
-    if not _TIMEOUT_RE.search(gold_log or ""):
+    carry a producer-owned execution-stop marker, so no run that ends on its
+    own is moved."""
+    if not _EXECUTION_STOP_RE.search(gold_log or ""):
         return False, ""
+    stopped_by = ("the no-forward-progress watchdog"
+                  if _STALL_RE.search(gold_log or "") else
+                  "the wall budget (wall-clock)")
     return True, (
-        "the gold read was NOT the failure - yosys ran to its wall budget and "
-        "was killed mid-proof (this program's own budget-exhaustion marker is "
-        "in the log), so no equiv_status was reached. Re-reading the gold with "
+        f"the gold read was NOT the failure - yosys was stopped mid-proof by "
+        f"{stopped_by} (this program's own execution-stop marker is in the "
+        "log), so no equiv_status was reached. Re-reading the gold with "
         "a different frontend cannot make an undecided SAT proof converge; it "
-        "only spends the budget again and delays the honest record. Raise "
-        "--timeout / VIBEIC_LEC_YOSYS_TIMEOUT_S, or close the remainder with "
-        "sign-off LEC.")
+        "only repeats the same undecided proof and delays the honest record. "
+        "Investigate the stalled process or raise --timeout / "
+        "VIBEIC_LEC_YOSYS_TIMEOUT_S as applicable, or close the remainder "
+        "with sign-off LEC.")
 
 
 def should_retry_gold_with_slang(parsed: Dict, gold_log: str,
@@ -700,11 +717,11 @@ def should_retry_gold_with_slang(parsed: Dict, gold_log: str,
     #
     # ASSEMBLY v1.11.95 - TWO BRANCHES IMPLEMENTED THIS SAME GUARD, and only one
     # copy may survive. The predicate is IDENTICAL: budget_kill_blocks_frontend_
-    # retry's whole test is `_TIMEOUT_RE.search(gold_log)`, and `_TIMEOUT_RE` is
-    # written ONLY by the two kill paths in `run_yosys_equiv`, so its presence is
-    # unambiguous evidence of budget exhaustion. The named function is kept
-    # because it is a superset: same predicate, PLUS the evidence string that
-    # reaches reports/lec.json, and it is the form under test
+    # retry's whole test is the producer-owned execution-stop marker, written
+    # ONLY by the kill paths in `run_yosys_equiv`, so its presence is
+    # unambiguous evidence that the proof did not complete. The named function
+    # is kept because it also carries the evidence string into reports/lec.json
+    # and is the form under test
     # (test_lec_bounded_proof.py::test_budget_killed_log_blocks_the_retry). A
     # second inline `_TIMEOUT_RE.search` here would be an unreachable duplicate
     # of one decision, not a second guard.
@@ -810,6 +827,8 @@ def parse_equiv_output(text: str) -> Dict:
     counts stay None (never the ambiguous -1 sentinel).
     """
     text = text or ""
+    _stop_kind = ("the no-forward-progress watchdog"
+                  if _STALL_RE.search(text) else "the wall-clock budget")
 
     final = _FINAL_RE.search(text)
     proven: Optional[int] = int(final.group(1)) if final else None
@@ -927,7 +946,7 @@ def parse_equiv_output(text: str) -> Dict:
             "FAIL → INCONCLUSIVE (the static/functional sign-off is not decided "
             "here; re-run with the slang frontend or fix the read error). See "
             "reports/lec.rpt for the frontend error.")
-    elif parse_error and _TIMEOUT_RE.search(text):
+    elif parse_error and _EXECUTION_STOP_RE.search(text):
         # MERGE (#155 origin SKIPPED-CONDITION vs local FAIL) — EVIDENCE-BASED
         # SPLIT: the miter was still running when the wall budget expired, leaving
         # no equiv_status (parse_error) but the self-written timeout marker.
@@ -951,14 +970,17 @@ def parse_equiv_output(text: str) -> Dict:
         if _MISMATCH_EVIDENCE_RE.search(text):
             verdict = "FAIL"
             verdict_explanation = (
-                "Yosys equiv exceeded its time budget, but the log RECORDED a "
+                f"Yosys equiv was stopped by {_stop_kind} before completion, "
+                "but the log "
+                "RECORDED a "
                 "mismatch / counterexample before it was killed — a proven "
                 "non-equivalence is a real FAIL regardless of the timeout. See "
                 "reports/lec.rpt for the recorded counterexample.")
         else:
             verdict = "SKIPPED-CONDITION"
             verdict_explanation = (
-                "Yosys equiv exceeded its time budget before equiv_status could "
+                f"Yosys equiv was stopped by {_stop_kind} before equiv_status "
+                "could "
                 "report — 0 points compared and NO mismatch was recorded, so "
                 "there is no equivalence evidence in either direction. This is a "
                 "DISCLOSED budget/capability gap (the same family as the $mem_v2 "
@@ -980,7 +1002,7 @@ def parse_equiv_output(text: str) -> Dict:
             "check did not reach a verdict (see reports/lec.rpt for the raw "
             f"tool log). NOT re-classified as INCONCLUSIVE because {_fe_evidence}"
             " — a run with no frontend-abort evidence stays a blocking FAIL.")
-    elif (_TIMEOUT_RE.search(text)
+    elif (_EXECUTION_STOP_RE.search(text)
           and proven is None and unproven is None
           and not _MISMATCH_EVIDENCE_RE.search(text)):
         # ORGANIC v1462 (ibex/CPU-class) — a wall-clock TIMEOUT killed the run
@@ -1006,7 +1028,7 @@ def parse_equiv_output(text: str) -> Dict:
         equivalent = False
         verdict = "INCONCLUSIVE"
         verdict_explanation = (
-            "Yosys equiv was KILLED by the wall-clock budget BEFORE any "
+            f"Yosys equiv was stopped by {_stop_kind} BEFORE any "
             "completed equiv_status verdict — no `N proven / M unproven` line "
             "was emitted (only the initial $equiv cell total was seen) and NO "
             "counterexample was recorded, so 0 points were decided in either "
@@ -1072,7 +1094,7 @@ def parse_equiv_output(text: str) -> Dict:
         #
         # The three budget guards above all have a precondition this shape
         # fails, so it fell through to the blocking FAIL below:
-        #   * the `parse_error + _TIMEOUT_RE` branch needs NOTHING parsed;
+        #   * the `parse_error + _EXECUTION_STOP_RE` branch needs NOTHING parsed;
         #   * the `proven is None and unproven is None` branch needs NEITHER
         #     count parsed;
         #   * `induction_did_not_converge` needs `Proved 0` or `Circuit
@@ -1086,7 +1108,7 @@ def parse_equiv_output(text: str) -> Dict:
         #     "N/T proven, U unproven — the RTL and gate netlist MAY GENUINELY
         #      DIFFER at these points."
         # from a log whose last line is this program's OWN
-        # `_TIMEOUT_MARKER`. That is the exact harm the module docstring says
+        # producer-owned execution-stop marker. That is the exact harm the module docstring says
         # this file exists to prevent: "a killed run produced NO evidence —
         # indistinguishable at the gate from a real mismatch", to be "NAMED
         # (raise --timeout) instead of read as a mismatch that was never
@@ -1114,15 +1136,15 @@ def parse_equiv_output(text: str) -> Dict:
         # So the re-class fires only on (timeout marker) AND (no completed
         # equiv_status) AND (no counterexample). §4.05 PRECISION-first /
         # NO-LEAK: each of the three conjuncts removes a way this could soften
-        # a real result, and `_TIMEOUT_RE` is written only by the two kill
-        # paths in run_yosys_equiv, so an in-budget run is untouched.
-        _budget_killed = bool(_TIMEOUT_RE.search(text))
+        # a real result, and `_EXECUTION_STOP_RE` is written only by this
+        # producer's kill paths, so a naturally completed run is untouched.
+        _execution_stopped = bool(_EXECUTION_STOP_RE.search(text))
         _measured_verdict = bool(_FINAL_RE.search(text))
-        if _budget_killed and not _measured_verdict and not _has_ctrex \
+        if _execution_stopped and not _measured_verdict and not _has_ctrex \
                 and not _noconv:
             _noconv = True
             _noconv_ev = (
-                "the wall-clock budget killed yosys mid-proof, before "
+                f"{_stop_kind} stopped yosys mid-proof, before "
                 "equiv_induct ran — the unproven remainder was never "
                 "attempted, not refuted")
         # NO-COMPLETED-COMPARISON KILL (measured: opentitan_aes × sky130A).
@@ -1136,8 +1158,9 @@ def parse_equiv_output(text: str) -> Dict:
         # … in module equiv" (_INDUCT_FOUND_RE) — so `proven is None AND
         # unproven is None` means the proof was CUT OFF before any point was
         # decided: an external kill / crash / container interruption that did
-        # NOT route through the wall-budget marker path (_TIMEOUT_RE absent, so
-        # _budget_killed above did not fire). Zero decided points + zero
+        # NOT route through an execution-stop marker path
+        # (_EXECUTION_STOP_RE absent, so _execution_stopped above did not
+        # fire). Zero decided points + zero
         # counterexamples = no equivalence evidence in EITHER direction — the
         # exact no-evidence state this module's docstring exists to keep OUT of
         # a false NOT_EQUIVALENT ("a killed run produced NO evidence —
@@ -1273,29 +1296,75 @@ def build_report(parsed: Dict, top: str, gate_netlist: str,
 
 
 # ---------------------------------------------------------------------------
-# Container plumbing (patterned on analog_real_corner_sweep._docker).
+# Container plumbing (patterned on the shared long-tool docker watchdog).
 # ---------------------------------------------------------------------------
-def _docker(container: str, cmd: str, timeout: int = 120):
+def _docker_exec_raw(container: str, cmd: str, timeout: int = 120):
+    """Short, unsupervised docker/host exec used only by watchdog probes.
+
+    `_docker_watchdog.run_docker_supervised` injects this callback for its
+    identity, CPU and reap probes.  Those commands are short and bounded; they
+    must not recursively enter the long-tool supervisor they are measuring.
+    """
+    argv = (["bash", "-lc", cmd] if container in ("", "host") else
+            ["docker", "exec", container, "bash", "-lc", cmd])
+    try:
+        r = subprocess.run(argv, capture_output=True, text=True,
+                           timeout=timeout)
+        return r.returncode, r.stdout, r.stderr
+    except subprocess.TimeoutExpired as exc:
+        out = exc.stdout or ""
+        err = exc.stderr or ""
+        if isinstance(out, bytes):
+            out = out.decode("utf-8", "replace")
+        if isinstance(err, bytes):
+            err = err.decode("utf-8", "replace")
+        return 124, out, err + f"\nprobe timeout after {timeout}s"
+    except OSError as exc:
+        return 127, "", f"COMMAND_NOT_FOUND: {exc}"
+
+
+def _docker(container: str, cmd: str, timeout: int = 120,
+            marker: Optional[str] = None):
     """Run `cmd` in the container under a bounded budget.
 
     The command carries its OWN container-side deadline a few seconds before
-    the host's. Without it, `subprocess.run`'s timeout kills the `docker exec`
-    CLIENT only — Docker does not propagate that inward, so the tool (here a
-    yosys equivalence run on a whole gate netlist, which can be tens of GB of
-    RAM) is ORPHANED and keeps burning a core and its memory unsupervised.
-    This function's own `except TimeoutExpired` handler shows the timeout is an
-    expected outcome, which makes the leak an expected outcome too.
+    host's.  A marked long tool additionally uses the shared container-aware
+    progress watchdog: it observes the stamped in-container process tree's CPU,
+    not merely the nearly-idle host `docker exec` client.  That distinction is
+    load-bearing for quiet Yosys SAT passes.  The former host-only progress
+    monitor killed two healthy RTLLM LEC jobs after its nested silence window
+    while each Yosys process was still advancing at one full core; the 7195 s
+    container timeout then survived as an orphan.
 
-    Same defect shape as the one measured leaking in the Phase-2 synth
-    dispatch; fixed here by pattern from that measurement, using the shared
-    helper. chip/tool-AGNOSTIC."""
+    The shared watchdog owns both sides of the contract: progress comes from
+    the real container tree, and a stall/ceiling reaps exactly the stamped tree
+    before releasing the host client.  `timeout` remains the TOTAL LEC attempt
+    budget, not a fresh retry budget.  Unmarked short probes retain the prior
+    lightweight path.  chip/tool/design-AGNOSTIC.
+    """
     try:
         import _docker_watchdog as _dw
-        cmd = _dw.wrap_with_container_timeout(cmd, timeout)
     except Exception:  # nosec — never let hardening break the call
-        pass
+        _dw = None
+
+    if marker and _dw is not None:
+        rc, out, err = _dw.run_docker_supervised(
+            container, cmd, marker,
+            docker_exec_raw=_docker_exec_raw,
+            # The producer's declared attempt budget is the absolute backstop.
+            # wrap_with_container_timeout fires five seconds earlier, normally
+            # returning GNU timeout's rc=124/137 for the existing classifier.
+            hard_ceiling_s=float(timeout),
+        )
+        return subprocess.CompletedProcess(
+            ["docker", "exec", container, "bash", "-lc", cmd],
+            rc, out, err)
+
+    if _dw is not None:
+        cmd = _dw.wrap_with_container_timeout(cmd, timeout)
     return _pr.run(
-        ["docker", "exec", container, "bash", "-lc", cmd],
+        (["bash", "-lc", cmd] if container in ("", "host") else
+         ["docker", "exec", container, "bash", "-lc", cmd]),
         capture_output=True, text=True)
 
 
@@ -1833,7 +1902,11 @@ def run_yosys_equiv(container: str, ys_path_in_container: str,
         r = _docker(
             container,
             cmd,
-            timeout=timeout)
+            timeout=timeout,
+            # Present in `yosys -s <path>` and therefore usable during the
+            # tiny pre-stamp race; after the stamp lands, supervision is by
+            # exact (pid, /proc starttime) identity and its descendants.
+            marker=ys_path_in_container)
     except subprocess.TimeoutExpired as exc:
         out = exc.stdout or ""
         if isinstance(out, bytes):
@@ -1861,6 +1934,8 @@ def run_yosys_equiv(container: str, ys_path_in_container: str,
     # real mismatch (proven on opentitan_aes × sky130A and covered by the tests).
     if launched and getattr(r, "returncode", 0) in _CONTAINER_TIMEOUT_RCS:
         out = out.rstrip("\n") + f"\n{_TIMEOUT_MARKER} after {timeout}s"
+    elif launched and getattr(r, "returncode", 0) in _PROGRESS_STALL_RCS:
+        out = out.rstrip("\n") + f"\n{_STALL_MARKER}"
     return launched, out
 
 
@@ -2629,6 +2704,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     # that actually ran, so "what was attempted" is evidence, not a guess.
     report["yosys_budget_s"] = args.timeout
     report["budget_exhausted"] = bool(_TIMEOUT_RE.search(raw))
+    report["progress_stalled"] = bool(_STALL_RE.search(raw))
     report["proof_stages_attempted"] = yosys_executed_passes(raw)[:40]
     # WHAT WAS CONSTRAINED, ALWAYS. Recorded on every run — including the runs
     # where nothing was constrained, with the reason — so a PASS on a scan
