@@ -414,12 +414,6 @@
         ],
         "why": "Cross-checks Datasheet / Application Note / Spec for consistency, which is phase-1 document work -- but its section 4 is 'spec_conformance_check.py -- Spec<->RTL contract gate (once RTL exists)' and runs `--rtl-dir phase2/stage1/rtl --top <module>`, and its procedure step 4 is 'Once RTL exists, run spec_conformance_check ... to prove the RTL conforms to the spec's ports + reset + latency contract'. That half reads stage1's artefact, so the skill is genuinely multi-stage. Found by spot-checking stage_phase1 against what each skill READS rather than what its name suggests."
       },
-      "phase1-output-verify": {
-        "stages": [
-          "stage_phase1"
-        ],
-        "why": "Its own description: runs 'After phase1_one_shot_runner emits 13 L*.json'. On-pass reviewer for this stage."
-      },
       "phase1-completeness-deep-review": {
         "stages": [
           "stage_phase1"

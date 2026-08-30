@@ -1,0 +1,76 @@
+{
+  "_comment": "Verbatim copies of the files stage_on_pass_review reads for stage_phase1, from two published benchmark-data cells. Nothing here is authored: each sha256 below is the source file's. The corpus-bound test re-reads the live cells when the corpus is resolvable; this fixture is what makes the control run on a checkout that has no corpus.",
+  "corpus_repo": "https://github.com/vibeic/benchmark-data",
+  "trees": {
+    "reject_spm": {
+      "cell": "ic/spm/v1.9.96_gf180mcuD",
+      "files": {
+        "phase1/generated_docs/L19_CONSTRAINTS_PDK.json": {
+          "bytes": 1302,
+          "sha256": "0a607cc8c218d329d05aab286c7be817ee5e9e59ed741173fd259bf9381182bc"
+        },
+        "phase1/generated_docs/L3_CMD_PROTOCOL.json": {
+          "bytes": 1430,
+          "sha256": "e6f136b980376b4f631403b6b01d1d5b782cdbe32c2bb12131b7fd9823b76c38"
+        },
+        "phase1/generated_docs/L4_REGMAP.json": {
+          "bytes": 1702,
+          "sha256": "636a98053f5b7f566201639eae29c08952fdca52888bee871b94fe672e4c08e3"
+        },
+        "phase1/input_doc/L1_product_metadata.txt": {
+          "bytes": 2266,
+          "sha256": "30b88fdce0860fc23da6e9b8a1700ec690bb0ab09fffcb2119b2976677ba49a6"
+        },
+        "phase1/input_doc/L2_architecture.txt": {
+          "bytes": 3005,
+          "sha256": "6d74a4e253477382c8bd076713ae92a29c72f066d7d9a1e814cc6e4401dab925"
+        },
+        "phase1/input_doc/L3_external_interface.txt": {
+          "bytes": 2052,
+          "sha256": "00e783dea0b688e6782bed9fe3e51b5436943aa011f7135534ccb3ca4f1ce04d"
+        },
+        "phase1/input_doc/L4_command_protocol.txt": {
+          "bytes": 454,
+          "sha256": "fe0944d5511da480a34ee6b0de00863e1c6b21f8003560794c511ac5237c9a8a"
+        },
+        "phase1/input_doc/L5_register_map.txt": {
+          "bytes": 456,
+          "sha256": "296f61b4759f52c9bb0a949da61d13e48de8215908d8c05d1d49f8b892dd1cbf"
+        },
+        "phase1/input_doc/L6_calibration.txt": {
+          "bytes": 415,
+          "sha256": "13992a4f0450c442c9a79bb21d0def1642ea67f7cacaa31b7f610c168c720f22"
+        },
+        "phase1/input_doc/L7_verification_plan.txt": {
+          "bytes": 6205,
+          "sha256": "465dfa3d935d577d040e42e41af3abf17d233cd813ec7b71ad5e885f244265c2"
+        },
+        "phase1/input_doc/L8_submodule_integration.txt": {
+          "bytes": 2333,
+          "sha256": "5bb8ae00cd186593d100dcd091dbf8bae47ddedbcaa1115f5cce51990edf97c0"
+        },
+        "phase1/input_doc/L9_constraints_floorplan.txt": {
+          "bytes": 3257,
+          "sha256": "17920001322a50abdedbdd058d2903637145f8d61f5120e8c5a1a79212241666"
+        }
+      }
+    },
+    "accept_a2b": {
+      "cell": "protocol_parity/a2b",
+      "files": {
+        "phase1/generated_docs/L4_REGMAP.json": {
+          "bytes": 2267,
+          "sha256": "ff09570870b9cf17967f317df8dde4c8727689bf14c28163228fb2355f28b2d1"
+        },
+        "phase1/generated_docs/L3_CMD_PROTOCOL.json": {
+          "bytes": 7442,
+          "sha256": "ecc3d8d503efe7e857157447b20c2b15da5298df76adf6cb5115557dc9331659"
+        },
+        "input/docs/a2b_spec.txt": {
+          "bytes": 19627,
+          "sha256": "5a52fb12bc058f94c44e424f45ffc59f6491d0fa30c9546dedcfc233f2f9542a"
+        }
+      }
+    }
+  }
+}

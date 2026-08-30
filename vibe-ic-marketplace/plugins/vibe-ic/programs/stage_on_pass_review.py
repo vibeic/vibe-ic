@@ -621,6 +621,208 @@ def rule_intent_pin_not_in_netlist(project: Path,
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# R1 for stage_phase1 — the artefact's claim about WHERE it read the intent
+# ─────────────────────────────────────────────────────────────────────────────
+# WHAT NOTHING ELSE CHECKS. `phase1_doc_input_completeness_check` measures the
+# INPUT -> L-doc direction: which verbatim tokens of the design input reached
+# some layer. MEASURED on the published cell `ic/spm/v1.9.96_gf180mcuD` it
+# answers PASS with 49 of 49 tokens captured. It never asks the opposite
+# question, and no other program in this plugin does either: when a layer says
+# WHERE it read a fact, is that source a file this run contains?
+#
+# Phase 1's artefact is a TRANSLATION of the design input rather than a
+# transformation of an upstream artefact, and each layer records its own
+# provenance — `extraction_evidence` maps an input path to the literals drawn
+# from it, and each entry of `top_module_pins` carries its own `evidence`. That
+# provenance is the artefact's one machine-readable claim ABOUT THE INTENT, and
+# it is checkable exactly: a path either resolves in the run tree or it does
+# not. No normalisation, no re-derivation, no tool.
+#
+# THE DEFECT IS REAL AND IT IS PUBLISHED. Three `ic/spm` cells and
+# `ic/u_hawaii_adc/v1.9.86_sky130A` attribute 65 literals to `input/docs/*.md`,
+# a directory none of them contains, while staging that same input at
+# `phase1/input_doc/*.txt` — same basename, different directory AND different
+# extension. `ic/spm/v1.9.96_gf180mcuD` proves it is the CITATION that is wrong
+# rather than the input that is missing: its own L19 cites
+# `phase1/input_doc/L1_product_metadata.txt` and resolves, while its L1/L2/L3
+# cite the `input/docs/*.md` spelling of the same documents and do not.
+#
+# Every downstream reader inherits this. Stage 1's own on-pass review treats
+# `L9_INTEGRATION_SPEC.json` as THE INTENT; a reviewer that trusts an intent
+# whose provenance points nowhere is grading a document that cannot be traced
+# to the design input at all.
+
+#: Sources whose ABSENCE is not evidence about the citation. The published
+#: corpus commits some binary design inputs and strips others (15 `.pdf` blobs
+#: are committed; 202 `.pdf` citations resolve to nothing), so a missing binary
+#: is a fact about the SNAPSHOT the reader holds, not about what the layer
+#: claimed. Text input is always published, which is what makes a missing `.md`
+#: or `.txt` evidence about the citation instead.
+#:
+#: THE DISARM IS LOAD-BEARING AND IT IS NARROW ON PURPOSE. MEASURED over the 91
+#: published roots carrying `phase1/generated_docs/`: with it, 4 roots are
+#: rejected; without it, 37 — a detector that fires on 41% of its corpus is the
+#: failure this rung exists to prevent, not a stricter version of it.
+_UNREADABLE_SOURCE_SUFFIXES = (".pdf",)
+
+#: Where a layer records provenance per PIN rather than per literal.
+_PER_ITEM_EVIDENCE_FIELDS = ("top_module_pins", "ports")
+
+
+def cites_a_path(value: Any) -> bool:
+    """Is this evidence value a CITATION of an input file, or a DISCLOSURE?
+
+    Phase 1 writes both into the same field, and telling them apart is the
+    whole precision of this rule. `input/docs/spec.md` is a claim about where a
+    fact was read. A `derived_from_*` key, or a sentence naming the program
+    that synthesised a port, is the layer disclosing that the fact was NOT read
+    out of any file — there is no path to check, and calling that a broken
+    citation would reject a layer for being honest about its own derivation.
+    That is the same move as R1's sentinel disarm one stage down.
+
+    MEASURED over the published corpus: 259 of 1008 evidence values are
+    disclosures rather than paths, and every one of them would otherwise be a
+    finding.
+    """
+    return bool(isinstance(value, str) and "/" in value
+                and not re.search(r"\s", value)
+                and re.search(r"\.[A-Za-z0-9]{1,6}$", value))
+
+
+def collect_citations(docs_dir: Path) -> Dict[str, Any]:
+    """Every provenance claim the L-docs make, split into citations and disclosures."""
+    cites: Dict[str, Dict[str, Any]] = {}
+    disclosures = 0
+    docs: List[str] = []
+    for fp in sorted(docs_dir.glob("L*.json")):
+        docs.append(fp.name)
+        try:
+            d = json.loads(fp.read_text(encoding="utf-8", errors="replace"))
+        except (OSError, ValueError):
+            continue
+        if not isinstance(d, dict):
+            continue
+        raw: List[tuple] = []
+        ev = d.get("extraction_evidence")
+        if isinstance(ev, dict):
+            for k, v in ev.items():
+                raw.append((k, len(v) if isinstance(v, list) else 1))
+        for field in _PER_ITEM_EVIDENCE_FIELDS:
+            for item in (d.get(field) or []):
+                if isinstance(item, dict) and item.get("evidence"):
+                    raw.append((item["evidence"], 1))
+        for value, n in raw:
+            if not cites_a_path(value):
+                disclosures += 1
+                continue
+            rec = cites.setdefault(str(value), {"literals": 0, "cited_by": []})
+            rec["literals"] += int(n)
+            if fp.name not in rec["cited_by"]:
+                rec["cited_by"].append(fp.name)
+    return {"citations": cites, "disclosures": disclosures, "docs": docs}
+
+
+def staged_input(project: Path, intent_rel: List[str]) -> List[str]:
+    """The design input this run actually contains, at the declared locations."""
+    out: List[str] = []
+    for rel in intent_rel:
+        base = project / rel
+        if base.is_dir():
+            for fp in sorted(base.rglob("*")):
+                if fp.is_file():
+                    out.append(str(fp.relative_to(project)))
+        elif base.is_file():
+            out.append(str(base.relative_to(project)))
+    return out
+
+
+def rule_cited_input_absent(project: Path, decl: Dict[str, Any]) -> Dict[str, Any]:
+    """R1 for stage_phase1. Returns {"verdict", ...}."""
+    artefact_rel = [str(x) for x in (decl.get("artefact") or [])]
+    intent_rel = [str(x) for x in (decl.get("intent") or [])]
+    docs_dirs = [project / r for r in artefact_rel
+                 if (project / r).is_dir() and "generated_docs" in str(r)]
+    if not docs_dirs:
+        return {"verdict": "NOT_CHECKED",
+                "why": ("the stage's `artefact:` names no readable "
+                        "phase1/generated_docs directory; there is no "
+                        "translation to review")}
+    found = collect_citations(docs_dirs[0])
+    cites = found["citations"]
+
+    # AN ARTEFACT THAT CITES NOTHING IS NOT AN ACCEPTANCE. A layer set that
+    # records no provenance at all refutes nothing and certifies nothing —
+    # the same rule R1 applies to an empty module set one stage down.
+    if not cites:
+        return {"verdict": "NOT_CHECKED", "why": (
+            f"{docs_dirs[0].relative_to(project)} carries {len(found['docs'])} "
+            f"L-doc(s) and NOT ONE path-shaped provenance claim among them "
+            f"({found['disclosures']} disclosure(s) that name no file). There "
+            f"is no claim about the input for this rule to check, and an "
+            f"absent claim is not a true one")}
+
+    have = staged_input(project, intent_rel)
+    by_stem = {}
+    for rel in have:
+        by_stem.setdefault(Path(rel).stem.lower(), []).append(rel)
+
+    unreadable, absent, grounded = [], [], []
+    for src in sorted(cites):
+        if Path(src).suffix.lower() in _UNREADABLE_SOURCE_SUFFIXES:
+            unreadable.append(src)
+        elif (project / src).is_file():
+            grounded.append(src)
+        else:
+            absent.append(src)
+
+    artefact = {
+        "generated_docs": str(docs_dirs[0].relative_to(project)),
+        "l_docs": len(found["docs"]),
+        "citations": len(cites),
+        "grounded": grounded,
+        "absent": absent,
+        "disarmed_unreadable_source": unreadable,
+        "disclosures": found["disclosures"],
+    }
+    intent = {"file": ", ".join(intent_rel) or "(none declared)",
+              "field": "staged design input",
+              "value": have[:12], "staged_count": len(have)}
+
+    if not absent:
+        return {"verdict": "ACCEPT", "intent": intent, "artefact": artefact}
+
+    literals = sum(cites[s]["literals"] for s in absent)
+    elsewhere = {}
+    for src in absent:
+        for cand in by_stem.get(Path(src).stem.lower(), []):
+            elsewhere[src] = cand
+            break
+    return {
+        "verdict": "REJECT",
+        "intent": intent,
+        "artefact": artefact,
+        "cited_but_absent": {s: cites[s] for s in absent},
+        "same_basename_staged_elsewhere": elsewhere,
+        "contradiction": (
+            f"{len(absent)} of the {len(cites)} source(s) the L-docs cite are "
+            f"not in this run, and {literals} literal(s) are attributed to "
+            f"them: {', '.join(absent[:4])}"
+            f"{', …' if len(absent) > 4 else ''}. This run stages "
+            f"{len(have)} design-input file(s) at {intent['file']}, and "
+            + (f"{len(elsewhere)} of the absent citation(s) name a file this "
+               f"run DOES stage under a different path (e.g. "
+               f"{sorted(elsewhere)[0]} vs {elsewhere[sorted(elsewhere)[0]]}), "
+               f"so the input was published and the CITATION is what is wrong. "
+               if elsewhere else
+               "no staged file carries any of those basenames. ")
+            + f"The provenance of those literals cannot be traced to the "
+              f"design input at all, and every downstream reader — stage 1's "
+              f"own review reads L9 as THE INTENT — inherits a document whose "
+              f"claim about where it came from is false."),
+    }
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # the rejection's executable test
 # ─────────────────────────────────────────────────────────────────────────────
 # THE TEST BELONGS TO THE RUN, NOT TO THE PLUGIN. The doctrine is that a
@@ -823,6 +1025,94 @@ if __name__ == "__main__":
 '''
 
 
+#: The stage_phase1 rejection's regression. Same contract as the stage-1 one:
+#: self-contained, stdlib only, a valid pytest module AND a `python3 <file>`
+#: script, resolving its own run root so no absolute path is baked in. It
+#: re-reads the L-docs' own provenance and the run tree; it runs no extractor
+#: and rebuilds no document.
+_EMITTED_TEST_PHASE1 = r'''#!/usr/bin/env python3
+"""AUTO-EMITTED by `{program}` from a stage-{stage} ON-PASS review rejection.
+
+    {contradiction}
+
+This test FAILS while that is true of this run tree and PASSES once it is
+repaired. It reads only this run's own L-docs and its own staged design input —
+no oracle, no harness, no golden — and it re-derives nothing: it runs no
+extractor and rebuilds no document.
+
+REPAIR is one of exactly two things, and which one is a design decision this
+test does not make:
+  * the design input is staged at the path the L-docs cite, or
+  * the L-docs' provenance is corrected to the path this run actually staged.
+"""
+import json
+import re
+import sys
+from pathlib import Path
+
+DOCS_REL = {docs_rel!r}
+UNREADABLE = {unreadable!r}
+_PER_ITEM = ("top_module_pins", "ports")
+
+
+def run_root() -> Path:
+    for d in [Path(__file__).resolve()] + list(Path(__file__).resolve().parents):
+        if (d / "phase1" / "generated_docs").is_dir():
+            return d
+    raise AssertionError("no run root above %s" % __file__)
+
+
+def cites_a_path(v):
+    return bool(isinstance(v, str) and "/" in v and not re.search(r"\s", v)
+                and re.search(r"\.[A-Za-z0-9]{{1,6}}$", v))
+
+
+def test_every_source_the_l_docs_cite_is_a_file_this_run_contains():
+    root = run_root()
+    docs = root / DOCS_REL
+    cites = {{}}
+    for fp in sorted(docs.glob("L*.json")):
+        try:
+            d = json.loads(fp.read_text(encoding="utf-8", errors="replace"))
+        except (OSError, ValueError):
+            continue
+        if not isinstance(d, dict):
+            continue
+        raw = []
+        ev = d.get("extraction_evidence")
+        if isinstance(ev, dict):
+            for k, v in ev.items():
+                raw.append((k, len(v) if isinstance(v, list) else 1))
+        for field in _PER_ITEM:
+            for item in (d.get(field) or []):
+                if isinstance(item, dict) and item.get("evidence"):
+                    raw.append((item["evidence"], 1))
+        for value, n in raw:
+            if cites_a_path(value):
+                cites[value] = cites.get(value, 0) + int(n)
+    checkable = {{s: n for s, n in cites.items()
+                 if Path(s).suffix.lower() not in UNREADABLE}}
+    assert checkable, (
+        "%s makes no checkable provenance claim; this test refutes nothing "
+        "over an artefact that cites no readable source" % DOCS_REL)
+    absent = sorted(s for s in checkable if not (root / s).is_file())
+    assert not absent, (
+        "%d of %d cited source(s) are not in this run, carrying %d attributed "
+        "literal(s): %s" % (len(absent), len(checkable),
+                            sum(checkable[s] for s in absent),
+                            ", ".join(absent)))
+
+
+if __name__ == "__main__":
+    try:
+        test_every_source_the_l_docs_cite_is_a_file_this_run_contains()
+    except AssertionError as e:
+        print("FAIL: %s" % e)
+        sys.exit(1)
+    print("PASS: every cited source is a file this run contains")
+'''
+
+
 def _body_r1(finding: Dict[str, Any], stage_id: str) -> str:
     return _EMITTED_TEST.format(
         program=_NAME, stage=stage_id,
@@ -839,6 +1129,14 @@ def _body_r2(finding: Dict[str, Any], stage_id: str) -> str:
         intent_rel=finding["intent"]["intent_rel"],
         intent_field=finding["intent"]["field"],
         netlist_rel=finding["artefact"]["artefact_rel"])
+
+
+def _body_phase1(finding: Dict[str, Any], stage_id: str) -> str:
+    return _EMITTED_TEST_PHASE1.format(
+        program=_NAME, stage=stage_id,
+        contradiction=finding["contradiction"],
+        docs_rel=finding["artefact"]["generated_docs"],
+        unreadable=tuple(_UNREADABLE_SOURCE_SUFFIXES))
 
 
 def emit_test(dest: Path, finding: Dict[str, Any], stage_id: str) -> Path:
@@ -866,6 +1164,7 @@ def emit_test(dest: Path, finding: Dict[str, Any], stage_id: str) -> Path:
 #: `ic/opentitan_aes` (its intent declares it read no top out of the input) and
 #: R2 rejects it.
 _RULES = {
+    "stage_phase1": [("R1_CITED_INPUT_ABSENT", rule_cited_input_absent)],
     "stage1": [("R1_INTENT_TOP_NOT_BUILT", rule_intent_top_not_built)],
     "stage2": [("R2_INTENT_PIN_NOT_IN_NETLIST", rule_intent_pin_not_in_netlist)],
 }
@@ -873,7 +1172,8 @@ _RULES = {
 #: The emitter for each rule's own regression. Keyed by rule id, beside
 #: `_RULES`, so a rule added without one fails loudly at emit time.
 _EMITTERS = {"R1_INTENT_TOP_NOT_BUILT": _body_r1,
-             "R2_INTENT_PIN_NOT_IN_NETLIST": _body_r2}
+             "R2_INTENT_PIN_NOT_IN_NETLIST": _body_r2,
+             "R1_CITED_INPUT_ABSENT": _body_phase1}
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -983,8 +1283,35 @@ def _print_r2(f: Dict[str, Any]) -> None:
               f"rule never rejects on them")
 
 
+def _print_phase1(f: Dict[str, Any]) -> None:
+    i, art = f["intent"], f["artefact"]
+    print(f"    INTENT   {i['file']} :: {i['field']} — "
+          f"{i['staged_count']} file(s): {', '.join(i['value'][:6])}"
+          f"{', …' if len(i['value']) > 6 else ''}")
+    print(f"    ARTEFACT {art['generated_docs']} — {art['l_docs']} L-doc(s) "
+          f"making {art['citations']} provenance claim(s); "
+          f"{len(art['grounded'])} resolve, {len(art['absent'])} do not")
+    for src in art["absent"][:6]:
+        rec = f["cited_but_absent"][src]
+        alt = f["same_basename_staged_elsewhere"].get(src)
+        print(f"      CITED {src}  ({rec['literals']} literal(s), by "
+              f"{', '.join(rec['cited_by'][:3])})"
+              + (f"  ->  this run stages {alt}" if alt else
+                 "  ->  no staged file carries that basename"))
+    if art["grounded"]:
+        print(f"    NOT A FINDING {len(art['grounded'])} citation(s) in the "
+              f"SAME run resolve ({', '.join(art['grounded'][:3])}), which is "
+              f"what shows the input was published and the citation is wrong")
+    if art["disarmed_unreadable_source"]:
+        print(f"    DISARMED {len(art['disarmed_unreadable_source'])} "
+              f"citation(s) of a source whose absence is a fact about the "
+              f"published snapshot rather than the citation: "
+              f"{', '.join(art['disarmed_unreadable_source'][:3])}")
+
+
 _PRINTERS = {"R1_INTENT_TOP_NOT_BUILT": _print_r1,
-             "R2_INTENT_PIN_NOT_IN_NETLIST": _print_r2}
+             "R2_INTENT_PIN_NOT_IN_NETLIST": _print_r2,
+             "R1_CITED_INPUT_ABSENT": _print_phase1}
 
 
 # ─────────────────────────────────────────────────────────────────────────────
