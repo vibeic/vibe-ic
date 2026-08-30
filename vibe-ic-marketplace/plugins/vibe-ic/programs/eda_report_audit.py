@@ -1435,6 +1435,10 @@ def _check_drc(project_dir: Path) -> AuditResult:
     # the sign-off policy can judge it. See `drc_report_check --signoff`.
     producers: List[dict] = []
     unreadable: List[str] = []
+    # A report that is PRESENT and EMPTY. Tracked apart from
+    # `unreadable` because they are different answers -- see the
+    # three-state note in the read loop below.
+    empty: List[str] = []
     # THE TOOL'S OWN FINAL WORD, alongside the summary that claims to report it.
     # Both are recorded per file and BOTH are disclosed, so a reader never has
     # to take the gate's word for which one the number came from.
@@ -1467,7 +1471,40 @@ def _check_drc(project_dir: Path) -> AuditResult:
         if not best_file:
             best_file = str(fp)
         n = _drc_real_violation_count(text)
-        if n is None:
+        # ---- THREE STATES, NOT TWO -----------------------------------
+        # A DRC report is ABSENT (never discovered -- the question could
+        # not be put, and nothing here measured this design), EMPTY (the
+        # tool wrote its report and had nothing to write: the question WAS
+        # put and the answer is zero), or POPULATED (the answer is whatever
+        # it parses to). Only the third can carry a violation.
+        #
+        # Collapsing EMPTY into "no determinable count" made a CLEAN route
+        # FAIL. OpenROAD's `detailed_route -output_drc` writes a zero-byte
+        # file exactly when it found no residual violation, so under the
+        # previous reading the cleaner the route, the redder this gate --
+        # and a route WITH violations, which writes a parseable report,
+        # passed the readability check the clean one failed.
+        #
+        # MEASURED 2026-08-30, spm x gf180mcuD, one tree, one gate:
+        #     routed_router.drc.rpt ABSENT -> passed True,  unreadable 0
+        #     routed_router.drc.rpt EMPTY  -> passed False, unreadable 1
+        # The sibling consumer added in the SAME commit that started
+        # requesting the report (`_router_drc_report_block`) already reads
+        # empty as clean; this is the other consumer of that artefact.
+        #
+        # RECORDED, NEVER SILENT (flow-change-acceptance 6): an empty
+        # report is NAMED in `empty_reports` and in a finding of its own,
+        # so "clean" never becomes indistinguishable from "the tool died
+        # before writing anything". It is credited as a count only -- the
+        # scope-wide `tool_authentic` requirement is untouched, so an empty
+        # file cannot on its own attest that any tool ran.
+        #
+        # chip-AGNOSTIC: emptiness of the tool's own output; no design,
+        # PDK, layer or vendor literal.
+        if n is None and not text.strip():
+            empty.append(_rel(fp, project_dir))
+            determined_files += 1
+        elif n is None:
             unreadable.append(str(fp))
         if n is not None:
             determined_files += 1
@@ -1554,6 +1591,20 @@ def _check_drc(project_dir: Path) -> AuditResult:
     # 2 would turn this gate GREEN — a cheaper false certificate than the one
     # being closed. "Nothing was certified" on a blocking sign-off gate is a
     # FAIL, not a skip.
+    # The EMPTY state, disclosed by name. INFO: it is a legitimate ZERO,
+    # not a defect -- but a reader must be able to see that the zero came
+    # from a report with no bytes in it rather than from a parsed count.
+    if empty:
+        _e_shown = ", ".join(empty[:5])
+        _e_more = f" (+{len(empty) - 5} more)" if len(empty) > 5 else ""
+        result.findings.append(Finding(
+            rule="DRC_REPORT_EMPTY", severity="INFO",
+            message=(f"{len(empty)} of {len(files)} discovered DRC report(s) "
+                     f"are PRESENT and EMPTY -- the tool wrote its report and "
+                     f"had no violation to write, read as ZERO violations. "
+                     f"This is NOT an absent report, which is not measured at "
+                     f"all and still refuses: {_e_shown}{_e_more}"),
+            file=empty[0]))
     if unreadable:
         _shown = ", ".join(unreadable[:5])
         _more = f" (+{len(unreadable) - 5} more)" if len(unreadable) > 5 else ""
@@ -1638,7 +1689,11 @@ def _check_drc(project_dir: Path) -> AuditResult:
                       "foundry_stdcell_excluded": stdcell_excluded,
                       "producers": producers,
                       "unreadable_files": len(unreadable),
-                      "unreadable": unreadable[:20]}
+                      "unreadable": unreadable[:20],
+                      # PRESENT-and-EMPTY, kept apart from both `unreadable`
+                      # (present, unparseable) and absence (never discovered).
+                      "empty_report_files": len(empty),
+                      "empty_reports": empty[:20]}
     return result
 
 

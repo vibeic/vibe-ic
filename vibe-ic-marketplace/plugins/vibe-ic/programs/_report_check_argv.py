@@ -56,7 +56,14 @@ from typing import List, Optional, Sequence, Tuple
 # — the exact defect class this helper exists to close, arriving through a
 # sibling change rather than a copy. The guard caught it on the accumulation
 # branch; neither PR alone was red.
-VALUE_FLAGS: Tuple[str, ...] = ("--mode", "--json", "--under")
+VALUE_FLAGS: Tuple[str, ...] = ("--mode", "--json", "--under",
+                                # A wrapper-owned option that TAKES A VALUE
+                                # must be registered here or the splitter
+                                # treats its value as the positional
+                                # project dir and silently re-points the
+                                # audit. See drc_report_check
+                                # WRAPPER_VALUE_FLAGS.
+                                "--require-report")
 
 
 def split_argv(
