@@ -71,6 +71,7 @@ import { threadCountTcl } from "./lib/pnr_threads.mjs";
 import { layoutHasGeometry } from "./lib/analog_layout_geometry.mjs";
 import { gateManifestEntry } from "./lib/manifest_metrics.mjs";
 import { parseWns, parseTns } from "./lib/sta_slack.mjs";
+import { parseIrReport, parseReportPower } from "./lib/psm_report.mjs";
 import { evaluateStaEvidence, staEvidenceTcl, STA_EVIDENCE_TERMS } from "./lib/sta_evidence.mjs";
 
 function _shellSingleQuotedHeredoc(content, sentinel) {
@@ -3764,12 +3765,31 @@ if {$rc} {
     const vssNet = _grab(/^PSM_VSS_NET=(.*)$/m) || null;
     const noPowerNet = result.output.includes("IR_DROP_NO_POWER_NET");
 
+    // P-1/P-4: PSM prints seven numbers, including Total power - the P of PPA.
+    // This tool parsed NONE of them and recorded a bare `status:"PASS"` with zero
+    // measurements, permanently. REQUIRED_METRICS had no `ir_drop` entry, so
+    // gateManifestEntry returned early and the INCONCLUSIVE gate that protects
+    // every other PPA step did not cover power. Every value PSM prints is in
+    // scientific notation (`3.50e-05 W`), so the parser is whole-line anchored
+    // and exponent-aware - a naive ([\d.]+) reads 3.50 and delivers a 10^5 error
+    // as a confident number.
+    const ir = parseIrReport(result.output);
+    const power = parseReportPower(result.output);
+    const irMeasured = ir.worst_ir_drop_v !== null && ir.total_power_w !== null;
+
     if (isComplete) {
       const dir = def_file.substring(0, def_file.lastIndexOf("/"));
       writeManifest(dir || "/tmp", {
         step: "ir_drop",
         status: "PASS",
         tool: "OpenROAD PSM",
+        net: vddNet,
+        // The measurements. Absent -> REQUIRED_METRICS turns this PASS into
+        // INCONCLUSIVE, which is the correct answer for a run that measured
+        // nothing.
+        ...ir,
+        report_power_w: power ? power.total_w : null,
+        report_power_split: power || undefined,
       });
     }
 
@@ -3806,6 +3826,14 @@ if {$rc} {
           success: (isComplete || isWarn) && !noPowerNet,
           exit_code: irRun.rc,
           openroad_error_count: irRun.errorCount,
+          measured: irMeasured,
+          not_measured_reason: irMeasured ? undefined
+            : (noPowerNet ? "the power net could not be identified in the DEF"
+               : (isWarn ? "PSM raised a connectivity error, which was caught; no IR report was produced"
+                  : "OpenROAD PSM printed no IR report")),
+          ...ir,
+          report_power_w: power ? power.total_w : null,
+          report_power_split: power || undefined,
           vdd_net: vddNet,
           vss_net: vssNet,
           def_power_nets: defPowerNets,

@@ -39,10 +39,12 @@ MCP_ROOT = Path(__file__).resolve().parents[1]
 SRC = (MCP_ROOT / "src" / "index.js").read_text()
 
 
-def _tool(name: str, span: int = 9000) -> str:
+def _tool(name: str) -> str:
+    """The whole tool body: from its name to the next server.tool( registration."""
     i = SRC.find(f'"{name}"')
     assert i > 0, f"tool {name} not found"
-    return SRC[i:i + span]
+    j = SRC.find("server.tool(", i)
+    return SRC[i:j if j > 0 else len(SRC)]
 
 
 def test_pdkconfig_separates_the_net_name_from_the_pin_name():

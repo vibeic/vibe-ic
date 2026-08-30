@@ -81,6 +81,15 @@ export const REQUIRED_METRICS = {
   extraction: [{ key: "size_bytes" }],
   // KLayout DRC violation count — a PASS with no count counted nothing.
   drc: [{ key: "violations" }],
+  // OpenROAD PSM. The measured bug: this step had NO entry here at all, so
+  // gateManifestEntry returned early (`if (!specs) return []`) and eda_ir_drop
+  // recorded `status:"PASS"` with zero measurements, permanently — an undeclared
+  // hole in the gate built for exactly this failure. PSM prints seven numbers
+  // including Total power, the P of PPA; the two required here are the quantity
+  // the tool is named for and the power number, both absent whenever PSM
+  // produced no IR report (a caught connectivity error, an unresolvable power
+  // net). Absent -> INCONCLUSIVE, never PASS.
+  ir_drop: [{ key: "worst_ir_drop_v" }, { key: "total_power_w" }],
 };
 
 // Names of the required metrics that are ABSENT from `entry`, in declaration
