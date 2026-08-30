@@ -2309,7 +2309,10 @@ def write_site_baseline() -> frozenset:
     empty baseline would make :func:`producer_regressions` unable to fire, and
     a guard that degrades to "off" reports success.
     """
-    inv = _producer._DEFAULT_INVENTORY
+    # `SHIPPED_INVENTORY`, not the program's `--root`-relative default: this
+    # module audits `SOURCE_ROOT` (= `F.PLUGIN_ROOT`) in-process, so the
+    # baseline it must agree with is the one shipped beside the program.
+    inv = _producer.SHIPPED_INVENTORY
     assert inv.is_file(), (
         f"{inv} is missing. It is the shrink-only record of declared outputs "
         f"this tree resolves to a write site, and without it the source arm of "

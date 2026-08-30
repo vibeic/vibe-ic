@@ -23,6 +23,25 @@ GATE = "a declared output has a live producer"
 
 _FLOW_REL = "vibe-ic-marketplace/plugins/vibe-ic/flow/phase1_phase2_phase3.yaml"
 _PROGRAMS_REL = "vibe-ic-marketplace/plugins/vibe-ic/programs"
+_BASELINE_REL = _PROGRAMS_REL + "/declared_output_write_site_baseline.json"
+
+#: THE SUBJECT CARRIES ITS OWN BASELINE, and it has to. The gate blocks on a
+#: DEMOTION -- a path this tree had resolved to a write site no longer having
+#: one -- which is a comparison against that file. A subject without one is a
+#: subject the gate cannot put its question to (rc 2), so leaving it out would
+#: make the fixture measure the absence of an input rather than the mutation.
+#:
+#: Both directions ship the SAME baseline, naming both declared outputs. That
+#: is what keeps the pair a controlled comparison: the flow, the producer file,
+#: the venue and the baseline are byte-identical across the two trees, and the
+#: single thing that moves is the producer's second destination.
+_BASELINE = """{
+  "write_site": [
+    "reports/synthetic_alpha_report.json",
+    "reports/synthetic_beta_report.json"
+  ]
+}
+"""
 
 _FLOW = '''steps:
   - id: '1'
@@ -64,6 +83,7 @@ def _tree(work: Path, producer: str) -> Path:
     programs = root / _PROGRAMS_REL
     programs.mkdir(parents=True, exist_ok=True)
     (programs / "synthetic_report_emit.py").write_text(producer, encoding="utf-8")
+    (root / _BASELINE_REL).write_text(_BASELINE, encoding="utf-8")
     return root
 
 
@@ -73,5 +93,16 @@ def can_pass(work: Path) -> Path:
 
 
 def can_fail(work: Path):
-    """The same producer, no longer writing — or naming — the second output."""
-    return _tree(work, _WRITES_ELSEWHERE), "no producer in the source"
+    """The same producer, no longer writing — or naming — the second output.
+
+    The expected refusal names the DEMOTION and not the `[NO-TRACE]` line the
+    same run also prints, because demotion is what this gate blocks on.
+    `test_no_trace_is_unreachable_so_it_cannot_be_the_only_blocker` measured
+    that on the real tree: deleting the sole producer of all 34
+    single-producer declared paths moved not one of them to NO-TRACE, because
+    the path's name survives in the source its READERS wrote. A fixture that
+    took the NO-TRACE line as the refusal would be green on a blocker a real
+    tree can never reach.
+    """
+    return (_tree(work, _WRITES_ELSEWHERE),
+            "[LOST WRITE SITE] reports/synthetic_beta_report.json")
