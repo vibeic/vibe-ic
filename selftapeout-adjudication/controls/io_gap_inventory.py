@@ -16,7 +16,9 @@ import json, os, re, glob, sys
 
 PDK  = "/home/reyerchu/_gf180_priv/pdk/gf180mcuD"
 IOLIB = f"{PDK}/libs.ref/gf180mcu_fd_io"
-ASG  = "/home/reyerchu/_jself_priv/probe_padring/phase3/stage3/pnr/pad_assignment.json"
+# J98: overridable so this file's exit(1) branch can be exercised.
+ASG  = os.environ.get("J98_ASG",
+       "/home/reyerchu/_jself_priv/probe_padring/phase3/stage3/pnr/pad_assignment.json")
 
 d = json.load(open(ASG))
 sides = {k: d.get(k, []) for k in ("PAD_SOUTH", "PAD_EAST", "PAD_NORTH", "PAD_WEST")}
@@ -58,7 +60,8 @@ print("\n=== 3. is the information to CHOOSE among them available? ===")
 # module BODY and found 8 ports in a submodule -- against 77 pads.  A count that does
 # not match the thing it is about is the adjacent-thing trap, and it read as an answer.
 # The top module declares its ports ANSI-style, INSIDE the parenthesised header.
-TOP = "/home/reyerchu/_jself_priv/probe_padring/phase2/stage1/rtl/chip_top.v"
+TOP = os.environ.get("J98_TOP",
+      "/home/reyerchu/_jself_priv/probe_padring/phase2/stage1/rtl/chip_top.v")
 txt = open(TOP, errors="replace").read()
 m = re.search(r"\bmodule\s+(\w+)\s*\((.*?)\)\s*;", txt, re.S)
 assert m, "no module header"

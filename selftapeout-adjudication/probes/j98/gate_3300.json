@@ -1,0 +1,49 @@
+{
+  "gate": "placement_legality_check",
+  "verdict": "FAIL",
+  "step_label": "placement_legality",
+  "placed_def": "phase3/stage3/pnr/placed.def",
+  "declared_components": 346888,
+  "parsed_components": 346888,
+  "placed": 346888,
+  "unplaced": 0,
+  "density_pct": null,
+  "density_source": null,
+  "placer_legality_verdict": "ILLEGAL",
+  "check_placement_violations": [
+    [
+      "SPARE",
+      14
+    ]
+  ],
+  "check_placement_raised": [],
+  "check_placement_unavailable": [],
+  "legalizer_failed_markers": [
+    "INITIAL_DPL_LEGALIZE_FAILED",
+    "POST_HOLD_LEGALIZE_FAILED"
+  ],
+  "legalizer_ok_markers": [],
+  "waiver": null,
+  "findings": [
+    {
+      "severity": "INFO",
+      "rule": "ALL_PLACED",
+      "message": "all 346888 component(s) carry PLACED/FIXED/COVER status"
+    },
+    {
+      "severity": "FAIL",
+      "rule": "LEGALIZER_REPORTED_FAILURE",
+      "message": "the placer's own legality check FAILED in this run: ['INITIAL_DPL_LEGALIZE_FAILED', 'POST_HOLD_LEGALIZE_FAILED'] in the PnR log. phase3/stage3/pnr/placed.def is the PRE-CTS snapshot and a DEF status token cannot express an overlap, so the checks above cannot see this: they report 346888 placed / 0 unplaced and are correct about the file they read. An unlegalized design loses pin access at detailed routing, and the resulting unrouted layout is then measured by DRC, LVS and EM as though it were the design."
+    },
+    {
+      "severity": "FAIL",
+      "rule": "CHECK_PLACEMENT_VIOLATIONS",
+      "message": "OpenROAD `check_placement` reported 14 violation(s) in this run: SPARE=14. That is the placer's OWN verdict on the database it actually placed — an overlap, a padding violation or an off-site instance. The DEF status-token checks above cannot see any of those: an illegally placed instance still carries `+ PLACED ( x y ) N`, so they report 346888 placed / 0 unplaced and are correct about the file they read."
+    },
+    {
+      "severity": "INFO",
+      "rule": "DENSITY_NOT_DERIVABLE",
+      "message": "placement density not derivable from DEF alone (per-cell areas live in the LEF) and no density report present — density check skipped, NOT fabricated"
+    }
+  ]
+}

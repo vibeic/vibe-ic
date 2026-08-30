@@ -1,0 +1,19 @@
+### perturbation 1 — name an ON-GRID instance as router-named: expect NOT CONFIRMED, rc=1
+  control  load_slew120204        (  2382240,   501760)  x%site=0     y%row=0      ON GRID
+  control  load_slew120205        (  2163840,   501760)  x%site=0     y%row=0      ON GRID
+
+NOT CONFIRMED: only 1/2 router-named instances are off grid.
+rc=1
+
+### perturbation 2 — draw the CONTROL from the off-grid group: expect WITHDRAWN, rc=2
+  control  load_slew120489        (  6503840,   184795)  x%site=0     y%row=4475   OFF GRID
+  control  load_slew120490        (  6503840,    66085)  x%site=0     y%row=3365   OFF GRID
+
+INCONCLUSIVE: only 3 control instance(s) matched; a control that small cannot separate the groups.
+rc=2
+
+### perturbation 3 — name an instance that does not exist: expect INCONCLUSIVE, rc=2
+  control  load_slew120204        (  2382240,   501760)  x%site=0     y%row=0      ON GRID
+
+INCONCLUSIVE: a named instance is absent from this DEF.
+rc=2

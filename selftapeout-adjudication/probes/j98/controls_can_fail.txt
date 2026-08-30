@@ -1,0 +1,37 @@
+=== perturbed here: the verdict must FLIP ===
+  SYNTHETIC-RED   cite_audit.py                    clean rc=0, +1 out-of-range coordinate rc=1
+  SYNTHETIC-RED   stale_figure_audit.py            clean rc=0, +1 unmarked superseded figure rc=1
+  SYNTHETIC-RED   branch_claim_by_name.py          real repo rc=0, non-repo rc=1
+      ^ and note WHICH value the broken query returns: the RETIRED substring
+        proxy reads 0 -- the exact number J74/J79 published AS the claim.
+        A broken query and a true claim were the same reading.  That is the
+        strongest argument against the proxy that exists, and it came from
+        controlling the replacement rather than from arguing about it.
+  SYNTHETIC-RED   io_gap_inventory.py              clean rc=0, one port declaration deleted rc=1
+  SYNTHETIC-RED   notfeasible_control.py           self-controlling since J98: re-invokes itself on synthetic trees, requires child rc 1
+  SYNTHETIC-RED   precheck_discriminates.sh        the brief's pre-check answers NOT_DETERMINED on an empty project and FAIL on one with a file where it globs -- so the four UNDETERMINED rows rest on an instrument that CAN say something else
+  SYNTHETIC-RED   summary_matches_its_rows.py      carries its own wrong-headline control and must report MISMATCH before it may read the report  [addendum/, not controls/]
+
+=== red seen on REAL input, not manufactured ===
+  OBSERVED-RED    decay_ledger.py                  4 rows MOVED on real input this dispatch -- meas/_j98/ledger_before_repin.txt
+
+=== a verdict whose red branch has NOT been fired, said as a gap ===
+  UNEXERCISED     posthold_verdict_predicate.py    rc=0: it moved NOT YET(2) -> HELD(0) on real input today, so two of its three states are exercised. Its REFUTED(1) branch never has been, and this run does NOT fire it: manufacturing a refutation of one's own registered predicate is evidence-shaping, which is worse than the gap
+  OBSERVED-RED    controls_can_fail.py             exited 1 naming itself the first time it was published into controls/ -- an unmanufactured red on real input. rc 1 = a control cannot redden, rc 2 = a file in controls/ went unaccounted, rc 3 = its own classifier failed its control
+
+=== render no verdict — asserted mechanically, not by my say-so ===
+  CONTROL  parses-a-FAILED-token -> renders_verdict=False (want False); prints-a-bare-FAIL -> True (want True)
+  REPORTER        build_to_fixed_point.py          no non-zero sys.exit, and no PASS/FAIL that is not part of a parsed token
+  REPORTER        initial_ladder_five.py           no non-zero sys.exit, and no PASS/FAIL that is not part of a parsed token
+  REPORTER        io_mix_vs_padfloor.py            no non-zero sys.exit, and no PASS/FAIL that is not part of a parsed token
+  REPORTER        logcut.py                        no non-zero sys.exit, and no PASS/FAIL that is not part of a parsed token
+  REPORTER        posthold_rung5_cost.py           no non-zero sys.exit, and no PASS/FAIL that is not part of a parsed token
+  REPORTER        resolve_five.py                  no non-zero sys.exit, and no PASS/FAIL that is not part of a parsed token
+
+=== coverage: every file in controls/ accounted for ===
+  (not a runnable, accounted: predicate_registered_at.txt)
+  16 file(s) in controls/, 15 classified, 1 non-runnable, 0 unaccounted
+
+Every verdict-rendering control is shown capable of RED — by perturbation here,
+or by an unmanufactured red on real input — except the registered predicate,
+whose REFUTED branch is named above as an unexercised gap rather than fired.

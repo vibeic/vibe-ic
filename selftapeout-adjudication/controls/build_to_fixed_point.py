@@ -15,6 +15,13 @@ IDENTICAL to the last published digit at all four dies.
 
 Inputs are the arms' own OpenROAD `DPL-0006/0007/0008` lines, nothing else.
 """
+
+print("NOTE — SUPERSEDED BY A FIFTH ARM (J76): this file solves the fixed point at "
+      "FOUR dies and its top figure, 6164.9 um / 2.154x, is the build-to top as it "
+      "stood BEFORE arm 5. The published answer is 6138.8-6171.2 um / 2.145-2.156x, "
+      "from controls/resolve_five.py, which reads the five arms' raw logs instead "
+      "of this file's typed table. Every number below is correct FOR FOUR ARMS.")
+
 import math
 
 # die_um: (core_area, movable_initial, fixed_initial, movable_posthold, fixed_posthold)

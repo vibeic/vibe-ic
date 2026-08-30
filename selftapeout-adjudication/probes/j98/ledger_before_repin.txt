@@ -1,0 +1,43 @@
+# decay ledger, run BEFORE this dispatch re-pinned it
+# 2026-08-22 22:25:38 CST
+
+kind        claim                                                     published                    now                          state
+--------------------------------------------------------------------------------------------------------------------------------------------
+external    remote heads TOTAL (informational, not pinned)            67 at J74 / 72 at J79        249                          HELD
+external    remote heads matching 'jself' (J74)                       0                            1                            MOVED
+external    origin/main sha — re-verified at ae78abb28 by J91         ae78abb28                    ae78abb28                    HELD
+external    next/clkbuf-downsize-diagnostic-is-inverted on the remote f99979a73                    f99979a73                    HELD
+external    the placeability-bound branch on the remote               4d1de0e2c                    4d1de0e2c                    HELD
+external    the report branch: remote tip == this worktree's HEAD     04f8dcc30                    04f8dcc30                    HELD
+external    pushed RESULT.md == this directory's RESULT.md            equal at push time           DRIFTED (live ac0bc2948 / pushed 5de099d2c) HELD
+frozen      PAD_INSTANCE_NOT_IN_BLOCK on origin/main                  >=1 (present)                2 occurrence(s)              HELD
+live-first  die 3800 post-hold FIRST-block residual                   2352                         2352                         HELD
+live-last   die 3800 post-hold LAST-block residual                    2340                         300                          MOVED
+live-last   die 3800 residual per rung                                2352 -> 2352 -> 2344 -> 2340 2352 -> 2352 -> 2344 -> 2340 -> 2307 -> 300 MOVED
+live-first  die 4200 post-hold FIRST-block residual                   2296                         2296                         HELD
+live-last   die 4200 post-hold LAST-block residual                    2296                         2296                         HELD
+live-first  die 5153 post-hold FIRST-block residual                   2418                         2418                         HELD
+live-last   die 5153 post-hold LAST-block residual                    2418                         2418                         HELD
+live-first  die 5434 post-hold FIRST-block residual                   2409                         2409                         HELD
+live-last   die 5434 post-hold LAST-block residual                    2409                         2409                         HELD
+frozen      j88_rootbig terminal post-hold residual                   2042                         2042                         HELD
+frozen      j88_rootfit terminal post-hold residual                   8                            8                            HELD
+live-open   any arm printed POST_HOLD_LEGALIZE_*                      none yet                     3300:POST_HOLD_LEGALIZE_FAILED MOVED
+monotone    die 3300 arm cumulative CPU seconds                       >= 70115                     94365                        MONOTONE-SAFE
+monotone    die 3800 arm cumulative CPU seconds                       >= 52023                     75951                        MONOTONE-SAFE
+monotone    die 4200 arm cumulative CPU seconds                       >= 50556                     74707                        MONOTONE-SAFE
+monotone    die 5153 arm cumulative CPU seconds                       >= 26806                     50957                        MONOTONE-SAFE
+monotone    die 5434 arm cumulative CPU seconds                       >= 16142                     40291                        MONOTONE-SAFE
+
+  * remote heads TOTAL (informational, not pinned): a count of OTHER people's branches; it moves whenever anyone pushes, so it is reported and never asserted
+  * remote heads matching 'jself' (J74): THIS is the load-bearing half of J74's sentence, and it is stable
+  * pushed RESULT.md == this directory's RESULT.md: informational: the canonical copy is the one in _jself_priv; the pushed one is a named snapshot and re-push is how it catches up
+  * die 3800 post-hold LAST-block residual: DECAYING BY CONSTRUCTION: a new rung rewrites it
+  * die 3800 residual per rung: the whole ladder; grows a term per rung
+  * die 4200 post-hold LAST-block residual: DECAYING BY CONSTRUCTION: a new rung rewrites it
+  * die 5153 post-hold LAST-block residual: DECAYING BY CONSTRUCTION: a new rung rewrites it
+  * die 5434 post-hold LAST-block residual: DECAYING BY CONSTRUCTION: a new rung rewrites it
+  * any arm printed POST_HOLD_LEGALIZE_*: the report's one stated-open item, published as OPEN; an answer is a FINDING
+
+4 published reading(s) MOVED: ["remote heads matching 'jself' (J74)", 'die 3800 post-hold LAST-block residual', 'die 3800 residual per rung', 'any arm printed POST_HOLD_LEGALIZE_*']
+Correct the sentence where it stands, or say beside it what it is a reading OF.

@@ -1,0 +1,72 @@
+{
+  "stages": [
+    {
+      "name": "floorplan",
+      "path": "phase3/stage3/pnr/floorplan.def",
+      "exists": true,
+      "size": 34046727,
+      "sha256": "e669433c9b0894485eb9345ef95b72a9d38b0376fd6a8c0c278496a694eb4853",
+      "num_components": 191615,
+      "has_routing": false,
+      "signal_route_stmts": 0,
+      "special_route_stmts": 0,
+      "declared_signal_nets": 191694
+    },
+    {
+      "name": "placed",
+      "path": "phase3/stage3/pnr/placed.def",
+      "exists": true,
+      "size": 90852852,
+      "sha256": "f94097c55bfc4fe0dc5231b73a9f59ba2f30b94e8df56b833931455ed4d2d827",
+      "num_components": 346888,
+      "has_routing": true,
+      "signal_route_stmts": 0,
+      "special_route_stmts": 55638,
+      "declared_signal_nets": 249670
+    },
+    {
+      "name": "post_cts",
+      "path": "phase3/stage3/pnr/post_cts.def",
+      "exists": true,
+      "size": 93324190,
+      "sha256": "03decfbf685803546d158d23939290bbc4944bc9641b3faea4972be867c1e493",
+      "num_components": 359272,
+      "has_routing": true,
+      "signal_route_stmts": 0,
+      "special_route_stmts": 55638,
+      "declared_signal_nets": 256813
+    },
+    {
+      "name": "post_hold",
+      "path": "phase3/stage3/pnr/post_hold.def",
+      "exists": true,
+      "size": 93350416,
+      "sha256": "423de489d4984100498f2254d48f703e3dd71678561a92c9f7f3a0309cfc2fb5",
+      "num_components": 359436,
+      "has_routing": true,
+      "signal_route_stmts": 0,
+      "special_route_stmts": 55638,
+      "declared_signal_nets": 256977
+    },
+    {
+      "name": "routed",
+      "path": "phase3/stage3/pnr/routed.def",
+      "exists": true,
+      "size": 114373502,
+      "sha256": "325d5e7352b95858e551ede6a8db64db775666582568f02fe148fa318a7422a4",
+      "num_components": 817322,
+      "has_routing": true,
+      "signal_route_stmts": 0,
+      "special_route_stmts": 55638,
+      "declared_signal_nets": 257867
+    }
+  ],
+  "errors": [
+    {
+      "severity": "error",
+      "rule": "signal-nets-unrouted",
+      "message": "routed.def declares 257867 signal net(s) in NETS but ZERO of them carry routing geometry \u2014 every `+ ROUTED` / `+ SHAPE` statement in the file (55638) is in SPECIALNETS, i.e. the power grid, which is written before detailed routing runs. The design interconnect is absent from this DEF. The PnR log shows the detailed router DID reach the design and then stopped, so this is an aborted route, not global-route-only mode."
+    }
+  ],
+  "warnings": []
+}

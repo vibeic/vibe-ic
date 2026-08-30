@@ -1,0 +1,11 @@
+  logs/p3_matmul2.log
+    ROUTE_DRC state      : NEITHER
+    detail               : route__drc_errors: NOT DETERMINED — neither the tool's metrics nor its log carried this number. That is not a reading of zero.
+    routing-residual lines in its PnR log: 0
+
+  logs/p3_sha256b.log
+    ROUTE_DRC state      : NO_METRIC
+    detail               : route__drc_errors: 3 came from PARSING THE LOG — the tool emitted no metric for it, so this value is a proxy for the measurement, not the measurement.
+    routing-residual lines in its PnR log: 2455
+
+DISCRIMINATES: the two arms report DIFFERENT states, `NEITHER` and `NO_METRIC` — so `NOT DETERMINED` is a reading this gate ARRIVED at, not the only thing it can say.

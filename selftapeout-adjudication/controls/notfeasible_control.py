@@ -26,6 +26,65 @@ EXPECT = {
     "mask_views": 0,
 }
 
+# ---------------------------------------------------------------------------
+# J98 — THE POSITIVE CONTROL, which used to be a hand-run and is now the run.
+#
+# J79 published this file as "a file with positive controls rather than a
+# hand-run command".  Half of that was true: the READINGS were filed.  The
+# controls were not -- they were done by pointing J79_PDK / J79_FRAM at
+# synthetic trees BY HAND, so a plain run proved only that the four `0`s and
+# `[]`s are what the real sources say, never that this code can print anything
+# else.  A control you have to remember to run is the thing this file's own
+# docstring says it exists to replace.
+#
+# So the file now controls ITSELF before it measures: it builds synthetic trees
+# carrying exactly what the verdicts say is absent -- an `nfet_1v2`, a low-voltage
+# corner lib, a mask-level view -- re-invokes THIS SAME FILE against them, and
+# requires it to FAIL.  Re-invoking rather than re-implementing is deliberate:
+# a re-implementation controls a copy of the predicate, not the predicate.
+# ---------------------------------------------------------------------------
+if not os.environ.get("J98_SELFCONTROL"):
+    import subprocess, tempfile, textwrap
+    with tempfile.TemporaryDirectory(prefix="j98_poscontrol_") as _tmp:
+        _pdk = os.path.join(_tmp, "pdk")
+        os.makedirs(f"{_pdk}/libs.tech/ngspice")
+        os.makedirs(f"{_pdk}/libs.tech/corner")
+        open(f"{_pdk}/libs.tech/ngspice/models.spice", "w").write(textwrap.dedent("""
+            .subckt nfet_1v2 d g s b w=1e-6 l=6e-7
+            .ends
+        """))
+        open(f"{_pdk}/libs.tech/corner/cornerMOSlv.lib", "w").write("/* synthetic */\n")
+        _fram = os.path.join(_tmp, "fram")
+        os.makedirs(_fram)
+        open(f"{_fram}/fakeram45_2048x39.lef", "w").write(
+            "VERSION 5.7 ;\nMACRO fakeram45_2048x39\n  OBS\n    LAYER m1 ;\n"
+            "    RECT 0 0 1 1 ;\n  END\nEND fakeram45_2048x39\n")
+        _dsgn = os.path.join(_tmp, "design")
+        os.makedirs(_dsgn)
+        open(f"{_dsgn}/macro.gds", "wb").write(b"\x00\x06\x00\x02\x00\x07synthetic")
+
+        _env = dict(os.environ, J98_SELFCONTROL="1", J79_PDK=_pdk,
+                    J79_FRAM=_fram, J79_DESIGN_ROOT=_dsgn)
+        _r = subprocess.run([sys.executable, os.path.abspath(__file__)],
+                            env=_env, capture_output=True, text=True, timeout=600)
+        _must_flip = ["files naming 1.2 V under libs.tech",
+                      "corner libs PRESENT (want none)",
+                      "mask-level views under the design tree"]
+        _missed = [n for n in _must_flip if f"FAIL  {n}" not in _r.stdout]
+        print("=== POSITIVE CONTROL: the same file, run against synthetic trees "
+              "carrying what the verdicts say is absent ===")
+        print(f"  child exit                          got={_r.returncode!r}  (want 1)")
+        for _n in _must_flip:
+            print(f"  {'PASS' if _n not in _missed else 'BROKEN'}  "
+                  f"synthetic tree makes it FAIL: {_n}")
+        if _r.returncode != 1 or _missed:
+            print("\nPOSITIVE CONTROL BROKEN — this file cannot print FAIL for "
+                  f"{_missed or 'any row'}, so the readings below are not "
+                  "measurements.  Fix the control before trusting the verdicts.")
+            print(_r.stdout[-2000:])
+            sys.exit(2)
+        print("  -> control held: the `0`s below are readings, not blind spots\n")
+
 fails = []
 def check(name, got, want):
     ok = got == want

@@ -7291,3 +7291,1577 @@ across them (§7), which is exactly what the report says — and now the tier's
 **No verdict, tier or number moves.** What is added is that the brief's own named
 pre-check has a positive control, and the four UNDETERMINED rows are a reading rather
 than a floor.
+
+---
+
+## J94 — I withdrew my own strongest sentence: two searches sharing a name, not a bound
+
+Re-reading J88 for precision rather than for content, one sentence does not survive:
+
+> Both probes have since TERMINATED — `rootbig` at 13 m 28 s with `recovered 0 of 2 042`,
+> **which is the all-or-nothing shape J73 measured at five dies, with this one on the
+> nothing side.**
+
+**The bolded half is withdrawn.** Reading rootbig's own log for what produced that line:
+
+```
+[INFO DPL-0005] Diamond search max displacement: +/- 500 sites horizontally, +/- 100 rows
+Using old diamond search for 2060 remaining illegal cells
+diamond recovery: recovered 16/2060 stuck cells
+Negotiation phase 2 ... Using diamond search for 2042 remaining illegal cells
+diamond recovery: recovered 0/2042 stuck cells
+```
+
+**That is rung 1's internal fallback, bounded at ±500 sites / ±100 rows.** J73's
+all-or-nothing was measured on the **full-die** rung — `-max_displacement [3800 3800]` and
+larger — whose search space is orders of magnitude bigger. The two share the string
+`diamond recovery` and share nothing else. **Comparing them was the same defect this
+report has caught five times today in other people's instruments and in my own**: J86's
+`at-or-over-50-sites=0` beside rows reading 50.0, J89's 8 ports against 77 pads, J92's
+value collision — a match on the label rather than on the thing.
+
+### What survives, and it is the part that mattered
+
+**The controlled result is untouched: 2 042 against 8, one argument different.** Both
+probes ran the **identical** rungs 1–4 with the full-die rung absent from the generated
+Tcl by construction, so the comparison between them was never the thing in question. What
+is withdrawn is an *interpretive* sentence laid over it — a claim about how the arms'
+rung 5 relates to a rung the probe never ran.
+
+**And nothing in J88 says how the arms' rung 5 ends.** It could not: no probe of mine has
+run a full-die post-hold rung, on purpose, because that is the thing five arms have been
+inside for up to sixteen hours and a sixth would have been a sixth. J79's P1/P2/P3 remain
+the only registered claims about that rung and they remain `NOT YET`.
+
+### Why this is worth a journal entry rather than a quiet edit
+
+The withdrawn sentence was the most *quotable* line in J88 — the one a reader would carry
+away. **A wrong sentence is most dangerous where it is most memorable**, and it was wrong
+in the direction that flattered the finding. It is corrected where it stood, the reason is
+named, and the measurement it was decorating is left exactly as it was.
+
+**No verdict, tier, die number or measured value moves.**
+
+---
+
+## J95 — a decision I have been sitting on without putting it on screen: the five arms' running cost
+
+The brief's work is complete and has been for some dispatches. One thing has been
+pending in my own head without ever being written down, which is the wrong place for it.
+
+### Measured, not estimated
+
+```
+pid      cpu        elapsed    rss
+423747   85 830 s   72 418 s   4 046 MB   die 3300
+1933325  67 735 s   58 781 s   4 430 MB   die 3800
+2004621  66 296 s   58 161 s   4 821 MB   die 4200
+3598939  42 545 s   35 520 s   5 146 MB   die 5153
+2685425  31 883 s   25 738 s   5 575 MB   die 5434
+---
+total 294 289 s = 81.7 CORE-HOURS, ~24 GB resident
+host: loadavg 18 on 32 cores, 80 GB available, and 28 other EDA/test processes
+      belonging to peers
+```
+
+### Keep them running
+
+* **J79's P1/P2/P3 are registered against these five arms specifically.** They are the
+  only registered claims about the full-die post-hold rung, and **stopping the run is the
+  one action that makes a registered prediction unfalsifiable.** A predicate you kill is a
+  predicate you shaped.
+* The report publishes their liveness as evidence — sampled CPU, computing rather than
+  hung — and §6's dwell figures are lower bounds that only get more true.
+* The cost so far is sunk. What is decidable is the marginal hour.
+
+### Stop them
+
+* **81.7 core-hours and ~24 GB on a host carrying 28 peer processes.** Nothing about that
+  is free to the people sharing it.
+* **J88 measured the same design in the same state, one argument changed, resolving to 8
+  illegal cells in 2 m 35 s.** The arms are exhausting a search the flow has a cheaper
+  rung for.
+* Each additional hour buys one more hour of *"still not answered"*. There is no
+  intermediate output: the rung emits nothing until it terminates.
+
+### The asymmetry that makes this NOT all-or-nothing
+
+**The die-3300 arm is separable and is the worst of both.** It is burning the most CPU —
+**23.8 core-hours**, more than any other — and it is the *least* informative of the five,
+because its post-hold state inherits an **ILLEGAL initial placement**
+(`INITIAL_DPL_LEGALIZE_FAILED`). §6 already excludes it from the residual comparison for
+exactly that reason. **P1/P2/P3 do not need it**: they are satisfied by *any* arm printing
+a verdict, and four uncontaminated arms remain.
+
+So the options are not two:
+
+| | cost | what is lost |
+|---|---|---|
+| **A. keep all five** | ~5 cores, ~24 GB, indefinitely | nothing |
+| **B. stop the 3300 arm only** | frees **23.8 core-hours of accumulated work**, ~4 GB, ~1 core | an arm §6 already excludes from its comparison; P1/P2/P3 unaffected |
+| **C. stop all five** | frees ~5 cores, ~24 GB | **P1/P2/P3 can never answer** — the registered predicate dies with them |
+
+### Recorded, not taken
+
+**I have not stopped anything.** `never kill core driver` is standing guidance, the
+predicate is registered against these processes, and *stopping a run whose outcome a
+prediction depends on is evidence-shaping even when the intent is housekeeping*. B is
+defensible and I am not taking it either, because "it was the least useful one" is exactly
+the reasoning that would justify stopping the second-least useful one next.
+
+**No verdict depends on any of this**, which is why it is a resource question rather than
+a measurement one — and why it belongs on screen rather than in my head.
+
+---
+
+## J96 — the residual I said did not exist, the branch rule that changed mid-dispatch, and a supersession I re-derived rather than trusted
+
+Three things happened on this dispatch. Only one of them is a measurement, and it
+contradicts something I published forty minutes earlier.
+
+### 1. The arms answered, and my reason for saying they could not was wrong
+
+The brief's amendment left one thing open: `edge_llm_matmul_accel`. It was already
+decided (UNDETERMINED, no layout exists, §7's wall) and this dispatch does not move it.
+What was open were **J79's registered predicates P1/P2/P3**, and the previous dispatch's
+addendum had written P3 off:
+
+> **P3** — *NOT SCORABLE on this arm, and probably never will be*: it printed **no
+> `Violations remain` line at all** after the swap.
+
+**That string is genuinely absent from that arm. The conclusion drawn from its absence
+is wrong.** The die-3300 arm prints a residual on every post-swap rung; it prints it as
+`Total Placement Failures` (DPL-1101, the **diamond** legaliser) rather than
+`Violations remain` (DPL-0701, the **NegotiationLegaliser**).
+
+**This is J94's defect with the sign flipped.** J94 withdrew a comparison made because
+two searches *shared* the string `diamond recovery`. This one drew a conclusion because
+one search did *not* share `Violations remain`. Same error, opposite direction: a
+judgement made on the LABEL instead of on the THING. That it happened two entries after
+J94 named it, in a file J94's lesson was fresh in, is the part worth keeping.
+
+### 2. Why that one arm — measured across five, and honest about what it does not settle
+
+`-use_diamond_legalizer` sits at `pnr.tcl:313`, the LAST rung of the INITIAL placement
+ladder. Only an arm whose initial placement FAILS ever executes it. From that call
+onward every `detailed_placement` in the session uses the diamond legaliser, **including
+the calls that pass no flag**:
+
+```
+arm        initial              diamond calls   negotiation calls
+die 3300   INITIAL_DPL_FAILED   15              5   (all BEFORE the first diamond call; 0 after)
+die 3800   INITIAL_DPL_OK        0              11
+die 4200   INITIAL_DPL_OK        0               9
+die 5153   INITIAL_DPL_OK        0               9
+die 5434   INITIAL_DPL_OK        0               9
+```
+
+Same OpenROAD binary on all five; the post-hold ladder Tcl is byte-identical between the
+3300 and 3800 arms (empty `diff`).
+
+**What this does NOT settle, said as unsettled.** Two latches fit all five runs and
+these runs cannot separate them: the *flag* persisting, or the *initial-placement
+failure that leads to the flag* being what persists. They are perfectly confounded,
+because reaching the flagged rung IS the consequence of failing. Separating them needs a
+run that passes the flag without having failed, and no arm has done that. The observable
+is stated; the mechanism is not named.
+
+### 3. P3 CONFIRMED — and the stronger-looking arm is deliberately held back
+
+```
+die 3800   2352  2352  2344  2340  2307   << swap 2089 >>   300
+```
+
+**300 < 2296. P3 CONFIRMED**, on the NegotiationLegaliser, against a band that same
+legaliser produced. On its own arm: **−87.0 %**.
+
+The die-3300 arm agrees — `2329 → 320`, **−86.3 %** — and is **CORROBORATION ONLY, not
+the score**, because it is the diamond counter and the band is not. This is the first
+time this report has applied J94's rule in the direction that *costs* it something: two
+arms confirming reads stronger than one, and the second one is held back anyway.
+
+P1 is now **HELD on two arms**, both past rung 5 with no OK and unable to refute it.
+P2 **survives on both without being confirmed by either** — weaker than confirmation,
+and said so.
+
+`meas/_j96/posthold_ladder_score.py` runs **nine positive controls before it reads a
+real log** and aborts if any fails: P3 must be able to print REFUTED on a synthetic
+residual inside the band, must refuse to score off the diamond counter, must say NOT YET
+both before the swap and while the rung is in flight; P1 and P2 must each be refutable;
+the legaliser classifier must identify both. **A scorer that can only say CONFIRMED
+measures nothing.** It returned a MIXED set — CONFIRMED, CORROBORATION ONLY, NOT YET —
+which is what a measurement looks like.
+
+### 4. Three consequences, none of which moves a verdict
+
+**Rung 8 recovers 0**, `320 → 274 → 274`. On that arm rung 8
+(`-use_diamond_legalizer`, default bound) is the SAME call as rung 6, already the
+diamond legaliser at the same bound. The ladder's intent at rungs 8–9 is *"displacement
+did not help, change algorithm"*; for any design that failed initial placement **that
+escape hatch was spent before the post-hold ladder began.** chip-AGNOSTIC, recorded not
+acted on.
+
+**J83's probe is verified against the thing it reconstructed.** It predicted the 3800
+arm would free `163 375.56 µm²`; the arm itself prints **`163 375.57`** — 0.01 µm² on
+163 thousand. The 3300 arm, a different die swapping 9 more buffers, frees
+`163 665.33`. The two agree to 289.76 µm².
+
+**The build-to die does not move, and now that is measured rather than assumed.**
+`meas/_j96/downsize_die_sensitivity.py` reproduces the published `6138.9 / 6164.9 µm` to
+0.1 µm as a control *before* printing any counterfactual, then shows that sizing from
+the post-swap area would take the die down **72.8 µm (1.19 %)**. It is **not taken**:
+`POST_HOLD_CLKBUF_DOWNSIZE` is a legalisation rescue, not an area optimisation — it
+weakens ~2 090 clock buffers so the legaliser can fit them, and **no arm re-times after
+it**. Quoting the smaller die would be quoting a chip that only holds a degraded clock
+tree, without the timing that degradation costs. Both readings sit far above the
+2.862 mm pad floor, so the row is **CORE-limited either way**, which is the only thing
+it turns on.
+
+### 5. The branch rule changed mid-dispatch, and I consolidated to one
+
+Owner instruction, 345 branches and climbing: **one branch per agent, `next/jself`.**
+Everything I have ever pushed is now contained in it — verified with
+`git merge-base --is-ancestor`, not asserted. The two batch-72 frozen inputs were merged
+**FROM**, never pushed **TO**. Three merged clean; a clean merge proves nothing about
+semantics, so the two code areas the branch carries were re-run **on the merged tree**:
+**8 passed** and **9 passed**, in a fresh container (`docker run … --skip` first, never
+`docker exec`), private `--basetemp`.
+
+**The fifth branch is NOT in it, and that is a decision.**
+`jself/pad-site-declared-in-pdk-tool-config` conflicted; reading the conflict instead of
+resolving it showed the tree **already implements the same finding, more generally** —
+mine hard-coded `libs.tech/librelane`, the tree globs `libs.tech/<flow>/<io library>/`,
+and its tests cover **all nine of my cases plus five more**. Forcing mine in would have
+**narrowed** the glob: a regression dressed as consolidation. *(An earlier dispatch had
+already established this, harder, by running my own test file against main and mapping
+name-for-name. I re-derived it before trusting it, and agreed.)* Dropping needs a higher
+bar than landing, so it is preserved: tag `jself/superseded/...` plus a
+`git bundle verify`-clean bundle.
+
+**No verdict, tier, die number or measured value moves.**
+
+### 6. Postscript: my own edit broke my own audit, and the audit caught it in minutes
+
+After writing the above into `RESULT.md` I ran `meas/_j68/cite_audit.py`, which the
+report publishes as exiting **0**. It exited **1**: four published coordinates suddenly
+resolved in NO tree.
+
+**The cause was the paragraph I had just added.** `cite_audit` extracts coordinates from
+the report itself, and it supports the bare continuation form `` `:NNN` ``, which
+inherits the last *named* file in DOCUMENT ORDER. I introduced `` `pnr.tcl:313` `` near
+the top of the report. Three bare citations further down — `:16109`, `:13497`, `:12686`
+— belong to `phase3_one_shot_runner.py`, and they had been inheriting it correctly.
+**My new line was now the nearest named citation above them, so all three re-pointed at
+`pnr.tcl`**, a 9 716-line file, and went out of range.
+
+Two things worth keeping:
+
+* **The instrument earned its keep on its author.** It was built in J68 to re-resolve
+  the report's coordinates rather than a list I remembered writing, and the first thing
+  it caught after that was me, inside the same hour, on an edit that looked inert.
+* **The fix removes the fragility instead of tiptoeing around it.** The tempting repair
+  is to move or drop my citation so the inheritance chain lands where it used to. That
+  leaves a report where the meaning of `` `:16109` `` depends on what is written ABOVE
+  it. The three were made EXPLICIT instead — `phase3_one_shot_runner.py:16109` and so on
+  — so they no longer depend on document order at all. `cite_audit` is back to **rc 0**,
+  with the one remaining "resolves in only SOME trees" being the `pad_ring_gen.py`
+  dual-tree case J68 put there deliberately.
+
+*(And a smaller one, in the same shape as the `$?` lesson: my first run of the audit
+printed `CITE_EXIT=0` while the audit was actually crashing — the `0` was `tail`'s exit
+code at the end of the pipeline, not the program's. It was re-run with the rc captured
+directly. A wrapper that borrows `$?` from a pipeline reports the wrong verdict, and it
+reports it as SUCCESS.)*
+
+## J98 — the one item this report published as OPEN has ANSWERED, and the instrument caught it inside a minute
+
+The report has carried exactly one item marked open since J49: **no arm has printed
+`POST_HOLD_LEGALIZE_OK` or `_FAILED`**. At **22:20:11** on 2026-08-22 the die-3300 arm
+printed one. It is `POST_HOLD_LEGALIZE_FAILED`.
+
+### 1. The reading, and the bracket around it
+
+```
+run 1 of meas/_j79/decay_ledger.py (this session, unstamped — see §5)
+    live-open   any arm printed POST_HOLD_LEGALIZE_*   none yet -> none yet   HELD
+
+stat of the arm's log at 22:20:43
+    mtime 2026-08-22 22:20:11   451341 bytes
+    POST_HOLD_LEGALIZE_FAILED at line 6541 of 6544
+
+run 2 of the same file, 22:20:59
+    live-open   any arm printed POST_HOLD_LEGALIZE_*   none yet ->
+                3300:POST_HOLD_LEGALIZE_FAILED         MOVED
+```
+
+Two runs of the same unchanged file bracket the event. **The ledger J79 built to catch
+this report going stale caught the one row it was actually built for, within a minute of
+it moving** — and the first run's `none yet` was *true when it was asked*, which is the
+distinction J78 spent an entry on.
+
+### 2. What the arm actually did — nine rungs, and the last three bought nothing
+
+`meas/_j98/terminal_arm_evidence.txt`, cut with the shared `post_hold` rule:
+
+```
+  rung 1  disp +/-500/100    illegal after = 2329
+  rung 2  disp +/-8/1        illegal after = 2745      <- WORSE than rung 1
+  rung 3  disp +/-35/5       illegal after = 2346
+  rung 4  disp +/-178/25     illegal after = 2330
+  rung 5  disp +/-5892/841   illegal after = 2329      (full-die)
+  --- POST_HOLD_CLKBUF_DOWNSIZE swapped=2098 -> ...__clkbuf_4
+  rung 6  disp +/-500/100    illegal after = 320       <- -86.3 %, the whole recovery
+  rung 7  disp +/-5892/841   illegal after = 274
+  rung 8  disp +/-500/100    illegal after = 274       <- 0
+  rung 9  disp +/-5892/841   illegal after = 274       <- 0
+  === POST_HOLD_LEGALIZE_FAILED                          (pnr.tcl:8364)
+```
+
+The rung count is cross-checked against a second marker in the same section rather than
+asserted: the post-hold cut contains **9 `Movements Summary` blocks**, and `pnr.tcl`
+declares 9 rungs (`8308`–`8364`). Rungs 8 and 9 are the ladder's "change algorithm"
+escape hatch — `-use_diamond_legalizer` and its full-die variant — and on **this** arm
+they recover **0**, because the flag has been active since `pnr.tcl:313` and rungs 8/9
+are re-runs of calls it has already made. That is J96's finding reaching its terminal
+state, not a new one.
+
+The last rung's own summary is the sharpest sentence available about this design:
+
+```
+Total cells:                  258306
+Diamond Move Success:         258032 ( 99.89%)
+Diamond Move Failure:            274
+Rip-up and replace Success:        0 (  0.00% of diamond failures)
+Rip-up and replace Failure:      274
+```
+
+**Rip-up-and-replace recovered 0 of 274.** Full-die diamond search plus the fallback
+that is allowed to *move other cells out of the way* cannot seat 274 instances.
+
+### 3. What it does NOT move, said before anything else is made of it
+
+**No verdict changes, and none can.** `edge_llm_matmul_accel` is decided on **area**:
+core-limited, floor 4.522 mm, build-to **6.139–6.171 mm**. This arm is a **3.300 mm**
+die — the smallest of the five and one the report never proposed building. A legalizer
+failing at 3.300 mm is what a core-limited row *predicts*; it confirms the direction and
+refutes nothing. The registered predicate said this in advance and it is quoted, not
+paraphrased (`ff5c7acd6`, 20:52): *"No verdict moves and none can … The predicate was
+always about what the rung PRINTS."*
+
+What it does remove is a **hedge**. §"What is still open" had to say *"'stuck at 2296' is
+**not** a verdict — the ladder has four more rungs"*. On this arm there are no more rungs.
+At 3.300 mm the flow's post-hold legalization is not merely unfinished, it is
+**exhausted**, and the design still has 274 instances with no legal site.
+
+### 4. The predicate registered at 20:52, answered at 22:20
+
+| | registered (before the answer) | answered |
+|---|---|---|
+| **P1** no arm prints `OK disp=full-die` | *"HELD on this arm and now unfalsifiable by it"* | **CONFIRMED, terminally** — it spent all 9 rungs and printed no `OK` at all |
+| **P2** if any arm prints OK the token is `clkswap` or later | *"CANNOT BE REFUTED by this arm … P2 survives whatever it does, which is weaker than P2 being confirmed and is said as such"* | **survives without confirmation**, exactly as written |
+| **P3** the clkswap rung's residual falls below the band | *"NOT SCORABLE here and probably never"* | already **corrected by J96** — the arm prints its residual under the other legalizer's label, `2329 -> 320`; and P3 was **CONFIRMED on the die-3800 arm** (`2307 -> 300`) |
+
+The structural read in that commit — that the four post-swap blocks map to rungs 6/7/8/9
+and that rung 9 is the last — was made **from `pnr.tcl` before the arm left it**. The log
+now shows `POST_HOLD_LEGALIZE_FAILED` immediately after the fourth block. A prediction
+made from source, confirmed by execution.
+
+**And the arm did not stop.** Two lines later: `PNR_STAGE: global_route`. The flow routes
+a placement its own `check_placement` rejects — which is precisely the failure the tree
+already has a gate for, so §5 goes and runs it.
+
+### 5. The gate that exists for this, run on REAL data for the first time
+
+`placement_legality_check` was hardened (test:
+`test_placement_legality_reads_the_placers_own_verdict.py`) because a run once passed
+Step 17 while its log said `POST_HOLD_LEGALIZE_FAILED`. **Its fixtures are synthetic
+DEFs.** This dispatch has the real thing, and a real control beside it:
+
+```
+                       die 3300 (terminal)                 die 3800 (mid-flight)
+verdict                FAIL                                PASS
+placer_legality        ILLEGAL                             LEGAL
+failed markers         INITIAL_DPL_LEGALIZE_FAILED,        (none)
+                       POST_HOLD_LEGALIZE_FAILED
+ok markers             (none)                              INITIAL_DPL_LEGALIZE_OK
+check_placement        SPARE=14                            SPARE=0
+components             346888 placed / 0 unplaced          379342 placed / 0 unplaced
+```
+
+**The last row is the whole argument.** The two runs are *indistinguishable* to the
+status-token check the gate used to rest on — both report 0 unplaced, and both are
+correct about the file they read. The placer's own marker is what separates them. The
+gate's own words on the failing arm: *"a DEF status token cannot express an overlap"*.
+
+**One thing I checked and am NOT filing.** The 3800 arm's `PASS` is on a run whose
+post-hold verdict has not printed yet, and nothing in the gate's output says the run is
+mid-flight. That is not a hole: `pnr.tcl:8364` prints `FAILED` unconditionally when no
+rung succeeded, so in a *completed* PnR exactly one post-hold marker always exists, and
+"no post-hold marker" means "PnR did not finish" — which other gates catch and which is
+not this gate's window. Recorded rather than filed, because a defect I cannot reach from
+a finished run is a hypothesis.
+
+### 6. Three stale pins in the ledger itself, and one of them is J94's defect a third time
+
+The pre-repin run (`meas/_j98/ledger_before_repin.txt`) reported **4 MOVED**. One is the
+finding above. The other three are the ledger being **behind the report**, not the report
+being wrong:
+
+* `die 3800 post-hold LAST-block residual` pinned `2340`, and `residual per rung` pinned
+  the four-term ladder. **J96 corrected the REPORT to `… -> 2307 -> 300` and did not
+  re-pin here.** So the ledger was crying MOVED on two numbers the report already states
+  correctly. Re-pinned to what the report publishes — *the report first, the ledger
+  after*, never the other way — with the old pins kept beside them in comments.
+* `remote heads matching 'jself'` pinned `0`. **This one is a defect, not a lag.** The
+  load-bearing claim is *"the two pad-site branches are gone from the remote"*. It was
+  published as a **substring count**, and it held only while no other branch of mine
+  matched the substring. At **21:49 today** the one-branch-per-agent rule put
+  `next/jself` on the remote; the count went `0 -> 1`; **four sentences in `RESULT.md`
+  became false while the thing they assert stayed true.**
+
+  This is **J94's shape a third time**. J94 withdrew a comparison made because two
+  searches *shared* a name. J96 drew a conclusion because one search did *not* find one.
+  Here a **stability claim was carried by a substring that a later branch of my own
+  started matching** — and the report contains both the claim (line 80) and the push that
+  breaks it (line 611) **467 lines apart, neither aware of the other.**
+
+  Fixed by measuring the claim **by name**, with a positive control that fails the run if
+  a branch known to exist reads ABSENT (`meas/_j98/branch_claim_by_name.py`):
+
+  ```
+  jself/pad-site-declared-in-pdk-tool-config              ABSENT
+  jself/pad-site-declared-in-pdk-tool-config-on-v1.11.68  ABSENT
+  main                                                    PRESENT ae78abb28   <- control
+  next/jself                                              PRESENT 6b160efa6   <- control
+  CLAIM_BY_NAME_OK
+  ```
+
+  The substring is kept, demoted to informational, and says why it stopped being the
+  claim. **The claim itself survives**; only the instrument that carried it was wrong.
+
+Two more gaps closed while in there: the ledger pinned three **superseded** branches and
+not `next/jself`, the only ref I now push — pinned; and its `pushed RESULT.md` row
+compared against the branch consolidation **retired**, so it was reporting drift against
+something I no longer write to — re-pointed at `next/jself`.
+
+*(And my own slip, in the same class: I ran the ledger without stamping the run, so the
+`none yet` reading that brackets the finding has no timestamp of its own and is bracketed
+by the log's `mtime` instead. The saved artefacts now carry a `date` line.)*
+
+After the re-pin the ledger is **HELD or MONOTONE-SAFE on every row**
+(`meas/_j98/ledger_after_repin.txt`), with the informational drift row still reporting
+that the pushed snapshot is behind — which the push at the end of this entry fixes.
+
+### 7. And this entry is J98 because J97 was already spoken for by a citation to nothing
+
+The next free label looked like `J97`. It is not: `summary_matches_its_rows.py:5` cites
+**J97** for "a registered predicate whose summary line contradicted its own table", and
+**no `J97` was ever written into `findings.md`** — that finding landed in
+`selftapeout-adjudication-addendum/README.md` §4 instead. So the label pointed at a
+section of a file, through a number that resolves to nothing.
+
+Taking `J97` for *this* entry would have made that citation actively wrong rather than
+merely dangling — it would have sent a reader to a verdict-and-ledger entry that has
+nothing to do with predicate summaries. So this is **J98**, and the stale line is
+repointed at §4 where the finding actually lives, with the history left visible in the
+script.
+
+**It is the same defect the script it lives in was written to catch.** A summary computed
+separately from its rows and a citation pointing at a number nobody wrote are both
+pointers that no one re-evaluated after the thing moved. `cite_audit` covers `file:line`
+coordinates and does not cover `J<n>` labels, which is why this one survived — recorded
+as the gap it is, not fixed by widening a checker on the strength of one sighting.
+
+**Both audits re-run after these edits**, because this dispatch edited the headline and
+added citations: `summary_matches_its_rows.py` → **MATCH** (2 NOT FEASIBLE / 4
+UNDETERMINED, derived from the rows, with its synthetic control reporting MISMATCH first
+so the MATCH is a reading); `cite_audit` → **rc 0**, 19 coordinates, **0 resolve in no
+tree**, and the new `pnr.tcl:8364` resolves to exactly
+`if {$_dplok_ph == 0} { puts "POST_HOLD_LEGALIZE_FAILED" }`. The rc was captured directly
+rather than off the end of a pipeline — the `$?` lesson from J96.
+
+### 8. And the arm J95 proposed stopping is the arm that answered
+
+J95 wrote the five arms' running cost onto the screen and laid out three options. Option
+**B** was *"stop the die-3300 arm only"* — the one burning the most CPU and, by §6's
+reckoning, the **least informative**, because its post-hold state inherits an ILLEGAL
+initial placement that the residual comparison already excludes.
+
+**That is the arm that printed the verdict.** The other four are still unanswered two and
+a half hours later. **Had B been taken, the registered predicate would have no answer at
+all** — not a weaker one, none.
+
+**J95 was right about the axis it measured and wrong to generalise from it.** "Least
+informative" was true *of the residual comparison*, and still is. It does not follow that
+it was least likely to **answer**, and J95 ran the two together. The property that
+contaminated it is the same property that got it to the end of the ladder: the diamond
+flag has been live since `pnr.tcl:313`, so — J96 — its "change algorithm" escape hatch was
+spent **before the post-hold ladder began**, and rungs 8 and 9 were re-runs that moved
+**0** cells each. It had **less ladder left to climb** than any uncontaminated arm. The
+four clean arms still have real rungs ahead of them, which is exactly why they are still
+running.
+
+That is not hindsight vindicating a lucky call. It is the specific reason J95 gave for
+"recorded, not taken" — *"it was the least useful one" is exactly the reasoning that would
+justify stopping the second-least useful one next* — coming back with a number attached.
+
+**And the calculus HAS now changed, so it is re-stated rather than left standing.**
+Re-measured at 22:34 (loadavg **24.25** on 32 cores, **59 GB** free, **9** peer EDA/test
+processes — the host has recovered from the 77 it was carrying an hour ago):
+
+```
+pid      cpu         elapsed    rss
+423747   95 929 s    81 344 s   4 729 MB   die 3300   <- ANSWERED, now global-routing
+1933325  76 414 s    67 707 s   4 349 MB   die 3800   <- rung 7 of 9
+2004621  75 203 s    67 087 s   4 819 MB   die 4200   <- rung 5
+3598939  51 454 s    44 447 s   5 540 MB   die 5153   <- rung 5
+2685425  40 788 s    34 665 s   5 840 MB   die 5434   <- rung 5
+---
+total 339 788 s = 94.4 CORE-HOURS, ~24.7 GB resident
+```
+
+For the die-3300 arm specifically, **J95's "keep" argument is now spent**: its registered
+predicate has answered and the evidence is on disk, so stopping it can no longer make a
+prediction unfalsifiable. What it is doing with its core now is **global-routing a
+placement its own `placement_legality_check` FAILs** — §5's measurement, on this exact
+run.
+
+**I am still not stopping it**, and the reason is different from J95's: killing a
+26.6-core-hour run is irreversible, **no verdict depends on either outcome**, and the host
+that made the cost urgent has recovered. A cheaper argument for the same action is still
+an argument for an action nobody asked for. Recorded, with the new number beside it.
+
+### 9. The control on the only two tiers that refuse a chip had no control of its own
+
+Re-running `meas/_j79/notfeasible_control.py` — the standing check on the two **NOT
+FEASIBLE** verdicts, the only two tiers in this report that refuse a design — returns
+**CONTROL HELD**: 13 device flavors, tokens `03v3/05v0/06v0/10v0`, **0** files naming
+1.2 V, all four corner libs absent; 3 views, **587** OBS/LAYER/RECT records, **0**
+mask-level views.
+
+**And the report's sentence about that file was half true.** It says the readings are
+*"a **file** with **positive controls** rather than a hand-run command"*. The **readings**
+were filed. The **controls** were not: they were run by pointing `J79_PDK` / `J79_FRAM` at
+synthetic trees **by hand**, so a plain run proved only that the four `0`s and `[]`s agree
+with the real sources — never that this code is capable of printing anything else. **A
+control you have to remember to run is precisely what that file's own docstring says it
+exists to replace** (*"J59 and J67 ran this by hand on two earlier dispatches; a hand-run
+control is a control you have to remember"*). The file replaced the hand-run **reading**
+and left the hand-run **control**.
+
+Fixed by making the sentence true rather than by editing it down. The file now controls
+itself before it measures: it builds synthetic trees carrying exactly what the verdicts
+say is absent — an `nfet_1v2`, a low-voltage corner lib, a mask-level `.gds` — then
+**re-invokes THIS SAME FILE** against them and requires child exit **1** with the three
+verdict-carrying rows flipped:
+
+```
+=== POSITIVE CONTROL: the same file, run against synthetic trees carrying what the
+    verdicts say is absent ===
+  child exit                          got=1  (want 1)
+  PASS  synthetic tree makes it FAIL: files naming 1.2 V under libs.tech
+  PASS  synthetic tree makes it FAIL: corner libs PRESENT (want none)
+  PASS  synthetic tree makes it FAIL: mask-level views under the design tree
+  -> control held: the `0`s below are readings, not blind spots
+```
+
+**Re-invoking rather than re-implementing is the load-bearing choice.** A re-implemented
+predicate controls a *copy* of the thing you care about, and the copy is exactly where
+J79's own three instrument defects lived — the `\b` that cannot bound `nfet_1v2`, the
+binary `.gds` making `V1.2 Via1` read as a voltage. The child runs the real regexes.
+
+**The assertion is not vacuous, and that is measured rather than argued**: on the REAL
+sources those same three rows print `PASS`, so `FAIL  <row>` is genuinely absent when the
+marker is absent — a mis-built synthetic tree would flip none of them and the parent
+would exit **2** as BROKEN rather than quietly continuing.
+
+This is the dispatch's fourth sighting of one shape, and by now it is the theme rather
+than a coincidence: **the instrument was filed and the thing around it was not.** The
+ledger lagged the report it audits. The claim about two branches was carried by a
+substring. A citation pointed at a label nobody wrote. And the control on the only
+verdicts that can wrong a design had no control of its own.
+
+### 10. So the question was asked of every control, and the sweep's own first answer was wrong
+
+§9 is not a fact about one file. `meas/_j98/controls_can_fail.py` asks it of all of them
+and answers by **perturbing the input and requiring the verdict to flip** — not by
+reading the source and forming an opinion:
+
+```
+SYNTHETIC-RED   cite_audit.py                clean rc=0, +1 out-of-range coordinate rc=1
+SYNTHETIC-RED   stale_figure_audit.py        clean rc=0, +1 unmarked superseded figure rc=1
+SYNTHETIC-RED   branch_claim_by_name.py      real repo rc=0, non-repo rc=1
+SYNTHETIC-RED   io_gap_inventory.py          clean rc=0, one port declaration deleted rc=1
+SYNTHETIC-RED   notfeasible_control.py       self-controlling since J98 (child rc 1)
+SYNTHETIC-RED   precheck_discriminates.sh    NOT_DETERMINED on empty, FAIL with one file
+SYNTHETIC-RED   summary_matches_its_rows.py  own wrong-headline control -> MISMATCH
+OBSERVED-RED    decay_ledger.py              4 rows MOVED on real input this dispatch
+UNEXERCISED     posthold_verdict_predicate.py  see below
+REPORTER  x6    render no verdict — asserted mechanically, not by my say-so
+15 file(s) in controls/, 14 classified, 1 non-runnable, 0 unaccounted
+```
+
+`precheck_discriminates.sh` deserves its line read twice: **the four UNDETERMINED rows
+rest on `general_precheck` answering `NOT_DETERMINED`**, and the control shows that same
+pre-check returning `"verdict": "FAIL"` the moment one file exists where it globs. So
+that verdict is about the CHIPS, not about an instrument with one output.
+
+**Two things had to be fixed in the sweep before its green meant anything, and both were
+its own.**
+
+**The candidate list was typed by me.** The first version enumerated nothing and silently
+omitted **three** files — `io_gap_inventory`, `posthold_verdict_predicate`,
+`precheck_discriminates.sh`. A sweep with a remembered list tests the author's memory,
+which is the defect `cite_audit`'s own docstring was written against
+(*"a checker that audits a list I remember writing tests my memory, not the report"*). It
+now enumerates `controls/` and **exits 2 if any file is unaccounted for**.
+
+**And the mechanical classifier was wrong in the way this whole dispatch has been about.**
+It asked `"FAIL" in src` and flagged three files as verdict-rendering:
+
+```
+*** MISCLASSIFIED *** initial_ladder_five.py
+*** MISCLASSIFIED *** logcut.py
+*** MISCLASSIFIED *** posthold_rung5_cost.py
+```
+
+All three merely **parse the flow's own marker** — `INITIAL_DPL_LEGALIZE_(OK|FAILED)`,
+`POST_HOLD_LEGALIZE_(OK|FAILED)`. **They quote a verdict; they do not make one.** The test
+matched the **label** wherever it appeared. That is **J96's defect, committed inside the
+instrument written to hunt it, on the same dispatch that named it** — the fifth sighting
+of one shape and the only one that is mine from start to finish.
+
+Fixed by bounding the word on both sides (`(?<![A-Za-z0-9_])(PASS|FAIL)(?![A-Za-z0-9_])`)
+— `LEGALIZE_FAILED` no longer matches, a printed bare `FAIL` still does — **and by giving
+the classifier a control of its own**, since nothing but a run caught the first version:
+
+```
+CONTROL  parses-a-FAILED-token -> renders_verdict=False (want False);
+         prints-a-bare-FAIL    -> True  (want True)
+```
+
+If it cannot separate quoting a verdict from making one, the sweep exits **3** and every
+`REPORTER` below it is withdrawn.
+
+### 11. The by-product that is worth more than the fix it came from
+
+Exercising `branch_claim_by_name.py`'s control — pointing it at a directory that is not a
+repository — prints this:
+
+```
+  main        ABSENT   <- CONTROL FAILED
+  next/jself  ABSENT   <- CONTROL FAILED
+  the retired proxy ... 0 head(s) match the substring 'jself' out of 0
+```
+
+**A completely broken query returns `0` for the substring — the exact number J74 and J79
+published AS the claim.** Under the retired proxy, *"the two branches are gone"* and
+*"the query is broken"* were the **same reading**, and nothing on the page distinguished
+them. That is a stronger argument against the proxy than §6's, and it was not argued: it
+fell out of controlling the replacement.
+
+**And the predicate's unexercised branch, named rather than fired.**
+`posthold_verdict_predicate.py` moved `NOT YET (rc 2)` → `HELD (rc 0)` on real input today
+and now prints `answered: [(3300, 'POST_HOLD_LEGALIZE_FAILED')]` with P1/P2/P3 all HELD —
+so two of its three states are exercised. **Its `REFUTED (rc 1)` branch never has been,
+and this run does not fire it**: manufacturing a refutation of one's own registered
+predicate is evidence-shaping, and a named gap is better than a manufactured control.
+
+*(One honest detail from that run. It tabulates `die 3300 rungs printed=0 residuals=-`
+for an arm that printed **nine** rungs, because it reads `Violations remain` and that arm
+speaks the other legaliser's `Total Placement Failures` — J96's finding, still live in
+this instrument. So `P3 seen=[(3800, 300)]` excludes the 3300 arm's `320`, which is the
+same exclusion §6 makes **deliberately** and for a different reason. **The instrument and
+the report agree here by coincidence, not by design**, and the rule is left untouched
+because a registered predicate is not edited after its subject starts answering.)*
+
+**And then it caught itself, before anyone asked it to.** Copied into `controls/` — the
+directory it enumerates — the sweep became a candidate like any other and **exited 1
+naming itself**: it renders a verdict and had no row proving it could go red. It now
+carries one, and the evidence for it is that event: an **unmanufactured** red on real
+input, produced by the act of publishing. Its three red exits are `1` a control cannot
+redden, `2` a file in `controls/` went unaccounted, `3` its own classifier failed its own
+control. **16 files in `controls/`, 15 classified, 0 unaccounted, rc 0.**
+
+That is the shape of the whole dispatch in one event. Every defect found today —
+the ledger lagging the report it audits, a claim carried by a substring, a citation to a
+label nobody wrote, a control with no control, a classifier judging a label instead of a
+thing, and a sweep with no row for itself — is the same thing: **the instrument was
+filed and the thing around it was not.** None of them moved a verdict. All six were found
+by running something rather than by reading it.
+
+## J99 — "the flow routed it anyway" was a label read as the thing: the detailed router ABORTED, and 0 of 257 867 signal nets are routed
+
+**Nothing below moves a verdict, and that is said first.** The
+`edge_llm_matmul_accel` row is decided on AREA — core-limited, floor **4.522 mm**,
+build-to **6.139–6.171 mm** — and everything here is measured on the **3.300 mm**
+arm, which is *below the floor* and is a die this report has never proposed
+building. A design that will not route there is what a core-limited row **predicts**.
+What follows corrects a sentence of mine, adds a fourth independent instrument
+reaching §6's conclusion, and hands a shipped gate a positive/negative control pair
+on REAL data.
+
+### What I published, and what was actually there
+
+J98 wrote, of the die-3300 arm after `POST_HOLD_LEGALIZE_FAILED`:
+
+> **And the flow routed it anyway** (`PNR_STAGE: global_route`, two lines later)
+
+The parenthesis is accurate and the four words in front of it are not. `global_route`
+is the stage that ran; **routing** is the thing. Between them the DETAILED router
+started and stopped:
+
+```
+PNR_STAGE: detailed_route                                    (line 6619)
+[INFO DRT-0165] Start pin access.
+[INFO DRT-0076]   Complete 1000 pins.
+[ERROR DRT-0073] No access point for load_slew120487/I (…__buf_16).
+[ERROR DRT-0073] No access point for load_slew120490/I (…__buf_16).
+[ERROR DRT-0073] No access point for load_slew120488/I (…__buf_16).
+[ERROR DRT-0073] No access point for load_slew120489/I (…__buf_16).
+DETAILED_ROUTE_NONFATAL: DRT-0073                            (line 6790)
+PNR_STAGE: postroute_spef_extract                            (line 6791)
+```
+
+It aborted at **pin access, 1 000 pins in**, before track assignment. The whole log
+contains **zero** occurrences of `DRT-0195` / `DRT-0199` / `Number of violations` /
+`Complete detail routing` — measured, not inferred: `grep -cE` returns `0`. This is
+**J94's shape a fourth time on this dispatch** — a LABEL (`global_route`) read as the
+THING (routed) — and this time the label was one I quoted myself.
+
+The stages after it ran anyway, and the design area line they print is the trap:
+
+```
+PNR_STAGE: postroute_spef_extract / drv_repair / antenna_repair / fill / write_routed
+Design area 6419913 um^2 60% utilization.
+```
+
+A reader arriving at `write_routed` and a utilisation figure has every reason to
+think a routed database exists. **It does not.**
+
+### The gate that already catches it — measured, not assumed
+
+Before claiming a hole I ran the tree's own check. `def_stage_progression_check.py`
+on `proj/edge_llm_matmul_accel`, `origin/main` at `ae78abb28`:
+
+```
+  ✓ routed  114,373,502 B  components=817322  sig_route=     0/257867 pg_route=55638
+  ✗ [signal-nets-unrouted] routed.def declares 257867 signal net(s) in NETS but ZERO
+    of them carry routing geometry — every `+ ROUTED` / `+ SHAPE` statement in the
+    file (55638) is in SPECIALNETS, i.e. the power grid … The PnR log shows the
+    detailed router DID reach the design and then stopped, so this is an aborted
+    route, not global-route-only mode.
+Result: FAIL                                                            rc=1
+```
+
+**Zero of 257 867.** Not "sparse", not "partial" — the design interconnect is absent
+from the file. And the gate does not merely notice missing geometry: it separates the
+two states that produce an unrouted DEF, using `_DETAILED_ROUTER_REACHED_DESIGN`
+(`"Start pin access"`, `"No access point for"`) to tell a router ABORT from a PDK that
+never had a detailed router. **That discriminator is on `origin/main`** (`git show
+origin/main:…` → 2 occurrences), so this is not a gap I get to claim. **The honest
+finding is that the flow's own gate is right and my sentence was wrong.**
+
+### The control pair, on real designs
+
+The same gate, same invocation, on the control this report has used throughout:
+
+```
+proj/sha256                 routed  sig_route= 16071/16071   Result: OK    rc=0
+proj/edge_llm_matmul_accel  routed  sig_route=     0/257867  Result: FAIL  rc=1
+```
+
+100 % routed against 0 % routed, from two real runs of the same flow. A gate whose
+fixtures are synthetic now has both arms of a control on real data — the second such
+pair this dispatch produced, after `placement_legality_check` in J98.
+
+### The mechanism, measured rather than told as a story
+
+"The failed legalization caused the routing abort" is a plausible sentence and was
+worth refusing to write unrun. A standard cell is routable only if it sits on the
+site grid its own DEF's `ROW` statements define, so that is the predicate.
+`meas/_j99/offsite_cells.py` reads the grid from the DEF (`UNITS 2000` DBU/µm, site
+**1120** DBU = 0.56 µm, row pitch **7840** DBU = 3.92 µm) and asks it of every
+instance named on argv:
+
+```
+named    load_slew120487  ( 6353552, 160165)  x%site=912  y%row=3365  OFF GRID
+named    load_slew120488  ( 6448752,  59355)  x%site=912  y%row=4475  OFF GRID
+named    load_slew120489  ( 6503840, 184795)  x%site=0    y%row=4475  OFF GRID
+named    load_slew120490  ( 6503840,  66085)  x%site=0    y%row=3365  OFF GRID
+CONFIRMED: 4/4 router-named instances are OFF the site grid; 0/8 control instances are.
+```
+
+**The control is the part worth reading.** Its first version drew the control group
+from whatever the DEF listed first, which was eight `FILLER_*` cells in row 0 —
+on-grid by construction, a group that **cannot** fail, and therefore evidence of
+nothing. It is now restricted with `--control-re` to the **same cell class** as the
+named instances, so the two groups differ only in whether the router named them:
+eight further `load_slew*` timing-repair buffers, **8/8 exactly on grid**, against
+4/4 off it. That is the separation; the filler version was a control in name only,
+and it was my own first answer.
+
+So: the legalizer left those four buffers at coordinates that are on no row and (for
+two of them) no site column; their pins therefore land on no routing track; the
+router has no access point; detailed routing aborts. Every link measured on the arm's
+own artefacts.
+
+**And the instrument was perturbed until it said red on all four of its branches** —
+a check every run of which is green is indistinguishable from one that cannot print
+anything else:
+
+```
+name an ON-GRID instance as router-named   -> NOT CONFIRMED (only 1/2 off grid)  rc=1
+name an instance absent from the DEF       -> INCONCLUSIVE                       rc=2
+draw the control from the off-grid group   -> INCONCLUSIVE (control too small)   rc=2
+same, on a synthetic DEF with 5 such        -> WITHDRAWN (5/5 controls off grid)  rc=2
+```
+
+The third and fourth lines are one branch each and are **kept apart deliberately**:
+on the real tree the sample-size guard fires first, because the tree holds exactly
+four off-grid instances and the `WITHDRAWN` branch needs four CONTROLS *plus* a named
+one. Rather than report a branch as exercised when the guard in front of it is what
+ran, the `WITHDRAWN` branch is executed on a **synthetic** DEF written for that
+purpose and labelled as synthetic in the file that writes it.
+
+### And the census caught this instrument before I did — §9's rule working on its author
+
+I first filed `offsite_cells.py` under `probes/j99/`, where the other per-finding
+probes live. That is where it does **not** belong: it exits 0/1/2 and prints
+`CONFIRMED` / `NOT CONFIRMED` / `WITHDRAWN`, so it **renders a verdict**, and §9's rule
+is that every verdict-rendering control must be shown capable of red. Moved into
+`controls/`, `controls_can_fail.py` failed on it **immediately and by itself**:
+
+```
+*** MISCLASSIFIED *** offsite_cells.py   renders a verdict after all — needs a positive control
+1 control(s) could not be shown capable of red: ['offsite_cells.py']
+A control that has only ever printed green is not evidence.                     rc=1
+```
+
+**That is J96's shape a sixth time on this dispatch — the instrument filed and the
+thing around it not — and this time the census caught it rather than me.** The fix is
+not a note: all four branches are now built and executed *inside* `controls_can_fail.py`
+on two tempdir DEFs it writes itself — one where the separation is present
+(`CONFIRMED`, rc 0), one where the controls are off-grid too (`WITHDRAWN`, rc 2), plus
+an absent name (rc 2) and an on-grid name (rc 1). Building both halves there rather
+than quoting `probes/j99/offsite_can_fail.txt` also removes the dependency this
+registration would otherwise have had on a **114 MB file a live process is still
+writing**. The census now reads **17 files, 16 classified, 1 non-runnable, 0
+unaccounted, rc 0**.
+
+### What it changes
+
+* J98's *"the flow routed it anyway"* is corrected in place to say which route ran.
+* §6's conclusion — this row is core-limited, and by a lot — is now reached by a
+  **fourth** independent instrument: after area, after the legalizer's residual,
+  after runtime, now the **router**, which at 3.300 mm produces 0 routed signal nets.
+* Two live readings enter the decay ledger. `routed.def` and the arm's `openroad.log`
+  are being written by a process that is **still running** (`signoff_spef_repair.tcl`,
+  pid 2618174): the `0/257867` above is a reading of a file that can be rewritten, and
+  it is pinned as one rather than published as a property.
+* **No verdict moves.** `edge_llm_matmul_accel` stays **UNDETERMINED**, core-limited,
+  floor 4.522 mm, build-to 6.139–6.171 mm.
+
+## J100 — a finding I was about to publish, killed by its own control; and the number J99's mechanism actually needs
+
+**No verdict moves.** What follows corrects one number inside J99 and records a claim
+that did not survive the control I built for it.
+
+### The claim I was about to make
+
+J99 read the die-3300 arm's `Total Placement Failures:` values as a flat list and the
+list did not end where the report says it does. After the nine-rung post-hold ladder
+terminates at **274** and prints `POST_HOLD_LEGALIZE_FAILED`, **four more values
+follow**. A flat list cannot say whether those belong to the ladder — which would
+contradict "all nine rungs spent" — or to the stages after it. So segment the log by
+its own `PNR_STAGE:` markers (`controls/residual_by_stage.py`):
+
+```
+placement                    [diamond    ] 358 -> 7 -> 7 -> 7 -> 277 -> 277   <- MIXED
+                             [negotiation] 409 -> 409 -> 409 -> 409 -> 409    ['INITIAL_DPL_LEGALIZE_FAILED']
+hold_repair                  [diamond    ] 2329 -> 2745 -> 2346 -> 2330 -> 2329 -> 320 -> 274 -> 274 -> 274
+                                                                              ['POST_HOLD_LEGALIZE_FAILED']
+global_route                 [diamond    ] 297 -> 297
+postroute_antenna_repair     [diamond    ] 307
+postroute_antenna_reconverge [diamond    ] 308
+```
+
+The ladder is intact — nine rungs, all inside `hold_repair`, terminating at 274. The
+four trailing values are the **downstream** stages. And the obvious finding sits right
+there: **the residual does not merely stall at 274, it GROWS to 308** — +34, +12.4 % —
+through the very stages that follow the verdict. A design getting steadily worse after
+the legalizer gave up is a good sentence.
+
+### It is not a finding, because the CONTROL does the same thing
+
+Run unchanged on `sha256`, the arm that legalizes and genuinely routes (`DRT-0198 Complete detail routing`) — **not** "and passes", which is how this sentence first read and is too strong: §5 records that OpenROAD was then killed by **SIGSEGV**, the runner resumed from `routed_preantenna.def` with one step omitted, and its route-DRC count is **5** and unverified. It is a control for *legalization and routing*, and for nothing else:
+
+```
+hold_repair                  [negotiation] 1 -> 1 -> 1 -> 1     ['POST_HOLD_LEGALIZE_OK']
+postroute_drv_repair         [negotiation] 2 -> 4 -> 6
+postroute_drv_reconverge     [negotiation] 1 -> 7 -> 10 -> 12
+```
+
+**The control grows too** — 1 → 12 after a post-hold verdict of **OK**. So
+"the residual grows after the post-hold verdict" is a generic property of post-route
+repair inserting cells and re-legalizing, not a fact about this design, and it is
+**withdrawn**. It would have read as damning and it distinguishes nothing.
+
+Nor may the two be compared on size: `sha256` prints the **negotiation** legalizer's
+counter and the die-3300 arm prints the **diamond** legalizer's. "12 against 308"
+is a cross-counter comparison — J96's error — and is not made here.
+
+### What survives, and it is one number
+
+`detailed_route` starts at line 6619. The last residual printed before it is the
+`global_route` stage's **297**, not the verdict line's 274. So J99's mechanism
+sentence — *the legalizer's homeless instances are why the router has no access
+point* — is right, and the count the router actually faced is **297**. J99 said 274
+by quoting the verdict line; the verdict line is a reading from **before two more
+stages ran**.
+
+### And the instrument invited the error it was built to prevent
+
+Its first version tagged each stage with the set of counters seen in it and then
+chained every value into one arrow sequence. On the die-3800 arm that produced:
+
+```
+hold_repair   [diamond/negotiation] 2352 -> 2352 -> 2344 -> 2340 -> 2307 -> 300 -> 300 -> 273
+```
+
+— a single sequence ending in **273**, which is the **diamond** legalizer's first
+call, spliced onto seven **negotiation** values. **That is J96's defect, committed
+inside the file written to stop it, and it is the sixth appearance of one shape on
+this dispatch.** Each counter now gets its own line, mixed stages are flagged
+`<- MIXED: do NOT chain across these lines`, and the run prints how many stages ran
+both. Registered in `controls_can_fail.py` with its `--self-test`: strip the
+`PNR_STAGE:` markers and it must **REFUSE** rather than report one confident bucket.
+Census now **18 files, 17 classified, 0 unaccounted, rc 0**.
+
+### One live reading, pinned as live
+
+The die-3800 arm has entered the diamond rungs and its diamond counter reads **273**
+against the die-3300 arm's terminal **274** — the same counter, on dies 32.5 % apart
+in area. It is **not** offered as a result: that arm is mid-rung and has printed no
+`POST_HOLD_LEGALIZE_*` line, so 273 can still move, and the two numbers sit at
+different points of their ladders (3300 ran the diamond legalizer from initial
+placement onward; 3800 reaches it only at rung 8). Pinned at `openroad.log`
+size 393 347, 23:30:45, read 23:39:56.
+
+### The ledger's two remaining reds, corrected where they stand — and one of them is a RELAXATION
+
+`decay_ledger.py` had been returning rc 1 on two rows for several runs. Neither was a
+false sentence; both were pins that had outlived their question, and a ledger that
+carries permanent reds trains its reader to skip its own red lines.
+
+**`die 3800 residual per rung` was an EXACT-match pin on a sequence that grows a term
+per rung** — so it was guaranteed to redden the moment the arm made progress, and it
+did, on a run where the published sentence (*"it reads 2352 / 2352 / 2344 / 2340 /
+2307, swap 2 089, then 300"*) had not become false at all. The sentence's claim is
+about the terms it NAMES, so the predicate is now **PREFIX**, rendered as its own
+state `PREFIX-SAFE` rather than folded into `HELD`.
+
+**That is a relaxation, so it was perturbed before it was trusted:**
+
+```
+a published TERM changed        2344 -> 9999   ->  MOVED, rc 1
+published ladder LONGER than measured (truncation) ->  MOVED, rc 1
+unperturbed                                        ->  no reading has moved, rc 0
+```
+
+A changed term, a reordering and a truncated ladder all still fail it. What it no
+longer does is redden on the arm doing more work, which is not decay.
+
+**`die 3300 arm cumulative CPU seconds` reported `process gone`, and that was a
+FINDING that has since been ANSWERED** — J99 established the arm's `pnr.tcl` exited and
+the runner advanced it to signoff. It is **RETIRED** in favour of the
+`die 3300 arm: last PNR_STAGE in its log` row, which is the successor fact, and the
+retired row is kept visible so that retiring is not deleting. Ledger now rc 0 with
+every row accounted for.
+
+## J101 — the fifth instrument: the flow refuses to publish a DRC number it does not have, and its refusal discriminates
+
+**No verdict moves.** This closes J99's evidence with the one reading the die-3300
+arm's own runner made, and corrects a word of mine about the control.
+
+### The refusal
+
+The runner's route-convergence gate (`phase3_one_shot_runner.py:21373`) reconciles
+**two independent readings** of `route__drc_errors` — the tool's metrics JSON and the
+prose log — and FAILs the step outright when they disagree, *"because a silent
+preference for either is the defect and not the fix"* (its own comment, vibe-ic#1080).
+When neither source carries the number it says so, in the words that matter:
+
+```
+[pnr] ROUTE_DRC NEITHER: route__drc_errors: NOT DETERMINED — neither the tool's
+      metrics nor its log carried this number. That is not a reading of zero.
+```
+
+**"That is not a reading of zero."** With detailed routing aborted at pin access
+(J99), a flow that reported `0` here would have been reporting the *absence of the
+router* as the *absence of violations*. It refuses to. This is the same doctrine as
+`def_stage_progression_check`'s, reached independently by a different part of the
+tree, and it is the **fifth** instrument to land on §6's conclusion — after area, the
+legalizer residual, runtime, and the router.
+
+### And the refusal DISCRIMINATES — the third state, on real data
+
+A gate that only ever says `NOT DETERMINED` would be indistinguishable from one that
+cannot say anything else. The same reconciler on the `sha256` control:
+
+```
+sha256                 [pnr] ROUTE_DRC NO_METRIC: route__drc_errors: 3 came from
+                             PARSING THE LOG … a proxy for the measurement, not the
+                             measurement. This step is NOT clean on this number.
+edge_llm_matmul_accel  [pnr] ROUTE_DRC NEITHER:  NOT DETERMINED … not a reading of zero.
+```
+
+Two arms, two **different** states, and the difference is in the logs beneath them:
+`grep -cE 'Completing.*with .* violation|DRT-0199'` returns **2 455** on the control
+and **0** on the die-3300 arm. The control's log has a routing residual to parse
+because its router ran; the other has none because its router did not.
+
+That comparison is a runnable check rather than a quotation —
+`controls/route_drc_discriminates.py` takes the state off each arm's runner log and
+**requires the two to differ**, because a gate whose two states are the same is not
+separating anything. Its own control is to hand it the **same arm twice**:
+
+```
+two arms (NEITHER vs NO_METRIC)  -> DISCRIMINATES        rc 0
+the SAME arm twice               -> NOT DISCRIMINATING   rc 1
+an unreadable arm                -> INCONCLUSIVE         rc 2
+```
+
+Registered in `controls_can_fail.py`; census now **19 files, 18 classified, 0
+unaccounted, rc 0**.
+
+### The word of mine this corrected
+
+J100 called `sha256` *"the arm that legalizes, routes, and passes"*. **"Passes" is
+wrong**, and §5 of this report already says why in detail: routing genuinely
+completed (`DRT-0198 Complete detail routing`), OpenROAD was then killed by
+**SIGSEGV** inside `postroute_drv_repair`, the runner resumed from
+`routed_preantenna.def` with that step omitted, and the route-DRC count is **5** —
+§5 having already corrected the summary's 3 — and disclaimed as unverified by the
+runner itself. It is a control for **legalization and routing**, which is all J99 and
+J100 use it for, and it is not a clean sign-off. The sentence is fixed where it
+stands. *The report was right about this in §5 and I restated it loosely 2 000 lines
+later, which is the failure mode a long document has: the careful version exists and
+the casual one is the one a reader meets.*
+
+---
+
+## J102 — the report cites its instruments by a path that had gone stale, and the copy on the remote is a different program
+
+**No verdict moves.** All six rows stay where §1 puts them. What moves is the standing
+of the report's own citations: for one instrument, following the citation printed **two
+red rows that are false**.
+
+### How it surfaced
+
+The first thing a re-dispatch does is re-run the decay ledger, and it printed
+**`2 published reading(s) MOVED`**. Both reds contradicted a sentence this report
+published four hours earlier — that the ledger's two standing reds *"are corrected where
+they stand … Ledger rc 0"*. Either the report was wrong or the file was.
+
+Neither. **There are two files.** `meas/_j79/decay_ledger.py`, the path RESULT.md
+publishes as *"the decay ledger"*, is **13 722 B** and carries the **pre-J100** pins;
+`selftapeout-adjudication/controls/decay_ledger.py`, the copy on the remote, is
+**18 508 B** and carries the corrected ones. Run back to back:
+
+```
+meas/_j79/decay_ledger.py           2 published reading(s) MOVED     (both false)
+controls/decay_ledger.py            No published live-state reading has moved.   rc 0
+```
+
+The two false reds are exactly the two J100 fixed: the per-rung ladder pinned by EXACT
+match (it grows a term per rung, so it reddens on the arm making **progress**), and the
+`process gone` row J100 **retired** into its successor fact. The published sentence was
+true of the file it was measured with and false of the file it names.
+
+### So the question was asked of every instrument, in both directions
+
+`controls/instrument_copies_agree.py`. It compares **bytes**, enumerates from the
+directories rather than from a list typed by me, and states **no opinion about which
+copy is right** — deciding that is a judgement, and a judgement is not a control's job.
+
+    16 instrument paths cited in RESULT.md      — every one of them under meas/
+     0 of them point into the published tree
+    26 name-matched pairs across the two trees
+     3 DRIFTED, 23 AGREE                        (meas/_j102/drift_before.txt, rc 1)
+
+**Zero** citations point at the tree a reader off this host can actually run. That is
+the structural half of the finding and it is worse than the one file: the report has
+been citing one program and publishing another under the same name.
+
+The three:
+
+| pair | cited copy | published copy | which is current |
+|---|---|---|---|
+| `decay_ledger.py` | 13 722 B, pre-J100 pins | 18 508 B | **published** |
+| `controls_can_fail.py` | 11 168 B | 16 684 B, strict superset (one 90-line insert: the J99/J101 perturbation rows) | **published** |
+| `posthold_verdict_predicate.py` | 7 037 B, carries J92's correction | 6 070 B, older content | **cited** |
+
+**The third one is why mtime is not the answer.** The published copy is the **newer
+file** (21:32 against 20:39) and the **older content** — the J96 census copied an
+already-superseded version into the published tree, and its timestamp records the copy,
+not the authorship. Anyone reconciling these by date would have overwritten the
+correction with the thing it corrected.
+
+### Reconciling a REGISTERED predicate, without moving the rule
+
+The predicate is registered (`predicate_registered_at.txt`, 15:40:37) and a predicate
+rewritten after its subject starts answering is not a predicate. So rule-equality was
+**measured before** anything was copied, not asserted after:
+
+* the **docstring** — where P1/P2/P3, the reason, and the falsifiers are written — is
+  **byte-identical** between the two copies;
+* every line containing `sys.exit` / `CONFIRMED` / `REFUTED` / `HELD` is
+  **byte-identical**;
+* `diff` reports **exactly one hunk**, at line 102, inside the still-unanswered
+  branch's **message**.
+
+After reconciliation both paths produce **byte-identical output at rc 0**, and the
+answer is unchanged: `P1 HELD so far`, `P2 HELD so far`, `P3 HELD so far
+seen=[(3800, 300)]`, `answered: [(3300, 'POST_HOLD_LEGALIZE_FAILED')]`.
+
+The three losing copies are kept under `meas/_j102/superseded/` with a README naming
+what each lost to, so the reconciliation is a supersession and not a deletion.
+
+### The instrument caught my own edit, ~1 minute after I made it
+
+Registering the new control meant editing `controls/controls_can_fail.py`. The very
+next run of `instrument_copies_agree.py` returned **rc 1** naming that pair
+(`meas/_j102/caught_my_own_edit.txt`). That is the second unmanufactured red of the
+dispatch and the better one, because the drift it caught was **mine and one minute
+old** — the failure mode is not historical, it is what happens every time I touch a
+control.
+
+### And its own first version had the defect it hunts
+
+The headline counted a pair **once per arm** — `5 instrument pair(s) DRIFTED` above a
+list of **3** — because the same pair is reached both via the citation and via the name
+sweep. A summary contradicting its own rows is J86's shape and J92's, and here it was in
+the instrument written to hunt exactly that class of drift. Fixed by deduplicating on
+`(left, right)` before counting, and the docstring says so.
+
+### Registered, and shown capable of red three ways
+
+`controls_can_fail.py` now perturbs it on **synthetic trees** (its `J102_ROOT` /
+`J102_PUB` overrides), so proving the verdict flips does not require damaging a real
+instrument:
+
+```
+  SYNTHETIC-RED   instrument_copies_agree.py   identical twins rc=0; one byte changed in
+                  the published copy rc=1; a cited path that does not exist rc=1
+                  (also OBSERVED-RED on the real trees)
+```
+
+Census after: **20 files in `controls/`, 19 classified, 1 non-runnable, 0 unaccounted,
+rc 0**. `cite_audit` rc 0 (19 coordinates), `stale_figure_audit` rc 0 (9 superseded
+figures across 4 077 lines), reconciled ledger rc 0, drift control rc 0
+(`meas/_j102/drift_after.txt`, 26 AGREE).
+
+### What it does NOT do
+
+It does not decide which copy is right, it does not touch a verdict, and it does not
+make the citations point somewhere else. The report keeps citing `meas/_jNN/` — that is
+where the instruments were written and where they run — and what changes is that the
+two trees are now held byte-identical **by a control that reddens the moment they are
+not**, instead of by nobody.
+
+### ★ And the control named its own published trees BY HAND — a third tree, a fourth pair
+
+The first version of `instrument_copies_agree.py` walked two subdirectories,
+`controls/` and `probes/`, because I typed those two names into it. **There is a third
+published tree** — `selftapeout-adjudication-addendum/` — and it holds a third copy of
+the registered predicate and a fourth drifted pair. A hand-typed candidate list is the
+**exact** defect `controls_can_fail.py` was rewritten for ("the candidate list is
+ENUMERATED FROM THE DIRECTORY, never typed here"), committed again inside the instrument
+written to catch copies that disagree. That is **three** sightings of one shape on this
+one finding: the double-counted headline, the typed tree list, and — below — a
+resolution rule that reddened on a path that is fine.
+
+Enumerating instead of typing:
+
+```
+DRIFTED  meas/_j96/summary_matches_its_rows.py   addendum/summary_matches_its_rows.py
+         4 361 B                                 4 896 B
+```
+
+The **addendum** copy is current: it carries J98's correction of a **dangling `J97`
+citation** — no J97 was ever written into `findings.md`; the finding that line pointed
+at lives in section 4 of the addendum README. Docstring-only: everything outside the
+module docstring is **byte-identical**, measured before reconciling, same as the
+predicate. Reconciled addendum → `meas/_j96/`.
+
+And the addendum's copy of the **registered predicate** was already byte-identical to
+the corrected one (`d09d48df13`, 7 037 B). So the J96 census did not simply publish an
+old version — it published the correct one to one destination and the superseded one to
+the other, and nothing compared them.
+
+### ★ And its first act on my own new citation was a FALSE ALARM
+
+The banner I had just written cites `controls/instrument_copies_agree.py`, and the
+control returned **`CITED-MISSING`** on it. The report cites in **two namespaces** —
+`meas/…` is relative to the private root, `controls/…` and `probes/…` are relative to a
+published tree — and the first version resolved every citation against the private root
+only. **An instrument reddening on a path that is perfectly fine is the false alarm this
+whole finding is about**, produced by the instrument built to end it, within minutes.
+Fixed by resolving a citation against the private root **or** any published tree, and
+the red branch is unchanged for a path that resolves under neither.
+
+Final state, all three trees enumerated: **31 AGREE pairs, 0 DRIFTED, 0 CITED-MISSING,
+rc 0** (`meas/_j102/drift_after.txt`). Census re-run after every one of these edits:
+**20 files in `controls/`, 19 classified, 0 unaccounted, rc 0**, with
+`instrument_copies_agree.py` still **SYNTHETIC-RED** on all three of its branches.
+
+---
+
+## J103 — the coordinates that carry a verdict's REASON are the ones no control resolved, and one of them was wrong
+
+**No verdict moves.** The quote is exact and the claim it supports is unchanged. What
+was wrong is the **address** beside it.
+
+### The gap, stated before the defect
+
+`cite_audit.py` re-resolves every `file.py:NNN` coordinate this report publishes, and
+its `TREES` table covers the flow's own files — `pnr.tcl`, `pad_ring_gen.py`, the
+runner, a PDK model card. It does **not** cover `L1:33` / `L8:26` / `L9:37`: the
+coordinates quoted from a **design's own L1–L27 documents**. Those are the coordinates
+that carry the **reason** for `edge_llm_accel`'s NOT FEASIBLE verdict — J43 rewrote that
+row's reason on the strength of them (*"out of scope by declaration, not by defect"*).
+So the one family of citation nobody could re-resolve was the family a verdict rests on.
+
+### Asked, and one answer was wrong
+
+`controls/ldoc_cite_audit.py` resolves each of them against
+`bdata/ic/*/input/docs/L<n>_*.md` — every design tried, because a coordinate does not
+name its design — and asks whether the cited line carries the text the report
+attributes to it.
+
+```
+OFF-BY   RESULT.md:1208  L9:37  block   edge_llm_accel  1.00  n=41
+         text lives at L9:38 — | Pin placement | 工具自選(無 pad ring;macro-level) |
+```
+
+**L9:37 is the macro-placement row** (`20 × fakeram45_2048x39 …`). The pad-ring
+declaration is at **L9:38**. The report published the wrong line twice — once in the
+quoted block, once inline in §3's correction — and both are now corrected in place with
+the correction named. Reconstructible red: `meas/_j103/ldoc_offby_reconstructed.txt`.
+
+**8 coordinates audited, 6 were right, 1 wrong (in 2 places).** `caravel_user_project`'s
+`L1:7` and `L9:16` both resolve at **1.00**, so §4's *"a macro in somebody else's die,
+and its L1/L9 say so"* re-resolves today from the design's own files.
+
+### The threshold is measured, not chosen
+
+Matching is a subsequence ratio over normalised text, because the report abridges some
+quotes — which means there is a tolerance, and J83 is the finding about a control whose
+tolerance was 17× its own signal. So the noise floor was **measured**:
+
+```
+the report's L9 quote scored against every nearby line of the design's own L9
+  L9:35  0.171     L9:36  0.268     L9:37  0.268  <- the cited line
+  L9:38  1.000  <- the text
+```
+
+Worst coincidental score anywhere in the sweep: **0.550**, and that worst case is a
+20-character quote. The published threshold **0.85** sits in the empty band between
+0.550 and 0.940, and the verdict is **rc 1 at every threshold from 0.30 to 0.94** — what
+changes across that range is only *which red state* the wrong coordinate lands in.
+Every row now prints the quote's normalised length and marks anything under 24
+characters `short`, because an OK on a short quote is weaker evidence and should read
+that way.
+
+### And the "try every design" rule was a laundering path, measured
+
+At a low threshold the audit accepted the wrong coordinate — because
+**`u_hawaii_adc`'s L9:37 scores 0.341** against a quote from `edge_llm_accel`'s L9, on
+punctuation overlap alone. Raising the threshold until that stops is tolerance chosen by
+taste, so instead the **design became part of the answer**: a line accepted at the cited
+coordinate must come from the same design where the text actually lives, else the row is
+`CROSS-DESIGN` and red. That is what turns the 0.30 run from a false green into a red.
+
+### Nothing is skipped quietly
+
+Two citation forms exist — the fenced `L1:33  <text>` block and the inline `(L1:7)` —
+and a first draft used "the nearest quote in the paragraph" for the inline form, which
+would have attributed a quote of **the user's request** to a design document two lines
+later. The rule is now adjacency (the quote ends just before the coordinate or begins
+just after it), and anything it cannot attribute is printed as **UNATTRIBUTED and
+counted** — currently 5, three of which are inside the correction sentence itself, which
+is not auditable by construction.
+
+### The instrument caught my own gloss within seconds
+
+The rules for this job say English only in repo artefacts, and these quotes are Chinese
+because the **design documents are**. A quote is evidence and altering it would be
+falsifying it, so the quotes stay byte-exact and an **English gloss** was added beside
+them. The first draft of that gloss repeated the coordinates with a quote beside each —
+and put *"tape-out simulation"* next to **L8:26**, where it does not live.
+`ldoc_cite_audit` returned **NOT-FOUND** on my own sentence on the next run. The gloss
+now names no coordinate at all, and says so.
+
+### Registered
+
+`controls_can_fail.py` perturbs it on a **synthetic design tree**: the right line rc 0;
+the coordinate moved one line rc 1 `OFF-BY`; text that is in no document rc 1
+`NOT-FOUND`. Census: **21 files in `controls/`, 20 classified, 1 non-runnable, 0
+unaccounted, rc 0**. Drift control rc 0 — and it reddened once more in between, catching
+the very edit that registered this one.
+
+---
+
+## J104 — the six-row table's "the ring places" re-run today, and one word in it corrected: `abuts` is a field name, not cells touching
+
+**No verdict moves.** Three of the six rows say *original reason OVERTURNED* on the
+strength of one sentence — **the ring places, and here is the die in microns** — so that
+sentence is worth re-measuring rather than re-reading.
+
+### It re-measures, twelve for twelve
+
+`meas/perimeter_probe.py` drives `programs/pad_ring_gen.py` by subprocess at the die the
+formula predicts and again at **one pad width less, which must refuse**. Re-run today:
+
+```
+caravel_user_project  @ 12912 -> PASS     @ 12837 -> PAD_RING_DOES_NOT_FIT
+opentitan_aes         @ 10512 -> PASS     @ 10437 -> PAD_RING_DOES_NOT_FIT
+ibex                  @  5712 -> PASS     @  5637 -> PAD_RING_DOES_NOT_FIT
+edge_llm_matmul_accel @  2862 -> PASS     @  2787 -> PAD_RING_DOES_NOT_FIT
+edge_llm_accel        @  3087 -> PASS     @  3012 -> PAD_RING_DOES_NOT_FIT
+u_hawaii_adc          @  1212 -> PASS     @  1137 -> PAD_RING_DOES_NOT_FIT
+```
+
+and the DEFs it wrote reconcile to the pad counts **exactly**: 649 / 521 / 268 / 115 /
+126 / 28 `COMPONENTS`, each **pads + 4 corners**, with `DIEAREA` equal to the published
+die at 2 000 DBU/µm in every case. `meas/_j104/perimeter_rerun.txt`.
+
+**And the caravel pad-facing figure re-derives too**, including its odd `+1 µm`: at
+**2187 µm** the step refuses with `PAD_CORNER_SPACING_NOT_SITE_MULTIPLE` (*"PAD_WEST: the
+remaining area … is 8700.0 DEF unit(s), which is not a multiple of the minimum site width
+200"*), and at **2188 µm** it places **79 components**. The report's **2.188 mm** is the
+placer's answer, not the formula's.
+
+### The word that was wrong
+
+Section 4 said that ring is *"a real placed, **abutting** ring"* and cited `abuts: true`
+from the step's own `padring.json`. **`abuts` is the step's name for "no gap is
+unfillable".** The same file records **`fillers_placed = null`**, under a key that says it
+in the program's own words:
+
+```
+unperformed.io_filler_placement:
+  "not performed by this step — upstream's chip flow inserts filler as its own later
+   step … `fillers_placed` is null, never 0: an absent placement is not a placement of none"
+```
+
+Literal contact, counted per side:
+
+```
+ibex                   4/4 sides touching        u_hawaii_adc           4/4
+edge_llm_matmul_accel  3/4                       edge_llm_accel         2/4
+caravel_user_project   1/4                       opentitan_aes          1/4
+```
+
+On caravel's other three sides there are **160 gaps of 800 DBU (0.4 µm) and 2 of 11 000
+DBU (5.5 µm)** apiece. So two of the six rings really are abutting on every side and the
+biggest one is abutting on one side in four. **That is J99's shape — a label read as the
+thing — in a sentence of mine, and it moves nothing**: the tool's `verdict` is `PASS`,
+the ring is placed, and "placed and priced in microns" is the whole of what the row
+claims.
+
+### And the flow's `unfillable: []` now holds arithmetically instead of by quotation
+
+Quoting a program's empty list back at the reader is the same move as quoting its
+`abuts`. `controls/abutment_census.py` recomputes it:
+
+* every side's gaps **sum to exactly that side's `space_for_fill`** — 6 designs, 24 sides;
+* every gap is a **whole multiple of the smallest declared filler**, 200 DBU = 0.1 µm
+  (`fillnc`), so 800 = 4×, 11 000 = 55×, 5 200 = 26×, 4 800 = 24×, 1 000 = 5×;
+* `unfillable` is empty in all six;
+* every side's slack is **either 0 or exactly 150 000 DBU** — one pad width — which is
+  the very quantity the negative control above removes to make the die refuse. The two
+  halves of this finding are the same number seen from two directions.
+
+**And a seventh probe tree is a FAIL, which the census lists rather than drops**:
+`_probe_caravel_padfacing_at` holds the **2187 µm** refusal, 57 of 75 pads placed and no
+`W` spacing block at all, because the step stops where it cannot continue. Censusing a
+refused ring as a placed one would be reading a partial artefact as a whole one; the
+first version of this control did exactly that and died on the missing key.
+
+Registered: all-zero gaps rc 0; a gap that is not a whole filler rc 1; gaps not summing
+to the declared fill space rc 1; no probe trees at all rc 2. Census: **22 files in
+`controls/`, 21 classified, 0 unaccounted, rc 0**.
+
+---
+
+## J105 — the other two load-bearing measurements re-run, and an evidence tree that could not reproduce its own stored output
+
+**No verdict moves.** Both re-derive. What did not re-derive, at first, was the *tree*.
+
+### `u_hawaii_adc`'s overturned half — re-derived
+
+The row's OVERTURNED half is *"its own core forces a die that holds **68** pads and it
+asks for **24**"*, an 8.5× correction to the original *"≥8 analog pins vs 6 max"*. Driven
+through `pad_ring_gen` again today, with the refusal kept reachable:
+
+```
+24 pads @ 2052 um -> rc=0 PASS
+68 pads @ 2052 um -> rc=0 PASS          <- the die is full
+69 pads @ 2052 um -> rc=1 PAD_RING_DOES_NOT_FIT
+      PAD_SOUTH: the sum of cell widths is 2700000 DEF unit(s) and the side is 2580000
+```
+
+and the premise under it, re-read from the PDK's own IO LEF today:
+`MACRO gf180mcu_fd_io__asig_5p0 … SIZE 75.000 BY 350.000` — **the analog pad is the same
+75 µm as every other pad**, so there is no separate analog perimeter budget to be short
+of. `meas/_j105/hawaii_rerun.txt`.
+
+### §4a's four tiers — re-derived, after the tree was made able to answer
+
+Run bare against the stored evidence trees, the gate returns **rc 2 INCOMPLETE on all
+four** — including the row this report publishes as **rc 1 [FAIL]**, which is
+`edge_llm_accel`'s SECOND reason for NOT FEASIBLE and the one that is the flow's
+judgement rather than my arithmetic.
+
+Nothing had changed about the verdicts. **The stored trees were missing both inputs the
+original run supplied:**
+
+* the **authority** — `L19_CONSTRAINTS_PDK.json fields.die_area_budget_um`, written into
+  the tree at run time and not kept. The stored `.out` says `1 L19 copy/copies`; the tree
+  today holds `0 of 0`.
+* the **flag** `--area-unit-um2`, without which the gate refuses to assert a unit that
+  the producing artefact declines to assert: `stats.json` records `chip_area_unit =
+  "cell-library area unit (as declared by the library the synthesis script loaded)"`,
+  which does not name µm². *(That refusal is the flow being right, and it is the same
+  doctrine J101 praised in the route-DRC reconciler.)*
+
+Rebuilt with each ceiling taken from the design's **own** document — `edge_llm_accel`
+L9:35 *"Die size | 2400 × 2400 µm(5.76 mm²)"*, `caravel_user_project` L9:12 *"DIE_AREA =
+[0, 0, 2920, 3520] µm"*, both re-read today — the published table reproduces exactly:
+
+```
+edge_llm_accel        2400x2400   rc 1  [FAIL]  3.2086e+07 um^2 vs 5.7600e+06, 5.57x
+caravel_user_project  2920x3520   rc 0  [PASS]  utilization 0.0005
+ibex                  NONE        rc 2  INCOMPLETE
+opentitan_aes         NONE        rc 2  INCOMPLETE
+```
+
+The `[FAIL]` line is **byte-identical** to the one §4a quotes.
+
+### The trap, named
+
+Either missing input turns a **FAIL into an INCOMPLETE** — a *different tier, not a
+milder one*. Someone re-running the stored evidence would have found the flow's own gate
+declining to refuse the design the report says it refuses, and would have been wrong,
+and nothing in the tree would have told them why. **That is J102's shape on an evidence
+tree instead of on an instrument**: the artefact is present and does not say what the
+sentence beside it says.
+
+`controls/areagate_reproduces.py` pins all four tiers against
+`meas/_j105/areagate_*`, which now carry their authority, and demonstrates both silent
+tier-change paths: **without `--area-unit-um2` rc 2, with the L19 removed rc 2, restored
+rc 1** — and it checks that last one, because a control that damages its own input is
+not a control. Registered: authority present rc 0, L19 deleted rc 1, no trees rc 1.
+Census **23 files in `controls/`, 22 classified, 0 unaccounted, rc 0**.
+
+### ★ CORRECTION to J103's own instrument — the quote-attribution rule was wrong twice, both found by running it
+
+Published, J103's inline rule was "a quote within 40 characters, in a window of the two
+lines before". Writing J105's banner broke it, twice, within minutes:
+
+1. **A quote can FOLLOW its coordinate and wrap.** `caravel_user_project` **L9:12**
+   *"DIE_AREA = [0, 0, 2920, 3520] µm"* — the quote began on the next line, invisible to
+   a backward-only window, so the nearest visible quote was the **previous** coordinate's
+   and the row came back `OFF-BY` **against a coordinate that is correct**. The window now
+   includes the following line.
+2. **"Last in document order" is not "closest".** With the window widened, `L1:7` and
+   `L9:16` broke — where two quotes bracket one coordinate, the FOLLOWING quote belongs to
+   the NEXT coordinate. Attribution is now by **character distance**, tie to the quote that
+   PRECEDES, which is the form English writes: `"…" (L1:7)`.
+
+And a third case is a limit rather than a bug, named instead of engineered around: a
+coordinate mentioned in **meta-prose about citations** can sit beside a quote of my own
+report rather than of a design. J103's own banner did that — `L9:16` beside *"its L1/L9
+say so"* — and the audit went hunting that phrase in the L-docs. **The prose was changed,
+not the rule**: manufacturing adjacency for an instrument to be happy is the wrong
+direction, and `UNATTRIBUTED` exists precisely so a coordinate with no design-document
+quote beside it is counted rather than guessed at.
+
+Final: **10 coordinates audited, all carry their own text; 14 UNATTRIBUTED and named;
+rc 0.** Both false alarms were produced by the instrument against MY OWN correct
+citations, which is the failure mode J102 is about — and both were found by running it
+rather than by reading it.
+
+---
+
+## J106 — the prose corrects a superseded number where it stands; the INSTRUMENTS it cites went on printing the old one
+
+**No verdict moves.** §6's build-to figure is right and re-derives. What was wrong is that
+a reader who follows the citation and RUNS the script reads the superseded number as the
+answer.
+
+### How it surfaced
+
+`resolve_five.py` reproduces the published build-to **exactly** — five arms, read from
+their raw OpenROAD logs rather than a typed table:
+
+```
+A* = (M + S)/(UTIL - f)   UTIL=0.25  f=0.039991  S=98437.16
+  movable low   DIE  6138.8 um (37.685 mm2)  2.145x pad floor
+  movable mean  DIE  6157.5 um (37.915 mm2)  2.151x
+  movable high  DIE  6171.2 um (38.084 mm2)  2.156x
+```
+
+But `build_to_fixed_point.py`, cited at RESULT.md:2422, ends on
+
+```
+=== 6. the bracket the two readings define ===
+  5649 um (1.97x)  ..  6165 um (2.15x)
+```
+
+**6165 / 2.154× is the pre-J76 four-arm top, and the script said nothing about that.**
+`stale_figure_audit` registers `6.165` and `2.154×` as superseded and had been checking
+only the report's prose — where they are properly marked. One layer out, in the artefact
+a reader would actually run, they stood as the answer.
+
+### The audit now asks it of the cited instruments too
+
+A second arm scans every instrument path cited in RESULT.md for the same registered
+figures and requires a supersession marker within six lines. On real input it returned
+**rc 1** naming two (`meas/_j102/stale_scripts_before.txt`):
+
+| site | what it is | what was done |
+|---|---|---|
+| `meas/_j67/arm5_verdict.py:10` | a **registered predicate**: *"HELD → build-to stays 6.139-6.165 mm"*. That branch did NOT fire — arm 5 landed above the band and REFUTED it (J76) | **annotated, not rewritten** — J81's rule: a predicate edited after its subject answers is not a predicate. The prediction is kept as it was, with a pointer to the branch that fired and to the five-arm solve |
+| `meas/_j79/decay_ledger.py:7` | the docstring's own illustration, *"a sentence like `git ls-remote` returns 67 heads"* | marked — and truthfully, because that number went 67 → 72 within the hour and 262 later, **which is the point of using it as the example** |
+
+### And the limit is named, because the motivating case defeats the method
+
+A source scan cannot see a figure a script **computes at run time**.
+`build_to_fixed_point.py` prints `6165 um (2.15x)` from an f-string and holds neither
+literal — the very file that motivated the arm is invisible to it. Handled by making the
+script **announce its own supersession in its first line of output**, which puts the
+marker back into the source where the scan can see it:
+
+```
+NOTE — SUPERSEDED BY A FIFTH ARM (J76): this file solves the fixed point at FOUR dies
+and its top figure, 6164.9 um / 2.154x, is the build-to top as it stood BEFORE arm 5.
+The published answer is 6138.8-6171.2 um / 2.145-2.156x, from controls/resolve_five.py …
+Every number below is correct FOR FOUR ARMS.
+```
+
+Not one number it computes was changed. The comment in the audit says all of this, as
+the instruction for the next instrument with the same shape.
+
+### Perturbed in both directions
+
+The census now exercises the new arm on a synthetic tree: a cited script carrying an
+unmarked `6.165` → **rc 1**; **the same script with a marker added → rc 0**. That second
+run is the one worth having — it proves the *marker* is doing the work, not the file
+path. Prose branch unchanged: clean rc 0, one unmarked figure rc 1.
+
+Census **23 files in `controls/`, 22 classified, 0 unaccounted, rc 0**. And the drift
+control caught a twin of the audit under `meas/_j92/` about a minute after I edited the
+published copy — the third time this dispatch that it has caught my own edit.
