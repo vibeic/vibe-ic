@@ -98,7 +98,15 @@ H2_RE = re.compile(r"^##\s+(?P<title>\S.*?)\s*$")
 #: this is a placeholder census, not a prose critic, and a wide pattern here
 #: would refuse legitimate text and get the rule weakened rather than the
 #: document fixed.
+#:
+#: MATCHED ON WORD BOUNDARIES, not as substrings, and the difference is a false
+#: positive waiting to happen: a design or macro name is arbitrary text this
+#: flow does not choose, and `block_XXXa` is a legal one. A rule that reddens a
+#: correct document because of the letters inside a name is a rule that gets
+#: switched off rather than obeyed.
 PLACEHOLDER_TOKENS = ("TODO", "TBD", "FIXME", "XXX", "<PLACEHOLDER>")
+PLACEHOLDER_RE = re.compile(
+    "|".join(rf"(?<![\w-]){re.escape(t)}(?![\w-])" for t in PLACEHOLDER_TOKENS))
 
 #: The YAML manifest that binds one document set to the tree it describes.
 MANIFEST_NAME = "documentation_manifest.yaml"
