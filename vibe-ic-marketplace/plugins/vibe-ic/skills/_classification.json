@@ -483,13 +483,6 @@
         ],
         "why": "A late-stage change to an ALREADY-placed-and-routed netlist; it cannot apply before that netlist exists."
       },
-      "phase3-backend-verify": {
-        "stages": [
-          "stage3",
-          "stage4"
-        ],
-        "why": "Its own description: runs after 'synth netlist + DEF + GDS + STA + DRC reports' exist. On-pass reviewer for the backend stages."
-      },
       "ppa-diagnose": {
         "stages": [
           "stage2",
@@ -623,12 +616,6 @@
           "off_flow"
         ],
         "why": "Doctrine for how a benchmark NUMBER must be produced. It constrains measurement methodology, not a point in a chip's flow."
-      },
-      "benchmark-verify": {
-        "stages": [
-          "off_flow"
-        ],
-        "why": "Produces BENCHMARK_VERIFICATION_REPORT.md for a benchmark IC. Owner ruling 2026-08-30: this is a BENCHMARK artefact -- it belongs to the benchmark programme, not to a stage of the flow."
       },
       "ppa-benchmark": {
         "stages": [
