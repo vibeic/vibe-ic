@@ -1,0 +1,34 @@
+{
+  "fields": {
+    "versions": [
+      {
+        "name": "A2B (AD2410)",
+        "note": "First-generation A2B transceiver."
+      },
+      {
+        "name": "A2B AD242x",
+        "note": "Second-generation AD242x family transceivers with expanded channels and diagnostics."
+      }
+    ],
+    "deprecated_features": [],
+    "backward_compat_traps": [
+      "Main and sub nodes must use a compatible A2B generation; mixing incompatible transceiver generations on one chain is not supported."
+    ],
+    "spec_version": "Analog Devices A2B (AD24xx transceiver family)",
+    "previous_versions": [
+      "AD2410"
+    ],
+    "key_changes": [
+      "AD242x expanded audio channel counts and diagnostics over AD2410.",
+      "GPIO-over-distance and enhanced line diagnostics in later parts."
+    ],
+    "version_naming_history_note": "Originally a Philips internal spec (1982); first public release v1.0 in 1992; NXP took ownership in 2006 when split from Philips. Recent versions are numbered as 'Rev. N' rather than 'vX.Y'.",
+    "ic_name": "A2B_Transceiver"
+  },
+  "extraction_status": "EXTRACTION_FOUND_NOTHING",
+  "schema_version": "v0.1.62",
+  "doc_class": "L14",
+  "emitted_by": "phase1_protocol_spec_extract.extract_l14_versioning v0.1.62",
+  "extraction_evidence": {},
+  "ic_name": "A2B_Transceiver"
+}

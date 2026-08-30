@@ -1,0 +1,26 @@
+{
+  "fields": {
+    "properties": [],
+    "must_have_properties": [
+      "On ESPI_RESET# deassertion the link operates Single I/O, 20 MHz, CRC disabled.",
+      "Every transaction is CMD(8b) + fields + optional data + CRC + turnaround + response(8b) + data + STATUS(16b) + CRC.",
+      "Turnaround (TAR) is 2 ESPI_CLK cycles of bus float when ownership reverses.",
+      "CRC-8 uses polynomial 0x07, init 0x00, over all bytes except the CRC byte; CRC is optional and negotiated.",
+      "Each of the 4 channels is independently enabled (Channel Enable) and must report Channel Ready before use.",
+      "Slave not ready inserts WAIT_STATE bytes (0x0F nibble) before its response code.",
+      "Slave signals service via ESPI_ALERT#; master replies with GET_STATUS."
+    ],
+    "espi_distinguishers": [
+      "Four multiplexed logical channels (Peripheral/VW/OOB/Flash) — not present in classic SPI or QSPI.",
+      "In-band Virtual Wire sideband tunneling.",
+      "GET/SET_CONFIGURATION register negotiation.",
+      "Replaces the LPC bus."
+    ]
+  },
+  "extraction_status": "EXTRACTION_FOUND_NOTHING",
+  "schema_version": "v0.1.62",
+  "doc_class": "L16",
+  "emitted_by": "phase1_protocol_spec_extract.extract_l16_compliance v0.1.62",
+  "extraction_evidence": {},
+  "ic_name": "Enhanced Serial Peripheral Interface (eSPI)"
+}

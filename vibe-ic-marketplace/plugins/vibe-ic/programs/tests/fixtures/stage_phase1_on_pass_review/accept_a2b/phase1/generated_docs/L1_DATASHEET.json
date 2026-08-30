@@ -1,0 +1,693 @@
+{
+  "schema_version": 2,
+  "doc_class": "datasheet",
+  "ic_name": "A2B_Transceiver",
+  "no_ic_name_in_input": false,
+  "package_info": null,
+  "no_package_in_input": true,
+  "pin_table": [
+    {
+      "name": "Per",
+      "mode": "input",
+      "aliases": [],
+      "rtl_name": "per",
+      "board_name": "Per",
+      "io_standard": null,
+      "no_io_standard_in_input": true,
+      "function": "for example data decoding errors,",
+      "evidence": "input/docs/a2b_spec.txt",
+      "extraction_strategy": "markdown_bullet_under_heading",
+      "description": "for example data decoding errors,"
+    }
+  ],
+  "no_pin_table_in_input": false,
+  "electrical_specs": [],
+  "no_electrical_specs_in_input": true,
+  "ordering_info": {
+    "part_number": "a2b",
+    "vendor": null,
+    "no_vendor_in_input": true
+  },
+  "tapeout_metadata": null,
+  "no_tapeout_metadata_in_input": true,
+  "extraction_evidence": {
+    "input/docs/a2b_spec.txt": [
+      {
+        "literal": "Per",
+        "label": "pin (markdown bullet under heading)"
+      },
+      {
+        "literal": "48 kHz",
+        "label": "frequency"
+      },
+      {
+        "literal": "48 kHz",
+        "label": "frequency"
+      },
+      {
+        "literal": "48 kHz",
+        "label": "frequency"
+      }
+    ]
+  },
+  "class_path": null,
+  "no_class_path_in_input": true,
+  "auto_discovered_identifiers": [
+    {
+      "name": "A2B",
+      "source_doc": "a2b_spec.txt",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "AD2410",
+      "source_doc": "a2b_spec.txt",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "AD2420",
+      "source_doc": "a2b_spec.txt",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "AD2425",
+      "source_doc": "a2b_spec.txt",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "ABSTRACT",
+      "source_doc": "a2b_spec.txt",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "UTP",
+      "source_doc": "a2b_spec.txt",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "ADAS",
+      "source_doc": "a2b_spec.txt",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "ANC",
+      "source_doc": "a2b_spec.txt",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "RNC",
+      "source_doc": "a2b_spec.txt",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "I2S",
+      "source_doc": "a2b_spec.txt",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "TDM",
+      "source_doc": "a2b_spec.txt",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "I2C",
+      "source_doc": "a2b_spec.txt",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "GPIO",
+      "source_doc": "a2b_spec.txt",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "OVERVIEW",
+      "source_doc": "a2b_spec.txt",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "PDIF",
+      "source_doc": "a2b_spec.txt",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "TOPOLOGY",
+      "source_doc": "a2b_spec.txt",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "DAISY",
+      "source_doc": "a2b_spec.txt",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "CHAIN",
+      "source_doc": "a2b_spec.txt",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "OVER",
+      "source_doc": "a2b_spec.txt",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "SINGLE",
+      "source_doc": "a2b_spec.txt",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "TWISTED",
+      "source_doc": "a2b_spec.txt",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "PAIR",
+      "source_doc": "a2b_spec.txt",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "MAIN",
+      "source_doc": "a2b_spec.txt",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "SUB",
+      "source_doc": "a2b_spec.txt",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "MASTER",
+      "source_doc": "a2b_spec.txt",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "SLAVE",
+      "source_doc": "a2b_spec.txt",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "NODES",
+      "source_doc": "a2b_spec.txt",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "TRANSCEIVER",
+      "source_doc": "a2b_spec.txt",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "ADC",
+      "source_doc": "a2b_spec.txt",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "DAC",
+      "source_doc": "a2b_spec.txt",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "NODE",
+      "source_doc": "a2b_spec.txt",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "DISCOVERY",
+      "source_doc": "a2b_spec.txt",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "ADDRESSING",
+      "source_doc": "a2b_spec.txt",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "SUPERFRAME",
+      "source_doc": "a2b_spec.txt",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "DOWNSTREAM",
+      "source_doc": "a2b_spec.txt",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "UPSTREAM",
+      "source_doc": "a2b_spec.txt",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "SYNCHRONOUS",
+      "source_doc": "a2b_spec.txt",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "SAMPLE",
+      "source_doc": "a2b_spec.txt",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "RATE",
+      "source_doc": "a2b_spec.txt",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "SYNC",
+      "source_doc": "a2b_spec.txt",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "PHANTOM",
+      "source_doc": "a2b_spec.txt",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "BUS",
+      "source_doc": "a2b_spec.txt",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "TUNNELED",
+      "source_doc": "a2b_spec.txt",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "AUDIO",
+      "source_doc": "a2b_spec.txt",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "CONTROL",
+      "source_doc": "a2b_spec.txt",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "INTERRUPTS",
+      "source_doc": "a2b_spec.txt",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "BCLK",
+      "source_doc": "a2b_spec.txt",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "FSYNC",
+      "source_doc": "a2b_spec.txt",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "DTX",
+      "source_doc": "a2b_spec.txt",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "DRX",
+      "source_doc": "a2b_spec.txt",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "LED",
+      "source_doc": "a2b_spec.txt",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "SAME",
+      "source_doc": "a2b_spec.txt",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "CLOCKING",
+      "source_doc": "a2b_spec.txt",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "LOCK",
+      "source_doc": "a2b_spec.txt",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "TIMING",
+      "source_doc": "a2b_spec.txt",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "DATA",
+      "source_doc": "a2b_spec.txt",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "INTEGRITY",
+      "source_doc": "a2b_spec.txt",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "ERRORS",
+      "source_doc": "a2b_spec.txt",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "DIAGNOSTICS",
+      "source_doc": "a2b_spec.txt",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "CRC",
+      "source_doc": "a2b_spec.txt",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "APPLICATION",
+      "source_doc": "a2b_spec.txt",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "EXAMPLES",
+      "source_doc": "a2b_spec.txt",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "KEY",
+      "source_doc": "a2b_spec.txt",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "STRUCTURAL",
+      "source_doc": "a2b_spec.txt",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "SIGNATURE",
+      "source_doc": "a2b_spec.txt",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "SUMMARY",
+      "source_doc": "a2b_spec.txt",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "ALL",
+      "source_doc": "a2b_spec.txt",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "SCK",
+      "source_doc": "a2b_spec.txt",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "TUNNELS",
+      "source_doc": "a2b_spec.txt",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "MIPI",
+      "source_doc": "a2b_spec.txt",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "IEC",
+      "source_doc": "a2b_spec.txt",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "LOCAL",
+      "source_doc": "a2b_spec.txt",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "PINS",
+      "source_doc": "a2b_spec.txt",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "REPRESENTATIVE",
+      "source_doc": "a2b_spec.txt",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "DTX0",
+      "source_doc": "a2b_spec.txt",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "DTX1",
+      "source_doc": "a2b_spec.txt",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "DRX0",
+      "source_doc": "a2b_spec.txt",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "DRX1",
+      "source_doc": "a2b_spec.txt",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "SDA",
+      "source_doc": "a2b_spec.txt",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "SCL",
+      "source_doc": "a2b_spec.txt",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "IO0",
+      "source_doc": "a2b_spec.txt",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "IO7",
+      "source_doc": "a2b_spec.txt",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "IRQ",
+      "source_doc": "a2b_spec.txt",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "INT",
+      "source_doc": "a2b_spec.txt",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "VIN",
+      "source_doc": "a2b_spec.txt",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "SWGND",
+      "source_doc": "a2b_spec.txt",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    }
+  ],
+  "document_title": "Automotive Audio Bus (A2B) Transceiver Technical Specification",
+  "version": "Analog Devices A2B (AD24xx family: AD2410 / AD2420 / AD2425 / AD242x)",
+  "revised_date": "Reflects Analog Devices A2B AD24xx transceiver specification",
+  "manufacturer": "Analog Devices, Inc. (ADI)",
+  "copyright": "© Analog Devices, Inc. — A2B is a registered trademark of Analog Devices",
+  "external_pins": [
+    "AP / AN (A-side positive / negative): downstream twisted-pair connection toward the next sub node.",
+    "BP / BN (B-side positive / negative): upstream twisted-pair connection toward the main node (absent on the main node's master side).",
+    "BCLK, SYNC (FSYNC / WS), DTX0/DTX1, DRX0/DRX1: local I2S/TDM audio port.",
+    "SDA, SCL: local I2C control port.",
+    "IO0..IO7 / GPIO: general-purpose I/O and interrupt pins (GPIO over distance).",
+    "IRQ / INT: interrupt output toward the host (main node) or local use.",
+    "VIN / SWGND / phantom-power switch pins: bus-power input and downstream power-switch control."
+  ],
+  "total_external_pin_count": 2,
+  "wire_protocol": "Open-drain / open-collector, wired-AND, two-wire bidirectional serial",
+  "key_features": [
+    "Single unshielded twisted pair (UTP) carries multichannel digital audio + control + power in a daisy-chain (line) topology.",
+    "One A2B main node (master) plus up to ten A2B sub nodes (slaves) in a daisy chain; each segment is a point-to-point twisted-pair link.",
+    "Node discovery enumerates sub nodes in order from the main node outward; each sub node gets a node address equal to its chain position.",
+    "Periodic superframe synchronous to the audio sample rate (e.g. 48 kHz) with separate downstream and upstream portions; deterministic, low, constant latency of approximately two samples end to end.",
+    "Phantom power (bus power) distributed to downstream nodes over the same twisted pair that carries the audio; switched segment-by-segment during discovery so a remote node needs no local supply.",
+    "Tunnels each node's local I2S/TDM audio + I2C control + GPIO + interrupts transparently over the bus.",
+    "Each node is an A2B transceiver (AD24xx family: AD2410 / AD2420 / AD2425 / AD242x); main and sub nodes typically share the same silicon.",
+    "Node-by-node clock recovery and re-timing lets the chain span a long total cable length (order of tens of metres) without jitter buildup.",
+    "Line diagnostics: cable open / short-to-ground / short-to-battery / short-across-pair / reversed-wiring detection and phantom-power faults, reported upstream via interrupts."
+  ],
+  "modes_of_operation": [
+    {
+      "name": "A2B main node (master)",
+      "role": "bus timing master + host bridge",
+      "note": "Connected to the host SoC via a local I2S/TDM audio port and a local I2C control port; generates the bus clock and superframe sync; originates downstream and collects upstream; the host configures the whole bus through the main node's I2C."
+    },
+    {
+      "name": "A2B sub node (slave)",
+      "role": "remote audio / control node",
+      "note": "Recovers clock and data from its upstream (B-side) pair, extracts the slots/control addressed to it, re-times and forwards downstream; exposes a local I2S/TDM port, a local I2C port, GPIO, and interrupt sources tunneled over the bus."
+    }
+  ],
+  "system_use_cases": [
+    "System Management Bus (SMBus)",
+    "Power Management Bus (PMBus)",
+    "Intelligent Platform Management Interface (IPMI)",
+    "Display Data Channel (DDC)",
+    "Advanced Telecom Computing Architecture (ATCA)"
+  ],
+  "overview": "A2B replaces the heavy point-to-point analog and digital audio wiring of a vehicle with a single twisted-pair daisy chain carrying audio, control, interrupts, and power together. The bus is mastered by a single A2B main node connected to the host SoC via local I2S/TDM and I2C. The main node converts the host's local audio and register traffic into the A2B line protocol and transmits downstream; each sub node recovers clock and data, extracts the slots addressed to it, and re-times the signal to the next node. Upstream data (e.g. microphone audio) flows back to the main node in the same superframe. The superframe is locked to the sample rate, so latency is deterministic and low (~2 samples). Phantom power feeds downstream nodes over the same pair. Each node is an A2B transceiver such as the AD2410 or an AD242x device.",
+  "release_history_note": "Originally Philips Semiconductors (now NXP). Revision history per document footer; Rev. 6 dated 4 April 2014; previous versions span 1982-2007 (v1.0..v3.0).",
+  "abstract": "The Automotive Audio Bus (A2B) is a high-bandwidth, bidirectional, digital audio bus from Analog Devices that distributes multichannel digital audio, control data, and power over a single unshielded twisted pair (UTP) cable in a daisy-chain (line) topology. A2B targets automotive infotainment and ADAS audio: microphone arrays, amplifiers, active and road-noise cancellation (ANC / RNC), and remote speaker / microphone nodes. One A2B main node (master), connected to a host processor / SoC through a local I2S/TDM audio port and a local I2C control port, drives a daisy-chained line of up to ten A2B sub nodes (slaves). Each node is an A2B transceiver (e.g. AD2410 / AD242x) that tunnels I2S/TDM audio together with I2C control, GPIO, and interrupts over the same twisted pair, and that delivers phantom power (bus power) to downstream nodes over the very same pair. Audio is organized into a periodic superframe locked to the audio sample rate (e.g. 48 kHz), divided into downstream and upstream portions, giving deterministic low and constant latency (approximately two samples).",
+  "keywords": [
+    "A2B",
+    "Automotive Audio Bus",
+    "Analog Devices",
+    "AD2410",
+    "AD2420",
+    "AD2425",
+    "AD242x",
+    "AD24xx",
+    "transceiver",
+    "main node",
+    "sub node",
+    "master",
+    "slave",
+    "daisy chain",
+    "unshielded twisted pair",
+    "UTP",
+    "superframe",
+    "downstream",
+    "upstream",
+    "phantom power",
+    "bus power",
+    "node discovery",
+    "node address",
+    "I2S",
+    "TDM",
+    "I2C",
+    "GPIO over distance",
+    "interrupt",
+    "ANC",
+    "RNC",
+    "microphone array",
+    "amplifier",
+    "deterministic latency",
+    "48 kHz",
+    "infotainment",
+    "ADAS"
+  ],
+  "topology_summary": "Daisy-chain (line) topology: the main node connects to sub node 0 over one twisted pair, sub node 0 to sub node 1 over the next segment, and so on up to sub node 9. Exactly one main node; up to ten sub nodes. Each transceiver has a B-side (upstream, toward the main node) and an A-side (downstream, toward the next sub node).",
+  "revision_history": [
+    {
+      "version": "A2B (AD2410)",
+      "date": "First-generation",
+      "description": "First A2B transceiver: single-twisted-pair daisy chain, main/sub nodes, superframe, phantom power, I2S/TDM + I2C tunneling."
+    },
+    {
+      "version": "A2B AD242x",
+      "date": "Second-generation",
+      "description": "AD242x family transceivers with expanded channel counts, diagnostics, and GPIO-over-distance capability."
+    }
+  ],
+  "use_cases": [
+    "Automotive microphone arrays (hands-free, voice recognition, ANC/RNC).",
+    "Remote smart-amplifier / speaker nodes near the speakers.",
+    "Distributed active / road-noise cancellation across nodes.",
+    "Infotainment multichannel audio distribution from a head unit.",
+    "Powering remote audio nodes over the bus with no local supply."
+  ],
+  "max_sub_nodes": 10,
+  "typical_sample_rates_kHz": [
+    44.1,
+    48
+  ],
+  "max_audio_channels_per_direction": 32,
+  "end_to_end_latency_samples": 2,
+  "transceiver_family": [
+    "AD2410",
+    "AD2420",
+    "AD2425",
+    "AD242x"
+  ]
+}

@@ -170,6 +170,56 @@ reject 5 of 10, four of them ordinary FLATTENED runs.
 
 Like R1, it reads a hierarchy the run left behind. It streams nothing.
 
+RULE R2 — TOP_MODULE_PROVENANCE_REFUTED (stage_phase1)
+=====================================================
+Stage `stage_phase1` translates the design INPUT into `phase1/generated_docs/
+L*.json`, and those documents are then the INTENT every later stage is checked
+against. Nothing checks them against the input they came from. That is the same
+shape stage 1 has and one rung earlier: stage 2 checks the netlist against the
+RTL, stage 3 checks the layout against the netlist and the PDK, stage 1's R1
+checks the RTL against L9 — and L9 itself is checked against nothing.
+
+`L9.top_module` is the sharpest single field in that set. It is the string the
+whole flow calls the design: `design_one_shot_runner._design_identity_fields`
+copies it verbatim into every stage-1 report as `design_identity.top`, and
+`_design_module_set.reconcile_declared_top` measures the staged RTL against it.
+L9 also DECLARES WHERE IT GOT IT — `top_module_extraction_strategy`, and
+`top_module_pins_evidence.fallback_source` beside it — so the document makes a
+provenance claim this review can put to the input.
+
+R2 is the SECOND rule on this stage and deliberately not a clause of the
+first: R1_CITED_CONSTANT_NOT_IN_ITS_SOURCE asks whether a cited constant is
+really in the document it cites, which is a question about a quotation. This is
+a question about a NAME that was never quoted at all. R2 refuses the case where
+BOTH sources are refuted at once: the declared top
+occurs nowhere in the design input, AND it is not derivable from the source the
+document's own strategy names (`L1.ic_name`). The name then came from neither
+the input nor its declared origin, and the flow spends the rest of the run
+certifying it.
+
+MEASURED on the published corpus at benchmark-data
+a467106a131f46a8375cbb9fefeefcb730635e9b (87 cells carrying an L1): 5
+rejections, 24 NOT CHECKED for want of a readable design input, 17 disarmed on
+the sentinel, and 41 accepted — 37 because the name IS in the input and 4
+because it derives from `L1.ic_name`. All three disarms are load-bearing: dropping the input
+disarm takes the rejection set 5 -> 12, dropping the `L1.ic_name` accept takes
+it 5 -> 9, dropping the sentinel disarm takes it 5 -> 12. A rule firing on 12
+of 63 answerable cells would be the detector-that-fires-on-everything failure,
+not a finding.
+
+The five are not near-misses. Three separate cells (`ddr5`, `gddr6`, `hbm3`)
+declare the SAME top module while their own L1 names three different designs;
+`io_link` declares a UART part number; `sas` declares another controller's top.
+Ten existing Phase-1 checks were run against `ddr5` — every wired clause of
+step D1 that reads these documents, plus the three unwired programs nearest to
+this shape — and not one of them mentions the top module or the refuted name.
+
+AND R2 IS WHAT KEEPS R1 HONEST, which is why it is worth a rung of its own.
+R1 DISARMS on `no_top_module_in_input: true`. All five R2 rejections set it.
+So on exactly the documents whose top module came from nowhere, the flow's only
+other on-pass review switches itself off — the false disclosure disarms the
+reader that would have caught it.
+
 A REJECTION CARRIES EVIDENCE OR IT IS NOT A REJECTION
 ======================================================
 The doctrine is that an AI rejection must be proven by a prompt-derived
@@ -182,6 +232,34 @@ finding missing any of them is NOT downgraded to a warning and NOT emitted as a
 rejection: the run is NOT CHECKED (rc 2), because an unproven rejection is a
 reviewer manufacturing confidence, which is the failure this whole rung exists
 to prevent.
+
+RULE R1 — CITED_CONSTANT_NOT_IN_ITS_SOURCE (stage_phase1)
+=========================================================
+The intent is the design INPUT text. The artefact is `phase1/generated_docs/`,
+and each L-doc records in `extraction_evidence` the input document it read a
+fact out of and the LITERAL it read. When a literal carries a hexadecimal
+constant that no input document writes as a hexadecimal number, the artefact is
+claiming a quotation the source does not contain — and the same number is
+usually the VALUE of a declared field, so the design is specified on it.
+
+The flow's anti-fabrication gate for those same literals,
+`phase1_evidence_grounding_check`, grounds the NAMES in them and says in its own
+docstring that a bare hex VALUE is out of scope, "gated for correctness
+elsewhere (oracle/conformance)". Elsewhere is downstream and downstream cannot
+see it: the oracle is derived from the same L-doc, so conformance compares the
+RTL with the same fabricated number and passes. Every later gate confirms it.
+
+MEASURED over the published corpus (91 cells, 2026-08-30): 58 carry readable
+input text and 33 do not (NOT CHECKED); those 58 cite 25 hexadecimal constants
+out of their input; 7 resolve, across five cells, and 18 do not, in ONE cell and
+ONE document — a run that read a connector PINOUT (pin 11 WAKE#, pin 12 CLKREQ#,
+pin 30 PWRBRK#) as an opcode table. That cell's own `extraction_strategy`
+carries `hallucination_scrub_v0_1_60` records naming the pattern
+`opcode_from_two_digit_decimal_page_number`; the scrubber ruled four of them
+fabricated and left the other eighteen, evidence claims and all. Of the 34 gate
+clauses the flow declares for this stage, not one names any of the eighteen.
+
+The narrowing, and its measurement, is beside `hex_occurrence_re` below.
 
 RULE R5 — PACKAGE_CANNOT_BOND_THE_DESIGN (stage5_manufacturing)
 ================================================================
@@ -394,6 +472,17 @@ _DEFAULT_TOP_WRAPPER = "chip_top"
 
 #: Extensions R4 accepts as a streamed layout in the die slot.
 _DIE_GLOBS = ("*.gds", "*.gdsii")
+
+#: The placeholder top module Phase 1 publishes with that strategy. A
+#: document that published it has declared a placeholder, not a claim about
+#: this design, so R2 has nothing to refute — the same reason R1 disarms.
+_SENTINEL_TOP = "chip_top"
+
+#: The files R2 reads as the design INPUT, under a declared intent path that
+#: is a directory. Kept narrow on purpose: a run's design input is text, and
+#: a binary datasheet cannot answer a substring question — pretending it did
+#: would be the review inventing an absence.
+_INPUT_SUFFIXES = (".txt", ".md", ".rst", ".json", ".yaml", ".yml", ".csv")
 
 
 #: The clock-domain roles that mean "this is the design's clock", as the
@@ -899,6 +988,208 @@ def rule_intent_pin_not_in_netlist(project: Path,
             f"was built rather than the one that was asked for."),
         # `test` is filled in by `emit_test` once the run's own regression has
         # actually been WRITTEN — see the note on R1.
+    }
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# R1 for stage_phase1 — the artefact's claim about WHERE it read the intent
+# ─────────────────────────────────────────────────────────────────────────────
+# WHAT NOTHING ELSE CHECKS. `phase1_doc_input_completeness_check` measures the
+# INPUT -> L-doc direction: which verbatim tokens of the design input reached
+# some layer. MEASURED on the published cell `ic/spm/v1.9.96_gf180mcuD` it
+# answers PASS with 49 of 49 tokens captured. It never asks the opposite
+# question, and no other program in this plugin does either: when a layer says
+# WHERE it read a fact, is that source a file this run contains?
+#
+# Phase 1's artefact is a TRANSLATION of the design input rather than a
+# transformation of an upstream artefact, and each layer records its own
+# provenance — `extraction_evidence` maps an input path to the literals drawn
+# from it, and each entry of `top_module_pins` carries its own `evidence`. That
+# provenance is the artefact's one machine-readable claim ABOUT THE INTENT, and
+# it is checkable exactly: a path either resolves in the run tree or it does
+# not. No normalisation, no re-derivation, no tool.
+#
+# THE DEFECT IS REAL AND IT IS PUBLISHED. Three `ic/spm` cells and
+# `ic/u_hawaii_adc/v1.9.86_sky130A` attribute 65 literals to `input/docs/*.md`,
+# a directory none of them contains, while staging that same input at
+# `phase1/input_doc/*.txt` — same basename, different directory AND different
+# extension. `ic/spm/v1.9.96_gf180mcuD` proves it is the CITATION that is wrong
+# rather than the input that is missing: its own L19 cites
+# `phase1/input_doc/L1_product_metadata.txt` and resolves, while its L1/L2/L3
+# cite the `input/docs/*.md` spelling of the same documents and do not.
+#
+# Every downstream reader inherits this. Stage 1's own on-pass review treats
+# `L9_INTEGRATION_SPEC.json` as THE INTENT; a reviewer that trusts an intent
+# whose provenance points nowhere is grading a document that cannot be traced
+# to the design input at all.
+
+#: Sources whose ABSENCE is not evidence about the citation. The published
+#: corpus commits some binary design inputs and strips others (15 `.pdf` blobs
+#: are committed; 202 `.pdf` citations resolve to nothing), so a missing binary
+#: is a fact about the SNAPSHOT the reader holds, not about what the layer
+#: claimed. Text input is always published, which is what makes a missing `.md`
+#: or `.txt` evidence about the citation instead.
+#:
+#: THE DISARM IS LOAD-BEARING AND IT IS NARROW ON PURPOSE. MEASURED over the 91
+#: published roots carrying `phase1/generated_docs/`: with it, 4 roots are
+#: rejected; without it, 37 — a detector that fires on 41% of its corpus is the
+#: failure this rung exists to prevent, not a stricter version of it.
+_UNREADABLE_SOURCE_SUFFIXES = (".pdf",)
+
+#: Where a layer records provenance per PIN rather than per literal.
+_PER_ITEM_EVIDENCE_FIELDS = ("top_module_pins", "ports")
+
+
+def cites_a_path(value: Any) -> bool:
+    """Is this evidence value a CITATION of an input file, or a DISCLOSURE?
+
+    Phase 1 writes both into the same field, and telling them apart is the
+    whole precision of this rule. `input/docs/spec.md` is a claim about where a
+    fact was read. A `derived_from_*` key, or a sentence naming the program
+    that synthesised a port, is the layer disclosing that the fact was NOT read
+    out of any file — there is no path to check, and calling that a broken
+    citation would reject a layer for being honest about its own derivation.
+    That is the same move as R1's sentinel disarm one stage down.
+
+    MEASURED over the published corpus: 259 of 1008 evidence values are
+    disclosures rather than paths, and every one of them would otherwise be a
+    finding.
+    """
+    return bool(isinstance(value, str) and "/" in value
+                and not re.search(r"\s", value)
+                and re.search(r"\.[A-Za-z0-9]{1,6}$", value))
+
+
+def collect_citations(docs_dir: Path) -> Dict[str, Any]:
+    """Every provenance claim the L-docs make, split into citations and disclosures."""
+    cites: Dict[str, Dict[str, Any]] = {}
+    disclosures = 0
+    docs: List[str] = []
+    for fp in sorted(docs_dir.glob("L*.json")):
+        docs.append(fp.name)
+        try:
+            d = json.loads(fp.read_text(encoding="utf-8", errors="replace"))
+        except (OSError, ValueError):
+            continue
+        if not isinstance(d, dict):
+            continue
+        raw: List[tuple] = []
+        ev = d.get("extraction_evidence")
+        if isinstance(ev, dict):
+            for k, v in ev.items():
+                raw.append((k, len(v) if isinstance(v, list) else 1))
+        for field in _PER_ITEM_EVIDENCE_FIELDS:
+            for item in (d.get(field) or []):
+                if isinstance(item, dict) and item.get("evidence"):
+                    raw.append((item["evidence"], 1))
+        for value, n in raw:
+            if not cites_a_path(value):
+                disclosures += 1
+                continue
+            rec = cites.setdefault(str(value), {"literals": 0, "cited_by": []})
+            rec["literals"] += int(n)
+            if fp.name not in rec["cited_by"]:
+                rec["cited_by"].append(fp.name)
+    return {"citations": cites, "disclosures": disclosures, "docs": docs}
+
+
+def staged_input(project: Path, intent_rel: List[str]) -> List[str]:
+    """The design input this run actually contains, at the declared locations."""
+    out: List[str] = []
+    for rel in intent_rel:
+        base = project / rel
+        if base.is_dir():
+            for fp in sorted(base.rglob("*")):
+                if fp.is_file():
+                    out.append(str(fp.relative_to(project)))
+        elif base.is_file():
+            out.append(str(base.relative_to(project)))
+    return out
+
+
+def rule_cited_input_absent(project: Path, decl: Dict[str, Any]) -> Dict[str, Any]:
+    """R1 for stage_phase1. Returns {"verdict", ...}."""
+    artefact_rel = [str(x) for x in (decl.get("artefact") or [])]
+    intent_rel = [str(x) for x in (decl.get("intent") or [])]
+    docs_dirs = [project / r for r in artefact_rel
+                 if (project / r).is_dir() and "generated_docs" in str(r)]
+    if not docs_dirs:
+        return {"verdict": "NOT_CHECKED",
+                "why": ("the stage's `artefact:` names no readable "
+                        "phase1/generated_docs directory; there is no "
+                        "translation to review")}
+    found = collect_citations(docs_dirs[0])
+    cites = found["citations"]
+
+    # AN ARTEFACT THAT CITES NOTHING IS NOT AN ACCEPTANCE. A layer set that
+    # records no provenance at all refutes nothing and certifies nothing —
+    # the same rule R1 applies to an empty module set one stage down.
+    if not cites:
+        return {"verdict": "NOT_CHECKED", "why": (
+            f"{docs_dirs[0].relative_to(project)} carries {len(found['docs'])} "
+            f"L-doc(s) and NOT ONE path-shaped provenance claim among them "
+            f"({found['disclosures']} disclosure(s) that name no file). There "
+            f"is no claim about the input for this rule to check, and an "
+            f"absent claim is not a true one")}
+
+    have = staged_input(project, intent_rel)
+    by_stem = {}
+    for rel in have:
+        by_stem.setdefault(Path(rel).stem.lower(), []).append(rel)
+
+    unreadable, absent, grounded = [], [], []
+    for src in sorted(cites):
+        if Path(src).suffix.lower() in _UNREADABLE_SOURCE_SUFFIXES:
+            unreadable.append(src)
+        elif (project / src).is_file():
+            grounded.append(src)
+        else:
+            absent.append(src)
+
+    artefact = {
+        "generated_docs": str(docs_dirs[0].relative_to(project)),
+        "l_docs": len(found["docs"]),
+        "citations": len(cites),
+        "grounded": grounded,
+        "absent": absent,
+        "disarmed_unreadable_source": unreadable,
+        "disclosures": found["disclosures"],
+    }
+    intent = {"file": ", ".join(intent_rel) or "(none declared)",
+              "field": "staged design input",
+              "value": have[:12], "staged_count": len(have)}
+
+    if not absent:
+        return {"verdict": "ACCEPT", "intent": intent, "artefact": artefact}
+
+    literals = sum(cites[s]["literals"] for s in absent)
+    elsewhere = {}
+    for src in absent:
+        for cand in by_stem.get(Path(src).stem.lower(), []):
+            elsewhere[src] = cand
+            break
+    return {
+        "verdict": "REJECT",
+        "intent": intent,
+        "artefact": artefact,
+        "cited_but_absent": {s: cites[s] for s in absent},
+        "same_basename_staged_elsewhere": elsewhere,
+        "contradiction": (
+            f"{len(absent)} of the {len(cites)} source(s) the L-docs cite are "
+            f"not in this run, and {literals} literal(s) are attributed to "
+            f"them: {', '.join(absent[:4])}"
+            f"{', …' if len(absent) > 4 else ''}. This run stages "
+            f"{len(have)} design-input file(s) at {intent['file']}, and "
+            + (f"{len(elsewhere)} of the absent citation(s) name a file this "
+               f"run DOES stage under a different path (e.g. "
+               f"{sorted(elsewhere)[0]} vs {elsewhere[sorted(elsewhere)[0]]}), "
+               f"so the input was published and the CITATION is what is wrong. "
+               if elsewhere else
+               "no staged file carries any of those basenames. ")
+            + f"The provenance of those literals cannot be traced to the "
+              f"design input at all, and every downstream reader — stage 1's "
+              f"own review reads L9 as THE INTENT — inherits a document whose "
+              f"claim about where it came from is false."),
     }
 
 
@@ -1647,6 +1938,520 @@ def rule_die_is_not_the_design(project: Path, decl: Dict[str, Any]) -> Dict[str,
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# stage_phase1 / R1 — a cited constant that is not in the document it cites
+# ─────────────────────────────────────────────────────────────────────────────
+# WHAT THIS CATCHES THAT NOTHING ELSE DOES
+# ----------------------------------------
+# A phase-1 L-doc records, in `extraction_evidence`, the input document it read
+# a fact out of and the LITERAL it read. `phase1_evidence_grounding_check` is
+# the flow's anti-fabrication gate for those literals, and it grounds the
+# NAME-shaped tokens in them. It does not ground the VALUES, and says so:
+#
+#     "A bare HEX / sized / decimal VALUE (`0x10`, `3'b010`, `240`) is a
+#      synthesized / computed VALUE, NOT an invented NAME — those are gated
+#      for correctness elsewhere (oracle/conformance), not here"
+#
+# "Elsewhere" is downstream, and downstream cannot see it. The oracle for a
+# design is DERIVED FROM THE SAME L-DOC, so spec-conformance compares the RTL
+# with the same fabricated number and passes. A wrong phase-1 constant is the
+# one defect class in the flow that every later gate confirms.
+#
+# MEASURED on the published corpus (91 cells, 2026-08-30). 58 cells carry
+# readable input text; 33 carry none and are NOT CHECKED. Across those 58, 25
+# hexadecimal constants are cited as verbatim quotations from a design input
+# document. SEVEN resolve, in five different cells, each on a legible
+# occurrence in the spec (`poly 0x04c11db7`, `init 0xffffffff`, `0x07
+# put_iowr_short`, `0x00 put_pc`, `polynomial 0x328b63`, `initial value :
+# 0x00`). EIGHTEEN do not resolve, all in ONE cell and ONE document.
+#
+# THE REJECTION IS CORROBORATED BY THE FLOW'S OWN SCRUBBER. That cell's
+# `extraction_strategy` carries `hallucination_scrub_v0_1_60` records naming
+# the pattern `opcode_from_two_digit_decimal_page_number` — "hex value matches
+# a 2-digit decimal page-format number ...; not a real opcode encoding". The
+# scrubber ruled FOUR of them fabricated and dropped the opcodes. It left the
+# other eighteen, and it left all eighteen EVIDENCE CLAIMS standing, including
+# the three it had itself just scrubbed. This rule is the measurement the
+# pattern-guess was standing in for: the constant is not in the document that
+# is named as its source.
+#
+# WHY HEXADECIMAL AND NOT EVERY NUMBER — the narrowing, with its measurement
+# ---------------------------------------------------------------------------
+# A hexadecimal literal is a NOTATION, and a document either uses it or does
+# not; a bare decimal is not, and reformats freely. Three matcher shapes were
+# measured on the same corpus, and two of them are silently wrong:
+#
+#   bare digits count as an occurrence      -> 18 rejections become 0.
+#       `0x11` "grounds" on the decimal `11`, which is the DEFECT — the run
+#       being rejected read connector pin 11 as opcode 0x11. A matcher that
+#       accepts the bare digits cannot see the class it exists to see.
+#   suffix spellings on a separator-collapsed haystack  ->  18 become 3.
+#       The flow's grounding gate collapses whitespace so a snake_case name
+#       matches its spec spelling. Under that normalisation the assembler
+#       spelling `14h` matches the pin row `14  HSOp(4)`, and the review
+#       manufactures agreement with a document that contains no hex at all.
+#   word-bounded, marker-required, on the raw text  ->  18 rejections and
+#       7 acceptances, every one of the 7 checked by eye.
+#
+# The third is what ships. The narrowing is the rule: a constant is grounded
+# only where the input WRITES it as a number in a base that makes it that
+# constant — `0x2A`, `2Ah`, `'h2A`, `$2A`, `16#2A` — never as the digits alone.
+#
+# chip-AGNOSTIC: pure notation. No IC, vendor, node or SKU literal.
+
+#: A hexadecimal constant inside an evidence literal.
+_HEX_IN_LITERAL_RE = re.compile(r"\b0[xX]([0-9A-Fa-f]{1,16})\b")
+
+#: Input text this rule can read. Same ladder as the flow's own grounding gate:
+#: a PDF reaches this review only through the text `doc_extract` left in the
+#: run, and reading THAT is reading what the stage produced — re-running the
+#: extractor would be re-deriving the artefact.
+_INPUT_TEXT_EXT = (".txt", ".md", ".markdown", ".rst", ".adoc", ".asciidoc",
+                   ".text")
+
+#: A source key naming a design INPUT document, and one naming an internal
+#: derivation. A `derived_*` / upstream-L key is not a claim of quotation from
+#: the input and is not this rule's subject — the same partition
+#: `phase1_evidence_grounding_check` draws, for the same reason.
+_INPUT_SRC_RE = re.compile(
+    r"input[\\/]+docs|input_doc|\.(?:txt|pdf|docx?|md|csv|html?|xlsx?|pptx?)\b",
+    re.IGNORECASE)
+_DERIVED_SRC_RE = re.compile(r"deriv|inferr|cross[_-]?layer|^L\d", re.IGNORECASE)
+
+#: The flow's own disclosure that it already ruled a value fabricated. A
+#: literal carrying it is a record of a scrub, not a claim about the input.
+_SCRUB_MARKER = "SCRUBBED"
+
+
+def hex_occurrence_re(digits: str) -> "re.Pattern[str]":
+    """Every notation an input document may use to WRITE this hex constant.
+
+    Word-bounded on both ends and applied to the RAW lowercased text. The
+    leading `0*` accepts a zero-padded spelling (`0x0A` for `0xA`); the
+    trailing `\\b` refuses a longer constant (`0x11` must not ground on
+    `0x110`). The suffix form carries a lookbehind so `2Ah` cannot be read out
+    of the middle of a longer token.
+    """
+    d = str(digits).lower().lstrip("0") or "0"
+    body = r"0*" + re.escape(d)
+    # THE ASSEMBLER SUFFIX MUST START WITH A DECIMAL DIGIT, which is the
+    # assembler's own rule (MASM writes `0EACh`, not `EACh`) and is here for
+    # the assembler's own reason: without it, `0xEAC` grounds on the English
+    # word "each" and `0xA` on "ah". That is a false ACCEPTANCE — the review
+    # calling a fabricated constant quoted because a word happens to be spelled
+    # out of hex digits — and it is the direction that goes unnoticed.
+    suffix = (r"0*" if d[0].isdigit() else r"0+") + re.escape(d) + r"h\b"
+    return re.compile(
+        r"0x" + body + r"\b"                       # C / Verilog / most specs
+        r"|(?<![0-9a-z_])" + suffix +              # assembler suffix
+        r"|'h" + body + r"\b"                      # Verilog sized
+        r"|\$" + body + r"\b"                      # Motorola
+        r"|16#" + body + r"\b")                    # VHDL / Ada
+
+
+def input_text(project: Path, intent_rel: List[str]) -> List[Dict[str, Any]]:
+    """The readable design-input text under the declared intent paths.
+
+    Returns one row per file: its project-relative path and its lowercased
+    text. A directory with no text-bearing file contributes nothing, and the
+    caller reports NOT CHECKED rather than treating "I could not read the
+    input" as "the input does not contain it".
+    """
+    rows: List[Dict[str, Any]] = []
+    seen = set()
+    for rel in intent_rel:
+        base = project / str(rel)
+        if not base.is_dir():
+            continue
+        for f in sorted(base.rglob("*")):
+            if not (f.is_file() and f.suffix.lower() in _INPUT_TEXT_EXT):
+                continue
+            key = f.resolve()
+            if key in seen:
+                continue
+            seen.add(key)
+            try:
+                rows.append({"file": str(f.relative_to(project)),
+                             "text": f.read_text(encoding="utf-8",
+                                                 errors="replace").lower()})
+            except OSError:
+                continue
+    return rows
+
+
+def cited_input_literals(doc: Any) -> List[Dict[str, str]]:
+    """(source, literal) for every entry claiming a VERBATIM quote of an input
+    document. Internal / derived provenance is not a quotation and is skipped."""
+    out: List[Dict[str, str]] = []
+    ev = doc.get("extraction_evidence") if isinstance(doc, dict) else None
+    if not isinstance(ev, dict):
+        return out
+    for src, entries in ev.items():
+        s = str(src)
+        if _DERIVED_SRC_RE.search(s) or not _INPUT_SRC_RE.search(s):
+            continue
+        if not isinstance(entries, list):
+            continue
+        for e in entries:
+            lit = e if isinstance(e, str) else (
+                e.get("literal") if isinstance(e, dict) else None)
+            if isinstance(lit, str):
+                out.append({"source": s, "literal": lit,
+                            "label": str(e.get("label")) if isinstance(e, dict)
+                            and e.get("label") is not None else ""})
+    return out
+
+
+def value_sites(doc: Any, needle: str, path: str = "") -> List[str]:
+    """JSON paths in the artefact where this constant is USED as a value.
+
+    Not a condition of the finding — a fabricated citation is a defect whether
+    or not anything reads it — but it is the blast radius, and it is what
+    separates a stray annotation from a number the design was built on.
+    """
+    hits: List[str] = []
+    n = needle.lower()
+    if isinstance(doc, dict):
+        for k, v in doc.items():
+            if k == "extraction_evidence" or k == "extraction_strategy":
+                continue
+            hits += value_sites(v, needle, f"{path}.{k}" if path else str(k))
+    elif isinstance(doc, list):
+        for i, v in enumerate(doc):
+            hits += value_sites(v, needle, f"{path}[{i}]")
+    elif isinstance(doc, str) and doc.lower() == n:
+        hits.append(path)
+    return hits
+
+
+def rule_cited_constant_not_in_source(project: Path,
+                                      decl: Dict[str, Any]) -> Dict[str, Any]:
+    """R1 for stage_phase1. Returns {"verdict", ...} like every other rule."""
+    intent_rel = [str(x) for x in (decl.get("intent") or [])]
+    artefact_rel = [str(x) for x in (decl.get("artefact") or [])]
+
+    gdirs = [project / r for r in artefact_rel
+             if (project / r).is_dir() and "generated_docs" in str(r)]
+    l_docs = sorted({p for d in gdirs for p in d.glob("L*.json")})
+    if not l_docs:
+        return {"verdict": "NOT_CHECKED",
+                "why": ("the stage staged no L-doc: "
+                        + (", ".join(str(d.relative_to(project)) for d in gdirs)
+                           or "no generated_docs among the declared artefact "
+                              "paths")
+                        + " yields NO L*.json, which refutes nothing and "
+                          "certifies nothing")}
+
+    texts = input_text(project, intent_rel)
+    if not texts:
+        return {"verdict": "NOT_CHECKED",
+                "why": (f"none of the declared intent paths "
+                        f"({', '.join(intent_rel) or 'none'}) carries a "
+                        f"readable text-bearing input document. A constant "
+                        f"cannot be looked for in a document that cannot be "
+                        f"read, and 'I could not look' is not 'it is not "
+                        f"there'.")}
+    haystack = "\n".join(t["text"] for t in texts)
+
+    checked: List[Dict[str, Any]] = []
+    ungrounded: List[Dict[str, Any]] = []
+    disclosed = 0
+    for jf in l_docs:
+        try:
+            d = json.loads(jf.read_text(encoding="utf-8", errors="replace"))
+        except (OSError, ValueError):
+            continue
+        for cite in cited_input_literals(d):
+            if _SCRUB_MARKER in cite["literal"]:
+                disclosed += 1
+                continue
+            for m in _HEX_IN_LITERAL_RE.finditer(cite["literal"]):
+                row = {"doc": jf.name, "source": cite["source"],
+                       "literal": cite["literal"], "label": cite["label"],
+                       "constant": m.group(0)}
+                checked.append(row)
+                if hex_occurrence_re(m.group(1)).search(haystack):
+                    continue
+                row = dict(row)
+                row["used_as_value_at"] = value_sites(d, m.group(0))[:12]
+                ungrounded.append(row)
+
+    # The finding carries the declared intent dirs itself, so the emitter can
+    # resolve them without `review()` having to hand every rule a field only
+    # this one wants.
+    intent_dirs = [str(x) for x in intent_rel]
+    artefact = {"generated_docs": [str(d.relative_to(project)) for d in gdirs],
+                "l_docs": [p.name for p in l_docs],
+                "constants_checked": len(checked),
+                "constants_ungrounded": len(ungrounded),
+                "scrub_disclosed_literals": disclosed,
+                "ungrounded": ungrounded}
+    intent = {"file": ", ".join(t["file"] for t in texts[:4])
+                      + (", …" if len(texts) > 4 else ""),
+              "files": [t["file"] for t in texts],
+              "field": "the design input text",
+              "value": f"{sum(len(t['text']) for t in texts)} characters "
+                       f"over {len(texts)} document(s)",
+              "intent_rel": [t["file"] for t in texts]}
+
+    # AN UNEXAMINED SUBJECT IS NOT AN ACCEPTANCE. When no L-doc cites a
+    # hexadecimal constant out of an input document, this rule has looked at
+    # nothing — which is not evidence that the extraction is faithful. It is
+    # NOT CHECKED, and the reason says so. MEASURED: this is 53 of the 58
+    # readable cells in the published corpus, and calling them ACCEPT would be
+    # a reviewer reporting a pass over a question it never put.
+    if not checked:
+        return {"verdict": "NOT_CHECKED", "intent": intent, "artefact": artefact,
+                "intent_dirs": intent_dirs,
+                "why": (f"{len(l_docs)} L-doc(s) cite no hexadecimal constant "
+                        f"as a quotation from the design input; this rule "
+                        f"examined 0 constants, which refutes nothing and "
+                        f"certifies nothing")}
+
+    if not ungrounded:
+        return {"verdict": "ACCEPT", "intent": intent, "artefact": artefact,
+                "intent_dirs": intent_dirs}
+
+    n = len(ungrounded)
+    shown = ", ".join(sorted({u["constant"] for u in ungrounded})[:8])
+    used = sum(1 for u in ungrounded if u.get("used_as_value_at"))
+    return {
+        "verdict": "REJECT",
+        "intent": intent,
+        "artefact": artefact,
+        "intent_dirs": intent_dirs,
+        "contradiction": (
+            f"{n} hexadecimal constant(s) are recorded in "
+            f"{', '.join(sorted({u['doc'] for u in ungrounded}))} as VERBATIM "
+            f"quotations from the design input "
+            f"({', '.join(sorted({u['source'] for u in ungrounded}))}), and no "
+            f"input document writes any of them as a hexadecimal number in any "
+            f"notation (0x2A / 2Ah / 'h2A / $2A / 16#2A): {shown}"
+            f"{', …' if n > 8 else ''}. {used} of them is/are used as a VALUE "
+            f"in the artefact, so the design is specified on a number the "
+            f"input never states."),
+        # `test` is filled in by `emit_test` once the run's own regression
+        # has actually been WRITTEN — see the note on stage 1's rule.
+    }
+
+
+# R2 — stage_phase1
+# ─────────────────────────────────────────────────────────────────────────────
+def _squash(text: str) -> str:
+    """Identifier-insensitive form: alphanumerics only, lowercased.
+
+    `HBM3_stack_on_interposer`, `HBM3 stack on interposer` and
+    `hbm3-stack-on-interposer` are the same name written three ways, and a
+    review that called them different names would report a contradiction that
+    is only punctuation.
+    """
+    return re.sub(r"[^a-z0-9]+", "", str(text).lower())
+
+
+def _tokens(text: str) -> set:
+    """The name's words, lowercased. Used ONLY to accept — see `_derives`."""
+    return {t for t in re.split(r"[^a-z0-9]+", str(text).lower()) if t}
+
+
+def _derives(top: str, source_name: str) -> bool:
+    """Is `top` derivable from the source its declared strategy names?
+
+    DELIBERATELY GENEROUS, because this predicate only ever ACCEPTS. Any word
+    in common is enough — `LPDDR5_SDRAM_component` from `LPDDR5 SDRAM (JEDEC
+    JESD209-5)`, `modbus_server_top` from `Modbus Application Protocol`. A
+    strict reading of "derives" would manufacture rejections out of ordinary
+    naming, and the measured cost of tightening it is five extra rejections
+    that are all ordinary naming.
+    """
+    return bool(_tokens(top) & _tokens(source_name))
+
+
+def read_design_input(project: Path, intent_rel: List[str],
+                      deny: Optional[List[str]] = None) -> Dict[str, Any]:
+    """The design INPUT this run was given, as text plus the file list.
+
+    A declared intent path may be a directory (`input/docs/`) or a single file
+    (`input/phase1_prompt.md`); both shapes are in the flow because both shapes
+    are in the corpus. Only text suffixes are read: a binary datasheet cannot
+    answer a substring question, and pretending it did would be the review
+    inventing an absence.
+
+    §4.05 IS APPLIED AGAIN HERE, AND IT HAS TO BE. `denied_intent_paths` vets
+    the paths the FLOW declares, which is the whole check when an intent path
+    names one file — R1's does. This rule's intent paths are DIRECTORIES, and
+    a directory that passes the deny check can still contain
+    `input/docs/oracle/…`. Walking it would then read the oracle through a
+    declared path that was itself clean, so the same deny list is applied to
+    every file the walk reaches, relative to the project.
+    """
+    denied = [str(d).lower() for d in (deny or [])]
+
+    def allowed(f: Path) -> bool:
+        try:
+            parts = [x.lower() for x in f.relative_to(project).parts]
+        except ValueError:
+            parts = [x.lower() for x in f.parts]
+        return not any(seg in part for part in parts for seg in denied)
+
+    files: List[Path] = []
+    for rel in intent_rel:
+        loc = project / str(rel)
+        if loc.is_dir():
+            files += [f for f in sorted(loc.rglob("*"))
+                      if f.is_file() and f.suffix.lower() in _INPUT_SUFFIXES
+                      and allowed(f)]
+        elif (loc.is_file() and loc.suffix.lower() in _INPUT_SUFFIXES
+                and allowed(loc)):
+            files.append(loc)
+    text = []
+    for f in files:
+        try:
+            text.append(f.read_text(encoding="utf-8", errors="replace"))
+        except OSError:
+            continue
+    return {"files": [str(f.relative_to(project)) for f in files],
+            "text": "\n".join(text)}
+
+
+def rule_top_module_provenance_refuted(project: Path,
+                                       decl: Dict[str, Any]) -> Dict[str, Any]:
+    """R2. Did the declared top module come from anywhere this run can show?"""
+    intent_rel = [str(x) for x in (decl.get("intent") or [])]
+    artefact_rel = [str(x) for x in (decl.get("artefact") or [])]
+
+    def in_artefact(name: str) -> Optional[Path]:
+        for r in artefact_rel:
+            cand = project / r / name
+            if cand.is_file():
+                return cand
+        return None
+
+    l9 = in_artefact("L9_INTEGRATION_SPEC.json")
+    if l9 is None:
+        return {"verdict": "NOT_CHECKED",
+                "why": ("the stage's `artefact:` carries no "
+                        "L9_INTEGRATION_SPEC.json; there is no declared top "
+                        "module to trace")}
+    intent_top = read_intent_top(l9)          # the same reader R1 uses
+    if not intent_top.get("readable"):
+        return {"verdict": "NOT_CHECKED", "why": f"{l9}: {intent_top.get('why')}"}
+    top = intent_top.get("value")
+    if not isinstance(top, str) or not top.strip():
+        return {"verdict": "NOT_CHECKED",
+                "artefact": {"file": str(l9.relative_to(project))},
+                "why": ("L9 declares no `top_module`; a document that claims "
+                        "nothing cannot be contradicted, and an absent claim "
+                        "is not a grounded one")}
+    top = top.strip()
+
+    strategy = intent_top.get("top_module_extraction_strategy")
+    if strategy == _SENTINEL_STRATEGY or top == _SENTINEL_TOP:
+        return {"verdict": "DISARMED",
+                "artefact": {"file": str(l9.relative_to(project)),
+                             "top_module": top, "strategy": strategy},
+                "observation": (
+                    f"L9 published the canonical placeholder {top!r} "
+                    f"(top_module_extraction_strategy={strategy!r}); the "
+                    f"document is disclosing that it named no top module, not "
+                    f"claiming one, so there is no provenance to refute")}
+
+    design_input = read_design_input(
+        project, intent_rel, [str(x) for x in (decl.get("intent_deny") or [])])
+    if not design_input["files"]:
+        return {"verdict": "NOT_CHECKED",
+                "artefact": {"file": str(l9.relative_to(project)),
+                             "top_module": top, "strategy": strategy},
+                "why": (f"none of the declared intent paths "
+                        f"({', '.join(intent_rel) or 'none'}) resolves to a "
+                        f"readable design input in this run tree. Whether "
+                        f"{top!r} came from the input is exactly the question, "
+                        f"and it cannot be put without the input — an absent "
+                        f"input is not a grounded name")}
+
+    intent = {"files": design_input["files"], "field": "the design input",
+              "value": f"{len(design_input['files'])} file(s), "
+                       f"{len(design_input['text'])} chars"}
+
+    if _squash(top) in _squash(design_input["text"]):
+        return {"verdict": "ACCEPT", "intent": intent,
+                "artefact": {"file": str(l9.relative_to(project)),
+                             "top_module": top, "strategy": strategy},
+                "grounded_in": "design_input"}
+
+    l1 = in_artefact("L1_DATASHEET.json")
+    ic_name = None
+    if l1 is not None:
+        try:
+            d1 = json.loads(l1.read_text(encoding="utf-8", errors="replace"))
+            if isinstance(d1, dict):
+                ic_name = d1.get("ic_name")
+        except (OSError, ValueError):
+            ic_name = None
+    if not isinstance(ic_name, str) or not ic_name.strip():
+        return {"verdict": "NOT_CHECKED", "intent": intent,
+                "artefact": {"file": str(l9.relative_to(project)),
+                             "top_module": top, "strategy": strategy},
+                "why": (f"{top!r} is not in the design input, and L1 declares "
+                        f"no `ic_name` — so the source this document's own "
+                        f"strategy ({strategy!r}) names cannot be read. The "
+                        f"provenance is unverified, which is not the same as "
+                        f"refuted")}
+
+    if _derives(top, ic_name):
+        return {"verdict": "ACCEPT", "intent": intent,
+                "artefact": {"file": str(l9.relative_to(project)),
+                             "top_module": top, "strategy": strategy,
+                             "l1_ic_name": ic_name},
+                "grounded_in": "l1_ic_name"}
+
+    return {
+        "verdict": "REJECT",
+        "intent": intent,
+        "artefact": {"file": str(l9.relative_to(project)),
+                     "l1_file": str(l1.relative_to(project)) if l1 else None,
+                     "top_module": top, "strategy": strategy,
+                     "l1_ic_name": ic_name,
+                     "no_top_module_in_input":
+                         intent_top.get("no_top_module_in_input")},
+        "disarms_stage1_r1": bool(intent_top.get("declares_no_top")),
+        # THE PRINTER'S OWN EXTENSION POINT, used rather than widened. Stage
+        # 1's evidence block is "a declared top against a module set" and reads
+        # as nonsense for any other pair of things; `evidence_lines` exists so
+        # a rule describes itself in its own vocabulary instead of borrowing
+        # one that does not fit.
+        "evidence_lines": [
+            ("INTENT", f"{len(design_input['files'])} design-input file(s): "
+                       + ", ".join(design_input["files"][:4])
+                       + (", …" if len(design_input["files"]) > 4 else "")),
+            ("ARTEFACT", f"{l9.relative_to(project)} :: top_module = {top!r} "
+                         f"(top_module_extraction_strategy={strategy!r}; "
+                         + (f"{l1.relative_to(project)} :: ic_name = "
+                            f"{ic_name!r}" if l1 else "no L1_DATASHEET.json")
+                         + ")"),
+        ] + ([("DISARMS", "this document sets no_top_module_in_input="
+               f"{intent_top.get('no_top_module_in_input')!r}, the stage-1 "
+               "on-pass review's own disarm condition")]
+             if intent_top.get("declares_no_top") else []),
+        "contradiction": (
+            f"L9 declares top_module={top!r} and declares it obtained it by "
+            f"{strategy!r}, and neither source yields it: {top!r} occurs "
+            f"nowhere in the {len(design_input['files'])} design-input file(s) "
+            f"this run was given ({', '.join(design_input['files'][:4])}"
+            f"{', …' if len(design_input['files']) > 4 else ''}), and it "
+            f"shares no word with the L1 ic_name {ic_name!r} that strategy "
+            f"names as its source. The design's own name came from neither the "
+            f"input nor its declared origin, and every stage-1 report stamps it "
+            f"as design_identity.top."
+            + (f" L9 also sets no_top_module_in_input="
+               f"{intent_top.get('no_top_module_in_input')!r}, which is the "
+               f"stage-1 on-pass review's DISARM condition: the document that "
+               f"invented the name also switches off the only other review "
+               f"that would have measured it."
+               if intent_top.get("declares_no_top") else "")),
+        # `test` is filled in by `emit_test`, for the reason R1 states.
+    }
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # the rejection's executable test
 # ─────────────────────────────────────────────────────────────────────────────
 # THE TEST BELONGS TO THE RUN, NOT TO THE PLUGIN. The doctrine is that a
@@ -1846,6 +2651,94 @@ if __name__ == "__main__":
         print("FAIL: %s" % e)
         sys.exit(1)
     print("PASS: the synthesised top builds every pin the intent declares")
+'''
+
+
+#: The stage_phase1 rejection's regression. Same contract as the stage-1 one:
+#: self-contained, stdlib only, a valid pytest module AND a `python3 <file>`
+#: script, resolving its own run root so no absolute path is baked in. It
+#: re-reads the L-docs' own provenance and the run tree; it runs no extractor
+#: and rebuilds no document.
+_EMITTED_TEST_PHASE1_CITED_INPUT = r'''#!/usr/bin/env python3
+"""AUTO-EMITTED by `{program}` from a stage-{stage} ON-PASS review rejection.
+
+    {contradiction}
+
+This test FAILS while that is true of this run tree and PASSES once it is
+repaired. It reads only this run's own L-docs and its own staged design input —
+no oracle, no harness, no golden — and it re-derives nothing: it runs no
+extractor and rebuilds no document.
+
+REPAIR is one of exactly two things, and which one is a design decision this
+test does not make:
+  * the design input is staged at the path the L-docs cite, or
+  * the L-docs' provenance is corrected to the path this run actually staged.
+"""
+import json
+import re
+import sys
+from pathlib import Path
+
+DOCS_REL = {docs_rel!r}
+UNREADABLE = {unreadable!r}
+_PER_ITEM = ("top_module_pins", "ports")
+
+
+def run_root() -> Path:
+    for d in [Path(__file__).resolve()] + list(Path(__file__).resolve().parents):
+        if (d / "phase1" / "generated_docs").is_dir():
+            return d
+    raise AssertionError("no run root above %s" % __file__)
+
+
+def cites_a_path(v):
+    return bool(isinstance(v, str) and "/" in v and not re.search(r"\s", v)
+                and re.search(r"\.[A-Za-z0-9]{{1,6}}$", v))
+
+
+def test_every_source_the_l_docs_cite_is_a_file_this_run_contains():
+    root = run_root()
+    docs = root / DOCS_REL
+    cites = {{}}
+    for fp in sorted(docs.glob("L*.json")):
+        try:
+            d = json.loads(fp.read_text(encoding="utf-8", errors="replace"))
+        except (OSError, ValueError):
+            continue
+        if not isinstance(d, dict):
+            continue
+        raw = []
+        ev = d.get("extraction_evidence")
+        if isinstance(ev, dict):
+            for k, v in ev.items():
+                raw.append((k, len(v) if isinstance(v, list) else 1))
+        for field in _PER_ITEM:
+            for item in (d.get(field) or []):
+                if isinstance(item, dict) and item.get("evidence"):
+                    raw.append((item["evidence"], 1))
+        for value, n in raw:
+            if cites_a_path(value):
+                cites[value] = cites.get(value, 0) + int(n)
+    checkable = {{s: n for s, n in cites.items()
+                 if Path(s).suffix.lower() not in UNREADABLE}}
+    assert checkable, (
+        "%s makes no checkable provenance claim; this test refutes nothing "
+        "over an artefact that cites no readable source" % DOCS_REL)
+    absent = sorted(s for s in checkable if not (root / s).is_file())
+    assert not absent, (
+        "%d of %d cited source(s) are not in this run, carrying %d attributed "
+        "literal(s): %s" % (len(absent), len(checkable),
+                            sum(checkable[s] for s in absent),
+                            ", ".join(absent)))
+
+
+if __name__ == "__main__":
+    try:
+        test_every_source_the_l_docs_cite_is_a_file_this_run_contains()
+    except AssertionError as e:
+        print("FAIL: %s" % e)
+        sys.exit(1)
+    print("PASS: every cited source is a file this run contains")
 '''
 
 
@@ -2490,6 +3383,101 @@ def _body_r4(finding: Dict[str, Any], stage_id: str) -> str:
         wrapper=finding["artefact"]["canonical_top_wrapper"])
 
 
+# The stage_phase1 R2 rejection's regression. Same contract as the stage-1 one
+# above: stdlib only, valid as a pytest module AND as `python3 <file>`, resolves
+# the run root by walking up to `phase1/generated_docs`, bakes in no absolute
+# path, and re-derives nothing.
+_EMITTED_TEST_PHASE1_R2 = r'''#!/usr/bin/env python3
+"""AUTO-EMITTED by `{program}` from a stage-{stage} ON-PASS review rejection.
+
+    {contradiction}
+
+This test FAILS while that is true of this run tree and PASSES once it is
+repaired. It reads only this run's own design INPUT and its own generated L
+docs — no oracle, no harness, no golden — and it runs no tool.
+
+REPAIR is one of exactly two things, and which one is a design decision this
+test does not make:
+  * L9.top_module is corrected to a name this run's input actually contains, or
+    one derived from the L1.ic_name its own top_module_extraction_strategy
+    names as the source, or
+  * L9 stops claiming a top module and publishes the canonical placeholder with
+    the sentinel strategy, which is the document's own way of disclosing that
+    the input named none.
+"""
+import json
+import re
+import sys
+from pathlib import Path
+
+L9_REL = {l9_rel!r}
+L1_REL = {l1_rel!r}
+INPUT_RELS = {input_rels!r}
+SENTINEL_TOP = {sentinel_top!r}
+SENTINEL_STRATEGY = {sentinel_strategy!r}
+
+
+def run_root():
+    for d in [Path(__file__).resolve()] + list(Path(__file__).resolve().parents):
+        if (d / "phase1" / "generated_docs").is_dir():
+            return d
+    raise AssertionError("no run root above %s" % __file__)
+
+
+def squash(t):
+    return re.sub(r"[^a-z0-9]+", "", str(t).lower())
+
+
+def words(t):
+    return set(w for w in re.split(r"[^a-z0-9]+", str(t).lower()) if w)
+
+
+def test_the_declared_top_module_came_from_the_input_or_its_declared_source():
+    root = run_root()
+    l9 = json.loads((root / L9_REL).read_text(encoding="utf-8", errors="replace"))
+    top = (l9.get("top_module") or "").strip()
+    strategy = l9.get("top_module_extraction_strategy")
+    if not top or top == SENTINEL_TOP or strategy == SENTINEL_STRATEGY:
+        return  # the document discloses a placeholder; nothing is claimed
+
+    text = []
+    for rel in INPUT_RELS:
+        f = root / rel
+        if f.is_file():
+            text.append(f.read_text(encoding="utf-8", errors="replace"))
+    assert text, (
+        "none of this run's declared input files is readable (%s); the "
+        "question this test asks cannot be put over an absent input"
+        % ", ".join(INPUT_RELS))
+    if squash(top) in squash("\n".join(text)):
+        return
+
+    ic_name = ""
+    l1p = root / L1_REL if L1_REL else None
+    if l1p is not None and l1p.is_file():
+        ic_name = json.loads(l1p.read_text(encoding="utf-8",
+                                           errors="replace")).get("ic_name") or ""
+    assert ic_name, (
+        "%s declares top_module=%r, which is in none of this run's %d input "
+        "file(s), and %s declares no ic_name to have derived it from"
+        % (L9_REL, top, len(text), L1_REL))
+    assert words(top) & words(ic_name), (
+        "%s declares top_module=%r by strategy %r, and neither source yields "
+        "it: it appears in none of this run's %d input file(s), and it shares "
+        "no word with %s ic_name=%r"
+        % (L9_REL, top, strategy, len(text), L1_REL, ic_name))
+
+
+if __name__ == "__main__":
+    try:
+        test_the_declared_top_module_came_from_the_input_or_its_declared_source()
+    except AssertionError as e:
+        print("FAIL: %s" % e)
+        sys.exit(1)
+    print("PASS: the declared top module is grounded in the input or in L1.ic_name")
+'''
+
+
 def _body_r1(finding: Dict[str, Any], stage_id: str) -> str:
     return _EMITTED_TEST.format(
         program=_NAME, stage=stage_id,
@@ -2506,6 +3494,14 @@ def _body_r2(finding: Dict[str, Any], stage_id: str) -> str:
         intent_rel=finding["intent"]["intent_rel"],
         intent_field=finding["intent"]["field"],
         netlist_rel=finding["artefact"]["artefact_rel"])
+
+
+def _body_phase1_cited_input(finding: Dict[str, Any], stage_id: str) -> str:
+    return _EMITTED_TEST_PHASE1_CITED_INPUT.format(
+        program=_NAME, stage=stage_id,
+        contradiction=finding["contradiction"],
+        docs_rel=finding["artefact"]["generated_docs"],
+        unreadable=tuple(_UNREADABLE_SOURCE_SUFFIXES))
 
 
 def _body_r3(finding: Dict[str, Any], stage_id: str) -> str:
@@ -2532,6 +3528,218 @@ def _body_analog(finding: Dict[str, Any], stage_id: str) -> str:
         analog_rels=list(finding["artefact"]["artefact_rels"]),
         blocks=[b["block"] for b in finding["artefact"]["blocks"]])
 
+def _body_phase1_r2(finding: Dict[str, Any], stage_id: str) -> str:
+    art = finding["artefact"]
+    return _EMITTED_TEST_PHASE1_R2.format(
+        program=_NAME, stage=stage_id,
+        contradiction=finding["contradiction"],
+        l9_rel=art["file"], l1_rel=art.get("l1_file"),
+        input_rels=list(finding["intent"]["files"]),
+        sentinel_top=_SENTINEL_TOP,
+        sentinel_strategy=_SENTINEL_STRATEGY)
+
+
+# THE stage_phase1 REGRESSION. Same contract as stage 1's: self-contained,
+# stdlib only, a valid pytest module AND a valid `python3 <file>` script, no
+# absolute path baked in, and it re-derives NOTHING — it re-reads this run's
+# own INTENT and ARTEFACT and asks the same question again.
+#
+# IT BAKES BOTH THE LIST AND THE RULE. A test asserting only today's offenders
+# goes green on a repair that fixes those and fabricates the next one; a test
+# asserting only the rule goes green when the last citation is deleted, which
+# is how a run passes by having nothing left to check. Clause 1 is the list,
+# clause 2 is the rule, and neither is sufficient alone.
+_EMITTED_TEST_PHASE1 = r'''#!/usr/bin/env python3
+"""AUTO-EMITTED by `{program}` from a stage-{stage} ON-PASS review rejection.
+
+    {contradiction}
+
+This test FAILS while that is true of this run tree and PASSES once it is
+repaired. It reads only this run's own INTENT (the design input text) and
+ARTEFACT (the generated L-docs) — no oracle, no harness, no golden — and it
+re-derives nothing: it runs no tool and re-extracts no document.
+
+REPAIR is one of exactly two things, and which one is a design decision this
+test does not make:
+  * the constant is corrected to the one the input document actually writes, or
+  * the claim is withdrawn — the citation goes AND the value goes with it.
+
+DELETING THE CITATION ALONE IS NOT A REPAIR, and this test says so: clause 1
+requires an offender still absent from the input to be absent from the artefact
+as a VALUE too. Dropping the provenance while keeping the number is the same
+design specified on the same invented constant, with the evidence that it was
+invented removed.
+"""
+import json
+import re
+import sys
+from pathlib import Path
+
+INTENT_RELS = {intent_rels!r}
+ARTEFACT_RELS = {artefact_rels!r}
+TEXT_EXT = {text_ext!r}
+#: The constants this rejection named. Baked so the test cannot go green by
+#: examining nothing, and re-scanned in clause 2 so it cannot go green on a
+#: repair that fixes these and fabricates the next one.
+UNGROUNDED = {ungrounded!r}
+
+_HEX = re.compile(r"\b0[xX]([0-9A-Fa-f]{{1,16}})\b")
+_INPUT_SRC = re.compile(
+    r"input[\\/]+docs|input_doc|\.(?:txt|pdf|docx?|md|csv|html?|xlsx?|pptx?)\b",
+    re.IGNORECASE)
+_DERIVED_SRC = re.compile(r"deriv|inferr|cross[_-]?layer|^L\d", re.IGNORECASE)
+
+
+def run_root():
+    for d in [Path(__file__).resolve()] + list(Path(__file__).resolve().parents):
+        if (d / "phase1" / "generated_docs").is_dir():
+            return d
+    raise AssertionError("no run root above %s" % __file__)
+
+
+def occurs(hexlit, hay):
+    """Does the input WRITE this constant as a hexadecimal number?
+
+    Word-bounded, and never on the bare digits: reading the decimal `17` as
+    `0x17` is the defect, so a matcher that accepted it could not see its own
+    subject.
+    """
+    d = hexlit.lower().replace("0x", "", 1).lstrip("0") or "0"
+    body = r"0*" + re.escape(d)
+    # the assembler suffix must start with a decimal digit (MASM's own rule):
+    # without it `0xEAC` grounds on the English word "each".
+    suffix = (r"0*" if d[0].isdigit() else r"0+") + re.escape(d) + r"h\b"
+    return re.search(r"0x" + body + r"\b"
+                     r"|(?<![0-9a-z_])" + suffix +
+                     r"|'h" + body + r"\b"
+                     r"|\$" + body + r"\b"
+                     r"|16#" + body + r"\b", hay) is not None
+
+
+def value_sites(node, needle, path=""):
+    out = []
+    if isinstance(node, dict):
+        for k, v in node.items():
+            if k in ("extraction_evidence", "extraction_strategy"):
+                continue
+            out += value_sites(v, needle, ("%s.%s" % (path, k)) if path else k)
+    elif isinstance(node, list):
+        for i, v in enumerate(node):
+            out += value_sites(v, needle, "%s[%d]" % (path, i))
+    elif isinstance(node, str) and node.lower() == needle.lower():
+        out.append(path)
+    return out
+
+
+def input_citations(doc):
+    """(source, literal) for every claim of a verbatim quote of an input doc."""
+    out = []
+    ev = doc.get("extraction_evidence")
+    if not isinstance(ev, dict):
+        return out
+    for src, entries in ev.items():
+        if _DERIVED_SRC.search(str(src)) or not _INPUT_SRC.search(str(src)):
+            continue
+        if not isinstance(entries, list):
+            continue
+        for e in entries:
+            lit = e if isinstance(e, str) else (
+                e.get("literal") if isinstance(e, dict) else None)
+            if isinstance(lit, str) and "SCRUBBED" not in lit:
+                out.append((str(src), lit))
+    return out
+
+
+def test_no_constant_is_quoted_from_an_input_that_does_not_state_it():
+    root = run_root()
+    texts = []
+    for rel in INTENT_RELS:
+        base = root / rel
+        if not base.is_dir():
+            continue
+        for f in sorted(base.rglob("*")):
+            if f.is_file() and f.suffix.lower() in TEXT_EXT:
+                texts.append(f.read_text(encoding="utf-8", errors="replace").lower())
+    assert texts, (
+        "no readable input document under %s; this test cannot look for a "
+        "constant in a document it cannot read" % ", ".join(INTENT_RELS))
+    hay = "\n".join(texts)
+
+    l_docs = []
+    for rel in ARTEFACT_RELS:
+        d = root / rel
+        if d.is_dir():
+            l_docs += sorted(d.glob("L*.json"))
+    assert l_docs, (
+        "%s staged no L*.json; this test refutes nothing over an empty "
+        "artefact" % ", ".join(ARTEFACT_RELS))
+    assert UNGROUNDED, "emitted with an empty offender list; it certifies nothing"
+    loaded = [(f.name, json.loads(f.read_text(encoding="utf-8", errors="replace")))
+              for f in l_docs]
+
+    # 1. THE REJECTION. Each constant it named is now written by the input, or
+    #    it is gone from the artefact — as a value AND as a citation.
+    still = []
+    for c in UNGROUNDED:
+        if occurs(c, hay):
+            continue
+        for name, d in loaded:
+            for site in value_sites(d, c):
+                still.append("%s still uses %s at %s" % (name, c, site))
+            for src, lit in input_citations(d):
+                if c.lower() in lit.lower():
+                    still.append("%s still cites %s to %s as %r"
+                                 % (name, c, src, lit[:70]))
+    assert not still, (
+        "%d constant(s) the review rejected are still absent from the input and "
+        "still present in the artefact:\n  %s"
+        % (len(still), "\n  ".join(still[:30])))
+
+    # 2. THE RULE. No citation of ANY hexadecimal constant to an input document
+    #    that does not write it — including one added since.
+    bad, checked = [], 0
+    for name, d in loaded:
+        for src, lit in input_citations(d):
+            for m in _HEX.finditer(lit):
+                checked += 1
+                if not occurs(m.group(0), hay):
+                    bad.append("%s cites %s to %s as %r"
+                               % (name, m.group(0), src, lit[:70]))
+    assert not bad, (
+        "%d of %d constant(s) quoted from the design input occur in no input "
+        "document, in any hexadecimal notation:\n  %s"
+        % (len(bad), checked, "\n  ".join(bad[:30])))
+
+
+if __name__ == "__main__":
+    try:
+        test_no_constant_is_quoted_from_an_input_that_does_not_state_it()
+    except AssertionError as e:
+        print("FAIL: %s" % e)
+        sys.exit(1)
+    print("PASS: no constant in this run is quoted from an input that does not "
+          "state it")
+'''
+
+def _body_phase1(finding: Dict[str, Any], stage_id: str) -> str:
+    """The stage_phase1 regression's SOURCE. `emit_test` is the one writer.
+
+    It returns the body only — no mkdir, no write, no path. A rule whose id is
+    absent from `_EMITTERS` raises there rather than writing another rule's
+    test, `review()` then leaves `test` absent, and the unproven-rejection
+    branch refuses the rejection. That is the contract, and this function must
+    not work around it.
+    """
+    return _EMITTED_TEST_PHASE1.format(
+        program=_NAME, stage=stage_id,
+        contradiction=finding["contradiction"],
+        intent_rels=list(finding.get("intent_dirs") or []),
+        artefact_rels=list(finding["artefact"]["generated_docs"]),
+        text_ext=list(_INPUT_TEXT_EXT),
+        ungrounded=sorted({u["constant"] for u
+                           in finding["artefact"]["ungrounded"]}))
+
+
 def emit_test(dest: Path, finding: Dict[str, Any], stage_id: str) -> Path:
     """Write the run's own regression for this rejection and return its path.
 
@@ -2548,20 +3756,42 @@ def emit_test(dest: Path, finding: Dict[str, Any], stage_id: str) -> Path:
 
 #: The rules this program runs, per stage. A stage with no rule is NOT CHECKED.
 #:
-#: ONE RULE PER STAGE, AND WHY EACH IS THE STAGE'S OWN. R1 reads the intent
-#: against stage 1's RTL — the only artefact in the flow that is a TRANSLATION
-#: of the intent. R2 reads it against stage 2's NETLIST, which is the first
-#: artefact whose interface is CONCRETE (parameters resolved, wrapper chosen)
-#: and the artefact stage 3 builds. They are not the same question and neither
-#: subsumes the other: MEASURED on the published corpus, R1 DISARMS on
-#: `ic/opentitan_aes` (its intent declares it read no top out of the input) and
-#: R2 rejects it.
+#: Each rule is owned by its stage. Stage_phase1 has two independent questions
+#: over the first translated artefact; stage1 compares declared top with RTL;
+#: stage2 compares the declared interface with the concrete netlist interface.
 _RULES = {
+    # stage_phase1's artefact is the L-docs, and the only thing they can be
+    # checked against is the design INPUT — a document. So the question is not
+    # "does the artefact build what the intent names" but "does the input SAY
+    # what the artefact quotes it as saying". There is no upstream artefact to
+    # diff, which is why a constant phase 1 gets wrong is wrong nowhere
+    # downstream: the oracle is derived from the same L-doc.
+    #
+    # THREE INDEPENDENT QUESTIONS, one per registration, and the first stage of
+    # this program to carry more than one. They came from TWO pull requests
+    # (#1845's first two, #1854's third) and are declared together because the
+    # doctrine allows a stage exactly one `on_pass_review:` block. They read
+    # disjoint claims and none subsumes another:
+    # R1_CITED_CONSTANT_NOT_IN_ITS_SOURCE asks whether a quoted HEXADECIMAL
+    # CONSTANT occurs in the document the artefact cites it to;
+    # R2_TOP_MODULE_PROVENANCE_REFUTED asks whether the declared TOP MODULE
+    # NAME came from the input or its declared source; R1_CITED_INPUT_ABSENT
+    # asks whether the cited SOURCE FILE is one this run contains at all. A
+    # citation can name a file that exists and still quote a constant that is
+    # not in it, and a run can ground every constant while citing a directory
+    # it does not have — MEASURED on the published corpus, the cells the three
+    # reject are different cells.
+    "stage_phase1": [("R1_CITED_CONSTANT_NOT_IN_ITS_SOURCE",
+                      rule_cited_constant_not_in_source),
+                     ("R2_TOP_MODULE_PROVENANCE_REFUTED",
+                      rule_top_module_provenance_refuted),
+                     ("R1_CITED_INPUT_ABSENT", rule_cited_input_absent)],
     "stage1": [("R1_INTENT_TOP_NOT_BUILT", rule_intent_top_not_built)],
     "stage2": [("R2_INTENT_PIN_NOT_IN_NETLIST", rule_intent_pin_not_in_netlist)],
     "stage3": [("R3_SIGNOFF_CLOCK_SLOWER_THAN_INTENT",
-                rule_signoff_clock_slower_than_intent)],    "stage_analog": [("R_ANALOG_INTENT_SPEC_NOT_THE_GRADED_SPEC",
-                       rule_intent_spec_not_the_graded_spec)],
+                rule_signoff_clock_slower_than_intent)],
+    "stage_analog": [("R_ANALOG_INTENT_SPEC_NOT_THE_GRADED_SPEC",
+                      rule_intent_spec_not_the_graded_spec)],
     # R4 reads the intent against stage 4's DIE — the artefact that LEAVES, and
     # the first one no earlier rung can speak about: R1 and R2 both compare the
     # intent to something the flow is still building, and a run can satisfy
@@ -2584,7 +3814,10 @@ _EMITTERS = {"R1_INTENT_TOP_NOT_BUILT": _body_r1,
              # silently produced exactly that, or a refusal nobody expected.
              # Registered here, enabling R5 is one line in `_RULES` and the
              # test it writes is its own.
-             "R5_PACKAGE_CANNOT_BOND_DESIGN": _body_r5}
+             "R5_PACKAGE_CANNOT_BOND_DESIGN": _body_r5,
+             "R1_CITED_CONSTANT_NOT_IN_ITS_SOURCE": _body_phase1,
+             "R2_TOP_MODULE_PROVENANCE_REFUTED": _body_phase1_r2,
+             "R1_CITED_INPUT_ABSENT": _body_phase1_cited_input}
 
 #: The rules this program DECLARES BUT DOES NOT RUN, per stage, each with the
 #: reason it is not enabled. A rule lands here — not in `_RULES` — when the
@@ -2724,6 +3957,32 @@ def _print_r2(f: Dict[str, Any]) -> None:
               f"rule never rejects on them")
 
 
+def _print_phase1_cited_input(f: Dict[str, Any]) -> None:
+    i, art = f["intent"], f["artefact"]
+    print(f"    INTENT   {i['file']} :: {i['field']} — "
+          f"{i['staged_count']} file(s): {', '.join(i['value'][:6])}"
+          f"{', …' if len(i['value']) > 6 else ''}")
+    print(f"    ARTEFACT {art['generated_docs']} — {art['l_docs']} L-doc(s) "
+          f"making {art['citations']} provenance claim(s); "
+          f"{len(art['grounded'])} resolve, {len(art['absent'])} do not")
+    for src in art["absent"][:6]:
+        rec = f["cited_but_absent"][src]
+        alt = f["same_basename_staged_elsewhere"].get(src)
+        print(f"      CITED {src}  ({rec['literals']} literal(s), by "
+              f"{', '.join(rec['cited_by'][:3])})"
+              + (f"  ->  this run stages {alt}" if alt else
+                 "  ->  no staged file carries that basename"))
+    if art["grounded"]:
+        print(f"    NOT A FINDING {len(art['grounded'])} citation(s) in the "
+              f"SAME run resolve ({', '.join(art['grounded'][:3])}), which is "
+              f"what shows the input was published and the citation is wrong")
+    if art["disarmed_unreadable_source"]:
+        print(f"    DISARMED {len(art['disarmed_unreadable_source'])} "
+              f"citation(s) of a source whose absence is a fact about the "
+              f"published snapshot rather than the citation: "
+              f"{', '.join(art['disarmed_unreadable_source'][:3])}")
+
+
 def _print_r5(f: Dict[str, Any]) -> None:
     """R5's evidence. Its INTENT is a package and a pin population and its
     ARTEFACT is one assembly record — neither R1's module set nor R2's port
@@ -2823,12 +4082,50 @@ def _print_r4(f: Dict[str, Any]) -> None:
               f"(sha256 {t['sha256'][:12]}…)")
 
 
+def _print_phase1(f: Dict[str, Any]) -> None:
+    """R1_CITED_CONSTANT_NOT_IN_ITS_SOURCE's evidence, in its own vocabulary.
+
+    Neither of the other two shapes fits. There is no module set here and no
+    port list — only a set of documents and the constants they do not contain.
+    Rendering this finding in stage 1's declared-top-against-module-set terms
+    would print a sentence about things this rule never read.
+    """
+    i, art = f["intent"], f["artefact"]
+    print(f"    INTENT   {len(i['files'])} design-input document(s), "
+          f"{i['value']}: {', '.join(i['files'][:3])}"
+          f"{', …' if len(i['files']) > 3 else ''}")
+    print(f"    ARTEFACT {len(art['l_docs'])} L-doc(s) under "
+          f"{', '.join(art['generated_docs'])}; "
+          f"{art['constants_checked']} cited hexadecimal constant(s), "
+          f"{art['constants_ungrounded']} of them written by no input document")
+    for u in art["ungrounded"][:12]:
+        used = (f"; used at {', '.join(u['used_as_value_at'][:3])}"
+                if u.get("used_as_value_at") else "; no longer used as a value")
+        print(f"      ABSENT {u['constant']} — {u['doc']} cites it to "
+              f"{u['source']} as {u['literal']!r}{used}")
+    if len(art["ungrounded"]) > 12:
+        print(f"      … and {len(art['ungrounded']) - 12} more")
+    if art.get("scrub_disclosed_literals"):
+        print(f"    NOT A FINDING {art['scrub_disclosed_literals']} literal(s) "
+              f"carry the flow's own scrub marker; a value the flow has "
+              f"already ruled fabricated is a disclosure, not a claim about "
+              f"the input")
+
+
+def _print_evidence_lines(f: Dict[str, Any]) -> None:
+    for label, value in f.get("evidence_lines") or []:
+        print(f"    {label:<8} {value}")
+
+
 _PRINTERS = {"R1_INTENT_TOP_NOT_BUILT": _print_r1,
              "R2_INTENT_PIN_NOT_IN_NETLIST": _print_r2,
              "R3_SIGNOFF_CLOCK_SLOWER_THAN_INTENT": _print_r3,
              "R_ANALOG_INTENT_SPEC_NOT_THE_GRADED_SPEC": _print_analog,
              "R4_DIE_IS_NOT_THE_DESIGN": _print_r4,
-             "R5_PACKAGE_CANNOT_BOND_DESIGN": _print_r5}
+             "R5_PACKAGE_CANNOT_BOND_DESIGN": _print_r5,
+             "R1_CITED_CONSTANT_NOT_IN_ITS_SOURCE": _print_phase1,
+             "R2_TOP_MODULE_PROVENANCE_REFUTED": _print_evidence_lines,
+             "R1_CITED_INPUT_ABSENT": _print_phase1_cited_input}
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -2961,13 +4258,13 @@ def main(argv: Optional[List[str]] = None) -> int:
               "which is what this review exists to prevent.")
         return 2
 
-    if rec["not_checked"]:
-        print(f"{_NAME}: rc=2 NOT CHECKED — {len(rec['not_checked'])} rule(s) "
-              f"could not read what they need:")
-        for f in rec["not_checked"]:
-            print(f"    {f['rule']}: {f.get('why')}")
-        return 2
-
+    # WHAT A RULE OBSERVED IS PRINTED WHATEVER THE RUN'S VERDICT TURNS OUT TO
+    # BE. These lines used to sit below the NOT CHECKED branch and were
+    # therefore swallowed whenever any rule could not look — so on a two-rule
+    # stage, a disarm one rule had reasoned its way to disappeared because a
+    # DIFFERENT rule had nothing to read. That is the same defect as the
+    # precedence below, one severity down: a rule's answer suppressed by a
+    # sibling's silence.
     for f in rec["observations"]:
         if f["verdict"] == "DISARMED":
             print(f"{_NAME}: [INFO] {f['rule']} DISARMED — {f['observation']}")
@@ -2980,6 +4277,59 @@ def main(argv: Optional[List[str]] = None) -> int:
         # other_stages` in tests/test_stage_analog_on_pass_review.py pins that.
         elif f["verdict"] == "ACCEPT" and f.get("observation"):
             print(f"{_NAME}: [INFO] {f['rule']} ACCEPT — {f['observation']}")
+
+    # A RULE THAT COULD NOT LOOK MUST NOT SILENCE ONE THAT FOUND SOMETHING.
+    #
+    # This ordering only became reachable when a stage first carried TWO rules.
+    # With one rule per stage, "some rule is NOT CHECKED" and "this run is NOT
+    # CHECKED" were the same sentence. With two they are not, and taking the
+    # old branch first is a measured disaster in both directions: composing
+    # stage_phase1's two rules over the published corpus took the stage from
+    # 76 ACCEPT / 5 REJECT / 24 NOT CHECKED to 10 / 1 / 94, and ALL FIVE of
+    # R2's proven rejections came out as rc 2 because R1 had no constant to
+    # examine on those cells. Symmetrically, R1's rejections vanished on every
+    # cell that publishes no design input for R2 to read.
+    #
+    # rc 2 means THE QUESTION COULD NOT BE PUT. Where a rule proved a
+    # contradiction, a question was put and answered, and answering rc 2 hides
+    # a proven rejection behind an unrelated rule's blindness — a reviewer
+    # manufacturing the absence of a finding it actually made, which is the
+    # same failure as manufacturing one it did not.
+    #
+    # So a proven rejection outranks NOT CHECKED, and NOTHING IS HIDDEN EITHER
+    # WAY: the unchecked rules are printed by name and reason immediately
+    # below, before the rejections, and `not_checked` carries them in the JSON
+    # exactly as before. rc 1 here means "at least one rule proved a
+    # contradiction", never "everything else was checked".
+    if rec["not_checked"]:
+        head = ("rc=2 NOT CHECKED — " if not rec["rejections"]
+                else "[NOT CHECKED] ")
+        print(f"{_NAME}: {head}{len(rec['not_checked'])} rule(s) "
+              f"could not read what they need:")
+        for f in rec["not_checked"]:
+            print(f"    {f['rule']}: {f.get('why')}")
+        if not rec["rejections"]:
+            # THE THIRD FACE OF THE SAME DEFECT. The observation lines above
+            # this branch and the rejection precedence below both exist because
+            # a rule that could not look must not silence one that answered. A
+            # plain ACCEPT — one carrying no `observation`, so the loop above
+            # says nothing about it — was the answer still being swallowed: on
+            # a stage where one rule cannot read this cell, every rule that DID
+            # read it and found no contradiction went unnamed and the run said
+            # only "NOT CHECKED". It still exits 2 — the stage was not fully
+            # reviewed, and that is the honest verdict — but what WAS reviewed
+            # is now on the record. Reachable only on a multi-rule stage, which
+            # is why it appears with the first one.
+            for f in rec["observations"]:
+                if f["verdict"] == "ACCEPT":
+                    print(f"{_NAME}: [ACCEPT] {f['rule']} read this artefact "
+                          f"and found no contradiction. This does not make the "
+                          f"stage reviewed: the rule(s) above were not "
+                          f"answered.")
+            return 2
+        print("    These rules were not answered. The verdict below is the "
+              "answer of the rule(s) that were, and it does not certify what "
+              "these could not read.")
 
     if rec["rejections"]:
         print(f"{_NAME}: REJECT — {len(rec['rejections'])} proven "

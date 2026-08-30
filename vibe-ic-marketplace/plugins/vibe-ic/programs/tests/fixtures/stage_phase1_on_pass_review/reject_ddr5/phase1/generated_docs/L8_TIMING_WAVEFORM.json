@@ -1,0 +1,171 @@
+{
+  "schema_version": "1",
+  "doc_class": "timing_waveform",
+  "ic_name": "DDR5 SDRAM (JEDEC JESD79-5)",
+  "timing_windows": [],
+  "timing_constants": [],
+  "waveforms": [],
+  "extraction_evidence": {},
+  "clock_domains": [
+    {
+      "name": "clk",
+      "freq_low_mhz": 1600.0,
+      "freq_high_mhz": null,
+      "role": "primary",
+      "freq_mhz": 1600.0,
+      "reset_strategy": "unspecified",
+      "evidence": {
+        "file": "input/docs/ddr5_spec.txt",
+        "line": 170,
+        "matched_substring": "1600 MHz"
+      },
+      "extraction_strategy": "clock_domain_doc_prose_fmax",
+      "freq_hz": 1600000000,
+      "period_ns": 0.625,
+      "domain_kind": "primary",
+      "source_pin": "clk"
+    },
+    {
+      "name": "clk",
+      "freq_mhz": 1800.0,
+      "freq_hz": 1800000000,
+      "low_mhz": 1800.0,
+      "high_mhz": 3000.0,
+      "role": "extracted_from_doc_freq_mention",
+      "source": "input/docs/ddr5_spec.txt",
+      "reset_strategy": "unspecified",
+      "extraction_strategy": "doc_freq_mention_keyword_window",
+      "freq_evidence_count_v1_6_368": 7,
+      "best_rank_v1_6_370": 5,
+      "primary_evidence_v1_6_370": "input/docs/ddr5_spec.txt",
+      "derived_from": "clk",
+      "period_ns": 0.555556,
+      "domain_kind": "primary",
+      "source_pin": "clk"
+    }
+  ],
+  "class_path": "pure_analog",
+  "clock_mhz": 1600.0,
+  "clock_waveform": {
+    "type": "differential CK_t / CK_c per channel",
+    "command_registration": "Commands registered at the rising edges of CK_t and CK_c.",
+    "channel_independence": "Each channel has its own clock; channels need not be synchronous.",
+    "data_rate": "Data toggles at double the clock-derived bit rate, up to 6.4 Gb/s/pin."
+  },
+  "wck2ck_synchronization_waveform": {
+    "purpose": "Lock the DRAM's internal WCK phase to CK before a high-speed read/write.",
+    "issued_by": "CAS command carrying WS_FS / WS_RD / WS_WR.",
+    "WS_FS": "Free-start: WCK starts immediately; may precede multiple reads/writes.",
+    "WS_RD": "Read-optimized: WCK timing optimized for an immediately following read.",
+    "WS_WR": "Write-optimized: WCK timing optimized for an immediately following write.",
+    "sequence": "CAS (WS_xx) -> WCK enabled and phase-locked -> RD / WR issued."
+  },
+  "read_burst_waveform": {
+    "command_issue": "CAS (WS_RD) then RD / RD32.",
+    "read_latency_RL": "Programmed Read Latency (per FSP) after RD.",
+    "strobe": "DRAM drives RDQS edge-aligned with DQ; double data rate at the WCK/RDQS rate.",
+    "burst_length": "16 (BL16) default; 32 (BL32); RD32 start position via C0/B3.",
+    "read_link_ecc": "Read Link ECC (16-bit) corrects a single-bit error in the read data."
+  },
+  "write_burst_waveform": {
+    "command_issue": "CAS (WS_WR) then WR / WR32 / MWR.",
+    "write_latency_WL": "Programmed Write Latency (per FSP; Set A / Set B) after WR.",
+    "strobe": "Controller drives WCK; DRAM samples DQ + DMI on both WCK edges.",
+    "burst_length": "16 (BL16) default; 32 (BL32).",
+    "write_x": "WRX fills the burst all-zero/all-one (WXS) without transferring data.",
+    "masked_write": "MWR uses DMI as a per-byte data mask.",
+    "write_link_ecc": "Write Link ECC (16-bit) protects write data on the wire."
+  },
+  "initialization_waveform": {
+    "sequence": "Supply ramp -> RESET_n LOW -> RESET_n HIGH -> mode-register programming -> per-channel link training -> channel IDLE.",
+    "note": "Initialization is per-channel; channels may come up independently."
+  },
+  "low_power_entry_exit": {
+    "power_down": "Entered via a CA command (PD bit); no CKE; lasts until CS next goes high.",
+    "self_refresh": "Entered via SRE over the CA bus; CK may be stopped per the defined window.",
+    "deep_sleep": "Entered via SRE with DSE; lowest standby power; full re-init on exit."
+  },
+  "general_timing_rule": "After power-up, voltage ramp, initialization, and training (CA / write-leveling / read / write, DFE, VrefDQ/VrefCA, ZQ), a row must be ACTIVATEd (tRCD) before a column access, PRECHARGEd (tRP) before re-activation, and refreshed (tRFC) within tREFI. Data is double-pumped on DQS_t/DQS_c.",
+  "voltage_thresholds": {
+    "VDDQ_V": 0.5,
+    "Vref_ca": "Per frequency set point (CA/CS).",
+    "Vref_dq": "Per frequency set point (DQ/DMI).",
+    "differential": "CK / WCK / RDQS are differential."
+  },
+  "row_command_waveform": {
+    "bus": "R[ ] command/address",
+    "content": "ACTIVATE/PRECHARGE/REFRESH/RFM/MRS across one or more CK cycles with bank-group/bank/row.",
+    "registration": "Sampled on rising CK_t/CK_c edges."
+  },
+  "column_command_waveform": {
+    "bus": "C[ ] command/address",
+    "content": "READ/WRITE with column address; decoded independently per 32-bit pseudo-channel.",
+    "parallelism": "Can be issued in the same cycle as a row command on the R bus."
+  },
+  "write_data_waveform": {
+    "data": "64 bits/channel (32/pseudo-channel) on DQ, double data rate.",
+    "strobe": "Framed by differential WDQS_t/WDQS_c; data centred relative to WDQS edges.",
+    "latency": "Launched at write latency WL from WRITE."
+  },
+  "read_data_waveform": {
+    "data": "64 bits/channel (32/pseudo-channel) on DQ, double data rate.",
+    "strobe": "Framed by differential RDQS_t/RDQS_c; edge-aligned with read data.",
+    "latency": "Appears at read latency RL from READ."
+  },
+  "refresh_waveform": {
+    "refab": "All-bank refresh (tRFC).",
+    "refsb": "Same-bank refresh across bank groups; other banks accessible.",
+    "interval": "REFab/REFsb issued within tREFI."
+  },
+  "timing_tables_referenced": [
+    "Per-channel command timing (ACT-to-RD/WR, RD/WR-to-data latencies RL/WL).",
+    "Data-strobe to data windows for WDQS (write) and RDQS (read) at up to 6.4 Gb/s/pin.",
+    "Refresh and refresh-management (RFM) timing.",
+    "Bank-group back-to-back column access timing."
+  ],
+  "voltage_levels": {
+    "signaling": "low-swing single-ended data/CA with differential clock and strobes",
+    "rails": [
+      "VDDC",
+      "VDDQ",
+      "VDDQL",
+      "VPP",
+      "VSS"
+    ]
+  },
+  "bit_waveform": {
+    "signaling": "parallel single-ended POD DQ (VrefDQ-referenced); differential CK_t/CK_c and DQS_t/DQS_c",
+    "data_rate": "double data rate (two beats per CK period)",
+    "strobe": "DQ captured on both edges of DQS_t/DQS_c",
+    "equalization": "DFE on DQ receivers; Duty-Cycle Adjuster on the path"
+  },
+  "command_waveform": {
+    "ca_command": "2-cycle command on CA[13:0], qualified by CS_n, timed to CK_t/CK_c.",
+    "row_cycle": "ACTIVATE (tRCD) -> READ/WRITE (BL16) -> PRECHARGE (tRP).",
+    "latency": "Read data returns after CAS latency (CL); writes use the write latency."
+  },
+  "burst_waveform": {
+    "native_burst_length": 16,
+    "burst_chop": 32,
+    "note": "BL16 = 16 beats = 64-byte cache line per 32-bit sub-channel."
+  },
+  "data_rate_waveform": {
+    "speed_bins_MTps": [
+      3200,
+      3600,
+      4000,
+      4400,
+      4800,
+      5200,
+      5600,
+      6000,
+      6400,
+      7200,
+      8000,
+      8400
+    ],
+    "max_data_rate_MTps": 8400,
+    "double_data_rate": true,
+    "example": "DDR5-6400 = 6400 MT/s at a 3200 MHz CK."
+  }
+}

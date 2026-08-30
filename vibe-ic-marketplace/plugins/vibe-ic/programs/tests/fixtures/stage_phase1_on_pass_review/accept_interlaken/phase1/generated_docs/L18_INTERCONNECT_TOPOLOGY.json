@@ -1,0 +1,39 @@
+{
+  "fields": {
+    "interconnect_rules": [],
+    "default_signal_values": {},
+    "typical_topologies": [],
+    "multi_copy_atomicity": {},
+    "axprot_polarity": null,
+    "id_routing": {
+      "description": "Interconnect may append bits to AxID to identify the originating master; slave-side ID_WIDTH > master-side ID_WIDTH",
+      "compliance_note": "Returning ID is the WIDER value; routing strips appended bits before returning to the master"
+    },
+    "topology_type": "Point-to-point chip-to-chip over N bonded SerDes lanes per direction; Protocol-over-Framing-over-SerDes layering.",
+    "supported_topologies": [
+      {
+        "name": "Bonded multi-lane link",
+        "description": "Words striped round-robin across N SerDes lanes; each lane self-framed with its own metaframe."
+      },
+      {
+        "name": "Channelized multiplex",
+        "description": "Up to 65536 logical channels share the physical link, selected by the Burst Control Word channel number."
+      }
+    ],
+    "device_classification": {
+      "endpoints": [
+        "Packet processor / NPU",
+        "Traffic manager",
+        "Framer / MAC",
+        "Switch fabric"
+      ]
+    },
+    "lane_bonding": "Round-robin striping across N lanes; receiver deskews on metaframe boundaries and clock-compensates with Skip Words."
+  },
+  "extraction_status": "EXTRACTION_FOUND_NOTHING",
+  "schema_version": "v0.1.62",
+  "doc_class": "L18",
+  "emitted_by": "phase1_protocol_spec_extract.extract_l18_interconnect v0.1.62",
+  "extraction_evidence": {},
+  "ic_name": "Interlaken Protocol Definition"
+}

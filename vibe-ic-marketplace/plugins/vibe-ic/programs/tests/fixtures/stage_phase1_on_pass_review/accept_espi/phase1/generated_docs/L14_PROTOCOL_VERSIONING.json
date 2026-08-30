@@ -1,0 +1,47 @@
+{
+  "fields": {
+    "versions": [],
+    "deprecated_features": [],
+    "backward_compat_traps": [
+      {
+        "trap_name": "Not_plain_SPI",
+        "rule": "eSPI multiplexes 4 logical channels with a command/response + turnaround protocol; it is NOT a NOR-flash SPI (single MOSI/MISO read/write).",
+        "trap": "Decoding eSPI as classic SPI (no channels, no VW/OOB/Flash, no CRC negotiation) is wrong."
+      },
+      {
+        "trap_name": "Replaces_LPC",
+        "rule": "eSPI is the LPC successor — it tunnels LPC-style I/O, memory and DMA cycles plus sideband signals in-band.",
+        "trap": "Treating eSPI as unrelated to LPC misses the Virtual Wire sideband tunneling intent."
+      }
+    ],
+    "spec_version": "eSPI Base Specification Revision 1.5 (Intel Doc 327432-004)",
+    "lineage": [
+      {
+        "version": "LPC 1.1",
+        "year": "2002",
+        "summary": "Low Pin Count bus — the predecessor eSPI replaces."
+      },
+      {
+        "version": "eSPI 0.6",
+        "year": "2012",
+        "summary": "Early eSPI revision."
+      },
+      {
+        "version": "eSPI 1.0",
+        "year": "2013",
+        "summary": "First production eSPI base spec."
+      },
+      {
+        "version": "eSPI 1.5",
+        "year": "2023",
+        "summary": "Adds Quad I/O at 66 MHz, refined Virtual Wire indices."
+      }
+    ]
+  },
+  "extraction_status": "EXTRACTION_FOUND_NOTHING",
+  "schema_version": "v0.1.62",
+  "doc_class": "L14",
+  "emitted_by": "phase1_protocol_spec_extract.extract_l14_versioning v0.1.62",
+  "extraction_evidence": {},
+  "ic_name": "Enhanced Serial Peripheral Interface (eSPI)"
+}

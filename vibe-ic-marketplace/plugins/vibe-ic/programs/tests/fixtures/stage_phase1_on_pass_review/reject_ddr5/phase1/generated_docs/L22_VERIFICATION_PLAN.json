@@ -1,0 +1,36 @@
+{
+  "doc_id": "L22",
+  "doc_name": "L22_VERIFICATION_PLAN",
+  "applicability": "APPLICABLE",
+  "ic_class": "pure_analog",
+  "fields": {
+    "coverage_goals": [],
+    "formal_properties": [],
+    "regression_matrix": {},
+    "verification_plan_present": "implicit",
+    "notes": "DDR5 does not ship an embedded testbench, but JESD79-5 implies a verification plan spanning power-up/training, the two independent sub-channels, the row/column command cycle and timing parameters, bank-group scheduling, all-bank and same-bank refresh, BL16 bursts, on-die ECC / ECS, write-CRC / CA-parity integrity, the mode-register set, the speed-bin range, and the module PMIC/SPD-hub/RCD. JEDEC compliance testing supplies the formal suite.",
+    "verification_categories_derived_from_spec": [
+      "Power-up / init / RESET_n at 1.1 V VDD/VDDQ, 1.8 V VPP.",
+      "Training — CA training, write leveling, read/write training (DFE tap, VrefDQ/VrefCA), ZQ calibration via MPC.",
+      "Two-sub-channel independence — concurrent unrelated A/B access.",
+      "Row cycle — ACTIVATE/READ/WRITE/PRECHARGE; tRCD/tRP/tRAS/tWR/CL.",
+      "Bank groups — tCCD_L vs tCCD_S; 32 banks / 8 groups.",
+      "Refresh — REFab and REFsb; tRFC/tREFI; fine-granularity / temperature.",
+      "Burst — BL16 and BL32 burst-chop.",
+      "On-die ECC — single-bit correction; Error Check and Scrub (ECS).",
+      "Integrity — write CRC and CA parity on ALERT_n.",
+      "Mode registers — MRW/MRR across the expanded MR space.",
+      "Speed-bin sweep — DDR5-3200 .. DDR5-8400; double-data-rate capture.",
+      "Module — PMIC rails, SPD-hub config, RCD CK/CA re-drive (RDIMM)."
+    ],
+    "ic_name": "DDR5 SDRAM (JEDEC JESD79-5)"
+  },
+  "extraction_hints": [
+    "Look for coverage targets, vplan, regression policy.",
+    "Capture per-feature coverage goals."
+  ],
+  "extraction_status": "NOT_YET_EXTRACTED",
+  "emitted_by": "phase1_post_process.emit_l_doc_skeleton v0.1.51",
+  "extraction_evidence": {},
+  "ic_name": "DDR5 SDRAM (JEDEC JESD79-5)"
+}

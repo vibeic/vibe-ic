@@ -1,0 +1,965 @@
+{
+  "schema_version": 2,
+  "doc_class": "datasheet",
+  "ic_name": "LPDDR5 SDRAM (JEDEC JESD209-5)",
+  "no_ic_name_in_input": false,
+  "package_info": null,
+  "no_package_in_input": true,
+  "pin_table": [],
+  "no_pin_table_in_input": true,
+  "electrical_specs": [],
+  "no_electrical_specs_in_input": true,
+  "ordering_info": {
+    "part_number": "lpddr5",
+    "vendor": null,
+    "no_vendor_in_input": true
+  },
+  "tapeout_metadata": {
+    "foundry": "Intel",
+    "process_node": "20nm",
+    "extraction_evidence": [
+      {
+        "file": "input/docs/lpddr5_spec.pdf"
+      }
+    ]
+  },
+  "no_tapeout_metadata_in_input": false,
+  "extraction_evidence": {
+    "input/docs/lpddr5_spec.pdf": [
+      {
+        "literal": "533 MHz",
+        "label": "frequency"
+      },
+      {
+        "literal": "800 MHz",
+        "label": "frequency"
+      },
+      {
+        "literal": "800 MHz",
+        "label": "frequency"
+      }
+    ]
+  },
+  "class_path": null,
+  "no_class_path_in_input": true,
+  "auto_discovered_identifiers": [
+    {
+      "name": "LPDDR",
+      "source_doc": "lpddr5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "SDRAM",
+      "source_doc": "lpddr5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "DDR",
+      "source_doc": "lpddr5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "LPDDR4",
+      "source_doc": "lpddr5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "DDR4",
+      "source_doc": "lpddr5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "K4X2G323PD",
+      "source_doc": "lpddr5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "JEDEC",
+      "source_doc": "lpddr5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "LPDDR5",
+      "source_doc": "lpddr5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "LPDDR1",
+      "source_doc": "lpddr5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "DRAM",
+      "source_doc": "lpddr5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "LPDDR2",
+      "source_doc": "lpddr5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "JESD209",
+      "source_doc": "lpddr5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "DDR1",
+      "source_doc": "lpddr5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "DDR2",
+      "source_doc": "lpddr5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "NAND",
+      "source_doc": "lpddr5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "K4P4G154EC",
+      "source_doc": "lpddr5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "FGC1",
+      "source_doc": "lpddr5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "LPDDR3",
+      "source_doc": "lpddr5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "CA0",
+      "source_doc": "lpddr5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "CA1",
+      "source_doc": "lpddr5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "CA2",
+      "source_doc": "lpddr5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "CA3",
+      "source_doc": "lpddr5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "CA4",
+      "source_doc": "lpddr5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "CA5",
+      "source_doc": "lpddr5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "CA6",
+      "source_doc": "lpddr5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "CA7",
+      "source_doc": "lpddr5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "CA8",
+      "source_doc": "lpddr5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "CA9",
+      "source_doc": "lpddr5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "RAS",
+      "source_doc": "lpddr5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "CAS",
+      "source_doc": "lpddr5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "BA0",
+      "source_doc": "lpddr5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "BA1",
+      "source_doc": "lpddr5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "BA2",
+      "source_doc": "lpddr5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "A30",
+      "source_doc": "lpddr5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "A31",
+      "source_doc": "lpddr5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "A32",
+      "source_doc": "lpddr5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "A20",
+      "source_doc": "lpddr5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "A21",
+      "source_doc": "lpddr5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "A22",
+      "source_doc": "lpddr5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "A23",
+      "source_doc": "lpddr5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "A24",
+      "source_doc": "lpddr5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "R10",
+      "source_doc": "lpddr5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "R11",
+      "source_doc": "lpddr5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "R12",
+      "source_doc": "lpddr5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "A15",
+      "source_doc": "lpddr5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "A16",
+      "source_doc": "lpddr5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "A17",
+      "source_doc": "lpddr5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "A18",
+      "source_doc": "lpddr5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "A19",
+      "source_doc": "lpddr5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "MA0",
+      "source_doc": "lpddr5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "MA1",
+      "source_doc": "lpddr5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "MA2",
+      "source_doc": "lpddr5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "MA3",
+      "source_doc": "lpddr5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "MA4",
+      "source_doc": "lpddr5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "MA5",
+      "source_doc": "lpddr5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "MA6",
+      "source_doc": "lpddr5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "MA7",
+      "source_doc": "lpddr5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "OP0",
+      "source_doc": "lpddr5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "OP1",
+      "source_doc": "lpddr5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "OP2",
+      "source_doc": "lpddr5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "NOP",
+      "source_doc": "lpddr5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "CKE",
+      "source_doc": "lpddr5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "HHH",
+      "source_doc": "lpddr5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "LLH",
+      "source_doc": "lpddr5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "HHL",
+      "source_doc": "lpddr5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "EEPROM",
+      "source_doc": "lpddr5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "ODT",
+      "source_doc": "lpddr5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "I9500",
+      "source_doc": "lpddr5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "PC3",
+      "source_doc": "lpddr5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "LPDDR3E",
+      "source_doc": "lpddr5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "RAM",
+      "source_doc": "lpddr5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "LVSTL",
+      "source_doc": "lpddr5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "SDR",
+      "source_doc": "lpddr5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "OP4",
+      "source_doc": "lpddr5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "OP3",
+      "source_doc": "lpddr5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "OP7",
+      "source_doc": "lpddr5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "OP6",
+      "source_doc": "lpddr5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "OP5",
+      "source_doc": "lpddr5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "R15",
+      "source_doc": "lpddr5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "R14",
+      "source_doc": "lpddr5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "R13",
+      "source_doc": "lpddr5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "R16",
+      "source_doc": "lpddr5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "DMI",
+      "source_doc": "lpddr5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "DBI",
+      "source_doc": "lpddr5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "LPDDR4X",
+      "source_doc": "lpddr5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "MCP",
+      "source_doc": "lpddr5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "WCK",
+      "source_doc": "lpddr5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "RDQS",
+      "source_doc": "lpddr5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "AMD",
+      "source_doc": "lpddr5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "FIFO",
+      "source_doc": "lpddr5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "DSE",
+      "source_doc": "lpddr5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "SB1",
+      "source_doc": "lpddr5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "SB0",
+      "source_doc": "lpddr5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "RFM",
+      "source_doc": "lpddr5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "BG0",
+      "source_doc": "lpddr5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "BG1",
+      "source_doc": "lpddr5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "WS_",
+      "source_doc": "lpddr5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "WXSB",
+      "source_doc": "lpddr5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "WXSA",
+      "source_doc": "lpddr5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "WRX",
+      "source_doc": "lpddr5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "DC3",
+      "source_doc": "lpddr5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "DC2",
+      "source_doc": "lpddr5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "DC1",
+      "source_doc": "lpddr5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "DC0",
+      "source_doc": "lpddr5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "R17",
+      "source_doc": "lpddr5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "WS_FS",
+      "source_doc": "lpddr5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "WS_RD",
+      "source_doc": "lpddr5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "WS_WR",
+      "source_doc": "lpddr5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "WXS",
+      "source_doc": "lpddr5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "LPDDR5X",
+      "source_doc": "lpddr5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "LPDDR5T",
+      "source_doc": "lpddr5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "LPDDR6",
+      "source_doc": "lpddr5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "ECC",
+      "source_doc": "lpddr5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "CAMM2",
+      "source_doc": "lpddr5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "DDR3L",
+      "source_doc": "lpddr5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "PDF",
+      "source_doc": "lpddr5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "JESD79",
+      "source_doc": "lpddr5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "UFS",
+      "source_doc": "lpddr5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "US20140059287",
+      "source_doc": "lpddr5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "LTE",
+      "source_doc": "lpddr5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "DDR5",
+      "source_doc": "lpddr5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "MRDIMM",
+      "source_doc": "lpddr5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "CAMM",
+      "source_doc": "lpddr5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "LOW",
+      "source_doc": "lpddr5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "DOUBLE",
+      "source_doc": "lpddr5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "DATA",
+      "source_doc": "lpddr5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "RATE",
+      "source_doc": "lpddr5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    }
+  ],
+  "vendor_short_literals": [
+    {
+      "literal": "33%",
+      "kind": "percent",
+      "source": "lpddr5_spec.pdf"
+    },
+    {
+      "literal": "20%",
+      "kind": "percent",
+      "source": "lpddr5_spec.pdf"
+    },
+    {
+      "literal": "25%",
+      "kind": "percent",
+      "source": "lpddr5_spec.pdf"
+    },
+    {
+      "literal": "30%",
+      "kind": "percent",
+      "source": "lpddr5_spec.pdf"
+    },
+    {
+      "literal": "2%",
+      "kind": "percent",
+      "source": "lpddr5_spec.pdf"
+    }
+  ],
+  "document_title": "Low Power Double Data Rate 5 (LPDDR5) SDRAM Standard",
+  "document_number": "JESD209-5",
+  "version": "JESD209-5 (original), with addenda JESD209-5B (LPDDR5/5X) and JESD209-5X (LPDDR5X)",
+  "revised_date": "Published 19 February 2019 (JESD209-5); JESD209-5B (LPDDR5/5X) published 28 July 2021",
+  "manufacturer": "JEDEC Solid State Technology Association (multi-vendor consortium standard)",
+  "publisher": "JEDEC Solid State Technology Association, 3103 North 10th Street, Suite 240 South, Arlington, VA 22201-2107",
+  "copyright": "Copyright JEDEC Solid State Technology Association 2019",
+  "abstract": "LPDDR5 (Low Power Double Data Rate 5) SDRAM is a high-speed, low-power mobile DRAM standardized by JEDEC as JESD209-5. It uses a new clocking architecture: a quarter-speed master clock (CK) for command/address plus a full-speed Write Clock (WCK) and Read Strobe (RDQS) that are enabled only when needed, reaching up to 6400 Mbit/s per pin. The device has 16 banks in four DDR4-style bank groups; prefetch remains 16n. LPDDR5 narrows the command/address (CA) bus to 7 bits at double data rate, reduces VDDQ to 0.5 V, and adds link ECC, DVFS, deep sleep, Data-Copy / Write-X, and CKE-less low-power entry (a CA command bounded by CS).",
+  "keywords": [
+    "LPDDR5",
+    "SDRAM",
+    "JESD209-5",
+    "JESD209-5B",
+    "JESD209-5X",
+    "LPDDR5X",
+    "Low Power Double Data Rate 5",
+    "mobile DRAM",
+    "WCK",
+    "Write Clock",
+    "RDQS",
+    "Read Strobe",
+    "WCK2CK sync",
+    "WS_FS",
+    "WS_RD",
+    "WS_WR",
+    "bank group",
+    "16 banks",
+    "16n prefetch",
+    "quarter-speed CK",
+    "6400 Mbps",
+    "CA bus",
+    "Link ECC",
+    "Data Bus Inversion",
+    "DBI",
+    "DVFSC",
+    "DVFS",
+    "deep sleep",
+    "per-bank refresh",
+    "all-bank refresh",
+    "Data-Copy",
+    "Write-X",
+    "DFE",
+    "VDDQ 0.5 V",
+    "two-deck"
+  ],
+  "external_pins": [
+    "CK_t, CK_c (differential quarter-speed master clock input)",
+    "WCK_t, WCK_c (differential full-speed Write Clock; 4x CK; enabled only when needed)",
+    "RDQS_t, RDQS_c (differential full-speed Read Strobe; DRAM-driven during reads)",
+    "CA[6:0] (7-bit command/address bus, double-data-rate)",
+    "CS (chip select; bounds low-power-mode duration; no CKE pin)",
+    "DQ (bidirectional data bus; x16 per channel, two x8 byte groups)",
+    "DMI (Data Mask / Data Bus Inversion, per byte group)",
+    "RESET_n (active-low reset)",
+    "ZQ (calibration reference pin; external precision resistor)",
+    "VDD1 (first core supply, ~1.8 V)",
+    "VDD2H / VDD2L (second core / periphery supplies; DVFSC selects high/low)",
+    "VDDQ (DQ / IO supply, reduced to 0.5 V)",
+    "VSS, VSSQ (grounds)"
+  ],
+  "external_pin_count_x16_single_channel_summary": "Per x16 channel: CK pair, WCK pair, RDQS pair, CA[6:0], CS, DQ[15:0], DMI per byte group, RESET_n, ZQ, plus VDD1 / VDD2H / VDD2L / VDDQ / VSS / VSSQ rails (ballout per JESD209-5).",
+  "key_features": [
+    "16-bank internal architecture in four DDR4-style bank groups (BG0..BG3, four banks each); BG / 16B / 8B modes.",
+    "16n prefetch (NOT doubled relative to LPDDR4; remains 16n).",
+    "New clocking architecture: quarter-speed differential CK for command/address + full-speed differential WCK + full-speed differential RDQS, WCK/RDQS enabled only when a transfer is imminent.",
+    "WCK-to-CK synchronization commands (WS_FS / WS_RD / WS_WR) carried by the CAS command to lock internal WCK to CK before a read/write.",
+    "One set of full-speed WCK clocks per byte (vs per 16 bits in LPDDR4).",
+    "Data transfer rate up to 6400 Mbit/s per pin (LPDDR5); JESD209-5B/5X (LPDDR5X) extends to 8533 Mbit/s.",
+    "7-bit double-data-rate command/address (CA) bus.",
+    "CKE pin eliminated — low-power mode entered by a CA command, lasting until CS next goes high.",
+    "VDDQ reduced to 0.5 V for low IO power.",
+    "Read Link ECC and Write Link ECC (16-bit) for single-bit on-the-wire error correction.",
+    "Data Bus Inversion (DBI) on the DMI lines.",
+    "Dynamic Voltage and Frequency Scaling (DVFS), including DVFSC selecting VDD2H / VDD2L.",
+    "Decision Feedback Equalization (DFE) on the receiver for SI at 6400+ Mbps.",
+    "Data-Copy and Write-X (all-zero / all-one) commands to reduce data-transfer activity.",
+    "Multi-bank refresh: all-bank refresh (REFab) and per-bank refresh (REFpb, round-robin).",
+    "Deep sleep mode (DSM) for lowest standby power.",
+    "Burst length 16 (BL16) default and double-length burst 32 (BL32).",
+    "Two-deck architecture (deck mode) for finer power/access granularity.",
+    "CA bus DDR encoding — a command spans two CA transfers (rising + falling CK edge)."
+  ],
+  "topology_summary": "Source-synchronous low-power mobile memory bus. An LPDDR5 controller (master) drives the quarter-speed differential CK, the 7-bit DDR CA bus, CS, and (when a transfer is imminent) the full-speed differential WCK to one or more LPDDR5 SDRAM devices (slaves) per channel. DQ and DMI are bidirectional; RDQS is DRAM-driven during reads. There is no CKE pin; low-power entry is a CA command bounded by CS. Devices commonly use a two-channel (x16 per channel) package with a two-deck internal organization.",
+  "speed_grade_summary": [
+    {
+      "generation": "LPDDR5",
+      "release_year": 2019,
+      "data_rate_Mbps_per_pin": 6400,
+      "WCK_MHz": 3200,
+      "CK_MHz_quarter_speed": 800,
+      "VDDQ_V": 0.5,
+      "spec": "JESD209-5"
+    },
+    {
+      "generation": "LPDDR5X",
+      "release_year": 2021,
+      "data_rate_Mbps_per_pin": 8533,
+      "WCK_MHz": 4266,
+      "CK_MHz_quarter_speed": 1066,
+      "VDDQ_V": 0.5,
+      "spec": "JESD209-5B / JESD209-5X"
+    }
+  ],
+  "density_organization_summary": "LPDDR5 dies are organized per x16 channel with 16 banks (four bank groups of four banks) in BG mode, or 16 banks flat in 16B mode, or 8 banks in 8B mode for some densities. Mobile densities range across 2 Gb..32 Gb dies, packaged as multi-die PoP / discrete packages of up to tens of GB total. Exact density/organization tables are defined in JESD209-5.",
+  "revision_history": [
+    {
+      "version": "JESD209-5",
+      "date": "19 February 2019",
+      "description": "Initial LPDDR5 SDRAM Standard (JEDEC JC-42.6). WCK/RDQS clocking, 16-bank/4-bank-group architecture, 6400 Mbps, 7-bit DDR CA bus, link ECC, DVFS, deep sleep, CKE elimination."
+    },
+    {
+      "version": "JESD209-5B",
+      "date": "28 July 2021",
+      "description": "LPDDR5/5X update: speed up to 8533 Mbit/s, tx/rx equalization, Adaptive Refresh Management."
+    },
+    {
+      "version": "JESD209-5X (LPDDR5X)",
+      "date": "2021-2024",
+      "description": "LPDDR5X branded extension reaching 8533+ Mbit/s (LPDDR5X-8533 / LPDDR5T-9600 / LPDDR5X-10700) on 14/12 nm-class processes."
+    }
+  ],
+  "use_cases": [
+    "Main memory in smartphones, tablets, and battery-powered devices.",
+    "AI / ML mobile accelerators and flagship SoCs (Snapdragon, Apple M-series, MediaTek Dimensity, Kirin).",
+    "Automotive infotainment and ADAS compute.",
+    "Edge-AI and high-bandwidth embedded vision.",
+    "Package-on-Package (PoP) and discrete LPDDR5 on mobile application processors."
+  ],
+  "overview": "LPDDR5 SDRAM is JEDEC's fifth-generation low-power mobile DRAM (JESD209-5). Its headline innovation is a new clocking architecture: a quarter-speed master clock (CK) carries command/address on a 7-bit double-data-rate CA bus, while a full-speed Write Clock (WCK) and Read Strobe (RDQS) — enabled only when a transfer is imminent — carry data at up to 6400 Mbit/s per pin. The DRAM is organized as 16 banks in four DDR4-style bank groups; prefetch remains 16n. To save power, LPDDR5 eliminates the CKE pin (low-power entry is a CA command bounded by CS), reduces VDDQ to 0.5 V, and adds Data-Copy / Write-X, DVFS, deep sleep, Read/Write Link ECC, and DBI. The WCK2CK synchronization commands (WS_FS / WS_RD / WS_WR), carried by the CAS command, prepare the DRAM to lock to the imminent high-speed WCK clock before the read or write begins."
+}

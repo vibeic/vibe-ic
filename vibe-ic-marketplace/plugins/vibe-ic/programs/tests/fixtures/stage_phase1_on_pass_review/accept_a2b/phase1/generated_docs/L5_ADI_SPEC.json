@@ -1,0 +1,36 @@
+{
+  "schema_version": 2,
+  "doc_class": "adi_spec",
+  "ic_name": "A2B_Transceiver",
+  "applicability": "NOT_APPLICABLE",
+  "applicability_reason": "no analog blocks detected in the input documents — digital-only IC; the analog interface spec layer is not applicable and is intentionally left empty",
+  "analog_blocks_detected": false,
+  "analog_blocks": [],
+  "no_analog": true,
+  "external_components": [],
+  "electrical_specs": [
+    {
+      "param": "FREQ",
+      "parameter": "clock_frequency",
+      "value": "48.0",
+      "unit": "kHz",
+      "source": "a2b_spec.txt",
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "FREQ",
+      "parameter": "clock_frequency",
+      "value": "44.1",
+      "unit": "kHz",
+      "source": "a2b_spec.txt",
+      "extraction_strategy": "spec_electrical_extract"
+    }
+  ],
+  "design_parameters": [],
+  "source_documents": [
+    "input/docs/a2b_spec.txt"
+  ],
+  "extraction_evidence": {},
+  "analog_digital_interface_present": true,
+  "signaling_summary": "The A2B line is a differential signal over a single unshielded twisted pair (~100 Ω). The main node drives the bus clock and superframe; each sub node recovers the clock from the line and re-times the signal. DC phantom power (bus power) is delivered on the same conductors as the AC-coupled differential audio/control signal, so a remote node can be powered entirely from the line. A2B is designed for low electromagnetic emissions in the automotive environment. The local node interfaces (I2S/TDM digital audio, I2C control) connect to local codecs / ADC-DAC / amplifiers, whose analog characteristics are separate from the A2B line itself."
+}

@@ -1,0 +1,85 @@
+{
+  "fields": {
+    "channels": [
+      {
+        "name": "ESPI_CLK",
+        "direction": "output (master)",
+        "purpose": "Common source-synchronous clock 20-66 MHz; idles low."
+      },
+      {
+        "name": "ESPI_IO0",
+        "direction": "bidirectional",
+        "purpose": "Command/response data lane 0 (Single/Dual/Quad)."
+      },
+      {
+        "name": "ESPI_IO1",
+        "direction": "bidirectional",
+        "purpose": "Data lane 1 (Dual/Quad); ALERT in single-slave dedicated mode."
+      },
+      {
+        "name": "ESPI_IO2",
+        "direction": "bidirectional",
+        "purpose": "Data lane 2 (Quad)."
+      },
+      {
+        "name": "ESPI_IO3",
+        "direction": "bidirectional",
+        "purpose": "Data lane 3 (Quad)."
+      },
+      {
+        "name": "ESPI_CS#",
+        "direction": "output (master)",
+        "purpose": "Active-low per-slave chip select."
+      },
+      {
+        "name": "ESPI_RESET#",
+        "direction": "output (master)",
+        "purpose": "Active-low reset to all slaves; min 100 us."
+      },
+      {
+        "name": "ESPI_ALERT#",
+        "direction": "input (from slave)",
+        "purpose": "Slave service-required alert."
+      }
+    ],
+    "global_signals": [],
+    "channel_counts": {
+      "physical_signals": 8,
+      "logical_channels": 4,
+      "io_lanes": 4
+    },
+    "handshake_pairs": {},
+    "dependency_graph": {
+      "common_rule": "VALID once asserted MUST remain asserted until READY also asserted on the same cycle",
+      "AXI_read": "ARVALID precedes RVALID; RVALID stays asserted until ARREADY accepted and final RLAST transferred"
+    },
+    "logical_channels": [
+      {
+        "id": 0,
+        "name": "Peripheral",
+        "purpose": "Memory/IO/message cycles (LPC-like)."
+      },
+      {
+        "id": 1,
+        "name": "Virtual Wire",
+        "purpose": "In-band tunneling of sideband signals."
+      },
+      {
+        "id": 2,
+        "name": "OOB",
+        "purpose": "Tunneled SMBus/MCTP messages."
+      },
+      {
+        "id": 3,
+        "name": "Flash Access",
+        "purpose": "Slave reads/writes the attached flash."
+      }
+    ]
+  },
+  "extraction_status": "EXTRACTION_FOUND_NOTHING",
+  "schema_version": "v0.1.62",
+  "doc_class": "L17",
+  "emitted_by": "phase1_protocol_spec_extract.extract_l17_channels v0.1.62",
+  "extraction_evidence": {},
+  "ic_name": "Enhanced Serial Peripheral Interface (eSPI)"
+}

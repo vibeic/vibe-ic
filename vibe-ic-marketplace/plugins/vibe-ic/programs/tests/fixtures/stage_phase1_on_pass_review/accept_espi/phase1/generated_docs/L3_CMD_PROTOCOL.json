@@ -1,0 +1,179 @@
+{
+  "schema_version": 2,
+  "doc_class": "cmd_protocol",
+  "ic_name": "Enhanced Serial Peripheral Interface (eSPI)",
+  "opcodes": [
+    {
+      "hex": "0x00",
+      "name": "PUT_PC",
+      "purpose": "Put a posted/completion Peripheral Channel transaction"
+    },
+    {
+      "hex": "0x01",
+      "name": "GET_PC",
+      "purpose": "Get a posted/completion Peripheral Channel transaction"
+    },
+    {
+      "hex": "0x04",
+      "name": "PUT_NP",
+      "purpose": "Put a non-posted Peripheral Channel transaction"
+    },
+    {
+      "hex": "0x02",
+      "name": "GET_NP",
+      "purpose": "Get a non-posted Peripheral Channel transaction"
+    },
+    {
+      "hex": "0x06",
+      "name": "PUT_IORD_SHORT",
+      "purpose": "Short (1/2/4 byte) I/O read"
+    },
+    {
+      "hex": "0x07",
+      "name": "PUT_IOWR_SHORT",
+      "purpose": "Short I/O write"
+    },
+    {
+      "hex": "0x08",
+      "name": "PUT_MEMRD32_SHORT",
+      "purpose": "Short 32-bit memory read"
+    },
+    {
+      "hex": "0x09",
+      "name": "PUT_MEMWR32_SHORT",
+      "purpose": "Short 32-bit memory write"
+    },
+    {
+      "hex": "0x10",
+      "name": "PUT_VWIRE",
+      "purpose": "Put Virtual Wire packet (Channel 1)"
+    },
+    {
+      "hex": "0x11",
+      "name": "GET_VWIRE",
+      "purpose": "Get Virtual Wire packet"
+    },
+    {
+      "hex": "0x12",
+      "name": "PUT_OOB",
+      "purpose": "Put OOB (tunneled SMBus) message (Channel 2)"
+    },
+    {
+      "hex": "0x13",
+      "name": "GET_OOB",
+      "purpose": "Get OOB message"
+    },
+    {
+      "hex": "0x14",
+      "name": "PUT_FLASH_C",
+      "purpose": "Put Flash Access completion (Channel 3)"
+    },
+    {
+      "hex": "0x15",
+      "name": "GET_FLASH_NP",
+      "purpose": "Get Flash Access non-posted request"
+    },
+    {
+      "hex": "0x20",
+      "name": "GET_STATUS",
+      "purpose": "Get the 16-bit slave STATUS register"
+    },
+    {
+      "hex": "0x21",
+      "name": "SET_CONFIGURATION",
+      "purpose": "Write a slave configuration register"
+    },
+    {
+      "hex": "0x22",
+      "name": "GET_CONFIGURATION",
+      "purpose": "Read a slave configuration register"
+    },
+    {
+      "hex": "0xFF",
+      "name": "RESET",
+      "purpose": "In-band reset"
+    }
+  ],
+  "no_opcodes_in_input": true,
+  "placeholder_opcode_count": 0,
+  "no_opcode_names_in_input": false,
+  "crc_parameters": {
+    "name": "CRC-8",
+    "width_bits": 8,
+    "polynomial_hex": "0x07",
+    "polynomial_expr": "x^8 + x^2 + x + 1",
+    "init_hex": "0x00",
+    "xorout_hex": "0x00",
+    "bit_order": "msb_first",
+    "refin": false,
+    "refout": false,
+    "coverage": "all command/response bytes except the CRC byte",
+    "optional": true,
+    "negotiated_via": "General Capabilities and Configuration register (offset 0x08): CRC Checking Enable bit0, CRC Checking Supported bit31",
+    "evidence": "Intel eSPI Base Specification Rev 1.5 §10 (CRC): polynomial 0x07 (x^8 + x^2 + x + 1), initial value 0x00"
+  },
+  "no_crc_parameters_in_input": false,
+  "verdict_byte_offset": null,
+  "verdict_byte_hex": null,
+  "no_verdict_byte_in_input": true,
+  "addr_max": null,
+  "len_max": null,
+  "payload_semantics": null,
+  "no_payload_semantics_in_input": true,
+  "opcode_synthesis_skipped_reason": "L2.protocol_overview.half_duplex is not True and no explicit opcode/command-table heading was found in input/docs/. Free-form hex bytes in prose, SVG labels, or PDF text do not constitute opcode evidence.",
+  "extraction_evidence": {
+    "input/docs/Intel_eSPI_Base_Specification.txt": [
+      {
+        "literal": "0x07",
+        "label": "CRC polynomial (extracted regex)"
+      },
+      {
+        "literal": "0x00",
+        "label": "CRC init"
+      }
+    ]
+  },
+  "protocol_type": "Command/response over shared serial bus; 8-bit opcode + fields + CRC; turnaround; 8-bit response code.",
+  "response_codes": [
+    {
+      "hex": "0x08",
+      "name": "ACCEPT",
+      "meaning": "Command accepted"
+    },
+    {
+      "hex": "0x01",
+      "name": "DEFER",
+      "meaning": "Non-posted command deferred; completion to follow"
+    },
+    {
+      "hex": "0x02",
+      "name": "NON_FATAL_ERROR",
+      "meaning": "Recoverable error"
+    },
+    {
+      "hex": "0x03",
+      "name": "FATAL_ERROR",
+      "meaning": "Unrecoverable error; link must re-init"
+    },
+    {
+      "hex": "0x04",
+      "name": "WAIT_STATE",
+      "meaning": "Slave inserts a wait state byte (0x0F nibble)"
+    },
+    {
+      "hex": "0x0C",
+      "name": "NO_RESPONSE",
+      "meaning": "Slave has no response (0xFF on bus)"
+    }
+  ],
+  "crc": {
+    "name": "CRC-8",
+    "poly_hex": "0x07",
+    "init_hex": "0x00",
+    "coverage": "all command/response bytes except the CRC byte; optional, negotiated"
+  },
+  "turnaround": "2 clock cycles bus float between command and response phases",
+  "addressing": "per-slave point-to-point ESPI_CS# select",
+  "byte_oriented": true,
+  "master_initiated": true
+}

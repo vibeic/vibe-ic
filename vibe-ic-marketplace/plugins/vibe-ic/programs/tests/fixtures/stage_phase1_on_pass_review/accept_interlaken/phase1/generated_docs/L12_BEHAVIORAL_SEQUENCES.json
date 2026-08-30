@@ -1,0 +1,38 @@
+{
+  "schema_version": 2,
+  "doc_class": "behavioral_sequences",
+  "ic_name": "Interlaken Protocol Definition",
+  "behavioral_sequences": [],
+  "no_behavioral_sequences_in_input": true,
+  "no_calibration": true,
+  "extraction_evidence": {
+    "derived_no_calibration_source": [
+      {
+        "literal": "no calibration / trim / OTP-cal source in input",
+        "label": "L12 no_calibration auto-set (#634 facet e) — absence-based, mirrors L5.no_analog"
+      }
+    ]
+  },
+  "transmit_sequence": [
+    "Protocol Layer segments the packet into bursts (bounded by BurstMax/BurstMin).",
+    "Emit a Burst Control Word with SOP, channel number and the flow-control calendar.",
+    "Emit the burst's Data Words.",
+    "Emit the Idle/Burst Control Word with EOP, EOP_Format (valid bytes 1..8) and CRC-24.",
+    "Framing Layer stripes words across the N lanes and scrambles each lane.",
+    "Insert the metaframe (Sync, Scrambler State, Skip, Diagnostic) every MetaFrameLength words.",
+    "64B/67B-encode each lane (bit 64 control/data, bit 65 scrambled, bit 66 inversion)."
+  ],
+  "receive_sequence": [
+    "Word-lock each lane on the Synchronization Word.",
+    "Synchronize the descrambler using the Scrambler State Word.",
+    "Deskew the bonded lanes on metaframe boundaries; absorb clock difference via Skip Words.",
+    "De-stripe words back into the ordered word stream.",
+    "Verify CRC-24 per burst and CRC-32 per lane (Diagnostic Word).",
+    "Reassemble bursts into packets using SOP / EOP / EOP_Format."
+  ],
+  "flow_control_sequence": [
+    "Each Control Word advances the per-channel XON/XOFF calendar.",
+    "XOFF on a channel back-pressures the far end for that channel.",
+    "XON re-enables transmission on that channel."
+  ]
+}

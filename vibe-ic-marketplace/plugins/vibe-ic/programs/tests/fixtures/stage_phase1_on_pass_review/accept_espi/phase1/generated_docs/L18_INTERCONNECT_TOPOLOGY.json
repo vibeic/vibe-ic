@@ -1,0 +1,42 @@
+{
+  "fields": {
+    "interconnect_rules": [],
+    "default_signal_values": {},
+    "typical_topologies": [
+      "ESPI_CS#[n]  - Active-low chip select, one per slave (point-to-point select)."
+    ],
+    "multi_copy_atomicity": {},
+    "axprot_polarity": null,
+    "id_routing": {
+      "description": "Interconnect may append bits to AxID to identify the originating master; slave-side ID_WIDTH > master-side ID_WIDTH",
+      "compliance_note": "Returning ID is the WIDER value; routing strips appended bits before returning to the master"
+    },
+    "topology_type": "Single master (PCH/chipset) to one or more slaves; shared ESPI_CLK + ESPI_IO[3:0]; per-slave ESPI_CS#.",
+    "supported_topologies": [
+      {
+        "name": "Single master, single slave",
+        "description": "PCH to one EC/BMC; ESPI_IO[1] may serve as ALERT (dedicated-alert mode)."
+      },
+      {
+        "name": "Single master, multiple slaves",
+        "description": "Shared bus; one ESPI_CS# per slave; ESPI_ALERT# shared (shared-alert mode)."
+      }
+    ],
+    "device_classification": {
+      "master": "Chipset / PCH",
+      "slaves": [
+        "EC",
+        "BMC",
+        "Super-I/O",
+        "Flash"
+      ]
+    },
+    "replaces": "Low Pin Count (LPC) parallel sideband wiring"
+  },
+  "extraction_status": "EXTRACTED",
+  "schema_version": "v0.1.62",
+  "doc_class": "L18",
+  "emitted_by": "phase1_protocol_spec_extract.extract_l18_interconnect v0.1.62",
+  "extraction_evidence": {},
+  "ic_name": "Enhanced Serial Peripheral Interface (eSPI)"
+}

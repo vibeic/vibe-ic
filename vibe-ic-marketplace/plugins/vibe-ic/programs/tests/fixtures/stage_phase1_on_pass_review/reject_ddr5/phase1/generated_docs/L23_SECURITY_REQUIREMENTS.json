@@ -1,0 +1,69 @@
+{
+  "doc_id": "L23",
+  "doc_name": "L23_SECURITY_REQUIREMENTS",
+  "applicability": "APPLICABLE",
+  "ic_class": "pure_analog",
+  "fields": {
+    "key_handling": {},
+    "attack_surface": [],
+    "side_channel_mitigation": [],
+    "secure_boot": false,
+    "security_requirements_present": false,
+    "notes": "DDR5 is a JEDEC DRAM interface: its built-in protections are anti-corruption / reliability (on-die ECC, ECS, write CRC, CA parity, refresh management) rather than security. Data on the bus is plaintext; confidentiality and authentication are provided by host-side memory-encryption engines above the DDR5 transport, not by the base protocol.",
+    "ic_name": "DDR5 SDRAM (JEDEC JESD79-5)",
+    "security_summary": "HBM3 is a DRAM memory standard; it provides no confidentiality (encryption), authentication, or access control at the protocol layer — stored data is plaintext. Its security-adjacent features are reliability/integrity mechanisms: on-die ECC, link ECC, command/address parity, RAS error reporting, soft-repair, and refresh management (RFM) bounding row-hammer-class disturbance.",
+    "security_features_at_protocol_level": [
+      {
+        "feature": "On-die ECC",
+        "purpose": "Detect/correct array errors transparently; integrity, not confidentiality."
+      },
+      {
+        "feature": "Link ECC",
+        "purpose": "Protect data on the channel against transmission errors."
+      },
+      {
+        "feature": "Command/address parity",
+        "purpose": "Detect corruption of commands/addresses on the R/C buses."
+      },
+      {
+        "feature": "Refresh Management (RFM)",
+        "purpose": "Bound row-hammer-class disturbance, mitigating a known DRAM fault-injection class."
+      },
+      {
+        "feature": "Soft-repair / hard-repair",
+        "purpose": "Map out failing cells for reliability; not an access-control feature."
+      },
+      {
+        "feature": "RAS alert/error reporting",
+        "purpose": "Surface uncorrectable/severe errors to the host for serviceability."
+      }
+    ],
+    "no_confidentiality": "No on-die encryption of stored data; payload is plaintext. Memory encryption is implemented by the host SoC, not by HBM3.",
+    "no_authentication": "No device-to-host cryptographic authentication at the protocol layer.",
+    "no_access_control": "No per-region access control / protection keys at the protocol layer; access control is a host/SoC responsibility.",
+    "rowhammer_class_vulnerabilities": "DRAM is subject to row-hammer-class disturbance; HBM3's mandatory Refresh-Management (RFM) and adaptive refresh are the standard's mitigation, complementing host-level mitigations.",
+    "comparison_to_sibling_standards": "Like DDR/LPDDR DRAM, HBM3 leaves confidentiality and authentication to the host; HBM3 strengthens the integrity/reliability side (on-die + link ECC, parity, RFM, RAS) relative to HBM2/HBM2E for data-center use.",
+    "anti_corruption_features": [
+      "On-die ECC corrects single-bit errors inside every DDR5 device.",
+      "Error Check and Scrub (ECS) scrubs accumulated single-bit errors.",
+      "Optional write-data CRC detects write corruption (ALERT_n).",
+      "Command/Address parity detects CA-bus corruption (ALERT_n).",
+      "Refresh management (RFM) bounds row-hammer / refresh-stress effects."
+    ],
+    "anti_tampering_features": [],
+    "confidentiality_features": [],
+    "authentication_features": [],
+    "future_security_pointers": [
+      "DDR5's base data path carries no cryptographic confidentiality or authentication; on-die ECC, write CRC, and CA parity are anti-corruption only.",
+      "Memory encryption / integrity (e.g. host-side total-memory-encryption engines) and refresh-management mitigations against row-hammer are layered above or alongside the DDR5 transport."
+    ]
+  },
+  "extraction_hints": [
+    "Look for key-management, side-channel, secure-boot sections.",
+    "Capture attack surface enumeration."
+  ],
+  "extraction_status": "NOT_YET_EXTRACTED",
+  "emitted_by": "phase1_post_process.emit_l_doc_skeleton v0.1.51",
+  "extraction_evidence": {},
+  "ic_name": "DDR5 SDRAM (JEDEC JESD79-5)"
+}

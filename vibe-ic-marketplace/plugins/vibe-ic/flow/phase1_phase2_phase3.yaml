@@ -91,6 +91,85 @@ stages:
   # external authoring path (e.g. the runner's dialogue mode).
   - id: stage_phase1
     name: "Phase 1 - Spec Extraction (input → L1-L27 structured JSON)"
+    # ON-PASS REVIEW (the verification tier, second stage wired — stage1 was
+    # first, v1.12.87; stage2 v1.13.2; stage3 v1.13.4)
+    # ------------------------------------------------------------------
+    # THE GAP THIS CLOSES WAS RECORDED IN THIS FILE, at step D1:
+    # "`phase1-output-verify` and `phase1-completeness-deep-review` both ship,
+    # both say in their own descriptions that they run 'After
+    # phase1_one_shot_runner emits L*.json', and neither is named by any stage
+    # -- so stage_phase1 has no declared on-pass review ... They belong in an
+    # `on_pass_review:` block on stage_phase1." This is that block.
+    #
+    # WHY THIS STAGE. Its artefact is the flow's FIRST translation: every
+    # later stage transforms an upstream artefact and is checked against it
+    # (stage2 checks the netlist against the RTL, stage3 checks the layout
+    # against the netlist and the PDK), but the L-docs are checked against a
+    # DOCUMENT, and a document is not machine-comparable. So a value that
+    # phase 1 gets wrong is not wrong anywhere downstream: the RTL implements
+    # it, the oracle is derived from the same L-doc, and spec-conformance
+    # compares the design with the same number and passes. The wrong value is
+    # carried to GDS by every gate doing its job correctly.
+    #
+    # WHAT THIS REVIEW READS. The INTENT is the design INPUT — the input
+    # documents, and the text of them the flow itself ingested. The ARTEFACT
+    # is `phase1/generated_docs/`. It re-derives NOTHING: it does not re-run
+    # the extractor, opens no tool and starts no process. It reads a claim the
+    # artefact makes ABOUT the input, and checks it against the input.
+    #
+    # THREE RULES, THREE CLAIMS, ONE BLOCK. The doctrine is one `on_pass_review`
+    # per stage, so the three rules that were authored for this stage in two
+    # separate PRs (#1845 and #1854) are declared here together. They read
+    # disjoint claims: R1_CITED_CONSTANT_NOT_IN_ITS_SOURCE asks whether a
+    # quoted hexadecimal CONSTANT occurs in the document cited for it;
+    # R2_TOP_MODULE_PROVENANCE_REFUTED asks whether the declared TOP MODULE
+    # NAME came from the input or its declared source; R1_CITED_INPUT_ABSENT
+    # asks whether the cited SOURCE FILE is a file this run contains at all.
+    #
+    # WHY `phase1/input_doc/` IS INTENT AND NOT ARTEFACT. It is the input
+    # document's text as `doc_extract` produced it, and it is the ONLY
+    # readable form of an input shipped as a PDF. The plugin's anti-fabrication
+    # program `phase1_evidence_grounding_check` already reads exactly this
+    # ladder for exactly this purpose — by hand: MEASURED on v1.12.99, it
+    # appears in no gate clause in this file, so the only mention of it here is
+    # this sentence. The scope limit that follows from reading an extracted
+    # text is stated rather than implied: if the extraction is wrong, this
+    # review cannot see it — that belongs to `doc_extract` and
+    # `binary_doc_low_extraction_warn`, not here.
+    #
+    # BLOCKING vs ADVISORY, declared here and not by the reviewer. ADVISORY:
+    # the review reports and exits 1 on a rejection; the executable test it
+    # emits into the run is what blocks. Flipping this to `blocking` is a
+    # one-word edit here and needs no reviewer change.
+    on_pass_review:
+      skill: phase1-output-verify
+      fires_on: stage_pass
+      verdict: advisory
+      # THE DESIGN INPUT, at every staged entry point this flow's own D1 step
+      # declares under `from: external`. It is the INTENT: what the L-docs are
+      # a translation OF, and the set a provenance claim has to resolve into.
+      # Path A (`input_doc/`) and Path B (`input_prompt/`) are BOTH named —
+      # a citation into the dialogue path is a citation into the design input.
+      # Path A (`input_doc/`) and Path B (`input_prompt/`) are BOTH named —
+      # a citation into the dialogue path is a citation into the design input,
+      # and R1_CITED_INPUT_ABSENT resolves a claimed source against this list.
+      intent:
+        - "input/docs/"
+        - "phase1/input_doc/"
+        - "input_doc/"
+        - "phase1/input_prompt/"
+        - "input/phase1_prompt.md"
+        - "input/phase1_structured.yaml"
+      intent_deny: ["oracle", "harness", "golden", "reference_output", "solution"]
+      artefact:
+        - "phase1/generated_docs/"
+      rejection_requires: [intent, artefact, contradiction, test]
+      # The run's own regression, written beside phase 1's other evidence —
+      # red until the run is repaired. See stage1's block for why a test that
+      # must fail today cannot live in the plugin's own suite.
+      emit_test_dir: "reports/phase1/gates/on_pass_review"
+      gate:
+        program_exit_zero: "stage_on_pass_review . --stage stage_phase1 --json reports/phase1/gates/stage_phase1_on_pass_review.json"
 
   - id: stage1
     name: "RTL Generation + Verification"
@@ -512,10 +591,11 @@ steps:
     #
     # ONLY `phase1` REMAINS, and the two obvious additions are DELIBERATELY NOT
     # MADE HERE. `phase1-output-verify` and `phase1-completeness-deep-review`
-    # both ship, both say in their own descriptions that they run "After
-    # phase1_one_shot_runner emits L*.json", and neither is named by any stage
-    # -- so stage_phase1 has no declared on-pass review. But they are
-    # VERIFICATION-tier reviewers, and v1.12.87 ruled on exactly this key:
+    # both ship and both say in their own descriptions that they run "After
+    # phase1_one_shot_runner emits L*.json". `phase1-output-verify` is now named
+    # by stage_phase1's `on_pass_review:` block above; neither belongs in this
+    # failure-triggered list. They are VERIFICATION-tier reviewers, and
+    # v1.12.87 ruled on exactly this key:
     # "`skills:` is a STEP field, and its meaning at every one of its sites is
     # 'invoke this when the step could not, or when the step failed' ...
     # Re-using the key for the opposite trigger would give one key two

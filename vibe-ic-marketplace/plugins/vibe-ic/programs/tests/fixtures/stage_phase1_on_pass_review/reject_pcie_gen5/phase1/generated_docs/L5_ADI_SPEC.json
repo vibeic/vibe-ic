@@ -1,0 +1,199 @@
+{
+  "schema_version": 2,
+  "doc_class": "adi_spec",
+  "ic_name": "PCI Express 5.0 (PCI-SIG Base Specification Rev 5.0)",
+  "applicability": "NOT_APPLICABLE",
+  "applicability_reason": "no analog blocks detected in the input documents — digital-only IC; the analog interface spec layer is not applicable and is intentionally left empty",
+  "analog_blocks_detected": false,
+  "analog_blocks": [],
+  "no_analog": true,
+  "external_components": [],
+  "electrical_specs": [
+    {
+      "param": "FREQ",
+      "parameter": "clock_frequency",
+      "value": "133.0",
+      "unit": "MHz",
+      "source": "pcie_gen5_spec.pdf",
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "VDD",
+      "parameter": "supply_voltage",
+      "value": "5.0",
+      "unit": "V",
+      "source": "pcie_gen5_spec.pdf",
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "VDD",
+      "parameter": "supply_voltage",
+      "value": "12.0",
+      "unit": "V",
+      "source": "pcie_gen5_spec.pdf",
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "VDD",
+      "parameter": "supply_voltage",
+      "value": "3.3",
+      "unit": "V",
+      "source": "pcie_gen5_spec.pdf",
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "VDD",
+      "parameter": "supply_voltage",
+      "value": "48.0",
+      "unit": "V",
+      "source": "pcie_gen5_spec.pdf",
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "VDD",
+      "parameter": "supply_voltage",
+      "value": "1.5",
+      "unit": "V",
+      "source": "pcie_gen5_spec.pdf",
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "IDD",
+      "parameter": "current_spec",
+      "value": "3.0",
+      "unit": "A",
+      "source": "pcie_gen5_spec.pdf",
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "IDD",
+      "parameter": "current_spec",
+      "value": "0.5",
+      "unit": "A",
+      "source": "pcie_gen5_spec.pdf",
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "IDD",
+      "parameter": "current_spec",
+      "value": "2.1",
+      "unit": "A",
+      "source": "pcie_gen5_spec.pdf",
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "IDD",
+      "parameter": "current_spec",
+      "value": "5.5",
+      "unit": "A",
+      "source": "pcie_gen5_spec.pdf",
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "IDD",
+      "parameter": "current_spec",
+      "value": "15.0",
+      "unit": "A",
+      "source": "pcie_gen5_spec.pdf",
+      "extraction_strategy": "spec_electrical_extract"
+    }
+  ],
+  "design_parameters": [],
+  "source_documents": [
+    "input/docs/pcie_gen5_spec.pdf"
+  ],
+  "extraction_evidence": {},
+  "class_path": "digital_cmd_driven",
+  "analog_digital_interface_present": true,
+  "signaling_summary": "Per-Lane low-voltage differential signaling on TXp/TXn and RXp/RXn pairs, NRZ (two-level), at 32 GT/s per Lane per direction (Gen5). Both ends are AC-coupled. Gen5 mandates a four-phase enhanced transmitter-equalization handshake (Phase 0-3) with preset hints, supports optional transmitter precoding, allows up to two protocol-aware retimers per link, and mandates Lane Margining at the Receiver. Encoding is 128b/130b; the embedded clock is recovered by the receiver CDR from the scrambled block stream.",
+  "transmitter_specs_minimum_canonical": {
+    "unit_interval_ns_nominal": 0.4,
+    "line_rate_GT_s": 2.5,
+    "differential_pp_voltage_V": {
+      "typical": 0.8,
+      "nominal_low": 0.4,
+      "nominal_high": 1.2,
+      "note": "specified as differential peak-to-peak; ≈ 800 mV typical"
+    },
+    "common_mode_voltage_V": 0.5,
+    "ac_coupling_required": true,
+    "de_emphasis_dB": -3.5,
+    "output_impedance_ohm": {
+      "differential": 100,
+      "single_ended": 50
+    },
+    "transmitter_disabled_state": "Electrical Idle — differential output transitions to undriven, common-mode held."
+  },
+  "receiver_specs_minimum_canonical": {
+    "differential_pp_voltage_V_min": 0.175,
+    "differential_pp_voltage_V_max": 1.2,
+    "input_impedance_ohm": {
+      "differential": 100,
+      "single_ended": 50
+    },
+    "ac_coupled_input": true,
+    "electrical_idle_detect_required": true,
+    "elastic_buffer_required": true,
+    "rx_eye_height_V_min": 0.175,
+    "rx_eye_width_UI_min": 0.4
+  },
+  "beacon_signaling": {
+    "purpose": "Wake the Link from L2 (deep sleep) when REFCLK is OFF.",
+    "frequency_range": "30 kHz to 500 MHz (modulated pulses)",
+    "coupling": "AC-coupled through ~75 nF capacitor",
+    "example": "A 30 kHz BEACON signal includes 2 ns pulses through a 75 nF capacitor (per Figure 4-31)."
+  },
+  "electrical_idle": {
+    "definition": "Differential transmitter output is undriven (high impedance or driven to common mode); no symbol stream produced.",
+    "indicated_by": "EIOS (Electrical Idle Ordered Set) before the transmitter enters Electrical Idle.",
+    "exit_indication": "EIEOS or FTS Ordered Sets, depending on the LTSSM exit state."
+  },
+  "voltage_classes": [
+    "Differential pp ≥ 0.8 V at TX nominal Gen 1",
+    "Differential pp ≥ 0.175 V at RX minimum (after channel loss)",
+    "DC common mode 0.5 V nominal at TX",
+    "Receiver tolerates different DC common mode than TX due to AC coupling"
+  ],
+  "8b_10b_role_in_analog": "The 8b/10b code provides DC balance and guaranteed transition density so the receiver's clock-data-recovery (CDR) loop can lock; the special K-codes (notably COM K28.5) provide the symbol-alignment marker.",
+  "modulation": "NRZ (two-level). PAM4 is NOT used at Gen5 (it is a PCIe 6.0 feature).",
+  "transmitter_specs_canonical": {
+    "line_rate_GT_s": 32.0,
+    "unit_interval_ps_nominal": 31.25,
+    "modulation": "NRZ",
+    "encoding": "128b/130b",
+    "ac_coupling_required": true,
+    "equalization": "Four-phase enhanced equalization (Phase 0, 1, 2, 3) with transmitter coefficient / preset exchange.",
+    "preset_hints": "Transmitter equalization presets P0-P10.",
+    "precoding": "Optional transmitter precoding to reduce DFE burst-error propagation at 32 GT/s.",
+    "transmitter_disabled_state": "Electrical Idle"
+  },
+  "receiver_specs_canonical": {
+    "line_rate_GT_s": 32.0,
+    "ac_coupled_input": true,
+    "ctle_dfe": "CTLE + DFE required to open the eye at 32 GT/s.",
+    "lane_margining_at_receiver": "Mandatory. Steps the receiver sampling point in time (left/right) and optionally voltage (up/down) and reports the error rate, exposing each lane's eye margin while in L0 without interrupting traffic.",
+    "electrical_idle_detect_required": true,
+    "elastic_buffer_required": true
+  },
+  "retimers": {
+    "max_per_link": 2,
+    "definition": "A protocol-aware PHY extension device that recovers clock and data, re-equalizes, and retransmits to extend electrical channel reach.",
+    "max_introduced": "The two-retimer maximum was introduced in PCIe 4.0 and carried into PCIe 5.0.",
+    "equalization_participation": "Each retimer participates in the Phase 0-3 equalization handshake (adds latency).",
+    "vs_redriver": "A retimer is a clean-and-retime digital repeater; a redriver is an analog amplifier only."
+  },
+  "equalization_phases": {
+    "Phase_0": "Initial preset exchange; partners + retimers adopt the requested transmitter preset.",
+    "Phase_1": "Coefficient fine-tuning toward the training direction.",
+    "Phase_2": "Downstream port adjusts upstream port TX coefficients.",
+    "Phase_3": "Upstream port adjusts downstream port TX coefficients; eye must be open before sustaining 32 GT/s."
+  },
+  "lane_margining": {
+    "mandatory": true,
+    "scope": "At the Receiver, in L0, without interrupting traffic.",
+    "time_margining": "Steps the sampling point left/right and reports error count.",
+    "voltage_margining": "Optionally steps the threshold up/down and reports error count.",
+    "transport": "Carried in the Lane Margining at the Receiver registers / margining control-skip ordered sets."
+  },
+  "encoding_role_in_analog": "The 128b/130b code (scrambled payload + 2-bit sync header) provides DC balance and transition density for the receiver CDR; precoding additionally limits how far a single DFE decision error can propagate as a burst at 32 GT/s."
+}

@@ -1,0 +1,64 @@
+{
+  "schema_version": 2,
+  "doc_class": "regmap",
+  "ic_name": "Enhanced Serial Peripheral Interface (eSPI)",
+  "registers": [
+    {
+      "offset": "0x04",
+      "name": "Device Identification",
+      "desc": "eSPI version in bits 7:0"
+    },
+    {
+      "offset": "0x08",
+      "name": "General Capabilities and Configuration",
+      "desc": "CRC enable (bit0), I/O mode supported (bits2:1), I/O mode select (bit3), operating frequency (bits7:4), CRC supported (bit31)"
+    },
+    {
+      "offset": "0x10",
+      "name": "Channel 0 Capabilities (Peripheral)",
+      "desc": "bit0 Channel Enable, bit1 Channel Ready"
+    },
+    {
+      "offset": "0x20",
+      "name": "Channel 1 Capabilities (Virtual Wire)",
+      "desc": "bit0 Channel Enable, bit1 Channel Ready"
+    },
+    {
+      "offset": "0x30",
+      "name": "Channel 2 Capabilities (OOB)",
+      "desc": "bit0 Channel Enable, bit1 Channel Ready"
+    },
+    {
+      "offset": "0x40",
+      "name": "Channel 3 Capabilities (Flash Access)",
+      "desc": "bit0 Channel Enable, bit1 Channel Ready"
+    }
+  ],
+  "no_registers_in_input": true,
+  "otp_layout": null,
+  "no_otp_layout_in_input": true,
+  "otp_ip_macro": {},
+  "internal_registers": [],
+  "extraction_evidence": {
+    "input/docs/Intel_eSPI_Base_Specification.txt": []
+  },
+  "register_map_present": true,
+  "base_address": "Defined at SoC level; offsets given relative to module base.",
+  "notes": "Module memory map per spec. Reads from reserved bits return zeros and writes to reserved bits have no effect.",
+  "status_register": {
+    "width_bits": 16,
+    "bits": {
+      "0": "PC_FREE",
+      "1": "NP_FREE",
+      "2": "VWIRE_FREE",
+      "3": "OOB_FREE",
+      "4": "PC_AVAIL",
+      "5": "NP_AVAIL",
+      "6": "VWIRE_AVAIL",
+      "7": "OOB_AVAIL",
+      "8": "FLASH_C_AVAIL",
+      "9": "FLASH_NP_AVAIL",
+      "15:10": "Reserved"
+    }
+  }
+}

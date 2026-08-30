@@ -1,0 +1,153 @@
+{
+  "schema_version": 2,
+  "doc_class": "control_logic",
+  "ic_name": "PCI Express 5.0 (PCI-SIG Base Specification Rev 5.0)",
+  "reject_rules": [],
+  "fsm_states": [],
+  "pipeline_stages": [],
+  "no_pipeline_stages_in_input": true,
+  "no_fsm_states_in_input": true,
+  "no_fsm_in_input": true,
+  "fsm_tokens": [],
+  "extraction_evidence": {
+    "input/docs/pcie_gen5_spec.pdf": []
+  },
+  "class_path": "digital_cmd_driven",
+  "fsm_states_ltssm": [
+    {
+      "name": "Detect",
+      "description": "Initial state after PERST# deassertion or unrecoverable Link error. Detect.Quiet → Detect.Active sub-states. Transmitter looks for a far-end receiver via differential detect circuitry."
+    },
+    {
+      "name": "Polling",
+      "description": "Bit-lock + symbol-lock + Lane polarity inversion + Link / Lane number exchange. Sub-states: Polling.Active, Polling.Configuration, Polling.Compliance, Polling.Speed (Gen 1 stays at 2.5 GT/s)."
+    },
+    {
+      "name": "Configuration",
+      "description": "Link Width and Lane Number negotiation. Sub-states: Configuration.Linkwidth.Start, Configuration.Linkwidth.Accept, Configuration.Lanenum.Wait, Configuration.Lanenum.Accept, Configuration.Complete, Configuration.Idle."
+    },
+    {
+      "name": "L0",
+      "description": "Normal operational state. TLPs and DLLPs flow in both directions; SKP ordered sets inserted every 1180-1538 symbols for clock-tolerance compensation."
+    },
+    {
+      "name": "L0s",
+      "description": "Low-power state that can be entered + exited individually on TX or RX direction. Fast exit via FTS (Fast Training Sequence) ordered sets."
+    },
+    {
+      "name": "L1",
+      "description": "Lower-power state requiring both directions in agreement. Slower exit than L0s; goes through Recovery.RcvrLock then Recovery.RcvrCfg then L0."
+    },
+    {
+      "name": "L2",
+      "description": "Deep sleep; REFCLK may be off; main-power may remain. Re-entry requires Beacon (or WAKE# at system level) and a full LTSSM restart from Detect."
+    },
+    {
+      "name": "Recovery",
+      "description": "Re-train an already-trained Link without going through full Detect/Polling/Configuration. Used to clear errors and to enter L0s/L1. Sub-states: Recovery.RcvrLock, Recovery.RcvrCfg, Recovery.Idle, Recovery.Speed (future)."
+    },
+    {
+      "name": "Loopback",
+      "description": "Test mode; Loopback Master transmits patterns to Loopback Slave, which retransmits them back. Used for production test and debug."
+    },
+    {
+      "name": "Disabled",
+      "description": "Transmitter outputs Electrical Idle on all Lanes; Link is electrically off. Re-entry to active state requires a state-machine reset or PERST# cycle."
+    },
+    {
+      "name": "Hot Reset",
+      "description": "Software-initiated reset; goes from L0/Recovery to Detect after transmitting TS1 with Hot Reset bit set."
+    }
+  ],
+  "fsm_states_data_link_layer": [
+    {
+      "name": "DL_Inactive",
+      "description": "Reported when LTSSM is not in L0 / L0s / L1 / Recovery; Transaction Layer sees the Link as unusable."
+    },
+    {
+      "name": "DL_Init",
+      "description": "Flow Control initialization phase (InitFC1 → InitFC2 DLLP exchange) on VC0."
+    },
+    {
+      "name": "DL_Active",
+      "description": "Normal operation; TLP send/receive + ACK/NAK + UpdateFC."
+    }
+  ],
+  "fsm_states_tlp_transmitter": [
+    {
+      "name": "TX_FORM",
+      "description": "Transaction Layer assembles the TLP header + payload + (optional) ECRC."
+    },
+    {
+      "name": "TX_SEQ",
+      "description": "Data Link Layer attaches the next Sequence Number and computes the 16-bit LCRC."
+    },
+    {
+      "name": "TX_FRAME",
+      "description": "Physical Layer 8b/10b-encodes the bytes, prepends STP, appends END (or EDB for nullified)."
+    },
+    {
+      "name": "TX_RETRY",
+      "description": "Retry Buffer holds every transmitted TLP until acked. On NAK or REPLAY_TIMER expiration, replay starting from the first un-acked sequence number."
+    }
+  ],
+  "fsm_states_tlp_receiver": [
+    {
+      "name": "RX_DECODE",
+      "description": "Physical Layer detects STP, captures the TLP bytes between STP and END, 8b/10b-decodes them."
+    },
+    {
+      "name": "RX_LCRC",
+      "description": "Data Link Layer recomputes the 16-bit LCRC + verifies Sequence Number monotonicity."
+    },
+    {
+      "name": "RX_ACKNAK",
+      "description": "If LCRC + Sequence are good, schedule an Ack DLLP; else NAK with the last good Sequence Number."
+    },
+    {
+      "name": "RX_TL",
+      "description": "Hand the TLP to Transaction Layer for type-specific processing (Memory / I/O / Configuration / Message)."
+    }
+  ],
+  "fsm_hints": {
+    "trigger": "PERST# deassertion triggers Detect; TS1/TS2 with the Data Rate Identifier (32.0 GT/s bit) selects Gen5; Recovery.Equalization runs the Phase 0-3 enhanced equalization before sustaining 32 GT/s.",
+    "rule": "Each transmitted TLP is added to the Retry Buffer; freed when an Ack for that-or-later Sequence arrives; NAK / REPLAY_TIMER triggers replay.",
+    "abort": "REPLAY_NUM threshold crossing or failed equalization at 32 GT/s declares the rate/link unrecoverable; the link falls back via Recovery to a lower data rate."
+  },
+  "anti_deadlock_rule": "Credit-based flow control (six credit types PH/PD/NPH/NPD/CplH/CplD) eliminates retries due to receiver buffer overflow; Completion credits are infinite at the Root Complex side to avoid deadlock with Non-Posted Requests. Unchanged from base PCIe.",
+  "exit_from_reset_or_poweron": "PERST# deassertion → LTSSM Detect → Polling → Configuration → L0 (initially at 2.5 GT/s for backward-compatible bring-up). The link then enters Recovery to negotiate the highest common rate; if both ends advertise 32.0 GT/s, Recovery.Equalization runs the four-phase enhanced equalization (with preset hints and any retimers) before settling at 32 GT/s in L0. Flow Control init unblocks the Transaction Layer.",
+  "default_ready_state_recommendation": {
+    "TX_idle": "Electrical Idle when no symbols to send and not in L0.",
+    "TX_L0": "Continuously transmit scrambled Logical Idle in 128b/130b Data Blocks when in L0 with no TLP/DLLP pending; SKP ordered sets inserted for clock-tolerance and margining control.",
+    "RX_idle": "Receiver decoders idle (or low-power) when in L0s/L1/L2; wake on FTS / Recovery / Beacon."
+  },
+  "configurations": [
+    {
+      "name": "x1 Link",
+      "description": "1 Lane per direction; simplest, lowest-bandwidth (2.5 GT/s = ~2 Gb/s effective per direction)."
+    },
+    {
+      "name": "x2 / x4 / x8 / x12 / x16 / x32 Link",
+      "description": "Aggregated Lanes; data bytes striped Lane-by-Lane starting at Lane 0. STP / SDP must be placed on Lane 0."
+    }
+  ],
+  "timing_dependency_rule": "Each Lane runs its own 32 GT/s symbol clock recovered locally (NRZ, 31.25 ps UI). Multi-Lane Links require a de-skew elastic buffer; the Physical Layer inserts SKP ordered sets to absorb ±300 ppm clock-tolerance and to carry margining control. Up to two retimers per link each add latency and participate in equalization.",
+  "fsm_states_equalization": [
+    {
+      "name": "EQ_PHASE_0",
+      "description": "Initial preset exchange; link partners (and retimers) adopt the requested transmitter preset (P0-P10)."
+    },
+    {
+      "name": "EQ_PHASE_1",
+      "description": "Coefficient handshake establishing a usable eye in the training direction."
+    },
+    {
+      "name": "EQ_PHASE_2",
+      "description": "Downstream port requests adjustments to the upstream port's transmitter coefficients."
+    },
+    {
+      "name": "EQ_PHASE_3",
+      "description": "Upstream port requests adjustments to the downstream port's transmitter coefficients; the eye must be open before sustaining 32 GT/s."
+    }
+  ]
+}
