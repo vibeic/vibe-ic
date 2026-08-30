@@ -456,10 +456,17 @@ B2_VALIDATION="$RUN/b2-arm-validation.json"
 # The enclosing test-arm lease starts earlier and is deliberately 30 s longer:
 # ordinary inner shutdown policy is 2 s TERM + 1 s KILL confirmation, followed
 # by terminal publication.  A pathological uninterruptible child may still
-# exhaust the outer lease and remains NORECORD.  A2/B2 do no pytest collection
-# and retain their existing 300 s contract.
+# exhaust the outer lease and remains NORECORD.
+# A2/B2 skip the duplicate targeted pytest, but they do NOT have a 300-second
+# checkpoint contract.  The concurrent landing window deliberately joins every
+# lane and performs write attribution before publishing its first unit, and the
+# later gatekeeper review has its own 1800-second no-verdict budget.  PR #1920
+# measured the old outer lease expiring at 15/25 while those inner instruments
+# were still running normally.  Give the landing arm the longest inner semantic
+# budget plus the same 30-second publication margin.  This is still a SILENCE
+# lease, never a PASS inferred from elapsed time: expiry remains NORECORD.
 TEST_ARM_SEMANTIC_STALL_GRACE=630
-LANDING_ARM_SEMANTIC_STALL_GRACE=300
+LANDING_ARM_SEMANTIC_STALL_GRACE=1830
 # PER-RUN ref names. Two verifications of two different PRs may legitimately be
 # in flight at once (the merge queue is serialized; a gatekeeper reading ahead is
 # not), and a fixed `refs/gk-verify/head` would have had each run fetching over
