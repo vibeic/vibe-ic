@@ -264,9 +264,9 @@ _LANDING_LANE_SHA256 = {
     "run_pytest":
         "e73a1cf7e3f5071ee73e1847343d154b4032683eea9106b6a46b41bafb4ab816",
     "run_repo_tools_pytest":
-        "6988862ad90e1fe5aff44baf6f23b6704f75dae873f2dd497bf8b71efde4989a",
+        "b4dda37adc8140716b5d863e1eb54bfcf4d2383510d45d80f4814fc1c21ae344",
     "run_unselectable_pytest":
-        "0e0b8290e80cf1b83bd402d176c0ce55afcce14cbf57935c8c6d0a64f93f63ab",
+        "dc4927bab39a82adb221e38b38b6b3638dd96a5951572904fe49b2acf1af4c33",
 }
 # Entry-to-last-lane control flow is reviewed as one indivisible contract.
 # Hashing only the three function definitions is insufficient: their exact
@@ -295,7 +295,7 @@ _LANDING_LANE_SHA256 = {
 #: them, the launcher, the window, and everything before them.
 _LANDING_WINDOW_ANCHOR = "lane_emit_window"
 _LANDING_EXECUTION_PREFIX_SHA256 = (
-    "2f498cdb16203af5e7fb6cca6fb202f226d2e90f334c535b01131c9519022e55"
+    "838ebe07aee10e3f79e84e3a8c52fe34760008b3ade30c49946e2643eb7f0ee3"
 )
 # RE-PINNED when the landing gained its runtime PREFLIGHT. Both digests below
 # moved for one reason and it is stated here rather than left to `git log`: the
@@ -571,8 +571,36 @@ _LANDING_EXECUTION_PREFIX_SHA256 = (
 # refused — failing to publish can only ever make a push harder, which is the
 # safe direction rather than a tolerance. `-B` suppresses a write and decides no
 # verdict. Neither can move a landing's answer.
+# RE-PINNED 2026-08-30 (second time today), for the DURABLE-JUNIT fix in the
+# repo-tools and unselectable lanes. FOUR of the six digests moved and ALL FOUR
+# are re-pinned here; the two that did not move — `run_pytest`'s lane body and
+# `_SEMANTIC_DRIVER_SHA256` — are not touched. ENUMERATED FROM THIS FILE'S OWN
+# SLICING CODE, not from the diff: the diff shows one edited file, and this gate
+# is a conjunction over six faces, so three of four re-pinned is the same as
+# none. Every value below was read back out of this check's own error text over
+# the tree being shipped, never hand-transcribed.
+#
+# WHAT MOVED: `run_repo_tools_pytest` and `run_unselectable_pytest` each merged
+# a complete per-file JUnit and then `rm -f`'d it unconditionally, so in a `--rm`
+# container every run destroyed the only copy of the case names it had just
+# spent ~46 minutes computing. Each lane now honours a path variable —
+# `GATEKEEPER_REPO_TOOLS_JUNIT` / `GATEKEEPER_UNSELECTABLE_JUNIT` — exactly as
+# `run_pytest` has always honoured `GATEKEEPER_PYTEST_JUNIT`: unset, the merge
+# target is still a `mktemp` and is still removed; set, the target is removed
+# UP FRONT so a dead run leaves no stale report, and the temporary removal at
+# the end no longer deletes the operator's file.
+#
+# Because both lane bodies sit inside the execution prefix, this moved the two
+# lane digests, the prefix AND the whole-file digest — four faces for one edit,
+# which is the arithmetic this gate exists to force.
+#
+# NOTHING ABOUT SUPERVISION MOVED: same three populations, same driver, same
+# `--stall-after`, same `--aggregate-check`, same no-ceiling contract, same
+# write guard, same `--junit` argument on every path. `rc` still decides both
+# lines; the variables can only ADD a readable record, and `test_landing_merge_verdict`
+# asserts that for all three by name.
 _LANDING_SCRIPT_SHA256 = (
-    "9e030aae03aef20b3159924d7a7a1edcf8b6ee0db6f0e40d0f9256d910134239"
+    "adc43b73d10c80fe8b8d6321da2c7c46c6862c41e7852e6c9480c8f40e6b1c54"
 )
 # The helper AST is not enough: a counterfeit CLI can define the expected
 # helper and never call it.  Bind the policy to the complete reviewed driver
