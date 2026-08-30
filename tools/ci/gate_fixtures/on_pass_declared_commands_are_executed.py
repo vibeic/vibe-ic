@@ -60,7 +60,7 @@ REAL_FLOW = (Path(__file__).resolve().parents[3]
 #: for the wrong reason.
 _PRISTINE = ("stage_on_pass_review . --stage stage3 --json "
              "reports/phase3/gates/stage3_on_pass_review.json "
-             "--compliance reports/flow_compliance.json")
+             "--compliance reports/phase3/gates/stage3_compliance.json")
 _MUTATED = _PRISTINE.replace("--stage stage3", "--stage stage99")
 
 
