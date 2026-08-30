@@ -1159,10 +1159,26 @@ def _assert_a_real_verdict_is_not_a_crash(shallow, deep, _CRASH_HINT_PREFIX):
                 f"{name}/{label}: a real verdict was disclosed as a CRASH, "
                 f"which would delete it from every falsifiability count. "
                 f"Snippet:\n{snippet}")
-            if label == "shallow":
-                assert marker in snippet, (
-                    f"{name}/{label}: the finding itself is missing from the "
-                    f"evidence snippet:\n{snippet}")
+            # ASSERTED ON BOTH ARMS NOW. It used to be asserted on the
+            # shallow arm only, and that concession was the defect: with a
+            # contiguous TAIL the verdict helper's stdout is
+            # `155 + 2 * len(project)` characters against a 300-char window,
+            # so the assertion sat exactly on a boundary
+            #
+            #     len(project) = 72 -> stdout 299 -> `verdict: FAIL` kept
+            #     len(project) = 73 -> stdout 301 -> `verdict: FAIL` gone
+            #
+            # and which lane read a RED here was decided by $TMPDIR. The
+            # bounded `shallow` fixture above is a workaround for that window;
+            # `output_snippet` now keeps `_OUTPUT_SNIPPET_HEAD_CHARS` of stdout
+            # HEAD as well as the tail, so the headline survives at ANY depth
+            # and the deep arm — 425 characters, far past any lottery — is the
+            # arm that proves it. See
+            # `test_the_report_headline_survives_at_any_path_depth` for the
+            # property stated on its own, with no helper in the way.
+            assert marker in snippet, (
+                f"{name}/{label}: the finding itself is missing from the "
+                f"evidence snippet:\n{snippet}")
             # NOT asserted on the deep path, and the omission is the finding.
             # MEASURED while writing this test: with a 425-character project
             # path, `_pytest_verdict_helper`'s snippet is the tail of one
@@ -1177,6 +1193,73 @@ def _assert_a_real_verdict_is_not_a_crash(shallow, deep, _CRASH_HINT_PREFIX):
             # `test_matrix_d6_skip_discipline._consumer_snippet` hard-codes a
             # copy of the current shape. Left open deliberately; asserting a
             # marker this code does not preserve would be asserting a wish.
+
+
+@pytest.mark.parametrize("pad", [0, 1, 40, 400, 4000])
+def test_the_report_headline_survives_at_any_path_depth(pad):
+    """The FIRST line of a gate's report reaches the consumer, always.
+
+    Stated directly on `output_snippet` rather than through a subprocess, so
+    the property is pinned by one call with one variable — the length of the
+    absolute paths the report quotes, which is what used to decide it.
+
+    `pad` sweeps the old boundary from both sides: at `pad` small the report
+    fits the window whole, at `pad` large it does not and the head is the only
+    reason `verdict: FAIL` is still there.
+    """
+    # IMPORTED AS A MODULE, and the head width read with getattr, so that a
+    # tree without the head window FAILS this test rather than ERRORING on the
+    # import. An ImportError says the question could not be put; the question
+    # here is answerable against any `output_snippet`, and the answer on a
+    # pure-tail one is "no".
+    from programs import flow_compliance_check as _fcc
+    output_snippet = _fcc.output_snippet
+    _OUTPUT_SNIPPET_HEAD_CHARS = getattr(
+        _fcc, "_OUTPUT_SNIPPET_HEAD_CHARS", None)
+    project = "/" + "d" * pad if pad else "/p"
+    stdout = (f"verdict: FAIL\n"
+              f"  [ERROR] corner set incomplete under {project}\n"
+              f"  offending file: {project}/constraints/pvt_matrix.json\n")
+    snippet = output_snippet(stdout, "")
+
+    assert snippet.startswith("verdict: FAIL"), (
+        f"stdout is {len(stdout)} chars; the headline did not survive the "
+        f"{_OUTPUT_SNIPPET_HEAD_CHARS}-char head window:\n{snippet}")
+    assert "pvt_matrix.json" in snippet, (
+        "the TAIL must still survive — the head is ADDITIVE, and a head that "
+        f"cost the tail would be a different defect:\n{snippet}")
+
+
+def test_the_snippet_is_additive_and_names_what_it_dropped():
+    """Everything the pure-tail shape delivered is still delivered.
+
+    The head can only be a repair if it takes nothing away, so the old shape
+    is recomputed here and asserted to be a SUBSET of the new one. And when
+    anything IS dropped the snippet says so at column 0, so a reader is never
+    handed a splice that reads as one contiguous report.
+    """
+    # Module import + getattr for the same reason as above: a pure-tail
+    # `output_snippet` must make this test go RED, not make it unrunnable.
+    from programs import flow_compliance_check as _fcc
+    output_snippet = _fcc.output_snippet
+    n = _fcc._OUTPUT_SNIPPET_CHARS
+    elision = getattr(_fcc, "_OUTPUT_SNIPPET_ELISION", None)
+    assert elision is not None, (
+        "the snippet declares no elision marker, so it cannot be keeping a "
+        "head and a tail — it is a contiguous window again")
+    stdout = "HEADLINE\n" + "".join(f"line {i}\n" for i in range(400))
+    stderr = "".join(f"err {i}\n" for i in range(400))
+
+    snippet = output_snippet(stdout, stderr)
+    assert stdout[-n:].strip() in snippet, "the old stdout tail was lost"
+    assert stderr[-n:].strip() in snippet, "the stderr window changed"
+    marker = elision.split("{n}")[0]
+    assert any(ln.startswith(marker) for ln in snippet.splitlines()), (
+        f"an elided snippet must NAME the gap:\n{snippet}")
+
+    short = output_snippet("one line\n", "")
+    assert marker not in short, (
+        f"nothing was elided, so nothing may claim it was: {short!r}")
 
 
 def test_rc0_and_rc2_are_untouched_by_the_crash_branch(tmp_path):

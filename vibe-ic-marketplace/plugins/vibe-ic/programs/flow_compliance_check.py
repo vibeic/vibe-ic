@@ -3363,11 +3363,51 @@ _WAIVER_STDOUT_SENTINEL = "PASS_WITH_WAIVERS"
 # frame anchor replaced the prose rule.
 _CRASH_HINT_PREFIX = "__CRASH_HINT__: "
 
-#: Per-stream width of the evidence snippet. Named so the one number is
-#: quotable and greppable instead of appearing as a bare 300 at the cut site
-#: (`programs/tests/test_matrix_d6_skip_discipline.py::_consumer_snippet`
-#: currently hard-codes its own copy of it).
+#: Per-stream width of the evidence snippet's TAIL. Named so the one number is
+#: quotable and greppable instead of appearing as a bare 300 at the cut site.
+#: (`test_matrix_d6_skip_discipline::_consumer_snippet` no longer keeps a copy —
+#: it calls `output_snippet` — so the width and the SHAPE move together.)
 _OUTPUT_SNIPPET_CHARS = 300
+
+#: Width of the STDOUT HEAD the snippet additionally keeps, in characters.
+#:
+#: WHY A HEAD EXISTS AT ALL. A gate states its verdict FIRST — `verdict: FAIL`,
+#: then the findings, then the offending paths. A pure tail cut therefore
+#: deletes the headline and keeps the least specific part of the report, and
+#: WHICH part it deletes is a function of how long the absolute paths in that
+#: report are — i.e. of where the checkout lives, which is not a property of
+#: the gate. MEASURED on `_VERDICT_HELPER_SRC`, whose stdout is
+#: `155 + 2 * len(project)` characters, one variable:
+#:
+#:     len(project) = 72 -> stdout 299 -> `verdict: FAIL` SURVIVES the cut
+#:     len(project) = 73 -> stdout 301 -> `verdict: FAIL` is GONE
+#:
+#: One character of `$TMPDIR` decided whether a legitimate FAIL still carried
+#: its finding. `test_a_real_verdict_is_not_mistaken_for_a_crash` bounds its
+#: shallow fixture to stay clear of that cliff; the bound is a workaround for
+#: the window, and this is the window. The head removes the lottery: the first
+#: line of a report is kept unconditionally, whatever follows it.
+#:
+#: WHY STDOUT ONLY, and this asymmetry is deliberate and measured. stderr is
+#: the channel a CRASH lands on, and a crash's evidence is in its TAIL: the
+#: exception type and message are the last lines, while its head is the
+#: constant `Traceback (most recent call last):` banner. Keeping a stderr head
+#: would put that banner into every deep-traceback snippet and so hand the
+#: dimension-2 PROSE fallback a crash tell for free — which would silently
+#: retire `test_crash_is_flagged_as_a_crash_at_any_checkout_depth`'s closing
+#: measurement, the one that proves `_CRASH_HINT_PREFIX` rather than a lucky
+#: truncation is what carries the crash on a deep checkout. The authoritative
+#: crash channel is that sentinel, decided on the UNTRUNCATED streams; stderr's
+#: window is left exactly as it was.
+_OUTPUT_SNIPPET_HEAD_CHARS = 300
+
+#: Emitted at column 0 between the kept head and the kept tail, naming how much
+#: was dropped, so a reader is never shown a spliced report that looks
+#: contiguous. Column 0 is load-bearing in the opposite direction too: it is
+#: content, so `_bare_traceback_tail` — which believes a bare exception line
+#: only when the text is NOTHING BUT that tail — keeps refusing a spliced
+#: stream, exactly as it refuses any stream carrying a real report.
+_OUTPUT_SNIPPET_ELISION = "[... {n} character(s) of stdout elided ...]"
 
 _TRACEBACK_HEADER = "Traceback (most recent call last)"
 
@@ -3453,21 +3493,47 @@ def output_snippet(stdout: str, stderr: str) -> str:
     enormous line falls back to the plain tail and the width stays bounded by
     ``2 * _OUTPUT_SNIPPET_CHARS`` per stream.
     """
-    n = _OUTPUT_SNIPPET_CHARS
+    return (_head_and_tail(stdout or "") + "\n"
+            + _grown_tail(stderr or "", _OUTPUT_SNIPPET_CHARS)).strip()
 
-    def _tail(stream: str) -> str:
-        text = stream or ""
-        if len(text) <= n:
-            return text
-        cut = len(text) - n
-        if text[cut - 1] == "\n":          # the cut already sits on a boundary
-            return text[cut:]
-        start = text.rfind("\n", 0, cut) + 1
-        if cut - start > n:                # that one line is wider than the
-            return text[cut:]              # budget; keep the old behaviour
-        return text[start:]
 
-    return (_tail(stdout) + "\n" + _tail(stderr)).strip()
+def _grown_tail(stream: str, n: int) -> str:
+    """The last *n* characters of *stream*, grown backward to a line start.
+
+    Main's cut, unchanged and now shared by both streams. See
+    :func:`output_snippet` for why it grows and never shrinks.
+    """
+    text = stream or ""
+    if len(text) <= n:
+        return text
+    cut = len(text) - n
+    if text[cut - 1] == "\n":              # the cut already sits on a boundary
+        return text[cut:]
+    start = text.rfind("\n", 0, cut) + 1
+    if cut - start > n:                    # that one line is wider than the
+        return text[cut:]                  # budget; keep the old behaviour
+    return text[start:]
+
+
+def _head_and_tail(stream: str) -> str:
+    """*stream* reduced to its head and its (line-grown) tail, gap named.
+
+    Returned verbatim when both windows would cover it, so the elision marker
+    can never appear in a snippet that elided nothing. The tail half is
+    :func:`_grown_tail`, so stdout keeps the grow-backward property main added
+    as well as the head this adds — the two repairs compose rather than
+    replace each other.
+    """
+    head, tail = _OUTPUT_SNIPPET_HEAD_CHARS, _OUTPUT_SNIPPET_CHARS
+    if len(stream) <= head + tail:
+        return stream
+    kept_tail = _grown_tail(stream, tail)
+    dropped = len(stream) - head - len(kept_tail)
+    if dropped <= 0:                       # growth closed the gap entirely
+        return stream
+    return (stream[:head].rstrip("\n") + "\n"
+            + _OUTPUT_SNIPPET_ELISION.format(n=dropped) + "\n"
+            + kept_tail.lstrip("\n"))
 
 
 def looks_like_python_traceback(text: str) -> bool:
