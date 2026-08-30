@@ -654,6 +654,59 @@ _LATCH_ERROR_RE = re.compile(
     r"|Latch inferred for signal)")
 
 
+# THE OFFICIAL SCORER'S OWN SYNTH RECIPE, so the smoke measures what the scorer
+# measures. The gate ran `read_verilog; synth -top X; stat`; the harness runs a
+# `synth.tcl` that first does `proc; opt; fsm; opt; memory; opt; techmap; opt`
+# and only then `synth`. Different network into `synth` means a different netlist
+# out, and the cell count is not a diagnostic — `ppa_area_threshold_check`
+# computes an area-reduction PERCENTAGE from it, so a cid007 verdict was being
+# formed with a different ruler than the one that scores it.
+#
+# Measured on cvdp_copilot_gaussian_rounding_div_0022's 33k-cell divider, in the
+# official cvdp-sim image:
+#     the scorer's synth.tcl        cells 32598, wires 32583
+#     the gate's old smoke recipe   cells 32848            <- 250 cells adrift
+#     this recipe                   cells 32598, wires 32583  (exact)
+#
+# NOT read from the harness at runtime — §4.05 keeps the harness out of this
+# gate. The recipe is embedded because it is a FIXED TEMPLATE, not per-problem
+# data: all 80 `synth.tcl` in the public benchmark reduce to ONE synthesis
+# recipe once the `-top` name is normalised (the only variation is the
+# `read_verilog` glob, which the gate supplies itself).
+#
+# ONE STEP OF THE SCORER'S SCRIPT IS DELIBERATELY OMITTED: `check -assert`.
+# The scorer runs it against the COMPLETE design, with the context files the
+# harness stages alongside the completion. This gate sees the completion ALONE,
+# so a design that legitimately instantiates a harness-supplied module has
+# undriven wires here and `check -assert` hard-fails on them — measured on the
+# elevator_control_0033/0036 shape: "Wire elev2.\seg[1] is used but has no
+# driver … Found 7 problems in 'check -assert'". Blocking that is the exact
+# false-BLOCK the surrounding code tolerates context modules to avoid. The step
+# is the scorer's, but its PRECONDITION (a complete design) is not met here, so
+# copying it would import a check without its input. `hierarchy -check` is kept:
+# it reports the same missing-module condition and the existing tolerance path
+# already handles it.
+_SCORER_SYNTH_STEPS = (
+    "hierarchy -check -top {top}; "
+    "proc; opt; fsm; opt; memory; opt; "
+    "techmap; opt; "
+    "synth -top {top}; "
+    "clean"
+)
+
+
+def _scorer_synth_script(path, top: str) -> str:
+    """The `yosys -p` script for a synthesizability smoke on `path`.
+
+    The path stays QUOTED: `yosys -p` takes a script yosys re-splits on
+    whitespace, so an unquoted workdir containing a space opened two
+    non-existent files and aborted before SYNTH — the #531 silent false-PASS
+    this gate exists to prevent.
+    """
+    return (f'read_verilog -sv "{path}"; '
+            + _SCORER_SYNTH_STEPS.format(top=top) + "; stat")
+
+
 def _confirming_rerun(code_text: str, top: str, workdir: Path,
                       tolerable_names=()) -> Tuple[bool, str]:
     """#531 round-5 (adversarial-review HIGH) — yosys aborts at the FIRST
@@ -674,8 +727,7 @@ def _confirming_rerun(code_text: str, top: str, workdir: Path,
     # UNQUOTED path made a workdir containing a space open two non-existent
     # files and abort before SYNTH (see yosys_smoke for the full shape).
     rc, out, err = _run(
-        ["yosys", "-p",
-         f'read_verilog -sv "{f2}"; synth -top {top}; stat'], timeout=300)
+        ["yosys", "-p", _scorer_synth_script(f2, top)], timeout=300)
     blob = (out or "") + "\n" + (err or "")
     if rc == 0:
         return True, "confirming re-run clean"
@@ -1029,8 +1081,7 @@ def yosys_smoke(code: str, workdir: Path,
         # plumbing. Guarded by
         # test_cvdp_gate_toolpath_must_not_disable_synth_smoke.py.
         rc, out, err = _run(
-            ["yosys", "-p",
-             f'read_verilog -sv "{f}"; synth -top {top}; stat'],
+            ["yosys", "-p", _scorer_synth_script(f, top)],
             timeout=synth_timeout)
         blob = (out or "") + "\n" + (err or "")
         if rc != 0:
