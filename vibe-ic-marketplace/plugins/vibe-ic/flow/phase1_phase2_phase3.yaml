@@ -7544,12 +7544,17 @@ steps:
         #
         # `stage4_compliance` IS A STAGE-4 WRAPPER ON A STAGE-4 STEP, which is
         # exactly the wiring the old comment at step 40 called unbounded
-        # recursion. It is bounded now, by construction rather than by
-        # placement: `flow_compliance_check` carries a scope stack
-        # (`VIBEIC_FCC_ACTIVE_SCOPES`) and a nested pass whose scope is already
-        # open returns rc=2 with the stack named. The outer pass writes the
-        # report; the inner one declines, out loud.
-        - advisory_program_exit_zero: "stage4_compliance . --json reports/phase3/gates/stage4_compliance.json"
+        # recursion. `--exclude-step 39` is what bounds it, and it bounds it
+        # STRUCTURALLY: the nested pass never evaluates the step whose gate
+        # spawned it, so the cycle is not in the graph at all and termination
+        # does not depend on anything surviving the trip into the child. It is
+        # also the honest scope -- read from step 39, "did stage 4 pass" cannot
+        # include step 39, which is the step still being evaluated.
+        # `flow_compliance_check` additionally carries a scope stack
+        # (`VIBEIC_FCC_ACTIVE_SCOPES`) as a BACKSTOP for a future self-scoping
+        # clause wired without an exclusion; it is not what makes THIS clause
+        # terminate, and it is not relied on here.
+        - advisory_program_exit_zero: "stage4_compliance . --exclude-step 39 --json reports/phase3/gates/stage4_compliance.json"
         - advisory_program_exit_zero: "stage_on_pass_review . --stage stage4 --json reports/phase3/gates/stage4_on_pass_review.json --compliance reports/phase3/gates/stage4_compliance.json"
         - json_field_true: {file: "reports/phase2/fpga/on_board_pass.json", field: "all_scenarios_passed", expect: true}
         - program_exit_zero: "fpga_on_board_attestation_check . --json reports/phase2/fpga/on_board_attestation.json --min-scenarios 1"

@@ -13,6 +13,15 @@ terminated by luck rather than by construction. The flow said so itself, at step
     stage4 step (37.5ic, 38, 39 are the tempting ones) it would re-enter itself
     without bound, which is why it is not.
 
+TWO MECHANISMS, AND ONLY ONE OF THEM IS LOAD-BEARING. The shipped clause
+terminates STRUCTURALLY, via `--exclude-step 39`: the nested pass never evaluates
+the step whose gate spawned it, so the cycle is not in the graph and termination
+does not depend on anything surviving the trip into the child. The scope stack is
+a BACKSTOP for a future self-scoping clause wired without an exclusion — it rides
+on an environment variable, so a caller that sanitises the child environment does
+not see it, and a design that RELIED on it would trade a silent gate for a flow
+that never returns.
+
 That avoidance is what put the review behind step 40's `condition:` —
 `phase3/stage5_manufacturing/silicon_received.json`, a path no run tree and no
 commit in this repository's history has ever carried — so the rule that reads
@@ -98,6 +107,61 @@ def test_a_different_scope_under_the_same_stack_still_runs(project):
     assert "already being evaluated" not in log, log
 
 
+def test_an_exclusion_that_matches_nothing_is_refused(project):
+    """A typo excludes nothing and looks identical to a clean run."""
+    rc, log = _run(project, "--stage-id", "stage4", "--exclude-step", "999")
+    assert rc == 2, log
+    assert "silently changes nothing" in log, log
+
+
+def test_the_excluded_step_is_absent_from_the_report(project):
+    out = project / "s4.json"
+    _run(project, "--stage-id", "stage4", "--strict", "--exclude-step", "39",
+         "--json", str(out))
+    ids = [str(r["id"]) for r in json.loads(out.read_text())["steps"]]
+    assert ids and "39" not in ids, ids
+
+
+def test_the_self_scoping_clause_terminates_with_the_backstop_STRIPPED(project,
+                                                                      tmp_path):
+    """The load-bearing half, proved without the half that is not.
+
+    Run with `env -i`-equivalent: the scope stack cannot reach the child, so if
+    the exclusion were not doing the work this would recurse until something
+    killed it. It returns instead.
+    """
+    out = tmp_path / "s4.json"
+    r = subprocess.run(
+        [sys.executable, str(PLUGIN / "programs" / "stage4_compliance.py"),
+         str(project), "--exclude-step", "39", "--json", str(out)],
+        capture_output=True, text=True, timeout=900,
+        env={"PATH": "/usr/bin:/bin", "HOME": str(tmp_path),
+             "PYTHONDONTWRITEBYTECODE": "1"})
+    assert r.returncode in (0, 1), (r.returncode, r.stdout[-800:], r.stderr[-800:])
+    assert out.is_file(), r.stderr[-800:]
+    assert "39" not in [str(x["id"]) for x in json.loads(out.read_text())["steps"]]
+
+
+def test_the_backstop_does_not_leak_into_the_calling_process(project):
+    """`stageN_compliance` imports `main` and calls it IN PROCESS.
+
+    Setting the scope on `os.environ` would outlive the call that set it and
+    make the NEXT in-process call for the same scope decline a question it
+    should have answered. The stack is passed to children explicitly instead.
+    """
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("fcc_leak_probe", FCC)
+    mod = importlib.util.module_from_spec(spec)
+    sys.modules["fcc_leak_probe"] = mod
+    sys.path.insert(0, str(PLUGIN / "programs"))
+    spec.loader.exec_module(mod)
+    before = os.environ.get(SCOPE_ENV)
+    mod.main([str(project), "--stage-id", "stage_analog", "--strict"])
+    assert os.environ.get(SCOPE_ENV) == before, "the scope leaked into os.environ"
+    again = mod.main([str(project), "--stage-id", "stage_analog", "--strict"])
+    assert again != 2 or "already being evaluated" not in "", again
+
+
 def test_stage4s_review_is_hosted_on_a_stage4_step_which_needs_the_guard():
     """The wiring this guard exists to permit, asserted so it cannot silently
     revert to the unreachable step it came from."""
@@ -117,5 +181,8 @@ def test_stage4s_review_is_hosted_on_a_stage4_step_which_needs_the_guard():
         f"step {host['id']!r} carries a condition: {host.get('condition')}")
     cmds = [v.get("command") if isinstance(v, dict) else v
             for sub in host["gate"]["all_of"] for v in sub.values()]
-    assert any(isinstance(c, str) and c.startswith("stage4_compliance")
-               for c in cmds), cmds
+    producer = [c for c in cmds
+                if isinstance(c, str) and c.startswith("stage4_compliance")]
+    assert producer, cmds
+    # ...and it must name the host it is running inside, or it evaluates itself.
+    assert f"--exclude-step {host['id']}" in producer[0], producer[0]

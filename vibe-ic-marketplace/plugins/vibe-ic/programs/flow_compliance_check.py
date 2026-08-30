@@ -3158,7 +3158,13 @@ def __check_program_exit_zero(project: Path, cmd_str: str) -> tuple[bool, str]:
     # have a measured regression history in this file (v1.10.14 -> 1.10.16).
     gate_budget = _pl.gate_timeout_s()
     try:
+        # `env=_child_env()` carries the scope stack DOWN to the gate program,
+        # and is None when there is nothing to carry, which is the inherit-as-
+        # before path. Passed explicitly rather than by mutating `os.environ`:
+        # this module's `main` is called IN PROCESS by `stageN_compliance`, and a
+        # process-global mutation would outlive the call that made it.
         _res = _watchdog.run_host_supervised(argv, cwd=str(project),
+                                       env=_child_env(),
                                        stall_grace_s=gate_budget)
         if _res.outcome in ("stalled", "ceiling"):
             raise _GateStalled(_res)
@@ -11390,6 +11396,18 @@ def completion_audit_verdict(
 #: re-entrancy block in `main`.
 _SCOPE_STACK_ENV = "VIBEIC_FCC_ACTIVE_SCOPES"
 
+#: The value `_child_env()` hands to every gate program this run spawns: the
+#: stack we were given, plus our own scope. Set by `main`, read only while
+#: spawning. NOT written to `os.environ` — see the comment at the assignment.
+_CHILD_SCOPE_STACK = ""
+
+
+def _child_env():
+    """The environment for a spawned gate program, carrying the scope stack."""
+    if not _CHILD_SCOPE_STACK:
+        return None          # nothing to add; let the child inherit as before
+    return dict(os.environ, **{_SCOPE_STACK_ENV: _CHILD_SCOPE_STACK})
+
 #: Scopes that contain no synthesis step, so the pre-PnR Yosys gate has nothing
 #: to read. `stage1` is spelt as an int one line below for historical reasons;
 #: these are the stages `--stage` could never name.
@@ -11421,6 +11439,21 @@ def main(argv: Optional[List[str]] = None) -> int:
     # stage_phase1 and stage_analog had no producible verdict source at all.
     # This takes the stage's OWN id, verbatim, so the set of askable scopes is
     # the set of stages the flow declares rather than a hand-typed subset.
+    # STRUCTURAL TERMINATION FOR A SELF-SCOPING PRODUCER, and the reason it is a
+    # flag rather than a convention. Stage 4's on-pass review has to be hosted on
+    # a stage-4 step -- every step after 39 is conditioned on an artefact a
+    # doc-to-GDS run does not produce -- so the `stage4_compliance` clause that
+    # produces its verdict sits INSIDE the scope it measures and would evaluate
+    # its own host, whose gate spawns it again. Naming the host here removes the
+    # cycle from the graph instead of catching it at run time, so termination
+    # does not depend on the environment surviving the trip. It is also the
+    # honest scope: read from step 39, "did stage 4 pass" cannot include step 39,
+    # which is still being evaluated.
+    p.add_argument("--exclude-step", dest="exclude_step", action="append",
+                   default=[],
+                   help=("Skip the step with this id (repeatable). For a "
+                         "compliance pass spawned BY a step inside the scope it "
+                         "measures: naming that step breaks the cycle."))
     p.add_argument("--stage-id", dest="stage_id",
                    help=("Only check steps belonging to this stage, named by "
                          "the stage's own `id` (e.g. stage_phase1, "
@@ -11722,6 +11755,24 @@ def main(argv: Optional[List[str]] = None) -> int:
             print(f"flow_compliance_check: no steps for {target_stage}", file=sys.stderr)
             return 2
 
+    excluded = {str(x) for x in (getattr(args, "exclude_step", None) or [])}
+    if excluded:
+        known = {str(st.get("id")) for st in steps if isinstance(st, dict)}
+        unknown = sorted(excluded - known)
+        if unknown:
+            # A TYPO EXCLUDES NOTHING AND LOOKS IDENTICAL TO A CLEAN RUN, which
+            # is the whole failure mode this change exists to stop. Refused.
+            print(f"flow_compliance_check: --exclude-step names "
+                  f"{', '.join(repr(u) for u in unknown)}, which no step in "
+                  f"scope declares. An exclusion that matches nothing silently "
+                  f"changes nothing.", file=sys.stderr)
+            return 2
+        steps = [st for st in steps if str(st.get("id")) not in excluded]
+        if not steps:
+            print(f"flow_compliance_check: --exclude-step {sorted(excluded)} "
+                  f"left no steps to check", file=sys.stderr)
+            return 2
+
     # ── RE-ENTRANCY: A SCOPED PASS MUST NOT RE-ENTER ITS OWN SCOPE ──────────
     # This program spawns itself: a step's gate may carry `stageN_compliance`,
     # which is `flow_compliance_check --stage N`, and that nested pass
@@ -11737,6 +11788,12 @@ def main(argv: Optional[List[str]] = None) -> int:
     # pass that quietly measured nothing. rc=2 is this program's existing
     # "the question could not be put" tier and the advisory slot already
     # records it as such.
+    # A BACKSTOP, NOT THE MECHANISM, and the distinction is load-bearing: it
+    # rides on an environment variable, so a caller that sanitises the child
+    # environment does not see it. The SHIPPED wiring therefore terminates
+    # structurally, via `--exclude-step` above; this catches a FUTURE self-
+    # scoping clause added without one, where the alternative is a flow that
+    # never returns.
     _scope = target_stage or "ALL"
     _active = [t for t in (os.environ.get(_SCOPE_STACK_ENV) or "").split(":") if t]
     if _scope in _active:
@@ -11746,7 +11803,19 @@ def main(argv: Optional[List[str]] = None) -> int:
               f"re-enter its own scope; the outer pass is the one whose verdict "
               f"this is.", file=sys.stderr)
         return 2
-    os.environ[_SCOPE_STACK_ENV] = ":".join(_active + [_scope])
+    # PUSHED HERE, POPPED IN THE `finally` AT THE END OF THIS FUNCTION. A
+    # subprocess would not need the pop -- it exits -- but `stageN_compliance`
+    # imports `main` and calls it IN PROCESS, so a leaked entry would make the
+    # NEXT in-process call for the same scope decline a question it should have
+    # answered. Measured as a hazard while writing this, not after.
+    # PASSED DOWN EXPLICITLY, NEVER SET ON OUR OWN PROCESS. `os.environ` is
+    # process-global and `stageN_compliance` imports `main` and calls it IN
+    # PROCESS, so mutating it here would leak this run's scope into the NEXT
+    # in-process call and make it decline a question it should have answered.
+    # A module-level value that each call overwrites has no such lifetime: it is
+    # read only by `_child_env()` while this call is spawning children.
+    global _CHILD_SCOPE_STACK
+    _CHILD_SCOPE_STACK = ":".join(_active + [_scope])
 
     # v0.119.29: --phase filter via canonical step-ID ranges. The flow
     # YAML doesn't tag steps with a phase keyword, but the conventional
