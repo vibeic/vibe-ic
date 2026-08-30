@@ -1,0 +1,17 @@
+{
+  "block": "delta_sigma",
+  "type": "delta_sigma",
+  "source": "GENERATED from input/docs/L5_ANALOG_SPEC.md Block A (analog-spec-extract)",
+  "pdk": "ihp_sg13g2",
+  "specs": [
+    {"name": "converter_type", "value": "incremental_delta_sigma", "note": "resets/accumulates per conversion window"},
+    {"name": "order",   "target": 2,    "min": 1,   "max": 3,   "units": "-",   "note": "loop-filter order (est)"},
+    {"name": "osr",     "target": 256,  "min": 64,  "max": 512, "units": "-",   "note": "oversampling ratio (est)"},
+    {"name": "enob",    "target": 14,   "min": 10,  "units": "bit", "note": "target effective resolution (est)"},
+    {"name": "vin_diff","target": 1.0,  "min": 0.0, "max": 1.2, "units": "V",   "note": "input range vs VHI/VLO"},
+    {"name": "vref",    "target": 1.0,  "min": 0.8, "max": 1.2, "units": "V",   "note": "reference (VHI-VLO)"},
+    {"name": "vdd_core","target": 1.2,  "min": 1.1, "max": 1.3, "units": "V",   "note": "core supply (one copy from the LDO)"},
+    {"name": "fclk",    "target": 1.0,  "min": 0.1, "max": 10,  "units": "MHz", "note": "modulator clock (CK4/5/6) (est)"},
+    {"name": "output",  "value": "1bit_serial", "note": "digital bitstream per channel (OUTn/dout)"}
+  ]
+}

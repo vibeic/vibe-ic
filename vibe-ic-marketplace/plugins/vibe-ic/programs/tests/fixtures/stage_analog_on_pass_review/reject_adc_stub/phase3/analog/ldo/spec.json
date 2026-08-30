@@ -1,0 +1,13 @@
+{
+  "block": "ldo",
+  "specs": [
+    {
+      "name": "vout",
+      "target": 1.0,
+      "units": "V",
+      "note": "deterministic stub — replace with extracted spec when analog-spec-extract skill runs"
+    }
+  ],
+  "extraction_strategy": "deterministic_stub",
+  "low_confidence": true
+}

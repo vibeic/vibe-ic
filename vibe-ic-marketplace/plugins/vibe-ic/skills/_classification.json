@@ -556,12 +556,6 @@
           "stage_analog"
         ],
         "why": "Scope capture + FPGA ADC read for analog blocks; the analog HIL measurement step."
-      },
-      "analog-output-verify": {
-        "stages": [
-          "stage_analog"
-        ],
-        "why": "Its own description: runs 'After analog_one_shot_runner emits A1..A9 outputs'. On-pass reviewer for the analog track."
       }
     },
     "stage_all": {
