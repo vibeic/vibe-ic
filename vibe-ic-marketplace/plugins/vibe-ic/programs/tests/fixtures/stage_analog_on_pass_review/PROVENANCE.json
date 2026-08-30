@@ -1,0 +1,59 @@
+{
+  "_comment": "Verbatim copies of the two files stage_on_pass_review reads for stage_analog — the INTENT (L5_ADI_SPEC.json) and the ARTEFACT (phase3/analog/<block>/spec.json) — from real runs on this fleet. Nothing here is authored: each sha256 below is the source file's, and accept_adc_conv and reject_adc_stub share a byte-identical L5, so the control varies the ARTEFACT alone while the intent and the harness are held fixed.",
+  "trees": {
+    "accept_adc_conv": {
+      "run": "/home/reyerchu/AI_IC_design/_c_adc_run/proj_fix",
+      "why": "a completed run of the incremental delta-sigma ADC front-end: both declared blocks in scope, every numeric requirement the intent declares carried by the spec the stage grades against",
+      "files": {
+        "phase1/generated_docs/L5_ADI_SPEC.json": {
+          "bytes": 9127,
+          "sha256": "dbba3423e10aff1dc1e617c11a37d59dcb9b60f2a7ebf1c6ad71485efb13c42f"
+        },
+        "phase3/analog/delta_sigma/spec.json": {
+          "bytes": 957,
+          "sha256": "3035034875d5e8c65f1d1ad0978b055f3ae036ed70c458413ade6cee5f421a5f"
+        },
+        "phase3/analog/ldo/spec.json": {
+          "bytes": 829,
+          "sha256": "09d4665d7ee1dd35c413848f2c3d8848153e381fdca291a364faac780a6c352f"
+        }
+      }
+    },
+    "reject_adc_stub": {
+      "run": "/home/reyerchu/AI_IC_design/_c_adc_run/proj_stub",
+      "why": "the SAME design and the byte-identical L5 as accept_adc_conv, with the analog runner's deterministic-stub A1 tier: one row per block, `vout target 1.0 V`, against an intent declaring Vout 1.2 V (1.1-1.3) and twelve further numeric requirements",
+      "files": {
+        "phase1/generated_docs/L5_ADI_SPEC.json": {
+          "bytes": 9127,
+          "sha256": "dbba3423e10aff1dc1e617c11a37d59dcb9b60f2a7ebf1c6ad71485efb13c42f"
+        },
+        "phase3/analog/delta_sigma/spec.json": {
+          "bytes": 298,
+          "sha256": "b2ad3537f779332df2effa853f85efb18174589f6d5ea06666b33477bfbdaf52"
+        },
+        "phase3/analog/ldo/spec.json": {
+          "bytes": 290,
+          "sha256": "58cfe36c9969e7512cb317ee5bf8abb10e565794afcba5b2a987d3af951d207d"
+        }
+      }
+    },
+    "accept_published_partial": {
+      "run": "/home/reyerchu/_d9_base/benchmark-data/ic/u_hawaii_adc",
+      "why": "the published benchmark cell: one block the intent declares no numeric requirement for (DISARMED by the intent's own disclosure) and one measured and accepted",
+      "files": {
+        "phase1/generated_docs/L5_ADI_SPEC.json": {
+          "bytes": 4939,
+          "sha256": "4cb7826fcec769aa927faba9da42210c5b451299a31de4578254ca9a827fbf1a"
+        },
+        "phase3/analog/delta_sigma/spec.json": {
+          "bytes": 1231,
+          "sha256": "723622e19fee914611377c8bc0dc51dc9e7c69007a7fc28205c79f4a25834690"
+        },
+        "phase3/analog/ldo/spec.json": {
+          "bytes": 907,
+          "sha256": "6238944675bc2ce68587f9fbe41485e917ccb1cc69b51f43ffd2af803f649d5e"
+        }
+      }
+    }
+  }
+}

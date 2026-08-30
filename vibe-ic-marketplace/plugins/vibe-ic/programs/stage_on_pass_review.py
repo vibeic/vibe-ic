@@ -979,6 +979,302 @@ def rule_signoff_clock_slower_than_intent(project: Path,
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# R_ANALOG
+# ─────────────────────────────────────────────────────────────────────────────
+#: The numeric keys an L5 spec row / an A1 spec.json row may carry. A row with
+#: none of them states no number and is therefore not a requirement a artefact
+#: can contradict.
+_SPEC_NUMERIC_KEYS = ("target", "min", "max", "value", "typ")
+
+
+def _spec_numbers(row: Dict[str, Any]) -> Dict[str, float]:
+    """The numeric content of one spec row, keyed by bound."""
+    out: Dict[str, float] = {}
+    for k in _SPEC_NUMERIC_KEYS:
+        v = row.get(k)
+        if isinstance(v, bool) or not isinstance(v, (int, float)):
+            continue
+        out[k] = float(v)
+    return out
+
+
+def _spec_key(name: Any) -> str:
+    """Compare spec names by their letters and digits alone.
+
+    MEASURED, and this is why it is not a plain equality: the intent writes
+    `Vin (diff)` and `Vdd (core)` where the artefact writes `vin_diff` and
+    `vdd`. A strict compare reported both as DROPPED on a run that had in fact
+    carried them, which is the reviewer inventing a contradiction out of a
+    spelling. The value fallback in `_dropped_and_contradicted` covers what
+    this still cannot align (`Vdd (core)` -> `vdd`).
+    """
+    return "".join(ch for ch in str(name).lower() if ch.isalnum())
+
+
+def _dropped_and_contradicted(requirements: List[Dict[str, Any]],
+                              artefact_rows: List[Dict[str, Any]]):
+    """The two shapes of "the graded spec is not the declared spec".
+
+    DROPPED       an intent requirement that appears in the artefact under
+                  neither its name nor its numbers.
+    CONTRADICTED  an artefact row that DOES carry the intent's requirement by
+                  name, and states a target the intent's own declared range
+                  excludes.
+
+    A requirement matched by VALUE and not by name is counted as carried: the
+    artefact renamed it, which is not the defect this rule is about.
+    """
+    by_key = {}
+    for row in artefact_rows:
+        by_key.setdefault(_spec_key(row.get("name")), _spec_numbers(row))
+    value_sets = [set(v.values()) for v in by_key.values() if v]
+
+    dropped: List[Dict[str, Any]] = []
+    contradicted: List[Dict[str, Any]] = []
+    for req in requirements:
+        key = _spec_key(req.get("name"))
+        want = _spec_numbers(req)
+        if key not in by_key:
+            if not any(set(want.values()) <= vs for vs in value_sets):
+                dropped.append({"name": req.get("name"),
+                                "unit": req.get("unit"),
+                                "declared": want})
+            continue
+        got = by_key[key]
+        target = got.get("target", got.get("value", got.get("typ")))
+        lo, hi = want.get("min"), want.get("max")
+        if target is None or (lo is None and hi is None):
+            continue
+        if (lo is not None and target < lo) or (hi is not None and target > hi):
+            contradicted.append({"name": req.get("name"),
+                                 "unit": req.get("unit"),
+                                 "declared": want, "graded_target": target})
+    return dropped, contradicted
+
+
+def _analog_spec_artefact(project: Path, artefact_rel: List[str],
+                          block: str) -> Optional[Path]:
+    """`<declared analog dir>/<block>/spec.json`, canonical spelling first.
+
+    The flow declares BOTH spellings for every A-step's artefact and says why
+    (`phase3/analog/` is what every producer writes; `phase1/analog/` is where
+    `migrate_to_layout_p` moves a project-root tree). This resolver reads the
+    declaration in the order the flow writes it and does not add a third.
+    """
+    for rel in artefact_rel:
+        cand = project / rel / block / "spec.json"
+        if cand.is_file():
+            return cand
+    return None
+
+
+def rule_intent_spec_not_the_graded_spec(project: Path,
+                                         decl: Dict[str, Any]) -> Dict[str, Any]:
+    """R_ANALOG. Returns {"verdict", "finding"|"observation", ...}.
+
+    THE CONTRADICTION, AND WHY NOTHING ELSE IN THE FLOW HOLDS IT
+    ------------------------------------------------------------
+    A1 reads the intent (`L5_ADI_SPEC.json`) ONCE and writes
+    `phase3/analog/<block>/spec.json`. From A2 to A9 that file IS the spec:
+    the topology is chosen against it, the deck is sized against it, the PVT
+    sweep is graded against it (`corner_yield_vs_spec_check` parses "yield
+    table vs spec.json limits"), the layout and the hardmacro are signed off
+    on the result. MEASURED on this tree: of the 54 `analog_*` programs, SEVEN
+    open `L5_ADI_SPEC.json`. FIVE are PRODUCERS (`analog_a1_spec_emit`,
+    `analog_a2_topology_emit`, `analog_a3_netlist_emit`,
+    `analog_real_corner_sweep`, `analog_one_shot_runner`). The other two are
+    checkers asking a different question: `analog_a0_skip_forbidden_check`
+    uses `analog_blocks_detected=false` as a waiver for a forbidden skip file
+    and never reads a block's requirements, and
+    `analog_content_detected_must_emit_l5_check` grades L5 against the input
+    DOCS and never opens a `spec.json`. NO A1-A9 GATE READS A BLOCK'S
+    REQUIREMENTS OUT OF L5 AT ALL. (One A-gate does open an L doc, for an
+    unrelated layer: `analog_netlist_pdk_check` reads L19_CONSTRAINTS_PDK,
+    the PDK constraint layer, not the analog spec.)
+
+    So the intent's numbers are copied once and never re-read. When the copy
+    is short or wrong, every downstream gate is green, because each of them
+    compares the artefact with the artefact. A1's own gate is explicit about
+    its threshold — `analog_a1_spec_extract_check` certifies a block that
+    "declares >= 1 spec field" — and MEASURED it reports "PASS: 2/2 block(s)
+    clean" on a `spec.json` whose single row is `vout target 1.0 V` while the
+    intent declares `Vout 1.2 V (1.1-1.3)` and five further requirements.
+
+    WHEN IT DISARMS
+    ---------------
+    On the INTENT's own disclosure, never on the artefact's. L5 saying
+    `no_analog: true` / `analog_blocks_detected: false`, a block L5 itself
+    marks `spurious: true` or `low_confidence: true`, and a block for which L5
+    declares no numeric requirement at all, are all the intent declining to
+    state a requirement — there is nothing for the artefact to contradict.
+    A `spec.json` that discloses `extraction_strategy: deterministic_stub` is
+    NOT a disarm and that is the point: the artefact saying it made the number
+    up does not retract the six the intent supplied.
+    """
+    intent_rel = [str(x) for x in (decl.get("intent") or [])]
+    artefact_rel = [str(x) for x in (decl.get("artefact") or [])]
+    l5 = next((project / r for r in intent_rel
+               if r.endswith("L5_ADI_SPEC.json")), None)
+    if l5 is None:
+        return {"verdict": "NOT_CHECKED",
+                "why": ("the stage's `intent:` names no L5_ADI_SPEC.json; "
+                        "R_ANALOG has no intent to read")}
+    if not l5.exists():
+        return {"verdict": "NOT_CHECKED",
+                "why": f"{l5} does not exist; the intent was never published"}
+    try:
+        doc = json.loads(l5.read_text(encoding="utf-8", errors="replace"))
+    except (OSError, ValueError) as e:
+        return {"verdict": "NOT_CHECKED", "why": f"{l5}: {e}"}
+    if not isinstance(doc, dict):
+        return {"verdict": "NOT_CHECKED", "why": f"{l5} is not a mapping"}
+
+    intent: Dict[str, Any] = {
+        "file": str(l5), "intent_rel": str(l5.relative_to(project)),
+        "field": "analog_blocks[].spec.specs[]",
+    }
+    analog_dirs = [str(r) for r in artefact_rel
+                   if (project / r).is_dir() and "analog" in str(r).lower()]
+
+    if doc.get("no_analog") is True or doc.get("analog_blocks_detected") is False:
+        intent["value"] = {"no_analog": doc.get("no_analog"),
+                           "analog_blocks_detected":
+                               doc.get("analog_blocks_detected")}
+        return {"verdict": "DISARMED", "intent": intent,
+                "artefact": {"analog_dirs": analog_dirs},
+                "observation": (
+                    "the intent DECLARES this design carries no analog content "
+                    f"(no_analog={doc.get('no_analog')!r}, "
+                    f"analog_blocks_detected="
+                    f"{doc.get('analog_blocks_detected')!r}), so it states no "
+                    "analog requirement for the stage's artefact to "
+                    "contradict")}
+
+    in_scope: List[Dict[str, Any]] = []
+    disarmed: List[Dict[str, Any]] = []
+    unreadable: List[Dict[str, Any]] = []
+    findings: List[Dict[str, Any]] = []
+    for blk in (doc.get("analog_blocks") or []):
+        if not isinstance(blk, dict):
+            continue
+        name = str(blk.get("name") or "")
+        if not name:
+            continue
+        if blk.get("spurious") is True or blk.get("low_confidence") is True:
+            disarmed.append({"block": name, "why": (
+                f"the intent marks it spurious={blk.get('spurious')!r} "
+                f"low_confidence={blk.get('low_confidence')!r}")})
+            continue
+        spec = blk.get("spec") if isinstance(blk.get("spec"), dict) else {}
+        rows = [r for r in (spec.get("specs") or []) if isinstance(r, dict)]
+        reqs = [r for r in rows if _spec_numbers(r)]
+        if not reqs:
+            disarmed.append({"block": name, "why": (
+                "the intent declares no numeric requirement for this block; "
+                "an absent declaration is not an agreement, and it is also "
+                "not a contradiction")})
+            continue
+        art = _analog_spec_artefact(project, artefact_rel, name)
+        if art is None:
+            unreadable.append({"block": name, "why": (
+                "the intent declares "
+                f"{len(reqs)} numeric requirement(s) and no spec.json for this "
+                f"block resolves under "
+                + (", ".join(analog_dirs) or "any declared analog dir"))})
+            continue
+        try:
+            adoc = json.loads(art.read_text(encoding="utf-8", errors="replace"))
+        except (OSError, ValueError) as e:
+            unreadable.append({"block": name, "why": f"{art}: {e}"})
+            continue
+        arows = [r for r in ((adoc.get("specs") or [])
+                             if isinstance(adoc, dict) else [])
+                 if isinstance(r, dict)]
+        dropped, contradicted = _dropped_and_contradicted(reqs, arows)
+        entry = {
+            "block": name,
+            "artefact_rel": str(art.relative_to(project)),
+            "intent_requirements": [
+                {"name": r.get("name"), "unit": r.get("unit"),
+                 "declared": _spec_numbers(r)} for r in reqs],
+            "artefact_specs": [r.get("name") for r in arows],
+            "artefact_extraction_strategy": (
+                adoc.get("extraction_strategy") if isinstance(adoc, dict)
+                else None),
+            "dropped": dropped,
+            "contradicted": contradicted,
+        }
+        in_scope.append(entry)
+        if dropped or contradicted:
+            findings.append(entry)
+
+    artefact = {"analog_dirs": analog_dirs,
+                "artefact_rels": [str(r) for r in artefact_rel],
+                "files": sorted(e["artefact_rel"] for e in in_scope),
+                "block_count": len(in_scope),
+                "blocks": in_scope}
+    intent["value"] = {e["block"]: [r["name"] for r in e["intent_requirements"]]
+                       for e in in_scope}
+
+    # AN EMPTY SCOPE IS NOT AN ACCEPTANCE. Every block was disarmed by the
+    # intent's own disclosure or had no artefact to read, so the denominator
+    # is zero and nothing was measured. Reporting that as "no contradiction
+    # found" is how a review of nothing reports a pass.
+    if not in_scope:
+        return {"verdict": "NOT_CHECKED", "intent": intent, "artefact": artefact,
+                "disarmed": disarmed, "unreadable": unreadable,
+                "why": ("no analog block is in scope: "
+                        f"{len(disarmed)} disarmed by the intent's own "
+                        f"disclosure, {len(unreadable)} with no readable "
+                        "spec.json, 0 measured")}
+
+    if not findings:
+        n_req = sum(len(e["intent_requirements"]) for e in in_scope)
+        return {"verdict": "ACCEPT", "intent": intent, "artefact": artefact,
+                "disarmed": disarmed, "unreadable": unreadable,
+                "observation": (
+                    f"{n_req} numeric requirement(s) across {len(in_scope)} "
+                    f"block(s) are each carried by the spec the stage grades "
+                    f"against; {len(disarmed)} block(s) disarmed by the "
+                    f"intent's own disclosure")}
+
+    parts = []
+    for e in findings:
+        if e["dropped"]:
+            parts.append(
+                f"for block {e['block']!r} the intent declares "
+                f"{len(e['intent_requirements'])} numeric requirement(s) and "
+                f"{e['artefact_rel']} — the only spec every A2-A9 gate grades "
+                f"against — carries {len(e['artefact_specs'])} row(s) and none "
+                f"matching "
+                + ", ".join(f"{d['name']!r}" for d in e["dropped"]))
+        for c in e["contradicted"]:
+            lo, hi = c["declared"].get("min"), c["declared"].get("max")
+            parts.append(
+                f"for block {e['block']!r} the intent declares "
+                f"{c['name']!r} = {c['declared'].get('target')} "
+                f"{c['unit'] or ''} (range {lo}-{hi}) and "
+                f"{e['artefact_rel']} grades it at {c['graded_target']}, "
+                f"outside the intent's own declared range")
+    return {
+        "verdict": "REJECT",
+        "intent": intent,
+        "artefact": artefact,
+        "disarmed": disarmed,
+        "unreadable": unreadable,
+        "findings_per_block": findings,
+        "contradiction": (
+            "; ".join(parts)
+            + ". A1 copies the intent into spec.json once and no gate reads "
+              "the intent again, so the stage sized, swept, laid out and "
+              "packaged these block(s) against a spec that is not the one "
+              "asked for, and every A-gate is green because each compares "
+              "the artefact with the artefact."),
+        # `test` is filled in by `emit_test` once the run's own regression
+        # has actually been WRITTEN — see the note on R1.
+    }
+
+# ─────────────────────────────────────────────────────────────────────────────
 # the rejection's executable test
 # ─────────────────────────────────────────────────────────────────────────────
 # THE TEST BELONGS TO THE RUN, NOT TO THE PLUGIN. The doctrine is that a
@@ -1293,6 +1589,134 @@ if __name__ == "__main__":
 """
 
 
+# The stage_analog counterpart. Same contract as the templates above:
+# stdlib only, a valid pytest module AND a valid `python3 <file>` script,
+# no absolute path baked in, and it RE-DERIVES NOTHING — it runs no
+# simulator and rebuilds no deck. It reads this run's own L5 and this
+# run's own per-block spec.json and recomputes the comparison the flow
+# never makes.
+_EMITTED_TEST_ANALOG = r'''#!/usr/bin/env python3
+"""AUTO-EMITTED by `{program}` from a stage-{stage} ON-PASS review rejection.
+
+    {contradiction}
+
+This test FAILS while that is true of this run tree and PASSES once it is
+repaired. It reads only this run's own INTENT and ARTEFACT — no oracle, no
+harness, no golden — and it re-derives nothing: it runs no simulator and
+rebuilds no deck.
+
+REPAIR is one of exactly two things, and which one is a design decision this
+test does not make:
+  * A1 re-extracts the block's spec.json so it carries every numeric
+    requirement the intent declares, at the values the intent declares, and
+    A2-A9 are RE-RUN on it — a spec change that was never re-simulated is not
+    a fix; or
+  * the intent is corrected to declare the requirements this design is
+    actually held to, and the blocks are re-graded from it.
+"""
+import json
+import sys
+from pathlib import Path
+
+INTENT_REL = {intent_rel!r}
+ANALOG_RELS = {analog_rels!r}
+BLOCKS = {blocks!r}
+NUMERIC_KEYS = ("target", "min", "max", "value", "typ")
+
+
+def run_root() -> Path:
+    for d in [Path(__file__).resolve()] + list(Path(__file__).resolve().parents):
+        if (d / "phase1" / "generated_docs").is_dir():
+            return d
+    raise AssertionError("no run root above %s" % __file__)
+
+
+def numbers(row):
+    out = dict()
+    for k in NUMERIC_KEYS:
+        v = row.get(k)
+        if isinstance(v, bool) or not isinstance(v, (int, float)):
+            continue
+        out[k] = float(v)
+    return out
+
+
+def spec_key(name):
+    return "".join(ch for ch in str(name).lower() if ch.isalnum())
+
+
+def test_the_spec_this_run_grades_against_is_the_spec_the_intent_declares():
+    root = run_root()
+    intent = json.loads((root / INTENT_REL).read_text(encoding="utf-8",
+                                                      errors="replace"))
+    problems = []
+    measured = 0
+    for blk in intent.get("analog_blocks") or []:
+        if not isinstance(blk, dict):
+            continue
+        name = str(blk.get("name") or "")
+        if name not in BLOCKS:
+            continue
+        spec = blk.get("spec") if isinstance(blk.get("spec"), dict) else dict()
+        reqs = [r for r in (spec.get("specs") or [])
+                if isinstance(r, dict) and numbers(r)]
+        if not reqs:
+            continue
+        art = None
+        for rel in ANALOG_RELS:
+            cand = root / rel / name / "spec.json"
+            if cand.is_file():
+                art = cand
+                break
+        assert art is not None, (
+            "%s declares %d numeric requirement(s) for block %r and no "
+            "spec.json resolves under %s" % (INTENT_REL, len(reqs), name,
+                                             ", ".join(ANALOG_RELS)))
+        adoc = json.loads(art.read_text(encoding="utf-8", errors="replace"))
+        arows = [r for r in (adoc.get("specs") or []) if isinstance(r, dict)]
+        by_key = dict()
+        for r in arows:
+            by_key.setdefault(spec_key(r.get("name")), numbers(r))
+        value_sets = [set(v.values()) for v in by_key.values() if v]
+        measured += 1
+        for req in reqs:
+            k = spec_key(req.get("name"))
+            want = numbers(req)
+            if k not in by_key:
+                if not any(set(want.values()) <= vs for vs in value_sets):
+                    problems.append(
+                        "%s: block %r requires %r %s and %s carries no such "
+                        "row" % (INTENT_REL, name, req.get("name"), want,
+                                 art.relative_to(root)))
+                continue
+            got = by_key[k]
+            target = got.get("target", got.get("value", got.get("typ")))
+            lo, hi = want.get("min"), want.get("max")
+            if target is None or (lo is None and hi is None):
+                continue
+            if (lo is not None and target < lo) or (hi is not None
+                                                    and target > hi):
+                problems.append(
+                    "%s: block %r requires %r in [%s, %s] and %s grades it at "
+                    "%s" % (INTENT_REL, name, req.get("name"), lo, hi,
+                            art.relative_to(root), target))
+    assert measured, (
+        "no block of %s was measured; this test refutes nothing over an empty "
+        "scope" % ", ".join(BLOCKS))
+    assert not problems, (
+        "the spec %d block(s) are graded against is not the spec the intent "
+        "declares:\n  " % measured + "\n  ".join(problems))
+
+
+if __name__ == "__main__":
+    try:
+        test_the_spec_this_run_grades_against_is_the_spec_the_intent_declares()
+    except AssertionError as e:
+        print("FAIL: %s" % e)
+        sys.exit(1)
+    print("PASS: every declared numeric requirement is in the graded spec")
+'''
+
 def _body_r1(finding: Dict[str, Any], stage_id: str) -> str:
     return _EMITTED_TEST.format(
         program=_NAME, stage=stage_id,
@@ -1320,6 +1744,20 @@ def _body_r3(finding: Dict[str, Any], stage_id: str) -> str:
         deck_rel=finding["artefact"]["file"],
         asked_ns=float(finding["intent"]["period_ns"]))
 
+
+def _body_analog(finding: Dict[str, Any], stage_id: str) -> str:
+    """The BODY only. `emit_test` is the one writer and does the rest.
+
+    Every argument is read back out of the finding the rule already published,
+    so there is nothing for the rule to smuggle through the record a landing
+    reads.
+    """
+    return _EMITTED_TEST_ANALOG.format(
+        program=_NAME, stage=stage_id,
+        contradiction=finding["contradiction"],
+        intent_rel=finding["intent"]["intent_rel"],
+        analog_rels=list(finding["artefact"]["artefact_rels"]),
+        blocks=[b["block"] for b in finding["artefact"]["blocks"]])
 
 def emit_test(dest: Path, finding: Dict[str, Any], stage_id: str) -> Path:
     """Write the run's own regression for this rejection and return its path.
@@ -1349,14 +1787,17 @@ _RULES = {
     "stage1": [("R1_INTENT_TOP_NOT_BUILT", rule_intent_top_not_built)],
     "stage2": [("R2_INTENT_PIN_NOT_IN_NETLIST", rule_intent_pin_not_in_netlist)],
     "stage3": [("R3_SIGNOFF_CLOCK_SLOWER_THAN_INTENT",
-                rule_signoff_clock_slower_than_intent)],
+                rule_signoff_clock_slower_than_intent)],    "stage_analog": [("R_ANALOG_INTENT_SPEC_NOT_THE_GRADED_SPEC",
+                       rule_intent_spec_not_the_graded_spec)],
+
 }
 
 #: The emitter for each rule's own regression. Keyed by rule id, beside
 #: `_RULES`, so a rule added without one fails loudly at emit time.
 _EMITTERS = {"R1_INTENT_TOP_NOT_BUILT": _body_r1,
              "R2_INTENT_PIN_NOT_IN_NETLIST": _body_r2,
-             "R3_SIGNOFF_CLOCK_SLOWER_THAN_INTENT": _body_r3}
+             "R3_SIGNOFF_CLOCK_SLOWER_THAN_INTENT": _body_r3,
+             "R_ANALOG_INTENT_SPEC_NOT_THE_GRADED_SPEC": _body_analog}
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1485,9 +1926,54 @@ def _print_r3(f: Dict[str, Any]) -> None:
               f"intent and the deck and does not depend on one existing")
 
 
+def _print_analog(f: Dict[str, Any]) -> None:
+    """R_ANALOG's own evidence lines.
+
+    Neither of the printers above fits: R1 renders a declared top against a
+    module set and R2 a pin list against a netlist's ports. This rule's pair is
+    a per-block REQUIREMENT SET against the spec.json the stage grades on, and
+    it measures SEVERAL subjects — so the denominator is part of the evidence
+    and is printed, not left for a reader to infer from a count of rules.
+    """
+    i, art = f["intent"], f["artefact"]
+    n_req = sum(len(b["intent_requirements"]) for b in art["blocks"])
+    print(f"    INTENT   {i['file']} :: {i['field']} declares {n_req} numeric "
+          f"requirement(s) over {art['block_count']} block(s) in scope")
+    for b in art["blocks"]:
+        print(f"               {b['block']}: "
+              + ", ".join(str(r["name"]) for r in b["intent_requirements"]))
+    print(f"    ARTEFACT the spec every A2-A9 gate grades against:")
+    for b in art["blocks"]:
+        print(f"               {b['artefact_rel']} carries "
+              f"{len(b['artefact_specs'])} row(s)"
+              + (f" (extraction_strategy="
+                 f"{b['artefact_extraction_strategy']!r})"
+                 if b.get("artefact_extraction_strategy") else "")
+              + ": " + (", ".join(str(n) for n in b["artefact_specs"])
+                        or "(none)"))
+    for b in f["findings_per_block"]:
+        if b["dropped"]:
+            print(f"    DROPPED  {b['block']}: {len(b['dropped'])} declared "
+                  f"requirement(s) absent from {b['artefact_rel']} under "
+                  f"neither name nor value: "
+                  + ", ".join(f"{d['name']!r} {d['declared']}"
+                              for d in b["dropped"]))
+        for c in b["contradicted"]:
+            print(f"    OUT OF RANGE {b['block']}: the intent declares "
+                  f"{c['name']!r} in "
+                  f"[{c['declared'].get('min')}, {c['declared'].get('max')}] "
+                  f"{c['unit'] or ''} and {b['artefact_rel']} grades it at "
+                  f"{c['graded_target']}")
+    print(f"    DENOMINATOR {len(f['findings_per_block'])} of "
+          f"{art['block_count']} block(s) measured contradict the intent; "
+          f"{len(f.get('disarmed') or [])} disarmed by the intent's own "
+          f"disclosure, {len(f.get('unreadable') or [])} with no readable "
+          f"spec.json")
+
 _PRINTERS = {"R1_INTENT_TOP_NOT_BUILT": _print_r1,
              "R2_INTENT_PIN_NOT_IN_NETLIST": _print_r2,
-             "R3_SIGNOFF_CLOCK_SLOWER_THAN_INTENT": _print_r3}
+             "R3_SIGNOFF_CLOCK_SLOWER_THAN_INTENT": _print_r3,
+             "R_ANALOG_INTENT_SPEC_NOT_THE_GRADED_SPEC": _print_analog}
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1612,6 +2098,15 @@ def main(argv: Optional[List[str]] = None) -> int:
     for f in rec["observations"]:
         if f["verdict"] == "DISARMED":
             print(f"{_NAME}: [INFO] {f['rule']} DISARMED — {f['observation']}")
+        # A RULE THAT MEASURES SEVERAL SUBJECTS REPORTS ITS OWN DENOMINATOR.
+        # The summary line at the end counts RULES, so a rule that accepted
+        # after the intent's disclosure took some of its own subjects out of
+        # scope would otherwise be summarised as "0 disarmed" over a non-empty
+        # disarm set. INERT for R1 and R2: neither carries `observation` on an
+        # ACCEPT, and `test_the_accept_observation_branch_is_inert_for_the_
+        # other_stages` in tests/test_stage_analog_on_pass_review.py pins that.
+        elif f["verdict"] == "ACCEPT" and f.get("observation"):
+            print(f"{_NAME}: [INFO] {f['rule']} ACCEPT — {f['observation']}")
 
     if rec["rejections"]:
         print(f"{_NAME}: REJECT — {len(rec['rejections'])} proven "

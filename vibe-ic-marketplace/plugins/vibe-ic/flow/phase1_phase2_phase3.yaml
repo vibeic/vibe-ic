@@ -233,6 +233,52 @@ stages:
     # / Cosim respectively.
     condition:
       files_exist: ["phase1/analog/analog_block_list.json"]
+    # THE ON-PASS REVIEW OF THE ANALOG TRACK, and the one question the A-gates
+    # cannot ask. A1 reads the intent (L5_ADI_SPEC.json) ONCE and writes
+    # `phase3/analog/<block>/spec.json`. From A2 to A9 that file IS the spec:
+    # the topology is chosen against it, the deck sized against it, the PVT
+    # sweep graded against it (`corner_yield_vs_spec_check` is explicit —
+    # "parse yield table vs spec.json limits"), and the layout and hardmacro
+    # signed off on the result.
+    #
+    # MEASURED on this tree: of the 54 `analog_*` programs, SEVEN open
+    # L5_ADI_SPEC.json. FIVE are PRODUCERS (analog_a1_spec_emit,
+    # analog_a2_topology_emit, analog_a3_netlist_emit, analog_real_corner_sweep,
+    # analog_one_shot_runner). The other two are checkers asking a different
+    # question: `analog_a0_skip_forbidden_check` uses
+    # `analog_blocks_detected=false` as a waiver for a forbidden skip file and
+    # never reads a block's requirements, and
+    # `analog_content_detected_must_emit_l5_check` grades L5 against the input
+    # DOCS and never opens a spec.json. NO A1-A9 GATE READS A BLOCK'S
+    # REQUIREMENTS OUT OF L5 AT ALL; the one A-gate that opens an L doc does it
+    # for an unrelated layer (analog_netlist_pdk_check reads
+    # L19_CONSTRAINTS_PDK). So nothing in the flow compares the
+    # spec the stage grades against with the spec the design asked for, and
+    # every A-gate is green on a short or wrong copy because each of them
+    # compares the artefact with the artefact.
+    on_pass_review:
+      skill: analog-output-verify
+      fires_on: stage_pass
+      verdict: advisory
+      intent:
+        - "phase1/generated_docs/L5_ADI_SPEC.json"
+      intent_deny: ["oracle", "harness", "golden", "reference_output", "solution"]
+      # BOTH spellings, canonical first — the same OR the A1..A9 steps declare
+      # for every one of their own artefacts, and for the same reason: every
+      # producer writes `phase3/analog/`, and `migrate_to_layout_p` moves a
+      # project-root analog/ tree to `phase1/analog/`. The review resolves
+      # `<dir>/<block>/spec.json` in the order written here and adds no third
+      # spelling of its own.
+      artefact:
+        - "phase3/analog/"
+        - "phase1/analog/"
+      rejection_requires: [intent, artefact, contradiction, test]
+      # See the stage1 note: a rejection must be proven by a test that FAILS
+      # TODAY, which cannot live in the plugin's own suite. It is written into
+      # the run being reviewed.
+      emit_test_dir: "reports/analog/on_pass_review"
+      gate:
+        program_exit_zero: "stage_on_pass_review . --stage stage_analog --json reports/analog/stage_analog_on_pass_review.json"
 
   - id: stage3
     name: "Physical Design + Sign-off"

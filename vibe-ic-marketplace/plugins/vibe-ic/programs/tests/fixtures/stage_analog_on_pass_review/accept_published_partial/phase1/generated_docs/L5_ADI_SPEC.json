@@ -1,0 +1,139 @@
+{
+  "schema_version": 2,
+  "doc_class": "adi_spec",
+  "ic_name": "u_hawaii_adc",
+  "analog_blocks_detected": true,
+  "analog_blocks": [
+    {
+      "name": "delta_sigma",
+      "type": "delta_sigma",
+      "spec": "1.8 V, 1.2 V, 125 °C",
+      "low_confidence": false,
+      "evidence": "input/docs/L1_DATASHEET.md (delta-sigma)",
+      "evidence_paragraph": "## Tapeout target\n| Field | Value |\n|---|---|\n| Target PDK | **IHP SG13G2** (130nm BiCMOS, open PDK) |\n| Supplies | IO/analog **1.8 V** (IOVDD) · core **1.2 V** (one channel core from the LDO) |\n| Channels | **6** identical incremental delt",
+      "count": 6,
+      "multiplicity": 6
+    },
+    {
+      "name": "ldo",
+      "type": "ldo",
+      "spec": {
+        "specs": [
+          {
+            "name": "Vout",
+            "target_raw": "1.2",
+            "range_raw": "1.1–1.3",
+            "unit": "V",
+            "note": "regulated CORE for the LDO-fed modulator copy",
+            "target": 1.2,
+            "min": 1.1,
+            "max": 1.3
+          },
+          {
+            "name": "Iout",
+            "target_raw": "0.5",
+            "range_raw": "0.1–1.0",
+            "unit": "mA",
+            "note": "modulator quiescent + dynamic budget (est)",
+            "target": 0.5,
+            "min": 0.1,
+            "max": 1.0
+          },
+          {
+            "name": "Vin",
+            "target_raw": "1.8",
+            "range_raw": "1.6–2.0",
+            "unit": "V",
+            "note": "IOVDD (confirmed top pin)",
+            "target": 1.8,
+            "min": 1.6,
+            "max": 2.0
+          },
+          {
+            "name": "Dropout",
+            "target_raw": "≤ 0.5",
+            "range_raw": "—",
+            "unit": "V",
+            "note": "headroom (1.8 IOVDD − 1.2 CORE = 0.6 V available)",
+            "max": 0.5
+          },
+          {
+            "name": "PSRR",
+            "target_raw": "≥ 40",
+            "range_raw": "≥ 40",
+            "unit": "dB",
+            "note": "supply rejection target (est, not silicon-measured)",
+            "min": 40.0
+          },
+          {
+            "name": "Iq",
+            "target_raw": "≤ 50",
+            "range_raw": "—",
+            "unit": "µA",
+            "note": "quiescent current target (est)",
+            "max": 50.0
+          },
+          {
+            "name": "Load/line reg",
+            "target_raw": "best-effort",
+            "range_raw": "—",
+            "unit": "—",
+            "note": "report achieved"
+          }
+        ],
+        "source": "L5_ANALOG_SPEC.md"
+      },
+      "low_confidence": false,
+      "evidence": "input/docs/L9_CONSTRAINTS.md (LDO)",
+      "evidence_paragraph": "## Floorplan\n| Field | Value |\n|---|---|\n| Core die (no seal ring) | 1300 × 1300 µm |\n| With seal ring | ~1480 × 1480 µm |\n| Channel layout | 6 identical modulator copies (array); 1 with adjacent LDO |\n| Pad ring | analog IN/OUT + supply pa",
+      "spec_extraction": "block_spec_table_v455",
+      "count": 1,
+      "multiplicity": 1
+    }
+  ],
+  "no_analog": false,
+  "external_components": [],
+  "electrical_specs": [],
+  "design_parameters": [
+    {
+      "parameter": "documented LEVEL",
+      "value": "1",
+      "source": "L5_ANALOG_SPEC.md",
+      "raw": "documented LEVEL=1 standin models — modeled, NOT silicon sign-off (disclosed in every result).",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    }
+  ],
+  "spurious_analog_blocks": [
+    {
+      "name": "adc",
+      "type": "adc",
+      "spec": null,
+      "low_confidence": true,
+      "evidence": "input/docs/L1_DATASHEET.md (ADC)",
+      "evidence_paragraph": "## Product\n| Field | Value |\n|---|---|\n| product_name | `u_hawaii_adc` (UHEE628) |\n| product_family | mixed-signal incremental delta-sigma ADC front-end |\n| one-line | An array of 6 incremental delta-sigma modulator channels; one channel's ",
+      "spurious": true,
+      "spurious_reason": "ORGANIC #466 R3: L5 explicitly enumerates analog block types and this candidate has NO L5 block-layer evidence (no Block-heading line and no spec-table block-type row naming it — it occurs only in L1/product-narrative prose; any spec it carries was harvested from that prose, not from a block spec table) — excluded from the sizing-consuming block list."
+    }
+  ],
+  "extraction_evidence": {
+    "input/docs/L1_DATASHEET.md": [
+      {
+        "literal": "ADC",
+        "label": "analog keyword class=adc (low_confidence)"
+      },
+      {
+        "literal": "delta-sigma",
+        "label": "analog keyword class=delta_sigma"
+      }
+    ],
+    "input/docs/L5_ANALOG_SPEC.md": [],
+    "input/docs/L9_CONSTRAINTS.md": [
+      {
+        "literal": "LDO",
+        "label": "analog keyword class=ldo (low_confidence)"
+      }
+    ]
+  },
+  "analog_digital_interface_present": false,
+  "signaling_summary": "Digital protocol block; signaling is on the named external pins per the protocol specification."
+}
