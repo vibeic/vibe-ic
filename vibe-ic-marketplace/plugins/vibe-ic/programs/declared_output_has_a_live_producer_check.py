@@ -47,6 +47,29 @@ only a minority of declared paths resolve to a write site. Blocking on the
 weak answer would report the ordinary way this repo writes files. Blocking on
 NO-TRACE reports the case where nothing in the running source mentions the
 path at all -- which is what a deleted producer leaves behind.
+
+(That is no longer the whole blocking condition. The DEMOTION recorded in the
+write-site baseline is too -- see the block above `regressed` in `main`, and
+the measurement that put it there. This heading survives because the reasoning
+under it is still why NO-TRACE alone is not enough.)
+
+WHERE THE BASELINE COMES FROM
+=============================
+`--root`, like every other input this program reads. The gate is declared as
+`$PG/declared_output_has_a_live_producer_check.py --root "$ROOT" --strict`,
+where `$PG` names the EXECUTABLE (pinned to the runtime tree) and `$ROOT`
+names the INPUT (it follows `VIBEIC_SUBJECT_ROOT`). A baseline resolved beside
+the program made those two trees disagree: the audit followed the redirect and
+the record did not, so every path the RUNTIME tree had resolved was looked up
+in the SUBJECT's flow, found absent, and reported as a lost write site.
+MEASURED on ae4dbc091 against this gate's own fixture pair: BOTH directions
+came back rc 1 carrying the same 18 `[LOST WRITE SITE]` lines, not one of
+which is about the subject.
+
+An ABSENT baseline under `--root` is REFUSED (rc 2), never read as "nothing to
+compare against". Resolving the file correctly without that would trade a gate
+that refused every redirected subject for one that accepted every redirected
+subject -- the same defect wearing the other sign.
 """
 from __future__ import annotations
 
@@ -72,8 +95,34 @@ VENUE_RELS: Tuple[str, ...] = (
 )
 SOURCE_SUFFIXES = (".py", ".sh", ".yaml", ".yml", ".json", ".tcl")
 
-_DEFAULT_INVENTORY = (Path(__file__).resolve().parent
-                      / "declared_output_write_site_baseline.json")
+#: The baseline is an INPUT, not part of the executable, so it is resolved
+#: under `--root` like every other input this program reads.
+#:
+#: IT USED TO BE RESOLVED BESIDE THE PROGRAM, and that made the gate answer
+#: about two trees at once. `repo_hygiene_gates.sh` runs this as
+#: `$PG/declared_output_has_a_live_producer_check.py --root "$ROOT"`, where
+#: `$PG` is pinned to the RUNTIME tree (it names the executable) and `$ROOT`
+#: follows `VIBEIC_SUBJECT_ROOT` (it names the input) — the split that lane
+#: documents for `unanchored_process_kill_check` at line 533 of that script.
+#: With the baseline beside the program, the audit followed the redirect and
+#: the baseline did not: every path the RUNTIME tree had resolved to a write
+#: site was looked up in the SUBJECT's flow, found absent, and reported as a
+#: regression. MEASURED on ae4dbc091, against this gate's own fixture pair:
+#: BOTH directions came back rc 1 with the same 18 `[LOST WRITE SITE]` lines,
+#: none of which is about the subject. A gate that refuses every input is not
+#: discriminating for the same reason one that accepts every input is not.
+_INVENTORY_REL = ("vibe-ic-marketplace/plugins/vibe-ic/programs"
+                  "/declared_output_write_site_baseline.json")
+
+#: The baseline SHIPPED BESIDE THIS PROGRAM — the record of the tree the
+#: EXECUTABLE came from. That is the right file for an in-process reader
+#: already auditing that same tree (`test_matrix_d3_outputs_produced` audits
+#: `F.PLUGIN_ROOT` and reads this, so a cell there and the shipped gate cannot
+#: disagree about what a regression is), and the wrong file for `main()`, whose
+#: subject is `--root`. The two are kept under two names so the distinction
+#: cannot be quietly lost again.
+SHIPPED_INVENTORY = (Path(__file__).resolve().parent
+                     / "declared_output_write_site_baseline.json")
 
 
 # --------------------------------------------------------------- rendering --
@@ -336,22 +385,12 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     ap.add_argument("--strict", action="store_true",
                     help="exit 1 on a NO-TRACE output or a lost write site")
     ap.add_argument("--inventory",
-                    help="the shrink-only write-site baseline (default: beside this program)")
+                    help="the shrink-only write-site baseline (default: under --root)")
     ap.add_argument("--record", action="store_true",
                     help="rewrite the baseline from this tree; never automatic")
     args = ap.parse_args(argv)
 
     root = Path(args.root).resolve()
-    inv_path = Path(args.inventory) if args.inventory else _DEFAULT_INVENTORY
-    inventory = None
-    if inv_path.is_file():
-        try:
-            inventory = json.loads(inv_path.read_text(encoding="utf-8"))
-        except ValueError as exc:
-            print(f"CANNOT CHECK: {inv_path} is not readable JSON ({exc}). An "
-                  f"unreadable baseline is refused, never treated as empty.",
-                  file=sys.stderr)
-            return 2
     try:
         report = audit(root,
                        flow=Path(args.flow) if args.flow else None,
@@ -359,6 +398,36 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     except FileNotFoundError as exc:
         print(f"CANNOT CHECK: {exc}", file=sys.stderr)
         return 2
+
+    # The baseline is read from the SUBJECT (see `_INVENTORY_REL`), and its
+    # ABSENCE IS REFUSED rather than read as "nothing to compare against".
+    # That is the same rule the unreadable case already had, and it has to be
+    # the same rule: the blocking condition of this gate is the DEMOTION, so a
+    # run with no baseline checks nothing that can fire. Resolving the baseline
+    # under `--root` without this would turn a gate that refused every
+    # redirected subject into one that silently accepted every redirected
+    # subject — the other half of the same defect.
+    inv_path = Path(args.inventory) if args.inventory else root / _INVENTORY_REL
+    inventory = None
+    if not inv_path.is_file():
+        if args.record:
+            inventory = None          # --record writes it; see below
+        else:
+            print(f"CANNOT CHECK: no write-site baseline at {inv_path}. This "
+                  f"gate blocks on a path LOSING its producer, which is a "
+                  f"comparison against that file; with no baseline there is "
+                  f"nothing to compare and a PASS would certify nothing. "
+                  f"Point --inventory at one, or rebuild it with --record.",
+                  file=sys.stderr)
+            return 2
+    else:
+        try:
+            inventory = json.loads(inv_path.read_text(encoding="utf-8"))
+        except ValueError as exc:
+            print(f"CANNOT CHECK: {inv_path} is not readable JSON ({exc}). An "
+                  f"unreadable baseline is refused, never treated as empty.",
+                  file=sys.stderr)
+            return 2
 
     no_trace = sorted(p for p, r in report["rows"].items()
                       if r["state"] == "NO-TRACE")
@@ -405,6 +474,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
               else f"{bad} declared output(s) lost or never had a producer")
 
     if args.record:
+        inv_path.parent.mkdir(parents=True, exist_ok=True)
         inv_path.write_text(json.dumps({
             "_comment": ("Declared required_outputs this tree resolves to a real "
                          "write site. SHRINK-ONLY is the wrong word: this set may "
