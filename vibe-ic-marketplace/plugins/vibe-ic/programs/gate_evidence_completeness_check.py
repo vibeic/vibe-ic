@@ -23,7 +23,36 @@ Usage:
     python3 gate_evidence_completeness_check.py <project_dir> --json report.json
     python3 gate_evidence_completeness_check.py <project_dir> --report FINAL_REPORT.md
 
-Exit 0 = every PASS gate has evidence, 1 = gaps found, 2 = I/O error.
+Exit codes:
+    0  every PASS gate in the report has evidence — or the report was READ and
+       claims no PASS gates at all. An empty artefact is not a missing one.
+    1  GAPS FOUND: the report claims a PASS the run has no artefact for.
+    2  NOT CHECKED: the question could not be put — the project dir is not a
+       directory, the report is absent, or it is present and unparseable.
+
+WHY 2 AND NOT 1 FOR AN ABSENT REPORT (measured 2026-08-31)
+=========================================================
+This program used to print `FAIL: nothing to audit` and return 1 when neither a
+FINAL_REPORT.md nor a flow-compliance JSON existed. That contradicted the line
+directly above it: rc 1 is defined here as "gaps found", and an absent report is
+not a gap — it is the same I/O condition the two neighbouring branches already
+route to 2 (`not a directory`, and `cannot parse JSON`). The absent-report
+branch was the only one of the three that answered a question it had never
+asked, and it answered it with the word FAIL.
+
+Measured on a real completed run tree (spm x sky130): rc 1, and the flow's
+advisory slot recorded it as `__ADVISORY_HINT__FINDING`, i.e. a finding against
+a design this program had not read one byte of. `gate_zero_denominator_refuses_
+check` already names this class -- "a gate ... returning a verdict about a
+design it had not read" -- and lists `fpga_qsf_lint "ERROR: QSF file not found"
+rc 1` as one of its three worked examples. That program is deliberately only the
+PROBE and says each fix is its own measured change. This is that change, for
+this one gate; no other gate's behaviour is touched.
+
+The rc-0 branch below is deliberately NOT changed with it. A report that was
+read and states no PASS claims is a real result over a real artefact, and rc 0
+is correct for it -- the distinction this repo states as "an empty artefact is
+not a missing one".
 """
 from __future__ import annotations
 
@@ -34,6 +63,7 @@ import sys
 from pathlib import Path
 from typing import Dict, List, Optional, Set, Tuple
 import _path_layout as _pl
+import _vacuous_exit as _vx
 
 
 def find_report(project: Path) -> Optional[Path]:
@@ -137,9 +167,16 @@ def main(argv=None) -> int:
 
     report_path = Path(args.report) if args.report else find_report(project)
     if not report_path or not report_path.exists():
-        print("gate_evidence_completeness_check: no FINAL_REPORT or flow compliance JSON found")
-        print("FAIL: nothing to audit")
-        return 1
+        # NOT CHECKED, not FAIL. Nothing was read, so there is no design to
+        # return a verdict about. The `VACUOUS_PASS:` sentinel is the token
+        # `flow_compliance_check._stdout_signals_vacuous` matches, so the
+        # advisory slot records this as `n/a (input not present)` instead of
+        # as a FINDING against an unread design.
+        reason = "no FINAL_REPORT.md or flow-compliance JSON in this run"
+        _vx.announce_vacuous("gate_evidence_completeness_check", reason)
+        print(_vx.verdict_line("gate_evidence_completeness_check",
+                               passed=True, skipped=True, reason=reason))
+        return _vx.exit_code(passed=True, skipped=True)
 
     if report_path.suffix == '.json':
         try:

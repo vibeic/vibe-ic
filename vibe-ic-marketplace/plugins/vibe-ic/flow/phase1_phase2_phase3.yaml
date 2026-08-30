@@ -6706,7 +6706,7 @@ steps:
         # artefact above unwritten.
         - advisory_program_exit_zero:
               command: "dfm_screen_check . --json reports/phase2/gates/dfm_screen.json"
-              advisory_reason: "NOT-YET-CLEAN: this gate CAN refuse and is wired advisory as a ratchet position, not as a verdict. Notch measured rc 1 on a real spm run (2026-08-31): it REFUSES TODAY on real input; the advisory slot is currently swallowing a live finding. Promote to blocking once this run is clean. It reported: dfm_screen_check: PASS_WITH_ADVISORIES — 1 advisory finding(s) [VIA_CUTS_UNRESOLVED]: 4129/4129 signal-net via uses reference via(s) declared neither "
+              advisory_reason: "CENSUS, correct permanently — and rc 1 here is NOT a refusal. This gate declares its own three tiers: 0 PASS, 1 PASS_WITH_ADVISORIES (the screen ran and RAISED a finding), 2 vacuous SKIP; the same docstring states the flow MUST wire it in the advisory slot. Notch rc 1 on a real spm run (2026-08-31) is therefore the advisory-finding tier working, not a swallowed refusal, and promoting this clause to blocking would fail every run that raises any advisory at all. What it counts: signal-net via uses whose via redundancy it could resolve. It reported 4129/4129 UNRESOLVED because the vias are declared neither in the DEF VIAS section nor in any locatable tech LEF -- redundancy is UNMEASURED for them, not violated, and the screen deliberately does not infer a cut count from an absent declaration."
     blocks_on: [34]
 
   - id: 36

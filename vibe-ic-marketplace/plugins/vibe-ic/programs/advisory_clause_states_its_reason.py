@@ -65,10 +65,21 @@ row above reads 84 for that reason and not because the rule was loosened.
 WHAT THOSE 82 REASONS SAY, and why they are not invented prose. Each is a
 MEASUREMENT, from a four-way classification of the whole population:
 
-    NOT-YET-CLEAN  62   can refuse; advisory is a ratchet position. The reason
+    NOT-YET-CLEAN  61   can refuse; advisory is a ratchet position. The reason
                         states the NOTCH — the rc that clause's own declared
                         command returned on a real completed run tree
-                        (15 rc 1, 30 rc 0, 17 rc 2).
+                        (14 rc 1, 30 rc 0, 17 rc 2).
+
+                        rc 1 IS NOT THE SAME FACT IN EVERY GATE, and reading it
+                        as one produced the first wrong reason this register
+                        carried. Measured over all 18 rc-1 clauses: exactly one,
+                        `dfm_screen_check`, declares rc 1 as a NON-failure tier
+                        (0 PASS / 1 PASS_WITH_ADVISORIES / 2 vacuous SKIP) and
+                        its own docstring says the flow MUST wire it advisory.
+                        Its reason called that a swallowed refusal and told a
+                        future reader to promote it to blocking, which would
+                        fail every run raising any advisory. Corrected, and the
+                        clause moved to CENSUS where it belongs.
     DEMOTED        13   wired blocking (7) or in the refusing `optional` slot
                         (6) and moved here. The reason names the commit and
                         quotes its stated justification. `integration_spec_audit`
@@ -78,7 +89,7 @@ MEASUREMENT, from a four-way classification of the whole population:
                         real violation and recording rc 0. 2 are `*_check`
                         programs with a defect predicate they cannot act on;
                         5 are producers/classifiers wired into a gate slot.
-    CENSUS          2   measures a population and records it; correctly
+    CENSUS          3   measures a population and records it; correctly
                         advisory, permanently.
 
 A reason invented to satisfy a checker informs nobody, which is why the register
