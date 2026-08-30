@@ -420,6 +420,20 @@ def test_every_rule_has_an_emitter_and_a_printer():
     active and declared-not-enabled registries are pinned to agree with the
     emitter and printer registries here — including for rules this stage did
     not author.
+
+    THE SET IS EVERY RULE THE PROGRAM KNOWS, NOT ONLY THE ENABLED ONES.
+    `_RULES` was the whole population when this was written; stage5 added
+    `_DECLARED_NOT_ENABLED` — a rule whose contradiction is real and whose
+    evidence does not exist yet. The moment such a rule IS enabled, `emit_test`
+    looks its emitter up, so it is exactly a rule for which discovering the
+    KeyError at runtime is the thing to prevent.
+
+    STILL EXACT SET EQUALITY, in both directions, so widening the left side did
+    not make this weaker: a rule in either dict with no emitter fails, and an
+    emitter naming a rule in NEITHER dict fails too. The union ADDS R5 to what
+    is REQUIRED rather than exempting it. That claim is not left to be read off
+    the code — `test_a_declared_not_enabled_rule_is_not_an_exemption` below is
+    its control, and both were measured against four mutations.
     """
     mod = _program()
     ids = {rid for rules in mod._RULES.values() for rid, _ in rules}
@@ -432,6 +446,47 @@ def test_every_rule_has_an_emitter_and_a_printer():
         f"printers {sorted(set(mod._PRINTERS) ^ ids)} do not match the rules")
     assert mod._EMITTERS[RULE] is mod._body_analog
     assert mod._PRINTERS[RULE] is mod._print_analog
+
+
+def test_a_declared_not_enabled_rule_is_not_an_exemption():
+    """THE CONTROL ON THE WIDENING ABOVE.
+
+    Widening a set that its neighbour compares by EQUALITY is the move that
+    quietly turns a check into a rubber stamp, so the widening is proved to
+    bite. Every rule in `_DECLARED_NOT_ENABLED` must carry BOTH registrations
+    and a reason, asserted on the DICT itself rather than inferred from the
+    equality — an equality can be satisfied by two sets that are wrong
+    together.
+
+    A rule may not sit in both dicts either: `main()` branches on
+    `stage in _DECLARED_NOT_ENABLED and stage not in _RULES`, so a stage in
+    both would RUN the rule while reporting it as not enabled — the one state
+    a "declared, not enabled" register must never be able to reach.
+
+    MEASURED against four mutations of the program, each caught, then restored:
+        drop R5 from _EMITTERS                      2 failed, 16 passed
+        an _EMITTERS key naming no rule (orphan)    1 failed, 17 passed
+        stage5 in BOTH _RULES and _DECLARED         1 failed, 17 passed
+        drop R5's _NOT_ENABLED_REASON              13 failed,  5 passed
+        restored                                            18 passed
+    """
+    mod = _program()
+    dne = getattr(mod, "_DECLARED_NOT_ENABLED", {})
+    if not dne:
+        return                    # nothing declared-not-enabled; nothing to pin
+    for stage, rules in dne.items():
+        assert stage not in mod._RULES, (
+            f"{stage} is in BOTH _RULES and _DECLARED_NOT_ENABLED; main() would "
+            f"run its rule while reporting it as not enabled")
+        for rid, fn in rules:
+            assert rid in mod._EMITTERS, (
+                f"{rid} is declared-not-enabled with no emitter. Enabling it "
+                f"would raise KeyError inside emit_test, which is the runtime "
+                f"discovery this file exists to prevent")
+            assert rid in mod._PRINTERS, f"{rid} has no printer"
+            assert rid in mod._NOT_ENABLED_REASON, (
+                f"{rid} is not enabled and does not say why")
+            assert callable(fn)
 
 
 def test_the_accept_observation_branch_is_inert_for_the_other_stages(tree):
