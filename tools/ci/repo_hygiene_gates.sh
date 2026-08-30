@@ -114,6 +114,36 @@ gate_dispatch_init "$@"
 # is not a directory, and an empty one would have failed every gate below. So
 # there is no could-not-check state here to buy an exemption with, and rc 1 is a
 # real finding about this checkout.
+#
+# AND FOR THE SAME REASON IT CANNOT BE RE-ASKED AT THE END. `gate_host_independence
+# _check` re-drives every declared gate in the working checkout and in a fresh
+# worktree of HEAD and requires one verdict. This gate's three causes — cache
+# residue under the declared roots, tracked drift against HEAD, and
+# PYTHONDONTWRITEBYTECODE in the environment — are ALL facts about the checkout
+# and the environment; not one of them is in the commit. A fresh worktree carries
+# none of them by construction, so the two arms are REQUIRED to differ the moment
+# the checkout holds any cache leftover — and #539 makes exactly such leftovers
+# the probe's own mandatory STIMULUS, so the probe supplies the condition that
+# forces the disagreement it then reports.
+#
+# MEASURED at v1.13.52, one commit, both rounds, 4.2s:
+#   checkout  rc=1 [FAIL] ... would make the attestation measure itself [7537 file(s)]
+#   worktree  rc=0 [PASS] ... attestable — no residue, no tracked drift [7492 file(s)]
+# Inside the full sweep the same disagreement was reported as
+# NON_DETERMINISTIC_VERDICT instead of HOST_DEPENDENT_VERDICT, because
+# `files_seen` is in the verdict line and the checkout kept growing under the
+# probe's own 140 drives (7531 -> 7579), so the two rounds hashed differently.
+# Same defect, different clothes.
+#
+# NOTHING IS LOST BY EXCLUDING IT. The gate is not made advisory and its verdict
+# is not relabelled: it still runs, first, blocking, and reports rc 1 over this
+# checkout from the one position where its answer is about the CHECKOUT rather
+# than about the sweep. What the exclusion removes is a second, invalid asking of
+# a question this gate is not built to answer. `programs/tests/
+# test_gate_host_independence.py` proves that premise executably rather than
+# asserting it here.
+#
+# host-independence: EXCLUDE — its subject is a fact about the CHECKOUT and the ENVIRONMENT (cache residue, tracked drift, PYTHONDONTWRITEBYTECODE), none of which is in the commit and none of which a fresh worktree carries, so the two arms are required to differ whenever the probe has the stimulus #539 requires it to have
 run "attestation preflight"             "$ROOT" python3 "$PG/attestation_preflight_check.py" "$ROOT" --repo "$ROOT"
 run "chip-AGNOSTIC source guard"        "$ROOT" python3 "$PG/source_chip_agnostic_check.py" "$PLUGIN"
 # Its PORTABILITY twin. Wired here because `gatekeeper_review` — the only
