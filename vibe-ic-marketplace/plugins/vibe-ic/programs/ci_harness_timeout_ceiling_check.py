@@ -594,8 +594,21 @@ _LANDING_SCRIPT_SHA256 = (
 # on main and stayed red until someone read a hygiene report. A digest pin is
 # exactly the check that catches this, and it did — one landing later than it
 # should have.
+#
+# RE-PINNED 2026-08-30. WHAT MOVED: the driver's lifecycle FSM now accepts a
+# `collect_scan` event, and the collection phase now emits one. Before it, the
+# first event a parent could validate after `session_start` was
+# `collect_report`, which pytest does not reach until the whole path scan is
+# over — MEASURED on the pinned image, a 120-file selection spends 57 of its 61
+# collection seconds before that first event and emits nothing at all in the
+# window. The supervisor therefore read a healthy scan as a stall and killed it
+# at the 300 s grace; at landing width (1231 files) the targeted lane could not
+# produce a record at all. Nothing about supervision, timeouts, the stall grace
+# or the JUnit contract this file checks moved with it: the grace is still 300
+# flat seconds of ZERO forward progress, and a genuinely hung collection is
+# still killed with rc 199 (falsified in both directions before this re-pin).
 _SEMANTIC_DRIVER_SHA256 = (
-    "e412b0e3ec696c45bea5f45be14a984664b66db6bc11a11e62095d74c48d53ce"
+    "113dfba7310a4050b1431bd522334f4c1443c5983c96fb837a6b533a5047dd8e"
 )
 #: `pip install pytest-timeout` names the plugin, not a bound; it carries no
 #: `--timeout=N` and so cannot match, but the negative is stated because a
