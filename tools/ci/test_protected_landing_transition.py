@@ -633,3 +633,99 @@ def test_the_authorised_activation_still_lands_on_a_drifted_base(tmp_path):
     receipt = _receipt(repo, base, candidate, tmp_path)
     assert receipt["payload"]["operation"] == "ACTIVATE"
     assert receipt["payload"]["candidate_state_id"] == "semantic-progress-v1"
+
+
+def _hygiene_doc(attestations):
+    """One structurally complete hygiene summary over two green gates."""
+    return {
+        "declared": 2, "ran": 2, "decided": 2, "passed": 2, "failed": 0,
+        "not_checked": 0, "wrote_corpus": 0, "deferred": 0, "other_shard": 0,
+        "out_of_scope": 0,
+        "gates": [{"label": "alpha gate", "state": "PASS"},
+                  {"label": "beta gate", "state": "PASS"}],
+        "corpora": [], "process_attestations": list(attestations),
+        "not_checked_unexempted": [], "wiring_errors": [],
+        "undisclosed_loops": [], "exemptions_expired": [],
+        "listed_only": False, "shard": None,
+        "corpus_inputs": {"benchmark_data_sha": None},
+    }
+
+
+_ALPHA = {"schema": 1, "complete": True, "label": "alpha gate", "state": "PASS",
+          "argv_sha256": "a" * 64, "returncode": 0,
+          "verdict_line": "[PASS] 1 item", "finding_identities": [],
+          "semantic_sha256": "b" * 64}
+_BETA = {"schema": 1, "complete": True, "label": "beta gate", "state": "PASS",
+         "argv_sha256": "c" * 64, "returncode": 0,
+         "verdict_line": "[PASS] 1 item", "finding_identities": [],
+         "semantic_sha256": "d" * 64}
+
+
+def _attestation_digest(rows):
+    doc = _hygiene_doc(rows)
+    raw = (json.dumps(doc, sort_keys=True) + "\n").encode("utf-8")
+    return P._old_hygiene_binding(doc, raw=raw)["process_attestations_sha256"]
+
+
+def test_attestation_digest_does_not_record_which_gate_won_the_race():
+    """The hash must identify the evidence, not the order it arrived in.
+
+    `_gate_dispatch.sh` appends one attestation per gate AS THAT GATE FINISHES,
+    under a lock, and `gate_dispatch_finish` reads the file back without
+    sorting, so above one job the list order is whichever gate won.
+    `canonical_bytes` is `json.dumps(sort_keys=True)`, which sorts dict KEYS and
+    never list ELEMENTS -- so before the repair the same run, the same gates and
+    the same findings hashed two different ways depending on the race.
+
+    NEGATIVE CONTROL, in the same test, so a future edit that deletes the
+    canonicalisation cannot leave this passing: the pre-repair formula is
+    computed inline and asserted to be the thing that DID differ.
+    """
+    forward = _attestation_digest([_ALPHA, _BETA])
+    reverse = _attestation_digest([_BETA, _ALPHA])
+    assert forward == reverse, (
+        "process_attestations_sha256 still carries the completion order")
+
+    pre_fix_forward = hashlib.sha256(
+        P.canonical_bytes([_ALPHA, _BETA])).hexdigest()
+    pre_fix_reverse = hashlib.sha256(
+        P.canonical_bytes([_BETA, _ALPHA])).hexdigest()
+    assert pre_fix_forward != pre_fix_reverse, (
+        "the negative control is vacuous: the unsorted formula no longer "
+        "distinguishes these two orders, so this test proves nothing")
+
+
+def test_attestation_digest_still_moves_when_the_evidence_moves():
+    """Anti-cheat: canonicalising the ORDER must not blind the hash to CONTENT.
+
+    `return []` and `return [row["label"] for row in rows]` both make the test
+    above pass.  Neither may make this one pass.
+    """
+    baseline = _attestation_digest([_ALPHA, _BETA])
+    red = dict(_BETA, returncode=1, state="FAIL",
+               verdict_line="[FAIL] named-red",
+               finding_identities=["[FAIL] named-red"])
+    assert _attestation_digest([_ALPHA, red]) != baseline
+    assert _attestation_digest([_ALPHA]) != baseline
+    dup = _attestation_digest([_ALPHA, _BETA, _BETA])
+    assert dup != baseline, (
+        "a duplicated attestation was silently collapsed by the ordering")
+
+
+def test_gate_digest_is_deliberately_left_order_sensitive():
+    """The sibling is NOT the same defect and must not be 'fixed' alongside it.
+
+    `gates` reaches this file in DECLARATION order -- deterministic, and
+    load-bearing: `repo_hygiene_parallel.merge_records` consumes it positionally
+    with `zip(labels, gates)`.  Sorting it would erase a real property rather
+    than a race, so its digest is expected to distinguish two orders.
+    """
+    def digest(gates):
+        doc = _hygiene_doc([_ALPHA, _BETA])
+        doc["gates"] = gates
+        raw = (json.dumps(doc, sort_keys=True) + "\n").encode("utf-8")
+        return P._old_hygiene_binding(doc, raw=raw)["gates_sha256"]
+
+    forward = [{"label": "alpha gate", "state": "PASS"},
+               {"label": "beta gate", "state": "PASS"}]
+    assert digest(forward) != digest(list(reversed(forward)))

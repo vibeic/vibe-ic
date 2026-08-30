@@ -980,6 +980,47 @@ def _old_verdict_binding(value: Any, *, base_commit: str,
     }
 
 
+def _attestation_canonical_order(rows: Sequence[Any]) -> list[Any]:
+    """Order a SET-like list totally, so hashing it is not hashing a race.
+
+    `process_attestations` reaches this file in COMPLETION order.
+    `_gate_dispatch.sh` appends one record per gate as that gate finishes, under
+    a lock (`_gate_attest_locked`), and `gate_dispatch_finish` reads the file
+    back without sorting (`:1604-1616`) -- so at any job count above one the
+    order is whichever gate won the race.  `canonical_bytes` is
+    `json.dumps(sort_keys=True)`, which sorts dict KEYS and never list ELEMENTS,
+    so that race was being carried straight into
+    `process_attestations_sha256`: measured 2026-08-31, two runs of the real
+    dispatcher with the same two gates, the same argv and the same findings, the
+    only difference being which finished first, produced
+    `1e2aaa95...` and `c63951c6...`.
+
+    ORDER WAS NEVER A PROPERTY OF THIS LIST, which is why sorting is the right
+    repair rather than a papering-over.  Every consumer keys by label and
+    requires exactly one record per label, in three independent places --
+    `repo_hygiene_parallel.merge_records` ("expected one process attestation,
+    got N"), `hygiene_finding_delta` (`Counter` bijection, then "not one"), and
+    `gate_host_independence_check._load_checkout_attestations` ("duplicate
+    process attestation").  Sorting by label is therefore a TOTAL order that no
+    reader can distinguish from the one it was given.
+
+    THE SIBLING `gates` IS DELIBERATELY NOT SORTED HERE.  Its order is
+    declaration order, it is deterministic (`gate_dispatch_finish` drains the
+    pool and replays in declaration order), and it is load-bearing --
+    `merge_records` consumes it positionally with `zip(labels, gates)`.  Sorting
+    that one would erase a real property instead of a race.
+
+    The canonical bytes are the tiebreak so the key is total even for input this
+    function is not entitled to assume well-formed; no new refusal is added,
+    because a hash that starts refusing records the landing path accepts today
+    is the same failure mode this repairs.
+    """
+    def key(row: Any) -> tuple[str, bytes]:
+        label = row.get("label") if isinstance(row, dict) else None
+        return (label if isinstance(label, str) else "", canonical_bytes(row))
+    return sorted(rows, key=key)
+
+
 def _old_hygiene_binding(value: Any, *, raw: bytes) -> dict[str, Any]:
     if not isinstance(value, dict):
         raise Refusal("old hygiene summary is not an object")
@@ -1051,8 +1092,9 @@ def _old_hygiene_binding(value: Any, *, raw: bytes) -> dict[str, Any]:
         "out_of_scope": out_of_scope,
         "benchmark_data_sha": benchmark_sha,
         "gates_sha256": hashlib.sha256(canonical_bytes(gates)).hexdigest(),
-        "process_attestations_sha256": hashlib.sha256(
-            canonical_bytes(value["process_attestations"])).hexdigest(),
+        "process_attestations_sha256": hashlib.sha256(canonical_bytes(
+            _attestation_canonical_order(
+                value["process_attestations"]))).hexdigest(),
     }
 def _validate_observed(value: Any, oid_len: int, what: str
                        ) -> list[dict[str, Any]]:
