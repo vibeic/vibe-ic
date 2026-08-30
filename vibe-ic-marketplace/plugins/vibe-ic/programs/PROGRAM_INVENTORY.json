@@ -25,8 +25,8 @@
     },
     "mcp_eda_test_files": {
       "definition": "Every test_*.py directly under plugins/vibe-ic/mcp-eda/test/.",
-      "count": 40,
-      "sha256_of_sorted_paths": "70bfce7a111759bbfd2dd026890d76ae1d6d8064a895fbb5fe572656d8be843b"
+      "count": 48,
+      "sha256_of_sorted_paths": "55f8cde1d5be01b77094d8563121e8ad0121050495bb15f07b07f9248a21405c"
     },
     "programs_helpers_and_shims": {
       "definition": "programs_top_level minus programs_catalogued: the helper modules and deprecation shims that INDEX.md deliberately omits. Stated in the plugin README so the gap between the two program counts is accounted for rather than left as an unexplained discrepancy.",

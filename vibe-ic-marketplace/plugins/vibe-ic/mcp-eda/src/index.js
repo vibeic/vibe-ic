@@ -52,7 +52,7 @@ import { registerDevices } from "./devices/_registry.js";
 // _spawnSync used by dockerExec + host handlers is the existing legacy
 // import declared further down (`spawnSync as _spawnSyncEarly`).
 import {
-  shq, assertSafeIdent, assertSafeToken, assertNoShellMeta,
+  shq, assertSafeIdent, assertSafeToken, assertSafeContainer, assertNoShellMeta,
   assertSafePath, assertSafePaths,
   optPath, optIdent, optToken, optNoShellMeta, guardError,
 } from "./lib/shell_safety.mjs";
@@ -71,6 +71,7 @@ import { threadCountTcl } from "./lib/pnr_threads.mjs";
 import { layoutHasGeometry } from "./lib/analog_layout_geometry.mjs";
 import { gateManifestEntry } from "./lib/manifest_metrics.mjs";
 import { parseWns, parseTns } from "./lib/sta_slack.mjs";
+import { parseIrReport, parseReportPower } from "./lib/psm_report.mjs";
 import { evaluateStaEvidence, staEvidenceTcl, STA_EVIDENCE_TERMS } from "./lib/sta_evidence.mjs";
 
 function _shellSingleQuotedHeredoc(content, sentinel) {
@@ -770,6 +771,14 @@ function pdkConfig(pdk, customOpts) {
       metal_prefix: "Metal",
       vdd_pin: "VDD",
       vss_pin: "VSS",
+      // The PDN NET name eda_pnr creates, which is NOT the std-cell PIN name in
+      // vdd_pin: eda_pnr writes `add_global_connection -net <vdd_net>
+      // -pin_pattern "<vdd_pin>"`, so on sky130 the DEF's SPECIALNETS are
+      // VDD/VSS while the cell pins matched are VPWR/VGND. Any consumer that
+      // needs a NET (OpenROAD PSM's `analyze_power_grid -net`) must read this
+      // one; reading vdd_pin asks PSM for a net that does not exist.
+      vdd_net: "VDD",
+      vss_net: "VSS",
       // v1.3.53 R9 — antenna diode master from the PDK's own std-cell library
       // (data, NOT logic): consumed by antennaRepairTcl for the incremental
       // repair->reroute loop. Chip-AGNOSTIC — the Tcl-gen never hardcodes it.
@@ -784,6 +793,14 @@ function pdkConfig(pdk, customOpts) {
       metal_prefix: "met",
       vdd_pin: "VPWR",
       vss_pin: "VGND",
+      // The PDN NET name eda_pnr creates, which is NOT the std-cell PIN name in
+      // vdd_pin: eda_pnr writes `add_global_connection -net <vdd_net>
+      // -pin_pattern "<vdd_pin>"`, so on sky130 the DEF's SPECIALNETS are
+      // VDD/VSS while the cell pins matched are VPWR/VGND. Any consumer that
+      // needs a NET (OpenROAD PSM's `analyze_power_grid -net`) must read this
+      // one; reading vdd_pin asks PSM for a net that does not exist.
+      vdd_net: "VDD",
+      vss_net: "VSS",
       // v1.3.53 R9 — same sky130 diode master the phase3 runner uses
       // (phase3_one_shot_runner.py PdkConfig.antenna_diode_cell), so both PnR
       // paths repair antennas identically.
@@ -804,6 +821,14 @@ function pdkConfig(pdk, customOpts) {
       metal_prefix: "metal",
       vdd_pin: "VDD",
       vss_pin: "VSS",
+      // The PDN NET name eda_pnr creates, which is NOT the std-cell PIN name in
+      // vdd_pin: eda_pnr writes `add_global_connection -net <vdd_net>
+      // -pin_pattern "<vdd_pin>"`, so on sky130 the DEF's SPECIALNETS are
+      // VDD/VSS while the cell pins matched are VPWR/VGND. Any consumer that
+      // needs a NET (OpenROAD PSM's `analyze_power_grid -net`) must read this
+      // one; reading vdd_pin asks PSM for a net that does not exist.
+      vdd_net: "VDD",
+      vss_net: "VSS",
       antenna_diode_cell: "ANTENNA_X1",
     },
   };
@@ -822,6 +847,8 @@ function pdkConfig(pdk, customOpts) {
       metal_prefix: customOpts.custom_metal_prefix || "met",
       vdd_pin: customOpts.custom_vdd || "VDD",
       vss_pin: customOpts.custom_vss || "VSS",
+      vdd_net: customOpts.custom_vdd_net || "VDD",
+      vss_net: customOpts.custom_vss_net || "VSS",
       // v1.3.53 R9 — a custom PDK has no known diode master; the caller may
       // supply one (custom_antenna_diode). Absent -> null -> antennaRepairTcl
       // SKIPS the repair loop (manual diode ECO) rather than inventing a cell.
@@ -834,6 +861,29 @@ function pdkConfig(pdk, customOpts) {
     };
   }
   return configs[pdk] || configs.gf180;
+}
+
+// P-3: the characterised supply of the Liberty that will actually be loaded.
+// eda_ir_drop's `voltage` is a caller DEFAULT of 1.8 while `pdk` defaults to
+// gf180, whose Liberty this same file selects as __tt_025C_3v30.lib (3.3 V). PSM
+// echoes the supplied voltage back as "Supply voltage" and computes "Percentage
+// drop" against it, so a wrong VDD silently rescales the answer and the tool
+// reports the caller's own assumption as a measurement. Nothing compared the two.
+//
+// Read from the .lib itself rather than through an OpenSTA API: the value is a
+// single declared field, the read is exact, and it does not depend on which
+// accessor a given OpenROAD build exposes. Returns null when it cannot be read —
+// absent is not a disagreement, and must not be reported as one.
+function libNomVoltage(cfg) {
+  try {
+    const lib = libPath(cfg);
+    if (!lib) return null;
+    const r = dockerExec(`grep -m1 -E '^[[:space:]]*nom_voltage' ${shq(lib)} || true`, 15000);
+    const m = (r.output || "").match(/nom_voltage[ \t]*:[ \t]*([-+]?(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?)/);
+    return m ? parseFloat(m[1]) : null;
+  } catch (e) {
+    return null;
+  }
 }
 
 function libPath(cfg) {
@@ -1905,10 +1955,10 @@ initialize_floorplan -utilization ${utilization} -aspect_ratio 1.0 -core_space 1
 make_tracks
 ${routingLayersSnippet}
 place_pins -hor_layers ${mp}3 -ver_layers ${mp}2
-add_global_connection -net VDD -pin_pattern "${cfg.vdd_pin}" -power
-add_global_connection -net VSS -pin_pattern "${cfg.vss_pin}" -ground
+add_global_connection -net ${cfg.vdd_net} -pin_pattern "${cfg.vdd_pin}" -power
+add_global_connection -net ${cfg.vss_net} -pin_pattern "${cfg.vss_pin}" -ground
 global_connect
-set_voltage_domain -power VDD -ground VSS
+set_voltage_domain -power ${cfg.vdd_net} -ground ${cfg.vss_net}
 define_pdn_grid -name main
 add_pdn_stripe -grid main -layer ${mp}1 -width 0.48 -followpins
 ${stripesSnippet}
@@ -1961,8 +2011,14 @@ exit`;
       dr_retried = true;
     }
 
-    const areaMatch = pnrRun.output.match(/Design area (\d+)/);
-    const utilMatch = pnrRun.output.match(/(\d+)% utilization/);
+    // area_um2 is a REQUIRED metric for place_and_route, so it must be read as
+    // printed: `/Design area (\d+)/` truncates `269.5` to 269 and cannot see an
+    // exponent at all, which is the same silent-magnitude hazard the PSM power
+    // number carries. Whole-line anchored, decimal- and exponent-aware.
+    const areaMatch = pnrRun.output.match(
+      /^[ \t]*Design area[ \t]+([-+]?(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?)[ \t]*u/mi);
+    const utilMatch = pnrRun.output.match(
+      /([-+]?(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?)[ \t]*% utilization/i);
     const slackMatch = pnrRun.output.match(/([\d.-]+)\s+slack \((MET|VIOLATED)\)/);
     // The PNR_COMPLETE sentinel is KEPT, but it is no longer load-bearing on
     // its own. MEASURED: in the old stdin mode a fully-failed script printed
@@ -1980,8 +2036,8 @@ exit`;
 
     const metrics = {
       success: complete && !hasZeroNet,
-      area_um2: areaMatch ? parseInt(areaMatch[1]) : null,
-      utilization_pct: utilMatch ? parseInt(utilMatch[1]) : null,
+      area_um2: areaMatch ? parseFloat(areaMatch[1]) : null,
+      utilization_pct: utilMatch ? parseFloat(utilMatch[1]) : null,
       slack_ns: slackMatch ? parseFloat(slackMatch[1]) : null,
       timing_met: slackMatch ? slackMatch[2] === "MET" : null,
       def_file: output_def,
@@ -2126,6 +2182,36 @@ ly.write('${output_gds}')
 cell_count_after = ly.cells()
 print('GDS_CELLS=' + str(cell_count_after))
 print('MERGE_OK: ' + str(cell_count_before) + ' lib cells + DEF -> ' + str(cell_count_after) + ' total cells')
+
+# A-3: measure the DESIGN, not the library. cell_count_after counts cell
+# DEFINITIONS in the merged layout, ~98% of which come from the PDK; it moves
+# 456 -> 447 between a real chip and a die with every component deleted, so it
+# cannot tell them apart. Count the placed INSTANCES of the DEF's own top cell
+# instead. The top cell is taken from the DEF's 'DESIGN <name> ;' line -- an
+# exact anchor, NOT a heuristic: "the top cell with the most instances" picks
+# the PDK's sky130_fd_sc_hd__macro_sparecell (7 instances) on an emptied DEF and
+# reports a plausible non-zero number for an empty die.
+import re as _re
+_design = None
+with open(def_path) as _f:
+    for _line in _f:
+        _m = _re.match(r'\\s*DESIGN\\s+(\\S+)\\s*;', _line)
+        if _m:
+            _design = _m.group(1)
+            break
+if _design is None:
+    print('GDS_TOP_CELL_UNKNOWN=1')
+else:
+    print('GDS_TOP_CELL=' + _design)
+    _ci = ly.cell_by_name(_design)
+    if _ci is None or _ci < 0:
+        print('GDS_TOP_CELL_UNKNOWN=1')
+    else:
+        _n = 0
+        for _i in ly.cell(_ci).each_inst():
+            _n += 1
+        print('GDS_TOP_INSTS=' + str(_n))
+        print('GDS_DESIGN_CELLS=' + str(cell_count_after - cell_count_before))
 `;
 
     const gdsCmd = `echo '${pyScript.replace(/'/g, "'\\''")}' > /tmp/gen_gds.py && QT_QPA_PLATFORM=offscreen ${TOOLS}/klayout/klayout -z -r /tmp/gen_gds.py 2>&1`;
@@ -2137,14 +2223,42 @@ print('MERGE_OK: ' + str(cell_count_before) + ' lib cells + DEF -> ' + str(cell_
     const libMatch = result.output.match(/CELL_GDS_LOADED=(\d+)/);
     const mergeOk = result.output.includes('MERGE_OK');
 
+    // A-3. `cells` is the count of cell DEFINITIONS in the merged layout, ~98% of
+    // which come from the PDK library: it reads 456 for a real 28-instance chip
+    // and 447 for the same DEF with its COMPONENTS block emptied. Both satisfied
+    // REQUIRED_METRICS.gds_generation=[{key:"cells"}], so an EMPTY DIE was
+    // written to GDS and recorded success:true / status:"PASS". `cells` is a
+    // library size, not a design size, and MERGE_OK is printed unconditionally by
+    // the script itself — a self-echoed marker, not a measurement.
+    //
+    // The measurement that discriminates is the number of placed INSTANCES of the
+    // DEF's own top cell: 28 for the real design, 0 for the emptied one.
+    const topCellMatch  = result.output.match(/GDS_TOP_CELL=(\S+)/);
+    const topInstsMatch = result.output.match(/GDS_TOP_INSTS=(\d+)/);
+    const designCellsMatch = result.output.match(/GDS_DESIGN_CELLS=(-?\d+)/);
+    const topCellUnknown = result.output.includes("GDS_TOP_CELL_UNKNOWN=1");
+    const topInsts = topInstsMatch ? parseInt(topInstsMatch[1]) : null;
+    const designCells = designCellsMatch ? parseInt(designCellsMatch[1]) : null;
+    // An empty die is a FAIL: the layout was produced and provably holds no
+    // design. A top cell that could not be identified is NOT_MEASURED — absent
+    // must never be rendered as either good or bad.
+    const emptyDie = topInsts === 0;
+    const instsMeasured = topInsts !== null && !topCellUnknown;
+    const gdsOk = cellsMatch != null && mergeOk && instsMeasured && !emptyDie;
+
     if (cellsMatch != null) {
       const dir = output_gds.substring(0, output_gds.lastIndexOf("/"));
       writeManifest(dir || "/tmp", {
         step: "gds_generation",
-        status: "PASS",
         tool: "KLayout",
+        status: gdsOk ? "PASS" : (emptyDie ? "FAIL" : "PASS"),
         cells: parseInt(cellsMatch[1]),
         lib_cells: libMatch ? parseInt(libMatch[1]) : null,
+        // The design-sized metrics. `top_insts` is REQUIRED for gds_generation,
+        // so a run that could not measure it is recorded INCONCLUSIVE, never PASS.
+        top_cell: topCellMatch ? topCellMatch[1] : null,
+        top_insts: instsMeasured ? topInsts : null,
+        design_cells: designCells,
         cell_gds_source: resolvedCellGds,
         gds_file: output_gds,
       });
@@ -2162,17 +2276,21 @@ print('MERGE_OK: ' + str(cell_count_before) + ' lib cells + DEF -> ' + str(cell_
       outputs: { [output_gds]: sha256File(output_gds.replace("/work/", projGds + "/")) },
       measurement: measurementRecord({
         operation: "gds_generation",
-        measured: cellsMatch != null && mergeOk,
+        measured: gdsOk,
         reasonClass: "TOOL_DID_NOT_RUN",
-        reason: "klayout did not report MERGE_OK with a cell count, so no "
-              + "merged layout was produced and its cell count is not known",
+        reason: emptyDie
+              ? "the merged layout's top cell contains ZERO placed instances - an "
+                + "empty die was written; no design was measured"
+              : "klayout did not report MERGE_OK with a cell count and the top "
+                + "cell's placed-instance count, so no merged layout holding a "
+                + "design was produced",
         read: [def_file],
-        wrote: (cellsMatch != null && mergeOk) ? [output_gds] : [],
+        wrote: gdsOk ? [output_gds] : [],
         toolLabel: "klayout",
         version: getToolVersionSafe("klayout"),
         image: containerImageIdentity().image_ref,
       }),
-      exitCode: (cellsMatch != null && mergeOk) ? 0 : 1,
+      exitCode: gdsOk ? 0 : 1,
       durationMs: durationGdsMs,
       stdoutTail: result.output || "",
       stderrTail: result.error || "",
@@ -2183,9 +2301,23 @@ print('MERGE_OK: ' + str(cell_count_before) + ' lib cells + DEF -> ' + str(cell_
         {
           type: "text",
           text: JSON.stringify({
-            success: cellsMatch != null && mergeOk,
+            success: gdsOk,
             cells: cellsMatch ? parseInt(cellsMatch[1]) : null,
             lib_cells: libMatch ? parseInt(libMatch[1]) : null,
+            top_cell: topCellMatch ? topCellMatch[1] : null,
+            top_insts: instsMeasured ? topInsts : null,
+            design_cells: designCells,
+            error: emptyDie
+              ? `EMPTY DIE: the merged layout's top cell ${topCellMatch ? topCellMatch[1] : "?"} `
+                + `contains 0 placed instances. ${cellsMatch ? cellsMatch[1] : "?"} cell `
+                + `definitions were written but ${libMatch ? libMatch[1] : "?"} of those come `
+                + `from the PDK library, so the cell count cannot tell a chip from an empty `
+                + `die. No design was laid out.`
+              : (!instsMeasured && cellsMatch != null && mergeOk
+                  ? `NOT_MEASURED: could not identify the DEF's top cell (its DESIGN name) in `
+                    + `the merged layout, so the placed-instance count is unknown. The GDS was `
+                    + `written but is not certified to hold a design.`
+                  : undefined),
             cell_gds_source: resolvedCellGds,
             gds_file: output_gds,
             output: result.output.slice(-1500),
@@ -2229,7 +2361,7 @@ server.tool(
       optPath(custom_celllef, "custom_celllef"); optPath(custom_cellgds, "custom_cellgds");
       optToken(custom_site, "custom_site"); optIdent(custom_vdd, "custom_vdd");
       optIdent(custom_vss, "custom_vss"); optToken(custom_metal_prefix, "custom_metal_prefix");
-      optPath(si_mcf_project, "si_mcf_project"); assertSafeIdent(container, "container");
+      optPath(si_mcf_project, "si_mcf_project"); assertSafeContainer(container, "container");
     } catch (e) { return guardError(e); }
     // Opt-in MCF SI-aware crosstalk-delay STA (project-level; shells to program).
     if (si_mcf_project !== undefined) {
@@ -3533,7 +3665,7 @@ server.tool(
   {
     def_file: z.string().describe("DEF file with placed design"),
     pdk: z.enum(["gf180", "sky130", "nangate45", "custom"]).default("gf180"),
-    voltage: z.number().default(1.8).describe("VDD voltage in volts"),
+    voltage: z.number().optional().describe("VDD voltage in volts. OMIT IT and the tool reads the characterised supply (nom_voltage) out of the Liberty it is about to load, which is the right source: this used to default to 1.8 while `pdk` defaults to gf180, whose Liberty this same file selects as __tt_025C_3v30.lib (3.3 V), so the default run fed 1.8 V into a 3.3 V library. PSM echoes the supplied voltage back as \"Supply voltage\" and computes \"Percentage drop\" against it, so a wrong value silently rescales the answer. When you DO pass one it is used (an off-nominal corner is legitimate) and cross-checked against nom_voltage, with a warning on disagreement."),
     custom_lib: z.string().optional(),
     custom_techlef: z.string().optional(),
     custom_celllef: z.string().optional(),
@@ -3553,9 +3685,61 @@ server.tool(
     } catch (e) { return guardError(e); }
     const cfg = pdkConfig(pdk, { custom_lib, custom_techlef, custom_celllef, custom_site, custom_vdd, custom_vss, custom_metal_prefix });
     const mp = cfg.metal_prefix;
-    const vddNet = cfg.vdd_pin || "VDD";
-    const vssNet = cfg.vss_pin || "VSS";
-    const ttlEnvVoltage = `set_pdnsim_net_voltage -net ${vddNet} -voltage ${voltage}\nset_pdnsim_net_voltage -net ${vssNet} -voltage 0.0`;
+    // P-5. This tool used to read `cfg.vdd_pin` and hand it to PSM as a NET name.
+    // vdd_pin is the std-cell PIN name; on sky130 that is VPWR, while the DEF
+    // eda_pnr writes carries the NET VDD. So `analyze_power_grid -net VPWR`
+    // failed with PSM-0028 "Cannot find net VPWR in the design" on every sky130
+    // run — the tool could not read a DEF its own sibling had just produced.
+    // gf180 and nangate45 both happen to use VDD/VSS for both, which is why the
+    // disagreement was invisible there.
+    //
+    // Guessing a name is what caused the bug, so this does not guess: it reads
+    // the power/ground nets out of the DEF that was actually supplied and picks
+    // from them. A candidate list (most specific first) is preferred when
+    // present; a DEF with exactly ONE power net is unambiguous and is used even
+    // if it matches no candidate (a DEF from OpenLane names it VPWR); and a DEF
+    // where the net cannot be identified is REFUSED as NOT_MEASURED rather than
+    // analysed against a name nobody confirmed.
+    // P-3: resolve the supply from the Liberty that will actually be loaded,
+    // rather than from a constant that has no relationship to the chosen PDK.
+    const nomVoltage = libNomVoltage(cfg);
+    const voltageSupplied = voltage !== undefined && voltage !== null;
+    const FALLBACK_VOLTAGE = 1.8;
+    const effVoltage = voltageSupplied ? voltage
+                     : (nomVoltage !== null ? nomVoltage : FALLBACK_VOLTAGE);
+    // Disagreement beyond 1% of nominal. Absent nom_voltage is NOT a
+    // disagreement — it is an unknown, and must not be reported as one.
+    const voltageMismatch = (voltageSupplied && nomVoltage !== null
+      && Math.abs(voltage - nomVoltage) > Math.max(1e-9, 0.01 * Math.abs(nomVoltage)));
+    const voltageAssumed = !voltageSupplied && nomVoltage === null;
+
+    const vddCandidates = [...new Set([custom_vdd, cfg.vdd_net, cfg.vdd_pin, "VDD", "VPWR"].filter(Boolean))];
+    const vssCandidates = [...new Set([custom_vss, cfg.vss_net, cfg.vss_pin, "VSS", "VGND"].filter(Boolean))];
+    const netResolveTcl = `
+# P-5: resolve the power/ground NET names from the DEF itself, never from the
+# std-cell pin name. Emits the discovered sets so the caller can report what the
+# DEF actually contained when resolution fails.
+set _blk [ord::get_db_block]
+set _pwr {}
+set _gnd {}
+foreach _n [$_blk getNets] {
+  set _st [$_n getSigType]
+  if {$_st == "POWER"}  { lappend _pwr [$_n getName] }
+  if {$_st == "GROUND"} { lappend _gnd [$_n getName] }
+}
+puts "PSM_PWR_NETS=[join $_pwr ,]"
+puts "PSM_GND_NETS=[join $_gnd ,]"
+proc _pick {cands found} {
+  foreach _c $cands { if {[lsearch -exact $found $_c] >= 0} { return $_c } }
+  if {[llength $found] == 1} { return [lindex $found 0] }
+  return ""
+}
+set _vddnet [_pick {${vddCandidates.join(" ")}} $_pwr]
+set _vssnet [_pick {${vssCandidates.join(" ")}} $_gnd]
+puts "PSM_VDD_NET=$_vddnet"
+puts "PSM_VSS_NET=$_vssnet"`;
+    const ttlEnvVoltage = `set_pdnsim_net_voltage -net $_vddnet -voltage ${effVoltage}
+if {$_vssnet ne ""} { set_pdnsim_net_voltage -net $_vssnet -voltage 0.0 }`;
 
     // T3 v0.106: inject cross-layer PDN stripes for tiny designs to avoid PSM-0069
     // connectivity failure. Metal4 stripes connect isolated Metal1 per-row rails.
@@ -3579,14 +3763,29 @@ catch {
 read_lef ${celllefPath(cfg)}
 read_liberty ${libPath(cfg)}
 read_def ${def_file}
+${netResolveTcl}
+# P-4: run report_power. Nothing in this MCP ran it -- grep -c "report_power"
+# over index.js was 0 -- so the P of PPA was never asked for at all. It is run
+# OUTSIDE the power-net branch below, so the design's power is reported even when
+# the PSM grid analysis cannot complete: those are two different measurements and
+# only one of them needs a resolvable PDN. MEASURED to work with no clock
+# defined (rc=0), which this tool cannot supply. Wrapped in catch so a design it
+# refuses degrades to "no power number", never to a failed run.
+puts "=== REPORT_POWER_BEGIN ==="
+if {[catch {report_power} _rperr]} { puts "REPORT_POWER_FAILED: $_rperr" }
+puts "=== REPORT_POWER_END ==="
+if {$_vddnet eq ""} {
+  puts "=== IR_DROP_NO_POWER_NET ==="
+} else {
 ${ttlEnvVoltage}
 ${pdnStripeTcl}
-set rc [catch {analyze_power_grid -net ${vddNet}} err]
+set rc [catch {analyze_power_grid -net $_vddnet} err]
 if {$rc} {
   puts "PSM_CONNECTIVITY_WARN: $err"
   puts "=== IR_DROP_WARN ==="
 } else {
   puts "=== IR_DROP_COMPLETE ==="
+}
 }`;
     const rawIrResult = dockerExec(
       openroadScriptCmd({ tcl: irTcl, tag: "ir_drop" }),
@@ -3609,12 +3808,84 @@ if {$rc} {
     const isComplete = result.output.includes("IR_DROP_COMPLETE") && !irFailed;
     const isWarn = result.output.includes("IR_DROP_WARN") && !irFailed;
 
-    if (isComplete) {
+    // P-5: what the DEF actually declared, and which net was analysed.
+    const _grab = (re) => { const m = result.output.match(re); return m ? m[1].trim() : null; };
+    const _list = (v) => (v ? v.split(",").filter(Boolean) : []);
+    const defPowerNets  = _list(_grab(/^PSM_PWR_NETS=(.*)$/m));
+    const defGroundNets = _list(_grab(/^PSM_GND_NETS=(.*)$/m));
+    const vddNet = _grab(/^PSM_VDD_NET=(.*)$/m) || null;
+    const vssNet = _grab(/^PSM_VSS_NET=(.*)$/m) || null;
+    const noPowerNet = result.output.includes("IR_DROP_NO_POWER_NET");
+
+    // P-1/P-4: PSM prints seven numbers, including Total power - the P of PPA.
+    // This tool parsed NONE of them and recorded a bare `status:"PASS"` with zero
+    // measurements, permanently. REQUIRED_METRICS had no `ir_drop` entry, so
+    // gateManifestEntry returned early and the INCONCLUSIVE gate that protects
+    // every other PPA step did not cover power. Every value PSM prints is in
+    // scientific notation (`3.50e-05 W`), so the parser is whole-line anchored
+    // and exponent-aware - a naive ([\d.]+) reads 3.50 and delivers a 10^5 error
+    // as a confident number.
+    const ir = parseIrReport(result.output);
+    const power = parseReportPower(result.output);
+    const irMeasured = ir.worst_ir_drop_v !== null && ir.total_power_w !== null;
+
+    // P-2. `success: isComplete || isWarn`, where isWarn means the Tcl
+    // `catch {analyze_power_grid}` FIRED — PSM produced no IR report at all. The
+    // code argues deliberately that a caught error is a warning by this tool's
+    // own design, and that argument is defensible: only an UNCAUGHT abort is a
+    // tool failure. But it is only safe if the caller can tell the two apart by
+    // a NUMBER, and there was no number in either case. The only discriminator
+    // was the boolean `psm_warn`, and the manifest recorded NEITHER — it was
+    // written only when isComplete, so a run whose analysis threw left no record
+    // at all. Read-fail and measured-fine reached the report as the same thing.
+    //
+    // The fix is not to turn the warning into a failure. It is that (a) the
+    // response carries an explicit three-state `status` and the numbers that
+    // back it, and (b) EVERY outcome writes a manifest entry, so a run that
+    // measured nothing is recorded as INCONCLUSIVE by the gate instead of
+    // vanishing. Absent is a third answer, not a quiet pass and not a fail.
+    // X-2 in miniature: two INDEPENDENT power numbers now exist -- PSM's
+    // "Total power" and report_power's Total row -- so they can be checked
+    // against each other instead of each being taken on trust. Disagreement
+    // beyond 1% is reported, never silently reconciled.
+    const powerCrossCheck = (power && ir.total_power_w !== null)
+      ? {
+          psm_total_w: ir.total_power_w,
+          report_power_total_w: power.total_w,
+          agree: Math.abs(power.total_w - ir.total_power_w)
+                 <= Math.max(1e-15, 0.01 * Math.abs(ir.total_power_w)),
+        }
+      : undefined;
+
+    const irStatus = noPowerNet ? "NOT_MEASURED"
+                   : irFailed   ? "NOT_MEASURED"
+                   : irMeasured ? "MEASURED"
+                                : "NOT_MEASURED";
+    {
       const dir = def_file.substring(0, def_file.lastIndexOf("/"));
       writeManifest(dir || "/tmp", {
         step: "ir_drop",
+        // Written as PASS; when the measurements are absent the REQUIRED_METRICS
+        // gate downgrades it to INCONCLUSIVE. That is the mechanism this repo
+        // already has for "we did not measure it", and it is used here rather
+        // than hand-rolling a second verdict.
         status: "PASS",
         tool: "OpenROAD PSM",
+        net: vddNet,
+        ir_status: irStatus,
+        voltage_v: effVoltage,
+        lib_nom_voltage_v: nomVoltage,
+        voltage_source: voltageSupplied ? "caller"
+                      : (nomVoltage !== null ? "liberty_nom_voltage" : "assumed_default"),
+        voltage_mismatch: voltageMismatch || undefined,
+        // Why no number, when there is none. A caller reading the manifest can
+        // now distinguish "the grid is fine" from "the analysis never ran".
+        psm_caught_error: isWarn || undefined,
+        power_net_resolved: !noPowerNet,
+        ...ir,
+        report_power_w: power ? power.total_w : null,
+        report_power_split: power || undefined,
+        power_cross_check: powerCrossCheck,
       });
     }
 
@@ -3623,6 +3894,44 @@ if {$rc} {
                    || result.output.match(/(\d+)\s+instances/i);
     if (instMatch && parseInt(instMatch[1]) < 100) {
       warnings.push(`Design has ${instMatch[1]} instances (< 100) — IR-drop results may not be meaningful for tiny designs.`);
+    }
+    if (powerCrossCheck && !powerCrossCheck.agree) {
+      warnings.push(
+        `The two power numbers disagree: OpenROAD PSM reports Total power `
+        + `${ir.total_power_w} W and report_power reports ${power.total_w} W. `
+        + `They are independent measurements of the same design and should `
+        + `agree; neither is silently preferred.`);
+    }
+    if (result.output.includes("REPORT_POWER_FAILED")) {
+      warnings.push(
+        "report_power did not run on this design, so the internal/switching/"
+        + "leakage split is NOT_MEASURED. The IR-report power number, if present, "
+        + "is unaffected.");
+    }
+    if (voltageMismatch) {
+      warnings.push(
+        `Supply voltage ${voltage} V was supplied, but the Liberty being loaded `
+        + `(${libPath(cfg)}) is characterised at nom_voltage ${nomVoltage} V. PSM `
+        + `echoes the supplied value back as "Supply voltage" and computes `
+        + `"Percentage drop" against it, so this run's percentage drop is scaled `
+        + `to ${voltage} V, not to the library's operating point. Intentional for `
+        + `an off-nominal corner; otherwise omit `
+        + `voltage and the library's ${nomVoltage} V is used.`);
+    }
+    if (voltageAssumed) {
+      warnings.push(
+        `No voltage was supplied and nom_voltage could not be read from `
+        + `${libPath(cfg)}, so ${FALLBACK_VOLTAGE} V was ASSUMED. The percentage `
+        + `drop is computed against an assumption, not a characterised supply.`);
+    }
+    if (noPowerNet) {
+      warnings.push(
+        `Could not identify the power NET to analyse in ${def_file}. `
+        + `The DEF declares POWER net(s) [${defPowerNets.join(", ") || "none"}] and `
+        + `GROUND net(s) [${defGroundNets.join(", ") || "none"}]; none matched the `
+        + `candidates [${vddCandidates.join(", ")}] and the set was not a single `
+        + `unambiguous net. NOT_MEASURED — no IR-drop number is reported. Pass `
+        + `custom_vdd/custom_vss naming the DEF's own power nets.`);
     }
     if (isWarn) {
       warnings.push("PSM connectivity check failed — cross-layer PDN stripes were injected but connectivity still incomplete. Downgraded to WARN.");
@@ -3639,9 +3948,32 @@ if {$rc} {
       content: [{
         type: "text",
         text: JSON.stringify({
-          success: isComplete || isWarn,
+          success: (isComplete || isWarn) && !noPowerNet,
           exit_code: irRun.rc,
           openroad_error_count: irRun.errorCount,
+          status: irStatus,
+          measured: irMeasured,
+          voltage_v: effVoltage,
+          lib_nom_voltage_v: nomVoltage,
+          voltage_source: voltageSupplied ? "caller"
+                        : (nomVoltage !== null ? "liberty_nom_voltage" : "assumed_default"),
+          voltage_mismatch: voltageMismatch || undefined,
+          // A caught PSM error and a clean grid are no longer the same report:
+          // `psm_caught_error` says the analysis threw, `status` says whether a
+          // number exists, and the numbers themselves are present or null.
+          psm_caught_error: isWarn || undefined,
+          not_measured_reason: irMeasured ? undefined
+            : (noPowerNet ? "the power net could not be identified in the DEF"
+               : (isWarn ? "PSM raised a connectivity error, which was caught; no IR report was produced"
+                  : "OpenROAD PSM printed no IR report")),
+          ...ir,
+          report_power_w: power ? power.total_w : null,
+          report_power_split: power || undefined,
+          power_cross_check: powerCrossCheck,
+          vdd_net: vddNet,
+          vss_net: vssNet,
+          def_power_nets: defPowerNets,
+          def_ground_nets: defGroundNets,
           warnings: warnings.length ? warnings : undefined,
           psm_warn: isWarn || undefined,
           output: result.output.slice(-2000),
@@ -5651,7 +5983,7 @@ server.tool(
       optPath(custom_celllef, "custom_celllef"); optPath(custom_cellgds, "custom_cellgds");
       optToken(custom_site, "custom_site"); optIdent(custom_vdd, "custom_vdd");
       optIdent(custom_vss, "custom_vss"); optToken(custom_metal_prefix, "custom_metal_prefix");
-      optPath(field_solve_spef, "field_solve_spef"); assertSafeIdent(field_solve_container, "field_solve_container");
+      optPath(field_solve_spef, "field_solve_spef"); assertSafeContainer(field_solve_container, "field_solve_container");
     } catch (e) { return guardError(e); }
     // Opt-in field-solved coupling upgrade (shells to the plugin program).
     if (field_solve_spef !== undefined) {

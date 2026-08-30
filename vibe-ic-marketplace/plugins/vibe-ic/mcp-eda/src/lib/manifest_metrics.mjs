@@ -66,9 +66,22 @@ export const REQUIRED_METRICS = {
   // Yosys cell count — a synthesis that mapped nothing has no cell count.
   synthesis: [{ key: "cells" }],
   // OpenROAD slack; `timing_met` null means the slack line was never found.
-  place_and_route: [{ key: "slack_ns" }, { key: "timing_met" }],
-  // KLayout cell count of the written stream.
-  gds_generation: [{ key: "cells" }],
+  // area_um2 / utilization_pct: the TIMING half of this entry was protected and
+  // the AREA half was not. eda_pnr's own verdict is `complete && !hasZeroNet`,
+  // which does not mention area either, so an area that failed to parse reached
+  // the manifest as `status:"PASS", area_um2:null` — and area is half of what
+  // place_and_route exists to report. Both are read from the same
+  // `report_design_area` line, so absent means that line was never printed.
+  place_and_route: [
+    { key: "slack_ns" }, { key: "timing_met" },
+    { key: "area_um2" }, { key: "utilization_pct" },
+  ],
+  // KLayout cell count of the written stream -- AND the placed-instance count of
+  // the design's own top cell. `cells` alone is ~98% PDK library (456 for a real
+  // 28-instance chip, 447 for the same DEF with COMPONENTS emptied), so it was
+  // satisfied by an EMPTY DIE. `top_insts` is the design-sized quantity; absent
+  // it, a gds_generation PASS proves only that KLayout ran.
+  gds_generation: [{ key: "cells" }, { key: "top_insts" }],
   // ATPG numbers — a PASS with no coverage number proves no ATPG.
   dft: [{ key: "coverage_pct" }, { key: "scan_chain_length" }, { key: "test_vectors" }],
   // cocotb test count — a run with no tests is not a passing run.
@@ -77,6 +90,15 @@ export const REQUIRED_METRICS = {
   extraction: [{ key: "size_bytes" }],
   // KLayout DRC violation count — a PASS with no count counted nothing.
   drc: [{ key: "violations" }],
+  // OpenROAD PSM. The measured bug: this step had NO entry here at all, so
+  // gateManifestEntry returned early (`if (!specs) return []`) and eda_ir_drop
+  // recorded `status:"PASS"` with zero measurements, permanently — an undeclared
+  // hole in the gate built for exactly this failure. PSM prints seven numbers
+  // including Total power, the P of PPA; the two required here are the quantity
+  // the tool is named for and the power number, both absent whenever PSM
+  // produced no IR report (a caught connectivity error, an unresolvable power
+  // net). Absent -> INCONCLUSIVE, never PASS.
+  ir_drop: [{ key: "worst_ir_drop_v" }, { key: "total_power_w" }],
 };
 
 // Names of the required metrics that are ABSENT from `entry`, in declaration

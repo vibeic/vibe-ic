@@ -41,6 +41,27 @@ export function assertSafeToken(value, label = "token") {
   return value;
 }
 
+// Docker container-name guard. A container name is NOT a Verilog identifier:
+// docker's own grammar is [a-zA-Z0-9][a-zA-Z0-9_.-]*, and the names this server
+// ships with ("vibeic-eda") carry a hyphen. Guarding such a param with
+// assertSafeIdent — whose class has no '-' — makes a tool's own default fail the
+// tool's own guard, refusing every invocation unconditionally; that is exactly
+// what happened to eda_sta's `container` and eda_extraction's
+// `field_solve_container` from 9d7e5e1a5 (2026-07-13) until this fix.
+//
+// The class below adds ONLY '-' and '.' to the identifier class and additionally
+// requires an alphanumeric first character, so it is strictly tighter than
+// assertSafeToken: it rejects every shell metacharacter (none of `;&|<>$`(){}[]!*?~"'\\`,
+// whitespace or newline is in the class) AND rejects a leading '-', which docker
+// would otherwise parse as a command-line flag rather than a container name.
+export const _CONTAINER_RE = /^[A-Za-z0-9][A-Za-z0-9_.-]*$/;
+export function assertSafeContainer(value, label = "container") {
+  if (typeof value !== "string" || !_CONTAINER_RE.test(value)) {
+    throw new Error(`unsafe ${label}: ${JSON.stringify(value)} (expected a docker container name ${_CONTAINER_RE})`);
+  }
+  return value;
+}
+
 // Path guard — reject shell metacharacters, whitespace and newlines. The
 // container/project paths this server handles never legitimately contain them,
 // so rejecting closes the injection surface for path-typed params while
@@ -74,6 +95,7 @@ export function assertNoShellMeta(value, label = "value") {
 export function optPath(v, label = "path") { if (v !== undefined && v !== null && v !== "") assertSafePath(v, label); return v; }
 export function optIdent(v, label = "identifier") { if (v !== undefined && v !== null && v !== "") assertSafeIdent(v, label); return v; }
 export function optToken(v, label = "token") { if (v !== undefined && v !== null && v !== "") assertSafeToken(v, label); return v; }
+export function optContainer(v, label = "container") { if (v !== undefined && v !== null && v !== "") assertSafeContainer(v, label); return v; }
 export function optNoShellMeta(v, label = "value") { if (v !== undefined && v !== null && v !== "") assertNoShellMeta(v, label); return v; }
 
 // Build a standard MCP error envelope so a guard throw returns a clean
