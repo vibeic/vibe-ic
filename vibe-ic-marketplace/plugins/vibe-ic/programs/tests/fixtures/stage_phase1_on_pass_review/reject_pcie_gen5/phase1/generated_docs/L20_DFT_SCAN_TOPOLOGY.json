@@ -1,0 +1,66 @@
+{
+  "doc_id": "L20",
+  "doc_name": "L20_DFT_SCAN_TOPOLOGY",
+  "applicability": "APPLICABLE",
+  "ic_class": "digital_cmd_driven",
+  "fields": {
+    "scan_chains": [],
+    "test_compression": null,
+    "bist_mbist": [],
+    "jtag_tap": null,
+    "dft_present": "partial",
+    "notes": "PCI Express 5.0 adds Lane Margining at the Receiver as a mandatory protocol-level DFT/observability feature for in-system signal integrity at 32 GT/s, plus the equalization preset registers needed to drive the four-phase EQ. JTAG / scan-chain / BIST are NOT specified at the protocol level — those remain integrator-side at the SoC.",
+    "in_band_test_facilities": [
+      {
+        "name": "Lane Margining at the Receiver",
+        "purpose": "Gen5-mandatory; in-system eye-margin probe that steps the receiver sampling point in time (left/right) and optionally voltage (up/down) in L0 without interrupting traffic, reporting the error rate per lane."
+      },
+      {
+        "name": "Polling.Compliance pattern",
+        "purpose": "LTSSM sub-state that transmits a defined compliance pattern at 2.5 GT/s for electrical eye / BER characterization."
+      },
+      {
+        "name": "Loopback test mode",
+        "purpose": "Loopback Master transmits a known pattern; Loopback Slave retransmits it back; allows receiver-eye and serializer/deserializer testing without a full link partner."
+      },
+      {
+        "name": "Hot Reset",
+        "purpose": "TS1 with Hot Reset bit set forces downstream device to Detect; testable via Bridge Control Secondary Bus Reset."
+      },
+      {
+        "name": "Disable Link",
+        "purpose": "Forces TX into Electrical Idle for power-consumption and OFF-state characterization."
+      },
+      {
+        "name": "Compliance Pattern (Section 4.2.8)",
+        "purpose": "Spec-defined repeating pattern of K28.5 + D21.5 + K28.5 + D10.2 for electrical eye / jitter measurement."
+      },
+      {
+        "name": "Advanced Error Reporting (AER)",
+        "purpose": "Provides in-protocol observability of correctable / uncorrectable / fatal errors."
+      }
+    ],
+    "internal_diagnostics_observability": [
+      "Link Status Register — current LTSSM state, negotiated Link Speed + Link Width.",
+      "Slot Status Register — Card Present, Power Indicator, Attention Indicator, MRL Sensor, Power Fault.",
+      "Device Status Register — Correctable / Non-Fatal / Fatal Error Detected, Unsupported Request Detected, AUX Power Detected, Transactions Pending.",
+      "Root Status Register — PME Status, PME Pending, PME Requester ID.",
+      "AER Uncorrectable Error Status / Mask / Severity Registers — fine-grained protocol-error observability.",
+      "AER Header Log Register — first 4 DW of the offending TLP header preserved for postmortem.",
+      "VC Resource Status Register — per-VC negotiation status."
+    ],
+    "out_of_band_test_facilities": [
+      "PROBE-via-protocol-analyzer (LeCroy / Keysight / vendor-specific) — interposer or mid-board tap to capture TLPs / DLLPs / Ordered Sets.",
+      "PROBE-via-vendor-PHY-debug-port — implementation-defined (PIPE-style PHY interface specs add scan + debug; not in Base Spec)."
+    ],
+    "ic_name": "PCI Express 5.0 (PCI-SIG Base Specification Rev 5.0)"
+  },
+  "extraction_hints": [
+    "Look for scan / DFT / BIST / JTAG sections.",
+    "Capture chain count, length, frequency."
+  ],
+  "extraction_status": "NOT_YET_EXTRACTED",
+  "emitted_by": "phase1_post_process.emit_l_doc_skeleton v0.1.51",
+  "extraction_evidence": {},
+  "ic_name": "PCI Express 5.0 (PCI-SIG Base Specification Rev 5.0)"
+}

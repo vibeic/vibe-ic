@@ -1,0 +1,38 @@
+{
+  "doc_id": "L22",
+  "doc_name": "L22_VERIFICATION_PLAN",
+  "applicability": "APPLICABLE",
+  "ic_class": "digital_arithmetic_primitive",
+  "fields": {
+    "coverage_goals": [],
+    "formal_properties": [],
+    "regression_matrix": {},
+    "verification_plan_present": "implicit",
+    "notes": "Spec does not include a formal verification plan; categories above are derived from the spec's functional and waveform descriptions.",
+    "verification_categories_derived_from_spec": [
+      "Register access (read/write to all register fields; reserved-bit behavior)",
+      "Nominal transfer / transaction across the protocol's operating modes",
+      "Error and fault condition detection and handling",
+      "Reset behavior verification",
+      "Back-to-back / sustained operation"
+    ],
+    "verification_items": [
+      "Word lock on Synchronization Word",
+      "Lane deskew on metaframe boundaries",
+      "Descrambler synchronization",
+      "Burst framing (SOP/EOP/EOP_Format)",
+      "CRC-24 per-burst error detection",
+      "CRC-32 per-lane diagnostic",
+      "XON/XOFF flow-control calendar",
+      "Skip-Word clock compensation"
+    ]
+  },
+  "extraction_hints": [
+    "Look for coverage targets, vplan, regression policy.",
+    "Capture per-feature coverage goals."
+  ],
+  "extraction_status": "NOT_YET_EXTRACTED",
+  "emitted_by": "phase1_post_process.emit_l_doc_skeleton v0.1.51",
+  "extraction_evidence": {},
+  "ic_name": "Interlaken Protocol Definition"
+}

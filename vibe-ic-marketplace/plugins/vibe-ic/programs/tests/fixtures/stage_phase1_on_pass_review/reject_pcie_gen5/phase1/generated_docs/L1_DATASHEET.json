@@ -1,0 +1,1788 @@
+{
+  "schema_version": 2,
+  "doc_class": "datasheet",
+  "ic_name": "PCI Express 5.0 (PCI-SIG Base Specification Rev 5.0)",
+  "no_ic_name_in_input": false,
+  "package_info": {
+    "package_type": "BGA",
+    "pin_count": 0,
+    "evidence": "input/docs/"
+  },
+  "no_package_in_input": false,
+  "pin_table": [
+    {
+      "name": "clk",
+      "mode": "in",
+      "io_standard": null,
+      "evidence": "v1.6.269 (#127): AID-class half-duplex detected via L2.protocol_overview; aid_class_rtl_gen.py always emits clk/reset_n/inout id_bus on chip_top.sv, so L9 is augmented to match RTL contract.",
+      "extraction_strategy": "cross_walk_from_l9_ports_v1_6_555"
+    },
+    {
+      "name": "reset_n",
+      "mode": "in",
+      "io_standard": null,
+      "evidence": "v1.6.269 (#127): AID-class half-duplex detected via L2.protocol_overview; aid_class_rtl_gen.py always emits clk/reset_n/inout id_bus on chip_top.sv, so L9 is augmented to match RTL contract.",
+      "extraction_strategy": "cross_walk_from_l9_ports_v1_6_555"
+    },
+    {
+      "name": "id_bus",
+      "mode": "inout",
+      "io_standard": null,
+      "evidence": "v1.6.269 (#127): AID-class half-duplex detected via L2.protocol_overview; aid_class_rtl_gen.py always emits clk/reset_n/inout id_bus on chip_top.sv, so L9 is augmented to match RTL contract.",
+      "extraction_strategy": "cross_walk_from_l9_ports_v1_6_555"
+    }
+  ],
+  "no_pin_table_in_input": false,
+  "electrical_specs": [],
+  "no_electrical_specs_in_input": true,
+  "ordering_info": {
+    "part_number": "pcie_gen5",
+    "vendor": "Microchip",
+    "no_vendor_in_input": false
+  },
+  "tapeout_metadata": {
+    "die_size_um": [
+      30000,
+      31900
+    ],
+    "die_dimensions_evidence": "30 × 31.90\nmm",
+    "process_node": "12nm",
+    "extraction_evidence": [
+      {
+        "file": "input/docs/pcie_gen5_spec.pdf"
+      }
+    ]
+  },
+  "no_tapeout_metadata_in_input": false,
+  "extraction_evidence": {
+    "input/docs/pcie_gen5_spec.pdf": [
+      {
+        "literal": "133 MHz",
+        "label": "frequency"
+      }
+    ]
+  },
+  "class_path": "digital_cmd_driven",
+  "no_class_path_in_input": false,
+  "auto_discovered_identifiers": [
+    {
+      "name": "PCI",
+      "source_doc": "pcie_gen5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "AGP",
+      "source_doc": "pcie_gen5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "SIG",
+      "source_doc": "pcie_gen5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "IBM",
+      "source_doc": "pcie_gen5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "SATA",
+      "source_doc": "pcie_gen5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "USB4",
+      "source_doc": "pcie_gen5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "SAS",
+      "source_doc": "pcie_gen5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "MSI",
+      "source_doc": "pcie_gen5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "PCB",
+      "source_doc": "pcie_gen5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "ATA",
+      "source_doc": "pcie_gen5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "USB",
+      "source_doc": "pcie_gen5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "SCSI",
+      "source_doc": "pcie_gen5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "IEEE",
+      "source_doc": "pcie_gen5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "DVI",
+      "source_doc": "pcie_gen5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "HDMI",
+      "source_doc": "pcie_gen5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "VGA",
+      "source_doc": "pcie_gen5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "P3608",
+      "source_doc": "pcie_gen5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "SSD",
+      "source_doc": "pcie_gen5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "HHHL",
+      "source_doc": "pcie_gen5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "FHHL",
+      "source_doc": "pcie_gen5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "ATX",
+      "source_doc": "pcie_gen5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "XFX",
+      "source_doc": "pcie_gen5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "RTX",
+      "source_doc": "pcie_gen5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "PRSNT1",
+      "source_doc": "pcie_gen5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "PRSNT2",
+      "source_doc": "pcie_gen5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "WAKE",
+      "source_doc": "pcie_gen5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "SMCLK",
+      "source_doc": "pcie_gen5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "TCK",
+      "source_doc": "pcie_gen5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "SMDAT",
+      "source_doc": "pcie_gen5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "TDI",
+      "source_doc": "pcie_gen5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "JTAG",
+      "source_doc": "pcie_gen5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "TDO",
+      "source_doc": "pcie_gen5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "TMS",
+      "source_doc": "pcie_gen5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "TRST",
+      "source_doc": "pcie_gen5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "PERST",
+      "source_doc": "pcie_gen5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "CLKREQ",
+      "source_doc": "pcie_gen5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "REFCLK",
+      "source_doc": "pcie_gen5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "PWRBRK",
+      "source_doc": "pcie_gen5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "CEM",
+      "source_doc": "pcie_gen5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "EPS12V",
+      "source_doc": "pcie_gen5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "SMP",
+      "source_doc": "pcie_gen5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "B10",
+      "source_doc": "pcie_gen5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "A10",
+      "source_doc": "pcie_gen5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "ECN",
+      "source_doc": "pcie_gen5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "GPU",
+      "source_doc": "pcie_gen5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "PSU",
+      "source_doc": "pcie_gen5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "CARD_PWR_STABLE",
+      "source_doc": "pcie_gen5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "CARD_CBL_PRES",
+      "source_doc": "pcie_gen5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "SENSE0",
+      "source_doc": "pcie_gen5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "SENSE1",
+      "source_doc": "pcie_gen5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "ECM",
+      "source_doc": "pcie_gen5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "PEM",
+      "source_doc": "pcie_gen5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "WLAN",
+      "source_doc": "pcie_gen5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "HMC",
+      "source_doc": "pcie_gen5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "SIM",
+      "source_doc": "pcie_gen5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "GSM",
+      "source_doc": "pcie_gen5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "WCDMA",
+      "source_doc": "pcie_gen5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "UIM",
+      "source_doc": "pcie_gen5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "WWAN",
+      "source_doc": "pcie_gen5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "Y460",
+      "source_doc": "pcie_gen5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "Y560",
+      "source_doc": "pcie_gen5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "Y570",
+      "source_doc": "pcie_gen5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "Y580",
+      "source_doc": "pcie_gen5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "IDE",
+      "source_doc": "pcie_gen5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "SFF",
+      "source_doc": "pcie_gen5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "XQD",
+      "source_doc": "pcie_gen5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "XMC",
+      "source_doc": "pcie_gen5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "CMC",
+      "source_doc": "pcie_gen5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "PMC",
+      "source_doc": "pcie_gen5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "VITA",
+      "source_doc": "pcie_gen5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "AMC",
+      "source_doc": "pcie_gen5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "ATCA",
+      "source_doc": "pcie_gen5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "I2C",
+      "source_doc": "pcie_gen5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "NGFF",
+      "source_doc": "pcie_gen5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "PHY",
+      "source_doc": "pcie_gen5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "XIO",
+      "source_doc": "pcie_gen5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "CPU",
+      "source_doc": "pcie_gen5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "HSI",
+      "source_doc": "pcie_gen5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "AWG",
+      "source_doc": "pcie_gen5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "NRZ",
+      "source_doc": "pcie_gen5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "PAM",
+      "source_doc": "pcie_gen5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "FEC",
+      "source_doc": "pcie_gen5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "FLIT",
+      "source_doc": "pcie_gen5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "X38",
+      "source_doc": "pcie_gen5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "AMD",
+      "source_doc": "pcie_gen5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "MCP72",
+      "source_doc": "pcie_gen5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "P35",
+      "source_doc": "pcie_gen5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "BIOS",
+      "source_doc": "pcie_gen5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "PLL",
+      "source_doc": "pcie_gen5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "PLDA",
+      "source_doc": "pcie_gen5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "FPGA",
+      "source_doc": "pcie_gen5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "POWER9",
+      "source_doc": "pcie_gen5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "AC922",
+      "source_doc": "pcie_gen5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "NETINT",
+      "source_doc": "pcie_gen5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "X570",
+      "source_doc": "pcie_gen5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "HC9001",
+      "source_doc": "pcie_gen5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "SCM",
+      "source_doc": "pcie_gen5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "DCM",
+      "source_doc": "pcie_gen5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "E1080",
+      "source_doc": "pcie_gen5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "CXP",
+      "source_doc": "pcie_gen5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "GH100",
+      "source_doc": "pcie_gen5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "BER",
+      "source_doc": "pcie_gen5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "CRC",
+      "source_doc": "pcie_gen5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "TLP",
+      "source_doc": "pcie_gen5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "DLLP",
+      "source_doc": "pcie_gen5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "PAM4",
+      "source_doc": "pcie_gen5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "AOC",
+      "source_doc": "pcie_gen5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "VAIO",
+      "source_doc": "pcie_gen5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "VPC",
+      "source_doc": "pcie_gen5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "MIPI",
+      "source_doc": "pcie_gen5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "MAC",
+      "source_doc": "pcie_gen5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "PCS",
+      "source_doc": "pcie_gen5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "PCIEPHY",
+      "source_doc": "pcie_gen5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "PIPE",
+      "source_doc": "pcie_gen5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "PMA",
+      "source_doc": "pcie_gen5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "ASIC",
+      "source_doc": "pcie_gen5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "IRQ",
+      "source_doc": "pcie_gen5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "APIC",
+      "source_doc": "pcie_gen5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "XOR",
+      "source_doc": "pcie_gen5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "ACK",
+      "source_doc": "pcie_gen5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "NAK",
+      "source_doc": "pcie_gen5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "LCRC",
+      "source_doc": "pcie_gen5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "ECRC",
+      "source_doc": "pcie_gen5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "DMA",
+      "source_doc": "pcie_gen5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "MPS",
+      "source_doc": "pcie_gen5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "GTX",
+      "source_doc": "pcie_gen5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "ATI",
+      "source_doc": "pcie_gen5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "VHDCI",
+      "source_doc": "pcie_gen5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "XGP",
+      "source_doc": "pcie_gen5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "NIC",
+      "source_doc": "pcie_gen5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "AMILO",
+      "source_doc": "pcie_gen5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "GUS",
+      "source_doc": "pcie_gen5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "PE4H",
+      "source_doc": "pcie_gen5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "DIY",
+      "source_doc": "pcie_gen5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "RAID",
+      "source_doc": "pcie_gen5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "OCZ",
+      "source_doc": "pcie_gen5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "IOPS",
+      "source_doc": "pcie_gen5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "AHCI",
+      "source_doc": "pcie_gen5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "NVM",
+      "source_doc": "pcie_gen5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "ICS",
+      "source_doc": "pcie_gen5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "CCIX",
+      "source_doc": "pcie_gen5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "CAPI",
+      "source_doc": "pcie_gen5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "CXL",
+      "source_doc": "pcie_gen5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "EMC",
+      "source_doc": "pcie_gen5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "HPE",
+      "source_doc": "pcie_gen5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "ASPM",
+      "source_doc": "pcie_gen5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "SDVO",
+      "source_doc": "pcie_gen5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "PA69",
+      "source_doc": "pcie_gen5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "ISBN",
+      "source_doc": "pcie_gen5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "CONECT",
+      "source_doc": "pcie_gen5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "S2CID",
+      "source_doc": "pcie_gen5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "OLS",
+      "source_doc": "pcie_gen5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "PDF",
+      "source_doc": "pcie_gen5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "AIC",
+      "source_doc": "pcie_gen5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "ASUS",
+      "source_doc": "pcie_gen5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "GDDR6",
+      "source_doc": "pcie_gen5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "THICC",
+      "source_doc": "pcie_gen5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "ROG",
+      "source_doc": "pcie_gen5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "GDDR6X",
+      "source_doc": "pcie_gen5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "BRK",
+      "source_doc": "pcie_gen5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "T1S02",
+      "source_doc": "pcie_gen5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "T1S08",
+      "source_doc": "pcie_gen5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "MP1",
+      "source_doc": "pcie_gen5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "PT628",
+      "source_doc": "pcie_gen5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "PA491",
+      "source_doc": "pcie_gen5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "FAQ",
+      "source_doc": "pcie_gen5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "UIO",
+      "source_doc": "pcie_gen5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "EDN",
+      "source_doc": "pcie_gen5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "EQ3",
+      "source_doc": "pcie_gen5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "EQ2",
+      "source_doc": "pcie_gen5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "NVIDIA",
+      "source_doc": "pcie_gen5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "HDR",
+      "source_doc": "pcie_gen5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "IDF",
+      "source_doc": "pcie_gen5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "HC28",
+      "source_doc": "pcie_gen5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "HCS",
+      "source_doc": "pcie_gen5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "GTG",
+      "source_doc": "pcie_gen5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "HPDA",
+      "source_doc": "pcie_gen5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "HPC",
+      "source_doc": "pcie_gen5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "ENUSZG17",
+      "source_doc": "pcie_gen5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "AM4",
+      "source_doc": "pcie_gen5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "POWER10",
+      "source_doc": "pcie_gen5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "ZG21",
+      "source_doc": "pcie_gen5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "ENU",
+      "source_doc": "pcie_gen5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "SZG21",
+      "source_doc": "pcie_gen5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "COMPUTEX",
+      "source_doc": "pcie_gen5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "EPYC",
+      "source_doc": "pcie_gen5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "PLX",
+      "source_doc": "pcie_gen5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "E870",
+      "source_doc": "pcie_gen5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "E880",
+      "source_doc": "pcie_gen5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "FCI",
+      "source_doc": "pcie_gen5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "TCG",
+      "source_doc": "pcie_gen5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "PT128",
+      "source_doc": "pcie_gen5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "PA35",
+      "source_doc": "pcie_gen5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "IO_34527",
+      "source_doc": "pcie_gen5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "VCS",
+      "source_doc": "pcie_gen5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "EXPRESS",
+      "source_doc": "pcie_gen5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "TECHNICAL",
+      "source_doc": "pcie_gen5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "FACTS",
+      "source_doc": "pcie_gen5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "ADDENDUM",
+      "source_doc": "pcie_gen5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "SIGNALING",
+      "source_doc": "pcie_gen5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "DATA",
+      "source_doc": "pcie_gen5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "RATE",
+      "source_doc": "pcie_gen5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "BACKWARD",
+      "source_doc": "pcie_gen5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "COMPATIBILITY",
+      "source_doc": "pcie_gen5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "LTSSM",
+      "source_doc": "pcie_gen5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "TS1",
+      "source_doc": "pcie_gen5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "TS2",
+      "source_doc": "pcie_gen5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "ENHANCED",
+      "source_doc": "pcie_gen5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "TRANSMITTER",
+      "source_doc": "pcie_gen5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "EQUALIZATION",
+      "source_doc": "pcie_gen5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "P10",
+      "source_doc": "pcie_gen5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "DFE",
+      "source_doc": "pcie_gen5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "RETIMERS",
+      "source_doc": "pcie_gen5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "TWO",
+      "source_doc": "pcie_gen5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "LANE",
+      "source_doc": "pcie_gen5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "MARGINING",
+      "source_doc": "pcie_gen5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "ALTERNATE",
+      "source_doc": "pcie_gen5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "PROTOCOL",
+      "source_doc": "pcie_gen5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "NEGOTIATION",
+      "source_doc": "pcie_gen5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "TRANSACTION",
+      "source_doc": "pcie_gen5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "LINK",
+      "source_doc": "pcie_gen5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "LAYER",
+      "source_doc": "pcie_gen5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "DISTINGUISHING",
+      "source_doc": "pcie_gen5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "ALL",
+      "source_doc": "pcie_gen5_spec.pdf",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    }
+  ],
+  "vendor_short_literals": [
+    {
+      "literal": "20%",
+      "kind": "percent",
+      "source": "pcie_gen5_spec.pdf"
+    },
+    {
+      "literal": "1.54%",
+      "kind": "percent",
+      "source": "pcie_gen5_spec.pdf"
+    },
+    {
+      "literal": "95%",
+      "kind": "percent",
+      "source": "pcie_gen5_spec.pdf"
+    },
+    {
+      "literal": "86%",
+      "kind": "percent",
+      "source": "pcie_gen5_spec.pdf"
+    },
+    {
+      "literal": "98%",
+      "kind": "percent",
+      "source": "pcie_gen5_spec.pdf"
+    },
+    {
+      "literal": "16%",
+      "kind": "percent",
+      "source": "pcie_gen5_spec.pdf"
+    },
+    {
+      "literal": "10.1109%",
+      "kind": "percent",
+      "source": "pcie_gen5_spec.pdf"
+    },
+    {
+      "literal": "2%",
+      "kind": "percent",
+      "source": "pcie_gen5_spec.pdf"
+    },
+    {
+      "literal": "80%",
+      "kind": "percent",
+      "source": "pcie_gen5_spec.pdf"
+    },
+    {
+      "literal": "84%",
+      "kind": "percent",
+      "source": "pcie_gen5_spec.pdf"
+    },
+    {
+      "literal": "206.0%",
+      "kind": "percent",
+      "source": "pcie_gen5_spec.pdf"
+    },
+    {
+      "literal": "2.250in",
+      "kind": "dimension",
+      "source": "pcie_gen5_spec.pdf"
+    },
+    {
+      "literal": "20mm",
+      "kind": "dimension",
+      "source": "pcie_gen5_spec.pdf"
+    },
+    {
+      "literal": "312mm",
+      "kind": "dimension",
+      "source": "pcie_gen5_spec.pdf"
+    },
+    {
+      "literal": "135mm",
+      "kind": "dimension",
+      "source": "pcie_gen5_spec.pdf"
+    },
+    {
+      "literal": "28mm",
+      "kind": "dimension",
+      "source": "pcie_gen5_spec.pdf"
+    },
+    {
+      "literal": "55mm",
+      "kind": "dimension",
+      "source": "pcie_gen5_spec.pdf"
+    },
+    {
+      "literal": "20.32mm",
+      "kind": "dimension",
+      "source": "pcie_gen5_spec.pdf"
+    },
+    {
+      "literal": "140.1mm",
+      "kind": "dimension",
+      "source": "pcie_gen5_spec.pdf"
+    },
+    {
+      "literal": "318.5mm",
+      "kind": "dimension",
+      "source": "pcie_gen5_spec.pdf"
+    },
+    {
+      "literal": "57.8mm",
+      "kind": "dimension",
+      "source": "pcie_gen5_spec.pdf"
+    },
+    {
+      "literal": "30mm",
+      "kind": "dimension",
+      "source": "pcie_gen5_spec.pdf"
+    },
+    {
+      "literal": "50.95mm",
+      "kind": "dimension",
+      "source": "pcie_gen5_spec.pdf"
+    },
+    {
+      "literal": "0.8mm",
+      "kind": "dimension",
+      "source": "pcie_gen5_spec.pdf"
+    },
+    {
+      "literal": "1.0mm",
+      "kind": "dimension",
+      "source": "pcie_gen5_spec.pdf"
+    },
+    {
+      "literal": "26.8mm",
+      "kind": "dimension",
+      "source": "pcie_gen5_spec.pdf"
+    },
+    {
+      "literal": "31.90\nmm",
+      "kind": "dimension",
+      "source": "pcie_gen5_spec.pdf"
+    },
+    {
+      "literal": "71mm",
+      "kind": "dimension",
+      "source": "pcie_gen5_spec.pdf"
+    },
+    {
+      "literal": "51mm",
+      "kind": "dimension",
+      "source": "pcie_gen5_spec.pdf"
+    },
+    {
+      "literal": "43mm",
+      "kind": "dimension",
+      "source": "pcie_gen5_spec.pdf"
+    },
+    {
+      "literal": "65mm",
+      "kind": "dimension",
+      "source": "pcie_gen5_spec.pdf"
+    },
+    {
+      "literal": "1.1\nIn",
+      "kind": "dimension",
+      "source": "pcie_gen5_spec.pdf"
+    },
+    {
+      "literal": "3.1\nIn",
+      "kind": "dimension",
+      "source": "pcie_gen5_spec.pdf"
+    },
+    {
+      "literal": "5.0\nIn",
+      "kind": "dimension",
+      "source": "pcie_gen5_spec.pdf"
+    },
+    {
+      "literal": "8.8mm",
+      "kind": "dimension",
+      "source": "pcie_gen5_spec.pdf"
+    },
+    {
+      "literal": "11.25mm",
+      "kind": "dimension",
+      "source": "pcie_gen5_spec.pdf"
+    },
+    {
+      "literal": "11.65mm",
+      "kind": "dimension",
+      "source": "pcie_gen5_spec.pdf"
+    },
+    {
+      "literal": "1mm",
+      "kind": "dimension",
+      "source": "pcie_gen5_spec.pdf"
+    },
+    {
+      "literal": "1.6mm",
+      "kind": "dimension",
+      "source": "pcie_gen5_spec.pdf"
+    },
+    {
+      "literal": "5.0in",
+      "kind": "dimension",
+      "source": "pcie_gen5_spec.pdf"
+    },
+    {
+      "literal": "8-pin",
+      "kind": "package_pin_count",
+      "source": "pcie_gen5_spec.pdf"
+    },
+    {
+      "literal": "6-pin",
+      "kind": "package_pin_count",
+      "source": "pcie_gen5_spec.pdf"
+    },
+    {
+      "literal": "0003\npin",
+      "kind": "package_pin_count",
+      "source": "pcie_gen5_spec.pdf"
+    },
+    {
+      "literal": "0004\npin",
+      "kind": "package_pin_count",
+      "source": "pcie_gen5_spec.pdf"
+    },
+    {
+      "literal": "6pin",
+      "kind": "package_pin_count",
+      "source": "pcie_gen5_spec.pdf"
+    },
+    {
+      "literal": "8pin",
+      "kind": "package_pin_count",
+      "source": "pcie_gen5_spec.pdf"
+    },
+    {
+      "literal": "16-pin",
+      "kind": "package_pin_count",
+      "source": "pcie_gen5_spec.pdf"
+    },
+    {
+      "literal": "52-pin",
+      "kind": "package_pin_count",
+      "source": "pcie_gen5_spec.pdf"
+    },
+    {
+      "literal": "4-pin",
+      "kind": "package_pin_count",
+      "source": "pcie_gen5_spec.pdf"
+    }
+  ],
+  "document_title": "PCI Express Base Specification",
+  "version": "Revision 5.0",
+  "revised_date": "2019",
+  "manufacturer": "PCI-SIG (PCI Special Interest Group)",
+  "copyright": "© 2019 PCI-SIG",
+  "abstract": "PCI Express 5.0 is a layered, point-to-point, dual-simplex, differentially-signaled serial I/O interconnect that doubles the per-lane signaling rate to 32 GT/s (NRZ) while retaining the 128b/130b block encoding carried forward from PCIe 3.0/4.0 and the same Transaction Layer / Data Link Layer / Physical Layer architecture and LTSSM as base PCIe. Gen5 adds four-phase enhanced transmitter equalization with preset hints, optional transmitter precoding, mandatory Lane Margining at the Receiver, support for up to two retimers per link, and Alternate Protocol Negotiation (notably for CXL) over the PCIe 5.0 physical layer.",
+  "keywords": [
+    "PCI Express 5.0",
+    "PCIe Gen5",
+    "32 GT/s",
+    "128b/130b",
+    "NRZ",
+    "Lane Margining at the Receiver",
+    "retimer",
+    "enhanced equalization",
+    "precoding",
+    "Alternate Protocol Negotiation",
+    "CXL",
+    "Data Rate Identifier",
+    "TLP",
+    "DLLP",
+    "LTSSM"
+  ],
+  "external_pins": [
+    "TXp / TXn (differential transmit pair, per Lane) — NRZ at 32 GT/s",
+    "RXp / RXn (differential receive pair, per Lane) — NRZ at 32 GT/s, with Lane Margining at the Receiver",
+    "REFCLK+ / REFCLK- (100 MHz reference clock, optional spread-spectrum)",
+    "PERST# (Fundamental Reset, active LOW)",
+    "WAKE# (open-drain wakeup, system-level)"
+  ],
+  "external_pin_count_per_lane": 4,
+  "supported_link_widths_lanes": [
+    1,
+    2,
+    4,
+    8,
+    12,
+    16,
+    32
+  ],
+  "modes_of_operation": [
+    {
+      "name": "Gen 1",
+      "line_rate_GT_s": 2.5,
+      "encoding": "8b/10b",
+      "note": "Backward-compatible fallback rate."
+    },
+    {
+      "name": "Gen 2",
+      "line_rate_GT_s": 5.0,
+      "encoding": "8b/10b",
+      "note": "Backward-compatible fallback rate."
+    },
+    {
+      "name": "Gen 3",
+      "line_rate_GT_s": 8.0,
+      "encoding": "128b/130b",
+      "note": "Introduced 128b/130b."
+    },
+    {
+      "name": "Gen 4",
+      "line_rate_GT_s": 16.0,
+      "encoding": "128b/130b",
+      "note": "Introduced up to two retimers per link."
+    },
+    {
+      "name": "Gen 5 (this spec)",
+      "line_rate_GT_s": 32.0,
+      "encoding": "128b/130b",
+      "modulation": "NRZ",
+      "per_lane_raw_bandwidth_Gbps": 32.0,
+      "per_lane_effective_bandwidth_Gbps": 31.5,
+      "note": "Doubles Gen4; NRZ (NOT PAM4); mandatory Lane Margining; four-phase enhanced EQ; optional precoding."
+    }
+  ],
+  "key_features": [
+    "Per-lane signaling rate doubled to 32 GT/s (32.0 GT/s) — double the 16 GT/s of PCIe 4.0 and 12.8x the 2.5 GT/s of PCIe 1.0.",
+    "Modulation remains NRZ (two-level) — PAM4 is NOT introduced until PCIe 6.0; Gen5 stays NRZ.",
+    "128b/130b encoding carried forward from Gen3/Gen4 (~1.54% overhead).",
+    "A x16 PCIe 5.0 link delivers ~63 GB/s per direction.",
+    "Fully backward compatible with PCIe 4.0/3.0/2.0/1.0; negotiates down to the highest common rate.",
+    "Same LTSSM as base PCIe, extended to train and equalize 32 GT/s.",
+    "Data Rate Identifier in TS1/TS2 advertises the new 32.0 GT/s bit.",
+    "Four-phase enhanced transmitter equalization (Phase 0-3) with preset hints (P0-P10).",
+    "Optional transmitter precoding to reduce DFE burst-error propagation at 32 GT/s.",
+    "Support for up to two retimers per link, each participating in the Phase 0-3 equalization handshake.",
+    "Mandatory Lane Margining at the Receiver — probes receiver eye margin in L0 without interrupting traffic.",
+    "Alternate Protocol Negotiation (modified TS1/TS2) lets a link run CXL 1.1/2.0 over the PCIe 5.0 PHY.",
+    "Layered TLP + DLLP + Physical Layer architecture preserved."
+  ],
+  "topology_summary": "Tree-shaped fabric ('hierarchy') rooted at a Root Complex, with optional Switches and Bridges. At 32 GT/s the channel is loss-limited, so up to two protocol-aware retimers may be inserted per link. Each Link is point-to-point and dual-simplex.",
+  "package_summary": "PCI Express Base Specification Revision 5.0 is a wire-level + transaction-level + software-interface specification. Mechanical / connector specifications are in the companion PCI Express Card Electromechanical Specification. NOTE: The PCI-SIG Base Specification Rev 5.0 is membership-gated; the Gen5-specific facts in these documents are drawn from the public PCI-SIG Rev 5.0 announcement, PCI-SIG specification briefs, and vendor IP-controller datasheets (Synopsys DesignWare, Cadence, Rambus, PLDA).",
+  "use_cases": [
+    "High-end GPU / AI / ML accelerators (~63 GB/s per direction at x16)",
+    "Enterprise + hyperscale servers; CXL-attached memory / accelerators",
+    "NVMe Gen5 SSD storage controllers (x4 at 32 GT/s)",
+    "400G / 800G networking interface controllers",
+    "CXL coherent accelerators via Alternate Protocol Negotiation",
+    "Backward-compatible drop-in for PCIe 4.0/3.0 slots at reduced rate"
+  ],
+  "revision_history": [
+    {
+      "version": "1.0",
+      "date": "April 29, 2002",
+      "description": "Initial release at 2.5 GT/s, 8b/10b."
+    },
+    {
+      "version": "2.0",
+      "date": "2007",
+      "description": "5 GT/s, 8b/10b."
+    },
+    {
+      "version": "3.0",
+      "date": "2010",
+      "description": "8 GT/s; switched encoding to 128b/130b."
+    },
+    {
+      "version": "4.0",
+      "date": "2017",
+      "description": "16 GT/s; up to two retimers per link."
+    },
+    {
+      "version": "5.0",
+      "date": "2019",
+      "description": "32 GT/s (NRZ); 128b/130b retained; Lane Margining; four-phase enhanced EQ; precoding; Alternate Protocol Negotiation for CXL."
+    }
+  ],
+  "overview": "PCI Express 5.0 is the fifth-generation revision of the PCI-SIG serial I/O interconnect. Its headline change is doubling the per-lane rate to 32 GT/s while keeping NRZ modulation (PAM4 waits for Gen6) and the 128b/130b encoding introduced at Gen3. To close the eye at 32 GT/s, Gen5 adds a four-phase enhanced transmitter-equalization handshake with preset hints, optional precoding, support for up to two retimers per link, and mandatory Lane Margining at the Receiver. The upper layers (TLP, DLLP, credit-based flow control, LTSSM, the PCI software model) are functionally identical to base PCIe and simply run at 32 GT/s. Gen5 also defines Alternate Protocol Negotiation (modified TS1/TS2) used by CXL, and remains fully backward compatible."
+}

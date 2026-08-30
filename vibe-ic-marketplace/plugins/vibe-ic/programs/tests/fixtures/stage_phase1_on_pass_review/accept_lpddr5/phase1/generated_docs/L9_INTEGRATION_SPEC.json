@@ -1,0 +1,185 @@
+{
+  "schema_version": 2,
+  "doc_class": "integration_spec",
+  "ic_name": "LPDDR5 SDRAM (JEDEC JESD209-5)",
+  "top_module": "LPDDR5_SDRAM_component",
+  "top_module_extraction_strategy": "l1_ic_name_fallback",
+  "no_top_module_in_input": true,
+  "ports": [],
+  "top_ports": [],
+  "top_module_pins": [],
+  "no_integration_in_input": true,
+  "submodules": [],
+  "no_submodules_in_input": true,
+  "sim_only_modules": [],
+  "fsm_states": [],
+  "no_fsm_states_in_input": true,
+  "pipeline_stages": [],
+  "no_pipeline_stages_in_input": true,
+  "internal_wires": [],
+  "no_internal_wires_in_input": true,
+  "expected_verdict_byte_hex": null,
+  "expected_verdict_byte_offset": null,
+  "expected_verdict_byte_extraction_strategy": null,
+  "expected_verdict_byte_offset_low_confidence": false,
+  "expected_verdict_byte_hex_low_confidence": false,
+  "cpu_interrupts": [],
+  "no_cpu_interrupts_in_input": true,
+  "memories": [],
+  "memory_candidates": [
+    {
+      "name": null,
+      "kind": "ram",
+      "type": "DRAM",
+      "port_count": null,
+      "depth": null,
+      "width": null,
+      "evidence_file": "lpddr5_spec.pdf",
+      "extraction_strategy": "l9_memory_prose_walker_v1_6_426",
+      "rejected_low_information": true,
+      "rejection_reason": "bare-keyword prose match with no structural evidence (depth/width/port_count absent and the name carries no memory token) — recorded as provenance, NOT as deferred work"
+    },
+    {
+      "name": "LPDDR3",
+      "kind": "ram",
+      "type": "RAM",
+      "port_count": null,
+      "depth": null,
+      "width": null,
+      "evidence_file": "lpddr5_spec.pdf",
+      "extraction_strategy": "l9_memory_prose_walker_v1_6_426",
+      "name_origin": "bare_token_left_context",
+      "rejected_low_information": true,
+      "rejection_reason": "bare-keyword prose match with no structural evidence (depth/width/port_count absent and the name carries no memory token) — recorded as provenance, NOT as deferred work"
+    },
+    {
+      "name": null,
+      "kind": "fifo",
+      "type": "FIFO",
+      "port_count": null,
+      "depth": null,
+      "width": null,
+      "evidence_file": "lpddr5_spec.pdf",
+      "extraction_strategy": "l9_memory_prose_walker_v1_6_426",
+      "rejected_low_information": true,
+      "rejection_reason": "bare-keyword prose match with no structural evidence (depth/width/port_count absent and the name carries no memory token) — recorded as provenance, NOT as deferred work"
+    },
+    {
+      "name": "LPDDR5X",
+      "kind": "ram",
+      "type": "DRAM",
+      "port_count": null,
+      "depth": null,
+      "width": null,
+      "evidence_file": "lpddr5_spec.pdf",
+      "extraction_strategy": "l9_memory_prose_walker_v1_6_426",
+      "name_origin": "bare_token_left_context",
+      "rejected_low_information": true,
+      "rejection_reason": "bare-keyword prose match with no structural evidence (depth/width/port_count absent and the name carries no memory token) — recorded as provenance, NOT as deferred work"
+    }
+  ],
+  "no_memory_candidates_in_input": false,
+  "no_memories_in_input": false,
+  "memory_map": [],
+  "no_memory_map_in_input": true,
+  "no_instantiation_template_in_input": true,
+  "top_module_pins_evidence": {
+    "reason": "no_module_declaration_in_input_docs",
+    "fallback_source": "L1.ic_name",
+    "extraction_strategy_marker": "fallback_explicit_v1_6_581"
+  },
+  "extraction_evidence": {
+    "derived_from_L3": []
+  },
+  "clock_domains": [
+    {
+      "name": "clk",
+      "freq_low_mhz": 100.0,
+      "freq_high_mhz": 533.0,
+      "role": "primary",
+      "freq_mhz": 100.0,
+      "reset_strategy": "unspecified",
+      "evidence": {
+        "file": "input/docs/lpddr5_spec.pdf",
+        "line": 85,
+        "matched_substring": "100 to 533 MHz"
+      },
+      "extraction_strategy": "clock_domain_doc_prose_fmax",
+      "freq_hz": 100000000,
+      "period_ns": 10.0,
+      "domain_kind": "primary",
+      "source_pin": "clk"
+    }
+  ],
+  "interface_type": null,
+  "no_interface_type_in_input": true,
+  "interface_types": [],
+  "no_interface_types_in_input": true,
+  "chip_top_interfaces": [],
+  "module_role": "Source-synchronous low-power mobile memory device paired with an LPDDR5 memory controller + PHY. JESD209-5 standardizes the SDRAM component side (ballout, low-voltage signaling, the 7-bit DDR CA protocol, WCK/RDQS clocking, mode registers, AC timing). The controller / PHY must implement: quarter-speed CK + on-demand WCK, WCK2CK synchronization, a command scheduler honouring tRCD/tRP/tRAS/tRC/tRRD_L/tRRD_S/tFAW/tCCD_L/tCCD_S/tWR/tWTR/tRFCab/tRFCpb/tREFI, ZQ calibration, read/write training with DFE, link-ECC + DBI, DVFS, and per-bank state tracking. Concrete LPDDR5 controller IP appears in mobile SoCs (Snapdragon, Apple M-series, MediaTek Dimensity, Kirin) and IP vendors (Synopsys, Cadence).",
+  "integration_overview": {
+    "channel_organization": "Typically two x16 channels per package; per-channel CK/WCK/RDQS/CA/CS/DQ/DMI; two-deck internal organization.",
+    "wire_directions": "CK, WCK, CA[6:0], CS, RESET_n: controller -> DRAM. RDQS: DRAM -> controller (read). DQ, DMI: bidirectional. ZQ: external reference. Supplies VDD1/VDD2H/VDD2L/VDDQ.",
+    "no_cke": "There is NO CKE pin; low-power entry is a CA command bounded by CS.",
+    "on_demand_wck": "WCK enabled only when a transfer is imminent (after WCK2CK sync).",
+    "no_handshake": "Deterministic latency; data follows the command without per-beat acknowledgment."
+  },
+  "interface_categories": [
+    "Quarter-speed differential master clock (CK_t / CK_c)",
+    "Full-speed differential Write Clock (WCK_t / WCK_c, on-demand)",
+    "Full-speed differential Read Strobe (RDQS_t / RDQS_c, DRAM-driven on read)",
+    "Chip select (CS) — also bounds low-power-mode duration",
+    "7-bit double-data-rate command/address (CA[6:0])",
+    "Bidirectional data (DQ)",
+    "Data Mask / Data Bus Inversion (DMI)",
+    "Asynchronous reset (RESET_n)",
+    "Calibration reference (ZQ)",
+    "Power (VDD1, VDD2H, VDD2L, VDDQ=0.5 V, VSS, VSSQ)"
+  ],
+  "interconnect_topologies_supported": [
+    "Single controller + single LPDDR5 die (point-to-point on the SoC board / PoP).",
+    "Single controller + multi-die LPDDR5 package (per-channel CS / clocks).",
+    "Two-channel x16 organization (two independent channels per package).",
+    "Package-on-Package (PoP) stacking over the mobile application processor."
+  ],
+  "default_signal_values_when_omitted": "RESET_n must be driven HIGH before normal operation. WCK remains disabled until a transfer is imminent. Low-power mode is entered only by an explicit CA command and persists until CS next goes high.",
+  "soc_dependent_items": [
+    "LPDDR5 controller / scheduler IP.",
+    "LPDDR5 PHY: quarter-speed CK PLL + on-demand WCK, WCK2CK leveling, per-bit deskew, DFE / tx-rx equalization, RX FIFO.",
+    "ZQ calibration sequencer.",
+    "DQ / RDQS read training and WCK write training (per FSP).",
+    "Link-ECC encoder/decoder (read + write) and DBI logic.",
+    "DVFS / FSP manager (FSP-OP / FSP-WR), DVFSC VDD2H/VDD2L.",
+    "Refresh scheduler (REFab / REFpb round-robin; optional RFM).",
+    "Regulators for VDD1 / VDD2H / VDD2L / VDDQ (VDDQ 0.5 V).",
+    "Vref(ca) / Vref(dq) generation per FSP.",
+    "RESET_n generation; deep-sleep entry/exit sequencing."
+  ],
+  "pull_up_resistors_terminators": [
+    {
+      "signal": "DQ / DMI / WCK / RDQS / CA",
+      "termination": "On-die termination (ODT) selectable per mode register; LPDDR5 relies on ODT + equalization rather than external termination."
+    },
+    {
+      "signal": "ZQ",
+      "termination": "External precision reference resistor to ground for impedance calibration."
+    },
+    {
+      "signal": "RESET_n",
+      "termination": "Controller-driven; board pull as needed."
+    }
+  ],
+  "low_power_modes": {
+    "Power_Down": "Entered via a CA command (PD); no CKE; lasts until CS next goes high.",
+    "Self_Refresh": "Entered via SRE; CK may be stopped per the defined window.",
+    "Deep_Sleep_Mode": "Lowest standby power; SRE with DSE; full re-init on exit.",
+    "DVFS_DVFSC": "Dynamic voltage/frequency scaling with VDD2H/VDD2L selection.",
+    "Write_X_Data_Copy": "Write-X (all-zero/all-one) and Data-Copy reduce data-transfer activity."
+  },
+  "compatibility_notes": [
+    "LPDDR5 is NOT pin- or protocol-compatible with DDR3/DDR4/DDR5; it follows the LPDDR line (LPDDR2/3/4/4X -> LPDDR5/5X) and JESD209-x numbering.",
+    "Versus LPDDR4: LPDDR5 adds WCK/RDQS on-demand clocking, widens the CA bus to 7 bits at DDR, moves the CAS command before the read/write to synchronize WCK, increases banks to 16 (4 bank groups), reduces VDDQ to 0.5 V, and adds link ECC, DVFS, deep sleep, Data-Copy/Write-X.",
+    "Versus DDR3: LPDDR5 has WCK (DDR3 has no separate write clock), uses JESD209-5 (not JESD79-3), is a low-voltage mobile standard, and uses CA-bus command encoding (not separate RAS/CAS/WE pins) — the key sibling-disambiguation signature.",
+    "LPDDR5X (JESD209-5B/5X) is a speed/SI extension (up to 8533 Mbps) with tx/rx equalization and Adaptive Refresh Management."
+  ]
+}

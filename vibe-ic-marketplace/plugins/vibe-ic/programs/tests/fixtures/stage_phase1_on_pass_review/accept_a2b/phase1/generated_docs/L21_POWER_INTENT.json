@@ -1,0 +1,31 @@
+{
+  "doc_id": "L21",
+  "doc_name": "L21_POWER_INTENT",
+  "applicability": "APPLICABLE",
+  "ic_class": "digital_arithmetic_primitive",
+  "fields": {
+    "power_domains": [],
+    "isolation_cells": [],
+    "level_shifters": [],
+    "upf_path": null,
+    "power_intent_present": false,
+    "ic_name": "A2B_Transceiver",
+    "power_intent": {
+      "phantom_power": "DC bus power delivered to downstream nodes over the same twisted pair that carries the audio/control signal.",
+      "switching": "switched segment-by-segment during discovery; a node powers its downstream segment only when instructed, which gates the discovery order.",
+      "node_power_options": [
+        "bus-powered (phantom power, no local supply)",
+        "local-powered (own supply where the bus cannot deliver enough power)"
+      ],
+      "fault_detection": "per-segment over-current / under-voltage detection, reported upstream."
+    }
+  },
+  "extraction_hints": [
+    "Look for power-domain partitioning, supply nets.",
+    "Capture isolation / retention / level-shifting requirements."
+  ],
+  "extraction_status": "NOT_YET_EXTRACTED",
+  "emitted_by": "phase1_post_process.emit_l_doc_skeleton v0.1.51",
+  "extraction_evidence": {},
+  "ic_name": "A2B_Transceiver"
+}

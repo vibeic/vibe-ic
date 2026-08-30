@@ -1,0 +1,77 @@
+{
+  "schema_version": 2,
+  "doc_class": "regmap",
+  "ic_name": "A2B_Transceiver",
+  "registers": [],
+  "no_registers_in_input": true,
+  "otp_layout": null,
+  "no_otp_layout_in_input": true,
+  "otp_ip_macro": {},
+  "internal_registers": [],
+  "extraction_evidence": {
+    "input/docs/a2b_spec.txt": []
+  },
+  "register_map_present": true,
+  "base_address": "Defined at SoC level; offsets given relative to module base.",
+  "notes": "Each A2B transceiver exposes a register space reached over I2C (directly on the main node; tunneled over the bus for sub nodes). Representative register groups (concrete addresses are device-specific to the AD24xx part): node configuration / mode (main vs sub); node address; discovery control / status; audio slot control (downstream / upstream slot counts and offsets); I2S/TDM configuration (BCLK/SYNC rate, slot width, TDM mode); I2C passthrough control; GPIO direction / value / GPIO-over-distance mapping; interrupt mask / status / source; phantom-power switch control; line-diagnostic status; PLL / lock status; vendor / product / version identification.",
+  "register_groups": [
+    {
+      "group": "Node configuration",
+      "fields": [
+        "mode (main/sub)",
+        "node address",
+        "PLL/lock status"
+      ]
+    },
+    {
+      "group": "Discovery",
+      "fields": [
+        "discovery control",
+        "discovery status",
+        "node count"
+      ]
+    },
+    {
+      "group": "Audio slots",
+      "fields": [
+        "downstream slot count/offset",
+        "upstream slot count/offset",
+        "slot format"
+      ]
+    },
+    {
+      "group": "I2S/TDM",
+      "fields": [
+        "BCLK/SYNC rate",
+        "slot width",
+        "TDM mode",
+        "DTX/DRX mapping"
+      ]
+    },
+    {
+      "group": "I2C passthrough",
+      "fields": [
+        "passthrough enable",
+        "local I2C controller config"
+      ]
+    },
+    {
+      "group": "GPIO / interrupt",
+      "fields": [
+        "GPIO direction",
+        "GPIO value",
+        "GPIO-over-distance map",
+        "interrupt mask",
+        "interrupt status"
+      ]
+    },
+    {
+      "group": "Power / diagnostics",
+      "fields": [
+        "phantom-power switch",
+        "power fault status",
+        "line-fault status"
+      ]
+    }
+  ]
+}

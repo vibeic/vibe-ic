@@ -1,0 +1,271 @@
+{
+  "schema_version": 2,
+  "doc_class": "integration_spec",
+  "ic_name": "PCI Express 5.0 (PCI-SIG Base Specification Rev 5.0)",
+  "top_module": "chip_top",
+  "top_module_extraction_strategy": "canonical_chip_top_sentinel",
+  "no_top_module_in_input": true,
+  "ports": [
+    {
+      "name": "clk",
+      "mode": "input",
+      "direction": "input",
+      "io": "1.8-V LVCMOS",
+      "extraction_strategy": "aid_class_canonical_pin_augment",
+      "evidence": "v1.6.269 (#127): AID-class half-duplex detected via L2.protocol_overview; aid_class_rtl_gen.py always emits clk/reset_n/inout id_bus on chip_top.sv, so L9 is augmented to match RTL contract."
+    },
+    {
+      "name": "reset_n",
+      "mode": "input",
+      "direction": "input",
+      "io": "1.8-V LVCMOS",
+      "extraction_strategy": "aid_class_canonical_pin_augment",
+      "evidence": "v1.6.269 (#127): AID-class half-duplex detected via L2.protocol_overview; aid_class_rtl_gen.py always emits clk/reset_n/inout id_bus on chip_top.sv, so L9 is augmented to match RTL contract."
+    },
+    {
+      "name": "id_bus",
+      "mode": "inout",
+      "direction": "inout",
+      "io": "open-drain single-wire",
+      "extraction_strategy": "aid_class_canonical_pin_augment",
+      "evidence": "v1.6.269 (#127): AID-class half-duplex detected via L2.protocol_overview; aid_class_rtl_gen.py always emits clk/reset_n/inout id_bus on chip_top.sv, so L9 is augmented to match RTL contract."
+    }
+  ],
+  "top_ports": [
+    {
+      "name": "clk",
+      "mode": "input",
+      "direction": "input",
+      "io": "1.8-V LVCMOS",
+      "extraction_strategy": "aid_class_canonical_pin_augment",
+      "evidence": "v1.6.269 (#127): AID-class half-duplex detected via L2.protocol_overview; aid_class_rtl_gen.py always emits clk/reset_n/inout id_bus on chip_top.sv, so L9 is augmented to match RTL contract."
+    },
+    {
+      "name": "reset_n",
+      "mode": "input",
+      "direction": "input",
+      "io": "1.8-V LVCMOS",
+      "extraction_strategy": "aid_class_canonical_pin_augment",
+      "evidence": "v1.6.269 (#127): AID-class half-duplex detected via L2.protocol_overview; aid_class_rtl_gen.py always emits clk/reset_n/inout id_bus on chip_top.sv, so L9 is augmented to match RTL contract."
+    },
+    {
+      "name": "id_bus",
+      "mode": "inout",
+      "direction": "inout",
+      "io": "open-drain single-wire",
+      "extraction_strategy": "aid_class_canonical_pin_augment",
+      "evidence": "v1.6.269 (#127): AID-class half-duplex detected via L2.protocol_overview; aid_class_rtl_gen.py always emits clk/reset_n/inout id_bus on chip_top.sv, so L9 is augmented to match RTL contract."
+    }
+  ],
+  "top_module_pins": [
+    {
+      "name": "clk",
+      "mode": "input",
+      "direction": "input",
+      "io": "1.8-V LVCMOS",
+      "extraction_strategy": "aid_class_canonical_pin_augment",
+      "evidence": "v1.6.269 (#127): AID-class half-duplex detected via L2.protocol_overview; aid_class_rtl_gen.py always emits clk/reset_n/inout id_bus on chip_top.sv, so L9 is augmented to match RTL contract."
+    },
+    {
+      "name": "reset_n",
+      "mode": "input",
+      "direction": "input",
+      "io": "1.8-V LVCMOS",
+      "extraction_strategy": "aid_class_canonical_pin_augment",
+      "evidence": "v1.6.269 (#127): AID-class half-duplex detected via L2.protocol_overview; aid_class_rtl_gen.py always emits clk/reset_n/inout id_bus on chip_top.sv, so L9 is augmented to match RTL contract."
+    },
+    {
+      "name": "id_bus",
+      "mode": "inout",
+      "direction": "inout",
+      "io": "open-drain single-wire",
+      "extraction_strategy": "aid_class_canonical_pin_augment",
+      "evidence": "v1.6.269 (#127): AID-class half-duplex detected via L2.protocol_overview; aid_class_rtl_gen.py always emits clk/reset_n/inout id_bus on chip_top.sv, so L9 is augmented to match RTL contract."
+    }
+  ],
+  "no_integration_in_input": true,
+  "submodules": [],
+  "no_submodules_in_input": true,
+  "sim_only_modules": [],
+  "fsm_states": [],
+  "no_fsm_states_in_input": true,
+  "pipeline_stages": [],
+  "no_pipeline_stages_in_input": true,
+  "internal_wires": [],
+  "no_internal_wires_in_input": true,
+  "expected_verdict_byte_hex": "0xF2",
+  "expected_verdict_byte_offset": 6,
+  "expected_verdict_byte_extraction_strategy": "aid_class_default_pass_byte",
+  "expected_verdict_byte_offset_low_confidence": true,
+  "expected_verdict_byte_hex_low_confidence": true,
+  "cpu_interrupts": [],
+  "no_cpu_interrupts_in_input": true,
+  "reset_domains": [
+    {
+      "name": "reset_n",
+      "polarity": "active_low",
+      "sync": "unknown",
+      "scan_prefixed": false,
+      "direction_prefix": null,
+      "extraction_strategy": "l9_port_reset_shape_v1_6_369"
+    }
+  ],
+  "memories": [],
+  "memory_candidates": [
+    {
+      "name": null,
+      "kind": "cache",
+      "type": "cache",
+      "port_count": null,
+      "depth": null,
+      "width": null,
+      "evidence_file": "pcie_gen5_spec.pdf",
+      "extraction_strategy": "l9_memory_prose_walker_v1_6_426",
+      "rejected_low_information": true,
+      "rejection_reason": "bare-keyword prose match with no structural evidence (depth/width/port_count absent and the name carries no memory token) — recorded as provenance, NOT as deferred work"
+    }
+  ],
+  "no_memory_candidates_in_input": false,
+  "no_memories_in_input": false,
+  "memory_map": [],
+  "no_memory_map_in_input": true,
+  "no_instantiation_template_in_input": true,
+  "extraction_evidence": {
+    "derived_from_L2.protocol_overview": [
+      {
+        "literal": "half_duplex/single_wire/wire_count=1",
+        "label": "verdict_byte_offset defaulted to 6 (AID-class half-duplex single-wire convention) — L3 did not extract an offset"
+      },
+      {
+        "literal": "half_duplex/single_wire/wire_count=1",
+        "label": "expected_verdict_byte_hex defaulted to AID-class protocol PASS sentinel (canonical 0xF2 at byte_offset 6); L3 did not extract a verdict-byte literal — low_confidence"
+      }
+    ],
+    "derived_from_L3": []
+  },
+  "clock_domains": [
+    {
+      "name": "clk",
+      "source_pin": "clk",
+      "domain_kind": "primary",
+      "role": "master",
+      "source": "synthesised-from-L9.top_ports",
+      "evidence": "L9.top_ports",
+      "reset_strategy": "unspecified",
+      "freq_hz": null,
+      "freq_mhz": null,
+      "period_ns": null
+    }
+  ],
+  "resets": [
+    {
+      "name": "reset_n",
+      "polarity": "active_low",
+      "extraction_strategy": "l9_top_port_reset_derive"
+    }
+  ],
+  "clocks": [
+    {
+      "name": "clk",
+      "edge": "posedge",
+      "extraction_strategy": "l9_top_port_clock_derive",
+      "role": "master",
+      "source": "synthesised-from-L9.top_ports",
+      "domain_kind": "primary"
+    }
+  ],
+  "interface_type": "pcie",
+  "no_interface_type_in_input": false,
+  "interface_types": [
+    {
+      "name": "pcie",
+      "occurrences": 305,
+      "first_line": 4,
+      "matched_token": "PCIe"
+    }
+  ],
+  "no_interface_types_in_input": false,
+  "chip_top_interfaces": [
+    {
+      "name": "pcie",
+      "matched_token": "PCIe"
+    }
+  ],
+  "class_path": "digital_cmd_driven",
+  "module_role": "Wire-level + transaction-level + software-interface specification for a fifth-generation (32 GT/s) point-to-point, layered, differential serial I/O interconnect. Functionally the same protocol as base PCIe, with the physical layer upgraded to 32 GT/s NRZ with 128b/130b encoding, four-phase enhanced equalization, optional precoding, up to two retimers per link, and mandatory Lane Margining at the Receiver.",
+  "topology_description": "Hierarchy (tree) rooted at a Root Complex (RC), with optional Switches and Bridges; leaf nodes are Endpoints. Each Link is a point-to-point dual-simplex connection. Because 32 GT/s channels are loss-limited, up to two protocol-aware retimers may be inserted per link to extend reach.",
+  "integration_overview": {
+    "host_count_per_hierarchy": 1,
+    "max_lane_width": 32,
+    "lane_widths_supported": [
+      1,
+      2,
+      4,
+      8,
+      12,
+      16,
+      32
+    ],
+    "host_side_register_spec": "PCI Configuration Space (256 B) + PCI Express Extended Configuration Space (up to 4096 B per device), incl. Link Capabilities/Control/Status 2, Secondary PCIe Extended Capability (EQ presets), and Lane Margining at the Receiver Extended Capability.",
+    "device_side_interface": "Each device exposes its Configuration Space via Configuration Read/Write TLPs routed by Bus/Device/Function number.",
+    "wire_count_per_lane_per_dir": 2,
+    "lanes_are_lock-step": "All Lanes of a Link run at the same line rate; data is striped Lane-by-Lane starting at Lane 0.",
+    "ac_coupling_required": true,
+    "refclk_freq_MHz": 100,
+    "refclk_sharing": "Common Clock OR Separate Reference clock with Independent SSC (SRIS).",
+    "gen5_line_rate_GT_s": 32.0,
+    "modulation": "NRZ",
+    "encoding": "128b/130b",
+    "x16_bandwidth_per_direction_GB_s": 63,
+    "backward_compat_rates_GT_s": [
+      2.5,
+      5.0,
+      8.0,
+      16.0,
+      32.0
+    ],
+    "retimers_max_per_link": 2,
+    "lane_margining_at_receiver": "mandatory"
+  },
+  "interface_categories": [
+    "Root Complex (RC) — top of the hierarchy; connects CPU + memory subsystem to PCIe fabric; one or more Root Ports.",
+    "Switch — logical assembly of virtual PCI-to-PCI bridges; aggregates multiple downstream Endpoints under one upstream port.",
+    "PCI Express Endpoint — modern PCIe-only Endpoint; Type 0 header; must not generate I/O Requests or support Lock semantics.",
+    "Legacy Endpoint — PCIe Endpoint with PCI-style behaviors permitted (may support I/O space + Lock semantics for legacy software).",
+    "PCI Express-to-PCI/PCI-X Bridge — translates between PCIe protocol and legacy PCI / PCI-X bus."
+  ],
+  "interconnect_topologies_supported": [
+    "Point-to-point Link between RC and a single Endpoint.",
+    "Tree via Switch — one upstream port + N downstream ports.",
+    "Cascaded Switches — multi-level hierarchy.",
+    "PCI Express-to-PCI Bridge for legacy peripherals.",
+    "Optional: Advanced Peer-to-Peer Communication (Cross-Link) between two RCs (separate spec)."
+  ],
+  "default_signal_values_when_omitted": "TX defaults to Electrical Idle outside L0/L0s; in L0 with no TLP/DLLP queued, TX emits scrambled Logical Idle in 128b/130b Data Blocks. PERST# is asserted (LOW) while system power is unstable.",
+  "soc_dependent_items": [
+    "PCIe 5.0 PHY transceiver (32 GT/s NRZ SerDes with CTLE + DFE + four-phase enhanced TX equalization + optional precoding + Lane Margining at the Receiver).",
+    "Retimer placement decision (0, 1, or up to 2 retimers per link).",
+    "REFCLK source (crystal + low-jitter PLL; SSC-tolerant; SRIS).",
+    "Equalization preset / coefficient policy (which P0-P10 presets to request during Phase 0).",
+    "Lane Margining controller integration for in-system diagnostics.",
+    "Alternate Protocol Negotiation enablement (e.g. CXL on the PHY).",
+    "PERST# / WAKE# generation and routing.",
+    "DMA engine wiring for Memory Read / Write TLPs at 32 GT/s.",
+    "Power-management policy (D0..D3 mapped to L0..L2)."
+  ],
+  "low_power_modes": {
+    "L0": "Active — full operation at the trained rate (up to 32 GT/s).",
+    "L0s": "Standby per direction; sub-µs exit via FTS.",
+    "L1": "Link inactive but trained; exit through Recovery.",
+    "L2": "Deep sleep; REFCLK off; Beacon required to wake.",
+    "L3": "Main power off."
+  },
+  "device_classes_examples": [
+    "GPU / AI accelerator (PCIe 5.0 Endpoint, typically x16, ~63 GB/s per direction)",
+    "NVMe Gen5 SSD storage controller (x4 at 32 GT/s)",
+    "400G/800G Network Interface Controller (x8 / x16)",
+    "CXL coherent accelerator / memory expander (via Alternate Protocol Negotiation)",
+    "PCIe 5.0 Switch fabric for multi-Endpoint backplanes",
+    "Retimer for long-reach 32 GT/s channels"
+  ]
+}

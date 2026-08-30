@@ -1,0 +1,248 @@
+{
+  "schema_version": 2,
+  "doc_class": "control_logic",
+  "ic_name": "LPDDR5 SDRAM (JEDEC JESD209-5)",
+  "reject_rules": [],
+  "fsm_states": [],
+  "pipeline_stages": [],
+  "no_pipeline_stages_in_input": true,
+  "no_fsm_states_in_input": true,
+  "no_fsm_in_input": true,
+  "fsm_tokens": [
+    {
+      "name": "FIFO",
+      "type": "structure",
+      "source": "lpddr5_spec.pdf"
+    }
+  ],
+  "extraction_evidence": {
+    "input/docs/lpddr5_spec.pdf": [
+      {
+        "literal": "FIFO",
+        "label": "FSM structure token"
+      }
+    ]
+  },
+  "fsm_states_sdram": [
+    {
+      "name": "Power Applied",
+      "code": "—",
+      "description": "RESET_n LOW; supplies ramping (VDD1/VDD2H/VDD2L/VDDQ); state undefined."
+    },
+    {
+      "name": "Reset",
+      "code": "—",
+      "description": "RESET_n LOW; logic reset; outputs Hi-Z; mode registers cleared."
+    },
+    {
+      "name": "Initialization",
+      "code": "—",
+      "description": "Mode-register program + ZQ calibration + initial WCK2CK sync before normal operation."
+    },
+    {
+      "name": "Idle",
+      "code": "—",
+      "description": "Banks precharged, timing met, MRs programmed. Ready for ACT-1/ACT-2, REF (ab/pb), MRW/MRR, SRE, PDE, or CAS/WCK2CK sync."
+    },
+    {
+      "name": "Refreshing (ab/pb)",
+      "code": "—",
+      "description": "REFab (all-bank) or REFpb (per-bank round-robin); tRFCab/tRFCpb."
+    },
+    {
+      "name": "Self Refresh",
+      "code": "—",
+      "description": "Entered via SRE over the CA bus; no CKE; deep sleep (DSM) is the deepest sub-mode (DSE)."
+    },
+    {
+      "name": "Mode Register Access",
+      "code": "—",
+      "description": "MRW (two CA cycles) or MRR; tMRW/tMRD/tMRR."
+    },
+    {
+      "name": "Activating",
+      "code": "—",
+      "description": "ACT-1 then ACT-2; row opening; tRCD before first column command."
+    },
+    {
+      "name": "Bank Active",
+      "code": "—",
+      "description": "One/more banks open; ready for CAS (WCK sync) + RD/WR/MWR, further ACT, or PRE."
+    },
+    {
+      "name": "WCK Synchronizing",
+      "code": "—",
+      "description": "After CAS WS_FS/WS_RD/WS_WR: lock internal WCK phase to CK before the transfer."
+    },
+    {
+      "name": "Reading",
+      "code": "—",
+      "description": "Read burst (BL16/BL32); DRAM drives DQ + RDQS at read latency."
+    },
+    {
+      "name": "Writing",
+      "code": "—",
+      "description": "Write burst (BL16/BL32); controller drives DQ + DMI framed by WCK; WRX fills without data."
+    },
+    {
+      "name": "Precharging",
+      "code": "—",
+      "description": "PRE / PREab; tRP before next ACT or MRW/REF/SRE."
+    },
+    {
+      "name": "Power-Down",
+      "code": "—",
+      "description": "Entered via CA command (PD); lasts until CS next goes high; no CKE."
+    },
+    {
+      "name": "Deep Sleep (DSM)",
+      "code": "—",
+      "description": "Lowest standby power; SRE with DSE; full re-init on exit."
+    }
+  ],
+  "fsm_states_controller": [
+    {
+      "name": "CTRL_POWER_UP",
+      "description": "Hold RESET_n LOW; ramp VDD1/VDD2H/VDD2L/VDDQ; VDDQ to 0.5 V."
+    },
+    {
+      "name": "CTRL_INIT",
+      "description": "Deassert RESET_n; start CK; program MRs; ZQ calibration; initial WCK2CK sync."
+    },
+    {
+      "name": "CTRL_IDLE",
+      "description": "Schedule REFab/REFpb; track tREFI/tFAW; manage DVFS FSP."
+    },
+    {
+      "name": "CTRL_ACTIVATE",
+      "description": "ACT-1 then ACT-2; respect tRCD, tRRD_L/tRRD_S, tFAW."
+    },
+    {
+      "name": "CTRL_WCK_SYNC",
+      "description": "Issue CAS WS_FS/WS_RD/WS_WR; enable WCK only when needed."
+    },
+    {
+      "name": "CTRL_READ",
+      "description": "RD/RD32 at programmed RL; receive DQ framed by DRAM-driven RDQS; decode read link ECC."
+    },
+    {
+      "name": "CTRL_WRITE",
+      "description": "WR/WR32/MWR at programmed WL; drive DQ + DMI framed by WCK; encode write link ECC; use WRX."
+    },
+    {
+      "name": "CTRL_PRECHARGE",
+      "description": "PRE/PREab; wait tRP."
+    },
+    {
+      "name": "CTRL_REFRESH",
+      "description": "REFab/REFpb (round-robin); wait tRFCab/tRFCpb; manage RFM."
+    },
+    {
+      "name": "CTRL_SELF_REFRESH",
+      "description": "SRE; deep sleep via DSE; re-init on deep-sleep exit."
+    },
+    {
+      "name": "CTRL_DVFS",
+      "description": "Switch FSP; change WCK rate; adjust RL/WL/ODT/Vref; DVFSC VDD2H/VDD2L."
+    },
+    {
+      "name": "CTRL_POWER_DOWN",
+      "description": "Enter power-down via CA command (no CKE); mode lasts until CS next goes high."
+    }
+  ],
+  "fsm_hints": {
+    "trigger": "Commands are committed on the 7-bit CA bus referenced to the quarter-speed CK (two CA transfers per command). The controller is the sole bus master. High-speed transfers require a prior WCK2CK synchronization (WS_FS/WS_RD/WS_WR via CAS).",
+    "rule": "Deterministic latency; once committed, data movement on DQ is fixed by read/write latency and burst length. WCK and RDQS are enabled only when a transfer is imminent.",
+    "abort": "RESET_n is the true abort. Low-power entry is via CA command and persists until CS next goes high (no CKE pin)."
+  },
+  "anti_deadlock_rule": "Controller shall honour all LPDDR5 timing parameters (tRCD, tRP, tRAS, tRC, tRRD_L/tRRD_S, tFAW, tCCD_L/tCCD_S, tRFCab/tRFCpb, tREFI, tWR, tWTR_L/tWTR_S, tRTP, WCK2CK sync windows, tMRW/tMRD/tMRR, tZQ*, DVFS/FSP-change and deep-sleep timings). Violations cause undefined behaviour with no protocol-level flag.",
+  "exit_from_reset_or_poweron": "After power-on or RESET_n, the DRAM enters its reset state. The initialization sequence (RESET_n deassert, supply ramp ordering with VDDQ=0.5 V, CK start, mode-register programming, ZQ calibration, initial WCK2CK synchronization) must complete before any user data command. Deep-sleep exit requires the full init sequence to be re-run.",
+  "default_ready_state_recommendation": {
+    "CK_idle": "Quarter-speed CK running/stable in active states.",
+    "WCK_idle": "Disabled (not toggling) when no transfer is imminent; enabled only after WCK2CK sync.",
+    "RDQS_idle": "High-impedance / undriven except during reads (DRAM-driven).",
+    "CS_idle": "Drives command framing; bounds low-power-mode duration.",
+    "RESET_n_idle": "HIGH during normal operation.",
+    "DQ_idle": "High-impedance between bursts."
+  },
+  "configurations": [
+    {
+      "name": "Bank-group mode",
+      "description": "16 banks as 4 groups x 4 banks; tCCD_L/tRRD_L same-group, tCCD_S/tRRD_S different-group."
+    },
+    {
+      "name": "16-bank / 8-bank mode",
+      "description": "16 flat banks or 8 banks per density."
+    },
+    {
+      "name": "WCK on-demand",
+      "description": "WCK enabled only after WCK2CK sync; saves power vs a continuous data clock."
+    },
+    {
+      "name": "DVFS / DVFSC",
+      "description": "Frequency set points with VDD2H/VDD2L core-voltage scaling."
+    },
+    {
+      "name": "Deep Sleep (DSM)",
+      "description": "Lowest standby power; full re-init on exit."
+    }
+  ],
+  "timing_dependency_rule": "Command/address (CA[6:0], CS) inputs (Vref(ca)) are set up/held around the CK edges (double data rate). DQ / DMI inputs (Vref(dq)) are set up/held around both WCK edges on writes. DQ outputs are launched edge-aligned with the DRAM-driven RDQS on reads. The internal WCK must be phase-locked to CK (WCK2CK synchronization) before any high-speed transfer; DFE / equalization must be trained for the active frequency set point.",
+  "fsm_transitions_major": [
+    {
+      "trigger": "Power applied, RESET_n LOW",
+      "target": "Reset",
+      "description": "Supplies ramp; RESET_n held LOW."
+    },
+    {
+      "trigger": "RESET_n rising + power stable + CK start",
+      "target": "Initialization -> ZQ cal -> WCK2CK sync -> Idle",
+      "description": "Program MRs, ZQ cal, initial WCK sync, ready."
+    },
+    {
+      "trigger": "ACT-1 then ACT-2 (Idle)",
+      "target": "Activating -> Bank Active",
+      "description": "Two activate cycles open a row; tRCD."
+    },
+    {
+      "trigger": "CAS WS_RD then RD (Bank Active)",
+      "target": "WCK Synchronizing -> Reading",
+      "description": "CAS syncs WCK; RD drives DQ + RDQS."
+    },
+    {
+      "trigger": "CAS WS_WR then WR/MWR (Bank Active)",
+      "target": "WCK Synchronizing -> Writing",
+      "description": "CAS syncs WCK; WR samples DQ on WCK edges; WRX fills."
+    },
+    {
+      "trigger": "PRE/PREab (Bank Active)",
+      "target": "Precharging -> Idle",
+      "description": "tRP before next ACT."
+    },
+    {
+      "trigger": "REFab/REFpb (Idle)",
+      "target": "Refreshing -> Idle",
+      "description": "tRFCab/tRFCpb; per-bank allows other-bank access."
+    },
+    {
+      "trigger": "SRE (Idle)",
+      "target": "Self Refresh / Deep Sleep",
+      "description": "CA command; DSE selects deep sleep."
+    },
+    {
+      "trigger": "MRW/MRR (Idle)",
+      "target": "Mode Register Access -> Idle",
+      "description": "tMRW/tMRD/tMRR."
+    },
+    {
+      "trigger": "PDE CA command",
+      "target": "Power-Down",
+      "description": "Lasts until CS next goes high; no CKE."
+    },
+    {
+      "trigger": "RESET_n LOW (any state)",
+      "target": "Reset",
+      "description": "Active-low reset to reset state."
+    }
+  ]
+}

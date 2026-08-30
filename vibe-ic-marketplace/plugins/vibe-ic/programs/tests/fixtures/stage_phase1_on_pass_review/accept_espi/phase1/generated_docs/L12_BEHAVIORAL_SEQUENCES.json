@@ -1,0 +1,138 @@
+{
+  "schema_version": 2,
+  "doc_class": "behavioral_sequences",
+  "ic_name": "Enhanced Serial Peripheral Interface (eSPI)",
+  "behavioral_sequences": [
+    {
+      "name": "command_turnaround_response",
+      "trigger": "Master asserts ESPI_CS# to begin a transaction (spec §4)",
+      "steps": [
+        {
+          "action": "Master asserts ESPI_CS#",
+          "next_state": "RX_CMD",
+          "expected_signal": "ESPI_CS_N=0"
+        },
+        {
+          "action": "Master drives 8-bit CMD opcode on ESPI_IO",
+          "next_state": "RX_CMD",
+          "expected_signal": "CMD opcode (spec §5)"
+        },
+        {
+          "action": "Master drives command-specific fields and optional payload",
+          "next_state": "RX_CRC",
+          "expected_signal": "command fields + payload (spec §4)"
+        },
+        {
+          "action": "Master drives CRC byte if CRC enabled",
+          "next_state": "TURNAROUND",
+          "expected_signal": "CRC-8 poly 0x07 byte (spec §10)"
+        },
+        {
+          "action": "Bus turnaround (TAR) — ownership passes to slave",
+          "next_state": "DRIVE_RESP",
+          "latency_us": null,
+          "check": "bus floats 2 ESPI_CLK cycles (spec §4/§13)"
+        },
+        {
+          "action": "Slave optionally inserts WAIT_STATE (0x0F) bytes",
+          "next_state": "WAIT_STATE",
+          "expected_signal": "0x0F nibble (spec §11)"
+        },
+        {
+          "action": "Slave drives 8-bit response code",
+          "next_state": "DRIVE_STATUS_CRC",
+          "expected_signal": "RSP code ACCEPT/DEFER/... (spec §6)"
+        },
+        {
+          "action": "Slave drives response data + 16-bit STATUS + CRC",
+          "next_state": "DEASSERT",
+          "expected_signal": "STATUS (spec §7) + CRC (spec §10)"
+        },
+        {
+          "action": "Master deasserts ESPI_CS#",
+          "next_state": "IDLE",
+          "expected_signal": "ESPI_CS_N=1 (spec §4)"
+        }
+      ]
+    },
+    {
+      "name": "alert_get_status",
+      "trigger": "Slave drives ESPI_ALERT# (service required) (spec §11)",
+      "steps": [
+        {
+          "action": "Slave drives ESPI_ALERT# to signal service-required",
+          "next_state": "IDLE",
+          "expected_signal": "ESPI_ALERT_N=0 (spec §11)"
+        },
+        {
+          "action": "Master issues GET_STATUS (0x20)",
+          "next_state": "RX_CMD",
+          "expected_signal": "CMD 0x20 (spec §6/§11)"
+        },
+        {
+          "action": "Master reads which channel's AVAIL bit is set in 16-bit STATUS",
+          "next_state": "DRIVE_STATUS_CRC",
+          "expected_signal": "STATUS *_AVAIL bit (spec §7)"
+        },
+        {
+          "action": "Master issues the matching GET_* command for that channel",
+          "next_state": "RX_CMD",
+          "expected_signal": "GET_VWIRE/GET_OOB/GET_FLASH_NP/... (spec §5)"
+        }
+      ]
+    },
+    {
+      "name": "virtual_wire_tunnel",
+      "trigger": "PUT_VWIRE (0x10) / GET_VWIRE (0x11) opcode on the Virtual Wire channel (spec §5/§9)",
+      "steps": [
+        {
+          "action": "Sender forms a VW packet: count byte + (index, data) pairs",
+          "next_state": "RX_CMD",
+          "expected_signal": "count + (index,data) pairs (spec §9)"
+        },
+        {
+          "action": "Each index addresses up to 4 virtual wires; data carries 4 valid bits + 4 wire-value bits",
+          "next_state": "DRIVE_RESP",
+          "check": "index/data encoding per spec §9"
+        },
+        {
+          "action": "Receiver updates the tunneled sideband signals",
+          "next_state": "IDLE",
+          "expected_signal": "sideband signals updated (spec §9)"
+        }
+      ]
+    }
+  ],
+  "no_behavioral_sequences_in_input": true,
+  "no_calibration": true,
+  "extraction_evidence": {
+    "derived_no_calibration_source": [
+      {
+        "literal": "no calibration / trim / OTP-cal source in input",
+        "label": "L12 no_calibration auto-set (#634 facet e) — absence-based, mirrors L5.no_analog"
+      }
+    ]
+  },
+  "command_sequence": [
+    "Master asserts ESPI_CS#.",
+    "Master drives 8-bit CMD opcode on ESPI_IO.",
+    "Master drives command-specific fields and optional payload.",
+    "Master drives CRC byte (if enabled).",
+    "Bus turnaround (TAR) 2 clocks — ownership passes to slave.",
+    "Slave optionally inserts WAIT_STATE (0x0F) bytes.",
+    "Slave drives 8-bit response code.",
+    "Slave drives response data + 16-bit STATUS + CRC.",
+    "Master deasserts ESPI_CS#."
+  ],
+  "alert_sequence": [
+    "Slave drives ESPI_ALERT# (service required).",
+    "Master issues GET_STATUS.",
+    "Master reads which channel's AVAIL bit is set.",
+    "Master issues the matching GET_* command."
+  ],
+  "vwire_sequence": [
+    "Master/slave forms VW packet: count byte + (index, data) pairs.",
+    "Each index addresses up to 4 virtual wires; data carries 4 valid bits + 4 wire-value bits.",
+    "Receiver updates the tunneled sideband signals."
+  ]
+}

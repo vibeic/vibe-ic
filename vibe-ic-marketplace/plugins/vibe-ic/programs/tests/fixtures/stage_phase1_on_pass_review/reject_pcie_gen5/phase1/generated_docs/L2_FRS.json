@@ -1,0 +1,799 @@
+{
+  "schema_version": 2,
+  "doc_class": "frs",
+  "ic_name": "PCI Express 5.0 (PCI-SIG Base Specification Rev 5.0)",
+  "frs_sections": [
+    {
+      "section": "32",
+      "title": "Ground      Reserved",
+      "content": "         PCI Express ×4 cards end at pin 32\n\n 33   HSOp(4)     Reserved   Lane 4 transmit data,\n 34   HSOn(4)     Ground     + and −\n\n 35   Ground      HSIp(4)    Lane 4 receive data,\n 36   Ground      HSIn(4)    + and −\n\n 37   HSOp(5)     Ground     Lane 5 transmit data,\n 38   HSOn(5)     Ground     + and −\n\n 39   Ground      HSIp(5)    Lane 5 receive data,\n 40   Ground      HSIn(5)    + and −\n\n 41   HSOp(6)     Ground     Lane 6 transmit data,\n 42   HSOn(6)     Ground     + and −\n\n 43   Ground      HSIp(6)    Lane 6 receive data,                         Legend\n\n 44   Ground      HSIn(6)    + and −                        Power       Supplies power to the card\n\n 45   HSOp(7)     Ground     Lane 7 transmit data,          Sense       Tied together on card\n\n 46   HSOn(7)     Ground     + and …",
+      "evidence": "input/docs/pcie_gen5_spec.pdf",
+      "heading_shape": "numbered"
+    },
+    {
+      "section": "49",
+      "title": "Ground      Ground                              Card-to-host",
+      "content": "                                                                        motherboard\n\n         PCI Express ×8 cards end at pin 49                Reserved     Not presently used\n\n\n\nPower\n\n\nSlot power\nAll PCI express cards may consume up to 3 A at +3.3 V (9.9 W). The amount of +12 V and total power\nthey may consume depends on the form factor and the role of the card:[31]: 35–36 [32][33]\n\n   ×1 cards are limited to 0.5 A at +12 V (6 W) and 10 W combined.\n   ×4 and wider cards are limited to 2.1 A at +12 V (25 W) and 25 W combined.\n   A full-sized ×1 card may draw up to the 25 W limits after initialization and software\n   configuration as a high-power device.\n   A full-sized ×16 graphics card may draw up to 5.5 A at +12 V (66 W) and 75 W combined\n   after initialization and software configurati…",
+      "evidence": "input/docs/pcie_gen5_spec.pdf",
+      "heading_shape": "numbered"
+    },
+    {
+      "section": "4",
+      "title": "Ground",
+      "content": "",
+      "evidence": "input/docs/pcie_gen5_spec.pdf",
+      "heading_shape": "numbered"
+    },
+    {
+      "section": "5",
+      "title": "Sense",
+      "content": "  6      Ground\n\n                       —\n\n 8-pin power connector (150 W)[36][37][38]\n Pin                  Description\n\n  1      +12 V\n  2      +12 V\n\n  3      +12 V\n\n  4      Sense 1 (8-pin connected[A])\n  5      Ground\n  6      Sense 0 (6-pin or 8-pin connected)\n\n  7      Ground\n\n  8      Ground\n\n\n\n\n              6 pin power connector pin map\n\n\n\n\n       8 pin power connector pin map\n\n\n\n\nA. When a 6-pin connector is plugged into an 8-pin receptacle the card is notified by a missing\n   Sense1 that it may only use up to 75 W.\n\n\n12VHPWR connector\nThe 16-pin 12VHPWR connector is a standard for connecting\ngraphics processing units (GPUs) to computer power supplies\nfor up to 600 W power delivery. It was introduced by Nvidia\nin 2022 to supersede the previous 6- and 8-pin power\nconnectors for GP…",
+      "evidence": "input/docs/pcie_gen5_spec.pdf",
+      "heading_shape": "numbered"
+    },
+    {
+      "section": "2025",
+      "title": "PAM-4",
+      "content": "                                      242B/256B\n   7.0      (specification   FEC                    128.0 GT/s      15.125      30.25       60.5       121      242\n                                      FLIT\n            released)\n\n            2028\n   8.0                                              256.0 GT/s      30.25       60.5        121        242      484\n            (planned)\n\n\nNotes\n\n  i. In each direction (each lane is a dual simplex channel).\n ii. Transfer rate refers to the encoded serial bit rate; 2.5 GT/s means 2.5 Gbit/s serial data rate.\niii. Throughput indicates the usable bandwidth (i.e. only including the payload, not the 8b/10b,\n     128b/130b, or 242B/256B encoding overhead). The PCIe 1.0 transfer rate of 2.5 GT/s per\n     lane means a 2.5 Gbit/s serial bit rate; after a…",
+      "evidence": "input/docs/pcie_gen5_spec.pdf",
+      "heading_shape": "numbered"
+    },
+    {
+      "section": "5",
+      "title": "GT/s and the per-lane throughput rises from 250 MB/s to",
+      "content": "500 MB/s. Consequently, a 16-lane PCIe connector (×16) can\nsupport an aggregate throughput of up to 8 GB/s.\n\nPCIe 2.0 motherboard slots are fully backward compatible\nwith PCIe v1.x cards. PCIe 2.0 cards are also generally\n                                                                    A PCI Express 2.0 ×1 expansion card\nbackward compatible with PCIe 1.x motherboards, using the\n                                                                    that provides USB 3.0 connectivity[b]\navailable bandwidth of PCI Express 1.1. Overall, graphic\ncards or motherboards designed for v2.0 work, with the other\nbeing v1.1 or v1.0a.\n\nThe PCI-SIG also said that PCIe 2.0 features improvements to the point-to-point data transfer protocol\nand its software architecture.[73]\n\nIntel's first PCIe 2.0 capable …",
+      "evidence": "input/docs/pcie_gen5_spec.pdf",
+      "heading_shape": "numbered"
+    },
+    {
+      "section": "106",
+      "title": "Power E1080 Enterprise server delivers a uniquely architected platform to help securely and",
+      "content": "     efficiently scale core operational and AI applications in a hybrid cloud, IBM Europe\n     Hardware Announcement ZG21-0059 (https://www.ibm.com/common/ssi/rep_ca/9/877/ENU\n     SZG21-0059/index.html)\n107. IBM Power E1080 Technical Overview and Introduction (http://www.redbooks.ibm.com/redp\n     apers/pdfs/redp5649.pdf)\n108. \"Intel Unveils 12th Gen Intel Core, Launches World's Best Gaming\" (https://www.intel.com/c\n     ontent/www/us/en/newsroom/news/12th-gen-core-processors.html). Intel.com. 31\n     December 2021. Retrieved 16 February 2022.\n109. \"NVIDIA Announces Hopper Architecture, the Next Generation of Accelerated Computing\" (h\n     ttps://nvidianews.nvidia.com/news/nvidia-announces-hopper-architecture-the-next-generatio\n     n-of-accelerated-computing).\n110. \"AMD Showcases Industr…",
+      "evidence": "input/docs/pcie_gen5_spec.pdf",
+      "heading_shape": "numbered"
+    }
+  ],
+  "no_frs_sections_in_input": false,
+  "protocol_overview": {
+    "half_duplex": true,
+    "wire_count": 4,
+    "byte_order": null,
+    "wake_required_pre_command": null,
+    "evidence": "half-duplex/single-wire/1-wire keyword match",
+    "type": "Layered, point-to-point, dual-simplex, differentially-signaled, packet-based serial I/O interconnect operating at 32 GT/s per lane (Gen5).",
+    "duplex": "dual-simplex (independent TX + RX differential pairs per Lane; both directions transmit simultaneously and continuously)",
+    "synchronous_serial": false,
+    "embedded_clock": true,
+    "encoding": "128b/130b (carried forward from Gen3/Gen4): a 130-bit block carries a 2-bit sync header + 128 bits of scrambled payload (~1.54% overhead). Replaces the 8b/10b of Gen1/Gen2.",
+    "line_rate_GT_s": 32.0,
+    "lane_widths_supported": [
+      1,
+      2,
+      4,
+      8,
+      12,
+      16,
+      32
+    ],
+    "layers": [
+      "Transaction Layer (TL)",
+      "Data Link Layer (DLL)",
+      "Physical Layer (PHY) = Logical Sub-block + Electrical Sub-block"
+    ],
+    "packet_classes_per_layer": {
+      "Transaction_Layer": "TLP (Transaction Layer Packet)",
+      "Data_Link_Layer": "DLLP (Data Link Layer Packet) — link-management only, e.g. ACK / NAK / FC / PM"
+    },
+    "flow_control": "Credit-based per Virtual Channel; receiver advertises credits to transmitter; no retries due to receiver buffer overflow.",
+    "split_transaction": true,
+    "address_spaces": [
+      "Memory",
+      "I/O",
+      "Configuration",
+      "Message"
+    ],
+    "max_payload_sizes_bytes_negotiated": [
+      128,
+      256,
+      512,
+      1024,
+      2048,
+      4096
+    ],
+    "virtual_channels_max": 8,
+    "traffic_classes_max": 8,
+    "modulation": "NRZ (two-level) — PAM4 is a PCIe 6.0 feature, NOT used at Gen5.",
+    "x16_bandwidth_per_direction_GB_s": 63,
+    "retimers_max_per_link": 2,
+    "lane_margining_at_receiver": "mandatory",
+    "alternate_protocol_negotiation": "supported (modified TS1/TS2 ordered sets); primary consumer is CXL 1.1/2.0"
+  },
+  "no_protocol_overview_in_input": false,
+  "compliance_requirements": [
+    "32 GT/s NRZ signaling with 128b/130b block encoding.",
+    "Backward-compatible auto-negotiation to the highest common rate.",
+    "Data Rate Identifier in TS1/TS2 advertising the 32.0 GT/s bit.",
+    "Four-phase enhanced equalization (Phase 0-3) completing with an open eye before sustaining 32 GT/s.",
+    "Mandatory Lane Margining at the Receiver, operable in L0.",
+    "Up to two retimers per link, each in the Phase 0-3 handshake.",
+    "ACK/NAK replay protocol with a Retry Buffer (unchanged).",
+    "Mandatory VC0 carrying TC0.",
+    "PCI Express Capability + Lane Margining at the Receiver registers.",
+    "Optional precoding; optional Alternate Protocol Negotiation (required where CXL is supported)."
+  ],
+  "timing_parameters": [],
+  "fmax_mhz": null,
+  "no_fmax_mhz_in_input": true,
+  "extraction_evidence": {
+    "input/docs/pcie_gen5_spec.pdf": [
+      {
+        "literal": "32 Ground      Reserved",
+        "label": "FRS section"
+      },
+      {
+        "literal": "49 Ground      Ground                              Card-to-host",
+        "label": "FRS section"
+      },
+      {
+        "literal": "4 Ground",
+        "label": "FRS section"
+      },
+      {
+        "literal": "5 Sense",
+        "label": "FRS section"
+      },
+      {
+        "literal": "2025 PAM-4",
+        "label": "FRS section"
+      },
+      {
+        "literal": "5 GT/s and the per-lane throughput rises from 250 MB/s to",
+        "label": "FRS section"
+      },
+      {
+        "literal": "106 Power E1080 Enterprise server delivers a uniquely architected platform to help securely and",
+        "label": "FRS section"
+      }
+    ]
+  },
+  "class_path": "digital_cmd_driven",
+  "auto_cited_sections": [
+    {
+      "file_ref": "phase1/input_doc/pcie_gen5_spec.txt:1",
+      "sec_id": "",
+      "heading": "PCI Express",
+      "slug": "pci_express"
+    },
+    {
+      "file_ref": "phase1/input_doc/pcie_gen5_spec.txt:21",
+      "sec_id": "",
+      "heading": "Style          Serial",
+      "slug": "style_serial"
+    },
+    {
+      "file_ref": "phase1/input_doc/pcie_gen5_spec.txt:270",
+      "sec_id": "2",
+      "heading": "+12 V        +12 V                                      51    HSOn(8)     Ground",
+      "slug": "12_v_12_v_51_hson_8_ground"
+    },
+    {
+      "file_ref": "phase1/input_doc/pcie_gen5_spec.txt:282",
+      "sec_id": "9",
+      "heading": "TRST#        +3.3 V                                     58    HSOp(10)    Ground",
+      "slug": "trst_3_3_v_58_hsop_10_ground"
+    },
+    {
+      "file_ref": "phase1/input_doc/pcie_gen5_spec.txt:285",
+      "sec_id": "10",
+      "heading": "+3.3 V aux   +3.3 V                                     59    HSOn(10)    Ground",
+      "slug": "3_3_v_aux_3_3_v_59_hson_10_ground"
+    },
+    {
+      "file_ref": "phase1/input_doc/pcie_gen5_spec.txt:294",
+      "sec_id": "12",
+      "heading": "CLKREQ#      Ground        Clock request signal[28]     62    HSOp(11)    Ground",
+      "slug": "clkreq_ground_clock_request_signal_28_62_hsop_11_ground"
+    },
+    {
+      "file_ref": "phase1/input_doc/pcie_gen5_spec.txt:297",
+      "sec_id": "13",
+      "heading": "Ground       REFCLK+                                    63    HSOn(11)    Ground",
+      "slug": "ground_refclk_63_hson_11_ground"
+    },
+    {
+      "file_ref": "phase1/input_doc/pcie_gen5_spec.txt:333",
+      "sec_id": "31",
+      "heading": "PRSNT2#     Ground                              82     Reserved   Ground",
+      "slug": "prsnt2_ground_82_reserved_ground"
+    },
+    {
+      "file_ref": "phase1/input_doc/pcie_gen5_spec.txt:335",
+      "sec_id": "32",
+      "heading": "Ground      Reserved",
+      "slug": "ground_reserved"
+    },
+    {
+      "file_ref": "phase1/input_doc/pcie_gen5_spec.txt:339",
+      "sec_id": "33",
+      "heading": "HSOp(4)     Reserved   Lane 4 transmit data,",
+      "slug": "hsop_4_reserved_lane_4_transmit_data"
+    },
+    {
+      "file_ref": "phase1/input_doc/pcie_gen5_spec.txt:340",
+      "sec_id": "34",
+      "heading": "HSOn(4)     Ground     + and −",
+      "slug": "hson_4_ground_and"
+    },
+    {
+      "file_ref": "phase1/input_doc/pcie_gen5_spec.txt:342",
+      "sec_id": "35",
+      "heading": "Ground      HSIp(4)    Lane 4 receive data,",
+      "slug": "ground_hsip_4_lane_4_receive_data"
+    },
+    {
+      "file_ref": "phase1/input_doc/pcie_gen5_spec.txt:343",
+      "sec_id": "36",
+      "heading": "Ground      HSIn(4)    + and −",
+      "slug": "ground_hsin_4_and"
+    },
+    {
+      "file_ref": "phase1/input_doc/pcie_gen5_spec.txt:345",
+      "sec_id": "37",
+      "heading": "HSOp(5)     Ground     Lane 5 transmit data,",
+      "slug": "hsop_5_ground_lane_5_transmit_data"
+    },
+    {
+      "file_ref": "phase1/input_doc/pcie_gen5_spec.txt:346",
+      "sec_id": "38",
+      "heading": "HSOn(5)     Ground     + and −",
+      "slug": "hson_5_ground_and"
+    },
+    {
+      "file_ref": "phase1/input_doc/pcie_gen5_spec.txt:348",
+      "sec_id": "39",
+      "heading": "Ground      HSIp(5)    Lane 5 receive data,",
+      "slug": "ground_hsip_5_lane_5_receive_data"
+    },
+    {
+      "file_ref": "phase1/input_doc/pcie_gen5_spec.txt:349",
+      "sec_id": "40",
+      "heading": "Ground      HSIn(5)    + and −",
+      "slug": "ground_hsin_5_and"
+    },
+    {
+      "file_ref": "phase1/input_doc/pcie_gen5_spec.txt:351",
+      "sec_id": "41",
+      "heading": "HSOp(6)     Ground     Lane 6 transmit data,",
+      "slug": "hsop_6_ground_lane_6_transmit_data"
+    },
+    {
+      "file_ref": "phase1/input_doc/pcie_gen5_spec.txt:352",
+      "sec_id": "42",
+      "heading": "HSOn(6)     Ground     + and −",
+      "slug": "hson_6_ground_and"
+    },
+    {
+      "file_ref": "phase1/input_doc/pcie_gen5_spec.txt:354",
+      "sec_id": "43",
+      "heading": "Ground      HSIp(6)    Lane 6 receive data,                         Legend",
+      "slug": "ground_hsip_6_lane_6_receive_data_legend"
+    },
+    {
+      "file_ref": "phase1/input_doc/pcie_gen5_spec.txt:363",
+      "sec_id": "47",
+      "heading": "Ground      HSIp(7)                              Open drain",
+      "slug": "ground_hsip_7_open_drain"
+    },
+    {
+      "file_ref": "phase1/input_doc/pcie_gen5_spec.txt:366",
+      "sec_id": "48",
+      "heading": "PRSNT2#     HSIn(7)                              Host-to-card",
+      "slug": "prsnt2_hsin_7_host_to_card"
+    },
+    {
+      "file_ref": "phase1/input_doc/pcie_gen5_spec.txt:370",
+      "sec_id": "49",
+      "heading": "Ground      Ground                              Card-to-host",
+      "slug": "ground_ground_card_to_host"
+    },
+    {
+      "file_ref": "phase1/input_doc/pcie_gen5_spec.txt:403",
+      "sec_id": "375",
+      "heading": "W total (1 @ 75 W + 2 @ 150 W). This was",
+      "slug": "w_total_1_75_w_2_150_w_this_was"
+    },
+    {
+      "file_ref": "phase1/input_doc/pcie_gen5_spec.txt:428",
+      "sec_id": "",
+      "heading": "Pin                 Description",
+      "slug": "pin_description"
+    },
+    {
+      "file_ref": "phase1/input_doc/pcie_gen5_spec.txt:430",
+      "sec_id": "1",
+      "heading": "+12 V",
+      "slug": "12_v"
+    },
+    {
+      "file_ref": "phase1/input_doc/pcie_gen5_spec.txt:432",
+      "sec_id": "2",
+      "heading": "Not connected (usually +12 V as well)",
+      "slug": "not_connected_usually_12_v_as_well"
+    },
+    {
+      "file_ref": "phase1/input_doc/pcie_gen5_spec.txt:437",
+      "sec_id": "4",
+      "heading": "Ground",
+      "slug": "ground"
+    },
+    {
+      "file_ref": "phase1/input_doc/pcie_gen5_spec.txt:438",
+      "sec_id": "5",
+      "heading": "Sense",
+      "slug": "sense"
+    },
+    {
+      "file_ref": "phase1/input_doc/pcie_gen5_spec.txt:452",
+      "sec_id": "4",
+      "heading": "Sense 1 (8-pin connected[A])",
+      "slug": "sense_1_8_pin_connected_a"
+    },
+    {
+      "file_ref": "phase1/input_doc/pcie_gen5_spec.txt:454",
+      "sec_id": "6",
+      "heading": "Sense 0 (6-pin or 8-pin connected)",
+      "slug": "sense_0_6_pin_or_8_pin_connected"
+    },
+    {
+      "file_ref": "phase1/input_doc/pcie_gen5_spec.txt:463",
+      "sec_id": "6",
+      "heading": "pin power connector pin map",
+      "slug": "pin_power_connector_pin_map"
+    },
+    {
+      "file_ref": "phase1/input_doc/pcie_gen5_spec.txt:534",
+      "sec_id": "",
+      "heading": "PCI Express Mini Card",
+      "slug": "pci_express_mini_card"
+    },
+    {
+      "file_ref": "phase1/input_doc/pcie_gen5_spec.txt:540",
+      "sec_id": "2013",
+      "heading": "use Mini PCI Express for expansion cards; however, as",
+      "slug": "use_mini_pci_express_for_expansion_cards_however_as"
+    },
+    {
+      "file_ref": "phase1/input_doc/pcie_gen5_spec.txt:552",
+      "sec_id": "50.95",
+      "heading": "mm (width × length) for a Full Mini Card. There is a",
+      "slug": "mm_width_length_for_a_full_mini_card_there_is_a"
+    },
+    {
+      "file_ref": "phase1/input_doc/pcie_gen5_spec.txt:554",
+      "sec_id": "0.8",
+      "heading": "mm pitch. Each row has eight contacts, a gap equivalent",
+      "slug": "mm_pitch_each_row_has_eight_contacts_a_gap_equivalent"
+    },
+    {
+      "file_ref": "phase1/input_doc/pcie_gen5_spec.txt:573",
+      "sec_id": "1.5",
+      "heading": "V and 3.3 V power",
+      "slug": "v_and_3_3_v_power"
+    },
+    {
+      "file_ref": "phase1/input_doc/pcie_gen5_spec.txt:613",
+      "sec_id": "",
+      "heading": "PCI Express External Cabling",
+      "slug": "pci_express_external_cabling"
+    },
+    {
+      "file_ref": "phase1/input_doc/pcie_gen5_spec.txt:624",
+      "sec_id": "",
+      "heading": "PCI Express OCuLink",
+      "slug": "pci_express_oculink"
+    },
+    {
+      "file_ref": "phase1/input_doc/pcie_gen5_spec.txt:631",
+      "sec_id": "10",
+      "heading": "GB/s.",
+      "slug": "gb_s"
+    },
+    {
+      "file_ref": "phase1/input_doc/pcie_gen5_spec.txt:719",
+      "sec_id": "2022",
+      "heading": "(first",
+      "slug": "first"
+    },
+    {
+      "file_ref": "phase1/input_doc/pcie_gen5_spec.txt:723",
+      "sec_id": "2025",
+      "heading": "PAM-4",
+      "slug": "pam_4"
+    },
+    {
+      "file_ref": "phase1/input_doc/pcie_gen5_spec.txt:730",
+      "sec_id": "8.0",
+      "heading": "256.0 GT/s      30.25       60.5        121        242      484",
+      "slug": "256_0_gt_s_30_25_60_5_121_242_484"
+    },
+    {
+      "file_ref": "phase1/input_doc/pcie_gen5_spec.txt:762",
+      "sec_id": "2.0",
+      "heading": "specification on 15 January 2007.[72] The PCIe 2.0",
+      "slug": "specification_on_15_january_2007_72_the_pcie_2_0"
+    },
+    {
+      "file_ref": "phase1/input_doc/pcie_gen5_spec.txt:764",
+      "sec_id": "5",
+      "heading": "GT/s and the per-lane throughput rises from 250 MB/s to",
+      "slug": "gt_s_and_the_per_lane_throughput_rises_from_250_mb_s_to"
+    },
+    {
+      "file_ref": "phase1/input_doc/pcie_gen5_spec.txt:765",
+      "sec_id": "500",
+      "heading": "MB/s. Consequently, a 16-lane PCIe connector (×16) can",
+      "slug": "mb_s_consequently_a_16_lane_pcie_connector_16_can"
+    },
+    {
+      "file_ref": "phase1/input_doc/pcie_gen5_spec.txt:1051",
+      "sec_id": "",
+      "heading": "Total       Variable    Total       Variable    Total    Variable",
+      "slug": "total_variable_total_variable_total_variable"
+    },
+    {
+      "file_ref": "phase1/input_doc/pcie_gen5_spec.txt:1138",
+      "sec_id": "3",
+      "heading": "initialize and manage flow control credits",
+      "slug": "initialize_and_manage_flow_control_credits"
+    },
+    {
+      "file_ref": "phase1/input_doc/pcie_gen5_spec.txt:1222",
+      "sec_id": "",
+      "heading": "Layer                                                                   Layer",
+      "slug": "layer_layer"
+    },
+    {
+      "file_ref": "phase1/input_doc/pcie_gen5_spec.txt:1233",
+      "sec_id": "",
+      "heading": "Layer       PHY                                             Transaction Layer",
+      "slug": "layer_phy_transaction_layer"
+    },
+    {
+      "file_ref": "phase1/input_doc/pcie_gen5_spec.txt:1238",
+      "sec_id": "4",
+      "heading": "2                   12 or 16              0 to 4096                           4",
+      "slug": "2_12_or_16_0_to_4096_4"
+    },
+    {
+      "file_ref": "phase1/input_doc/pcie_gen5_spec.txt:1282",
+      "sec_id": "",
+      "heading": "External GPUs",
+      "slug": "external_gpus"
+    },
+    {
+      "file_ref": "phase1/input_doc/pcie_gen5_spec.txt:1344",
+      "sec_id": "2.52",
+      "heading": "million IOPS in random transfers.[167]",
+      "slug": "million_iops_in_random_transfers_167"
+    },
+    {
+      "file_ref": "phase1/input_doc/pcie_gen5_spec.txt:1431",
+      "sec_id": "2",
+      "heading": "Mayhew, D.; Krishnan, V. (August 2003). \"PCI express and advanced switching:",
+      "slug": "mayhew_d_krishnan_v_august_2003_pci_express_and_advanced_swi"
+    },
+    {
+      "file_ref": "phase1/input_doc/pcie_gen5_spec.txt:1438",
+      "sec_id": "4",
+      "heading": "Zhang, Yanmin; Nguyen, T Long (June 2007). \"Enable PCI Express Advanced Error",
+      "slug": "zhang_yanmin_nguyen_t_long_june_2007_enable_pci_express_adva"
+    },
+    {
+      "file_ref": "phase1/input_doc/pcie_gen5_spec.txt:1455",
+      "sec_id": "2009",
+      "heading": "Retrieved 7 December 2009.",
+      "slug": "retrieved_7_december_2009"
+    },
+    {
+      "file_ref": "phase1/input_doc/pcie_gen5_spec.txt:1477",
+      "sec_id": "15",
+      "heading": "Do, Vanessa (11 September 2025). \"Rethinking AI Infrastructure: The Rise Of PCIe",
+      "slug": "do_vanessa_11_september_2025_rethinking_ai_infrastructure_th"
+    },
+    {
+      "file_ref": "phase1/input_doc/pcie_gen5_spec.txt:1489",
+      "sec_id": "2018",
+      "heading": "(PCIe_CEM_SPEC_R4_V9_12072018_NCB.pdf)",
+      "slug": "pcie_cem_spec_r4_v9_12072018_ncb_pdf"
+    },
+    {
+      "file_ref": "phase1/input_doc/pcie_gen5_spec.txt:1502",
+      "sec_id": "23",
+      "heading": "\"AMD Radeon RX 5700 XT 8GB GDDR6 THICC II – RX-57XT8DFD6\" (https://web.archive.o",
+      "slug": "amd_radeon_rx_5700_xt_8gb_gddr6_thicc_ii_rx_57xt8dfd6_https_"
+    },
+    {
+      "file_ref": "phase1/input_doc/pcie_gen5_spec.txt:1513",
+      "sec_id": "2",
+      "heading": "November 2011. Retrieved 24 October 2011.",
+      "slug": "november_2011_retrieved_24_october_2011"
+    },
+    {
+      "file_ref": "phase1/input_doc/pcie_gen5_spec.txt:1514",
+      "sec_id": "26",
+      "heading": "PCI Express Card Electromechanical Specification Revision 2.0",
+      "slug": "pci_express_card_electromechanical_specification_revision_2_"
+    },
+    {
+      "file_ref": "phase1/input_doc/pcie_gen5_spec.txt:1531",
+      "sec_id": "31",
+      "heading": "PCI Express Card Electromechanical Specification Revision 1.1",
+      "slug": "pci_express_card_electromechanical_specification_revision_1_"
+    },
+    {
+      "file_ref": "phase1/input_doc/pcie_gen5_spec.txt:1542",
+      "sec_id": "35",
+      "heading": "PCI Express ×16 Graphics 150W-ATX Specification Revision 1.0",
+      "slug": "pci_express_16_graphics_150w_atx_specification_revision_1_0"
+    },
+    {
+      "file_ref": "phase1/input_doc/pcie_gen5_spec.txt:1544",
+      "sec_id": "37",
+      "heading": "PCI Express Card Electromechanical Specification Revision 3.0",
+      "slug": "pci_express_card_electromechanical_specification_revision_3_"
+    },
+    {
+      "file_ref": "phase1/input_doc/pcie_gen5_spec.txt:1559",
+      "sec_id": "9",
+      "heading": "February 2025.",
+      "slug": "february_2025"
+    },
+    {
+      "file_ref": "phase1/input_doc/pcie_gen5_spec.txt:1577",
+      "sec_id": "2023",
+      "heading": "– 10. PCI Express 48VHPWR Auxiliary Power Connector Definition",
+      "slug": "10_pci_express_48vhpwr_auxiliary_power_connector_definition"
+    },
+    {
+      "file_ref": "phase1/input_doc/pcie_gen5_spec.txt:1593",
+      "sec_id": "28",
+      "heading": "September 2014.",
+      "slug": "september_2014"
+    },
+    {
+      "file_ref": "phase1/input_doc/pcie_gen5_spec.txt:1607",
+      "sec_id": "2010",
+      "heading": "Retrieved 26 October 2009.",
+      "slug": "retrieved_26_october_2009"
+    },
+    {
+      "file_ref": "phase1/input_doc/pcie_gen5_spec.txt:1618",
+      "sec_id": "2007",
+      "heading": "Retrieved 9 February 2007.",
+      "slug": "retrieved_9_february_2007"
+    },
+    {
+      "file_ref": "phase1/input_doc/pcie_gen5_spec.txt:1637",
+      "sec_id": "16",
+      "heading": "April 2026.",
+      "slug": "april_2026"
+    },
+    {
+      "file_ref": "phase1/input_doc/pcie_gen5_spec.txt:1696",
+      "sec_id": "2007",
+      "heading": "Retrieved 5 September 2007.",
+      "slug": "retrieved_5_september_2007"
+    },
+    {
+      "file_ref": "phase1/input_doc/pcie_gen5_spec.txt:1722",
+      "sec_id": "2011",
+      "heading": "Archived from the original (http://www.pcisig.com/news_room/Press_Releases/Novem",
+      "slug": "archived_from_the_original_http_www_pcisig_com_news_room_pre"
+    },
+    {
+      "file_ref": "phase1/input_doc/pcie_gen5_spec.txt:1737",
+      "sec_id": "86",
+      "heading": "\"Mellanox Announces 200Gb/s HDR InfiniBand Solutions Enabling Record Levels of",
+      "slug": "mellanox_announces_200gb_s_hdr_infiniband_solutions_enabling"
+    },
+    {
+      "file_ref": "phase1/input_doc/pcie_gen5_spec.txt:1745",
+      "sec_id": "2016",
+      "heading": "Retrieved 18 August 2016.",
+      "slug": "retrieved_18_august_2016"
+    },
+    {
+      "file_ref": "phase1/input_doc/pcie_gen5_spec.txt:1760",
+      "sec_id": "92",
+      "heading": "\"IBM Power System AC922 (8335-GTG) server helps you to harness breakthrough",
+      "slug": "ibm_power_system_ac922_8335_gtg_server_helps_you_to_harness_"
+    },
+    {
+      "file_ref": "phase1/input_doc/pcie_gen5_spec.txt:1771",
+      "sec_id": "94",
+      "heading": "Mujtaba, Hassan (9 January 2019). \"AMD Ryzen 3000 Series CPUs Based on Zen 2",
+      "slug": "mujtaba_hassan_9_january_2019_amd_ryzen_3000_series_cpus_bas"
+    },
+    {
+      "file_ref": "phase1/input_doc/pcie_gen5_spec.txt:1774",
+      "sec_id": "95",
+      "heading": "Alcorn, Paul (3 June 2019). \"AMD Nixes PCIe 4.0 Support on Older Socket AM4",
+      "slug": "alcorn_paul_3_june_2019_amd_nixes_pcie_4_0_support_on_older_"
+    },
+    {
+      "file_ref": "phase1/input_doc/pcie_gen5_spec.txt:1794",
+      "sec_id": "28",
+      "heading": "June 2018.",
+      "slug": "june_2018"
+    },
+    {
+      "file_ref": "phase1/input_doc/pcie_gen5_spec.txt:1798",
+      "sec_id": "12",
+      "heading": "December 2018.",
+      "slug": "december_2018"
+    },
+    {
+      "file_ref": "phase1/input_doc/pcie_gen5_spec.txt:1823",
+      "sec_id": "110",
+      "heading": "\"AMD Showcases Industry-Leading Gaming, Commercial, and Mainstream PC",
+      "slug": "amd_showcases_industry_leading_gaming_commercial_and_mainstr"
+    },
+    {
+      "file_ref": "phase1/input_doc/pcie_gen5_spec.txt:1878",
+      "sec_id": "25",
+      "heading": "June 2022.",
+      "slug": "june_2022"
+    },
+    {
+      "file_ref": "phase1/input_doc/pcie_gen5_spec.txt:1904",
+      "sec_id": "2012",
+      "heading": "Retrieved 29 August 2012.",
+      "slug": "retrieved_29_august_2012"
+    },
+    {
+      "file_ref": "phase1/input_doc/pcie_gen5_spec.txt:1916",
+      "sec_id": "7",
+      "heading": "December 2012.",
+      "slug": "december_2012"
+    },
+    {
+      "file_ref": "phase1/input_doc/pcie_gen5_spec.txt:1927",
+      "sec_id": "7",
+      "heading": "December 2009.",
+      "slug": "december_2009"
+    },
+    {
+      "file_ref": "phase1/input_doc/pcie_gen5_spec.txt:1945",
+      "sec_id": "145",
+      "heading": "PCI Express Base Specification, Revision 3.0 Table 4-24",
+      "slug": "pci_express_base_specification_revision_3_0_table_4_24"
+    },
+    {
+      "file_ref": "phase1/input_doc/pcie_gen5_spec.txt:1962",
+      "sec_id": "24",
+      "heading": "August 2006. Retrieved 14 July 2018.",
+      "slug": "august_2006_retrieved_14_july_2018"
+    },
+    {
+      "file_ref": "phase1/input_doc/pcie_gen5_spec.txt:1966",
+      "sec_id": "11",
+      "heading": "September 2010.",
+      "slug": "september_2010"
+    },
+    {
+      "file_ref": "phase1/input_doc/pcie_gen5_spec.txt:1969",
+      "sec_id": "2010",
+      "heading": "Retrieved 11 September 2010.",
+      "slug": "retrieved_11_september_2010"
+    },
+    {
+      "file_ref": "phase1/input_doc/pcie_gen5_spec.txt:2017",
+      "sec_id": "164",
+      "heading": "\"CompactFlash Association readies next-gen XQD format, promises write speeds of",
+      "slug": "compactflash_association_readies_next_gen_xqd_format_promise"
+    },
+    {
+      "file_ref": "phase1/input_doc/pcie_gen5_spec.txt:2022",
+      "sec_id": "18",
+      "heading": "May 2014.",
+      "slug": "may_2014"
+    },
+    {
+      "file_ref": "phase1/input_doc/pcie_gen5_spec.txt:2042",
+      "sec_id": "2012",
+      "heading": "Retrieved 7 December 2012.",
+      "slug": "retrieved_7_december_2012"
+    },
+    {
+      "file_ref": "phase1/input_doc/pcie_gen5_spec.txt:2055",
+      "sec_id": "172",
+      "heading": "Evan Koblentz (3 February 2017). \"New PCI Express 4.0 delay may empower next-gen",
+      "slug": "evan_koblentz_3_february_2017_new_pci_express_4_0_delay_may_"
+    },
+    {
+      "file_ref": "phase1/input_doc/pcie_gen5_spec.txt:2065",
+      "sec_id": "2019",
+      "heading": "Retrieved 9 August 2019.",
+      "slug": "retrieved_9_august_2019"
+    },
+    {
+      "file_ref": "phase1/input_doc/pcie_gen5_spec.txt:2098",
+      "sec_id": "",
+      "heading": "SIGNALING AND DATA RATE",
+      "slug": "signaling_and_data_rate"
+    },
+    {
+      "file_ref": "phase1/input_doc/pcie_gen5_spec.txt:2109",
+      "sec_id": "",
+      "heading": "BACKWARD COMPATIBILITY AND LTSSM",
+      "slug": "backward_compatibility_and_ltssm"
+    },
+    {
+      "file_ref": "phase1/input_doc/pcie_gen5_spec.txt:2141",
+      "sec_id": "",
+      "heading": "LANE MARGINING",
+      "slug": "lane_margining"
+    }
+  ],
+  "functional_requirements": [
+    {
+      "id": "FR-RATE-01",
+      "text": "Gen5 signaling rate is 32 GT/s per Lane per direction, double the 16 GT/s of PCIe 4.0. Modulation is two-level NRZ; PAM4 is NOT used at Gen5."
+    },
+    {
+      "id": "FR-ENC-02",
+      "text": "Physical Layer encoding is 128b/130b (carried forward from Gen3): each 130-bit block is a 2-bit sync header + 128 bits of scrambled payload; ~1.54% overhead."
+    },
+    {
+      "id": "FR-BACKCOMPAT-03",
+      "text": "A Gen5 device must be backward compatible with PCIe 4.0/3.0/2.0/1.0 and negotiate down to the highest common data rate of its link partner."
+    },
+    {
+      "id": "FR-LTSSM-04",
+      "text": "The LTSSM is the same state machine as base PCIe, extended so Recovery performs the 32 GT/s data-rate change and equalization."
+    },
+    {
+      "id": "FR-DRID-05",
+      "text": "The supported data rate is advertised via the Data Rate Identifier field in TS1/TS2 ordered sets; a new 32.0 GT/s bit is set in the supported-link-speeds vector."
+    },
+    {
+      "id": "FR-EQ-06",
+      "text": "32 GT/s requires enhanced equalization. The procedure runs in four phases — Phase 0, 1, 2, 3 — exchanging transmitter coefficient / preset requests between partners (and through retimers)."
+    },
+    {
+      "id": "FR-PRESET-07",
+      "text": "Transmitter equalization preset hints (presets P0-P10) seed the equalization for faster convergence to an open eye."
+    },
+    {
+      "id": "FR-PRECODE-08",
+      "text": "Gen5 adds optional transmitter precoding to reduce burst errors from DFE error propagation at 32 GT/s. (Precoding is also used by Flit mode in Gen6; Gen5 introduces the mechanism itself.)"
+    },
+    {
+      "id": "FR-RETIMER-09",
+      "text": "A link may contain up to TWO retimers (same max as PCIe 4.0). A retimer is a protocol-aware PHY extension device that recovers clock/data, re-equalizes, and retransmits; each participates in the Phase 0-3 handshake. Distinct from an analog-only redriver."
+    },
+    {
+      "id": "FR-MARGIN-10",
+      "text": "Gen5 mandates Lane Margining at the Receiver: probing receiver timing (and optionally voltage) margin while in L0 without interrupting traffic; steps the sampling point and reports the error rate per lane."
+    },
+    {
+      "id": "FR-ALTPROTO-11",
+      "text": "Gen5 defines Alternate Protocol Negotiation (modified TS1/TS2) to run an alternate protocol over the PCIe 5.0 PHY; primary consumer is CXL 1.1/2.0 (CXL.io/CXL.cache/CXL.mem at 32 GT/s)."
+    },
+    {
+      "id": "FR-FRAMING-12",
+      "text": "Gen5 retains 128b/130b packet framing — Flit mode as mandatory framing is a PCIe 6.0 feature."
+    }
+  ],
+  "error_response_conditions": [
+    "Receiver Error (Physical Layer) — 128b/130b block sync-header error, scrambler mis-lock, or bit-stream loss.",
+    "Equalization failure — Phase 0-3 fails to open the eye at 32 GT/s; link falls back to a lower data rate.",
+    "LCRC error (Data Link Layer) — TLP fails 16-bit LCRC; NAK + replay.",
+    "Replay Number rollover — REPLAY_NUM threshold crossed; LTSSM Recovery.",
+    "Completion Timeout (Transaction Layer).",
+    "Unsupported Request / Completer Abort / Configuration Retry Status.",
+    "ECRC mismatch (optional) — reported via AER.",
+    "Flow control credit underflow — fatal protocol error.",
+    "Lane Margining error-rate excess — diagnostic (not a link-down condition by itself)."
+  ]
+}

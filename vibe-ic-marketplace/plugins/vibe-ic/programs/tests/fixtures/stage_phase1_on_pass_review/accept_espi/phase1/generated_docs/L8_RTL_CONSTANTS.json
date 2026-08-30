@@ -1,0 +1,161 @@
+{
+  "schema_version": 2,
+  "doc_class": "rtl_constants",
+  "ic_name": "Enhanced Serial Peripheral Interface (eSPI)",
+  "rx_classifier_ticks": null,
+  "no_rx_classifier_ticks_in_input": true,
+  "timing_constants": [],
+  "no_timing_constants_in_input": true,
+  "timing_parameters": [],
+  "clock_mhz": 20.0,
+  "no_clock_mhz_in_input": false,
+  "clock_domains": [
+    {
+      "name": "clk",
+      "freq_low_mhz": 20.0,
+      "freq_high_mhz": null,
+      "role": "primary",
+      "freq_mhz": 20.0,
+      "reset_strategy": "unspecified",
+      "evidence": {
+        "file": "input/docs/Intel_eSPI_Base_Specification.txt",
+        "line": 15,
+        "matched_substring": "20 MHz"
+      },
+      "extraction_strategy": "clock_domain_doc_prose_fmax",
+      "freq_hz": 20000000,
+      "period_ns": 50.0,
+      "domain_kind": "primary",
+      "source_pin": "clk"
+    },
+    {
+      "name": "clk",
+      "freq_mhz": 66.0,
+      "freq_hz": 66000000,
+      "low_mhz": 66.0,
+      "high_mhz": 66.0,
+      "role": "extracted_from_doc_freq_mention",
+      "source": "input/docs/Intel_eSPI_Base_Specification.txt",
+      "reset_strategy": "unspecified",
+      "extraction_strategy": "doc_freq_mention_keyword_window",
+      "freq_evidence_count_v1_6_368": 1,
+      "best_rank_v1_6_370": 5,
+      "primary_evidence_v1_6_370": "input/docs/Intel_eSPI_Base_Specification.txt",
+      "derived_from": "clk",
+      "period_ns": 15.151515,
+      "domain_kind": "primary",
+      "source_pin": "clk"
+    }
+  ],
+  "no_clock_domains_in_input": false,
+  "synthesis_targets": [],
+  "no_synthesis_targets_in_input": true,
+  "parameters": [],
+  "peripheral_only_emit_skipped_v1_6_376": 0,
+  "extraction_strategy": {
+    "l8_evidence_population_v1_6_395": 1
+  },
+  "extraction_evidence": {
+    "input/docs/Intel_eSPI_Base_Specification.txt": [
+      {
+        "literal": "20 MHz",
+        "label": "clock_domain_doc_prose_fmax_primary"
+      }
+    ]
+  },
+  "auto_discovered_literals": [
+    {
+      "literal": "1.8V",
+      "value": "1.8",
+      "unit": "V",
+      "source_doc": "Intel_eSPI_Base_Specification.txt",
+      "kind": "voltage",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "literal": "20MHz",
+      "value": "20",
+      "unit": "MHz",
+      "source_doc": "Intel_eSPI_Base_Specification.txt",
+      "kind": "frequency",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "literal": "66MHz",
+      "value": "66",
+      "unit": "MHz",
+      "source_doc": "Intel_eSPI_Base_Specification.txt",
+      "kind": "frequency",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "literal": "2ns",
+      "value": "2",
+      "unit": "ns",
+      "source_doc": "Intel_eSPI_Base_Specification.txt",
+      "kind": "time",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "literal": "1ns",
+      "value": "1",
+      "unit": "ns",
+      "source_doc": "Intel_eSPI_Base_Specification.txt",
+      "kind": "time",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "literal": "100us",
+      "value": "100",
+      "unit": "us",
+      "source_doc": "Intel_eSPI_Base_Specification.txt",
+      "kind": "time",
+      "source": "phase1_auto_extraction"
+    }
+  ],
+  "width_parameters": {
+    "CMD_OPCODE_BITS": {
+      "width_bits": 8
+    },
+    "RESPONSE_CODE_BITS": {
+      "width_bits": 8
+    },
+    "STATUS_BITS": {
+      "width_bits": 16
+    },
+    "CRC_BITS": {
+      "width_bits": 8
+    },
+    "IO_LANES": {
+      "legal_values": [
+        1,
+        2,
+        4
+      ]
+    }
+  },
+  "key_constants": {
+    "CRC8_POLY": "0x07",
+    "CRC8_INIT": "0x00",
+    "TURNAROUND_CLOCKS": 2,
+    "BOOT_FREQ_MHZ": 20,
+    "MAX_FREQ_MHZ": 66,
+    "WAIT_STATE_NIBBLE": "0x0F",
+    "NO_RESPONSE_BYTE": "0xFF",
+    "RESET_OPCODE": "0xFF",
+    "GET_STATUS_OPCODE": "0x20"
+  },
+  "freq_encodings": {
+    "000": "20MHz",
+    "001": "25MHz",
+    "010": "33MHz",
+    "011": "50MHz",
+    "100": "66MHz"
+  },
+  "io_mode_encodings": {
+    "00": "Single",
+    "01": "Single+Dual",
+    "10": "Single+Quad",
+    "11": "Single+Dual+Quad"
+  }
+}

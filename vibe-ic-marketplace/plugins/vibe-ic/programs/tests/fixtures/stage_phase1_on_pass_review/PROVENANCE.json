@@ -1,0 +1,726 @@
+{
+  "_comment": "Verbatim copies of the files stage_on_pass_review reads for stage_phase1, from seven published benchmark-data cells — five for R1_CITED_CONSTANT_NOT_IN_ITS_SOURCE and R2_TOP_MODULE_PROVENANCE_REFUTED (#1845), two for R1_CITED_INPUT_ABSENT (#1854, folded in here because the doctrine forbids two PRs declaring one stage's block). Nothing here is authored and nothing is trimmed: each sha256 below is the source file's, and an input document is carried WHOLE, because a truncated input would let this fixture choose what the design input says — which is the one thing these rules must never do. The corpus-bound tests re-read the live cells for the whole-cell numbers; this fixture is what makes the controls run on a checkout that has no corpus.",
+  "_why_one_input_is_gzipped": "`reject_pcie_gen5/.../pcie_gen5_spec.txt` ships gzipped, and that is a workaround for a false positive in another gate rather than anything about this rule. The published document quotes press-release URLs of the form `https://www.businesswire.com/news/home/<id>/en/...`, and `shipped_path_portability_check` R1 reads the `/home/<id>/` segment of a URL as a personal home path — measured, 5 findings, turning a gate that is PASS on main RED. Trimming those lines out was not an option: it would make the fixture choose what the input says. Fixing R1 to know a URL from a filesystem path is a change to a repo-wide blocking gate and belongs to that gate, not to this one. So the bytes are carried intact and unscanned. `decompressed_sha256` below is the PUBLISHED file's own hash and is asserted on every run, so the compression hides nothing: `gunzip -c` reproduces the cell byte for byte.",
+  "corpus_repo": "https://github.com/vibeic/benchmark-data",
+  "trees": {
+    "accept_espi": {
+      "cell": "protocol_parity/espi",
+      "files": {
+        "input/docs/Intel_eSPI_Base_Specification.txt": {
+          "bytes": 7212,
+          "sha256": "994abb4b50431682d568da70f11176aab6dd433f5a13b566e7b026a5e964b445"
+        },
+        "phase1/generated_docs/L10_TEST_CASES.json": {
+          "bytes": 1508,
+          "sha256": "72edf428504d41db0d695715bb759166e5f52d03ee9d779eaad802054a417bdf"
+        },
+        "phase1/generated_docs/L11_OTP_CONTENT.json": {
+          "bytes": 818,
+          "sha256": "143f8b6af42496d0238de7158d11033dd733e1b6b95614f41ca7d466e0e7e631"
+        },
+        "phase1/generated_docs/L12_BEHAVIORAL_SEQUENCES.json": {
+          "bytes": 4982,
+          "sha256": "32bd87a82cd8a1267818b755f490f87da1033558d39868a33430cfc8bb8ac7f8"
+        },
+        "phase1/generated_docs/L13_LAB_CALIBRATION.json": {
+          "bytes": 795,
+          "sha256": "a803875e0d20e02d6a17fc2e467603a529eee14a4cf4d89a085bfaeec09e8f6e"
+        },
+        "phase1/generated_docs/L14_PROTOCOL_VERSIONING.json": {
+          "bytes": 1627,
+          "sha256": "13e0df6beb40f2ffb8eaf96f72d4fbad72d301f4be4f13a86c05eef12f384598"
+        },
+        "phase1/generated_docs/L15_ENCODING_TABLES.json": {
+          "bytes": 3203,
+          "sha256": "6b31166efaadfaa63e81e0ef167706d027b012a95b0d834b11ecc21b69eeab6d"
+        },
+        "phase1/generated_docs/L16_COMPLIANCE_PROPERTIES.json": {
+          "bytes": 1329,
+          "sha256": "213ebd9ce4451636539c19c62354adbd56b89695e07b7b0d7b7fee3f628a570a"
+        },
+        "phase1/generated_docs/L17_CHANNEL_SIGNAL_CATALOG.json": {
+          "bytes": 2414,
+          "sha256": "8553ab55e45a2330af2642c8fdf061ffca1448f316cd5af641327750f07a8f9a"
+        },
+        "phase1/generated_docs/L18_INTERCONNECT_TOPOLOGY.json": {
+          "bytes": 1532,
+          "sha256": "f08c9430839b4ad59613c405ed47e73ae6b82b9797378e6a1816d369e7c7d2e7"
+        },
+        "phase1/generated_docs/L19_CONSTRAINTS_PDK.json": {
+          "bytes": 906,
+          "sha256": "9e99878407f9cd1e6cf8626c655ad1444fbe98013554e35c625647cb734f0fc9"
+        },
+        "phase1/generated_docs/L1_DATASHEET.json": {
+          "bytes": 17788,
+          "sha256": "de178238a66f16634b081752d9cb3e7f9109e8a870afa80333280e281d864cdb"
+        },
+        "phase1/generated_docs/L20_DFT_SCAN_TOPOLOGY.json": {
+          "bytes": 823,
+          "sha256": "07f092b00e2439053290121d1d1a764c8d8c7f3498b9127ebead19c3de6c2bab"
+        },
+        "phase1/generated_docs/L21_POWER_INTENT.json": {
+          "bytes": 724,
+          "sha256": "26cd243a59b4542019a7906b83c41b37d1c056d559dc1d5dd8f314e8c8c5091d"
+        },
+        "phase1/generated_docs/L22_VERIFICATION_PLAN.json": {
+          "bytes": 1369,
+          "sha256": "c4b23dd653d8f07f44d902faa6306f94afa7587a0aaf023ce267cd879a3ac765"
+        },
+        "phase1/generated_docs/L23_SECURITY_REQUIREMENTS.json": {
+          "bytes": 1101,
+          "sha256": "706edf6234f5872c87c6d42c0f77af5787424401d1770502231f2c368a73f76b"
+        },
+        "phase1/generated_docs/L2_FRS.json": {
+          "bytes": 10914,
+          "sha256": "8f4dfa28b8c58e0ebb8ec5c7311773db688fa250dccdf38cee221cd2d435eaf5"
+        },
+        "phase1/generated_docs/L3_CMD_PROTOCOL.json": {
+          "bytes": 4899,
+          "sha256": "739df102d41203615579d874ff33467169cc500c5781ce40b06e6813ca20949d"
+        },
+        "phase1/generated_docs/L4_REGMAP.json": {
+          "bytes": 1870,
+          "sha256": "9553d0e01e7278b579af7e6c5bd44dc5388c58ff7a09d4e191add595e9750dd6"
+        },
+        "phase1/generated_docs/L5_ADI_SPEC.json": {
+          "bytes": 926,
+          "sha256": "7b1f36cc8040eb29b6d253f4a07a103d1b31b9d8aa4aa1914fa7abd94296b95e"
+        },
+        "phase1/generated_docs/L6_CONTROL_LOGIC.json": {
+          "bytes": 3816,
+          "sha256": "2b706962f0e20cd037b1c73185eab71c0bc1bf43e2ca074af90882a15394cba3"
+        },
+        "phase1/generated_docs/L7_TEST_DEBUG.json": {
+          "bytes": 1937,
+          "sha256": "0fe01911c81f94441884d6ad60cb951aa7752a59718db8b3ef99aac09a303e8d"
+        },
+        "phase1/generated_docs/L8_RTL_CONSTANTS.json": {
+          "bytes": 4026,
+          "sha256": "7e5205c771ead03e4ff6879749d5dd4027dbaeb5534fc6d5db8ebd9be14d6555"
+        },
+        "phase1/generated_docs/L8_TIMING_WAVEFORM.json": {
+          "bytes": 3070,
+          "sha256": "977da1b41fa4483a06ed0ca4a5435af2cfa715fa3912cbc4d42ae4ef59d8e1d6"
+        },
+        "phase1/generated_docs/L9_INTEGRATION_SPEC.json": {
+          "bytes": 5943,
+          "sha256": "35be9fcb41476c69148d32ef78c2baaf579f1b3280d6b57f362d394a9fea912c"
+        },
+        "phase1/input_doc/Intel_eSPI_Base_Specification.txt": {
+          "bytes": 7212,
+          "sha256": "994abb4b50431682d568da70f11176aab6dd433f5a13b566e7b026a5e964b445"
+        },
+        "phase1/input_doc/__chip_root___rglob_readme_fallback_v1_6_343__.txt": {
+          "bytes": 52,
+          "sha256": "d5e7b7af54fafa7cc93bc90ccc31012e84dab3ea3d4fa429dc4c2e3693475888"
+        },
+        "phase1/input_doc/__chip_root_phase3__stage4__foundry_handoff__README.txt": {
+          "bytes": 677,
+          "sha256": "5416ab65b5661ffaf69b687f853c2548b40d3fc7826ed23d80502774ca17b33c"
+        }
+      },
+      "cell_published": true
+    },
+    "reject_pcie_gen5": {
+      "cell": "protocol_parity/pcie_gen5",
+      "files": {
+        "phase1/generated_docs/L10_TEST_CASES.json": {
+          "bytes": 1977,
+          "sha256": "fb60f70def1ba45b78af8e652d555e4b8acf25d36d75d7837c9028f77b27f611"
+        },
+        "phase1/generated_docs/L11_OTP_CONTENT.json": {
+          "bytes": 2790,
+          "sha256": "a24fcdb90391462f62d7088ee74fde3051a26af2d6e6719114973e4ebe727b17"
+        },
+        "phase1/generated_docs/L12_BEHAVIORAL_SEQUENCES.json": {
+          "bytes": 19427,
+          "sha256": "00ed4172534d8abd2d731ec49aa676b70feb81436b38e75d34fbc98bb6c842ab"
+        },
+        "phase1/generated_docs/L13_LAB_CALIBRATION.json": {
+          "bytes": 2052,
+          "sha256": "3dc787248c078d0f81404ed7ab93e1a432ae27c1d0e4a905e526d772d2e938ac"
+        },
+        "phase1/generated_docs/L14_PROTOCOL_VERSIONING.json": {
+          "bytes": 4028,
+          "sha256": "0bc609163e49671af6010e6f3785b1c21e29aa5fca8e0ddad8aedb26e88606b9"
+        },
+        "phase1/generated_docs/L15_ENCODING_TABLES.json": {
+          "bytes": 8655,
+          "sha256": "8c43705a036d14c1816d87200709dbf68922c7a8ccfbc0e0a27b44b9f479bec4"
+        },
+        "phase1/generated_docs/L16_COMPLIANCE_PROPERTIES.json": {
+          "bytes": 3940,
+          "sha256": "a3c08e2996da1522a28cf89f1fb7e4076e370443493703102a7a45cb6c8fdca6"
+        },
+        "phase1/generated_docs/L17_CHANNEL_SIGNAL_CATALOG.json": {
+          "bytes": 7714,
+          "sha256": "f87d02537f21f34ebd42c2872114d472ee7121767f687e3bb352ae8fb7338d15"
+        },
+        "phase1/generated_docs/L18_INTERCONNECT_TOPOLOGY.json": {
+          "bytes": 6051,
+          "sha256": "c65426d87eb7ef2561e9dcdb4c5901b2ce34f0813454c3da5a09827783866e44"
+        },
+        "phase1/generated_docs/L19_CONSTRAINTS_PDK.json": {
+          "bytes": 1910,
+          "sha256": "1e5d3a6e108c08dbd1665a2965266ac8c1256996f3a2e9d91fd4c7c37afb7c86"
+        },
+        "phase1/generated_docs/L1_DATASHEET.json": {
+          "bytes": 46833,
+          "sha256": "dd8e612996eb669393110461ad07160394acecc49cee6d6929db176c70f88bc3"
+        },
+        "phase1/generated_docs/L20_DFT_SCAN_TOPOLOGY.json": {
+          "bytes": 3603,
+          "sha256": "4f344c10327fd974ebaceaf8418b5d4a70997e99d9f6b92305b23cbe076be8a3"
+        },
+        "phase1/generated_docs/L21_POWER_INTENT.json": {
+          "bytes": 5431,
+          "sha256": "805129129fa181a185e89ff7315b68a9678ffd872bb83cf7f6e51532eecf9add"
+        },
+        "phase1/generated_docs/L22_VERIFICATION_PLAN.json": {
+          "bytes": 2453,
+          "sha256": "1bc070329c3ebc2e17d1054861d4aa4460395750b10323a8b6cfb3c4e53b5c9d"
+        },
+        "phase1/generated_docs/L23_SECURITY_REQUIREMENTS.json": {
+          "bytes": 2648,
+          "sha256": "98c64867f4d5132ade8a88b64c45f4ea90da490cb279134e96fef290657ef1b6"
+        },
+        "phase1/generated_docs/L2_FRS.json": {
+          "bytes": 33784,
+          "sha256": "c9aec29348753033407b71d98b6a74f065cb7b44d8743f11d2224b07b3e64177"
+        },
+        "phase1/generated_docs/L3_CMD_PROTOCOL.json": {
+          "bytes": 18715,
+          "sha256": "d4dfd4263aea86ee15c8fee7832ea23c2366ec6fccc235b3420c9b0a2c146923"
+        },
+        "phase1/generated_docs/L4_REGMAP.json": {
+          "bytes": 5703,
+          "sha256": "026136cf78dbcbe72db7d966b72036550458e210ff83c4406b495dd2a020699e"
+        },
+        "phase1/generated_docs/L5_ADI_SPEC.json": {
+          "bytes": 8372,
+          "sha256": "1b25924f1d088dddeaf219ad08a416de55bbd358de5a54214fd19481c2f5b352"
+        },
+        "phase1/generated_docs/L6_CONTROL_LOGIC.json": {
+          "bytes": 7812,
+          "sha256": "33d40a7ebfd96a8b94a40ac0854859643e78f2f4861896c014d1cd3350e2ae34"
+        },
+        "phase1/generated_docs/L7_TEST_DEBUG.json": {
+          "bytes": 5573,
+          "sha256": "181a12b761f6df10db6bc4ca820479717ee14d46da21618d3817b336e880328c"
+        },
+        "phase1/generated_docs/L8_RTL_CONSTANTS.json": {
+          "bytes": 10067,
+          "sha256": "189dde0c5f2ed3308a136bf69a2cf176eae38a71649b810e848d283be095fef9"
+        },
+        "phase1/generated_docs/L8_TIMING_WAVEFORM.json": {
+          "bytes": 6010,
+          "sha256": "3ac8ed2dd25af8ee9d110861b889a160ecda6fe1f199952fce2cf78bc74faf7d"
+        },
+        "phase1/generated_docs/L9_INTEGRATION_SPEC.json": {
+          "bytes": 11891,
+          "sha256": "e4e9aea09e33666ef5957f340abab0436232d094a30f0c6e171adbf05e55305c"
+        },
+        "phase1/input_doc/pcie_gen5_spec.txt.gz": {
+          "bytes": 46765,
+          "sha256": "8d5aedc7ecbcbb33c7408418d01a42d2eb4089ae622d748d5e1408e24d07649c",
+          "decompressed_bytes": 137919,
+          "decompressed_sha256": "57845eebed877f7655e44547fff80449d5dd52af8ff0cca0a3877a13a4e99be5"
+        }
+      },
+      "cell_published": true
+    },
+    "accept_interlaken": {
+      "cell": "protocol_parity/interlaken",
+      "files": {
+        "input/docs/Interlaken_Protocol_Definition.txt": {
+          "bytes": 8955,
+          "sha256": "a8cb616b1622923d6fd6b27275a6d9bcfdd9ba9c4394a45b141eb0c1701c6a16"
+        },
+        "phase1/generated_docs/L10_TEST_CASES.json": {
+          "bytes": 1837,
+          "sha256": "b384359e3e7e88251b3a22a0f1915a55e02d3e1c94604847623b0bcd80db3372"
+        },
+        "phase1/generated_docs/L11_OTP_CONTENT.json": {
+          "bytes": 1468,
+          "sha256": "d2fba8ff2c8226cfa666a4a124ac0a864c93db26a2bcb0fb2020912cf585f441"
+        },
+        "phase1/generated_docs/L12_BEHAVIORAL_SEQUENCES.json": {
+          "bytes": 1745,
+          "sha256": "50f9f5040d18e18b9602626dcf661cd1b69f1b02b5410dd8c12706645c3fd5c3"
+        },
+        "phase1/generated_docs/L13_LAB_CALIBRATION.json": {
+          "bytes": 842,
+          "sha256": "e6911e4331fb65fcb13ae0683ac6ed98a5a80b6d082929a925218b126fc470ec"
+        },
+        "phase1/generated_docs/L14_PROTOCOL_VERSIONING.json": {
+          "bytes": 1711,
+          "sha256": "3abf22103eaddca43699f22a27755919be823c8e42cb07bf2bc85d1bf7f5330c"
+        },
+        "phase1/generated_docs/L15_ENCODING_TABLES.json": {
+          "bytes": 2768,
+          "sha256": "78514c9a227d15ed7aecdf70d32022c83ec6c1a4bae8bfbfa89b76d179feb734"
+        },
+        "phase1/generated_docs/L16_COMPLIANCE_PROPERTIES.json": {
+          "bytes": 1758,
+          "sha256": "6c28494d92d96267a16b894d18a3889ea3834f2dda1e7097fab27ad174ce3dca"
+        },
+        "phase1/generated_docs/L17_CHANNEL_SIGNAL_CATALOG.json": {
+          "bytes": 2184,
+          "sha256": "53c04f039728f159b0116a5a6b357c30b04629c39f08c5b275f431d6770debab"
+        },
+        "phase1/generated_docs/L18_INTERCONNECT_TOPOLOGY.json": {
+          "bytes": 1580,
+          "sha256": "e186d14a8ad7eed75e8f32f0f3201015b218bad4cc4a00eb6229862396a8eaca"
+        },
+        "phase1/generated_docs/L19_CONSTRAINTS_PDK.json": {
+          "bytes": 943,
+          "sha256": "ac9a24093064824de3a5405550ae507babbd1e4a4f50db5f31de30bbf07c08e5"
+        },
+        "phase1/generated_docs/L1_DATASHEET.json": {
+          "bytes": 8775,
+          "sha256": "3adac1759c94663f2eac1434a6b0dd9aaf5c738c2559d4462b58f2c8f9a3ae51"
+        },
+        "phase1/generated_docs/L20_DFT_SCAN_TOPOLOGY.json": {
+          "bytes": 964,
+          "sha256": "889e59f29e7588b219ee723479aee726828e73300c96edb959f7b0f978ef7628"
+        },
+        "phase1/generated_docs/L21_POWER_INTENT.json": {
+          "bytes": 825,
+          "sha256": "9fe72b566d6f55a86ea43f3f07f728592e0bc1ead5341b9681baf88a6fdb8914"
+        },
+        "phase1/generated_docs/L22_VERIFICATION_PLAN.json": {
+          "bytes": 1471,
+          "sha256": "769d37181c19f8f10411233dbe4fba158cbabc9b901b1a676b4f435c2a9cbef8"
+        },
+        "phase1/generated_docs/L23_SECURITY_REQUIREMENTS.json": {
+          "bytes": 1274,
+          "sha256": "2d2692909ebc3b7cbe7727d90db861037bba063ed9e4170cdf2503f862c367e3"
+        },
+        "phase1/generated_docs/L2_FRS.json": {
+          "bytes": 13051,
+          "sha256": "2f9b45bb55435ce5e63c3800fd3f705f97d92a4085eae1de1fa2bc7679ab37a9"
+        },
+        "phase1/generated_docs/L3_CMD_PROTOCOL.json": {
+          "bytes": 3787,
+          "sha256": "4076f8d9d380df25b08a7af637df3ce2d9e7f7b55eec8de23ff29f6d0bd0cb16"
+        },
+        "phase1/generated_docs/L4_REGMAP.json": {
+          "bytes": 1384,
+          "sha256": "97165a53d12f022f958a57b75635ffc49b635ab8f695c075ae1c2855b5092f50"
+        },
+        "phase1/generated_docs/L5_ADI_SPEC.json": {
+          "bytes": 1163,
+          "sha256": "e9081727578361a397938e2c119f009c971a5b2533a089fe872cd35d34b78756"
+        },
+        "phase1/generated_docs/L6_CONTROL_LOGIC.json": {
+          "bytes": 1802,
+          "sha256": "4933552845eb1ba1d91dfdaf8ec46480da385569ff2c8991741807bfed318dbf"
+        },
+        "phase1/generated_docs/L7_TEST_DEBUG.json": {
+          "bytes": 1138,
+          "sha256": "d6562eba93ef63eff268439a2c49af2445ba1076114df8d93a511b64120f1b14"
+        },
+        "phase1/generated_docs/L8_RTL_CONSTANTS.json": {
+          "bytes": 1715,
+          "sha256": "54628191c232f204a04c8ac8af38dc285ae285bfab1c23c13eb0046bc43533b1"
+        },
+        "phase1/generated_docs/L8_TIMING_WAVEFORM.json": {
+          "bytes": 887,
+          "sha256": "8f9d600d027b2d0d54091cb1e3ada9bb47ae86b613620095189d512664296da4"
+        },
+        "phase1/generated_docs/L9_INTEGRATION_SPEC.json": {
+          "bytes": 2318,
+          "sha256": "bef71605384f707019593092ffad0223b52ae67cb27ead30d4255fd427c033e3"
+        },
+        "phase1/input_doc/Interlaken_Protocol_Definition.txt": {
+          "bytes": 8955,
+          "sha256": "a8cb616b1622923d6fd6b27275a6d9bcfdd9ba9c4394a45b141eb0c1701c6a16"
+        }
+      },
+      "cell_published": true
+    },
+    "accept_lpddr5": {
+      "cell": "protocol_parity/lpddr5",
+      "files": {
+        "phase1/generated_docs/L10_TEST_CASES.json": {
+          "bytes": 2513,
+          "sha256": "7696c0d8545914e86a49aa46ddbee84b5ae4616a860c685e3de2b4e4203260ad"
+        },
+        "phase1/generated_docs/L11_OTP_CONTENT.json": {
+          "bytes": 2714,
+          "sha256": "6da5ee02a439a30182b563cea9568f57201fef15a9d98c969c8434bd6370f4d4"
+        },
+        "phase1/generated_docs/L12_BEHAVIORAL_SEQUENCES.json": {
+          "bytes": 4752,
+          "sha256": "e40b052ffaf123d756838cb3806d738c8e380fccc5e2476a79b7359a358c1b75"
+        },
+        "phase1/generated_docs/L13_LAB_CALIBRATION.json": {
+          "bytes": 4421,
+          "sha256": "50766d9bd0929ca91e6fd49d8b0312faa24e73ee6fdebc8465eabbe1fa91ec12"
+        },
+        "phase1/generated_docs/L14_PROTOCOL_VERSIONING.json": {
+          "bytes": 6407,
+          "sha256": "ea7b36356f2fa23b0834a596c1e4969a8d70cfb05250902d09ad7b5a658c59a6"
+        },
+        "phase1/generated_docs/L15_ENCODING_TABLES.json": {
+          "bytes": 6497,
+          "sha256": "a9eaa0634d2b5508eaea3546f9d7f3f8a10e972020045ac02815ad9affc2e626"
+        },
+        "phase1/generated_docs/L16_COMPLIANCE_PROPERTIES.json": {
+          "bytes": 5578,
+          "sha256": "92ad43f09962221d922a4f64c730f2fe9bc0e67e4b0eb43efe9818e4853eeafd"
+        },
+        "phase1/generated_docs/L17_CHANNEL_SIGNAL_CATALOG.json": {
+          "bytes": 7176,
+          "sha256": "a536be9764952c0d473b84bd5954989ecdff3af9f76dff17ff31c3b10649ce77"
+        },
+        "phase1/generated_docs/L18_INTERCONNECT_TOPOLOGY.json": {
+          "bytes": 4212,
+          "sha256": "0c6b681ea3455110bac5dade7d8833927a6917a8262d109b2325e0f4942f453f"
+        },
+        "phase1/generated_docs/L19_CONSTRAINTS_PDK.json": {
+          "bytes": 2310,
+          "sha256": "0e7343a1195fdf8704501e00db4a17e3ee51048307dddbf6a2398d9a20ce548b"
+        },
+        "phase1/generated_docs/L1_DATASHEET.json": {
+          "bytes": 27854,
+          "sha256": "014d40fb5b76f707738595e3b30b694d3117734113e6f1f253f26ff9e5e0a98b"
+        },
+        "phase1/generated_docs/L20_DFT_SCAN_TOPOLOGY.json": {
+          "bytes": 2542,
+          "sha256": "951e200cba34f2122c0225c28527fa6a914ac867e200aca0d094d02a586368c1"
+        },
+        "phase1/generated_docs/L21_POWER_INTENT.json": {
+          "bytes": 4698,
+          "sha256": "2acdad7560dbe344ada5b43f914ae47b231f126ed4ec82e08f65601132b7d2e0"
+        },
+        "phase1/generated_docs/L22_VERIFICATION_PLAN.json": {
+          "bytes": 3119,
+          "sha256": "b8b0092cb5c54c777c8ac0e4a03db67286f02ac006cbeb482bf982061cb87e67"
+        },
+        "phase1/generated_docs/L23_SECURITY_REQUIREMENTS.json": {
+          "bytes": 3585,
+          "sha256": "7e4d75e6c96730c8b7df3b79c3bb8503dc90c814b2641264401aef8038ab1496"
+        },
+        "phase1/generated_docs/L2_FRS.json": {
+          "bytes": 12557,
+          "sha256": "be7e71909cdd6d3514cdec00831f7eb059738117b0a2864e547b91ff7b5840e3"
+        },
+        "phase1/generated_docs/L3_CMD_PROTOCOL.json": {
+          "bytes": 9143,
+          "sha256": "d7f5527a220afc1850ce61a8eb69245904b1a2ede91f043ef185fd05e991930d"
+        },
+        "phase1/generated_docs/L4_REGMAP.json": {
+          "bytes": 7231,
+          "sha256": "ab05059b2709c770ba0ff63b34673ca56e82c5a2f9f058a4b0b4574c5d985a96"
+        },
+        "phase1/generated_docs/L5_ADI_SPEC.json": {
+          "bytes": 4748,
+          "sha256": "dcfbc1b7a171ddc033846ba99558ef6d90c5d1902034d424431383892203aa35"
+        },
+        "phase1/generated_docs/L6_CONTROL_LOGIC.json": {
+          "bytes": 9245,
+          "sha256": "56a7d7ade553f0ca7a1bdab5d0fbcb70ea7f4c5b37b7e1963d37d6fda51a1d79"
+        },
+        "phase1/generated_docs/L7_TEST_DEBUG.json": {
+          "bytes": 2473,
+          "sha256": "70feff72654bf617450fa94b75b3977185e254885ee80a047f14a32e50ffb1ba"
+        },
+        "phase1/generated_docs/L8_RTL_CONSTANTS.json": {
+          "bytes": 7414,
+          "sha256": "8e124418670388042dc44b4b5cd7c65ddd1e8fc2394e99018199480cadeb8f39"
+        },
+        "phase1/generated_docs/L8_TIMING_WAVEFORM.json": {
+          "bytes": 5207,
+          "sha256": "55133e7ec671450f68bd51801bfec1e27be196813b13d6c34548b47867054429"
+        },
+        "phase1/generated_docs/L9_INTEGRATION_SPEC.json": {
+          "bytes": 9093,
+          "sha256": "462d03665a78a3181a3bb76429a877df3aba23c63d7b026310036958cfab7622"
+        },
+        "phase1/input_doc/lpddr5_spec.txt": {
+          "bytes": 42234,
+          "sha256": "c229f6567764b9b8dad0820f65fa7d4bb790d422ee9e82715942f571975e921c"
+        }
+      },
+      "cell_published": true
+    },
+    "reject_ddr5": {
+      "cell": "protocol_parity/ddr5",
+      "files": {
+        "input/docs/ddr5_spec.txt": {
+          "bytes": 16170,
+          "sha256": "d133bbf054c33e6f4b932275e6efa6c750235baedeea1044b6311b68b4638068"
+        },
+        "phase1/generated_docs/L10_TEST_CASES.json": {
+          "bytes": 1558,
+          "sha256": "cc5a1dbc48f1f8d0b4967d1bd154f4804b5e38622006ab06aff8aec0a66ce1eb"
+        },
+        "phase1/generated_docs/L11_OTP_CONTENT.json": {
+          "bytes": 4204,
+          "sha256": "68f2124ec5670684f9a547d46933a289f7be93c1aaf7b961dbd0d649dfc13eea"
+        },
+        "phase1/generated_docs/L12_BEHAVIORAL_SEQUENCES.json": {
+          "bytes": 7366,
+          "sha256": "a70168972bdef3e754b5a17d789b64f11991253836abaa23f697b12635b2b95d"
+        },
+        "phase1/generated_docs/L13_LAB_CALIBRATION.json": {
+          "bytes": 5223,
+          "sha256": "0f404e2dff50ab116744ea79a84ac298155d1fd6a71029957653f55b4141f122"
+        },
+        "phase1/generated_docs/L14_PROTOCOL_VERSIONING.json": {
+          "bytes": 9109,
+          "sha256": "2406dace10ab6c82fa02228aaf0ee1214db920c463724b3c03bf435a530e3541"
+        },
+        "phase1/generated_docs/L15_ENCODING_TABLES.json": {
+          "bytes": 12495,
+          "sha256": "77153f12243c53cd05d141205764a9cef4f68a3a25bb45c8442e65bdb5cceee6"
+        },
+        "phase1/generated_docs/L16_COMPLIANCE_PROPERTIES.json": {
+          "bytes": 3616,
+          "sha256": "a5d7142b8b5701b639d78178b309381b28b21c5753be2dafc3c0b505b225acf0"
+        },
+        "phase1/generated_docs/L17_CHANNEL_SIGNAL_CATALOG.json": {
+          "bytes": 6643,
+          "sha256": "dfd463eeb49a2fd0aa577ef8a5fb3c099bb78f3ca7a226c6ba3d77cbd764e4c2"
+        },
+        "phase1/generated_docs/L18_INTERCONNECT_TOPOLOGY.json": {
+          "bytes": 4446,
+          "sha256": "a1acf3c0baa8a641955754c284a61020e0df3890a184dfa862c627fa9e3709ae"
+        },
+        "phase1/generated_docs/L19_CONSTRAINTS_PDK.json": {
+          "bytes": 3277,
+          "sha256": "1bee099008abf12dd0e7d244e225b0aa1cf6eebb191227360e58025da7c36f6a"
+        },
+        "phase1/generated_docs/L1_DATASHEET.json": {
+          "bytes": 25841,
+          "sha256": "63cfad4074da9bddcae87e494de0bc060890f8acebcc3af113dbc7f6f1fc2d0f"
+        },
+        "phase1/generated_docs/L20_DFT_SCAN_TOPOLOGY.json": {
+          "bytes": 3665,
+          "sha256": "a7abccd071562b8c6328e0bfaddd217eeff1414131da9d2f0da672f072563ae2"
+        },
+        "phase1/generated_docs/L21_POWER_INTENT.json": {
+          "bytes": 4921,
+          "sha256": "0c16320113603d938f5e8cb33bfd351b2e3e41d5a131b5accc2664dca21d0197"
+        },
+        "phase1/generated_docs/L22_VERIFICATION_PLAN.json": {
+          "bytes": 2033,
+          "sha256": "417fd3c8ce361a5991042d25f0aff6bc24edce5d9119988f6eb4a7fdf3de25e4"
+        },
+        "phase1/generated_docs/L23_SECURITY_REQUIREMENTS.json": {
+          "bytes": 4141,
+          "sha256": "e14c7067064c6342e291b5d019c2f7156014499cbda72969ec24690fbd25f6f0"
+        },
+        "phase1/generated_docs/L2_FRS.json": {
+          "bytes": 20471,
+          "sha256": "112c16b17160af89ee62f7a3bd195b882c8253d4e050e04f092d7eeb6a89e4a3"
+        },
+        "phase1/generated_docs/L3_CMD_PROTOCOL.json": {
+          "bytes": 14102,
+          "sha256": "a47b3905defb28f0180f25044954709ccebd5e162f2338e224b7e757e1538943"
+        },
+        "phase1/generated_docs/L4_REGMAP.json": {
+          "bytes": 6627,
+          "sha256": "954841aa8eb837398dcccf19f5a7709c32264d2fe2bd7facc9a7ed1f319b0bbd"
+        },
+        "phase1/generated_docs/L5_ADI_SPEC.json": {
+          "bytes": 11537,
+          "sha256": "907275c362f2983318738453b3f3e316570f495e42fc839c922f0d4a6c26d328"
+        },
+        "phase1/generated_docs/L6_CONTROL_LOGIC.json": {
+          "bytes": 5790,
+          "sha256": "fc50c7e573d34d86a1035079386858355a724eba38c0a00f9bf1eb0c1fe798c5"
+        },
+        "phase1/generated_docs/L7_TEST_DEBUG.json": {
+          "bytes": 3938,
+          "sha256": "72f41fe367db84bddd81b9201f7c9ce36a9259660ea23f84ef83a32d27cdefc7"
+        },
+        "phase1/generated_docs/L8_RTL_CONSTANTS.json": {
+          "bytes": 9254,
+          "sha256": "c0273963c745088a9a1641f5036768b8fc9e9aeb359441e224fef8b30f1f3500"
+        },
+        "phase1/generated_docs/L8_TIMING_WAVEFORM.json": {
+          "bytes": 7122,
+          "sha256": "93d0839467d3c41cd90d68de9ad234e81536e54d61d10ed5476bee0ef10c78eb"
+        },
+        "phase1/generated_docs/L9_INTEGRATION_SPEC.json": {
+          "bytes": 8250,
+          "sha256": "18590a0c1fe43568c7dec3ced4abf5ab284e8a3ee6ade351ed4966ca8b596469"
+        },
+        "phase1/input_doc/ddr5_spec.txt": {
+          "bytes": 16170,
+          "sha256": "d133bbf054c33e6f4b932275e6efa6c750235baedeea1044b6311b68b4638068"
+        }
+      },
+      "cell_published": true
+    },
+    "reject_spm": {
+      "cell": "ic/spm/v1.9.96_gf180mcuD",
+      "files": {
+        "phase1/generated_docs/L19_CONSTRAINTS_PDK.json": {
+          "bytes": 1302,
+          "sha256": "0a607cc8c218d329d05aab286c7be817ee5e9e59ed741173fd259bf9381182bc"
+        },
+        "phase1/generated_docs/L3_CMD_PROTOCOL.json": {
+          "bytes": 1430,
+          "sha256": "e6f136b980376b4f631403b6b01d1d5b782cdbe32c2bb12131b7fd9823b76c38"
+        },
+        "phase1/generated_docs/L4_REGMAP.json": {
+          "bytes": 1702,
+          "sha256": "636a98053f5b7f566201639eae29c08952fdca52888bee871b94fe672e4c08e3"
+        },
+        "phase1/input_doc/L1_product_metadata.txt": {
+          "bytes": 2266,
+          "sha256": "30b88fdce0860fc23da6e9b8a1700ec690bb0ab09fffcb2119b2976677ba49a6"
+        },
+        "phase1/input_doc/L2_architecture.txt": {
+          "bytes": 3005,
+          "sha256": "6d74a4e253477382c8bd076713ae92a29c72f066d7d9a1e814cc6e4401dab925"
+        },
+        "phase1/input_doc/L3_external_interface.txt": {
+          "bytes": 2052,
+          "sha256": "00e783dea0b688e6782bed9fe3e51b5436943aa011f7135534ccb3ca4f1ce04d"
+        },
+        "phase1/input_doc/L4_command_protocol.txt": {
+          "bytes": 454,
+          "sha256": "fe0944d5511da480a34ee6b0de00863e1c6b21f8003560794c511ac5237c9a8a"
+        },
+        "phase1/input_doc/L5_register_map.txt": {
+          "bytes": 456,
+          "sha256": "296f61b4759f52c9bb0a949da61d13e48de8215908d8c05d1d49f8b892dd1cbf"
+        },
+        "phase1/input_doc/L6_calibration.txt": {
+          "bytes": 415,
+          "sha256": "13992a4f0450c442c9a79bb21d0def1642ea67f7cacaa31b7f610c168c720f22"
+        },
+        "phase1/input_doc/L7_verification_plan.txt": {
+          "bytes": 6205,
+          "sha256": "465dfa3d935d577d040e42e41af3abf17d233cd813ec7b71ad5e885f244265c2"
+        },
+        "phase1/input_doc/L8_submodule_integration.txt": {
+          "bytes": 2333,
+          "sha256": "5bb8ae00cd186593d100dcd091dbf8bae47ddedbcaa1115f5cce51990edf97c0"
+        },
+        "phase1/input_doc/L9_constraints_floorplan.txt": {
+          "bytes": 3257,
+          "sha256": "17920001322a50abdedbdd058d2903637145f8d61f5120e8c5a1a79212241666"
+        }
+      },
+      "cell_published": false,
+      "_withdrawn": "MEASURED 2026-08-30: ic/spm/v1.9.96_gf180mcuD is no longer published in vibeic/benchmark-data (HEAD 88621a5 keeps ic/spm/v1.10.18_sky130A as the one specimen). The files below are the copies #1854 recorded when the cell was published, carried unchanged; their sha256 can no longer be re-derived from the corpus."
+    },
+    "accept_a2b": {
+      "cell": "protocol_parity/a2b",
+      "files": {
+        "input/docs/a2b_spec.txt": {
+          "bytes": 19627,
+          "sha256": "5a52fb12bc058f94c44e424f45ffc59f6491d0fa30c9546dedcfc233f2f9542a"
+        },
+        "phase1/generated_docs/L10_TEST_CASES.json": {
+          "bytes": 3527,
+          "sha256": "6fc752e4c1bb64d1b588bea9289974c3d9b5413dd9604ce049a2eced80fc2935"
+        },
+        "phase1/generated_docs/L11_OTP_CONTENT.json": {
+          "bytes": 751,
+          "sha256": "9e7cca982fc701bbf3b94b934944f82034d8bdc7de7ae8c59e24e41162e8d534"
+        },
+        "phase1/generated_docs/L12_BEHAVIORAL_SEQUENCES.json": {
+          "bytes": 5333,
+          "sha256": "00f2df5bb074c40dcbb2389332075e79c2e6d5c93c94e1c07bfe5fd127b7aa58"
+        },
+        "phase1/generated_docs/L13_LAB_CALIBRATION.json": {
+          "bytes": 821,
+          "sha256": "2a36dfe364e2f7278a5b99cee1320b6b1c95fba3dc3453305f81d682f3685804"
+        },
+        "phase1/generated_docs/L14_PROTOCOL_VERSIONING.json": {
+          "bytes": 1307,
+          "sha256": "74f0716ca3f638faadd2beffa4103cec52bb16bd8b6d6d72a5fa3522bc0bbcaa"
+        },
+        "phase1/generated_docs/L15_ENCODING_TABLES.json": {
+          "bytes": 6625,
+          "sha256": "b9671866a8da59ac62c86939e74c37e5a29dc32db857cc26817432e44a300701"
+        },
+        "phase1/generated_docs/L16_COMPLIANCE_PROPERTIES.json": {
+          "bytes": 3673,
+          "sha256": "25d752ceccd6f105dd63519c2fd47e7c042b9c64b218671e2771d6c9fabe14ff"
+        },
+        "phase1/generated_docs/L17_CHANNEL_SIGNAL_CATALOG.json": {
+          "bytes": 2617,
+          "sha256": "0596b7deba0cc2dbc253824b7c9219c84925d95543606b16b2baa9c6e567086f"
+        },
+        "phase1/generated_docs/L18_INTERCONNECT_TOPOLOGY.json": {
+          "bytes": 2496,
+          "sha256": "542de9b7dd6d4825fdbd46e2b89c121f36a8f91859c6b7b1d2e2d23f9c22d1b4"
+        },
+        "phase1/generated_docs/L19_CONSTRAINTS_PDK.json": {
+          "bytes": 953,
+          "sha256": "4e96a7a1e2189f4afdd53a8dcb77174df63c73adff520d2bbfa35040bfcea42f"
+        },
+        "phase1/generated_docs/L1_DATASHEET.json": {
+          "bytes": 21390,
+          "sha256": "4e7e0724bfebf2ce0d02778a3b2b754f60ccdaac4315e1b0b7dc07036da88db2"
+        },
+        "phase1/generated_docs/L20_DFT_SCAN_TOPOLOGY.json": {
+          "bytes": 898,
+          "sha256": "e7c997de778053b53cd6e3fc3045c1d1d46668f65cf0505080c5cee2074c684e"
+        },
+        "phase1/generated_docs/L21_POWER_INTENT.json": {
+          "bytes": 1242,
+          "sha256": "726237197026045f7a2a1b1f20c6719b7320f815b6badfdb9d636f8cff9933b0"
+        },
+        "phase1/generated_docs/L22_VERIFICATION_PLAN.json": {
+          "bytes": 1958,
+          "sha256": "f624b3f93d6a63a05abe1b2cf0f07a7fbc27a099fac8dc021c74a8db3cd2c498"
+        },
+        "phase1/generated_docs/L23_SECURITY_REQUIREMENTS.json": {
+          "bytes": 1192,
+          "sha256": "3a8bbc4be644eb9dc8a5e1e38370e8b9f9a17dcc63662767499392009ff5274d"
+        },
+        "phase1/generated_docs/L2_FRS.json": {
+          "bytes": 21883,
+          "sha256": "aef8319aad9f6111c08634df27eea676239862643b3c29cbdce21d49e9b5be7a"
+        },
+        "phase1/generated_docs/L3_CMD_PROTOCOL.json": {
+          "bytes": 7442,
+          "sha256": "ecc3d8d503efe7e857157447b20c2b15da5298df76adf6cb5115557dc9331659"
+        },
+        "phase1/generated_docs/L4_REGMAP.json": {
+          "bytes": 2267,
+          "sha256": "ff09570870b9cf17967f317df8dde4c8727689bf14c28163228fb2355f28b2d1"
+        },
+        "phase1/generated_docs/L5_ADI_SPEC.json": {
+          "bytes": 1678,
+          "sha256": "68572bc35e8beca019c43e45da664feafa93132fbc60aef651f74437337f1e58"
+        },
+        "phase1/generated_docs/L6_CONTROL_LOGIC.json": {
+          "bytes": 5954,
+          "sha256": "14192af19bc1cd1950e9209fd08ceaf51c6617d336452d0f0c5bc24d564c695a"
+        },
+        "phase1/generated_docs/L7_TEST_DEBUG.json": {
+          "bytes": 2800,
+          "sha256": "5981364af84cb35da7ed4f2eba16deea9f05d639ba3b9fe568887379cf0f282c"
+        },
+        "phase1/generated_docs/L8_RTL_CONSTANTS.json": {
+          "bytes": 3892,
+          "sha256": "2d270888468f6fcf4dc741bc6396028ec4d9b4e0382cbc6eb529d3acf038d9b2"
+        },
+        "phase1/generated_docs/L8_TIMING_WAVEFORM.json": {
+          "bytes": 4374,
+          "sha256": "5e80bf798e416b485babc0d56477ef7331a8711f1a10862bd460ae2d0a7b9b6f"
+        },
+        "phase1/generated_docs/L9_INTEGRATION_SPEC.json": {
+          "bytes": 5727,
+          "sha256": "10b96a4ed1aeb5f63102262eb1ce5ef57c1e8505178182162f97fd4d1123fa8a"
+        },
+        "phase1/input_doc/a2b_spec.txt": {
+          "bytes": 19627,
+          "sha256": "5a52fb12bc058f94c44e424f45ffc59f6491d0fa30c9546dedcfc233f2f9542a"
+        }
+      },
+      "cell_published": true
+    }
+  },
+  "_why_every_tree_carries_both_rules_inputs": "The stage carries TWO rules, and a tree holding only one rule's documents is not a run — it is one rule's slice of one. Measured before these were completed: composing the rules over trees that each answered one of them took the stage from 76 ACCEPT / 5 REJECT / 24 NOT CHECKED to 10 / 1 / 94, because a rule that could not look reported rc 2 over a rule that had proved a contradiction. The verdict precedence was fixed in the program; these trees were completed so the fixtures state a whole run either way. Every file added is verbatim from the SAME published cell the tree already named — no tree changed cell.",
+  "_omitted": "`accept_lpddr5` drops one file the published cell carries, `input/docs/lpddr5_spec.pdf` (541 KB). Only text suffixes are read as design input, so that PDF is not an input this review can read on the live cell either — omitting it ships 541 KB no test opens and changes the file set the review sees by nothing."
+}

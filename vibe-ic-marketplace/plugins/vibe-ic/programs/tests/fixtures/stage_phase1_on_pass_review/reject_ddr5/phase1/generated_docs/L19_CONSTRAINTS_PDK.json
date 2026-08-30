@@ -1,0 +1,67 @@
+{
+  "doc_id": "L19",
+  "doc_name": "L19_CONSTRAINTS_PDK",
+  "applicability": "APPLICABLE",
+  "ic_class": "pure_analog",
+  "fields": {
+    "pdk_target": null,
+    "die_area_budget_um": null,
+    "power_budget_uw": null,
+    "sdc_constraints_path": null,
+    "floorplan_hints": [],
+    "constraints_present": true,
+    "notes": "DDR5 (JESD79-5) is a JEDEC DRAM interface standard: it fixes the two-sub-channel DIMM architecture, the 1.1 V VDD/VDDQ (1.8 V VPP) rails, the DFE/Duty-Cycle/VrefDQ/VrefCA signal-integrity model, the 2-cycle CA protocol, BL16, 32 banks / 8 bank groups with same-bank refresh, on-die ECC, and the mode-register set. It does NOT impose PDK-specific SDC / floorplan constraints; the SerDes-class DQ electrical characterization, the module PCB / RCD / PMIC design, and the controller PHY are board / implementation concerns. The interoperability-critical constraints are the timing parameters, training, DFE/Vref, and the refresh schedule.",
+    "ic_name": "DDR5 SDRAM (JEDEC JESD79-5)",
+    "host_interposer_constraints_summary": [
+      "2.5D silicon interposer must route 1024 data links per stack (plus command/address, clock, strobe, ECC, control) over short, matched paths.",
+      "Microbump pitch and TSV routing budget set by the base/logic die microbump map.",
+      "Per-channel link budget for 6.4 Gb/s/pin (skew, crosstalk, return-loss) since channels are independent.",
+      "Power delivery for VDDC / VDDQ / VDDQL / VPP at high sustained bandwidth.",
+      "Thermal constraint: stacked dies (~30 µm thick) under sustained high bandwidth require a thermal solution; refresh adapts to TEMP."
+    ],
+    "stack_internal_constraints": [
+      "8-Hi / 12-Hi die stacking with TSV alignment across dies.",
+      "Die thickness ~30 µm to allow 12-Hi stacks within package-height limits.",
+      "KGSD screening required before integration.",
+      "Hard-repair fuse budget and runtime soft-repair provisioning for RAS."
+    ],
+    "fabrication_cost_note": "Silicon interposer fabrication is significantly more expensive than printed-circuit-board manufacture, adding cost to the final product; this is the trade for very high bandwidth in a small form factor.",
+    "electrical_channel_constraints": {
+      "signaling": "parallel source-synchronous double-data-rate (single-ended POD DQ; differential CK_t/CK_c and DQS_t/DQS_c)",
+      "data_rates_MTps": [
+        3200,
+        3600,
+        4000,
+        4400,
+        4800,
+        5200,
+        5600,
+        6000,
+        6400,
+        7200,
+        8000,
+        8400
+      ],
+      "max_data_rate_MTps": 8400,
+      "supply_voltages": {
+        "VDD": "1.1 V",
+        "VDDQ": "1.1 V",
+        "VPP": "1.8 V"
+      },
+      "equalization": "DFE on DQ receivers; Duty-Cycle Adjuster",
+      "reference": "internal VrefDQ / VrefCA (trained)",
+      "sub_channels_per_dimm": 2,
+      "sub_channel_data_bits": 32,
+      "burst_length": 16,
+      "ca_command_cycles": 2
+    }
+  },
+  "extraction_hints": [
+    "Look for floorplan, area, power, timing constraints.",
+    "Capture PDK target if stated."
+  ],
+  "extraction_status": "NOT_YET_EXTRACTED",
+  "emitted_by": "phase1_post_process.emit_l_doc_skeleton v0.1.51",
+  "extraction_evidence": {},
+  "ic_name": "DDR5 SDRAM (JEDEC JESD79-5)"
+}

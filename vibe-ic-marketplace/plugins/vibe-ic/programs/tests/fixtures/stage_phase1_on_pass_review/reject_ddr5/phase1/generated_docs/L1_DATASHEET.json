@@ -1,0 +1,882 @@
+{
+  "schema_version": 2,
+  "doc_class": "datasheet",
+  "ic_name": "DDR5 SDRAM (JEDEC JESD79-5)",
+  "no_ic_name_in_input": false,
+  "package_info": null,
+  "no_package_in_input": true,
+  "pin_table": [],
+  "no_pin_table_in_input": true,
+  "electrical_specs": [
+    {
+      "name": "VDD",
+      "parameter": "VDD",
+      "min_typ_max": {
+        "typ": 1.1
+      },
+      "unit": "V",
+      "conditions": "VDD=nominal, T=25C unless otherwise stated",
+      "evidence": "input/docs/ddr5_spec.txt"
+    },
+    {
+      "name": "VDDQ",
+      "parameter": "VDDQ",
+      "min_typ_max": {
+        "typ": 1.1
+      },
+      "value": "1.1",
+      "unit": "V",
+      "condition": null,
+      "conditions": "VDD=nominal, T=25C unless otherwise stated",
+      "evidence": "input/docs/ddr5_spec.txt",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "name": "VPP",
+      "parameter": "VPP",
+      "min_typ_max": {
+        "typ": 1.8
+      },
+      "value": "1.8",
+      "unit": "V",
+      "condition": null,
+      "conditions": "VDD=nominal, T=25C unless otherwise stated",
+      "evidence": "input/docs/ddr5_spec.txt",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    }
+  ],
+  "no_electrical_specs_in_input": false,
+  "ordering_info": {
+    "part_number": "ddr5",
+    "vendor": null,
+    "no_vendor_in_input": true
+  },
+  "tapeout_metadata": null,
+  "no_tapeout_metadata_in_input": true,
+  "extraction_evidence": {
+    "input/docs/ddr5_spec.txt": [
+      {
+        "literal": "VDD=1.1V",
+        "label": "electrical spec"
+      },
+      {
+        "literal": "- VDDQ = 1.1 V (DQ IO)       (DDR4: 1.2 V)",
+        "label": "electrical spec (bullet KV)"
+      },
+      {
+        "literal": "- VPP  = 1.8 V (wordline pump, same as DDR4)",
+        "label": "electrical spec (bullet KV)"
+      },
+      {
+        "literal": "1600 MHz",
+        "label": "frequency"
+      },
+      {
+        "literal": "1800 MHz",
+        "label": "frequency"
+      },
+      {
+        "literal": "2000 MHz",
+        "label": "frequency"
+      }
+    ]
+  },
+  "class_path": "pure_analog",
+  "no_class_path_in_input": false,
+  "auto_discovered_identifiers": [
+    {
+      "name": "DDR5",
+      "source_doc": "ddr5_spec.txt",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "SDRAM",
+      "source_doc": "ddr5_spec.txt",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "JEDEC",
+      "source_doc": "ddr5_spec.txt",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "JESD79",
+      "source_doc": "ddr5_spec.txt",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "OVERVIEW",
+      "source_doc": "ddr5_spec.txt",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "DRAM",
+      "source_doc": "ddr5_spec.txt",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "DDR4",
+      "source_doc": "ddr5_spec.txt",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "VDDQ",
+      "source_doc": "ddr5_spec.txt",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "DIMM",
+      "source_doc": "ddr5_spec.txt",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "TWO",
+      "source_doc": "ddr5_spec.txt",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "INDEPENDENT",
+      "source_doc": "ddr5_spec.txt",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "SUB",
+      "source_doc": "ddr5_spec.txt",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "CHANNELS",
+      "source_doc": "ddr5_spec.txt",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "ECC",
+      "source_doc": "ddr5_spec.txt",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "BL16",
+      "source_doc": "ddr5_spec.txt",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "BL32",
+      "source_doc": "ddr5_spec.txt",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "DFE",
+      "source_doc": "ddr5_spec.txt",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "ODECC",
+      "source_doc": "ddr5_spec.txt",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "VPP",
+      "source_doc": "ddr5_spec.txt",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "PMIC",
+      "source_doc": "ddr5_spec.txt",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "SPD",
+      "source_doc": "ddr5_spec.txt",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "RCD",
+      "source_doc": "ddr5_spec.txt",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "MR0",
+      "source_doc": "ddr5_spec.txt",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "DCA",
+      "source_doc": "ddr5_spec.txt",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "CHANNEL",
+      "source_doc": "ddr5_spec.txt",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "ARCHITECTURE",
+      "source_doc": "ddr5_spec.txt",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "UDIMM",
+      "source_doc": "ddr5_spec.txt",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "RDIMM",
+      "source_doc": "ddr5_spec.txt",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "OWN",
+      "source_doc": "ddr5_spec.txt",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "DECISION",
+      "source_doc": "ddr5_spec.txt",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "FEEDBACK",
+      "source_doc": "ddr5_spec.txt",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "EQUALIZATION",
+      "source_doc": "ddr5_spec.txt",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "ISI",
+      "source_doc": "ddr5_spec.txt",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "DDR3",
+      "source_doc": "ddr5_spec.txt",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "DIE",
+      "source_doc": "ddr5_spec.txt",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "ECS",
+      "source_doc": "ddr5_spec.txt",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "BANKS",
+      "source_doc": "ddr5_spec.txt",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "BANK",
+      "source_doc": "ddr5_spec.txt",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "GROUPS",
+      "source_doc": "ddr5_spec.txt",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "SAME",
+      "source_doc": "ddr5_spec.txt",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "REFRESH",
+      "source_doc": "ddr5_spec.txt",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "BURST",
+      "source_doc": "ddr5_spec.txt",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "LENGTH",
+      "source_doc": "ddr5_spec.txt",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "CHOP",
+      "source_doc": "ddr5_spec.txt",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "BL8",
+      "source_doc": "ddr5_spec.txt",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "SPEED",
+      "source_doc": "ddr5_spec.txt",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "BINS",
+      "source_doc": "ddr5_spec.txt",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "DATA",
+      "source_doc": "ddr5_spec.txt",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "RATES",
+      "source_doc": "ddr5_spec.txt",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "SUPPLY",
+      "source_doc": "ddr5_spec.txt",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "VOLTAGES",
+      "source_doc": "ddr5_spec.txt",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "INTERNAL",
+      "source_doc": "ddr5_spec.txt",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "VREF",
+      "source_doc": "ddr5_spec.txt",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "TRAINING",
+      "source_doc": "ddr5_spec.txt",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "INSIDE",
+      "source_doc": "ddr5_spec.txt",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "DQS",
+      "source_doc": "ddr5_spec.txt",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "MPC",
+      "source_doc": "ddr5_spec.txt",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "COMMAND",
+      "source_doc": "ddr5_spec.txt",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "ADDRESS",
+      "source_doc": "ddr5_spec.txt",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "PROTOCOL",
+      "source_doc": "ddr5_spec.txt",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "NEW",
+      "source_doc": "ddr5_spec.txt",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "CYCLE",
+      "source_doc": "ddr5_spec.txt",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "ACTIVATE",
+      "source_doc": "ddr5_spec.txt",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "ACT",
+      "source_doc": "ddr5_spec.txt",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "READ",
+      "source_doc": "ddr5_spec.txt",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "WRITE",
+      "source_doc": "ddr5_spec.txt",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "PRECHARGE",
+      "source_doc": "ddr5_spec.txt",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "PRE",
+      "source_doc": "ddr5_spec.txt",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "REF",
+      "source_doc": "ddr5_spec.txt",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "SELF",
+      "source_doc": "ddr5_spec.txt",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "ENTRY",
+      "source_doc": "ddr5_spec.txt",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "EXIT",
+      "source_doc": "ddr5_spec.txt",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "MRW",
+      "source_doc": "ddr5_spec.txt",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "MRR",
+      "source_doc": "ddr5_spec.txt",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "RAS",
+      "source_doc": "ddr5_spec.txt",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "CAS",
+      "source_doc": "ddr5_spec.txt",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "DDR",
+      "source_doc": "ddr5_spec.txt",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "LEVEL",
+      "source_doc": "ddr5_spec.txt",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "HUB",
+      "source_doc": "ddr5_spec.txt",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "EEPROM",
+      "source_doc": "ddr5_spec.txt",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "I2C",
+      "source_doc": "ddr5_spec.txt",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "I3C",
+      "source_doc": "ddr5_spec.txt",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "REGISTERS",
+      "source_doc": "ddr5_spec.txt",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "MR7",
+      "source_doc": "ddr5_spec.txt",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "MR2",
+      "source_doc": "ddr5_spec.txt",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "RFM",
+      "source_doc": "ddr5_spec.txt",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "PIN",
+      "source_doc": "ddr5_spec.txt",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "SIGNAL",
+      "source_doc": "ddr5_spec.txt",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "LIST",
+      "source_doc": "ddr5_spec.txt",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "CKE",
+      "source_doc": "ddr5_spec.txt",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "CRC",
+      "source_doc": "ddr5_spec.txt",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "DISTINCTION",
+      "source_doc": "ddr5_spec.txt",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "SIBLING",
+      "source_doc": "ddr5_spec.txt",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "MEMORY",
+      "source_doc": "ddr5_spec.txt",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "STANDARDS",
+      "source_doc": "ddr5_spec.txt",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "DLL",
+      "source_doc": "ddr5_spec.txt",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "LPDDR5",
+      "source_doc": "ddr5_spec.txt",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "JESD209",
+      "source_doc": "ddr5_spec.txt",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "WCK",
+      "source_doc": "ddr5_spec.txt",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "HBM3",
+      "source_doc": "ddr5_spec.txt",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "JESD238",
+      "source_doc": "ddr5_spec.txt",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "TSV",
+      "source_doc": "ddr5_spec.txt",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    }
+  ],
+  "document_title": "DDR5 SDRAM Standard",
+  "document_number": "JESD79-5",
+  "version": "JEDEC Standard JESD79-5 (DDR5 SDRAM)",
+  "revised_date": "JESD79-5 (DDR5 SDRAM)",
+  "manufacturer": "JEDEC Solid State Technology Association",
+  "publisher": "JEDEC Solid State Technology Association",
+  "copyright": "© JEDEC Solid State Technology Association",
+  "abstract": "DDR5 SDRAM (Double Data Rate 5 Synchronous Dynamic Random Access Memory) is the fifth-generation mainstream double-data-rate DRAM defined by JEDEC Standard JESD79-5. DDR5 is the successor to DDR4 (JESD79-4) and targets higher bandwidth, capacity, and channel efficiency at a lower 1.1 V VDD/VDDQ supply. Its single most defining architectural change is the split of each DIMM channel into TWO INDEPENDENT 32-bit (40-bit with ECC) sub-channels, each with its own command/address (CA) bus, chip-select, and clock — versus DDR4's single 64/72-bit bus. DDR5 adds Decision Feedback Equalization (DFE) on the DQ receivers, On-Die ECC (ODECC) in every device, 32 banks in 8 bank groups with same-bank refresh, a native burst length of 16 (BL16) plus BL32 burst-chop, internal VrefDQ/VrefCA with read/write/CA training, a 2-cycle CA command protocol, an expanded mode-register space, and a DIMM-level Power Management IC (PMIC) + SPD hub + Registering Clock Driver (RCD) module architecture. Speed bins span DDR5-3200 through DDR5-8400+ MT/s.",
+  "keywords": [
+    "DDR5",
+    "JESD79-5",
+    "SDRAM",
+    "double data rate",
+    "sub-channel",
+    "two sub-channels",
+    "32-bit sub-channel",
+    "Decision Feedback Equalization",
+    "DFE",
+    "on-die ECC",
+    "ODECC",
+    "bank group",
+    "same-bank refresh",
+    "REFsb",
+    "BL16",
+    "burst length 16",
+    "burst chop",
+    "DDR5-3200",
+    "DDR5-8400",
+    "MT/s",
+    "1.1 V",
+    "VDD",
+    "VDDQ",
+    "VPP",
+    "VrefDQ",
+    "VrefCA",
+    "CA training",
+    "write training",
+    "read training",
+    "2-cycle CA",
+    "command/address",
+    "mode register",
+    "MRW",
+    "MRR",
+    "DIMM PMIC",
+    "Power Management IC",
+    "SPD hub",
+    "RCD",
+    "Registering Clock Driver",
+    "RDIMM",
+    "UDIMM",
+    "LRDIMM",
+    "DQS",
+    "CK_t",
+    "CK_c",
+    "ACTIVATE",
+    "PRECHARGE",
+    "REFRESH",
+    "ZQ",
+    "ALERT_n"
+  ],
+  "external_pins": [
+    "CK_t / CK_c: differential clock (command/address timing reference) per sub-channel",
+    "CS_n: chip select per sub-channel",
+    "CA[13:0]: command/address bus (2-cycle commands) per sub-channel",
+    "DQ[31:0]: data bus, 32 bits per sub-channel (40 with ECC)",
+    "DQS_t / DQS_c: differential data strobe (source-synchronous, per byte)",
+    "DM_n / DBI_n: data mask / data bus inversion (per byte lane)",
+    "CKE: clock enable / power-down control",
+    "RESET_n: asynchronous reset",
+    "ALERT_n: CRC / command-address parity error alert",
+    "ZQ: external calibration reference resistor",
+    "VDD / VDDQ: 1.1 V supplies; VPP: 1.8 V wordline-boost supply",
+    "Vref: internal (VrefDQ / VrefCA generated on-die)"
+  ],
+  "external_pin_count_x16_single_channel_summary": "Per x16 channel: CK pair, WCK pair, RDQS pair, CA[6:0], CS, DQ[15:0], DMI per byte group, RESET_n, ZQ, plus VDD1 / VDD2H / VDD2L / VDDQ / VSS / VSSQ rails (ballout per JESD209-5).",
+  "key_features": [
+    "Fifth-generation mainstream DDR SDRAM; JEDEC JESD79-5.",
+    "Two INDEPENDENT 32-bit (40-bit with ECC) sub-channels per DIMM, each with its own CA bus, CS_n, and CK_t/CK_c (vs DDR4's single 64/72-bit bus).",
+    "Decision Feedback Equalization (DFE) on the DQ receivers to cancel post-cursor ISI at high data rates.",
+    "On-Die ECC (ODECC) standard in every device; Error Check and Scrub (ECS).",
+    "32 banks in 8 bank groups (x8 device; 16 banks / 4 groups for x16); all-bank refresh (REFab) plus same-bank refresh (REFsb).",
+    "Native burst length BL16 (64-byte access per sub-channel) plus BL32 burst-chop.",
+    "Speed bins DDR5-3200 through DDR5-8400+ MT/s (double-data-rate, two beats per CK period).",
+    "VDD = VDDQ = 1.1 V, VPP = 1.8 V (lower than DDR4's 1.2 V VDD/VDDQ).",
+    "Internal VrefDQ / VrefCA generation with CA / read / write training.",
+    "New 2-cycle CA command protocol (CA[13:0]); greatly expanded mode-register space (MR0..MRxx).",
+    "DIMM-level Power Management IC (PMIC, 12 V -> 1.1 V on module), SPD hub, and Registering Clock Driver (RCD) for RDIMMs; Duty-Cycle Adjuster (DCA)."
+  ],
+  "topology_summary": "Parallel, source-synchronous, double-data-rate DRAM. Each DIMM is split into two independent 32-bit (40-bit ECC) sub-channels; each sub-channel drives its DRAMs over CA[13:0] + CS_n (2-cycle commands) with DQ[31:0] captured on DQS_t/DQS_c. RDIMMs add a Registering Clock Driver (RCD) and an SPD hub; an on-module PMIC produces the 1.1 V rails from 12 V.",
+  "density_organization_summary": "x4 / x8 devices: 32 banks in 8 bank groups (4 banks per group). x16 device: 16 banks in 4 bank groups. Each access at BL16 moves a 64-byte cache line per 32-bit sub-channel.",
+  "revision_history": [
+    {
+      "version": "DDR3 (JESD79-3)",
+      "date": "2007",
+      "description": "1.5 V, DLL, single 64/72-bit bus, BL8, no bank groups."
+    },
+    {
+      "version": "DDR4 (JESD79-4)",
+      "date": "2012",
+      "description": "1.2 V, bank groups, single 64/72-bit bus, BL8, gear-down; no DFE / sub-channels / on-die-ECC / DIMM-PMIC."
+    },
+    {
+      "version": "DDR5 (JESD79-5)",
+      "date": "2020",
+      "description": "1.1 V, two independent 32-bit sub-channels, BL16, DFE, on-die ECC, same-bank refresh, 32 banks / 8 groups, DIMM PMIC / SPD-hub / RCD, internal VrefDQ/VrefCA, 2-cycle CA, expanded mode registers."
+    }
+  ],
+  "use_cases": [
+    "Mainstream desktop / laptop / workstation main memory (UDIMM / SODIMM)",
+    "Server and data-center main memory (RDIMM / LRDIMM with RCD / DB)",
+    "High-bandwidth CPU and accelerator memory subsystems",
+    "Capacity-scaled memory with on-die ECC for reliability"
+  ],
+  "overview": "DDR5 SDRAM (JEDEC JESD79-5) is the fifth-generation mainstream double-data-rate DRAM. Relative to DDR4 it splits each DIMM channel into two independent 32-bit (40-bit ECC) sub-channels, lowers VDD/VDDQ to 1.1 V, raises the per-pin data rate to DDR5-8400+ MT/s, doubles the native burst length to BL16, adds Decision Feedback Equalization on the DQ receivers, makes On-Die ECC standard, organizes 32 banks into 8 bank groups with same-bank refresh, moves VrefDQ/VrefCA on-die with CA/read/write training, uses a 2-cycle CA command protocol over CA[13:0], greatly expands the mode-register space, and moves power management onto the DIMM with a PMIC, an SPD hub, and (for RDIMMs) a Registering Clock Driver. It remains a parallel, source-synchronous DRAM clocked off CK_t/CK_c with DQS_t/DQS_c data strobes — not a serial link, not a low-power WCK part (LPDDR5), and not a 3D-stacked TSV part (HBM3).",
+  "external_pin_count": "1024 data pins per stack (16 channels x 64-bit) plus per-channel command/address, clock, strobe, ECC, control and supply microbumps on the interposer-facing microbump array (the JEDEC ballout is a microbump map, not a discrete-package pinout).",
+  "density_organization_table": [
+    {
+      "stack_height": "8-Hi",
+      "dies": 8,
+      "per_die_density_Gb": 16,
+      "stack_capacity_GB": 16,
+      "channels": 16,
+      "bits_per_channel": 64,
+      "total_interface_bits": 1024,
+      "pseudo_channels": 32,
+      "bits_per_pseudo_channel": 32
+    },
+    {
+      "stack_height": "12-Hi",
+      "dies": 12,
+      "per_die_density_Gb": 16,
+      "stack_capacity_GB": 24,
+      "channels": 16,
+      "bits_per_channel": 64,
+      "total_interface_bits": 1024,
+      "pseudo_channels": 32,
+      "bits_per_pseudo_channel": 32
+    }
+  ],
+  "bandwidth_summary": "Per-pin data rate from DDR5-3200 (3200 MT/s) to DDR5-8400+ MT/s, at a 3200 MHz clock for DDR5-6400 (two beats per CK period). The two independent sub-channels double the number of concurrent accesses per DIMM relative to DDR4.",
+  "supported_data_rates_MTps": [
+    3200,
+    3600,
+    4000,
+    4400,
+    4800,
+    5200,
+    5600,
+    6000,
+    6400,
+    7200,
+    8000,
+    8400
+  ],
+  "max_data_rate_MTps": 8400,
+  "device_organizations": [
+    "x4",
+    "x8",
+    "x16"
+  ],
+  "supply_voltages": {
+    "VDD": "1.1 V",
+    "VDDQ": "1.1 V",
+    "VPP": "1.8 V"
+  },
+  "modes_of_operation": [
+    {
+      "name": "Two independent sub-channels",
+      "role": "channel concurrency",
+      "note": "Each DDR5 DIMM presents two independent 32-bit (40-bit ECC) sub-channels, each with its own CA bus, CS_n, and clock; the two operate independently, doubling concurrent accesses vs DDR4's single 64/72-bit bus."
+    },
+    {
+      "name": "BL16 / BL32 burst",
+      "role": "data transfer",
+      "note": "Native burst length 16 (16 beats x 32 bits = 64-byte cache line per sub-channel), plus BL32 burst-chop and on-the-fly burst control."
+    },
+    {
+      "name": "On-die ECC + Error Check and Scrub (ECS)",
+      "role": "reliability",
+      "note": "Single-error-correcting on-die ECC in every device, plus an internal scrub (ECS) mode."
+    }
+  ]
+}
