@@ -2105,6 +2105,68 @@ def _rtl_gen_waive(project: Path) -> dict | None:
     return None
 
 
+def _declared_route_ai_backup(routing: dict) -> dict:
+    """Validate the route-level AI-backup declaration, without defaulting it.
+
+    An absent declaration is different from a malformed declaration for
+    diagnostics, but neither authorises AI work.  In particular, strings are
+    not accepted as a convenient one-item list: silently normalising a broken
+    route would turn a Program failure into an undeclared AI task.
+    """
+    plugin_entry = routing.get("plugin_entry")
+    if plugin_entry is None:
+        return {"status": "UNDECLARED", "skills": []}
+    if not isinstance(plugin_entry, dict):
+        return {"status": "INVALID", "skills": [],
+                "reason": "plugin_entry must be an object"}
+    if "ai_backup" not in plugin_entry:
+        return {"status": "UNDECLARED", "skills": []}
+    declared = plugin_entry.get("ai_backup")
+    if not isinstance(declared, list) or not declared:
+        return {"status": "INVALID", "skills": [],
+                "reason": "plugin_entry.ai_backup must be a non-empty list"}
+    if any(not isinstance(skill, str) or not skill.strip()
+           for skill in declared):
+        return {"status": "INVALID", "skills": [],
+                "reason": "every declared AI-backup skill must be non-empty text"}
+    skills = [skill.strip() for skill in declared]
+    if len(set(skills)) != len(skills):
+        return {"status": "INVALID", "skills": [],
+                "reason": "declared AI-backup skills must be unique"}
+    return {"status": "DECLARED", "skills": skills}
+
+
+def _make_ai_backup_task(problem_id: str, project: Path, skills: list[str],
+                         source: str, detail: str, bench: str,
+                         dataset: Path, run_p: Path) -> dict:
+    """Build one prompt-bound handoff into the runner-owned RTL directory."""
+    project = Path(project).resolve()
+    dataset = Path(dataset).resolve()
+    run_p = Path(run_p).resolve()
+    prompt = project / "input" / "phase1_prompt.md"
+    prompt_text = prompt.read_text(errors="replace")
+    return {
+        "schema": "vibeic.benchmark.ai_backup_task.v1",
+        "id": str(problem_id),
+        "project": str(project),
+        # `skill` keeps the existing single-skill consumer compatible.  The
+        # route declaration is ordered, so its first member is the primary;
+        # `declared_skills` keeps every authorised alternative visible.
+        "skill": skills[0],
+        "declared_skills": list(skills),
+        "handoff_source": source,
+        "prompt_sha256": _sha256_text(prompt_text),
+        "write_rtl_to": str(project / "phase2" / "stage1" / "rtl"),
+        "read_docs_from": str(project / "phase1" / "generated_docs"),
+        "read_prompt_from": str(prompt),
+        "runner_said": str(detail or "")[:600],
+        "regate_entry_step": "2",
+        "review_required_after_regating": True,
+        "resume_with": (f"benchmark_dispatch.py {bench} --resume "
+                        f"--dataset {dataset} --run {run_p}"),
+    }
+
+
 def cmd_solve(bench: str, dataset: str, run: str, limit: int = 0) -> int:
     """Solve every problem through the GENERAL flow.
 
@@ -2200,6 +2262,20 @@ def cmd_solve(bench: str, dataset: str, run: str, limit: int = 0) -> int:
         rc = subprocess.run(argv, capture_output=True, text=True).returncode
         got = bio.collect(fmt, pid, proj)
         waive = _rtl_gen_waive(proj)
+        route_backup = _declared_route_ai_backup(verdict)
+        backup_source = None
+        backup_skills: list[str] = []
+        backup_detail = ""
+        if not got.get("ok"):
+            if waive:
+                backup_source = "rtl_gen_waive"
+                backup_skills = [str(waive.get("fallback_skill"))]
+                backup_detail = str(waive.get("detail") or "")
+            elif route_backup["status"] == "DECLARED":
+                backup_source = "route_declaration"
+                backup_skills = list(route_backup["skills"])
+                backup_detail = str(got.get("reason") or "")
+        awaiting_backup = bool(backup_source)
         phases = fpa.attribute(
             proj, routing=verdict, entry=entry, evidence=ev,
             exit_step=exit_step, rtl_present=rtl_present,
@@ -2214,16 +2290,19 @@ def cmd_solve(bench: str, dataset: str, run: str, limit: int = 0) -> int:
                   "routing_verdict": verdict,
                   "phases": phases,
                   "candidate_origin": ("PROGRAM" if got.get("ok") else
-                                       ("AI_BACKUP_PENDING" if waive else
+                                       ("AI_BACKUP_PENDING" if awaiting_backup else
                                         "NONE")),
+                  "route_ai_backup": route_backup,
                   "program_first_ai_review": {"status": "PENDING"},
                   "ai_repair_required": False,
                   "awaiting_ai_review": bool(got.get("ok")),
-                  "awaiting_ai_backup": bool(waive and not got.get("ok")),
+                  "awaiting_ai_backup": awaiting_backup,
                   "awaiting_ai": bool(got.get("ok")
-                                      or (waive and not got.get("ok")))}
+                                      or awaiting_backup)}
         state = ("candidate->AI-review" if got.get("ok")
-                 else ("WAIVE->AI" if waive else "no-rtl"))
+                 else ("WAIVE->AI" if backup_source == "rtl_gen_waive"
+                       else ("route-declared->AI" if awaiting_backup
+                             else "no-rtl")))
         print(f"  {pid:44s} {nature:22s} entry={str(entry):3s} "
               f"exit={str(exit_step):4s} rc={rc} {state}")
         if got.get("ok"):
@@ -2236,19 +2315,10 @@ def cmd_solve(bench: str, dataset: str, run: str, limit: int = 0) -> int:
             p1 = (phases.get("phase1_routing") or {})
             p1["needs_ai_parse_consumed_by"] = (
                 f"blind Program First AI review at {task['review_path']}")
-        elif waive:
-            backlog.append({
-                "schema": "vibeic.benchmark.ai_backup_task.v1",
-                "id": pid, "project": str(proj),
-                "skill": waive.get("fallback_skill"),
-                "write_rtl_to": str(proj / "phase2" / "stage1" / "rtl"),
-                "read_docs_from": str(proj / "phase1" / "generated_docs"),
-                "read_prompt_from": str(proj / "input" / "phase1_prompt.md"),
-                "runner_said": waive.get("detail", "")[:600],
-                "review_required_after_regating": True,
-                "resume_with": (f"benchmark_dispatch.py {bench} --resume "
-                                f"--dataset {ds} --run {run_p}"),
-            })
+        elif awaiting_backup:
+            backlog.append(_make_ai_backup_task(
+                pid, proj, backup_skills, str(backup_source), backup_detail,
+                bench, ds, run_p))
         results.append(result)
 
     if backlog:
@@ -2261,7 +2331,7 @@ def cmd_solve(bench: str, dataset: str, run: str, limit: int = 0) -> int:
         # AI-backup, not a bypass of it: nothing here writes a scoring artefact.
         bl = run_p / _BACKUP_WORKLIST
         _write_jsonl(bl, backlog)
-        print(f"\n{len(backlog)} problem(s) WAIVED to an AI skill -> {bl}")
+        print(f"\n{len(backlog)} problem(s) handed to a declared AI skill -> {bl}")
         print(f"  author RTL into each project's phase2/stage1/rtl/, then:")
         print(f"    python3 {Path(__file__).name} {bench} --resume "
               f"--dataset {ds} --run {run_p}")
@@ -2322,12 +2392,12 @@ def cmd_solve(bench: str, dataset: str, run: str, limit: int = 0) -> int:
 def cmd_resume(bench: str, dataset: str, run: str) -> int:
     """Advance Program First / AI Review work and publish only acceptances.
 
-    PROGRAM emits first. A runner WAIVE is the sole case in which AI backup
-    authors the initial candidate. Every gated candidate then receives a blind
-    AI route + semantic review. AI may reject only with a prompt-derived test
-    that the frozen candidate actually fails; a repair must pass that same
-    immutable test plus PROGRAM gates and a fresh review. A changed prompt is
-    never legitimised by refresh.
+    PROGRAM emits first. A runner WAIVE or a valid route-level declaration may
+    authorise AI backup for a missing initial candidate. Every gated candidate
+    then receives a blind AI route + semantic review. AI may reject only with a
+    prompt-derived test that the frozen candidate actually fails; a repair must
+    pass that same immutable test plus PROGRAM gates and a fresh review. A
+    changed prompt is never legitimised by refresh.
     """
     import subprocess                                    # noqa: PLC0415
     sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -2414,8 +2484,9 @@ def cmd_resume(bench: str, dataset: str, run: str) -> int:
         for row in prior_enhancements
     }
 
-    # AI backup authors only after a deterministic WAIVE. It still has to pass
-    # the exact same runner and then enters the ordinary blind AI review.
+    # AI backup is authorised only by its recorded WAIVE/route declaration. It
+    # is bound to the staged prompt, still passes the same runner, and then
+    # enters the ordinary blind AI review.
     for item in backup:
         pid = str(item.get("id"))
         result = result_by_id.get(pid)
@@ -2423,6 +2494,36 @@ def cmd_resume(bench: str, dataset: str, run: str) -> int:
         if result is None:
             repairs.append({"id": pid, "status": "INVALID_HANDOFF",
                             "reasons": ["backup id is absent from solve_report"]})
+            continue
+        prompt = proj / "input" / "phase1_prompt.md"
+        expected_prompt_hash = item.get("prompt_sha256")
+        try:
+            current_prompt_hash = _sha256_text(
+                prompt.read_text(errors="replace"))
+        except OSError as exc:
+            current_prompt_hash = None
+            prompt_reason = f"staged prompt is unreadable: {exc}"
+        else:
+            prompt_reason = "staged prompt differs from the handoff-bound hash"
+        if (not isinstance(expected_prompt_hash, str)
+                or len(expected_prompt_hash) != 64
+                or current_prompt_hash != expected_prompt_hash):
+            status = ("PROMPT_CHANGED" if expected_prompt_hash
+                      and current_prompt_hash is not None
+                      else "INVALID_BACKUP_HANDOFF")
+            repairs.append({
+                "schema": "vibeic.benchmark.ai_repair_task.v2",
+                "id": pid, "project": str(proj), "status": status,
+                "reasons": [prompt_reason],
+                "required_next": (
+                    "restore the exact staged prompt and start a fresh "
+                    "--solve handoff; do not re-gate this backup"),
+            })
+            result.update({"accepted": False, "candidate_origin": "NONE",
+                           "awaiting_ai_backup": False,
+                           "awaiting_ai_review": False,
+                           "awaiting_ai": False})
+            print(f"  {pid:44s} AI backup blocked: {status}")
             continue
         rtl_dir = proj / "phase2" / "stage1" / "rtl"
         authored = rtl_dir.is_dir() and (list(rtl_dir.glob("*.sv"))
