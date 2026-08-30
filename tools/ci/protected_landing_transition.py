@@ -621,12 +621,119 @@ def _observe_manifest(repo: Path, commit: str, algorithm: str,
     return record, raw
 
 
-def _match_state(files: list[dict[str, Any]], manifest: dict[str, Any]) -> str:
-    if files == manifest["current"]["files"]:
-        return manifest["current"]["id"]
-    if files == manifest["next"]["files"]:
-        return manifest["next"]["id"]
-    raise Refusal("protected tuple matches neither authorised atomic state")
+def moved_paths(manifest: Mapping[str, Any]) -> list[str]:
+    """The paths the two recorded states disagree on: the authorised move."""
+    current = {row["path"]: row for row in manifest["current"]["files"]}
+    return sorted(row["path"] for row in manifest["next"]["files"]
+                  if current.get(row["path"]) != row)
+
+
+def _rows_by_path(files: Sequence[Mapping[str, Any]], what: str
+                  ) -> dict[str, Mapping[str, Any]]:
+    out: dict[str, Mapping[str, Any]] = {}
+    for row in files:
+        path = row["path"]
+        if path in out:
+            raise Refusal(f"{what} names {path} twice")
+        out[path] = row
+    return out
+
+
+def classify_move(base_files: Sequence[Mapping[str, Any]],
+                  candidate_files: Sequence[Mapping[str, Any]],
+                  manifest: Mapping[str, Any]) -> tuple[str, str, str]:
+    """Classify candidate-against-BASE as STEADY, ACTIVATE, or a named refusal.
+
+    THE BASE IS OBSERVED, NEVER MATCHED.  This replaces `_match_state`, which
+    asked whether the BASE's own protected tuple was byte-identical to one of
+    two tuples recorded in the manifest, and refused the landing when it was
+    not.  That question has a stale answer by construction: the recorded
+    tuples photograph every protected path at one commit, so ANY later landing
+    that moves ANY protected path -- including one no transition ever named --
+    falsifies both of them, and every subsequent landing is refused for a
+    change that is nobody's fault and that no re-render prevents recurring.
+
+    MEASURED on `origin/main` while this was the rule: 60 of the last 60
+    commits matched NEITHER of their own manifest's states, so `build_receipt`
+    refused at its FIRST comparison for every candidate, and
+    `test_phase_b_activated_parity.py` was red on trunk with three landings'
+    worth of drift (`tools/gatekeeper-land.sh` at v1.13.8,
+    `tools/ci/repo_hygiene_gates.sh` at v1.13.16,
+    `ci_harness_timeout_ceiling_check.py`), none of them a defect and all of
+    them staying.
+
+    So the base's tuple is taken as GIVEN -- it is what this repository is --
+    and the question becomes the one the register is actually for: WHAT DOES
+    THE CANDIDATE MOVE, AND DID THE BASE AUTHORISE THAT MOVE.  Nothing is
+    relaxed by this: the candidate is now compared against the base's OBSERVED
+    bytes, which is strictly more accurate than comparing it against a
+    photograph of some earlier commit, and every drifted path is NAMED.
+
+      STEADY    the candidate moves no protected path at all.
+      ACTIVATE  the candidate moves EXACTLY the paths the manifest's two
+                states disagree on, to EXACTLY the bytes `next` records, and
+                the base still stands at `current` on all of them.
+      refusal   anything else, naming the paths -- a path the manifest
+                authorises no move of, a half-applied activation, bytes other
+                than the authorised ones, or a re-move of an already spent
+                transition.
+
+    `base_state_id` is still reported, because a receipt reader chooses the
+    runtime by it: the base stands at `next` once the authorised move has been
+    activated there, and at `current` until then.
+    """
+    names = [row["path"] for row in manifest["paths"]]
+    base = _rows_by_path(base_files, "the base tuple")
+    candidate = _rows_by_path(candidate_files, "the candidate tuple")
+    current = _rows_by_path(manifest["current"]["files"], "manifest.current")
+    nxt = _rows_by_path(manifest["next"]["files"], "manifest.next")
+    for what, observed in (("base", base), ("candidate", candidate)):
+        absent = sorted(set(names) - set(observed))
+        if absent:
+            raise Refusal(f"protected paths are absent from the {what}: "
+                          + ", ".join(absent))
+
+    moved = set(moved_paths(manifest))
+    if not moved:
+        raise Refusal("the manifest authorises a transition that moves nothing")
+
+    # Spent or pending, read off the BASE rather than asserted.
+    activated_at_base = all(base[path] == nxt[path] for path in moved)
+    base_state_id = (manifest["next"]["id"] if activated_at_base
+                     else manifest["current"]["id"])
+
+    drift = sorted(path for path in names if candidate[path] != base[path])
+    if not drift:
+        return "STEADY", base_state_id, base_state_id
+
+    undeclared = [path for path in drift if path not in moved]
+    if undeclared:
+        # THE REMEDY IS PRINTED, not left to be remembered. The whole reason
+        # this register went stale is that the obligation lived in somebody's
+        # head; a refusal that names the file and hands back the exact command
+        # that satisfies it does not.
+        raise Refusal(
+            "protected tuple matches neither authorised atomic state: the "
+            "candidate moves protected paths the manifest authorises no move "
+            "of: " + ", ".join(undeclared)
+            + ". Declare the move in the same landing:  python3 tools/ci/"
+            "protected_landing_manifest_author.py --commit <base> "
+            "--transition-id <new-id> --current-id "
+            + base_state_id + " --next-id <new-id>-next"
+            + "".join(f" --next-file {path}={path}" for path in undeclared)
+            + " --out " + MANIFEST_PATH)
+    if activated_at_base:
+        raise Refusal(
+            "protected tuple attempts a rollback or unprepared move: the "
+            "authorised transition is already activated at the base, so a "
+            "further move of these needs a new PREPARE: " + ", ".join(drift))
+    wrong = sorted(path for path in moved if candidate[path] != nxt[path])
+    if wrong:
+        raise Refusal(
+            "protected tuple matches neither authorised atomic state: the "
+            "activation is partial, or installs bytes other than the ones "
+            "`next` records, on: " + ", ".join(wrong))
+    return "ACTIVATE", base_state_id, manifest["next"]["id"]
 
 
 def _attest_worktree(repo: Path, worktree: Path, commit: str) -> None:
@@ -668,21 +775,19 @@ def build_receipt(*, object_repo: Path, base: str, candidate: str,
         strict_loads(cand_manifest_raw, what="candidate manifest"), oid_len)
     base_files = _observe_files(
         repo, base_commit, base_manifest["paths"], algorithm, oid_len)
-    base_state_id = _match_state(base_files, base_manifest)
     candidate_files = _observe_files(
         repo, cand_commit, base_manifest["paths"], algorithm, oid_len)
 
     if cand_manifest_raw == base_manifest_raw:
-        candidate_state_id = _match_state(candidate_files, base_manifest)
-        if candidate_state_id == base_state_id:
-            operation = "STEADY"
-        elif (base_state_id == base_manifest["current"]["id"]
-              and candidate_state_id == base_manifest["next"]["id"]):
-            operation = "ACTIVATE"
-        else:
-            raise Refusal("protected tuple attempts a rollback or unprepared move")
+        operation, base_state_id, candidate_state_id = classify_move(
+            base_files, candidate_files, base_manifest)
     else:
         operation = "PREPARE"
+        # The base's own state id, observed. `classify_move` with the base as
+        # its own candidate can only return STEADY, so this reads the id
+        # without a second definition of how the id is decided.
+        _steady, base_state_id, _same = classify_move(
+            base_files, base_files, base_manifest)
         if candidate_files != base_files:
             raise Refusal("PREPARE changed live protected bytes with the manifest")
         if candidate_manifest["paths"] != base_manifest["paths"]:

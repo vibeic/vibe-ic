@@ -560,3 +560,76 @@ def test_bootstrap_candidate_manifest_cannot_authorize_a_live_change(tmp_path):
         P.build_bootstrap_receipt(
             object_repo=repo, trusted_base=base, phase_a=phase_a,
             old_verdict=verdict, old_hygiene_summary=hygiene)
+
+
+# ---------------------------------------------------------------------------
+# THE BASE IS OBSERVED, NOT MATCHED -- and that must not disarm the guard.
+#
+# `_match_state` used to be asked about the BASE's own tuple, which made every
+# landing on a trunk that had legitimately moved ANY protected path refuse at
+# `build_receipt`'s first comparison, and put `test_phase_b_activated_parity`
+# red on trunk. MEASURED at v1.13.21: three landings (v1.13.8
+# `tools/gatekeeper-land.sh`, v1.13.16 `tools/ci/repo_hygiene_gates.sh`, and
+# `ci_harness_timeout_ceiling_check.py`) had drifted the tuple, all of them
+# legitimate and all of them staying.
+#
+# These two are a matched pair on ONE drifted base: the first requires that a
+# drifted base no longer deadlocks, the second requires that the SAME base
+# still refuses a candidate that moves the SAME path -- by name. Without the
+# second, the first is just an exemption.
+# ---------------------------------------------------------------------------
+
+def _drifted_base(repo: Path, tmp_path: Path) -> tuple[str, str]:
+    """An ordinary landing that moved a protected path no transition names."""
+    victim = sorted(P.REQUIRED_AUTHORITY_PATHS - P.RUNTIME_PATHS)[0]
+    _write(repo, victim, b"landed-on-trunk:" + victim.encode())
+    return _commit(repo, "an ordinary landing that moves a protected path"), victim
+
+
+def test_a_base_that_drifted_on_an_unauthorised_path_no_longer_deadlocks(tmp_path):
+    repo, _first_base, _manifest_doc = _repo(tmp_path)
+    base, victim = _drifted_base(repo, tmp_path)
+    _write(repo, "unrelated.txt", b"ordinary change")
+    candidate = _commit(repo, "steady candidate on a drifted base")
+    receipt = _receipt(repo, base, candidate, tmp_path)
+    assert receipt["payload"]["operation"] == "STEADY"
+    assert receipt["payload"]["base_state_id"] == "legacy-timeout-v1"
+    # THE DRIFT IS WITNESSED, not assumed: the base's own manifest still
+    # records the pre-drift bytes for `victim`, so the old `_match_state(base)`
+    # comparison is exactly the one that would have refused here.
+    recorded_raw = _git(repo, "show", f"{base}:{P.MANIFEST_PATH}")
+    recorded = {row["path"]: row
+                for row in json.loads(recorded_raw)["current"]["files"]}
+    observed = {row["path"]: row for row in receipt["payload"]["base_files"]}
+    assert observed[victim]["sha256"] != recorded[victim]["sha256"], (
+        "the base did not actually drift, so this proves nothing")
+    assert P.moved_paths(json.loads(recorded_raw)) == sorted(P.RUNTIME_PATHS), (
+        "`victim` is inside the authorised move, so it is not undeclared")
+    assert victim not in P.moved_paths(json.loads(recorded_raw))
+
+
+def test_the_drifted_base_still_refuses_a_candidate_that_moves_that_path(tmp_path):
+    repo, _first_base, _manifest_doc = _repo(tmp_path)
+    base, victim = _drifted_base(repo, tmp_path)
+    _write(repo, victim, b"and now the candidate edits it too")
+    candidate = _commit(repo, "undeclared move of a protected path")
+    gates, tests = _worktrees(repo, candidate, tmp_path)
+    with pytest.raises(P.Refusal, match="neither authorised atomic state") as caught:
+        P.build_receipt(
+            object_repo=repo, base=base, candidate=candidate,
+            candidate_gates=gates, candidate_tests=tests)
+    assert victim in str(caught.value), str(caught.value)
+
+
+def test_the_authorised_activation_still_lands_on_a_drifted_base(tmp_path):
+    """The control for the pair above: the guard says YES to the real move.
+
+    A refusal that fires on everything is not discriminating, so the drifted
+    base must still ACTIVATE the transition the manifest actually authorises.
+    """
+    repo, _first_base, manifest = _repo(tmp_path)
+    base, _victim = _drifted_base(repo, tmp_path)
+    candidate = _activate(repo, manifest)
+    receipt = _receipt(repo, base, candidate, tmp_path)
+    assert receipt["payload"]["operation"] == "ACTIVATE"
+    assert receipt["payload"]["candidate_state_id"] == "semantic-progress-v1"
