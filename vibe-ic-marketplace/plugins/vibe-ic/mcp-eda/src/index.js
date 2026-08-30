@@ -3783,16 +3783,41 @@ if {$rc} {
     const power = parseReportPower(result.output);
     const irMeasured = ir.worst_ir_drop_v !== null && ir.total_power_w !== null;
 
-    if (isComplete) {
+    // P-2. `success: isComplete || isWarn`, where isWarn means the Tcl
+    // `catch {analyze_power_grid}` FIRED — PSM produced no IR report at all. The
+    // code argues deliberately that a caught error is a warning by this tool's
+    // own design, and that argument is defensible: only an UNCAUGHT abort is a
+    // tool failure. But it is only safe if the caller can tell the two apart by
+    // a NUMBER, and there was no number in either case. The only discriminator
+    // was the boolean `psm_warn`, and the manifest recorded NEITHER — it was
+    // written only when isComplete, so a run whose analysis threw left no record
+    // at all. Read-fail and measured-fine reached the report as the same thing.
+    //
+    // The fix is not to turn the warning into a failure. It is that (a) the
+    // response carries an explicit three-state `status` and the numbers that
+    // back it, and (b) EVERY outcome writes a manifest entry, so a run that
+    // measured nothing is recorded as INCONCLUSIVE by the gate instead of
+    // vanishing. Absent is a third answer, not a quiet pass and not a fail.
+    const irStatus = noPowerNet ? "NOT_MEASURED"
+                   : irFailed   ? "NOT_MEASURED"
+                   : irMeasured ? "MEASURED"
+                                : "NOT_MEASURED";
+    {
       const dir = def_file.substring(0, def_file.lastIndexOf("/"));
       writeManifest(dir || "/tmp", {
         step: "ir_drop",
+        // Written as PASS; when the measurements are absent the REQUIRED_METRICS
+        // gate downgrades it to INCONCLUSIVE. That is the mechanism this repo
+        // already has for "we did not measure it", and it is used here rather
+        // than hand-rolling a second verdict.
         status: "PASS",
         tool: "OpenROAD PSM",
         net: vddNet,
-        // The measurements. Absent -> REQUIRED_METRICS turns this PASS into
-        // INCONCLUSIVE, which is the correct answer for a run that measured
-        // nothing.
+        ir_status: irStatus,
+        // Why no number, when there is none. A caller reading the manifest can
+        // now distinguish "the grid is fine" from "the analysis never ran".
+        psm_caught_error: isWarn || undefined,
+        power_net_resolved: !noPowerNet,
         ...ir,
         report_power_w: power ? power.total_w : null,
         report_power_split: power || undefined,
@@ -3832,7 +3857,12 @@ if {$rc} {
           success: (isComplete || isWarn) && !noPowerNet,
           exit_code: irRun.rc,
           openroad_error_count: irRun.errorCount,
+          status: irStatus,
           measured: irMeasured,
+          // A caught PSM error and a clean grid are no longer the same report:
+          // `psm_caught_error` says the analysis threw, `status` says whether a
+          // number exists, and the numbers themselves are present or null.
+          psm_caught_error: isWarn || undefined,
           not_measured_reason: irMeasured ? undefined
             : (noPowerNet ? "the power net could not be identified in the DEF"
                : (isWarn ? "PSM raised a connectivity error, which was caught; no IR report was produced"
