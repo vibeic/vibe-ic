@@ -358,6 +358,48 @@ def test_ai_repair_reenters_at_validation_without_regeneration(
 
 
 @_NEEDS_SIMULATOR
+def test_ai_resigns_exact_candidate_after_program_gate_normalization(tmp_path):
+    run, task, _ = _task(tmp_path)
+    project = Path(task["project"])
+    working_rtl = project / "phase2" / "stage1" / "rtl" / "dut.v"
+    review = _proven_fail_review(task)
+    _write_review(task, review)
+    challenge = bd._validate_ai_review(task)["verified_challenge"]
+
+    working_rtl.write_text(
+        "module dut(input wire a, output wire y); assign y = a; endmodule\n")
+    record = _write_ai_repair_record(run, task, challenge)
+    record_path = bd._repair_record_path(run, task)
+    repair_provenance, reasons = bd._validate_repair_record(
+        record_path, task, record["repaired_rtl_sha256"], challenge)
+    assert reasons == []
+
+    # Model a deterministic PROGRAM-gate normalization after the AI supplied
+    # its first repair.  The old signature must not authorize the new bytes.
+    working_rtl.write_text(
+        "module dut(input wire a, output wire y); "
+        "assign y = a & 1'b1; endmodule\n")
+    got = bio.collect("rtllm", "p1", project, supplied_rtl=True)
+    final_task = bd._make_ai_review_task(
+        "p1", project, got, ROUTING, 0, run, "AI_REPAIR",
+        verification_challenges=[challenge],
+        program_candidate=task["candidate_snapshot"],
+        repair_provenance=repair_provenance)
+    rebound, reasons = bd._refresh_final_repair_provenance(final_task)
+    assert rebound is None
+    assert any("repaired_rtl_sha256" in reason for reason in reasons)
+
+    final_hash = final_task["rtl_sha256"]
+    record["pre_gate_ai_rtl_sha256"] = record["repaired_rtl_sha256"]
+    record["repaired_rtl_sha256"] = final_hash
+    record_path.write_text(json.dumps(record))
+    rebound, reasons = bd._refresh_final_repair_provenance(final_task)
+    assert reasons == []
+    assert rebound["repaired_rtl_sha256"] == final_hash
+    assert rebound["pre_gate_ai_rtl_sha256"] != final_hash
+
+
+@_NEEDS_SIMULATOR
 def test_proven_ai_edit_cannot_reenter_without_repair_author_record(
         tmp_path, monkeypatch):
     run = tmp_path / "run"
@@ -450,6 +492,31 @@ def test_repair_must_pass_the_same_immutable_challenge(tmp_path):
     assert verdict["status"] == "REJECTED"
     assert verdict["inherited_challenge_results"][0]["status"] == "FAIL"
     assert any("immutable verification" in reason for reason in verdict["reasons"])
+
+
+@_NEEDS_SIMULATOR
+def test_fresh_ai_fail_plus_inherited_fail_requests_another_repair(tmp_path):
+    run = tmp_path / "run"
+    (run / "responses").mkdir(parents=True)
+    project = _project(tmp_path)
+    (project / "phase2" / "stage1" / "rtl" / "dut.v").write_text(
+        "module dut(input wire a, output wire y); assign y = ~a; endmodule\n")
+    got = bio.collect("rtllm", "p1", project)
+    task = bd._make_ai_review_task(
+        "p1", project, got, ROUTING, 0, run, "PROGRAM")
+    review = _proven_fail_review(task)
+    _write_review(task, review)
+    inherited = bd._validate_ai_review(task)["verified_challenge"]
+    task["verification_challenges"] = [inherited]
+
+    # Both the fresh prompt-bound challenge and the immutable inherited one
+    # reject this candidate.  Agreement that it is still wrong authorizes the
+    # next repair; only an attempted PASS over the inherited failure is invalid.
+    verdict = bd._validate_ai_review(task)
+    assert verdict["status"] == "REPAIR_REQUIRED"
+    assert verdict["challenge_result"]["status"] == "FAIL"
+    assert verdict["inherited_challenge_results"][0]["status"] == "FAIL"
+    assert verdict["reasons"] == []
 
 
 @pytest.mark.parametrize(

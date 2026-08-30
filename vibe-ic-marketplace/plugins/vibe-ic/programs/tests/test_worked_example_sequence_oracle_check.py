@@ -26,6 +26,11 @@ _HAS_IVERILOG = shutil.which("iverilog") is not None
 # A spec disclosing a cycle-by-cycle worked example (same shape as pulse_detect).
 SPEC = ("Implement a pulse detector. data_in is a 1-bit input. data_out is 1 the cycle the "
         "pulse completes. For example, if data_in is 01010, the data_out is 00101.")
+SPEC_CLOCKED_OUTPUT = (
+    SPEC + " Inside an always block, sensitive to the positive edge of clk, "
+    "implement pulse detection and output generation. Set data_out to 1 in "
+    "the end cycle of the pulse."
+)
 
 # CORRECT Mealy form: output is combinational on (state, current input) — same-cycle.
 RTL_MEALY = """
@@ -101,6 +106,16 @@ def test_registered_moore_design_is_blocked():
     r = g.analyze(RTL_MOORE, SPEC)
     assert r["applicable"] is True
     assert r["verdict"] == "BLOCK", r  # the one-cycle-lag error the example forbids
+
+
+@pytest.mark.skipif(not _HAS_IVERILOG, reason="iverilog unavailable")
+def test_explicit_clocked_output_contract_drives_before_and_samples_after_edge():
+    registered = g.analyze(RTL_MOORE, SPEC_CLOCKED_OUTPUT)
+    combinational = g.analyze(RTL_MEALY, SPEC_CLOCKED_OUTPUT)
+    assert registered["sampling_semantics"] == \
+        "drive-before-edge/sample-after-edge"
+    assert registered["verdict"] == "PASS", registered
+    assert combinational["verdict"] == "BLOCK", combinational
 
 
 @pytest.mark.skipif(not _HAS_IVERILOG, reason="iverilog unavailable")

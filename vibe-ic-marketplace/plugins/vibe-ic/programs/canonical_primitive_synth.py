@@ -528,14 +528,9 @@ endmodule
 
 _TPL_PULSE = r'''// pulse_detect: Detects a sampled 0->1->0 pulse over 3 cycles.
 // Spec example: data_in=01010 -> data_out=00101
-// Output = 1 at the END cycle of the pulse (the cycle where data_in returns
-// to 0 after having been 1). Both state transition and output generation live
-// in the specified clocked/reset block, so data_out cannot glitch between
-// sampled input cycles.
-//
-// State register tracks the previous data_in:
-//   S0 = last seen data_in == 0 (idle / baseline)
-//   S1 = saw data_in == 1 after a 0 (rising part seen)
+// Output = 1 at the END cycle of the exact three-sample sequence 0,1,0.
+// Both state transition and output generation live in the specified
+// clocked/reset block, so data_out cannot glitch between sampled input cycles.
 
 module pulse_detect (
     input      clk,
@@ -544,29 +539,30 @@ module pulse_detect (
     output reg data_out
 );
 
-    localparam S0 = 1'b0; // baseline: last data_in == 0
-    localparam S1 = 1'b1; // saw the rising 0->1
+    // Prefix state records only input samples actually observed after reset.
+    // This prevents reset from manufacturing the leading zero of a pulse,
+    // while retaining a real trailing zero for overlapping 0,1,0,1,0 pulses.
+    localparam ST_EMPTY    = 2'b00;
+    localparam ST_ZERO     = 2'b01;
+    localparam ST_ZERO_ONE = 2'b10;
 
-    reg state;
+    reg [1:0] state;
 
     always @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
-            state    <= S0;
+            state    <= ST_EMPTY;
             data_out <= 1'b0;
         end else begin
+            data_out <= (state == ST_ZERO_ONE) && !data_in;
             case (state)
-                S0: begin
-                    state    <= data_in ? S1 : S0;
-                    data_out <= 1'b0;
-                end
-                S1: begin
-                    state    <= data_in ? S1 : S0;
-                    data_out <= ~data_in;
-                end
-                default: begin
-                    state    <= S0;
-                    data_out <= 1'b0;
-                end
+                ST_EMPTY:
+                    state <= data_in ? ST_EMPTY : ST_ZERO;
+                ST_ZERO:
+                    state <= data_in ? ST_ZERO_ONE : ST_ZERO;
+                ST_ZERO_ONE:
+                    state <= data_in ? ST_EMPTY : ST_ZERO;
+                default:
+                    state <= ST_EMPTY;
             endcase
         end
     end

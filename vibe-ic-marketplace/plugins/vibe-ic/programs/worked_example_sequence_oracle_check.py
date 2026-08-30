@@ -19,8 +19,11 @@ WHAT it does — given the spec prose + the authored RTL:
   1. Parse a HIGH-CONFIDENCE worked example: `if <inport> is <bits>, ... <outport> is <bits>`
      with two EQUAL-LENGTH ≥3-bit [01] strings, where <inport>/<outport> are real 1-bit
      ports of the module (one input, one output) and a clk + reset port exist.
-  2. Build a tiny self-TB that releases reset, drives <inport> with the input bits one per
-     clock, samples <outport> at the example's index alignment, and compares to the output bits.
+  2. Build a tiny self-TB that releases reset and replays the disclosed trace.  When the
+     spec explicitly requires output generation in a positive-edge always block, drive each
+     input before the edge and sample after it.  Otherwise retain the original same-cycle
+     combinational interpretation.  The spec, not a hard-coded Mealy/Moore preference, picks
+     the alignment.
   3. iverilog/vvp it; BLOCK (rc 1) on any mismatch, PASS (rc 0) on a clean match.
 
 §4.05 SAFETY — the load-bearing half is the NEGATIVE no-leak: the gate SKIPs (rc 0, advisory)
@@ -136,12 +139,46 @@ def _find_clk_reset(ports):
     return clk, rst, pol
 
 
-def _build_tb(modname, clk, rst, pol, inp, outp, in_bits, out_bits, result_path):
+def _requires_clocked_output(spec: str, outp: str) -> bool:
+    """True only for an explicit clocked-output implementation contract."""
+    text = re.sub(r"\s+", " ", spec).lower()
+    edge = "positive edge" in text or "posedge" in text
+    block = "always block" in text or "always_ff" in text
+    output_contract = (
+        "output generation" in text
+        or re.search(rf"\b(?:set|assign|update|drive)\s+{re.escape(outp.lower())}\b",
+                     text) is not None
+    )
+    return edge and block and output_contract
+
+
+def _build_tb(modname, clk, rst, pol, inp, outp, in_bits, out_bits,
+              result_path, *, clocked_output=False):
     n = len(in_bits)
     assert_v = "1'b0" if pol == "low" else "1'b1"
     deassert_v = "1'b1" if pol == "low" else "1'b0"
     inset = "".join(f"        in_v[{i}] = 1'b{in_bits[i]};\n" for i in range(n))
     exset = "".join(f"        ex_v[{i}] = 1'b{out_bits[i]};\n" for i in range(n))
+    if clocked_output:
+        replay = f"""    @(negedge clk); rstp={deassert_v};
+    for (i=0;i<{n};i=i+1) begin
+      @(negedge clk); din = in_v[i];
+      @(posedge clk); #1;
+      if (dout !== ex_v[i]) begin
+        err=err+1;
+        $display("MISMATCH cycle=%0d din=%b dout=%b exp=%b", i, din, dout, ex_v[i]);
+      end
+    end"""
+    else:
+        replay = f"""    rstp={deassert_v};
+    for (i=0;i<{n};i=i+1) begin
+      @(posedge clk); #1 din = in_v[i];
+      #3;
+      if (dout !== ex_v[i]) begin
+        err=err+1;
+        $display("MISMATCH cycle=%0d din=%b dout=%b exp=%b", i, din, dout, ex_v[i]);
+      end
+    end"""
     # The verdict is written to a FILE whose path the DUT cannot know — so authored RTL
     # that $displays "PASS"/"FAIL" on stdout cannot spoof the verdict (Step-2.7 LOW).
     return f"""module wex_tb;
@@ -154,15 +191,7 @@ def _build_tb(modname, clk, rst, pol, inp, outp, in_bits, out_bits, result_path)
 {inset}{exset}
     rstp={assert_v}; din=1'b0;
     @(posedge clk); @(posedge clk);
-    rstp={deassert_v};
-    for (i=0;i<{n};i=i+1) begin
-      @(posedge clk); #1 din = in_v[i];
-      #3;
-      if (dout !== ex_v[i]) begin
-        err=err+1;
-        $display("MISMATCH cycle=%0d din=%b dout=%b exp=%b", i, din, dout, ex_v[i]);
-      end
-    end
+{replay}
     vf = $fopen("{result_path}", "w");
     if (err==0) $fdisplay(vf, "WEX_VERDICT PASS"); else $fdisplay(vf, "WEX_VERDICT FAIL %0d", err);
     $fclose(vf);
@@ -227,12 +256,17 @@ def analyze(rtl: str, spec: str) -> dict:
         return res
     if not _iverilog():
         res["reason"] = "iverilog unavailable"; return res
-    res.update(applicable=True, inport=inp, outport=outp, in_bits=in_bits, out_bits=out_bits,
-               clk=clk, rst=rst, pol=pol, module=modname)
+    clocked_output = _requires_clocked_output(spec, outp)
+    res.update(applicable=True, inport=inp, outport=outp, in_bits=in_bits,
+               out_bits=out_bits, clk=clk, rst=rst, pol=pol, module=modname,
+               sampling_semantics=("drive-before-edge/sample-after-edge"
+                                   if clocked_output
+                                   else "same-cycle-combinational"))
     with tempfile.TemporaryDirectory() as td:
         td = Path(td)
         result_path = td / "wex_verdict.txt"
-        tb = _build_tb(modname, clk, rst, pol, inp, outp, in_bits, out_bits, str(result_path))
+        tb = _build_tb(modname, clk, rst, pol, inp, outp, in_bits, out_bits,
+                       str(result_path), clocked_output=clocked_output)
         (td / "dut.v").write_text(rtl)
         (td / "tb.v").write_text(tb)
         try:  # build hang / tool error → fail-safe SKIP, never BLOCK

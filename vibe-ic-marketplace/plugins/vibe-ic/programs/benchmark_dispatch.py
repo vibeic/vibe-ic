@@ -649,6 +649,7 @@ def _make_ai_review_task(problem_id: str, project: Path, got: dict,
                          candidate_origin: str, *,
                          verification_challenges: list[dict] | None = None,
                          program_candidate: dict | None = None,
+                         repair_parent_candidate: dict | None = None,
                          repair_provenance: dict | None = None) -> dict:
     """Build the hash-bound, oracle-free handoff for one AI review."""
     project, run_p = Path(project).resolve(), Path(run_p).resolve()
@@ -676,6 +677,7 @@ def _make_ai_review_task(problem_id: str, project: Path, got: dict,
         "candidate_origin": candidate_origin,
         "candidate_snapshot": candidate,
         "program_candidate_snapshot": program_candidate,
+        "repair_parent_candidate_snapshot": repair_parent_candidate,
         "verification_challenges": challenges,
         "repair_provenance": repair_provenance,
         "prompt_path": str(prompt),
@@ -826,6 +828,43 @@ def _validate_repair_record(path: Path, task: dict, repaired_hash: str,
     return {**record, "path": str(path), "sha256": _sha256_text(raw)}, []
 
 
+def _refresh_final_repair_provenance(task: dict) -> tuple[dict | None,
+                                                          list[str]]:
+    """Rebind an AI signature to the exact candidate emitted by PROGRAM gates.
+
+    A supplied AI repair re-enters at validation, but deterministic gate logic
+    can still normalize that RTL before freezing the candidate.  The original
+    pre-gate signature must not silently authorize different bytes.  Before a
+    fresh review exists, let the AI explicitly re-sign the final hash at the
+    same evidence path; otherwise fail closed and request final provenance.
+    """
+    if task.get("candidate_origin") != "AI_REPAIR":
+        return None, ["candidate is not an AI_REPAIR"]
+    provenance = task.get("repair_provenance") or {}
+    path_raw = str(provenance.get("path") or "").strip()
+    path = Path(path_raw)
+    parent = (task.get("repair_parent_candidate_snapshot")
+              or task.get("program_candidate_snapshot") or {})
+    parent_hash = str(parent.get("rtl_sha256") or "")
+    challenges = task.get("verification_challenges") or []
+    challenge_hash = str(provenance.get("challenge_sha256") or "")
+    challenge = next(
+        (item for item in challenges
+         if str(item.get("sha256") or "") == challenge_hash), None)
+    reasons: list[str] = []
+    if not parent_hash:
+        reasons.append("final AI repair task lacks its PROGRAM parent hash")
+    if challenge is None:
+        reasons.append("final AI repair task lacks its inherited challenge")
+    if not path_raw:
+        reasons.append("final AI repair task lacks its evidence path")
+    if reasons:
+        return None, reasons
+    parent_task = {**task, "rtl_sha256": parent_hash}
+    return _validate_repair_record(
+        path, parent_task, str(task.get("rtl_sha256") or ""), challenge)
+
+
 def _validate_embedded_repair_provenance(task: dict) -> list[str]:
     """Ensure a final AI_REPAIR review still names its actual repair author."""
     if task.get("candidate_origin") != "AI_REPAIR":
@@ -833,17 +872,22 @@ def _validate_embedded_repair_provenance(task: dict) -> list[str]:
     provenance = task.get("repair_provenance")
     if not isinstance(provenance, dict):
         return ["AI_REPAIR candidate lacks repair_provenance"]
-    program = task.get("program_candidate_snapshot") or {}
+    parent = (task.get("repair_parent_candidate_snapshot")
+              or task.get("program_candidate_snapshot") or {})
     challenges = task.get("verification_challenges") or []
     expected_challenge_hashes = {str(c.get("sha256")) for c in challenges}
     reasons = []
+    reasons.extend(
+        "repair parent " + reason
+        for reason in _validate_candidate_snapshot(
+            parent, str(task.get("id"))))
     if provenance.get("schema") != _AI_REPAIR_RECORD_SCHEMA:
         reasons.append("repair_provenance schema is invalid")
     if str(provenance.get("id")) != str(task.get("id")):
         reasons.append("repair_provenance id does not match task")
     if provenance.get("prompt_sha256") != task.get("prompt_sha256"):
         reasons.append("repair_provenance prompt hash is stale")
-    if provenance.get("parent_rtl_sha256") != program.get("rtl_sha256"):
+    if provenance.get("parent_rtl_sha256") != parent.get("rtl_sha256"):
         reasons.append("repair_provenance parent hash is stale")
     if provenance.get("repaired_rtl_sha256") != task.get("rtl_sha256"):
         reasons.append("repair_provenance repaired hash is stale")
@@ -1162,6 +1206,13 @@ def _validate_ai_review(task: dict) -> dict:
                 "an inherited immutable verification test could not be RUN on "
                 "this host, so the repair is neither proven nor disproven: "
                 + "; ".join(str(r) for r in result.get("reasons") or []))
+        elif (result.get("status") == "FAIL"
+              and semantic_verdict == "FAIL"):
+            # A fresh AI rejection and an inherited prompt-derived failure
+            # agree that this intermediate repair is still wrong.  That is
+            # additional repair evidence, not a malformed review.  A claimed
+            # PASS over the same failure remains rejected below.
+            pass
         elif result.get("status") != "PASS":
             reasons.append("repair does not pass every immutable verification "
                            "test that proved its parent candidate wrong")
@@ -2425,6 +2476,34 @@ def cmd_resume(bench: str, dataset: str, run: str) -> int:
             repairs.append({"id": pid, "status": "INVALID_REVIEW_TASK",
                             "reasons": ["review id is absent from solve_report"]})
             continue
+        review_path = Path(str(task.get("review_path") or ""))
+        if (task.get("candidate_origin") == "AI_REPAIR"
+                and not review_path.is_file()):
+            final_provenance, final_provenance_reasons = \
+                _refresh_final_repair_provenance(task)
+            if final_provenance_reasons:
+                repairs.append({
+                    "schema": "vibeic.benchmark.ai_repair_task.v2",
+                    "id": pid, "project": task.get("project"),
+                    "status": "AI_REPAIR_FINAL_PROVENANCE_REQUIRED",
+                    "reasons": final_provenance_reasons,
+                    "repair_record_path": (task.get("repair_provenance")
+                                           or {}).get("path"),
+                    "program_parent_rtl_sha256":
+                        (task.get("program_candidate_snapshot")
+                         or {}).get("rtl_sha256"),
+                    "final_repaired_rtl_sha256": task.get("rtl_sha256"),
+                })
+                result.update({"accepted": False, "awaiting_ai": True,
+                               "awaiting_ai_review": False,
+                               "ai_repair_required": True})
+                print(f"  {pid:44s} final gated RTL needs AI provenance")
+                continue
+            task["repair_provenance"] = final_provenance
+            result.update({"awaiting_ai": True,
+                           "awaiting_ai_review": True,
+                           "ai_repair_required": False})
+            print(f"  {pid:44s} final AI repair provenance rebound")
         prompt_hash, _, _, _ = _current_task_material(task)
         if prompt_hash != task.get("prompt_sha256"):
             repairs.append({
@@ -2505,6 +2584,7 @@ def cmd_resume(bench: str, dataset: str, run: str) -> int:
                 verification_challenges=inherited,
                 program_candidate=(task.get("program_candidate_snapshot")
                                    or task.get("candidate_snapshot")),
+                repair_parent_candidate=task.get("candidate_snapshot"),
                 repair_provenance=repair_provenance)
             task_by_id[pid] = new_task
             result["review_task"] = new_task["review_path"]
