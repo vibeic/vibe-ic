@@ -2308,22 +2308,102 @@ def test_nothing_the_flow_declares_is_left_unswept(tmp_path):
     # bare form is still declared elsewhere, so it never reached `unaccounted`.
     # Each of the nine is named against its live successor, and ASSERTED to still
     # be live, by `_REHOMED` below -- prose here, a control that runs there.
-    assert pop["swept"] == pop["declared"] == 221, pop
+    #
+    # 221 -> 223 -> 225, AND THE LITERAL IS GONE. This is the seventh round.
+    # The sixth was still open in review when the seventh arrived: a change
+    # moved it 221 -> 223 against a main measuring 223, `stage_analog` landed
+    # (PR #1849, v1.13.11) while that change was in review, and the flow was at
+    # 225 before the correction could merge. A number that goes stale inside
+    # its own review window is not lagging; it is the wrong instrument.
+    #
+    # WHAT THE SEVEN ROUNDS ACTUALLY MEASURED, and it is not what the literal
+    # claimed to be measuring. `swept == declared` -- the pin that says the
+    # SWEEP IS WHOLE -- held on every one of those trees, with `unswept` and
+    # `unrecognised` empty throughout. NOT ONE of the seven was a sweep that
+    # missed a declaration. Every one was a GROW: the flow gained a clause and
+    # nothing in the flow's own change had to remember a count living in this
+    # file. A stale literal then accused the flow of a defect the flow did not
+    # have, which is how a guard reaches seven.
+    #
+    # THE LITERAL'S REAL JOB IS NARROWER than the equality it was written as.
+    # The comment at the top of this block has said so since the first round:
+    # it "is only there so a flow that silently SHRINKS is caught too". A count
+    # is a poor instrument for that, and `population_delta`'s own docstring
+    # says exactly why -- 181 -> 181 cannot tell a churn from no change, and
+    # "the answer a reader needs is never the count, it is WHICH".
+    #
+    # SO THE FLOOR IS THE CLAUSES, NOT THEIR NUMBER.
+    # `tools/flow_declared_clause_floor.json` records every clause the flow has
+    # declared, on the identity `population_delta` diffs by -- `(step, kind,
+    # cmd)`, as a multiset. `liar_census.clause_floor_shortfall` compares it
+    # against the live flow and answers in two halves that are NOT symmetric:
+    #
+    #   MISSING   recorded, no longer declared. THE FAILURE, named one clause
+    #             per line. A deliberate retirement is authorised by deleting
+    #             that entry in the same change -- a reviewable diff saying
+    #             WHAT left, which a number never could.
+    #   SURPLUS   declared, not yet recorded. NOT a failure. A grow never
+    #             reopens this test, and that asymmetry is the entire repair.
+    #
+    # THE OPEN QUESTION FOUR BLOCKS UP IS THE ONE THIS ANSWERS. It ran: "a
+    # floor derived from the previous flow blob would catch every shrink with
+    # nothing to remember, but it would leave a DELIBERATE shrink no way to be
+    # authorised. That is a call for the flow's owner." The flow's owner made
+    # it, on 2026-08-30, on the review of the sixth round. The authorisation
+    # channel is the record itself: `record_clause_floor` is ADDITIVE ONLY and
+    # REFUSES to drop an entry, so the only way a clause leaves the floor is a
+    # human deleting it, in the change that removes it, with the reason in the
+    # commit.
+    #
+    # WHAT IS NOT CLAIMED. This does not catch a clause that is added and then
+    # removed between two refreshes of the record -- the floor never held it.
+    # That is a real and stated limit, and it is strictly better than the
+    # literal, which could not tell a churn from no change at all. It is also
+    # the direction that fails SAFE: the guard under-covers, it never accuses.
+    # THE PIN THAT WAS NEVER THE PROBLEM, KEPT EXACTLY AS IT WAS. `swept ==
+    # declared` is what says the census READ every clause the flow declares; a
+    # declaration the parser cannot understand lands in `declared` and not in
+    # `swept`, and that is the one failure in this test that would be a real
+    # defect. It held through all seven rounds and it is not relaxed here.
+    assert pop["swept"] == pop["declared"], pop
+
+    short = lc.clause_floor_shortfall(lc.FLOW_YAML)
+    assert short["floor"] > 0, short
+    # The floor and the report must be reading the same flow. Without this the
+    # two numbers could drift apart and nothing would say so.
+    assert short["declared"] == pop["declared"], (short, pop["declared"])
+    assert short["missing"] == [], (
+        "A DECLARATION LEFT THE FLOW.\n"
+        + "\n".join(f"  {c['step']}  {c['kind']}  {c['cmd']}"
+                    for c in short["missing"])
+        + "\n\nEach line is recorded in tools/flow_declared_clause_floor.json "
+          "and the flow no longer declares it. If that is DELIBERATE, delete "
+          "exactly those entries from that file in this same change and say "
+          "why in the commit. If it is not, the flow lost a gate."
+    )
     assert pop["unrecognised"] == {}, pop["unrecognised"]
 
 
 # --------------------------------------------------------------------------
 # THE SHRINK PIN'S OWN PROTOCOL, EXECUTABLE
 #
-# The literal above is moved by hand, and the block that authorises each move
-# derives it by DIFFING CLAUSE SETS between two flow blobs -- because a count
-# cannot tell a grow from a churn, and "which clause left" is the only answer
-# worth having. That derivation was prose for five rounds and on the fifth it
-# failed exactly as prose fails: computed against a base that moved, never
-# re-run, landed red. `population_delta` is that protocol as a function. These
-# controls pin that it can DECIDE the three directions apart -- if it answered
-# the same way for a grow, a shrink and a churn it would be a vacuous green and
-# strictly worse than the hand-diff it replaces.
+# For seven rounds the pin above was a literal moved by hand, and the block
+# that authorised each move derived it by DIFFING CLAUSE SETS between two flow
+# blobs -- because a count cannot tell a grow from a churn, and "which clause
+# left" is the only answer worth having. That derivation was prose for five
+# rounds and on the fifth it failed exactly as prose fails: computed against a
+# base that moved, never re-run, landed red. `population_delta` is that
+# protocol as a function. These controls pin that it can DECIDE the three
+# directions apart -- if it answered the same way for a grow, a shrink and a
+# churn it would be a vacuous green and strictly worse than the hand-diff it
+# replaced.
+#
+# THE LITERAL IS NOW GONE and `clause_floor_shortfall` is what the test above
+# blocks on. `population_delta` is NOT superseded by it and is not dead code:
+# it diffs two arbitrary flow BLOBS, which is what an author reviewing a change
+# needs, while the floor compares the live flow against a recorded set. The
+# controls below are the reason either can be trusted, and they are kept
+# whole.
 # --------------------------------------------------------------------------
 
 def _delta_flow(where: Path, yaml_text: str) -> Path:
@@ -2407,6 +2487,141 @@ def test_a_CHURN_is_not_invisible_the_way_it_is_to_a_count(tmp_path):
     assert [c["cmd"] for c in d["added"]] == ["gamma ."], d["added"]
     assert [c["cmd"] for c in d["removed"]] == ["beta ."], d["removed"]
     assert d["shrank"] is True, d
+
+
+# --------------------------------------------------------------------------
+# THE CLAUSE FLOOR — the thing that replaced the literal
+#
+# `population_delta` above answers "what changed between two blobs", which is
+# what a reviewer needs. The FLOOR answers the question the literal was
+# actually posted to answer — "has anything the flow once declared quietly
+# stopped being declared" — against a recorded set rather than against a
+# number, and it answers it BY NAME.
+#
+# The three directions are planted, not taken from the live flow, so these
+# controls cannot rot when the flow moves. The asymmetry is the whole design
+# and each half is asserted separately: a GROW must be SILENT (that is the
+# repair — seven stale rounds were all grows) and a SHRINK must FAIL AND NAME
+# (that is the guard). A control that only checked the shrink would be
+# satisfied by a floor that failed on everything, and one that only checked
+# the grow would be satisfied by a floor that failed on nothing.
+# --------------------------------------------------------------------------
+def _floor_file(where: Path, clauses) -> Path:
+    where.mkdir(parents=True, exist_ok=True)
+    f = where / "floor.json"
+    f.write_text(json.dumps({"clauses": [
+        {"step": s, "kind": k, "cmd": c} for s, k, c in clauses]}),
+        encoding="utf-8")
+    return f
+
+
+_FLOOR_RECORDED = (("9", "program_exit_zero", "alpha ."),
+                   ("9", "program_exit_zero", "beta ."))
+
+
+def test_the_floor_is_silent_on_a_grow(tmp_path):
+    """THE REPAIR. All seven stale rounds of the literal were this shape: the
+    flow gained a declaration, nothing was lost, and a test in another file
+    went red for it. A guard that reopens on a grow is a guard whose author is
+    asked to remember a number while editing a different file, and this repo
+    has seven measurements saying that does not work."""
+    short = lc.clause_floor_shortfall(
+        _delta_flow(tmp_path / "a", _DELTA_GROW),
+        _floor_file(tmp_path / "f", _FLOOR_RECORDED))
+    assert short["missing"] == [], short
+    assert [c["cmd"] for c in short["surplus"]] == ["gamma ."], short
+    assert short["floor"] == 2 and short["declared"] == 3, short
+
+
+def test_the_floor_NAMES_the_clause_that_left(tmp_path):
+    """THE GUARD. `missing` is one entry per clause, because deleting exactly
+    those lines from the record is how a deliberate retirement is authorised —
+    a reviewable diff saying WHAT left."""
+    short = lc.clause_floor_shortfall(
+        _delta_flow(tmp_path / "a", _DELTA_SHRINK),
+        _floor_file(tmp_path / "f", _FLOOR_RECORDED))
+    assert [c["cmd"] for c in short["missing"]] == ["beta ."], short
+    assert short["surplus"] == [], short
+
+
+def test_the_floor_catches_a_churn_the_literal_was_green_on(tmp_path):
+    """THE CASE THAT CONDEMNS THE COUNT. `floor == declared == 2`, so the
+    literal `assert declared == 2` was GREEN here while a blocking clause left
+    the flow and another took its slot. MEASURED on the live tree the same
+    way: replacing stage 2's `stage_on_pass_review` clause with a different
+    program left `declared` at 225 — unchanged, and the literal would have
+    passed — while `missing` named the clause that went."""
+    short = lc.clause_floor_shortfall(
+        _delta_flow(tmp_path / "a", _DELTA_CHURN),
+        _floor_file(tmp_path / "f", _FLOOR_RECORDED))
+    assert short["floor"] == short["declared"] == 2, short
+    assert [c["cmd"] for c in short["missing"]] == ["beta ."], short
+    assert [c["cmd"] for c in short["surplus"]] == ["gamma ."], short
+
+
+def test_an_absent_floor_is_refused_not_read_as_nothing_to_compare(tmp_path):
+    """A shrink detector that cannot fire reports success. Absence is the
+    cheapest way to reach that state, so it is the loudest refusal."""
+    with pytest.raises(FileNotFoundError) as e:
+        lc.clause_floor_shortfall(_delta_flow(tmp_path / "a", _DELTA_BEFORE),
+                                  tmp_path / "no-such-floor.json")
+    assert "nothing to compare" in str(e.value)
+
+
+def test_an_empty_floor_is_refused(tmp_path):
+    """`{"clauses": []}` would make `missing` empty for EVERY flow."""
+    empty = _floor_file(tmp_path / "f", ())
+    with pytest.raises(ValueError) as e:
+        lc.clause_floor_shortfall(_delta_flow(tmp_path / "a", _DELTA_BEFORE),
+                                  empty)
+    assert "could not fire" in str(e.value)
+
+
+def test_an_unreadable_floor_is_refused(tmp_path):
+    """Same rule as the empty one: a broken record is not an empty record."""
+    bad = tmp_path / "broken.json"
+    bad.write_text("{not json", encoding="utf-8")
+    with pytest.raises(ValueError) as e:
+        lc.clause_floor_shortfall(_delta_flow(tmp_path / "a", _DELTA_BEFORE),
+                                  bad)
+    assert "never read as empty" in str(e.value)
+
+
+def test_the_recorder_refuses_to_drop_an_entry(tmp_path):
+    """REFRESH MUST BE SAFE TO RUN WITHOUT JUDGEMENT or nobody runs it and the
+    record decays — but a refresh that dropped a missing entry would authorise
+    a shrink by accident, which is the one thing this record exists to stop.
+    So it is ADDITIVE ONLY and refuses instead, naming what it would have had
+    to drop."""
+    floor = _floor_file(tmp_path / "f", _FLOOR_RECORDED)
+    before = floor.read_text(encoding="utf-8")
+    with pytest.raises(ValueError) as e:
+        lc.record_clause_floor(_delta_flow(tmp_path / "a", _DELTA_SHRINK),
+                               floor)
+    assert "authorise a shrink silently" in str(e.value)
+    assert "beta ." in str(e.value)
+    assert floor.read_text(encoding="utf-8") == before, \
+        "the recorder rewrote the floor on the path where it refuses"
+
+
+def test_the_recorder_adds_a_grow_and_the_floor_then_passes(tmp_path):
+    """The other half: after a grow, refreshing is mechanical and correct."""
+    floor = _floor_file(tmp_path / "f", _FLOOR_RECORDED)
+    grown = _delta_flow(tmp_path / "a", _DELTA_GROW)
+    lc.record_clause_floor(grown, floor)
+    short = lc.clause_floor_shortfall(grown, floor)
+    assert short["missing"] == [] and short["surplus"] == [], short
+    assert short["floor"] == 3, short
+
+
+def test_the_shipped_floor_is_readable_and_matches_the_shipped_flow(tmp_path):
+    """A NON-EMPTY DENOMINATOR on the real record, not a planted one. The
+    controls above run on blobs that cannot rot; this is the one that says the
+    file the test above actually blocks on is present, parses, and is not
+    empty."""
+    short = lc.clause_floor_shortfall(lc.FLOW_YAML, lc.CLAUSE_FLOOR)
+    assert short["floor"] > 100, short
+    assert short["missing"] == [], short["missing"]
 
 
 def test_the_identity_keeps_the_cmd_and_not_just_the_program(tmp_path):

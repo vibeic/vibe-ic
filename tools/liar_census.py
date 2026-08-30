@@ -646,6 +646,127 @@ def population_report(flow_yaml: Path) -> Dict[str, Any]:
             "unrecognised": unrecognised}
 
 
+#: The record of every clause the flow HAS declared. Not a count: the clauses
+#: themselves, on the identity `population_delta` diffs by.
+CLAUSE_FLOOR = HERE / "flow_declared_clause_floor.json"
+
+
+def _clause_counter(flow_yaml: Path):
+    """The flow's clauses as a multiset of `(step, kind, cmd)`.
+
+    The SAME identity `population_delta` uses, taken from the same walk, so the
+    floor and the delta can never disagree about what one clause is."""
+    import collections  # noqa: PLC0415
+    return collections.Counter(
+        (c.step, c.kind, c.cmd) for c in discover_clauses(flow_yaml))
+
+
+def read_clause_floor(floor_path: Path = CLAUSE_FLOOR):
+    """The recorded clause multiset. ABSENT, UNREADABLE and EMPTY are REFUSED.
+
+    All three would make `clause_floor_shortfall` unable to report anything,
+    and a shrink detector that cannot fire reports success. Raised rather than
+    returned as an empty set for exactly that reason."""
+    import collections  # noqa: PLC0415
+    if not floor_path.is_file():
+        raise FileNotFoundError(
+            f"{floor_path} is missing. It is the record of the clauses this "
+            f"flow has declared, and it is the only thing that can notice one "
+            f"leaving; with no record there is nothing to compare and a PASS "
+            f"would certify nothing.")
+    try:
+        doc = json.loads(floor_path.read_text(encoding="utf-8"))
+    except ValueError as exc:
+        raise ValueError(f"{floor_path} is not readable JSON ({exc}). An "
+                         f"unreadable floor is refused, never read as empty.")
+    entries = doc.get("clauses")
+    if not entries:
+        raise ValueError(f"{floor_path} records no clause; the shrink detector "
+                         f"could not fire and would report clean.")
+    return collections.Counter(
+        (e["step"], e["kind"], e["cmd"]) for e in entries)
+
+
+def clause_floor_shortfall(flow_yaml: Path = FLOW_YAML,
+                           floor_path: Path = CLAUSE_FLOOR) -> Dict[str, Any]:
+    """Which recorded clauses the flow no longer declares — and which are new.
+
+    WHY THIS REPLACED A HAND-WRITTEN NUMBER
+    =======================================
+    `test_nothing_the_flow_declares_is_left_unswept` pinned the population with
+    a literal, and that literal went stale SEVEN times. Every one of the seven
+    was a GROW: the flow gained a declaration and nothing in the flow's own
+    change had to remember a number living in a test file. Six were recorded in
+    that test's comment block as "the literal LAGGED"; the seventh arrived
+    while the sixth was still open in review.
+
+    THE LITERAL WAS NEVER THE GUARD ANYWAY. `swept == declared` is what pins
+    that the sweep is WHOLE, and it held on every one of those trees --
+    `unswept` and `unrecognised` empty throughout. The literal's stated job is
+    narrower: catch a flow that SILENTLY SHRINKS. A count is a poor instrument
+    for that and the census's own docstring says why -- 181 -> 181 cannot tell
+    a churn from no change, and "the answer a reader needs is never the count,
+    it is WHICH."
+
+    So the floor is the CLAUSES, and the verdict is by NAME:
+
+      MISSING   recorded, and the flow no longer declares it. THE FAILURE.
+                Reported one clause per line, so a deliberate retirement is
+                authorised by deleting exactly that entry in the same change
+                that removes it from the flow -- which is a reviewable diff
+                naming what left, and not a number nobody can check.
+      SURPLUS   declared, and not yet recorded. NOT a failure, and this is the
+                whole point: a grow never reopens this test, which is the
+                thing that made a number unmaintainable.
+
+    A record that only has to move when something is REMOVED is a record the
+    flow's own author is not asked to remember, and removal is the one event
+    that needs a human anyway.
+    """
+    live = _clause_counter(flow_yaml)
+    floor = read_clause_floor(floor_path)
+
+    def listed(delta) -> List[Dict[str, str]]:
+        return [{"step": step, "kind": kind, "cmd": cmd}
+                for (step, kind, cmd), n in sorted(delta.items())
+                for _ in range(n)]
+
+    return {"floor": sum(floor.values()), "declared": sum(live.values()),
+            "missing": listed(floor - live), "surplus": listed(live - floor)}
+
+
+def record_clause_floor(flow_yaml: Path = FLOW_YAML,
+                        floor_path: Path = CLAUSE_FLOOR) -> Dict[str, Any]:
+    """Add the flow's new clauses to the record. NEVER removes one.
+
+    Refresh has to be safe to run without judgement, or nobody will run it and
+    the record decays. It is safe because it is ADDITIVE ONLY: if the flow no
+    longer declares something the record holds, this REFUSES rather than
+    dropping the entry, because dropping it is exactly how a shrink would be
+    authorised by accident. That case is the one a human has to decide, and it
+    is decided by hand, in the change that removes the clause.
+    """
+    NL = chr(10)
+    short = clause_floor_shortfall(flow_yaml, floor_path)
+    if short["missing"]:
+        raise ValueError(
+            "refusing to rewrite the floor: the flow no longer declares "
+            + str(len(short["missing"])) + " recorded clause(s). Removing them "
+            "here would authorise a shrink silently. Delete the entries by "
+            "hand, in the change that removes them from the flow:" + NL
+            + NL.join(f"  {c['step']}  {c['kind']}  {c['cmd']}"
+                      for c in short["missing"]))
+    live = _clause_counter(flow_yaml)
+    doc = json.loads(floor_path.read_text(encoding="utf-8")) \
+        if floor_path.is_file() else {}
+    doc["clauses"] = [{"step": s, "kind": k, "cmd": c}
+                      for (s, k, c), n in sorted(live.items())
+                      for _ in range(n)]
+    floor_path.write_text(json.dumps(doc, indent=2, ensure_ascii=False) + "\n",
+                          encoding="utf-8")
+    return short
+
+
 def population_delta(before_yaml: Path, after_yaml: Path) -> Dict[str, Any]:
     """WHICH clauses arrived and WHICH left, between two flow blobs.
 
