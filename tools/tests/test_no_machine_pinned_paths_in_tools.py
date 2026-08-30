@@ -162,3 +162,76 @@ def test_the_harvest_join_key_is_left_alone():
         + "\nThis key is data, not a path. Rewriting it disarms the "
           "verify_consolidation.py negative control."
     )
+
+
+# ----------------------------------------- the LIVE SURFACE the guards missed --
+#
+# The two cases above hold the shipped systemd units and one argparse default.
+# Neither reaches the OPERATOR DOCUMENTATION beside them, and neither reaches
+# tools/tests/. MEASURED on ebccf100a0 (v1.13.77), with both cases above GREEN:
+#
+#   tools/ci/GATEKEEPER_ENFORCEMENT.md:114   ## Deploying on 8HD-4 (<a LAN address>)
+#   tools/tests/test_gen_flow_gate_d9_premise.py:98
+#                                            live = Path("/home/<operator>/vibeic.ai/...")
+#
+# The heading is LIVE SURFACE, not a record: it is the instruction a reader
+# follows, and it names an address on someone's internal network. The pinned
+# page is worse than unportable -- it is a test that could run on exactly one
+# machine on earth and skipped, identically and silently, everywhere else. The
+# path does not exist even on the machine it names.
+
+#: An IPv4 dotted quad. Deliberately not narrowed to RFC1918: a routable
+#: address in a deploy instruction is the same defect wearing a different hat,
+#: and `docs/research/` keeps its host lines because a record is not an
+#: instruction. MEASURED: with the heading repaired, tools/ci carries ZERO
+#: matches, so this case has no false positives to tolerate.
+_IPV4 = re.compile(r"(?<![\w.])((?:\d{1,3}\.){3}\d{1,3})(?![\w.])")
+
+
+def _operator_surface():
+    """Everything under tools/ci/ a reader is meant to READ or RUN."""
+    out = []
+    for pat in ("*.md", "*.sh", "*.service", "*.timer"):
+        out.extend(CI.glob(pat))
+    return sorted(out)
+
+
+def test_no_operator_facing_file_names_a_host_address():
+    """A deploy instruction may not name one network's address.
+
+    `test_no_shipped_ci_unit_names_an_account_or_a_home_directory` above scans
+    ONLY `*.service` / `*.timer`, so the deploy doc that tells you how to
+    install them was held to nothing.
+    """
+    offenders = []
+    for p in _operator_surface():
+        for n, line in enumerate(p.read_text(encoding="utf-8",
+                                             errors="ignore").splitlines(), 1):
+            for m in _IPV4.finditer(line):
+                if all(int(o) < 256 for o in m.group(1).split(".")):
+                    offenders.append(f"{p.relative_to(ROOT)}:{n}: {m.group(1)}")
+    assert not offenders, (
+        "host address(es) in operator-facing files under tools/ci:\n  "
+        + "\n  ".join(offenders)
+        + "\nName the ROLE, not the address -- the reader's host is not yours."
+    )
+
+
+def test_the_d9_premise_page_is_resolved_from_the_environment():
+    """The published page is a fact about the publishing host, not the repo.
+
+    Pinned to one home directory this test skipped on every machine including
+    the one it named, where the path does not exist either. Reading it from
+    `VIBEIC_PUBLISHED_FLOW_GATE_PAGE` is what lets any publisher run it at all.
+    """
+    src = (ROOT / "tools" / "tests"
+           / "test_gen_flow_gate_d9_premise.py").read_text(encoding="utf-8")
+    assert "VIBEIC_PUBLISHED_FLOW_GATE_PAGE" in src, (
+        "the published-page location must be named by env var, so a host other "
+        "than the author's can supply it"
+    )
+    hit = _HOME.search(src)
+    assert hit is None, (
+        f"the d9 premise test pins a home directory ({hit.group(0)!r}); it can "
+        f"then run on one machine and skip, silently, on every other"
+    )

@@ -111,7 +111,7 @@ tools/ci/gatekeeper_status_poller.py --sha $(git rev-parse HEAD)
 git push origin $(git rev-parse HEAD):main     # accepted once green
 ```
 
-## Deploying on 8HD-4 (192.168.1.120)
+## Deploying the poller on a host
 
 ```bash
 # on the runner host, as the account the gate should speak as

@@ -559,7 +559,7 @@ subject   462b66838  (the candidate tip; the table edit and the version bump
                       are the commit that carries this section, and neither
                       touches code)
 control   8e5ce1629  (v1.12.15) — live main immediately before this landing
-host      8HD-a (1.34.17.159)
+host      8HD-a
 image     ghcr.io/vibeic/vibeic-eda@sha256:66c33ff2 — the digest BOTH
           tools/ci/protected_landing_transition.json and
           tools/ci/run_suite_in_eda_image.sh pin, entrypoint bypassed

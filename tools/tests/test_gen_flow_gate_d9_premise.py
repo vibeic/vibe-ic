@@ -95,10 +95,19 @@ def test_the_refusal_writes_nothing(tmp_path):
 
 
 def test_the_published_page_is_untouched_by_a_check():
-    live = Path("/home/reyerchu/vibeic.ai/flow-gate.html")
+    # The page's location is a fact about the publishing host, not about this
+    # repository, so it is NAMED by env var rather than pinned to one home
+    # directory. Pinned, this test could only ever run on one machine on earth
+    # and skipped -- silently and identically -- everywhere else.
+    import os
+    import pytest
+    where = os.environ.get("VIBEIC_PUBLISHED_FLOW_GATE_PAGE")
+    if not where:                                       # pragma: no cover
+        pytest.skip("VIBEIC_PUBLISHED_FLOW_GATE_PAGE is unset: no published "
+                    "page to check on this host")
+    live = Path(where)
     if not live.is_file():                              # pragma: no cover
-        import pytest
-        pytest.skip("the published page is not on this host")
+        pytest.skip(f"VIBEIC_PUBLISHED_FLOW_GATE_PAGE={where!r} is not a file")
     before = live.read_bytes()
     r = _run("--reality", str(_REALITY), "--page", str(live), "--check")
     assert r.returncode == 2, r.stdout + r.stderr
