@@ -830,6 +830,22 @@ PLATFORM_CAPABILITY_GAPS_AS_MEASURED: Dict[Any, str] = {}
 #:           is that answer. The recomputation also says, as a by-product, that
 #:           no other member had gone stale in the meantime.
 SINGLE_ENTRY_STEPS_AS_MEASURED: Tuple[str, ...] = (
+    # 2026-08-31: 26 -> 24 members. Steps 14 and 37 LEFT. v1.13.78 gave the
+    # on-pass review a verdict source with an executed producer, so each of
+    # those steps now WRITES a per-stage compliance report and reads it on the
+    # next clause; the artefact was not declared, d7 went red on it, and
+    # declaring it took both steps from one required_output to two. They are
+    # out of this population because they are no longer single-entry, not
+    # because anything was removed from them: the change that moved them is
+    # purely additive (+6 lines, 0 removed) and every other member is unmoved.
+    #
+    # RE-DERIVED, not hand-edited. This tuple is exactly what
+    # `[k for k in step_ids() if len(required_outputs(k)) < 2]` answers on this
+    # tree, in flow order — recomputed in full rather than by deleting the two
+    # names, so the recomputation also certifies that no OTHER member went
+    # stale in the meantime (it says: 0 joined). The file's own note above
+    # says why that matters: a hand-edited tuple is how v1.10.38 shipped a
+    # 28-entry pin over a 27-step population.
     # 2026-08-21: 26 -> 27 members. Step 1.6x JOINED — `7fcbc7397` added it with
     # exactly one required_output (`reports/crosslayer/rewrite_equivalence
     # _check.json`), which is what this population means. 37.5ic and 37.5self
@@ -846,9 +862,30 @@ SINGLE_ENTRY_STEPS_AS_MEASURED: Tuple[str, ...] = (
     # out of it now (5 entries); step 37.5self JOINED at v1.11.4 with one output
     # and LEFT with the step itself when the general precheck became 37.5ic's
     # second ARM.
-    "1", "8", "FS1", "DT1", "12", "A1", "A2", "A3", "A4", "A5",
-    "A7", "A9", "14", "16", "17", "20", "22", "DT2", "DT3", "35", "36",
-    "37", "M4", "42", "44", "P0",
+    "1",
+    "8",
+    "FS1",
+    "DT1",
+    "12",
+    "A1",
+    "A2",
+    "A3",
+    "A4",
+    "A5",
+    "A7",
+    "A9",
+    "16",
+    "17",
+    "20",
+    "22",
+    "DT2",
+    "DT3",
+    "35",
+    "36",
+    "M4",
+    "42",
+    "44",
+    "P0",
 )
 
 

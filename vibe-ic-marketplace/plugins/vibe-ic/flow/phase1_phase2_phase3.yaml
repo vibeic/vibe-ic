@@ -1484,6 +1484,7 @@ steps:
     required_outputs:
       - "reports/phase2/lint/rtl_hygiene.json"
       - "reports/phase2/lint/rom_init_lint.json"
+      - "reports/phase1/gates/stage_phase1_compliance.json"
       # Always written, including NOT_APPLICABLE, so "no cross-layer search"
       # remains distinct from "the fidelity check never ran". Appended after
       # the two long-standing lint outputs to preserve their stable ordering.
@@ -3956,6 +3957,7 @@ steps:
       - yosys_tiecell_recipe_order_check
     required_outputs:
       - "phase2/stage2/synth/netlist.v"
+      - "reports/analog/stage_analog_compliance.json"
     gate:
       all_of:
         # ── ON-PASS REVIEW of stage_analog ─────────────────────────────────
@@ -4057,6 +4059,7 @@ steps:
     required_outputs:
       - "phase3/stage3/pnr/floorplan.def"
       - "phase3/stage3/pnr/pdn.tcl OR phase3/stage3/pnr/pdn.done"
+      - "reports/phase2/gates/stage2_compliance.json"
     gate:
       all_of:
         # ── ON-PASS REVIEW of stage2 ─────────────────────────────────
@@ -7074,6 +7077,7 @@ steps:
     mcp_tools: [eda_gds]
     required_outputs:
       - "phase3/stage4/gds/*.gds"
+      - "reports/phase3/gates/stage3_compliance.json"
     gate:
       all_of:
         # ── ON-PASS REVIEW of stage3 ─────────────────────────────────
@@ -7274,6 +7278,7 @@ steps:
       - "phase3/stage4/hardmacro/*.lib"
       - "phase3/stage4/hardmacro/*.gds"
       - "phase3/stage4/hardmacro/*.v"
+      - "reports/phase3/digital_hardmacro.json"
       # ONE DIRECTORY PER DELIVERED PACKAGE, including the single-package case:
       # a kit with two macros has two datasheets, and a shape that collapses the
       # common case would make the shape exercised on every run different from
@@ -7746,6 +7751,7 @@ steps:
     required_outputs:
       - "phase2/stage1/fpga/final/*.sof"
       - "reports/phase2/fpga/on_board_pass.json"
+      - "reports/phase3/gates/stage4_compliance.json"
     # Hardened 2026-04-22: single-JSON self-attestation ("echo
     # all_scenarios_passed: true > on_board_pass.json") is rejected.
     # Requires: pass.json with hashed bitstream + scenarios list;
