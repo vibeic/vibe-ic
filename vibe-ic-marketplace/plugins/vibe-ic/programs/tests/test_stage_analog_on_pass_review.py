@@ -421,7 +421,13 @@ def test_every_rule_has_an_emitter_and_a_printer():
     this stage did not author.
     """
     mod = _program()
+    # A rule DECLARED BUT NOT ENABLED can reach `emit_test` the moment it is
+    # enabled, and the point of registering its emitter early is that enabling
+    # it later cannot silently write somebody else's test. So the invariant is
+    # over every rule that CAN reach the emitter, not only the running ones.
     ids = {rid for rules in mod._RULES.values() for rid, _ in rules}
+    ids |= {rid for rules in getattr(mod, "_DECLARED_NOT_ENABLED", {}).values()
+            for rid, _ in rules}
     assert RULE in ids
     assert set(mod._EMITTERS) == ids, (
         f"emitters {sorted(set(mod._EMITTERS) ^ ids)} do not match the rules")

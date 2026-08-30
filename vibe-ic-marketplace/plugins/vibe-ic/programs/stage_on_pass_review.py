@@ -50,10 +50,10 @@ AUDIT_ONLY. If a stage is ever wired to block, the flow is what changes and
 this line changes with it.
 
 THAT SENTENCE DELIBERATELY STATES NO COUNT, AND THE REASON IS MEASURED TWICE
-OVER. It said "both wirings — stage1 and stage2", written against v1.13.3. It
-was ALREADY FALSE when v1.13.7 landed it, because v1.13.4 (#1848) had wired
-stage3 in between. Correcting it to "three" would have been false again inside
-a day: v1.13.11 (#1849) wired `stage_analog`, making four. Two stale counts in
+OVER. It once named the two wirings that existed when it was written, against
+v1.13.3. It was ALREADY FALSE when v1.13.7 landed it, because v1.13.4 had wired
+a third in between. Correcting it to "three" would have been false again inside
+a day: v1.13.11 wired a fourth. Two stale counts in
 one sentence in nine versions is not carelessness, it is what a hand-typed
 count DOES, and the remedy is the one this repo already applies to every stated
 programs/ count — do not write the number, let the check read it. The guard
@@ -183,6 +183,139 @@ rejection: the run is NOT CHECKED (rc 2), because an unproven rejection is a
 reviewer manufacturing confidence, which is the failure this whole rung exists
 to prevent.
 
+RULE R5 — PACKAGE_CANNOT_BOND_THE_DESIGN (stage5_manufacturing)
+================================================================
+DECLARED, AND DELIBERATELY NOT ENABLED. It has never fired, it cannot fire
+today, and the paragraphs below say why in as many words rather than leaving a
+reader to discover it from an rc.
+
+WHAT IT WOULD ASK. The intent (`L1_DATASHEET.json`) names the package the part
+is meant to ship in — `package_info.package_type` and `package_info.pin_count`
+— and, separately, how many signals the design brings to the outside world
+(`pin_table`, `external_pins`, `external_pin_count`). Stage 5's step 42 records
+the package that was actually assembled in `packaging_log.json`. When the
+assembled package provides fewer bond-out pins than the design needs, the part
+cannot be bonded out, and NOTHING IN THE FLOW ASKS: measured at v1.12.100, all
+five stage-5 gates — `manufacturing_fab_intake_check`, `wafer_sort_yield_check`,
+`packaging_intake_check`, `final_test_attestation_check`,
+`htol_attestation_check` — carry ZERO references to `phase1/` or to any L
+document. They check each artefact against itself. Stage 2 checks the netlist
+against the RTL and stage 3 checks layout against netlist and PDK, so a package
+too small for its own die passes every gate in the flow.
+
+WHY IT IS NOT ENABLED. There is no artefact to review. MEASURED 2026-08-30 over
+the published corpus and this fleet: of 105 published run roots (a root being a
+directory carrying `phase1/generated_docs`), **0** carry a
+`phase3/stage5_manufacturing/` directory, **0** carry `silicon_received.json`,
+and **0** commits in the history of either repository ever added a file under
+any `phase3/stage5_manufacturing/` path. The only published
+`steps/manufacturing/stage5_manufacturing/**` files are D3 AUDIT LEDGERS
+(`STEP_RECORD.json`, `written.json`) recording `n_produced: 0` and
+`declared_output_not_produced … "reason": "absent"` — they are the matrix
+tooling's record that the step made nothing, and reading them as stage-5
+artefacts is the mistake this paragraph exists to prevent.
+
+So both halves of the control would have to be authored. A reviewer proven
+against artefacts its own author created for the purpose has never been tested,
+and enabling it would put exactly the confidence this rung exists to refuse
+behind a rule nothing has ever contradicted. It is therefore registered in
+`_DECLARED_NOT_ENABLED`, not in `_RULES`: `--stage stage5_manufacturing`
+reports the declaration and returns 2. The flow block carries no `gate:` key,
+so nothing invokes it.
+
+AND THE STAGE STILL REPORTS GREEN, which is why the gap is worth writing down.
+On the real published report
+`ic/sha256/clean_run_v1427_20260715/_logs/flow_compliance_strict.json` all five
+stage-5 rows are `SKIPPED-CONDITION`, and `stage_passed()` holds that in its
+green set — `{'passed': True, 'why': '5 row(s) for stage5_manufacturing; all
+green'}`. An on-pass review declared here FIRES on every real subject and finds
+nothing to read.
+
+THE HALF THAT IS PROVABLE TODAY, AND WHAT IT FOUND
+--------------------------------------------------
+The artefact side cannot be tested. The INTENT side can, because L1 is real and
+published, and `read_package_intent` is the reader R5 would use. Run over the
+105 published roots it finds that the intent CONTRADICTS ITSELF on **7 of the 7
+roots that state a package at all**, every one of them with
+`no_package_in_input: false` — that is, while claiming it read the package out
+of the design input, not while disclosing that it could not:
+
+    …/uart       QFP  pin_count 0   design needs 38 (external_pins)
+    …/jtag       QFP  pin_count 0   design needs  5
+    …/swd        BGA  pin_count 0   design needs  4
+    …/mipi       BGA  pin_count 0   design needs  7
+    …/onfi      TSOP  pin_count 0   design needs 24
+    …/pcie_gen5  BGA  pin_count 0   design needs  5
+    …/hdmi       QFP  pin_count 5   design needs 64, and its own
+                                    external_pin_count says so in words:
+                                    "64-pin PAP (HTQFP) package; 64 pins total"
+
+A package with zero pins is not a package, and it is what stage 5 would be
+judged against. This is a finding about the INPUT to manufacturing and it
+stands whether or not stage 5 ever runs; it is reported here rather than
+repaired here, because repairing an L document is Phase 1's, not this rung's.
+
+The whole partition, so a rule that widened or stopped biting is visible as a
+number and not as a claim: **7 REJECT, 98 DISARMED, 0 ACCEPT, 0 NOT_CHECKED**
+over 105 roots.
+
+THE ACCEPT DIRECTION HAS NO REAL SUBJECT, and that is stated rather than
+implied: not one published root declares a package big enough for its own pin
+list, because only 8 declare a `package_info` dict at all and 7 of those are the
+rejections above (the 8th, `ic/edge_llm_matmul_accel`, states a *style* — "bare
+die on carrier" — and no pin count). So the ACCEPT branch below is exercised
+only by unit tests. A reader should weigh this reader's acceptances
+accordingly; its rejections are the part real data has tested.
+
+WHAT THE DISARM ACTUALLY DOES HERE, MEASURED BOTH WAYS. Removing it moves those
+98 roots from DISARMED to NOT_CHECKED and **the rejection set does not move at
+all** — they carry no `package_info.pin_count`, so the `provides is None` branch
+already refuses them. That is unlike R1, whose disarm moved 12 cells out of the
+rejection set and was narrowed deliberately. Stating it matters because a disarm
+that carries 98 of 105 subjects looks load-bearing and is not: here it changes a
+LABEL, and the honest label for "the intent disclosed it read no package" is
+DISARMED rather than "could not read".
+
+WHAT WOULD ENABLE IT, EXACTLY
+----------------------------
+Stated as files rather than as an intention, because "get some real data" is
+not an entry condition anybody can check. R5 moves from
+`_DECLARED_NOT_ENABLED` to `_RULES` when a run tree carries BOTH of these,
+neither of them written to make the rule fire:
+
+    phase3/stage5_manufacturing/silicon_received.json   (step 40's intake
+        declaration — without it every stage-5 step is SKIPPED-CONDITION and
+        the review has no subject)
+    phase3/stage5_manufacturing/packaging_log.json      (step 42's own declared
+        output, stating `package_type` and `pin_count`)
+
+and the pair of them exists TWICE: once as a known-GOOD assembly whose pin
+count covers its design's external pin population, and once as a known-BAD one
+whose pin count does not. ONE of each is the minimum — a rule shown only to
+reject has not been shown not to reject everything, and a rule shown only to
+accept is a rubber stamp. Neither may be authored by whoever enables the rule.
+
+How such artefacts come to exist is not this program's call and no estimate of
+it is offered here.
+
+WHEN R5 DISARMS. `no_package_in_input: true` — the intent disclosing it could
+not read a package out of the design input — disarms it, exactly as
+`no_top_module_in_input` disarms R1. A review cannot call a contradiction
+against a declaration of ignorance. The disarm is narrow in the same way: it
+reads the DISCLOSURE field, never a package-type string it finds plausible.
+
+AND THE DISCLOSURE FIELD IS SECTION-GRANULAR, WHICH IS WHY `pin_count: 0` IS
+REPORTED RATHER THAN READ AS A CLAIM OF ZERO. `phase1_doc_one_shot_runner.py`
+flips the sentinel with `if l1.get(flag) is True and l1.get(section): l1[flag] =
+False` — that is, whenever the `package_info` SECTION is non-empty, whatever
+field put it there, and under a `landed > 0` counter that also counts bullets
+landing in other sections. So `no_package_in_input: false` warrants that
+something reached `package_info`, NOT that a pin count was read, and a `0`
+published there cannot be distinguished from a pin count nobody found. Either
+way the document as published states a package its own pin list refutes, which
+is what the finding says; attributing each of the seven to a producer path is
+Phase 1's question and is not asserted here.
+
 §4.05
 =====
 `intent:` is the design INPUT. `intent_deny:` is enforced, not documentation: a
@@ -204,8 +337,9 @@ Exit codes
 ==========
     0 = ACCEPT — the stage's artefact and the intent do not contradict
     1 = REJECT — at least one proven contradiction, evidence in the report
-    2 = NOT CHECKED — no declaration, stage PASS not established, a denied
-        intent path, an unreadable input, or a finding that could not be proven
+    2 = NOT CHECKED — no declaration, a rule DECLARED BUT NOT ENABLED
+        (`_DECLARED_NOT_ENABLED`), stage PASS not established, a denied intent
+        path, an unreadable input, or a finding that could not be proven
 """
 from __future__ import annotations
 
@@ -1715,6 +1849,296 @@ if __name__ == "__main__":
 '''
 
 
+# R5 (stage5_manufacturing) — DECLARED, NOT ENABLED. See the module docstring.
+# ─────────────────────────────────────────────────────────────────────────────
+#: The intent field L1 uses to disclose that it could not read a package out of
+#: the design input. R5's disarm reads THIS, never a package-type string.
+_NO_PACKAGE_FIELD = "no_package_in_input"
+
+#: Where the intent states how many pins the package provides.
+_PKG_PIN_COUNT_PATH = ("package_info", "pin_count")
+
+#: Where the artefact states what was actually assembled. Step 42's declared
+#: output; absent from every published run — which is why R5 is not enabled.
+_PACKAGING_LOG = "phase3/stage5_manufacturing/packaging_log.json"
+
+
+def _as_pin_count(value: Any) -> Optional[int]:
+    """A pin count, or None when the field states no number.
+
+    L1 publishes this field as an int on most roots and as PROSE on others
+    (`"64-pin PAP (HTQFP) package; 64 pins total"`), so a reader that accepts
+    only ints would silently score the prose roots as "no declaration" — an
+    absent count and an unparsed one must not share an outcome. A bool is not a
+    count: `True` is an int in Python and would otherwise read as one pin.
+    """
+    if isinstance(value, bool) or value is None:
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        return int(value) if value == int(value) else None
+    if isinstance(value, str):
+        import re
+        m = re.search(r"\d+", value)
+        return int(m.group()) if m else None
+    return None
+
+
+def read_package_intent(l1_path: Path) -> Dict[str, Any]:
+    """What the intent says the package PROVIDES and what the design NEEDS.
+
+    Both halves come from the same document, which is what makes this half of
+    R5 provable while the artefact half is not: L1 states the package's pin
+    count AND enumerates the design's external pins, so it can contradict
+    itself with no manufacturing artefact in existence.
+
+    `needs` is taken from the LARGEST of the three pin populations L1
+    publishes, and `needs_source` names which one it came from. Taking the
+    largest is deliberate: `pin_table`, `external_pins` and
+    `external_pin_count` are three partial statements of one fact (MEASURED:
+    25, 73 and 31 of 105 roots respectively, and they disagree with each other
+    on roots that carry more than one), and a package must bond out ALL of the
+    design's pins, so the binding requirement is the greatest of them. Taking
+    the smallest would let an under-counted field excuse an undersized package.
+    """
+    try:
+        d = json.loads(l1_path.read_text(encoding="utf-8", errors="replace"))
+    except (OSError, ValueError) as e:
+        return {"readable": False, "why": str(e)}
+    if not isinstance(d, dict):
+        return {"readable": False, "why": "L1 is not a mapping"}
+
+    pkg = d.get(_PKG_PIN_COUNT_PATH[0])
+    pkg = pkg if isinstance(pkg, dict) else {}
+    provides = _as_pin_count(pkg.get(_PKG_PIN_COUNT_PATH[1]))
+
+    populations = {
+        "pin_table": len(d["pin_table"]) if isinstance(d.get("pin_table"), list) else None,
+        "external_pins": (len(d["external_pins"])
+                          if isinstance(d.get("external_pins"), list) else None),
+        "external_pin_count": _as_pin_count(d.get("external_pin_count")),
+        "total_external_pin_count": _as_pin_count(d.get("total_external_pin_count")),
+    }
+    stated = {k: v for k, v in populations.items() if isinstance(v, int) and v > 0}
+    needs_source, needs = (max(stated.items(), key=lambda kv: kv[1])
+                           if stated else (None, None))
+
+    return {
+        "readable": True,
+        "file": str(l1_path),
+        "field": "package_info.pin_count",
+        "value": provides,
+        "package_type": pkg.get("package_type"),
+        "provides": provides,
+        "needs": needs,
+        "needs_source": needs_source,
+        "pin_populations": populations,
+        _NO_PACKAGE_FIELD: d.get(_NO_PACKAGE_FIELD),
+        "declares_no_package": d.get(_NO_PACKAGE_FIELD) is True,
+    }
+
+
+def intent_self_contradicts(intent: Dict[str, Any]) -> Dict[str, Any]:
+    """Does the intent's own package declaration refuse its own pin list?
+
+    This is R5's question asked one field earlier, and it is answerable on real
+    published data with no manufacturing artefact at all. It is NOT the rule:
+    the rule compares the intent to what stage 5 assembled. It is the reader
+    R5 depends on, exercised where evidence exists.
+    """
+    if not intent.get("readable"):
+        return {"verdict": "NOT_CHECKED", "why": intent.get("why")}
+    if intent.get("declares_no_package"):
+        return {"verdict": "DISARMED",
+                "observation": (
+                    f"the intent DECLARES it could not read a package out of "
+                    f"the design input ({_NO_PACKAGE_FIELD}=True); "
+                    f"{intent.get('package_type')!r} is a placeholder, not a "
+                    f"claim about this design")}
+    if intent.get("provides") is None:
+        return {"verdict": "NOT_CHECKED",
+                "why": ("the intent states no package_info.pin_count; an "
+                        "absent declaration is not an agreement")}
+    if intent.get("needs") is None:
+        return {"verdict": "NOT_CHECKED",
+                "why": ("the intent enumerates no external pin; an empty pin "
+                        "population refutes nothing and certifies nothing")}
+    if int(intent["provides"]) >= int(intent["needs"]):
+        return {"verdict": "ACCEPT"}
+    return {
+        "verdict": "REJECT",
+        "contradiction": (
+            f"the intent declares a {intent.get('package_type')!r} package of "
+            f"{intent['provides']} pin(s) with {_NO_PACKAGE_FIELD}="
+            f"{intent.get(_NO_PACKAGE_FIELD)!r} — that is, while claiming it "
+            f"read the package out of the design input — and the SAME document "
+            f"brings {intent['needs']} signal(s) to the outside world "
+            f"({intent['needs_source']}). A package of "
+            f"{intent['provides']} pin(s) cannot bond out {intent['needs']}."),
+    }
+
+
+def rule_package_cannot_bond_design(project: Path, decl: Dict[str, Any]) -> Dict[str, Any]:
+    """R5. DECLARED, NOT ENABLED — registered in `_DECLARED_NOT_ENABLED`.
+
+    Written so the gap is legible and so enabling it is an edit to one
+    registry rather than an authoring job. It is not reachable from `main`
+    while stage5 stays out of `_RULES`, and it MUST NOT be moved there on the
+    strength of an artefact written to make it fire: see the module docstring.
+    """
+    intent_rel = [str(x) for x in (decl.get("intent") or [])]
+    artefact_rel = [str(x) for x in (decl.get("artefact") or [])]
+    l1 = next((project / r for r in intent_rel
+               if r.endswith("L1_DATASHEET.json")), None)
+    if l1 is None:
+        return {"verdict": "NOT_CHECKED",
+                "why": ("the stage's `intent:` names no L1_DATASHEET.json; R5 "
+                        "has no intent to read")}
+    if not l1.exists():
+        return {"verdict": "NOT_CHECKED",
+                "why": f"{l1} does not exist; the intent was never published"}
+    intent = read_package_intent(l1)
+    intent["intent_rel"] = str(l1.relative_to(project))
+    if not intent.get("readable"):
+        return {"verdict": "NOT_CHECKED", "why": f"{l1}: {intent.get('why')}"}
+
+    log = next((project / r for r in artefact_rel
+                if r.endswith("packaging_log.json")), project / _PACKAGING_LOG)
+    if not log.exists():
+        # THE ONLY BRANCH ANY REAL RUN HAS EVER REACHED. Not an acceptance:
+        # nothing was assembled, so nothing was reviewed.
+        return {"verdict": "NOT_CHECKED", "intent": intent,
+                "why": (f"{log} does not exist; stage 5 assembled nothing, so "
+                        f"there is no package for the intent to contradict")}
+    try:
+        art = json.loads(log.read_text(encoding="utf-8", errors="replace"))
+    except (OSError, ValueError) as e:
+        return {"verdict": "NOT_CHECKED", "intent": intent, "why": f"{log}: {e}"}
+    if not isinstance(art, dict):
+        return {"verdict": "NOT_CHECKED", "intent": intent,
+                "why": f"{log} is not a mapping"}
+
+    assembled = _as_pin_count(art.get("pin_count"))
+    artefact = {"file": str(log.relative_to(project)),
+                "package_type": art.get("package_type"),
+                "pin_count": assembled}
+    if assembled is None:
+        return {"verdict": "NOT_CHECKED", "intent": intent, "artefact": artefact,
+                "why": (f"{log} states no pin_count; an artefact that does not "
+                        f"say what it assembled cannot be compared")}
+    if intent.get("declares_no_package"):
+        return {"verdict": "DISARMED", "intent": intent, "artefact": artefact,
+                "observation": intent_self_contradicts(intent)["observation"]}
+    if intent.get("needs") is None:
+        return {"verdict": "NOT_CHECKED", "intent": intent, "artefact": artefact,
+                "why": ("the intent enumerates no external pin; an empty pin "
+                        "population refutes nothing and certifies nothing")}
+    if assembled >= int(intent["needs"]):
+        return {"verdict": "ACCEPT", "intent": intent, "artefact": artefact}
+    return {
+        "verdict": "REJECT", "intent": intent, "artefact": artefact,
+        "contradiction": (
+            f"the design brings {intent['needs']} signal(s) to the outside "
+            f"world ({intent['needs_source']}) and stage 5 assembled a "
+            f"{art.get('package_type')!r} of {assembled} pin(s): the part "
+            f"cannot be bonded out."),
+    }
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+#: R5's own emitted regression. It reads the run's packaging log and the run's
+#: L1 — no oracle, no harness, no golden — and re-derives nothing.
+_EMITTED_TEST_R5 = r'''#!/usr/bin/env python3
+"""AUTO-EMITTED by `{program}` from a stage-{stage} ON-PASS review rejection.
+
+    {contradiction}
+
+This test FAILS while that is true of this run tree and PASSES once it is
+repaired. It reads only this run's own INTENT (the L1 datasheet) and ARTEFACT
+(the packaging log step 42 wrote); it runs no tool and assembles nothing.
+
+REPAIR is one of exactly two things, and which one is a design decision this
+test does not make:
+  * the part is assembled in a package that carries every pin the design
+    brings to the outside world, or
+  * the intent is corrected to declare the pin population the design really
+    has, and the package chosen for it.
+"""
+import json
+import re
+import sys
+from pathlib import Path
+
+INTENT_REL = {intent_rel!r}
+ARTEFACT_REL = {artefact_rel!r}
+
+
+def run_root() -> Path:
+    for d in [Path(__file__).resolve()] + list(Path(__file__).resolve().parents):
+        if (d / "phase1" / "generated_docs").is_dir():
+            return d
+    raise AssertionError("no run root above %s" % __file__)
+
+
+def _count(v):
+    if isinstance(v, bool) or v is None:
+        return None
+    if isinstance(v, int):
+        return v
+    if isinstance(v, str):
+        m = re.search(r"\d+", v)
+        return int(m.group()) if m else None
+    return None
+
+
+def test_the_assembled_package_carries_every_pin_the_design_brings_out():
+    root = run_root()
+    intent = json.loads((root / INTENT_REL).read_text(encoding="utf-8",
+                                                      errors="replace"))
+    art = json.loads((root / ARTEFACT_REL).read_text(encoding="utf-8",
+                                                     errors="replace"))
+    pops = {{"pin_table": len(intent.get("pin_table") or [])
+             if isinstance(intent.get("pin_table"), list) else None,
+             "external_pins": len(intent.get("external_pins") or [])
+             if isinstance(intent.get("external_pins"), list) else None,
+             "external_pin_count": _count(intent.get("external_pin_count")),
+             "total_external_pin_count":
+                 _count(intent.get("total_external_pin_count"))}}
+    stated = {{k: v for k, v in pops.items() if isinstance(v, int) and v > 0}}
+    assert stated, (
+        "%s enumerates no external pin; this test refutes nothing over an "
+        "empty pin population" % INTENT_REL)
+    source, needs = max(stated.items(), key=lambda kv: kv[1])
+    assembled = _count(art.get("pin_count"))
+    assert assembled is not None, (
+        "%s states no pin_count; an artefact that does not say what it "
+        "assembled cannot be compared" % ARTEFACT_REL)
+    assert assembled >= needs, (
+        "%s assembled a %r of %d pin(s) and %s brings %d signal(s) to the "
+        "outside world (%s): the part cannot be bonded out."
+        % (ARTEFACT_REL, art.get("package_type"), assembled, INTENT_REL,
+           needs, source))
+
+
+if __name__ == "__main__":
+    try:
+        test_the_assembled_package_carries_every_pin_the_design_brings_out()
+    except AssertionError as e:
+        print("FAIL: %s" % e)
+        sys.exit(1)
+    print("PASS: the assembled package carries every pin the design brings out")
+'''
+
+
+def _body_r5(finding: Dict[str, Any], stage_id: str) -> str:
+    return _EMITTED_TEST_R5.format(
+        program=_NAME, stage=stage_id,
+        contradiction=finding["contradiction"],
+        intent_rel=finding["intent"]["intent_rel"],
+        artefact_rel=finding["artefact"]["file"])
+
+
 _EMITTED_TEST_R3 = r"""#!/usr/bin/env python3
 '''AUTO-EMITTED by `{program}` from a stage-{stage} ON-PASS review rejection.
 
@@ -2152,7 +2576,45 @@ _EMITTERS = {"R1_INTENT_TOP_NOT_BUILT": _body_r1,
              "R2_INTENT_PIN_NOT_IN_NETLIST": _body_r2,
              "R3_SIGNOFF_CLOCK_SLOWER_THAN_INTENT": _body_r3,
              "R_ANALOG_INTENT_SPEC_NOT_THE_GRADED_SPEC": _body_analog,
-             "R4_DIE_IS_NOT_THE_DESIGN": _body_r4}
+             "R4_DIE_IS_NOT_THE_DESIGN": _body_r4,
+             # R5's rule is DECLARED AND NOT ENABLED, so `emit_test` is never
+             # reached for it from `main`. Its emitter is registered anyway:
+             # the KeyError guard exists to stop a rule writing SOMEBODY
+             # ELSE's test, and leaving R5 out would mean enabling it later
+             # silently produced exactly that, or a refusal nobody expected.
+             # Registered here, enabling R5 is one line in `_RULES` and the
+             # test it writes is its own.
+             "R5_PACKAGE_CANNOT_BOND_DESIGN": _body_r5}
+
+#: The rules this program DECLARES BUT DOES NOT RUN, per stage, each with the
+#: reason it is not enabled. A rule lands here — not in `_RULES` — when the
+#: contradiction it names is real and there is no evidence to prove it on, so
+#: that the gap is written down instead of being a thing nobody can see.
+#:
+#: THE ENTRY CONDITION FOR LEAVING THIS DICT is a control on artefacts this
+#: program's author did not create: one real known-GOOD and one real known-BAD.
+#: Moving a rule to `_RULES` on the strength of an artefact written to make it
+#: fire proves only that its author can write a file, and it puts the flow's
+#: confidence behind a rule nothing has ever contradicted.
+#: SAME SHAPE AS `_RULES`, deliberately: enabling a rule is then moving one
+#: entry between two dicts, not rewriting it. The reason lives beside it keyed
+#: by rule id, the way `_EMITTERS` and `_PRINTERS` are.
+_DECLARED_NOT_ENABLED = {
+    "stage5_manufacturing": [("R5_PACKAGE_CANNOT_BOND_DESIGN",
+                              rule_package_cannot_bond_design)],
+}
+
+#: Why each declared rule is not enabled. Carries the MEASUREMENT, so a reader
+#: can re-check the claim instead of taking it.
+_NOT_ENABLED_REASON = {
+    "R5_PACKAGE_CANNOT_BOND_DESIGN":
+        "no run has ever produced a stage-5 artefact: MEASURED 2026-08-30, 0 of "
+        "105 published run roots carry phase3/stage5_manufacturing/, 0 carry "
+        "silicon_received.json, and no commit in either repository's history "
+        "ever added a file under that path. Both halves of the control would "
+        "have to be authored, and a reviewer proven on its author's own "
+        "fixture has never been tested.",
+}
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -2262,6 +2724,24 @@ def _print_r2(f: Dict[str, Any]) -> None:
               f"rule never rejects on them")
 
 
+def _print_r5(f: Dict[str, Any]) -> None:
+    """R5's evidence. Its INTENT is a package and a pin population and its
+    ARTEFACT is one assembly record — neither R1's module set nor R2's port
+    list, so it renders its own."""
+    i, art = f["intent"], f["artefact"]
+    print(f"    INTENT   {i['file']} :: {i['field']} = {i['value']!r} "
+          f"({i['package_type']!r}), and the same document brings "
+          f"{i['needs']} signal(s) out ({i['needs_source']}); "
+          f"{_NO_PACKAGE_FIELD}={i.get(_NO_PACKAGE_FIELD)!r}")
+    print(f"    ARTEFACT {art['file']} assembled {art['package_type']!r} "
+          f"carrying {art['pin_count']} pin(s)")
+    pops = ", ".join(f"{k}={v}" for k, v in sorted(i["pin_populations"].items())
+                     if v is not None)
+    print(f"    POPULATIONS the intent states {pops or '(none)'}; the binding "
+          f"requirement is the greatest of them, because the package must "
+          f"bond out ALL of the design's pins")
+
+
 def _print_r3(f: Dict[str, Any]) -> None:
     i, art, fc = f["intent"], f["artefact"], f["artefact"]["fastest_clock"]
     print(f"    INTENT   {i['file']} :: {i['field']} = {i['value']!r} asks for "
@@ -2347,7 +2827,8 @@ _PRINTERS = {"R1_INTENT_TOP_NOT_BUILT": _print_r1,
              "R2_INTENT_PIN_NOT_IN_NETLIST": _print_r2,
              "R3_SIGNOFF_CLOCK_SLOWER_THAN_INTENT": _print_r3,
              "R_ANALOG_INTENT_SPEC_NOT_THE_GRADED_SPEC": _print_analog,
-             "R4_DIE_IS_NOT_THE_DESIGN": _print_r4}
+             "R4_DIE_IS_NOT_THE_DESIGN": _print_r4,
+             "R5_PACKAGE_CANNOT_BOND_DESIGN": _print_r5}
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -2436,6 +2917,24 @@ def main(argv: Optional[List[str]] = None) -> int:
         print(f"{_NAME}: rc=2 NOT CHECKED — stage {a.stage} did not pass "
               f"({fired['why']}). This review reviews a PASS; a stage that "
               f"failed is the repair tier's, not this one's.")
+        return 2
+
+    if a.stage in _DECLARED_NOT_ENABLED and a.stage not in _RULES:
+        rules = _DECLARED_NOT_ENABLED[a.stage]
+        emit({"program": _NAME, "stage": a.stage, "verdict": "NOT_CHECKED",
+              "why": "declared but not enabled",
+              "declared_not_enabled": [
+                  {"rule": r, "reason": _NOT_ENABLED_REASON[r]}
+                  for r, _fn in rules]})
+        print(f"{_NAME}: rc=2 NOT CHECKED — stage {a.stage!r} declares "
+              f"{len(rules)} on-pass rule(s) that are DECLARED AND NOT "
+              f"ENABLED:")
+        for rule_id, _fn in rules:
+            print(f"    {rule_id}: {_NOT_ENABLED_REASON[rule_id]}")
+        print("    The rule is written down so the gap is visible, and it is "
+              "not run so that nothing reports a review it did not perform. "
+              "Enabling it needs one real known-GOOD and one real known-BAD "
+              "artefact that this program's author did not create.")
         return 2
 
     if a.stage not in _RULES:
