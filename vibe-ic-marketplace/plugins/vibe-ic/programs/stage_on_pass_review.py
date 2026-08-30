@@ -44,10 +44,21 @@ clean, which is how 113 of 150 gates came to be in that class. This line does
 NOT add a fourth mapping of the kind the paragraph above refuses: every
 stage-specific rule still comes from the flow and this program still adds none.
 It records what an rc from THIS program means, which is a property of this
-program, and it agrees with both wirings that exist — stage1 and stage2 each
-carry `verdict: advisory` in their `on_pass_review:` block, and the audit
-measures the wiring as AUDIT_ONLY. If a stage is ever wired to block, the flow
-is what changes and this line changes with it.
+program, and it agrees with EVERY `on_pass_review:` block the flow carries:
+each states `verdict: advisory`, and the audit measures the wiring as
+AUDIT_ONLY. If a stage is ever wired to block, the flow is what changes and
+this line changes with it.
+
+THAT SENTENCE DELIBERATELY STATES NO COUNT, AND THE REASON IS MEASURED TWICE
+OVER. It said "both wirings — stage1 and stage2", written against v1.13.3. It
+was ALREADY FALSE when v1.13.7 landed it, because v1.13.4 (#1848) had wired
+stage3 in between. Correcting it to "three" would have been false again inside
+a day: v1.13.11 (#1849) wired `stage_analog`, making four. Two stale counts in
+one sentence in nine versions is not carelessness, it is what a hand-typed
+count DOES, and the remedy is the one this repo already applies to every stated
+programs/ count — do not write the number, let the check read it. The guard
+below compares SETS taken from the flow, so a fifth wiring moves it with no
+edit and only a genuine DISAGREEMENT reddens it.
 
 RULE R1 — INTENT_TOP_NOT_BUILT (stage1)
 =======================================

@@ -48,6 +48,7 @@ from __future__ import annotations
 import ast
 import json
 import os
+import re
 import tempfile
 import subprocess
 import sys
@@ -495,34 +496,115 @@ def test_it_declares_its_enforcement_intent_inside_the_read_window():
     m = A._DECL_RE.search(src[:A.DECL_WINDOW_BYTES])
     assert m, ("`ENFORCEMENT:` appears but not in a form the audit's own regex "
                "accepts — a MENTION in prose is not a declaration")
-    assert m.group(1) == "advisory", (
-        f"declares {m.group(1)!r}; both wirings of this program carry "
-        f"`verdict: advisory` in their `on_pass_review:` block, and a gate "
-        f"that declares blocking while wired AUDIT_ONLY is the audit's "
-        f"`contradiction` class")
 
 
-def test_the_flow_wirings_are_what_that_declaration_claims():
+def test_the_declaration_agrees_with_what_the_FLOW_actually_wires():
     """The declaration is checked against the FLOW, not merely against itself.
 
-    Asserting only that the file says `advisory` would keep passing after
-    somebody wired a stage to block: the gate would then be lying and both
-    halves of the lie would be inside the same file. The flow is the other
-    half, so it is read here.
+    DELIBERATELY NOT `assert declared == "advisory"`, which is what this test
+    and its neighbour both did when they landed. Pinning the literal makes the
+    guard an OBSTACLE the day a stage is legitimately wired to block: the flow
+    changes, the declaration has to follow, and a test asserting the old word
+    has to be edited to let a correct change through — which is how a guard
+    teaches people that guards are things you edit.
+
+    The invariant is AGREEMENT, and it holds at either value. Measured cost of
+    the literal form: the sibling prose said "both wirings" while the flow had
+    carried THREE since v1.13.4, and neither pinned test could notice, because
+    all three happened to be `advisory` and `advisory` was the word hard-coded
+    into the assertion. A set comparison reads the third for free.
     """
+    import flow_gate_enforcement_audit as A
     import yaml
     doc = yaml.safe_load(
         (PROGRAMS.parent / "flow" / "phase1_phase2_phase3.yaml").read_text())
-    wired = [(s.get("id"), s["on_pass_review"].get("verdict"))
-             for s in _walk_stages(doc)
-             if isinstance(s, dict) and isinstance(s.get("on_pass_review"), dict)]
+    wired = [(n.get("id"), n["on_pass_review"].get("verdict"))
+             for n in _walk_stages(doc)
+             if isinstance(n, dict) and isinstance(n.get("on_pass_review"), dict)]
     assert wired, ("no stage wires an on_pass_review block; this test would "
-                   "otherwise pass over an empty set")
-    off = [(sid, v) for sid, v in wired if v != "advisory"]
-    assert not off, (
-        f"stage(s) {off} wire this program to something other than advisory, "
-        f"so its `ENFORCEMENT: advisory` declaration is now false. Change the "
-        f"declaration with the wiring.")
+                   "otherwise pass over an empty set, which is the vacuous "
+                   "green it exists to refuse")
+
+    verdicts = {v for _, v in wired}
+    assert len(verdicts) == 1, (
+        f"stages wire this ONE program to different verdicts {sorted(verdicts)}, "
+        f"so no single `ENFORCEMENT:` line in it can be true of all of them. "
+        f"That is a real design question, not a test failure to paper over.")
+
+    src = PROG.read_text(encoding="utf-8")
+    m = A._DECL_RE.search(src[:A.DECL_WINDOW_BYTES])
+    assert m, "the gate declares no enforcement intent the audit can read"
+    assert m.group(1) == verdicts.pop(), (
+        f"the gate declares {m.group(1)!r} while every wiring in the flow says "
+        f"{sorted(v for _, v in wired)!r}. Change the declaration with the "
+        f"wiring — a gate that declares blocking while wired AUDIT_ONLY is the "
+        f"audit's `contradiction` class, and the reverse is a gate whose rc "
+        f"stops a landing while its own source says it only advises.")
+
+
+def _declaration_block(src: str) -> str:
+    """The ENFORCEMENT paragraph ONLY, cut at the next section heading.
+
+    Scoped deliberately. The docstring below the declaration quotes the stale
+    sentence this guard exists to refuse, as history; a guard that read the
+    whole docstring would read that quotation as a live claim and could never
+    be satisfied. The claim under test is the one the declaration itself makes.
+    """
+    import flow_gate_enforcement_audit as A
+    m = A._DECL_RE.search(src[:A.DECL_WINDOW_BYTES])
+    assert m, "no ENFORCEMENT declaration to scope to"
+    rest = src[m.start():]
+    nxt = re.search(r"\n([^\n]+)\n={3,}\n", rest)
+    return rest[:nxt.start()] if nxt else rest[:3000]
+
+
+def test_the_declaration_does_not_ENUMERATE_the_wirings():
+    """THE GUARD FOR THE SENTENCE, and the reason it is a second test.
+
+    Its neighbour compares the ENFORCEMENT VALUE with the verdicts the flow
+    wires. That is a true and useful property and it can go red — but it is NOT
+    what went wrong. The declaration once read "both wirings that exist —
+    stage1 and stage2" while the flow carried four, and reverting that sentence
+    changes no ENFORCEMENT value, so the value guard passes over it and always
+    would have. MEASURED, three arms, one answer: fix in 1 passed, the file
+    reverted to the stale sentence 1 passed, restored 1 passed. A guard that
+    cannot go red for the reason it exists is worse than none, because a reader
+    believes it.
+
+    THE PROPERTY: a set the declaration NAMES must be the set the flow WIRES.
+    Naming none is fine and is what the declaration does today. Naming all of
+    them is fine too — and goes red the moment a wiring is added or removed,
+    which is the whole point. Naming SOME is the defect, and it is what a
+    hand-written enumeration decays into.
+    """
+    stages = _wired_stages()
+    named = {sid for sid in stages
+             if re.search(r"\b" + re.escape(sid) + r"\b",
+                          _declaration_block(PROG.read_text(encoding="utf-8")))}
+    if not named:
+        return                      # states no membership; nothing can go stale
+    missing = sorted(set(stages) - named)
+    assert not missing, (
+        f"the ENFORCEMENT declaration enumerates {sorted(named)} but the flow "
+        f"wires {sorted(stages)} — it does not name {missing}. An enumeration "
+        f"in prose is a copy of the flow's membership that nothing keeps true: "
+        f"it was written correct at v1.13.3, shipped false at v1.13.7 because "
+        f"v1.13.4 wired stage3 in between, and would have been false again "
+        f"within a day when v1.13.11 wired stage_analog. Name them ALL or name "
+        f"NONE; do not write a subset.")
+
+
+def _wired_stages() -> dict:
+    """{stage id: verdict} for every `on_pass_review:` block in the flow."""
+    import yaml
+    doc = yaml.safe_load(
+        (PROGRAMS.parent / "flow" / "phase1_phase2_phase3.yaml").read_text())
+    out = {n.get("id"): n["on_pass_review"].get("verdict")
+           for n in _walk_stages(doc)
+           if isinstance(n, dict) and isinstance(n.get("on_pass_review"), dict)}
+    assert out, ("no stage wires an on_pass_review block; every assertion "
+                 "built on this would pass over an empty set")
+    return out
 
 
 def _walk_stages(node):
