@@ -117,6 +117,42 @@ def _future_record(*, path: str, source: Path, mode: str, repo: Path,
             "sha256": hashlib.sha256(raw).hexdigest(), "size": len(raw)}
 
 
+#: Paths a previous register protected that the derivation deliberately no
+#: longer covers, each with the reason. EMPTY, and it must stay a record of
+#: decisions rather than a place to silence the guard below.
+WITHDRAWN: dict[str, str] = {}
+
+
+def refuse_a_shrink(previous_rows: Any, derived_rows: Any) -> None:
+    """Refuse a derived set smaller than the register it replaces.
+
+    A DERIVED SET THAT SILENTLY SHRINKS IS WORSE THAN A STALE ONE.  Staleness
+    is visible -- the parity tests go red and somebody comes looking.  A quiet
+    contraction is not: the register keeps validating, the landing keeps
+    passing, and a file simply stops being protected with no line anywhere
+    saying so.  So every path the previous register protected must still be
+    derived, or be named in `WITHDRAWN` with its reason, in the same commit
+    that removes it.  A reason nobody wrote is not a reason.
+
+    Its own function so it can be exercised directly: `render` loads the
+    verifier through `_load_transition`, so a test cannot reach the derivation
+    by patching an imported module object.
+    """
+    previous = {row["path"] for row in previous_rows
+                if isinstance(row, dict) and isinstance(row.get("path"), str)}
+    derived = {row["path"] for row in derived_rows}
+    dropped = sorted(previous - derived - set(WITHDRAWN))
+    if dropped:
+        raise Refusal(
+            "the derived protected set is SMALLER than the register it "
+            "replaces, and no reason is recorded for the difference: "
+            + ", ".join(dropped)
+            + ". Either the verifier stopped reading these files -- in which "
+            "case say so in WITHDRAWN, in this commit -- or the derivation is "
+            "wrong. A path that quietly stops being protected is the failure "
+            "this check exists for.")
+
+
 def render(*, repo: Path, commit: str, transition_id: str, current_id: str,
            next_id: str, moves: dict[str, Path]) -> dict[str, Any]:
     transition = _load_transition()
@@ -129,12 +165,32 @@ def render(*, repo: Path, commit: str, transition_id: str, current_id: str,
         repo, resolved, algorithm, oid_len)[1]
     live_manifest = transition.strict_loads(
         live_manifest_raw, what="the manifest already in the tree")
-    for key in ("paths", "runner"):
-        if key not in live_manifest:
-            raise Refusal(f"the manifest in the tree has no `{key}` to copy")
+
+    # DERIVED FROM THE VERIFIER, NOT COPIED FROM THE LAST MANIFEST.
+    #
+    # Both of these used to be lifted verbatim out of whatever manifest was
+    # already in the tree, which made the register a hand-fed list: it could
+    # only ever be as current as the last person who remembered to edit it, and
+    # at v1.13.3 that was v1.12.39.  A path is protected BECAUSE THE VERIFIER
+    # READS IT, so the verifier is the source of truth and says so itself in
+    # `RUNTIME_PATHS` / `REQUIRED_AUTHORITY_PATHS`; the runner is likewise the
+    # profile `_runner_profile` validates against.  See `derived_paths`.
+    paths = transition.derived_paths()
+    runner = transition.derived_runner()
+
+    # A DERIVED SET THAT SILENTLY SHRINKS IS WORSE THAN A STALE ONE.
+    #
+    # Staleness is visible -- the parity tests go red and somebody comes
+    # looking.  A quiet contraction is not: the register keeps validating, the
+    # landing keeps passing, and a file simply stops being protected with no
+    # line anywhere saying so.  So every path the previous register protected
+    # must still be derived, or be named here with its reason.  WITHDRAWN is
+    # empty today and a future removal must add to it in the same commit that
+    # removes the path; a reason nobody wrote is not a reason.
+    refuse_a_shrink(live_manifest.get("paths", []), paths)
 
     current = transition._observe_files(
-        repo, resolved, live_manifest["paths"], algorithm, oid_len)
+        repo, resolved, paths, algorithm, oid_len)
     known = {row["path"]: row for row in current}
     unknown = sorted(set(moves) - set(known))
     if unknown:
@@ -166,8 +222,8 @@ def render(*, repo: Path, commit: str, transition_id: str, current_id: str,
         "kind": transition.MANIFEST_KIND,
         "transition_id": transition_id,
         "manifest_path": transition.MANIFEST_PATH,
-        "runner": live_manifest["runner"],
-        "paths": live_manifest["paths"],
+        "runner": runner,
+        "paths": paths,
         "current": {"id": current_id, "files": current},
         "next": {"id": next_id, "files": nxt},
     }
@@ -179,13 +235,23 @@ def render(*, repo: Path, commit: str, transition_id: str, current_id: str,
 
 
 def serialise(manifest: dict[str, Any]) -> bytes:
-    """The exact on-disk shape: sorted keys, no spaces, no trailing newline.
+    """The exact on-disk shape: sorted keys, no spaces, ONE trailing newline.
 
-    MEASURED against the manifest in the tree — this round-trips it byte for
-    byte, so a re-render of an unchanged tuple produces no diff.
+    THE NEWLINE IS THE POINT.  The docstring here used to say "no trailing
+    newline" and to claim it round-tripped the manifest in the tree byte for
+    byte.  It did not: the file on disk ends `0a` and this function emitted
+    29 874 bytes against the file's 29 875, a difference of EXACTLY that one
+    byte.  So `serialise(json.loads(raw)) != raw` for the tree's own manifest,
+    every re-render diffed against itself, and the register could not be
+    re-authored without a spurious whole-file change -- which is a large part
+    of why it was last authored at v1.12.39 and left to go stale.
+
+    The tree's bytes are the ones that win: a text file ends with a newline,
+    every editor and `git diff` agrees, and the verifier hashes whatever the
+    file contains, so this side is the one that was wrong.
     """
     return json.dumps(manifest, sort_keys=True,
-                      separators=(",", ":")).encode("utf-8")
+                      separators=(",", ":")).encode("utf-8") + b"\n"
 
 
 def main(argv: Sequence[str] | None = None) -> int:

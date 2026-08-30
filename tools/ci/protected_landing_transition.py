@@ -65,6 +65,70 @@ RUNNER_IMAGE = (
     "sha256:66c33ff2e05781758f596d82bff61ad8a404ef0a7eae3d21ab8a9d55df0d01ff"
 )
 
+#: THE RUNNER PROFILE, ONCE.  `_runner_profile` VALIDATES against this and
+#: `protected_landing_manifest_author.render` BUILDS from it, so the register
+#: cannot record a runner the verifier would reject -- and nobody has to keep a
+#: second copy of it in a JSON file by hand.  It was a local literal inside the
+#: validator, which meant the only way to author a manifest was to copy the
+#: runner out of whatever manifest was already in the tree; that copy is how a
+#: stale register stays stale.
+RUNNER_PROFILE_ID = "vibeic-landing-hermetic-v1"
+RUNNER_PROFILE_EXPECTED = {
+    "platform": "linux/amd64",
+    "user": "65534:65534",
+    "network": "none",
+    "read_only": True,
+    "cap_drop": ["ALL"],
+    "security_opt": ["no-new-privileges:true"],
+    "tmpfs": [
+        "/tmp:rw,nosuid,nodev,noexec,size=536870912,mode=1777"],
+    "pull": "never",
+    "workdir": "/subject",
+    "subject_mount": "read-only",
+    "runtime_mount": "read-only",
+    "corpus_mount": "read-only",
+    "input_mounts": "selection-and-progress-plan-read-only",
+    "runtime_overlays": "sorted-exact-files-read-only",
+    "process_environment": "env-i-exact-arm-profile",
+    "progress_protocol": "VIBEIC_PROGRESS/1",
+    "evidence_transport": (
+        "private-volume-post-stop-export-and-absence-proof"),
+}
+
+
+def derived_runner() -> dict:
+    """The runner row a manifest must carry, built from this file's own rules."""
+    return {"schema": 1, "profile_id": RUNNER_PROFILE_ID, "engine": "docker",
+            "image": RUNNER_IMAGE, **{k: (list(v) if isinstance(v, list) else v)
+                                      for k, v in RUNNER_PROFILE_EXPECTED.items()}}
+
+
+def derived_paths() -> list:
+    """The protected SET, derived from what this verifier actually executes.
+
+    THE REGISTER IS NOT A LIST SOMEBODY MAINTAINS.  Both roles are already
+    declared in this file, because this file is the thing that enforces them:
+    `RUNTIME_PATHS` is what a candidate may move under one authorised
+    transition, `REQUIRED_AUTHORITY_PATHS` is what the verifier executes to
+    reach a verdict.  The manifest used to carry a hand-kept copy of their
+    union, and a copy of a rule is a rule that can drift from itself.
+
+    MEASURED at v1.13.3, before this function existed: the manifest's 52 paths
+    were EXACTLY this union -- 41 authority-only, 4 runtime-only, 7 both, zero
+    surplus, zero missing.  So the copy was already redundant; it was only ever
+    waiting to disagree.
+    """
+    rows = []
+    for path in sorted(set(RUNTIME_PATHS) | set(REQUIRED_AUTHORITY_PATHS)):
+        roles = []
+        if path in REQUIRED_AUTHORITY_PATHS:
+            roles.append("authority")
+        if path in RUNTIME_PATHS:
+            roles.append("runtime")
+        rows.append({"path": path, "roles": roles})
+    return rows
+
+
 RUNTIME_PATHS = frozenset({
     "tools/gatekeeper-land.sh",
     "vibe-ic-marketplace/plugins/vibe-ic/programs/pytest_per_file_junit.py",
@@ -287,27 +351,7 @@ def _runner_profile(value: Any, what: str = "manifest.runner"
         raise Refusal(f"{what}.image is not an immutable digest reference")
     if image != RUNNER_IMAGE:
         raise Refusal(f"{what}.image is not the BASE-owned runner image")
-    expected = {
-        "platform": "linux/amd64",
-        "user": "65534:65534",
-        "network": "none",
-        "read_only": True,
-        "cap_drop": ["ALL"],
-        "security_opt": ["no-new-privileges:true"],
-        "tmpfs": [
-            "/tmp:rw,nosuid,nodev,noexec,size=536870912,mode=1777"],
-        "pull": "never",
-        "workdir": "/subject",
-        "subject_mount": "read-only",
-        "runtime_mount": "read-only",
-        "corpus_mount": "read-only",
-        "input_mounts": "selection-and-progress-plan-read-only",
-        "runtime_overlays": "sorted-exact-files-read-only",
-        "process_environment": "env-i-exact-arm-profile",
-        "progress_protocol": "VIBEIC_PROGRESS/1",
-        "evidence_transport": (
-            "private-volume-post-stop-export-and-absence-proof"),
-    }
+    expected = RUNNER_PROFILE_EXPECTED
     for key, expected_value in expected.items():
         if row[key] != expected_value:
             raise Refusal(f"{what}.{key} does not match the hermetic profile")

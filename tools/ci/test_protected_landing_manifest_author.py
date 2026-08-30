@@ -149,3 +149,84 @@ def test_the_cli_refuses_a_malformed_move_argument(tmp_path):
         stdin=subprocess.DEVNULL, capture_output=True, text=True, check=False)
     assert proc.returncode == 2, proc.stdout + proc.stderr
     assert "PATH=FILE" in proc.stderr
+
+
+# ---------------------------------------------------------------------------
+# THE REGISTER IS DERIVED FROM THE VERIFIER, NOT MAINTAINED BY HAND.
+#
+# `paths` and `runner` were copied verbatim out of whatever manifest was
+# already in the tree, so the register could only ever be as current as the
+# last person who remembered to edit it -- at v1.13.3 that was v1.12.39, and
+# `test_phase_b_activated_parity.py` had been 3-red on main ever since, which
+# blocks EVERY protected-file change.
+#
+# A path is protected because the verifier READS it, so the verifier is the
+# source of truth. Both roles are already declared there and are what these
+# tests bind to.
+# ---------------------------------------------------------------------------
+
+
+def test_the_protected_set_is_what_the_verifier_executes(transition):
+    """Derived, and derived from the two sets the verifier enforces."""
+    derived = {row["path"]: tuple(row["roles"])
+               for row in transition.derived_paths()}
+    assert derived, "the derivation produced no protected set at all"
+    for path in transition.RUNTIME_PATHS:
+        assert "runtime" in derived[path], path
+    for path in transition.REQUIRED_AUTHORITY_PATHS:
+        assert "authority" in derived[path], path
+    assert set(derived) == (set(transition.RUNTIME_PATHS)
+                            | set(transition.REQUIRED_AUTHORITY_PATHS))
+    for path, roles in derived.items():
+        assert list(roles) == sorted(set(roles)), path
+        assert set(roles) <= transition.ROLE_VALUES, path
+
+
+def test_the_derivation_reproduces_the_register_in_the_tree(author, transition):
+    """A no-op TODAY, which is what makes it safe to adopt.
+
+    MEASURED at v1.13.3: the hand-kept register held exactly this union -- 52
+    paths, 41 authority-only, 4 runtime-only, 7 both, zero surplus and zero
+    missing -- so the copy was already redundant and was only waiting to
+    disagree. If this ever fails, the register and the verifier have parted
+    company and THAT is the finding.
+    """
+    live = json.loads((_ROOT / _MANIFEST).read_bytes())
+    assert transition.derived_paths() == live["paths"]
+    assert transition.derived_runner() == live["runner"]
+
+
+def test_the_derived_runner_is_one_the_verifier_accepts(transition):
+    """Built from the same profile `_runner_profile` validates against, so the
+    author cannot render a runner the verifier would refuse."""
+    assert transition._runner_profile(transition.derived_runner()) == \
+        transition.derived_runner()
+
+
+def test_a_silently_shrinking_protected_set_is_refused(author, transition):
+    """THE GUARD.  A quiet contraction is worse than a stale register."""
+    full = transition.derived_paths()
+    victim = sorted(transition.REQUIRED_AUTHORITY_PATHS)[0]
+    shrunk = [row for row in full if row["path"] != victim]
+    author.refuse_a_shrink(full, full)            # a no-op set is fine
+    with pytest.raises(Exception) as caught:
+        author.refuse_a_shrink(full, shrunk)
+    assert victim in str(caught.value), caught.value
+    assert "SMALLER" in str(caught.value), caught.value
+
+
+def test_a_withdrawal_with_a_recorded_reason_is_allowed(author, transition,
+                                                        monkeypatch):
+    """The guard is not a wall: it asks for the reason, in the same commit."""
+    full = transition.derived_paths()
+    victim = sorted(transition.REQUIRED_AUTHORITY_PATHS)[0]
+    shrunk = [row for row in full if row["path"] != victim]
+    monkeypatch.setattr(author, "WITHDRAWN",
+                        {victim: "probe: the verifier no longer reads it"})
+    author.refuse_a_shrink(full, shrunk)          # named, therefore allowed
+
+
+def test_the_guard_reads_the_previous_register_defensively(author, transition):
+    """Rows a stale file may hold that are not `{"path": str}` are ignored,
+    never crashed on: the guard runs against whatever is already in the tree."""
+    author.refuse_a_shrink([{"nope": 1}, "junk", None], transition.derived_paths())
