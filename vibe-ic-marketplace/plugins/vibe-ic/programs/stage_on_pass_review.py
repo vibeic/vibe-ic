@@ -337,9 +337,10 @@ Exit codes
 ==========
     0 = ACCEPT — the stage's artefact and the intent do not contradict
     1 = REJECT — at least one proven contradiction, evidence in the report
-    2 = NOT CHECKED — no declaration, a rule DECLARED BUT NOT ENABLED
-        (`_DECLARED_NOT_ENABLED`), stage PASS not established, a denied intent
-        path, an unreadable input, or a finding that could not be proven
+    2 = NOT CHECKED — no declaration, an INCOMPLETE declaration (a stage that
+        declares the review and states no `verdict:`), a rule DECLARED BUT NOT
+        ENABLED (`_DECLARED_NOT_ENABLED`), stage PASS not established, a denied
+        intent path, an unreadable input, or a finding that could not be proven
 """
 from __future__ import annotations
 
@@ -395,6 +396,20 @@ _DEFAULT_TOP_WRAPPER = "chip_top"
 #: Extensions R4 accepts as a streamed layout in the die slot.
 _DIE_GLOBS = ("*.gds", "*.gdsii")
 
+#: The verdict policies a stage's `on_pass_review:` block may declare — the
+#: ONLY accepted values. An unrecognised spelling is a stage that has not
+#: stated a policy, and reading it as "probably advisory" is how a policy
+#: nobody chose becomes the default for the stages still queued to wire this.
+VERDICT_POLICIES = ("advisory", "blocking")
+
+#: THIS PROGRAM's own enforcement declaration — the exact string
+#: `flow_gate_enforcement_audit.declared_intent` reads out of the `ENFORCEMENT:`
+#: line in the module docstring above (vibe-ic#1858). It is a NAME rather than
+#: a literal re-typed at each use because a fact spelt in two places is a fact
+#: that will disagree, and the guard below compares it against BOTH the
+#: docstring the audit reads AND every stage's `verdict:`.
+DECLARED_ENFORCEMENT = "advisory"
+
 
 #: The clock-domain roles that mean "this is the design's clock", as the
 #: published corpus spells them. Everything else in a `clock_domains[]` list is
@@ -447,6 +462,66 @@ def load_declaration(flow_def: Path, stage_id: str) -> Dict[str, Any]:
             blk = st.get("on_pass_review")
             return dict(blk) if isinstance(blk, dict) else {}
     raise ValueError(f"{flow_def} declares no stage {stage_id!r}")
+
+
+def declared_verdict(decl: Dict[str, Any]) -> Optional[str]:
+    """The stage's declared verdict policy, or None when it declared none.
+
+    None covers BOTH shapes of silence — the key absent, and a key whose value
+    is not one of `VERDICT_POLICIES`. They are the same fact ("this stage has
+    not said whether its review blocks"), and separating them would invite a
+    caller to treat the second as a near-miss worth guessing at.
+    """
+    v = decl.get("verdict")
+    if not isinstance(v, str):
+        return None
+    v = v.strip().lower()
+    return v if v in VERDICT_POLICIES else None
+
+
+def stages_declaring_review(flow_def: Path) -> List[Dict[str, Any]]:
+    """Every stage carrying an `on_pass_review:` block, with its verdict.
+
+    The population is DISCOVERED from the flow, never listed: stage 1 wired
+    this at v1.12.87, stage 2 at v1.13.2 and stage 3 at v1.13.4, and the
+    phase-1, analog, stage-4 and stage-5 blocks are queued behind them. A
+    hand-kept list of stages here would be one stage short on exactly the day
+    a new one landed, which is the accumulation this reader exists to stop.
+
+    Rows are `{"stage", "verdict", "declared_verdict"}` — the raw value and the
+    recognised one, because "said nothing" and "said something unrecognised"
+    are indistinguishable once both have normalised to None.
+
+    Raises ValueError on an unreadable or unparsable flow, for the reason
+    `load_declaration` does: "the flow could not be read" must never come out
+    as "no stage declares a review", which is the shape that makes a guard
+    pass on a tree it never measured.
+    """
+    if yaml is None:
+        raise ValueError("pyyaml is not importable; the flow cannot be parsed")
+    try:
+        doc = yaml.safe_load(flow_def.read_text(encoding="utf-8"))
+    except OSError as e:
+        raise ValueError(f"{flow_def}: {e}") from e
+    except Exception as e:  # yaml error
+        raise ValueError(f"{flow_def} is not parsable YAML: {e}") from e
+    if not isinstance(doc, dict):
+        raise ValueError(f"{flow_def} is not a mapping")
+    stages = doc.get("stages")
+    if not isinstance(stages, list):
+        raise ValueError(f"{flow_def} carries no `stages:` list")
+    out: List[Dict[str, Any]] = []
+    for st in stages:
+        if not isinstance(st, dict):
+            continue
+        blk = st.get("on_pass_review")
+        if not isinstance(blk, dict):
+            continue
+        out.append({"stage": str(st.get("id")),
+                    "verdict": blk.get("verdict"),
+                    "declared_verdict": declared_verdict(blk)})
+    return out
+
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -2889,6 +2964,54 @@ def main(argv: Optional[List[str]] = None) -> int:
               f"declared in the flow; a stage that does not declare one has "
               f"not been reviewed.")
         return 2
+    # THE DECLARATION MUST BE COMPLETE, NOT MERELY PRESENT. `verdict:` is the
+    # one field that says whether this review's rejection blocks, and the
+    # module docstring is explicit that it is the flow's to state and not this
+    # program's. A block that omits it was, until here, reviewed anyway: the
+    # emitted record carried `verdict_policy: null` and stdout printed
+    # `verdict policy: None`, which reads as an answer.
+    #
+    # AND THE ENFORCEMENT AUDIT CANNOT CATCH IT. `flow_gate_enforcement_audit`
+    # populates by gate PROGRAM, and every stage's clause names THIS program —
+    # so stage 3 (v1.13.4) added a third clause without moving the audit's gate
+    # count by one, and the phase-1, analog, stage-4 and stage-5 blocks will do
+    # the same. vibe-ic#886's silence arrives here through a door #886 is
+    # structurally unable to see. NOT CHECKED is the honest verdict, and the
+    # loud one.
+    policy = declared_verdict(decl)
+    if policy is None:
+        emit({"program": _NAME, "stage": a.stage, "verdict": "NOT_CHECKED",
+              "why": "the on_pass_review block declares no usable `verdict:`",
+              "declared_verdict": decl.get("verdict"),
+              "verdict_policies": list(VERDICT_POLICIES)})
+        print(f"{_NAME}: rc=2 NOT CHECKED — stage {a.stage!r} declares an "
+              f"`on_pass_review:` block whose `verdict:` is "
+              f"{decl.get('verdict')!r}, which is not one of "
+              f"{list(VERDICT_POLICIES)}. Whether this review's rejection "
+              f"BLOCKS is the flow's decision and it has not been made; the "
+              f"review does not pick one on the flow's behalf.")
+        return 2
+    # BOTH HALVES OF ONE DECLARATION MUST AGREE. This program declares
+    # `ENFORCEMENT: advisory` about itself (vibe-ic#1858) and no runner spawns
+    # it inline. A stage claiming `blocking` would be asserting a wiring that
+    # does not exist — the `declares blocking, wired AUDIT_ONLY` contradiction
+    # the audit records as debt, arriving through the flow instead of through
+    # the docstring. This does not forbid blocking: wire the program where its
+    # rc can stop a step, re-declare it there, and the two move together.
+    if policy != DECLARED_ENFORCEMENT:
+        emit({"program": _NAME, "stage": a.stage, "verdict": "NOT_CHECKED",
+              "why": ("the stage's `verdict:` and this program's "
+                      "`ENFORCEMENT:` declaration disagree"),
+              "stage_verdict_policy": policy,
+              "program_enforcement": DECLARED_ENFORCEMENT})
+        print(f"{_NAME}: rc=2 NOT CHECKED — stage {a.stage!r} declares "
+              f"`verdict: {policy}` while this program declares "
+              f"`ENFORCEMENT: {DECLARED_ENFORCEMENT}` and no runner spawns it "
+              f"inline. Wire it where it can block and re-declare it here, or "
+              f"declare the stage {DECLARED_ENFORCEMENT!r}; the review does "
+              f"not run under two policies at once.")
+        return 2
+
 
     denied = denied_intent_paths(project, [str(x) for x in decl.get("intent") or []],
                                  [str(x) for x in decl.get("intent_deny") or []])

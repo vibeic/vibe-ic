@@ -140,8 +140,20 @@ stages:
     # the review reports evidence and exits 1 on a rejection, and the runner
     # surfaces it; it does not stop the flow. A rejection's evidence is
     # required to include an executable test, and it is that test — an
-    # ordinary repo test, in the ordinary suite — that blocks. Flipping this
-    # to `blocking` is a one-word edit here and needs no reviewer change.
+    # ordinary repo test, in the ordinary suite — that blocks.
+    #
+    # `verdict:` IS REQUIRED, and flipping it is no longer a one-word edit. A
+    # stage that declares this block and omits `verdict:` is NOT CHECKED
+    # (rc 2): the review does not choose a policy the flow declined to state,
+    # and `flow_gate_enforcement_audit` cannot catch the omission, because it
+    # populates by gate PROGRAM and every stage's clause names the same one —
+    # stage 3 (v1.13.4) and the analog stage (v1.13.8) each added one without moving its gate count.
+    # And `blocking` now costs more than this line: `stage_on_pass_review`
+    # declares `ENFORCEMENT: advisory` about itself (vibe-ic#1858) and no
+    # runner spawns it inline, so the two would disagree — the program refuses
+    # (rc 2) and `test_every_on_pass_review_stage_declares_its_verdict` fails.
+    # Wire it where its rc can stop a step and re-declare it there, or leave it
+    # advisory; the pair moves together or not at all.
     on_pass_review:
       skill: phase2-rtl-verify
       fires_on: stage_pass
