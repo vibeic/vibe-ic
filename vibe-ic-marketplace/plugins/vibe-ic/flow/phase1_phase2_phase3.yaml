@@ -169,7 +169,7 @@ stages:
       # must fail today cannot live in the plugin's own suite.
       emit_test_dir: "reports/phase1/gates/on_pass_review"
       gate:
-        program_exit_zero: "stage_on_pass_review . --stage stage_phase1 --json reports/phase1/gates/stage_phase1_on_pass_review.json"
+        program_exit_zero: "stage_on_pass_review . --stage stage_phase1 --json reports/phase1/gates/stage_phase1_on_pass_review.json --compliance reports/flow_compliance.json"
 
   - id: stage1
     name: "RTL Generation + Verification"
@@ -252,7 +252,7 @@ stages:
       # run is fixed.
       emit_test_dir: "reports/phase2/gates/on_pass_review"
       gate:
-        program_exit_zero: "stage_on_pass_review . --stage stage1 --json reports/phase2/gates/stage1_on_pass_review.json"
+        program_exit_zero: "stage_on_pass_review . --stage stage1 --json reports/phase2/gates/stage1_on_pass_review.json --compliance reports/flow_compliance.json"
 
   - id: stage2
     name: "Synthesis + DFT"
@@ -315,7 +315,7 @@ stages:
       rejection_requires: [intent, artefact, contradiction, test]
       emit_test_dir: "reports/phase2/gates/on_pass_review"
       gate:
-        program_exit_zero: "stage_on_pass_review . --stage stage2 --json reports/phase2/gates/stage2_on_pass_review.json"
+        program_exit_zero: "stage_on_pass_review . --stage stage2 --json reports/phase2/gates/stage2_on_pass_review.json --compliance reports/flow_compliance.json"
 
   - id: stage_analog
     name: "Analog Design Pipeline (parallel with digital stages 1-2)"
@@ -369,7 +369,7 @@ stages:
       # the run being reviewed.
       emit_test_dir: "reports/analog/on_pass_review"
       gate:
-        program_exit_zero: "stage_on_pass_review . --stage stage_analog --json reports/analog/stage_analog_on_pass_review.json"
+        program_exit_zero: "stage_on_pass_review . --stage stage_analog --json reports/analog/stage_analog_on_pass_review.json --compliance reports/flow_compliance.json"
 
   - id: stage3
     name: "Physical Design + Sign-off"
@@ -397,7 +397,7 @@ stages:
       rejection_requires: [intent, artefact, contradiction, test]
       emit_test_dir: "reports/phase3/gates/on_pass_review"
       gate:
-        program_exit_zero: "stage_on_pass_review . --stage stage3 --json reports/phase3/gates/stage3_on_pass_review.json"
+        program_exit_zero: "stage_on_pass_review . --stage stage3 --json reports/phase3/gates/stage3_on_pass_review.json --compliance reports/flow_compliance.json"
 
   # v1.6.13 Wave 88 — Mixed-Signal Integration (M1-M4) inserted
   # between digital stage3 and stage4. Required when analog blocks
@@ -463,7 +463,7 @@ stages:
       rejection_requires: [intent, artefact, contradiction, test]
       emit_test_dir: "reports/phase3/gates/on_pass_review"
       gate:
-        program_exit_zero: "stage_on_pass_review . --stage stage4 --json reports/phase3/gates/stage4_on_pass_review.json"
+        program_exit_zero: "stage_on_pass_review . --stage stage4 --json reports/phase3/gates/stage4_on_pass_review.json --compliance reports/flow_compliance.json"
 
   # v1.6.13 Wave 88 — Manufacturing & Test (post-fab silicon stage).
   # Optional: only fires when project sets manufacturing.enabled = true
@@ -7707,7 +7707,17 @@ steps:
 
 # Final gate — runs after all 41 main-track integer steps + A1-A9
 # + M1-M4 (54 entities total) + P0 structural-RTL umbrella.
+#
+# `--json reports/flow_compliance.json` IS LOAD-BEARING, not a convenience.
+# Every `on_pass_review:` gate above reads this exact path with `--compliance`
+# to establish the stage verdict it fires on. Until v1.13.40 this ran with no
+# `--json` at all and the six gates named no verdict source, so
+# `stage_on_pass_review.stage_passed()` returned UNESTABLISHED and the review
+# exited 2 NOT CHECKED before consulting a rule — on every input, forever.
+# Nine rules across six stages had therefore never refused anything.
+# `on_pass_review_answerable_check.py` keeps the two halves in agreement: it
+# FAILS if a gate names a report this line does not write, or names none.
 final_gate:
   program: flow_compliance_check
-  args: ". --flow phase1_phase2_phase3 --strict"
+  args: ". --flow phase1_phase2_phase3 --strict --json reports/flow_compliance.json"
   exit_zero_required: true

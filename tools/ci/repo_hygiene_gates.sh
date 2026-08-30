@@ -775,6 +775,14 @@ run "stage membership declared once"    "$ROOT" python3 "$PG/flow_stage_membersh
 # this file with a single-line `run(?:_\w+)?\s+"label"...` regex.
 run "skills declare their stage"        "$ROOT" python3 "$PG/skill_stage_membership_check.py" --plugin "$PLUGIN"
 
+# vibe-ic: an on-pass review gate that carries neither `--compliance` nor
+# `--stage-verdict` returns rc 2 NOT CHECKED on every input, forever -- it can
+# neither accept nor reject. MEASURED at v1.13.40: all SIX enabled clauses were
+# in that state, so nine rules had never refused anything. Its subject is the
+# shipped flow document, which is what puts it in this file. ONE LINE, no `\`
+# continuation -- two probes parse this file with a single-line regex.
+run "on-pass gates can establish a verdict" "$ROOT" python3 "$PG/on_pass_review_answerable_check.py" --flow "$PLUGIN/flow/phase1_phase2_phase3.yaml"
+
 # vibe-ic#1121 family, landed in the v1.11.19..v1.11.32 PPA stack and wired
 # here by the lander because `flow/` and `tools/ci/` are single-writer surfaces
 # the lane could not touch.
