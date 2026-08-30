@@ -199,14 +199,14 @@ def test_the_run_states_the_clause_reach_not_only_the_findings():
 #: there. The NAME SET alone cannot see a member that stays in the reach and
 #: stops reading the file it exists for.
 #:
-#: MEASURED at v1.13.66, on the tree v1.13.66 itself created: replace
+#: MEASURED at v1.13.67, on the tree v1.13.67 itself created: replace
 #: `gate_red_since_check`'s `"tools/ci/gate_red_since.json"` with any other
 #: shipped tracked basename -- `benchmark/CAPTURE_ROUTING.json` was used -- and
 #: the reach is still exactly `{gate_red_since_check.py}`, so the assertion
 #: below it PASSES. The gate that exists to adjudicate the acknowledged-red
 #: register would no longer open that register, and nothing here would say so.
 #:
-#: v1.13.66 removed the way a FIXTURE could move this boundary. This is the
+#: v1.13.67 removed the way a FIXTURE could move this boundary. This is the
 #: other way it moves: the member stays and its subject changes.
 REACH_AND_WHAT_BINDS_IT = {
     "gate_red_since_check.py": ("gate_red_since.json",),

@@ -129,12 +129,19 @@ USAGE
     macro_obs_load_parity_check.py <project_dir> [--json OUT]
                                    [--lef PATH ...] [--log PATH ...]
 
+    Discovery reads BOTH `*.lef` and `*.tlef` under the project. `--lef` accepts
+    either; pass the tech LEF explicitly when the PDK is mounted rather than
+    vendored, because a mounted PDK is outside the project and no glob reaches
+    it.
+
     exit 0 = for every macro, what the LEF declares is what a reader can load
     exit 1 = at least one macro's OBS section would be discarded (BLOCKING)
-    exit 2 = could not be determined — no LEF, or no macro declares an OBS.
-             NEVER a vacuous pass: "no obstruction was lost" and "there was no
-             obstruction to lose" are different sentences and do not share an
-             exit code.
+    exit 2 = could not be determined — no LEF, or no macro declares an OBS, or
+             the LEF set that was read declares NO LAYER AT ALL (the tech LEF is
+             outside the project tree, so nothing could resolve). NEVER a
+             vacuous pass: "no obstruction was lost", "there was no obstruction
+             to lose" and "nothing here could tell you either way" are three
+             different sentences and do not share an exit code.
 """
 from __future__ import annotations
 
@@ -169,6 +176,23 @@ _RECT_LINE_RE = re.compile(r"\s*RECT\s+[\d.eE+-]+\s+[\d.eE+-]+\s+"
 # The extent-layer exclusion `parse_macro_obs` applies, mirrored here so
 # `parsed` and `loadable` are counted the same way and are comparable.
 _EXTENT_LAYER = "OVERLAP"
+
+# The reader's own announcement of WHICH LEF it loaded. Same doctrine as the
+# undefined-layer match below: a TOOL diagnostic string, not a design, PDK or
+# vendor literal — the path it yields is whatever the run happened to load. It
+# exists so that when this gate cannot see a layer declaration, it can NAME the
+# file that would have supplied one instead of asking the reader to guess.
+_LEF_LOAD_RE = re.compile(r"LEF\s+file\s*:\s*(\S+?\.(?:tlef|lef))\b", re.I)
+
+
+def tech_lefs_named_by_tool_log(log_texts) -> "Set[str]":
+    """Absolute LEF paths the run's own tool logs record having loaded (PURE)."""
+    out: Set[str] = set()
+    for t in log_texts:
+        for m in _LEF_LOAD_RE.finditer(t):
+            out.add(m.group(1).rstrip(","))
+    return out
+
 
 # The reader's own announcement of the loss. Matched on the SEMANTIC text rather
 # than only on a message ID, so a renumbered or reworded-but-equivalent
@@ -336,6 +360,14 @@ def audit(lef_texts: Sequence[str], lef_labels: Sequence[str] = (),
         "obs_rects_lost_total": sum(f["obs_rects_lost"] for f in findings),
         "undefined_layers_in_tool_log": sorted(from_log),
         "tool_logs_read": len(log_texts),
+        # DEGRADE LOUDLY. When the LEF set that was read declares NO layers at
+        # all, "referenced but not declared" is true of every layer by
+        # construction and the comparison was never actually performed. That is
+        # a different fact from a resolvable set with a gap in it, so it is
+        # recorded rather than left to be inferred from an empty list.
+        "layer_declarations_absent": not declared,
+        "tech_lef_named_by_tool_log": sorted(
+            tech_lefs_named_by_tool_log(log_texts)),
         "findings": findings,
     }
 
@@ -363,9 +395,18 @@ def discover_lefs(proj: Path) -> List[Path]:
     failure mode a blocking gate can least afford.
 
     Both roles are needed and neither file type can supply the other's half."""
+    #
+    # `.tlef` IS INCLUDED, and leaving it out was half of the defect this
+    # function's own docstring warns about. The file that declares the layers is
+    # conventionally named `<lib>__nom.tlef` — the PDK ships it that way — so a
+    # glob of `*.lef` alone cannot see a tech LEF even when the design has
+    # VENDORED one under `input/pdk/`, which is the remedy this gate prints.
+    # Both suffixes, or the remedy is unreachable.
     out: List[Path] = []
     seen = set()
-    for pat in ("input/pdk/**/*.lef", "phase3/**/*.lef", "**/*.lef"):
+    for pat in ("input/pdk/**/*.lef", "input/pdk/**/*.tlef",
+                "phase3/**/*.lef", "phase3/**/*.tlef",
+                "**/*.lef", "**/*.tlef"):
         for p in sorted(proj.glob(pat)):
             rp = p.resolve()
             if rp in seen or not p.is_file():
@@ -426,6 +467,46 @@ def main(argv=None) -> int:
         print("[CANNOT DETERMINE] macro_obs_load_parity: no macro in the "
               f"{len(lef_texts)} LEF(s) read declares an OBS. NOT a pass — "
               "nothing was compared.", file=sys.stderr)
+        return 2
+
+    # THE QUESTION COULD NOT BE PUT. `unresolvable` means "referenced by an OBS
+    # and declared by no LEF that was read". When the LEF set that was read
+    # declares NO layer at all, that predicate is true of EVERY layer for a
+    # reason that has nothing to do with the abstract: the file that declares
+    # layers is the TECH LEF, and a macro abstract never declares one. A run
+    # whose PDK is MOUNTED (the tech LEF lives outside the project tree) rather
+    # than VENDORED under `input/pdk/` therefore hands this gate a set with zero
+    # declarations, and every OBS layer looks undeclared by construction.
+    #
+    # That is a measurement-scope failure, not a finding, and it must not be
+    # reported as one — an rc=1 here says "this macro's obstructions would be
+    # discarded" about geometry the gate never had the means to resolve.
+    #
+    # THE MEASURED LEG STILL WINS. If a tool log carries the reader's own
+    # `undefined layer (...) referenced`, the loss was OBSERVED by the reader
+    # and does not depend on this gate's static set at all — so that path keeps
+    # its rc=1 below and this branch stands aside for it. Same two-leg doctrine
+    # as the rest of this program: the static leg alone cannot convict when the
+    # static leg had nothing to read.
+    if (not rep["layers_declared_by_lef_set"]
+            and not rep["undefined_layers_in_tool_log"]):
+        named = rep["tech_lef_named_by_tool_log"]
+        where = (" The run's own tool log records loading: "
+                 + ", ".join(named[:4])
+                 + (f" (+{len(named) - 4} more)" if len(named) > 4 else "")
+                 + " — pass that file with --lef, or vendor it under"
+                   " input/pdk/, and re-run."
+                 if named else
+                 " No tool log read here names a LEF that was loaded either, so"
+                 " this gate cannot even say which file would answer it. Pass"
+                 " the tech LEF the run loads with --lef, or vendor it under"
+                 " input/pdk/, and re-run.")
+        print(f"[CANNOT DETERMINE] macro_obs_load_parity: the "
+              f"{len(lef_texts)} LEF(s) read declare ZERO layers, so every OBS "
+              f"layer is unresolvable by construction and nothing was actually "
+              f"compared. A macro abstract declares no layers; the TECH LEF "
+              f"does.{where} NOT a pass, and NOT a finding.",
+              file=sys.stderr)
         return 2
 
     f = rep["findings"]
