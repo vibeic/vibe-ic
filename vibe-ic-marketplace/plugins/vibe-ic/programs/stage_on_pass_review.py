@@ -66,6 +66,61 @@ out of the rejection set, leaving 3 rejections and 16 acceptances. A rule that
 fired on all 30 would be the same failure as a detector that fires on 21 of 21
 subjects.
 
+RULE R3 — SIGNOFF_CLOCK_SLOWER_THAN_INTENT (stage3)
+===================================================
+Stage 3's own gates grade the LAYOUT against the NETLIST and the PDK: LVS
+against the netlist, DRC against the rules, STA against the SDC. Every one of
+them is measured against the SIGN-OFF CONSTRAINT DECK, and no gate in the flow
+reads that deck against the design intent.
+
+`phase3/stage3/pnr/constraint.sdc` is the deck. `pnr.tcl` `read_sdc`s it, and
+steps 16 (clock planning), 17 (placement), 19 (CTS), 20 (hold fixing) and 23
+(post-route STA) all close against it. `sdc_validator_check` DOES cross-check a
+deck against L8 — but its `_SEARCH_ROOTS` are `phase2/stage1/fpga` and
+`phase2/stage2/constraints`, so the stage-2 deck is graded and THE STAGE-3
+SIGN-OFF DECK IS NEVER READ BY IT. `clock_plan_check` grades the plan's
+substance and names no L-doc at all. `achieved_period_recorded_check` says in
+its own docstring that "it does not judge the number", and reads the asked
+period out of the run's own record rather than out of the intent.
+
+So when `sdc_gen` misses every tier of its precedence walk it writes
+`_DEFAULT_MHZ` (50.0 MHz -> 20.0 ns) into the sign-off deck, the design is
+placed, CTS'd and timed at that period, and each of those steps goes green
+because each is graded against the deck. MEASURED on the published corpus,
+`evaluation/phase1_parity/sgmii`: L8 and L9 both declare `clk_main` at 625.0
+MHz (`period_ns: 1.6`), the emitted deck says so out loud in its own header
+("no constraints/*.sdc supplied; clk_period_ns=20.0"), and
+`phase3/stage3/sta/post_route_timing.rpt` closes a path at 2.04 ns arrival
+against a `20.00 clock clk (rise edge)`. Steps 16, 17, 19 and 20 are all PASS on
+that run. The layout is signed off 12.5x slower than the design is specified to
+run, and nothing in the flow says a word.
+
+WHEN R3 DISARMS, AND WHY EACH NARROWING IS NOT A WEAKENING
+----------------------------------------------------------
+  * A DECK STRICTER THAN THE INTENT IS NOT A CONTRADICTION. R3 fires only when
+    the deck's period is LONGER than the one the intent asks for. A design
+    timed at a shorter period than it was asked for meets the asked one with
+    margin — rejecting it would be the reviewer complaining about
+    conservatism. MEASURED: `evaluation/phase1_parity/espi` declares 20.0 MHz
+    (50.0 ns) and carries the same fabricated 20.0 ns deck; without this
+    narrowing the rejection set over the corpus's five sign-off decks is 2, with
+    it 1. The one it drops is the one where the artefact is not worse than the
+    intent.
+  * AN ABSENT DECLARATION IS NOT AN AGREEMENT. When the intent declares no
+    frequency at all (`evaluation/phase1_parity/mdio`: L8.clock_mhz is null and
+    both clock-domain lists are empty) there is nothing for the deck to
+    contradict, and R3 is NOT CHECKED rather than ACCEPT.
+  * A CONTRADICTORY INTENT CANNOT PUT THE QUESTION. Two PRIMARY records
+    disagreeing about the period make the review NOT CHECKED — the same verdict
+    `sdc_validator_check` reaches for the same shape. Note this does NOT fire on
+    the corpus's incidental `role: extracted_from_doc_freq_mention` records,
+    which are document mentions rather than a declared domain.
+  * AN ABSENT DECK REFUTES NOTHING. A run with no `constraint.sdc`, or one with
+    no `create_clock` in it, is NOT CHECKED, never ACCEPT.
+  * WHEN THE DECK CREATES SEVERAL CLOCKS the SHORTEST period is the one
+    compared, which is the reading most favourable to the artefact: R3 rejects
+    only when EVERY clock the deck constrains is slower than the intent asks.
+
 A REJECTION CARRIES EVIDENCE OR IT IS NOT A REJECTION
 ======================================================
 The doctrine is that an AI rejection must be proven by a prompt-derived
@@ -139,6 +194,33 @@ _DEFAULT_EMIT_DIR = "reports/phase2/gates/on_pass_review"
 #: The intent field L9 uses to disclose that it could not read a top out of the
 #: design input, and the strategy value that goes with it.
 _SENTINEL_STRATEGY = "canonical_chip_top_sentinel"
+
+
+#: The clock-domain roles that mean "this is the design's clock", as the
+#: published corpus spells them. Everything else in a `clock_domains[]` list is
+#: an incidental record (`extracted_from_doc_freq_mention` is a document
+#: mention, not a declared domain) and is NOT read as the design's period.
+_PRIMARY_ROLES = frozenset({"primary", "master"})
+
+#: Float-representation slack ONLY. 10.0 ns asked against a deck that stores
+#: 10.000000000000002 is the same number; this is not a timing margin and must
+#: never be widened into one. A deck 1 ps slower than the intent is still
+#: slower than the intent.
+_PERIOD_EPS_REL = 1e-6
+
+#: `create_clock -period <ns>` in the sign-off deck, in either argument order
+#: (`create_clock -name c -period 20.0 [get_ports c]` and
+#: `create_clock [get_ports clk] -name core_clock -period 25.9` both occur in
+#: the published corpus).
+_CREATE_CLOCK_RE = re.compile(r"(?m)^[ \t]*create_clock\b(?P<args>[^\n]*)")
+_PERIOD_ARG_RE = re.compile(r"-period\s+([0-9]*\.?[0-9]+)")
+_NAME_ARG_RE = re.compile(r"-name\s+(\S+)")
+_GET_PORTS_RE = re.compile(r"get_ports\s+([\w\\\[\]:$.]+)")
+
+#: A `clock <name> (rise edge)` row in an OpenSTA path report, whose two equal
+#: leading numbers are the period the path was closed against.
+_STA_EDGE_RE = re.compile(
+    r"(?m)^\s*(\d+(?:\.\d+)?)\s+\1\s+clock\s+(\S+)\s+\(rise edge\)")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -621,6 +703,268 @@ def rule_intent_pin_not_in_netlist(project: Path,
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# R3
+# ─────────────────────────────────────────────────────────────────────────────
+def _pos_float(v) -> Optional[float]:
+    try:
+        f = float(v)
+    except (TypeError, ValueError):
+        return None
+    return f if f > 0 else None
+
+
+def _primary_period_from_domains(doc: Dict[str, Any], src: str) -> List[Dict[str, Any]]:
+    """Every PRIMARY clock-domain record in `doc`, as a declared period.
+
+    Returns one entry per PRIMARY record — plural on purpose, so a doc that
+    declares two disagreeing primaries is visible to the caller as a
+    contradiction rather than silently resolved by list order.
+    """
+    out: List[Dict[str, Any]] = []
+    for i, cd in enumerate(doc.get("clock_domains") or []):
+        if not isinstance(cd, dict):
+            continue
+        if str(cd.get("role") or "").strip().lower() not in _PRIMARY_ROLES:
+            continue
+        ns = _pos_float(cd.get("period_ns"))
+        if ns is None:
+            mhz = _pos_float(cd.get("freq_mhz")) or _pos_float(cd.get("freq_low_mhz"))
+            ns = (1000.0 / mhz) if mhz else None
+        if ns is None:
+            continue
+        out.append({"file": src, "field": f"clock_domains[{i}]",
+                    "clock": cd.get("name"), "role": cd.get("role"),
+                    "period_ns": ns})
+    return out
+
+
+def read_intent_period(l8: Optional[Path], l9: Optional[Path],
+                       project: Path) -> Dict[str, Any]:
+    """The period the DESIGN ASKS FOR, read the way the generator claims to.
+
+    The precedence is `sdc_gen`'s own first two tiers, which is the point: the
+    review reads the intent through the same walk the deck's producer says it
+    uses, so a disagreement is the producer having missed it rather than the
+    reviewer having invented a different question. Tier 3 (the design's own
+    staged SDC) and tier 4 (`_DEFAULT_MHZ`) are deliberately NOT read — neither
+    is the design INPUT, and tier 4 is the fabrication this rule exists to see.
+    """
+    read: List[str] = []
+    docs: List[tuple] = []
+    for path in (l8, l9):
+        if path is None:
+            continue
+        if not path.exists():
+            continue
+        try:
+            d = json.loads(path.read_text(encoding="utf-8", errors="replace"))
+        except (OSError, ValueError) as e:
+            return {"declared": None, "why": f"{path}: {e}"}
+        if not isinstance(d, dict):
+            return {"declared": None, "why": f"{path} is not a mapping"}
+        rel = str(path.relative_to(project)) if project in path.parents else str(path)
+        read.append(rel)
+        docs.append((rel, d))
+    if not docs:
+        return {"declared": None,
+                "why": "none of the declared intent documents exist"}
+
+    # tier 1 — the scalar the design owns.
+    for rel, d in docs:
+        mhz = _pos_float(d.get("clock_mhz"))
+        if mhz:
+            return {"declared": True, "read": read, "file": rel,
+                    "field": "clock_mhz", "value": d.get("clock_mhz"),
+                    "unit": "MHz", "period_ns": 1000.0 / mhz,
+                    "tier": "L-doc clock_mhz"}
+
+    # tier 2 — the PRIMARY clock-domain record.
+    for rel, d in docs:
+        cands = _primary_period_from_domains(d, rel)
+        if not cands:
+            continue
+        distinct = sorted({round(c["period_ns"], 9) for c in cands})
+        if len(distinct) > 1:
+            return {"declared": None, "read": read, "candidates": cands,
+                    "why": (f"{rel} declares {len(distinct)} DIFFERENT periods "
+                            f"under a primary role ({distinct} ns); an SDC "
+                            f"cannot be validated against a contradictory "
+                            f"constraint set, and picking one of them would be "
+                            f"the reviewer resolving a disagreement the intent "
+                            f"has not resolved")}
+        c = cands[0]
+        return {"declared": True, "read": read, "file": c["file"],
+                "field": c["field"], "value": c["clock"],
+                "clock": c["clock"], "role": c["role"],
+                "period_ns": c["period_ns"],
+                "tier": "L-doc primary clock_domains[]"}
+
+    return {"declared": False, "read": read,
+            "why": ("no declared intent document carries a clock frequency: "
+                    "`clock_mhz` is absent or null and no clock_domains[] "
+                    "record carries a primary role with a period")}
+
+
+def read_signoff_deck(sdc: Path, project: Path) -> Dict[str, Any]:
+    """Every `create_clock` in the deck stage 3 signed off against."""
+    try:
+        text = sdc.read_text(encoding="utf-8", errors="replace")
+    except OSError as e:
+        return {"readable": False, "why": str(e)}
+    clocks: List[Dict[str, Any]] = []
+    for m in _CREATE_CLOCK_RE.finditer(text):
+        args = m.group("args")
+        per = _PERIOD_ARG_RE.search(args)
+        if not per:
+            continue
+        ns = _pos_float(per.group(1))
+        if ns is None:
+            continue
+        nm = _NAME_ARG_RE.search(args)
+        pt = _GET_PORTS_RE.search(args)
+        clocks.append({"name": nm.group(1) if nm else None,
+                       "port": pt.group(1) if pt else None,
+                       "period_ns": ns,
+                       "line": m.group(0).strip()})
+    return {"readable": True,
+            "file": str(sdc.relative_to(project)) if project in sdc.parents
+                    else str(sdc),
+            "clocks": clocks}
+
+
+def signed_off_under(project: Path, rels: List[str],
+                     period_ns: float) -> List[Dict[str, Any]]:
+    """Stage-3 sign-off evidence produced under the deck's period.
+
+    The BLAST RADIUS, not the finding: each of these files is a step that went
+    green against the refuted number. Kept out of `rejection_requires` on
+    purpose — the contradiction is between the intent and the deck, and a run
+    that has not reached STA yet still carries it.
+    """
+    hits: List[Dict[str, Any]] = []
+    for rel in rels:
+        base = project / rel
+        paths = ([base] if base.is_file()
+                 else sorted(base.rglob("*")) if base.is_dir() else [])
+        for fp in paths:
+            if not fp.is_file() or fp.suffix not in (".rpt", ".json"):
+                continue
+            try:
+                text = fp.read_text(encoding="utf-8", errors="replace")
+            except OSError:
+                continue
+            rp = str(fp.relative_to(project))
+            if fp.suffix == ".rpt":
+                for num, clk in _STA_EDGE_RE.findall(text):
+                    if abs(float(num) - period_ns) <= period_ns * _PERIOD_EPS_REL:
+                        hits.append({"file": rp, "period_ns": float(num),
+                                     "evidence": f"clock {clk} (rise edge) at "
+                                                 f"{num}"})
+                        break
+                continue
+            try:
+                d = json.loads(text)
+            except ValueError:
+                continue
+            for c in (d.get("clocks") or []) if isinstance(d, dict) else []:
+                ns = _pos_float(isinstance(c, dict) and c.get("period_ns"))
+                if ns is not None and abs(ns - period_ns) <= period_ns * _PERIOD_EPS_REL:
+                    hits.append({"file": rp, "period_ns": ns,
+                                 "evidence": f"clocks[].period_ns={ns} "
+                                             f"({c.get('name')})"})
+                    break
+    return hits
+
+
+def rule_signoff_clock_slower_than_intent(project: Path,
+                                          decl: Dict[str, Any]) -> Dict[str, Any]:
+    """R3. Returns {"verdict", ...} in the same shape R1 does."""
+    intent_rel = [str(x) for x in (decl.get("intent") or [])]
+    artefact_rel = [str(x) for x in (decl.get("artefact") or [])]
+
+    def _named(suffix):
+        return next((project / r for r in intent_rel if r.endswith(suffix)), None)
+
+    l8, l9 = _named("L8_TIMING_WAVEFORM.json"), _named("L9_INTEGRATION_SPEC.json")
+    if l8 is None and l9 is None:
+        return {"verdict": "NOT_CHECKED",
+                "why": ("the stage's `intent:` names neither "
+                        "L8_TIMING_WAVEFORM.json nor L9_INTEGRATION_SPEC.json; "
+                        "R3 has no intent to read")}
+
+    sdc = next((project / r for r in artefact_rel
+                if r.endswith("constraint.sdc")), None)
+    if sdc is None:
+        return {"verdict": "NOT_CHECKED",
+                "why": ("the stage's `artefact:` names no sign-off "
+                        "constraint.sdc; R3 has no artefact to read")}
+    if not sdc.exists():
+        return {"verdict": "NOT_CHECKED",
+                "why": (f"{sdc.relative_to(project)} does not exist: this run "
+                        f"staged no stage-3 sign-off deck, which refutes "
+                        f"nothing and certifies nothing")}
+
+    deck = read_signoff_deck(sdc, project)
+    if not deck.get("readable"):
+        return {"verdict": "NOT_CHECKED", "why": f"{sdc}: {deck.get('why')}"}
+    artefact = {"file": deck["file"], "clocks": deck["clocks"],
+                "clock_count": len(deck["clocks"])}
+    if not deck["clocks"]:
+        return {"verdict": "NOT_CHECKED", "artefact": artefact,
+                "why": (f"{deck['file']} creates no clock with a period; the "
+                        f"deck constrains nothing, so there is no sign-off "
+                        f"period for the intent to contradict")}
+
+    intent = read_intent_period(l8, l9, project)
+    if intent.get("declared") is None:
+        return {"verdict": "NOT_CHECKED", "intent": intent, "artefact": artefact,
+                "why": intent.get("why")}
+    if intent.get("declared") is False:
+        # AN ABSENT DECLARATION IS NOT AN AGREEMENT — the same rule R1 applies
+        # to a missing `top_module`. Answering ACCEPT here would certify every
+        # deck on every run whose intent never stated a frequency.
+        return {"verdict": "NOT_CHECKED", "intent": intent, "artefact": artefact,
+                "why": intent.get("why")}
+
+    asked = float(intent["period_ns"])
+    fastest = min(deck["clocks"], key=lambda c: c["period_ns"])
+    artefact["fastest_clock"] = fastest
+    tol = asked * _PERIOD_EPS_REL
+
+    if fastest["period_ns"] <= asked + tol:
+        out = {"verdict": "ACCEPT", "intent": intent, "artefact": artefact}
+        if fastest["period_ns"] < asked - tol:
+            out["observation"] = (
+                f"the sign-off deck constrains {fastest['period_ns']} ns, "
+                f"SHORTER than the {asked:.6g} ns the intent asks for. A deck "
+                f"stricter than the intent is not a contradiction: timing that "
+                f"closes at the shorter period closes at the longer one, so "
+                f"the artefact is not worse than what was asked.")
+        return out
+
+    stamped = signed_off_under(project, artefact_rel, fastest["period_ns"])
+    return {
+        "verdict": "REJECT",
+        "intent": intent,
+        "artefact": artefact,
+        "signed_off_under": stamped,
+        "contradiction": (
+            f"the intent asks for {asked:.6g} ns "
+            f"({intent['file']} :: {intent['field']} = {intent['value']!r}"
+            f"{', ' + str(intent.get('unit')) if intent.get('unit') else ''}), "
+            f"and {deck['file']} — the deck stage 3 placed, CTS'd and closed "
+            f"timing against — constrains {len(deck['clocks'])} clock(s) whose "
+            f"FASTEST is {fastest['period_ns']} ns "
+            f"({fastest['line']}), a factor of "
+            f"{fastest['period_ns'] / asked:.3g} slower. Every stage-3 gate is "
+            f"graded against this deck, so each one goes green while the "
+            f"layout is signed off at a clock the design was never specified "
+            f"to run at. {len(stamped)} sign-off artefact(s) carry the refuted "
+            f"period."),
+    }
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # the rejection's executable test
 # ─────────────────────────────────────────────────────────────────────────────
 # THE TEST BELONGS TO THE RUN, NOT TO THE PLUGIN. The doctrine is that a
@@ -823,6 +1167,118 @@ if __name__ == "__main__":
 '''
 
 
+_EMITTED_TEST_R3 = r"""#!/usr/bin/env python3
+'''AUTO-EMITTED by `{program}` from a stage-{stage} ON-PASS review rejection.
+
+    {contradiction}
+
+This test FAILS while that is true of this run tree and PASSES once it is
+repaired. It reads only this run's own INTENT (the L-docs) and ARTEFACT (the
+sign-off deck) — no oracle, no harness, no golden — and it re-derives nothing:
+it runs no tool, invokes no router and rebuilds no deck.
+
+REPAIR is one of exactly two things, and which one is a design decision this
+test does not make:
+  * the sign-off deck is regenerated at the period the intent asks for and
+    stage 3 is re-run against it, or
+  * the intent is corrected to the period this design is actually specified to
+    run at, and the {n_stamped} sign-off artefact(s) closed under the old
+    number are regenerated from it.
+'''
+import json
+import re
+import sys
+from pathlib import Path
+
+INTENT_RELS = {intent_rels!r}
+DECK_REL = {deck_rel!r}
+ASKED_NS = {asked_ns!r}
+PRIMARY_ROLES = ("primary", "master")
+_CC = re.compile(r"(?m)^[ \t]*create_clock\b([^\n]*)")
+_PER = re.compile(r"-period\s+([0-9]*\.?[0-9]+)")
+
+
+def run_root():
+    for d in [Path(__file__).resolve()] + list(Path(__file__).resolve().parents):
+        if (d / "phase1" / "generated_docs").is_dir():
+            return d
+    raise AssertionError("no run root above %s" % __file__)
+
+
+def _pos(v):
+    try:
+        f = float(v)
+    except (TypeError, ValueError):
+        return None
+    return f if f > 0 else None
+
+
+def asked_period_ns(root):
+    docs = []
+    for rel in INTENT_RELS:
+        fp = root / rel
+        if fp.is_file():
+            docs.append((rel, json.loads(fp.read_text(encoding="utf-8",
+                                                      errors="replace"))))
+    for rel, d in docs:
+        mhz = _pos(d.get("clock_mhz"))
+        if mhz:
+            return 1000.0 / mhz, "%s::clock_mhz=%s" % (rel, d.get("clock_mhz"))
+    for rel, d in docs:
+        for i, cd in enumerate(d.get("clock_domains") or []):
+            if not isinstance(cd, dict):
+                continue
+            if str(cd.get("role") or "").lower() not in PRIMARY_ROLES:
+                continue
+            ns = _pos(cd.get("period_ns"))
+            if ns is None:
+                mhz = _pos(cd.get("freq_mhz")) or _pos(cd.get("freq_low_mhz"))
+                ns = (1000.0 / mhz) if mhz else None
+            if ns is not None:
+                return ns, "%s::clock_domains[%d] %s" % (rel, i, cd.get("name"))
+    return None, "no intent document declares a clock frequency"
+
+
+def test_the_signoff_deck_is_not_slower_than_the_period_the_intent_asks_for():
+    root = run_root()
+    asked, why = asked_period_ns(root)
+    assert asked is not None, (
+        "%s; this test refutes nothing over an intent that asks for no period"
+        % why)
+    deck = root / DECK_REL
+    assert deck.is_file(), (
+        "%s does not exist; an absent sign-off deck refutes nothing and "
+        "certifies nothing" % DECK_REL)
+    text = deck.read_text(encoding="utf-8", errors="replace")
+    periods = []
+    for m in _CC.finditer(text):
+        per = _PER.search(m.group(1))
+        if per:
+            ns = _pos(per.group(1))
+            if ns is not None:
+                periods.append(ns)
+    assert periods, (
+        "%s creates no clock with a period; this test refutes nothing over a "
+        "deck that constrains nothing" % DECK_REL)
+    fastest = min(periods)
+    assert fastest <= asked * (1 + 1e-6), (
+        "%s signs off at %s ns (fastest of %d clock(s)) while the intent asks "
+        "for %.6g ns (%s): the layout is timed %.3gx slower than the design is "
+        "specified to run" % (DECK_REL, fastest, len(periods), asked, why,
+                              fastest / asked))
+
+
+if __name__ == "__main__":
+    try:
+        test_the_signoff_deck_is_not_slower_than_the_period_the_intent_asks_for()
+    except AssertionError as e:
+        print("FAIL: %s" % e)
+        sys.exit(1)
+    print("PASS: the sign-off deck is not slower than the intent (asked "
+          "%.6g ns)" % ASKED_NS)
+"""
+
+
 def _body_r1(finding: Dict[str, Any], stage_id: str) -> str:
     return _EMITTED_TEST.format(
         program=_NAME, stage=stage_id,
@@ -839,6 +1295,16 @@ def _body_r2(finding: Dict[str, Any], stage_id: str) -> str:
         intent_rel=finding["intent"]["intent_rel"],
         intent_field=finding["intent"]["field"],
         netlist_rel=finding["artefact"]["artefact_rel"])
+
+
+def _body_r3(finding: Dict[str, Any], stage_id: str) -> str:
+    return _EMITTED_TEST_R3.format(
+        program=_NAME, stage=stage_id,
+        contradiction=finding["contradiction"],
+        n_stamped=len(finding.get("signed_off_under") or []),
+        intent_rels=list(finding["intent"].get("read") or []),
+        deck_rel=finding["artefact"]["file"],
+        asked_ns=float(finding["intent"]["period_ns"]))
 
 
 def emit_test(dest: Path, finding: Dict[str, Any], stage_id: str) -> Path:
@@ -868,12 +1334,15 @@ def emit_test(dest: Path, finding: Dict[str, Any], stage_id: str) -> Path:
 _RULES = {
     "stage1": [("R1_INTENT_TOP_NOT_BUILT", rule_intent_top_not_built)],
     "stage2": [("R2_INTENT_PIN_NOT_IN_NETLIST", rule_intent_pin_not_in_netlist)],
+    "stage3": [("R3_SIGNOFF_CLOCK_SLOWER_THAN_INTENT",
+                rule_signoff_clock_slower_than_intent)],
 }
 
 #: The emitter for each rule's own regression. Keyed by rule id, beside
 #: `_RULES`, so a rule added without one fails loudly at emit time.
 _EMITTERS = {"R1_INTENT_TOP_NOT_BUILT": _body_r1,
-             "R2_INTENT_PIN_NOT_IN_NETLIST": _body_r2}
+             "R2_INTENT_PIN_NOT_IN_NETLIST": _body_r2,
+             "R3_SIGNOFF_CLOCK_SLOWER_THAN_INTENT": _body_r3}
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -983,8 +1452,28 @@ def _print_r2(f: Dict[str, Any]) -> None:
               f"rule never rejects on them")
 
 
+def _print_r3(f: Dict[str, Any]) -> None:
+    i, art, fc = f["intent"], f["artefact"], f["artefact"]["fastest_clock"]
+    print(f"    INTENT   {i['file']} :: {i['field']} = {i['value']!r} asks for "
+          f"{float(i['period_ns']):.6g} ns ({i['tier']})")
+    print(f"    ARTEFACT {art['file']} — the deck stage 3 signed off against — "
+          f"creates {art['clock_count']} clock(s); fastest {fc['period_ns']} "
+          f"ns: {fc['line']}")
+    if f.get("signed_off_under"):
+        s = f["signed_off_under"]
+        print(f"    SIGNED OFF UNDER {fc['period_ns']} ns in {len(s)} "
+              f"artefact(s):")
+        for r in s[:8]:
+            print(f"               {r['file']} ({r['evidence']})")
+    else:
+        print(f"    SIGNED OFF UNDER no sign-off artefact in this run yet "
+              f"carries the refuted period; the contradiction is between the "
+              f"intent and the deck and does not depend on one existing")
+
+
 _PRINTERS = {"R1_INTENT_TOP_NOT_BUILT": _print_r1,
-             "R2_INTENT_PIN_NOT_IN_NETLIST": _print_r2}
+             "R2_INTENT_PIN_NOT_IN_NETLIST": _print_r2,
+             "R3_SIGNOFF_CLOCK_SLOWER_THAN_INTENT": _print_r3}
 
 
 # ─────────────────────────────────────────────────────────────────────────────

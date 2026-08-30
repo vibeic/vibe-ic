@@ -1,0 +1,81 @@
+{
+  "_comment": "Verbatim copies of the files stage_on_pass_review reads for R3, from three published benchmark-data cells. Nothing here is authored: each sha256 below is the source file's. The corpus-bound test re-reads the live cells when the corpus is resolvable; this fixture is what makes the control run on a checkout that has no corpus.",
+  "corpus_repo": "https://github.com/vibeic/benchmark-data",
+  "trees": {
+    "accept_subservient": {
+      "cell": "ic/subservient",
+      "files": {
+        "phase1/generated_docs/L8_TIMING_WAVEFORM.json": {
+          "bytes": 1488,
+          "sha256": "19399effe23f4bde7873058abfb49f2e293a8e9fb643cf36a200e0538ed16e80"
+        },
+        "phase1/generated_docs/L9_INTEGRATION_SPEC.json": {
+          "bytes": 20155,
+          "sha256": "8264ccf0687263363a6af46fcada82ef442d89d60dde6f24047966807aa173f3"
+        },
+        "phase3/stage3/pnr/constraint.sdc": {
+          "bytes": 249,
+          "sha256": "3c10a0da1946ae1824044807f4169fadf132691f4cc65f815249d4ce0657b60d"
+        },
+        "phase3/stage3/cts/clock_plan.json": {
+          "bytes": 388,
+          "sha256": "780bc2926763afb9d8bd60b2ed4e71fc27e367281a533feeae351af809ba2878"
+        },
+        "phase3/stage3/sta/post_route_timing.rpt": {
+          "bytes": 308,
+          "sha256": "bb41c3e40693d8193502eda0c45ccd3114d2500e394f7f85d09c9fd963adaa77"
+        }
+      }
+    },
+    "reject_sgmii": {
+      "cell": "evaluation/phase1_parity/sgmii",
+      "files": {
+        "phase1/generated_docs/L8_TIMING_WAVEFORM.json": {
+          "bytes": 5523,
+          "sha256": "5f72f327aeb552f4cdcbf0ade902e8da1e29f9d9c17b5f86fda71973cfa5cc4e"
+        },
+        "phase1/generated_docs/L9_INTEGRATION_SPEC.json": {
+          "bytes": 8697,
+          "sha256": "045325e35f4dc0ef596bcb0d246cbb0a60f3c3818145eb4533f334376756458f"
+        },
+        "phase3/stage3/pnr/constraint.sdc": {
+          "bytes": 249,
+          "sha256": "3b2ebc98c98cab58907b98646dcf4eea3f9470404a85f4b4c61a369419fe3d0f"
+        },
+        "phase3/stage3/cts/clock_plan.json": {
+          "bytes": 196,
+          "sha256": "0c2a9f0f320eb41afc7fffaf801ac290a943f92b6178cf19b3f356b9ea052c39"
+        },
+        "phase3/stage3/sta/post_route_timing.rpt": {
+          "bytes": 1201,
+          "sha256": "24e8636b6dc2c68da12f15fd74c014ebcf90a71af7c5f56be2568546a8bfb74f"
+        }
+      }
+    },
+    "accept_espi_overconstrained": {
+      "cell": "evaluation/phase1_parity/espi",
+      "files": {
+        "phase1/generated_docs/L8_TIMING_WAVEFORM.json": {
+          "bytes": 3070,
+          "sha256": "977da1b41fa4483a06ed0ca4a5435af2cfa715fa3912cbc4d42ae4ef59d8e1d6"
+        },
+        "phase1/generated_docs/L9_INTEGRATION_SPEC.json": {
+          "bytes": 5943,
+          "sha256": "35be9fcb41476c69148d32ef78c2baaf579f1b3280d6b57f362d394a9fea912c"
+        },
+        "phase3/stage3/pnr/constraint.sdc": {
+          "bytes": 249,
+          "sha256": "3b2ebc98c98cab58907b98646dcf4eea3f9470404a85f4b4c61a369419fe3d0f"
+        },
+        "phase3/stage3/cts/clock_plan.json": {
+          "bytes": 196,
+          "sha256": "0c2a9f0f320eb41afc7fffaf801ac290a943f92b6178cf19b3f356b9ea052c39"
+        },
+        "phase3/stage3/sta/post_route_timing.rpt": {
+          "bytes": 1129,
+          "sha256": "8c90d05e16f54c767b390cedab62cdf43316405fa22c5d0d7ac69fef35a15143"
+        }
+      }
+    }
+  }
+}
