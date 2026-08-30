@@ -569,42 +569,48 @@ def acceptance_control_gate(repo: Path, base: str, head: str) -> GateResult:
 # land green". The verdict is literally a merge condition; it belongs at the
 # merge decision.
 #
-# WHAT BLOCKS, AND THE ONE THING THAT DOES NOT YET
-# ------------------------------------------------
+# WHAT BLOCKS
+# -----------
 # The checklist's merge condition is "every applicable question has verifiable
 # evidence, and every inapplicable question has a machine-checkable reason".
-# Answering it needs an answers document, and MEASURED on this tree there is
-# not one anywhere: `grep -rl vibeic.ppa.pr_answers` matches only the checker
-# itself. So `answers_document_present: false` is currently the state of every
-# branch in flight, and wiring THAT as blocking would turn every open PR red on
-# the day it landed — which is how a gate gets switched off rather than obeyed.
+# Answering it needs an answers document, and every arm of that answer now
+# blocks — including its absence.
 #
-# The split is therefore on the report's own `answers_document_present` flag:
+# THE ABSENT ARM USED TO BE ADVISORY, AND IT STOPPED BEING SO BY ITS OWN
+# WRITTEN CONDITION. The advisory branch carried an expiry: "THE MOMENT an
+# answers-document convention exists in this repository — a declared path, and
+# this branch's own document at it — the `not present` arm becomes blocking and
+# this comment goes away." Both halves are satisfied: the path is declared
+# below as `_PPA_ANSWERS_REL`, and this repository carries a real document at
+# it. MEASURED on 05bb5e8d94, one change-set, the document the only variable:
 #
-#   document supplied  -> FULLY BLOCKING. Every finding the checker can make is
-#                         a real finding: a question with nothing behind it, and
-#                         AUTHOR_OVERRIDE_REFUSED, where the author marked an
-#                         applicable question N/A and the detector disagreed.
-#   no document        -> REPORTED, not blocking, naming how many questions
-#                         apply so the gap is visible on every single review.
+#     answers document supplied   rc 0  PASS  7 applicable, 13 N/A, 0 undetermined
+#     document withheld           rc 1  FAIL  6 MISSING_EVIDENCE, each reading
+#                                             "no answers document was supplied"
 #
-# This is a claim and it has an expiry condition, stated so it can be held to:
-# THE MOMENT an answers-document convention exists in this repository — a
-# declared path, and this branch's own document at it — the `not present` arm
-# becomes blocking and this comment goes away. Nothing else needs to change;
-# the checker already returns rc 1 for that case today.
+# so the flip costs this repository nothing: it already answers. What the
+# advisory branch cost was the whole blocking arm — a gate that never passes
+# `--answers` can only ever see `answers_document_present: false`, and a wiring
+# that cannot fail is not a wiring. `AUTHOR_OVERRIDE_REFUSED` — the detector
+# disagreeing with an author who marked an applicable question N/A — had never
+# been reachable.
+#
+# WHAT THIS CHANGE DOES NOT FIX, stated so it is not mistaken for fixed. The
+# answers document resolves at a REPOSITORY path that every branch inherits, so
+# a change-set can satisfy this gate with a document that answers questions
+# about a DIFFERENT change-set. That is inherited staleness, it is not created
+# or worsened here, and blocking on absence does not detect it. It is filed as
+# a named follow-up in `.github/ppa_pr_answers.json` under `findings`.
 #
 # rc 2 is NOT CHECKED, never a pass: the content arm needs a diff, and given
 # only a path list it reports the surfaces it did NOT look for. "I could not
 # read it" and "I read it and it was empty" must not share a verdict.
 # --------------------------------------------------------------------------
-#: WHERE A BRANCH PUTS ITS APPENDIX-C ANSWERS. A gate that never passes
-#: `--answers` can only ever see `answers_document_present: false`, which is
-#: the one arm that does not block — i.e. a wiring that cannot fail, which is
-#: not a wiring. Declaring the path is what makes the blocking arm REACHABLE:
-#: an author who writes this file gets the full merge condition enforced.
-#: It sits beside `PULL_REQUEST_TEMPLATE.md` because it is the machine half of
-#: the same document.
+#: WHERE A BRANCH PUTS ITS APPENDIX-C ANSWERS. Declaring the path is what made
+#: the blocking arm REACHABLE, and its absence is now itself blocking: a
+#: change-set that does not answer does not merge. It sits beside
+#: `PULL_REQUEST_TEMPLATE.md` because it is the machine half of the same
+#: document.
 _PPA_ANSWERS_REL = ".github/ppa_pr_answers.json"
 
 
@@ -651,13 +657,17 @@ def ppa_pr_scope_gate(repo: Path, base: str, head: str,
     by_status = summary.get("by_status") or {}
     applicable = summary.get("applicable", "?")
     if rep is not None and rep.get("answers_document_present") is False:
+        # BLOCKING. This arm returned 0 until the convention existed; it does
+        # not any more, and the reason is in the block at the top of this
+        # section. The message still names the path, because a refusal a reader
+        # cannot act on is a refusal that gets switched off.
         return GateResult(
-            name, 0,
-            f"REPORTED, not blocking — {applicable} of the 20 Appendix-C "
-            f"questions apply to this change-set and no answers document was "
-            f"supplied at {_PPA_ANSWERS_REL}. Adding that file makes every "
-            f"one of them blocking; until the convention is required "
-            f"repo-wide, its absence is reported and not blocking.")
+            name, 1,
+            f"the merge condition is VIOLATED — {applicable} of the 20 "
+            f"Appendix-C questions apply to this change-set and NO answers "
+            f"document was supplied at {_PPA_ANSWERS_REL}. Write that file: "
+            f"every applicable question needs verifiable evidence, and every "
+            f"inapplicable one a machine-checkable reason.")
     bad = ", ".join(f"{k}={v}" for k, v in sorted(by_status.items())
                     if k not in ("NOT_APPLICABLE", "SATISFIED"))
     qs = [str(q.get("question")) for q in (rep or {}).get("questions") or []

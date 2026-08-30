@@ -659,10 +659,33 @@ _gate_dispatch_corpus_state() {
 # place a gate is executed and the ONE place its outcome is recorded.
 #
 # rc2_mode is 0 for an ordinary gate, 1 for a gate carrying a dated exemption,
-# and 2 for a dispatcher-owned structural refusal.  Mode 2 is deliberately
-# private: an empty/undetermined population must leave normal process evidence
-# and exactly one shard owner, but it must never acquire the non-fatal tolerance
-# that a human may buy with `uncheckable_until`.
+# 2 for a dispatcher-owned POPULATION REFUSAL, and 3 for a dispatcher-owned
+# COULD-NOT-LOOK.  Modes 2 and 3 are deliberately private: neither may acquire
+# the non-fatal tolerance a human buys with `uncheckable_until`.
+#
+# MODE 2 AND MODE 3 ARE OPPOSITE FACTS AND USED TO SHARE ONE EXIT CODE.
+# ====================================================================
+#   mode 2  I LOOKED.  The corpus was opened and the population it yielded was
+#           empty (or its producer broke mid-enumeration).  That is a finding
+#           ABOUT THE REPOSITORY, it is blocking, and it is un-exemptible: a
+#           population refusal must not be purchasable with a date.
+#   mode 3  I COULD NOT LOOK.  No corpus was resolved, so nothing was opened
+#           and no population was measured.  That is a fact ABOUT THE RUN, not
+#           about the tree, and it is NEVER blocking-because-unreadable.  It
+#           must NAME what it could not read.
+#
+# Until this mode existed both arrived as mode 2, so `gate_dispatch_finish`
+# refused identically on "your corpus is empty, which is a defect" and "this
+# host has no corpus bound, which is not your commit's fault".  The reader
+# could not tell which, and the repair each calls for is different.  The two
+# already had DIFFERENT SENTENCES (vibe-ic#1764 gave `absent` its own text);
+# what they did not have was different CONSEQUENCES, and the sentence is not
+# the part a `-ne 0` consumer reads.
+#
+# NOTHING IS DROPPED FROM EITHER SIDE.  Mode 2 keeps every property #1769 built
+# into it — blocking, un-exemptible, process-attested, one shard owner.  Mode 3
+# keeps the standing ruling's shape — rc 2 UNDETERMINED, names what it could not
+# read, never blocking.  The defect was only that one rc carried both.
 _dispatch() {
   local tolerate="$1" may_write="$2" label="$3" wd="$4"; shift 4
   # vibe-ic#584 — consume the pending exemption FIRST and unconditionally, so a
@@ -688,6 +711,14 @@ precedes it — tolerance has to be bought, not defaulted into"
     _gate_wiring_error "\"$label\" carries an 'uncheckable_until $ex_until' \
 exemption but is wired with a wrapper that can never report NOT_CHECKED — the \
 exemption describes a state this gate cannot reach"
+  elif [ "$tolerate" -eq 3 ] && [ -n "$ex_until" ]; then
+    # A could-not-look is already non-blocking; there is nothing to buy, and a
+    # date attached here would read as a tolerance for a state that costs
+    # nothing — i.e. it would advertise a refusal this mode does not make.
+    _gate_wiring_error "\"$label\" is a dispatcher-owned could-not-look and \
+cannot consume an uncheckable exemption — it is already non-blocking, so an \
+exemption would describe a refusal it never makes"
+    ex_until=""; ex_why=""
   elif [ "$tolerate" -eq 2 ] && [ -n "$ex_until" ]; then
     _gate_wiring_error "\"$label\" is a dispatcher-owned population refusal \
 and cannot consume an uncheckable exemption — an unknown denominator must \
@@ -940,7 +971,25 @@ _gate_execute() {
       return 0
     fi
   fi
-  if [ "$tolerate" -eq 2 ] && [ "$rc" -eq 2 ]; then
+  if [ "$tolerate" -eq 3 ] && [ "$rc" -eq 2 ]; then
+    # I COULD NOT LOOK. Recorded as its own state so it is neither counted as a
+    # verdict nor counted as a refusal. It is loud in the log and silent in the
+    # exit code, which is the whole point: this run learned nothing about the
+    # tree, and saying so must not be reported as a defect IN the tree.
+    _GX_STATE="UNDETERMINED"
+    echo "   ^^ COULD NOT LOOK (rc 2, UNDETERMINED; never blocking):" \
+         "$label [${secs}s]" >&2
+    echo "      Nothing was opened, so no population was measured. This is a" \
+         "fact about THIS RUN, not a finding about the tree; the line above" \
+         "names what could not be read." >&2
+  elif [ "$tolerate" -eq 3 ]; then
+    # Same guard as mode 2 below, and for the same reason: a could-not-look
+    # that did not exit 2 has not established the thing it claims. Do not let
+    # rc 0 manufacture a silent non-verdict.
+    _GX_STATE="FAIL"
+    echo "   ^^ FAILED: could-not-look evidence returned rc $rc instead of" \
+         "rc 2: $label [${secs}s]" >&2
+  elif [ "$tolerate" -eq 2 ] && [ "$rc" -eq 2 ]; then
     _GX_STATE="NOT_CHECKED"
     echo "   ^^ NOT CHECKED (rc 2, BLOCKING; no exemption): $label [${secs}s]" >&2
   elif [ "$tolerate" -eq 2 ]; then
@@ -1140,7 +1189,14 @@ _gate_pool_collect() {
     # `-` is the no-process row placed by `_gate_pool_precomputed`: its state was
     # recorded at declaration time and there was never a worker to lose.
     -) return 0 ;;
-    PASS|FAIL|NOT_CHECKED|WROTE_CORPUS) ;;
+    # UNDETERMINED is a REAL state a worker can report (a dispatcher-owned
+    # could-not-look), so it belongs on this list. Until it was added the
+    # fail-safe above did exactly what it promises for an untaught name and
+    # rewrote it to NOT_CHECKED — which silently put the could-not-look back
+    # into the refusal channel it was separated out of. Measured: the absent
+    # arm recorded state NOT_CHECKED with blocking_refusal false, a row in
+    # neither state cleanly.
+    PASS|FAIL|NOT_CHECKED|UNDETERMINED|WROTE_CORPUS) ;;
     *) st="" ;;
   esac
   if [ -z "$st" ]; then
@@ -1254,16 +1310,33 @@ _gate_dispatch_population_refusal() {
   local kind="$1" corpus="$2" producer_rc="$3" item_count="$4"; shift 4
   case "$kind" in
     empty)
+      # THE EVIDENCE OF THE SUCCESSFUL READ IS PART OF THE VERDICT, not decoration.
+      # This row is blocking and un-exemptible, and the only thing entitling it
+      # to be either is that the corpus WAS opened and the zero WAS measured.
+      # Stated in machine-readable form so a reader — and a test — can tell this
+      # apart from a could-not-look without parsing prose.
       echo "[NOT_CHECKED] EMPTY CORPUS \"$corpus\": producer rc" \
            "$producer_rc yielded $item_count item(s); the per-item gates had" \
            "nothing to examine."
+      echo "[READ_OK] corpus=\"$corpus\" opened=yes producer_rc=$producer_rc" \
+           "measured_items=$item_count — the population was MEASURED at zero," \
+           "which is a finding about the tree. This is why the row is BLOCKING" \
+           "and carries no exemption."
       ;;
     absent)
-      echo "[NOT_CHECKED] CORPUS NOT FOUND \"$corpus\": the producer exited" \
+      echo "[UNDETERMINED] CORPUS NOT FOUND \"$corpus\": the producer exited" \
            "$producer_rc — no corpus was resolved, so NOTHING WAS OPENED and" \
            "$item_count item(s) is the ABSENCE of a measurement rather than a" \
            "measurement of zero. The producer's own diagnostic above names" \
            "what it looked for and how to point it at a corpus."
+      # NAMING WHAT COULD NOT BE READ IS THE OBLIGATION THAT MAKES THIS
+      # NON-BLOCKING ACCEPTABLE. A could-not-look that does not say what it
+      # could not look AT is a shrug, and a shrug is what the standing ruling
+      # exists to refuse.
+      echo "[COULD_NOT_READ] corpus=\"$corpus\" opened=no producer_rc=$producer_rc" \
+           "measured_items=none — no population was measured, so this run makes" \
+           "NO claim about the tree here. NOT blocking: an unreadable corpus is" \
+           "a fact about this host, not a defect in the commit."
       ;;
     producer_failed)
       echo "[NOT_CHECKED] CORPUS PRODUCER FAILED for \"$corpus\":" \
@@ -1339,7 +1412,11 @@ corpus — read every verdict from this loop as covering an unknown fraction of 
   elif [ "$attest_population" -eq 1 ] \
        && [ "$rc" -eq "$GATE_DISPATCH_ABSENT_RC" ] && [ "$n" -eq 0 ]; then
     GATE_DISPATCH_ITEM_NOTE="[population: producer rc $rc — NO CORPUS RESOLVED, nothing was opened, over $corpus]"
-    _dispatch 2 0 \
+    # MODE 3, NOT MODE 2. Nothing was opened, so no population was measured and
+    # there is no finding about the tree to make. This used to dispatch mode 2
+    # and therefore refused identically to a MEASURED empty corpus — the two
+    # opposite facts sharing one exit code.
+    _dispatch 3 0 \
       "corpus \"$corpus\" was NOT FOUND — nothing was opened to check" \
       "${ROOT:-$PWD}" _gate_dispatch_population_refusal \
       absent "$corpus" "$rc" "$n" "$@"
@@ -1603,6 +1680,15 @@ doc = {
     # Kept separate from both ran and deferred so coverage consumers can prove
     # the full denominator exactly: ran + out_of_scope + other_shard/deferred.
     "out_of_scope": n("OUT_OF_SCOPE"),
+    # vibe-ic jwire2 D2 — "I COULD NOT LOOK", kept OUT of `ran`, out of
+    # `decided` and out of `not_checked`. A consumer that folded it into
+    # not_checked would be back to reading one number for two opposite facts,
+    # which is the defect this key exists to end. The LIST is the load-bearing
+    # half, for the same reason `not_checked_unexempted` is a list: a
+    # could-not-look must NAME what it could not read.
+    "undetermined": n("UNDETERMINED"),
+    "undetermined_labels": [g["label"] for g in gates
+                            if g["state"] == "UNDETERMINED"],
     "shard": SHARD,
     # vibe-ic#957 — `declared` counts GATES. A loop-driven gate's subject is an
     # ITEM, and three green gates over one item is not three items checked.
@@ -1660,6 +1746,9 @@ gate_dispatch_finish() {
   local total=$(( SECONDS - GATE_DISPATCH_T0 ))
   local refused="" unexempted="" writers="" expired="" nexpired=0
   local nunexempted=0
+  # vibe-ic jwire2 D2 — the could-not-look tally, kept apart from `refused` so
+  # the two facts cannot be read off one number.
+  local undetermined="" nundetermined=0
 
   if [ "$GATE_DISPATCH_ATTESTATION_FAILED" -ne 0 ]; then
     _gate_wiring_error "one or more gate processes completed without a "\
@@ -1765,6 +1854,12 @@ after the last gate and attaches to nothing"
       # run declined to decide; something it was never asked to.
       OTHER_SHARD) elsewhere=$(( elsewhere + 1 )) ;;
       OUT_OF_SCOPE) outofscope=$(( outofscope + 1 )) ;;
+      # I COULD NOT LOOK. Counted and NAMED, never blocking, and deliberately
+      # NOT folded into NOT_CHECKED: a reader who sees the refusal count must
+      # be seeing refusals. It is also not `decided`, because nothing was.
+      UNDETERMINED)
+        nundetermined=$(( nundetermined + 1 ))
+        undetermined="${undetermined:+$undetermined, }${GATE_LABELS[$i]}" ;;
       NOT_CHECKED)
         notchecked=$(( notchecked + 1 ))
         refused="${refused:+$refused, }${GATE_LABELS[$i]}"
@@ -1802,7 +1897,15 @@ after the last gate and attaches to nothing"
   # rc is never classified, because what it did was change the tree every gate
   # after it read. OTHER_SHARD is not this host's question at all.
   decided=$(( passed + failed ))
-  ran=$(( declared - elsewhere - outofscope ))
+  # UNDETERMINED IS SUBTRACTED FROM `ran` FOR THE REASON `OTHER_SHARD` ALREADY IS:
+  # the host was never able to ask the question. The ZERO DECIDED branch below is
+  # guarded on `ran`, and its own comment gives the rule — "a shard that owns no
+  # gate is not caught by it ... that host was never asked the question". A host
+  # with no corpus to open is in that state, not in the state ZERO DECIDED
+  # exists to catch (gates that COULD have decided and did not). Leaving it in
+  # `ran` would make an unbound corpus refuse through a second door and hand
+  # back exactly the collapse this change removes.
+  ran=$(( declared - elsewhere - outofscope - nundetermined ))
 
   if [ "$wrote" -ne 0 ]; then
     # Named separately from a plain FAIL and BEFORE it: a gate that modified
@@ -1843,6 +1946,18 @@ after the last gate and attaches to nothing"
          "$nexpired uncheckable exemption(s) are PAST their review date and" \
          "this is NOT a pass: $expired (${total}s)" >&2
     exit 1
+  fi
+
+  # THE COULD-NOT-LOOK SET IS ANNOUNCED, ALWAYS, AND BEFORE ANY EXIT.
+  # Non-blocking is not the same as invisible: a state nobody can see is a
+  # shrug, and the standing ruling's whole requirement is that "I could not
+  # look" NAMES what it could not read. Printed unconditionally so it survives
+  # every exit path below, including the ones that leave immediately.
+  if [ "$nundetermined" -ne 0 ]; then
+    echo "repo_hygiene_gates: $nundetermined gate(s) COULD NOT LOOK" \
+         "(UNDETERMINED, never blocking) — nothing was opened for: " \
+         "$undetermined. This run makes NO claim about them; it is not a" \
+         "finding about the tree. (${total}s)" >&2
   fi
 
   # Dispatcher-owned population refusals deliberately carry NO exemption.

@@ -117,5 +117,17 @@
       ],
       "note": "Nothing here is AI-attributed. The measured gain -- VerilogEval-v2 official PASS 130 -> 132 over 156 problems, zero regressions -- comes from four DETERMINISTIC emitters that already existed on disk and that nothing imported; no model runs on that path and the two recovered problems are named (Prob031_dff, Prob136_m2014_q6). Not more trials either: one emit per problem, single-shot, scored by each problem's own official _ref.sv + _test.sv under iverilog, controlled against the same harness with EMITTERS truncated to the shipped two. The one change that could be mistaken for an accuracy gain is stated as buying nothing: the conformance gate refuses 0 of 262 live emits. The third test is that gate's negative control -- it proves the measurement can still go red."
     }
+  ],
+  "findings": [
+    {
+      "id": "ppa-answers-inherited-staleness",
+      "status": "OPEN",
+      "raised": "2026-08-31",
+      "raised_by": "jwire2 ruling D1",
+      "title": "An INHERITED answers document can satisfy the merge condition while answering questions about a DIFFERENT change-set.",
+      "detail": "gatekeeper_review.ppa_pr_scope_gate resolves the answers document as `repo / _PPA_ANSWERS_REL` when no --answers is passed. That is a REPOSITORY path, so any branch cut from main inherits main's document by default. The gate then reads answers_document_present: true and evaluates a document describing main's change-set, not the branch's. Blocking on ABSENCE does not detect this: the document is present, it is simply about something else. The failure mode is a GREEN gate over an unanswered change-set -- the false-green direction, which compounds silently.",
+      "explicitly_not_fixed_by": "the 2026-08-31 flip of the absent-document arm to blocking",
+      "what_would_settle_it": "A ruling on whether the document must be re-authored per change-set or may be inherited. If per change-set, the gate needs a binding between the document and the diff it answers -- for example the document naming the base..head it was written against, refused when that does not match the change-set under review. If inheritance is acceptable, this closes as WONTFIX with that reason recorded. Either way it is a policy call, not a code defect."
+    }
   ]
 }

@@ -436,8 +436,49 @@ def test_json_five_section_shape(tmp_path):
 # ---------------------------------------------------------------------------
 # 9. CLI end-to-end via main() with --changed-file + --json.
 # ---------------------------------------------------------------------------
+#: THE APPENDIX-C ANSWERS DOCUMENT A MERGE-OK FIXTURE NOW NEEDS.
+#:
+#: `ppa_pr_scope_check`'s absent-document arm became BLOCKING on 2026-08-31 by
+#: the expiry condition gatekeeper_review.py had written for itself, so a
+#: fixture that reaches MERGE_OK must answer the merge condition like any other
+#: change-set. This is NOT a relaxation of the fixture: the document is
+#: verified, and every piece of evidence in it has to resolve — the artefact's
+#: sha256 is computed from the file rather than asserted, and the two `test`
+#: refs name a test that exists. An answers document that lied would leave the
+#: gate red, which is the point of the gate.
+def _write_ppa_answers(repo, plugin):
+    import hashlib
+    rel_src = "vibe-ic-marketplace/plugins/vibe-ic/programs/widget.py"
+    rel_art = "vibe-ic-marketplace/plugins/vibe-ic/programs/widget_report.json"
+    rel_tst = ("vibe-ic-marketplace/plugins/vibe-ic/programs/tests/"
+               "test_widget.py::test_widget_is_measured")
+    tests_dir = plugin / "programs" / "tests"
+    tests_dir.mkdir(parents=True, exist_ok=True)
+    (tests_dir / "test_widget.py").write_text(
+        "def test_widget_is_measured():\n    assert True\n")
+    art = plugin / "programs" / "widget_report.json"
+    art.write_text('{"metric":"area_um2","value":1.0}\n')
+    digest = "sha256:" + hashlib.sha256(art.read_bytes()).hexdigest()
+    gh = repo / ".github"
+    gh.mkdir(parents=True, exist_ok=True)
+    (gh / "ppa_pr_answers.json").write_text(json.dumps({
+        "schema": "vibeic.ppa.pr_answers.v1",
+        "answers": [
+            {"question": 1, "evidence": [{"kind": "path", "ref": rel_src}]},
+            {"question": 2, "evidence": [{"kind": "path", "ref": rel_src}]},
+            {"question": 3, "evidence": [{"kind": "artefact", "ref": rel_art,
+                                          "sha256": digest}]},
+            {"question": 4, "evidence": [{"kind": "test", "ref": rel_tst}]},
+            {"question": 5, "evidence": [{"kind": "test", "ref": rel_tst}]},
+        ],
+    }, indent=2) + "\n")
+
+
 def test_cli_main_merge_ok(tmp_path):
     repo, plugin = _build_clean_plugin(tmp_path, version="1.0.96")
+    # The Appendix-C merge condition is blocking on ALL arms since 2026-08-31,
+    # its absent arm included, so a MERGE_OK fixture answers it.
+    _write_ppa_answers(repo, plugin)
     # Initialise a real git repo so the version-resolution path (head/base
     # plugin.json) works through `git show`.
     import subprocess
@@ -483,6 +524,77 @@ def test_cli_main_merge_ok(tmp_path):
     assert report["verdict"] == "MERGE_OK", report["blocking"]
     assert report["cadence"] == "TARGETED"
     assert report["version_bump"] == "1.0.95->1.0.96"
+
+
+
+def test_an_absent_answers_document_now_blocks_the_merge(tmp_path):
+    """D1 — the absent-document arm BLOCKS, and this is the falsifier for it.
+
+    THE SAME FIXTURE AS `test_cli_main_merge_ok`, with ONE variable: whether
+    `_write_ppa_answers` ran. That test is the other arm of this one, so the
+    pair proves the flip discriminates rather than merely refusing everything.
+
+    WHY IT FLIPPED, and it was not a policy choice made here. The advisory
+    branch carried its own expiry: "THE MOMENT an answers-document convention
+    exists in this repository — a declared path, and this branch's own document
+    at it — the `not present` arm becomes blocking". Both halves are satisfied:
+    `_PPA_ANSWERS_REL` declares the path and the repository carries a document
+    at it.
+
+    WHAT THE ADVISORY ARM COST: a gate that never passes `--answers` can only
+    ever see `answers_document_present: false`, so the BLOCKING arm — including
+    `AUTHOR_OVERRIDE_REFUSED`, where the detector disagrees with an author who
+    marked an applicable question N/A — had never been reachable at all.
+    """
+    repo, plugin = _build_clean_plugin(tmp_path, version="1.0.96")
+    # DELIBERATELY NOT `_write_ppa_answers(repo, plugin)`. That single omission
+    # is the whole difference from the MERGE_OK fixture above.
+    import os
+    import subprocess
+    env = {"GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t",
+           "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t"}
+    full_env = {**os.environ, **env}
+    subprocess.run(["git", "-C", str(repo), "init", "-q"], check=True)
+    pj = plugin / ".claude-plugin" / "plugin.json"
+    pj.write_text(json.dumps({"name": "vibe-ic", "version": "1.0.95"}) + "\n")
+    subprocess.run(["git", "-C", str(repo), "add", "-A"], check=True)
+    subprocess.run(["git", "-C", str(repo), "commit", "-qm", "base"],
+                   check=True, env=full_env)
+    base_sha = subprocess.run(["git", "-C", str(repo), "rev-parse", "HEAD"],
+                              capture_output=True, text=True).stdout.strip()
+    pj.write_text(json.dumps({"name": "vibe-ic", "version": "1.0.96"}) + "\n")
+    mkt = repo / "vibe-ic-marketplace" / ".claude-plugin" / "marketplace.json"
+    md = json.loads(mkt.read_text())
+    md["plugins"][0]["version"] = "1.0.96"
+    mkt.write_text(json.dumps(md) + "\n")
+    subprocess.run(["git", "-C", str(repo), "add", "-A"], check=True)
+    subprocess.run(["git", "-C", str(repo), "commit", "-qm", "head"],
+                   check=True, env=full_env)
+
+    changed = tmp_path / "changed.txt"
+    changed.write_text(
+        "vibe-ic-marketplace/plugins/vibe-ic/programs/widget.py\n")
+    out_json = tmp_path / "verdict.json"
+    rc = gk.main([
+        "--base", base_sha, "--head", "HEAD",
+        "--role", "core-agent",
+        "--repo", str(repo),
+        "--plugin-root", str(plugin),
+        "--pytest-cmd", "python3 -m pytest -q programs/tests",
+        "--changed-file", str(changed),
+        "--json", str(out_json),
+    ])
+    report = json.loads(out_json.read_text())
+    assert rc != 0, (
+        "a change-set that answered none of the Appendix-C merge condition "
+        f"was cleared to merge: {report['verdict']}")
+    assert report["verdict"] == "REQUEST_CHANGES", report
+
+    blocking = json.dumps(report.get("blocking") or report)
+    assert "ppa_pr_scope_check" in blocking, (
+        "the run was refused, but not by the Appendix-C gate — this test would "
+        f"then be passing for the wrong reason: {blocking[:400]}")
+    assert "answers document" in blocking, blocking[:400]
 
 
 def test_cli_main_request_changes_rc1(tmp_path):
