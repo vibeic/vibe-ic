@@ -18,10 +18,26 @@ The references fall into exactly two classes, and this module gives each one
 a first-class resolver:
 
 CLASS (a) — IN-REPO data (``/home/<dev>/vibe-ic/...``)
-    Checked-in artifacts such as ``benchmark-data/``. These live in THIS
-    checkout, so they need no configuration — only a correct root. Use
-    :func:`repo_path` / :func:`require_repo`, which derive the root from
-    ``__file__`` instead of from a literal.
+    Checked-in artifacts. These live in THIS checkout, so they need no
+    configuration — only a correct root. Use :func:`repo_path` /
+    :func:`require_repo`, which derive the root from ``__file__`` instead of
+    from a literal.
+
+    THE EXAMPLE THIS PARAGRAPH USED TO GIVE WAS ``benchmark-data/``, AND IT IS
+    NOT CLASS (a) ANY MORE. That tree left the repository at ``c5d7f2d00``;
+    ``git ls-tree -r HEAD -- benchmark-data`` matches nothing. So every
+    ``require_repo("benchmark-data", ...)`` in the suite resolved to a path that
+    cannot exist on ANY host, and skipped — reading in every report as an
+    ordinary "not in this checkout" probe that a checkout could satisfy. No
+    checkout can. That is silently-absent coverage: the shape that lets a real
+    regression land while the report stays green.
+
+    ``benchmark-data`` is therefore RE-ROUTED here, in one place, onto the
+    published corpus ``_published_corpus.corpus_root()`` resolves — the same
+    answer ``test_tool_diagnostic_id_gate.py:338`` already uses. The in-repo
+    root is still tried, so a checkout that carries the tree is read exactly as
+    before, and nothing is weakened: where neither resolves the skip is the same
+    skip, now naming which of the two states it is in.
 
 CLASS (b) — EXTERNAL corpora (``/home/<dev>/AI_IC_design/...`` and friends)
     Large benchmark datasets (RTLLM, VerilogEval, CVDP, past run artifacts)
@@ -61,6 +77,7 @@ inside an import::
 from __future__ import annotations
 
 import os
+import sys
 from pathlib import Path
 
 import pytest
@@ -93,12 +110,55 @@ def _find_repo_root() -> Path | None:
 REPO_ROOT: Path | None = _find_repo_root()
 
 
+def _published_root() -> "Path | None":
+    """`_published_corpus.corpus_root()`, imported lazily and never fatally."""
+    mod = _published_corpus()
+    if mod is None:
+        return None
+    try:
+        return mod.corpus_root()
+    except Exception:
+        return None
+
+
+def _published_corpus():
+    """The helper module, or None. Lazy because it measures the corpus at
+    import (it shells out to git); non-fatal because ~147 test modules import
+    THIS one and a resolver that raises would take all of them down over a
+    question that has a perfectly good answer of "no"."""
+    here = str(Path(__file__).resolve().parent)
+    if here not in sys.path:
+        sys.path.insert(0, here)
+    try:
+        import _published_corpus as _pc
+        return _pc
+    except Exception:
+        return None
+
+
+def _published_reroute(parts) -> "Path | None":
+    """Delegate to `_published_corpus.reroute_moved_path` — written once."""
+    mod = _published_corpus()
+    if mod is None:
+        return None
+    try:
+        return mod.reroute_moved_path(*parts)
+    except Exception:
+        return None
+
+
+_PUBLISHED_PREFIX = "benchmark-data"
+
+
 def repo_path(*parts: str) -> Path:
     """``REPO_ROOT`` joined with *parts*; skip when the repo root is unresolvable.
 
     Use for in-repo, checked-in data. Skips (rather than failing) on the
     installed-cache tree, where the monorepo simply is not present.
     """
+    rerouted = _published_reroute(parts)
+    if rerouted is not None:
+        return rerouted
     if REPO_ROOT is None:
         pytest.skip(
             "source monorepo not available: no 'vibe-ic-marketplace' ancestor "
@@ -111,7 +171,18 @@ def require_repo(*parts: str) -> Path:
     """:func:`repo_path` that additionally skips when the path does not exist."""
     p = repo_path(*parts)
     if not p.exists():
-        rel = "/".join(parts)
+        rel = "/".join(str(x) for x in parts)
+        # TWO STATES, TWO SENTENCES. "not in this checkout" is only true of the
+        # in-repo class; for the moved prefix the honest reading is whether a
+        # corpus was named at all, which is what the operator can act on.
+        if rel == _PUBLISHED_PREFIX or rel.startswith(_PUBLISHED_PREFIX + "/"):
+            root = _published_root()
+            pytest.skip(
+                f"{rel}: the published corpus at {root} does not carry it"
+                if root is not None else
+                f"{rel}: this tree no longer carries benchmark-data (it moved "
+                f"to vibeic/benchmark-data) and no VIBE_IC_BENCHMARK_DATA "
+                f"pointer names a clone — this is 'could not look'")
         pytest.skip(f"in-repo artifact not present in this checkout: {rel}")
     return p
 
@@ -124,6 +195,9 @@ def repo_path_opt(*parts: str) -> Path:
     unresolvable, so it is safe to evaluate at import time. Pair it with the
     module's own ``pytest.mark.skipif``.
     """
+    rerouted = _published_reroute(parts)
+    if rerouted is not None:
+        return rerouted
     if REPO_ROOT is None:
         return _MISSING_REPO.joinpath(*parts)
     return REPO_ROOT.joinpath(*parts)

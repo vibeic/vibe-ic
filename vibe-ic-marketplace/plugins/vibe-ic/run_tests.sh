@@ -13,7 +13,22 @@
 #   3. tools/phase1_engine/tests/ - the Phase-1 gap/render engine (#1391)
 #   4. mcp-eda/test/              - the MCP EDA server sub-project
 #   5. skills/*/tests/            - per-skill compliance regression (generated)
-#   6. Coverage audit             - every skill has compliance.yaml + tests
+#   6. _shared/                   - the shared skill runner/compliance harness
+#   7. Coverage audit             - every skill has compliance.yaml + tests
+#
+# THE ROSTER ABOVE IS A HAND LIST, AND IT WENT STALE. `_shared/` was absent
+# through `ebccf100a0` (v1.13.77) while `gatekeeper-land.sh` already named it as a
+# tree that carries files no landing stage reaches. RE-MEASURED on `ebccf100a0`,
+# `run_tests.sh --list-tiers` piped into `pytest --collect-only`:
+#
+#     without this entry    73 dirs, 43668 nodes
+#     with it               74 dirs, 44024 nodes   (+356, exactly _shared's)
+#
+# They PASS today, so nothing was hidden at that moment; what was hidden is the
+# future — a red there could never reach this script's exit code. See the closing note at the bottom of this file: a
+# hand roster is the wrong shape for an automatically-growing tree, and
+# `test_bidirectional_controls_are_executed.py::test_no_test_file_collects_zero_tests`
+# is the guard that now asks the population question from git instead.
 #
 # Exit 0 = all pass. Non-zero = failures (see stdout).
 #
@@ -65,6 +80,12 @@ mapfile -t TEST_DIRS < <(
             echo "$d"
         fi
     done
+
+    # The shared skill-runner / compliance harness. Reached by NO tier above
+    # (it is not `skills/*/tests`, not `programs/tests`, and bare `pytest` sees
+    # one testpath by design) and by NO landing stage — `gatekeeper-land.sh`
+    # lists it among the trees with no stage at all. 356 nodes on v1.13.77.
+    [ -d _shared ] && compgen -G "_shared/test_*.py" > /dev/null && echo _shared
 )
 
 if [[ ${#TEST_DIRS[@]} -eq 0 ]]; then
@@ -84,11 +105,13 @@ prog_tests=$(printf '%s\n' "${TEST_DIRS[@]}" | grep -E '^programs/tests$' | wc -
 skill_tests=$(printf '%s\n' "${TEST_DIRS[@]}" | grep -c 'skills/' || true)
 engine_tests=$(printf '%s\n' "${TEST_DIRS[@]}" | grep -cE '^tools/phase1_engine/tests$' || true)
 mcp_tests=$(printf '%s\n' "${TEST_DIRS[@]}" | grep -cE '^mcp-eda/test$' || true)
+shared_tests=$(printf '%s\n' "${TEST_DIRS[@]}" | grep -cE '^_shared$' || true)
 printf "  %-35s %d dir\n" "Plugin-level (driver/integration)" "$plugin_tests"
 printf "  %-35s %d dir\n" "Deterministic programs" "$prog_tests"
 printf "  %-35s %d dirs\n" "Per-skill compliance" "$skill_tests"
 printf "  %-35s %d dir\n" "Phase-1 engine" "$engine_tests"
 printf "  %-35s %d dir\n" "MCP EDA server" "$mcp_tests"
+printf "  %-35s %d dir\n" "Shared skill harness" "$shared_tests"
 echo ""
 
 # Coverage audit - every skill must have compliance.yaml + tests
@@ -126,3 +149,36 @@ else
 fi
 echo "==========================================================="
 exit $RC
+
+# ── IS A HAND ROSTER THE RIGHT SHAPE HERE? NO. ───────────────────────────────
+#
+# Plainly: it is not, and this file should stop being one. The block above is
+# five hand-written entries plus one `find`, over a tree that grows by itself,
+# and line 3 calls the result THE FULL SUITE. That claim can only ever be as
+# true as the last person who remembered to edit it — `_shared/` was added to
+# the repo, ran green in nobody's suite, and was named as an uncovered tree in
+# `tools/gatekeeper-land.sh:1379-1386` while line 3 here still said "full".
+# Nothing detected the disagreement, because a roster cannot notice what is not
+# on it. `landing_unselectable_pytest_corpus.py` states the same rule for the
+# landing corpus — "THE CORPUS IS A COMPLEMENT, NEVER A ROSTER" — and gives the
+# reason: a list of trees goes stale the first time one is added, silently, and
+# in the direction that still prints PASS.
+#
+# The shape that does not rot is the one that program already uses: derive the
+# population from `git ls-files`, subtract what is DECLARED out with its reason,
+# and run the remainder. Two things now stand between this roster and a silent
+# hole, and both are complements rather than lists:
+#
+#   test_bidirectional_controls_are_executed.py::test_no_test_file_collects_zero_tests
+#       every tracked (and untracked-not-ignored) pytest module in this plugin,
+#       from git, must yield at least one collected node.
+#   landing_unselectable_pytest_corpus.py
+#       every tracked test file no landing stage reaches, enumerated.
+#
+# Neither yet FAILS on "a tree exists that this script does not discover", which
+# is the missing third check and the one that would have caught `_shared/` on
+# the day it landed rather than eight versions later. Converting the block above
+# to a git-derived complement is the fix; it is not made here because it changes
+# what the suite RUNS, and that belongs in its own change with its own
+# before/after node count, not bundled with the roster repair that proves it is
+# needed.

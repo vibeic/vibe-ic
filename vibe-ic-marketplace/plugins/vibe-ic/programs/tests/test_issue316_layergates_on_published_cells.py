@@ -56,7 +56,33 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import _progress_run as _pr  # noqa: E402
 
 _PROGRAMS = Path(__file__).resolve().parents[1]
-_IC = _PROGRAMS.parents[3] / "benchmark-data" / "ic"
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from _published_corpus import corpus_root, skip_reason  # noqa: E402
+
+
+def _ic_root() -> Path:
+    """`ic/` under whichever tree holds the published corpus.
+
+    `_IC` WAS `_PROGRAMS.parents[3] / "benchmark-data" / "ic"`, and that path
+    cannot resolve on any host: `benchmark-data/` left this repository at
+    `c5d7f2d00` and `git ls-tree -r HEAD -- benchmark-data` matches nothing. So
+    every `_cell()` in this module skipped everywhere, forever, over a reason no
+    provisioning could satisfy — while the report showed an ordinary skip. This
+    module's whole subject is PUBLISHED CELLS, so that is the entire corpus half
+    of the file reading as coverage while measuring nothing.
+
+    `corpus_root()` is the repository's own answer, as `test_tool_diagnostic_id_
+    gate.py:338` already uses it, and the in-repo path is kept as the fallback so
+    a checkout that still carries the tree is read exactly as before.
+    """
+    root = corpus_root()
+    if root is not None and (root / "ic").is_dir():
+        return root / "ic"
+    return _PROGRAMS.parents[3] / "benchmark-data" / "ic"
+
+
+_IC = _ic_root()
 #: Premises this repo OWNS, so a rule keeps its regression test when the
 #: published tree that used to carry the premise is retired (#905).
 _FIXTURES = Path(__file__).resolve().parent / "fixtures"
@@ -77,7 +103,7 @@ sys.path.insert(0, str(_PROGRAMS))
 def _cell(name: str) -> Path:
     p = _IC / name
     if not (p / "phase1" / "generated_docs").is_dir():
-        pytest.skip(f"published cell {name} not present")
+        pytest.skip(f"published cell {name} not present under {_IC}: {skip_reason()}")
     return p
 
 
@@ -223,7 +249,7 @@ def test_l21_passes_the_same_published_cell_once_the_rails_are_declared(
     # Copy only what the gate reads: the macro LEF root and L21.
     src_lef = cell / "input" / "pdk_local"
     if not src_lef.is_dir():
-        pytest.skip("published macro LEF root not present")
+        pytest.skip(f"published macro LEF root not present under {_IC}: {skip_reason()}")
     shutil.copytree(src_lef, work / "input" / "pdk_local")
 
     l21_src = cell / "phase1" / "generated_docs" / "L21_POWER_INTENT.json"
@@ -289,7 +315,7 @@ def test_backend_parser_reads_a_pin_written_entirely_on_one_line():
     lef = (_IC / "u_hawaii_adc" / _CELL / "phase3" / "analog" / "hardmacro"
            / "ldo" / "ldo.lef")
     if not lef.is_file():
-        pytest.skip("published hardmacro LEF not present")
+        pytest.skip(f"published hardmacro LEF not present under {_IC}: {skip_reason()}")
     real = _parse_macro_supply_pins(lef.read_text())
     assert real == {"ldo": [("IOVDD", "POWER"), ("VSS", "GROUND")]}, real
 
@@ -305,7 +331,7 @@ def test_the_backend_plan_now_reports_those_pins_instead_of_missing_them():
     lef = (_IC / "u_hawaii_adc" / _CELL / "phase3" / "analog" / "hardmacro"
            / "delta_sigma" / "delta_sigma.lef")
     if not lef.is_file():
-        pytest.skip("published hardmacro LEF not present")
+        pytest.skip(f"published hardmacro LEF not present under {_IC}: {skip_reason()}")
     text = lef.read_text()
 
     conn, unconn = _macro_supply_gc_plan([text], [], [])

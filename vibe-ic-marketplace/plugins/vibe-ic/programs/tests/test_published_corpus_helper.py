@@ -87,32 +87,29 @@ def test_the_skip_IS_reachable_when_nothing_was_ever_offered(tmp_path, monkeypat
 # The exploit that was demonstrated. It must now be impossible.
 # ══════════════════════════════════════════════════════════════════════
 
-def test_a_pointer_at_an_empty_directory_REFUSES_rather_than_skipping(tmp_path):
+def test_a_pointer_at_an_empty_directory_REFUSES_rather_than_skipping(
+        tmp_path, monkeypatch):
     """`I was told where it is and it is not there` is not `there is none`.
 
     This is the measured exploit: an empty dir used to yield a fully green run.
+
+    THE `finally: os.environ.pop(...)` THIS REPLACES DID NOT RESTORE ANYTHING —
+    it DELETED whatever the operator had set. See
+    `test_a_benchmark_data_directory_with_only_inputs_is_not_a_corpus`.
     """
     empty = tmp_path / "empty"
     empty.mkdir()
+    monkeypatch.setenv(C.CORPUS_ENV, str(empty))
     with pytest.raises(C.CorpusPointerBroken) as e:
-        import os
-        os.environ[C.CORPUS_ENV] = str(empty)
-        try:
-            C.corpus_root()
-        finally:
-            os.environ.pop(C.CORPUS_ENV, None)
+        C.corpus_root()
     assert "no published cell" in str(e.value)
     assert C.CORPUS_ENV in str(e.value)
 
 
-def test_a_pointer_at_a_path_that_does_not_exist_REFUSES(tmp_path):
-    import os
-    os.environ[C.CORPUS_ENV] = str(tmp_path / "nope")
-    try:
-        with pytest.raises(C.CorpusPointerBroken) as e:
-            C.corpus_root()
-    finally:
-        os.environ.pop(C.CORPUS_ENV, None)
+def test_a_pointer_at_a_path_that_does_not_exist_REFUSES(tmp_path, monkeypatch):
+    monkeypatch.setenv(C.CORPUS_ENV, str(tmp_path / "nope"))
+    with pytest.raises(C.CorpusPointerBroken) as e:
+        C.corpus_root()
     assert "does not exist" in str(e.value)
 
 
@@ -133,33 +130,40 @@ def test_the_refusal_is_visible_to_a_whole_pytest_run(tmp_path):
 # What counts as a cell — the directory alone must not
 # ══════════════════════════════════════════════════════════════════════
 
-def test_a_benchmark_data_directory_with_only_inputs_is_not_a_corpus(tmp_path):
+def test_a_benchmark_data_directory_with_only_inputs_is_not_a_corpus(
+        tmp_path, monkeypatch):
     """vibe-ic still HAS benchmark-data — 542 design-input files. Its presence must
-    not read as 'the results are here', or every check would run against nothing."""
+    not read as 'the results are here', or every check would run against nothing.
+
+    `monkeypatch.delenv`, NOT `os.environ.pop`. The pop had no restore, so on a
+    host that HAD set `VIBE_IC_BENCHMARK_DATA` this test deleted it for the rest
+    of the session — and `corpus_root()` reads the variable at CALL time, so
+    every corpus check in every module collected after this one silently
+    reverted to "no corpus was offered". MEASURED over the 159 corpus-touching
+    modules with the pointer bound at a real clone: `test_tier_d_interconnect_
+    detect.py` (which sorts after this file) skipped all 9 of its fixture cases
+    with "the published benchmark corpus is not in this checkout", while the
+    same module run alone against the same clone passed 7 of them. That is a
+    test switching off other tests — the shape this suite hunts — and the
+    session-scoped leak made it invisible to every report.
+    """
     (tmp_path / "benchmark-data" / "ic" / "d" / "input").mkdir(parents=True)
     (tmp_path / "benchmark-data" / "ic" / "d" / "input" / "spec.md").write_text("x")
-    import os
-    os.environ.pop(C.CORPUS_ENV, None)
-    saved = C._REPO
-    try:
-        C._REPO = tmp_path
-        assert C.corpus_root() is None, "an input-only tree was read as a corpus"
-    finally:
-        C._REPO = saved
+    monkeypatch.delenv(C.CORPUS_ENV, raising=False)
+    monkeypatch.setattr(C, "_REPO", tmp_path)
+    assert C.corpus_root() is None, "an input-only tree was read as a corpus"
 
 
-def test_cell_dirs_lists_exactly_the_cells(tmp_path):
+def test_cell_dirs_lists_exactly_the_cells(tmp_path, monkeypatch):
     _cell(tmp_path, "alpha", "v1.0.0_sky130A")
     _cell(tmp_path, "alpha", "v2.0.0_gf180mcuD")
     _cell(tmp_path, "beta", "v1.5.0_ihp-sg13g2")
     (tmp_path / "ic" / "alpha" / "clean_run_v1427").mkdir()   # not a cell
     (tmp_path / "ic" / "beta" / "input").mkdir()              # not a cell
-    import os
-    os.environ[C.CORPUS_ENV] = str(tmp_path)
-    try:
-        names = sorted(p.name for p in C.cell_dirs())
-    finally:
-        os.environ.pop(C.CORPUS_ENV, None)
+    # `finally: os.environ.pop(...)` RESTORED NOTHING — it deleted the operator's
+    # pointer instead of putting it back. See the note above.
+    monkeypatch.setenv(C.CORPUS_ENV, str(tmp_path))
+    names = sorted(p.name for p in C.cell_dirs())
     assert names == ["v1.0.0_sky130A", "v1.5.0_ihp-sg13g2", "v2.0.0_gf180mcuD"], names
 
 

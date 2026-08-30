@@ -122,3 +122,95 @@ def test_helper_module_has_no_personal_home_path():
     import re
     assert not re.search(r"/home/[a-z][a-z0-9_-]*/", src), \
         "_hostpaths.py must not contain any personal absolute path"
+
+
+# --------------------------------------------------------------------------- #
+# the moved prefix: `benchmark-data/` is not CLASS (a) any more
+# --------------------------------------------------------------------------- #
+#
+# `require_repo("benchmark-data", ...)` resolved against THIS repository, and
+# that tree left it at `c5d7f2d00` — `git ls-tree -r HEAD -- benchmark-data`
+# matches nothing. So every such call skipped on every host, over a reason no
+# provisioning could satisfy, while reading as an ordinary "not in this
+# checkout" probe. Both directions are pinned here: with no corpus the skip is
+# the same skip, and with one the data is handed over.
+
+
+def _fake_corpus(root: Path) -> Path:
+    (root / "ic" / "demo" / "v1.0.0_sky130A").mkdir(parents=True)
+    (root / "PUBLISHING.md").write_text("x")
+    (root / "protocol_parity" / "ucie" / "phase1" / "input_doc").mkdir(parents=True)
+    return root
+
+
+def test_require_repo_on_the_moved_prefix_skips_when_no_corpus(monkeypatch):
+    """NEGATIVE half. Without this, the case below could pass because the
+    resolver hands back a path for everything."""
+    monkeypatch.delenv("VIBE_IC_BENCHMARK_DATA", raising=False)
+    with pytest.raises(pytest.skip.Exception) as exc:
+        HP.require_repo("benchmark-data", "evaluation", "phase1_parity")
+    msg = str(exc.value)
+    assert "benchmark-data" in msg
+    assert "could not look" in msg, (
+        f"the skip must say which of the two states it is in, not just that "
+        f"something is absent: {msg}")
+
+
+def _resolved(*parts):
+    """`require_repo`, with its SKIP converted into a failure.
+
+    THIS WRAPPER IS THE POINT OF THE CASE BELOW. Written the obvious way — a
+    bare `assert HP.require_repo(...) == ...` — removing the reroute made this
+    guard SKIP, not fail: `require_repo` skips when the path is absent, and
+    pytest reported `17 passed, 1 skipped` for a resolver that had stopped
+    resolving. A control that answers "inconclusive" when its subject is broken
+    is the same silently-absent coverage this whole change is about, one level
+    up. MEASURED: with the wrapper, the same deletion gives `1 failed`.
+    """
+    try:
+        return HP.require_repo(*parts)
+    except pytest.skip.Exception as exc:      # noqa: PT012 - that IS the finding
+        pytest.fail(
+            f"require_repo({', '.join(map(repr, parts))}) SKIPPED with a corpus "
+            f"bound and carrying the path — the moved prefix is not being "
+            f"resolved: {exc}")
+
+
+def test_PAIRED_GUARD_require_repo_reaches_a_bound_corpus(tmp_path, monkeypatch):
+    """POSITIVE half, including the RENAMED prefix a plain root swap misses."""
+    corpus = _fake_corpus(tmp_path / "corpus")
+    monkeypatch.setenv("VIBE_IC_BENCHMARK_DATA", str(corpus))
+
+    assert _resolved("benchmark-data", "evaluation", "phase1_parity") \
+        == corpus / "protocol_parity"
+    assert _resolved("benchmark-data", "ic", "demo") == corpus / "ic" / "demo"
+    assert HP.repo_path_opt("benchmark-data", "ic") == corpus / "ic"
+
+
+def test_a_bound_corpus_does_not_invent_a_path_it_does_not_carry(
+        tmp_path, monkeypatch):
+    """The reroute must never turn an absence into a pass.
+
+    Only an EXISTING path is returned, so a request the corpus does not carry
+    still skips — and it skips with the sentence for THAT state (the corpus was
+    read and does not have it), not with 'I could not look'.
+    """
+    corpus = _fake_corpus(tmp_path / "corpus")
+    monkeypatch.setenv("VIBE_IC_BENCHMARK_DATA", str(corpus))
+    with pytest.raises(pytest.skip.Exception) as exc:
+        HP.require_repo("benchmark-data", "ic", "no_such_design")
+    assert "does not carry it" in str(exc.value), str(exc.value)
+
+
+def test_a_NON_moved_prefix_is_untouched_by_the_reroute(tmp_path, monkeypatch):
+    """The blast radius is exactly one prefix.
+
+    `_hostpaths` resolves ~147 modules' paths; a reroute that leaked into any
+    other prefix would silently re-point the whole suite.
+    """
+    corpus = _fake_corpus(tmp_path / "corpus")
+    monkeypatch.setenv("VIBE_IC_BENCHMARK_DATA", str(corpus))
+    assert HP.repo_path("tools", "ci") == HP.REPO_ROOT / "tools" / "ci"
+    # A prefix that merely STARTS with the same letters is not the moved one.
+    assert HP.repo_path_opt("benchmark-data-notes") \
+        == HP.REPO_ROOT / "benchmark-data-notes"

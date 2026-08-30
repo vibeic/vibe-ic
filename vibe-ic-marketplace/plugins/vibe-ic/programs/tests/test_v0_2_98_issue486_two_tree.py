@@ -104,12 +104,63 @@ def test_repo_resource_or_skip_named_skip_on_flattened_tree(tmp_path, monkeypatc
 
 def test_repo_path_or_missing_is_nonexistent_on_flattened_tree(tmp_path, monkeypatch):
     """Module-level-safe: returns a guaranteed-non-existent path on the
-    flattened tree so `.is_dir()` guards fire instead of IndexError."""
+    flattened tree so `.is_dir()` guards fire instead of IndexError.
+
+    THE POINTER IS NOW CONTROLLED, AND IT ALWAYS SHOULD HAVE BEEN. This case
+    read `VIBE_IC_BENCHMARK_DATA` from the ambient environment: an operator who
+    exported it changed the answer without touching a line of code, so the case
+    measured the host, not the resolver. It only became visible when
+    `repo_path_or_missing` learned to answer `benchmark-data/...` from the
+    published corpus — with a real clone exported, the "guaranteed non-existent"
+    path came back as `<clone>/protocol_parity`, which exists.
+
+    The invariant this case is actually for is unchanged and is asserted below:
+    with NO corpus reachable, a flattened tree must yield a path that does not
+    exist, so a caller's `.is_dir()` guard fires instead of an IndexError. The
+    other half — a corpus IS reachable, so the data is genuinely there and must
+    be handed over — is the paired case that follows.
+    """
     root = _make_flat_plugin(tmp_path)
     monkeypatch.setattr(pt, "__file__", str(root / "programs" / "tests" / "_plugin_tree.py"))
+    monkeypatch.delenv("VIBE_IC_BENCHMARK_DATA", raising=False)
     bp = pt.repo_path_or_missing("benchmark-data", "evaluation", "phase1_parity")
     assert not bp.is_dir()
     assert not bp.exists()
+    # And the general case is untouched by the reroute: a NON-moved resource is
+    # still the flattened-tree sentinel whether or not a corpus exists.
+    other = pt.repo_path_or_missing("tools", "ci")
+    assert not other.exists()
+
+
+def test_PAIRED_GUARD_a_reachable_corpus_is_handed_over_on_a_flattened_tree(
+        tmp_path, monkeypatch):
+    """The other direction: `benchmark-data/...` resolves when a corpus does.
+
+    Without this, the case above could pass because the resolver never answers
+    at all — which is exactly what it did on every host from `c5d7f2d00` until
+    the reroute: `benchmark-data/` is not in the repository, so every caller got
+    a non-existent path and skipped, forever, and no test said so.
+
+    The corpus pointer is absolute and independent of the repo root, so a
+    flattened cache tree with a valid pointer CAN read the corpus; refusing it
+    there would be an invented restriction.
+    """
+    root = _make_flat_plugin(tmp_path)
+    monkeypatch.setattr(pt, "__file__", str(root / "programs" / "tests" / "_plugin_tree.py"))
+
+    corpus = tmp_path / "corpus"
+    (corpus / "ic" / "demo" / "v1.0.0_sky130A").mkdir(parents=True)
+    (corpus / "PUBLISHING.md").write_text("x")
+    (corpus / "protocol_parity" / "ucie" / "phase1" / "input_doc").mkdir(parents=True)
+    monkeypatch.setenv("VIBE_IC_BENCHMARK_DATA", str(corpus))
+
+    # The RENAMED prefix, which is the half a plain root swap does not fix.
+    bp = pt.repo_path_or_missing("benchmark-data", "evaluation", "phase1_parity")
+    assert bp == corpus / "protocol_parity", bp
+    # And a path the corpus does not carry still comes back non-existent, so
+    # this cannot turn an absence into a pass.
+    missing = pt.repo_path_or_missing("benchmark-data", "no", "such", "tree")
+    assert not missing.exists()
 
 
 # --------------------------------------------------------------------------- #

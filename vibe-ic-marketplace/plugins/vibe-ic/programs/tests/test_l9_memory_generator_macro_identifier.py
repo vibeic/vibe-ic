@@ -73,6 +73,9 @@ PLUGIN = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(PLUGIN / "programs"))
 import phase1_doc_one_shot_runner as P  # noqa: E402
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from _published_corpus import corpus_root, skip_reason  # noqa: E402
+
 U = P._v1_6_441_is_useful_memory_entry
 _MEMORY_NAME_TOKEN_PATTERN = P._MEMORY_NAME_TOKEN_RE.pattern
 
@@ -93,11 +96,32 @@ def _emit(l9, extracted, project):
         P._v1_6_426_emit_memories(l9, extracted)
 
 
+#: The design input this module reads, relative to whichever tree holds the
+#: corpus. The `benchmark-data/` prefix belongs to the IN-REPO layout only.
+_DOCS_REL = Path("ic") / "edge_llm_accel" / "input" / "docs"
+
+
 def _real_docs_dir():
-    """Locate the on-disk edge_llm_accel input docs by STRUCTURE (the
-    marketplace nesting means the repo root is several parents up), not by a
-    hard-coded parent count."""
-    rel = Path("benchmark-data") / "ic" / "edge_llm_accel" / "input" / "docs"
+    """Locate the on-disk edge_llm_accel input docs, POINTER FIRST.
+
+    THE WALK BELOW COULD NOT SUCCEED ON ANY HOST. It searched `PLUGIN` and every
+    parent for `benchmark-data/ic/edge_llm_accel/input/docs`, and that tree left
+    this repository at `c5d7f2d00`: `git ls-tree -r HEAD -- benchmark-data`
+    matches nothing. So the skip below was not a capability probe — no
+    provisioning could satisfy it, on any machine, ever — while reading in every
+    report as an ordinary healthy skip. Silently-absent coverage is the shape
+    that lets a regression land unnoticed, which is exactly what this module's
+    load-bearing end-to-end test is here to prevent.
+
+    `corpus_root()` is the repository's one answer to "where are the published
+    trees", as `test_tool_diagnostic_id_gate.py:338` already uses it. The
+    in-repo walk is KEPT and tried second, so a checkout that still carries the
+    tree is read exactly as before.
+    """
+    root = corpus_root()
+    if root is not None and (root / _DOCS_REL).is_dir():
+        return root / _DOCS_REL
+    rel = Path("benchmark-data") / _DOCS_REL
     for cand in [PLUGIN, *PLUGIN.parents]:
         d = cand / rel
         if d.is_dir():
@@ -131,7 +155,7 @@ def test_real_edge_llm_accel_docs_promote_the_sram_macro():
     asserts the chip's only SRAM hard macro reaches `memories[]`."""
     real = _real_docs()
     if real is None:
-        pytest.skip("benchmark-data/ic/edge_llm_accel/input/docs not on disk")
+        pytest.skip(f"ic/edge_llm_accel/input/docs: {skip_reason()}")
     _docs, design, extracted = real
     assert extracted, "no input docs read"
 
@@ -153,7 +177,7 @@ def test_real_doc_promoted_row_does_not_fabricate_depth_width():
     the pre-existing `low_confidence` marker stays on the row."""
     real = _real_docs()
     if real is None:
-        pytest.skip("benchmark-data/ic/edge_llm_accel/input/docs not on disk")
+        pytest.skip(f"ic/edge_llm_accel/input/docs: {skip_reason()}")
     _docs, design, extracted = real
     l9 = {"top_module": "edge_llm_accel"}
     _emit(l9, extracted, design)
@@ -177,7 +201,7 @@ def test_real_doc_without_the_staged_artifact_stays_a_candidate():
     back."""
     real = _real_docs()
     if real is None:
-        pytest.skip("benchmark-data/ic/edge_llm_accel/input/docs not on disk")
+        pytest.skip(f"ic/edge_llm_accel/input/docs: {skip_reason()}")
     if not _ACCEPTS_PROJECT:
         pytest.skip("emitter predates the staged-artefact clause")
     l9 = {"top_module": "edge_llm_accel"}
@@ -193,7 +217,7 @@ def test_real_doc_promoted_row_cites_the_staged_artifact():
     points at is really on disk."""
     real = _real_docs()
     if real is None:
-        pytest.skip("benchmark-data/ic/edge_llm_accel/input/docs not on disk")
+        pytest.skip(f"ic/edge_llm_accel/input/docs: {skip_reason()}")
     if not _ACCEPTS_PROJECT:
         pytest.skip("emitter predates the staged-artefact clause")
     _docs, design, extracted = real
@@ -220,7 +244,7 @@ def test_real_doc_non_macro_neighbour_stays_a_candidate():
     `memory_candidates[]`."""
     real = _real_docs()
     if real is None:
-        pytest.skip("benchmark-data/ic/edge_llm_accel/input/docs not on disk")
+        pytest.skip(f"ic/edge_llm_accel/input/docs: {skip_reason()}")
     _docs, design, extracted = real
     l9 = {"top_module": "edge_llm_accel"}
     _emit(l9, extracted, design)
@@ -505,7 +529,7 @@ def test_symlinked_staging_reaches_memories_end_to_end(tmp_path, shape):
     staging shapes — the promotion must not depend on which one the operator
     chose."""
     if _real_staged_macro_dir() is None:
-        pytest.skip("benchmark-data/ic/edge_llm_accel not on disk")
+        pytest.skip(f"ic/edge_llm_accel: {skip_reason()}")
     proj = _stage_shape(tmp_path, shape)
     staged = P._staged_macro_cell_names(proj)
     assert "fakeram45_2048x39" in staged, (
@@ -533,7 +557,7 @@ def test_symlinked_staging_agrees_with_the_other_readers_of_this_directory(
     shapes, including the ones where the two siblings disagree with each
     other."""
     if _real_staged_macro_dir() is None:
-        pytest.skip("benchmark-data/ic/edge_llm_accel not on disk")
+        pytest.skip(f"ic/edge_llm_accel: {skip_reason()}")
     p3 = pytest.importorskip("phase3_one_shot_runner")
     proj = _stage_shape(tmp_path, "file-symlink")
 
@@ -664,7 +688,7 @@ def test_exhausted_budget_is_reported_in_l9_and_on_the_affected_rows(
     promoted."""
     real = _real_docs()
     if real is None:
-        pytest.skip("benchmark-data/ic/edge_llm_accel/input/docs not on disk")
+        pytest.skip(f"ic/edge_llm_accel/input/docs: {skip_reason()}")
     if not _ACCEPTS_PROJECT:
         pytest.skip("emitter predates the staged-artefact clause")
     stage = Path(tmp_path) / "input" / "pdk_local"
@@ -766,7 +790,7 @@ def test_a_complete_scan_reports_nothing_and_changes_no_l9_key(tmp_path):
     stamps no row, so the truncation channel does not become noise on a design
     that lost nothing."""
     if _real_staged_macro_dir() is None:
-        pytest.skip("benchmark-data/ic/edge_llm_accel not on disk")
+        pytest.skip(f"ic/edge_llm_accel: {skip_reason()}")
     _docs, design, extracted = _real_docs()
     assert _scan(design)[1] == [], (
         "the real design scans completely; nothing to report")
@@ -900,7 +924,7 @@ def test_symlink_into_an_unsearchable_directory_reaches_l9_and_stderr(
     if os.geteuid() == 0:
         pytest.skip("running as root: permission bits do not deny reads")
     if _real_staged_macro_dir() is None:
-        pytest.skip("benchmark-data/ic/edge_llm_accel not on disk")
+        pytest.skip(f"ic/edge_llm_accel: {skip_reason()}")
     if not _ACCEPTS_PROJECT:
         pytest.skip("emitter predates the staged-artefact clause")
     _docs, _design, extracted = _real_docs()
@@ -1150,7 +1174,7 @@ def test_this_walker_is_a_superset_of_its_two_siblings(tmp_path, shape):
     The assertion below is that this walker sees no less than a sibling, on
     each shape in the table."""
     if _real_staged_macro_dir() is None:
-        pytest.skip("benchmark-data/ic/edge_llm_accel not on disk")
+        pytest.skip(f"ic/edge_llm_accel: {skip_reason()}")
     p3 = pytest.importorskip("phase3_one_shot_runner")
     proj = _stage_shape(tmp_path, shape)
     pl = proj / "input" / "pdk_local"

@@ -381,6 +381,59 @@ def named_cell(*parts: str) -> Optional[Path]:
     return p if p.is_dir() else None
 
 
+#: The prefix that used to be a directory of THIS repository and is not one now.
+MOVED_PREFIX = "benchmark-data"
+
+#: Prefixes the PUBLISHER renamed on the way out, written ONCE rather than
+#: guessed at each call site. The move is recorded above as "521 present there
+#: (55 of them under a renamed prefix)"; this is that rename. MEASURED against a
+#: full clone of `vibeic/benchmark-data` (65 commits, 88621a5, every ref):
+#: `evaluation/phase1_parity` exists at NO revision, and those specs are
+#: published at top-level `protocol_parity/<proto>/...`.
+MOVED_ALIASES = (("evaluation/phase1_parity", "protocol_parity"),)
+
+
+def reroute_moved_path(*parts: str) -> Optional[Path]:
+    """A `benchmark-data/...` request, answered from the published corpus.
+
+    WHY THIS IS HERE AND NOT AT THE CALL SITE. Two test helpers —
+    `_hostpaths.repo_path` / `require_repo` / `repo_path_opt` and
+    `_plugin_tree.repo_path_or_missing` — resolve `benchmark-data/...` against
+    the REPOSITORY, and both docstrings class it as checked-in in-repo data.
+    It stopped being that at `c5d7f2d00`. Every such call therefore skipped on
+    every host, over a reason no provisioning could satisfy, while reading as an
+    ordinary "not in this checkout" probe. Writing the answer once is the point:
+    `named_cell` above records what it cost when one module spelled the corpus
+    path inline instead.
+
+    Returns None when the request is not under the moved prefix, when no corpus
+    resolves, or when the corpus does not carry the path. All three leave the
+    caller's existing behaviour exactly as it was. Only an EXISTING path is ever
+    returned, so this cannot turn an absence into a pass.
+    """
+    rel = "/".join(str(x) for x in parts).strip("/")
+    if rel != MOVED_PREFIX and not rel.startswith(MOVED_PREFIX + "/"):
+        return None
+    root = corpus_root()
+    if root is None:
+        return None
+    sub = rel[len(MOVED_PREFIX):].strip("/")
+
+    candidates = []
+    for old, new in MOVED_ALIASES:
+        if sub == old:
+            candidates.append(new)
+        elif sub.startswith(old + "/"):
+            candidates.append(new + sub[len(old):])
+    candidates.append(sub)
+
+    for cand in candidates:
+        p = root.joinpath(*cand.split("/")) if cand else root
+        if p.exists():
+            return p
+    return None
+
+
 def cell_dirs() -> Tuple[Path, ...]:
     """Every published cell that is actually readable here. Empty when there is none."""
     root = corpus_root()

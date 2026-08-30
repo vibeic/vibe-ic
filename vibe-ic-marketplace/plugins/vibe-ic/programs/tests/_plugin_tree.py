@@ -124,6 +124,19 @@ def repo_root() -> Optional[Path]:
     return None
 
 
+def _reroute_moved(parts) -> Optional[Path]:
+    """`_published_corpus.reroute_moved_path`, lazily and never fatally."""
+    import sys as _sys
+    here = str(Path(__file__).resolve().parent)
+    if here not in _sys.path:
+        _sys.path.insert(0, here)
+    try:
+        import _published_corpus as _pc
+        return _pc.reroute_moved_path(*parts)
+    except Exception:
+        return None
+
+
 def repo_path_or_missing(*parts: str) -> Path:
     """Resolve a path relative to the REPO ROOT, returning a guaranteed
     NON-EXISTENT path when running on the flattened cache (no repo root).
@@ -134,6 +147,16 @@ def repo_path_or_missing(*parts: str) -> Path:
     does not exist, so the existing skip fires instead of an ``IndexError``
     from a hard-coded ``parents[N]``.
     """
+    # `benchmark-data/...` IS NOT UNDER THE REPO ROOT ANY MORE. It left at
+    # `c5d7f2d00` (`git ls-tree -r HEAD -- benchmark-data` matches nothing), so
+    # every caller that asked for it here got a path no host could satisfy and
+    # skipped on the guard below — reading as "absent on this checkout", which
+    # no checkout could change. `_published_corpus.reroute_moved_path` answers
+    # from the pointer when one is set, and returns None otherwise, so the
+    # flattened-cache behaviour and the plain in-repo behaviour are untouched.
+    rerouted = _reroute_moved(parts)
+    if rerouted is not None:
+        return rerouted
     rr = repo_root()
     if rr is None:
         # A path under the plugin root that cannot exist, so .is_dir() is

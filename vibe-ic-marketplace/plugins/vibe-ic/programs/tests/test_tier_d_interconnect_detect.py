@@ -12,14 +12,54 @@ Two layers:
 """
 import glob
 import os
+import sys
 from pathlib import Path
 
 import pytest
 
 from tier_d_interconnect_detect import is_ethernet_800g, is_nvlink, is_ucie
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from _published_corpus import corpus_root, skip_reason  # noqa: E402
+
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent.parent.parent.parent
-BP = REPO_ROOT / "benchmark-data" / "evaluation" / "phase1_parity"
+
+#: THE FIXTURE ROOT WAS UNREACHABLE ON EVERY HOST, AND THE PREFIX ALSO MOVED.
+#:
+#: `BP` was `REPO_ROOT / "benchmark-data" / "evaluation" / "phase1_parity"`, a
+#: single repo-relative path. `benchmark-data/` left this repository at
+#: `c5d7f2d00` — `git ls-tree -r HEAD -- benchmark-data` matches nothing — so
+#: the nine `test_no_mis_fire_on_real_specs` cases skipped on every machine, for
+#: a reason no provisioning could satisfy, while reading as a healthy skip.
+#:
+#: Routing to `corpus_root()` alone would NOT have recovered them. The published
+#: repository does not carry `evaluation/phase1_parity/` at all: those specs are
+#: one of the "55 files under a RENAMED prefix" `_published_corpus` records, and
+#: they are published at top-level `protocol_parity/`. MEASURED against a clone
+#: of `vibeic/benchmark-data` @ 88621a5: `evaluation/phase1_parity` absent;
+#: `protocol_parity/{ethernet_800g,pcie_gen5,nvlink,cxl}/phase1/input_doc/*`
+#: present, `protocol_parity/{ethernet,ucie}` present with NO input_doc — so 7
+#: of the 9 cases become live and 2 stay skipped over a genuinely unpublished
+#: input, which is a different fact and says so.
+#:
+#: BOTH SPELLINGS ARE SEARCHED, in this order, and the in-repo one is kept: a
+#: checkout that still carries the historical tree is read exactly as before.
+_BASES = ("protocol_parity", "evaluation/phase1_parity")
+
+
+def _spec_roots():
+    """Every root that could hold the parity specs — pointer first, repo last."""
+    roots = []
+    corpus = corpus_root()
+    if corpus is not None:
+        roots += [corpus / b for b in _BASES]
+    roots += [REPO_ROOT / "benchmark-data" / b for b in _BASES]
+    return [r for r in roots if r.is_dir()]
+
+
+#: Kept as a name a reader may still grep for. It is now "the first root that
+#: resolves", not "the only path there is".
+BP = next(iter(_spec_roots()), REPO_ROOT / "benchmark-data" / _BASES[-1])
 
 
 # --------------------------------------------------------------------------- unit
@@ -83,11 +123,13 @@ def test_ucie_silent_on_plain_pcie():
 
 # --------------------------------------------------------- fixture (real specs)
 def _spec_blob(proto: str) -> str:
-    cands = (
-        glob.glob(str(BP / proto / "phase1" / "input_doc" / "*"))
-        + glob.glob(str(BP / proto / "input_doc" / "*"))
-        + glob.glob(str(BP / proto / "input" / "docs" / "*"))
-    )
+    cands = []
+    for base in _spec_roots():
+        cands += (
+            glob.glob(str(base / proto / "phase1" / "input_doc" / "*"))
+            + glob.glob(str(base / proto / "input_doc" / "*"))
+            + glob.glob(str(base / proto / "input" / "docs" / "*"))
+        )
     txt = ""
     for c in cands:
         if os.path.isfile(c) and c.endswith((".txt", ".md")):
@@ -116,5 +158,14 @@ _SMOKE = [
 def test_no_mis_fire_on_real_specs(label, proto, det, expected):
     blob = _spec_blob(proto)
     if not blob:
-        pytest.skip(f"benchmark spec for {proto} not present")
+        # TWO STATES, TWO SENTENCES. A corpus that RESOLVED and does not
+        # publish this spec is a measurement; a corpus nobody named is "I could
+        # not look". `_published_corpus` was repaired for exactly this
+        # conflation and it must not be reintroduced one layer out.
+        roots = _spec_roots()
+        pytest.skip(
+            f"no input_doc for {proto} under {[str(r) for r in roots]} — the "
+            f"corpus WAS read and does not publish this spec"
+            if roots else
+            f"benchmark spec for {proto} not present: {skip_reason()}")
     assert det(blob) is expected, f"{label}: detector returned {det(blob)}, expected {expected}"
