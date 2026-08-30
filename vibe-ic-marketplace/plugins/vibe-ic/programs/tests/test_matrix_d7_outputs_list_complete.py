@@ -1211,8 +1211,21 @@ def test_the_dropped_edge_RETURNS_when_the_step_stops_supplying_the_flag(
                 continue
             for clause in step.get("gate", {}).get("all_of", []):
                 for key, value in list(clause.items()):
+                    # A clause value is EITHER a bare command string OR the dict
+                    # form `{command: ..., ...}`. Both are legal and
+                    # `_evaluate_gate` dispatches on both — it normalises the
+                    # string into the dict. This control matched only the string
+                    # form, so a clause carrying `advisory_reason:` (which
+                    # requires the dict form) took `hit` to 0 and the test failed
+                    # on "clause not found" rather than on its subject. A control
+                    # that matches nothing goes green, which is the worse half.
                     if isinstance(value, str) and value.strip() == target:
                         clause[key] = _STEP37_PROGRAM + " ."
+                        hit += 1
+                    elif (isinstance(value, dict)
+                          and isinstance(value.get("command"), str)
+                          and value["command"].strip() == target):
+                        value["command"] = _STEP37_PROGRAM + " ."
                         hit += 1
         assert hit == 1, f"the clause this control edits was not found: {hit}"
 
