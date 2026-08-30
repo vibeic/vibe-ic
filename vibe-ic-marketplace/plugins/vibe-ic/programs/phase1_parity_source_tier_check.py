@@ -50,7 +50,20 @@ Exit codes
 ----------
     0 = all protocols tiered + published counts match + no dangling citation
     1 = at least one violation
-    2 = io / parse error
+    2 = the question could not be put. TWO DISTINCT STATES, and they used to
+        print the same word:
+          * PARITY_ROOT_ABSENT — the parity root is not a directory. NOTHING
+            was opened. This is a DECLINE, not a finding: it says nothing
+            about any record, and it names the resolved absolute path so a
+            reader can tell which tree was looked for. It is this repo's
+            normal state — `protocol_parity/` left with the published corpus
+            at v1.10.56 — and `tools/ci/repo_hygiene_gates.sh` dispatches this
+            gate with `run_tolerating_uncheckable` under a dated exemption for
+            exactly that reason.
+          * ERROR: reading <file> — a record WAS opened and could not be read
+            or parsed. That IS a defect in the subject.
+        Neither converts rc 1: an exemption forgives rc 2 only, so this gate
+        reading a record and finding it dishonest still refuses the landing.
 """
 from __future__ import annotations
 
@@ -382,14 +395,56 @@ def main(argv: List[str] | None = None) -> int:
 
     root = Path(args.parity_root)
     if not root.is_dir():
-        print(f"ERROR: not a directory: {root}", file=sys.stderr)
+        # A DECLINE, AND IT USED TO PRINT LIKE A FINDING (measured v1.13.3).
+        # In the landing sweep this branch reached the log as
+        #
+        #     ERROR: not a directory: protocol_parity
+        #
+        # and that one line carries two defects of exactly the kind this file
+        # exists to prevent one level down.
+        #
+        # (1) THE WORD. `ERROR` is what this gate also prints when it OPENED a
+        #     record and could not read it. A reader scanning a 4400-line sweep
+        #     cannot tell that apart from rc 1 -- a record read and found
+        #     dishonest -- and only rc 1 is a defect in the SUBJECT. Nothing
+        #     was opened here and nothing is claimed about any record, so the
+        #     line has to say so in its own words rather than leave the
+        #     distinction to the dispatcher's annotation on the NEXT line.
+        #
+        # (2) THE PLACE. `root` is whatever the caller typed. The declaration
+        #     this gate actually carries in tools/ci/repo_hygiene_gates.sh is
+        #     RELATIVE (`... .py protocol_parity`), so the refusal named an
+        #     ARGUMENT and not a place, and a reader had no way to know which
+        #     cwd it was resolved against. The exemption covering that row
+        #     already CLAIMS this refusal "NAMES the path it looked for"; the
+        #     claim is made true here rather than the sentence softened.
+        #
+        # `PARITY_ROOT_ABSENT` is the repo's `*_ABSENT` rule-id convention, so
+        # this refusal now falls inside the population of
+        # `absence_verdict_names_its_search_space_check` -- the gate whose
+        # entire subject is "not found must say WHERE it looked", and which
+        # never reached this one because it carried no rule id to be found by.
+        # The absolute path is the LOCUS that gate requires.
+        print(f"[NOT CHECKED] phase1_parity_source_tier_check: "
+              f"PARITY_ROOT_ABSENT: {root.resolve()} "
+              f"({'exists but is not a directory' if root.exists() else 'does not exist'}; "
+              f"argument {args.parity_root!r} resolved against cwd {Path.cwd()}). "
+              f"NOTHING WAS OPENED -- no source_tier.json, no RESULT markdown "
+              f"and no citation was read, so this is not a claim that any "
+              f"record is honest or dishonest.", file=sys.stderr)
         return 2
     tier_file = Path(args.tier_file) if args.tier_file else root / TIER_FILE_DEFAULT
 
     try:
         report = check(root, tier_file)
     except (OSError, json.JSONDecodeError) as exc:
-        print(f"ERROR: {exc}", file=sys.stderr)
+        # STILL `ERROR`, deliberately: unlike the branch above, a record WAS
+        # opened here and could not be read, which is a defect in the subject.
+        # It names the file for the same reason the branch above names the
+        # root -- a JSONDecodeError renders as "line 3 column 5" and says
+        # nothing about WHICH document, and the tier file is resolvable two
+        # ways (the default under the root, or an explicit --tier-file).
+        print(f"ERROR: reading {tier_file}: {exc}", file=sys.stderr)
         return 2
 
     if args.json_out:

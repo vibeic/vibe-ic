@@ -265,6 +265,46 @@ def test_cli_bad_root_returns_2(tmp_path: Path):
 
 
 # --------------------------------------------------------------------------
+# rc 2 IS A DECLINE, AND IT MUST NOT READ AS A FINDING.
+#
+# MEASURED on the v1.13.3 landing sweep: the row this gate occupies printed
+#
+#     ERROR: not a directory: protocol_parity
+#
+# `ERROR` is also what the program's PARSE branch prints, and that one IS a
+# defect in the subject; `protocol_parity` is the raw argv, so the refusal named an
+# argument rather than a place. A reader could tell neither apart. These two
+# tests are the control on both halves -- they hold on any host because the
+# subject is a tmp_path, and they fail on the pre-fix message.
+# --------------------------------------------------------------------------
+def test_absent_root_declines_without_claiming_anything_about_a_record(
+        tmp_path: Path, capsys):
+    missing = tmp_path / "protocol_parity"
+    assert mod.main([str(missing)]) == 2
+    err = capsys.readouterr().err
+    assert "PARITY_ROOT_ABSENT" in err, err
+    # THE LOCUS: the resolved absolute path, not the argument as typed.
+    assert str(missing.resolve()) in err, err
+    # It must not read as a verdict about the record, in either direction.
+    assert "NOTHING WAS OPENED" in err, err
+    assert "PASS" not in err and "FAIL" not in err, err
+
+
+def test_an_unreadable_record_still_says_ERROR_and_names_the_file(
+        tmp_path: Path, capsys):
+    """The OTHER rc 2. A record WAS opened, so this one is a defect in the
+    subject and must NOT be reworded into the decline above."""
+    _mk_protocol(tmp_path, "alpha")
+    tier = tmp_path / "source_tier.json"
+    tier.write_text("{not json")
+    assert mod.main([str(tmp_path)]) == 2
+    err = capsys.readouterr().err
+    assert err.startswith("ERROR: reading "), err
+    assert str(tier) in err, err
+    assert "PARITY_ROOT_ABSENT" not in err, err
+
+
+# --------------------------------------------------------------------------
 # the real corpus
 # --------------------------------------------------------------------------
 
