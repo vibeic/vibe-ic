@@ -168,8 +168,13 @@ stages:
       # red until the run is repaired. See stage1's block for why a test that
       # must fail today cannot live in the plugin's own suite.
       emit_test_dir: "reports/phase1/gates/on_pass_review"
-      gate:
-        program_exit_zero: "stage_on_pass_review . --stage stage_phase1 --json reports/phase1/gates/stage_phase1_on_pass_review.json --compliance reports/flow_compliance.json"
+      # DISPATCHED FROM `steps:`, WHICH IS THE ONLY SECTION THE ENGINE READS.
+      # `flow_compliance_check.main` reads `steps = flow.get("steps", [])`; a
+      # clause declared here was dispatched by NOTHING (v1.13.32, and still
+      # measured at v1.13.54: 6 clauses under `stages:`, 0 dispatchable). The
+      # command now lives on the step named below -- ONE declaration, in the
+      # section the engine reads -- and this back-pointer says where.
+      dispatched_by: "2"
 
   - id: stage1
     name: "RTL Generation + Verification"
@@ -251,8 +256,13 @@ stages:
       # into the run it is reviewing: the run's own regression, red until the
       # run is fixed.
       emit_test_dir: "reports/phase2/gates/on_pass_review"
-      gate:
-        program_exit_zero: "stage_on_pass_review . --stage stage1 --json reports/phase2/gates/stage1_on_pass_review.json --compliance reports/flow_compliance.json"
+      # DISPATCHED FROM `steps:`, WHICH IS THE ONLY SECTION THE ENGINE READS.
+      # `flow_compliance_check.main` reads `steps = flow.get("steps", [])`; a
+      # clause declared here was dispatched by NOTHING (v1.13.32, and still
+      # measured at v1.13.54: 6 clauses under `stages:`, 0 dispatchable). The
+      # command now lives on the step named below -- ONE declaration, in the
+      # section the engine reads -- and this back-pointer says where.
+      dispatched_by: "7"
 
   - id: stage2
     name: "Synthesis + DFT"
@@ -314,8 +324,13 @@ stages:
         - "phase2/stage2/synth/netlist.v"
       rejection_requires: [intent, artefact, contradiction, test]
       emit_test_dir: "reports/phase2/gates/on_pass_review"
-      gate:
-        program_exit_zero: "stage_on_pass_review . --stage stage2 --json reports/phase2/gates/stage2_on_pass_review.json --compliance reports/flow_compliance.json"
+      # DISPATCHED FROM `steps:`, WHICH IS THE ONLY SECTION THE ENGINE READS.
+      # `flow_compliance_check.main` reads `steps = flow.get("steps", [])`; a
+      # clause declared here was dispatched by NOTHING (v1.13.32, and still
+      # measured at v1.13.54: 6 clauses under `stages:`, 0 dispatchable). The
+      # command now lives on the step named below -- ONE declaration, in the
+      # section the engine reads -- and this back-pointer says where.
+      dispatched_by: "15"
 
   - id: stage_analog
     name: "Analog Design Pipeline (parallel with digital stages 1-2)"
@@ -368,8 +383,13 @@ stages:
       # TODAY, which cannot live in the plugin's own suite. It is written into
       # the run being reviewed.
       emit_test_dir: "reports/analog/on_pass_review"
-      gate:
-        program_exit_zero: "stage_on_pass_review . --stage stage_analog --json reports/analog/stage_analog_on_pass_review.json --compliance reports/flow_compliance.json"
+      # DISPATCHED FROM `steps:`, WHICH IS THE ONLY SECTION THE ENGINE READS.
+      # `flow_compliance_check.main` reads `steps = flow.get("steps", [])`; a
+      # clause declared here was dispatched by NOTHING (v1.13.32, and still
+      # measured at v1.13.54: 6 clauses under `stages:`, 0 dispatchable). The
+      # command now lives on the step named below -- ONE declaration, in the
+      # section the engine reads -- and this back-pointer says where.
+      dispatched_by: "14"
 
   - id: stage3
     name: "Physical Design + Sign-off"
@@ -396,8 +416,13 @@ stages:
         - "reports/phase3/"
       rejection_requires: [intent, artefact, contradiction, test]
       emit_test_dir: "reports/phase3/gates/on_pass_review"
-      gate:
-        program_exit_zero: "stage_on_pass_review . --stage stage3 --json reports/phase3/gates/stage3_on_pass_review.json --compliance reports/flow_compliance.json"
+      # DISPATCHED FROM `steps:`, WHICH IS THE ONLY SECTION THE ENGINE READS.
+      # `flow_compliance_check.main` reads `steps = flow.get("steps", [])`; a
+      # clause declared here was dispatched by NOTHING (v1.13.32, and still
+      # measured at v1.13.54: 6 clauses under `stages:`, 0 dispatchable). The
+      # command now lives on the step named below -- ONE declaration, in the
+      # section the engine reads -- and this back-pointer says where.
+      dispatched_by: "37"
 
   # v1.6.13 Wave 88 — Mixed-Signal Integration (M1-M4) inserted
   # between digital stage3 and stage4. Required when analog blocks
@@ -462,8 +487,13 @@ stages:
       canonical_top_wrapper: "chip_top"
       rejection_requires: [intent, artefact, contradiction, test]
       emit_test_dir: "reports/phase3/gates/on_pass_review"
-      gate:
-        program_exit_zero: "stage_on_pass_review . --stage stage4 --json reports/phase3/gates/stage4_on_pass_review.json --compliance reports/flow_compliance.json"
+      # DISPATCHED FROM `steps:`, WHICH IS THE ONLY SECTION THE ENGINE READS.
+      # `flow_compliance_check.main` reads `steps = flow.get("steps", [])`; a
+      # clause declared here was dispatched by NOTHING (v1.13.32, and still
+      # measured at v1.13.54: 6 clauses under `stages:`, 0 dispatchable). The
+      # command now lives on the step named below -- ONE declaration, in the
+      # section the engine reads -- and this back-pointer says where.
+      dispatched_by: "40"
 
   # v1.6.13 Wave 88 — Manufacturing & Test (post-fab silicon stage).
   # Optional: only fires when project sets manufacturing.enabled = true
@@ -1399,6 +1429,17 @@ steps:
       - "reports/crosslayer/rewrite_equivalence_check.json"
     gate:
       all_of:
+        # ── ON-PASS REVIEW of stage_phase1 ─────────────────────────────────
+        # Declared on the stage (`stages[].on_pass_review`), DISPATCHED here:
+        # the first gated step of stage1 -- stage_phase1 has finished by then.
+        # `advisory_`, NOT `program_exit_zero`, and that is the whole point:
+        # the block declares `verdict: advisory` and the program declares
+        # `DECLARED_ENFORCEMENT = "advisory"`. The blocking slot would make a
+        # rejection stop the step -- turning "unverified" into "blocking",
+        # which #1253 refuses -- and would additionally read the program's
+        # rc=2 NOT CHECKED as VACUOUS_PASS. The advisory slot RUNS it and
+        # RECORDS the verdict without changing the step's tier.
+        - advisory_program_exit_zero: "stage_on_pass_review . --stage stage_phase1 --json reports/phase1/gates/stage_phase1_on_pass_review.json --compliance reports/flow_compliance.json"
         # BLOCKING and unconditional. The judge itself records NOT_APPLICABLE
         # for an ordinary, un-rewritten design; conditioning this clause on its
         # own inputs would let a rewrite omit the evidence that checks it.
@@ -2375,6 +2416,17 @@ steps:
       # is refused is the unconditional CLAIM, not the artefact.
     gate:
       all_of:
+        # ── ON-PASS REVIEW of stage1 ─────────────────────────────────
+        # Declared on the stage (`stages[].on_pass_review`), DISPATCHED here:
+        # the step that already carries `stage1_compliance .`.
+        # `advisory_`, NOT `program_exit_zero`, and that is the whole point:
+        # the block declares `verdict: advisory` and the program declares
+        # `DECLARED_ENFORCEMENT = "advisory"`. The blocking slot would make a
+        # rejection stop the step -- turning "unverified" into "blocking",
+        # which #1253 refuses -- and would additionally read the program's
+        # rc=2 NOT CHECKED as VACUOUS_PASS. The advisory slot RUNS it and
+        # RECORDS the verdict without changing the step's tier.
+        - advisory_program_exit_zero: "stage_on_pass_review . --stage stage1 --json reports/phase2/gates/stage1_on_pass_review.json --compliance reports/flow_compliance.json"
         - files_exist: ["phase2/stage2/constraints/*.sdc", "phase2/stage2/constraints/pvt_matrix.json"]
         - program_exit_zero: "sdc_syntax_check . --json reports/phase2/gates/sdc_syntax.json"
         # ORGANIC-20260606 #442 — pvt_matrix.json with corners=[] is not
@@ -3742,6 +3794,17 @@ steps:
       - "phase2/stage2/synth/netlist.v"
     gate:
       all_of:
+        # ── ON-PASS REVIEW of stage_analog ─────────────────────────────────
+        # Declared on the stage (`stages[].on_pass_review`), DISPATCHED here:
+        # the synthesis-handoff step, after A1..A9 have finished.
+        # `advisory_`, NOT `program_exit_zero`, and that is the whole point:
+        # the block declares `verdict: advisory` and the program declares
+        # `DECLARED_ENFORCEMENT = "advisory"`. The blocking slot would make a
+        # rejection stop the step -- turning "unverified" into "blocking",
+        # which #1253 refuses -- and would additionally read the program's
+        # rc=2 NOT CHECKED as VACUOUS_PASS. The advisory slot RUNS it and
+        # RECORDS the verdict without changing the step's tier.
+        - advisory_program_exit_zero: "stage_on_pass_review . --stage stage_analog --json reports/analog/stage_analog_on_pass_review.json --compliance reports/flow_compliance.json"
         - optional_program_exit_zero:
             command: "yosys_hilomap_required_check . --json reports/phase2/gates/yosys_hilomap.json"
             condition_files_exist: ["phase2/stage2/synth"]
@@ -3812,6 +3875,17 @@ steps:
       - "phase3/stage3/pnr/pdn.tcl OR phase3/stage3/pnr/pdn.done"
     gate:
       all_of:
+        # ── ON-PASS REVIEW of stage2 ─────────────────────────────────
+        # Declared on the stage (`stages[].on_pass_review`), DISPATCHED here:
+        # the step that already carries `stage2_compliance .`.
+        # `advisory_`, NOT `program_exit_zero`, and that is the whole point:
+        # the block declares `verdict: advisory` and the program declares
+        # `DECLARED_ENFORCEMENT = "advisory"`. The blocking slot would make a
+        # rejection stop the step -- turning "unverified" into "blocking",
+        # which #1253 refuses -- and would additionally read the program's
+        # rc=2 NOT CHECKED as VACUOUS_PASS. The advisory slot RUNS it and
+        # RECORDS the verdict without changing the step's tier.
+        - advisory_program_exit_zero: "stage_on_pass_review . --stage stage2 --json reports/phase2/gates/stage2_on_pass_review.json --compliance reports/flow_compliance.json"
         # flow v2.3.1 (review R3) — IP integration checklist: hard-macro
         # LEF/GDS/Liberty file-set alignment + lib corner coverage +
         # L21 power-domain consistency, before the macros enter
@@ -6762,6 +6836,17 @@ steps:
       - "phase3/stage4/gds/*.gds"
     gate:
       all_of:
+        # ── ON-PASS REVIEW of stage3 ─────────────────────────────────
+        # Declared on the stage (`stages[].on_pass_review`), DISPATCHED here:
+        # the step that already carries `stage3_compliance .`.
+        # `advisory_`, NOT `program_exit_zero`, and that is the whole point:
+        # the block declares `verdict: advisory` and the program declares
+        # `DECLARED_ENFORCEMENT = "advisory"`. The blocking slot would make a
+        # rejection stop the step -- turning "unverified" into "blocking",
+        # which #1253 refuses -- and would additionally read the program's
+        # rc=2 NOT CHECKED as VACUOUS_PASS. The advisory slot RUNS it and
+        # RECORDS the verdict without changing the step's tier.
+        - advisory_program_exit_zero: "stage_on_pass_review . --stage stage3 --json reports/phase3/gates/stage3_on_pass_review.json --compliance reports/flow_compliance.json"
         - files_exist: ["phase3/stage4/gds/*.gds"]
         - program_exit_zero: "gds_size_check --gds-file phase3/stage4/gds/*.gds --json reports/phase3/gds_size.json"
         # Substance, not just size. gds_size_check compares against a
@@ -7570,6 +7655,17 @@ steps:
       - "phase3/stage5_manufacturing/wafer_lot_received.json"
     gate:
       all_of:
+        # ── ON-PASS REVIEW of stage4 ─────────────────────────────────
+        # Declared on the stage (`stages[].on_pass_review`), DISPATCHED here:
+        # the step that already carries `stage4_compliance .`.
+        # `advisory_`, NOT `program_exit_zero`, and that is the whole point:
+        # the block declares `verdict: advisory` and the program declares
+        # `DECLARED_ENFORCEMENT = "advisory"`. The blocking slot would make a
+        # rejection stop the step -- turning "unverified" into "blocking",
+        # which #1253 refuses -- and would additionally read the program's
+        # rc=2 NOT CHECKED as VACUOUS_PASS. The advisory slot RUNS it and
+        # RECORDS the verdict without changing the step's tier.
+        - advisory_program_exit_zero: "stage_on_pass_review . --stage stage4 --json reports/phase3/gates/stage4_on_pass_review.json --compliance reports/flow_compliance.json"
         - program_exit_zero: "manufacturing_fab_intake_check . --json reports/manufacturing/fab_intake.json"
         # THE STAGE-4 BOUNDARY, ASKED BY THE STEP THAT SPENDS THE MASK SET.
         # `stage4_compliance` is the end-of-stage gate the README names for

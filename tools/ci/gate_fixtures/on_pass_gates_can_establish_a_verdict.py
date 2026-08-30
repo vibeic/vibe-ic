@@ -35,18 +35,27 @@ GATE = "on-pass gates can establish a verdict"
 _BASE = ("stage_on_pass_review . --stage stage_alpha "
          "--json reports/stage_alpha_on_pass_review.json")
 
+#: THE CLAUSE SITS UNDER `steps:`, WHICH IS WHERE THE ENGINE READS IT.
+#: It used to sit under `stages[].on_pass_review.gate` — faithful to the
+#: shipped flow at the time this fixture was written, and dispatched by
+#: nothing. The six clauses were moved into `steps:`; the checker under test
+#: now resolves the command from there, so a fixture still declaring it on the
+#: stage would present the checker with NO command and fail its own good arm.
 _FLOW = """\
 stages:
   - id: stage_alpha
     name: the stage whose on-pass review is declared
     on_pass_review:
       skill: a-review-skill
-      gate:
-        program_exit_zero: {command}
+      verdict: advisory
+      dispatched_by: "step_one"
 steps:
   - id: step_one
     name: the step the stage carries
     stage: stage_alpha
+    gate:
+      all_of:
+        - advisory_program_exit_zero: {command}
 """
 
 

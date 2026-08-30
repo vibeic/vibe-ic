@@ -117,7 +117,7 @@
   "measured_at": {
     "classification_commit": "7b7b2f3cc2d00eea136440d885c1d1f8420881ac (v1.12.100)",
     "how": "sweep_reach_survey drives each sweep against the POPULATED probe corpus and against BOTH empty corpora (three readable empty directories, and no targets at all). The rc from each of the three runs is recorded per entry below, so the argument for every name is re-derivable from this file rather than asserted in it.",
-    "reconfirmed_at": "8917d6652d52121384958a5ca9dfc0b0363fbd96 (v1.13.62), where the survey still discovers 65 sweep-shaped programs, drives 36 and finds the same 28 SILENT \u2014 28 of 28 registered"
+    "reconfirmed_at": "8917d6652d52121384958a5ca9dfc0b0363fbd96 (v1.13.63), where the survey still discovers 65 sweep-shaped programs, drives 36 and finds the same 28 SILENT \u2014 28 of 28 registered"
   },
   "permitted": {
     "arith_ss_corner_risk_check.py": {

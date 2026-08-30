@@ -736,6 +736,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `oe_pattern_check` | any | — | Analyze output-enable (OE) patterns for tristate bus drivers. |
 | `offgrid_drc_classify_check` | any | — | ORGANIC #594. |
 | `on_pass_review_answerable_check` | any | — | an on-pass gate that can only ever say rc=2. |
+| `on_pass_review_declared_command_runs_check` | any | — | the declared command must RUN. |
 | `onehot_fsm_synth` | any | — | DETERMINISTIC one-hot FSM next-state/output synthesizer (v1.1.38 clean-room §4.2 absorption). |
 | `onewire_protocol_synth` | any | v0.1.84 | 1-Wire-class protocol synth helper. |
 | `onfi_protocol_synth` | any | v0.1.84 | ONFI NAND-Flash protocol synth helper. |
@@ -2011,6 +2012,7 @@ _(no programs in this group)_
 - `oe_pattern_check` — Analyze output-enable (OE) patterns for tristate bus drivers.
 - `offgrid_drc_classify_check` — ORGANIC #594.
 - `on_pass_review_answerable_check` — an on-pass gate that can only ever say rc=2.
+- `on_pass_review_declared_command_runs_check` — the declared command must RUN.
 - `onehot_fsm_synth` — DETERMINISTIC one-hot FSM next-state/output synthesizer (v1.1.38 clean-room §4.2 absorption).
 - `onewire_protocol_synth` — 1-Wire-class protocol synth helper.  _[v0.1.84]_
 - `onfi_protocol_synth` — ONFI NAND-Flash protocol synth helper.  _[v0.1.84]_
