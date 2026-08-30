@@ -760,6 +760,33 @@ run_tolerating_uncheckable "PR bases reach main" "$ROOT" python3 "$PG/pr_base_re
 # fail; anything NEW does.
 run "flow-gate enforcement audit"       "$ROOT" python3 "$PG/flow_gate_enforcement_audit.py"
 
+# THE OTHER HALF OF THE SAME QUESTION. The audit above measures WHICH gates can
+# stop a run. It does not ask the advisory ones to say WHY, and MEASURED at
+# v1.13.73 that is 82 of the flow's 229 gate clauses: a third of the gate
+# population that can never block, and not one of them required to justify it.
+# Advisory is often exactly right; the defect is the SILENCE. A clause wired
+# advisory on purpose and a clause somebody downgraded to make a red go away
+# are byte-identical to every reader and to every program in this tree.
+#
+# IT IS BLOCKING, AND THAT IS THE POINT rather than an oversight. An advisory
+# version of this check would be its own subject — an unjustified advisory
+# clause asserting that advisory clauses must be justified — and it would be
+# the 78th member of the set it measures. It shipped with the 77 offenders
+# RECORDED in a shrink-only register; on 2026-08-31 every one was PAID — all 82
+# clauses now carry `advisory_reason:` and the register tightened 77 -> 0. So it
+# runs today with no standing dispensation: any silent advisory clause is rc 1,
+# as is a recorded entry deleted rather than paid. The 82 reasons are
+# MEASUREMENTS, not invented prose — each states the clause's class
+# (NOT-YET-CLEAN with its measured rc notch on a real run / DEMOTED with the
+# commit that demoted it / CANNOT-REFUSE proved by a planted violation /
+# CENSUS), and each is re-derivable from the tree.
+#
+# `run`, not `run_tolerating_uncheckable`: it reads the flow YAML and the
+# programs directory from a tree handed to it by absolute path, so it needs no
+# network, no container and no run directory, and its rc 2 means one of those
+# could not be read — a broken checkout, which must never read as clean.
+run "advisory clauses state a reason"   "$ROOT" python3 "$PG/advisory_clause_states_its_reason.py" "$ROOT"
+
 # vibe-ic#923 — the flow declared stage membership TWICE (a per-stage roster
 # `stages[].steps` and a per-step `stage:` field), nothing derived either from
 # the other, and they had drifted apart for 12 of the 63 steps: 4 outright

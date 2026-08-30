@@ -863,7 +863,9 @@ steps:
         # program-only today, and #312 is the open question of whether it
         # should. Wired advisory so the answer is MEASURED on real runs
         # instead of argued; it cannot fail a step.
-        - advisory_program_exit_zero: "phase1_expert_track_evidence_check ."
+        - advisory_program_exit_zero:
+              command: "phase1_expert_track_evidence_check ."
+              advisory_reason: "NOT-YET-CLEAN: this gate CAN refuse and is wired advisory as a ratchet position, not as a verdict. Notch measured rc 0 on a real spm run (2026-08-31): it is already clean on real input, so blocking would cost nothing today; the only thing holding it advisory is that no other run has been measured."
         # vibe-ic#306/#381 — TEN per-layer contract gates, ADVISORY. Until the
         # advisory slot existed these ran NOWHERE but their own unit tests:
         # a fixture the author wrote proved the logic, no real L-doc was ever
@@ -891,15 +893,23 @@ steps:
         # ADVISES at the source and both are wired here, which pays down two
         # of the four entries in flow_gate_enforcement_baseline.json instead
         # of leaving them as standing permission.
-        - advisory_program_exit_zero: "l16_compliance_properties_actionable_check ."
-        - advisory_program_exit_zero: "l17_channel_catalog_consumer_contract_check ."
+        - advisory_program_exit_zero:
+              command: "l16_compliance_properties_actionable_check ."
+              advisory_reason: "NOT-YET-CLEAN: this gate CAN refuse and is wired advisory as a ratchet position, not as a verdict. Notch measured rc 0 on a real spm run (2026-08-31): it is already clean on real input, so blocking would cost nothing today; the only thing holding it advisory is that no other run has been measured."
+        - advisory_program_exit_zero:
+              command: "l17_channel_catalog_consumer_contract_check ."
+              advisory_reason: "NOT-YET-CLEAN: this gate CAN refuse and is wired advisory as a ratchet position, not as a verdict. Notch measured rc 1 on a real spm run (2026-08-31): it REFUSES TODAY on real input; the advisory slot is currently swallowing a live finding. Promote to blocking once this run is clean."
         # L21 macro supply rails: every USE POWER/GROUND pin of an INSTANTIATED
         # hard macro has a same-use rail in L21 — the set `_macro_supply_gc_plan`
         # name-matches against. FAILs edge_llm_accel + u_hawaii_adc today.
-        - advisory_program_exit_zero: "l21_macro_supply_rail_declared_check ."
+        - advisory_program_exit_zero:
+              command: "l21_macro_supply_rail_declared_check ."
+              advisory_reason: "NOT-YET-CLEAN: this gate CAN refuse and is wired advisory as a ratchet position, not as a verdict. Notch measured rc 2 on a real spm run (2026-08-31): NOT CHECKED on that run — no input reached it, so the notch is unmeasured and this clause is not yet evidence of anything."
         # L8 STA period is design-owned, never sdc_gen's hardcoded default.
         # FAILs opentitan_aes, whose published SDC carries the default verbatim.
-        - advisory_program_exit_zero: "l8_sta_clock_period_design_owned_check ."
+        - advisory_program_exit_zero:
+              command: "l8_sta_clock_period_design_owned_check ."
+              advisory_reason: "NOT-YET-CLEAN: this gate CAN refuse and is wired advisory as a ratchet position, not as a verdict. Notch measured rc 0 on a real spm run (2026-08-31): it is already clean on real input, so blocking would cost nothing today; the only thing holding it advisory is that no other run has been measured."
         # D9 Phase 1 — L6 states must carry the transitions their consumer needs.
         # ADVISORY, and the reason is a MEASUREMENT, not a preference.
         #
@@ -933,11 +943,17 @@ steps:
         # PR) reads `reports/**/*.json` for exactly that field — so a `--json`
         # here would manufacture the Step-36 red it then reports. See the
         # cascade recorded at Step 36.
-        - advisory_program_exit_zero: "l6_fsm_scaffold_actionable_check ."
+        - advisory_program_exit_zero:
+              command: "l6_fsm_scaffold_actionable_check ."
+              advisory_reason: "NOT-YET-CLEAN: this gate CAN refuse and is wired advisory as a ratchet position, not as a verdict. Notch measured rc 2 on a real spm run (2026-08-31): NOT CHECKED on that run — no input reached it, so the notch is unmeasured and this clause is not yet evidence of anything."
         # L7 debug/test access points are grounded in a layer that implements them
-        - advisory_program_exit_zero: "l7_debug_access_grounding_check ."
+        - advisory_program_exit_zero:
+              command: "l7_debug_access_grounding_check ."
+              advisory_reason: "NOT-YET-CLEAN: this gate CAN refuse and is wired advisory as a ratchet position, not as a verdict. Notch measured rc 0 on a real spm run (2026-08-31): it is already clean on real input, so blocking would cost nothing today; the only thing holding it advisory is that no other run has been measured."
         # every clock period an L8 consumer resolves is unique and actionable
-        - advisory_program_exit_zero: "l8_clock_period_actionability_check ."
+        - advisory_program_exit_zero:
+              command: "l8_clock_period_actionability_check ."
+              advisory_reason: "NOT-YET-CLEAN: this gate CAN refuse and is wired advisory as a ratchet position, not as a verdict. Notch measured rc 0 on a real spm run (2026-08-31): it is already clean on real input, so blocking would cost nothing today; the only thing holding it advisory is that no other run has been measured."
         # ORPHANED, RE-HOMED. D1 EMITS L8_RTL_CONSTANTS.json (it is in this
         # step's own required_outputs and `rtl-constants-gen` is in its skills),
         # so D1 is the step that can be asked whether what it emitted holds
@@ -946,28 +962,48 @@ steps:
         # and a design whose Phase 1 emitted no constants file has nothing here
         # to contradict. Measured on a real L8: rc=0, 2 constants, 0 duplicates;
         # a duplicate name injected -> rc=1 naming it.
-        - advisory_program_exit_zero: "constants_validation phase1/generated_docs"
+        - advisory_program_exit_zero:
+              command: "constants_validation phase1/generated_docs"
+              advisory_reason: "NOT-YET-CLEAN: this gate CAN refuse and is wired advisory as a ratchet position, not as a verdict. Notch measured rc 0 on a real spm run (2026-08-31): it is already clean on real input, so blocking would cost nothing today; the only thing holding it advisory is that no other run has been measured."
         # the floorplan phase 3 pins verbatim is unambiguous and agrees across layers
-        - advisory_program_exit_zero: "l9_floorplan_contract_check ."
+        - advisory_program_exit_zero:
+              command: "l9_floorplan_contract_check ."
+              advisory_reason: "NOT-YET-CLEAN: this gate CAN refuse and is wired advisory as a ratchet position, not as a verdict. Notch measured rc 2 on a real spm run (2026-08-31): NOT CHECKED on that run — no input reached it, so the notch is unmeasured and this clause is not yet evidence of anything."
         # every executable L10 case carries an oracle anchor
-        - advisory_program_exit_zero: "l10_test_case_oracle_anchor_check ."
+        - advisory_program_exit_zero:
+              command: "l10_test_case_oracle_anchor_check ."
+              advisory_reason: "NOT-YET-CLEAN: this gate CAN refuse and is wired advisory as a ratchet position, not as a verdict. Notch measured rc 1 on a real spm run (2026-08-31): it REFUSES TODAY on real input; the advisory slot is currently swallowing a live finding. Promote to blocking once this run is clean. It reported: - [EXPECTED_RESTATES_STIMULUS] toggle_branch_coverage: expected text is byte-identical to the stimulus — restating the input is not a prediction, so t"
         # ORPHANED, RE-HOMED. Derives L10 oracle vectors from the L9 opcode
         # table D1 itself emits. No `--json` sink: it writes only when L9 yields
         # opcodes, so declaring the artefact unconditionally would redden every
         # opcode-less design. Measured on a fixture with L9 present: rc=0.
-        - advisory_program_exit_zero: "oracle_vector_gen ."
+        - advisory_program_exit_zero:
+              command: "oracle_vector_gen ."
+              advisory_reason: "NOT A GATE: this is a producer/classifier, not a predicate. Every exit path is 0 (produced) or 2 (no input), so there is nothing here that could refuse. It is wired in a gate slot and counted as gate coverage; move it to a step output."
         # L11 OTP content resolves for the consumer that reads it
-        - advisory_program_exit_zero: "l11_otp_content_consumer_contract_check ."
+        - advisory_program_exit_zero:
+              command: "l11_otp_content_consumer_contract_check ."
+              advisory_reason: "NOT-YET-CLEAN: this gate CAN refuse and is wired advisory as a ratchet position, not as a verdict. Notch measured rc 0 on a real spm run (2026-08-31): it is already clean on real input, so blocking would cost nothing today; the only thing holding it advisory is that no other run has been measured."
         # L12 sequences are visible in the layer their consumer actually reads
-        - advisory_program_exit_zero: "l12_sequences_in_consumed_layer_check ."
+        - advisory_program_exit_zero:
+              command: "l12_sequences_in_consumed_layer_check ."
+              advisory_reason: "NOT-YET-CLEAN: this gate CAN refuse and is wired advisory as a ratchet position, not as a verdict. Notch measured rc 0 on a real spm run (2026-08-31): it is already clean on real input, so blocking would cost nothing today; the only thing holding it advisory is that no other run has been measured."
         # the L13 bring-up contract is complete for the hardware in scope
-        - advisory_program_exit_zero: "l13_bringup_contract_check ."
+        - advisory_program_exit_zero:
+              command: "l13_bringup_contract_check ."
+              advisory_reason: "NOT-YET-CLEAN: this gate CAN refuse and is wired advisory as a ratchet position, not as a verdict. Notch measured rc 0 on a real spm run (2026-08-31): it is already clean on real input, so blocking would cost nothing today; the only thing holding it advisory is that no other run has been measured."
         # L14 protocol versioning is self-consistent
-        - advisory_program_exit_zero: "l14_protocol_versioning_contract_check ."
+        - advisory_program_exit_zero:
+              command: "l14_protocol_versioning_contract_check ."
+              advisory_reason: "NOT-YET-CLEAN: this gate CAN refuse and is wired advisory as a ratchet position, not as a verdict. Notch measured rc 0 on a real spm run (2026-08-31): it is already clean on real input, so blocking would cost nothing today; the only thing holding it advisory is that no other run has been measured."
         # L15 code-bearing tables reconcile with their consumers
-        - advisory_program_exit_zero: "l15_encoding_tables_contract_check ."
+        - advisory_program_exit_zero:
+              command: "l15_encoding_tables_contract_check ."
+              advisory_reason: "NOT-YET-CLEAN: this gate CAN refuse and is wired advisory as a ratchet position, not as a verdict. Notch measured rc 0 on a real spm run (2026-08-31): it is already clean on real input, so blocking would cost nothing today; the only thing holding it advisory is that no other run has been measured."
         # L18 interconnect topology is factual (its own default mode is ADVISES)
-        - advisory_program_exit_zero: "l18_interconnect_topology_factuality_check ."
+        - advisory_program_exit_zero:
+              command: "l18_interconnect_topology_factuality_check ."
+              advisory_reason: "NOT-YET-CLEAN: this gate CAN refuse and is wired advisory as a ratchet position, not as a verdict. Notch measured rc 0 on a real spm run (2026-08-31): it is already clean on real input, so blocking would cost nothing today; the only thing holding it advisory is that no other run has been measured."
         # vibe-ic#376 — the ONE general gate over declared cross-layer
         # references, as opposed to the hand-written pairwise gates that each
         # cover a slice. It SUBSUMES NONE of them and retires none: measured,
@@ -986,7 +1022,9 @@ steps:
         # §6) and BLOCKING would fail every run on that family. The promotion
         # condition is stated in the program's own docstring and is a
         # re-measurement, not a judgement call.
-        - advisory_program_exit_zero: "cross_layer_reference_check ."
+        - advisory_program_exit_zero:
+              command: "cross_layer_reference_check ."
+              advisory_reason: "NOT-YET-CLEAN: this gate CAN refuse and is wired advisory as a ratchet position, not as a verdict. Notch measured rc 1 on a real spm run (2026-08-31): it REFUSES TODAY on real input; the advisory slot is currently swallowing a live finding. Promote to blocking once this run is clean. It reported: L1:port:x references [('size', 32)] and resolves to width=32; phase2_scaffold_gen.derive_signals — the derivation that would consume it — yields width"
         # Every row above judges a layer's CONTENT against a contract. This one
         # judges a layer that has no content at all — and does it here, at the
         # step that PRODUCES the layers, because that is the only place the
@@ -1026,7 +1064,9 @@ steps:
         # shares. Narrowing until the count reached zero would have required
         # dropping the layer or accepting bare presence, and either one
         # swallows the defect underneath.
-        - advisory_program_exit_zero: "phase1_planned_consumer_starved_check ."
+        - advisory_program_exit_zero:
+              command: "phase1_planned_consumer_starved_check ."
+              advisory_reason: "NOT-YET-CLEAN: this gate CAN refuse and is wired advisory as a ratchet position, not as a verdict. Notch measured rc 0 on a real spm run (2026-08-31): it is already clean on real input, so blocking would cost nothing today; the only thing holding it advisory is that no other run has been measured."
         # ── doc-spec family (vibe-ic#693) ─────────────────────────────────
         # Three gates that existed with passing unit tests and no executable
         # caller: they had never judged real data. Each was run over the 16
@@ -1058,7 +1098,9 @@ steps:
         # BLOCKING would fail half the corpus for defects in the DOC PRODUCER,
         # not in the designs. Promotion requires the extractor repair first,
         # then a re-measurement.
-        - advisory_program_exit_zero: "l_doc_cross_consistency_check ."
+        - advisory_program_exit_zero:
+              command: "l_doc_cross_consistency_check ."
+              advisory_reason: "NOT-YET-CLEAN: this gate CAN refuse and is wired advisory as a ratchet position, not as a verdict. Notch measured rc 0 on a real spm run (2026-08-31): it is already clean on real input, so blocking would cost nothing today; the only thing holding it advisory is that no other run has been measured."
         # TWO ORPHANED PHASE-1 GATES, RE-HOMED (2026-08-25), and the shape is
         # `optional` rather than advisory for a measured reason. Both read
         # PROVENANCE out of the emitted L-docs, and on this tree only L5 ever
@@ -1068,8 +1110,12 @@ steps:
         # the provenance to check and the absent case carries its reason, so the
         # skip is declared rather than silent. When the L-doc emitters start
         # writing provenance these begin firing with no further change.
-        - advisory_program_exit_zero: "phase1_provenance_presence_check phase1/generated_docs"
-        - advisory_program_exit_zero: "input_docs_coverage_check ."
+        - advisory_program_exit_zero:
+              command: "phase1_provenance_presence_check phase1/generated_docs"
+              advisory_reason: "DEMOTED from optional_program_exit_zero in 0291e92f1 (2026-08-25): the optional slot REFUSES when its inputs are present, and an unmet condition there still denied the step its PASS tier (test_matrix_d8). Enforcement was traded for the tier, not for a reason about this gate."
+        - advisory_program_exit_zero:
+              command: "input_docs_coverage_check ."
+              advisory_reason: "DEMOTED from optional_program_exit_zero in 0291e92f1 (2026-08-25): the optional slot REFUSES when its inputs are present, and an unmet condition there still denied the step its PASS tier (test_matrix_d8). Enforcement was traded for the tier, not for a reason about this gate."
         # WHAT THE COVERAGE NUMBER ABOVE IS EARNED BY. The runner prints
         # "Coverage (overall): 100.0%" and `extraction_patterns.json` says in
         # its own header that it is the denominator. A literal is credited when
@@ -1094,7 +1140,9 @@ steps:
         # Measured across three: 77.1%, 86.2%, and 100.0% on the arm fed a
         # structured YAML — so it discriminates rather than always complaining.
         # Promote it when the two figures agree.
-        - advisory_program_exit_zero: "extraction_credited_by_prose_only_check . --json reports/phase1/extraction_credited_by_prose_only.json"
+        - advisory_program_exit_zero:
+              command: "extraction_credited_by_prose_only_check . --json reports/phase1/extraction_credited_by_prose_only.json"
+              advisory_reason: "INERT, not advisory: every exit path returns 0 or 2, so no input can make this gate refuse. Measured by planting a real violation — it printed the finding and exited 0. Advisory is the wrong word for a gate with no reachable refusal path; give it one or stop counting it as coverage."
         # ADVISORY, and `--strict` is load-bearing: without it every WARN exits
         # 0 and the gate cannot fail at all — a blocking gate that cannot fail
         # is a fake gate, so it is wired strict AND advisory rather than
@@ -1111,7 +1159,9 @@ steps:
         # spec set can score 72 of them even when the corner cases ARE covered.
         # Promotion to blocking requires that per-file/per-corpus bug fixed
         # first; until then --strict is only honest as an advisory signal.
-        - advisory_program_exit_zero: "spec_review_lint --strict input/docs/*.md input/docs/*.rst input/*.md"
+        - advisory_program_exit_zero:
+              command: "spec_review_lint --strict input/docs/*.md input/docs/*.rst input/*.md"
+              advisory_reason: "NOT-YET-CLEAN: this gate CAN refuse and is wired advisory as a ratchet position, not as a verdict. Notch measured rc 2 on a real spm run (2026-08-31): NOT CHECKED on that run — no input reached it, so the notch is unmeasured and this clause is not yet evidence of anything."
         # ORPHANED, RE-HOMED (2026-08-25). D1 is the step that EMITS
         # L9_INTEGRATION_SPEC.json, so it is the step that can be asked whether
         # what it emitted is a well-formed integration spec. Measured on a real
@@ -1131,7 +1181,9 @@ steps:
         # ['D1'] — a gate learned to read its artefact". Advisory keeps that and
         # gives the tier back. Promotion belongs with a fixture that can answer
         # it, not with a comment claiming it would pass.
-        - advisory_program_exit_zero: "integration_spec_audit ."
+        - advisory_program_exit_zero:
+              command: "integration_spec_audit ."
+              advisory_reason: "DEMOTED, not designed advisory: wired blocking, moved here in 0291e92f1 (2026-08-25) because a blocking clause it could not pass cost step D1 its tier. It CAN refuse (sys.exit(0 if passed else 1)) and on a real spm run today it returns files_passed 0 — the premise of the demotion no longer holds."
         # THE EXTRACTOR CHECKED AGAINST A SECOND EXTRACTOR OF THE SAME INPUT.
         # `l_doc_parity_diff` is the deterministic comparator the 2026-05-29
         # parity doctrine asks for: every fact the PROGRAM put in an L doc that
@@ -1159,6 +1211,7 @@ steps:
         # stage the comparison.
         - advisory_program_exit_zero:
             command: "l_doc_parity_diff --program-dir phase1/generated_docs --agent-dir phase1/agent_docs --strict"
+            advisory_reason: "NOT-YET-CLEAN: this gate CAN refuse and is wired advisory as a ratchet position, not as a verdict. Notch measured rc 0 on a real spm run (2026-08-31): it is already clean on real input, so blocking would cost nothing today; the only thing holding it advisory is that no other run has been measured."
             condition_files_exist:
               - "phase1/agent_docs/L*.json"
             absent_condition_reason: "Scoped to a run that staged a second, independent extraction of the same source into phase1/agent_docs/. Nothing in this flow writes that directory — it is the fresh-agent side of the parity loop and arrives by hand — so on an ordinary run there is no second opinion to diff against, and comparing the generated docs with an empty directory would report perfect parity over nothing."
@@ -1439,7 +1492,9 @@ steps:
         # which #1253 refuses -- and would additionally read the program's
         # rc=2 NOT CHECKED as VACUOUS_PASS. The advisory slot RUNS it and
         # RECORDS the verdict without changing the step's tier.
-        - advisory_program_exit_zero: "stage_on_pass_review . --stage stage_phase1 --json reports/phase1/gates/stage_phase1_on_pass_review.json --compliance reports/flow_compliance.json"
+        - advisory_program_exit_zero:
+              command: "stage_on_pass_review . --stage stage_phase1 --json reports/phase1/gates/stage_phase1_on_pass_review.json --compliance reports/flow_compliance.json"
+              advisory_reason: "DEMOTED, not designed advisory: wired blocking until da6fcd7fe (2026-08-30), moved here in the change that made the declared command actually execute; that push used --no-verify because the full tier did not stamp. Restore blocking once the six on-pass stage commands run green."
         # BLOCKING and unconditional. The judge itself records NOT_APPLICABLE
         # for an ordinary, un-rewritten design; conditioning this clause on its
         # own inputs would let a rewrite omit the evidence that checks it.
@@ -1581,7 +1636,9 @@ steps:
         # waiver channel (3 of the 11 are third-party vendor RTL the flow does
         # not author), then a re-measure, then a per-step promotion with the
         # new number stated.
-        - advisory_program_exit_zero: "arith_ss_corner_risk_check --strict phase2/stage1/rtl --json reports/phase2/gates/arith_ss_corner_risk.json"
+        - advisory_program_exit_zero:
+              command: "arith_ss_corner_risk_check --strict phase2/stage1/rtl --json reports/phase2/gates/arith_ss_corner_risk.json"
+              advisory_reason: "NOT-YET-CLEAN: this gate CAN refuse and is wired advisory as a ratchet position, not as a verdict. Notch measured rc 0 on a real spm run (2026-08-31): it is already clean on real input, so blocking would cost nothing today; the only thing holding it advisory is that no other run has been measured."
         # RTL BUG DENSITY — the count half of this step's RTL-bug accounting.
         # `rtl_bug_report_schema_check` above grades the SHAPE of each claimed
         # RTL bug; nothing counted how many the candidate RTL actually needed.
@@ -1599,7 +1656,9 @@ steps:
         # row to `docs/design/BENCHMARK_PLUGIN_LEARNING.md` in the REPOSITORY
         # root, so a flow run would mutate a tracked doc outside the project it
         # is grading. No `--json` sink, so the clause declares no artefact.
-        - advisory_program_exit_zero: "fresh_agent_rtl_bug_density_metric . --no-learning-log"
+        - advisory_program_exit_zero:
+              command: "fresh_agent_rtl_bug_density_metric . --no-learning-log"
+              advisory_reason: "NOT A GATE: this is a producer/classifier, not a predicate. Every exit path is 0 (produced) or 2 (no input), so there is nothing here that could refuse. It is wired in a gate slot and counted as gate coverage; move it to a step output."
         # D9 Phase 1 — every submodule L9 DECLARES exists as a `module` in the
         # RTL this flow generated, and is instantiated by something.
         #
@@ -1650,7 +1709,9 @@ steps:
         # program writes `{"verdict": "FAIL"}`, which Step 36's
         # `step_internal_fail_bubble_up_check` reads as an unacknowledged
         # step-internal FAIL. See the cascade recorded at Step 36.
-        - advisory_program_exit_zero: "l9_submodule_conformance_check ."
+        - advisory_program_exit_zero:
+              command: "l9_submodule_conformance_check ."
+              advisory_reason: "NOT-YET-CLEAN: this gate CAN refuse and is wired advisory as a ratchet position, not as a verdict. Notch measured rc 1 on a real spm run (2026-08-31): it REFUSES TODAY on real input; the advisory slot is currently swallowing a live finding. Promote to blocking once this run is clean. It reported: [SUBMODULE_FILE_MISSING] min_distance: L9 declares submodule 'min_distance' but no `module min_distance` declaration found under rtl/."
         # THE RTL WAS NEVER COMPARED TO THE SPEC. `spec_conformance_check`
         # exists, has existed, and appeared NOWHERE in this flow — measured on
         # 2026-08-26 by driving a 4-channel PWM with an SPI register interface
@@ -1710,6 +1771,7 @@ steps:
         # reason.
         - advisory_program_exit_zero:
             command: "spec_conformance_check --rtl-dir phase2/stage1/rtl --spec phase1/generated_docs/L9_INTEGRATION_SPEC.json --json reports/phase2/gates/spec_conformance.json"
+            advisory_reason: "NOT-YET-CLEAN: this gate CAN refuse and is wired advisory as a ratchet position, not as a verdict. Notch measured rc 0 on a real spm run (2026-08-31): it is already clean on real input, so blocking would cost nothing today; the only thing holding it advisory is that no other run has been measured."
             condition_files_exist:
               - "phase1/generated_docs/L9_INTEGRATION_SPEC.json"
             absent_condition_reason: >-
@@ -2011,7 +2073,9 @@ steps:
         # split above, that path also carried the line/toggle measurement; the
         # measurement has moved to coverage_verilator.json and this clause
         # keeps the functional payload it always read.)
-        - advisory_program_exit_zero: "functional_state_transition_coverage_check phase2/stage1/sim/tb --coverage reports/phase2/coverage/coverage_actual.json"
+        - advisory_program_exit_zero:
+              command: "functional_state_transition_coverage_check phase2/stage1/sim/tb --coverage reports/phase2/coverage/coverage_actual.json"
+              advisory_reason: "DEMOTED from optional_program_exit_zero in 0291e92f1 (2026-08-25): the optional slot REFUSES when its inputs are present, and an unmet condition there still denied the step its PASS tier (test_matrix_d8). Enforcement was traded for the tier, not for a reason about this gate."
         # NEW TB PATH gate — the professional cocotb TB (professional_tb_gen)
         # must never silently pass a real functional mismatch. UNCONDITIONAL
         # (vibe-ic#236, resolving the #220 known-open ownership question): the
@@ -2043,8 +2107,12 @@ steps:
         # what makes it safe here; it is advisory because a skip on every
         # project this tree has is also proof it has never been exercised
         # against a design that does declare one.
-        - advisory_program_exit_zero: "behavioral_evidence_per_spec_item_check ."
-        - advisory_program_exit_zero: "dispatcher_awake_gate_check ."
+        - advisory_program_exit_zero:
+              command: "behavioral_evidence_per_spec_item_check ."
+              advisory_reason: "NOT-YET-CLEAN: this gate CAN refuse and is wired advisory as a ratchet position, not as a verdict. Notch measured rc 1 on a real spm run (2026-08-31): it REFUSES TODAY on real input; the advisory slot is currently swallowing a live finding. Promote to blocking once this run is clean. It reported: FAIL: behavioral_evidence_per_spec_item_check"
+        - advisory_program_exit_zero:
+              command: "dispatcher_awake_gate_check ."
+              advisory_reason: "NOT-YET-CLEAN: this gate CAN refuse and is wired advisory as a ratchet position, not as a verdict. Notch measured rc 0 on a real spm run (2026-08-31): it is already clean on real input, so blocking would cost nothing today; the only thing holding it advisory is that no other run has been measured."
         # ORPHANED, AND UNREACHABLE BY CONSTRUCTION until this change (2026-08-25).
         # `--clock-period-ns` was `required=True`, so the only caller that could
         # exist was one that had already computed a period — and none did. A
@@ -2075,6 +2143,7 @@ steps:
         # project with no L2 was recorded as a planned read of an ABSENT layer.
         - advisory_program_exit_zero:
             command: "protocol_turnaround_audit --rtl-dir phase2/stage1/rtl --l2-json phase1/generated_docs/L2_FRS.json"
+            advisory_reason: "DEMOTED from optional_program_exit_zero in 0291e92f1 (2026-08-25): the optional slot REFUSES when its inputs are present, and an unmet condition there still denied the step its PASS tier (test_matrix_d8). Enforcement was traded for the tier, not for a reason about this gate."
             condition_files_exist:
               - "phase1/generated_docs/L2_FRS.json"
             absent_condition_reason: "The turnaround budget is computed from the L2 timing layer — delimiter_max, delimiter_detect_threshold and t_turnaround_min. A design whose Phase 1 emitted no L2 owns none of the three, and the program answers that by auditing the RTL against an unknown-sentinel budget rather than refusing, which reads as a measurement and is not one. Scoped to the runs that carry the layer."
@@ -2104,13 +2173,17 @@ steps:
         # artefact wired blocking would fail the step twice for one root cause.
         # Wired advisory, the per-category gap is recorded and printed on every
         # run without changing what any run stops on.
-        - advisory_program_exit_zero: "coverage_closure ."
+        - advisory_program_exit_zero:
+              command: "coverage_closure ."
+              advisory_reason: "NOT-YET-CLEAN: this gate CAN refuse and is wired advisory as a ratchet position, not as a verdict. Notch measured rc 2 on a real spm run (2026-08-31): NOT CHECKED on that run — no input reached it, so the notch is unmeasured and this clause is not yet evidence of anything."
         # ORPHANED, RE-HOMED (2026-08-25). Step 4 owns simulation coverage,
         # and this asks whether each RTL module has a unit testbench at all —
         # the question `coverage_closure` above does not ask. ADVISORY: it has
         # never run on a real project from the flow, and its first run should
         # not be a landing's.
-        - advisory_program_exit_zero: "rtl_unit_test_coverage_check ."
+        - advisory_program_exit_zero:
+              command: "rtl_unit_test_coverage_check ."
+              advisory_reason: "NOT-YET-CLEAN: this gate CAN refuse and is wired advisory as a ratchet position, not as a verdict. Notch measured rc 0 on a real spm run (2026-08-31): it is already clean on real input, so blocking would cost nothing today; the only thing holding it advisory is that no other run has been measured."
     blocks_on: [2]
 
   - id: 5
@@ -2335,6 +2408,7 @@ steps:
         # second FPGA top in the corpus to measure against. Today there is one.
         - advisory_program_exit_zero:
             command: "fpga_led_probe_lint phase2/stage1/fpga --qsf phase2/stage1/fpga/*.qsf --json reports/phase2/gates/fpga_led_probe_lint.json"
+            advisory_reason: "NOT-YET-CLEAN: this gate CAN refuse and is wired advisory as a ratchet position, not as a verdict. Notch measured rc 2 on a real spm run (2026-08-31): NOT CHECKED on that run — no input reached it, so the notch is unmeasured and this clause is not yet evidence of anything."
             condition_files_exist: ["phase2/stage1/fpga/*.qsf"]
             absent_condition_reason: >-
               Scoped to a run that Quartus actually built: with no .qsf there
@@ -2380,6 +2454,7 @@ steps:
         # there would assert a production this clause's own condition denies.
         - advisory_program_exit_zero:
             command: "auto_diagnostic_led_synth . --out-dir reports/phase2/fpga/led_synth"
+            advisory_reason: "NOT A GATE: this is a producer/classifier, not a predicate. Every exit path is 0 (produced) or 2 (no input), so there is nothing here that could refuse. It is wired in a gate slot and counted as gate coverage; move it to a step output."
             condition_files_exist: ["phase2/stage1/fpga/*.qsf"]
             absent_condition_reason: >-
               Scoped to the same population as the LED-probe lint beside it: a
@@ -2426,7 +2501,9 @@ steps:
         # which #1253 refuses -- and would additionally read the program's
         # rc=2 NOT CHECKED as VACUOUS_PASS. The advisory slot RUNS it and
         # RECORDS the verdict without changing the step's tier.
-        - advisory_program_exit_zero: "stage_on_pass_review . --stage stage1 --json reports/phase2/gates/stage1_on_pass_review.json --compliance reports/flow_compliance.json"
+        - advisory_program_exit_zero:
+              command: "stage_on_pass_review . --stage stage1 --json reports/phase2/gates/stage1_on_pass_review.json --compliance reports/flow_compliance.json"
+              advisory_reason: "DEMOTED, not designed advisory: wired blocking until da6fcd7fe (2026-08-30), moved here in the change that made the declared command actually execute; that push used --no-verify because the full tier did not stamp. Restore blocking once the six on-pass stage commands run green."
         - files_exist: ["phase2/stage2/constraints/*.sdc", "phase2/stage2/constraints/pvt_matrix.json"]
         - program_exit_zero: "sdc_syntax_check . --json reports/phase2/gates/sdc_syntax.json"
         # ORGANIC-20260606 #442 — pvt_matrix.json with corners=[] is not
@@ -2446,7 +2523,9 @@ steps:
         # writes `phase2/stage2/constraints/<top>.upf` — NOT declared in this
         # step's `required_outputs`, for the reason written out there — and
         # self-validates the file it wrote.
-        - advisory_program_exit_zero: "l21_to_upf_emit . --top chip_top"
+        - advisory_program_exit_zero:
+              command: "l21_to_upf_emit . --top chip_top"
+              advisory_reason: "NOT-YET-CLEAN: this gate CAN refuse and is wired advisory as a ratchet position, not as a verdict. Notch measured rc 2 on a real spm run (2026-08-31): NOT CHECKED on that run — no input reached it, so the notch is unmeasured and this clause is not yet evidence of anything."
         # vibe-ic#762 — a staged hard macro's own Liberty may declare a
         # NON-SEQUENTIAL stability window (`timing_type : non_seq_hold_*`)
         # between two SIGNAL pins. Measured: a 9.00 ns address-around-strobe
@@ -2473,7 +2552,9 @@ steps:
         # to. BLAST RADIUS: 0 of 9 published roots — exactly three
         # design-staged macro Liberties exist in benchmark-data and none
         # declares a non_seq_* arc, so every published cell SKIPs.
-        - advisory_program_exit_zero: "macro_non_seq_arc_contract_check . --json reports/phase2/gates/macro_non_seq_arcs.json"
+        - advisory_program_exit_zero:
+              command: "macro_non_seq_arc_contract_check . --json reports/phase2/gates/macro_non_seq_arcs.json"
+              advisory_reason: "NOT-YET-CLEAN: this gate CAN refuse and is wired advisory as a ratchet position, not as a verdict. Notch measured rc 2 on a real spm run (2026-08-31): NOT CHECKED on that run — no input reached it, so the notch is unmeasured and this clause is not yet evidence of anything."
         # ── `stage1_compliance`, wired for the first time ────────────────────
         #
         # THE STAGE-1 EXIT QUESTION, ASKED AT THE STAGE BOUNDARY. Step 7 is the
@@ -2497,7 +2578,9 @@ steps:
         # reader after the wrong artefact. The verdict belongs on the record,
         # not in step 7's tier. It writes no artefact, so nothing is added to
         # `required_outputs`.
-        - advisory_program_exit_zero: "stage1_compliance ."
+        - advisory_program_exit_zero:
+              command: "stage1_compliance ."
+              advisory_reason: "NOT-YET-CLEAN: this gate CAN refuse and is wired advisory as a ratchet position, not as a verdict. Notch measured rc 0 on a real spm run (2026-08-31): it is already clean on real input, so blocking would cost nothing today; the only thing holding it advisory is that no other run has been measured."
     blocks_on: [1]
 
   - id: 8
@@ -2800,6 +2883,7 @@ steps:
         # into the report-reading gates as though it had been wired blocking.
         - advisory_program_exit_zero:
             command: "pdk_consistency_check --netlist phase2/stage2/synth/netlist.v --project-json input/project.json --pdk-lib input/pdk/liberty/*.lib"
+            advisory_reason: "NOT-YET-CLEAN: this gate CAN refuse and is wired advisory as a ratchet position, not as a verdict. Notch measured rc 1 on a real spm run (2026-08-31): it REFUSES TODAY on real input; the advisory slot is currently swallowing a live finding. Promote to blocking once this run is clean. It reported: WARNING: Liberty file not found: input/pdk/liberty/*.lib"
             condition_files_exist: ["input/pdk/liberty/*.lib"]
             absent_condition_reason: "No liberty is staged under input/pdk/liberty/, so there is no cell set to compare the netlist against. Whether a run may reach synthesis with no staged PDK at all is `declared_pdk_is_the_pdk_used_check`'s question at step 36, and it is BLOCKING there; this clause would only be able to report every cell missing against an empty library, which is a zero-denominator FAIL this repo refuses."
     blocks_on: [2, 3, 8]
@@ -3429,9 +3513,15 @@ steps:
         # failed, and the lint has to stay LAST for its own wiring test; both
         # of these still follow every blocking sub-gate, so both are still
         # re-run. Order here is a re-run contract, not a preference.
-        - advisory_program_exit_zero: "analog_adc_enob_corner_check ."
-        - advisory_program_exit_zero: "analog_sigma_delta_gain_floor_check ."
-        - advisory_program_exit_zero: "analog_corner_lib_realism_lint ."
+        - advisory_program_exit_zero:
+              command: "analog_adc_enob_corner_check ."
+              advisory_reason: "NOT-YET-CLEAN: this gate CAN refuse and is wired advisory as a ratchet position, not as a verdict. Notch measured rc 0 on a real spm run (2026-08-31): it is already clean on real input, so blocking would cost nothing today; the only thing holding it advisory is that no other run has been measured."
+        - advisory_program_exit_zero:
+              command: "analog_sigma_delta_gain_floor_check ."
+              advisory_reason: "NOT-YET-CLEAN: this gate CAN refuse and is wired advisory as a ratchet position, not as a verdict. Notch measured rc 0 on a real spm run (2026-08-31): it is already clean on real input, so blocking would cost nothing today; the only thing holding it advisory is that no other run has been measured."
+        - advisory_program_exit_zero:
+              command: "analog_corner_lib_realism_lint ."
+              advisory_reason: "NOT-YET-CLEAN: this gate CAN refuse and is wired advisory as a ratchet position, not as a verdict. Notch measured rc 2 on a real spm run (2026-08-31): NOT CHECKED on that run — no input reached it, so the notch is unmeasured and this clause is not yet evidence of anything."
         # THREE ORPHANED ANALOG GATES, RE-HOMED HERE (2026-08-25). Each was
         # authored with tests and then reachable from nothing — no flow clause,
         # no runner, no tools/ci line. A4 is the step that owns a PVT sweep, and
@@ -3758,9 +3848,15 @@ steps:
         # `hw_sizing_history.json`, move the first three to
         # `program_exit_zero`. They already return 1 for every defect,
         # including a malformed report.
-        - advisory_program_exit_zero: "analog_hil_report_schema_check . --json reports/phase2/gates/hil_report_schema.json"
-        - advisory_program_exit_zero: "analog_hil_iteration_cap_check . --json reports/phase2/gates/hil_iteration_cap.json"
-        - advisory_program_exit_zero: "analog_hil_single_knob_check . --json reports/phase2/gates/hil_single_knob.json"
+        - advisory_program_exit_zero:
+              command: "analog_hil_report_schema_check . --json reports/phase2/gates/hil_report_schema.json"
+              advisory_reason: "NOT-YET-CLEAN: this gate CAN refuse and is wired advisory as a ratchet position, not as a verdict. Notch measured rc 2 on a real spm run (2026-08-31): NOT CHECKED on that run — no input reached it, so the notch is unmeasured and this clause is not yet evidence of anything."
+        - advisory_program_exit_zero:
+              command: "analog_hil_iteration_cap_check . --json reports/phase2/gates/hil_iteration_cap.json"
+              advisory_reason: "NOT-YET-CLEAN: this gate CAN refuse and is wired advisory as a ratchet position, not as a verdict. Notch measured rc 2 on a real spm run (2026-08-31): NOT CHECKED on that run — no input reached it, so the notch is unmeasured and this clause is not yet evidence of anything."
+        - advisory_program_exit_zero:
+              command: "analog_hil_single_knob_check . --json reports/phase2/gates/hil_single_knob.json"
+              advisory_reason: "NOT-YET-CLEAN: this gate CAN refuse and is wired advisory as a ratchet position, not as a verdict. Notch measured rc 2 on a real spm run (2026-08-31): NOT CHECKED on that run — no input reached it, so the notch is unmeasured and this clause is not yet evidence of anything."
         # The DE10-Lite board gate is pointed at its DECLARED SUBJECT —
         # `analog/<block>/hw_test/pin_assignments.qsf`, per
         # skills/analog-hw-testbench-gen/SKILL.md — not at the project root.
@@ -3771,7 +3867,9 @@ steps:
         # measured, that is 0 of the 3 pure-analog published runs. So the
         # umbrella alone would never let this gate see the analog QSF it was
         # written for.
-        - advisory_program_exit_zero: "analog_hw_tb_de10lite_budget_check phase3/analog --json reports/phase2/gates/a9_de10lite_budget.json"
+        - advisory_program_exit_zero:
+              command: "analog_hw_tb_de10lite_budget_check phase3/analog --json reports/phase2/gates/a9_de10lite_budget.json"
+              advisory_reason: "NOT-YET-CLEAN: this gate CAN refuse and is wired advisory as a ratchet position, not as a verdict. Notch measured rc 2 on a real spm run (2026-08-31): NOT CHECKED on that run — no input reached it, so the notch is unmeasured and this clause is not yet evidence of anything."
         # ORPHANED, RE-HOMED (2026-08-25). A9 is the step that owns HW
         # correlation, and this reads the convergence log that correlation
         # produces. ADVISORY: measured on a real completed project it returns
@@ -3779,7 +3877,9 @@ steps:
         # which is the right answer for a digital design and also means it has
         # never been exercised against a real analog bench. It reports until one
         # has answered it.
-        - advisory_program_exit_zero: "analog_hil_convergence_log_check ."
+        - advisory_program_exit_zero:
+              command: "analog_hil_convergence_log_check ."
+              advisory_reason: "NOT-YET-CLEAN: this gate CAN refuse and is wired advisory as a ratchet position, not as a verdict. Notch measured rc 0 on a real spm run (2026-08-31): it is already clean on real input, so blocking would cost nothing today; the only thing holding it advisory is that no other run has been measured."
     blocks_on: [A8]
 
   # ── Step 14 (Wave 91 / v1.6.15): pre-PnR Yosys gate ──────────────
@@ -3826,7 +3926,9 @@ steps:
         # which #1253 refuses -- and would additionally read the program's
         # rc=2 NOT CHECKED as VACUOUS_PASS. The advisory slot RUNS it and
         # RECORDS the verdict without changing the step's tier.
-        - advisory_program_exit_zero: "stage_on_pass_review . --stage stage_analog --json reports/analog/stage_analog_on_pass_review.json --compliance reports/flow_compliance.json"
+        - advisory_program_exit_zero:
+              command: "stage_on_pass_review . --stage stage_analog --json reports/analog/stage_analog_on_pass_review.json --compliance reports/flow_compliance.json"
+              advisory_reason: "DEMOTED, not designed advisory: wired blocking until da6fcd7fe (2026-08-30), moved here in the change that made the declared command actually execute; that push used --no-verify because the full tier did not stamp. Restore blocking once the six on-pass stage commands run green."
         - optional_program_exit_zero:
             command: "yosys_hilomap_required_check . --json reports/phase2/gates/yosys_hilomap.json"
             condition_files_exist: ["phase2/stage2/synth"]
@@ -3864,6 +3966,7 @@ steps:
         # that declares itself advisory can be wired at all.
         - advisory_program_exit_zero:
             command: "yosys_tiecell_recipe_order_check . --json reports/phase2/gates/yosys_tiecell_recipe_order.json"
+            advisory_reason: "NOT-YET-CLEAN: this gate CAN refuse and is wired advisory as a ratchet position, not as a verdict. Notch measured rc 0 on a real spm run (2026-08-31): it is already clean on real input, so blocking would cost nothing today; the only thing holding it advisory is that no other run has been measured."
             condition_files_exist: ["phase2/stage2/synth"]
             absent_condition_reason: >-
               Scoped to the presence of a synthesis directory: the rule is
@@ -3907,7 +4010,9 @@ steps:
         # which #1253 refuses -- and would additionally read the program's
         # rc=2 NOT CHECKED as VACUOUS_PASS. The advisory slot RUNS it and
         # RECORDS the verdict without changing the step's tier.
-        - advisory_program_exit_zero: "stage_on_pass_review . --stage stage2 --json reports/phase2/gates/stage2_on_pass_review.json --compliance reports/flow_compliance.json"
+        - advisory_program_exit_zero:
+              command: "stage_on_pass_review . --stage stage2 --json reports/phase2/gates/stage2_on_pass_review.json --compliance reports/flow_compliance.json"
+              advisory_reason: "DEMOTED, not designed advisory: wired blocking until da6fcd7fe (2026-08-30), moved here in the change that made the declared command actually execute; that push used --no-verify because the full tier did not stamp. Restore blocking once the six on-pass stage commands run green."
         # flow v2.3.1 (review R3) — IP integration checklist: hard-macro
         # LEF/GDS/Liberty file-set alignment + lib corner coverage +
         # L21 power-domain consistency, before the macros enter
@@ -3968,7 +4073,9 @@ steps:
         # same reasoning is why stage3's wrapper is wired on a stage4 step and
         # stage4's on a stage5 step, and why none of the three may ever be
         # wired inside its own stage.
-        - advisory_program_exit_zero: "stage2_compliance ."
+        - advisory_program_exit_zero:
+              command: "stage2_compliance ."
+              advisory_reason: "NOT-YET-CLEAN: this gate CAN refuse and is wired advisory as a ratchet position, not as a verdict. Notch measured rc 0 on a real spm run (2026-08-31): it is already clean on real input, so blocking would cost nothing today; the only thing holding it advisory is that no other run has been measured."
     blocks_on: [13, 14, A8]
 
   # ── chip/IC path only ────────────────────────────────────────────────
@@ -4419,7 +4526,9 @@ steps:
         # short-circuited past, and `_evaluate_gate` re-runs the advisories
         # that follow a failing sub-gate on purpose. It is first only so the
         # four wirings read the same way.
-        - advisory_program_exit_zero: "hold_area_budget_check . --json reports/phase3/pnr/hold_area_budget.json"
+        - advisory_program_exit_zero:
+              command: "hold_area_budget_check . --json reports/phase3/pnr/hold_area_budget.json"
+              advisory_reason: "NOT-YET-CLEAN: this gate CAN refuse and is wired advisory as a ratchet position, not as a verdict. Notch measured rc 2 on a real spm run (2026-08-31): NOT CHECKED on that run — no input reached it, so the notch is unmeasured and this clause is not yet evidence of anything."
         # File-presence precondition (kept, consistent with sibling Steps 21/23).
         - files_exist: ["phase3/stage3/pnr/post_hold.def"]
         # Substance: prove the Step-20 hold-FIXING step did real work — either a
@@ -4529,7 +4638,9 @@ steps:
         # blocking, contradicting its own declaration. It now RUNS on every
         # route and its verdict is printed and carried into the JSON report;
         # a finding does NOT fail the step.
-        - advisory_program_exit_zero: "route_congestion_trade_disclosure ."
+        - advisory_program_exit_zero:
+              command: "route_congestion_trade_disclosure ."
+              advisory_reason: "CENSUS, correct permanently: it counts the nets from which global routing removed a non-default rule (GRT-0273) and how many are clock nets. A trade the router made is a disclosure about the run, not a defect the run introduced."
         # vibe-ic#828 part 2 — THIS GATE WAS NEVER WIRED. Its own header said
         # so: "It is not registered in flow/phase1_phase2_phase3.yaml and no
         # runner invokes it; its only caller is tools/ci/repo_hygiene_gates.sh".
@@ -4834,7 +4945,9 @@ steps:
         # spm/sky130A 5.24) with no achieved period beside it. Those four go
         # ADVISORY-red here and are repaired going forward by the runner change
         # that emits on PASS as well as on FAIL.
-        - advisory_program_exit_zero: "achieved_period_recorded_check . --json reports/phase2/gates/achieved_period_recorded.json"
+        - advisory_program_exit_zero:
+              command: "achieved_period_recorded_check . --json reports/phase2/gates/achieved_period_recorded.json"
+              advisory_reason: "NOT-YET-CLEAN: this gate CAN refuse and is wired advisory as a ratchet position, not as a verdict. Notch measured rc 1 on a real spm run (2026-08-31): it REFUSES TODAY on real input; the advisory slot is currently swallowing a live finding. Promote to blocking once this run is clean."
         # HOLD IS WORST AT THE FAST CORNER. `sta_corner_record_completeness_check`
         # below judges each declared corner "for the ROLE it was declared to
         # serve" — it never asks whether assigning the HOLD role to a non-fast
@@ -5561,7 +5674,9 @@ steps:
         # Reporting it is the first step; blocking on it belongs after somebody
         # has decided whether that wrapper is wrong or the check's expectation
         # is too narrow.
-        - advisory_program_exit_zero: "synth_wrapper_check ."
+        - advisory_program_exit_zero:
+              command: "synth_wrapper_check ."
+              advisory_reason: "NOT-YET-CLEAN: this gate CAN refuse and is wired advisory as a ratchet position, not as a verdict. Notch measured rc 1 on a real spm run (2026-08-31): it REFUSES TODAY on real input; the advisory slot is currently swallowing a live finding. Promote to blocking once this run is clean. It reported: FAIL — {'wrappers_checked': 2, 'valid_wrappers': 0, 'errors': 2}"
     blocks_on: [22]
 
   # ── Step 30: Post-Layout SPICE Verification ──────────────────
@@ -6006,8 +6121,12 @@ steps:
         # `waiver_growth_check` PASSES on that same project with a real waiver
         # set, so it is wired the same way only because a first blocking run
         # should not be a landing's first run of it.
-        - advisory_program_exit_zero: "pnr_via_stack_completeness_check ."
-        - advisory_program_exit_zero: "waiver_growth_check ."
+        - advisory_program_exit_zero:
+              command: "pnr_via_stack_completeness_check ."
+              advisory_reason: "INERT, not advisory: every exit path returns 0 or 2, so no input can make this gate refuse. Measured by planting a real violation — it printed the finding and exited 0. Advisory is the wrong word for a gate with no reachable refusal path; give it one or stop counting it as coverage."
+        - advisory_program_exit_zero:
+              command: "waiver_growth_check ."
+              advisory_reason: "NOT-YET-CLEAN: this gate CAN refuse and is wired advisory as a ratchet position, not as a verdict. Notch measured rc 1 on a real spm run (2026-08-31): it REFUSES TODAY on real input; the advisory slot is currently swallowing a live finding. Promote to blocking once this run is clean. It reported: [ERROR] UNJUSTIFIED_WAIVER_GROWTH: waivers.json adds 4 root waiver(s) the baseline did not carry (> tolerance 0; net count change 4) without `growth_r"
         # ORPHANED, RE-HOMED. Step 31 already declares `skills: [drc-fix,
         # lvs-triage, perc-check]` — the PERC skill was named with NO PERC
         # program behind it. Its input `phase3/stage3/pnr/routed.def` is Step
@@ -6016,7 +6135,9 @@ steps:
         # program that CONSUMES that report is the clause directly below and
         # without the flag there is nothing for it to read. An empty dir is
         # still rc=2 (vacuous), never a fail.
-        - advisory_program_exit_zero: "perc_corpus_sweep . --report reports/phase3/perc_sweep.json"
+        - advisory_program_exit_zero:
+              command: "perc_corpus_sweep . --report reports/phase3/perc_sweep.json"
+              advisory_reason: "NOT A GATE: this is a producer/classifier, not a predicate. Every exit path is 0 (produced) or 2 (no input), so there is nothing here that could refuse. It is wired in a gate slot and counted as gate coverage; move it to a step output."
         # THE OTHER HALF OF THAT SWEEP, and the reason it was missing is the
         # sharpest thing this campaign measured.
         #
@@ -6035,6 +6156,7 @@ steps:
         # written down in prose and never built. This clause builds it.
         - advisory_program_exit_zero:
             command: "sweep_reach_check --report reports/phase3/perc_sweep.json"
+            advisory_reason: "NOT-YET-CLEAN: this gate CAN refuse and is wired advisory as a ratchet position, not as a verdict. Notch measured rc 0 on a real spm run (2026-08-31): it is already clean on real input, so blocking would cost nothing today; the only thing holding it advisory is that no other run has been measured."
             condition_files_exist:
               - "reports/phase3/perc_sweep.json"
             absent_condition_reason: >-
@@ -6057,7 +6179,9 @@ steps:
         # the step would be a third authority over one report. It writes
         # nothing: `--out-md` / `--out-json` are deliberately omitted, so this
         # clause adds no `required_outputs` row.
-        - advisory_program_exit_zero: "lvs_triage_classify --report reports/phase3/lvs.rpt"
+        - advisory_program_exit_zero:
+              command: "lvs_triage_classify --report reports/phase3/lvs.rpt"
+              advisory_reason: "NOT A GATE: this is a producer/classifier, not a predicate. Every exit path is 0 (produced) or 2 (no input), so there is nothing here that could refuse. It is wired in a gate slot and counted as gate coverage; move it to a step output."
         # `mcp_execution_verify` is the L3 layer README.md advertises — "MCP
         # tool execution proof via manifest", against an agent that reports a
         # tool run it never made. It was declared by SIX skills as the
@@ -6091,6 +6215,7 @@ steps:
         # clauses it means by what they do; the count stays the truth.
         - advisory_program_exit_zero:
             command: "mcp_execution_verify --manifest latest_results.jsonl --require-steps drc,lvs"
+            advisory_reason: "NOT-YET-CLEAN: this gate CAN refuse and is wired advisory as a ratchet position, not as a verdict. Notch measured rc 1 on a real spm run (2026-08-31): it REFUSES TODAY on real input; the advisory slot is currently swallowing a live finding. Promote to blocking once this run is clean."
             condition_files_exist: ["latest_results.jsonl"]
             absent_condition_reason: >-
               Scoped to a run that drove the MCP-EDA server: the manifest is
@@ -6333,6 +6458,7 @@ steps:
         # `required_outputs` row.
         - advisory_program_exit_zero:
             command: "upf_syntax_check . --json reports/phase2/gates/upf_syntax.json"
+            advisory_reason: "DEMOTED from optional_program_exit_zero in 0291e92f1 (2026-08-25): the optional slot REFUSES when its inputs are present, and an unmet condition there still denied the step its PASS tier (test_matrix_d8). Enforcement was traded for the tier, not for a reason about this gate."
             condition_files_exist:
               - "phase2/stage2/constraints/*.upf"
             absent_condition_reason: >-
@@ -6490,7 +6616,9 @@ steps:
         # blocking. Blocking coverage is unchanged: the only outcome the old
         # slot could have failed on was a crash, and a crash leaves the
         # artefact above unwritten.
-        - advisory_program_exit_zero: "dfm_screen_check . --json reports/phase2/gates/dfm_screen.json"
+        - advisory_program_exit_zero:
+              command: "dfm_screen_check . --json reports/phase2/gates/dfm_screen.json"
+              advisory_reason: "NOT-YET-CLEAN: this gate CAN refuse and is wired advisory as a ratchet position, not as a verdict. Notch measured rc 1 on a real spm run (2026-08-31): it REFUSES TODAY on real input; the advisory slot is currently swallowing a live finding. Promote to blocking once this run is clean. It reported: dfm_screen_check: PASS_WITH_ADVISORIES — 1 advisory finding(s) [VIA_CUTS_UNRESOLVED]: 4129/4129 signal-net via uses reference via(s) declared neither "
     blocks_on: [34]
 
   - id: 36
@@ -6553,7 +6681,9 @@ steps:
     gate:
       all_of:
         - program_exit_zero: "tapeout_signoff_check . --mode tapeout --json reports/audit/tapeout_checklist.json"
-        - advisory_program_exit_zero: "report_belongs_to_project_check . --json reports/audit/report_belongs_to_project.json"
+        - advisory_program_exit_zero:
+              command: "report_belongs_to_project_check . --json reports/audit/report_belongs_to_project.json"
+              advisory_reason: "NOT-YET-CLEAN: this gate CAN refuse and is wired advisory as a ratchet position, not as a verdict. Notch measured rc 0 on a real spm run (2026-08-31): it is already clean on real input, so blocking would cost nothing today; the only thing holding it advisory is that no other run has been measured."
         # D9 Phase 1 — doctrine rule #4 at the step that signs off. A
         # step-internal `verdict: FAIL` must be ACKNOWLEDGED (waivered, or the
         # parent step's pass.flag dropped); silently keeping pass.flag while a
@@ -6868,7 +6998,9 @@ steps:
         # which #1253 refuses -- and would additionally read the program's
         # rc=2 NOT CHECKED as VACUOUS_PASS. The advisory slot RUNS it and
         # RECORDS the verdict without changing the step's tier.
-        - advisory_program_exit_zero: "stage_on_pass_review . --stage stage3 --json reports/phase3/gates/stage3_on_pass_review.json --compliance reports/flow_compliance.json"
+        - advisory_program_exit_zero:
+              command: "stage_on_pass_review . --stage stage3 --json reports/phase3/gates/stage3_on_pass_review.json --compliance reports/flow_compliance.json"
+              advisory_reason: "DEMOTED, not designed advisory: wired blocking until da6fcd7fe (2026-08-30), moved here in the change that made the declared command actually execute; that push used --no-verify because the full tier did not stamp. Restore blocking once the six on-pass stage commands run green."
         - files_exist: ["phase3/stage4/gds/*.gds"]
         - program_exit_zero: "gds_size_check --gds-file phase3/stage4/gds/*.gds --json reports/phase3/gds_size.json"
         # Substance, not just size. gds_size_check compares against a
@@ -6902,7 +7034,9 @@ steps:
         # in. Conditioned on the report existing: a project that has not written
         # one has no claim to check, which is a different statement from "its
         # claims are backed".
-        - advisory_program_exit_zero: "reported_figure_artifact_backing_check . --report FINAL_REPORT.md"
+        - advisory_program_exit_zero:
+              command: "reported_figure_artifact_backing_check . --report FINAL_REPORT.md"
+              advisory_reason: "DEMOTED from optional_program_exit_zero in 0291e92f1 (2026-08-25): the optional slot REFUSES when its inputs are present, and an unmet condition there still denied the step its PASS tier (test_matrix_d8). Enforcement was traded for the tier, not for a reason about this gate."
         # Provenance required: GDS must be produced by a real streamer
         # (KLayout def2gds, Magic gds write, etc.). This closes the
         # "rename old .def to .gds" loophole.
@@ -6939,15 +7073,21 @@ steps:
         # no synthesis evidence directory. A gate nothing ran could not say so.
         # `gate_evidence_completeness_check` needs a FINAL_REPORT.md and says so
         # rather than passing when there is none.
-        - advisory_program_exit_zero: "flow_stage_check ."
-        - advisory_program_exit_zero: "gate_evidence_completeness_check ."
+        - advisory_program_exit_zero:
+              command: "flow_stage_check ."
+              advisory_reason: "NOT-YET-CLEAN: this gate CAN refuse and is wired advisory as a ratchet position, not as a verdict. Notch measured rc 0 on a real spm run (2026-08-31): it is already clean on real input, so blocking would cost nothing today; the only thing holding it advisory is that no other run has been measured."
+        - advisory_program_exit_zero:
+              command: "gate_evidence_completeness_check ."
+              advisory_reason: "NOT-YET-CLEAN: this gate CAN refuse and is wired advisory as a ratchet position, not as a verdict. Notch measured rc 1 on a real spm run (2026-08-31): it REFUSES TODAY on real input; the advisory slot is currently swallowing a live finding. Promote to blocking once this run is clean. It reported: FAIL: nothing to audit"
         # ORPHANED, RE-HOMED. Step 37 is where the GDS is published, so it is
         # where "which of these polygons came from someone else's IP" can be
         # asked. `build-text` prints and writes nothing, so no required_outputs
         # change. Measured: rc=2 with no `plugin_output/declaration.json` (a
         # project reusing no catalogue IP — correctly vacuous), rc=0 on a
         # complete blob, rc=3 when the blob carries a REFUSED line.
-        - advisory_program_exit_zero: "gds_ip_attribution build-text ."
+        - advisory_program_exit_zero:
+              command: "gds_ip_attribution build-text ."
+              advisory_reason: "NOT-YET-CLEAN: this gate CAN refuse and is wired advisory as a ratchet position, not as a verdict. Notch measured rc 0 on a real spm run (2026-08-31): it is already clean on real input, so blocking would cost nothing today; the only thing holding it advisory is that no other run has been measured."
         # THE STAGE-3 BOUNDARY, ASKED BY THE STEP ITS OWN DOCSTRING NAMES.
         # `stage3_compliance` is the end-of-stage gate the README names for
         # stage3, and it does not merely say "run me after stage 3" — it names
@@ -6969,7 +7109,9 @@ steps:
         # steps only, and step 37 is stage4 — outside the filter, so this
         # clause cannot re-enter itself. It would recurse without bound if
         # wired onto any stage3 step, which is why it is not.
-        - advisory_program_exit_zero: "stage3_compliance ."
+        - advisory_program_exit_zero:
+              command: "stage3_compliance ."
+              advisory_reason: "NOT-YET-CLEAN: this gate CAN refuse and is wired advisory as a ratchet position, not as a verdict. Notch measured rc 1 on a real spm run (2026-08-31): it REFUSES TODAY on real input; the advisory slot is currently swallowing a live finding. Promote to blocking once this run is clean. It reported: STRUCTURAL MEASUREMENT: registered=null invoked=null no_verdict=null — the structural-RTL umbrella was NOT ASKED to run in this invocation, so this re"
     blocks_on: [34, 36]
 
   # ── cell/IP path — TERMINAL ──────────────────────────────────────────
@@ -7320,7 +7462,9 @@ steps:
         # new entry. Bare invocation, positional root — its parser takes
         # `root` positionally (`nargs="?"`), so `--root` would be
         # `unrecognized arguments` -> rc 3 on every arm.
-        - advisory_program_exit_zero: "every_required_metric_key_has_a_producer ."
+        - advisory_program_exit_zero:
+              command: "every_required_metric_key_has_a_producer ."
+              advisory_reason: "NOT-YET-CLEAN: this gate CAN refuse and is wired advisory as a ratchet position, not as a verdict. Notch measured rc 2 on a real spm run (2026-08-31): NOT CHECKED on that run — no input reached it, so the notch is unmeasured and this clause is not yet evidence of anything."
         # AND THE SAME QUESTION ONE LAYER OUT. The clause above asks whether a
         # required METRIC has a producer. This one asks whether a declared
         # closed-loop EDGE has one — whether the step it falls back to can even
@@ -7343,7 +7487,9 @@ steps:
         # are REACHABLE/UNREACHABLE/UNSTATED, none of which is FAIL or MISSING
         # — so it cannot bubble, and withholding it would leave an ADVISORY
         # census with nothing a reader can re-check.
-        - advisory_program_exit_zero: "closed_loop_metric_reaches_its_producer . --json reports/phase3/closed_loop_metric_reach.json"
+        - advisory_program_exit_zero:
+              command: "closed_loop_metric_reaches_its_producer . --json reports/phase3/closed_loop_metric_reach.json"
+              advisory_reason: "CENSUS, correct permanently: it counts the flow's declared closed_loop edges and how many can reach a producer that reads the metric the trigger names. UNREACHABLE is a fact about the tree's capabilities, not a defect any one change owns."
         # THE SIBLING ABOVE IS ADVISORY AND CANNOT BE ANYTHING ELSE: its finding,
         # UNREACHABLE, is a fact about what this tree is CAPABLE of, inherited by
         # every landing and owned by none. This clause is the other half of that
@@ -7541,6 +7687,7 @@ steps:
         # a malformed tester response (MEASURED: one INVALID_VARIANT finding).
         - advisory_program_exit_zero:
             command: "hw_vs_rtl_verdict_check --responses-dir reports/phase2/fpga/hw_blame --layout reports/phase2/fpga/frame_layout.json"
+            advisory_reason: "NOT-YET-CLEAN: this gate CAN refuse and is wired advisory as a ratchet position, not as a verdict. Notch measured rc 2 on a real spm run (2026-08-31): NOT CHECKED on that run — no input reached it, so the notch is unmeasured and this clause is not yet evidence of anything."
             condition_files_exist:
               - "reports/phase2/fpga/hw_blame/*.json"
             absent_condition_reason: "Scoped to a run that actually ran a hardware-vs-RTL blame campaign. The per-variant tester responses are produced by the bench harness, never by this flow, so a run with no board and no variant sweep has nothing to compare; the gate would be reading an empty directory rather than judging a verdict. The step's own on-board attestation clauses still decide whether the board passed."
@@ -7616,7 +7763,9 @@ steps:
         # below already reports. The BLOCKING verdict stays with
         # mixed_signal_merge_check, which reads what this writes — so M1 still
         # cannot PASS without a real top-level LVS PASS.
-        - advisory_program_exit_zero: "mixed_signal_top_lvs_run . --json reports/analog/mixed_signal/top_lvs_run.json"
+        - advisory_program_exit_zero:
+              command: "mixed_signal_top_lvs_run . --json reports/analog/mixed_signal/top_lvs_run.json"
+              advisory_reason: "NOT-YET-CLEAN: this gate CAN refuse and is wired advisory as a ratchet position, not as a verdict. Notch measured rc 2 on a real spm run (2026-08-31): NOT CHECKED on that run — no input reached it, so the notch is unmeasured and this clause is not yet evidence of anything."
         - program_exit_zero: "mixed_signal_merge_check . --json reports/analog/mixed_signal/merge.json"
     blocks_on: [A8, 15, 37]
     notes: |
@@ -7781,7 +7930,9 @@ steps:
         # which #1253 refuses -- and would additionally read the program's
         # rc=2 NOT CHECKED as VACUOUS_PASS. The advisory slot RUNS it and
         # RECORDS the verdict without changing the step's tier.
-        - advisory_program_exit_zero: "stage_on_pass_review . --stage stage4 --json reports/phase3/gates/stage4_on_pass_review.json --compliance reports/flow_compliance.json"
+        - advisory_program_exit_zero:
+              command: "stage_on_pass_review . --stage stage4 --json reports/phase3/gates/stage4_on_pass_review.json --compliance reports/flow_compliance.json"
+              advisory_reason: "DEMOTED, not designed advisory: wired blocking until da6fcd7fe (2026-08-30), moved here in the change that made the declared command actually execute; that push used --no-verify because the full tier did not stamp. Restore blocking once the six on-pass stage commands run green."
         - program_exit_zero: "manufacturing_fab_intake_check . --json reports/manufacturing/fab_intake.json"
         # THE STAGE-4 BOUNDARY, ASKED BY THE STEP THAT SPENDS THE MASK SET.
         # `stage4_compliance` is the end-of-stage gate the README names for
@@ -7803,7 +7954,9 @@ steps:
         # steps only, and step 40 is stage5_manufacturing — outside the filter.
         # Wired onto any stage4 step (37.5ic, 38, 39 are the tempting ones) it
         # would re-enter itself without bound, which is why it is not.
-        - advisory_program_exit_zero: "stage4_compliance ."
+        - advisory_program_exit_zero:
+              command: "stage4_compliance ."
+              advisory_reason: "NOT-YET-CLEAN: this gate CAN refuse and is wired advisory as a ratchet position, not as a verdict. Notch measured rc 1 on a real spm run (2026-08-31): it REFUSES TODAY on real input; the advisory slot is currently swallowing a live finding. Promote to blocking once this run is clean. It reported: STRUCTURAL MEASUREMENT: registered=null invoked=null no_verdict=null — the structural-RTL umbrella was NOT ASKED to run in this invocation, so this re"
     blocks_on: [38]
     notes: |
       External step. Plugin records lot id, mask set version, and

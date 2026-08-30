@@ -201,10 +201,31 @@ _GATE_SLOTS = ("program_exit_zero", "optional_program_exit_zero",
 # `[ \t]` and not `\s`: `\s` crosses newlines, so a bare `ENFORCEMENT:` at the
 # end of one line would bind to a `blocking` that is prose on the next.
 # Measured over all 120 in-flow gates: anchoring changes no gate's verdict.
-_DECL_RE = re.compile(
-    r"""^[ \t]*(?:\#[ \t]*)?(?:["']{1,3}[ \t]*)?"""
-    r"""ENFORCEMENT:[ \t]*(blocking|advisory)\b""",
-    re.IGNORECASE | re.MULTILINE)
+#: THE ANCHORED-DECLARATION SHAPE, SPELT ONCE (2026-08-30).
+#: The prefix set above is a RULE, and a rule that is re-typed at a second
+#: declaration token is a rule with two values. `advisory_clause_states_its_
+#: reason` reads an `ADVISORY_REASON:` declaration and must read it by the same
+#: rule this file already applies to `ENFORCEMENT:` — including the #886
+#: anchoring that keeps prose from counting — so the shape is a BUILDER here
+#: and the token is its argument. Nothing about `ENFORCEMENT:` changes: the
+#: pattern this produces for it is byte-for-byte the one it replaced, which
+#: `test_declaration_shape_is_spelt_once` pins.
+def declaration_re(token: str, value: str) -> "re.Pattern[str]":
+    """A compiled matcher for `<TOKEN>: <value>` as a DECLARATION.
+
+    A declaration OPENS its line, allowing only what can legitimately precede
+    it: indentation, a `#` comment marker, or the quote that opens a one-line
+    docstring. Backticks are deliberately excluded — in this repo they are how
+    a docstring quotes a token while talking ABOUT it, and reading that as a
+    declaration is #886.
+    """
+    return re.compile(
+        r"""^[ \t]*(?:\#[ \t]*)?(?:["']{1,3}[ \t]*)?"""
+        + re.escape(token) + r""":[ \t]*""" + value,
+        re.IGNORECASE | re.MULTILINE)
+
+
+_DECL_RE = declaration_re("ENFORCEMENT", r"(blocking|advisory)\b")
 # The second channel: intent stated in the JSON the gate emits. Captures the
 # WHOLE right-hand side, not just a leading string literal — see
 # `declared_intent` for why a value-only match reads a conditional expression
@@ -272,7 +293,14 @@ def _walk_clauses(node, out: List[dict], section: Optional[str] = None) -> None:
                 # `condition_files_exist:`).
                 cmd = val.get("command") if isinstance(val, dict) else val
                 name = _first_token(cmd) if isinstance(cmd, str) else None
+                # `clause` is the clause MAPPING as written, or `{}` for the
+                # bare-string form. Carried so a caller can read a per-clause
+                # key -- `absent_condition_reason`, `advisory_reason` -- without
+                # opening the YAML a second time with a second walk. An
+                # ADDITIVE key: every existing consumer reads this dict by
+                # name, and none enumerates its keys.
                 out.append({"slot": key, "gate": name, "command": cmd,
+                            "clause": val if isinstance(val, dict) else {},
                             "section": section,
                             "dispatchable": section == DISPATCHED_SECTION})
             _walk_clauses(val, out, section)

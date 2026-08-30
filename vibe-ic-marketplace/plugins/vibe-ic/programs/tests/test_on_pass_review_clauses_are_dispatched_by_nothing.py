@@ -290,8 +290,17 @@ def test_the_disclosure_reaches_the_console_on_both_paths(capsys, tmp_path):
         for sub in ((st.get("gate") or {}).get("all_of") or []):
             if isinstance(sub, dict):
                 for k, v in list(sub.items()):
-                    if isinstance(v, str) and v.startswith("stage_on_pass_review"):
-                        moved.append(sub.pop(k))
+                    # BOTH legal clause shapes. `_evaluate_gate` accepts a bare
+                    # command STRING or the dict form `{command: ...}`, and a
+                    # clause carrying `advisory_reason:` must be the dict form.
+                    # Matching only the string form made this walk find nothing,
+                    # so the test failed on its own setup assertion instead of
+                    # on the disclosure it exists to prove.
+                    cmd_v = v.get("command") if isinstance(v, dict) else v
+                    if (isinstance(cmd_v, str)
+                            and cmd_v.startswith("stage_on_pass_review")):
+                        sub.pop(k)
+                        moved.append(cmd_v)
     assert moved, "no on-pass clause found under `steps:` to move back"
     for cmd in moved:
         sid = cmd.split("--stage ", 1)[1].split()[0]

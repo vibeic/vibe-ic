@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 1234
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1234)
+- **Total programs (excluding helpers / shims):** 1236
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1236)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 1225 |
+| `any` | 1227 |
 
 ## Alphabetical listing
 
@@ -34,6 +34,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `achieved_period_recorded_check` | any | — | "asked" and "reached" must both be on disk. |
 | `adder_map_techmap` | any | — | make a DECLARED adder techmap actually bind, and never claim it bound without evidence from yosys's own log. |
 | `adversarial_agent` | any | — | a role whose objective is to make PASS a lie. #1119. |
+| `advisory_clause_states_its_reason` | any | — | an advisory gate must say WHY it is advisory. |
 | `afdx_protocol_synth` | any | — | AFDX / ARINC 664 Part 7 protocol synth helper. |
 | `agent_checkin_scope_guard` | any | — | role-based check-in (commit) path-scope gate. |
 | `agent_report_presence_check` | any | — | verify the project ships a structured top-level AGENT_REPORT.md summarising what the run delivered. |
@@ -529,6 +530,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `ic_expert_db_consistency_check` | any | — | gate: the IC Expert DB stays an ADVISORY knowledge layer that is CONSISTENT with (never contradicts) the deterministic gate/program layer... |
 | `ic_expert_db_health_audit` | any | — | periodic HEALTH audit of the IC Expert DB (beyond the ship-blocking consistency gate). |
 | `ic_expert_db_query` | any | — | GENERAL-CORE retrieval over the IC Expert DB. |
+| `ic_release_docs_gen` | any | — | the PRODUCT documents for a signed-off die. |
 | `iface_conformance_v2` | any | — | prompt→interface conformance gate (ORGANIC #695). |
 | `image_gated_verification_check` | any | — | a skip is green, and 13 of them are a hole (vibe-ic#1128). |
 | `infiniband_protocol_synth` | any | — | InfiniBand Architecture (IBTA) protocol synth helper. |
@@ -1306,7 +1308,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (1225 programs)
+### `any` (1227 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `absence_verdict_names_its_search_space_check` — "not found" must say WHERE it looked.
@@ -1317,6 +1319,7 @@ _(no programs in this group)_
 - `achieved_period_recorded_check` — "asked" and "reached" must both be on disk.
 - `adder_map_techmap` — make a DECLARED adder techmap actually bind, and never claim it bound without evidence from yosys's own log.
 - `adversarial_agent` — a role whose objective is to make PASS a lie. #1119.
+- `advisory_clause_states_its_reason` — an advisory gate must say WHY it is advisory.
 - `afdx_protocol_synth` — AFDX / ARINC 664 Part 7 protocol synth helper.
 - `agent_checkin_scope_guard` — role-based check-in (commit) path-scope gate.
 - `agent_report_presence_check` — verify the project ships a structured top-level AGENT_REPORT.md summarising what the run delivered.
@@ -1807,6 +1810,7 @@ _(no programs in this group)_
 - `ic_expert_db_consistency_check` — gate: the IC Expert DB stays an ADVISORY knowledge layer that is CONSISTENT with (never contradicts) the deterministic gate/program layer...
 - `ic_expert_db_health_audit` — periodic HEALTH audit of the IC Expert DB (beyond the ship-blocking consistency gate).
 - `ic_expert_db_query` — GENERAL-CORE retrieval over the IC Expert DB.
+- `ic_release_docs_gen` — the PRODUCT documents for a signed-off die.
 - `iface_conformance_v2` — prompt→interface conformance gate (ORGANIC #695).
 - `image_gated_verification_check` — a skip is green, and 13 of them are a hole (vibe-ic#1128).
 - `infiniband_protocol_synth` — InfiniBand Architecture (IBTA) protocol synth helper.
