@@ -617,3 +617,64 @@ def test_the_fixture_is_what_provenance_says_it_is():
                if p.is_file() and p.name != "PROVENANCE.json"}
     assert on_disk == seen, (
         f"undeclared fixture file(s): {sorted(str(p) for p in on_disk - seen)}")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# the interface is read out of CODE, not out of a retired-interface note
+# ─────────────────────────────────────────────────────────────────────────────
+#
+# `_NETLIST_PORT_RE` is `^[ \t]*(input|output|inout)\b ... [;,]`. A `//` prefix
+# breaks that anchor, but a `/* ... */` block does not: a line inside one starts
+# at column 0 like any other. R2 compares these names against the pins the
+# intent declared, so a port that exists only in a comment is either a pin the
+# netlist appears to build and does not, or an "extra port" reported against a
+# netlist that has none.
+#
+# Both cases are PAIRED with the same declaration uncommented, so a fix that
+# stopped finding ports would fail the control.
+
+sys.path.insert(0, str(PROGRAMS))
+import stage_on_pass_review as _sopr  # noqa: E402
+
+_BODY_WITH_A_RETIRED_NOTE = """
+input  clk;
+output done;
+/* retired in rev C, kept for the record:
+input  phantom_clk;
+output phantom_done;
+*/
+"""
+
+
+def test_a_port_declared_only_inside_a_block_comment_is_not_a_port():
+    ports = _sopr.netlist_port_directions(_BODY_WITH_A_RETIRED_NOTE)
+    assert set(ports) == {"clk", "done"}, (
+        f"a /* */ note was read as a port declaration: {sorted(ports)}")
+
+
+def test_control_the_same_ports_uncommented_are_found():
+    """The pair. Without it, `return {}` satisfies the case above."""
+    live = _BODY_WITH_A_RETIRED_NOTE.replace(
+        "/* retired in rev C, kept for the record:\n", "").replace("*/\n", "")
+    ports = _sopr.netlist_port_directions(live)
+    assert set(ports) == {"clk", "done", "phantom_clk", "phantom_done"}
+    assert ports["phantom_clk"] == "input"
+    assert ports["phantom_done"] == "output"
+
+
+def test_a_line_comment_after_a_real_declaration_does_not_lose_it():
+    """Stripping must not reach past the declaration it trails."""
+    ports = _sopr.netlist_port_directions(
+        "input  clk;   // the only clock\noutput done;  // pulse\n")
+    assert ports == {"clk": "input", "done": "output"}
+
+
+def test_the_strip_is_idempotent_on_the_live_caller_path(tmp_path):
+    """`read_netlist_interface` already hands over a stripped body, so this
+    call changes nothing on the live path -- asserted, not assumed."""
+    nl = tmp_path / "netlist.v"
+    nl.write_text("module top (clk, done);\n" + _BODY_WITH_A_RETIRED_NOTE +
+                  "endmodule\n")
+    got = _sopr.read_netlist_interface(nl)
+    assert got["readable"] is True and got["top"] == "top"
+    assert got["port_names"] == ["clk", "done"]

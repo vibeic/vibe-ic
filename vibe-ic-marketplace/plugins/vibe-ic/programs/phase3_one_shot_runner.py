@@ -37990,8 +37990,17 @@ def _blackbox_scope_to_netlists(hits: List[str], container: str,
         if txt is None:
             kept.append(h)          # unreadable -> cannot judge -> keep
             continue
+        # READ CODE, NOT COMMENTS. A PDK blackbox file opens with a license
+        # BLOCK comment, and `^\s*module` -- `\s` spans newlines -- matches a
+        # line inside one. A header narrating `module <the cell this file
+        # holds>` mints that very name, `mods & instantiated` is then true for
+        # a file the netlist never instantiates, and the narrowing this
+        # function exists for silently reverts to loading every family the PDK
+        # ships. The malformed SRAM blackbox comes back with it and yosys
+        # exits 1, which is the failure v1.12.74 was landed to remove.
+        code = _strip_v_comments(txt)
         mods = {m.group(1).lstrip("\\")
-                for m in _BLACKBOX_MODULE_RE.finditer(txt)}
+                for m in _BLACKBOX_MODULE_RE.finditer(code)}
         if not mods or (mods & instantiated):
             kept.append(h)
         else:

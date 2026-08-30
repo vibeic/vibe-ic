@@ -404,3 +404,126 @@ def test_the_real_corpus_prompt_that_was_misrouted():
     assert v["nature"] == "spec_generation", (
         f"Prob042_vector4 is a build-this spec and was routed {v['nature']!r} "
         f"via {v['source']!r}")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# a module QUOTED INSIDE A COMMENT is a description of RTL, not RTL
+# ─────────────────────────────────────────────────────────────────────────────
+#
+# `_MODULE_HEAD` is `^[ \t]*module\b[^;]{0,4000};`. A `//` prefix breaks the
+# anchor; a `/* ... */` block does not, because a line inside one starts at
+# column 0 like any other. So a prompt that quotes an old interface to say "do
+# not reuse this" reads as a prompt that CARRIES a module -- and
+# `prompt_embeds_rtl` is the positive half of the router's `needs_ai_parse`
+# condition and the disarm for the "no existing RTL was supplied" warning.
+# A prompt with no RTL in it then routes as though it had some.
+#
+# Paired throughout: every commented case has the same text uncommented, which
+# must still read as embedded.
+
+_QUOTED_IN_A_BLOCK_COMMENT = """Design a 4-bit counter with synchronous reset.
+
+For reference only, the interface we are REPLACING looked like this:
+/*
+module old_counter (input clk, input rst, output [3:0] q);
+  always @(posedge clk) q <= q + 1;
+endmodule
+*/
+
+Do not reuse it. Write the new module from the description above.
+"""
+
+
+def test_a_module_quoted_inside_a_block_comment_is_not_embedded_rtl():
+    assert tnr.prompt_embeds_rtl(_QUOTED_IN_A_BLOCK_COMMENT) is False, (
+        "a module body inside /* */ was read as RTL the prompt carries")
+
+
+def test_control_the_same_module_uncommented_IS_embedded_rtl():
+    """The pair. Without it, `return False` satisfies the case above."""
+    live = _QUOTED_IN_A_BLOCK_COMMENT.replace("/*\n", "").replace("*/\n", "")
+    assert tnr.prompt_embeds_rtl(live) is True, (
+        "a real embedded module stopped being found -- the strip has blinded "
+        "the reader rather than sharpened it")
+
+
+def test_a_line_comment_above_a_real_module_does_not_lose_it():
+    """Stripping `//` must not reach past the line it is on."""
+    assert tnr.prompt_embeds_rtl(
+        "// the module below is the one to fix\n"
+        "module m (input a, output y);\n  assign y = a;\nendmodule\n") is True
+
+
+def test_the_warning_the_verdict_drives_follows_the_corrected_reading():
+    """Not a property of the helper in isolation: the routed verdict moves.
+
+    A commented quotation must leave the router saying the RTL is absent; the
+    same text uncommented must not."""
+    quoted = tnr.classify_task_nature(
+        "Fix any and all bugs in this code.\n" + _QUOTED_IN_A_BLOCK_COMMENT,
+        False, None)
+    live = tnr.classify_task_nature(
+        "Fix any and all bugs in this code.\n"
+        + _QUOTED_IN_A_BLOCK_COMMENT.replace("/*\n", "").replace("*/\n", ""),
+        False, None)
+    assert quoted["needs_ai_parse"] is True, quoted
+    assert live["needs_ai_parse"] is False, live
+
+
+# ── the corpus control, at scale ────────────────────────────────────────────
+#
+# The risk this fix carries is not that it fails to strip -- it is that
+# stripping goes blind to RTL a prompt really does carry. Measured over the
+# real prompts on the author's machine (302 CVDP + 156 VerilogEval-Human) the
+# verdict is IDENTICAL for every one: 86 and 4 embed, before and after. This
+# pins that sweep wherever the corpus is mounted, and skips with an actionable
+# reason where it is not, rather than passing over a file nobody opened.
+
+def _sweep_prompts():
+    """(id, text) for every real prompt this machine can supply."""
+    import json
+    rows = []
+    ve = corpus_path("_extbench/verilog-eval/dataset_code-complete-iccad2023")
+    if ve.is_dir():
+        for f in sorted(ve.glob("*_prompt.txt")):
+            rows.append((f.name, f.read_text(errors="replace")))
+    for cand in (corpus_path("cvdp_dataset.jsonl"),
+                 corpus_path("_extbench/cvdp/cvdp_dataset.jsonl")):
+        if not cand.is_file():
+            continue
+        with cand.open(errors="replace") as fh:
+            for line in fh:
+                try:
+                    d = json.loads(line)
+                except ValueError:
+                    continue
+                v = d.get("input") or d.get("prompt")
+                if isinstance(v, dict):
+                    v = v.get("prompt") or v.get("question")
+                if isinstance(v, str) and v.strip():
+                    rows.append((str(d.get("id", "?")), v))
+        break
+    return rows
+
+
+def test_stripping_changes_no_verdict_on_the_real_prompt_corpus():
+    rows = _sweep_prompts()
+    if len(rows) < 50:
+        pytest.skip("real prompt corpus absent; set $VIBEIC_CORPUS_ROOT to the "
+                    "external benchmark corpus root")
+    head = tnr._MODULE_HEAD
+    end = tnr._ENDMODULE
+
+    def raw_reading(t):
+        h = head.search(t)
+        return h is not None and end.search(t, h.end()) is not None
+
+    embeds = [pid for pid, t in rows if tnr.prompt_embeds_rtl(t)]
+    assert embeds, (
+        f"{len(rows)} prompts and not one reads as embedding RTL -- the "
+        f"corpus is the wrong shape, so a green here would be vacuous")
+    lost = [pid for pid, t in rows
+            if raw_reading(t) and not tnr.prompt_embeds_rtl(t)]
+    assert lost == [], (
+        f"{len(lost)} of {len(rows)} real prompts stopped reading as embedded "
+        f"once comments were stripped: {lost[:10]}")

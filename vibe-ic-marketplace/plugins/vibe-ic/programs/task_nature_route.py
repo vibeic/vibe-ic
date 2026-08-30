@@ -43,6 +43,12 @@ import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+# ONE stripper, not a fourth copy. `_design_module_set.strip_comments` is the
+# tree's Verilog comment remover and already backs the module-set readers.
+import _design_module_set as _dms  # noqa: E402
+
 # ── The five natures → the normal plugin entry each one takes ────────────────
 # `route` is coarse: `phase1_entry` (Phase-1 owns spec→RTL) vs `plugin_loop`
 # (a different normal plugin loop owns the transform). `plugin_entry` carries
@@ -539,10 +545,20 @@ def prompt_embeds_rtl(prompt: str) -> bool:
 
     So this promotes a HINTED transform out of a warning that is false for it.
     It never turns an unhinted request into a transform.
+
+    COMMENTS ARE NOT RTL. The question is whether the prompt CARRIES a module
+    body, and a prompt that quotes one inside `/* ... */` to say "the old
+    interface was this, do not reuse it" carries a description of RTL, not
+    RTL -- `^[ \t]*module\b` matches a line inside the block just the same.
+    Read the same way the flow reads every other HDL text: comments removed
+    first. MEASURED over the 458 real prompts on this machine (302 CVDP, 156
+    VerilogEval-Human) the verdict is unchanged for every one -- 86 and 4
+    embed, before and after -- so this closes the class without narrowing what
+    is still found.
     """
-    text = prompt or ""
-    head = _MODULE_HEAD.search(text)
-    return head is not None and _ENDMODULE.search(text, head.end()) is not None
+    clean = _dms.strip_comments(prompt or "")
+    head = _MODULE_HEAD.search(clean)
+    return head is not None and _ENDMODULE.search(clean, head.end()) is not None
 
 
 def classify_task_nature(prompt: str,
