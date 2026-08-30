@@ -66,7 +66,16 @@ export const REQUIRED_METRICS = {
   // Yosys cell count — a synthesis that mapped nothing has no cell count.
   synthesis: [{ key: "cells" }],
   // OpenROAD slack; `timing_met` null means the slack line was never found.
-  place_and_route: [{ key: "slack_ns" }, { key: "timing_met" }],
+  // area_um2 / utilization_pct: the TIMING half of this entry was protected and
+  // the AREA half was not. eda_pnr's own verdict is `complete && !hasZeroNet`,
+  // which does not mention area either, so an area that failed to parse reached
+  // the manifest as `status:"PASS", area_um2:null` — and area is half of what
+  // place_and_route exists to report. Both are read from the same
+  // `report_design_area` line, so absent means that line was never printed.
+  place_and_route: [
+    { key: "slack_ns" }, { key: "timing_met" },
+    { key: "area_um2" }, { key: "utilization_pct" },
+  ],
   // KLayout cell count of the written stream -- AND the placed-instance count of
   // the design's own top cell. `cells` alone is ~98% PDK library (456 for a real
   // 28-instance chip, 447 for the same DEF with COMPONENTS emptied), so it was

@@ -1988,8 +1988,14 @@ exit`;
       dr_retried = true;
     }
 
-    const areaMatch = pnrRun.output.match(/Design area (\d+)/);
-    const utilMatch = pnrRun.output.match(/(\d+)% utilization/);
+    // area_um2 is a REQUIRED metric for place_and_route, so it must be read as
+    // printed: `/Design area (\d+)/` truncates `269.5` to 269 and cannot see an
+    // exponent at all, which is the same silent-magnitude hazard the PSM power
+    // number carries. Whole-line anchored, decimal- and exponent-aware.
+    const areaMatch = pnrRun.output.match(
+      /^[ \t]*Design area[ \t]+([-+]?(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?)[ \t]*u/mi);
+    const utilMatch = pnrRun.output.match(
+      /([-+]?(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?)[ \t]*% utilization/i);
     const slackMatch = pnrRun.output.match(/([\d.-]+)\s+slack \((MET|VIOLATED)\)/);
     // The PNR_COMPLETE sentinel is KEPT, but it is no longer load-bearing on
     // its own. MEASURED: in the old stdin mode a fully-failed script printed
@@ -2007,8 +2013,8 @@ exit`;
 
     const metrics = {
       success: complete && !hasZeroNet,
-      area_um2: areaMatch ? parseInt(areaMatch[1]) : null,
-      utilization_pct: utilMatch ? parseInt(utilMatch[1]) : null,
+      area_um2: areaMatch ? parseFloat(areaMatch[1]) : null,
+      utilization_pct: utilMatch ? parseFloat(utilMatch[1]) : null,
       slack_ns: slackMatch ? parseFloat(slackMatch[1]) : null,
       timing_met: slackMatch ? slackMatch[2] === "MET" : null,
       def_file: output_def,
