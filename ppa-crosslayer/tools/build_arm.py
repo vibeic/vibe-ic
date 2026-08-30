@@ -124,7 +124,10 @@ def main(argv=None) -> int:
     ptcl = proj / "reports" / "phase3" / "power_spm.tcl"
     if prpt.is_file():
         rep = ppower.read_power_report(prpt)
-        stage, why = "unknown", []
+        # None, never the word "unknown": the note below already reports
+        # "stage NOT_MEASURED, not guessed", and a scope value that spells the
+        # guess anyway compares equal to every other unguessed stage.
+        stage, why = None, []
         if ptcl.is_file():
             tcl = ptcl.read_text(errors="replace")
             reads_spef = "read_spef" in tcl

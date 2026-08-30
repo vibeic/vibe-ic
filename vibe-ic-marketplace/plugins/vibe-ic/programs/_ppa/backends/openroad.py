@@ -203,7 +203,8 @@ class RecordError(ValueError):
 def _record(metric: str, status: str, unit: str, scope: Dict[str, Any],
             source: Dict[str, Any], *,
             value: Any = None, reason: Optional[str] = None,
-            formula: Optional[str] = None) -> Dict[str, Any]:
+            formula: Optional[str] = None,
+            scope_gaps: Optional[Dict[str, str]] = None) -> Dict[str, Any]:
     """Build one `vibeic.ppa.metric.v1` record, refusing the shapes §2 forbids.
 
     The rules enforced here, each because its opposite is what a hurried author
@@ -243,6 +244,12 @@ def _record(metric: str, status: str, unit: str, scope: Dict[str, Any],
         "scope": dict(scope),
         "source": dict(source),
     }
+    if scope_gaps:
+        # A scope key this artefact could not establish is ABSENT, and the
+        # reason for its absence is recorded HERE -- outside `scope`, where it
+        # cannot make two records compare equal (§2, and `_ppa/timing._gaps_for`
+        # is the same convention in the sibling producer).
+        rec["scope_gaps"] = dict(sorted(scope_gaps.items()))
     if status in _STATUS_WITH_VALUE:
         rec["value"] = value
     else:
@@ -721,16 +728,33 @@ def _emit_design_area_report(o: ParseOutcome, e: _LogEmitter, text: str) -> None
         e.absent("utilization.design_report.pct", "%", sc, "design_area_report",
                  "`Design area N um^2 P% utilization` line")
         return
-    fill = "unknown"
+    # THE FILL STATE IS OMITTED WHEN THE LOG DOES NOT STATE IT, never spelled
+    # `"unknown"`. The docstring above is right that this figure means one thing
+    # before filler insertion and another after, and that `scope` is what keeps
+    # it away from the others -- but a placeholder word defeats exactly that:
+    # `"unknown" == "unknown"`, so two runs whose fill state nobody could read
+    # compared as two runs filled the SAME WAY, and `_ppa/metrics.validate` had
+    # no spelling of SCOPE_SENTINEL that could see a word. MEASURED before this
+    # change: 16 of the 22 `area.design_report.um2` records over the 15 distinct
+    # `openroad.log` artefacts on this host carried `fill: "unknown"`.
+    gaps: Dict[str, str] = {}
+    fill_kw: Dict[str, Any] = {}
     if filler is not None:
-        fill = "post_fill" if filler.start() < m.start() else "pre_fill"
-    sc_area = _scope("post_route", fill=fill)
-    sc_util = _scope("post_route", fill=fill, rounding="integer")
+        fill_kw["fill"] = ("post_fill" if filler.start() < m.start()
+                           else "pre_fill")
+    else:
+        gaps["fill"] = ("the log states no `[INFO DPL-` filler line, so whether "
+                        "this area was reported before or after filler "
+                        "insertion is unrecorded")
+    sc_area = _scope("post_route", **fill_kw)
+    sc_util = _scope("post_route", rounding="integer", **fill_kw)
     src = e._source(n)
     o.records.append(_record("area.design_report.um2", "MEASURED", "um^2",
-                             sc_area, src, value=_f(m.group(1))))
+                             sc_area, src, value=_f(m.group(1)),
+                             scope_gaps=gaps))
     o.records.append(_record("utilization.design_report.pct", "MEASURED", "%",
-                             sc_util, src, value=_f(m.group(2))))
+                             sc_util, src, value=_f(m.group(2)),
+                             scope_gaps=gaps))
 
 
 def _emit_route(o: ParseOutcome, e: _LogEmitter, text: str) -> None:

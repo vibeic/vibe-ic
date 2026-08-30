@@ -81,6 +81,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Tuple
 
 from . import identity as ident
+from . import metrics as _metrics
 from . import provenance as prov
 from .canonical_json import digest_of
 
@@ -274,8 +275,18 @@ def resolve_metric_conflict(records: Sequence[Mapping[str, Any]]
         if rank is None:
             return None, []
         ranked.append((rank, dict(rec)))
-    if len({(r.get("status"), (r.get("unit") or "").lower(),
-             digest_of(r.get("value"))) for _, r in ranked}) < 2:
+    # AGREEMENT IS ASKED WITH THE INDEX'S OWN PREDICATE, not a second copy of
+    # it. Until v1.11.70 this compared `digest_of(value)`, which spells
+    # `14246.0` and `14246` differently while `metrics.states_the_same_fact`
+    # -- the function that decides whether the index REFUSES the pair --
+    # compares them with `==` and calls them one measurement. So a group the
+    # index had already accepted as corroboration arrived here, was declared a
+    # conflict, and had a perfectly agreeing reading "overridden". MEASURED on
+    # the 30 PnR run trees on this host: 5 of 22 collapsed groups were of that
+    # kind, every one an integral float from the log against an int from the
+    # JSON. One question, one reader.
+    first = ranked[0][1]
+    if all(_metrics.states_the_same_fact(first, rec) for _, rec in ranked[1:]):
         return None, []          # they agree: corroboration, not a conflict
 
     # ONLY A READING THAT CARRIES A NUMBER CAN WIN. An artefact that could not

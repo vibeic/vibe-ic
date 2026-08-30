@@ -252,3 +252,119 @@ def test_the_overridden_silence_is_recorded_without_a_null_value(tmp_path):
     assert lost[0]["status"] == "NOT_MEASURED"
     assert "value" not in lost[0]
     assert lost[0]["reason"]
+
+
+# ── The declaration and the index must answer ONE question the same way ─────
+#
+# `test_agreement_is_not_a_resolution` above states the rule and its fixture
+# writes both readings as ints, so it could not see the spelling the producers
+# actually emit: the log's `Total wire length = 14246 um.` parses to the float
+# 14246.0 and `openroad.metrics.json` carries the int 14246. `MetricIndex`
+# calls those one measurement -- `_ppa/metrics.states_the_same_fact` compares
+# with `==` and says so in a comment naming this exact case -- and until
+# v1.11.70 `resolve_metric_conflict` compared `digest_of(value)`, which spells
+# them differently, so it collapsed a pair the index had already ACCEPTED as
+# corroboration and recorded an override that never happened.
+#
+# MEASURED over the 30 PnR run trees on this host: 22 groups collapsed, 17 of
+# them real conflicts and 5 of them this. No published number moved -- the two
+# readings are numerically equal -- but 5 record sets lost a corroborating
+# source and gained a `METRIC_AUTHORITY_RESOLVED` note for a disagreement that
+# did not exist.
+
+#: The same run, written the way the two artefacts really spell an AGREEMENT.
+LOG_AGREEING = """\
+OpenROAD 26Q3-1535-g543c33894f
+PNR_STAGE: detailed_route
+[INFO DRT-0195] Start 4th optimization iteration.
+Total wire length = 14246 um.
+Total number of vias = 4159.
+[INFO DRT-0267] cpu time = 00:02:08, elapsed time = 00:00:19
+"""
+
+METRICS_JSON_AGREEING = """\
+{
+ "detailedroute__route__wirelength": 14246,
+ "detailedroute__route__vias": 4159
+}
+"""
+
+
+def _run_agreeing(tmp_path):
+    d = tmp_path / "pnr_agree"
+    d.mkdir()
+    (d / "openroad.log").write_text(LOG_AGREEING)
+    (d / "openroad.metrics.json").write_text(METRICS_JSON_AGREEING)
+    return d
+
+
+def _resolutions(out):
+    """Every METRIC_AUTHORITY_RESOLVED note this document reports.
+
+    Read out of `diagnostics`, which is where `ParseOutcome.note` files them.
+    The first spelling of this helper looked in a `notes` key the document does
+    not have, so it found nothing on every input and the assertion below could
+    not fail -- hence `test_a_resolution_really_is_reported_when_one_happens`,
+    which is this reader's positive control.
+    """
+    return [n for n in (out.document().get("diagnostics") or [])
+            if n.get("code") == "METRIC_AUTHORITY_RESOLVED"]
+
+
+def test_a_resolution_really_is_reported_when_one_happens(tmp_path):
+    """The positive control for `_resolutions`. On the CONFLICTING fixture the
+    declaration does settle three metrics, so a reader that returns [] here is
+    broken rather than reassuring."""
+    out = oro.parse_run(_run(tmp_path))
+    assert sorted(n["metric"] for n in _resolutions(out)) == sorted(_SETTLED)
+
+
+def test_an_integral_float_is_not_a_disagreement():
+    """14246.0 and 14246 are one measurement written two ways.
+
+    Asked of the declaration directly. `metrics.states_the_same_fact` is the
+    function whose answer decides whether the INDEX refuses the pair, so a
+    declaration that answered differently would be settling something the index
+    never called a conflict.
+    """
+    a = {"metric": "route.wirelength.um", "status": "MEASURED", "unit": "um",
+         "value": 14246, "source": {"kind": "metrics_json"}}
+    b = {"metric": "route.wirelength.um", "status": "MEASURED", "unit": "um",
+         "value": 14246.0, "source": {"kind": "log"}}
+    # The index's own answer first, so this test cannot pass by both layers
+    # being wrong in the same new way.
+    assert M.states_the_same_fact(a, b) is True
+    assert C.resolve_metric_conflict([a, b]) == (None, [])
+
+
+def test_a_corroborating_pair_is_not_collapsed_and_reports_no_override(tmp_path):
+    """At the seam that does the collapsing, on a run whose two artefacts agree.
+
+    Both readings must survive with their own `source.path`, neither may carry
+    `overridden_by_authority`, and no resolution may be reported -- a
+    corroborating second source is EVIDENCE, and filing it as a loser says two
+    artefacts disagreed when they did not.
+    """
+    out = oro.parse_run(_run_agreeing(tmp_path))
+    wl = _by(out.records, "route.wirelength.um")
+    vias = _by(out.records, "route.via.count")
+    # NOT VACUOUS: two artefacts really were read, and they really do agree.
+    assert sorted(r["source"]["kind"] for r in wl) == ["log", "metrics_json"]
+    assert {r["value"] for r in wl} == {14246, 14246.0}
+    assert sorted(r["source"]["kind"] for r in vias) == ["log", "metrics_json"]
+
+    for rec in wl + vias:
+        assert "overridden_by_authority" not in rec["source"], rec["source"]
+        assert "authority" not in rec["source"], rec["source"]
+    assert _resolutions(out) == [], _resolutions(out)
+
+    # ...and the index accepts both, which is the answer this must not differ
+    # from: corroboration, not a conflict.
+    index = M.MetricIndex()
+    refused = []
+    for rec in out.records:
+        try:
+            index.add(rec)
+        except M.MetricError as exc:
+            refused.append((exc.code, rec["metric"]))
+    assert refused == [], refused

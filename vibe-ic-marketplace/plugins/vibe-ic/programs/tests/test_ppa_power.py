@@ -174,13 +174,29 @@ def test_two_unstated_bases_are_not_a_match():
     an activity model. Letting UNSTATED match UNSTATED would make "not measured"
     a value that participates in arithmetic — the numeric-sentinel defect §2
     forbids, one level up.
+
+    THE RULE IS UNCHANGED AND THIS TEST IS STRICTER THAN IT WAS. It used to
+    assert `scope.activity_basis == UNSTATED`, which relied on
+    `comparable()` recognising that particular word. But `"UNSTATED" ==
+    "UNSTATED"`, so anything reading `scope` WITHOUT going through
+    `comparable()` — `_ppa/benchmark.check_scope_parity` did exactly this, and
+    granted parity — saw two matching bases. Since v1.11.71 the key is ABSENT
+    when the artefact stated nothing, which no reader can mistake for a match,
+    and the reason lives in `scope_gaps` where it cannot make anything compare
+    equal. Both halves are asserted here, plus the refusal that was asserted
+    before.
     """
     a = pw.total_record(pw.parse_power_report(_rpt(None)),
                         stage="post_route", scenario="functional")
     lower = _TABLE.replace("1.65e-03 100.0%", "1.20e-03 100.0%")
     b = pw.total_record(pw.parse_power_report(_rpt(None, table=lower)),
                         stage="post_route", scenario="functional")
-    assert a["scope"]["activity_basis"] == pw.BASIS_UNSTATED
+    assert "activity_basis" not in a["scope"], (
+        f"an unstated basis is back in scope as "
+        f"{a['scope']['activity_basis']!r}, where it compares EQUAL to the next "
+        "record that stated nothing either")
+    assert "activity_basis" in (a.get("scope_gaps") or {}), (
+        "the key was dropped without a word about why")
     out = pw.compare_total_power(a, b)
     assert out["verdict"] == pw.V_UNDETERMINED, out
     assert "unknown" in out["reason"]

@@ -4,7 +4,12 @@
   "title": "vibeic.ppa.metric.v1 — the canonical PPA metric record",
   "description": "The shape every number in the PPA system travels in, frozen in docs/PPA_INTERFACES.md section 2. THE INVARIANT THIS SCHEMA EXISTS TO ENFORCE: 0, -1 and \"\" never mean 'not measured'. A number that was not obtained is a record with status NOT_MEASURED and a reason, and it carries NO `value` key -- not `value: null`, which survives .get() as a present key and re-enters arithmetic as `or 0`. SECOND INVARIANT: comparability is a property of `scope`, not of the metric name; two records naming the same metric under different scope are different facts. This file is versioned by filename: v1 is never edited once something has hashed against it, and a change is v2 (PPA_INTERFACES section 5). The authoritative ENFORCER is programs/_ppa/metrics.py::validate, which is dependency-free; test_ppa_metrics_schema_agreement.py proves the two agree on one fixture corpus, so this document can never drift into decoration.",
   "type": "object",
-  "required": ["schema", "metric", "status", "scope"],
+  "required": [
+    "schema",
+    "metric",
+    "status",
+    "scope"
+  ],
   "properties": {
     "schema": {
       "description": "First key of every instance document.",
@@ -17,7 +22,14 @@
     },
     "status": {
       "description": "Section 6.2. The enum is CLOSED: a reader that does not recognise a status cannot know whether the row may enter arithmetic, so an unknown one is refused rather than assumed safe. MEASURED and DERIVED may enter a numeric comparison; NOT_MEASURED, NOT_APPLICABLE and INVALID may not and carry a reason instead of a value; ESTIMATED carries a value but is never part of a final PPA claim -- it stays a distinct status rather than being banned so that an estimate which leaked into a bundle is VISIBLE as an estimate instead of being relabelled MEASURED by whoever wanted the row to count.",
-      "enum": ["MEASURED", "NOT_MEASURED", "NOT_APPLICABLE", "INVALID", "ESTIMATED", "DERIVED"]
+      "enum": [
+        "MEASURED",
+        "NOT_MEASURED",
+        "NOT_APPLICABLE",
+        "INVALID",
+        "ESTIMATED",
+        "DERIVED"
+      ]
     },
     "value": {
       "description": "The number. Present ONLY for MEASURED, DERIVED and ESTIMATED. Never null: null is a present key, and a present key is not an absence.",
@@ -41,7 +53,9 @@
     "inputs": {
       "description": "Optional for DERIVED: the metric names this value was computed from.",
       "type": "array",
-      "items": {"type": "string"}
+      "items": {
+        "type": "string"
+      }
     },
     "basis": {
       "description": "Required for ESTIMATED: what the estimate rests on.",
@@ -49,62 +63,213 @@
       "minLength": 1
     },
     "scope": {
-      "description": "What makes two numbers comparable. Synthesis area and post-route area are different metrics; vectorless power and VCD power are different metrics; a different corner, mode or activity basis is a different fact. `stage` is the only universally required field -- corner, mode and clock fields are required by the DOMAIN that owns the metric, because a die-area record has no clock and demanding one would force a domain author to invent a value, which is how a scope field becomes decorative. Every declared field must be non-empty: an empty scope field is the third sentinel one level in, since \"\" == \"\" makes two records with an unknown corner compare as the same corner.",
+      "description": "What makes two numbers comparable. Synthesis area and post-route area are different metrics; vectorless power and VCD power are different metrics; a different corner, mode or activity basis is a different fact. `stage` is the only universally required field -- corner, mode and clock fields are required by the DOMAIN that owns the metric, because a die-area record has no clock and demanding one would force a domain author to invent a value, which is how a scope field becomes decorative. Every declared field must be non-empty: an empty scope field is the third sentinel one level in, since \"\" == \"\" makes two records with an unknown corner compare as the same corner. And a WORD for the same silence is the same defect a third time: \"unknown\" == \"unknown\" the way null == null does, while satisfying both minLength and the required-key test. A field a producer could not establish is OMITTED and named in `scope_gaps`.",
       "type": "object",
-      "required": ["stage"],
+      "required": [
+        "stage"
+      ],
       "minProperties": 1,
       "properties": {
-        "stage": {"type": "string", "minLength": 1},
-        "mode": {"type": "string", "minLength": 1},
-        "process": {"type": "string", "minLength": 1},
-        "voltage_v": {"type": "number"},
-        "temperature_c": {"type": "number"},
-        "rc_corner": {"type": "string", "minLength": 1},
-        "clock": {"type": "string", "minLength": 1},
-        "check": {"type": "string", "minLength": 1},
-        "activity_basis": {"type": "string", "minLength": 1}
+        "stage": {
+          "type": "string",
+          "minLength": 1,
+          "not": {
+            "pattern": "^[ \\t]*(?:\\-|<[Nn][Oo][Nn][Ee]>|<[Uu][Nn][Kk][Nn][Oo][Ww][Nn]>|\\?|[Nn]/[Aa]|[Nn][Aa]|[Nn][Ii][Ll]|[Nn][Oo]_[Vv][Aa][Ll][Uu][Ee]|[Nn][Oo][Nn][Ee]|[Nn][Oo][Tt]_[Ee][Ss][Tt][Aa][Bb][Ll][Ii][Ss][Hh][Ee][Dd]|[Nn][Oo][Tt]_[Ss][Pp][Ee][Cc][Ii][Ff][Ii][Ee][Dd]|[Nn][Oo][Tt]_[Ss][Tt][Aa][Tt][Ee][Dd]|[Nn][Uu][Ll][Ll]|[Tt][Bb][Dd]|[Uu][Nn][Dd][Ee][Ff][Ii][Nn][Ee][Dd]|[Uu][Nn][Dd][Ee][Tt][Ee][Rr][Mm][Ii][Nn][Ee][Dd]|[Uu][Nn][Kk][Nn][Oo][Ww][Nn]|[Uu][Nn][Ss][Pp][Ee][Cc][Ii][Ff][Ii][Ee][Dd]|[Uu][Nn][Ss][Tt][Aa][Tt][Ee][Dd])[ \\t]*$"
+          }
+        },
+        "mode": {
+          "type": "string",
+          "minLength": 1,
+          "not": {
+            "pattern": "^[ \\t]*(?:\\-|<[Nn][Oo][Nn][Ee]>|<[Uu][Nn][Kk][Nn][Oo][Ww][Nn]>|\\?|[Nn]/[Aa]|[Nn][Aa]|[Nn][Ii][Ll]|[Nn][Oo]_[Vv][Aa][Ll][Uu][Ee]|[Nn][Oo][Nn][Ee]|[Nn][Oo][Tt]_[Ee][Ss][Tt][Aa][Bb][Ll][Ii][Ss][Hh][Ee][Dd]|[Nn][Oo][Tt]_[Ss][Pp][Ee][Cc][Ii][Ff][Ii][Ee][Dd]|[Nn][Oo][Tt]_[Ss][Tt][Aa][Tt][Ee][Dd]|[Nn][Uu][Ll][Ll]|[Tt][Bb][Dd]|[Uu][Nn][Dd][Ee][Ff][Ii][Nn][Ee][Dd]|[Uu][Nn][Dd][Ee][Tt][Ee][Rr][Mm][Ii][Nn][Ee][Dd]|[Uu][Nn][Kk][Nn][Oo][Ww][Nn]|[Uu][Nn][Ss][Pp][Ee][Cc][Ii][Ff][Ii][Ee][Dd]|[Uu][Nn][Ss][Tt][Aa][Tt][Ee][Dd])[ \\t]*$"
+          }
+        },
+        "process": {
+          "type": "string",
+          "minLength": 1,
+          "not": {
+            "pattern": "^[ \\t]*(?:\\-|<[Nn][Oo][Nn][Ee]>|<[Uu][Nn][Kk][Nn][Oo][Ww][Nn]>|\\?|[Nn]/[Aa]|[Nn][Aa]|[Nn][Ii][Ll]|[Nn][Oo]_[Vv][Aa][Ll][Uu][Ee]|[Nn][Oo][Nn][Ee]|[Nn][Oo][Tt]_[Ee][Ss][Tt][Aa][Bb][Ll][Ii][Ss][Hh][Ee][Dd]|[Nn][Oo][Tt]_[Ss][Pp][Ee][Cc][Ii][Ff][Ii][Ee][Dd]|[Nn][Oo][Tt]_[Ss][Tt][Aa][Tt][Ee][Dd]|[Nn][Uu][Ll][Ll]|[Tt][Bb][Dd]|[Uu][Nn][Dd][Ee][Ff][Ii][Nn][Ee][Dd]|[Uu][Nn][Dd][Ee][Tt][Ee][Rr][Mm][Ii][Nn][Ee][Dd]|[Uu][Nn][Kk][Nn][Oo][Ww][Nn]|[Uu][Nn][Ss][Pp][Ee][Cc][Ii][Ff][Ii][Ee][Dd]|[Uu][Nn][Ss][Tt][Aa][Tt][Ee][Dd])[ \\t]*$"
+          }
+        },
+        "voltage_v": {
+          "type": "number"
+        },
+        "temperature_c": {
+          "type": "number"
+        },
+        "rc_corner": {
+          "type": "string",
+          "minLength": 1,
+          "not": {
+            "pattern": "^[ \\t]*(?:\\-|<[Nn][Oo][Nn][Ee]>|<[Uu][Nn][Kk][Nn][Oo][Ww][Nn]>|\\?|[Nn]/[Aa]|[Nn][Aa]|[Nn][Ii][Ll]|[Nn][Oo]_[Vv][Aa][Ll][Uu][Ee]|[Nn][Oo][Nn][Ee]|[Nn][Oo][Tt]_[Ee][Ss][Tt][Aa][Bb][Ll][Ii][Ss][Hh][Ee][Dd]|[Nn][Oo][Tt]_[Ss][Pp][Ee][Cc][Ii][Ff][Ii][Ee][Dd]|[Nn][Oo][Tt]_[Ss][Tt][Aa][Tt][Ee][Dd]|[Nn][Uu][Ll][Ll]|[Tt][Bb][Dd]|[Uu][Nn][Dd][Ee][Ff][Ii][Nn][Ee][Dd]|[Uu][Nn][Dd][Ee][Tt][Ee][Rr][Mm][Ii][Nn][Ee][Dd]|[Uu][Nn][Kk][Nn][Oo][Ww][Nn]|[Uu][Nn][Ss][Pp][Ee][Cc][Ii][Ff][Ii][Ee][Dd]|[Uu][Nn][Ss][Tt][Aa][Tt][Ee][Dd])[ \\t]*$"
+          }
+        },
+        "clock": {
+          "type": "string",
+          "minLength": 1,
+          "not": {
+            "pattern": "^[ \\t]*(?:\\-|<[Nn][Oo][Nn][Ee]>|<[Uu][Nn][Kk][Nn][Oo][Ww][Nn]>|\\?|[Nn]/[Aa]|[Nn][Aa]|[Nn][Ii][Ll]|[Nn][Oo]_[Vv][Aa][Ll][Uu][Ee]|[Nn][Oo][Nn][Ee]|[Nn][Oo][Tt]_[Ee][Ss][Tt][Aa][Bb][Ll][Ii][Ss][Hh][Ee][Dd]|[Nn][Oo][Tt]_[Ss][Pp][Ee][Cc][Ii][Ff][Ii][Ee][Dd]|[Nn][Oo][Tt]_[Ss][Tt][Aa][Tt][Ee][Dd]|[Nn][Uu][Ll][Ll]|[Tt][Bb][Dd]|[Uu][Nn][Dd][Ee][Ff][Ii][Nn][Ee][Dd]|[Uu][Nn][Dd][Ee][Tt][Ee][Rr][Mm][Ii][Nn][Ee][Dd]|[Uu][Nn][Kk][Nn][Oo][Ww][Nn]|[Uu][Nn][Ss][Pp][Ee][Cc][Ii][Ff][Ii][Ee][Dd]|[Uu][Nn][Ss][Tt][Aa][Tt][Ee][Dd])[ \\t]*$"
+          }
+        },
+        "check": {
+          "type": "string",
+          "minLength": 1,
+          "not": {
+            "pattern": "^[ \\t]*(?:\\-|<[Nn][Oo][Nn][Ee]>|<[Uu][Nn][Kk][Nn][Oo][Ww][Nn]>|\\?|[Nn]/[Aa]|[Nn][Aa]|[Nn][Ii][Ll]|[Nn][Oo]_[Vv][Aa][Ll][Uu][Ee]|[Nn][Oo][Nn][Ee]|[Nn][Oo][Tt]_[Ee][Ss][Tt][Aa][Bb][Ll][Ii][Ss][Hh][Ee][Dd]|[Nn][Oo][Tt]_[Ss][Pp][Ee][Cc][Ii][Ff][Ii][Ee][Dd]|[Nn][Oo][Tt]_[Ss][Tt][Aa][Tt][Ee][Dd]|[Nn][Uu][Ll][Ll]|[Tt][Bb][Dd]|[Uu][Nn][Dd][Ee][Ff][Ii][Nn][Ee][Dd]|[Uu][Nn][Dd][Ee][Tt][Ee][Rr][Mm][Ii][Nn][Ee][Dd]|[Uu][Nn][Kk][Nn][Oo][Ww][Nn]|[Uu][Nn][Ss][Pp][Ee][Cc][Ii][Ff][Ii][Ee][Dd]|[Uu][Nn][Ss][Tt][Aa][Tt][Ee][Dd])[ \\t]*$"
+          }
+        },
+        "activity_basis": {
+          "type": "string",
+          "minLength": 1,
+          "not": {
+            "pattern": "^[ \\t]*(?:\\-|<[Nn][Oo][Nn][Ee]>|<[Uu][Nn][Kk][Nn][Oo][Ww][Nn]>|\\?|[Nn]/[Aa]|[Nn][Aa]|[Nn][Ii][Ll]|[Nn][Oo]_[Vv][Aa][Ll][Uu][Ee]|[Nn][Oo][Nn][Ee]|[Nn][Oo][Tt]_[Ee][Ss][Tt][Aa][Bb][Ll][Ii][Ss][Hh][Ee][Dd]|[Nn][Oo][Tt]_[Ss][Pp][Ee][Cc][Ii][Ff][Ii][Ee][Dd]|[Nn][Oo][Tt]_[Ss][Tt][Aa][Tt][Ee][Dd]|[Nn][Uu][Ll][Ll]|[Tt][Bb][Dd]|[Uu][Nn][Dd][Ee][Ff][Ii][Nn][Ee][Dd]|[Uu][Nn][Dd][Ee][Tt][Ee][Rr][Mm][Ii][Nn][Ee][Dd]|[Uu][Nn][Kk][Nn][Oo][Ww][Nn]|[Uu][Nn][Ss][Pp][Ee][Cc][Ii][Ff][Ii][Ee][Dd]|[Uu][Nn][Ss][Tt][Aa][Tt][Ee][Dd])[ \\t]*$"
+          }
+        }
       },
-      "additionalProperties": {"not": {"enum": [null, ""]}}
+      "additionalProperties": {
+        "not": {
+          "enum": [
+            null,
+            ""
+          ]
+        },
+        "if": {
+          "type": "string"
+        },
+        "then": {
+          "not": {
+            "pattern": "^[ \\t]*(?:\\-|<[Nn][Oo][Nn][Ee]>|<[Uu][Nn][Kk][Nn][Oo][Ww][Nn]>|\\?|[Nn]/[Aa]|[Nn][Aa]|[Nn][Ii][Ll]|[Nn][Oo]_[Vv][Aa][Ll][Uu][Ee]|[Nn][Oo][Nn][Ee]|[Nn][Oo][Tt]_[Ee][Ss][Tt][Aa][Bb][Ll][Ii][Ss][Hh][Ee][Dd]|[Nn][Oo][Tt]_[Ss][Pp][Ee][Cc][Ii][Ff][Ii][Ee][Dd]|[Nn][Oo][Tt]_[Ss][Tt][Aa][Tt][Ee][Dd]|[Nn][Uu][Ll][Ll]|[Tt][Bb][Dd]|[Uu][Nn][Dd][Ee][Ff][Ii][Nn][Ee][Dd]|[Uu][Nn][Dd][Ee][Tt][Ee][Rr][Mm][Ii][Nn][Ee][Dd]|[Uu][Nn][Kk][Nn][Oo][Ww][Nn]|[Uu][Nn][Ss][Pp][Ee][Cc][Ii][Ff][Ii][Ee][Dd]|[Uu][Nn][Ss][Tt][Aa][Tt][Ee][Dd])[ \\t]*$"
+          }
+        }
+      }
     },
     "source": {
       "description": "Provenance. Required for MEASURED: a number with no provenance cannot be checked against the artefact it came from, which is the entire contract. `sha256` is of the ARTEFACT bytes; the identity of the record itself is computed with _ppa/canonical_json.py and is never hand-rolled.",
       "type": "object",
-      "required": ["path", "tool"],
+      "required": [
+        "path",
+        "tool"
+      ],
       "properties": {
-        "path": {"type": "string", "minLength": 1},
-        "sha256": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
-        "tool": {"type": "string", "minLength": 1},
-        "tool_commit": {"type": "string"},
-        "parser": {"type": "string"},
-        "parser_sha256": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}
+        "path": {
+          "type": "string",
+          "minLength": 1
+        },
+        "sha256": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        },
+        "tool": {
+          "type": "string",
+          "minLength": 1
+        },
+        "tool_commit": {
+          "type": "string"
+        },
+        "parser": {
+          "type": "string"
+        },
+        "parser_sha256": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        }
+      }
+    },
+    "scope_gaps": {
+      "description": "Why each ABSENT scope key is absent -- one sentence per key, OUTSIDE `scope` so it cannot make two records compare equal. An omitted key that says nothing is the same silence one field over: \"this view has no RC corner axis\" and \"nobody recorded one\" are different facts and a reader cannot tell them apart from a hole.",
+      "type": "object",
+      "additionalProperties": {
+        "type": "string",
+        "minLength": 1
       }
     }
   },
   "allOf": [
     {
       "description": "MEASURED: a value, a unit and a source.",
-      "if": {"properties": {"status": {"const": "MEASURED"}}, "required": ["status"]},
-      "then": {"required": ["value", "unit", "source"]}
+      "if": {
+        "properties": {
+          "status": {
+            "const": "MEASURED"
+          }
+        },
+        "required": [
+          "status"
+        ]
+      },
+      "then": {
+        "required": [
+          "value",
+          "unit",
+          "source"
+        ]
+      }
     },
     {
       "description": "DERIVED: a value, a unit and the formula that produced it.",
-      "if": {"properties": {"status": {"const": "DERIVED"}}, "required": ["status"]},
-      "then": {"required": ["value", "unit", "formula"]}
+      "if": {
+        "properties": {
+          "status": {
+            "const": "DERIVED"
+          }
+        },
+        "required": [
+          "status"
+        ]
+      },
+      "then": {
+        "required": [
+          "value",
+          "unit",
+          "formula"
+        ]
+      }
     },
     {
       "description": "ESTIMATED: a value, a unit and the basis of the estimate.",
-      "if": {"properties": {"status": {"const": "ESTIMATED"}}, "required": ["status"]},
-      "then": {"required": ["value", "unit", "basis"]}
+      "if": {
+        "properties": {
+          "status": {
+            "const": "ESTIMATED"
+          }
+        },
+        "required": [
+          "status"
+        ]
+      },
+      "then": {
+        "required": [
+          "value",
+          "unit",
+          "basis"
+        ]
+      }
     },
     {
       "description": "THE FOURTH INVARIANT. A non-measurement carries a reason and MUST NOT carry a value. This is the clause that stops 0 from meaning 'not measured'.",
       "if": {
-        "properties": {"status": {"enum": ["NOT_MEASURED", "NOT_APPLICABLE", "INVALID"]}},
-        "required": ["status"]
+        "properties": {
+          "status": {
+            "enum": [
+              "NOT_MEASURED",
+              "NOT_APPLICABLE",
+              "INVALID"
+            ]
+          }
+        },
+        "required": [
+          "status"
+        ]
       },
       "then": {
-        "required": ["reason"],
-        "not": {"required": ["value"]}
+        "required": [
+          "reason"
+        ],
+        "not": {
+          "required": [
+            "value"
+          ]
+        }
       }
     }
   ]

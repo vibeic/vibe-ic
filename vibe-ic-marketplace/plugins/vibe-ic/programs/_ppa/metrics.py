@@ -82,6 +82,8 @@ __all__ = [
     "measured", "not_measured", "not_applicable", "invalid", "estimated",
     "derived",
     "validate", "validate_or_raise", "is_comparable",
+    "is_scope_silence",
+    "states_the_same_fact",
     "scope_digest", "record_key", "metric_domain", "unit_suffix_of",
     "VERDICT_UNIT", "is_verdict_metric", "verdict",
     "MetricIndex", "Coverage", "CoverageRow", "coverage", "format_coverage",
@@ -167,6 +169,45 @@ _UNIT_SUFFIXES: Dict[str, str] = {
 #: force the domain lane to invent a value, which is how a scope field becomes
 #: decorative.
 _REQUIRED_SCOPE = ("stage",)
+
+#: The words a producer reaches for when it could not establish a scope field.
+#:
+#: §2 says a field a producer could not establish is OMITTED and the reason is
+#: recorded outside `scope`. `null` and `""` are refused below as SCOPE_SENTINEL
+#: because `null == null`. A PLACEHOLDER WORD is the same silence in a third
+#: spelling and, until v1.11.71, nothing in this system could see it: `"unknown"
+#: == "unknown"` exactly the way `null == null` does, and a non-empty string
+#: satisfies both the required-key check above and `benchmark.check_scope_parity`.
+#: MEASURED on this host: `_ppa/backends/openroad` wrote `fill: "unknown"` on 16
+#: of 22 real records and `_ppa/power` wrote `activity_basis: "UNSTATED"` on 144,
+#: so a pre-fill area passed as a post-fill one and a vectorless power number
+#: passed as a VCD one -- the two comparisons §2 names by name.
+#:
+#: A BLACKLIST IS THE RIGHT INSTRUMENT HERE and a per-key vocabulary is not: the
+#: set of ways to say "I did not know" is closed and stable, while the set of
+#: facts a scope field may state is open and grows with every new PDK, corner
+#: and stage. This list enumerates SILENCES, never FACTS.
+#:
+#: `none`/`null`/`nil` are in it because they are what a null becomes the moment
+#: it passes through string formatting -- the same defect, one `str()` later. A
+#: producer that means "no filler was inserted" states that (`no_fill`), which is
+#: a fact about the run and compares equal only to another run that did the same.
+_SCOPE_SILENCE_TOKENS = frozenset({
+    "unknown", "unstated", "unspecified", "undefined", "undetermined",
+    "not_stated", "not_specified", "not_established", "no_value",
+    "tbd", "n/a", "na", "none", "null", "nil", "-", "?", "<none>", "<unknown>",
+})
+
+
+def is_scope_silence(value: Any) -> bool:
+    """Does this scope value say "nobody established this field"?
+
+    PUBLIC so a producer can ask the same question the validator asks, rather
+    than keeping a second copy of the vocabulary in step by hand -- which is the
+    defect this module exists to refuse, applied to itself.
+    """
+    return (isinstance(value, str)
+            and value.strip().lower() in _SCOPE_SILENCE_TOKENS)
 
 
 class MetricError(Exception):
@@ -342,6 +383,19 @@ def validate(rec: Any) -> List[Tuple[str, str]]:
                     "unknown scope field — two of them compare EQUAL, which "
                     "silently makes two different facts comparable. Omit the "
                     "key, or state it.")
+            elif is_scope_silence(val):
+                # THE THIRD SPELLING, and the one nothing could refuse. A word
+                # that means "I did not know" is not a condition the measurement
+                # was taken under; it is the absence of one, wearing a value's
+                # clothes. It is strictly worse than `null` was, because `null`
+                # at least reached this refusal.
+                bad("SCOPE_SENTINEL",
+                    f"`scope.{key}` is {val!r}, which is a word for \"nobody "
+                    "established this field\", not a condition the measurement "
+                    "was taken under. Two of them compare EQUAL — so a "
+                    "synthesis number passes as a post-route one and a "
+                    "vectorless power number passes as a VCD one. Omit the "
+                    "key and name it in `scope_gaps`, or state it.")
 
     has_value = "value" in rec
     numeric_status = status in COMPARABLE_STATUSES or status == ESTIMATED
@@ -578,7 +632,7 @@ def _same_artefact(a: Mapping[str, Any], b: Mapping[str, Any]) -> bool:
     return bool(sa) and sa == sb
 
 
-def _states_the_same_fact(a: Mapping[str, Any], b: Mapping[str, Any]) -> bool:
+def states_the_same_fact(a: Mapping[str, Any], b: Mapping[str, Any]) -> bool:
     """Whether two records under one identity assert the same thing.
 
     AGREEMENT IS NOT A CONFLICT, and until v1.11.33 this index called it one:
@@ -595,6 +649,19 @@ def _states_the_same_fact(a: Mapping[str, Any], b: Mapping[str, Any]) -> bool:
     which file they were read from, its hash, the parser, the reason text on a
     non-measurement -- is provenance, and provenance differing is exactly what a
     second artefact IS.
+
+    PUBLIC, AND THE ONLY READER OF THIS QUESTION. `_ppa/contract.py`'s
+    `resolve_metric_conflict` decides whether a group is a conflict at all
+    before it settles anything, and until v1.11.70 it asked with
+    `canonical_json.digest_of(value)` instead. Those two spellings answer
+    differently on the integral float this very comment is about: the index
+    called `14246.0` and `14246` one measurement and the declaration called
+    them a disagreement, so the declaration overrode a reading that had not
+    contradicted anything and filed a resolution that never happened. MEASURED
+    on the 30 PnR run trees on this host: 5 of the 22 groups it collapsed were
+    of that kind. Two layers, one question, opposite answers -- which is the
+    same defect class this module exists to refuse -- so there is now one
+    function and both call it.
     """
     if a.get("status") != b.get("status"):
         return False
@@ -646,7 +713,7 @@ class MetricIndex:
                     "identically. Deduplicating silently would make a record "
                     "set's size depend on how many times a producer ran.")
             same_artefact = _same_artefact(prior, rec)
-            if not _states_the_same_fact(prior, rec):
+            if not states_the_same_fact(prior, rec):
                 if same_artefact:
                     # The SAME BYTES produced two different numbers. That is not
                     # two artefacts disagreeing -- it is this parser being
@@ -674,7 +741,7 @@ class MetricIndex:
             # CORROBORATION, not conflict. The two records agree on status,
             # unit and value and differ only in where they were read from.
             # Calling this a conflict is what made a two-artefact run
-            # unreportable: see the note above `_states_the_same_fact`.
+            # unreportable: see the note above `states_the_same_fact`.
             self._corroborations.setdefault(key, []).append({
                 "basis": "SAME_ARTEFACT" if same_artefact else "SECOND_ARTEFACT",
                 "source": dict(rec.get("source") or {}),

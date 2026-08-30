@@ -87,6 +87,7 @@ from __future__ import annotations
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 
 from . import canonical_json
+from . import metrics as _metrics
 
 __all__ = [
     "RC_OK", "RC_REFUSED", "RC_UNDETERMINED",
@@ -443,16 +444,26 @@ def check_scope_parity(arms: Sequence[Mapping[str, Any]]) -> Dict[str, Any]:
             # meant to be refused. Producers reach for null exactly when they
             # could not read the field -- which is when the refusal matters
             # most -- so a required key must carry a stated value or be absent.
-            blank = [k for k in REQUIRED_SCOPE[axis]
-                     if sc.get(k) is None or sc.get(k) == ""]
+            # EVERY key, not just the required ones, and the WORD as well as
+            # the null. The required-key restriction was the narrower half of
+            # this guard: the equality test below compares the WHOLE scope
+            # dict, so a silence in any key -- `liberty`, `fill`, `tool` --
+            # makes two arms match on an axis neither of them established. And
+            # the vocabulary is asked through `_ppa/metrics.is_scope_silence`
+            # rather than re-listed here, because the one thing this lane keeps
+            # finding is two layers asking one question and answering it
+            # differently.
+            blank = sorted(k for k, v in sc.items()
+                           if v is None or v == "" or _metrics.is_scope_silence(v))
             if blank:
                 raise Refusal(
                     "SCOPE_SENTINEL",
                     f"arm {flow!r}'s `{axis}` scope declares {blank} with no "
-                    "value. `null` and \"\" are not unknown-corner markers: two "
-                    "of them compare EQUAL, so two numbers measured under "
-                    "conditions nobody recorded would pass as measured under "
-                    "the SAME conditions. State the field or omit the key.",
+                    "value. `null`, \"\" and words like \"unknown\" are not "
+                    "unknown-corner markers: two of them compare EQUAL, so two "
+                    "numbers measured under conditions nobody recorded would "
+                    "pass as measured under the SAME conditions. State the "
+                    "field or omit the key.",
                     RC_UNDETERMINED)
         for flow, sc in scopes[1:]:
             ref_flow, ref_sc = scopes[0]

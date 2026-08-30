@@ -94,9 +94,14 @@ def _derive_power_stage(run, rpt):
         netlist = m.group(1) if m else None
         src = f"{rpt.relative_to(run)} provenance header"
     if netlist is None:
-        return "unknown", (f"{src} declares no linked netlist; the stage a "
-                           "power number belongs to cannot be established, so "
-                           "it is not asserted")
+        # None, NOT the word "unknown". The sentence beside it already said the
+        # stage "is not asserted" while the token returned asserted one:
+        # `"unknown" == "unknown"`, so two runs whose stage nobody could derive
+        # reached `check_scope_parity` as two runs measured at the SAME stage.
+        # The producer omits the key on None; the reason travels in `why`.
+        return None, (f"{src} declares no linked netlist; the stage a "
+                      "power number belongs to cannot be established, so "
+                      "it is not asserted")
     n = netlist.replace(str(run), "").lstrip("/")
     if "/pnr/" in n or "routed" in n or "_pnr" in n:
         return (("post_route_extracted" if spef else "post_route_no_extraction"),
@@ -107,7 +112,7 @@ def _derive_power_stage(run, rpt):
                          f"reads {'a' if spef else 'NO'} SPEF -- so this number "
                          "is a synthesis-stage estimate whatever directory it "
                          "was filed in")
-    return "unknown", f"{src} links {n}, which this deriver does not classify"
+    return None, f"{src} links {n}, which this deriver does not classify"
 
 
 def main(argv=None) -> int:
@@ -169,7 +174,10 @@ def main(argv=None) -> int:
             (out / "power.json").write_text(json.dumps(doc, indent=2) + "\n")
             wrote["power"] = 0
             if stage != "post_route_extracted":
-                problems.append(f"power stage DERIVED as {stage!r}: {why}")
+                problems.append(
+                    (f"power stage DERIVED as {stage!r}: {why}" if stage
+                     else f"power stage NOT ESTABLISHED, so `scope.stage` is "
+                          f"omitted rather than named: {why}"))
     else:
         problems.append(f"no power report at {prpt}: NOT_MEASURED, not zero")
 

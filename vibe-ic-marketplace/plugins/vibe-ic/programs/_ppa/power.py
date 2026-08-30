@@ -72,6 +72,10 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from . import canonical_json as _cj
+# The vocabulary of "nobody established this" lives in ONE place, with the
+# validator that refuses it. A second copy here is a second copy of the
+# question, which is the defect this lane exists to close.
+from . import metrics as _metrics
 from .backends import opensta as _opensta
 
 __all__ = [
@@ -505,11 +509,17 @@ def _source(report: Dict[str, Any]) -> Dict[str, Any]:
 
 def _record(metric: str, status: str, value: Optional[float],
             scope: Dict[str, Any], source: Dict[str, Any], *,
-            raw: Optional[str] = None, reason: Optional[str] = None
-            ) -> Dict[str, Any]:
+            raw: Optional[str] = None, reason: Optional[str] = None,
+            scope_gaps: Optional[Dict[str, str]] = None) -> Dict[str, Any]:
     rec: Dict[str, Any] = {"schema": SCHEMA_METRIC, "metric": metric,
                            "status": status, "unit": "W", "scope": scope,
                            "source": source}
+    if scope_gaps:
+        # OUTSIDE `scope`, and that is the whole point: a reason recorded here
+        # cannot make two records compare equal, whereas the same reason spelled
+        # as a scope value can and did. Same channel and same convention as
+        # `_ppa/timing._gaps_for`.
+        rec["scope_gaps"] = dict(sorted(scope_gaps.items()))
     if status in (STATUS_MEASURED, STATUS_DERIVED):
         rec["value"] = value
         if raw is not None:
@@ -521,7 +531,7 @@ def _record(metric: str, status: str, value: Optional[float],
     return rec
 
 
-def metric_records(report: Dict[str, Any], *, stage: str = "unknown",
+def metric_records(report: Dict[str, Any], *, stage: Optional[str] = None,
                    scenario: str = "default",
                    project: Optional[Path] = None,
                    extra_scope: Optional[Dict[str, Any]] = None
@@ -544,8 +554,34 @@ def metric_records(report: Dict[str, Any], *, stage: str = "unknown",
     # on the run the mutation ledger replays, the STA and IR engines' totals
     # differ by 4.3x.  The CORROBORATION state is deliberately NOT here: it
     # describes how well we know the basis, not what was measured.
-    base_scope = {"stage": stage, "scenario": scenario,
-                  "activity_basis": basis}
+    # THE WORD HALF OF THE SAME RULE. Until now `stage` was written
+    # unconditionally and defaulted to the WORD `"unknown"`, which nothing in
+    # this system refused: `metrics.validate`'s required-key test is satisfied
+    # by any non-empty string, and `benchmark.check_scope_parity` granted two
+    # arms parity on it and compared a synthesis power number against a
+    # post-route one. `activity_basis` is the same defect with a
+    # documented-looking value -- `UNSTATED` says the artefact named no basis,
+    # and `"UNSTATED" == "UNSTATED"`, so two power numbers that never said what
+    # they were computed against passed parity as if they had said the same
+    # thing. CONTRADICTED stays IN: the artefact stated two bases, which is a
+    # determinate finding about it rather than a silence, and every record
+    # carrying it is INVALID and so can never enter a comparison anyway.
+    base_scope: Dict[str, Any] = {"scenario": scenario}
+    _word_gaps: Dict[str, str] = {}
+    if stage is not None and not _metrics.is_scope_silence(stage):
+        base_scope["stage"] = stage
+    else:
+        _word_gaps["stage"] = (
+            "the caller could not establish which stage this power number "
+            f"belongs to (it passed {stage!r}); a stage is derived from the "
+            "netlist the power session linked, never from the directory the "
+            "report was filed in")
+    if basis == BASIS_UNSTATED:
+        _word_gaps["activity_basis"] = (
+            "the artefact states no POWER_ANALYSIS_MODE / activity source, so "
+            "what this number was computed against is unrecorded")
+    else:
+        base_scope["activity_basis"] = basis
     # ── the two conditions this module used to NULL ────────────────────────
     # `liberty` and `tool` were written in unconditionally as
     # `report.get(...)`, which is `None` for any artefact whose provenance
@@ -565,7 +601,7 @@ def metric_records(report: Dict[str, Any], *, stage: str = "unknown",
     # records compare equal. An artefact that names no tool still loses its
     # MEASURED records to `SOURCE_UNTOOLED`; that refusal is correct and it is
     # deliberately not softened here.
-    scope_gaps: Dict[str, str] = {}
+    scope_gaps: Dict[str, str] = dict(_word_gaps)
     for key, val, gap in (
             ("liberty", report.get("liberty"),
              "the artefact states no liberty file, so the library these "
@@ -644,7 +680,8 @@ def metric_records(report: Dict[str, Any], *, stage: str = "unknown",
             out.append(_record(
                 _METRIC_NAME[c], STATUS_NOT_MEASURED, None,
                 dict(base_scope, group=TOTAL_GROUP), src,
-                reason="the artefact states no power rows"))
+                reason="the artefact states no power rows",
+                scope_gaps=scope_gaps))
         return out
 
     invalid = basis == BASIS_CONTRADICTED
@@ -655,7 +692,8 @@ def metric_records(report: Dict[str, Any], *, stage: str = "unknown",
                 _METRIC_NAME[c],
                 STATUS_INVALID if invalid else STATUS_MEASURED,
                 r[f"{c}_w"], scope, src, raw=r[f"{c}_raw"],
-                reason=act.get("reason") if invalid else None)
+                reason=act.get("reason") if invalid else None,
+                scope_gaps=scope_gaps)
             rec["provenance"] = dict(provenance)
             out.append(rec)
     return out
@@ -1063,7 +1101,7 @@ SCHEMA_POWER = "vibeic.ppa.power.v1"
 SCHEMA_PATH = "schemas/ppa/power.v1.schema.json"
 
 
-def power_document(report: Dict[str, Any], *, stage: str = "unknown",
+def power_document(report: Dict[str, Any], *, stage: Optional[str] = None,
                    scenario: str = "default",
                    project: Optional[Path] = None,
                    extra_scope: Optional[Dict[str, Any]] = None
