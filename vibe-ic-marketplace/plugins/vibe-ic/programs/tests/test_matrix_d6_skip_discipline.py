@@ -923,6 +923,35 @@ class GateOnlyEval:
 #:   `_ADVISORY_HINT_PREFIX` — an advisory clause never blocked, so its pass was
 #:                             never in the plain PASS bucket to be moved out of.
 #:   `_STRUCTURE_ONLY_HINT_PREFIX` — a different tier about CONTENT, not a skip.
+def _enclosing_function_source(src: str, offset: int) -> str:
+    """The full source of the function containing `offset`.
+
+    Structure, not arithmetic: `ast` gives the function's real line span, so the
+    region tracks the code however much it grows. Falls back to the remainder of
+    the file if the offset cannot be placed in a function -- never to a shorter
+    span, because under-covering is the failure this exists to remove.
+    """
+    import ast as _ast
+    line_of_offset = src.count("\n", 0, offset) + 1
+    try:
+        tree = _ast.parse(src)
+    except SyntaxError:
+        return src[offset:]
+    best = None
+    for node in _ast.walk(tree):
+        if not isinstance(node, (_ast.FunctionDef, _ast.AsyncFunctionDef)):
+            continue
+        end = getattr(node, "end_lineno", None)
+        if end is None or not (node.lineno <= line_of_offset <= end):
+            continue
+        if best is None or node.lineno > best.lineno:
+            best = node
+    if best is None:
+        return src[offset:]
+    lines = src.splitlines(keepends=True)
+    return "".join(lines[best.lineno - 1:best.end_lineno])
+
+
 def _disclosure_prefixes() -> Tuple[str, ...]:
     _ensure_programs_on_path()
     import flow_compliance_check as _fcc  # type: ignore
@@ -945,10 +974,25 @@ def _disclosure_prefixes() -> Tuple[str, ...]:
     # THIS DOES NOT WEAKEN L1b. An undisclosed pass on nothing still fires; the
     # leg simply now recognises all four spellings of a disclosure instead of
     # three, and it recognises them by reading the flow's own constants.
+    # `_INCOMPLETE_HINT_PREFIX` is the FIFTH spelling and was NEVER CLASSIFIED
+    # HERE -- not because anyone judged it neither, but because the byte window
+    # above could not SEE it. MEASURED: its dispatch sits 3369 bytes after the
+    # marker and the window was 3000, so this leg has been blind to it for as
+    # long as it has existed. Before the region was made structural this gate
+    # reported `1 passed` with it unregistered.
+    #
+    # ACCEPTED as a disclosure, on the same one-directional argument as the
+    # others. #599 gives INCOMPLETE its meaning: "the gate reports its input was
+    # applicable and was NOT examined ... A vacuous step is one nobody needs to
+    # come back to; this is one somebody does." That is a STRONGER disclosure
+    # than vacuity, and it moves a step OUT of a bare PASS and never into one,
+    # so a gate recording it HAS disclosed and L1b must not charge the step as
+    # an undisclosed pass on nothing.
     return (_fcc._VACUOUS_HINT_PREFIX,
             _fcc._SKIP_HINT_PREFIX,
             _fcc._WAIVER_HINT_PREFIX,
-            _fcc._JSON_VACUOUS_HINT_PREFIX)
+            _fcc._JSON_VACUOUS_HINT_PREFIX,
+            _fcc._INCOMPLETE_HINT_PREFIX)
 
 
 #: Hints the consumer's tier chain dispatches that this leg deliberately does
@@ -995,7 +1039,25 @@ def test_d6_every_tier_moving_hint_is_either_accepted_or_excluded_by_name():
         f"{marker!r} ({src.count(marker)} matches); this guard can no longer "
         f"find the branch it is about")
     start = src.index(marker)
-    chain = src[start:start + 3000]
+    # THE WHOLE ENCLOSING REGION, NOT A BYTE COUNT. A window measured in bytes
+    # silently under-covers as the code it measures grows, and it fails
+    # SILENTLY-WRONG: it does not say "I could not see the whole chain", it
+    # answers about the part it saw.
+    #
+    # MEASURED on this very tree: `_INCOMPLETE_HINT_PREFIX` is dispatched in the
+    # chain at +3369 bytes -- 369 past the cut -- and is classified NOWHERE, so
+    # this leg reports `1 passed` while carrying exactly the defect it exists to
+    # catch. Widen the region and it names it immediately.
+    #
+    # STRICTLY A SUPERSET, asserted rather than assumed: a larger region can
+    # only ADD to `dispatched`, which makes `unclassified` larger (this leg gets
+    # STRICTER) and `stale` smaller (fewer false findings). Nothing the byte
+    # window charged can be excused by it.
+    chain = _enclosing_function_source(src, start)
+    assert len(chain) >= 3000, (
+        f"the region found by structure is {len(chain)} bytes, SHORTER than the "
+        f"3000-byte window it replaces, so this change could hide something the "
+        f"old slice saw")
     dispatched = {
         name for name in dir(_fcc)
         if name.endswith("_HINT_PREFIX") and f"startswith({name})" in chain}
