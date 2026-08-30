@@ -183,7 +183,7 @@ RUN
 ``PYTEST_DISABLE_PLUGIN_AUTOLOAD=1`` is mandatory in this tree (a stray
 ``pytest_ethereum`` plugin otherwise breaks collection).
 
-LIVE, not remembered: 178<!--figure:blocking_clauses--> blocking clauses over
+LIVE, not remembered: 179<!--figure:blocking_clauses--> blocking clauses over
 67<!--figure:gated_steps--> gated steps. This is the denominator a reader
 wants, and it moves with the yaml: the digits are written by
 ``tools/gen_matrix_63x8_census.py`` and the ``<!--figure:...-->`` anchors name

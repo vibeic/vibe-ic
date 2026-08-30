@@ -825,9 +825,40 @@ def test_output_entries_classify_into_the_four_kinds():
     # THREE sites and `figure:required_outputs_file` 123 -> 124, and
     # `gen_matrix_63x8_census.py --check-figures` was red on all of them. Those
     # anchors move in the same change as this pin.
-    assert sum(seen.values()) == 166, seen
+    # 2026-08-30: 166 -> 172, GLOB 18 -> 24, and FILE does not move at all.
+    # Step 37.5ip became the producer of the IP release documents. Six entries,
+    # every one a GLOB, and the wildcard is in the same position and for the
+    # same reason as 37.5ip's four hardmacro views above and 37.5ic's two
+    # sign-off HTMLs: the identifying half of the path is the DESIGN's, not the
+    # flow's. Here it is the delivered package name —
+    # `documentation/ip/<package>/IP_DATASHEET.md` — because a kit with two
+    # macros has two datasheets, and the producer writes one directory per
+    # package including the single-package case so the shape exercised on every
+    # run is the shape a two-macro release takes.
+    #
+    #   +6  37.5ip  IP_DATASHEET.md, IP_INTEGRATION_GUIDE.md, RELEASE_NOTES.md,
+    #               ERRATA.md, DELIVERABLES_MANIFEST.md,
+    #               documentation_manifest.yaml
+    #
+    # MEASURED by diffing the (step, entry) SET against origin/main a4604d3fa:
+    # exactly those six were added, none removed. FILE (124) and ANY_OF (24) are
+    # untouched, which is what makes the attribution checkable rather than
+    # asserted — the whole delta lands on one kind and one step.
+    #
+    # The conditional and optional documents the contract declares
+    # (IP_PROGRAMMING_REFERENCE.md, AN001_REFERENCE_INTEGRATION.md) are
+    # deliberately NOT here. `required_outputs` is unconditional, and an
+    # unconditional claim over a conditionally-produced artefact is the
+    # "declare an undeclared artefact and relocate the red" shape step 37.5ic's
+    # own notes refuse. Their absence is judged by `release_docs_check`, which
+    # reads the release's own manifest to decide whether the condition fired.
+    #
+    # d3 pays for the six: none resolves in any admissible run root (no
+    # published cell has taken the IP path at all), so the manifest records
+    # them UNPROVEN, which is the true statement of the gap.
+    assert sum(seen.values()) == 172, seen
     assert seen[F.FILE] == 124
-    assert seen[F.GLOB] == 18
+    assert seen[F.GLOB] == 24
     assert seen[F.ANY_OF] == 24
     # Reported to the orchestrator: the PROGRAM_EXIT form described in the brief
     # does NOT exist in required_outputs. It lives only in `gate` clauses. The
