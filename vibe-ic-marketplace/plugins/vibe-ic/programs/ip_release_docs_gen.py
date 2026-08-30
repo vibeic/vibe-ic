@@ -820,6 +820,24 @@ def _delivered_views_field(rel: Release) -> Field:
     return measured("Views delivered", len(rel.kit.views), KIT_DIR)
 
 
+def _kit_production_field(rel: Release) -> Field:
+    """What the kit PRODUCER recorded about writing the four views.
+
+    A DIFFERENT fact from the verdict below, and kept a separate row for that
+    reason: "the abstract was written" and "the four views agree" are two
+    questions, and one row answering both would be a row that answers neither.
+    """
+    rel_path = "reports/phase3/digital_hardmacro_gen.json"
+    doc = _read_json(rel.project / rel_path)
+    status = (doc or {}).get("status") if isinstance(doc, dict) else None
+    if isinstance(status, str) and status:
+        return measured("Hardmacro production status", status, rel_path)
+    return unmeasured(
+        "Hardmacro production status",
+        f"{rel_path} carries no status in this run, so no written record says "
+        f"how the four views came to be here")
+
+
 def _kit_verdict_field(rel: Release) -> Field:
     """The verdict step 37.5ip's own gate RECORDED, quoted from its record.
 
@@ -847,7 +865,8 @@ def _kit_verdict_field(rel: Release) -> Field:
 def release_notes(rel: Release) -> Tuple[str, List[Field]]:
     ident = _ident_fields(rel)
     views = view_fields(rel.kit)
-    status = [_delivered_views_field(rel), _kit_verdict_field(rel)]
+    status = [_delivered_views_field(rel), _kit_production_field(rel),
+              _kit_verdict_field(rel)]
     every = ident + views + status
     limitations = [
         "- Silicon measurement: not performed. There is no characterised "
