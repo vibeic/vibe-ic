@@ -737,6 +737,22 @@ def test_default_empty_population_preserves_legacy_no_process_shape(tmp_path):
         "exempt_reason": None,
         "exemption_expired": False,
         "scope": None,
+        # vibe-ic#1789 — THE FIELD THAT MAKES THIS TEST'S OWN NAME CHECKABLE.
+        # `_gate_dispatch.sh` publishes `blocking_refusal` on EVERY gate row,
+        # deliberately always present ("an absent key must not be ambiguous
+        # between 'not a refusal' and 'written by an older script'"), and
+        # `tools/ci/test_issue1770_refused_exemption_is_not_recorded.py`
+        # asserts exactly that of every row. So it belongs in a literal
+        # comparison of the whole row, and this test omitted it.
+        #
+        # It is not a formality here. `False` IS the legacy no-process shape:
+        # the attested population refusal wears the same label, the same
+        # `EXPANDED` expansion, the same `items: 0` and the same `gates: 1` by
+        # design, and this bit is the only thing left that separates them —
+        # `repo_hygiene_parallel._legacy_empty_without_process` reads it and
+        # nothing else to tell the two apart. Asserting the row WITHOUT it left
+        # the test unable to distinguish the shape it is named for.
+        "blocking_refusal": False,
     }]
     assert doc["not_checked_unexempted"] == [label]
     assert attestations == progress == []
@@ -970,11 +986,20 @@ def test_the_shipped_hygiene_script_reports_this_checkout_as_NOT_FOUND(tmp_path)
 _REAL_CORPUS = "published cells carrying a routed DEF"
 
 
-def _hygiene_dag_record(tmp_path: Path, stem: str, pointer: str | None):
+def _hygiene_dag_record(tmp_path: Path, stem: str, pointer: str | None,
+                        attest_population: bool = True):
     """A real dispatch record over the REAL corpus name, plus one green gate.
 
     The green gate is load-bearing: `_summary_rc` returns 2 for a run that
     decided nothing at all, which would mask the waiver either way.
+
+    `attest_population` SELECTS THE MODE, and both of them are real. The shipped
+    `tools/ci/repo_hygiene_gates.sh:1110` declares this corpus with
+    `GATE_DISPATCH_ATTEST_POPULATION=1`, so True is what production wires; False
+    is the legacy no-process row, which is the shape the phase-1 bootstrap
+    waiver in `_summary_rc` was written for and the only shape it can still
+    reach. A helper that could only build one of the two would have made the
+    caller below unable to ask its question in the state that answers it.
     """
     import repo_hygiene_parallel as P
 
@@ -982,6 +1007,7 @@ def _hygiene_dag_record(tmp_path: Path, stem: str, pointer: str | None):
     root = tmp_path / f"run-{stem}"
     root.mkdir()
     script = root / "gates.sh"
+    attest = "GATE_DISPATCH_ATTEST_POPULATION=1 " if attest_population else ""
     script.write_text(textwrap.dedent(f"""\
         set -euo pipefail
         ROOT={str(root)!r}
@@ -989,7 +1015,7 @@ def _hygiene_dag_record(tmp_path: Path, stem: str, pointer: str | None):
         gate_dispatch_init "$@"
         run 'a green gate' "$ROOT" python3 -c "print('[PASS] 1 item')"
         _body() {{ run "per cell ($1)" "$ROOT" true; }}
-        GATE_DISPATCH_ATTEST_POPULATION=1 gate_dispatch_over \\
+        {attest}gate_dispatch_over \\
           {_REAL_CORPUS!r} _body python3 {str(HELPER)!r} --repo {str(subject)!r}
         gate_dispatch_finish
         """), encoding="utf-8")
@@ -1025,14 +1051,61 @@ def _hygiene_dag_record(tmp_path: Path, stem: str, pointer: str | None):
 
 
 def test_an_absent_corpus_does_not_close_the_hygiene_dag_green(tmp_path):
-    """Both states through the real wiring, and only one of them is waivable."""
+    """Both states, in BOTH dispatch modes, and neither is green when absent.
+
+    THIS TEST USED TO RUN ONE MODE AND ASSERT THE OTHER MODE'S ANSWER, and it
+    went red the day the two stopped agreeing. It built its record with
+    `GATE_DISPATCH_ATTEST_POPULATION=1` — what the shipped
+    `repo_hygiene_gates.sh:1110` wires — and asserted `b_rc == 0`, the phase-1
+    bootstrap waiver, which `_summary_rc` grants only to the LEGACY no-process
+    row. While `_legacy_empty_without_process` could not tell an attested
+    refusal from a synthetic one, those were the same thing. vibe-ic#1789
+    (fa2ce1e1e, v1.12.90) gave the record the bit that tells them apart, for a
+    different and correct reason — a run over an empty corpus was reporting its
+    own attested gate as an "unassigned gate label in attestation progress" —
+    and the waiver stopped reaching the attested row with it. MEASURED by
+    running this file at `fa2ce1e1e^` and at `fa2ce1e1e`: green, then red.
+
+    So the 2x2 is measured rather than assumed, and it is asserted here:
+
+        mode        state     _summary_rc   expansion
+        legacy      absent        2         NO_CORPUS
+        legacy      read-empty    0         EXPANDED     <- the waiver
+        attested    absent        2         NO_CORPUS
+        attested    read-empty    2         EXPANDED
+
+    vibe-ic#1764's guarantee is the LEFT COLUMN of the legacy row pair and it
+    is intact: the waiver still discriminates where it can still fire. What is
+    no longer true is that the two states are told apart BY RC in the attested
+    mode — there, both refuse — so the distinction is asserted where it still
+    lives, on `expansion` and on the label, and it is asserted in both modes.
+    Flipping `b_rc` to 2 and stopping would have left `a_rc != b_rc` vacuous:
+    a test that proves the two states differ, by comparing two numbers that are
+    now equal.
+
+    NEITHER MODE IS HYPOTHETICAL. The attested one is what lands. The legacy
+    one is the shape `gatekeeper-verify-merge.sh:810
+    base_has_exact_legacy_routed_empty` accepts on the BASE arm, so it decides
+    whether a landing may build trusted transition evidence.
+    """
     corpus = _read_but_empty_corpus(tmp_path)
 
-    a_proc, a_doc, a_rc = _hygiene_dag_record(tmp_path, "absent", None)
-    b_proc, b_doc, b_rc = _hygiene_dag_record(tmp_path, "empty", str(corpus))
+    # --- LEGACY mode: the only mode the phase-1 waiver can still reach -------
+    a_proc, a_doc, a_rc = _hygiene_dag_record(
+        tmp_path, "legacy-absent", None, attest_population=False)
+    b_proc, b_doc, b_rc = _hygiene_dag_record(
+        tmp_path, "legacy-empty", str(corpus), attest_population=False)
 
-    # Preconditions: both really are the zero-population, refused-at-finish row.
-    assert a_proc.returncode == b_proc.returncode == 2
+    # Preconditions: both really are the zero-population row, and the verdict
+    # under test is `_summary_rc`'s and not the shell's. MEASURED: in LEGACY
+    # mode `gate_dispatch_finish` closes 0 in BOTH states — the shell suite
+    # does not refuse a zero population it did not attest — so the shell rc
+    # cannot be the thing that tells them apart here, and the assertion that
+    # follows is about the consumer that can. (In attested mode, below, the
+    # shell closes 2 in both. Neither mode's shell rc discriminates; only the
+    # record does.)
+    assert a_proc.returncode == b_proc.returncode == 0, (
+        a_proc.returncode, b_proc.returncode)
     assert a_doc["decided"] == b_doc["decided"] == 1
     for doc in (a_doc, b_doc):
         row = [c for c in doc["corpora"] if c["name"] == _REAL_CORPUS]
@@ -1056,6 +1129,48 @@ def test_an_absent_corpus_does_not_close_the_hygiene_dag_green(tmp_path):
             if c["name"] == _REAL_CORPUS][0]["expansion"] == "NO_CORPUS"
     assert [c for c in b_doc["corpora"]
             if c["name"] == _REAL_CORPUS][0]["expansion"] == "EXPANDED"
+
+    # --- ATTESTED mode: what `repo_hygiene_gates.sh` actually wires ----------
+    c_proc, c_doc, c_rc = _hygiene_dag_record(
+        tmp_path, "attested-absent", None, attest_population=True)
+    d_proc, d_doc, d_rc = _hygiene_dag_record(
+        tmp_path, "attested-empty", str(corpus), attest_population=True)
+
+    # Same zero-population precondition, in the mode that lands.
+    assert c_proc.returncode == d_proc.returncode == 2, (
+        c_proc.returncode, d_proc.returncode)
+    assert c_doc["decided"] == d_doc["decided"] == 1
+    for doc in (c_doc, d_doc):
+        row = [c for c in doc["corpora"] if c["name"] == _REAL_CORPUS]
+        assert len(row) == 1 and row[0]["items"] == 0, row
+
+    # NEITHER closes green. The absent one for #1764's reason; the read-empty
+    # one because an attested population refusal RAN and is not the bootstrap
+    # row the waiver is written for.
+    assert c_rc == d_rc == 2, (c_rc, d_rc,
+                               c_proc.stdout + c_proc.stderr,
+                               d_proc.stdout + d_proc.stderr)
+
+    # AND THEY ARE STILL TWO STATES, which is the property that must survive
+    # them sharing an rc. If these ever re-merge, an absent corpus can wear the
+    # read-empty row on the landing path and `base_has_exact_legacy_routed_empty`
+    # is the consumer that pays for it.
+    c_row = [c for c in c_doc["corpora"] if c["name"] == _REAL_CORPUS][0]
+    d_row = [c for c in d_doc["corpora"] if c["name"] == _REAL_CORPUS][0]
+    assert c_row["expansion"] == "NO_CORPUS", c_row
+    assert d_row["expansion"] == "EXPANDED", d_row
+    c_gate = [g for g in c_doc["gates"] if g.get("corpus") == _REAL_CORPUS][0]
+    d_gate = [g for g in d_doc["gates"] if g.get("corpus") == _REAL_CORPUS][0]
+    assert c_gate["label"] != d_gate["label"], (c_gate, d_gate)
+    assert "NOT FOUND" in c_gate["label"], c_gate["label"]
+    assert "EMPTY" in d_gate["label"], d_gate["label"]
+
+    # THE BIT #1789 ADDED, asserted on both sides so the mode difference is a
+    # measurement and not a claim: attested rows carry it, legacy rows do not.
+    assert c_gate["blocking_refusal"] is d_gate["blocking_refusal"] is True
+    for doc in (a_doc, b_doc):
+        legacy = [g for g in doc["gates"] if g.get("corpus") == _REAL_CORPUS][0]
+        assert legacy["blocking_refusal"] is False, legacy
 
 
 # --- vibe-ic#1764: the RECORD consumer sections 5/5b did not sweep -----------
