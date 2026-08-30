@@ -57,6 +57,7 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+import shutil
 import sys
 from pathlib import Path
 
@@ -439,9 +440,15 @@ def test_stage1_still_answers_exactly_as_it_did(tmp_path, cell, rc):
     """Adding a stage must not move another stage's verdict. Exact rc, both
     directions, on the real fixtures stage 1 already ships."""
     env = dict(os.environ, PYTHONDONTWRITEBYTECODE="1")
+    # The run tree is a COPY and the emit lands inside it. Reviewing the shipped
+    # fixture in place with the emit redirected to `tmp_path` put the rejection's
+    # proof outside the run, which the engine now refuses (rc 2) — and refusing
+    # it is the point: a proof the run cannot open is not a proof.
+    run_dir = tmp_path / "run"
+    shutil.copytree(_FIX / cell, run_dir)
     r = subprocess.run(
-        [sys.executable, str(PROG), str(_FIX / cell), "--stage", "stage1",
+        [sys.executable, str(PROG), str(run_dir), "--stage", "stage1",
          "--flow-def", str(FLOW), "--stage-verdict", "PASS",
-         "--emit-test", str(tmp_path / "emit")],
+         "--emit-test", str(run_dir / "reports" / "emit")],
         capture_output=True, text=True, env=env)
     assert r.returncode == rc, r.stdout + r.stderr
