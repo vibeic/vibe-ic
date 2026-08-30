@@ -242,12 +242,26 @@ def _first_token(cmd: str) -> Optional[str]:
     return parts[0] if parts else None
 
 
-def _walk_clauses(node, out: List[dict]) -> None:
+#: The ONE top-level section of the flow document the engine dispatches from.
+#:
+#: `flow_compliance_check.main` reads `steps = flow.get("steps", [])` and every
+#: gate it evaluates comes from that list. A clause anywhere else in the
+#: document is declared and DISPATCHED BY NOTHING — see
+#: `_undispatchable_rows` for the measurement that put this constant here, and
+#: `test_on_pass_review_clauses_are_dispatched_by_nothing` for the control that
+#: fails if `flow_compliance_check` ever stops reading exactly this key.
+DISPATCHED_SECTION = "steps"
+
+
+def _walk_clauses(node, out: List[dict], section: Optional[str] = None) -> None:
     """Collect every gate clause in the document, at any nesting depth.
 
     The flow definition nests gates under `gate:`, `all_of:`, `any_of:` and
     per-step lists, so the walk is recursive and structural rather than
     positional — a gate is wherever one of `_GATE_SLOTS` is a mapping key.
+
+    `section` is the TOP-LEVEL key the clause was found under, carried down so
+    a caller can tell a clause the engine dispatches from one it does not.
     """
     if isinstance(node, dict):
         for key, val in node.items():
@@ -258,15 +272,27 @@ def _walk_clauses(node, out: List[dict]) -> None:
                 # `condition_files_exist:`).
                 cmd = val.get("command") if isinstance(val, dict) else val
                 name = _first_token(cmd) if isinstance(cmd, str) else None
-                out.append({"slot": key, "gate": name, "command": cmd})
-            _walk_clauses(val, out)
+                out.append({"slot": key, "gate": name, "command": cmd,
+                            "section": section,
+                            "dispatchable": section == DISPATCHED_SECTION})
+            _walk_clauses(val, out, section)
     elif isinstance(node, list):
         for item in node:
-            _walk_clauses(item, out)
+            _walk_clauses(item, out, section)
 
 
 def clauses_in_flow(flow: Path) -> List[dict]:
-    """Every gate clause the flow engine would dispatch on, in document order.
+    """Every gate clause IN THE DOCUMENT, in document order, each tagged with
+    whether the flow engine would dispatch on it.
+
+    THE FIRST LINE OF THIS DOCSTRING USED TO SAY "every gate clause the flow
+    engine would dispatch on", AND IT WAS A SUPERSET. The walk starts at the
+    whole document; `flow_compliance_check` reads `flow.get("steps", [])` and
+    nothing else. MEASURED on 4689d581d: 226 clauses, 221 under `steps:` and 5
+    under `stages:` — the five `on_pass_review:` gates, one per stage — so five
+    clauses were counted as wired into an engine that cannot reach them. Each
+    clause now carries `section` and `dispatchable`; nothing is dropped from
+    the list, so every count this audit publishes is unchanged.
 
     THE DEFECT THIS REPLACED (ORGANIC #885, measured 2026-08-09). The previous
     implementation matched
@@ -298,7 +324,15 @@ def clauses_in_flow(flow: Path) -> List[dict]:
     except yaml.YAMLError as exc:
         raise FlowGrammarError(f"cannot parse {flow}: {exc}") from exc
     out: List[dict] = []
-    _walk_clauses(doc, out)
+    # Descend one level FIRST so every clause carries the top-level section it
+    # was found under. A non-mapping document walks with `section=None`, which
+    # is `dispatchable=False` — the safe direction: a document shape this
+    # function does not understand is reported as unreachable, never as wired.
+    if isinstance(doc, dict):
+        for section, val in doc.items():
+            _walk_clauses(val, out, section)
+    else:
+        _walk_clauses(doc, out, None)
     return out
 
 
@@ -1844,6 +1878,38 @@ def audit(flow: Path, programs: Path) -> dict:
             "declared": declared_intent(programs, g),
             "slots": sorted(slots[g]),
         })
+    # DECLARED IN THE DOCUMENT, DISPATCHED BY NOTHING — the gap between
+    # AUDIT_ONLY and ORPHANED, and until now it fell through it.
+    #
+    # `ORPHANED` below already carries the right words for this state: "not
+    # even the final compliance audit reaches it, so it runs only if someone
+    # invokes it by hand". But ORPHANED is defined as "not referenced by the
+    # flow definition at all", and these clauses ARE referenced — they are just
+    # referenced somewhere the engine never looks. So they were scored
+    # AUDIT_ONLY, whose own definition at the top of this file is "its verdict
+    # cannot stop the step", which says the final audit RUNS it.
+    #
+    # MEASURED on 4689d581d, and this is the pair that shows the two states
+    # were sharing one word. `provenance_check` and `stage_on_pass_review` come
+    # back as byte-identical rows — AUDIT_ONLY / NOT_INVOKED — and on a real
+    # published cell (ic/spm/v1.10.18_sky130A) `flow_compliance_check` dispatched
+    # 125 gates: `provenance_check` is in that ledger and `stage_on_pass_review`
+    # appears zero times. Same row, opposite fact.
+    #
+    # A gate is listed here only when EVERY clause naming it is outside
+    # `DISPATCHED_SECTION`. One dispatchable clause is enough to reach it, so a
+    # gate wired in both places is not a finding.
+    by_gate: Dict[str, List[dict]] = {}
+    for c in clauses:
+        if c.get("gate"):
+            by_gate.setdefault(c["gate"], []).append(c)
+    undispatchable = [
+        {"gate": g,
+         "sections": sorted({str(c.get("section")) for c in cs}),
+         "clauses": len(cs)}
+        for g, cs in sorted(by_gate.items())
+        if cs and not any(c.get("dispatchable") for c in cs)]
+
     # #886: a gate that is AUDIT_ONLY and declares NOTHING. This class was
     # structurally exempt from every failing branch below, which is the defect
     # in one line: the audit could only fail on gates that had already gone to
@@ -1990,6 +2056,13 @@ def audit(flow: Path, programs: Path) -> dict:
         "orphaned": orphaned,
         "malformed_clauses": malformed,
         "undeclared_audit_only": undeclared_audit_only,
+        # Declared in the document, dispatched by nothing. Reported, never
+        # failed: WHERE these clauses should be wired is a flow owner's
+        # decision — a step's `gate:` cannot express "after the stage passed",
+        # which is what `fires_on: stage_pass` asks for — and #1253's rule
+        # applies, "wiring a RED gate turns 'unverified' into 'blocking', which
+        # is a different change and not this one".
+        "undispatchable": undispatchable,
         "gates": rows,
     }
 
@@ -2385,6 +2458,24 @@ def main(argv: Optional[List[str]] = None) -> int:
             for k in new_u:
                 print(f"   {k}")
             rc = 1
+    # PRINTED ON BOTH PATHS, unlike the disclosure below it. That one is about
+    # what a PASS is read as meaning; this one is about a gate that is not
+    # running at all, and a reader who needs that fact needs it whichever way
+    # the exit code went.
+    undisp = rep.get("undispatchable") or []
+    if undisp:
+        print(f"\n  DISCLOSURE — {len(undisp)} gate(s) are declared in the flow "
+              f"document but sit OUTSIDE `{DISPATCHED_SECTION}:`, which is the "
+              f"only section `flow_compliance_check` reads "
+              f"(`steps = flow.get(\"steps\", [])`). Nothing dispatches them: "
+              f"not a runner inline, and not the final compliance audit "
+              f"either. Not failed here — WHERE they should be wired is a flow "
+              f"owner's call, and a step's `gate:` cannot express `fires_on: "
+              f"stage_pass`:")
+        for u in undisp:
+            print(f"    {u['gate']}  {u['clauses']} clause(s) under "
+                  f"{', '.join(u['sections'])}:")
+
     if rc:
         return rc
     print(f"\n[PASS] no NEW enforcement contradiction "
