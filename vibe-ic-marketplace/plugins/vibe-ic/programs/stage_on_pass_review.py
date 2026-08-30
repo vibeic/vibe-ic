@@ -2793,39 +2793,19 @@ def test_every_pin_the_intent_declares_is_built_by_the_synthesised_top():
 #: script, resolving its own run root so no absolute path is baked in. It
 #: re-reads the L-docs' own provenance and the run tree; it runs no extractor
 #: and rebuilds no document.
-_EMITTED_TEST_PHASE1_CITED_INPUT = r'''#!/usr/bin/env python3
-"""AUTO-EMITTED by `{program}` from a stage-{stage} ON-PASS review rejection.
-
-    {contradiction}
-
-This test FAILS while that is true of this run tree and PASSES once it is
-repaired. It reads only this run's own L-docs and its own staged design input —
-no oracle, no harness, no golden — and it re-derives nothing: it runs no
-extractor and rebuilds no document.
-
-REPAIR is one of exactly two things, and which one is a design decision this
-test does not make:
-  * the design input is staged at the path the L-docs cite, or
-  * the L-docs' provenance is corrected to the path this run actually staged.
-"""
-import json
-import re
-import sys
-from pathlib import Path
-
-DOCS_REL = {docs_rel!r}
+_EMITTED_TEST_PHASE1_CITED_INPUT = (
+    _emitted_doc(
+        '"""',
+        "It reads only this run's own L-docs and its own staged design input —\n"
+        "no oracle, no harness, no golden — and it re-derives nothing: it runs no\n"
+        "extractor and rebuilds no document.",
+        "  * the design input is staged at the path the L-docs cite, or\n"
+        "  * the L-docs' provenance is corrected to the path this run actually staged.")
+    + _emitted_prelude(r'''DOCS_REL = {docs_rel!r}
 UNREADABLE = {unreadable!r}
 _PER_ITEM = ("top_module_pins", "ports")
-
-
-def run_root() -> Path:
-    for d in [Path(__file__).resolve()] + list(Path(__file__).resolve().parents):
-        if (d / "phase1" / "generated_docs").is_dir():
-            return d
-    raise AssertionError("no run root above %s" % __file__)
-
-
-def cites_a_path(v):
+''', want_re=True)
+    + r'''def cites_a_path(v):
     return bool(isinstance(v, str) and "/" in v and not re.search(r"\s", v)
                 and re.search(r"\.[A-Za-z0-9]{{1,6}}$", v))
 
@@ -2864,16 +2844,12 @@ def test_every_source_the_l_docs_cite_is_a_file_this_run_contains():
         "literal(s): %s" % (len(absent), len(checkable),
                             sum(checkable[s] for s in absent),
                             ", ".join(absent)))
-
-
-if __name__ == "__main__":
-    try:
-        test_every_source_the_l_docs_cite_is_a_file_this_run_contains()
-    except AssertionError as e:
-        print("FAIL: %s" % e)
-        sys.exit(1)
-    print("PASS: every cited source is a file this run contains")
 '''
+    + _emitted_main(
+        "        test_every_source_the_l_docs_cite_is_a_file_this_run_contains()\n"
+        "",
+        "    print(\"PASS: every cited source is a file this run contains\")\n"
+        ""))
 
 
 # R5 (stage5_manufacturing) — DECLARED, NOT ENABLED. See the module docstring.
@@ -3419,44 +3395,24 @@ def _body_r4(finding: Dict[str, Any], stage_id: str) -> str:
 # above: stdlib only, valid as a pytest module AND as `python3 <file>`, resolves
 # the run root by walking up to `phase1/generated_docs`, bakes in no absolute
 # path, and re-derives nothing.
-_EMITTED_TEST_PHASE1_R2 = r'''#!/usr/bin/env python3
-"""AUTO-EMITTED by `{program}` from a stage-{stage} ON-PASS review rejection.
-
-    {contradiction}
-
-This test FAILS while that is true of this run tree and PASSES once it is
-repaired. It reads only this run's own design INPUT and its own generated L
-docs — no oracle, no harness, no golden — and it runs no tool.
-
-REPAIR is one of exactly two things, and which one is a design decision this
-test does not make:
-  * L9.top_module is corrected to a name this run's input actually contains, or
-    one derived from the L1.ic_name its own top_module_extraction_strategy
-    names as the source, or
-  * L9 stops claiming a top module and publishes the canonical placeholder with
-    the sentinel strategy, which is the document's own way of disclosing that
-    the input named none.
-"""
-import json
-import re
-import sys
-from pathlib import Path
-
-L9_REL = {l9_rel!r}
+_EMITTED_TEST_PHASE1_R2 = (
+    _emitted_doc(
+        '"""',
+        "It reads only this run's own design INPUT and its own generated L\n"
+        "docs — no oracle, no harness, no golden — and it runs no tool.",
+        "  * L9.top_module is corrected to a name this run's input actually contains, or\n"
+        "    one derived from the L1.ic_name its own top_module_extraction_strategy\n"
+        "    names as the source, or\n"
+        "  * L9 stops claiming a top module and publishes the canonical placeholder with\n"
+        "    the sentinel strategy, which is the document's own way of disclosing that\n"
+        "    the input named none.")
+    + _emitted_prelude(r'''L9_REL = {l9_rel!r}
 L1_REL = {l1_rel!r}
 INPUT_RELS = {input_rels!r}
 SENTINEL_TOP = {sentinel_top!r}
 SENTINEL_STRATEGY = {sentinel_strategy!r}
-
-
-def run_root():
-    for d in [Path(__file__).resolve()] + list(Path(__file__).resolve().parents):
-        if (d / "phase1" / "generated_docs").is_dir():
-            return d
-    raise AssertionError("no run root above %s" % __file__)
-
-
-def squash(t):
+''', want_re=True, run_root_sig='')
+    + r'''def squash(t):
     return re.sub(r"[^a-z0-9]+", "", str(t).lower())
 
 
@@ -3498,16 +3454,12 @@ def test_the_declared_top_module_came_from_the_input_or_its_declared_source():
         "it: it appears in none of this run's %d input file(s), and it shares "
         "no word with %s ic_name=%r"
         % (L9_REL, top, strategy, len(text), L1_REL, ic_name))
-
-
-if __name__ == "__main__":
-    try:
-        test_the_declared_top_module_came_from_the_input_or_its_declared_source()
-    except AssertionError as e:
-        print("FAIL: %s" % e)
-        sys.exit(1)
-    print("PASS: the declared top module is grounded in the input or in L1.ic_name")
 '''
+    + _emitted_main(
+        "        test_the_declared_top_module_came_from_the_input_or_its_declared_source()\n"
+        "",
+        "    print(\"PASS: the declared top module is grounded in the input or in L1.ic_name\")\n"
+        ""))
 
 
 def _body_r1(finding: Dict[str, Any], stage_id: str) -> str:
@@ -3581,33 +3533,20 @@ def _body_phase1_r2(finding: Dict[str, Any], stage_id: str) -> str:
 # asserting only the rule goes green when the last citation is deleted, which
 # is how a run passes by having nothing left to check. Clause 1 is the list,
 # clause 2 is the rule, and neither is sufficient alone.
-_EMITTED_TEST_PHASE1 = r'''#!/usr/bin/env python3
-"""AUTO-EMITTED by `{program}` from a stage-{stage} ON-PASS review rejection.
-
-    {contradiction}
-
-This test FAILS while that is true of this run tree and PASSES once it is
-repaired. It reads only this run's own INTENT (the design input text) and
-ARTEFACT (the generated L-docs) — no oracle, no harness, no golden — and it
-re-derives nothing: it runs no tool and re-extracts no document.
-
-REPAIR is one of exactly two things, and which one is a design decision this
-test does not make:
-  * the constant is corrected to the one the input document actually writes, or
-  * the claim is withdrawn — the citation goes AND the value goes with it.
-
-DELETING THE CITATION ALONE IS NOT A REPAIR, and this test says so: clause 1
-requires an offender still absent from the input to be absent from the artefact
-as a VALUE too. Dropping the provenance while keeping the number is the same
-design specified on the same invented constant, with the evidence that it was
-invented removed.
-"""
-import json
-import re
-import sys
-from pathlib import Path
-
-INTENT_RELS = {intent_rels!r}
+_EMITTED_TEST_PHASE1 = (
+    _emitted_doc(
+        '"""',
+        "It reads only this run's own INTENT (the design input text) and\n"
+        "ARTEFACT (the generated L-docs) — no oracle, no harness, no golden — and it\n"
+        "re-derives nothing: it runs no tool and re-extracts no document.",
+        "  * the constant is corrected to the one the input document actually writes, or\n"
+        "  * the claim is withdrawn — the citation goes AND the value goes with it.",
+        "DELETING THE CITATION ALONE IS NOT A REPAIR, and this test says so: clause 1\n"
+        "requires an offender still absent from the input to be absent from the artefact\n"
+        "as a VALUE too. Dropping the provenance while keeping the number is the same\n"
+        "design specified on the same invented constant, with the evidence that it was\n"
+        "invented removed.")
+    + _emitted_prelude(r'''INTENT_RELS = {intent_rels!r}
 ARTEFACT_RELS = {artefact_rels!r}
 TEXT_EXT = {text_ext!r}
 #: The constants this rejection named. Baked so the test cannot go green by
@@ -3620,16 +3559,8 @@ _INPUT_SRC = re.compile(
     r"input[\\/]+docs|input_doc|\.(?:txt|pdf|docx?|md|csv|html?|xlsx?|pptx?)\b",
     re.IGNORECASE)
 _DERIVED_SRC = re.compile(r"deriv|inferr|cross[_-]?layer|^L\d", re.IGNORECASE)
-
-
-def run_root():
-    for d in [Path(__file__).resolve()] + list(Path(__file__).resolve().parents):
-        if (d / "phase1" / "generated_docs").is_dir():
-            return d
-    raise AssertionError("no run root above %s" % __file__)
-
-
-def occurs(hexlit, hay):
+''', want_re=True, run_root_sig='')
+    + r'''def occurs(hexlit, hay):
     """Does the input WRITE this constant as a hexadecimal number?
 
     Word-bounded, and never on the bare digits: reading the decimal `17` as
@@ -3741,17 +3672,13 @@ def test_no_constant_is_quoted_from_an_input_that_does_not_state_it():
         "%d of %d constant(s) quoted from the design input occur in no input "
         "document, in any hexadecimal notation:\n  %s"
         % (len(bad), checked, "\n  ".join(bad[:30])))
-
-
-if __name__ == "__main__":
-    try:
-        test_no_constant_is_quoted_from_an_input_that_does_not_state_it()
-    except AssertionError as e:
-        print("FAIL: %s" % e)
-        sys.exit(1)
-    print("PASS: no constant in this run is quoted from an input that does not "
-          "state it")
 '''
+    + _emitted_main(
+        "        test_no_constant_is_quoted_from_an_input_that_does_not_state_it()\n"
+        "",
+        "    print(\"PASS: no constant in this run is quoted from an input that does not \"\n"
+        "          \"state it\")\n"
+        ""))
 
 def _body_phase1(finding: Dict[str, Any], stage_id: str) -> str:
     """The stage_phase1 regression's SOURCE. `emit_test` is the one writer.
