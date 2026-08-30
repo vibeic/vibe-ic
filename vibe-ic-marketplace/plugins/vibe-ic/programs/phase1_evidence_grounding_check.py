@@ -61,6 +61,25 @@ _INPUT_SRC_RE = re.compile(
     r"input[\\/]+docs|input_doc|\.(?:txt|pdf|docx?|md|csv|html?|xlsx?|pptx?)\b",
     re.IGNORECASE)
 _DERIVED_SRC_RE = re.compile(r"deriv|inferr|cross[_-]?layer|^L\d", re.IGNORECASE)
+
+
+def is_input_quotation(src) -> bool:
+    """True when this evidence source key claims a VERBATIM quote of an INPUT doc.
+
+    THE PARTITION LIVES HERE AND NOWHERE ELSE. `stage_on_pass_review` carried a
+    second copy of both regexes and of this one expression, under a comment
+    saying it drew "the same partition `phase1_evidence_grounding_check` draws,
+    for the same reason" -- a premise spelt in two places, which is a premise
+    that will disagree. Neither copy is the reviewer's own judgement to make:
+    which source keys are input quotations is this gate's definition, and a
+    reviewer that answers the question differently from the gate is reviewing a
+    different run than the one the gate passed.
+
+    Not an HDL reader. `src` is a provenance KEY (`input/docs/spec.md`,
+    `derived_from_L3`), never design source, so there is nothing here to strip.
+    """
+    return (not _DERIVED_SRC_RE.search(str(src))
+            and bool(_INPUT_SRC_RE.search(str(src))))
 _WS_RE = re.compile(r"\s+")
 
 # A NAME-shaped identifier — the fabrication-prone anchor of an evidence literal:
@@ -138,7 +157,7 @@ def _iter_literals(ev) -> List[Tuple[str, str]]:
         return out
     for src, entries in ev.items():
         # ground ONLY direct input-doc quotes; exempt internal/derived provenance.
-        if _DERIVED_SRC_RE.search(str(src)) or not _INPUT_SRC_RE.search(str(src)):
+        if not is_input_quotation(src):
             continue
         if not isinstance(entries, list):
             continue

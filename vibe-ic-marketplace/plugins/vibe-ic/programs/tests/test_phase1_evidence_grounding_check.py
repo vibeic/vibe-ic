@@ -61,3 +61,67 @@ def test_an_error_is_rc_2_not_a_verdict(tmp_path, monkeypatch):
         raise ValueError("unparsable layer JSON")
     monkeypatch.setattr(G, "check", boom)
     assert G.main([str(tmp_path)]) == 2
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# the input/derived partition has ONE definition
+# ─────────────────────────────────────────────────────────────────────────────
+#
+# `stage_on_pass_review` carried a verbatim second copy of both regexes and of
+# the one expression that combines them, under a comment saying it drew "the
+# same partition `phase1_evidence_grounding_check` draws, for the same reason".
+# Two copies of a premise are two premises. The reviewer that decides which
+# evidence keys are input quotations must decide it the way the GATE decides
+# it, or it is reviewing a run the gate never passed.
+#
+# `is_input_quotation` is not an HDL reader: `src` is a provenance KEY, never
+# design source, so there is nothing in it to strip. That is stated here so a
+# later reader does not "harden" it by stripping comments out of a filename.
+
+import ast  # noqa: E402
+
+_CONSUMERS = ("stage_on_pass_review.py",)
+
+
+def test_the_partition_is_defined_once_in_the_tree():
+    for name in _CONSUMERS:
+        src = (PROGRAMS / name).read_text(encoding="utf-8")
+        tree = ast.parse(src)
+        assigned = {t.id for n in ast.walk(tree)
+                    if isinstance(n, ast.Assign)
+                    for t in n.targets if isinstance(t, ast.Name)}
+        assert "_INPUT_SRC_RE" not in assigned, (
+            f"{name} defines its own _INPUT_SRC_RE again -- the partition is "
+            f"back in two places and free to drift")
+        assert "_DERIVED_SRC_RE" not in assigned, (
+            f"{name} defines its own _DERIVED_SRC_RE again")
+
+
+def test_both_readers_answer_the_same_question():
+    """The property the dedupe exists for, driven through both entry points."""
+    import stage_on_pass_review as sopr
+
+    quotes = ("input/docs/spec.md", "input_doc/datasheet.txt",
+              "input\\docs\\spec.md", "notes.md", "table.csv")
+    not_quotes = ("derived_from_L3", "cross_layer_rule_7", "L5",
+                  "inferred_default", "derived_from_input/docs/spec.md")
+
+    for key in quotes:
+        assert G.is_input_quotation(key) is True, key
+    for key in not_quotes:
+        assert G.is_input_quotation(key) is False, key
+
+    for key in quotes + not_quotes:
+        doc = {"extraction_evidence": {key: ["a quoted literal"]}}
+        seen = [r["source"] for r in sopr.cited_input_literals(doc)]
+        assert bool(seen) is G.is_input_quotation(key), (
+            f"the reviewer and the gate disagree about {key!r}: reviewer "
+            f"kept={bool(seen)}, gate says={G.is_input_quotation(key)}")
+
+
+def test_the_predicate_is_not_an_hdl_reader():
+    """A key that LOOKS like HDL is still just a key, and a key naming a
+    comment marker is not thereby a comment."""
+    assert G.is_input_quotation("input/docs/module foo.md") is True
+    assert G.is_input_quotation("input") is False
+    assert G.is_input_quotation("// input/docs/spec.md") is True

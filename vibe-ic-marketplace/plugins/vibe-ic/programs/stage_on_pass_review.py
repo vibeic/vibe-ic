@@ -438,6 +438,9 @@ import _design_module_set as _dms  # noqa: E402
 # R4 reads a die with it rather than shipping a second parser that could drift
 # from the first.
 from gds_topcell_name_check import parse_structures  # noqa: E402
+# The evidence-source partition is the grounding gate's own definition; R? reads
+# it from there rather than restating it. See `is_input_quotation`.
+import phase1_evidence_grounding_check as _peg  # noqa: E402
 from _atomic_artefact import write_json as atomic_write_json  # vibe-ic#1082 (helper from PR #1094)  # noqa: E402
 
 try:
@@ -2095,14 +2098,14 @@ _HEX_IN_LITERAL_RE = re.compile(r"\b0[xX]([0-9A-Fa-f]{1,16})\b")
 _INPUT_TEXT_EXT = (".txt", ".md", ".markdown", ".rst", ".adoc", ".asciidoc",
                    ".text")
 
-#: A source key naming a design INPUT document, and one naming an internal
-#: derivation. A `derived_*` / upstream-L key is not a claim of quotation from
-#: the input and is not this rule's subject — the same partition
-#: `phase1_evidence_grounding_check` draws, for the same reason.
-_INPUT_SRC_RE = re.compile(
-    r"input[\\/]+docs|input_doc|\.(?:txt|pdf|docx?|md|csv|html?|xlsx?|pptx?)\b",
-    re.IGNORECASE)
-_DERIVED_SRC_RE = re.compile(r"deriv|inferr|cross[_-]?layer|^L\d", re.IGNORECASE)
+#: A source key naming a design INPUT document is IMPORTED, not restated. A
+#: `derived_*` / upstream-L key is not a claim of quotation from the input and
+#: is not this rule's subject — and the partition that says so belongs to
+#: `phase1_evidence_grounding_check`, which is the gate that enforces it. This
+#: file held a verbatim second copy of both regexes under a comment saying it
+#: drew "the same partition ... for the same reason": the same fact in two
+#: places, free to drift, with the reviewer then reviewing a partition the gate
+#: does not use.
 
 #: The flow's own disclosure that it already ruled a value fabricated. A
 #: literal carrying it is a record of a scrub, not a claim about the input.
@@ -2173,11 +2176,11 @@ def cited_input_literals(doc: Any) -> List[Dict[str, str]]:
     if not isinstance(ev, dict):
         return out
     for src, entries in ev.items():
-        s = str(src)
-        if _DERIVED_SRC_RE.search(s) or not _INPUT_SRC_RE.search(s):
+        if not _peg.is_input_quotation(src):
             continue
         if not isinstance(entries, list):
             continue
+        s = str(src)
         for e in entries:
             lit = e if isinstance(e, str) else (
                 e.get("literal") if isinstance(e, dict) else None)
