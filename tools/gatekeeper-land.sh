@@ -853,17 +853,63 @@ lane_timed() {                       # lane_timed <name> <fn…>
   lane_stamp "$name" t1
   return "$rc"
 }
-# THE REPORT. Printed once, after the window is joined and emitted, from the
-# MAIN shell only. Three numbers, because one of them alone would mislead:
+# THE REPORT. Printed after the window is joined and emitted, from the MAIN
+# shell only. Three numbers, because one of them alone would mislead:
 # the per-lane elapsed (what each lane cost), the WINDOW span (what the tier
 # actually waited, = the critical path), and the SERIAL sum (what the same work
 # would have cost one after another). The ratio is the concurrency actually
 # obtained, which is the only honest answer to "was the window worth it".
-lane_report_window() {
-  local name t0 t1 elapsed sum=0 first="" last="" measured=0 missing=""
+#
+# ONE ROUND PER CALL, BECAUSE A LANDING CAN HAVE TWO. When
+# `lane_window_saw_a_write` fires, the whole window runs a second time at width
+# 1 -- and `lane_window_reset` deliberately clears `.rc`/`.out`/`.reported` and
+# NOT `.t0`/`.t1`, while `lane_stamp` truncates. So round 2's stamps landed on
+# top of round 1's and the single report at the end described the SERIAL round
+# and called it the tier. MEASURED by driving `lane_stamp` and this function
+# with a lopsided tier (targeted 1736 / hygiene 1259 / corpus 518 / audit 26)
+# and then a serial re-run of the same work:
+#
+#   what round 1 alone says   window 1736s wall vs 3539s serial -- 2.04x
+#   what was actually printed window 3539s wall vs 3539s serial -- 1.00x
+#
+# On the one landing shape that costs the most wall clock, the log said the
+# tier obtained NO concurrency. It obtained 2.04x and then paid for a full
+# serial repeat on top, and neither number survived. The re-run is also the
+# single largest wall-clock event this script can have, so it is the last
+# reading that should be silently overwritten.
+#
+# THE STAMPS ARE ARCHIVED, NOT RE-READ FROM A SECOND CLOCK. Before the re-run
+# starts, round 1's stamps are MOVED aside under a suffix and each round is
+# then reported against its own. There is deliberately no fallback clock: the
+# only other stamps in reach are the parent's, whose difference is the barrier
+# -- the very number this instrument exists to stop printing.
+#
+# STILL CANNOT MOVE A VERDICT. Every function here returns 0 unconditionally,
+# touches no `FAILED`, and writes no `.rc`.
+lane_stamps_archive() {              # lane_stamps_archive <round-suffix>
+  local name
   for name in $LANE_LAUNCHED; do
-    t0="$(cat "$LANE_DIR/$name.t0" 2>/dev/null || true)"
-    t1="$(cat "$LANE_DIR/$name.t1" 2>/dev/null || true)"
+    # `mv` only what exists. A lane that left no stamp must stay unstamped in
+    # the archive too, so the round-1 report says NO ELAPSED RECORD for it
+    # rather than inheriting round 2's.
+    [ -f "$LANE_DIR/$name.t0" ] && mv -f "$LANE_DIR/$name.t0" "$LANE_DIR/$name.$1.t0"
+    [ -f "$LANE_DIR/$name.t1" ] && mv -f "$LANE_DIR/$name.t1" "$LANE_DIR/$name.$1.t1"
+  done
+  printf '%s' "$LANE_LAUNCHED" > "$LANE_DIR/lanes.$1"
+  return 0
+}
+#: Set by `lane_report_round` so the caller can state the cost ACROSS rounds.
+#: A round that measured nothing leaves them empty rather than 0 -- an
+#: unmeasured round and a zero-length one are not the same state.
+LANE_ROUND_WINDOW=""
+LANE_ROUND_SUM=""
+lane_report_round() {                # lane_report_round <suffix> <lane-list>
+  local sfx="$1" lanes="$2"
+  local name t0 t1 elapsed sum=0 first="" last="" measured=0 missing=""
+  LANE_ROUND_WINDOW=""; LANE_ROUND_SUM=""
+  for name in $lanes; do
+    t0="$(cat "$LANE_DIR/$name$sfx.t0" 2>/dev/null || true)"
+    t1="$(cat "$LANE_DIR/$name$sfx.t1" 2>/dev/null || true)"
     case "${t0:-x}${t1:-x}" in
       *[!0-9]*) missing="$missing $name"; continue ;;
     esac
@@ -896,6 +942,34 @@ lane_report_window() {
     "$window" "$sum" \
     "$(awk -v s="$sum" -v w="$window" 'BEGIN{printf "%.2f", s/w}')" \
     "$measured" "${missing:+, $(set -- $missing; echo $#) lane(s) unmeasured}"
+  LANE_ROUND_WINDOW="$window"; LANE_ROUND_SUM="$sum"
+  return 0
+}
+lane_report_window() {
+  # NO ARCHIVE = ONE ROUND = the output this script printed before rounds were
+  # told apart, byte for byte. The two-round shape is entered only when the
+  # re-run actually happened, so the ordinary landing's log does not change.
+  if [ ! -f "$LANE_DIR/lanes.concurrent" ]; then
+    lane_report_round "" "$LANE_LAUNCHED"
+    return 0
+  fi
+  local w1 w2
+  echo "  REPORT  round 1 of 2 — the CONCURRENT window:"
+  lane_report_round ".concurrent" "$(cat "$LANE_DIR/lanes.concurrent")"
+  w1="$LANE_ROUND_WINDOW"
+  echo "  REPORT  round 2 of 2 — the SERIAL re-run forced by the write guard:"
+  lane_report_round "" "$LANE_LAUNCHED"
+  w2="$LANE_ROUND_WINDOW"
+  # THE TIER PAID BOTH, and neither round alone says so. Stated only when both
+  # rounds measured something; a round that could not be measured makes the
+  # total unknowable and it is refused rather than reported as the other half.
+  if [ -n "$w1" ] && [ -n "$w2" ]; then
+    printf '  REPORT  this tier cost %ss wall in total — %ss concurrent THEN %ss serial; the re-run is not free and is not an overlap\n' \
+      "$(( w1 + w2 ))" "$w1" "$w2"
+  else
+    echo "  REPORT  total across the two rounds: NOT MEASURED — one round left no complete stamp pair, and the other half is not the total"
+  fi
+  return 0
 }
 lane_launch() {                      # lane_launch <name> <fn…>
   local name="$1"; shift
@@ -1836,6 +1910,10 @@ if [ "$LANE_WIDTH" -gt 1 ]; then
     echo "  REPORT  a write-guard bracket reported a write inside the concurrent"
     echo "          window — re-running that window SERIALLY so the write is"
     echo "          attributed to a stage rather than to an overlap."
+    # ARCHIVED BEFORE THE RE-RUN OVERWRITES THEM. `lane_stamp` truncates, so
+    # without this the concurrent round's cost is destroyed by the round that
+    # exists only because of it.
+    lane_stamps_archive concurrent
     LANE_WIDTH=1
     lane_run_window
   fi

@@ -65,9 +65,11 @@ _SCHEDULER = (
     "fn_emit",
     "run",
     "lane_stamp",
+    "lane_stamps_archive",
     "lane_timed",
     "lane_launch",
     "lane_join",
+    "lane_report_round",
     "lane_report_window",
     "lane_window_reset",
     "lane_hygiene",
@@ -194,6 +196,7 @@ if [ "$LANE_WIDTH" -gt 1 ]; then
   for _lane in $LANE_LAUNCHED; do lane_join "$_lane"; done
   if lane_window_saw_a_write; then
     echo "  REPORT  serial re-run"
+    lane_stamps_archive concurrent
     LANE_WIDTH=1
     lane_run_window
   fi
@@ -509,6 +512,117 @@ def test_a_write_inside_the_window_forces_a_serial_re_run(scheduler, work):
     text = (work / "marks").read_text(encoding="utf-8")
     assert text.count("targeted start") == 2, text
     assert set(row[0] for row in _journal(work)) == set(_WINDOW)
+
+
+_ROUND_1 = "  REPORT  round 1 of 2 — the CONCURRENT window:"
+_ROUND_2 = "  REPORT  round 2 of 2 — the SERIAL re-run forced by the write guard:"
+_TOTAL = re.compile(
+    r"^  REPORT  this tier cost (\d+)s wall in total — (\d+)s concurrent "
+    r"THEN (\d+)s serial", re.MULTILINE)
+
+
+def test_the_concurrent_round_survives_the_serial_re_run(scheduler, work):
+    """FAILS if round 2's stamps are allowed to overwrite round 1's.
+
+    `lane_window_reset` clears `.rc`/`.out`/`.reported` and deliberately NOT
+    `.t0`/`.t1`, and `lane_stamp` truncates. So a single report at the end read
+    the SERIAL round and called it the tier: the concurrency the first round
+    really obtained was destroyed by the round that exists only because of it,
+    and the log said the window was worth nothing on the one landing shape that
+    costs the most wall clock.
+
+    The assertion is not "two headings were printed". It is that the two window
+    lines DISAGREE in the direction only real rounds can — the concurrent one
+    overlapped (window < serial sum) and the serial one did not — and that the
+    total the report states about itself is their sum.
+    """
+    proc = _run(scheduler, work,
+                {"LANE_WIDTH": "4", "_WG_RC": "1", "T_SEC": "5", "C_SEC": "2",
+                 "H_SEC": "1", "A_SEC": "1"})
+    assert proc.returncode == 0, proc.stdout
+    assert _ROUND_1 in proc.stdout, proc.stdout
+    assert _ROUND_2 in proc.stdout, proc.stdout
+
+    windows = _LANE_WINDOW.findall(proc.stdout)
+    assert len(windows) == 2, (
+        f"expected one window line per round, got {len(windows)}: "
+        f"{proc.stdout}")
+    (w1, s1, r1), (w2, s2, r2) = windows
+    assert int(w1) < int(s1), (
+        f"round 1 is the CONCURRENT window and must have overlapped "
+        f"({w1}s wall vs {s1}s serial): {proc.stdout}")
+    assert float(r1) > float(r2), (
+        f"round 1 must report MORE concurrency than the serial re-run "
+        f"({r1}x vs {r2}x); equal ratios mean one round overwrote the other: "
+        f"{proc.stdout}")
+
+    total = _TOTAL.search(proc.stdout)
+    assert total, proc.stdout
+    assert (total.group(2), total.group(3)) == (w1, w2), proc.stdout
+    assert int(total.group(1)) == int(w1) + int(w2), (
+        f"the tier paid both rounds; the total must be their sum: "
+        f"{proc.stdout}")
+
+
+def test_without_a_re_run_the_report_is_exactly_the_one_round_it_always_was(
+        scheduler, work):
+    """The ordinary landing's log must not change at all.
+
+    A diagnostic that reshapes every log to serve the rare case makes the
+    common case harder to read, so the two-round shape is entered only when the
+    re-run actually happened.
+    """
+    proc = _run(scheduler, work, {"LANE_WIDTH": "4", "_WG_RC": "0"})
+    assert proc.returncode == 0, proc.stdout
+    assert _ROUND_1 not in proc.stdout, proc.stdout
+    assert _ROUND_2 not in proc.stdout, proc.stdout
+    assert not _TOTAL.search(proc.stdout), proc.stdout
+    assert len(_LANE_WINDOW.findall(proc.stdout)) == 1, proc.stdout
+
+
+def test_a_lane_unstamped_in_round_1_does_not_inherit_round_2s_stamp(
+        scheduler, work):
+    """The archive moves only what exists, so an absent stamp stays absent.
+
+    Copying `.t0`/`.t1` unconditionally, or letting the round-1 report fall
+    through to the live stamps, would hand a lane that never finished the
+    duration of the lane that replaced it — a number invented for a lane whose
+    only honest reading is that it did not finish.
+    """
+    proc = _run(scheduler, work,
+                {"LANE_WIDTH": "4", "_WG_RC": "1", "T_SEC": "1", "C_SEC": "1",
+                 "H_SEC": "1", "A_SEC": "1"})
+    assert proc.returncode == 0, proc.stdout
+    lanes = work / "lanes"
+    # Round 1's stamps are ARCHIVED under a suffix and round 2's are live, so
+    # both generations are on disk at once — which is the whole mechanism.
+    assert (lanes / "targeted.concurrent.t0").is_file(), sorted(
+        pth.name for pth in lanes.iterdir())
+    assert (lanes / "targeted.t0").is_file()
+    assert (lanes / "targeted.concurrent.t0").read_text() != (
+        lanes / "targeted.t0").read_text(), (
+        "the archived round-1 stamp is the live round-2 one; the archive did "
+        "not happen before the re-run overwrote it")
+
+
+def test_the_real_script_archives_BEFORE_it_re_runs(land_text):
+    """The driver above is a COPY; this reads the shipped one.
+
+    Every other test here drives `_DRIVER`, which is this repository's
+    transcription of the real top-level block. A transcription can be correct
+    while the original is not, so the ordering the whole mechanism depends on
+    is asserted against `tools/gatekeeper-land.sh` itself.
+    """
+    block = re.search(
+        r"^  if lane_window_saw_a_write; then\n(?:.*?\n)*?^  fi$",
+        land_text, re.MULTILINE)
+    assert block, "the write-guard re-run branch is gone from gatekeeper-land.sh"
+    body = block.group(0)
+    assert "lane_stamps_archive concurrent" in body, body
+    assert body.index("lane_stamps_archive concurrent") < body.index(
+        "lane_run_window"), (
+        "the archive must run BEFORE the re-run, or lane_stamp truncates the "
+        f"stamps it was meant to preserve:\n{body}")
 
 
 def test_the_hygiene_pool_gives_back_what_the_other_lanes_take(scheduler,

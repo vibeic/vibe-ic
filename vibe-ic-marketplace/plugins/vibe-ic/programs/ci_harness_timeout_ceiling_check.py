@@ -295,7 +295,7 @@ _LANDING_LANE_SHA256 = {
 #: them, the launcher, the window, and everything before them.
 _LANDING_WINDOW_ANCHOR = "lane_emit_window"
 _LANDING_EXECUTION_PREFIX_SHA256 = (
-    "838ebe07aee10e3f79e84e3a8c52fe34760008b3ade30c49946e2643eb7f0ee3"
+    "62ae5873f5621150c464a211d60daad322d3db1b2805f991b2deb329a6322b8c"
 )
 # RE-PINNED when the landing gained its runtime PREFLIGHT. Both digests below
 # moved for one reason and it is stated here rather than left to `git log`: the
@@ -599,8 +599,41 @@ _LANDING_EXECUTION_PREFIX_SHA256 = (
 # write guard, same `--junit` argument on every path. `rc` still decides both
 # lines; the variables can only ADD a readable record, and `test_landing_merge_verdict`
 # asserts that for all three by name.
+# RE-PINNED for THE CONCURRENT ROUND THE SERIAL RE-RUN WAS DESTROYING. TWO of
+# the six digests moved and BOTH are re-pinned here. WHICH TWO, AND THE WITNESS
+# THAT IT IS ONLY TWO: the digests were ENUMERATED FROM THIS FILE — the two
+# constants below plus the three `_LANDING_LANE_SHA256` bodies plus
+# `_SEMANTIC_DRIVER_SHA256` — and then re-derived over the edited tree, never
+# read off a diff. Re-pinning three of four faces is the same as re-pinning
+# none, because the check is a CONJUNCTION and stays red on the face nobody
+# looked at.
+#
+#   whole file           MOVED  -> re-pinned below
+#   execution prefix     MOVED  -> re-pinned below  (both edits are above the
+#                                 `lane_emit_window` anchor: the report
+#                                 functions at the top of the file and the
+#                                 archive call inside the re-run branch)
+#   run_pytest           did NOT move
+#   run_repo_tools_pytest did NOT move
+#   run_unselectable_pytest did NOT move
+#   _SEMANTIC_DRIVER_SHA256 not touched — it pins pytest_per_file_junit.py
+#
+# The three unmoved lane bodies are this check's own witness that the
+# populations are byte-identical, and the run that produced these two values
+# reported exactly two errors and no lane-body error.
+#
+# WHAT CHANGED, so the pin is a review and not a rubber stamp. When
+# `lane_window_saw_a_write` fires, the window runs a second time at width 1.
+# `lane_window_reset` clears `.rc`/`.out`/`.reported` and NOT `.t0`/`.t1`, and
+# `lane_stamp` truncates, so round 2's stamps landed on round 1's and the one
+# report at the end described the SERIAL round and called it the tier —
+# `window 9s wall vs 9s serial — 1.00x` on a tier that had just obtained 2.04x
+# and then paid for a full serial repeat. The stamps are now ARCHIVED before
+# the re-run and each round is reported against its own; with no re-run the
+# output is byte-identical to before. Nothing added here touches `FAILED`,
+# writes an `.rc`, or returns non-zero.
 _LANDING_SCRIPT_SHA256 = (
-    "adc43b73d10c80fe8b8d6321da2c7c46c6862c41e7852e6c9480c8f40e6b1c54"
+    "683881563d78af4e37e695c2bb6be5266a6c590f616085c99f033a6a6ac9ac77"
 )
 # The helper AST is not enough: a counterfeit CLI can define the expected
 # helper and never call it.  Bind the policy to the complete reviewed driver
