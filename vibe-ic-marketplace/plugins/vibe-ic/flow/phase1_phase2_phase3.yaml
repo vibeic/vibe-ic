@@ -6897,13 +6897,68 @@ steps:
         path: "phase3/stage4/gds/*.gds"
     programs:
       - digital_hardmacro_gen
+      # THE DOCUMENTS ARE AN OUTPUT OF THIS STEP, not a separate chore. Until
+      # this producer existed, `required_outputs` here was the four views AND
+      # NOTHING ELSE: a hard IP shipped with its LEF, Liberty, GDS and Verilog
+      # and no statement of what it is, how to instantiate it, what the
+      # integrating design MUST do, or what is known to be wrong with it. A chip
+      # is fabricated and its facts survive in the run directory; an IP is
+      # DELIVERED, and every fact not spelled by the four views reaches its
+      # integrator in a document or does not reach them.
+      #
+      # WRITTEN BY THE RUNNER, NOT BY THE GATE, and 37.5ic's arrangement is
+      # deliberately NOT copied: `step_digital_hardmacro_gen` already records
+      # why (an auditor that writes a declared required_output into the project
+      # it is auditing certifies its own output — A8's GDS producer was wired
+      # into A8's gate and that was withdrawn on 2026-07-28 after the audit was
+      # measured creating the very .gds its next clauses read). So this producer
+      # is dispatched from `phase3_one_shot_runner.step_ip_release_docs_gen`,
+      # and the gate below judges documents the audit did not touch.
+      - ip_release_docs_gen
     required_outputs:
       - "phase3/stage4/hardmacro/*.lef"
       - "phase3/stage4/hardmacro/*.lib"
       - "phase3/stage4/hardmacro/*.gds"
       - "phase3/stage4/hardmacro/*.v"
+      # ONE DIRECTORY PER DELIVERED PACKAGE, including the single-package case:
+      # a kit with two macros has two datasheets, and a shape that collapses the
+      # common case would make the shape exercised on every run different from
+      # the shape a two-macro release takes. Named with the glob the producer
+      # actually writes, for the reason 37.5ic's own note records: declaring a
+      # bare filename no producer in this flow writes is "named nowhere the gate
+      # can reach".
+      - "phase3/stage4/documentation/ip/*/IP_DATASHEET.md"
+      - "phase3/stage4/documentation/ip/*/IP_INTEGRATION_GUIDE.md"
+      - "phase3/stage4/documentation/ip/*/RELEASE_NOTES.md"
+      - "phase3/stage4/documentation/ip/*/ERRATA.md"
+      - "phase3/stage4/documentation/ip/*/DELIVERABLES_MANIFEST.md"
+      - "phase3/stage4/documentation/ip/*/documentation_manifest.yaml"
     gate:
-      program_exit_zero: "digital_hardmacro_check . --json reports/phase3/digital_hardmacro.json"
+      all_of:
+        - program_exit_zero: "digital_hardmacro_check . --json reports/phase3/digital_hardmacro.json"
+        # AND THE DOCUMENTS ARE JUDGED, NOT COUNTED. Existence is already
+        # covered by `required_outputs` above, and existence is the weakest
+        # thing that can be asked of a document: a datasheet with a hand-typed
+        # pin count exists.
+        #
+        # This clause RE-DERIVES what the documents state and refuses a
+        # disagreement with the tree — the stated signal pin count against the
+        # delivered Verilog view (a different view, read by a different
+        # program), every shipped-view sha256 against the file, every
+        # quantitative field against the artefact path it cites, and the
+        # manifest's own derived / NOT_MEASURED counts against a recount. It
+        # also refuses a mandatory constraint that appears ONLY in an
+        # Application Note, which is optional and is the first document dropped
+        # from a delivery.
+        #
+        # rc 2 IS RESERVED AND IS NOT REACHABLE HERE ON A RUN THAT DELIVERS A
+        # KIT. The gate answers rc 2 for exactly one state — no kit and no
+        # documents, so there is no release to examine — and this step's own
+        # condition means a run reaching it is on the IP path. A kit that EXISTS
+        # with no documentation beside it is rc 1: crediting that to the vacuous
+        # tier would reinstate the very defect this clause was added for. That
+        # distinction is why this is a second clause and not a `files_exist`.
+        - program_exit_zero: "release_docs_check . --arm ip --json reports/phase3/release_docs.json"
     # 0.5ic writes the NO_TEMPLATE.txt this step's condition reads.
     blocks_on: [37, 0.5ic]
 

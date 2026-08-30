@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 1230
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1230)
+- **Total programs (excluding helpers / shims):** 1232
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1232)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 1221 |
+| `any` | 1223 |
 
 ## Alphabetical listing
 
@@ -545,6 +545,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `ip_catalog_upstream_audit` | any | — | Verify catalog manifests against canonical upstream repos. |
 | `ip_catalog_validate` | any | — | Validate catalog manifests against schema + permissive-license whitelist. |
 | `ip_integration_check` | any | — | hard-macro / IP integration checklist gate (flow v2.3.1, external review R3). |
+| `ip_release_docs_gen` | any | — | the release documents for a delivered hard IP. |
 | `ir_drop_budget_check` | any | — | numeric IR-drop budget gate for tapeout sign-off. |
 | `ir_drop_report_check` | any | — | IR-drop report check — wrapper for eda_report_audit --mode ir_drop. |
 | `ir_drop_triage_classify` | any | v0.1.50 | IR-drop triage classifier (Pattern-B → program). |
@@ -953,6 +954,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `regression_issue_intake_check` | any | — | Issue-#5 lesson-learned enforcement: before a debug agent attempts a |
 | `regression_report_aggregate` | any | — | Pattern-B extraction from `skills/regression-manage/SKILL.md` Workflow step 1 + Output format. |
 | `regression_severity_classify` | any | — | Pattern-B extraction from `skills/regression-manage/SKILL.md` Workflow step 3. |
+| `release_docs_check` | any | — | the gate over a release document set. |
 | `repo_hygiene_parallel` | any | — | Run repo hygiene as a fail-closed local parallel DAG. |
 | `report_belongs_to_project_check` | any | — | a runner report must be ABOUT the project it sits in. |
 | `reported_figure_artifact_backing_check` | any | — | the ARTIFACT-BACKING gate. |
@@ -1302,7 +1304,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (1221 programs)
+### `any` (1223 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `absence_verdict_names_its_search_space_check` — "not found" must say WHERE it looked.
@@ -1819,6 +1821,7 @@ _(no programs in this group)_
 - `ip_catalog_upstream_audit` — Verify catalog manifests against canonical upstream repos.
 - `ip_catalog_validate` — Validate catalog manifests against schema + permissive-license whitelist.
 - `ip_integration_check` — hard-macro / IP integration checklist gate (flow v2.3.1, external review R3).
+- `ip_release_docs_gen` — the release documents for a delivered hard IP.
 - `ir_drop_budget_check` — numeric IR-drop budget gate for tapeout sign-off.
 - `ir_drop_report_check` — IR-drop report check — wrapper for eda_report_audit --mode ir_drop.
 - `ir_drop_triage_classify` — IR-drop triage classifier (Pattern-B → program).  _[v0.1.50]_
@@ -2226,6 +2229,7 @@ _(no programs in this group)_
 - `regression_issue_intake_check` — Issue-#5 lesson-learned enforcement: before a debug agent attempts a
 - `regression_report_aggregate` — Pattern-B extraction from `skills/regression-manage/SKILL.md` Workflow step 1 + Output format.
 - `regression_severity_classify` — Pattern-B extraction from `skills/regression-manage/SKILL.md` Workflow step 3.
+- `release_docs_check` — the gate over a release document set.
 - `repo_hygiene_parallel` — Run repo hygiene as a fail-closed local parallel DAG.
 - `report_belongs_to_project_check` — a runner report must be ABOUT the project it sits in.
 - `reported_figure_artifact_backing_check` — the ARTIFACT-BACKING gate.
