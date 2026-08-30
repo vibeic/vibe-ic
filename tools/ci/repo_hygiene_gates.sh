@@ -739,6 +739,42 @@ run "flow-gate enforcement audit"       "$ROOT" python3 "$PG/flow_gate_enforceme
 # also refuses the degenerate repair of deleting the surviving one.
 run "stage membership declared once"    "$ROOT" python3 "$PG/flow_stage_membership_single_declaration_check.py"
 
+# THE OTHER HALF OF THE SAME AXIS, and it ran NOWHERE. The gate above keeps the
+# flow from declaring a step's stage twice. This one asks the question that
+# makes the axis worth having: does every SHIPPED SKILL say where in the flow it
+# applies? It was authored, tested and merged, and then MEASURED at v1.13.3 by
+# `checker_execution_wiring_audit` and `gate_is_wired_check` as the one checker
+# in this tree that NOTHING but its own unit test ever ran — a fixture the
+# author wrote proved the logic, and no artefact was ever handed to it. Both
+# audits exited 1 naming it, and only it.
+#
+# WHY IT IS WIRED RATHER THAN RECORDED. The two audits each carry a register
+# that would have absorbed this name and gone green. Neither was touched: a
+# register entry says "nothing runs this and that is accepted", which is the
+# state, not a repair, and the state is exactly what the two audits exist to
+# refuse. `run`, not `run_tolerating_uncheckable`: the gate reads only
+# `flow/phase1_phase2_phase3.yaml` and `skills/_classification.json` from a
+# tree it is handed by absolute path, so it needs no network, no container and
+# no run directory, and its rc 2 means one of those two files could not be read
+# — a broken checkout, which must not read as clean. It is BLOCKING, and that
+# is stated here rather than left to be inferred.
+#
+# WHY NOW, AND NOT AS A REGISTER ROW THAT AGES. The five on-pass review stages
+# in flight (#1845 #1849 #1850 #1853 #1854) each move a skill from DECLARED in
+# `skills/_classification.json` to DERIVED from a stage's `on_pass_review:`,
+# and each edits BOTH files. `derived_attachment` reads `on_pass_review` off
+# the stage wrapper, so a skill a new stage names is placed with no edit to any
+# list here — and P4 refuses the half-done edit that leaves the old declaration
+# behind. Wiring the gate covers all five without a row per stage; recording it
+# would have covered none of them.
+#
+# `"$ROOT"` + an absolute `"$PG/..."` so the denominator probe can drive it from
+# a scratch tree (a plugin-relative form is recorded [NOT DRIVEN]), and
+# `--plugin "$PLUGIN"` names the subject at the wiring site instead of leaving
+# it to the program's default. ONE LINE, no `\` continuation — two probes parse
+# this file with a single-line `run(?:_\w+)?\s+"label"...` regex.
+run "skills declare their stage"        "$ROOT" python3 "$PG/skill_stage_membership_check.py" --plugin "$PLUGIN"
+
 # vibe-ic#1121 family, landed in the v1.11.19..v1.11.32 PPA stack and wired
 # here by the lander because `flow/` and `tools/ci/` are single-writer surfaces
 # the lane could not touch.

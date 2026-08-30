@@ -23,6 +23,10 @@ import pytest
 PLUGIN = Path(__file__).resolve().parent.parent.parent
 PROGRAM = PLUGIN / "programs" / "skill_stage_membership_check.py"
 CLASSIFICATION = PLUGIN / "skills" / "_classification.json"
+REPO = PLUGIN.parents[2]
+HYGIENE = REPO / "tools" / "ci" / "repo_hygiene_gates.sh"
+#: The label `tools/ci/repo_hygiene_gates.sh` declares this gate under.
+GATE_LABEL = "skills declare their stage"
 
 
 def _run(plugin: Path):
@@ -259,3 +263,68 @@ def test_fixture_the_derived_side_never_starts_demanding_declarations(tmp_path):
     assert rc == 0, (
         f"`wired-skill` is named by a step and must stay placed with NO "
         f"declaration; got {rc}:\n{out}")
+
+
+# ---------------------------------------------------------------------------
+# THE WIRING IS ITSELF A CONTROL.
+#
+# MEASURED at v1.13.3: this checker was the ONE program in the tree that
+# `checker_execution_wiring_audit` and `gate_is_wired_check` both named, and
+# the only reason either exited 1 —
+#
+#     [FAIL] 1 checker(s) that NOTHING but their own test runs — a fixture the
+#            author wrote proves the logic, never the artefacts:
+#        skill_stage_membership_check.py
+#     [FAIL] 1 gate(s) newly consulted by no automatic verdict:
+#        skill_stage_membership_check
+#
+# Everything above this line proves the checker REFUSES the right things. None
+# of it proved anything was ever handed to it, and MEASURED both ways: with the
+# `run` line removed, emptying a shipped skill's `stages` list passes the whole
+# hygiene sweep unnoticed; with it, the sweep exits 1 naming that skill.
+#
+# READ FROM THE DISPATCHER'S OWN RECORD, not from the script text, for the same
+# reason `test_three_orphan_checkers_have_a_machine_runner` does: the record is
+# what `gatekeeper_review` consumes to decide what it consulted, so a gate that
+# is present in the file but not in the record is not actually consulted.
+# `--list` DECLARES without executing, so this costs a parse and not a sweep.
+#
+# The audit assertion is deliberately NOT duplicated here. Both audits run
+# through the BLOCKING `run` wrapper in that same script and go red the moment
+# this runner disappears — that is the fourth arm of this change's own
+# falsification — so re-running a 70s audit inside a unit test would pin
+# nothing the landing gate does not already pin.
+# ---------------------------------------------------------------------------
+@pytest.mark.skipif(not HYGIENE.is_file(), reason="hygiene script absent")
+def test_the_gate_is_declared_in_the_landing_sweep(tmp_path):
+    summary = tmp_path / "summary.json"
+    subprocess.run(["bash", str(HYGIENE), "--list",
+                    "--summary-json", str(summary)],
+                   capture_output=True, text=True, check=False)
+    doc = json.loads(summary.read_text())
+    row = next((g for g in doc["gates"] if g["label"] == GATE_LABEL), None)
+    assert row is not None, (
+        f"{GATE_LABEL!r} is not in the hygiene dispatcher's own record, so "
+        f"nothing but this test file runs the checker again. Declared: "
+        f"{sorted(g['label'] for g in doc['gates'])}")
+
+
+@pytest.mark.skipif(not HYGIENE.is_file(), reason="hygiene script absent")
+def test_the_gate_is_declared_BLOCKING_and_not_quietly_advisory(tmp_path):
+    """The other wrong answer. A gate wired but exempted refuses nothing, and
+    'nothing said' is the defect: an exemption here would be a dated,
+    reasoned decision and must be visible as one, never a default."""
+    summary = tmp_path / "summary.json"
+    subprocess.run(["bash", str(HYGIENE), "--list",
+                    "--summary-json", str(summary)],
+                   capture_output=True, text=True, check=False)
+    doc = json.loads(summary.read_text())
+    row = next((g for g in doc["gates"] if g["label"] == GATE_LABEL), None)
+    assert row is not None, (
+        f"{GATE_LABEL!r} is not declared at all — see the test above; this one "
+        f"is about HOW it is declared and has nothing to judge")
+    assert row["exempt_until"] is None, (
+        f"{GATE_LABEL!r} carries an uncheckable exemption until "
+        f"{row['exempt_until']}: {row.get('exempt_reason')!r}. This gate reads "
+        f"only two files out of the plugin tree, so it has no environment to "
+        f"be forgiven for; its rc 2 means one of them could not be read.")
