@@ -184,6 +184,11 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Sequence, Set, Tuple
 
 import _watchdog as _wd
+# ONE DEFINITION OF THE STRIDE, imported rather than restated.  The emitter
+# checkpoints on it and the clause below accepts only exact `+STRIDE` steps;
+# two copies of that number would let the channel drift into accepting a
+# heartbeat the emitter never promised.
+from _pytest_progress_plugin import COLLECT_SCAN_STRIDE
 
 RC_OK = 0
 RC_RED = 1
@@ -251,6 +256,18 @@ _MAX_DOMAIN_PROGRESS_SCOPES_FLOOR = 64
 #: One stream per emitting process. A parallel pytest session opens one per
 #: worker, so this is a concurrency bound, never an estimate of how many
 #: workers a healthy run may use.
+#: The scan channel's runaway cap.  PER UNIT AND FLAT, with a FLOOR -- the
+#: shape a runaway rule has to have, as distinct from a stall grace, which is
+#: about forward progress and stays flat in seconds.
+#:
+#: MEASURED on this repo (2026-08-30, pinned image 0.3.6): a 120-file selection
+#: makes pytest scan 355 200 paths, i.e. ~2 960 per selected file, because the
+#: tree is re-walked per argument.  8 192 leaves ~2.8x headroom on the measured
+#: rate while still bounding a runaway emitter, and the floor keeps a
+#: one-file selection from being capped below a legitimate scan.
+_COLLECT_SCAN_PATHS_PER_UNIT = 8192
+_COLLECT_SCAN_FLOOR = 1_000_000
+
 _MAX_PROGRESS_STREAMS = 256
 #: Absolute ceiling over ALL streams. The per-stream ceiling stays
 #: `_MAX_PROGRESS_BYTES`, so the set's budget is that times the number of
@@ -571,6 +588,7 @@ class _SemanticProgressProbe:
 
     _FIELDS = {
         "session_start": set(),
+        "collect_scan": {"scanned"},
         "collect_report": {"nodeid", "outcome"},
         "item_collected": {"nodeid"},
         "collection_finish": {"selected_items"},
@@ -583,7 +601,8 @@ class _SemanticProgressProbe:
 
     def __init__(self, path: Path, nonce: str, pid_fn, *, collect_only=False,
                  require_runtime_identity=False,
-                 partial_session: bool = False):
+                 partial_session: bool = False,
+                 collect_scan_ceiling: int = _COLLECT_SCAN_FLOOR):
         self.path = path
         self.nonce = nonce
         self.pid_fn = pid_fn
@@ -606,6 +625,10 @@ class _SemanticProgressProbe:
         self.last_ns = 0
         self.error = ""
         self.collect_reports: Set[str] = set()
+        #: Paths this process has checkpointed scanning.  Advances during the
+        #: phase that used to emit nothing at all; see `collect_scan` below.
+        self.collect_scanned = 0
+        self.collect_scan_ceiling = collect_scan_ceiling
         self.items: Set[str] = set()
         self.item_order: List[str] = []
         self.finished: Set[str] = set()
@@ -668,6 +691,10 @@ class _SemanticProgressProbe:
                 self._fail("trusted pytest runtime identity is missing")
                 return
             self.stage = "collecting"
+        elif event == "collect_scan":
+            self._accept_collect_scan(record.get("scanned"))
+            if self.error:
+                return
         elif event == "collect_report":
             nodeid = record.get("nodeid")
             if (self.stage != "collecting" or not isinstance(nodeid, str)
@@ -771,6 +798,33 @@ class _SemanticProgressProbe:
         self.last_ns = stamp
         self.score += 1
 
+    def _accept_collect_scan(self, scanned) -> None:
+        """THE PHASE THAT COSTS THE TIME, MADE OBSERVABLE.
+
+        Before this clause the FSM's first event after `session_start` was
+        `collect_report`, which pytest does not reach until the whole path
+        scan is done -- MEASURED, 57 of 61 s on a 120-file selection, and past
+        any flat grace at landing width.  The supervisor then killed a process
+        that was scanning thousands of paths a second and called it a stall,
+        which is the one thing a progress-stall watchdog must never do.
+
+        EXACT `+STRIDE` TRANSITIONS, exactly as `domain_progress` below.  A
+        stuck session cannot hold its grace open: to emit the next value it
+        must really scan another STRIDE paths.  A duplicate, a gap or a jump
+        is a refusal, not a slower clock.
+        """
+        if (self.stage != "collecting" or not isinstance(scanned, int)
+                or isinstance(scanned, bool)
+                or scanned != self.collect_scanned + COLLECT_SCAN_STRIDE):
+            self._fail("duplicate/out-of-order collect_scan")
+            return
+        if scanned > self.collect_scan_ceiling:
+            self._fail(
+                f"collect_scan exceeded the scan ceiling "
+                f"({scanned} > {self.collect_scan_ceiling})")
+            return
+        self.collect_scanned = scanned
+
     def sample(self) -> int:
         """Return a monotonic score; invalid bytes freeze it until refusal."""
         if self.error:
@@ -865,12 +919,14 @@ class _ProgressStreamSet:
 
     def __init__(self, directory: Path, nonce: str, pid_fn, *,
                  collect_only: bool = False,
-                 require_runtime_identity: bool = False):
+                 require_runtime_identity: bool = False,
+                 collect_scan_ceiling: int = _COLLECT_SCAN_FLOOR):
         # Forwarded UNCHANGED to each per-process probe below. This class
         # demultiplexes streams; it does not relax any clause the probe
         # enforces, so every option the probe takes must reach it.
         self._collect_only = collect_only
         self._require_runtime_identity = require_runtime_identity
+        self._collect_scan_ceiling = collect_scan_ceiling
         self.directory = directory
         self.nonce = nonce
         self.pid_fn = pid_fn
@@ -998,6 +1054,7 @@ class _ProgressStreamSet:
             probe = _SemanticProgressProbe(
                 path, self.nonce, (lambda captured: lambda: captured)(pid),
                 partial_session=worker is not None,
+                collect_scan_ceiling=self._collect_scan_ceiling,
                 collect_only=self._collect_only,
                 require_runtime_identity=self._require_runtime_identity)
         except OSError as exc:
@@ -1707,6 +1764,107 @@ def _red_node_ids(suites: Sequence[ET.Element]) -> List[str]:
     return ids
 
 
+#: THE AGGREGATE ARM'S ABANDON CEILING, DERIVED FROM WHAT WAS SELECTED.
+#:
+#: THE DEFECT.  The aggregate arm inherited the SAME flat `--maxfail` the
+#: per-file arm uses, and a flat bound applied to a whole run gets MORE certain
+#: to fire the larger the suite grows -- which is backwards for the one arm
+#: whose entire purpose is the cross-file question only a large selection can
+#: pose.  MEASURED on the landing tier (2026-08-30, v1.13.1, pinned image): a
+#: 175-file selection tripped its bound at 10 reds after 378 of 4361 items and
+#: ABANDONED 162 of 175 files, so the tier reported
+#:
+#:     AGGREGATE_NORECORD: aggregate session stopped at its own DECLARED
+#:     FAILURE BOUND ... cross-file/order semantics are UNKNOWN, not clean
+#:
+#: and no landing of any width could get an answer out of that arm.
+#:
+#: THE SHAPE OF THE FIX, and it is the same shape as the stall grace above: a
+#: RUNAWAY rule is per-unit and FLAT, a CEILING scales with the work.  The
+#: per-file arm keeps the caller's flat bound -- one file, N reds, unchanged.
+#: The aggregate arm gets `max(FLOOR, selected_files * PER_UNIT)`.  It STILL
+#: REFUSES: a genuine runaway, where the reds keep coming file after file,
+#: reaches the ceiling and is abandoned exactly as before.  What it no longer
+#: does is abandon a selection for having a normal number of standing reds.
+#:
+#: PER_UNIT is 1.  The measured aggregate carried ~25 items per selected file,
+#: so "one red per selected file, on average" is already a suite in trouble and
+#: is the right place to stop believing the run.
+#:
+#: THE FLOOR IS THE CALLER'S OWN BOUND, not a second constant.  A flat floor was
+#: written here first and it was wrong in the one direction that matters: it
+#: RAISED a bound the caller had deliberately set small, so a 2-file selection
+#: asking for `--maxfail=2` stopped being truncated at all.  Two tests in this
+#: tree caught it. The ceiling may only ever move a bound UP toward the size of
+#: the work, and never past what a small selection asked for.
+_AGGREGATE_FAILURE_BOUND_PER_UNIT = 1
+
+
+def aggregate_failure_bound(pytest_argv: Sequence[str],
+                            selected: int) -> Optional[int]:
+    """The bound the AGGREGATE arm actually runs under.
+
+    THIS IS A ONE-WAY RATCHET AND THE DIRECTION IS THE WHOLE POINT.  Read the
+    `max` below as a rule, not as arithmetic:
+
+        it may RAISE a bound toward the size of the work    -- always allowed
+        it may LOWER a bound the caller asked for           -- NEVER
+
+    A caller that declared no bound acquires none here (`None` in, `None`
+    out): this function widens a refusal threshold, it never invents one.
+
+    THE ASYMMETRY WAS LEARNED, NOT ASSUMED.  A flat floor was written here
+    first -- `max(declared, FLOOR, selected * PER_UNIT)` with FLOOR=50 -- and
+    it was wrong in exactly the forbidden direction: it RAISED the deliberate
+    `--maxfail=2` of a 2-file selection to 50, so that selection stopped being
+    truncated at all and two tests in this tree went red catching it.  A
+    ceiling that scales with the work must still stop at what a small
+    selection asked for, and `declared` is therefore the floor -- there is no
+    second constant, because a second constant is what got this wrong.
+
+    `test_the_bound_is_derived_from_the_selection_and_only_ever_rises` pins
+    both directions; this comment exists so the next reader does not have to
+    rediscover the rule by breaking it.
+    """
+    declared = _declared_failure_bound(pytest_argv)
+    if declared is None:
+        return None
+    # `max`, and never `min`: see the ratchet above.
+    return max(declared, int(selected) * _AGGREGATE_FAILURE_BOUND_PER_UNIT)
+
+
+def _with_failure_bound(pytest_argv: Sequence[str],
+                        bound: Optional[int]) -> List[str]:
+    """`pytest_argv` with every failure-bound flag replaced by `bound`.
+
+    Every spelling `_declared_failure_bound` READS is removed here, or the
+    lowest of the two would silently win and the ceiling would be decorative.
+    """
+    argv = list(pytest_argv)
+    out: List[str] = []
+    index = 0
+    while index < len(argv):
+        arg = argv[index]
+        if arg == "--maxfail" and index + 1 < len(argv):
+            index += 2
+            continue
+        if arg.startswith("--maxfail=") or arg == "--exitfirst":
+            index += 1
+            continue
+        if (len(arg) > 1 and arg[0] == "-" and arg[1] != "-"
+                and "x" in arg[1:]):
+            stripped = "-" + arg[1:].replace("x", "")
+            if stripped != "-":
+                out.append(stripped)
+            index += 1
+            continue
+        out.append(arg)
+        index += 1
+    if bound is not None:
+        out.append(f"--maxfail={bound}")
+    return out
+
+
 def _declared_failure_bound(pytest_argv: Sequence[str]) -> Optional[int]:
     """The failure bound THIS driver was told to hand pytest, or None.
 
@@ -1864,6 +2022,7 @@ def _run_progress_supervised(
             Callable[["_SemanticProgressProbe"], None]] = None,
         poll_s: Optional[float] = None,
         collect_only: bool = False,
+        scan_units: int = 1,
         outcome_sink: Optional[Dict[str, object]] = None,
         ) -> Tuple[Optional[int], str, bool]:
     """Run until natural completion; stop only after semantic events stall.
@@ -1931,6 +2090,9 @@ def _run_progress_supervised(
         progress_path, nonce,
         lambda: holder["proc"].pid if "proc" in holder else None,
         collect_only=collect_only,
+        collect_scan_ceiling=max(
+            _COLLECT_SCAN_FLOOR,
+            int(scan_units) * _COLLECT_SCAN_PATHS_PER_UNIT),
         require_runtime_identity=(
             os.environ.get(_REQUIRE_RUNTIME_IDENTITY_ENV) == "1"))
     child_env = os.environ.copy()
@@ -2212,7 +2374,7 @@ def run_one(pytest_argv: Sequence[str], test_file: str, junit_path: Path,
     ]
     return _run_progress_supervised(
         cmd, stall_after, cwd, progress_relay_path=progress_relay_path,
-        outcome_sink=outcome_sink)
+        scan_units=1, outcome_sink=outcome_sink)
 
 
 def run_aggregate(pytest_argv: Sequence[str], test_files: Sequence[str],
@@ -2224,6 +2386,11 @@ def run_aggregate(pytest_argv: Sequence[str], test_files: Sequence[str],
                   outcome_sink: Optional[Dict[str, object]] = None,
                   ) -> Tuple[Optional[int], str, bool]:
     """Run the original whole-selection pytest shape as a semantics canary."""
+    # THE ONE PLACE THE CEILING IS APPLIED.  The classification below asks
+    # `aggregate_failure_bound` the same question with the same inputs, so the
+    # arm and the verdict can never disagree about the bound that was in force.
+    pytest_argv = _with_failure_bound(
+        pytest_argv, aggregate_failure_bound(pytest_argv, len(test_files)))
     cmd = list(pytest_argv) + _declared_rootdir(pytest_argv, cwd) \
         + _declared_configfile(pytest_argv, cwd, test_files) + [
         "-p", _PROGRESS_PLUGIN,
@@ -2232,7 +2399,8 @@ def run_aggregate(pytest_argv: Sequence[str], test_files: Sequence[str],
     ]
     return _run_progress_supervised(
         cmd, stall_after, cwd, progress_relay_path=progress_relay_path,
-        progress_observer=progress_observer, outcome_sink=outcome_sink)
+        progress_observer=progress_observer, scan_units=len(test_files),
+        outcome_sink=outcome_sink)
 
 
 def run_collect(pytest_argv: Sequence[str], test_files: Sequence[str],
@@ -2254,7 +2422,8 @@ def run_collect(pytest_argv: Sequence[str], test_files: Sequence[str],
     ]
     return _run_progress_supervised(
         cmd, stall_after, cwd, progress_relay_path=progress_relay_path,
-        poll_s=poll_s, collect_only=True, outcome_sink=outcome_sink)
+        poll_s=poll_s, collect_only=True, scan_units=len(test_files),
+        outcome_sink=outcome_sink)
 
 
 def _write_json_atomic(path: Path, payload: object) -> None:
@@ -3103,7 +3272,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 # renaming the verdict — the landing refuses either way.
                 if aggregate_suites is not None:
                     truncation = _maxfail_truncation(
-                        _declared_failure_bound(pytest_argv), aggregate_rc,
+                        aggregate_failure_bound(pytest_argv, len(selection)),
+                        aggregate_rc,
                         aggregate_red, aggregate_sink,
                         len(selection) - len(aggregate_missing),
                         len(selection), aggregate_extra)

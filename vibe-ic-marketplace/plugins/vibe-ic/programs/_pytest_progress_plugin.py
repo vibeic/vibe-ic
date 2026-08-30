@@ -46,6 +46,40 @@ _path = None
 _WORKER_ID_OK = frozenset(
     "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_")
 
+#: Scanned paths between two ``collect_scan`` checkpoints.
+#:
+#: WHY THIS EVENT EXISTS.  Until it did, this plugin's first event after
+#: ``session_start`` was ``collect_report``, which pytest does not reach until
+#: the whole path scan is over.  MEASURED on this repo (2026-08-30, pinned
+#: image 0.3.6, a 120-file selection): the session spends 57 of its 61
+#: collection seconds before the first ``collect_report`` and emits NOTHING a
+#: parent can validate in that window.  The landing tier's supervisor watches
+#: exactly this channel, so it saw zero forward progress and killed a healthy
+#: collection at its 300 s grace -- `AGGREGATE_NORECORD ... (stage=collecting)`.
+#: A 1231-file selection scales that silence to ~10 min, so at real landing
+#: width the targeted lane could not return a verdict at all.
+#:
+#: Over the SAME silent window ``pytest_collect_file`` fires 355 200 times with
+#: a LARGEST gap between any two calls of 0.59 s.  The phase that costs the
+#: time can prove it is moving; it simply was never asked to.
+#:
+#: A CHECKPOINT, NEVER A HEARTBEAT -- the same rule ``domain_progress`` above
+#: is written to.  The event is emitted when the COUNT crosses a stride, never
+#: on a clock, so a process that has stopped scanning stops emitting and its
+#: grace correctly expires.  The parent accepts only exact ``+STRIDE``
+#: transitions, so neither a duplicate nor a fabricated jump keeps a stuck
+#: session alive.  The stride is what keeps the channel small: 355 200 scanned
+#: paths cost 355 events, not 355 200.
+#:
+#: NOT GUARDED BY ``_emit_lock``: pytest performs collection on the main
+#: thread, and the lock is not reentrant, so taking it here and again in
+#: ``_emit`` would deadlock.  A miscount cannot manufacture progress -- the
+#: parent's exact-stride clause rejects any value that is not the next one.
+COLLECT_SCAN_STRIDE = 1000
+
+_scanned = 0
+_scan_emitted = 0
+
 
 def _own_ppid() -> int:
     """Parent pid as of THIS call, read without trusting a cached value."""
@@ -147,6 +181,29 @@ def pytest_sessionstart(session) -> None:
             parse_constant=_reject_nonfinite,
         )
     _emit("session_start", **fields)
+
+
+def _count_scanned_path() -> None:
+    """Count one scanned path; checkpoint when the count crosses the stride."""
+    global _scanned, _scan_emitted
+    _scanned += 1
+    if _scanned - _scan_emitted >= COLLECT_SCAN_STRIDE:
+        _scan_emitted += COLLECT_SCAN_STRIDE
+        _emit("collect_scan", scanned=_scan_emitted)
+
+
+def pytest_collect_file(file_path, parent):
+    """Liveness only.  Counts the path and expresses NO opinion on collecting
+    it: this hook is not ``firstresult``, and returning ``None`` leaves the
+    collection decision exactly where it was."""
+    _count_scanned_path()
+    return None
+
+
+def pytest_collect_directory(path, parent):
+    """Liveness only, as ``pytest_collect_file`` above."""
+    _count_scanned_path()
+    return None
 
 
 def pytest_collectreport(report) -> None:
