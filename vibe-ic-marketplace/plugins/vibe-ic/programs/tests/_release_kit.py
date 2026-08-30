@@ -216,7 +216,13 @@ def _layers(register_rich: bool) -> Dict[str, dict]:
     return {
         "L1_DATASHEET": {
             "doc_class": "datasheet", "ic_name": DESIGN,
-            "description": "A synchronous block delivered as a hard macro."},
+            # THE PIPE IS DELIBERATE. Layer prose is arbitrary text this flow
+            # does not choose, and a `|` inside it must be escaped to stay
+            # inside its Markdown cell. The gate's cell reader has to honour
+            # that escape or it sees four cells, reads the row as leaving the
+            # table, and stops examining every row below it.
+            "description": "A synchronous block (clk | rst_n in, dout out) "
+                           "delivered as a hard macro."},
         "L4_REGMAP": regmap,
         "L7_TEST_DEBUG": {
             "test_modes": [{"name": "scan"}],

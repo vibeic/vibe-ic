@@ -288,7 +288,7 @@ def _one_line(text: str, limit: int = 400) -> str:
     The `|` is escaped for the same reason.
     """
     flat = _WS_RE.sub(" ", text).strip().replace("|", "\\|")
-    return flat if len(flat) <= limit else flat[: limit - 1].rstrip() + "…"
+    return flat if len(flat) <= limit else flat[: limit - 3].rstrip() + "..."
 
 
 # ── reading the run's own kit ──────────────────────────────────────────────

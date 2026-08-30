@@ -415,6 +415,30 @@ def test_a_name_that_merely_contains_a_placeholder_token_is_not_refused(tmp_path
     assert result.returncode == RC_PASS, result.stdout
 
 
+def test_an_escaped_pipe_in_a_cell_does_not_truncate_the_table(tmp_path):
+    """The negative control for the cell reader.
+
+    Layer prose is arbitrary text this flow does not choose. A `|` inside it is
+    escaped to stay in its Markdown cell; a reader that splits on a bare `|`
+    sees four cells, reads the row as leaving the table, and never examines the
+    rows below — and the recount then disagrees with the manifest, refusing a
+    correct release for a defect the reader invented. The fixture's datasheet
+    summary carries a pipe for exactly this.
+    """
+    project = released(tmp_path)
+    datasheet = docs_dir(project, SUBJECT) / "IP_DATASHEET.md"
+    assert "\\|" in datasheet.read_text(encoding="utf-8"), (
+        "the fixture no longer produces an escaped pipe, so this control "
+        "proves nothing")
+    result, data = report(project)
+    assert result.returncode == RC_PASS, result.stdout
+    # The rows BELOW the escaped-pipe row must have been examined: the
+    # interface table follows it, and its cross-check must have run.
+    detail = next(d for d in data["summary"]["releases"]
+                  if d["release"] == SUBJECT)
+    assert detail["pin_count_cross_check"] == "AGREES", detail
+
+
 # ══════════════════ F6 — a manifest count nobody re-derived ════════════════
 
 def test_a_manifest_count_that_drifted_is_refused(tmp_path):

@@ -189,8 +189,18 @@ def derived_rows(document: str, text: str) -> List[Row]:
     return rows
 
 
+#: A cell boundary: a `|` that is NOT backslash-escaped. Splitting on a bare
+#: `|` was a MEASURED defect of this reader: the producer escapes a pipe inside
+#: a prose cell (`\|`, the Markdown rule — an unescaped one would end the cell),
+#: a naive split then saw FOUR cells instead of three, the row was read as
+#: leaving the table, and every row BELOW it went unexamined. A recount over the
+#: truncated table then disagreed with the manifest, so a correct release was
+#: refused for a defect the reader had invented.
+_CELL_SPLIT_RE = re.compile(r"(?<!\\)\|")
+
+
 def _cells(line: str) -> List[str]:
-    parts = [c.strip() for c in line.split("|")]
+    parts = [c.strip() for c in _CELL_SPLIT_RE.split(line)]
     if parts and not parts[0]:
         parts = parts[1:]
     if parts and not parts[-1]:

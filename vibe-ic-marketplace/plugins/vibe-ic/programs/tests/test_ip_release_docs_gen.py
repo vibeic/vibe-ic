@@ -18,6 +18,7 @@ own: it must never state a SECOND opinion about whether the kit is deliverable.
 """
 from __future__ import annotations
 
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -55,6 +56,14 @@ def run(project: Path, *extra) -> subprocess.CompletedProcess:
         capture_output=True, text=True)
 
 
+#: A cell boundary: a `|` that is not backslash-escaped. This reader is the
+#: test's OWN, independent of the gate's, so that both have to agree with the
+#: producer rather than with each other. It carried the naive bare-`|` split
+#: first, and the escaped-pipe control below turned it red — which is what the
+#: control is for.
+_CELL_SPLIT_RE = re.compile(r"(?<!\\)\|")
+
+
 def _derived_rows(text: str):
     """Every `Derived from` row of one document, as (label, value, third)."""
     rows, in_table = [], False
@@ -63,8 +72,11 @@ def _derived_rows(text: str):
         if not line.startswith("|"):
             in_table = False
             continue
-        cells = [c.strip() for c in line.strip("|").split("|")]
-        cells = [c.strip() for c in cells]
+        cells = [c.strip() for c in _CELL_SPLIT_RE.split(line)]
+        if cells and not cells[0]:
+            cells = cells[1:]
+        if cells and not cells[-1]:
+            cells = cells[:-1]
         if len(cells) != 3:
             in_table = False
             continue
