@@ -3764,6 +3764,16 @@ read_lef ${celllefPath(cfg)}
 read_liberty ${libPath(cfg)}
 read_def ${def_file}
 ${netResolveTcl}
+# P-4: run report_power. Nothing in this MCP ran it -- grep -c "report_power"
+# over index.js was 0 -- so the P of PPA was never asked for at all. It is run
+# OUTSIDE the power-net branch below, so the design's power is reported even when
+# the PSM grid analysis cannot complete: those are two different measurements and
+# only one of them needs a resolvable PDN. MEASURED to work with no clock
+# defined (rc=0), which this tool cannot supply. Wrapped in catch so a design it
+# refuses degrades to "no power number", never to a failed run.
+puts "=== REPORT_POWER_BEGIN ==="
+if {[catch {report_power} _rperr]} { puts "REPORT_POWER_FAILED: $_rperr" }
+puts "=== REPORT_POWER_END ==="
 if {$_vddnet eq ""} {
   puts "=== IR_DROP_NO_POWER_NET ==="
 } else {
@@ -3834,6 +3844,19 @@ if {$rc} {
     // back it, and (b) EVERY outcome writes a manifest entry, so a run that
     // measured nothing is recorded as INCONCLUSIVE by the gate instead of
     // vanishing. Absent is a third answer, not a quiet pass and not a fail.
+    // X-2 in miniature: two INDEPENDENT power numbers now exist -- PSM's
+    // "Total power" and report_power's Total row -- so they can be checked
+    // against each other instead of each being taken on trust. Disagreement
+    // beyond 1% is reported, never silently reconciled.
+    const powerCrossCheck = (power && ir.total_power_w !== null)
+      ? {
+          psm_total_w: ir.total_power_w,
+          report_power_total_w: power.total_w,
+          agree: Math.abs(power.total_w - ir.total_power_w)
+                 <= Math.max(1e-15, 0.01 * Math.abs(ir.total_power_w)),
+        }
+      : undefined;
+
     const irStatus = noPowerNet ? "NOT_MEASURED"
                    : irFailed   ? "NOT_MEASURED"
                    : irMeasured ? "MEASURED"
@@ -3862,6 +3885,7 @@ if {$rc} {
         ...ir,
         report_power_w: power ? power.total_w : null,
         report_power_split: power || undefined,
+        power_cross_check: powerCrossCheck,
       });
     }
 
@@ -3870,6 +3894,19 @@ if {$rc} {
                    || result.output.match(/(\d+)\s+instances/i);
     if (instMatch && parseInt(instMatch[1]) < 100) {
       warnings.push(`Design has ${instMatch[1]} instances (< 100) — IR-drop results may not be meaningful for tiny designs.`);
+    }
+    if (powerCrossCheck && !powerCrossCheck.agree) {
+      warnings.push(
+        `The two power numbers disagree: OpenROAD PSM reports Total power `
+        + `${ir.total_power_w} W and report_power reports ${power.total_w} W. `
+        + `They are independent measurements of the same design and should `
+        + `agree; neither is silently preferred.`);
+    }
+    if (result.output.includes("REPORT_POWER_FAILED")) {
+      warnings.push(
+        "report_power did not run on this design, so the internal/switching/"
+        + "leakage split is NOT_MEASURED. The IR-report power number, if present, "
+        + "is unaffected.");
     }
     if (voltageMismatch) {
       warnings.push(
@@ -3932,6 +3969,7 @@ if {$rc} {
           ...ir,
           report_power_w: power ? power.total_w : null,
           report_power_split: power || undefined,
+          power_cross_check: powerCrossCheck,
           vdd_net: vddNet,
           vss_net: vssNet,
           def_power_nets: defPowerNets,
