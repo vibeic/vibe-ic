@@ -72,6 +72,9 @@ sys.path.insert(0, str(Path(__file__).parent))
 import _path_layout as _pl  # noqa: E402
 import _published_tree  # noqa: E402
 import plugin_manifest_discovery as _pmd  # noqa: E402  (#800 ONE version reader)
+# ONE resolver for "what is the chip GDS", shared with the Step-35 gate that
+# grades this kit, so producer and gate cannot drift apart (field: foundry-handoff hollow chip GDS).
+import foundry_handoff_package_check as _fhpc  # noqa: E402
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import _atomic_artefact as _aa  # noqa: E402  (vibe-ic#1082)
 
@@ -864,6 +867,47 @@ def main(argv=None) -> int:
               "antenna step in reports/phase3/antenna.json). Refusing to write "
               "a foundry handoff pack for a layout with no realized "
               "interconnect. Finish routing, then re-run.", file=sys.stderr)
+        return 2
+
+    # field (foundry-handoff hollow chip GDS) — the SECOND refusal, and the one #654 could not reach.
+    # #654 keys on `antenna.json:routing_incomplete`. MEASURED on the two
+    # benchmark runs this was written from (spm_gf180mcuD_20260831_a1 and
+    # subservient_gf180mcuD_20260831_d1), that key is FALSE — detailed routing
+    # COMPLETED, with one residual violation, which is why `pnr` is FAIL and NOT
+    # why routing is incomplete. So #654 stayed silent while this generator
+    # wrote a full mask spec, WAT probe plan and ATE corner-vector kit for a
+    # chip whose GDS does not exist anywhere in the tree (`step_gds` never ran:
+    # the runner gates stream-out on `pnr.status == "PASS"`, correctly).
+    #
+    # The kit exists to describe ONE artefact — the die. Writing it for a
+    # streamed non-die is the laundering this program must not do, so the
+    # predicate is asked BEFORE the handoff directory is created: a refusal
+    # leaves NO half-kit on disk for the next reader to mistake for a
+    # deliverable.
+    #
+    # SCOPE, stated because the narrower rule was a deliberate choice and the
+    # wider one was MEASURED: this refuses when stream-out HAS written a .gds
+    # and what it wrote is not a die (0-byte, hollow, frame-only). It does NOT
+    # refuse a tree with no .gds at all. Two reasons. (1) That tree is already
+    # rc=1 FAIL `FOUNDRY_HANDOFF_CHIP_GDS_MISSING` at the gate — no false green
+    # to close, only a skeleton the gate has already refused. (2) The wider rule
+    # was implemented and reddened 38 tests across 9 files whose fixtures run
+    # this generator on a bare project to check its FIELD DERIVATION (design_top
+    # from L1.ic_name, pdk from L19, cell counts, TODO semantics); making all
+    # nine plant a GDS would rewrite what those tests are about to buy a
+    # property the gate already holds.
+    #
+    # It does NOT soften the gate either: `foundry_handoff_package_check`
+    # evaluates `chip_gds_finding` BEFORE its `missing -> SKIP (rc=2)` branch,
+    # so an absent kit still exits rc=1 FAIL rather than the VACUOUS_PASS the
+    # flow runner reads rc=2 as. Verified end to end on a copy of the spm run
+    # tree.
+    _gds, _rule, _detail = _fhpc.packageable_chip_gds(project)
+    if _rule is not None and (_rule != _fhpc.RULE_NO_CHIP_GDS
+                              or _fhpc.gds_files_on_disk(project)):
+        print(f"VACUOUS_PASS: {_rule}: {_detail} Refusing to write a foundry "
+              f"handoff pack. Produce the sign-off GDS first (canonical step "
+              f"37 stream-out), then re-run.", file=sys.stderr)
         return 2
 
     handoff_dir = _pl.foundry_handoff_dir(project)

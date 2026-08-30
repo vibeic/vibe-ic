@@ -47,6 +47,15 @@ from pathlib import Path
 import pytest
 import yaml
 
+# field (foundry-handoff hollow chip GDS) — the chip GDS in this fixture must
+# carry GEOMETRY. A four-byte GDSII BOUNDARY record header (length 4, record
+# type 0x08) is the smallest thing that makes
+# `analog_a5_layout_check._gds_geometry_count` read 1 rather than 0. Without it
+# this fixture models a HOLLOW die, which `foundry_handoff_pack_gen` now refuses
+# to package and `foundry_handoff_package_check` now FAILs — so the fixture
+# would stop standing for the real run it was written from.
+_GDS_BOUNDARY_RECORD = b"\x00\x04\x08\x00"
+
 PLUGIN_ROOT = Path(__file__).resolve().parents[2]
 PROGRAMS = PLUGIN_ROOT / "programs"
 FLOW_YAML = PLUGIN_ROOT / "flow" / "phase1_phase2_phase3.yaml"
@@ -115,7 +124,8 @@ def _handoff_kit(tmp_path: Path, *, corner_vectors=True, scribe="note",
     # a real chip GDS named after the design, so the chip-GDS sub-gate passes
     gds_dir = hd / "gds"
     gds_dir.mkdir()
-    (gds_dir / f"{ic_name}.gds").write_bytes(b"HEADER\x00chip layout\n" * 32)
+    (gds_dir / f"{ic_name}.gds").write_bytes(
+        _GDS_BOUNDARY_RECORD + b"HEADER\x00chip layout\n" * 32)
     docs = proj / "phase1/generated_docs"
     docs.mkdir(parents=True)
     (docs / "L1_DATASHEET.json").write_text(
@@ -253,7 +263,8 @@ def _anti_scribe_kit(tmp_path: Path, *, chip_gds=None,
         gds_dir.mkdir(parents=True)
         name = (f"{ic_name}.gds" if chip_gds == "chip"
                 else "scribe_line_layout.gds")
-        (gds_dir / name).write_bytes(b"HEADER\x00layout\n" * 8)
+        (gds_dir / name).write_bytes(
+            _GDS_BOUNDARY_RECORD + b"HEADER\x00layout\n" * 8)
     return proj
 
 

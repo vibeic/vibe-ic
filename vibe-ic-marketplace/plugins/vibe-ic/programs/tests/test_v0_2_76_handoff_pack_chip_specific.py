@@ -23,6 +23,15 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import foundry_handoff_pack_gen as FH  # noqa: E402
 
+# field (foundry-handoff hollow chip GDS) — the chip GDS in this fixture must
+# carry GEOMETRY. A four-byte GDSII BOUNDARY record header (length 4, record
+# type 0x08) is the smallest thing that makes
+# `analog_a5_layout_check._gds_geometry_count` read 1 rather than 0. Without it
+# this fixture models a HOLLOW die, which `foundry_handoff_pack_gen` now refuses
+# to package and `foundry_handoff_package_check` now FAILs — so the fixture
+# would stop standing for the real run it was written from.
+_GDS_BOUNDARY_RECORD = b"\x00\x04\x08\x00"
+
 
 def _proj(tmp_path, name="alpha", lib="examplepdk_sc_hd__tt_025C.lib",
           l10_cases=("TC_RESET", "TC_SMOKE")):
@@ -39,7 +48,7 @@ def _proj(tmp_path, name="alpha", lib="examplepdk_sc_hd__tt_025C.lib",
     (p / "phase3" / "stage3" / "pnr").mkdir(parents=True)
     (p / "phase3" / "stage4" / "gds").mkdir(parents=True)
     (p / "phase3" / "stage4" / "gds" / f"{name}.gds").write_bytes(
-        b"\x00\x06\x00\x02" + name.encode())
+        _GDS_BOUNDARY_RECORD + b"\x00\x06\x00\x02" + name.encode())
     lib_dir = p / "input" / "pdk" / "liberty"
     lib_dir.mkdir(parents=True)
     (lib_dir / lib).write_text("library(x){}")

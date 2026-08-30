@@ -1,0 +1,10 @@
+SELECTION (59 files)
+
+=== BASE  ===
+17 failed, 1717 passed, 89 skipped, 5 xfailed in 334.20s (0:05:34)
+BASE pytest rc=1
+=== AFTER ===
+17 failed, 1733 passed, 89 skipped, 5 xfailed in 493.84s (0:08:13)
+AFTER pytest rc=1
+=== NEW failures (AFTER - BASE) ===
+=== FIXED (BASE - AFTER) ===

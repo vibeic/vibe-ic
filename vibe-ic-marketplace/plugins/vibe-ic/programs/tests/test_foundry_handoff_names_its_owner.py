@@ -54,6 +54,15 @@ sys.path.insert(0, str(PROGRAMS))
 
 import foundry_handoff_pack_gen as FH  # noqa: E402
 
+# field (foundry-handoff hollow chip GDS) — the chip GDS in this fixture must
+# carry GEOMETRY. A four-byte GDSII BOUNDARY record header (length 4, record
+# type 0x08) is the smallest thing that makes
+# `analog_a5_layout_check._gds_geometry_count` read 1 rather than 0. Without it
+# this fixture models a HOLLOW die, which `foundry_handoff_pack_gen` now refuses
+# to package and `foundry_handoff_package_check` now FAILs — so the fixture
+# would stop standing for the real run it was written from.
+_GDS_BOUNDARY_RECORD = b"\x00\x04\x08\x00"
+
 CHECKER = PROGRAMS / "foundry_handoff_package_check.py"
 
 
@@ -315,7 +324,8 @@ def _project(tmp_path, with_chip_gds=False):
         "link_design chip_top\n")
     (p / "phase3/stage4/gds").mkdir(parents=True)
     name = "alpha.gds" if with_chip_gds else "chip_top.gds"
-    (p / "phase3/stage4/gds" / name).write_bytes(b"\x00\x06\x00\x02alph")
+    (p / "phase3/stage4/gds" / name).write_bytes(
+        _GDS_BOUNDARY_RECORD + b"\x00\x06\x00\x02alph")
     (p / "phase1/generated_docs").mkdir(parents=True)
     (p / "phase1/generated_docs/L1_DATASHEET.json").write_text(
         json.dumps({"ic_name": "alpha"}))

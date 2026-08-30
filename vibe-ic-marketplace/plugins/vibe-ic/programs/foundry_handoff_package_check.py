@@ -33,7 +33,13 @@ deliberately not self-required here.
 
 chip-AGNOSTIC. No vendor / IC / tool-specific data hard-coded.
 
-Default rationale when SKIP: Foundry-handoff kit assembler not shipped.
+Default rationale when SKIP: the kit is incomplete — required members are
+absent. (It used to read "Foundry-handoff kit assembler not shipped.", which
+was false and cost a real investigation: the assembler IS shipped and IS wired
+— `foundry_handoff_pack_gen`, in `phase3_one_shot_runner.
+_DERIVED_ARTEFACT_GENERATORS`. Worse, this key is emitted on EVERY verdict,
+PASS and FAIL included, so a FAIL report carried a sentence saying the producer
+did not exist. It is a constant, never a statement about the run.)
 
 Usage
 -----
@@ -94,7 +100,14 @@ _REQUIRED_FILES = [
 _SCRIBE_PENDING_NOTE = (
     'phase3/stage4/foundry_handoff/scribe_line_layout.PENDING_FOUNDRY.txt')
 _SCRIBE_PENDING_FIELD = 'PENDING_FOUNDRY_scribe_line_layout'
-_WAIVER_RATIONALE = 'Foundry-handoff kit assembler not shipped.'
+# NOT a statement about the run: this key is written into the report under every
+# verdict, PASS and FAIL included. Its old text — "Foundry-handoff kit assembler
+# not shipped." — was also FALSE (the assembler is shipped and wired), and a FAIL
+# report carrying it was read as "the producer is missing", sending an
+# investigation after a program that already exists. The text now names the only
+# thing a SKIP from this gate actually means.
+_WAIVER_RATIONALE = ('Foundry-handoff kit incomplete: required member(s) absent '
+                     'and the step is not waived.')
 
 # ─────────────────────────────────────────────────────────────────────────────
 # THE OPERATOR'S OWN REFUSAL, AND WHY THIS GATE HAS TO READ IT
@@ -398,6 +411,142 @@ def _find_chip_gds(project, ic_name):
     return chip_gds, scribe_only, physical_tops
 
 
+# ── shared resolver: "is there a chip GDS a handoff kit could describe?" ──
+# field (foundry-handoff hollow chip GDS) — the PRODUCER side of this gate had no chip-GDS predicate at
+# all, and this gate had only a name-and-non-zero-size one. MEASURED on two
+# benchmark runs (spm_gf180mcuD_20260831_a1, subservient_gf180mcuD_20260831_d1):
+# PnR FAILed, so `step_gds` never ran, so NO .gds exists anywhere in either tree
+# — and `foundry_handoff_pack_gen` still wrote a complete mask spec, WAT probe
+# plan and ATE corner-vector kit for that absent die. Its only refusal (#654)
+# keys on `antenna.json:routing_incomplete`, which both runs record as FALSE:
+# routing COMPLETED, with a residual violation. So the one guard was silent on
+# exactly the case it exists for.
+#
+# And the expensive form, measured end to end on a copy of the real spm run
+# tree: a structurally valid GDSII stream of 108 bytes — HEADER, BGNLIB,
+# LIBNAME, UNITS, a top structure carrying the design's own name, ENDSTR,
+# ENDLIB, and NOT ONE geometry record — was packaged and signed off by this gate
+# as PASS, "all 4 required artefacts present + chip GDS 'spm.gds'".
+#
+# A packager that launders an absent or hollow die into a deliverable is worse
+# than no packager. The resolver lives HERE, in the gate that owns the "what
+# counts as the chip GDS" question, so the producer and the gate cannot drift
+# apart on the naming rules (`_find_chip_gds` / `_SCRIBE_LINE_GDS_HINTS` / the
+# three search roots).
+#
+# The geometry predicate is the SAME one the hardmacro gate uses —
+# `analog_a5_layout_check._gds_geometry_count`, imported the way
+# `analog_hardmacro_check._gds_geometry_records` imports it — so "carries
+# geometry" means one thing across the flow. A 0-byte GDS never reaches it:
+# `_find_chip_gds` already skips `st_size <= 0`, so an empty file lands in the
+# ABSENT arm and keeps the rule step 35 already emits for it.
+# The module's own directory is put on sys.path first. The bare
+# `from _atomic_artefact import ...` at the top of this file already assumes
+# programs/ is importable, but THIS import decides a verdict: if it silently
+# failed the gate would report GEOMETRY_PREDICATE_UNAVAILABLE on every project,
+# which is a corpus-wide red bought for nothing. A gate invoked through a copy
+# or a symlink elsewhere gets sys.path[0] = that other directory, so make it
+# explicit rather than inherited.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+try:  # pragma: no cover - programs/ is on sys.path by the line above
+    from analog_a5_layout_check import _gds_geometry_count
+except ImportError:
+    _gds_geometry_count = None  # type: ignore[assignment]
+
+RULE_NO_CHIP_GDS = 'FOUNDRY_HANDOFF_NO_CHIP_GDS_TO_PACKAGE'
+RULE_HOLLOW_CHIP_GDS = 'FOUNDRY_HANDOFF_HOLLOW_CHIP_GDS'
+RULE_GEOMETRY_PREDICATE_UNAVAILABLE = (
+    'FOUNDRY_HANDOFF_GEOMETRY_PREDICATE_UNAVAILABLE')
+
+
+def gds_files_on_disk(project):
+    """EVERY `*.gds` under the three roots — any size, any name, frame or die.
+
+    Distinct from `_any_real_gds`, deliberately. It answers "did stream-out
+    write anything at all here", which is the question that separates "this flow
+    has not reached stream-out yet" from "this flow streamed something and what
+    it streamed is not a die". The producer refuses on the second and not the
+    first; the GATE refuses on both, and already did on the first.
+    """
+    project = Path(project)
+    out = []
+    for root in (project / "phase3/stage4/foundry_handoff/gds",
+                 project / "phase3/stage4/gds",
+                 project / "gds"):
+        if root.is_dir():
+            out.extend(sorted(root.glob("*.gds")))
+    return out
+
+
+def _any_real_gds(project):
+    """Non-empty, non-scribe .gds files under the three roots `_find_chip_gds`
+    searches. Used when L1.ic_name is absent, so a project that never ran
+    phase 1 is still measured on whether a die was streamed at all rather than
+    silently treated as packageable."""
+    out = []
+    for root in (project / "phase3/stage4/foundry_handoff/gds",
+                 project / "phase3/stage4/gds",
+                 project / "gds"):
+        if not root.is_dir():
+            continue
+        for f in sorted(root.glob("*.gds")):
+            if any(h in f.stem.lower() for h in _SCRIBE_LINE_GDS_HINTS):
+                continue
+            try:
+                if f.stat().st_size > 0:
+                    out.append(f)
+            except OSError:
+                continue
+    return out
+
+
+def packageable_chip_gds(project):
+    """Return (gds_path_or_None, rule_or_None, detail).
+
+    `rule` is None only when a real, geometry-carrying chip GDS is on disk.
+    Every other return NAMES the rule the caller must refuse under — never a
+    bare False, so a refusal always says which predicate decided it.
+
+    An unavailable geometry parser is its OWN named refusal, not a skipped
+    predicate: a packager that cannot evaluate "is this die hollow" must refuse
+    to package, never pack on the strength of a check it could not run.
+    """
+    project = Path(project)
+    ic_name = _read_l1_ic_name(project)
+    chip_gds, scribe_only, physical_tops = _find_chip_gds(project, ic_name)
+    if chip_gds is None:
+        # No L1.ic_name is not a licence to package: fall back to "did the flow
+        # stream ANY non-scribe, non-empty die?" before concluding absence.
+        fallback = [] if ic_name else _any_real_gds(project)
+        if not fallback:
+            where = ("only scribe-line / frame GDS present"
+                     if scribe_only else "no .gds present")
+            return None, RULE_NO_CHIP_GDS, (
+                f"{where} under phase3/stage4/foundry_handoff/gds/ or "
+                f"phase3/stage4/gds/ or gds/ "
+                f"(L1.ic_name={ic_name!r}, physical PnR top(s)="
+                f"{physical_tops or '(none resolved)'}). There is no die to "
+                f"describe, so a mask spec / WAT plan / ATE vector kit written "
+                f"now would describe nothing.")
+        chip_gds = fallback[0]
+    if _gds_geometry_count is None:
+        return chip_gds, RULE_GEOMETRY_PREDICATE_UNAVAILABLE, (
+            "analog_a5_layout_check._gds_geometry_count could not be imported, "
+            "so whether {} carries geometry cannot be evaluated".format(
+                chip_gds.name))
+    try:
+        records = _gds_geometry_count(chip_gds.read_bytes())
+    except OSError as exc:
+        return chip_gds, RULE_HOLLOW_CHIP_GDS, (
+            f"{chip_gds.name}: unreadable ({exc})")
+    if records <= 0:
+        return chip_gds, RULE_HOLLOW_CHIP_GDS, (
+            f"{chip_gds.name}: the GDS stream carries no BOUNDARY/PATH/SREF/"
+            f"AREF/BOX record — a hollow die is not a deliverable")
+    return chip_gds, None, (
+        f"{chip_gds.name}: {records} GDS geometry/placement record(s)")
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser()
     parser.add_argument("project_dir")
@@ -451,6 +600,36 @@ def main(argv=None):
                     f"phase3/stage4/gds/ or gds/. Step 35 PASS "
                     f"requires the chip-named GDS deliverable."
                 ),
+            }
+
+    # field (foundry-handoff hollow chip GDS) — SUBSTANCE, not merely presence. `_find_chip_gds`
+    # accepts any non-empty file with the right name, so a structurally valid
+    # GDSII stream carrying ZERO geometry records — 108 bytes — satisfied the
+    # v1.6.162 chip-GDS requirement and this gate PASSED the kit around it.
+    #
+    # WHY IT IS IN THE GATE AND NOT ONLY IN THE PRODUCER, measured: with the
+    # producer-side refusal alone, the hollow case moved from rc=0 PASS to rc=2
+    # SKIP, and `flow_compliance_check` reads rc=2 as VACUOUS_PASS. The same
+    # green in a different exit code is not a fix. A producer-only refusal is
+    # also deletable — hand-write the four kit JSONs beside a hollow GDS and
+    # nothing looks at the die. Keyed here, on the artefact, no choice of writer
+    # evades it.
+    #
+    # It fires ONLY when a chip GDS was actually identified: an absent GDS is
+    # already FOUNDRY_HANDOFF_CHIP_GDS_MISSING above, and re-reporting it here
+    # would double-count one defect.
+    if chip_gds is not None and chip_gds_finding is None:
+        _pkg_gds, _pkg_rule, _pkg_detail = packageable_chip_gds(project)
+        if _pkg_rule in (RULE_HOLLOW_CHIP_GDS,
+                         RULE_GEOMETRY_PREDICATE_UNAVAILABLE):
+            chip_gds_finding = {
+                "severity": "ERROR",
+                "rule": _pkg_rule,
+                "message": (
+                    f"{_pkg_detail}. A chip GDS that carries no geometry is "
+                    f"not a deliverable: the handoff kit describes a die that "
+                    f"does not exist. Step 35 PASS requires a chip-named GDS "
+                    f"whose stream carries layout records."),
             }
 
     # ORGANIC-20260606 #433(d) — 0-byte member hard-fail: an empty file
