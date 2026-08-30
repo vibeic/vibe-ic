@@ -107,7 +107,9 @@ def score_one(design_id: str, draft: Path, dataset: Path, bench: Path,
               workdir: Optional[Path] = None) -> Tuple[str, List[str], str]:
     """Gate + officially score one design. Returns (verdict, fail_logs, detail).
 
-    verdict ∈ {'PASS','FAIL','NO_RESULT','GATE_BLOCKED','NO_DRAFT'}."""
+    verdict ∈ {'PASS','FAIL','NO_RESULT','GATE_BLOCKED','NO_DRAFT',
+                'IMAGE_MISSING'}. Everything that is not PASS/FAIL is
+    could-not-score (exit 2) — a verdict about the run, never about the draft."""
     if not draft.is_file():
         return "NO_DRAFT", [], f"draft not found: {draft}"
     tmp_owner = None
@@ -189,6 +191,38 @@ def score_one(design_id: str, draft: Path, dataset: Path, bench: Path,
         # nothing called it. Default the synth image to the sim image the
         # caller already proved they have; an explicit env still wins.
         env.setdefault("OSS_PNR_IMAGE", sim_image)
+
+        # ...AND "the sim image the caller already proved they have" is an
+        # assumption the caller never actually discharges. When the named image
+        # is absent, the harness still runs: it fails to start the container,
+        # writes a `reports/1.txt` whose entire body is the two lines
+        # "Running harness with project name: ..." / "Cleaning up Docker
+        # resources...", and records `{"result": 1, "errors": 1,
+        # "execution": 1.27}` — a 1.3-second "test" in which no simulation ever
+        # happened. `parse_result` faithfully reads that as FAIL, so an ABSENT
+        # IMAGE IS REPORTED AS A DEFECT IN THE DESIGN.
+        #
+        # That is the same lie as #714 in the opposite direction, and it is
+        # worse than a crash: measured here, a draft and a deliberately altered
+        # variant of it both scored FAIL, which reads as "the change didn't
+        # help" when in truth NEITHER was ever simulated. A convergence loop
+        # fed those verdicts re-authors a correct design forever.
+        #
+        # An image is either present or it is not, so this preflight cannot
+        # misfire — and it must run BEFORE the harness, because afterwards the
+        # environment failure is indistinguishable from a design failure in
+        # everything except a timing heuristic.
+        missing = [img for img in dict.fromkeys(
+                       (sim_image, env.get("OSS_PNR_IMAGE")))
+                   if img and subprocess.run(
+                       ["docker", "image", "inspect", img],
+                       capture_output=True).returncode != 0]
+        if missing:
+            return ("IMAGE_MISSING", [], "cannot score: image(s) not present "
+                    "locally: " + ", ".join(missing) + " — the harness would "
+                    "record this as a FAILING TEST, which is a verdict about "
+                    "the environment, not the design. Build/pull the image, or "
+                    "pass --sim-image with one you have.")
         subprocess.run(
             [sys.executable, "run_benchmark.py", "-f", str(score_dataset),
              "--model", "local_import", "--prompts-responses-file", str(resp),
