@@ -13,6 +13,11 @@ below: the repo's own known-BAD stage-3 fixture returns rc 2 under the old
 declared command and rc 1 REJECT under the same command plus a verdict source.
 Same fixture, same engine, same rule.
 
+The subject is pinned by IDENTITY, not by size: `ENABLED_ON_PASS_STAGES`
+below names the stages themselves, because a count stays green through a swap
+and would let this module judge a population nobody chose. The "six" in the
+paragraph above is a measurement taken at v1.13.40, not the pin.
+
 Every rule is proved on a purpose-built flow that VIOLATES it and again on the
 repaired copy of that same flow, so no test here can pass for the reason the
 check is absent. The shipped flow is the control that must stay green in both
@@ -39,6 +44,24 @@ GATE_LABEL = "on-pass gates can establish a verdict"
 
 #: The report `final_gate` writes and every on-pass gate reads.
 REPORT = "reports/flow_compliance.json"
+
+#: WHICH stages the shipped flow declares an ENABLED on-pass gate for.
+#:
+#: This was `len(...) == 6`, and a count is invariant under a SWAP: one stage
+#: arriving in the same batch as another departs holds the number at six while
+#: the population this module judges has become a DIFFERENT SET, and the
+#: assertion stays green over it. The answer a reader needs is never how many,
+#: it is which -- so the identities are pinned, and every comparison against
+#: them below reports the two directions apart: a member that DEPARTED and a
+#: member that ARRIVED are different facts and must not share one number.
+ENABLED_ON_PASS_STAGES = {
+    "stage_phase1",
+    "stage1",
+    "stage2",
+    "stage_analog",
+    "stage3",
+    "stage4",
+}
 
 
 def _run(flow: Path):
@@ -78,12 +101,23 @@ def test_the_shipped_flow_is_green():
     assert "[PASS]" in out
 
 
-def test_the_shipped_flow_still_declares_six_enabled_on_pass_gates():
-    """The check must not be green because the subject disappeared."""
-    doc = _flow_doc()
-    assert len(_enabled_with_gate(doc)) == 6, (
-        "this check is only meaningful over a non-empty subject; if the axis "
-        "legitimately changed size, update this number deliberately")
+def test_the_shipped_flow_declares_exactly_these_enabled_on_pass_gates():
+    """The check must not be green because the subject moved underneath it.
+
+    A count cannot distinguish a swap from no change, so it cannot establish
+    that the six stages judged today are the six that were judged when this
+    number was written. The set can, and it names the difference in both
+    directions when it moves.
+    """
+    got = {s["id"] for s in _enabled_with_gate(_flow_doc())}
+    assert got == ENABLED_ON_PASS_STAGES, (
+        "the enabled on-pass population is not the one pinned here.\n"
+        f"  departed (pinned, no longer enabled with a gate): "
+        f"{sorted(ENABLED_ON_PASS_STAGES - got)}\n"
+        f"  arrived  (enabled with a gate, never pinned):     "
+        f"{sorted(got - ENABLED_ON_PASS_STAGES)}\n"
+        "if the axis legitimately changed, update the identities above "
+        "deliberately -- a count would not have shown you this line.")
 
 
 def test_every_shipped_gate_reads_the_report_the_final_gate_writes():
@@ -132,8 +166,13 @@ def test_p1_fires_on_every_offending_stage_not_just_the_first(tmp_path):
             f" --compliance {REPORT}", "")
     rc, out = _run(_write(tmp_path, doc))
     assert rc == 1
-    assert out.count("P1 CANNOT REJECT") == 6, (
-        f"all six must be named, not just the first:\n{out}")
+    named = {sid for sid in ENABLED_ON_PASS_STAGES if sid in out}
+    assert named == ENABLED_ON_PASS_STAGES, (
+        f"every offending stage must be NAMED, not merely counted; the "
+        f"finding is silent about {sorted(ENABLED_ON_PASS_STAGES - named)}:"
+        f"\n{out}")
+    assert out.count("P1 CANNOT REJECT") == len(ENABLED_ON_PASS_STAGES), (
+        f"one finding per offending stage, not just the first:\n{out}")
 
 
 # ── P2: the report nothing writes ────────────────────────────────────────────
