@@ -33576,6 +33576,68 @@ def step_tapeout_docs_gen(project: Path) -> StepResult:
                        "flow_step": "37.5ic"})
 
 
+def step_ic_release_docs_gen(project: Path) -> StepResult:
+    """Canonical step 37.5ic's PRODUCT-document producer.
+
+    NOT A SECOND COPY OF `step_tapeout_docs_gen`. That producer writes the
+    sign-off HTML at `reports/phase3/docs/` — what was checked, what passed,
+    what did not — and stays exactly where it is, in this step's blocking
+    `all_of`. This one writes the product set at
+    `phase3/stage4/documentation/ic/<release>/`: what the die IS, its interface,
+    its outline, the constraints an integrator must honour, and its errata.
+
+    WHY IT IS HERE AND NOT IN THE GATE, for the reason `step_digital_hardmacro_gen`
+    and `step_ip_release_docs_gen` above both record: `flow_compliance_check` is
+    the phase-2+3 ACCEPTANCE AUDITOR, and an auditor that writes a declared
+    `required_output` into the project it is auditing certifies its own output.
+    `ic_release_docs_gen` is declared in step 37.5ic's `programs:` and is
+    invoked from HERE — the path a real run takes — so
+    `release_docs_check --arm ic` judges documents the audit did not write.
+
+    NEVER FAILS THE RUN. A producer refusal (rc 1 — an artefact class is hollow
+    or a sign-off property is not clean, so no product document may be written)
+    and "nothing to document" (rc 2) are recorded as SKIP: the GATE is what
+    fails. If the documents are absent or wrong, `release_docs_check` refuses
+    the step on its own evidence rather than on this step's exit code — and it
+    derives the releases it expects from the tree, so an absent document set is
+    a named refusal rather than an empty sweep.
+
+    AFTER `step_tapeout_docs_gen` and after artefact canonicalisation, because
+    the producer reads the sign-off GDS, the routed DEF and the sign-off records
+    that canonicalisation puts at their declared paths.
+    """
+    t0 = time.time()
+    applies, why = _canonical_step_condition(project, "37.5ic")
+    if applies is None:
+        return StepResult("ic_release_docs_gen", "BLOCKED", time.time() - t0,
+                          why)
+    if not applies:
+        return StepResult("ic_release_docs_gen", "SKIP", time.time() - t0, why)
+
+    prog = PROGRAMS_DIR / "ic_release_docs_gen.py"
+    if not prog.is_file():  # pragma: no cover - shipped tree always has it
+        return StepResult("ic_release_docs_gen", "SKIP", time.time() - t0,
+                          f"{prog.name} not present in this tree")
+    cmd = [sys.executable, str(prog), str(project)]
+    try:
+        cp = subprocess.run(cmd, capture_output=True, text=True,
+                            errors="replace", timeout=600)
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return StepResult("ic_release_docs_gen", "ENV_UNAVAILABLE",
+                          time.time() - t0,
+                          f"producer did not complete: {exc}")
+    detail_lines = (cp.stdout or cp.stderr or "").strip().splitlines()
+    detail = detail_lines[0] if detail_lines else f"rc={cp.returncode}"
+    status = {0: "PASS", 1: "SKIP", 2: "SKIP"}.get(cp.returncode,
+                                                   "ENV_UNAVAILABLE")
+    doc_root = project / "phase3" / "stage4" / "documentation" / "ic"
+    outputs = ([str(f) for f in sorted(doc_root.rglob("*")) if f.is_file()]
+               if doc_root.is_dir() else [])
+    return StepResult("ic_release_docs_gen", status, time.time() - t0,
+                      detail, outputs,
+                      {"producer_rc": cp.returncode, "flow_step": "37.5ic"})
+
+
 def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
                                 container: str) -> StepResult:
     """v1.6.36 — stage runner outputs at the canonical paths the flow YAML expects.
@@ -43391,6 +43453,12 @@ def main() -> int:
     # producer reads 37.5ic's condition from the canonical YAML, so this call
     # cannot drift into the mutually-exclusive 37.5ip path.
     plan.append(step_tapeout_docs_gen(project))
+
+    # And the PRODUCT documents beside the sign-off evidence. The generator
+    # above writes what was CHECKED; this writes what the part IS — and refuses
+    # to write anything when an artefact class this run signed off carries no
+    # substance, which is a population the metrics-only sign-off cannot see.
+    plan.append(step_ic_release_docs_gen(project))
 
     # Canonical step 37.5ip — the cell/IP path terminal. The four-view kit is
     # what an IP delivery IS, and until this was wired nothing this flow

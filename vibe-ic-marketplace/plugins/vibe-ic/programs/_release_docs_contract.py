@@ -251,12 +251,17 @@ IP_DOCS: Tuple[DocSpec, ...] = (
 )
 
 #: Step 37.5ic's product-document set. Declared here beside the IP arm because
-#: the RULES are shared and a rule declared twice disagrees with itself. The
-#: 37.5ic producer that writes these is a separate landing; until it exists the
-#: flow wires only the `ip` arm, so this table is read by the gate's `--arm ic`
-#: and by nothing in a real run — which is stated rather than hidden, because an
-#: arm that is declared and never invoked is exactly the defect v1.13.42
-#: measured six times over.
+#: the RULES are shared and a rule declared twice disagrees with itself.
+#:
+#: THE PRODUCER NOW EXISTS. When this table was written the 37.5ic producer was
+#: a separate landing, the flow wired only the `ip` arm, and this table was read
+#: by the gate's `--arm ic` and by nothing in a real run — which was stated
+#: rather than hidden, because an arm that is declared and never invoked is
+#: exactly the defect v1.13.42 measured six times over. `ic_release_docs_gen`
+#: closes it: it is declared in step 37.5ic's `programs:`, dispatched by
+#: `phase3_one_shot_runner.step_ic_release_docs_gen` on the path a real run
+#: takes, and judged by `release_docs_check . --arm ic` in that step's blocking
+#: `gate.all_of`. Both arms are now producer-backed and gate-consumed.
 IC_DOCS: Tuple[DocSpec, ...] = (
     DocSpec(
         filename="PRELIMINARY_DATASHEET.md",

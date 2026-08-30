@@ -93,6 +93,7 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Tuple
 
+import _ic_release_artefacts as _art
 import _vacuous_exit as _vx
 import digital_hardmacro_check as _hm
 from _atomic_artefact import write_text as atomic_write_text
@@ -339,25 +340,54 @@ def _stated(rows: Sequence[Row], document: str,
     return None
 
 
-def _netlist_signal_ports(project: Path, release: str) -> Optional[Tuple[int, Path]]:
-    """The logical port count the delivered Verilog view declares, re-derived."""
-    views = _hm.discover_packages(_hm.hardmacro_dir(project)).get(release, {})
-    v_path = views.get(".v")
-    if v_path is None:
-        return None
-    bus = "[]<>"
-    lef_path = views.get(".lef")
-    if lef_path is not None:
-        bus = _hm.lef_bus_chars(
-            lef_path.read_text(encoding="utf-8", errors="replace"))
+#: Where the chip path's route leaves its gate-level netlist. A glob, because
+#: the emitter names it after the design and a design name is exactly the
+#: literal a chip-AGNOSTIC gate may not carry.
+IC_NETLIST_GLOB = "phase3/stage3/pnr/*_pnr.v"
+
+
+def _netlist_signal_ports(project: Path, arm: str,
+                          release: str) -> Optional[Tuple[int, Path]]:
+    """The logical port count a SECOND view declares, re-derived by this gate.
+
+    IP arm: the delivered blackbox Verilog beside the LEF the document was
+    written off. IC arm: the gate-level netlist the route produced beside the
+    DEF the document was written off. Same shape in both — a different view,
+    read by a different program from the one that wrote the number — because a
+    count re-derived from the SAME artefact the document cited proves only that
+    the generator can read its own output.
+
+    Returns None when this arm has no second view, which is reported as
+    NOT DETERMINED rather than accepted.
+    """
+    if arm == "ip":
+        views = _hm.discover_packages(_hm.hardmacro_dir(project)).get(release, {})
+        v_path = views.get(".v")
+        if v_path is None:
+            return None
+        bus = "[]<>"
+        lef_path = views.get(".lef")
+        if lef_path is not None:
+            bus = _hm.lef_bus_chars(
+                lef_path.read_text(encoding="utf-8", errors="replace"))
+    else:
+        # NOT A GUESS BETWEEN CANDIDATES. Two gate-level netlists is two
+        # answers, and picking one would make the cross-check depend on sort
+        # order — a gate whose verdict moves with a filename is not a gate.
+        hits = sorted(project.glob(IC_NETLIST_GLOB))
+        if len(hits) != 1:
+            return None
+        v_path = hits[0]
+        bus = "[]<>"
     parsed = _hm.parse_verilog(
         v_path.read_text(encoding="utf-8", errors="replace"), bus)
     ports = parsed.get("ports")
     return (len(ports) if isinstance(ports, set) else 0), v_path
 
 
-def _check_pin_count(project: Path, release: str, rows: Sequence[Row],
-                     findings: List[Finding]) -> str:
+
+def _check_pin_count(project: Path, arm: str, release: str,
+                     rows: Sequence[Row], findings: List[Finding]) -> str:
     """R3 — the stated pin counts, against the netlist and against themselves.
 
     THE SIGNAL COUNT IS SETTLED BY THE NETLIST. The document derived it from the
@@ -381,7 +411,7 @@ def _check_pin_count(project: Path, release: str, rows: Sequence[Row],
     every document — an early return after one finding would leave the OTHER
     defect unreported in the same run.
     """
-    netlist = _netlist_signal_ports(project, release)
+    netlist = _netlist_signal_ports(project, arm, release)
     states: List[str] = []
     for document in sorted({row.document for row in rows}):
         signal = _stated(rows, document, SIGNAL_PIN_LABEL)
@@ -415,13 +445,14 @@ def _check_pin_count(project: Path, release: str, rows: Sequence[Row],
         if signal is None:
             continue
         if netlist is None:
+            where = (_hm.hardmacro_dir(project).as_posix() + "/*.v"
+                     if arm == "ip" else IC_NETLIST_GLOB)
             findings.append(Finding(
                 "PIN_COUNT_NOT_CROSS_CHECKED", "INFO", release,
                 f"{document} states '{SIGNAL_PIN_LABEL}' = {signal[1]} and "
-                f"this release ships no .v view under "
-                f"{_hm.hardmacro_dir(project).as_posix()}, so the count could "
-                f"not be re-derived from a second view. NOT DETERMINED, not "
-                f"accepted."))
+                f"this run carries no single netlist view at {where}, so the "
+                f"count could not be re-derived from a second view. NOT "
+                f"DETERMINED, not accepted."))
             states.append("NOT_DETERMINED")
             continue
         netlist_count, v_path = netlist
@@ -431,7 +462,7 @@ def _check_pin_count(project: Path, release: str, rows: Sequence[Row],
         findings.append(Finding(
             "PIN_COUNT_DISAGREES_WITH_NETLIST", "ERROR", release,
             f"{document} states '{SIGNAL_PIN_LABEL}' = {signal[1]}, derived "
-            f"from {signal[0].third}; the delivered netlist view "
+            f"from {signal[0].third}; the netlist view "
             f"`{v_path.relative_to(project).as_posix()}` declares "
             f"{netlist_count} logical port(s). A datasheet with a pin count no "
             f"view supports is stale on arrival."))
@@ -481,6 +512,206 @@ def _check_deliverables_digests(project: Path, release: str, text: str,
                 f"disk digests to {actual}. The documents describe a build "
                 f"that is not the one shipped."))
     return checked
+
+
+#: `metrics.json`'s own name for the die bounding box, and the label the IC
+#: datasheet states the same quantity under. Spelled here so the gate and the
+#: producer cannot drift into cross-checking two different things.
+IC_METRICS_REL = "phase3/final/metrics.json"
+IC_DIE_BBOX_KEY = "design__die__bbox"
+IC_WIDTH_LABEL = "Die width (um)"
+IC_HEIGHT_LABEL = "Die height (um)"
+
+#: How far the two derivations may differ before the gate calls it a
+#: disagreement. NOT a tolerance on the design — a tolerance on the ROUNDING
+#: the two writers apply: the document rounds to 3 decimal places and a metrics
+#: writer commonly rounds to 1. Anything wider would let a real edit through,
+#: and anything narrower would redden every correct run on the third decimal.
+IC_DIE_TOLERANCE_UM = 0.11
+
+
+def _check_die_area(project: Path, release: str, rows: Sequence[Row],
+                    findings: List[Finding]) -> str:
+    """R3ic — the stated die outline, against the metrics the sign-off read.
+
+    THE DOCUMENT DERIVED IT FROM THE DEF and this re-derives it from
+    `metrics.json` — a DIFFERENT artefact, written by a DIFFERENT producer —
+    for the reason the pin cross-check exists: a number re-derived from the
+    artefact the document cited proves only that the generator can read its own
+    output. A die size edited after generation, or carried forward from an
+    earlier build, disagrees with the tree instead of being believed.
+
+    The finding names BOTH sides with BOTH paths, because "the die size is
+    wrong" is not actionable and "240 x 160 here, 180 x 120 there" is.
+    """
+    metrics_path = project / IC_METRICS_REL
+    doc = _load_json(metrics_path)
+    bbox = doc.get(IC_DIE_BBOX_KEY) if isinstance(doc, dict) else None
+    parts = str(bbox).split() if isinstance(bbox, str) else []
+    coords = None
+    if len(parts) == 4:
+        try:
+            coords = tuple(float(token) for token in parts)
+        except ValueError:
+            coords = None
+    if coords is None:
+        # DISCLOSED, NOT SILENT, and the same reading the pin cross-check emits
+        # when it has no second view: a cross-check that could not run and a
+        # cross-check that agreed must never print the same nothing.
+        if any(row.label in (IC_WIDTH_LABEL, IC_HEIGHT_LABEL)
+               and row.value != NOT_MEASURED for row in rows):
+            findings.append(Finding(
+                "DIE_SIZE_NOT_CROSS_CHECKED", "INFO", release,
+                f"this release states a die size and `{IC_METRICS_REL}` "
+                f"carries no readable `{IC_DIE_BBOX_KEY}`, so the outline "
+                f"could not be re-derived from a second artefact. NOT "
+                f"DETERMINED, not accepted."))
+        return "NOT_DETERMINED"
+    x0, y0, x1, y1 = coords
+    expected = {IC_WIDTH_LABEL: abs(x1 - x0), IC_HEIGHT_LABEL: abs(y1 - y0)}
+
+    states: List[str] = []
+    for document in sorted({row.document for row in rows}):
+        for label, want in expected.items():
+            stated = _stated_float(rows, document, label)
+            if stated is None:
+                continue
+            row, value = stated
+            if value < 0:
+                findings.append(Finding(
+                    "DIE_SIZE_UNREADABLE", "ERROR", release,
+                    f"{document} states '{label}' = {row.value!r}, which is "
+                    f"not a length."))
+                states.append("UNREADABLE")
+                continue
+            if abs(value - want) <= IC_DIE_TOLERANCE_UM:
+                states.append("AGREES")
+                continue
+            findings.append(Finding(
+                "DIE_SIZE_DISAGREES_WITH_METRICS", "ERROR", release,
+                f"{document} states '{label}' = {value:g} um, derived from "
+                f"{row.third}; `{IC_METRICS_REL}` states "
+                f"{IC_DIE_BBOX_KEY} = {bbox!r}, which is {want:g} um on that "
+                f"axis. A datasheet with a die size no artefact supports is "
+                f"stale on arrival."))
+            states.append("DISAGREES")
+    if not states:
+        return "NOT_STATED"
+    for tier in ("UNREADABLE", "DISAGREES"):
+        if tier in states:
+            return tier
+    return "AGREES"
+
+
+def _stated_float(rows: Sequence[Row], document: str,
+                  label: str) -> Optional[Tuple[Row, float]]:
+    """The length ONE document states for `label`, or None when it states none.
+
+    A NOT_MEASURED row is NOT a stated length and is deliberately not read as
+    zero, for the reason `_stated` records: "we did not look" and "we looked
+    and it is zero" must never reach the same comparison.
+    """
+    for row in rows:
+        if row.document != document or row.label != label:
+            continue
+        if row.value == NOT_MEASURED:
+            continue
+        try:
+            return row, float(row.value)
+        except ValueError:
+            return row, -1.0
+    return None
+
+
+def _load_json(path: Path):
+    try:
+        return json.loads(path.read_text(encoding="utf-8", errors="replace"))
+    except Exception:
+        return None
+
+
+def _check_source_digests(project: Path, release: str, manifest: Optional[dict],
+                          findings: List[Finding]) -> int:
+    """R6b — every `source_artefacts` digest in the manifest, recomputed.
+
+    THE IP ARM ALREADY HAD A DIGEST CHECK and the IC arm has no deliverables
+    document to carry one, which is not a reason for the IC arm to bind
+    nothing: both manifests already record a sha256 for every artefact they
+    read, and until this landed NOTHING recomputed them in either arm.
+
+    This is the check that catches a document set correctly describing a
+    DIFFERENT build of the same design — every heading in place, every section
+    present, every count self-consistent, and the artefacts it names are not
+    the artefacts on disk. A manifest whose digests are never re-derived binds
+    nothing.
+    """
+    entries = (manifest or {}).get("source_artefacts")
+    if not isinstance(entries, list):
+        return 0
+    checked = 0
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        rel_path = entry.get("path")
+        stated = entry.get("sha256")
+        if not (isinstance(rel_path, str) and isinstance(stated, str)
+                and re.fullmatch(r"[0-9a-f]{64}", stated)):
+            continue
+        checked += 1
+        target = project / rel_path
+        if not target.is_file():
+            findings.append(Finding(
+                "MANIFEST_SOURCE_ABSENT", "ERROR", release,
+                f"{MANIFEST_NAME} records a digest for `{rel_path}` and no "
+                f"such file exists under {project}. A citation that resolves "
+                f"to nothing binds nothing."))
+            continue
+        actual = _sha256(target)
+        if actual != stated:
+            findings.append(Finding(
+                "MANIFEST_SOURCE_DIGEST_STALE", "ERROR", release,
+                f"{MANIFEST_NAME} states sha256 {stated} for `{rel_path}`; "
+                f"the file on disk digests to {actual}. The documents "
+                f"describe a build that is not the one on this tree."))
+    return checked
+
+
+def _check_artefact_substance(project: Path, release: str,
+                              findings: List[Finding]) -> str:
+    """R9 — the artefacts these documents describe must have something IN them.
+
+    THE GATE ASKS THIS AGAIN, HAVING ALREADY BEEN ASKED BY THE PRODUCER, and
+    the repetition is the point. `ic_release_docs_gen` refuses to WRITE a
+    document set over a hollow artefact — but documents are FILES: they outlive
+    the run, they get copied forward, and an artefact hollowed out AFTER
+    generation leaves a beautiful document set describing a die with nothing on
+    it. A producer-side refusal alone would mean the check only ever ran at the
+    one moment the tree was known good.
+
+    The predicate is `_ic_release_artefacts.audit` — the SAME one the producer
+    used, imported rather than restated, so the two can never disagree about
+    what "hollow" means.
+
+    IC ARM ONLY. The IP arm's equivalent is `digital_hardmacro_check`, which
+    step 37.5ip already declares in the same `gate.all_of` as this program;
+    running a second substance audit over the same kit would give that step two
+    verdicts over one population.
+    """
+    # SCOPED TO THIS RELEASE. The sign-off GDS is per-release, and auditing
+    # every release's layout for every release would make one hollow stream
+    # redden a second, untouched release — a refusal that is environmental
+    # rather than content-earned, which is what the control release exists to
+    # detect.
+    audit = _art.audit(project, release)
+    for finding in audit.errors:
+        findings.append(Finding(
+            finding.rule, "ERROR", release,
+            f"{finding.artefact_class}: `{finding.path}` — {finding.message} "
+            f"The document set in this release describes it as if it carried "
+            f"the work."))
+    if audit.errors:
+        return "REFUSED"
+    return "CLEAN" if audit.any_present else "NOTHING_PRESENT"
 
 
 def _sha256(path: Path) -> str:
@@ -590,13 +821,22 @@ def check_release(project: Path, arm: str, release_dir: Path,
 
     derived, holes = _check_rows(project, rows, release, findings)
     constraints_checked = _check_app_notes(arm, texts, release, findings)
-    pin_state = _check_pin_count(project, release, rows, findings) \
-        if arm == "ip" else "NOT_APPLICABLE"
+    # BOTH ARMS NOW, and the `arm == "ip"` guard that stood here is the defect
+    # it removed: the IC arm carried the same three interface rows and NOTHING
+    # re-derived any of them, so a hand-edited chip pin count was believed.
+    pin_state = _check_pin_count(project, arm, release, rows, findings)
+    die_state = (_check_die_area(project, release, rows, findings)
+                 if arm == "ic" else "NOT_APPLICABLE")
+    substance = (_check_artefact_substance(project, release, findings)
+                 if arm == "ic" else "NOT_APPLICABLE")
     digests = 0
     if IP_DELIVERABLES_MANIFEST in texts:
         digests = _check_deliverables_digests(
             project, release, texts[IP_DELIVERABLES_MANIFEST], findings)
-    _check_manifest(release_dir, release, derived, holes, findings)
+    manifest_doc = _check_manifest(release_dir, release, derived, holes,
+                                   findings)
+    source_digests = _check_source_digests(project, release, manifest_doc,
+                                           findings)
 
     detail = {
         "release": release,
@@ -607,8 +847,11 @@ def check_release(project: Path, arm: str, release_dir: Path,
         "rows_examined": len(rows),
         "mandatory_constraints_in_app_notes": constraints_checked,
         "shipped_digests_recomputed": digests,
+        "source_digests_recomputed": source_digests,
         "placeholders": placeholders,
         "pin_count_cross_check": pin_state,
+        "die_size_cross_check": die_state,
+        "artefact_substance": substance,
         "pass": not any(f.severity == "ERROR" for f in findings),
     }
     return findings, detail
@@ -619,18 +862,38 @@ def check_release(project: Path, arm: str, release_dir: Path,
 #: looked in when it found nothing. An absence verdict that does not name where
 #: it looked is a claim nobody can re-check.
 KIT_DIR_GLOB = "phase3/stage4/hardmacro/*.{{lef,lib,gds,v}} (arm {arm})"
+IC_RELEASE_GLOB = "phase3/stage4/gds/*.gds (arm {arm})"
+
+
+def _searched_glob(arm: str) -> str:
+    """Where THIS arm looked for a release it should have documented."""
+    return (IC_RELEASE_GLOB if arm == "ic" else KIT_DIR_GLOB).format(arm=arm)
 
 
 def expected_releases(project: Path, arm: str) -> List[str]:
     """The releases this arm SHOULD have documented, from the tree itself.
 
     For the IP arm the answer is the delivered hardmacro packages: one kit, one
-    document set. Deriving it rather than reading the documentation directory is
-    what makes "the kit shipped and nobody documented it" a FAIL instead of an
-    empty sweep that passes.
+    document set. For the IC arm it is the sign-off layouts — one die, one
+    document set — derived by ``_ic_release_artefacts.releases`` from
+    ``phase3/stage4/gds/*.gds``, which is step 37.5ic's own declared input.
+
+    DERIVING IT RATHER THAN READING THE DOCUMENTATION DIRECTORY IS THE WHOLE
+    POINT, and until this landed the IC arm did neither: it returned `[]`
+    unconditionally, so a run that signed off a die and wrote NOT ONE document
+    reached the `not expected and not present` branch below and was scored
+    NOT_DETERMINED — a PASS tier. The arm was declared, wired to nothing, and
+    could only ever answer "nothing to examine". That is the v1.13.42 shape
+    this gate's own docstring was written about, reproduced inside the gate
+    that was written to end it.
+
+    Reading the tree makes "the die was signed off and nobody documented it" a
+    refusal with a name instead of an empty sweep that passes.
     """
     if arm == "ip":
         return sorted(_hm.discover_packages(_hm.hardmacro_dir(project)))
+    if arm == "ic":
+        return _art.releases(project)
     return []
 
 
@@ -653,7 +916,7 @@ def run_audit(project: Path, arm: str) -> Result:
             "documentation_root": root.as_posix(),
             "documentation_root_exists": root.is_dir(),
             "searched_and_absent": [
-                doc_dir(arm) + "/*/", KIT_DIR_GLOB.format(arm=arm)],
+                doc_dir(arm) + "/*/", _searched_glob(arm)],
             "expected_releases": [],
             "releases_examined": 0,
             "releases": [],
@@ -668,19 +931,30 @@ def run_audit(project: Path, arm: str) -> Result:
         if not release_dir.is_dir():
             # THE DEFECT THIS GATE WAS WRITTEN FOR. A hard IP shipping its four
             # views with no integration guide is rc 1, never the vacuous tier.
+            produced, consequence = (
+                (f"delivers hardmacro package `{release}` under "
+                 f"{_hm.hardmacro_dir(project)}",
+                 "A delivered IP with no document set reaches its integrator "
+                 "as four files and nothing that says what they are.")
+                if arm == "ip" else
+                (f"signs off layout `{release}` under "
+                 f"{(project / 'phase3/stage4/gds').as_posix()}",
+                 "A die signed off with no document set is a part nobody can "
+                 "state the interface, the outline, the supplies or the known "
+                 "issues of."))
             result.findings.append(Finding(
                 "RELEASE_DOCUMENTATION_ABSENT", "ERROR", release,
-                f"the run delivers hardmacro package `{release}` under "
-                f"{_hm.hardmacro_dir(project)} and {release_dir} carries no "
-                f"release documentation. A delivered IP with no document set "
-                f"reaches its integrator as four files and nothing that says "
-                f"what they are."))
+                f"the run {produced} and {release_dir} carries no release "
+                f"documentation. {consequence}"))
             details.append({"release": release, "directory": release_dir.as_posix(),
                             "documents_present": [], "derived_fields": 0,
                             "not_measured_fields": 0, "rows_examined": 0,
                             "mandatory_constraints_in_app_notes": 0,
-                            "shipped_digests_recomputed": 0, "placeholders": 0,
+                            "shipped_digests_recomputed": 0,
+                            "source_digests_recomputed": 0, "placeholders": 0,
                             "pin_count_cross_check": "NOT_STATED",
+                            "die_size_cross_check": "NOT_STATED",
+                            "artefact_substance": "NOT_EXAMINED",
                             "pass": False})
             continue
         findings, detail = check_release(project, arm, release_dir, release)
