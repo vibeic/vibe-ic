@@ -483,6 +483,45 @@ _DEFAULT_EMIT_DIR = "reports/phase2/gates/on_pass_review"
 _SUPPORTED_FIRES_ON = "stage_pass"
 
 
+def emit_dir_escapes(project: Path, emit_dir: Path) -> bool:
+    """Is this emit destination outside the run tree?
+
+    `Path("/run") / "/tmp/x"` is `/tmp/x` — an absolute `emit_test_dir:` does
+    not join, it REPLACES. That is how a rejection's regression came to be
+    written outside the run while the record recorded it as present.
+    """
+    try:
+        resolved = Path(emit_dir).expanduser().resolve()
+    except OSError:
+        return True
+    root = Path(project).resolve()
+    return not (resolved == root or root in resolved.parents)
+
+
+def proof_is_inside_the_run(project: Path, test_value: Any) -> bool:
+    """Does this rejection's `test:` name a file the RUN can open?
+
+    THE DEFINITION OF A PROVEN REJECTION, and the reason this is a predicate
+    rather than an `if` at the write site. `unproven()` asked only whether the
+    field was non-empty, so an absolute path to a file outside the run
+    satisfied it: `rejection_requires` listed `test`, the string was there, and
+    `unproven_rejections` read 0. A rejection whose evidence lands where nobody
+    at the run will look is an unproven rejection wearing a proof, and the
+    unproven branch exists precisely to refuse those.
+
+    Run-relative AND on disk. Either half alone is satisfiable by an artefact
+    nobody can open: a relative path to a file that was never written, or an
+    absolute path to one that exists somewhere else entirely.
+    """
+    if not isinstance(test_value, str) or not test_value:
+        return False
+    candidate = Path(test_value)
+    if candidate.is_absolute():
+        return False
+    return (Path(project) / candidate).is_file()
+
+
+
 #: The intent field L9 uses to disclose that it could not read a top out of the
 #: design input, and the strategy value that goes with it.
 _SENTINEL_STRATEGY = "canonical_chip_top_sentinel"
@@ -3929,13 +3968,27 @@ _NOT_ENABLED_REASON = {
 # ─────────────────────────────────────────────────────────────────────────────
 # the evidence contract
 # ─────────────────────────────────────────────────────────────────────────────
-def unproven(finding: Dict[str, Any], requires) -> List[str]:
-    """Parts of `rejection_requires:` this rejection does not carry."""
+def unproven(finding: Dict[str, Any], requires,
+             project: Optional[Path] = None) -> List[str]:
+    """Parts of `rejection_requires:` this rejection does not carry.
+
+    `test` IS NOT JUST A NON-EMPTY STRING. Every other required part is data the
+    record carries; `test` is a claim about the RUN — that a regression for this
+    rejection exists where the run can open it. Measured on v1.13.66: pointed at
+    an absolute path outside the run, the emit succeeded, `test` held that
+    absolute path, and this function counted the rejection PROVEN because the
+    string was non-empty. `project` is optional so a caller with no run in hand
+    keeps the old field-presence semantics; `review()` always passes it.
+    """
     missing = []
     for part in requires:
-        v = finding.get(str(part))
+        name = str(part)
+        v = finding.get(name)
         if v is None or (isinstance(v, (str, list, dict)) and len(v) == 0):
-            missing.append(str(part))
+            missing.append(name)
+        elif name == "test" and project is not None \
+                and not proof_is_inside_the_run(project, v):
+            missing.append(name)
     return missing
 
 
@@ -3945,12 +3998,22 @@ def review(project: Path, stage_id: str, decl: Dict[str, Any],
                      or _DEFAULT_REJECTION_REQUIRES)
     emit_dir = emit_dir or (project / str(decl.get("emit_test_dir")
                                           or _DEFAULT_EMIT_DIR))
+    # REFUSED, NOT CLAMPED, and the choice is the finding's answer. Clamping an
+    # out-of-run destination back under the run would make the flow say one
+    # thing and the run do another — the same defect as a field the engine
+    # ignores, pointed the other way. So the escape is refused: nothing is
+    # written, `test` stays absent, and the unproven-rejection branch below
+    # demotes every rejection this review produces. `main` refuses the whole
+    # run earlier for the same reason; this guard is what a caller reaching
+    # `review()` directly still hits.
+    emit_escapes = emit_dir_escapes(project, emit_dir)
     rec: Dict[str, Any] = {
         "program": _NAME, "stage": stage_id, "project": str(project),
         "skill": decl.get("skill"), "verdict_policy": decl.get("verdict"),
         "rejection_requires": list(requires),
         "rules": [], "rejections": [], "observations": [],
         "unproven_rejections": [], "not_checked": [],
+        "emit_dir": str(emit_dir), "emit_outside_run": emit_escapes,
     }
     for rule_id, fn in _RULES.get(stage_id, []):
         out = fn(project, decl)
@@ -3962,15 +4025,23 @@ def review(project: Path, stage_id: str, decl: Dict[str, Any],
             # citation. An emit that fails leaves `test` absent, and the
             # unproven-rejection branch below then refuses the rejection —
             # which is correct, because nothing was proven.
-            try:
-                dest = emit_test(emit_dir / f"test_{rule_id.lower()}.py",
-                                 out, stage_id)
-                out["test"] = str(dest.relative_to(project)) \
-                    if dest.is_absolute() and project in dest.parents \
-                    else str(dest)
-            except OSError as e:
-                out["emit_error"] = str(e)
-            missing = unproven(out, requires)
+            if emit_escapes:
+                out["emit_error"] = (
+                    f"emit_test_dir {str(emit_dir)!r} resolves OUTSIDE the run "
+                    f"{str(project)!r}; nothing was written. A rejection's "
+                    f"regression is the evidence that the rejection is PROVEN, "
+                    f"and evidence the run cannot open proves nothing.")
+                out["emit_outside_run"] = str(emit_dir)
+            else:
+                try:
+                    dest = emit_test(emit_dir / f"test_{rule_id.lower()}.py",
+                                     out, stage_id)
+                    out["test"] = str(dest.relative_to(project)) \
+                        if dest.is_absolute() and project in dest.parents \
+                        else str(dest)
+                except OSError as e:
+                    out["emit_error"] = str(e)
+            missing = unproven(out, requires, project)
             if missing:
                 out["missing_evidence"] = missing
                 rec["unproven_rejections"].append(out)
@@ -4324,11 +4395,13 @@ def main(argv: Optional[List[str]] = None) -> int:
               "read the oracle, the harness or the golden is grading itself.")
         return 2
 
-    # ── the declaration's OWN firing condition, read before any review ──
+    # ── the declaration's OWN two fields, read before anything is reviewed ──
     #
-    # It was DECORATIVE and was measured so on v1.13.66. It is refused here, up
-    # front, rather than mid-review: a review the declaration did not ask for
-    # is not made better by running it well.
+    # BOTH WERE DECORATIVE and both were measured so on v1.13.66. They are
+    # refused here, up front, rather than mid-review: a review the declaration
+    # did not ask for is not made better by running it well, and every
+    # rejection a run with no reachable emit destination could produce is one
+    # nobody can act on. Producing a pile of them is worse than declining.
     declared_fires_on = decl.get("fires_on")
     if str(declared_fires_on) != _SUPPORTED_FIRES_ON:
         emit({"program": _NAME, "stage": a.stage, "verdict": "NOT_CHECKED",
@@ -4346,6 +4419,27 @@ def main(argv: Optional[List[str]] = None) -> int:
               f"cannot be used to silence a review: "
               f"`on_pass_review_declared_command_runs_check` P4 is BLOCKING "
               f"and refuses any block declaring another value.")
+        return 2
+
+    declared_emit = a.emit_test or (project / str(
+        decl.get("emit_test_dir") or _DEFAULT_EMIT_DIR))
+    if emit_dir_escapes(project, declared_emit):
+        emit({"program": _NAME, "stage": a.stage, "verdict": "NOT_CHECKED",
+              "why": "emit_test_dir escapes the run",
+              "emit_dir": str(declared_emit), "project": str(project)})
+        print(f"{_NAME}: rc=2 NOT CHECKED — the emitted regression would land "
+              f"OUTSIDE the run: {str(declared_emit)!r} does not resolve under "
+              f"{str(project)!r}.")
+        print(f"    A rejection's emitted test is the evidence that the "
+              f"rejection is PROVEN. If it lands where nobody at the run will "
+              f"look, `review()` records `test:` as present while nothing at "
+              f"the run can ever open it — measured on v1.13.66, rc 1 with "
+              f"unproven_rejections=0 and an absolute path in `test:`.")
+        print(f"    REFUSED, NOT CLAMPED. Rewriting the destination back under "
+              f"the run would make the declaration and the behaviour disagree "
+              f"silently, which is the same defect as a field the engine "
+              f"ignores. The declaration is wrong and this says so where the "
+              f"author can fix it.")
         return 2
 
     fired = stage_passed(a.compliance, a.stage, a.stage_verdict)
