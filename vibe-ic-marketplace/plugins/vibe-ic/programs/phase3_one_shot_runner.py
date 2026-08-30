@@ -38133,6 +38133,38 @@ def _gate_only_supply_ports(gate_v: Path, gold_v: Path, top: str) -> List[str]:
     return sorted(p for p in (gate_ports - gold_ports) if _is_supply_name(p))
 
 
+def lec_post_layout_scope(gate_kind: str, gold_kind: str, top: str) -> str:
+    """The scope sentence for a post-layout LEC record, DERIVED from the arm.
+
+    MEASURED (subservient x gf180mcuD, plugin v1.13.40). This sentence was a
+    fixed literal — "re-proves the FINAL routed/post-route repair netlist" —
+    emitted whichever netlist was actually compared. On that run the
+    post-route timing repair had not written its netlist yet when the gate ran
+    (`lec_post_layout.json` 03:31, `subservient_timing_repaired.v` 03:33), so
+    the correct fallback arm was taken and the netlist proved was
+    `subservient_pnr.v`, while the record claimed the repaired one.
+
+    The two are not the same design: post-route repair removed 20 cells
+    (35054 -> 35034, md5 cac77753 -> 73b27420), and the netlist carrying that
+    run's best timing number (-4.65 ns vs -5.98 ns) was the one with NO
+    equivalence evidence — while the record said it had some.
+
+    A scope claim wider than the measurement is exactly what this gate exists
+    to catch, so it is derived here and never asserted. chip-AGNOSTIC: the two
+    arms are the flow's own, and no design, PDK or vendor literal appears.
+    """
+    if gate_kind == "postroute_timing_repaired":
+        return (f"re-proves the post-route-repaired netlist == the {gold_kind} "
+                f"reference after CTS/PnR/post-route repair/fill "
+                f"(Step-13 only proved RTL==synth).")
+    return (f"re-proves the ROUTED PnR netlist == the {gold_kind} reference "
+            f"after CTS/PnR/fill (Step-13 only proved RTL==synth). NO post-"
+            f"route-repair netlist existed when this ran, so nothing here "
+            f"vouches for one: if post-route timing repair later writes "
+            f"{top}_timing_repaired.v, that netlist is UNPROVEN by this "
+            f"record.")
+
+
 def _emit_lec_post_layout(project: Path, top: str, pdk: PdkConfig,
                           container: str, out_json: Path, out_rpt: Path,
                           notes: List[str]) -> str:
@@ -38152,10 +38184,27 @@ def _emit_lec_post_layout(project: Path, top: str, pdk: PdkConfig,
     postroute_timing_repair_out = _pl.postroute_timing_repair_dir(project)
     synth_out = _pl.synth_dir(project)
     # GATE (under test): the FINAL netlist — prefer post-repair, else routed PnR.
+    #
+    # WHICH ARM RAN IS RECORDED, because the two are different claims and the
+    # record used to make the stronger one either way. MEASURED (subservient x
+    # gf180mcuD, v1.13.40): post-route timing repair had not written its
+    # netlist yet when this gate ran (lec_post_layout.json 03:31,
+    # subservient_timing_repaired.v 03:33), so the fallback arm was correctly
+    # taken and `gate` was subservient_pnr.v — while `scope` still read "re-
+    # proves the FINAL routed/post-route repair netlist". The two netlists are
+    # NOT the same design: post-route repair removed 20 cells (35054 -> 35034,
+    # md5 cac77753 -> 73b27420), and the netlist carrying the run's best timing
+    # number was the one with no equivalence evidence at all. A scope sentence
+    # wider than the measurement is the failure this whole gate exists to
+    # prevent, so it is derived from the arm rather than asserted.
     gate = None
-    for cand in (postroute_timing_repair_out / f"{top}_timing_repaired.v", pnr_out / f"{top}_pnr.v"):
+    gate_kind = None
+    for cand, kind in ((postroute_timing_repair_out / f"{top}_timing_repaired.v",
+                        "postroute_timing_repaired"),
+                       (pnr_out / f"{top}_pnr.v", "pnr_routed")):
         if cand.is_file():
             gate = cand
+            gate_kind = kind
             break
     if gate is None:
         # honest SKIP: no routed/post-route repair netlist -> design not placed-and-routed.
@@ -38322,17 +38371,20 @@ def _emit_lec_post_layout(project: Path, top: str, pdk: PdkConfig,
         # upgrades to functional after the fork image rebuild).
         "lec_recipe": lec_recipe,
         "functional_read_liberty": functional_lib,
-        "scope": ("re-proves the FINAL routed/post-route repair netlist == the "
-                  f"{gold_kind} reference after CTS/PnR/post-route repair/fill "
-                  "(Step-13 only proved RTL==synth)."),
+        # WHICH netlist this record is about, as a field a machine can read
+        # instead of a path a reader has to recognise.
+        "gate_kind": gate_kind,
+        "scope": lec_post_layout_scope(gate_kind, gold_kind, top),
     }
     out_json.write_text(json.dumps(doc, indent=2) + "\n")
     # Human .rpt via the gate's substance evaluation (mirror the verdict).
     gate_res = mod.evaluate_report(doc)
     out_rpt.parent.mkdir(parents=True, exist_ok=True)
     out_rpt.write_text(
-        "# Post-layout LEC (routed/post-route repair netlist == synth/RTL reference)\n"
-        f"# gold ({gold_kind}): {gold}\n# gate (routed): {gate}\n#\n"
+        "# Post-layout LEC (final placed-and-routed netlist == synth/RTL "
+        "reference)\n"
+        f"# gold ({gold_kind}): {gold}\n# gate ({gate_kind}): {gate}\n"
+        f"# scope: {doc['scope']}\n#\n"
         f"verdict: {doc['verdict']}\n"
         f"gate_result: {gate_res['result']}\n"
         f"total_points: {doc['total_points']}\n"
