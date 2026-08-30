@@ -5679,7 +5679,8 @@ def _build_pg_reconnect_tcl(reroute: bool = True) -> str:
         "# The physical-only cells' rails are net-owned shapes only NOW, so the\n"
         "# spacing engine has to see them: re-route incrementally. TritonRoute\n"
         "# rips up and re-lays only the wires that now violate.\n"
-        "if {[catch {detailed_route -verbose 0} _pgrr_err]} {\n"
+        "if {![info exists _vic_drc_opt]} { set _vic_drc_opt [list] }\n"
+        "if {[catch {detailed_route -verbose 0 {*}$_vic_drc_opt} _pgrr_err]} {\n"
         "  puts \"PG_REROUTE_NONFATAL: $_pgrr_err\"\n"
         "} else {\n"
         "  puts \"PG_REROUTE_DONE\"\n"
@@ -17071,6 +17072,126 @@ def _macro_supply_preroute_decision(project: "Path", pdk: "PdkConfig",
                             f"{g['status']})" for g in rep["gaps"][:6]))}
 
 
+ROUTER_DRC_REPORT_NAME = "routed_router.drc.rpt"
+
+
+def _router_drc_report_block(pnr_out: Path, log_text: str) -> str:
+    """The router's OWN DRC report for this route, as a block for
+    `routed.drc.rpt` -- or a named statement of why there is none.
+
+    WHY THIS EXISTS. Every other line of `routed.drc.rpt` is a projection of
+    the LOG: a count, and at best the log's type/layer table. The log never
+    carries a net or a bounding box, because `detailed_route` writes those
+    only when given `-output_drc`. With the flow now asking for it
+    (`_route_drc_report_tcl`), this is the consumer -- without a consumer the
+    report would be written and read by nothing.
+
+    THREE OUTCOMES, ALL NAMED (flow-change-acceptance 6). A report that is
+    absent because the build cannot produce one, absent because nothing asked,
+    and present-but-empty are three different facts, and a projection that
+    said nothing in all three cases would read identically to a route with no
+    violations to report.
+
+    ADVISORY: this is reporting detail. It never changes the verdict or the
+    violation COUNT, which `_drt_final_violations` reads from the log.
+
+    chip-AGNOSTIC: file presence and the flow's own markers; no PDK, layer or
+    design literal.
+    """
+    rpt = pnr_out / ROUTER_DRC_REPORT_NAME
+    if rpt.is_file():
+        body = rpt.read_text(errors="ignore").strip()
+        head = (f"# source: detailed_route -output_drc "
+                f"{ROUTER_DRC_REPORT_NAME} ({len(body)} B)\n")
+        return head + (body if body else
+                       "# (the router wrote an EMPTY report -- it found no "
+                       "residual violations)")
+    if "ROUTE_DRC_REPORT_UNSUPPORTED" in log_text:
+        return ("# UNAVAILABLE: this OpenROAD build's detailed_route does not\n"
+                "# accept -output_drc (the run logged "
+                "ROUTE_DRC_REPORT_UNSUPPORTED),\n"
+                "# so no per-violation net/bbox detail exists for this route.")
+    return ("# NOT REQUESTED: no " + ROUTER_DRC_REPORT_NAME + " and no\n"
+            "# ROUTE_DRC_REPORT_* record in the log -- this route ran through\n"
+            "# a path that never asked the router for its own report.")
+
+
+def _route_drc_report_tcl(rpt_path: str) -> str:
+    """Tcl that ASKS `detailed_route` for its own DRC report, when the build
+    accepts the option -- returned as a `{*}`-expandable Tcl list plus a named
+    record either way.
+
+    WHY THIS EXISTS. `detailed_route` writes the residual violations it found
+    -- type, net and BOUNDING BOX -- only when given `-output_drc`. This flow
+    passes it at NO call site, so every route logs
+
+        [WARNING DRT-0290] Warning: no DRC report specified, skipped writing
+        DRC report
+
+    twice, and `<pnr>/routed.drc.rpt` is a runner-side PROJECTION OF THE LOG
+    (`canonicalize_artefacts`): it carries a count and, at best, the log's
+    type/layer table. Nothing on disk names WHICH net or WHERE.
+
+    MEASURED 2026-08-29/30, spm x gf180mcuD: `pnr` FAILed on one residual
+    `NS Metal x1 on Metal1` and naming it required hand-patching the plugin
+    cache with this very option and re-running the flow as a one-off
+    diagnostic. The option produced
+
+        violation type: NS Metal
+            srcs: net:__uuf__._040_
+            bbox = (226.3900, 294.9900) - (226.4300, 295.0450) on Layer Metal1
+
+    and changed NOTHING about the route: that run's `routed.def` was
+    byte-identical to the unpatched run's (`sha256 a980a07fc58d...`).
+    The plugin's OTHER routing path -- the `eda_pnr` MCP tool -- has passed
+    `-output_drc` unconditionally for many versions; only the canonical
+    Phase-3 flow, the one an operator actually runs, omits it.
+
+    WHY IT PROBES FIRST. `-output_drc` is not universally available. An
+    unknown key raises `STA-0562` INSIDE the `catch` that wraps every
+    `detailed_route` call here, which reports it as a NONFATAL and continues --
+    so on such a build an unguarded flag would turn a missing REPORT into a
+    LOST ROUTE, strictly worse than the gap it closes. `info body
+    detailed_route` is Tcl introspection: it invokes nothing, and on this
+    OpenROAD (26Q3-1884-g80f878d28a) returns the proc source whose `keys` list
+    names every accepted option. MEASURED: it matches `-output_drc` and does
+    NOT match a bogus flag, so the probe can say no.
+
+    ITS ONE FALSE NEGATIVE, STATED. On a build where `detailed_route` is not a
+    Tcl proc at all, `info body` raises and this reports UNSUPPORTED even
+    though the flag might work. That direction is deliberate: it costs the
+    report and never the route.
+
+    ADVISORY, not blocking. A build without the option still routes and still
+    publishes its count; it loses only the per-violation detail, and says so.
+
+    Idempotent and resume-safe: guarded by `info exists`, so it may be emitted
+    at several call sites and survives `_build_pnr_resume_tcl_text` deleting
+    the block that carries the first one.
+
+    chip-AGNOSTIC: OpenROAD command introspection only; the sole design-derived
+    value is the output path the caller supplies.
+    """
+    return (
+        "if {![info exists _vic_drc_opt]} {\n"
+        "  set _vic_drc_opt [list]\n"
+        "  set _vic_dr_body \"\"\n"
+        "  if {[catch {info body detailed_route} _vic_dr_body]} "
+        "{ set _vic_dr_body \"\" }\n"
+        "  if {[string match {*-output_drc*} $_vic_dr_body]} {\n"
+        "    set _vic_drc_opt [list -output_drc " + rpt_path + "]\n"
+        "    puts \"ROUTE_DRC_REPORT_REQUESTED: " + rpt_path + "\"\n"
+        "  } else {\n"
+        # DEGRADE LOUDLY (flow-change-acceptance 6): a silent skip reads
+        # downstream exactly like a route that had nothing to report.
+        "    puts \"ROUTE_DRC_REPORT_UNSUPPORTED: this OpenROAD build's "
+        "detailed_route does not accept -output_drc (probed via `info body`); "
+        "residual route violations will carry no net/bbox\"\n"
+        "  }\n"
+        "}\n"
+    )
+
+
 def _spare_safe_routing_clear_tcl(marker_prefix: str = "SHIP") -> str:
     """Emit a TCL fragment that clears signal-net routing while preserving
     spare / dont_touch nets. Self-contained, NONFATAL-guarded;
@@ -18464,8 +18585,9 @@ def _build_postroute_timing_repair_tcl(top: str, tech_lef_c: str, cell_lef_c: st
         # small/low-util die) cannot grind its full ~64-iteration budget. The
         # initial route still completes; only the futile violation-reduction tail
         # is capped. The base signoff route (Step 21) stays UNBOUNDED/converging.
+        "if {![info exists _vic_drc_opt]} { set _vic_drc_opt [list] }\n"
         f"if {{[catch {{detailed_route -droute_end_iter "
-        f"{_POSTROUTE_TIMING_REPAIR_MAX_DROUTE_ITERS}}} _dr_err]}} {{\n"
+        f"{_POSTROUTE_TIMING_REPAIR_MAX_DROUTE_ITERS} {{*}}$_vic_drc_opt}} _dr_err]}} {{\n"
         "  puts \"POSTROUTE_TIMING_REPAIR_DETAILED_ROUTE_NONFATAL: $_dr_err\"\n"
         "}\n"
         + _refill
@@ -18660,7 +18782,8 @@ def _antenna_repair_tcl(pdk: "PdkConfig") -> str:
         "        break\n"
         "      }\n"
         "      # INCREMENTAL reroute — re-routes ONLY the dirty nets.\n"
-        "      if {[catch {detailed_route -verbose 0} _ra_dr]} {\n"
+        "      if {![info exists _vic_drc_opt]} { set _vic_drc_opt [list] }\n"
+        "      if {[catch {detailed_route -verbose 0 {*}$_vic_drc_opt} _ra_dr]} {\n"
         "        puts \"REPAIR_ANTENNA_REROUTE_NONFATAL: $_ra_dr\"\n"
         "        break\n"
         "      }\n"
@@ -19703,7 +19826,13 @@ def _v1_8_100_signoff_drv_repair_tcl(out_dir_c: str) -> str:
         +
         "    if {[catch {global_route} _sdr_gr]} "
         "{ puts \"SDR_GR_NONFATAL: $_sdr_gr\"; break }\n"
-        "    if {[catch {detailed_route} _sdr_dr]} "
+        # ASK THE ROUTER FOR ITS DRC REPORT. This reroute can be the LAST one
+        # to touch the geometry that ships, so its report is the one that
+        # describes the published violations. Same path as the base route's:
+        # last writer wins, which is the shipped route by construction.
+        + _route_drc_report_tcl(out_dir_c + "/" + ROUTER_DRC_REPORT_NAME)
+        +
+        "    if {[catch {detailed_route {*}$_vic_drc_opt} _sdr_dr]} "
         "{ puts \"SDR_DR_NONFATAL: $_sdr_dr\"; break }\n"
         # v1.8.100 r2 — the seed is HELD, not halved. MEASURED (iter1): halving
         # the repeater spacing each pass drove the count 314 -> 747 -> 647 -> 70
@@ -20202,6 +20331,11 @@ def _build_pnr_tcl_text(*, tech_lef_c: str, cell_lef_c: str,
     # same geometry.
     _fp_geometry_block = _floorplan_geometry_tcl(
         die_w, die_h, core_pad, core_w, core_h, fp_rect)
+    # ASK THE ROUTER FOR ITS DRC REPORT — probed, so a build without the
+    # option loses the report and never the route. See
+    # `_route_drc_report_tcl`.
+    _drc_report_block = _route_drc_report_tcl(
+        out_dir_c + "/" + ROUTER_DRC_REPORT_NAME)
     return f"""
 {_thread_block}read_lef {tech_lef_c}
 read_lef {cell_lef_c}
@@ -20397,7 +20531,7 @@ puts "{_PNR_STAGE_MARKER} detailed_route"
 # the LAST DRT-0199; closing it after the first pass would pin the metric while
 # the prose moved on and manufacture a disagreement on a design that converged.
 utl::push_metrics_stage "detailedroute__{{}}"
-if {{[catch {{detailed_route}} dr_err]}} {{
+{_drc_report_block}if {{[catch {{detailed_route {{*}}$_vic_drc_opt}} dr_err]}} {{
   puts "DETAILED_ROUTE_NONFATAL: $dr_err"
 }}
 # ORGANIC #571 (b) — CHECKPOINT the routed DEF the MOMENT detailed_route
@@ -24899,7 +25033,8 @@ for {set _cvg 0} {$_cvg < __BOUND__} {incr _cvg} {
   if {[catch {check_placement} e]} { puts "SHIP_CVG_CP_WARN: $e" }
 __SPARE_SAFE_CLEAR__
   if {[catch {global_route} e]} { puts "SHIP_CVG_GR_NONFATAL: $e" }
-  if {[catch {detailed_route -droute_end_iter __SHIP_DR_ITERS__} e]} { puts "SHIP_CVG_DR_NONFATAL: $e"; incr _ship_dr_failed }
+  if {![info exists _vic_drc_opt]} { set _vic_drc_opt [list] }
+  if {[catch {detailed_route -droute_end_iter __SHIP_DR_ITERS__ {*}$_vic_drc_opt} e]} { puts "SHIP_CVG_DR_NONFATAL: $e"; incr _ship_dr_failed }
 }
 # FINAL honest post-reroute real-SPEF measurement (the number the sign-off
 # independently re-derives, and the one the promotion gate keys on).
@@ -25149,7 +25284,8 @@ def _ship_signoff_spef_repair_tcl(top: str, tech_lef_c: str, cell_lef_c: str,
         # counted, including the ones inside the convergence loop below.
         + "set _ship_dr_failed 0\n"
         + "if {[catch {global_route} e]} { puts \"SHIP_GR_NONFATAL: $e\" }\n"
-        f"if {{[catch {{detailed_route -droute_end_iter {_SHIP_REROUTE_MAX_DROUTE_ITERS}}} e]}} {{ puts \"SHIP_DR_NONFATAL: $e\"; incr _ship_dr_failed }}\n"
+        "if {![info exists _vic_drc_opt]} { set _vic_drc_opt [list] }\n"
+        f"if {{[catch {{detailed_route -droute_end_iter {_SHIP_REROUTE_MAX_DROUTE_ITERS} {{*}}$_vic_drc_opt}} e]}} {{ puts \"SHIP_DR_NONFATAL: $e\"; incr _ship_dr_failed }}\n"
         # POST-REROUTE real-SPEF convergence (#603): the reroute above lands
         # the pre-reroute repair on the REAL routed parasitics; re-extract and
         # re-repair against them (bounded, DRC-converging) so the SHIPPED route
@@ -25812,7 +25948,8 @@ def _ship_wire_length_escalation_tcl(top: str, tech_lef_c: str, cell_lef_c: str,
     reroute_tcl = (
         _spare_safe_routing_clear_tcl("SHIP_ESC")
         + "if {[catch {global_route} e]} { puts \"SHIP_ESC_GR_NONFATAL: $e\" }\n"
-        "if {[catch {detailed_route} e]} { puts \"SHIP_ESC_DR_NONFATAL: $e\" }\n"
+        "if {![info exists _vic_drc_opt]} { set _vic_drc_opt [list] }\n"
+        "if {[catch {detailed_route {*}$_vic_drc_opt} e]} { puts \"SHIP_ESC_DR_NONFATAL: $e\" }\n"
         + extract_tcl
     )
     count_proc = (
@@ -35218,6 +35355,7 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
     if log_path.is_file():
         log_text = log_path.read_text(errors="ignore")
         # Keep the raw "violation"/DRT log lines for the reviewer-context block.
+        router_drc_block = _router_drc_report_block(pnr_out, log_text)
         viol_lines = [ln for ln in log_text.splitlines()
                       if "violation" in ln.lower() or "DRT" in ln]
         # ORGANIC #585 fix — the authoritative post-route DRC count is the LAST
@@ -35280,6 +35418,9 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
             f"\n"
             f"# === detailed_route + global_route summary lines from openroad.log ===\n"
             f"{relevant}\n"
+            f"\n"
+            f"# === router DRC report (detailed_route -output_drc) ===\n"
+            f"{router_drc_block}\n"
             f"\n"
             f"# === violation lines (last 100, if any) ===\n"
             + ("\n".join(viol_lines[-100:]) or
