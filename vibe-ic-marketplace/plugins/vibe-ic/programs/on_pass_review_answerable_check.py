@@ -102,6 +102,9 @@ import shlex
 import sys
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))  # so the sibling import below resolves however this is invoked
+from _atomic_artefact import write_json  # noqa: E402  vibe-ic#1082 (helper from PR #1094)
+
 try:
     import yaml
 except ImportError:  # pragma: no cover - the tree ships pyyaml
@@ -258,8 +261,16 @@ def main(argv=None) -> int:
     if a.json:
         out = Path(a.json)
         out.parent.mkdir(parents=True, exist_ok=True)
-        import json as _json
-        out.write_text(_json.dumps(report, indent=2) + "\n", encoding="utf-8")
+        # vibe-ic#1082 -- ATOMIC, because this record IS the verdict. It carries
+        # `verdict` and the findings a caller acts on, so a `write_text` that
+        # dies mid-write leaves a half-parsed judgement at the DECLARED
+        # destination, and the next reader takes that truncation for this
+        # gate's evidence rather than for a write that never finished.
+        #
+        # `ensure_ascii=True` and `sort_keys=False` are `json.dumps`'s own
+        # defaults, which is what the call this replaces used, so the BYTES do
+        # not move; the trailing newline comes from `write_json` itself.
+        write_json(out, report, indent=2, ensure_ascii=True, sort_keys=False)
     for f in findings:
         print(f"[FAIL] {f}")
     if not findings:
