@@ -61,6 +61,12 @@ Per module:
   4. A constant-only RHS (reset init ``F <= 1'b0``) never triggers.
   5. A combinational driver (``assign F = ..`` / blocking ``F = ..``)
      is never a stale-NBA read, so it is not collected in step 2.
+  6. Follow one explicit pointer-representation hop.  Async FIFOs commonly
+     register ``gray_ptr <= bin2gray(binary_ptr)`` while advancing
+     ``binary_ptr <= binary_ptr + accepted`` in the same cycle, then drive
+     ``full``/``empty`` combinationally from ``gray_ptr``.  The flag assignment
+     is combinational, but its SOURCE is still one accepted access stale.  FAIL
+     that shape; accept ``bin2gray(binary_ptr + accepted)``.
 
 SKIP (exit 0, gate not applicable) when no occupancy flag is present.
 
@@ -124,6 +130,11 @@ def _is_flag_name(name: str) -> bool:
     n2 = re.sub(r"_(o|i|reg|flag|out)$", "", n2)
     for stem in _FLAG_STEMS:
         if n2 == stem or n == stem:
+            return True
+        # Canonical dual-clock FIFO dialect: wfull / rempty (domain prefix,
+        # no underscore).  Whole remainder must be a known stem, so unrelated
+        # identifiers beginning with w/r are not widened into flags.
+        if len(n) > 1 and n[0] in "wr" and n[1:] == stem:
             return True
         # suffix / prefix match e.g. fifo_full, buf_empty, full_flag
         if n2.endswith("_" + stem) or n2.startswith(stem + "_"):
@@ -214,6 +225,30 @@ def _find_advanced_pointers(blocks_text: str) -> Dict[str, str]:
     return ptrs
 
 
+def _find_stale_derived_pointers(blocks_text: str,
+                                 ptrs: Dict[str, str]) -> Dict[str, str]:
+    """Return ``{derived_pointer: advancing_base_pointer}`` for one-cycle
+    stale registered representations.
+
+    A Gray pointer is the canonical case, but this is deliberately function-
+    agnostic: any registered pointer representation computed from the bare
+    pre-NBA base while that base advances in the same clocked module is stale.
+    An RHS that applies ``base +/- ...`` is a next-state representation and is
+    accepted.  Constants and self-assignments are ignored.
+    """
+    derived: Dict[str, str] = {}
+    for m in re.finditer(r"\b(\w+)\s*<=\s*([^;]+);", blocks_text,
+                         re.IGNORECASE):
+        lhs, rhs = m.group(1), m.group(2)
+        for base in ptrs:
+            if lhs == base or not re.search(rf"\b{re.escape(base)}\b", rhs):
+                continue
+            if re.search(rf"\b{re.escape(base)}\b\s*[+\-]", rhs):
+                continue
+            derived[lhs] = base
+    return derived
+
+
 def _line_of(text: str, offset: int) -> int:
     return text.count("\n", 0, offset) + 1
 
@@ -242,6 +277,7 @@ def _check_module(name: str, header: str, body: str,
     ptr_advance_in_expr_re = re.compile(
         rf"\b(?:{ptr_alt})\b\s*[+\-]"
     )
+    stale_derived = _find_stale_derived_pointers(seq_all, ptrs)
 
     # For each sequential block, find NBA assignments to a flag.
     for blk_start, blk_txt in seq_blocks:
@@ -279,6 +315,43 @@ def _check_module(name: str, header: str, body: str,
                         f"the NEXT-state pointer (`{fname} <= ((ptr-1)==LVL);`) "
                         f"so it settles in the same cycle as the pointer it "
                         f"describes."
+                    ),
+                })
+
+    # One-hop async-pointer form: the output flag itself is combinational, but
+    # the registered Gray/encoded pointer it consumes was captured from the
+    # pre-advance binary pointer.  This is the same latency defect transported
+    # through one named representation register.
+    for fname in flags:
+        assign_re = re.compile(
+            rf"\bassign\s+{re.escape(fname)}\s*=\s*([^;]+);",
+            re.IGNORECASE,
+        )
+        for m in assign_re.finditer(body_clean):
+            rhs = m.group(1)
+            for derived, base in stale_derived.items():
+                if not re.search(rf"\b{re.escape(derived)}\b", rhs):
+                    continue
+                abs_off = file_offset + m.start()
+                fline = _line_of(whole_text, abs_off)
+                failures.append({
+                    "rule": "OCCUPANCY_FLAG_STALE_DERIVED_POINTER_LATENCY",
+                    "severity": "FAIL",
+                    "module": name,
+                    "flag": fname,
+                    "pointer": base,
+                    "derived_pointer": derived,
+                    "file": file_path,
+                    "line": fline,
+                    "message": (
+                        f"occupancy flag `{fname}` reads registered pointer "
+                        f"representation `{derived}`, but `{derived}` is "
+                        f"captured from the pre-advance `{base}` while "
+                        f"`{base}` advances in the same cycle. The flag is one "
+                        f"accepted access late. Register `{derived}` from the "
+                        f"accepted next `{base}` value (for example "
+                        f"`encode({base} + accepted_enable)`) so binary and "
+                        f"encoded pointers describe the same occupancy."
                     ),
                 })
     return failures, True

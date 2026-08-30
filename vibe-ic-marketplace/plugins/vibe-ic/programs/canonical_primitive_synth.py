@@ -1196,8 +1196,9 @@ _TPL_FIFO = r'''// asyn_fifo: Asynchronous FIFO with gray-code CDC pointers (Cum
 // Design notes:
 //   - Binary pointers are (clog2(DEPTH)+1) bits: the extra MSB distinguishes
 //     full from empty. The low clog2(DEPTH) bits are the RAM address.
-//   - The current binary pointers are converted to Gray and stored in pointer
-//     registers, matching the specified registered pointer architecture.
+//   - Binary and Gray pointers are registered from the same accepted next
+//     position. Local full/empty protection therefore accounts for every
+//     completed access without permitting a one-cycle overflow/underflow.
 //   - Write gray pointer is 2-FF synchronized into the rclk domain (wptr_syn);
 //     read gray pointer is 2-FF synchronized into the wclk domain (rptr_syn).
 //   - Read data is REGISTERED (spec: dual_port_RAM has 'output reg rdata'),
@@ -1300,8 +1301,7 @@ module asyn_fifo #(
 
     // ------------------------------------------------------------------
     // Write controller (wclk domain)
-    // The binary address advances on an accepted write.  The registered Gray
-    // pointer captures the conversion of the current binary pointer.
+    // Binary and Gray pointers advance together for each accepted write.
     // ------------------------------------------------------------------
     always @(posedge wclk or negedge wrstn) begin
         if (!wrstn) begin
@@ -1309,7 +1309,7 @@ module asyn_fifo #(
             wptr      <= {PW{1'b0}};
         end else begin
             waddr_bin <= waddr_bin + wen;
-            wptr      <= bin2gray(waddr_bin);
+            wptr      <= bin2gray(waddr_bin + wen);
         end
     end
 
@@ -1322,7 +1322,7 @@ module asyn_fifo #(
             rptr      <= {PW{1'b0}};
         end else begin
             raddr_bin <= raddr_bin + ren;
-            rptr      <= bin2gray(raddr_bin);
+            rptr      <= bin2gray(raddr_bin + ren);
         end
     end
 
