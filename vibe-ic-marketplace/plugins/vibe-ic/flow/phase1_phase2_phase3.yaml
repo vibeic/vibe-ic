@@ -2558,17 +2558,39 @@ steps:
     # canonical flow read the number; the four steps that dominate area (9, 12,
     # 17, 34) were all terminal.
     #
-    # 1 is the fallback because a design's synthesised area is a property of its
-    # RTL and of the recipe THIS step runs. Step 9 IS the synthesis step, so
-    # "re-synthesise" is not an upstream move for it — a self-edge here would
-    # re-run the same recipe on the same input and spin. Step 1 is a transitive
-    # blocks_on ancestor, so the edge re-enters this step, and it is the same
-    # target steps 2/3/4/5 already fall back to for the same reason.
+    # THE FALLBACK WAS 1 UNTIL THE ACTUATOR EXISTED, and the argument for it was
+    # this, in full: "Step 9 IS the synthesis step, so re-synthesise is not an
+    # upstream move for it — a self-edge here would re-run the same recipe on the
+    # same input and spin."
     #
-    # The trigger names the DECLARED ceiling and nothing else. See the gate
-    # clause below for what happens when no design declares one.
+    # Every word of that was true when it was written and none of it is true now.
+    # `phase3_one_shot_runner.step_synth` re-enters ITSELF on an area overflow at
+    # `AREA_RETRY_PERIOD_RELAX`, which is NOT the same recipe; it re-measures
+    # `chip_area` and adopts the result only when it is BOTH smaller than the
+    # first attempt AND inside the budget (`area_retry_is_worth_adopting`); and it
+    # cannot spin, because `period_relax != 1.0` is what stops the recursion, so
+    # the loop is bounded at one by construction rather than by a counter.
+    #
+    # 1 WAS NEVER REACHABLE, and the runner already says so at the site, in the
+    # only place that could know:
+    #
+    #     CLC-ACTUATION-NOT-FALLBACK-REENTRY: edge 9 falls back to step 1,
+    #     but its actuator calls step_synth; expected one of [step_rtl_gen]
+    #
+    # with three measurements behind it — no RTL producer can see an area budget,
+    # `step_rtl_gen` is deterministic so the same L docs give the same RTL, and
+    # the one remediation path that can change a regeneration accepts only wiring
+    # hints. Re-entering step 1 on an area overflow returns byte-identical RTL,
+    # which the RTL repair loop already names `FAIL_RTL_REPAIR_INERT`.
+    #
+    # So this is not a new claim about what the flow could do. It is the
+    # declaration catching up with what the flow HAS BEEN DOING, and the actuator
+    # is the reason, not the trigger text — which is unchanged, and already names
+    # the metric and the ceiling.
+    #
+    # See the gate clause below for what happens when no design declares one.
     closed_loop:
-      fallback_to: 1
+      fallback_to: 9
       trigger: "design__instance__area above the design's DECLARED ceiling (L19.die_area_budget_um); the structure has to change"
     # prose says lint/sim/formal-clean RTL; the RTL artefact is Step 1's.
     required_inputs:
@@ -7167,6 +7189,30 @@ steps:
         # — so it cannot bubble, and withholding it would leave an ADVISORY
         # census with nothing a reader can re-check.
         - advisory_program_exit_zero: "closed_loop_metric_reaches_its_producer . --json reports/phase3/closed_loop_metric_reach.json"
+        # THE SIBLING ABOVE IS ADVISORY AND CANNOT BE ANYTHING ELSE: its finding,
+        # UNREACHABLE, is a fact about what this tree is CAPABLE of, inherited by
+        # every landing and owned by none. This clause is the other half of that
+        # question and it is BLOCKING, because its finding is a defect a change
+        # INTRODUCES.
+        #
+        # It also measures a DIFFERENT POPULATION, which is the reason it exists.
+        # The sibling reports REACHABLE over the flow's DECLARED edges. That
+        # number is a true statement about the declarations and a false
+        # impression of the flow: the declared edges and the re-entry loops the
+        # runners actually execute are DISJOINT SETS. The area re-synthesis loop,
+        # the routing-congestion loosen ladder, the over-utilisation die-upsize
+        # retry and the RTL repair retry all run on real projects and appear in
+        # none of the three declaration censuses — the last of them carrying its
+        # own inertness detector, `FAIL_RTL_REPAIR_INERT`, and still invisible to
+        # all three.
+        #
+        # `program_exit_zero`, not advisory, and the failing condition is
+        # REACHABLE rather than notional: a re-entry site that can neither change
+        # what it feeds in nor read back what came out (rc 1), or a recorded site
+        # that has since lost one of those two signals. Both are proven reachable
+        # by mutation in `test_closed_loop_executed_reentry_census.py`, which
+        # breaks a running loop in two arms and holds two control loops still.
+        - program_exit_zero: "closed_loop_executed_reentry_census . --json reports/phase3/closed_loop_executed_reentry.json"
     # 0.5ic writes the router files this step's condition reads, the template
     # the operator's arm is run against, and the declaration our arm compares
     # the layout to.

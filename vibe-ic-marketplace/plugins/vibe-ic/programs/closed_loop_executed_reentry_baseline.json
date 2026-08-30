@@ -1,0 +1,87 @@
+{
+  "design_one_shot_runner.py::_iverilog_compile_with_sv_fallback::_docker_exec": {
+    "ACTUATING": 1,
+    "INERT": 0,
+    "SELF_CHECKED_ONLY": 0
+  },
+  "design_one_shot_runner.py::_verilator_sim_escape::_docker_exec": {
+    "ACTUATING": 1,
+    "INERT": 0,
+    "SELF_CHECKED_ONLY": 0
+  },
+  "design_one_shot_runner.py::main::step_fpga_burn": {
+    "ACTUATING": 0,
+    "INERT": 0,
+    "SELF_CHECKED_ONLY": 2
+  },
+  "design_one_shot_runner.py::main::step_fpga_compile": {
+    "ACTUATING": 0,
+    "INERT": 0,
+    "SELF_CHECKED_ONLY": 2
+  },
+  "design_one_shot_runner.py::main::step_reference_tb": {
+    "ACTUATING": 0,
+    "INERT": 0,
+    "SELF_CHECKED_ONLY": 3
+  },
+  "design_one_shot_runner.py::main::step_rtl_gen": {
+    "ACTUATING": 0,
+    "INERT": 0,
+    "SELF_CHECKED_ONLY": 4
+  },
+  "design_one_shot_runner.py::main::step_usb_hid_tester_verify": {
+    "ACTUATING": 1,
+    "INERT": 0,
+    "SELF_CHECKED_ONLY": 0
+  },
+  "phase1_doc_one_shot_runner.py::main::run": {
+    "ACTUATING": 3,
+    "INERT": 0,
+    "SELF_CHECKED_ONLY": 0
+  },
+  "phase3_one_shot_runner.py::_emit_multi_corner_sta::_docker_exec": {
+    "ACTUATING": 1,
+    "INERT": 0,
+    "SELF_CHECKED_ONLY": 0
+  },
+  "phase3_one_shot_runner.py::_max_captable_c::_docker_exec": {
+    "ACTUATING": 1,
+    "INERT": 0,
+    "SELF_CHECKED_ONLY": 0
+  },
+  "phase3_one_shot_runner.py::_resolve_auto_die_um::_docker_exec": {
+    "ACTUATING": 1,
+    "INERT": 0,
+    "SELF_CHECKED_ONLY": 0
+  },
+  "phase3_one_shot_runner.py::main::run": {
+    "ACTUATING": 2,
+    "INERT": 0,
+    "SELF_CHECKED_ONLY": 0
+  },
+  "phase3_one_shot_runner.py::run_at_speed_atpg_producers::run": {
+    "ACTUATING": 1,
+    "INERT": 0,
+    "SELF_CHECKED_ONLY": 0
+  },
+  "phase3_one_shot_runner.py::step_pad_ring_gen::_docker_exec": {
+    "ACTUATING": 1,
+    "INERT": 0,
+    "SELF_CHECKED_ONLY": 0
+  },
+  "phase3_one_shot_runner.py::step_pad_ring_gen::run": {
+    "ACTUATING": 1,
+    "INERT": 0,
+    "SELF_CHECKED_ONLY": 0
+  },
+  "phase3_one_shot_runner.py::step_pnr::_docker_exec": {
+    "ACTUATING": 0,
+    "INERT": 0,
+    "SELF_CHECKED_ONLY": 1
+  },
+  "phase3_one_shot_runner.py::step_synth::step_synth": {
+    "ACTUATING": 1,
+    "INERT": 0,
+    "SELF_CHECKED_ONLY": 0
+  }
+}
