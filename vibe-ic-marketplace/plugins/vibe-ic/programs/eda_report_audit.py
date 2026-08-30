@@ -337,6 +337,77 @@ def _identity(p: Path):
     return ("inode", st.st_dev, st.st_ino)
 
 
+def _content_key(p: Path):
+    """The key two paths share when they are one MEASUREMENT, not one file.
+
+    `_identity` above collapses aliases of a single physical file. It does not
+    — and by its own documented table must not — collapse INDEPENDENT COPIES,
+    which carry two inodes. That is the remaining half of the same defect, and
+    the flow creates it on purpose.
+
+    MEASURED (subservient x gf180mcuD, plugin v1.13.40, image 0.3.39). The
+    phase-3 runner canonicalizes the router DRC report by writing ONE body
+    string to TWO paths (`phase3_one_shot_runner.py`, "Mirror to reports/
+    phase3/ where the gate's --json output lands")::
+
+        stat -Lc '%d:%i %s'  phase3/stage3/pnr/routed.drc.rpt   66306:86959502 19113
+        stat -Lc '%d:%i %s'  reports/phase3/drc_router.rpt      66306:86959503 19113
+        md5sum   both                        10ef04cdcae8e7ef2f0abaead418ea16
+
+    Two inodes, identical bytes, one router pass. `--under` scoping already
+    narrows the router-DRC gate from 3 files to these 2, and the inode dedup
+    already collapses each one's `steps/**` symlink — 4 literal paths become 2
+    keys — but the two copies both survive and every per-file quantity is
+    summed twice::
+
+        drc_router.rpt says   [INFO DRT-0199] Number of violations = 18
+        the gate recorded     real_violation_total = 36
+                              tool_corroborated_files = 2
+
+    18 x 2. The gate multiplied a count by how many times the flow had written
+    it down, and then reported the second write as independent corroboration of
+    the first. It over-reports, so no dirty design is graded clean — but the
+    sign-off number a reader would quote is wrong by the copy count, and it is
+    wrong for EVERY design, since the mirroring is unconditional.
+
+    A DRC violation is a property of the layout, not an event: two reports with
+    the same bytes are one measurement of it however many times the flow filed
+    them. So the key is the content digest.
+
+    EMPTY FILES ARE DELIBERATELY EXCLUDED. Two zero-byte reports have identical
+    content and are NOT one measurement — they are two measurements that did
+    not happen, and v1.13.21's ABSENT/EMPTY/POPULATED split counts them
+    separately in `empty_report_files`. Collapsing them would hide one of two
+    holes behind the other, which is the exact failure mode that split was
+    landed to end. Size is the pre-filter as well as the carve-out: a digest is
+    computed only for a file whose size collides with another survivor's, so
+    the common case (no duplicates) reads nothing.
+
+    Unreadable files degrade to their own literal path — the same fail-safe
+    `_identity` takes — so nothing a file the audit cannot read does can remove
+    a readable report from the audit.
+
+    OPT-IN, AND DRC-ONLY TODAY, deliberately. `_discover` serves six modes
+    (drc/lvs/sta/power/em/ir) and the double-filing is measured in exactly one
+    of them: `phase3_one_shot_runner` has a single "Mirror to reports/phase3/"
+    site and it is the router-DRC one; every other `write_text(body)` in that
+    runner files its report once. Turning this on project-wide would change
+    discovery for five modes on no evidence, and it does: with it applied
+    unconditionally, `test_sta_gate_step_scope::test_d1_unscoped_discovery_is_
+    unchanged` drops from 5 files to 2, because that fixture writes two bodies
+    across five paths. Widening it to another mode is a separate change and
+    needs its own measured double-file, not this one's.
+    """
+    try:
+        h = hashlib.sha256()
+        with p.open("rb") as fh:
+            for chunk in iter(lambda: fh.read(1 << 20), b""):
+                h.update(chunk)
+        return ("sha256", h.hexdigest())
+    except OSError:
+        return ("path", p)
+
+
 def _name_token_match(name: str, prefixes: Sequence[str]) -> bool:
     """True iff some TOKEN of `name`'s stem STARTS WITH one of `prefixes`.
 
@@ -371,7 +442,8 @@ def _name_token_match(name: str, prefixes: Sequence[str]) -> bool:
 
 
 def _discover(project_dir: Path, patterns: List[str],
-              exclude_name_tokens: Sequence[str] = ()) -> List[Path]:
+              exclude_name_tokens: Sequence[str] = (),
+              collapse_identical: bool = False) -> List[Path]:
     """Glob for files matching any of the given patterns recursively,
     skipping hidden / backup-flavored directories (#525), this program's own
     verdict documents, names carrying any of `exclude_name_tokens`, and
@@ -430,7 +502,44 @@ def _discover(project_dir: Path, patterns: List[str],
             continue
         seen.add(key)
         unique.append(p)
-    return unique
+    return _collapse_identical_content(unique) if collapse_identical else unique
+
+
+def _collapse_identical_content(paths: List[Path]) -> List[Path]:
+    """Drop survivors that are a byte-for-byte re-filing of an earlier one.
+
+    Runs AFTER every filter and after the inode dedup, for the same reason
+    those are ordered as they are: the key must be claimed by a path that is
+    actually in the output. See `_content_key` for the measurement.
+
+    Size is the pre-filter. A digest is read only for files whose size is
+    shared by at least one other survivor, so a tree with no duplicates does
+    no extra I/O at all, and a size we cannot stat leaves the file in place.
+    """
+    sizes = {}
+    for p in paths:
+        try:
+            sz = p.stat().st_size
+        except OSError:
+            sz = None
+        sizes[p] = sz
+    counts = {}
+    for sz in sizes.values():
+        if sz:                      # 0 and None never collide -- see _content_key
+            counts[sz] = counts.get(sz, 0) + 1
+    seen = set()
+    out = []
+    for p in paths:
+        sz = sizes[p]
+        if not sz or counts.get(sz, 0) < 2:
+            out.append(p)
+            continue
+        key = _content_key(p)
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(p)
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -1403,7 +1512,8 @@ def _check_drc(project_dir: Path) -> AuditResult:
     files = _discover(project_dir, ["*drc*.rpt", "*drc*.log", "*drc*.txt",
                                      "*drc*.lyrdb",
                                      "*DRC*.rpt", "*DRC*.log", "*DRC*.txt",
-                                     "*DRC*.lyrdb"])
+                                     "*DRC*.lyrdb"],
+                      collapse_identical=True)
     if not files:
         result.findings.append(Finding(
             rule="DRC_REPORT_EXISTS", severity="ERROR",
