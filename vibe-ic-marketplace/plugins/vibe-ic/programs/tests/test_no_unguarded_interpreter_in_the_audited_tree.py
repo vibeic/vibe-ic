@@ -92,6 +92,7 @@ def _writes_bytecode(tmp_path: Path, *, flag: bool, var: bool,
     argv.append(str(pkg / "main.py"))
     env = dict(os.environ)
     env.pop("PYTHONDONTWRITEBYTECODE", None)
+    env.pop("PYTHONPYCACHEPREFIX", None)  # the pinned image sets it to /tmp/pycache
     if var:
         env["PYTHONDONTWRITEBYTECODE"] = "1"
     r = subprocess.run(argv, env=env, capture_output=True, text=True)
@@ -214,6 +215,7 @@ def test_the_review_launched_AS_THE_TIER_LAUNCHES_IT_leaves_no_bytecode(
         (prog / src.name).write_bytes(src.read_bytes())
     env = dict(os.environ)
     env.pop("PYTHONDONTWRITEBYTECODE", None)
+    env.pop("PYTHONPYCACHEPREFIX", None)  # the pinned image sets it to /tmp/pycache
     r = subprocess.run([sys.executable, str(prog / "gatekeeper_review.py"),
                         "--help"], capture_output=True, text=True, env=env,
                        cwd=str(tmp_path))
@@ -238,6 +240,7 @@ def test_CONTROL_an_ORDINARY_program_in_that_directory_still_writes(tmp_path):
         "import _watchdog\nprint('ok')\n", encoding="utf-8")
     env = dict(os.environ)
     env.pop("PYTHONDONTWRITEBYTECODE", None)
+    env.pop("PYTHONPYCACHEPREFIX", None)  # the pinned image sets it to /tmp/pycache
     env["PYTHONPATH"] = str(prog)
     r = subprocess.run([sys.executable, str(prog / "_probe_entry.py")],
                        capture_output=True, text=True, env=env,
