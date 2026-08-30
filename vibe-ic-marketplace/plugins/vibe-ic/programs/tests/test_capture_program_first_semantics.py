@@ -55,10 +55,8 @@ def test_captured_templates_preserve_prompt_visible_architecture():
     assert "if (din_valid)" in serial
 
     fifo = canonical.emit_rtl("async_gray_fifo")
-    assert "wptr      <= bin2gray(waddr_bin)" in fifo
-    assert "rptr      <= bin2gray(raddr_bin)" in fifo
-    assert "wptr_next" not in fifo
-    assert "rptr_next" not in fifo
+    assert "wptr      <= bin2gray(waddr_bin + wen)" in fifo
+    assert "rptr      <= bin2gray(raddr_bin + ren)" in fifo
 
     pipe = canonical.emit_rtl("pipelined_unsigned_multiplier_8")
     assert "assign mul_en_out = mul_en_out_reg[2]" in pipe
@@ -418,7 +416,7 @@ endmodule
 
 @pytest.mark.skipif(not _HAVE_TOOLS,
                     reason="Icarus Verilog is required")
-def test_fifo_gray_pointer_registers_current_binary_position(tmp_path):
+def test_fifo_gray_pointer_tracks_each_accepted_access_at_the_boundary(tmp_path):
     rtl = tmp_path / "asyn_fifo.v"
     rtl.write_text(canonical.emit_rtl("async_gray_fifo"))
     tb = tmp_path / "tb.v"
@@ -433,20 +431,27 @@ module tb;
     .rempty(rempty),.rdata(rdata));
   always #5 wclk=~wclk;
   always #17 rclk=~rclk;
+  integer i;
   initial begin
     #2; wrstn=0; rrstn=0; #40;
-    @(negedge wclk); wrstn=1; rrstn=1; winc=1; wdata=8'h11;
-    @(posedge wclk); #1;
-    if (dut.waddr_bin !== 5'd1 || dut.wptr !== 5'd0) begin
-      $display("FAIL first-position bin=%0d gray=%0d",dut.waddr_bin,dut.wptr);
-      $fatal;
+    @(negedge wclk); wrstn=1; rrstn=1; winc=1;
+    for (i=1; i<=16; i=i+1) begin
+      wdata=i;
+      @(posedge wclk); #1;
+      if (dut.wptr !== ((dut.waddr_bin) ^ (dut.waddr_bin >> 1))) begin
+        $display("FAIL pointer-pair access=%0d bin=%0d gray=%0d",
+                 i,dut.waddr_bin,dut.wptr);
+        $fatal;
+      end
+      if (i < 16 && wfull !== 1'b0) begin
+        $display("FAIL early-full access=%0d",i); $fatal;
+      end
+      if (i == 16 && wfull !== 1'b1) begin
+        $display("FAIL late-full access=%0d",i); $fatal;
+      end
+      @(negedge wclk);
     end
-    @(negedge wclk); wdata=8'h22; @(posedge wclk); #1;
-    if (dut.waddr_bin !== 5'd2 || dut.wptr !== 5'd1) begin
-      $display("FAIL second-position bin=%0d gray=%0d",dut.waddr_bin,dut.wptr);
-      $fatal;
-    end
-    $display("PASS registered-current-position-gray"); $finish;
+    $display("PASS accepted-access-gray-boundary"); $finish;
   end
 endmodule
 """)
@@ -458,7 +463,7 @@ endmodule
     sim = progress.run([shutil.which("vvp"), str(out)],
                        capture_output=True, text=True)
     assert sim.returncode == 0, sim.stdout + sim.stderr
-    assert "PASS registered-current-position-gray" in sim.stdout
+    assert "PASS accepted-access-gray-boundary" in sim.stdout
 
 
 @pytest.mark.skipif(not _HAVE_IVERILOG,

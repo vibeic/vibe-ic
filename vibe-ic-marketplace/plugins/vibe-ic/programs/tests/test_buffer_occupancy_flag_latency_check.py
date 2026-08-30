@@ -147,6 +147,32 @@ module fifo(input clk, input rst, output reg full, output reg empty,
 endmodule
 """
 
+BUGGY_ASYNC_GRAY = """
+module fifo(
+    input wclk,
+    input wrstn,
+    input winc,
+    output wire wfull,
+    output wire rempty
+);
+    reg [4:0] waddr_bin, wptr;
+    wire wen = winc & ~wfull;
+    always @(posedge wclk or negedge wrstn) begin
+        if (!wrstn) begin waddr_bin <= 0; wptr <= 0; end
+        else begin
+            waddr_bin <= waddr_bin + wen;
+            wptr <= (waddr_bin ^ (waddr_bin >> 1));
+        end
+    end
+    assign wfull = (wptr == 5'b11000);
+    assign rempty = (wptr == 5'b00000);
+endmodule
+"""
+
+GOOD_ASYNC_GRAY = BUGGY_ASYNC_GRAY.replace(
+    "wptr <= (waddr_bin ^ (waddr_bin >> 1));",
+    "wptr <= ((waddr_bin + wen) ^ ((waddr_bin + wen) >> 1));")
+
 
 def test_buggy_stale_flag_fails(tmp_path):
     proj = _proj(tmp_path, {"LIFObuffer.v": BUGGY_LIFO})
@@ -183,6 +209,21 @@ def test_ansi_multi_output_fifo_fails(tmp_path):
     r = _run(proj)
     assert r.returncode == 1, r.stdout + r.stderr
     assert r.stdout.count("OCCUPANCY_FLAG_STALE_POINTER_LATENCY") >= 2
+
+
+def test_async_gray_pointer_one_hop_stale_representation_fails(tmp_path):
+    proj = _proj(tmp_path, {"fifo.v": BUGGY_ASYNC_GRAY})
+    r = _run(proj)
+    assert r.returncode == 1, r.stdout + r.stderr
+    assert "OCCUPANCY_FLAG_STALE_DERIVED_POINTER_LATENCY" in r.stdout
+    assert "waddr_bin" in r.stdout and "wptr" in r.stdout
+
+
+def test_async_gray_pointer_accepted_next_representation_passes(tmp_path):
+    proj = _proj(tmp_path, {"fifo.v": GOOD_ASYNC_GRAY})
+    r = _run(proj)
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "PASS" in r.stdout
 
 
 def test_waiver_downgrades(tmp_path):
