@@ -147,6 +147,11 @@ try:
 except Exception:  # pragma: no cover - defensive (program missing)
     _fsm_check_text = None
 try:
+    from valid_ready_independence_check import (  # type: ignore
+        check_text as _valid_ready_check_text)
+except Exception:  # pragma: no cover - defensive (program missing)
+    _valid_ready_check_text = None
+try:
     from handshake_livelock_result_stability_check import (  # type: ignore
         check_text as _handshake_check_text)
 except Exception:  # pragma: no cover - defensive (program missing)
@@ -3222,6 +3227,24 @@ def handshake_stability_gate_record(rid, completion):
                                     "handshake-stability", completion)
 
 
+def valid_ready_independence_gate_record(rid, completion):
+    """B6 — a source's VALID must not wait on the sink's READY. BLOCK on ERROR.
+
+    Admitted to the blocking set on measurement, not on argument. Swept over the
+    302 officially-passing CVDP deliveries it fires ONCE; that one source
+    deasserts TVALID whenever TREADY drops, which is an AXI4-Stream violation on
+    its face and passes only because the testbench holds TREADY high. Blocking
+    it costs no PASS: the protocol-correct variant was scored through the
+    official harness and also PASSes. On the blind clean-room failures it
+    recovers two AXI-stream designs.
+
+    It stays silent on the two legal idioms that put ready next to valid --
+    deassert-on-transfer, and the skid-buffer load `tready || !tvalid` -- which
+    is the whole reason it can block rather than merely advise."""
+    return _structural_finding_gate(_valid_ready_check_text,
+                                    "valid-ready-independence", completion)
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(
         description="CVDP copilot SOLE-EMIT gate (#528): drafts JSONL in, "
@@ -3887,6 +3910,15 @@ def main(argv=None) -> int:
                     ok = False
                     entry["verdict"] = "BLOCKED"
                     entry["handshake_block"] = _b4_note
+                _b6_ok, _b6_note = valid_ready_independence_gate_record(
+                    _rid_s, out_rec.get("completion", ""))
+                if _b6_note.startswith(("valid-ready-independence FAIL",
+                                        "valid-ready-independence PASS")):
+                    entry["valid_ready_independence"] = _b6_note
+                if not _b6_ok:
+                    ok = False
+                    entry["verdict"] = "BLOCKED"
+                    entry["valid_ready_block"] = _b6_note
                 # B5 — the EXAMPLE-FREE clause smoke TB. Reuses B2's per-record
                 # workdir: both write their own filenames into it, and a record
                 # that reached B2 has already created it.
