@@ -430,32 +430,32 @@ module freq_divbyodd #(
     reg [31:0] cnt1, cnt2;
     reg        clk_div1, clk_div2;
 
-    // Advance the counter and its decoded phase from the SAME next state.
-    // This makes the new high interval begin on the wrap edge itself.
+    // Decode the CURRENT counter value.  Nonblocking assignment semantics then
+    // advance the counter and register the matching level on the same edge.
     always @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
             cnt1 <= 32'd0;
             clk_div1 <= 1'b1;
         end else if (cnt1 == NUM_DIV - 1) begin
             cnt1 <= 32'd0;
-            clk_div1 <= 1'b1;
+            clk_div1 <= 1'b0;
         end else begin
             cnt1 <= cnt1 + 32'd1;
-            clk_div1 <= ((cnt1 + 32'd1) < (NUM_DIV / 2));
+            clk_div1 <= (cnt1 < (NUM_DIV / 2));
         end
     end
 
-    // The falling-edge phase follows the identical next-state rule.
+    // The falling-edge phase follows the identical current-state rule.
     always @(negedge clk or negedge rst_n) begin
         if (!rst_n) begin
             cnt2 <= 32'd0;
             clk_div2 <= 1'b1;
         end else if (cnt2 == NUM_DIV - 1) begin
             cnt2 <= 32'd0;
-            clk_div2 <= 1'b1;
+            clk_div2 <= 1'b0;
         end else begin
             cnt2 <= cnt2 + 32'd1;
-            clk_div2 <= ((cnt2 + 32'd1) < (NUM_DIV / 2));
+            clk_div2 <= (cnt2 < (NUM_DIV / 2));
         end
     end
 
@@ -1196,9 +1196,8 @@ _TPL_FIFO = r'''// asyn_fifo: Asynchronous FIFO with gray-code CDC pointers (Cum
 // Design notes:
 //   - Binary pointers are (clog2(DEPTH)+1) bits: the extra MSB distinguishes
 //     full from empty. The low clog2(DEPTH) bits are the RAM address.
-//   - Binary and Gray pointers are registered from the same accepted next
-//     position. Local full/empty protection therefore accounts for every
-//     completed access without permitting a one-cycle overflow/underflow.
+//   - The current binary pointers are converted to Gray and stored in pointer
+//     registers, matching the specified registered pointer architecture.
 //   - Write gray pointer is 2-FF synchronized into the rclk domain (wptr_syn);
 //     read gray pointer is 2-FF synchronized into the wclk domain (rptr_syn).
 //   - Read data is REGISTERED (spec: dual_port_RAM has 'output reg rdata'),
@@ -1285,11 +1284,6 @@ module asyn_fifo #(
         bin2gray = b ^ (b >> 1);
     endfunction
 
-    wire [PW-1:0] waddr_bin_next = waddr_bin + wen;
-    wire [PW-1:0] raddr_bin_next = raddr_bin + ren;
-    wire [PW-1:0] wptr_next = bin2gray(waddr_bin_next);
-    wire [PW-1:0] rptr_next = bin2gray(raddr_bin_next);
-
     // ------------------------------------------------------------------
     // Dual-port RAM
     // ------------------------------------------------------------------
@@ -1306,15 +1300,16 @@ module asyn_fifo #(
 
     // ------------------------------------------------------------------
     // Write controller (wclk domain)
-    // Binary and Gray pointers advance together for each accepted write.
+    // The binary address advances on an accepted write.  The registered Gray
+    // pointer captures the conversion of the current binary pointer.
     // ------------------------------------------------------------------
     always @(posedge wclk or negedge wrstn) begin
         if (!wrstn) begin
             waddr_bin <= {PW{1'b0}};
             wptr      <= {PW{1'b0}};
         end else begin
-            waddr_bin <= waddr_bin_next;
-            wptr      <= wptr_next;
+            waddr_bin <= waddr_bin + wen;
+            wptr      <= bin2gray(waddr_bin);
         end
     end
 
@@ -1326,8 +1321,8 @@ module asyn_fifo #(
             raddr_bin <= {PW{1'b0}};
             rptr      <= {PW{1'b0}};
         end else begin
-            raddr_bin <= raddr_bin_next;
-            rptr      <= rptr_next;
+            raddr_bin <= raddr_bin + ren;
+            rptr      <= bin2gray(raddr_bin);
         end
     end
 
