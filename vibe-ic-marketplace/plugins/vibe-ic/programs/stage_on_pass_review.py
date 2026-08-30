@@ -107,6 +107,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -384,6 +385,242 @@ def rule_intent_top_not_built(project: Path, decl: Dict[str, Any]) -> Dict[str, 
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# R2 — stage 2
+# ─────────────────────────────────────────────────────────────────────────────
+#: Port-direction keywords, in the NON-ANSI form every synthesised netlist uses
+#: (`input clk;` / `output [7:0] q;`, one per line). This reader parses the
+#: ARTEFACT the stage left behind; it elaborates nothing and runs nothing.
+_NETLIST_PORT_RE = re.compile(
+    r"(?m)^[ \t]*(input|output|inout)\b[ \t]*"
+    r"(?:(?:wire|reg|logic|signed|unsigned)[ \t]+)*"
+    r"(?:\[[ \t]*(-?\d+)[ \t]*:[ \t]*(-?\d+)[ \t]*\][ \t]*)?"
+    r"([A-Za-z_][A-Za-z0-9_$]*)[ \t]*[;,]")
+
+#: The roles an intent may give a pin to declare it a SUPPLY rather than a
+#: signal. Read off the intent's OWN fields — never off the pin's name. See the
+#: disarm note in `rule_intent_pin_not_in_netlist`.
+_SUPPLY_ROLES = ("power", "ground", "supply")
+
+#: Where the intent publishes the chip's external pin list, most specific
+#: first. `phase1_doc_one_shot_runner` promotes L1's pin table into all three.
+_INTENT_PIN_FIELDS = ("top_ports", "ports", "top_module_pins")
+
+
+def _supply_declared(pin: Dict[str, Any]) -> Optional[str]:
+    """The intent's OWN declaration that this pin is a supply, or None.
+
+    Reads only declared ROLE fields. A name-shaped test ("does it start with a
+    known rail prefix") would be this reviewer inventing a fact the intent did
+    not state, and would silence a real signal pin that happens to be named
+    like a rail.
+    """
+    for key in ("io", "type", "kind", "role", "pin_type"):
+        v = pin.get(key)
+        if isinstance(v, str) and v.strip().lower() in _SUPPLY_ROLES:
+            return f"{key}={v!r}"
+    for key in ("power", "supply", "is_supply", "is_power"):
+        if pin.get(key) is True:
+            return f"{key}=True"
+    for key in ("direction", "mode"):
+        v = pin.get(key)
+        if isinstance(v, str) and v.strip().lower().startswith("supply"):
+            return f"{key}={v!r}"
+    return None
+
+
+def read_intent_pins(l9_path: Path) -> Dict[str, Any]:
+    """The intent's declared external pin list, and which field carried it."""
+    try:
+        d = json.loads(l9_path.read_text(encoding="utf-8", errors="replace"))
+    except (OSError, ValueError) as e:
+        return {"readable": False, "why": str(e)}
+    if not isinstance(d, dict):
+        return {"readable": False, "why": "L9 is not a mapping"}
+    for field in _INTENT_PIN_FIELDS:
+        rows = d.get(field)
+        if isinstance(rows, list) and rows:
+            pins = [p for p in rows if isinstance(p, dict) and p.get("name")]
+            if pins:
+                return {"readable": True, "file": str(l9_path), "field": field,
+                        "value": [str(p["name"]) for p in pins],
+                        "pins": pins}
+    return {"readable": True, "file": str(l9_path), "field": None,
+            "value": [], "pins": []}
+
+
+def netlist_port_directions(text: str) -> Dict[str, str]:
+    """`{port name: direction}` for one module body. PURE."""
+    out: Dict[str, str] = {}
+    for direction, _msb, _lsb, name in _NETLIST_PORT_RE.findall(text):
+        out.setdefault(name, direction)
+    return out
+
+
+def read_netlist_interface(netlist: Path) -> Dict[str, Any]:
+    """The interface of the module the netlist TOPS OUT AT.
+
+    The top is STRUCTURAL — the module no other module in the file
+    instantiates — not the one the intent names. That is deliberate: the
+    question this rule puts is "does the thing that will be built carry the
+    pins the design was asked for", and the thing that will be built is
+    whatever the netlist roots at. Reading the intent's name here would let a
+    netlist that roots at a different module answer for a module nobody
+    builds.
+    """
+    try:
+        text = netlist.read_text(encoding="utf-8", errors="replace")
+    except OSError as e:
+        return {"readable": False, "why": str(e)}
+    bodies = _dms.module_bodies_in_text(text)
+    if not bodies:
+        return {"readable": False,
+                "why": f"{netlist.name} declares no module"}
+    roots = sorted(_dms.instantiation_roots(bodies))
+    if len(roots) != 1:
+        return {"readable": False, "modules": sorted(bodies),
+                "roots": roots,
+                "why": (f"{netlist.name} has {len(roots)} structural root(s) "
+                        f"({', '.join(roots) or 'none'}); a netlist with no "
+                        f"single root has no one interface to compare against "
+                        f"the intent")}
+    top = roots[0]
+    ports = netlist_port_directions(bodies[top])
+    return {"readable": True, "file": str(netlist), "top": top,
+            "modules": sorted(bodies), "ports": ports,
+            "port_names": sorted(ports)}
+
+
+def rule_intent_pin_not_in_netlist(project: Path,
+                                   decl: Dict[str, Any]) -> Dict[str, Any]:
+    """R2. The intent declares a pin the synthesised netlist does not build.
+
+    THE INTENT is the design INPUT's pin table, promoted into L9. THE ARTEFACT
+    is the netlist step 9 produces and step 14 hands to place-and-route — the
+    first artefact in the flow in which the interface is CONCRETE: parameters
+    resolved, wrapper chosen, widths fixed. A pin the intent declares and this
+    module does not carry is a pin the fabricated chip will not have.
+
+    WHY THE REVERSE DIRECTION IS AN OBSERVATION AND NOT A REJECTION. Ports the
+    netlist carries and the intent does not are ROUTINE and legitimately
+    flow-authored: DFT insertion adds a scan interface, the chip_top wrapper
+    adds its own, tie cells add theirs. MEASURED over the published corpus, 2
+    of the 11 comparable cells carry extra ports and BOTH are legitimate, so a
+    rule that rejected on them would be firing on the flow's own correct
+    behaviour. This rule is therefore one-directional by construction, and the
+    extra ports are reported so the reader can see what the reviewer saw.
+
+    THE DISARM, and why it is a narrowing rather than a weakening. A pin the
+    intent itself marks POWER or GROUND is legitimately absent from a
+    non-power-aware synthesised netlist — supply connectivity is stage 3's
+    (the power grid, and power-aware LVS), and Yosys emits no supply ports
+    unless asked. MEASURED over the published corpus: without this disarm the
+    rejection set is 3 of 11 cells, and 2 of those 3 are the same cell's two
+    supply pins. With it the set is 1 of 11. The disarm reads the intent's own
+    declared ROLE field and nothing else — see `_supply_declared`.
+    """
+    intent_rel = [str(x) for x in (decl.get("intent") or [])]
+    artefact_rel = [str(x) for x in (decl.get("artefact") or [])]
+    l9 = next((project / r for r in intent_rel
+               if r.endswith("L9_INTEGRATION_SPEC.json")), None)
+    if l9 is None:
+        return {"verdict": "NOT_CHECKED",
+                "why": ("the stage's `intent:` names no L9_INTEGRATION_SPEC.json; "
+                        "R2 has no intent to read")}
+    if not l9.exists():
+        return {"verdict": "NOT_CHECKED",
+                "why": f"{l9} does not exist; the intent was never published"}
+    intent = read_intent_pins(l9)
+    intent["intent_rel"] = str(l9.relative_to(project))
+    if not intent.get("readable"):
+        return {"verdict": "NOT_CHECKED", "why": f"{l9}: {intent.get('why')}"}
+    if not intent["pins"]:
+        return {"verdict": "NOT_CHECKED", "intent": intent,
+                "why": (f"{l9.name} declares no external pin in any of "
+                        f"{', '.join(_INTENT_PIN_FIELDS)}; there is no intent "
+                        f"for the artefact to contradict, and an absent "
+                        f"declaration is not an agreement")}
+
+    nets = [project / r for r in artefact_rel
+            if str(r).endswith(".v") and (project / r).is_file()]
+    if not nets:
+        return {"verdict": "NOT_CHECKED", "intent": intent,
+                "why": ("none of the declared artefact paths resolves to a "
+                        "netlist file: "
+                        + (", ".join(artefact_rel) or "(no artefact declared)")
+                        + " — the stage published no netlist to compare, which "
+                          "refutes nothing and certifies nothing")}
+    netlist = nets[0]
+    art = read_netlist_interface(netlist)
+    art["artefact_rel"] = str(netlist.relative_to(project))
+    if not art.get("readable"):
+        return {"verdict": "NOT_CHECKED", "intent": intent, "artefact": art,
+                "why": f"{netlist}: {art.get('why')}"}
+    if not art["ports"]:
+        return {"verdict": "NOT_CHECKED", "intent": intent, "artefact": art,
+                "why": (f"the netlist's structural top {art['top']!r} declares "
+                        f"NO port; an empty interface refutes nothing and "
+                        f"certifies nothing")}
+
+    built = set(art["ports"])
+    absent_signal: List[Dict[str, Any]] = []
+    disarmed: List[Dict[str, Any]] = []
+    for pin in intent["pins"]:
+        name = str(pin["name"])
+        if name in built:
+            continue
+        why_supply = _supply_declared(pin)
+        row = {"name": name,
+               "direction": pin.get("direction") or pin.get("mode"),
+               "evidence": pin.get("evidence")}
+        if why_supply:
+            row["intent_declares_supply"] = why_supply
+            disarmed.append(row)
+        else:
+            absent_signal.append(row)
+    extra = sorted(built - {str(p["name"]) for p in intent["pins"]})
+
+    art["extra_ports_not_in_intent"] = extra
+    common = {"intent": intent, "artefact": art, "disarmed": disarmed,
+              "extra_ports_not_in_intent": extra}
+
+    if not absent_signal:
+        out = {"verdict": "ACCEPT", **common}
+        if disarmed:
+            out["verdict"] = "DISARMED"
+            out["observation"] = (
+                f"{len(disarmed)} intent pin(s) are absent from the netlist's "
+                f"top {art['top']!r} and every one of them is a pin THE INTENT "
+                f"ITSELF declares a supply rather than a signal ("
+                + "; ".join(f"{r['name']} [{r['intent_declares_supply']}]"
+                            for r in disarmed)
+                + "); a non-power-aware synthesised netlist carries no supply "
+                  "port, and supply connectivity is signed off in stage 3 by "
+                  "the power grid and power-aware LVS, not here")
+        return out
+
+    names = [r["name"] for r in absent_signal]
+    return {
+        "verdict": "REJECT", **common,
+        "absent_signal_pins": absent_signal,
+        "contradiction": (
+            f"the intent declares {len(intent['pins'])} external pin(s) in "
+            f"{Path(intent['intent_rel']).name}::{intent['field']}, and the "
+            f"netlist this stage hands to place-and-route tops out at "
+            f"{art['top']!r} carrying {len(built)} port(s) — "
+            f"{len(absent_signal)} declared pin(s) are not among them: "
+            f"{', '.join(names[:8])}{', …' if len(names) > 8 else ''}. "
+            f"The netlist builds {', '.join(sorted(built)[:8])}"
+            f"{', …' if len(built) > 8 else ''}. "
+            f"A pin the design input asks for and the synthesised top does not "
+            f"carry is a pin the fabricated chip will not have, and every "
+            f"stage-3 sign-off downstream is correct about the interface that "
+            f"was built rather than the one that was asked for."),
+        # `test` is filled in by `emit_test` once the run's own regression has
+        # actually been WRITTEN — see the note on R1.
+    }
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # the rejection's executable test
 # ─────────────────────────────────────────────────────────────────────────────
 # THE TEST BELONGS TO THE RUN, NOT TO THE PLUGIN. The doctrine is that a
@@ -467,21 +704,176 @@ if __name__ == "__main__":
 '''
 
 
-def emit_test(dest: Path, finding: Dict[str, Any], stage_id: str) -> Path:
-    """Write the run's own regression for this rejection and return its path."""
-    body = _EMITTED_TEST.format(
+_EMITTED_TEST_R2 = r'''#!/usr/bin/env python3
+"""AUTO-EMITTED by `{program}` from a stage-{stage} ON-PASS review rejection.
+
+    {contradiction}
+
+This test FAILS while that is true of this run tree and PASSES once it is
+repaired. It reads only this run's own INTENT and ARTEFACT — no oracle, no
+harness, no golden — and it re-derives nothing: it runs no synthesis and
+rebuilds no netlist.
+
+REPAIR is one of exactly two things, and which one is a design decision this
+test does not make:
+  * the stage synthesises a top that carries the declared pin(s), or
+  * the intent is corrected to declare the interface this design actually has,
+    and every artefact derived from the old pin list is regenerated from it.
+
+It deliberately does NOT assert the reverse direction. Ports the netlist
+carries and the intent does not are routine — scan insertion, the wrapper, tie
+cells — and asserting on them would make this file red for the flow doing its
+job. It also does not assert on a pin the intent itself marks a supply: a
+non-power-aware netlist carries no supply port, and that is stage 3's to sign
+off.
+"""
+import json
+import re
+import sys
+from pathlib import Path
+
+INTENT_REL = {intent_rel!r}
+INTENT_FIELD = {intent_field!r}
+NETLIST_REL = {netlist_rel!r}
+SUPPLY_ROLES = ("power", "ground", "supply")
+_PORT_RE = re.compile(
+    r"(?m)^[ \t]*(input|output|inout)\b[ \t]*"
+    r"(?:(?:wire|reg|logic|signed|unsigned)[ \t]+)*"
+    r"(?:\[[ \t]*-?\d+[ \t]*:[ \t]*-?\d+[ \t]*\][ \t]*)?"
+    r"([A-Za-z_][A-Za-z0-9_$]*)[ \t]*[;,]")
+_MODULE_RE = re.compile(
+    r"(?ms)^[ \t]*module[ \t]+([A-Za-z_]\w*)\b(.*?)^[ \t]*endmodule")
+
+
+def run_root() -> Path:
+    for d in [Path(__file__).resolve()] + list(Path(__file__).resolve().parents):
+        if (d / "phase1" / "generated_docs").is_dir():
+            return d
+    raise AssertionError("no run root above %s" % __file__)
+
+
+def _is_supply(pin) -> bool:
+    for key in ("io", "type", "kind", "role", "pin_type"):
+        v = pin.get(key)
+        if isinstance(v, str) and v.strip().lower() in SUPPLY_ROLES:
+            return True
+    for key in ("power", "supply", "is_supply", "is_power"):
+        if pin.get(key) is True:
+            return True
+    for key in ("direction", "mode"):
+        v = pin.get(key)
+        if isinstance(v, str) and v.strip().lower().startswith("supply"):
+            return True
+    return False
+
+
+def test_every_pin_the_intent_declares_is_built_by_the_synthesised_top():
+    root = run_root()
+    intent = json.loads((root / INTENT_REL).read_text(encoding="utf-8",
+                                                      errors="replace"))
+    pins = [p for p in (intent.get(INTENT_FIELD) or [])
+            if isinstance(p, dict) and p.get("name")]
+    assert pins, "%s::%s declares no external pin" % (INTENT_REL, INTENT_FIELD)
+
+    text = (root / NETLIST_REL).read_text(encoding="utf-8", errors="replace")
+    text = re.sub(r"/\*.*?\*/", "", text, flags=re.DOTALL)
+    text = re.sub(r"//[^\n]*", "", text)
+    bodies = dict((m.group(1), m.group(2)) for m in _MODULE_RE.finditer(text))
+    assert bodies, (
+        "%s declares no module; this test refutes nothing over an empty "
+        "artefact" % NETLIST_REL)
+    # The SAME instantiation shape `_design_module_set._instantiates` uses:
+    # `<module> [#(params)] <inst> (`. A looser match (a bare name anywhere in
+    # a body) would call a wire named after a module an instantiation, and
+    # this file would then disagree with the review that emitted it.
+    instantiated = set()
+    for name in bodies:
+        pat = re.compile(r"\b" + re.escape(name)
+                         + r"\s+(?:#\s*\((?:[^;]*?)\)\s*)?[A-Za-z_]\w*\s*"
+                         + r"(?:\[[^\]]*\]\s*)?\(")
+        for other, body in bodies.items():
+            if other != name and pat.search(body):
+                instantiated.add(name)
+    roots = sorted(set(bodies) - instantiated)
+    assert len(roots) == 1, (
+        "%s has %d structural roots (%s); with no single root there is no one "
+        "interface to compare" % (NETLIST_REL, len(roots), ", ".join(roots)))
+    built = set(n for _d, n in _PORT_RE.findall(bodies[roots[0]]))
+    assert built, (
+        "the netlist's structural top %r declares no port; an empty interface "
+        "refutes nothing" % roots[0])
+
+    absent = sorted(str(p["name"]) for p in pins
+                    if str(p["name"]) not in built and not _is_supply(p))
+    assert not absent, (
+        "%s::%s declares %d pin(s); the netlist %s tops out at %r carrying %d "
+        "port(s), and %d declared signal pin(s) are not among them: %s. The "
+        "top builds: %s" % (INTENT_REL, INTENT_FIELD, len(pins), NETLIST_REL,
+                            roots[0], len(built), len(absent),
+                            ", ".join(absent), ", ".join(sorted(built))))
+
+
+if __name__ == "__main__":
+    try:
+        test_every_pin_the_intent_declares_is_built_by_the_synthesised_top()
+    except AssertionError as e:
+        print("FAIL: %s" % e)
+        sys.exit(1)
+    print("PASS: the synthesised top builds every pin the intent declares")
+'''
+
+
+def _body_r1(finding: Dict[str, Any], stage_id: str) -> str:
+    return _EMITTED_TEST.format(
         program=_NAME, stage=stage_id,
         contradiction=finding["contradiction"],
         n_restamped=len(finding.get("restamped_in") or []),
         intent_rel=finding["intent"]["intent_rel"],
         rtl_rels=list(finding["artefact"]["rtl_dirs"]))
+
+
+def _body_r2(finding: Dict[str, Any], stage_id: str) -> str:
+    return _EMITTED_TEST_R2.format(
+        program=_NAME, stage=stage_id,
+        contradiction=finding["contradiction"],
+        intent_rel=finding["intent"]["intent_rel"],
+        intent_field=finding["intent"]["field"],
+        netlist_rel=finding["artefact"]["artefact_rel"])
+
+
+def emit_test(dest: Path, finding: Dict[str, Any], stage_id: str) -> Path:
+    """Write the run's own regression for this rejection and return its path.
+
+    A rule with no emitter raises KeyError here rather than writing somebody
+    else's test — `review()` then leaves `test` absent and the
+    unproven-rejection branch refuses the rejection, which is correct: a
+    rejection whose test could not be written is not proven.
+    """
+    body = _EMITTERS[finding["rule"]](finding, stage_id)
     dest.parent.mkdir(parents=True, exist_ok=True)
     dest.write_text(body, encoding="utf-8")
     return dest
 
 
 #: The rules this program runs, per stage. A stage with no rule is NOT CHECKED.
-_RULES = {"stage1": [("R1_INTENT_TOP_NOT_BUILT", rule_intent_top_not_built)]}
+#:
+#: ONE RULE PER STAGE, AND WHY EACH IS THE STAGE'S OWN. R1 reads the intent
+#: against stage 1's RTL — the only artefact in the flow that is a TRANSLATION
+#: of the intent. R2 reads it against stage 2's NETLIST, which is the first
+#: artefact whose interface is CONCRETE (parameters resolved, wrapper chosen)
+#: and the artefact stage 3 builds. They are not the same question and neither
+#: subsumes the other: MEASURED on the published corpus, R1 DISARMS on
+#: `ic/opentitan_aes` (its intent declares it read no top out of the input) and
+#: R2 rejects it.
+_RULES = {
+    "stage1": [("R1_INTENT_TOP_NOT_BUILT", rule_intent_top_not_built)],
+    "stage2": [("R2_INTENT_PIN_NOT_IN_NETLIST", rule_intent_pin_not_in_netlist)],
+}
+
+#: The emitter for each rule's own regression. Keyed by rule id, beside
+#: `_RULES`, so a rule added without one fails loudly at emit time.
+_EMITTERS = {"R1_INTENT_TOP_NOT_BUILT": _body_r1,
+             "R2_INTENT_PIN_NOT_IN_NETLIST": _body_r2}
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -539,6 +931,60 @@ def review(project: Path, stage_id: str, decl: Dict[str, Any],
         else:
             rec["not_checked"].append(out)
     return rec
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# how each rule renders the evidence it read
+# ─────────────────────────────────────────────────────────────────────────────
+# The four required parts are the SAME for every rule; what INTENT and ARTEFACT
+# look like is not. R1's artefact is a directory of RTL and a module set; R2's
+# is one netlist file and a port list. One printer that tried to render both
+# would have to speak in a vocabulary that fits neither.
+def _print_r1(f: Dict[str, Any]) -> None:
+    i, art = f["intent"], f["artefact"]
+    print(f"    INTENT   {i['file']} :: {i['field']} = {i['value']!r}")
+    print(f"    ARTEFACT {', '.join(art['rtl_dirs']) or '(none)'} "
+          f"declares {art['module_count']} module(s): "
+          f"{', '.join(art['modules'][:8])}"
+          f"{', …' if len(art['modules']) > 8 else ''}")
+    if f.get("restamped_in"):
+        print(f"    RESTAMPED design_identity.top={i['value']!r} in "
+              f"{len(f['restamped_in'])} report(s), e.g. "
+              f"{f['restamped_in'][0]}")
+
+
+def _print_r2(f: Dict[str, Any]) -> None:
+    i, art = f["intent"], f["artefact"]
+    absent = [r["name"] for r in f["absent_signal_pins"]]
+    print(f"    INTENT   {i['file']} :: {i['field']} declares "
+          f"{len(i['pins'])} external pin(s): {', '.join(i['value'][:8])}"
+          f"{', …' if len(i['value']) > 8 else ''}")
+    print(f"    ARTEFACT {art['artefact_rel']} tops out at {art['top']!r} "
+          f"carrying {len(art['ports'])} port(s): "
+          f"{', '.join(art['port_names'][:8])}"
+          f"{', …' if len(art['port_names']) > 8 else ''}")
+    print(f"    ABSENT   {len(absent)} declared signal pin(s) the netlist does "
+          f"not build: {', '.join(absent)}")
+    for r in f["absent_signal_pins"][:8]:
+        print(f"               {r['name']} ({r['direction']}) declared in "
+              f"{r['evidence']}")
+    if f.get("disarmed"):
+        print(f"    DISARMED {len(f['disarmed'])} further absent pin(s) the "
+              f"intent itself declares a supply, not counted: "
+              + ", ".join(f"{r['name']} [{r['intent_declares_supply']}]"
+                          for r in f["disarmed"]))
+    if art.get("extra_ports_not_in_intent"):
+        print(f"    NOT A FINDING the netlist also carries "
+              f"{len(art['extra_ports_not_in_intent'])} port(s) the intent "
+              f"does not declare "
+              f"({', '.join(art['extra_ports_not_in_intent'][:8])}"
+              f"{', …' if len(art['extra_ports_not_in_intent']) > 8 else ''}); "
+              f"scan insertion and the wrapper add ports legitimately, so this "
+              f"rule never rejects on them")
+
+
+_PRINTERS = {"R1_INTENT_TOP_NOT_BUILT": _print_r1,
+             "R2_INTENT_PIN_NOT_IN_NETLIST": _print_r2}
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -669,17 +1115,8 @@ def main(argv: Optional[List[str]] = None) -> int:
               f"contradiction(s) between the intent and the stage-{a.stage} "
               f"artefact:")
         for f in rec["rejections"]:
-            i, art = f["intent"], f["artefact"]
             print(f"  [{f['rule']}]")
-            print(f"    INTENT   {i['file']} :: {i['field']} = {i['value']!r}")
-            print(f"    ARTEFACT {', '.join(art['rtl_dirs']) or '(none)'} "
-                  f"declares {art['module_count']} module(s): "
-                  f"{', '.join(art['modules'][:8])}"
-                  f"{', …' if len(art['modules']) > 8 else ''}")
-            if f.get("restamped_in"):
-                print(f"    RESTAMPED design_identity.top={i['value']!r} in "
-                      f"{len(f['restamped_in'])} report(s), e.g. "
-                      f"{f['restamped_in'][0]}")
+            _PRINTERS[f["rule"]](f)
             print(f"    CONTRADICTION {f['contradiction']}")
             print(f"    TEST     {f['test']}  (emitted; FAILS on this run, "
                   f"passes when repaired — run it with `python3` or pytest)")
