@@ -14,8 +14,23 @@ quantity. If it cannot, re-entering it reproduces what it produced before, and
 the loop is inert by construction — which the RTL retry loop already detects and
 calls `FAIL_RTL_REPAIR_INERT`.
 
-MEASURED ON THE SHIPPED FLOW: 21 declared edges, REACHABLE=0, UNREACHABLE=2,
+MEASURED ON THE SHIPPED FLOW: 21 declared edges, REACHABLE=1, UNREACHABLE=1,
 UNSTATED=19.
+
+REACHABLE WAS 0 UNTIL THE AREA EDGE'S DECLARATION WAS CORRECTED, and the
+correction was to the FALLBACK TARGET, never to the trigger. The trigger has
+always named `design__instance__area` and `L19.die_area_budget_um`; what was
+wrong was `fallback_to: 1`, while the actuator that runs on this trigger —
+`phase3_one_shot_runner.step_synth` re-entering ITSELF at
+`AREA_RETRY_PERIOD_RELAX` — re-enters step 9. The runner had recorded exactly
+that mismatch at the site, as `CLC-ACTUATION-NOT-FALLBACK-REENTRY`.
+
+This distinction is the one the test below defends, because the cheap way to
+move this number is the wrong one: WRITING A METRIC NAME INTO A TRIGGER converts
+UNSTATED to UNREACHABLE and changes nothing about the design. Measured over the
+seven metric-shaped UNSTATED triggers — substitute the obvious identifier into
+each and 7 of 7 come back UNREACHABLE, with REACHABLE still 0. Reachable means
+an ACTUATOR EXISTS, not that a path exists on paper.
 """
 from __future__ import annotations
 
@@ -71,14 +86,54 @@ def test_an_L_doc_field_name_IS_searched():
 
 
 # ── the verdict, on the tree that ships ─────────────────────────────────────
-def test_the_area_edge_is_unreachable_and_says_why():
-    """Measured three ways by hand before this program existed: no RTL producer
-    can see an area budget, `step_rtl_gen` is deterministic, and the one
-    remediation path accepts two hint kinds, both wiring defects."""
-    rows = {r["step"]: r for r in _mod().audit(_ROOT)["edges"]}
+def test_the_area_edge_is_reachable_because_an_actuator_re_enters_it():
+    """AND THE PROOF MUST NOT BE THE TRIGGER TEXT.
+
+    The verdict flipped because the edge now names the step its actuator
+    actually re-enters, and that step's producer set contains a program that
+    reads the metric. Both halves are asserted separately below so that editing
+    either one alone cannot keep this test green.
+    """
+    C = _mod()
+    rows = {r["step"]: r for r in C.audit(_ROOT)["edges"]}
     area = rows["9"]
-    assert area["verdict"] == "UNREACHABLE", area
-    assert "die_area_budget_um" in area["why"]
+    assert area["verdict"] == "REACHABLE", area
+    assert area["fallback_to"] == "9", (
+        "the edge must target the step its actuator re-enters; a fallback of 1 "
+        "is the state the runner itself refuses as "
+        "CLC-ACTUATION-NOT-FALLBACK-REENTRY")
+    assert "area_total_vs_budget_check" in area["readers"], area
+    assert "die_area_budget_um" in " ".join(area["metrics"])
+
+
+def test_the_trigger_text_did_not_buy_the_reachable_verdict():
+    """THE ANTI-CHEAT. If the same trigger, pointed back at step 1, still reads
+    UNREACHABLE, then no wording bought this verdict — the fallback target did,
+    and the target is a claim about which code runs."""
+    C = _mod()
+    rows = {r["step"]: r for r in C.audit(_ROOT)["edges"]}
+    trigger = " ".join(rows["9"]["metrics"])
+    assert "design__instance__area" in trigger and "die_area_budget_um" in trigger
+
+    import yaml                                             # noqa: PLC0415
+    flow = yaml.safe_load(
+        (_ROOT / "vibe-ic-marketplace" / "plugins" / "vibe-ic" / "flow"
+         / "phase1_phase2_phase3.yaml").read_text(errors="replace"))
+    steps = {str(s.get("id")): s for s in flow["steps"]}
+    names = set()
+    for m in rows["9"]["metrics"]:
+        names |= C._leaf_names(m)
+    progs = _PROGRAMS
+    for target in ("1",):
+        producers = C.step_producers(steps[target])
+        readers = [p for p in producers
+                   if C.producer_reads(p, names, progs)]
+        assert not readers, (
+            f"step {target} was supposed to be the unreachable target: the "
+            f"three measurements behind that are unchanged — no RTL producer "
+            f"sees an area budget, step_rtl_gen is deterministic, and the one "
+            f"remediation path takes wiring hints only. Readers found: "
+            f"{readers}")
 
 
 def test_every_edge_lands_in_exactly_one_of_the_three_verdicts():

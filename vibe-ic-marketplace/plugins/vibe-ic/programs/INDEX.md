@@ -203,6 +203,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `closed_loop_edge_check` | any | — | a declared `closed_loop` must be an edge something can actually take, or the declaration is decoration. |
 | `closed_loop_executable_coverage_check` | any | — | a line of YAML is not a loop. |
 | `closed_loop_metric_reaches_its_producer` | any | — | can this edge be closed at all? |
+| `closed_loop_executed_reentry_census` | any | — | which re-entry loops does the tree actually RUN? |
 | `cmd_arg_range_validation_check` | any | — | M4: Verify that command argument fields (address, length, channel, etc.) are explicitly bounds-checked before use, not silently truncated... |
 | `cmd_argument_validation_present_check` | any | — | every opcode in L3_CMD_PROTOCOL.json that takes ≥2 inbound argument bytes must declare an `argument_validation_predicate` field referenci... |
 | `cmd_buf_index_semantic_consistency_check` | aid_class_half_duplex, digital_cmd_driven, mixed_signal_otp | Wave 37 | Wave 37 (v0.119.69). |
@@ -1483,6 +1484,7 @@ _(no programs in this group)_
 - `closed_loop_edge_check` — a declared `closed_loop` must be an edge something can actually take, or the declaration is decoration.
 - `closed_loop_executable_coverage_check` — a line of YAML is not a loop.
 - `closed_loop_metric_reaches_its_producer` — can this edge be closed at all?
+- `closed_loop_executed_reentry_census` — which re-entry loops does the tree actually RUN?
 - `cmd_arg_range_validation_check` — M4: Verify that command argument fields (address, length, channel, etc.) are explicitly bounds-checked before use, not silently truncated...
 - `cmd_argument_validation_present_check` — every opcode in L3_CMD_PROTOCOL.json that takes ≥2 inbound argument bytes must declare an `argument_validation_predicate` field referenci...
 - `cmd_protocol_byte_exact_check` — gate that catches L3_CMD_PROTOCOL.json with symbolic/abstract entries in fields_tx instead of byte-exact bytes.
