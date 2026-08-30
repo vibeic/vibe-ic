@@ -1,0 +1,42 @@
+{
+  "_comment": "Verbatim copies of the files stage_on_pass_review reads for stage 4, from two published benchmark-data cells. Nothing here is authored. The L9 JSONs are the source bytes as-is; the layouts are the source bytes GZIPPED (a GDSII sign-off die is ~0.8-1.6 MB and this repository's other GDS fixtures are hundreds of bytes), and `sha256` below is the DECOMPRESSED file's -- i.e. the published artefact's own hash, which the test asserts after materialising the tree, so 'verbatim' is measured here rather than promised. The corpus-bound test re-reads the live cells when the corpus is resolvable; this fixture is what makes the control run on a checkout that has no corpus.",
+  "corpus_repo": "https://github.com/vibeic/benchmark-data",
+  "how_to_materialise": "For each tree, write every entry of `files` to its published path under a writable copy: `source` names a file under `_layouts/` to gunzip, or the entry is a plain file already present at that path in this fixture. TWO published paths in reject_hawaii_ldo carry the SAME sha256 -- that byte-identity IS the finding's corroboration and is why the layout is shipped once and written twice.",
+  "trees": {
+    "accept_spm_ihp": {
+      "cell": "ic/spm/v1.5.58_ihp-sg13g2",
+      "why": "A real sign-off die whose hierarchy root IS the module its intent names, with no_top_module_in_input=false -- the intent makes a real claim and the die keeps it.",
+      "files": {
+        "phase1/generated_docs/L9_INTEGRATION_SPEC.json": {
+          "bytes": 9484,
+          "sha256": "d0be3191b7cee4ebe78ed45fba9300ef83ef1ee424a94e2bfedc933caaab0252"
+        },
+        "phase3/stage4/gds/spm.gds": {
+          "source": "_layouts/spm.gds.gz",
+          "bytes": 822084,
+          "sha256": "acbb3ae16744db2badb560bab55081b31eb02af8903c9b34f1f36171fd1752ea"
+        }
+      }
+    },
+    "reject_hawaii_ldo": {
+      "cell": "ic/u_hawaii_adc/v1.9.86_sky130A",
+      "why": "The published cell whose RESULT.md states `Verdict: PASS` and `flow_compliance_check --strict -> Overall PASS, exit 0` while its die slot holds a layout whose hierarchy root is `ldo` -- a sub-block, byte-identical to that same run's block deliverable. Its L9 names `u_hawaii_adc` with no_top_module_in_input=false.",
+      "files": {
+        "phase1/generated_docs/L9_INTEGRATION_SPEC.json": {
+          "bytes": 12380,
+          "sha256": "4ef024b27c79fd5840349da8bf43729579f6cea58a2a3e34f59b277134ce03ef"
+        },
+        "phase3/stage4/gds/ldo.gds": {
+          "source": "_layouts/ldo.gds.gz",
+          "bytes": 641262,
+          "sha256": "369719cff9eb079a7f47dceef4bd05320616c0ca0955ca55cf5d8c26a56f4e87"
+        },
+        "phase3/analog/hardmacro/ldo/ldo.gds": {
+          "source": "_layouts/ldo.gds.gz",
+          "bytes": 641262,
+          "sha256": "369719cff9eb079a7f47dceef4bd05320616c0ca0955ca55cf5d8c26a56f4e87"
+        }
+      }
+    }
+  }
+}

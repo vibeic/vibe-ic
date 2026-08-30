@@ -470,15 +470,6 @@
         ],
         "why": "Fixes lint violations (stage1) and synthesis errors (stage2); its inputs are RTL and tool logs from both."
       },
-      "compliance-gate-spot-check": {
-        "stages": [
-          "stage1",
-          "stage2",
-          "stage3",
-          "stage4"
-        ],
-        "why": "Spot-checks flow_compliance_check gate verdicts for gameable patterns. Its documented subject is the phase-2/phase-3 gates ('77+ structural-RTL gates'), so it spans four stages -- multi-stage, NOT stage_all: it makes no claim on stage_analog or stage5_manufacturing."
-      },
       "design-for-eco": {
         "stages": [
           "stage3"

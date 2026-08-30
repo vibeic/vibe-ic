@@ -146,6 +146,30 @@ WHEN R3 DISARMS, AND WHY EACH NARROWING IS NOT A WEAKENING
     compared, which is the reading most favourable to the artefact: R3 rejects
     only when EVERY clock the deck constrains is slower than the intent asks.
 
+RULE R4 — DIE_IS_NOT_THE_DESIGN (stage4)
+========================================
+Stage 4 is the SHIP step: step 37 streams `phase3/stage4/gds/*.gds`, step 38
+hands it to a foundry. Stage 2 checked the netlist against the RTL and stage 3
+checked the layout against the netlist and the PDK — both INTERNAL comparisons,
+each satisfied by a self-consistent stack built around the wrong subject. The
+question that appears only here is whether the file in the die slot is the
+design the intent asked for, and step 37's own clauses cannot ask it: size,
+substance, port labels and provenance are all satisfied by a well-formed layout
+of ANY design, and `gds_topcell_name_check` must be TOLD the name it matches
+and is named in no `gate:` in this flow.
+
+R4 reads the intent's `top_module` and the hierarchy ROOT of the layout in the
+die slot, and rejects when the root is neither that module nor the flow's own
+chip-top wrapper (`canonical_top_wrapper:`, declared in the flow). MEASURED
+over every published cell carrying a stage-4 die (10): 3 roots equal the
+intent's top, 6 are the wrapper, 1 is neither — `ic/u_hawaii_adc/v1.9.86…`,
+which publishes `Verdict: PASS` with `flow_compliance_check --strict → Overall
+PASS, exit 0` over a die whose root is a sub-block, byte-identical to that same
+run's own block deliverable. Requiring equality with the intent alone would
+reject 5 of 10, four of them ordinary FLATTENED runs.
+
+Like R1, it reads a hierarchy the run left behind. It streams nothing.
+
 A REJECTION CARRIES EVIDENCE OR IT IS NOT A REJECTION
 ======================================================
 The doctrine is that an AI rejection must be proven by a prompt-derived
@@ -186,6 +210,7 @@ Exit codes
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import re
 import sys
@@ -195,6 +220,11 @@ from typing import Any, Dict, List, Optional
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import _design_module_set as _dms  # noqa: E402
+# THE GDSII READER IS NOT WRITTEN TWICE. `gds_topcell_name_check.parse_structures`
+# already walks the record stream and returns (defined, referenced, valid_header);
+# R4 reads a die with it rather than shipping a second parser that could drift
+# from the first.
+from gds_topcell_name_check import parse_structures  # noqa: E402
 from _atomic_artefact import write_json as atomic_write_json  # vibe-ic#1082 (helper from PR #1094)  # noqa: E402
 
 try:
@@ -219,6 +249,17 @@ _DEFAULT_EMIT_DIR = "reports/phase2/gates/on_pass_review"
 #: The intent field L9 uses to disclose that it could not read a top out of the
 #: design input, and the strategy value that goes with it.
 _SENTINEL_STRATEGY = "canonical_chip_top_sentinel"
+
+#: The flow's OWN chip-top wrapper name — the module `design_one_shot_runner`
+#: auto-emits around a design, and the placeholder the
+#: `canonical_chip_top_sentinel` strategy publishes. A die whose hierarchy root
+#: carries this name IS this run's die: the wrapper is the chip. The live
+#: declaration is the stage's `canonical_top_wrapper:`; this is the fallback for
+#: a stage that declares the review and omits it.
+_DEFAULT_TOP_WRAPPER = "chip_top"
+
+#: Extensions R4 accepts as a streamed layout in the die slot.
+_DIE_GLOBS = ("*.gds", "*.gdsii")
 
 
 #: The clock-domain roles that mean "this is the design's clock", as the
@@ -1286,6 +1327,192 @@ def rule_intent_spec_not_the_graded_spec(project: Path,
     }
 
 # ─────────────────────────────────────────────────────────────────────────────
+# R4 — stage 4 publishes the DIE. Is the thing in the die slot this design?
+# ─────────────────────────────────────────────────────────────────────────────
+# WHAT NOTHING ELSE ASKS
+# ----------------------
+# Stage 2 checks the netlist against the RTL. Stage 3 checks the layout against
+# the netlist and the PDK. Every one of those comparisons is INTERNAL: it asks
+# whether the artefact is self-consistent with the artefact one rung below it.
+# Stage 4 is where the run stops comparing and starts SHIPPING — step 37 streams
+# `phase3/stage4/gds/*.gds` and step 38 hands it to a foundry — and the question
+# that appears exactly there, and nowhere earlier, is whether the file in the
+# die slot is the DESIGN THE INTENT ASKED FOR.
+#
+# Step 37's own gates are `gds_size_check` (bytes), `gds_substance_check`
+# (element count against the DEF's placed instances), `gds_port_label_check`
+# (a label per placed DEF pin) and `provenance_check` (a real streamer wrote
+# it). Every one of them is satisfied by ANY well-formed layout of ANY design.
+# `gds_topcell_name_check` exists and does compare a name — but it takes the
+# name as an ARGUMENT (`--top-name`), it is named in no `gate:` in this flow at
+# all, and a check that must be TOLD what the answer is cannot read the intent.
+#
+# THE REAL DEFECT THIS COMES FROM
+# -------------------------------
+# `ic/u_hawaii_adc/v1.9.86_sky130A` publishes `Verdict: PASS` with
+# `flow_compliance_check --strict -> PASS=8 FAIL=0 MISSING=0, Overall PASS,
+# exit 0`. Its die slot holds `phase3/stage4/gds/ldo.gds`, whose hierarchy root
+# is `ldo` and whose seven structures are that block plus primitive devices.
+# Its L9 names `u_hawaii_adc` and claims `no_top_module_in_input: false`. The
+# file is BYTE-IDENTICAL (sha256 369719cf…) to the block deliverable published
+# at `phase3/analog/hardmacro/ldo/ldo.gds` in the same run: what was handed to
+# the mask shop is a copy of one sub-block. No gate in this flow said so; the
+# first party to notice was an external shuttle's own precheck.
+#
+# WHY THE ACCEPT SET HAS TWO MEMBERS AND NOT ONE
+# ----------------------------------------------
+# A die's root is legitimately EITHER the module the intent names OR the flow's
+# own chip-top wrapper, which is a real wrapper instantiating the design and is
+# the name the sentinel strategy publishes. MEASURED over every published cell
+# carrying a stage-4 die (10 of them): 3 ship a root equal to the intent's
+# `top_module`, 6 ship the wrapper, and 1 ships neither. Requiring equality with
+# the intent alone would have rejected 5 of 10 — four of them runs that merely
+# FLATTENED into the wrapper, which is correct and ordinary. That is the
+# difference between a detector and one that fires on half its subjects.
+def read_die(project: Path, artefact_rel: List[str]) -> Dict[str, Any]:
+    """The streamed layouts in the stage's die slot, and their hierarchy roots.
+
+    Reads the artefact the stage left behind. It streams nothing, invokes no
+    tool, and starts no process: `parse_structures` is a walk over bytes.
+    """
+    dirs = [project / r for r in artefact_rel
+            if (project / r).is_dir() and "gds" in Path(str(r)).name.lower()]
+    files = sorted({p for d in dirs for g in _DIE_GLOBS for p in d.glob(g)})
+    per_file, defined, tops = [], set(), set()
+    for fp in files:
+        try:
+            data = fp.read_bytes()
+        except OSError as e:
+            per_file.append({"file": str(fp.relative_to(project)),
+                             "unreadable": str(e)})
+            continue
+        d, refd, valid = parse_structures(data)
+        roots = [n for n in d if n not in refd]
+        defined |= set(d)
+        tops |= set(roots)
+        per_file.append({"file": str(fp.relative_to(project)),
+                         "bytes": len(data), "valid_gdsii_header": valid,
+                         "structure_count": len(d), "top_cells": sorted(roots),
+                         "sha256": hashlib.sha256(data).hexdigest()})
+    return {"die_dirs": [str(d.relative_to(project)) for d in dirs],
+            "files": per_file,
+            "structures_defined": len(defined),
+            "defined": defined,
+            "top_cells": sorted(tops)}
+
+
+def also_published_as(project: Path, artefact_rel: List[str],
+                      die: Dict[str, Any]) -> List[Dict[str, str]]:
+    """Block deliverables in this run whose BYTES are the die file's bytes.
+
+    Corroboration, never the trigger: R4 rejects on the name evidence alone, so
+    a run that publishes no block deliverable is judged exactly the same way.
+    When this list is non-empty it says the thing in the die slot is not merely
+    misnamed — it is a copy of something this run already delivered as a block.
+    """
+    dirs = [project / r for r in artefact_rel
+            if (project / r).is_dir() and "hardmacro" in str(r).lower()]
+    want = {f.get("sha256"): f["file"] for f in die["files"] if f.get("sha256")}
+    hits: List[Dict[str, str]] = []
+    for d in dirs:
+        for g in _DIE_GLOBS:
+            for fp in sorted(d.rglob(g)):
+                try:
+                    h = hashlib.sha256(fp.read_bytes()).hexdigest()
+                except OSError:
+                    continue
+                if h in want and str(fp.relative_to(project)) != want[h]:
+                    hits.append({"die_file": want[h],
+                                 "block_deliverable": str(fp.relative_to(project)),
+                                 "sha256": h})
+    return hits
+
+
+def rule_die_is_not_the_design(project: Path, decl: Dict[str, Any]) -> Dict[str, Any]:
+    """R4. Returns {"verdict", ...} in the same shape R1 uses."""
+    intent_rel = [str(x) for x in (decl.get("intent") or [])]
+    artefact_rel = [str(x) for x in (decl.get("artefact") or [])]
+    l9 = next((project / r for r in intent_rel
+               if r.endswith("L9_INTEGRATION_SPEC.json")), None)
+    if l9 is None:
+        return {"verdict": "NOT_CHECKED",
+                "why": ("the stage's `intent:` names no L9_INTEGRATION_SPEC.json; "
+                        "R4 has no intent to read")}
+    if not l9.exists():
+        return {"verdict": "NOT_CHECKED",
+                "why": f"{l9} does not exist; the intent was never published"}
+    intent = read_intent_top(l9)
+    intent["intent_rel"] = str(l9.relative_to(project))
+    if not intent.get("readable"):
+        return {"verdict": "NOT_CHECKED", "why": f"{l9}: {intent.get('why')}"}
+    declared = intent.get("value")
+    if not declared:
+        return {"verdict": "NOT_CHECKED", "intent": intent,
+                "why": (f"{l9.name} declares no `top_module`; there is no "
+                        f"intent for the die to contradict, and an absent "
+                        f"declaration is not an agreement")}
+
+    die = read_die(project, artefact_rel)
+    artefact = {k: v for k, v in die.items() if k != "defined"}
+
+    # AN ABSENT OR UNREADABLE DIE IS NOT AN ACCEPTANCE. Each of these three is
+    # "I could not look", and answering ACCEPT to any of them would make
+    # DELETING the die the cheapest way to pass an on-pass review.
+    if not die["files"]:
+        return {"verdict": "NOT_CHECKED", "intent": intent, "artefact": artefact,
+                "why": ("the stage published no layout in its die slot ("
+                        + (", ".join(die["die_dirs"])
+                           or "no gds dir among the declared artefact paths")
+                        + "); an absent die refutes nothing and certifies "
+                          "nothing")}
+    if not die["structures_defined"]:
+        return {"verdict": "NOT_CHECKED", "intent": intent, "artefact": artefact,
+                "why": ("no file in the die slot defines a single GDSII "
+                        "structure; there is no hierarchy to read, which is a "
+                        "different statement from `the hierarchy is wrong`")}
+    if not die["top_cells"]:
+        return {"verdict": "NOT_CHECKED", "intent": intent, "artefact": artefact,
+                "why": ("every structure in the die slot is referenced by "
+                        "another, so no hierarchy root can be read; R4 "
+                        "compares a root and there is none")}
+
+    wrapper = str(decl.get("canonical_top_wrapper") or _DEFAULT_TOP_WRAPPER)
+    acceptable = {str(declared), wrapper}
+    hit = sorted(set(die["top_cells"]) & acceptable)
+    artefact["canonical_top_wrapper"] = wrapper
+    artefact["intent_top_defined_anywhere_in_die"] = str(declared) in die["defined"]
+    if hit:
+        return {"verdict": "ACCEPT", "intent": intent, "artefact": artefact,
+                "matched": hit}
+
+    twins = also_published_as(project, artefact_rel, die)
+    roots = ", ".join(die["top_cells"][:8]) + (", …" if len(die["top_cells"]) > 8 else "")
+    return {
+        "verdict": "REJECT",
+        "intent": intent,
+        "artefact": artefact,
+        "also_published_as": twins,
+        "contradiction": (
+            f"the intent names top module {str(declared)!r} "
+            f"({intent.get('top_module_extraction_strategy')!r}, "
+            f"no_top_module_in_input="
+            f"{intent.get('no_top_module_in_input')!r}), and the layout this "
+            f"stage published for tape-out has hierarchy root(s) {roots} — "
+            f"neither {str(declared)!r} nor this flow's own chip-top wrapper "
+            f"{wrapper!r}"
+            + ("" if artefact["intent_top_defined_anywhere_in_die"] else
+               f", and {str(declared)!r} is defined nowhere in the die's "
+               f"{die['structures_defined']} structure(s)")
+            + (f". The die file is byte-identical to a block deliverable this "
+               f"same run published at {twins[0]['block_deliverable']} "
+               f"(sha256 {twins[0]['sha256'][:12]}…), so what leaves for the "
+               f"mask shop is a copy of one block"
+               if twins else "")
+            + f". Stage 4 is the ship step: this die is not this design."),
+    }
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # the rejection's executable test
 # ─────────────────────────────────────────────────────────────────────────────
 # THE TEST BELONGS TO THE RUN, NOT TO THE PLUGIN. The doctrine is that a
@@ -1728,6 +1955,117 @@ if __name__ == "__main__":
     print("PASS: every declared numeric requirement is in the graded spec")
 '''
 
+# The stage-4 counterpart. Same contract, different subject: it reads the
+# INTENT's top module and the hierarchy ROOT of the layout in the die slot, and
+# it parses the GDSII record stream itself so the emitted file stays
+# self-contained and stdlib-only, exactly as the stage-1 one parses Verilog.
+_EMITTED_TEST_R4 = r'''#!/usr/bin/env python3
+"""AUTO-EMITTED by `{program}` from a stage-{stage} ON-PASS review rejection.
+
+    {contradiction}
+
+This test FAILS while that is true of this run tree and PASSES once it is
+repaired. It reads only this run's own INTENT and the layout this run published
+for tape-out -- no oracle, no harness, no golden -- and it re-derives nothing:
+it streams no layout, runs no tool and starts no process.
+
+REPAIR is one of exactly two things, and which one is a design decision this
+test does not make:
+  * the die slot is filled with the layout of the design the intent names
+    (whose hierarchy root is that module, or this flow's own chip-top
+    wrapper), or
+  * the intent is corrected to name what this run actually delivers, and what
+    is in the die slot is moved to the deliverable slot that matches it.
+"""
+import json
+import sys
+from pathlib import Path
+
+INTENT_REL = {intent_rel!r}
+DIE_RELS = {die_rels!r}
+WRAPPER = {wrapper!r}
+_DIE_GLOBS = ("*.gds", "*.gdsii")
+_STRNAME = (0x06, 0x06)
+_SNAME = (0x12, 0x06)
+
+
+def run_root() -> Path:
+    for d in [Path(__file__).resolve()] + list(Path(__file__).resolve().parents):
+        if (d / "phase1" / "generated_docs").is_dir():
+            return d
+    raise AssertionError("no run root above %s" % __file__)
+
+
+def structures(data: bytes):
+    defined, referenced = [], set()
+    i, n = 0, len(data)
+    while i + 4 <= n:
+        rlen = (data[i] << 8) | data[i + 1]
+        if rlen < 4 or i + rlen > n:
+            break
+        key = (data[i + 2], data[i + 3])
+        name = data[i + 4:i + rlen].split(b"\x00", 1)[0].decode("ascii", "replace")
+        if key == _STRNAME:
+            defined.append(name)
+        elif key == _SNAME:
+            referenced.add(name)
+        i += rlen
+    return defined, referenced
+
+
+def test_the_die_published_for_tapeout_is_the_design_the_intent_names():
+    root = run_root()
+    intent = json.loads((root / INTENT_REL).read_text(encoding="utf-8",
+                                                      errors="replace"))
+    declared = intent.get("top_module")
+    assert declared, "%s declares no top_module" % INTENT_REL
+
+    files = sorted({{f for rel in DIE_RELS if (root / rel).is_dir()
+                    for g in _DIE_GLOBS for f in (root / rel).glob(g)}})
+    assert files, (
+        "%s holds no layout; an absent die refutes nothing, and deleting the "
+        "artefact is not a repair" % ", ".join(DIE_RELS))
+
+    defined, tops = set(), set()
+    for f in files:
+        d, refd = structures(f.read_bytes())
+        defined |= set(d)
+        tops |= {{n for n in d if n not in refd}}
+    assert defined, (
+        "no file in the die slot defines a GDSII structure; there is no "
+        "hierarchy to read")
+    assert tops, (
+        "every structure in the die slot is referenced by another, so no "
+        "hierarchy root can be read")
+
+    assert tops & {{declared, WRAPPER}}, (
+        "%s declares top_module=%r and the die published for tape-out has "
+        "hierarchy root(s) %s -- neither that module nor this flow's chip-top "
+        "wrapper %r. %r is %s in the die's %d structure(s)." % (
+            INTENT_REL, declared, ", ".join(sorted(tops)), WRAPPER, declared,
+            "defined" if declared in defined else "defined nowhere",
+            len(defined)))
+
+
+if __name__ == "__main__":
+    try:
+        test_the_die_published_for_tapeout_is_the_design_the_intent_names()
+    except AssertionError as e:
+        print("FAIL: %s" % e)
+        sys.exit(1)
+    print("PASS: the die published for tape-out is the design the intent names")
+'''
+
+
+def _body_r4(finding: Dict[str, Any], stage_id: str) -> str:
+    return _EMITTED_TEST_R4.format(
+        program=_NAME, stage=stage_id,
+        contradiction=finding["contradiction"],
+        intent_rel=finding["intent"]["intent_rel"],
+        die_rels=list(finding["artefact"]["die_dirs"]),
+        wrapper=finding["artefact"]["canonical_top_wrapper"])
+
+
 def _body_r1(finding: Dict[str, Any], stage_id: str) -> str:
     return _EMITTED_TEST.format(
         program=_NAME, stage=stage_id,
@@ -1800,6 +2138,11 @@ _RULES = {
     "stage3": [("R3_SIGNOFF_CLOCK_SLOWER_THAN_INTENT",
                 rule_signoff_clock_slower_than_intent)],    "stage_analog": [("R_ANALOG_INTENT_SPEC_NOT_THE_GRADED_SPEC",
                        rule_intent_spec_not_the_graded_spec)],
+    # R4 reads the intent against stage 4's DIE — the artefact that LEAVES, and
+    # the first one no earlier rung can speak about: R1 and R2 both compare the
+    # intent to something the flow is still building, and a run can satisfy
+    # both while streaming a different subject into the tape-out slot.
+    "stage4": [("R4_DIE_IS_NOT_THE_DESIGN", rule_die_is_not_the_design)],
 
 }
 
@@ -1808,7 +2151,8 @@ _RULES = {
 _EMITTERS = {"R1_INTENT_TOP_NOT_BUILT": _body_r1,
              "R2_INTENT_PIN_NOT_IN_NETLIST": _body_r2,
              "R3_SIGNOFF_CLOCK_SLOWER_THAN_INTENT": _body_r3,
-             "R_ANALOG_INTENT_SPEC_NOT_THE_GRADED_SPEC": _body_analog}
+             "R_ANALOG_INTENT_SPEC_NOT_THE_GRADED_SPEC": _body_analog,
+             "R4_DIE_IS_NOT_THE_DESIGN": _body_r4}
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1981,10 +2325,29 @@ def _print_analog(f: Dict[str, Any]) -> None:
           f"disclosure, {len(f.get('unreadable') or [])} with no readable "
           f"spec.json")
 
+def _print_r4(f: Dict[str, Any]) -> None:
+    i, art = f["intent"], f["artefact"]
+    roots = ", ".join(art["top_cells"][:8]) + (", …" if len(art["top_cells"]) > 8 else "")
+    print(f"    INTENT   {i['file']} :: {i['field']} = {i['value']!r}")
+    print(f"    ARTEFACT {', '.join(art['die_dirs']) or '(none)'} holds "
+          f"{len(art['files'])} layout(s) defining "
+          f"{art['structures_defined']} structure(s); hierarchy root(s): {roots}")
+    print(f"    ABSENT   the wrapper this flow would accept is "
+          f"{art['canonical_top_wrapper']!r}, and {i['value']!r} is "
+          + ("defined in the die but is not its root"
+             if art["intent_top_defined_anywhere_in_die"]
+             else "defined nowhere in the die"))
+    for t in f.get("also_published_as") or []:
+        print(f"    ALSO     {t['die_file']} is byte-identical to the block "
+              f"deliverable {t['block_deliverable']} "
+              f"(sha256 {t['sha256'][:12]}…)")
+
+
 _PRINTERS = {"R1_INTENT_TOP_NOT_BUILT": _print_r1,
              "R2_INTENT_PIN_NOT_IN_NETLIST": _print_r2,
              "R3_SIGNOFF_CLOCK_SLOWER_THAN_INTENT": _print_r3,
-             "R_ANALOG_INTENT_SPEC_NOT_THE_GRADED_SPEC": _print_analog}
+             "R_ANALOG_INTENT_SPEC_NOT_THE_GRADED_SPEC": _print_analog,
+             "R4_DIE_IS_NOT_THE_DESIGN": _print_r4}
 
 
 # ─────────────────────────────────────────────────────────────────────────────
