@@ -1904,11 +1904,61 @@ def _hygiene_verdict(doc: dict, script_rc: int) -> GateResult:
     if wiring:
         # The set's own DECLARATION is wrong, so no count it reports means what
         # it says. ERROR rather than FAIL: nothing was concluded about the tree.
+        #
+        # TWO DIFFERENT THINGS ARRIVE IN THIS ONE LIST, and until now the
+        # headline named only the first of them.
+        # `repo_hygiene_parallel._merge` folds its coverage `problems` into
+        # `wiring_errors` under a `parallel coverage: ` prefix, so a shard that
+        # returned OWNED_SUPERVISOR_NORECORD — the supervision channel produced
+        # no terminal record — was reported as an error "in the hygiene gate
+        # DECLARATIONS". That sentence is FALSE about those rows, and it is
+        # false in the expensive direction: it sends the reader to the gate
+        # wiring, which is correct, to look for a defect that is not there.
+        #
+        # MEASURED on pristine main 6c798ce4be, one full review:
+        #
+        #   ERROR — 75 wiring error(s) in the hygiene gate declarations, so the
+        #   set certifies nothing: parallel coverage: arm A shard 0:
+        #   OWNED_SUPERVISOR_NORECORD: private supervisor channel failed before
+        #   a terminal record; atomic cleanup=shutdown_complete/
+        #   final_descendants=[] … [145/145 gate(s) ran in 289s]
+        #
+        # Every one of the first three named rows is a shard NORECORD, and the
+        # shard's own cleanup proof says `final_descendants=[]` — nothing was
+        # left running; the shard simply could not certify what it measured.
+        # `gatekeeper_review.py` had already predicted this exact number at
+        # :1506 ("2 of 8 shards killed at rc 199, and 75 of the 80 'wiring
+        # errors' the run then reported were the fallout of those two kills")
+        # and the headline still named the wrong subject.
+        #
+        # NOTHING IS SILENCED AND NO VERDICT MOVES. Both kinds stay in `wiring`,
+        # every existing consumer of `wiring_errors` still sees every row, and
+        # the result is rc 2 ERROR either way: a set that produced no record for
+        # part of itself certifies nothing, exactly as a mis-declared set does.
+        # The only thing that changes is that the reason is TRUE. An UNKNOWN
+        # reported as a specific accusation is the same category error this
+        # file exists to prevent, committed by the file itself.
+        _COVER = "parallel coverage: "
+        decl = [w for w in wiring if not w.startswith(_COVER)]
+        cover = [w for w in wiring if w.startswith(_COVER)]
+        if cover and not decl:
+            head = (f"ERROR — the hygiene set produced NO RECORD for "
+                    f"{len(cover)} of its own shards, so it certifies nothing. "
+                    f"This is a SUPERVISION failure, not a defect in the gate "
+                    f"declarations: ")
+            shown = cover
+        elif cover and decl:
+            head = (f"ERROR — {len(decl)} wiring error(s) in the hygiene gate "
+                    f"declarations AND {len(cover)} shard(s) that produced no "
+                    f"record, so the set certifies nothing: ")
+            shown = decl + cover
+        else:
+            head = (f"ERROR — {len(decl)} wiring error(s) in the hygiene gate "
+                    f"declarations, so the set certifies nothing: ")
+            shown = decl
         return GateResult(name, 2,
-                          f"ERROR — {len(wiring)} wiring error(s) in the "
-                          f"hygiene gate declarations, so the set certifies "
-                          f"nothing: " + "; ".join(wiring[:3])
-                          + (" …" if len(wiring) > 3 else "") + f" [{where}]")
+                          head + "; ".join(shown[:3])
+                          + (" …" if len(shown) > 3 else "") + f" [{where}]")
     if wrote:
         # BEFORE the FAIL branch. Every gate that ran after a corpus write read
         # a tree this run modified, so any accompanying failure may be about
