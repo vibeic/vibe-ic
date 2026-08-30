@@ -63,6 +63,45 @@ ELSEWHERE = ("OTHER_SHARD", "LISTED")
 #: hides the real coverage answer behind a parse error.
 NOT_ASKED = ("OUT_OF_SCOPE",)
 
+# TWO QUESTIONS, TWO EXIT CODES — and until vibe-ic#1892 they shared one.
+#
+# This program answers a COVERAGE question ("can the run state its own reach?")
+# and, because it holds the union, it also reports the VERDICT it finds there
+# ("did a gate FAIL / write into the corpus?").  Both refusals returned 1, so a
+# caller asking the first question read the answer to the second.
+#
+# `repo_hygiene_parallel` is that caller.  It calls this program to police the
+# plan and folds a non-zero rc into its `problems` list, which `_merge` renames
+# `parallel coverage: …` and `gatekeeper_review._hygiene_verdict` reports as
+# "the hygiene set produced NO RECORD for N of its own shards, so it certifies
+# nothing".  MEASURED on 7203d6fce (v1.13.39), one full hygiene set, 501s:
+#
+#     146/146 gate(s) ran, 9 of 9 shard records present, every planned label
+#     decided exactly once — and 6 gates FAILED.
+#     -> [FAIL] hygiene_shard_aggregate: 6 gate(s) FAILED: … (rc 1, and NOT ONE
+#        [COVERAGE] line, because there was no coverage problem)
+#     -> gatekeeper_review: "ERROR — the hygiene set produced NO RECORD for 1 of
+#        its own shards … see the [COVERAGE] lines above"  rc 2
+#
+# Nothing had been lost.  The six FAILs were upgraded to UNKNOWN and the reader
+# was sent to look for a shard that never existed, at "[COVERAGE] lines" that
+# were never printed.  So the hygiene set could not report a red at all: any
+# gate going FAIL collapsed the whole set to "certifies nothing".
+#
+# rc 2 is this repo's "the question could not be put", which is exactly what an
+# unaccountable denominator is, and it is what this program exists to say.  rc 1
+# keeps its older meaning: the reach IS accountable and the verdict over it is
+# FAIL.  NOTHING IS SILENCED — every refusal that returned non-zero before still
+# returns non-zero, every [COVERAGE]/[FAIL] line is unchanged, and the caller
+# still refuses to certify a run whose coverage cannot be stated.
+#: The run cannot state its own reach: a lost/duplicated/unplanned gate, a
+#: missing or unreadable shard record, a host that ignored its shard assignment,
+#: or an empty denominator.  UNKNOWN — not pass, not fail.
+COVERAGE_UNACCOUNTABLE = 2
+#: The reach is accountable and the verdict over it is FAIL: a gate FAILED, or a
+#: gate WROTE INTO the corpus it was auditing.
+VERDICT_FAILED = 1
+
 
 def load(paths: List[Path]):
     """Read every shard record, or say precisely which one cannot be read."""
@@ -91,9 +130,20 @@ def main(argv=None) -> int:
     expected = sorted({l.strip() for l in
                        args.expect.read_text().splitlines() if l.strip()})
     if not expected:
+        # The declared record is written FIRST even here: a caller that reads
+        # the machine answer must not be blind precisely when the denominator
+        # is the thing that is missing.
+        if args.json:
+            write_json(args.json, {
+                "expected": 0, "decided": 0, "not_checked": [],
+                "out_of_scope": [], "failed": [], "wrote_corpus": [],
+                "shards": len(args.records), "critical_path_seconds": 0,
+                "problems": ["the expected-label file is empty; a run over "
+                             "nothing cannot state its reach"],
+            }, ensure_ascii=True)
         print("[FAIL] hygiene_shard_aggregate: the expected-label file is "
               "empty; a run over nothing is not a pass")
-        return 1
+        return COVERAGE_UNACCOUNTABLE
 
     docs, broken = load(args.records)
     problems: List[str] = list(broken)
@@ -180,15 +230,15 @@ def main(argv=None) -> int:
     if problems:
         print(f"[FAIL] hygiene_shard_aggregate: {head} — and the run cannot "
               f"state its own reach, so it is not a result")
-        return 1
+        return COVERAGE_UNACCOUNTABLE
     if wrote:
         print(f"[FAIL] hygiene_shard_aggregate: {len(wrote)} gate(s) WROTE "
               f"INTO the corpus: {', '.join(sorted(set(wrote))[:5])} [{head}]")
-        return 1
+        return VERDICT_FAILED
     if failed:
         print(f"[FAIL] hygiene_shard_aggregate: {len(set(failed))} gate(s) "
               f"FAILED: {', '.join(sorted(set(failed))[:6])} [{head}]")
-        return 1
+        return VERDICT_FAILED
     if undecided or not_asked:
         print(f"hygiene_shard_aggregate: {head} — this is NOT a pass over: "
               + ", ".join(sorted(set(undecided) | set(not_asked))[:6]))
