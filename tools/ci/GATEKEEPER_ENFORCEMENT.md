@@ -114,14 +114,29 @@ git push origin $(git rev-parse HEAD):main     # accepted once green
 ## Deploying on 8HD-4 (192.168.1.120)
 
 ```bash
-# on 8HD-4, as reyerchu
+# on the runner host, as the account the gate should speak as
 git clone https://github.com/vibeic/vibe-ic.git ~/vibe-ic     # if absent
 gh auth login                                                  # needs repo scope
-sudo cp ~/vibe-ic/tools/ci/gatekeeper-poller.{service,timer} /etc/systemd/system/
-sudo systemctl daemon-reload
-sudo systemctl enable --now gatekeeper-poller.timer
-systemctl list-timers gatekeeper-poller.timer
+sudo ~/vibe-ic/tools/ci/install_gatekeeper_poller.sh
 ```
+
+The installer writes the two machine-specific pieces the unit files no longer
+carry -- `/etc/default/gatekeeper-poller` (the checkout to gate, derived from
+where the script itself lives) and a `User=` drop-in for the account behind
+`sudo` -- then copies the units, reloads, and enables the timer. It refuses
+rather than guesses: not a git checkout, no such user, or running as root all
+stop it with a named reason.
+
+`--print` shows exactly what it would write, and needs no root:
+
+```bash
+tools/ci/install_gatekeeper_poller.sh --print
+```
+
+Until v1.12.x the unit files named one developer's account and home directory
+in four places, so they could only be installed on that one machine. They no
+longer contain either; `tools/tests/test_no_machine_pinned_paths_in_tools.py`
+holds that.
 
 Verify one tick by hand before trusting the timer:
 

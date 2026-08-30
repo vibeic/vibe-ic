@@ -7,8 +7,27 @@ Wants=network-online.target
 
 [Service]
 Type=oneshot
-User=reyerchu
-WorkingDirectory=/home/reyerchu/vibe-ic
+
+# WHO AND WHERE ARE NOT BAKED IN. This unit used to carry `User=<a developer>`
+# and that developer's home directory in four places, which meant the file
+# could only be installed on one machine: anywhere else systemd fails the unit
+# with "Failed to determine user credentials" or a missing ExecStart. Both
+# machine-specific pieces are now written at install time by
+# tools/ci/install_gatekeeper_poller.sh:
+#     /etc/default/gatekeeper-poller                 -> GATEKEEPER_REPO_ROOT,
+#                                                       GATEKEEPER_STATE_DIR
+#     .../gatekeeper-poller.service.d/10-local.conf  -> User=
+#
+# The environment file is deliberately NOT optional (no `-` prefix). A unit
+# that starts without knowing which checkout to gate would poll nothing and
+# report nothing, and a gate that goes quiet while nobody is looking is the
+# exact failure mode this mechanism exists to end.
+EnvironmentFile=/etc/default/gatekeeper-poller
+
+# WorkingDirectory is deliberately ABSENT. Every subprocess the poller spawns
+# passes an explicit cwd= (the repo root, the throwaway clone, the worktree),
+# so the unit's own cwd was never read. Naming a directory here bought nothing
+# and pinned the unit to one machine.
 
 # The pin is load-bearing. A bare `python3 -m pytest` autoloads every installed
 # pytest11 entry point, and one broken third-party plugin (web3's
@@ -18,10 +37,8 @@ WorkingDirectory=/home/reyerchu/vibe-ic
 # mistaken for a red gate, but the right fix is to not trip over it at all.
 Environment=PYTEST_DISABLE_PLUGIN_AUTOLOAD=1
 Environment=GATEKEEPER_REPO=vibeic/vibe-ic
-Environment=GATEKEEPER_REPO_ROOT=/home/reyerchu/vibe-ic
-Environment=GATEKEEPER_STATE_DIR=/home/reyerchu/.gatekeeper-poller
 
-ExecStart=/usr/bin/python3 /home/reyerchu/vibe-ic/tools/ci/gatekeeper_status_poller.py
+ExecStart=/usr/bin/python3 ${GATEKEEPER_REPO_ROOT}/tools/ci/gatekeeper_status_poller.py
 
 # The gate is minutes per commit and there can be several open PRs. This bounds
 # one tick; the timer's Persistent= will pick up where it left off.
