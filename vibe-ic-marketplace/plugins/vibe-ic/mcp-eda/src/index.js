@@ -863,6 +863,29 @@ function pdkConfig(pdk, customOpts) {
   return configs[pdk] || configs.gf180;
 }
 
+// P-3: the characterised supply of the Liberty that will actually be loaded.
+// eda_ir_drop's `voltage` is a caller DEFAULT of 1.8 while `pdk` defaults to
+// gf180, whose Liberty this same file selects as __tt_025C_3v30.lib (3.3 V). PSM
+// echoes the supplied voltage back as "Supply voltage" and computes "Percentage
+// drop" against it, so a wrong VDD silently rescales the answer and the tool
+// reports the caller's own assumption as a measurement. Nothing compared the two.
+//
+// Read from the .lib itself rather than through an OpenSTA API: the value is a
+// single declared field, the read is exact, and it does not depend on which
+// accessor a given OpenROAD build exposes. Returns null when it cannot be read —
+// absent is not a disagreement, and must not be reported as one.
+function libNomVoltage(cfg) {
+  try {
+    const lib = libPath(cfg);
+    if (!lib) return null;
+    const r = dockerExec(`grep -m1 -E '^[[:space:]]*nom_voltage' ${shq(lib)} || true`, 15000);
+    const m = (r.output || "").match(/nom_voltage[ \t]*:[ \t]*([-+]?(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?)/);
+    return m ? parseFloat(m[1]) : null;
+  } catch (e) {
+    return null;
+  }
+}
+
 function libPath(cfg) {
   if (cfg.custom_lib) return cfg.custom_lib;
   return `${cfg.pdk_path}/libs.ref/${cfg.scl}/lib/${cfg.scl}${cfg.lib_suffix}`;
@@ -3642,7 +3665,7 @@ server.tool(
   {
     def_file: z.string().describe("DEF file with placed design"),
     pdk: z.enum(["gf180", "sky130", "nangate45", "custom"]).default("gf180"),
-    voltage: z.number().default(1.8).describe("VDD voltage in volts"),
+    voltage: z.number().optional().describe("VDD voltage in volts. OMIT IT and the tool reads the characterised supply (nom_voltage) out of the Liberty it is about to load, which is the right source: this used to default to 1.8 while `pdk` defaults to gf180, whose Liberty this same file selects as __tt_025C_3v30.lib (3.3 V), so the default run fed 1.8 V into a 3.3 V library. PSM echoes the supplied voltage back as \"Supply voltage\" and computes \"Percentage drop\" against it, so a wrong value silently rescales the answer. When you DO pass one it is used (an off-nominal corner is legitimate) and cross-checked against nom_voltage, with a warning on disagreement."),
     custom_lib: z.string().optional(),
     custom_techlef: z.string().optional(),
     custom_celllef: z.string().optional(),
@@ -3677,6 +3700,19 @@ server.tool(
     // if it matches no candidate (a DEF from OpenLane names it VPWR); and a DEF
     // where the net cannot be identified is REFUSED as NOT_MEASURED rather than
     // analysed against a name nobody confirmed.
+    // P-3: resolve the supply from the Liberty that will actually be loaded,
+    // rather than from a constant that has no relationship to the chosen PDK.
+    const nomVoltage = libNomVoltage(cfg);
+    const voltageSupplied = voltage !== undefined && voltage !== null;
+    const FALLBACK_VOLTAGE = 1.8;
+    const effVoltage = voltageSupplied ? voltage
+                     : (nomVoltage !== null ? nomVoltage : FALLBACK_VOLTAGE);
+    // Disagreement beyond 1% of nominal. Absent nom_voltage is NOT a
+    // disagreement — it is an unknown, and must not be reported as one.
+    const voltageMismatch = (voltageSupplied && nomVoltage !== null
+      && Math.abs(voltage - nomVoltage) > Math.max(1e-9, 0.01 * Math.abs(nomVoltage)));
+    const voltageAssumed = !voltageSupplied && nomVoltage === null;
+
     const vddCandidates = [...new Set([custom_vdd, cfg.vdd_net, cfg.vdd_pin, "VDD", "VPWR"].filter(Boolean))];
     const vssCandidates = [...new Set([custom_vss, cfg.vss_net, cfg.vss_pin, "VSS", "VGND"].filter(Boolean))];
     const netResolveTcl = `
@@ -3702,7 +3738,7 @@ set _vddnet [_pick {${vddCandidates.join(" ")}} $_pwr]
 set _vssnet [_pick {${vssCandidates.join(" ")}} $_gnd]
 puts "PSM_VDD_NET=$_vddnet"
 puts "PSM_VSS_NET=$_vssnet"`;
-    const ttlEnvVoltage = `set_pdnsim_net_voltage -net $_vddnet -voltage ${voltage}
+    const ttlEnvVoltage = `set_pdnsim_net_voltage -net $_vddnet -voltage ${effVoltage}
 if {$_vssnet ne ""} { set_pdnsim_net_voltage -net $_vssnet -voltage 0.0 }`;
 
     // T3 v0.106: inject cross-layer PDN stripes for tiny designs to avoid PSM-0069
@@ -3814,6 +3850,11 @@ if {$rc} {
         tool: "OpenROAD PSM",
         net: vddNet,
         ir_status: irStatus,
+        voltage_v: effVoltage,
+        lib_nom_voltage_v: nomVoltage,
+        voltage_source: voltageSupplied ? "caller"
+                      : (nomVoltage !== null ? "liberty_nom_voltage" : "assumed_default"),
+        voltage_mismatch: voltageMismatch || undefined,
         // Why no number, when there is none. A caller reading the manifest can
         // now distinguish "the grid is fine" from "the analysis never ran".
         psm_caught_error: isWarn || undefined,
@@ -3829,6 +3870,22 @@ if {$rc} {
                    || result.output.match(/(\d+)\s+instances/i);
     if (instMatch && parseInt(instMatch[1]) < 100) {
       warnings.push(`Design has ${instMatch[1]} instances (< 100) — IR-drop results may not be meaningful for tiny designs.`);
+    }
+    if (voltageMismatch) {
+      warnings.push(
+        `Supply voltage ${voltage} V was supplied, but the Liberty being loaded `
+        + `(${libPath(cfg)}) is characterised at nom_voltage ${nomVoltage} V. PSM `
+        + `echoes the supplied value back as "Supply voltage" and computes `
+        + `"Percentage drop" against it, so this run's percentage drop is scaled `
+        + `to ${voltage} V, not to the library's operating point. Intentional for `
+        + `an off-nominal corner; otherwise omit `
+        + `voltage and the library's ${nomVoltage} V is used.`);
+    }
+    if (voltageAssumed) {
+      warnings.push(
+        `No voltage was supplied and nom_voltage could not be read from `
+        + `${libPath(cfg)}, so ${FALLBACK_VOLTAGE} V was ASSUMED. The percentage `
+        + `drop is computed against an assumption, not a characterised supply.`);
     }
     if (noPowerNet) {
       warnings.push(
@@ -3859,6 +3916,11 @@ if {$rc} {
           openroad_error_count: irRun.errorCount,
           status: irStatus,
           measured: irMeasured,
+          voltage_v: effVoltage,
+          lib_nom_voltage_v: nomVoltage,
+          voltage_source: voltageSupplied ? "caller"
+                        : (nomVoltage !== null ? "liberty_nom_voltage" : "assumed_default"),
+          voltage_mismatch: voltageMismatch || undefined,
           // A caught PSM error and a clean grid are no longer the same report:
           // `psm_caught_error` says the analysis threw, `status` says whether a
           // number exists, and the numbers themselves are present or null.
