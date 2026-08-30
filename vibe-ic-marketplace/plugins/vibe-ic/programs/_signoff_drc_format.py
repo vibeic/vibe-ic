@@ -221,6 +221,49 @@ def router_iter_counts(text: str) -> List[int]:
     return out
 
 
+#: DRT-0701 prints BOTH of its numbers on one line — the verified count and,
+#: parenthesised, the in-loop count the routing loop had reported:
+#:
+#:   [WARNING DRT-0701] Post-route verification found 2 violation(s) that the
+#:   routing loop did not report (1 in-loop). The published result is the
+#:   verified one.
+#:
+#: `RE_DRT_0701` above captures only the first. Capturing BOTH is what lets a
+#: caller PROVE — rather than assume — that a stale
+#: `detailedroute__route__drc_errors` metric is the superseded in-loop quantity:
+#: the proof is that the metric equals the number OpenROAD itself labels
+#: "in-loop". Without the pair the two readings are simply unequal and there is
+#: no evidence saying which one describes the geometry that ships.
+#: chip-AGNOSTIC: OpenROAD/TritonRoute log grammar only.
+RE_DRT_0701_PAIR = re.compile(
+    r"\[WARNING DRT-0701\][^\n]*?found\s+(\d+)\s+violation"
+    r"[^\n]*?\((\d+)\s+in-loop\)")
+
+
+def router_post_route_verified_pair(text: str) -> Optional[Tuple[int, int]]:
+    """`(verified, in_loop)` from the LAST DRT-0701 line, or None.
+
+    None, never a pair of zeros: a log where the verifier did not speak — or
+    spoke in a wording this regex does not know — is UNDETERMINED here. A caller
+    that gets None must keep whatever disagreement it already had; it must not
+    read the silence as "the two numbers agree".
+
+    Returns the pair only when BOTH halves parsed. A line that names the
+    verified count but not the in-loop one carries no evidence about any
+    metric, so it is not a pair.
+    """
+    if not text:
+        return None
+    ms = RE_DRT_0701_PAIR.findall(text)
+    if not ms:
+        return None
+    verified, in_loop = ms[-1]
+    try:
+        return int(verified), int(in_loop)
+    except (TypeError, ValueError):
+        return None
+
+
 def router_post_route_verified_count(text: str) -> Optional[int]:
     """OpenROAD's POST-ROUTE VERIFICATION count, or None when it did not speak.
 

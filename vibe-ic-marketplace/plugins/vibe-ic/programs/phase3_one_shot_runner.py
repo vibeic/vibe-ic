@@ -12855,7 +12855,60 @@ def _drt_reading(out_dir: Path, log_text: str):
         metrics = {}
     raw = metrics.get(_KEY_DRT)
     metric = raw if isinstance(raw, int) and not isinstance(raw, bool) else None
-    return _sm.reconcile("route__drc_errors", metric, prose), metrics
+
+    # v1.13.71 — DRT-0701 SUPERSEDES THE TOOL METRIC, ON PROOF, NOT ON FAITH.
+    #
+    # `detailedroute__route__drc_errors` is written by the routing LOOP. When
+    # OpenROAD's post-route verification disagrees with the loop it says so, and
+    # says which number ships, in one line that carries BOTH quantities:
+    #
+    #   [WARNING DRT-0701] Post-route verification found 2 violation(s) that the
+    #   routing loop did not report (1 in-loop). The published result is the
+    #   verified one.
+    #
+    # `router_iter_counts` already appends the VERIFIED count, so the prose side
+    # reads 2. The metric side was left at the loop's 1, the two disagreed, and
+    # `reconcile` refused to issue any route verdict — correctly, because on the
+    # evidence it had, either side could have been the broken one.
+    #
+    # MEASURED on subservient x gf180mcuD, plugin v1.13.70, image fad41245fbff
+    # (2026-08-31): METRIC=1, LOG=2, and phase3/stage3/pnr/routed_router.drc.rpt
+    # physically contains 2 `violation type` records. The prose was right and the
+    # run died in a refusal anyway, so route convergence for that IC was recorded
+    # as UNKNOWN rather than as the 2-violation non-convergence it actually was.
+    #
+    # The supersede fires ONLY when the metric EQUALS the number OpenROAD itself
+    # labels "in-loop". That equality is the proof that this metric is the
+    # superseded quantity and not an independent third reading. Any other
+    # disagreement is untouched and still FAILs: this narrows the refusal to the
+    # cases where the tool has not told us who wins, it does not widen a
+    # tolerance and it never picks a side on its own authority.
+    superseded = None
+    pair = _sdf.router_post_route_verified_pair(log_text or "")
+    if pair is None:
+        lp = out_dir / "openroad.log"
+        if lp.is_file():
+            pair = _sdf.router_post_route_verified_pair(
+                lp.read_text(errors="ignore"))
+    if pair is not None and metric is not None:
+        verified, in_loop = pair
+        if metric == in_loop and verified != in_loop:
+            superseded = {"tool_metric": metric, "in_loop": in_loop,
+                          "verified": verified,
+                          "basis": "DRT-0701 post-route verification"}
+            metric = verified
+
+    rec = _sm.reconcile("route__drc_errors", metric, prose)
+    if superseded is not None:
+        # Disclosure, not silence: the substituted reading is named in the
+        # detail so a reader of this run can see that the number came from
+        # DRT-0701 and not from the metrics JSON it nominally cites.
+        rec.detail = (
+            f"{rec.detail} [DRT-0701 SUPERSEDE: the metrics JSON carried "
+            f"{superseded['tool_metric']!r}, which equals the in-loop count "
+            f"OpenROAD reports as superseded; the published post-route verified "
+            f"count {superseded['verified']!r} was used instead]")
+    return rec, metrics
 
 
 def _compute_resized_die(die_w: int, die_h: int,
