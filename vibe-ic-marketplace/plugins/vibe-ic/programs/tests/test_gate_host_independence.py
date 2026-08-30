@@ -41,6 +41,7 @@ module and FAILS there — the mutation control for this file.
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 import tempfile
@@ -379,6 +380,95 @@ def test_539_every_remote_reaching_gate_in_the_real_script_is_EXCLUDED():
             # An exclusion with no reason is a silent one wearing a label.
             assert len(g.excluded) > 20, g
             assert "no reason given" not in g.excluded, g
+
+
+def _preflight(tree: Path) -> subprocess.CompletedProcess:
+    """Drive the REAL preflight over `tree`, with the env pinned identical."""
+    env = dict(os.environ)
+    env["PYTHONDONTWRITEBYTECODE"] = "1"
+    return subprocess.run(
+        [sys.executable, "-B", str(_PROGRAMS / "attestation_preflight_check.py"),
+         str(tree), "--repo", str(tree)],
+        capture_output=True, text=True, env=env, timeout=_T)
+
+
+def test_the_attestation_PREFLIGHTs_subject_is_the_CHECKOUT_not_the_commit(
+        tmp_path):
+    """THE PREMISE OF ITS EXCLUSION, PROVED BY RUNNING IT — not asserted in a
+    comment beside it.
+
+    `attestation preflight` was declared at v1.12.39 without the directive its
+    class had carried since v1.9.78, and at v1.13.52 it was the one gate the
+    host-independence probe reported over the whole 140-gate probed set. It was
+    reported inside the sweep as NON_DETERMINISTIC_VERDICT — `files_seen` is in
+    its verdict line and the checkout kept growing under the probe's own drives
+    (7531 -> 7579), so the two rounds hashed differently — and in isolation, on
+    a quiet tree, as HOST_DEPENDENT_VERDICT on BOTH rounds. The second reading is
+    the true one, and this test is why it is not a matter of opinion.
+
+    ONE commit, ONE environment, TWO trees differing only by an IGNORED cache
+    directory. If the verdict still moves, the subject is the checkout. Every
+    other input the gate has is held equal, so nothing else can be the cause.
+
+    THE EXCLUSION LIVES OR DIES HERE. If this gate is ever changed so that its
+    verdict is a property of the COMMIT, these two arms agree, this test goes
+    red, and the directive in `repo_hygiene_gates.sh` must be removed rather
+    than kept out of habit. An exclusion whose premise nothing re-checks is the
+    silently-shrinking population this probe exists to refuse, one gate at a
+    time.
+    """
+    def _tree(name: str) -> Path:
+        # THE SAME COMMIT in both trees, `.gitignore` included: the residue has
+        # to be ignored rather than merely uncommitted, because an UNTRACKED
+        # path is the probe's declared stimulus while an IGNORED one is the
+        # thing `git status` cannot see — the 13-of-39 asymmetry this gate was
+        # written from.
+        r = _repo_with(tmp_path, "# not used by this test\n", name=name)
+        (r / ".gitignore").write_text("__pycache__/\n")
+        subprocess.run(["git", "-C", str(r), "add", ".gitignore"], check=True)
+        subprocess.run(["git", "-C", str(r), "commit", "-qm", "ignore"],
+                       check=True)
+        return r
+
+    clean, dirty = _tree("clean"), _tree("dirty")
+    cache = dirty / "__pycache__"
+    cache.mkdir()
+    (cache / "m.cpython-310.pyc").write_bytes(b"\x00")
+    assert _porcelain(dirty) == [], (
+        "the residue must be INVISIBLE to git, or the trees differ in a way "
+        "the probe would have refused rather than probed")
+
+    a, b = _preflight(dirty), _preflight(clean)
+    assert b.returncode == 0, ("the control arm must PASS, or the comparison "
+                               "below proves nothing", b.stdout, b.stderr)
+    assert a.returncode == 1, ("the residue arm must REFUSE", a.stdout, a.stderr)
+    assert "measure itself" in a.stdout, a.stdout
+    assert "attestable" in b.stdout, b.stdout
+
+
+def test_the_checkout_subject_preflight_is_EXCLUDED_in_the_real_script():
+    """And the rule is APPLIED where it matters, stated as a property of the
+    command rather than as a roster of labels.
+
+    The test above proves the premise; this one proves the premise is acted on.
+    Neither alone is enough: a proved premise nobody applies leaves the probe
+    failing on a gate that cannot pass it, and an applied exclusion with no
+    proved premise is a gate waved through by a sentence.
+    """
+    gates = G.corpus_gates(_REPO / "tools" / "ci" / "repo_hygiene_gates.sh")
+    assert gates, "the real script parsed to no gates at all — nothing was read"
+    preflights = [g for g in gates
+                  if "attestation_preflight_check.py" in g.cmd]
+    print(f"host-independence: {len(preflights)} checkout-subject preflight "
+          f"gate(s) of {len(gates)} in repo_hygiene_gates.sh")
+    assert preflights, (
+        "no gate invokes attestation_preflight_check.py any more — this rule's "
+        "subject is GONE, not broken; delete the rule with the gate")
+    for g in preflights:
+        assert g.excluded is not None, (
+            f"{g.label} reports on the CHECKOUT and is still probed twice; the "
+            f"two arms are required to differ and the probe cannot pass it", g)
+        assert "CHECKOUT" in g.excluded, g.excluded
 
 
 def test_539_the_probe_ITSELF_leaves_the_numerator_and_is_NAMED(tmp_path):
