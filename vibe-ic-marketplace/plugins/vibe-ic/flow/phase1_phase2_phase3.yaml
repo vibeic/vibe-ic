@@ -238,6 +238,29 @@ stages:
     name: "Physical Design + Sign-off"
     # Design-for-ECO inserted Step 18 (Spare-cell + ECO-prep insertion)
     # between Placement (17) and CTS (19); all later ids were +1.
+    on_pass_review:
+      skill: phase3-backend-verify
+      fires_on: stage_pass
+      verdict: advisory
+      # THE INTENT IS THE DESIGN INPUT. L8 is the design-owned source of the
+      # STA clock period (`l8_sta_clock_period_design_owned_check`); L9 is the
+      # fallback the same precedence walk uses when L8 carries no scalar.
+      intent:
+        - "phase1/generated_docs/L8_TIMING_WAVEFORM.json"
+        - "phase1/generated_docs/L9_INTEGRATION_SPEC.json"
+      intent_deny: ["oracle", "harness", "golden", "reference_output", "solution"]
+      # THE ARTEFACT IS THE DECK STAGE 3 ACTUALLY RAN AGAINST, plus the
+      # sign-off evidence produced under it. `pnr.tcl` read_sdc's the first
+      # entry; steps 16/17/19/20/23 all grade against it.
+      artefact:
+        - "phase3/stage3/pnr/constraint.sdc"
+        - "phase3/stage3/cts/"
+        - "phase3/stage3/sta/"
+        - "reports/phase3/"
+      rejection_requires: [intent, artefact, contradiction, test]
+      emit_test_dir: "reports/phase3/gates/on_pass_review"
+      gate:
+        program_exit_zero: "stage_on_pass_review . --stage stage3 --json reports/phase3/gates/stage3_on_pass_review.json"
 
   # v1.6.13 Wave 88 — Mixed-Signal Integration (M1-M4) inserted
   # between digital stage3 and stage4. Required when analog blocks

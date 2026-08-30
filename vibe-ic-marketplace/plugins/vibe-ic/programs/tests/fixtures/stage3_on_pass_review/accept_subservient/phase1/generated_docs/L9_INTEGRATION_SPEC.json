@@ -1,0 +1,642 @@
+{
+  "schema_version": 2,
+  "doc_class": "integration_spec",
+  "ic_name": "subservient",
+  "top_module": "subservient",
+  "top_module_extraction_strategy": "l1_ic_name_fallback",
+  "no_top_module_in_input": false,
+  "ports": [
+    {
+      "name": "i_clk",
+      "mode": "input",
+      "direction": "input",
+      "io": null,
+      "evidence": "input/docs/L3_external_interface.md",
+      "extraction_strategy": "gfm_multitable_header_role_v0_3_2+desc_cascade_v1_6_463",
+      "description": "系統時脈;所有資料於上升沿同步"
+    },
+    {
+      "name": "i_rst",
+      "mode": "input",
+      "direction": "input",
+      "io": null,
+      "evidence": "input/docs/L3_external_interface.md",
+      "extraction_strategy": "gfm_multitable_header_role_v0_3_2+desc_cascade_v1_6_463",
+      "description": "同步 reset,**active-high**;assert 後一個 cycle SERV 內部歸零"
+    },
+    {
+      "name": "o_gpio",
+      "mode": "output",
+      "direction": "output",
+      "io": null,
+      "evidence": "input/docs/L3_external_interface.md",
+      "extraction_strategy": "gfm_multitable_header_role_v0_3_2+desc_cascade_v1_6_463",
+      "description": "GPIO 輸出;預設 1 pin,可作為 simple debug bit 或 UART tx"
+    },
+    {
+      "name": "i_gpio",
+      "mode": "input",
+      "direction": "input",
+      "io": null,
+      "evidence": "input/docs/L3_external_interface.md",
+      "extraction_strategy": "gfm_multitable_header_role_v0_3_2+desc_cascade_v1_6_463",
+      "optional": true,
+      "description": "GPIO 輸入(若 Plugin 採雙向 GPIO)"
+    },
+    {
+      "name": "o_sram_addr",
+      "mode": "output",
+      "direction": "output",
+      "io": null,
+      "evidence": "input/docs/L3_external_interface.md",
+      "extraction_strategy": "gfm_multitable_header_role_v0_3_2+desc_cascade_v1_6_463",
+      "description": "位址"
+    },
+    {
+      "name": "o_sram_data",
+      "mode": "output",
+      "direction": "output",
+      "io": null,
+      "evidence": "input/docs/L3_external_interface.md",
+      "extraction_strategy": "gfm_multitable_header_role_v0_3_2+desc_cascade_v1_6_463",
+      "description": "寫入資料(typical)"
+    },
+    {
+      "name": "i_sram_data",
+      "mode": "input",
+      "direction": "input",
+      "io": null,
+      "evidence": "input/docs/L3_external_interface.md",
+      "extraction_strategy": "gfm_multitable_header_role_v0_3_2+desc_cascade_v1_6_463",
+      "description": "讀取資料(typical)"
+    },
+    {
+      "name": "o_sram_we",
+      "mode": "output",
+      "direction": "output",
+      "io": null,
+      "evidence": "input/docs/L3_external_interface.md",
+      "extraction_strategy": "gfm_multitable_header_role_v0_3_2+desc_cascade_v1_6_463",
+      "description": "寫入啟用"
+    },
+    {
+      "name": "o_sram_cyc",
+      "mode": "output",
+      "direction": "output",
+      "io": null,
+      "evidence": "input/docs/L3_external_interface.md",
+      "extraction_strategy": "gfm_multitable_header_role_v0_3_2+desc_cascade_v1_6_463",
+      "description": "匯流排 cycle 有效"
+    },
+    {
+      "name": "o_sram_wdata",
+      "mode": "output",
+      "direction": "output",
+      "io": null,
+      "evidence": "promoted from L1.pin_table",
+      "description": "| `o_sram_data` (or `o_sram_wdata`) | 8-bit | output | 寫入資料(typical) |",
+      "extraction_strategy": "desc_cascade_v1_6_463"
+    },
+    {
+      "name": "i_sram_rdata",
+      "mode": "input",
+      "direction": "input",
+      "io": null,
+      "evidence": "promoted from L1.pin_table",
+      "description": "| `i_sram_data` (or `i_sram_rdata`) | 8-bit | input | 讀取資料(typical) |",
+      "extraction_strategy": "desc_cascade_v1_6_463"
+    }
+  ],
+  "top_ports": [
+    {
+      "name": "i_clk",
+      "mode": "input",
+      "direction": "input",
+      "io": null,
+      "evidence": "input/docs/L3_external_interface.md",
+      "extraction_strategy": "gfm_multitable_header_role_v0_3_2+desc_cascade_v1_6_463",
+      "description": "系統時脈;所有資料於上升沿同步"
+    },
+    {
+      "name": "i_rst",
+      "mode": "input",
+      "direction": "input",
+      "io": null,
+      "evidence": "input/docs/L3_external_interface.md",
+      "extraction_strategy": "gfm_multitable_header_role_v0_3_2+desc_cascade_v1_6_463",
+      "description": "同步 reset,**active-high**;assert 後一個 cycle SERV 內部歸零"
+    },
+    {
+      "name": "o_gpio",
+      "mode": "output",
+      "direction": "output",
+      "io": null,
+      "evidence": "input/docs/L3_external_interface.md",
+      "extraction_strategy": "gfm_multitable_header_role_v0_3_2+desc_cascade_v1_6_463",
+      "description": "GPIO 輸出;預設 1 pin,可作為 simple debug bit 或 UART tx"
+    },
+    {
+      "name": "i_gpio",
+      "mode": "input",
+      "direction": "input",
+      "io": null,
+      "evidence": "input/docs/L3_external_interface.md",
+      "extraction_strategy": "gfm_multitable_header_role_v0_3_2+desc_cascade_v1_6_463",
+      "optional": true,
+      "description": "GPIO 輸入(若 Plugin 採雙向 GPIO)"
+    },
+    {
+      "name": "o_sram_addr",
+      "mode": "output",
+      "direction": "output",
+      "io": null,
+      "evidence": "input/docs/L3_external_interface.md",
+      "extraction_strategy": "gfm_multitable_header_role_v0_3_2+desc_cascade_v1_6_463",
+      "description": "位址"
+    },
+    {
+      "name": "o_sram_data",
+      "mode": "output",
+      "direction": "output",
+      "io": null,
+      "evidence": "input/docs/L3_external_interface.md",
+      "extraction_strategy": "gfm_multitable_header_role_v0_3_2+desc_cascade_v1_6_463",
+      "description": "寫入資料(typical)"
+    },
+    {
+      "name": "i_sram_data",
+      "mode": "input",
+      "direction": "input",
+      "io": null,
+      "evidence": "input/docs/L3_external_interface.md",
+      "extraction_strategy": "gfm_multitable_header_role_v0_3_2+desc_cascade_v1_6_463",
+      "description": "讀取資料(typical)"
+    },
+    {
+      "name": "o_sram_we",
+      "mode": "output",
+      "direction": "output",
+      "io": null,
+      "evidence": "input/docs/L3_external_interface.md",
+      "extraction_strategy": "gfm_multitable_header_role_v0_3_2+desc_cascade_v1_6_463",
+      "description": "寫入啟用"
+    },
+    {
+      "name": "o_sram_cyc",
+      "mode": "output",
+      "direction": "output",
+      "io": null,
+      "evidence": "input/docs/L3_external_interface.md",
+      "extraction_strategy": "gfm_multitable_header_role_v0_3_2+desc_cascade_v1_6_463",
+      "description": "匯流排 cycle 有效"
+    },
+    {
+      "name": "o_sram_wdata",
+      "mode": "output",
+      "direction": "output",
+      "io": null,
+      "evidence": "promoted from L1.pin_table",
+      "description": "| `o_sram_data` (or `o_sram_wdata`) | 8-bit | output | 寫入資料(typical) |",
+      "extraction_strategy": "desc_cascade_v1_6_463"
+    },
+    {
+      "name": "i_sram_rdata",
+      "mode": "input",
+      "direction": "input",
+      "io": null,
+      "evidence": "promoted from L1.pin_table",
+      "description": "| `i_sram_data` (or `i_sram_rdata`) | 8-bit | input | 讀取資料(typical) |",
+      "extraction_strategy": "desc_cascade_v1_6_463"
+    }
+  ],
+  "top_module_pins": [
+    {
+      "name": "i_clk",
+      "mode": "input",
+      "direction": "input",
+      "io": null,
+      "evidence": "input/docs/L3_external_interface.md",
+      "extraction_strategy": "gfm_multitable_header_role_v0_3_2+desc_cascade_v1_6_463",
+      "description": "系統時脈;所有資料於上升沿同步"
+    },
+    {
+      "name": "i_rst",
+      "mode": "input",
+      "direction": "input",
+      "io": null,
+      "evidence": "input/docs/L3_external_interface.md",
+      "extraction_strategy": "gfm_multitable_header_role_v0_3_2+desc_cascade_v1_6_463",
+      "description": "同步 reset,**active-high**;assert 後一個 cycle SERV 內部歸零"
+    },
+    {
+      "name": "o_gpio",
+      "mode": "output",
+      "direction": "output",
+      "io": null,
+      "evidence": "input/docs/L3_external_interface.md",
+      "extraction_strategy": "gfm_multitable_header_role_v0_3_2+desc_cascade_v1_6_463",
+      "description": "GPIO 輸出;預設 1 pin,可作為 simple debug bit 或 UART tx"
+    },
+    {
+      "name": "i_gpio",
+      "mode": "input",
+      "direction": "input",
+      "io": null,
+      "evidence": "input/docs/L3_external_interface.md",
+      "extraction_strategy": "gfm_multitable_header_role_v0_3_2+desc_cascade_v1_6_463",
+      "optional": true,
+      "description": "GPIO 輸入(若 Plugin 採雙向 GPIO)"
+    },
+    {
+      "name": "o_sram_addr",
+      "mode": "output",
+      "direction": "output",
+      "io": null,
+      "evidence": "input/docs/L3_external_interface.md",
+      "extraction_strategy": "gfm_multitable_header_role_v0_3_2+desc_cascade_v1_6_463",
+      "description": "位址"
+    },
+    {
+      "name": "o_sram_data",
+      "mode": "output",
+      "direction": "output",
+      "io": null,
+      "evidence": "input/docs/L3_external_interface.md",
+      "extraction_strategy": "gfm_multitable_header_role_v0_3_2+desc_cascade_v1_6_463",
+      "description": "寫入資料(typical)"
+    },
+    {
+      "name": "i_sram_data",
+      "mode": "input",
+      "direction": "input",
+      "io": null,
+      "evidence": "input/docs/L3_external_interface.md",
+      "extraction_strategy": "gfm_multitable_header_role_v0_3_2+desc_cascade_v1_6_463",
+      "description": "讀取資料(typical)"
+    },
+    {
+      "name": "o_sram_we",
+      "mode": "output",
+      "direction": "output",
+      "io": null,
+      "evidence": "input/docs/L3_external_interface.md",
+      "extraction_strategy": "gfm_multitable_header_role_v0_3_2+desc_cascade_v1_6_463",
+      "description": "寫入啟用"
+    },
+    {
+      "name": "o_sram_cyc",
+      "mode": "output",
+      "direction": "output",
+      "io": null,
+      "evidence": "input/docs/L3_external_interface.md",
+      "extraction_strategy": "gfm_multitable_header_role_v0_3_2+desc_cascade_v1_6_463",
+      "description": "匯流排 cycle 有效"
+    },
+    {
+      "name": "o_sram_wdata",
+      "mode": "output",
+      "direction": "output",
+      "io": null,
+      "evidence": "promoted from L1.pin_table",
+      "description": "| `o_sram_data` (or `o_sram_wdata`) | 8-bit | output | 寫入資料(typical) |",
+      "extraction_strategy": "desc_cascade_v1_6_463"
+    },
+    {
+      "name": "i_sram_rdata",
+      "mode": "input",
+      "direction": "input",
+      "io": null,
+      "evidence": "promoted from L1.pin_table",
+      "description": "| `i_sram_data` (or `i_sram_rdata`) | 8-bit | input | 讀取資料(typical) |",
+      "extraction_strategy": "desc_cascade_v1_6_463"
+    }
+  ],
+  "no_integration_in_input": false,
+  "submodules": [
+    {
+      "name": "SERV core",
+      "instances": 1,
+      "type": "markdown submodule-contract heading",
+      "role": "documented submodule",
+      "low_confidence": true
+    },
+    {
+      "name": "Servile wrapper",
+      "instances": 1,
+      "type": "markdown submodule-contract heading",
+      "role": "documented submodule",
+      "low_confidence": true
+    },
+    {
+      "name": "共享 SRAM",
+      "instances": 1,
+      "type": "markdown submodule-contract heading",
+      "role": "documented submodule",
+      "low_confidence": true
+    },
+    {
+      "name": "GPIO peripheral",
+      "instances": 1,
+      "type": "markdown submodule-contract heading",
+      "role": "documented submodule",
+      "low_confidence": true
+    },
+    {
+      "name": "RF-RAM interface",
+      "instances": 1,
+      "type": "markdown submodule-contract heading",
+      "role": "documented submodule",
+      "low_confidence": true
+    },
+    {
+      "name": "Debug switch",
+      "instances": 1,
+      "type": "markdown submodule-contract heading",
+      "role": "documented submodule",
+      "low_confidence": true
+    }
+  ],
+  "no_submodules_in_input": false,
+  "sim_only_modules": [],
+  "fsm_states": [],
+  "no_fsm_states_in_input": true,
+  "pipeline_stages": [],
+  "no_pipeline_stages_in_input": true,
+  "internal_wires": [],
+  "no_internal_wires_in_input": true,
+  "expected_verdict_byte_hex": null,
+  "expected_verdict_byte_offset": null,
+  "expected_verdict_byte_extraction_strategy": null,
+  "expected_verdict_byte_offset_low_confidence": false,
+  "expected_verdict_byte_hex_low_confidence": false,
+  "cpu_interrupts": [],
+  "no_cpu_interrupts_in_input": true,
+  "reset_domains": [
+    {
+      "name": "i_rst",
+      "polarity": "active_high",
+      "sync": "unknown",
+      "scan_prefixed": false,
+      "direction_prefix": "i_",
+      "extraction_strategy": "l9_port_reset_shape_v1_6_369"
+    }
+  ],
+  "memories": [
+    {
+      "name": "sky130_fd_sc_hd",
+      "kind": "ram",
+      "type": "SRAM",
+      "port_count": null,
+      "depth": null,
+      "width": null,
+      "evidence_file": "L1_product_metadata.md",
+      "extraction_strategy": "l9_memory_prose_walker_v1_6_426",
+      "low_confidence": true,
+      "name_origin": "backtick_left_context"
+    },
+    {
+      "name": "Cyclone10LP",
+      "kind": "ram",
+      "type": "SRAM",
+      "port_count": null,
+      "depth": null,
+      "width": null,
+      "evidence_file": "L1_product_metadata.md",
+      "extraction_strategy": "l9_memory_prose_walker_v1_6_426",
+      "low_confidence": true,
+      "name_origin": "pipe_cell_left_context"
+    },
+    {
+      "name": "i_rst",
+      "kind": "ram",
+      "type": "SRAM",
+      "port_count": null,
+      "depth": null,
+      "width": null,
+      "evidence_file": "L2_architecture.md",
+      "extraction_strategy": "l9_memory_prose_walker_v1_6_426",
+      "low_confidence": true,
+      "name_origin": "backtick_left_context"
+    },
+    {
+      "name": "RESET_PC",
+      "kind": "ram",
+      "type": "SRAM",
+      "port_count": null,
+      "depth": null,
+      "width": null,
+      "evidence_file": "L2_architecture.md",
+      "extraction_strategy": "l9_memory_prose_walker_v1_6_426",
+      "low_confidence": true,
+      "name_origin": "backtick_left_context"
+    },
+    {
+      "name": "i_gpio",
+      "kind": "ram",
+      "type": "SRAM",
+      "port_count": null,
+      "depth": null,
+      "width": null,
+      "evidence_file": "L3_external_interface.md",
+      "extraction_strategy": "l9_memory_prose_walker_v1_6_426",
+      "low_confidence": true,
+      "name_origin": "backtick_left_context"
+    },
+    {
+      "name": "WITH_CSR",
+      "kind": "ram",
+      "type": "SRAM",
+      "port_count": null,
+      "depth": null,
+      "width": null,
+      "evidence_file": "L3_external_interface.md",
+      "extraction_strategy": "l9_memory_prose_walker_v1_6_426",
+      "low_confidence": true,
+      "name_origin": "backtick_left_context"
+    },
+    {
+      "name": "subservient_core",
+      "kind": "ram",
+      "type": "RAM",
+      "port_count": null,
+      "depth": null,
+      "width": null,
+      "evidence_file": "L8_submodule_integration.md",
+      "extraction_strategy": "l9_memory_prose_walker_v1_6_426",
+      "low_confidence": true,
+      "name_origin": "backtick_left_context"
+    },
+    {
+      "name": "o_gpio",
+      "kind": "ram",
+      "type": "RAM",
+      "port_count": null,
+      "depth": null,
+      "width": null,
+      "evidence_file": "L8_submodule_integration.md",
+      "extraction_strategy": "l9_memory_prose_walker_v1_6_426",
+      "low_confidence": true,
+      "name_origin": "backtick_left_context"
+    },
+    {
+      "name": "o_gpio",
+      "kind": "ram",
+      "type": "SRAM",
+      "port_count": null,
+      "depth": null,
+      "width": null,
+      "evidence_file": "L8_submodule_integration.md",
+      "extraction_strategy": "l9_memory_prose_walker_v1_6_426",
+      "low_confidence": true,
+      "name_origin": "backtick_left_context"
+    },
+    {
+      "name": "PL_TARGET_DENSITY",
+      "kind": "ram",
+      "type": "SRAM",
+      "port_count": null,
+      "depth": null,
+      "width": null,
+      "evidence_file": "L9_constraints_floorplan.md",
+      "extraction_strategy": "l9_memory_prose_walker_v1_6_426",
+      "low_confidence": true,
+      "name_origin": "backtick_left_context"
+    },
+    {
+      "name": "GF180MCU",
+      "kind": "ram",
+      "type": "SRAM",
+      "port_count": null,
+      "depth": null,
+      "width": null,
+      "evidence_file": "L9_constraints_floorplan.md",
+      "extraction_strategy": "l9_memory_prose_walker_v1_6_426",
+      "low_confidence": true,
+      "name_origin": "pipe_cell_left_context"
+    },
+    {
+      "name": "FP_CORE_UTIL",
+      "kind": "ram",
+      "type": "SRAM",
+      "port_count": null,
+      "depth": null,
+      "width": null,
+      "evidence_file": "L9_constraints_floorplan.md",
+      "extraction_strategy": "l9_memory_prose_walker_v1_6_426",
+      "low_confidence": true,
+      "name_origin": "backtick_left_context"
+    },
+    {
+      "name": "FP_PDN_HOFFSET",
+      "kind": "ram",
+      "type": "SRAM",
+      "port_count": null,
+      "depth": null,
+      "width": null,
+      "evidence_file": "L9_constraints_floorplan.md",
+      "extraction_strategy": "l9_memory_prose_walker_v1_6_426",
+      "low_confidence": true,
+      "name_origin": "backtick_left_context"
+    }
+  ],
+  "memory_candidates": [
+    {
+      "name": null,
+      "kind": "ram",
+      "type": "SRAM",
+      "port_count": null,
+      "depth": null,
+      "width": null,
+      "evidence_file": "L1_product_metadata.md",
+      "extraction_strategy": "l9_memory_prose_walker_v1_6_426",
+      "rejected_low_information": true,
+      "rejection_reason": "bare-keyword prose match with no structural evidence (depth/width/port_count absent and the name carries no memory token) — recorded as provenance, NOT as deferred work"
+    },
+    {
+      "name": null,
+      "kind": "regfile",
+      "type": "register file",
+      "port_count": null,
+      "depth": null,
+      "width": null,
+      "evidence_file": "L2_architecture.md",
+      "extraction_strategy": "l9_memory_prose_walker_v1_6_426",
+      "rejected_low_information": true,
+      "rejection_reason": "bare-keyword prose match with no structural evidence (depth/width/port_count absent and the name carries no memory token) — recorded as provenance, NOT as deferred work"
+    }
+  ],
+  "no_memory_candidates_in_input": false,
+  "no_memories_in_input": false,
+  "memory_map": [],
+  "no_memory_map_in_input": true,
+  "no_instantiation_template_in_input": true,
+  "extraction_evidence": {
+    "derived_from_L3": []
+  },
+  "clock_domains": [
+    {
+      "name": "clk",
+      "freq_low_mhz": 100.0,
+      "freq_high_mhz": null,
+      "role": "primary",
+      "freq_mhz": 100.0,
+      "reset_strategy": "unspecified",
+      "evidence": {
+        "file": "input/docs/L1_product_metadata.md",
+        "line": 36,
+        "matched_substring": "100 MHz"
+      },
+      "extraction_strategy": "clock_domain_doc_prose_fmax",
+      "freq_hz": 100000000,
+      "period_ns": 10.0,
+      "domain_kind": "primary",
+      "source_pin": "clk",
+      "low_mhz": 50.0,
+      "high_mhz": 50.0,
+      "merged_extractor_count_v1_6_397": 2
+    }
+  ],
+  "parameters": [
+    {
+      "name": "memsize",
+      "default": "1024",
+      "type": "256 / 512 / 1024 / 2048(以 byte 為單位)",
+      "description": "",
+      "source": "L3_external_interface.md",
+      "extraction_strategy": "rst_param_grid_table_anchorless_v1_6_400"
+    },
+    {
+      "name": "RESET_PC",
+      "default": "`0x00000000`",
+      "type": "`0x00000000` ~ `0xFFFFFFFC`(SERV 規格)",
+      "description": "",
+      "source": "L3_external_interface.md",
+      "extraction_strategy": "rst_param_grid_table_anchorless_v1_6_400"
+    },
+    {
+      "name": "WITH_CSR",
+      "default": "1(預設,enable timer + IRQ)",
+      "type": "0 / 1",
+      "description": "",
+      "source": "L3_external_interface.md",
+      "extraction_strategy": "rst_param_grid_table_anchorless_v1_6_400"
+    }
+  ],
+  "interface_type": "gpio",
+  "no_interface_type_in_input": false,
+  "interface_types": [
+    {
+      "name": "gpio",
+      "matched_token": "GPIO",
+      "occurrences": 32,
+      "extraction_strategy": "readme_interface_vocab_extended_v1_6_457"
+    }
+  ],
+  "no_interface_types_in_input": false,
+  "chip_top_interfaces": [
+    {
+      "name": "gpio",
+      "matched_token": "GPIO"
+    }
+  ]
+}

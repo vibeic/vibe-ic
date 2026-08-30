@@ -1,0 +1,128 @@
+{
+  "schema_version": "1",
+  "doc_class": "timing_waveform",
+  "ic_name": "Enhanced Serial Peripheral Interface (eSPI)",
+  "timing_windows": [],
+  "timing_constants": {
+    "clk_freq_mhz": {
+      "boot": 20,
+      "max": 66
+    },
+    "tSU_ns": 2,
+    "tHO_ns": 1,
+    "cs_to_clk_setup_clocks": 2,
+    "turnaround_clocks": 2,
+    "reset_pulse_min_us": 100
+  },
+  "waveforms": [],
+  "extraction_evidence": {},
+  "clock_domains": [
+    {
+      "name": "clk",
+      "freq_low_mhz": 20.0,
+      "freq_high_mhz": null,
+      "role": "primary",
+      "freq_mhz": 20.0,
+      "reset_strategy": "unspecified",
+      "evidence": {
+        "file": "input/docs/Intel_eSPI_Base_Specification.txt",
+        "line": 15,
+        "matched_substring": "20 MHz"
+      },
+      "extraction_strategy": "clock_domain_doc_prose_fmax",
+      "freq_hz": 20000000,
+      "period_ns": 50.0,
+      "domain_kind": "primary",
+      "source_pin": "clk"
+    },
+    {
+      "name": "clk",
+      "freq_mhz": 66.0,
+      "freq_hz": 66000000,
+      "low_mhz": 66.0,
+      "high_mhz": 66.0,
+      "role": "extracted_from_doc_freq_mention",
+      "source": "input/docs/Intel_eSPI_Base_Specification.txt",
+      "reset_strategy": "unspecified",
+      "extraction_strategy": "doc_freq_mention_keyword_window",
+      "freq_evidence_count_v1_6_368": 1,
+      "best_rank_v1_6_370": 5,
+      "primary_evidence_v1_6_370": "input/docs/Intel_eSPI_Base_Specification.txt",
+      "derived_from": "clk",
+      "period_ns": 15.151515,
+      "domain_kind": "primary",
+      "source_pin": "clk"
+    }
+  ],
+  "clock_mhz": 20.0,
+  "clock_and_data_waveform": {
+    "clk_idle": "low",
+    "drive_edge": "rising (command phase)",
+    "sample_edge": "falling (command phase)",
+    "turnaround": "bus floats for 2 ESPI_CLK cycles when ownership reverses"
+  },
+  "transaction_waveform": {
+    "order": [
+      "CS# assert",
+      "CMD opcode (8 bits)",
+      "command fields",
+      "optional data",
+      "CRC byte",
+      "TAR (2 clk float)",
+      "response code (8 bits)",
+      "response data/status",
+      "CRC byte",
+      "CS# deassert"
+    ]
+  },
+  "rx_timing": {
+    "description": "host/external: master command-phase symbols the slave RX samples",
+    "H1_ns": {
+      "min": 15,
+      "typ": 30,
+      "max": 50
+    },
+    "H0_ns": {
+      "min": 15,
+      "typ": 30,
+      "max": 50
+    },
+    "BR_ns": {
+      "min": 30,
+      "typ": 60,
+      "max": 100,
+      "note": "turnaround = 2 ESPI_CLK"
+    },
+    "IBT_ns": {
+      "min": 15,
+      "typ": 30,
+      "max": 50,
+      "note": "min symbol cadence = 1 ESPI_CLK"
+    }
+  },
+  "tx_timing": {
+    "description": "DUT/internal: slave response-phase symbols driven after TAR",
+    "H1_ns": {
+      "min": 15,
+      "typ": 30,
+      "max": 50
+    },
+    "H0_ns": {
+      "min": 15,
+      "typ": 30,
+      "max": 50
+    },
+    "BR_ns": {
+      "min": 30,
+      "typ": 60,
+      "max": 100,
+      "note": "turnaround = 2 ESPI_CLK"
+    },
+    "IBT_ns": {
+      "min": 15,
+      "typ": 30,
+      "max": 50,
+      "note": "min symbol cadence = 1 ESPI_CLK"
+    }
+  }
+}
