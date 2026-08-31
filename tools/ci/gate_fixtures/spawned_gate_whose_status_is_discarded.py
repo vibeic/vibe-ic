@@ -19,8 +19,8 @@ THE DENOMINATORS THE GATE PRINTS ARE IDENTICAL IN BOTH DIRECTIONS. Measured:
     clause A population            1   ->   1     (modules with a swallow-all handler)
     discarded gate spawns (A)      0   ->   1     <- the answer
     clause B population            1   ->   1
-    run-subject, cannot run (B)    1   ->   1
-    inventory rows applied         1   ->   1
+    run-subject, cannot run (B)    0   ->   0     (post-shrink; see below)
+    inventory rows applied         0   ->   0     (the register is now empty)
 
 The clause A POPULATION is the line worth naming: it counts modules that
 contain a swallow-all handler, and `fixture_gate_runner` is in it in BOTH arms
@@ -29,16 +29,32 @@ red by ADDING the try/except, or by adding a second module, would have moved a
 printed population as well as the verdict. An empty subject prints `modules
 parsed: 0` and is the vacuity path this fixture must not take.
 
-THE SHIPPED INVENTORY IS PART OF THE SUBJECT'S CONTRACT. `$PG` stays the real
-programs tree, so the gate reads its REAL `spawned_gate_status_inventory.json`,
-whose single row is the clause B instance
-`B::…/programs/full_suite_run_check.py::full_suite_run_check.py`. A row that
-matches nothing is rc 1 by this gate's design, so the subject reproduces that
-row in BOTH arms — a program whose SUBJECT is whether something ran, carrying
-none of the tokens (`subprocess`, `Popen`, `os.system`, `returncode`,
-`check_output`, `check_call`) that would let it start a process or read a
-status. Omitting it would turn the green arm red for STALENESS, which proves
-nothing about either clause's predicate.
+THE SHIPPED INVENTORY IS PART OF THE SUBJECT'S CONTRACT, AND IT SHRANK.
+`$PG` stays the real programs tree, so the gate reads its REAL
+`spawned_gate_status_inventory.json`. When this fixture was written that file
+carried one row — the clause B instance
+`B::…/programs/full_suite_run_check.py::full_suite_run_check.py` — and because a
+row matching nothing is rc 1 by this gate's design, the subject had to REPRODUCE
+that row in both arms: a program whose subject is whether something ran, carrying
+none of the tokens that would let it start a process or read a status. The
+paragraph here said "omitting it would turn the green arm red for STALENESS".
+
+THAT IS NO LONGER TRUE AND THE OPPOSITE IS. The owner-level ruling of
+2026-08-31 PAID the row off rather than waiving it — `full_suite_run_check.py`
+now runs `run_tests.sh --list-tiers` and reads its status, so the register was
+SHRUNK to `"known": []`, which it records in `_shrunk_2026_08_31`. From that
+moment the token-free stub manufactured an UNACCOUNTED clause B finding, and the
+CAN-PASS arm could not pass:
+
+    run-subject, cannot run (B):    1
+    inventory rows applied:         0
+    [FAIL] 1 gate spawn(s) whose verdict reaches nothing
+
+So the subject's `full_suite_run_check.py` is now the POST-shrink shape: still in
+clause B's POPULATION — the name is what puts it there, and the printed
+population must stay 1 so the clause is provably looking — but it OBSERVES a run,
+so it is not a finding. Dropping the file instead would take the population to 0
+and make the green arm green for having no subject, which proves nothing.
 
 chip-AGNOSTIC: nothing here names any IC, vendor, SKU or process.
 """
@@ -52,22 +68,24 @@ GATE = "spawned gate whose status is discarded"
 
 _PROGRAMS_REL = "vibe-ic-marketplace/plugins/vibe-ic/programs"
 
-#: CLAUSE B, and the row the shipped inventory already names. Its subject is
-#: whether the suite RAN; it decides by matching a command line as TEXT. Held
-#: identical across both arms so the inventory row is never stale.
+#: CLAUSE B's POPULATION, in the shape the register was shrunk TO. Its name is
+#: what puts it in the population; what keeps it out of the findings is that it
+#: SPAWNS the thing it reports on and READS the status. Held identical across
+#: both arms, so `clause B population: 1` and `run-subject, cannot run (B): 0`
+#: are printed on both and only clause A's number moves.
 #:
-#: Written to carry NONE of the six tokens the gate looks for — that absence is
-#: the whole finding, so a stray one here would silently un-make the green arm.
+#: The tokens are in CODE, not in a comment or a docstring: a prose mention is
+#: not an invocation, and a fixture that leaned on one would be asserting the
+#: substring and not the predicate.
 _CLAUSE_B = '''#!/usr/bin/env python3
-"""Decides whether the full suite ran, by matching a recorded command line."""
-from pathlib import Path
-
-_EXPECTED = "python3 -m pytest tools/ci"
+"""Decides whether the full suite ran, by running it and reading its status."""
+import subprocess
 
 
-def suite_was_run(record_path):
-    line = Path(record_path).read_text(encoding="utf-8").strip()
-    if _EXPECTED in line:
+def suite_was_run(runner_path):
+    proc = subprocess.run(["bash", runner_path, "--list-tiers"],
+                          capture_output=True, text=True)
+    if proc.returncode == 0 and proc.stdout.strip():
         return "[PASS] the full suite ran"
     return "[FAIL] the full suite did not run"
 '''
