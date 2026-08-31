@@ -289,3 +289,104 @@ handoff lines, tool invocations.
 **Your task is not complete until the audit returns PASS.** Missing
 elements are the single largest source of skill-execution non-determinism
 across different agents.
+
+## Captured by benchmark-enhancement-capture — 2026-09-01 (u_hawaii_adc A5 convergence: two blocks to netgen match-unique + KLayout DRC 0 on a native PDK)
+
+The deterministic half of every rule below ships in
+`programs/magic_gencell_layout_lib.py` (LAW numbers reference the campaign's
+A5_STATUS.md in benchmark-data `uhadc/a5-layout-generator`, where the full
+24-law evidence trail and the working generator live). Use the library; do
+not re-derive the parsing or the geometry checks by hand.
+
+### Skill: Magic .mag coordinate spaces — read `magscale` PER FILE, rlabels are always internal (LAWS #1/#22)
+
+**Pattern**: `use` transforms and `rect` lines are in lambda ONLY when the
+file has no `magscale` header; magic silently writes `magscale 1 2` the
+moment any geometry sits off the lambda grid (a half-lambda column of an
+odd-length device is enough), and then every transform/rect in THAT file is
+2x. Gencell children split by family (measured: MOS/resistor children carried
+the header, MIM-cap children did not). `rlabel` coordinates are internal
+(2x) in BOTH kinds of file.
+
+**When to apply**: any scripted Magic layout — before trusting a single
+parsed coordinate.
+
+**What to do**: parse with `magic_gencell_layout_lib.mag_scale` /
+`parse_use_transforms` / `parse_rlabels`. Never assume a family of .mag
+files shares a unit.
+
+**Worked failure**: reading a `magscale 1 2` parent as lambda doubled every
+origin — the entire wiring layer painted off the devices; extraction
+returned one single-pin net per terminal (51 nets, zero joins) with NO tool
+error anywhere.
+
+**Why this is GENERAL**: the header semantics are magic's own file format,
+independent of PDK; any tech whose gencell emits off-grid geometry trips it.
+
+### Skill: exit-ladder discipline — stagger tied taps, allocate descents ascending AND obstacle-aware (LAWS #9/#23)
+
+**Pattern**: a right-side exit ladder is short-proof only while rung y is
+strictly ascending with rank ("a rung at Y_i can only cross a descent whose
+top is below Y_i"). Two facts break a naive implementation: (a) D and S
+labels of one MOS share a y, so two rungs go co-linear and short; (b) a
+descent placed blindly at `origin + pitch*(rank-1)` ignores everything
+between its tap and its rail — including other rows' tap pads.
+
+**When to apply**: any tight-pitch cell whose contact columns cannot host
+per-column vertical lanes (measured threshold: column pitch below wire
+width + spacing + via pad).
+
+**What to do**: `stagger_ladder_taps` (ties raised >= wire+space along the
+column's own full-height M2 — LAW #9 guarantees the column carries it),
+then `allocate_descent` per rank with every terminal and ladder point of
+OTHER nets as obstacles. Afterwards run `cross_net_overlaps` on the wiring
+manifest — an empty result is the necessary condition, not a formality.
+
+**Worked failure**: 28 same-device cross-net shorts from co-linear rungs,
+plus one macro's blind descent through a neighbour row's tap pads;
+"Top level cell failed pin matching" was the only symptom LVS showed.
+
+**Why this is GENERAL**: the proof obligation (ascending y, foreign-point
+clearance) is geometry, not PDK; only the pitch numbers come from the deck
+and they are parameters.
+
+### Skill: MIM-cap plate exits derive from the MEASURED plate bbox, never fixed offsets (LAW #24)
+
+**Pattern**: the top-plate via stack auto-paints a pad on the bottom-plate
+metal at its lowest level, so its lateral exit must clear the cap's own
+bottom plate; the bottom-plate exit must clear the NEIGHBOUR's plate.
+Fixed offsets are chip-luck: they encode one cap size.
+
+**When to apply**: wiring any MIM/MOM cap whose plates are on routing
+metals; sizing changed by even one micron re-opens this.
+
+**What to do**: `cap_plate_exits(plate_bbox)` with the deck's clearances;
+verify with `cross_net_overlaps` including the via3+/metal5 links.
+
+**Worked failure**: three plate welds (two caps internally shorted, one
+onto its neighbour) — found only by a flattened-layout island probe,
+because `l2n.shapes_of_net` returns CHILD-LOCAL coordinates and an
+unflattened weld analysis is garbage.
+
+**Why this is GENERAL**: the auto-pad behaviour is the via-stack's, the
+clearance is a deck number, and the bbox is measured per instance.
+
+### Skill: magic extraction is NOT connectivity-authoritative on gencell PDKs — sign off with the PDK's own LVS, quantize the comparison to the grid
+
+**Pattern**: magic's extraction (hierarchical AND flat) does not reliably
+merge parent-painted metal with gencell contact stacks (measured: 93
+isolated terminal nets where KLayout found 9). Sign-off connectivity is the
+PDK's KLayout LVS + netgen. At the comparison, the drawn mask is on the
+manufacturing grid while derived netlist parameters may not be; the PDK
+netgen deck declares a tolerance for this but the clause is inert in
+current netgen builds (control-run measured). Quantize the COMPARISON copy
+with `grid_snap_spice_params`; never touch the design netlist.
+
+**When to apply**: every A5/A6 LVS on a Magic-gencell layout.
+
+**why_not_bucket_a (the residual)**: WHICH netlist transform closes a given
+mismatch (canonical net renaming, X-to-primitive conversion, parameter
+bookkeeping strips) depends on the PDK's extraction dialect and stays a
+per-PDK recorded recipe; the library ships the invariant pieces only.
+
+_Captured by benchmark-enhancement-capture 2026-09-01 (u_hawaii_adc)._
