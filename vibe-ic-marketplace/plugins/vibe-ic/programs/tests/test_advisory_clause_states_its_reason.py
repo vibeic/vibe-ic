@@ -33,6 +33,18 @@ import flow_gate_enforcement_audit as A  # noqa: E402
 
 _FLOW = _PROGRAMS.parent / "flow" / "phase1_phase2_phase3.yaml"
 
+# The docstring census the gate publishes has exactly THESE THREE rows. Pinned
+# as a SET and not only as a count (vibe-ic `population_pin_without_its_member
+# _set`): `len(said) == 3` is invariant under one row leaving and another
+# arriving in the same edit, and the dispatch below keys on these exact
+# strings — so a renamed row used to fall through the `.get()` default and be
+# compared against the WRONG measurement, silently. The set pin names a missing
+# row and an extra row separately, and the dispatch is now total.
+_ROW_ADVISORY = "declare `ENFORCEMENT: advisory` (says WHAT)"
+_ROW_SILENT = "declare no enforcement intent at all"
+_ROW_REASON = "state a REASON where the clause or the gate can show it"
+_CENSUS_ROWS = {_ROW_ADVISORY, _ROW_SILENT, _ROW_REASON}
+
 _CONTROL = '''#!/usr/bin/env python3
 """control_gate — green in every arm.
 
@@ -143,11 +155,17 @@ def test_the_census_the_gate_publishes_is_the_one_it_measures():
     said = {k: int(v) for k, v in re.findall(
         r"^\s+(declare[^0-9]+?|state a REASON[^0-9]+?)\s+(\d+)\s*$",
         doc, re.M)}
-    assert len(said) == 3, (
+    got_rows = set(k.strip() for k in said)
+    missing = _CENSUS_ROWS - got_rows
+    extra = got_rows - _CENSUS_ROWS
+    assert got_rows == _CENSUS_ROWS, (
         f"this test compares the docstring's census rows to the measurement, "
-        f"and it found {len(said)} of them: {sorted(said)}. A reworded "
-        f"docstring would make it pass by reading nothing, which is the "
-        f"vacuous green it exists to prevent.")
+        f"and the rows it read are not the ones it dispatches on. Rows the "
+        f"docstring no longer states: {sorted(missing)}; rows it states that "
+        f"nothing here measures: {sorted(extra)}. A reworded docstring would "
+        f"otherwise make it pass by reading nothing, which is the vacuous "
+        f"green it exists to prevent — and a row RENAMED (one out, one in) "
+        f"keeps the count at 3 while changing the set.")
     population = int(re.search(r"MEASURED over all (\d+)", doc).group(1))
     rows = G.census(_FLOW, _PROGRAMS)
     assert len(rows) == population, (
@@ -165,12 +183,11 @@ def test_the_census_the_gate_publishes_is_the_one_it_measures():
     measured_advisory = sum(1 for i in intents if i == "advisory")
     measured_silent = sum(1 for i in intents if i is None)
     stated = sum(1 for r in rows if r["verdict"] == G.OK)
+    measured_by_row = {_ROW_ADVISORY: measured_advisory,
+                       _ROW_SILENT: measured_silent,
+                       _ROW_REASON: stated}
     for key, want in said.items():
-        got = ({"declare `ENFORCEMENT: advisory` (says WHAT)": measured_advisory,
-                "declare no enforcement intent at all": measured_silent}
-               .get(key.strip()))
-        if got is None:      # the "state a REASON ..." row
-            got = stated
+        got = measured_by_row[key.strip()]
         assert got == want, f"docstring says {key.strip()!r} = {want}; measured {got}"
 
 

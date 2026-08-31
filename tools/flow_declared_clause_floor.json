@@ -62,11 +62,6 @@
     },
     {
       "step": "15",
-      "kind": "advisory_program_exit_zero",
-      "cmd": "stage2_compliance ."
-    },
-    {
-      "step": "15",
       "kind": "optional_program_exit_zero",
       "cmd": "ip_integration_check . --json reports/phase2/gates/ip_integration.json"
     },
@@ -258,11 +253,6 @@
     {
       "step": "23",
       "kind": "program_exit_zero",
-      "cmd": "drv_promotion_corroboration_check . --json reports/phase3/sta/drv_promotion_corroboration.json"
-    },
-    {
-      "step": "23",
-      "kind": "program_exit_zero",
       "cmd": "hold_corner_coverage_check . --json reports/phase3/sta/hold_corner_coverage.json"
     },
     {
@@ -418,11 +408,6 @@
     {
       "step": "31",
       "kind": "program_exit_zero",
-      "cmd": "magic_illegal_overlap_check . --json reports/phase3/magic_illegal_overlap.json"
-    },
-    {
-      "step": "31",
-      "kind": "program_exit_zero",
       "cmd": "pg_rail_geometry_check . --json reports/phase3/pg_rail_geometry.json"
     },
     {
@@ -519,11 +504,6 @@
       "step": "37",
       "kind": "advisory_program_exit_zero",
       "cmd": "reported_figure_artifact_backing_check . --report FINAL_REPORT.md"
-    },
-    {
-      "step": "37",
-      "kind": "advisory_program_exit_zero",
-      "cmd": "stage3_compliance ."
     },
     {
       "step": "37",
@@ -647,11 +627,6 @@
     },
     {
       "step": "40",
-      "kind": "advisory_program_exit_zero",
-      "cmd": "stage4_compliance ."
-    },
-    {
-      "step": "40",
       "kind": "program_exit_zero",
       "cmd": "manufacturing_fab_intake_check . --json reports/manufacturing/fab_intake.json"
     },
@@ -719,11 +694,6 @@
       "step": "7",
       "kind": "advisory_program_exit_zero",
       "cmd": "macro_non_seq_arc_contract_check . --json reports/phase2/gates/macro_non_seq_arcs.json"
-    },
-    {
-      "step": "7",
-      "kind": "advisory_program_exit_zero",
-      "cmd": "stage1_compliance ."
     },
     {
       "step": "7",

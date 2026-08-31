@@ -2717,20 +2717,60 @@ def test_two_clauses_that_are_IDENTICAL_are_two_and_not_one(tmp_path):
 #: that blob declares. BOTH move together or the assertion below is comparing a
 #: count to a different tree's population -- which is the exact failure the
 #: "base that moved" blocks above record, five times.
-# PIN MOVED e265f228be -> d760471ed (v1.12.40), AND IT AUTHORISES A TEN-CLAUSE
-# CHURN. `d760471ed` is not chosen for being recent: it is the OLDEST commit
+# PIN MOVED d760471ed -> 964b1eaac1 (v1.14.49), AND IT AUTHORISES A SIX-CLAUSE
+# CHURN. `964b1eaac1` is not chosen for being recent: it is the OLDEST commit
 # whose flow blob has `population_delta(pin, HEAD)["removed"] == []`, MEASURED by
-# walking all 17 commits that touched the flow YAML since the old pin and
-# reporting `removed_vs_HEAD` for each (14, 16, 17, 11, 13, 16, 16, 14, 13, 10,
-# 8, 8, 7, 7, 6, 0, 0). Taking the newest instead would blind the detector to
-# every commit in between for nothing; taking anything older leaves a removal in
-# the window that this change has not authorised.
+# walking all 22 commits that touched the flow YAML since the old pin and
+# reporting `removed_vs_HEAD` for each (6, 6, 7, 7, 8, 9, 10, 11, 11, 11, 12,
+# 12, 12, 12, 12, 12, 2, 1, 1, 1, 1, 1, 0). The window this move leaves is ONE
+# commit wide and that is not a shortcut -- the last of the six departures
+# landed in `964b1eaac1` itself, so no older commit can qualify. Taking anything
+# older leaves a removal in the window that this change has not authorised.
 #
-# WHAT THE MOVE AUTHORISES is set out clause by clause beside the census literal
-# above, and NONE of it is a retirement -- every removed command has a live
-# successor. The half of that authorisation which RUNS is `_REHOMED`, below.
-_SHRINK_PIN = "d760471ed"
-_SHRINK_PIN_DECLARED = 220
+# WHAT THE MOVE AUTHORISES, clause by clause, and NONE of it is a retirement --
+# every removed identity has a LIVE successor, and each landing argues the
+# change at its own wiring site in the flow YAML:
+#
+#   93235bdf36 [v1.13.78] "the review of the die was hosted on a step no run
+#   reaches" -- the four stage-compliance clauses began declaring the report
+#   they had been writing unnamed:
+#      7  advisory  `stage1_compliance .`
+#             -> 7  advisory  `... . --json reports/phase2/gates/stage1_compliance.json`
+#      15 advisory  `stage2_compliance .`
+#             -> 15 advisory  `... . --json reports/phase2/gates/stage2_compliance.json`
+#      37 advisory  `stage3_compliance .`
+#             -> 37 advisory  `... . --json reports/phase3/gates/stage3_compliance.json`
+#      40 advisory  `stage4_compliance .`
+#             -> 39 advisory  `... . --exclude-step 39 --json reports/phase3/gates/stage4_compliance.json`
+#   The fourth also MOVED STEP, 40 -> 39, which is the defect that commit's
+#   subject names: the stage-4 review sat on a step no run reaches.
+#
+#   87b189b50f [v1.13.82] "validate the runner's overlap record instead of
+#   trusting its presence" -- the report was re-pathed to the audit tree:
+#      31 program_exit_zero
+#         `magic_illegal_overlap_check . --json reports/phase3/magic_illegal_overlap.json`
+#           -> `magic_illegal_overlap_check . --json reports/audit/magic_illegal_overlap_audit.json`
+#   This one is ALSO the `_REHOMED` row below, because its command string
+#   changed and the exact-string control cannot tell that from a deletion.
+#
+#   964b1eaac1 [v1.14.49] "apply the rung, observe step 31 move" -- the ONLY one
+#   of the six that is not a re-spelling. The command is byte-identical; the
+#   KIND moved `program_exit_zero` -> `optional_program_exit_zero`:
+#      23 `drv_promotion_corroboration_check . --json reports/phase3/sta/drv_promotion_corroboration.json`
+#   A blocking clause becoming optional is exactly what this control exists to
+#   catch, so it is the one that had to be read rather than counted. It is
+#   authorised because the clause did not become weaker for free: it gained
+#   `condition_files_exist` naming both `_PNR_DIRS` the gate itself searches,
+#   and an `absent_condition_reason` -- the W4 declaration that BUYS the
+#   not-applicable and is disclosed as such rather than scoring as an
+#   examination. MEASURED at that landing: steps 32/34/35 had been landing
+#   PASS_VOIDED_BY_DEPENDENCY on runs with FAIL=0, because no design can make an
+#   absent route promotion appear. The clause is still declared, still runs, and
+#   still blocks whenever a promoted route exists.
+#
+# The half of that authorisation which RUNS is `_REHOMED`, below.
+_SHRINK_PIN = "964b1eaac1"
+_SHRINK_PIN_DECLARED = 233
 
 #: The pin this one replaced, kept because the control below is anchored to it
 #: permanently: it is the only tree in this repository's history that can
@@ -2787,6 +2827,15 @@ _REHOMED = {
     "--tool=klayout,magic,openroad":
     "provenance_check . --output=phase3/stage4/gds/*.gds "
     "--tool=klayout,magic,openroad --require-measured",
+    # 87b189b50f (v1.13.82): step 31 stopped trusting the runner's overlap
+    # record for being PRESENT and started validating it, and the report moved
+    # out of the phase3 tree into the audit tree with it. A RE-PATH -- the
+    # clause is declared at the same step, in the same kind, by the same
+    # program, and only the destination it writes changed.
+    "magic_illegal_overlap_check . --json "
+    "reports/phase3/magic_illegal_overlap.json":
+    "magic_illegal_overlap_check . --json "
+    "reports/audit/magic_illegal_overlap_audit.json",
     # The coverage artefact was renamed to name its producer, so the two
     # clauses that read it followed it.
     "verilator_coverage_measure check --coverage-json "

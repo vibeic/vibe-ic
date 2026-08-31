@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 1238
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1238)
+- **Total programs (excluding helpers / shims):** 1239
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1239)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 1229 |
+| `any` | 1230 |
 
 ## Alphabetical listing
 
@@ -335,6 +335,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `eda_image_preflight` | any | — | verify the CVDP scoring sim image matches the official Dockerfile.sim tool spec BEFORE any scoring run (ORGANIC #536). |
 | `eda_log_check` | any | — | Deterministic EDA tool log/report checker. |
 | `eda_report_audit` | any | — | eda_report_audit.py -- Multi-mode EDA report checker for backend skills. |
+| `edge_history_reset_phantom_check` | any | — | a history register reset to a constant fabricates an edge the moment reset releases. |
 | `edp_protocol_synth` | any | v0.1.95 | VESA Embedded DisplayPort (eDP) protocol synth helper. |
 | `em_current_density_check` | any | — | REAL electromigration current-density sign-off. |
 | `em_peak_current_authority_check` | any | — | the EM peak current must reach a COMPARISON, or the step must name the authority it lacks. |
@@ -1310,7 +1311,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (1229 programs)
+### `any` (1230 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `absence_verdict_names_its_search_space_check` — "not found" must say WHERE it looked.
@@ -1617,6 +1618,7 @@ _(no programs in this group)_
 - `eda_image_preflight` — verify the CVDP scoring sim image matches the official Dockerfile.sim tool spec BEFORE any scoring run (ORGANIC #536).
 - `eda_log_check` — Deterministic EDA tool log/report checker.
 - `eda_report_audit` — eda_report_audit.py -- Multi-mode EDA report checker for backend skills.
+- `edge_history_reset_phantom_check` — a history register reset to a constant fabricates an edge the moment reset releases.
 - `edp_protocol_synth` — VESA Embedded DisplayPort (eDP) protocol synth helper.  _[v0.1.95]_
 - `em_current_density_check` — REAL electromigration current-density sign-off.
 - `em_peak_current_authority_check` — the EM peak current must reach a COMPARISON, or the step must name the authority it lacks.
