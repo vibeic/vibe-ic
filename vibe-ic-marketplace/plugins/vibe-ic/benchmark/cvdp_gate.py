@@ -893,8 +893,7 @@ def _load_synth_scored_map(path) -> Dict[str, bool]:
         if rid is None:
             continue
         rid = str(rid)
-        prompt = d.get("prompt") or d.get("input") if isinstance(
-            d.get("input"), str) else d.get("prompt")
+        prompt = _record_prompt_text(d)
         # "True WINS" union — intra-file too (Step-2.7 round-3): a positive
         # synth-scored signal must never be DOWNGRADED to False by a later
         # duplicate-id line (a multi-record-per-problem dataset, or a cat'd
@@ -2202,11 +2201,46 @@ def _load_prompts(path):
         except json.JSONDecodeError:
             continue
         rid = d.get("id")
-        txt = (d.get("prompt") or d.get("input") or d.get("question")
-               or d.get("text") or "")
+        txt = _record_prompt_text(d)
         if rid is not None:
             out[str(rid)] = txt
     return out
+
+
+def _record_prompt_text(d):
+    """The record's prompt, wherever this benchmark's shape put it.
+
+    A CVDP record's `input` is a DICT ({prompt, context}), not a string, so
+    `d.get("prompt") or d.get("input")` yields either the whole dict (which then
+    reaches text code as a dict) or nothing at all. Both spellings existed here
+    and both were wrong on the shape they were most likely to meet: the
+    area-threshold gate reported
+
+        area NOT_APPLICABLE: no --threshold-pct and no --prompt;
+        cannot determine the area-reduction target
+
+    on records whose own `input.prompt` states "5% for wires or 3% for cells" --
+    the clause the threshold parser exists to read. A cid007 record scored with
+    its area check silently switched off is the failure mode
+    `a-silent-fallback-is-worse-than-none` names: the gate reported success for
+    a question it never asked.
+
+    Returns "" only when the record genuinely carries no prompt text.
+    """
+    if not isinstance(d, dict):
+        return ""
+    inp = d.get("input")
+    if isinstance(inp, dict):
+        cand = inp.get("prompt")
+        if isinstance(cand, str) and cand.strip():
+            return cand
+    for key in ("prompt", "question", "text"):
+        cand = d.get(key)
+        if isinstance(cand, str) and cand.strip():
+            return cand
+    if isinstance(inp, str) and inp.strip():
+        return inp
+    return ""
 
 
 def _load_context_modules(path):
@@ -4077,6 +4111,29 @@ def main(argv=None) -> int:
         out_path.write_text(
             "".join(json.dumps(r, ensure_ascii=False) + "\n"
                     for r in passed))
+    # EXIT INVARIANT: a BLOCKED record must say WHY it was blocked.
+    #
+    # There are 16 sites that set verdict=BLOCKED and each is supposed to record
+    # its own `*_block` note; two of them do not, and the omission is invisible
+    # until someone downstream needs the reason. Measured on a clean-room round:
+    # strobe_divider and wb2ahb came back GATE_BLOCKED with NO `*_block` key
+    # anywhere in their record, so the author had a refusal and no way to act on
+    # it -- a gate that blocks without saying why converts a fixable defect into
+    # a dead end. Asserting it at the single exit costs one pass and cannot be
+    # forgotten by a future seventeenth site, which per-site edits would be.
+    for _rec in report:
+        if not isinstance(_rec, dict) or _rec.get("verdict") != "BLOCKED":
+            continue
+        if any(k.endswith("_block") for k in _rec):
+            continue
+        _notes = [n for n in (_rec.get("notes") or []) if isinstance(n, str)]
+        _rec["unattributed_block"] = (
+            "BLOCKED with no *_block reason recorded — the notes below are the "
+            "only evidence retained: " + ("; ".join(_notes[:3]) if _notes
+                                          else "(none)"))
+        print(f"cvdp_gate: WARNING {_rec.get('id')} blocked without a recorded "
+              f"reason", file=sys.stderr)
+
     if args.report:
         Path(args.report).write_text(
             json.dumps({"total": len(records), "passed": len(passed),
