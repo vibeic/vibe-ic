@@ -200,7 +200,7 @@ def test_flat_multifile_emit_carries_hygiene_fix(tmp_path):
     comp = json.dumps({"rtl/foo.sv": foo, "rtl/bar.sv": bar})
     ok, out_rec, entry = G.gate_record(
         {"id": "x", "completion": comp}, tmp_path,
-        expected_files=["rtl/foo.sv", "rtl/bar.sv"])
+        response_files=["rtl/foo.sv", "rtl/bar.sv"])
     assert ok and entry["verdict"] == "PASS", entry
     emit = out_rec["completion"]
     # the power-up-determinism `initial` block --fix inserts must reach the emit

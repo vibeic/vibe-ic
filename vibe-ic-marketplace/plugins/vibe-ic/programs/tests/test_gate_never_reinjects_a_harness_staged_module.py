@@ -5,10 +5,10 @@ rewriting. It was also firing for a module the harness STAGES, and appending
 that one is a duplicate declaration: elaboration dies on `already been declared
 in this scope`.
 
-Which provided file the delivery replaces is decidable from `input.context`
-alone — the author replaces a file iff the delivery defines a module that file
-defines. `output.context` is the reference-solution field and this gate
-deliberately does not read it (`_load_expected_files_map`'s own contract).
+Which provided module owns which source file is still decided from
+`input.context` alone. The separate response-contract loader reads only the
+output path keys that the official question shows to the candidate; it never
+participates in this reinjection decision and never reads reference bodies.
 
 Measured on 302 authored CVDP completions: 3 designs failed this way.
 `cvdp_copilot_elevator_control_0033`/`0036` define `elevator_control_system` and

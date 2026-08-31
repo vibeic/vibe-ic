@@ -6,10 +6,9 @@ A hand-rolled `{id, prompt}`-only export drops `input.context`, leaving the
 blind author to re-invent an interface the hidden harness rejects. This program
 is the input-side sole-source that keeps context.
 
-POSITIVE: a record WITH input.context → exported record carries `context` with
-the exact rtl files; a from-scratch record (no context) → just `{id, prompt}`.
-NEGATIVE no-leak: the GOLDEN `output.response` / `output.context` is NEVER
-exported (clean-room — only the problem's own GIVEN input may pass through).
+POSITIVE: a record WITH input.context preserves it, and the response file-path
+keys shown by the official question are exported as a sanitized routing contract.
+NEGATIVE no-leak: GOLDEN VALUES and the harness are never exported.
 chip-AGNOSTIC: synthetic records only.
 """
 import json
@@ -55,6 +54,8 @@ def test_context_record_preserves_input_context(tmp_path):
     assert "context" in r, "input.context RTL must be preserved, not stripped"
     assert r["context"] == {
         "rtl/lfsr_8bit.sv": "module lfsr_8bit(input clk, output reg [7:0] q); endmodule"}
+    assert r["response_contract"] == {
+        "files": ["rtl/lfsr_8bit.sv"], "schema": "direct_text"}
 
 
 def test_golden_and_harness_never_leak(tmp_path):
@@ -66,8 +67,9 @@ def test_golden_and_harness_never_leak(tmp_path):
     assert "GOLDEN SOLUTION MUST NOT LEAK" not in blob
     assert "...golden..." not in blob
     assert "HARNESS MUST NOT LEAK" not in blob
-    # exported record carries ONLY id, prompt, context
-    assert set(recs[0].keys()) <= {"id", "prompt", "context"}
+    # Path keys are public routing metadata; reference values remain absent.
+    assert set(recs[0].keys()) <= {
+        "id", "prompt", "context", "response_contract"}
 
 
 def test_scratch_record_has_no_context_key(tmp_path):
@@ -76,6 +78,23 @@ def test_scratch_record_has_no_context_key(tmp_path):
     assert n_total == 1 and n_ctx == 0
     assert "context" not in recs[0]
     assert set(recs[0].keys()) == {"id", "prompt"}
+
+
+def test_multifile_response_contract_exports_paths_and_schema_only(tmp_path):
+    rec = {
+        "id": "cvdp_copilot_pair_0001",
+        "input": {"prompt": "Complete both modules.", "context": {}},
+        "output": {"context": {
+            "rtl/top.sv": "GOLDEN TOP MUST NOT LEAK",
+            "rtl/helper.sv": "GOLDEN HELPER MUST NOT LEAK",
+        }},
+    }
+    ds = _write(tmp_path, [rec])
+    exported, _, _ = EX.export_records(ds)
+    assert exported[0]["response_contract"] == {
+        "files": ["rtl/top.sv", "rtl/helper.sv"], "schema": "code_map"}
+    blob = json.dumps(exported)
+    assert "GOLDEN TOP" not in blob and "GOLDEN HELPER" not in blob
 
 
 def test_dict_branch_unwraps_content_wrapper_no_reblind(tmp_path):

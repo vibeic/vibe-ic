@@ -17,10 +17,14 @@ emit only `{id, prompt}` silently strip it (prose-only "remember the context"
 regresses — the GATE-AS-SOLE-EMIT-PATH lesson on the input side), so this program
 makes the context-complete record the SOLE export path.
 
+The official prompt builder also shows the candidate the expected response file
+names and selects direct-text versus JSON from their count.  Export those path
+KEYS as a sanitized ``response_contract``; never export the reference values.
+
 Emit (one of):
-  - a single prompts JSONL of `{id, prompt, context}` (context = the rtl-file map,
-    omitted when the record has none) — what the author / `cvdp_gate --prompts`
-    and `--dataset` plumbing consume; or
+  - a single prompts JSONL of `{id, prompt, context, response_contract}`
+    (`context` and `response_contract` omitted when absent) — what the author /
+    `cvdp_gate --prompts` and `--dataset` plumbing consume; or
   - `--batch-dir` + `--batch-size N`: the same records split into `batchNN.jsonl`
     for batch-agent fan-out.
 
@@ -90,11 +94,37 @@ def _prompt_text(rec: dict) -> str:
     return t if isinstance(t, str) else ""
 
 
+def _response_contract(rec: dict) -> Optional[dict]:
+    """Return the scorer-visible response paths/schema, never reference bytes.
+
+    Official CVDP constructs ``files = list(output.context.keys())`` before it
+    calls the model, prints those names into the question, and selects direct
+    text only for exactly one file.  Preserve that routing fact in the blind
+    export without reading a single mapping value.  Already-sanitized records
+    pass their ``response_contract.files`` through the same validation.
+    """
+    public = rec.get("response_contract")
+    files = public.get("files") if isinstance(public, dict) else None
+    if not isinstance(files, list):
+        output = rec.get("output")
+        context = output.get("context") if isinstance(output, dict) else None
+        files = list(context) if isinstance(context, dict) else None
+    if not isinstance(files, list):
+        return None
+    clean = [path for path in files if isinstance(path, str) and path]
+    if not clean:
+        return None
+    return {
+        "files": clean,
+        "schema": "direct_text" if len(clean) == 1 else "code_map",
+    }
+
+
 def export_records(dataset: Path) -> Tuple[List[dict], int, int]:
     """Read the dataset JSONL and return (author_records, n_total, n_with_ctx).
 
-    Each author record is `{id, prompt}` plus `context` (the rtl map) when the
-    source record provides one — the SOLE context-complete author input."""
+    Each author record is `{id, prompt}` plus `context` (the rtl map) and the
+    sanitized response contract when the source record provides them."""
     records: List[dict] = []
     n_ctx = 0
     for ln in dataset.read_text(errors="replace").splitlines():
@@ -113,6 +143,9 @@ def export_records(dataset: Path) -> Tuple[List[dict], int, int]:
         if ctx:
             out["context"] = ctx
             n_ctx += 1
+        contract = _response_contract(rec)
+        if contract:
+            out["response_contract"] = contract
         records.append(out)
     return records, len(records), n_ctx
 
@@ -131,7 +164,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     ap.add_argument("--dataset", required=True,
                     help="source CVDP dataset JSONL (records carry input.context)")
     ap.add_argument("--out", default=None,
-                    help="single prompts JSONL of {id, prompt, context}")
+                    help="single prompts JSONL of {id, prompt, context, "
+                         "response_contract}")
     ap.add_argument("--batch-dir", default=None,
                     help="instead of --out, split into batchNN.jsonl here")
     ap.add_argument("--batch-size", type=int, default=5,

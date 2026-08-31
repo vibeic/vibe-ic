@@ -907,21 +907,20 @@ def _load_synth_scored_map(path) -> Dict[str, bool]:
     return out
 
 
-def _load_expected_files_map(path) -> Dict[str, List[str]]:
-    """{id: [expected rtl/*.sv, …]} from a CVDP dataset JSONL, read ONLY from the
-    record's `input.context` keys (a legitimate model input).
+def _load_response_contract_map(path) -> Dict[str, List[str]]:
+    """Return ``{id: [response file, ...]}`` from scorer-visible routing data.
 
-    OFFICIAL-COMPLIANCE: the file layout that the official harness writes into
-    lives in `output.context` (the reference-solution field, values stripped in
-    the public set) and in the harness `.env` VERILOG_SOURCES — BOTH are held back
-    from the model (README_NON_AGENTIC; paper §2). So the gate NO LONGER reads
-    `output.context`. For a MODIFY-style multi-file problem the deliverable layout
-    is carried by `input.context` (the existing rtl/*.sv the author is handed —
-    provided to the model), which is the compliant source used here. A brand-new
-    multi-file design whose file layout is stated nowhere in prompt+context is an
-    ACCEPTED under-specification floor: the gate cannot split it and emits a bare
-    blob (the author should emit a `{"code":[…]}` code-dict when the prompt implies
-    separate files). chip-AGNOSTIC: pure file-path structure."""
+    CVDP's official ``dataset_processor.py`` takes the *keys* of
+    ``output.context`` before authoring, appends ``Name the files as: [...]`` to
+    the candidate's question, and selects direct-text versus JSON from that file
+    count.  The paths are therefore part of the exam question's response
+    contract, while the mapping VALUES remain the held-back reference solution.
+    Read keys only; never inspect or copy a value.
+
+    A sanitized export may carry the same public contract as
+    ``response_contract.files`` so the gate does not need the full dataset.
+    Unknown contracts are omitted rather than guessed from module skeletons.
+    """
     out: Dict[str, List[str]] = {}
     p = Path(path)
     if not p.is_file():
@@ -937,14 +936,20 @@ def _load_expected_files_map(path) -> Dict[str, List[str]]:
         if not isinstance(d, dict):
             continue
         rid = d.get("id")
-        ic = (d.get("input") or {}).get("context") \
-            if isinstance(d.get("input"), dict) else None
-        if rid is None or not isinstance(ic, dict):
+        if rid is None:
             continue
-        rtl = [k for k in ic
-               if isinstance(k, str) and k.lower().endswith(_RTL_SUFFIXES)]
-        if len(rtl) > 1:                      # only multi-file ids are relevant
-            out[str(rid)] = sorted(rtl)
+        contract = d.get("response_contract")
+        files = contract.get("files") if isinstance(contract, dict) else None
+        if not isinstance(files, list):
+            output = d.get("output")
+            context = output.get("context") if isinstance(output, dict) else None
+            files = list(context) if isinstance(context, dict) else None
+        if not isinstance(files, list):
+            continue
+        clean = [str(k) for k in files
+                 if isinstance(k, str) and k.lower().endswith(_RTL_SUFFIXES)]
+        if clean:
+            out[str(rid)] = clean
     return out
 
 
@@ -1443,10 +1448,103 @@ def _name_aware_split(combined: str, rtl_files: List[str]) -> Dict[str, str]:
     return result
 
 
+def _rtl_semantic_bytes(text: str) -> str:
+    """Remove comments and layout whitespace while preserving every RTL token.
+
+    String bytes (including escapes), identifiers, literals, and operators stay
+    exact.  This is intentionally stricter than synthesis equivalence: it is
+    used only to identify an unchanged ``input.context`` pass-through module.
+    """
+    out: List[str] = []
+    i = 0
+    while i < len(text):
+        if text.startswith("//", i):
+            end = text.find("\n", i + 2)
+            i = len(text) if end < 0 else end + 1
+            continue
+        if text.startswith("/*", i):
+            end = text.find("*/", i + 2)
+            i = len(text) if end < 0 else end + 2
+            continue
+        ch = text[i]
+        if ch.isspace():
+            i += 1
+            continue
+        if ch == '"':
+            start = i
+            i += 1
+            while i < len(text):
+                if text[i] == "\\" and i + 1 < len(text):
+                    i += 2
+                    continue
+                i += 1
+                if text[i - 1] == '"':
+                    break
+            out.append(text[start:i])
+            continue
+        out.append(ch)
+        i += 1
+    return "".join(out)
+
+
+def _drop_unchanged_context_siblings(
+        combined: str,
+        response_files: Optional[List[str]],
+        provided_context_by_path: Optional[Dict[str, str]]) -> str:
+    """Drop re-inlined context modules that are not response targets.
+
+    A single-output modify problem may arrive as a blob containing the changed
+    target plus byte-equivalent copies of separately provided context siblings.
+    Keeping those copies duplicates modules at official elaboration.  Remove a
+    module only when its owning input-context path is *not* in the public
+    response contract and its semantic bytes are identical; any token change,
+    ambiguous ownership, or missing contract is a no-op.
+    """
+    if not response_files or not provided_context_by_path:
+        return combined
+    response_set = set(_rtl_only(response_files))
+    if not response_set:
+        return combined
+    authored = _parse_modules(combined)
+    if not authored:
+        return combined
+    drop_names: set = set()
+    ownership: Dict[str, Tuple[str, str]] = {}
+    ambiguous: set = set()
+    for path, source in provided_context_by_path.items():
+        if path in response_set or not str(path).lower().endswith(_RTL_SUFFIXES):
+            continue
+        for name, body in _parse_modules(source).items():
+            if name in ownership:
+                ambiguous.add(name)
+            else:
+                ownership[name] = (path, body)
+    for name, body in authored.items():
+        if name in ambiguous or name not in ownership:
+            continue
+        if _rtl_semantic_bytes(body) == _rtl_semantic_bytes(ownership[name][1]):
+            drop_names.add(name)
+    if not drop_names:
+        return combined
+    mask = _mask_code(combined)
+    spans: List[Tuple[int, int]] = []
+    for m in re.finditer(r"\bmodule\s+([A-Za-z_]\w*)", mask):
+        if m.group(1) not in drop_names:
+            continue
+        em = re.search(r"\bendmodule\b", mask[m.end():])
+        if em:
+            spans.append((m.start(), m.end() + em.end()))
+    for start, end in reversed(spans):
+        combined = combined[:start] + combined[end:]
+    return combined
+
+
 def _emit_or_split(combined: str,
-                   expected_files: Optional[List[str]],
-                   context_derived: bool = False) -> str:
-    """Return the completion bytes to emit. For a MULTI-FILE problem the emit is
+                   response_files: Optional[List[str]],
+                   provided_context_by_path: Optional[Dict[str, str]] = None) -> str:
+    """Emit bytes according to the scorer-visible response-file contract.
+
+    For a MULTI-FILE problem the emit is
     the official `{"code":[{path:src},…]}` envelope — NEVER a bare blob, which the
     scorer would write into EACH expected slot → duplicate-module FAIL. When a
     clean per-module split exists it is used; otherwise a NAME-AWARE split places
@@ -1454,32 +1552,23 @@ def _emit_or_split(combined: str,
     positional fallback only when name-matching cannot apply. For the dominant
     single-file (0/1 expected rtl) shape the bare blob is emitted unchanged.
 
-    `context_derived` (set by gate_record) means the `expected_files` come from
-    `input.context` — i.e. they are pass-through sibling files the harness ALSO
-    compiles from its own copy. In that mode a modify/lint completion that
-    correctly authors ONLY the edited target (siblings instantiated, not
-    re-emitted — the context-sibling no-inline rule) leaves the other slots empty.
-    Two corrections then apply, BOTH verified against the official local_import
-    scorer (which writes the response VERBATIM to the single TOPLEVEL file and
-    does NOT decode a `{"code":[…]}` envelope):
-      1. DROP empty slots — an empty `rtl/<sibling>.sv` OVERWRITES the harness's
-         real sibling in VERILOG_SOURCES → `Can't resolve module reference` FAIL.
-      2. If exactly ONE authored file remains, emit its BARE RTL — the scorer
-         stages it to TOPLEVEL and keeps the context siblings; an envelope would
-         land as literal text in TOPLEVEL.sv and break elaboration.
-    Without `context_derived` (a genuine multi-OUTPUT deliverable, or a direct
-    caller) the lossless envelope is preserved unchanged."""
-    rtl_files = _rtl_only(expected_files) if expected_files else []
+    ``response_files`` is routing metadata shown to the candidate by the
+    official prompt builder; it is not inferred from input-context count.
+    ``provided_context_by_path`` is independent provenance used only to avoid
+    emitting empty/unchanged replacements for files already provided.  Even if
+    only one authored file remains, a multi-file response contract MUST retain
+    the JSON envelope — schema and provenance are different facts.
+    """
+    combined = _drop_unchanged_context_siblings(
+        combined, response_files, provided_context_by_path)
+    rtl_files = _rtl_only(response_files) if response_files else []
     if len(rtl_files) > 1:
-        split = _split_blob_to_expected(combined, expected_files)
+        split = _split_blob_to_expected(combined, response_files)
         if split is None:
             split = _name_aware_split(combined, rtl_files)
-        if context_derived:
-            split = {k: v for k, v in split.items() if v and v.strip()}
-            if len(split) == 1:
-                return next(iter(split.values()))
-            if not split:
-                return combined
+        provided = set(provided_context_by_path or {})
+        split = {k: v for k, v in split.items()
+                 if v and v.strip() or k not in provided}
         return json.dumps({"code": [{k: v} for k, v in split.items()]},
                           ensure_ascii=False)
     return combined
@@ -1488,8 +1577,10 @@ def _emit_or_split(combined: str,
 def gate_record(rec: Dict, workdir: Path,
                 prompt_text: Optional[str] = None,
                 synth_scored: Optional[bool] = None,
-                expected_files: Optional[List[str]] = None,
-                ctx_rtl_texts: Optional[List[str]] = None) -> Tuple[bool, Dict, Dict]:
+                response_files: Optional[List[str]] = None,
+                ctx_rtl_texts: Optional[List[str]] = None,
+                provided_context_by_path: Optional[Dict[str, str]] = None,
+                ) -> Tuple[bool, Dict, Dict]:
     """Gate one {id, completion} record → (ok, out_record, report_entry).
 
     Hygiene runs PER CODE FENCE (each fence body is fixed separately — a
@@ -1615,7 +1706,8 @@ def gate_record(rec: Dict, workdir: Path,
             # gate COMPILED == the bytes the scorer compiles from the emit.
             # MULTI-FILE split (when --dataset names >1 expected file) takes
             # precedence over the single-file bare normalize; else bare.
-            emitted = _emit_or_split(combined, expected_files, context_derived=True)
+            emitted = _emit_or_split(
+                combined, response_files, provided_context_by_path)
             entry["emit_format"] = (
                 "json_dict (multi-file split from blob)"
                 if emitted is not combined and emitted != combined
@@ -1640,7 +1732,8 @@ def gate_record(rec: Dict, workdir: Path,
         out_rec = dict(rec)
         # always route through the multi-file splitter (a single bare blob for a
         # multi-file problem must be split); for single-file it returns `fixed`.
-        emitted = _emit_or_split(fixed, expected_files, context_derived=True)
+        emitted = _emit_or_split(
+            fixed, response_files, provided_context_by_path)
         if emitted != code:
             out_rec["completion"] = emitted
         return True, out_rec, entry
@@ -1681,7 +1774,8 @@ def gate_record(rec: Dict, workdir: Path,
     # Unconditional (not gated on a hygiene diff): an unchanged fenced draft was
     # the dominant ELAB_ERROR shape — it kept the fence verbatim. MULTI-FILE
     # problems route through the splitter (one module per expected file).
-    out_rec["completion"] = _emit_or_split(combined, expected_files, context_derived=True)
+    out_rec["completion"] = _emit_or_split(
+        combined, response_files, provided_context_by_path)
     # ORGANIC v1.2.45 — emit-side hang hint (RTL BYTE-EQUIVALENT: completion
     # is unchanged; ONLY `out_rec["hang_predicted"]` / `hang_reason` /
     # `hang_signatures` carry the tag). The scorer reads verdict-fields
@@ -3576,16 +3670,15 @@ def main(argv=None) -> int:
               "any id — the yosys-smoke synth-timeout fail-safe will BLOCK every "
               "timeout (cannot confirm a problem is non-synth-scored).",
               file=sys.stderr)
-    # MULTI-FILE expected-file map (convergence 2026-06-21) — {id: [rtl files]}
-    # for ids whose official deliverable spans >1 rtl/*.sv. Lets the gate SPLIT a
-    # single-blob completion into one file per expected path so the scorer does
-    # not duplicate every module into every slot (duplicate-declaration FAIL).
-    # Only --dataset carries output.context; --prompts typically does not.
-    expected_files_map: Dict[str, List[str]] = {}
-    for _ef_src in (args.dataset, args.prompts):
-        if _ef_src:
-            for _rid, _efs in _load_expected_files_map(_ef_src).items():
-                expected_files_map.setdefault(_rid, _efs)
+    # Scorer-visible response contract — the official prompt builder shows these
+    # filenames to the candidate and chooses direct-text vs JSON from their count.
+    # Prefer a sanitized --prompts response_contract; the full dataset supplies
+    # the same public keys when score_one is the entry. Never read output values.
+    response_files_map: Dict[str, List[str]] = {}
+    for _contract_src in (args.prompts, args.dataset):
+        if _contract_src:
+            for _rid, _files in _load_response_contract_map(_contract_src).items():
+                response_files_map.setdefault(_rid, _files)
     # ORGANIC #705 — optional per-id latency specs the gate ENFORCES (measured
     # vs spec literal) as a pre-emit BLOCK.
     latency_specs = (_load_latency_specs(args.latency_specs)
@@ -3632,8 +3725,10 @@ def main(argv=None) -> int:
             ok, out_rec, entry = gate_record(
                 rec, wd, prompt_text=prompts.get(str(rec.get("id"))),
                 synth_scored=synth_scored_map.get(str(rec.get("id"))),
-                expected_files=expected_files_map.get(str(rec.get("id"))),
-                ctx_rtl_texts=context_rtl.get(str(rec.get("id"))))
+                response_files=response_files_map.get(str(rec.get("id"))),
+                ctx_rtl_texts=context_rtl.get(str(rec.get("id"))),
+                provided_context_by_path=context_rtl_by_path.get(
+                    str(rec.get("id"))))
             if _port_renames:
                 # record the interface-conformance port renames in the report.
                 entry["port_aligned"] = dict(_port_renames)
