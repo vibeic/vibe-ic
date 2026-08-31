@@ -2144,15 +2144,18 @@ def build_design_deck(project: Path, block: str, pdk_lib: str, corner: str,
     # so it is recorded rather than refused — but never silently.
     info["model_lib_path_changed"] = declared_lib != pdk_lib
 
+    restamped = [0]
+
     def _restamp(m: "re.Match") -> str:
         # Only the process-corner card this step owns is re-stamped; a
         # companion device-class card (RES/CAP/…) keeps A3's binding verbatim.
         if Path(m.group(1)).name == Path(pdk_lib).name:
+            restamped[0] += 1
             return f".lib {pdk_lib} {corner}"
         return m.group(0)
 
     deck, _nseen = _LIB_CARD_RE.subn(_restamp, deck)
-    info["lib_cards_restamped"] = 1
+    info["lib_cards_restamped"] = restamped[0]
     info["lib_cards_kept"] = len(companions)
     deck, applied = stamp_temp_card(deck, temp_c)
     info.update(applied)
