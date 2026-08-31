@@ -513,6 +513,16 @@ def emit_l_doc_skeleton(l_doc_code: str,
         resolved = ic_class if ic_class else "unknown"
     spec = _tx.l_doc_spec(l_doc_code)
     fields_template = _skeleton_fields_for(l_doc_code)
+    # stamp2 / l_doc_field_producer_check — `sdc_constraints_path` was a key
+    # this emitter wrote and nothing ever populated, while the flow's own SDC
+    # ground truth (`sdc_constraints.collect_sdc_files`) was on disk at emit
+    # time. Populate it from the design's OWN staged file; a project staging
+    # no SDC keeps the honest null. Keyed on the template rather than the
+    # code spelling so every L19 emission path gets it.
+    if "sdc_constraints_path" in fields_template and project_dir is not None:
+        staged = _staged_sdc_rel(Path(project_dir))
+        if staged is not None:
+            fields_template["sdc_constraints_path"] = staged
     hints = _extraction_hints_for(l_doc_code)
     return {
         "doc_id": spec.code,
@@ -526,6 +536,36 @@ def emit_l_doc_skeleton(l_doc_code: str,
         "emitted_by": _pmd.emitted_by(
             "phase1_post_process.emit_l_doc_skeleton"),
     }
+
+
+def _staged_sdc_rel(project_dir: Path) -> Optional[str]:
+    """Project-relative posix path of the design's own primary staged SDC.
+
+    `sdc_constraints.collect_sdc_files` is the ONE definition of the staged
+    constraints ground truth (`input/constraints/` first, then
+    `input/reference_flow/`), and phase3's synth step consumes that list in
+    that order — so the path recorded here names the file the flow will
+    actually read first. Never invents: the value is a file that exists at
+    emit time, so the L19-4 dangling-path advisory cannot fire on a produced
+    value. Returns None when the design stages no SDC, or when the staged
+    file resolves outside the project (a symlinked stage must not leak an
+    absolute foreign path into a published L-doc).
+    """
+    try:
+        from sdc_constraints import collect_sdc_files
+    except ImportError:
+        return None
+    try:
+        files = collect_sdc_files(project_dir)
+    except OSError:
+        return None
+    if not files:
+        return None
+    try:
+        return (files[0].resolve()
+                .relative_to(project_dir.resolve()).as_posix())
+    except (ValueError, OSError):
+        return None
 
 
 def _skeleton_fields_for(l_doc_code: str) -> Dict[str, Any]:

@@ -277,3 +277,48 @@ class TestDoctrineCompliance:
         d = rep.as_dict()
         assert d["emitted_by"] == \
             f"phase1_post_process v{shipped_plugin_version()}"
+
+
+class TestL19StagedSdcPath:
+    """stamp2 / l_doc_field_producer_check — `sdc_constraints_path` was a key
+    the skeleton emitter wrote and nothing ever populated, while the staged
+    ground truth (`sdc_constraints.collect_sdc_files`) was already on disk at
+    emit time. The producer now records the design's OWN staged file; it
+    still never invents one."""
+
+    def _proj(self, tmp_path, *rel_sdcs):
+        proj = tmp_path / "proj"
+        for rel in rel_sdcs:
+            f = proj / rel
+            f.parent.mkdir(parents=True, exist_ok=True)
+            f.write_text("create_clock -name clk -period 10 [get_ports clk]\n")
+        proj.mkdir(parents=True, exist_ok=True)
+        return proj
+
+    def test_staged_sdc_is_recorded_project_relative(self, tmp_path):
+        proj = self._proj(tmp_path, "input/constraints/design.sdc")
+        sk = mod.emit_l_doc_skeleton("L19", "unknown", project_dir=proj)
+        assert sk["fields"]["sdc_constraints_path"] == \
+            "input/constraints/design.sdc"
+        # The produced value must be resolvable exactly the way the L19-4
+        # advisory resolves it — `project / path` exists.
+        assert (proj / sk["fields"]["sdc_constraints_path"]).is_file()
+
+    def test_no_staged_sdc_keeps_the_honest_null(self, tmp_path):
+        proj = self._proj(tmp_path)
+        sk = mod.emit_l_doc_skeleton("L19", "unknown", project_dir=proj)
+        assert sk["fields"]["sdc_constraints_path"] is None
+
+    def test_priority_order_matches_the_consumer(self, tmp_path):
+        # input/constraints/ outranks input/reference_flow/ — the same
+        # order `sdc_constraints.collect_sdc_files` hands phase3 synth.
+        proj = self._proj(tmp_path,
+                          "input/reference_flow/ref.sdc",
+                          "input/constraints/design.sdc")
+        sk = mod.emit_l_doc_skeleton("L19", "unknown", project_dir=proj)
+        assert sk["fields"]["sdc_constraints_path"] == \
+            "input/constraints/design.sdc"
+
+    def test_no_project_dir_is_unchanged(self):
+        sk = mod.emit_l_doc_skeleton("L19", "unknown")
+        assert sk["fields"]["sdc_constraints_path"] is None
