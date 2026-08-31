@@ -75,7 +75,7 @@ _HERE = Path(__file__).resolve().parent
 if str(_HERE) not in sys.path:
     sys.path.insert(0, str(_HERE))
 
-import cvdp_atomic_bridge as _bridge  # noqa: E402  INTERFACE + module-name source
+import record_prompt_context_bridge as _bridge  # noqa: E402  INTERFACE + module-name source
 
 Port = Tuple[str, int]
 
@@ -572,7 +572,7 @@ _ALLCAPS_PARAM_RE = re.compile(r"^[A-Z][A-Z0-9_]*$")
 
 def _pick_io_pair(record: dict, top: str) -> Optional[Tuple[str, str]]:
     """The single (data-in, data-out) port pair from the PROMPT+CONTEXT interface
-    (`cvdp_atomic_bridge.extract_interface`) — NOT the cocotb harness (OFF-LIMITS
+    (`record_prompt_context_bridge.extract_interface`) — NOT the cocotb harness (OFF-LIMITS
     oracle). A clean Hamming encoder/decoder is exactly 1 non-sequential input and
     1 non-sequential output; anything else SKIPs. Mirrors the compliant
     `crc_synth.solve` interface-source pattern (prompt+context only)."""

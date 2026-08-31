@@ -7,7 +7,7 @@ power-of-two-positional layout with a redundant LSB), DERIVES the standard
 Hamming parity coverage from k/p (never reading a golden body), and emits the
 XOR-tree encoder or the syndrome single-error-correcting decoder. It is
 CVDP-COMPLIANT: the module NAME and the port INTERFACE both come from
-`input.prompt`/`input.context` via `cvdp_atomic_bridge` (exactly like `crc_synth`),
+`input.prompt`/`input.context` via `record_prompt_context_bridge` (exactly like `crc_synth`),
 NEVER from the OFF-LIMITS cocotb harness / `.env` TOPLEVEL.
 
 POSITIVE: the real-shaped (7,4) encoder and decoder records PARSE, EMIT, and the
@@ -49,7 +49,7 @@ if str(PROG) not in sys.path:
     sys.path.insert(0, str(PROG))
 
 import hamming_synth as H  # noqa: E402
-import cvdp_atomic_bridge as CB  # noqa: E402  compliant name+interface source
+import record_prompt_context_bridge as CB  # noqa: E402  compliant name+interface source
 from _hostpaths import corpus_path  # noqa: E402
 
 _HAS_IVERILOG = shutil.which("iverilog") is not None and shutil.which("vvp") is not None
@@ -64,8 +64,8 @@ def _record(prompt: str, top: str, in_sig: str = "data_in",
             params=None, tb_name: str = "tx_test") -> dict:
     """A CVDP-COMPLIANT record: the module NAME and the port INTERFACE both live in
     `input.prompt` — the ONLY model-visible surface. `hamming_synth.solve` recovers
-    the name via `cvdp_atomic_bridge.toplevel_name` (prompt/context) and the ports via
-    `cvdp_atomic_bridge.extract_interface` (a prompt `### Inputs:`/`### Outputs:`
+    the name via `record_prompt_context_bridge.toplevel_name` (prompt/context) and the ports via
+    `record_prompt_context_bridge.extract_interface` (a prompt `### Inputs:`/`### Outputs:`
     block, prose, or a test-case table) — NEVER the cocotb `dut.<sig>` harness or the
     `.env` TOPLEVEL, which are the hidden test HARNESS = OFF-LIMITS oracle. Mirrors
     the compliant `crc_synth.solve` interface-source pattern.

@@ -6,7 +6,7 @@ the spec explicitly states wrapping/modulo/ring-counter behaviour.
 This is an AI-recovered, spec-faithful GENRE convention delivered through the
 ALREADY-WIRED #733 lessons-consumption path: it is authored as an ACTIVE
 `### Skill:` section in `agents/ic-expert-agent.md` (which
-`benchmark_dispatch.py --setup` renders into each run's `lessons.md` via
+the general solve initializer renders into each run's `lessons.md` via
 `_render_lesson_digest`), and the keyword `saturating counter / no upper limit
 / cannot overflow` is added to the genre keyword list in BOTH Shape-B and
 Shape-C blind instructions so the #733 consume directive routes a matching spec

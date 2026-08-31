@@ -459,7 +459,7 @@ def _loads_from_skills(call: ast.Call, names: dict) -> bool:
     and it was wrong in the direction that matters least but costs most: four
     modules flagged that load `programs/backlog_sanitize_check.py`,
     `programs/enhancement_emit.py`, `programs/gen_skill_inventory.py` and
-    `benchmark/cvdp_task_router.py` and merely NAME a SKILL.md in an assertion.
+    a removed benchmark-specific router and merely NAME a SKILL.md in an assertion.
     Measured: each leaves 0 `.pyc` under `skills/`. Demanding a suppression
     there would have been four edits that fix nothing, and the habit of adding
     a token to silence a check is how a check stops meaning anything.

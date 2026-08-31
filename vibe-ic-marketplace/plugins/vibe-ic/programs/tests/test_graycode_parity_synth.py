@@ -1,6 +1,6 @@
 """test_graycode_parity_synth.py — the DETERMINISTIC gray-code / parity solver.
 
-graycode_parity_synth.solve(record) reuses cvdp_atomic_bridge for the module NAME
+graycode_parity_synth.solve(record) reuses record_prompt_context_bridge for the module NAME
 (from the prompt) and the port NAMES via extract_interface (prompt+context ONLY —
 `### Inputs:`/`### Outputs:` block / skeleton header / test table; NEVER the hidden
 harness or golden), then recognizes the gray-conversion / parity OPERATION from the
@@ -477,7 +477,7 @@ def test_chip_agnostic_parity_even_arbitrary_name():
 # REAL dataset records (gated) — COMPLIANCE invariant (prompt+context ONLY).
 #
 # The solver now sources the interface EXCLUSIVELY from the model-visible surface
-# (`input.prompt` + `input.context`) via the frozen `cvdp_atomic_bridge.extract_interface`;
+# (`input.prompt` + `input.context`) via the frozen `record_prompt_context_bridge.extract_interface`;
 # it NEVER reads the hidden harness (cocotb `dut.<sig>`, `.env`) or golden — those
 # are OFF-LIMITS oracle.
 #
@@ -487,7 +487,7 @@ def test_chip_agnostic_parity_even_arbitrary_name():
 # `input.context`. The frozen `extract_interface` parses `input.context` skeletons,
 # prose `### Inputs:`/`### Outputs:` blocks, and test-case tables — but NOT an
 # in-prompt code skeleton — so those two now HONESTLY SKIP rather than fall back to
-# the harness. (This is NOT a runtime regression: `cvdp_atomic_bridge.solve` strips
+# the harness. (This is NOT a runtime regression: `record_prompt_context_bridge.solve` strips
 # the harness BEFORE dispatch, so the old cocotb read already returned nothing and
 # these records already skipped at runtime; only the non-production direct-call with
 # a full record ever "emitted" — via the now-removed OFF-LIMITS harness read.)

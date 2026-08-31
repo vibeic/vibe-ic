@@ -153,8 +153,7 @@ def assemble(prompt: str, iface: Optional[List[Dict[str, Any]]], target: Optiona
     the context-sibling collision advisory.
 
     `output_target` names the artefact the agent is asked to author. It defaults
-    to `rtl.sv` — the RTL-authoring hand-off this module was built for, and the
-    only one that existed while `benchmark/cvdp_task_loop` was the sole caller.
+    to `rtl.sv` — the RTL-authoring hand-off this module was built for.
     The assembly itself (retrieve, render the two INDEPENDENT digests, write the
     contract, emit the descriptor) is target-agnostic, so the Phase-1 expert
     PARSE track reuses it verbatim with `l_doc_expectations.json`. Same dual-

@@ -367,7 +367,7 @@ def test_solver_wired_into_bridge():
 
 
 def test_bridge_solve_emits_both_new_records():
-    import cvdp_atomic_bridge as B
+    import record_prompt_context_bridge as B
     for rid in ("cvdp_copilot_convolutional_encoder_0010",
                 "cvdp_copilot_moving_average_0005"):
         r = _find_dataset_record(rid)

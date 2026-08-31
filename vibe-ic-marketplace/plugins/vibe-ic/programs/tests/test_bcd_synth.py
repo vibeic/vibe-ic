@@ -3,7 +3,7 @@
 bcd_synth.solve(record) recognizes a single BCD primitive (BCD adder /
 binary->BCD double-dabble / BCD->binary) from the prompt prose, pins the
 digit-count/bit-width from the prose or the embedded test-case table (reusing the
-shipped cvdp_atomic_bridge for the harness TOPLEVEL + interface), and emits the
+shipped record_prompt_context_bridge for the harness TOPLEVEL + interface), and emits the
 CORRECT decimal-arithmetic RTL named per TOPLEVEL — NEVER a plain binary add.
 
 POSITIVE (host-verified via iverilog when available):

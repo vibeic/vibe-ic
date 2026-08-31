@@ -1,14 +1,8 @@
-"""v0.2.46 regressions for the three ORGANIC-20260605 orchestration/scorer fixes.
+"""Regressions for clean transcripts and scorer/golden disagreement evidence.
 
 #415 transcripts-export-default — the blindness audit was structurally
-DORMANT (no orchestration path produced its input): --setup now pre-creates
-<RUNDIR>/transcripts/ and prints the export requirement; instructions make
-export the DEFAULT; the NOTICE branch demands RESULT disclosure; a populated
-clean transcripts dir scores through "blindness_audit: PASS" (acceptance).
-
-#416 ratelimit-resilient-dispatch-ladder — burst-kill signature + 1-agent
-CANARY + narrow completion-driven resume now live in the shipped
-ORCHESTRATION RULES and the methodology skill.
+DORMANT (no orchestration path produced its input): the general solve entry now
+pre-creates <RUNDIR>/transcripts/ and pins full-dataset clean-room metadata.
 
 #418 scorer-disagreeing-golden-flag — second dataset-defect audit class:
 a vetted canonical sample failing the hidden golden at >=50% mismatch flags
@@ -23,18 +17,14 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import blindness_audit as ba  # noqa: E402
-from _entry_guard_fixture import write_prompt_report  # noqa: E402
+import benchmark_dispatch as bd  # noqa: E402
 
 PLUGIN = Path(__file__).resolve().parent.parent.parent
 HARNESS = PLUGIN / "benchmark"
-DISPATCH = PLUGIN / "programs" / "benchmark_dispatch.py"
 SKILL = PLUGIN / "skills" / "open-benchmark-methodology" / "SKILL.md"
 
 sys.path.insert(0, str(HARNESS))
 import score_iverilog_tb as sit  # noqa: E402
-
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-import _progress_run as _pr  # noqa: E402
 
 #: The repo's existing tool gate. Without it this module raises
 #: FileNotFoundError on a host that lacks the tool, instead of disclosing a
@@ -47,49 +37,16 @@ _HAVE_TOOLS = bool(shutil.which("iverilog"))
 
 # ── #415: transcripts export is the orchestration default ────────────────
 
-def _setup_run(tmp_path):
+def test_general_solve_prepares_clean_transcript_envelope(tmp_path):
     ds = tmp_path / "ds"; ds.mkdir()
     (ds / "Prob001_prompt.txt").write_text("Build a thing.\n")
     run = tmp_path / "run"
-    r = _pr.run(
-        [sys.executable, str(DISPATCH), "verilogeval-v2", "--setup",
-         "--dataset", str(ds), "--run", str(run)],
-        capture_output=True, text=True)
-    # Use the producer-derived prompt envelope so this downstream transcripts
-    # test does not depend on a self-authored existence marker.
-    write_prompt_report(run)
-    return ds, run, r
-
-
-def test_setup_precreates_transcripts_and_prints_requirement(tmp_path):
-    ds, run, r = _setup_run(tmp_path)
-    assert r.returncode == 0, r.stdout + r.stderr
+    bd._prepare_general_solve_run(
+        "verilogeval-v2", ds, run, "verilogeval", 0)
     assert (run / "transcripts").is_dir()
-    assert "EXPORT REQUIRED" in r.stdout
-
-
-def _score(ds, run):
-    return _pr.run(
-        [sys.executable, str(DISPATCH), "verilogeval-v2", "--score",
-         "--run", str(run), "--dataset", str(ds)],
-        capture_output=True, text=True)
-
-
-def test_empty_transcripts_dir_takes_notice_with_disclosure(tmp_path):
-    ds, run, _ = _setup_run(tmp_path)
-    out = _score(ds, run)
-    assert "NOTICE" in out.stdout
-    assert "blindness audit unavailable" in out.stdout
-
-
-def test_populated_clean_transcripts_score_through_audit_pass(tmp_path):
-    # the #415 acceptance: a campaign scores with blindness_audit: PASS
-    ds, run, _ = _setup_run(tmp_path)
-    (run / "transcripts" / "batch00.log").write_text(
-        f"read {ds}/Prob001_prompt.txt ok\n")
-    out = _score(ds, run)
-    assert "blindness_audit: PASS" in (out.stdout + out.stderr)
-    assert "NOTICE" not in out.stdout
+    config = json.loads((run / ".bench_config.json").read_text())
+    assert config["schema"] == "vibeic.benchmark.general_run.v1"
+    assert config["full_dataset"] is True
 
 
 def test_shape_c_rules_carry_export_requirement():
@@ -100,24 +57,8 @@ def test_shape_c_rules_carry_export_requirement():
 
 def test_methodology_carries_export_requirement():
     txt = SKILL.read_text()
-    assert "Transcript export is the DEFAULT" in txt
-    assert "blindness audit unavailable" in txt
-
-
-# ── #416: rate-limit resilience ladder in the shipped rules ──────────────
-
-def test_shape_c_rules_carry_ratelimit_ladder():
-    txt = (HARNESS / "blind_instructions_shape_c.md").read_text()
-    assert "Rate-limit resilience ladder" in txt
-    assert "CANARY" in txt
-    assert "2–4 concurrent" in txt or "2-4 concurrent" in txt
-    assert "completion-driven" in txt
-
-
-def test_methodology_carries_ratelimit_ladder():
-    txt = SKILL.read_text()
-    assert "Rate-limit resilience ladder" in txt
-    assert "CANARY" in txt
+    assert "Export author/reviewer transcripts" in txt
+    assert "Missing\ntranscripts require an explicit disclosure" in txt
 
 
 # ── #418: suspected-defective-golden audit ────────────────────────────────

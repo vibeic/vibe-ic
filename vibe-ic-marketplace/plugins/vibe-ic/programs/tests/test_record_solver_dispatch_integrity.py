@@ -2,7 +2,7 @@
 
 The UNIFIED dispatch (`spec_artifact_registry.generate_from_record`) routes a record to
 the FIRST record-level operation solver (in `_RECORD_SOLVER_NAMES` order) that fires; the
-text-level registry `generate()` is the fall-through. `cvdp_atomic_bridge.solve` is the
+text-level registry `generate()` is the fall-through. `record_prompt_context_bridge.solve` is the
 thin driver that calls `generate_from_record` (supplying the record→ports text path).
 The INVARIANT this file pins:
 
@@ -40,7 +40,7 @@ PROG = Path(__file__).resolve().parents[1]
 if str(PROG) not in sys.path:
     sys.path.insert(0, str(PROG))
 
-import cvdp_atomic_bridge as B  # noqa: E402
+import record_prompt_context_bridge as B  # noqa: E402
 import spec_artifact_registry as R  # noqa: E402
 from _hostpaths import corpus_path  # noqa: E402
 
@@ -50,7 +50,7 @@ _GP_ID = "cvdp_copilot_Carry_Lookahead_Adder_0001"
 
 
 def _strip_oracle(record: dict) -> dict:
-    """Mirror `cvdp_atomic_bridge._strip_oracle`: a COPY of the record with the
+    """Mirror `record_prompt_context_bridge._strip_oracle`: a COPY of the record with the
     OFF-LIMITS oracle removed — the hidden test harness (`record["harness"]`:
     cocotb TB, `.env`) and the golden solution (`record["output"]`). The dispatch
     (`B.solve`) strips these up front so the deterministic solvers see ONLY

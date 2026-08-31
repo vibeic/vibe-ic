@@ -2,7 +2,7 @@
 """graycode_parity_synth.py — a DETERMINISTIC solver for the CVDP gray-code
 and parity families.
 
-WHY: the existing `cvdp_atomic_bridge.py` routes atomic-noun CVDP prompts through
+WHY: the existing `record_prompt_context_bridge.py` routes atomic-noun CVDP prompts through
 the `spec_artifact_registry` arithmetic/comparator/mux canonicals, but the
 registry has NO gray<->binary converter canonical, and these CVDP converters are
 PARAMETERIZED (bus width is the `WIDTH` parameter the harness overrides, NOT a
@@ -10,7 +10,7 @@ literal in the prose), so the bridge's numeric width-resolver leaves the bus
 UNRESOLVED and SKIPs. This module supplies exactly that missing deterministic
 emitter — GENERAL, §4.05 parse-or-SKIP, NO-CHEAT.
 
-REUSE of `cvdp_atomic_bridge` (all from the model-visible surface `input.prompt` +
+REUSE of `record_prompt_context_bridge` (all from the model-visible surface `input.prompt` +
 `input.context` — NEVER the hidden harness or golden, which are OFF-LIMITS oracle):
   * `toplevel_name(record)`     — the module NAME stated in the prompt.
   * `extract_interface(record, top)` — the port NAMES + directions from the prompt
@@ -63,7 +63,7 @@ _HERE = Path(__file__).resolve().parent
 if str(_HERE) not in sys.path:
     sys.path.insert(0, str(_HERE))
 
-import cvdp_atomic_bridge as _bridge  # noqa: E402  REUSE name + cocotb IO + guards
+import record_prompt_context_bridge as _bridge  # noqa: E402  REUSE name + cocotb IO + guards
 
 
 # --------------------------------------------------------------------------- #
@@ -179,7 +179,7 @@ def _bus_width_param(prompt: str) -> Optional[Tuple[str, int]]:
 # --------------------------------------------------------------------------- #
 def _io_names(record: dict, top: str) -> Optional[Tuple[List[str], List[str]]]:
     """Input / output port NAMES sourced ONLY from `input.prompt` + `input.context`
-    via `cvdp_atomic_bridge.extract_interface` — never the hidden harness (cocotb
+    via `record_prompt_context_bridge.extract_interface` — never the hidden harness (cocotb
     `dut.<sig>`, `.env`) or golden, which are OFF-LIMITS oracle. Returns
     (input_names, output_names), or None when the interface is not prompt-derivable
     (an honest §4.05 SKIP). The bus WIDTHS are NOT taken from here — they come from

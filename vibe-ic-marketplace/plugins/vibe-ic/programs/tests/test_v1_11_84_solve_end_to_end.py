@@ -70,7 +70,7 @@ def solved():
 # ── the wiring the unit tests cannot see ─────────────────────────────────────
 def test_the_front_door_has_a_verb_that_solves(solved):
     """--solve exists and produced a report. Before this it did not exist, and
-    the gap between --setup and --score was filled by hand."""
+    the old separate-scaffold-to-score gap was filled by hand."""
     assert solved["report"]["total"] == _LIMIT
 
 

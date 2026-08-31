@@ -4,7 +4,7 @@ datapath family solver.
 
 COMPLIANCE (post harness-read cleanup): the solver sources the module NAME and the
 port INTERFACE ONLY from `input.prompt` + `input.context`, via
-`cvdp_atomic_bridge.{toplevel_name,extract_interface}`. The hidden cocotb harness
+`record_prompt_context_bridge.{toplevel_name,extract_interface}`. The hidden cocotb harness
 (`dut.<sig>` test + `.env` TOPLEVEL / VERILOG_SOURCES) and the golden `output.*`
 are OFF-LIMITS oracle and are NEVER read. Every record below therefore states its
 name + interface in the PROMPT (a `` `top` `` designation + an `### Inputs:`/

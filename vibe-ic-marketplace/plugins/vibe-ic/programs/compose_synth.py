@@ -5,7 +5,7 @@ WHY (owner directive 2026-06-23): a composite CVDP "code generation" design is a
 TOP that instantiates atomic sub-blocks + glue. The cocotb scorer tests the WHOLE
 top's function. So if we (1) PARSE the structure from the prompt prose / skeleton
 HEADER / harness interface, (2) SOLVE each sub-block with the existing atomic
-solvers (cvdp_atomic_bridge + the cvdp_*_synth family), and (3) EMIT the wired top
+solvers (record_prompt_context_bridge + the cvdp_*_synth family), and (3) EMIT the wired top
 (sub-module defs + a top that instantiates + wires them), the harness passes — WITHOUT
 ever reconstructing a custom algorithm. This is the COMPOSE counterpart to the atomic
 bridge: the bridge solves ONE atomic module; this engine solves a STRUCTURED top whose
@@ -60,7 +60,7 @@ _HERE = Path(__file__).resolve().parent
 if str(_HERE) not in sys.path:
     sys.path.insert(0, str(_HERE))
 
-import cvdp_atomic_bridge as _bridge  # reuse harness/.env access + composite SKIP cues
+import record_prompt_context_bridge as _bridge  # reuse harness/.env access + composite SKIP cues
 
 
 # --------------------------------------------------------------------------- #

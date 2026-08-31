@@ -971,7 +971,7 @@ def solve(record: dict) -> Optional[str]:
     if not isinstance(record, dict):
         return None
     try:
-        import cvdp_atomic_bridge as _bridge
+        import record_prompt_context_bridge as _bridge
     except Exception:
         return None
     top = _bridge.toplevel_name(record)

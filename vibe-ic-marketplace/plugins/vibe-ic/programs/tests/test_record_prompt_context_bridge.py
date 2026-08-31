@@ -1,6 +1,6 @@
-"""test_cvdp_atomic_bridge.py — the CVDP-prose -> atomic-spec bridge.
+"""Generic visible prompt/context record bridge tests.
 
-cvdp_atomic_bridge.solve(record) reads the module name from the harness TOPLEVEL,
+record_prompt_context_bridge.solve(record) reads the module name from the harness TOPLEVEL,
 extracts the interface from the BEST available CVDP source (skeleton header /
 cocotb dut.<sig> / test-case table / prose), builds a clean port block, prepends
 it to the ORIGINAL prompt prose, and routes through spec_artifact_registry —
@@ -38,7 +38,7 @@ PROG = Path(__file__).resolve().parents[1]
 if str(PROG) not in sys.path:
     sys.path.insert(0, str(PROG))
 
-import cvdp_atomic_bridge as B  # noqa: E402
+import record_prompt_context_bridge as B  # noqa: E402
 
 
 # --------------------------------------------------------------------------- #

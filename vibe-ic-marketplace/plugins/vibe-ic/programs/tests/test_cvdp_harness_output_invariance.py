@@ -6,7 +6,7 @@ sees ONLY `input.prompt` + `input.context`. The ENTIRE hidden harness (cocotb
 `output.*` (golden/reference RTL) are OFF-LIMITS oracle.
 
 The load-bearing INVARIANT this guard pins: the deterministic CVDP solve/emit path
-(`cvdp_atomic_bridge.solve` / `toplevel_name` / `extract_interface`) must produce
+(`record_prompt_context_bridge.solve` / `toplevel_name` / `extract_interface`) must produce
 IDENTICAL results whether or not `record["harness"]` and `record["output"]` are
 present. If stripping the oracle changes the emitted RTL or the module name, the
 solver is reading the oracle — a compliance breach.
@@ -33,7 +33,7 @@ PROG = Path(__file__).resolve().parents[1]
 if str(PROG) not in sys.path:
     sys.path.insert(0, str(PROG))
 
-import cvdp_atomic_bridge as B  # noqa: E402
+import record_prompt_context_bridge as B  # noqa: E402
 from _hostpaths import corpus_path  # noqa: E402
 
 

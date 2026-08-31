@@ -29,18 +29,15 @@ Checks (chip-AGNOSTIC; no benchmark/IC name hardcoded):
      `pass_at_1.json` / `cocotb_score.json` BEFORE authoring (a contaminating
      "what failed last time" lookup) → FAIL.
 
-A run dir whose `.bench_config.json` sets `floor_only: true` is an EXPLICIT,
-user-requested opt-in (the `--floor-only` option). It still must re-author its
-selected problems blind, so checks 1/2/4 still apply; only check 3's
-`inherited_from` is permitted to name the prior run it took the FAIL list from
-(the SAMPLES must still be freshly authored, never copied).
+Partial prior-failure runs are not canonical benchmark evaluations. A config
+that sets ``floor_only`` therefore fails this guard even when its samples were
+freshly authored.
 
 Usage:
     python3 benchmark_clean_room_check.py <run_dir> [--json <out>]
-                                          [--allow-floor-only]
 
 Exit codes:
-    0  clean-room OK (or a sanctioned floor-only run with fresh samples)
+    0  clean-room full-dataset run OK
     1  contaminated — at least one violation
     2  argument / I/O error (e.g. run dir missing)
 
@@ -77,8 +74,7 @@ class CleanRoomFinding:
 
 
 def _run_creation_marker(run: Path) -> float:
-    """Reference 'run started' timestamp: the .bench_config.json mtime if
-    present (written at --setup), else the run dir's own mtime."""
+    """Reference start timestamp: general-solve config mtime, else run mtime."""
     cfg = run / ".bench_config.json"
     if cfg.is_file():
         return cfg.stat().st_mtime
@@ -113,8 +109,7 @@ def _external_symlink(p: Path, run_resolved: Path) -> bool:
         return True
 
 
-def audit(run: Path, allow_floor_only: bool = True
-          ) -> Tuple[str, List[CleanRoomFinding]]:
+def audit(run: Path) -> Tuple[str, List[CleanRoomFinding]]:
     findings: List[CleanRoomFinding] = []
     run_resolved = run.resolve()
 
@@ -126,22 +121,23 @@ def audit(run: Path, allow_floor_only: bool = True
         except (OSError, ValueError):
             cfg = {}
     floor_only = bool(cfg.get("floor_only"))
+    if floor_only or cfg.get("full_dataset") is False:
+        findings.append(CleanRoomFinding(
+            rule="PARTIAL_DATASET",
+            path=str(cfg_path),
+            detail=("the run metadata declares a partial dataset, not a full "
+                    "clean-room benchmark evaluation.")))
 
     # ── Check 3: seed/inherited config field ──────────────────────────
     for key in ("inherited_from", "seed_run", "reused_samples_from"):
         val = cfg.get(key)
         if val:
-            # floor_only runs may NAME the prior run they took the FAIL list
-            # from via inherited_from, but reused_samples_from is never ok.
-            sanctioned = (allow_floor_only and floor_only
-                          and key == "inherited_from")
-            if not sanctioned:
-                findings.append(CleanRoomFinding(
-                    rule="SEED_CONFIG",
-                    path=str(cfg_path),
-                    detail=(f".bench_config.json sets {key}={val!r} — the run "
-                            "inherited authoring state from a prior run. A "
-                            "clean-room run starts EMPTY.")))
+            findings.append(CleanRoomFinding(
+                rule="SEED_CONFIG",
+                path=str(cfg_path),
+                detail=(f".bench_config.json sets {key}={val!r} — the run "
+                        "inherited authoring state from a prior run. A "
+                        "clean-room run starts EMPTY.")))
 
     t0 = _run_creation_marker(run)
 
@@ -165,7 +161,7 @@ def audit(run: Path, allow_floor_only: bool = True
                 path=str(p),
                 detail=(f"sample mtime {mtime:.0f} predates run-dir creation "
                         f"{t0:.0f} — copied in from an earlier run rather than "
-                        "authored after --setup.")))
+                        "authored after the clean-room run began.")))
 
     # ── Check 4: prior-score read in a run/harness log ────────────────
     for log in list(run.rglob("*.log")) + list(run.rglob("harness*.txt")):
@@ -191,12 +187,6 @@ def main(argv: Optional[List[str]] = None) -> int:
                     "inherited prior samples / scores / memory (ORGANIC-20260604).")
     ap.add_argument("run_dir", help="benchmark run directory to audit")
     ap.add_argument("--json", help="write JSON report to this path")
-    ap.add_argument("--allow-floor-only", action="store_true", default=True,
-                    help="permit a floor_only run to NAME its seed run via "
-                         "inherited_from (samples must still be fresh). Default on.")
-    ap.add_argument("--no-floor-only", dest="allow_floor_only",
-                    action="store_false",
-                    help="strict: even floor_only inherited_from is a violation.")
     args = ap.parse_args(argv)
 
     run = Path(args.run_dir)
@@ -204,7 +194,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         print(f"error: run dir not found: {run}", file=sys.stderr)
         return 2
 
-    verdict, findings = audit(run, allow_floor_only=args.allow_floor_only)
+    verdict, findings = audit(run)
     report = {
         "gate": "benchmark_clean_room_check",
         "verdict": verdict,

@@ -15,7 +15,7 @@ clock-port scanner lists `rtl/` among its search roots. Every design staged at
 `<project>/rtl/` was therefore reported as arriving with NO RTL, and the exact
 mistake the docstring forbids happened silently.
 
-Measured on 302 real CVDP problems staged through `cvdp_phase1_entry.py`
+Measured on 302 real CVDP problems staged through the general IO adapter
 (which stages context RTL to `<case>/rtl/<path>`): 132 designs flipped
 `rtl_present_at_input` False->True, and the class the detector was blindest on
 -- functional_modification -- went from 0/55 correctly routed to 45/55, with
@@ -50,7 +50,7 @@ def _write(p: Path, text="module m(); endmodule\n"):
 
 # ── the defect: RTL staged at <project>/rtl/ ─────────────────────────────────
 def test_rtl_staged_at_the_project_rtl_dir_is_seen(tmp_path):
-    """THE REGRESSION. `cvdp_phase1_entry._stage_case` writes context RTL to
+    """THE REGRESSION. The general IO adapter writes supplied context RTL to
     `<case>/<relpath>`, i.e. `<case>/rtl/foo.sv`. Reading only `input/rtl/`
     reported 'no RTL' for all 55 functional_modification problems."""
     p = _project(tmp_path)

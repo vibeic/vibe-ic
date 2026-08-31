@@ -9,7 +9,7 @@
 
   (2) ADDRESS / RANGE DECODER — a stated `address -> onehot/select` map or an
       `address range -> region` map. The combinational binary->one-hot decoder is
-      ALREADY solved by the registry decoder path (cvdp_atomic_bridge), so this
+      ALREADY solved by the registry decoder path (record_prompt_context_bridge), so this
       solver covers ONLY what that path MISSES: the SEQUENTIAL (clocked) binary->
       one-hot decoder, and the genuine address-RANGE -> region/select map (a set of
       stated `[base, limit]` ranges each driving a region/select output, with a
@@ -24,12 +24,12 @@ WHY a dedicated CVDP solver (and not the existing ones):
     table; an address-RANGE decode is a set of `>=`/`<=` range COMPARISONS, not an
     enumerated case, so it is outside that solver. The registry decoder path emits
     the COMBINATIONAL binary->one-hot but has no CLOCKED variant.
-  * cvdp_atomic_bridge's cocotb-driven port extraction mis-tokenizes these shift /
+  * record_prompt_context_bridge's cocotb-driven port extraction mis-tokenizes these shift /
     decode designs (a bare SIPO has no enable/valid for the bridge to anchor on; the
     sequential decoder's registered output and reset confuse the registry op
     recognizer). So both families fall through to SKIP today.
 
-This solver reuses the shipped `cvdp_atomic_bridge` ONLY for the module-name
+This solver reuses the shipped `record_prompt_context_bridge` ONLY for the module-name
 resolver (`toplevel_name` — from input.prompt + input.context, never the hidden
 harness). It does NOT edit the bridge; it is a standalone family solver exposing the same
 `solve(record)->Optional[str]` contract as the other `cvdp_*_synth` modules (the
@@ -98,7 +98,7 @@ _SKIP_RE = re.compile(
 # --------------------------------------------------------------------------- #
 def _toplevel(record: dict) -> Optional[str]:
     try:
-        import cvdp_atomic_bridge as _bridge
+        import record_prompt_context_bridge as _bridge
         return _bridge.toplevel_name(record)
     except Exception:
         return None

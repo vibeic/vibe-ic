@@ -1,6 +1,6 @@
 """test_cvdp_complete_extract.py — the UNIFIED CVDP complete-extraction layer.
 
-cvdp_complete_extract.extract(record) composes the shipped cvdp_atomic_bridge
+cvdp_complete_extract.extract(record) composes the shipped record_prompt_context_bridge
 interface helpers + the v1.1.82 structural extractors into ONE complete spec
 dict, and assigns a per-record COMPLETENESS verdict:
   COMPLETE                  — every PROMPT/CONTEXT-declared port placed + stated

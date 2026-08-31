@@ -51,8 +51,7 @@ def test_seed_config_fails(tmp_path):
 
 
 def test_reused_samples_from_fails_even_floor_only(tmp_path):
-    # floor_only may name a seed via inherited_from, but reused_samples_from is
-    # NEVER sanctioned — samples must always be freshly authored.
+    # Partial evaluation and inherited samples are independently forbidden.
     run = _mk_run(tmp_path, {"bench": "x", "floor_only": True,
                              "reused_samples_from": "../old_run/samples"})
     verdict, findings = clr.audit(run)
@@ -60,15 +59,25 @@ def test_reused_samples_from_fails_even_floor_only(tmp_path):
     assert any(f.rule == "SEED_CONFIG" for f in findings)
 
 
-def test_floor_only_inherited_from_is_sanctioned(tmp_path):
-    # an explicit floor-only run may NAME its seed run via inherited_from,
-    # provided its samples are still authored fresh.
+def test_floor_only_inherited_from_is_rejected(tmp_path):
     run = _mk_run(tmp_path, {"bench": "x", "floor_only": True,
                              "inherited_from": "../seed_run"})
     time.sleep(0.01)
     (run / "samples" / "Prob001.sv").write_text("module m; endmodule\n")
-    verdict, findings = clr.audit(run, allow_floor_only=True)
-    assert verdict == "PASS", findings
+    verdict, findings = clr.audit(run)
+    assert verdict == "FAIL"
+    assert any(f.rule == "PARTIAL_DATASET" for f in findings)
+    assert any(f.rule == "SEED_CONFIG" for f in findings)
+
+
+def test_general_diagnostic_limit_is_not_a_canonical_run(tmp_path):
+    run = _mk_run(tmp_path, {
+        "schema": "vibeic.benchmark.general_run.v1",
+        "bench": "x", "clean_room": True, "full_dataset": False,
+    })
+    verdict, findings = clr.audit(run)
+    assert verdict == "FAIL"
+    assert any(f.rule == "PARTIAL_DATASET" for f in findings)
 
 
 def test_predated_sample_fails(tmp_path):

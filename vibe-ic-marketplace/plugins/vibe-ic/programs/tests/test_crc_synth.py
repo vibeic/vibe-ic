@@ -3,7 +3,7 @@
 crc_synth.solve(record) recognizes a stand-alone CRC generator/checker,
 PARSES the stated convention (width / polynomial / init / reflect-in / reflect-out
 / final-XOR), and emits the deterministic shift-register CRC datapath (module
-named per the harness TOPLEVEL, ports from the shipped cvdp_atomic_bridge).
+named per the harness TOPLEVEL, ports from the shipped record_prompt_context_bridge).
 
 POSITIVE: a real-shaped CRC record (width=8, POLY=0xAA, init=0, no reflect, the
 serial MSB-first `crc_reg=(crc_reg<<1)^POLY if MSB^data_in[i]` algorithm) PARSES,
@@ -52,7 +52,7 @@ def _record(prompt: str, top: str = "crc_generator",
     """A CVDP-COMPLIANT record: the module NAME and the port INTERFACE both live in
     `input.prompt` — the ONLY model-visible surface. The harness `.env` TOPLEVEL and
     the cocotb testbench are RETAINED for shape fidelity but are OFF-LIMITS oracle the
-    refactored `cvdp_atomic_bridge` never reads (name from prompt/context only,
+    refactored `record_prompt_context_bridge` never reads (name from prompt/context only,
     interface from a prompt `### Inputs:`/`### Outputs:` block, prose, or a
     test-case table — never from `dut.<sig>` or `.env`).
 

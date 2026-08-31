@@ -18,7 +18,7 @@ This module does NOT author RTL and does NOT replace the bridge's conservative
 emit gate. It is the MEASUREMENT + STRUCTURED-SPEC layer: it COMPOSES the already
 shipped pieces —
 
-  * `cvdp_atomic_bridge`  — the prompt+context interface helpers (skeleton header
+  * `record_prompt_context_bridge`  — the prompt+context interface helpers (skeleton header
     + test-case table + prose ports), the module name (`toplevel_name`, from the
     prompt/context, NEVER `.env`), composite/special-algebra cues, prose width
     resolution; and
@@ -88,7 +88,7 @@ if str(_HERE) not in sys.path:
     sys.path.insert(0, str(_HERE))
 
 # Reused (NOT modified) — interface + module-name + cue helpers.
-import cvdp_atomic_bridge as _bridge  # noqa: E402
+import record_prompt_context_bridge as _bridge  # noqa: E402
 import prose_interface_table_read as _tbl  # noqa: E402  markdown signal/direction table
 # Symbolic / parameter-expression width reader (param-expr / range-before-name /
 # param-override). A width stated as a parameter expression with a derivable

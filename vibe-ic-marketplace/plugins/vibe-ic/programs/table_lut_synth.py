@@ -17,7 +17,7 @@ VerilogEval single-output truth-table / K-map dialect, so the CVDP markdown form
 slip through. This solver EMITS the table directly: a combinational `case` (truth
 table / map) honoring the stated default.
 
-REUSE: the shipped `cvdp_atomic_bridge` supplies the INTERFACE — `toplevel_name`
+REUSE: the shipped `record_prompt_context_bridge` supplies the INTERFACE — `toplevel_name`
 (the harness `.env` TOPLEVEL the testbench binds). We import + reuse it; we never
 re-derive the harness plumbing. (We do NOT edit the bridge — this solver is a
 standalone family solver exposing the same `solve(record)->Optional[str]` shape as
@@ -55,7 +55,7 @@ _HERE = Path(__file__).resolve().parent
 if str(_HERE) not in sys.path:
     sys.path.insert(0, str(_HERE))
 
-import cvdp_atomic_bridge as _bridge  # noqa: E402  harness TOPLEVEL / interface plumbing
+import record_prompt_context_bridge as _bridge  # noqa: E402  harness TOPLEVEL / interface plumbing
 
 Port = Tuple[str, int]  # (name, width)
 

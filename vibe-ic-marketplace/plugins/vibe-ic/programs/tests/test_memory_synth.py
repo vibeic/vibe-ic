@@ -70,7 +70,7 @@ def _rec(top, prompt, *, input_context=None, rtl_path=None):
     # recover the name from the prompt+context. The interface already lives in the
     # prompt's own `### Input/Output Ports`. The harness `.env` TOPLEVEL is retained
     # for record-shape fidelity only; the refactored solver never reads it.
-    import cvdp_atomic_bridge as _B
+    import record_prompt_context_bridge as _B
     if _B.toplevel_name({"input": {"prompt": prompt,
                                    "context": input_context or {}}}) != top:
         prompt = f"Design the Verilog module `{top}`.\n\n" + prompt
@@ -108,7 +108,7 @@ def _ensure_named(rec, top):
     recoverable or when rec is None (dataset absent -> synthetic twin used)."""
     if rec is None:
         return None
-    import cvdp_atomic_bridge as _B
+    import record_prompt_context_bridge as _B
     if _B.toplevel_name(rec) != top:
         rec = json.loads(json.dumps(rec))
         rec["input"]["prompt"] = (

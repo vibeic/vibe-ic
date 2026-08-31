@@ -1,38 +1,25 @@
-# CVDP example quickstart (Shape D, N=1 public)
+# CVDP open quickstart
 
-The public CVDP repo ships only `example_dataset/` (one problem per category).
-The full 1,500+ problem set is gated by NVIDIA + Turing — request access there.
+Use the HF v1.1.0 open JSONL and the general benchmark entry. The historical
+N=1 project wrapper and per-cid authoring paths are superseded.
 
 ```bash
-# 1. Clone
-git clone https://github.com/NVlabs/cvdp_benchmark ~/datasets/cvdp_benchmark
+python3 ${CLAUDE_PLUGIN_ROOT}/programs/benchmark_dispatch.py cvdp-open
 
-# 2. Plan + env check (verify vibeic-eda container is running)
-python3 ${CLAUDE_PLUGIN_ROOT}/programs/benchmark_dispatch.py cvdp
+python3 ${CLAUDE_PLUGIN_ROOT}/programs/benchmark_dispatch.py cvdp-open \
+  --solve --dataset <cvdp-open.jsonl> --run <fresh-run-dir>
 
-# 3. Stage the project under the vibeic-eda mount root
-#    (the container can only see paths under the mount; symlinks aren't followed)
-MOUNT="$VIBEIC_DESIGNS"           # whatever your vibeic-eda /foss/designs mount maps to (you chose it at install)
-rsync -a ~/datasets/cvdp_benchmark/example_dataset/<problem>/ $MOUNT/<problem>/
+# Complete only the runner-owned backup/review/repair queues, then:
+python3 ${CLAUDE_PLUGIN_ROOT}/programs/benchmark_dispatch.py cvdp-open \
+  --resume --dataset <cvdp-open.jsonl> --run <run-dir>
 
-# 4. Drive the runner per blind_instructions_shape_d.md
-python3 ${CLAUDE_PLUGIN_ROOT}/programs/vibe_ic_one_shot_runner.py $MOUNT/<problem> \
-    --pdk sky130A --ic-name <ic>
-
-# 5. Score against the hidden cocotb harness
-python3 ${CLAUDE_PLUGIN_ROOT}/benchmark/score_cocotb_mcp.py \
-    --project $MOUNT/<problem> --top <dut> --rtl work/rtl/<dut>.sv \
-    --mount-root $MOUNT
-# → writes $MOUNT/<problem>/reports/cocotb_score.json
+OSS_SIM_IMAGE=<official-compatible-image> \
+OSS_PNR_IMAGE=<official-compatible-image> \
+python3 ${CLAUDE_PLUGIN_ROOT}/programs/benchmark_dispatch.py cvdp-open \
+  --score --dataset <cvdp-open.jsonl> --run <run-dir> \
+  --scorer-root <cvdp-benchmark-root>
 ```
 
-## Honest expectations + the reset-polarity gotcha (skill § 4 Cat A)
-
-The 2026-05-28 baseline on the public `fixed_priority_arbiter` problem hit a
-spec ↔ harness inconsistency: the spec labels reset *synchronous* but the
-hidden cocotb harness samples `grant==0` immediately after `RisingEdge(clk)`
-with no settle delay, racing a synchronous-reset NBA update. The
-documented resolution: emit BOTH a spec-literal sync-reset variant and an
-async-reset variant (`always @(posedge clk or posedge reset)`); the
-async-reset variant passes all TC1-TC8. Keep both files; document the
-inconsistency in your RESULT — it's FLOOR, not RTL bug.
+No benchmark-specific router or solver is part of this recipe. CVDP-aware code
+is limited to staging its JSONL input and packaging accepted bytes for the
+official scorer.

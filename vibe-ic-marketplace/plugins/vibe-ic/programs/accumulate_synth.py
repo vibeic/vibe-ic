@@ -12,7 +12,7 @@ WHY a dedicated CVDP solver (and not the registry / the other family solvers):
   * The registry's plain +/-/* synths key on VerilogEval / RTLLM bullet ports and
     emit a COMBINATIONAL `result = a + b`. A running accumulator is SEQUENTIAL
     (state across clocks, reset, enable) — a different shape the registry never
-    emits. cvdp_atomic_bridge.py ALSO SKIPs this family: its cocotb-driven port
+    emits. record_prompt_context_bridge.py ALSO SKIPs this family: its cocotb-driven port
     extractor mis-tokenizes the clocked interface and its _SPECIAL_ALGEBRA_RE skips
     the saturate cue. So neither path covers running-sum / running-MAC / running
     min-max / power-of-2 moving-average.
@@ -73,7 +73,7 @@ _NOT_A_PORT_NAME = {
 # --------------------------------------------------------------------------- #
 def _toplevel(record: dict) -> Optional[str]:
     try:
-        import cvdp_atomic_bridge as _bridge
+        import record_prompt_context_bridge as _bridge
         t = _bridge.toplevel_name(record)
         if t:
             return t

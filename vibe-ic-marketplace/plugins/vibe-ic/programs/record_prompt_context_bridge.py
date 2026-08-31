@@ -1,7 +1,10 @@
 #!/usr/bin/env python3
-"""cvdp_atomic_bridge.py — a CVDP-prose -> atomic-spec BRIDGE that lets the existing
-deterministic registry solvers (spec_artifact_registry) program-SOLVE the
-atomic-shaped CVDP "code generation" problems.
+"""record_prompt_context_bridge.py — visible prompt/context record adapter.
+
+Translate a generic record carrying ``input.prompt`` and ``input.context`` into
+the ordinary prose/interface form consumed by ``spec_artifact_registry``.
+Routing and operation synthesis remain in the general product programs; this
+module supplies no benchmark, category-id, or problem-id decision.
 
 WHY (owner directive 2026-06-23): a CVDP "code generation" problem like the 32-bit
 Brent-Kung adder is FUNCTIONALLY just `sum = a + b + carry_in` — the cocotb scorer
@@ -87,7 +90,7 @@ import prose_interface_table_read as _tbl  # noqa: E402  markdown signal/directi
 # ADAPTER + driver: it exposes the record-adapter helpers the solvers reuse
 # (`toplevel_name` / `extract_interface[_ex]` / `_COMPOSITE_RE` / `_build_port_block`
 # …) and a `solve()` that simply calls `generate_from_record()`. The solvers
-# `import cvdp_atomic_bridge` for those helpers, which is why the registry is imported
+# `import record_prompt_context_bridge` for those helpers, which is why the registry is imported
 # LAZILY here (see the module-top note) — registry → solver → bridge must stay acyclic.
 
 Port = Tuple[str, int]  # (name, width)
@@ -976,7 +979,8 @@ def main(argv=None) -> int:
     import argparse
     import json
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
-    ap.add_argument("--jsonl", required=True, help="CVDP code-generation jsonl")
+    ap.add_argument("--jsonl", required=True,
+                    help="visible prompt/context records in JSONL form")
     ap.add_argument("--id", help="solve only this record id")
     ap.add_argument("--emit", action="store_true", help="print emitted RTL")
     a = ap.parse_args(argv)

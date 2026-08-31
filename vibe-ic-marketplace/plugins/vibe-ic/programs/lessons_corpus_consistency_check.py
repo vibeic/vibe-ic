@@ -2,7 +2,7 @@
 """programs/lessons_corpus_consistency_check.py — ORGANIC #741
 
 Self-consistency audit for the blind-authoring lessons corpus
-(`agents/ic-expert-agent.md`, which `benchmark_dispatch.py --setup` renders
+(`agents/ic-expert-agent.md`, which the general benchmark solve entry renders
 into each run's `lessons.md`).
 
 WHY THIS EXISTS

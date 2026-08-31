@@ -12,7 +12,7 @@ BCD `sum=8, cout=1`). So this solver emits the CORRECT decimal-arithmetic RTL
 deterministically, recognizing the variant + the digit-count/bit-width from the
 prompt prose or the embedded test-case table.
 
-REUSE: the shipped `cvdp_atomic_bridge` supplies the INTERFACE, sourced ONLY from
+REUSE: the shipped `record_prompt_context_bridge` supplies the INTERFACE, sourced ONLY from
 the model-visible surface (`input.prompt` + `input.context`) — `toplevel_name` (the
 module name stated in the prompt) and `extract_interface` (the port set from the
 skeleton header in `input.context` / a prose port block / a test-case table). We
@@ -46,7 +46,7 @@ _HERE = Path(__file__).resolve().parent
 if str(_HERE) not in sys.path:
     sys.path.insert(0, str(_HERE))
 
-import cvdp_atomic_bridge as _bridge  # noqa: E402  INTERFACE + module-name extraction
+import record_prompt_context_bridge as _bridge  # noqa: E402  INTERFACE + module-name extraction
 
 Port = Tuple[str, int]
 

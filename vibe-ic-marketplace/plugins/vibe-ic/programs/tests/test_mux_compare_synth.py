@@ -5,7 +5,7 @@ COMPLIANCE (CVDP official rule, arXiv:2506.14074 §2 + README_NON_AGENTIC): the 
 sees ONLY `input.prompt` + `input.context`. Every record here states its module NAME
 (`module `X``) and its port INTERFACE (a `### Inputs:`/`### Outputs:` block with
 adjacent prose widths) in the PROMPT — the solver sources both from
-`cvdp_atomic_bridge` (prompt+context only). The harness `.env`/cocotb + `output`
+`record_prompt_context_bridge` (prompt+context only). The harness `.env`/cocotb + `output`
 golden are RETAINED on each record as an OFF-LIMITS DECOY the solver must ignore.
 
 Coverage:
@@ -61,7 +61,7 @@ _DATASET = corpus_path("_extbench/cvdp_open_v110/"
 def _rec(top: str, prompt: str, *, skeleton_ports: str = "", test_py: str = "") -> dict:
     """A CVDP-COMPLIANT record. The module NAME and the port INTERFACE both live in
     `input.prompt` (the ONLY model-visible surface — the solver sources name+iface
-    from `cvdp_atomic_bridge`, which reads `input.prompt`+`input.context` only). The
+    from `record_prompt_context_bridge`, which reads `input.prompt`+`input.context` only). The
     harness `.env` TOPLEVEL, the cocotb testbench, and any `output.context` skeleton
     are RETAINED as OFF-LIMITS oracle the solver must never read — a DECOY that proves
     the emit is invariant to their presence. Each caller's `prompt` names the module
@@ -593,7 +593,7 @@ def _strip_oracle(rec: dict) -> dict:
 def test_real_comparator_is_prompt_only_and_oracle_invariant():
     """`cvdp_copilot_comparator_0001` states its module name as `**Module Name:**
     `signed_unsigned_comparator`` and its ports in a `| Signal | Direction | Bit
-    Width |` table. The shared `cvdp_atomic_bridge` now parses BOTH shapes from the
+    Width |` table. The shared `record_prompt_context_bridge` now parses BOTH shapes from the
     PROMPT (the model-visible surface only), so this solver EMITS a compliant result
     recovered from `input.prompt` — never the harness.
 
