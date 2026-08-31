@@ -2370,6 +2370,10 @@ def test_a_step_whose_gate_is_its_only_producer_stays_missing():
                 f"evidence {list(result.evidence)!r}. An auditor may not "
                 f"certify a step on an artefact it created during its own run."
             )
+            assert any("PRODUCER GAP" in r for r in result.reasons), (
+                f"step {sid}: the sole-auditor-producer gap was not named in "
+                f"the MISSING verdict: {result.reasons!r}"
+            )
             left = [o for o in outs if (project / o).exists()]
             assert not left, (
                 f"step {sid}: the audit created its own declared output(s) "
@@ -2381,16 +2385,13 @@ def test_a_step_whose_gate_is_its_only_producer_stays_missing():
             shutil.rmtree(tmp, ignore_errors=True)
 
 
-def test_self_certified_evidence_is_named_and_refusable():
-    """The PARTIAL case: credited by default, but never silently.
+def test_audit_created_evidence_is_excluded_by_default_and_preexisting_passes():
+    """The PARTIAL case distinguishes run evidence from auditor output.
 
-    A step with some real evidence does not hit the early MISSING return, so
-    its gate runs and writes the declared `--json` output the run never made.
-    That credit is kept — only four of the flow's declared-and-self-written
-    artefacts have any producer outside their own gate, so refusing by default
-    would fail runs that are not defective — but it is now NAMED on the step
-    line, and `--strict-audit-evidence` refuses it. Both directions are
-    asserted here so neither can quietly stop working.
+    A pre-existing declared output may support a done claim. Delete that same
+    path and let the step's own audit gate recreate it, and the default verdict
+    must stay MISSING/INCOMPLETE. Passing the legacy opt-in as False must not
+    restore the old lenient path. This is the bidirectional issue-1981 control.
     """
     _all_self, partial = _steps_by_self_produced_share()
     assert partial, (
@@ -2399,6 +2400,7 @@ def test_self_certified_evidence_is_named_and_refusable():
         "that removes the last such step."
     )
     checked = 0
+    paired_done_claims = 0
     for step in partial:
         sid = step["id"]
         outs = list(step["required_outputs"])
@@ -2420,29 +2422,49 @@ def test_self_certified_evidence_is_named_and_refusable():
                     p.parent.mkdir(parents=True, exist_ok=True)
                     p.write_text(_SELF_EVIDENCE_BODY)
                     break
-            lenient = FCC.check_step(project, step, {})
-            created = [o for o in self_written if (project / o).exists()]
-            if not created:
+            default = FCC.check_step(project, step, {})
+            tagged = [sp for sp in (default.output_binding or {}).get(
+                "specs", []) if sp.get("code") == "audit_created"]
+            if not tagged:
                 # This step's gate did not write its declared `--json` target
                 # on this fixture (a conditional clause, or the program
-                # refused). There is nothing self-certified to grade; the next
+                # refused). There is nothing audit-created to grade; the next
                 # step may still have something. Never counted as a pass.
                 continue
             checked += 1
-            named = [r for r in lenient.reasons
+            created = sorted(str(sp["spec"]) for sp in tagged)
+            named = [r for r in default.reasons
                      if "SELF-CERTIFIED EVIDENCE" in r]
             assert named, (
                 f"step {sid}: the audit created {created} and the report never "
-                f"said so — reasons were {list(lenient.reasons)!r}"
+                f"said so — reasons were {list(default.reasons)!r}"
             )
             for rel in created:
                 assert any(rel in r for r in named), (
                     f"step {sid}: {rel} was created by the audit but the "
                     f"SELF-CERTIFIED EVIDENCE line does not name it: {named!r}"
                 )
-            # And the strict form must actually refuse it, on a FRESH tree —
-            # the lenient run above left the file behind, which is precisely
-            # what makes the default non-idempotent.
+                assert rel not in default.evidence, (
+                    f"step {sid}: audit-created {rel} was tagged but still "
+                    f"credited as evidence {list(default.evidence)!r}"
+                )
+            assert default.status not in ("PASS", "VACUOUS_PASS"), (
+                f"step {sid}: default audit resolved to {default.status!r} "
+                f"while declared output(s) {created} existed only because "
+                f"this audit wrote them"
+            )
+            assert any("PRODUCER GAP" in r for r in default.reasons), (
+                f"step {sid}: audit-created outputs were refused without "
+                f"naming the missing pre-audit producer: {default.reasons!r}"
+            )
+            left = [rel for rel in created if (project / rel).exists()]
+            assert not left, (
+                f"step {sid}: default audit left its own output {left} in the "
+                f"audited tree, so a second audit could read it as run evidence"
+            )
+
+            # The old opt-in is compatibility syntax, not a way to disable the
+            # invariant. Exercise False explicitly on a fresh tree.
             shutil.rmtree(project)
             project.mkdir()
             _seed_conditions(project, step)
@@ -2456,25 +2478,62 @@ def test_self_certified_evidence_is_named_and_refusable():
                     p.parent.mkdir(parents=True, exist_ok=True)
                     p.write_text(_SELF_EVIDENCE_BODY)
                     break
-            strict = FCC.check_step(project, step, {},
-                                    strict_audit_evidence=True)
-            assert strict.status not in ("PASS", "VACUOUS_PASS"), (
-                f"step {sid}: --strict-audit-evidence still resolved to "
-                f"{strict.status!r} while its declared output(s) {created} "
-                f"existed only because this audit wrote them"
+            explicit_false = FCC.check_step(
+                project, step, {}, strict_audit_evidence=False)
+            assert explicit_false.status not in ("PASS", "VACUOUS_PASS"), (
+                f"step {sid}: strict_audit_evidence=False weakened the "
+                f"default; status={explicit_false.status!r}, "
+                f"audit-created outputs={created}"
             )
             left = [rel for rel in created if (project / rel).exists()]
             assert not left, (
-                f"step {sid}: --strict-audit-evidence left its own output "
-                f"{left} in the audited tree, so a second strict audit would "
-                f"read it as run evidence and report PASS"
+                f"step {sid}: explicit False left audit-created outputs "
+                f"{left} behind"
             )
+
+            # Bidirectional arm: the same paths genuinely pre-exist this audit.
+            # The gate may still find a substantive defect, so count rather
+            # than demand a done claim from every heterogeneous flow step.
+            shutil.rmtree(project)
+            project.mkdir()
+            _seed_conditions(project, step)
+            for entry in others:
+                for alt in F.split_any_of(entry):
+                    rel = alt.replace("**/", "d7deep/").replace("*", "d7")
+                    p = project / rel
+                    for anc in reversed([p.parent] + list(p.parent.parents)):
+                        if anc.is_file():
+                            anc.unlink()
+                    p.parent.mkdir(parents=True, exist_ok=True)
+                    p.write_text(_SELF_EVIDENCE_BODY)
+                    break
+            for rel in self_written:
+                p = project / rel
+                p.parent.mkdir(parents=True, exist_ok=True)
+                p.write_text(_SELF_EVIDENCE_BODY)
+            preexisting = FCC.check_step(project, step, {})
+            if preexisting.status in ("PASS", "VACUOUS_PASS"):
+                paired_done_claims += 1
+                assert any(rel in preexisting.evidence
+                           for rel in self_written), (
+                    f"step {sid}: pre-existing independent output was not "
+                    f"credited: {preexisting.evidence!r}"
+                )
+                assert not any(
+                    sp.get("code") == "audit_created"
+                    for sp in (preexisting.output_binding or {}).get(
+                        "specs", [])
+                ), f"step {sid}: pre-existing evidence was mistagged"
         finally:
             shutil.rmtree(tmp, ignore_errors=True)
     assert checked, (
         "no partial step's gate wrote its declared `--json` target on the "
-        "synthesized fixture, so neither the advisory nor the strict refusal "
-        "was exercised — this test measured nothing"
+        "synthesized fixture, so the default refusal was not exercised — "
+        "this test measured nothing"
+    )
+    assert paired_done_claims, (
+        "no partial step reached a done claim when its independently produced "
+        "evidence pre-existed the audit, so the positive control was unmeasured"
     )
 
 

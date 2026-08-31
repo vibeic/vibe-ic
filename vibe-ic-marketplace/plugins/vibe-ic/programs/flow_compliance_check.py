@@ -9896,7 +9896,12 @@ def _outputs_read_by_in_scope_steps(sid, my_outputs, manifest):
 
 def check_step(project: Path, step: Dict[str, Any], waivers: Dict,
                skip_analog: bool = False, skip_hardware: bool = False,
-               strict_audit_evidence: bool = False) -> StepResult:
+               strict_audit_evidence: bool = True) -> StepResult:
+    # Kept as an API-compatibility argument for callers that adopted the
+    # 2026-07-28 opt-in.  There is deliberately no lenient branch any more:
+    # an audit-created artefact is never run evidence, even when a legacy
+    # caller explicitly passes False.
+    _ = strict_audit_evidence
     raw_id = step["id"]
     try:
         sid = int(raw_id)
@@ -10136,12 +10141,22 @@ def check_step(project: Path, step: Dict[str, Any], waivers: Dict,
     # statement about the step, and answering it by letting the auditor write
     # the file is answering it with the auditor. The narrower PARTIAL case
     # (some declared outputs already present, one more written by the gate
-    # during the audit) is disclosed by the SELF-CERTIFIED EVIDENCE advisory
-    # below and refused outright under --strict-audit-evidence.
+    # during the audit) is tagged audit_created and refused by default below;
+    # the legacy flag cannot weaken that rule.
     if outputs and missing_entries and not result.evidence:
         result.status = "MISSING"
         result.reasons.append(
             f"no required_outputs found (expected: {outputs})")
+        _own_audit_targets = _gate_json_targets(step)
+        _own_audit_missing = sorted(
+            pat for pat in missing_entries if pat in _own_audit_targets)
+        if _own_audit_missing:
+            result.reasons.append(
+                f"PRODUCER GAP: declared output(s) {_own_audit_missing} were "
+                f"absent at audit start and are also this step's own audit "
+                f"gate output target(s). The auditor will not run that gate "
+                f"to manufacture completion evidence; wire a pre-audit "
+                f"producer into the owning runner.")
         # v1.6.269 (#126) — ENV_UNAVAILABLE fallback at early MISSING.
         if sid in waivers and bool(waivers[sid].get("_env_unavailable")):
             natural_reason = result.reasons[-1] if result.reasons else "MISSING"
@@ -10293,16 +10308,16 @@ def check_step(project: Path, step: Dict[str, Any], waivers: Dict,
         passed, reasons = _evaluate_gate(project, gate, skip_analog=skip_analog)
         _audit_produced = [rel for rel in _absent_before_gate
                            if (project / rel).exists()]
-        if strict_audit_evidence and _audit_produced:
+        if _audit_produced:
             # IDEMPOTENCE. Refusing the audit's own output is only a
             # measurement if the NEXT audit gets the same answer. Left on
             # disk, the file the gate just wrote is indistinguishable from run
-            # evidence on the second pass, so strict mode would report MISSING
+            # evidence on the second pass, so the audit would report MISSING
             # once and PASS forever after — a verdict that depends on how many
-            # times the auditor has run. So under this flag the audit removes
-            # exactly what it created (never a file that was already there,
-            # which is why `_absent_before_gate` is captured BEFORE the gate)
-            # and the tree is left as the run left it.
+            # times the auditor has run. Remove exactly what this invocation
+            # created (never a file that was already there, which is why
+            # `_absent_before_gate` is captured BEFORE the gate) and leave the
+            # tree as the run left it.
             for _rel in list(_audit_produced):
                 try:
                     (project / _rel).unlink()
@@ -10310,9 +10325,10 @@ def check_step(project: Path, step: Dict[str, Any], waivers: Dict,
                     # Unmeasured is not zero: say so rather than let a stale
                     # file quietly become next run's evidence.
                     result.reasons.append(
-                        f"WARNING: --strict-audit-evidence could not remove "
-                        f"the audit's own {_rel} ({_exc}); a later audit will "
-                        f"read it as run evidence")
+                        f"WARNING: could not remove audit-created output "
+                        f"{_rel} ({_exc}); this invocation still excludes it, "
+                        f"but a later audit cannot distinguish the leftover "
+                        f"from pre-existing run evidence")
         # Wave 93 — VACUOUS_PASS verdict tier promotion. If the gate
         # passed AND every reason carries the __VACUOUS_HINT__ marker
         # (and at least one was emitted), the step ran but every
@@ -10657,35 +10673,35 @@ def check_step(project: Path, step: Dict[str, Any], waivers: Dict,
     # 2026-07-28 — WHAT THIS CREDIT REALLY IS, now said out loud. An entry that
     # reaches here was absent before the gate; the only thing that ran in
     # between is the gate; so every hit the re-probe can get is an artefact
-    # THIS AUDIT CREATED. Crediting it silently is self-certification. It is
-    # still credited BY DEFAULT, and that is measured rather than assumed. The
-    # shipped flow has 17 entries across 14 steps that are both declared and
-    # their own step's gate `--json` target (16 across 13 until 2026-07-28,
-    # when step 27 declared `reports/phase3/si_mcf_sta_check.json`), and SIX
-    # of the 17 appear in ZERO
-    # of the 29 tracked run roots that carry a runner marker
-    # (sta/pre_pnr_summary.json, sta/post_route_summary.json,
-    # ir_drop_signoff.json, em_signoff.json, antenna_signoff.json,
-    # analog/mixed_signal/merge.json). Refusing the credit unconditionally
-    # would therefore turn steps 10, 23, 24, 25, 26 and M1 red on every root
-    # that reaches them — a false alarm on every project, not a finding. What
-    # closes that properly is a flow-WIRING change giving those artefacts a
-    # producer, the way `phase3_one_shot_runner._DECLARED_SIGNOFF_GATES` did
-    # for four sign-off gates on 2026-07-27; it is not a checker change.
+    # THIS AUDIT CREATED. Crediting it is self-certification, whether or not
+    # the flow currently has an independent producer wired for other runs.
+    # A population count cannot turn verifier output into pre-audit evidence:
+    # missing producers are flow-WIRING gaps and stay MISSING until the runner
+    # writes the declared artefacts before this auditor starts.
     #
-    # So: the credit stands, the FACT is reported on the step line and in the
-    # JSON report, and `--strict-audit-evidence` turns the report into a
-    # verdict for a caller who wants the strict rule today. MEASURED with
-    # check_step over those 29 roots: 53 step-verdicts move PASS/VACUOUS_PASS
-    # -> MISSING under the strict flag (steps 10, 23, 24, 25, 26, 28), none
-    # move under the default, and the files the audit leaves behind in the
-    # tree it is auditing drop from 328 to 256.
+    # The legacy `strict_audit_evidence` argument remains accepted so older
+    # callers do not break, but it cannot weaken this invariant. Every
+    # audit-created target is tagged below, excluded from evidence, and left
+    # in `missing_entries` so a PASS-tier gate verdict becomes MISSING.
+    if _audit_produced and result.output_binding:
+        _ob = result.output_binding
+        for _sp in _bind_specs:
+            if _sp.get("spec") in _audit_produced:
+                _sp["code"] = "audit_created"
+                _sp["satisfied"] = False
+                _sp["audit_created"] = _sp.get("spec")
+                _sp.pop("credited", None)
+        _ob["codes"] = sorted({str(d.get("code")) for d in _bind_specs})
+        _ob["notes"] = (_ob["notes"] + [
+            f"{rel}: audit_created; excluded from run evidence because it "
+            f"was absent at audit start and this step's own gate wrote it"
+            for rel in _audit_produced
+        ])[:12]
     if missing_entries:
         _gate_written = _gate_json_targets(step)
         _still_missing: List[str] = []
         for pat in missing_entries:
-            if pat in _gate_written and not (
-                    strict_audit_evidence and pat in _audit_produced):
+            if pat in _gate_written and pat not in _audit_produced:
                 hits = [h for sp in (p.strip() for p in pat.split(" OR "))
                         for h in _glob_first(project, sp)]
                 if hits:
@@ -10727,18 +10743,14 @@ def check_step(project: Path, step: Dict[str, Any], waivers: Dict,
         missing_entries = _still_missing
     if _audit_produced:
         result.reasons.append(
-            f"ADVISORY (non-blocking, #306): SELF-CERTIFIED EVIDENCE "
+            f"SELF-CERTIFIED EVIDENCE EXCLUDED (audit_created) "
             f"{_audit_produced} — this step's own gate created these declared "
             f"output(s) during THIS audit; they were absent when it began, so "
             f"they are evidence the auditor authored, not evidence the run "
-            f"produced. "
-            + ("Refused: --strict-audit-evidence is set."
-               if strict_audit_evidence else
-               "Credited (default) because 6 of the flow's 17 entries of this "
-               "shape have no producer at all outside their own gate, so a "
-               "blanket refusal would red runs that are not defective. Re-run "
-               "with --strict-audit-evidence to see the verdict without "
-               "them."))
+            f"produced. PRODUCER GAP: no pre-audit producer supplied these "
+            f"paths; wire them into the owning runner before claiming this "
+            f"step complete. Refused by default and excluded from credited "
+            f"run evidence.")
 
     # v1.6.269 (#126) — ENV_UNAVAILABLE fallback promotion. If the
     # ── required_outputs is ALL-of-N: a gate may not certify a step done
@@ -11540,16 +11552,10 @@ def main(argv: Optional[List[str]] = None) -> int:
     )
     p.add_argument(
         "--strict-audit-evidence", action="store_true",
-        help=("2026-07-28: refuse, as evidence for a `required_outputs` "
-              "entry, any artefact THIS audit created — i.e. a declared "
-              "output that is also one of the step's own gate `--json` "
-              "targets and was absent when the audit began. Off by default "
-              "because 6 of the flow's 17 such entries appear in NONE of the "
-              "29 tracked run roots, so the strict rule fails runs that are "
-              "not defective; the fact is reported as an ADVISORY either way. "
-              "MEASURED over those 29 roots: 53 step-verdicts move to MISSING "
-              "with the flag and 0 without it, and the audit leaves 256 files "
-              "behind instead of 328 because it removes what it wrote."),
+        help=("Compatibility no-op: audit-created `required_outputs` are "
+              "always tagged audit_created and excluded from run evidence. "
+              "Strict audit-evidence behavior is unconditional; this legacy "
+              "flag cannot weaken or strengthen it."),
     )
     p.add_argument(
         "--phase", choices=["2", "3", "all"],

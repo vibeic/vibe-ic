@@ -5034,9 +5034,9 @@ steps:
       # MISSING -> FAIL, from "nothing to say" to a named STA defect. And it
       # does NOT make the artefact's absence red on a run that lacks it: the
       # post-gate re-probe credits the copy this step's OWN gate wrote during
-      # the audit. That self-certification is pre-existing and flow-wide, is
-      # now reported as a SELF-CERTIFIED EVIDENCE advisory on the step line,
-      # and is refused under `flow_compliance_check --strict-audit-evidence`.
+      # the audit. That self-certification is pre-existing and flow-wide. The
+      # checker now tags the recreated file audit_created, excludes it by
+      # default, and reports the missing pre-audit producer as a wiring gap.
       - "reports/phase3/sta/sta_corner_record_completeness.json"
       # The post-route SIGN-OFF CORNER verdict — same shape as the entry above
       # and declared with it under #1215.
@@ -5450,11 +5450,10 @@ steps:
       # PASS, and every one lists em_signoff.json among the files the audit
       # itself created. What the declaration DOES buy is the completeness of
       # the list (the runner reads this exact path in `_DECLARED_SIGNOFF_GATES`
-      # and nothing declared it) plus a named SELF-CERTIFIED EVIDENCE advisory
-      # on the step line; the absence becomes a verdict only under
-      # `flow_compliance_check --strict-audit-evidence`, which is opt-in
-      # because only four of the flow's twelve declared-and-self-written
-      # artefacts have any producer outside their own gate.
+      # and nothing declared it). If absent at audit start, the gate's recreated
+      # copy is tagged audit_created and excluded by default; the step stays
+      # MISSING until the owning runner supplies a pre-audit producer. The
+      # population of other roots carrying the file cannot weaken that rule.
       - "reports/phase3/em_signoff.json"
       # THE AUTHORITY VERDICT — the same W1 shape as the entry above, missed
       # when the `em_peak_current_authority_check` clause was added to the gate
@@ -5756,11 +5755,11 @@ steps:
       # and it is this step's own gate `--json` target, so on a tree where the
       # MCF condition IS satisfied `check_step` re-probes after the gate and
       # credits the copy the audit just wrote. MEASURED on a tracked root with
-      # the file deleted: default run -> VACUOUS_PASS, the file recreated by
-      # the audit and NAMED in the SELF-CERTIFIED EVIDENCE advisory;
-      # `--strict-audit-evidence` -> MISSING with nothing left behind. What
-      # would make that absence red by default is a flow-WIRING change giving
-      # the report a producer outside its own gate, as
+      # the file deleted: the audit recreates it, tags it audit_created,
+      # excludes it from evidence, removes it again, and returns MISSING. A
+      # pre-existing independently produced copy remains admissible. What
+      # closes the MISSING producer gap is a flow-WIRING change giving the
+      # report a producer outside its own gate, as
       # `phase3_one_shot_runner._DECLARED_SIGNOFF_GATES` did for the four
       # STA/EM sign-off gates — not a checker change.
       #
@@ -5883,9 +5882,8 @@ steps:
       # writes it (`grep -rn perc_signoff programs/` reaches only
       # `perc_signoff_check` itself and `postroute_timing_repair_decision`, which READS
       # it), so `check_step` re-probes it after the gate runs and credits the
-      # copy the audit just wrote. The absence is therefore still not red by
-      # default; it is named in a SELF-CERTIFIED EVIDENCE advisory and refused
-      # under `--strict-audit-evidence`. MEASURED: of the 8 tracked roots that
+      # copy the audit just wrote. That audit-created copy is now excluded by
+      # default and the producer gap is MISSING. MEASURED: of the 8 tracked roots that
       # carry this file, the one checked byte-for-byte
       # (benchmark-data/ic/caravel_user_project) holds
       # `{"program": "perc_signoff_check", ...}` — the gate's own verdict
@@ -6037,9 +6035,8 @@ steps:
       # WHAT IT DOES NOT DO, stated 2026-07-28 rather than implied: both are
       # also this step's OWN gate `--json` targets and no producer outside that
       # gate writes either, so on a root that lacks them `check_step` re-probes
-      # after the gate and credits the copy the audit just wrote. The absence
-      # is named in a SELF-CERTIFIED EVIDENCE advisory and becomes a verdict
-      # only under `flow_compliance_check --strict-audit-evidence`.
+      # after the gate, tags the copy audit_created, excludes it from credited
+      # evidence, and keeps the producer gap MISSING by default.
       - "reports/phase3/lvs.json"
       - "reports/phase2/gates/erc_density.json"
       # A THIRD machine-readable verdict of the same shape, and the same defect

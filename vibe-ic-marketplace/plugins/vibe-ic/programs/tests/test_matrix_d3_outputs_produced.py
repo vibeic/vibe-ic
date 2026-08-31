@@ -824,8 +824,8 @@ _LIVE_ENTRY_COUNT = 135
 #:     ``step_declared_signoff_gates(project)``. On a root published after that
 #:     wiring the artefact pre-exists the audit and this entry MUST disappear.
 #:     Re-publishing the root is the one thing that closes it; until then the
-#:     step-25 verdict on this root rests on the audit's own output and
-#:     ``--strict-audit-evidence`` refuses it.
+#:     step-25 verdict on this root used to rest on the audit's own output;
+#:     default audit-evidence handling now tags and refuses that recreated file.
 #:
 #: Pinning all three means the POPULATION cannot grow silently, which is the
 #: part A8 tried to grow.

@@ -483,16 +483,13 @@ def test_rerunning_the_gate_on_an_untouched_tree_reproduces_the_digest(
     """The digest is stable across re-runs, and the classification never
     attributes the difference to the design.
 
-    UNCHANGED is NOT asserted, and the reason is a measured property of the
-    program this record instruments rather than of the record: on a tree the
-    auditor has never run on, its own first-run report files become the second
-    run's evidence, and `passed_gate_count` moves 142 -> 141 between run 1 and
-    run 2 before settling. `--strict-audit-evidence`'s own help text describes
-    the same mechanism ("MISSING once and PASS forever after"). This record
-    NAMES that movement — design inputs byte-identical, so nothing about the
-    design is being claimed — which is exactly its job. Asserting UNCHANGED
-    here would be asserting the gate is idempotent on a fresh tree, which is a
-    different claim and, measured, a false one.
+    UNCHANGED is not required on the second run because this digest classifies
+    every audit-side-effect population, not only declared outputs. Issue 1981
+    made the declared-output subset idempotent: files created by a step's own
+    gate are removed and can no longer become evidence on run two. Other audit
+    diagnostics may still move the tally once, and this record must name that
+    movement without attributing it to byte-identical design inputs. The third
+    run pins the eventual steady state.
     """
     root = _design(tmp_path / "proj")
     _run_fcc(root)

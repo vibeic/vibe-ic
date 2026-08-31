@@ -1044,7 +1044,7 @@
         },
         "reports/phase2/gates/perc_signoff.json": {
           "status": "PRODUCED_BY_RUN",
-          "provenance_note": "the recorded copy is `perc_signoff_check`'s own verdict document ({\"program\": \"perc_signoff_check\", ...}) and no producer outside step 28's gate writes this path, so the run root carries compliance-gate output committed alongside the run. Admissible for dimension 3 (the root carries a runner marker and the file pre-exists any audit of it) but it is NOT independent of the checker: see flow_compliance_check --strict-audit-evidence.",
+          "provenance_note": "the recorded copy is `perc_signoff_check`'s own verdict document ({\"program\": \"perc_signoff_check\", ...}) and no producer outside step 28's gate writes this path, so the run root carries compliance-gate output committed alongside the run. Admissible for dimension 3 (the root carries a runner marker and the file pre-exists any audit of it) but it is NOT independent of the checker; flow_compliance_check now excludes auditor-recreated copies by default.",
           "run": "benchmark-data/ic/spm/v1.10.18_sky130A",
           "alternative": "reports/phase2/gates/perc_signoff.json",
           "path": "reports/phase2/gates/perc_signoff.json",
