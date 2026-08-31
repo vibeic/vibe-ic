@@ -301,6 +301,36 @@ bug):
    the repo-gatekeeper assigns it at merge). Keep the title + content chip-AGNOSTIC
    (no vendor / SKU / IC names). This is a SEPARATE commit from any benchmark
    result (NO-MIX).
+
+### PR publication base (HARD Plugin contract; not a Skill)
+
+Immediately before publishing the PR, freeze the exact pair you validated and
+render the required PR-body block with the Plugin program:
+
+```bash
+python3 vibe-ic-marketplace/plugins/vibe-ic/programs/gatekeeper_review.py \
+  --render-pr-contract --repo . --base origin/main --head HEAD
+```
+
+Put that block in the PR body. Its policy token is
+`gatekeeper-replay-no-author-rebase`. After `gh pr create`, the publication base
+is immutable. Main advancing is expected and is **not** a reason for the author
+to fetch/rebase/force-push. If Gatekeeper finds a genuine defect in the PR, fix
+the defect on the existing branch without merging/rebasing later main, rerun
+the author tests, update only the validated-head SHA, and retain the original
+validated-base SHA. Repo Gatekeeper alone owns integration replay/rebase,
+re-testing on current main, version assignment, and landing.
+
+The live contract check is:
+
+```bash
+gh pr view <PR> --json body,headRefOid,baseRefName,createdAt | \
+  python3 vibe-ic-marketplace/plugins/vibe-ic/programs/gatekeeper_review.py \
+    --check-pr-contract --pr-json - --repo . --base origin/main --head HEAD
+```
+
+Missing/mutable base metadata, a head mismatch, or absorbing a later main commit
+is blocking. `main advanced after publication` is a PASS owned by Gatekeeper.
 4. The **repo-gatekeeper** reviews (machine gates + Step-2.7 §4.05) + lands it. The
    improvement reaches you on the next plugin version — re-run clean-room to confirm
    it moved the number against the LANDED version.

@@ -20,11 +20,16 @@ never re-implemented):
                                          line the PR ADDS or any added/renamed
                                          PATH, anywhere in the repo (not just the
                                          plugin source tree)
+  * pr_publication_base_check          — external PRs pin the exact main/head
+                                         pair the author validated. Later main
+                                         movement is a green Gatekeeper handoff;
+                                         author-side rebase onto it is blocked
   * gatekeeper_stale_branch_check.py   — the LANDING-METHOD guard: a PR forked
                                          from an older base that also touches a
-                                         file landed since would phantom-revert
-                                         it under a blind checkout — land via
-                                         cherry-pick of the PR's own delta
+                                         file landed since requires Gatekeeper
+                                         replay/rebase. It is non-blocking only
+                                         during version-less external-PR review;
+                                         final landing review still blocks
   * landing_collateral_revert_check.py — the same guard AFTER the fact: no
                                          commit in `base..head` may erase the
                                          contribution an EARLIER commit of the
@@ -168,11 +173,13 @@ import argparse
 import importlib.util
 import json
 import os
+import re
 import signal
 import subprocess
 import sys
 import tempfile
 from dataclasses import dataclass, field, asdict
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
@@ -236,6 +243,11 @@ _PROGRAMS_DIR = Path(__file__).resolve().parent
 _PLUGIN_ROOT_DEFAULT = _PROGRAMS_DIR.parent  # .../vibe-ic
 _PLUGIN_JSON_REL = "vibe-ic-marketplace/plugins/vibe-ic/.claude-plugin/plugin.json"
 _MARKETPLACE_JSON_REL = "vibe-ic-marketplace/.claude-plugin/marketplace.json"
+PR_BASE_OPEN = "<!-- vibeic-pr-validation-base:v1 -->"
+PR_BASE_CLOSE = "<!-- /vibeic-pr-validation-base:v1 -->"
+PR_INTEGRATION_OWNER = "repo-gatekeeper"
+PR_PUBLICATION_POLICY = "gatekeeper-replay-no-author-rebase"
+_FULL_SHA_RE = r"[0-9a-fA-F]{40}"
 
 
 # --------------------------------------------------------------------------
@@ -290,6 +302,143 @@ def _git(repo: Path, *args: str) -> Tuple[int, str, str]:
     proc = subprocess.run(["git", "-C", str(repo), *args],
                           capture_output=True, text=True)
     return proc.returncode, proc.stdout, proc.stderr
+
+
+def resolve_pr_contract_commit(repo: Path, ref: str) -> Optional[str]:
+    """Resolve one full commit SHA without accepting a missing/ambiguous ref."""
+    rc, out, _ = _git(repo, "rev-parse", "--verify", f"{ref}^{{commit}}")
+    value = out.strip()
+    return value.lower() if rc == 0 and re.fullmatch(_FULL_SHA_RE, value) else None
+
+
+def render_pr_publication_contract(base_sha: str, head_sha: str) -> str:
+    """The exact machine-readable block every external PR body carries."""
+    return "\n".join([
+        PR_BASE_OPEN,
+        "## Validation base",
+        "",
+        f"- Author-validated main commit: `{base_sha}`",
+        f"- Validated PR head: `{head_sha}`",
+        f"- Integration owner: `{PR_INTEGRATION_OWNER}`",
+        f"- Post-publication main policy: `{PR_PUBLICATION_POLICY}`",
+        PR_BASE_CLOSE,
+    ])
+
+
+def parse_pr_publication_contract(
+        body: str) -> tuple[Optional[dict[str, str]], list[str]]:
+    """Read exactly one contract block; duplicate answers are a refusal."""
+    errors: list[str] = []
+    if body.count(PR_BASE_OPEN) != 1 or body.count(PR_BASE_CLOSE) != 1:
+        return None, [
+            "PR body must contain exactly one v1 validation-base block"]
+    start, end = body.index(PR_BASE_OPEN), body.index(PR_BASE_CLOSE)
+    if end <= start:
+        return None, ["validation-base block markers are reversed"]
+    block = body[start:end + len(PR_BASE_CLOSE)]
+
+    def one(label: str, pattern: str) -> Optional[str]:
+        hits = re.findall(pattern, block, flags=re.MULTILINE)
+        if len(hits) != 1:
+            errors.append(f"validation-base block needs exactly one {label}")
+            return None
+        return str(hits[0])
+
+    base = one("Author-validated main commit",
+               rf"^- Author-validated main commit: `({_FULL_SHA_RE})`$")
+    head = one("Validated PR head",
+               rf"^- Validated PR head: `({_FULL_SHA_RE})`$")
+    owner = one("Integration owner", r"^- Integration owner: `([^`]+)`$")
+    policy = one("Post-publication main policy",
+                 r"^- Post-publication main policy: `([^`]+)`$")
+    if owner is not None and owner != PR_INTEGRATION_OWNER:
+        errors.append(
+            f"integration owner must be {PR_INTEGRATION_OWNER!r}")
+    if policy is not None and policy != PR_PUBLICATION_POLICY:
+        errors.append(
+            f"post-publication policy must be {PR_PUBLICATION_POLICY!r}")
+    if errors:
+        return None, errors
+    return {"base": str(base).lower(), "head": str(head).lower()}, []
+
+
+def _pr_contract_time(value) -> Optional[datetime]:
+    if not isinstance(value, str) or not value.strip():
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.strip().replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def audit_pr_publication_contract(repo: Path, pr: dict,
+                                  current_main: str) -> dict:
+    """Prove authors froze their base while Gatekeeper owns later integration.
+
+    A moving current-main tip is a PASS. The author branch absorbing that tip
+    is a FAIL: merge-base(current-main, PR-head) must remain the base recorded
+    when the PR was published. `createdAt` prevents rewriting the body to call
+    a later main commit the original publication base.
+    """
+    errors: list[str] = []
+    if pr.get("baseRefName") != "main":
+        errors.append("PR must target main")
+    contract, body_errors = parse_pr_publication_contract(
+        str(pr.get("body") or ""))
+    errors.extend(body_errors)
+    expected_head = str(pr.get("headRefOid") or "").lower()
+    published_at = _pr_contract_time(pr.get("createdAt"))
+    if not re.fullmatch(_FULL_SHA_RE, expected_head):
+        errors.append("PR metadata has no full 40-hex headRefOid")
+    if published_at is None:
+        errors.append("PR metadata has no parseable createdAt")
+    main_sha = resolve_pr_contract_commit(repo, current_main)
+    if main_sha is None:
+        errors.append(f"current main ref does not resolve: {current_main}")
+    if contract is None:
+        return {"verdict": "FAIL", "errors": errors}
+
+    base_sha, head_sha = contract["base"], contract["head"]
+    if resolve_pr_contract_commit(repo, base_sha) != base_sha:
+        errors.append("author-validated base commit does not resolve locally")
+    if resolve_pr_contract_commit(repo, head_sha) != head_sha:
+        errors.append("validated PR head commit does not resolve locally")
+    if expected_head and head_sha != expected_head:
+        errors.append("validated PR head does not equal GitHub headRefOid")
+
+    if not errors:
+        ancestor_rc, _, _ = _git(repo, "merge-base", "--is-ancestor",
+                                 base_sha, head_sha)
+        if ancestor_rc != 0:
+            errors.append("author-validated main is not an ancestor of head")
+        _, fork, _ = _git(repo, "merge-base", str(main_sha), head_sha)
+        if fork.strip().lower() != base_sha:
+            errors.append(
+                "PR branch absorbed a main commit after its published base; "
+                "author-side rebase is forbidden because Repo Gatekeeper owns "
+                "landing replay/rebase")
+        _, base_committed, _ = _git(
+            repo, "show", "-s", "--format=%cI", base_sha)
+        base_time = _pr_contract_time(base_committed.strip())
+        if base_time is None:
+            errors.append("validated base commit time could not be established")
+        elif published_at is not None and base_time > published_at:
+            errors.append(
+                "validated base was committed after PR publication; the "
+                "publication base is immutable and cannot be advanced")
+
+    return {
+        "verdict": "FAIL" if errors else "PASS",
+        "validated_base": base_sha,
+        "validated_head": head_sha,
+        "current_main": main_sha,
+        "main_advanced": bool(main_sha and main_sha != base_sha),
+        "integration_owner": PR_INTEGRATION_OWNER,
+        "errors": errors,
+    }
 
 
 def changed_files(repo: Path, base: str, head: str) -> List[str]:
@@ -898,6 +1047,45 @@ def stale_branch_gate(repo: Path, base: str, head: str) -> GateResult:
     summary = (body.splitlines() or [""])[0][:240]
     return GateResult("gatekeeper_stale_branch_check", rc,
                       summary or "(no output)")
+
+
+def authoring_stale_branch_policy(result: GateResult,
+                                  version_by_gatekeeper: bool) -> GateResult:
+    """A stale external PR selects the landing method; it is not author work.
+
+    The merge verifier already replays/rebases on current main and re-runs the
+    gates. Making the author chase main duplicates that work and creates an
+    endless race with unrelated landings. Only the version-less external-PR
+    mode gets this ownership transfer; direct-push/final landing review keeps
+    the original blocking result.
+    """
+    if version_by_gatekeeper and result.rc == 1:
+        return GateResult(
+            result.name, 0,
+            "LANDING_METHOD owned by Repo Gatekeeper — author publication "
+            "base remains frozen; replay/rebase and re-gating happen at landing")
+    return result
+
+
+def publication_base_gate(repo: Path, current_main: str,
+                          pr_metadata: Optional[dict]) -> GateResult:
+    """Require the immutable publication base/head on every external PR."""
+    name = "pr_publication_base_check"
+    if not isinstance(pr_metadata, dict):
+        return GateResult(
+            name, 1,
+            "external version-less PR review requires --pr-json with the "
+            "Plugin-owned validation-base contract")
+    report = audit_pr_publication_contract(repo, pr_metadata, current_main)
+    errors = report.get("errors") or []
+    if report.get("verdict") != "PASS":
+        return GateResult(name, 1, "; ".join(str(v) for v in errors)[:600])
+    if report.get("main_advanced"):
+        return GateResult(
+            name, 0,
+            "main advanced after publication — author base correctly remains "
+            "frozen; Repo Gatekeeper owns integration replay/rebase")
+    return GateResult(name, 0, "validated publication base/head are pinned")
 
 
 # --------------------------------------------------------------------------
@@ -2232,6 +2420,7 @@ def review(base: str, head: str, *,
            control_junit: Optional[str] = None,
            control_text: Optional[str] = None,
            version_by_gatekeeper: bool = False,
+           pr_metadata: Optional[dict] = None,
            override_files: Optional[List[str]] = None,
            override_cur: Optional[str] = None,
            override_prev: Optional[str] = None,
@@ -2246,7 +2435,9 @@ def review(base: str, head: str, *,
     `version_by_gatekeeper=True` is the AUTHORING-side review of a version-less
     PR (field/core PRs carry no bump; the gatekeeper assigns the version at
     merge): the version gate DEFERS when cur==prev and the authoring-time
-    cadence floor is TARGETED. The gatekeeper's FINAL review (after
+    cadence floor is TARGETED. It also requires `pr_metadata` carrying the
+    Plugin-owned immutable publication-base contract. The gatekeeper's FINAL
+    review (after
     gatekeeper_assign_version.py writes the real version) is run WITHOUT the
     flag, fully enforcing the monotonic+equality bump on the assigned version.
 
@@ -2294,7 +2485,10 @@ def review(base: str, head: str, *,
     gates.append(path_portability_gate(plugin_root))
     gates.append(commit_msg_nda_gate(repo, base, head))
     gates.append(nda_diff_scan_gate(repo, base, head))
-    gates.append(stale_branch_gate(repo, base, head))
+    if version_by_gatekeeper:
+        gates.append(publication_base_gate(repo, base, pr_metadata))
+    gates.append(authoring_stale_branch_policy(
+        stale_branch_gate(repo, base, head), version_by_gatekeeper))
     # The same landing method, seen from the other side. `stale_branch_gate`
     # judges a branch BEFORE it lands; once it has landed, its FRESH verdict is
     # structurally guaranteed and content-blind. This one reads the commits.
@@ -2428,6 +2622,18 @@ def main(argv: Optional[List[str]] = None) -> int:
                          "assigns the version at merge via "
                          "gatekeeper_assign_version.py and re-runs this review "
                          "WITHOUT the flag on the bumped tree)")
+    ap.add_argument(
+        "--pr-json", default=None,
+        help=("with --version-by-gatekeeper: JSON from `gh pr view --json "
+              "body,headRefOid,baseRefName,createdAt`; use - for stdin. "
+              "Required by the Plugin-owned publication-base gate"))
+    contract_mode = ap.add_mutually_exclusive_group()
+    contract_mode.add_argument(
+        "--render-pr-contract", action="store_true",
+        help="render the exact publication-base block for the PR body, then exit")
+    contract_mode.add_argument(
+        "--check-pr-contract", action="store_true",
+        help="check --pr-json against --base as current main, then exit")
     ap.add_argument("--json", default=None, help="write the verdict JSON here")
     ap.add_argument(
         "--gate-record", dest="hygiene_report", default=None,
@@ -2464,6 +2670,22 @@ def main(argv: Optional[List[str]] = None) -> int:
     plugin_root = Path(args.plugin_root).resolve() if args.plugin_root \
         else _PLUGIN_ROOT_DEFAULT
 
+    if args.render_pr_contract:
+        base_sha = resolve_pr_contract_commit(repo, args.base)
+        head_sha = resolve_pr_contract_commit(repo, args.head)
+        if base_sha is None or head_sha is None:
+            print("ERROR: --base/--head did not resolve to full commit SHAs",
+                  file=sys.stderr)
+            return 2
+        rc, _, _ = _git(repo, "merge-base", "--is-ancestor",
+                        base_sha, head_sha)
+        if rc != 0:
+            print("FAIL: validation base is not an ancestor of head",
+                  file=sys.stderr)
+            return 1
+        print(render_pr_publication_contract(base_sha, head_sha))
+        return 0
+
     commit_cmds: List[str] = []
     if args.commit_cmds_file:
         p = Path(args.commit_cmds_file)
@@ -2481,6 +2703,40 @@ def main(argv: Optional[List[str]] = None) -> int:
         override_files = [ln.strip() for ln in
                           p.read_text(encoding="utf-8").splitlines() if ln.strip()]
 
+    pr_metadata: Optional[dict] = None
+    if args.pr_json:
+        try:
+            raw = sys.stdin.read() if args.pr_json == "-" else Path(
+                args.pr_json).read_text(encoding="utf-8")
+            value = json.loads(raw)
+        except (OSError, json.JSONDecodeError) as exc:
+            print(f"ERROR: --pr-json is unreadable: {exc}", file=sys.stderr)
+            return 2
+        if not isinstance(value, dict):
+            print("ERROR: --pr-json must contain one JSON object",
+                  file=sys.stderr)
+            return 2
+        pr_metadata = value
+
+    if args.check_pr_contract:
+        if pr_metadata is None:
+            print("ERROR: --check-pr-contract requires --pr-json",
+                  file=sys.stderr)
+            return 2
+        report = audit_pr_publication_contract(repo, pr_metadata, args.base)
+        if report.get("verdict") != "PASS":
+            print("FAIL: PR publication-base contract")
+            for error in report.get("errors") or []:
+                print(f"  - {error}")
+            return 1
+        if report.get("main_advanced"):
+            print("PASS: main advanced after publication; author base stays "
+                  "frozen and Repo Gatekeeper owns replay/rebase/landing")
+        else:
+            print("PASS: PR body pins the validated base/head; Repo Gatekeeper "
+                  "owns any later integration replay/rebase/landing")
+        return 0
+
     try:
         v = review(args.base, args.head,
                    repo=repo, plugin_root=plugin_root,
@@ -2490,6 +2746,7 @@ def main(argv: Optional[List[str]] = None) -> int:
                    control_junit=args.control_junit,
                    control_text=args.control_text,
                    version_by_gatekeeper=args.version_by_gatekeeper,
+                   pr_metadata=pr_metadata,
                    override_files=override_files,
                    batch=args.batch,
                    hygiene_report=(Path(args.hygiene_report)

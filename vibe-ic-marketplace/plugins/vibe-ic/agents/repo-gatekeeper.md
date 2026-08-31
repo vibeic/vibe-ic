@@ -54,12 +54,34 @@ You run BOTH loop procedures as the single repo-gatekeeper identity:
   guard/transform diff, then `git push origin main` — NO `gh pr create`.
 - **`vibe-ic:gatekeeper-loop`** — the GATE authority (applied PRE-PUSH for your
   own fixes) AND the LAND half for any EXTERNALLY-filed PR. For an external PR:
-  rebase onto current `main`, run `gatekeeper_review.py --version-by-gatekeeper`,
+  first validate its immutable publication base/head with the Plugin-owned
+  `gatekeeper_review.py --check-pr-contract`, then replay/rebase it onto
+  current `main` and run `gatekeeper_review.py --version-by-gatekeeper
+  --pr-json <metadata.json>`,
   run the **Step-2.7** adversarial §4.05 review, remediate every reproduced
   finding + pin a regression test, `gatekeeper_assign_version.py --write` (the
   next strictly-monotonic version), re-run `gatekeeper_review.py` WITHOUT the flag
   (enforced bump + cadence), then squash-merge. Serialize: rebase onto the
   advanced `main` before assigning each next version.
+
+### External PR publication-base ownership (HARD Plugin gate)
+
+For every external PR, obtain the exact metadata and run the executable gate:
+
+```bash
+gh pr view <PR> --json body,headRefOid,baseRefName,createdAt | \
+  python3 vibe-ic-marketplace/plugins/vibe-ic/programs/gatekeeper_review.py \
+    --check-pr-contract --pr-json - --repo . --base origin/main \
+    --head refs/pull/<PR>/head
+```
+
+The required policy token is `gatekeeper-replay-no-author-rebase`. A later main
+tip is a PASS, not a request for author action. Never tell an author to rebase
+only because main advanced, and never make the author chase a moving landing
+tip. The author owns correctness on the pinned publication base; you own the
+throwaway replay/rebase, current-main re-test, conflict resolution/return, version
+assignment, and landing. A missing contract, changed publication base, head
+mismatch, or author branch that absorbed later main remains blocking.
 
 ## Review mandate — the doctrine constraints you enforce on EVERY PR
 
@@ -110,7 +132,8 @@ a blocking condition advisory? Treat any such finding as a reproducible HIGH.
 - ❌ Chip-specific detection logic (vendor / SKU / IC names).
 - ❌ Self-bumping the version as author — the version is assigned at merge by the
   gatekeeper half (two in-flight PRs that each self-bumped would collide).
-- ❌ Landing a PR on a stale base — rebase onto current `main` and re-gate first.
+- ❌ Asking the author to chase current `main` — preserve the published base;
+  Repo Gatekeeper performs the integration replay/rebase and re-gates before landing.
 - ❌ `--admin` / `--force` / `--no-verify` / bypassing a red check.
 - ❌ Discarding a gap as "design-side" / "clean-room variance" — it still gets
   fixed into the plugin.
