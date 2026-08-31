@@ -34502,6 +34502,33 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
             written.append(str(em_rpt))
             written.append(str(rpt_phase3 / "em.json"))
 
+    # --- #1215: Step 25 EM AUTHORITY comparison -------------------------
+    # em.json above is a MEASUREMENT-ONLY artefact; the budget comparison
+    # lives in `em_peak_current_authority_check`, whose Jmax authority (the
+    # tech-LEF DCCURRENTDENSITY table) exists only inside the EDA image at
+    # $PDK_ROOT, so the host-side gate's discovery found nothing and its
+    # honest verdict was INCOMPLETE on every run of every design. Stage the
+    # ONE resolved `pdk.tech_lef` into the project and run the comparison
+    # here, so the peak current reaches a verdict and the final_audit's
+    # argument-less re-run of the same gate resolves via the staged copy.
+    # Runs after the EM emit (it screens em.rpt) and before the PERC
+    # aggregate below (whose EM category reads this comparison).
+    em_auth_json = rpt_phase3 / "em_current_authority.json"
+    # Regen also when the existing report is INCOMPLETE: that verdict means
+    # the comparison NEVER RAN (no reachable authority at the time), so it is
+    # not a measurement to preserve — re-deriving it is free, idempotent
+    # (authority still unreachable -> the same honest INCOMPLETE is
+    # rewritten), and the only path by which a pre-fix run tree can ever
+    # reach a measured verdict without re-routing.
+    if primary_def.is_file() and (
+            _signoff_regen(em_auth_json, primary_def, em_rpt)
+            or _read_verdict(em_auth_json) == "INCOMPLETE"):
+        try:
+            if _emit_em_current_authority(project, pdk, container, notes):
+                written.append(str(em_auth_json))
+        except Exception as exc:
+            notes.append(f"EM authority emit failed: {exc}")
+
     # --- ORGANIC-20260531: Step 26 antenna (re-emit to audit path) ------
     antenna_rpt = rpt_phase3 / "antenna.rpt"
     if primary_def.is_file() and _signoff_regen(antenna_rpt, primary_def):
@@ -34735,7 +34762,12 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
     # Runs AFTER the antenna/ir/em/erc emitters above so it reads their
     # verdicts. Guarded like them (only when a routed DEF exists).
     perc_rpt = rpt_phase3 / "perc_equivalent.rpt"
-    if primary_def.is_file() and _signoff_regen(perc_rpt, primary_def):
+    # #1215: em_current_authority.json is now one of this aggregate's inputs
+    # (the EM category reads its verdict), so it joins the staleness sources —
+    # a perc report older than the authority comparison describes a state
+    # that no longer exists.
+    if primary_def.is_file() and _signoff_regen(perc_rpt, primary_def,
+                                                em_auth_json):
         if _emit_perc_equivalent(project, top, pdk, container, notes):
             written.append(str(perc_rpt))
             written.append(str(rpt_phase3 / "perc_equivalent.json"))
@@ -42177,6 +42209,73 @@ def _read_verdict(json_path: Path) -> Optional[str]:
         return None
 
 
+def _emit_em_current_authority(project: Path, pdk: PdkConfig,
+                               container: str, notes: List[str]) -> bool:
+    """#1215 — run the Step-25 EM AUTHORITY comparison with a REACHABLE Jmax
+    reference, writing reports/phase3/em_current_authority.json.
+
+    WHY THE GATE WAS INCOMPLETE FOREVER (measured, spm/subservient/sha256
+    2026-08-31): `em_peak_current_authority_check`'s Jmax tier resolves via
+    `signoff_ladder_run._discover_jmax_ref` — project files first, then
+    `$PDK_ROOT`. The tech LEFs DO carry the authority (gf180mcuD: 9
+    DCCURRENTDENSITY statements per tlef; sky130A: 10 — verified inside the
+    image), but `/foss/pdks` is image-internal, `$PDK_ROOT` is unset on the
+    host where the gate runs, and no run tree carries a `*.tlef`. So the
+    reference existed and was simply unreachable — kind (c), a resolver gap,
+    not an unanswerable contract.
+
+    THE FIX: read the ONE resolved `pdk.tech_lef` (host copy first, then the
+    container — `_read_pdk_text`) and stage it under `phase3/pdk_stage/`
+    (the same project-local, gitignored convention as the top-metal width
+    fix), then invoke the gate with `--tech-lef` pointing at the staged copy.
+    The staged copy ALSO makes the final_audit's argument-less re-run of the
+    same yaml clause resolve, via `_discover_jmax_ref`'s project rglob.
+
+    §4.05 HONESTY PRESERVED: when the PDK genuinely states no
+    DCCURRENTDENSITY, nothing is staged, the gate is still run with no
+    reference, and its verdict stays the honest INCOMPLETE naming the missing
+    authority. Nothing is fabricated and INCOMPLETE is never relabelled —
+    the comparison either runs against the foundry's own numbers or refuses.
+    chip-AGNOSTIC: no PDK name, layer name or numeric literal; the tech LEF
+    is whatever `PdkConfig.tech_lef` resolved for this run."""
+    rpt3 = _pl.reports_phase3_dir(project)
+    rpt3.mkdir(parents=True, exist_ok=True)
+    tlef = getattr(pdk, "tech_lef", None)
+    tlef_arg: Optional[Path] = None
+    if tlef:
+        host_p = Path(tlef)
+        if host_p.is_file():
+            # Already host-readable (e.g. the pdk_stage top-metal-corrected
+            # copy) — hand it over directly, no second staging.
+            tlef_arg = host_p
+        else:
+            txt = _read_pdk_text(str(tlef), container)
+            if txt and "DCCURRENTDENSITY" in txt:
+                stage_dir = project / "phase3" / "pdk_stage"
+                stage_dir.mkdir(parents=True, exist_ok=True)
+                staged = stage_dir / host_p.name
+                if not staged.is_file():
+                    staged.write_text(txt)
+                tlef_arg = staged
+            elif txt is not None:
+                notes.append(
+                    "EM authority: resolved tech LEF states no "
+                    "DCCURRENTDENSITY — Jmax tier stays honestly unresolved")
+            else:
+                notes.append(
+                    "EM authority: tech LEF unreadable from host and "
+                    "container — Jmax tier stays honestly unresolved")
+    cmd = [sys.executable,
+           str(PROGRAMS_DIR / "em_peak_current_authority_check.py"),
+           str(project),
+           "--json", str(rpt3 / "em_current_authority.json")]
+    if tlef_arg is not None:
+        cmd += ["--tech-lef", str(tlef_arg)]
+    subprocess.run(cmd, timeout=600, check=False,
+                   capture_output=True, text=True)
+    return (rpt3 / "em_current_authority.json").is_file()
+
+
 def _emit_perc_equivalent(project: Path, top: str, pdk: PdkConfig,
                           container: str, notes: List[str]) -> bool:
     """Aggregate the 7 Calibre-PERC categories into ONE honest open-source
@@ -42255,6 +42354,32 @@ def _emit_perc_equivalent(project: Path, top: str, pdk: PdkConfig,
     em_cat["guardband"] = (
         "current density < 0.5 mA/um per wire; vias >= 2x2 arrays on "
         "power straps (stated as a GUARDBAND design rule, not a tool proof)")
+    # #1215: em.json is measurement-only, so #444 maps its MEASURED verdict
+    # to INCOMPLETE ("no budget comparison applied"). When the Step-25
+    # authority gate HAS applied the comparison — em_current_authority.json,
+    # emitted just before this aggregate — the category reads THAT verdict:
+    # PASS/FAIL is the comparison's own answer against the tech-LEF Jmax and
+    # the net's declared supply current. When the comparison is absent or
+    # itself INCOMPLETE (no reachable Jmax authority), the honest INCOMPLETE
+    # stands exactly as before — never relabelled.
+    if em_cat.get("result") == "INCOMPLETE":
+        em_auth = rpt3 / "em_current_authority.json"
+        auth_v = _read_verdict(em_auth)
+        if auth_v in ("PASS", "FAIL"):
+            jmax_src = None
+            try:
+                jmax_src = (json.loads(em_auth.read_text())
+                            .get("jmax_screen") or {}).get("jmax_source")
+            except (OSError, ValueError):
+                pass
+            em_cat["result"] = auth_v
+            em_cat["source_verdict"] = auth_v
+            em_cat["evidence"] = "reports/phase3/em_current_authority.json"
+            em_cat["note"] = (
+                "budget comparison applied by em_peak_current_authority_check "
+                "(supply-current conservation bound + per-layer Jmax from "
+                f"{jmax_src or 'the resolved tech LEF'}); measurement artifact "
+                "remains reports/phase3/em.json (#1215)")
     categories.append(em_cat)
     categories.append(_auto(
         "Floating nets", erc_v, "OpenROAD report_floating_nets (ERC screen)",
