@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 1241
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1241)
+- **Total programs (excluding helpers / shims):** 1242
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1242)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 1232 |
+| `any` | 1233 |
 
 ## Alphabetical listing
 
@@ -788,6 +788,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pcie_gen5_protocol_synth` | any | v0.1.89 | PCI Express 5.0 (Gen5) protocol synth helper. |
 | `pcie_protocol_synth` | any | v0.1.84 | PCI Express-class protocol synth helper. |
 | `pdk_analog_completeness_check` | any | — | pdk_analog_completeness_check.py |
+| `pdk_analog_layout_minima` | any | — | the target PDK's DRAWN-GEOMETRY minima, read out of `programs/pdk_registry.json` for whatever family is asked for. |
 | `pdk_cell_models` | any | — | single source of truth for per-PDK stdcell Verilog simulation models that live INSIDE the EDA container. |
 | `pdk_consistency_check` | any | — | Deterministic PDK-netlist consistency checker. |
 | `pdk_device_map` | any | — | PDK-AGNOSTIC generic->foundry device-map accessor (R13). |
@@ -1313,7 +1314,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (1232 programs)
+### `any` (1233 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `absence_verdict_names_its_search_space_check` — "not found" must say WHERE it looked.
@@ -2072,6 +2073,7 @@ _(no programs in this group)_
 - `pcie_gen5_protocol_synth` — PCI Express 5.0 (Gen5) protocol synth helper.  _[v0.1.89]_
 - `pcie_protocol_synth` — PCI Express-class protocol synth helper.  _[v0.1.84]_
 - `pdk_analog_completeness_check` — pdk_analog_completeness_check.py
+- `pdk_analog_layout_minima` — the target PDK's DRAWN-GEOMETRY minima, read out of `programs/pdk_registry.json` for whatever family is asked for.
 - `pdk_cell_models` — single source of truth for per-PDK stdcell Verilog simulation models that live INSIDE the EDA container.
 - `pdk_consistency_check` — Deterministic PDK-netlist consistency checker.
 - `pdk_device_map` — PDK-AGNOSTIC generic->foundry device-map accessor (R13).
