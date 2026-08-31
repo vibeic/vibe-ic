@@ -846,47 +846,47 @@ WAIVERS: Tuple[Waiver, ...] = (
     # the numbers above.
 
     # ── dimension 6 — skip discipline (the CONDITION half) ────────────
-    Waiver(
-        step_id="DT2",
-        dim=6,
-        reason=(
-            "RE-OPENED 2026-07-28 at the convergence merge, with a sharper "
-            "reason than it carried before. DT2's step-level condition is "
-            "ALL-of over three paths, two of which "
-            "(phase2/stage2/dft/cut_netlist.v and phase3/stage3/pnr/*_pnr.v) "
-            "are artefacts whose absence DT2 exists to detect, so the step "
-            "disappears in the scenario it was written for. The repo AGREES: "
-            "flow_condition_reachability_check classifies it 'self-disabling' "
-            "and it is carried in flow_condition_reachability_baseline.json as "
-            "a known-open hole owned by vibe-ic#235. WHAT IS NEW, and why the "
-            "cell is not enforced-clean by the obvious repair: re-arming the "
-            "condition on the PRODUCER'S OWN OUTPUTS (any-of over "
-            "reports/phase2/dft/path_delay_coverage.json or "
-            "phase2/stage2/dft/path_delay_atpg_not_run.json) was tried, "
-            "measured, and WITHDRAWN — it moves the self-disable from the "
-            "input side to the output side, where it is strictly worse: "
-            "deleting the one artefact DT2 exists to report on turns the step "
-            "from MISSING/rc 1 into SKIPPED-CONDITION/rc 0 and removes it from "
-            "the executed-PASS denominator, because total_required subtracts "
-            "SKIPPED-CONDITION. Closing this cell needs a flow-level non-fatal "
-            "verdict for 'ran, disclosed, could not measure' that COSTS the "
-            "denominator; no spelling of the condition alone can do it."
-        ),
-        evidence=(
-            "flow/flow_condition_reachability_baseline.json (owner: "
-            "vibe-ic#235). Reproduce the hole: `python3 "
-            "programs/flow_condition_reachability_check.py .` -> 'KNOWN-OPEN: "
-            "1 self-disabling condition(s)' naming step DT2. Reproduce the "
-            "withdrawn repair, on a project holding cut_netlist.v + *.spef + "
-            "*_pnr.v and NO at-speed grade and NO not-run record, with a "
-            "single-step DT2 flow lifted from each yaml: ALL-of condition -> "
-            "'MISSING=1' / 'Overall: FAIL (strict=True)' / rc 1; "
-            "producer-outputs condition -> 'SKIPPED=2' / 'Steps: 1 total "
-            "(0/-1 executed PASS)' / 'Overall: PASS' / rc 0. Measured "
-            "2026-07-28 with programs/flow_compliance_check.py from this tree "
-            "on both flow definitions."
-        ),
-    ),
+    # EMPTY. The single entry here — DT2 — was CLOSED 2026-08-31 by resolving
+    # the condition. Recorded rather than silently deleted, because the entry
+    # asserted that closing it was IMPOSSIBLE by this route, and a register that
+    # drops a refuted claim teaches nothing:
+    #
+    #   IT SAID: "Closing this cell needs a flow-level non-fatal verdict for
+    #   'ran, disclosed, could not measure' that COSTS the denominator; no
+    #   spelling of the condition alone can do it."
+    #
+    #   WHAT WAS WRONG WITH THAT: it followed from the withdrawn repair it
+    #   describes — ARMING the condition on a disclosure record, which does
+    #   need such a verdict. The guard was never asking for an extra arm.
+    #   `flow_condition_reachability_check.classify()` named exactly two of the
+    #   three ALL-of paths as unreachable (`phase2/stage2/dft/cut_netlist.v`,
+    #   `phase3/stage3/pnr/*_pnr.v`) and left `phase3/stage3/extracted/*.spef`
+    #   alone, because that one is step 22's sole required_output and already
+    #   carried a T3 backstop. Both unreachable paths are artefacts a producer
+    #   really writes that NO step in the flow YAML declares. The condition is
+    #   now the two DECLARED outputs of DT2's own `blocks_on: [DT1, 22]` —
+    #   `reports/phase2/dft/transition_coverage.json` plus the SPEF — which is
+    #   the spelling DT3 one step later already used. No new verdict tier was
+    #   needed, and none was added.
+    #
+    #   AND THE WITHDRAWAL DOES NOT RECUR, by construction: this change adds no
+    #   arm, it REMOVES paths from an ALL-of, which can only make the condition
+    #   arm later and never earlier, so the output-side self-disable the 2026-07-28
+    #   dimension-6 change was withdrawn for cannot arise.
+    #
+    #   MEASURED, 8 fixtures + 3 real run roots, single-step DT2 flow lifted
+    #   from each yaml: `pre_route` unchanged at SKIPPED-CONDITION rc 0 (the
+    #   withdrawal's own regression case); a routed+extracted design with NO DFT
+    #   still self-skips (no false alarm); `cut_lost` and `routed_no_pnrv_nog`
+    #   move SKIPPED-CONDITION rc 0 -> MISSING rc 1 (the hole closing); nothing
+    #   went PASS -> FAIL; and benchmark-data/ic/spm/v1.5.58_ihp-sg13g2, a
+    #   published cell carrying a real 16-of-16 robust at-speed PASS, moves
+    #   SKIPPED-CONDITION -> PASS — the old condition was discarding a grade the
+    #   run had actually made.
+    #
+    #   The full prior adjudication is preserved verbatim under `_closed_detail`
+    #   in flow/flow_condition_reachability_baseline.json, whose `holes` list is
+    #   now empty.
 
     # ── dimension 7 — is the required_outputs list complete? ───────────
     # Five of the nine original entries were CLOSED on 2026-07-28 by declaring

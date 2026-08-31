@@ -30,11 +30,16 @@ report must agree that it did not make DRV worse.
 
 Verdicts
 --------
-VACUOUS_PASS (0) no promotion happened this run (no `routed_base_prerepair.def`)
-PASS         (0) promotion happened AND the sign-off report corroborates it
+PASS         (0) promotion happened AND the sign-off report corroborates it,
+                 OR no promotion happened and the producer's own
+                 `drv_promotion_not_run.json` record says so (the normal case
+                 — examined and declared, not inferred from an absent file)
+VACUOUS_PASS (0) neither the promotion marker nor the non-promotion record
+                 exists, i.e. `step_signoff_spef_repair` never ran at all
 FAIL         (1) sign-off DRV is WORSE than the promotion claimed, or a
                  promotion happened with NO sign-off report to corroborate it
-                 (an uncorroborated promotion is exactly the failure mode)
+                 (an uncorroborated promotion is exactly the failure mode),
+                 or the non-promotion record exists and is unreadable
 IO_ERROR     (2) argument / read error
 
 ENFORCEMENT: blocking — shipping a route whose claimed improvement the
@@ -54,6 +59,19 @@ from typing import List, Optional, Tuple
 
 # The promotion leaves this behind when (and only when) it swapped the route.
 _PROMOTION_MARKER = "routed_base_prerepair.def"
+# ...and `step_signoff_spef_repair` leaves THIS behind on every branch that did
+# NOT promote. The pair is exhaustive and mutually exclusive by construction:
+# the producer writes the record on each non-promotion return and DELETES it on
+# the promotion branch, so after the step has run exactly one of the two exists.
+#
+# WHY THE PAIR EXISTS (vibe-ic#220 / #210 / #219). This gate used to infer "no
+# promotion happened" from the ABSENCE of the marker, and absence is not a
+# measurement: a promotion that ran and died before `shutil.copy2` leaves the
+# same empty pnr dir as a run that correctly declined to promote, and the gate
+# called both of them VACUOUS_PASS. The record turns the normal case into a
+# POSITIVE reading — the producer's own declaration, with its reason — so the
+# gate can answer PASS on evidence instead of passing on silence.
+_NOT_RUN_RECORD = "drv_promotion_not_run.json"
 _REPAIR_LOG = "signoff_spef_repair.log"
 
 # The report the acceptance gate reads. Same candidate paths as
@@ -105,6 +123,18 @@ def promotion_happened(project: Path) -> Optional[Path]:
     return None
 
 
+def promotion_declined_record(project: Path) -> Optional[Path]:
+    """The producer's own "I did not promote, and here is why" record.
+
+    Searched over the same `_PNR_DIRS` as the promotion marker, so the two can
+    never disagree about where they live."""
+    for d in _PNR_DIRS:
+        p = project / d / _NOT_RUN_RECORD
+        if p.is_file():
+            return p
+    return None
+
+
 def repair_log(project: Path) -> Optional[Path]:
     for d in _PNR_DIRS:
         p = project / d / _REPAIR_LOG
@@ -134,8 +164,62 @@ def signoff_drv_violations(rpt_text: str) -> int:
 def check(project: Path) -> dict:
     promo = promotion_happened(project)
     if promo is None:
+        # NOT-PROMOTED, DECLARED. The producer left its own record saying it
+        # did not promote and why, so this is a reading, not a silence: the
+        # gate has confirmed that there is no promoted route whose claimed
+        # improvement the sign-off report would have to corroborate. That is a
+        # real PASS and is deliberately NOT the VACUOUS_PASS below.
+        #
+        # The distinction is load-bearing, not cosmetic. `flow_compliance_check`
+        # promotes a `VACUOUS_PASS:` line to the vacuity tier, and step 23 is a
+        # SIGN-OFF step, so ONE vacuous clause beside four substantive ones made
+        # the step PARTIALLY-VACUOUS and `_blocks_when_vacuous` then voided every
+        # downstream done-claim (MEASURED on spm@1.14.30: steps 30-38 landed
+        # PASS_VOIDED_BY_DEPENDENCY on a run with FAIL=0). Reporting the normal
+        # case as what it is — examined, declared, nothing to corroborate —
+        # removes that cascade without weakening the gate: a promotion that DID
+        # happen still takes the corroboration path below and still FAILs when
+        # the sign-off report contradicts it.
+        rec_path = promotion_declined_record(project)
+        if rec_path is not None:
+            try:
+                rec = json.loads(rec_path.read_text(errors="replace"))
+            except (OSError, ValueError):
+                rec = None
+            if isinstance(rec, dict):
+                why = str(rec.get("reason") or rec.get("note")
+                          or "no reason recorded")
+                stage = rec.get("not_run_stage")
+                return {
+                    "verdict": "PASS", "rc": 0, "promoted": False,
+                    "not_run_record": str(rec_path),
+                    "not_run_stage": stage,
+                    "reason": (
+                        "no route was promoted this run, and the producer says "
+                        "so itself: " + why
+                        + (f" (stage: {stage})" if stage else "")
+                        + " — there is no promoted route whose claimed "
+                          "improvement the sign-off report must corroborate, "
+                          "and that is a reading of the producer's own record, "
+                          "not an inference from an absent file."),
+                }
+            # A record that exists but is not readable JSON is WORSE than none:
+            # the producer claims to have declared something and the claim
+            # cannot be read. Never a pass.
+            return {"verdict": "FAIL", "rc": 1, "promoted": False,
+                    "not_run_record": str(rec_path),
+                    "reason": (f"the producer's non-promotion record "
+                               f"{rec_path} exists but is not readable JSON, "
+                               f"so whether a route was promoted this run "
+                               f"cannot be established either way.")}
+        # NEITHER the marker NOR the record. The producer did not run at all
+        # (a routing FAIL that returns early from `step_pnr` skips
+        # `step_signoff_spef_repair`), so nothing was examined and the verdict
+        # says exactly that.
         return {"verdict": "VACUOUS_PASS", "rc": 0,
-                "reason": "no route promotion this run — gate inapplicable",
+                "reason": ("no route promotion this run and no non-promotion "
+                           "record either — `step_signoff_spef_repair` never "
+                           "ran; gate inapplicable"),
                 "promoted": False}
 
     rpt = find_signoff_report(project)
@@ -192,6 +276,18 @@ def main(argv: Optional[List[str]] = None) -> int:
         # recorded as an ordinary PASS. Measured against the consumer directly.
         print(f"VACUOUS_PASS: {rep['reason']}")
     if a.json:
+        # MEASURED once the clause started running on ordinary runs: this was a
+        # bare `write_text`, and `reports/phase3/sta/` does not exist yet on a
+        # project that has not reached sign-off STA. The gate computed the right
+        # verdict (`verdict: PASS`) and then died writing its own report, which
+        # `flow_compliance_check` recorded as
+        #   basis: gate-crashed — the gate program raised an unhandled exception
+        #          and returned no verdict
+        # i.e. a correct answer converted into a CRASHED gate by its own
+        # bookkeeping. Unreachable while the clause was armed only by a
+        # promotion (a promoted route implies a run that reached sign-off), and
+        # reachable the moment it is armed by the non-promotion record.
+        Path(a.json).parent.mkdir(parents=True, exist_ok=True)
         Path(a.json).write_text(json.dumps(rep, indent=2, ensure_ascii=False))
     return rep["rc"]
 

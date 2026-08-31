@@ -4804,33 +4804,108 @@ steps:
     name: "Path-delay-fault (at-speed, timing-graded) ATPG"
     stage: stage2
     condition:
-      # Needs the DT1 scan cut PLUS the post-route timing model (routed
-      # netlist + SPEF) — self-skips (NOT_APPLICABLE) before Phase 3 runs.
+      # TWO triggers, and they are exactly this step's own `blocks_on: [DT1, 22]`
+      # written as artefacts: DT1's at-speed grade, and step 22's post-route
+      # timing model. Self-skips (NOT_APPLICABLE) on a design with no DFT track,
+      # and before Phase 3 has extracted parasitics.
       #
-      # THIS IS A KNOWN-OPEN SELF-DISABLING CONDITION, and it is carried as one
-      # in flow/flow_condition_reachability_baseline.json (owner vibe-ic#235),
-      # not hidden: two of the three paths are artefacts whose absence DT2
-      # exists to detect. It is left in this shape ON PURPOSE. The obvious
-      # repair — re-arm on the PRODUCER'S OWN OUTPUTS, any-of over
-      # reports/phase2/dft/path_delay_coverage.json or
-      # phase2/stage2/dft/path_delay_atpg_not_run.json — was written, measured
-      # and WITHDRAWN at the 2026-07-28 convergence merge, because it moves the
-      # self-disable from the INPUT side to the OUTPUT side and that is
-      # strictly worse. Measured on a project holding cut_netlist.v + *.spef +
-      # *_pnr.v and no at-speed grade and no not-run record, single-step DT2
-      # flow: ALL-of (this spelling) -> MISSING, "Overall: FAIL", rc 1;
-      # producer-outputs -> SKIPPED-CONDITION, "0/-1 executed PASS",
-      # "Overall: PASS", rc 0 — the step leaves the denominator entirely,
-      # because total_required subtracts SKIPPED-CONDITION. "The producer never
-      # ran" is production-reachable (run_at_speed_atpg_producers lives inside
-      # step_canonicalize_artefacts, which a routing FAIL returning early from
-      # step_pnr skips) and path_delay_atpg_not_run.json exists in 0 of the 12
-      # tracked run roots, so that arm is not evidence of anything today.
-      # Closing this needs a flow-level non-fatal "ran, disclosed, could not
-      # measure" verdict that COSTS the denominator — not a new condition.
-      files_exist: ["phase2/stage2/dft/cut_netlist.v",
-                    "phase3/stage3/extracted/*.spef",
-                    "phase3/stage3/pnr/*_pnr.v"]
+      # THIS WAS THE FLOW'S LAST BASELINED SELF-DISABLING CONDITION
+      # (flow/flow_condition_reachability_baseline.json, owner vibe-ic#235).
+      # It read
+      #     files_exist: ["phase2/stage2/dft/cut_netlist.v",
+      #                   "phase3/stage3/extracted/*.spef",
+      #                   "phase3/stage3/pnr/*_pnr.v"]
+      # as an ALL-of, so ANY one of the three going missing disarmed the step —
+      # and `flow_condition_reachability_check` named exactly which two could go
+      # missing SILENTLY: `cut_netlist.v` and `*_pnr.v`. Both are artefacts a
+      # producer really writes that NO step in this file declares, so neither
+      # absence is loud anywhere. `*.spef` was never part of the hole: it is
+      # step 22's SOLE required_output and already carried a T3 backstop.
+      #
+      # THE ROOT CAUSE WAS DECLARATION-vs-PRODUCER, AND IT IS FIXED BY NAMING
+      # DECLARED ARTEFACTS, NOT BY DECLARING THE UNDECLARED ONES. Both
+      # declare-them alternatives were written, measured and REFUSED:
+      #   * declare `*_pnr.v` as a hard files_exist on step 21 — REFUSED on the
+      #     corpus sweep: the artefact is absent from 29 of 41 published routed
+      #     run roots (it is not gitignored; the published cells simply do not
+      #     carry it), so the declaration would newly FAIL 29 shipped cells.
+      #   * declare `cut_netlist.v` at step 11, as a hard `any_of` of the cut
+      #     netlist OR `dft_atpg_not_run.json` (the shape step 11's producer
+      #     really guarantees) — REFUSED on measurement: over 491 dft dirs on a
+      #     working host, 37 carry `scan_netlist.v` with NEITHER, and at least
+      #     one of those is a real run root (`_scan/T1`) that disclosed only at
+      #     the DT level (`transition_atpg_not_run.json`,
+      #     `path_delay_atpg_not_run.json`, `sdd_atpg_not_run.json`) and never
+      #     wrote a step-11 record. That predicate would fail a real run.
+      #
+      # WHY THIS SPELLING IS RIGHT AND NOT MERELY WHAT PASSES THE GUARD:
+      #   * The two triggers ARE this step's `blocks_on: [DT1, 22]`, written as
+      #     the artefacts those two steps DECLARE. Steps chaining on each
+      #     other's declared outputs instead of each other's intermediates is
+      #     the same repair DT1's own required_outputs note describes, and DT3
+      #     one step later already uses exactly this spelling.
+      #   * `*.spef` is step 22's SOLE required_output and step 22
+      #     `blocks_on: [21]`, so a SPEF cannot exist unless routing PASSED.
+      #     `*_pnr.v` therefore added no scoping — only a third way for DT2 to
+      #     vanish. The missing-netlist case is guarded BY THE PRODUCER and
+      #     better: `path_delay_fault_atpg_run._timing_inputs_present` returns
+      #     NOT_APPLICABLE naming WHICH of (routed netlist, SDC, SPEF) is gone.
+      #     The condition's silence names nothing.
+      #   * `cut_netlist.v` is a REGENERABLE step-11 intermediate, not a timing
+      #     input: `path_delay_fault_atpg_run` calls `_tdf._ensure_cut(...)`,
+      #     which CREATES the cut from the netlist when it is absent. DT1 owns
+      #     that input and already handles its absence properly (any_of +
+      #     `transition_atpg_not_run.json`).
+      #
+      # WHY `reports/phase2/dft/transition_coverage.json` AND NOT
+      # `cut_netlist.v`. Both express "the DFT at-speed track really ran", and
+      # only one of them is backstopped: `transition_coverage.json` is DT1's
+      # SOLE required_output, so if it disappears DT1 itself goes MISSING and
+      # says so, while `cut_netlist.v` is declared nowhere and can vanish in
+      # silence. It is also the SAME spelling DT3 already uses one step later
+      # (DT3's condition is path_delay_coverage.json + transition_coverage.json),
+      # so the three DT steps now chain on each other's declared grades rather
+      # than on each other's undeclared intermediates.
+      # This trigger is what keeps a NO-DFT design out of DT2: a routed and
+      # extracted design that never ran scan has no `transition_coverage.json`,
+      # DT1 self-skips, and DT2 self-skips beside it instead of taking a hard
+      # MISSING for a grade nobody asked for
+      # (`test_a_routed_extracted_design_with_no_dft_does_not_arm_dt2`).
+      #
+      # THE 2026-07-28 WITHDRAWAL IS NOT RE-RUN HERE. That change replaced this
+      # ALL-of with an any-of over the PRODUCER'S OWN OUTPUTS and was correctly
+      # withdrawn for moving the self-disable to the output side. This change
+      # adds no arm at all: removing paths from an ALL-of can only make the
+      # condition arm LATER, never earlier, so the output-side self-disable it
+      # was withdrawn for cannot arise. MEASURED, single-step DT2 flow, 8
+      # fixtures + 3 real run roots, stock vs this spelling:
+      #   pre_route (DT1 graded, nothing routed)
+      #                                    SKIPPED-CONDITION -> unchanged
+      #       <- the exact case the 2026-07-28 withdrawal was protecting
+      #   no_dft_routed / routed_no_cut (routed+extracted, NO DFT at all)
+      #                                    SKIPPED-CONDITION -> unchanged
+      #       <- no false alarm on a design that never asked for at-speed ATPG
+      #   routed_full (everything + grade)  PASS             -> unchanged
+      #   routed_nograde (everything, no DT2 grade)
+      #                                     MISSING rc 1     -> unchanged
+      #   cut_lost (DT1 graded, routed+extracted, cut netlist gone, no DT2 grade)
+      #                                    SKIPPED-CONDITION -> MISSING rc 1
+      #   routed_no_pnrv_nog (DT1 graded, no *_pnr.v, no DT2 grade)
+      #                                    SKIPPED-CONDITION -> MISSING rc 1
+      #   routed_no_pnrv (DT1 graded, no *_pnr.v, DT2 GRADED)
+      #                                    SKIPPED-CONDITION -> PASS
+      #   benchmark-data/ic/spm/v1.5.58_ihp-sg13g2 (a PUBLISHED converged cell
+      #       carrying a genuine 16-of-16 robust at-speed PASS)
+      #                                    SKIPPED-CONDITION -> PASS
+      #   benchmark-data/ic/spm/v1.10.18_sky130A (DT1 graded, never routed)
+      #                                    SKIPPED-CONDITION -> unchanged
+      #   benchmark-data/evaluation/phase1_parity/sgmii (routed+extracted, no DFT)
+      #                                    SKIPPED-CONDITION -> unchanged
+      # Nothing went PASS -> FAIL. Two silent skips became loud, two real
+      # at-speed grades the old condition threw away are now reported, and every
+      # legitimately-inapplicable tree still self-skips.
+      files_exist: ["reports/phase2/dft/transition_coverage.json",
+                    "phase3/stage3/extracted/*.spef"]
     programs:
       - path_delay_fault_atpg_run
       - path_delay_coverage_check
@@ -5191,13 +5266,47 @@ steps:
         # "NOT-APPLICABLE (declared, N of M gate clause(s) here examined
         # nothing)", and does not move the tier. Deleting the clause deletes its
         # exemption with it. Both `_PNR_DIRS` the gate itself searches are
-        # listed, so the condition and the program can never disagree about
-        # where the marker lives.
+        # listed for BOTH filenames, so the condition and the program can never
+        # disagree about where either artefact lives.
+        #
+        # -- THE FOURTH AND FIFTH TRIGGER (vibe-ic#220) --------------------
+        # `drv_promotion_not_run.json` is the producer's own "I did not promote,
+        # and here is why" record. Adding it is what makes this clause REACHABLE
+        # instead of self-disabling, and it is a PRODUCER change, not a label:
+        # `step_signoff_spef_repair` now writes the record on every one of its
+        # five non-promotion returns (no_base_route / tool_unsupported /
+        # precondition_unmet / producer_execution_error / repair_declined) and
+        # DELETES it on the promotion branch, so after the step has run exactly
+        # one of {marker, record} exists. Before that change the non-promotion
+        # branches wrote NOTHING, so "no promotion happened" and "the promotion
+        # ran and died before `shutil.copy2`" left byte-identical evidence and
+        # the gate called both VACUOUS_PASS. MEASURED over 45 real run roots on
+        # a working host: `routed_base_prerepair.def` is present in 0 of them,
+        # so the branch that left no evidence was not the corner case, it was
+        # every run.
+        #
+        # WHY THIS DOES NOT RE-CREATE THE VACUITY DEFECT. The 2026-08-31
+        # measurement (`measure(step23)`, v1.14.49) established that the T2
+        # shape as usually prescribed -- arm on the record, let the clause run
+        # -- made the clause return VACUOUS_PASS on the normal day, which
+        # promoted step 23 to PARTIALLY-VACUOUS and voided 10 downstream steps.
+        # That conclusion was correct ABOUT THE GATE AS IT THEN WAS. The gate is
+        # now different: reading the producer's record is an EXAMINATION, and
+        # `drv_promotion_corroboration_check` answers a real PASS on it, naming
+        # the recorded reason. VACUOUS_PASS is now reserved for the one state
+        # where nothing was examined -- neither marker nor record, i.e.
+        # `step_signoff_spef_repair` never ran at all. So the clause runs, says
+        # something true, and does not move the tier. Both landed doctrines
+        # (reachability #210/#219; vacuity #901/#1115) are satisfied without
+        # either giving way -- the collision was between the doctrines and a
+        # gate that could only INFER, not between the doctrines.
         - optional_program_exit_zero:
             command: "drv_promotion_corroboration_check . --json reports/phase3/sta/drv_promotion_corroboration.json"
             condition_files_exist:
               - "phase3/stage3/pnr/routed_base_prerepair.def"
               - "pnr/routed_base_prerepair.def"
+              - "phase3/stage3/pnr/drv_promotion_not_run.json"
+              - "pnr/drv_promotion_not_run.json"
             absent_condition_reason: "no route promotion happened this run, so no promoted route exists whose claimed improvement the sign-off report could corroborate; the gate's own verdict table makes this its normal outcome and the marker is measured at 0 of 15 published run-roots"
     blocks_on: [22]
 

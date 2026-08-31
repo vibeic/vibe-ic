@@ -26175,6 +26175,57 @@ def _ship_repair_should_promote(parsed: dict, repaired_def_ok: bool,
     return True
 
 
+# --- DRV-promotion disclosure (vibe-ic#220) -------------------------------
+#
+# `drv_promotion_corroboration_check` (step 23) corroborates a route this step
+# PROMOTED against the sign-off report that route claims to improve. It used to
+# be armed on `routed_base_prerepair.def` alone — the marker this step writes on
+# the promotion branch and only there.
+#
+# That made the clause self-disabling in the exact shape #210/#219 exist to
+# refuse. Every NON-promotion return below wrote nothing at all, so "no
+# promotion happened" and "the promotion ran and died before it could copy the
+# marker" left byte-identical evidence, and the gate read both as
+# VACUOUS_PASS. MEASURED over 45 real run roots on this host: the marker is
+# present in 0 of them, so the branch that leaves NO evidence is not the corner
+# case — it is every run.
+#
+# The repair is the T2 shape the reachability guard names: the producer always
+# leaves either a RESULT or a record saying why there is none. `_drv_promotion_
+# disclose` writes that record on every non-promotion return; the promotion
+# branch calls `_drv_promotion_clear` so the two are mutually exclusive and the
+# gate can never read a stale "did not promote" beside a real promotion.
+_DRV_PROMOTION_NOT_RUN = "drv_promotion_not_run.json"
+
+
+def _drv_promotion_disclose(pnr_out: Path, stage: str, reason: str) -> None:
+    """Record that this run did NOT promote a repaired route, and why.
+
+    Best-effort by design: this is a disclosure, and a disclosure that raises
+    would convert a benign non-promotion into a step crash. A write that fails
+    leaves the pre-existing "neither marker nor record" state, which the gate
+    already reports as VACUOUS_PASS rather than as a pass.
+    """
+    try:
+        pnr_out.mkdir(parents=True, exist_ok=True)
+        (pnr_out / _DRV_PROMOTION_NOT_RUN).write_text(json.dumps({
+            "program": "step_signoff_spef_repair",
+            "promoted": False,
+            "not_run_stage": stage,
+            "reason": reason,
+        }, indent=2) + "\n")
+    except OSError:
+        pass
+
+
+def _drv_promotion_clear(pnr_out: Path) -> None:
+    """Delete any stale non-promotion record once a promotion HAS happened."""
+    try:
+        (pnr_out / _DRV_PROMOTION_NOT_RUN).unlink()
+    except OSError:
+        pass
+
+
 def step_signoff_spef_repair(project: Path, top: str, pdk: "PdkConfig",
                              container: str) -> "Optional[StepResult]":
     """#527 estimate-vs-SPEF — SHIPPED post-route real-SPEF setup repair at the
@@ -26186,8 +26237,21 @@ def step_signoff_spef_repair(project: Path, top: str, pdk: "PdkConfig",
     pnr_out = _pl.pnr_dir(project)
     routed = pnr_out / "routed.def"
     if not routed.is_file():
+        # No base route to repair — nothing to promote, and nothing for step
+        # 23 to corroborate. Disclosed rather than left silent, so the gate
+        # reads a declaration instead of inferring one from an empty dir.
+        _drv_promotion_disclose(
+            pnr_out, "no_base_route",
+            "no phase3/stage3/pnr/routed.def exists, so there is no base "
+            "sign-off route for the post-route real-SPEF repair to improve "
+            "on and nothing could be promoted")
         return None
     if not _openroad_supports_postroute_spef_repair(container):
+        _drv_promotion_disclose(
+            pnr_out, "tool_unsupported",
+            "the OpenROAD build in this container does not support the "
+            "post-route real-SPEF repair, so the repair was never attempted "
+            "and no route was promoted")
         return None
     try:
         corner_libs = _resolve_signoff_corner_libs(project, pdk, container)
@@ -26196,6 +26260,11 @@ def step_signoff_spef_repair(project: Path, top: str, pdk: "PdkConfig",
     ss_lib = corner_libs.get("SS") or corner_libs.get("TT")
     cap = _max_captable_c(pdk, container)
     if not ss_lib or not cap:
+        _drv_promotion_disclose(
+            pnr_out, "precondition_unmet",
+            "the slow sign-off corner Liberty and/or the PDK max-captable "
+            "value could not be resolved, so the repair was never attempted "
+            "and no route was promoted")
         return None
     tcl = _ship_signoff_spef_repair_tcl(
         top,
@@ -26216,6 +26285,10 @@ def step_signoff_spef_repair(project: Path, top: str, pdk: "PdkConfig",
         rc, out, err = _docker_exec(
             container, f"openroad -no_init -exit {tcl_c}", marker=tcl_c)
     except Exception as exc:
+        _drv_promotion_disclose(
+            pnr_out, "producer_execution_error",
+            f"the repair invocation itself failed ({exc}); the base route was "
+            f"kept and no route was promoted")
         return StepResult("signoff_spef_repair", "PASS", time.time() - t0,
                           f"no-op (base route kept): repair invocation failed: {exc}")
     log = (out or "") + "\n" + (err or "")
@@ -26227,6 +26300,10 @@ def step_signoff_spef_repair(project: Path, top: str, pdk: "PdkConfig",
     def_ok = repaired_def.is_file() and repaired_def.stat().st_size > 0
     v_ok = repaired_v.is_file() and repaired_v.stat().st_size > 0
     if _ship_repair_should_promote(parsed, def_ok, v_ok):
+        # A promotion DID happen: drop any non-promotion record a previous
+        # invocation left, so the marker and the record can never both be
+        # readable and the gate can never corroborate against a stale claim.
+        _drv_promotion_clear(pnr_out)
         shutil.copy2(routed, pnr_out / "routed_base_prerepair.def")
         shutil.copy2(repaired_def, routed)
         _pnr_v = pnr_out / f"{top}_pnr.v"
@@ -26250,9 +26327,13 @@ def step_signoff_spef_repair(project: Path, top: str, pdk: "PdkConfig",
             extras={"pg_net_ownership_stale": True,
                     "pg_net_ownership_stale_reason":
                         _PG_STALE_AFTER_PROMOTION})
+    _note = _ship_repair_nonpromotion_note(parsed)
+    _drv_promotion_disclose(
+        pnr_out, "repair_declined",
+        "the repair ran and its result did not clear the promotion gate, so "
+        "the base route was kept: " + _note)
     return StepResult(
-        "signoff_spef_repair", "PASS", time.time() - t0,
-        _ship_repair_nonpromotion_note(parsed))
+        "signoff_spef_repair", "PASS", time.time() - t0, _note)
 
 
 # --- DRV wire-length escalation (a SEPARATE, independently-gated attempt) --

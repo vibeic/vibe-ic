@@ -693,10 +693,40 @@ def test_a_disclosed_not_run_is_never_cost_free_at_the_flow_level(tmp_path):
 
     rc, doc = _fcc(tmp_path, _dt_subflow(tmp_path))
     assert _status_of(doc, "DT1") == "MISSING", doc["_stdout"]
-    assert _status_of(doc, "DT2") == "MISSING", doc["_stdout"]
     assert doc["overall"] == "FAIL", doc["_stdout"]
     assert rc == 1, doc["_stdout"]
-    assert doc["counts"]["MISSING"] >= 2, doc["counts"]
+    assert doc["counts"]["MISSING"] >= 1, doc["counts"]
+
+    # DT2 DEFERS TO ITS UPSTREAM HERE, AND THAT IS NOT THE DISCOUNT.
+    #
+    # This used to assert `DT2 == "MISSING"` and `MISSING >= 2`. DT2's arming
+    # condition named `phase2/stage2/dft/cut_netlist.v`, which this tree has, so
+    # DT2 armed and went red for a grade its own upstream had never produced.
+    # DT2's condition is now DT1's DECLARED grade plus step 22's SPEF — the
+    # artefact spelling of its own `blocks_on: [DT1, 22]` — because
+    # `cut_netlist.v` is an UNDECLARED step-11 intermediate whose disappearance
+    # is loud nowhere, which is exactly the vibe-ic#235 hole this file's
+    # baseline entry carried. On this tree DT1 produced no grade, so DT2 waits.
+    #
+    # THE DISCOUNT THIS TEST REFUSES IS UNAFFECTED, and that is the whole point:
+    # the defect it was written for is `Overall: PASS` on a tree where nothing
+    # was measured, and the three assertions above still pin FAIL / rc 1 / a red
+    # step inside the denominator. What moved is WHICH step carries the red, not
+    # whether one does.
+    #
+    # THE PRECEDENT IS IN THIS SAME RUN. DT3 already chains on declared grades
+    # (its condition is path_delay_coverage.json + transition_coverage.json) and
+    # therefore ALREADY reports SKIPPED-CONDITION on this exact tree, in the
+    # arm this test passed in before and the arm it passes in now. This file
+    # accepted that for DT3 without calling it a discount; DT2 now behaves the
+    # same way, for the same reason.
+    #
+    # WHAT IS STILL REFUSED: DT2 may never come out of this tree GREEN.
+    assert _status_of(doc, "DT2") in ("MISSING", "SKIPPED-CONDITION"), (
+        "DT2 reported something other than red-or-deferred on a tree where "
+        "no at-speed grade exists at all:\n" + doc["_stdout"])
+    assert _status_of(doc, "DT3") in ("MISSING", "SKIPPED-CONDITION"), (
+        "DT3 likewise:\n" + doc["_stdout"])
 
 
 def test_a_routed_extracted_design_with_no_dft_does_not_arm_dt2(tmp_path):
@@ -767,6 +797,16 @@ def test_dt2_arms_and_goes_red_when_its_own_grade_is_absent(tmp_path):
     pnr = tmp_path / "phase3/stage3/pnr/top_pnr.v"
     pnr.parent.mkdir(parents=True, exist_ok=True)
     pnr.write_text("module top(); endmodule\n")
+    # "EVERYTHING DT2 NEEDS" INCLUDES DT1'S GRADE, and it always did — the tree
+    # just did not have to say so while DT2's condition named `cut_netlist.v`.
+    # DT2 `blocks_on: [DT1, 22]`, and DT1's declared sole required_output is
+    # this file; DT2's condition now names it (plus step 22's SPEF) instead of
+    # step 11's undeclared `cut_netlist.v`. Adding it here does not weaken the
+    # assertion below by one character — DT2 still has every input it needs and
+    # still has no at-speed grade of its own, which is the state being pinned.
+    # The tree WITHOUT it is pinned separately, by
+    # `test_dt2_defers_when_dt1_produced_no_grade_and_dt1_carries_the_red`.
+    _coverage(tmp_path, "DT1")
 
     rc, doc = _fcc(tmp_path, _dt_subflow(tmp_path))
     assert _status_of(doc, "DT2") == "MISSING", (
@@ -774,5 +814,46 @@ def test_dt2_arms_and_goes_red_when_its_own_grade_is_absent(tmp_path):
         "with NO at-speed grade on disk, did not go red — the step whose only "
         "job is to report that grade vanished instead:\n" + doc["_stdout"])
     assert doc["counts"]["MISSING"] >= 1, doc["_stdout"]
+    assert doc["overall"] == "FAIL", doc["_stdout"]
+    assert rc == 1, doc["_stdout"]
+
+
+def test_dt2_defers_when_dt1_produced_no_grade_and_dt1_carries_the_red(tmp_path):
+    """The tree `test_dt2_arms_and_goes_red_when_its_own_grade_is_absent` used
+    to use, kept as its own case so nothing is lost by that test gaining DT1's
+    grade.
+
+    Scan cut + SPEF + routed netlist, and NO grade from EITHER at-speed step.
+    DT2's condition now names DT1's declared grade, so DT2 waits — and the tree
+    is still red, because DT1 armed on the scan cut and went MISSING for the
+    grade IT owes. One defect, one red step, and the exit code is unchanged.
+
+    WHAT THIS PINS: the red must not evaporate when DT2 stops double-reporting
+    its upstream's failure. If a future edit makes DT1 skip here too, this test
+    goes green-on-nothing and `overall == "FAIL"` catches it.
+
+    MUTATION THIS CATCHES: dropping `reports/phase2/dft/transition_coverage.json`
+    from DT2's condition and leaving only the SPEF. DT2 would then arm on any
+    routed+extracted tree, including a design with no DFT at all — the false
+    alarm `test_a_routed_extracted_design_with_no_dft_does_not_arm_dt2` refuses
+    — while THIS tree would go MISSING at both DT1 and DT2 and look unchanged.
+    Read the two together: this one says the red survives, that one says it does
+    not spread.
+    """
+    _cut(tmp_path)
+    spef = tmp_path / "phase3/stage3/extracted/top.spef"
+    spef.parent.mkdir(parents=True, exist_ok=True)
+    spef.write_text('*SPEF "IEEE 1481-1998"\n')
+    pnr = tmp_path / "phase3/stage3/pnr/top_pnr.v"
+    pnr.parent.mkdir(parents=True, exist_ok=True)
+    pnr.write_text("module top(); endmodule\n")
+
+    rc, doc = _fcc(tmp_path, _dt_subflow(tmp_path))
+    assert _status_of(doc, "DT1") == "MISSING", (
+        "DT1 armed on the scan cut and owes a transition grade this tree does "
+        "not have; it must carry the red:\n" + doc["_stdout"])
+    assert _status_of(doc, "DT2") == "SKIPPED-CONDITION", (
+        "DT2 did not defer to the upstream grade it declares:\n"
+        + doc["_stdout"])
     assert doc["overall"] == "FAIL", doc["_stdout"]
     assert rc == 1, doc["_stdout"]

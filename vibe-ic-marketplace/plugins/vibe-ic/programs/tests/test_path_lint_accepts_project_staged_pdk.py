@@ -1,6 +1,6 @@
 """Path lint accepts the project's OWN staged PDK copy (u_hawaii_adc round-5).
 
-WHAT WENT WRONG (measured, v1.14.75): two shipped rules force one binding —
+WHAT WENT WRONG (measured, v1.14.76): two shipped rules force one binding —
 `pdk_analog_completeness_check` REQUIRES the project to carry its model libs
 under `input/pdk/**` (a run stands on input/ alone), and the availability
 resolver prefers that staged copy — so A3 binds

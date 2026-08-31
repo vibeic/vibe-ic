@@ -128,13 +128,33 @@ def audit_d2(plugin: Path) -> dict:
             r = subprocess.run([sys.executable, str(gp), str(plugin)],
                                capture_output=True, text=True)
             if r.returncode == 1:
-                findings.append({"check": guard, "detail": r.stdout.strip()[:300]})
+                # THE WHOLE FINDING, not its first 300 characters.
+                #
+                # This used to be `r.stdout.strip()[:300]`, and the cap did not
+                # trim decoration — it deleted the build-failing half of the
+                # finding. `flow_condition_reachability_check` prints its
+                # KNOWN-OPEN (baselined, reported-not-blocking) section FIRST and
+                # its hard `FAIL: N NEW self-disabling condition(s)` section
+                # SECOND. MEASURED on origin/main c9dacb8275: the guard exited 1
+                # because of a NEW hole at step 23, and BOTH the console line and
+                # the --json report showed only the DT2 known-open, cut off
+                # mid-sentence at "flow-YAML". An operator reading this audit saw
+                # a non-blocking entry and no sign of the blocking one.
+                #
+                # A truncated FAIL is the same defect class D2 exists to catch,
+                # one level up: the report that would have told you is the thing
+                # that went quiet. The full stdout is kept, and the console
+                # renderer below indents it so multi-line findings stay readable.
+                findings.append({"check": guard,
+                                 "detail": r.stdout.strip(),
+                                 "exit_code": r.returncode})
             elif r.returncode != 0:
                 findings.append({
                     "check": guard,
+                    "exit_code": r.returncode,
                     "detail": (f"guard could not run (exit {r.returncode}) — a "
                                f"guard that did not execute is NOT a pass: "
-                               f"{(r.stderr or r.stdout).strip()[:200]}")})
+                               f"{(r.stderr or r.stdout).strip()}")})
         else:
             findings.append({"check": guard, "detail": "guard program missing"})
 
@@ -212,7 +232,12 @@ def main(argv=None) -> int:
     print("D2 step-compliance-checker: "
           + ("PASS" if d2["passed"] else "FAIL"))
     for f in d2["findings"]:
-        print(f"   - {f['check']}: {f['detail']}")
+        # Multi-line details are printed whole and indented under their check,
+        # rather than clipped to one line — see the note at the truncation site.
+        _lines = str(f["detail"]).splitlines() or [""]
+        print(f"   - {f['check']}: {_lines[0]}")
+        for _l in _lines[1:]:
+            print(f"     {_l}")
     print("=> deterministic audit " + ("PASS" if passed else "FAIL")
           + " (D3 = run the full-test-audit skill for the skill-extractability dimension)")
     return 0 if passed else 1

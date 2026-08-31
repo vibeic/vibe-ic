@@ -2421,7 +2421,27 @@ def test_d6_waivers_are_evidence_backed_and_strict():
     ``strict=True`` is the anti-rot mechanism: when one of these gaps is fixed
     the cell XPASSes and this suite goes red, forcing the waiver's removal.
     """
-    assert dim_waivers(), f"dimension {DIM} declares no waiver at all"
+    # AN EMPTY DIMENSION IS A CLEAN DIMENSION, and this used to assert the
+    # opposite (`assert dim_waivers()`). That made the register unable to reach
+    # zero: closing the LAST waiver in a dimension turned a fixed gap into a red
+    # suite, which is a standing incentive to leave one open. Dimension 6
+    # reached zero on 2026-08-31 when DT2's self-disabling condition was
+    # resolved, and that is what this file exists to make possible.
+    #
+    # THE WIRING-BUG PROTECTION THE OLD ASSERTION BOUGHT IS KEPT, and it was
+    # never this line that bought it: a `dim_waivers()` that silently returns
+    # nothing while cells still carry xfail marks fails the `marked ==
+    # explained` assertion at the bottom of this function, which compares the
+    # two directions against each other rather than against a non-zero count.
+    # Emptiness is therefore only allowed when it is CORROBORATED — no cell
+    # carries a mark either — and that is asserted here rather than implied.
+    if not dim_waivers():
+        unexplained = sorted(sid for sid in F.step_ids()
+                             if _mark_for(sid) is not None)
+        assert not unexplained, (
+            f"dimension {DIM} declares no waiver, yet these cells still carry "
+            f"an xfail mark: {unexplained}. Either the registry lookup is "
+            f"broken or those exemptions lost their reason.")
     for waiver in dim_waivers():
         problems = W.validate(waiver)
         assert not problems, f"waiver {waiver.label}: {problems}"
