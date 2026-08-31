@@ -76,6 +76,19 @@
         "nominal_supply_v": 1.8,
         "note": "nfet_01v8 / pfet_01v8 typical Vth"
       },
+      "analog_device_layout_minima": {
+        "_comment": "vibe-ic#1952 — DRAWN-geometry minima, keyed by the GENERIC device ROLE tokens the analog IR uses (res/nmos/pmos/cap), so the A2 topology library can FLOOR its geometry to what the target process will actually let it draw instead of carrying one static constant across every PDK. Read via programs/pdk_analog_layout_minima.py, which contains no family name. A role is listed ONLY when its rule was read out of this PDK's own record; an ABSENT role means NOT MEASURED (floors nothing), never 'no minimum exists'.",
+        "_measured_from": "libs.tech/magic/sky130A.tech:4831 — `width mrp1 330 \"mrp1 resistor width < %d (poly.3)\"`; 330 centimicrons = 0.33 um. `mrp1` is the drawn layer magic extracts as `sky130_fd_pr__res_generic_po` (:6068 `device rsubcircuit sky130_fd_pr__res_generic_po mrp1 *poly l=l w=w`), the generic poly resistor this PDK's device_models declares.",
+        "_note": "This family's poly-resistor floor sits BELOW the topology library's own 0.35 nominal, so nothing is clamped here and the emitted geometry is unchanged. It is recorded anyway because a floor that is only written down where it bites is not a floor — and because this entry is the control that proves the clamp is a minimum and not a retune. The PRECISION poly resistors on this PDK are wider (xhrpoly/uhrpoly 0.35, :4839 `P+ poly.1a`); the generic device is the one the analog role token `res` resolves to, so it is the one recorded.",
+        "roles": {
+          "res": {
+            "min_width_um": 0.33,
+            "device": "sky130_fd_pr__res_generic_po",
+            "rule": "poly.3",
+            "rule_text": "mrp1 resistor width < 0.33"
+          }
+        }
+      },
       "per_pdk_table_key": "sky130",
       "metal_density_windows": {
         "_measured_from": "libs.tech/magic/check_density.py:725,727 (LI) 743,745 (MET1) 761,763 (MET2) 779,781 (MET3) 797,799 (MET4) 815,817 (MET5) — the whole-die block; the stepped 10x10-tile block at :509..:672 carries the SAME constants, so the window does not depend on the measurement scope.",
@@ -202,6 +215,20 @@
         "nominal_supply_v": 3.3,
         "note": "nfet_03v3 / pfet_03v3 typical Vth"
       },
+      "analog_device_layout_minima": {
+        "_comment": "vibe-ic#1952 — see the sky130A entry's _comment for the schema. Same generic role tokens, same reader, no code path is specific to this family.",
+        "_measured_from": "libs.tech/magic/gf180mcuD.tech:3124 — `width rpp 800 \"ppolyres minimum width < %d (PRES.1)\"`; 800 centimicrons = 0.80 um. `rpp` is the drawn layer magic extracts as the p+ poly resistor (:4156 `device rsubcircuit ppolyf_u rpp *poly ... l=r_length w=r_width`), which this PDK's device_models declares as gf180mcu_fd_pr__res_generic_po.",
+        "_corroborated_by": "libs.tech/klayout/tech/drc/rule_decks/pres.rb:32,35 — `# Rule PRES.1: Minimum width of Poly2 resistor is 0.8um.` and `pres1_l1.output('PRES.1', 'PRES.1 : Minimum width of Poly2 resistor: 0.8um')`. The KLayout deck and the magic deck agree exactly, so the constant does not depend on which signoff tool reads it.",
+        "_note": "0.80 um is more than twice the topology library's 0.35 nominal — this family reproduces vibe-ic#1952 harder than the one it was reported on (56.3% property delta vs 35.3%), which is what makes the defect a library-constant defect and not an SG13G2 one.",
+        "roles": {
+          "res": {
+            "min_width_um": 0.8,
+            "device": "gf180mcu_fd_pr__res_generic_po",
+            "rule": "PRES.1",
+            "rule_text": "Minimum width of Poly2 resistor is 0.8um"
+          }
+        }
+      },
       "per_pdk_table_key": "gf180",
       "metal_density_windows": {
         "_measured_from": "libs.tech/klayout/tech/drc/rule_decks/density.rb:38 (M1.4) :49 (M2.4) :61 (M3.4) :74 (M4.4) :87 (M5.4) :100 (MT30.7) :111 (MT.3) — each is `if (metalN.area / chip_area) * 100 < 30` over the ENTIRE die, i.e. a whole-die minimum.",
@@ -315,6 +342,19 @@
         "vth_p_v": 0.47,
         "nominal_supply_v": 1.2,
         "note": "lv nfet/pfet typical Vth (HV sg13_hv_* available). Core supply is 1.2V, NOT 1.8V: the shipped Liberty sg13g2_stdcell_typ_1p20V_25C.lib declares nom_voltage : 1.2, and the corner set is 1p08/1p20/1p32 (LV) plus 1p35/1p50/1p65 (the elevated-VDD characterisation). The previous 1.8 was carried over from the sky130 entry and would mis-bias any analog sizing done against this PDK."
+      },
+      "analog_device_layout_minima": {
+        "_comment": "vibe-ic#1952 — see the sky130A entry's _comment for the schema. Same generic role tokens, same reader, no code path is specific to this family.",
+        "_measured_from": "libs.tech/klayout/tech/drc/rule_decks/sg13g2_tech_default.json:166 — `\"Rppd_a\": 0.5` — consumed by libs.tech/klayout/tech/drc/rule_decks/sg13g2_maximal.drc:2603,2604 as `Rppd_all.ext_width(0.5.um)` -> `output(\"Rppd.a\", \"Min. GatPoly width = 0.50\")`. The rule is stated on the drawn GatPoly of the p+ poly resistor, which device_map.res_poly names `rppd`.",
+        "_note": "This is the family vibe-ic#1952 was measured on: the topology library's static 0.35 against a 0.50 drawn minimum made the layout generator clamp the drawn device while the netlist kept 0.35, so KLayout-extract -> netgen reported `w circuit1: 5e-07 circuit2: 3.5e-07 (delta=35.3%, cutoff=0%)` on EVERY block on this PDK. The neighbouring resistor flavours this PDK ships state the same 0.50 (Rsil_a, Rpnd_a, Rhi_a at :155,161,171), so the floor does not depend on which resistor flavour a design picks.",
+        "roles": {
+          "res": {
+            "min_width_um": 0.5,
+            "device": "rppd",
+            "rule": "Rppd.a",
+            "rule_text": "Min. GatPoly width = 0.50"
+          }
+        }
       },
       "per_pdk_table_key": "ihp-sg13g2",
       "metal_density_windows": {

@@ -44,6 +44,28 @@ WHAT IT DELIBERATELY DOES **NOT** DO
     `design_inputs_bound` is `[]` — stated in both artefacts, so no reader can
     mistake a class-library topology for one derived from this design.
 
+DRAWN GEOMETRY IS FLOORED TO THE TARGET PDK, NOT TO A LIBRARY CONSTANT
+======================================================================
+A library constant cannot know what the target process will let you draw. The
+`res` width in this library was a static 0.35 and stayed 0.35 on every PDK,
+including ones whose poly-resistor rule states a wider minimum — so the layout
+generator clamped the DRAWN device up to the rule while the netlist kept the
+constant, and KLayout-extract -> netgen then reported a device-property
+mismatch on every block built from this library (vibe-ic#1952).
+
+So: every `constants` entry the library declares as a drawn WIDTH (via
+`constant_roles`) and every device's `w` is FLOORED to the resolved family's
+`analog_device_layout_minima` record, read through
+`programs/pdk_analog_layout_minima.py`. The floor is DERIVED — the number is
+the registry's record of the PDK's OWN rule, carrying that rule's id and text —
+and it is a FLOOR, so a family whose minimum sits below the library nominal
+comes out byte-identical. Every clamp that fires is written into
+`_provenance.layout_minima.clamps` and `fields_clamped`, and stated in
+`topology.md`; a family the registry carries no measured minimum for floors
+NOTHING and says so, rather than quietly passing. No family name appears in
+this file — which family is affected is entirely a property of the registry
+data.
+
 A2 measures VOCABULARY, not structure — and this producer must not exploit it
 =============================================================================
 `analog_a2_topology_select_check` accepts any file over 200 bytes carrying one
@@ -91,6 +113,7 @@ from typing import Any, Dict, List, Optional, Tuple
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import _analog_producer_common as _pc  # noqa: E402
+import pdk_analog_layout_minima as _minima  # noqa: E402
 
 PRODUCER = "analog_a2_topology_emit"
 PROVENANCE_SCHEMA = 1
@@ -99,7 +122,9 @@ IR_SCHEMA = 1
 
 _CANONICAL_ANALOG = "phase3/analog"
 _DECLARED_ANALOG = "phase1/analog"
-_REGISTRY = Path(__file__).resolve().parent / "pdk_registry.json"
+# The registry path itself now lives with the one reader that opens it
+# (`pdk_analog_layout_minima`) — a second copy here would be a second thing to
+# keep pointing at the same file.
 
 # Terminal count of each device ROLE, as the open PDKs' own `.subckt` headers
 # declare them. The renderer checks the IR against this before it emits, so a
@@ -111,6 +136,13 @@ ROLE_TERMINALS = {
     "res": 3,       # r0 r1 sub
     "cap": 2,       # c0 c1
 }
+
+# Library key: `constant_roles` maps a `constants` name to the device ROLE
+# whose DRAWN WIDTH it is. Only a constant listed here is subject to the PDK
+# layout floor — `l_unit` is a length in the same units and must NOT be floored
+# by a width rule, and inferring "is this a width?" from a name would do
+# exactly that. An entry that declares nothing is floored on its devices only.
+CONSTANT_ROLES_KEY = "constant_roles"
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -137,6 +169,10 @@ LIBRARY: Dict[str, Dict[str, Any]] = {
         "rails": {"vdd": "vdd", "vss": "vss"},
         "internal_nets": ["nbias", "ntail", "nd1", "vg", "vfb"],
         "constants": {"l_unit": 20.0, "w_res": 0.35},
+        # `w_res` is the DRAWN WIDTH of the `res` devices below, so it is
+        # floored to the target PDK's poly-resistor minimum; `l_unit` is a
+        # length and is deliberately not listed.
+        "constant_roles": {"w_res": "res"},
         "devices": [
             {"name": "mn_bias", "role": "nmos", "function":
              "diode-connected bias reference of the tail current mirror",
@@ -521,28 +557,18 @@ def _declared_pdk_target(project: Path) -> Optional[str]:
 
 def pdk_device_params(selector: str) -> Tuple[Optional[str], Dict[str, Any]]:
     """`analog_device_params` for the registry family matching `selector`.
-    READ, never retyped — `analog-topology-select` forbids restating these."""
-    data = _read_json(_REGISTRY)
-    if not isinstance(data, dict):
+    READ, never retyped — `analog-topology-select` forbids restating these.
+
+    The selector->family match itself lives in `pdk_analog_layout_minima`
+    (one matcher, shared): the electrical constants and the layout minima are
+    two records of the SAME registry entry, and resolving them through two
+    copies of the ladder is how one of them silently ends up read off a
+    different family than the other."""
+    name, ent = _minima.resolve_family(selector)
+    if not name:
         return None, {}
-    sel = str(selector or "").strip().lower()
-    for ent in data.get("pdks") or []:
-        if not isinstance(ent, dict):
-            continue
-        name = str(ent.get("name") or "")
-        if not name:
-            continue
-        # Exact, then prefix either way, then containment either way: an
-        # L-doc commonly declares the family by its bare process token
-        # (`sg13g2`) while the registry entry carries a vendor prefix
-        # (`ihp-sg13g2`) — prefix matching alone answered None for exactly
-        # the declared-target case (measured: u_hawaii_adc).
-        if name.lower() == sel or name.lower().startswith(sel) \
-                or sel.startswith(name.lower()) \
-                or sel in name.lower() or name.lower() in sel:
-            params = ent.get("analog_device_params")
-            return name, (params if isinstance(params, dict) else {})
-    return None, {}
+    params = ent.get("analog_device_params")
+    return name, (params if isinstance(params, dict) else {})
 
 
 def bound_spec_values(project: Path, block: str) -> Tuple[Dict[str, float],
@@ -572,11 +598,63 @@ def bound_spec_values(project: Path, block: str) -> Tuple[Dict[str, float],
 
 
 # ── artefacts ─────────────────────────────────────────────────────────────
+def floor_geometry_to_pdk(lib: Dict[str, Any], constants: Dict[str, Any],
+                          devices: List[Dict[str, Any]],
+                          role_minima: Dict[str, Any]
+                          ) -> List[Dict[str, Any]]:
+    """Raise every DRAWN WIDTH in this IR to the target family's minimum.
+
+    Mutates `constants` and `devices` in place and returns one record per
+    clamp that FIRED — never a record for a value that was already legal, so
+    an empty list means the library geometry was drawable as written and not
+    that nothing was checked (that case is the `minima_available` flag on the
+    provenance block).
+
+    Two things are floored, and both have to be, because they reach the
+    netlist by different routes: `analog_a3_netlist_emit` renders each
+    device's own `w` (`d.get("w")`), and it also evaluates
+    `device_param_exprs` in an environment seeded from `constants` — so a
+    constant left un-floored would re-introduce the illegal width through any
+    expression that reads it.
+    """
+    clamps: List[Dict[str, Any]] = []
+    for cname, role in (lib.get(CONSTANT_ROLES_KEY) or {}).items():
+        if cname not in constants:
+            continue
+        lo = _minima.min_width_um(role_minima, role)
+        new, was = _minima.floor_width(constants[cname], lo)
+        if was is None:
+            continue
+        constants[cname] = new
+        clamps.append({"target": f"constants.{cname}", "role": role,
+                       "library_value": was, "pdk_minimum": lo,
+                       "value": new,
+                       "rule": (role_minima.get(role) or {}).get("rule"),
+                       "rule_text": (role_minima.get(role)
+                                     or {}).get("rule_text")})
+    for d in devices:
+        role = d.get("role")
+        lo = _minima.min_width_um(role_minima, str(role))
+        new, was = _minima.floor_width(d.get("w"), lo)
+        if was is None:
+            continue
+        d["w"] = new
+        clamps.append({"target": f"devices.{d.get('name')}.w", "role": role,
+                       "library_value": was, "pdk_minimum": lo,
+                       "value": new,
+                       "rule": (role_minima.get(role) or {}).get("rule"),
+                       "rule_text": (role_minima.get(role)
+                                     or {}).get("rule_text")})
+    return clamps
+
+
 def build_ir(block: str, btype: str, entry: Dict[str, Any],
              lib: Dict[str, Any], spec_values: Dict[str, float],
              spec_path: Optional[str], project: Path,
              pdk_family: Optional[str],
-             pdk_params: Dict[str, Any]) -> Dict[str, Any]:
+             pdk_params: Dict[str, Any],
+             role_minima: Optional[Dict[str, Any]] = None,
+             minima_source: Optional[str] = None) -> Dict[str, Any]:
     knobs: Dict[str, Any] = {}
     knob_sources: Dict[str, str] = {}
     defaulted: List[str] = []
@@ -593,6 +671,11 @@ def build_ir(block: str, btype: str, entry: Dict[str, Any],
         knob_sources[k["name"]] = "library_default"
         defaulted.append(k["name"])
 
+    role_minima = dict(role_minima or {})
+    constants = dict(lib.get("constants") or {})
+    devices = [dict(d) for d in lib["devices"]]
+    clamps = floor_geometry_to_pdk(lib, constants, devices, role_minima)
+
     ir: Dict[str, Any] = {
         "ir_schema": IR_SCHEMA,
         "block": block,
@@ -604,8 +687,8 @@ def build_ir(block: str, btype: str, entry: Dict[str, Any],
         "internal_nets": list(lib["internal_nets"]),
         "role_terminals": {r: ROLE_TERMINALS[r] for r in
                            sorted({d["role"] for d in lib["devices"]})},
-        "constants": dict(lib.get("constants") or {}),
-        "devices": [dict(d) for d in lib["devices"]],
+        "constants": constants,
+        "devices": devices,
         "spec_knobs": [dict(k) for k in lib.get("spec_knobs", [])],
         "knobs": knobs,
         "knob_sources": knob_sources,
@@ -635,10 +718,36 @@ def build_ir(block: str, btype: str, entry: Dict[str, Any],
                 "family": pdk_family,
                 "analog_device_params": pdk_params or None,
             },
+            # vibe-ic#1952. `minima_available` is the honest distinction
+            # between "checked, nothing was below the floor" (clamps == [])
+            # and "this family declares no measured minimum, so NOTHING was
+            # floored" — a reader that cannot tell those apart will read the
+            # second as the first.
+            "layout_minima": {
+                "path": "programs/pdk_registry.json",
+                "field": "analog_device_layout_minima",
+                "reader": "programs/pdk_analog_layout_minima.py",
+                "family": pdk_family,
+                "minima_available": bool(role_minima),
+                "measured_from": minima_source,
+                "roles": role_minima or None,
+                "clamps": clamps,
+                "note": (
+                    "drawn widths are FLOORED to the target PDK's own rule, "
+                    "not set from it: a family whose minimum sits below the "
+                    "library nominal leaves the geometry unchanged."
+                    if role_minima else
+                    "this family declares no measured device minimum in the "
+                    "registry, so NO width was floored — the geometry below "
+                    "is the library nominal and has not been checked against "
+                    "any layout rule."),
+            },
             "fields_bound": sorted([n for n, s in knob_sources.items()
                                     if s == "spec"]),
             "fields_defaulted": sorted(defaulted),
             "defaults_used": bool(defaulted),
+            "fields_clamped": sorted(c["target"] for c in clamps),
+            "clamped_to_pdk_minimum": bool(clamps),
             "sizing_handoff": lib.get("sizing_handoff"),
             "ai_handoff": (
                 {"track": "skill", "skill": "analog-sizing",
@@ -647,7 +756,10 @@ def build_ir(block: str, btype: str, entry: Dict[str, Any],
             "limits": (
                 "the topology is a circuit-CLASS selection. Device geometry "
                 "is the library nominal unless a device_param_expr bound it "
-                "to a spec value; see fields_bound / fields_defaulted."),
+                "to a spec value or the target PDK's layout minimum floored "
+                "it; see fields_bound / fields_defaulted / fields_clamped. A "
+                "floor makes the geometry DRAWABLE, not correct: it is not a "
+                "sizing solution and does not re-solve the block."),
         },
     }
     return ir
@@ -710,6 +822,46 @@ def render_md(ir: Dict[str, Any], lib: Dict[str, Any],
                  "or supply constant is quoted here. Quoting one from memory "
                  "is the failure this section exists to prevent.")
     L.append("")
+    L.append("## Drawn-geometry minima of the target process")
+    L.append("")
+    lm = prov.get("layout_minima") or {}
+    if lm.get("minima_available"):
+        L.append(f"Read from `{lm['path']}` "
+                 f"(`{lm.get('family')}.{lm['field']}`) via `{lm['reader']}`, "
+                 f"which measured them from the PDK's own rule record:")
+        L.append("")
+        L.append("| device class | min drawn width (um) | rule |")
+        L.append("|---|---|---|")
+        for role in sorted(lm.get("roles") or {}):
+            rec = (lm["roles"] or {})[role]
+            L.append(f"| {role} | {rec.get(_minima.MIN_WIDTH_KEY)} | "
+                     f"`{rec.get('rule')}` — {rec.get('rule_text')} |")
+        L.append("")
+        if lm.get("clamps"):
+            L.append("The library nominal was below that minimum and has "
+                     "been **floored to it**. A netlist that keeps a width "
+                     "the process will not let the layout draw is the "
+                     "device-property mismatch this floor exists to prevent:")
+            L.append("")
+            L.append("| geometry | library nominal | floored to | rule |")
+            L.append("|---|---|---|---|")
+            for c in lm["clamps"]:
+                L.append(f"| `{c['target']}` | {c['library_value']} | "
+                         f"{c['value']} | `{c.get('rule')}` |")
+            L.append("")
+            L.append("A floor makes the geometry drawable; it does not "
+                     "re-solve the block. Whether the floored value still "
+                     "meets the spec is an A4 corner-sweep question.")
+        else:
+            L.append("Every library nominal is already at or above this "
+                     "process's minimum, so **no width was changed**.")
+    else:
+        L.append("`programs/pdk_registry.json` carries no measured "
+                 "`analog_device_layout_minima` for the requested PDK "
+                 "family, so **no width below was floored to any layout "
+                 "rule**. The geometry is the library nominal and has not "
+                 "been checked against this process.")
+    L.append("")
     L.append("## Spec binding")
     L.append("")
     if ir["design_inputs_bound"]:
@@ -737,6 +889,8 @@ def render_md(ir: Dict[str, Any], lib: Dict[str, Any],
     L.append(f"- fields bound from spec: {prov['fields_bound'] or 'none'}")
     L.append(f"- fields taking a library default: "
              f"{prov['fields_defaulted'] or 'none'}")
+    L.append(f"- geometry floored to the PDK layout minimum: "
+             f"{prov['fields_clamped'] or 'none'}")
     if prov.get("ai_handoff"):
         L.append(f"- **handed off to the AI track**: skill "
                  f"`{prov['ai_handoff']['skill']}` — "
@@ -855,8 +1009,12 @@ def emit_for_block(project: Path, entry: Dict[str, Any],
 
     spec_values, spec_path = bound_spec_values(project, name)
     fam, params = pdk_device_params(pdk)
+    # The SAME selector resolves both records through the one shared matcher,
+    # so a family whose Vth is quoted can never be a family whose layout
+    # minima were silently skipped.
+    _minima_fam, role_minima = _minima.layout_minima(pdk)
     ir = build_ir(name, btype, entry, lib, spec_values, spec_path, project,
-                  fam, params)
+                  fam, params, role_minima, _minima.minima_source(pdk))
     md = render_md(ir, lib, fam, params)
     bdir.mkdir(parents=True, exist_ok=True)
     md_path.write_text(md, encoding="utf-8")
@@ -869,7 +1027,10 @@ def emit_for_block(project: Path, entry: Dict[str, Any],
                topology_md=str(md_path.relative_to(project)),
                topology_json=str(ir_path.relative_to(project)),
                selection_basis=ir["selection_basis"],
-               fields_defaulted=ir["_provenance"]["fields_defaulted"])
+               fields_defaulted=ir["_provenance"]["fields_defaulted"],
+               fields_clamped=ir["_provenance"]["fields_clamped"],
+               layout_minima_available=(
+                   ir["_provenance"]["layout_minima"]["minima_available"]))
     return rec
 
 
