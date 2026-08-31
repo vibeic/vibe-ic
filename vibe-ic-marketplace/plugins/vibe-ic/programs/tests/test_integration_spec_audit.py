@@ -4,6 +4,7 @@ Tests verify correct detection of missing top_module, missing submodules,
 stub/placeholder text, register/reset/clock warnings, and empty directories.
 """
 import json
+import shutil
 import sys
 from pathlib import Path
 
@@ -14,6 +15,7 @@ assert SCRIPT.exists(), f"Script not found: {SCRIPT}"
 
 sys.path.insert(0, str(SCRIPT.parent))
 import integration_spec_audit as isa  # noqa: E402
+from _hostpaths import require_repo
 
 
 # ---------------------------------------------------------------------------
@@ -45,6 +47,51 @@ def test_valid_l9_pass(tmp_path):
     result = isa.audit(str(tmp_path))
     assert result.passed is True
     assert result.summary["errors"] == 0
+
+
+def test_gate_report_is_not_graded_as_an_integration_spec(tmp_path):
+    docs = tmp_path / "phase1" / "generated_docs"
+    docs.mkdir(parents=True)
+    (docs / "L9_INTEGRATION_SPEC.json").write_text(
+        json.dumps(make_valid_l9()))
+
+    reports = tmp_path / "reports" / "phase2" / "gates"
+    reports.mkdir(parents=True)
+    report = reports / "ip_integration.json"
+    report.write_text(json.dumps({
+        "program": "ip_integration_check",
+        "verdict": "PASS_WITH_REVIEW",
+    }))
+
+    result = isa.audit(str(tmp_path))
+    assert result.passed is True
+    assert result.summary == {
+        "files_checked": 1,
+        "files_passed": 1,
+        "errors": 0,
+        "stubs_found": 0,
+    }
+    assert all(f.file != "reports/phase2/gates/ip_integration.json"
+               for f in result.findings)
+
+
+def test_real_l9_discovery_excludes_a_sibling_generated_report(tmp_path):
+    source = require_repo(
+        "vibe-ic-marketplace", "plugins", "vibe-ic", "programs", "tests",
+        "fixtures", "l17_e1_rail", "shared.L9_INTEGRATION_SPEC.json")
+    docs = tmp_path / "phase1" / "generated_docs"
+    docs.mkdir(parents=True)
+    spec = docs / "shared.L9_INTEGRATION_SPEC.json"
+    shutil.copy2(source, spec)
+
+    reports = tmp_path / "reports" / "phase2" / "gates"
+    reports.mkdir(parents=True)
+    (reports / "ip_integration.json").write_text(json.dumps({
+        "program": "ip_integration_check",
+        "verdict": "PASS_WITH_REVIEW",
+    }))
+
+    assert isa.discover_spec_files(tmp_path) == [spec]
 
 
 # ---------------------------------------------------------------------------

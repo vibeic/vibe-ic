@@ -16,7 +16,7 @@ Verifies that L9 Integration Spec JSON files contain valid top-module definition
 submodule lists with ports, internal wiring, and no stub/placeholder modules.
 
 What it catches:
-  1. NO_SPEC_FILE — no *L9*.json, *integration*.json, or *integration_spec*.json found
+  1. NO_SPEC_FILE — no matching integration-spec JSON found in generated_docs
   2. INVALID_JSON — file is not valid JSON
   3. MISSING_TOP — missing 'top_module' or 'dtop' key
   4. MISSING_SUBMODULES — missing or empty 'submodules' list
@@ -48,6 +48,8 @@ import sys
 from dataclasses import dataclass, field, asdict
 from pathlib import Path
 from typing import List
+
+import _path_layout as _pl
 
 
 # ---------------------------------------------------------------------------
@@ -105,9 +107,20 @@ def find_stub_paths(data, path: str = "") -> List[str]:
 # File discovery
 # ---------------------------------------------------------------------------
 def discover_spec_files(base: Path) -> List[Path]:
-    """Find JSON files matching *L9*.json, *integration*.json, *integration_spec*.json."""
+    """Find integration specs without treating generated reports as specs.
+
+    A project root is scoped to the canonical Phase-1 handoff.  Falling back
+    to ``base`` preserves the supported direct-generated-docs invocation, but
+    the project's report tree is never eligible for spec discovery.
+    """
+    generated_docs = _pl.generated_docs_dir(base)
+    search_root = generated_docs if generated_docs.is_dir() else base
+    reports = _pl.reports_dir(base)
+
     found: List[Path] = []
-    for fpath in sorted(base.rglob("*.json")):
+    for fpath in sorted(search_root.rglob("*.json")):
+        if fpath.is_relative_to(reports):
+            continue
         name_lower = fpath.name.lower()
         if ("l9" in name_lower or "integration" in name_lower):
             found.append(fpath)
