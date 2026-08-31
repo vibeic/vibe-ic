@@ -16,8 +16,14 @@ Usage:
 """
 from __future__ import annotations
 import argparse, hashlib, json, os, shutil, subprocess, sys, tempfile
+import concurrent.futures
+import contextlib
+import fcntl
 import re
+import threading
+from dataclasses import dataclass
 from pathlib import Path
+from typing import Callable, Iterable, TypeVar
 
 from _atomic_artefact import write_json as _atomic_write_json
 from _atomic_artefact import write_text as _atomic_write_text
@@ -25,6 +31,147 @@ from _atomic_artefact import write_text as _atomic_write_text
 HARNESS = Path(__file__).resolve().parent.parent / "benchmark"
 REGISTRY = HARNESS / "BENCHMARK_REGISTRY.json"
 EXPERT_AGENT_MD = Path(__file__).resolve().parent.parent / "agents" / "ic-expert-agent.md"
+
+_COORDINATOR_LOCK = ".benchmark_dispatch.coordinator.lock"
+
+
+class _CoordinatorBusy(RuntimeError):
+    """A second solve/resume coordinator targeted the same run root."""
+
+
+@contextlib.contextmanager
+def _run_root_coordinator_lock(run_p: Path, operation: str):
+    """Own all run-root shared writes for one solve/resume invocation.
+
+    The lock file is intentionally persistent so a refused second coordinator
+    can name the last recorded owner.  Ownership itself is the kernel ``flock``
+    and is released on close, including exception exits; the JSON is only a
+    diagnostic, never evidence that a stale process still owns the run.
+    """
+    run_p = Path(run_p).resolve()
+    run_p.mkdir(parents=True, exist_ok=True)
+    lock_p = run_p / _COORDINATOR_LOCK
+    lock_f = lock_p.open("a+", encoding="utf-8")
+    try:
+        try:
+            fcntl.flock(lock_f.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as exc:
+            lock_f.seek(0)
+            owner = lock_f.read().strip() or "owner metadata unavailable"
+            raise _CoordinatorBusy(
+                "another benchmark_dispatch coordinator owns run root "
+                f"{run_p}: {owner}") from exc
+        lock_f.seek(0)
+        lock_f.truncate()
+        lock_f.write(json.dumps({
+            "schema": "vibeic.benchmark.run_root_lock.v1",
+            "operation": str(operation),
+            "pid": os.getpid(),
+            "run_root": str(run_p),
+        }, sort_keys=True) + "\n")
+        lock_f.flush()
+        yield
+    finally:
+        try:
+            fcntl.flock(lock_f.fileno(), fcntl.LOCK_UN)
+        finally:
+            lock_f.close()
+
+
+T = TypeVar("T")
+R = TypeVar("R")
+
+
+def _ordered_parallel_map(items: Iterable[T], worker: Callable[[T], R],
+                          jobs: int) -> list[R]:
+    """Run unique-project work concurrently and return input-order results."""
+    rows = list(items)
+    if jobs <= 1 or len(rows) <= 1:
+        return [worker(row) for row in rows]
+    ordered: list[R | None] = [None] * len(rows)
+    with concurrent.futures.ThreadPoolExecutor(max_workers=jobs) as pool:
+        futures = {pool.submit(worker, row): i for i, row in enumerate(rows)}
+        for future in concurrent.futures.as_completed(futures):
+            ordered[futures[future]] = future.result()
+    return [row for row in ordered if row is not None]
+
+
+@dataclass(frozen=True)
+class _ProcessOutcome:
+    rc: int | None
+    error: str | None = None
+
+
+class _RunnerBudget:
+    """Bound runner-heavy concurrency and per-worker tool thread budgets.
+
+    A whole runner invocation is conservatively treated as a heavy slot.  This
+    bounds every synth/LEC it may reach without requiring the dispatcher to
+    duplicate the runner's internal step map.  ``jobs`` and ``heavy_jobs`` are
+    separate so staging/collection fan-out can remain wider than EDA pressure.
+    """
+
+    def __init__(self, jobs: int, heavy_jobs: int | None,
+                 worker_threads: int):
+        if jobs < 1:
+            raise ValueError("--jobs must be >= 1")
+        self.jobs = int(jobs)
+        self.heavy_jobs = int(heavy_jobs if heavy_jobs is not None else jobs)
+        if self.heavy_jobs < 1 or self.heavy_jobs > self.jobs:
+            raise ValueError("--heavy-jobs must be between 1 and --jobs")
+        if worker_threads < 0:
+            raise ValueError("--worker-threads must be >= 0")
+        self._heavy = threading.BoundedSemaphore(self.heavy_jobs)
+        self._env: dict[str, str] | None = None
+        if worker_threads or self.jobs > 1:
+            threads = (int(worker_threads) if worker_threads else
+                       max(1, (os.cpu_count() or self.jobs) // self.heavy_jobs))
+            self._env = os.environ.copy()
+            for name in ("VIBEIC_EDA_THREADS", "VIBEIC_OPENROAD_THREADS",
+                         "OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS",
+                         "MKL_NUM_THREADS", "NUMEXPR_NUM_THREADS"):
+                self._env[name] = str(threads)
+
+    def run(self, argv: list[str]) -> _ProcessOutcome:
+        kwargs = {"capture_output": True, "text": True}
+        if self._env is not None:
+            kwargs["env"] = self._env
+        try:
+            with self._heavy:
+                proc = subprocess.run(argv, **kwargs)
+        except Exception as exc:                         # noqa: BLE001
+            return _ProcessOutcome(
+                rc=None, error=f"{type(exc).__name__}: {exc}")
+        return _ProcessOutcome(rc=int(proc.returncode))
+
+
+@dataclass(frozen=True)
+class _SolveWorkerOutcome:
+    index: int
+    problem_id: str
+    result_json: str
+    review_task_json: str | None
+    backup_task_json: str | None
+    log_line: str
+
+
+@dataclass(frozen=True)
+class _ResumeRunnerOutcome:
+    problem_id: str
+    rc: int | None
+    collected_json: str | None
+    error: str | None
+
+
+def _phase_error_attribution() -> dict:
+    """Named no-measurement record for a project worker that could not finish."""
+    row = {"status": "NOT_MEASURED", "reason": "PROJECT_WORKER_ERROR"}
+    return {
+        "phase1_routing": dict(row),
+        "phase2_solving": dict(row),
+        "phase3_verifying": dict(row),
+        "phase4_debugging": dict(row),
+    }
 
 
 # ORGANIC-20260605-shapec-lesson-digest-injection — surface captured lessons to
@@ -2085,7 +2232,10 @@ def _prepare_general_solve_run(bench: str, dataset: Path, run_p: Path,
     run_p = Path(run_p).resolve()
     if not dataset.exists():
         raise SystemExit(f"dataset path not found: {dataset}")
-    if run_p.exists() and any(run_p.iterdir()):
+    existing = ([child for child in run_p.iterdir()
+                 if child.name != _COORDINATOR_LOCK]
+                if run_p.exists() else [])
+    if existing:
         raise SystemExit(
             f"clean-room solve requires an empty fresh run directory: {run_p}")
     run_p.mkdir(parents=True, exist_ok=True)
@@ -2115,7 +2265,9 @@ def _prepare_general_solve_run(bench: str, dataset: Path, run_p: Path,
               "scored or published as a benchmark result")
 
 
-def cmd_solve(bench: str, dataset: str, run: str, limit: int = 0) -> int:
+def _cmd_solve_locked(bench: str, dataset: str, run: str, limit: int = 0,
+                      jobs: int = 1, heavy_jobs: int | None = None,
+                      worker_threads: int = 0) -> int:
     """Solve every problem through the GENERAL flow.
 
     This verb did not exist. A separate scaffold prepared the run and
@@ -2168,116 +2320,180 @@ def cmd_solve(bench: str, dataset: str, run: str, limit: int = 0) -> int:
     ds, run_p = Path(dataset).resolve(), Path(run).resolve()
     _prepare_general_solve_run(bench, ds, run_p, fmt, limit)
     runner = Path(__file__).resolve().parent / "vibe_ic_one_shot_runner.py"
-
-    results, backlog, review_tasks, n = [], [], [], 0
-    for prob in bio.problems(fmt, ds):
-        if limit and n >= limit:
+    runner_budget = _RunnerBudget(jobs, heavy_jobs, worker_threads)
+    problem_rows = []
+    for index, prob in enumerate(bio.problems(fmt, ds)):
+        if limit and index >= limit:
             break
-        n += 1
-        pid = str(prob["id"])
+        problem_rows.append((index, prob))
+    problem_ids = [str(prob.get("id", f"problem-{index}"))
+                   for index, prob in problem_rows]
+    project_keys = [re.sub(r"[^\w.-]", "_", pid) for pid in problem_ids]
+    if (len(set(problem_ids)) != len(problem_ids)
+            or len(set(project_keys)) != len(project_keys)):
+        print("ERROR: duplicate problem id or project-path collision in "
+              "benchmark dataset", file=sys.stderr)
+        return 2
+
+    def _solve_one(row) -> _SolveWorkerOutcome:
+        index, prob = row
+        pid = str(prob.get("id", f"problem-{index}"))
         proj = run_p / "projects" / re.sub(r"[^\w.-]", "_", pid)
-        proj.mkdir(parents=True, exist_ok=True)
-        staged = bio.stage(fmt, prob, proj)
+        staged_chars = 0
+        nature = "NOT_MEASURED"
+        entry = None
+        ev = None
+        exit_step = None
+        verdict: dict = {}
+        try:
+            proj.mkdir(parents=True, exist_ok=True)
+            staged = bio.stage(fmt, prob, proj)
+            staged_chars = int(staged.get("prompt_chars") or 0)
 
-        # One detector, not a second inline copy: `input/rtl/` is only ONE of
-        # the canonical places a design's input RTL arrives in, and a private
-        # re-implementation here silently disagreed with the attribution report
-        # written from the same tree.
-        rtl_present = fpa.rtl_present_at_input(proj)
-        prompt_text = (proj / "input" / "phase1_prompt.md").read_text(errors="replace")
+            # One detector, not a second inline copy: `input/rtl/` is only ONE
+            # of the canonical places a design's input RTL arrives in.
+            rtl_present = fpa.rtl_present_at_input(proj)
+            prompt_text = (proj / "input" / "phase1_prompt.md").read_text(
+                errors="replace")
 
-        # SPEC COMPLETENESS, from the one general engine via this format's thin
-        # adapter. Recorded, never acted on: a prompt the engine calls
-        # INCOMPLETE_SPEC_ABSENT is still solved and still scored — the verdict
-        # is what lets a FAIL be triaged as FLOOR rather than as an agent miss.
-        completeness = _assess_why or "NOT_ADAPTED"
-        assess = _assessors.get(fmt)
-        if assess is not None:
-            try:
-                completeness = assess(prompt_text).get("completeness", "?")
-            except Exception as exc:                      # noqa: BLE001
-                completeness = f"UNAVAILABLE: {type(exc).__name__}: {exc}"
+            # Completeness is disclosure only; it never selects a solver.
+            completeness = _assess_why or "NOT_ADAPTED"
+            assess = _assessors.get(fmt)
+            if assess is not None:
+                try:
+                    completeness = assess(prompt_text).get("completeness", "?")
+                except Exception as exc:                  # noqa: BLE001
+                    completeness = (
+                        f"UNAVAILABLE: {type(exc).__name__}: {exc}")
 
-        verdict = tnr.classify_task_nature(
-            prompt_text, rtl_present, None)
-        nature = verdict["nature"]
-        entry = tnr.NATURE_ENTRY.get(nature, {}).get("entry_step")
-        ev = tnr.NATURE_ENTRY.get(nature, {}).get("default_evidence")
-        exit_step = (tnr.EVIDENCE_EXIT.get(ev) or {}).get("exit_step")
+            verdict = tnr.classify_task_nature(prompt_text, rtl_present, None)
+            nature = verdict["nature"]
+            entry = tnr.NATURE_ENTRY.get(nature, {}).get("entry_step")
+            ev = tnr.NATURE_ENTRY.get(nature, {}).get("default_evidence")
+            exit_step = (tnr.EVIDENCE_EXIT.get(ev) or {}).get("exit_step")
 
-        argv = [sys.executable, str(runner), str(proj),
-                "--skip-analog", "--skip-hardware"]
-        # The exit decides what must NOT run. An RTL-evidence benchmark never
-        # needs physical design: measured, no open RTL scorer reads a netlist
-        # or a GDS, so running phase 3 for one would be work nothing consumes.
-        if exit_step and exit_step in tnr.flow_step_ids():
-            order = {s: i for i, s in enumerate(tnr.flow_step_ids())}
-            if order.get(exit_step, 99) < order.get("15", 99):
-                argv.append("--skip-phase3")
-        if entry and entry != "D1":
-            argv += ["--entry-step", str(entry)]
+            argv = [sys.executable, str(runner), str(proj),
+                    "--skip-analog", "--skip-hardware"]
+            # The exit decides what must NOT run. An RTL-evidence benchmark
+            # never needs physical design because no open RTL scorer consumes
+            # a netlist or GDS.
+            if exit_step and exit_step in tnr.flow_step_ids():
+                order = {s: i for i, s in enumerate(tnr.flow_step_ids())}
+                if order.get(exit_step, 99) < order.get("15", 99):
+                    argv.append("--skip-phase3")
+            if entry and entry != "D1":
+                argv += ["--entry-step", str(entry)]
 
-        rc = subprocess.run(argv, capture_output=True, text=True).returncode
-        got = bio.collect(fmt, pid, proj)
-        waive = _rtl_gen_waive(proj)
-        route_backup = _declared_route_ai_backup(verdict)
-        backup_source = None
-        backup_skills: list[str] = []
-        backup_detail = ""
-        if not got.get("ok"):
-            if waive:
-                backup_source = "rtl_gen_waive"
-                backup_skills = [str(waive.get("fallback_skill"))]
-                backup_detail = str(waive.get("detail") or "")
-            elif route_backup["status"] == "DECLARED":
-                backup_source = "route_declaration"
-                backup_skills = list(route_backup["skills"])
-                backup_detail = str(got.get("reason") or "")
-        awaiting_backup = bool(backup_source)
-        phases = fpa.attribute(
-            proj, routing=verdict, entry=entry, evidence=ev,
-            exit_step=exit_step, rtl_present=rtl_present,
-            artefact_collected=bool(got.get("ok")))
-        result = {"id": pid, "nature": nature, "entry": entry,
-                  "evidence": ev, "exit": exit_step, "rc": rc,
-                  "ok": bool(got.get("ok")),
-                  "candidate_ready": bool(got.get("ok")),
-                  "accepted": False,
-                  "staged": staged["prompt_chars"],
-                  "completeness": completeness,
-                  "routing_verdict": verdict,
-                  "phases": phases,
-                  "candidate_origin": ("PROGRAM" if got.get("ok") else
-                                       ("AI_BACKUP_PENDING" if awaiting_backup else
-                                        "NONE")),
-                  "route_ai_backup": route_backup,
-                  "program_first_ai_review": {"status": "PENDING"},
-                  "ai_repair_required": False,
-                  "awaiting_ai_review": bool(got.get("ok")),
-                  "awaiting_ai_backup": awaiting_backup,
-                  "awaiting_ai": bool(got.get("ok")
-                                      or awaiting_backup)}
-        state = ("candidate->AI-review" if got.get("ok")
-                 else ("WAIVE->AI" if backup_source == "rtl_gen_waive"
-                       else ("route-declared->AI" if awaiting_backup
-                             else "no-rtl")))
-        print(f"  {pid:44s} {nature:22s} entry={str(entry):3s} "
-              f"exit={str(exit_step):4s} rc={rc} {state}")
-        if got.get("ok"):
-            task = _make_ai_review_task(
-                pid, proj, got, verdict, rc, run_p, "PROGRAM")
-            review_tasks.append(task)
-            result["review_task"] = task["review_path"]
-            # This is the consumer the route attribution previously said did
-            # not exist. The review must independently classify the same prompt.
-            p1 = (phases.get("phase1_routing") or {})
-            p1["needs_ai_parse_consumed_by"] = (
-                f"blind Program First AI review at {task['review_path']}")
-        elif awaiting_backup:
-            backlog.append(_make_ai_backup_task(
-                pid, proj, backup_skills, str(backup_source), backup_detail,
-                bench, ds, run_p))
+            process = runner_budget.run(argv)
+            if process.error is not None:
+                raise RuntimeError(process.error)
+            rc = int(process.rc)
+            got = bio.collect(fmt, pid, proj)
+            waive = _rtl_gen_waive(proj)
+            route_backup = _declared_route_ai_backup(verdict)
+            backup_source = None
+            backup_skills: list[str] = []
+            backup_detail = ""
+            if not got.get("ok"):
+                if waive:
+                    backup_source = "rtl_gen_waive"
+                    backup_skills = [str(waive.get("fallback_skill"))]
+                    backup_detail = str(waive.get("detail") or "")
+                elif route_backup["status"] == "DECLARED":
+                    backup_source = "route_declaration"
+                    backup_skills = list(route_backup["skills"])
+                    backup_detail = str(got.get("reason") or "")
+            awaiting_backup = bool(backup_source)
+            phases = fpa.attribute(
+                proj, routing=verdict, entry=entry, evidence=ev,
+                exit_step=exit_step, rtl_present=rtl_present,
+                artefact_collected=bool(got.get("ok")))
+            result = {
+                "id": pid, "nature": nature,
+                "entry": entry, "evidence": ev, "exit": exit_step,
+                "rc": rc,
+                "ok": bool(got.get("ok")),
+                "candidate_ready": bool(got.get("ok")),
+                "accepted": False, "staged": staged_chars,
+                "completeness": completeness,
+                "routing_verdict": verdict, "phases": phases,
+                "candidate_origin": (
+                    "PROGRAM" if got.get("ok") else
+                    ("AI_BACKUP_PENDING" if awaiting_backup else "NONE")),
+                "route_ai_backup": route_backup,
+                "program_first_ai_review": {"status": "PENDING"},
+                "ai_repair_required": False,
+                "awaiting_ai_review": bool(got.get("ok")),
+                "awaiting_ai_backup": awaiting_backup,
+                "awaiting_ai": bool(got.get("ok") or awaiting_backup),
+            }
+            review_task = None
+            backup_task = None
+            if got.get("ok"):
+                review_task = _make_ai_review_task(
+                    pid, proj, got, verdict, rc, run_p, "PROGRAM")
+                result["review_task"] = review_task["review_path"]
+                p1 = (phases.get("phase1_routing") or {})
+                p1["needs_ai_parse_consumed_by"] = (
+                    "blind Program First AI review at "
+                    f"{review_task['review_path']}")
+            elif awaiting_backup:
+                backup_task = _make_ai_backup_task(
+                    pid, proj, backup_skills, str(backup_source),
+                    backup_detail, bench, ds, run_p)
+            state = ("candidate->AI-review" if got.get("ok")
+                     else ("WAIVE->AI" if backup_source == "rtl_gen_waive"
+                           else ("route-declared->AI" if awaiting_backup
+                                 else "no-rtl")))
+            log_line = (f"  {pid:44s} {nature:22s} entry={str(entry):3s} "
+                        f"exit={str(exit_step):4s} rc={rc} {state}")
+            return _SolveWorkerOutcome(
+                index=index, problem_id=pid,
+                result_json=json.dumps(result),
+                review_task_json=(json.dumps(review_task)
+                                  if review_task else None),
+                backup_task_json=(json.dumps(backup_task)
+                                  if backup_task else None),
+                log_line=log_line)
+        except Exception as exc:                          # noqa: BLE001
+            error = f"{type(exc).__name__}: {exc}"
+            result = {
+                "id": pid,
+                "nature": nature, "entry": entry,
+                "evidence": ev, "exit": exit_step, "rc": None,
+                "worker_status": "ERROR", "worker_error": error,
+                "worker_retryable": (
+                    proj / "input" / "phase1_prompt.md").is_file(),
+                "ok": False, "candidate_ready": False, "accepted": False,
+                "staged": staged_chars,
+                "completeness": "NOT_MEASURED: WORKER_ERROR",
+                "routing_verdict": verdict,
+                "phases": _phase_error_attribution(),
+                "candidate_origin": "NONE", "route_ai_backup": {
+                    "status": "NOT_MEASURED", "skills": []},
+                "program_first_ai_review": {"status": "NOT_MEASURED"},
+                "ai_repair_required": False,
+                "awaiting_ai_review": False,
+                "awaiting_ai_backup": False, "awaiting_ai": False,
+            }
+            return _SolveWorkerOutcome(
+                index=index, problem_id=pid,
+                result_json=json.dumps(result),
+                review_task_json=None, backup_task_json=None,
+                log_line=(f"  {pid:44s} NOT_MEASURED worker ERROR: {error}"))
+
+    outcomes = _ordered_parallel_map(problem_rows, _solve_one, jobs)
+    results: list[dict] = []
+    backlog: list[dict] = []
+    review_tasks: list[dict] = []
+    for outcome in outcomes:
+        result = json.loads(outcome.result_json)
         results.append(result)
+        if outcome.review_task_json:
+            review_tasks.append(json.loads(outcome.review_task_json))
+        if outcome.backup_task_json:
+            backlog.append(json.loads(outcome.backup_task_json))
+        print(outcome.log_line)
 
     if backlog:
         # THE HAND-OFF. A program cannot call a language model, so the honest
@@ -2347,7 +2563,26 @@ def cmd_solve(bench: str, dataset: str, run: str, limit: int = 0) -> int:
     return 2 if results and waiting == len(results) else 1
 
 
-def cmd_resume(bench: str, dataset: str, run: str) -> int:
+def cmd_solve(bench: str, dataset: str, run: str, limit: int = 0,
+              jobs: int = 1, heavy_jobs: int | None = None,
+              worker_threads: int = 0) -> int:
+    """Run the sole solve coordinator under an exclusive run-root lock."""
+    try:
+        with _run_root_coordinator_lock(Path(run), "solve"):
+            return _cmd_solve_locked(
+                bench, dataset, run, limit=limit, jobs=jobs,
+                heavy_jobs=heavy_jobs, worker_threads=worker_threads)
+    except _CoordinatorBusy as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 2
+    except ValueError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 2
+
+
+def _cmd_resume_locked(bench: str, dataset: str, run: str,
+                       jobs: int = 1, heavy_jobs: int | None = None,
+                       worker_threads: int = 0) -> int:
     """Advance Program First / AI Review work and publish only acceptances.
 
     PROGRAM emits first. A runner WAIVE or a valid route-level declaration may
@@ -2386,6 +2621,7 @@ def cmd_resume(bench: str, dataset: str, run: str) -> int:
         print(f"ERROR: no IO adapter bound for {bench!r}", file=sys.stderr)
         return 2
     runner = Path(__file__).resolve().parent / "vibe_ic_one_shot_runner.py"
+    runner_budget = _RunnerBudget(jobs, heavy_jobs, worker_threads)
 
     try:
         backup = _read_jsonl(run_p / _BACKUP_WORKLIST)
@@ -2403,8 +2639,8 @@ def cmd_resume(bench: str, dataset: str, run: str) -> int:
               file=sys.stderr)
         return 2
 
-    def _run_and_collect(pid: str, proj: Path, *,
-                         supplied_rtl: bool = False) -> tuple[int, dict]:
+    def _run_and_collect(job) -> _ResumeRunnerOutcome:
+        pid, proj, supplied_rtl, entry = job
         argv = [sys.executable, str(runner), str(proj), "--skip-analog",
                 "--skip-hardware", "--skip-phase3"]
         if supplied_rtl:
@@ -2412,8 +2648,22 @@ def cmd_resume(bench: str, dataset: str, run: str) -> int:
             # first RTL-validation step so program-first does not author again
             # and overwrite the hash whose semantics the AI just repaired.
             argv += ["--entry-step", "2"]
-        rc = subprocess.run(argv, capture_output=True, text=True).returncode
-        return rc, bio.collect(fmt, pid, proj, supplied_rtl=supplied_rtl)
+        elif entry and entry != "D1":
+            argv += ["--entry-step", str(entry)]
+        process = runner_budget.run(argv)
+        if process.error is not None:
+            return _ResumeRunnerOutcome(
+                problem_id=pid, rc=None, collected_json=None,
+                error=process.error)
+        try:
+            got = bio.collect(fmt, pid, proj, supplied_rtl=supplied_rtl)
+            payload = json.dumps(got)
+        except Exception as exc:                          # noqa: BLE001
+            return _ResumeRunnerOutcome(
+                problem_id=pid, rc=process.rc, collected_json=None,
+                error=f"{type(exc).__name__}: {exc}")
+        return _ResumeRunnerOutcome(
+            problem_id=pid, rc=process.rc, collected_json=payload, error=None)
 
     def _refresh_result(result: dict, proj: Path, rc: int, got: dict) -> None:
         routing = result.get("routing_verdict") or {}
@@ -2432,6 +2682,9 @@ def cmd_resume(bench: str, dataset: str, run: str) -> int:
             "awaiting_ai_review": bool(got.get("ok")),
             "awaiting_ai": bool(got.get("ok")),
         })
+        result.pop("worker_status", None)
+        result.pop("worker_error", None)
+        result.pop("worker_retryable", None)
 
     repairs: list[dict] = []
     remaining_backup: list[dict] = []
@@ -2442,16 +2695,104 @@ def cmd_resume(bench: str, dataset: str, run: str) -> int:
         for row in prior_enhancements
     }
 
-    # AI backup is authorised only by its recorded WAIVE/route declaration. It
-    # is bound to the staged prompt, still passes the same runner, and then
-    # enters the ordinary blind AI review.
+    # A process-level worker error is not converted into a design verdict.
+    # The staged project stays in the run root and --resume retries exactly
+    # that Program invocation; successful projects already committed in the
+    # solve report are never discarded or re-authored.
+    retry_plans = []
+    for result in results:
+        if (result.get("worker_status") == "ERROR"
+                and result.get("worker_retryable") is True):
+            pid = str(result.get("id"))
+            retry_plans.append({
+                "id": pid, "result": result,
+                "project": (run_p / "projects" /
+                            re.sub(r"[^\w.-]", "_", pid)),
+            })
+    retry_outcomes = _ordered_parallel_map(
+        [(p["id"], p["project"], False, p["result"].get("entry"))
+         for p in retry_plans], _run_and_collect, jobs)
+    existing_backup_ids = {str(item.get("id")) for item in backup}
+    for plan, outcome in zip(retry_plans, retry_outcomes):
+        pid = plan["id"]
+        result = plan["result"]
+        proj = plan["project"]
+        if outcome.error is not None:
+            repairs.append({
+                "schema": "vibeic.benchmark.ai_repair_task.v2",
+                "id": pid, "project": str(proj),
+                "status": "PROJECT_WORKER_ERROR",
+                "reasons": [outcome.error],
+                "required_next": (
+                    "fix the named worker failure and run --resume again; "
+                    "other coordinator-committed project results are retained"),
+            })
+            result.update({"rc": None, "worker_status": "ERROR",
+                           "worker_error": outcome.error})
+            print(f"  {pid:44s} Program worker retry ERROR: {outcome.error}")
+            continue
+        rc = int(outcome.rc)
+        got = json.loads(str(outcome.collected_json))
+        _refresh_result(result, proj, rc, got)
+        if got.get("ok"):
+            task = _make_ai_review_task(
+                pid, proj, got, result.get("routing_verdict") or {}, rc,
+                run_p, "PROGRAM")
+            task_by_id[pid] = task
+            result.update({
+                "review_task": task["review_path"],
+                "candidate_origin": "PROGRAM",
+                "awaiting_ai_review": True, "awaiting_ai": True,
+            })
+            refreshed.add(pid)
+            print(f"  {pid:44s} Program worker retry completed; "
+                  "fresh AI review required")
+            continue
+        waive = _rtl_gen_waive(proj)
+        route_backup = _declared_route_ai_backup(
+            result.get("routing_verdict") or {})
+        backup_source = None
+        backup_skills: list[str] = []
+        backup_detail = ""
+        if waive:
+            backup_source = "rtl_gen_waive"
+            backup_skills = [str(waive.get("fallback_skill"))]
+            backup_detail = str(waive.get("detail") or "")
+        elif route_backup["status"] == "DECLARED":
+            backup_source = "route_declaration"
+            backup_skills = list(route_backup["skills"])
+            backup_detail = str(got.get("reason") or "")
+        result.update({
+            "route_ai_backup": route_backup,
+            "candidate_origin": (
+                "AI_BACKUP_PENDING" if backup_source else "NONE"),
+            "awaiting_ai_backup": bool(backup_source),
+            "awaiting_ai_review": False,
+            "awaiting_ai": bool(backup_source),
+        })
+        if backup_source and pid not in existing_backup_ids:
+            backup.append(_make_ai_backup_task(
+                pid, proj, backup_skills, str(backup_source), backup_detail,
+                bench, Path(dataset).resolve(), run_p))
+            existing_backup_ids.add(pid)
+        print(f"  {pid:44s} Program worker retry completed (rc={rc})")
+
+    # AI backup is authorised only by its recorded WAIVE/route declaration.
+    # The coordinator validates every handoff first, workers run only unique
+    # projects, and the coordinator applies their immutable outcomes in the
+    # original worklist order.
+    backup_plans: list[dict] = []
     for item in backup:
         pid = str(item.get("id"))
         result = result_by_id.get(pid)
         proj = Path(str(item.get("project") or ""))
         if result is None:
-            repairs.append({"id": pid, "status": "INVALID_HANDOFF",
-                            "reasons": ["backup id is absent from solve_report"]})
+            backup_plans.append({
+                "kind": "invalid", "item": item, "id": pid,
+                "repair": {"id": pid, "status": "INVALID_HANDOFF",
+                           "reasons": [
+                               "backup id is absent from solve_report"]},
+            })
             continue
         prompt = proj / "input" / "phase1_prompt.md"
         expected_prompt_hash = item.get("prompt_sha256")
@@ -2469,30 +2810,83 @@ def cmd_resume(bench: str, dataset: str, run: str) -> int:
             status = ("PROMPT_CHANGED" if expected_prompt_hash
                       and current_prompt_hash is not None
                       else "INVALID_BACKUP_HANDOFF")
-            repairs.append({
+            backup_plans.append({
+                "kind": "prompt_error", "item": item, "id": pid,
+                "result": result, "status": status,
+                "repair": {
                 "schema": "vibeic.benchmark.ai_repair_task.v2",
                 "id": pid, "project": str(proj), "status": status,
                 "reasons": [prompt_reason],
                 "required_next": (
                     "restore the exact staged prompt and start a fresh "
                     "--solve handoff; do not re-gate this backup"),
+                },
             })
-            result.update({"accepted": False, "candidate_origin": "NONE",
-                           "awaiting_ai_backup": False,
-                           "awaiting_ai_review": False,
-                           "awaiting_ai": False})
-            print(f"  {pid:44s} AI backup blocked: {status}")
             continue
         rtl_dir = proj / "phase2" / "stage1" / "rtl"
         authored = rtl_dir.is_dir() and (list(rtl_dir.glob("*.sv"))
                                          + list(rtl_dir.glob("*.v")))
         if not authored:
+            backup_plans.append({
+                "kind": "no_rtl", "item": item, "id": pid,
+                "result": result,
+            })
+            continue
+        backup_plans.append({
+            "kind": "run", "item": item, "id": pid, "result": result,
+            "project": proj, "rtl_dir": rtl_dir,
+        })
+
+    backup_run_plans = [p for p in backup_plans if p["kind"] == "run"]
+    backup_outcomes = iter(_ordered_parallel_map(
+        [(p["id"], p["project"], True, None) for p in backup_run_plans],
+        _run_and_collect, jobs))
+    for plan in backup_plans:
+        kind = plan["kind"]
+        pid = plan["id"]
+        item = plan["item"]
+        if kind == "invalid":
+            repairs.append(plan["repair"])
+            continue
+        result = plan["result"]
+        if kind == "prompt_error":
+            repairs.append(plan["repair"])
+            result.update({"accepted": False, "candidate_origin": "NONE",
+                           "awaiting_ai_backup": False,
+                           "awaiting_ai_review": False,
+                           "awaiting_ai": False})
+            print(f"  {pid:44s} AI backup blocked: {plan['status']}")
+            continue
+        if kind == "no_rtl":
             remaining_backup.append(item)
             result.update({"accepted": False, "awaiting_ai_backup": True,
                            "awaiting_ai_review": False, "awaiting_ai": True})
             print(f"  {pid:44s} AI backup still has no authored RTL")
             continue
-        rc, got = _run_and_collect(pid, proj, supplied_rtl=True)
+        outcome = next(backup_outcomes)
+        if outcome.error is not None:
+            remaining_backup.append(item)
+            repairs.append({
+                "schema": "vibeic.benchmark.ai_repair_task.v2",
+                "id": pid, "project": str(plan["project"]),
+                "status": "PROJECT_WORKER_ERROR",
+                "reasons": [outcome.error],
+                "required_next": (
+                    "fix the named worker failure and run --resume again; "
+                    "other coordinator-committed project results are retained"),
+            })
+            result.update({
+                "rc": None, "worker_status": "ERROR",
+                "worker_error": outcome.error, "accepted": False,
+                "candidate_ready": False, "awaiting_ai_backup": True,
+                "awaiting_ai_review": False, "awaiting_ai": True,
+                "ai_repair_required": False,
+            })
+            print(f"  {pid:44s} AI backup worker ERROR: {outcome.error}")
+            continue
+        rc = int(outcome.rc)
+        got = json.loads(str(outcome.collected_json))
+        proj = plan["project"]
         _refresh_result(result, proj, rc, got)
         if got.get("ok"):
             task = _make_ai_review_task(
@@ -2513,7 +2907,7 @@ def cmd_resume(bench: str, dataset: str, run: str) -> int:
                 "id": pid, "project": str(proj),
                 "status": "PROGRAM_GATES_REJECTED_AI_BACKUP",
                 "reasons": [str(got.get("reason") or "runner rejected RTL")],
-                "write_rtl_to": str(rtl_dir),
+                "write_rtl_to": str(plan["rtl_dir"]),
                 "resume_with": (f"benchmark_dispatch.py {bench} --resume "
                                 f"--dataset {dataset} --run {run_p}"),
             })
@@ -2523,56 +2917,69 @@ def cmd_resume(bench: str, dataset: str, run: str) -> int:
                            "ai_repair_required": True})
             print(f"  {pid:44s} AI backup rejected by PROGRAM gates (rc={rc})")
 
-    # AI repair is authorised only after the frozen candidate has demonstrably
-    # failed a self-contained prompt-derived test.  Preserve that exact test,
-    # re-run the normal PROGRAM gates, and require the repaired candidate to
-    # pass it before a fresh AI PASS can publish anything.
+    # AI repair is authorised only after the frozen candidate demonstrably
+    # failed a prompt-derived test.  Validation remains coordinator-owned;
+    # only the independent project runner calls fan out.
+    repair_plans: list[dict] = []
     for pid, task in list(task_by_id.items()):
         if pid in refreshed:
+            repair_plans.append({"kind": "noop", "id": pid})
             continue
         result = result_by_id.get(pid)
         if result is None:
-            repairs.append({"id": pid, "status": "INVALID_REVIEW_TASK",
-                            "reasons": ["review id is absent from solve_report"]})
+            repair_plans.append({
+                "kind": "report", "id": pid,
+                "repair": {"id": pid, "status": "INVALID_REVIEW_TASK",
+                           "reasons": [
+                               "review id is absent from solve_report"]},
+            })
             continue
+        pre_logs: list[str] = []
         review_path = Path(str(task.get("review_path") or ""))
         if (task.get("candidate_origin") == "AI_REPAIR"
                 and not review_path.is_file()):
             final_provenance, final_provenance_reasons = \
                 _refresh_final_repair_provenance(task)
             if final_provenance_reasons:
-                repairs.append({
-                    "schema": "vibeic.benchmark.ai_repair_task.v2",
-                    "id": pid, "project": task.get("project"),
-                    "status": "AI_REPAIR_FINAL_PROVENANCE_REQUIRED",
-                    "reasons": final_provenance_reasons,
-                    "repair_record_path": (task.get("repair_provenance")
-                                           or {}).get("path"),
-                    "program_parent_rtl_sha256":
-                        (task.get("program_candidate_snapshot")
-                         or {}).get("rtl_sha256"),
-                    "final_repaired_rtl_sha256": task.get("rtl_sha256"),
-                })
                 result.update({"accepted": False, "awaiting_ai": True,
                                "awaiting_ai_review": False,
                                "ai_repair_required": True})
-                print(f"  {pid:44s} final gated RTL needs AI provenance")
+                repair_plans.append({
+                    "kind": "report", "id": pid,
+                    "log": f"  {pid:44s} final gated RTL needs AI provenance",
+                    "repair": {
+                        "schema": "vibeic.benchmark.ai_repair_task.v2",
+                        "id": pid, "project": task.get("project"),
+                        "status": "AI_REPAIR_FINAL_PROVENANCE_REQUIRED",
+                        "reasons": final_provenance_reasons,
+                        "repair_record_path": (task.get("repair_provenance")
+                                               or {}).get("path"),
+                        "program_parent_rtl_sha256":
+                            (task.get("program_candidate_snapshot")
+                             or {}).get("rtl_sha256"),
+                        "final_repaired_rtl_sha256": task.get("rtl_sha256"),
+                    },
+                })
                 continue
             task["repair_provenance"] = final_provenance
             result.update({"awaiting_ai": True,
                            "awaiting_ai_review": True,
                            "ai_repair_required": False})
-            print(f"  {pid:44s} final AI repair provenance rebound")
+            pre_logs.append(f"  {pid:44s} final AI repair provenance rebound")
         prompt_hash, _, _, _ = _current_task_material(task)
         if prompt_hash != task.get("prompt_sha256"):
-            repairs.append({
-                "schema": "vibeic.benchmark.ai_repair_task.v2",
-                "id": pid, "project": task.get("project"),
-                "status": "PROMPT_CHANGED",
-                "reasons": ["restore the original prompt; it cannot be refreshed"],
-            })
             result.update({"accepted": False, "awaiting_ai": True,
                            "awaiting_ai_review": False})
+            repair_plans.append({
+                "kind": "report", "id": pid, "pre_logs": pre_logs,
+                "repair": {
+                    "schema": "vibeic.benchmark.ai_repair_task.v2",
+                    "id": pid, "project": task.get("project"),
+                    "status": "PROMPT_CHANGED",
+                    "reasons": [
+                        "restore the original prompt; it cannot be refreshed"],
+                },
+            })
             continue
         proj = Path(str(task.get("project") or ""))
         working_paths = _rtl_files(proj)
@@ -2582,61 +2989,114 @@ def cmd_resume(bench: str, dataset: str, run: str) -> int:
         except OSError:
             working_hash = None
         if working_hash == task.get("rtl_sha256"):
+            repair_plans.append({
+                "kind": "noop", "id": pid, "pre_logs": pre_logs})
             continue
         prior_verdict = _validate_ai_review(task)
         challenge = prior_verdict.get("verified_challenge")
         if prior_verdict.get("status") != "REPAIR_REQUIRED" or not challenge:
-            repairs.append({
-                "schema": "vibeic.benchmark.ai_repair_task.v2",
-                "id": pid, "project": str(proj),
-                "status": "UNPROVEN_AI_EDIT_REJECTED",
-                "reasons": [
-                    "working RTL changed before an AI finding was proven by "
-                    "a prompt-derived executable verification test",
-                    *[str(v) for v in prior_verdict.get("reasons") or []],
-                ],
-                "restore_from": (task.get("candidate_snapshot") or {}).get(
-                    "manifest_path"),
-            })
             result.update({"accepted": False, "awaiting_ai": True,
                            "awaiting_ai_review": True,
                            "ai_repair_required": False})
-            print(f"  {pid:44s} changed RTL rejected: AI issue is unproven")
+            repair_plans.append({
+                "kind": "report", "id": pid, "pre_logs": pre_logs,
+                "log": (f"  {pid:44s} changed RTL rejected: "
+                        "AI issue is unproven"),
+                "repair": {
+                    "schema": "vibeic.benchmark.ai_repair_task.v2",
+                    "id": pid, "project": str(proj),
+                    "status": "UNPROVEN_AI_EDIT_REJECTED",
+                    "reasons": [
+                        "working RTL changed before an AI finding was proven "
+                        "by a prompt-derived executable verification test",
+                        *[str(v) for v in prior_verdict.get("reasons") or []],
+                    ],
+                    "restore_from": (task.get("candidate_snapshot") or {}).get(
+                        "manifest_path"),
+                },
+            })
             continue
         repair_record_path = _repair_record_path(run_p, task)
         repair_provenance, provenance_reasons = _validate_repair_record(
             repair_record_path, task, str(working_hash), challenge)
         if provenance_reasons:
-            repairs.append({
-                "schema": "vibeic.benchmark.ai_repair_task.v2",
-                "id": pid, "project": str(proj),
-                "status": "AI_REPAIR_PROVENANCE_REQUIRED",
-                "reasons": provenance_reasons,
-                "repair_record_path": str(repair_record_path),
-                "reviewed_rtl_sha256": task.get("rtl_sha256"),
-                "repaired_rtl_sha256": working_hash,
-                "challenge_sha256": challenge.get("sha256"),
-            })
             result.update({"accepted": False, "awaiting_ai": True,
                            "awaiting_ai_review": False,
                            "ai_repair_required": True})
-            print(f"  {pid:44s} changed RTL needs AI repair provenance")
+            repair_plans.append({
+                "kind": "report", "id": pid, "pre_logs": pre_logs,
+                "log": f"  {pid:44s} changed RTL needs AI repair provenance",
+                "repair": {
+                    "schema": "vibeic.benchmark.ai_repair_task.v2",
+                    "id": pid, "project": str(proj),
+                    "status": "AI_REPAIR_PROVENANCE_REQUIRED",
+                    "reasons": provenance_reasons,
+                    "repair_record_path": str(repair_record_path),
+                    "reviewed_rtl_sha256": task.get("rtl_sha256"),
+                    "repaired_rtl_sha256": working_hash,
+                    "challenge_sha256": challenge.get("sha256"),
+                },
+            })
             continue
-        program_first_phases = (result.get("program_first_phases")
-                                or result.get("phases") or {})
-        rc, got = _run_and_collect(pid, proj, supplied_rtl=True)
+        repair_plans.append({
+            "kind": "run", "id": pid, "pre_logs": pre_logs,
+            "task": task, "result": result, "project": proj,
+            "challenge": challenge, "repair_provenance": repair_provenance,
+            "program_first_phases": (
+                result.get("program_first_phases")
+                or result.get("phases") or {}),
+        })
+
+    repair_run_plans = [p for p in repair_plans if p["kind"] == "run"]
+    repair_outcomes = iter(_ordered_parallel_map(
+        [(p["id"], p["project"], True, None) for p in repair_run_plans],
+        _run_and_collect, jobs))
+    for plan in repair_plans:
+        for line in plan.get("pre_logs") or []:
+            print(line)
+        if plan["kind"] == "noop":
+            continue
+        if plan["kind"] == "report":
+            repairs.append(plan["repair"])
+            if plan.get("log"):
+                print(plan["log"])
+            continue
+        pid = plan["id"]
+        task = plan["task"]
+        result = plan["result"]
+        proj = plan["project"]
+        outcome = next(repair_outcomes)
+        if outcome.error is not None:
+            repairs.append({
+                "schema": "vibeic.benchmark.ai_repair_task.v2",
+                "id": pid, "project": str(proj),
+                "status": "PROJECT_WORKER_ERROR",
+                "reasons": [outcome.error],
+                "required_next": (
+                    "fix the named worker failure and run --resume again; "
+                    "other coordinator-committed project results are retained"),
+            })
+            result.update({
+                "rc": None, "worker_status": "ERROR",
+                "worker_error": outcome.error, "accepted": False,
+                "awaiting_ai": True, "awaiting_ai_review": False,
+                "ai_repair_required": True,
+            })
+            print(f"  {pid:44s} AI repair worker ERROR: {outcome.error}")
+            continue
+        rc = int(outcome.rc)
+        got = json.loads(str(outcome.collected_json))
         _refresh_result(result, proj, rc, got)
+        program_first_phases = plan["program_first_phases"]
         if program_first_phases:
             result["program_first_phases"] = program_first_phases
-            # Solving is the original Program emission. The supplied AI edit
-            # belongs to debugging; step-2 re-entry only verifies it.
             result.setdefault("phases", {})["phase2_solving"] = \
                 program_first_phases.get("phase2_solving", {})
             result["phases"]["phase4_debugging"] = \
                 program_first_phases.get("phase4_debugging", {})
         if got.get("ok"):
             inherited = list(task.get("verification_challenges") or [])
-            inherited.append(challenge)
+            inherited.append(plan["challenge"])
             new_task = _make_ai_review_task(
                 pid, proj, got, result.get("routing_verdict") or {}, rc,
                 run_p, "AI_REPAIR",
@@ -2644,7 +3104,7 @@ def cmd_resume(bench: str, dataset: str, run: str) -> int:
                 program_candidate=(task.get("program_candidate_snapshot")
                                    or task.get("candidate_snapshot")),
                 repair_parent_candidate=task.get("candidate_snapshot"),
-                repair_provenance=repair_provenance)
+                repair_provenance=plan["repair_provenance"])
             task_by_id[pid] = new_task
             result["review_task"] = new_task["review_path"]
             result["candidate_origin"] = "AI_REPAIR"
@@ -2856,6 +3316,23 @@ def cmd_resume(bench: str, dataset: str, run: str) -> int:
     return 2 if (remaining_backup or repairs or ordered_tasks) else 1
 
 
+def cmd_resume(bench: str, dataset: str, run: str, jobs: int = 1,
+               heavy_jobs: int | None = None,
+               worker_threads: int = 0) -> int:
+    """Run the sole resume coordinator under an exclusive run-root lock."""
+    try:
+        with _run_root_coordinator_lock(Path(run), "resume"):
+            return _cmd_resume_locked(
+                bench, dataset, run, jobs=jobs, heavy_jobs=heavy_jobs,
+                worker_threads=worker_threads)
+    except _CoordinatorBusy as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 2
+    except ValueError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 2
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("bench", nargs="?", help="benchmark name (see --list)")
@@ -2888,6 +3365,15 @@ def main():
                     help="with --solve: stop after N problems (0 = all)")
     ap.add_argument("--dataset", help="dataset path on disk")
     ap.add_argument("--run", help="run dir")
+    ap.add_argument("--jobs", type=int, default=1,
+                    help="with --solve/--resume: bounded project workers "
+                         "(default 1 preserves serial behaviour)")
+    ap.add_argument("--heavy-jobs", type=int, default=None,
+                    help="with --solve/--resume: maximum concurrent runner "
+                         "heavy slots (default: --jobs)")
+    ap.add_argument("--worker-threads", type=int, default=0,
+                    help="with --solve/--resume: EDA threads per worker; 0 "
+                         "auto-budgets host CPUs (serial default is unchanged)")
     ap.add_argument("--scorer-root",
                     help="with CVDP --score: directory containing the official "
                          "run_benchmark.py (or set CVDP_BENCHMARK_ROOT)")
@@ -2954,11 +3440,15 @@ def main():
     if a.resume:
         if not (a.dataset and a.run):
             raise SystemExit("--resume requires --dataset and --run")
-        sys.exit(cmd_resume(a.bench, a.dataset, a.run))
+        sys.exit(cmd_resume(
+            a.bench, a.dataset, a.run, jobs=a.jobs,
+            heavy_jobs=a.heavy_jobs, worker_threads=a.worker_threads))
     if a.solve:
         if not (a.dataset and a.run):
             raise SystemExit("--solve requires --dataset and --run")
-        sys.exit(cmd_solve(a.bench, a.dataset, a.run, limit=a.limit))
+        sys.exit(cmd_solve(
+            a.bench, a.dataset, a.run, limit=a.limit, jobs=a.jobs,
+            heavy_jobs=a.heavy_jobs, worker_threads=a.worker_threads))
     # default: show plan + env status
     env = _env_check()
     print(f"# Environment: iverilog={'OK' if env['iverilog'] else 'MISSING'}, "

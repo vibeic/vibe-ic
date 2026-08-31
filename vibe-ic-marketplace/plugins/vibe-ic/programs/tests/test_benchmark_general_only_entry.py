@@ -32,7 +32,11 @@ def test_repository_has_no_benchmark_specific_entry_surface():
 
 def test_general_router_decides_before_the_runner_is_invoked():
     """`--solve` is the lifecycle verb, not permission to skip routing."""
-    tree = ast.parse(textwrap.dedent(inspect.getsource(dispatch.cmd_solve)))
+    # ``cmd_solve`` now owns only the run-root coordinator lock.  Routing and
+    # runner invocation remain together in the locked implementation; inspect
+    # that body so the ordering assertion still measures the production path.
+    tree = ast.parse(textwrap.dedent(
+        inspect.getsource(dispatch._cmd_solve_locked)))
     calls = [node for node in ast.walk(tree) if isinstance(node, ast.Call)]
 
     route = next(
@@ -45,7 +49,7 @@ def test_general_router_decides_before_the_runner_is_invoked():
         node for node in calls
         if isinstance(node.func, ast.Attribute)
         and isinstance(node.func.value, ast.Name)
-        and node.func.value.id == "subprocess"
+        and node.func.value.id == "runner_budget"
         and node.func.attr == "run")
 
     assert route.lineno < runner.lineno
