@@ -3737,7 +3737,6 @@ clock buffers` / `Max level 11`, so the tree is the same shape in each:
 | baseline (the arm's own) | `{clkbuf_4}` | `clkbuf_16` (50 sites) | **2 054** — reproduces the arm's 2 055 to 0.05 % |
 | wide buf_list | `{1 2 4 8 12}` | `clkbuf_16` | **2 054 — unchanged, not by one instance** |
 | narrow root | `{clkbuf_4}` | `clkbuf_8` (26 sites) | **2 052 × clkbuf_8; only 2 at the bound** |
-
 | **E. name a `-root_buf` that fits the measured bound** | **none measured — skew 4.86 → 4.50 (−7.4 %), max network latency 7.61 → 6.92 (−9.1 %), same 2 363 buffers, same 11 levels** | **the 2 055 never exist; nothing at the bound to legalize** | **none** |
 
 **★ AND OPTION E IS NOW MEASURED END TO END, NOT JUST AT CTS (J88).** Two full
