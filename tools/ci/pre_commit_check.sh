@@ -202,6 +202,74 @@ else
 fi
 
 # --------------------------------------------------------------------------
+# The manifest a commit carries must describe the tree that commit ships.
+#
+# A landing carries tools/ci/protected_landing_transition.json and, before this,
+# NOTHING verified it was rendered against the tree it travels with -- the
+# lander references the transition validator zero times and the hygiene set's
+# one reference is a comment. Batch 72 shipped a manifest rendered two mains
+# earlier and no gate said a word.
+#
+# Wired HERE, and not into repo_hygiene_gates.sh or gatekeeper-land.sh, because
+# both are PROTECTED paths and editing one to add a protected-path check is the
+# circularity this whole class comes from. This runner is the honest home: the
+# rule is visible at the moment the tree it binds is being changed.
+#
+# rc 2 is "could not look" and must not fail a commit -- a working tree with no
+# manifest, or one not in a git checkout, is not a finding about the tree.
+# --------------------------------------------------------------------------
+echo ""
+echo "--- Protected manifest describes its tree ---"
+MAN_TREE="$PROJECT_ROOT/vibe-ic-marketplace/plugins/vibe-ic/programs/transition_manifest_describes_its_tree_check.py"
+MAN_PROT_LIST="$PROJECT_ROOT/tools/ci/protected_landing_transition.json"
+if [ -f "$MAN_TREE" ]; then
+    # `set -e` is in force at the top of this file, so the checker is called
+    # inside an `if` -- a bare call returning 1 would exit the runner here and
+    # every check BELOW would silently never run. That is worse than the defect
+    # this block exists for, and it is how the block was first written.
+    MAN_TREE_RC=0
+    python3 "$MAN_TREE" --repo "$PROJECT_ROOT" --ref HEAD || MAN_TREE_RC=$?
+    if [ "$MAN_TREE_RC" -eq 1 ]; then
+        # SCOPED TO WHAT THE COMMITTER CAN ACT ON. MEASURED on `30dca502ed`
+        # (v1.14.26): main is drifted from `current` on 4 of its 52 protected
+        # paths and from `next` on 1. Failing every commit for that would
+        # block people who touched nothing protected and can do nothing about
+        # it -- a gate nobody can satisfy gets disabled, and then it protects
+        # nothing. It is an ERROR only when this commit touches a protected
+        # path or the manifest; otherwise the drift is REPORTED and the commit
+        # proceeds. Scoping, not softening: the blocking case is exactly the one
+        # where landing would ship a manifest that lies about its tree.
+        MAN_TREE_HITS=""
+        if [ -f "$MAN_PROT_LIST" ]; then
+            MAN_TREE_HITS=$(git -C "$PROJECT_ROOT" diff --cached --name-only 2>/dev/null \
+                | python3 -c 'import json,sys
+prot=set()
+try:
+    prot={f["path"] for f in json.load(open(sys.argv[1]))["current"]["files"]}
+except Exception:
+    pass
+prot.add("tools/ci/protected_landing_transition.json")
+for ln in sys.stdin.read().split():
+    if ln in prot:
+        print(ln)' "$MAN_PROT_LIST" || true)
+        fi
+        if [ -n "$MAN_TREE_HITS" ]; then
+            echo "  BLOCKING: this commit touches a protected path, so it would"
+            echo "  ship a manifest that does not describe its own tree:"
+            printf '    %s\n' $MAN_TREE_HITS
+            ERRORS=$((ERRORS + 1))
+        else
+            echo "  REPORTED, not blocking: this commit touches no protected path"
+            echo "  and no manifest, so it cannot repair the drift above."
+        fi
+    elif [ "$MAN_TREE_RC" -eq 2 ]; then
+        echo "  NOT CHECKED (rc 2): see the reason above. Not a finding."
+    fi
+else
+    echo "  SKIP: transition_manifest_describes_its_tree_check.py not present"
+fi
+
+# --------------------------------------------------------------------------
 # 5. Check for accidental secret/credential files
 # --------------------------------------------------------------------------
 echo ""
