@@ -113,6 +113,7 @@ from typing import Any, Dict, List, Optional, Tuple
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import _analog_producer_common as _pc  # noqa: E402
+import pdk_analog_device_params as _pdp  # noqa: E402
 import pdk_analog_layout_minima as _minima  # noqa: E402
 
 PRODUCER = "analog_a2_topology_emit"
@@ -556,19 +557,42 @@ def _declared_pdk_target(project: Path) -> Optional[str]:
 
 
 def pdk_device_params(selector: str) -> Tuple[Optional[str], Dict[str, Any]]:
-    """`analog_device_params` for the registry family matching `selector`.
+    """The DECLARED `analog_device_params` for the family matching `selector`.
     READ, never retyped — `analog-topology-select` forbids restating these.
 
     The selector->family match itself lives in `pdk_analog_layout_minima`
     (one matcher, shared): the electrical constants and the layout minima are
     two records of the SAME registry entry, and resolving them through two
     copies of the ladder is how one of them silently ends up read off a
-    different family than the other."""
-    name, ent = _minima.resolve_family(selector)
-    if not name:
-        return None, {}
-    params = ent.get("analog_device_params")
-    return name, (params if isinstance(params, dict) else {})
+    different family than the other.
+
+    vibe-ic#1962 — the MEASURED sub-record is deliberately NOT returned here.
+    It is a different kind of fact (a number taken off this PDK's own models at
+    a stated bias, with a fit residual) and it is quoted in its own section
+    with its own provenance; folding it into this dict would print a nested
+    record as a row in the constants table and would let a measured number be
+    mistaken for a declared one.
+    """
+    return _pdp.declared_params(selector)
+
+
+def pdk_measured_params(selector: str, project: Optional[Path] = None
+                        ) -> Tuple[Dict[str, float], Dict[str, Any]]:
+    """`(the flat measured constants, their provenance)` for `selector`.
+
+    vibe-ic#1962. `({}, {"measured": False, ...})` is the honest answer for a
+    family nobody has characterized yet: the artefact then STATES that it
+    quoted no measured constant, which a reader cannot confuse with a family
+    whose constants happened to be zero. `project` lets a PDK staged into the
+    design outrank the shipped record, because the staged PDK is the one the
+    design's decks load.
+
+    The corner is left unspecified, so the record's own NOMINAL corner answers.
+    A2 selects a topology; picking a process corner is a sizing decision and
+    belongs to the pass that makes it, which reads the other corners by name.
+    """
+    return (_pdp.measured_values(selector, None, None, project),
+            _pdp.measured_provenance(selector, None, None, project))
 
 
 def bound_spec_values(project: Path, block: str) -> Tuple[Dict[str, float],
@@ -654,7 +678,10 @@ def build_ir(block: str, btype: str, entry: Dict[str, Any],
              pdk_family: Optional[str],
              pdk_params: Dict[str, Any],
              role_minima: Optional[Dict[str, Any]] = None,
-             minima_source: Optional[str] = None) -> Dict[str, Any]:
+             minima_source: Optional[str] = None,
+             measured_params: Optional[Dict[str, float]] = None,
+             measured_provenance: Optional[Dict[str, Any]] = None,
+             ) -> Dict[str, Any]:
     knobs: Dict[str, Any] = {}
     knob_sources: Dict[str, str] = {}
     defaulted: List[str] = []
@@ -694,6 +721,14 @@ def build_ir(block: str, btype: str, entry: Dict[str, Any],
         "knob_sources": knob_sources,
         "device_param_exprs": [dict(e) for e in
                                lib.get("device_param_exprs", [])],
+        # vibe-ic#1962 — the target process's MEASURED electrical constants,
+        # carried into the IR so a `device_param_exprs` entry can be written
+        # against a sheet resistance or a transconductance the PDK's own models
+        # were measured for, instead of against a number a sizing pass
+        # re-derives by hand every time. Empty for a family nobody has
+        # characterized; `_provenance.pdk_constants_source.measured` says which
+        # of the two it is.
+        "pdk_measured_params": dict(measured_params or {}),
         "analyses_implied": list(lib.get("analyses_implied") or []),
         # Carried into the IR so `analog_a3_netlist_emit` renders the stimulus
         # generically instead of holding a second per-type table.
@@ -717,6 +752,11 @@ def build_ir(block: str, btype: str, entry: Dict[str, Any],
                 "path": "programs/pdk_registry.json",
                 "family": pdk_family,
                 "analog_device_params": pdk_params or None,
+                # vibe-ic#1962 — the MEASURED half, and how it was measured.
+                # `measured: false` is a POSITIVE statement that this family
+                # has not been characterized, so a reader can tell "quoted
+                # nothing" from "quoted a zero".
+                "measured": dict(measured_provenance or {"measured": False}),
             },
             # vibe-ic#1952. `minima_available` is the honest distinction
             # between "checked, nothing was below the floor" (clamps == [])
@@ -763,6 +803,62 @@ def build_ir(block: str, btype: str, entry: Dict[str, Any],
         },
     }
     return ir
+
+
+def _render_measured_section(ir: Dict[str, Any]) -> List[str]:
+    """The MEASURED process constants, and what was measured to get them.
+
+    vibe-ic#1962. Kept as its own section, and never folded into the declared
+    table above, because the two are different kinds of fact: the declared
+    constants are a hand-maintained record of the family, and these were taken
+    off this PDK's OWN models at a stated bias, on a stated primitive, by a
+    stated method, with a residual that says how well the model being fitted
+    describes the device. A number quoted without those is exactly the
+    re-derived-per-session constant this section replaces.
+    """
+    prov = (ir["_provenance"].get("pdk_constants_source") or {}).get(
+        "measured") or {}
+    values = ir.get("pdk_measured_params") or {}
+    L: List[str] = ["## Measured process constants", ""]
+    if not prov.get("measured"):
+        L.append("This PDK family has NOT been characterized, so no measured "
+                 "constant is quoted here. Run "
+                 "`programs/pdk_analog_characterize.py --pdk <family>` to "
+                 "measure them from the PDK's own models. "
+                 f"({prov.get('reason') or 'no measured record resolves'})")
+        L.append("")
+        return L
+    L.append(f"Measured from the target PDK's own models by "
+             f"`{prov.get('generated_by')}` and read out of "
+             f"`programs/pdk_registry.json` — not re-derived here, and not "
+             f"restated from memory.")
+    L.append("")
+    L.append(f"- corner: `{prov.get('corner')}` at "
+             f"{prov.get('temp_c')} °C, supply {prov.get('supply_v')} V")
+    for role, dev in sorted((prov.get("devices") or {}).items()):
+        L.append(f"- `{role}` measured on `{dev}`")
+    for lib, section in (prov.get("sections") or []):
+        L.append(f"- model section `{section}` of `{lib}`")
+    L.append("")
+    if values:
+        L.append("| constant | value |")
+        L.append("|---|---|")
+        for k in sorted(values):
+            L.append(f"| `{k}` | {values[k]:.6g} |")
+        L.append("")
+    for k, resid in sorted((prov.get("fit") or {}).items()):
+        L.append(f"- fit witness `{k}`: {resid}")
+    if prov.get("fit"):
+        L.append("")
+    nm = prov.get("not_measured") or {}
+    if nm:
+        L.append("NOT measured on this family, and therefore not quoted "
+                 "anywhere downstream:")
+        L.append("")
+        for k in sorted(nm):
+            L.append(f"- `{k}` — {nm[k]}")
+        L.append("")
+    return L
 
 
 def render_md(ir: Dict[str, Any], lib: Dict[str, Any],
@@ -822,6 +918,7 @@ def render_md(ir: Dict[str, Any], lib: Dict[str, Any],
                  "or supply constant is quoted here. Quoting one from memory "
                  "is the failure this section exists to prevent.")
     L.append("")
+    L.extend(_render_measured_section(ir))
     L.append("## Drawn-geometry minima of the target process")
     L.append("")
     lm = prov.get("layout_minima") or {}
@@ -1009,12 +1106,14 @@ def emit_for_block(project: Path, entry: Dict[str, Any],
 
     spec_values, spec_path = bound_spec_values(project, name)
     fam, params = pdk_device_params(pdk)
-    # The SAME selector resolves both records through the one shared matcher,
-    # so a family whose Vth is quoted can never be a family whose layout
-    # minima were silently skipped.
+    # The SAME selector resolves all THREE records through the one shared
+    # matcher, so a family whose Vth is quoted can never be a family whose
+    # layout minima — or whose measured constants — were silently skipped.
     _minima_fam, role_minima = _minima.layout_minima(pdk)
+    measured, measured_prov = pdk_measured_params(pdk, project)
     ir = build_ir(name, btype, entry, lib, spec_values, spec_path, project,
-                  fam, params, role_minima, _minima.minima_source(pdk))
+                  fam, params, role_minima, _minima.minima_source(pdk),
+                  measured, measured_prov)
     md = render_md(ir, lib, fam, params)
     bdir.mkdir(parents=True, exist_ok=True)
     md_path.write_text(md, encoding="utf-8")

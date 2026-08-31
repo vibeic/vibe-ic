@@ -23,6 +23,20 @@ Given a block's `spec.json` (from `analog-spec-extract`) and PDK device characte
    name; the A2 gate (`programs/analog_a2_topology_select_check.py`) and
    `analog-sizing-loop` consume the same registry field.
    (canonical reference: GF180 nfet≈0.65V/pfet≈0.70V/3.3V; SKY130 nfet≈0.45V/pfet≈0.47V/1.8V.)
+2b. The MEASURED half of that same field (vibe-ic#1962) —
+   `analog_device_params.measured`, read with
+   `programs/pdk_analog_device_params.py` and produced by
+   `programs/pdk_analog_characterize.py`. It carries what the declared
+   constants above do not: `k_prime_n_ua_per_v2` / `k_prime_p_ua_per_v2`, the
+   threshold the square-law fit implies, `vgs_at_id_*_v`, `rsheet_ohm_per_sq`
+   (+ `r_end_ohm`) and `cap_area_ff_per_um2` (+ `cap_perim_ff_per_um`), per
+   process corner, each attributed to the primitive and the model-lib section
+   it was measured on and each carrying the fit residual that says how well the
+   model describes the device. `analog_a2_topology_emit` puts these into
+   `topology.json` as `pdk_measured_params`, so a library `device_param_exprs`
+   entry may be written against one of them by name. A family with NO record
+   quotes nothing and says so — never a default, never a neighbouring family's
+   number.
 3. Constraints: power budget, area budget, accuracy requirements
 
 ## Proven topologies (GF180, verified via SPICE)
@@ -68,6 +82,11 @@ These templates are from `analog-sizing/PRACTICAL_NOTES.md` — all verified wor
    - Supply voltage headroom. Vth and the nominal supply are deterministic
      PDK constants — read `vth_n_v` / `vth_p_v` / `nominal_supply_v` from
      `programs/pdk_registry.json` (`analog_device_params`), do NOT guess.
+     When the family has been characterized, prefer the MEASURED
+     `vth_*_extracted_v` for a headroom argument about a device in
+     saturation: it is the threshold the square-law fit of THIS process
+     implies at a stated bias, whereas the declared value is a model-card
+     constant. Both are in the record; quote which one you used.
      The *headroom feasibility* itself stays judgment: you must read each
      candidate's schematic to count how many devices are stacked between
      the rails and pick realistic Vdsat/Vov margins (the spec gives no

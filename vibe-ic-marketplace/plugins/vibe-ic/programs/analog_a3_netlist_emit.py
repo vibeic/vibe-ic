@@ -133,6 +133,7 @@ import _analog_a_check_common as _acc  # noqa: E402
 # a broken reader must break this producer loudly, not silently drop back to
 # the substring heuristic and bind a role by name order.
 import pdk_device_map as _pdm  # noqa: E402
+import pdk_analog_device_params as _pdp  # noqa: E402
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import _progress_run as _pr  # noqa: E402
@@ -492,7 +493,9 @@ def resolve_role_models(family_entry: Dict[str, Any], roles: List[str],
 
 def resolve_pdk_context(project: Path, pdk: str, container: str,
                         roles: List[str],
-                        domain: Optional[Any] = None) -> Dict[str, Any]:
+                        domain: Optional[Any] = None,
+                        resolution: Optional[Dict[str, Any]] = None,
+                        ) -> Dict[str, Any]:
     """model lib + corner section + per-role model names, through the EXISTING
     family-agnostic resolvers so a project that declares a native target never
     gets one foundry's device tokens against another's model lib.
@@ -502,7 +505,18 @@ def resolve_pdk_context(project: Path, pdk: str, container: str,
     discovers it from the block's own A1 spec. Two blocks of one project that
     state different domains resolve to different flavours; `domain=None` (and
     every design that states no voltage) resolves chip-globally, exactly as
-    this function did before."""
+    this function did before.
+
+    `resolution` (vibe-ic#1962) is an ALREADY-RESOLVED
+    `analog_pdk_availability.resolve_pdk` result. This function discovers the
+    target from the PROJECT's L19 document, which is right for its per-block
+    callers and wrong for a caller that is asked about a PDK rather than about
+    a design: with no L19 to read, the resolver result stayed None and the
+    request fell through to the fallback family — measured, a request naming
+    one family came back carrying ANOTHER family's model lib AND its device
+    names. Passing the result in is how a PDK-shaped caller uses this one
+    binder instead of growing a second one. `None` (every existing call site)
+    reads the project exactly as before."""
     ctx_json: Dict[str, Any] = {}
     device_map: Dict[str, str] = {}
     model_lib: Optional[str] = None
@@ -514,15 +528,16 @@ def resolve_pdk_context(project: Path, pdk: str, container: str,
     family = pdk
     try:
         import analog_pdk_deck_context as _apdc
-        res = None
-        try:
-            import analog_pdk_availability as _apa
-            declared = _declared_pdk_target(project)
-            if declared:
-                res = _apa.resolve_pdk(declared, project=project,
-                                       container=container)
-        except Exception:
-            res = None
+        res = resolution
+        if res is None:
+            try:
+                import analog_pdk_availability as _apa
+                declared = _declared_pdk_target(project)
+                if declared:
+                    res = _apa.resolve_pdk(declared, project=project,
+                                           container=container)
+            except Exception:
+                res = None
         # vibe-ic#906 — ASK FOR EVERY ROLE THE IR ACTUALLY USES.
         #
         # This filtered the topology's roles down to the MOS pair before asking
@@ -595,7 +610,15 @@ def resolve_pdk_context(project: Path, pdk: str, container: str,
         "unresolved_roles": unresolved,
         "device_terminals": device_terminals,
         "geometry_units": geometry_units,
-        "analog_device_params": fam_entry.get("analog_device_params") or {},
+        # vibe-ic#1962 — the DECLARED half only, taken off THIS function's own
+        # already-resolved entry rather than re-resolved through a second
+        # matcher. The measured sub-record is a different kind of fact and is
+        # served through its own reader; folding it in here would change what
+        # every existing reader of this key sees the moment a family is
+        # characterized. Byte-identical for a family with no measured record.
+        "analog_device_params": {
+            k: v for k, v in (fam_entry.get("analog_device_params") or
+                              {}).items() if k != _pdp.MEASURED_KEY},
         "work_items": work_items,
         "deck_context": ctx_json,
     }
@@ -615,8 +638,19 @@ def _resolve_params(ir: Dict[str, Any], sv: Dict[str, float]
                     ) -> Tuple[Dict[str, Dict[str, float]], List[str],
                                List[str], Dict[str, Any]]:
     """Apply the IR's device_param_exprs. Returns (overrides, spec_bound,
-    library_nominal, env)."""
+    library_nominal, env).
+
+    vibe-ic#1962 — the target process's MEASURED electrical constants are
+    seeded FIRST, so a `device_param_exprs` entry may be written against the
+    sheet resistance, the transconductance parameter or the capacitance density
+    the PDK's own models were measured for. Seeded first and not last, and
+    deliberately: a library `constants` entry or a spec-bound knob of the same
+    name still wins, because a process constant is what the design is built
+    ON, never what it is built FROM. A family nobody has characterized seeds
+    nothing and every expression resolves exactly as it did before."""
     env: Dict[str, Any] = {}
+    env.update({k: v for k, v in (ir.get("pdk_measured_params") or {}).items()
+                if isinstance(v, (int, float)) and not isinstance(v, bool)})
     env.update(ir.get("constants") or {})
     env.update({k: v for k, v in (ir.get("knobs") or {}).items()
                 if isinstance(v, (int, float))})

@@ -74,7 +74,286 @@
         "vth_n_v": 0.45,
         "vth_p_v": 0.47,
         "nominal_supply_v": 1.8,
-        "note": "nfet_01v8 / pfet_01v8 typical Vth"
+        "note": "nfet_01v8 / pfet_01v8 typical Vth",
+        "measured": {
+          "_schema": 1,
+          "_generated_by": "programs/pdk_analog_characterize.py",
+          "_method": "k' and the threshold: two-point square-law fit of sqrt(Id) vs Vgs at saturation, from the OUTER two of three gate biases; the interior point is not used by the fit and its relative error is published as `fit`. Gate drive: the gate voltage a diode-connected instance settles at for a stated current in a stated geometry. Sheet resistance: two LENGTHS at one width, which cancels the end/contact resistance exactly and publishes it separately; a third instance at twice the width says whether the primitive honours `w` at all, and the sheet is withheld when it does not. Capacitance: two SQUARE plates, which separate the area density from the perimeter fringe exactly and publish both.",
+          "produced_at": "2026-08-31T17:19:35Z",
+          "nominal_corner": "typ",
+          "simulator": {
+            "tool": "ngspice",
+            "binary": "/foss/tools/bin/ngspice",
+            "container": "vibeic-eda",
+            "version": "47",
+            "container_image": "ghcr.io/vibeic/vibeic-eda:latest",
+            "container_image_id": "sha256:e4742faeb97abc182338d80f707c6e4d33cfd710c204533702844b979dc9009d"
+          },
+          "conditions": {
+            "supply_basis": "pdk_registry.json sky130A.analog_device_params.nominal_supply_v",
+            "bias_strategy": "two passes: a supply-referred seed grid whose only product is a preliminary threshold, then a threshold-referred grid at fractions of the remaining gate swing, which is what is published. Each corner's `bias` block states the volts each role was actually measured at.",
+            "seed_vgs_fractions_of_supply": [
+              0.5,
+              0.625,
+              0.75
+            ],
+            "vov_fractions_of_remaining_swing": [
+              0.25,
+              0.375,
+              0.5
+            ],
+            "vgs_ceiling_fraction_of_supply": 0.95,
+            "fit_points": "the outer two of the three; the interior point is the residual witness and is not used by the fit",
+            "mos_w_um": 10.0,
+            "mos_l_um": 1.0,
+            "diode_w_um": 4.0,
+            "diode_l_um": 2.0,
+            "diode_i_a": 1e-05,
+            "res_w_um": 0.5,
+            "res_l1_um": 20.0,
+            "res_l2_um": 40.0,
+            "res_width_probe_um": 1.0,
+            "cap_s1_um": 10.0,
+            "cap_s2_um": 20.0,
+            "cap_probe_hz": 1000.0
+          },
+          "resolution": {
+            "family": "sky130A",
+            "registry_family": "sky130A",
+            "source": "container_installed",
+            "status": "OK",
+            "model_lib": "/foss/pdks/sky130A/libs.tech/ngspice/sky130.lib.spice",
+            "role_binding": {
+              "nmos": "deck_context",
+              "pmos": "deck_context",
+              "res": "registry",
+              "cap": "registry"
+            },
+            "unresolved_roles": []
+          },
+          "corner_section_notes": {},
+          "corners": {
+            "typ": {
+              "sections": [
+                [
+                  "/foss/pdks/sky130A/libs.tech/ngspice/sky130.lib.spice",
+                  "tt"
+                ]
+              ],
+              "devices": {
+                "nmos": "sky130_fd_pr__nfet_01v8",
+                "pmos": "sky130_fd_pr__pfet_01v8",
+                "res": "sky130_fd_pr__res_high_po_0p35",
+                "cap": "sky130_fd_pr__cap_mim_m3_1"
+              },
+              "temp_c": 27.0,
+              "supply_v": 1.8,
+              "bias": {
+                "nmos": {
+                  "vgs_v": [
+                    0.8356232919375077,
+                    0.9963527432812564,
+                    1.1570821946250052
+                  ],
+                  "basis": "threshold-referred: Vth_seed 0.5142 V + [0.25, 0.375, 0.5] of the remaining gate swing 1.286 V, capped at 0.95 of the rail",
+                  "seed_vth_v": 0.5141643892500103
+                },
+                "pmos": {
+                  "vgs_v": [
+                    1.1020990471880185,
+                    1.218415872656682,
+                    1.3347326981253458
+                  ],
+                  "basis": "threshold-referred: Vth_seed 0.8695 V + [0.25, 0.375, 0.5] of the remaining gate swing 0.9305 V, capped at 0.95 of the rail",
+                  "seed_vth_v": 0.8694653962506913
+                }
+              },
+              "deck_idiom": {
+                "nmos": {
+                  "geometry_units": "scaled_micron",
+                  "terminals": 4
+                },
+                "pmos": {
+                  "geometry_units": "scaled_micron",
+                  "terminals": 4
+                },
+                "res": {
+                  "geometry_units": "scaled_micron",
+                  "terminals": 3
+                },
+                "cap": {
+                  "geometry_units": "scaled_micron",
+                  "terminals": 2
+                }
+              },
+              "params": {
+                "cap_area_ff_per_um2": 2.00009,
+                "cap_perim_ff_per_um": 0.16432499999999992,
+                "k_prime_n_ua_per_v2": 210.4392489109299,
+                "k_prime_p_ua_per_v2": 59.69603936610526,
+                "r_end_ohm": 602.953930140342,
+                "r_per_um_ohm": 1105.078133967439,
+                "vgs_at_id_n_v": 0.755343,
+                "vgs_at_id_p_v": 1.39504,
+                "vth_n_extracted_v": 0.5368172421115243,
+                "vth_p_extracted_v": 0.9779979241271864
+              },
+              "fit": {
+                "n_fit_residual_rel": 0.023016717416690754,
+                "p_fit_residual_rel": 0.0465064370173589
+              },
+              "not_measured": {
+                "rsheet_ohm_per_sq": "the resolved primitive `sky130_fd_pr__res_high_po_0p35` returns the same resistance at w and at 2w, so it does not honour the drawn width; a sheet resistance derived from a width the device ignored would be fabricated. The per-micron resistance at this primitive's OWN fixed width is published instead."
+              }
+            },
+            "slow": {
+              "sections": [
+                [
+                  "/foss/pdks/sky130A/libs.tech/ngspice/sky130.lib.spice",
+                  "ss"
+                ]
+              ],
+              "devices": {
+                "nmos": "sky130_fd_pr__nfet_01v8",
+                "pmos": "sky130_fd_pr__pfet_01v8",
+                "res": "sky130_fd_pr__res_high_po_0p35",
+                "cap": "sky130_fd_pr__cap_mim_m3_1"
+              },
+              "temp_c": 27.0,
+              "supply_v": 1.8,
+              "bias": {
+                "nmos": {
+                  "vgs_v": [
+                    0.8563056569473416,
+                    1.013588047456118,
+                    1.1708704379648944
+                  ],
+                  "basis": "threshold-referred: Vth_seed 0.5417 V + [0.25, 0.375, 0.5] of the remaining gate swing 1.258 V, capped at 0.95 of the rail",
+                  "seed_vth_v": 0.5417408759297888
+                },
+                "pmos": {
+                  "vgs_v": [
+                    1.1065195016848741,
+                    1.222099584737395,
+                    1.337679667789916
+                  ],
+                  "basis": "threshold-referred: Vth_seed 0.8754 V + [0.25, 0.375, 0.5] of the remaining gate swing 0.9246 V, capped at 0.95 of the rail",
+                  "seed_vth_v": 0.875359335579832
+                }
+              },
+              "deck_idiom": {
+                "nmos": {
+                  "geometry_units": "scaled_micron",
+                  "terminals": 4
+                },
+                "pmos": {
+                  "geometry_units": "scaled_micron",
+                  "terminals": 4
+                },
+                "res": {
+                  "geometry_units": "scaled_micron",
+                  "terminals": 3
+                },
+                "cap": {
+                  "geometry_units": "scaled_micron",
+                  "terminals": 2
+                }
+              },
+              "params": {
+                "cap_area_ff_per_um2": 2.00009,
+                "cap_perim_ff_per_um": 0.16432499999999992,
+                "k_prime_n_ua_per_v2": 197.24421065475988,
+                "k_prime_p_ua_per_v2": 51.12613581082397,
+                "r_end_ohm": 602.953930140342,
+                "r_per_um_ohm": 1105.078133967439,
+                "vgs_at_id_n_v": 0.783981,
+                "vgs_at_id_p_v": 1.4414,
+                "vth_n_extracted_v": 0.5579376805051646,
+                "vth_p_extracted_v": 0.9973691965600663
+              },
+              "fit": {
+                "n_fit_residual_rel": 0.02025690329566666,
+                "p_fit_residual_rel": 0.07005389388035774
+              },
+              "not_measured": {
+                "rsheet_ohm_per_sq": "the resolved primitive `sky130_fd_pr__res_high_po_0p35` returns the same resistance at w and at 2w, so it does not honour the drawn width; a sheet resistance derived from a width the device ignored would be fabricated. The per-micron resistance at this primitive's OWN fixed width is published instead."
+              }
+            },
+            "fast": {
+              "sections": [
+                [
+                  "/foss/pdks/sky130A/libs.tech/ngspice/sky130.lib.spice",
+                  "ff"
+                ]
+              ],
+              "devices": {
+                "nmos": "sky130_fd_pr__nfet_01v8",
+                "pmos": "sky130_fd_pr__pfet_01v8",
+                "res": "sky130_fd_pr__res_high_po_0p35",
+                "cap": "sky130_fd_pr__cap_mim_m3_1"
+              },
+              "temp_c": 27.0,
+              "supply_v": 1.8,
+              "bias": {
+                "nmos": {
+                  "vgs_v": [
+                    0.8142310639849317,
+                    0.9785258866541098,
+                    1.1428207093232878
+                  ],
+                  "basis": "threshold-referred: Vth_seed 0.4856 V + [0.25, 0.375, 0.5] of the remaining gate swing 1.314 V, capped at 0.95 of the rail",
+                  "seed_vth_v": 0.4856414186465757
+                },
+                "pmos": {
+                  "vgs_v": [
+                    1.097539478192934,
+                    1.214616231827445,
+                    1.331692985461956
+                  ],
+                  "basis": "threshold-referred: Vth_seed 0.8634 V + [0.25, 0.375, 0.5] of the remaining gate swing 0.9366 V, capped at 0.95 of the rail",
+                  "seed_vth_v": 0.8633859709239118
+                }
+              },
+              "deck_idiom": {
+                "nmos": {
+                  "geometry_units": "scaled_micron",
+                  "terminals": 4
+                },
+                "pmos": {
+                  "geometry_units": "scaled_micron",
+                  "terminals": 4
+                },
+                "res": {
+                  "geometry_units": "scaled_micron",
+                  "terminals": 3
+                },
+                "cap": {
+                  "geometry_units": "scaled_micron",
+                  "terminals": 2
+                }
+              },
+              "params": {
+                "cap_area_ff_per_um2": 2.00009,
+                "cap_perim_ff_per_um": 0.16432499999999992,
+                "k_prime_n_ua_per_v2": 223.34391365479613,
+                "k_prime_p_ua_per_v2": 67.60761187069151,
+                "r_end_ohm": 602.953930140342,
+                "r_per_um_ohm": 1105.078133967439,
+                "vgs_at_id_n_v": 0.727626,
+                "vgs_at_id_p_v": 1.35243,
+                "vth_n_extracted_v": 0.5157063547888309,
+                "vth_p_extracted_v": 0.9569273601183654
+              },
+              "fit": {
+                "n_fit_residual_rel": 0.025719195358367707,
+                "p_fit_residual_rel": 0.02905253388166495
+              },
+              "not_measured": {
+                "rsheet_ohm_per_sq": "the resolved primitive `sky130_fd_pr__res_high_po_0p35` returns the same resistance at w and at 2w, so it does not honour the drawn width; a sheet resistance derived from a width the device ignored would be fabricated. The per-micron resistance at this primitive's OWN fixed width is published instead."
+              }
+            }
+          }
+        }
       },
       "analog_device_layout_minima": {
         "_comment": "vibe-ic#1952 — DRAWN-geometry minima, keyed by the GENERIC device ROLE tokens the analog IR uses (res/nmos/pmos/cap), so the A2 topology library can FLOOR its geometry to what the target process will actually let it draw instead of carrying one static constant across every PDK. Read via programs/pdk_analog_layout_minima.py, which contains no family name. A role is listed ONLY when its rule was read out of this PDK's own record; an ABSENT role means NOT MEASURED (floors nothing), never 'no minimum exists'.",
@@ -341,7 +620,316 @@
         "vth_n_v": 0.42,
         "vth_p_v": 0.47,
         "nominal_supply_v": 1.2,
-        "note": "lv nfet/pfet typical Vth (HV sg13_hv_* available). Core supply is 1.2V, NOT 1.8V: the shipped Liberty sg13g2_stdcell_typ_1p20V_25C.lib declares nom_voltage : 1.2, and the corner set is 1p08/1p20/1p32 (LV) plus 1p35/1p50/1p65 (the elevated-VDD characterisation). The previous 1.8 was carried over from the sky130 entry and would mis-bias any analog sizing done against this PDK."
+        "note": "lv nfet/pfet typical Vth (HV sg13_hv_* available). Core supply is 1.2V, NOT 1.8V: the shipped Liberty sg13g2_stdcell_typ_1p20V_25C.lib declares nom_voltage : 1.2, and the corner set is 1p08/1p20/1p32 (LV) plus 1p35/1p50/1p65 (the elevated-VDD characterisation). The previous 1.8 was carried over from the sky130 entry and would mis-bias any analog sizing done against this PDK.",
+        "measured": {
+          "_schema": 1,
+          "_generated_by": "programs/pdk_analog_characterize.py",
+          "_method": "k' and the threshold: two-point square-law fit of sqrt(Id) vs Vgs at saturation, from the OUTER two of three gate biases; the interior point is not used by the fit and its relative error is published as `fit`. Gate drive: the gate voltage a diode-connected instance settles at for a stated current in a stated geometry. Sheet resistance: two LENGTHS at one width, which cancels the end/contact resistance exactly and publishes it separately; a third instance at twice the width says whether the primitive honours `w` at all, and the sheet is withheld when it does not. Capacitance: two SQUARE plates, which separate the area density from the perimeter fringe exactly and publish both.",
+          "produced_at": "2026-08-31T17:19:50Z",
+          "nominal_corner": "typ",
+          "simulator": {
+            "tool": "ngspice",
+            "binary": "/foss/tools/bin/ngspice",
+            "container": "vibeic-eda",
+            "version": "47",
+            "container_image": "ghcr.io/vibeic/vibeic-eda:latest",
+            "container_image_id": "sha256:e4742faeb97abc182338d80f707c6e4d33cfd710c204533702844b979dc9009d"
+          },
+          "conditions": {
+            "supply_basis": "pdk_registry.json ihp-sg13g2.analog_device_params.nominal_supply_v",
+            "bias_strategy": "two passes: a supply-referred seed grid whose only product is a preliminary threshold, then a threshold-referred grid at fractions of the remaining gate swing, which is what is published. Each corner's `bias` block states the volts each role was actually measured at.",
+            "seed_vgs_fractions_of_supply": [
+              0.5,
+              0.625,
+              0.75
+            ],
+            "vov_fractions_of_remaining_swing": [
+              0.25,
+              0.375,
+              0.5
+            ],
+            "vgs_ceiling_fraction_of_supply": 0.95,
+            "fit_points": "the outer two of the three; the interior point is the residual witness and is not used by the fit",
+            "mos_w_um": 10.0,
+            "mos_l_um": 1.0,
+            "diode_w_um": 4.0,
+            "diode_l_um": 2.0,
+            "diode_i_a": 1e-05,
+            "res_w_um": 0.5,
+            "res_l1_um": 20.0,
+            "res_l2_um": 40.0,
+            "res_width_probe_um": 1.0,
+            "cap_s1_um": 10.0,
+            "cap_s2_um": 20.0,
+            "cap_probe_hz": 1000.0
+          },
+          "resolution": {
+            "family": "ihpsg13g2",
+            "registry_family": null,
+            "source": "container_installed",
+            "status": "OK",
+            "model_lib": "/foss/pdks/ihp-sg13g2/libs.tech/ngspice/models/cornerMOSlv.lib",
+            "role_binding": {
+              "nmos": "deck_context",
+              "pmos": "deck_context",
+              "res": "deck_context",
+              "cap": "deck_context"
+            },
+            "unresolved_roles": []
+          },
+          "corner_section_notes": {
+            "slow": {
+              "/foss/pdks/ihp-sg13g2/libs.tech/ngspice/models/cornerCAP.lib": "states no `slow` corner section; kept `cap_typ`, so this lib's contribution to the `slow` record is at its nominal corner",
+              "/foss/pdks/ihp-sg13g2/libs.tech/ngspice/models/cornerRES.lib": "states no `slow` corner section; kept `res_typ`, so this lib's contribution to the `slow` record is at its nominal corner"
+            },
+            "fast": {
+              "/foss/pdks/ihp-sg13g2/libs.tech/ngspice/models/cornerCAP.lib": "states no `fast` corner section; kept `cap_typ`, so this lib's contribution to the `fast` record is at its nominal corner",
+              "/foss/pdks/ihp-sg13g2/libs.tech/ngspice/models/cornerRES.lib": "states no `fast` corner section; kept `res_typ`, so this lib's contribution to the `fast` record is at its nominal corner"
+            }
+          },
+          "corners": {
+            "typ": {
+              "sections": [
+                [
+                  "/foss/pdks/ihp-sg13g2/libs.tech/ngspice/models/cornerMOSlv.lib",
+                  "mos_tt"
+                ],
+                [
+                  "/foss/pdks/ihp-sg13g2/libs.tech/ngspice/models/cornerCAP.lib",
+                  "cap_typ"
+                ],
+                [
+                  "/foss/pdks/ihp-sg13g2/libs.tech/ngspice/models/cornerRES.lib",
+                  "res_typ"
+                ]
+              ],
+              "devices": {
+                "nmos": "sg13_lv_nmos",
+                "pmos": "sg13_lv_pmos",
+                "res": "rppd",
+                "cap": "cap_cmim"
+              },
+              "temp_c": 27.0,
+              "supply_v": 1.2,
+              "bias": {
+                "nmos": {
+                  "vgs_v": [
+                    0.44601767191182684,
+                    0.5716813932598557,
+                    0.6973451146078846
+                  ],
+                  "basis": "threshold-referred: Vth_seed 0.1947 V + [0.25, 0.375, 0.5] of the remaining gate swing 1.005 V, capped at 0.95 of the rail",
+                  "seed_vth_v": 0.19469022921576912
+                },
+                "pmos": {
+                  "vgs_v": [
+                    0.5493481059413665,
+                    0.6577900882844722,
+                    0.7662320706275777
+                  ],
+                  "basis": "threshold-referred: Vth_seed 0.3325 V + [0.25, 0.375, 0.5] of the remaining gate swing 0.8675 V, capped at 0.95 of the rail",
+                  "seed_vth_v": 0.33246414125515544
+                }
+              },
+              "deck_idiom": {
+                "nmos": {
+                  "geometry_units": "metric",
+                  "terminals": 4
+                },
+                "pmos": {
+                  "geometry_units": "metric",
+                  "terminals": 4
+                },
+                "res": {
+                  "geometry_units": "scaled_micron",
+                  "terminals": 3
+                },
+                "cap": {
+                  "geometry_units": "scaled_micron",
+                  "terminals": 2
+                }
+              },
+              "params": {
+                "cap_area_ff_per_um2": 1.5000000000000002,
+                "cap_perim_ff_per_um": 0.03999999999999902,
+                "k_prime_n_ua_per_v2": 328.2147637102496,
+                "k_prime_p_ua_per_v2": 73.62125243177721,
+                "r_end_ohm": -0.021632088257319992,
+                "r_per_um_ohm": 520.0018720056144,
+                "rsheet_ohm_per_sq": 260.0009360028072,
+                "vgs_at_id_n_v": 0.386662,
+                "vgs_at_id_p_v": 0.691501,
+                "vth_n_extracted_v": 0.1970889179379298,
+                "vth_p_extracted_v": 0.3321094748158372
+              },
+              "fit": {
+                "n_fit_residual_rel": 0.005667358370666556,
+                "p_fit_residual_rel": 0.003942932975790584
+              },
+              "not_measured": {}
+            },
+            "slow": {
+              "sections": [
+                [
+                  "/foss/pdks/ihp-sg13g2/libs.tech/ngspice/models/cornerMOSlv.lib",
+                  "mos_ss"
+                ],
+                [
+                  "/foss/pdks/ihp-sg13g2/libs.tech/ngspice/models/cornerCAP.lib",
+                  "cap_typ"
+                ],
+                [
+                  "/foss/pdks/ihp-sg13g2/libs.tech/ngspice/models/cornerRES.lib",
+                  "res_typ"
+                ]
+              ],
+              "devices": {
+                "nmos": "sg13_lv_nmos",
+                "pmos": "sg13_lv_pmos",
+                "res": "rppd",
+                "cap": "cap_cmim"
+              },
+              "temp_c": 27.0,
+              "supply_v": 1.2,
+              "bias": {
+                "nmos": {
+                  "vgs_v": [
+                    0.4783174337474414,
+                    0.5985978614562012,
+                    0.718878289164961
+                  ],
+                  "basis": "threshold-referred: Vth_seed 0.2378 V + [0.25, 0.375, 0.5] of the remaining gate swing 0.9622 V, capped at 0.95 of the rail",
+                  "seed_vth_v": 0.23775657832992192
+                },
+                "pmos": {
+                  "vgs_v": [
+                    0.5847417254272371,
+                    0.6872847711893642,
+                    0.7898278169514914
+                  ],
+                  "basis": "threshold-referred: Vth_seed 0.3797 V + [0.25, 0.375, 0.5] of the remaining gate swing 0.8203 V, capped at 0.95 of the rail",
+                  "seed_vth_v": 0.3796556339029828
+                }
+              },
+              "deck_idiom": {
+                "nmos": {
+                  "geometry_units": "metric",
+                  "terminals": 4
+                },
+                "pmos": {
+                  "geometry_units": "metric",
+                  "terminals": 4
+                },
+                "res": {
+                  "geometry_units": "scaled_micron",
+                  "terminals": 3
+                },
+                "cap": {
+                  "geometry_units": "scaled_micron",
+                  "terminals": 2
+                }
+              },
+              "params": {
+                "cap_area_ff_per_um2": 1.5000000000000002,
+                "cap_perim_ff_per_um": 0.03999999999999902,
+                "k_prime_n_ua_per_v2": 314.2503788450913,
+                "k_prime_p_ua_per_v2": 72.45011199081918,
+                "r_end_ohm": -0.021632088257319992,
+                "r_per_um_ohm": 520.0018720056144,
+                "rsheet_ohm_per_sq": 260.0009360028072,
+                "vgs_at_id_n_v": 0.428419,
+                "vgs_at_id_p_v": 0.740988,
+                "vth_n_extracted_v": 0.23772046953548218,
+                "vth_p_extracted_v": 0.3783284957810392
+              },
+              "fit": {
+                "n_fit_residual_rel": 0.006369107542387456,
+                "p_fit_residual_rel": 0.006806264357045461
+              },
+              "not_measured": {}
+            },
+            "fast": {
+              "sections": [
+                [
+                  "/foss/pdks/ihp-sg13g2/libs.tech/ngspice/models/cornerMOSlv.lib",
+                  "mos_ff"
+                ],
+                [
+                  "/foss/pdks/ihp-sg13g2/libs.tech/ngspice/models/cornerCAP.lib",
+                  "cap_typ"
+                ],
+                [
+                  "/foss/pdks/ihp-sg13g2/libs.tech/ngspice/models/cornerRES.lib",
+                  "res_typ"
+                ]
+              ],
+              "devices": {
+                "nmos": "sg13_lv_nmos",
+                "pmos": "sg13_lv_pmos",
+                "res": "rppd",
+                "cap": "cap_cmim"
+              },
+              "temp_c": 27.0,
+              "supply_v": 1.2,
+              "bias": {
+                "nmos": {
+                  "vgs_v": [
+                    0.41312396387437744,
+                    0.5442699698953145,
+                    0.6754159759162516
+                  ],
+                  "basis": "threshold-referred: Vth_seed 0.1508 V + [0.25, 0.375, 0.5] of the remaining gate swing 1.049 V, capped at 0.95 of the rail",
+                  "seed_vth_v": 0.1508319518325033
+                },
+                "pmos": {
+                  "vgs_v": [
+                    0.5108942226757274,
+                    0.6257451855631062,
+                    0.7405961484504848
+                  ],
+                  "basis": "threshold-referred: Vth_seed 0.2812 V + [0.25, 0.375, 0.5] of the remaining gate swing 0.9188 V, capped at 0.95 of the rail",
+                  "seed_vth_v": 0.28119229690096986
+                }
+              },
+              "deck_idiom": {
+                "nmos": {
+                  "geometry_units": "metric",
+                  "terminals": 4
+                },
+                "pmos": {
+                  "geometry_units": "metric",
+                  "terminals": 4
+                },
+                "res": {
+                  "geometry_units": "scaled_micron",
+                  "terminals": 3
+                },
+                "cap": {
+                  "geometry_units": "scaled_micron",
+                  "terminals": 2
+                }
+              },
+              "params": {
+                "cap_area_ff_per_um2": 1.5000000000000002,
+                "cap_perim_ff_per_um": 0.03999999999999902,
+                "k_prime_n_ua_per_v2": 341.2023505975637,
+                "k_prime_p_ua_per_v2": 75.44517774347821,
+                "r_end_ohm": -0.021632088257319992,
+                "r_per_um_ohm": 520.0018720056144,
+                "rsheet_ohm_per_sq": 260.0009360028072,
+                "vgs_at_id_n_v": 0.34688,
+                "vgs_at_id_p_v": 0.639024,
+                "vth_n_extracted_v": 0.15790386204778,
+                "vth_p_extracted_v": 0.2843745425554173
+              },
+              "fit": {
+                "n_fit_residual_rel": 0.0044185780606113435,
+                "p_fit_residual_rel": 0.0014331372043453847
+              },
+              "not_measured": {}
+            }
+          }
+        }
       },
       "analog_device_layout_minima": {
         "_comment": "vibe-ic#1952 — see the sky130A entry's _comment for the schema. Same generic role tokens, same reader, no code path is specific to this family.",

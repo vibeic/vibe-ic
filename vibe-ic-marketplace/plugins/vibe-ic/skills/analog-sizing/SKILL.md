@@ -23,6 +23,51 @@ Trigger when the user:
 4. Starting point or "greenfield"
 5. Constraint: minimize power, minimize area, or balanced
 
+## The process constants are MEASURED, not re-derived here (vibe-ic#1962)
+
+Do **not** derive k', the threshold, the resistor sheet or the MiM density by
+hand, and do not quote them from memory. They are a deterministic measurement
+of the target PDK's own models, taken once and published with their provenance:
+
+```bash
+# read what has already been measured for the target family
+python3 plugins/vibe-ic/programs/pdk_analog_device_params.py --pdk <family>
+
+# measure (or refresh) a family that carries no record yet
+python3 plugins/vibe-ic/programs/pdk_analog_characterize.py \
+    --pdk <family> --container vibeic-eda --corners typ,slow,fast
+```
+
+The record lives under each PDK entry's `analog_device_params.measured` in
+`programs/pdk_registry.json` — or, for a PDK STAGED INTO the design (which may
+not be publishable), under `analog/_pdk_char/analog_device_params.json` in the
+project, which outranks the shipped record. What it gives you, per corner:
+
+| constant | what it is |
+|---|---|
+| `k_prime_n_ua_per_v2` / `k_prime_p_ua_per_v2` | µ·Cox, from a two-point square-law fit in saturation |
+| `vth_n_extracted_v` / `vth_p_extracted_v` | the threshold THAT fit implies, which is not the model card's Vth0 |
+| `vgs_at_id_n_v` / `vgs_at_id_p_v` | the gate drive a stated current buys in a stated geometry — the bias-chain handle |
+| `rsheet_ohm_per_sq`, `r_end_ohm`, `r_per_um_ohm` | the resistor sheet, and the end/contact term a single-device measurement hides in it |
+| `cap_area_ff_per_um2`, `cap_perim_ff_per_um` | the capacitance density, and the fringe a single-plate measurement hides in it |
+
+**Read the `fit` residual before you use a k'.** It is the relative error of an
+interior bias point the fit did not use. A residual of a few percent means the
+square law describes the device; a large one means the value is the best
+square-law fit of a device that is not square-law, and a gm/Id argument is the
+better tool at that operating point.
+
+**Read `not_measured` too.** A constant that is absent is absent because the
+measurement refused, and the reason is stated — most commonly a resistor
+flavour that ignores the drawn width, for which `r_per_um_ohm` is published
+instead of a sheet. Never substitute a neighbouring family's number for one
+this family does not carry.
+
+What stays YOUR judgment, and is not in that record: which spec binds which
+device, how to split the current budget, what overdrive to spend, which corner
+the block must close at, and whether the topology can meet the spec at all.
+The measurement removes the arithmetic, not the design.
+
 ## Sizing workflow
 
 1. **Identify the signal path and loading** — what sets gain, what sets BW, what dominates noise

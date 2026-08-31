@@ -14,6 +14,8 @@ import json
 
 import pytest
 
+import pdk_analog_device_params as pdk_params
+
 from _analog_producer_fixture import (
     A1, A2, GATE_A2, PROGRAMS, block, make_project, run_prog, bdir, read_json)
 
@@ -145,11 +147,12 @@ def test_a_class_the_library_does_not_carry_gets_NO_topology(tmp_path):
 def test_the_process_constants_come_from_the_registry(tmp_path):
     reg = json.loads((PROGRAMS / "pdk_registry.json").read_text())
     fam = next(e for e in reg["pdks"] if e.get("analog_device_params"))
-    params = fam["analog_device_params"]
+    resolved, declared = pdk_params.declared_params(fam["name"])
+    assert resolved == fam["name"] and declared
 
     p, _ = _emit(tmp_path, [block("blk_alpha", "comparator")])
     md = (bdir(p, "blk_alpha") / "topology.md").read_text(encoding="utf-8")
-    for key, val in params.items():
+    for key, val in declared.items():
         if key == "note":
             continue
         assert f"`{key}`" in md and str(val) in md, (
