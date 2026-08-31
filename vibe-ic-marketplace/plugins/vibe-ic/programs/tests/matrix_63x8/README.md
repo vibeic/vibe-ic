@@ -331,7 +331,7 @@ the moment eight rows were added up. See `substitution.py`.
 
 <!-- BEGIN GENERATED CENSUS — tools/gen_matrix_63x8_census.py — DO NOT EDIT BY HAND -->
 
-**612 cells: 532 ENFORCED, 0 ENFORCED-CONTRADICTED, 8 WAIVED, 19 NA, 6 NOT_MEASURED, 45 ENFORCED-SKIPPED, 2 WAIVED-SKIPPED.**
+**612 cells: 532 ENFORCED, 0 ENFORCED-CONTRADICTED, 8 WAIVED, 19 NA, 26 NOT_MEASURED, 25 ENFORCED-SKIPPED, 2 WAIVED-SKIPPED.**
 
 The 0 CONTRADICTED cells are configured as enforcing while their own predicate is currently RED. They are NOT folded into the 532: a cell whose predicate fails is not evidence of enforcement. See vibe-ic#888.
 

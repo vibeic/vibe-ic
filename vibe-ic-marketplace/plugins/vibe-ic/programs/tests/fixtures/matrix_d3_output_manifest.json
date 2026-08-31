@@ -17,36 +17,44 @@
       "rel": "AI_IC_design/4th_benchmark/ibex_e2e"
     },
     "benchmark-data/ic/caravel_user_project": {
-      "kind": "repo",
-      "rel": "benchmark-data/ic/caravel_user_project"
+      "kind": "home",
+      "rel": "benchmark-data/ic/caravel_user_project",
+      "note": "re-kinded repo->home 2026-08-31: the published corpus does not carry this root (withdrawn by benchmark-data bcf2f94 owner instruction 2026-08-20, or never published under this name). A machine tree per #527; entries recorded against it are fixture-attested. See TRIAGE.md on the fix ref."
     },
     "benchmark-data/ic/sha256": {
-      "kind": "repo",
-      "rel": "benchmark-data/ic/sha256"
+      "kind": "home",
+      "rel": "benchmark-data/ic/sha256",
+      "note": "re-kinded repo->home 2026-08-31: the published corpus does not carry this root (withdrawn by benchmark-data bcf2f94 owner instruction 2026-08-20, or never published under this name). A machine tree per #527; entries recorded against it are fixture-attested. See TRIAGE.md on the fix ref."
     },
     "benchmark-data/ic/sha256/clean_run_v1427_20260715": {
-      "kind": "repo",
-      "rel": "benchmark-data/ic/sha256/clean_run_v1427_20260715"
+      "kind": "home",
+      "rel": "benchmark-data/ic/sha256/clean_run_v1427_20260715",
+      "note": "re-kinded repo->home 2026-08-31: the published corpus does not carry this root (withdrawn by benchmark-data bcf2f94 owner instruction 2026-08-20, or never published under this name). A machine tree per #527; entries recorded against it are fixture-attested. See TRIAGE.md on the fix ref."
     },
     "benchmark-data/ic/spm/v1.5.58_ihp-sg13g2": {
-      "kind": "repo",
-      "rel": "benchmark-data/ic/spm/v1.5.58_ihp-sg13g2"
+      "kind": "home",
+      "rel": "benchmark-data/ic/spm/v1.5.58_ihp-sg13g2",
+      "note": "re-kinded repo->home 2026-08-31: the published corpus does not carry this root (withdrawn by benchmark-data bcf2f94 owner instruction 2026-08-20, or never published under this name). A machine tree per #527; entries recorded against it are fixture-attested. See TRIAGE.md on the fix ref."
     },
     "benchmark-data/ic/spm/v1.9.96_gf180mcuD": {
-      "kind": "repo",
-      "rel": "benchmark-data/ic/spm/v1.9.96_gf180mcuD"
+      "kind": "home",
+      "rel": "benchmark-data/ic/spm/v1.9.96_gf180mcuD",
+      "note": "re-kinded repo->home 2026-08-31: the published corpus does not carry this root (withdrawn by benchmark-data bcf2f94 owner instruction 2026-08-20, or never published under this name). A machine tree per #527; entries recorded against it are fixture-attested. See TRIAGE.md on the fix ref."
     },
     "benchmark-data/ic/subservient": {
-      "kind": "repo",
-      "rel": "benchmark-data/ic/subservient"
+      "kind": "home",
+      "rel": "benchmark-data/ic/subservient",
+      "note": "re-kinded repo->home 2026-08-31: the published corpus does not carry this root (withdrawn by benchmark-data bcf2f94 owner instruction 2026-08-20, or never published under this name). A machine tree per #527; entries recorded against it are fixture-attested. See TRIAGE.md on the fix ref."
     },
     "benchmark-data/ic/u_hawaii_adc": {
-      "kind": "repo",
-      "rel": "benchmark-data/ic/u_hawaii_adc"
+      "kind": "home",
+      "rel": "benchmark-data/ic/u_hawaii_adc",
+      "note": "re-kinded repo->home 2026-08-31: the published corpus does not carry this root (withdrawn by benchmark-data bcf2f94 owner instruction 2026-08-20, or never published under this name). A machine tree per #527; entries recorded against it are fixture-attested. See TRIAGE.md on the fix ref."
     },
     "benchmark-data/ic/u_hawaii_adc/v1.9.86_sky130A": {
-      "kind": "published",
-      "rel": "benchmark-data/ic/u_hawaii_adc/v1.9.86_sky130A"
+      "kind": "home",
+      "rel": "benchmark-data/ic/u_hawaii_adc/v1.9.86_sky130A",
+      "note": "re-kinded repo->home 2026-08-31: the published corpus does not carry this root (withdrawn by benchmark-data bcf2f94 owner instruction 2026-08-20, or never published under this name). A machine tree per #527; entries recorded against it are fixture-attested. See TRIAGE.md on the fix ref."
     },
     "campaign_pdk/spm/_aborted_tmpplugin_run": {
       "kind": "home",
@@ -57,14 +65,23 @@
       "rel": "campaign_pdk/spm/pdk_portability_ihp-sg13g2_20260721"
     },
     "benchmark-data/ic/caravel_user_project/v1.9.43_sky130A": {
-      "kind": "repo",
+      "kind": "home",
       "rel": "benchmark-data/ic/caravel_user_project/v1.9.43_sky130A",
-      "note": "carries phase2/stage2/dft/* that step 11 declares; tracked at HEAD"
+      "note": "re-kinded repo->home 2026-08-31: the published corpus does not carry this root (withdrawn by benchmark-data bcf2f94 owner instruction 2026-08-20, or never published under this name). A machine tree per #527; entries recorded against it are fixture-attested. See TRIAGE.md on the fix ref."
     },
     "benchmark-data/evaluation/phase1_parity/espi": {
-      "kind": "repo",
+      "kind": "home",
       "rel": "benchmark-data/evaluation/phase1_parity/espi",
-      "note": "carries phase3/stage3/sim_postlayout/pass.flag that step 29 declares; tracked at HEAD"
+      "note": "re-kinded repo->home 2026-08-31: the published corpus does not carry this root (withdrawn by benchmark-data bcf2f94 owner instruction 2026-08-20, or never published under this name). A machine tree per #527; entries recorded against it are fixture-attested. See TRIAGE.md on the fix ref."
+    },
+    "benchmark-data/ic/spm/v1.10.18_sky130A": {
+      "kind": "published",
+      "rel": "benchmark-data/ic/spm/v1.10.18_sky130A"
+    },
+    "benchmark-data/ic/spm/v1.5.65_sky130A": {
+      "kind": "repo",
+      "rel": "benchmark-data/ic/spm/v1.5.65_sky130A",
+      "note": "registered 2026-08-31: a run tree the published corpus carries TODAY (benchmark-data a467106) with runner provenance (provenance.jsonl); the corpus-resolvable repo-kind root the route probes and discovery need."
     }
   },
   "steps": {
@@ -73,133 +90,133 @@
       "entries": {
         "phase1/generated_docs/L1_DATASHEET.json": {
           "status": "PRODUCED_BY_RUN",
-          "run": "benchmark-data/ic/spm/v1.9.96_gf180mcuD",
+          "run": "benchmark-data/ic/spm/v1.10.18_sky130A",
           "alternative": "phase1/generated_docs/L1_DATASHEET.json",
           "path": "phase1/generated_docs/L1_DATASHEET.json",
-          "size_bytes": 37719
+          "size_bytes": 38000
         },
         "phase1/generated_docs/L2_FRS.json": {
           "status": "PRODUCED_BY_RUN",
-          "run": "benchmark-data/ic/spm/v1.9.96_gf180mcuD",
+          "run": "benchmark-data/ic/spm/v1.10.18_sky130A",
           "alternative": "phase1/generated_docs/L2_FRS.json",
           "path": "phase1/generated_docs/L2_FRS.json",
-          "size_bytes": 11361
+          "size_bytes": 11569
         },
         "phase1/generated_docs/L3_CMD_PROTOCOL.json": {
           "status": "PRODUCED_BY_RUN",
-          "run": "benchmark-data/ic/spm/v1.9.96_gf180mcuD",
+          "run": "benchmark-data/ic/spm/v1.10.18_sky130A",
           "alternative": "phase1/generated_docs/L3_CMD_PROTOCOL.json",
           "path": "phase1/generated_docs/L3_CMD_PROTOCOL.json",
-          "size_bytes": 1144
+          "size_bytes": 1430
         },
         "phase1/generated_docs/L4_REGMAP.json": {
           "status": "PRODUCED_BY_RUN",
-          "run": "benchmark-data/ic/spm/v1.9.96_gf180mcuD",
+          "run": "benchmark-data/ic/spm/v1.10.18_sky130A",
           "alternative": "phase1/generated_docs/L4_REGMAP.json",
           "path": "phase1/generated_docs/L4_REGMAP.json",
-          "size_bytes": 921
+          "size_bytes": 1702
         },
         "phase1/generated_docs/L5_ADI_SPEC.json": {
           "status": "PRODUCED_BY_RUN",
-          "run": "benchmark-data/ic/spm/v1.9.96_gf180mcuD",
+          "run": "benchmark-data/ic/spm/v1.10.18_sky130A",
           "alternative": "phase1/generated_docs/L5_ADI_SPEC.json",
           "path": "phase1/generated_docs/L5_ADI_SPEC.json",
-          "size_bytes": 1045
+          "size_bytes": 1245
         },
         "phase1/generated_docs/L6_CONTROL_LOGIC.json": {
           "status": "PRODUCED_BY_RUN",
-          "run": "benchmark-data/ic/spm/v1.9.96_gf180mcuD",
+          "run": "benchmark-data/ic/spm/v1.10.18_sky130A",
           "alternative": "phase1/generated_docs/L6_CONTROL_LOGIC.json",
           "path": "phase1/generated_docs/L6_CONTROL_LOGIC.json",
-          "size_bytes": 1086
+          "size_bytes": 1348
         },
         "phase1/generated_docs/L7_TEST_DEBUG.json": {
           "status": "PRODUCED_BY_RUN",
-          "run": "benchmark-data/ic/spm/v1.9.96_gf180mcuD",
+          "run": "benchmark-data/ic/spm/v1.10.18_sky130A",
           "alternative": "phase1/generated_docs/L7_TEST_DEBUG.json",
           "path": "phase1/generated_docs/L7_TEST_DEBUG.json",
-          "size_bytes": 3780
+          "size_bytes": 3990
         },
         "phase1/generated_docs/L8_TIMING_WAVEFORM.json": {
           "status": "PRODUCED_BY_RUN",
-          "run": "benchmark-data/ic/spm/v1.9.96_gf180mcuD",
+          "run": "benchmark-data/ic/spm/v1.10.18_sky130A",
           "alternative": "phase1/generated_docs/L8_TIMING_WAVEFORM.json",
           "path": "phase1/generated_docs/L8_TIMING_WAVEFORM.json",
-          "size_bytes": 1591
+          "size_bytes": 2089
         },
         "phase1/generated_docs/L9_INTEGRATION_SPEC.json": {
           "status": "PRODUCED_BY_RUN",
-          "run": "benchmark-data/ic/spm/v1.9.96_gf180mcuD",
+          "run": "benchmark-data/ic/spm/v1.10.18_sky130A",
           "alternative": "phase1/generated_docs/L9_INTEGRATION_SPEC.json",
           "path": "phase1/generated_docs/L9_INTEGRATION_SPEC.json",
-          "size_bytes": 9484
+          "size_bytes": 9995
         },
         "phase1/generated_docs/L10_TEST_CASES.json": {
           "status": "PRODUCED_BY_RUN",
-          "run": "benchmark-data/ic/spm/v1.9.96_gf180mcuD",
+          "run": "benchmark-data/ic/spm/v1.10.18_sky130A",
           "alternative": "phase1/generated_docs/L10_TEST_CASES.json",
           "path": "phase1/generated_docs/L10_TEST_CASES.json",
-          "size_bytes": 2867
+          "size_bytes": 3063
         },
         "phase1/generated_docs/L11_OTP_CONTENT.json": {
           "status": "PRODUCED_BY_RUN",
-          "run": "benchmark-data/ic/spm/v1.9.96_gf180mcuD",
+          "run": "benchmark-data/ic/spm/v1.10.18_sky130A",
           "alternative": "phase1/generated_docs/L11_OTP_CONTENT.json",
           "path": "phase1/generated_docs/L11_OTP_CONTENT.json",
-          "size_bytes": 622
+          "size_bytes": 788
         },
         "phase1/generated_docs/L12_BEHAVIORAL_SEQUENCES.json": {
           "status": "PRODUCED_BY_RUN",
-          "run": "benchmark-data/ic/spm/v1.9.96_gf180mcuD",
+          "run": "benchmark-data/ic/spm/v1.10.18_sky130A",
           "alternative": "phase1/generated_docs/L12_BEHAVIORAL_SEQUENCES.json",
           "path": "phase1/generated_docs/L12_BEHAVIORAL_SEQUENCES.json",
-          "size_bytes": 391
+          "size_bytes": 605
         },
         "phase1/generated_docs/L13_*.json": {
           "status": "PRODUCED_BY_RUN",
-          "run": "benchmark-data/ic/spm/v1.9.96_gf180mcuD",
+          "run": "benchmark-data/ic/spm/v1.10.18_sky130A",
           "alternative": "phase1/generated_docs/L13_*.json",
           "path": "phase1/generated_docs/L13_LAB_CALIBRATION.json",
-          "size_bytes": 3356
+          "size_bytes": 3556
         },
         "phase1/generated_docs/L8_RTL_CONSTANTS.json": {
           "status": "PRODUCED_BY_RUN",
-          "run": "benchmark-data/ic/caravel_user_project",
+          "run": "benchmark-data/ic/spm/v1.10.18_sky130A",
           "alternative": "phase1/generated_docs/L8_RTL_CONSTANTS.json",
           "path": "phase1/generated_docs/L8_RTL_CONSTANTS.json",
-          "size_bytes": 3207
+          "size_bytes": 7706
         },
         "phase1/generated_docs/L21_POWER_INTENT.json": {
           "status": "PRODUCED_BY_RUN",
-          "run": "benchmark-data/ic/caravel_user_project",
+          "run": "benchmark-data/ic/spm/v1.10.18_sky130A",
           "alternative": "phase1/generated_docs/L21_POWER_INTENT.json",
           "path": "phase1/generated_docs/L21_POWER_INTENT.json",
-          "size_bytes": 531
+          "size_bytes": 760
         },
         "reports/phase1/extraction_coverage_report.md": {
           "status": "PRODUCED_BY_RUN",
-          "run": "benchmark-data/ic/spm/v1.9.96_gf180mcuD",
+          "run": "benchmark-data/ic/spm/v1.10.18_sky130A",
           "alternative": "reports/phase1/extraction_coverage_report.md",
           "path": "reports/phase1/extraction_coverage_report.md",
           "size_bytes": 1694
         },
         "reports/phase1/extraction_coverage_report.json": {
           "status": "PRODUCED_BY_RUN",
-          "run": "benchmark-data/ic/spm/v1.9.96_gf180mcuD",
+          "run": "benchmark-data/ic/spm/v1.10.18_sky130A",
           "alternative": "reports/phase1/extraction_coverage_report.json",
           "path": "reports/phase1/extraction_coverage_report.json",
           "size_bytes": 4610
         },
         "reports/audit/phase1/expert_parse_track.json": {
           "status": "PRODUCED_BY_RUN",
-          "run": "benchmark-data/ic/spm/v1.9.96_gf180mcuD",
+          "run": "benchmark-data/ic/spm/v1.10.18_sky130A",
           "alternative": "reports/audit/phase1/expert_parse_track.json",
           "path": "reports/audit/phase1/expert_parse_track.json",
-          "size_bytes": 7399
+          "size_bytes": 7393
         },
         "phase1/extraction_patterns.json": {
           "status": "PRODUCED_BY_RUN",
-          "run": "benchmark-data/ic/spm/v1.9.96_gf180mcuD",
+          "run": "benchmark-data/ic/spm/v1.10.18_sky130A",
           "alternative": "phase1/extraction_patterns.json",
           "path": "phase1/extraction_patterns.json",
           "size_bytes": 7608,
@@ -212,10 +229,10 @@
       "entries": {
         "phase2/stage1/rtl/*.sv OR phase2/stage1/rtl/*.v": {
           "status": "PRODUCED_BY_RUN",
-          "run": "benchmark-data/ic/spm/v1.9.96_gf180mcuD",
+          "run": "benchmark-data/ic/spm/v1.10.18_sky130A",
           "alternative": "phase2/stage1/rtl/*.v",
           "path": "phase2/stage1/rtl/spm.v",
-          "size_bytes": 5442
+          "size_bytes": 2152
         }
       }
     },
@@ -227,14 +244,14 @@
         },
         "reports/phase2/lint/rtl_hygiene.json": {
           "status": "PRODUCED_BY_RUN",
-          "run": "benchmark-data/ic/spm/v1.9.96_gf180mcuD",
+          "run": "benchmark-data/ic/spm/v1.10.18_sky130A",
           "alternative": "reports/phase2/lint/rtl_hygiene.json",
           "path": "reports/phase2/lint/rtl_hygiene.json",
           "size_bytes": 2
         },
         "reports/phase2/lint/rom_init_lint.json": {
           "status": "PRODUCED_BY_RUN",
-          "run": "benchmark-data/ic/spm/v1.9.96_gf180mcuD",
+          "run": "benchmark-data/ic/spm/v1.10.18_sky130A",
           "alternative": "reports/phase2/lint/rom_init_lint.json",
           "path": "reports/phase2/lint/rom_init_lint.json",
           "size_bytes": 2
@@ -250,24 +267,24 @@
       "entries": {
         "reports/phase2/cdc/crossing.json": {
           "status": "PRODUCED_BY_RUN",
-          "run": "benchmark-data/ic/spm/v1.9.96_gf180mcuD",
+          "run": "benchmark-data/ic/spm/v1.10.18_sky130A",
           "alternative": "reports/phase2/cdc/crossing.json",
           "path": "reports/phase2/cdc/crossing.json",
-          "size_bytes": 506
+          "size_bytes": 428
         },
         "reports/phase2/cdc/async_input.json": {
           "status": "PRODUCED_BY_RUN",
-          "run": "benchmark-data/ic/spm/v1.9.96_gf180mcuD",
+          "run": "benchmark-data/ic/spm/v1.10.18_sky130A",
           "alternative": "reports/phase2/cdc/async_input.json",
           "path": "reports/phase2/cdc/async_input.json",
-          "size_bytes": 377
+          "size_bytes": 313
         },
         "reports/phase2/cdc/reset_dep.json": {
           "status": "PRODUCED_BY_RUN",
-          "run": "benchmark-data/ic/spm/v1.9.96_gf180mcuD",
+          "run": "benchmark-data/ic/spm/v1.10.18_sky130A",
           "alternative": "reports/phase2/cdc/reset_dep.json",
           "path": "reports/phase2/cdc/reset_dep.json",
-          "size_bytes": 390
+          "size_bytes": 326
         }
       }
     },
@@ -276,17 +293,17 @@
       "entries": {
         "phase2/stage1/sim/*.log OR phase2/stage1/sim/results.xml OR phase2/stage1/sim/pass.flag OR phase2/stage1/sim_professional/**/results.xml": {
           "status": "PRODUCED_BY_RUN",
-          "run": "benchmark-data/ic/sha256",
+          "run": "benchmark-data/ic/spm/v1.10.18_sky130A",
           "alternative": "phase2/stage1/sim/results.xml",
-          "path": "phase2/stage1/sim/results.xml",
-          "size_bytes": 101
+          "path": "phase2/stage1/sim_professional/spm/results.xml",
+          "size_bytes": 847
         },
         "reports/phase2/coverage/coverage_actual.json": {
           "status": "PRODUCED_BY_RUN",
-          "run": "benchmark-data/ic/spm/v1.9.96_gf180mcuD",
+          "run": "benchmark-data/ic/spm/v1.10.18_sky130A",
           "alternative": "reports/phase2/coverage/coverage_actual.json",
           "path": "reports/phase2/coverage/coverage_actual.json",
-          "size_bytes": 525
+          "size_bytes": 517
         },
         "reports/phase2/coverage/coverage_verilator.json": {
           "status": "UNPROVEN"
@@ -298,24 +315,24 @@
       "entries": {
         "phase2/stage1/formal/*.sby": {
           "status": "PRODUCED_BY_RUN",
-          "run": "benchmark-data/ic/spm/v1.5.58_ihp-sg13g2",
+          "run": "benchmark-data/ic/spm/v1.10.18_sky130A",
           "alternative": "phase2/stage1/formal/*.sby",
           "path": "phase2/stage1/formal/formal_spm_formal.sby",
           "size_bytes": 368
         },
         "phase2/stage1/formal/results.json": {
           "status": "PRODUCED_BY_RUN",
-          "run": "benchmark-data/ic/spm/v1.5.58_ihp-sg13g2",
+          "run": "benchmark-data/ic/spm/v1.10.18_sky130A",
           "alternative": "phase2/stage1/formal/results.json",
           "path": "phase2/stage1/formal/results.json",
-          "size_bytes": 1405
+          "size_bytes": 1404
         },
         "phase2/stage1/sim_full_stack/results.json": {
           "status": "PRODUCED_BY_RUN",
-          "run": "benchmark-data/ic/sha256",
+          "run": "benchmark-data/ic/spm/v1.10.18_sky130A",
           "alternative": "phase2/stage1/sim_full_stack/results.json",
           "path": "phase2/stage1/sim_full_stack/results.json",
-          "size_bytes": 3119
+          "size_bytes": 10134
         }
       }
     },
@@ -330,10 +347,10 @@
         },
         "reports/phase2/fpga/quartus_map_audit.json": {
           "status": "PRODUCED_BY_RUN",
-          "run": "benchmark-data/ic/spm/v1.9.96_gf180mcuD",
+          "run": "benchmark-data/ic/spm/v1.10.18_sky130A",
           "alternative": "reports/phase2/fpga/quartus_map_audit.json",
           "path": "reports/phase2/fpga/quartus_map_audit.json",
-          "size_bytes": 263
+          "size_bytes": 363
         }
       },
       "unproven": [
@@ -346,17 +363,17 @@
       "entries": {
         "phase2/stage2/constraints/*.sdc": {
           "status": "PRODUCED_BY_RUN",
-          "run": "benchmark-data/ic/spm/v1.9.96_gf180mcuD",
+          "run": "benchmark-data/ic/spm/v1.10.18_sky130A",
           "alternative": "phase2/stage2/constraints/*.sdc",
           "path": "phase2/stage2/constraints/spm.sdc",
-          "size_bytes": 1049
+          "size_bytes": 1585
         },
         "phase2/stage2/constraints/pvt_matrix.json": {
           "status": "PRODUCED_BY_RUN",
-          "run": "benchmark-data/ic/spm/v1.9.96_gf180mcuD",
+          "run": "benchmark-data/ic/spm/v1.10.18_sky130A",
           "alternative": "phase2/stage2/constraints/pvt_matrix.json",
           "path": "phase2/stage2/constraints/pvt_matrix.json",
-          "size_bytes": 971
+          "size_bytes": 911
         }
       }
     },
@@ -365,10 +382,10 @@
       "entries": {
         "reports/phase2/sdc_check.json": {
           "status": "PRODUCED_BY_RUN",
-          "run": "benchmark-data/ic/spm/v1.9.96_gf180mcuD",
+          "run": "benchmark-data/ic/spm/v1.10.18_sky130A",
           "alternative": "reports/phase2/sdc_check.json",
           "path": "reports/phase2/sdc_check.json",
-          "size_bytes": 1740
+          "size_bytes": 1768
         }
       }
     },
@@ -377,10 +394,10 @@
       "entries": {
         "phase2/stage2/synth/netlist.v": {
           "status": "PRODUCED_BY_RUN",
-          "run": "benchmark-data/ic/spm/v1.9.96_gf180mcuD",
+          "run": "benchmark-data/ic/spm/v1.10.18_sky130A",
           "alternative": "phase2/stage2/synth/netlist.v",
           "path": "phase2/stage2/synth/netlist.v",
-          "size_bytes": 48138
+          "size_bytes": 48041
         },
         "phase2/stage2/synth/area.rpt OR phase2/stage2/synth/stats.json": {
           "status": "PRODUCED_LIVE",
@@ -390,7 +407,9 @@
           ],
           "writes": "phase2/stage2/synth/stats.json",
           "base_run": "benchmark-data/ic/caravel_user_project",
-          "size_bytes": 1624
+          "size_bytes": 1727,
+          "run": "benchmark-data/ic/spm/v1.10.18_sky130A",
+          "path": "phase2/stage2/synth/stats.json"
         }
       }
     },
@@ -420,8 +439,10 @@
           ],
           "writes": "reports/phase3/sta/pre_pnr_summary.json",
           "base_run": "benchmark-data/ic/sha256/clean_run_v1427_20260715",
-          "size_bytes": 1696,
-          "base_run_note": "RE-MEASURED 2026-08-10, not renamed. Commit 51517e71 retired benchmark-data/ic/spm/v1.5.66_gf180mcuD and bulk-renamed all 65 run/base_run citations onto the replacement cell. That is correct for a PRODUCED_BY_RUN `run`; it INVERTS a PRODUCED_LIVE `base_run`, because the replacement cell carries this artefact TRACKED AT HEAD (885 B, added by that same commit) while the retired one did not - verified with `git ls-tree -r 51517e71^ -- <retired cell>`, which lists post_route_signoff_corner.json, spef_vs_estimate_discrepancy.json and sta_corner_record_completeness.json under reports/phase3/sta/ and no pre_pnr_summary.json. A live production cannot be proved against a tree that already holds the artefact, so the record had become unprovable by construction and the cell was red. It is re-pointed at the run root step 10's OTHER declared output is already evidenced by, so both of this steps entries now come from ONE run: the run that produced phase3/stage3/sta/pre_pnr_timing.rpt is the run whose summary of that report is produced here. THE OLD RECORD WAS ALREADY HOLLOW, which is why this is not a like-for-like re-point: 969 B is exactly what this producer writes into a tree carrying NO STA report at all (passed:false, findings [STA_REPORT_EXISTS, SCOPE_NOT_FOUND], files_found:0, BOTH --under scopes in scoped_under_missing), byte-identical from four independent admissible roots measured on this commit. produce_live now refuses a base run in which no declared --under scope exists, so that absence record can never again be counted as a produced artefact."
+          "size_bytes": 885,
+          "base_run_note": "RE-MEASURED 2026-08-10, not renamed. Commit 51517e71 retired benchmark-data/ic/spm/v1.5.66_gf180mcuD and bulk-renamed all 65 run/base_run citations onto the replacement cell. That is correct for a PRODUCED_BY_RUN `run`; it INVERTS a PRODUCED_LIVE `base_run`, because the replacement cell carries this artefact TRACKED AT HEAD (885 B, added by that same commit) while the retired one did not - verified with `git ls-tree -r 51517e71^ -- <retired cell>`, which lists post_route_signoff_corner.json, spef_vs_estimate_discrepancy.json and sta_corner_record_completeness.json under reports/phase3/sta/ and no pre_pnr_summary.json. A live production cannot be proved against a tree that already holds the artefact, so the record had become unprovable by construction and the cell was red. It is re-pointed at the run root step 10's OTHER declared output is already evidenced by, so both of this steps entries now come from ONE run: the run that produced phase3/stage3/sta/pre_pnr_timing.rpt is the run whose summary of that report is produced here. THE OLD RECORD WAS ALREADY HOLLOW, which is why this is not a like-for-like re-point: 969 B is exactly what this producer writes into a tree carrying NO STA report at all (passed:false, findings [STA_REPORT_EXISTS, SCOPE_NOT_FOUND], files_found:0, BOTH --under scopes in scoped_under_missing), byte-identical from four independent admissible roots measured on this commit. produce_live now refuses a base run in which no declared --under scope exists, so that absence record can never again be counted as a produced artefact.",
+          "run": "benchmark-data/ic/spm/v1.10.18_sky130A",
+          "path": "reports/phase3/sta/pre_pnr_summary.json"
         }
       }
     },
@@ -430,49 +451,49 @@
       "entries": {
         "phase2/stage2/dft/scan_netlist.v": {
           "status": "PRODUCED_BY_RUN",
-          "run": "benchmark-data/ic/spm/v1.9.96_gf180mcuD",
+          "run": "benchmark-data/ic/spm/v1.10.18_sky130A",
           "alternative": "phase2/stage2/dft/scan_netlist.v",
           "path": "phase2/stage2/dft/scan_netlist.v",
-          "size_bytes": 81570,
+          "size_bytes": 80661,
           "note": "vibe-ic#1266 — RE-POINTED. This record cited 'AI_IC_design/4th_benchmark/ibex_e2e', a kind='home' root no checkout carries, while the entry was in fact being answered by a search of the admissible roots. Re-measured live: the artefact is tracked at HEAD in this root, non-empty and non-symlink, and the run's OWN write ledger (reports/write_ledger.json captured 2026-08-08T02:48:29Z) records step 11 as having written exactly this path. That is a provenance any checkout can re-derive; the old one was a claim about one machine."
         },
         "phase2/stage2/dft/atpg_coverage.rpt": {
           "status": "PRODUCED_BY_RUN",
-          "run": "benchmark-data/ic/spm/v1.9.96_gf180mcuD",
+          "run": "benchmark-data/ic/spm/v1.10.18_sky130A",
           "alternative": "phase2/stage2/dft/atpg_coverage.rpt",
           "path": "phase2/stage2/dft/atpg_coverage.rpt",
-          "size_bytes": 421,
+          "size_bytes": 417,
           "note": "vibe-ic#1266 — RE-POINTED off 'AI_IC_design/4th_benchmark/ibex_e2e' for the reason on scan_netlist.v above. This root's write ledger records step 11 as having written this exact path."
         },
         "phase2/stage2/dft/transition_atpg_plan.md": {
           "status": "PRODUCED_BY_RUN",
-          "run": "benchmark-data/ic/spm/v1.9.96_gf180mcuD",
+          "run": "benchmark-data/ic/spm/v1.10.18_sky130A",
           "alternative": "phase2/stage2/dft/transition_atpg_plan.md",
           "path": "phase2/stage2/dft/transition_atpg_plan.md",
-          "size_bytes": 2050,
+          "size_bytes": 2033,
           "note": "vibe-ic#1266 — RE-POINTED off 'campaign_pdk/spm/_aborted_tmpplugin_run'. That citation was the worst of the five: besides naming a tree no checkout carries, the run it named ABORTED, so the record asserted production by a run that did not finish. This root's write ledger records step 11 as having written this exact path."
         },
         "reports/phase2/dft/coverage.json": {
           "status": "PRODUCED_BY_RUN",
-          "run": "benchmark-data/ic/spm/v1.9.96_gf180mcuD",
+          "run": "benchmark-data/ic/spm/v1.10.18_sky130A",
           "alternative": "reports/phase2/dft/coverage.json",
           "path": "reports/phase2/dft/coverage.json",
-          "size_bytes": 3549,
+          "size_bytes": 3887,
           "note": "vibe-ic#1266 — RE-POINTED off 'AI_IC_design/4th_benchmark/ibex_e2e' for the reason on scan_netlist.v above. This root's write ledger records step 11 as having written this exact path."
         },
         "reports/phase2/dft/bsdl_plan.json": {
           "status": "PRODUCED_BY_RUN",
-          "run": "benchmark-data/ic/spm/v1.9.96_gf180mcuD",
+          "run": "benchmark-data/ic/spm/v1.10.18_sky130A",
           "alternative": "reports/phase2/dft/bsdl_plan.json",
           "path": "reports/phase2/dft/bsdl_plan.json",
-          "size_bytes": 1179
+          "size_bytes": 638
         },
         "phase2/stage2/dft/coverage.yml": {
           "status": "PRODUCED_BY_RUN",
-          "run": "benchmark-data/ic/spm/v1.9.96_gf180mcuD",
+          "run": "benchmark-data/ic/spm/v1.10.18_sky130A",
           "alternative": "phase2/stage2/dft/coverage.yml",
           "path": "phase2/stage2/dft/coverage.yml",
-          "size_bytes": 28797
+          "size_bytes": 28926
         }
       }
     },
@@ -485,10 +506,10 @@
       "entries": {
         "reports/phase2/dft/transition_coverage.json": {
           "status": "PRODUCED_BY_RUN",
-          "run": "benchmark-data/ic/spm/v1.9.96_gf180mcuD",
+          "run": "benchmark-data/ic/spm/v1.10.18_sky130A",
           "alternative": "reports/phase2/dft/transition_coverage.json",
           "path": "reports/phase2/dft/transition_coverage.json",
-          "size_bytes": 35030
+          "size_bytes": 34989
         }
       }
     },
@@ -497,10 +518,10 @@
       "entries": {
         "reports/phase2/dft/path_delay_coverage.json": {
           "status": "PRODUCED_BY_RUN",
-          "run": "benchmark-data/ic/spm/v1.9.96_gf180mcuD",
+          "run": "benchmark-data/ic/spm/v1.10.18_sky130A",
           "alternative": "reports/phase2/dft/path_delay_coverage.json",
           "path": "reports/phase2/dft/path_delay_coverage.json",
-          "size_bytes": 19313
+          "size_bytes": 19628
         }
       }
     },
@@ -509,10 +530,10 @@
       "entries": {
         "reports/phase2/dft/sdd_coverage.json": {
           "status": "PRODUCED_BY_RUN",
-          "run": "benchmark-data/ic/spm/v1.9.96_gf180mcuD",
+          "run": "benchmark-data/ic/spm/v1.10.18_sky130A",
           "alternative": "reports/phase2/dft/sdd_coverage.json",
           "path": "reports/phase2/dft/sdd_coverage.json",
-          "size_bytes": 9109
+          "size_bytes": 1596
         }
       }
     },
@@ -521,10 +542,10 @@
       "entries": {
         "phase2/stage2/synth/post_dft_netlist.v": {
           "status": "PRODUCED_BY_RUN",
-          "run": "benchmark-data/ic/spm/v1.9.96_gf180mcuD",
+          "run": "benchmark-data/ic/spm/v1.10.18_sky130A",
           "alternative": "phase2/stage2/synth/post_dft_netlist.v",
           "path": "phase2/stage2/synth/post_dft_netlist.v",
-          "size_bytes": 39179
+          "size_bytes": 76893
         }
       }
     },
@@ -533,17 +554,17 @@
       "entries": {
         "reports/lec.rpt": {
           "status": "PRODUCED_BY_RUN",
-          "run": "benchmark-data/ic/spm/v1.9.96_gf180mcuD",
+          "run": "benchmark-data/ic/spm/v1.10.18_sky130A",
           "alternative": "reports/lec.rpt",
           "path": "reports/lec.rpt",
-          "size_bytes": 20543
+          "size_bytes": 83335
         },
         "reports/lec.json": {
           "status": "PRODUCED_BY_RUN",
-          "run": "benchmark-data/ic/spm/v1.9.96_gf180mcuD",
+          "run": "benchmark-data/ic/spm/v1.10.18_sky130A",
           "alternative": "reports/lec.json",
           "path": "reports/lec.json",
-          "size_bytes": 1219
+          "size_bytes": 1327
         }
       }
     },
@@ -670,10 +691,10 @@
       "entries": {
         "phase2/stage2/synth/netlist.v": {
           "status": "PRODUCED_BY_RUN",
-          "run": "benchmark-data/ic/spm/v1.9.96_gf180mcuD",
+          "run": "benchmark-data/ic/spm/v1.10.18_sky130A",
           "alternative": "phase2/stage2/synth/netlist.v",
           "path": "phase2/stage2/synth/netlist.v",
-          "size_bytes": 48138
+          "size_bytes": 48041
         },
         "reports/analog/stage_analog_compliance.json": {
           "status": "UNPROVEN",
@@ -758,10 +779,10 @@
         },
         "reports/spare_cell_coverage.json": {
           "status": "PRODUCED_BY_RUN",
-          "run": "benchmark-data/ic/spm/v1.9.96_gf180mcuD",
+          "run": "benchmark-data/ic/spm/v1.10.18_sky130A",
           "alternative": "reports/spare_cell_coverage.json",
           "path": "reports/spare_cell_coverage.json",
-          "size_bytes": 438
+          "size_bytes": 440
         }
       }
     },
@@ -801,10 +822,10 @@
       "entries": {
         "phase3/stage3/pnr/routed.def": {
           "status": "PRODUCED_BY_RUN",
-          "run": "benchmark-data/ic/spm/v1.9.96_gf180mcuD",
+          "run": "benchmark-data/ic/spm/v1.5.65_sky130A",
           "alternative": "phase3/stage3/pnr/routed.def",
           "path": "phase3/stage3/pnr/routed.def",
-          "size_bytes": 517754
+          "size_bytes": 301739
         },
         "phase3/stage3/pnr/routed.drc.rpt": {
           "status": "PRODUCED_BY_RUN",
@@ -815,10 +836,10 @@
         },
         "reports/phase3/drc_router.rpt": {
           "status": "PRODUCED_BY_RUN",
-          "run": "benchmark-data/ic/caravel_user_project",
+          "run": "benchmark-data/ic/spm/v1.10.18_sky130A",
           "alternative": "reports/phase3/drc_router.rpt",
           "path": "reports/phase3/drc_router.rpt",
-          "size_bytes": 19208
+          "size_bytes": 18462
         },
         "reports/phase3/drc_router.json": {
           "status": "UNPROVEN"
@@ -830,10 +851,10 @@
       "entries": {
         "phase3/stage3/extracted/parasitic.spef OR phase3/stage3/extracted/*.spef": {
           "status": "PRODUCED_BY_RUN",
-          "run": "benchmark-data/ic/spm/v1.9.96_gf180mcuD",
+          "run": "benchmark-data/ic/spm/v1.5.65_sky130A",
           "alternative": "phase3/stage3/extracted/*.spef",
           "path": "phase3/stage3/extracted/spm.spef",
-          "size_bytes": 342755
+          "size_bytes": 277698
         }
       }
     },
@@ -849,7 +870,7 @@
         },
         "reports/phase3/sta/post_route_summary.json": {
           "status": "PRODUCED_BY_RUN",
-          "run": "benchmark-data/ic/spm/v1.9.96_gf180mcuD",
+          "run": "benchmark-data/ic/spm/v1.10.18_sky130A",
           "alternative": "reports/phase3/sta/post_route_summary.json",
           "path": "reports/phase3/sta/post_route_summary.json",
           "size_bytes": 1152,
@@ -857,17 +878,17 @@
         },
         "reports/phase3/sta/sta_corner_record_completeness.json": {
           "status": "PRODUCED_BY_RUN",
-          "run": "benchmark-data/ic/spm/v1.5.58_ihp-sg13g2",
+          "run": "benchmark-data/ic/spm/v1.10.18_sky130A",
           "alternative": "reports/phase3/sta/sta_corner_record_completeness.json",
           "path": "reports/phase3/sta/sta_corner_record_completeness.json",
-          "size_bytes": 3822
+          "size_bytes": 8220
         },
         "reports/phase3/sta/post_route_signoff_corner.json": {
           "status": "PRODUCED_BY_RUN",
-          "run": "benchmark-data/ic/spm/v1.9.96_gf180mcuD",
+          "run": "benchmark-data/ic/spm/v1.10.18_sky130A",
           "alternative": "reports/phase3/sta/post_route_signoff_corner.json",
           "path": "reports/phase3/sta/post_route_signoff_corner.json",
-          "size_bytes": 393
+          "size_bytes": 391
         }
       }
     },
@@ -876,32 +897,32 @@
       "entries": {
         "reports/phase3/ir_drop.rpt": {
           "status": "PRODUCED_BY_RUN",
-          "run": "benchmark-data/ic/spm/v1.9.96_gf180mcuD",
+          "run": "benchmark-data/ic/spm/v1.10.18_sky130A",
           "alternative": "reports/phase3/ir_drop.rpt",
           "path": "reports/phase3/ir_drop.rpt",
-          "size_bytes": 3464
+          "size_bytes": 3030
         },
         "reports/phase3/ir_drop.json": {
           "status": "PRODUCED_BY_RUN",
-          "run": "benchmark-data/ic/spm/v1.9.96_gf180mcuD",
+          "run": "benchmark-data/ic/spm/v1.10.18_sky130A",
           "alternative": "reports/phase3/ir_drop.json",
           "path": "reports/phase3/ir_drop.json",
-          "size_bytes": 600
+          "size_bytes": 905
         },
         "reports/phase3/ir_drop_signoff.json": {
           "status": "PRODUCED_BY_RUN",
-          "run": "benchmark-data/ic/spm/v1.9.96_gf180mcuD",
+          "run": "benchmark-data/ic/spm/v1.10.18_sky130A",
           "alternative": "reports/phase3/ir_drop_signoff.json",
           "path": "reports/phase3/ir_drop_signoff.json",
-          "size_bytes": 555,
+          "size_bytes": 564,
           "note": "2026-08-12 - was PRODUCED_LIVE, producer ir_drop_report_check, base_run benchmark-data/ic/spm/v1.9.96_gf180mcuD. That record was measured 2026-07-27 against the LIVE run tree this cell was later published from, at a moment when the tree did not carry this path, so the producer could be run and watched to write it. The published cell now carries the artefact tracked at HEAD, and produce_live refuses - correctly - to call a production LIVE against a tree that already holds the target. Corrected to the status the code itself prescribes for exactly this case (produce_live: \"the artefact is TRACKED AT HEAD ... in that case the entry is not a live production at all; it should be recorded PRODUCED_BY_RUN\"). Nothing was written and nothing was published: the bytes cited are the ones the commit already carried."
         },
         "reports/phase3/dynamic_ir.json": {
           "status": "PRODUCED_BY_RUN",
-          "run": "benchmark-data/ic/spm/v1.9.96_gf180mcuD",
+          "run": "benchmark-data/ic/spm/v1.10.18_sky130A",
           "alternative": "reports/phase3/dynamic_ir.json",
           "path": "reports/phase3/dynamic_ir.json",
-          "size_bytes": 1887
+          "size_bytes": 1572
         }
       }
     },
@@ -910,24 +931,24 @@
       "entries": {
         "reports/phase3/em.rpt": {
           "status": "PRODUCED_BY_RUN",
-          "run": "benchmark-data/ic/spm/v1.9.96_gf180mcuD",
+          "run": "benchmark-data/ic/spm/v1.10.18_sky130A",
           "alternative": "reports/phase3/em.rpt",
           "path": "reports/phase3/em.rpt",
-          "size_bytes": 3253
+          "size_bytes": 2816
         },
         "reports/phase3/em.json": {
           "status": "PRODUCED_BY_RUN",
-          "run": "benchmark-data/ic/spm/v1.9.96_gf180mcuD",
+          "run": "benchmark-data/ic/spm/v1.10.18_sky130A",
           "alternative": "reports/phase3/em.json",
           "path": "reports/phase3/em.json",
-          "size_bytes": 292
+          "size_bytes": 294
         },
         "reports/phase3/em_signoff.json": {
           "status": "PRODUCED_BY_RUN",
-          "run": "benchmark-data/ic/spm/v1.9.96_gf180mcuD",
+          "run": "benchmark-data/ic/spm/v1.10.18_sky130A",
           "alternative": "reports/phase3/em_signoff.json",
           "path": "reports/phase3/em_signoff.json",
-          "size_bytes": 717,
+          "size_bytes": 898,
           "note": "2026-08-12 - was PRODUCED_LIVE, producer em_report_check, base_run benchmark-data/ic/spm/v1.9.96_gf180mcuD. That record was measured 2026-07-27 against the LIVE run tree this cell was later published from, at a moment when the tree did not carry this path, so the producer could be run and watched to write it. The published cell now carries the artefact tracked at HEAD, and produce_live refuses - correctly - to call a production LIVE against a tree that already holds the target. Corrected to the status the code itself prescribes for exactly this case (produce_live: \"the artefact is TRACKED AT HEAD ... in that case the entry is not a live production at all; it should be recorded PRODUCED_BY_RUN\"). Nothing was written and nothing was published: the bytes cited are the ones the commit already carried."
         },
         "reports/phase3/em_current_authority.json": {
@@ -941,21 +962,21 @@
       "entries": {
         "reports/phase3/antenna.rpt": {
           "status": "PRODUCED_BY_RUN",
-          "run": "benchmark-data/ic/spm/v1.9.96_gf180mcuD",
+          "run": "benchmark-data/ic/spm/v1.10.18_sky130A",
           "alternative": "reports/phase3/antenna.rpt",
           "path": "reports/phase3/antenna.rpt",
           "size_bytes": 487
         },
         "reports/phase3/antenna.json": {
           "status": "PRODUCED_BY_RUN",
-          "run": "benchmark-data/ic/spm/v1.9.96_gf180mcuD",
+          "run": "benchmark-data/ic/spm/v1.10.18_sky130A",
           "alternative": "reports/phase3/antenna.json",
           "path": "reports/phase3/antenna.json",
-          "size_bytes": 236
+          "size_bytes": 260
         },
         "reports/phase3/antenna_signoff.json": {
           "status": "PRODUCED_BY_RUN",
-          "run": "benchmark-data/ic/spm/v1.9.96_gf180mcuD",
+          "run": "benchmark-data/ic/spm/v1.10.18_sky130A",
           "alternative": "reports/phase3/antenna_signoff.json",
           "path": "reports/phase3/antenna_signoff.json",
           "size_bytes": 188,
@@ -983,17 +1004,17 @@
       "entries": {
         "reports/phase3/si_crosstalk.rpt OR reports/phase3/si_crosstalk.json": {
           "status": "PRODUCED_BY_RUN",
-          "run": "benchmark-data/ic/spm/v1.9.96_gf180mcuD",
+          "run": "benchmark-data/ic/spm/v1.10.18_sky130A",
           "alternative": "reports/phase3/si_crosstalk.json",
           "path": "reports/phase3/si_crosstalk.json",
-          "size_bytes": 860
+          "size_bytes": 833
         },
         "reports/phase3/si_mcf_sta.json": {
           "status": "PRODUCED_BY_RUN",
-          "run": "benchmark-data/ic/spm/v1.9.96_gf180mcuD",
+          "run": "benchmark-data/ic/spm/v1.10.18_sky130A",
           "alternative": "reports/phase3/si_mcf_sta.json",
           "path": "reports/phase3/si_mcf_sta.json",
-          "size_bytes": 2750
+          "size_bytes": 2723
         }
       }
     },
@@ -1002,32 +1023,32 @@
       "entries": {
         "reports/phase3/perc_equivalent.json": {
           "status": "PRODUCED_BY_RUN",
-          "run": "benchmark-data/ic/spm/v1.9.96_gf180mcuD",
+          "run": "benchmark-data/ic/spm/v1.10.18_sky130A",
           "alternative": "reports/phase3/perc_equivalent.json",
           "path": "reports/phase3/perc_equivalent.json",
-          "size_bytes": 8142
+          "size_bytes": 8188
         },
         "reports/phase3/perc_equivalent.rpt": {
           "status": "PRODUCED_BY_RUN",
-          "run": "benchmark-data/ic/spm/v1.9.96_gf180mcuD",
+          "run": "benchmark-data/ic/spm/v1.10.18_sky130A",
           "alternative": "reports/phase3/perc_equivalent.rpt",
           "path": "reports/phase3/perc_equivalent.rpt",
-          "size_bytes": 4066
+          "size_bytes": 4111
         },
         "reports/phase3/PERC_SIGNOFF_MEMO.md": {
           "status": "PRODUCED_BY_RUN",
-          "run": "benchmark-data/ic/spm/v1.9.96_gf180mcuD",
+          "run": "benchmark-data/ic/spm/v1.10.18_sky130A",
           "alternative": "reports/phase3/PERC_SIGNOFF_MEMO.md",
           "path": "reports/phase3/PERC_SIGNOFF_MEMO.md",
-          "size_bytes": 3966
+          "size_bytes": 3960
         },
         "reports/phase2/gates/perc_signoff.json": {
           "status": "PRODUCED_BY_RUN",
           "provenance_note": "the recorded copy is `perc_signoff_check`'s own verdict document ({\"program\": \"perc_signoff_check\", ...}) and no producer outside step 28's gate writes this path, so the run root carries compliance-gate output committed alongside the run. Admissible for dimension 3 (the root carries a runner marker and the file pre-exists any audit of it) but it is NOT independent of the checker: see flow_compliance_check --strict-audit-evidence.",
-          "run": "benchmark-data/ic/caravel_user_project",
+          "run": "benchmark-data/ic/spm/v1.10.18_sky130A",
           "alternative": "reports/phase2/gates/perc_signoff.json",
           "path": "reports/phase2/gates/perc_signoff.json",
-          "size_bytes": 523
+          "size_bytes": 657
         }
       }
     },
@@ -1044,10 +1065,10 @@
         },
         "reports/phase2/gates/post_layout_sim.json": {
           "status": "PRODUCED_BY_RUN",
-          "run": "benchmark-data/evaluation/phase1_parity/espi",
+          "run": "benchmark-data/ic/spm/v1.10.18_sky130A",
           "alternative": "reports/phase2/gates/post_layout_sim.json",
           "path": "reports/phase2/gates/post_layout_sim.json",
-          "size_bytes": 569,
+          "size_bytes": 344,
           "note": "vibe-ic#983 ruling 2. The SUBSTANCE arm of step 29, newly declared. Recorded PRODUCED_BY_RUN because espi carries it non-empty and tracked at HEAD, which is what that status asserts. Stated plainly so no reader over-reads it: this report's ONLY producer is step 29's own BLOCKING gate clause (no runner invokes post_layout_sim_check), so its presence in a published tree is the gate's output archived alongside the run, not an independent production event. Measured: declaring it moves 0 of the 6 published trees carrying a post-layout sim dir."
         }
       }
@@ -1076,40 +1097,40 @@
       "entries": {
         "reports/phase3/drc_signoff.rpt": {
           "status": "PRODUCED_BY_RUN",
-          "run": "benchmark-data/ic/spm/v1.9.96_gf180mcuD",
+          "run": "benchmark-data/ic/spm/v1.10.18_sky130A",
           "alternative": "reports/phase3/drc_signoff.rpt",
           "path": "reports/phase3/drc_signoff.rpt",
-          "size_bytes": 139888
+          "size_bytes": 22379
         },
         "reports/phase3/lvs.rpt": {
           "status": "PRODUCED_BY_RUN",
-          "run": "benchmark-data/ic/spm/v1.9.96_gf180mcuD",
+          "run": "benchmark-data/ic/spm/v1.10.18_sky130A",
           "alternative": "reports/phase3/lvs.rpt",
           "path": "reports/phase3/lvs.rpt",
-          "size_bytes": 37676
+          "size_bytes": 60534
         },
         "reports/phase3/erc.rpt": {
           "status": "PRODUCED_BY_RUN",
-          "run": "benchmark-data/ic/spm/v1.9.96_gf180mcuD",
+          "run": "benchmark-data/ic/spm/v1.10.18_sky130A",
           "alternative": "reports/phase3/erc.rpt",
           "path": "reports/phase3/erc.rpt",
-          "size_bytes": 3009
+          "size_bytes": 1963
         },
         "reports/phase3/lvs.json": {
           "status": "PRODUCED_BY_RUN",
           "provenance_note": "the recorded copy is `eda_report_audit:lvs` output (step 31's own gate) — same class as perc_signoff.json above.",
-          "run": "benchmark-data/ic/caravel_user_project",
+          "run": "benchmark-data/ic/spm/v1.10.18_sky130A",
           "alternative": "reports/phase3/lvs.json",
           "path": "reports/phase3/lvs.json",
-          "size_bytes": 225
+          "size_bytes": 273
         },
         "reports/phase2/gates/erc_density.json": {
           "status": "PRODUCED_BY_RUN",
           "provenance_note": "the recorded copy is `erc_density_check` output (step 31's own gate) — same class as perc_signoff.json above.",
-          "run": "benchmark-data/ic/caravel_user_project",
+          "run": "benchmark-data/ic/spm/v1.10.18_sky130A",
           "alternative": "reports/phase2/gates/erc_density.json",
           "path": "reports/phase2/gates/erc_density.json",
-          "size_bytes": 1188
+          "size_bytes": 842
         },
         "reports/phase3/perc_sweep.json": {
           "status": "UNPROVEN",
@@ -1132,18 +1153,18 @@
         "reports/phase3/lvs_verdict.json": {
           "status": "PRODUCED_BY_RUN",
           "provenance_note": "declared 2026-08-20 alongside magic_illegal_overlap.json, and unlike it this one is EVIDENCED. Recorded against the run root and byte size it was MEASURED at in the published corpus (146d665); the other two published spm cells carry it too (v1.10.18_sky130A 1117 B, v1.5.58_ihp-sg13g2 944 B), so the entry resolves rather than moving the d7 finding into d3.",
-          "run": "benchmark-data/ic/spm/v1.9.96_gf180mcuD",
+          "run": "benchmark-data/ic/spm/v1.10.18_sky130A",
           "alternative": "reports/phase3/lvs_verdict.json",
           "path": "reports/phase3/lvs_verdict.json",
-          "size_bytes": 1131
+          "size_bytes": 1117
         },
         "reports/phase3/drc_signoff.json": {
           "status": "PRODUCED_BY_RUN",
           "provenance_note": "the recorded copy is `eda_report_audit:drc` output (step 31's own gate clause `drc_report_check . --mode drc --signoff --under reports/phase3/drc_signoff.rpt --json reports/phase3/drc_signoff.json`) — same class as lvs.json and erc_density.json above. DECLARED by d976999c4 [v1.11.45], which added the path to step 31's required_outputs and did not measure it into this manifest; the parity gate has read 164 declared paths against 163 entries ever since. RE-DERIVED on the current tree rather than by widening that assertion: the artefact resolves non-empty at the run root five of its own siblings already cite, and the entry is decided LIVE by the same PRODUCED_BY_RUN branch as the other 121, so it reddens the day the root stops carrying it. ADMISSIBILITY of that run root, measured 2026-08-22 and recorded here because it is the second half of the same fact: the root carries both `provenance.jsonl` and `reports/orchestrator/` and so is admissible under this manifest's own criterion, and not every run root produces the .json form (the flow's own note: 16 roots carry the .rpt, 3 carry the .json) — this entry records where one DID, which is what the manifest is for.",
-          "run": "benchmark-data/ic/spm/v1.9.96_gf180mcuD",
+          "run": "benchmark-data/ic/spm/v1.10.18_sky130A",
           "alternative": "reports/phase3/drc_signoff.json",
           "path": "reports/phase3/drc_signoff.json",
-          "size_bytes": 1919
+          "size_bytes": 2142
         }
       }
     },
@@ -1171,14 +1192,14 @@
       "entries": {
         "reports/phase3/power.rpt": {
           "status": "PRODUCED_BY_RUN",
-          "run": "benchmark-data/ic/spm/v1.9.96_gf180mcuD",
+          "run": "benchmark-data/ic/spm/v1.10.18_sky130A",
           "alternative": "reports/phase3/power.rpt",
           "path": "reports/phase3/power.rpt",
-          "size_bytes": 2330
+          "size_bytes": 2343
         },
         "reports/phase3/power.json": {
           "status": "PRODUCED_BY_RUN",
-          "run": "benchmark-data/ic/spm/v1.9.96_gf180mcuD",
+          "run": "benchmark-data/ic/spm/v1.10.18_sky130A",
           "alternative": "reports/phase3/power.json",
           "path": "reports/phase3/power.json",
           "size_bytes": 165
@@ -1197,14 +1218,14 @@
         },
         "reports/density.json OR reports/phase3/density.json": {
           "status": "PRODUCED_BY_RUN",
-          "run": "benchmark-data/ic/spm/v1.9.96_gf180mcuD",
+          "run": "benchmark-data/ic/spm/v1.10.18_sky130A",
           "alternative": "reports/density.json",
           "path": "reports/density.json",
           "size_bytes": 389
         },
         "reports/density.rpt OR reports/phase3/density.rpt": {
           "status": "PRODUCED_BY_RUN",
-          "run": "benchmark-data/ic/spm/v1.9.96_gf180mcuD",
+          "run": "benchmark-data/ic/spm/v1.10.18_sky130A",
           "alternative": "reports/density.rpt",
           "path": "reports/density.rpt",
           "size_bytes": 585
@@ -1216,10 +1237,10 @@
       "entries": {
         "reports/phase3/dfm_screen.json": {
           "status": "PRODUCED_BY_RUN",
-          "run": "benchmark-data/ic/spm/v1.9.96_gf180mcuD",
+          "run": "benchmark-data/ic/spm/v1.10.18_sky130A",
           "alternative": "reports/phase3/dfm_screen.json",
           "path": "reports/phase3/dfm_screen.json",
-          "size_bytes": 1521
+          "size_bytes": 2198
         }
       }
     },
@@ -1228,10 +1249,10 @@
       "entries": {
         "reports/audit/tapeout_checklist.json": {
           "status": "PRODUCED_BY_RUN",
-          "run": "benchmark-data/ic/spm/v1.9.96_gf180mcuD",
+          "run": "benchmark-data/ic/spm/v1.10.18_sky130A",
           "alternative": "reports/audit/tapeout_checklist.json",
           "path": "reports/audit/tapeout_checklist.json",
-          "size_bytes": 1187
+          "size_bytes": 2253
         }
       }
     },
@@ -1240,10 +1261,10 @@
       "entries": {
         "phase3/stage4/gds/*.gds": {
           "status": "PRODUCED_BY_RUN",
-          "run": "benchmark-data/ic/spm/v1.9.96_gf180mcuD",
+          "run": "benchmark-data/ic/spm/v1.10.18_sky130A",
           "alternative": "phase3/stage4/gds/*.gds",
           "path": "phase3/stage4/gds/spm.gds",
-          "size_bytes": 1180456
+          "size_bytes": 1616344
         },
         "reports/phase3/gates/stage3_compliance.json": {
           "status": "UNPROVEN",
@@ -1362,10 +1383,10 @@
         },
         "reports/phase3/foundry_handoff_audit.json": {
           "status": "PRODUCED_BY_RUN",
-          "run": "benchmark-data/ic/spm/v1.9.96_gf180mcuD",
+          "run": "benchmark-data/ic/spm/v1.10.18_sky130A",
           "alternative": "reports/phase3/foundry_handoff_audit.json",
           "path": "reports/phase3/foundry_handoff_audit.json",
-          "size_bytes": 2567
+          "size_bytes": 3089
         }
       }
     },
@@ -1377,18 +1398,19 @@
         },
         "reports/phase2/fpga/on_board_pass.json": {
           "status": "PRODUCED_BY_RUN",
-          "run": "benchmark-data/ic/spm/v1.9.96_gf180mcuD",
+          "run": "benchmark-data/ic/spm/v1.10.18_sky130A",
           "alternative": "reports/phase2/fpga/on_board_pass.json",
           "path": "reports/phase2/fpga/on_board_pass.json",
-          "size_bytes": 732
+          "size_bytes": 724
         },
         "reports/phase3/gates/stage4_compliance.json": {
           "status": "UNPROVEN",
-          "note": "2026-08-31 - UNPROVEN. Declared by `29e9c72796` [v1.13.96], which moved the flow yaml without moving this manifest; `d3_manifest_declaration_parity_check` has been reporting it as uncovered ever since (measured red on 781d24727 [v1.14.22] before this change, 7 uncovered paths). The stage-tier `*_compliance.json` reports are written by `flow_compliance_check --stage-id <X> --strict --json <this path>`, a clause that postdates every admissible run root in this manifest, so no published run carries the file and there is nothing to record as PRODUCED_BY_RUN. UNPROVEN is the true statement of the gap: the entry is now DECIDABLE, and the dimension-3 cell reports it unevidenced wherever a corpus is offered."
+          "note": "2026-08-31 - UNPROVEN. Declared by `29e9c72796` [v1.13.96], which moved the flow yaml without moving this manifest; `d3_manifest_declaration_parity_check` has been reporting it as uncovered ever since (measured red on 781d24727 [v1.14.22] before this change, 7 uncovered paths). The stage-tier `*_compliance.json` reports are written by `flow_compliance_check --stage-id <X> --strict --json <this path>`, a clause that postdates every admissible run root in this manifest, so no published run carries the file and there is nothing to record as PRODUCED_BY_RUN. UNPROVEN is the true statement of the gap: the entry is now DECIDABLE, and the dimension-3 cell reports it unevidenced wherever a corpus is offered. 2026-08-31 - listed in this record's `unproven` set: with the corpus withdrawal (benchmark-data bcf2f94) no admissible root can carry it, its only current producer is the acceptance audit itself (see SELF_CERTIFYING_AUDIT_PROBE - audit-written evidence is refused by design), and step 39's cell is WAIVED, so the unwaived-entries guard was the only place this impossibility surfaced. The waiver-premise test re-checks the absence against git live."
         }
       },
       "unproven": [
-        "phase2/stage1/fpga/final/*.sof"
+        "phase2/stage1/fpga/final/*.sof",
+        "reports/phase3/gates/stage4_compliance.json"
       ]
     },
     "A6": {

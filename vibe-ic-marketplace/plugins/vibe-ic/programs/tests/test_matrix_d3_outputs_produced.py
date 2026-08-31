@@ -632,6 +632,24 @@ _EXTERNAL_RUN_ROOTS_AS_MEASURED: Tuple[str, ...] = (
     "AI_IC_design/4th_benchmark/U_Hawaii_EE628_DeltaSigma_ADC_e2e",
     "AI_IC_design/4th_benchmark/cv32e40p_e2e",
     "AI_IC_design/4th_benchmark/ibex_e2e",
+    # 2026-08-31 — ten labels JOIN, none of them a new tree: they are the
+    # in-repo roots the published corpus stopped carrying (four withdrawn by
+    # benchmark-data `bcf2f94`, owner instruction 2026-08-20; the rest never
+    # published under these names), re-kinded repo/published -> home in the
+    # manifest per #527. A root no checkout resolves is a machine tree, and
+    # its entries are fixture-attested — which is what these already were on
+    # every host since the withdrawal; this records it instead of asserting
+    # the pre-withdrawal world.
+    "benchmark-data/evaluation/phase1_parity/espi",
+    "benchmark-data/ic/caravel_user_project",
+    "benchmark-data/ic/caravel_user_project/v1.9.43_sky130A",
+    "benchmark-data/ic/sha256",
+    "benchmark-data/ic/sha256/clean_run_v1427_20260715",
+    "benchmark-data/ic/spm/v1.5.58_ihp-sg13g2",
+    "benchmark-data/ic/spm/v1.9.96_gf180mcuD",
+    "benchmark-data/ic/subservient",
+    "benchmark-data/ic/u_hawaii_adc",
+    "benchmark-data/ic/u_hawaii_adc/v1.9.86_sky130A",
     "campaign_pdk/spm/_aborted_tmpplugin_run",
     "campaign_pdk/spm/pdk_portability_ihp-sg13g2_20260721",
 )
@@ -663,8 +681,17 @@ _EXTERNAL_RUN_ROOTS_AS_MEASURED: Tuple[str, ...] = (
 #: there is no external tree left to be attested from. See the note on
 #: :data:`UNEVIDENCED_CELLS` for why dormancy is the true reading and why for
 #: M4 the external attribution was additionally wrong in its own terms.
+#: 2026-08-31 — thirteen cells JOIN, the growing direction, and the cause is
+#: named because growth here must be a loud event: benchmark-data `bcf2f94`
+#: (owner instruction 2026-08-20) withdrew the run trees whose entries kept
+#: these cells live-evidenced, and the dead roots were re-kinded to machine
+#: trees per #527, so every entry still recorded against them is decided by
+#: the committed manifest alone. This is not fourteen new soft spots — it is
+#: fourteen existing ones the withdrawal made visible; each leaves again the
+#: day a published run carries its artefacts.
 EXTERNALLY_ATTESTED_STEPS: Tuple[str, ...] = (
-    "17", "20", "30",
+    "0.5ic", "16", "17", "19", "20", "30", "32",
+    "A1", "A2", "A3", "A4", "A5", "A6", "A7", "A8", "A9",
 )
 
 #: How many of the declared entries are decided LIVE on every host. An
@@ -803,29 +830,41 @@ _LIVE_ENTRY_COUNT = 135
 #: Pinning all three means the POPULATION cannot grow silently, which is the
 #: part A8 tried to grow.
 SELF_CERTIFYING_AUDIT_PROBE: Dict[str, Tuple[str, ...]] = {
-    # The analog reference run — A8's own base_run. MUST stay empty.
-    "benchmark-data/ic/u_hawaii_adc": (),
-    # 2026-08-07 — v1.5.66_gf180mcuD (the former non-empty control here) was
-    # retired and replaced by v1.9.96_gf180mcuD. RE-MEASURED against the new
-    # cell, not carried forward: it is published AFTER the em_signoff wiring
-    # this probe's own comment predicted would make the entry disappear
-    # ("on a root published after that wiring the artefact pre-exists the
-    # audit and this entry MUST disappear") — `reports/phase3/{ir_drop_signoff,
-    # em_signoff,antenna_signoff}.json` all pre-exist in the published cell, so
-    # a `flow_compliance_check` run against a copy creates 0 files there of any
-    # kind. Verified empirically (copytree + real subprocess run + before/after
-    # file-list diff) before pinning, not assumed from the prediction alone.
-    # The probe's "not empty" side is currently uncovered by any pinned entry —
-    # disclosed here rather than silently dropped; a future root published
-    # BEFORE the step-25 wiring reaches this file would restore it.
-    "benchmark-data/ic/spm/v1.9.96_gf180mcuD": (),
-    # 2026-08-06 — the published cell that carries A8's hardmacro GDS. It is in
-    # the probe for the reason A8 is the reason the probe exists: this root is
-    # now an evidence source, so "could the auditor have written the artefact
-    # it then reports" has to be asked of it too. MEASURED empty — a
-    # `flow_compliance_check` run creates 0 files there of any kind — and
-    # pinned empty so it cannot start creating one silently.
-    "benchmark-data/ic/u_hawaii_adc/v1.9.86_sky130A": (),
+    # 2026-08-31 — the three former probe roots (ic/u_hawaii_adc,
+    # ic/spm/v1.9.96_gf180mcuD, ic/u_hawaii_adc/v1.9.86_sky130A) all left the
+    # published corpus (benchmark-data `bcf2f94`, owner instruction
+    # 2026-08-20: "remove the current ic results — none of them is a pass")
+    # and were re-kinded repo->home in the manifest; a probe over a root no
+    # checkout resolves measures nothing, and the assertion above this dict
+    # says so out loud. The one root the corpus still publishes with a
+    # converged verdict is the SPECIMEN (restored by owner instruction
+    # `88621a5`), so the question moves there — it is now THE evidence
+    # source, so "could the auditor have written the artefact it then
+    # reports" has to be asked of it. Measured by the owning test on every
+    # run (copytree + real flow_compliance_check subprocess + before/after
+    # file-list diff); the tuple below is that measurement, taken 2026-08-31
+    # on this change, not carried forward from any older root.
+    #
+    # MEASURED NON-EMPTY, and RECORDED RATHER THAN ENDORSED — the same
+    # disposition the retired steps-24/26 note above this dict records. Every
+    # entry below is a declared required_output the AUDIT ITSELF writes into
+    # the tree it audits: the v1.13.78 stage-compliance gates and the #1000
+    # `em_current_authority` / step-31 `perc_sweep` clauses name their own
+    # `--json` targets among their steps' required_outputs, and the SPECIMEN
+    # predates that wiring, so nothing pre-exists to shadow the write. That
+    # is a FLOW defect (the producer belongs in the runner that owns the
+    # step, not in a gate clause of the acceptance audit); fixing it is out
+    # of this pin's scope. Pinned so the population cannot grow silently; a
+    # run published AFTER the wiring, where the artefacts pre-exist the
+    # audit, makes every one of these disappear.
+    "benchmark-data/ic/spm/v1.10.18_sky130A": (
+        "25::reports/phase3/em_current_authority.json",
+        "2::reports/crosslayer/rewrite_equivalence_check.json",
+        "2::reports/phase1/gates/stage_phase1_compliance.json",
+        "31::reports/phase3/perc_sweep.json",
+        "37::reports/phase3/gates/stage3_compliance.json",
+        "39::reports/phase3/gates/stage4_compliance.json",
+    ),
 }
 
 
@@ -3035,8 +3074,13 @@ def test_d3_run_root_discovery_is_live():
 #: manifest. Written down here rather than picked at runtime: a probe that
 #: chooses its own subject can quietly stop covering a kind.
 _CORPUS_ROUTE_PROBES: Tuple[Tuple[str, str], ...] = (
-    ("benchmark-data/ic/spm/v1.5.58_ihp-sg13g2", _IN_REPO_KIND),
-    ("benchmark-data/ic/u_hawaii_adc/v1.9.86_sky130A", _PUBLISHED_KIND),
+    # 2026-08-31 — both former probe labels left the published corpus
+    # (v1.5.58_ihp-sg13g2 was never published; v1.9.86_sky130A was withdrawn
+    # by benchmark-data `bcf2f94`) and were re-kinded repo->home, so the probe
+    # drove labels of the wrong kind. Re-pointed at the two roots the corpus
+    # carries TODAY, one per admissibility kind, as the owning test demands.
+    ("benchmark-data/ic/spm/v1.5.65_sky130A", _IN_REPO_KIND),
+    ("benchmark-data/ic/spm/v1.10.18_sky130A", _PUBLISHED_KIND),
 )
 
 
@@ -4942,6 +4986,30 @@ UNEVIDENCED_CELLS: Tuple[str, ...] = (
     # moved and the publish scope did not widen.  Step 30 remains because its
     # STEP_RECORD is `status: skipped` with no declared-output rows at all.
     "30",
+    # 2026-08-31 — twelve cells JOIN, and the event is the corpus, not the
+    # flow: benchmark-data `bcf2f94` (owner instruction 2026-08-20, "remove
+    # the current ic results — none of them is a pass") withdrew the cells
+    # this dimension's records cited, and the roots were re-kinded to machine
+    # trees per #527. 88 entries the SPECIMEN (`v1.10.18_sky130A`) still
+    # evidences were re-pointed at it in the same change; these twelve are
+    # what remains — entries no tree the corpus publishes carries (the analog
+    # A1-A9 family, 0.5ic's submission-template set, 31's
+    # magic_illegal_overlap.json, 32's repair artefacts). Population and the
+    # closing cost re-measured live on this change (see
+    # `_UNEVIDENCED_CLOSING_COST_BYTES`); a red cell cannot rot, and each of
+    # these closes the day a run carrying its artefact is published.
+    "0.5ic",
+    "31",
+    "32",
+    "A1",
+    "A2",
+    "A3",
+    "A4",
+    "A5",
+    "A6",
+    "A7",
+    "A8",
+    "A9",
 )
 
 
@@ -5055,7 +5123,11 @@ def unevidenced_entries() -> Tuple[Tuple[str, str], ...]:
 #: enough to be escalated as an owner decision. Pinned so that the population
 #: moving, or a recorded size moving, is a NAMED event rather than a silent
 #: change of subject.
-_UNEVIDENCED_CLOSING_COST_BYTES = 1893
+# 2026-08-31 — re-measured with the corpus-withdrawal population (22
+# entries over the thirteen unevidenced cells); the previous 1893 B was the
+# step-30-only world. Derived by `unevidenced_closing_cost()` on this
+# change, every term recorded.
+_UNEVIDENCED_CLOSING_COST_BYTES = 702113
 
 #: An entry the manifest records with no size. Returned instead of ``0`` so the
 #: guard can tell "nobody measured it" from "it costs nothing" — folding the
@@ -5259,9 +5331,20 @@ def test_d3_the_unevidenced_remedy_is_only_promised_where_a_producer_exists():
 #: the entry stopped being unevidenced. A cell JOINING it is a NEW declared
 #: output the publish contract cannot carry, and is its own finding.
 UNEVIDENCED_OUTSIDE_THE_PUBLISH_CONTRACT: Tuple[Tuple[str, str], ...] = (
+    # 2026-08-31 — three pairs JOIN with the corpus withdrawal (`bcf2f94`):
+    # 0.5ic's two input/submission_template entries (the publisher stages run
+    # outputs, never the project's own input/ tree) and 32's repair_log
+    # alternative. Re-measured live on this change with `publishable()` over
+    # the unevidenced population, exactly as the owning test derives it.
+    ("0.5ic", "input/submission_template/slots/*.yaml OR "
+              "input/submission_template/NO_TEMPLATE.txt OR "
+              "input/submission_template/SELF_TAPEOUT.txt"),
+    ("0.5ic", "input/submission_template/tapeout_declaration.json"),
     ("30", "phase3/stage3/spice/*.sp OR phase3/stage3/spice/*.spice OR "
            "sim_spice/*.sp"),
     ("32", "phase3/stage3/postroute_timing_repair/postroute_timing_repair_decision.json"),
+    ("32", "phase3/stage3/postroute_timing_repair/repair_log.json OR "
+           "phase3/stage3/postroute_timing_repair/no_repair_needed.flag"),
 )
 
 
@@ -5614,8 +5697,26 @@ def test_d3_the_publish_scope_is_what_the_publisher_actually_stages(tmp_path):
 #: position the d7 detector could not see until vibe-ic#1452 taught it the
 #: shadowing writers. The pin would have recorded a blind spot as a fact.
 UNEVIDENCED_WITHOUT_A_NAMED_PRODUCER: Tuple[Tuple[str, str], ...] = (
+    # 2026-08-31 — nine pairs JOIN as a consequence of the corpus withdrawal
+    # (`bcf2f94`) growing the unevidenced population this pin splits; nothing
+    # gained or lost a producer. Same caveat as the module note above: "the
+    # oracle cannot see the producer" and "there is no producer" are different
+    # findings — the analog A6-A9 artefacts are written by EDA tools inside
+    # the container, a write position the AST oracle cannot see.
+    ("0.5ic", "input/submission_template/tapeout_declaration.json"),
+    ("0.5ic", "reports/phase1/submission_template.json"),
+    ("0.5ic", "reports/phase1/tapeout_declaration.json"),
     ("30", "phase3/stage3/spice/correlation.json OR "
            "reports/phase3/spice_correlation.json"),
+    ("31", "reports/phase3/magic_illegal_overlap.json"),
+    ("A6", "phase3/analog/*/drc_clean.flag OR phase3/analog/*/drc.report OR "
+           "phase3/analog/*/*.lyrdb OR phase3/analog/*/drc.rpt"),
+    ("A7", "phase3/analog/*/pre_vs_post.json"),
+    ("A8", "phase3/analog/hardmacro/*/*.lef"),
+    ("A8", "phase3/analog/hardmacro/*/*.lib"),
+    ("A9", "phase3/mixed_signal/cosim/*_cosim_results.json OR "
+           "phase3/mixed_signal/cosim/mixed_signal_results.json OR "
+           "phase3/analog/*/hw_measurements.json"),
 )
 
 
@@ -6553,7 +6654,11 @@ def test_d3_a_committed_ledger_can_be_refuted_by_its_own_commit():
     name the stale claim, and must report nothing once the ledger is re-emitted
     over the tree as it now is.
     """
-    src = run_roots().get("benchmark-data/ic/spm/v1.9.96_gf180mcuD")
+    # 2026-08-31 — v1.9.96_gf180mcuD left the published corpus (`bcf2f94`)
+    # and was re-kinded to a machine tree; the control moves to the SPECIMEN,
+    # the published spm cell the corpus carries today, which brings its own
+    # committed reports/write_ledger.json exactly as this control needs.
+    src = run_roots().get("benchmark-data/ic/spm/v1.10.18_sky130A")
     assert src is not None, (
         "the published spm cell does not resolve here; this control needs a "
         "real published tree, not a synthetic one")

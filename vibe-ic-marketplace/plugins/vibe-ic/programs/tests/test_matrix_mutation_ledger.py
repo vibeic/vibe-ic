@@ -577,10 +577,17 @@ def test_0_5ic_d3_live_replay_closes_the_exact_coverage_delta():
     the third assertion, not the first: the new cell is COVERED — census
     reports ``uncovered == []`` at 509 — so a waiver came off without leaving
     an enforced cell nobody has shown can redden.
+
+    MOVED 509 -> 489 on 2026-08-31, the shrinking direction, and the cause is
+    the corpus withdrawal (benchmark-data `bcf2f94`): twenty d3 cells whose
+    manifest records now cite machine trees left ENFORCED for NOT_MEASURED.
+    All twenty are named in :data:`matrix_mutation_ledger.
+    LEDGER_CELLS_NOT_ENFORCED`, which moved in the same change; ``uncovered ==
+    []`` still holds at 489, so nothing enforced lost its mutation coverage.
     """
     rep = L.census(cell_states())
-    assert rep["considered"] == 509, rep
-    assert rep["covered"] == 509, rep
+    assert rep["considered"] == 489, rep
+    assert rep["covered"] == 489, rep
     assert rep["uncovered"] == [], rep
 
 

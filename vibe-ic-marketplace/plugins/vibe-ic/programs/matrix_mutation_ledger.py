@@ -2040,7 +2040,7 @@ NOT_FALSIFIABLE: Tuple[NotFalsifiable, ...] = ()
 # 36 below the previous value counted), 544 - 35 = 509. This is the direction
 # the note on the 479 -> 478 move said this pin would move in if the waiver
 # ever came off, and it named the cell in advance; both halves held.
-LEDGER_AS_MEASURED: Tuple[int, int, int] = (68, 8, 509)
+LEDGER_AS_MEASURED: Tuple[int, int, int] = (68, 8, 489)
 
 #: Every cell of the live 63x8 grid that is NOT ENFORCED, with the state its
 #: owning dimension module answers. The COMPANION to the count above, and the
@@ -2121,6 +2121,39 @@ LEDGER_CELLS_NOT_ENFORCED: Tuple[Tuple[str, int, str], ...] = (
     ("20", 3, "NOT_MEASURED"),
     ("30", 3, "NOT_MEASURED"),
     ("32", 3, "NOT_MEASURED"),
+    # 2026-08-31 — TWENTY MORE CELLS enter the same fourth state, and the
+    # event is the corpus, not the flow: benchmark-data `bcf2f94` (owner
+    # instruction 2026-08-20) withdrew the run trees these cells' manifest
+    # records cited, and the dead roots were re-kinded repo/published -> home
+    # per #527 in the same change that re-pointed 90 records at the two roots
+    # the corpus still publishes (`v1.10.18_sky130A`, `v1.5.65_sky130A`).
+    # These twenty keep at least one entry only a machine tree attests, so
+    # `unanswerable_citations` re-derives NOT_MEASURED for them live — the
+    # same not-a-waiver, not-a-closure semantics as the six above: re-point
+    # the record or publish a run carrying the artefact and each one
+    # self-invalidates. 509 -> 489 is exactly these twenty, each named here
+    # because a lowered count with no named cell is the shape the grid gate
+    # refuses.
+    ("0.5ic", 3, "NOT_MEASURED"),
+    ("9", 3, "NOT_MEASURED"),
+    ("10", 3, "NOT_MEASURED"),
+    ("16", 3, "NOT_MEASURED"),
+    ("18", 3, "NOT_MEASURED"),
+    ("21", 3, "NOT_MEASURED"),
+    ("23", 3, "NOT_MEASURED"),
+    ("29", 3, "NOT_MEASURED"),
+    ("31", 3, "NOT_MEASURED"),
+    ("34", 3, "NOT_MEASURED"),
+    ("38", 3, "NOT_MEASURED"),
+    ("A1", 3, "NOT_MEASURED"),
+    ("A2", 3, "NOT_MEASURED"),
+    ("A3", 3, "NOT_MEASURED"),
+    ("A4", 3, "NOT_MEASURED"),
+    ("A5", 3, "NOT_MEASURED"),
+    ("A6", 3, "NOT_MEASURED"),
+    ("A7", 3, "NOT_MEASURED"),
+    ("A8", 3, "NOT_MEASURED"),
+    ("A9", 3, "NOT_MEASURED"),
     # 15.5ic/26.5ic/37.5ip/37.5ic d3: the four path-specific steps that arrived
     # 2026-08-20 with a step-level `condition: files_exist:
     # [input/submission_template/...]` and `condition_kind: design_dependent`.

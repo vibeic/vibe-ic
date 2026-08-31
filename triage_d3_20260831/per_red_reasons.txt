@@ -1,0 +1,165 @@
+test_d3_required_outputs_are_produced[stepD1]
+    step D1 (Phase 1 Doc Extraction (17 skills + dialogue entry → L1-L27)) declares 19 required_outputs; 19 are NOT produced:
+    (cites 3 distinct benchmark-data root/path strings)
+test_d3_required_outputs_are_produced[step0.5ic]
+    step 0.5ic (Submission Template Ingest — the operator's slot geometry and fixtures (chip/IC path only)) declares 4 required_outputs; 4 are NOT produced:
+    (cites 1 distinct benchmark-data root/path strings)
+test_d3_required_outputs_are_produced[step1]
+    step 1 (Spec-to-RTL) declares 1 required_outputs; 1 are NOT produced:
+    (cites 2 distinct benchmark-data root/path strings)
+test_d3_required_outputs_are_produced[step2]
+    step 2 (🔁 RTL validation (rewrite fidelity + lint + Quartus-unsafe patterns + RTL-bug claim schema)) declares 4 required_outputs; 4 are NOT produced:
+    (cites 1 distinct benchmark-data root/path strings)
+test_d3_required_outputs_are_produced[step3]
+    step 3 (🔁 CDC / RDC check) declares 3 required_outputs; 3 are NOT produced:
+    (cites 1 distinct benchmark-data root/path strings)
+test_d3_required_outputs_are_produced[step4]
+    step 4 (🔁 Simulation (testbench-based + L10/L12 coverage + Verilator coverage)) declares 3 required_outputs; 3 are NOT produced:
+    (cites 2 distinct benchmark-data root/path strings)
+test_d3_required_outputs_are_produced[step5]
+    step 5 (🔁 Formal verification (assertions proved + bit-level full-stack phase2/stage1/tb)) declares 3 required_outputs; 3 are NOT produced:
+    (cites 2 distinct benchmark-data root/path strings)
+test_d3_required_outputs_are_produced[step7]
+    step 7 (Constraint setup (SDC + PVT matrix)) declares 2 required_outputs; 2 are NOT produced:
+    (cites 1 distinct benchmark-data root/path strings)
+test_d3_required_outputs_are_produced[step8]
+    step 8 (🔁 SDC validation) declares 1 required_outputs; 1 are NOT produced:
+    (cites 1 distinct benchmark-data root/path strings)
+test_d3_required_outputs_are_produced[step9]
+    step 9 (Synthesis (Yosys → mapped netlist)) declares 2 required_outputs; 2 are NOT produced:
+    (cites 2 distinct benchmark-data root/path strings)
+test_d3_required_outputs_are_produced[step10]
+    step 10 (🔁 Pre-layout STA (multi-corner)) declares 2 required_outputs; 2 are NOT produced:
+    (cites 2 distinct benchmark-data root/path strings)
+test_d3_required_outputs_are_produced[step11]
+    step 11 (DFT insertion (scan chain + ATPG + at-speed + BSDL)) declares 6 required_outputs; 6 are NOT produced:
+    (cites 1 distinct benchmark-data root/path strings)
+test_d3_required_outputs_are_produced[stepDT1]
+    step DT1 (Transition-delay-fault (at-speed LOC) ATPG) declares 1 required_outputs; 1 are NOT produced:
+    (cites 2 distinct benchmark-data root/path strings)
+test_d3_required_outputs_are_produced[step12]
+    step 12 (Post-DFT optimization (resynth / buffering)) declares 1 required_outputs; 1 are NOT produced:
+    (cites 2 distinct benchmark-data root/path strings)
+test_d3_required_outputs_are_produced[step13]
+    step 13 (🔁 Equivalence check (RTL ≡ post-DFT netlist)) declares 2 required_outputs; 2 are NOT produced:
+    (cites 1 distinct benchmark-data root/path strings)
+test_d3_required_outputs_are_produced[stepA1]
+    step A1 (Analog Spec Extraction) declares 1 required_outputs; 1 are NOT produced:
+    (cites 2 distinct benchmark-data root/path strings)
+test_d3_required_outputs_are_produced[stepA2]
+    step A2 (Analog Topology Selection) declares 1 required_outputs; 1 are NOT produced:
+    (cites 2 distinct benchmark-data root/path strings)
+test_d3_required_outputs_are_produced[stepA3]
+    step A3 (Analog Netlist Generation) declares 1 required_outputs; 1 are NOT produced:
+    (cites 1 distinct benchmark-data root/path strings)
+test_d3_required_outputs_are_produced[stepA4]
+    step A4 (Analog Corner Sweep (PVT)) declares 1 required_outputs; 1 are NOT produced:
+    (cites 1 distinct benchmark-data root/path strings)
+test_d3_required_outputs_are_produced[stepA5]
+    step A5 (Analog Layout) declares 1 required_outputs; 1 are NOT produced:
+    (cites 2 distinct benchmark-data root/path strings)
+test_d3_required_outputs_are_produced[stepA6]
+    step A6 (Analog Physical Verification (per-block DRC + LVS before merge)) declares 2 required_outputs; 2 are NOT produced:
+    (cites 1 distinct benchmark-data root/path strings)
+test_d3_required_outputs_are_produced[stepA7]
+    step A7 (🔁 Post-Layout Resimulation) declares 1 required_outputs; 1 are NOT produced:
+    (cites 1 distinct benchmark-data root/path strings)
+test_d3_required_outputs_are_produced[stepA8]
+    step A8 (Hardmacro Generation (LEF + Liberty + GDS + Verilog)) declares 4 required_outputs; 4 are NOT produced:
+    (cites 2 distinct benchmark-data root/path strings)
+test_d3_required_outputs_are_produced[stepA9]
+    step A9 (🔁 Co-Simulation (+ HW correlation when bench data exists)) declares 1 required_outputs; 1 are NOT produced:
+    (cites 1 distinct benchmark-data root/path strings)
+test_d3_required_outputs_are_produced[step14]
+    step 14 (🔁 Synthesis handoff gate (pre-PnR Yosys script + netlist audit; open-source-flow specific)) declares 2 required_outputs; 2 are NOT produced:
+    (cites 1 distinct benchmark-data root/path strings)
+test_d3_required_outputs_are_produced[step16]
+    step 16 (Clock planning) declares 1 required_outputs; 1 are NOT produced:
+    (cites 1 distinct benchmark-data root/path strings)
+test_d3_required_outputs_are_produced[step18]
+    step 18 (Spare-cell + ECO-prep insertion (Design-for-ECO)) declares 2 required_outputs; 2 are NOT produced:
+    (cites 2 distinct benchmark-data root/path strings)
+test_d3_required_outputs_are_produced[step21]
+    step 21 (Routing (global + detailed)) declares 4 required_outputs; 4 are NOT produced:
+    (cites 3 distinct benchmark-data root/path strings)
+test_d3_required_outputs_are_produced[step22]
+    step 22 (Parasitic Extraction (RC → SPEF)) declares 1 required_outputs; 1 are NOT produced:
+    (cites 1 distinct benchmark-data root/path strings)
+test_d3_required_outputs_are_produced[stepDT2]
+    step DT2 (Path-delay-fault (at-speed, timing-graded) ATPG) declares 1 required_outputs; 1 are NOT produced:
+    (cites 2 distinct benchmark-data root/path strings)
+test_d3_required_outputs_are_produced[stepDT3]
+    step DT3 (Small-delay-defect (SDD) at-speed grade) declares 1 required_outputs; 1 are NOT produced:
+    (cites 1 distinct benchmark-data root/path strings)
+test_d3_required_outputs_are_produced[step23]
+    step 23 (🔁 Post-route STA (multi-corner multi-mode sign-off)) declares 4 required_outputs; 4 are NOT produced:
+    (cites 4 distinct benchmark-data root/path strings)
+test_d3_required_outputs_are_produced[step24]
+    step 24 (🔁 IR Drop (static + dynamic)) declares 4 required_outputs; 4 are NOT produced:
+    (cites 1 distinct benchmark-data root/path strings)
+test_d3_required_outputs_are_produced[step25]
+    step 25 (🔁 EM check (electromigration lifetime)) declares 4 required_outputs; 4 are NOT produced:
+    (cites 1 distinct benchmark-data root/path strings)
+test_d3_required_outputs_are_produced[step26]
+    step 26 (🔁 Antenna check (gate-oxide protection)) declares 3 required_outputs; 3 are NOT produced:
+    (cites 1 distinct benchmark-data root/path strings)
+test_d3_required_outputs_are_produced[step27]
+    step 27 (🔁 Signal Integrity (Crosstalk / Noise / Glitch + MCF crosstalk-delay)) declares 2 required_outputs; 2 are NOT produced:
+    (cites 1 distinct benchmark-data root/path strings)
+test_d3_required_outputs_are_produced[step28]
+    step 28 (🔁 PERC / Reliability sign-off (ESD + latch-up + cross-domain)) declares 4 required_outputs; 4 are NOT produced:
+    (cites 2 distinct benchmark-data root/path strings)
+test_d3_required_outputs_are_produced[step29]
+    step 29 (Post-Layout Gate-Level Simulation (Post-Sim + SDF)) declares 2 required_outputs; 2 are NOT produced:
+    (cites 1 distinct benchmark-data root/path strings)
+test_d3_required_outputs_are_produced[step31]
+    step 31 (🔁 Physical Verification (DRC + LVS + ERC + Density)) declares 9 required_outputs; 9 are NOT produced:
+    (cites 2 distinct benchmark-data root/path strings)
+test_d3_required_outputs_are_produced[step33]
+    step 33 (Power analysis (pre/post-layout)) declares 2 required_outputs; 2 are NOT produced:
+    (cites 1 distinct benchmark-data root/path strings)
+test_d3_required_outputs_are_produced[step34]
+    step 34 (Metal Fill (ECO-aware density fill insertion)) declares 3 required_outputs; 3 are NOT produced:
+    (cites 2 distinct benchmark-data root/path strings)
+test_d3_required_outputs_are_produced[step35]
+    step 35 (DFM screen (CMP density + redundant-via ratio + foundry-side OPC/RET disclosure)) declares 1 required_outputs; 1 are NOT produced:
+    (cites 1 distinct benchmark-data root/path strings)
+test_d3_required_outputs_are_produced[step36]
+    step 36 (Tapeout checklist (final sign-off confirmation)) declares 1 required_outputs; 1 are NOT produced:
+    (cites 1 distinct benchmark-data root/path strings)
+test_d3_required_outputs_are_produced[step37]
+    step 37 (GDSII output (only if Step 31 PV fully clean)) declares 2 required_outputs; 2 are NOT produced:
+    (cites 1 distinct benchmark-data root/path strings)
+test_d3_required_outputs_are_produced[step38]
+    step 38 (Foundry Handoff (mask spec + WAT plan + scribe layout + corner test kit)) declares 5 required_outputs; 5 are NOT produced:
+    (cites 3 distinct benchmark-data root/path strings)
+test_d3_run_root_discovery_is_live
+    these run roots are recorded as evidence but resolve in none of the trees searched — this repository (/home/reyerchu/_d3wt), the corpus named by VIBE_IC_BENCHMARK_DATA (/home/reyerchu/_bd_clean): ['benchmark-data/ic/cara
+    (cites 10 distinct benchmark-data root/path strings)
+test_d3_waived_steps_still_produce_their_unwaived_entries
+    entries of a WAIVED step that are NOT part of its waiver have regressed:
+    (cites 2 distinct benchmark-data root/path strings)
+test_d3_the_compliance_audit_does_not_create_declared_outputs
+    the self-certification probe drives 'benchmark-data/ic/u_hawaii_adc', which lives in this repository and must resolve; it did not
+    (cites 1 distinct benchmark-data root/path strings)
+test_d3_zero_byte_artefacts_are_not_counted_as_produced
+    no admissible run root resolved on the source tree, so discovery is broken; see test_d3_run_root_discovery_is_live
+    (cites 0 distinct benchmark-data root/path strings)
+test_d3_unevidenced_cells_are_named_cell_by_cell
+    the set of dimension-3 cells with an UNEVIDENCED entry changed: measured ['0.5ic', '1', '10', '11', '12', '13', '14', '15', '16', '17', '18', '19', '2', '20', '21', '22', '23', '24', '25', '26', '27', '28', '29', '3', '3
+    (cites 0 distinct benchmark-data root/path strings)
+test_d3_the_cost_of_closing_the_unevidenced_class_is_measured
+    the cost of closing the unevidenced class moved: measured 3902907 B over 129 entr(ies), pinned 1893 B.
+    (cites 0 distinct benchmark-data root/path strings)
+test_d3_the_unevidenced_population_is_split_by_which_gap_it_has
+    the UNEVIDENCED-without-a-producer population changed.
+    (cites 0 distinct benchmark-data root/path strings)
+test_d3_the_ledger_binding_is_exercised_by_the_repos_own_evidence
+    no admissible in-repo run root resolves here, so this measurement would be vacuous; that is a run-root discovery failure, not a pass
+    (cites 0 distinct benchmark-data root/path strings)
+test_d3_a_committed_ledger_can_be_refuted_by_its_own_commit
+    the published spm cell does not resolve here; this control needs a real published tree, not a synthetic one
+    (cites 0 distinct benchmark-data root/path strings)
+test_d3_no_committed_ledger_was_captured_from_a_checkout
+    no run roots enumerated at all — this guard measured NOTHING, which is not the same as finding nothing
+    (cites 0 distinct benchmark-data root/path strings)
