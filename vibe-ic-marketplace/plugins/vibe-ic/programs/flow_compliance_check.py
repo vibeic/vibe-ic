@@ -2619,7 +2619,7 @@ def _output_claim_matches(declared: str, missing_patterns: List[str]) -> bool:
 # code path from emitting it. The gate still honoured it and step 29 came out
 # SKIPPED-CONDITION instead of MISSING. The producer-side half of that defect
 # was fixed where it belongs (phase3_one_shot_runner._SDF_SIM_CAP_GAPS now
-# hands out a flag only for the two genuinely-open gaps); what stayed open was
+# hands out a flag only for an observed missing simulator); what stayed open was
 # the GENERIC vector: nothing stopped the NEXT marker — or a hand-edited one —
 # from minting `cap:anything` and being believed.
 #
@@ -2738,21 +2738,14 @@ _DECLARED_CAPABILITY_GAP_FLAGS: Mapping[str, Tuple[str, ...]] = MappingProxyType
     # `verilator_coverage_measure` prints it on its own waiver exit.
     "cap:verilator_coverage_toolchain": (),
     # --- phase3 / phase3_one_shot_runner ---------------------------------
-    # The built-in gate-sim testbench generator binds exactly one port
-    # contract and this design's top ports do not match it. Step 29 only.
-    "cap:sdf_gatelevel_tb_port_contract": (
+    # The execution environment lacks the gate-level simulator executables.
+    # A missing TB/model/SDF/netlist or a failed invocation is not eligible.
+    "cap:sdf_gatelevel_simulator_toolchain": (
         "phase3/stage3/sim_postlayout/results.log",
         "phase3/stage3/sim_postlayout/pass.flag",
     ),
-    # No stdcell Verilog simulation model resolves for this cell library.
-    # Step 29 only.
-    "cap:sdf_gatelevel_pdk_cell_model": (
-        "phase3/stage3/sim_postlayout/results.log",
-        "phase3/stage3/sim_postlayout/pass.flag",
-    ),
-    # Critical-path SPICE correlation needs an extracted transistor netlist +
-    # analog stimulus + device models (an analog/mixed-signal capability).
-    # Step 30 only.
+    # The execution environment genuinely lacks ngspice. Missing models,
+    # netlist/SPEF/STA inputs, or a failed run are not eligible. Step 30 only.
     "cap:post_layout_spice_correlation": (
         "phase3/stage3/spice/correlation.json",
         "reports/phase3/spice_correlation.json",

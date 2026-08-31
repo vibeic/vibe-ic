@@ -42,6 +42,7 @@ import argparse
 import json
 import os
 import re
+import shlex
 import sys
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
@@ -84,6 +85,9 @@ _ANNOT_RE = re.compile(r"Created a vpiInterModPath")
 _RESULT_RE = re.compile(r"GATE_SIM_RESULT\s+(PASS|FAIL)\s+(\d+)/(\d+)")
 _LOCK_RE = re.compile(r"locked:\s*order=(\w+)\s+latency=(\d+)")
 _CALFAIL_RE = re.compile(r"CALIBRATION_FAIL")
+_ORACLE_RESULT_RE = re.compile(r"ORACLE_TB_DONE\s+pass=(\d+)/(\d+)")
+_GENERIC_PASS_RE = re.compile(
+    r"(?:PROTOCOL_REFERENCE_TB_PASS|PROFESSIONAL_TB_PASS|REFERENCE_TB_PASS)\b")
 # same contract post_layout_sim_check.py enforces: a results.log line that
 # starts (after optional whitespace / "** ") with FATAL or ERROR fails the gate.
 _FATAL_LINE_RE = re.compile(r"^\s*(\*\*\s*)?(FATAL|ERROR)\b", re.IGNORECASE | re.MULTILINE)
@@ -104,6 +108,28 @@ def parse_sim_stdout(text: str) -> Dict[str, object]:
         "total": int(res.group(3)) if res else 0,
     }
     return out
+
+
+def parse_self_check_stdout(text: str) -> Dict[str, object]:
+    """Parse a Phase-2 self-checking testbench transcript.
+
+    A reusable testbench is accepted only when it emits an established,
+    machine-readable self-check marker.  Mere simulator exit zero is not a
+    functional verdict.
+    """
+    oracle = _ORACLE_RESULT_RE.search(text or "")
+    if oracle:
+        passed, total = int(oracle.group(1)), int(oracle.group(2))
+        return {
+            "verdict": "PASS" if total > 0 and passed == total else "FAIL",
+            "passed": passed,
+            "total": total,
+            "marker": "ORACLE_TB_DONE",
+        }
+    if _GENERIC_PASS_RE.search(text or ""):
+        return {"verdict": "PASS", "passed": 1, "total": 1,
+                "marker": _GENERIC_PASS_RE.search(text).group(0)}
+    return {"verdict": None, "passed": 0, "total": 0, "marker": None}
 
 
 def _curate_transcript(sim_stdout: str) -> str:
@@ -484,6 +510,29 @@ def resolve_cell_models(project: Path, used_cells: set,
     paths = _pcm.container_model_paths(pdk_id)
     if not paths:
         return None
+    def _run_argv(argv, timeout):
+        quoted = " ".join(shlex.quote(str(x)) for x in argv)
+        r = _docker(container, quoted, timeout=timeout)
+        clean = "\n".join(line for line in (r.stdout or "").splitlines()
+                            if not line.startswith("[INFO]"))
+        return r.returncode, clean, r.stderr or ""
+    # The shared materializer is a no-op for stable paths and substitutes a
+    # live content-addressed directory only when the model table contains its
+    # known fallback token.  No PDK identity is encoded at this call site.
+    paths = _pcm.materialize_gf180_paths(paths, _run_argv)
+    # Some model families keep UDP definitions in a co-located primitives
+    # file; prepend any such companion when the live image supplies it.
+    companions = []
+    for model_path in paths:
+        companion = model_path.rsplit("/", 1)[0] + "/primitives.v"
+        probe = _docker(container, f"test -s {shlex.quote(companion)}",
+                        timeout=60)
+        clean_probe = "\n".join(
+            line for line in (probe.stdout or "").splitlines()
+            if not line.startswith("[INFO]"))
+        if probe.returncode == 0 and not clean_probe.strip():
+            companions.append(companion)
+    paths = companions + [p for p in paths if p not in companions]
     text = _read_container_files(container, paths)
     if not text:
         return None
@@ -540,6 +589,203 @@ def missing_empty_cell_stubs(text: str, used: set, pdk_text: str) -> List[str]:
     pdk_defined = set(_MODULE_RE.findall(pdk_text))
     empty_cells = set(m.group(1) for m in _EMPTY_INST_RE.finditer(text))
     return sorted((used & empty_cells) - pdk_defined)
+
+
+# Established Phase-2 testbenches are the first choice for Step 29.  The
+# ordering prefers oracle/reference benches over connectivity-only full-stack
+# benches; each candidate must instantiate the actual top and carry a
+# machine-readable self-check marker.
+_TB_MODULE_RE = re.compile(r"(?m)^\s*module\s+([A-Za-z_][\w$]*)\b")
+
+
+def _tb_dut_instance(text: str, top: str) -> Optional[str]:
+    m = re.search(r"(?m)^\s*" + re.escape(top)
+                  + r"\s+([A-Za-z_][\w$]*)\s*\(", text or "")
+    return m.group(1) if m else None
+
+
+def find_reusable_testbench(project: Path, top: str) -> Optional[Dict[str, object]]:
+    """Find an existing self-checking Phase-2 Verilog testbench for ``top``."""
+    roots = [
+        project / "phase2/stage1/sim_full_stack",
+        project / "phase2/stage1/sim/tb",
+        project / "phase2/stage1/sim",
+    ]
+    candidates: List[Path] = []
+    for root in roots:
+        if root.is_dir():
+            candidates.extend(sorted(root.glob("*.v")))
+            candidates.extend(sorted(root.glob("*.sv")))
+    def _rank(path: Path) -> Tuple[int, str]:
+        name = path.name.lower()
+        return (0 if "oracle" in name else 1 if "reference" in name else 2,
+                name)
+    for path in sorted(set(candidates), key=_rank):
+        try:
+            text = path.read_text(errors="replace")
+        except OSError:
+            continue
+        inst = _tb_dut_instance(text, top)
+        module = _TB_MODULE_RE.search(text)
+        has_contract = bool(re.search(r"ORACLE_TB_DONE|"
+                                      r"PROTOCOL_REFERENCE_TB_PASS|"
+                                      r"PROFESSIONAL_TB_PASS|REFERENCE_TB_PASS",
+                                      text))
+        if inst and module and has_contract:
+            return {"path": path, "text": text, "module": module.group(1),
+                    "dut_instance": inst}
+    return None
+
+
+def inject_sdf_annotation(tb_text: str, tb_module: str, dut_instance: str,
+                          sdf_path: str) -> str:
+    """Inject one SDF annotation initial block into an existing testbench."""
+    pat = re.compile(r"(?m)^(\s*module\s+" + re.escape(tb_module)
+                     + r"\b[^;]*;)")
+    statement = (f'\n  initial $sdf_annotate("{sdf_path}", '
+                 f'{dut_instance});  // Step 29 injected annotation')
+    out, count = pat.subn(r"\1" + statement, tb_text, count=1)
+    if count != 1:
+        raise ValueError(f"testbench module declaration not found: {tb_module}")
+    return out
+
+
+def _tool_pair_available(container: str) -> Optional[bool]:
+    try:
+        r = _docker(container, "command -v iverilog && command -v vvp", timeout=60)
+    except Exception:
+        return None
+    return r.returncode == 0 and len((r.stdout or "").splitlines()) >= 2
+
+
+def build_reused_results_log(meta: Dict[str, object], sim_stdout: str) -> str:
+    """Build BLOCKING Step-29 evidence for an existing self-checking bench."""
+    verdict = str(meta.get("verdict") or "")
+    lines = [
+        "SDF-annotated post-layout gate-level simulation (Step 29)",
+        f"design           : {meta.get('top')}",
+        f"netlist          : {meta.get('netlist')}",
+        f"cell library     : {meta.get('pdk_lib')}",
+        f"sdf file         : {meta.get('sdf')}",
+        f"testbench reused : {meta.get('testbench')}",
+        f"dut instance     : {meta.get('dut_instance')}",
+        f"self-check marker: {meta.get('marker')}",
+        f"vectors          : {meta.get('passed')}/{meta.get('total')}",
+        "",
+        "-- simulator transcript --",
+        _curate_transcript(sim_stdout),
+        "",
+    ]
+    if verdict == "PASS":
+        lines.append("VERDICT: PASS — existing self-checking testbench passed "
+                     "against the routed netlist with SDF annotation.")
+    else:
+        lines.append("VERDICT: FAIL — existing self-checking testbench did not "
+                     f"pass ({meta.get('passed')}/{meta.get('total')} vectors; "
+                     f"SDF interconnect records={meta.get('annotated_interconnect_delays')}; "
+                     f"reason={meta.get('failure_reason') or verdict or '?' }).")
+    return "\n".join(lines) + "\n"
+
+
+def _run_reused_testbench(project: Path, top: str, container: str,
+                           sim_dir: Path, netlist: Path, sdf: Path,
+                           models: CellModels, used: set,
+                           reusable: Dict[str, object], notes: list) \
+        -> Dict[str, object]:
+    """Compile and run one existing self-checking TB on the routed netlist."""
+    ntext = netlist.read_text(errors="replace")
+    stubs = missing_empty_cell_stubs(ntext, used, models.text)
+    stub_path = sim_dir / "phys_cell_stubs.v"
+    stub_path.write_text(
+        "// Physical-only cells omitted from functional PDK models.\n"
+        "`timescale 1ns/1ps\n"
+        + "".join(f"module {cell} (); endmodule\n" for cell in stubs))
+
+    tb_module = str(reusable["module"])
+    dut_instance = str(reusable["dut_instance"])
+    injected = inject_sdf_annotation(
+        str(reusable["text"]), tb_module, dut_instance, str(sdf))
+    tb_path = sim_dir / f"{tb_module}_sdf_reused.v"
+    tb_path.write_text(injected)
+    vvp = sim_dir / f"{top}_gatesim.vvp"
+    compile_flags = "-g2012 -ginterconnect"
+    cc = (f"cd {shlex.quote(str(sim_dir))} && "
+          f"iverilog {compile_flags} -s {shlex.quote(tb_module)} "
+          f"-o {shlex.quote(vvp.name)} {shlex.quote(tb_path.name)} "
+          f"{shlex.quote(str(netlist))} {shlex.quote(stub_path.name)} "
+          f"{models.arg} > compile.log 2>&1; echo RC=$?")
+    try:
+        cr = _docker(container, cc, timeout=600)
+    except Exception as exc:
+        return {"verdict": "ERROR", "reason": f"compile invoke: {exc}"}
+    if "RC=0" not in (cr.stdout or ""):
+        # A routed design with an existing self-checking bench is still a
+        # measured Step-29 attempt when the gate compiler rejects it.  Emit a
+        # named FAIL with the SDF record count; reserve ERROR for discovery or
+        # invocation failures where no subject was measured.
+        return {"verdict": "FAIL", "reason": "compile failed",
+                "annotated_interconnect_delays": len(_ANNOT_RE.findall(sdf.read_text(errors="replace"))),
+                "passed": 0, "total": 0}
+
+    rr = (f"cd {shlex.quote(str(sim_dir))} && vvp {shlex.quote(vvp.name)} "
+          "-sdf-info > sim_stdout.log 2> sim_stderr.log; echo RC=$?")
+    try:
+        run_result = _docker(container, rr, timeout=600)
+    except Exception as exc:
+        return {"verdict": "ERROR", "reason": f"sim invoke: {exc}"}
+    sim_stdout_path = sim_dir / "sim_stdout.log"
+    sim_stdout = sim_stdout_path.read_text(errors="replace") \
+        if sim_stdout_path.is_file() else ""
+    parsed = parse_self_check_stdout(sim_stdout)
+    stderr_path = sim_dir / "sim_stderr.log"
+    sim_stderr = stderr_path.read_text(errors="replace") \
+        if stderr_path.is_file() else ""
+    annotation_abort = ("NULL handle" in sim_stderr or
+                        "vpi_scan.cc" in sim_stderr or
+                        "vpi_iter.cc" in sim_stderr)
+    if parsed["verdict"] is None and annotation_abort:
+        parsed.update({"verdict": "FAIL", "marker": "SDF_ANNOTATION_ABORT",
+                       "failure_reason": "SDF annotation runtime abort"})
+    if "RC=0" not in (run_result.stdout or "") and parsed["verdict"] is None:
+        parsed["verdict"] = "ERROR"
+    if parsed["verdict"] is None:
+        parsed["verdict"] = "ERROR"
+
+    meta: Dict[str, object] = {
+        "top": top,
+        "netlist": str(netlist),
+        "pdk_lib": models.arg,
+        "pdk_lib_source": models.source,
+        "sdf": str(sdf),
+        "testbench": str(reusable["path"]),
+        "dut_instance": dut_instance,
+        "annotated_interconnect_delays": len(_ANNOT_RE.findall(sim_stdout)),
+        **parsed,
+    }
+    _aa.write_text(sim_dir / "results.log",
+                   build_reused_results_log(meta, sim_stdout))
+    _aa.write_text(sim_dir / "results.json", json.dumps({
+        "program": "sdf_gate_sim",
+        "version": "1.1.0",
+        "verdict": parsed["verdict"],
+        "self_check": {"marker": parsed["marker"],
+                       "passed": parsed["passed"], "total": parsed["total"]},
+        "annotated_interconnect_delays": meta["annotated_interconnect_delays"],
+        "artifacts": {"netlist": str(netlist), "sdf": str(sdf),
+                      "testbench_source": str(reusable["path"]),
+                      "testbench_injected": str(tb_path)},
+    }, indent=2, ensure_ascii=False) + "\n")
+    if parsed["verdict"] == "PASS":
+        _aa.write_text(sim_dir / "pass.flag",
+                       f"PASS {parsed['passed']}/{parsed['total']} "
+                       "(reused self-checking TB; SDF gate simulation)\n")
+    stale = sim_dir / "sdf_sim_skipped.json"
+    if stale.is_file():
+        stale.unlink()
+    notes.append("sdf_gate_sim: reused existing self-checking testbench; "
+                 f"{parsed['verdict']} ({parsed['passed']}/{parsed['total']})")
+    return {"verdict": parsed["verdict"], "meta": meta,
+            "results_log": str(sim_dir / "results.log")}
 
 
 # ---------------------------------------------------------------------------
@@ -628,16 +874,20 @@ def run(project, top: str = "spm", container: str = DEFAULT_CONTAINER,
         return {"verdict": "NOT_APPLICABLE", "reason": "no netlist"}
     ntext = netlist.read_text(errors="replace")
     used, ports = netlist_cells_and_ports(ntext, top)
-    portmap = _detect_serial_mult(ports)
-    if not portmap:
-        notes.append(f"sdf_gate_sim: {top} ports do not match the serial-"
-                     f"multiplier contract ({sorted(ports)}) — skipping")
-        return {"verdict": "NOT_APPLICABLE", "reason": "port shape"}
 
     sdf = find_sdf(project, top)
     if not sdf:
         notes.append("sdf_gate_sim: no real SDF found")
         return {"verdict": "NOT_APPLICABLE", "reason": "no sdf"}
+
+    tools_available = _tool_pair_available(container)
+    if tools_available is False:
+        notes.append("sdf_gate_sim: iverilog/vvp are absent from the execution "
+                     "environment")
+        return {"verdict": "NOT_APPLICABLE", "reason": "no simulator"}
+    if tools_available is None:
+        notes.append("sdf_gate_sim: simulator capability probe failed")
+        return {"verdict": "ERROR", "reason": "simulator probe failed"}
 
     models = resolve_cell_models(project, used, container)
     if not models:
@@ -647,9 +897,24 @@ def run(project, top: str = "spm", container: str = DEFAULT_CONTAINER,
                      f"{len(used)} distinct cells instantiated)")
         return {"verdict": "NOT_APPLICABLE", "reason": "no pdk lib"}
 
-    width = int(portmap["width"])
     sim_dir.mkdir(parents=True, exist_ok=True)
+    reusable = find_reusable_testbench(project, top)
+    if reusable is not None:
+        return _run_reused_testbench(
+            project, top, container, sim_dir, netlist, sdf, models, used,
+            reusable, notes)
 
+    # Compatibility fallback for older projects that predate the canonical
+    # self-checking Phase-2 oracle.  New designs are not constrained to this
+    # interface shape: absence of a reusable TB is a producer/input failure,
+    # never a platform capability gap.
+    portmap = _detect_serial_mult(ports)
+    if not portmap:
+        notes.append(f"sdf_gate_sim: no reusable self-checking testbench for "
+                     f"{top} and no compatible legacy generator ({sorted(ports)})")
+        return {"verdict": "ERROR", "reason": "no self-checking testbench"}
+
+    width = int(portmap["width"])
     # emit physical-cell stubs (fillers with no PDK model, empty port list)
     stubs = missing_empty_cell_stubs(ntext, used, models.text)
     stub_path = sim_dir / "phys_cell_stubs.v"
@@ -845,7 +1110,13 @@ def main(argv: Optional[list] = None) -> int:
     out = json.dumps(verdict.get("meta", verdict), indent=2, ensure_ascii=False)
     if args.json:
         Path(args.json).write_text(out)
-    print(f"VERDICT: {verdict.get('verdict')}")
+    if verdict.get("verdict") == "FAIL" and verdict.get("meta", verdict).get("annotated_interconnect_delays") is not None:
+        m = verdict.get("meta", verdict)
+        print("VERDICT: FAIL — SDF interconnect records="
+              f"{m.get('annotated_interconnect_delays')}; "
+              f"self-check vectors={m.get('passed')}/{m.get('total')}")
+    else:
+        print(f"VERDICT: {verdict.get('verdict')}")
     return 0 if verdict.get("verdict") == "PASS" else 1
 
 

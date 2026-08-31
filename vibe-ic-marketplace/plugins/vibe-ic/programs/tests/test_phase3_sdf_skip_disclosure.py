@@ -20,9 +20,9 @@ simulator or a missing routed netlist all came out looking like a disclosed
 platform gap.
 
 `_sdf_sim_skip_disclosure` now derives (capability_flag, reason) from what
-`sdf_gate_sim.run()` actually returned. Only two genuine gaps keep a flag; every
-real failure gets flag=None, which the #675-strict promoter refuses, so the step
-stays MISSING (red).
+`sdf_gate_sim.run()` actually returned. Only an observed missing simulator
+toolchain keeps a flag; every input/producer failure gets flag=None, which the
+#675-strict promoter refuses, so the step stays MISSING (red).
 """
 from __future__ import annotations
 
@@ -95,14 +95,11 @@ def test_sdf_present_but_producer_never_ran_is_a_runner_defect(tmp_path):
     assert "runner defect" in reason
 
 
-@pytest.mark.parametrize("reason_in,flag_out", [
-    ("port shape", "cap:sdf_gatelevel_tb_port_contract"),
-    ("no pdk lib", "cap:sdf_gatelevel_pdk_cell_model"),
-])
-def test_the_two_genuine_gaps_keep_a_named_flag(tmp_path, reason_in, flag_out):
+def test_the_genuine_missing_tool_gap_keeps_a_named_flag(tmp_path):
     flag, reason = p3._sdf_sim_skip_disclosure(
-        {"verdict": "NOT_APPLICABLE", "reason": reason_in}, _sdf(tmp_path))
-    assert flag == flag_out
+        {"verdict": "NOT_APPLICABLE", "reason": "no simulator"},
+        _sdf(tmp_path))
+    assert flag == "cap:sdf_gatelevel_simulator_toolchain"
     assert len(reason) > 60, "a cap-gap disclosure must name the gap"
 
 
@@ -111,8 +108,8 @@ def test_the_stale_false_capability_flag_is_gone():
     back-annotated sim. It can (v1.3.94+), so no code path may emit it."""
     for res in (None,
                 {"verdict": "ERROR", "reason": "compile failed"},
-                {"verdict": "NOT_APPLICABLE", "reason": "port shape"},
-                {"verdict": "NOT_APPLICABLE", "reason": "no pdk lib"},
+            {"verdict": "NOT_APPLICABLE", "reason": "no simulator"},
+            {"verdict": "ERROR", "reason": "no pdk lib"},
                 {"verdict": "NOT_APPLICABLE", "reason": "no sdf"}):
         flag, reason = p3._sdf_sim_skip_disclosure(res, Path("/nonexistent.sdf"))
         assert flag != "cap:sdf_annotated_gatelevel_sim"
@@ -140,11 +137,12 @@ def test_flagless_marker_is_refused_by_the_strict_promoter(tmp_path):
         tmp_path, list(_STEP29_OUTPUTS)) is None
 
     flag2, reason2 = p3._sdf_sim_skip_disclosure(
-        {"verdict": "NOT_APPLICABLE", "reason": "port shape"}, _sdf(tmp_path))
+        {"verdict": "NOT_APPLICABLE", "reason": "no simulator"},
+        _sdf(tmp_path))
     _marker(tmp_path, flag2, reason2)
     hint = fcc._declared_sibling_self_skip_for_missing(
         tmp_path, list(_STEP29_OUTPUTS))
-    assert hint and "cap:sdf_gatelevel_tb_port_contract" in hint
+    assert hint and "cap:sdf_gatelevel_simulator_toolchain" in hint
 
 
 # ── direction-1 guards: must PASS on BOTH trees ───────────────────────────
@@ -165,7 +163,7 @@ def guard_strict_promoter_still_requires_flag_and_ownership(tmp_path):
     the pre-registry tree — the registry's own contents are asserted in
     `test_capability_gap_flag_registry.py`.
     """
-    declared = "cap:sdf_gatelevel_tb_port_contract"
+    declared = "cap:sdf_gatelevel_simulator_toolchain"
     d = tmp_path / "phase3/stage3/sim_postlayout"
     d.mkdir(parents=True)
     # no capability_flag -> refused

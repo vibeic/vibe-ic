@@ -337,9 +337,8 @@ def test_every_producer_binding_is_honoured(tmp_path):
          ["reports/phase2/dft/sdd_coverage.json"]),
         ("cap:atpg_signoff_coverage", "phase2/stage2/dft",
          ["phase2/stage2/dft/coverage.json"]),
-        ("cap:sdf_gatelevel_tb_port_contract", "phase3/stage3/sim_postlayout",
-         list(_STEP29_OUTS)),
-        ("cap:sdf_gatelevel_pdk_cell_model", "phase3/stage3/sim_postlayout",
+        ("cap:sdf_gatelevel_simulator_toolchain",
+         "phase3/stage3/sim_postlayout",
          list(_STEP29_OUTS)),
         (_SPICE_CAP, "phase3/stage3/spice", list(_STEP30_OUTS)),
     ]

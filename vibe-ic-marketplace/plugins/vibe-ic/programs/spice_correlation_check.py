@@ -274,6 +274,26 @@ def check_critical_path_correlation(
     }
 
     corr = _check_spice_correlation_json(project)
+    if corr and isinstance(corr.get("correlation"), dict) \
+            and corr["correlation"].get("liberty_spef_cone_delay_ns"):
+        c = corr["correlation"]
+        stats["correlation_checked"] = True
+        stats["spice_paths_found"] = 1
+        stats["max_discrepancy_pct"] = abs(float(c.get("pct_error", 0.0)))
+        verdict = c.get("verdict")
+        severity = "ERROR" if verdict in (
+            "MISMATCH", "CRITICAL_MISMATCH") else "INFO"
+        findings.append(Finding(
+            rule="SPICE_STA_" + str(verdict or "UNKNOWN"),
+            severity=severity,
+            message=(
+                f"Critical path transistor simulation: "
+                f"SPICE={c.get('spice_path_delay_ns')}ns vs "
+                f"Liberty+SPEF={c.get('liberty_spef_cone_delay_ns')}ns "
+                f"({c.get('pct_error')}%; derived tolerance "
+                f"{c.get('tolerance_pct')}%) -> {verdict}"),
+        ))
+        return stats
     if corr and "paths" in corr:
         stats["correlation_checked"] = True
         paths = corr["paths"]
@@ -539,8 +559,17 @@ def parse_liberty_header(text: str) -> dict:
     if tu:
         base, unit = float(tu.group(1)), tu.group(2)
         tu_scale = {"s": 1e9, "us": 1e3, "ns": 1.0, "ps": 1e-3}[unit] * base
+    cap = re.search(
+        r"capacitive_load_unit\s*\(\s*([\d.]+)\s*,\s*(ff|pf|nf)\s*\)",
+        text, re.IGNORECASE)
+    cap_scale_pf = 1.0
+    if cap:
+        cap_scale_pf = float(cap.group(1)) * {
+            "ff": 1e-3, "pf": 1.0, "nf": 1e3,
+        }[cap.group(2).lower()]
     return {
         "time_unit_ns": tu_scale,
+        "cap_unit_pf": cap_scale_pf,
         "slew_lower_rise": _num(r"slew_lower_threshold_pct_rise\s*:\s*([\d.]+)", 30.0),
         "slew_upper_rise": _num(r"slew_upper_threshold_pct_rise\s*:\s*([\d.]+)", 70.0),
         "slew_lower_fall": _num(r"slew_lower_threshold_pct_fall\s*:\s*([\d.]+)", 30.0),
@@ -639,6 +668,105 @@ def bilinear(index_1: List[float], index_2: List[float],
     top = v00 + fy * (v01 - v00)
     bot = v10 + fy * (v11 - v10)
     return top + fx * (bot - top)
+
+
+def _local_grid_values(table: dict, x: float, y: float) -> List[float]:
+    """Four NLDM samples bracketing ``(x, y)`` (duplicates at edges)."""
+    def _indices(axis, value):
+        if value <= axis[0]:
+            return 0, 0
+        if value >= axis[-1]:
+            last = len(axis) - 1
+            return last, last
+        for i in range(len(axis) - 1):
+            if axis[i] <= value <= axis[i + 1]:
+                return i, i + 1
+        last = len(axis) - 1
+        return last, last
+    i0, i1 = _indices(table["index_1"], x)
+    j0, j1 = _indices(table["index_2"], y)
+    values = table["values"]
+    return [values[i0][j0], values[i0][j1],
+            values[i1][j0], values[i1][j1]]
+
+
+def _timing_blocks(cell_block: str) -> List[str]:
+    out = []
+    for m in re.finditer(r"\btiming\s*\([^)]*\)\s*\{", cell_block or ""):
+        out.append(_match_brace_block(cell_block, m.start()))
+    return out
+
+
+def derive_liberty_path_tolerance(liberty_text: str, stages: List[dict],
+                                  expected_ns: float) -> Optional[dict]:
+    """Derive path tolerance from the exact NLDM grid cells STA sampled.
+
+    Each stage contributes half the range of its four surrounding
+    characterization samples.  Summing those interpolation resolutions gives
+    a conservative path-level uncertainty without a tuned percentage, PDK
+    constant, or design-specific exception.
+    """
+    if expected_ns <= 0 or not stages:
+        return None
+    hdr = parse_liberty_header(liberty_text)
+    contributions = []
+    total_uncertainty_ns = 0.0
+    for stage in stages:
+        cell_block = extract_cell_block(liberty_text, stage["cell"])
+        if not cell_block:
+            return None
+        related = stage["toggle_pin"]
+        timing = None
+        for block in _timing_blocks(cell_block):
+            rel = re.search(r'related_pin\s*:\s*"?([^";]+)', block)
+            if rel and related in rel.group(1).split():
+                timing = block
+                break
+        if timing is None:
+            return None
+        table_name = "cell_fall" if stage.get("transition") == "fall" \
+            else "cell_rise"
+        table = parse_nldm_table(timing, table_name)
+        if not table:
+            return None
+        slew = stage.get("input_slew_ns")
+        if slew is None:
+            slew = table["index_1"][len(table["index_1"]) // 2]
+        load_pf = stage.get("sta_load_pf")
+        if load_pf is None:
+            load_pf = stage.get("wire_cap_pf", 0.0)
+        load_axis = load_pf / max(hdr["cap_unit_pf"], 1e-30)
+        samples = _local_grid_values(table, float(slew), float(load_axis))
+        uncertainty_ns = 0.5 * (max(samples) - min(samples)) \
+            * hdr["time_unit_ns"]
+        total_uncertainty_ns += uncertainty_ns
+        contributions.append({
+            "stage": stage["inst"],
+            "cell": stage["cell"],
+            "table": table_name,
+            "input_slew_ns": round(float(slew), 9),
+            "load_pf": round(float(load_pf), 9),
+            "local_grid_half_range_ns": round(uncertainty_ns, 9),
+        })
+    return {
+        "method": "sum_of_local_nldm_grid_half_ranges",
+        "uncertainty_ns": round(total_uncertainty_ns, 9),
+        "tolerance_pct": total_uncertainty_ns / expected_ns * 100.0,
+        "contributions": contributions,
+    }
+
+
+def path_correlation_verdict(pct_error: float, tolerance_pct: float) -> str:
+    """Classify with the derived tolerance; twice it is critical severity."""
+    err = abs(pct_error)
+    critical = 2.0 * tolerance_pct
+    if err > critical and not math.isclose(err, critical, rel_tol=1e-12,
+                                           abs_tol=1e-12):
+        return "CRITICAL_MISMATCH"
+    if err > tolerance_pct and not math.isclose(
+            err, tolerance_pct, rel_tol=1e-12, abs_tol=1e-12):
+        return "MISMATCH"
+    return "CORRELATED"
 
 
 # ───────────────── extracted-netlist subckt extraction (pure) ─────────────────
@@ -785,6 +913,112 @@ def _run_ngspice_in(container: str, cwd_dir: str, deck_path: str,
     except Exception as e:  # pragma: no cover - env dependent
         return False, f"docker/ngspice invocation failed: {e}"
     return cp.returncode == 0, cp.stdout
+
+
+def _container_stdout(container: str, command: str,
+                      timeout: int = 120) -> Optional[str]:
+    try:
+        cp = _pr.run(["docker", "exec", container, "bash", "-lc", command],
+                     capture_output=True, text=True)
+    except Exception:
+        return None
+    return cp.stdout if cp.returncode == 0 else None
+
+
+def _read_container_text(container: str, path: str) -> Optional[str]:
+    return _container_stdout(container, f"cat {shlex.quote(path)}", timeout=180)
+
+
+def select_model_section(entries: List[Tuple[str, str]],
+                         liberty_path: str) -> Optional[Tuple[str, str]]:
+    """Choose the model section matching the active Liberty process token.
+
+    The choice is semantic and data-driven: tokens such as ``tt`` in the
+    Liberty filename prefer the corresponding central/typical model section.
+    No PDK, foundry, library, or design name is encoded here.
+    """
+    if not entries:
+        return None
+    central = {"tt", "typ", "typical", "nom", "nominal"}
+    process = central | {"ff", "ss", "fs", "sf", "fast", "slow"}
+    lib_tokens = set(re.split(r"[^a-z]+", Path(liberty_path).stem.lower())) \
+        & process
+    wants_central = bool(lib_tokens & central)
+    scored = []
+    for path, section in entries:
+        section_tokens = set(re.findall(r"[a-z]+", section.lower()))
+        score = 0
+        if lib_tokens & section_tokens:
+            score += 20
+        if wants_central and section_tokens & central:
+            score += 10
+        score -= len(path) / 10000.0
+        scored.append((score, path, section))
+    _score, path, section = max(scored)
+    return path, section
+
+
+def discover_installed_pdk_sources(container: str, liberty_path: str,
+                                   required_cells: set) -> Optional[dict]:
+    """Discover standard-cell SPICE + device model section beside Liberty."""
+    marker = "/libs.ref/"
+    if marker not in liberty_path:
+        return None
+    pdk_root = liberty_path.split(marker, 1)[0]
+    cell_root = str(Path(liberty_path).parent.parent)
+    find_cells = (
+        f"find {shlex.quote(cell_root)} -type f "
+        r"\( -name '*.spice' -o -name '*.sp' -o -name '*.cir' \) "
+        "-path '*/spice/*' -print")
+    cell_files = [line.strip() for line in
+                  (_container_stdout(container, find_cells) or "").splitlines()
+                  if line.strip().startswith("/")]
+    best = None
+    for path in sorted(cell_files):
+        text = _read_container_text(container, path)
+        if not text:
+            continue
+        names = set(re.findall(r"(?im)^\s*\.subckt\s+(\S+)", text))
+        score = len(names & required_cells)
+        if score and (best is None or score > best[0]):
+            best = (score, path, text, names)
+    if best is None:
+        return None
+
+    model_root = pdk_root + "/libs.tech/ngspice"
+    scan = (
+        f"find {shlex.quote(model_root)} -type f "
+        r"\( -name '*.spice' -o -name '*.sp' -o -name '*.lib' \) "
+        r"-exec grep -Him 24 -E '^[[:space:]]*[.]lib[[:space:]]+"
+        r"[A-Za-z0-9_]+' {} + 2>/dev/null")
+    raw = _container_stdout(container, scan, timeout=180) or ""
+    entries: List[Tuple[str, str]] = []
+    for line in raw.splitlines():
+        m = re.match(r"^([^:]+):\s*\.lib\s+([A-Za-z0-9_]+)\s*$", line,
+                     re.IGNORECASE)
+        if m:
+            entries.append((m.group(1), m.group(2)))
+    model = select_model_section(entries, liberty_path)
+    if model is None:
+        return None
+    prelude_scan = (
+        f"for f in {shlex.quote(model_root)}/*.spice "
+        f"{shlex.quote(model_root)}/*.sp; do "
+        "test -f \"$f\" || continue; "
+        "grep -qiE '^[[:space:]]*[.]param[[:space:]]+' \"$f\" || continue; "
+        "grep -qiE '^[[:space:]]*[.]lib[[:space:]]+' \"$f\" && continue; "
+        "printf '%s\\n' \"$f\"; done")
+    preludes = sorted(line.strip() for line in
+                      (_container_stdout(container, prelude_scan) or "").splitlines()
+                      if line.strip().startswith("/"))
+    return {
+        "cell_spice": best[1],
+        "cell_text": best[2],
+        "subckt_names": best[3],
+        "model_file": model[0],
+        "model_section": model[1],
+        "model_preludes": preludes,
+    }
 
 
 # ─────────────────────────── driver orchestrator ───────────────────────────
@@ -965,6 +1199,19 @@ _INVERTING_RE = re.compile(r"^(?:INV|NAND|NOR|XNOR|AOI|OAI|IMUX|MXI|IND)",
                            re.IGNORECASE)
 
 
+def _cell_family(cell: str) -> str:
+    """Library-prefix-independent cell family token (pure)."""
+    token = (cell or "").split("__")[-1]
+    token = re.sub(r"(?:_[0-9]+|_[xX][0-9]+)$", "", token)
+    family = re.compile(
+        r"^(?:inv|buf|nand|nor|and|or|xor|xnor|aoi|oai|mux|mxi|imux|"
+        r"s?dff|dfr|df|dla|dlh|dll|lat|lsr)", re.IGNORECASE)
+    for part in re.split(r"_+", token):
+        if family.match(part):
+            return part
+    return token
+
+
 def normalize_mos_bulk(body: str, vss: str = "VSS", vdd: str = "VDD") -> str:
     """Rebind every MOSFET bulk (4th node) to the cell rails: nmos→VSS, pmos→
     VDD (pure). The LVS-extracted netlist ties each device bulk to its LOCAL
@@ -1008,12 +1255,12 @@ def _subckt_device_lines(body: str) -> str:
 
 def cell_inverts(cell: str) -> bool:
     """True if the cell inverts its combinational arc polarity (pure)."""
-    return bool(_INVERTING_RE.match(cell or ""))
+    return bool(_INVERTING_RE.match(_cell_family(cell)))
 
 
 def is_sequential_cell(cell: str) -> bool:
     """True for flops/latches — never stitched as a combinational stage (pure)."""
-    return bool(_SEQ_CELL_RE.match(cell or ""))
+    return bool(_SEQ_CELL_RE.match(_cell_family(cell)))
 
 
 def tie_value_for_cell(cell: str) -> str:
@@ -1022,7 +1269,7 @@ def tie_value_for_cell(cell: str) -> str:
     XOR/XNOR → tie low (passes/inverts the other input). Complex families
     (AOI/OAI/MUX) default high; a wrong guess is caught by the swing backstop,
     never fabricated."""
-    u = (cell or "").upper()
+    u = _cell_family(cell).upper()
     if u.startswith(("XOR", "XNOR", "NOR", "OR")):
         return "0"
     return "vdd"
@@ -1033,6 +1280,9 @@ def tie_value_for_cell(cell: str) -> str:
 _STA_ROW_RE = re.compile(
     r"^\s*([\d.]+)\s+([\d.]+)\s+([v^])\s+(\S+)\s+\(([\w\[\]]+)\)\s*$",
     re.MULTILINE)
+_STA_ROW_DETAIL_RE = re.compile(
+    r"^\s*([\d.]+)\s+([\d.]+)\s+([\d.]+)\s+([\d.]+)\s+"
+    r"([v^])\s+(\S+)\s+\(([\w\[\]]+)\)\s*$")
 
 
 def parse_sta_path(text: str) -> Optional[dict]:
@@ -1040,15 +1290,29 @@ def parse_sta_path(text: str) -> Optional[dict]:
     path (pure). Returns {startpoint, endpoint, start_time_ns, end_time_ns,
     path_delay_ns, endpoint_transition, rows:[{incr,time,tr,pin,inst,cell}]}.
     rows are the DATA rows that carry a `(CELL)`/`(in)`/`(out)` tag, in order."""
-    sp = re.search(r"^Startpoint:\s+(\S+)", text, re.MULTILINE)
+    starts = list(re.finditer(r"^Startpoint:\s+(\S+)", text, re.MULTILINE))
+    if len(starts) > 1:
+        text = text[:starts[1].start()]
+        starts = starts[:1]
+    sp = starts[0] if starts else None
     ep = re.search(r"^Endpoint:\s+(\S+)", text, re.MULTILINE)
     rows: List[dict] = []
-    for m in _STA_ROW_RE.finditer(text):
-        incr, time_, tr, pin, cell = m.groups()
+    for line in (text or "").splitlines():
+        detailed = _STA_ROW_DETAIL_RE.match(line)
+        simple = _STA_ROW_RE.match(line) if detailed is None else None
+        if detailed:
+            cap, slew, incr, time_, tr, pin, cell = detailed.groups()
+        elif simple:
+            incr, time_, tr, pin, cell = simple.groups()
+            cap = slew = None
+        else:
+            continue
         inst = pin.split("/")[0] if "/" in pin else pin
         rows.append({
             "incr": float(incr), "time": float(time_), "tr": tr,
             "pin": pin, "inst": inst, "cell": cell,
+            "cap_pf": float(cap) if cap is not None else None,
+            "slew_ns": float(slew) if slew is not None else None,
         })
     if not rows:
         return None
@@ -1104,7 +1368,9 @@ def parse_verilog_instances(vtext: str) -> dict:
     inst_map: dict = {}
     for m in _INST_RE.finditer(vtext):
         cell, inst, blob = m.group(1), m.group(2), m.group(3)
-        conns = {p: n.strip() for p, n in _CONN_RE.findall(blob)}
+        inst = inst.strip().lstrip("\\")
+        conns = {p: n.strip().lstrip("\\")
+                 for p, n in _CONN_RE.findall(blob)}
         if conns:
             inst_map[inst] = {"cell": cell, "conns": conns}
     return inst_map
@@ -1198,10 +1464,19 @@ def resolve_path_stages(sta_path: dict, inst_map: dict, spef_caps: dict,
             toggle_pin = ins[0] if ins else None
         if toggle_pin is None or out_net is None:
             return None
+        row_index = sta_path["rows"].index(r)
+        prior_slew = next(
+            (pr.get("slew_ns") for pr in reversed(sta_path["rows"][:row_index])
+             if pr.get("slew_ns") is not None), None)
         stages.append({
             "inst": inst, "cell": r["cell"], "toggle_pin": toggle_pin,
             "out_pin": out_pin, "out_net": out_net,
             "wire_cap_pf": spef_caps.get(out_net, 0.0),
+            "sta_delay_ns": r["incr"],
+            "input_slew_ns": prior_slew,
+            "output_slew_ns": r.get("slew_ns"),
+            "sta_load_pf": r.get("cap_pf"),
+            "transition": "fall" if r["tr"] == "v" else "rise",
         })
         prev_net = out_net
 
@@ -1313,6 +1588,85 @@ def build_path_deck(shim_abs: str, corner: str, stages: List[dict],
     return "\n".join(deck)
 
 
+def _installed_pin_node(pin: str, stage: dict, input_node: str,
+                        output_node: str) -> str:
+    up = pin.upper()
+    if pin == stage["toggle_pin"]:
+        return input_node
+    if pin == stage["out_pin"]:
+        return output_node
+    if up in ("VSS", "GND", "VGND", "VPW", "VNB", "VPB"):
+        return "0"
+    if up in ("VDD", "VCC", "VPWR", "VNW"):
+        return "vdd"
+    family = _cell_family(stage["cell"]).upper()
+    toggle = stage["toggle_pin"].upper()
+    if family.startswith(("MUX", "MXI", "IMUX")):
+        is_select = bool(re.match(r"^(?:S|SEL|SELECT)[0-9]*$", up))
+        if is_select:
+            return "vdd" if re.search(r"(?:1|B)$", toggle) else "0"
+        if re.match(r"^(?:S|SEL|SELECT)[0-9]*$", toggle):
+            return "vdd" if re.search(r"(?:1|B)$", up) else "0"
+    return tie_value_for_cell(stage["cell"])
+
+
+def build_installed_path_deck(model_file: str, model_section: str,
+                              model_preludes: List[str],
+                              cell_spice: str, stages: List[dict],
+                              subckts: dict, vdd: float, tr_ns: float,
+                              temp_c: float, vth: float,
+                              endpoint_load_pf: float) -> str:
+    """Build a path deck referencing installed PDK sources, never copying them."""
+    n = len(stages)
+    def out_node(i):
+        return "pout" if i == n - 1 else f"n{i}"
+    def in_node(i):
+        return "a" if i == 0 else out_node(i - 1)
+
+    body, caps = [], []
+    parity = False
+    for i, stage in enumerate(stages):
+        pins, _raw = subckts[stage["cell"]]
+        nodes = [_installed_pin_node(p, stage, in_node(i), out_node(i))
+                 for p in pins]
+        body.append(f"xpath{i} {' '.join(nodes)} {stage['cell']}")
+        wire = float(stage.get("wire_cap_pf") or 0.0)
+        extra = wire + (endpoint_load_pf - wire if i == n - 1 else 0.0)
+        if extra > 0:
+            caps.append(f"cpath{i} {out_node(i)} 0 {extra * 1e3:g}f")
+        if cell_inverts(stage["cell"]):
+            parity = not parity
+
+    td = 2.0
+    pw = max(8.0, 24.0 * tr_ns)
+    period = 2.0 * (td + tr_ns + pw)
+    stop = period * 1.2
+    step = max(0.001, tr_ns / 100.0)
+    fall_trigger = "RISE" if parity else "FALL"
+    rise_trigger = "FALL" if parity else "RISE"
+    lines = [
+        "* STA critical-path transistor-level correlation",
+        *(f".include '{path}'" for path in model_preludes),
+        f".lib '{model_file}' {model_section}",
+        f".include '{cell_spice}'",
+        f".temp {temp_c:g}",
+        f"vdd vdd 0 {vdd:g}",
+        f"vin a 0 pulse(0 {vdd:g} {td:g}n {tr_ns:g}n {tr_ns:g}n "
+        f"{pw:g}n {period:g}n)",
+        *body,
+        *caps,
+        f".tran {step:g}n {stop:g}n",
+        f".meas tran tpd_fall TRIG v(a) VAL='{vth:g}' {fall_trigger}=1 "
+        f"TARG v(pout) VAL='{vth:g}' FALL=1",
+        f".meas tran tpd_rise TRIG v(a) VAL='{vth:g}' {rise_trigger}=1 "
+        f"TARG v(pout) VAL='{vth:g}' RISE=1",
+        ".meas tran vpout_max MAX v(pout)",
+        ".meas tran vpout_min MIN v(pout)",
+        ".end",
+    ]
+    return "\n".join(lines) + "\n"
+
+
 _PATH_MEAS_RE = re.compile(
     r"^\s*(tpd_fall|tpd_rise|vpout_max|vpout_min)\s*=\s*"
     r"([\-+]?[0-9.]+(?:[eE][\-+]?\d+)?)", re.MULTILINE | re.IGNORECASE)
@@ -1354,10 +1708,6 @@ def _pick_sta_report(project: Path, subckt_names: set) -> Optional[Path]:
 
 def _find_gate_netlist(project: Path) -> Optional[Path]:
     """Locate the routed gate-level Verilog netlist."""
-    for rel in ("phase3/stage3/pnr/spm_pnr.v",):
-        p = project / rel
-        if p.is_file():
-            return p
     pnr = project / "phase3" / "stage3" / "pnr"
     if pnr.is_dir():
         vs = sorted(pnr.glob("*_pnr.v")) or sorted(pnr.glob("*.v"))
@@ -1525,6 +1875,146 @@ def _path_correlation_json_path(project: Path) -> Path:
 def _check_path_correlation_json(project: Path) -> Optional[dict]:
     """Load spice_path_correlation.json if already produced."""
     return _load_json(_path_correlation_json_path(project))
+
+
+def run_installed_pdk_path_correlation(
+    project: Path,
+    liberty_path: str,
+    container: str = _DEFAULT_CONTAINER,
+    max_stages: int = 12,
+) -> dict:
+    """Run the BLOCKING Step 30 check from the active installed PDK.
+
+    The active Liberty path is supplied by the Phase-3 PDK configuration.  Its
+    sibling cell SPICE and device-model section are discovered at runtime.
+    Only a genuinely absent ngspice executable returns ``NO_TOOL``; every
+    missing input, parse failure, non-swinging deck, or simulator failure is an
+    ``ERROR`` and cannot be promoted to a capability-gap skip.
+    """
+    project = Path(project)
+    if _resolve_ngspice(container) is None:
+        return {"status": "NO_TOOL", "reason": "ngspice executable absent"}
+    liberty_text = _read_container_text(container, liberty_path)
+    if not liberty_text:
+        return {"status": "ERROR", "reason": "active Liberty unreadable"}
+    netlist = _find_gate_netlist(project)
+    spef = next(iter(sorted(_pl.extracted_dir(project).glob("*.spef"))), None)
+    if not netlist or not spef:
+        return {"status": "ERROR", "reason": "routed netlist or SPEF absent"}
+
+    netlist_text = netlist.read_text(errors="replace")
+    inst_map = parse_verilog_instances(netlist_text)
+    required_cells = {entry["cell"] for entry in inst_map.values()}
+    sources = discover_installed_pdk_sources(
+        container, liberty_path, required_cells)
+    if not sources:
+        return {"status": "ERROR",
+                "reason": "installed cell SPICE or model section unresolved"}
+
+    sta_report = _pick_sta_report(project, sources["subckt_names"])
+    if not sta_report:
+        return {"status": "ERROR", "reason": "critical STA path unresolved"}
+    sta_path = parse_sta_path(sta_report.read_text(errors="replace"))
+    if not sta_path:
+        return {"status": "ERROR", "reason": "critical STA path unparseable"}
+    resolved = resolve_path_stages(
+        sta_path, inst_map, parse_spef_caps(spef.read_text(errors="replace")),
+        sources["subckt_names"], liberty_text, max_stages)
+    if not resolved:
+        return {"status": "ERROR", "reason": "critical path not stitchable"}
+
+    expected_ns = sum(float(stage.get("sta_delay_ns") or 0.0)
+                      for stage in resolved["stages"])
+    tolerance = derive_liberty_path_tolerance(
+        liberty_text, resolved["stages"], expected_ns)
+    if not tolerance:
+        return {"status": "ERROR",
+                "reason": "Liberty grid tolerance could not be derived"}
+
+    subckts = {}
+    for stage in resolved["stages"]:
+        cell = stage["cell"]
+        if cell not in subckts:
+            subckt = extract_subckt(sources["cell_text"], cell, model_map={})
+            if not subckt:
+                return {"status": "ERROR",
+                        "reason": f"cell SPICE subckt absent: {cell}"}
+            subckts[cell] = subckt
+
+    hdr = parse_liberty_header(liberty_text)
+    vdd = hdr["nom_voltage"] or 1.0
+    temp_c = hdr["nom_temperature"]
+    vth = vdd * hdr["output_threshold_fall"] / 100.0
+    input_slew_ns = resolved["stages"][0].get("input_slew_ns")
+    if input_slew_ns is None:
+        input_slew_ns = tolerance["contributions"][0]["input_slew_ns"]
+    tr_ns = pulse_tr_for_slew(
+        float(input_slew_ns), hdr["slew_lower_fall"],
+        hdr["slew_upper_fall"], hdr["slew_derate"])
+    deck = build_installed_path_deck(
+        sources["model_file"], sources["model_section"],
+        sources["model_preludes"],
+        sources["cell_spice"], resolved["stages"], subckts, vdd, tr_ns,
+        temp_c, vth, resolved["endpoint_load_pf"])
+    out_dir = _pl.spice_dir(project)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    deck_path = out_dir / "correlation.spice"
+    log_path = out_dir / "correlation.log"
+    deck_path.write_text(deck)
+    ok, transcript = _run_ngspice_in(
+        container, str(Path(sources["model_file"]).parent), str(deck_path))
+    log_path.write_text(transcript or "")
+    if not ok:
+        return {"status": "ERROR", "reason": "ngspice execution failed",
+                "deck": str(deck_path), "log": str(log_path)}
+    measured = parse_path_meas(transcript)
+    swing = measured.get("vpout_max", 0.0) - measured.get("vpout_min", 0.0)
+    if swing < 0.5 * vdd:
+        return {"status": "ERROR", "reason": "critical path did not swing",
+                "deck": str(deck_path), "log": str(log_path)}
+    direction = sta_path["endpoint_transition"]
+    key = "tpd_fall" if direction == "fall" else "tpd_rise"
+    spice_s = measured.get(key)
+    if spice_s is None or spice_s <= 0 or expected_ns <= 0:
+        return {"status": "ERROR", "reason": "path delay measurement absent",
+                "deck": str(deck_path), "log": str(log_path)}
+    spice_ns = spice_s * 1e9
+    pct_error = (spice_ns - expected_ns) / expected_ns * 100.0
+    tolerance_pct = float(tolerance["tolerance_pct"])
+    verdict = path_correlation_verdict(pct_error, tolerance_pct)
+    report = {
+        "program": "spice_correlation_check.installed_pdk_path_driver",
+        "version": "2.0.0",
+        "provenance": "real_ngspice_transistor_path",
+        "reference": {
+            "sta_report": sta_report.name,
+            "startpoint": sta_path["startpoint"],
+            "endpoint": sta_path["endpoint"],
+            "endpoint_transition": direction,
+            "sta_total_path_delay_ns": sta_path["path_delay_ns"],
+            "liberty_spef_cone_delay_ns": round(expected_ns, 9),
+        },
+        "correlation": {
+            "spice_path_delay_ns": round(spice_ns, 9),
+            "liberty_spef_cone_delay_ns": round(expected_ns, 9),
+            "pct_error": round(pct_error, 6),
+            "tolerance_pct": round(tolerance_pct, 6),
+            "critical_tolerance_pct": round(2.0 * tolerance_pct, 6),
+            "tolerance_derivation": tolerance,
+            "stages_correlated": resolved["covered"],
+            "stages_total_combinational": resolved["total_comb"],
+            "verdict": verdict,
+        },
+        "artifacts": {"deck": str(deck_path), "log": str(log_path)},
+        "model_provenance": "active installed PDK selected from Liberty path",
+        "nda_note": "Model and Liberty content were read at runtime, not emitted.",
+    }
+    report_path = _pl.reports_dir(project) / "phase3" / "spice_correlation.json"
+    report_path.parent.mkdir(parents=True, exist_ok=True)
+    report_path.write_text(json.dumps(report, indent=2, ensure_ascii=False) + "\n")
+    return {"status": "RAN", "report": report,
+            "report_path": str(report_path), "deck": str(deck_path),
+            "log": str(log_path)}
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -2131,7 +2621,8 @@ def main(argv: list = None) -> int:
                                skipped, reason))
         for f in result.findings:
             if f.severity in ("ERROR", "WARNING"):
-                print(f"  [{f.severity}] {f.rule}: {f.message}")
+                suffix = " (measured SPICE decks=0)" if f.rule == "NO_SPICE_VERIFICATION" else ""
+                print(f"  [{f.severity}] {f.rule}: {f.message}{suffix}")
 
     if result.passed and skipped:
         _vx.announce_vacuous(result.program, reason)

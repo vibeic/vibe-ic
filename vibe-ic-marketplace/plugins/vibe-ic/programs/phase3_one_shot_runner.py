@@ -36027,13 +36027,10 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
     # missing SDF) into a disclosed-skip that flow_compliance promotes from
     # MISSING to SKIPPED-CONDITION.
     #
-    # The declaration is now derived from what ACTUALLY happened, and only the
-    # two genuine gaps in this producer keep a capability_flag:
-    #   * the built-in gate-sim testbench generator binds exactly one port
-    #     contract (bit-serial multiplier) — a real, named tooling gap;
-    #   * the PDK's stdcell Verilog simulation model cannot be resolved (an
-    #     unknown library: neither host-staged under input/pdk/verilog/ nor
-    #     present in the container PDK table).
+    # The declaration is derived from what ACTUALLY happened. The one genuine
+    # environment gap is an observed absence of iverilog/vvp. Existing Phase-2
+    # self-checking TBs are reused for arbitrary interfaces; a missing TB/model
+    # is an input/producer failure, not a platform capability gap.
     # Everything else — no routed netlist, no SDF, compile failure, simulator
     # error — is a REAL defect and is written WITHOUT a capability_flag, so the
     # #675-strict promoter refuses it and step 29 stays MISSING. chip-AGNOSTIC.
@@ -36074,33 +36071,45 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
         skip_note.write_text(json.dumps(_payload, indent=2) + "\n")
         written.append(str(skip_note))
 
-    # --- Step 30: Post-Layout SPICE correlation — honest disclosed-skip ----
-    # Previously ORPHANED (no runner produced spice/*.sp or correlation.json AND
-    # no skip-note → a SILENT MISSING, flagged by the executor-coverage gate).
-    # Critical-path SPICE correlation needs an extracted transistor netlist + a
-    # vector/analog stimulus + device models — an analog/mixed-signal capability;
-    # a pure-digital block's timing is signed off by post-route multi-corner STA
-    # (step 23). Emit a CONSCIOUS skip-sentinel so flow_compliance promotes the
-    # step to SKIPPED-CONDITION (disclosed capability gap) instead of a silent
-    # orphan. A real analog/mixed-signal block runs SPICE via the A-track.
+    # --- Step 30: transistor-level critical-path correlation ---------------
+    # The active PDK configuration supplies Liberty. The producer discovers
+    # its sibling cell SPICE + device model section at runtime, extracts the
+    # STA critical cone, simulates it in ngspice, and compares the measured
+    # delay with the Liberty+SPEF incremental delay from that same path. The
+    # tolerance is derived from the local Liberty NLDM grid cells; no fixed or
+    # design-tuned percentage is accepted.
     spice_out = project / "phase3/stage3/spice"
     spice_skip = spice_out / "spice_correlation_not_run.json"
-    # v1.3.94 — REAL post-layout SPICE↔liberty cell-delay correlation. When the
-    # PDK ships an ngspice bridge (input/pdk/bridge/*_ngspice_shim.lib), run
-    # ngspice on a representative cell (extracted transistor subckt) and
-    # correlate the SPICE-measured delay against the liberty NLDM arc → writes
-    # reports/phase3/spice_correlation.json with real numbers (>10% ERROR /
-    # >25% CRITICAL). Returns None on an honest skip (no shim / no ngspice) →
-    # the SKIPPED-CONDITION placeholder below still fires. NEVER fabricates.
     _spice_corr_ran = False
+    _spice_driver_result: Dict[str, object] = {
+        "status": "ERROR", "reason": "SPICE producer not invoked"}
     if not (project / "reports/phase3/spice_correlation.json").is_file():
         try:
             import spice_correlation_check as _scc
-            _scc_rep = _scc.run_commercial_pdk_cell_correlation(project, container=container)
-            if _scc_rep is not None:
+            _active_liberty = _to_container_path(str(pdk.liberty), container)
+            _spice_driver_result = _scc.run_installed_pdk_path_correlation(
+                project, liberty_path=_active_liberty, container=container)
+            if _spice_driver_result.get("status") == "RAN":
                 _spice_corr_ran = True
-                written.append(str(project / "reports/phase3/spice_correlation.json"))
+                written.extend([
+                    str(project / "reports/phase3/spice_correlation.json"),
+                    str(spice_out / "correlation.spice"),
+                    str(spice_out / "correlation.log"),
+                ])
+            else:
+                # Compatibility for an explicitly staged private bridge. It
+                # remains secondary; installed PDKs never need this branch.
+                _scc_rep = _scc.run_commercial_pdk_cell_correlation(
+                    project, container=container)
+                if _scc_rep is not None:
+                    _spice_corr_ran = True
+                    _spice_driver_result = {"status": "RAN",
+                                            "legacy_bridge": True}
+                    written.append(
+                        str(project / "reports/phase3/spice_correlation.json"))
         except Exception as _scc_exc:
+            _spice_driver_result = {"status": "ERROR",
+                                    "reason": f"driver raised: {_scc_exc}"}
             notes.append(f"SPICE correlation driver failed: {_scc_exc}")
     else:
         _spice_corr_ran = True
@@ -36109,24 +36118,16 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
                    or any((project / "sim_spice").glob("*.sp"))
                    if spice_out.is_dir() or (project / "sim_spice").is_dir()
                    else False)
+    if _spice_corr_ran and spice_skip.is_file():
+        spice_skip.unlink()
     if not _spice_have and not spice_skip.is_file():
         spice_out.mkdir(parents=True, exist_ok=True)
-        spice_skip.write_text(json.dumps({
-            "verdict": "SKIPPED-CONDITION",
-            "reason": ("no critical-path SPICE correlation ran; it requires an "
-                       "extracted transistor netlist + vector/analog stimulus + "
-                       "device models (an analog/mixed-signal capability). This "
-                       "digital block's timing is signed off by post-route "
-                       "multi-corner STA (step 23); SPICE correlation is a "
-                       "belt-and-suspenders analog cross-check run on the A-track."),
-            "capability_flag": "cap:post_layout_spice_correlation",
-            # OWN the step-30 canonical outputs so flow_compliance's STRICT
-            # early-MISSING promotion (#675 strict) can defer step 30 WITHOUT
-            # this marker being able to mask any other step's absent output.
-            "skips_required_output": [
-                "phase3/stage3/spice/correlation.json",
-                "reports/phase3/spice_correlation.json",
-            ],
+        _spice_cap_flag, _spice_reason = \
+            _spice_correlation_skip_disclosure(_spice_driver_result)
+        _tool_absent = bool(_spice_cap_flag)
+        _payload = {
+            "verdict": "SKIPPED-CONDITION" if _tool_absent else "ERROR",
+            "reason": _spice_reason,
             "design_identity": _design_identity_fields(project),
             "advisory_approximation": {
                 "post_route_sta_signoff": True,
@@ -36134,7 +36135,14 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
                     list((project / "phase3/stage3/extracted").glob("*.sp"))
                     if (project / "phase3/stage3/extracted").is_dir() else []),
             },
-        }, indent=2) + "\n")
+        }
+        if _tool_absent:
+            _payload["capability_flag"] = _spice_cap_flag
+            _payload["skips_required_output"] = [
+                "phase3/stage3/spice/correlation.json",
+                "reports/phase3/spice_correlation.json",
+            ]
+        spice_skip.write_text(json.dumps(_payload, indent=2) + "\n")
         written.append(str(spice_skip))
 
     # --- Step 32b: post-route timing repair TCL (ORGANIC #561) ----------------
@@ -39628,25 +39636,16 @@ def _lec_post_layout_refusal(project: Path) -> Optional[str]:
 # Step 29 disclosure table. Maps what `sdf_gate_sim.run()` actually reported to
 # (capability_flag, reason). A NON-EMPTY capability_flag is a claim that the
 # PLATFORM cannot do this — it must therefore name a gap that is genuinely open,
-# and only these two are. Everything absent from this table is a real defect and
+# and only the observed simulator-tool absence is. Everything absent from this table is a real defect and
 # gets flag=None, which the #675-strict promoter refuses (step stays MISSING).
 # Pure data + pure function → unit-testable without a container. chip-AGNOSTIC.
 _SDF_SIM_CAP_GAPS: Dict[str, Tuple[str, str]] = {
-    "port shape": (
-        "cap:sdf_gatelevel_tb_port_contract",
-        "SDF-annotated gate-level sim NOT run: the built-in gate-sim "
-        "testbench generator binds exactly one port contract (bit-serial "
-        "multiplier: clk + reset + one multi-bit input + one 1-bit input + "
-        "one 1-bit output) and this design's top ports do not match it. The "
-        "SDF was emitted and the simulator is available; the missing piece is "
-        "a design-shaped self-checking gate-level testbench.",
-    ),
-    "no pdk lib": (
-        "cap:sdf_gatelevel_pdk_cell_model",
-        "SDF-annotated gate-level sim NOT run: no stdcell Verilog simulation "
-        "model could be resolved for this design's cell library — neither "
-        "host-staged under input/pdk/verilog/ nor known to the in-container "
-        "PDK model table (pdk_cell_models.PDK_CELL_MODELS).",
+    "no simulator": (
+        "cap:sdf_gatelevel_simulator_toolchain",
+        "SDF-annotated gate-level sim NOT run: the execution environment "
+        "genuinely lacks the required iverilog/vvp executables. A missing "
+        "testbench, model, netlist, SDF, or failed invocation is not eligible "
+        "for this disclosure.",
     ),
 }
 
@@ -39680,6 +39679,21 @@ def _sdf_sim_skip_disclosure(sim_result: Optional[Dict[str, object]],
             f"reason={reason or '?'}. The runner DOES drive a back-annotated "
             "sim (v1.3.94+), so this is a real failure of an implemented "
             "capability — NOT a disclosed capability gap.")
+
+
+def _spice_correlation_skip_disclosure(
+        driver_result: Optional[Dict[str, object]]) -> Tuple[Optional[str], str]:
+    """Only an observed missing ngspice executable is a Step-30 cap gap."""
+    result = driver_result or {}
+    status = str(result.get("status") or "ERROR")
+    reason = str(result.get("reason") or "SPICE producer did not run")
+    if status == "NO_TOOL":
+        return ("cap:post_layout_spice_correlation",
+                "Post-layout critical-path correlation NOT run: the execution "
+                "environment genuinely lacks the ngspice executable.")
+    return (None,
+            f"Post-layout critical-path correlation failed: {reason}. This is "
+            "an implemented-capability failure, not a capability gap.")
 
 
 def _emit_sdf(project: Path, top: str, pdk: PdkConfig, container: str,
