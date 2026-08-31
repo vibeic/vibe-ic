@@ -1703,6 +1703,30 @@ def _main_parsed(args) -> int:
                         + " and ".join(short) + "; only the first is debt paid")
             else:
                 head = f"{base - now} of them are PAID and still on the register"
+            # THE REMEDY IS NOT ALWAYS THE ONE THIS ARM WAS WRITTEN FOR.
+            # `--write-baseline` is right when the corpus genuinely stopped
+            # publishing a run. It is DESTRUCTIVE when the sweep merely stood
+            # on a checkout that predates the entry: the population key names
+            # the corpus REPOSITORY, not the commit, so an out-of-date clone
+            # reaches this branch looking exactly like a withdrawal — and a
+            # write there ratchets the register down to what that checkout
+            # happens to carry and seals the result. MEASURED at e9ec0ce1c1
+            # on two clones of the published corpus: the current one examines
+            # the one recorded run and exits 0, a checkout 5 commits behind
+            # reports it absent and lands here. Both readings are named, so
+            # the operator picks one instead of running the advised command
+            # over whichever tree they had.
+            if split["absent_total"]:
+                fetch = (f" FIRST CHECK THE CHECKOUT: {split['absent_total']} "
+                         f"of these left because their run tree is not under "
+                         f"{corpus} at all, and a clone that is simply behind "
+                         f"the published corpus is indistinguishable here from "
+                         f"one the runs were removed from. Fetch/checkout the "
+                         f"corpus and re-run before recording anything — a "
+                         f"--write-baseline over a stale tree records what that "
+                         f"tree carries, and seals it.")
+            else:
+                fetch = ""
             print(f"[FAIL] the recorded baseline claims {base} unacknowledged "
                   f"step-internal FAIL(s) and the sweep measures {now}: "
                   f"{head}. A register that keeps a settled entry is "
@@ -1710,7 +1734,7 @@ def _main_parsed(args) -> int:
                   f"Re-record it with --write-baseline, which carries any "
                   f"withdrawal into `withdrawn_unexamined` so the drop is not "
                   f"later read as work somebody did; the ratchet may only "
-                  f"shrink, and it must.")
+                  f"shrink, and it must.{fetch}")
             return 1
         print(f"[PASS] no NEW unacknowledged step-internal FAIL ({now} recorded)")
         return 0

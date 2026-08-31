@@ -203,6 +203,29 @@ TWO MODES
            records to 0 and printed ``~ improved: ... 3 -> 0`` before exiting
            0. See ``compare_denominator``.
 
+           AND THE RECORDED TOTAL IS NOT ENOUGH EITHER. It can only fire when
+           the total FALLS, so a row that has under-reached since before the
+           register was written is invisible to it forever — the recorded
+           number is what the hole sums to. MEASURED on the published corpus
+           at e9ec0ce1c1: the emitters carried 12 producer records for the one
+           shipped row and the manifest selected 9, in every producing cell,
+           because ``L9.top_module_pins`` carries ``width_symbolic`` and the
+           row did not name it. The register recorded 9 and was content.
+           And in the other direction, the same total called a sweep of a
+           SMALLER CORPUS "an emitter renamed the field" when no emitter had
+           moved: reach per producing cell was identical, there was one
+           producing cell fewer.
+
+           So the denominator is also asked of the DOCUMENTS in front of the
+           sweep. ``offered`` is what the emitters carry under the row's
+           producer layers in ANY collection; ``examined`` is what the
+           manifest selects; ``compare_reach`` reports the gap and names the
+           collection to declare. It needs no baseline and does not move with
+           the size of the corpus, so it fires on 2 cells exactly as on 400 —
+           and it lets ``compare_denominator`` say WHICH of the two a shrunk
+           total was instead of naming a cause it never measured. Both remain
+           rc 1; neither credits the findings drop.
+
 WHERE THE CORPUS IS, NOW THAT IT IS NOT HERE (vibe-ic#1710's treatment)
 -----------------------------------------------------------------------
 ``tools/ci/repo_hygiene_gates.sh`` sweeps ``--corpus "$ROOT/benchmark-data/ic"``.
@@ -461,6 +484,78 @@ def index_elements(layers: Dict[str, List[Tuple[Path, dict]]],
                     idx.setdefault(
                         element_id(code, kind, name.strip()), []).append(rec)
     return idx
+
+
+def offered_records(layers: Dict[str, List[Tuple[Path, dict]]],
+                    codes: Iterable[str],
+                    reference_field: str,
+                    key_field: str) -> Dict[Tuple[str, str], int]:
+    """(layer, collection) -> records carrying the reference field, in ANY
+    collection under the row's producer layers.
+
+    WHAT THIS IS FOR, AND WHY A TOTAL COULD NOT DO IT (vibe-ic#376)
+    ---------------------------------------------------------------
+    `compare_denominator` asks whether the sweep reaches as many records as
+    the recorded one did. That number answers two questions at once and
+    cannot tell them apart: the manifest stopped covering what the emitters
+    emit (the defect), or fewer cells were swept (not the defect). It is
+    also BLIND to the first whenever it happens without the second, which is
+    the state this program shipped in — measured on the published corpus at
+    e9ec0ce1c1, the emitters carried 12 producer records for
+    `port_width_symbolic_to_parameter` and the manifest reached 9, because
+    `L9.top_module_pins` carries `width_symbolic` and was never declared.
+    A recorded total of 9 is exactly what a 3-of-4 reach over 3 cells sums
+    to, so nothing in the register could ever have noticed.
+
+    This is the same question asked of the CORPUS IN HAND instead of of
+    another population: of the records the emitted documents actually carry
+    under this row's producer layers, how many does the manifest select?
+    It needs no baseline, it does not move when the corpus grows or shrinks,
+    and its answer names the collection an author has to go and declare.
+
+    A collection is a TOP-LEVEL key whose value is a list — the same shape
+    `index_elements` selects by name, so `offered` and `examined` are
+    counted over exactly one population and their difference is the
+    manifest, never a difference in how the two walks read a document.
+    """
+    out: Dict[Tuple[str, str], int] = {}
+    for code in codes:
+        for _path, payload in layers.get(code, []):
+            if not isinstance(payload, dict):
+                continue
+            for coll, val in payload.items():
+                if not isinstance(val, list):
+                    continue
+                n = 0
+                for el in val:
+                    if not isinstance(el, dict):
+                        continue
+                    name = el.get(key_field)
+                    raw = el.get(reference_field)
+                    if (isinstance(name, str) and name.strip()
+                            and isinstance(raw, str) and raw.strip()):
+                        n += 1
+                if n:
+                    out[(code, coll)] = out.get((code, coll), 0) + n
+    return out
+
+
+def row_reach(row: dict,
+              layers: Dict[str, List[Tuple[Path, dict]]]
+              ) -> Tuple[int, List[str]]:
+    """(records the corpus OFFERS this row, collections it does not declare).
+
+    The collection names are returned as ``L<n>.<collection>`` so a reader is
+    told which emitter moved rather than that a number fell.
+    """
+    prod = row["producer"]
+    offered = offered_records(layers, prod["layers"],
+                              prod["reference_field"],
+                              prod.get("key_field", "name"))
+    declared = set(prod["collections"])
+    unreached = sorted(f"{code}.{coll}" for (code, coll) in offered
+                       if coll not in declared)
+    return sum(offered.values()), unreached
 
 
 def _index_by_name(idx: Dict[str, List[dict]]) -> Dict[str, List[dict]]:
@@ -812,6 +907,13 @@ def check_project(project: Path, rows: List[dict]) -> dict:
         "findings": [],
         "elements_examined": 0,
         "elements_judged": 0,
+        # What the emitted documents OFFER this row, and which collections
+        # they offer it in that the manifest does not declare. See
+        # `offered_records`: the recorded denominator cannot tell a manifest
+        # that stopped covering the emitters from a smaller corpus, and is
+        # blind to the first when it happens alone.
+        "records_offered": 0,
+        "collections_unreached": [],
         "verdict": "VACUOUS_PASS",
     }
     if not _ldc.generated_docs_dir(project).is_dir():
@@ -827,11 +929,18 @@ def check_project(project: Path, rows: List[dict]) -> dict:
     report["layers_present"] = sorted(layers)
     for row in rows:
         findings, examined, judged = evaluate_row(row, project, layers)
+        offered, unreached = row_reach(row, layers)
         report["rows_evaluated"].append(
             {"id": row["id"], "elements_with_reference": examined,
-             "elements_judged": judged, "findings": len(findings)})
+             "elements_judged": judged, "findings": len(findings),
+             "records_offered": offered,
+             "collections_unreached": unreached})
         report["elements_examined"] += examined
         report["elements_judged"] += judged
+        report["records_offered"] += offered
+        for coll in unreached:
+            if coll not in report["collections_unreached"]:
+                report["collections_unreached"].append(coll)
         report["findings"].extend(findings)
     if report["findings"]:
         report["verdict"] = "FAIL"
@@ -897,6 +1006,12 @@ def check_corpus(corpus: Path, rows: List[dict]) -> dict:
         # "no findings because the mechanism examined nothing" — see
         # compare_denominator.
         "examined": {},
+        # The same denominator asked of THIS corpus rather than of the one
+        # the register was measured over: `offered` is what the emitted
+        # documents carry, `examined` is what the manifest selects, and the
+        # gap between them is the manifest — never the population.
+        "offered": {},
+        "unreached": {},
         "judged": {},
         "errors": [],
     }
@@ -921,6 +1036,12 @@ def check_corpus(corpus: Path, rows: List[dict]) -> dict:
                                     + rowrep["elements_with_reference"])
             out["judged"][rid] = (out["judged"].get(rid, 0)
                                   + rowrep.get("elements_judged", 0))
+            out["offered"][rid] = (out["offered"].get(rid, 0)
+                                   + rowrep.get("records_offered", 0))
+            seen = out["unreached"].setdefault(rid, [])
+            for coll in rowrep.get("collections_unreached", []):
+                if coll not in seen:
+                    seen.append(coll)
     out["cells_swept"] = len(out["cells"])
     return out
 
@@ -1032,7 +1153,10 @@ def seal_status(path: Path) -> Tuple[str, str]:
 
 
 def compare_denominator(examined: Dict[str, int],
-                        recorded: Optional[Dict[str, int]]) -> List[str]:
+                        recorded: Optional[Dict[str, int]],
+                        offered: Optional[Dict[str, int]] = None,
+                        unreached: Optional[Dict[str, List[str]]] = None
+                        ) -> List[str]:
     """Rows whose REACH shrank since the baseline was recorded.
 
     MEASURED, and the reason this exists (vibe-ic#376). Rename the producer's
@@ -1057,19 +1181,112 @@ def compare_denominator(examined: Dict[str, int],
     comparable to the one recorded. Removing a cell from the corpus lands
     here too, and should: it is a deliberate act, and `--write-baseline`
     is how it is declared.
+
+    WHICH OF THE TWO IT WAS, SAID RATHER THAN GUESSED
+    -------------------------------------------------
+    This arm used to print ONE sentence for both — "an emitter renamed the
+    field or the collection, moved the layer, or the corpus shrank" — and a
+    reader has no way to tell which. MEASURED at e9ec0ce1c1: swept against a
+    STALE checkout of the published corpus this printed
+    ``examined 9 -> 6 ... an emitter renamed the field``, and no emitter had
+    renamed anything. Reach per producing cell was byte-identical in both
+    checkouts; the corpus carried one fewer producing cell.
+
+    `offered`/`unreached` (see :func:`offered_records`) answer that
+    directly, on the corpus in hand, so the two outcomes are now separated:
+
+      the manifest does not select a collection the emitters emit
+          -> LOST REACH. The mechanism stopped covering the documents.
+      the manifest selects EVERYTHING the corpus offers, and the total is
+      still below the recorded one
+          -> SMALLER POPULATION. The mechanism is intact; this sweep covered
+             fewer cells than the register was measured over.
+      the corpus offers NOTHING under the declared producer layers and field,
+      while the register was measured over records that existed
+          -> LOST REACH. A field rename and a layer move both land here, and
+             neither leaves a collection to name.
+
+    Both remain rc 1 and neither credits the findings drop: a smaller
+    population is not a repair either. What changes is that the sentence is
+    true, and an author is no longer sent to look for an emitter that never
+    moved.
     """
     if recorded is None:
         return []
+    unreached = unreached or {}
+    offered = offered or {}
     out: List[str] = []
     for row in sorted(set(examined) | set(recorded)):
         now, was = examined.get(row, 0), recorded.get(row, 0)
-        if now < was:
+        if now >= was:
+            continue
+        miss = unreached.get(row) or []
+        have = offered.get(row, 0)
+        if miss:
             out.append(
-                f"{row}: examined {was} -> {now} producer record(s). The "
-                f"sweep is reaching LESS than when the baseline was "
-                f"recorded — an emitter renamed the field or the "
-                f"collection, moved the layer, or the corpus shrank. Any "
+                f"{row}: examined {was} -> {now} producer record(s), and the "
+                f"corpus in hand OFFERS {have}. The manifest does not declare "
+                f"{', '.join(miss)}, which the emitters carry this reference "
+                f"in. An emitter renamed or added a collection underneath "
+                f"the manifest row. Any drop in findings across this change "
+                f"is not a repair.")
+        elif have == 0:
+            out.append(
+                f"{row}: examined {was} -> {now} producer record(s), and NO "
+                f"record under the declared producer layer(s) carries the "
+                f"declared reference field at all. The field was renamed or "
+                f"the layer moved; there is no collection left to name. Any "
                 f"drop in findings across this change is not a repair.")
+        else:
+            out.append(
+                f"SMALLER POPULATION, not lost reach — {row}: examined "
+                f"{was} -> {now} producer record(s), and the manifest "
+                f"selects {now} of the {have} this corpus OFFERS. Reach is "
+                f"intact; this sweep covered fewer cells than the register "
+                f"was measured over, so no verdict computed over it is "
+                f"comparable to the recorded one. Sweep the recorded "
+                f"population. Any drop in findings across this change is "
+                f"still not a repair.")
+    return out
+
+
+def compare_reach(offered: Dict[str, int],
+                  examined: Dict[str, int],
+                  unreached: Dict[str, List[str]]) -> List[str]:
+    """Rows whose manifest does not select what the corpus in hand OFFERS.
+
+    THE ARM THE RECORDED TOTAL COULD NOT BE. `compare_denominator` can only
+    fire when the total FALLS, so a row that has under-reached since before
+    the register was written is invisible to it forever: the recorded number
+    is what the hole sums to. MEASURED on the published corpus at
+    e9ec0ce1c1 — `port_width_symbolic_to_parameter` reached 9 of the 12
+    producer records the emitters carry, in every producing cell, and the
+    register recorded 9 as if that were the population.
+
+    This arm compares the manifest against the DOCUMENTS, on whatever corpus
+    is in front of it, so it fires the first time an emitter adds or renames
+    a collection and it fires on 2 cells exactly as on 400. It is the
+    "re-derive the denominator FROM the emitters" question, asked
+    continuously instead of at each `--write-baseline`.
+
+    A row that offers nothing is NOT reported here: "the corpus carries no
+    such record" is a different fact from "it carries them and the manifest
+    looks elsewhere", and the first is `compare_denominator`'s to judge
+    against the register — this arm has no population to compare it to.
+    """
+    out: List[str] = []
+    for row in sorted(offered):
+        have, reach = offered.get(row, 0), examined.get(row, 0)
+        miss = unreached.get(row) or []
+        if have and reach < have and miss:
+            out.append(
+                f"{row}: the corpus OFFERS {have} producer record(s) and the "
+                f"manifest selects {reach}. Undeclared: "
+                f"{', '.join(miss)}. The emitters carry this reference in "
+                f"{'a collection' if len(miss) == 1 else 'collections'} the "
+                f"row does not name, so every finding this row could make "
+                f"there is unmade — and a recorded denominator cannot show "
+                f"it, because the recorded number is what the hole sums to.")
     return out
 
 
@@ -1101,6 +1318,26 @@ def _print_findings(findings: List[dict]) -> None:
         print(f"  [{f['code']}] {', '.join(str(i) for i in ids)}")
         print(f"      carried by: {', '.join(str(x) for x in files)}")
         print(f"      {f.get('detail')}")
+
+
+def _announce_unreached(report: dict) -> None:
+    """Say, in PROJECT mode, that this design emits carriers nobody looks at.
+
+    DISCLOSED, NOT JUDGED. The per-design verdict is about the design; an
+    undeclared collection is a defect in the MANIFEST, and reddening every
+    run for it would punish the designs for the gate's own gap. The
+    BLOCKING arm is `compare_reach`, in the `--corpus` mode CI runs. What a
+    per-design reader may not have is silence: a PASS over 3 of the 4
+    records the design emits is not the reach that line reads as.
+    """
+    missing = report.get("collections_unreached") or []
+    if not missing:
+        return
+    print(f"  (reach) this design emits the declared reference in "
+          f"{', '.join(missing)}, which the manifest does not declare — "
+          f"{report.get('elements_examined', 0)} of "
+          f"{report.get('records_offered', 0)} producer record(s) were "
+          f"examined. The corpus sweep is the arm that FAILs on this.")
 
 
 def _adjudicate_register_without_a_corpus(bpath: Path) -> int:
@@ -1274,7 +1511,10 @@ def main(argv: Optional[List[str]] = None) -> int:
         recorded = load_baseline(bpath)
         recorded_examined = load_baseline_examined(bpath)
         regressions, improvements = compare_baseline(report["counts"], recorded)
-        shrunk = compare_denominator(report["examined"], recorded_examined)
+        shrunk = compare_denominator(report["examined"], recorded_examined,
+                                     report["offered"], report["unreached"])
+        under_reach = compare_reach(report["offered"], report["examined"],
+                                    report["unreached"])
         n_cells = len(report["cells"])
         n_find = sum(len(c["findings"]) for c in report["cells"])
         n_exam = sum(report["examined"].values())
@@ -1290,7 +1530,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         # denominator shrank, the SAME findings drop is the symptom, and
         # printing it as a win directly above the failure is how a reader
         # ends up believing the wrong half of the output.
-        if not shrunk:
+        if not shrunk and not under_reach:
             for line in improvements:
                 print(f"  ~ improved: {line}")
         if report["errors"]:
@@ -1332,10 +1572,22 @@ def main(argv: Optional[List[str]] = None) -> int:
             print(f"  (register) {sdetail} A sweep ran here, so the counts "
                   f"above are the measurement; a run with NO corpus has only "
                   f"the seal and will refuse.", file=sys.stderr)
-        if shrunk:
-            for line in shrunk:
+        if under_reach:
+            for line in under_reach:
                 print(f"[FAIL] cross-layer reference sweep LOST REACH: {line}",
                       file=sys.stderr)
+            return 1
+        if shrunk:
+            for line in shrunk:
+                # The prefix is part of the verdict, so it may not name a
+                # cause the arm did not measure: `compare_denominator`
+                # already decided which of the two this is, and a line that
+                # opens with SMALLER POPULATION must not be printed under a
+                # LOST REACH headline.
+                head = ("cross-layer reference sweep"
+                        if line.startswith("SMALLER POPULATION")
+                        else "cross-layer reference sweep LOST REACH:")
+                print(f"[FAIL] {head} {line}", file=sys.stderr)
             return 1
         if regressions:
             for line in regressions:
@@ -1388,6 +1640,7 @@ def main(argv: Optional[List[str]] = None) -> int:
               f"reference(s) — carried by {report['elements_examined']} "
               f"producer record(s) — resolve in scope and reach the "
               f"derivation that would consume them.")
+        _announce_unreached(report)
         return 0
     if verdict == "PASS_WITH_WAIVER":
         print(f"[PASS_WITH_WAIVER] {GATE}: {len(report['findings'])} "
@@ -1397,6 +1650,7 @@ def main(argv: Optional[List[str]] = None) -> int:
           f"finding(s) over {report['elements_examined']} declared "
           f"reference(s).")
     _print_findings(report["findings"])
+    _announce_unreached(report)
     return 1
 
 

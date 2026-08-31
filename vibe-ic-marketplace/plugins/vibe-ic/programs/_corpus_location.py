@@ -357,18 +357,89 @@ def refuse(gate: str, named: Path, resolved: Path, origin: str,
     return 2
 
 
+def corpus_repo_name(root: Path) -> Optional[str]:
+    """The repository `root` is a checkout OF, from its own `origin` URL.
+
+    A clone directory can be called anything. `git clone <corpus> /tmp/x` and
+    `git clone <corpus> ~/benchmark-data` are the same repository, and the
+    only thing on disk that says so is the remote the checkout carries.
+
+    None means "this checkout does not say" — no origin, no git, a git that
+    would not answer. Every caller must fall back rather than guess: a
+    repository identity that is sometimes absent may narrow a population key,
+    never widen one.
+
+    A LABEL, NOT AN ATTESTATION. Anyone who can write a checkout can write its
+    remote, so this says which set a count was taken over and never that the
+    bytes are trustworthy. What guards a register against a tampered corpus is
+    the register's own seal and its may-only-shrink ratchet, and neither of
+    those is weakened by naming the population correctly — a mislabelled one
+    is strictly worse, because it ratchets two different sets against each
+    other in silence.
+    """
+    try:
+        probe = _pr.run(["git", "-C", str(root), "remote", "get-url", "origin"],
+                        capture_output=True, text=True)
+    except (OSError, subprocess.SubprocessError, _pr.Stalled):  # noqa: BLE001
+        return None
+    if probe.returncode != 0:
+        return None
+    url = (probe.stdout or "").strip()
+    if not url:
+        return None
+    # scp-style (`git@host:owner/repo.git`) and URL forms both end in the
+    # repository name; take the last path segment either way.
+    name = url.rstrip("/").rsplit("/", 1)[-1].rsplit(":", 1)[-1]
+    if name.endswith(".git"):
+        name = name[:-len(".git")]
+    return name or None
+
+
 def population_key(corpus: Path, origin: str) -> str:
-    """WHICH population a count was taken over, as a repository-relative path.
+    """WHICH population a count was taken over.
 
     THE INTEGER IS MEANINGLESS WITHOUT THE SET IT COUNTED (vibe-ic#1223), and
     after the corpus split the same set has two spellings: `benchmark-data/ic`
     while it lived here, `ic` inside the clone the pointer names. A baseline
     recorded under the first must still ratchet against a sweep of the second —
-    they are the same cells — so the ENV origin is normalised back to the
-    canonical name rather than each side being left to drift.
+    they are the same cells — so the two are reconciled here rather than each
+    side being left to drift.
 
-    That normalisation is deliberately NOT applied to a NAMED root: a caller who
-    types a path in this repository gets the key for the tree they typed.
+    A PATH SPELLING IS NOT THE IDENTITY OF A CORPUS (vibe-ic#1704 follow-on)
+    -----------------------------------------------------------------------
+    The reconciliation used to be applied ONLY when the corpus arrived through
+    `$VIBE_IC_BENCHMARK_DATA`, which made the key a function of HOW the caller
+    reached the tree and of what the clone directory happens to be called.
+    MEASURED on a host carrying a clone of the published corpus at
+    `~/benchmark-data`, against `step_internal_fail_bubble_up_baseline.json`
+    (`corpus_population: benchmark-data/ic`, `per_run:
+    {<one run>: 1}`):
+
+        --corpus ~/benchmark-data/ic                   -> key `ic`
+            rc 2 NOT CHECKED, "measured over 'benchmark-data/ic' and this
+            sweep covered 'ic'" — WHILE MEASURING 4 run trees, 4 with
+            reports and exactly the 1 recorded finding. The sweep was
+            standing on the entry the register names and was refused, so
+            that entry could not be EXAMINED by the invocation CI uses.
+
+        VIBE_IC_BENCHMARK_DATA=~/benchmark-data        -> key `benchmark-data/ic`
+            rc 0, the same cells, the entry examined.
+
+    Two verdicts over one population, decided by the spelling. So the key is
+    now taken from the corpus repository's OWN identity — `origin`'s
+    repository name — whenever the checkout says it is a clone of the
+    published-corpus repository. That holds across clone directory names and
+    across `--corpus` versus the pointer, because it is the same repository
+    and it says so itself.
+
+    IT IDENTIFIES THE REPOSITORY, NOT ITS STATE. Two clones at different
+    commits are still one population; whether this checkout carries the runs
+    the register names is the sweep's own question, and each gate already
+    reports a run tree it could not open rather than counting it as repaired.
+
+    When the checkout does NOT say (no origin, no git, an unanswering git)
+    the previous rule stands unchanged, so nothing that used to key one way
+    keys another for want of a remote.
     """
     c = corpus.resolve()
     for anc in (c, *c.parents):
@@ -377,8 +448,11 @@ def population_key(corpus: Path, origin: str) -> str:
                 rel = c.relative_to(anc).as_posix() or "."
             except ValueError:                      # noqa: PERF203
                 break
+            canonical = (CANONICAL_CORPUS_NAME if rel == "."
+                         else f"{CANONICAL_CORPUS_NAME}/{rel}")
+            if corpus_repo_name(anc) == CANONICAL_CORPUS_NAME:
+                return canonical
             if origin != ENV:
                 return rel
-            return (CANONICAL_CORPUS_NAME if rel == "."
-                    else f"{CANONICAL_CORPUS_NAME}/{rel}")
+            return canonical
     return c.name

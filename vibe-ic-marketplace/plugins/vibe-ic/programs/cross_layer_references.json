@@ -1,5 +1,22 @@
 {
   "schema_version": 1,
+  "_collections_comment": [
+    "producer.collections is DERIVED FROM THE EMITTERS, never guessed. Every",
+    "top-level list under a producer layer whose elements carry a non-empty",
+    "reference_field is a carrier and must be named here; a carrier left out",
+    "is reach the mechanism silently does not have, and the recorded",
+    "denominator cannot show it because the recorded number is what the hole",
+    "sums to. `cross_layer_reference_check.compare_reach` measures exactly",
+    "that gap on whatever corpus is in front of it and names the collection.",
+    "",
+    "`top_module_pins` was such a carrier from the start. The checker's own",
+    "evaluate_row docstring names it -- 'one port object is shared by",
+    "L9.top_ports / .ports / .top_module_pins and promoted into L1.pin_table'",
+    "-- and this row never declared it. MEASURED on the published corpus at",
+    "e9ec0ce1c1: 3 producing cells, 4 carriers each = 12 producer records",
+    "emitted, 9 selected. The register's `examined: 9` is that 3-of-4 reach,",
+    "not the population."
+  ],
   "_comment": [
     "Declared cross-layer REFERENCES. Data, not code — see",
     "cross_layer_reference_check.py for the resolver and for why the shipped",
@@ -30,7 +47,8 @@
       "grammar": "symbolic_range",
       "producer": {
         "layers": ["L1", "L9"],
-        "collections": ["pin_table", "top_ports", "ports"],
+        "collections": ["pin_table", "top_ports", "ports",
+                        "top_module_pins"],
         "kind": "port",
         "key_field": "name",
         "reference_field": "width_symbolic"
