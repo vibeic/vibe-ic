@@ -138,6 +138,41 @@ triage.
 > (b) a 🔷-deferred FIX_STATUS row backed by a reproduced investigation is INCOMPLETE
 > work — surface it and drive the fork fix.
 
+## § 0.7 — VERDICT-TIER INTERROGATION (BINDING; owner doctrine, 2026-09-01, spm case)
+
+A verdict is not finished when the top line is written. Every non-PASS tier row
+(WAIVED, SKIPPED-CONDITION, VACUOUS-PASS, PARTIALLY-VACUOUS, INCOMPLETE,
+NOT_INVOCABLE, advisory disagreement) is a sentence that reads "this was not
+measured" — and "not measured" has exactly THREE legitimate justifications:
+
+  1. **Condition genuinely absent** — DERIVED from the design's own
+     declarations (ic_class, the L-doc feature roster), never from a name
+     pattern, an argv crash, or a template's assumption.
+  2. **Capability genuinely absent** — VERIFIED against the pinned vibeic-eda
+     image, never taken from a stale claim. The image ships iverilog, ngspice,
+     verilator, OpenROAD, klayout, magic and netgen; "no tool" is false more
+     often than it is true (measured: steps 29/30 claimed MISSING_CAPABILITY
+     on tools the image carries — vibe-ic#1967).
+  3. **Genuinely external** — real silicon, a physical board, a fab.
+
+Before ANY verdict is handed to the owner, interrogate every non-PASS row
+against these three. A row with no valid answer is a CAPTURE item: file it
+(Bucket T → the vibeic-eda fork; Bucket A → programs/; Bucket B only with
+why_not_bucket_a) and say in the verdict how many were filed. The spm
+prototype of this interrogation produced three real defects in one pass:
+a stale capability claim (#1967), a caller-manufactured NOT_INVOCABLE where
+the gate was never actually asked (#1968), and a renderer re-deriving a count
+the checker already owns (#1969). The owner should never have to ask "why is
+this row not a FAIL?" — that question belongs inside the agent.
+
+Two corollaries, both measured:
+  * FAIL means "the question was put and the answer was no". Never inflate a
+    could-not-ask into a FAIL (it collapses "the design is bad" and "the
+    instrument is absent" into one signal) — and never let a could-not-ask
+    masquerade as coverage.
+  * An applicability decision belongs to the gate or a declaration-derived
+    predicate — never to the failure mode of the call that tried to reach it.
+
 ## Dual-register user-facing dialogue
 
 You own the natural-language **user-facing register**. You face the user directly, but you
