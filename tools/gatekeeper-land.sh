@@ -1279,7 +1279,11 @@ run_pytest() {
     # reader cannot reconstruct from the tail of a 91-file run, and `tail -6`
     # would show whichever file happened to be last instead of the one that
     # cost the record.
-    printf '%s\n' "$out" | grep -a '^NORECORD\|^NOTRUN\|^AGGREGATE_NORECORD' | sed 's/^/          /'
+    # `TRUNCATED` lines ride along: a session that stopped at its own declared
+    # failure bound has ALREADY printed the red case names, and on the
+    # 2026-08-31 full tier those names were computed inside $out and never
+    # reached this log — the only copy died with the --rm container.
+    printf '%s\n' "$out" | grep -a '^NORECORD\|^NOTRUN\|^AGGREGATE_NORECORD\|^AGGREGATE_TRUNCATED\|^FILE_TRUNCATED\|^TRUNCATED_RED' | sed 's/^/          /'
     printf '%s\n' "$out" | tail -6 | sed 's/^/          /'
     FAILED=1
     # THROUGH A FILE, because this stage now runs in a lane and a variable set

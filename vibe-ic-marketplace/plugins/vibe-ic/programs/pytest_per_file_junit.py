@@ -1953,6 +1953,50 @@ def _maxfail_truncation(bound: Optional[int], rc: Optional[int], red: int,
             "PREFIX of the failure set, not the failure set; REFUSED")
 
 
+def _per_file_truncation(pytest_argv: Sequence[str], rc: Optional[int],
+                         incomplete: bool,
+                         suites: Optional[List[ET.Element]],
+                         sink: Dict[str, object], covered: int,
+                         total: int) -> Tuple[Optional[str], List[str]]:
+    """Name a PER-FILE session that stopped at its OWN declared failure bound.
+
+    The aggregate arm has named this event since `_maxfail_truncation` was
+    written; the per-file arm hits the IDENTICAL event — pytest stops at the
+    caller's flat `--maxfail`, exits naturally with a valid JUnit prefix, and
+    the lifecycle join correctly reports fewer finished items than declared —
+    and reported the join's completeness clause instead:
+
+        NORECORD  <file>  pytest progress protocol incomplete: m.<pid>.<n>.jsonl:
+                  session finished before every selected item completed (102/138)
+
+    MEASURED on the 2026-08-31 full tier at 47968f0ee2: two files
+    (`test_landing_merge_verdict.py` 102/138, `test_source_chip_agnostic_check.py`
+    11/13) were classified exactly so, and because the classification nulls the
+    parsed JUnit prefix, the red case NAMES — the only copy, inside a `--rm`
+    container — were destroyed with it. A file carrying >= bound reds can NEVER
+    produce a per-file record under this classification, so the files most in
+    need of naming are precisely the ones this arm refuses to name.
+
+    Every clause is `_maxfail_truncation`'s, supervisor-side and fail-closed: a
+    stall, a leak, an unproved cleanup census, a wrong red count or a non-1 rc
+    all return None and keep the unexplained-NORECORD label. The verdict does
+    not move — the file result stays UNKNOWN-in-full and the driver still
+    refuses; only the diagnosis and the red names move.
+    """
+    if not incomplete or suites is None:
+        return None, []
+    red = 0
+    for suite in suites:
+        _cases, n_red = _count(suite)
+        red += n_red
+    truncation = _maxfail_truncation(
+        _declared_failure_bound(pytest_argv), rc, red, sink, covered, total,
+        [])
+    if truncation is None:
+        return None, []
+    return truncation, _red_node_ids(suites)
+
+
 def _sink_protocol_error(sink: Dict[str, object]) -> str:
     """The lifecycle join's OWN complaint, or "" when it did not make one."""
     if sink.get("protocol_complete") is not False:
@@ -2479,6 +2523,7 @@ def _fallback_worker_main(spec_path: Path) -> int:
     out = ""
     killed = True
     suites: Optional[List[ET.Element]] = None
+    truncation: Optional[str] = None
     cases = 0
     red = 0
     sink: Dict[str, object] = {}
@@ -2492,6 +2537,16 @@ def _fallback_worker_main(spec_path: Path) -> int:
             sys.stdout.write("\n")
         sys.stdout.flush()
         suites = _load_suites(junit_path)
+        # BEFORE the record is nulled: a session that stopped at its own
+        # declared failure bound carries the red NAMES in its JUnit prefix, and
+        # this print is the only place they survive — the parent replays this
+        # worker's log verbatim. See `_per_file_truncation`.
+        truncation, truncated_red = _per_file_truncation(
+            spec["pytest_argv"], rc, killed, suites, sink, 1, 1)
+        if truncation is not None:
+            print(f"FILE_TRUNCATED  {test_file}  {truncation}", flush=True)
+            for node_id in truncated_red:
+                print(f"TRUNCATED_RED  {node_id}", flush=True)
         if killed or rc not in (0, 1):
             suites = None
         if suites is not None:
@@ -2504,12 +2559,19 @@ def _fallback_worker_main(spec_path: Path) -> int:
         print(out.splitlines()[-1], file=sys.stderr, flush=True)
         killed = True
         suites = None
+        truncation = None
 
     has_record = suites is not None
-    reason = ("" if has_record else
-              _norecord_reason(rc, out, killed, float(spec["stall_after"]),
-                               stalled=sink.get("stalled") is True,
-                               protocol_error=_sink_protocol_error(sink)))
+    if has_record:
+        reason = ""
+    elif truncation is not None:
+        reason = ("session stopped at its own declared failure bound — "
+                  + truncation)
+    else:
+        reason = _norecord_reason(
+            rc, out, killed, float(spec["stall_after"]),
+            stalled=sink.get("stalled") is True,
+            protocol_error=_sink_protocol_error(sink))
     try:
         _write_json_atomic(meta_path, {
             "schema": 1,
@@ -3279,8 +3341,13 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                         len(selection), aggregate_extra)
                     if truncation is not None:
                         print(f"AGGREGATE_TRUNCATED  {truncation}", flush=True)
+                        # `TRUNCATED_RED` and not indentation: the landing
+                        # lane surfaces its summary by grepping line prefixes,
+                        # and an indented id was computed, printed, and never
+                        # reached the operator log — measured on the
+                        # 2026-08-31 full tier, all 62 aggregate red names.
                         for node_id in _red_node_ids(aggregate_suites):
-                            print(f"    {node_id}", flush=True)
+                            print(f"TRUNCATED_RED  {node_id}", flush=True)
                         aggregate_coverage_problem = (
                             "aggregate session stopped at its own declared "
                             "failure bound after "
@@ -3435,6 +3502,18 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 if not out.endswith("\n"):
                     sys.stdout.write("\n")
                 suites = _load_suites(per)
+                # BEFORE the record is nulled: a session that stopped at its
+                # own declared failure bound carries the red NAMES in its JUnit
+                # prefix, and this print is the only copy that survives the
+                # nulling below. See `_per_file_truncation`.
+                truncation, truncated_red = _per_file_truncation(
+                    pytest_argv, rc, killed, suites, file_sink, i,
+                    len(selection))
+                if truncation is not None:
+                    print(f"FILE_TRUNCATED  {test_file}  {truncation}",
+                          flush=True)
+                    for node_id in truncated_red:
+                        print(f"TRUNCATED_RED  {node_id}", flush=True)
                 # A process killed/interrupted after starting to write XML can
                 # leave a parseable PREFIX. Parseability is not completeness;
                 # only normal pytest outcomes 0/1 may contribute a record.
@@ -3448,12 +3527,17 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                         cases += c
                         red += r
                 red_total += red
-                results.append(FileResult(
-                    test_file, rc, killed, suites, cases, red,
-                    norecord_reason=_norecord_reason(
+                if truncation is not None:
+                    file_reason = ("session stopped at its own declared "
+                                   "failure bound — " + truncation)
+                else:
+                    file_reason = _norecord_reason(
                         rc, out, killed, a.stall_after,
                         stalled=file_sink.get("stalled") is True,
-                        protocol_error=_sink_protocol_error(file_sink))))
+                        protocol_error=_sink_protocol_error(file_sink))
+                results.append(FileResult(
+                    test_file, rc, killed, suites, cases, red,
+                    norecord_reason=file_reason))
                 state = ("NORECORD" if suites is None
                          else ("red" if red or rc != 0 else "ok"))
                 print(f"--- {test_file}  rc={rc}  cases={cases}  red={red}  "

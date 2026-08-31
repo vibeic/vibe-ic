@@ -2618,6 +2618,80 @@ def test_a_zero_collecting_file_is_not_reclassified_as_a_truncation(tmp_path):
     assert proc.returncode == D.RC_NORECORD, proc.stdout
 
 
+# ── a PER-FILE --maxfail prefix is the SAME named truncation ─────────────────
+#
+# MEASURED on the 2026-08-31 full tier at 47968f0ee2: two per-file fallback
+# sessions stopped at the lane's flat `--maxfail=10` and were reported as
+#
+#     NORECORD  <file>  pytest progress protocol incomplete: m.<pid>.<n>.jsonl:
+#               session finished before every selected item completed (102/138)
+#
+# and the parsed JUnit prefix — the only copy of the red case names, inside a
+# `--rm` container — was nulled with the classification. A file carrying
+# >= bound reds could therefore NEVER produce a per-file record: exactly the
+# files most in need of naming were the ones this arm refused to name. The
+# aggregate arm has named the identical event since `_maxfail_truncation`;
+# these pin the per-file arm — direct and fallback-worker — to the same rule.
+# The verdict does not move: the file stays NORECORD-refused and unmerged.
+
+_ELEVEN_RED = "\n".join(
+    f"def test_{i:02d}():\n    assert False" for i in range(11)) + "\n"
+
+
+def test_a_per_file_maxfail_prefix_is_named_and_still_refused(tmp_path):
+    """POSITIVE CONTROL, direct per-file arm: the cause must be named."""
+    corpus = _tree(tmp_path, {"test_many.py": _ELEVEN_RED})
+    merged = tmp_path / "merged.xml"
+    proc = _run_driver_in(corpus, merged, pytest_extra=("--maxfail=10",))
+    assert "FILE_TRUNCATED  test_many.py  10 failures reached" in proc.stdout, (
+        proc.stdout)
+    assert "TRUNCATED_RED  test_many::test_00" in proc.stdout, proc.stdout
+    assert "TRUNCATED_RED  test_many::test_09" in proc.stdout, proc.stdout
+    # The 11th case never ran; a name for it would be an invention.
+    assert "test_10" not in proc.stdout, proc.stdout
+    assert ("NORECORD  test_many.py  session stopped at its own declared "
+            "failure bound") in proc.stdout, proc.stdout
+    # The misdiagnosis this pins against: the lifecycle join's completeness
+    # clause is TRUE but it is the symptom, not the cause.
+    assert "protocol incomplete" not in proc.stdout, proc.stdout
+    # THE REFUSAL IS UNCHANGED: still no record, still not merged.
+    assert proc.returncode == D.RC_NORECORD, proc.stdout
+    assert _files_in(merged) == []
+
+
+def test_a_fallback_worker_maxfail_prefix_is_named_and_still_refused(tmp_path):
+    """POSITIVE CONTROL, fallback-worker arm — the arm the full tier ran."""
+    corpus = _tree(tmp_path, {"test_many.py": _ELEVEN_RED})
+    merged = tmp_path / "merged.xml"
+    proc = _run_driver_in(
+        corpus, merged, "--aggregate-check",
+        "--aggregate-stall-after", str(_STALL),
+        pytest_extra=("--maxfail=10",))
+    assert "FILE_TRUNCATED  test_many.py  10 failures reached" in proc.stdout, (
+        proc.stdout)
+    assert "TRUNCATED_RED  test_many::test_00" in proc.stdout, proc.stdout
+    assert ("NORECORD  test_many.py  session stopped at its own declared "
+            "failure bound") in proc.stdout, proc.stdout
+    assert proc.returncode == D.RC_NORECORD, proc.stdout
+    assert _files_in(merged) == []
+
+
+def test_a_per_file_stall_is_not_reclassified_as_a_truncation(tmp_path):
+    """NEGATIVE CONTROL: a genuine per-file hang stays an unexplained NORECORD.
+
+    The bound is declared, exactly as in the positive case; the one thing that
+    differs is that the supervisor's stall lease fired instead of the process
+    exiting on its own, and that alone must keep the truncation label off.
+    """
+    corpus = _tree(tmp_path, {"test_hangs.py": _HANGS_IN_TEST})
+    merged = tmp_path / "merged.xml"
+    proc = _run_driver_in(corpus, merged, pytest_extra=("--maxfail=10",))
+    assert "FILE_TRUNCATED" not in proc.stdout, proc.stdout
+    assert "TRUNCATED_RED" not in proc.stdout, proc.stdout
+    assert "NORECORD  test_hangs.py  STALLED after" in proc.stdout, proc.stdout
+    assert proc.returncode == D.RC_NORECORD, proc.stdout
+
+
 def test_the_bound_is_read_from_this_drivers_own_argv():
     """Never from the child's output: a test may print `--maxfail` too."""
     assert D._declared_failure_bound(["-q"]) is None

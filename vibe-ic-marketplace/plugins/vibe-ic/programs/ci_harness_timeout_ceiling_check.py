@@ -262,7 +262,7 @@ _DRIVER_COMMAND_RE = {
 # permissive "looks command-like" fallback.
 _LANDING_LANE_SHA256 = {
     "run_pytest":
-        "e73a1cf7e3f5071ee73e1847343d154b4032683eea9106b6a46b41bafb4ab816",
+        "024ed312b1e407b51193e7ef5a2d1753ab89405b2d00d4f7a72b9e33b3e7bb12",
     "run_repo_tools_pytest":
         "b4dda37adc8140716b5d863e1eb54bfcf4d2383510d45d80f4814fc1c21ae344",
     "run_unselectable_pytest":
@@ -295,7 +295,7 @@ _LANDING_LANE_SHA256 = {
 #: them, the launcher, the window, and everything before them.
 _LANDING_WINDOW_ANCHOR = "lane_emit_window"
 _LANDING_EXECUTION_PREFIX_SHA256 = (
-    "62ae5873f5621150c464a211d60daad322d3db1b2805f991b2deb329a6322b8c"
+    "88a6b2dcd0f536aabcb4ac77996891fb6fb64ffefb6d2d8374ade75bbe2baf88"
 )
 # RE-PINNED when the landing gained its runtime PREFLIGHT. Both digests below
 # moved for one reason and it is stated here rather than left to `git log`: the
@@ -632,8 +632,35 @@ _LANDING_EXECUTION_PREFIX_SHA256 = (
 # the re-run and each round is reported against its own; with no re-run the
 # output is byte-identical to before. Nothing added here touches `FAILED`,
 # writes an `.rc`, or returns non-zero.
+# RE-PINNED for the PER-FILE TRUNCATION NAMING. FOUR of the six digests moved
+# and ALL FOUR are re-pinned here; `run_repo_tools_pytest` and
+# `run_unselectable_pytest` did not move and are not touched. Every value was
+# read back out of this check's own error text over the edited tree, never
+# hand-transcribed.
+#
+# WHAT MOVED, one defect in two files. A per-file session that stopped at its
+# OWN declared `--maxfail` bound was classified by the lifecycle join's
+# completeness clause — "session finished before every selected item
+# completed" — and the classification nulled the parsed JUnit prefix, so the
+# red case NAMES were destroyed with it. MEASURED on the 2026-08-31 full tier
+# at 47968f0ee2: two files, 102/138 and 11/13; the 23 red names in the first
+# survived nowhere. The aggregate arm has named the identical event since
+# `_maxfail_truncation`; the driver now applies the same supervisor-side
+# clauses per file (`_per_file_truncation`, every clause fail-closed), prints
+# `FILE_TRUNCATED` + `TRUNCATED_RED <node id>` before the record is nulled,
+# and `run_pytest`'s FAIL branch greps those markers into the lane summary —
+# which is why the whole-file digest, the execution prefix, `run_pytest`'s
+# body and `_SEMANTIC_DRIVER_SHA256` all moved.
+#
+# NOTHING ABOUT SUPERVISION MOVED: same three populations, same driver, same
+# `--stall-after`, same `--aggregate-check`, same no-ceiling contract, same
+# write guard, same junit. The verdict does not move on any path — a truncated
+# file is still NORECORD-refused and unmerged; only the diagnosis and the red
+# names move. Falsified both directions in `test_pytest_per_file_junit.py`:
+# fix in -> named + refused; source reverted -> the two positive controls red;
+# a genuine stall and a zero-collecting file keep the truncation label off.
 _LANDING_SCRIPT_SHA256 = (
-    "683881563d78af4e37e695c2bb6be5266a6c590f616085c99f033a6a6ac9ac77"
+    "37279d64bb73fb32e8c4148ee9f9404da05ad0d7a7f34dea7358a70e8e197db4"
 )
 # The helper AST is not enough: a counterfeit CLI can define the expected
 # helper and never call it.  Bind the policy to the complete reviewed driver
@@ -668,8 +695,12 @@ _LANDING_SCRIPT_SHA256 = (
 # or the JUnit contract this file checks moved with it: the grace is still 300
 # flat seconds of ZERO forward progress, and a genuinely hung collection is
 # still killed with rc 199 (falsified in both directions before this re-pin).
+# RE-PINNED with the per-file truncation naming (`_per_file_truncation`): the
+# driver names a session that stopped at its OWN declared failure bound and
+# prints the red case names before the record is nulled — see the block above
+# `_LANDING_SCRIPT_SHA256` for the full account. Supervision is untouched.
 _SEMANTIC_DRIVER_SHA256 = (
-    "113dfba7310a4050b1431bd522334f4c1443c5983c96fb837a6b533a5047dd8e"
+    "ae741549be2b011e5441041b537336aaa2c4919bf739b0db44c7eb4ebfac5d24"
 )
 #: `pip install pytest-timeout` names the plugin, not a bound; it carries no
 #: `--timeout=N` and so cannot match, but the negative is stated because a
