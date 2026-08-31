@@ -2207,6 +2207,22 @@ def _load_prompts(path):
     return out
 
 
+def _load_prompt_sources(*, dataset=None, prompts=None):
+    """Return the union of prompt text carried by the gate's two inputs.
+
+    The official CVDP dataset is already an authoritative prompt source via
+    ``input.prompt``.  ``score_one.py`` therefore supplies ``--dataset`` alone;
+    requiring a duplicate ``--prompts`` JSONL silently disarms every
+    prompt-aware gate in that canonical one-design path.  Load the dataset
+    first and let an explicit prompts file override the same id when supplied.
+    """
+    out = {}
+    for source in (dataset, prompts):
+        if source:
+            out.update(_load_prompts(source))
+    return out
+
+
 def _record_prompt_text(d):
     """The record's prompt, wherever this benchmark's shape put it.
 
@@ -3297,7 +3313,8 @@ def main(argv=None) -> int:
                     help="optional JSON gate report path")
     ap.add_argument("--prompts", default=None,
                     help="ORGANIC #559 — optional prompts JSONL ({id, "
-                         "prompt}); when given, a completion whose modules "
+                         "prompt}); overrides input.prompt from --dataset for "
+                         "the same id. A completion whose modules "
                          "do not include the filename the prompt asks the "
                          "author to save (rtl/<name>.sv) is BLOCKED — the "
                          "CVDP harness derives TOPLEVEL from the file layout "
@@ -3307,7 +3324,8 @@ def main(argv=None) -> int:
                          "filename/module-name mismatch (strict-advisory)")
     ap.add_argument("--dataset", default=None,
                     help="ORGANIC #734 — optional source JSONL carrying each "
-                         "record's `input.context` (the original CVDP dataset). "
+                         "record's `input.prompt` and `input.context` (the "
+                         "original CVDP dataset). "
                          "The documented local_export prompts JSONL omits "
                          "input.context, so the #715 context-module protection "
                          "is silently inactive there and correct completions "
@@ -3452,7 +3470,12 @@ def main(argv=None) -> int:
         if isinstance(c, str) and "\r" in c:
             rec["completion"] = c.replace("\r\n", "\n").replace("\r", "\n")
     # ORGANIC #559 — optional prompt-aware filename↔module-name conformance.
-    prompts = _load_prompts(args.prompts) if args.prompts else {}
+    # The original dataset is itself a prompt source (`input.prompt`).  The
+    # canonical score_one path passes --dataset without manufacturing a second
+    # prompts JSONL, so ignoring it here silently disabled every prompt-aware
+    # check while context/category/file-count checks from the SAME dataset ran.
+    # Explicit --prompts remains the per-id override.
+    prompts = _load_prompt_sources(dataset=args.dataset, prompts=args.prompts)
     # ORGANIC #715 round-2 + #734 — per-id context-module stems from the prompts
     # AND/OR the --dataset `input.context` so multi-file completeness never
     # false-BLOCKs a harness-provided context module the author correctly
