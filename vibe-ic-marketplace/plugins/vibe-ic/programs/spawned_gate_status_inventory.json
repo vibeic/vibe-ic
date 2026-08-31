@@ -1,9 +1,5 @@
 {
   "_comment": "Gate spawns whose verdict reaches nothing, as they stand on the tree spawned_gate_whose_status_is_discarded.py shipped with. MAY ONLY SHRINK; a row matching nothing is rc 1. Each is repaired by binding the result and reading its status, or by declaring ADVISORY at the call site — which this checker reads. Hand-authored from --json; there is no --write-baseline.",
-  "known": [
-    {
-      "key": "B::vibe-ic-marketplace/plugins/vibe-ic/programs/full_suite_run_check.py::full_suite_run_check.py",
-      "reason": "INSTANCE 2 of the pair the 2026-08-21 capture measured. 294 lines whose subject is whether the full suite RAN, with zero occurrences of subprocess, Popen, os.system, check_output and returncode: it decides by matching a command line as text and publishes a verdict about something it never observed. Recorded, not repaired — giving it a way to observe a run is a change to what it BLOCKS on."
-    }
-  ]
+  "known": [],
+  "_shrunk_2026_08_31": "The one recorded row is PAID and removed, not waived. It read: '294 lines whose subject is whether the full suite RAN, with zero occurrences of subprocess, Popen, os.system, check_output and returncode: it decides by matching a command line as text and publishes a verdict about something it never observed. Recorded, not repaired — giving it a way to observe a run is a change to what it BLOCKS on.' The owner-level ruling of 2026-08-31 made exactly that change. The program now RUNS `run_tests.sh --list-tiers` (subprocess.run, returncode checked, the printed directories verified to exist) and derives its population from `git ls-files` via landing_unselectable_pytest_corpus, so its verdict is about something it observed. This register may only SHRINK and this is the shrink; it is not a --write-baseline."
 }

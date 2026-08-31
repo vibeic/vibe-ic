@@ -581,7 +581,13 @@ fully programmable; only Step 2.7 is genuine LLM judgment):
 - PR machine gate — `--version-by-gatekeeper` DEFERS the version gate for
   the version-less authoring PR; the post-assignment re-run (flag OFF)
   enforces the bump: `programs/gatekeeper_review.py`
-- Full-suite (not subset) pytest run: `programs/full_suite_run_check.py`
+- Full-suite (not subset) test run: `programs/full_suite_run_check.py`. It
+  classifies an invocation by the POPULATION IT COVERS (git-derived), not by
+  its shape or its name: `./run_tests.sh` is FULL because the tiers it prints
+  cover every tracked test file; a bare `pytest` and an explicit
+  `pytest programs/tests` are SUBSETS, because `pytest.ini` names one tree of
+  five (owner ruling, 2026-08-31). At an x.y.0 milestone the cadence gate
+  requires the first and refuses the others.
 - Issue-fix counterpart (the other half of the contribution model):
   `vibe-ic:core-agent-loop`
 - Adversarial-review skill used at Step 2.7: `vibe-ic:codex-adversarial-review`

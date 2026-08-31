@@ -1,49 +1,90 @@
 #!/usr/bin/env python3
-"""full_suite_run_check.py — full-suite (not subset) pytest gate for the
-core-agent loop (extracted from vibe-ic:core-agent-loop §Step 3).
+"""full_suite_run_check.py — is the invocation the FULL suite, or a subset?
 
-The skill's HARD RULE: before pushing, run the FULL test suite, which is
-BOTH test trees:
+THE QUESTION IS ASKED OF THE POPULATION, NOT OF A NAME
+======================================================
+An invocation is FULL when the set of directories it actually runs covers
+every test file this plugin has. Both halves of that sentence are DERIVED:
 
-  * ``programs/tests/``  — unit tests for individual programs.
-  * ``tests/``           — the integration/regression GATES (INDEX.md
-                           freshness, every-skill-has-compliance,
-                           orchestrator branch regressions).
+  the population   `git ls-files`, filtered by pytest's OWN collection
+                   patterns, minus the trees `landing_unselectable_pytest_
+                   corpus._EXCLUDED` declares out WITH their reason. That
+                   derivation has been the population question's single
+                   answer since v1.13.80 and this program imports it rather
+                   than writing a second one — a second definition of "the
+                   corpus" drifts, and the direction it drifts in is a tree
+                   nothing checks.
 
-A subset run once let a real regression onto main. ``pytest.ini`` pins
-both trees via ``testpaths`` and a comment forbidding a path filter, but
-nothing checked that the agent actually invoked pytest *without* a
-narrowing path argument.
+  the coverage     for a pytest command, its positional paths (or, with no
+                   positional path, `pytest.ini`'s `testpaths`); for a shell
+                   runner, the tier list THE RUNNER ITSELF PRINTS.
 
-This program makes that a real deterministic check. It does NOT re-run
-pytest (that is the agent's job, and re-running here would be slow and
-duplicative); it validates the COMMAND STRING the agent used so a
-subset-narrowing invocation FAILs:
+FULL  iff  no population file lies outside the covered directories.
 
-  PASS  ``cd $PLUGIN_ROOT && python3 -m pytest -q``     (no path filter)
-  PASS  ``pytest``                                       (testpaths drives it)
-  PASS  ``python3 -m pytest -q programs/tests tests``    (BOTH trees explicit)
-  FAIL  ``python3 -m pytest -q programs/tests/``         (subset — gates skipped)
-  FAIL  ``pytest tests/test_compliance.py``              (single file)
-  FAIL  ``pytest -k version``                            (-k subset selector)
+WHY NOT JUST RECOGNISE `run_tests.sh`
+=====================================
+Because a check that recognises a FILENAME stays green when someone edits
+that file to quietly drop a tree — and dropping a tree is exactly the
+failure this gate is for. `run_tests.sh` already answers `--list-tiers` from
+the same `TEST_DIRS` array its pytest invocation consumes, so this program
+ASKS it and then checks the answer against the population. A runner mutated
+to stop discovering `mcp-eda/test` prints one tier fewer, 48 population
+files fall outside the covered set, and the invocation is classified SUBSET
+naming the tree that went missing. The name of the script is nowhere in the
+acceptance condition; a script is interrogated because it resolves inside
+the plugin and answers `--list-tiers` with real directories, not because of
+what it is called.
 
-The check: a pytest invocation is "full suite" iff it supplies EITHER
-no positional path argument at all (letting pytest.ini ``testpaths`` run
-both trees) OR positional paths that cover BOTH trees. Any narrowing
-selector (``-k`` / ``-m`` / a single test file / only one of the two
-trees) is a subset and FAILs.
+WHAT THIS FIXES (the owner-level ruling of 2026-08-31)
+======================================================
+1. `run_tests.sh` IS a full-suite invocation. It is the only command that
+   executes all five test trees. Before this change the program contained
+   ZERO occurrences of `run_tests` and reported
+
+       [FAIL] full_suite_run_check: NO pytest invocation found — the suite
+              was never run.
+
+   for it. At cadence FULL that is a hard FAIL, so the agent that ran
+   everything was told it ran nothing, and the cheapest way to clear the red
+   was to run a SUBSET. A gate wrong in this direction does not merely fail
+   to catch the shortcut — it recommends it.
+
+2. `programs/tests/` ALONE STOPS COUNTING AS FULL. One tree cannot speak for
+   five. MEASURED at e37d10e1e: `programs/tests` leaves 141 tracked test
+   files uncovered — `skills/` 82, `mcp-eda/test` 48,
+   `tools/phase1_engine/tests` 8, `_shared` 3 — while the 74 tiers
+   `run_tests.sh --list-tiers` prints leave 0. This is not special-cased in
+   either direction; it is the same subtraction, and it reverses itself
+   automatically the day those trees are folded into one.
+
+   This RETIRES `test_only_programs_tests_is_full_since_the_v0219_merge` and
+   the live `_integration_tree_has_tests()` probe it rested on. That decision
+   was correct for the TWO-TREE world it was made in (top-level `tests/`
+   versus `programs/tests`, both collecting 19504). What outran it is that
+   three further trees were recognised later — `tools/phase1_engine/tests`
+   (#1391), `mcp-eda/test` (#1420) and `skills/*/tests` — and a fourth,
+   `_shared`, at v1.13.80. The empty-`tests/` probe is subsumed: an empty
+   tree contributes no population file, so it cannot be missing from any
+   coverage set.
+
+REFUSAL IS NOT FAILURE
+======================
+If the population cannot be derived (no git, `git ls-files` fails, an empty
+repository) this program exits 2 — NOT DETERMINED. It is never turned into a
+PASS, and never into a FAIL either: "I could not look" must not reach a
+reader as either "I looked and it was fine" or "I looked and it was broken".
 
 Usage
 -----
-    python3 full_suite_run_check.py --command "python3 -m pytest -q"
+    python3 full_suite_run_check.py --command "./run_tests.sh"
     python3 full_suite_run_check.py <command_log.txt> [--json <out>]
 
 Exit codes
 ----------
-    0   PASS — at least one full-suite pytest invocation found.
-    1   FAIL — a pytest invocation was found but it is a SUBSET, OR no
-            pytest invocation was found at all (the suite was never run).
-    2   argument / I/O error.
+    0   PASS — at least one full-suite invocation found.
+    1   FAIL — an invocation was found but it is a SUBSET, OR no test
+            invocation was found at all (the suite was never run).
+    2   argument / I/O error, or the population could not be derived.
 
 Missing file -> rc 2. Empty input -> rc 1 (the suite demonstrably was NOT
 run; that is an honest FAIL, never a vacuous PASS).
@@ -53,21 +94,40 @@ chip-AGNOSTIC.
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import json
+import os
 import re
 import shlex
+import subprocess
 import sys
 from dataclasses import dataclass, field, asdict
 from pathlib import Path
-from typing import List, Optional
+from typing import Dict, List, Optional, Sequence, Tuple
 
+_PROGRAMS = Path(__file__).resolve().parent
+_PLUGIN_DEFAULT = _PROGRAMS.parent
 
-# The two canonical trees that together constitute the full suite.
-_TREE_PROGRAMS = "programs/tests"
-_TREE_INTEGRATION = "tests"
-
-# Subset-selector flags: their presence narrows the run to a fraction.
+# Subset-selector flags: their presence narrows the run to a fraction of
+# whatever directories are named, so no coverage set can rescue them.
 _SUBSET_FLAGS = ("-k", "-m")
+
+#: How long a runner gets to answer `--list-tiers`. It is a discovery print,
+#: not a test run: measured 0.009 s at e37d10e1e. A script that takes longer
+#: than this to list its tiers is not answering the question.
+_LIST_TIERS_TIMEOUT = 30
+
+#: The flag a runner must answer to be treated as a source of coverage.
+_LIST_TIERS_FLAG = "--list-tiers"
+
+
+def _load_sibling(name: str):
+    """Import a sibling program by path, however this file was invoked."""
+    spec = importlib.util.spec_from_file_location(name, _PROGRAMS / f"{name}.py")
+    mod = importlib.util.module_from_spec(spec)
+    sys.modules.setdefault(name, mod)
+    spec.loader.exec_module(mod)
+    return mod
 
 
 @dataclass
@@ -84,30 +144,122 @@ class Report:
     passed: bool
     pytest_invocations: int
     full_suite_found: bool
+    #: None == the population was derived. A string == NOT DETERMINED, and the
+    #: string is why. `passed` is False either way; rc 2 is what separates them.
+    undetermined: Optional[str] = None
+    population: int = 0
     invocations: List[Invocation] = field(default_factory=list)
 
 
-def _norm_path(tok: str) -> str:
-    """Strip trailing slash so 'programs/tests/' == 'programs/tests'."""
-    return tok.rstrip("/")
+# --------------------------------------------------------------------------
+# THE POPULATION — imported, never re-derived.
+# --------------------------------------------------------------------------
+def population(root: Optional[Path] = None) -> Optional[List[str]]:
+    """Every tracked test file this plugin owns, plugin-relative, sorted.
 
+    None is a REFUSAL (rc 2), never an empty list. A population of zero and a
+    population that could not be read are the same shape to a caller that
+    subtracts, and only one of them means the suite is complete.
 
-def _integration_tree_has_tests(root: Optional[Path] = None) -> bool:
-    """Does the legacy integration tree still contain any test files?
-
-    Checked live rather than hardcoded, so this gate self-corrects in both
-    directions: today the tree is empty (v0.2.19 merged it into
-    programs/tests) and an explicit programs/tests run is the full suite;
-    the day someone adds a test back under tests/, this returns True and the
-    two-tree requirement is enforced again automatically.
+    The derivation is `landing_unselectable_pytest_corpus`'s — `git ls-files`
+    filtered by pytest's own `python_files` patterns, with that program's
+    DECLARED exclusions (each carrying its reason) subtracted. Importing it is
+    the point: the corpus this gate judges coverage against and the corpus the
+    landing enumerates as unreachable must be the same corpus, or a landing
+    could run one and be certified against the other.
     """
-    base = root if root is not None else Path(__file__).resolve().parents[1]
-    tree = base / _TREE_INTEGRATION
-    if not tree.is_dir():
-        return False
-    return any(tree.glob("test_*.py")) or any(tree.glob("**/test_*.py"))
+    plugin = (root or _PLUGIN_DEFAULT).resolve()
+    try:
+        lu = _load_sibling("landing_unselectable_pytest_corpus")
+    except Exception as e:                                  # pragma: no cover
+        return None
+    repo = lu.repo_root(start=plugin / "programs" / "x.py")
+    if repo is None:
+        return None
+    tracked = lu.tracked_test_files(repo)
+    if tracked is None:
+        return None
+    try:
+        prefix = plugin.relative_to(repo).as_posix() + "/"
+    except ValueError:                                      # pragma: no cover
+        prefix = lu.plugin_rel(repo) + "/"
+    # The declared exclusions are spelled repo-relative against that program's
+    # own `_PLUGIN_REL`. Re-express them PLUGIN-relative before matching, so a
+    # plugin that sits at a different path in the repo (the flattened install
+    # cache, a worktree) does not silently stop excluding anything — a missed
+    # exclusion inflates the population and reddens a run that IS complete.
+    stem = lu._PLUGIN_REL.rstrip("/") + "/"
+    excluded = tuple(e.prefix[len(stem):] if e.prefix.startswith(stem)
+                     else e.prefix for e in lu._EXCLUDED)
+    out = []
+    for rel in tracked:
+        if not rel.startswith(prefix):
+            continue                      # repo-root trees are not this plugin's
+        local = rel[len(prefix):]
+        if any(local.startswith(x) for x in excluded):
+            continue
+        out.append(local)
+    return sorted(out)
 
 
+def _uncovered(pop: Sequence[str], dirs: Sequence[str]) -> List[str]:
+    """Population files that lie under none of `dirs`."""
+    norm = [d.rstrip("/") for d in dirs if d.strip()]
+    return [f for f in pop
+            if not any(f == d or f.startswith(d + "/") for d in norm)]
+
+
+def covering_dirs(pop: Sequence[str]) -> List[str]:
+    """The minimal TIER directories that cover `pop`, derived from `pop` alone.
+
+    A file's tier is its outermost ancestor directory named `tests`/`test`, and
+    its top-level component when it has none (`_shared/test_skill_runner.py`).
+    MEASURED at e37d10e1e this reproduces exactly the 74 tiers
+    `run_tests.sh --list-tiers` prints — which is the point: a caller that needs
+    to NAME the full suite in a command string gets the same set the runner
+    discovers, without a second roster and without shelling out to the runner.
+    """
+    tiers = set()
+    for f in pop:
+        parts = f.split("/")
+        for i, part in enumerate(parts[:-1]):
+            if part in ("tests", "test"):
+                tiers.add("/".join(parts[:i + 1]))
+                break
+        else:
+            tiers.add(parts[0])
+    return sorted(tiers)
+
+
+def _name_missing_trees(uncovered: Sequence[str]) -> List[str]:
+    """Name the MISSING TREES, not 141 individual files.
+
+    Grouped by top-level component and collapsed to that group's longest
+    common directory prefix, so `mcp-eda/test` and `tools/phase1_engine/tests`
+    are reported at the depth they actually exist at rather than as `mcp-eda`
+    and `tools`.
+    """
+    groups: Dict[str, List[str]] = {}
+    for f in uncovered:
+        groups.setdefault(f.split("/")[0], []).append(f)
+    names = []
+    for top, files in sorted(groups.items()):
+        parts = [f.split("/")[:-1] for f in files]
+        common = parts[0]
+        for p in parts[1:]:
+            keep = 0
+            for a, b in zip(common, p):
+                if a != b:
+                    break
+                keep += 1
+            common = common[:keep]
+        names.append(("/".join(common) or top) + f" ({len(files)} file(s))")
+    return names
+
+
+# --------------------------------------------------------------------------
+# COVERAGE — what a given command actually runs.
+# --------------------------------------------------------------------------
 def _pytest_verb_index(tokens: List[str]) -> int:
     """Index of the `pytest` verb token. For `python -m pytest`, this is the
     `pytest` token AFTER the `-m`, so the module-flag `-m` is never confused
@@ -115,27 +267,132 @@ def _pytest_verb_index(tokens: List[str]) -> int:
     for i, t in enumerate(tokens):
         if t == "pytest" or t.endswith("/pytest"):
             return i
-        # `python -m pytest`: the verb is the token after `-m` if it's pytest.
         if t == "-m" and i + 1 < len(tokens) and tokens[i + 1] == "pytest":
             return i + 1
     return -1
 
 
-def _classify_pytest(tokens: List[str]) -> (bool, str):
-    """Given the token list of a single pytest command, return
-    (full_suite, reason). Only tokens AFTER the pytest verb are args."""
+def _looks_like_pytest(tokens: List[str]) -> bool:
+    joined = " ".join(tokens)
+    if re.search(r"(^|\s|/)pytest(\s|$)", joined):
+        return True
+    if re.search(r"\bpython[0-9.]*\b\s+-m\s+pytest\b", joined):
+        return True
+    return False
+
+
+def testpaths(root: Optional[Path] = None) -> List[str]:
+    """`pytest.ini`'s `testpaths` — what a bare `pytest` actually runs.
+
+    Read from the file rather than assumed. A bare `pytest` used to be granted
+    FULL unconditionally with the reason "pytest.ini testpaths runs both
+    trees"; `pytest.ini` has declared ONE testpath since v1.0.0 and
+    `single_testpath_guard.py` pins it there on purpose, so that reason was
+    describing a config that does not exist. Reading the key means the verdict
+    follows the config in whichever direction it moves.
+    """
+    ini = (root or _PLUGIN_DEFAULT) / "pytest.ini"
+    try:
+        text = ini.read_text(encoding="utf-8")
+    except OSError:
+        return []
+    for line in text.splitlines():
+        s = line.strip()
+        if s.startswith("#") or "=" not in s:
+            continue
+        key, _, val = s.partition("=")
+        if key.strip() == "testpaths":
+            return [p.rstrip("/") for p in val.split() if p.strip()]
+    return []
+
+
+def runner_tiers(script: Path) -> Optional[List[str]]:
+    """Ask a shell runner which directories it runs. None == it is not one.
+
+    A candidate is interrogated because of what it ANSWERS, never because of
+    what it is named:
+
+      * it must resolve to a file inside the plugin;
+      * `--list-tiers` must exit 0 within the timeout;
+      * every line it prints must be an existing directory in the plugin;
+      * it must print at least two of them.
+
+    A hygiene script, a benchmark driver or an invented `some_other_script.sh`
+    fails one of those and contributes NO coverage — so it is a subset, which
+    is the honest verdict for a command that is not a test runner at all.
+    """
+    if not script.is_file():
+        return None
+    plugin = script.parent
+    # THE PRECONDITION IS STATIC, AND IT IS NOT A NAME CHECK. Spawning a script
+    # because a command string mentioned it is a side effect a VERIFICATION
+    # program has no business causing: eleven `.sh` files ship inside this
+    # plugin and `hooks/post_install.sh` is one of them. So a candidate must
+    # DECLARE the protocol in its own text before it is run. A `run_tests.sh`
+    # mutated to drop a tree still declares it — the cheat arm is untouched —
+    # and a script that does not implement it is never executed and reads as a
+    # subset, which is the safe direction and also the true one.
+    try:
+        if _LIST_TIERS_FLAG not in script.read_text(encoding="utf-8", errors="replace"):
+            return None
+    except OSError:                                         # pragma: no cover
+        return None
+    try:
+        proc = subprocess.run(
+            ["bash", str(script), _LIST_TIERS_FLAG],
+            capture_output=True, text=True, cwd=str(plugin),
+            timeout=_LIST_TIERS_TIMEOUT,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if proc.returncode != 0:
+        return None
+    lines = [ln.strip() for ln in proc.stdout.splitlines() if ln.strip()]
+    if len(lines) < 2:
+        return None
+    if not all((plugin / ln).is_dir() for ln in lines):
+        return None
+    return lines
+
+
+def _script_candidates(tokens: List[str], plugin: Path) -> List[Path]:
+    """Tokens that could be a runner living inside the plugin.
+
+    Path-shaped, `.sh`-suffixed, and resolving inside the plugin — that is the
+    whole filter. It selects an INTERROGATION TARGET; the verdict still comes
+    from what the script prints.
+    """
+    out = []
+    for t in tokens:
+        if t.startswith("-") or not t.endswith(".sh"):
+            continue
+        p = Path(t)
+        cand = p if p.is_absolute() else (plugin / t)
+        try:
+            cand = cand.resolve()
+        except OSError:                                     # pragma: no cover
+            continue
+        try:
+            cand.relative_to(plugin.resolve())
+        except ValueError:
+            continue
+        out.append(cand)
+    return out
+
+
+def _classify_pytest(tokens: List[str],
+                     pop: Sequence[str],
+                     root: Optional[Path] = None) -> Tuple[bool, str]:
+    """(full_suite, reason) for a pytest command. Only tokens AFTER the verb."""
     verb_idx = _pytest_verb_index(tokens)
     args = tokens[verb_idx + 1:] if verb_idx >= 0 else tokens
 
-    # 1. subset selector flags always narrow — but only as pytest ARGS.
     for t in args:
         if t in _SUBSET_FLAGS:
             return False, f"subset selector '{t}' narrows the run"
         if t.startswith("-k=") or t.startswith("-m="):
             return False, f"subset selector '{t.split('=')[0]}' narrows the run"
 
-    # 2. collect positional (non-flag, non-flag-value) path arguments.
-    #    -q is store_true; -p / -c / -o / --rootdir / --import-mode take values.
     value_flags = {"-p", "-c", "-o", "--rootdir", "--import-mode"}
     paths: List[str] = []
     skip_next = False
@@ -150,69 +407,63 @@ def _classify_pytest(tokens: List[str]) -> (bool, str):
             continue
         if t.startswith("-"):
             continue
-        paths.append(_norm_path(t))
+        paths.append(t.rstrip("/"))
 
-    if not paths:
-        # No positional path -> pytest.ini testpaths runs the full set.
-        return True, "no path filter (pytest.ini testpaths runs both trees)"
+    # A single test FILE is a subset even when it lives under a covered tree.
+    if any(p.endswith(".py") for p in paths):
+        return False, f"single-file / file-level path(s) {sorted(set(paths))} are a subset"
 
-    norm = set(paths)
-    covers_programs = any(
-        p == _TREE_PROGRAMS or p.startswith(_TREE_PROGRAMS + "/")
-        for p in norm
-    )
-    covers_integration = any(
-        p == _TREE_INTEGRATION or p.startswith(_TREE_INTEGRATION + "/")
-        for p in norm
-    )
-    # A single test FILE under a tree (path with a '.py') is a subset even
-    # if it lives under one of the trees.
-    has_file = any(p.endswith(".py") for p in norm)
-    if has_file:
-        return False, f"single-file / file-level path(s) {sorted(norm)} are a subset"
+    if paths:
+        dirs, how = sorted(set(paths)), "explicit path(s)"
+    else:
+        dirs = testpaths(root)
+        how = "pytest.ini testpaths"
+        if not dirs:
+            return False, ("no positional path and pytest.ini declares no "
+                           "testpaths — nothing is selected")
 
-    if covers_programs and covers_integration:
-        return True, f"both trees covered explicitly: {sorted(norm)}"
-    # v0.2.19 merged the two test trees: conftest.py records "the two former
-    # test trees were merged" and pytest.ini's testpaths is programs/tests
-    # alone. When the integration tree holds NO test files, an explicit
-    # `programs/tests` path IS the full suite — measured on this tree:
-    # `pytest -q --collect-only` and `pytest programs/tests -q --collect-only`
-    # both collect 19504. This is detected DYNAMICALLY, not assumed: if the
-    # integration tree ever grows test files again, the two-tree requirement
-    # reinstates itself without anyone editing this gate.
-    if covers_programs and not covers_integration             and not _integration_tree_has_tests():
-        return True, ("programs/tests covers the full suite — the integration "
-                      "tree holds no test files (merged in v0.2.19)")
-    missing = []
-    if not covers_programs:
-        missing.append(_TREE_PROGRAMS)
-    if not covers_integration:
-        missing.append(_TREE_INTEGRATION)
-    return False, f"subset — missing tree(s): {missing} (only {sorted(norm)})"
+    missing = _uncovered(pop, dirs)
+    if not missing:
+        return True, (f"{how} {dirs} cover all {len(pop)} tracked test file(s)")
+    return False, (f"subset — {how} {dirs} leave {len(missing)} of {len(pop)} "
+                   f"tracked test file(s) unrun; missing tree(s): "
+                   f"{_name_missing_trees(missing)}")
 
 
-def _looks_like_pytest(tokens: List[str]) -> bool:
-    joined = " ".join(tokens)
-    # `pytest ...` OR `python -m pytest ...` OR `python3 -m pytest`.
-    if re.search(r"(^|\s|/)pytest(\s|$)", joined):
-        return True
-    if re.search(r"\bpython[0-9.]*\b\s+-m\s+pytest\b", joined):
-        return True
-    return False
+def _classify_runner(script: Path,
+                     pop: Sequence[str]) -> Optional[Tuple[bool, str]]:
+    """(full_suite, reason) for a shell runner, or None if it is not one."""
+    tiers = runner_tiers(script)
+    if tiers is None:
+        return None
+    missing = _uncovered(pop, tiers)
+    name = script.name
+    if not missing:
+        return True, (f"{name} --list-tiers reports {len(tiers)} tier(s) "
+                      f"covering all {len(pop)} tracked test file(s)")
+    return False, (f"subset — {name} --list-tiers reports {len(tiers)} tier(s), "
+                   f"leaving {len(missing)} of {len(pop)} tracked test file(s) "
+                   f"unrun; missing tree(s): {_name_missing_trees(missing)}")
 
 
-def scan_commands(commands: List[str]) -> Report:
+# --------------------------------------------------------------------------
+def scan_commands(commands: List[str],
+                  root: Optional[Path] = None) -> Report:
+    pop = population(root)
+    if pop is None:
+        return Report(passed=False, pytest_invocations=0, full_suite_found=False,
+                      undetermined="the tracked test corpus could not be derived "
+                                   "from git — NOT DETERMINED, which is neither "
+                                   "a pass nor a fail")
+    plugin = (root or _PLUGIN_DEFAULT).resolve()
     invocations: List[Invocation] = []
     full_found = False
-    n_pytest = 0
+    n_invocations = 0
     for idx, raw in enumerate(commands, start=1):
         line = raw.strip()
         if not line or line.startswith("#"):
             continue
-        # A command line may chain with && ; split and inspect each segment.
-        segments = re.split(r"&&|;", line)
-        for seg in segments:
+        for seg in re.split(r"&&|;", line):
             seg = seg.strip()
             if not seg:
                 continue
@@ -220,31 +471,47 @@ def scan_commands(commands: List[str]) -> Report:
                 tokens = shlex.split(seg)
             except ValueError:
                 tokens = seg.split()
-            if not _looks_like_pytest(tokens):
+
+            verdict: Optional[Tuple[bool, str]] = None
+            if _looks_like_pytest(tokens):
+                verdict = _classify_pytest(tokens, pop, root)
+            else:
+                # Not a pytest command line. It may still BE the suite: a
+                # runner that execs pytest over every tier is a full-suite
+                # invocation and reporting "the suite was never run" for it is
+                # the defect this program was rewritten to remove.
+                for cand in _script_candidates(tokens, plugin):
+                    verdict = _classify_runner(cand, pop)
+                    if verdict is not None:
+                        break
+            if verdict is None:
                 continue
-            n_pytest += 1
-            full, reason = _classify_pytest(tokens)
-            if full:
-                full_found = True
+            n_invocations += 1
+            full, reason = verdict
+            full_found = full_found or full
             invocations.append(Invocation(
                 line_no=idx, command=seg, is_pytest=True,
                 full_suite=full, reason=reason))
     return Report(
         passed=full_found,
-        pytest_invocations=n_pytest,
+        pytest_invocations=n_invocations,
         full_suite_found=full_found,
+        undetermined=None,
+        population=len(pop),
         invocations=invocations,
     )
 
 
 def main(argv: Optional[list] = None) -> int:
     p = argparse.ArgumentParser(
-        description="Verify a full-suite (both-trees) pytest run was issued "
-                    "by the core-agent before push (chip-AGNOSTIC).")
+        description="Classify a test invocation as the FULL suite or a SUBSET, "
+                    "by covering the git-derived population (chip-AGNOSTIC).")
     p.add_argument("commands_file", nargs="?", default=None,
                    help="File of shell commands, one per line.")
     p.add_argument("--command", default=None,
                    help="A single command string to scan.")
+    p.add_argument("--plugin-root", default=None,
+                   help="Plugin root to judge against (default: this file's).")
     p.add_argument("--json", default=None, help="Write JSON report to this path.")
     args = p.parse_args(argv)
 
@@ -264,25 +531,36 @@ def main(argv: Optional[list] = None) -> int:
         print("ERROR: provide a commands file or --command", file=sys.stderr)
         return 2
 
-    report = scan_commands(commands)
+    root = Path(args.plugin_root).resolve() if args.plugin_root else None
+    report = scan_commands(commands, root=root)
     report_json = json.dumps(asdict(report), indent=2, ensure_ascii=False)
 
     if args.json:
         Path(args.json).parent.mkdir(parents=True, exist_ok=True)
         Path(args.json).write_text(report_json + "\n", encoding="utf-8")
 
+    if report.undetermined:
+        print(f"NOT DETERMINED: full_suite_run_check: {report.undetermined}",
+              file=sys.stderr)
+        return 2
+
     if report.full_suite_found:
-        print(f"[PASS] full_suite_run_check: full-suite pytest invocation "
-              f"found ({report.pytest_invocations} pytest command(s) seen).")
+        print(f"[PASS] full_suite_run_check: full-suite invocation found "
+              f"(covers all {report.population} tracked test file(s); "
+              f"{report.pytest_invocations} invocation(s) seen).")
+        for inv in report.invocations:
+            if inv.full_suite:
+                print(f"  line {inv.line_no} [OK] {inv.command}")
+                print(f"    -> {inv.reason}")
         return 0
 
     if report.pytest_invocations == 0:
-        print("[FAIL] full_suite_run_check: NO pytest invocation found — "
+        print("[FAIL] full_suite_run_check: NO test invocation found — "
               "the suite was never run.")
         return 1
 
-    print("[FAIL] full_suite_run_check: pytest was run but only as a SUBSET "
-          "(the integration/regression gates were skipped):")
+    print("[FAIL] full_suite_run_check: tests were run but only as a SUBSET "
+          f"of the {report.population} tracked test file(s):")
     for inv in report.invocations:
         flag = "OK" if inv.full_suite else "SUBSET"
         print(f"  line {inv.line_no} [{flag}] {inv.command}")

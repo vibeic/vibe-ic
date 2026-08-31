@@ -231,7 +231,11 @@ def test_cadence_minor_milestone_selects_full(tmp_path):
     v = gk.review(
         "BASE", "HEAD",
         repo=repo, plugin_root=plugin, role="core-agent",
-        pytest_cmd="python3 -m pytest -q",     # no path filter = full suite
+        # THE RUNNER, not a bare `pytest`. Since the 2026-08-31 ruling the
+        # cadence gate judges COVERAGE of the tracked corpus, and a bare
+        # `pytest` resolves to `pytest.ini`'s single testpath — one tree of
+        # five. `./run_tests.sh` is the invocation that reaches all of them.
+        pytest_cmd="./run_tests.sh",
         override_files=["vibe-ic-marketplace/plugins/vibe-ic/programs/widget.py"],
         override_cur="1.1.0", override_prev="1.0.99",
     )

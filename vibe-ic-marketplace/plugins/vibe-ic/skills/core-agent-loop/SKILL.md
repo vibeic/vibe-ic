@@ -741,7 +741,13 @@ programmable; only Step 2 fix-authoring is genuine LLM judgment):
   an externally-filed version-less PR): `programs/gatekeeper_review.py`
 - Version assignment (next monotonic version → plugin.json + marketplace.json;
   the pusher runs `--write` pre-push): `programs/gatekeeper_assign_version.py`
-- Full-suite (not subset) pytest run: `programs/full_suite_run_check.py`
+- Full-suite (not subset) test run: `programs/full_suite_run_check.py`. It
+  classifies an invocation by the POPULATION IT COVERS (git-derived), not by
+  its shape or its name: `./run_tests.sh` is FULL because the tiers it prints
+  cover every tracked test file; a bare `pytest` and an explicit
+  `pytest programs/tests` are SUBSETS, because `pytest.ini` names one tree of
+  five (owner ruling, 2026-08-31). At an x.y.0 milestone the cadence gate
+  requires the first and refuses the others.
 
 ### The ADVISORY censuses — run them, do not gate on them
 

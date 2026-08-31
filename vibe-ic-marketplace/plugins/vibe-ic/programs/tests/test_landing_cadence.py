@@ -151,10 +151,19 @@ def test_a_subset_cannot_satisfy_a_milestone(tmp_path):
 
 def test_a_directory_token_must_not_be_readable_as_the_whole_tree(tmp_path):
     """The first version of describe() emitted `programs/tests/.selection` for a
-    subset. `full_suite_run_check` classifies a path under the single testpath
-    as the FULL suite, so that string satisfied a milestone while 101 files
-    ran. This pins the shape that is actually refused."""
-    assert gr._fsr_scan(["python3 -m pytest -q programs/tests/.selection"]).full_suite_found is True
+    subset. `full_suite_run_check` then classified any path under the single
+    testpath as the FULL suite, so that string satisfied a milestone while 101
+    files ran. This pins the shape that is actually refused.
+
+    THE HAZARD ITSELF IS NOW GONE, and this line records that rather than the
+    hazard: under the 2026-08-31 ruling the classifier measures COVERAGE OF THE
+    TRACKED POPULATION, so a placeholder token under `programs/tests` covers
+    nothing at all and a real `programs/tests` covers one tree of five. Neither
+    can buy a milestone any more. The rest of the case still stands — describe()
+    must not emit the placeholder — because a string that happens to be refused
+    today is a thinner guarantee than a string that is TRUE."""
+    assert gr._fsr_scan(
+        ["python3 -m pytest -q programs/tests/.selection"]).full_suite_found is False
     tree = lc.tree_test_files(_PLUGIN)
     _, subset_cmd, _ = lc.describe(_PLUGIN, _write_sel(tmp_path, tree[:5]))
     assert ".selection" not in subset_cmd

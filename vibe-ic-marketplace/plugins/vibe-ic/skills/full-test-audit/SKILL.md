@@ -23,18 +23,30 @@ extractability) needs LLM judgment and is run as a fan-out here.
 
 ## Part 1 — Full test (the CI way, not a subset)
 
-`pytest.ini` declares ONE tree (`testpaths = programs/tests`); run it the way CI
-does — bare, no path filter — plus the chip-AGNOSTIC source guard. (Running
-`pytest programs/tests/<one>` alone is the v0.2.19 footgun that shipped CI red.)
+**`./run_tests.sh` IS the full suite. A bare `pytest` is NOT.** `pytest.ini`
+declares ONE testpath on purpose (`single_testpath_guard.py` pins it), so a bare
+`pytest` reaches `programs/tests` and stops there. MEASURED at e37d10e1e that
+leaves 141 of 3117 tracked test files unrun — `skills/*/tests` 82,
+`mcp-eda/test` 48, `tools/phase1_engine/tests` 8, `_shared` 3 — while the 74
+tiers `run_tests.sh` discovers leave none. This section used to instruct the
+opposite ("bare pytest from the plugin root, single tree"), which is the
+shortcut the owner-level ruling of 2026-08-31 closed:
+`full_suite_run_check.py` now classifies an invocation by the population it
+COVERS, so the command below is the one it accepts and the bare one is refused.
 
 ```bash
 # chip-AGNOSTIC source guard (CI step 1a)
 python3 <plugin>/programs/source_chip_agnostic_check.py <plugin>
-# full suite (CI step 1b) — bare pytest from the plugin root, single tree
-cd <plugin> && pytest -q
+# full suite (CI step 1b) — every tier, not one tree
+cd <plugin> && ./run_tests.sh
+# and confirm the command you actually ran counts as full:
+python3 <plugin>/programs/full_suite_run_check.py --command "./run_tests.sh"
 ```
 Report: passed / failed / skipped, and the guard verdict. A single FAILED is a
-fail — surface the failing test, do not round it away.
+fail — surface the failing test, do not round it away. `run_tests.sh` prints the
+tier census it discovered first; a tier count that has SHRUNK is itself a
+finding, because the cheapest way to make a suite green is to stop running part
+of it.
 
 ## Part 2 — D1: every program has a test  ·  Part 3 — D2: every step has a checker
 
