@@ -1102,8 +1102,41 @@ RECORD_ADJUDICATION = _ra.declare(
     # fields carrying them are disclosure, not verdict. Verified by running the
     # rule against both corpus records carrying `coupling_pairs: 0`, which
     # still supersede PASS -> VACUOUS_PASS.
+    #
+    # v1.14.24 (`test(si-mcf): pin the escape, the de-escalation, and the
+    # coverage disclosure`) moved the closure a THIRD time, and this digest is
+    # regenerated for it. That commit declares "No threshold, Miller factor,
+    # margin or verdict rule changed", and the re-review CHECKED that claim
+    # rather than accepting it: rebuilding the fingerprint closure at the
+    # previously-declared revision and at this one gives 13 members on both
+    # sides, none added, none removed, and exactly ONE changed — `build_report`,
+    # which gained three `summary` keys copied straight out of `stats`
+    # (`windows_coverage`, `windows_resolved`, `windows_total`). `verdict_for`,
+    # `error_categories`, `denominator` and `_vacuity` — the four that between
+    # them decide the verdict — are byte-identical under normalisation.
+    #
+    # THE ONE QUESTION THE CHANGE DOES RAISE, and it is why a digest over a
+    # report-shape edit is not noise. v1.14.24 also made `audit()` emit a NEW
+    # finding, `WINDOW_COVERAGE_PARTIAL`. The rule below rebuilds `Finding`
+    # objects out of the record's `findings` list and runs them through
+    # `error_categories`, so a new finding reaching that list is exactly the
+    # kind of thing this fingerprint exists to make somebody look at. It is
+    # WARNING severity and `error_categories` skips every non-ERROR finding, so
+    # it enters neither the `not_run` nor the `defect` bucket and cannot move
+    # the verdict — ANSWERED BY RUNNING IT, not by reading it, and pinned in
+    # `tests/test_v1_14_24_window_coverage_warning_is_not_a_verdict.py` so the
+    # next author changing that severity is stopped by a test rather than by a
+    # digest they can regenerate without reading.
+    #
+    # RE-ADJUDICATED, which is the remedy this gate actually asks for. Both
+    # published `si_mcf_sta_check` records in the corpus were decided against
+    # the logic above: `spm/v1.10.18_sky130A` (coupling_pairs 2066) and
+    # `spm/v1.5.65_sky130A` (coupling_pairs 1558) both re-derived thousands of
+    # folds, so `zero-fold-is-not-a-signoff` does not reach either and neither
+    # carries a superseded verdict. The rule STANDS AS WRITTEN; nothing about
+    # any published record is relabelled.
     decision_digest=(
-        "bab7cda2e01f1c85cd400009a4beab95dc537219e931d8667b88a7d390e06ce3"),
+        "4e7ac17edadbf730cdd70708f19fbe1f4f8afad280433bd4294fa079d604b9f6"),
     rules=(
         _ra.Rule(
             rule_id="si_mcf_sta_check.zero-fold-is-not-a-signoff",
