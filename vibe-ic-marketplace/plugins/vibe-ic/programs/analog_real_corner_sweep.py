@@ -2103,29 +2103,57 @@ def build_design_deck(project: Path, block: str, pdk_lib: str, corner: str,
     deck = "\n".join(inlined)
 
     found_lib = _LIB_CARD_RE.findall(deck)
-    if len(found_lib) != 1:
+    if not found_lib:
         info["reason"] = (
-            f"the delivered deck carries {len(found_lib)} `.lib` corner "
-            f"card(s); exactly one is required for A4 to select a process "
-            f"corner without guessing which one governs")
+            "the delivered deck carries 0 `.lib` corner card(s); at least the "
+            "process-corner card is required for A4 to select a process corner")
         return None, info
-    declared_lib, declared_section = found_lib[0]
-    info["declared_model_lib"] = declared_lib
-    info["declared_model_section"] = declared_section
-    info["sim_model_lib"] = pdk_lib
-    if Path(declared_lib).name != Path(pdk_lib).name:
+    # A sectioned PDK ships ONE corner lib PER DEVICE CLASS and a correct deck
+    # binds each class it uses (confirmed: IHP sg13g2 cornerMOShv.lib mos_tt +
+    # cornerCAP.lib cap_typ + cornerRES.lib res_typ — A3's own emitter writes
+    # exactly that). The card A4 owns is the one bound to the model set this
+    # step RESOLVED; the other device-class cards are A3's electrical
+    # decisions, kept verbatim. Partition by file name, the same identity the
+    # model-set refusal below has always used.
+    own_cards = [(lib, sec) for lib, sec in found_lib
+                 if Path(lib).name == Path(pdk_lib).name]
+    companions = [(lib, sec) for lib, sec in found_lib
+                  if Path(lib).name != Path(pdk_lib).name]
+    if not own_cards:
+        declared = ", ".join(repr(lib) for lib, _sec in found_lib)
         info["reason"] = (
-            f"the delivered deck is bound to model set {declared_lib!r} and "
+            f"the delivered deck is bound to model set {declared} and "
             f"this step resolved {pdk_lib!r}; re-stamping the corner section is "
             f"this step's job, re-stamping the MODEL SET is not — the device "
             f"names in the delivered netlist were chosen against the first")
         return None, info
+    if len(own_cards) > 1:
+        info["reason"] = (
+            f"the delivered deck carries {len(own_cards)} `.lib` card(s) bound "
+            f"to the resolved model set {Path(pdk_lib).name!r}; exactly one is "
+            f"required for A4 to select a process corner without guessing "
+            f"which one governs")
+        return None, info
+    declared_lib, declared_section = own_cards[0]
+    info["declared_model_lib"] = declared_lib
+    info["declared_model_section"] = declared_section
+    info["sim_model_lib"] = pdk_lib
+    info["companion_lib_cards"] = [
+        {"lib": lib, "section": sec} for lib, sec in companions]
     # Same file name, different directory: a staged copy of the same lib. Real,
     # so it is recorded rather than refused — but never silently.
     info["model_lib_path_changed"] = declared_lib != pdk_lib
-    deck, nlib = _LIB_CARD_RE.subn(
-        lambda m: f".lib {pdk_lib} {corner}", deck)
-    info["lib_cards_restamped"] = nlib
+
+    def _restamp(m: "re.Match") -> str:
+        # Only the process-corner card this step owns is re-stamped; a
+        # companion device-class card (RES/CAP/…) keeps A3's binding verbatim.
+        if Path(m.group(1)).name == Path(pdk_lib).name:
+            return f".lib {pdk_lib} {corner}"
+        return m.group(0)
+
+    deck, _nseen = _LIB_CARD_RE.subn(_restamp, deck)
+    info["lib_cards_restamped"] = 1
+    info["lib_cards_kept"] = len(companions)
     deck, applied = stamp_temp_card(deck, temp_c)
     info.update(applied)
     info["netlist_lines"] = len(sp_text.split("\n"))
@@ -2142,10 +2170,18 @@ def design_deck_required_roles(project: Path, block: str):
         txt = sp_path.read_text()
     except OSError:
         return None
+    # Role detection is keyed on the industry-wide device NAMING CONVENTION
+    # (an identifier containing `nmos`/`nfet` vs `pmos`/`pfet`), not on any
+    # one PDK's literal device names: the sky130 literals this used to match
+    # made the role read return None for every other family, so the flavour
+    # election downstream ran with no required roles at all. Comment lines are
+    # excluded so a prose mention of a device does not become a role.
+    code = "\n".join(ln for ln in txt.splitlines()
+                     if not ln.lstrip().startswith("*"))
     roles = []
-    if "sky130_fd_pr__nfet_01v8" in txt:
+    if re.search(r"(?i)\b\w*n(?:mos|fet)\w*\b", code):
         roles.append("nmos")
-    if "sky130_fd_pr__pfet_01v8" in txt:
+    if re.search(r"(?i)\b\w*p(?:mos|fet)\w*\b", code):
         roles.append("pmos")
     return tuple(roles) or None
 
