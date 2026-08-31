@@ -78,6 +78,7 @@ from ic_class_profile import (  # noqa: E402
 )
 from l_doc_consumer_contract import l_doc_fields, load_l_doc  # noqa: E402
 import l_doc_generator_stamp as _stamp  # noqa: E402
+from _atomic_artefact import write_json as _atomic_write_json  # noqa: E402
 
 
 TOOL = "l22_analog_verification_plan_emit"
@@ -459,8 +460,12 @@ def main(argv: Optional[List[str]] = None) -> int:
     if args.json:
         out = Path(args.json)
         out.parent.mkdir(parents=True, exist_ok=True)
-        out.write_text(json.dumps(report, indent=2, ensure_ascii=False) + "\n",
-                       encoding="utf-8")
+        # vibe-ic#1082: --json names the destination a downstream
+        # `required_outputs` check opens, so it must appear whole or not at
+        # all. `write_text` creates the final name first and fills it second;
+        # a writer that dies in between leaves a truncated L22 plan under the
+        # name that reads to every consumer as "the step produced this".
+        _atomic_write_json(out, report)
     print(json.dumps(report, indent=2, ensure_ascii=False))
     #: An UNRECOGNISED status is rc 1, never rc 0: a status this table does not
     #: know is a status nothing has decided about, and defaulting it to PASS is

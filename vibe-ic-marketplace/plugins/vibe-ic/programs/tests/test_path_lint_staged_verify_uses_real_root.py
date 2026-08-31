@@ -1,6 +1,6 @@
 """Staged verification must judge containment against the REAL project root.
 
-WHAT WENT WRONG (measured, u_hawaii_adc round-5b @ v1.14.79 — ONE round after
+WHAT WENT WRONG (measured, u_hawaii_adc round-5b @ v1.14.80 — ONE round after
 the project-internal rung landed): A3's `verify_with_checkers` copies the deck
 into a TemporaryDirectory and runs the checkers on that staging tree, so the
 path lint's containment rung tested `/tmp/a3verify_*` — and the deck's correct
@@ -71,7 +71,14 @@ def test_without_the_flag_the_staging_tree_still_refuses(
 
 
 def test_real_root_does_not_admit_paths_outside_it(tmp_path: Path) -> None:
-    stage = _staging(tmp_path, "/home/somebody_else/models/foo.lib")
+    # Derived, not a literal home dir — see the sibling note in
+    # test_path_lint_accepts_project_staged_pdk.py. `outside_the_project/` is
+    # a real directory outside the named --project-root, so the rung is tested
+    # against a genuinely foreign path without pinning one machine's home.
+    foreign = tmp_path / "outside_the_project" / "models" / "foo.lib"
+    foreign.parent.mkdir(parents=True)
+    foreign.write_text("* model lib\n")
+    stage = _staging(tmp_path, str(foreign))
     r = _run(stage, "--project-root", str(tmp_path / "real_project"))
     assert r.returncode == 1
 

@@ -1,6 +1,6 @@
 """Path lint accepts the project's OWN staged PDK copy (u_hawaii_adc round-5).
 
-WHAT WENT WRONG (measured, v1.14.79): two shipped rules force one binding —
+WHAT WENT WRONG (measured, v1.14.80): two shipped rules force one binding —
 `pdk_analog_completeness_check` REQUIRES the project to carry its model libs
 under `input/pdk/**` (a run stands on input/ alone), and the availability
 resolver prefers that staged copy — so A3 binds
@@ -55,8 +55,16 @@ def test_project_staged_pdk_copy_is_accepted_and_stated(tmp_path: Path) -> None:
 
 
 def test_foreign_absolute_path_still_refused(tmp_path: Path) -> None:
-    project = _project(tmp_path,
-                       ".lib /home/somebody_else/models/foo.lib tt")
+    # The foreign path is DERIVED from the test's own tmp tree rather than
+    # spelled as a literal home dir: a hard-coded `/home/<someone>/...` pins
+    # one machine's layout into shipped source (shipped_path_portability_check
+    # R1). Building it as a real directory beside — never inside — the project
+    # root tests the same rung against a path that actually exists and is
+    # genuinely outside containment, on any host.
+    foreign = tmp_path / "outside_the_project" / "models" / "foo.lib"
+    foreign.parent.mkdir(parents=True)
+    foreign.write_text("* model lib\n")
+    project = _project(tmp_path / "proj", f".lib {foreign} tt")
     r = _run(project)
     assert r.returncode == 1
     rep = json.loads((project / "r.json").read_text())
