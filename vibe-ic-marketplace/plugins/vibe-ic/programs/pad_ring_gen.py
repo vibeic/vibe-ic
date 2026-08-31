@@ -166,6 +166,12 @@ Their TCL `exit 1`s with a line on stderr and no record. Every refusal here is
 a rule id and a message inside `reports/phase3/padring.json` — see
 `_pad_ring`'s table of which of their exits became data.
 
+`PAD_CORNER_SPACING_NOT_SITE_MULTIPLE` also publishes every positive count
+that the same arithmetic says would fit when the declared pads have one
+uniform width.  It does not choose one or alter the declaration.  When the
+declared pads have different widths, count alone no longer determines their
+total width, so the record says `NOT_DETERMINED` instead of inventing a list.
+
 NOT PERFORMED HERE, and said in the artefact rather than left to be noticed:
 bond pads and IO terminals. IO filler placement IS performed here because the
 canonical flow has no later IO-filler step: the later OpenROAD
@@ -329,8 +335,13 @@ ROTATION_VERTICAL_NOT_HONOURED: Dict[str, Any] = {
 UNPERFORMED: Dict[str, str] = {}
 
 
-def _finding(severity: str, rule: str, message: str) -> Dict[str, str]:
-    return {"severity": severity, "rule": rule, "message": message}
+def _finding(severity: str, rule: str, message: str,
+             **extra: Any) -> Dict[str, Any]:
+    finding: Dict[str, Any] = {
+        "severity": severity, "rule": rule, "message": message,
+    }
+    finding.update(extra)
+    return finding
 
 
 def _report(verdict: str, reason: str, **kw: Any) -> Dict[str, Any]:
@@ -398,18 +409,41 @@ def _skip_marker(project: Path, reason: str) -> None:
 
 
 # ── placement: upstream's eight steps, in upstream's order ─────────────────
+def _feasible_uniform_pad_counts(side_available: int, pad_width: int,
+                                 site_width: int) -> List[int]:
+    """Every positive uniform-pad count that passes steps 1-8.
+
+    This is the same integer arithmetic `_place` applies below, evaluated for
+    each count that physically fits.  It is guidance, never a repair: the
+    caller still has to declare the actual pad instances and signal map, and
+    the original refusal remains blocking until that declaration itself is
+    feasible.
+    """
+    if side_available < 0 or pad_width <= 0 or site_width <= 0:
+        return []
+    feasible: List[int] = []
+    for count in range(1, side_available // pad_width + 1):
+        space_for_fill = side_available - count * pad_width
+        between = (space_for_fill // (count + 1) // site_width) * site_width
+        rest = space_for_fill - between * (count - 1)
+        to_corner, odd = divmod(rest, 2)
+        if not odd and to_corner % site_width == 0:
+            feasible.append(count)
+    return feasible
+
+
 def _place(die: PR.Def, cfg: Dict[str, Any], lib: PR.IoLibrary,
            site_wh: Dict[str, Tuple[int, int]]
            ) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]],
                       Dict[str, Any], Dict[str, Dict[str, int]],
-                      List[Dict[str, str]]]:
+                      List[Dict[str, Any]]]:
     """Returns (pads, corners, abutment, spacing, findings).
 
     A finding of severity ERROR means the ring is refused, exactly as
     upstream's `exit 1` refuses it — with the difference that the refusal ends
     up in the report.
     """
-    findings: List[Dict[str, str]] = []
+    findings: List[Dict[str, Any]] = []
     units = die.units
     llx, lly, urx, ury = die.box
     edge = int(round(cfg["edge_spacing_um"] * units))
@@ -520,13 +554,48 @@ def _place(die: PR.Def, cfg: Dict[str, Any], lib: PR.IoLibrary,
         # divergence and this comment is it.
         # 8. refuse a corner spacing that is not a multiple of the site width
         if odd or to_corner % site_w:
+            widths = sorted(set(along))
+            guidance_fields: Dict[str, Any] = {
+                "current_pad_count": n,
+                "side_available_dbu": avail,
+                "minimum_site_width_dbu": site_w,
+                "declared_pad_widths_dbu": widths,
+            }
+            if len(widths) == 1 and widths[0] > 0:
+                feasible = _feasible_uniform_pad_counts(
+                    avail, widths[0], site_w)
+                guidance_fields.update({
+                    "declared_uniform_pad_width_dbu": widths[0],
+                    "feasible_pad_counts": feasible,
+                    "feasible_pad_counts_basis": "uniform_declared_pad_width",
+                })
+                guidance = (
+                    f" With the declared side/corner/edge geometry, uniform "
+                    f"pad width {widths[0]} DEF unit(s), and site width "
+                    f"{site_w}, the feasible positive per-side counts are "
+                    f"{feasible}; the current count {n} is not in that set.")
+            else:
+                guidance_fields.update({
+                    "declared_uniform_pad_width_dbu": None,
+                    "feasible_pad_counts": None,
+                    "feasible_pad_counts_basis": "NOT_DETERMINED",
+                    "feasible_pad_counts_reason": (
+                        "count alone does not determine total pad width when "
+                        "the declared pads have different widths"),
+                })
+                guidance = (
+                    " Feasible per-side counts are NOT DETERMINED from count "
+                    f"alone because the declared pads have widths {widths} "
+                    "DEF unit(s); changing the count without naming which "
+                    "masters remain would guess the total width.")
             findings.append(_finding(
                 "ERROR", "PAD_CORNER_SPACING_NOT_SITE_MULTIPLE",
                 f"{PR.SIDE_VAR[side]}: the remaining area for the pads on "
                 f"the side is {rest / 2} DEF unit(s), which is not a multiple "
                 f"of the minimum site width {site_w} — the gap between the "
                 f"corner and the first pad could then not be closed by filler "
-                f"cells, and a ring that does not abut carries no supply"))
+                f"cells, and a ring that does not abut carries no supply."
+                f"{guidance}", **guidance_fields))
             continue
         spacing[side] = {"space_for_fill": space_for_fill,
                          "between": between, "to_corner": to_corner}

@@ -38,6 +38,7 @@ The fixture is synthetic on purpose — a square die, a three-master IO library,
 four pads a side — and carries no process, foundry or library name.
 """
 import json
+import math
 import re
 import os
 import shutil
@@ -55,6 +56,7 @@ sys.path.insert(0, str(PROGRAMS))
 import _pad_ring as PR            # noqa: E402
 import pad_ring_check as CHK      # noqa: E402
 import pad_ring_gen as GEN        # noqa: E402
+from _hostpaths import require_repo  # noqa: E402
 from not_verified_tier import (   # noqa: E402
     not_verified_reason,
     skip_not_verified,
@@ -75,7 +77,8 @@ PADS = {n: f"pad_{n}" for n in ALL_SIGNALS}
 # SITEs first (the spacing arithmetic rounds to the pad site's width), then the
 # masters. `site_w` parameterises the site width so the corner-spacing refusal
 # can be reached without inventing a second library.
-def _io_lef(site_w: float = 1.0) -> str:
+def _io_lef(site_w: float = 1.0, *, pad_w: float = 75.0,
+            corner_w: float = 350.0) -> str:
     return f"""VERSION 5.8 ;
 UNITS
   DATABASE MICRONS 1000 ;
@@ -88,7 +91,7 @@ END io_site
 SITE io_corner_site
     CLASS PAD ;
     SYMMETRY R90 ;
-    SIZE 350.00 BY 350.00 ;
+    SIZE {corner_w:.2f} BY {corner_w:.2f} ;
 END io_corner_site
 SITE core_site
     CLASS CORE ;
@@ -96,11 +99,11 @@ SITE core_site
 END core_site
 MACRO pad_bidir
   CLASS PAD ;
-  SIZE 75 BY 350 ;
+  SIZE {pad_w:.2f} BY 350 ;
 END pad_bidir
 MACRO pad_corner
   CLASS PAD ;
-  SIZE 350 BY 350 ;
+  SIZE {corner_w:.2f} BY {corner_w:.2f} ;
 END pad_corner
 MACRO pad_fill1
   CLASS PAD ;
@@ -121,7 +124,7 @@ END LIBRARY
 # --------------------------------------------------------------------------- #
 # fixtures
 # --------------------------------------------------------------------------- #
-def _floorplan(pins=None, instances=None) -> str:
+def _floorplan(pins=None, instances=None, *, die: int = DIE) -> str:
     """A floor-planned block that ALREADY INSTANTIATES its IO cells — which is
     what upstream's placer requires and what this flow's synthesis does not do.
     """
@@ -135,7 +138,7 @@ def _floorplan(pins=None, instances=None) -> str:
         for n in pins)
     return (f'VERSION 5.8 ;\nDIVIDERCHAR "/" ;\nBUSBITCHARS "[]" ;\n'
             f"DESIGN core ;\nUNITS DISTANCE MICRONS {UNITS} ;\n"
-            f"DIEAREA ( 0 0 ) ( {DIE} {DIE} ) ;\n"
+            f"DIEAREA ( 0 0 ) ( {die} {die} ) ;\n"
             f"COMPONENTS {len(comps)} ;\n" + "\n".join(comps) +
             f"\nEND COMPONENTS\n"
             f"PINS {len(pins)} ;\n{body}\nEND PINS\nEND DESIGN\n")
@@ -166,7 +169,8 @@ def _config(**over) -> dict:
 
 
 def _project(tmp_path: Path, *, config=..., floorplan=...,
-             io_lib: bool = True, site_w: float = 1.0) -> Path:
+             io_lib: bool = True, site_w: float = 1.0,
+             pad_w: float = 75.0, corner_w: float = 350.0) -> Path:
     root = tmp_path / "proj"
     (root / "phase3/stage3/pnr").mkdir(parents=True, exist_ok=True)
     fp = _floorplan() if floorplan is ... else floorplan
@@ -178,7 +182,8 @@ def _project(tmp_path: Path, *, config=..., floorplan=...,
     if io_lib:
         lib = root / "pdk/proc/libs.ref/proc_io/lef"
         lib.mkdir(parents=True, exist_ok=True)
-        (lib / "io.lef").write_text(_io_lef(site_w))
+        (lib / "io.lef").write_text(
+            _io_lef(site_w, pad_w=pad_w, corner_w=corner_w))
     return root
 
 
@@ -389,6 +394,122 @@ def test_a_corner_spacing_off_the_site_grid_is_refused(tmp_path):
     root = _project(tmp_path, site_w=6.0)
     assert _gen(root) == 1
     assert "PAD_CORNER_SPACING_NOT_SITE_MULTIPLE" in _rules(root)
+
+
+def test_the_corner_grid_refusal_names_every_feasible_uniform_pad_count(
+        tmp_path, capsys):
+    """The refusal must answer the arithmetic question it already solved.
+
+    This neutral geometry is the issue's exact discriminating shape: a
+    1_300-unit side, 180-unit corners, 80-unit uniform pads and a 1-unit site.
+    Six pads leave an odd corner remainder, while 4, 5 and 7 are among the
+    feasible positive counts.  Naming only the refusal makes an author rerun
+    the full flow once per guess; publishing the complete set makes the same
+    deterministic arithmetic actionable without weakening the refusal.
+    """
+    count = 6
+    signals = {s: [f"{s.lower()}_signal_{i}" for i in range(count)]
+               for s in PR.SIDES}
+    pads = {name: f"pad_{name}"
+            for side in PR.SIDES for name in signals[side]}
+    config = _config(
+        PAD_SOUTH=[pads[n] for n in signals["S"]],
+        PAD_EAST=[pads[n] for n in signals["E"]],
+        PAD_NORTH=[pads[n] for n in signals["N"]],
+        PAD_WEST=[pads[n] for n in signals["W"]],
+        PAD_EDGE_SPACING=0,
+        PAD_FILLERS=["pad_fill1"],
+        SIGNAL_MAP={pads[n]: n for side in PR.SIDES for n in signals[side]},
+    )
+    root = _project(
+        tmp_path,
+        config=config,
+        floorplan=_floorplan(
+            pins=[n for side in PR.SIDES for n in signals[side]],
+            instances=list(pads.values()), die=1_300_000),
+        site_w=1.0, pad_w=80.0, corner_w=180.0)
+
+    assert _gen(root) == 1
+    refusals = [f for f in _report(root)["findings"]
+                if f["rule"] == "PAD_CORNER_SPACING_NOT_SITE_MULTIPLE"]
+    assert len(refusals) == 4
+    expected = [1, 2, 3, 4, 5, 7, 9, 10, 11]
+    for finding in refusals:
+        assert f"feasible positive per-side counts are {expected}" in (
+            finding["message"]), finding["message"]
+        assert finding.get("current_pad_count") == 6
+        assert finding.get("declared_uniform_pad_width_dbu") == 80_000
+        assert finding.get("feasible_pad_counts") == expected
+    stdout = capsys.readouterr().out
+    assert f"feasible positive per-side counts are {expected}" in stdout
+
+
+def test_mixed_width_refusal_does_not_invent_a_count_only_answer(tmp_path):
+    """Different master widths make a bare count insufficient geometry.
+
+    The refusal must remain actionable without pretending that removing any
+    one pad has the same effect.  It names the observed widths and says why a
+    feasible count is not determined until the remaining masters are named.
+    """
+    mixed_instances = [PADS[SIGNALS[side][0]] for side in PR.SIDES]
+    floorplan = _floorplan()
+    for instance in mixed_instances:
+        floorplan = floorplan.replace(
+            f"- {instance} pad_bidir + UNPLACED ;",
+            f"- {instance} pad_wide + UNPLACED ;")
+    root = _project(tmp_path, floorplan=floorplan, site_w=6.0)
+    lef = root / "pdk/proc/libs.ref/proc_io/lef/io.lef"
+    lef.write_text(lef.read_text().replace(
+        "END LIBRARY",
+        "MACRO pad_wide\n  CLASS PAD ;\n  SIZE 76 BY 350 ;\n"
+        "END pad_wide\nEND LIBRARY"))
+
+    assert _gen(root) == 1
+    refusals = [f for f in _report(root)["findings"]
+                if f["rule"] == "PAD_CORNER_SPACING_NOT_SITE_MULTIPLE"]
+    assert len(refusals) == 4
+    for finding in refusals:
+        assert finding["declared_pad_widths_dbu"] == [75_000, 76_000]
+        assert finding["feasible_pad_counts"] is None
+        assert finding["feasible_pad_counts_basis"] == "NOT_DETERMINED"
+        assert "NOT DETERMINED from count alone" in finding["message"]
+
+
+def test_feasible_count_guidance_keeps_a_captured_real_ring_feasible():
+    """A checked-in successful ring must not become a false recommendation.
+
+    The report is a captured program output, not a fixture authored with this
+    helper.  Reconstruct each side's available length from its measured pad
+    widths and published fill space.  The greatest common divisor of its
+    measured gaps is a conservative site grid: if the recorded count is
+    feasible even on that grid, the new guidance cannot exclude the ring that
+    the producer actually placed.
+    """
+    captured = require_repo(
+        "docs", "capture", "2026-08-22-jpadsite", "evidence",
+        "declared_grouping", "DECLARED_on_3762_PASSES.json")
+    report = json.loads(captured.read_text())
+    assert report["verdict"] == "PASS", report["reason"]
+    positive_gaps = [
+        value for side in report["spacing"].values()
+        for key, value in side.items()
+        if key in ("between", "to_corner") and value > 0
+    ]
+    conservative_site_width = math.gcd(*positive_gaps)
+    assert conservative_site_width > 0
+
+    for side in PR.SIDES:
+        pads = [p for p in report["pads"] if p["side"] == side]
+        widths = {p["width_dbu"] for p in pads}
+        assert len(widths) == 1, (side, widths)
+        count = report["config"]["pads_per_side"][PR.SIDE_VAR[side]]
+        assert count == len(pads)
+        pad_width = next(iter(widths))
+        available = count * pad_width + report["spacing"][side][
+            "space_for_fill"]
+        feasible = GEN._feasible_uniform_pad_counts(
+            available, pad_width, conservative_site_width)
+        assert count in feasible, (side, count, feasible)
 
 
 def test_a_non_rectangular_die_is_refused_not_approximated(tmp_path):

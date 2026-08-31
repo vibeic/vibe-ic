@@ -8696,7 +8696,7 @@ def _v713_mk_include_dirs(project: Path) -> List[Path]:
     return out
 
 
-# v1.14.85 — frontend-ladder reporting helpers.
+# v1.14.86 — frontend-ladder reporting helpers.
 _LADDER_EXHAUSTED_NOTE = (
     "\n\n| FRONTEND_LADDER_EXHAUSTED: this verdict is the VERILATOR "
     "(SV-2017) elaboration, which is the frontend that got furthest — not the "
@@ -8736,7 +8736,7 @@ def _verilator_escape_was_reached(vrc: int, vout: str, verr: str) -> bool:
             or "verilator" in lowered)
 
 
-# v1.14.85 — name the frontend that actually produced the verdict.
+# v1.14.86 — name the frontend that actually produced the verdict.
 # The message hardcoded "iverilog rc=..." even when the verdict came from the
 # verilator SV-2017 escape at the end of the frontend ladder, so a report could
 # attribute one tool's elaboration rejection to a different tool that had
@@ -8921,7 +8921,7 @@ def _iverilog_compile_with_sv_fallback(
                 rtl_files, tb_path, run_dir, container, top_name, _vl_reason)
             if vrc == 0:
                 return vrc, vout, verr, vfe
-            # v1.14.85 — REPORT THE FRONTEND THAT GOT FURTHEST, not the first.
+            # v1.14.86 — REPORT THE FRONTEND THAT GOT FURTHEST, not the first.
             # When the ladder exhausts, returning rung 1's error attributes a
             # KNOWN frontend limitation to the design. Measured: iverilog said
             # `aes_pkg.sv:19: syntax error / I give up.` — the SystemVerilog
