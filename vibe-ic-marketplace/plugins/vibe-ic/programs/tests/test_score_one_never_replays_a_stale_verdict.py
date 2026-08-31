@@ -43,6 +43,19 @@ def test_the_scorer_clears_the_prefix_before_running(monkeypatch, tmp_path):
     verdicts = ["PASS", "FAIL"]
 
     def fake_run(cmd, **kw):
+        # The image preflight (v1.13.28) runs BEFORE the harness and refuses to
+        # score when the named image is absent. This test is about stale
+        # verdicts, not about the environment, so report the image as present
+        # and let the preflight stay inert. Without this branch the stub reaches
+        # for `--out` on a `docker image inspect` command and dies with
+        # `ValueError: '--out' is not in list` — a green-looking suite failure
+        # that says nothing about the behaviour under test.
+        if list(str(c) for c in cmd[:3]) == ["docker", "image", "inspect"]:
+            class _Present:
+                returncode = 0
+                stdout = ""
+                stderr = ""
+            return _Present()
         # emulate run_benchmark: write raw_result.json ONLY when the prefix is
         # absent, exactly as the real one refuses to re-run over an existing tree
         if any(str(c).endswith("run_benchmark.py") for c in cmd):
