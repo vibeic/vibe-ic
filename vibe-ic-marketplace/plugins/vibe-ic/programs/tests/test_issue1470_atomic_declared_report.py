@@ -59,6 +59,7 @@ import atomic_artifact_write_check as G  # noqa: E402
 import generated_artifact_conflict_resolve as RESOLVER  # noqa: E402
 import hygiene_finding_delta as DELTA  # noqa: E402
 import skill_stage_membership_check as MEMBERSHIP  # noqa: E402
+import advisory_clause_states_its_reason as ADVISORY  # noqa: E402
 import stage_on_pass_review as REVIEW  # noqa: E402
 
 PROGRAMS = Path(__file__).resolve().parent.parent
@@ -83,12 +84,22 @@ BASELINE = PROGRAMS / "_atomic_artefact_residual.json"
 #: writes `verdict` plus the findings a caller acts on, which is the same class
 #: as the other three.
 #:
-#: FOUR programs in four versions is the rate, and it is worth naming: this
+#: `advisory_clause_states_its_reason` is the FIFTH, and it arrived by the same
+#: door as the third and fourth: it landed after the residual was measured, so
+#: the register could not excuse it and the ratchet named it on sight —
+#: `advisory_clause_states_its_reason.py:685  .write_text(...)`, MEASURED on
+#: the 2026-08-31 stamp tree 411c0ac73 (v1.14.43) as the one and only new
+#: offender, with the residual at 513 against a baseline of 514. Its `main()`
+#: writes the census plus `new`/`paid` — the debt a landing is judged on — so
+#: it is the same verdict-bearing class as the other four.
+#:
+#: FIVE programs in five versions is the rate, and it is worth naming: this
 #: register does not go stale because anyone edits it, it goes stale because
 #: the tree keeps growing programs that write a declared report. The ratchet
 #: catching each one BY NAME is the mechanism working, not a defect in it.
 CONVERTED = ["generated_artifact_conflict_resolve", "hygiene_finding_delta",
-             "stage_on_pass_review", "skill_stage_membership_check"]
+             "stage_on_pass_review", "skill_stage_membership_check",
+             "advisory_clause_states_its_reason"]
 
 #: The register's size at the tranche that last pulled it down (#1082's
 #: `open(..., 'w')` closure). It may SHRINK below this; growing past it is the
@@ -139,12 +150,22 @@ def _argv_membership(dest: Path, repo: Path):
     return ["--plugin", str(PROGRAMS.parent), "--json", str(dest)]
 
 
+def _argv_advisory(dest: Path, repo: Path):
+    # The REAL plugin tree, for the same reason `_argv_membership` uses it:
+    # `census` must SUCCEED for the write to be reached at all (an unreadable
+    # flow returns 2 before writing), so the death test below is only a
+    # measurement if the run gets that far. Defaulting `root` reads the shipped
+    # flow + programs directly; no project tree, no subprocess, ~0.4s.
+    return ["--json", str(dest)]
+
+
 #: (label, module, argv-builder). Driven end to end in both runtime tests.
 DRIVEN = [
     ("generated_artifact_conflict_resolve", RESOLVER, _argv_resolver),
     ("hygiene_finding_delta", DELTA, _argv_delta),
     ("stage_on_pass_review", REVIEW, _argv_review),
     ("skill_stage_membership_check", MEMBERSHIP, _argv_membership),
+    ("advisory_clause_states_its_reason", ADVISORY, _argv_advisory),
 ]
 
 

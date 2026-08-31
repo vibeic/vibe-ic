@@ -236,6 +236,7 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import _atomic_artefact as _aa  # noqa: E402
 import _ratchet_baseline as _ratchet  # noqa: E402
 import flow_gate_enforcement_audit as _fgea  # noqa: E402
 
@@ -682,8 +683,11 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     rc, report = _report(rows, recorded)
     if a.json:
-        Path(a.json).write_text(json.dumps(report, indent=2,
-                                           ensure_ascii=False) + "\n")
+        # vibe-ic#1082: the declared report destination appears under its final
+        # name only once it is complete, so a reader that finds the file finds
+        # a whole document or nothing -- never a truncated one that
+        # `required_outputs` would credit as produced.
+        _aa.write_json(a.json, report, indent=2, ensure_ascii=False)
     return rc
 
 

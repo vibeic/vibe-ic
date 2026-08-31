@@ -15,8 +15,13 @@
 #
 # EVERY testpath HERE NAMED A DIRECTORY THAT HAS NEVER EXISTED, from this file's
 # first commit to `ebccf100a0` (v1.13.77).
-# The plugin directory is `plugins/vibe-ic/`; all four entries said
-# `plugins/vibe-ic-d`, and so did the prose above them. pytest does not error
+# The plugin directory is `plugins/vibe-ic/`; all four entries named a
+# subdirectory of the RETIRED deterministic-edition plugin instead, and so did
+# the prose above them. That retired token is deliberately NOT SPELLED here,
+# nor in `test_pytest_ini_paths_exist.py` which narrates the same defect:
+# `dead_plugin_path_check` reads a prose mention as dead doctrine, because a
+# reader copies a literal out of an explanation as readily as out of an
+# instruction. It is readable in full at `ebccf100a0`. pytest does not error
 # on a testpath that is not there — it falls back to collecting the rootdir,
 # which here hits `plugins/vibe-ic/conftest.py` and dies on
 # `Defining 'pytest_plugins' in a non-top-level conftest`. MEASURED on

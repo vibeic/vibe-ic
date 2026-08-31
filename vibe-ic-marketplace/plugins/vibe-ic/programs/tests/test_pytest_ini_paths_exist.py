@@ -42,8 +42,18 @@ AND IT PINNED ONE CONFIG WHILE TWO SHIP
 an instance of the shape it hunts: a rule stated over a population defined by a
 spelling. The repository ships a SECOND pytest configuration —
 `vibe-ic-marketplace/pyproject.toml`, `[tool.pytest.ini_options]` — and every
-one of its four `testpaths` named `plugins/vibe-ic-d/…`, a directory that has
-never existed here. MEASURED on `612b5a94d` from `vibe-ic-marketplace/`:
+one of its four `testpaths` named a subdirectory of the RETIRED
+deterministic-edition plugin, a directory that has never existed here.
+
+That retired token is deliberately NOT SPELLED in this file, and restoring it
+"for clarity" reintroduces a red. `dead_plugin_path_check` scans the shipped
+bundle and fails on ANY occurrence, prose included, because a dead path in a
+docstring is still copy-pasteable doctrine — an agent following the text
+verbatim runs a checker that does not exist. That checker builds the token at
+runtime for the same reason, so it never matches itself; the literal is
+readable in full at `612b5a94d`, which is where this narrative points anyway.
+
+MEASURED on `612b5a94d` from `vibe-ic-marketplace/`:
 
     as shipped     no tests collected, 1 error in 0.07s
     repaired       42894 tests collected in 82s
