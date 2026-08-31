@@ -133,7 +133,7 @@ Consequences, both of them deliberate:
     ``QUARTUS_STUCK_AT``, ``PERC_ESD_FAIL``, ``POST_LAYOUT_NO_SPICE``), which
     also de-registered three :data:`UNREDDENED` entries. The other three —
     1, 12 and 35 — are gated by a file's existence and nothing else, and are
-    WAIVED in ``matrix_63x8/waivers.py`` with strict xfail, so the day one of
+    WAIVED in ``flow_matrix/waivers.py`` with strict xfail, so the day one of
     them acquires a gate that can judge content the waiver turns the suite red.
 
 Nothing here was made greener by weakening a check: no gate program, no
@@ -186,7 +186,7 @@ RUN
 LIVE, not remembered: 182<!--figure:blocking_clauses--> blocking clauses over
 67<!--figure:gated_steps--> gated steps. This is the denominator a reader
 wants, and it moves with the yaml: the digits are written by
-``tools/gen_matrix_63x8_census.py`` and the ``<!--figure:...-->`` anchors name
+``tools/gen_flow_matrix_census.py`` and the ``<!--figure:...-->`` anchors name
 the bindings that produced them (vibe-ic#961). Do not hand-edit them.
 
 The paragraph below is a PINNED RECORD of what was measured while this file
@@ -235,9 +235,9 @@ import pytest
 
 import flow_compliance_check as FCC
 
-from matrix_63x8 import flowref as F
-from matrix_63x8 import waivers as W
-from matrix_63x8.cells import cells_for
+from flow_matrix import flowref as F
+from flow_matrix import waivers as W
+from flow_matrix.cells import cells_for
 
 DIM = 2
 
@@ -2887,7 +2887,7 @@ def test_d2_gate_has_a_reachable_fail(cell, tmp_path, _gate_timeout):
     #        A red graded ABSENCE_RED does not count: it says the project was
     #        empty, which every gate in the flow would say. Six steps used to
     #        be carried entirely by such a red; three of them still are and
-    #        are WAIVED in matrix_63x8/waivers.py, so this assertion is what
+    #        are WAIVED in flow_matrix/waivers.py, so this assertion is what
     #        their strict xfail is satisfied by — and what turns the suite red
     #        the day one of them gains a clause that can judge content.
     assert reds, (
@@ -3587,7 +3587,7 @@ def test_d2_a_content_earned_program_red_is_still_a_real_red(
 #: genuine content check LEC cannot subsume: scan insertion is functionally
 #: transparent, so LEC would still pass a post-DFT netlist whose scan chain
 #: silently vanished) — so it left this register and its waiver in
-#: ``matrix_63x8/waivers.py`` was removed, not re-worded. Steps 1 and 35 did
+#: ``flow_matrix/waivers.py`` was removed, not re-worded. Steps 1 and 35 did
 #: NOT close: both carry an explicit, owner-confirmed AUDIT NOTE in the flow
 #: yaml stating the files_exist-only gate is DELIBERATE (Step 1: content
 #: judgement belongs downstream at Steps 2-6 by design; Step 35: promoting
@@ -3599,7 +3599,7 @@ def test_d2_a_content_earned_program_red_is_still_a_real_red(
 #: ``files_exist`` — so by the measurement in
 #: :func:`test_d2_a_files_exist_clause_is_satisfied_by_a_zero_byte_file` the
 #: whole gate is satisfied by empty files and can fail on one input only, the
-#: file not being there. They are WAIVED in ``matrix_63x8/waivers.py`` with
+#: file not being there. They are WAIVED in ``flow_matrix/waivers.py`` with
 #: ``strict=True``: a stale entry (the step gains a content clause) reddens
 #: the suite exactly as it did for step 12.
 ABSENCE_ONLY_STEPS: Tuple[str, ...] = ("1", "35")
@@ -3641,7 +3641,7 @@ def test_d2_the_waived_cells_are_gated_by_existence_alone():
     unpublished = [k for k in sorted(registered) if W.waiver_for(k, DIM) is None]
     assert not unpublished, (
         f"{unpublished} are recorded here as not-yet-falsified but carry no "
-        f"dimension-{DIM} waiver in matrix_63x8/waivers.py, so the accepted "
+        f"dimension-{DIM} waiver in flow_matrix/waivers.py, so the accepted "
         f"gap is invisible where accepted gaps are published — and the cell "
         f"would be RUN as if enforced")
 
@@ -3895,7 +3895,7 @@ def test_d2_flow_yaml_override_is_unset():
 
 
 # ══════════════════════════════════════════════════════════════════════
-# UNIFORM CELL-STATE INTERFACE (read by programs/tests/test_matrix_63x8_coverage.py)
+# UNIFORM CELL-STATE INTERFACE (read by programs/tests/test_flow_matrix_coverage.py)
 #
 # The coverage meta-test must be able to ask every dimension module the same
 # question and get an answer the module itself computes. Anything it derived on

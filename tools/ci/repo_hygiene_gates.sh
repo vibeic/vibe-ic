@@ -2729,7 +2729,7 @@ run "closed-loop edges resolve" "$ROOT" python3 "$PG/closed_loop_edge_check.py" 
 # The census the two gates above feed into, and the one thing in this family that
 # a HUMAN had to remember to run.
 #
-# WHY THIS LINE EXISTS. `matrix_63x8/README.md` publishes the campaign's headline
+# WHY THIS LINE EXISTS. `flow_matrix/README.md` publishes the campaign's headline
 # figure — "504 cells: N ENFORCED, N CONTRADICTED, N WAIVED, N NA" — and it has
 # gone stale TWICE, in two different ways, and neither time did anything notice.
 #
@@ -2751,7 +2751,7 @@ run "closed-loop edges resolve" "$ROOT" python3 "$PG/closed_loop_edge_check.py" 
 # there is no `.github/workflows` directory in this repository, and before this
 # line THIS script contained zero references to `63x8`, `matrix` or `census` —
 # and #929 edited this very file, adding a gate one line away. The only automated
-# consumer was `test_matrix_63x8_census_freshness.py`, which runs when a human
+# consumer was `test_flow_matrix_census_freshness.py`, which runs when a human
 # selects it. So the guard shipped by #928 was real, was correct, and was enforced
 # by nothing that fires on a merge. Six PRs landed on 2026-08-11 alone.
 #
@@ -2805,8 +2805,8 @@ run "closed-loop edges resolve" "$ROOT" python3 "$PG/closed_loop_edge_check.py" 
 # out of date, which blocks the campaign, not the push.
 #
 # The two tiers are now separate by construction. Run it where it belongs:
-#     python3 tools/gen_matrix_63x8_census.py <root> --check
-# and `test_matrix_63x8_census_freshness.py` still enforces it in the suite, so the
+#     python3 tools/gen_flow_matrix_census.py <root> --check
+# and `test_flow_matrix_census_freshness.py` still enforces it in the suite, so the
 # figure cannot drift unnoticed -- it simply no longer sits between a fix and main.
 #
 # NOT REMOVED FOR SPEED. Measured on the trimmed tree it is 64s, which is not what

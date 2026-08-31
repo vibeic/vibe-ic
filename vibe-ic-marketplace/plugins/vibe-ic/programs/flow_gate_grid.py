@@ -18,7 +18,7 @@ arithmetic emitted:
 
 544 is a number nobody wrote down and nobody checked: half of it (68) tracked
 the flow, the other half (8) was frozen. The live population is
-`matrix_63x8.cells.ALL_CELLS` = `flowref.step_ids() x DIMENSIONS` = 68 x 9 =
+`flow_matrix.cells.ALL_CELLS` = `flowref.step_ids() x DIMENSIONS` = 68 x 9 =
 **612**, and the 9 has been 9 since dimension D9 (`verdict_consumed`) was added.
 So this grid was under-reporting the DENOMINATOR by a whole dimension while
 quoting its own rule that "`declared` is the denominator, and a consumer reports
@@ -142,7 +142,7 @@ D6_BASELINE = {
 D8_BASELINE = {"14"}
 
 #: THE DECLARED POPULATION. The denominator is this tuple's length times the
-#: flow's step count -- both derived, neither typed. `matrix_63x8.cells`
+#: flow's step count -- both derived, neither typed. `flow_matrix.cells`
 #: enumerates the same nine and the ledger test cross-checks the two agree, so a
 #: tenth dimension cannot be added on one side only.
 DIMENSIONS = ("D1 wiring", "D2 runnable", "D3 outputs", "D4 criteria",

@@ -54,13 +54,13 @@ def test_the_canonical_flow_yaml_reaches_the_tests_that_read_it():
 def test_a_read_artefact_selects_the_tests_that_read_it():
     """The case displaced out of `test_helper_rule_does_not_widen…`.
 
-    `programs/tests/matrix_63x8/README.md` looks like docs and is not:
-    `test_matrix_63x8_census_freshness.py:66` reads it and asserts on its
+    `programs/tests/flow_matrix/README.md` looks like docs and is not:
+    `test_flow_matrix_census_freshness.py:66` reads it and asserts on its
     contents. A change to it must reach that test.
     """
-    out = set(sel.select_tests([f"{PREFIX}/{TESTS_REL}/matrix_63x8/README.md"],
+    out = set(sel.select_tests([f"{PREFIX}/{TESTS_REL}/flow_matrix/README.md"],
                                PLUGIN_ROOT, plugin_prefix=PREFIX))
-    assert f"{TESTS_REL}/test_matrix_63x8_census_freshness.py" in out
+    assert f"{TESTS_REL}/test_flow_matrix_census_freshness.py" in out
 
 
 def test_a_plugin_file_outside_the_source_dirs_is_mapped():

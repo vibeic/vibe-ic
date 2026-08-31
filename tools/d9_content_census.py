@@ -80,7 +80,7 @@ sys.path.insert(0, str(REPO / "vibe-ic-marketplace" / "plugins" / "vibe-ic"
                       / "programs" / "tests"))
 
 import d9_flow_gate_reality as R          # noqa: E402  the sibling instrument
-from matrix_63x8 import flowref as F      # noqa: E402
+from flow_matrix import flowref as F      # noqa: E402
 
 CONTENT_SENSITIVE = "CONTENT-SENSITIVE"
 EXISTENCE_ONLY = "EXISTENCE-ONLY"

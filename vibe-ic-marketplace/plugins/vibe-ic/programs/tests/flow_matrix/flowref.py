@@ -1,4 +1,4 @@
-"""matrix_63x8.flowref — LIVE, cached accessors over the flow yaml.
+"""flow_matrix.flowref — LIVE, cached accessors over the flow yaml.
 
 Everything here is recomputed from
 ``<plugin_root>/flow/phase1_phase2_phase3.yaml`` on first access and then
@@ -28,7 +28,7 @@ never sort them naively. Use :func:`normalize_id` (``str()``) for dict keys and
 :func:`step_ids` for the raw, declaration-ordered tuple.
 
 Key presence, DERIVED — every digit below is written by
-``tools/gen_matrix_63x8_census.py`` from the yaml, and the ``<!--figure:...-->``
+``tools/gen_flow_matrix_census.py`` from the yaml, and the ``<!--figure:...-->``
 anchor beside it names the binding that produced it. Do not hand-edit them:
 run ``--fix-figures``, and ``--check`` fails on drift (vibe-ic#961).
 
@@ -221,7 +221,7 @@ PROGRAMS_DIR: Path = PLUGIN_ROOT / "programs"
 #: Point this at a scratch copy instead, then call :func:`clear_caches`.
 #:
 #: It is also a loaded gun: a suite run with it set is measuring a file nobody
-#: reviewed. ``test_matrix_63x8_ledger.py`` asserts it is UNSET, so a normal run
+#: reviewed. ``test_flow_matrix_ledger.py`` asserts it is UNSET, so a normal run
 #: cannot silently be redirected.
 FLOW_YAML_ENV = "VIBE_IC_MATRIX_FLOW_YAML"
 

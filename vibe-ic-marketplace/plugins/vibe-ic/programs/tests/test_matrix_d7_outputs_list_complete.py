@@ -214,9 +214,9 @@ import flow_compliance_check as FCC
 import matrix_d7_artifact_graph as G
 import matrix_d7_write_record as R
 import step_write_ledger as SWL
-from matrix_63x8 import flowref as F
-from matrix_63x8 import waivers
-from matrix_63x8.cells import cells_for
+from flow_matrix import flowref as F
+from flow_matrix import waivers
+from flow_matrix.cells import cells_for
 
 # WHERE W2's OBSERVED PRODUCER ORACLE WENT.
 #
@@ -246,7 +246,7 @@ RESOLUTION_LIMITS_AS_MEASURED = 6
 # ─────────────────────────────────────────────────────────────────────
 # This module used to carry a `PENDING_WAIVERS` mirror of its nine dimension-7
 # waivers, added while eight agents shared one worktree and a concurrent edit to
-# `matrix_63x8/waivers.py` could lose an entry. The orchestrator has since
+# `flow_matrix/waivers.py` could lose an entry. The orchestrator has since
 # landed all nine centrally, so `_waiver_for` read the central copy and ignored
 # the local one — the mirror's own comment predicted it would become "dead
 # weight that should be deleted" once that happened, and it had.
@@ -1184,7 +1184,7 @@ def test_the_dropped_edge_RETURNS_when_the_step_stops_supplying_the_flag(
     control was landed green where one was readable and is red everywhere
     else, which is the corpus-shaped failure vibe-ic#1357 named — except that
     here it reddened rather than skipped, and a d7 red is not contained: it
-    takes the whole nested outcome run of ``test_matrix_63x8_coverage`` to
+    takes the whole nested outcome run of ``test_flow_matrix_coverage`` to
     NORECORD and with it five ids across coverage and census_freshness.
 
     The invariant is KEPT, not weakened, and it is strictly sharper. The
@@ -2004,7 +2004,7 @@ def test_d7_a_record_whose_emitter_withheld_the_residual_is_refused(monkeypatch)
 #: because the yaml half alone is a HALF FIX that relocates the red into
 #: dimension 3 rather than removing it (measured: d7 6 -> 1, d3 6 -> 10).
 #: Step 34 was WAIVED instead. That waiver has since been WITHDRAWN and its
-#: reasoning was wrong; see the withdrawal note in ``matrix_63x8.waivers``.
+#: reasoning was wrong; see the withdrawal note in ``flow_matrix.waivers``.
 #:
 #: The pin therefore names a population whose every promotion has a
 #: disposition. It is BOOKKEEPING, deliberately last, and it cannot be used as
@@ -2201,7 +2201,7 @@ def test_the_pin_is_SILENT_on_a_healthy_binding():
 
 
 # ══════════════════════════════════════════════════════════════════════
-# UNIFORM CELL-STATE INTERFACE (read by programs/tests/test_matrix_63x8_coverage.py)
+# UNIFORM CELL-STATE INTERFACE (read by programs/tests/test_flow_matrix_coverage.py)
 #
 # The coverage meta-test must be able to ask every dimension module the same
 # question and get an answer the module itself computes. Anything it derived on

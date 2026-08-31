@@ -2,7 +2,7 @@
 ENFORCED unless a NAMED mutation is known to redden it, and a new flow step may
 not arrive with eight unfalsifiable cells.
 
-    ``test_matrix_63x8_coverage.py`` proves every one of the 504 cells has a
+    ``test_flow_matrix_coverage.py`` proves every one of the 504 cells has a
     real, collected, non-skipping pytest item in a known state. Its own
     docstring says what that does NOT prove: that the item's predicate could
     ever have said no. This file asks for the missing half — name the change
@@ -85,8 +85,8 @@ import pytest
 import yaml
 
 import matrix_mutation_ledger as L
-from matrix_63x8 import flowref as F
-from matrix_63x8.cells import DIMENSION_NAMES, DIMENSIONS
+from flow_matrix import flowref as F
+from flow_matrix.cells import DIMENSION_NAMES, DIMENSIONS
 
 
 def _domain_progress(scope: str, completed: int, total: int) -> None:

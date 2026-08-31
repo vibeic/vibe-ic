@@ -409,12 +409,12 @@ def test_the_declared_denominator_is_derived_from_both_axes(tmp_path):
 def test_the_grids_dimension_list_agrees_with_the_live_cell_ledger():
     """ADDING ONE MUST NOT BE POSSIBLE ON ONE SIDE ONLY.
 
-    `matrix_63x8.cells` enumerates the same population from the other end. A
+    `flow_matrix.cells` enumerates the same population from the other end. A
     tenth dimension added there and not here would put this grid back to
     under-reporting its denominator — which is exactly how D9 went uncounted.
     """
     sys.path.insert(0, str(GRID.parent / "tests"))
-    from matrix_63x8 import cells  # noqa: E402
+    from flow_matrix import cells  # noqa: E402
     assert len(fgg.DIMENSIONS) == len(cells.DIMENSIONS), (
         f"the grid declares {len(fgg.DIMENSIONS)} dimensions {fgg.DIMENSIONS} "
         f"and the ledger declares {len(cells.DIMENSIONS)} {cells.DIMENSIONS}")

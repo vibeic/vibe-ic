@@ -168,8 +168,8 @@ RUNTIME_PATHS = frozenset({
     "vibe-ic-marketplace/plugins/vibe-ic/programs/_watchdog.py",
     "vibe-ic-marketplace/plugins/vibe-ic/programs/_progress_run.py",
     "vibe-ic-marketplace/plugins/vibe-ic/programs/matrix_mutation_ledger.py",
-    "vibe-ic-marketplace/plugins/vibe-ic/programs/tests/test_matrix_63x8_census_freshness.py",
-    "vibe-ic-marketplace/plugins/vibe-ic/programs/tests/test_matrix_63x8_coverage.py",
+    "vibe-ic-marketplace/plugins/vibe-ic/programs/tests/test_flow_matrix_census_freshness.py",
+    "vibe-ic-marketplace/plugins/vibe-ic/programs/tests/test_flow_matrix_coverage.py",
     "vibe-ic-marketplace/plugins/vibe-ic/programs/tests/test_matrix_artefact_mutation_channel.py",
     "vibe-ic-marketplace/plugins/vibe-ic/programs/tests/test_matrix_mutation_ledger.py",
 })
@@ -231,8 +231,8 @@ REQUIRED_AUTHORITY_PATHS = frozenset({
     "vibe-ic-marketplace/plugins/vibe-ic/programs/tool_diagnostic_id_gate.py",
     "vibe-ic-marketplace/plugins/vibe-ic/programs/trusted_pytest_entry.py",
     "vibe-ic-marketplace/plugins/vibe-ic/programs/matrix_mutation_ledger.py",
-    "vibe-ic-marketplace/plugins/vibe-ic/programs/tests/test_matrix_63x8_census_freshness.py",
-    "vibe-ic-marketplace/plugins/vibe-ic/programs/tests/test_matrix_63x8_coverage.py",
+    "vibe-ic-marketplace/plugins/vibe-ic/programs/tests/test_flow_matrix_census_freshness.py",
+    "vibe-ic-marketplace/plugins/vibe-ic/programs/tests/test_flow_matrix_coverage.py",
     "vibe-ic-marketplace/plugins/vibe-ic/programs/tests/test_matrix_artefact_mutation_channel.py",
     "vibe-ic-marketplace/plugins/vibe-ic/programs/tests/test_matrix_mutation_ledger.py",
 })

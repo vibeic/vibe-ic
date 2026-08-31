@@ -8,7 +8,7 @@ and #1318 — were filed two minutes apart, both adding the SAME line to step 27
 They do not disagree; they are the same fix authored twice. Merged, git places the
 two additions at different offsets in one list and BOTH survive: the flow yaml
 merges with ZERO conflict markers and step 27 ends up declaring that path twice.
-The only merge conflict is in `test_matrix_63x8_ledger.py`, so whoever resolves it
+The only merge conflict is in `test_flow_matrix_ledger.py`, so whoever resolves it
 sees *a* conflict — but not this one. The duplicate arrives in the file nobody is
 looking at.
 
@@ -35,7 +35,7 @@ from __future__ import annotations
 from collections import Counter
 from typing import Any, Dict, List, Mapping, Sequence
 
-from matrix_63x8 import flowref as F
+from flow_matrix import flowref as F
 
 
 def duplicated_required_outputs(

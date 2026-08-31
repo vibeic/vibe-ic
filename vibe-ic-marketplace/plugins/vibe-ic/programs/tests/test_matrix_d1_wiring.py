@@ -151,9 +151,9 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 
 import pytest
 
-from matrix_63x8 import flowref as F
-from matrix_63x8 import waivers
-from matrix_63x8.cells import DIMENSION_NAMES, cells_for
+from flow_matrix import flowref as F
+from flow_matrix import waivers
+from flow_matrix.cells import DIMENSION_NAMES, cells_for
 
 DIM = 1
 assert DIMENSION_NAMES[DIM] == "wiring"
@@ -2167,7 +2167,7 @@ def test_probe_waiver_plumbing_yields_a_STRICT_xfail(monkeypatch):
 
 
 # ══════════════════════════════════════════════════════════════════════
-# UNIFORM CELL-STATE INTERFACE (read by programs/tests/test_matrix_63x8_coverage.py)
+# UNIFORM CELL-STATE INTERFACE (read by programs/tests/test_flow_matrix_coverage.py)
 #
 # The coverage meta-test must be able to ask every dimension module the same
 # question and get an answer the module itself computes. Anything it derived on

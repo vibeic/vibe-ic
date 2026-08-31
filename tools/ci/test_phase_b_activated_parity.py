@@ -699,9 +699,79 @@ def test_the_current_tuple_is_the_tuple_recorded_where_the_manifest_was_authored
             f"{author[:12]} carries the live manifest but the state it moved "
             "FROM is not in this checkout, so `current` cannot be checked "
             "against anything")
-    _assert_authoring_shape(
-        author, paths, observed, _tuple_at_predecessor(predecessor, paths),
-        current, _state_map(manifest, "next"))
+    _assert_manifest_authoring_shape(
+        manifest, author, paths, observed, predecessor,
+        _tuple_at_predecessor(predecessor, paths), current,
+        _state_map(manifest, "next"))
+
+
+def _rename_endpoints_at(predecessor, paths):
+    """The two tuples a predecessor's pending RENAME actually names.
+
+    The predecessor stands at the old paths in ``current`` and records the
+    candidate at the new paths in ``next``.  Both are mapped into the live
+    register's path space so the comparison below remains exact by path, mode,
+    blob oid, sha256 and size.  A non-rename predecessor returns ``None`` and
+    leaves every pre-existing authoring shape unchanged.
+    """
+    previous = _manifest_at(predecessor)
+    if previous is None:
+        return None
+    renames = _renames(previous)
+    if not renames:
+        return None
+    moved_paths = sorted(renames.get(path, path)
+                         for path in _paths(previous))
+    assert moved_paths == paths, (
+        f"the pending RENAME at {predecessor[:12]} produces {moved_paths}, "
+        f"but the closing register protects {paths}")
+    current = {
+        renames.get(row["path"], row["path"]): _recorded(row)
+        for row in previous["current"]["files"]
+    }
+    nxt = {row["path"]: _recorded(row)
+           for row in previous["next"]["files"]}
+    return current, nxt
+
+
+def _assert_manifest_authoring_shape(manifest, author, paths, observed,
+                                     predecessor, parent_observed, current,
+                                     nxt) -> None:
+    """Dispatch between an ordinary authoring commit and a closing RENAME.
+
+    A RENAME is deliberately stricter than treating its closing manifest as a
+    PREPARE: the predecessor must equal its own recorded ``current`` at the old
+    paths, the authoring commit must equal that predecessor's recorded ``next``
+    at the moved paths, and the new register must re-photograph that exact
+    candidate tuple as ``current``.  This is the atomic old-endpoint ->
+    new-endpoint -> closed-register chain the verifier's RENAME operation
+    enforces; accepting it as an ordinary PREPARE would incorrectly demand that
+    the parent already held the candidate's new bytes.
+    """
+    endpoints = _rename_endpoints_at(predecessor, paths)
+    if endpoints is None:
+        _assert_authoring_shape(
+            author, paths, observed, parent_observed, current, nxt)
+        return
+
+    previous_current, previous_next = endpoints
+    parent_drift = sorted(
+        path for path in paths
+        if parent_observed.get(path) != previous_current.get(path))
+    assert parent_drift == [], (
+        f"the RENAME at {author[:12]} does not move FROM its predecessor's "
+        f"recorded `current`; these paths differ: {parent_drift}")
+    rename_drift = sorted(
+        path for path in paths if observed.get(path) != previous_next.get(path))
+    assert rename_drift == [], (
+        f"the RENAME at {author[:12]} does not install its predecessor's "
+        f"recorded `next`; these paths differ: {rename_drift}")
+    register_drift = sorted(
+        path for path in paths if observed.get(path) != current.get(path))
+    assert register_drift == [], (
+        f"the RENAME at {author[:12]} did not re-photograph the moved tuple "
+        f"as the closing register's `current`; these paths differ: "
+        f"{register_drift}")
 
 
 def _assert_authoring_shape(author, paths, observed, parent_observed,
@@ -1158,17 +1228,40 @@ def test_a_tuple_no_commit_records_is_still_refused(manifest):
 
     # THE CONTROL. The live tuple is accepted, or the negatives below prove
     # nothing -- a refusal that fires on everything is not discriminating.
-    _assert_authoring_shape(author, paths, observed, parent_observed,
-                            current, nxt)
+    _assert_manifest_authoring_shape(
+        manifest, author, paths, observed, predecessor, parent_observed,
+        current, nxt)
 
     for victim in (sorted(current)[0], sorted(current)[-1]):
         forged = dict(current)
         mode, oid, sha256, size = forged[victim]
         forged[victim] = (mode, "0" * len(oid), "f" * len(sha256), size + 1)
         with pytest.raises(AssertionError) as caught:
-            _assert_authoring_shape(author, paths, observed, parent_observed,
-                                    forged, nxt)
+            _assert_manifest_authoring_shape(
+                manifest, author, paths, observed, predecessor,
+                parent_observed, forged, nxt)
         assert victim in str(caught.value), (victim, str(caught.value)[:400])
+
+    if _rename_endpoints_at(predecessor, paths) is not None:
+        victim = sorted(parent_observed)[0]
+        mode, oid, sha256, size = parent_observed[victim]
+        forged_parent = dict(parent_observed)
+        forged_parent[victim] = (
+            mode, "0" * len(oid), "f" * len(sha256), size + 1)
+        with pytest.raises(AssertionError) as caught:
+            _assert_manifest_authoring_shape(
+                manifest, author, paths, observed, predecessor,
+                forged_parent, current, nxt)
+        assert victim in str(caught.value), str(caught.value)[:400]
+
+        forged_observed = dict(observed)
+        forged_observed[victim] = (
+            mode, "0" * len(oid), "f" * len(sha256), size + 1)
+        with pytest.raises(AssertionError) as caught:
+            _assert_manifest_authoring_shape(
+                manifest, author, paths, forged_observed, predecessor,
+                parent_observed, current, nxt)
+        assert victim in str(caught.value), str(caught.value)[:400]
 
     if observed != current:                      # the squashed ACTIVATE limb
         victim = sorted(nxt)[0]
@@ -1176,8 +1269,9 @@ def test_a_tuple_no_commit_records_is_still_refused(manifest):
         mode, oid, sha256, size = forged_next[victim]
         forged_next[victim] = (mode, "0" * len(oid), "f" * len(sha256), size + 1)
         with pytest.raises(AssertionError) as caught:
-            _assert_authoring_shape(author, paths, observed, parent_observed,
-                                    current, forged_next)
+            _assert_manifest_authoring_shape(
+                manifest, author, paths, observed, predecessor,
+                parent_observed, current, forged_next)
         assert victim in str(caught.value), str(caught.value)[:400]
 
 

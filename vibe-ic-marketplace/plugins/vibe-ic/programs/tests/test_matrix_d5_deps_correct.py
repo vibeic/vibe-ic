@@ -261,9 +261,9 @@ from typing import Dict, List, Set, Tuple
 
 import pytest
 
-from matrix_63x8 import cells as C
-from matrix_63x8 import flowref as F
-from matrix_63x8 import waivers as W
+from flow_matrix import cells as C
+from flow_matrix import flowref as F
+from flow_matrix import waivers as W
 
 DIM = 5
 
@@ -275,7 +275,7 @@ DIM = 5
 #: closing a dimension-2 gap) reads an artefact TWO steps declare as their own
 #: required_output (9, the true producer, already in step 12's closure; 14, a
 #: pre-existing duplicate declaration that would be a circular edge) — see the
-#: waiver's own reason/evidence in ``matrix_63x8/waivers.py`` for why the
+#: waiver's own reason/evidence in ``flow_matrix/waivers.py`` for why the
 #: duplicate was not simply deleted. Pinned rather than floored so a waiver
 #: set is a recorded fact instead of an empty loop reporting green — see
 #: ``test_d5_waivers_meet_the_registry_bar``.
@@ -1095,7 +1095,7 @@ def d5_problems(step_id) -> List[str]:
 # ═════════════════════════════════════════════════════════════════════
 # This module used to carry a `_LOCAL_WAIVERS` mirror of its five dimension-5
 # waivers, added while eight agents shared one worktree and a concurrent edit to
-# `matrix_63x8.waivers.WAIVERS` could lose an entry. The orchestrator has since
+# `flow_matrix.waivers.WAIVERS` could lose an entry. The orchestrator has since
 # landed all five centrally, so `_waiver_for` read the central copy and ignored
 # the local one — an edit to the mirror changed nothing a reader ever saw.
 #
@@ -1820,7 +1820,7 @@ def test_d5_every_waiver_names_a_declared_step():
 
 
 # ══════════════════════════════════════════════════════════════════════
-# UNIFORM CELL-STATE INTERFACE (read by programs/tests/test_matrix_63x8_coverage.py)
+# UNIFORM CELL-STATE INTERFACE (read by programs/tests/test_flow_matrix_coverage.py)
 #
 # The coverage meta-test must be able to ask every dimension module the same
 # question and get an answer the module itself computes. Anything it derived on

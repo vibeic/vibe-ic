@@ -1,4 +1,4 @@
-"""matrix_63x8.substitution — the question ``ENFORCED`` does not answer.
+"""flow_matrix.substitution — the question ``ENFORCED`` does not answer.
 
 ``ENFORCED`` says a live predicate RAN and PASSED. It does not say WHAT it ran
 against, and for at least one dimension the honest answer is "not the mechanism
@@ -106,7 +106,7 @@ UNDECLARED = _Undeclared()
 HOOK = "matrix_cell_substitution"
 
 #: The census states a substitution disclosure can legally decorate. Kept in
-#: step with ``test_matrix_63x8_coverage.VALID_STATES``; a disclosure on
+#: step with ``test_flow_matrix_coverage.VALID_STATES``; a disclosure on
 #: anything else is refused by :func:`disclosure_for`.
 SUBSTITUTABLE_STATES: Tuple[str, ...] = ("ENFORCED",)
 

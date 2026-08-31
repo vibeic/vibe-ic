@@ -939,7 +939,7 @@ def test_the_peer_detector_sees_a_real_process():
 #       worktree: rc=0 [PASS] 63x8 census fresh: 504 cells over 8 dimensions
 #
 # The two arms did not disagree about the SUBJECT. One arm ran out of wall
-# clock. `_OUTCOME_TIMEOUT_S = 60` in `test_matrix_63x8_coverage` is a bound on
+# clock. `_OUTCOME_TIMEOUT_S = 60` in `test_flow_matrix_coverage` is a bound on
 # an inner pytest, and this probe drives 66 gates twice, so the checkout arm is
 # the one under load. Whether it fires depends on the machine, which is why the
 # same tool reported 6/6 clean on one run and 5/6 on the next.

@@ -16,7 +16,7 @@ EVERYTHING HERE IS RECOMPUTED FROM THE SOURCE TREE
 ====================================================================
 Nothing in this module reads ``.audit_63x8.json``. The inputs are
 
-  * ``flow/phase1_phase2_phase3.yaml``  (via ``matrix_63x8.flowref``), and
+  * ``flow/phase1_phase2_phase3.yaml``  (via ``flow_matrix.flowref``), and
   * the **AST** of every ``programs/*.py``.
 
 AST, not grep. The campaign's own cautionary tale (PR #460) is a change that
@@ -144,7 +144,7 @@ brief's, and keeping it means a green test means something.
 THE FLOW'S OWN OPTIONALITY — WHY W1 AND W4 ARE NOT UNIVERSAL
 ====================================================================
 The gate grammar carries three exec-clause kinds with three different force
-levels (``matrix_63x8.flowref`` §3), and one of them makes production
+levels (``flow_matrix.flowref`` §3), and one of them makes production
 **conditional**::
 
     - optional_program_exit_zero:
@@ -217,7 +217,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Dict, FrozenSet, List, Optional, Set, Tuple
 
-from matrix_63x8 import flowref as F
+from flow_matrix import flowref as F
 
 #: W2's SECOND producer oracle. Kept in its own module, not inlined here, so
 #: this one stays a pure function of the flow yaml and the program ASTs: the

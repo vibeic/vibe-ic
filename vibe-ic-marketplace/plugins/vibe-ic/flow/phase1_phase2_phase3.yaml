@@ -5478,7 +5478,7 @@ steps:
       # This is the THIRD closure of W1 by declaration, after step 31's
       # `magic_illegal_overlap.json` (2026-08-20 R9) and `perc_sweep.json`
       # (`2ffa7a594` [v1.12.10]). Both are recorded in
-      # `test_matrix_63x8_ledger.py`, and the second one records that its
+      # `test_flow_matrix_ledger.py`, and the second one records that its
       # declaring commit did NOT carry the paired ledger pin, the d3 manifest
       # entry, or the anchored figures. All three move with this entry.
       - "reports/phase3/em_current_authority.json"
