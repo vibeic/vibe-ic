@@ -4962,7 +4962,161 @@ def _build_macro_pdn_grid_tcl(plan: Optional[Dict[str, Any]]) -> str:
     return out
 
 
-def _build_pdn_tcl(pdk: "PdkConfig", container: Optional[str] = None) -> str:
+def _pdn_em_width_floor(project: Path, pdk: "PdkConfig",
+                        container: Optional[str] = None
+                        ) -> Optional[Dict[str, Any]]:
+    """#1215-PDN — DERIVE the per-layer minimum PDN strap width from the
+    PDK's own Jmax and the design's MEASURED supply current. Never tuned.
+
+    THE ARITHMETIC (recorded verbatim in reports/phase3/pdn_em_sizing.json):
+
+        I_total          = P / V   per analysed supply net (the WORST net's
+                           value is used), read from the prior EM
+                           measurement of THIS project — the same
+                           conservation authority the Step-25 gate screens
+                           against ("no branch of a passive resistive grid
+                           can carry more current than is injected into it").
+        w_em(layer)      = I_total / (jmax_per_width(layer) * (1 - margin))
+
+    with jmax_per_width taken from `em_current_density_check.parse_lef_jmax`
+    over the SAME resolved tech LEF the gate reads (identical unit
+    interpretation, no re-derivation), and margin = the gate's own default
+    guardband (0.10). A strap of width w_em cannot exceed the margined Jmax
+    under ANY current distribution, because no segment can carry more than
+    I_total — so this is a one-shot derivation with no distribution
+    assumption and nothing to iterate on. It is a FLOOR: an existing wider
+    ratio-derived or registry width stands (max(), never narrower).
+
+    Returns None — behaviour unchanged — when no prior EM measurement exists
+    (a first pass; the EM gate then measures honestly and the NEXT pass
+    derives) or when the tech LEF states no per-layer Jmax. Follow-pin rails
+    are NOT sized here: their width is the cell architecture's, and the
+    Step-25 gate now judges them at the width the DEF actually states.
+
+    chip-AGNOSTIC: every number comes from the project's own measurement or
+    the PDK's own LEF; no layer name, PDK name or numeric literal."""
+    rpt3 = _pl.reports_phase3_dir(project)
+    # Supply current: prefer the Step-25 comparison artifact (it already
+    # paired each net's Total power / Supply voltage); fall back to parsing
+    # em.rpt with the gate's own module regexes.
+    i_total: Optional[float] = None
+    i_src: Optional[str] = None
+    auth_json = rpt3 / "em_current_authority.json"
+    try:
+        doc = json.loads(auth_json.read_text())
+        vals = [v.get("supply_current_A") for v in doc.get("supply_authority", [])
+                if isinstance(v, dict)
+                and isinstance(v.get("supply_current_A"), (int, float))]
+        if vals:
+            i_total = max(vals)
+            i_src = "reports/phase3/em_current_authority.json supply_authority"
+    except (OSError, ValueError):
+        pass
+    if i_total is None:
+        em_rpt = rpt3 / "em.rpt"
+        try:
+            txt = em_rpt.read_text(errors="replace")
+        except OSError:
+            return None
+        try:
+            import em_peak_current_authority_check as _empc
+            powers = [float(m.group(1))
+                      for m in _empc._TOTAL_POWER_RE.finditer(txt)]
+            volts = [float(m.group(1))
+                     for m in _empc._SUPPLY_V_RE.finditer(txt)]
+            pairs = [p / v for p, v in zip(powers, volts) if v > 0]
+            if pairs:
+                i_total = max(pairs)
+                i_src = "reports/phase3/em.rpt Total power / Supply voltage"
+        except Exception:
+            return None
+    if not i_total or i_total <= 0:
+        return None
+
+    tlef_txt = _read_pdk_text(getattr(pdk, "tech_lef", None), container)
+    if not tlef_txt:
+        return None
+    try:
+        import em_current_density_check as _emcd
+        table = _emcd.parse_lef_jmax(tlef_txt)
+    except Exception:
+        return None
+    margin = 0.10  # the EM gate's own default guardband (_DEFAULT_MARGIN)
+    # The gate counts util >= (1 - margin) as an OFFENDER, so the bound must
+    # be STRICT: w is rounded UP to the PDK's own MANUFACTURINGGRID (LEF
+    # statement; 0.001 um fallback), plus one quantum on exact equality —
+    # w = I/(jmax*(1-margin)) exactly would sit ON the threshold in the
+    # degenerate case of one segment carrying the whole I_total, and a
+    # round-to-nearest could even land BELOW the bound it claims to enforce.
+    _gm = re.search(r"^\s*MANUFACTURINGGRID\s+([0-9.eE+\-]+)\s*;",
+                    tlef_txt, re.MULTILINE | re.IGNORECASE)
+    try:
+        grid = float(_gm.group(1)) if _gm else 0.001
+    except ValueError:
+        grid = 0.001
+    if not (0 < grid <= 1.0):
+        grid = 0.001
+    # pdngen centres a stripe on its axis, so the HALF-width must land on
+    # the manufacturing grid — the width quantum is 2x the grid. Measured:
+    # w_em 7.235 on a 0.005 grid was refused with "[ERROR PDN-0117] Width
+    # (7.2350 um) specified must be a multiple of 0.0100 um" and the whole
+    # grid degraded to PDN_NONFATAL (no SPECIALNETS at all — far worse than
+    # a 0.005 um wider strap).
+    quantum = 2.0 * grid
+    per_layer: Dict[str, Any] = {}
+    for lname_lc, e in table.items():
+        if e.get("kind") != "routing":
+            continue
+        jpw = e.get("jmax_per_width_A_per_um")
+        if not jpw or jpw <= 0:
+            continue
+        bound = i_total / (jpw * (1.0 - margin))
+        w_em = math.ceil(bound / quantum - 1e-9) * quantum
+        if w_em <= bound + 1e-12:
+            w_em += quantum
+        per_layer[lname_lc] = {
+            "orig_name": e.get("orig_name"),
+            "jmax_A_per_um": jpw,
+            "w_bound_um": bound,
+            "w_em_um": round(w_em, 4)}
+    if not per_layer:
+        return None
+    floor = {
+        "program": "phase3_one_shot_runner._pdn_em_width_floor",
+        "basis": ("supply-current conservation bound: no PDN segment can "
+                  "carry more than the injected I_total = P/V, so a strap "
+                  "of width w_em = I_total/(jmax*(1-margin)) cannot exceed "
+                  "the margined Jmax under any current distribution"),
+        "arithmetic": ("w_em(layer) = I_total / (jmax_per_width * "
+                       "(1 - margin)), rounded UP to 2x the LEF "
+                       "MANUFACTURINGGRID (pdngen centres the stripe, so "
+                       "the half-width must be on-grid — PDN-0117; one "
+                       "extra quantum on exact equality) so the bound is "
+                       "STRICT — the gate counts util >= 1 - margin as an "
+                       "offender"),
+        "manufacturing_grid_um": grid,
+        "width_quantum_um": quantum,
+        "i_total_A": i_total,
+        "i_total_source": i_src,
+        "jmax_source": str(getattr(pdk, "tech_lef", None)),
+        "margin": margin,
+        "applied_as": ("FLOOR on strap widths only (max with the "
+                       "ratio/registry width; follow-pin rails untouched); "
+                       "the Jmax rule, margin and gate are UNCHANGED — the "
+                       "gate confirms independently"),
+        "per_layer": per_layer,
+    }
+    try:
+        rpt3.mkdir(parents=True, exist_ok=True)
+        _aa.write_text(rpt3 / "pdn_em_sizing.json",
+                       json.dumps(floor, indent=2) + "\n")
+    except OSError:
+        pass
+    return floor
+
+
+def _build_pdn_tcl(pdk: "PdkConfig", container: Optional[str] = None,
+                   em_floor: Optional[Dict[str, Any]] = None) -> str:
     """v0.1.47 — emit OpenROAD PDN (`add_global_connection`/`define_pdn_grid`/
     `pdngen`) Tcl, NONFATAL-guarded.
 
@@ -4970,10 +5124,34 @@ def _build_pdn_tcl(pdk: "PdkConfig", container: Optional[str] = None) -> str:
     `tapcell_master` non-None), or a SKIPPED line otherwise. Without this
     block routed.def has 0 SPECIALNETS → silicon DOA.
     """
+    # #1215-PDN — apply the DERIVED EM width floor to STRAP layers (never
+    # follow-pins). max() only: a floor can widen a strap, never narrow it,
+    # and when the pitch no longer satisfies the documented spacing ratio it
+    # is re-derived with the same _PDN_STRAP_* ratios the auto plan uses.
+    _emfl = (em_floor or {}).get("per_layer") or {}
+
+    def _em_floor_w(layer: str, w: float) -> Tuple[float, bool]:
+        fl = _emfl.get(str(layer).lower())
+        if fl and fl.get("w_em_um") and float(fl["w_em_um"]) > float(w):
+            return float(fl["w_em_um"]), True
+        return float(w), False
+
     if pdk.tapcell_master and "sky130" in (pdk.tapcell_master or ""):
         # sky130-style cell-pin VPWR/VPB (tuned met4/met5 IR-drop grid)
+        _w4, _f4 = _em_floor_w("met4", 1.6)
+        _w5, _f5 = _em_floor_w("met5", 1.6)
+        _p45 = max(40.0, _PDN_STRAP_MIN_PITCH_X_WIDTH * max(_w4, _w5))
+        # untouched grid keeps the tuned 40.0/8.0 byte-identical; a widened
+        # one re-derives the offset with the auto plan's documented ratio.
+        _o45 = 8.0 if _p45 == 40.0 else round(_p45 / _PDN_STRAP_OFFSET_DIV, 3)
+        _em_note = ""
+        if _f4 or _f5:
+            _em_note = (
+                f"# EM-derived strap floor applied (pdn_em_sizing.json): "
+                f"met4 {_w4} met5 {_w5} pitch {_p45}\n")
         return (
             "# === v0.1.47 PDN: global connections + grid + ring ===\n"
+            + _em_note +
             "if {[catch {\n"
             "  add_global_connection -net VPWR -pin_pattern \"^VPWR$\" -power\n"
             "  add_global_connection -net VPWR -pin_pattern \"^VPB$\"  -power\n"
@@ -4983,8 +5161,8 @@ def _build_pdn_tcl(pdk: "PdkConfig", container: Optional[str] = None) -> str:
             "  set_voltage_domain -name CORE -power VPWR -ground VGND\n"
             "  define_pdn_grid -name grid -voltage_domains CORE\n"
             "  add_pdn_stripe -grid grid -layer met1 -width 0.48 -pitch 5.44 -offset 0 -followpins\n"
-            "  add_pdn_stripe -grid grid -layer met4 -width 1.6 -pitch 40.0 -offset 8.0 -extend_to_core_ring\n"
-            "  add_pdn_stripe -grid grid -layer met5 -width 1.6 -pitch 40.0 -offset 8.0 -extend_to_core_ring\n"
+            f"  add_pdn_stripe -grid grid -layer met4 -width {_w4} -pitch {_p45} -offset {_o45} -extend_to_core_ring\n"
+            f"  add_pdn_stripe -grid grid -layer met5 -width {_w5} -pitch {_p45} -offset {_o45} -extend_to_core_ring\n"
             "  add_pdn_connect -grid grid -layers {met1 met4}\n"
             "  add_pdn_connect -grid grid -layers {met4 met5}\n"
             "  pdngen\n"
@@ -5068,8 +5246,34 @@ def _build_pdn_tcl(pdk: "PdkConfig", container: Optional[str] = None) -> str:
                 _no_strap_why = (f"no routing layer above {fpl} to strap with")
         _stripes = straps.get("stripes") or []
         _connects = straps.get("connects") or []
+        # #1215-PDN — the derived EM width floor, applied to every strap
+        # regardless of plan source (registry / auto / project): max() only,
+        # so a registry-tuned grid is only ever WIDENED, and only when this
+        # project's own measurement demands it. Pitch is re-derived with the
+        # auto plan's documented spacing ratio when the wider strap needs it.
+        _em_widened: List[str] = []
+        if _emfl and _stripes:
+            _stripes = [dict(st) for st in _stripes]
+            for st in _stripes:
+                _sw0 = st.get("width")
+                if not (st.get("layer") and _sw0):
+                    continue
+                _swf, _hit = _em_floor_w(st["layer"], float(_sw0))
+                if _hit:
+                    st["width"] = round(_swf, 3)
+                    _np = max(float(st.get("pitch") or 0.0),
+                              _PDN_STRAP_MIN_PITCH_X_WIDTH * _swf)
+                    if _np != float(st.get("pitch") or 0.0):
+                        st["pitch"] = round(_np, 3)
+                        st["offset"] = round(_np / _PDN_STRAP_OFFSET_DIV, 3)
+                    _em_widened.append(
+                        f"{st['layer']} {_sw0}->{st['width']}")
         if _stripes:
             _sl = []
+            if _em_widened:
+                _sl.append(
+                    "  # EM-derived strap floor applied (pdn_em_sizing.json"
+                    "): " + ", ".join(_em_widened) + "\n")
             for st in _stripes:
                 lyr = st.get("layer")
                 sw = st.get("width")
@@ -21809,7 +22013,21 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
         for _si in spare_plan.get("instances", [])
         if _si.get("cell")]
     tapcell_prune_block = _build_tapcell_prune_tcl(pdk, _spare_pts_um)
-    pdn_block = _build_pdn_tcl(pdk, container)
+    # #1215-PDN — derived (never tuned) EM strap-width floor from this
+    # project's own prior measurement + the PDK's own Jmax; None on a first
+    # pass (no measurement yet) keeps the PDN byte-identical. NONFATAL.
+    try:
+        _pdn_em_floor = _pdn_em_width_floor(project, pdk, container)
+    except Exception as _em_exc:  # pragma: no cover - defensive
+        print(f"[phase3] PDN EM floor derivation skipped (nonfatal): {_em_exc}")
+        _pdn_em_floor = None
+    if _pdn_em_floor:
+        print("[phase3] PDN EM-derived strap width floor in force: "
+              f"I_total={_pdn_em_floor['i_total_A']:.3e} A "
+              f"({_pdn_em_floor['i_total_source']}), margin "
+              f"{_pdn_em_floor['margin']}; per-layer w_em recorded in "
+              "reports/phase3/pdn_em_sizing.json")
+    pdn_block = _build_pdn_tcl(pdk, container, em_floor=_pdn_em_floor)
     # === hard-macro supply-pin auto global-connect ===
     # C4/2026-07-31 — this block is now emitted BEFORE `pdngen`, not
     # after it. Its purpose is to bind each hard macro's POWER/GROUND
@@ -42265,15 +42483,33 @@ def _emit_em_current_authority(project: Path, pdk: PdkConfig,
                 notes.append(
                     "EM authority: tech LEF unreadable from host and "
                     "container — Jmax tier stays honestly unresolved")
+    out_json = rpt3 / "em_current_authority.json"
     cmd = [sys.executable,
            str(PROGRAMS_DIR / "em_peak_current_authority_check.py"),
            str(project),
-           "--json", str(rpt3 / "em_current_authority.json")]
+           "--json", str(out_json)]
     if tlef_arg is not None:
         cmd += ["--tech-lef", str(tlef_arg)]
-    subprocess.run(cmd, timeout=600, check=False,
-                   capture_output=True, text=True)
-    return (rpt3 / "em_current_authority.json").is_file()
+    # Success means the artefact was REFRESHED, not that a file exists — a
+    # crashed gate leaves the previous run's verdict on disk, and "the old
+    # file is still there" must not be reported as an emit (the first
+    # validation run hid exactly that shape behind an is_file() return).
+    try:
+        before = out_json.stat().st_mtime if out_json.is_file() else None
+    except OSError:
+        before = None
+    proc = subprocess.run(cmd, timeout=600, check=False,
+                          capture_output=True, text=True)
+    try:
+        after = out_json.stat().st_mtime if out_json.is_file() else None
+    except OSError:
+        after = None
+    if after is None or (before is not None and after <= before):
+        notes.append(
+            f"EM authority emit did not refresh {out_json.name} "
+            f"(rc={proc.returncode}): {(proc.stderr or '')[-200:]}")
+        return False
+    return True
 
 
 def _emit_perc_equivalent(project: Path, top: str, pdk: PdkConfig,

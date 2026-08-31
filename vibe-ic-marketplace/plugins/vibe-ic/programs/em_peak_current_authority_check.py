@@ -303,9 +303,17 @@ def jmax_tier(project: Path, jmax: Optional[Path], tech_lef: Optional[Path],
             jpath, tlef = _discover_jmax_ref(project)
         except Exception:  # pragma: no cover - defensive
             jpath, tlef = None, None
+    # #1215-PDN: hand the density screen the routed DEF's own per-layer PG
+    # width lower bound, so a width-less CSV segment is judged against the
+    # wire the router actually drew instead of the LEF minimum. Lower bound
+    # -> J overstated -> conservative direction preserved (a PASS through it
+    # is trustworthy; a FAIL is strictly less pessimistic than before).
+    defw = emc.discover_def_pg_min_widths(project)
     verdict, rep = emc.evaluate(em_path, jpath, tlef, margin,
-                                emc._DEFAULT_BLACKS_N, None, 20)
+                                emc._DEFAULT_BLACKS_N, None, 20,
+                                def_widths=defw or None)
     return {"verdict": verdict, "skip_reason": rep.get("skip_reason"),
+            "def_pg_min_widths_um": defw or None,
             "jmax_source": rep.get("jmax_source"),
             "summary": rep.get("summary"),
             "offender_count": rep.get("offender_count", 0),

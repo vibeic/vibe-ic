@@ -346,10 +346,102 @@ def iter_segments(em_path: Path, net_hint: Optional[str]
 
 
 # ---------------------------------------------------------------------------
+# Routed-DEF PG width lower bound (#1215-PDN).
+# ---------------------------------------------------------------------------
+# The PSM em_segments.csv carries no width column, so the screen fell back to
+# the LAYER's LEF default WIDTH — the minimum legal wire, not the wire the
+# router drew. Measured on spm x gf180mcuD (2026-08-31): the Metal4 PDN
+# stripes are 1.6 um in the routed DEF while the LEF default is 0.28 um, so
+# every strap current was divided by a width ~5.7x too small and the report
+# overstated J by the same factor (Metal1: assumed 0.23 um vs the real
+# 0.6 um follow-pin rail — utilization 1.66 reported for a true 0.64).
+#
+# The DEF's own SPECIALNETS section states every PG wire's width explicitly
+# (`+ ROUTED <layer> <width-dbu>` / `NEW <layer> <width-dbu>`), so the
+# per-layer MINIMUM positive special-wire width is a true LOWER BOUND on the
+# width of ANY PG wire on that layer — the analysed net's wires are a subset
+# of all SPECIALNETS, and min over the superset <= min over the subset.
+# Dividing by a lower bound OVERSTATES J, so this bound can only ADD
+# offenders relative to the truth, never hide one: a PASS through it is
+# trustworthy, and it is strictly less pessimistic than the LEF default
+# (every legal wire is >= the LEF minimum). Width preference order is
+# csv > def_specialnets > lef_default, each segment recording its source.
+# chip-AGNOSTIC: DEF grammar only.
+_DEF_DBU_RE = re.compile(r"UNITS\s+DISTANCE\s+MICRONS\s+(\d+)")
+_DEF_SNET_SECTION_RE = re.compile(r"SPECIALNETS\b(.*?)END\s+SPECIALNETS",
+                                  re.DOTALL)
+_DEF_SNET_WIRE_RE = re.compile(r"(?:^|[+\s])(?:ROUTED|NEW)\s+(\S+)\s+(\d+)\b")
+
+
+def _def_pg_widths_of(def_path: Path) -> Dict[str, float]:
+    """Parse ONE DEF's SPECIALNETS into {layer_lc: min positive width um}."""
+    try:
+        text = def_path.read_text(errors="replace")
+    except OSError:
+        return {}
+    dbm = _DEF_DBU_RE.search(text)
+    dbu = _num(dbm.group(1)) if dbm else None
+    if not dbu or dbu <= 0:
+        return {}
+    sm = _DEF_SNET_SECTION_RE.search(text)
+    if not sm:
+        return {}
+    out: Dict[str, float] = {}
+    for wm in _DEF_SNET_WIRE_RE.finditer(sm.group(1)):
+        w_um = _num(wm.group(2))
+        if w_um is None or w_um <= 0:
+            continue  # 0-width entries are via points, not wires
+        w_um = w_um / dbu
+        lyr = wm.group(1).lower()
+        if lyr not in out or w_um < out[lyr]:
+            out[lyr] = w_um
+    return out
+
+
+def discover_def_pg_min_widths(root: Optional[Path]) -> Dict[str, float]:
+    """Per-layer lower bound (um) on routed PG wire width, from SPECIALNETS.
+
+    ``root`` may be a DEF file or a project directory (searched at the
+    canonical ``phase3/stage3/pnr/*.def``). Returns {} when no readable DEF
+    with SPECIALNETS exists — the caller then keeps the LEF fallback, which
+    is the pre-fix behaviour (degrade to more pessimistic, never to silence).
+    Layer keys are lowercased to match ``parse_lef_jmax`` tables.
+
+    Candidates are tried NEWEST-FIRST and the first non-empty width map
+    wins. Alphabetical order answered about the WRONG SUBJECT, measured on
+    spm x gf180mcuD 2026-08-31: ``sorted(...)[0]`` picked ``filled.def``,
+    which at gate time was still the PREVIOUS (PDN-failed) run's copy with
+    ZERO SPECIALNETS — {} — so the gate fell back to LEF widths and FAILed a
+    grid whose freshly-routed DEF (13:13) carried the sized 7.24 um straps;
+    the same command re-run 70 s later, after the new filled.def landed,
+    PASSed. Newest-first also skips ``floorplan.def`` (written before
+    pdngen, legitimately SPECIALNETS-free) instead of returning {} for the
+    whole project."""
+    if root is None:
+        return {}
+    try:
+        if root.is_file():
+            return _def_pg_widths_of(root)
+        if not root.is_dir():
+            return {}
+        cands = sorted(root.glob("phase3/stage3/pnr/*.def"),
+                       key=lambda p: p.stat().st_mtime, reverse=True)
+    except OSError:
+        return {}
+    for c in cands:
+        w = _def_pg_widths_of(c)
+        if w:
+            return w
+    return {}
+
+
+# ---------------------------------------------------------------------------
 # Screening.
 # ---------------------------------------------------------------------------
 def _screen_segment(seg: Dict[str, Any], table: Dict[str, Dict[str, Any]],
-                    margin: float, blacks_n: float) -> Dict[str, Any]:
+                    margin: float, blacks_n: float,
+                    def_widths: Optional[Dict[str, float]] = None
+                    ) -> Dict[str, Any]:
     """Screen one segment → dict with status in
     {ok, offender, unscreened}. Numeric detail included when screened."""
     l0 = seg["layer0"].lower()
@@ -382,7 +474,14 @@ def _screen_segment(seg: Dict[str, Any], table: Dict[str, Dict[str, Any]],
     if entry.get("kind") != "routing":
         return {"status": "unscreened", "net": net, "layer": seg["layer0"],
                 "reason": "layer_is_not_routing", "current_A": cur}
-    width = seg.get("width_um") or entry.get("width_um")
+    width = seg.get("width_um")
+    width_src = "csv"
+    if not width:
+        width = (def_widths or {}).get(l0)
+        width_src = "def_specialnets_min"
+    if not width:
+        width = entry.get("width_um")
+        width_src = "lef_default_width"
     if not width:
         return {"status": "unscreened", "net": net, "layer": seg["layer0"],
                 "reason": "no_segment_or_layer_width", "current_A": cur}
@@ -411,6 +510,7 @@ def _screen_segment(seg: Dict[str, Any], table: Dict[str, Dict[str, Any]],
     return {
         "status": "offender" if offender else "ok",
         "net": net, "layer": entry["orig_name"], "basis": basis,
+        "width_source": width_src,
         "current_A": cur, "width_um": width, "thickness_um": thickness,
         "density_A_per_um2": dens_areal,
         "density_A_per_um": dens_per_width,
@@ -432,7 +532,8 @@ def _lifetime_ratio(util: float, n: float) -> Optional[float]:
 
 def evaluate(em_path: Optional[Path], jmax_path: Optional[Path],
              tech_lef: Optional[Path], margin: float, blacks_n: float,
-             net_hint: Optional[str], top_offenders: int
+             net_hint: Optional[str], top_offenders: int,
+             def_widths: Optional[Dict[str, float]] = None
              ) -> Tuple[str, Dict[str, Any]]:
     """Return (verdict, report). verdict in {PASS, FAIL, SKIPPED}."""
     rep: Dict[str, Any] = {
@@ -484,7 +585,7 @@ def evaluate(em_path: Optional[Path], jmax_path: Optional[Path],
 
     for seg in segs:
         n_total += 1
-        r = _screen_segment(seg, table, margin, blacks_n)
+        r = _screen_segment(seg, table, margin, blacks_n, def_widths)
         if r["status"] == "unscreened":
             n_unscreened += 1
             unscreened_reasons[r["reason"]] = unscreened_reasons.get(r["reason"], 0) + 1
@@ -587,6 +688,11 @@ def main(argv: Optional[List[str]] = None) -> int:
     ap.add_argument("--top-offenders", type=int, default=20,
                     help="max offenders to list on FAIL (default 20)")
     ap.add_argument("--json", default=None, help="JSON report output path")
+    ap.add_argument("--def-file", default=None,
+                    help="routed DEF (or project dir) whose SPECIALNETS give "
+                         "the per-layer PG width lower bound (#1215-PDN); "
+                         "when omitted and em_report is a project dir, the "
+                         "canonical phase3/stage3/pnr/*.def is tried")
     args = ap.parse_args(argv)
 
     if not (0.0 <= args.margin < 1.0):
@@ -599,9 +705,12 @@ def main(argv: Optional[List[str]] = None) -> int:
     em_path = _discover_em_report(Path(args.em_report))
     jmax_path = Path(args.jmax) if args.jmax else None
     tech_lef = Path(args.tech_lef) if args.tech_lef else None
+    def_widths = discover_def_pg_min_widths(
+        Path(args.def_file) if args.def_file else Path(args.em_report))
 
     verdict, rep = evaluate(em_path, jmax_path, tech_lef, args.margin,
-                            args.blacks_n, args.net, args.top_offenders)
+                            args.blacks_n, args.net, args.top_offenders,
+                            def_widths=def_widths or None)
     out = json.dumps(rep, indent=2, ensure_ascii=False)
     if args.json:
         Path(args.json).parent.mkdir(parents=True, exist_ok=True)
