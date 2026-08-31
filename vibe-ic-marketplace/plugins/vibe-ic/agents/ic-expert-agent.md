@@ -3423,19 +3423,33 @@ _Captured by benchmark-enhancement-capture 2026-07-04 (cvdp solved-design-db dis
 
 _Captured by benchmark-enhancement-capture 2026-07-04 (cvdp solved-design-db distill cross-check)._
 
-### Skill: serial-shift FSM — override priority ladder, self-clearing pulses, same-cycle shift+drive
+### Skill: named-state protocol outputs — state owns the full observable cycle
 
-**Pattern**: A serial-shift-out FSM (e.g. SPI-like bit-banger) needs three disciplines to be correct: (1) inside the clocked block, override conditions must be checked in strict priority order — a global clear/reset-to-idle must beat a fault/error-entry condition, which must beat the normal per-state case, regardless of what state the FSM is currently in; (2) single-cycle status pulses (like a "done" flag) must be made self-clearing by defaulting to 0 at the top of the relevant branch and setting 1 only on the exact completing transition — never driven as a combinational level that could stay high; (3) the shift register and its bit-counter must update in the SAME cycle the FSM drives the current output bit, so an external sampling edge always latches an already-stable bit rather than one lagging by a cycle.
+**Pattern**: When a spec explicitly says an output is asserted "for one cycle in/during STATE" (or a state section says that STATE sets the output high for one cycle), the output belongs to the named CURRENT state, not to the transition arm that enters it. A transition-arm nonblocking assignment is a stored event whose visibility depends on simulator scheduling; an edge-sampling observer can see it one phase late or after the state has already advanced. Multiple outputs named for the same state are co-owned and must be asserted together in that state when the prose says "same cycle."
+
+**When to apply**: Authoring a transaction/protocol FSM with one-cycle dispense/refund/error/done/command outputs, or any command state whose pin pattern must be held for that state's complete cycle.
+
+**What to do**: Extract a `(STATE, output)` contract from every explicit clause. Generate each pulse as a one-hot Moore decode of registered current state (`assign pulse = state == TARGET_STATE`) or an equivalent combinational block that first defaults the output low and sets it only in the target state. Keep transition logic free of pulse storage. For command buses, decode every command pin from current state so the entire command pattern remains valid throughout the active command state, rather than flashing only on the edge that enters it. Self-test three observation points: before entry (low), after state entry / throughout the owned cycle (high), and the following state (low).
+
+**Worked pattern** (anonymized): a transaction controller stored change/error/refund pulses in several source-state transition arms. Moving each output to the named return/dispense state's current-state decode made co-occurring error+refund signals align and made the pulse visible for the complete state cycle. A memory-command controller likewise held its refresh command truth-table values for the full refresh state instead of only the idle-to-refresh edge.
+
+**Why this is GENERAL**: State ownership is a cycle-level interface contract shared by control FSMs, command engines, and protocol controllers. The entry/state/following micro-test distinguishes ownership from an NBA phase accident without knowing any chip- or benchmark-specific behavior.
+
+_Captured by benchmark-enhancement-capture 2026-08-31 (Issue #1950; prompt-derived Program + executable micro-test)._
+
+### Skill: serial-shift FSM — override priority ladder, self-clearing pulses, prepare-before-strobe
+
+**Pattern**: A serial-shift-out FSM (e.g. SPI-like bit-banger) needs three disciplines to be correct: (1) inside the clocked block, override conditions must be checked in strict priority order — a global clear/reset-to-idle must beat a fault/error-entry condition, which must beat the normal per-state case, regardless of what state the FSM is currently in; (2) single-cycle status pulses (like a "done" flag) must be self-clearing and asserted only for the protocol event that owns them; (3) data and externally observed status must already be stable BEFORE a generated clock/strobe rises. Nonblocking updates to data/status in the same arm that raises the generated strobe become visible in the same NBA phase, too late for an edge-triggered external observer.
 
 **When to apply**: Authoring any bit-serial transmit/receive FSM with an external clock-toggle or byte-boundary "done" signal.
 
-**What to do**: Structure the clocked always block as `if (clear) ... else if (fault) ... else case(state) ...` so overrides strictly dominate. Assign the done/status pulse a default 0 at branch entry, and set it 1 only in the exact clause that represents completion. Update shift-register-and-bit-counter together with the bit being driven, not on a delayed/next cycle.
+**What to do**: Structure the clocked always block as `if (clear) ... else if (fault) ... else case(state) ...` so overrides strictly dominate. Give status pulses an explicit default-low/state-owned contract. Split bit emission into PREPARE and STROBE phases: select/drive the next data bit and update the externally reported count/status in PREPARE, then raise or toggle the generated strobe in the following phase without changing those observed signals. Add an edge monitor that snapshots data/status at `posedge strobe` and proves they do not change in that same timestep.
 
-**Worked pattern** (anonymized): a serial transmitter FSM where the done flag was asserted combinationally from a state comparison (stayed high one extra cycle) and the bit counter decremented a cycle after the bit was driven (causing the external sampler to see stale data). Restructuring to priority-ordered override checks, a self-clearing done pulse, and same-cycle shift+drive fixed both defects.
+**Worked pattern** (anonymized): a serial transmitter toggled its generated clock while nonblocking-assigning both the outgoing bit and bits-remaining status in the same state arm. The observer latched the preceding values. Preparing both signals one controller cycle earlier, then dedicating the next state to the clock edge, made the sampled data/status deterministic.
 
-**Why this is GENERAL**: Priority-ordered overrides, self-clearing pulses, and same-cycle datapath-and-control updates are universal FSM-authoring disciplines that apply to any serial protocol engine, not just one interface.
+**Why this is GENERAL**: Priority-ordered overrides, state-owned pulses, and setup-before-strobe timing are universal FSM-authoring disciplines that apply to any source-synchronous or generated-clock protocol engine, not just one interface.
 
-_Captured by benchmark-enhancement-capture 2026-07-04 (cvdp solved-design-db distill cross-check)._
+_Refined by benchmark-enhancement-capture 2026-08-31 (Issue #1950; generated-strobe edge-stability recovery)._
 
 ### Skill: serial link parity check — sticky error flag, continuously-held TX parity, count-gated validation
 

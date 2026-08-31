@@ -30,6 +30,16 @@ Input spec (JSON or YAML), e.g.:
     }
   For *_seq add: "clk": "clk", "reset": {"name":"reset","mode":"sync","polarity":"high","to":"A"}.
 
+  Multiple one-cycle protocol outputs owned by named states use the additive
+  ``state_outputs`` map.  Each signal is a Moore decode of CURRENT state and is
+  therefore deasserted outside its owner state(s):
+
+    "state_outputs": {
+      "return_change": ["RETURN_CHANGE"],
+      "error": ["RETURN_MONEY"],
+      "return_money": ["RETURN_MONEY"]
+    }
+
 chip-AGNOSTIC: pure table→logic transform; no IC-, bus-, or protocol-specific
 knowledge. Deterministic: same spec → byte-identical RTL.
 
@@ -42,6 +52,7 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import re
 import sys
 from pathlib import Path
 from typing import Dict, List
@@ -74,6 +85,43 @@ def _input_values(transitions: Dict[str, dict]) -> List[str]:
     return sorted(vals, key=lambda v: int(v))
 
 
+def _state_outputs(spec: dict) -> Dict[str, List[str]]:
+    """Normalized ``signal -> [owner states]`` map, preserving input order."""
+    raw = spec.get("state_outputs", {}) or {}
+    if not isinstance(raw, dict):
+        raise ValueError("state_outputs must be a signal-to-state-list mapping")
+    out: Dict[str, List[str]] = {}
+    for signal, owners in raw.items():
+        if not isinstance(signal, str) or not re.fullmatch(r"[A-Za-z_]\w*", signal):
+            raise ValueError(f"invalid state-output signal: {signal!r}")
+        if isinstance(owners, str):
+            owners = [owners]
+        if not isinstance(owners, list) or not owners:
+            raise ValueError(f"state_outputs[{signal!r}] must name at least one state")
+        normalized: List[str] = []
+        for owner in owners:
+            if not isinstance(owner, str):
+                raise ValueError(f"state_outputs[{signal!r}] has a non-string state")
+            if owner not in normalized:
+                normalized.append(owner)
+        out[signal] = normalized
+    return out
+
+
+def _append_state_outputs(lines: List[str], spec: dict, state_expr: str,
+                          enc: Dict[str, int]) -> None:
+    """Emit one-hot current-state decodes for named-state protocol outputs.
+
+    Equality is the default deassertion: once ``state_expr`` is not an owner,
+    the output is zero without a stored pulse that can trail the state by an
+    NBA phase.
+    """
+    for signal, owners in _state_outputs(spec).items():
+        ordered = sorted(owners, key=lambda state: enc[state])
+        cond = " || ".join(f"({state_expr} == {state})" for state in ordered)
+        lines.append(f"  assign {signal} = {cond};")
+
+
 def _validate(spec: dict) -> None:
     for req in ("module", "kind", "encoding", "transitions"):
         if req not in spec:
@@ -87,14 +135,26 @@ def _validate(spec: dict) -> None:
         for nxt in trans[s].values():
             if nxt not in enc:
                 raise ValueError(f"next-state '{nxt}' (from '{s}') not in encoding")
-    if spec["kind"].startswith("moore") and spec["kind"] != "moore_comb":
-        pass
-    if spec["kind"] in ("moore_comb", "moore_seq") and "outputs" not in spec:
-        raise ValueError("Moore FSM requires per-state 'outputs'")
+    state_out = _state_outputs(spec)
+    for signal, owners in state_out.items():
+        for owner in owners:
+            if owner not in enc:
+                raise ValueError(
+                    f"state-output '{signal}' owner '{owner}' not in encoding")
+    if spec["kind"] in ("moore_comb", "moore_seq") \
+            and "outputs" not in spec and not state_out:
+        raise ValueError("Moore FSM requires per-state 'outputs' or 'state_outputs'")
+    if spec["kind"] == "mealy_seq" and "outputs" not in spec:
+        raise ValueError("Mealy FSM requires per-state/input 'outputs'")
+    legacy_out = spec.get("output", "out")
+    if "outputs" in spec and legacy_out in state_out:
+        raise ValueError(
+            f"output '{legacy_out}' is declared by both outputs and state_outputs")
 
 
 def _gen_moore_comb(spec: dict) -> str:
-    enc = spec["encoding"]; trans = spec["transitions"]; outs = spec["outputs"]
+    enc = spec["encoding"]; trans = spec["transitions"]
+    outs = spec.get("outputs")
     w = _state_width(enc)
     si = spec.get("state_in", "state")
     no = spec.get("next_state_out", "next_state")
@@ -102,11 +162,15 @@ def _gen_moore_comb(spec: dict) -> str:
     out = spec.get("output", "out")
     ivals = _input_values(trans)
 
+    ports = [f"  input        {inp}",
+             f"  input  [{w-1}:0] {si}",
+             f"  output reg [{w-1}:0] {no}"]
+    if outs is not None:
+        ports.append(f"  output       {out}")
+    ports.extend(f"  output       {signal}" for signal in _state_outputs(spec))
     lines = [f"module {spec['module']} ("]
-    lines.append(f"  input        {inp},")
-    lines.append(f"  input  [{w-1}:0] {si},")
-    lines.append(f"  output reg [{w-1}:0] {no},")
-    lines.append(f"  output       {out}")
+    lines.extend(p + ("," if i < len(ports) - 1 else "")
+                 for i, p in enumerate(ports))
     lines.append(");")
     # state localparams
     for s, v in sorted(enc.items(), key=lambda kv: kv[1]):
@@ -132,12 +196,14 @@ def _gen_moore_comb(spec: dict) -> str:
     lines.append(f"  end")
     lines.append("")
     # Moore output
-    one_states = [s for s, o in outs.items() if int(o) == 1]
-    if one_states:
-        cond = " || ".join(f"({si} == {s})" for s in sorted(one_states, key=lambda s: enc[s]))
-        lines.append(f"  assign {out} = {cond};")
-    else:
-        lines.append(f"  assign {out} = 1'b0;")
+    if outs is not None:
+        one_states = [s for s, o in outs.items() if int(o) == 1]
+        if one_states:
+            cond = " || ".join(f"({si} == {s})" for s in sorted(one_states, key=lambda s: enc[s]))
+            lines.append(f"  assign {out} = {cond};")
+        else:
+            lines.append(f"  assign {out} = 1'b0;")
+    _append_state_outputs(lines, spec, si, enc)
     lines.append("endmodule")
     return "\n".join(lines) + "\n"
 
@@ -166,12 +232,16 @@ def _gen_seq(spec: dict) -> str:
     outs = spec.get("outputs", {})
     ivals = _input_values(trans)
 
-    lines = [f"module {spec['module']} ("]
-    lines.append(f"  input        {clk},")
+    ports = [f"  input        {clk}"]
     if reset:
-        lines.append(f"  input        {reset['name']},")
-    lines.append(f"  input        {inp},")
-    lines.append(f"  output       {out}")
+        ports.append(f"  input        {reset['name']}")
+    ports.append(f"  input        {inp}")
+    if mealy or "outputs" in spec:
+        ports.append(f"  output       {out}")
+    ports.extend(f"  output       {signal}" for signal in _state_outputs(spec))
+    lines = [f"module {spec['module']} ("]
+    lines.extend(p + ("," if i < len(ports) - 1 else "")
+                 for i, p in enumerate(ports))
     lines.append(");")
     for s, v in sorted(enc.items(), key=lambda kv: kv[1]):
         lines.append(f"  localparam {s} = {_enc_lit(w, v)};")
@@ -218,13 +288,14 @@ def _gen_seq(spec: dict) -> str:
         lines.append(f"    endcase")
         lines.append(f"  end")
         lines.append(f"  assign {out} = {out}_r;")
-    else:
+    elif "outputs" in spec:
         one_states = [s for s, o in outs.items() if int(o) == 1]
         if one_states:
             cond = " || ".join(f"(state == {s})" for s in sorted(one_states, key=lambda s: enc[s]))
             lines.append(f"  assign {out} = {cond};")
         else:
             lines.append(f"  assign {out} = 1'b0;")
+    _append_state_outputs(lines, spec, "state", enc)
     lines.append("endmodule")
     return "\n".join(lines) + "\n"
 

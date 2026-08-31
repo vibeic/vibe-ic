@@ -146,6 +146,15 @@ try:
     from fsm_transition_completeness_check import check_text as _fsm_check_text  # type: ignore
 except Exception:  # pragma: no cover - defensive (program missing)
     _fsm_check_text = None
+# Issue #1950 — prompt-derived named-state output / generated-strobe timing.
+# This is surfaced ADVISORY-only until the passing_302 denominator contains at
+# least one applicable contract.  The measured 181 official pass candidates
+# produced zero findings but also zero applicable contracts; zero false fires on
+# a zero denominator is not evidence for blocking enforcement.
+try:
+    from fsm_state_output_check import check_text as _fsm_state_output_check_text  # type: ignore
+except Exception:  # pragma: no cover - defensive (program missing)
+    _fsm_state_output_check_text = None
 try:
     from valid_ready_independence_check import (  # type: ignore
         check_text as _valid_ready_check_text)
@@ -3365,6 +3374,34 @@ def fsm_completeness_gate_record(rid, completion):
                                     completion)
 
 
+def fsm_state_output_gate_record(rid, completion, prompt_text):
+    """Issue #1950 — named-state pulse / generated-strobe timing verdict.
+
+    The helper returns ok=False on an ERROR so the result is machine-readable,
+    but the current sole-emit wiring is explicitly ADVISORY: passing_302 had
+    181 official-pass candidates and zero false findings, but zero applicable
+    contracts.  Enforcement needs a non-zero positive denominator first.
+    """
+    if _fsm_state_output_check_text is None:
+        return True, "fsm-state-output unavailable — skipped"
+    if not prompt_text:
+        return True, "no prompt — fsm-state-output skipped"
+    code, _kind = extract_code(completion or "")
+    if not (code or "").strip():
+        return True, "no RTL — fsm-state-output skipped"
+    try:
+        findings, status = _fsm_state_output_check_text(code, prompt_text)
+    except Exception as exc:  # pragma: no cover - defensive
+        return True, f"fsm-state-output raised (advisory): {exc}"
+    errors = [finding for finding in findings
+              if getattr(finding, "severity", "") == "ERROR"]
+    if errors:
+        detail = "; ".join(
+            f"{finding.rule}({finding.signal})" for finding in errors[:4])
+        return False, "fsm-state-output FAIL: " + detail
+    return True, f"fsm-state-output {status} ({len(findings)} finding(s))"
+
+
 def handshake_stability_gate_record(rid, completion):
     """B4 — handshake livelock / result-stability (#523). BLOCK on an ERROR."""
     return _structural_finding_gate(_handshake_check_text,
@@ -4084,6 +4121,25 @@ def main(argv=None) -> int:
                     ok = False
                     entry["verdict"] = "BLOCKED"
                     entry["clause_block"] = _b5_note
+                # Issue #1950 / B7 — extract explicit one-cycle outputs owned by
+                # named FSM states and generated-strobe observation contracts,
+                # then flag transition-owned pulses / same-NBA data updates.
+                # The check is intentionally ADVISORY in this release:
+                # passing_302 differential = 181 official-pass candidates,
+                # 0 findings, but 0 applicable contracts.  A zero denominator
+                # cannot justify irreversible blocking (§4.05).  The typed
+                # helper still returns its real FAIL so a future non-zero corpus
+                # can promote the same single-source verdict without rewriting
+                # the checker.
+                _b7_ok, _b7_note = fsm_state_output_gate_record(
+                    _rid_s, out_rec.get("completion", ""),
+                    prompts.get(_rid_s, ""))
+                if _b7_note.startswith(("fsm-state-output FAIL",
+                                        "fsm-state-output CHECKED")):
+                    entry["fsm_state_output"] = (
+                        _b7_note
+                        + (" [ADVISORY — passing_302 had zero applicable contracts]"
+                           if not _b7_ok else ""))
             report.append(entry)
             if ok:
                 # ORGANIC (run_v1239_converge) — harness-TOPLEVEL alias repair.

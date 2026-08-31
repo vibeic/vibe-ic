@@ -29,8 +29,11 @@
       "bucket_A_program": "programs/rtl_hygiene_lint.py",
       "bucket_A_related": [
         "programs/chip_top_gate_wrapper_gen.py",
+        "programs/fsm_state_output_check.py",
+        "programs/fsm_table_rtl_gen.py",
         "programs/spec_conformance_check.py",
-        "programs/spec_declaration_emit.py"
+        "programs/spec_declaration_emit.py",
+        "programs/spec_fsm_extract.py"
       ],
       "bucket_A_related_note": "`spec_declaration_emit.py` owns the FREE-CHOICE declaration contract at this step: the spec's own MUST-declare clause + field table decide which interface choices the author must record BEFORE authoring, and the emitter refuses (naming the field) rather than defaulting one. Route a recovery here whenever the recovered fact was a decision the designer made that no downstream tool could infer — bit order, reset-release latency, integer encoding, reset polarity, a build parameter, an optional-feature selection. Do NOT route such a recovery to a value-inference program: inferring a free choice from the artifacts is the defect, not the fix.",
       "bucket_B_skill_file": "agents/ic-expert-agent.md",

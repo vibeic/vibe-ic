@@ -13,7 +13,9 @@ This program does the DETERMINISTIC, chip-AGNOSTIC, PROGRAM-FIRST half of that
 job: given a prompt, it extracts the STRUCTURAL FSM skeleton —
 
   * one `fsm_state`      ChecklistItem per stated, NAMED state, and
-  * one `fsm_transition` ChecklistItem per stated (state, condition -> next)
+  * one `fsm_transition` ChecklistItem per stated (state, condition -> next), and
+  * one `fsm_state_output` ChecklistItem per explicit one-cycle output owned by
+    a named state.
 
 — anchored to a real state-name token and a real transition statement, so the
 downstream coverage attribution (`spec_coverage_check.py` / the TB self-check)
@@ -38,14 +40,17 @@ WHAT COUNTS AS A "STATED FSM" (the §4.05 no-leak boundary)
 CONTRACT
   Each emitted dict is shaped to seed a `spec_coverage_check.ChecklistItem`:
     {
-      "kind":        "fsm_state" | "fsm_transition",
+      "kind":        "fsm_state" | "fsm_transition" | "fsm_state_output",
       "requirement": human-readable testable requirement,
       "evidence":    the EXACT state / transition line it came from,
       "coverage_tokens": [tokens a TB must touch to cover it],
-      # transition-only structured fields (also harmless on states):
+      # transition / state-output structured fields (also harmless on states):
       "state":       <source state name>      (transition only),
       "next_state":  <destination state name> (transition only),
       "condition":   <transition condition or "">,
+      "signal":      <output signal>          (state-output only),
+      "asserted_value": 1,                    (state-output only),
+      "duration_cycles": 1,                   (state-output only),
     }
 
 CLI
@@ -648,6 +653,156 @@ def _collect_transitions(prose: str, states: List[str]
     return out
 
 
+# ---------------------------------------------------------------------------
+# Named-state one-cycle output collection (Issue #1950)
+# ---------------------------------------------------------------------------
+# These forms are deliberately narrow: the output identifier must be quoted or
+# sit directly in a set/assert/drive/pulse/trigger clause, the clause must state
+# exactly one cycle, and the owner must be an explicit state section / an
+# ``in|during <STATE>`` phrase / the unique destination of that same sentence.
+# A free-standing ``done pulses for one cycle`` therefore does NOT invent a
+# state owner.  This is the §4.05 no-leak boundary.
+_STATE_OUTPUT_PATTERNS = (
+    re.compile(
+        r"\b(?:sets?|asserts?|drives?|raises?|pulses?)\s+"
+        r"(?:the\s+)?`?([A-Za-z_]\w*)`?(?:\s+signal)?\s+"
+        r"(?:to\s+)?(?:high|1\s*'\s*b1|1)\b[^.;\n]{0,100}?"
+        r"\b(?:for|during)\s+(?:exactly\s+)?one(?:\s+clock)?\s+cycle\b",
+        re.IGNORECASE),
+    re.compile(
+        r"`([A-Za-z_]\w*)`\s+(?:is\s+)?(?:set\s+to|goes|pulses?|asserts?)\s+"
+        r"(?:high|1\s*'\s*b1|1)\b[^.;\n]{0,100}?"
+        r"\b(?:for|during)\s+(?:exactly\s+)?one(?:\s+clock)?\s+cycle\b",
+        re.IGNORECASE),
+    re.compile(
+        r"\btriggers?\s+(?:the\s+)?`?([A-Za-z_]\w*)`?(?:\s+signal)?\s+"
+        r"(?:high\s+)?(?:for|during)\s+(?:exactly\s+)?one"
+        r"(?:\s+clock)?\s+cycle\b",
+        re.IGNORECASE),
+    re.compile(
+        r"`([A-Za-z_]\w*)`[^.;\n]{0,50}?\bactive\s+high\b[^.;\n]{0,50}?"
+        r"\b(?:for|during)\s+(?:exactly\s+)?one(?:\s+clock)?\s+cycle\b",
+        re.IGNORECASE),
+)
+_NON_SIGNAL_NAMES = {
+    "a", "an", "the", "to", "signal", "signals", "output", "outputs",
+    "pulse", "pulses", "state", "states", "cycle", "cycles",
+}
+
+
+def _state_output_regions(prose: str, by_lower: Dict[str, str]
+                          ) -> List[Tuple[int, int, str]]:
+    """Per-state sections bounded by the next state OR document heading.
+
+    The transition extractor intentionally lets the last state section reach the
+    document end because flat transition prose may follow it.  Output ownership
+    must be stricter: a later ``## Assumptions`` / numbered bold section is not
+    still an action of the preceding state.
+    """
+    state_headers: List[Tuple[int, str]] = []
+    for pat in _MD_SECTION_HEADER_PATTERNS:
+        for m in pat.finditer(prose):
+            nm = _resolve_state(_norm(next((g for g in m.groups() if g), "")),
+                                by_lower)
+            if nm is not None:
+                state_headers.append((m.start(), nm))
+    state_headers.sort()
+    generic = sorted({m.start() for m in re.finditer(
+        r"^\s*(?:#{1,6}\s+.+|\d+[.)]\s+\*\*[^\n]+\*\*)",
+        prose, re.MULTILINE)})
+    regions: List[Tuple[int, int, str]] = []
+    for start, owner in state_headers:
+        later = [p for p in generic if p > start]
+        end = later[0] if later else len(prose)
+        regions.append((start, end, owner))
+    return regions
+
+
+def _sentence_spans(prose: str):
+    """Yield ``(start, sentence)`` without losing the absolute section offset."""
+    start = 0
+    for m in re.finditer(r".*?(?:[.;\n]|\Z)", prose, re.DOTALL):
+        sent = m.group(0)
+        if sent.strip():
+            yield m.start(), sent
+        start = m.end()
+    if start < len(prose) and prose[start:].strip():  # defensive; \Z normally wins
+        yield start, prose[start:]
+
+
+def _explicit_state_owner(sentence: str, sentence_pos: int,
+                          states: List[str],
+                          regions: List[Tuple[int, int, str]]) -> Optional[str]:
+    """Resolve the state that owns an output clause, or None rather than guess.
+
+    Priority is the enclosing per-state section, then an explicit in/during
+    state phrase, then a UNIQUE transition destination in the same sentence.
+    The final form covers prose such as ``pulse error for one cycle and move to
+    ERROR_STATE`` while refusing a sentence with two different destinations.
+    """
+    by_lower = {s.lower(): s for s in states}
+    section = _section_owner_for(regions, sentence_pos)
+    if section is not None:
+        return section
+
+    owners: List[str] = []
+    for m in re.finditer(
+            r"\b(?:in|during|within|while\s+in)\s+(?:the\s+)?`?\*?\*?"
+            r"([A-Za-z_]\w*)`?\*?\*?(?:\s+state)?\b",
+            sentence, re.IGNORECASE):
+        owner = _resolve_state(m.group(1), by_lower)
+        if owner is not None and owner not in owners:
+            owners.append(owner)
+    if len(owners) == 1:
+        return owners[0]
+    if len(owners) > 1:
+        return None
+
+    dests: List[str] = []
+    for m in _TRANS_RE.finditer(sentence):
+        # A pulse followed by "reset/return to IDLE" belongs to the terminal
+        # event, not to the quiescent destination.  Only an explicit move /
+        # transition / enter-style destination can provide ownership here.
+        if re.match(r"\s*(?:reset|return)", m.group(0), re.IGNORECASE):
+            continue
+        dest = _resolve_state(m.group(1), by_lower)
+        if dest is not None and dest.upper() not in {"IDLE", "RESET", "WAIT"} \
+                and dest not in dests:
+            dests.append(dest)
+    return dests[0] if len(dests) == 1 else None
+
+
+def _collect_state_outputs(prose: str, states: List[str]) -> List[Tuple[str, str, str]]:
+    """Return ``(owner_state, output_signal, evidence)`` for explicit one-cycle
+    named-state output clauses.  First occurrence wins; no owner means no item."""
+    by_lower = {s.lower(): s for s in states}
+    regions = _state_output_regions(prose, by_lower)
+    out: List[Tuple[str, str, str]] = []
+    seen: Set[Tuple[str, str]] = set()
+    for pos, sentence in _sentence_spans(prose):
+        signals: List[str] = []
+        for pat in _STATE_OUTPUT_PATTERNS:
+            for m in pat.finditer(sentence):
+                sig = _norm(m.group(1))
+                if (_IDENT_RE.fullmatch(sig)
+                        and sig.lower() not in _NON_SIGNAL_NAMES
+                        and sig not in signals):
+                    signals.append(sig)
+        if not signals:
+            continue
+        owner = _explicit_state_owner(sentence, pos, states, regions)
+        if owner is None:
+            continue
+        evidence = sentence.strip()
+        for sig in signals:
+            key = (owner.lower(), sig.lower())
+            if key in seen:
+                continue
+            seen.add(key)
+            out.append((owner, sig, evidence))
+    return out
+
+
 def _table_transitions(prose: str, states: Set[str],
                        seen: Set[Tuple[str, str, str]]
                        ) -> List[Tuple[str, str, str, str]]:
@@ -740,6 +895,25 @@ def extract(prompt_text: str) -> List[Dict]:
             "next_state": "",
             "condition": "",
         })
+    # one fsm_state_output item per explicit state-owned one-cycle assertion.
+    # The generated implementation contract is Moore-shaped: asserted from the
+    # CURRENT named state, deasserted everywhere else.  That avoids the
+    # transition-arm/NBA phase skew captured by Issue #1950.
+    for owner, signal, ev in _collect_state_outputs(prose, states):
+        items.append({
+            "kind": "fsm_state_output",
+            "requirement": ("In state " + owner + ", output " + signal
+                            + " is asserted high for exactly one cycle and "
+                            + "deasserted outside that state."),
+            "evidence": ev,
+            "coverage_tokens": [owner, signal],
+            "state": owner,
+            "next_state": "",
+            "condition": "",
+            "signal": signal,
+            "asserted_value": 1,
+            "duration_cycles": 1,
+        })
     # one fsm_transition item per stated edge
     for src, cond, dst, ev in transitions:
         cond_txt = (" when " + cond) if cond else ""
@@ -800,6 +974,7 @@ def _main(argv: Optional[List[str]] = None) -> int:
 
     states = [it for it in items if it["kind"] == "fsm_state"]
     trans = [it for it in items if it["kind"] == "fsm_transition"]
+    outputs = [it for it in items if it["kind"] == "fsm_state_output"]
     print("STATES (" + str(len(states)) + "):")
     for it in states:
         print("  - " + it["state"] + "   [" + it["evidence"][:70] + "]")
@@ -807,6 +982,10 @@ def _main(argv: Optional[List[str]] = None) -> int:
     for it in trans:
         cond = (" when " + it["condition"]) if it["condition"] else ""
         print("  - " + it["state"] + cond + " -> " + it["next_state"])
+        print("      evidence: " + it["evidence"][:90])
+    print("STATE OUTPUTS (" + str(len(outputs)) + "):")
+    for it in outputs:
+        print("  - " + it["state"] + ": " + it["signal"] + " = 1 (one cycle)")
         print("      evidence: " + it["evidence"][:90])
     return 0
 

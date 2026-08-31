@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 1239
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1239)
+- **Total programs (excluding helpers / shims):** 1241
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1241)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 1230 |
+| `any` | 1232 |
 
 ## Alphabetical listing
 
@@ -441,6 +441,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `fsm_error_invariant` | any | — | Detect FSMs where an error signal can break upper-layer invariants. |
 | `fsm_prose_synth` | any | — | deterministic SOLVER for the COMBINATIONAL one-hot FSM-DECODE subset of the prose/tabular FSM family that full_moore_fsm_synth.py does NO... |
 | `fsm_state_coverage_check` | any | Wave 13 | v0.119.45 (Wave 13) gate. |
+| `fsm_state_output_check` | any | — | Prompt-derived FSM state-output and generated-strobe timing check. |
 | `fsm_table_rtl_gen` | any | v0.1.6 | deterministic FSM-table → synthesizable RTL generator. |
 | `fsm_transition_completeness_check` | any | v0.3.21 | v0.3.21 (ORGANIC #522). |
 | `fsm_vector_rtl_emit` | any | — | supplemental DETERMINISTIC Tier-1 emitters for the VerilogEval-HUMAN (code-complete, ICCAD-2023) tier pipeline. |
@@ -589,6 +590,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `l21_macro_supply_rail_declared_check` | any | — | L21 SEMANTIC completeness gate. |
 | `l21_macro_supply_rail_synth` | any | — | Derive the power-intent rail set from the design's OWN hard-macro LEFs. |
 | `l21_to_upf_emit` | any | v0.1.51 | render L21 power intent into an IEEE-1801 UPF handoff artifact (flow v2.3.1, external review R1). |
+| `l22_analog_verification_plan_emit` | any | — | Project the analog/mixed-signal verification contract into L22. |
 | `l22_checklist_milestone_emit` | any | — | the verification checklist's own milestones. |
 | `l22_coverage_goal_emit` | any | — | lift measurable coverage targets out of the design's own input docs and into L22, the layer that CONSUMES them. |
 | `l22_verification_plan_measurable_check` | any | — | SEMANTIC gate for L22_VERIFICATION_PLAN (batch layergate-7). |
@@ -1311,7 +1313,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (1230 programs)
+### `any` (1232 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `absence_verdict_names_its_search_space_check` — "not found" must say WHERE it looked.
@@ -1724,6 +1726,7 @@ _(no programs in this group)_
 - `fsm_error_invariant` — Detect FSMs where an error signal can break upper-layer invariants.
 - `fsm_prose_synth` — deterministic SOLVER for the COMBINATIONAL one-hot FSM-DECODE subset of the prose/tabular FSM family that full_moore_fsm_synth.py does NO...
 - `fsm_state_coverage_check` — v0.119.45 (Wave 13) gate.  _[Wave 13]_
+- `fsm_state_output_check` — Prompt-derived FSM state-output and generated-strobe timing check.
 - `fsm_table_rtl_gen` — deterministic FSM-table → synthesizable RTL generator.  _[v0.1.6]_
 - `fsm_transition_completeness_check` — v0.3.21 (ORGANIC #522).  _[v0.3.21]_
 - `fsm_vector_rtl_emit` — supplemental DETERMINISTIC Tier-1 emitters for the VerilogEval-HUMAN (code-complete, ICCAD-2023) tier pipeline.
@@ -1872,6 +1875,7 @@ _(no programs in this group)_
 - `l21_macro_supply_rail_declared_check` — L21 SEMANTIC completeness gate.
 - `l21_macro_supply_rail_synth` — Derive the power-intent rail set from the design's OWN hard-macro LEFs.
 - `l21_to_upf_emit` — render L21 power intent into an IEEE-1801 UPF handoff artifact (flow v2.3.1, external review R1).  _[v0.1.51]_
+- `l22_analog_verification_plan_emit` — Project the analog/mixed-signal verification contract into L22.
 - `l22_checklist_milestone_emit` — the verification checklist's own milestones.
 - `l22_coverage_goal_emit` — lift measurable coverage targets out of the design's own input docs and into L22, the layer that CONSUMES them.
 - `l22_verification_plan_measurable_check` — SEMANTIC gate for L22_VERIFICATION_PLAN (batch layergate-7).
