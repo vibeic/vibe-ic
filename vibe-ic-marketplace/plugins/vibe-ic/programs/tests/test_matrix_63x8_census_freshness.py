@@ -65,6 +65,26 @@ BEGIN = ("<!-- BEGIN GENERATED CENSUS — tools/gen_matrix_63x8_census.py — "
          "DO NOT EDIT BY HAND -->")
 END = "<!-- END GENERATED CENSUS -->"
 
+#: THE ONE LINE THAT REPAIRS EVERY FIGURE THIS FILE GUARDS, printed by every
+#: assertion here that can go red on drift.
+#:
+#: It is `--fix` and not the bare run. The bare run rewrites the census block
+#: and leaves the anchored figures stale, so a reader who follows it comes back
+#: to a still-red tree — the generator's own `--check` message says `--fix` for
+#: exactly that reason, and this file used to say the bare run.
+#:
+#: It is NOT wired into the landing path, and that is a MEASURED decision rather
+#: than an omission: `--fix` costs 396 s wall / 3586 s CPU on 8HD-9 (three runs,
+#: 2026-08-31), because the census half runs all nine dimension modules as
+#: pytest subprocesses. The regenerate-on-land set it would otherwise join —
+#: `generated_artifact_conflict_resolve.REGISTRY`, which holds `INDEX.md` and
+#: `PROGRAM_INVENTORY.json` — bounds each generator at
+#: `SUBPROCESS_TIMEOUT_S = 60`, so registering this one would make that resolver
+#: rc=2 UNMEASURABLE on every landing instead of keeping anything fresh. The
+#: census stays STAMP-CADENCE, and this constant is what carries the remedy to
+#: whoever trips it.
+REGENERATE = "python3 tools/gen_matrix_63x8_census.py --fix"
+
 
 def _block() -> str:
     text = README.read_text(encoding="utf-8")
@@ -242,8 +262,7 @@ def test_the_census_block_is_fresh():
     text = README.read_text(encoding="utf-8")
     rendered = gen.render(rows, totals)
     assert gen.splice(text, rendered) == text, (
-        f"the census in {README} is stale — re-run "
-        f"`python3 tools/gen_matrix_63x8_census.py`.\n"
+        f"the census in {README} is stale — re-run `{REGENERATE}`.\n"
         f"committed:\n{_block()[:1200]}\n\n"
         f"re-derived:\n{rendered[:1200]}")
 
@@ -352,23 +371,27 @@ def test_the_published_total_equals_the_live_census():
     ), (
         f"the published ENFORCED split (own={row['own']}, "
         f"substituted={row['substituted']}, undeclared={row['undeclared']}) "
-        f"does not reproduce; the tree says {live_split}")
+        f"does not reproduce; the tree says {live_split}.\n"
+        f"Regenerate: {REGENERATE}")
     assert (row["waived"], row["na"]) == (live["WAIVED"], live["NA"]), (
         f"the published WAIVED/NA ({row['waived']}/{row['na']}) does not "
-        f"reproduce; the tree says {live['WAIVED']}/{live['NA']}")
+        f"reproduce; the tree says {live['WAIVED']}/{live['NA']}.\n"
+        f"Regenerate: {REGENERATE}")
     assert row["contradicted"] == live["CONTRADICTED"], (
         f"the published CONTRADICTED ({row['contradicted']}) does not "
-        f"reproduce; the tree says {live['CONTRADICTED']}")
+        f"reproduce; the tree says {live['CONTRADICTED']}.\n"
+        f"Regenerate: {REGENERATE}")
     assert row["not_measured"] == live["NOT_MEASURED"], (
         f"the published NOT MEASURED ({row['not_measured']}) does not "
         f"reproduce; the tree says {live['NOT_MEASURED']}. A cell whose "
         f"predicate declined to run is not coverage and is not a defect — it "
-        f"is UNKNOWN, and it has to be published as such")
+        f"is UNKNOWN, and it has to be published as such.\n"
+        f"Regenerate: {REGENERATE}")
     assert row["own"] + row["substituted"] + row["undeclared"] == live["ENFORCED"], (
         f"the three ENFORCED columns sum to "
         f"{row['own'] + row['substituted'] + row['undeclared']}, but "
         f"{live['ENFORCED']} cells are ENFORCED — some cell is in no column "
-        f"or in two")
+        f"or in two.\nRegenerate: {REGENERATE}")
     # THE ONE THAT WOULD HAVE CAUGHT THE FOLD. Every assertion above compares a
     # published figure to a live figure, so all of them stayed green while the
     # headline said 453 and the row said 481: no single one of them spans both
@@ -385,7 +408,7 @@ def test_the_published_total_equals_the_live_census():
         f"the published columns account for {printed} cells but the matrix has "
         f"{len(states)}. A published row that does not partition is how a "
         f"contradicted — or an unmeasurable — cell hides inside an enforcement "
-        f"figure. Published: {row}")
+        f"figure. Published: {row}.\nRegenerate: {REGENERATE}")
 
 
 def test_no_substituted_cell_is_inside_a_figure_presented_as_enforcement():

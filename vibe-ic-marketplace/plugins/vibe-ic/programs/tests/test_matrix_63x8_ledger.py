@@ -825,10 +825,66 @@ def test_output_entries_classify_into_the_four_kinds():
     # THREE sites and `figure:required_outputs_file` 123 -> 124, and
     # `gen_matrix_63x8_census.py --check-figures` was red on all of them. Those
     # anchors move in the same change as this pin.
-    assert sum(seen.values()) == 166, seen
-    assert seen[F.FILE] == 124
-    assert seen[F.GLOB] == 18
-    assert seen[F.ANY_OF] == 24
+    # 2026-08-31: 166 -> 182, FILE 124 -> 130, GLOB 18 -> 28, ANY_OF unchanged.
+    # SIXTEEN entries, THREE owners, and this is the first note here whose delta
+    # lands mostly on GLOB rather than FILE.
+    #
+    # RE-DERIVED rather than incremented, by the method the 2026-08-20 (smrg)
+    # note above prescribes: `flowref` was driven at EVERY revision of
+    # `flow/phase1_phase2_phase3.yaml` between `2ca7bd1d8b` -- the last commit
+    # that touched this pin, and the last one at which it measures 166/124/18/24
+    # -- and the tip, through `VIBE_IC_MATRIX_FLOW_YAML`, and the (step, entry)
+    # SET diffed commit by commit. Exactly sixteen entries were added and none
+    # removed; the step count is 68 at both ends.
+    #
+    #   `7d0abad4bc` [v1.13.58]  166 -> 172, GLOB 18 -> 24. Step 37.5ip's six
+    #       `phase3/stage4/documentation/ip/*/` deliverables -- DELIVERABLES_
+    #       MANIFEST.md, ERRATA.md, IP_DATASHEET.md, IP_INTEGRATION_GUIDE.md,
+    #       RELEASE_NOTES.md, documentation_manifest.yaml. GLOB for the reason
+    #       37.5ip's four hardmacro views are: the identifying half of the path
+    #       is the IP's name, not the flow's.
+    #   `5bfae3aedb` [v1.13.76]  172 -> 176, GLOB 24 -> 28. Step 37.5ic's four
+    #       `phase3/stage4/documentation/ic/*/` product documents -- ERRATA.md,
+    #       PRELIMINARY_DATASHEET.md, RELEASE_NOTES.md,
+    #       documentation_manifest.yaml. Same shape, same reason.
+    #   `29e9c72796` [v1.13.96]  176 -> 182, FILE 124 -> 130. Six plain FILEs:
+    #       the five stage-tier `*_compliance.json` reports on steps 2, 14, 15,
+    #       37 and 39, plus step 37.5ip's `reports/phase3/digital_hardmacro.json`.
+    #       That commit's own subject says it re-derived "the pin"; the pin it
+    #       re-derived is the one in `test_matrix_d8_missing_caught.py`, and this
+    #       one was left behind -- which is the fourth time this file records a
+    #       declaring commit moving this number without moving it here.
+    #
+    # `c4fba40c4c` is the negative control INSIDE the derivation: the ECO ->
+    # postroute_timing_repair rename swapped two of step 32's entries for two
+    # others, and the pin correctly did not move. A method that could not tell a
+    # swap from an addition would have charged it +2.
+    #
+    # ANY_OF is untouched by all three, and FILE is untouched by the first two,
+    # which is what makes the per-kind asserts a real check rather than a
+    # restatement of the sum.
+    # NO GENERATOR OWNS THIS PIN, which is why every note above is a
+    # derivation and not a number. The remedy when it goes red is NOT to type
+    # the new total:
+    #
+    #   1. find the last commit that touched this pin (`git log -1 -- <this
+    #      file>`); it is the sha at which the pin is green by construction;
+    #   2. for every revision of `flow/phase1_phase2_phase3.yaml` since, drive
+    #      `matrix_63x8.flowref` at that revision through
+    #      `$VIBE_IC_MATRIX_FLOW_YAML` and diff the (step, entry) SET;
+    #   3. write the per-commit added/removed entries into the note above, then
+    #      move the four numbers.
+    #
+    # Step 2 is what separates an addition from a swap, and a swap that is
+    # counted as an addition is how this pin has previously been moved to a
+    # number that was wrong in a new way.
+    REDERIVE = ("re-derive it: diff the (step, entry) SET per flow-yaml "
+                "revision since the last commit that touched this pin, via "
+                "$VIBE_IC_MATRIX_FLOW_YAML — never type the new total")
+    assert sum(seen.values()) == 182, (seen, REDERIVE)
+    assert seen[F.FILE] == 130, (seen, REDERIVE)
+    assert seen[F.GLOB] == 28, (seen, REDERIVE)
+    assert seen[F.ANY_OF] == 24, (seen, REDERIVE)
     # Reported to the orchestrator: the PROGRAM_EXIT form described in the brief
     # does NOT exist in required_outputs. It lives only in `gate` clauses. The
     # classifier still returns it for forward-compat, but a sibling branching on
