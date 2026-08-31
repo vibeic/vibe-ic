@@ -7,7 +7,7 @@ the issue's headline symptom did NOT reproduce:
     gate_discloses_denominator_check --population ci   rc 0, PASS,
                                                        0 findings,
                                                        50 probed / 74 declared
-    tools/gen_matrix_63x8_census.py --check
+    tools/gen_flow_matrix_census.py --check
       launched with cwd inside an EMPTY git repository:
         [PASS] 63x8 census fresh: 504 cells over 8 dimensions; ...
         real 1m50.203s
@@ -74,7 +74,7 @@ import _progress_run as _pr  # noqa: E402
 
 _REPO = _PROGRAMS.parents[3]
 _CI_SCRIPT = _REPO / "tools" / "ci" / "repo_hygiene_gates.sh"
-_GEN = _REPO / "tools" / "gen_matrix_63x8_census.py"
+_GEN = _REPO / "tools" / "gen_flow_matrix_census.py"
 
 #: The probe's own per-gate budget. The point of (a) is that the census gate no
 #: longer needs a meaningful fraction of it; a bound generous enough to survive
@@ -180,7 +180,7 @@ def _census_launches(subject: Path) -> List[_Launch]:
     hygiene script. That line was deliberately removed (see `_ci_launches`), so
     both tests below went red claiming a wiring defect that does not exist —
     measured on `origin/main`: `expected exactly one declaration launching
-    gen_matrix_63x8_census.py; found 0`. The census still runs, from a
+    gen_flow_matrix_census.py; found 0`. The census still runs, from a
     different place, and the property #972 is about is a property of WHOEVER
     STARTS IT rather than of one script.
 
@@ -200,12 +200,12 @@ def test_the_ci_declaration_hands_the_census_gate_the_probed_tree(tmp_path):
 
     The program can accept a root all day; if the line that runs it passes
     none, the census still answers about itself — the state measured at
-    6525cf05, and still reachable: `gen_matrix_63x8_census.py --check` with no
+    6525cf05, and still reachable: `gen_flow_matrix_census.py --check` with no
     subject censuses ITS OWN checkout, which is the whole hazard.
 
     The argument must be an ARGUMENT, not merely a `$ROOT` somewhere in the
     line: the pre-fix CI declaration already contained one, inside the path to
-    the program (`"$ROOT/tools/gen_matrix_63x8_census.py"`), and `_expand`
+    the program (`"$ROOT/tools/gen_flow_matrix_census.py"`), and `_expand`
     rewrites THAT one to the real repository so the interpreter can find the
     file. Testing for `$ROOT` in the text passes on the broken wiring —
     measured, on the first version of this test, which is why the assertion is

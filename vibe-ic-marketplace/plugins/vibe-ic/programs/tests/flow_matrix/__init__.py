@@ -1,4 +1,4 @@
-"""matrix_63x8 — shared substrate for the 63-step x 8-dimension coverage matrix.
+"""flow_matrix — shared substrate for the 63-step x 8-dimension coverage matrix.
 
 See README.md in this directory. Intentionally contains no logic: the four
 public modules are ``flowref`` (live accessors over the flow yaml), ``cells``
@@ -8,9 +8,9 @@ mechanism or against a stand-in).
 
 Nothing is re-exported here on purpose. Siblings import the modules by name::
 
-    from matrix_63x8 import flowref as F
-    from matrix_63x8 import cells as C
-    from matrix_63x8 import waivers as W
+    from flow_matrix import flowref as F
+    from flow_matrix import cells as C
+    from flow_matrix import waivers as W
 
 so that every call site says WHICH layer it is reading — a bare ``step_ids()``
 in a dimension module hides whether the answer came from the live yaml or from

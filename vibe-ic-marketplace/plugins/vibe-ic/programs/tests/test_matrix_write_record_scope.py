@@ -105,7 +105,7 @@ from typing import Any, Dict, Tuple
 import pytest
 
 import step_write_ledger as SWL
-from matrix_63x8 import flowref as F
+from flow_matrix import flowref as F
 
 #: (dimension, module basename, the FACT the record does not carry, and the
 #: record fields that measure it). One row per refusal; the rows ARE the

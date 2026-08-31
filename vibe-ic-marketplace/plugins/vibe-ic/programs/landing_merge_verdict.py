@@ -46,7 +46,7 @@ WHY A DIFFERENTIAL FAILED-SET AND NOT "THE TREE MUST BE GREEN"
 
     programs/tests/test_ci_harness_timeout_ceiling_check.py   3 of 40 fail
     repo hygiene: flow_gate_enforcement_audit                 rc=1 (5 AUDIT_ONLY)
-    repo hygiene: gen_matrix_63x8_census --check              rc=1
+    repo hygiene: gen_flow_matrix_census --check              rc=1
     repo hygiene: ci_harness_timeout_ceiling_check            rc=1 (7 bounds)
 
 A gate that demands green would refuse EVERY landing today, and a gate that

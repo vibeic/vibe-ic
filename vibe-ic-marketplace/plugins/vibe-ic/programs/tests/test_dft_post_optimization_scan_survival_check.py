@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Tests for dft_post_optimization_scan_survival_check.py.
 
-Closes vibe-ic's matrix_63x8 dimension-2 gap on Step 12: the old
+Closes vibe-ic's flow_matrix dimension-2 gap on Step 12: the old
 files_exist-only gate could not fail on content, so an empty, wrong, or
 scan-stripped post_dft_netlist.v all satisfied it. Each test below drives
 the real predicate (`assess`), not a hand-simplified restatement of it, and
@@ -115,7 +115,7 @@ def test_reverse_a_populated_post_dft_netlist_does_not_fail_on_emptiness(tmp_pat
 # ── FAIL mode 2: post_dft_netlist.v is the pre-DFT netlist copied over ────
 
 def test_post_dft_identical_to_pre_dft_fails(tmp_path):
-    """The exact substitution bug the matrix_63x8 waiver named: Step 12's
+    """The exact substitution bug the flow_matrix waiver named: Step 12's
     old files_exist-only gate could not tell a resynthesized netlist from
     the untouched pre-DFT one copied over verbatim."""
     _stage(tmp_path, scan=_SCAN_NETLIST, pre_dft=_PRE_DFT_NETLIST,

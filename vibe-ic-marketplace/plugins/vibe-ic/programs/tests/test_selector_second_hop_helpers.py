@@ -14,10 +14,10 @@ TEST names it literally — and the one test whose failure proves the hole does
 not:
 
     grep -c phase1_phase2_phase3.yaml test_matrix_d4_criteria_match.py   -> 0
-    grep -c phase1_phase2_phase3.yaml matrix_63x8/flowref.py             -> 3
+    grep -c phase1_phase2_phase3.yaml flow_matrix/flowref.py             -> 3
 
 `test_matrix_d4_criteria_match` reaches the flow through
-``from matrix_63x8 import flowref``. So on `a38902d1` a flow-yaml change
+``from flow_matrix import flowref``. So on `a38902d1` a flow-yaml change
 selects 128 files and **d4 is not one of them** — the dimension that measures
 flow-yaml correctness is the one a flow-yaml change does not run. That is not
 hypothetical: `test_matrix_d4_criteria_match[step1]` was red on main all day,
@@ -84,7 +84,7 @@ def test_the_HELPER_edge_is_what_carries_it():
     idx = S._build_key_helper_index(PLUGIN_ROOT, {"phase1_phase2_phase3.yaml"})
     helpers = idx.get("phase1_phase2_phase3.yaml", set())
     assert helpers, "no helper names the flow yaml — re-derive this rule"
-    assert any(h.startswith("programs/tests/matrix_63x8/") for h in helpers), (
+    assert any(h.startswith("programs/tests/flow_matrix/") for h in helpers), (
         f"the matrix helper no longer names the flow yaml; got {sorted(helpers)}")
     d4_text = (PLUGIN_ROOT / D4).read_text(errors="replace")
     assert "phase1_phase2_phase3.yaml" not in d4_text, (

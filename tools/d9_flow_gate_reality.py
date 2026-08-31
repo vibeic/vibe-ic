@@ -133,7 +133,7 @@ BENCH = REPO / "benchmark-data"
 sys.path.insert(0, str(TESTS))
 sys.path.insert(0, str(REPO / "tools"))
 
-from matrix_63x8 import flowref as F  # noqa: E402
+from flow_matrix import flowref as F  # noqa: E402
 
 # The four buckets and the classifier are the sibling instrument's, imported so
 # the two tables cannot disagree about what a vacuous pass is.

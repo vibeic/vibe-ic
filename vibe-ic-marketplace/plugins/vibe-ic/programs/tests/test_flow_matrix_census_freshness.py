@@ -3,7 +3,7 @@
 
 WHAT WENT WRONG
 ===============
-``matrix_63x8/README.md`` published a hand-written census table::
+``flow_matrix/README.md`` published a hand-written census table::
 
     | **total** |  | **483** | **9** | **12** |
 
@@ -24,7 +24,7 @@ not travel with the number is not a caveat.
 
 WHAT THIS FILE LOCKS
 ====================
-1. The block is GENERATED. ``tools/gen_matrix_63x8_census.py --check`` re-derives
+1. The block is GENERATED. ``tools/gen_flow_matrix_census.py --check`` re-derives
    it from the live suite and this test fails on any drift — the same shape as
    ``test_programs_index_freshness.py`` for ``programs/INDEX.md``.
 2. The published figures EQUAL the live census, checked here independently of
@@ -37,7 +37,7 @@ WHAT THIS FILE LOCKS
 Run::
 
     cd .../plugins/vibe-ic && PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 \\
-      python3 -m pytest programs/tests/test_matrix_63x8_census_freshness.py -q
+      python3 -m pytest programs/tests/test_flow_matrix_census_freshness.py -q
 """
 from __future__ import annotations
 
@@ -50,18 +50,18 @@ import pytest
 
 from _plugin_tree import plugin_path, repo_path_or_missing
 
-from matrix_63x8 import substitution as SUB
+from flow_matrix import substitution as SUB
 
-import test_matrix_63x8_coverage as CV
+import test_flow_matrix_coverage as CV
 
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import _progress_run as _pr  # noqa: E402
 
-GEN = repo_path_or_missing("tools", "gen_matrix_63x8_census.py")
-README = plugin_path("programs", "tests", "matrix_63x8", "README.md")
+GEN = repo_path_or_missing("tools", "gen_flow_matrix_census.py")
+README = plugin_path("programs", "tests", "flow_matrix", "README.md")
 
-BEGIN = ("<!-- BEGIN GENERATED CENSUS — tools/gen_matrix_63x8_census.py — "
+BEGIN = ("<!-- BEGIN GENERATED CENSUS — tools/gen_flow_matrix_census.py — "
          "DO NOT EDIT BY HAND -->")
 END = "<!-- END GENERATED CENSUS -->"
 
@@ -116,7 +116,7 @@ def test_the_census_block_is_present_and_marked_generated():
 
 #: Runs the real generator CLI over a SYNTHETIC census. The stub is installed
 #: in `sys.modules` before `_load()` runs, so the generator's own `import
-#: test_matrix_63x8_coverage` resolves to it instead of importing the real one
+#: test_flow_matrix_coverage` resolves to it instead of importing the real one
 #: — the same interception `test_blocker_list_report_contract` uses to put a
 #: program under test on a known input. Everything else is the real generator:
 #: `_load`, `census_rows`, `render`, `splice`, `main`, the partition guard and
@@ -137,7 +137,7 @@ class _Verdict:
 def _dims():
     # Importable only after the generator's `_load()` has put the plugin test
     # directories on sys.path, which it does before it touches the census.
-    from matrix_63x8.cells import DIMENSIONS
+    from flow_matrix.cells import DIMENSIONS
     return DIMENSIONS
 
 
@@ -150,16 +150,16 @@ def enforcement_census():
 
 
 def substitution_census():
-    from matrix_63x8 import substitution as SUB
+    from flow_matrix import substitution as SUB
     return {("1", dim): SUB.OWN_MECHANISM for dim in _dims()}
 
 
-stub = types.ModuleType("test_matrix_63x8_coverage")
+stub = types.ModuleType("test_flow_matrix_coverage")
 stub.enforcement_census = enforcement_census
 stub.substitution_census = substitution_census
-sys.modules["test_matrix_63x8_coverage"] = stub
+sys.modules["test_flow_matrix_coverage"] = stub
 
-sys.argv = ["gen_matrix_63x8_census.py"]
+sys.argv = ["gen_flow_matrix_census.py"]
 if mode == "check":
     sys.argv.append("--check")
 sys.argv += ["--out", out_path]
@@ -196,7 +196,7 @@ def _load_generator():
     import importlib.util
 
     spec = importlib.util.spec_from_file_location(
-        "_gen_matrix_63x8_census", str(_gen_or_skip()))
+        "_gen_flow_matrix_census", str(_gen_or_skip()))
     mod = importlib.util.module_from_spec(spec)
     sys.modules[spec.name] = mod
     prev = sys.dont_write_bytecode
@@ -243,7 +243,7 @@ def test_the_census_block_is_fresh():
     rendered = gen.render(rows, totals)
     assert gen.splice(text, rendered) == text, (
         f"the census in {README} is stale — re-run "
-        f"`python3 tools/gen_matrix_63x8_census.py`.\n"
+        f"`python3 tools/gen_flow_matrix_census.py`.\n"
         f"committed:\n{_block()[:1200]}\n\n"
         f"re-derived:\n{rendered[:1200]}")
 

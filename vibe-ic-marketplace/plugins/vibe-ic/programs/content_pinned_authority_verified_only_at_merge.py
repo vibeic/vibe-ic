@@ -34,7 +34,7 @@ ELEVEN OF THE TWELVE ARE MAIN'S OWN. `tools/ci/_gate_dispatch.sh`,
 `tools/gatekeeper-land.sh`, `_corpus_location.py`,
 `ci_harness_timeout_ceiling_check.py`, `hygiene_finding_delta.py`,
 `landing_merge_verdict.py`, `repo_hygiene_parallel.py` and
-`tests/test_matrix_63x8_coverage.py` were all edited on main without the
+`tests/test_flow_matrix_coverage.py` were all edited on main without the
 manifest being re-rendered. Only the twelfth is this branch's.
 
 That is the defect this program exists to report, and it is reporting it about

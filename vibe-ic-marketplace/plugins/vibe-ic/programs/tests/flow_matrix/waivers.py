@@ -1,4 +1,4 @@
-"""matrix_63x8.waivers — the accepted-gap registry.
+"""flow_matrix.waivers — the accepted-gap registry.
 
 A waiver is a public, dated admission that one cell of the 504 is NOT enforced
 and WHY. It is not a way to make a red test green; it is a way to make an
@@ -651,7 +651,7 @@ WAIVERS: Tuple[Waiver, ...] = (
     # Bidirectional control:
     # `programs/tests/test_matrix_a8_published_gds_control.py` (the name
     # deliberately avoids the `test_matrix_d[1-8]_*` prefix, which
-    # `test_matrix_63x8_coverage.DIMENSION_MODULE_GLOB` reserves for the eight
+    # `test_flow_matrix_coverage.DIMENSION_MODULE_GLOB` reserves for the eight
     # dimension modules themselves).
     #
     # STEPS 6 AND 39 STAY WAIVED — the NA_TOOLCHAIN_ABSENT reclassification was
@@ -789,7 +789,7 @@ WAIVERS: Tuple[Waiver, ...] = (
             "('9', '14') for phase2/stage2/synth/netlist.v. Negative "
             "control: deleting step 14's required_outputs entry (tested, "
             "then reverted) makes this cell pass but reddens "
-            "test_matrix_63x8_ledger.py::"
+            "test_flow_matrix_ledger.py::"
             "test_required_outputs_non_empty_exactly_where_declared, "
             "::test_output_entries_classify_into_the_four_kinds, "
             "::test_accessors_track_a_removed_field, "

@@ -66,8 +66,8 @@ CONTROL_TESTS = (
 # outer schedule interleaves every validated item completion with these domain
 # transitions, so neither a long file nor a long nested population is judged by
 # elapsed time, stdout, or CPU activity.
-HERMETIC_CENSUS_FILE = "programs/tests/test_matrix_63x8_census_freshness.py"
-HERMETIC_MATRIX_FILE = "programs/tests/test_matrix_63x8_coverage.py"
+HERMETIC_CENSUS_FILE = "programs/tests/test_flow_matrix_census_freshness.py"
+HERMETIC_MATRIX_FILE = "programs/tests/test_flow_matrix_coverage.py"
 HERMETIC_ARTEFACT_FILE = "programs/tests/test_matrix_artefact_mutation_channel.py"
 HERMETIC_MUTATION_FILE = "programs/tests/test_matrix_mutation_ledger.py"
 # EVERY DOMAIN TOTAL BELOW WAS MEASURED ON 2026-08-25, and three of the nine

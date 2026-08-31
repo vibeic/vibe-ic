@@ -1,4 +1,4 @@
-"""Meta-test for the `matrix_63x8` shared substrate.
+"""Meta-test for the `flow_matrix` shared substrate.
 
 This file guards the substrate that all eight dimension modules import. It
 proves three things, and deliberately nothing else:
@@ -44,9 +44,9 @@ from collections import Counter
 import pytest
 import yaml
 
-from matrix_63x8 import cells as C
-from matrix_63x8 import flowref as F
-from matrix_63x8 import waivers as W
+from flow_matrix import cells as C
+from flow_matrix import flowref as F
+from flow_matrix import waivers as W
 
 # ──────────────────────────────────────────────────────────────────────
 # 2026-08-20, R6/R3 — EVERY TRIPWIRE BELOW MOVED, ON ONE CAUSE.
@@ -204,7 +204,7 @@ CENSUS_BLOCKS_ON_PRESENT = 68
 CENSUS_BLOCKS_ON_NON_EMPTY = 66
 # 60 -> 61 on 2026-08-08: step 12 gained a `program_exit_zero` exec clause
 # (dft_post_optimization_scan_survival_check), closing the files_exist-only
-# gap the matrix_63x8 dimension-2 audit named. Step 1 is still exec-free.
+# gap the flow_matrix dimension-2 audit named. Step 1 is still exec-free.
 # RE-MEASURED 2026-08-21. This pin was stale before the ninth dimension
 # landed: the flow's step population moved 68 -> 69 (`1.6x` added in
 # v1.11.15, `37.5self` retired in v1.11.18) and these counts were moved
@@ -823,7 +823,7 @@ def test_output_entries_classify_into_the_four_kinds():
     # The declaring commit did not carry its derived figures either: the same
     # entry moves `figure:required_output_entries` 165 -> 166 in TWO files at
     # THREE sites and `figure:required_outputs_file` 123 -> 124, and
-    # `gen_matrix_63x8_census.py --check-figures` was red on all of them. Those
+    # `gen_flow_matrix_census.py --check-figures` was red on all of them. Those
     # anchors move in the same change as this pin.
     assert sum(seen.values()) == 166, seen
     assert seen[F.FILE] == 124
@@ -938,7 +938,7 @@ def test_xfail_mark_is_always_strict():
             "Substrate self-check: exercises the mark factory without touching "
             "the real registry, which stays empty until the orchestrator applies."
         ),
-        evidence="programs/tests/test_matrix_63x8_ledger.py::test_xfail_mark_is_always_strict",
+        evidence="programs/tests/test_flow_matrix_ledger.py::test_xfail_mark_is_always_strict",
     )
     assert W.validate(probe) == ()
 

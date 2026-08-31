@@ -4,7 +4,7 @@ say how much of the page it actually guards.
 
 WHAT WENT WRONG
 ===============
-``tools/gen_matrix_63x8_census.py --check`` regenerates a marked block and
+``tools/gen_flow_matrix_census.py --check`` regenerates a marked block and
 compares it with the committed one. ``splice()`` is
 ``text[:start] + block + text[stop + len(END):]`` — everything outside the two
 markers is returned verbatim and therefore compares equal by construction,
@@ -13,10 +13,10 @@ whatever it says. The block is 36 lines of a 501-line README.
 Measured on ``origin/main`` at ``8ad04f45``, five live-derived figures sat
 outside it and were stale:
 
-    matrix_63x8/README.md:132   blocks_on present 62 / non-empty 60  (live 63/61)
-    matrix_63x8/README.md:141   "all 126 required_outputs entries"   (live 133)
-    matrix_63x8/README.md:232   "150 blocking clauses"               (live 160)
-    matrix_63x8/flowref.py:61   "126 entries over 61 steps"          (live 133)
+    flow_matrix/README.md:132   blocks_on present 62 / non-empty 60  (live 63/61)
+    flow_matrix/README.md:141   "all 126 required_outputs entries"   (live 133)
+    flow_matrix/README.md:232   "150 blocking clauses"               (live 160)
+    flow_matrix/flowref.py:61   "126 entries over 61 steps"          (live 133)
     test_matrix_d2_falsifiable.py:186  "150 blocking clauses"        (live 160)
 
 The first was invalidated by ``332b9985`` (#929) — the exact commit the census
@@ -47,7 +47,7 @@ WHAT THIS FILE LOCKS
 Run::
 
     cd .../plugins/vibe-ic && PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 \\
-      python3 -m pytest programs/tests/test_matrix_63x8_figure_coverage.py -q
+      python3 -m pytest programs/tests/test_flow_matrix_figure_coverage.py -q
 """
 from __future__ import annotations
 
@@ -62,11 +62,11 @@ from _plugin_tree import plugin_path, repo_path_or_missing
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import _progress_run as _pr  # noqa: E402
 
-GEN = repo_path_or_missing("tools", "gen_matrix_63x8_census.py")
-README = plugin_path("programs", "tests", "matrix_63x8", "README.md")
+GEN = repo_path_or_missing("tools", "gen_flow_matrix_census.py")
+README = plugin_path("programs", "tests", "flow_matrix", "README.md")
 PLUGIN = plugin_path()
 
-#: Same reasoning as `test_matrix_63x8_census_freshness._CLI_TIMEOUT_S`: the
+#: Same reasoning as `test_flow_matrix_census_freshness._CLI_TIMEOUT_S`: the
 #: pytest harness bound is 180 s, so any ONE blocking call may take at most
 #: 180 // 3. MEASURED on this tree, `--check-figures` over the real corpus is
 #: 1.4 s — it parses one yaml and reads 24 files, and deliberately does NOT
@@ -106,7 +106,7 @@ def _load_generator():
     enlarge the very tree other gates audit.
     """
     spec = importlib.util.spec_from_file_location(
-        "_gen_matrix_63x8_census_figures", str(_gen_or_skip()))
+        "_gen_flow_matrix_census_figures", str(_gen_or_skip()))
     mod = importlib.util.module_from_spec(spec)
     sys.modules[spec.name] = mod
     prev = sys.dont_write_bytecode
@@ -136,7 +136,7 @@ def _corpus(tmp_path: Path, body: str) -> Path:
     root = tmp_path / "corpus"
     root.mkdir()
     (root / "doc.md").write_text(
-        f"about matrix_63x8.flowref\n\n{body}\n", encoding="utf-8")
+        f"about flow_matrix.flowref\n\n{body}\n", encoding="utf-8")
     return root
 
 
@@ -218,7 +218,7 @@ def test_every_anchored_figure_in_the_committed_corpus_is_fresh():
     stale = [(f["rel"], s) for f in report["files"] for s in f["stale"]]
     assert not stale, (
         "anchored figure(s) disagree with the flow yaml; re-run "
-        "`python3 tools/gen_matrix_63x8_census.py --fix-figures`:\n"
+        "`python3 tools/gen_flow_matrix_census.py --fix-figures`:\n"
         + "\n".join(f"  {rel}:{s['line']}  {s['name']} states {s['stated']}, "
                     f"tree says {s['derived']}" for rel, s in stale))
     assert report["guarded_anchored"], (

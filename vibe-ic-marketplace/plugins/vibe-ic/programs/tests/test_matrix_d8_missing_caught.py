@@ -92,7 +92,7 @@ the current ``flow_compliance_check.py`` by executing them.
 CELL STATES (63 = 61 + 0 + 2)
 ====================================================================
   ENFORCED  61 — every step that declares ``required_outputs``.
-  WAIVED     0 — ``matrix_63x8.waivers.WAIVERS`` is empty for this dimension.
+  WAIVED     0 — ``flow_matrix.waivers.WAIVERS`` is empty for this dimension.
   NA         2 — ``FS1`` and ``P0`` declare no ``required_outputs`` at all, so
                  there is no declared artefact that can go missing. The NA test
                  asserts that PRECONDITION live: the day either step gains a
@@ -131,7 +131,7 @@ this module red at the intended assertion:
   9. catcher   — ``_STUB_TAG_RE`` widened to match the fixture body
      -> ``test_d8_fixture_body_is_inert``
  10. substrate — a placeholder waiver (``reason="TODO"``, no evidence) smuggled
-     into ``matrix_63x8.waivers.WAIVERS``
+     into ``flow_matrix.waivers.WAIVERS``
      -> ``test_d8_every_waiver_is_evidence_backed``
 
 Note what #2 and #4 say together: the two halves of the ALL-of-N / any-of
@@ -159,7 +159,7 @@ Three things this module provably does NOT decide:
    This gap is no longer disclosed HERE and erased THERE. Since 2026-08-09 the
    module answers :func:`matrix_cell_substitution` for every cell, so the split
    travels with the census figure instead of living in this paragraph: the
-   generated table in ``matrix_63x8/README.md`` reports the substituted cells in
+   generated table in ``flow_matrix/README.md`` reports the substituted cells in
    their own column and the total never folds them into "enforcing". Measured
    the day the contract landed: 16 of the 61 ENFORCED cells run against the
    step's own gate, 45 against the stand-in.
@@ -191,9 +191,9 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 import pytest
 
-from matrix_63x8 import cells as C
-from matrix_63x8 import flowref as F
-from matrix_63x8 import waivers as W
+from flow_matrix import cells as C
+from flow_matrix import flowref as F
+from flow_matrix import waivers as W
 
 # The CATCHER under test. Imported as a module (never `from ... import
 # check_step`) so that a monkeypatched or reloaded attribute would be visible,
@@ -2330,7 +2330,7 @@ def test_d8_every_waiver_is_evidence_backed():
 
 
 # ══════════════════════════════════════════════════════════════════════
-# UNIFORM CELL-STATE INTERFACE (read by programs/tests/test_matrix_63x8_coverage.py)
+# UNIFORM CELL-STATE INTERFACE (read by programs/tests/test_flow_matrix_coverage.py)
 #
 # The coverage meta-test must be able to ask every dimension module the same
 # question and get an answer the module itself computes. Anything it derived on

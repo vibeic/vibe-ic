@@ -1,4 +1,4 @@
-# `matrix_63x8` — shared substrate for the flow-step × dimension coverage matrix
+# `flow_matrix` — shared substrate for the flow-step × dimension coverage matrix
 
 The Vibe-IC flow has **68<!--figure:flow_steps--> steps**. The 2026-07 audit
 asked **9<!--figure:matrix_dimensions--> questions** of each one.
@@ -15,7 +15,7 @@ package name keeps its `63x8` spelling: it is the campaign's name, not a count.
 
 Every digit in this file that describes the flow is DERIVED: it carries a
 `<!--figure:...-->` anchor naming the binding that produced it, and
-`tools/gen_matrix_63x8_census.py --check` fails on drift. Repair with
+`tools/gen_flow_matrix_census.py --check` fails on drift. Repair with
 `--fix-figures`; never hand-edit an anchored number. The same command
 prints, on every verdict, how many figures it guards and how many stated
 figures in this file it does NOT (vibe-ic#961).
@@ -124,7 +124,7 @@ records **the grammar as measured**, including the places where the grammar in
 circulation is wrong.
 
 ```python
-from matrix_63x8 import flowref as F
+from flow_matrix import flowref as F
 
 F.step_ids()                    # 63, raw MIXED types: 'D1', 1, 'FS1', 44 …
 F.step_by_id(12) is F.step_by_id("12")
@@ -159,7 +159,7 @@ Things that will bite you if you skip the docstring:
 ### `cells.py` — the 612<!--figure:ledger_cells-->-cell ledger
 `ALL_CELLS` is the cross product of `flowref.step_ids()` × `DIMENSIONS`, built
 **live from the yaml, never from the audit JSON**. Add or delete a step and the
-ledger changes with the repo; `test_matrix_63x8_ledger.py` notices.
+ledger changes with the repo; `test_flow_matrix_ledger.py` notices.
 
 `Cell.audit_verdict` / `Cell.audit_summary` are **history for humans**. Never
 assert on them.
@@ -181,7 +181,7 @@ for "a stand-in, and here is which and why". A module that exposes nothing is
 **UNDECLARED**, which is a third state and *not* a synonym for `None` —
 reading silence as "not substituted" would republish the exact defect the
 contract removes. Which dimensions have declared is pinned in
-`test_matrix_63x8_coverage.DIMENSIONS_DECLARING_SUBSTITUTION`, in both
+`test_flow_matrix_coverage.DIMENSIONS_DECLARING_SUBSTITUTION`, in both
 directions, so a declaration cannot be dropped without the suite saying so.
 
 ### `waivers.py` — the accepted-gap registry
@@ -199,7 +199,7 @@ yaml (eight agents share this worktree — **never edit it in place**).
 `$VIBE_IC_MATRIX_FLOW_YAML` does the same at import time.
 
 Both are loaded guns: a suite run with the override set grades itself against a
-file nobody reviewed. `test_matrix_63x8_ledger.py` asserts the env var is
+file nobody reviewed. `test_flow_matrix_ledger.py` asserts the env var is
 **unset**, so a normal run cannot be silently redirected.
 
 The substrate's own predicates were mutation-proved: **16/16 mutations reddened
@@ -217,7 +217,7 @@ placeholder or dropping the evidence requirement; `xfail_mark` losing
 
 ```bash
 cd .../plugins/vibe-ic && PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 \
-  python3 -m pytest programs/tests/test_matrix_63x8_ledger.py -q
+  python3 -m pytest programs/tests/test_flow_matrix_ledger.py -q
 ```
 
 `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1` is mandatory here: a stray `pytest_ethereum`
@@ -235,10 +235,10 @@ Under the plugin's `pytest.ini` (`--import-mode=importlib`) plus the root
 `conftest.py`, only this spelling resolves:
 
 ```python
-from matrix_63x8 import cells as C, flowref as F, waivers as W
+from flow_matrix import cells as C, flowref as F, waivers as W
 ```
 
-`from programs.tests.matrix_63x8.cells import ...` does **not**.
+`from programs.tests.flow_matrix.cells import ...` does **not**.
 
 ### The cell is a STEP; three dimensions naturally ask about a CLAUSE
 
@@ -284,7 +284,7 @@ thread-parallel test execution.
 
 ## The census
 
-Reported by `programs/tests/test_matrix_63x8_coverage.py`, which collects the
+Reported by `programs/tests/test_flow_matrix_coverage.py`, which collects the
 eight modules through pytest's own machinery, asks each module the state of the
 cells it owns, and then RUNS those modules and joins the answer against what
 each cell's predicate actually did. **612<!--figure:ledger_cells--> / 612<!--figure:ledger_cells--> cells present,
@@ -316,8 +316,8 @@ The per-dimension numbers for BOTH axes live in the generated block below;
 this section deliberately quotes none of them, because a hand-copied total is
 exactly what #889 removed.
 
-The table below is **GENERATED** by `tools/gen_matrix_63x8_census.py` and
-diffed against the tree by `programs/tests/test_matrix_63x8_census_freshness.py`.
+The table below is **GENERATED** by `tools/gen_flow_matrix_census.py` and
+diffed against the tree by `programs/tests/test_flow_matrix_census_freshness.py`.
 It was hand-written until 2026-08-09, and by then it had drifted: it published
 `483 / 9 / 12` while the reproduce command printed underneath it returned
 `481 / 11 / 12`, with four of the eight rows wrong. A number nobody recomputes
@@ -329,7 +329,7 @@ The ENFORCED column is printed SPLIT and there is deliberately no single
 cells, says so at length in its own docstring, and that disclosure used to die
 the moment eight rows were added up. See `substitution.py`.
 
-<!-- BEGIN GENERATED CENSUS — tools/gen_matrix_63x8_census.py — DO NOT EDIT BY HAND -->
+<!-- BEGIN GENERATED CENSUS — tools/gen_flow_matrix_census.py — DO NOT EDIT BY HAND -->
 
 **612 cells: 532 ENFORCED, 0 ENFORCED-CONTRADICTED, 8 WAIVED, 19 NA, 6 NOT_MEASURED, 45 ENFORCED-SKIPPED, 2 WAIVED-SKIPPED.**
 
@@ -363,8 +363,8 @@ The 8 WAIVED and 19 NA cells are not enforcing anything and enter none of those 
 Regenerate (never edit this block by hand, and never quote it without re-running):
 
 ```
-python3 tools/gen_matrix_63x8_census.py          # rewrite
-python3 tools/gen_matrix_63x8_census.py --check  # exit 1 on drift
+python3 tools/gen_flow_matrix_census.py          # rewrite
+python3 tools/gen_flow_matrix_census.py --check  # exit 1 on drift
 ```
 
 <!-- END GENERATED CENSUS -->
@@ -450,7 +450,7 @@ python3 tools/gen_matrix_63x8_census.py --check  # exit 1 on drift
 > **CORRECTION, measured 2026-08-09 on `dee025059`** — this block is a record
 > of a decision taken then, left standing as such, but it no longer describes
 > the tree: the live census reports **A8/d3 as ENFORCED, not WAIVED**, and
-> `matrix_63x8.waivers.WAIVERS` carries no entry for it (which is why
+> `flow_matrix.waivers.WAIVERS` carries no entry for it (which is why
 > `test_state_agrees_with_the_waiver_registry_and_the_collected_marks` is
 > green). The waiver was retired by a later change than this note; who and why
 > is not re-derived here rather than guessed at. Dimension 3 now reads
@@ -537,7 +537,7 @@ that matter most:
 cannot redden.**
 
 Both digits are ANCHORED and re-derived by
-`tools/gen_matrix_63x8_census.py --check-figures` against
+`tools/gen_flow_matrix_census.py --check-figures` against
 `matrix_mutation_ledger` itself. They were hand-typed until 2026-08-12 and by
 then the first was right and the second was wrong by three: the ledger's own
 count moved 4 -> 2 -> 1 across `46dbf43d` and `fc664a57`, each time in the

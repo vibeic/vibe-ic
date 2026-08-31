@@ -157,7 +157,7 @@ _ENV_SUPPRESSOR = "PYTHONDONTWRITEBYTECODE"
 _ARGV_SUPPRESSOR = "-B"
 
 #: The in-process suppression, as the house already writes it — `test_api_health.py`,
-#: `test_matrix_63x8_census_freshness.py`, `test_issue972_census_probe_and_rollup.py`.
+#: `test_flow_matrix_census_freshness.py`, `test_issue972_census_probe_and_rollup.py`.
 #: Required to be ASSIGNED, not merely named: both modules that load from
 #: `skills/` today assign it, so the tightening flags neither.
 _SUPPRESSION = "dont_write_bytecode"

@@ -243,7 +243,7 @@ def test_the_tag_pattern_matches_the_consumers(tmp_path):
 # `_default_census_writer(repo, 1.0)` returns in 1.1 s with
 # `"the generator did not finish within 1.0s"` and zero declared paths.
 #
-# This is the same opt-out `test_matrix_63x8_coverage.py` already makes, for the same
+# This is the same opt-out `test_flow_matrix_coverage.py` already makes, for the same
 # reason: killing a healthy item because a wall-clock estimate was crossed is a false
 # differential. Removing the mark without also removing the real census would restore
 # the session abort.

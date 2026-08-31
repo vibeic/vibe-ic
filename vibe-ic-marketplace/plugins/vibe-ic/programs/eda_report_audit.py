@@ -994,7 +994,7 @@ def _check_report_design_binding(files: List[Path], project_dir: Path,
 #: that the IR-drop evidence is authentic was a statement about the runner's own
 #: summary of it, and the tool's destroyed output was outvoted by it.
 #:
-#: THAT IS A SHAPE THIS REPOSITORY HAD ALREADY NAMED. `matrix_63x8/README.md`
+#: THAT IS A SHAPE THIS REPOSITORY HAD ALREADY NAMED. `flow_matrix/README.md`
 #: records two artefact findings that closed for the same reason — "the gate
 #: believed a summary the RUNNER wrote instead of the output the TOOL wrote" —
 #: and says in as many words that it "is the shape to look for next".

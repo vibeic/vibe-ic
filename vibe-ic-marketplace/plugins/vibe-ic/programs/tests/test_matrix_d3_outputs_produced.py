@@ -478,9 +478,9 @@ from typing import Dict, List, Optional, Tuple
 
 import pytest
 
-from matrix_63x8 import flowref as F
-from matrix_63x8 import waivers
-from matrix_63x8.cells import cells_for
+from flow_matrix import flowref as F
+from flow_matrix import waivers
+from flow_matrix.cells import cells_for
 
 import _plugin_tree
 
@@ -2231,7 +2231,7 @@ def _corpus_skip_would_hide(step_id, cites: Tuple[Tuple[str, str, str], ...]) ->
 # ──────────────────────────────────────────────────────────────────────
 # This module used to carry a `_LOCAL_WAIVERS` mirror of its four dimension-3
 # waivers, added while eight agents shared one worktree and concurrent edits to
-# `matrix_63x8.waivers.WAIVERS` lost entries. Its docstring said the mirror
+# `flow_matrix.waivers.WAIVERS` lost entries. Its docstring said the mirror
 # "becomes inert the moment the orchestrator lands it" — and the orchestrator
 # did land it, so `waiver_for` had been reading the central copy and ignoring
 # the local one for some time.
@@ -6416,7 +6416,7 @@ def test_d3_the_stale_ledger_message_names_a_remedy_the_emitter_can_deliver():
 
 
 # ══════════════════════════════════════════════════════════════════════
-# UNIFORM CELL-STATE INTERFACE (read by programs/tests/test_matrix_63x8_coverage.py)
+# UNIFORM CELL-STATE INTERFACE (read by programs/tests/test_flow_matrix_coverage.py)
 #
 # The coverage meta-test must be able to ask every dimension module the same
 # question and get an answer the module itself computes. Anything it derived on

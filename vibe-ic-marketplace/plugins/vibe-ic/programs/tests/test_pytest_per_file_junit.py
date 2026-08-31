@@ -722,7 +722,7 @@ def test_finite_domain_checkpoints_keep_one_long_test_item_alive(
 def test_nested_validated_progress_is_relayed_to_the_outer_session(
         tmp_path, monkeypatch):
     """An inner healthy session may outlive the outer stall window."""
-    target = (_PROGRAMS / "tests" / "test_matrix_63x8_coverage.py")
+    target = (_PROGRAMS / "tests" / "test_flow_matrix_coverage.py")
     node = (str(target)
             + "::test_nested_outcome_run_outlives_old_fixed_bound_with_semantic_progress")
     merged = tmp_path / "outer.xml"
@@ -743,7 +743,7 @@ def test_nested_validated_progress_is_relayed_to_the_outer_session(
 def test_nested_collect_progress_is_relayed_to_the_outer_session(
         tmp_path, monkeypatch):
     """The live matrix collection cannot be silent until its child exits."""
-    target = (_PROGRAMS / "tests" / "test_matrix_63x8_coverage.py")
+    target = (_PROGRAMS / "tests" / "test_flow_matrix_coverage.py")
     node = (str(target)
             + "::test_live_collection_relays_finite_semantic_progress_past_old_bound")
     merged = tmp_path / "outer-collect.xml"
@@ -2189,7 +2189,7 @@ def test_both_landing_arms_run_through_this_driver():
     # The entry owns the driver argv for both arms; the subject cannot shadow it.
     assert "--overlay tools/ci/hermetic_test_arm_entry.sh" in verify_src
     assert ("--overlay vibe-ic-marketplace/plugins/vibe-ic/programs/tests/"
-            "test_matrix_63x8_coverage.py") in verify_src
+            "test_flow_matrix_coverage.py") in verify_src
     assert "launch_hermetic_test_arm B1" in verify_src
     assert "launch_hermetic_test_arm A1" in verify_src
     assert "pytest_per_file_junit.py" in entry_src

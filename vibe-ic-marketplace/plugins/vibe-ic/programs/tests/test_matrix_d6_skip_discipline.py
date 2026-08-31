@@ -218,9 +218,9 @@ from typing import Any, Dict, List, Optional, Tuple
 import pytest
 import yaml
 
-from matrix_63x8 import flowref as F
-from matrix_63x8 import waivers as W
-from matrix_63x8.cells import cells_for
+from flow_matrix import flowref as F
+from flow_matrix import waivers as W
+from flow_matrix.cells import cells_for
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import _progress_run as _pr  # noqa: E402
@@ -344,7 +344,7 @@ _HEADLINE_RE = re.compile(r"^Steps: \d+ total \((\d+)/(-?\d+) executed PASS",
 # ─────────────────────────────────────────────────────────────────────
 # This module used to carry a `_PENDING_WAIVERS` mirror of its two dimension-6
 # waivers, added while eight agents shared one worktree and a concurrent edit to
-# `matrix_63x8.waivers.WAIVERS` could lose an entry. The orchestrator has since
+# `flow_matrix.waivers.WAIVERS` could lose an entry. The orchestrator has since
 # landed both centrally, so `_waiver_for` and `_mark_for` read the central copy
 # and ignored the local one.
 #
@@ -2480,7 +2480,7 @@ def test_d6_consumer_and_reachability_programs_exist():
 
 
 # ══════════════════════════════════════════════════════════════════════
-# UNIFORM CELL-STATE INTERFACE (read by programs/tests/test_matrix_63x8_coverage.py)
+# UNIFORM CELL-STATE INTERFACE (read by programs/tests/test_flow_matrix_coverage.py)
 #
 # The coverage meta-test must be able to ask every dimension module the same
 # question and get an answer the module itself computes. Anything it derived on

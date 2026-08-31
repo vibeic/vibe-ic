@@ -32,7 +32,7 @@ plugin-relative), the selected subset is the UNION of:
 
   4. For each changed SHARED TEST-HELPER module — any ``*.py`` under
      ``programs/tests/`` that is NOT a ``test_*.py`` file, e.g.
-     ``programs/tests/matrix_63x8/waivers.py`` or
+     ``programs/tests/flow_matrix/waivers.py`` or
      ``programs/tests/_hostpaths.py`` — every test file that IMPORTS it,
      derived from the tests' own ``import`` statements rather than from a
      hand-written list. See ``_helper_consumers`` for the exact edges.
@@ -50,14 +50,14 @@ SHARED TEST-HELPER MODULES  (vibe-ic#534, measured 2026-07-28)
 Rules 1 and 2 between them see only ``programs/<stem>.py`` / ``benchmark/
 <stem>.py`` and ``programs/tests/test_*.py``. A third population exists and was
 invisible to both: SHARED code that lives under ``programs/tests/`` but is not
-itself a test — ``matrix_63x8/{waivers,cells,flowref}.py``, ``_hostpaths.py``,
+itself a test — ``flow_matrix/{waivers,cells,flowref}.py``, ``_hostpaths.py``,
 ``_plugin_tree.py``, ``_source_pin.py``, ``_gdsii.py``, ``matrix_d4_probe.py``,
 ``matrix_d7_artifact_graph.py``. Measured on this tree BEFORE rule 4, with the
-real CLI (``--base HEAD``, one-line edit to ``matrix_63x8/waivers.py``): the
+real CLI (``--base HEAD``, one-line edit to ``flow_matrix/waivers.py``): the
 selector saw the changed path (``1 changed path(s)``) and emitted 15 files —
 exactly the smoke floor, 0 of the 11 test files that import it.
 
-That was not an ordinary coverage gap. ``matrix_63x8/waivers.py`` is the CENTRAL
+That was not an ordinary coverage gap. ``flow_matrix/waivers.py`` is the CENTRAL
 waiver registry that vibe-ic#527 (v1.7.86) and #530 (v1.7.88) deliberately
 consolidated, moving waiver text out of per-dimension mirrors so one accepted
 gap has exactly one text. Consolidation is what makes the hole expensive: a
@@ -74,13 +74,13 @@ eleventh being ``test_matrix_waiver_single_source.py``, which #530 itself added.
 So the edges come from the tests' own ``import`` statements, parsed with ``ast``:
 
   * a helper's importable name is derived from its path relative to
-    ``programs/tests/`` (``matrix_63x8/waivers.py`` -> ``matrix_63x8.waivers``,
-    ``matrix_63x8/__init__.py`` -> ``matrix_63x8``), plus its bare basename when
+    ``programs/tests/`` (``flow_matrix/waivers.py`` -> ``flow_matrix.waivers``,
+    ``flow_matrix/__init__.py`` -> ``flow_matrix``), plus its bare basename when
     that name is unambiguous — this tree really does bare-import a nested helper
     after an inline ``sys.path.insert`` (``from synthetic_protocol_blobs import
     …``), so path-dotted names alone would miss it;
   * importing ``a.b`` imports ``a``, so ancestor packages count as imported.
-    This is what couples the whole ``matrix_63x8`` package: a test that reads
+    This is what couples the whole ``flow_matrix`` package: a test that reads
     only ``cells`` is still selected when ``waivers`` changes, because both
     resolve through the package whose contents moved. For this tree the
     package-ancestor edge changes nothing (all 11 consumers import ``waivers``
@@ -95,9 +95,9 @@ top-level name (a sound superset filter — no import form of ``a.b`` can omit t
 literal ``a``). Measured on this tree, 1986 test files:
 
     changed helper                      tests selected (excl. 15 smoke)   wall
-    matrix_63x8/waivers.py                 11                             ~1 s
-    matrix_63x8/cells.py                   11
-    matrix_63x8/flowref.py                 11
+    flow_matrix/waivers.py                 11                             ~1 s
+    flow_matrix/cells.py                   11
+    flow_matrix/flowref.py                 11
     matrix_d4_probe.py                      1
     matrix_d7_artifact_graph.py             1
     _hostpaths.py                         116
@@ -816,8 +816,8 @@ def _build_key_helper_index(
     ``flow/phase1_phase2_phase3.yaml`` selects 128 files and
     ``test_matrix_d4_criteria_match.py`` is NOT among them, because that test
     names the yaml zero times. It reaches the flow through
-    ``from matrix_63x8 import flowref``, and the path lives in
-    ``programs/tests/matrix_63x8/flowref.py`` (3 occurrences).
+    ``from flow_matrix import flowref``, and the path lives in
+    ``programs/tests/flow_matrix/flowref.py`` (3 occurrences).
 
     d4 recomputes itself from that yaml on every run, so the dimension that
     measures flow-yaml correctness was the one a flow-yaml change did not run.
@@ -987,7 +987,7 @@ def _helper_module_names(plugin_root: Path, source_stems: set[str]) -> dict[str,
     Two naming schemes are emitted because the tree really uses both:
 
     * the path-dotted name relative to ``programs/tests/`` (which conftest puts
-      on ``sys.path``): ``matrix_63x8/waivers.py`` -> ``matrix_63x8.waivers``,
+      on ``sys.path``): ``flow_matrix/waivers.py`` -> ``flow_matrix.waivers``,
       and ``<pkg>/__init__.py`` -> ``<pkg>``;
     * the bare basename, for nested helpers imported by bare name after an
       inline ``sys.path.insert`` (``from synthetic_protocol_blobs import …``).
@@ -1033,10 +1033,10 @@ def _helper_module_names(plugin_root: Path, source_stems: set[str]) -> dict[str,
 def _imported_module_names(text: str, own_package: str | None) -> set[str] | None:
     """Every module name imported by ``text``, ancestors included.
 
-    ``own_package`` is the dotted package the file lives in (``matrix_63x8`` for
-    ``matrix_63x8/cells.py``, ``None`` at the tests-dir top level) and resolves
-    relative imports: inside ``matrix_63x8``, ``from . import flowref`` and
-    ``from .flowref import StepId`` both yield ``matrix_63x8.flowref``.
+    ``own_package`` is the dotted package the file lives in (``flow_matrix`` for
+    ``flow_matrix/cells.py``, ``None`` at the tests-dir top level) and resolves
+    relative imports: inside ``flow_matrix``, ``from . import flowref`` and
+    ``from .flowref import StepId`` both yield ``flow_matrix.flowref``.
 
     Returns ``None`` when the file cannot be parsed — a selector must not go
     quiet because one file is unreadable or syntactically broken; the caller
@@ -1089,7 +1089,7 @@ def _helper_consumers(plugin_root: Path, changed_helpers: list[str],
 
       1. direct     — a test imports the changed module by either of its names;
       2. package    — a test imports an ANCESTOR package of the changed module
-                      (``from matrix_63x8 import cells`` when ``waivers.py``
+                      (``from flow_matrix import cells`` when ``waivers.py``
                       changed), because both resolve through the package whose
                       contents moved;
       3. transitive — helper -> helper -> test (a change to ``flowref.py``
@@ -1474,7 +1474,7 @@ def select_tests(
             # SECOND HOP. The index above globs `test_*.py`, so a data file that
             # only a HELPER names is found by nothing — which is why a flow-yaml
             # change still missed `test_matrix_d4_criteria_match.py` (0 mentions;
-            # it reads the flow via `matrix_63x8/flowref.py`). Resolve those
+            # it reads the flow via `flow_matrix/flowref.py`). Resolve those
             # helpers through rule 4, which already owns helper -> test.
             helper_index = _build_key_helper_index(plugin_root, keys)
             named_helpers = sorted({h for k in keys

@@ -37,7 +37,7 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
-import matrix_63x8.flowref as F
+import flow_matrix.flowref as F
 import matrix_d7_artifact_graph as G
 import test_matrix_d7_outputs_list_complete as D7
 
@@ -116,10 +116,10 @@ def test_tree_returns_none_for_everything_that_is_not_a_program():
     the dict form never would.
     """
     for absent in ("", "does_not_exist_at_all", "../../etc/passwd",
-                   "sub/module", "a.b", "matrix_63x8"):
+                   "sub/module", "a.b", "flow_matrix"):
         assert G._tree(absent) is None, (
             f"`_tree({absent!r})` resolved to a tree; the dict lookup it "
             f"replaced returned None for it")
 
-    # `matrix_63x8` is a real DIRECTORY under programs/tests — never a program.
-    assert not (F.PROGRAMS_DIR / "matrix_63x8.py").is_file()
+    # `flow_matrix` is a real DIRECTORY under programs/tests — never a program.
+    assert not (F.PROGRAMS_DIR / "flow_matrix.py").is_file()

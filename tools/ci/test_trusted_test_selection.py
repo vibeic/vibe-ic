@@ -390,7 +390,7 @@ def test_the_full_population_outcome_domains_track_the_dimension_module_count():
     # a second thing that can drift -- and it is read by AST, because importing
     # a test module to ask it one constant runs its imports and fixtures.
     tests_dir = _plugin_root() / "programs/tests"
-    tree = ast.parse((tests_dir / "test_matrix_63x8_coverage.py").read_text())
+    tree = ast.parse((tests_dir / "test_flow_matrix_coverage.py").read_text())
     pattern = next(
         (n.value.value for n in tree.body
          if isinstance(n, ast.Assign)
@@ -399,7 +399,7 @@ def test_the_full_population_outcome_domains_track_the_dimension_module_count():
          and isinstance(n.value, ast.Constant)), None)
     assert isinstance(pattern, str) and pattern, (
         "DIMENSION_MODULE_GLOB is no longer a module-level string literal in "
-        "test_matrix_63x8_coverage.py; this probe reads it by AST and must be "
+        "test_flow_matrix_coverage.py; this probe reads it by AST and must be "
         "updated rather than left to silently match nothing")
     live = len(sorted(tests_dir.glob(pattern)))
     assert live >= 1, (

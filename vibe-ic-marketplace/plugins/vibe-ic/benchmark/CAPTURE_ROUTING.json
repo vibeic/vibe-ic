@@ -390,7 +390,7 @@
       "bucket_A_related": [
         "programs/flow_gate_grid.py",
         "programs/tests/test_matrix_d1_wiring.py",
-        "programs/tests/matrix_63x8/cells.py"
+        "programs/tests/flow_matrix/cells.py"
       ],
       "bucket_B_skill_file": "skills/open-benchmark-methodology/SKILL.md"
     },
