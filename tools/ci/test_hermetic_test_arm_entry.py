@@ -65,7 +65,27 @@ def test_inner_and_outer_semantic_leases_are_fixed_and_have_shutdown_margin():
     assert '"VIBEIC_PYTEST_SEMANTIC_STALL_GRACE": "600"' in runner
     assert "PYTEST_SEMANTIC_STALL_GRACE=" not in body
     assert "TEST_ARM_SEMANTIC_STALL_GRACE=630" in body
-    assert "LANDING_ARM_SEMANTIC_STALL_GRACE=300" in body
+    # THE LANDING-ARM VALUE IS NOT PINNED HERE, and the literal that used to be
+    # is why this file was red on main. `19560655d` [v1.13.74] raised it from
+    # 300 to 1830 — "the outer silence lease was 300 seconds and the inner
+    # Gatekeeper review it waits on has its own 1800-second no-verdict budget",
+    # measured on #1920 as a healthy arm reported NORECORD at 15/25 — and landed
+    # its own test for the new value in `tools/test_gatekeeper_verify_progress_
+    # lease.py` without touching this line. The two files then CONTRADICTED each
+    # other: that one asserts `> 300` and `>= GK_REVIEW_BUDGET_S + 30`, this one
+    # asserted `== 300`, and NO value of the script satisfied both.
+    #
+    # The value belongs to the test that states the RELATION, because the
+    # relation is what makes it correct and a literal here goes stale every time
+    # the inner budget moves. What is asserted here is what this file is for:
+    # the lease is ONE fixed integer literal (not an environment default that a
+    # caller could shrink), and it is a DIFFERENT number from the test arm's, so
+    # the two call-site bindings below are distinguishable.
+    landing = re.search(r"^LANDING_ARM_SEMANTIC_STALL_GRACE=(\d+)$", body,
+                        re.MULTILINE)
+    assert landing, "the landing-arm lease is not one literal integer assignment"
+    assert landing.group(1) != "630", (
+        "the two leases must be distinguishable; see _lease_bindings below")
     assert "${GATEKEEPER_SEMANTIC_STALL_GRACE" not in body
     assert '--env "VIBEIC_PYTEST_SEMANTIC_STALL_GRACE=' not in body
     # Bind the lease to every exact plan-producing call site.  Merely finding
