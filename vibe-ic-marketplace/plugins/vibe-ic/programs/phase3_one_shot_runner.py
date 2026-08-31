@@ -3729,6 +3729,165 @@ def _build_tapcell_and_placeability_tcl(
 
 
 
+#: vibe-ic#1958 — the Tcl variable the carved fence lands in. An empty list
+#: expands to nothing, so `rtl_macro_placer` is then invoked with exactly the
+#: arguments it carried before this block existed.
+_I1958_MACRO_FENCE_VAR = "_mpl_fence"
+
+#: The carve itself. Plain Tcl (deliberately not an f-string: the block is
+#: dense in braces and there is nothing in it to interpolate — every number it
+#: uses it MEASURES from odb).
+_I1958_MACRO_FENCE_TCL = """\
+# === vibe-ic#1958 — the macro fence excludes the FIXED pads ===
+# MPL-0050 errors on any FIXED, non-BLOCK, non-COVER instance whose bbox
+# overlaps `core_area INTERSECT global_fence`. Carve the fence down to the
+# largest sub-rectangle of the core that no such instance overlaps. Nothing to
+# exclude -> the list stays empty -> the `rtl_macro_placer` call below is
+# argument-identical to the one emitted before this block existed.
+set %(var)s {}
+if {[catch {
+  set _mf_blk [ord::get_db_block]
+  set _mf_ca [$_mf_blk getCoreArea]
+  set _mf_clx [$_mf_ca xMin]
+  set _mf_cly [$_mf_ca yMin]
+  set _mf_cux [$_mf_ca xMax]
+  set _mf_cuy [$_mf_ca yMax]
+  set _mf_lx $_mf_clx
+  set _mf_ly $_mf_cly
+  set _mf_ux $_mf_cux
+  set _mf_uy $_mf_cuy
+  # The offender set, mirroring MPL's own three conditions exactly. `FIXED` is
+  # carried alongside FIRM/LOCKED/COVER because the odb Tcl binding has spelled
+  # the DEF `+ FIXED` status both ways across versions.
+  set _mf_obs {}
+  set _mf_names {}
+  foreach _mf_i [$_mf_blk getInsts] {
+    set _mf_st [$_mf_i getPlacementStatus]
+    if {$_mf_st ne "FIRM" && $_mf_st ne "LOCKED" && $_mf_st ne "COVER" && $_mf_st ne "FIXED"} { continue }
+    set _mf_mt [[$_mf_i getMaster] getType]
+    # a macro is what MPL is here to place, and a COVER master is exempted by
+    # MPL itself -- neither of them is an offender.
+    if {[string match "BLOCK*" $_mf_mt]} { continue }
+    if {[string match "COVER*" $_mf_mt]} { continue }
+    set _mf_bb [$_mf_i getBBox]
+    lappend _mf_obs [list [$_mf_bb xMin] [$_mf_bb yMin] [$_mf_bb xMax] [$_mf_bb yMax]]
+    lappend _mf_names [$_mf_i getName]
+  }
+  # Greedy minimum-area cut, repeated until no offender overlaps. Bounded by
+  # the offender count: a pass that changes nothing ends the loop, and a pass
+  # that changes something has removed at least one overlap, so it cannot spin.
+  set _mf_pass 0
+  set _mf_again 1
+  while {$_mf_again && $_mf_pass <= [llength $_mf_obs]} {
+    set _mf_again 0
+    incr _mf_pass
+    foreach _mf_o $_mf_obs {
+      if {$_mf_ux <= $_mf_lx || $_mf_uy <= $_mf_ly} { break }
+      lassign $_mf_o _mf_ox0 _mf_oy0 _mf_ox1 _mf_oy1
+      if {$_mf_ox1 <= $_mf_lx || $_mf_ox0 >= $_mf_ux || $_mf_oy1 <= $_mf_ly || $_mf_oy0 >= $_mf_uy} { continue }
+      set _mf_w [expr {double($_mf_ux - $_mf_lx)}]
+      set _mf_h [expr {double($_mf_uy - $_mf_ly)}]
+      set _mf_best {}
+      set _mf_bloss 0
+      foreach _mf_c [list \\
+          [list L $_mf_ox1 [expr {($_mf_ox1 - $_mf_lx) * $_mf_h}]] \\
+          [list R $_mf_ox0 [expr {($_mf_ux - $_mf_ox0) * $_mf_h}]] \\
+          [list B $_mf_oy1 [expr {($_mf_oy1 - $_mf_ly) * $_mf_w}]] \\
+          [list T $_mf_oy0 [expr {($_mf_uy - $_mf_oy0) * $_mf_w}]]] {
+        lassign $_mf_c _mf_side _mf_val _mf_loss
+        set _mf_ok 1
+        if {$_mf_side eq "L" && $_mf_val >= $_mf_ux} { set _mf_ok 0 }
+        if {$_mf_side eq "R" && $_mf_val <= $_mf_lx} { set _mf_ok 0 }
+        if {$_mf_side eq "B" && $_mf_val >= $_mf_uy} { set _mf_ok 0 }
+        if {$_mf_side eq "T" && $_mf_val <= $_mf_ly} { set _mf_ok 0 }
+        if {!$_mf_ok} { continue }
+        if {[llength $_mf_best] == 0 || $_mf_loss < $_mf_bloss} {
+          set _mf_best $_mf_c
+          set _mf_bloss $_mf_loss
+        }
+      }
+      if {[llength $_mf_best] == 0} {
+        # the offender spans the rectangle in both axes: no cut removes it.
+        # Collapse, and let the report below say so.
+        set _mf_ux $_mf_lx
+        break
+      }
+      lassign $_mf_best _mf_side _mf_val _mf_loss
+      if {$_mf_side eq "L"} { set _mf_lx $_mf_val }
+      if {$_mf_side eq "R"} { set _mf_ux $_mf_val }
+      if {$_mf_side eq "B"} { set _mf_ly $_mf_val }
+      if {$_mf_side eq "T"} { set _mf_uy $_mf_val }
+      set _mf_again 1
+    }
+  }
+  set _mf_dbu [[ord::get_db_tech] getDbUnitsPerMicron]
+  if {[llength $_mf_obs] == 0} {
+    puts "MACRO_FENCE_UNCHANGED: no FIXED non-macro instance on the die; the fence stays the core area"
+  } elseif {$_mf_ux <= $_mf_lx || $_mf_uy <= $_mf_ly} {
+    puts "MACRO_FENCE_UNAVAILABLE: [llength $_mf_obs] FIXED non-macro instance(s) leave no macro-placeable sub-rectangle of the core, so NO fence is passed and MPL reports MPL-0050 by name instead of being handed a fence that hides the die -- $_mf_names"
+  } elseif {$_mf_lx == $_mf_clx && $_mf_ly == $_mf_cly && $_mf_ux == $_mf_cux && $_mf_uy == $_mf_cuy} {
+    puts "MACRO_FENCE_UNCHANGED: [llength $_mf_obs] FIXED non-macro instance(s) on the die, none of them overlapping the core; the fence stays the core area"
+  } else {
+    # -fence_* is MICRONS (mpl passes the four values straight through to
+    # HierRTLMP, which holds the floorplan in microns); odb geometry is DBU.
+    set %(var)s [list \\
+      -fence_lx [expr {double($_mf_lx) / $_mf_dbu}] \\
+      -fence_ly [expr {double($_mf_ly) / $_mf_dbu}] \\
+      -fence_ux [expr {double($_mf_ux) / $_mf_dbu}] \\
+      -fence_uy [expr {double($_mf_uy) / $_mf_dbu}]]
+    puts "MACRO_FENCE_CARVED: core ($_mf_clx $_mf_cly $_mf_cux $_mf_cuy) -> fence ($_mf_lx $_mf_ly $_mf_ux $_mf_uy) dbu, clear of [llength $_mf_obs] FIXED non-macro instance(s) -- $_mf_names"
+  }
+} _mf_err]} {
+  set %(var)s {}
+  puts "MACRO_FENCE_NONFATAL: $_mf_err"
+}
+""" % {"var": _I1958_MACRO_FENCE_VAR}
+
+
+def _i1958_macro_fence_tcl() -> str:
+    """Carve the macro-placement fence clear of the FIXED non-macro instances.
+
+    THE RULE IS MPL'S OWN, not a guess at it.  OpenROAD
+    `mpl/src/clusterEngine.cpp::computeModuleMetrics` raises
+
+        [ERROR MPL-0050] Found fixed non-macro instance <inst> inside the
+                         macro placement area.
+
+    for every instance that is (a) FIXED, (b) not a macro (`isBlock()`), (c)
+    not COVER-typed and (d) whose bbox OVERLAPS the macro placement area --
+    and `setFloorplanShape` makes that area `core_area INTERSECT global_fence`,
+    the global fence defaulting to the whole core.  On the chip / pad-ring path
+    the ring's pads are exactly (a)+(b)+(d): `rtl_macro_placer` refuses, every
+    macro stays wherever the netlist order left it, and global route then
+    congests around the pile.
+
+    (d) is the only one of the four this flow can move, and the fence is what
+    moves it.  So: start from the core rectangle and repeatedly cut away the
+    smallest slice that clears one overlapping offender, until none is left.
+    A pad RING carves to the core interior in one pass per side -- which is
+    the region the macros needed to be confined to anyway.
+
+    Three properties this deliberately has:
+
+      * INERT when there is nothing to exclude.  No FIXED non-macro instance
+        overlapping the core -> the fence stays the core -> the variable stays
+        empty -> the emitted call is argument-identical to the pre-fix one, so
+        a design with no pad ring cannot be changed by this block.
+      * LOUD when it cannot help.  If the carve collapses (offenders cover the
+        core in both axes) it passes NO fence and says so, leaving MPL-0050 to
+        fire with its own message.  Handing MPL a degenerate fence instead
+        would trade a named error for an unplaced macro nobody goes looking
+        for -- and MPL-0068 for a fence outside the core is not better.
+      * FAIL-SAFE on odb.  Any error inside leaves the variable empty and
+        prints the reason; the macro placer still runs, exactly as before.
+
+    chip-AGNOSTIC: reads `getCoreArea`, instance placement status, master type
+    and bounding boxes.  No design, PDK, library, cell or pad name and no
+    dimension literal appears anywhere in the emitted Tcl.
+    """
+    return _I1958_MACRO_FENCE_TCL
+
+
 def _build_tapcell_prune_tcl(pdk: "PdkConfig",
                              spare_pts_um: Optional[
                                  Sequence[Tuple[int, int]]] = None) -> str:
@@ -9613,6 +9772,157 @@ def _v1_6_596_build_hilomap_directive(liberty_path: str,
         f"hilomap -hicell {tc['hi_cell']} {tc['hi_pin']} "
         f"-locell {tc['lo_cell']} {tc['lo_pin']}"
     )
+
+
+# === vibe-ic#1958 — DERIVE the CTS buffer family from the target PDK ========
+# `clock_tree_synthesis -buf_list/-root_buf` needs two masters that the LIBRARY
+# ACTUALLY CONTAINS. The pre-fix recovery scan looked for the NAME of a buffer
+# ("clkbuf" anywhere, or a name STARTING with "BUF"), which is a naming
+# convention and not a property of the cell. IHP SG13G2 names its buffers
+# `sg13g2_buf_1 .. sg13g2_buf_16` — no `clkbuf` substring, and the name does
+# not start with `buf` — so the scan returned nothing, the sky130 literal was
+# used on a non-sky130 PDK, `CTS-0126 No physical master cell found` was caught
+# NONFATAL, and the run continued with NO CLOCK TREE AT ALL.
+#
+# What a buffer IS, in the Liberty itself: exactly one signal input, exactly
+# one signal output, and the output's `function` is that input. That is the
+# property; the name is the proxy. So the derivation below reads the STRUCTURE
+# and falls back to the name vocabulary only when the Liberty carries no pin
+# model to read (a stub / abstract .lib).
+#
+# chip-AGNOSTIC: no cell, vendor, library or PDK literal appears in any of it.
+_I1958_CELL_DECL_RE = re.compile(
+    r'(?m)^[ \t]*cell[ \t]*\(\s*"?([A-Za-z_][^"()\s]*)"?\s*\)[ \t]*\{')
+#: `pin (X) {` only. `pg_pin (VDD) {` cannot match: the anchor requires `pin`
+#: to be the first non-blank token on the line (#404 R2 paid for the version
+#: that did not).
+_I1958_PIN_DECL_RE = re.compile(
+    r'(?m)^[ \t]*pin[ \t]*\(\s*"?([A-Za-z_][^"()\s]*)"?\s*\)[ \t]*\{')
+_I1958_DIRECTION_RE = re.compile(r'(?m)^[ \t]*direction[ \t]*:[ \t]*"?(\w+)')
+_I1958_FUNCTION_RE = re.compile(r'(?m)^[ \t]*function[ \t]*:[ \t]*"([^"]*)"')
+_I1958_AREA_RE = re.compile(r'(?m)^[ \t]*area[ \t]*:[ \t]*([0-9.eE+-]+)')
+#: a name ending in digits: the drive-strength token every std-cell library
+#: uses, whatever separator it puts in front of it.
+_I1958_DRIVE_RE = re.compile(r'^(.*?)(\d+)$')
+#: "buf" as a TOKEN — at the start of the name or after a non-alphanumeric.
+#: Matches `BUFX2`, `..._buf_4`, `..._buf`; does NOT match `clkdlybuf4s15`
+#: (a delay cell) or `ebufn_2` (a tristate), whose `buf` is mid-token.
+_I1958_BUF_TOKEN_RE = re.compile(r'(?:^|[^a-z0-9])buf')
+
+
+def _i1958_liberty_buffer_cells(liberty_text: str) -> List[Tuple[str, float]]:
+    """Every cell in `liberty_text` that IS a buffer, as `(name, area)`.
+
+    Structural, not lexical: one input pin, one output pin, and the output's
+    `function` is the input pin's name.  An inverter (`function : "!A"`), a
+    tristate (two inputs), a gate (two inputs), a flop (`ff()` + clocked pins)
+    and a tie cell (no input) are all excluded by that test alone, with no
+    name matching anywhere.
+
+    Cell bodies are delimited by the NEXT cell declaration rather than by
+    brace matching: sibling `cell (...)` blocks are what a Liberty library
+    is, and brace-walking a 30 MB library to learn the same thing costs
+    seconds on every PnR run.  Returns `[]` on anything unparseable.
+    """
+    if not liberty_text:
+        return []
+    decls = list(_I1958_CELL_DECL_RE.finditer(liberty_text))
+    found: List[Tuple[str, float]] = []
+    for idx, decl in enumerate(decls):
+        end = decls[idx + 1].start() if idx + 1 < len(decls) else len(
+            liberty_text)
+        body = liberty_text[decl.end():end]
+        pins = list(_I1958_PIN_DECL_RE.finditer(body))
+        if not pins:
+            continue
+        inputs: List[str] = []
+        outputs: List[Tuple[str, str]] = []
+        for pidx, pin in enumerate(pins):
+            pend = pins[pidx + 1].start() if pidx + 1 < len(pins) else len(body)
+            pbody = body[pin.end():pend]
+            dm = _I1958_DIRECTION_RE.search(pbody)
+            direction = dm.group(1).lower() if dm else ""
+            if direction == "input":
+                inputs.append(pin.group(1))
+            elif direction == "output":
+                fm = _I1958_FUNCTION_RE.search(pbody)
+                outputs.append((pin.group(1), fm.group(1) if fm else ""))
+            elif direction:
+                # inout / internal — not a buffer's pin set. Bail on the cell
+                # rather than silently treating it as one.
+                inputs.append(pin.group(1))
+                outputs.append((pin.group(1), ""))
+        if len(inputs) != 1 or len(outputs) != 1:
+            continue
+        func = outputs[0][1].replace("(", "").replace(")", "").replace(" ", "")
+        if not func or func != inputs[0]:
+            continue
+        am = _I1958_AREA_RE.search(body)
+        try:
+            area = float(am.group(1)) if am else 0.0
+        except (TypeError, ValueError):
+            area = 0.0
+        found.append((decl.group(1), area))
+    return found
+
+
+def _i1958_drive_and_base(cell: str) -> Tuple[str, Optional[int]]:
+    """Split a cell name into `(family base, drive strength)`.
+
+    `<anything>4` -> `(<anything>, 4)`; a name with no trailing integer is its
+    own single-member family.  This is the ONE place a name is read, and only
+    to GROUP cells the structural test has already proven to be buffers — the
+    membership decision is never made here."""
+    m = _I1958_DRIVE_RE.match(cell)
+    if m:
+        return m.group(1), int(m.group(2))
+    return cell, None
+
+
+def _i1958_pick_cts_buffers(
+        liberty_text: str) -> Tuple[Optional[str], Optional[str], str]:
+    """Choose `(-buf_list cell, -root_buf cell, how)` from a Liberty.
+
+    Both come from ONE family, because CTS builds a tree out of them and a
+    tree whose root is from a different library family has no consistent
+    load model.  Within the family: the MEDIAN drive drives the leaves and
+    the LARGEST drives the root — the same relationship the two registry
+    PDKs that declare these cells by hand already express (sky130A pins
+    clkbuf_4/clkbuf_16 out of 1,2,4,8,16; nangate45 pins CLKBUF_X1/X3).
+
+    Family preference is a tie-break ONLY, applied after the structural test
+    has decided what is a buffer: a clock-buffer family first (a library that
+    ships one means it for exactly this), then a plain buffer family, then
+    whatever is left; within a tier the largest family wins, then the name,
+    so the choice is deterministic for a given library.
+
+    Returns `(None, None, "")` when the Liberty yields no buffer at all."""
+    cells = _i1958_liberty_buffer_cells(liberty_text)
+    if not cells:
+        return None, None, ""
+    families: Dict[str, List[Tuple[Optional[int], float, str]]] = {}
+    for name, area in cells:
+        base, drive = _i1958_drive_and_base(name)
+        families.setdefault(base, []).append((drive, area, name))
+
+    def _tier(base: str) -> int:
+        low = base.lower()
+        if "clkbuf" in low or ("clk" in low and "buf" in low):
+            return 0
+        if _I1958_BUF_TOKEN_RE.search(low):
+            return 1
+        return 2
+
+    base = min(families, key=lambda b: (_tier(b), -len(families[b]), b))
+    members = sorted(families[base],
+                     key=lambda t: (t[0] if t[0] is not None else -1, t[1],
+                                    t[2]))
+    buf = members[len(members) // 2][2]
+    root = members[-1][2]
+    how = (f"derived from the PDK's own Liberty: {len(cells)} structural "
+           f"buffer cell(s), family {base!r} with {len(members)} drive "
+           f"strength(s); median drive -> -buf_list, largest -> -root_buf")
+    return buf, root, how
 
 
 # v1.6.596 — for #404 P3 ORGANIC. Post-synth net-rename pass.
@@ -21094,6 +21404,21 @@ def _padring_routing_consumer_tcl(full_pnr_tcl: str,
     The returned deck is the actual routing consumer.  It cannot fall back to
     `floorplan.def`: absence of `padring.def` aborts before placement/CTS/route,
     and the marker is durable evidence that the consumed path was intentional.
+
+    vibe-ic#1958 — THE INGEST NEEDS `-floorplan_initialize`.  The seam this
+    function replaces sits AFTER `read_verilog` + `link_design`, so by the time
+    the ring is read the chip already owns a block.  A bare `read_def` asks odb
+    to create a second one:
+
+        [ERROR ORD-0048] ...
+        [ERROR ODB-0251] Chip already has a block
+
+    and OpenROAD dies before placement.  `-floorplan_initialize` is the mode
+    that lays a floorplan DEF ONTO the linked design instead of creating the
+    design from it, which is exactly what the ring is.  `-incremental` is NOT
+    an alternative: it ignores the DEF's ROW section, so global placement then
+    fails `[ERROR GPL-0130] No rows defined in design`.  Both alternatives were
+    measured on the reporter's probe before this flag was chosen.
     """
     matches = list(re.finditer(
         rf'(?ms)^puts "{re.escape(_PNR_STAGE_MARKER)} floorplan"\s*$.*?'
@@ -21109,7 +21434,7 @@ def _padring_routing_consumer_tcl(full_pnr_tcl: str,
         f'if {{![file exists {padring_def_c}]}} {{\n'
         f'  error "PADRING_ROUTING_INPUT_MISSING: {padring_def_c}"\n'
         f'}}\n'
-        f'read_def {padring_def_c}\n'
+        f'read_def -floorplan_initialize {padring_def_c}\n'
         f'puts "PADRING_ROUTING_CONSUMED: {padring_def_c}"')
     return (full_pnr_tcl[:matches[0].start()] + consume
             + full_pnr_tcl[matches[0].end():])
@@ -21930,39 +22255,89 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
     # last resort AFTER the scan has failed, where it is a disclosed guess rather
     # than a silent default — and `_clk_buf_note` says so, so a run that used it
     # is distinguishable from one that resolved a real cell.
+    # vibe-ic#1958 — TWO further instances of the same "a proxy stands in for
+    # the property" shape survived the #561 fix, and together they put the
+    # sky130 literal into a SG13G2 run's `clock_tree_synthesis`:
+    #
+    #   1. THE LIBERTY WAS NEVER READ. `Path(pdk.liberty).read_text()` is a
+    #      HOST-side read inside a bare `except Exception: pass`, but
+    #      `pdk.liberty` is a CONTAINER-side path for every registry and
+    #      project-staged PDK (`/foss/pdks/...`). FileNotFoundError, swallowed,
+    #      scan skipped — the same #687 shape the tech-LEF consumer 200 lines
+    #      below already fixed with `_v1_6_604_read_text_or_container_cat`.
+    #      So the "recovery" could not run at all on the PDKs that need it.
+    #   2. THE NAME STOOD IN FOR THE CELL. Even with the text in hand, the
+    #      candidate test was `"clkbuf" in name` or `name.upper()` STARTING
+    #      with "BUF". SG13G2's buffers are `sg13g2_buf_1..16`: neither holds.
+    #      Zero candidates -> the sky130 master -> `[ERROR CTS-0126] No
+    #      physical master cell found`, caught NONFATAL, and the design routed
+    #      with no clock tree.
+    #
+    # Both are fixed by asking the Liberty what a buffer IS (one input, one
+    # output, output function == the input) instead of what it is CALLED; the
+    # name vocabulary survives only for a Liberty that carries no pin model to
+    # read. `_clk_buf_how` records which of the three paths decided, so a run
+    # can always be told apart from the one before it.
     clk_buf = pdk.clk_buf
     clk_buf_root = pdk.clk_buf_root
     _clk_buf_note = ""
+    _clk_buf_how = "PDK registry (clk_buf_cell / clk_buf_root_cell)"
     if clk_buf is None:
         try:
-            lib_text = Path(pdk.liberty).read_text(errors="ignore")
-            cellnames: List[str] = []
-            for line in lib_text.splitlines():
-                s = line.strip()
-                if s.startswith("cell ") and "(" in s:
-                    n = s.split("(")[1].split(")")[0].strip()
-                    cellnames.append(n)
-            # Priority: CLKBUF, then BUF (any drive), then INV
-            clk_candidates = [n for n in cellnames if "clkbuf" in n.lower()]
-            buf_candidates = [n for n in cellnames if n.upper().startswith("BUF")]
-            clk_buf = (clk_candidates[0] if clk_candidates else
-                       (buf_candidates[0] if buf_candidates else clk_buf))
-            # Root buffer = a higher-drive variant if available
-            clk_buf_root = clk_candidates[-1] if clk_candidates else clk_buf
+            lib_text = _v1_6_604_read_text_or_container_cat(
+                str(pdk.liberty), container) or ""
+            # (a) STRUCTURAL — what the cell does, from its own pin model.
+            _s_buf, _s_root, _s_how = _i1958_pick_cts_buffers(lib_text)
+            if _s_buf:
+                clk_buf, clk_buf_root, _clk_buf_how = _s_buf, _s_root, _s_how
+            else:
+                # (b) NAME VOCABULARY — a stub/abstract Liberty declares cells
+                # with no pins, so (a) has nothing to read. Priority: CLKBUF,
+                # then a "buf" TOKEN (`BUFX2`, `..._buf_4`) rather than the
+                # pre-fix `startswith("BUF")`, which no vendor-prefixed
+                # library can ever satisfy.
+                cellnames: List[str] = []
+                for line in lib_text.splitlines():
+                    s = line.strip()
+                    if s.startswith("cell ") and "(" in s:
+                        n = s.split("(")[1].split(")")[0].strip()
+                        cellnames.append(n)
+                clk_candidates = [n for n in cellnames if "clkbuf" in n.lower()]
+                buf_candidates = [n for n in cellnames
+                                  if _I1958_BUF_TOKEN_RE.search(n.lower())]
+                _named = clk_candidates or buf_candidates
+                clk_buf = _named[0] if _named else clk_buf
+                # Root buffer = a higher-drive variant if available. The
+                # declaration order of a std-cell Liberty is the only ordering
+                # a pin-less stub offers, so `[-1]` is the same convention the
+                # CLKBUF branch has always used -- extended to the BUF branch,
+                # which previously made the root the WEAKEST drive in the list
+                # by handing it `clk_buf` itself.
+                clk_buf_root = _named[-1] if _named else clk_buf
+                if clk_buf is not None:
+                    _clk_buf_how = (
+                        "name vocabulary in the PDK's Liberty (no pin model "
+                        "to read structurally)")
         except Exception:
             pass
+    if clk_buf is not None and _clk_buf_how:
+        print(f"[phase3] CTS buffers: -buf_list {{{clk_buf}}} -root_buf "
+              f"{clk_buf_root} — {_clk_buf_how}", file=sys.stderr)
     if clk_buf is None:
         # The scan found nothing. Name the guess rather than making it silently:
         # this cell exists only in sky130, so on any other PDK the note is the
         # difference between a confusing downstream CTS error and a stated cause.
         clk_buf = "sky130_fd_sc_hd__clkbuf_4"
         clk_buf_root = clk_buf_root or "sky130_fd_sc_hd__clkbuf_16"
+        _clk_buf_how = ""
         _clk_buf_note = (
             f"clk_buf UNRESOLVED for pdk={pdk.name!r}: its registry entry "
-            f"declares no clk_buf_cell and its Liberty yielded no CLKBUF/BUF "
-            f"cell, so the sky130 master {clk_buf!r} is being used as a "
-            f"disclosed guess. If this PDK is not sky130, CTS will ask for a "
-            f"cell its library does not contain.")
+            f"declares no clk_buf_cell, and its Liberty ({pdk.liberty}) could "
+            f"not be read or contains no cell whose pin model is a buffer "
+            f"(one input, one output, output function == the input) and no "
+            f"CLKBUF/BUF-named cell either, so the sky130 master {clk_buf!r} "
+            f"is being used as a disclosed guess. If this PDK is not sky130, "
+            f"CTS will ask for a cell its library does not contain.")
         # Same channel the rest of this function discloses through, so the note
         # lands in the phase3 log beside the run it describes. A note nobody
         # emits is the shape this fix exists to remove.
@@ -22436,9 +22811,18 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
     # mixed-size global placement (byte-identical when no macros present).
     macro_place_block = ""
     if pdk.macro_lefs:
+        # vibe-ic#1958 — the fence comes FIRST, because MPL decides the
+        # macro-placement area from the fence and then errors (MPL-0050) on
+        # the FIXED pads inside it. `_i1958_macro_fence_tcl` measures the
+        # exclusion from odb and leaves the variable EMPTY when there is
+        # nothing to exclude, so `{*}` expands to nothing and this call is
+        # argument-identical to the pre-fix one on every design without a
+        # pad ring.
         macro_place_block = (
             "# === hard-macro placement (local IP macros present) ===\n"
-            "if {[catch {rtl_macro_placer -halo_width 20 -halo_height 20} "
+            + _i1958_macro_fence_tcl()
+            + "if {[catch {rtl_macro_placer -halo_width 20 -halo_height 20 "
+            "{*}$" + _I1958_MACRO_FENCE_VAR + "} "
             "_mpl_err]} {\n"
             "  puts \"MACRO_PLACE_NONFATAL: $_mpl_err\"\n"
             "}\n"

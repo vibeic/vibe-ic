@@ -28,6 +28,7 @@ import pytest
 
 PROGRAMS = pathlib.Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROGRAMS))
+import phase3_one_shot_runner as _runner  # noqa: E402
 
 _SRC = (PROGRAMS / "phase3_one_shot_runner.py").read_text(encoding="utf-8")
 _BEGIN = "    clk_buf = pdk.clk_buf\n"
@@ -48,8 +49,20 @@ class _Pdk:
         self.liberty = liberty
 
 
-def _run(pdk):
-    ns = {"pdk": pdk, "Path": pathlib.Path, "List": list, "sys": sys}
+def _run(pdk, container=""):
+    """Execute the block against the REAL module namespace.
+
+    vibe-ic#1958 — the namespace used to be four hand-picked names, which meant
+    the block could only be tested as long as it called nothing the module
+    defines.  It now calls `_v1_6_604_read_text_or_container_cat` (so a
+    container-side Liberty is actually read) and `_i1958_pick_cts_buffers` (so a
+    buffer is recognised by its pin model), and a hand-built namespace would
+    turn both into a NameError that the block's own `except Exception: pass`
+    swallows -- i.e. the tests would go on passing while testing the fallback.
+    `container` defaults to "" so every case below still exercises the
+    host-side read it was written for."""
+    ns = dict(vars(_runner))
+    ns.update({"pdk": pdk, "container": container})
     exec(_block(), ns)          # noqa: S102 - executing the block under test
     return ns
 

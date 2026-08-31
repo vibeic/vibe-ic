@@ -181,7 +181,11 @@ def test_pad_ring_is_inserted_at_the_real_floorplan_to_route_seam():
         full, "/work/phase3/stage3/pnr/padring.def")
     assert seed.rstrip().endswith("exit")
     assert "global_placement" not in seed
-    ingest = routed.index("read_def /work/phase3/stage3/pnr/padring.def")
+    # vibe-ic#1958 — the ingest carries `-floorplan_initialize`: it lands the
+    # ring on the design `link_design` has already created, instead of asking
+    # odb for a second block (ODB-0251).
+    ingest = routed.index(
+        "read_def -floorplan_initialize /work/phase3/stage3/pnr/padring.def")
     assert ingest < routed.index("\nglobal_placement")
     assert ingest < routed.index("\ndetailed_route")
     assert routed.index("read_lef /pdk/libs.ref/io/lef/pads.lef") < routed.index(
