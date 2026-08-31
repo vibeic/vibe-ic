@@ -123,6 +123,9 @@ def _spec_requirements(prompt: str,
                 "kind": "self_tb_coverage",
                 "requirement": r["requirement"],
                 "shapes": r.get("shapes", []),
+                "authoring_invariants": r.get("authoring_invariants", []),
+                "self_tb_scenarios": r.get("self_tb_scenarios", []),
+                "parameter_sweeps": r.get("parameter_sweeps", []),
             })
     except Exception:
         pass

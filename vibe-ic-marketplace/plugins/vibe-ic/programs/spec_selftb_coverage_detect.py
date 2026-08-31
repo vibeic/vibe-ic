@@ -15,8 +15,10 @@ self-check and shipped. The COVERAGE_GAP residuals:
   * axil_precision_counter — an AXI-Lite register peripheral whose self-TB poked
     a register but never ADVANCED SIM TIME, so a running counter/elapsed that is
     wrong-by-time read back "correct" at t=0.
-  * interrupt_controller — an IRQ controller whose self-TB never exercised the
-    ack→next-IRQ re-assert latency / deassert-during-ack / request-sync slices.
+  * interrupt_controller — an IRQ controller whose author conflated registered
+    pending state, the currently-selected identity, and the active identity
+    that a later ack retires; its self-TB also missed held-request suppression,
+    ack/new-request coincidence, recovery-tail timing, and the N=1 width case.
   * binary_search_tree_sorting — a "complete the partial FSM/algorithm" task
     whose self-TB used degenerate (empty/reset) stimulus and asserted only a
     done flag, never the real data result on a populated structure.
@@ -84,6 +86,82 @@ _FSM_CONTEXT_RE = re.compile(
     r"|\bsearch\b|\biterat", re.IGNORECASE)
 
 
+# Input-derived authoring contract for interrupt-controller prompts.  These are
+# deliberately structured (rather than only prose in `requirement`) so every AI
+# backup consumer can preserve the exact invariants and deterministic self-TB
+# matrix.  The preemption policy remains spec-controlled; the invariant below
+# only constrains HOW a preemptive design may replace its current selection.
+_INTERRUPT_AUTHORING_INVARIANTS = [
+    {
+        "id": "identity_separation",
+        "requirement": (
+            "Keep registered pending state, the currently selected/presented "
+            "identity, and the latched active/ACK identity as separate roles."),
+    },
+    {
+        "id": "registered_strict_preemption",
+        "requirement": (
+            "Keep preemption policy spec-controlled. If enabled, consider only "
+            "registered pending requests and replace the selection only for a "
+            "strictly higher-priority request; otherwise hold it until ACK."),
+    },
+    {
+        "id": "ack_active_identity",
+        "requirement": (
+            "ACK retires and clears the latched active identity, never a "
+            "recomputed live winner or a newly selected identity."),
+    },
+    {
+        "id": "held_request_suppression",
+        "requirement": (
+            "Use edge capture or equivalent seen/armed state so a request held "
+            "through ACK cannot immediately requeue itself."),
+    },
+    {
+        "id": "minimum_index_width",
+        "requirement": (
+            "Define the interrupt-index width as max(1, clog2(NUM_INTERRUPTS)) "
+            "or an equivalent expression so NUM_INTERRUPTS=1 is legal."),
+    },
+]
+
+_INTERRUPT_SELF_TB_SCENARIOS = [
+    {
+        "id": "arrival_during_service",
+        "requirement": (
+            "While one request is active, inject lower/equal and strictly "
+            "higher-priority requests; no raw same-cycle arrival may preempt, "
+            "and any allowed preemption starts from registered pending state."),
+    },
+    {
+        "id": "ack_plus_new_request",
+        "requirement": (
+            "Coincide ACK with a new request and prove ACK retires the old active "
+            "identity while the new request remains pending for selection."),
+    },
+    {
+        "id": "held_request_through_ack",
+        "requirement": (
+            "Hold a request asserted through its ACK and prove it does not "
+            "requeue until it is released and asserted again."),
+    },
+    {
+        "id": "recovery_tail_timing",
+        "requirement": (
+            "Check deassert-during-ACK and the declared next-interrupt recovery "
+            "schedule, including no stale identity replay and no empty bubble."),
+    },
+]
+
+_INTERRUPT_PARAMETER_SWEEPS = [
+    {
+        "id": "single_interrupt",
+        "parameters": {"NUM_INTERRUPTS": 1},
+        "requirement": "Compile and simulate the full ACK/re-arm path at N=1.",
+    },
+]
+
+
 def detect_selftb_coverage(prompt: str) -> Dict[str, Any]:
     """Classify the design's verification-relevant shapes and return the self-TB
     coverage advisory.
@@ -95,11 +173,17 @@ def detect_selftb_coverage(prompt: str) -> Dict[str, Any]:
                                     #   interrupt_controller / fsm_completion
           "slices": [str, ...],     # the concrete self-TB slices to exercise
           "requirement": str|None,  # ready-to-inject author directive
+          "authoring_invariants": [dict, ...],
+          "self_tb_scenarios": [dict, ...],
+          "parameter_sweeps": [dict, ...],
         }
     """
     p = prompt or ""
     shapes: List[str] = []
     slices: List[str] = []
+    authoring_invariants: List[Dict[str, Any]] = []
+    self_tb_scenarios: List[Dict[str, Any]] = []
+    parameter_sweeps: List[Dict[str, Any]] = []
 
     has_trigger = bool(_TRIGGER_RE.search(p))
     has_done = bool(_DONE_RE.search(p))
@@ -128,10 +212,17 @@ def detect_selftb_coverage(prompt: str) -> Dict[str, Any]:
     if _INTERRUPT_RE.search(p) and _INT_HANDSHAKE_RE.search(p):
         shapes.append("interrupt_controller")
         slices.append(
-            "INTERRUPT CONTROLLER: exercise the handshake-latency slices — after "
-            "an ack clears one IRQ the interrupt line must RE-ASSERT for remaining "
-            "pending IRQs within tolerance, DEASSERT exactly during ack, and the "
-            "request synchronizer's latency must stay within bounds.")
+            "INTERRUPT CONTROLLER: keep PENDING, SELECTED/PRESENTED, and "
+            "ACTIVE/ACK identities separate; ACK must clear the latched active "
+            "identity, never a recomputed winner. If the spec enables preemption, "
+            "use REGISTERED pending state and require STRICTLY HIGHER priority. "
+            "Exercise arrival-during-service, ACK+new-request, a held request "
+            "through ACK, and recovery-tail timing; suppress held-level requeue, "
+            "RE-ASSERT remaining work on the declared schedule, DEASSERT during "
+            "ACK, and sweep NUM_INTERRUPTS=1 with a minimum one-bit index.")
+        authoring_invariants.extend(_INTERRUPT_AUTHORING_INVARIANTS)
+        self_tb_scenarios.extend(_INTERRUPT_SELF_TB_SCENARIOS)
+        parameter_sweeps.extend(_INTERRUPT_PARAMETER_SWEEPS)
 
     # 4) 'complete the partial FSM/algorithm' task — gated on FSM/algorithm
     # context so a plain "complete the code" combinational block does not earn
@@ -151,7 +242,14 @@ def detect_selftb_coverage(prompt: str) -> Dict[str, Any]:
             "RTL) is the graded axis here; a weak self-TB lets a real bug ship. "
             "Before emit, ensure your self-TB exercises: " + " ".join(slices))
 
-    return {"shapes": shapes, "slices": slices, "requirement": requirement}
+    return {
+        "shapes": shapes,
+        "slices": slices,
+        "requirement": requirement,
+        "authoring_invariants": authoring_invariants,
+        "self_tb_scenarios": self_tb_scenarios,
+        "parameter_sweeps": parameter_sweeps,
+    }
 
 
 def main(argv: Optional[List[str]] = None) -> int:
