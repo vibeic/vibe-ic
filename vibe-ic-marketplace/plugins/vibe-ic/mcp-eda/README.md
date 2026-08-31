@@ -18,27 +18,26 @@ GDS file (tapeout-ready)
 ## Quick Start
 
 ```bash
-# 1. Provide the EDA container (named vibeic-eda). Recommended: the enhanced fork image.
-docker pull ghcr.io/vibeic/vibeic-eda:latest                       # forked toolchain, FAIL→PASS fixes (source build: git clone github.com/vibeic/vibeic-eda)
-docker rm -f vibeic-eda 2>/dev/null || true                        # drop any old container of this name
-docker run -d --name vibeic-eda -v $HOME/designs:/design \
-  ghcr.io/vibeic/vibeic-eda:latest --skip sleep infinity
-# already running an older tag? recreate config-preserving: tools/vibeic-eda/restart-eda.sh
-# (no argument = the newest vibeic-eda image this host holds, by digest; or pass a tag)
-# stock fallback: docker pull hpretl/iic-osic-tools:latest  (then run it named vibeic-eda)
+# 1. Install the plugin. It packages and auto-registers this MCP server.
+claude plugin marketplace add https://github.com/vibeic/vibe-ic
+claude plugin install vibe-ic
 
-# 2. Install MCP server
-git clone https://github.com/anthropics/mcp-eda.git
-cd mcp-eda && npm install
+# 2. Pull the EDA image.
+docker pull ghcr.io/vibeic/vibeic-eda:latest
 
-# 3. Connect to Claude Code
-claude mcp add eda node $(pwd)/src/index.js -e EDA_CONTAINER=vibeic-eda
+# 3. From the installed plugin root, create the named container safely.
+export VIBEIC_DESIGNS="/absolute/path/to/your/projects"
+DESIGNS_DIR="$VIBEIC_DESIGNS" \
+  bash tools/vibeic-eda/restart-eda.sh ghcr.io/vibeic/vibeic-eda:latest
 
-# 4. Start designing ICs
-claude "Design a 4-bit counter IC using GF180 180nm PDK"
+# 4. Start a new Claude Code session and run eda_doctor(skip_versions=false).
+claude
 ```
 
-See [INSTALL_GUIDE.md](INSTALL_GUIDE.md) for detailed setup with troubleshooting.
+The shipped `.mcp.json` starts `mcp-eda/src/bootstrap.mjs`, which self-heals Node
+dependencies before loading the server. Do not create a second manual MCP
+registration. See [INSTALL_GUIDE.md](INSTALL_GUIDE.md) for container policy,
+verification, updates, and troubleshooting.
 
 ## 55 MCP Tools (47 EDA + 7 Device + 1 health)
 

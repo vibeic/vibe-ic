@@ -59,6 +59,20 @@ _ENV = {"PATH": os.environ.get("PATH", "/usr/bin:/bin"),
         "RESTART_EDA_PRINT_IMAGE": "1"}
 _DIGEST_REF = re.compile(r"^\S+@sha256:[0-9a-f]{64}$")
 
+PLUGIN_ROOT = Path(__file__).resolve().parents[2]
+REPO_ROOT = next((
+    up for up in Path(__file__).resolve().parents
+    if (up / ".claude-plugin" / "marketplace.json").is_file()
+    and (up / "vibe-ic-marketplace" / "plugins" / "vibe-ic").is_dir()
+), None)
+PACKAGED_SCRIPT = PLUGIN_ROOT / "tools" / "vibeic-eda" / "restart-eda.sh"
+CANONICAL_SCRIPT = (
+    REPO_ROOT / "tools" / "vibeic-eda" / "restart-eda.sh"
+    if REPO_ROOT is not None else None
+)
+INSTALL_GUIDE = PLUGIN_ROOT / "mcp-eda" / "INSTALL_GUIDE.md"
+MCP_README = PLUGIN_ROOT / "mcp-eda" / "README.md"
+
 
 def _resolve(*args, expect_ok=True):
     r = _pr.run(["bash", str(SCRIPT), *args],
@@ -124,3 +138,95 @@ def test_no_floating_default_in_source():
     src = SCRIPT.read_text(encoding="utf-8")
     assert "${1:-latest}" not in src, (
         "restart-eda.sh must not default to a floating :latest tag")
+
+
+def test_issue1933_restart_helper_is_in_the_marketplace_package():
+    """The remediation path is relative to the installed plugin root, so the
+    file must live inside that root rather than only in the source repository."""
+    assert PACKAGED_SCRIPT.is_file(), (
+        "marketplace package is missing tools/vibeic-eda/restart-eda.sh")
+    assert os.access(PACKAGED_SCRIPT, os.X_OK), (
+        "packaged tools/vibeic-eda/restart-eda.sh is not executable")
+    if CANONICAL_SCRIPT is not None:
+        assert PACKAGED_SCRIPT.read_bytes() == CANONICAL_SCRIPT.read_bytes(), (
+            "source and packaged restart helpers drifted; both remediation "
+            "paths must execute the same policy")
+
+
+def test_issue1933_packaged_layout_finds_the_shipped_image_resolver(tmp_path):
+    """Exercise the installed layout without Docker. The old lookup understood
+    only <repo>/vibe-ic-marketplace/plugins/vibe-ic/programs and a copied script
+    still failed after packaging because <plugin>/programs was never searched."""
+    installed_root = tmp_path / "installed-plugin"
+    installed_script = installed_root / "tools" / "vibeic-eda" / "restart-eda.sh"
+    installed_script.parent.mkdir(parents=True)
+    shutil.copy2(PACKAGED_SCRIPT, installed_script)
+    installed_programs = installed_root / "programs"
+    installed_programs.mkdir()
+    (installed_programs / "_eda_image.py").write_text("# fixture\n", encoding="utf-8")
+    (installed_programs / "_docker_memory.py").write_text("# fixture\n", encoding="utf-8")
+
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    log = tmp_path / "python-argv.txt"
+    digest = "ghcr.io/vibeic/vibeic-eda@sha256:" + "a" * 64
+    fake_python = fake_bin / "python3"
+    fake_python.write_text(
+        "#!/bin/sh\n"
+        "printf '%s\\n' \"$@\" > \"$RESTART_EDA_CALL_LOG\"\n"
+        f"printf '%s\\n' '{digest}'\n",
+        encoding="utf-8",
+    )
+    fake_python.chmod(0o755)
+    env = {
+        "PATH": f"{fake_bin}:/usr/bin:/bin",
+        "RESTART_EDA_CALL_LOG": str(log),
+        "RESTART_EDA_PRINT_IMAGE": "1",
+    }
+
+    result = _pr.run(
+        ["bash", str(installed_script)],
+        capture_output=True,
+        text=True,
+        env=env,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == digest
+    assert log.read_text(encoding="utf-8").splitlines() == [
+        str(installed_programs / "_eda_image.py"),
+        "--judged",
+    ]
+    assert "find_plugin_program _docker_memory.py" in PACKAGED_SCRIPT.read_text(
+        encoding="utf-8")
+
+
+def test_issue1933_install_docs_use_marketplace_autowire_only():
+    guide = INSTALL_GUIDE.read_text(encoding="utf-8")
+    readme = MCP_README.read_text(encoding="utf-8")
+
+    for required in (
+        "claude plugin marketplace add",
+        "claude plugin install vibe-ic",
+        '${CLAUDE_PLUGIN_ROOT}/mcp-eda/src/bootstrap.mjs',
+        "eda_doctor(skip_versions=false)",
+        "--memory",
+        "--memory-swap",
+        "tools/vibeic-eda/restart-eda.sh",
+    ):
+        assert required in guide, f"INSTALL_GUIDE.md omits {required!r}"
+
+    for stale in (
+        "claude mcp add",
+        "git clone <your-repo-url>/mcp-eda.git",
+        "plugins/vibe-ic-d",
+        "-p 8888:80",
+        "-p 5901:5901",
+    ):
+        assert stale not in guide, f"INSTALL_GUIDE.md retains stale route {stale!r}"
+
+    assert "claude plugin install vibe-ic" in readme
+    assert "bootstrap.mjs" in readme
+    assert "eda_doctor(skip_versions=false)" in readme
+    assert "claude mcp add" not in readme
+    assert "github.com/anthropics/mcp-eda" not in readme
