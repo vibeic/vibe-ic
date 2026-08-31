@@ -1,6 +1,6 @@
 """A4 `build_design_deck` on a SECTIONED-corner-lib PDK (vibe-ic u_hawaii_adc).
 
-WHAT WENT WRONG (measured, u_hawaii_adc ldo, plugin v1.14.71): A3's own emitter
+WHAT WENT WRONG (measured, u_hawaii_adc ldo, plugin v1.14.72): A3's own emitter
 writes the PDK-correct per-device-class binding for a sectioned corner library
 family — three `.lib` cards (`cornerMOShv.lib mos_tt` + `cornerCAP.lib cap_typ`
 + `cornerRES.lib res_typ`) — and A4's `build_design_deck` refused ANY deck whose

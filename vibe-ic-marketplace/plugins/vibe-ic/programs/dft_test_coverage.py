@@ -305,6 +305,45 @@ def compute(cut_netlist: Path, coverage_yml: Path, liberties=None, top=None,
     covered_on_unobservable = sum(
         1 for s in (cov0 | cov1) if site_to_net(s, pin_net) in unobservable)
 
+    # WHY THE EXCLUSION SET IS EMPTY (#772). `untestable_faults_excluded: 0`
+    # beside a non-zero `untestable_nets` is ambiguous between two facts that
+    # demand OPPOSITE actions, and the record could not tell them apart:
+    #   * the intersection machinery failed to meet the engine's fault names
+    #     (fix the mapping), or
+    #   * the untestable nets carry no enumerated fault site AT ALL, so there
+    #     was never anything to exclude (the classifier is working; a better
+    #     mapping would still exclude nothing).
+    # The load-bearing datum is how many untestable nets the engine actually
+    # enumerated a fault site on. It is computed from the SAME `site_to_net`
+    # map the exclusion itself uses, so it can never disagree with it.
+    untestable_nets = uncontrollable | unobservable
+    fault_carrying_nets = {n for n in (site_to_net(s, pin_net) for s in uniq_points)
+                           if n is not None}
+    untestable_carrying = untestable_nets & fault_carrying_nets
+    unmapped_sites = sum(1 for s in uniq_points
+                         if site_to_net(s, pin_net) is None)
+
+    # The reason is stated ONLY when the exclusion is empty — a run that
+    # excluded something needs no excuse, and a line on every run would train
+    # the reader to skip it.
+    if excluded_effective:
+        exclusion_empty_reason = None
+    elif not untestable_nets:
+        exclusion_empty_reason = (
+            "no net was classified untestable, so there was nothing to exclude")
+    elif not untestable_carrying:
+        exclusion_empty_reason = (
+            f"{len(untestable_nets)} net(s) were classified untestable and the "
+            f"engine enumerated NO fault site on any of them (fault sites sit on "
+            f"{len(fault_carrying_nets)} other net(s)); the exclusion is "
+            "necessarily empty and a better site->net mapping would not change "
+            "it — the sign-off shortfall is on faults the engine DID enumerate")
+    else:
+        exclusion_empty_reason = (
+            f"{len(untestable_carrying)} of {len(untestable_nets)} untestable "
+            "net(s) carry an enumerated fault site, but every such fault was "
+            "DETECTED, so the per-net covered oracle refused every exclusion")
+
     # GUARD 2 (hard invariant): an excluded fault is one left undetected, so the
     # excluded count can never exceed the uncovered count → test ≤ 100 %.
     assert test_pct <= 100.0 + 1e-9, (
@@ -343,6 +382,13 @@ def compute(cut_netlist: Path, coverage_yml: Path, liberties=None, top=None,
         "excluded_sa1_sites": sorted(e1),
         "covered_on_uncontrollable_net": {"sa0": coarse0, "sa1": coarse1},
         "covered_on_unobservable_net": covered_on_unobservable,
+        # Disclosure (#772): whether the untestable set could have contributed
+        # at all. `untestable_nets_carrying_fault_sites == 0` means the empty
+        # exclusion is a property of the DESIGN's fault list, not a mapping bug.
+        "untestable_nets_carrying_fault_sites": len(untestable_carrying),
+        "fault_carrying_nets": len(fault_carrying_nets),
+        "fault_sites_unmapped_to_a_net": unmapped_sites,
+        "exclusion_empty_reason": exclusion_empty_reason,
         "lift_pct": round(test_pct - raw_pct, 4),
     }
 

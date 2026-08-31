@@ -160,6 +160,13 @@ def _eda_thread_count() -> int:
 _THIS = Path(__file__).resolve()
 PROGRAMS_DIR = _THIS.parent  # always the directory containing this script
 
+# The full-stack TB's memory/firmware binding lives in its own module so it can
+# be tested without driving the whole runner. Imported off PROGRAMS_DIR (not the
+# caller's cwd) so it resolves however the runner was invoked.
+if str(PROGRAMS_DIR) not in sys.path:
+    sys.path.insert(0, str(PROGRAMS_DIR))
+import _full_stack_memory_binding as _fsmb  # noqa: E402
+
 # ─── authored-RTL guard state ────────────────────────────────────────────
 # Set by --force-rtl-regen: the EXPLICIT opt-in to let the generator
 # overwrite RTL it did not produce. Default False — a destructive action is
@@ -7251,6 +7258,164 @@ def step_l10_unit_tb_gen(project: Path,
         [str(out_dir)])
 
 
+# ── vibe-ic — THE FULL-STACK TB HAD TO STOP HARD-CODING THE CLOCK'S NAME ─────
+#
+# The generator below opened every TB it wrote with
+#
+#     reg clk = 0;
+#     reg reset_n = 0;
+#     always #10 clk = ~clk;   // 50 MHz default
+#
+# and then bound the DUT's ports by name, skipping only the two literals `clk`
+# and `reset_n`. So the clock generator drove the port `clk` — and NOTHING ELSE.
+# A DUT whose clock is called `i_clk`, `clk_i`, `sys_clk`, `aclk`, `HCLK` … got
+# `reg i_clk = 0;` out of the ordinary-input branch and NOTHING ever toggled it.
+# The design was simulated with a FLAT clock for the whole run, and the TB still
+# ran to `$finish` and wrote `pass.flag`, so the step reported success.
+#
+# MEASURED (subservient x gf180mcuD, clock port `i_clk`, reset `i_rst`):
+#
+#     verilator coverage of the DUT:  line 9.09%   toggle 0.63%   branch 3.03%
+#
+# The 700-line core executed its reset state and stopped. That is not a weak
+# testbench; it is a testbench that never started the design, and the coverage
+# gate's FAIL was the first thing in the flow to notice.
+#
+# The clock and the reset are now resolved from what the DESIGN says its ports
+# are — the L8 clock contract first, then the same structural name vocabulary
+# `cpu_boot_latency_oracle_tb_gen` already uses — and the polarity of the reset
+# is read out of the DUT's own RTL (`posedge`/`negedge`) before falling back to
+# the name's shape. Nothing is invented: when no clock port can be resolved the
+# TB SAYS SO in its header and in `results.json`, because a TB that silently
+# cannot exercise its DUT is the defect this closes, and an undisclosed one is
+# the same defect wearing a passing verdict.
+#
+# chip-AGNOSTIC: port-name grammar and Verilog edge keywords only.
+_FS_TB_CLOCK_RE = re.compile(r"(?:^|_)(?:clk|clock)(?:$|_)", re.IGNORECASE)
+_FS_TB_RESET_RE = re.compile(r"(?:^|_)(?:rst|reset|resetn|rstn|nrst|nreset)(?:$|_)",
+                             re.IGNORECASE)
+_FS_TB_ACTIVE_LOW_RE = re.compile(
+    r"(?:_n$|n$|_b$|(?:^|_)(?:rstn|resetn|nrst|nreset)(?:$|_))", re.IGNORECASE)
+
+#: Clock cycles the TB runs after reset release when a clock port WAS resolved.
+#: A count, not a delay, so it means the same thing at any period. Bounded
+#: because a TB that never ends is a hang, not coverage.
+_FS_TB_RUN_CYCLES = 2000
+# A firmware-driven run needs a budget in INSTRUCTIONS, not in the handful of
+# cycles a connectivity skeleton needs: a bit-serial core spends tens of cycles
+# per instruction, so 2000 cycles is a reset and almost nothing else. Bounded,
+# so this still cannot become a hang.
+_FS_TB_FIRMWARE_RUN_CYCLES = 400000
+
+
+def _fs_tb_reset_polarity_from_rtl(project: Path, top_module: str,
+                                   rst: str):
+    """True=active-low, False=active-high, None=the RTL says neither.
+
+    Reads the DUT's own edge sensitivity, which outranks the name: a port
+    called `rst_n` that the RTL samples on `posedge` is active-high whatever
+    its name suggests, and driving it by the name would hold the design in
+    reset for the whole run — the failure mode this whole block exists to
+    stop. chip-AGNOSTIC: Verilog edge keywords only."""
+    if not rst:
+        return None
+    for root in (_pl.rtl_dir(project), project / "rtl", project / "phase2" / "rtl"):
+        try:
+            if not root.is_dir():
+                continue
+        except Exception:
+            continue
+        files = sorted([f for pat in ("*.v", "*.sv") for f in root.glob(pat)])
+        # The top's own file first — the edge that matters is the one the
+        # top-level reset tree samples on.
+        files = ([f for f in files if f.stem == top_module]
+                 + [f for f in files if f.stem != top_module])
+        for f in files[:32]:
+            try:
+                text = f.read_text(encoding="utf-8", errors="ignore")
+            except OSError:
+                continue
+            low = re.search(r"negedge\s+" + re.escape(rst) + r"\b", text)
+            high = re.search(r"posedge\s+" + re.escape(rst) + r"\b", text)
+            if low and not high:
+                return True
+            if high and not low:
+                return False
+    return None
+
+
+def _fs_tb_resolve_clock_reset(project: Path, top_module: str,
+                               gd: Path,
+                               inputs) -> Dict[str, Any]:
+    """Which DUT input is the clock, which is the reset, and which way the
+    reset asserts.
+
+    ``inputs`` is ``[(name, width_decl), ...]`` for the DUT's INPUT ports as
+    the TB will declare them. A port with a width is not a clock and not a
+    reset: both are single wires, and admitting a bus here is how a data port
+    ends up being toggled at the clock rate.
+
+    Returns a record with the resolution AND its source, so the TB can state
+    how it decided rather than presenting a guess as a fact.
+    """
+    names = [n for n, w in inputs if not w]
+    out: Dict[str, Any] = {
+        "clock": None, "clock_source": None,
+        "reset": None, "reset_source": None, "reset_active_low": None,
+        "reset_polarity_source": None,
+    }
+    # 1. WHAT THE DESIGN DECLARES. The L8 clock contract names the port; it is
+    #    honoured only when it names a port the DUT actually has, so a stale or
+    #    mis-extracted L8 cannot make the TB bind a clock that is not there.
+    for layer in ("L8_RTL_CONSTANTS", "L8_TIMING_WAVEFORM"):
+        if out["clock"]:
+            break
+        try:
+            l8 = json.loads((gd / f"{layer}.json").read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        if not isinstance(l8, dict):
+            continue
+        for list_key in ("clocks", "clock_domains"):
+            for entry in (l8.get(list_key) or []):
+                if not isinstance(entry, dict):
+                    continue
+                for key in ("port_name", "source_pin", "name", "port", "signal"):
+                    v = entry.get(key)
+                    if isinstance(v, str) and v.strip() in names:
+                        out["clock"] = v.strip()
+                        out["clock_source"] = f"{layer}.{list_key}[].{key}"
+                        break
+                if out["clock"]:
+                    break
+            if out["clock"]:
+                break
+    # 2. STRUCTURAL. Same vocabulary `cpu_boot_latency_oracle_tb_gen` uses.
+    if not out["clock"]:
+        for n in names:
+            if _FS_TB_CLOCK_RE.search(n):
+                out["clock"] = n
+                out["clock_source"] = "port-name grammar"
+                break
+    for n in names:
+        if n == out["clock"]:
+            continue
+        if _FS_TB_RESET_RE.search(n):
+            out["reset"] = n
+            out["reset_source"] = "port-name grammar"
+            break
+    if out["reset"]:
+        pol = _fs_tb_reset_polarity_from_rtl(project, top_module, out["reset"])
+        if pol is None:
+            out["reset_active_low"] = bool(
+                _FS_TB_ACTIVE_LOW_RE.search(out["reset"]))
+            out["reset_polarity_source"] = "port-name grammar"
+        else:
+            out["reset_active_low"] = pol
+            out["reset_polarity_source"] = "DUT RTL edge sensitivity"
+    return out
+
+
 def step_full_stack_tb_gen(project: Path,
                            top_name: str = "chip_top") -> StepResult:
     """v1.6.88 (#20 Bug 3 P0 BLOCKER) — synthesise a chip-AGNOSTIC
@@ -7416,9 +7581,14 @@ def step_full_stack_tb_gen(project: Path,
         "// Opcodes come from L3_CMD_PROTOCOL.json (chip-AGNOSTIC).",
         "`timescale 1ns / 1ps",
         f"module tb_{top_module}_full;",
+        # These two are the LEGACY stimulus regs, kept because a DUT whose
+        # ports really are named `clk` / `reset_n` binds straight to them (the
+        # port loop below skips those two names for exactly that reason). The
+        # clock generator is NOT emitted here any more: it is emitted after the
+        # declarations, bound to the port this DUT actually clocks on. See the
+        # block comment on `_fs_tb_resolve_clock_reset`.
         "  reg clk = 0;",
         "  reg reset_n = 0;",
-        "  always #10 clk = ~clk;  // 50 MHz default",
     ]
 
     # Collect declarations + instantiation lines. We avoid colliding
@@ -7494,6 +7664,38 @@ def step_full_stack_tb_gen(project: Path,
             inst_args.append(f"    .{nm}({nm})")
 
     lines.extend(decl_lines)
+
+    # THE CLOCK GENERATOR, BOUND TO THE PORT THIS DUT ACTUALLY CLOCKS ON.
+    # Emitted here, after the declarations, so the reg it drives is already
+    # declared. See `_fs_tb_resolve_clock_reset` for what this closes.
+    _fs_inputs = [(p.get("name", "").strip(), _v643_width_decl(p))
+                  for p in top_ports
+                  if isinstance(p, dict)
+                  and (p.get("name") or "").strip()
+                  and _v643_legal_verilog_id((p.get("name") or "").strip())
+                  and (p.get("direction") or p.get("mode") or "input").lower()
+                  == "input"
+                  and not _v643_is_power_pin(p, (p.get("name") or "").strip())]
+    _fs_ck = _fs_tb_resolve_clock_reset(project, top_module, gd, _fs_inputs)
+    _fs_clk = _fs_ck["clock"]
+    _fs_rst = _fs_ck["reset"]
+    lines.append("")
+    if _fs_clk:
+        lines.append(f"  // Free-running DUT clock on `{_fs_clk}` "
+                     f"(resolved from {_fs_ck['clock_source']}).")
+        lines.append(f"  always #10 {_fs_clk} = ~{_fs_clk};  // 50 MHz default")
+    else:
+        # NOT a silent fallback. `clk` is toggled so the file still carries a
+        # clock generator, and the header says in as many words that it reaches
+        # no DUT port — because a TB that cannot start its DUT must not look
+        # like one that did.
+        lines.append("  // NO DUT CLOCK PORT RESOLVED — neither the L8 clock "
+                     "contract nor the port-name grammar named a single-bit "
+                     "input of this DUT.")
+        lines.append("  // The generator below drives the TB-local `clk` and "
+                     "reaches NO DUT port: any sequential logic in this DUT is "
+                     "UNEXERCISED by this testbench.")
+        lines.append("  always #10 clk = ~clk;  // 50 MHz default (TB-local)")
     # v1.6.269 (#127) — emit a single-wire pad alias so the
     # bit_level_full_stack_tb_check gate's pad regex
     # (acc_id|sda|single_wire|pad_io|pad_id|id_pin) matches. Aliases
@@ -7523,6 +7725,39 @@ def step_full_stack_tb_gen(project: Path,
         lines.append("`endif")
     lines.append("  );")
     lines.append("")
+    # ---- firmware-backed external memory binding --------------------------
+    # A design whose stimulus channel is neither an inout pad nor an L3 opcode
+    # stream nor a register-map bus previously got a TB in which every ordinary
+    # input kept `= 0` for the whole run. For a core fed from external memory
+    # that is not a weak TB — it is one that cannot start the DUT. When the DUT
+    # exposes a memory port AND the design staged a firmware image, bind them.
+    # Purely ADDITIVE: the read-data port is already declared `reg` above.
+    _fs_memgrp = _fsmb.resolve_memory_port_group(top_ports)
+    _fs_fw = _fsmb.find_firmware(project)
+    _fs_mem_bound = bool(
+        _fs_memgrp and _fs_memgrp.get("depth") and _fs_fw and _fs_clk)
+    # STAGE BEFORE EMITTING. `$readmemh` resolves against the SIMULATOR's cwd,
+    # not the TB's directory, so an image that was never staged makes the model
+    # load nothing and the memory read as zeros — indistinguishable from having
+    # no firmware at all. If staging fails the binding is REFUSED and the TB
+    # says so; a model that silently loads nothing is never emitted.
+    _fs_fw_staged: List[str] = []
+    _fs_stage_failed = False
+    if _fs_mem_bound:
+        _fs_fw_staged = _fsmb.stage_firmware_for_sim(project, _fs_fw)
+        if _fs_fw_staged:
+            lines.extend(
+                _fsmb.emit_memory_model_lines(_fs_memgrp, _fs_fw, _fs_clk))
+            lines.append("")
+        else:
+            _fs_mem_bound = False
+            _fs_stage_failed = True
+            lines.append("  // FIRMWARE BINDING REFUSED — the staged image "
+                         f"'{_fs_fw['image_name']}' could not be placed in any "
+                         "simulation working directory, so a memory model here "
+                         "would load nothing and read as all-zero. No model is "
+                         "emitted; the DUT's data inputs are UNDRIVEN.")
+            lines.append("")
     # Bit-time delay constant — bit_level_full_stack_tb_check expects
     # either `#<n>;` or `#T_BIT` in the body.
     lines.append("  // v1.6.269 — bit-time / opcode driver (chip-AGNOSTIC).")
@@ -7553,9 +7788,17 @@ def step_full_stack_tb_gen(project: Path,
     lines.append("")
     lines.append("  initial begin")
     lines.append("    bit_count = 0; byte_count = 0; rx_byte = 0;")
-    lines.append("    // Reset")
-    lines.append("    reset_n = 0; #100;")
-    lines.append("    reset_n = 1; #100;")
+    if _fs_rst:
+        _a, _d = ("0", "1") if _fs_ck["reset_active_low"] else ("1", "0")
+        lines.append(f"    // Reset on `{_fs_rst}` — asserted {_a}, released "
+                     f"{_d} (polarity from {_fs_ck['reset_polarity_source']})")
+        lines.append(f"    {_fs_rst} = {_a}; #100;")
+        lines.append(f"    {_fs_rst} = {_d}; #100;")
+    else:
+        lines.append("    // NO DUT RESET PORT RESOLVED — the TB-local "
+                     "`reset_n` below reaches no DUT port.")
+        lines.append("    reset_n = 0; #100;")
+        lines.append("    reset_n = 1; #100;")
     lines.append("    // v1.6.269 — drive ≥3 distinct opcodes from L3 (chip-AGNOSTIC)")
     for op in opcodes_hex[:5]:
         try:
@@ -7564,7 +7807,17 @@ def step_full_stack_tb_gen(project: Path,
             continue
         lines.append(f"    drive_byte(8'h{v:02X}); byte_count = byte_count + 1;")
         lines.append("    #1; // inter-opcode gap")
-    lines.append("    #1000;")
+    if _fs_clk:
+        # A COUNT OF THE DUT'S OWN CYCLES, not a wall-clock delay: `#1000`
+        # means a different number of cycles at every period, and at a slow
+        # one it means almost none. Bounded, so this cannot become a hang.
+        _fs_cycles = (_FS_TB_FIRMWARE_RUN_CYCLES if _fs_mem_bound
+                      else _FS_TB_RUN_CYCLES)
+        lines.append(f"    // Run the DUT for {_fs_cycles} of its own "
+                     f"clock cycles after reset release.")
+        lines.append(f"    repeat ({_fs_cycles}) @(posedge {_fs_clk});")
+    else:
+        lines.append("    #1000;")
     lines.append("    $display(\"FULL_STACK_TB_DONE bytes=%0d bits=%0d\","
                  " byte_count, bit_count);")
     lines.append("    $finish;")
@@ -7667,6 +7920,65 @@ def step_full_stack_tb_gen(project: Path,
                        "oracle. " if no_command_protocol else "")
                     + "chip-AGNOSTIC.")},
         )
+        # THE STIMULUS BINDING, ON THE RECORD. A reader of results.json can
+        # now tell a TB that clocks its DUT from one that does not, without
+        # opening the .v — and the UNRESOLVED case is a stated fact rather
+        # than a silence that reads like success.
+        # WHICH CHANNEL ACTUALLY DROVE THE DUT'S DATA INPUTS. The clock record
+        # above says the design was clocked; it does not say anything was fed
+        # to it. A TB that clocked a core whose every data input sat at its
+        # initial value is not a weak test of the design — it is a test of the
+        # stimulus, and the record now says which case this is.
+        _fs_driven = set()
+        if _fs_mem_bound:
+            _fs_channel = "firmware_memory"
+            _fs_driven = {_fs_memgrp.get("rdata")} - {None}
+        elif inout_names:
+            _fs_channel = "inout_pad"
+            _fs_driven = set(inout_names)
+        elif _rm_info:
+            _fs_channel = "register_map"
+        else:
+            _fs_channel = "none"
+        # `_fs_inputs` is a list of (name, width_decl) pairs.
+        _fs_data_inputs = {nm for nm, _w in _fs_inputs if nm}
+        _fs_data_inputs -= {_fs_ck["clock"], _fs_ck["reset"], None, ""}
+        _fs_undriven = _fs_data_inputs - _fs_driven
+        _fs_reason = ""
+        if _fs_channel == "none":
+            _fs_reason = "; ".join(filter(None, [
+                "no inout pad in the port list" if not inout_names else "",
+                "no opcodes declared by L3" if not opcodes_hex else "",
+                "no register-map transaction vectors" if not _rm_info else "",
+                ("no external memory port resolved from the port list"
+                 if not _fs_memgrp else
+                 (_fs_memgrp.get("refused") or
+                  "a memory port resolved but the design staged no firmware "
+                  "image under input/firmware/")),
+            ])) or "no stimulus channel resolved"
+        results["stimulus_binding"] = {
+            **_fsmb.describe_stimulus_binding(
+                _fs_channel, group=_fs_memgrp, fw=_fs_fw,
+                undriven_inputs=_fs_undriven, reason=_fs_reason),
+            "firmware_staged_to": _fs_fw_staged,
+            "firmware_staging_failed": _fs_stage_failed,
+            "clock_port": _fs_ck["clock"],
+            "clock_port_source": _fs_ck["clock_source"],
+            "reset_port": _fs_ck["reset"],
+            "reset_active_low": _fs_ck["reset_active_low"],
+            "reset_polarity_source": _fs_ck["reset_polarity_source"],
+            "dut_is_clocked_by_this_tb": bool(_fs_ck["clock"]),
+            "run_cycles_after_reset": (
+                (_FS_TB_FIRMWARE_RUN_CYCLES if _fs_mem_bound
+                 else _FS_TB_RUN_CYCLES) if _fs_ck["clock"] else None),
+            "note": (
+                "the TB drives the DUT's own clock port"
+                if _fs_ck["clock"] else
+                "NO DUT clock port resolved — this TB toggles a TB-local reg "
+                "that reaches no DUT port, so every sequential element in the "
+                "DUT is UNEXERCISED and any coverage measured on it is "
+                "coverage of a design that never ran"),
+        }
         # ORGANIC #186 part 2 — publish the register-map coverage denominator
         # alongside the numerator so a thin oracle can never read as a full
         # one: how many registers the documents declare, how many are readable
@@ -8076,7 +8388,7 @@ def _v713_mk_include_dirs(project: Path) -> List[Path]:
     return out
 
 
-# v1.14.71 — frontend-ladder reporting helpers.
+# v1.14.72 — frontend-ladder reporting helpers.
 _LADDER_EXHAUSTED_NOTE = (
     "\n\n| FRONTEND_LADDER_EXHAUSTED: this verdict is the VERILATOR "
     "(SV-2017) elaboration, which is the frontend that got furthest — not the "
@@ -8116,7 +8428,7 @@ def _verilator_escape_was_reached(vrc: int, vout: str, verr: str) -> bool:
             or "verilator" in lowered)
 
 
-# v1.14.71 — name the frontend that actually produced the verdict.
+# v1.14.72 — name the frontend that actually produced the verdict.
 # The message hardcoded "iverilog rc=..." even when the verdict came from the
 # verilator SV-2017 escape at the end of the frontend ladder, so a report could
 # attribute one tool's elaboration rejection to a different tool that had
@@ -8301,7 +8613,7 @@ def _iverilog_compile_with_sv_fallback(
                 rtl_files, tb_path, run_dir, container, top_name, _vl_reason)
             if vrc == 0:
                 return vrc, vout, verr, vfe
-            # v1.14.71 — REPORT THE FRONTEND THAT GOT FURTHEST, not the first.
+            # v1.14.72 — REPORT THE FRONTEND THAT GOT FURTHEST, not the first.
             # When the ladder exhausts, returning rung 1's error attributes a
             # KNOWN frontend limitation to the design. Measured: iverilog said
             # `aes_pkg.sv:19: syntax error / I give up.` — the SystemVerilog
