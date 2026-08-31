@@ -79,7 +79,8 @@ DETECTION RULES (documented so they are auditable)
 --------------------------------------------------
 * Acceptance section: the first markdown heading whose text matches
   `## 驗收` or contains the word "acceptance" (case-insensitive), up to the
-  next same-or-higher-level heading or EOF.
+  next same-or-higher-level heading or EOF. Heading-shaped lines inside
+  fenced code blocks are ignored.
 * Command/criterion lines extracted from that section:
     - lines inside fenced code blocks (```...```), one command per line;
     - inline-code spans (`...`) that look like a shell command
@@ -236,6 +237,10 @@ def _fetch_issue_comments(repo: str, issue_number: int,
 # Acceptance-section extraction
 # --------------------------------------------------------------------------
 _HEADING_RE = re.compile(r"^(#{1,6})\s+(.+?)\s*$", re.MULTILINE)
+# One shared fenced-block grammar for section, command, reopen, and output
+# extraction. Markdown-looking lines inside these spans are code, not document
+# structure.
+_FENCE_RE = re.compile(r"```[a-zA-Z0-9_+-]*\n(.*?)```", re.DOTALL)
 # Acceptance heading: literal "驗收", or the English word "acceptance"
 # anywhere in the heading text. chip-AGNOSTIC structural cue only.
 _ACCEPTANCE_HEADING_TOKEN_RE = re.compile(r"驗收|acceptance", re.IGNORECASE)
@@ -258,7 +263,15 @@ def extract_acceptance_section(body: str) -> Optional[str]:
     The section spans from an acceptance heading to the next heading of
     the same or higher level (smaller or equal '#' count), or EOF.
     """
-    headings = list(_HEADING_RE.finditer(body))
+    fenced_spans = [match.span() for match in _FENCE_RE.finditer(body)]
+
+    def _in_fence(pos: int) -> bool:
+        return any(start <= pos < end for start, end in fenced_spans)
+
+    headings = [
+        match for match in _HEADING_RE.finditer(body)
+        if not _in_fence(match.start())
+    ]
     for i, m in enumerate(headings):
         level = len(m.group(1))
         title = m.group(2)
@@ -290,7 +303,6 @@ _REOPEN_MARKER_RE = re.compile(
     r"REOPEN|RE-?OPEN|複查|反證|重開|counter[\s-]?evidence",
     re.IGNORECASE,
 )
-_FENCE_RE = re.compile(r"```[a-zA-Z0-9_+-]*\n(.*?)```", re.DOTALL)
 
 
 def _has_fenced_block(text: str) -> bool:
@@ -352,9 +364,8 @@ def extract_commands(section: str) -> Tuple[List[str], List[str]]:
     criteria: List[str] = []
 
     # 1. Fenced code blocks → every non-blank line is a command.
-    fence_re = re.compile(r"```[a-zA-Z0-9_+-]*\n(.*?)```", re.DOTALL)
     fenced_spans: List[Tuple[int, int]] = []
-    for fm in fence_re.finditer(section):
+    for fm in _FENCE_RE.finditer(section):
         fenced_spans.append((fm.start(), fm.end()))
         block = fm.group(1)
         for ln in block.splitlines():
@@ -510,8 +521,7 @@ def _has_end_state_evidence(section: str, commands: List[str]) -> bool:
     not itself one of the acceptance commands."""
     cmd_norms = {_norm_ws(c) for c in commands}
     has_fence_output = False
-    fence_re = re.compile(r"```[a-zA-Z0-9_+-]*\n(.*?)```", re.DOTALL)
-    for fm in fence_re.finditer(section):
+    for fm in _FENCE_RE.finditer(section):
         for ln in fm.group(1).splitlines():
             s = _norm_ws(ln)
             if not s:
