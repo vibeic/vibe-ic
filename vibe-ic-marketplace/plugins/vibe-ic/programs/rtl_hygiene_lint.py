@@ -4127,6 +4127,10 @@ def rule_array_reset_loop_idiom(src: str, path: str) -> List[Finding]:
 #       bits, only making the (intended) truncation explicit. (The existing
 #       Rule 15 only covers a BARE-VARREF truncation `lhs <= wider_sig;`; this
 #       adds the arithmetic-RHS case.)
+#   (c) WIDTHTRUNC — an unsigned, single-name ranged `localparam` initialized
+#       from an unsized expression. The declaration already converts the value
+#       to its own width; `--fix` makes that exact conversion explicit while
+#       preserving a canonical symbolic width (`W'(expr)` / `$clog2(N)'(expr)`).
 #
 # CORPUS-CLEAN discipline — the auto-`--fix` only ever inserts a PROVABLY
 # value-identical cast, and it fires ONLY when every guard below holds, so it can
@@ -4139,7 +4143,9 @@ def rule_array_reset_loop_idiom(src: str, path: str) -> List[Finding]:
 #     TRUNCATE if the parameter were overridden larger at instantiation, so a
 #     param-derived width is reported (advisory) but NEVER auto-cast;
 #   * the expression is the exact two-operand accumulator (`L <= L + n;`) or
-#     two-operand `*`/`%` shape — anything richer is left untouched.
+#     two-operand `*`/`%` shape; the localparam form is restricted to one
+#     unsigned name and skips casts, sized literals, concatenations and slices.
+#     Anything outside those proven shapes is left untouched.
 # The cast is idempotent (a re-run sees `12'(x)` / `8'(a*b)`, not a bare ref, so
 # it never double-wraps), and the main `--fix` path already reverts any edit that
 # stops the file compiling (the #533 compile-neutrality net). chip-AGNOSTIC:
@@ -4206,11 +4212,148 @@ def _decl_width_info(region: str,
     return info
 
 
+_RANGED_LOCALPARAM_RE = re.compile(
+    r'\blocalparam\b'
+    r'(?P<qual>(?:\s+(?:logic|bit|reg|unsigned|signed))*)\s*'
+    r'\[\s*(?P<range>[^\]]+?)\s*\]\s*'
+    r'(?P<name>[A-Za-z_]\w*)\s*=\s*'
+    r'(?P<rhs>[^;]+?)\s*;',
+    re.S,
+)
+
+
+def _strip_balanced_outer_parens(expr: str) -> str:
+    """Remove only parentheses that enclose the whole expression."""
+    out = expr.strip()
+    while out.startswith('(') and out.endswith(')'):
+        depth = 0
+        closes_at_end = False
+        for idx, ch in enumerate(out):
+            if ch == '(':
+                depth += 1
+            elif ch == ')':
+                depth -= 1
+                if depth < 0:
+                    return out
+                if depth == 0:
+                    closes_at_end = idx == len(out) - 1
+                    break
+        if not closes_at_end:
+            break
+        out = out[1:-1].strip()
+    return out
+
+
+def _is_balanced_clog2(expr: str) -> bool:
+    """True only for one complete `$clog2(...)` expression."""
+    m = re.match(r'^\$clog2\s*\(', expr)
+    if not m or not expr.endswith(')'):
+        return False
+    open_at = expr.find('(', m.start())
+    depth = 0
+    for idx in range(open_at, len(expr)):
+        ch = expr[idx]
+        if ch == '(':
+            depth += 1
+        elif ch == ')':
+            depth -= 1
+            if depth < 0:
+                return False
+            if depth == 0:
+                return idx == len(expr) - 1
+    return False
+
+
+def _ranged_localparam_cast_width(range_expr: str) -> Optional[str]:
+    """Return the declaration width for the issue-1946 safe range subset.
+
+    Accepted forms are literal `[H:L]`, canonical `[WIDTH-1:0]`, and canonical
+    `[$clog2(...)-1:0]`. Symbolic spellings are retained instead of baking in a
+    current parameter value, so instance overrides remain safe.
+    """
+    if range_expr.count(':') != 1:
+        return None
+    hi, lo = (part.strip() for part in range_expr.split(':', 1))
+    if re.fullmatch(r'\d+', hi) and re.fullmatch(r'\d+', lo):
+        return str(abs(int(hi) - int(lo)) + 1)
+    if lo != '0':
+        return None
+    minus_one = re.fullmatch(r'(.+?)\s*-\s*1', hi, re.S)
+    if not minus_one:
+        return None
+    width = minus_one.group(1).strip()
+    if re.fullmatch(r'[A-Za-z_]\w*', width):
+        return width
+    if _is_balanced_clog2(width):
+        return width
+    return None
+
+
+def _localparam_rhs_is_excluded(rhs: str) -> bool:
+    """Apply the issue-1946 fail-safe exclusions to one initializer."""
+    if not rhs or ',' in rhs:
+        return True                    # empty / comma-list declaration
+    core = _strip_balanced_outer_parens(rhs)
+    # An existing size/type cast already makes the conversion explicit.
+    if re.match(
+            r"^(?:\d+|[A-Za-z_$][\w$]*|\$clog2\s*\([^;]+\))\s*'\s*\(",
+            core):
+        return True
+    # A self-sized literal, concatenation, or bit/part select already carries
+    # an explicit width/selection. Do not second-guess it.
+    literal = core[1:].strip() if core[:1] in {'+', '-'} else core
+    if _SIZED_LITERAL_RE.fullmatch(literal):
+        return True
+    if core.startswith('{') and core.endswith('}'):
+        return True
+    if '[' in core or ']' in core:
+        return True
+    return False
+
+
+def _ranged_localparam_width_cast_sites(region: str, region_offset: int,
+                                         src: str) -> List[Dict]:
+    """Find value-identical ranged-localparam width casts (issue #1946)."""
+    sites: List[Dict] = []
+    # Prevent a diagnostic string such as `$display("localparam [W-1:0] ...")`
+    # from becoming an edit site. The mask is length-preserving, so all spans
+    # still address `region` / raw source exactly.
+    scan = _mask_comments_and_strings(region)
+    for m in _RANGED_LOCALPARAM_RE.finditer(scan):
+        qual = m.group('qual') or ''
+        if re.search(r'\bsigned\b', qual):
+            continue
+        cast_width = _ranged_localparam_cast_width(m.group('range'))
+        if cast_width is None:
+            continue
+        rhs_field = region[m.start('rhs'):m.end('rhs')]
+        rhs = rhs_field.strip()
+        if _localparam_rhs_is_excluded(rhs):
+            continue
+        leading = len(rhs_field) - len(rhs_field.lstrip())
+        trailing = len(rhs_field) - len(rhs_field.rstrip())
+        start = region_offset + m.start('rhs') + leading
+        end = region_offset + m.end('rhs') - trailing
+        name = m.group('name')
+        sites.append({
+            'kind': 'localparam', 'symbol': name,
+            'line': src.count('\n', 0, start) + 1,
+            'span': (start, end), 'repl': f"{cast_width}'({rhs})",
+            'fixable': True,
+            'msg': (f"unsigned ranged localparam `{name}` implicitly converts "
+                    f"its unsized initializer to `{cast_width}` bits "
+                    f"(verilator WIDTHTRUNC). --fix inserts the value-identical "
+                    f"cast `{cast_width}'({rhs})`."),
+        })
+    return sites
+
+
 def _width_cast_sites(src: str) -> List[Dict]:
     """Return the list of width-cast SITES (both the auto-fixable subset and the
     advisory-only remainder) across every module region. Each site is a dict:
 
-        {kind: 'expand'|'trunc', symbol, line, span: (start, end) in `src`,
+        {kind: 'expand'|'trunc'|'localparam', symbol, line,
+         span: (start, end) in `src`,
          repl: replacement text, fixable: bool, msg}
 
     `span` indexes the comment-stripped `src`, whose offsets equal the raw file's
@@ -4223,6 +4366,7 @@ def _width_cast_sites(src: str) -> List[Dict]:
     gconsts = _global_param_consts(src)
     for _mname, mlo, mhi in _module_regions(src):
         region = src[mlo:mhi]
+        sites.extend(_ranged_localparam_width_cast_sites(region, mlo, src))
         info = _decl_width_info(region, gconsts)
         if not info:
             continue
@@ -4317,9 +4461,12 @@ def rule_width_expand_trunc(src: str, path: str) -> List[Finding]:
         if s['span'] in seen:
             continue
         seen.add(s['span'])
-        f = Finding(path, s['line'], 'WARN',
-                    'width-expand' if s['kind'] == 'expand'
-                    else 'width-trunc-arith', s['symbol'], s['msg'])
+        rule = {
+            'expand': 'width-expand',
+            'trunc': 'width-trunc-arith',
+            'localparam': 'width-trunc-localparam',
+        }[s['kind']]
+        f = Finding(path, s['line'], 'WARN', rule, s['symbol'], s['msg'])
         findings.append(_advisory(f, _prov.PROSE_HEURISTIC,
                                   _prov.NO_CORROBORATION))
     return findings
@@ -4427,7 +4574,8 @@ def autofix_width_cast(p: Path) -> Tuple[int, List[str]]:
     place: insert a value-IDENTICAL size cast that silences verilator
     WIDTHEXPAND/WIDTHTRUNC without changing behaviour. Edits are spliced into the
     RAW text right-to-left (so earlier offsets stay valid) and only the `fixable`
-    subset (unsigned + pure-literal widths) is touched. Returns (count, labels).
+    subset (unsigned + pure-literal signal widths, or the narrowly parsed
+    ranged-localparam forms) is touched. Returns (count, labels).
     No-op (0, []) when nothing is fixable. The caller's #533 compile-neutrality
     net reverts the whole file if any edit stops it compiling."""
     raw = p.read_text(errors='replace')
