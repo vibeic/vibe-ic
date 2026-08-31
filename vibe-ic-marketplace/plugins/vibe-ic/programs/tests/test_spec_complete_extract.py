@@ -7,6 +7,7 @@ param table, param-expression widths, log2ceil, clk/rst/1-bit conventions) appli
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import sys
 from pathlib import Path
@@ -77,6 +78,59 @@ def test_skeleton_iface_passthrough():
     assert spec["interface"] == sk and spec["completeness"] == "COMPLETE"
 
 
+#: The census record — WHICH records resolve COMPLETE over WHICH corpus. The
+#: expectation lives THERE, not as an integer literal here: a bare count is
+#: invariant under one record arriving and another leaving, and — the reason
+#: this file learned it the hard way — a bare count also cannot say whether the
+#: CORPUS moved or the READER moved. Both questions are answered by pinning the
+#: corpus identity beside the members it produced.
+_CENSUS = _PROG / "cvdp_complete_census_baseline.json"
+
+_CVDP_RELPATH = ("_extbench/cvdp_open_v110/"
+                 "cvdp_v1.1.0_nonagentic_code_generation_no_commercial.jsonl")
+
+
+def _cvdp_corpus():
+    """(records, census) over the pinned corpus — or an explicit failure saying
+    WHICH dimension moved.
+
+    The dataset is external and not version-controlled, so "the count changed"
+    is two different events wearing one face. This separates them BEFORE any
+    census assertion runs: a byte/record-count mismatch is reported as a corpus
+    event, and the member comparison — which would be meaningless over other
+    bytes — is never reached. It is a FAILURE and not a skip on purpose: a
+    silent skip here is the shape that lets a real regression land green.
+    """
+    ds = require_corpus(_CVDP_RELPATH)
+    if not ds.exists():
+        pytest.skip("dataset not present")
+    census = json.loads(_CENSUS.read_text())
+    pinned = census["corpus"]
+    blob = ds.read_bytes()
+    recs = [json.loads(l) for l in blob.decode().splitlines() if l.strip()]
+    got = (hashlib.sha256(blob).hexdigest(), len(recs))
+    want = (pinned["sha256"], pinned["records"])
+    assert got == want, (
+        f"THE CORPUS MOVED, not the reader chain. {ds} is sha256={got[0]} with "
+        f"{got[1]} records; {_CENSUS.name} was measured against sha256={want[0]} "
+        f"with {want[1]}. Every census assertion below is a claim about THOSE "
+        f"bytes and is not applicable to these. Re-derive the record against the "
+        f"new corpus and argue the delta in it — do NOT edit a number to match.")
+    return recs, census
+
+
+def _is_degenerate(spec) -> bool:
+    """Does this verdict describe a module with nothing coming IN, or nothing
+    going OUT?
+
+    Structural and name-free: it asks the SHAPE of the recovered interface and
+    never which design it belongs to, so it applies to a corpus it has never
+    seen. `inout` satisfies both directions.
+    """
+    dirs = {p.get("dir") for p in spec.get("interface", [])}
+    return not (dirs & {"input", "inout"}) or not (dirs & {"output", "inout"})
+
+
 def test_cvdp_adapter_complete_count_is_prompt_context_only():
     """The CVDP adapter reads ONLY input.prompt + input.context (§4.05 compliance:
     the model sees only the submitter-visible spec; the hidden cocotb `dut.<sig>`
@@ -97,12 +151,10 @@ def test_cvdp_adapter_complete_count_is_prompt_context_only():
         (Verilog keywords mis-parsed as port names); the reserved-word guard drops
         them, so its honest verdict is now INCOMPLETE_SPEC_ABSENT.
     Both moves are pure prompt+context correctness — no harness read."""
-    ds = require_corpus("_extbench/cvdp_open_v110/"
-                        "cvdp_v1.1.0_nonagentic_code_generation_no_commercial.jsonl")
-    if not ds.exists():
-        pytest.skip("dataset not present")
-    recs = [json.loads(l) for l in ds.read_text().splitlines()]
-    comp = sum(1 for r in recs if C.extract(r)["completeness"] == "COMPLETE")
+    recs, census = _cvdp_corpus()
+    measured = {r["id"] for r in recs
+                if C.extract(r)["completeness"] == "COMPLETE"}
+    pinned = set(census["complete_ids"])
     # ORGANIC-20260705: the v1.2.96 harness-read removal replaced the oracle
     # interface path with `_table_interface` (test-case tables) + `_prose_ports`
     # ONLY, silently dropping two common PROMPT interface forms — the markdown
@@ -130,9 +182,94 @@ def test_cvdp_adapter_complete_count_is_prompt_context_only():
     # parsed out of a results-table header, given a fake width so the record
     # could score complete). 226 is the honest count. Kept EXACT, not relaxed to
     # `>=`, so the next drift is caught the same way this one was.
-    assert comp == 226, f"CVDP COMPLETE (prompt+context only) drifted to {comp}"
+    #
+    # 226 -> 233 (2026-08-26, commit 11bb1cde7, "the four clusters' fixes, and
+    # the corpus number the reader chain actually earns"). THE CORPUS DID NOT
+    # MOVE. This is the entry that changed the SHAPE of the expectation, so it
+    # is worth stating why. The red read as "the corpus grew" — and one record
+    # really did grow, `data_bus_controller_0001` gaining `m1_ready`/`s_ready`.
+    # But it is COMPLETE on BOTH arms and contributes ZERO to the delta: it
+    # gained those ports from the NEW PROSE READER, over the same bytes. The
+    # two-arm control settles it — the identical on-disk dataset scores 226
+    # under the `fe27b28b7` tree and 233 under this one, so the code moved and
+    # the corpus is a constant. 11bb1cde7 measured both arms in its own commit
+    # message (226/3/73 vs 233/3/66) and moved the number THERE but not here,
+    # which is how main was left red for five days.
+    #
+    # The number is therefore no longer typed in this file. It is
+    # `len(census["complete_ids"])` over `cvdp_complete_census_baseline.json`,
+    # which pins the CORPUS IDENTITY beside the MEMBERS it produced — the two
+    # facts whose absence made this red unreadable. The arrivals (7, and 0
+    # departures — a strict superset) are adjudicated there, 5 earned and 2 not;
+    # the 2 that are not earned are held by
+    # `test_cvdp_complete_verdict_is_never_degenerate` below, because a count
+    # cannot tell a recovery-improvement from a recovery-regression and this one
+    # was both at once.
+    #
+    # RATCHET — EXACT SET, both directions, deliberately NOT `>=`. This
+    # population is not monotone-up and must not be made so: 228 -> 226 was an
+    # honest DROP that removed two false COMPLETEs, and repairing the two
+    # quarantined records would honestly drop 233 -> 231. `>=` would have let
+    # every one of those bugs ride.
+    missing = sorted(pinned - measured)
+    extra = sorted(measured - pinned)
+    assert measured == pinned, (
+        f"CVDP COMPLETE (prompt+context only) is {len(measured)}; the census "
+        f"record pins {len(pinned)}. Records the record expects that this tree "
+        f"no longer resolves ({len(missing)}): {missing}; records this tree "
+        f"resolves that the record does not know ({len(extra)}): {extra}. The "
+        f"corpus is already proven identical, so this is the READER CHAIN. "
+        f"Adjudicate each id from input.prompt only (§4.05) and re-derive "
+        f"{_CENSUS.name} — a count edited to match is not a measurement.")
     # §4.05: the cocotb harness signal-set block is NO LONGER re-attached; the
     # supplied (prompt+context) interface is echoed in `interface_source` instead.
     s = C.extract(recs[0])
     assert "harness" not in s, "the OFF-LIMITS cocotb harness block must not be re-attached"
     assert "interface_source" in s
+
+
+def test_cvdp_complete_verdict_is_never_degenerate():
+    """A COMPLETE verdict must describe a module someone could actually write.
+
+    The count above cannot express this. It rose 226 -> 233 while carrying, in
+    the same move, two records that score COMPLETE on an interface with nothing
+    coming in or nothing going out: a decoder recovered as `{i_clk, i_rstb}` —
+    clock and reset, zero outputs, while its prompt declares `i_binary_in` and
+    `o_one_hot_out` WITH widths — and a GCD recovered as one output and no
+    inputs. Both are prompt-stated facts that were missed, i.e.
+    INCOMPLETE_EXTRACTION_GAP, not COMPLETE. A count is blind to the difference
+    between recovery-improvement and recovery-regression, and 226 -> 233 was
+    both at once: +5 earned, +2 not.
+
+    So the count is paired with a floor on the SHAPE of what it counts. The
+    floor is structural and name-free (see `_is_degenerate`) and it is a
+    QUARANTINE, not a licence: the record lists the 3 known-degenerate ids with
+    the reason each is wrong, MAY ONLY SHRINK, and the target is 0. Repairing
+    the reader chain is a behaviour change with its own corpus-sweep acceptance
+    burden — it would move 233 -> 231 — and is deliberately NOT folded into a
+    criterion fix. What this test guarantees meanwhile is that the number can
+    never again ratchet a new false COMPLETE in silently.
+    """
+    recs, census = _cvdp_corpus()
+    quarantined = set(census["degenerate_complete"]["ids"])
+    measured = set()
+    for r in recs:
+        s = C.extract(r)
+        if s["completeness"] == "COMPLETE" and _is_degenerate(s):
+            measured.add(r["id"])
+    arrived = sorted(measured - quarantined)
+    assert not arrived, (
+        f"NEW false COMPLETE ({len(arrived)}): {arrived}. Each scores COMPLETE "
+        f"on an interface with no input or no output, so no module can be "
+        f"written from it. Either the reader chain regressed, or the verdict "
+        f"is right and `_is_degenerate` is too coarse for a shape this corpus "
+        f"has now grown — argue which in {_CENSUS.name}. This quarantine may "
+        f"only SHRINK; adding a row to make this pass is the failure it exists "
+        f"to catch.")
+    departed = sorted(quarantined - measured)
+    assert not departed, (
+        f"{_CENSUS.name} is STALE: {departed} no longer score COMPLETE on a "
+        f"degenerate interface. That is the outcome this quarantine wants — "
+        f"delete the row(s) so the record states what is true. Reported as a "
+        f"failure and not passed over so the floor cannot drift upward by "
+        f"accumulating rows nothing measures.")
