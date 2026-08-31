@@ -69,6 +69,26 @@ therefore NO independent oracle that could accept a repair for this class, and
 the gate's own condition is trivially satisfiable by flipping a reset literal.
 See `why_not_bucket_a` in NOT_REPAIRABLE below.
 
+`edge-history-reset-to-constant` — a history register whose reset arm assigns a
+CONSTANT while an edge term over (sig, prev) exists, so the edge fires on a
+transition that never happened the moment reset releases. Its gate,
+`edge_history_reset_phantom_check`, NAMES a transform (`prev <= sig` in the reset
+arm) and still cannot be Bucket A, for a reason its own sweep measured rather
+than argued: what separates a defect from a correct synchroniser is whether
+`sig` can be HIGH at the instant reset releases, and that lives in the STIMULUS,
+not in the RTL either program is handed. That gate's recorded sweep fires on 7
+of 57 known-failing drafts AND on 9 of 302 known-passing deliveries, and it
+names two designs on OPPOSITE sides of that split that are structurally
+identical — so the split is not decidable from the text, no oracle here can
+accept a candidate, and the class routes to the author.
+
+THIS IS THE ROUTER, NOT THE EMIT GATE, and that is what makes the wiring
+admissible. `ESCALATE`/rc 1 here discards nothing and refuses no delivery — it
+says a defect stands unrepaired and names who decides. A signature with a
+measured false-fire rate may therefore reach THIS verdict, where it may not
+reach an emit gate's BLOCK or `step_determinism_gates`' FAIL list (§4.05: a
+false BLOCK is irreversible; a false ESCALATE costs one author one look).
+
 chip-AGNOSTIC: the logic reads a spec string and an RTL string. It contains no
 benchmark record format, no design name, and no expected value.
 
@@ -116,6 +136,33 @@ NOT_REPAIRABLE: Dict[str, Dict[str, str]] = {
             "agents/lessons/ic_expert_L9 (RTL authoring craft) — author the "
             "level-decode form from the spec's divisor rather than patching "
             "the self-toggle form after the fact.",
+    },
+    "edge-history-reset-to-constant": {
+        "gate": "edge_history_reset_phantom_check",
+        "why_not_bucket_a":
+            "The gate NAMES the transform — `prev <= sig` in the reset arm — so "
+            "unlike the divider class above the candidate is not the obstacle. "
+            "The ACCEPTANCE is. The property the gate stands for is 'an edge "
+            "fires at reset release on a transition that never happened', and "
+            "whether it does depends on the value of `sig` at that instant, "
+            "which is a fact about the STIMULUS and not about the RTL. No "
+            "spec-derived oracle can supply it: a self-testbench that drives "
+            "`sig` low out of reset PASSES the defect and one that drives it "
+            "high FAILS the correct synchroniser, so the oracle would be "
+            "measuring its own arbitrary choice. The gate's own sweep is the "
+            "evidence, not an argument: 7 of 57 known-failing drafts and 9 of "
+            "302 known-passing deliveries fire, and the author tried to narrow "
+            "it structurally and the data refused — that sweep names two "
+            "designs on opposite sides of the split that are structurally "
+            "identical. Applying the transform on that basis would rewrite nine "
+            "correct designs to make a pattern stop matching, which is the "
+            "exact failure mode this module's invariant exists to refuse.",
+        "escalate_to":
+            "the RTL author (and agents/lessons/ic_expert_L9, RTL authoring "
+            "craft) — decide from the STIMULUS whether `sig` can be high when "
+            "reset releases; if it can, reset the history register as "
+            "`prev <= sig` and discard the first measured interval after reset "
+            "before any threshold verdict.",
     },
 }
 
@@ -492,6 +539,39 @@ def repair(rtl: str, spec: str) -> dict:
             res.update(verdict="ESCALATE", defect="clock-divider-phase-form",
                        evidence={"gate": info["gate"],
                                  "finding": pf["findings"][0]},
+                       why_not_bucket_a=info["why_not_bucket_a"],
+                       escalate_to=info["escalate_to"])
+            return res
+    except Exception:
+        pass
+
+    # ── non-repairable class: a history register reset to a CONSTANT.
+    # Ordered AFTER the divider branch deliberately: that class was here first
+    # and its routing must not change. A design that trips both is reported as
+    # the divider, unchanged from before this branch existed.
+    #
+    # This is the one consumer whose VERDICT this gate can honestly move.
+    # `edge_history_reset_phantom_check` emits WARN and only WARN, so
+    # `cvdp_gate._structural_finding_gate` (which blocks on ERROR) is provably
+    # invariant under it, and `step_determinism_gates`' FAIL list is closed to a
+    # signature with a measured false-fire rate. ESCALATE is neither: it refuses
+    # no delivery and rewrites no RTL, it names an unrepaired defect and routes
+    # it to whoever holds the missing evidence. See NOT_REPAIRABLE above.
+    try:
+        import edge_history_reset_phantom_check as _ehr
+        _findings, _ = _ehr.check_text(rtl)
+        if _findings:
+            info = NOT_REPAIRABLE["edge-history-reset-to-constant"]
+            f0 = _findings[0]
+            res.update(verdict="ESCALATE",
+                       defect="edge-history-reset-to-constant",
+                       evidence={"gate": info["gate"],
+                                 "finding": {"rule": f0.rule,
+                                             "severity": f0.severity,
+                                             "symbol": f0.symbol,
+                                             "line": f0.line,
+                                             "message": f0.message},
+                                 "further_findings": len(_findings) - 1},
                        why_not_bucket_a=info["why_not_bucket_a"],
                        escalate_to=info["escalate_to"])
             return res

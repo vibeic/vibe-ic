@@ -4256,7 +4256,36 @@ def step_determinism_gates(project: Path, top_name: str = "") -> StepResult:
 
     A fired gate is a real determinism bug → FAIL (an RTL repair point),
     exactly what
-    the benchmark path blocks emit on; both gates self-skip otherwise."""
+    the benchmark path blocks emit on; both gates self-skip otherwise.
+
+    ONE ADVISORY MEMBER, AND IT MAY NEVER JOIN THE FOUR ABOVE
+    ----------------------------------------------------------
+    `edge_history_reset_phantom_check` runs here too — a history register whose
+    reset arm assigns a CONSTANT while an edge term over (sig, prev) exists
+    fabricates an edge the moment reset releases, which arms counters and starts
+    intervals over a measurement window that does not exist. Until this wiring
+    NOTHING in the tree ran it: the rule was distilled from a blind failure,
+    specified, shipped as a program, and the same design then failed again by
+    the identical mechanism because no dispatch consulted the program.
+
+    It is ADVISORY HERE AND CANNOT MOVE THIS STEP'S PASS/FAIL, and the reason is
+    a measurement rather than caution. The four gates above are zero-false-
+    positive by construction; this signature is not — it fires on 7 of 57
+    genuinely-failing blind drafts AND on 9 of 302 officially-PASSING
+    deliveries, and the two sides cannot be separated structurally
+    (`edge_detector_0001` passes, `clock_jitter_detection_module` fails, and
+    they are IDENTICAL in shape). What separates them is whether `sig` can be
+    HIGH when reset releases, which lives in the stimulus. A determinism FAIL
+    refuses the phase-2 verdict, so a signature with that false-fire rate may
+    not produce one.
+
+    Its verdict is therefore ROUTED rather than raised: the finding is handed to
+    `gate_directed_rtl_repair`, whose `edge-history-reset-to-constant` entry
+    decides ESCALATE (no oracle can accept a repair) and names who holds the
+    missing evidence. That router's verdict DOES change on this checker in both
+    directions — ESCALATE/rc 1 on the constant reset arm, NOT_APPLICABLE/rc 0
+    once it reads `prev <= sig` — which is the whole point of consulting it here
+    instead of printing a warning."""
     t0 = time.time()
     rtl_dir = _pl.rtl_dir(project)
     if not rtl_dir.is_dir():
@@ -4274,11 +4303,13 @@ def step_determinism_gates(project: Path, top_name: str = "") -> StepResult:
         import clock_divider_phase_form_check as _cdp  # noqa: E402
         import worked_example_sequence_oracle_check as _wex  # noqa: E402
         import clock_divider_ratio_oracle_check as _cdr  # noqa: E402
+        import edge_history_reset_phantom_check as _ehr  # noqa: E402
     except Exception as e:  # pragma: no cover — defensive import guard
         return StepResult("determinism_gates", "SKIP", time.time() - t0,
                           f"gate modules unavailable: {e}")
     spec_text = _gather_spec_text(project)
     findings: List[str] = []
+    advisories: List[Dict[str, object]] = []
     repairs: List[str] = []
     n_checked = 0
     mod_texts: Dict[str, str] = {}
@@ -4304,6 +4335,19 @@ def step_determinism_gates(project: Path, top_name: str = "") -> StepResult:
                     f"{fd['self_toggled']} is a reset-0 SELF-TOGGLE "
                     f"(phase-inverted on cycle 1). Use the level-decode form "
                     f"`clk_divK <= (cntK < N/2)`, each intermediate reset HIGH.")
+        except Exception:
+            pass
+        # ADVISORY member — phantom edge at reset release. Per FILE, like the
+        # phase-form gate above and for the same reason: a history register
+        # reset to a constant is the same defect in a submodule as in the top.
+        # The result goes to `advisories`, NEVER to `findings`: see the
+        # docstring for the sweep that forbids it moving this step's verdict.
+        try:
+            for _f in _ehr.check_text(txt)[0]:
+                advisories.append({"file": f.name, "symbol": _f.symbol,
+                                   "line": _f.line, "rule": _f.rule,
+                                   "severity": _f.severity,
+                                   "message": _f.message})
         except Exception:
             pass
     # spec WORKED-EXAMPLE oracle runs ONCE, on the TOP/DUT module ONLY. The
@@ -4379,22 +4423,71 @@ def step_determinism_gates(project: Path, top_name: str = "") -> StepResult:
         except Exception:
             pass
 
+    # ROUTE the advisory through the consumer that owns its verdict. The class
+    # is looked up in `gate_directed_rtl_repair.NOT_REPAIRABLE` rather than
+    # restated here, so deleting that entry breaks this dispatch loudly instead
+    # of leaving the step printing a routing nobody honours any more.
+    advisory_extra: Optional[Dict[str, object]] = None
+    if advisories:
+        try:
+            import gate_directed_rtl_repair as _gdr  # noqa: E402
+            _route = _gdr.NOT_REPAIRABLE["edge-history-reset-to-constant"]
+            advisory_extra = {
+                "defect": "edge-history-reset-to-constant",
+                "gate": _route["gate"],
+                # The router's own verdict for this class. It is ESCALATE for
+                # every input that reaches it, because no oracle can accept a
+                # repair — and NOT_APPLICABLE the moment the reset arm reads
+                # `prev <= sig`, which is the direction that makes this a
+                # wiring and not a label.
+                "router_verdict": "ESCALATE",
+                "blocking": False,
+                "why_advisory_here":
+                    "the signature fires on 9 of 302 officially-PASSING "
+                    "deliveries, so it may not produce a determinism FAIL; "
+                    "see gate_directed_rtl_repair.NOT_REPAIRABLE",
+                "why_not_bucket_a": _route["why_not_bucket_a"],
+                "escalate_to": _route["escalate_to"],
+                "findings": advisories,
+            }
+        except Exception:
+            advisory_extra = {"defect": "edge-history-reset-to-constant",
+                              "gate": "edge_history_reset_phantom_check",
+                              "router_verdict": "UNAVAILABLE",
+                              "blocking": False, "findings": advisories}
+    advisory_note = ""
+    if advisories:
+        advisory_note = (
+            " | ADVISORY (never changes this verdict) — phantom edge at reset "
+            "release, routed ESCALATE by gate_directed_rtl_repair: "
+            + "; ".join(f"{a['file']}:{a['line']} {a['symbol']}"
+                        for a in advisories[:4])
+            + (f" (+{len(advisories) - 4} more)" if len(advisories) > 4 else ""))
+
     if findings:
+        _extras: Dict[str, object] = {
+            "gate": "determinism_gates",
+            "source": "shape_b_sample_export.guard_export checks C/D "
+                      "(promoted to the shared phase-2 chain)"}
+        if advisory_extra:
+            _extras["edge_history_reset_advisory"] = advisory_extra
         return StepResult(
             "determinism_gates", "FAIL", time.time() - t0,
-            "; ".join(findings),
-            extras={"gate": "determinism_gates",
-                    "source": "shape_b_sample_export.guard_export checks C/D "
-                              "(promoted to the shared phase-2 chain)"})
+            "; ".join(findings) + advisory_note, extras=_extras)
     detail = (f"determinism gates clean over {n_checked} RTL file(s) "
               f"(clock-divider phase-form + worked-example oracle + "
               f"clock-divider waveform-ratio oracle; all self-skip when not "
               f"applicable)")
     if repairs:
         detail += " | gate-directed repair: " + "; ".join(repairs)
+    detail += advisory_note
+    pass_extras: Dict[str, object] = {}
+    if repairs:
+        pass_extras["gate_directed_repairs"] = repairs
+    if advisory_extra:
+        pass_extras["edge_history_reset_advisory"] = advisory_extra
     return StepResult("determinism_gates", "PASS", time.time() - t0, detail,
-                      extras={"gate_directed_repairs": repairs} if repairs
-                      else None)
+                      extras=pass_extras or None)
 
 
 def step_leaf_typo_aliases(project: Path) -> StepResult:
@@ -7983,7 +8076,7 @@ def _v713_mk_include_dirs(project: Path) -> List[Path]:
     return out
 
 
-# v1.14.63 — frontend-ladder reporting helpers.
+# v1.14.64 — frontend-ladder reporting helpers.
 _LADDER_EXHAUSTED_NOTE = (
     "\n\n| FRONTEND_LADDER_EXHAUSTED: this verdict is the VERILATOR "
     "(SV-2017) elaboration, which is the frontend that got furthest — not the "
@@ -8023,7 +8116,7 @@ def _verilator_escape_was_reached(vrc: int, vout: str, verr: str) -> bool:
             or "verilator" in lowered)
 
 
-# v1.14.63 — name the frontend that actually produced the verdict.
+# v1.14.64 — name the frontend that actually produced the verdict.
 # The message hardcoded "iverilog rc=..." even when the verdict came from the
 # verilator SV-2017 escape at the end of the frontend ladder, so a report could
 # attribute one tool's elaboration rejection to a different tool that had
@@ -8208,7 +8301,7 @@ def _iverilog_compile_with_sv_fallback(
                 rtl_files, tb_path, run_dir, container, top_name, _vl_reason)
             if vrc == 0:
                 return vrc, vout, verr, vfe
-            # v1.14.63 — REPORT THE FRONTEND THAT GOT FURTHEST, not the first.
+            # v1.14.64 — REPORT THE FRONTEND THAT GOT FURTHEST, not the first.
             # When the ladder exhausts, returning rung 1's error attributes a
             # KNOWN frontend limitation to the design. Measured: iverilog said
             # `aes_pkg.sv:19: syntax error / I give up.` — the SystemVerilog
