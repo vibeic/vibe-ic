@@ -377,31 +377,65 @@ def resolve_netlist(text: str, log_path: Path,
     return None
 
 
-def _resolve_area_unit(liberty: Optional[Path]) -> Tuple[str, Dict[str, Any]]:
+def _resolve_area_unit(liberty: Optional[Path],
+                       container: Optional[str] = None,
+                       ) -> Tuple[str, Dict[str, Any]]:
     """(`chip_area_unit`, evidence). Falls back to the unestablished sentence.
 
     Every failure path returns the SAME sentence the emitter has always
     written, so a tree with no reachable PDK produces byte-identical unit text
     to before this was added. Only a positive MEASUREMENT changes it.
+
+    LOOKS IN BOTH PLACES, host first. The Liberty the synthesis reports is
+    whatever path the tool knew, and for a PDK that ships inside the EDA image
+    that is a CONTAINER path — measured on gf180mcuD, where the host has no
+    `/foss` at all while the declared glob resolves to exactly one LEF inside
+    the image. Host first so a staged, mounted PDK costs no container call and
+    behaves exactly as before; the container is consulted only when the host
+    could not answer, and only when the caller named one.
     """
     if liberty is None:
         return _ystat.AREA_UNIT_UNESTABLISHED, {
             "established": False,
             "reason": "the synthesis did not report which library it loaded"}
     registry = Path(__file__).resolve().parent / "pdk_registry.json"
-    cell_lef, why = _aunit.resolve_from_registry(Path(liberty), registry)
-    if cell_lef is None:
-        return _ystat.AREA_UNIT_UNESTABLISHED, {
-            "established": False, "liberty": str(liberty), "reason": why}
-    rec = _aunit.derive(Path(liberty), cell_lef)
-    if not rec.get("established"):
-        return _ystat.AREA_UNIT_UNESTABLISHED, rec
-    return rec["unit"], rec
+    readers = [_aunit.HOST]
+    cr = _aunit.container_reader(container)
+    if cr is not None:
+        readers.append(cr)
+    evidence: Dict[str, Any] = {
+        "established": False, "liberty": str(liberty),
+        "reason": "no reader was consulted"}
+    for rd in readers:
+        # The WHOLE per-reader block is inside the guard, resolution and
+        # derivation both: a reader that cannot run must be RECORDED as a
+        # reader that could not run, never silently read as "not found".
+        try:
+            cell_lef, why = _aunit.resolve_from_registry(
+                Path(liberty), registry, reader=rd)
+            if cell_lef is None:
+                evidence = {"established": False, "liberty": str(liberty),
+                            "reason": why, "looked_on": rd.name}
+                continue
+            rec = _aunit.derive(Path(liberty), cell_lef, reader=rd)
+        except Exception as exc:      # a reader that raises states nothing
+            evidence = {"established": False, "liberty": str(liberty),
+                        "looked_on": rd.name,
+                        "reason": f"the lookup on {rd.name} could not run "
+                                  f"({type(exc).__name__}: {exc}), so nothing "
+                                  f"was learned about the unit here"}
+            continue
+        rec["looked_on"] = rd.name
+        if rec.get("established"):
+            return rec["unit"], rec
+        evidence = rec
+    return _ystat.AREA_UNIT_UNESTABLISHED, evidence
 
 
 def build_report(project: Path, log_path: Path,
                  netlist: Optional[Path],
                  liberty: Optional[Path] = None,
+                 container: Optional[str] = None,
                  ) -> Tuple[Optional[Dict[str, Any]], Dict[str, Any]]:
     """``liberty`` is the library the synthesis actually loaded.
 
@@ -448,7 +482,7 @@ def build_report(project: Path, log_path: Path,
     # ESTABLISH THE UNIT, OR KEEP SAYING IT IS NOT ESTABLISHED. Never assume:
     # a library this run did not load, or a cell LEF the registry cannot
     # resolve, leaves the figure exactly as unitless as it was.
-    _unit_record = _resolve_area_unit(liberty)
+    _unit_record = _resolve_area_unit(liberty, container)
     report = {
         "schema": SCHEMA,
         "netlist": _project_relative(nl, project),
@@ -536,7 +570,8 @@ def main(argv: Optional[List[str]] = None) -> int:
 
 def emit_for_run(project: Path, log_path: Path,
                  netlist: Optional[Path] = None,
-                 liberty: Optional[Path] = None) -> Optional[Path]:
+                 liberty: Optional[Path] = None,
+                 container: Optional[str] = None) -> Optional[Path]:
     """In-run entry point. Returns the artefact path, or None if refused.
 
     The artefact must be produced DURING the run: the synthesis log is a
@@ -545,7 +580,8 @@ def emit_for_run(project: Path, log_path: Path,
     in a fresh clone.
     """
     try:
-        report, _diag = build_report(project, log_path, netlist, liberty)
+        report, _diag = build_report(project, log_path, netlist, liberty,
+                                     container=container)
         if report is None:
             return None
         out = _pl.synth_dir(project) / "stats.json"

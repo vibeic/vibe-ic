@@ -90,6 +90,7 @@ from __future__ import annotations
 import fnmatch
 import json
 import re
+import shlex
 import statistics
 from pathlib import Path, PurePosixPath
 from typing import Any, Dict, List, Optional, Tuple
@@ -129,13 +130,125 @@ _LEF_SIZE_RE = re.compile(r'SIZE\s+([0-9.]+)\s+BY\s+([0-9.]+)\s*;')
 #: Found by another lane re-deriving the published count and getting 428.
 
 
-def _read(p: Optional[Path]) -> Optional[str]:
+# ── WHERE THE PDK ACTUALLY IS ────────────────────────────────────────────
+# `resolve_from_registry` recovers the search root from the Liberty it is
+# handed, and then had to look for the cell LEF on the LOCAL filesystem. For a
+# PDK that ships INSIDE the EDA image that root does not exist here at all, and
+# the refusal was published as though the registry were wrong.
+#
+# MEASURED on spm x gf180mcuD (run spm_manual_1.14.30, plugin v1.14.30). The
+# Liberty recorded by the synthesis step is
+# `/foss/pdks/gf180mcuD/libs.ref/gf180mcu_fd_sc_mcu7t5v0/lib/..._tt_025C_5v00.lib`
+# — a CONTAINER path, because yosys ran in the container and that is the path
+# it knew. So the root came out as `/foss/pdks/gf180mcuD`, and on the host
+# `ls -d /foss` is "No such file or directory"; `docker inspect vibeic-eda`
+# shows the only mounts are the designs directory, twice. Inside the container
+# the declared glob resolves EXACTLY — one file,
+# `libs.ref/gf180mcu_fd_sc_mcu7t5v0/lef/gf180mcu_fd_sc_mcu7t5v0.lef`, 671072
+# bytes. The published sentence "declares cell_lef_glob=... which matches no
+# file under /foss/pdks/gf180mcuD" was therefore FALSE, and every gf180mcuD run
+# left its area figure's unit unestablished on the strength of it.
+#
+# So WHERE to look is a parameter. The default is unchanged (this filesystem);
+# a caller that knows the container passes a reader for it. Neither reader
+# guesses: a root that is not there is reported as not there, which is a
+# different sentence from a glob that matched nothing.
+
+
+class HostReader:
+    """Look on the filesystem this process runs on. The default."""
+
+    name = "this filesystem"
+
+    def exists(self, path: str) -> bool:
+        return Path(path).exists()
+
+    def glob(self, root: str, pattern: str) -> List[str]:
+        return [str(p) for p in sorted(Path(root).glob(pattern)) if p.is_file()]
+
+    def read(self, path: str) -> Optional[str]:
+        try:
+            return Path(path).read_text(errors="replace")
+        except OSError:
+            return None
+
+
+HOST = HostReader()
+
+
+class ContainerReader:
+    """Look inside a running EDA container.
+
+    GUARD, inherited from `phase3_one_shot_runner._registry_glob_one`'s own
+    measured failure: the image is entered through a LOGIN shell and its
+    profile prints "[INFO] Final PATH variable: ..." onto STDOUT ahead of the
+    command's own output. A caller that trusted the first stdout line took that
+    banner as a path. So a candidate is accepted ONLY when it sits under the
+    root AND `test -f` says it exists; every other line is dropped.
+    """
+
+    def __init__(self, container: str):
+        self.container = container
+        self.name = f"container {container}"
+
+    def _run(self, cmd: str):
+        # NOTHING IS CAUGHT HERE, deliberately. The first draft of this class
+        # wrapped every call in `except Exception: return False` and passed
+        # `timeout=` to a function whose parameter is `deadline_s`; the
+        # TypeError was swallowed and the reader reported, in a published
+        # artefact, that a directory which DOES exist does not. A reader that
+        # cannot run says so by raising; `_resolve_area_unit` records the
+        # failure as evidence, which is the only place it can be read.
+        import _container_exec as _ce
+        return _ce.run_in_container(self.container, cmd, deadline_s=60)
+
+    def exists(self, path: str) -> bool:
+        return self._run(f"test -e {shlex.quote(path)}").returncode == 0
+
+    def glob(self, root: str, pattern: str) -> List[str]:
+        full = f"{root.rstrip('/')}/{pattern.lstrip('/')}"
+        cp = self._run(f"ls -1 {full}")
+        prefix = root.rstrip("/") + "/"
+        out: List[str] = []
+        for line in (cp.stdout or "").splitlines():
+            cand = line.strip()
+            if not cand.startswith(prefix):
+                continue            # banner or noise, never a path
+            if self.exists(cand):
+                out.append(cand)
+        return sorted(out)
+
+    def read(self, path: str) -> Optional[str]:
+        cp = self._run(f"cat {shlex.quote(path)}")
+        if cp.returncode != 0:
+            return None
+        # `cat` output is preceded by the login banner. Everything from the
+        # first line of the file onward is what we want, and we cannot know
+        # where that is by content — so read the file's byte length and take
+        # exactly that many trailing characters is NOT safe either (encoding).
+        # Instead the banner is bounded and identifiable: drop leading lines
+        # that are the image's own `[INFO] Final <NAME> variable:` prologue.
+        text = cp.stdout or ""
+        lines = text.splitlines(keepends=True)
+        i = 0
+        while i < len(lines) and _BANNER_RE.match(lines[i]):
+            i += 1
+        return "".join(lines[i:])
+
+
+#: The vibeic-eda login profile's prologue, dropped from captured stdout.
+_BANNER_RE = re.compile(r"^\s*\[INFO\]\s+Final\s+\S+\s+variable:")
+
+
+def container_reader(container: Optional[str]):
+    """A reader for `container`, or None when no container was named."""
+    return ContainerReader(container) if container else None
+
+
+def _read(p: Optional[Path], reader=None) -> Optional[str]:
     if p is None:
         return None
-    try:
-        return Path(p).read_text(errors="replace")
-    except OSError:
-        return None
+    return (reader or HOST).read(str(p))
 
 
 def liberty_areas(text: str) -> Dict[str, float]:
@@ -173,16 +286,23 @@ def lef_footprints_um2(text: str) -> Dict[str, float]:
 
 
 def derive(liberty: Optional[Path], cell_lef: Optional[Path],
-           tolerance: float = DEFAULT_TOLERANCE) -> Dict[str, Any]:
+           tolerance: float = DEFAULT_TOLERANCE, reader=None) -> Dict[str, Any]:
     """Establish the Liberty's area unit, or say why it could not be.
 
     Returns a record that is written into the artefact verbatim, so a reader can
     re-derive the conclusion rather than trust it: the cell count compared, the
     ratio band, and the tolerance applied.
 
-    `established` is True ONLY when every compared cell's
-    `liberty_area / lef_um2` sits inside `1 +/- tolerance`. One cell outside it
-    is a disagreement, and a disagreement is not established.
+    `established` is a POPULATION judgement, and the docstring here used to
+    overstate it: it said "True ONLY when every compared cell sits inside
+    1 +/- tolerance", which the code below does not do and never did. What it
+    tests is that the MEDIAN ratio is centred on 1 within `tolerance` AND the
+    interquartile spread is within `tolerance` — because a unit difference is a
+    COMMON FACTOR across the whole library, not one odd cell. Individual
+    outliers do not block; they are DISCLOSED, in `cells_outside_tolerance` and
+    `outliers`, so a reader can judge them. Corrected here rather than left,
+    because a docstring that claims a gate is stricter than it is will be
+    believed by the next person who has to decide whether to trust it.
     """
     rec: Dict[str, Any] = {
         "established": False,
@@ -194,7 +314,7 @@ def derive(liberty: Optional[Path], cell_lef: Optional[Path],
         "liberty": str(liberty) if liberty else None,
         "cell_lef": str(cell_lef) if cell_lef else None,
     }
-    lib_text, lef_text = _read(liberty), _read(cell_lef)
+    lib_text, lef_text = _read(liberty, reader), _read(cell_lef, reader)
     if lib_text is None:
         rec["reason"] = "no readable Liberty was supplied"
         return rec
@@ -262,8 +382,8 @@ def _quartiles(sorted_ratios: List[float]) -> Tuple[float, float]:
     return statistics.median(lo), statistics.median(hi)
 
 
-def resolve_from_registry(liberty: Path,
-                          registry: Path) -> Tuple[Optional[Path], Optional[str]]:
+def resolve_from_registry(liberty: Path, registry: Path, reader=None,
+                          ) -> Tuple[Optional[Path], Optional[str]]:
     """The cell LEF that belongs to this Liberty, per `pdk_registry.json`.
 
     THE ROOT COMES FROM THE FILE, THE LAYOUT COMES FROM THE REGISTRY. An earlier
@@ -294,13 +414,25 @@ def resolve_from_registry(liberty: Path,
         root = _root_of(lib_posix, lg)
         if root is None:
             continue
-        lefs = sorted(Path(root).glob(cg))
+        rd = reader or HOST
+        # TWO DIFFERENT REFUSALS, and conflating them is what published a false
+        # sentence about a correct registry. "The glob matched nothing under a
+        # root that IS here" is a registry or PDK problem. "The root is not on
+        # this filesystem at all" is a statement about WHERE WE LOOKED, and it
+        # names the fix (look in the container) instead of blaming the entry.
+        if not rd.exists(root):
+            return None, (
+                f"the search root {root} does not exist on {rd.name}: the "
+                f"Liberty names a path this process cannot see (a PDK that "
+                f"ships inside the EDA image is the ordinary case), so the "
+                f"cell LEF was never looked for, let alone found")
+        lefs = rd.glob(root, cg)
         if not lefs:
             return None, (
                 f"the registry entry whose layout matches this Liberty "
                 f"declares cell_lef_glob={cg!r}, which matches no file under "
-                f"{root}")
-        return lefs[0], None
+                f"{root} on {rd.name}")
+        return Path(lefs[0]), None
     return None, ("no registry entry declares a Liberty layout matching "
                   f"{lib_posix}, so the cell LEF that belongs to it is not known")
 

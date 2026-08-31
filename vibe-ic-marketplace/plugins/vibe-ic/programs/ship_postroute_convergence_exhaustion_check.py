@@ -78,7 +78,10 @@ Honest-FAIL contract
 --------------------
   * Missing / unreadable / empty input        -> exit 2 (error), never a
                                                  vacuous PASS.
-  * No CVG markers at all in the log          -> exit 2 (this loop did not run
+  * The emitter DISCLOSED that it did not     -> NOT_APPLICABLE at exit 0.
+    enter the block (SHIP_REPAIR_NOOP)           See below; this is not a pass
+                                                 and not an error.
+  * No CVG markers and no such disclosure     -> exit 2 (this loop did not run
                                                  here; there is nothing to
                                                  audit, which is NOT a pass).
   * No terminal marker AND fewer passes than  -> exit 2 (INDETERMINATE: the loop
@@ -87,6 +90,44 @@ Honest-FAIL contract
                                                  log or an abnormal exit).
   * Bound reached while still converging      -> exit 1 (FAIL).
   * Otherwise                                 -> exit 0 (PASS).
+
+THE LOOP IS CONDITIONAL, AND A CORRECT RUN MAY NEVER ENTER IT
+-------------------------------------------------------------
+`_SHIP_SIGNOFF_REPAIR_TCL` takes a design signature before and after the
+repair, and when the repair changed NO instance it keeps the base route rather
+than throwing a DRC-clean route away to ship an identical one (v1.8.43). The
+whole reroute + convergence block lives in the `else` of that test, so a design
+that already meets setup never runs a single convergence pass — correctly.
+
+MEASURED on spm x gf180mcuD (run spm_manual_1.14.30, plugin v1.14.30), from
+`phase3/stage3/pnr/signoff_spef_repair.log`::
+
+    SHIP_WNS_BEFORE:       10.742564475371312
+    SHIP_WNS_AFTER_REPAIR: 10.742564475371312
+    SHIP_REPAIR_NOOP: 1 (repair changed no instance; base route kept ...)
+    <no SHIP_ROUTING_CLEARED, no SHIP_WNS_CVG_PASS*, no SHIP_CVG_*>
+    SHIP_SIGNOFF_REPAIR_DONE
+
+and this program returned ERROR on it, publishing
+`reports/phase3/ship_convergence_exhaustion.json` with verdict ERROR and
+`passes_observed: 0`. Every design that closes setup — that is, every GOOD run —
+posted that ERROR, because the contract above had a state for "the loop ran and
+the log is truncated" and none for "the emitter deliberately did not enter the
+block".
+
+So the emitter's OWN disclosure is read, rather than inferred from the absence
+of markers: a log carrying `SHIP_REPAIR_NOOP` and no convergence pass is
+NOT_APPLICABLE. This is the same distinction `_mcp_measurement` draws with
+`NOTHING_TO_MEASURE` -- "the operation ran and there was legitimately nothing
+to judge... a gate that refuses that refuses every design it applies to, and a
+gate that refuses everything gets bypassed, which is a deleted gate."
+
+It is a SEPARATE verdict, never folded into PASS, so a run that skipped the
+loop can never be counted as a run that converged. And it is not forgeable by a
+design: the marker is emitted by the emitter's own Tcl inside a branch keyed on
+the instance-and-master signature of the placed netlist, and it is mutually
+exclusive with the branch that emits the convergence passes — a log carrying
+any `SHIP_WNS_CVG_PASS` takes the ordinary path regardless.
 
 Scope declaration: this is a STANDALONE DIAGNOSTIC gate. It is deliberately NOT
 wired into any phase-3 flow verdict, because a gate declared BLOCKING must be
@@ -129,6 +170,12 @@ TERMINAL_MARKERS = (
     "SHIP_CVG_PLATEAU",
     "SHIP_CVG_NONNUMERIC",
 )
+
+#: The emitter's own disclosure that it kept the base route and never entered
+#: the reroute + convergence block. Read as a POSITIVE statement of non-entry,
+#: never inferred from silence: silence is a truncated log and stays an error.
+NOT_ENTERED_MARKER = "SHIP_REPAIR_NOOP"
+_NOT_ENTERED_RE = re.compile(rf"^\s*{NOT_ENTERED_MARKER}\b", re.M)
 
 _WNS_RE = re.compile(r"^\s*SHIP_WNS_CVG_PASS(\d+):\s*(\S+)", re.M)
 _DRV_RE = re.compile(r"^\s*SHIP_DRV_CVG_PASS(\d+):\s*(\S+)", re.M)
@@ -250,6 +297,11 @@ def audit(raw: str, bound: int = DEFAULT_BOUND
         "estimate_wns_after": _to_float(estimate.group(1)) if estimate else None,
         "bound_exhausted": False,
         "still_converging_at_exit": None,
+        # Tri-state on purpose. True: passes were measured. False: the emitter
+        # disclosed it did not enter the block. None: neither — silence, which
+        # is a truncated log and stays an error.
+        "loop_entered": bool(passes) or (None if not
+                                         _NOT_ENTERED_RE.search(raw) else False),
     }
 
     # The end-of-flow SPEF repair number is an ESTIMATE by construction. Name
@@ -265,6 +317,17 @@ def audit(raw: str, bound: int = DEFAULT_BOUND
             f"(never the authoritative sta.rpt). It is what a real-parasitics "
             f"timing repair WOULD recover, not what this design ships. Do not report it "
             f"as setup closure."))
+
+    if not passes and _NOT_ENTERED_RE.search(raw):
+        findings.append(Finding(
+            "INFO", "loop_not_entered",
+            f"the emitter disclosed {NOT_ENTERED_MARKER}: the repair changed "
+            f"no instance, so the base route was kept and the reroute + "
+            f"convergence block was never entered. There is no convergence to "
+            f"audit and no bound to have exhausted. This is NOT a pass — "
+            f"nothing converged here — and NOT an error: the run behaved "
+            f"correctly and said so."))
+        return "NOT_APPLICABLE", findings, summary
 
     if not passes:
         return "ERROR", findings, summary
@@ -354,11 +417,17 @@ def _gather_text(target: Path) -> Tuple[Optional[str], Optional[str]]:
                 text = path.read_text(errors="replace")
             except OSError:
                 continue
-            if "SHIP_WNS_CVG_PASS" in text or "SHIP_DRV_CVG_PASS" in text:
+            # The non-entry disclosure is as much this loop's vocabulary as
+            # its pass markers are. Without it a directory scan refuses (rc 2)
+            # exactly the runs the NOT_APPLICABLE branch exists to answer, and
+            # the CLI would disagree with the in-runner call on one log.
+            if ("SHIP_WNS_CVG_PASS" in text or "SHIP_DRV_CVG_PASS" in text
+                    or NOT_ENTERED_MARKER in text):
                 chunks.append(text)
     if not chunks:
         return None, (f"no log under {target} carries the post-route "
-                      f"convergence markers (SHIP_WNS_CVG_PASS*)")
+                      f"convergence markers (SHIP_WNS_CVG_PASS*) or the "
+                      f"emitter's non-entry disclosure ({NOT_ENTERED_MARKER})")
     return "\n".join(chunks), None
 
 
@@ -414,7 +483,10 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     if verdict == "ERROR":
         return 2
-    return 0 if verdict == "PASS" else 1
+    # NOT_APPLICABLE exits 0 like PASS and is rendered as itself everywhere
+    # else: there was nothing to converge, which is not a failure. The verdict
+    # STRING is what a reader keys on, never the exit code alone.
+    return 0 if verdict in ("PASS", "NOT_APPLICABLE") else 1
 
 
 if __name__ == "__main__":

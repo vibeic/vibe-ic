@@ -972,6 +972,7 @@ def _log_surviving_artefact(outputs, *, produced_by: str,
     }
     if marker:
         entry["marker"] = marker
+    _rmeas.attach(Path(sink), entry)
     try:
         with (Path(sink) / "provenance.jsonl").open("a") as f:
             f.write(json.dumps(entry) + "\n")
@@ -12307,10 +12308,19 @@ def step_synth(project: Path, top: str, pdk: PdkConfig,
     try:
         # THE LIBRARY THIS SYNTHESIS ACTUALLY LOADED. It is the same one
         # interpolated into `stat -liberty` above, so the area figure and
-        # the library its unit is derived from cannot disagree. The HOST
-        # path, not the container translation: the emitter runs here.
+        # the library its unit is derived from cannot disagree.
+        #
+        # It is NOT necessarily a host path, and the earlier note here claiming
+        # it was is what left every in-image PDK's area unit unestablished: for
+        # a PDK resolved out of `pdk_registry.json` this is the CONTAINER path
+        # (`_pdk_config_from_registry` builds it from the container root), and
+        # on a host with no PDK mount there is nothing there to read. The
+        # container is passed so the emitter can look in the place the path
+        # actually names; it still tries this filesystem first, so a staged
+        # PDK under input/pdk/ costs no container call.
         _area_stats = _sas.emit_for_run(project, log, netlist,
-                                        liberty=getattr(pdk, "liberty", None))
+                                        liberty=getattr(pdk, "liberty", None),
+                                        container=container)
     except Exception:
         _area_stats = None
     _synth_evidence = [str(netlist), str(log)]
@@ -32077,6 +32087,7 @@ def _v1_6_620_append_pv_signoff_provenance(project: Path, top: str) -> List[str]
             # which of two entries for one path is current.
             entry["supersedes"] = {"timestamp": _prev.get("timestamp"),
                                    "tool": _prev.get("tool")}
+        _rmeas.attach(project, entry)
         with prov_path.open("a") as f:
             f.write(json.dumps(entry) + "\n")
         _ledger.append(entry)   # de-dup within this loop
@@ -32180,19 +32191,21 @@ def _restamp_provenance_output(project: Path, rel: str, path: Path,
                 _found = True
                 _newest_sha = _outs[rel]
         if _found and _newest_sha != _sha:
+            _reemit = {
+                "tool": tool,
+                "command": command,
+                "exit_code": 0,
+                "duration_ms": None,
+                "reconstructed": True,
+                "timestamp": _dt.datetime.now(_dt.timezone.utc)
+                                .strftime("%Y-%m-%dT%H:%M:%SZ"),
+                "note": "output re-emitted; the earlier record of "
+                        "this path is superseded, not amended",
+                "outputs": {rel: _sha},
+            }
+            _rmeas.attach(project, _reemit)
             with prov_path.open("a") as _f:
-                _f.write(json.dumps({
-                    "tool": tool,
-                    "command": command,
-                    "exit_code": 0,
-                    "duration_ms": None,
-                    "reconstructed": True,
-                    "timestamp": _dt.datetime.now(_dt.timezone.utc)
-                                    .strftime("%Y-%m-%dT%H:%M:%SZ"),
-                    "note": "output re-emitted; the earlier record of "
-                            "this path is superseded, not amended",
-                    "outputs": {rel: _sha},
-                }) + "\n")
+                _f.write(json.dumps(_reemit) + "\n")
         if not _found:
             _entry = {
                 "tool": tool,
@@ -32204,6 +32217,7 @@ def _restamp_provenance_output(project: Path, rel: str, path: Path,
                                 .strftime("%Y-%m-%dT%H:%M:%SZ"),
                 "outputs": {rel: _sha},
             }
+            _rmeas.attach(project, _entry)
             with prov_path.open("a") as _f:
                 _f.write(json.dumps(_entry) + "\n")
     except (OSError, ValueError):
@@ -32275,20 +32289,22 @@ def _record_reemitted_outputs(project: Path) -> Optional[str]:
                 if cur != declared_sha:
                     drifted[rel] = cur
         if drifted:
+            _bulk = {
+                "tool": "phase3_one_shot_runner",
+                "command": "re-emit (phase3 iteration)",
+                "exit_code": 0,
+                "duration_ms": None,
+                "reconstructed": True,
+                "timestamp": _dt.datetime.now(_dt.timezone.utc)
+                                .strftime("%Y-%m-%dT%H:%M:%SZ"),
+                "note": "outputs re-emitted by a re-run of this "
+                        "runner; the earlier record of each path "
+                        "is superseded, not amended",
+                "outputs": drifted,
+            }
+            _rmeas.attach(project, _bulk)
             with prov_path.open("a") as f:
-                f.write(json.dumps({
-                    "tool": "phase3_one_shot_runner",
-                    "command": "re-emit (phase3 iteration)",
-                    "exit_code": 0,
-                    "duration_ms": None,
-                    "reconstructed": True,
-                    "timestamp": _dt.datetime.now(_dt.timezone.utc)
-                                    .strftime("%Y-%m-%dT%H:%M:%SZ"),
-                    "note": "outputs re-emitted by a re-run of this "
-                            "runner; the earlier record of each path "
-                            "is superseded, not amended",
-                    "outputs": drifted,
-                }) + "\n")
+                f.write(json.dumps(_bulk) + "\n")
     except Exception as exc:  # noqa: BLE001 — bookkeeping never breaks the run
         return f"provenance re-emit record failed: {exc}"
     return None
@@ -34467,6 +34483,7 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
                                  .strftime("%Y-%m-%dT%H:%M:%SZ"),
                 "outputs": _synth_outputs,
             }
+            _rmeas.attach(project, _synth_entry)
             with prov_path_s.open("a") as f:
                 f.write(json.dumps(_synth_entry) + "\n")
             if str(prov_path_s) not in written:
@@ -35339,6 +35356,7 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
                                 .strftime("%Y-%m-%dT%H:%M:%SZ"),
                 "outputs": outputs,
             }
+            _rmeas.attach(project, entry)
             with prov_path.open("a") as f:
                 f.write(json.dumps(entry) + "\n")
             written.append(str(prov_path))
@@ -35374,6 +35392,7 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
                                 .strftime("%Y-%m-%dT%H:%M:%SZ"),
                 "outputs": {spef_rel: _sha(spef_out)},
             }
+            _rmeas.attach(project, spef_entry)
             with prov_path.open("a") as f:
                 f.write(json.dumps(spef_entry) + "\n")
             if str(prov_path) not in written:

@@ -100,6 +100,7 @@ import _path_layout as _pl
 import _rtl_include_hub as _hub  # shared include-hub aggregator predicate
 import _commercial_pdk as _cpdk  # config-driven commercial-PDK id (NDA: no SKU in source)
 import _lesson_digest  # surface the captured-lesson digest to spec-to-rtl authors
+import _runner_measurement as _rmeas  # the tool's third value, read from its artefact
 # STAGED IS NOT CONSUMED (ORGANIC #733). `_lesson_digest` hands the author a
 # digest; NOTHING asked whether a section that matches this design was USED.
 # Measured in that program's header: a blind author was handed a section
@@ -12288,6 +12289,13 @@ def step_yosys_synth(project: Path, top_name: str = "chip_top",
                 "note": ("v1.6.196 in-runner provenance append "
                          "(replaces missing wrapper invocation)"),
             }
+            # THE TOOL'S THIRD VALUE — did this yosys run map any gate.
+            # Read from the netlist on disk, never from the fact that a
+            # subprocess ran (see `_runner_measurement`). Without it, Step 9's
+            # `provenance_check --require-measured` binds to THIS entry — the
+            # only one that declares the netlist — finds no measurement record,
+            # and disposes the step INCOMPLETE on every design, forever.
+            _rmeas.attach(project, prov_record)
             prov_path = project / "provenance.jsonl"
             # v0.1.87 — SUPERSEDE prior entries that declare the same output
             # paths instead of blind-appending. Append-only provenance
