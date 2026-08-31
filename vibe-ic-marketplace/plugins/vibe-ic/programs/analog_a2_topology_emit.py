@@ -507,6 +507,18 @@ def _canonical_type(btype: Optional[str]) -> str:
         return str(btype or "").strip().lower()
 
 
+def _declared_pdk_target(project: Path) -> Optional[str]:
+    """The project's OWN L19-declared PDK target (same field A3 reads).
+    None when the doc or field is absent — the caller then falls back
+    loudly, never silently."""
+    d = _read_json(project / "phase1/generated_docs/L19_CONSTRAINTS_PDK.json")
+    if isinstance(d, dict):
+        f = d.get("fields")
+        if isinstance(f, dict) and isinstance(f.get("pdk_target"), str):
+            return f["pdk_target"].strip() or None
+    return None
+
+
 def pdk_device_params(selector: str) -> Tuple[Optional[str], Dict[str, Any]]:
     """`analog_device_params` for the registry family matching `selector`.
     READ, never retyped — `analog-topology-select` forbids restating these."""
@@ -520,8 +532,14 @@ def pdk_device_params(selector: str) -> Tuple[Optional[str], Dict[str, Any]]:
         name = str(ent.get("name") or "")
         if not name:
             continue
+        # Exact, then prefix either way, then containment either way: an
+        # L-doc commonly declares the family by its bare process token
+        # (`sg13g2`) while the registry entry carries a vendor prefix
+        # (`ihp-sg13g2`) — prefix matching alone answered None for exactly
+        # the declared-target case (measured: u_hawaii_adc).
         if name.lower() == sel or name.lower().startswith(sel) \
-                or sel.startswith(name.lower()):
+                or sel.startswith(name.lower()) \
+                or sel in name.lower() or name.lower() in sel:
             params = ent.get("analog_device_params")
             return name, (params if isinstance(params, dict) else {})
     return None, {}
@@ -897,16 +915,30 @@ def main(argv: Optional[List[str]] = None) -> int:
                                     formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("project", type=Path)
     ap.add_argument("--block", default=None)
-    ap.add_argument("--pdk", default="sky130",
+    ap.add_argument("--pdk", default=None,
                     help="PDK selector whose analog_device_params are quoted "
-                         "in topology.md (read from pdk_registry.json)")
+                         "in topology.md (read from pdk_registry.json). "
+                         "Default: the project's own L19-declared pdk_target; "
+                         "'sky130' only when the project declares none. The "
+                         "old static 'sky130' default silently quoted the "
+                         "wrong family's Vth/rail into every topology on any "
+                         "other PDK (measured: u_hawaii_adc / ihp-sg13g2).")
     ap.add_argument("--json", default=None)
     args = ap.parse_args(argv)
     project = args.project.resolve()
     if not project.is_dir():
         print(f"error: not a directory: {project}", file=sys.stderr)
         return 1
-    rc, report = run(project, args.block, args.pdk)
+    if args.pdk:
+        pdk, pdk_source = args.pdk, "cli"
+    else:
+        declared = _declared_pdk_target(project)
+        pdk, pdk_source = ((declared, "l19_declared") if declared
+                           else ("sky130", "static_default"))
+    print(f"{PRODUCER}: pdk selector `{pdk}` ({pdk_source})", file=sys.stderr)
+    rc, report = run(project, args.block, pdk)
+    report["pdk_selector"] = pdk
+    report["pdk_selector_source"] = pdk_source
     if args.json:
         out = Path(args.json)
         out.parent.mkdir(parents=True, exist_ok=True)

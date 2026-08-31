@@ -66,3 +66,35 @@ blocks (delta_sigma, LV) passed; flavour-split blocks dead-ended. Flavour-blind.
 Chip-AGNOSTIC (directory identity + recorded election; no PDK literal). The rule is
 A4's own stated doctrine made true: "re-stamping the MODEL SET is not this step's
 job" — now it also does not RE-ELECT it. Do not land from here — gatekeeper review.
+
+---
+
+# LAND — fix 3: A2 quotes the DECLARED target's constants, not a static sky130 default
+
+## What
+`analog_a2_topology_emit.py`:
+1. `--pdk` default None → resolution order: explicit CLI > the project's own
+   L19-declared `pdk_target` (same field A3 reads; new `_declared_pdk_target`) >
+   'sky130' static fallback. The winning selector + source printed to stderr and
+   recorded in the report (`pdk_selector` / `pdk_selector_source`).
+2. `pdk_device_params` gains a containment rung: the L-doc's bare process token
+   (`sg13g2`) now resolves the vendor-prefixed registry entry (`ihp-sg13g2`);
+   exact/prefix matching alone answered None for exactly the declared-target case.
+
+## Why (measured — .108 round-2 ldo topology.json, peer-reported)
+The analog runner invokes A2 with no --pdk → static sky130 default → an IHP-target
+project's topology quoted family=sky130A (vth_n 0.45 / rail 1.8) while the registry's
+ihp-sg13g2 entry (0.42 / 1.2) sat unread — whose own note says carrying the sky130
+values over mis-biases sizing. Any sizing started from that record uses the wrong
+Vth/rail.
+
+## Falsification (two-tree, 2026-08-31, base c0867ee16)
+- pre-fix: 2 RED (bare-token matching; L19-follow) + 2 GREEN (sky130 fallback
+  without declaration; explicit --pdk wins) — bidirectional.
+- post-fix: 4/4 new + 29/29 across the A2 suites GREEN.
+
+## Doctrine
+Chip-AGNOSTIC (reads the project's own declaration + the registry; the containment
+rung is naming-shape, no PDK literal in code). Degrades loudly: an L19 target with
+no registry entry still yields the honest "no analog_device_params resolves" text,
+never a silent sky130 substitution. Do not land from here — gatekeeper review.
