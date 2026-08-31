@@ -7414,6 +7414,151 @@ def _fs_tb_resolve_clock_reset(project: Path, top_module: str,
             out["reset_active_low"] = pol
             out["reset_polarity_source"] = "DUT RTL edge sensitivity"
     return out
+# ---------------------------------------------------------------------------
+# ORGANIC #1956 — the full-stack TB is a SKELETON the flow itself asks the
+# author to EXTEND: it is connectivity-only (drives no functional stimulus,
+# measured ~9% line / 0% toggle coverage) and the functional body is the
+# residual left to the author. `step_full_stack_tb_gen` used to end with an
+# UNCONDITIONAL `tb_path.write_text(...)`, so the very next runner invocation
+# reverted that enhancement to the skeleton: `coverage_closure` could never
+# stay closed through the rerun that measures it, and the step-4 FAIL cascaded
+# to the downstream chain. The generator now re-emits the skeleton ONLY when
+#   (a) no TB exists at that path,
+#   (b) the TB on disk is a VERBATIM, unedited skeleton this generator itself
+#       stamped (its self-digest still matches), or
+#   (c) the DUT INTERFACE CONTRACT changed — a pin the DUT now exposes is no
+#       longer bound, or the TB unconditionally binds a pin the DUT no longer
+#       exposes. Case (c) preserves the superseded file next to the TB and
+#       says so LOUDLY in the StepResult (never a silent overwrite).
+# Anything else is an author/AI enhancement that satisfies (or extends) the
+# contract, and it SURVIVES the rerun.
+# chip-AGNOSTIC: a structural parse of the TB text against the resolved port
+# list; no chip / vendor / PDK literal anywhere.
+# ---------------------------------------------------------------------------
+_V1956_STAMP = "vibe-ic-tb-skeleton-sha256:"
+_V1956_STAMP_RE = re.compile(re.escape(_V1956_STAMP) + r"\s*([0-9a-f]{64})")
+
+
+def _v1956_stamped_skeleton(lines: List[str]) -> str:
+    """The skeleton text carrying a digest of its own body.
+
+    The digest is what makes "is this still MY skeleton?" a MEASUREMENT
+    instead of a guess: any edit — including an in-place enhancement that
+    keeps the auto-generated header comment — breaks it.
+    """
+    head, rest = lines[0], list(lines[1:])
+    body = "\n".join(rest)
+    stamp = (f"// {_V1956_STAMP} "
+             f"{hashlib.sha256(body.encode('utf-8')).hexdigest()}"
+             f" — regenerated only while UNEDITED; edit this file and the"
+             f" generator PRESERVES it (#1956)")
+    return "\n".join([head, stamp] + rest)
+
+
+def _v1956_is_verbatim_skeleton(text: str) -> bool:
+    """True iff `text` is a stamped skeleton nobody has edited since.
+
+    A file with NO stamp (emitted before #1956, or authored by hand) is NOT
+    verbatim: we cannot prove it is unedited, and the cost is asymmetric —
+    preserving a stale skeleton costs a stale skeleton, clobbering an
+    enhancement costs the enhancement (the #1956 defect itself).
+    """
+    kept: List[str] = []
+    recorded: Optional[str] = None
+    for ln in text.split("\n"):
+        if recorded is None:
+            m = _V1956_STAMP_RE.search(ln)
+            if m:
+                recorded = m.group(1)
+                continue
+        kept.append(ln)
+    if recorded is None or len(kept) < 2:
+        return False
+    body = "\n".join(kept[1:])   # drop the header line, as the stamper did
+    return hashlib.sha256(body.encode("utf-8")).hexdigest() == recorded
+
+
+def _v1956_strip_comments(text: str) -> str:
+    """Verilog source with comments blanked (a commented-out `.pin(` is not a
+    binding, and a commented-out module name is not an instantiation)."""
+    text = re.sub(r"/\*.*?\*/", " ", text, flags=re.S)
+    return re.sub(r"//[^\n]*", "", text)
+
+
+def _v1956_strip_ifdef_blocks(text: str) -> str:
+    """Source with every `ifdef / `ifndef … `endif region removed.
+
+    Only UNCONDITIONAL connections are contract-bearing. Power/ground supply
+    pins (#645) and any define-gated port live inside such a region on both
+    sides, so a TB that binds them must not be read as binding a pin the DUT
+    "no longer exposes".
+    """
+    out: List[str] = []
+    depth = 0
+    for ln in text.split("\n"):
+        s = ln.strip()
+        if re.match(r"`(ifdef|ifndef)\b", s):
+            depth += 1
+            continue
+        if re.match(r"`endif\b", s):
+            depth = max(0, depth - 1)
+            continue
+        if depth == 0:
+            out.append(ln)
+    return "\n".join(out)
+
+
+def _v1956_dut_instance_conns(text: str, dut: str) -> Optional[str]:
+    """The connection-list text of the first `<dut> <inst> ( … );`, or None
+    when no instantiation of `dut` can be located."""
+    pat = re.compile(
+        r"\b" + re.escape(dut) + r"\b\s*"
+        # optional parameter override `#( … )` (one nesting level)
+        r"(?:#\s*\((?:[^()]|\([^()]*\))*\)\s*)?"
+        r"([A-Za-z_]\w*)\s*\(")
+    for m in pat.finditer(text):
+        i = m.end() - 1              # index of the opening paren
+        depth = 0
+        for j in range(i, len(text)):
+            if text[j] == "(":
+                depth += 1
+            elif text[j] == ")":
+                depth -= 1
+                if depth == 0:
+                    return text[i + 1:j]
+        break
+    return None
+
+
+def _v1956_contract_check(text: str, dut: str,
+                          required_pins: set) -> Tuple[bool, str]:
+    """Does the TB on disk still satisfy (or extend) the DUT interface
+    contract? Returns (satisfied, reason-when-not).
+
+    Satisfied means: it instantiates `dut`, it binds every pin the DUT
+    unconditionally exposes, and — when the instantiation is parseable — it
+    binds no UNCONDITIONAL pin the DUT no longer exposes. Extra stimulus,
+    extra tasks, extra checkers, extra instances (a BFM, a scoreboard) are
+    an EXTENSION and are explicitly fine.
+    """
+    src = _v1956_strip_ifdef_blocks(_v1956_strip_comments(text))
+    conns = _v1956_dut_instance_conns(src, dut)
+    if conns is None:
+        return False, f"DUT module {dut!r} is not instantiated by this TB"
+    bound = set(re.findall(r"\.\s*([A-Za-z_]\w*)\s*\(", conns))
+    if not bound:
+        # Positional (or otherwise unparseable) connections — we cannot read
+        # the binding, so we do not get to call it broken. Preserve.
+        return True, "DUT instantiated with non-named connections"
+    missing = sorted(required_pins - bound)
+    if missing:
+        return False, (f"DUT pin(s) {', '.join(missing)} are no longer bound "
+                       f"by this TB")
+    stale = sorted(bound - required_pins)
+    if stale:
+        return False, (f"this TB binds {', '.join(stale)}, which the DUT no "
+                       f"longer exposes")
+    return True, (f"binds all {len(required_pins)} DUT pin(s)")
 
 
 def step_full_stack_tb_gen(project: Path,
@@ -7430,6 +7575,14 @@ def step_full_stack_tb_gen(project: Path,
     re-deriving the port list. This step emits the skeleton
     deterministically; chip-AGNOSTIC (port list comes from L9, no
     chip-specific vocabulary).
+
+    ORGANIC #1956 — the emitted file is a SKELETON that asks to be
+    EXTENDED with functional stimulus, so it is NOT re-emitted
+    unconditionally: it is (re)generated only when the TB is absent,
+    when the TB on disk is a verbatim unedited skeleton this generator
+    stamped, or when the DUT interface contract changed (regenerated
+    with a LOUD notice + the superseded file kept). An author/AI TB
+    that satisfies or extends the contract SURVIVES every rerun.
 
     Produces:
         phase2/stage1/sim_full_stack/tb_<top>_full.v"""
@@ -7579,6 +7732,18 @@ def step_full_stack_tb_gen(project: Path,
         "// single-wire pad alias (acc_id / id_pin) so the bit_level_",
         "// full_stack_tb_check gate recognises bit-level stimulus.",
         "// Opcodes come from L3_CMD_PROTOCOL.json (chip-AGNOSTIC).",
+        "//",
+        "// #1956 — THIS FILE IS YOURS TO EXTEND. It is CONNECTIVITY-ONLY",
+        "// (it closes no functional coverage on its own): add stimulus and",
+        "// checkers here and the edit SURVIVES the next runner invocation.",
+        "// The generator re-emits this skeleton only when the file is",
+        "// absent, when it is still byte-identical to the stamp above, or",
+        "// when the DUT port list changed (then it says so and keeps the",
+        "// superseded file under sim_full_stack/superseded/). Keep every",
+        "// .pin() binding of u_dut, keep the single-wire pad alias +",
+        "// bit-time delays bit_level_full_stack_tb_check looks for, and",
+        "// keep the $display(\"FULL_STACK_TB_DONE ...\") the simulating",
+        "// step scores this TB by.",
         "`timescale 1ns / 1ps",
         f"module tb_{top_module}_full;",
         # These two are the LEGACY stimulus regs, kept because a DUT whose
@@ -7830,7 +7995,108 @@ def step_full_stack_tb_gen(project: Path,
     lines.append("endmodule")
     lines.append("")
 
-    tb_path.write_text("\n".join(lines))
+    # ORGANIC #1956 — DO NOT clobber a TB the author enhanced. This file is a
+    # skeleton the flow itself asks to be extended with functional stimulus;
+    # re-emitting it unconditionally reverted every enhancement on the next
+    # invocation (see the `_v1956_*` helpers above for the full contract).
+    _v1956_skeleton = _v1956_stamped_skeleton(lines)
+    _v1956_required = {m.group(1) for m in
+                       (re.match(r"\s*\.\s*([A-Za-z_]\w*)\s*\(", a)
+                        for a in inst_args) if m}
+    _v1956_existing: Optional[str] = None
+    if tb_path.is_file():
+        try:
+            _v1956_existing = tb_path.read_text()
+        except Exception:
+            _v1956_existing = None
+    _v1956_action = "generated"
+    _v1956_note = ""
+    _v1956_backup: Optional[Path] = None
+    _v1956_forced = os.environ.get("VIBE_IC_TB_FORCE_REGEN") == "1"
+    _v1956_bit_advisory: List[str] = []
+    if _v1956_existing is None:
+        tb_path.write_text(_v1956_skeleton)
+    elif _v1956_existing == _v1956_skeleton:
+        # Byte-identical — writing would only churn the mtime.
+        _v1956_action = "unchanged"
+    elif _v1956_forced:
+        tb_path.write_text(_v1956_skeleton)
+        _v1956_action = "regenerated_forced"
+        _v1956_note = (" | NOTICE: VIBE_IC_TB_FORCE_REGEN=1 — the existing "
+                       f"{tb_path.name} was overwritten by explicit request "
+                       "(#1956)")
+    elif _v1956_is_verbatim_skeleton(_v1956_existing):
+        # Our own skeleton, unedited since we stamped it → safe to refresh.
+        tb_path.write_text(_v1956_skeleton)
+        _v1956_action = "regenerated"
+    else:
+        _v1956_ok, _v1956_why = _v1956_contract_check(
+            _v1956_existing, top_module, _v1956_required)
+        if _v1956_ok:
+            _v1956_action = "preserved"
+            # Degrade LOUDLY, never silently: the preserved TB is now the
+            # artefact bit_level_full_stack_tb_check reads, so ask THAT gate's
+            # own predicate (never a second copy of its rules) whether the
+            # enhancement still satisfies it, and say so HERE — the author
+            # should learn it at the step that preserved the file, not as an
+            # opaque FAIL several steps downstream.
+            try:
+                import bit_level_full_stack_tb_check \
+                    as _v1956_blc  # noqa: E402
+                _bit_ok, _bit_why = _v1956_blc._check_tb_drives_bit_level(
+                    tb_path)
+                if not _bit_ok:
+                    _v1956_bit_advisory = list(_bit_why)
+            except Exception:
+                pass
+            # This runner's OWN contract with itself: the step that simulates
+            # this TB scores it by the completion marker it prints (see the
+            # `"FULL_STACK_TB_DONE" in out` verdict below). An enhancement
+            # that drops the marker runs fine and is then read as "did not
+            # reach FULL_STACK_TB_DONE — possible RTL defect", blaming the
+            # RTL for a missing $display. Say it here instead.
+            try:
+                if "FULL_STACK_TB_DONE" not in _v1956_existing:
+                    _v1956_bit_advisory.append(
+                        "no FULL_STACK_TB_DONE completion marker — the step "
+                        "that simulates this TB scores it by that $display")
+            except Exception:
+                pass
+            _v1956_note = (
+                f" | PRESERVED the existing author-enhanced {tb_path.name} — "
+                f"it satisfies the DUT interface contract ({_v1956_why}), so "
+                f"the connectivity skeleton was NOT re-emitted over it "
+                f"(#1956). Set VIBE_IC_TB_FORCE_REGEN=1 to force the "
+                f"skeleton back."
+                + (f" ADVISORY: the preserved TB does not yet carry "
+                   f"everything the downstream consumers of this path read "
+                   f"({'; '.join(_v1956_bit_advisory)}) — carry the "
+                   f"skeleton's single-wire pad alias, bit-time delays and "
+                   f"completion $display into the enhanced TB."
+                   if _v1956_bit_advisory else ""))
+        else:
+            # The contract really did change — the TB on disk can no longer
+            # bind this DUT. Regenerate, but NEVER destroy the author's work:
+            # keep it beside the TB (in a subdir, so no `tb_*_full.v` glob
+            # picks up a duplicate module) and say so loudly.
+            _v1956_backup = (sim_dir / "superseded"
+                             / f"{tb_path.stem}.superseded{tb_path.suffix}")
+            try:
+                _v1956_backup.parent.mkdir(parents=True, exist_ok=True)
+                _v1956_backup.write_text(_v1956_existing)
+            except Exception:
+                _v1956_backup = None
+            tb_path.write_text(_v1956_skeleton)
+            _v1956_action = "regenerated_contract_changed"
+            _v1956_note = (
+                f" | NOTICE: the DUT interface contract CHANGED — "
+                f"{_v1956_why}. The skeleton was REGENERATED against the new "
+                f"port list"
+                + (f" and the superseded TB kept at "
+                   f"{_v1956_backup.relative_to(project)}"
+                   if _v1956_backup else "")
+                + " — re-apply the functional stimulus on top of the new "
+                  "port list (#1956).")
 
     # v1.6.269 (#127) — emit / refresh sim_full_stack/results.json with
     # opcodes_tested populated. step_reference_tb may overwrite this
@@ -7918,6 +8184,12 @@ def step_full_stack_tb_gen(project: Path,
                        "functional verification is via gate-level synth + "
                        "Phase 3 + firmware execution, not a command-byte "
                        "oracle. " if no_command_protocol else "")
+                    + ("The TB at this path is an AUTHOR-ENHANCED file "
+                       "PRESERVED by #1956 — these connectivity vectors "
+                       "describe the generator's own skeleton stimulus, NOT "
+                       "the enhanced TB's run; that TB's functional verdict "
+                       "comes from the step that simulates it. "
+                       if _v1956_action == "preserved" else "")
                     + "chip-AGNOSTIC.")},
         )
         # THE STIMULUS BINDING, ON THE RECORD. A reader of results.json can
@@ -8103,8 +8375,24 @@ def step_full_stack_tb_gen(project: Path,
     if _v701_warn:
         _extras["v701_tiny_root_warn"] = _v701_warn
         _warn_suffix = " | " + _v701_warn
+    # ORGANIC #1956 — what this invocation did to the TB on disk is part of
+    # the record: a preserved enhancement and a regenerated skeleton are very
+    # different artefacts to every downstream consumer of this step.
+    _extras["v1956_tb_action"] = _v1956_action
+    _extras["v1956_tb_contract_pins"] = sorted(_v1956_required)
+    if _v1956_backup is not None:
+        _extras["v1956_superseded_tb"] = str(_v1956_backup)
+    if _v1956_bit_advisory:
+        _extras["v1956_bit_level_advisory"] = _v1956_bit_advisory
+    if _v1956_action == "preserved":
+        # The TB was NOT re-emitted, so this step did not author it. Do not
+        # let the headline read as if it had.
+        note = note.replace(f"tb_{top_module}_full.v emitted",
+                            f"tb_{top_module}_full.v PRESERVED (not "
+                            f"re-emitted)", 1)
     return StepResult("full_stack_tb_gen", verdict_word,
-                      time.time() - t0, note + _reconcile_note + _warn_suffix,
+                      time.time() - t0,
+                      note + _reconcile_note + _v1956_note + _warn_suffix,
                       [str(tb_path), str(sim_dir / "results.json")],
                       _extras)
 
@@ -8388,7 +8676,7 @@ def _v713_mk_include_dirs(project: Path) -> List[Path]:
     return out
 
 
-# v1.14.73 — frontend-ladder reporting helpers.
+# v1.14.74 — frontend-ladder reporting helpers.
 _LADDER_EXHAUSTED_NOTE = (
     "\n\n| FRONTEND_LADDER_EXHAUSTED: this verdict is the VERILATOR "
     "(SV-2017) elaboration, which is the frontend that got furthest — not the "
@@ -8428,7 +8716,7 @@ def _verilator_escape_was_reached(vrc: int, vout: str, verr: str) -> bool:
             or "verilator" in lowered)
 
 
-# v1.14.73 — name the frontend that actually produced the verdict.
+# v1.14.74 — name the frontend that actually produced the verdict.
 # The message hardcoded "iverilog rc=..." even when the verdict came from the
 # verilator SV-2017 escape at the end of the frontend ladder, so a report could
 # attribute one tool's elaboration rejection to a different tool that had
@@ -8613,7 +8901,7 @@ def _iverilog_compile_with_sv_fallback(
                 rtl_files, tb_path, run_dir, container, top_name, _vl_reason)
             if vrc == 0:
                 return vrc, vout, verr, vfe
-            # v1.14.73 — REPORT THE FRONTEND THAT GOT FURTHEST, not the first.
+            # v1.14.74 — REPORT THE FRONTEND THAT GOT FURTHEST, not the first.
             # When the ladder exhausts, returning rung 1's error attributes a
             # KNOWN frontend limitation to the design. Measured: iverilog said
             # `aes_pkg.sv:19: syntax error / I give up.` — the SystemVerilog
