@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
 """sta_corner_record_completeness_check.py — the timing RECORD-completeness gate.
 
+ENFORCEMENT: blocking — Step 23 invokes this gate through
+``program_exit_zero``; a non-zero verdict stops post-route STA completion.
+
 The defect (measured, not hypothetical)
 ---------------------------------------
 A campaign ledger carried NO STA column at all while two ICs violated setup at
@@ -59,9 +62,14 @@ R2 DECLARED-BUT-UNREPORTED — every (corner, role) the flow was CONFIGURED to
    `sta_spef_multicorner.rpt` does not exist.
 
 R3 NO TYP-ONLY PASS — if any SIGN-OFF corner violates, the run's timing verdict
-   is VIOLATION regardless of what the primary/typ corner says. When the primary
-   corner MET while a sign-off corner violated, the finding says so explicitly,
-   because that combination is the misleading pass this gate exists to stop.
+   is VIOLATION regardless of what the primary/typ corner says. A sign-off
+   corner is judged only on the datapoint for the role it was declared to
+   serve: setup at the setup corner, hold at the hold corner. Other datapoints
+   on the same row remain disclosed, but cannot turn a met sign-off role into a
+   violation (for example, a pre-layout setup estimate carried beside a
+   post-route hold result). When the primary corner MET while a sign-off corner
+   violated, the finding says so explicitly, because that combination is the
+   misleading pass this gate exists to stop.
 
 R4 CORNER-LIBRARY RESOLUTION — a multi-corner claim must be backed by multiple
    corner LIBRARIES, and a degradation to fewer must be LOUD.
@@ -1333,7 +1341,7 @@ def evaluate(project: Path,
                 f"worst {pretty} slack — an incomplete corner characterisation "
                 f"(source: {row.get('source')})")
 
-    # ---- R3: a violated sign-off corner governs, whatever typ says ---------
+    # ---- R3: a violated sign-off ROLE governs, whatever typ says -----------
     typ_met: List[str] = []
     signoff_violated: List[str] = []
     for row in table:
@@ -1348,14 +1356,33 @@ def evaluate(project: Path,
             typ_met.append(f"{row['corner']} ({row['axis']})")
         if row.get("role_class") != "signoff":
             continue
-        if worst < -slack_tol:
+
+        # A row may carry more than the sign-off datapoint it was declared to
+        # serve. In particular, the per-corner sweep can contribute a
+        # PRE_LAYOUT setup estimate to the fast/hold row while the OCV report
+        # contributes its SIGNOFF hold result. Both numbers belong in the
+        # evidence table, but only the declared role is a sign-off verdict.
+        # Taking min(setup, hold) here made an unrelated pre-layout setup miss
+        # manufacture a post-route HOLD-corner violation. R2 immediately above
+        # already requires each declared role's own datapoint to exist, so R3
+        # projects the row onto exactly those declared roles and no others.
+        role_fields = [
+            ("setup_wns_ns", "setup")
+            for role in (row.get("roles") or []) if role == "setup"
+        ] + [
+            ("hold_wns_ns", "hold")
+            for role in (row.get("roles") or []) if role == "hold"
+        ]
+        violated = [
+            (field, tag, float(row[field]))
+            for field, tag in role_fields
+            if row.get(field) is not None and float(row[field]) < -slack_tol
+        ]
+        if violated:
             rules.append("R3_SIGNOFF_CORNER_VIOLATION")
             signoff_violated.append(str(row["corner"]))
-            detail = []
-            for f, tag in (("setup_wns_ns", "setup"), ("hold_wns_ns", "hold")):
-                v = row.get(f)
-                if v is not None and float(v) < -slack_tol:
-                    detail.append(f"{tag} {float(v):+.3f} ns")
+            detail = [f"{tag} {value:+.3f} ns"
+                      for _field, tag, value in violated]
             tns_s = ("" if row.get("tns_ns") is None
                      else f", TNS {float(row['tns_ns']):.2f}")   # type: ignore[arg-type]
             findings.append(

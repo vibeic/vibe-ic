@@ -1,6 +1,6 @@
 """Staged verification must judge containment against the REAL project root.
 
-WHAT WENT WRONG (measured, u_hawaii_adc round-5b @ v1.14.88 — ONE round after
+WHAT WENT WRONG (measured, u_hawaii_adc round-5b @ v1.14.89 — ONE round after
 the project-internal rung landed): A3's `verify_with_checkers` copies the deck
 into a TemporaryDirectory and runs the checkers on that staging tree, so the
 path lint's containment rung tested `/tmp/a3verify_*` — and the deck's correct

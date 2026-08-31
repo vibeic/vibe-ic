@@ -20,6 +20,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import _progress_run as _pr  # noqa: E402
+from _hostpaths import require_repo  # noqa: E402
 
 PROG = Path(__file__).resolve().parent.parent / "sta_corner_record_completeness_check.py"
 STA = "phase3/stage3/sta/"
@@ -155,3 +156,132 @@ def test_mixed_basis_row_keeps_both_numbers(tmp_path):
     ss = rows["process:SS"]
     assert ss["setup_wns_ns"] == -50.00   # no sign-off SETUP exists -> unchanged
     assert ss["hold_wns_ns"] == 0.20
+
+
+def _mixed_role_run(tmp_path: Path, *, setup_slack: float = 0.50,
+                    hold_slack: float = 0.20):
+    """One complete process-axis run with opposite-basis data on HOLD.
+
+    The corner names are deliberately semantic-neutral. The gate learns their
+    roles exclusively from the run's stance record, exactly as production does.
+    """
+    stance = json.dumps({
+        "signoff_dimension": "multi_corner_ocv_process",
+        "setup_process_corner": "SLOW",
+        "hold_process_corner": "FAST",
+        "multi_process_corner": True,
+        "corner_library_resolution": {
+            "axis": "process",
+            "liberty_by_corner": {
+                "SLOW": "/pdk/lib/slow.lib",
+                "FAST": "/pdk/lib/fast.lib",
+            },
+            "distinct_library_count": 2,
+            "reported_corner_count": 2,
+            "collapsed": False,
+            "unresolved_corners": [],
+            "unresolved_reason": None,
+            "degradation_disclosure": None,
+        },
+    })
+    signoff = (
+        "=== SETUP corner: process=SLOW liberty=/pdk/lib/slow.lib, "
+        "SPEF=top.max.spef ===\n"
+        f"worst slack max {setup_slack}\n"
+        "tns max 0.00\n"
+        "SIGNOFF_CHECK_TYPES_REPORTED recovery removal max_slew "
+        "min_pulse_width max_capacitance\n"
+        "=== HOLD corner: process=FAST liberty=/pdk/lib/fast.lib, "
+        "SPEF=top.min.spef ===\n"
+        f"worst slack min {hold_slack}\n"
+        "tns max 0.00\n"
+        "SIGNOFF_CHECK_TYPES_REPORTED recovery removal max_slew "
+        "min_pulse_width max_capacitance\n"
+    )
+    return {
+        "reports/phase3/mcorner_ocv_stance.json": stance,
+        STA + "sta_mcorner_ocv.rpt": signoff,
+        # The real defect shape: the FAST row also carries an unrelated,
+        # negative PRE_LAYOUT setup estimate from the per-corner sweep.
+        STA + "per_corner/sta_FAST.rpt": PRELAYOUT_VIOLATES,
+    }
+
+
+def test_r3_judges_only_the_declared_role_on_a_mixed_basis_row(tmp_path):
+    """FORWARD control: unrelated pre-layout setup cannot fail HOLD sign-off.
+
+    Pre-fix this observes `R3_SIGNOFF_CORNER_VIOLATION` and rc=1. Post-fix the
+    declared setup and hold roles both meet and the complete record passes.
+    """
+    rc, doc = _run_doc(tmp_path, _mixed_role_run(tmp_path))
+
+    assert rc == 0, doc
+    assert "R3_SIGNOFF_CORNER_VIOLATION" not in doc["rules_violated"]
+    fast = next(c for c in doc["corners"] if c["corner"] == "FAST")
+    assert fast["basis_used"] == {
+        "setup_wns_ns": "PRE_LAYOUT", "hold_wns_ns": "SIGNOFF",
+        "tns_ns": "SIGNOFF",
+    }
+    assert fast["setup_wns_ns"] == -50.00  # disclosed, never erased
+    assert fast["hold_wns_ns"] == 0.20
+
+
+def test_r3_still_blocks_a_violating_declared_role(tmp_path):
+    """REVERSE control: the role projection must not weaken real sign-off."""
+    for setup_slack, hold_slack in ((-0.50, 0.20), (0.50, -0.20)):
+        case = tmp_path / ("bad_setup" if setup_slack < 0 else "bad_hold")
+        rc, doc = _run_doc(
+            case, _mixed_role_run(case, setup_slack=setup_slack,
+                                  hold_slack=hold_slack))
+        assert rc == 1
+        assert "R3_SIGNOFF_CORNER_VIOLATION" in doc["rules_violated"]
+
+
+def test_real_published_multicorner_record_remains_clean(tmp_path):
+    """Real-artifact arm: a published multicorner run stays false-positive-free.
+
+    This is deliberately separate from the synthetic negative control above:
+    the real run proves corpus compatibility; the synthetic run supplies the
+    value-changing assertion that bites on the pre-fix program.
+    """
+    published = require_repo(
+        "benchmark-data", "ic", "spm", "v1.10.18_sky130A")
+    # The publisher retains reports under reports/phase3/ after pruning the
+    # original run tree. Feed those immutable bytes through the current
+    # consumer at its canonical locations; do not judge stale absolute report
+    # citations that point back at the producer's retired host directory.
+    files = {
+        "reports/phase3/mcorner_ocv_stance.json":
+            (published / "reports/phase3/mcorner_ocv_stance.json").read_text(),
+        "reports/phase3/multi_corner_spef_stance.json":
+            (published / "reports/phase3/multi_corner_spef_stance.json").read_text(),
+        "phase2/stage2/constraints/pvt_matrix.json":
+            (published / "phase2/stage2/constraints/pvt_matrix.json").read_text(),
+        STA + "sta_mcorner_ocv.rpt":
+            (published / "reports/phase3/sta_mcorner_ocv.rpt").read_text(),
+        STA + "sta_spef_multicorner.rpt":
+            (published / "reports/phase3/sta_spef_multicorner.rpt").read_text(),
+        STA + "sta_spef_based.rpt":
+            (published / "reports/phase3/sta_spef_based.rpt").read_text(),
+    }
+    rc, doc = _run_doc(tmp_path, files)
+
+    assert rc == 0, doc
+    assert doc["verdict"] == "PASS"
+    assert doc["signoff_corner_rows"] == 4
+    assert "R3_SIGNOFF_CORNER_VIOLATION" not in doc["rules_violated"]
+
+
+def _run_doc(tmp_path: Path, files):
+    """Invoke the public CLI and return its whole verdict document."""
+    project = tmp_path / "project"
+    project.mkdir(parents=True, exist_ok=True)
+    for rel, body in files.items():
+        path = project / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(body)
+    out = tmp_path / "out.json"
+    res = _pr.run(
+        [sys.executable, str(PROG), str(project), "--json", str(out)],
+        capture_output=True, text=True)
+    return res.returncode, json.loads(out.read_text())
