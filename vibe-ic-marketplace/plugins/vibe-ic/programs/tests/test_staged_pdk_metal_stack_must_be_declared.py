@@ -188,6 +188,32 @@ def test_bridge_signoff_config_declaration_selects_the_stack(
     assert Path(cfg.tech_lef).parent.name == "ALT", cfg.tech_lef
 
 
+def test_bridge_declaration_outside_lef_tree_wins_over_single_candidate(
+        tmp_path: Path) -> None:
+    """The bridge path is relative to ``input/pdk/``, not its ``lef/`` tree.
+
+    A distribution may need to preserve a sibling-library layout outside the
+    staging glob.  Even when that glob finds exactly one decoy, the explicit
+    integrator declaration remains the most authoritative input.
+    """
+    proj = _stage(tmp_path, {"STD": {5: 0.44}}, deck=False)
+    pdk = proj / "input" / "pdk"
+    declared = (pdk / "distribution" / "reference" / "techlef" /
+                "libx_declared_tech.lef")
+    declared.parent.mkdir(parents=True)
+    declared.write_text(_tech_lef(4, 0.28))
+    bridge = pdk / "bridge"
+    bridge.mkdir(parents=True)
+    (bridge / "signoff_config.json").write_text(
+        '{"tech_lef": "distribution/reference/techlef/'
+        'libx_declared_tech.lef"}')
+
+    cfg = _p3()._detect_pdk(proj)
+
+    assert cfg is not None
+    assert Path(cfg.tech_lef) == declared, cfg.tech_lef
+
+
 def test_a_declaration_pointing_at_nothing_refuses(tmp_path: Path) -> None:
     """A declared path that does not exist must REFUSE, never silently fall
     back — falling back is how a sign-off ends up on an unintended stack."""

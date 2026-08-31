@@ -8942,9 +8942,6 @@ def _select_tech_lef(pdk_dir: Path, candidates: List[Path]) -> Path:
        precisely the failure this function was written to remove: it produces
        a full green sign-off against a stack nobody chose.
     """
-    if len(candidates) == 1:
-        return candidates[0]
-
     cfg_f = pdk_dir / "bridge" / "signoff_config.json"
     if cfg_f.is_file():
         try:
@@ -8964,6 +8961,9 @@ def _select_tech_lef(pdk_dir: Path, candidates: List[Path]) -> Path:
             print(f"[tech-lef] DECLARED by bridge signoff_config: "
                   f"{p.relative_to(pdk_dir)}", file=sys.stderr)
             return p
+
+    if len(candidates) == 1:
+        return candidates[0]
 
     # Narrow by the sign-off deck's own enabled top-metal option.
     survivors = list(candidates)
