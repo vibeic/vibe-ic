@@ -238,6 +238,10 @@
           "alternative": "reports/phase2/lint/rom_init_lint.json",
           "path": "reports/phase2/lint/rom_init_lint.json",
           "size_bytes": 2
+        },
+        "reports/phase1/gates/stage_phase1_compliance.json": {
+          "status": "UNPROVEN",
+          "note": "2026-08-31 - UNPROVEN. Declared by `29e9c72796` [v1.13.96], which moved the flow yaml without moving this manifest; `d3_manifest_declaration_parity_check` has been reporting it as uncovered ever since (measured red on 781d24727 [v1.14.22] before this change, 7 uncovered paths). The stage-tier `*_compliance.json` reports are written by `flow_compliance_check --stage-id <X> --strict --json <this path>`, a clause that postdates every admissible run root in this manifest, so no published run carries the file and there is nothing to record as PRODUCED_BY_RUN. UNPROVEN is the true statement of the gap: the entry is now DECIDABLE, and the dimension-3 cell reports it unevidenced wherever a corpus is offered."
         }
       }
     },
@@ -670,6 +674,10 @@
           "alternative": "phase2/stage2/synth/netlist.v",
           "path": "phase2/stage2/synth/netlist.v",
           "size_bytes": 48138
+        },
+        "reports/analog/stage_analog_compliance.json": {
+          "status": "UNPROVEN",
+          "note": "2026-08-31 - UNPROVEN. Declared by `29e9c72796` [v1.13.96], which moved the flow yaml without moving this manifest; `d3_manifest_declaration_parity_check` has been reporting it as uncovered ever since (measured red on 781d24727 [v1.14.22] before this change, 7 uncovered paths). The stage-tier `*_compliance.json` reports are written by `flow_compliance_check --stage-id <X> --strict --json <this path>`, a clause that postdates every admissible run root in this manifest, so no published run carries the file and there is nothing to record as PRODUCED_BY_RUN. UNPROVEN is the true statement of the gap: the entry is now DECIDABLE, and the dimension-3 cell reports it unevidenced wherever a corpus is offered."
         }
       }
     },
@@ -689,6 +697,10 @@
           "alternative": "phase3/stage3/pnr/pdn.done",
           "path": "phase3/stage3/pnr/pdn.done",
           "size_bytes": 144
+        },
+        "reports/phase2/gates/stage2_compliance.json": {
+          "status": "UNPROVEN",
+          "note": "2026-08-31 - UNPROVEN. Declared by `29e9c72796` [v1.13.96], which moved the flow yaml without moving this manifest; `d3_manifest_declaration_parity_check` has been reporting it as uncovered ever since (measured red on 781d24727 [v1.14.22] before this change, 7 uncovered paths). The stage-tier `*_compliance.json` reports are written by `flow_compliance_check --stage-id <X> --strict --json <this path>`, a clause that postdates every admissible run root in this manifest, so no published run carries the file and there is nothing to record as PRODUCED_BY_RUN. UNPROVEN is the true statement of the gap: the entry is now DECIDABLE, and the dimension-3 cell reports it unevidenced wherever a corpus is offered."
         }
       }
     },
@@ -917,6 +929,10 @@
           "path": "reports/phase3/em_signoff.json",
           "size_bytes": 717,
           "note": "2026-08-12 - was PRODUCED_LIVE, producer em_report_check, base_run benchmark-data/ic/spm/v1.9.96_gf180mcuD. That record was measured 2026-07-27 against the LIVE run tree this cell was later published from, at a moment when the tree did not carry this path, so the producer could be run and watched to write it. The published cell now carries the artefact tracked at HEAD, and produce_live refuses - correctly - to call a production LIVE against a tree that already holds the target. Corrected to the status the code itself prescribes for exactly this case (produce_live: \"the artefact is TRACKED AT HEAD ... in that case the entry is not a live production at all; it should be recorded PRODUCED_BY_RUN\"). Nothing was written and nothing was published: the bytes cited are the ones the commit already carried."
+        },
+        "reports/phase3/em_current_authority.json": {
+          "status": "UNPROVEN",
+          "note": "2026-08-31 - UNPROVEN. Declared in the same change that records this entry, to close the dimension-7 finding W1:gate_output_read_elsewhere on step 25 - the LAST ENFORCED-CONTRADICTED cell in the 63x8 matrix. The gate clause `em_peak_current_authority_check . --json reports/phase3/em_current_authority.json` designates it and `phase3_one_shot_runner` reads it by name. It resolves in NO admissible run root: the gate postdates every published cell, and the copies on this host live in agent scratch trees, which `_admissibility` excludes by construction. So this declaration moves the finding from dimension 7 to dimension 3 - exactly as step 31's `magic_illegal_overlap.json` did on 2026-08-20 - and that is stated here rather than left for a reader to discover from a red cell."
         }
       }
     },
@@ -1107,9 +1123,9 @@
             "--json",
             "reports/phase3/magic_illegal_overlap.json"
           ],
-        "writes": "reports/phase3/magic_illegal_overlap.json",
-        "producer_is_declared_before_gate": true,
-        "base_run": "benchmark-data/ic/spm/v1.9.96_gf180mcuD",
+          "writes": "reports/phase3/magic_illegal_overlap.json",
+          "producer_is_declared_before_gate": true,
+          "base_run": "benchmark-data/ic/spm/v1.9.96_gf180mcuD",
           "size_bytes": 1729,
           "provenance_note": "The producer postdates every published run, but phase3_one_shot_runner dispatches it before LVS and the tracked-only live proof writes this non-empty report from the published extraction evidence. The compliance-audit gate writes its independent triage copy under reports/audit, so it cannot create the declared evidence it then audits."
         },
@@ -1228,6 +1244,10 @@
           "alternative": "phase3/stage4/gds/*.gds",
           "path": "phase3/stage4/gds/spm.gds",
           "size_bytes": 1180456
+        },
+        "reports/phase3/gates/stage3_compliance.json": {
+          "status": "UNPROVEN",
+          "note": "2026-08-31 - UNPROVEN. Declared by `29e9c72796` [v1.13.96], which moved the flow yaml without moving this manifest; `d3_manifest_declaration_parity_check` has been reporting it as uncovered ever since (measured red on 781d24727 [v1.14.22] before this change, 7 uncovered paths). The stage-tier `*_compliance.json` reports are written by `flow_compliance_check --stage-id <X> --strict --json <this path>`, a clause that postdates every admissible run root in this manifest, so no published run carries the file and there is nothing to record as PRODUCED_BY_RUN. UNPROVEN is the true statement of the gap: the entry is now DECIDABLE, and the dimension-3 cell reports it unevidenced wherever a corpus is offered."
         }
       }
     },
@@ -1263,6 +1283,10 @@
         },
         "phase3/stage4/documentation/ip/*/IP_DATASHEET.md": {
           "status": "UNPROVEN"
+        },
+        "reports/phase3/digital_hardmacro.json": {
+          "status": "UNPROVEN",
+          "note": "2026-08-31 - UNPROVEN. Same declaring commit and the same omission as the five stage-tier compliance reports above (`29e9c72796` [v1.13.96]). The IP hardmacro report postdates every admissible run root here, so no published run carries it."
         }
       },
       "condition_files": [
@@ -1357,6 +1381,10 @@
           "alternative": "reports/phase2/fpga/on_board_pass.json",
           "path": "reports/phase2/fpga/on_board_pass.json",
           "size_bytes": 732
+        },
+        "reports/phase3/gates/stage4_compliance.json": {
+          "status": "UNPROVEN",
+          "note": "2026-08-31 - UNPROVEN. Declared by `29e9c72796` [v1.13.96], which moved the flow yaml without moving this manifest; `d3_manifest_declaration_parity_check` has been reporting it as uncovered ever since (measured red on 781d24727 [v1.14.22] before this change, 7 uncovered paths). The stage-tier `*_compliance.json` reports are written by `flow_compliance_check --stage-id <X> --strict --json <this path>`, a clause that postdates every admissible run root in this manifest, so no published run carries the file and there is nothing to record as PRODUCED_BY_RUN. UNPROVEN is the true statement of the gap: the entry is now DECIDABLE, and the dimension-3 cell reports it unevidenced wherever a corpus is offered."
         }
       },
       "unproven": [

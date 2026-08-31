@@ -863,6 +863,32 @@ def test_output_entries_classify_into_the_four_kinds():
     # ANY_OF is untouched by all three, and FILE is untouched by the first two,
     # which is what makes the per-kind asserts a real check rather than a
     # restatement of the sum.
+    # 2026-08-31 (b): 182 -> 183, FILE 130 -> 131, ONE entry with ONE owner,
+    # and this time the declaring change carries the pin.
+    #
+    #   +1  step 25 `reports/phase3/em_current_authority.json`, declared to
+    #       close the dimension-7 finding W1:gate_output_read_elsewhere -- the
+    #       third closure of that rule by declaration, after step 31's
+    #       `magic_illegal_overlap.json` and `perc_sweep.json` above. Step 25's
+    #       gate clause DESIGNATES the path (`em_peak_current_authority_check .
+    #       --json reports/phase3/em_current_authority.json`) and
+    #       `phase3_one_shot_runner` reads it by name at three sites, the last
+    #       of which cites it as `em_cat["evidence"]`. Written by one thing,
+    #       read by another, declared by nothing. It was the LAST
+    #       ENFORCED-CONTRADICTED cell in the 63x8 matrix.
+    #
+    # RE-DERIVED by the prescribed method, not incremented: `flowref` was driven
+    # at the pre-edit `flow/phase1_phase2_phase3.yaml` through
+    # `VIBE_IC_MATRIX_FLOW_YAML` and at the tip, and the (step, entry) SET
+    # diffed. ADDED exactly `('25', 'reports/phase3/em_current_authority.json')`;
+    # REMOVED nothing; 182 -> 183. A plain FILE -- no wildcard, no `" OR "` --
+    # so GLOB (28) and ANY_OF (24) are untouched, which is what makes the
+    # attribution checkable rather than asserted.
+    #
+    # The paired anchors move in this same change:
+    # `figure:required_output_entries` 182 -> 183 and
+    # `figure:required_outputs_file` 130 -> 131.
+    #
     # NO GENERATOR OWNS THIS PIN, which is why every note above is a
     # derivation and not a number. The remedy when it goes red is NOT to type
     # the new total:
@@ -881,8 +907,8 @@ def test_output_entries_classify_into_the_four_kinds():
     REDERIVE = ("re-derive it: diff the (step, entry) SET per flow-yaml "
                 "revision since the last commit that touched this pin, via "
                 "$VIBE_IC_MATRIX_FLOW_YAML — never type the new total")
-    assert sum(seen.values()) == 182, (seen, REDERIVE)
-    assert seen[F.FILE] == 130, (seen, REDERIVE)
+    assert sum(seen.values()) == 183, (seen, REDERIVE)
+    assert seen[F.FILE] == 131, (seen, REDERIVE)
     assert seen[F.GLOB] == 28, (seen, REDERIVE)
     assert seen[F.ANY_OF] == 24, (seen, REDERIVE)
     # Reported to the orchestrator: the PROGRAM_EXIT form described in the brief

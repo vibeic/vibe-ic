@@ -2511,7 +2511,17 @@ def matrix_cell_state(step_id) -> str:
 # ══════════════════════════════════════════════════════════════════════
 # L6's own guards: the denominator, and the register that forgives three cells
 # ══════════════════════════════════════════════════════════════════════
-_FLOW_DECLARED_OUTPUT_FLOOR = 162
+#: RE-DERIVED 2026-08-31, 162 -> 214. A `>=` floor cannot see LOOSENING: the
+#: flow grew past 162 without reddening anything, so this stopped being the live
+#: baseline it is documented as and would no longer have caught a shrink back to
+#: the old figure. Measured on `781d24727` [v1.14.22]: declared 162, live 213 —
+#: 1.31x of slack, all of it pre-existing. The one entry this change adds
+#: (step 25's `reports/phase3/em_current_authority.json`) takes it to 214. The
+#: same audit re-derived `test_matrix_d5_deps_correct`'s five floors; the other
+#: bounds in this file (`len(l3) >= 40`, `len(audited) >= 60`,
+#: `len(chain) >= 3000`) are DELIBERATELY rough collapse detectors, say so in
+#: their own messages, and are left alone.
+_FLOW_DECLARED_OUTPUT_FLOOR = 214
 
 
 def test_d6_l6_flow_declared_output_denominator_is_disclosed():

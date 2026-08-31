@@ -64,10 +64,47 @@ the exact basename of ``A`` occurs as a **standalone string constant** and:
     names ``drc_clean.flag`` and ``lvs_match.flag`` several times, in the
     section EXPLAINING why it no longer reads them, and that prose must not be
     counted as a read;
-  * the constant does not occur *only* inside a ``not in`` container — in
-    ``spare_cell_preservation_check`` the names ``post_cts.def`` and
-    ``post_hold.def`` appear solely in an EXCLUSION list
-    (``d.name not in (...)``), which is the opposite of a read.
+  * the constant does not occur *only* as an operand of a comparison, or as an
+    element of a container being compared against. ``spare_cell_preservation_
+    check`` names ``post_cts.def`` and ``post_hold.def`` solely in an EXCLUSION
+    list (``d.name not in (...)``), and ``flow_compliance_check`` name-tests
+    ``coverage_actual.json`` against ``result.evidence`` — the declared outputs
+    of the step it is CHECKING (``Path(artifact_rel).name != _COVERAGE_SELFSKIP_
+    ARTIFACT``). Both classify a path the program already holds; neither opens
+    anything;
+  * the constant is not merely the BINDING SITE of a module-level
+    ``NAME = "literal"`` alias. Naming a constant is not using it, and without
+    resolving the alias the binding and every use are the same string in
+    different positions, so none of them can be classified. The USES are
+    counted, each in its own position.
+
+Deliberately NOT excluded, and this was measured rather than assumed: the
+literal argument of ``str.endswith`` / ``str.startswith``. A draft of this
+narrowing excluded them on the reasoning that a suffix test classifies rather
+than reads. It does not — ``stage_on_pass_review`` selects the file it is about
+to open with ``next((project / r for r in intent_rel if
+r.endswith("L5_ADI_SPEC.json")))`` and then calls ``.read_text()`` on it. The
+draft silently dropped four genuine anchors, and NO pair-level measurement could
+see it: all four artefacts are produced by ``D1``, which is in every step's
+closure. ``test_d5_read_position_analysis_is_not_a_blanket`` is the control that
+caught it, and it measures ANCHORS, not pairs, for exactly that reason.
+
+**LAYER 2b — WHERE THE FLOW DECLARES WHAT THE INVOCATION READS.** A gate program
+that is DISPATCHED has no single read set. ``stage_on_pass_review`` is one
+program wired as a gate on six steps, each with a different ``--stage``, and
+every one of its rules reads only the ``intent:`` / ``artefact:`` the flow
+declares for the stage it was handed. The whole-program anchor cannot see that
+and charges every step with the UNION over all seven stages. Measured on main at
+v1.14.22 the union charged six steps (2, 7, 14, 15, 37, 39) with reading
+``phase3/stage5_manufacturing/packaging_log.json`` — declared by exactly one
+stage, ``stage5_manufacturing``, which no gate command in the flow selects and
+whose rule is registered ``enabled=False`` for that reason. Step 42 produces it
+and is the LAST step, so the edge each finding asked for was forward or
+circular: a charge whose only possible repair is impossible is not a finding
+about ``blocks_on``. So for a program in ``_FLOW_DECLARED_READ_PROGRAMS`` the
+anchor is INTERSECTED with what the flow declares for THIS invocation. This
+does not forgive; it substitutes a better source, the same move layer 3 makes
+with ``required_inputs: [{from: X}]``.
 
 Both layers then drop two classes of non-dependency:
 
@@ -77,17 +114,37 @@ Both layers then drop two classes of non-dependency:
     ``phase3/mixed_signal/cosim/mixed_signal_results.json``). A co-producer of X
     does not depend on the *other* producer of X.
 
-Measured on the current tree: **12 of 63 steps have at least one derived
-cross-step data dependency**, carrying 16 distinct (consumer, producer) pairs
-backed by 32 evidence rows.
+Measured on the current tree: **23 of 63 steps have at least one derived
+cross-step data dependency**, carrying 29 distinct (consumer, producer) pairs
+backed by 70 evidence rows.
 That is the honest denominator of the layer-1+2 half of this dimension, and it
 is stated in :func:`test_d5_derived_dependency_denominator_is_disclosed` so it
 can never quietly drift to zero and leave a suite of vacuous passes behind — the
 exact shape of the failure this campaign was convened over (a runtime ordering
 guard that saw 0 violations because it had been starved of its input).
 
-WHY IT FELL FROM 14/19/35 (v1.7.68) TO 12/16/31, stated because a SHRINKING
-denominator is the shape this guard exists to catch. The five dimension-5
+WHY IT FELL FROM 37/92 TO 29/70 (v1.14.22 -> here), stated because a SHRINKING
+denominator is the shape this guard exists to catch. The read-position rule and
+layer 2b removed EIGHT pairs -- ``(2,4) (2,42) (7,42) (14,4) (14,42) (15,42)
+(37,42) (39,42)`` -- and no others; those eight were the whole of this
+dimension's ENFORCED-CONTRADICTED count. Fourteen more evidence rows went from
+pairs that SURVIVED: ``(7,D1) 6->3``, ``(14,D1) 8->5``, ``(15,D1) 5->2``,
+``(37,D1) 4->2``, ``(39,D1) 4->1``. Each is an L-doc a DIFFERENT stage's review
+reads -- step 7 is ``stage1``, whose ``intent:`` is ``L9_INTEGRATION_SPEC.json``
+alone, and it was being charged with reading L1, L5 and L8 because some other
+stage's rule does. Exactly one PROGRAM-level anchor was lost,
+``(flow_compliance_check, coverage_actual.json)``;
+``(stage_on_pass_review, packaging_log.json)`` is still an anchor of the program
+and is simply no longer attributed to steps whose stage does not declare it.
+
+The three floors below were re-derived at the same time. They had said
+``12 / 16 / 32`` while the live tree measured ``23 / 37 / 92``: the floors are
+``>=`` guards, so eleven pairs and sixty rows of drift never reddened anything
+and the anti-starvation bound had gone slack by a factor of nearly three. They
+now sit on the live post-fix baseline.
+
+WHY IT FELL FROM 14/19/35 (v1.7.68) TO 12/16/31, kept because it is the earlier
+half of the same disclosure. The five dimension-5
 waivers were closed by fixing the defects, and three of the removed pairs were
 themselves the defects — a consumer reading an artefact it must not read:
 
@@ -340,22 +397,91 @@ class ProgramUnparseable(Exception):
 def program_string_constants(basename: str) -> frozenset:
     """Standalone string constants of ``programs/<basename>.py``.
 
-    AST, not text: comments never enter, so the "``# e.g. \"foo_check\"`` counted
-    as a call site" failure cannot recur. Two further classes are removed
-    because they are provably not path construction:
-
-      * bare-expression strings (module / function / class docstrings, and the
-        free-standing comment-strings this codebase uses between defs), and
-      * constants that appear ONLY as members of a ``not in`` container, which
-        is an exclusion list — the opposite of a read.
+    Thin wrapper over :func:`read_position_constants`, which is the analysis and
+    which the tests drive directly from source text so every exclusion is proven
+    by a case written to exercise it.
     """
     path = F.program_path(basename)
     if path is None:  # pragma: no cover - unresolved gate programs are dim 1
         raise ProgramUnparseable(f"programs/{basename}.py does not exist")
+    return read_position_constants(
+        path.read_text(encoding="utf-8", errors="replace"), origin=str(path)
+    )
+
+
+def _module_string_aliases(tree: ast.Module) -> Dict[str, str]:
+    """``{NAME: literal}`` for MODULE-LEVEL ``NAME = "literal"`` bindings.
+
+    A gate program that names an artefact usually names it ONCE, at module
+    level, and then refers to the NAME. Without resolving that, the binding site
+    and every use are the same string in different syntactic positions, and the
+    position analysis below can classify none of them.
+
+    Only single-target, module-level, plain-string bindings are resolved, and a
+    name bound twice or bound to anything else is dropped entirely: an alias
+    this cannot prove is an alias must keep counting as a read.
+    """
+    aliases: Dict[str, str] = {}
+    rebound: Set[str] = set()
+    for node in tree.body:
+        target = value = None
+        if (isinstance(node, ast.Assign) and len(node.targets) == 1
+                and isinstance(node.targets[0], ast.Name)):
+            target, value = node.targets[0].id, node.value
+        elif isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
+            target, value = node.target.id, node.value
+        if target is None:
+            continue
+        if not (isinstance(value, ast.Constant) and isinstance(value.value, str)):
+            rebound.add(target)
+        elif target in aliases and aliases[target] != value.value:
+            rebound.add(target)
+        else:
+            aliases[target] = value.value
+    for name in rebound:
+        aliases.pop(name, None)
+    return aliases
+
+
+def read_position_constants(source: str, origin: str = "<source>") -> frozenset:
+    """String constants of one gate program that occur in READ position.
+
+    AST, not text: comments never enter, so the "``# e.g. \"foo_check\"`` counted
+    as a call site" failure cannot recur. Three classes are removed because each
+    is provably not path construction:
+
+      * bare-expression strings (module / function / class docstrings, and the
+        free-standing comment-strings this codebase uses between defs);
+      * the BINDING SITE of a module-level ``NAME = "literal"`` alias. Naming a
+        constant is not using it; the USES of the name are counted, each in its
+        own position. Without this, a program that names an artefact once at
+        module level and then only COMPARES against the name is indistinguishable
+        from one that opens it;
+      * constants that appear ONLY as an operand of an ``ast.Compare`` — either
+        directly, or as an element of a container being compared against. This
+        SUPERSEDES the earlier ``not in``-container rule, which was this same
+        idea drawn one operator wide. ``x not in (a, b)`` and
+        ``Path(p).name != a`` are both the program CLASSIFYING a path it already
+        holds; neither opens anything.
+
+    A constant that occurs even ONCE outside those positions still counts. That
+    is the point, and it is what keeps this from becoming an amnesty: a program
+    that name-tests a literal AND builds a path from it is a reader and stays
+    charged (``test_d5_compare_position_does_not_forgive_a_real_read``).
+
+    NOT EXCLUDED, and this was measured rather than assumed: the literal argument
+    of ``str.endswith`` / ``str.startswith``. ``stage_on_pass_review`` selects the
+    file it is about to open with
+    ``next((project / r for r in intent_rel if r.endswith("L5_ADI_SPEC.json")))``
+    and then calls ``.read_text()`` on it — a suffix test there IS the read. An
+    earlier draft of this function excluded those arguments and silently dropped
+    four genuine anchors; ``test_d5_read_position_analysis_is_not_a_blanket`` is
+    what caught it and is what keeps it caught.
+    """
     try:
-        tree = ast.parse(path.read_text(encoding="utf-8", errors="replace"))
+        tree = ast.parse(source)
     except SyntaxError as exc:
-        raise ProgramUnparseable(f"{path}: {exc}") from exc
+        raise ProgramUnparseable(f"{origin}: {exc}") from exc
 
     docstring_nodes = {
         id(node.value)
@@ -364,13 +490,40 @@ def program_string_constants(basename: str) -> frozenset:
         and isinstance(node.value, ast.Constant)
         and isinstance(node.value.value, str)
     }
+    aliases = _module_string_aliases(tree)
+    binding_nodes: Set[int] = set()
+    for node in tree.body:
+        value = None
+        if (isinstance(node, ast.Assign) and len(node.targets) == 1
+                and isinstance(node.targets[0], ast.Name)
+                and node.targets[0].id in aliases):
+            value = node.value
+        elif (isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name)
+                and node.target.id in aliases):
+            value = node.value
+        if isinstance(value, ast.Constant) and isinstance(value.value, str):
+            binding_nodes.add(id(value))
+
+    def one_literal(node) -> Tuple[str, int]:
+        """``(text, node id)`` when ``node`` IS one string literal, else ``("", 0)``."""
+        if isinstance(node, ast.Constant) and isinstance(node.value, str):
+            return node.value, id(node)
+        if (isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load)
+                and node.id in aliases):
+            return aliases[node.id], id(node)
+        return "", 0
+
+    def countable(node) -> Tuple[str, int]:
+        text, nid = one_literal(node)
+        if not text or nid in docstring_nodes or nid in binding_nodes:
+            return "", 0
+        return text, nid
 
     total: Counter = Counter()
     for node in ast.walk(tree):
-        if isinstance(node, ast.Constant) and isinstance(node.value, str):
-            if id(node) in docstring_nodes:
-                continue
-            total[node.value] += 1
+        text, _nid = countable(node)
+        if text:
+            total[text] += 1
         elif isinstance(node, ast.JoinedStr):
             # f-strings: only the LITERAL segments are usable evidence; a
             # `{var}` hole is explicitly not resolved here (see known gap 1).
@@ -379,23 +532,145 @@ def program_string_constants(basename: str) -> frozenset:
                     total[part.value] += 1
 
     excluded: Counter = Counter()
+
+    def count_compare_operand(node) -> None:
+        text, _nid = countable(node)
+        if text:
+            excluded[text] += 1
+        elif isinstance(node, (ast.Tuple, ast.List, ast.Set)):
+            for element in node.elts:
+                count_compare_operand(element)
+
     for node in ast.walk(tree):
-        if not isinstance(node, ast.Compare):
-            continue
-        for op, comparator in zip(node.ops, node.comparators):
-            if not isinstance(op, ast.NotIn):
-                continue
-            if not isinstance(comparator, (ast.Tuple, ast.List, ast.Set)):
-                continue
-            for element in comparator.elts:
-                if isinstance(element, ast.Constant) and isinstance(
-                    element.value, str
-                ):
-                    excluded[element.value] += 1
+        if isinstance(node, ast.Compare):
+            for operand in [node.left] + list(node.comparators):
+                count_compare_operand(operand)
 
     return frozenset(
         text for text, count in total.items() if excluded[text] < count
     )
+
+
+# ══════════════════════════════════════════════════════════════════════
+# LAYER 2b — WHERE THE FLOW DECLARES WHAT THE INVOCATION READS
+# ══════════════════════════════════════════════════════════════════════
+#: Gate programs that are DISPATCHED, and whose reads the flow therefore
+#: declares per invocation instead of leaving to be reconstructed from the
+#: program's AST. ``{program: (selector flag, yaml key of the declaration)}``.
+#:
+#: WHY THIS EXISTS. ``stage_on_pass_review`` is ONE program wired as a gate on
+#: SIX steps, each with a different ``--stage``. Its rules are registered per
+#: stage and every one of them reads only ``decl["intent"]`` / ``decl["artefact"]``
+#: — the block the flow declares for the stage it was given. The basename anchor
+#: cannot see that: it takes the constants of the WHOLE program and charges
+#: every step that runs it, i.e. the UNION over all seven stages. Measured on
+#: main at v1.14.22 that union charged six steps (2, 7, 14, 15, 37, 39) with
+#: reading ``phase3/stage5_manufacturing/packaging_log.json``, which is declared
+#: by exactly one stage — ``stage5_manufacturing``, which NO gate command in the
+#: flow selects, and whose rule is registered ``enabled=False`` for that reason.
+#: Step 42 produces that artefact and is the LAST step in the flow, so the edge
+#: the finding asked for was a forward or circular one in every case: a charge
+#: whose only possible repair is impossible is not a finding about ``blocks_on``.
+#:
+#: WHAT IT DOES NOT DO. It does not forgive; it SUBSTITUTES a better source. For
+#: a program listed here the anchor is intersected with what the flow declares
+#: for THIS invocation — so a read the flow declares is still charged, and a
+#: read of an artefact the flow does NOT declare is charged as a dimension-7
+#: question against the declaration rather than silently believed. The same move
+#: layer 3 makes with ``required_inputs: [{from: X}]``: where the flow writes the
+#: answer down, read it instead of reconstructing it.
+_FLOW_DECLARED_READ_PROGRAMS: Dict[str, Tuple[str, str]] = {
+    "stage_on_pass_review": ("--stage", "on_pass_review"),
+}
+
+#: Keys inside that block naming paths the invocation READS. ``intent`` is what
+#: the review is checked against and ``artefact`` is what it reviews; both are
+#: opened. ``intent_deny`` is a word list, not a path list, and is not here.
+_FLOW_DECLARED_READ_KEYS: Tuple[str, ...] = ("intent", "artefact")
+
+
+@functools.lru_cache(maxsize=None)
+def flow_declaration_blocks(key: str) -> Dict[str, Dict]:
+    """``{node id: node[key]}`` for every node in the flow that carries ``key``.
+
+    Walks the whole document rather than ``steps()``: the ``on_pass_review``
+    blocks hang off the STAGE objects, which are not steps.
+    """
+    found: Dict[str, Dict] = {}
+
+    def walk(node) -> None:
+        if isinstance(node, dict):
+            block = node.get(key)
+            if isinstance(block, dict) and node.get("id") is not None:
+                found[str(node["id"])] = block
+            for value in node.values():
+                walk(value)
+        elif isinstance(node, list):
+            for value in node:
+                walk(value)
+
+    walk(F.load_flow())
+    return found
+
+
+@functools.lru_cache(maxsize=None)
+def flow_declared_program_reads(step_id) -> Dict[str, Tuple[str, ...]]:
+    """``{program: paths the flow declares THIS step's invocation of it reads}``.
+
+    Only programs in `_FLOW_DECLARED_READ_PROGRAMS` appear. A program that is
+    listed but whose selector or declaration cannot be resolved is OMITTED, not
+    given an empty list: an unresolvable declaration must fall back to the
+    whole-program anchor rather than silently forgiving every artefact.
+    """
+    out: Dict[str, Set[str]] = {}
+    for command in F.gate_commands(step_id):
+        try:
+            tokens = shlex.split(command)
+        except ValueError:  # pragma: no cover - defensive: unbalanced quotes
+            tokens = command.split()
+        if not tokens:
+            continue
+        program = tokens[0].rsplit("/", 1)[-1]
+        if program.endswith(".py"):
+            program = program[:-3]
+        spec = _FLOW_DECLARED_READ_PROGRAMS.get(program)
+        if spec is None:
+            continue
+        flag, key = spec
+        selected = None
+        for index, token in enumerate(tokens):
+            if token == flag and index + 1 < len(tokens):
+                selected = tokens[index + 1]
+            elif token.startswith(flag + "="):
+                selected = token.split("=", 1)[1]
+        if selected is None:
+            continue
+        block = flow_declaration_blocks(key).get(selected)
+        if block is None:
+            continue
+        paths: Set[str] = set()
+        for field in _FLOW_DECLARED_READ_KEYS:
+            for entry in (block.get(field) or []):
+                normalised = _norm_path(entry)
+                if normalised:
+                    paths.add(normalised)
+        out.setdefault(program, set()).update(paths)
+    return {program: tuple(sorted(paths)) for program, paths in out.items()}
+
+
+def _declared_by_flow(artefact: str, declared: Tuple[str, ...]) -> bool:
+    """Is ``artefact`` one of ``declared``, or inside a directory it names?
+
+    Containment is used HERE and refused in layer 1, and the two are different
+    questions. Layer 1's rejected case was "step 21 scans a directory step 34
+    later writes into", i.e. an ADJACENCY inferred from two unrelated
+    declarations. Here the flow has declared, in one block, that this invocation
+    reads this directory — ``artefact: [phase1/generated_docs/]`` is how the
+    stage-1 review says it reads the L-docs, and there is no other way for it to
+    say so.
+    """
+    return any(artefact == entry or artefact.startswith(entry + "/")
+               for entry in declared)
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -419,10 +694,17 @@ def derived_dependencies(step_id) -> Tuple[Tuple[str, str, str], ...]:
             found.add((producer, read, f"yaml gate/condition declares '{read}'"))
 
     anchors = unique_basename_artefacts()
+    by_flow = flow_declared_program_reads(step_id)
     for prog in F.gate_programs(step_id):
         constants = program_string_constants(prog)
+        declared = by_flow.get(prog)
         for base, art in anchors.items():
             if base not in constants:
+                continue
+            if declared is not None and not _declared_by_flow(art, declared):
+                # The flow declares what THIS invocation reads and this is not
+                # in it; the whole-program anchor is the union over every other
+                # invocation of the same program. See `_FLOW_DECLARED_READ_PROGRAMS`.
                 continue
             if consumer in prod[art]:
                 continue
@@ -1082,9 +1364,9 @@ def test_d5_state_census_is_exhaustive():
 # deliberately, with the reason written into the docstring the way the last
 # three removals were. Upward moves (a new declared read, a new step) are
 # free: this is a floor, not an equality pin.
-_DERIVED_DEP_STEPS_FLOOR = 12
-_DERIVED_DEP_PAIRS_FLOOR = 16
-_DERIVED_DEP_ROWS_FLOOR = 32
+_DERIVED_DEP_STEPS_FLOOR = 23
+_DERIVED_DEP_PAIRS_FLOOR = 29
+_DERIVED_DEP_ROWS_FLOOR = 70
 
 # Cells whose layer-1+2 data-dependency clause is EMPTY BY CONSTRUCTION, and
 # why. Both were closed by DELETING a cross-step read, so for exactly these
@@ -1203,6 +1485,252 @@ def test_d5_every_gate_program_is_parseable():
         f"{len(blind)} gate program(s) unparseable, so dimension 5's layer-2 "
         f"read detection is blind for their steps: {blind}"
     )
+
+
+# ══════════════════════════════════════════════════════════════════════
+# THE READ-POSITION ANALYSIS, AND THE CONTROLS THAT KEEP IT HONEST
+# ══════════════════════════════════════════════════════════════════════
+#: SHRINK-ONLY. What layer 2 stopped charging when the read-position analysis
+#: and layer 2b landed, and the site that earns each one. Every entry is an
+#: ADMISSION: `test_d5_the_narrowing_register_names_live_subjects` requires each
+#: to still describe a LIVE suppression of a charge this dimension would
+#: otherwise make. When the site changes, the entry stops describing anything
+#: and that test reddens until it is deleted or the narrowing is re-argued.
+#: A register that outlives its subject is an amnesty.
+#:
+#: ``(program, basename, consumers it charged, why it is not a read)``
+_NARROWED_LIVE_SUBJECTS: Tuple[Tuple[str, str, Tuple[str, ...], str], ...] = (
+    (
+        "stage_on_pass_review",
+        "packaging_log.json",
+        ("2", "7", "14", "15", "37", "39"),
+        "named only by R5_PACKAGE_CANNOT_BOND_DESIGN, which the flow declares "
+        "under stage5_manufacturing's `on_pass_review.artefact`. No gate "
+        "command passes `--stage stage5_manufacturing`, and the rule is "
+        "registered `enabled=False` into `_DECLARED_NOT_ENABLED` for exactly "
+        "that reason. Suppressed by layer 2b.",
+    ),
+    (
+        "flow_compliance_check",
+        "coverage_actual.json",
+        ("2", "14"),
+        "flow_compliance_check.py `Path(artifact_rel).name != "
+        "_COVERAGE_SELFSKIP_ARTIFACT`, over `result.evidence` — the declared "
+        "outputs of the step BEING CHECKED. The constant classifies a path the "
+        "scan already holds. Suppressed by the compare-position rule.",
+    ),
+)
+
+
+def test_d5_read_position_analysis_excludes_only_what_it_claims():
+    """Each exclusion fires, and each retention survives — driven from source.
+
+    Written against source text rather than a real gate program so every branch
+    is exercised by a case authored to exercise it, and so a future edit to a
+    real program cannot quietly become this test's only subject.
+    """
+    source = '''
+"""module docstring naming docstring_only.json"""
+from pathlib import Path
+
+ALIAS_COMPARED = "alias_compared.json"
+ALIAS_OPENED = "alias_opened.json"
+REBOUND = "rebound_one.json"
+REBOUND = "rebound_two.json"
+
+def f(root, given):
+    if Path(given).name != ALIAS_COMPARED:
+        pass
+    if Path(given).name == "eq_only.json":
+        pass
+    if given not in ("not_in_only.json",):
+        pass
+    if given in ["in_only.json"]:
+        pass
+    if given.endswith("suffix_selected.json"):
+        return (root / given).read_text()
+    open(root / ALIAS_OPENED)
+    return (root / "built_only.json").read_text()
+'''
+    live = read_position_constants(source, origin="<fixture>")
+    for excluded in ("docstring_only.json", "alias_compared.json",
+                     "eq_only.json", "not_in_only.json", "in_only.json"):
+        assert excluded not in live, (
+            f"{excluded!r} occurs ONLY where the program classifies a path it "
+            f"already holds; layer 2 must not charge a read for it"
+        )
+    for retained in ("alias_opened.json", "built_only.json",
+                     "suffix_selected.json", "rebound_one.json",
+                     "rebound_two.json"):
+        assert retained in live, (
+            f"{retained!r} must still count: it is used to build or select a "
+            f"path that is opened, or its name is bound more than once and the "
+            f"alias must therefore not be resolved at all"
+        )
+
+
+def test_d5_compare_position_does_not_forgive_a_real_read():
+    """Paired control, one literal at a time: adding a comparison changes nothing.
+
+    A narrowing check's hazard is the NEW BLIND SPOT it creates, so the true
+    positive is hidden inside it: the same literal is first only built from,
+    then compared against AND built from. An implementation that counted
+    occurrences the wrong way round, or stopped at the first comparison it saw,
+    would silently drop the read and nothing else here would notice.
+    """
+    built = 'def f(root):\n    return (root / "x.json").read_text()\n'
+    compared_and_built = (
+        'def f(root, given):\n'
+        '    if given == "x.json" or given not in ("x.json",):\n'
+        '        return (root / "x.json").read_text()\n'
+        '    return None\n'
+    )
+    compared_only = (
+        'def f(given):\n'
+        '    return given == "x.json" or given not in ("x.json",)\n'
+    )
+    assert "x.json" in read_position_constants(built, origin="<built>")
+    assert "x.json" in read_position_constants(
+        compared_and_built, origin="<compared_and_built>"
+    ), ("a literal the program BUILDS a path from stays a read however many "
+        "times it is also compared against")
+    assert "x.json" not in read_position_constants(
+        compared_only, origin="<compared_only>"
+    ), "the exclusion must actually fire when every occurrence is a comparison"
+
+
+def test_d5_read_position_analysis_is_not_a_blanket():
+    """The two narrowed programs still register every read they really make.
+
+    THIS TEST IS THE REASON THE FIRST DRAFT OF `read_position_constants` WAS
+    WITHDRAWN. That draft also excluded the literal argument of
+    `str.endswith` / `str.startswith`, on the reasoning that a suffix test
+    classifies rather than reads. It does not: `stage_on_pass_review` selects
+    the file it is about to open with
+    `next((project / r for r in intent_rel if r.endswith("L5_ADI_SPEC.json")))`
+    and then calls `.read_text()` on it. The draft dropped that anchor and three
+    more, and NO pair-level measurement could see it — every one of those
+    artefacts is produced by D1, which is in every step's closure. Only an
+    anchor-level control sees an over-narrowing that costs no pair, and this is
+    that control.
+    """
+    expected = {
+        "stage_on_pass_review": {
+            "L1_DATASHEET.json", "L5_ADI_SPEC.json",
+            "L8_TIMING_WAVEFORM.json", "L9_INTEGRATION_SPEC.json",
+            "packaging_log.json",
+        },
+        "flow_compliance_check": {
+            "L5_ADI_SPEC.json", "L6_CONTROL_LOGIC.json",
+            "L9_INTEGRATION_SPEC.json", "extraction_patterns.json",
+        },
+    }
+    anchors = set(unique_basename_artefacts())
+    for program, must_keep in sorted(expected.items()):
+        live = program_string_constants(program) & anchors
+        missing = sorted(must_keep - live)
+        assert not missing, (
+            f"{program}.py no longer registers a read of {missing}; the "
+            f"read-position analysis has widened past what it was authored for "
+            f"(live anchors: {sorted(live)})"
+        )
+
+
+def test_d5_flow_declared_reads_resolve_for_every_dispatched_program():
+    """Layer 2b must RESOLVE, per step, or it is silently doing nothing.
+
+    A selector flag that stopped being passed, a stage id that was renamed, or a
+    declaration block that moved would all leave `flow_declared_program_reads`
+    returning `{}` — and `{}` means "fall back to the whole-program anchor",
+    which passes quietly while the narrowing it is supposed to apply applies
+    nowhere. So the steps it resolves for are pinned, and so is the fact that
+    each resolution names at least one path.
+    """
+    resolved = {
+        F.normalize_id(sid): flow_declared_program_reads(sid)
+        for sid in F.step_ids()
+    }
+    for program in _FLOW_DECLARED_READ_PROGRAMS:
+        wired = {sid for sid in resolved
+                 if program in F.gate_programs(sid)}
+        answered = {sid for sid, got in resolved.items() if program in got}
+        assert wired, (
+            f"{program} is registered in _FLOW_DECLARED_READ_PROGRAMS but is no "
+            f"longer any step's gate program; delete the entry"
+        )
+        assert wired == answered, (
+            f"{program} is a gate program of {sorted(wired)} but layer 2b "
+            f"resolves a declaration for only {sorted(answered)}. An "
+            f"unresolved dispatch falls back to the whole-program anchor and "
+            f"the narrowing silently stops applying"
+        )
+        for sid in sorted(answered):
+            assert resolved[sid][program], (
+                f"step {sid}: the flow declares an EMPTY read set for "
+                f"{program}; an empty declaration would forgive every artefact"
+            )
+
+
+def test_d5_the_narrowing_register_names_live_subjects():
+    """`_NARROWED_LIVE_SUBJECTS` must keep describing live suppression.
+
+    Four things per entry, each a different way the entry could go stale:
+
+      1. the program still holds the raw basename somewhere in its source;
+      2. the artefact is still a unique-basename artefact, so the anchor could
+         still fire on it;
+      3. the narrowing is still what silences it — the charge is absent from the
+         named consumers' live `derived_dependencies`;
+      4. the suppression still MATTERS — the producer is still outside each
+         named consumer's closure, so without the narrowing this would still be
+         a D5-MISSING-EDGE and not a charge that has since been declared.
+
+    Without (4) this would go on passing over a register that had stopped
+    forgiving anything, which is the vacuous pass this dimension exists to
+    refuse.
+    """
+    anchors = unique_basename_artefacts()
+    prod = producers()
+    stale: List[str] = []
+    for program, basename, consumers, why in _NARROWED_LIVE_SUBJECTS:
+        path = F.program_path(program)
+        assert path is not None, f"{program}.py is no longer a resolvable gate program"
+        if basename not in path.read_text(encoding="utf-8", errors="replace"):
+            stale.append(f"{program}.py no longer contains {basename!r} at all")
+            continue
+        if basename not in anchors:
+            stale.append(f"{basename!r} is no longer a unique-basename artefact")
+            continue
+        artefact = anchors[basename]
+        for consumer in consumers:
+            if not F.has_step(consumer):
+                stale.append(f"{consumer} is no longer a declared step")
+                continue
+            if program not in F.gate_programs(consumer):
+                stale.append(
+                    f"{program} is no longer a gate program of step {consumer}"
+                )
+                continue
+            charged = {art for _p, art, _e in derived_dependencies(consumer)}
+            if artefact in charged:
+                stale.append(
+                    f"step {consumer} is charged with reading {artefact} again; "
+                    f"the entry is wrong or the read is real. Reason on file: {why}"
+                )
+                continue
+            unordered = [p for p in prod[artefact]
+                         if p != consumer and p not in ancestors(consumer)]
+            if not unordered:
+                stale.append(
+                    f"step {consumer} -> {artefact}: every producer "
+                    f"{sorted(prod[artefact])} is now in its closure, so this "
+                    f"would no longer be a D5-MISSING-EDGE; delete the entry"
+                )
+    assert not stale, (
+        "the narrowing register no longer describes live suppression — it may "
+        "only SHRINK, and shrinking means deleting the entry: " + "; ".join(stale)
+    )
+
 
 
 def test_d5_runtime_ordering_guard_loads_the_same_edges():
@@ -1324,8 +1852,19 @@ def matrix_cell_state(step_id) -> str:
 # ══════════════════════════════════════════════════════════════════════
 #: Live floors, same idiom as the layer-1+2 trio above: a FLOOR, so a new
 #: `required_inputs` entry is free and a silent shrink is not.
-_DECLARED_DEP_STEPS_FLOOR = 54
-_DECLARED_DEP_PAIRS_FLOOR = 69
+#:
+#: RE-DERIVED 2026-08-31, 54/69 -> 58/76, and the reason is worth stating because
+#: it is the failure mode this whole trio guards against, one level up. These are
+#: `>=` guards, so the tree growing past them costs nothing and reddens nothing —
+#: which means a floor written as "the live baseline" stops BEING the live
+#: baseline the first time the flow grows, silently, and the ratchet it is
+#: supposed to be can no longer see a shrink back to the old number. Measured on
+#: `781d24727` [v1.14.22]: declared 54/69, live 58/76. The layer-1+2 trio above
+#: had drifted further (12/16/32 declared against 23/37/92 live, nearly 3x) and
+#: was re-derived in the same change. NOTHING here moved them: this layer reads
+#: `required_inputs`, and that change touched `required_outputs`.
+_DECLARED_DEP_STEPS_FLOOR = 58
+_DECLARED_DEP_PAIRS_FLOOR = 76
 
 
 def test_d5_declared_input_denominator_is_disclosed():

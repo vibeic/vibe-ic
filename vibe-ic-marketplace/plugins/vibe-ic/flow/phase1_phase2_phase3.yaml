@@ -5281,6 +5281,32 @@ steps:
       # because only four of the flow's twelve declared-and-self-written
       # artefacts have any producer outside their own gate.
       - "reports/phase3/em_signoff.json"
+      # THE AUTHORITY VERDICT — the same W1 shape as the entry above, missed
+      # when the `em_peak_current_authority_check` clause was added to the gate
+      # below. That clause DESIGNATES this path (`--json
+      # reports/phase3/em_current_authority.json`) and `phase3_one_shot_runner`
+      # READS it by name at three sites: an existence probe
+      # (`em_auth_json = rpt_phase3 / "em_current_authority.json"`), and the
+      # sign-off aggregate, which opens it and cites it as
+      # `em_cat["evidence"] = "reports/phase3/em_current_authority.json"`.
+      # Written by one thing, read by another, declared by nothing: dimension 7
+      # charged step 25 `W1:gate_output_read_elsewhere` on it, and that cell was
+      # the last ENFORCED-CONTRADICTED cell in the 63x8 matrix.
+      #
+      # DECLARING IT CANNOT MANUFACTURE A MISSING. `em_peak_current_authority_
+      # check.main` writes the `--json` target BEFORE it branches on the
+      # verdict, so the file exists on the FAIL and INCOMPLETE paths as well as
+      # on PASS; the only earlier returns are argument errors, which fail the
+      # `program_exit_zero` clause anyway. Same post-gate re-probe shape as
+      # em_signoff.json above.
+      #
+      # This is the THIRD closure of W1 by declaration, after step 31's
+      # `magic_illegal_overlap.json` (2026-08-20 R9) and `perc_sweep.json`
+      # (`2ffa7a594` [v1.12.10]). Both are recorded in
+      # `test_matrix_63x8_ledger.py`, and the second one records that its
+      # declaring commit did NOT carry the paired ledger pin, the d3 manifest
+      # entry, or the anchored figures. All three move with this entry.
+      - "reports/phase3/em_current_authority.json"
     gate:
       # OUTPUT-PATH COLLISION. This declared `--json reports/phase3/em.json`,
       # which is the PRODUCER's file: `step_canonicalize_artefacts` →
