@@ -96,12 +96,35 @@ def _analog_dir(project: Path) -> Optional[Path]:
     return None
 
 
-def _is_whitelisted(path_tok: str) -> bool:
-    return any(path_tok.startswith(p) for p in WHITELIST_PREFIXES)
+def _is_whitelisted(path_tok: str, project_root: str = "") -> bool:
+    """A path is acceptable when it is a canonical PDK root include OR it
+    resolves INSIDE this project's own tree.
+
+    The project-internal rung exists because two shipped rules already force
+    that binding (measured: u_hawaii_adc round-5): pdk_analog_completeness_check
+    REQUIRES the project to carry its model libs under input/pdk/** (the
+    reproducibility rule — a run stands on input/ alone), and the availability
+    resolver prefers the project-staged copy over the container's. A3 then
+    binds `<project>/input/pdk/models/<lib>` and this lint refused it, so an
+    author following both rules could only land in WAIVE. A project-internal
+    path travels WITH the project; the non-portability this lint exists to
+    catch is a path OUTSIDE both the PDK root and the project (a foreign home
+    dir, a scratch /tmp deck), and that stays refused."""
+    if any(path_tok.startswith(p) for p in WHITELIST_PREFIXES):
+        return True
+    if project_root:
+        root = project_root.rstrip("/") + "/"
+        if path_tok.startswith(root):
+            return True
+    return False
 
 
 def run_audit(project: Path) -> AuditResult:
     result = AuditResult()
+    try:
+        project_root = str(project.resolve())
+    except OSError:
+        project_root = str(project)
     analog_dir = _analog_dir(project)
     if analog_dir is None:
         result.findings.append(Finding(
@@ -138,14 +161,32 @@ def run_audit(project: Path) -> AuditResult:
                 continue
             had_include = True
             path_tok = m.group(2)
-            if path_tok.startswith("/") and not _is_whitelisted(path_tok):
+            if path_tok.startswith("/") and \
+                    not _is_whitelisted(path_tok, project_root):
                 bad_paths += 1
                 result.findings.append(Finding(
                     rule="NON_WHITELISTED_ABSOLUTE_PATH",
                     severity="ERROR",
                     message=(f"{rel}: hardcoded absolute path '{path_tok}' is "
-                             f"not under {WHITELIST_PREFIXES[0]}; use the "
-                             f"standard PDK include pattern"),
+                             f"not under {WHITELIST_PREFIXES[0]} and not "
+                             f"inside this project; use the standard PDK "
+                             f"include pattern or the project's own "
+                             f"input/pdk copy"),
+                    file=rel,
+                    line=idx,
+                ))
+            elif path_tok.startswith("/") and \
+                    not any(path_tok.startswith(p)
+                            for p in WHITELIST_PREFIXES):
+                # project-internal absolute binding: accepted (see
+                # _is_whitelisted), but stated — portability visibility is
+                # this lint's whole reason to exist.
+                result.findings.append(Finding(
+                    rule="PROJECT_INTERNAL_ABSOLUTE_PATH",
+                    severity="INFO",
+                    message=(f"{rel}: absolute path '{path_tok}' binds the "
+                             f"project's own staged PDK copy (travels with "
+                             f"the project; re-render A3 after moving it)"),
                     file=rel,
                     line=idx,
                 ))
