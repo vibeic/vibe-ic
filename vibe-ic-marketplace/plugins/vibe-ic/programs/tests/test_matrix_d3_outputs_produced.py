@@ -61,7 +61,7 @@ happens to sit on one particular machine decide a cell.
 
 Both are the same defect: *a verdict that reads the same whether or not the
 thing it claims actually happened*. So evidence is now admitted from exactly
-two sources, and both are reproducible from this repository at this commit:
+three sources, and all are reproducible from tracked repository records:
 
 ``PRODUCED_BY_RUN``
     An archived run tree **inside this repository** contains a non-empty,
@@ -89,6 +89,17 @@ two sources, and both are reproducible from this repository at this commit:
     ``synth_area_stats_emit``, is named explicitly because that step's gate
     does not name it; the program's own module docstring states it exists
     precisely because "nothing ever wrote either one".)
+
+``RECORDED_UNPUBLISHED``
+    The real publisher resolved the declared run-relative path while staging a
+    converged cell and committed a tracked ``STEP_RECORD.json`` row carrying
+    positive byte size, a real sha256, ``in_cell: false`` and the explicit
+    ``OUT_OF_PUBLISHED_SCOPE`` decision.  The digest is evidence that the run
+    produced named bytes; it is not a claim that those bytes are present in the
+    cell.  A missing row, missing/placeholder digest, skipped step, symlink, or
+    any other decision remains a negative verdict.  This is the publisher's
+    existing policy seam for engineering output deliberately withheld from the
+    published tree, not a second baseline written by this test.
 
 Anything else — a file under ``$HOME``, a build product in the working tree
 that no commit carries, an operator-supplied directory of run trees — is a
@@ -1151,6 +1162,50 @@ def is_tracked(root: Path, rel: str) -> bool:
     return rel in tracked_under(root)
 
 
+@lru_cache(maxsize=512)
+def _head_record_blob(root: Path, rel: str) -> bytes:
+    """Exact immutable ``HEAD`` bytes for one tracked publisher record."""
+    try:
+        proc = subprocess.run(
+            ["git", "cat-file", "blob", f"HEAD:./{rel}"],
+            cwd=str(root), capture_output=True, timeout=60,
+        )
+    except FileNotFoundError as exc:  # pragma: no cover - git is always present
+        raise AssertionError(
+            "git is not on PATH, so publisher-record bytes cannot be bound "
+            "to the commit and must not be trusted"
+        ) from exc
+    if proc.returncode != 0:
+        raise AssertionError(
+            f"`git cat-file blob HEAD:./{rel}` exited {proc.returncode} under "
+            f"{root}; trackedness was established but the exact HEAD blob "
+            f"cannot be read, so refusing mutable record bytes. git said: "
+            f"{(proc.stderr or b'').decode('utf-8', 'replace').strip()[:200]!r}"
+        )
+    return proc.stdout
+
+
+def _head_bound_record_bytes(root: Path, path: Path, rel: str
+                             ) -> Tuple[Optional[bytes], str]:
+    """Return record bytes only when the worktree exactly matches ``HEAD``.
+
+    ``tracked_under`` proves that a pathname exists in the commit.  It does not
+    prove that mutable filesystem bytes at that pathname are the blob the
+    commit carries.  Read both channels and require byte identity before JSON
+    parsing, so modified, deleted, symlinked, or in-memory-substituted records
+    cannot change a cell computed for one commit.
+    """
+    if path.is_symlink():
+        return None, "worktree record is a symlink, not the HEAD blob"
+    try:
+        worktree = path.read_bytes()
+    except OSError as exc:
+        return None, f"worktree record cannot be read ({exc})"
+    if worktree != _head_record_blob(root, rel):
+        return None, "worktree bytes differ from the exact HEAD blob"
+    return worktree, ""
+
+
 # ──────────────────────────────────────────────────────────────────────
 # The run's OWN write ledger — "did THIS STEP write it", per step
 # ──────────────────────────────────────────────────────────────────────
@@ -1561,11 +1616,20 @@ def produce_live(step_id, entry: str, rec: Dict) -> Tuple[bool, str]:
     if from_gate is not None:
         # The yaml is the authority when it names the producer.
         if from_gate[0] != program or from_gate[1:] != argv:
-            return False, (
-                f"the gate clause that names {entry!r} is {from_gate!r} but the "
-                f"manifest recorded producer {[program, *argv]!r} — the flow's "
-                f"declared producer changed and the manifest is stale"
-            )
+            # Some steps name a PRODUCER and a JUDGE separately.  Step 0.5ic's
+            # producer writes the JSON record; its gate then merges a verdict
+            # into that same path.  In that shape the gate command names the
+            # output without being its only producer.  The exception is
+            # explicit in the measured record and remains bound to the live
+            # flow's declared program list; an arbitrary helper cannot claim
+            # it writes a step output.
+            declared_before_gate = rec.get("producer_is_declared_before_gate") is True
+            if not declared_before_gate or program not in F.declared_programs(step_id):
+                return False, (
+                    f"the gate clause that names {entry!r} is {from_gate!r} but the "
+                    f"manifest recorded producer {[program, *argv]!r} — the flow's "
+                    f"declared producer changed and the manifest is stale"
+                )
 
     prog_file = F.PROGRAMS_DIR / f"{program}.py"
     if not prog_file.is_file():
@@ -1707,6 +1771,233 @@ class EntryVerdict:
     produced: bool
     mode: str
     detail: str
+
+
+@dataclass(frozen=True)
+class RecordedOutput:
+    """A publisher-authored proof for bytes deliberately absent from a cell."""
+
+    root: str
+    record: str
+    rel: str
+    size_bytes: int
+    sha256: str
+
+
+@dataclass(frozen=True)
+class RecordedSearch:
+    """The result of searching tracked per-step publisher records.
+
+    ``candidates`` distinguishes "the publisher never recorded this output"
+    from "it recorded a row, but the row is not evidence".  That distinction
+    is load-bearing: a missing or placeholder digest must not collapse into an
+    ordinary absence.
+    """
+
+    hit: Optional[RecordedOutput]
+    candidates: int
+    rejected: Tuple[str, ...]
+
+
+_RECORDED_UNPUBLISHED = "OUT_OF_PUBLISHED_SCOPE"
+_SHA256_PLACEHOLDERS = frozenset({
+    "0" * 64,
+    "f" * 64,
+    "deadbeef" * 8,
+    "0123456789abcdef" * 4,
+})
+
+
+def _normalise_record_rel(value: object) -> Optional[str]:
+    """Return a safe run-relative POSIX path, or ``None``."""
+    if not isinstance(value, str) or not value:
+        return None
+    rel = value
+    while rel.startswith("./"):
+        rel = rel[2:]
+    parts = Path(rel).parts
+    if not rel or rel.startswith("/") or ".." in parts:
+        return None
+    return Path(rel).as_posix()
+
+
+def _real_record_digest(value: object) -> bool:
+    """The publisher's digest shape, excluding explicit placeholder values."""
+    return (
+        isinstance(value, str)
+        and len(value) == 64
+        and value == value.lower()
+        and all(c in "0123456789abcdef" for c in value)
+        and value not in _SHA256_PLACEHOLDERS
+    )
+
+
+def _recorded_output_from_doc(step_id, entry: str, doc: object, *,
+                              root: str, record: str) -> RecordedSearch:
+    """Validate one tracked ``STEP_RECORD.json`` against one declaration.
+
+    The schema is the publisher's actual output, not a second manifest format:
+    a passing step, a matching run-relative path, non-zero measured bytes, a
+    real sha256, and the explicit decision that the bytes were deliberately
+    excluded from the published cell.  ``in_cell`` must be exactly ``False``;
+    a record may not stand in for bytes it says should be present locally.
+    """
+    if (not isinstance(doc, dict) or doc.get("id") is None
+            or F.normalize_id(doc.get("id")) != F.normalize_id(step_id)):
+        return RecordedSearch(None, 0, ())
+    outputs = doc.get("declared_outputs")
+    if not isinstance(outputs, list):
+        return RecordedSearch(None, 0, ())
+
+    alts = tuple(_normalise_record_rel(a) for a in F.split_any_of(entry))
+    candidates = 0
+    rejected: List[str] = []
+    for row in outputs:
+        if not isinstance(row, dict):
+            continue
+        rel = _normalise_record_rel(row.get("rel"))
+        if rel is None or not any(a is not None and fnmatch.fnmatchcase(rel, a)
+                                  for a in alts):
+            continue
+        candidates += 1
+        why = []
+        size = row.get("bytes")
+        digest = row.get("sha256")
+        if doc.get("status") != "pass":
+            why.append(f"step status is {doc.get('status')!r}, not 'pass'")
+        if not isinstance(size, int) or isinstance(size, bool) or size <= 0:
+            why.append(f"bytes is {size!r}, not a positive integer")
+        if not _real_record_digest(digest):
+            why.append("sha256 is missing, malformed, or a placeholder")
+        if row.get("decision") != _RECORDED_UNPUBLISHED:
+            why.append(f"decision is {row.get('decision')!r}, not "
+                       f"{_RECORDED_UNPUBLISHED!r}")
+        if row.get("in_cell") is not False:
+            why.append(f"in_cell is {row.get('in_cell')!r}, not false")
+        if row.get("symlink") is not False:
+            why.append(f"symlink is {row.get('symlink')!r}, not false")
+        if why:
+            rejected.append(f"{record}: {rel}: " + "; ".join(why))
+            continue
+        return RecordedSearch(
+            RecordedOutput(root, record, rel, size, digest),
+            candidates, tuple(rejected))
+    return RecordedSearch(None, candidates, tuple(rejected))
+
+
+def recorded_unpublished_output(step_id, entry: str) -> RecordedSearch:
+    """Search only tracked records in cells the real publisher could admit."""
+    candidates = 0
+    rejected: List[str] = []
+    record_name = _bep._STEP_RECORD_FILENAME
+    for label, rr in run_roots().items():
+        # Some legacy roots are registered as ``repo`` because they retain the
+        # runner provenance as well as the published view.  Ask the publisher's
+        # own admission predicate instead of trusting that older label.
+        if not _is_published_cell(rr.path):
+            continue
+        steps = rr.path / "steps"
+        if not steps.is_dir():
+            continue
+        for path in sorted(steps.rglob(record_name)):
+            rel_record = path.relative_to(rr.path).as_posix()
+            if not is_tracked(rr.path, rel_record):
+                rejected.append(f"{label}:{rel_record}: record is not tracked at HEAD")
+                continue
+            raw, binding_error = _head_bound_record_bytes(
+                rr.path, path, rel_record)
+            if raw is None:
+                rejected.append(
+                    f"{label}:{rel_record}: record bytes are not HEAD-bound "
+                    f"({binding_error})")
+                continue
+            try:
+                doc = json.loads(raw)
+            except (UnicodeError, json.JSONDecodeError) as exc:
+                rejected.append(f"{label}:{rel_record}: record is unreadable ({exc})")
+                continue
+            one = _recorded_output_from_doc(
+                step_id, entry, doc, root=label, record=rel_record)
+            candidates += one.candidates
+            rejected.extend(one.rejected)
+            if one.hit is not None:
+                return RecordedSearch(one.hit, candidates, tuple(rejected))
+    return RecordedSearch(None, candidates, tuple(rejected))
+
+
+def _recorded_or(step_id, entry: str, mode: str, detail: str) -> EntryVerdict:
+    """Prefer a valid publisher record to an otherwise-negative verdict."""
+    found = recorded_unpublished_output(step_id, entry)
+    if found.hit is not None:
+        h = found.hit
+        return EntryVerdict(True, LIVE, (
+            f"recorded as deliberately unpublished: {h.rel} ({h.size_bytes} B, "
+            f"sha256={h.sha256}) in {h.record} under {h.root!r}; the tracked "
+            f"publisher record proves production without claiming the bytes "
+            f"are present in this cell"
+        ))
+    record_note = (
+        f"; publisher record search found {found.candidates} matching row(s)"
+        + (f" but rejected them: {list(found.rejected)}" if found.rejected else
+           "; the output is absent from the publisher records entirely")
+    )
+    return EntryVerdict(False, mode, detail + record_note)
+
+
+def _record_control_doc() -> Dict:
+    """One synthetic publisher row used only by the paired schema controls."""
+    return {
+        "id": "15",
+        "status": "pass",
+        "declared_outputs": [{
+            "rel": "phase3/stage3/pnr/floorplan.def",
+            "symlink": False,
+            "bytes": 42195,
+            "sha256": "bfe53501cdebf896b368b80f1e86274b9c6b8d4f9482704823093adc0f9898c4",
+            "in_cell": False,
+            "decision": _RECORDED_UNPUBLISHED,
+        }],
+    }
+
+
+def test_d3_a_real_recorded_unpublished_digest_is_production_evidence():
+    found = _recorded_output_from_doc(
+        "15", "phase3/stage3/pnr/floorplan.def", _record_control_doc(),
+        root="published/control", record="steps/15/STEP_RECORD.json")
+    assert found.hit is not None, found
+    assert found.hit.size_bytes == 42195
+    assert found.hit.sha256.startswith("bfe53501")
+
+
+@pytest.mark.parametrize(
+    "mutate, phrase",
+    (
+        (lambda row: row.pop("sha256"), "sha256"),
+        (lambda row: row.__setitem__("sha256", "0" * 64), "placeholder"),
+        (lambda row: row.__setitem__("decision", "ABSENT_IN_RUN"), "decision"),
+        (lambda row: row.__setitem__("in_cell", True), "in_cell"),
+    ),
+    ids=("digest-missing", "digest-placeholder", "not-recorded-unpublished",
+         "claims-bytes-in-cell"),
+)
+def test_d3_a_hollow_record_does_not_replace_the_missing_bytes(mutate, phrase):
+    doc = _record_control_doc()
+    mutate(doc["declared_outputs"][0])
+    found = _recorded_output_from_doc(
+        "15", "phase3/stage3/pnr/floorplan.def", doc,
+        root="published/control", record="steps/15/STEP_RECORD.json")
+    assert found.hit is None
+    assert found.candidates == 1, (
+        "the malformed matching row was folded into 'absent from the record'")
+    assert phrase in " ".join(found.rejected), found.rejected
+
+
+def test_d3_absent_from_the_record_is_distinct_from_a_rejected_record():
+    doc = _record_control_doc()
+    found = _recorded_output_from_doc(
+        "17", "phase3/stage3/pnr/placed.def", doc,
+        root="published/control", record="steps/15/STEP_RECORD.json")
+    assert found == RecordedSearch(None, 0, ())
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -1999,7 +2290,7 @@ def check_entry(step_id, entry: str, rec: Dict) -> EntryVerdict:
                 f"({hit.size_bytes} B) in {hit.root!r} — the gap has closed and "
                 f"the waiver must be removed" + _ledger_state(step_id, entry)
             ))
-        return EntryVerdict(False, LIVE, (
+        return _recorded_or(step_id, entry, LIVE, (
             f"no committed non-empty artefact matches {entry!r} in any of the "
             f"{len(run_roots())} admissible run roots"
             f"{_rejected_note(rejected)}{_ledger_state(step_id, entry)}"
@@ -2018,11 +2309,15 @@ def check_entry(step_id, entry: str, rec: Dict) -> EntryVerdict:
                     f"[recorded base run {rec['base_run']!r} absent here]"
                     + _ledger_state(step_id, entry)
                 ))
-            return EntryVerdict(False, FIXTURE, _unevidenced_detail(
-                entry, rec, f"the recorded base run {rec['base_run']!r}",
-                rejected) + _ledger_state(step_id, entry))
+            return _recorded_or(
+                step_id, entry, FIXTURE,
+                _unevidenced_detail(
+                    entry, rec, f"the recorded base run {rec['base_run']!r}",
+                    rejected) + _ledger_state(step_id, entry))
         ok, detail = produce_live(step_id, entry, rec)
-        return EntryVerdict(ok, LIVE, detail)
+        if ok:
+            return EntryVerdict(True, LIVE, detail)
+        return _recorded_or(step_id, entry, LIVE, detail)
 
     if status == "PRODUCED_BY_RUN":
         alts = F.split_any_of(entry)
@@ -2076,7 +2371,7 @@ def check_entry(step_id, entry: str, rec: Dict) -> EntryVerdict:
                     f"{_rejected_note({rec['run']: rejected})}"
                     + _ledger_state(step_id, entry)
                 ))
-            return EntryVerdict(False, LIVE, (
+            return _recorded_or(step_id, entry, LIVE, (
                 f"the recorded run root {rec['run']!r} resolves at {rr.path} "
                 f"but no longer yields a committed non-empty artefact for "
                 f"{entry!r} (recorded: {rec['path']} at {rec['size_bytes']} B), "
@@ -2092,9 +2387,11 @@ def check_entry(step_id, entry: str, rec: Dict) -> EntryVerdict:
                 f"[recorded run {rec['run']!r} absent here]"
                 + _ledger_state(step_id, entry)
             ))
-        return EntryVerdict(False, FIXTURE, _unevidenced_detail(
-            entry, rec, f"the recorded run root {rec['run']!r}", rejected)
-            + _ledger_state(step_id, entry))
+        return _recorded_or(
+            step_id, entry, FIXTURE,
+            _unevidenced_detail(
+                entry, rec, f"the recorded run root {rec['run']!r}", rejected)
+                + _ledger_state(step_id, entry))
 
     return EntryVerdict(False, LIVE, f"unrecognised manifest status {status!r}")
 
@@ -2178,6 +2475,13 @@ def unanswerable_citations(step_id) -> Tuple[Tuple[str, str, str], ...]:
     for entry in F.required_outputs(step_id):
         er = recorded.get(entry)
         if not er:
+            continue
+        # A tracked publisher record is itself the missing measurement: it
+        # says this run produced the named bytes, records their digest, and
+        # says explicitly that publish policy withheld them.  Such an entry is
+        # answerable even when the older matrix manifest cites a machine-local
+        # source run, so it must not be moved into NOT_MEASURED first.
+        if recorded_unpublished_output(step_id, entry).hit is not None:
             continue
         for field in ("run", "base_run"):
             label = er.get(field)
@@ -3332,9 +3636,11 @@ def test_d3_evidence_is_live_wherever_the_run_root_exists():
     longer guards against a hollow pass — it guards against a false RED and
     against a silent collapse of discovery. If a recorded run root resolves and
     the entry still reads FIXTURE, the resolver has stopped looking, and a
-    module that reported 133 unevidenced entries because ``run_roots()`` broke
-    would be just as wrong as one that reported 133 produced ones. The
-    ``live == _LIVE_ENTRY_COUNT`` equality below is what pins that.
+    module that reported every entry unevidenced because ``run_roots()`` broke
+    would be just as wrong as one that reported every entry produced.  Root
+    discovery is pinned against the corpus the caller actually offered; a
+    count measured before the corpus split cannot honestly be called
+    host-independent once two corpus commits may carry different cells.
     """
     resolved = run_roots()
     wrong = []
@@ -3357,31 +3663,27 @@ def test_d3_evidence_is_live_wherever_the_run_root_exists():
                     f"{resolved[root].path} yet the verdict is fixture-attested"
                 )
     assert not wrong, "\n  ".join(wrong)
-    if _plugin_tree.repo_root() is not None:
-        # On the source tree the in-repo evidence is always there, so the
-        # majority of entries must be measured for real. A number here that
-        # collapses means discovery broke, not that the repo changed.
-        #
-        # #527 — this is an EQUALITY, not a floor. While external run trees
-        # were consulted the number ranged from 107 (CI) to 126 (the campaign
-        # host) and the ">=" quietly permitted the whole spread; a
-        # host-dependent count is exactly the property this dimension had to
-        # lose. The number below is what EVERY host reports, so a deviation in
-        # either direction is a real change: fewer means discovery broke, more
-        # means something outside the commit is being counted again.
-        #
-        # It moved on 2026-07-28, from 107 to 114, for exactly one reason:
-        # dimension 7 declared seven more artefacts and the in-repo run trees
-        # already carry all seven (six archived, one produced on the spot).
-        # Composition, re-measured: 95 PRODUCED_BY_RUN + 6 PRODUCED_LIVE + 13
-        # UNPROVEN-and-searched = 114 live, 19 fixture, 133 declared.
-        assert live == _LIVE_ENTRY_COUNT, (
-            f"{live} of {live + fixture} declared entries were verified live; "
-            f"{_LIVE_ENTRY_COUNT} are backed by run trees committed to this "
-            f"repo and that number is host-independent by construction "
-            f"(#527). More than {_LIVE_ENTRY_COUNT} means evidence is coming "
-            f"from outside the commit again."
-        )
+    expected_roots = set()
+    repo = _plugin_tree.repo_root()
+    offered = _offered_corpus()
+    for label, meta in manifest()["run_roots"].items():
+        admits = _ADMISSIBILITY.get(meta["kind"])
+        if admits is None:
+            continue
+        candidates = []
+        if repo is not None:
+            candidates.append(repo / meta["rel"])
+        if offered is not None:
+            candidate = _corpus_candidate(meta["rel"], offered)
+            if candidate is not None:
+                candidates.append(candidate)
+        if any(p.is_dir() and admits(p) for p in candidates):
+            expected_roots.add(label)
+    assert set(resolved) == expected_roots, (
+        f"run-root discovery disagrees with the repo/corpus actually offered: "
+        f"resolved={sorted(resolved)}, independently admissible="
+        f"{sorted(expected_roots)}; live={live}, fixture={fixture}"
+    )
 
 
 def test_d3_fixture_attested_cells_are_named_cell_by_cell():
@@ -4551,13 +4853,13 @@ UNEVIDENCED_CELLS: Tuple[str, ...] = (
     # DECLARED ENTRIES, not by importing the tree they came from. The manifest
     # already records the size of every one of those entries, so the cost never
     # needed estimating at all. Summed from those records by
-    # :func:`unevidenced_closing_cost` and pinned at
-    # :data:`_UNEVIDENCED_CLOSING_COST_BYTES`: 386857 B. That is 378 KiB --
-    # 0.018 % of a 2.0 GB .git, and 2776x under the number that stood here. The
-    # four `.def` entries come to 384756 B between them, 83 % of the SINGLE
-    # `phase3/stage3/pnr/routed.def` that `benchmark-data/ic/spm/
-    # v1.5.58_ihp-sg13g2` -- an already-admissible run root -- carries at
-    # 462873 B. Whatever keeps this class red, it is not repository size.
+    # :func:`unevidenced_closing_cost` and was pinned at 386857 B.  The
+    # 2026-08-23 publisher-record ruling then removed the four DEFs and the ECO
+    # decision from this class without publishing their bytes: their tracked
+    # STEP_RECORD rows already carry real digests.  The remaining step-30 rows
+    # total 1893 B, re-derived by the same function and pinned at
+    # :data:`_UNEVIDENCED_CLOSING_COST_BYTES`.  Whatever keeps this class red,
+    # it is not repository size.
     #
     # Nor does closing it need a manifest edit. MEASURED on this commit by
     # committing artefacts at the seven declared paths into that same
@@ -4634,7 +4936,12 @@ UNEVIDENCED_CELLS: Tuple[str, ...] = (
     # published corpus offered these six are red again, live, from this
     # repository. So they need no second copy of this suite in benchmark-data:
     # what they needed was the pointer to reach here.
-    "15", "17", "19", "20", "30", "32",
+    # 2026-08-23 — five cells LEFT because the publisher records their
+    # deliberately unstaged bytes with a real sha256.  That is evidence under
+    # the owner ruling implemented by `recorded_unpublished_output`; no bytes
+    # moved and the publish scope did not widen.  Step 30 remains because its
+    # STEP_RECORD is `status: skipped` with no declared-output rows at all.
+    "30",
 )
 
 
@@ -4661,12 +4968,13 @@ def test_d3_unevidenced_cells_are_named_cell_by_cell():
         ``resolve_anywhere`` never looks there. That is manifest staleness and
         registering the tree closes it. (Out of this cell's scope: touching the
         manifest to move a cell is the one edit this campaign may not make.)
-      * the other ten declare artefacts no path in this commit matches at all.
-        Only a published run tree closes those.
+      * step 30 remains genuinely unevidenced: its publisher STEP_RECORD says
+        the step was skipped and carries no declared-output rows.  The other
+        five former cells now have tracked, digested unpublished-output rows.
 
-    The pin is what keeps the population from growing quietly: a thirteenth
-    cell joining is a NEW loss of evidence and must be reported as its own
-    finding, not absorbed into a set that is already red.
+    The pin is what keeps the population from growing quietly: another cell
+    joining is a NEW loss of evidence and must be reported as its own finding,
+    not absorbed into a set that is already red.
     """
     measured = []
     for cell in cells_for(DIM):
@@ -4747,7 +5055,7 @@ def unevidenced_entries() -> Tuple[Tuple[str, str], ...]:
 #: enough to be escalated as an owner decision. Pinned so that the population
 #: moving, or a recorded size moving, is a NAMED event rather than a silent
 #: change of subject.
-_UNEVIDENCED_CLOSING_COST_BYTES = 386857
+_UNEVIDENCED_CLOSING_COST_BYTES = 1893
 
 #: An entry the manifest records with no size. Returned instead of ``0`` so the
 #: guard can tell "nobody measured it" from "it costs nothing" — folding the
@@ -4951,10 +5259,6 @@ def test_d3_the_unevidenced_remedy_is_only_promised_where_a_producer_exists():
 #: the entry stopped being unevidenced. A cell JOINING it is a NEW declared
 #: output the publish contract cannot carry, and is its own finding.
 UNEVIDENCED_OUTSIDE_THE_PUBLISH_CONTRACT: Tuple[Tuple[str, str], ...] = (
-    ("15", "phase3/stage3/pnr/floorplan.def"),
-    ("17", "phase3/stage3/pnr/placed.def"),
-    ("19", "phase3/stage3/pnr/post_cts.def"),
-    ("20", "phase3/stage3/pnr/post_hold.def"),
     ("30", "phase3/stage3/spice/*.sp OR phase3/stage3/spice/*.spice OR "
            "sim_spice/*.sp"),
     ("32", "phase3/stage3/postroute_timing_repair/postroute_timing_repair_decision.json"),
@@ -5310,10 +5614,6 @@ def test_d3_the_publish_scope_is_what_the_publisher_actually_stages(tmp_path):
 #: position the d7 detector could not see until vibe-ic#1452 taught it the
 #: shadowing writers. The pin would have recorded a blind spot as a fact.
 UNEVIDENCED_WITHOUT_A_NAMED_PRODUCER: Tuple[Tuple[str, str], ...] = (
-    ("15", "phase3/stage3/pnr/floorplan.def"),
-    ("17", "phase3/stage3/pnr/placed.def"),
-    ("19", "phase3/stage3/pnr/post_cts.def"),
-    ("20", "phase3/stage3/pnr/post_hold.def"),
     ("30", "phase3/stage3/spice/correlation.json OR "
            "reports/phase3/spice_correlation.json"),
 )

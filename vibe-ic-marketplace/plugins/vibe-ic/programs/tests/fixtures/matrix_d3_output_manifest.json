@@ -1100,8 +1100,18 @@
           "provenance_note": "declared 2026-08-28 to close the dimension-7 finding W1:gate_output_read_elsewhere on step 31 — `perc_corpus_sweep --report` writes it and the `sweep_reach_check --report` clause directly below it is the only reader, so it is load-bearing outside its own writer. UNPROVEN and not PRODUCED_BY_RUN because no run root this module may consult carries the path: `find -name perc_sweep.json` over the published corpus, 2026-08-28, returned nothing across all 10 admissible run roots, and the sweep clause that writes it was re-homed onto step 31 on 2026-08-25 — after every published cell. Same class as magic_illegal_overlap.json above, and the same consequence: the UNPROVEN branch re-searches every admissible root on each call, so the first run tree that publishes the file closes this entry live and the record reddens in the other direction."
         },
         "reports/phase3/magic_illegal_overlap.json": {
-          "status": "UNPROVEN",
-          "provenance_note": "declared 2026-08-20 to close the dimension-7 finding W1:gate_output_read_elsewhere on step 31. UNPROVEN and not PRODUCED_BY_RUN because no run root this module may consult carries the path: `find` over the published corpus (vibeic/benchmark-data @ 146d665) and over every in-repo root returns nothing, and magic_illegal_overlap_check postdates every published cell. The UNPROVEN branch re-searches every admissible root on each call, so the first run tree that publishes the file closes this entry live and the record reddens in the other direction."
+          "status": "PRODUCED_LIVE",
+          "producer": "magic_illegal_overlap_check",
+          "argv": [
+            ".",
+            "--json",
+            "reports/phase3/magic_illegal_overlap.json"
+          ],
+        "writes": "reports/phase3/magic_illegal_overlap.json",
+        "producer_is_declared_before_gate": true,
+        "base_run": "benchmark-data/ic/spm/v1.9.96_gf180mcuD",
+          "size_bytes": 1729,
+          "provenance_note": "The producer postdates every published run, but phase3_one_shot_runner dispatches it before LVS and the tracked-only live proof writes this non-empty report from the published extraction evidence. The compliance-audit gate writes its independent triage copy under reports/audit, so it cannot create the declared evidence it then audits."
         },
         "reports/phase3/lvs_verdict.json": {
           "status": "PRODUCED_BY_RUN",
@@ -1534,16 +1544,54 @@
       "verdict": "ENFORCED",
       "entries": {
         "input/submission_template/slots/*.yaml OR input/submission_template/NO_TEMPLATE.txt OR input/submission_template/SELF_TAPEOUT.txt": {
-          "status": "UNPROVEN"
+          "status": "PRODUCED_LIVE",
+          "producer": "submission_template_ingest",
+          "argv": [
+            ".",
+            "--template",
+            "input/template-not-present",
+            "--no-template-reason",
+            "The declared deliverable is an IP hardmacro, so this design is not submitted through a shuttle template."
+          ],
+          "writes": "input/submission_template/NO_TEMPLATE.txt",
+          "base_run": "benchmark-data/ic/spm/v1.9.96_gf180mcuD",
+          "size_bytes": 511
         },
         "reports/phase1/submission_template.json": {
-          "status": "UNPROVEN"
+          "status": "PRODUCED_LIVE",
+          "producer": "submission_template_ingest",
+          "producer_is_declared_before_gate": true,
+          "argv": [
+            ".",
+            "--template",
+            "input/template-not-present",
+            "--no-template-reason",
+            "The declared deliverable is an IP hardmacro, so this design is not submitted through a shuttle template."
+          ],
+          "writes": "reports/phase1/submission_template.json",
+          "base_run": "benchmark-data/ic/spm/v1.9.96_gf180mcuD",
+          "size_bytes": 1216
         },
         "input/submission_template/tapeout_declaration.json": {
-          "status": "UNPROVEN"
+          "status": "PRODUCED_LIVE",
+          "producer": "tapeout_declaration_gen",
+          "argv": [
+            "."
+          ],
+          "writes": "input/submission_template/tapeout_declaration.json",
+          "base_run": "benchmark-data/ic/spm/v1.9.96_gf180mcuD",
+          "size_bytes": 835
         },
         "reports/phase1/tapeout_declaration.json": {
-          "status": "UNPROVEN"
+          "status": "PRODUCED_LIVE",
+          "producer": "tapeout_declaration_gen",
+          "producer_is_declared_before_gate": true,
+          "argv": [
+            "."
+          ],
+          "writes": "reports/phase1/tapeout_declaration.json",
+          "base_run": "benchmark-data/ic/spm/v1.9.96_gf180mcuD",
+          "size_bytes": 3010
         }
       }
     }
