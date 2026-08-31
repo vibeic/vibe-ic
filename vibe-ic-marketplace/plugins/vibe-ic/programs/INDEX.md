@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 1242
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1242)
+- **Total programs (excluding helpers / shims):** 1243
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1243)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 1233 |
+| `any` | 1234 |
 
 ## Alphabetical listing
 
@@ -681,6 +681,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `macro_obs_geometry_intersect_check` | any | — | Emitted metal that crosses a placed macro's declared obstruction. vibe-ic#686. |
 | `macro_obs_load_parity_check` | any | — | The obstructions the LEF DECLARES vs the obstructions the tool can LOAD. |
 | `magic_extract_spice_emit` | any | — | Magic parasitic-RC extraction: emit, validate, audit. |
+| `magic_gencell_layout_lib` | any | — | chip-AGNOSTIC deterministic core of the Magic-gencell analog layout path (skill `analog-layout`, step A5). |
 | `magic_illegal_overlap_check` | any | — | read the EXTRACTION tool's own error channel and gate it at zero, before LVS. |
 | `magic_illegal_overlap_record_check` | any | — | Validate the runner-produced Step-31 illegal-overlap record in place. |
 | `magic_port_extract_emit` | any | v0.1.114 | Magic port-labeled GDS-extraction TCL generator. |
@@ -1314,7 +1315,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (1233 programs)
+### `any` (1234 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `absence_verdict_names_its_search_space_check` — "not found" must say WHERE it looked.
@@ -1966,6 +1967,7 @@ _(no programs in this group)_
 - `macro_obs_geometry_intersect_check` — Emitted metal that crosses a placed macro's declared obstruction. vibe-ic#686.
 - `macro_obs_load_parity_check` — The obstructions the LEF DECLARES vs the obstructions the tool can LOAD.
 - `magic_extract_spice_emit` — Magic parasitic-RC extraction: emit, validate, audit.
+- `magic_gencell_layout_lib` — chip-AGNOSTIC deterministic core of the Magic-gencell analog layout path (skill `analog-layout`, step A5).
 - `magic_illegal_overlap_check` — read the EXTRACTION tool's own error channel and gate it at zero, before LVS.
 - `magic_illegal_overlap_record_check` — Validate the runner-produced Step-31 illegal-overlap record in place.
 - `magic_port_extract_emit` — Magic port-labeled GDS-extraction TCL generator.  _[v0.1.114]_
