@@ -2163,6 +2163,26 @@ def build_design_deck(project: Path, block: str, pdk_lib: str, corner: str,
     return deck, info
 
 
+def _a3_declared_model_lib(project: Path, block: str):
+    """The model lib A3 RECORDED electing for this block (flavour included),
+    from the netlist_provenance.json beside the delivered netlist. None when
+    the netlist or the record is absent/unreadable/shapeless — the caller
+    then keeps its own resolution unchanged."""
+    sp_path, found = a3_netlist_path(project, block)
+    if not found:
+        return None
+    prov = sp_path.parent / "netlist_provenance.json"
+    try:
+        data = json.loads(prov.read_text())
+    except (OSError, ValueError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    pdk_rec = data.get("pdk")
+    lib = pdk_rec.get("model_lib") if isinstance(pdk_rec, dict) else None
+    return lib if isinstance(lib, str) and lib.strip() else None
+
+
 def design_deck_required_roles(project: Path, block: str):
     """Device roles the DELIVERED netlist instantiates, read off the netlist
     itself rather than off a template this deck is not made of."""
@@ -2618,6 +2638,32 @@ def _run_block(project, block, container, pdk, topology_override):
     # loops below go through it, so a design deck cannot be used for the nominal
     # point and a built-in one for the PVT grid (or the reverse).
     design_deck_info: dict = {}
+    # ── follow A3's model-set election (flavour-aware) ──────────────────────
+    # #1940 follow-up (measured: u_hawaii_adc ldo). A PDK family ships the MOS
+    # corner sections in more than one device FLAVOUR lib (plain-voltage vs
+    # elevated-voltage). A3 elects the flavour FOR THE BLOCK's own voltage
+    # domain (#903) and records it in netlist_provenance.json; this step's
+    # context resolution answers the FAMILY question and may elect the other
+    # flavour — and the deck's device names were chosen against A3's. By this
+    # step's own doctrine the model set is not A4's to re-elect, so when the
+    # delivered netlist's recorded model lib lives in the SAME model tree
+    # (same directory) as the resolved one and is reachable, A4 follows the
+    # delivered election and keeps only the corner selection for itself. A
+    # binding OUTSIDE the resolved tree is still refused downstream with both
+    # names (cross-family), and an unreadable/absent record changes nothing.
+    if design_deck:
+        _declared_lib = _a3_declared_model_lib(project, block)
+        if _declared_lib and _declared_lib != pdk_lib \
+                and str(Path(_declared_lib).parent) == str(Path(pdk_lib).parent) \
+                and _docker(container,
+                            f"test -f {shlex.quote(_declared_lib)}"
+                            ).returncode == 0:
+            print(f"[real_sim] block={block}: following the delivered "
+                  f"netlist's model-set election {_declared_lib} "
+                  f"(context resolved {pdk_lib}; same model tree — only the "
+                  f"corner is this step's to choose)", file=sys.stderr)
+            design_deck_info["model_lib_followed_declared"] = pdk_lib
+            pdk_lib = _declared_lib
     if design_deck:
         def _render(corner, knob, val, temp_c):
             deck, info = build_design_deck(project, block, pdk_lib, corner,
