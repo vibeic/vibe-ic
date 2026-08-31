@@ -149,6 +149,12 @@ _FILE_KEYS = frozenset({"path", "mode", "blob_oid", "sha256", "size"})
 _MANIFEST_KEYS = frozenset({
     "schema", "kind", "transition_id", "manifest_path", "runner", "paths",
     "current", "next"})
+#: Keys a register MAY carry and MAY omit.  `moves` arrived with the RENAME
+#: operation; a register written before it must still read as well-formed here,
+#: because this file is asked about whatever register the tree happens to hold,
+#: including one older than the key.  Absent is not malformed.
+_OPTIONAL_MANIFEST_KEYS = frozenset({"moves"})
+_MOVE_KEYS = frozenset({"from", "to"})
 
 # The two register kinds, as LITERALS. Reading them off the verifier would make
 # every assertion below a comparison of a constant with itself; this file is the
@@ -173,6 +179,15 @@ _MUST_STAY_PROTECTED = frozenset({
 # History, not policy: what the manifest recorded when the semantic landing
 # runtime was activated. This is asserted against the object database, never
 # against the live manifest.
+#
+# THESE PATHS ARE SPELLED AS THAT COMMIT SPELLED THEM, AND A RENAME MAY NOT
+# TOUCH THEM. They name blobs in `7c376e3481`'s tree; a sweep that rewrote them
+# to a later spelling would assert that history contained a file it did not,
+# and `test_the_semantic_landing_activation_is_still_what_history_records`
+# would go red against the object database while looking like a rename that
+# had simply been completed. A dated measurement rewritten is a falsified
+# measurement. Anything below this comment that carries an old package name
+# carries it on purpose.
 _HISTORIC_TRANSITION = "semantic-landing-v1"
 _HISTORIC_CURRENT = "legacy-landing-v1"
 _HISTORIC_PROTECTED = 47
@@ -301,14 +316,63 @@ def _paths(manifest: dict) -> list[str]:
     return [row["path"] for row in manifest["paths"]]
 
 
+def _renames(manifest: dict) -> dict[str, str]:
+    """`from -> to` for every rename this register AUTHORISES.
+
+    READ OFF THE REGISTER, NOT OFF THE VERIFIER.  This file is the independent
+    witness, so it parses `moves` itself rather than importing the parser it is
+    supposed to be checking.  A register that declares none gives `{}` and
+    every function below is exactly what it was before renames existed.
+    """
+    rows = manifest.get("moves", [])
+    assert isinstance(rows, list), "manifest.moves is not a list"
+    out: dict[str, str] = {}
+    for row in rows:
+        assert isinstance(row, dict) and set(row) == _MOVE_KEYS, row
+        assert isinstance(row["from"], str) and isinstance(row["to"], str), row
+        out[row["from"]] = row["to"]
+    froms = [row["from"] for row in rows]
+    assert froms == sorted(froms), "manifest.moves is not sorted by `from`"
+    assert len(froms) == len(set(froms)), "manifest.moves names a path twice"
+    tos = [row["to"] for row in rows]
+    assert len(tos) == len(set(tos)), "manifest.moves has two rows one target"
+    return out
+
+
 def _state_map(manifest: dict, side: str) -> dict[str, tuple[str, str, str, int]]:
-    return {row["path"]: _recorded(row) for row in manifest[side]["files"]}
+    """The recorded tuple, ALWAYS KEYED BY THE PATH THE REGISTER PROTECTS NOW.
+
+    `next` photographs the paths the tree WILL hold, so under an authorised
+    rename its keys are the DESTINATIONS.  Every comparison in this file asks
+    "what does the register say about protected path p", and the answer for a
+    path being renamed lives under its destination -- so the destination is
+    mapped back to the source here, once, instead of at each of the nine call
+    sites.  With no rename declared the mapping is empty and this is the
+    dictionary comprehension it has always been.
+    """
+    rows = {row["path"]: _recorded(row) for row in manifest[side]["files"]}
+    if side == "next":
+        for source, destination in _renames(manifest).items():
+            assert destination in rows, (
+                f"manifest.next does not carry the rename destination "
+                f"{destination}")
+            rows[source] = rows.pop(destination)
+    return rows
 
 
 def _moved(manifest: dict) -> set[str]:
+    """The protected paths this register AUTHORISES a change to.
+
+    A RENAME IS A MOVE EVEN WHEN NOT ONE BYTE CHANGES.  `_recorded` is
+    (mode, blob_oid, sha256, size) and carries no path, so a pure `git mv`
+    records the identical tuple at a new name and would be invisible here --
+    the register would be authorising a change that no clause in this file
+    could see.  The renames are unioned in explicitly for that reason.
+    """
     current = _state_map(manifest, "current")
     nxt = _state_map(manifest, "next")
-    return {path for path in nxt if current[path] != nxt[path]}
+    return ({path for path in nxt if current[path] != nxt[path]}
+            | set(_renames(manifest)))
 
 
 @lru_cache(maxsize=1)
@@ -379,17 +443,102 @@ def _predecessor_of_the_anchor() -> str | None:
 
     Which of the two is decided by measurement, not by a flag: an anchor the
     base can reach has landed; one it cannot is still on a branch.
+
+    UNLESS THE PARENT IS ITSELF A RECORDED STATE.  The sentence above turns on
+    the parent being "an intermediate state that records neither tuple", and
+    that is a measurable claim rather than a property of being on a branch.  A
+    branch that installs a protected change and THEN re-declares the register
+    -- a PREPARE, its ACTIVATE, and a second PREPARE naming what the next
+    landing will move -- has a parent that records its own register's `next`
+    EXACTLY.  Reaching past it to the fork base would compare `current` against
+    a tree two transitions old and call a correctly recorded chain a drift.
+    MEASURED here on the branch that made `manifest.moves` expressible: the
+    anchor's parent recorded 52 of 52 rows of its own `next`, and the fork base
+    differed on `tools/ci/protected_landing_transition.py` -- the very file the
+    parent had just activated.  So the parent is asked first, and the fork base
+    is the answer only when the parent records nothing.
     """
     author = _authoring_commit()
     if author is None:
         return None
+    has_parent = _git(
+        "rev-parse", "--verify", "--quiet", f"{author}^{{commit}}")[0] == 0
+    if has_parent and _parent_records_its_own_next(author):
+        return f"{author}^"
     base = _base_commit()
     if base is not None and _git(
             "merge-base", "--is-ancestor", author, base)[0] != 0:
         return base
-    if _git("rev-parse", "--verify", "--quiet", f"{author}^{{commit}}")[0] != 0:
+    if not has_parent:
         return None
     return f"{author}^"
+
+
+def _declared_renames_at(commit: str) -> dict[str, str]:
+    """`from -> to` that the register AT `commit` authorises.
+
+    The predecessor of a RENAME anchor is the commit that DECLARED the move, so
+    its register is where the permission lives.  Read from the object database,
+    never from the live tree -- the question is what the base said, not what the
+    candidate says about itself.
+    """
+    rc, raw = _git("show", f"{commit}:{_MANIFEST}")
+    if rc != 0:
+        return {}
+    try:
+        rows = json.loads(raw).get("moves", [])
+    except ValueError:
+        return {}
+    if not isinstance(rows, list):
+        return {}
+    return {row["from"]: row["to"] for row in rows
+            if isinstance(row, dict)
+            and isinstance(row.get("from"), str)
+            and isinstance(row.get("to"), str)}
+
+
+def _tuple_at_predecessor(predecessor: str, paths: list[str]
+                          ) -> dict[str, tuple[str, str, str, int]]:
+    """The predecessor's protected tuple, IN THE LIVE REGISTER'S PATH SPACE.
+
+    A RENAME candidate's register protects the MOVED set, and the predecessor
+    holds those files under their old names -- so asking for them by their new
+    names finds nothing and the anchor reads as "added protected paths, which
+    it may not".  MEASURED on the branch that performs the first rename: two
+    paths reported as added, both of them destinations the predecessor's own
+    register had declared.  So the predecessor is read at ITS OWN paths and the
+    rows are carried forward by the moves IT authorised.  With none declared
+    this is `_tree_tuple(predecessor, paths)`, unchanged.
+    """
+    renames = _declared_renames_at(predecessor)
+    if not renames:
+        return _tree_tuple(predecessor, paths)
+    sources = {to: frm for frm, to in renames.items()}
+    at_predecessor = [sources.get(path, path) for path in paths]
+    observed = _tree_tuple(predecessor, at_predecessor)
+    return {renames.get(path, path): row for path, row in observed.items()}
+
+
+def _parent_records_its_own_next(author: str) -> bool:
+    """Does `author^` hold exactly the tuple ITS OWN register calls `next`?
+
+    That is what "a completed ACTIVATE" means, stated as a measurement of the
+    parent alone.  An intermediate commit an author happened to make -- the
+    case the fork-base rule exists for -- records neither of its register's
+    tuples and answers False here.
+    """
+    rc, raw = _git("show", f"{author}^:{_MANIFEST}")
+    if rc != 0:
+        return False
+    try:
+        predecessor = json.loads(raw)
+        rows = predecessor["next"]["files"]
+        paths = sorted(row["path"] for row in rows)
+        recorded = {row["path"]: _recorded(row) for row in rows}
+    except (ValueError, KeyError, TypeError):
+        return False
+    observed = _tree_tuple(f"{author}^", paths)
+    return sorted(observed) == paths and observed == recorded
 
 
 @lru_cache(maxsize=1)
@@ -410,7 +559,12 @@ def manifest() -> dict:
 
 def test_the_manifest_is_a_well_formed_authorised_transition(manifest):
     """Invariant 1. Whatever transition this is, it is completely described."""
-    assert set(manifest) == _MANIFEST_KEYS, sorted(manifest)
+    assert _MANIFEST_KEYS <= set(manifest) <= (
+        _MANIFEST_KEYS | _OPTIONAL_MANIFEST_KEYS), sorted(manifest)
+    renames = _renames(manifest)
+    assert not (renames and manifest["kind"] == _REOBSERVATION_KIND), (
+        "a re-observation records no move, so it cannot declare one: "
+        + ", ".join(sorted(renames)))
     assert manifest["schema"] == 1
     assert manifest["kind"] in {_TRANSITION_KIND, _REOBSERVATION_KIND}, (
         "manifest.kind is not a protected-landing register kind: "
@@ -448,11 +602,15 @@ def test_the_manifest_is_a_well_formed_authorised_transition(manifest):
     # Both tuples must describe exactly the protected path set, in the same
     # order the verifier compares them in -- no side entries, no omissions. An
     # asymmetric tuple would let a path move without either state naming it.
-    for side in ("current", "next"):
+    # `next` covers the path set AFTER the authorised renames -- which, when
+    # none is declared, is `paths` itself. Sorted, because that is the order the
+    # verifier compares in.
+    future = sorted(renames.get(path, path) for path in paths)
+    for side, expected in (("current", paths), ("next", future)):
         state = manifest[side]
         assert set(state) == {"id", "files"}, sorted(state)
         recorded = [row["path"] for row in state["files"]]
-        assert recorded == paths, side
+        assert recorded == expected, side
         for row in state["files"]:
             assert set(row) == _FILE_KEYS, row
             assert row["mode"] in {"100644", "100755"}, row
@@ -542,7 +700,7 @@ def test_the_current_tuple_is_the_tuple_recorded_where_the_manifest_was_authored
             "FROM is not in this checkout, so `current` cannot be checked "
             "against anything")
     _assert_authoring_shape(
-        author, paths, observed, _tree_tuple(predecessor, paths),
+        author, paths, observed, _tuple_at_predecessor(predecessor, paths),
         current, _state_map(manifest, "next"))
 
 
@@ -627,6 +785,22 @@ def test_the_live_tree_is_exactly_one_recorded_state_and_never_a_mixture(manifes
             f"measured: {unlanded}")
 
     moved = sorted(_moved(manifest))
+    if not moved:
+        # A RE-OBSERVATION RECORDS ONE STATE UNDER TWO IDS.  Its two tuples are
+        # byte-identical -- that is what "records the tree and authorises
+        # nothing" means -- so "exactly one recorded state" cannot be asked as a
+        # count of matching ids; both match, always, and the count says 2 for a
+        # register that is perfectly well formed.  The question that still has
+        # content is whether the live tree IS that one state, and it is asked of
+        # all 52 rows rather than of the empty authorised set.
+        recorded = _state_map(manifest, "current")
+        differing = sorted(path for path in paths
+                           if observed[path] != recorded[path])
+        assert differing == [], (
+            "this register is a re-observation, so the live tree must BE the "
+            f"single state it records; it differs on: {differing}")
+        return
+
     matched: list[str] = []
     drift: dict[str, list[str]] = {}
     for side in ("current", "next"):
@@ -757,7 +931,7 @@ def test_the_live_tree_moves_no_protected_path_the_base_did_not_authorise(
     `classify_move` is imported from the verifier rather than restated, so
     there is one definition of what an authorised move is.
     """
-    base = _base_commit()
+    base = _register_base_commit(manifest)
     if base is None:
         pytest.skip(_UNVERIFIED.format(
             what="the base commit this tree lands on ($GATEKEEPER_BASE, "
@@ -772,6 +946,40 @@ def test_the_live_tree_moves_no_protected_path_the_base_did_not_authorise(
     assert base_state_id in {manifest["current"]["id"], manifest["next"]["id"]}
     assert candidate_state_id in {
         manifest["current"]["id"], manifest["next"]["id"]}
+
+
+def _register_base_commit(manifest: dict) -> str | None:
+    """The commit the LIVE register moves FROM, measured rather than assumed.
+
+    `_base_commit` answers "where did this branch fork", which is the right
+    question for a branch carrying ONE transition and the wrong one for a
+    branch that installs a protected change and then re-declares the register
+    on top of it -- a PREPARE, its ACTIVATE, and a second PREPARE naming what
+    the next landing will move.  There the fork point is two transitions old,
+    and comparing the live tree against it reports the branch's own activated,
+    recorded, authorised change as an unauthorised move.
+
+    The register itself already says which commit it moved from: `current` IS
+    that tuple.  So the fork point is used when it records `current`, and
+    otherwise the newest first-parent ancestor that does.  On trunk, and on any
+    single-transition branch, this returns exactly what `_base_commit` returned
+    and nothing here changes.
+    """
+    fork = _base_commit()
+    if fork is None:
+        return None
+    paths = _paths(manifest)
+    current = _state_map(manifest, "current")
+    if _tree_tuple(fork, paths) == current:
+        return fork
+    code, out = _git("rev-list", "--first-parent", f"{fork}..HEAD")
+    if code != 0:
+        return fork
+    for commit in out.decode("ascii").split():          # newest first
+        observed = _tree_tuple(commit, paths)
+        if sorted(observed) == sorted(paths) and observed == current:
+            return commit
+    return fork
 
 
 def test_the_move_is_exactly_the_paths_the_two_states_disagree_on(manifest):
@@ -944,7 +1152,7 @@ def test_a_tuple_no_commit_records_is_still_refused(manifest):
     if predecessor is None:
         pytest.skip(_UNVERIFIED.format(what="the state the anchor moved FROM"))
     observed = _tree_tuple(author, paths)
-    parent_observed = _tree_tuple(predecessor, paths)
+    parent_observed = _tuple_at_predecessor(predecessor, paths)
     current = _state_map(manifest, "current")
     nxt = _state_map(manifest, "next")
 
@@ -1021,7 +1229,12 @@ def test_an_activation_to_bytes_next_does_not_record_is_refused(manifest):
     verifier = _verifier()
     live = _live_rows(manifest)
     current = {row["path"]: row for row in manifest["current"]["files"]}
-    nxt = {row["path"]: row for row in manifest["next"]["files"]}
+    # KEYED BY THE PATH THE REGISTER PROTECTS NOW, so a renamed row is reachable
+    # under the name the base holds it by; the row's own `path` field still
+    # names the destination, which is the point.
+    _sources = {to: frm for frm, to in _renames(manifest).items()}
+    nxt = {_sources.get(row["path"], row["path"]): row
+           for row in manifest["next"]["files"]}
     moved = sorted(_moved(manifest))
     if not moved:
         pytest.skip(
@@ -1032,14 +1245,46 @@ def test_an_activation_to_bytes_next_does_not_record_is_refused(manifest):
     prepared = [dict(current[row["path"]]) if row["path"] in set(moved) else row
                 for row in live]
 
-    # THE CONTROL: from `current`, installing exactly `next` IS an ACTIVATE.
-    activated = [dict(nxt[row["path"]]) if row["path"] in set(moved) else row
+    # `nxt` is keyed by the path the register protects NOW (`_state_map` maps a
+    # rename destination back to its source), so a row can be built for every
+    # moved path whether or not it is being renamed. The row's own `path` field
+    # is the DESTINATION for a renamed file, which is exactly what makes the
+    # construction below not an ACTIVATE.
+    # IN THE BASE'S PATH SPACE. `nxt`'s row for a renamed file carries the
+    # DESTINATION in its own `path` field; left there, the candidate simply
+    # lacks the protected paths and refuses for that reason instead of the one
+    # under test. Pinning the path to the source builds the thing that must be
+    # refused: the declared rename ACTIVATED IN PLACE, bytes installed at the
+    # old name under the base's own manifest.
+    activated = [dict(nxt[row["path"]], path=row["path"])
+                 if row["path"] in set(moved) else row
                  for row in live]
-    operation, base_id, cand_id = verifier.classify_move(
-        prepared, activated, manifest)
-    assert operation == "ACTIVATE", operation
-    assert base_id == manifest["current"]["id"]
-    assert cand_id == manifest["next"]["id"]
+    if _renames(manifest):
+        # A DECLARED RENAME HAS NO IN-PLACE ACTIVATION, and that is the rule
+        # rather than a gap in this test: installing `next` while keeping the
+        # manifest would leave the next base holding files its own register
+        # cannot name. The control here is the refusal, asserted by name.
+        with pytest.raises(verifier.Refusal) as caught:
+            verifier.classify_move(prepared, activated, manifest)
+        assert "pending RENAME" in str(caught.value), str(caught.value)[:400]
+        # AND THE WRONG BYTES ARE STILL REFUSED, per authorised path. The
+        # message is the rename one rather than "neither authorised atomic
+        # state" -- under a pending rename there is no atomic state to be in --
+        # but the path is still named, which is what a reader needs.
+        for victim in moved:
+            wrong = [_forge(row) if row["path"] == victim else row
+                     for row in prepared]
+            with pytest.raises(verifier.Refusal) as caught:
+                verifier.classify_move(prepared, wrong, manifest)
+            assert victim in str(caught.value), str(caught.value)[:400]
+        return
+    else:
+        # THE CONTROL: from `current`, installing exactly `next` IS an ACTIVATE.
+        operation, base_id, cand_id = verifier.classify_move(
+            prepared, activated, manifest)
+        assert operation == "ACTIVATE", operation
+        assert base_id == manifest["current"]["id"]
+        assert cand_id == manifest["next"]["id"]
 
     # Bytes `next` does not record, on an authorised path.
     for victim in moved:
@@ -1051,6 +1296,10 @@ def test_an_activation_to_bytes_next_does_not_record_is_refused(manifest):
         assert "neither authorised atomic state" in str(caught.value)
 
     # And a spent transition may not be re-run: from `next`, back to `current`.
+    # UNREACHABLE UNDER A DECLARED RENAME, because `activated` is not a state
+    # this register can reach at all -- see the refusal asserted above.
+    if _renames(manifest):
+        return
     for victim in moved:
         rolled = [dict(current[row["path"]]) if row["path"] == victim else row
                   for row in activated]
