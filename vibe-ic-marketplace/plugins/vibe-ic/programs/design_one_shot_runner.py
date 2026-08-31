@@ -7983,6 +7983,75 @@ def _v713_mk_include_dirs(project: Path) -> List[Path]:
     return out
 
 
+# v1.14.63 — frontend-ladder reporting helpers.
+_LADDER_EXHAUSTED_NOTE = (
+    "\n\n| FRONTEND_LADDER_EXHAUSTED: this verdict is the VERILATOR "
+    "(SV-2017) elaboration, which is the frontend that got furthest — not the "
+    "iverilog attempt, whose failure was {first} and is the SystemVerilog "
+    "limit this ladder exists to route around. sv2v was tried in between and "
+    "did not produce a conversion ({reason}). Read the error above as the "
+    "design's, and the iverilog one as the tool's."
+)
+
+
+def _first_rung_summary(text: str) -> str:
+    """One short line naming how the FIRST frontend failed, for the note."""
+    for line in (text or "").splitlines():
+        line = line.strip()
+        if line and "syntax error" in line.lower():
+            return line[:160]
+    for line in (text or "").splitlines():
+        if line.strip():
+            return line.strip()[:160]
+    return "(no iverilog diagnostic captured)"
+
+
+def _verilator_escape_was_reached(vrc: int, vout: str, verr: str) -> bool:
+    """True iff verilator actually RAN and rejected the design.
+
+    A verilator that is absent, or that could not be dispatched, produces no
+    elaboration verdict at all — and an absence must never be promoted to "the
+    design is broken". In that case the caller keeps the historical iverilog
+    failure, which is at least a real tool's real output."""
+    blob = ((vout or "") + (verr or ""))
+    if not blob.strip():
+        return False
+    if _compiler_was_not_found(vrc, vout, verr):
+        return False
+    lowered = blob.lower()
+    return ("%error" in lowered or "%warning" in lowered
+            or "verilator" in lowered)
+
+
+# v1.14.63 — name the frontend that actually produced the verdict.
+# The message hardcoded "iverilog rc=..." even when the verdict came from the
+# verilator SV-2017 escape at the end of the frontend ladder, so a report could
+# attribute one tool's elaboration rejection to a different tool that had
+# failed for an unrelated reason two rungs earlier.
+_TB_FRONTEND_NAMES = {
+    "iverilog_g2012": "iverilog -g2012",
+    "iverilog_sv2v": "iverilog (via sv2v pre-pass)",
+    "verilator_sv2017": "verilator (SV-2017, frontend-ladder escape)",
+}
+
+
+def _tb_compile_failure_label(tb_frontend: str) -> str:
+    """How to describe a TB compile failure, given which frontend judged it.
+
+    "real structural defect" is the right words only for the DEFAULT frontend
+    rejecting the source. When the verdict comes from the ladder's final
+    SV-2017 escape, the accurate statement is narrower and more useful: the
+    design AS CONFIGURED did not elaborate. Measured case — the elaboration
+    failed on a module that is missing because a parameter the design input
+    never stated selected an excluded variant. That is not a defect in the RTL,
+    and telling the operator it is sends them to repair code that is correct."""
+    if tb_frontend == "verilator_sv2017":
+        return ("the design AS CONFIGURED did not elaborate under the "
+                "ladder's full SV-2017 frontend (see FRONTEND_LADDER_EXHAUSTED "
+                "below; this is NOT the iverilog SystemVerilog limit)")
+    return "real structural defect"
+
+
 def _iverilog_compile_with_sv_fallback(
         base_cmd: List[str], rtl_files: List[Path], tb_path: Path,
         run_dir: Path, container: str, top_name: str,
@@ -8139,6 +8208,33 @@ def _iverilog_compile_with_sv_fallback(
                 rtl_files, tb_path, run_dir, container, top_name, _vl_reason)
             if vrc == 0:
                 return vrc, vout, verr, vfe
+            # v1.14.63 — REPORT THE FRONTEND THAT GOT FURTHEST, not the first.
+            # When the ladder exhausts, returning rung 1's error attributes a
+            # KNOWN frontend limitation to the design. Measured: iverilog said
+            # `aes_pkg.sv:19: syntax error / I give up.` — the SystemVerilog
+            # limit the ladder exists to route around — and the caller labelled
+            # that "real structural defect" and fed it to the RTL repair loop,
+            # which then reported itself INERT and pointed at an RTL-repair
+            # skill and a Phase-1 re-run. Three wrong targets.
+            # Verilator, the most capable frontend here, had already said the
+            # informative thing: a specific module was missing — the same cause
+            # the synth step diagnoses precisely. Honesty is preserved in both
+            # directions: a genuine RTL defect that ALL frontends reject still
+            # FAILs, because the last frontend rejects it too; only WHICH
+            # rejection the operator is shown changes.
+            if _verilator_escape_was_reached(vrc, vout, verr):
+                # Fold BOTH streams into the diagnostic: verilator prints the
+                # load-bearing line ("Cannot find file containing module: X")
+                # on STDOUT, so an `err`-only message reproduces the very
+                # defect this fix exists to remove — a verdict that does not
+                # contain the abort it is reporting.
+                _vdiag = "\n".join(x for x in ((verr or "").strip(),
+                                                (vout or "").strip()) if x)
+                return (vrc, vout,
+                        _vdiag + _LADDER_EXHAUSTED_NOTE.format(
+                            first=_first_rung_summary(err or out),
+                            reason=_vl_reason[:200]),
+                        "verilator_sv2017")
         # verilator unavailable / also rejected / non-assertion failure —
         # honest iverilog failure stands.
         return rc, out, err, "iverilog_g2012"
@@ -9319,8 +9415,9 @@ def _reference_tb_generic_full_stack(project: Path, top_name: str,
                 "reference_tb", "FAIL",
                 time.time() - t0,
                 (f"generic full-stack TB ({tb_path.name}) failed to "
-                 f"compile against rtl/ — real structural defect. "
-                 f"iverilog rc={rc} stderr={(err or out)[-1200:]}"),
+                 f"compile against rtl/ — {_tb_compile_failure_label(tb_frontend)}. "
+                 f"{_TB_FRONTEND_NAMES.get(tb_frontend, tb_frontend)} "
+                 f"rc={rc} stderr={(err or out)[-1200:]}"),
                 extras={"verification_track": "generic_full_stack",
                         "aid_tb_skipped_reason": track_reason,
                         "tb_frontend": tb_frontend})
