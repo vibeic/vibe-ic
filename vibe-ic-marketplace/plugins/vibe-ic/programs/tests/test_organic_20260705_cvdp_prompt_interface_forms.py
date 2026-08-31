@@ -22,6 +22,7 @@ _PROGRAMS = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_PROGRAMS))
 
 import cvdp_atomic_bridge as B  # noqa: E402
+import cvdp_complete_extract as C  # noqa: E402
 import prose_interface_table_read as T  # noqa: E402
 
 
@@ -75,6 +76,79 @@ def test_signal_direction_table_binds_comparator_shape():
     assert set(ins) == {"i_A", "i_B", "i_enable"}
     assert outs == ["o_equal"]
     assert widths["i_A"] == 5 and widths["o_equal"] == 1
+
+
+def test_signal_direction_reader_unions_sectioned_interface_tables():
+    """A single interface is often split into Global/Master/Slave tables.
+    One-sided tables are valid fragments; none may disappear merely because it
+    lacks both an input and an output in that individual section."""
+    prompt = (
+        "### Global\n"
+        "| Signal Name | Width | Direction | Description |\n"
+        "|-------------|-------|-----------|-------------|\n"
+        "| clk         | 1 bit | input     | clock       |\n"
+        "| rst_n       | 1 bit | input     | reset       |\n"
+        "\n### Master 0\n"
+        "| Signal Name | Width  | Direction | Description |\n"
+        "|-------------|--------|-----------|-------------|\n"
+        "| m0_ready    | 1 bit  | output    | ready       |\n"
+        "| m0_valid    | 1 bit  | input     | valid       |\n"
+        "| m0_data     | 32 bit | input     | data        |\n"
+        "\n### Master 1\n"
+        "| Signal Name | Width  | Direction | Description |\n"
+        "|-------------|--------|-----------|-------------|\n"
+        "| m1_ready    | 1 bit  | output    | ready       |\n"
+        "| m1_valid    | 1 bit  | input     | valid       |\n"
+        "| m1_data     | 32 bit | input     | data        |\n"
+        "\n### Slave\n"
+        "| Signal Name | Width  | Direction | Description |\n"
+        "|-------------|--------|-----------|-------------|\n"
+        "| s_ready     | 1 bit  | input     | ready       |\n"
+        "| s_valid     | 1 bit  | output    | valid       |\n"
+        "| s_data      | 32 bit | output    | data        |\n"
+    )
+    ins, outs, widths, _sym = T.read_signal_direction_table(prompt)
+    assert ins == ["clk", "rst_n", "m0_valid", "m0_data", "m1_valid",
+                   "m1_data", "s_ready"]
+    assert outs == ["m0_ready", "m1_ready", "s_valid", "s_data"]
+    assert widths == {
+        "clk": 1, "rst_n": 1,
+        "m0_ready": 1, "m0_valid": 1, "m0_data": 32,
+        "m1_ready": 1, "m1_valid": 1, "m1_data": 32,
+        "s_ready": 1, "s_valid": 1, "s_data": 32,
+    }
+
+
+def test_complete_extract_keeps_all_tables_beside_stale_skeleton_names():
+    """The CVDP adapter must expose every prompt-table fact even when a stale
+    fenced skeleton uses a different spelling. Resolution happens downstream;
+    deleting the table spelling here made Program First unable to choose it."""
+    prompt = (
+        "Write module bus.\n"
+        "### Global\n"
+        "| Signal | Width | Direction |\n"
+        "|--------|-------|-----------|\n"
+        "| clk    | 1 bit | input     |\n"
+        "\n### Producer\n"
+        "| Signal | Width | Direction |\n"
+        "|--------|-------|-----------|\n"
+        "| p_ready| 1 bit | output    |\n"
+        "| p_valid| 1 bit | input     |\n"
+        "\n### Consumer\n"
+        "| Signal | Width | Direction |\n"
+        "|--------|-------|-----------|\n"
+        "| c_ready| 1 bit | input     |\n"
+        "| c_valid| 1 bit | output    |\n"
+        "```systemverilog\n"
+        "module bus(input clk, input c_read, output p_read, output c_valid);\n"
+        "```\n"
+    )
+    _skel, ins, outs, _params, _defaults, _table, widths, _tb = \
+        C._recover_cvdp_interface({"id": "x", "input": {"prompt": prompt}},
+                                  "bus")
+    assert ins == ["clk", "c_read", "p_valid", "c_ready"]
+    assert outs == ["p_read", "c_valid", "p_ready"]
+    assert widths["p_ready"] == 1 and widths["c_ready"] == 1
 
 
 if __name__ == "__main__":
