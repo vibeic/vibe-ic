@@ -5156,7 +5156,49 @@ steps:
         # Blocking slot: measured over the 15 published run-roots under
         # benchmark-data/ic it blocks 0 (every one VACUOUS_PASS — no promotion
         # happened), and rc=2/VACUOUS is the non-blocking tier by convention.
-        - program_exit_zero: "drv_promotion_corroboration_check . --json reports/phase3/sta/drv_promotion_corroboration.json"
+        # That measurement is RESTATED here, not dropped, because it is exactly
+        # the measurement that motivates the wiring below: a clause that blocks
+        # 0 of 15 while costing the whole step is the defect.
+        #
+        # ENFORCEMENT: BLOCKING, and still blocking after the rewiring below —
+        # when a promotion DID happen the condition matches, the program runs,
+        # and a contradicted or uncorroborated promotion still FAILs the step.
+        #
+        # OPTIONAL SLOT, not because the check is optional but because its
+        # SUBJECT is. This gate corroborates a route promoted by
+        # `signoff_spef_repair`; when no promotion happened there is no promoted
+        # route to corroborate, and the gate says so itself — its own verdict
+        # table makes `VACUOUS_PASS / no promotion happened this run` the normal
+        # outcome, and `test_issue306_register_paydown` measures 0 of 15
+        # published run-roots carrying the marker.
+        #
+        # Wired as a mandatory clause that normal outcome cost the whole step:
+        # step 23 is a SIGN-OFF step (`_SIGNOFF_RE` matches "post-route STA"), so
+        # one vacuous clause beside four substantive ones made the step
+        # PARTIALLY-VACUOUS — a qualified-done tier — and
+        # `_blocks_when_vacuous` then voided every downstream done-claim.
+        # MEASURED on spm@1.14.30: steps 32, 34 and 35 landed
+        # PASS_VOIDED_BY_DEPENDENCY naming this clause, on a run with FAIL=0.
+        # The step's own `observed` line read
+        #   "PARTIALLY-VACUOUS (1 of 5 gate clause(s) examined nothing):
+        #    drv_promotion_corroboration_check ..."
+        # A design cannot make that go away, so the flow could not reach PASS on
+        # any run where no route promotion happened — which is the usual case.
+        #
+        # `absent_condition_reason` is the W4 declaration that BUYS the
+        # not-applicable: the clause states at its own wiring site why an absent
+        # input is genuine, is disclosed as
+        # "NOT-APPLICABLE (declared, N of M gate clause(s) here examined
+        # nothing)", and does not move the tier. Deleting the clause deletes its
+        # exemption with it. Both `_PNR_DIRS` the gate itself searches are
+        # listed, so the condition and the program can never disagree about
+        # where the marker lives.
+        - optional_program_exit_zero:
+            command: "drv_promotion_corroboration_check . --json reports/phase3/sta/drv_promotion_corroboration.json"
+            condition_files_exist:
+              - "phase3/stage3/pnr/routed_base_prerepair.def"
+              - "pnr/routed_base_prerepair.def"
+            absent_condition_reason: "no route promotion happened this run, so no promoted route exists whose claimed improvement the sign-off report could corroborate; the gate's own verdict table makes this its normal outcome and the marker is measured at 0 of 15 published run-roots"
     blocks_on: [22]
 
   - id: 24
