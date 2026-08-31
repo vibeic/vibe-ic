@@ -119,6 +119,72 @@ def test_clause_b_a_run_subject_that_cannot_run_is_refused():
     assert "neither start a process nor read a status" in r.stdout
 
 
+#: The supervision primitive this tree requires an opaque spawn to use. It
+#: starts the child and returns its status, so a program built on it CAN observe
+#: a run — and `loop_watchdog_compliance_check` class (c) makes it mandatory for
+#: exactly the shape clause B's one population member has.
+_REPAIRED_B_SUPERVISED = '''\
+"""Whether the full suite actually ran."""
+import importlib.util
+import pathlib
+import sys
+
+
+def _watchdog():
+    spec = importlib.util.spec_from_file_location(
+        "_watchdog", pathlib.Path(__file__).resolve().parent / "_watchdog.py")
+    mod = importlib.util.module_from_spec(spec)
+    sys.modules.setdefault("_watchdog", mod)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def main(argv):
+    proc = _watchdog().run_supervised(["bash", argv[1], "--list-tiers"])
+    if proc.rc != 0:
+        print("[FAIL] the full suite did not run")
+        return 1
+    print("[PASS] the full suite ran")
+    return 0
+'''
+
+
+def test_clause_b_accepts_a_run_subject_that_observes_through_run_supervised():
+    """The widened token, driven from the side that must now PASS.
+
+    `loop_watchdog_compliance_check` requires an opaque `bash <script>` spawn to
+    move to `_watchdog.run_supervised`. Before `run_supervised` was in
+    `_RUN_TOKENS`, obeying that gate made this one flag the same file, and clause
+    B's whole population is that one file. This is the arm that would go red if
+    the token were removed again.
+    """
+    r = _run(_tree({"suite_run_check.py": _REPAIRED_B_SUPERVISED}))
+    assert r.returncode == 0, (
+        f"a run-subject program that spawns and reads a status through the "
+        f"tree's own supervision primitive was refused (rc={r.returncode})\n"
+        f"{r.stdout}\n{r.stderr}")
+    assert "clause B population:            1" in r.stdout, (
+        "the subject must still BE in clause B's population — a pass earned by "
+        "falling out of the population proves nothing")
+
+
+def test_clause_b_still_refuses_a_run_subject_that_only_MENTIONS_supervision():
+    """The other side: naming the primitive in prose is not observing a run.
+
+    A docstring or comment containing `run_supervised` would satisfy a substring
+    test while the program still decides by matching text. Asserted so the
+    widening cannot be spent that way.
+    """
+    prose = _DEFECT_B.replace(
+        '"""Whether the full suite actually ran."""',
+        '"""Whether the full suite actually ran.\n\nTODO: use run_supervised.\n"""')
+    assert "run_supervised" in prose
+    r = _run(_tree({"suite_run_check.py": prose}))
+    assert r.returncode == 1, (
+        f"a program that only MENTIONS the primitive was accepted "
+        f"(rc={r.returncode})\n{r.stdout}\n{r.stderr}")
+
+
 def test_a_bound_and_read_status_is_not_refused():
     r = _run(_tree({"sample_runner.py": _REPAIRED_A}))
     assert r.returncode == 0, (

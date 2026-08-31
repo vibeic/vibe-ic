@@ -135,8 +135,24 @@ _CHECKER_RE = re.compile(
     r"[\w/]*(?:_check|_audit|_gate|_gates|_scan)\.py(?=[\s'\"]|$)")
 
 #: Clause B: the tokens a program needs to start a process or read a status.
+#:
+#: `run_supervised` IS ONE OF THEM, and leaving it out made this clause
+#: contradict `loop_watchdog_compliance_check`. That gate's class (c) REQUIRES an
+#: opaque `bash <script>` spawn to be routed through `_watchdog.run_supervised`;
+#: this clause reads a file with none of the other six tokens as unable to
+#: observe a run. `full_suite_run_check.py` is the ONLY member of clause B's
+#: population AND is the file the watchdog gate named, so obeying one gate broke
+#: the other and no honest state of that file satisfied both.
+#:
+#: It is not a widening of convenience. `run_supervised` launches the child
+#: (`popen_factory`, defaulting to a host `Popen`), supervises it by forward
+#: progress, and returns a `SupervisedResult` whose `.rc` is the process's own
+#: return code — RC_STALLED / RC_CEILING when it had to kill it. A caller that
+#: reads that `.rc` has observed a run in exactly the sense this clause means,
+#: and the clause's own words are "no way to start a process and no way to read
+#: a status", not "does not contain the string `subprocess`".
 _RUN_TOKENS = ("subprocess", "Popen", "os.system", "returncode",
-               "check_output", "check_call")
+               "check_output", "check_call", "run_supervised")
 
 #: Clause B population: a program whose own name puts the RUN immediately
 #: before the verdict word, so the run IS the subject. `run_output_
@@ -232,6 +248,41 @@ def scan_clause_a(path: Path, root: Path) -> List[dict]:
     return out
 
 
+def _code_only(text: str) -> str:
+    """`text` with every comment and string literal blanked out.
+
+    MEASURED, and it is why this exists: with the raw text, the string
+    `subprocess` surviving in ONE COMMENT was enough to keep clause B green over
+    a program that had no way left to start a process. A prose mention is not an
+    invocation — this file's own COVERAGE section names
+    `invocation_proved_by_parse_not_by_text` as the defect to avoid, and a
+    substring test over comments is that defect.
+
+    Positions are preserved (blanks, not deletions) so a line number taken from
+    the AST still lines up. A file that will not tokenize falls back to the raw
+    text, which is the previous behaviour and the conservative direction: it can
+    only make the clause say LESS, never more.
+    """
+    try:
+        import io
+        import tokenize
+        out = list(text)
+        lines = [0]
+        for ln in text.splitlines(keepends=True):
+            lines.append(lines[-1] + len(ln))
+        for tok in tokenize.generate_tokens(io.StringIO(text).readline):
+            if tok.type not in (tokenize.COMMENT, tokenize.STRING):
+                continue
+            (r1, c1), (r2, c2) = tok.start, tok.end
+            a, b = lines[r1 - 1] + c1, lines[r2 - 1] + c2
+            for i in range(a, min(b, len(out))):
+                if out[i] != "\n":
+                    out[i] = " "
+        return "".join(out)
+    except Exception:                       # noqa: BLE001 — see the docstring
+        return text
+
+
 def scan_clause_b(path: Path, root: Path) -> List[dict]:
     # A test ABOUT such a program is not such a program.
     if "tests" in path.parts:
@@ -242,7 +293,7 @@ def scan_clause_b(path: Path, root: Path) -> List[dict]:
         text = path.read_text(encoding="utf-8", errors="replace")
     except OSError:
         return []
-    if any(tok in text for tok in _RUN_TOKENS):
+    if any(tok in _code_only(text) for tok in _RUN_TOKENS):
         return []
     return [{"clause": "B", "file": path.relative_to(root).as_posix(),
              "line": 1, "gate": path.name}]

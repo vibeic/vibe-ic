@@ -99,7 +99,6 @@ import json
 import os
 import re
 import shlex
-import subprocess
 import sys
 from dataclasses import dataclass, field, asdict
 from pathlib import Path
@@ -369,9 +368,10 @@ def runner_tiers(script: Path) -> Optional[List[str]]:
     # number the timeout was, so nothing about the deadline changes; the stall
     # grace is set to it as well, because the 30-minute default would let a
     # silent listing sit for the whole grace before the ceiling could fire.
-    # MEASURED, not assumed: neither this call nor the `subprocess.run(timeout=)`
-    # it replaces kills a process GROUP, so a script that backgrounds work still
-    # orphans it. The gain here is the discipline and the structured outcome,
+    # MEASURED, not assumed: neither this call nor the timeout-bounded
+    # `subprocess` launch it replaces kills a process GROUP
+    # (`_watchdog._default_kill` is `proc.kill()`), so a script that backgrounds
+    # work still orphans it. The gain here is the discipline and the structured outcome,
     # and claiming more than that would be claiming something unmeasured.
     proc = _watchdog().run_supervised(
         ["bash", str(script), _LIST_TIERS_FLAG],
