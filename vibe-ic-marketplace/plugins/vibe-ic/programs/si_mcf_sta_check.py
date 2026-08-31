@@ -549,6 +549,32 @@ def audit(project_dir: Path,
 
     net_windows, exact = _load_windows(report, sp["net_driver_pins"])
     stats["windows_exact"] = exact
+    # `windows_exact` says only that a window FILE was found and parsed. It has
+    # never said how many nets that file actually resolved, and a net it does
+    # not resolve is folded at the WORST-CASE Miller factor ("unknown window =>
+    # assume overlap"). So `windows_exact: true` could stand over a run in which
+    # 70% of the nets were never analysed at all, and did — the coverage was
+    # 465 of 1558 on a tracked artefact while this field read true. Coverage is
+    # now MEASURED here, recorded, and stated as a WARNING when it is partial.
+    # WARNING, not ERROR, and deliberately: the unresolved nets degrade in the
+    # CONSERVATIVE direction, so partial coverage can only overstate the
+    # crosstalk penalty, never hide one. It must be visible; it must not
+    # silently flip a design's sign-off verdict.
+    if isinstance(net_windows, dict) and net_windows:
+        _res = sum(1 for v in net_windows.values() if v is not None)
+        _tot = len(net_windows)
+        stats["windows_resolved"] = _res
+        stats["windows_total"] = _tot
+        stats["windows_coverage"] = round(_res / _tot, 6)
+        if _res < _tot:
+            findings.append(Finding(
+                "WARNING", "WINDOW_COVERAGE_PARTIAL",
+                f"switching windows resolved for {_res} of {_tot} coupling "
+                f"net(s) ({_res / _tot:.1%}); the remaining {_tot - _res} were "
+                f"folded at the worst-case Miller factor because an unknown "
+                f"window conservatively assumes overlap — the corner slacks are "
+                f"an envelope over that assumption for those nets, not a "
+                f"measurement of their switching"))
     guard = float(report.get("overlap_guard_ns", 0.0) or 0.0)
 
     corners = report.get("corners", {})
@@ -952,6 +978,9 @@ def build_report(findings: List[Finding], stats: dict, project_dir: str) -> dict
     summary = {
         "corners_checked": stats.get("corners_checked", []),
         "windows_exact": stats.get("windows_exact"),
+        "windows_coverage": stats.get("windows_coverage"),
+        "windows_resolved": stats.get("windows_resolved"),
+        "windows_total": stats.get("windows_total"),
         "coupling_pairs": stats.get("coupling_pairs"),
         "errors_count": sum(1 for f in findings if f.severity == "ERROR"),
         "findings_count": len(findings),
