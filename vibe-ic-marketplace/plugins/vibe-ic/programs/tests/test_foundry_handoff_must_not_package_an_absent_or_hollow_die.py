@@ -39,8 +39,8 @@ hollow GDS and nothing looks at the die. The predicate therefore lives in the
 GATE as well, keyed on the artefact, where no choice of writer can evade it.
 
 CORPUS SWEEP (zero false positives): the geometry predicate was run over every
-`.gds` under `/home/reyerchu/vibeic-designs` on 192.168.1.121 — 76 files,
-0 with zero geometry. This ERROR cannot redden an existing real artefact.
+`.gds` under `~/vibeic-designs` (the design corpus on 192.168.1.121) — 76
+files, 0 with zero geometry. This ERROR cannot redden an existing real artefact.
 """
 from __future__ import annotations
 
