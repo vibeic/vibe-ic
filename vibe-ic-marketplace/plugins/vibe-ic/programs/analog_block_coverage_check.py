@@ -1,17 +1,25 @@
 #!/usr/bin/env python3
 """analog_block_coverage_check.py — deterministic gate for analog block design coverage
 
-Validates that every analog module detected in RTL has a corresponding
-design directory under analog/<block>/ with the required deliverables:
+Validates that every declared analog block has a corresponding design
+directory under analog/<block>/ with the required deliverables:
   - spec.json (extracted spec from L1/L5)
   - *.sp (SPICE netlist)
   - corner_results.json (PVT corner sweep results)
 
-Also checks analog/analog_block_list.json if present (explicit block list
-from analog-spec-extract skill).
+The explicit analog/analog_block_list.json emitted by analog-spec-extract is
+the authoritative roster when present.  The RTL module-name heuristic is a
+fallback only when that list is absent.  Heuristic hits outside an explicit
+roster are reported as WARNINGs because a digital product/top name can contain
+an analog class token without itself being an analog implementation block.
+
+ENFORCEMENT: blocking — missing deliverables on rostered blocks fail the
+completion audit.  A heuristic-only hit outside an explicit roster is
+ADVISORY and cannot fail the gate.
 
 Self-skips when:
-  - No analog modules detected in RTL AND no analog_block_list.json
+  - No analog modules detected in RTL AND no analog_block_list.json, or
+  - A valid explicit analog_block_list.json declares no blocks
 
 Usage:
     python3 analog_block_coverage_check.py <project_dir>
@@ -87,38 +95,97 @@ def _detect_analog_modules(project: Path) -> List[str]:
     return sorted(found)
 
 
-def _load_block_list(project: Path) -> List[str]:
+def _load_block_list(project: Path) -> Optional[List[str]]:
     bl = _pl.analog_dir(project) / "analog_block_list.json"
     if not bl.exists():
-        return []
+        return None
     try:
         data = json.loads(bl.read_text(errors="replace"))
         if isinstance(data, dict) and "blocks" in data:
-            return [b["name"] if isinstance(b, dict) else str(b)
-                    for b in data["blocks"]]
-        if isinstance(data, list):
-            return [b["name"] if isinstance(b, dict) else str(b)
-                    for b in data]
-    except (json.JSONDecodeError, OSError, KeyError):
-        pass
-    return []
+            data = data["blocks"]
+        if not isinstance(data, list):
+            return None
+        return [b["name"] if isinstance(b, dict) else str(b)
+                for b in data]
+    except (json.JSONDecodeError, OSError, KeyError, TypeError):
+        return None
 
 
 def run_audit(project: Path) -> AuditResult:
     result = AuditResult()
 
     rtl_modules = _detect_analog_modules(project)
-    explicit_blocks = _load_block_list(project)
+    block_list_present = (
+        _pl.analog_dir(project) / "analog_block_list.json"
+    ).is_file()
+    loaded_blocks = _load_block_list(project)
+    explicit_blocks = loaded_blocks or []
 
-    all_blocks = sorted(set(rtl_modules) | set(explicit_blocks))
+    if block_list_present and loaded_blocks is None:
+        result.passed = False
+        result.findings.append(Finding(
+            rule="ANALOG_BLOCK_LIST_INVALID",
+            severity="ERROR",
+            message=(
+                "analog_block_list.json exists but is not readable as a JSON "
+                "list or an object containing a blocks list; refusing to "
+                "infer an authoritative roster."
+            ),
+        ))
+        result.summary = {
+            "skipped": False,
+            "total_blocks": 0,
+            "covered": 0,
+            "uncovered": [],
+            "from_rtl": rtl_modules,
+            "from_block_list": [],
+            "roster_source": "invalid_analog_block_list",
+            "rtl_name_hints_not_in_block_list": [],
+            "pass": False,
+        }
+        return result
+
+    if block_list_present:
+        all_blocks = sorted(set(explicit_blocks))
+        ignored_rtl_hints = sorted(set(rtl_modules) - set(explicit_blocks))
+    else:
+        all_blocks = sorted(set(rtl_modules))
+        ignored_rtl_hints = []
+
+    for module in ignored_rtl_hints:
+        result.findings.append(Finding(
+            rule="RTL_ANALOG_NAME_NOT_IN_BLOCK_LIST",
+            severity="WARNING",
+            message=(
+                f"RTL module '{module}' matched the analog name heuristic but "
+                "is not declared in analog_block_list.json; the explicit block "
+                "list is authoritative, so no analog deliverables are required "
+                "for this module."
+            ),
+        ))
 
     if not all_blocks:
         result.findings.append(Finding(
             rule="SKIP_NO_ANALOG",
             severity="INFO",
-            message="No analog modules detected in RTL and no analog_block_list.json; skipping",
+            message=(
+                "analog_block_list.json declares no analog blocks; skipping"
+                if block_list_present else
+                "No analog modules detected in RTL and no "
+                "analog_block_list.json; skipping"
+            ),
         ))
-        result.summary = {"skipped": True, "reason": "no_analog_blocks"}
+        result.summary = {
+            "skipped": True,
+            "reason": "no_analog_blocks",
+            "from_rtl": rtl_modules,
+            "from_block_list": explicit_blocks,
+            "roster_source": (
+                "analog_block_list" if block_list_present else
+                "rtl_name_heuristic"
+            ),
+            "rtl_name_hints_not_in_block_list": ignored_rtl_hints,
+        }
         return result
 
     analog_dir = _pl.analog_dir(project)
@@ -168,6 +235,11 @@ def run_audit(project: Path) -> AuditResult:
         "uncovered": uncovered,
         "from_rtl": rtl_modules,
         "from_block_list": explicit_blocks,
+        "roster_source": (
+            "analog_block_list" if block_list_present else
+            "rtl_name_heuristic"
+        ),
+        "rtl_name_hints_not_in_block_list": ignored_rtl_hints,
         "pass": result.passed,
     }
     return result
