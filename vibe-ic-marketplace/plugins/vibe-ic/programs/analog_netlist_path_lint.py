@@ -119,12 +119,25 @@ def _is_whitelisted(path_tok: str, project_root: str = "") -> bool:
     return False
 
 
-def run_audit(project: Path) -> AuditResult:
+def run_audit(project: Path,
+              real_root: "Optional[Path]" = None) -> AuditResult:
+    """`real_root` names the REAL project the decks belong to when `project`
+    is a VERIFICATION STAGING tree (A3's `verify_with_checkers` copies the
+    deck into a TemporaryDirectory before running the checkers, so the
+    project-internal containment rung tested the wrong root and refused the
+    project's own staged-PDK binding all over again — measured u_hawaii_adc
+    round-5b, one round after the rung was added). Containment accepts a path
+    inside EITHER root; everything else is unchanged."""
     result = AuditResult()
     try:
         project_root = str(project.resolve())
     except OSError:
         project_root = str(project)
+    if real_root is not None:
+        try:
+            project_root = str(Path(real_root).resolve())
+        except OSError:
+            project_root = str(real_root)
     analog_dir = _analog_dir(project)
     if analog_dir is None:
         result.findings.append(Finding(
@@ -215,13 +228,18 @@ def main(argv: Optional[list] = None) -> int:
         formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("project_dir", type=Path)
     ap.add_argument("--json", default=None, help="JSON report output path")
+    ap.add_argument("--project-root", type=Path, default=None,
+                    help="the REAL project root the decks belong to, when "
+                         "project_dir is a verification staging copy (the "
+                         "project-internal containment rung is tested "
+                         "against THIS root)")
     args = ap.parse_args(argv)
 
     if not args.project_dir.is_dir():
         print(f"ERROR: {args.project_dir} is not a directory", file=sys.stderr)
         return 2
 
-    result = run_audit(args.project_dir)
+    result = run_audit(args.project_dir, real_root=args.project_root)
     out = json.dumps(asdict(result), indent=2, ensure_ascii=False)
     if args.json:
         Path(args.json).parent.mkdir(parents=True, exist_ok=True)

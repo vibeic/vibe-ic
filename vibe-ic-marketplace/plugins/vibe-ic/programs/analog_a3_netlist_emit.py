@@ -833,7 +833,8 @@ _CHECKERS = (
 
 
 def verify_with_checkers(block: str, sp_text: str, tb_text: Optional[str],
-                         design_content: Optional[str] = None
+                         design_content: Optional[str] = None,
+                         real_project: Optional[Path] = None
                          ) -> Tuple[bool, List[Dict[str, Any]]]:
     """Run the real checkers over a staging project holding ONLY this block's
     netlist, so the verdict is about this file and not about whatever else the
@@ -876,6 +877,14 @@ def verify_with_checkers(block: str, sp_text: str, tb_text: Optional[str],
             cmd = [sys.executable, str(path), str(proj)]
             if per_block:
                 cmd += ["--block", block]
+            # The staging tree is NOT the project the deck belongs to: a deck
+            # correctly binding the REAL project's own input/pdk copy would
+            # read as a foreign absolute path when containment is tested
+            # against this TemporaryDirectory (measured: u_hawaii_adc
+            # round-5b). Hand the lint the real root so the project-internal
+            # rung judges the tree that will actually exist on disk.
+            if label == "path_lint" and real_project is not None:
+                cmd += ["--project-root", str(real_project)]
             try:
                 cp = _pr.run(cmd, capture_output=True, text=True)
             except (OSError, subprocess.SubprocessError) as exc:
@@ -1203,7 +1212,8 @@ def emit_for_block(project: Path, entry: Dict[str, Any], pdk: str,
     tb_text, tb_env, tb_notes = render_testbench(ir, pdkctx, env, prov_lines)
 
     ok, findings = verify_with_checkers(name, sp_text, tb_text,
-                                        design_content)
+                                        design_content,
+                                        real_project=project)
     if not ok:
         _drop_stale(bdir, name)
         gap = write_gap(bdir, project, name, btype, "NETLIST_REJECTED_BY_CHECKS",
