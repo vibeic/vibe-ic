@@ -58,6 +58,20 @@ So `--next-file PATH=FILE` names the bytes that do not exist in the tree yet.
 That is the whole reason this program takes them from the filesystem rather
 than from a commit: at PREPARE time the future bytes are a working-tree edit.
 
+THE ONE SHAPE THAT IS NOT A MOVE
+================================
+`--no-move` renders a RE-OBSERVATION: `next` is `current`, the register records
+the tree as it stands, and NOTHING is authorised.  It exists for exactly one
+situation, and it is not a convenience.  A landing that moves a protected path
+without opening a transition leaves the register naming bytes the tree no longer
+holds, and the documented remedy -- re-author at the current base -- needs a
+PREPARE, and a PREPARE needs a move.  MEASURED on `ac3232ddeb` (v1.14.4):
+`tools/ci/_gate_dispatch.sh` had been moved by `e37d10e1e7` (v1.14.3) and again
+by `ac3232ddeb`, neither under a transition, and the last transition on main was
+fully activated -- so the remedy was unreachable until some unrelated protected
+file happened to need changing.  `--no-move` is the way back, and it is refused
+together with `--next-file` so it can never quietly swallow a real move.
+
 NO SECOND DEFINITION
 ====================
 Path/role policy and the runner profile are COPIED from the manifest already in
@@ -163,7 +177,8 @@ def refuse_a_shrink(previous_rows: Any, derived_rows: Any) -> None:
 
 
 def render(*, repo: Path, commit: str, transition_id: str, current_id: str,
-           next_id: str, moves: dict[str, Path]) -> dict[str, Any]:
+           next_id: str, moves: dict[str, Path],
+           no_move: bool = False) -> dict[str, Any]:
     transition = _load_transition()
     repo = repo.resolve(strict=True)
     algorithm, oid_len = transition._object_format(repo)
@@ -205,12 +220,20 @@ def render(*, repo: Path, commit: str, transition_id: str, current_id: str,
     if unknown:
         raise Refusal("a move names a path the manifest does not protect: "
                       + ", ".join(unknown))
-    if not moves:
+    if no_move and moves:
+        raise Refusal(
+            "--no-move records the tree as it stands and authorises nothing, "
+            "so it cannot be combined with --next-file; drop one. The named "
+            "paths were: " + ", ".join(sorted(moves)))
+    if not moves and not no_move:
         raise Refusal(
             "a manifest with no move is refused by parse_manifest ('manifest "
             "next tuple does not differ from current'). There is no settled "
-            "manifest: leave the last transition in place, or name the move "
-            "the next commit will install with --next-file.")
+            "manifest: leave the last transition in place, name the move the "
+            "next commit will install with --next-file, or -- when a protected "
+            "path was moved by a landing that opened no transition and there "
+            "is nothing pending to ride the repair on -- record the tree as it "
+            "stands with --no-move.")
 
     nxt = []
     for row in current:
@@ -228,7 +251,8 @@ def render(*, repo: Path, commit: str, transition_id: str, current_id: str,
 
     manifest = {
         "schema": transition.SCHEMA,
-        "kind": transition.MANIFEST_KIND,
+        "kind": (transition.REOBSERVATION_KIND if no_move
+                 else transition.MANIFEST_KIND),
         "transition_id": transition_id,
         "manifest_path": transition.MANIFEST_PATH,
         "runner": runner,
@@ -275,6 +299,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument(
         "--next-file", action="append", default=[], metavar="PATH=FILE",
         help="a protected PATH whose future bytes are in FILE")
+    parser.add_argument(
+        "--no-move", action="store_true",
+        help="record the tree as it stands and authorise NOTHING: a "
+             "re-observation, for a protected path that moved under a landing "
+             "which opened no transition. Refused together with --next-file.")
     parser.add_argument("--out", type=Path,
                         help="write here instead of stdout")
     args = parser.parse_args(argv)
@@ -292,7 +321,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         manifest = render(repo=args.repo, commit=args.commit,
                           transition_id=args.transition_id,
                           current_id=args.current_id, next_id=args.next_id,
-                          moves=moves)
+                          moves=moves, no_move=args.no_move)
     except Exception as exc:                       # noqa: BLE001 - reported
         print(f"  REFUSE  {type(exc).__name__}: {exc}", file=sys.stderr)
         return 2

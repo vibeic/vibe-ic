@@ -230,3 +230,63 @@ def test_the_guard_reads_the_previous_register_defensively(author, transition):
     """Rows a stale file may hold that are not `{"path": str}` are ignored,
     never crashed on: the guard runs against whatever is already in the tree."""
     author.refuse_a_shrink([{"nope": 1}, "junk", None], transition.derived_paths())
+
+
+# --- `--no-move`: the register recording a ceremony that was SKIPPED ---------
+#
+# The refusal above ("a manifest that moves nothing") is right for a transition
+# and it left the register with no way back from the one thing it exists to
+# catch. MEASURED on `ac3232ddeb` (v1.14.4): `tools/ci/_gate_dispatch.sh` shipped
+# bytes in NEITHER recorded state, moved by `e37d10e1e7` (v1.14.3) and again by
+# `ac3232ddeb`, neither under a transition -- and the documented remedy needs a
+# PREPARE, which needs a move, and nothing was pending. These three cases are the
+# bidirectional control: the flag renders a register the VERIFIER parses, it
+# cannot be combined with a move, and without the flag the old refusal stands.
+
+
+def test_no_move_renders_a_reobservation_the_verifier_parses(
+        author, transition, head):
+    manifest = author.render(repo=_ROOT, commit=head,
+                             transition_id="reobservation-probe-v1",
+                             current_id="probe-observed-at-head",
+                             next_id="reobservation-probe-v1-next",
+                             moves={}, no_move=True)
+    raw = author.serialise(manifest)
+    _algorithm, oid_len = transition._object_format(_ROOT)
+    parsed = transition.parse_manifest(
+        transition.strict_loads(raw, what="rendered re-observation"), oid_len)
+    assert parsed["kind"] == transition.REOBSERVATION_KIND
+    assert transition.moved_paths(parsed) == [], "a re-observation moves nothing"
+    # And `current` is still OBSERVED at the named commit, which is the whole
+    # point: this is what clears a path that drifted with no transition.
+    algorithm, oid_len = transition._object_format(_ROOT)
+    live = json.loads((_ROOT / _MANIFEST).read_text(encoding="utf-8"))
+    assert parsed["current"]["files"] == transition._observe_files(
+        _ROOT, head, live["paths"], algorithm, oid_len)
+
+
+def test_no_move_cannot_be_combined_with_a_move(
+        author, transition, head, tmp_path):
+    """It records the tree and authorises NOTHING, so it may never swallow one."""
+    subject = _a_protected_path(transition)
+    future = tmp_path / "future_bytes"
+    future.write_bytes((_ROOT / subject).read_bytes() + b"\n# future\n")
+    with pytest.raises(Exception) as caught:
+        author.render(repo=_ROOT, commit=head, transition_id="probe-v1",
+                      current_id="a", next_id="b",
+                      moves={subject: future}, no_move=True)
+    assert "cannot be combined with --next-file" in str(caught.value)
+    assert subject in str(caught.value)
+
+
+def test_without_the_flag_a_manifest_that_moves_nothing_is_still_refused(
+        author, head):
+    """THE NEGATIVE CONTROL FOR THE FLAG. `no_move` defaults to False, so the
+    refusal three commits landed against is still reached by an ordinary call."""
+    with pytest.raises(Exception) as caught:
+        author.render(repo=_ROOT, commit=head, transition_id="probe-v1",
+                      current_id="a", next_id="b", moves={}, no_move=False)
+    assert "no settled manifest" in str(caught.value)
+    assert "--no-move" in str(caught.value), (
+        "the refusal must name the way out, or the obligation lives in "
+        "somebody's head again")

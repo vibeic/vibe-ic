@@ -729,3 +729,97 @@ def test_gate_digest_is_deliberately_left_order_sensitive():
     forward = [{"label": "alpha gate", "state": "PASS"},
                {"label": "beta gate", "state": "PASS"}]
     assert digest(forward) != digest(list(reversed(forward)))
+
+
+# ---------------------------------------------------------------------------
+# THE RE-OBSERVATION SHAPE.
+#
+# A register must be able to record a ceremony that was SKIPPED. Every other
+# shape here describes a move, and a manifest that moves nothing is refused --
+# correctly, for a transition. MEASURED on `ac3232ddeb` (v1.14.4):
+# `tools/ci/_gate_dispatch.sh` shipped bytes in NEITHER recorded state, moved by
+# `e37d10e1e7` (v1.14.3) and again by `ac3232ddeb`, neither under a transition;
+# and the documented remedy -- re-author at the current base -- needs a PREPARE,
+# which needs a move, and main had none pending.
+#
+# These four cases are the bidirectional control: the new shape is ACCEPTED and
+# is STRICTER, the new way to lie is REFUSED, and the old refusal is proven
+# still live on the identical predicate. A shape that only ever sees the input
+# that passes has not been checked.
+# ---------------------------------------------------------------------------
+
+
+def _reobservation(repo: Path, **kwargs) -> dict:
+    """The same register, re-observed: `next` is `current`, byte for byte."""
+    manifest = _manifest(repo, **kwargs)
+    manifest["kind"] = P.REOBSERVATION_KIND
+    manifest["next"]["files"] = [dict(row) for row in manifest["current"]["files"]]
+    return manifest
+
+
+def test_a_reobservation_records_the_tree_and_authorises_nothing(tmp_path) -> None:
+    repo, _base, _manifest_in_tree = _repo(tmp_path)
+    manifest = P.parse_manifest(_reobservation(repo), 40)
+    assert manifest["kind"] == P.REOBSERVATION_KIND
+    assert P.moved_paths(manifest) == []
+
+    live = [dict(row) for row in manifest["current"]["files"]]
+    operation, base_id, candidate_id = P.classify_move(live, live, manifest)
+    assert operation == "STEADY", operation
+    assert base_id == candidate_id == manifest["next"]["id"]
+
+
+def test_a_reobservation_that_hides_a_move_is_refused(tmp_path) -> None:
+    """The NEW way to lie: declare no move and carry one anyway."""
+    repo, _base, _manifest_in_tree = _repo(tmp_path)
+    manifest = _reobservation(repo)
+    victim = sorted(P.RUNTIME_PATHS)[0]
+    manifest["next"]["files"] = [
+        _record(repo, row["path"], b"smuggled:" + row["path"].encode())
+        if row["path"] == victim else row
+        for row in manifest["next"]["files"]]
+    with pytest.raises(P.Refusal) as caught:
+        P.parse_manifest(manifest, 40)
+    assert "re-observation records no move" in str(caught.value)
+    assert victim in str(caught.value)
+
+
+def test_a_transition_that_moves_nothing_is_still_refused(tmp_path) -> None:
+    """THE OLD REFUSAL, ON THE OLD SENTENCE. The re-observation kind is the
+    ONLY thing that makes an empty move legal; a register that still calls
+    itself a transition is the malformation `1f1749d2d`, `b161ec6e5` and
+    `eda53573f` shipped, and it is refused exactly as before."""
+    repo, _base, _manifest_in_tree = _repo(tmp_path)
+    manifest = _reobservation(repo)
+    manifest["kind"] = P.MANIFEST_KIND                # the ONLY difference
+    with pytest.raises(P.Refusal) as caught:
+        P.parse_manifest(manifest, 40)
+    assert "manifest next tuple does not differ from current" in str(caught.value)
+
+
+def test_under_a_reobservation_every_protected_move_is_undeclared(tmp_path) -> None:
+    """STRICTER, NOT LOOSER. With nothing authorised, every protected path a
+    candidate touches is undeclared, and the refusal still names it."""
+    repo, _base, _manifest_in_tree = _repo(tmp_path)
+    manifest = P.parse_manifest(_reobservation(repo), 40)
+    live = [dict(row) for row in manifest["current"]["files"]]
+
+    for victim in (sorted(P.RUNTIME_PATHS)[0],
+                   sorted(P.REQUIRED_AUTHORITY_PATHS)[0]):
+        candidate = [
+            _record(repo, row["path"], b"undeclared:" + row["path"].encode())
+            if row["path"] == victim else row
+            for row in live]
+        with pytest.raises(P.Refusal) as caught:
+            P.classify_move(live, candidate, manifest)
+        assert "authorises no move" in str(caught.value), str(caught.value)[:400]
+        assert victim in str(caught.value), str(caught.value)[:400]
+
+
+def test_an_unknown_register_kind_is_refused(tmp_path) -> None:
+    repo, _base, _manifest_in_tree = _repo(tmp_path)
+    manifest = _manifest(repo)
+    manifest["kind"] = "vibeic.protected-landing-whatever"
+    with pytest.raises(P.Refusal) as caught:
+        P.parse_manifest(manifest, 40)
+    assert "not a protected-landing register kind" in str(caught.value)

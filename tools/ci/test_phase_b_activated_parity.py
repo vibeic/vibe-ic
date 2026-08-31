@@ -150,6 +150,12 @@ _MANIFEST_KEYS = frozenset({
     "schema", "kind", "transition_id", "manifest_path", "runner", "paths",
     "current", "next"})
 
+# The two register kinds, as LITERALS. Reading them off the verifier would make
+# every assertion below a comparison of a constant with itself; this file is the
+# independent witness and states its own expectation.
+_TRANSITION_KIND = "vibeic.protected-landing-transition"
+_REOBSERVATION_KIND = "vibeic.protected-landing-reobservation"
+
 # Not a count and not a whole tuple: the entry points that decide a landing.
 # If one of these stopped being protected, an unmeasured edit to it could ride
 # in with any candidate, and every other assertion in this file would still
@@ -406,7 +412,9 @@ def test_the_manifest_is_a_well_formed_authorised_transition(manifest):
     """Invariant 1. Whatever transition this is, it is completely described."""
     assert set(manifest) == _MANIFEST_KEYS, sorted(manifest)
     assert manifest["schema"] == 1
-    assert manifest["kind"] == "vibeic.protected-landing-transition"
+    assert manifest["kind"] in {_TRANSITION_KIND, _REOBSERVATION_KIND}, (
+        "manifest.kind is not a protected-landing register kind: "
+        f"{manifest['kind']!r}")
     assert manifest["manifest_path"] == _MANIFEST
 
     for what, value in (
@@ -452,8 +460,23 @@ def test_the_manifest_is_a_well_formed_authorised_transition(manifest):
             assert _SHA256_RE.fullmatch(row["sha256"]), row
             assert type(row["size"]) is int and row["size"] >= 0, row
 
-    assert manifest["current"]["files"] != manifest["next"]["files"], (
-        "the `next` tuple does not differ from `current`: nothing is authorised")
+    # THE TWO KINDS CARRY OPPOSITE RULES AND BOTH ARE ASSERTED, so neither can
+    # wear the other's shape. A register that calls itself a transition and
+    # moves nothing is the historical malformation and stays refused on the
+    # identical predicate; a register that calls itself a re-observation and
+    # moves something is the NEW way to lie, and is refused here.
+    if manifest["kind"] == _REOBSERVATION_KIND:
+        smuggled = sorted(
+            row["path"] for row, was in zip(manifest["next"]["files"],
+                                            manifest["current"]["files"])
+            if row != was)
+        assert smuggled == [], (
+            "this register declares itself a RE-OBSERVATION, which authorises "
+            "nothing, and its `next` moves: " + ", ".join(smuggled))
+    else:
+        assert manifest["current"]["files"] != manifest["next"]["files"], (
+            "the `next` tuple does not differ from `current`: nothing is "
+            "authorised")
 
     runner = manifest["runner"]
     assert runner["schema"] == 1
@@ -619,6 +642,102 @@ def test_the_live_tree_is_exactly_one_recorded_state_and_never_a_mixture(manifes
         f"{drift}")
 
 
+def test_every_protected_path_holds_bytes_the_register_records(manifest):
+    """Invariant 3b. THE SAME QUESTION, ASKED OF ALL 52 PATHS AND NOT 1.
+
+    A TRACKER THAT ONLY WATCHES ENTRIES THAT DIFFER CANNOT SEE AN ENTRY THAT
+    WAS CHANGED IN PLACE. Invariant 3 above asks whether the live bytes are one
+    recorded state, but it asks it of `_moved(manifest)` -- the paths the
+    transition AUTHORISES, which is normally one path and is sometimes none.
+    For the other fifty-one, `current == next`, so they are outside `_moved`
+    and that assertion never looks at them. Nothing else looks either:
+
+      * Invariant 3's own `unlanded` clause compares the live bytes to what
+        HEAD'S TREE records, which catches a file edited into the checkout
+        behind git's back. Once the edit is COMMITTED, live and HEAD agree and
+        it is silent -- which is exactly the state a landing leaves.
+      * Invariant 4 compares the BASE this tree lands on against the live tree.
+        Its docstring says so plainly: "On trunk the merge-base with
+        `origin/main` is HEAD, so this is STEADY and green -- which is the
+        point; an ordinary landing leaves no residue." That is the right
+        behaviour for a candidate branch and it is total blindness on trunk,
+        which is where this repository lands: all four commits below are
+        single-parent pushes onto main, so `classify_move` compared a tree with
+        itself and could only answer STEADY.
+
+    So once a change is ON main, no clause compared the register's recorded
+    bytes against the bytes main actually ships -- for fifty-one of the
+    fifty-two paths. MEASURED on ead8dddfcb (v1.13.98), five protected paths
+    hold bytes matching NEITHER recorded state, and only the one inside
+    `_moved` is visible to invariant 3:
+
+      VISIBLE    tools/ci/protected_landing_transition.py       (in `_moved`)
+      INVISIBLE  tools/ci/repo_hygiene_gates.sh                 d155935a7d +3
+      INVISIBLE  tools/gatekeeper-verify-merge.sh               19560655df
+      INVISIBLE  …/programs/drc_vacuous_pass_check.py           70afd8a696
+      INVISIBLE  …/programs/repo_hygiene_parallel.py            a4604d3fa3
+
+    WHY THAT IS NOT COSMETIC. The register exists so that "the runtime deciding
+    a landing is the runtime somebody measured" -- invariant 3's own words. A
+    protected path whose shipped bytes appear in neither recorded state is a
+    runtime nobody measured under the register, vouched for by a register that
+    still names the bytes it replaced. The four above include the hygiene gate
+    runner and the merge verifier: the register was describing a landing tier
+    that has not existed since v1.13.43.
+
+    THIS IS A WEAKER PREDICATE THAN INVARIANT 3, DELIBERATELY, AND IT REPLACES
+    NOTHING. For an authorised path, "matches current or next" is implied by
+    "matches exactly one of them", so this adds nothing there and invariant 3
+    keeps its stronger claim and its own failure text. What this adds is the
+    fifty-one paths nobody was asking about.
+
+    HOW TO CLEAR IT: re-author the manifest at the current base with
+    `protected_landing_manifest_author.py --commit <base>`, which re-derives
+    `current` from the tree that actually exists. Do NOT hand-edit a row --
+    `test_the_current_tuple_is_the_tuple_recorded_where_the_manifest_was_authored`
+    refuses a `current` the authoring commit and its parent do not both record.
+
+    THAT COMMAND NEEDS A MOVE, AND THE DRIFT MAY NOT COME WITH ONE. Measured on
+    `ac3232ddeb` (v1.14.4), the tree this clause first went red on: the last
+    transition was fully activated, nothing protected was pending, and the
+    author program refused -- "a manifest with no move is refused by
+    parse_manifest". `--no-move` renders the register as a RE-OBSERVATION
+    instead: it records the tree as it stands and authorises nothing, which is
+    the strictest state `classify_move` has. That is the only way to clear this
+    clause when no protected path is pending::
+
+        python3 tools/ci/protected_landing_manifest_author.py --repo . \
+            --commit <base> --transition-id <id> --current-id <id-naming-mover> \
+            --next-id <id>-next --no-move \
+            --out tools/ci/protected_landing_transition.json
+
+    The ids are the audit trail: name the landing that moved the path. A
+    register that records "whatever is there" without saying who put it there
+    is a rubber stamp, not a record.
+    """
+    paths = _paths(manifest)
+    observed = {path: _observed(path) for path in paths}
+    current = _state_map(manifest, "current")
+    nxt = _state_map(manifest, "next")
+
+    stale = sorted(path for path in paths
+                   if observed[path] != current[path]
+                   and observed[path] != nxt[path])
+    detail = "\n".join(
+        f"    {path}\n"
+        f"      current {current[path][2][:12]}  next {nxt[path][2][:12]}  "
+        f"LIVE {observed[path][2][:12]}"
+        f"{'  (inside the authorised move)' if path in _moved(manifest) else ''}"
+        for path in stale)
+    assert stale == [], (
+        f"{len(stale)} of {len(paths)} protected path(s) ship bytes that "
+        f"appear in NEITHER recorded state of "
+        f"`{manifest['transition_id']}`, so the register vouches for a runtime "
+        f"this tree does not contain:\n{detail}\n"
+        f"    Re-author the manifest at this base with "
+        f"protected_landing_manifest_author.py --commit <base>.")
+
+
 def test_the_live_tree_moves_no_protected_path_the_base_did_not_authorise(
         manifest):
     """Invariant 4, and the clause with the teeth: `classify_move` on this tree.
@@ -669,7 +788,12 @@ def test_the_move_is_exactly_the_paths_the_two_states_disagree_on(manifest):
     current = _state_map(manifest, "current")
     nxt = _state_map(manifest, "next")
     moved = sorted(_moved(manifest))
-    assert moved, "the manifest authorises a transition that moves nothing"
+    if manifest["kind"] == _REOBSERVATION_KIND:
+        assert moved == [], (
+            "a re-observation authorises nothing, so nothing may differ "
+            f"between its two states: {moved}")
+    else:
+        assert moved, "the manifest authorises a transition that moves nothing"
 
     role_map = {row["path"]: frozenset(row["roles"]) for row in manifest["paths"]}
     for path in moved:
@@ -685,6 +809,11 @@ def test_the_move_is_exactly_the_paths_the_two_states_disagree_on(manifest):
                 f"{path} is outside the authorised move and its live bytes are "
                 "not the bytes this commit records")
 
+    if not moved:
+        # A re-observation: every path went through the loop above, and there
+        # is no move to straddle. Not a skip -- the clause that matters here
+        # (live == what this commit records, on all 52) has already run.
+        return
     sides = set()
     for path in moved:
         live = _observed(path)
@@ -894,7 +1023,11 @@ def test_an_activation_to_bytes_next_does_not_record_is_refused(manifest):
     current = {row["path"]: row for row in manifest["current"]["files"]}
     nxt = {row["path"]: row for row in manifest["next"]["files"]}
     moved = sorted(_moved(manifest))
-    assert moved, "the manifest authorises a transition that moves nothing"
+    if not moved:
+        pytest.skip(
+            "this register is a RE-OBSERVATION and authorises no move, so "
+            "there is no ACTIVATE to construct -- that half is UNVERIFIED "
+            "here, which is not the same as verified")
 
     prepared = [dict(current[row["path"]]) if row["path"] in set(moved) else row
                 for row in live]

@@ -39,6 +39,37 @@ import _progress_run as _pr  # noqa: E402
 
 SCHEMA = 1
 MANIFEST_KIND = "vibeic.protected-landing-transition"
+# A REGISTER MUST BE ABLE TO RECORD A CEREMONY THAT WAS SKIPPED.
+#
+# Every other shape here describes a MOVE, and `parse_manifest`, `classify_move`
+# and the parity corpus each refuse a register that moves nothing -- "there is
+# no settled manifest".  That is right for a transition and it left the register
+# with no way back from the one thing it exists to catch.  MEASURED on
+# `ac3232ddeb` (v1.14.4): `tools/ci/_gate_dispatch.sh` shipped bytes appearing in
+# NEITHER recorded state, moved by `e37d10e1e7` (v1.14.3, which said in its own
+# commit message that the file "needs a base-authorised PREPARE/ACTIVATE
+# transition rather than an ordinary merge", and then landed as an ordinary
+# push) and again by `ac3232ddeb`.  Re-observing the tree is the documented
+# remedy, but a PREPARE has to authorise a move, and main had none pending: the
+# last transition was fully activated.  So the remedy was unreachable until some
+# unrelated protected file happened to need changing.
+#
+# A RE-OBSERVATION is that missing shape, and it is DECLARED, never inferred.
+# It is not the historical malformation returning: those three manifests
+# collapsed `current` onto `next` while still calling themselves transitions,
+# and that is still refused, by the identical sentence, on the identical rule.
+# What this adds is the OPPOSITE rule under a different `kind`:
+#
+#     transition      current.files MUST differ from next.files   (unchanged)
+#     re-observation  current.files MUST EQUAL  next.files        (new)
+#
+# so neither kind can carry the other's shape, and a re-observation cannot
+# smuggle an unannounced move any more than a transition can hide behind
+# "nothing pending".  A re-observation authorises NOTHING, so under it every
+# protected move by a candidate is undeclared and `classify_move` refuses it by
+# name: the register is strictly STRICTER between transitions, not looser.
+REOBSERVATION_KIND = "vibeic.protected-landing-reobservation"
+MANIFEST_KINDS = frozenset({MANIFEST_KIND, REOBSERVATION_KIND})
 RECEIPT_KIND = "vibeic.protected-landing-transition-receipt"
 BOOTSTRAP_RECEIPT_KIND = "vibeic.protected-landing-bootstrap-receipt"
 PUSH_PREFLIGHT_KIND = "vibeic.landing-push-preflight-receipt"
@@ -386,8 +417,9 @@ def parse_manifest(value: Any, oid_len: int) -> dict[str, Any]:
     )
     if type(root["schema"]) is not int or root["schema"] != SCHEMA:
         raise Refusal("manifest.schema is not 1")
-    if root["kind"] != MANIFEST_KIND:
-        raise Refusal("manifest.kind is not the protected transition kind")
+    if root["kind"] not in MANIFEST_KINDS:
+        raise Refusal("manifest.kind is not a protected-landing register kind")
+    reobservation = root["kind"] == REOBSERVATION_KIND
     transition_id = _state_id(root["transition_id"], "manifest.transition_id")
     if root["manifest_path"] != MANIFEST_PATH:
         raise Refusal("manifest_path does not name the trusted manifest")
@@ -432,11 +464,28 @@ def parse_manifest(value: Any, oid_len: int) -> dict[str, Any]:
         raise Refusal("manifest.current does not exactly cover manifest.paths")
     if [row["path"] for row in next_state["files"]] != names:
         raise Refusal("manifest.next does not exactly cover manifest.paths")
-    if current["files"] == next_state["files"]:
+    # THE TWO KINDS CARRY OPPOSITE RULES, AND BOTH ARE ENFORCED.
+    #
+    # The transition sentence is unchanged, on the unchanged predicate: a
+    # register that calls itself a transition and moves nothing is the
+    # malformation `1f1749d2d`, `b161ec6e5` and `eda53573f` shipped, and it
+    # still cannot be parsed.  The re-observation sentence is its mirror: a
+    # register that declares no move may not contain one, so the declaration
+    # cannot be used as cover for bytes nobody authorised.
+    if reobservation:
+        smuggled = sorted(
+            row["path"] for row, was in zip(next_state["files"],
+                                            current["files"])
+            if row != was)
+        if smuggled:
+            raise Refusal(
+                "a re-observation records no move, but manifest next differs "
+                "from current on: " + ", ".join(smuggled))
+    elif current["files"] == next_state["files"]:
         raise Refusal("manifest next tuple does not differ from current")
     return {
         "schema": SCHEMA,
-        "kind": MANIFEST_KIND,
+        "kind": root["kind"],
         "transition_id": transition_id,
         "manifest_path": MANIFEST_PATH,
         "runner": runner,
@@ -681,6 +730,11 @@ def classify_move(base_files: Sequence[Mapping[str, Any]],
     `base_state_id` is still reported, because a receipt reader chooses the
     runtime by it: the base stands at `next` once the authorised move has been
     activated there, and at `current` until then.
+
+    A RE-OBSERVATION register (`REOBSERVATION_KIND`) authorises no move at all.
+    Under it the only classification reachable is STEADY, and every protected
+    path a candidate touches is undeclared and refused by name -- so it is the
+    strictest state this function has, not an escape from it.
     """
     names = [row["path"] for row in manifest["paths"]]
     base = _rows_by_path(base_files, "the base tuple")
@@ -695,12 +749,26 @@ def classify_move(base_files: Sequence[Mapping[str, Any]],
 
     moved = set(moved_paths(manifest))
     if not moved:
-        raise Refusal("the manifest authorises a transition that moves nothing")
-
-    # Spent or pending, read off the BASE rather than asserted.
-    activated_at_base = all(base[path] == nxt[path] for path in moved)
-    base_state_id = (manifest["next"]["id"] if activated_at_base
-                     else manifest["current"]["id"])
+        # A RE-OBSERVATION AUTHORISES NOTHING, AND THAT IS THE STRICTER STATE.
+        # `parse_manifest` has already refused an undeclared empty move, so
+        # reaching here with `moved` empty means the register SAYS it records
+        # the tree and opens no transition.  Every protected path is then
+        # outside the authorised move, so any candidate that touches one falls
+        # into `undeclared` below and is refused BY NAME -- the same refusal, on
+        # a wider set.  Nothing can be activated under this register; the next
+        # real move authors a PREPARE, which is the point.
+        if manifest["kind"] != REOBSERVATION_KIND:
+            raise Refusal(
+                "the manifest authorises a transition that moves nothing")
+        # Both states are the same bytes here, so either id names the live
+        # state; `next` is chosen so a reader sees the id the register was
+        # LAST re-observed under. Written out rather than left to `all(())`.
+        base_state_id = manifest["next"]["id"]
+    else:
+        # Spent or pending, read off the BASE rather than asserted.
+        activated_at_base = all(base[path] == nxt[path] for path in moved)
+        base_state_id = (manifest["next"]["id"] if activated_at_base
+                         else manifest["current"]["id"])
 
     drift = sorted(path for path in names if candidate[path] != base[path])
     if not drift:
@@ -722,7 +790,7 @@ def classify_move(base_files: Sequence[Mapping[str, Any]],
             + base_state_id + " --next-id <new-id>-next"
             + "".join(f" --next-file {path}={path}" for path in undeclared)
             + " --out " + MANIFEST_PATH)
-    if activated_at_base:
+    if moved and activated_at_base:
         raise Refusal(
             "protected tuple attempts a rollback or unprepared move: the "
             "authorised transition is already activated at the base, so a "

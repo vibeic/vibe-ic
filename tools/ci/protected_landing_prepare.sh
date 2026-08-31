@@ -31,7 +31,15 @@ MOVED=(); for p in "${DIRTY[@]}"; do for q in "${PROT[@]}"; do [ "$p" = "$q" ] &
 
 if [ "${#MOVED[@]}" -eq 0 ]; then
   echo "protected_landing_prepare: no protected path is modified — nothing to prepare."
-  echo "  (that is not a failure; commit normally.)"; exit 0
+  echo "  (that is not a failure; commit normally.)"
+  echo "  If a protected path DRIFTED — it ships bytes the register records in neither"
+  echo "  state, because some landing moved it without opening a transition — there is"
+  echo "  nothing to prepare and the repair is a RE-OBSERVATION, which records the tree"
+  echo "  and authorises nothing:"
+  echo "    python3 tools/ci/protected_landing_manifest_author.py --repo . \\"
+  echo "      --commit HEAD --transition-id <id> --current-id <id-naming-the-mover> \\"
+  echo "      --next-id <id>-next --no-move --out $MANIFEST"
+  exit 0
 fi
 echo "protected_landing_prepare: ${#MOVED[@]} protected path(s) move:"
 printf '    %s\n' "${MOVED[@]}"
