@@ -3577,6 +3577,49 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             print(f"EMPTY     {r.path}  rc={r.rc}: a report was written and it "
                   f"carries no test case")
 
+    # EVERY RED CASE, BY NAME, ON A GREPPABLE PREFIX -- ALWAYS, NOT ONLY WHEN
+    # THE SESSION TRUNCATED.
+    #
+    # `TRUNCATED_RED` above prints the names only on the `--stop-after-failures`
+    # path, which produced this inversion: the MORE completely a run measured,
+    # the LESS its log said. MEASURED on the 2026-08-31 full tier, both runs:
+    #
+    #   prev  116 red >= the bound -> TRUNCATED -> 136 `TRUNCATED_RED` lines,
+    #         117 unique node ids, recoverable from the log today.
+    #   next   89 red <  the bound -> "aggregate complete rc=1 ... red=89",
+    #         and NOT ONE NAME ANYWHERE. The only per-case record was the
+    #         `mktemp` merged report, and `docker run --rm` destroyed it.
+    #
+    # The caller can pass `GATEKEEPER_*_JUNIT` to keep that report, and
+    # `tools/gatekeeper-land.sh` documents it -- but the orchestrator that runs
+    # the landing did not, and a record that survives only when somebody
+    # remembers an environment variable is not a record. The names are already
+    # computed here; printing them costs nothing and cannot change a verdict.
+    #
+    # READ BACK FROM THE MERGED REPORT, not from `aggregate_suites`: that name
+    # is set to None on the incomplete path, and the per-file arm's reds live
+    # in `results`, not in it. The merged file is the one artefact that holds
+    # every case this invocation measured, whichever arm produced it.
+    merged_red: List[str] = []
+    try:
+        merged_root = ET.parse(str(a.junit)).getroot()
+    except Exception:                                    # pragma: no cover
+        merged_root = None
+    if merged_root is not None:
+        merged_red = _red_node_ids(
+            [merged_root] if merged_root.tag == "testsuite"
+            else list(merged_root.iter("testsuite")))
+    # DEDUPED, ORDER PRESERVED: the merged report holds the aggregate suites AND
+    # the per-file suites, so a case both arms ran appears twice in it. The
+    # reader wants the SET of red names, and a name printed twice reads as two
+    # findings.
+    seen_red: Set[str] = set()
+    for node_id in merged_red:
+        if node_id in seen_red:
+            continue
+        seen_red.add(node_id)
+        print(f"RED  {node_id}", flush=True)
+
     print("=== pytest junit summary")
     mode = ("aggregate-only" if a.aggregate_only else
             ("aggregate-first" if a.aggregate_check else "per-file"))

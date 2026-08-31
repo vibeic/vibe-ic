@@ -1087,6 +1087,49 @@ lane_window_reset() {
 # stopped the candidate at 1437 tests, which the verdict correctly refused as
 # unmeasurable. A landing gate that cannot answer for a wide PR is a landing gate
 # nobody uses.
+# ── WHAT A RED LANE MUST SAY, IN ONE PLACE FOR ALL THREE LANES ────────────
+#
+# The three pytest lanes drive the SAME driver and reported it three different
+# ways: `run_pytest` grepped the driver's greppable prefixes and then tailed;
+# `run_repo_tools_pytest` and `run_unselectable_pytest` only tailed. `tail -6`
+# is EXACTLY the six lines of the driver's summary block, so in those two lanes
+# a `NORECORD` line -- a file whose result is UNKNOWN, the one thing a reader
+# cannot reconstruct from a tail -- was computed, printed into `$out`, and
+# discarded. MEASURED on both 2026-08-31 full tiers: `repo tools tests` said
+# `NORECORD 2` in each, and neither log names either file. Recovering them took
+# re-running the lane with `GATEKEEPER_REPO_TOOLS_JUNIT` exported and
+# differencing the 65-file discovery against the 63 per-file suites in the
+# report; they are `tools/ci/test_dispatch_shell_harnesses.py` and
+# `tools/test_gatekeeper_land_lanes.py`.
+#
+# `suite_write_guard:` rides along for a reason measured on 2026-08-31 while
+# triaging this very run. `unselectable tests` FAILED in three separate landing
+# tiers with `aggregate complete rc=1 cases=1341 red=0` -- a refusal with NOT ONE
+# red test case behind it. `pytest_per_file_junit.py` returns RC_RED on a
+# non-zero session status even when the XML is green, and its own comment names
+# the expected author: "Session-level guards such as this repo's
+# `suite_write_guard` legitimately set session.exitstatus = 1 after every
+# testcase has passed". The guard PRINTS the offending paths. `tail -6` is the
+# summary block, so that print never reached the log, and isolating the cause
+# cost three container arms, a full instrumented tier and a 0.2 s `git status`
+# watcher -- which found two transient blocking-class writes into the shared
+# worktree (`programs/_i528_planted_unrouted_check.py`, planted by
+# `programs/tests/test_gate_skip_routing_check.py`, ~6 s; and `programs/INDEX.md`
+# MODIFIED for ~20 s) while four lanes shared it. The gate had the answer and
+# threw it away.
+#
+# `^RED ` rides along with the same argument: the driver now prints every red
+# case by name whether or not the session truncated, so a lane that does not
+# grep for it throws the answer away for the second time.
+#
+# IT CHANGES NO VERDICT. `rc` still decides every one of these lines; this
+# function only prints, and it prints what the driver already computed.
+lane_report_out() {                  # lane_report_out <driver stdout>
+  printf '%s\n' "$1" \
+    | grep -a '^NORECORD\|^NOTRUN\|^AGGREGATE_NORECORD\|^AGGREGATE_TRUNCATED\|^FILE_TRUNCATED\|^TRUNCATED_RED\|^RED \|suite_write_guard:\|written by ' \
+    | sed 's/^/          /'
+  printf '%s\n' "$1" | tail -6 | sed 's/^/          /'
+}
 run_pytest() {
   local sel out rc
   TARGETED_NORECORD=0
@@ -1283,8 +1326,7 @@ run_pytest() {
     # failure bound has ALREADY printed the red case names, and on the
     # 2026-08-31 full tier those names were computed inside $out and never
     # reached this log — the only copy died with the --rm container.
-    printf '%s\n' "$out" | grep -a '^NORECORD\|^NOTRUN\|^AGGREGATE_NORECORD\|^AGGREGATE_TRUNCATED\|^FILE_TRUNCATED\|^TRUNCATED_RED' | sed 's/^/          /'
-    printf '%s\n' "$out" | tail -6 | sed 's/^/          /'
+    lane_report_out "$out"
     FAILED=1
     # THROUGH A FILE, because this stage now runs in a lane and a variable set
     # in a subshell never reaches the main shell. The refusal below reads the
@@ -1474,7 +1516,7 @@ run_repo_tools_pytest() {
   rm -f "$snap" "$list" ${merged_tmp:+"$merged_tmp"}
   if [ "$rc" -ne 0 ]; then
     printf '  FAIL  repo tools tests (%s file(s))\n' "${#files[@]}"
-    printf '%s\n' "$out" | tail -6 | sed 's/^/          /'
+    lane_report_out "$out"
     FAILED=1; return 1
   fi
   # rc 0 clean / 1 wrote / 2 NOT_CHECKED. 2 is NOT a pass: "I could not look"
@@ -1625,7 +1667,7 @@ run_unselectable_pytest() {
   printf '        unselectable corpus: %s file(s)\n' "${#files[@]}"
   if [ "$rc" -ne 0 ]; then
     echo "  FAIL  unselectable tests"
-    printf '%s\n' "$out" | tail -6 | sed 's/^/          /'
+    lane_report_out "$out"
     FAILED=1; return 1
   fi
   if [ "$wrc" -ne 0 ]; then

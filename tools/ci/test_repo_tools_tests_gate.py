@@ -28,6 +28,24 @@ _ROOT = Path(__file__).resolve().parents[2]
 _LAND = _ROOT / "tools" / "gatekeeper-land.sh"
 _FN = "run_repo_tools_pytest"
 
+#: TOP-LEVEL HELPERS THE EXTRACTED FUNCTION CALLS, extracted with it.
+#:
+#: `_extract_fn` lifts ONE function out of a 3000-line script, so the unit it
+#: produces is runnable only while that function calls nothing the script
+#: defines elsewhere. `run_repo_tools_pytest` stopped being self-contained when
+#: its failure branch was moved onto the shared `lane_report_out` — the emitter
+#: all three pytest lanes now go through, so that the NORECORD filenames and red
+#: node ids two of them used to compute and discard reach the log.
+#:
+#: MEASURED before this line existed: three tests here failed with
+#: `function did not report FAILED=` and the cause was one line further down the
+#: captured output — `environment: line 99: lane_report_out: command not found`.
+#: The gate function itself still printed `FAIL  repo tools tests (1 file(s))`
+#: and `FAILED=1`, i.e. it was WORKING; only the harness's extraction was
+#: incomplete.
+_LANE_HELPERS = ("lane_report_out",)
+
+
 
 def _extract_fn(name):
     """Pull `name() { ... }` out of the script, brace-matched at column 0."""
@@ -107,6 +125,7 @@ def _run_fn_against(tmp_path, test_body, name="test_probe.py", *,
         f'ROOT="{root}"\n'
         f'PROGRAMS="{_ROOT}/vibe-ic-marketplace/plugins/vibe-ic/programs"\n'
         "FAILED=0\n"
+        + "\n".join(_extract_fn(h) for h in _LANE_HELPERS) + "\n"
         + _extract_fn(_FN) + "\n"
         + f"{_FN}\n"
         'echo "FAILED=$FAILED"\n'
@@ -136,6 +155,17 @@ def _run_fn_against(tmp_path, test_body, name="test_probe.py", *,
     p = subprocess.run(["bash", "-c", script], capture_output=True, text=True,
                        cwd=root, env=env)
     out = p.stdout + p.stderr
+    # NAME THE HARNESS FAILURE, because the one that happened did not name
+    # itself. bash reports a helper the extraction did not carry as
+    # `<name>: command not found` on stderr, three lines above an assertion that
+    # only said "function did not report FAILED=" — a message about the SUBJECT
+    # for a defect in the FIXTURE. The next helper a lane grows says so here.
+    missing = re.findall(r"line \d+: ([A-Za-z_][A-Za-z0-9_]*): command not found",
+                         out)
+    assert not missing, (
+        f"the extracted script calls {sorted(set(missing))}, which "
+        f"`_extract_fn` did not carry — add them to `_LANE_HELPERS`. This is a "
+        f"gap in this fixture, not a finding about the gate.\n{out}")
     m = re.search(r"FAILED=(\d+)\s*$", out.strip())
     assert m, f"function did not report FAILED=\n{out}"
     return int(m.group(1)), out

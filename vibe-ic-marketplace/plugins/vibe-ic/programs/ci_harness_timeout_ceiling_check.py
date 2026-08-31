@@ -260,13 +260,38 @@ _DRIVER_COMMAND_RE = {
 # reviewed bodies turns every such control-flow rewrite into an explicit policy
 # change that the parent-side landing differential can review; there is no
 # permissive "looks command-like" fallback.
+# RE-PINNED 2026-08-31 — "every red id and every NORECORD name, on the path that
+# always runs". SIX FACES MOVED AND ALL SIX ARE RE-PINNED HERE; a pin with N
+# faces is re-pinned N times or not at all, and a partial re-pin is a checker
+# that has stopped checking whichever face was left behind.
+#
+# WHAT MOVED, AND IT IS ONE CHANGE:
+#   * `run_pytest`, `run_repo_tools_pytest`, `run_unselectable_pytest` bodies —
+#     each one's failure branch now calls the SHARED `lane_report_out`, replacing
+#     three different emissions (one grep+tail, two bare tails) with one.
+#   * the entry-to-final-pytest PREFIX and the WHOLE script — because
+#     `lane_report_out` is a new top-level function defined ahead of the lanes,
+#     so bytes moved inside the reviewed prefix even where behaviour did not.
+#   * the semantic driver `pytest_per_file_junit.py` — it now prints `RED
+#     <nodeid>` for every red case read back from the merged report, always,
+#     instead of only on the `--stop-after-failures` truncation path.
+#
+# WHAT DID NOT MOVE, which is the part this pin exists to protect: no lane's
+# pytest INVOCATION changed, no argument was added or removed, no verdict is
+# derived differently, and every `rc` decision is the byte-identical `if` it was.
+# The three regexes above still match, unchanged. This change can only ADD lines
+# to a log that a lane was already computing and discarding.
+#
+# EVERY DIGEST BELOW IS DERIVED, never hand-transcribed: each is the value this
+# file's own rule printed as `sha256=` when run against the reviewed tree, and
+# the orchestrator's independently observed map agrees with all six.
 _LANDING_LANE_SHA256 = {
     "run_pytest":
-        "024ed312b1e407b51193e7ef5a2d1753ab89405b2d00d4f7a72b9e33b3e7bb12",
+        "3b3b685c4841db38be00b3fb2cc33fa86252b585d6ffab9450e34ad9b2e26dbd",
     "run_repo_tools_pytest":
-        "b4dda37adc8140716b5d863e1eb54bfcf4d2383510d45d80f4814fc1c21ae344",
+        "95de055aebcd611fd6809deb3f0b3fdf542b9f0d0642df702bbb63ebee6d4ccf",
     "run_unselectable_pytest":
-        "dc4927bab39a82adb221e38b38b6b3638dd96a5951572904fe49b2acf1af4c33",
+        "aac62e70f0eb53fba2925c85188fd57384396503ff871665f8ca9748cf36ef0a",
 }
 # Entry-to-last-lane control flow is reviewed as one indivisible contract.
 # Hashing only the three function definitions is insufficient: their exact
@@ -295,7 +320,7 @@ _LANDING_LANE_SHA256 = {
 #: them, the launcher, the window, and everything before them.
 _LANDING_WINDOW_ANCHOR = "lane_emit_window"
 _LANDING_EXECUTION_PREFIX_SHA256 = (
-    "88a6b2dcd0f536aabcb4ac77996891fb6fb64ffefb6d2d8374ade75bbe2baf88"
+    "c556baf95d5a9de0a4590935a825dc043e16cee0d32f66617ac071ce210ae61e"
 )
 # RE-PINNED when the landing gained its runtime PREFLIGHT. Both digests below
 # moved for one reason and it is stated here rather than left to `git log`: the
@@ -660,7 +685,7 @@ _LANDING_EXECUTION_PREFIX_SHA256 = (
 # fix in -> named + refused; source reverted -> the two positive controls red;
 # a genuine stall and a zero-collecting file keep the truncation label off.
 _LANDING_SCRIPT_SHA256 = (
-    "37279d64bb73fb32e8c4148ee9f9404da05ad0d7a7f34dea7358a70e8e197db4"
+    "c77b060c4f58b8f0aeb195ed4970aafc99e946ab3a8b294441ad5e388046b383"
 )
 # The helper AST is not enough: a counterfeit CLI can define the expected
 # helper and never call it.  Bind the policy to the complete reviewed driver
@@ -700,7 +725,7 @@ _LANDING_SCRIPT_SHA256 = (
 # prints the red case names before the record is nulled — see the block above
 # `_LANDING_SCRIPT_SHA256` for the full account. Supervision is untouched.
 _SEMANTIC_DRIVER_SHA256 = (
-    "ae741549be2b011e5441041b537336aaa2c4919bf739b0db44c7eb4ebfac5d24"
+    "706b7756351d14d73ea7a45a054944e78916eb33e5c28b990f3d6b0971d84d4f"
 )
 #: `pip install pytest-timeout` names the plugin, not a bound; it carries no
 #: `--timeout=N` and so cannot match, but the negative is stated because a
