@@ -37,3 +37,32 @@ recorded in info, candidate follow-up issue, NOT silently guessed.
 BLOCKING-vs-ADVISORY unchanged (A4 still refuses 0-card / ambiguous / wrong-model-set
 decks). Chip-AGNOSTIC: no PDK literal added; keyed on file-name identity + naming
 convention. Do not land from here — review via repo-gatekeeper.
+
+---
+
+# LAND — fix 2: A4 follows A3's model-set election (flavour-aware)
+
+## What
+`run_block` (design-deck path): when the delivered netlist's RECORDED model lib
+(`netlist_provenance.json` → pdk.model_lib, A3's #903 flavour election) differs from
+A4's context-resolved lib but lives in the SAME model tree (same directory) and is
+reachable, A4 follows the record (`design_deck_info.model_lib_followed_declared`
+records the overridden resolution) and keeps only the corner choice. Cross-tree
+bindings still refuse naming both sides; absent/unreadable record changes nothing.
+New helper `_a3_declared_model_lib`.
+
+## Why (measured — .108 round-2, u_hawaii_adc ldo)
+A3 correctly elects the elevated-voltage MOS lib for the 1.8V LDO pass path and
+records it; A4's own resolution elected the plain-voltage flavour in the same
+directory → own-card election found 0 cards → model-set refusal. Flavour-aligned
+blocks (delta_sigma, LV) passed; flavour-split blocks dead-ended. Flavour-blind.
+
+## Falsification (two-tree, 2026-08-31)
+- pre-fix c0867ee16 + test file: test_same_tree_flavour_election_is_followed RED
+  (exact flavour-blind refusal in stderr), both refusal pins GREEN.
+- post-fix: 3/3 new + 123/123 across all 8 A4/corner suites GREEN.
+
+## Doctrine
+Chip-AGNOSTIC (directory identity + recorded election; no PDK literal). The rule is
+A4's own stated doctrine made true: "re-stamping the MODEL SET is not this step's
+job" — now it also does not RE-ELECT it. Do not land from here — gatekeeper review.
