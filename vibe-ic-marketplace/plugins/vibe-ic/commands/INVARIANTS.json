@@ -35,6 +35,20 @@
       }
     },
     {
+      "id": "commands.analog-entrypoint-is-shipped",
+      "statement": "The documented standalone analog entry point ships as a command file.",
+      "why": "Analog skills and runner messages route users to /vibe-ic-analog. Without the command file, that documented next action resolves to an unknown command.",
+      "rule": {
+        "kind": "require_companion",
+        "for_each": ["INVARIANTS.json"],
+        "companion": "vibe-ic-analog.md"
+      },
+      "counterexample": {
+        "path": "INVARIANTS.json",
+        "content": "{}\n"
+      }
+    },
+    {
       "id": "commands.no-absolute-host-path",
       "statement": "No command file may contain an absolute /home/<user> path; the placeholder form /home/<your-user> is the way to show one.",
       "why": "These files ship to users. An author's own home path in a command reads to the user as an instruction and sends them to a directory that does not exist on their machine.",
