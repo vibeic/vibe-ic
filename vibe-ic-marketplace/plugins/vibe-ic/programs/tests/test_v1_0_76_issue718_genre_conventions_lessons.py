@@ -5,7 +5,7 @@ The conventions a #716 independent blind-solve used to recover designs that
 single-track authoring abandoned as FLOORs lived only in the dual-track agents'
 reasoning, so fresh clean-room rounds re-failed the SAME recoverable problems.
 They are now durably encoded as `### Skill:` sections in
-`agents/ic-expert-agent.md`, which `benchmark_dispatch.py --setup` renders into
+`agents/ic-expert-agent.md`, which general solve initialization renders into
 each run's `lessons.md` (a MUST-READ for every blind author) via
 `_render_lesson_digest`.
 

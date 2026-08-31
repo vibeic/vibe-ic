@@ -76,7 +76,7 @@ _NOT_A_PORT_NAME = {
 # --------------------------------------------------------------------------- #
 def _toplevel(record: dict) -> Optional[str]:
     try:
-        import cvdp_atomic_bridge as _bridge
+        import record_prompt_context_bridge as _bridge
         return _bridge.toplevel_name(record)
     except Exception:
         return None

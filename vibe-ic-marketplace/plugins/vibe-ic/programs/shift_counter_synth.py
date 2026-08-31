@@ -12,7 +12,7 @@ WHY a dedicated CVDP solver (and not the two existing registry synths):
     (`**data_in** (8-bits, [7:0])`) and embeds worked example vectors / a cocotb
     test, NOT those phrasings. So neither existing synth fires on the CVDP
     barrel-shift / rotate / specialized-counter records.
-  * cvdp_atomic_bridge.py DOES read CVDP interfaces, but it SHORT-CIRCUITS this very
+  * record_prompt_context_bridge.py DOES read CVDP interfaces, but it SHORT-CIRCUITS this very
     family to SKIP: its _SPECIAL_ALGEBRA_RE skips `\\bsaturat`, and its cocotb-driven
     port extraction mis-tokenizes these designs (e.g. it returned
     o_processed_data -> ('data',1) for adc_data_rotate and None for barrel_shifter).
@@ -74,7 +74,7 @@ _NOT_A_PORT_NAME = {
 # --------------------------------------------------------------------------- #
 def _toplevel(record: dict) -> Optional[str]:
     try:
-        import cvdp_atomic_bridge as _bridge
+        import record_prompt_context_bridge as _bridge
         return _bridge.toplevel_name(record)
     except Exception:
         return None

@@ -74,7 +74,7 @@ def _rec(top, prompt, *, input_context=None):
     # cannot already recover the name from the prompt+context. The interface already
     # lives in the prompt's own `### Inputs/Outputs`. The harness `.env` TOPLEVEL is
     # retained for record-shape fidelity only; the refactored solver never reads it.
-    import cvdp_atomic_bridge as _B
+    import record_prompt_context_bridge as _B
     if _B.toplevel_name({"input": {"prompt": prompt,
                                    "context": input_context or {}}}) != top:
         prompt = f"Design the Verilog module `{top}`.\n\n" + prompt
@@ -507,7 +507,7 @@ def test_real_dataset_no_overlap_and_count():
         "cvdp_copilot_sequencial_binary_to_one_hot_decoder_0001",
     }, solved
     try:
-        import cvdp_atomic_bridge as B
+        import record_prompt_context_bridge as B
         import copy
         bridge = {r["id"] for r in recs if B.solve(copy.deepcopy(r))}
         assert not (set(solved) & bridge), "must be net-new vs the bridge"

@@ -21,7 +21,7 @@ from pathlib import Path
 _PROGRAMS = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_PROGRAMS))
 
-import cvdp_atomic_bridge as B  # noqa: E402
+import record_prompt_context_bridge as B  # noqa: E402
 import cvdp_complete_extract as C  # noqa: E402
 import prose_interface_table_read as T  # noqa: E402
 

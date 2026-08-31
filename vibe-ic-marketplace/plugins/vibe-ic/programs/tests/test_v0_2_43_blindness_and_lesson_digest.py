@@ -5,8 +5,8 @@ Pins the two ORGANIC-20260605 instruction/orchestration fixes:
     (all shapes) + the methodology skill now forbid reading ANY dataset file
     other than the current problem's prompt — explicitly including SIBLING
     problems' reference/test files — and bind close-loop agents equally.
-  * shapec-lesson-digest-injection (#412): `benchmark_dispatch.py --setup`
-    renders the capture loop's general-pattern `### Skill:` sections into
+  * lesson-digest-injection (#412): the general solve initialization renders
+    the capture loop's general-pattern `### Skill:` sections into
     `<RUNDIR>/lessons.md`, and the Shape-C blind instructions make it a
     MUST-READ, so already-captured recoveries stop recurring single-shot.
 """
@@ -15,9 +15,6 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import benchmark_dispatch as bd  # noqa: E402
-
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-import _progress_run as _pr  # noqa: E402
 
 PLUGIN = Path(__file__).resolve().parent.parent.parent
 HARNESS = PLUGIN / "benchmark"
@@ -47,8 +44,8 @@ def test_shape_d_carries_cross_problem_prohibition():
 
 def test_methodology_skill_carries_cross_problem_item():
     txt = SKILL.read_text()
-    assert "any dataset file other than the current problem's prompt" in txt
-    assert "close-loop prompt" in txt  # spawn-time propagation instruction
+    assert "sibling problems' solutions" in txt
+    assert "host scorer during solve" in txt
 
 
 # ── #412: lesson digest rendering ─────────────────────────────────────────
@@ -109,18 +106,14 @@ def test_digest_renders_real_expert_lessons(tmp_path):
     assert "minimum SOP/POS with don't-cares" in digest
 
 
-def test_setup_renders_lessons_md_end_to_end(tmp_path):
+def test_general_solve_initialization_renders_lessons_md(tmp_path):
     ds = tmp_path / "ds"; ds.mkdir()
     (ds / "ProbA_prompt.txt").write_text("Build a thing.\n")
     (ds / "ProbB_prompt.txt").write_text("Build another.\n")
     run = tmp_path / "run"
-    r = _pr.run(
-        [sys.executable, str(PLUGIN / "programs" / "benchmark_dispatch.py"),
-         "verilogeval-v2", "--setup", "--dataset", str(ds), "--run", str(run)],
-        capture_output=True, text=True)
-    assert r.returncode == 0, r.stdout + r.stderr
+    bd._prepare_general_solve_run(
+        "verilogeval-v2", ds, run, "verilogeval", 0)
     assert (run / "lessons.md").is_file()
-    assert "lessons:" in r.stdout and "MUST read" in r.stdout
 
 
 def test_shape_c_instructions_mandate_reading_digest():

@@ -22,17 +22,10 @@ benchmark-only path:
 WHY THIS FILE EXISTS SEPARATELY FROM ANY BENCHMARK (§ 0 GENERAL-CORE /
 THIN-ADAPTER). This routing is general IC-design knowledge — it is the same
 decision whether the task arrives from a user prompt, a design doc, or a
-benchmark record. It previously lived only inside `benchmark/cvdp_task_router.py`,
-reachable only when running CVDP, which is exactly the naming debt § 0's naming
-test describes: a `cvdp_…` file whose logic is pure prose/param handling. The
-consequence was concrete — a 2026-08-24 CVDP run entered through a hand-rolled
-prompt→drafts→gate loop because the general layer had no multi-entry front door
-to enter through, so 224 of 302 records that should have taken completion /
-modify / optimize / debug loops were pushed through free-hand authoring instead.
-
-A BENCHMARK ADAPTER MUST NOT REIMPLEMENT THIS. Its only job is to map its own
-record format onto a NATURE (e.g. CVDP's `cidNNN` label) and delegate here.
-Chip-AGNOSTIC and dataset-AGNOSTIC: no SKU, no vendor, no dataset literal.
+benchmark record. A benchmark adapter must stage visible prompt/context and
+must not choose or declare the nature. Benchmark labels, category ids, problem
+names, hidden harnesses, and expected answers are never routing inputs.
+Chip-AGNOSTIC and dataset-AGNOSTIC: no SKU, vendor, or dataset literal.
 """
 from __future__ import annotations
 
@@ -262,8 +255,7 @@ NATURE_ENTRY: Dict[str, Dict[str, Any]] = {
         "admission_gates": ["P0"],
         "plugin_entry": {
             "name": "completion_loop",
-            "deterministic_first": ["cvdp_context_interface_recover.py",
-                                    "modify_complete_synth.py"],
+            "deterministic_first": ["modify_complete_synth.py"],
             "ai_backup": ["spec-to-rtl"],
             "verify": ["rtl_hygiene_lint.py", "spec_conformance_check.py",
                        "phase2-rtl-verify"],
@@ -283,8 +275,7 @@ NATURE_ENTRY: Dict[str, Dict[str, Any]] = {
         "admission_gates": ["P0"],
         "plugin_entry": {
             "name": "modify_loop",
-            "deterministic_first": ["cvdp_context_interface_recover.py",
-                                    "modify_complete_synth.py"],
+            "deterministic_first": ["modify_complete_synth.py"],
             "ai_backup": ["rtl-repair"],
             "verify": ["equivalence-check", "phase2-rtl-verify",
                        "rtl_hygiene_lint.py"],
@@ -333,8 +324,7 @@ NATURE_ENTRY: Dict[str, Dict[str, Any]] = {
                             "declared stimulus source to simulate against"),
         "plugin_entry": {
             "name": "debug_loop",
-            "deterministic_first": ["cvdp_context_interface_recover.py",
-                                    "debug_first_pass.py"],
+            "deterministic_first": ["debug_first_pass.py"],
             "ai_backup": ["rtl-repair"],
             "verify": ["phase2-rtl-verify", "equivalence-check",
                        "formal-verify", "rtl_hygiene_lint.py"],
@@ -566,8 +556,9 @@ def classify_task_nature(prompt: str,
                          nature: Optional[str] = None) -> Dict[str, Any]:
     """Return {nature, route, plugin_entry, source, needs_ai_parse}.
 
-    `nature` — when the caller already KNOWS the nature (a benchmark label, a
-    user who said "debug this"), pass it and the routing is deterministic.
+    `nature` — when the requester explicitly declared the nature (for example,
+    "debug this"), pass it and the routing is deterministic. Benchmark metadata
+    is not an explicit requester declaration and must not be passed here.
 
     Otherwise the structural signal decides:
       * existing RTL          ⇒ a transform on existing RTL;

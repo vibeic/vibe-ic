@@ -26,7 +26,7 @@
     "comb_gate_synth::_gate_bank::_RED_LINE(text)",
     "crc_oracle_vector_check::inspect::_CRC_MODULE_RE(rtl)",
     "crc_synth::solve::_COMPOSITE_CRC_RE(prompt)",
-    "cvdp_atomic_bridge::_skeleton_ports::_HEADER_RE(text)",
+    "record_prompt_context_bridge::_skeleton_ports::_HEADER_RE(text)",
     "cvdp_context_interface_recover::_parse_one_span::_PORT_KW(header)",
     "design_one_shot_runner::_autoemit_chip_top_wrapper::mod_re(text_scan)",
     "design_one_shot_runner::_cdc_top_clock_ports::_CDC_MODULE_RE(txt)",

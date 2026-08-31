@@ -162,7 +162,7 @@ def _claim(text: str):
     if it had not recognised the text at all.
 
     MEASURED over the 302-record CVDP corpus at this seam's one caller,
-    `cvdp_atomic_bridge._prose_ports`: 226 records COMPLETE before the chain was
+    `record_prompt_context_bridge._prose_ports`: 226 records COMPLETE before the chain was
     wired, 239 after, 233 with this check — and the 6 records this check costs
     were COMPLETE only because a partial reading had deleted most of the
     interface they were judged on. `thermostat_0001` was COMPLETE on one output.

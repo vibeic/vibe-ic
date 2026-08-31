@@ -10,7 +10,7 @@ clean bullet-port block. This synth fills that gap for the SELECT/COMPARE family
 it PARSES the stated operation (N:1 mux select map, 1:N demux routing, a>b/a==b/a<b
 comparator with the signed-ness PARSED, min/max of N inputs) and the stated widths,
 then emits a combinational datapath named per the PROMPT-stated module name. The
-module NAME and the port INTERFACE both come from the shipped `cvdp_atomic_bridge`
+module NAME and the port INTERFACE both come from the shipped `record_prompt_context_bridge`
 (`toplevel_name` / `extract_interface`), whose sole sources are `input.prompt` +
 `input.context`. When the bridge cannot resolve the name or the interface from that
 model-visible surface, this solver SKIPs (returns None) — never a harness peek.
@@ -63,7 +63,7 @@ Port = Tuple[str, int]  # (name, width)
 # are never touched here. (The bridge's own `solve()` additionally strips the oracle
 # up front, so by the time a design reaches this family solver the harness/output
 # are already gone.)
-import cvdp_atomic_bridge as _bridge  # noqa: E402  NAME + INTERFACE source
+import record_prompt_context_bridge as _bridge  # noqa: E402  NAME + INTERFACE source
 
 # Clock / reset / async-control port names the datapath classifiers must ignore
 # (a purely COMBINATIONAL select/compare has no such ports). A plain constant set,

@@ -20,6 +20,13 @@
         "tb_compile_with_ref": true,
         "pass_regex": "Mismatches:\\s*0\\s+in\\s+\\d+\\s+samples"
       },
+      "solve_entry": {
+        "front_door": "programs/benchmark_dispatch.py verilogeval-v2 --solve --dataset <ds> --run <run>",
+        "router": "programs/task_nature_route.py",
+        "runner": "programs/vibe_ic_one_shot_runner.py",
+        "review": "programs/benchmark_dispatch.py verilogeval-v2 --resume --dataset <ds> --run <run>",
+        "score": "programs/benchmark_dispatch.py verilogeval-v2 --score --dataset <ds> --run <run>"
+      },
       "status": "RUNNABLE — atomic micro-problems, Shape C harness"
     },
     "verilogeval-human": {
@@ -40,6 +47,13 @@
       "scorer_args": {
         "tb_compile_with_ref": true,
         "pass_regex": "Mismatches:\\s*0\\s+in\\s+\\d+\\s+samples"
+      },
+      "solve_entry": {
+        "front_door": "programs/benchmark_dispatch.py verilogeval-human --solve --dataset <ds> --run <run>",
+        "router": "programs/task_nature_route.py",
+        "runner": "programs/vibe_ic_one_shot_runner.py",
+        "review": "programs/benchmark_dispatch.py verilogeval-human --resume --dataset <ds> --run <run>",
+        "score": "programs/benchmark_dispatch.py verilogeval-human --score --dataset <ds> --run <run>"
       },
       "status": "RUNNABLE — atomic micro-problems, Shape C harness"
     },
@@ -73,6 +87,13 @@
         "asyn_fifo"
       ],
       "scorer_substitution_recovered_fail": [],
+      "solve_entry": {
+        "front_door": "programs/benchmark_dispatch.py rtllm --solve --dataset <ds> --run <run>",
+        "router": "programs/task_nature_route.py",
+        "runner": "programs/vibe_ic_one_shot_runner.py",
+        "review": "programs/benchmark_dispatch.py rtllm --resume --dataset <ds> --run <run>",
+        "score": "programs/benchmark_dispatch.py rtllm --score --dataset <ds> --run <run>"
+      },
       "status": "RUNNABLE — standalone designs with own testbench, Shape B harness"
     },
     "cvdp": {
@@ -154,6 +175,12 @@
         "license": "see per-IC SOURCE_MANIFEST"
       },
       "scorer": "skill:benchmark-verify",
+      "entry_policy": {
+        "front_door": "commands/vibe-ic-all.md",
+        "runner": "programs/vibe_ic_one_shot_runner.py",
+        "verify": "skills/benchmark-verify/SKILL.md",
+        "benchmark_specific_solver": false
+      },
       "status": "RUNNABLE — full runner + benchmark-verify skill (six pillars)"
     },
     "cvdp-open": {
@@ -173,21 +200,20 @@
         "license": "other — see dataset LICENSE/NOTICE; commercial tracks carry extra terms"
       },
       "flow": {
-        "nonagentic": "CANONICAL (RULE 0 / § 5.1, owner directive 2026-07-05): cvdp_task_router.py (routes each record by its cidNNN) -> route=phase1_entry: cvdp_phase1_entry.py -> vibe_ic_one_shot_runner.py (json-to-rtl deterministic, WAIVE to spec-to-rtl AI-backup) ; route=ai_led: the per-cid plugin loop (cvdp_context_interface_recover + modify_complete_synth / debug_first_pass -> rtl-repair / rtl-review) -> cvdp_gate.py --prompts <prompts.jsonl> --dataset <dataset.jsonl> (SOLE EMIT PATH; BOTH flags are REQUIRED - without them the #559 module-name, #715/#734 multi-file and #729 area guards are inactive and the gate now REFUSES) -> official run_benchmark.py",
+        "nonagentic": "GENERAL ENTRY ONLY: benchmark_dispatch.py cvdp-open --solve stages input.prompt/input.context through benchmark_io_adapter, lets task_nature_route decide each problem's normal flow entry, and invokes vibe_ic_one_shot_runner. Complete the runner-owned AI backup/review/repair worklists with --resume, then use --score for the official run_benchmark.py verdict. No cid-, benchmark-, or problem-specific router/solver is permitted.",
         "agentic": "official docker agent image (shape D)",
-        "blind_instructions": "blind_instructions_shape_cvdp.md",
-        "nonagentic_legacy_DO_NOT_USE": "SUPERSEDED — local_export -> blind authoring -> cvdp_gate.py -> local_import. This skips Phase-1 entirely and lets an AI author RTL free-hand, which measures 'a frontier model + cvdp_gate', NOT the Vibe-IC runner (§ 5.1). RULE 0 forbids it as a bespoke benchmark-only harness. Every published CVDP number to date came from this path; a number from it must be labelled blind-author, never a product number."
+        "blind_instructions": "blind_instructions_shape_cvdp.md"
       },
       "scorer": "official run_benchmark.py with OSS_SIM_IMAGE built from the upstream Dockerfile.sim — run eda_image_preflight.py FIRST (#536: image must match iverilog 13 / yosys 0.40 / cocotb 2.0.1 / verilator 5.038 or scoring is refused); no tool substitution needed (image is fully OSS since v1.1.0)",
       "triage": "verify_fail_triage.py (#534) classifies fails into SYNTH_GATE/ELAB_ERROR/FUNC_PARTIAL/FUNC_ALL with blind-safe hints",
-      "status": "RUNNABLE. Best BLIND-AUTHOR number 243/302 = 80.46% (v1.2.63, 5-tier: T1 38/38 deterministic-emit, T2 176/221 program-extracted-spec + AI). A CANONICAL Phase-1-entry number is a TARGET RE-RUN and does NOT exist yet (§ 5.1). Cautionary datapoint 2026-08-24: a hand-rolled prompt->drafts->gate loop with the gate's guard flags omitted scored 192/302 = 63.58% — no deterministic emit, no program-extracted spec, 0/5 on multi-file, and every area claim unchecked.",
+      "status": "RUNNABLE through the general product entry. Historical direct-author and benchmark-local routing numbers are non-canonical; a fresh full-dataset Program First + AI Review measurement is required after this entry-policy change.",
       "solve_entry": {
-        "router": "benchmark/cvdp_task_router.py --dataset <ds> --report <run>/route.json",
-        "phase1_route": "benchmark/cvdp_phase1_entry.py --dataset <ds> --run <run>",
-        "ai_led_route": "per-cid plugin loop, see open-benchmark-methodology § 5.1 table",
-        "tier_measure": "programs/benchmark_dispatch.py --solve  (5-TIER; T1 = deterministic emit, no AI — names the emitter per problem)",
-        "emit": "benchmark/cvdp_gate.py --batch <drafts> --out <responses> --prompts <prompts> --dataset <ds>",
-        "note": "--prompts AND --dataset are not optional conveniences; they arm the guards. The gate refuses without them (or an explicit --without-spec-guards)."
+        "front_door": "programs/benchmark_dispatch.py cvdp-open --solve --dataset <ds> --run <run>",
+        "router": "programs/task_nature_route.py (invoked by benchmark_dispatch; prompt/context evidence only)",
+        "runner": "programs/vibe_ic_one_shot_runner.py --entry-step <general-router-decision>",
+        "review": "programs/benchmark_dispatch.py cvdp-open --resume --dataset <ds> --run <run>",
+        "score": "programs/benchmark_dispatch.py cvdp-open --score --dataset <ds> --run <run> --scorer-root <cvdp-benchmark-root>",
+        "note": "benchmark_io_adapter may translate dataset/response formats only; it must not decide a route, author RTL, or assign a verdict."
       }
     }
   }

@@ -18,14 +18,14 @@ WHY a dedicated CVDP solver (and not the bridge / arith_variants):
       an add/sub/mul VERB; a single-operand abs / sign-extend / negate, or a
       clamp-to-explicit-[lo,hi] (not the add-then-saturate it handles), has no `a+b`
       verb and so it returns None.
-    * cvdp_atomic_bridge SHORT-CIRCUITS `\\bsaturat`/`\\bclamp` to SKIP outright, and
+    * record_prompt_context_bridge SHORT-CIRCUITS `\\bsaturat`/`\\bclamp` to SKIP outright, and
       its registry path has no canonical for "clamp x to [lo,hi]" / "abs(x)" /
       "sign-extend W->M" / "x > T ? p : q", so it emits nothing (or, worse, a
       registry shape that does not match the function).
 
   This solver fills exactly that gap. It sources the module name + port interface
-  ONLY from input.prompt + input.context (via `cvdp_atomic_bridge.toplevel_name` /
-  `cvdp_atomic_bridge.extract_interface`) — the hidden cocotb harness (`dut.<sig>`
+  ONLY from input.prompt + input.context (via `record_prompt_context_bridge.toplevel_name` /
+  `record_prompt_context_bridge.extract_interface`) — the hidden cocotb harness (`dut.<sig>`
   test + `.env` TOPLEVEL / VERILOG_SOURCES) and the golden `output.*` are OFF-LIMITS
   oracle and are NEVER read. It recognizes the FUNCTION, parses the STATED bound /
   threshold / from-to widths / signed-ness from the prompt, and emits a
@@ -62,7 +62,7 @@ _HERE = Path(__file__).resolve().parent
 if str(_HERE) not in sys.path:
     sys.path.insert(0, str(_HERE))
 
-import cvdp_atomic_bridge as _bridge  # noqa: E402  INTERFACE + module-name source
+import record_prompt_context_bridge as _bridge  # noqa: E402  INTERFACE + module-name source
 
 from _prose_polarity import is_denied, sentence_scope
 

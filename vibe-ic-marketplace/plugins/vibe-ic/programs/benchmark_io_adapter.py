@@ -259,6 +259,107 @@ def _rtl_gen_verdict(project: Path) -> Optional[Dict[str, str]]:
     return last
 
 
+def cvdp_scorer_contracts(dataset: Path) -> Dict[str, List[str]]:
+    """Return CVDP's scorer-visible response paths, never reference bytes.
+
+    This is a POST-GENERATION scorer adapter. CVDP stores the file-envelope
+    contract as the keys of output.context beside the hidden reference values.
+    The authoring path must not read that object; the host scorer may read the
+    keys only after Program First + AI Review acceptance is complete. Keeping
+    this function here preserves the general-core/thin-adapter boundary: the
+    contract can package already-accepted bytes, but cannot route or solve.
+    """
+    contracts: Dict[str, List[str]] = {}
+    for raw in Path(dataset).read_text(errors="replace").splitlines():
+        if not raw.strip():
+            continue
+        try:
+            record = json.loads(raw)
+        except json.JSONDecodeError:
+            continue
+        pid = record.get("id")
+        output = record.get("output")
+        context = output.get("context") if isinstance(output, dict) else None
+        if not pid or not isinstance(context, dict):
+            continue
+        paths = [str(path) for path in context
+                 if isinstance(path, str) and path]
+        if paths:
+            contracts[str(pid)] = paths
+    return contracts
+
+
+_MODULE_BLOCK_RE = re.compile(
+    r"\bmodule\s+([A-Za-z_]\w*)\b[\s\S]*?\bendmodule\b",
+    re.MULTILINE)
+
+
+def cvdp_package_response(snapshot_paths: List[Path],
+                          source_paths: List[Path],
+                          response_paths: List[str]) -> str:
+    """Package exact accepted RTL bytes for CVDP's local-import scorer.
+
+    One-file contracts receive bare RTL. Multi-file contracts receive the
+    official code-map envelope. Mapping is by an exact source basename first,
+    then by exact module-name == response basename. Anything ambiguous or
+    missing is refused; a format adapter must never guess a transformation.
+    """
+    snapshots = [Path(p) for p in snapshot_paths]
+    sources = [Path(p) for p in source_paths]
+    if not snapshots or len(snapshots) != len(sources):
+        raise ValueError("candidate snapshot/source path cardinality mismatch")
+    if not all(path.is_file() for path in snapshots):
+        raise ValueError("candidate snapshot RTL is absent")
+    if not response_paths:
+        raise ValueError("CVDP scorer response contract is absent")
+
+    texts = [path.read_text(errors="replace") for path in snapshots]
+    combined = "\n".join(texts)
+    if len(response_paths) == 1:
+        return combined
+
+    by_basename: Dict[str, str] = {}
+    duplicate_basenames = set()
+    for source, text in zip(sources, texts):
+        name = source.name
+        if name in by_basename:
+            duplicate_basenames.add(name)
+        by_basename[name] = text
+    for name in duplicate_basenames:
+        by_basename.pop(name, None)
+
+    by_module: Dict[str, str] = {}
+    duplicate_modules = set()
+    for match in _MODULE_BLOCK_RE.finditer(combined):
+        name, body = match.group(1), match.group(0)
+        if name in by_module:
+            duplicate_modules.add(name)
+        by_module[name] = body
+    for name in duplicate_modules:
+        by_module.pop(name, None)
+
+    packaged = []
+    used = set()
+    for response_path in response_paths:
+        basename = Path(response_path).name
+        stem = Path(response_path).stem
+        if basename in by_basename:
+            body = by_basename[basename]
+            key = ("file", basename)
+        elif stem in by_module:
+            body = by_module[stem]
+            key = ("module", stem)
+        else:
+            raise ValueError(
+                f"accepted RTL cannot be mapped exactly to {response_path!r}")
+        if key in used:
+            raise ValueError(
+                f"accepted RTL mapping for {response_path!r} is ambiguous")
+        used.add(key)
+        packaged.append({response_path: body})
+    return json.dumps({"code": packaged}, ensure_ascii=False)
+
+
 def main(argv: Optional[List[str]] = None) -> int:
     import argparse
     ap = argparse.ArgumentParser(description="Inspect a benchmark's IO mapping.")

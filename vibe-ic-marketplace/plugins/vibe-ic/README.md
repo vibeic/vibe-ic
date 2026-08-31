@@ -1,4 +1,4 @@
-# vibe-ic — AI-Native IC Design plugin (**v1.14.74**)
+# vibe-ic — AI-Native IC Design plugin (**v1.14.75**)
 
 **A deterministic program layer with AI-backup skills, driving spec → RTL → GDS.**
 
@@ -58,23 +58,24 @@ RTLLM / CVDP / etc.)? Use the **`/vibe-ic-benchmark`** front door:
 
 # Run (per the recommended commands the plan prints)
 git clone https://github.com/hkust-zhiyao/RTLLM ~/datasets/RTLLM
-/vibe-ic-benchmark rtllm --setup --dataset ~/datasets/RTLLM --run ~/runs/r1
-# … drive batches per benchmark/blind_instructions_shape_*.md
-/vibe-ic-benchmark rtllm --score --run ~/runs/r1
+/vibe-ic-benchmark rtllm --solve --dataset ~/datasets/RTLLM --run ~/runs/r1
+# … complete the runner-declared AI backup/review worklists, then resume
+/vibe-ic-benchmark rtllm --resume --dataset ~/datasets/RTLLM --run ~/runs/r1
+/vibe-ic-benchmark rtllm --score --dataset ~/datasets/RTLLM --run ~/runs/r1
 ```
 
 **MUST READ FIRST** — the [`open-benchmark-methodology`](skills/open-benchmark-methodology/SKILL.md)
-skill is the source of truth for run-shape choice (A/B/C/D/E), tool-substitution
-disclosure (iverilog↔VCS, etc.), and the triage rubric (FLOOR vs agent-fixable).
+skill is the source of truth for the one general product entry,
+tool-substitution disclosure (iverilog↔VCS, etc.), and evidence-backed triage.
 A `UserPromptSubmit` hook auto-injects a reminder when any benchmark keyword
 appears in your message. **Don't bypass it.**
 
-Per-shape entry points:
-- **Shape A** (full IC, doc→GDS): `/vibe-ic-all <project>` + `benchmark-verify` skill
-- **Shape B** (standalone designs): `vibe_ic_one_shot_runner.py --skip-phase3 --skip-analog --skip-hardware`
-- **Shape C** (atomic micro-problems): `benchmark/gates_atomic.py` per problem
-- **Shape D** (agentic SoC + cocotb): `vibe_ic_one_shot_runner.py` + `score_cocotb_mcp.py`
-- **Shape E** (blocked / out-of-scope): document only, do NOT publish a number
+Entry points:
+- **Open RTL evaluations**: `benchmark_dispatch.py --solve` → the normal
+  `vibe_ic_one_shot_runner.py`; only input/output and official-scorer adapters
+  vary by dataset.
+- **Full IC evaluations**: `/vibe-ic-all <project>` + `benchmark-verify`.
+- **Blocked / out-of-scope datasets**: document only; do not publish a number.
 
 See `benchmark/README.md` for the full harness orientation and per-benchmark quickstarts.
 

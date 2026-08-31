@@ -2,7 +2,7 @@
 """gf_synth.py — a DETERMINISTIC solver for the CVDP Galois-field / carry-less
 multiplication family.
 
-WHY (owner directive 2026-06-23): the shipped `cvdp_atomic_bridge.py` deliberately
+WHY (owner directive 2026-06-23): the shipped `record_prompt_context_bridge.py` deliberately
 SKIPs every Galois-field / carry-less / polynomial-multiply CVDP problem, because a
 GF(2^n) multiply is NOT plain integer `a*b` and the registry's plain-`*` op would
 MIS-EMIT it (§4.05: "a wrong op is worse than an honest skip"). This synth fills that
@@ -42,7 +42,7 @@ _HERE = Path(__file__).resolve().parent
 if str(_HERE) not in sys.path:
     sys.path.insert(0, str(_HERE))
 
-import cvdp_atomic_bridge as _bridge  # noqa: E402  REUSE interface/module-name helpers
+import record_prompt_context_bridge as _bridge  # noqa: E402  REUSE interface/module-name helpers
 
 Port = Tuple[str, int]
 

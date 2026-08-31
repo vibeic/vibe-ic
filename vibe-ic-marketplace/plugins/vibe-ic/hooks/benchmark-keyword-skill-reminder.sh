@@ -61,20 +61,15 @@ Project benchmark front-door invoked ("vibe-ic benchmark …").
 DO THIS BEFORE RESPONDING (two-step):
 
   1. Invoke Skill(skill="vibe-ic:open-benchmark-methodology") to load
-     the program-first doctrine:
-       § 2 run-shape decision matrix (A=full runner / B=runner --skip-phase3
-            / C=gates.py harness / D=agentic with runner / E=blocked-or-OOS)
-       § 3 tool-substitution disclosure (VCS→iverilog, DC→yosys+OpenROAD,
-            cvdp-sim→iic-osic-tools) + cwd=design_dir rule
-       § 4 triage rubric A-H — do NOT label a fail "benchmark-defect" without
-            walking through it
-       § 5 per-benchmark cheat sheet (current shape + status + TARGET RE-RUN)
+     the one-general-entry doctrine, clean-room blindness rules, Program First
+     + hash-bound AI review, official scorer disclosure, and failure triage.
 
   2. Use the runner front-door — NOT a hand-rolled harness:
-        /vibe-ic-benchmark <bench> [--list | --setup | --score | --run …]
+        /vibe-ic-benchmark <bench> [--list | --solve | --resume | --score]
      or programmatically:
         python3 ${CLAUDE_PLUGIN_ROOT}/programs/benchmark_dispatch.py --list
-     This auto-routes the benchmark to its registry shape (BENCHMARK_REGISTRY.json).
+     Dataset shape changes only the thin IO/scorer adapters; every problem is
+     routed from visible prompt/context through the normal product runner.
 
 DO NOT:
   - propose a benchmark plan / interpret a result without consulting the methodology

@@ -21,7 +21,7 @@ _PROG = Path(__file__).resolve().parents[1]
 if str(_PROG) not in sys.path:
     sys.path.insert(0, str(_PROG))
 
-import cvdp_atomic_bridge as B  # noqa: E402
+import record_prompt_context_bridge as B  # noqa: E402
 import cvdp_complete_extract as C  # noqa: E402
 from _hostpaths import corpus_path  # noqa: E402
 

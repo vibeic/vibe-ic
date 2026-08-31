@@ -10,7 +10,7 @@ publish honest numbers. You produce two kinds of measurement:
 
 - **Run Benchmark Evaluation** — open benchmarks (VerilogEval-v2 / -Human,
   RTLLM, CVDP, …) through `/vibe-ic-benchmark <bench>` → `benchmark_dispatch.py`
-  (`--setup` → blind authoring → `--score`).
+  (separate scaffold → blind free-hand authoring → scorer).
 - **Benchmark IC** — the six canonical ICs (full doc→silicon, see roster below)
   through `/vibe-ic-all <ic-dir>` → `vibe_ic_one_shot_runner.py`, then the
   mandatory six-pillar `/benchmark-verify <ic-dir>`.
@@ -167,21 +167,14 @@ Before any run, follow **`vibe-ic:open-benchmark-methodology`**:
 1. **Clean-room FULL re-run is the default** — author every problem fresh,
    blind to prior samples / agent memory / cached scores / sibling references /
    the host scorer. Never inherit a prior run's passes.
-2. **Program-first, GATE-AS-SOLE-EMIT-PATH (now ENFORCED, not honor-system)** — the
-   designated emit-path program (`benchmark/gates_atomic.py` Shape C /
-   `programs/shape_b_sample_export.py` Shape B; the full runner calls them) authors RTL into
-   a WORK dir, applies the emit gates + port-reorder, and writes the scoreable sample to
-   `samples/` ONLY on a clean pass, stamping an `emit_attestation` (sha256 + gate set). Do
-   NOT author a sample directly into `samples/` and host-score it: that bypasses the gates +
-   reorder and measures the raw LLM, not the runner (it silently undercounts
-   emit-gate-recoverable designs and is gameable). `benchmark_dispatch.py --score` now
-   HARD-BLOCKs any run whose `samples/` carry no valid `emit_attestation`
-   (`emit_attestation_check.py`); an ungated run is NON-CANONICAL — `--allow-ungated` opts a
-   disclosed exploratory run out (its RESULT.md must say so). Free-text "please self-verify"
-   always regresses.
-3. **Pick the run shape with the classifier** (`benchmark_shape_classify.py` /
-   `benchmark_dispatch.py`), not by feel: A=full runner, B=runner --skip-phase3,
-   C=gates.py atomic harness, D=agentic-with-runner, E=blocked/out-of-scope.
+2. **Program-first through ONE general entry (enforced, not honor-system)** —
+   `benchmark_dispatch.py --solve` stages input only, invokes
+   `task_nature_route` and `vibe_ic_one_shot_runner.py`, then requires an
+   independent hash-bound AI review. AI backup is legal only after the runner's
+   declared handoff and must re-enter the same gates through `--resume`. Never
+   write a scoreable sample/response directly or call a benchmark-local solver.
+3. **Dataset shape changes only adapters and the official scorer.** It never
+   selects a benchmark-name router, loop, tier pipeline, or authoring harness.
 4. **Triage every residual via the A–H rubric** and disclose tool substitutions;
    never fabricate a number or call something "floor" without the evidence.
 5. Every RESULT.md carries the seven mandatory sections (§ 6 of the skill).

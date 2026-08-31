@@ -164,18 +164,16 @@ def _slug(s: str) -> str:
 # leading boundary so `base_Prob089_…` is caught like `Prob089_…`.
 #
 # The tail is NOT open-ended, because a family tag also legitimately prefixes
-# this plugin's own thin benchmark ADAPTERS — `cvdp_gate.py`,
-# `cvdp_solve_pipeline.py`, `verilogeval_v2` — which the open-benchmark
-# doctrine says are correctly named that way (SKILL.md: "the `cvdp_` /
-# `rtllm_` / `verilogeval_` prefix is CORRECT for the record-IO shell").
+# this plugin's own thin benchmark IO/scorer adapters. The open-benchmark
+# doctrine permits benchmark prefixes only at those record-format boundaries.
 # Refusing those would just re-create the false-positive class this issue is
 # about. What separates a DATASET IDENTIFIER from an adapter is that the
 # dataset numbers things: a cell carries a 4-digit ordinal
 # (`cvdp_copilot_scrambler_0001`), a release carries a dotted version
 # (`cvdp_v1.1.0_nonagentic_….jsonl`). Requiring THREE digits anywhere in the
-# tail admits both and still excludes every adapter — `cvdp_gate.py` and
-# `cvdp_solve_pipeline.py` have none, `verilogeval_v2` and
-# `cvdp_phase1_entry.py` have one. A bare standalone tag is refused on its own.
+# tail admits both and still excludes thin adapter symbols such as
+# `cvdp_complete_extract.py` and `rtllm_iface_recover.py`, which carry no
+# numbered dataset cell identity. A bare standalone tag is refused on its own.
 _TAG_L = r"(?<![A-Za-z0-9])"                # not glued to a letter/digit left
 _TAG = (r"(?:RTLLM|VerilogEval(?:-(?:v[12]|Human|Machine))?|CVDP|MetRex"
         r"|ResBench|RTL-Repo|PyHDL-Eval)")

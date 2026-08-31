@@ -8,7 +8,7 @@ conventions. When those are STATED in the CVDP prose, the RTL is deterministic:
 there is exactly one correct serial (bit-by-bit) shift-register CRC, and exactly
 one correct unrolled parallel form. This module parses the stated convention from
 the prompt and emits that datapath, named per the harness TOPLEVEL with ports
-taken from the shipped `cvdp_atomic_bridge` interface extractor.
+taken from the shipped `record_prompt_context_bridge` interface extractor.
 
 §4.05 PARSE-OR-SKIP / NO-CHEAT (binding):
   CRC is *extremely* convention-sensitive: a wrong reflect or a wrong init
@@ -47,7 +47,7 @@ _HERE = Path(__file__).resolve().parent
 if str(_HERE) not in sys.path:
     sys.path.insert(0, str(_HERE))
 
-import cvdp_atomic_bridge as _bridge  # noqa: E402  INTERFACE + module-name source
+import record_prompt_context_bridge as _bridge  # noqa: E402  INTERFACE + module-name source
 
 from _prose_polarity import LINE_END_BREAKS, is_denied, sentence_scope
 

@@ -20,7 +20,7 @@ re-parameterize the port rather than freeze the default.
 
 WHY THIS IS ITS OWN MODULE. The reader was written during a CVDP capture and
 lived as `_signal_direction_table`, a PRIVATE function inside
-`cvdp_atomic_bridge`. Its logic never touched a record field or a dataset
+`record_prompt_context_bridge`. Its logic never touched a record field or a dataset
 literal — it is prose in, ports out — but under a benchmark prefix, behind a
 leading underscore, the general Phase-1 path could not reach it: a plain design
 doc stating its pins in the commonest table form in the industry parsed to

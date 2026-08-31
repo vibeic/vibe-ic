@@ -139,9 +139,12 @@ def _stage_run(tmp_path, with_violation: bool):
     (run / "samples").mkdir(parents=True)
     (run / "work").mkdir()
     (run / ".bench_config.json").write_text(json.dumps({
-        "bench": "verilogeval-v2", "dataset": str(ds), "shape": "C",
-        "problems": 1, "batches": 1, "clean_room": True,
-        "floor_only": False, "inherited_from": None, "seed_run": None}))
+        "schema": "vibeic.benchmark.general_run.v1",
+        "bench": "verilogeval-v2", "format": "verilogeval",
+        "dataset": str(ds.resolve()), "clean_room": True,
+        "full_dataset": True, "diagnostic_limit": 0,
+        "inherited_from": None, "seed_run": None,
+        "reused_samples_from": None}))
     t = run / "transcripts"; t.mkdir()
     body = (f"read {ds}/Prob001_prompt.txt\n" +
             (f"cat {ds}/Prob001_ref.sv\n" if with_violation else ""))

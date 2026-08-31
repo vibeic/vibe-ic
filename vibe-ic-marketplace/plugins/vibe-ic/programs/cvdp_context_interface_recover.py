@@ -6,7 +6,7 @@ WHY THIS IS THE SPEC, NOT THE ANSWER (§3.9 + the existing bridge doctrine):
   * A module's PORT HEADER (`module foo(input [7:0] a, output b);`) is the
     INTERFACE — the contract the testbench binds to — and is, by definition,
     part of the specification chain, NOT the functional answer. The
-    `cvdp_atomic_bridge` already reads the `output['context']` skeleton's
+    `record_prompt_context_bridge` already reads the `output['context']` skeleton's
     module HEADER (header-only, never the body) as a legitimate interface
     source; this module only widens that same header-only recovery to the
     PROVIDED `input['context']` RTL (also spec, also not the golden output).
@@ -40,7 +40,7 @@ _HERE = Path(__file__).resolve().parent
 if str(_HERE) not in sys.path:
     sys.path.insert(0, str(_HERE))
 
-import cvdp_atomic_bridge as _bridge  # toplevel_name
+import record_prompt_context_bridge as _bridge  # toplevel_name
 import verilog_width_resolve as _wr       # param_defaults / eval_width_expr
 
 from _prose_polarity import is_denied

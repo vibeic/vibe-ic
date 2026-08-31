@@ -5,7 +5,7 @@ table_lut_synth.solve(record) emits a combinational `case` for a function that
 is FULLY specified by an enumerated table in the prompt — a truth table, a code
 input->output mapping, a ROM/LUT with stated contents, a seven-segment / code map,
 or a stated case/lookup — naming the module per the harness TOPLEVEL (reusing the
-shipped cvdp_atomic_bridge). It EMITS only a COMPLETE table (every input
+shipped record_prompt_context_bridge). It EMITS only a COMPLETE table (every input
 combination present, OR the listed codes plus a stated default) and SKIPS (-> None)
 every incomplete / ambiguous / sequential / composite shape.
 
@@ -57,7 +57,7 @@ from _hostpaths import require_corpus  # noqa: E402
 # Real-shaped CVDP v1.1.0 record fixture builder.
 # --------------------------------------------------------------------------- #
 def _make_record(top, rtl_path, prompt, cocotb_test=""):
-    # COMPLIANCE: cvdp_atomic_bridge.toplevel_name derives the module name from
+    # COMPLIANCE: record_prompt_context_bridge.toplevel_name derives the module name from
     # `input.prompt` + `input.context` ONLY (the harness `.env` TOPLEVEL is an
     # OFF-LIMITS oracle). Some fixture prompts (e.g. GP_PROMPT) describe the block
     # in prose ("Generate/Propagate (GP) module") without a canonical `module `X``
@@ -280,7 +280,7 @@ def test_section_4_05_skips(top, prompt):
 # A COMPLETE truth table whose prompt states NO module name anywhere (no `module X`,
 # no "named/called `X`", no "(ABBR) module", no backtick `X` module reference). The
 # table itself is fully determined, so the ONLY reason to SKIP is the genuinely-absent
-# module name: cvdp_atomic_bridge.toplevel_name -> None (name derives from
+# module name: record_prompt_context_bridge.toplevel_name -> None (name derives from
 # input.prompt + input.context ONLY, and neither states one) -> no emit. (GP_PROMPT
 # can NOT be reused here: its prose "Generate/Propagate (GP) module" legitimately
 # names the module `GP` via the compliant "(ABBR) module" designation.)

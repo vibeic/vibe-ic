@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 1241
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1241)
+- **Total programs (excluding helpers / shims):** 1242
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1242)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 1232 |
+| `any` | 1233 |
 
 ## Alphabetical listing
 
@@ -264,7 +264,6 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `crosslayer_search_space` | any | — | the CROSS-LAYER PPA search space, and the citation that authorises every lever in it. |
 | `crypto_arch_extractor` | any | — | Extract crypto architecture parameters from README/text docs. |
 | `cts_quality_check` | any | — | Step 19 CTS substance gate. |
-| `cvdp_atomic_bridge` | any | — | a CVDP-prose -> atomic-spec BRIDGE that lets the existing deterministic registry solvers (spec_artifact_registry) program-SOLVE the atomi... |
 | `cvdp_complete_extract` | any | — | a UNIFIED CVDP complete-extraction layer. |
 | `cvdp_context_interface_recover` | any | — | recover the TARGET module's PORT INTERFACE from the PROVIDED `input['context']` RTL header (CONVERGE lever: Tier4 -> Tier3). |
 | `cxl_protocol_synth` | any | v0.1.89 | Compute Express Link (CXL) cache-coherent interconnect synth helper. |
@@ -788,6 +787,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pcie_gen5_protocol_synth` | any | v0.1.89 | PCI Express 5.0 (Gen5) protocol synth helper. |
 | `pcie_protocol_synth` | any | v0.1.84 | PCI Express-class protocol synth helper. |
 | `pdk_analog_completeness_check` | any | — | pdk_analog_completeness_check.py |
+| `pdk_analog_layout_minima` | any | — | the target PDK's DRAWN-GEOMETRY minima, read out of `programs/pdk_registry.json` for whatever family is asked for. |
 | `pdk_cell_models` | any | — | single source of truth for per-PDK stdcell Verilog simulation models that live INSIDE the EDA container. |
 | `pdk_consistency_check` | any | — | Deterministic PDK-netlist consistency checker. |
 | `pdk_device_map` | any | — | PDK-AGNOSTIC generic->foundry device-map accessor (R13). |
@@ -951,6 +951,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `readme_usage_sequence_extractor` | any | — | for #36 Bug 2: README "usage sequence" / numbered-step picker. |
 | `readme_vendor_extractor` | any | — | best-effort vendor extraction from README text. |
 | `real_artefact_test_backing_check` | any | — | how many of a change's tests are driven by a REAL checked-in artefact, and how many by a fixture the author typed alongside the change. |
+| `record_prompt_context_bridge` | any | — | visible prompt/context record adapter. |
 | `reference_control_resolved_through_a_mutable_ref` | any | — | A control whose reference point is a name that moves. |
 | `registry_is_the_iteration_domain` | any | — | A registry that IS the population instead of a FILTER over one. |
 | `regmap_bit_layout_check` | any | — | gate that catches L4_REGMAP.json registers that don't specify explicit bit positions for their fields. |
@@ -1313,7 +1314,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (1232 programs)
+### `any` (1233 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `absence_verdict_names_its_search_space_check` — "not found" must say WHERE it looked.
@@ -1550,7 +1551,6 @@ _(no programs in this group)_
 - `crosslayer_search_space` — the CROSS-LAYER PPA search space, and the citation that authorises every lever in it.
 - `crypto_arch_extractor` — Extract crypto architecture parameters from README/text docs.
 - `cts_quality_check` — Step 19 CTS substance gate.
-- `cvdp_atomic_bridge` — a CVDP-prose -> atomic-spec BRIDGE that lets the existing deterministic registry solvers (spec_artifact_registry) program-SOLVE the atomi...
 - `cvdp_complete_extract` — a UNIFIED CVDP complete-extraction layer.
 - `cvdp_context_interface_recover` — recover the TARGET module's PORT INTERFACE from the PROVIDED `input['context']` RTL header (CONVERGE lever: Tier4 -> Tier3).
 - `cxl_protocol_synth` — Compute Express Link (CXL) cache-coherent interconnect synth helper.  _[v0.1.89]_
@@ -2072,6 +2072,7 @@ _(no programs in this group)_
 - `pcie_gen5_protocol_synth` — PCI Express 5.0 (Gen5) protocol synth helper.  _[v0.1.89]_
 - `pcie_protocol_synth` — PCI Express-class protocol synth helper.  _[v0.1.84]_
 - `pdk_analog_completeness_check` — pdk_analog_completeness_check.py
+- `pdk_analog_layout_minima` — the target PDK's DRAWN-GEOMETRY minima, read out of `programs/pdk_registry.json` for whatever family is asked for.
 - `pdk_cell_models` — single source of truth for per-PDK stdcell Verilog simulation models that live INSIDE the EDA container.
 - `pdk_consistency_check` — Deterministic PDK-netlist consistency checker.
 - `pdk_device_map` — PDK-AGNOSTIC generic->foundry device-map accessor (R13).
@@ -2235,6 +2236,7 @@ _(no programs in this group)_
 - `readme_usage_sequence_extractor` — for #36 Bug 2: README "usage sequence" / numbered-step picker.
 - `readme_vendor_extractor` — best-effort vendor extraction from README text.
 - `real_artefact_test_backing_check` — how many of a change's tests are driven by a REAL checked-in artefact, and how many by a fixture the author typed alongside the change.
+- `record_prompt_context_bridge` — visible prompt/context record adapter.
 - `reference_control_resolved_through_a_mutable_ref` — A control whose reference point is a name that moves.
 - `registry_is_the_iteration_domain` — A registry that IS the population instead of a FILTER over one.
 - `regmap_bit_layout_check` — gate that catches L4_REGMAP.json registers that don't specify explicit bit positions for their fields.

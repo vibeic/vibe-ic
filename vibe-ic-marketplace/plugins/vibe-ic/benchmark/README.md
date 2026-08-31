@@ -12,7 +12,7 @@ a harness.
 | `BENCHMARK_REGISTRY.json` | Single source of truth: every known open benchmark → run-shape (A/B/C/D/E), dataset URL, on-disk layout, scorer choice |
 | `score_iverilog_tb.py` | Generic Shape B + C scorer — iverilog substituting for VCS / Xcelium, runs vvp from the design dir so `$readmemh` resolves |
 | `score_cocotb_mcp.py` | Generic Shape D scorer — wraps `docker exec vibeic-eda … cocotb` (substitutes the gated `nvidia/cvdp-sim` image) |
-| `gates_atomic.py` | Generic Shape C per-problem gate — drives `phase1_engine`, `spec_conformance_check`, `rtl_hygiene_lint --fix` (every verification step is a plugin PROGRAM) |
+| `score_cvdp_open.py` | CVDP official-scorer adapter — validates the two OSS images and invokes upstream `run_benchmark.py` on accepted general-flow responses |
 | `blind_instructions_shape_b.md` | Per-shape blind-agent instructions (runner-driven, RTLLM-class) |
 | `blind_instructions_shape_c.md` | Per-shape blind-agent instructions (atomic micro-problems, VerilogEval-class) |
 | `blind_instructions_shape_d.md` | Per-shape blind-agent instructions (agentic SoC, CVDP-class) |
@@ -30,18 +30,18 @@ python3 ${CLAUDE_PLUGIN_ROOT}/programs/benchmark_dispatch.py --list
 # 2. Show plan for a benchmark (with env check + recommended commands)
 python3 ${CLAUDE_PLUGIN_ROOT}/programs/benchmark_dispatch.py rtllm
 
-# 3. Set up a clean run dir (after cloning the dataset)
+# 3. Solve every problem through the general IC-design path
 git clone https://github.com/hkust-zhiyao/RTLLM /path/to/RTLLM
 python3 ${CLAUDE_PLUGIN_ROOT}/programs/benchmark_dispatch.py rtllm \
-    --setup --dataset /path/to/RTLLM --run /path/to/run_blind_001
+    --solve --dataset /path/to/RTLLM --run /path/to/run_blind_001
 
-# 4. Then drive the runs per the blind instructions
-#    (Shape B → run vibe_ic_one_shot_runner.py per design;
-#     Shape C → run gates_atomic.py per problem with the LLM authoring)
+# 4. Complete the runner-owned AI backup/review/repair worklists, then resume
+python3 ${CLAUDE_PLUGIN_ROOT}/programs/benchmark_dispatch.py rtllm \
+    --resume --dataset /path/to/RTLLM --run /path/to/run_blind_001
 
 # 5. Score
 python3 ${CLAUDE_PLUGIN_ROOT}/programs/benchmark_dispatch.py rtllm \
-    --score --run /path/to/run_blind_001
+    --score --dataset /path/to/RTLLM --run /path/to/run_blind_001
 ```
 
 ## The doctrine you MUST internalize first
@@ -53,8 +53,8 @@ the source of truth for:
 
 - § 1 Where Vibe-IC is a program vs an LLM (spec→RTL itself is an AI skill;
   every gate around it is a program)
-- § 2 The five canonical run-shapes (A=full runner / B=runner --skip-phase3 /
-  C=gates.py harness / D=agentic-with-runner / E=blocked/out-of-scope)
+- § 2 The five scorer/evidence shapes. Runnable open evaluations still share
+  one authoring entry: dispatcher → general router → one-shot runner.
 - § 3 Tool-substitution disclosure (VCS→iverilog, DC→yosys+OpenROAD, etc.) +
   the `cwd=design_dir` rule
 - § 4 Triage rubric A-H (FLOOR vs agent-fixable) — never label a fail

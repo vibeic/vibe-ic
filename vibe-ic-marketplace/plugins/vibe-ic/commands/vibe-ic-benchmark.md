@@ -1,6 +1,6 @@
 ---
 name: vibe-ic-benchmark
-description: Run any known open IC-design benchmark (VerilogEval-v2/Human, RTLLM, CVDP, …) the CORRECT way per the open-benchmark-methodology skill. Auto-routes to the right run-shape (A/B/C/D), sets up the run dir scaffold, points at the blind instructions, and invokes the scorer. Use when "run benchmark X", "score benchmark X", "benchmark this", "reproduce X benchmark", "跑 benchmark", "重跑 RTLLM", "score VerilogEval".
+description: Run any known open IC-design benchmark (VerilogEval-v2/Human, RTLLM, CVDP, …) through the same general IC-design path, then invoke its official scorer. Use when "run benchmark X", "score benchmark X", "benchmark this", "reproduce X benchmark", "跑 benchmark", "重跑 RTLLM", "score VerilogEval".
 argument-hint: <bench> [--solve|--resume|--score --dataset <path> --run <path>] [--list]
 ---
 
@@ -11,6 +11,13 @@ the methodology from `open-benchmark-methodology` skill (§ 2 decision matrix �
 substitution disclosure → § 4 triage rubric) by routing to the correct run-shape
 per the registry at `${CLAUDE_PLUGIN_ROOT}/benchmark/BENCHMARK_REGISTRY.json`.
 
+`--solve` names the complete route-and-solve lifecycle; it is not a direct
+solver entry.  For every problem, the first decision is made by the general
+`task_nature_route` from the visible prompt and supplied-RTL state.  Only after
+that route selects the normal flow entry/evidence boundary may
+`vibe_ic_one_shot_runner` run.  Benchmark name, problem id, and dataset metadata
+never select a route.
+
 ## Modes
 
 ```bash
@@ -20,19 +27,16 @@ python3 ${CLAUDE_PLUGIN_ROOT}/programs/benchmark_dispatch.py --list
 # 2. Show plan for one benchmark (env check + recommended commands)
 python3 ${CLAUDE_PLUGIN_ROOT}/programs/benchmark_dispatch.py <bench>
 
-# 3. Set up a run dir (clones the registry's expected layout into <run>)
-python3 ${CLAUDE_PLUGIN_ROOT}/programs/benchmark_dispatch.py <bench> \
-    --setup --dataset <path-to-dataset> --run <run-dir>
-
-# 4. Run Program First; this emits AI backup/review worklists
+# 3. Run Program First through the general flow; this creates a fresh run dir
+#    and emits AI backup/review worklists
 python3 ${CLAUDE_PLUGIN_ROOT}/programs/benchmark_dispatch.py <bench> \
     --solve --dataset <path-to-dataset> --run <run-dir>
 
-# 5. Complete blind AI review; a FAIL also needs an executable challenge
+# 4. Complete blind AI review; a FAIL also needs an executable challenge
 python3 ${CLAUDE_PLUGIN_ROOT}/programs/benchmark_dispatch.py <bench> \
     --resume --dataset <path-to-dataset> --run <run-dir>
 
-# 6. Score only after program_first_ai_review_acceptance.json says COMPLETE
+# 5. Score only after program_first_ai_review_acceptance.json says COMPLETE
 python3 ${CLAUDE_PLUGIN_ROOT}/programs/benchmark_dispatch.py <bench> \
     --score --dataset <path-to-dataset> --run <run-dir>
 ```
@@ -54,12 +58,13 @@ python3 ${CLAUDE_PLUGIN_ROOT}/programs/benchmark_dispatch.py <bench> \
 | Shape | Author | Scorer | Example benchmarks |
 |---|---|---|---|
 | **A** | `vibe_ic_one_shot_runner.py` (full chain) | `benchmark-verify` skill (six pillars) | benchmark_clean ICs (spm, sha256, subservient, u_hawaii_adc) |
-| **B** | `vibe_ic_one_shot_runner.py --skip-phase3 --skip-analog --skip-hardware` | `benchmark/score_iverilog_tb.py` | RTLLM |
-| **C** | LLM authors per problem + `benchmark/gates_atomic.py` (each gate is a plugin program) | `benchmark/score_iverilog_tb.py` | VerilogEval-v2, VerilogEval-Human |
+| **B** | general `benchmark_dispatch --solve` → `task_nature_route` → `vibe_ic_one_shot_runner` | `benchmark/score_iverilog_tb.py` | RTLLM |
+| **C** | the same general solve path; shape affects only scorer-facing packaging | `benchmark/score_iverilog_tb.py` | VerilogEval-v2, VerilogEval-Human |
+| **C/D** | the same general solve path; CVDP JSONL is a thin I/O adapter only | official `run_benchmark.py` via `benchmark/score_cvdp_open.py` | CVDP open |
 | **D** | `vibe_ic_one_shot_runner.py` (with `catalog-glue-author` if REUSED-IP) | `benchmark/score_cocotb_mcp.py` (MCP eda_cocotb / docker exec) | CVDP example, subservient-class |
 | **E** | n/a — blocked / out-of-scope, document only | n/a | PyHDL-Eval (golden gated), RTL-Repo (wrong metric), MetRex / ResBench (different task / toolchain), CVDP-full (gated) |
 
-For Shape B/C runs driven by `--solve`, Program emits the first candidate and
+For every runnable open evaluation driven by `--solve`, Program emits the first candidate and
 an independent, blind AI reviews that exact hash. This is sequential Program
 First + AI Backup, not two authors racing. AI is the final semantic authority,
 but a semantic FAIL must include a self-contained prompt-derived executable

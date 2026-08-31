@@ -39,7 +39,7 @@ def _toplevel(record: dict) -> Optional[str]:
     # fallback: when the name is stated in neither the prompt nor the context,
     # return None (never a peek at the hidden testbench).
     try:
-        import cvdp_atomic_bridge as _bridge
+        import record_prompt_context_bridge as _bridge
         return _bridge.toplevel_name(record)
     except Exception:
         return None

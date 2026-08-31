@@ -47,7 +47,7 @@ def test_all_benchmark_entry_doc_targets_are_shipped():
 
     assert len(references) >= 20, (
         "sanity check: canonical benchmark docs should expose their commands")
-    assert any(path == Path("benchmark/gates_atomic.py")
+    assert any(path == Path("programs/benchmark_dispatch.py")
                for _, path in references), references
     assert not missing, "missing documented Python targets: " + ", ".join(
         f"{doc}: {path}" for doc, path in missing)

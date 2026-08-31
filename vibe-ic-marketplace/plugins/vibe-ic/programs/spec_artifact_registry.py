@@ -722,14 +722,14 @@ def generate(text: str, top: str = "TopModule") -> Tuple[Optional[str], Optional
 #
 # These operation-named solvers (gf / bcd / crc / hamming / encoder / memory /
 # shift_counter / …) take a full benchmark RECORD and do their OWN interface
-# extraction (via the record-adapter helpers in `cvdp_atomic_bridge`, which is the
+# extraction (via the record-adapter helpers in `record_prompt_context_bridge`, which is the
 # thin record→ports adapter, NOT a dispatcher). They program-SOLVE special-algebra
 # / structural datapaths the text-level REGISTRY above SKIPs. They run FIRST (their
 # declared order is the precedence — first non-None wins), then `generate()` is the
 # text-level fall-through. This is the SINGLE deterministic-solver dispatch: the
 # bridge is now a thin driver that calls ONLY `generate_from_record()`.
 #
-# DEFERRED import (the solvers `import cvdp_atomic_bridge` for the record-adapter
+# DEFERRED import (the solvers `import record_prompt_context_bridge` for the record-adapter
 # helpers; importing them at registry module-load time, while the bridge is still
 # importing the registry's own helpers, would race a half-initialized module). The
 # load runs lazily on the first `generate_from_record()` call, by which time every

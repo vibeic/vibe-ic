@@ -74,7 +74,7 @@ _NON_GEN_TASK_RE = re.compile(
 # --------------------------------------------------------------------------- #
 def _toplevel(record: dict) -> Optional[str]:
     try:
-        import cvdp_atomic_bridge as _bridge
+        import record_prompt_context_bridge as _bridge
         return _bridge.toplevel_name(record)
     except Exception:
         return None
@@ -476,7 +476,7 @@ def solve(record: dict) -> Optional[str]:
     if conv is not None:
         if ins is None or outs is None:
             try:
-                import cvdp_atomic_bridge as _bridge
+                import record_prompt_context_bridge as _bridge
                 bi = _bridge.extract_interface(record, top)
                 if bi:
                     ins, outs = bi

@@ -231,9 +231,12 @@ def _stage_run(tmp_path, transcript_body: str):
     # isolates the downstream blindness-audit behaviour.
     write_prompt_report(run)
     (run / ".bench_config.json").write_text(json.dumps({
-        "bench": "verilogeval-v2", "dataset": str(ds), "shape": "C",
-        "problems": 1, "batches": 1, "clean_room": True,
-        "floor_only": False, "inherited_from": None, "seed_run": None}))
+        "schema": "vibeic.benchmark.general_run.v1",
+        "bench": "verilogeval-v2", "format": "verilogeval",
+        "dataset": str(ds.resolve()), "clean_room": True,
+        "full_dataset": True, "diagnostic_limit": 0,
+        "inherited_from": None, "seed_run": None,
+        "reused_samples_from": None}))
     t = run / "transcripts"; t.mkdir()
     (t / "batch00.jsonl").write_text(transcript_body)
     return ds, run

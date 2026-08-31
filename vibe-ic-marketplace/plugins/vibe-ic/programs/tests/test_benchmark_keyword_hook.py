@@ -118,8 +118,8 @@ class TestReminderShape:
     def test_includes_runner_front_door(self):
         assert "/vibe-ic-benchmark" in _run_with_prompt(self._P)
 
-    def test_includes_decision_matrix_section(self):
-        assert "decision matrix" in _run_with_prompt(self._P)
+    def test_includes_one_general_entry_doctrine(self):
+        assert "one-general-entry doctrine" in _run_with_prompt(self._P)
 
     def test_includes_anti_handroll_directive(self):
         out = _run_with_prompt(self._P)

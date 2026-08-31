@@ -13,7 +13,7 @@ WHY a dedicated CVDP solver (and not the bridge / arithmetic_synth / compose):
   negative/borrow FLAGS, multi-operand arity, and rounding.
 
   But the existing solvers MISS a whole shape of these records:
-    * cvdp_atomic_bridge.py only emits COMBINATIONAL registry shapes and
+    * record_prompt_context_bridge.py only emits COMBINATIONAL registry shapes and
       SHORT-CIRCUITS `\\bsaturat` to SKIP. A named-architecture adder whose cocotb
       harness wraps `a+b` in a clk + start/done (or a pure valid_out) handshake is
       NOT combinational, so the bridge returns None (verified: it SKIPs
@@ -22,7 +22,7 @@ WHY a dedicated CVDP solver (and not the bridge / arithmetic_synth / compose):
       ports:" phrasing, which these CVDP "fix-the-bug" prompts do not use.
 
   This solver fills exactly that gap: it reads the module name + interface ONLY
-  from `input.prompt` + `input.context` (via cvdp_atomic_bridge.toplevel_name /
+  from `input.prompt` + `input.context` (via record_prompt_context_bridge.toplevel_name /
   extract_interface — the hidden cocotb harness, .env TOPLEVEL, and golden output
   are OFF-LIMITS oracle and are NEVER read), recognizes the FUNCTION (add / sub /
   add-sub-by-mode / multiply / multi-operand sum / saturating add-sub), and emits a
@@ -67,7 +67,7 @@ _HERE = Path(__file__).resolve().parent
 if str(_HERE) not in sys.path:
     sys.path.insert(0, str(_HERE))
 
-import cvdp_atomic_bridge as _bridge  # noqa: E402  INTERFACE + module-name source
+import record_prompt_context_bridge as _bridge  # noqa: E402  INTERFACE + module-name source
 
 from _prose_polarity import is_denied, sentence_scope
 #   (prompt+context ONLY — the hidden cocotb harness / .env / golden are OFF-LIMITS).

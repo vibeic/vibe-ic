@@ -27,7 +27,7 @@ if _HERE not in sys.path:
 
 def _toplevel(record: dict) -> Optional[str]:
     try:
-        import cvdp_atomic_bridge as _bridge
+        import record_prompt_context_bridge as _bridge
         t = _bridge.toplevel_name(record)
         if t:
             return t
