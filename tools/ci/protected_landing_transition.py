@@ -493,7 +493,23 @@ def _parse_moves(value: Any, names: Sequence[str]) -> list[dict[str, str]]:
     return moves
 
 
-def parse_manifest(value: Any, oid_len: int) -> dict[str, Any]:
+def parse_manifest(value: Any, oid_len: int,
+                   authorised_moves: Sequence[Mapping[str, str]] = ()
+                   ) -> dict[str, Any]:
+    """Parse and validate one transition manifest.
+
+    `authorised_moves` is supplied ONLY when parsing a CANDIDATE manifest, and
+    only from the BASE manifest's own `moves`.  A candidate that performs a
+    base-authorised rename must ship a register protecting the MOVED path set,
+    which by construction is not the base's `RUNTIME_PATHS` -- so without this
+    the candidate's own register could never parse and the rename would be as
+    inexpressible as it was before.
+
+    Passing nothing restores the exact pre-move rule: the register must equal
+    `RUNTIME_PATHS` on the nose.  Either way the candidate supplies no policy;
+    it is measured against the base's set, or against the base's set with the
+    base's own renames applied, and against nothing else.
+    """
     root = _keys_with_optional(
         value,
         {"schema", "kind", "transition_id", "manifest_path", "runner", "paths",
@@ -524,7 +540,15 @@ def parse_manifest(value: Any, oid_len: int) -> dict[str, Any]:
     role_map = {row["path"]: frozenset(row["roles"]) for row in paths}
     runtime = {path for path, roles in role_map.items() if "runtime" in roles}
     authority = {path for path, roles in role_map.items() if "authority" in roles}
-    if runtime != RUNTIME_PATHS:
+    # The set this register must match: BASE's, or BASE's with BASE's own
+    # authorised renames applied.  With no authorised moves the second is the
+    # first, so this is the original single-set equality unchanged.
+    expected_runtime = frozenset(
+        apply_moves(sorted(RUNTIME_PATHS), authorised_moves))
+    expected_authority = frozenset(
+        apply_moves(sorted(REQUIRED_AUTHORITY_PATHS), authorised_moves))
+    if runtime not in (RUNTIME_PATHS, expected_runtime):
+        runtime_reference = expected_runtime
         # THE MESSAGE NAMES THE DIFFERENCE, NOT THE SIZE. It read "is not the
         # exact five-file tuple" while RUNTIME_PATHS held eleven — a sentence
         # that went stale the first time anyone protected another file and then
@@ -534,13 +558,16 @@ def parse_manifest(value: Any, oid_len: int) -> dict[str, Any]:
         # and described the wrong shape of problem, while fourteen cases of
         # `test_landing_gate_direct_push_tier` went red behind it on
         # `assert 2 == 1`.
-        missing = sorted(RUNTIME_PATHS - runtime)
-        extra = sorted(runtime - RUNTIME_PATHS)
+        missing = sorted(runtime_reference - runtime)
+        extra = sorted(runtime - runtime_reference)
         raise Refusal(
             "manifest runtime role set does not match RUNTIME_PATHS"
             + (f"; the manifest OMITS {missing}" if missing else "")
             + (f"; the manifest carries UNEXPECTED {extra}" if extra else ""))
-    missing_authority = REQUIRED_AUTHORITY_PATHS - authority
+    missing_authority = (REQUIRED_AUTHORITY_PATHS - authority
+                         if REQUIRED_AUTHORITY_PATHS <= authority
+                         or not authorised_moves
+                         else expected_authority - authority)
     if missing_authority:
         raise Refusal("manifest omits trusted authority dependencies: "
                       + ", ".join(sorted(missing_authority)))
@@ -1020,8 +1047,12 @@ def build_receipt(*, object_repo: Path, base: str, candidate: str,
         repo, cand_commit, algorithm, oid_len)
     base_manifest = parse_manifest(
         strict_loads(base_manifest_raw, what="base manifest"), oid_len)
+    # The candidate's register is judged against BASE's set, or against BASE's
+    # set with BASE's OWN authorised renames applied -- never against anything
+    # the candidate itself declares.
     candidate_manifest = parse_manifest(
-        strict_loads(cand_manifest_raw, what="candidate manifest"), oid_len)
+        strict_loads(cand_manifest_raw, what="candidate manifest"), oid_len,
+        base_manifest["moves"])
     base_files = _observe_files(
         repo, base_commit, base_manifest["paths"], algorithm, oid_len)
 
