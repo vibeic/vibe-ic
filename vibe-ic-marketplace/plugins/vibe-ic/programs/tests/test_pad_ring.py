@@ -1065,14 +1065,24 @@ def _io_lef_sites_not_in_lef(site_w: float = 1.0) -> str:
     return text
 
 
-def _site_declaration(*entries: tuple) -> str:
-    """A PDK tech-view config in the form the distributions write it."""
-    lines = ["set current_folder [file dirname [file normalize [info script]]]",
-             'set ::env(PAD_SITE_NAME) "io_site"',
-             'set ::env(PAD_CORNER_SITE_NAME) "io_corner_site"',
-             "# Create fake pad sites",
-             "# Note: This is needed if site definition are not in LEF",
-             "set ::env(PAD_FAKE_SITES) [dict create]"]
+def _site_declaration(*entries: tuple, scalars: bool = True) -> str:
+    """A PDK tech-view config in the form the distributions write it.
+
+    `scalars` suppresses the two `set ::env(PAD_SITE_*_NAME)` lines while
+    keeping the `PAD_FAKE_SITES` dict. That is a shape a distribution really
+    can ship — upstream declares the dict and the two names as three separate
+    variables — and it is what a test about the SITE LOOKUP needs, because a
+    config that also declares the names makes the run refuse earlier, on the
+    adoption layer, for a different and equally correct reason. Both refusals
+    are pinned; suppressing the scalars is how they are pinned SEPARATELY.
+    """
+    lines = ["set current_folder [file dirname [file normalize [info script]]]"]
+    if scalars:
+        lines += ['set ::env(PAD_SITE_NAME) "io_site"',
+                  'set ::env(PAD_CORNER_SITE_NAME) "io_corner_site"']
+    lines += ["# Create fake pad sites",
+              "# Note: This is needed if site definition are not in LEF",
+              "set ::env(PAD_FAKE_SITES) [dict create]"]
     lines += [f'dict set ::env(PAD_FAKE_SITES) "{n}" "{w}, {h}"'
               for n, w, h in entries]
     return "\n".join(lines) + "\n"
@@ -1081,6 +1091,7 @@ def _site_declaration(*entries: tuple) -> str:
 def _project_sites_in_tech_view(tmp_path: Path, *, site_w: float = 1.0,
                                 declare: bool = True,
                                 second_lib: tuple = None,
+                                scalars: bool = True,
                                 config=...) -> Path:
     root = _project(tmp_path, config=config, site_w=site_w)
     (root / "pdk/proc/libs.ref/proc_io/lef/io.lef").write_text(
@@ -1090,7 +1101,7 @@ def _project_sites_in_tech_view(tmp_path: Path, *, site_w: float = 1.0,
         d.mkdir(parents=True, exist_ok=True)
         (d / "config.tcl").write_text(_site_declaration(
             ("io_site", f"{site_w:.2f}", "350"),
-            ("io_corner_site", "350", "350")))
+            ("io_corner_site", "350", "350"), scalars=scalars))
     if second_lib is not None:
         d = root / "pdk/proc/libs.tech/someflow/proc_other_io"
         d.mkdir(parents=True, exist_ok=True)
@@ -1150,9 +1161,20 @@ def test_the_artefact_says_which_pdk_view_each_site_came_from(tmp_path):
 
 def test_a_site_declared_by_neither_pdk_view_is_still_refused(tmp_path):
     """The refusal has to stay reachable. Reading a second view widens WHERE
-    a site may be declared; it does not let a name nobody declared through."""
+    a site may be declared; it does not let a name nobody declared through.
+
+    `scalars=False` so this PDK declares its two SITES and does not declare
+    `PAD_SITE_NAME`. That is what isolates the lookup: with the scalar
+    present the run refuses one layer earlier, on the contradiction, which is
+    correct and is pinned by
+    `test_a_project_that_contradicts_the_pdk_is_refused_by_name` — a refusal
+    that would otherwise stand in for this one and let it rot unnoticed."""
     root = _project_sites_in_tech_view(
-        tmp_path, config=_config(PAD_SITE_NAME="no_such_site"))
+        tmp_path, scalars=False,
+        config=_config(PAD_SITE_NAME="no_such_site"))
+    assert not PR.PdkDeclarations(
+        PR.discover_io_library_configs(str(root / "pdk"), "proc")).values, \
+        "the premise: this PDK declares no scalar, so nothing is adopted"
     assert _gen(root) == 1
     assert "PAD_SITE_NOT_FOUND" in _rules(root)
 
@@ -2193,3 +2215,415 @@ def test_the_shipped_orientations_are_what_the_placer_produces(tmp_path):
         f"the placer orients the corners {corners}; this step ships "
         f"{dict(PR.CORNER_ORIENT)}. A square corner cell hides this in every "
         f"extent check — only a DEF reader sees it")
+
+
+# --------------------------------------------------------------------------- #
+# THE PDK-ADOPTION LAYER
+#
+# Five of the thirteen contract variables are properties of the IO CELL
+# LIBRARY, not of the project: `PAD_SITE_NAME`, `PAD_CORNER_SITE_NAME`,
+# `PAD_EDGE_SPACING`, `PAD_CORNER`, `PAD_FILLERS`. The PDK declares all five in
+# the SAME `libs.tech/<flow>/<io library>/config.tcl` this step already opens
+# for `PAD_FAKE_SITES` — a file this module transcribed two of the answers out
+# of, into its own header, and then asked an operator for all five.
+#
+# The tests below hold three things apart, because they are three different
+# claims:
+#
+#   ADOPTION      a variable the project left out and the PDK declares is
+#                 filled FROM THE PDK, with the file AND LINE recorded. Not an
+#                 invention: there is no default for any of the five anywhere
+#                 in `_pad_ring`, and `..._invents_nothing` is the negative
+#                 control that says so.
+#   REFUSAL       a project that CONTRADICTS a declaration is refused BY NAME,
+#                 `PAD_CONFIG_CONTRADICTS_PDK`, rather than silently preferred
+#                 in either direction.
+#   RESTRAINT     the other eight — the four side lists, the three rotations
+#                 and `SIGNAL_MAP` — are NOT adopted and still SKIP with exit
+#                 2. Five of those eight ARE the package pin-out.
+# --------------------------------------------------------------------------- #
+_FULL_DECL = (
+    'set current_folder [file dirname [file normalize [info script]]]\n'
+    'set ::env(PAD_SITE_NAME) "io_site"\n'
+    'set ::env(PAD_CORNER_SITE_NAME) "io_corner_site"\n'
+    'set ::env(PAD_EDGE_SPACING) "10"\n'
+    'set ::env(PAD_CORNER) "pad_corner"\n'
+    'set ::env(PAD_FILLERS) "pad_fill196"\n'
+    "# Create fake pad sites\n"
+    "# Note: This is needed if site definition are not in LEF\n"
+    "set ::env(PAD_FAKE_SITES) [dict create]\n"
+    'dict set ::env(PAD_FAKE_SITES) "io_site" "1.00, 350"\n'
+    'dict set ::env(PAD_FAKE_SITES) "io_corner_site" "350, 350"\n'
+)
+
+#: The five, and the value the fixture PDK declares for each. Written once so
+#: no test re-states the fixture's own numbers back at it.
+_DECLARED = {"PAD_SITE_NAME": "io_site",
+             "PAD_CORNER_SITE_NAME": "io_corner_site",
+             "PAD_EDGE_SPACING": "10",
+             "PAD_CORNER": "pad_corner",
+             "PAD_FILLERS": ["pad_fill196"]}
+
+
+def _project_pdk_declares_all_five(tmp_path: Path, *, config=...,
+                                   declaration: str = _FULL_DECL,
+                                   second: str = None) -> Path:
+    """The tech-view fixture, with the config.tcl declaring all five."""
+    root = _project(tmp_path, config=config, site_w=1.0)
+    (root / "pdk/proc/libs.ref/proc_io/lef/io.lef").write_text(
+        _io_lef_sites_not_in_lef(1.0))
+    d = root / "pdk/proc/libs.tech/someflow/proc_io"
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "config.tcl").write_text(declaration)
+    if second is not None:
+        e = root / "pdk/proc/libs.tech/someflow/proc_other_io"
+        e.mkdir(parents=True, exist_ok=True)
+        (e / "config.tcl").write_text(second)
+    return root
+
+
+def _decls(root: Path, **kw) -> "PR.PdkDeclarations":
+    # QUOTED on purpose. This module has no `from __future__ import
+    # annotations`, so a bare annotation is evaluated at def time and a tree
+    # without the adoption layer would die at COLLECTION — one module error
+    # in place of the per-test reds that are the whole point of running the
+    # new tests against the old sources.
+    lefs = PR.discover_io_lefs(str(root / "pdk"), "proc")
+    return PR.PdkDeclarations(
+        PR.discover_io_library_configs(str(root / "pdk"), "proc"),
+        masters=PR.IoLibrary(lefs).masters, **kw)
+
+
+# -- ADOPTION ---------------------------------------------------------------
+def test_the_pdk_declares_all_five_and_all_five_are_read(tmp_path):
+    """THE DEFECT, as a count. The file this step opens declares five of the
+    thirteen contract variables and this step read one key out of it."""
+    root = _project_pdk_declares_all_five(tmp_path)
+    d = _decls(root)
+    assert set(d.values) == set(PR.PDK_DECLARED_VARS)
+    assert {k: d.values[k] for k in _DECLARED} == _DECLARED
+    assert not d.conflicts and not d.rejected
+
+
+def test_an_adopted_value_is_cited_to_a_file_AND_a_line(tmp_path):
+    """A value with no provenance is a value somebody has to trust. The line
+    matters as much as the file: this config.tcl declares six variables, and a
+    reader sent to the file still has to find the one that was read."""
+    root = _project_pdk_declares_all_five(tmp_path)
+    d = _decls(root)
+    lines = _FULL_DECL.splitlines()
+    for var, src in d.sources.items():
+        path, _, line = src.rpartition(":")
+        assert path.endswith("proc_io/config.tcl"), src
+        # the cited line really is the line that declares it
+        assert lines[int(line) - 1].startswith(f"set ::env({var})"), src
+
+
+def test_a_project_that_declares_nothing_of_the_five_is_completed(tmp_path):
+    """The whole point: a config carrying only what the project can answer
+    reaches a PASS, because the PDK answered the rest out of its own file."""
+    only_ours = {k: v for k, v in _config().items()
+                 if k not in PR.PDK_DECLARED_VARS}
+    root = _project_pdk_declares_all_five(tmp_path, config=only_ours)
+    assert _gen(root) == 0, _report(root)["reason"]
+    rep, _ = CHK._unwrap(_report(root))
+    assert rep["verdict"] == "PASS"
+    assert sorted(rep["config"]["adopted_from_pdk"]) == sorted(
+        PR.PDK_DECLARED_VARS)
+    assert rep["config"]["PAD_CORNER"] == _DECLARED["PAD_CORNER"]
+    assert rep["config"]["PAD_EDGE_SPACING"] == float(
+        _DECLARED["PAD_EDGE_SPACING"])
+    assert _chk(root) == 0
+
+
+def test_an_adopted_ring_is_the_same_ring_the_project_would_have_declared(
+        tmp_path):
+    """Adoption changed WHERE the five values were read, and must not have
+    changed the geometry. Same die, same library, one config declaring the
+    five and one leaving them to the PDK: the placed ring is identical to the
+    DEF unit."""
+    only_ours = {k: v for k, v in _config().items()
+                 if k not in PR.PDK_DECLARED_VARS}
+    theirs = _project_pdk_declares_all_five(tmp_path / "a", config=only_ours)
+    ours = _project_pdk_declares_all_five(tmp_path / "b")
+    assert _gen(theirs) == 0 and _gen(ours) == 0
+    a, _ = CHK._unwrap(_report(theirs))
+    b, _ = CHK._unwrap(_report(ours))
+    assert a["pads"] == b["pads"]
+    assert a["corners"] == b["corners"]
+    assert a["fillers"] == b["fillers"]
+    assert a["spacing"] == b["spacing"]
+    # and the two reports differ in exactly the fact that one was adopted
+    assert a["config"]["adopted_from_pdk"] and not b["config"][
+        "adopted_from_pdk"]
+
+
+def test_a_project_that_agrees_is_not_counted_as_adopted(tmp_path):
+    """The project said the same thing. Its own word stands, nothing was
+    adopted, and a report that claimed otherwise would overstate what the PDK
+    supplied."""
+    root = _project_pdk_declares_all_five(tmp_path)
+    assert _gen(root) == 0, _report(root)["reason"]
+    rep, _ = CHK._unwrap(_report(root))
+    assert rep["config"]["adopted_from_pdk"] == []
+    # but the declarations were still READ and are still reported
+    assert set(rep["pdk_declarations"]["adopted"]) == set(
+        PR.PDK_DECLARED_VARS)
+
+
+def test_the_adoption_layer_invents_nothing(tmp_path):
+    """THE NEGATIVE CONTROL, and the one that makes the rest mean something.
+    Take the declaring file away and the five are not filled by anything —
+    there is no default for any of them in `_pad_ring`, so the run refuses
+    exactly as it did before this layer existed."""
+    only_ours = {k: v for k, v in _config().items()
+                 if k not in PR.PDK_DECLARED_VARS}
+    root = _project_pdk_declares_all_five(tmp_path, config=only_ours)
+    (root / "pdk/proc/libs.tech/someflow/proc_io/config.tcl").unlink()
+    assert not _decls(root).values
+    assert _gen(root) == 1
+    rep, _ = CHK._unwrap(_report(root))
+    assert "PAD_CONFIG_VARIABLE_ABSENT" in _rules(root), rep["reason"]
+    for var in PR.PDK_DECLARED_VARS:
+        assert var in rep["reason"]
+
+
+def test_pad_fillers_is_adopted_as_the_list_the_contract_declares(tmp_path):
+    """Upstream spells `PAD_FILLERS` as one whitespace-separated Tcl word and
+    this flow's contract spells it as a list. Splitting is a transcription
+    between two file formats: no element added, dropped or reordered."""
+    decl = _FULL_DECL.replace(
+        'set ::env(PAD_FILLERS) "pad_fill196"',
+        'set ::env(PAD_FILLERS) "pad_fill196 \\\n'
+        '                        pad_fill9"')
+    root = _project_pdk_declares_all_five(tmp_path, declaration=decl)
+    assert _decls(root).values["PAD_FILLERS"] == ["pad_fill196", "pad_fill9"]
+
+
+# -- REFUSAL ----------------------------------------------------------------
+def test_a_project_that_contradicts_the_pdk_is_refused_by_name(tmp_path):
+    """THE REFUSAL THAT PAYS. `PAD_EDGE_SPACING` was checked only for being a
+    non-negative number of microns, so a project could place a ring on a
+    spacing the PDK contradicts and find out at the shuttle's pad-mask stage —
+    a refusal several steps and one gate away from the two numbers that
+    disagree, with nothing in any artefact naming them."""
+    root = _project_pdk_declares_all_five(
+        tmp_path, config=_config(PAD_EDGE_SPACING=20))
+    assert _gen(root) == 1
+    assert "PAD_CONFIG_CONTRADICTS_PDK" in _rules(root)
+    rep, _ = CHK._unwrap(_report(root))
+    # BOTH numbers and the file:line, in the message. A refusal that named
+    # only one of them would send a reader to look for the other.
+    assert "20" in rep["reason"] and "10" in rep["reason"]
+    assert "config.tcl:" in rep["reason"]
+
+
+def test_every_one_of_the_five_can_be_contradicted(tmp_path):
+    """One refusal reached through one variable proves one variable. All five
+    are the IO library's, so all five must refuse."""
+    wrong = {"PAD_SITE_NAME": "other_site",
+             "PAD_CORNER_SITE_NAME": "other_corner_site",
+             "PAD_EDGE_SPACING": 20,
+             "PAD_CORNER": "pad_bidir",
+             "PAD_FILLERS": ["pad_bidir"]}
+    assert set(wrong) == set(PR.PDK_DECLARED_VARS)
+    for var, bad in wrong.items():
+        root = _project_pdk_declares_all_five(
+            tmp_path / var, config=_config(**{var: bad}))
+        assert _gen(root) == 1, var
+        assert "PAD_CONFIG_CONTRADICTS_PDK" in _rules(root), var
+        assert var in CHK._unwrap(_report(root))[0]["reason"], var
+
+
+def test_the_contradiction_refusal_is_load_bearing(tmp_path):
+    """The bidirectional control. Remove the one comparison and the
+    contradicting project is ACCEPTED — a ring placed on a spacing the PDK
+    contradicts, with a PASS on it. A test that cannot fail against the
+    pre-fix code proves nothing, so here is the pre-fix code."""
+    # The PDK declares 20 and the project declares 10. The DISAGREEMENT is
+    # what is under test, so it is put on the PDK's side of the fixture and
+    # not the project's: the project's 10 is the spacing this synthetic ring
+    # abuts at, so with the comparison removed the run reaches a full PASS
+    # rather than exiting 1 further down for an unrelated geometric reason.
+    # A control that dies of something else has not shown the guard is what
+    # made the refusal.
+    root = _project_pdk_declares_all_five(
+        tmp_path,
+        declaration=_FULL_DECL.replace('set ::env(PAD_EDGE_SPACING) "10"',
+                                       'set ::env(PAD_EDGE_SPACING) "20"'))
+    assert _gen(root) == 1
+    assert "PAD_CONFIG_CONTRADICTS_PDK" in _rules(root)
+
+    mutant = _mutant(tmp_path, "_pad_ring.py",
+                     "        if not _declarations_agree(var, have, "
+                     "declared):",
+                     "        if False:")
+    rc = subprocess.run(
+        [sys.executable, str(mutant / "pad_ring_gen.py"), str(root),
+         "--json", str(root / PR.REPORT_REL), *_pdk_args(root)],
+        capture_output=True, text=True)
+    assert rc.returncode == 0, rc.stdout + rc.stderr
+    mut_rep = json.loads((root / PR.REPORT_REL).read_text())
+    assert mut_rep["verdict"] == "PASS"
+    # and the ring it placed really is on the value the PDK contradicts
+    assert mut_rep["config"]["PAD_EDGE_SPACING"] == 10.0
+
+
+def test_a_spacing_that_differs_only_in_spelling_is_not_a_contradiction(
+        tmp_path):
+    """`PAD_EDGE_SPACING` is a NUMBER the PDK writes as a string. "10", 10 and
+    10.0 are one declaration, and refusing a project for the spelling would be
+    refusing it for nothing."""
+    for spelling in ("10", 10, 10.0):
+        root = _project_pdk_declares_all_five(
+            tmp_path / f"s{spelling}",
+            config=_config(PAD_EDGE_SPACING=spelling))
+        assert _gen(root) == 0, _report(root)["reason"]
+
+
+def test_fillers_in_another_order_are_not_a_contradiction(tmp_path):
+    """`PAD_FILLERS` is a SET of masters. The declaration order is the greedy
+    order `gap_is_fillable` chooses for itself anyway, so refusing a project
+    for listing the same fillers differently would be refusing it for
+    nothing."""
+    decl = _FULL_DECL.replace(
+        'set ::env(PAD_FILLERS) "pad_fill196"',
+        'set ::env(PAD_FILLERS) "pad_fill196 pad_fill9"')
+    root = _project_pdk_declares_all_five(
+        tmp_path, declaration=decl,
+        config=_config(PAD_FILLERS=["pad_fill9", "pad_fill196"]))
+    assert _gen(root) == 0, _report(root)["reason"]
+
+
+# -- RESTRAINT --------------------------------------------------------------
+def test_the_eight_only_the_project_can_answer_still_skip(tmp_path):
+    """The honest size of the ask. A project with NO config at all still
+    SKIPs with exit 2 — five of the eight it is asked for ARE the package
+    pin-out, and a pin-out this program chose would be indistinguishable in
+    the artefact from one somebody decided."""
+    root = _project_pdk_declares_all_five(tmp_path, config=None)
+    assert _gen(root) == 2
+    rep = _report(root)
+    cfg = [m for m in rep["missing_inputs"]
+           if m["path"] == PR.ASSIGNMENT_REL][0]
+    assert sorted(cfg["variables_from_pdk"]) == sorted(PR.PDK_DECLARED_VARS)
+    assert sorted(cfg["variables_absent"]) == sorted(
+        v for v in PR.REQUIRED_VARS if v not in PR.PDK_DECLARED_VARS)
+    assert len(cfg["variables_absent"]) == 8
+    # and the marker a reader standing in pnr/ finds says the same
+    assert (root / PR.PADRING_SKIPPED_REL).is_file()
+
+
+def test_the_adoption_set_is_a_subset_of_what_the_generator_delegates():
+    """`pad_assignment_gen.PDK_DELEGATED_VARS` answers a DIFFERENT question —
+    what a design's documents left to the PDK, for a config it then WRITES —
+    and it delegates eight, including the three rotations. This tuple answers
+    "what may this step adopt into a config somebody else wrote", and a
+    rotation adopted here would be adopted into a step that has measured it
+    cannot honour a non-default one. Pinned so the two never drift apart in
+    silence."""
+    sys.path.insert(0, str(PROGRAMS))
+    import pad_assignment_gen as PAG
+    assert set(PR.PDK_DECLARED_VARS) < set(PAG.PDK_DELEGATED_VARS)
+    assert set(PAG.PDK_DELEGATED_VARS) - set(PR.PDK_DECLARED_VARS) == {
+        "PAD_ROTATION_HORIZONTAL", "PAD_ROTATION_VERTICAL",
+        "PAD_ROTATION_CORNER"}
+    assert PR.PDK_LIST_VARS == PAG.PDK_LIST_VARS
+
+
+# -- WHAT THE PDK SAID THAT COULD NOT BE USED -------------------------------
+def test_two_libraries_declaring_one_variable_two_ways_adopt_neither(
+        tmp_path):
+    """The same refusal `site_declaration_conflicts` makes one level down, for
+    the same reason: resolving it by directory order would pick a corner
+    master out of a directory listing."""
+    other = _FULL_DECL.replace('set ::env(PAD_CORNER) "pad_corner"',
+                               'set ::env(PAD_CORNER) "pad_bidir"')
+    root = _project_pdk_declares_all_five(tmp_path, second=other)
+    d = _decls(root)
+    assert "PAD_CORNER" not in d.values
+    assert [c["value"] for c in d.conflicts["PAD_CORNER"]] == ["pad_corner",
+                                                              "pad_bidir"]
+    # the other four agree in both files and are still adopted
+    assert set(d.values) == set(PR.PDK_DECLARED_VARS) - {"PAD_CORNER"}
+
+
+def test_a_conflicted_variable_is_neither_adopted_nor_contradicted(tmp_path):
+    """A variable this step declined to resolve cannot be used to refuse the
+    project. Charging a project for the PDK's own ambiguity would make a
+    two-library tree unusable for a config that was never wrong."""
+    other = _FULL_DECL.replace('set ::env(PAD_CORNER) "pad_corner"',
+                               'set ::env(PAD_CORNER) "pad_bidir"')
+    root = _project_pdk_declares_all_five(
+        tmp_path, second=other, config=_config(PAD_CORNER="pad_corner"))
+    assert _gen(root) == 0, _report(root)["reason"]
+    rep, _ = CHK._unwrap(_report(root))
+    assert rep["config"]["adopted_from_pdk"] == []
+    assert "PAD_CORNER" in rep["pdk_declarations"]["conflicts"]
+
+
+def test_the_one_tcl_substitution_these_files_use_is_resolved(tmp_path):
+    """MEASURED in the pinned image: one open PDK writes its corner master as
+    `"$::env(PAD_CELL_LIBRARY)__cor"`. Upstream sets that variable to the
+    library whose config it is loading, which is the name of the DIRECTORY the
+    file sits in — read off the path, not guessed."""
+    d = tmp_path / "root/pdk/proc/libs.tech/someflow/pad_corner"
+    d.mkdir(parents=True)
+    (d / "config.tcl").write_text(
+        'set ::env(PAD_CORNER) "$::env(PAD_CELL_LIBRARY)"\n')
+    decls = PR.PdkDeclarations([d / "config.tcl"])
+    assert decls.values["PAD_CORNER"] == "pad_corner"
+    assert decls.sources["PAD_CORNER"].endswith(":1")
+
+
+def test_a_substitution_that_cannot_be_expanded_is_rejected_with_its_reason(
+        tmp_path):
+    """"The PDK said nothing" and "the PDK said something this step could not
+    expand" are different facts, and only the second one names a file to go
+    and read. A master name with a `$` in it would be looked up, not found,
+    and refused three steps later with the PDK blamed for it."""
+    decl = _FULL_DECL.replace('set ::env(PAD_CORNER) "pad_corner"',
+                              'set ::env(PAD_CORNER) "$::env(SOMETHING)_cor"')
+    root = _project_pdk_declares_all_five(tmp_path, declaration=decl)
+    d = _decls(root)
+    assert "PAD_CORNER" not in d.values
+    assert "$::env(SOMETHING)_cor" in d.rejected["PAD_CORNER"]
+    assert "config.tcl:" in d.rejected["PAD_CORNER"]
+
+
+def test_a_declaration_naming_a_master_the_library_does_not_carry_is_rejected(
+        tmp_path):
+    """Rejected HERE, where the file and line are still in hand, rather than
+    adopted and refused three steps later with the PDK blamed for it."""
+    decl = _FULL_DECL.replace('set ::env(PAD_CORNER) "pad_corner"',
+                              'set ::env(PAD_CORNER) "no_such_master"')
+    root = _project_pdk_declares_all_five(tmp_path, declaration=decl)
+    d = _decls(root)
+    assert "PAD_CORNER" not in d.values
+    assert "no_such_master" in d.rejected["PAD_CORNER"]
+    # and with no master to adopt, a project that leaves it out is refused
+    # for the ABSENCE — not completed with a name the library does not have
+    only_ours = {k: v for k, v in _config().items() if k != "PAD_CORNER"}
+    root2 = _project_pdk_declares_all_five(
+        tmp_path / "b", declaration=decl, config=only_ours)
+    assert _gen(root2) == 1
+    assert "PAD_CONFIG_VARIABLE_ABSENT" in _rules(root2)
+
+
+def test_the_declarations_block_is_on_every_verdict(tmp_path):
+    """An absent key and an empty one are different facts to a reader diffing
+    two reports, and only the empty one says "this step looked and the PDK
+    declared nothing"."""
+    skipped = _project(tmp_path / "skip", config=None)
+    assert _gen(skipped) == 2
+    passed = _project_pdk_declares_all_five(tmp_path / "pass")
+    assert _gen(passed) == 0
+    failed = _project_pdk_declares_all_five(
+        tmp_path / "fail", config=_config(PAD_EDGE_SPACING=20))
+    assert _gen(failed) == 1
+    for root, expect in ((skipped, False), (passed, True), (failed, True)):
+        rep, _ = CHK._unwrap(_report(root))
+        block = rep["pdk_declarations"]
+        assert list(block["declarable"]) == list(PR.PDK_DECLARED_VARS)
+        assert bool(block["adopted"]) is expect
+        assert bool(block["files_read"]) is expect

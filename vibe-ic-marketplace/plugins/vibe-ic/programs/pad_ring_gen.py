@@ -146,6 +146,20 @@ a bond diagram behind it — and a plausible guess is indistinguishable in the
 artefact from a real pin-out. So when the config is absent this program SKIPs,
 exits 2, and its report names the absent variables ONE BY ONE.
 
+IT WILL, HOWEVER, ADOPT WHAT THE PDK ALREADY DECLARED. Five of the thirteen
+are not the project's to answer: `PAD_SITE_NAME`, `PAD_CORNER_SITE_NAME`,
+`PAD_EDGE_SPACING`, `PAD_CORNER` and `PAD_FILLERS` are properties of the IO
+CELL LIBRARY, and the PDK declares all five in the same `config.tcl` this step
+already opens for `PAD_FAKE_SITES`. Asking an operator for a value that is on
+disk is not caution; it is a question with a known answer. So they are adopted
+from there via `_pad_ring.apply_pdk_declarations`, with the FILE AND LINE each
+came from recorded in `pdk_declarations`, and a project that CONTRADICTS one is
+REFUSED by name (`PAD_CONFIG_CONTRADICTS_PDK`) rather than silently overridden
+in either direction. THE EIGHT ONLY THE PROJECT CAN ANSWER — the four side
+lists, the three rotations, `SIGNAL_MAP` — still SKIP with exit 2, because five
+of those eight ARE the pin-out. That is the honest size of the ask, and it was
+thirteen.
+
 WHERE THIS BEATS UPSTREAM
 =========================
 Their TCL `exit 1`s with a line on stderr and no record. Every refusal here is
@@ -334,6 +348,13 @@ def _report(verdict: str, reason: str, **kw: Any) -> Dict[str, Any]:
         "inputs": {"floorplan_def": None, "pad_assignment": None},
         "io_cell_library": {"resolved": False, "lefs": [], "n_masters": 0,
                             "n_sites": 0, "pad_class_sites": []},
+        # What the PDK declared for itself, present on EVERY verdict including
+        # the ones reached before the PDK was read. An absent key and an empty
+        # one are different facts to a reader diffing two reports, and only
+        # the empty one says "this step looked and the PDK declared nothing".
+        "pdk_declarations": {"files_read": [], "adopted": {}, "sources": {},
+                             "conflicts": {}, "rejected": {},
+                             "declarable": list(PR.PDK_DECLARED_VARS)},
         "config": None,
         "die": None,
         "padring_def": None,
@@ -801,13 +822,30 @@ def main(argv: Optional[List[str]] = None) -> int:
     site_decls = PR.discover_io_site_declarations(args.pdk_root, args.pdk)
     lib = PR.IoLibrary(lefs, site_decls)
 
+    # What the PDK declares for itself. Same discipline as the site table one
+    # line up: read from the PDK and nowhere else, `--io-lef` cannot supply it,
+    # and the masters the library actually carries are handed in so a
+    # declaration naming a cell that is not there is REJECTED here rather than
+    # adopted and refused three steps later with the PDK blamed for it.
+    decls = PR.PdkDeclarations(
+        PR.discover_io_library_configs(args.pdk_root, args.pdk),
+        masters=lib.masters)
+    pdk_supplied = sorted(decls.values)
+
     # ── the SKIP branch: name the absent variables one by one ──────────────
     missing: List[Dict[str, Any]] = []
     if not fp_path.is_file():
         missing.append({"input": "floorplan DEF", "path": PR.FLOORPLAN_DEF_REL})
     if not asg_path.is_file():
+        # WHAT IS STILL ABSENT IS NOT THE WHOLE CONTRACT. Five of the thirteen
+        # are properties of the IO cell library and the PDK declares them in
+        # the file this step already opens; listing those five back to an
+        # operator as questions to answer is asking for a value that is on
+        # disk. What is reported absent is what only the project can answer.
         missing.append({"input": "pad ring config", "path": PR.ASSIGNMENT_REL,
-                        "variables_absent": list(PR.REQUIRED_VARS)})
+                        "variables_absent": [v for v in PR.REQUIRED_VARS
+                                             if v not in decls.values],
+                        "variables_from_pdk": pdk_supplied})
     else:
         # THE SPLIT BETWEEN SKIP AND FAIL, stated once. A config file that
         # declares NOTHING is an ABSENT INPUT — the state this flow is in
@@ -824,9 +862,18 @@ def main(argv: Optional[List[str]] = None) -> int:
             gone = [v for v in PR.REQUIRED_VARS
                     if raw.get(v) is None or raw.get(v) == ""]
             if len(gone) == len(PR.REQUIRED_VARS):
+                # THE SKIP/FAIL SPLIT IS UNCHANGED and is still decided on the
+                # PROJECT's own object: a config declaring SOME of the contract
+                # is malformed and FAILs below, whether or not the PDK could
+                # have supplied the rest. What the PDK declares changes only
+                # which variables are REPORTED as still undecided — the
+                # difference between telling an operator to answer thirteen
+                # questions and telling them to answer the ones only they can.
                 missing.append({"input": "pad ring config",
                                 "path": PR.ASSIGNMENT_REL,
-                                "variables_absent": gone})
+                                "variables_absent": [v for v in gone
+                                                     if v not in decls.values],
+                                "variables_from_pdk": pdk_supplied})
     if not lib.resolved:
         missing.append({"input": "PDK IO cell library",
                         "path": "<PDK_ROOT>/<tree>/libs.ref/*io*/lef/*.lef"})
@@ -850,6 +897,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         )
         rep = _report("SKIP", reason, missing_inputs=missing,
                       io_cell_library=lib.as_dict(),
+                      pdk_declarations=decls.as_dict(),
                       inputs={"floorplan_def": (PR.FLOORPLAN_DEF_REL
                                                 if fp_path.is_file() else None),
                               "pad_assignment": (PR.ASSIGNMENT_REL
@@ -864,6 +912,9 @@ def main(argv: Optional[List[str]] = None) -> int:
             print(f"  absent input: {m['path']}  ({m['input']})")
             for v in m.get("variables_absent", []):
                 print(f"      absent variable: {v}")
+            for v in m.get("variables_from_pdk", []):
+                print(f"      from PDK:        {v} "
+                      f"({decls.sources.get(v)})")
         print(f"  no padring.def was written — see {PR.PADRING_SKIPPED_REL} "
               f"and {PR.REPORT_REL}")
         return 2
@@ -874,6 +925,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     def _fail(rule: str, message: str, **kw: Any) -> int:
         rep = _report("FAIL", f"{rule}: {message}", inputs=inputs,
                       io_cell_library=lib.as_dict(),
+                      pdk_declarations=decls.as_dict(),
                       findings=[_finding("ERROR", rule, message)], **kw)
         _write(project, args.json, rep)
         print(f"=== {PROGRAM} ({project.name}) ===")
@@ -903,8 +955,19 @@ def main(argv: Optional[List[str]] = None) -> int:
             die=die_rec)
 
     try:
-        cfg = PR.validate_assignment(json.loads(
-            asg_path.read_text(errors="replace")))
+        raw_cfg = json.loads(asg_path.read_text(errors="replace"))
+        # ADOPTION HAPPENS BEFORE VALIDATION, and it has to. `PAD_CORNER` left
+        # out of the project's config is `PAD_CONFIG_VARIABLE_ABSENT` to
+        # `validate_assignment`, so a config the PDK could complete would be
+        # refused for a variable the PDK answers. Ordering it the other way
+        # would make the adoption unreachable on exactly the configs it exists
+        # for. A CONTRADICTION raised here is an `AssignmentError` like any
+        # other and lands in the same `_fail` below, with its own rule.
+        if isinstance(raw_cfg, dict):
+            raw_cfg, adopted_vars = PR.apply_pdk_declarations(raw_cfg, decls)
+        else:
+            adopted_vars = []
+        cfg = PR.validate_assignment(raw_cfg)
     except PR.AssignmentError as exc:
         return _fail(exc.rule, f"{PR.ASSIGNMENT_REL}: {exc.message}",
                      die=die_rec)
@@ -945,7 +1008,8 @@ def main(argv: Optional[List[str]] = None) -> int:
             f"proceed on the placer's own measured orientation "
             f"({ROTATION_VERTICAL_NOT_HONOURED['measured_orientation']}).")
         rep = _report("SKIP", reason, inputs=inputs,
-                      io_cell_library=lib.as_dict(), die=die_rec,
+                      io_cell_library=lib.as_dict(),
+                      pdk_declarations=decls.as_dict(), die=die_rec,
                       missing_inputs=[{
                           "input": "a pad rotation this step implements",
                           "path": PR.ASSIGNMENT_REL,
@@ -972,6 +1036,13 @@ def main(argv: Optional[List[str]] = None) -> int:
         "rotation": cfg["rotation"],
         "pads_per_side": {PR.SIDE_VAR[s]: len(cfg["sides"][s])
                           for s in PR.SIDES},
+        # Which of the five PDK-scoped variables this run did NOT get from the
+        # project. Recorded here, next to the values themselves, and not only
+        # in `pdk_declarations`, so a reader of the config block can see that
+        # a value came from the PDK without cross-referencing another block.
+        # A variable the project declared and the PDK agrees with is NOT here:
+        # nothing was adopted, the project's own word stands.
+        "adopted_from_pdk": list(adopted_vars),
     }
     # Filled by the site lookups below, so the artefact says which PDK view
     # each of the two sites was resolved from rather than leaving a reader to
@@ -1066,6 +1137,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     if errors:
         rep = _report("FAIL", f"{errors[0]['rule']}: {errors[0]['message']}",
                       inputs=inputs, io_cell_library=lib.as_dict(),
+                      pdk_declarations=decls.as_dict(),
                       die=die_rec, config=cfg_rec, pads=pads, corners=corners,
                       abutment=abut, spacing=spacing,
                       fillers_declared=cfg["fillers"], findings=findings)
@@ -1110,7 +1182,8 @@ def main(argv: Optional[List[str]] = None) -> int:
             errors = [findings[-1]]
         rep = _report(
             "FAIL", f"{errors[0]['rule']}: {errors[0]['message']}",
-            inputs=inputs, io_cell_library=lib.as_dict(), die=die_rec,
+            inputs=inputs, io_cell_library=lib.as_dict(),
+            pdk_declarations=decls.as_dict(), die=die_rec,
             config=cfg_rec, pads=pads, corners=corners, fillers=fillers,
             abutment=abut, spacing=spacing,
             fillers_declared=cfg["fillers"],
@@ -1159,7 +1232,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         f"`{PR.ASSIGNMENT_REL}` onto the die declared by "
         f"`{PR.FLOORPLAN_DEF_REL}`, by upstream's own spacing algorithm; "
         f"every adjacent ring cell physically touches in the emitted DEF",
-        inputs=inputs, io_cell_library=lib.as_dict(), die=die_rec,
+        inputs=inputs, io_cell_library=lib.as_dict(),
+        pdk_declarations=decls.as_dict(), die=die_rec,
         config=cfg_rec, padring_def=PR.PADRING_DEF_REL, pads=pads,
         corners=corners, fillers=fillers, abutment=abut, spacing=spacing,
         fillers_declared=cfg["fillers"],
@@ -1173,6 +1247,10 @@ def main(argv: Optional[List[str]] = None) -> int:
     print(f"  abuts:   {abut['abuts']}  (filler widths "
           f"{abut['filler_widths_dbu']} DEF units)")
     print(f"  bterms:  {bterms['covered']}/{bterms['total']} covered")
+    if adopted_vars:
+        print(f"  from PDK: {', '.join(adopted_vars)}")
+        for v in adopted_vars:
+            print(f"      {v} = {cfg_rec.get(v)!r}  ({decls.sources.get(v)})")
     print(f"  wrote:   {PR.PADRING_DEF_REL}")
     return 0
 

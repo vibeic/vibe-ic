@@ -744,6 +744,192 @@ def discover_io_library_configs(pdk_root: Optional[str] = None,
     return found
 
 
+# ── the PDK-adoption layer ──────────────────────────────────────────────────
+#: The five variables of `REQUIRED_VARS` that are properties of the IO CELL
+#: LIBRARY rather than of the project: the two site names, the corner and
+#: filler MASTERS, and the die-edge-to-IO-row distance. Every one of them is
+#: answered by the same `libs.tech/*/*io*/config.tcl` this module already opens
+#: for `PAD_FAKE_SITES` — `parse_pad_env_declarations` returns them today and
+#: nothing consumed them, so the file transcribed two of the answers into its
+#: own header and still asked an operator for all five.
+#:
+#: THE DOCTRINE IS THE ONE THIS MODULE ALREADY STATES FOR SITES, unchanged:
+#: only the PDK may declare these, they are read out of a PDK file and nowhere
+#: else, and there is no default for any of them anywhere in this file. What
+#: is added is that a declaration is USED rather than transcribed, and that a
+#: project CONTRADICTING one is REFUSED instead of silently preferred.
+#:
+#: WHAT IS DELIBERATELY NOT HERE is the other eight: the four side lists, the
+#: three rotations and `SIGNAL_MAP`. Five of those eight ARE the package
+#: pin-out, and a pin-out this program chose would be indistinguishable in the
+#: artefact from one somebody decided. They stay the caller's SKIP branch.
+#:
+#: The three rotations are the near miss and are excluded on their own
+#: grounds: `pad_assignment_gen.PDK_DELEGATED_VARS` DOES delegate them, because
+#: that program answers "what did the design's documents leave to the PDK" for
+#: a config it then WRITES. This tuple answers a different question — "what may
+#: this step adopt into a config somebody else wrote" — and a rotation adopted
+#: here would be adopted into a step that has measured it cannot honour a
+#: non-default one (see `SIDE_ORIENT`). `PDK_DECLARED_VARS` is therefore a
+#: strict subset of `PDK_DELEGATED_VARS`, and
+#: `test_the_adoption_set_is_a_subset_of_what_the_generator_delegates` says so
+#: rather than leaving the two tuples to drift.
+PDK_DECLARED_VARS: Tuple[str, ...] = (
+    "PAD_SITE_NAME", "PAD_CORNER_SITE_NAME", "PAD_EDGE_SPACING",
+    "PAD_CORNER", "PAD_FILLERS",
+)
+
+#: Variables upstream spells as one whitespace-separated Tcl word and this
+#: flow's config contract spells as a list. Splitting on whitespace is a
+#: TRANSCRIPTION between two file formats; no element is added, dropped or
+#: reordered.
+PDK_LIST_VARS: Tuple[str, ...] = ("PAD_FILLERS",)
+
+#: The ONE Tcl substitution resolved here, and the reason it can be: upstream
+#: sets `PAD_CELL_LIBRARY` to the library whose config it is loading, so the
+#: expansion is the name of the DIRECTORY the file sits in — read off the
+#: path, not guessed. MEASURED in the pinned image: one open PDK writes its
+#: corner master as `"$::env(PAD_CELL_LIBRARY)__cor"`, which
+#: `parse_pad_env_declarations` correctly refuses to return as a literal and
+#: `parse_pad_env_unresolved` hands over instead.
+#:
+#: Anything ELSE still carrying a `$` or a `[` after this one expansion is NOT
+#: adopted. It is recorded in `rejected` with the raw text, because "the PDK
+#: said nothing" and "the PDK said something this step could not expand" are
+#: different facts and only the second one names a file to go and read.
+_CELL_LIB_REF = "$::env(PAD_CELL_LIBRARY)"
+
+
+def _pdk_library_name(cfg: Path) -> str:
+    """The IO cell library a TECH-view config belongs to: its directory.
+
+    `discover_io_library_configs` finds these at
+    `<tree>/libs.tech/<flow>/<library>/config.tcl` and matches the `io` token
+    on `<library>`, so the parent directory IS the library name — the same
+    string upstream's `PAD_CELL_LIBRARY` holds while it loads that file.
+    """
+    return cfg.parent.name
+
+
+def _coerce_declared(var: str, value: str) -> object:
+    return [tok for tok in value.split() if tok] if var in PDK_LIST_VARS \
+        else value
+
+
+class PdkDeclarations:
+    """What the PDK itself declares for `PDK_DECLARED_VARS`, and what it did
+    not get to declare.
+
+    Built on this module's EXISTING parser — `parse_pad_env_declarations` for
+    the literals and `parse_pad_env_unresolved` for the values carrying a Tcl
+    substitution — so there is exactly one `set ::env(PAD_*)` reader in this
+    file and the line number that reader already carries is used, rather than
+    a second parser that would have to be kept agreeing with the first.
+
+    Four states, kept apart because they are four different facts:
+
+        values      adopted — one PDK file declared it, resolvably
+        sources     `<file>:<line>` each adopted value came from. The LINE is
+                    carried because a config.tcl declares six variables and a
+                    reader sent to the file still has to find the one that
+                    was read
+        conflicts   two IO libraries declared it differently. NOT adopted:
+                    resolving that by directory order would pick a master or a
+                    spacing out of a directory listing, which is the same
+                    error `site_declaration_conflicts` refuses one level down
+        rejected    declared, but not usable — a substitution this module does
+                    not expand, or a master name the IO library does not
+                    carry. Recorded WITH its reason rather than dropped
+    """
+
+    def __init__(self, files: Sequence[Path] = (),
+                 masters: Optional[Dict[str, Tuple[float, float]]] = None):
+        self.files: List[Path] = list(files)
+        self.values: Dict[str, object] = {}
+        self.sources: Dict[str, str] = {}
+        self.conflicts: Dict[str, List[Dict[str, object]]] = {}
+        self.rejected: Dict[str, str] = {}
+        self.files_read: List[str] = []
+
+        for cfg in self.files:
+            try:
+                text = cfg.read_text(errors="replace")
+            except OSError:
+                continue
+            self.files_read.append(str(cfg))
+            for var, value, line in self._candidates(cfg, text):
+                self._offer(cfg, var, value, line, masters)
+
+    # -- reading -----------------------------------------------------------
+    def _candidates(self, cfg: Path, text: str):
+        """`(var, coerced value, line)` for every `PDK_DECLARED_VARS` entry
+        this file resolvably declares; the unresolvable ones go to `rejected`
+        on the way past."""
+        literals = parse_pad_env_declarations(text)
+        for var in PDK_DECLARED_VARS:
+            if var in literals:
+                raw, line = literals[var]
+                if raw:
+                    yield var, _coerce_declared(var, raw), line
+                continue
+            unresolved = parse_pad_env_unresolved(text).get(var)
+            if unresolved is None:
+                continue                       # absent: reported by absence
+            raw, line = unresolved
+            expanded = raw.replace(_CELL_LIB_REF, _pdk_library_name(cfg))
+            if _TCL_SUBST_RE.search(expanded):
+                self.rejected[var] = (
+                    f"declared in {cfg}:{line} as {raw!r}, whose value still "
+                    f"carries a Tcl substitution after the one expansion this "
+                    f"step performs — only Tcl knows what it becomes, and a "
+                    f"master name with a '$' in it would be looked up, not "
+                    f"found, and refused three steps later with the PDK "
+                    f"blamed for it")
+                continue
+            yield var, _coerce_declared(var, expanded), line
+
+    def _offer(self, cfg: Path, var: str, value: object, line: int,
+               masters: Optional[Dict[str, Tuple[float, float]]]) -> None:
+        if masters is not None and var in ("PAD_CORNER", "PAD_FILLERS"):
+            named = ([value] if isinstance(value, str)
+                     else list(value))  # type: ignore[arg-type]
+            unknown = [m for m in named if m not in masters]
+            if unknown:
+                self.rejected[var] = (
+                    f"declared in {cfg}:{line} as {value!r}, but the IO cell "
+                    f"library carries no master named "
+                    f"{', '.join(repr(u) for u in unknown)} — a declaration "
+                    f"this step cannot resolve to a cell is not adopted")
+                return
+        source = f"{cfg}:{line}"
+        if var in self.conflicts:
+            self.conflicts[var].append({"value": value, "declared_in": source})
+            return
+        if var not in self.values:
+            self.values[var] = value
+            self.sources[var] = source
+            return
+        if self.values[var] != value:
+            # Two IO libraries, two answers. NEITHER is adopted.
+            self.conflicts[var] = [
+                {"value": self.values[var],
+                 "declared_in": self.sources[var]},
+                {"value": value, "declared_in": source}]
+            self.values.pop(var, None)
+            self.sources.pop(var, None)
+
+    # -- reporting ---------------------------------------------------------
+    def as_dict(self) -> Dict[str, object]:
+        return {"files_read": list(self.files_read),
+                "adopted": {k: self.values[k] for k in sorted(self.values)},
+                "sources": {k: self.sources[k] for k in sorted(self.sources)},
+                "conflicts": {k: self.conflicts[k]
+                              for k in sorted(self.conflicts)},
+                "rejected": {k: self.rejected[k]
+                             for k in sorted(self.rejected)},
+                "declarable": list(PDK_DECLARED_VARS)}
+
+
 #: A site the PDK's TECH view declares is CLASS PAD. Not a preference:
 #: MEASURED by driving `make_fake_io_site` and dumping the database — see this
 #: module's header. Named so the constant carries the reason.
@@ -897,6 +1083,82 @@ class AssignmentError(ValueError):
         super().__init__(message)
         self.rule = rule
         self.message = message
+
+
+#: How a project value and a PDK declaration are compared, PER VARIABLE. Not
+#: one rule for all five, because the five are not one kind of thing:
+#: `PAD_EDGE_SPACING` is a NUMBER written as a string, so "26", 26 and 26.0 are
+#: one declaration and refusing a project for the spelling would be refusing it
+#: for nothing; `PAD_FILLERS` is a SET of masters whose declaration order is
+#: the greedy order `gap_is_fillable` chooses for itself anyway. Everything
+#: else is a name, and a name is itself.
+def _declarations_agree(var: str, project: object, pdk: object) -> bool:
+    if var == "PAD_EDGE_SPACING":
+        try:
+            return float(project) == float(pdk)  # type: ignore[arg-type]
+        except (TypeError, ValueError):
+            return str(project).strip() == str(pdk).strip()
+    if var in PDK_LIST_VARS:
+        if isinstance(project, str):
+            project = project.split()
+        if not isinstance(project, (list, tuple)):
+            return False
+        pdk_list = (pdk.split() if isinstance(pdk, str)
+                    else list(pdk))  # type: ignore[arg-type]
+        return set(map(str, project)) == set(map(str, pdk_list))
+    return str(project).strip() == str(pdk).strip()
+
+
+def apply_pdk_declarations(
+        obj: Dict[str, object],
+        decls: "PdkDeclarations") -> Tuple[Dict[str, object], List[str]]:
+    """Fill the PDK-declared variables the project left out, and REFUSE the
+    ones it contradicts. Returns `(merged config, adopted variable names)`.
+
+    The whole doctrine, in three lines of behaviour:
+
+      * the project said NOTHING and the PDK declared it -> ADOPTED, with the
+        file and line recorded in the report. Not an invention: the value came
+        out of a PDK file and there is no default for it anywhere in this
+        module.
+      * the project said the SAME thing -> left exactly as the project wrote
+        it, and NOT counted as adopted. A project is not overwritten by a value
+        it already agrees with, and a report that called that an adoption would
+        overstate what the PDK supplied.
+      * the project said something ELSE -> `PAD_CONFIG_CONTRADICTS_PDK`.
+
+    The third is the one that pays. Before this, `PAD_EDGE_SPACING` was checked
+    only for being a non-negative number of microns, so a project could declare
+    a spacing the PDK contradicts, place a ring on it, and find out at the
+    shuttle's pad-mask stage — a refusal several steps and one gate away from
+    the two numbers that disagree, with nothing in any artefact naming them.
+
+    A variable in `decls.conflicts` or `decls.rejected` is in NEITHER branch:
+    it was not adopted, so there is nothing to fill and nothing to contradict.
+    That is deliberate. Refusing a project against a declaration this step
+    itself declined to resolve would charge the project for the PDK's
+    ambiguity.
+    """
+    merged = dict(obj)
+    adopted: List[str] = []
+    for var in PDK_DECLARED_VARS:
+        if var not in decls.values:
+            continue
+        declared = decls.values[var]
+        have = merged.get(var)
+        if have is None or have == "" or have == []:
+            merged[var] = declared
+            adopted.append(var)
+            continue
+        if not _declarations_agree(var, have, declared):
+            raise AssignmentError(
+                "PAD_CONFIG_CONTRADICTS_PDK",
+                f"{var}={have!r} contradicts the PDK's own declaration "
+                f"{declared!r} in {decls.sources.get(var)} — this variable is "
+                f"a property of the IO cell library, not of the project, and "
+                f"a ring placed on the project's value would be refused by "
+                f"the shuttle against the library's")
+    return merged, adopted
 
 
 def validate_assignment(obj: object) -> Dict[str, object]:
