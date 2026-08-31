@@ -1297,6 +1297,115 @@ def _scan_chunks(read, layout_cands=(), block: int = _READ_BLOCK,
     return nonempty, is_drc, classification, cited
 
 
+# ---------------------------------------------------------------------------
+# v1.14.6 — A COMPLETE KLAYOUT REPORT DATABASE *IS* A STATED VIOLATION COUNT.
+#
+# `DRC_NO_VERDICT_IN_SCOPE` exists because geometry is not a verdict: a checker
+# that died before running leaves a layout worth checking and no result, and
+# calling that clean is the defect this gate was built to refuse. That reasoning
+# is right and is untouched here.
+#
+# But KLayout does not state its result in prose. It writes a report database,
+# and the result IS the `<item>` list: an empty `<items></items>` is KLayout
+# SAYING zero, in the only dialect KLayout says anything in. This gate scanned
+# such a file for a textual count, found none, and refused a scope in which the
+# sign-off deck had in fact reported.
+#
+# MEASURED on spm x gf180mcuD, plugin v1.14.5, image sha256:fad41245fbff
+# (2026-08-31), reports/phase3/drc_signoff.rpt:
+#     <generator>drc: script='/foss/pdks/gf180mcuD/.../gf180mcu.drc'</generator>
+#     <top-cell>spm</top-cell>
+#     763 <category> elements      <- the whole deck was loaded and enumerated
+#     <items></items>              <- ZERO violations, stated
+# while the run's own `drc` step independently reported `violations=0`. The gate
+# returned INCONCLUSIVE, step 31 FAILed, and NINE downstream steps went
+# PASS_VOIDED_BY_DEPENDENCY on a design whose DRC was clean.
+#
+# THE FOUR GUARDS ARE THE WHOLE SAFETY ARGUMENT, and each one is exactly what
+# separates this file from the Magic casualty the refusal was written for (a
+# 0-byte report and `<top-cell>UNKNOWN`):
+#   1. the closing `</report-database>` is present  -> not truncated mid-write;
+#   2. `<generator>` names a deck                   -> we know WHICH rules ran;
+#   3. `<top-cell>` names a real cell               -> it checked a subject;
+#   4. at least one `<category>`                    -> the deck was enumerated.
+# A file failing ANY of them yields no count and the refusal stands untouched.
+#: chip-AGNOSTIC: KLayout RDB grammar only.
+_RDBV_OPEN_RE = re.compile(r"<report-database\b")
+_RDBV_CLOSE_RE = re.compile(r"</report-database>")
+_RDBV_DECK_RE = re.compile(r"<generator>\s*drc:\s*script\s*=\s*'([^']*)'", re.I)
+_RDBV_TOPCELL_RE = re.compile(r"<top-cell>([^<]*)</top-cell>")
+_RDBV_CATEGORY_RE = re.compile(r"<category>")
+_RDBV_ITEM_RE = re.compile(r"<item>")
+_RDBV_TOPCELL_REFUSED = ("", "unknown", "none", "null")
+
+
+#: Bounded like every other reader in this program. `test_drc_vacuous_streaming
+#: _bounded` exists because a whole-file `read_text` on a multi-GB sign-off
+#: report overran the per-gate budget and got the step KILLED, so it never
+#: reached a verdict at all. A new reader that materialises the file would
+#: reintroduce exactly that, and the first draft of this one did — the pin
+#: caught it (`assert 32528 < 20480`). Head, streamed body, tail.
+_RDBV_HEAD_BYTES = 65536
+_RDBV_TAIL_BYTES = 4096
+_RDBV_CHUNK = 1 << 20
+_RDBV_OVERLAP = 64          # longest token here is far shorter than this
+
+
+def rdb_stated_violation_count(fp: "Path") -> Optional[int]:
+    """The `<item>` count of a COMPLETE KLayout report database, else None.
+
+    None, never 0 — the caller's whole contract is that "could not read" and
+    "read zero" are different facts, so a database failing any of the four
+    guards returns nothing at all and leaves the refusal in place.
+    """
+    try:
+        size = fp.stat().st_size
+        with fp.open("rb") as fh:
+            head = fh.read(_RDBV_HEAD_BYTES).decode("utf-8", "ignore")
+            if not _RDBV_OPEN_RE.search(head):
+                return None
+            deck = _RDBV_DECK_RE.search(head)
+            if deck is None or not deck.group(1).strip():
+                return None
+            top = _RDBV_TOPCELL_RE.search(head)
+            if top is None or top.group(1).strip().lower() in _RDBV_TOPCELL_REFUSED:
+                return None
+            # The closing tag, from the TAIL — a database truncated mid-write
+            # (the Magic-casualty shape) has no closing tag and is refused.
+            fh.seek(max(0, size - _RDBV_TAIL_BYTES))
+            if not _RDBV_CLOSE_RE.search(fh.read().decode("utf-8", "ignore")):
+                return None
+            # Streamed count, fixed window, overlap so a token split across a
+            # chunk boundary is still seen exactly once.
+            fh.seek(0)
+            items = 0
+            categories = 0
+            carry = ""
+            # A MATCH IS COUNTED WHERE IT STARTS. Counting `buf[:cut]` and the
+            # carry as two separate strings splits any token straddling `cut`
+            # and counts it in NEITHER — measured on a 228-byte database whose
+            # single `<category>` sat across the boundary, which made a complete
+            # report read as "no deck enumerated". Accepting a match whose START
+            # is before `cut` counts it exactly once: the carry begins inside
+            # that token, so the next round cannot see it again.
+            while True:
+                block = fh.read(_RDBV_CHUNK)
+                buf = carry + block.decode("utf-8", "ignore")
+                last = not block
+                cut = len(buf) if last else max(0, len(buf) - _RDBV_OVERLAP)
+                items += sum(1 for m in _RDBV_ITEM_RE.finditer(buf)
+                             if m.start() < cut)
+                categories += sum(1 for m in _RDBV_CATEGORY_RE.finditer(buf)
+                                  if m.start() < cut)
+                if last:
+                    break
+                carry = buf[cut:]
+    except OSError:
+        return None
+    if not categories:
+        return None
+    return items
+
 def _scan_report_file(fp: Path,
                       layout_cands=()) -> Tuple[bool, bool, dict, set]:
     """Stream one DRC report file. Opens with the SAME locale-default encoding +
@@ -1355,6 +1464,20 @@ def audit(path: Path, layout: Optional[Path] = None,
         # derives the identical facts from a fixed window (see its module note).
         try:
             nonempty, is_drc, c, cited = _scan_report_file(fp, layout_cands)
+            # The textual scan does not speak KLayout. If it parsed no count
+            # and this file is a COMPLETE report database, take the count the
+            # database states. Only ever FILLS a gap: a textual count already
+            # parsed is left exactly as it was.
+            if c.get("zero_count") is not True and not c.get("nonzero_count"):
+                _rdb_n = rdb_stated_violation_count(fp)
+                if _rdb_n is not None:
+                    is_drc = True
+                    c = dict(c)
+                    c["rdb_item_count"] = _rdb_n
+                    if _rdb_n == 0:
+                        c["zero_count"] = True
+                    else:
+                        c["nonzero_count"] = _rdb_n
         except OSError:
             result.findings.append(Finding(
                 rule="DRC_LOG_READABLE", severity="ERROR",
