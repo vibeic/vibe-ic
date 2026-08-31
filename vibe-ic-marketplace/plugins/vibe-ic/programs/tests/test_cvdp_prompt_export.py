@@ -6,19 +6,28 @@ A hand-rolled `{id, prompt}`-only export drops `input.context`, leaving the
 blind author to re-invent an interface the hidden harness rejects. This program
 is the input-side sole-source that keeps context.
 
-POSITIVE: a record WITH input.context → exported record carries `context` with
-the exact rtl files; a from-scratch record (no context) → just `{id, prompt}`.
-NEGATIVE no-leak: the GOLDEN `output.response` / `output.context` is NEVER
-exported (clean-room — only the problem's own GIVEN input may pass through).
+POSITIVE: a record WITH input.context preserves it, and the response file-path
+keys shown by the official question are exported as a sanitized routing contract.
+NEGATIVE no-leak: GOLDEN VALUES and the harness are never exported.
 chip-AGNOSTIC: synthetic records only.
 """
+import importlib.util
 import json
 import sys
 from pathlib import Path
 
 HARNESS = Path(__file__).resolve().parent.parent.parent / "benchmark"
-sys.path.insert(0, str(HARNESS))
-import cvdp_prompt_export as EX  # noqa: E402
+# Import the module-under-test by FILE PATH, never by bare name: in a
+# two-tree session a same-named module from the other tree may already sit
+# in sys.modules, and a bare import would silently bind these assertions to
+# the OTHER tree's code (measured: exactly the 2 prompt-export tests red in
+# the two-tree arm). Same hermetic pattern as
+# test_gate_never_reinjects_a_harness_staged_module._gate().
+_spec = importlib.util.spec_from_file_location(
+    "cvdp_prompt_export_under_test", HARNESS / "cvdp_prompt_export.py")
+EX = importlib.util.module_from_spec(_spec)
+assert _spec.loader is not None
+_spec.loader.exec_module(EX)
 
 _CTX_REC = {
     "id": "cvdp_copilot_lfsr_0007",
@@ -55,6 +64,8 @@ def test_context_record_preserves_input_context(tmp_path):
     assert "context" in r, "input.context RTL must be preserved, not stripped"
     assert r["context"] == {
         "rtl/lfsr_8bit.sv": "module lfsr_8bit(input clk, output reg [7:0] q); endmodule"}
+    assert r["response_contract"] == {
+        "files": ["rtl/lfsr_8bit.sv"], "schema": "direct_text"}
 
 
 def test_golden_and_harness_never_leak(tmp_path):
@@ -66,8 +77,9 @@ def test_golden_and_harness_never_leak(tmp_path):
     assert "GOLDEN SOLUTION MUST NOT LEAK" not in blob
     assert "...golden..." not in blob
     assert "HARNESS MUST NOT LEAK" not in blob
-    # exported record carries ONLY id, prompt, context
-    assert set(recs[0].keys()) <= {"id", "prompt", "context"}
+    # Path keys are public routing metadata; reference values remain absent.
+    assert set(recs[0].keys()) <= {
+        "id", "prompt", "context", "response_contract"}
 
 
 def test_scratch_record_has_no_context_key(tmp_path):
@@ -76,6 +88,23 @@ def test_scratch_record_has_no_context_key(tmp_path):
     assert n_total == 1 and n_ctx == 0
     assert "context" not in recs[0]
     assert set(recs[0].keys()) == {"id", "prompt"}
+
+
+def test_multifile_response_contract_exports_paths_and_schema_only(tmp_path):
+    rec = {
+        "id": "cvdp_copilot_pair_0001",
+        "input": {"prompt": "Complete both modules.", "context": {}},
+        "output": {"context": {
+            "rtl/top.sv": "GOLDEN TOP MUST NOT LEAK",
+            "rtl/helper.sv": "GOLDEN HELPER MUST NOT LEAK",
+        }},
+    }
+    ds = _write(tmp_path, [rec])
+    exported, _, _ = EX.export_records(ds)
+    assert exported[0]["response_contract"] == {
+        "files": ["rtl/top.sv", "rtl/helper.sv"], "schema": "code_map"}
+    blob = json.dumps(exported)
+    assert "GOLDEN TOP" not in blob and "GOLDEN HELPER" not in blob
 
 
 def test_dict_branch_unwraps_content_wrapper_no_reblind(tmp_path):

@@ -1,16 +1,17 @@
 """cvdp_gate must SPLIT a single concatenated RTL blob into one file per
-expected path for a MULTI-FILE problem (the dataset's output.context lists >1
-rtl/*.sv), so the official scorer does not write the whole blob into EACH
+response path for a MULTI-FILE problem (the scorer-visible response contract
+lists >1 rtl/*.sv), so the official scorer does not write the whole blob into EACH
 expected slot → duplicate-module compile FAIL.
 
 Root cause of 7 residual failures in the CVDP convergence campaign
 (axis_border_gen_0014, elevator_control_0006/0026, huffman_0001,
 ping_pong_buffer_0001, …): a multi-file deliverable emitted as one .sv.
 
-No-leak: a SINGLE-file problem (or no --dataset / incomplete split) is emitted
-bare, unchanged — the split NEVER activates without an authoritative complete
-expected-file match.
+No-leak: only response file KEYS shown in the official question are consumed;
+reference solution values are never read. A single-file/unknown contract stays
+bare.
 """
+import importlib.util
 import json
 import shutil
 import sys
@@ -20,8 +21,17 @@ import pytest
 
 PLUGIN = Path(__file__).resolve().parent.parent.parent
 HARNESS = PLUGIN / "benchmark"
-sys.path.insert(0, str(HARNESS))
-import cvdp_gate as G  # noqa: E402
+# Import the module-under-test by FILE PATH, never by bare name: in a
+# two-tree session a same-named module from the other tree may already sit
+# in sys.modules, and a bare import would silently bind these assertions to
+# the OTHER tree's code (measured: exactly the 2 prompt-export tests red in
+# the two-tree arm). Same hermetic pattern as
+# test_gate_never_reinjects_a_harness_staged_module._gate().
+_spec = importlib.util.spec_from_file_location(
+    "cvdp_gate_multifile_split_under_test", HARNESS / "cvdp_gate.py")
+G = importlib.util.module_from_spec(_spec)
+assert _spec.loader is not None
+_spec.loader.exec_module(G)
 
 A = "module foo(input a, output y);\n assign y = a;\nendmodule"
 B = "module bar(input b, output z);\n assign z = ~b;\nendmodule"
@@ -77,23 +87,28 @@ def test_emit_or_split_singlefile_is_bare():
     assert G._emit_or_split(A, None) == A
 
 
-def test_load_expected_files_map_only_multifile(tmp_path):
-    # OFFICIAL-COMPLIANCE: the expected-file layout is read from `input.context`
-    # (a legitimate model input), NEVER from `output.context` (the reference-
-    # solution field, held back from the model). A multi-file record whose
-    # input.context carries >1 rtl/*.sv yields the split list; a single-file one
-    # is omitted; an output.context-only record is IGNORED (proving the loader no
-    # longer reads the reference-solution field).
+def test_load_response_contract_reads_keys_not_context_guesses(tmp_path):
+    # Official dataset_processor shows output.context KEYS to the candidate and
+    # chooses response schema from their count. Values stay held back and are
+    # irrelevant. A sanitized response_contract is the equivalent export shape.
     ds = tmp_path / "ds.jsonl"
     ds.write_text("\n".join([
-        json.dumps({"id": "m2", "input": {"context": {
-            "rtl/foo.sv": "x", "rtl/bar.sv": "y", "docs/x.md": ""}}}),
-        json.dumps({"id": "s1", "input": {"context": {"rtl/only.sv": "z"}}}),
-        json.dumps({"id": "o1", "output": {"context": {
-            "rtl/a.sv": "", "rtl/b.sv": ""}}}),   # output-only → must be IGNORED
+        json.dumps({"id": "m2", "output": {"context": {
+            "rtl/foo.sv": "SECRET-A", "rtl/bar.sv": "SECRET-B"}}}),
+        json.dumps({"id": "s1", "output": {"context": {
+            "rtl/only.sv": "SECRET"}}}),
+        json.dumps({"id": "public", "response_contract": {
+            "files": ["rtl/a.sv", "rtl/b.sv"]}}),
+        json.dumps({"id": "input_only", "input": {"context": {
+            "rtl/x.sv": "x", "rtl/y.sv": "y"}}}),
     ]))
-    m = G._load_expected_files_map(ds)
-    assert m == {"m2": ["rtl/bar.sv", "rtl/foo.sv"]}   # s1 single, o1 output-only omitted
+    m = G._load_response_contract_map(ds)
+    assert m == {
+        "m2": ["rtl/foo.sv", "rtl/bar.sv"],
+        "s1": ["rtl/only.sv"],
+        "public": ["rtl/a.sv", "rtl/b.sv"],
+    }
+    assert "SECRET" not in repr(m)
 
 
 _HAS_TOOLCHAIN = (shutil.which("iverilog") is not None
@@ -108,7 +123,7 @@ def test_gate_record_splits_bare_multifile_blob(tmp_path):
     # split JSON envelope (not the duplicated blob).
     rec = {"id": "p", "completion": A + "\n\n" + B}
     ok, out_rec, entry = G.gate_record(
-        rec, tmp_path, expected_files=["rtl/foo.sv", "rtl/bar.sv"])
+        rec, tmp_path, response_files=["rtl/foo.sv", "rtl/bar.sv"])
     assert ok, entry
     obj = json.loads(out_rec["completion"])
     paths = set(k for d in obj["code"] for k in d)
@@ -120,23 +135,22 @@ CTX_TARGET = ("module inter_block(input a, output y);\n"
               "  intra_block u(.a(a), .y(y));\nendmodule")
 
 
-def test_single_authored_file_emits_bare_not_envelope():
+def test_single_authored_file_keeps_multifile_schema_without_empty_context():
     # a modify task: input.context has inter_block.sv + intra_block.sv; the author
     # correctly authors ONLY inter_block (instantiates the sibling). The gate must
-    # emit BARE inter_block RTL — NOT a {"code":[…]} envelope (the scorer writes
-    # the response verbatim to TOPLEVEL, so an envelope lands as literal text), and
-    # NOT an empty intra_block.sv (which would clobber the harness's real sibling).
-    out = G._emit_or_split(CTX_TARGET, ["rtl/inter_block.sv", "rtl/intra_block.sv"], context_derived=True)
-    assert not out.lstrip().startswith('{"code"'), "must not emit envelope"
-    assert "module inter_block" in out
-    assert "module intra_block" not in out          # sibling not re-emitted (no empty clobber)
+    # The response contract is multi-file, so retain JSON even though only the
+    # authored target remains. Never emit an empty sibling that clobbers context.
+    out = G._emit_or_split(
+        CTX_TARGET, ["rtl/inter_block.sv", "rtl/intra_block.sv"],
+        {"rtl/intra_block.sv": "module intra_block; endmodule"})
+    assert set(k for d in json.loads(out)["code"] for k in d) == {"rtl/inter_block.sv"}
 
 
 def test_multi_authored_files_still_envelope():
     # when the author genuinely authors BOTH modules into their eponymous files,
     # the multi-file envelope is preserved (existing 7-residual-fix behaviour).
     blob = A.replace("foo", "aaa") + "\n\n" + B.replace("bar", "bbb")
-    out = G._emit_or_split(blob, ["rtl/aaa.sv", "rtl/bbb.sv"], context_derived=True)
+    out = G._emit_or_split(blob, ["rtl/aaa.sv", "rtl/bbb.sv"])
     assert out.lstrip().startswith('{"code"')
     j = json.loads(out)
     paths = {list(d.keys())[0] for d in j["code"]}
@@ -148,7 +162,9 @@ def test_multi_authored_files_still_envelope():
 def test_no_empty_slot_ever_emitted():
     # a blob defining only one of two expected modules must never yield an empty
     # file for the other (empty .sv clobbers a passed-through context sibling).
-    out = G._emit_or_split(A, ["rtl/foo.sv", "rtl/other.sv"], context_derived=True)
+    out = G._emit_or_split(
+        A, ["rtl/foo.sv", "rtl/other.sv"],
+        {"rtl/other.sv": "module other; endmodule"})
     if out.lstrip().startswith('{"code"'):
         for d in json.loads(out)["code"]:
             assert list(d.values())[0].strip(), "empty slot emitted"
