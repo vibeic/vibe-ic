@@ -43,15 +43,20 @@ if str(_HERE) not in sys.path:
     sys.path.insert(0, str(_HERE))
 def read_signal_direction_table(prompt: str, params: Optional[Dict[str, int]] = None
                             ) -> Tuple[List[str], List[str], Dict[str, int], Dict[str, str]]:
-    """(input_names, output_names, widths, symbolic) from a markdown INTERFACE table
-    whose header carries a Signal/Port/Name column AND a Direction column — the
-    common CVDP `| Signal | Direction | Bit Width | ... |` shape. A PROMPT-sourced
-    interface (legal). Names classified by the Direction cell (Input/inout ->
-    input, Output -> output); `widths` maps a name to its resolved width from the
-    `Bit Width` cell (a literal int, an `[hi:lo]` range, or a parameter name whose
-    default is in `params`); `symbolic` records `name -> "PARAM-1:0"` when the width
-    cell is a parameter, so the emit re-parameterizes the port. Absent when the
-    cell is unresolvable."""
+    """(input_names, output_names, widths, symbolic) from every markdown
+    INTERFACE table whose header carries a Signal/Port/Name column AND a
+    Direction column — the common `| Signal | Direction | Bit Width | ... |`
+    shape. A single interface is often split across Global/Master/Slave tables,
+    including input-only or output-only sections, so all matching fragments are
+    unioned in document order. A PROMPT-sourced interface (legal).
+
+    Names are classified by the Direction cell (Input/inout -> input, Output ->
+    output); `widths` maps a name to its resolved width from the `Bit Width` cell
+    (a literal int, an `[hi:lo]` range, or a parameter name whose default is in
+    `params`); `symbolic` records `name -> "PARAM-1:0"` when the width cell is a
+    parameter, so the emit re-parameterizes the port. Absent when the cell is
+    unresolvable. A repeated name keeps its first direction/width: contradictory
+    later prose must not silently mutate an already-declared interface fact."""
     params = params or {}
 
     def _width_cell(cell: str) -> Tuple[Optional[int], Optional[str]]:
@@ -68,6 +73,11 @@ def read_signal_direction_table(prompt: str, params: Optional[Dict[str, int]] = 
         return None, None
 
     lines = prompt.splitlines()
+    ins: List[str] = []
+    outs: List[str] = []
+    widths: Dict[str, int] = {}
+    symbolic: Dict[str, str] = {}
+    seen_direction: Dict[str, str] = {}
     for i, ln in enumerate(lines):
         low = ln.lower()
         if "|" not in ln or "direction" not in low:
@@ -84,10 +94,6 @@ def read_signal_direction_table(prompt: str, params: Optional[Dict[str, int]] = 
                     if "width" in h or "bit" in h), None)
         if nci is None or dci is None:
             continue
-        ins: List[str] = []
-        outs: List[str] = []
-        widths: Dict[str, int] = {}
-        symbolic: Dict[str, str] = {}
         for body in lines[i + 2:]:
             if "|" not in body or not body.strip().startswith("|"):
                 break
@@ -99,23 +105,25 @@ def read_signal_direction_table(prompt: str, params: Optional[Dict[str, int]] = 
                 continue
             name = nm.group(1)
             d = cells[dci].lower()
-            if "out" in d:
-                outs.append(name)
+            if "out" in d and "inout" not in d:
+                direction = "output"
             elif "in" in d:                 # input / inout -> input
-                ins.append(name)
+                direction = "input"
             else:
                 continue
+            prior = seen_direction.get(name)
+            if prior is not None and prior != direction:
+                continue                    # contradictory duplicate: first wins
+            if prior is None:
+                seen_direction[name] = direction
+                (outs if direction == "output" else ins).append(name)
             if wci is not None:
                 w, sym = _width_cell(cells[wci])
-                if w is not None:
+                if w is not None and name not in widths:
                     widths[name] = w
-                if sym is not None:
+                if sym is not None and name not in symbolic:
                     symbolic[name] = sym
-        ins = list(dict.fromkeys(ins))
-        outs = list(dict.fromkeys(outs))
-        if ins and outs:
-            return ins, outs, widths, symbolic
-    return [], [], {}, {}
+    return ins, outs, widths, symbolic
 
 
 def bridge_prompt(text: str, params: Optional[Dict[str, int]] = None) -> str:
