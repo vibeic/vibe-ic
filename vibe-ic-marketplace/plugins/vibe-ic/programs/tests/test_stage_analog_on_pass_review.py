@@ -392,8 +392,26 @@ def test_the_flow_declares_this_stages_review():
     assert blk["dispatched_by"], "the block names no dispatching step"
     step = next(s for s in flow["steps"]
                 if str(s.get("id")) == str(blk["dispatched_by"]))
-    cmds = [v for sub in (step["gate"]["all_of"]) if isinstance(sub, dict)
-            for v in sub.values() if isinstance(v, str)]
+    # A GATE CLAUSE IS `{slot: {"command": ..., "advisory_reason": ...}}`, NOT
+    # `{slot: "<command>"}`. The dict form is what `da6fcd7fe3` [v1.13.63] wrote
+    # when it added the ratchet reason beside every advisory command — the same
+    # commit that added this assertion. Reading only `isinstance(v, str)` values
+    # therefore collected NOTHING here, and the test has been red on main ever
+    # since while the clause it doubts has been running the whole time.
+    # `on_pass_review_declared_command_runs_check` reads the same two shapes
+    # (`GATE_SLOTS`, then `val.get("command") if isinstance(val, dict) else val`)
+    # and reports this stage as EXECUTED verbatim against its published
+    # known-BAD and known-GOOD trees.
+    cmds = []
+    for sub in (step["gate"]["all_of"] or []):
+        if not isinstance(sub, dict):
+            continue
+        for slot, val in sub.items():
+            cmd = val.get("command") if isinstance(val, dict) else val
+            if isinstance(cmd, str):
+                cmds.append(cmd)
+    assert cmds, ("the dispatching step declares no gate command at all — the "
+                  "clause shape changed again", blk["dispatched_by"], step["gate"])
     assert any(c.startswith("stage_on_pass_review") and f"--stage {STAGE} " in c
                for c in cmds), (blk["dispatched_by"], cmds)
 
