@@ -1,4 +1,5 @@
 """The scorer-visible CVDP response contract controls delivery formatting."""
+import importlib.util
 import json
 import sys
 from pathlib import Path
@@ -6,8 +7,17 @@ from pathlib import Path
 
 PLUGIN = Path(__file__).resolve().parent.parent.parent
 HARNESS = PLUGIN / "benchmark"
-sys.path.insert(0, str(HARNESS))
-import cvdp_gate as G  # noqa: E402
+# Import the module-under-test by FILE PATH, never by bare name: in a
+# two-tree session a same-named module from the other tree may already sit
+# in sys.modules, and a bare import would silently bind these assertions to
+# the OTHER tree's code (measured: exactly the 2 prompt-export tests red in
+# the two-tree arm). Same hermetic pattern as
+# test_gate_never_reinjects_a_harness_staged_module._gate().
+_spec = importlib.util.spec_from_file_location(
+    "cvdp_gate_response_contract_under_test", HARNESS / "cvdp_gate.py")
+G = importlib.util.module_from_spec(_spec)
+assert _spec.loader is not None
+_spec.loader.exec_module(G)
 
 
 ELEVATOR = "module elevator_control_system; endmodule"
