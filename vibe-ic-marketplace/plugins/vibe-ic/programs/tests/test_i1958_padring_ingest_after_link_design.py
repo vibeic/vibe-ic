@@ -45,7 +45,8 @@ _RING = "/work/phase3/stage3/pnr/padring.def"
 
 def _deck() -> str:
     """A minimal pnr.tcl carrying the two things that matter: a `link_design`
-    before the floorplan section, and the floorplan seam the consumer replaces."""
+    before the floorplan section, the floorplan seam the consumer replaces, and
+    the marked main global-route command the chip path specializes."""
     marker = R._PNR_STAGE_MARKER
     return ("read_lef /pdk/core.lef\n"
             "read_verilog /work/netlist.v\n"
@@ -56,6 +57,8 @@ def _deck() -> str:
             "write_def /work/phase3/stage3/pnr/floorplan.def\n"
             f'puts "{marker} placement"\n'
             "global_placement\n"
+            f'puts "{marker} global_route"\n'
+            "global_route\n"
             "detailed_route\n")
 
 
@@ -102,6 +105,26 @@ def test_the_fail_closed_guard_and_the_marker_are_unchanged():
     assert f'PADRING_ROUTING_INPUT_MISSING: {_RING}' in deck
     assert f'PADRING_ROUTING_CONSUMED: {_RING}' in deck
     assert "initialize_floorplan" not in deck
+
+
+def test_i1966_chip_path_allows_pad_pin_access_congestion():
+    """The #1966 defect: the pad-ring consumer must not hard-fail global route
+    on zero-capacity edge tiles that detailed routing can legally enter."""
+    deck = R._padring_routing_consumer_tcl(_deck(), _RING)
+    commands = [ln for ln in deck.splitlines()
+                if ln.startswith("global_route")]
+    assert commands == [
+        "global_route -allow_congestion "
+        "-congestion_report_file grt_congestion.rpt"
+    ]
+
+
+def test_i1966_generic_core_route_stays_bare():
+    """Scope guard: only the verified chip/pad-ring consumer gets the flag;
+    the generic deck used by core/IP flows remains byte-for-byte bare."""
+    commands = [ln for ln in _deck().splitlines()
+                if ln.startswith("global_route")]
+    assert commands == ["global_route"]
 
 
 def test_the_ingest_survives_the_resume_transform():

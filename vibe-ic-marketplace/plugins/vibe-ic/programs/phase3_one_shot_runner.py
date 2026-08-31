@@ -21419,6 +21419,16 @@ def _padring_routing_consumer_tcl(full_pnr_tcl: str,
     an alternative: it ignores the DEF's ROW section, so global placement then
     fails `[ERROR GPL-0130] No rows defined in design`.  Both alternatives were
     measured on the reporter's probe before this flag was chosen.
+
+    vibe-ic#1966 — THE CHIP-PATH GLOBAL ROUTE ALLOWS CONGESTION.  A verified
+    pad ring places its BTerms beneath the pad OBS at the die edge.  OpenROAD's
+    global router can therefore report a zero-capacity pin-access tile even
+    though detailed routing completes cleanly through that same tile.  The
+    generic/core deck keeps its historical bare ``global_route``; only this
+    pad-ring consumer replaces the main route command with the measured
+    ``-allow_congestion`` invocation and asks OpenROAD to write its congestion
+    report.  The stage marker, rather than a global text replacement, identifies
+    the one main route command so post-route repair reroutes are untouched.
     """
     matches = list(re.finditer(
         rf'(?ms)^puts "{re.escape(_PNR_STAGE_MARKER)} floorplan"\s*$.*?'
@@ -21436,8 +21446,31 @@ def _padring_routing_consumer_tcl(full_pnr_tcl: str,
         f'}}\n'
         f'read_def -floorplan_initialize {padring_def_c}\n'
         f'puts "PADRING_ROUTING_CONSUMED: {padring_def_c}"')
-    return (full_pnr_tcl[:matches[0].start()] + consume
-            + full_pnr_tcl[matches[0].end():])
+    consumer_tcl = (full_pnr_tcl[:matches[0].start()] + consume
+                    + full_pnr_tcl[matches[0].end():])
+    route_matches = list(re.finditer(
+        rf'(?ms)^puts "{re.escape(_PNR_STAGE_MARKER)} global_route"\s*$.*?'
+        r'^global_route\s*$',
+        consumer_tcl,
+    ))
+    if len(route_matches) != 1:
+        raise ValueError(
+            f"PNR_GLOBAL_ROUTE_SEAM_AMBIGUOUS: expected one main global-route "
+            f"command, found {len(route_matches)}")
+    route_block = route_matches[0].group(0)
+    routed_block, substitutions = re.subn(
+        r'(?m)^global_route\s*$',
+        'global_route -allow_congestion '
+        '-congestion_report_file grt_congestion.rpt',
+        route_block,
+        count=1,
+    )
+    if substitutions != 1:
+        raise ValueError(
+            "PNR_GLOBAL_ROUTE_SEAM_AMBIGUOUS: main global-route command was "
+            "not replaceable")
+    return (consumer_tcl[:route_matches[0].start()] + routed_block
+            + consumer_tcl[route_matches[0].end():])
 
 
 class PnrResumeUnavailable(Exception):

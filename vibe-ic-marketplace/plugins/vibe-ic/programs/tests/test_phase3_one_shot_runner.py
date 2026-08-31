@@ -168,7 +168,8 @@ def _pnr_contract_deck() -> str:
             "write_def /work/phase3/stage3/pnr/floorplan.def\n"
             f'puts "{marker} placement"\n'
             "global_placement\n"
-            f'puts "{marker} routing"\n'
+            f'puts "{marker} global_route"\n'
+            "global_route\n"
             "detailed_route\n"
             "write_def /work/phase3/stage3/pnr/chip_top.def\n")
 
