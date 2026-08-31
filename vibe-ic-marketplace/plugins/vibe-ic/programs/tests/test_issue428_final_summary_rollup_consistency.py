@@ -247,8 +247,31 @@ def test_rollup_order_covers_every_bucket_the_checker_can_emit():
 # ─── 6. end-to-end render: the two roll-ups in one document ──────────────
 
 def _render_with(monkeypatch, tmp_path, audit_text):
-    monkeypatch.setattr(F, "_run_audit",
-                        lambda *a, **k: (audit_text, "PASS"))
+    # #1969: the renderer no longer re-parses human stdout.  Model what the
+    # real checker does by writing its canonical snapshot during `_run_audit`.
+    # When verdict lines were withheld, `step_counts` stays complete while
+    # `steps[]` is incomplete — an internally torn artifact, which is now the
+    # only condition the reconciliation banner is allowed to name.
+    tally = F._parse_audit_tally(audit_text)
+    parsed = F._parse_verdicts(audit_text)
+
+    def _fake_run(*_args, **_kwargs):
+        if tally is not None:
+            p = (tmp_path / "reports" / "audit" /
+                 "phase23_completion_audit.json")
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_text(json.dumps({
+                "run_status": "PASS",
+                "step_counts": tally,
+                "steps": [
+                    {"id": sid, "status": status,
+                     "name": f"step {sid}", "stage": "stage1"}
+                    for sid, status in parsed.items()
+                ],
+            }), encoding="utf-8")
+        return audit_text, "PASS"
+
+    monkeypatch.setattr(F, "_run_audit", _fake_run)
     (tmp_path / "reports").mkdir(parents=True, exist_ok=True)
     return F._render(tmp_path, run_audit=True)
 
@@ -291,17 +314,19 @@ def test_rendered_report_has_one_consistent_rollup(monkeypatch, tmp_path):
 
 def test_rendered_report_names_the_disagreement_when_verdicts_are_unreadable(
         monkeypatch, tmp_path):
-    """NEGATIVE: reproduce the #428 shape by withholding the verdict lines
-    for the lettered ids. The document must NOT silently move them into
-    MISSING; it must name the disagreement, and the gate must FAIL."""
+    """NEGATIVE: a JSON snapshot missing five step rows is torn.
+
+    The producer-owned `step_counts` remains the rendered global roll-up; the
+    absent rows affect only the per-step view and fire the tripwire.
+    """
     dropped = ("D1", "FS1", "DT1", "DT2", "DT3")
     md = _render_with(monkeypatch, tmp_path,
                       _full_audit_for_real_flow(drop_ids=dropped))
     assert C.RECONCILIATION_FAILED_MARKER in md
     table = C.parse_rollup_table(md)
-    assert table.get(F.NO_VERDICT) == len(dropped)
+    assert table.get(F.NO_VERDICT, 0) == 0
     assert table.get("MISSING", 0) == 0, (
-        "unreadable verdicts were folded back into the blocking bucket")
+        "missing per-step rows changed the producer-owned global tally")
     (tmp_path / "reports" / "final_summary.md").write_text(md, encoding="utf-8")
     ok, notes = C.check_project(tmp_path)
     assert not ok

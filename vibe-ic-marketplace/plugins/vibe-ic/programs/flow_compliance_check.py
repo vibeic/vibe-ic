@@ -13561,6 +13561,14 @@ def main(argv: Optional[List[str]] = None) -> int:
             "invoked_gate_count": structural_invoked_count,
             "not_invocable_gate_count": structural_not_invocable_count,
             "step_counts": counts,
+            # vibe-ic#1969 — the tally and the records it counted travel in
+            # ONE canonical artifact.  `final_report_generate` consumes
+            # `step_counts` for its global roll-up and `steps[].status` for
+            # its per-step table; omitting the latter forced the renderer to
+            # scrape human stdout and create a second, drifting tally.
+            # Both values project the SAME final `results` objects after
+            # ordering/cascade re-tiering, immediately before this write.
+            "steps": [asdict(r) for r in results],
             "structural_fail_lines": structural_fail_lines,
             "step_artifact_fail_lines": step_artifact_fail_lines,
             "missing_required_artifacts": missing_required,

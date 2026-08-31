@@ -13,7 +13,9 @@ hand-written) and are linked from the tail of the generated report.
 
 Reads:
   - flow/phase1_phase2_phase3.yaml          (canonical step definitions)
-  - flow_compliance_check.py         (verdict per step, run as subproc)
+  - reports/audit/phase23_completion_audit.json
+                                      (authoritative step_counts + steps[])
+  - flow_compliance_check.py         (writes that audit, run as subproc)
   - synth/*.v + pnr/*.def            (cell-count breakdown)
   - reports/hw_test.json             (generic hardware-test verdict)
                                      OR fallback reports/md905_test.json
@@ -58,6 +60,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import _path_layout as _pl
 import _analog_a_check_common as _acc
+import _flow_verdict_tiers as _T
 import _watchdog as _wd  # progress-stall process supervision
 
 
@@ -91,14 +94,11 @@ AUDIT_TIMEOUT_VERDICT = "AUDIT_TIMEOUT"
 # or the compliance tool is missing). Kept distinct from AUDIT_TIMEOUT.
 AUDIT_NOT_RUN_VERDICT = "UNKNOWN"
 
-# ORGANIC #428 — the bucket a step lands in when the audit text carries
-# NO verdict line for it. This is NOT the compliance verdict `MISSING`
-# ("a required output is absent"): it means "this renderer could not
-# read a verdict for the step at all". Booking the two together is what
-# let a parse gap masquerade as a blocking-artefact gap and silently
-# move steps out of PASS/FAIL/SKIPPED into MISSING, so the roll-up table
-# and the checker tally quoted three lines above it disagreed on the
-# FAIL count with nothing marking either as counting a different thing.
+# ORGANIC #428 / #1969 — the bucket used only when no fresh canonical audit
+# snapshot (or no per-step record in it) can answer. This is NOT the compliance
+# verdict `MISSING` ("a required output is absent"); it means the renderer has
+# no producer-owned verdict. Booking those together once let a parse gap wear a
+# blocking-artefact name. The renderer no longer parses stdout to fill this in.
 NO_VERDICT = "NO-VERDICT-IN-AUDIT"
 
 VERDICT_SYM = {
@@ -360,6 +360,141 @@ def _safe_json(p: Path) -> Optional[Any]:
         return json.loads(p.read_text(encoding="utf-8", errors="replace"))
     except Exception:
         return None
+
+
+# ─── canonical audit snapshot (#1969) ───────────────────────────────────
+
+def _audit_snapshot_path(project: Path) -> Path:
+    """The one machine-readable snapshot the compliance producer owns."""
+    return _pl.report_path(project, "phase23_completion_audit.json")
+
+
+def _audit_snapshot_token(path: Path) -> Optional[Tuple[int, int, str]]:
+    """Identity of the on-disk snapshot, or None when it cannot be read.
+
+    The renderer runs the checker itself.  A pre-existing audit must not be
+    mistaken for the output of that invocation when the checker stalls or its
+    artifact write fails, so `_render` records this token before the run and
+    accepts the JSON only when the token changes.  The digest covers a rewrite
+    whose size happens not to move; mtime makes the common path cheap to
+    diagnose in a debugger.
+    """
+    try:
+        data = path.read_bytes()
+        st = path.stat()
+    except OSError:
+        return None
+    return st.st_mtime_ns, len(data), hashlib.sha256(data).hexdigest()
+
+
+def _load_fresh_audit_snapshot(
+    project: Path,
+    before: Optional[Tuple[int, int, str]],
+) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
+    """Load the snapshot written by THIS audit invocation.
+
+    Returns `(snapshot, problem)`.  A problem is a named non-measurement, never
+    permission to fall back to parsing stdout: that fallback is the second
+    definition removed by #1969.
+    """
+    path = _audit_snapshot_path(project)
+    after = _audit_snapshot_token(path)
+    if after is None:
+        return None, f"canonical audit JSON was not written at {path}"
+    if before is not None and after == before:
+        return None, (
+            "canonical audit JSON was not refreshed by this audit invocation; "
+            "the on-disk file may be stale")
+    raw = _safe_json(path)
+    if not isinstance(raw, dict):
+        return None, f"canonical audit JSON is unreadable or not an object: {path}"
+    return raw, None
+
+
+def _audit_bucket(raw: Any) -> str:
+    """One report spelling for a producer count/status key."""
+    bucket = _T.normalize(str(raw or ""))
+    # Internally the producer calls this step status WAIVED; its stdout and the
+    # report call the same bucket WAIVED-DEFERRED.  This is an alias, not a new
+    # classification.
+    if bucket in {"WAIVED", "WAIVED-DEFERRED"}:
+        return "WAIVED-DEFERRED"
+    return bucket
+
+
+def _audit_step_counts(
+    audit: Dict[str, Any],
+) -> Tuple[Dict[str, int], List[str]]:
+    """Consume `step_counts`; never derive it from `steps[]`."""
+    raw = audit.get("step_counts")
+    if not isinstance(raw, dict):
+        return {}, ["audit JSON has no object-valued step_counts"]
+    counts: Dict[str, int] = {}
+    problems: List[str] = []
+    origins: Dict[str, str] = {}
+    for key, value in raw.items():
+        bucket = _audit_bucket(key)
+        if not bucket:
+            problems.append(f"step_counts has an empty bucket name from {key!r}")
+            continue
+        if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+            problems.append(
+                f"step_counts[{key!r}] is not a non-negative integer: {value!r}")
+            continue
+        if bucket in counts:
+            problems.append(
+                f"step_counts aliases {origins[bucket]!r} and {key!r} both to "
+                f"{bucket!r}")
+        counts[bucket] = counts.get(bucket, 0) + value
+        origins.setdefault(bucket, str(key))
+    return counts, problems
+
+
+def _audit_step_verdicts(
+    audit: Dict[str, Any],
+) -> Tuple[Dict[str, str], Dict[str, int], List[str]]:
+    """Consume the producer's per-step records for tables and integrity.
+
+    `row_counts` exists only for the torn-artifact tripwire.  Displayed global
+    counts always come from `step_counts`, even when this cross-check finds a
+    disagreement.
+    """
+    rows = audit.get("steps")
+    if not isinstance(rows, list):
+        return {}, {}, ["audit JSON has no array-valued steps"]
+    verdicts: Dict[str, str] = {}
+    row_counts: collections.Counter[str] = collections.Counter()
+    problems: List[str] = []
+    for index, row in enumerate(rows):
+        if not isinstance(row, dict):
+            problems.append(f"steps[{index}] is not an object")
+            continue
+        sid_raw = row.get("id")
+        sid = str(sid_raw) if sid_raw is not None else ""
+        status = _audit_bucket(row.get("status"))
+        if not sid:
+            problems.append(f"steps[{index}] has no id")
+            continue
+        if not status:
+            problems.append(f"steps[{index}] ({sid}) has no status")
+            continue
+        if sid in verdicts:
+            problems.append(f"steps[] repeats step id {sid!r}")
+        verdicts[sid] = status
+        row_counts[status] += 1
+    return verdicts, dict(row_counts), problems
+
+
+def _reconcile_audit_snapshot(
+    step_counts: Dict[str, int],
+    row_counts: Dict[str, int],
+) -> Dict[str, Tuple[int, int]]:
+    """Internal tear detector: `(step_counts_n, steps_rows_n)` by bucket."""
+    return {
+        bucket: (step_counts.get(bucket, 0), row_counts.get(bucket, 0))
+        for bucket in sorted(set(step_counts) | set(row_counts))
+        if step_counts.get(bucket, 0) != row_counts.get(bucket, 0)
+    }
 
 
 # Subdirs of reports/ the generator probes (in priority order) when
@@ -701,6 +836,11 @@ _VERDICT_LINE_RE = re.compile(
 
 
 def _parse_verdicts(audit_text: str) -> Dict[str, str]:
+    """Legacy stdout diagnostic retained for old-report tests only.
+
+    `_render` MUST NOT call this: canonical verdicts come from audit JSON
+    `steps[]` (#1969).
+    """
     return {m.group(2): m.group(1).strip()
             for m in _VERDICT_LINE_RE.finditer(audit_text)}
 
@@ -715,6 +855,7 @@ _TALLY_TOKEN_RE = re.compile(r"\b([A-Z][A-Z-]*[A-Z])=(\d+)")
 _TALLY_LABEL_ALIASES = {
     "SKIPPED": "SKIPPED-CONDITION",
     "WAIVED-DEFERRED": "WAIVED-DEFERRED",
+    "PASS-VOIDED": "PASS-VOIDED-BY-DEPENDENCY",
 }
 
 
@@ -946,7 +1087,7 @@ def _render_step_tables(flow: Dict[str, Any], verdicts: Dict[str, str]) -> str:
 
 
 def _verdict_rollup(flow: Dict[str, Any], verdicts: Dict[str, str]) -> Tuple[Dict[str, int], int]:
-    """Per-verdict roll-up over every step the flow declares.
+    """Legacy recount diagnostic; `_render` consumes JSON `step_counts`.
 
     ORGANIC #428 — a step with NO verdict line in the audit text falls
     into the NAMED `NO-VERDICT-IN-AUDIT` bucket, never into the
@@ -1035,9 +1176,9 @@ def _counts_snapshot(
     }
 
 
-def _snapshot_marker(audit_text: str, overall: str,
+def _snapshot_marker(audit_material: str, overall: str,
                      content_census: str = "") -> str:
-    """A short, stable digest of the audit text + verdict + the content
+    """A short, stable digest of the audit snapshot + verdict + the content
     census, plus a UTC timestamp, stamped beside the verdict so a reader knows
     the counts are a point-in-time snapshot and a fresh `--strict` re-run may
     move them once late artefacts land (#461 symptom (2)).
@@ -1060,10 +1201,10 @@ def _snapshot_marker(audit_text: str, overall: str,
     timestamp and no path in it. So the digest stays stable across repeated
     runs over one tree, which is the property that made it worth quoting.
     Empty census (a project with no such record at all) digests exactly the
-    audit text plus a fixed marker, so the shape is identical everywhere.
+    audit material plus a fixed marker, so the shape is identical everywhere.
     """
-    payload = audit_text if not content_census \
-        else f"{audit_text}\n{content_census}"
+    payload = audit_material if not content_census \
+        else f"{audit_material}\n{content_census}"
     h = hashlib.sha256(payload.encode("utf-8", errors="replace")).hexdigest()[:12]
     ts = _dt.datetime.now(_dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     return f"snapshot {ts} · audit-digest sha256:{h} · overall {overall}"
@@ -1728,12 +1869,54 @@ def _render(project: Path, run_audit: bool = True,
     # the file). The caller may also supply it explicitly.
     if prior_marker is None:
         prior_marker = _previous_snapshot_marker(project)
+    audit_before = (_audit_snapshot_token(_audit_snapshot_path(project))
+                    if run_audit else None)
     if run_audit:
         audit_text, overall = _run_audit(project, timeout_s=audit_timeout_s,
                                          prior_marker=prior_marker)
     else:
         audit_text, overall = ("(audit skipped)", AUDIT_NOT_RUN_VERDICT)
-    verdicts = _parse_verdicts(audit_text)
+
+    # vibe-ic#1969 — ONE MACHINE-READABLE SNAPSHOT, TWO CONSUMED VIEWS.
+    #
+    # The producer owns both facts: `step_counts` is the global roll-up and
+    # `steps[].status` is the per-step view.  The renderer used to ignore that
+    # artifact, parse human stdout for each step, and count the parse.  A gate's
+    # nested evidence can itself contain `[... ] Step <id>:`; the later match
+    # overwrote the real outer line and manufactured a second tally over the
+    # same 68 steps.  Never fall back to that parser here.  If this invocation
+    # did not write a fresh snapshot, degrade to named NO-VERDICT data.
+    audit_snapshot: Optional[Dict[str, Any]] = None
+    snapshot_problem: Optional[str] = None
+    if run_audit and overall not in {
+            AUDIT_TIMEOUT_VERDICT, AUDIT_NOT_RUN_VERDICT}:
+        audit_snapshot, snapshot_problem = _load_fresh_audit_snapshot(
+            project, audit_before)
+    elif not run_audit:
+        snapshot_problem = "audit was skipped by request"
+    else:
+        snapshot_problem = (
+            f"audit produced {overall}, so no fresh verdict snapshot is "
+            "available")
+
+    snapshot_problems: List[str] = []
+    row_counts: Dict[str, int] = {}
+    if audit_snapshot is not None:
+        rollup, count_problems = _audit_step_counts(audit_snapshot)
+        verdicts, row_counts, row_problems = _audit_step_verdicts(
+            audit_snapshot)
+        snapshot_problems.extend(count_problems)
+        snapshot_problems.extend(row_problems)
+        if rollup:
+            total_steps = sum(rollup.values())
+        else:
+            # Malformed/empty counts are not permission to count step rows.
+            total_steps = len(flow.get("steps", []))
+            rollup = ({NO_VERDICT: total_steps} if total_steps else {})
+    else:
+        verdicts = {}
+        total_steps = len(flow.get("steps", []))
+        rollup = ({NO_VERDICT: total_steps} if total_steps else {})
 
     cells = _gather_cell_count(project)
     hw = _gather_hardware_test(project)
@@ -1747,14 +1930,13 @@ def _render(project: Path, run_audit: bool = True,
     waivers = waivers_pkg["steps"]
     pdk_gaps = waivers_pkg["gaps"]
     ic_name = _gather_ic_name(project) or "(unknown — fill in via L1_DATASHEET.json[ic_name])"
-    rollup, total_steps = _verdict_rollup(flow, verdicts)
     chip_addendum = (_pl.report_path(project, "chip_specific_summary.md")).is_file()
 
-    # #461 symptom (2): SINGLE COUNTS SNAPSHOT. Every PASS / executed
-    # count displayed anywhere in the report derives from THIS one
-    # `_verdict_rollup` parse of THIS one audit run — never from a
-    # second flow_compliance parse and never from a different PASS
-    # definition. `executed_pass` matches the audit summary line's
+    # #461 / #1969: SINGLE COUNTS SNAPSHOT. Every PASS / executed count
+    # displayed anywhere in the report derives from the producer's ONE
+    # `step_counts` object — never from a renderer-side per-step recount and
+    # never from a different PASS definition. `executed_pass` matches the
+    # audit summary line's
     # "X/Y executed PASS" semantics (strict PASS only — VACUOUS-PASS was
     # ruled out of the numerator and stays in the denominator) so the
     # headline audit block, the prose, and the resource log all agree. A
@@ -1764,8 +1946,11 @@ def _render(project: Path, run_audit: bool = True,
     # The census is folded into the digest, not merely rendered: the digest is
     # the token a reader quotes as proof of WHICH run these counts are, and it
     # gave the same answer for a designed run and a silent one.
+    snapshot_material = (
+        json.dumps(audit_snapshot, sort_keys=True, ensure_ascii=False)
+        if audit_snapshot is not None else audit_text)
     snapshot_marker = _snapshot_marker(
-        audit_text, overall,
+        snapshot_material, overall,
         _content_census(analog_ev.get("content_grid") or {}))
 
     now = _dt.datetime.now(_dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -1815,41 +2000,39 @@ def _render(project: Path, run_audit: bool = True,
         md.append(ln)
     md.append("```")
     md.append("")
-    # ORGANIC #428 — reconcile the per-step roll-up this renderer computed
-    # against the checker's OWN tally in the fence directly above (both
-    # read out of the SAME `audit_text`, so this can never be a stale-file
-    # comparison). Historically these could disagree on the BLOCKING
-    # FAIL/MISSING counts with nothing in the document marking either as
-    # counting a different thing. Disagreement is now named, per bucket,
-    # at the top of the report — it is never papered over by adjusting a
-    # count to match.
-    _tally = _parse_audit_tally(audit_text)
-    _recon = _reconcile_rollup(rollup, _tally)
-    if _tally is None:
-        md.append(f"> ℹ️ **Roll-up reconciliation: not possible** — the audit "
-                  f"text carries no `flow_compliance_check.py` tally line "
-                  f"(audit skipped, timed out, or the tool was "
-                  f"unavailable), so the per-verdict counts below could not "
-                  f"be cross-checked against the checker's own totals. "
-                  f"Treat them as unverified.")
+    # ORGANIC #428 / vibe-ic#1969 — reconciliation is now ONLY an integrity
+    # tripwire on the ONE audit artifact.  `step_counts` renders the global
+    # table; `steps[].status` renders the per-step table.  Counting the latter
+    # is permitted only here, to prove the producer did not tear those two
+    # views while writing them — the recounted value never feeds a display.
+    # Human stdout is deliberately absent from this decision: parsing it was
+    # the second definition that caused #1969.
+    _recon = _reconcile_audit_snapshot(rollup, row_counts)
+    if audit_snapshot is None:
+        md.append(f"> ℹ️ **Roll-up reconciliation: not possible** — "
+                  f"{snapshot_problem or 'no fresh canonical audit JSON was available'}. "
+                  f"The renderer did not fall back to recounting human stdout; "
+                  f"treat the per-verdict data below as unmeasured.")
         md.append("")
-    elif _recon:
+    elif snapshot_problems or _recon:
         _bits = ", ".join(
-            f"`{b}` (this report {r} vs checker {t})"
-            for b, (r, t) in sorted(_recon.items()))
+            f"`{b}` (`step_counts` {count_n} vs `steps[]` {rows_n})"
+            for b, (count_n, rows_n) in sorted(_recon.items()))
+        if snapshot_problems:
+            _problem_bits = "; ".join(snapshot_problems)
+            _bits = f"{_bits}; {_problem_bits}" if _bits else _problem_bits
         md.append(f"> ⚠️ **Roll-up reconciliation FAILED** — the per-step "
-                  f"roll-up computed by this renderer disagrees with the "
-                  f"`flow_compliance_check.py` tally quoted immediately "
-                  f"above, over the SAME {total_steps} steps of the SAME "
-                  f"audit run, in: {_bits}. The checker's tally is "
-                  f"authoritative (it is what "
-                  f"`reports/audit/phase23_completion_audit.json"
-                  f"[step_counts]` is serialised from). Do NOT read the "
-                  f"per-verdict counts below — especially the FAIL count — "
-                  f"as a converged result until this is resolved.")
+                  f"records and `step_counts` inside the SAME "
+                  f"`reports/audit/phase23_completion_audit.json` disagree "
+                  f"over its {total_steps}-step snapshot, in: {_bits}. This is "
+                  f"a genuinely torn audit artifact. The renderer still "
+                  f"prints the producer-owned `step_counts` below; do not "
+                  f"treat its per-step table as a converged view until the "
+                  f"producer artifact is repaired.")
         md.append("")
-    # #461 symptom (2): every count below comes from the SINGLE `snap`
-    # snapshot — never a second parse, never a divergent PASS definition.
+    # #461 / #1969: every count below comes from the SINGLE producer-owned
+    # `step_counts` snapshot via `snap` — never a stdout parse or per-step
+    # recount, never a divergent PASS definition.
     pass_n = snap["pass_only"]
     waived_n = snap["waived"]
     skipped_n = snap["skipped"]
@@ -2161,8 +2344,10 @@ def _render(project: Path, run_audit: bool = True,
               f"same bucket definitions as the `flow_compliance_check.py` "
               f"tally quoted under **Verdict** above and as "
               f"`reports/audit/phase23_completion_audit.json[step_counts]`. "
-              f"Any disagreement is reported explicitly under **Verdict** — "
-              f"it is never reconciled by adjusting a count._")
+              f"This table consumes that JSON object directly; the per-step "
+              f"table consumes the same artifact's `steps[]`. Any internal "
+              f"tear is reported explicitly under **Verdict** — it is never "
+              f"reconciled by adjusting a count._")
     md.append("")
     md.append("| Verdict | Count |")
     md.append("|---|---:|")
