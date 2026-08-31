@@ -31,9 +31,43 @@ WHAT THIS CHECKS
 ================
 P1  SECOND DECLARATION.  No `stages[]` entry may carry a membership roster.
     A roster is DISCOVERED, not matched by key name: any key on a stage entry
-    whose value is a list naming one or more DECLARED STEP IDS is a second
-    membership declaration, whatever it is called. Renaming `steps:` to
-    `members:` does not evade this.
+    that names DECLARED STEP IDS **in a collection** — a list or tuple at any
+    depth — or that names TWO OR MORE distinct step ids by any shape, is a
+    second membership declaration, whatever it is called. Renaming `steps:` to
+    `members:` does not evade this, and neither does a one-element roster: a
+    list of one is still a list.
+
+    A KEY THAT NAMES EXACTLY ONE STEP ID, REACHED ONLY THROUGH SCALARS, IS A
+    REFERENCE AND NOT A DECLARATION. The two are not the same object and the
+    difference is testable rather than stylistic:
+
+        a ROSTER assigns steps TO a stage. Delete `steps[].stage` and the
+        roster still tells you the membership — which is exactly what makes it
+        a second declaration, and what let it drift for 12 of 63 steps.
+
+        a BACK-POINTER names the ONE step that dispatches a stage-scoped
+        clause. Delete `steps[].stage` and it recovers nothing. It names one
+        step out of a stage of up to twenty, and MEASURED on the shipped flow,
+        five of the six `dispatched_by` pointers name a step that is NOT in the
+        stage carrying the clause (a stage's on-pass review is dispatched from
+        the stage that follows it) — a roster naming a step in another stage
+        would be the #923 contradiction, so these cannot be rosters.
+
+    Before this reading, `_flatten` walked the whole `on_pass_review` sub-tree
+    and collected the single scalar `dispatched_by: '7'`, so the flow went red
+    on P1 at the moment it obeyed its own "a clause dispatched by nothing is not
+    a gate" doctrine (`on_pass_review_declared_command_runs_check` P3, and
+    `test_on_pass_review_clauses_are_dispatched_by_nothing.py` before it, which
+    measured five stage-level clauses dispatched 0 times in a 125-gate ledger on
+    a real published cell). There was NO state of the flow in which both gates
+    were green: as shipped this check FAILED with 6 findings and P3 passed; with
+    the six `dispatched_by` lines cut this check passed and P3 FAILED with 6.
+
+    THE BOUND, stated rather than discovered later: a one-step roster written as
+    a bare SCALAR (`steps: 14`) reads as a reference here. It is not silent —
+    every such reference is listed in the record and printed as REFERENCE — but
+    it is not a finding. Closing it structurally is not possible without
+    key-name matching, which is the thing this predicate was written to avoid.
 
 P2  REFERENTIAL INTEGRITY.  Every step must carry a non-empty `stage:` naming
     a stage declared in `stages[]`. This is what stops the P1 finding from
@@ -53,7 +87,7 @@ import argparse
 import json
 import sys
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Tuple
 
 try:
     import yaml  # type: ignore
@@ -76,16 +110,31 @@ def _step_ids(doc: Dict[str, Any]) -> List[str]:
 
 def _flatten(value: Any) -> List[str]:
     """Every scalar reachable from ``value``, as a string."""
-    out: List[str] = []
+    collected, scalar = _reachable(value, False)
+    return collected + scalar
+
+
+def _reachable(value: Any, in_collection: bool) -> Tuple[List[str], List[str]]:
+    """``(reached through a list/tuple, reached only through scalars/maps)``.
+
+    The split is the whole of P1's roster-vs-reference distinction, and it is a
+    property of the CONTAINER, not of the count: a one-element list is still a
+    collection, so `members: [14]` cannot evade the roster rule by being short.
+    """
+    collected: List[str] = []
+    plain: List[str] = []
     if isinstance(value, (list, tuple)):
         for v in value:
-            out.extend(_flatten(v))
+            got_c, got_p = _reachable(v, True)
+            collected.extend(got_c + got_p)
     elif isinstance(value, dict):
         for v in value.values():
-            out.extend(_flatten(v))
+            got_c, got_p = _reachable(v, in_collection)
+            collected.extend(got_c)
+            (collected if in_collection else plain).extend(got_p)
     elif value is not None and not isinstance(value, bool):
-        out.append(str(value))
-    return out
+        (collected if in_collection else plain).append(str(value))
+    return collected, plain
 
 
 def analyze(doc: Dict[str, Any]) -> Dict[str, Any]:
@@ -95,16 +144,30 @@ def analyze(doc: Dict[str, Any]) -> Dict[str, Any]:
     declared_ids = [str(s.get("id")) for s in stages if s.get("id") is not None]
     step_ids = set(_step_ids(doc))
 
-    # P1 — a roster is any stage key whose value names declared step ids.
+    # P1 — a roster is any stage key that names declared step ids IN A
+    # COLLECTION, or that names two or more distinct ids by any shape. A key
+    # naming exactly one id through scalars alone is a REFERENCE: recorded and
+    # printed, never a finding. See the P1 paragraph in the module docstring.
     rosters: List[Dict[str, Any]] = []
+    references: List[Dict[str, Any]] = []
     for st in stages:
         for key, value in st.items():
             if key in _NON_MEMBERSHIP_KEYS:
                 continue
-            named = [v for v in _flatten(value) if v in step_ids]
-            if named:
+            in_coll, plain = _reachable(value, False)
+            named_coll = [v for v in in_coll if v in step_ids]
+            named_plain = [v for v in plain if v in step_ids]
+            named = named_coll + named_plain
+            if not named:
+                continue
+            if named_coll or len(set(named)) >= 2:
                 rosters.append({"stage": str(st.get("id")), "key": str(key),
-                                "names_steps": named})
+                                "names_steps": named,
+                                "why": ("in a collection" if named_coll
+                                        else "names 2+ distinct steps")})
+            else:
+                references.append({"stage": str(st.get("id")),
+                                   "key": str(key), "names_step": named[0]})
 
     # P2 — every step's stage must resolve.
     dangling: List[Dict[str, str]] = []
@@ -131,6 +194,7 @@ def analyze(doc: Dict[str, Any]) -> Dict[str, Any]:
         "steps_examined": len(steps),
         "declared_stage_ids": declared_ids,
         "second_declarations": rosters,
+        "step_references": references,
         "dangling_stage_refs": dangling,
         "stages_with_no_members": dead,
         "membership": members,
@@ -207,6 +271,12 @@ def main(argv=None) -> int:
 
     if bad:
         return 2
+
+    for r in rec["step_references"]:
+        print(f"{_NAME}: REFERENCE — stage {r['stage']}: key `{r['key']}` "
+              f"names one step ({r['names_step']}) through a scalar. A "
+              f"reference, not a membership declaration; listed so it is not "
+              f"silent.")
 
     sizes = ", ".join(f"{k}={len(v)}"
                       for k, v in sorted(rec["membership"].items()))

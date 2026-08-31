@@ -35,6 +35,9 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import _progress_run as _pr  # noqa: E402
+# Imported, not only driven by subprocess: `analyze()` is the predicate, and an
+# import edge is also what makes this file SELECTABLE when the checker changes.
+import flow_stage_membership_single_declaration_check as M  # noqa: E402
 
 yaml = pytest.importorskip("yaml")
 
@@ -280,3 +283,91 @@ def test_the_only_stages_consumer_is_indifferent_to_the_roster(tmp_path):
         json.dumps(records["without"], sort_keys=True), (
         "the only program that loads flow['stages'] produced a different "
         "record with and without the roster")
+
+
+# ── P1: a ROSTER is a collection; a BACK-POINTER is a scalar ──────────────
+# The reading landed with the `dispatched_by` fix. Before it, `_flatten` walked
+# the whole `on_pass_review` sub-tree and collected the single scalar
+# `dispatched_by: '7'`, so the flow went red on P1 at the moment it obeyed
+# `on_pass_review_declared_command_runs_check` P3 ("a pointer nobody checks is a
+# comment"). There was no state of the flow in which both gates were green.
+#
+# These arms are the falsification in BOTH directions: every roster SHAPE the
+# predicate is supposed to catch must still be caught, and the one shape it is
+# supposed to let through must pass. A rule that only ever sees the passing arm
+# is a mute button, not a reading.
+
+def _doc(stage_extra):
+    """A minimal two-stage flow. `stage_extra` is merged onto stage `s1`."""
+    s1 = {"id": "s1", "name": "one"}
+    s1.update(stage_extra)
+    return {
+        "stages": [s1, {"id": "s2", "name": "two"}],
+        "steps": [{"id": "1", "stage": "s1"}, {"id": "2", "stage": "s1"},
+                  {"id": "3", "stage": "s2"}],
+    }
+
+
+@pytest.mark.parametrize("extra,why", [
+    ({"steps": ["1", "2"]},                 "the #923 roster itself"),
+    ({"members": ["1", "2"]},               "renamed — still a roster"),
+    ({"members": ["1"]},                    "a ONE-ELEMENT list is still a list"),
+    ({"anything": {"nested": ["2"]}},       "a list nested under a mapping"),
+    ({"pair": {"a": "1", "b": "2"}},        "two distinct ids, no list at all"),
+    ({"deep": [{"k": "1"}]},                "an id inside a mapping inside a list"),
+])
+def test_a_roster_is_caught_whatever_it_is_called_or_nested_in(extra, why):
+    rec = M.analyze(_doc(extra))
+    assert rec["second_declarations"], f"missed: {why}"
+    assert rec["second_declarations"][0]["stage"] == "s1"
+    assert rec["step_references"] == [], why
+
+
+@pytest.mark.parametrize("extra", [
+    {"dispatched_by": "1"},
+    {"on_pass_review": {"condition": "x", "dispatched_by": "1"}},
+    {"on_pass_review": {"nested": {"deeper": {"dispatched_by": "2"}}}},
+])
+def test_a_single_step_named_through_scalars_is_a_reference_not_a_roster(extra):
+    rec = M.analyze(_doc(extra))
+    assert rec["second_declarations"] == []
+    assert len(rec["step_references"]) == 1
+    assert rec["step_references"][0]["stage"] == "s1"
+
+
+def test_the_same_key_naming_a_SECOND_step_becomes_a_roster():
+    """The boundary, driven from both sides of itself. One id is a reference;
+    the moment the key names two, it is assigning membership."""
+    one = M.analyze(_doc({"on_pass_review": {"dispatched_by": "1"}}))
+    two = M.analyze(_doc({"on_pass_review": {"dispatched_by": "1",
+                                             "also": "2"}}))
+
+    assert one["second_declarations"] == [] and one["step_references"]
+    assert two["second_declarations"] and two["step_references"] == []
+    assert two["second_declarations"][0]["why"] == "names 2+ distinct steps"
+
+
+def test_a_reference_is_recorded_and_printed_rather_than_being_silent():
+    """A reading that drops a finding must leave the thing it dropped VISIBLE,
+    or the next reader cannot tell it from a case nobody looked at."""
+    rec = M.analyze(_doc({"on_pass_review": {"dispatched_by": "1"}}))
+
+    assert rec["step_references"] == [
+        {"stage": "s1", "key": "on_pass_review", "names_step": "1"}]
+    # …and it is a declared key of the record, so a consumer can read it.
+    assert "step_references" in rec
+
+
+def test_the_shipped_flow_has_exactly_the_six_dispatch_back_pointers():
+    """MEASURED on the shipped flow: six stages carry an `on_pass_review` with a
+    `dispatched_by`, `stage5_manufacturing` carries the block WITHOUT one, and
+    none of the seven is a roster. If a seventh appears, or one of the six turns
+    into a list, this says so instead of the count drifting unnoticed."""
+    import yaml
+    flow = Path(M.__file__).resolve().parent.parent / "flow" / "phase1_phase2_phase3.yaml"
+    rec = M.analyze(yaml.safe_load(flow.read_text(encoding="utf-8")))
+
+    assert rec["second_declarations"] == []
+    assert [r["stage"] for r in rec["step_references"]] == [
+        "stage_phase1", "stage1", "stage2", "stage_analog", "stage3", "stage4"]
+    assert {r["key"] for r in rec["step_references"]} == {"on_pass_review"}
