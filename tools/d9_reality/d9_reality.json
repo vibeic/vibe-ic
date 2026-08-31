@@ -3,7 +3,16 @@
  "corpus": {
   "runs": 107,
   "how": "git ls-files benchmark-data | dirs containing phase1/generated_docs/",
-  "tech_lef_runs": 0
+  "tech_lef_runs": 0,
+  "identity": {
+   "status": "REPRODUCES_AT_A_NAMED_COMMIT",
+   "reproduces_at": "ae800cb70",
+   "window": "cdc54d32f..ae800cb70 (2026-08-02..2026-08-12)",
+   "method": "git ls-tree -r --name-only <commit> -- benchmark-data | dirs containing phase1/generated_docs/",
+   "published_at": "c45c502ce",
+   "reproduces_at_published_commit": 0,
+   "why": "This artefact states a figure about a corpus and named no corpus. The figure IS checkable, because `corpus.how` is index-based: re-deriving it from git history needs no corpus checkout. Measured over all 46 commits that ever touched benchmark-data, `runs: 107` holds exactly across cdc54d32f..ae800cb70 and nowhere else — 106 before, 105 from e73601fec, and 0 from c5d7f2d00 [2026-08-16] when the published results moved to vibeic/benchmark-data. `reproduces_at` is the LAST commit at which the figure is true. `published_at` is this artefact's own commit, c45c502ce [v1.10.70], 2026-08-18: TWO DAYS AFTER the corpus left, where the same method yields 0 and the generator itself returns `CANNOT CHECK`. The artefact was landed after its subject was gone, and nothing said so. `test_d9_reality_names_its_corpus.py` now refuses an identity whose figure does not re-derive at the commit it names."
+  }
  },
  "steps": 63,
  "moves_today": 31,

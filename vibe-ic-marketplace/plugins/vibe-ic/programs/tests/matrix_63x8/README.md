@@ -335,6 +335,8 @@ the moment eight rows were added up. See `substitution.py`.
 
 The 0 CONTRADICTED cells are configured as enforcing while their own predicate is currently RED. They are NOT folded into the 532: a cell whose predicate fails is not evidence of enforcement. See vibe-ic#888.
 
+Corpus at generation: NOT_OFFERED — no published cell was read. Every figure below is a function of this commit alone.
+
 **What these 612 cells measure — and what they do not.** Every cell asks whether a step is declared, wired, and reached by a gate. NO cell reads the CONTENT of the artefact a step produces. A shipped sign-off artefact can violate the very criterion its step is named after and no cell here changes colour. Read this table as COVERAGE SHAPE, never as evidence that a design is correct.
 
 `ENFORCED` is published SPLIT, because it is not one thing. It means a live predicate ran and passed; it does not say WHAT it ran against, and that turns out to be three different answers:

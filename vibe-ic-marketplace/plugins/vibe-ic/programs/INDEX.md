@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 1236
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1236)
+- **Total programs (excluding helpers / shims):** 1238
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1238)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 1227 |
+| `any` | 1229 |
 
 ## Alphabetical listing
 
@@ -444,7 +444,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `fsm_transition_completeness_check` | any | v0.3.21 | v0.3.21 (ORGANIC #522). |
 | `fsm_vector_rtl_emit` | any | — | supplemental DETERMINISTIC Tier-1 emitters for the VerilogEval-HUMAN (code-complete, ICCAD-2023) tier pipeline. |
 | `full_moore_fsm_synth` | any | — | deterministic SOLVER for a full Moore FSM. |
-| `full_suite_run_check` | any | — | full-suite (not subset) pytest gate for the core-agent loop (extracted from vibe-ic:core-agent-loop §Step 3). |
+| `full_suite_run_check` | any | — | is the invocation the FULL suite, or a subset? |
 | `function_void_with_output_check` | any | Wave 29 | Wave 29 (v0.119.61) gate. |
 | `functional_state_transition_coverage_check` | any | — | Verify TBs exercise the state-changing side-effects of every cmd opcode, not just byte-stream correctness. |
 | `gameable_placeholder_scan` | any | — | deterministic half of the compliance-gate-spot-check "gameability scan" (Step 3, first three bullets). |
@@ -1189,6 +1189,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `transient_signal_latch_check` | any | — | Flag 1-cycle pulses read by multi-cycle FSMs without latching. |
 | `transition_coverage_check` | any | — | REAL transition-delay-fault (TDF) coverage gate for the LOC at-speed ATPG step. |
 | `transition_fault_atpg_run` | any | — | REAL open-source TRANSITION-DELAY-FAULT (TDF) ATPG via the forked vibeic/yosys SAT engine (launch-off-capture, 2-frame). |
+| `transition_manifest_describes_its_tree_check` | any | — | A commit's protected manifest must describe the tree that commit ships. |
 | `triage_note_answers_the_question_check` | any | — | A triage note that describes BEHAVIOUR does not say why the behaviour is OK. |
 | `triage_record_check` | any | — | self-consistency linter for benchmark residual-triage records (open-benchmark-methodology § 4 + § 6.4). |
 | `tristate_active_drive_check` | any | — | P1.1 deterministic gate |
@@ -1309,7 +1310,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (1227 programs)
+### `any` (1229 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `absence_verdict_names_its_search_space_check` — "not found" must say WHERE it looked.
@@ -1725,7 +1726,7 @@ _(no programs in this group)_
 - `fsm_transition_completeness_check` — v0.3.21 (ORGANIC #522).  _[v0.3.21]_
 - `fsm_vector_rtl_emit` — supplemental DETERMINISTIC Tier-1 emitters for the VerilogEval-HUMAN (code-complete, ICCAD-2023) tier pipeline.
 - `full_moore_fsm_synth` — deterministic SOLVER for a full Moore FSM.
-- `full_suite_run_check` — full-suite (not subset) pytest gate for the core-agent loop (extracted from vibe-ic:core-agent-loop §Step 3).
+- `full_suite_run_check` — is the invocation the FULL suite, or a subset?
 - `function_void_with_output_check` — Wave 29 (v0.119.61) gate.  _[Wave 29]_
 - `functional_state_transition_coverage_check` — Verify TBs exercise the state-changing side-effects of every cmd opcode, not just byte-stream correctness.
 - `gameable_placeholder_scan` — deterministic half of the compliance-gate-spot-check "gameability scan" (Step 3, first three bullets).
@@ -2467,6 +2468,7 @@ _(no programs in this group)_
 - `transient_signal_latch_check` — Flag 1-cycle pulses read by multi-cycle FSMs without latching.
 - `transition_coverage_check` — REAL transition-delay-fault (TDF) coverage gate for the LOC at-speed ATPG step.
 - `transition_fault_atpg_run` — REAL open-source TRANSITION-DELAY-FAULT (TDF) ATPG via the forked vibeic/yosys SAT engine (launch-off-capture, 2-frame).
+- `transition_manifest_describes_its_tree_check` — A commit's protected manifest must describe the tree that commit ships.
 - `triage_note_answers_the_question_check` — A triage note that describes BEHAVIOUR does not say why the behaviour is OK.
 - `triage_record_check` — self-consistency linter for benchmark residual-triage records (open-benchmark-methodology § 4 + § 6.4).
 - `tristate_active_drive_check` — P1.1 deterministic gate

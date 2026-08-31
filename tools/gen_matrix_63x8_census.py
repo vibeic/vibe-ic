@@ -1001,6 +1001,58 @@ def _verdict_partition(totals: Dict[str, int]) -> str:
     return f"{printed}/{totals['cells']} accounted"
 
 
+def corpus_identity_line() -> str:
+    """One sentence naming the corpus this block was generated against.
+
+    WHY A GENERATED BLOCK HAS TO SAY THIS. The census is a statistic, and several
+    of its cells have predicates that consult the published corpus. So the block
+    is a function of (this commit, that corpus) and it published only the first
+    half. Two hosts at the SAME commit with DIFFERENT corpora mounted therefore
+    produced two different tables, both of which read as "the census", and
+    `--check` on either one called the other stale without saying why.
+
+    It is deliberately NOT a timestamp. `WHAT IT REFUSES` above rules out a stamp
+    that changes on every run, because that makes `--check` meaningless. This
+    changes only when the MOUNT changes, which is exactly the drift a reader
+    needs to see and the only drift this line can introduce.
+
+    MEASURED, and this is why the line reads the way it does: with no corpus
+    mounted the generator writes the block and reports `no change`; with a corpus
+    mounted that it cannot use it declares the run NORECORD and writes NOTHING.
+    So the generator never silently published two truths — the hazard is the
+    narrower one where a DIFFERENT usable corpus moves the numbers, and that case
+    is invisible without this line.
+    """
+    try:
+        sys.path.insert(0, str(PLUGIN_ROOT / "programs" / "tests"))
+        from _published_corpus import corpus_state  # noqa: E402
+        state, root = corpus_state()
+    except Exception as exc:  # pragma: no cover - a corpus seam that cannot be
+        # asked is reported, never guessed at, and never silently omitted.
+        return (f"Corpus at generation: UNRESOLVED — the corpus seam could not be "
+                f"consulted ({type(exc).__name__}: {str(exc)[:120]}). This block "
+                f"may or may not be a function of a mounted corpus.")
+    if root is None:
+        return (f"Corpus at generation: {state.upper().replace('-', '_')} — no "
+                f"published cell was read. Every figure below is a function of "
+                f"this commit alone.")
+    return (f"Corpus at generation: {state.upper().replace('-', '_')} @ "
+            f"{_corpus_commit(root)} ({root.name}). Figures whose predicate "
+            f"consults the corpus are a function of THAT tree as well as of this "
+            f"commit.")
+
+
+def _corpus_commit(root) -> str:
+    """The corpus's own HEAD, short. `unknown-commit` rather than a guess."""
+    try:
+        out = subprocess.run(["git", "rev-parse", "--short", "HEAD"], cwd=str(root),
+                             capture_output=True, text=True, timeout=20)
+        sha = out.stdout.strip()
+        return sha if out.returncode == 0 and sha else "unknown-commit"
+    except Exception:  # pragma: no cover - defensive
+        return "unknown-commit"
+
+
 def render(rows: List[Dict], totals: Dict[str, int]) -> str:
     """The generated block, marker to marker. No timestamp: see WHAT IT REFUSES."""
     out: List[str] = [BEGIN, ""]
@@ -1052,6 +1104,8 @@ def render(rows: List[Dict], totals: Dict[str, int]) -> str:
         f"enforcing while their own predicate is currently RED. They are NOT "
         f"folded into the {totals['enforced']}: a cell whose predicate fails is "
         f"not evidence of enforcement. See vibe-ic#888.")
+    out.append("")
+    out.append(corpus_identity_line())
     out.append("")
     # WHAT THIS MATRIX MEASURES, printed with the number rather than filed in a
     # doc nobody re-reads. Adversarial round 2 (2026-08-10) established that NO
