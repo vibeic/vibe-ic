@@ -63,6 +63,7 @@ from pathlib import Path, PurePosixPath
 from typing import (Any, Dict, FrozenSet, List, Optional, Sequence, Set,
                     Tuple)
 import _path_layout as _pl
+import _runner_measurement as _rmeas
 import _reference_flow_boundary as _rfb
 import _source_record_merge as _srm  # per-source merge: silence cannot erase
 import floorplan_contract as _fpc  # design-declared fixed floorplan + DRV limits
@@ -855,6 +856,28 @@ def _log_invocation(cmd: str, rc: int, duration_ms: int,
     _outs = _hash_declared_outputs(sink, outputs)
     if _outs:
         entry["outputs"] = _outs
+        # THE TOOL'S THIRD VALUE, read from the artefact the tool wrote.
+        #
+        # `_mcp_measurement`'s writer half is the MCP server's
+        # `measurementRecord()`, which this runner never goes through — it
+        # drives its tools by `docker exec` — so the record was structurally
+        # absent for every physical artefact on every design, and
+        # `provenance_check --require-measured` reported UNDECLARED ->
+        # INCOMPLETE forever. MEASURED on spm x gf180mcuD v1.14.5: 25 of 34
+        # gating step-ordering violations were that one gate with nothing to
+        # read.
+        #
+        # NOT the flat `"measured": True` above it — that one is a literal
+        # about `duration_ms`, and promoting it here would assert that a tool
+        # did its work because a subprocess was timed, which is the exact
+        # fabrication `_mcp_measurement` exists to refuse. This reads the
+        # artefact instead, and says nothing when it has no rule for it.
+        try:
+            _m = _rmeas.derive_for_outputs(Path(sink), _outs, _tool)
+            if _m is not None:
+                entry["measurement"] = _m
+        except Exception:      # nosec — provenance must never break a run
+            pass
     try:
         with (Path(sink) / "provenance.jsonl").open("a") as f:
             f.write(json.dumps(entry) + "\n")
