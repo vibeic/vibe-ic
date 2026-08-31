@@ -21,6 +21,10 @@ emitted Liberty (`hardmacro/<block>/<block>.lib`):
   3. If `analog/<block>/corner_results.json` exists, its provenance is
      reported (real_ngspice vs stub) so a reviewer can see whether the
      Liberty was derived from a real corner sweep.
+  4. If the design declares a clock period in its SDC or L8, every Liberty
+     propagation-delay arc must fit within that period. An analog settling
+     time longer than a clock period is an interface contract, not a
+     synchronous cell arc; it belongs in `interface.json` `timing_contract`.
 
 The defect this catches (real): a Liberty that only declares `area`
 (or whose every delay is `0.0`) passes STA vacuously — every path has
@@ -71,6 +75,7 @@ except ImportError:  # pragma: no cover
 
 import _vacuous_exit as _vx
 import _analog_a_check_common as _acc
+from macro_non_seq_arc_contract_check import design_clock_period_ns
 from _atomic_artefact import write_text as atomic_write_text  # vibe-ic#1082 (helper from PR #1094)
 
 
@@ -146,6 +151,34 @@ _LEAKAGE_GROUP_RE = re.compile(
 _LEAKAGE_VALUE_RE = re.compile(r"\bvalue\s*:\s*([-+0-9.eE]+)\s*;")
 _CELL_RE = re.compile(r"\bcell\s*\(\s*([^)\s]+)\s*\)\s*\{", re.IGNORECASE)
 
+# A propagation delay is not the same thing as a leakage number or an output
+# transition. The comparison below therefore reads only the Liberty groups
+# that STA treats as propagation delays. This distinction is load-bearing for
+# analog macros: a leakage+capacitance-only model is valid, while copying a
+# microsecond analog settling measurement into cell_rise/cell_fall fabricates a
+# synchronous path through the macro.
+_ARC_DELAY_ATTRS = (
+    "cell_rise", "cell_fall", "intrinsic_rise", "intrinsic_fall",
+)
+_ARC_GROUP_RE = re.compile(
+    rf"\b(?P<kind>{'|'.join(_ARC_DELAY_ATTRS)})\s*"
+    r"(?:\([^)]*\))?\s*\{",
+    re.IGNORECASE,
+)
+_TIME_UNIT_RE = re.compile(
+    r"\btime_unit\s*:\s*\"?\s*"
+    r"(?P<mult>\d+(?:\.\d+)?)\s*(?P<unit>fs|ps|ns|us|ms|s)\s*\"?\s*;",
+    re.IGNORECASE,
+)
+_TIME_UNIT_TO_NS = {
+    "fs": 1e-6,
+    "ps": 1e-3,
+    "ns": 1.0,
+    "us": 1e3,
+    "ms": 1e6,
+    "s": 1e9,
+}
+
 
 def _extract_values_blocks(text: str) -> List[str]:
     """Return the raw content of each values(...) call (balanced-paren scan)."""
@@ -163,6 +196,73 @@ def _extract_values_blocks(text: str) -> List[str]:
             i += 1
         blocks.append(text[start:i - 1])
     return blocks
+
+
+def _balanced_group_body(text: str, open_brace: int) -> str:
+    """Return one Liberty group's body, starting at its opening ``{``."""
+    depth = 1
+    i = open_brace + 1
+    start = i
+    while i < len(text) and depth > 0:
+        if text[i] == "{":
+            depth += 1
+        elif text[i] == "}":
+            depth -= 1
+        i += 1
+    return text[start:i - 1] if depth == 0 else text[start:]
+
+
+def _without_liberty_comments(text: str) -> str:
+    """Remove C- and C++-style comments before finding live arc syntax."""
+    text = re.sub(r"/\*.*?\*/", "", text, flags=re.DOTALL)
+    return re.sub(r"//[^\n]*", "", text)
+
+
+def liberty_arc_delays_ns(text: str) -> Tuple[List[dict], str]:
+    """Return propagation-delay samples normalised to ns and the time unit.
+
+    Only ``cell_rise``, ``cell_fall``, ``intrinsic_rise`` and
+    ``intrinsic_fall`` are propagation delays. Leakage and capacitance keep a
+    no-arc analog model non-degenerate but never become synchronous arcs here.
+    An absent/unrecognised ``time_unit`` returns raw samples with
+    ``delay_ns=None`` so the caller can refuse an uncheckable comparison.
+    """
+    text = _without_liberty_comments(text)
+    tm = _TIME_UNIT_RE.search(text)
+    scale = None
+    unit = "absent"
+    if tm:
+        unit = f"{tm.group('mult')}{tm.group('unit').lower()}"
+        scale = (float(tm.group("mult")) *
+                 _TIME_UNIT_TO_NS[tm.group("unit").lower()])
+
+    samples: List[dict] = []
+
+    # Scalar Liberty spelling: ``cell_rise : 0.42 ;``.
+    for kind in _ARC_DELAY_ATTRS:
+        for m in _SCALAR_RE[kind].finditer(text):
+            raw = float(m.group(1))
+            samples.append({
+                "kind": kind,
+                "raw_value": raw,
+                "delay_ns": raw * scale if scale is not None else None,
+            })
+
+    # NLDM spelling: ``cell_rise(template) { values("..."); }``. Restrict
+    # values() to the delay group body; a whole-file values() scan would also
+    # mistake power tables for timing arcs.
+    for m in _ARC_GROUP_RE.finditer(text):
+        body = _balanced_group_body(text, m.end() - 1)
+        for blob in _extract_values_blocks(body):
+            for token in _NUM_RE.findall(blob):
+                raw = float(token)
+                samples.append({
+                    "kind": m.group("kind").lower(),
+                    "raw_value": raw,
+                    "delay_ns": raw * scale if scale is not None else None,
+                })
+
+    return samples, unit
 
 
 @dataclass
@@ -254,6 +354,9 @@ def run_audit(project: Path) -> Result:
     failed: List[str] = []
     structure_only: List[str] = []
     design_bound: List[str] = []
+    period_ns = design_clock_period_ns(project)
+    arc_samples_examined = 0
+    arc_period_violations: List[dict] = []
 
     for block in blocks:
         lib = hm_dir / block / f"{block}.lib"
@@ -316,6 +419,51 @@ def run_audit(project: Path) -> Result:
                 message=(f"Block '{block}': every timing value in the Liberty "
                          f"is 0 — zero-delay model (forbidden). Use actual "
                          f"SPICE-measured delays.")))
+            continue
+
+        arc_samples, time_unit = liberty_arc_delays_ns(text)
+        arc_samples_examined += len(arc_samples)
+        if period_ns is not None and arc_samples and time_unit == "absent":
+            res.passed = False
+            failed.append(block)
+            res.findings.append(Finding(
+                rule="LIB_ARC_TIME_UNIT_UNDECLARED", severity="ERROR",
+                block=block,
+                message=(f"Block '{block}': {len(arc_samples)} propagation "
+                         f"delay sample(s) exist but the Liberty declares no "
+                         f"time_unit, so they cannot be compared with the "
+                         f"design clock period ({period_ns:g} ns).")))
+            continue
+
+        oversized = ([
+            sample for sample in arc_samples
+            if sample["delay_ns"] is not None
+            and sample["delay_ns"] > period_ns
+        ] if period_ns is not None else [])
+        if oversized:
+            res.passed = False
+            failed.append(block)
+            worst = max(oversized, key=lambda sample: sample["delay_ns"])
+            evidence = {
+                "block": block,
+                "cell": cell_name,
+                "kind": worst["kind"],
+                "delay_ns": worst["delay_ns"],
+                "clock_period_ns": period_ns,
+                "time_unit": time_unit,
+                "samples_over_period": len(oversized),
+            }
+            arc_period_violations.append(evidence)
+            res.findings.append(Finding(
+                rule="LIB_ARC_EXCEEDS_CLOCK_PERIOD", severity="ERROR",
+                block=block,
+                message=(f"Block '{block}': Liberty cell '{cell_name}' "
+                         f"{worst['kind']} delay {worst['delay_ns']:g} ns "
+                         f"exceeds the design clock period {period_ns:g} ns "
+                         f"({len(oversized)} sample(s) exceed it); an analog "
+                         f"macro carries no synchronous cell arc; move the "
+                         f"settling contract to interface.json "
+                         f"timing_contract.")))
             continue
 
         # ── the certification question, asked LAST ────────────────────────
@@ -386,6 +534,9 @@ def run_audit(project: Path) -> Result:
         "structure_only_blocks": structure_only,
         "verdict_tier": verdict_tier,
         "failed_blocks": failed,
+        "design_clock_period_ns": period_ns,
+        "arc_delay_samples_examined": arc_samples_examined,
+        "arc_period_violations": arc_period_violations,
         "pass": res.passed,
     }
     return res

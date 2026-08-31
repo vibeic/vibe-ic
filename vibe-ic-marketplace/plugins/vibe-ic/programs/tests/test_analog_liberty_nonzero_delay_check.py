@@ -49,6 +49,37 @@ LIB_ALL_ZERO = """library(ldo_lib) {
   }
 }"""
 
+LIB_SETTLING_AS_ARC = """library(controlled_analog) {
+  time_unit : "1us";
+  cell(controlled_analog) {
+    pin(out) {
+      timing() {
+        related_pin : "enable";
+        cell_rise(scalar) { values("2.97"); }
+        cell_fall(scalar) { values("4.50"); }
+      }
+    }
+    cell_leakage_power : 0.0031;
+  }
+}"""
+
+LIB_LEAKAGE_AND_CAPS_ONLY = """library(controlled_analog) {
+  time_unit : "1ns";
+  cell(controlled_analog) {
+    cell_leakage_power : 0.0031;
+    pin(enable) { direction : input; capacitance : 0.02; }
+    pin(out) { direction : output; capacitance : 0.40; }
+  }
+}"""
+
+
+def _clock(root, period_ns):
+    l8 = root / "phase1" / "generated_docs" / "L8_TIMING_WAVEFORM.json"
+    l8.parent.mkdir(parents=True, exist_ok=True)
+    l8.write_text(json.dumps({
+        "fields": {"clocks": [{"name": "clk", "period_ns": period_ns}]}
+    }))
+
 
 class TestAnalyzer:
     def test_real_has_nonzero(self):
@@ -68,6 +99,24 @@ class TestAnalyzer:
         has_timing, values, cell = mod.analyze_liberty(LIB_ALL_ZERO)
         assert has_timing is True
         assert all(v == 0.0 for v in values)
+
+    def test_arc_delay_parser_scopes_values_and_normalises_units(self):
+        samples, unit = mod.liberty_arc_delays_ns(LIB_SETTLING_AS_ARC)
+        assert unit == "1us"
+        assert [(s["kind"], s["delay_ns"]) for s in samples] == [
+            ("cell_rise", 2970.0), ("cell_fall", 4500.0)]
+
+        # A power-table values() group is not a propagation-delay arc.
+        power_only = """library(x) { time_unit : "1ns";
+          cell(x) { internal_power() { rise_power(t) { values("9000"); } }
+                    cell_leakage_power : 1.0; } }"""
+        assert mod.liberty_arc_delays_ns(power_only)[0] == []
+
+        commented = """library(x) { time_unit : "1ns";
+          /* cell_rise(t) { values("9000"); } */
+          // intrinsic_fall : 8000;
+          cell(x) { cell_leakage_power : 1.0; } }"""
+        assert mod.liberty_arc_delays_ns(commented)[0] == []
 
 
 # --------------------------------------------------------------------------
@@ -119,6 +168,67 @@ def test_fail_all_zero_delay(tmp_path):
     res = mod.run_audit(tmp_path)
     assert res.passed is False
     assert "LIB_ZERO_DELAY" in {f.rule for f in res.findings}
+
+
+def test_fail_analog_settling_encoded_as_synchronous_arc(tmp_path):
+    _clock(tmp_path, 1000.0)
+    _mk(tmp_path, "controlled_analog", LIB_SETTLING_AS_ARC,
+        corner={"_provenance": "real_ngspice",
+                "design_content": DESIGN_BOUND})
+    res = mod.run_audit(tmp_path)
+    assert res.passed is False
+    finding = next(f for f in res.findings
+                   if f.rule == "LIB_ARC_EXCEEDS_CLOCK_PERIOD")
+    assert "cell_fall delay 4500 ns" in finding.message
+    assert "design clock period 1000 ns" in finding.message
+    assert ("an analog macro carries no synchronous cell arc; move the "
+            "settling contract to interface.json timing_contract" in
+            finding.message)
+    assert res.summary["arc_period_violations"] == [{
+        "block": "controlled_analog",
+        "cell": "controlled_analog",
+        "kind": "cell_fall",
+        "delay_ns": 4500.0,
+        "clock_period_ns": 1000.0,
+        "time_unit": "1us",
+        "samples_over_period": 2,
+    }]
+
+
+def test_pass_leakage_and_caps_only_with_settling_kept_out_of_liberty(tmp_path):
+    _clock(tmp_path, 1000.0)
+    _mk(tmp_path, "controlled_analog", LIB_LEAKAGE_AND_CAPS_ONLY,
+        corner={"_provenance": "real_ngspice",
+                "design_content": DESIGN_BOUND})
+    res = mod.run_audit(tmp_path)
+    assert res.passed is True
+    assert res.summary["arc_delay_samples_examined"] == 0
+    assert res.summary["arc_period_violations"] == []
+
+
+def test_pass_propagation_arc_at_or_below_clock_period(tmp_path):
+    # The worst sample equals the period exactly; only strictly slower arcs
+    # violate the rule.
+    _clock(tmp_path, 4.5)
+    lib = LIB_SETTLING_AS_ARC.replace('time_unit : "1us"',
+                                     'time_unit : "1ns"')
+    _mk(tmp_path, "controlled_analog", lib,
+        corner={"_provenance": "real_ngspice",
+                "design_content": DESIGN_BOUND})
+    res = mod.run_audit(tmp_path)
+    assert res.passed is True
+    assert res.summary["arc_delay_samples_examined"] == 2
+
+
+def test_fail_clocked_arc_without_a_liberty_time_unit(tmp_path):
+    _clock(tmp_path, 1000.0)
+    lib = LIB_SETTLING_AS_ARC.replace('  time_unit : "1us";\n', '')
+    _mk(tmp_path, "controlled_analog", lib,
+        corner={"_provenance": "real_ngspice",
+                "design_content": DESIGN_BOUND})
+    res = mod.run_audit(tmp_path)
+    assert res.passed is False
+    assert "LIB_ARC_TIME_UNIT_UNDECLARED" in {f.rule for f in res.findings}
 
 
 def test_fail_missing_lib(tmp_path):

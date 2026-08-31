@@ -26,7 +26,8 @@ Takes a verified analog block (SPICE corner sweep passed, optionally hardware-ve
 > `programs/analog_hardmacro_check.py` (all 4 files exist; LEF has
 > MACRO/PIN, LIB has cell, V has module) and
 > `programs/analog_liberty_nonzero_delay_check.py` (the "no zero-delay
-> Liberty" rule — area-only / all-zero `.lib` => FAIL). Cross-file
+> Liberty" rule — area-only / all-zero `.lib` => FAIL; a propagation arc
+> slower than the design's declared SDC/L8 clock period => FAIL). Cross-file
 > pin-name equality is enforced by
 > `programs/analog_hardmacro_pinname_consistency_check.py`.
 
@@ -65,15 +66,22 @@ Takes a verified analog block (SPICE corner sweep passed, optionally hardware-ve
   `programs/analog_liberty_nonzero_delay_check.py`: the `.lib` must carry
   at least one timing/leakage attribute and every timing value must be
   non-zero (an area-only or all-zero `.lib` is the documented vacuous-STA
-  defect and FAILs). The check also reports the corner-sweep provenance
+  defect and FAILs). If a `cell_rise`/`cell_fall`/intrinsic propagation
+  delay exceeds the design-owned clock period in SDC/L8, the same check
+  FAILs: an analog settling time is not a synchronous cell arc. Keep a
+  leakage+capacitance-only Liberty when the macro has no real synchronous
+  propagation arc, and record settling in `interface.json`
+  `timing_contract`. The check also reports the corner-sweep provenance
   (`real_ngspice` vs stub) read from `corner_results.json`.
-- **Judgment residual (NOT a program):** which arcs to model and what
-  delay value to assign — `corner_results.json` carries the analog spec
-  value (e.g. `vout_v`, `ota_ugbw_hz`) per PVT corner, NOT pre-computed
+- **Judgment residual (NOT a program):** which genuine sub-period arcs to
+  model and what delay value to assign — `corner_results.json` carries the
+  analog spec value (e.g. `vout_v`, `ota_ugbw_hz`) per PVT corner, NOT pre-computed
   `cell_rise`/`cell_fall`/`setup`/`hold`/`leakage` timing arcs. Mapping
   a measured analog metric onto Liberty timing arcs for a given control
-  interface is an analog-modeling decision; only the SS-worst-corner
-  selection and the non-zero formatting are deterministic.
+  interface is an analog-modeling decision. The deterministic boundary is:
+  SS-worst-corner selection, non-zero formatting, and no propagation arc
+  may exceed the design clock period; a slower settling contract belongs
+  in `interface.json` `timing_contract` instead.
 
 ### 4. Behavioral Verilog (`hardmacro/<block>/<block>.v`)
 - For gate-level simulation (digital TB can instantiate this)
@@ -95,7 +103,9 @@ Takes a verified analog block (SPICE corner sweep passed, optionally hardware-ve
    `layout.mag`; if there is no `layout.mag`, run `eda_analog_layout` (A5) first
 2. **LEF**: Run Magic `lef write` with correct pin definitions
 3. **Liberty**: Pick the SS (worst) corner from `corner_results.json` and
-   author the `.lib` with non-zero arcs (modeling judgment per § 3 above);
+   author the `.lib` with non-zero leakage and only genuine sub-period
+   propagation arcs (modeling judgment per § 3 above); put analog settling
+   in `interface.json` `timing_contract`;
    non-degeneracy gate = `analog_liberty_nonzero_delay_check.py`
 4. **Behavioral Verilog**: Emit a module whose port list matches
    `spec.json` `interface.pins`; behavior-modeling is judgment (§ 4 above)
@@ -117,6 +127,10 @@ hardmacro/<block>/
 
 - Do not generate Liberty with zero delays — use actual SPICE-measured
   values (enforced by `programs/analog_liberty_nonzero_delay_check.py`)
+- Do not encode an analog settling time longer than the declared clock period
+  as `cell_rise` / `cell_fall`: an analog macro carries no synchronous cell
+  arc for that contract. Move it to `interface.json` `timing_contract`
+  (enforced by `programs/analog_liberty_nonzero_delay_check.py`)
 - Do not mismatch pin names between LEF and Verilog — causes LVS failure
   at integration (enforced by
   `programs/analog_hardmacro_pinname_consistency_check.py`)
