@@ -647,7 +647,20 @@ run "plugin full audit"             "$PLUGIN" python3 programs/plugin_full_audit
 # 7 of 29; widening it reddens every landing. See `_NOT_A_PROJECT_GATE` in
 # flow_compliance_check.py for the measurement.
 run "openroad TCL deprecations"     "$PLUGIN" python3 programs/openroad_tcl_deprecation_check.py
-run "practical notes specificity"   "$PLUGIN" python3 programs/practical_notes_specificity_check.py
+# `run_tolerating_uncheckable`, not `run`: on a host without the OPTIONAL NDA
+# token store this checker answers NOT_MEASURED / rc 2 — its own conversion
+# note says the NDA doctrine ends "A caller must report NOT_MEASURED", and the
+# resolver refuses rather than scanning with an empty token set. Plain `run`
+# relabeled that refusal as a content verdict: the 2026-08-31 stamp run (a
+# tokenless container) recorded `^^ FAILED: practical notes specificity [0s]`
+# over 16 files whose scan on a configured host is PASS — reproduced both ways
+# at 4648133466 by flipping only VIBEIC_NDA_TOKENS. "This host cannot answer
+# the NDA sub-question" and "the practical notes are chip-specific" are
+# different facts; only the second is rc 1, and rc 1 still fails through this
+# wrapper. Do NOT green this by giving the host a token file — the wiring, not
+# the environment, was wrong.
+uncheckable_until 2027-02-28 "rc 2 means this host carries no NDA token store (VIBEIC_NDA_TOKENS / the private config's 'nda_tokens'), so the specific_pdk_codename rule cannot be built and the checker reports NOT_MEASURED per the NDA doctrine — it is NOT a claim about the 16 scanned documents. Every other rule still ran, and a document that trips ANY rule on a host that CAN build the full set is rc 1 and fails through this wrapper. Revisit: by this date either the landing runtime carries the tokens (preferred — then this exemption never fires there) or the checker has split 'tokens missing' from its broken-repo rc 2 arms"
+run_tolerating_uncheckable "practical notes specificity" "$PLUGIN" python3 programs/practical_notes_specificity_check.py
 
 # A disposition in the P0 registers can assert a home ("driven at the final
 # acceptance gate") in the same present tense the one true claim above uses
