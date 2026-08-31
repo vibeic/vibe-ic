@@ -388,3 +388,198 @@ moves the lander's sha256 and reddens 10 tests. `tools/gatekeeper-land.sh` is in
 but it was measured on a different tree, so it is re-measured here rather than
 quoted. Result in §6.3.
 
+## 7. THE LANDING ORDER — why this cannot be one landing, and what it is instead
+
+This is the part attempts 1-4 never wrote down, and it is the reason a fifth
+attempt shaped like them would have failed the same way.
+
+A candidate that renames a protected runtime path is refused by
+`build_receipt` before any test runs, because the candidate is observed at the
+BASE's path list. No amount of care inside the rename changes that. The rename
+is therefore not one landing; with commit 1 in place it is FOUR, in this order:
+
+  L1  Land commit 1 alone (`fbbe00d084`) — the protocol gains `manifest.moves`
+      and the RENAME operation. This is a BYTE change at a FIXED path
+      (`tools/ci/protected_landing_transition.py`), which the protocol already
+      expresses. It renames nothing and is reviewable on its own.
+
+  L2  PREPARE. A manifest-only landing that declares the two moves and the
+      `next` state naming the new paths. Live bytes and the `paths`/role set
+      are unchanged, so it satisfies PREPARE's existing rules; it needs L1
+      already in the base, because BASE's parser is what reads the new key.
+
+  L3  RENAME. Commit 2 (`92c0a436d4`) — the `git mv`s, the 307 substitutions,
+      `RUNTIME_PATHS` updated to the new paths, and the register
+      re-photographed in the SAME landing. This is the operation L1 added.
+
+  L4  Regenerate `PROGRAM_INVENTORY.json` against the landed tree.
+
+L1 AND L2 CANNOT BE COLLAPSED, and L2 and L3 cannot either: BASE supplies the
+policy, so each step must already BE the base before the next is judged. That is
+the design working, not an obstacle to route around.
+
+### 7.1 What this ref does NOT contain, stated plainly
+
+L2 and L4 are not in this ref. L2 is a manifest authored against whatever commit
+L1 actually lands as, so it cannot be written before that sha exists;
+`tools/ci/protected_landing_manifest_author.py` needs a `--move from=to` flag to
+emit it, which is a small addition this ref does not make. L4 is mechanical and
+belongs to the landing.
+
+So: this ref proves the rename is expressible and performs it; it does not
+carry the two steps that can only be written once L1 has a sha.
+
+### 7.2 The one thing NOT to do
+
+The plain lander does not consult the validator (§1.8), so this rename can be
+pushed today and nothing will stop it. Doing that would leave main's register
+naming two files that no longer exist, and — measured in the 2026-08-22 research
+note — that state makes EVERY later protected-path landing refuse on the BASE,
+which no candidate can route around. It also requires `--no-verify`, which the
+repo-gatekeeper role forbids. The bypass is a trap, not a shortcut.
+
+## 6. ARMS — the collected count asserted on BOTH sides
+
+A rename that silently drops a test from collection is a deletion wearing a
+rename's clothes, so the count must be EQUAL, not merely plausible.
+
+### 6.1 Collection — EQUAL
+
+    BEFORE  main 3f169b1195, in a --shared clone
+            test_matrix_63x8_{coverage,census_freshness,figure_coverage,ledger}.py
+            -> 103 tests collected
+    AFTER   this ref
+            test_flow_matrix_{coverage,census_freshness,figure_coverage,ledger}.py
+            -> 103 tests collected
+
+**103 == 103.** No module vanished from collection, and none appeared.
+
+### 6.2 Execution — run in full on both sides
+
+    BEFORE  6 failed, 97 passed, 0 skipped, 103 total   (793s)
+
+Main's own six reds in these four modules, for the record, because they are the
+baseline this rename must not add to:
+
+    census_freshness :: test_the_census_block_is_fresh
+    census_freshness :: test_the_generator_cli_can_go_red_and_green
+    census_freshness :: test_the_published_total_equals_the_live_census
+    coverage         :: test_no_cell_is_counted_enforced_while_its_predicate_is_red
+    figure_coverage  :: test_every_anchored_figure_in_the_committed_corpus_is_fresh
+    ledger           :: test_output_entries_classify_into_the_four_kinds
+
+Five of those six are census/figure-freshness reds — which is very likely the
+set kcensus5 is fixing (§2). They are PRE-EXISTING on main and are not this
+ref's to fix; they are recorded so the AFTER arm can be judged against them
+rather than against zero.
+
+    AFTER   [result recorded in §6.4 below]
+
+A FIRST AFTER RUN WAS DISCARDED, and saying so is the point. It reported
+"8 failed, 81 passed, 14 skipped" — but that run was executing in the worktree
+while this ref's history was being rebuilt under it (`git checkout -B`), so the
+test files were renamed back mid-run. The 14 skips were files disappearing, not
+a property of the tree. It is kept at `scratchpad/arms/after_CONTAMINATED.log`
+and is not evidence of anything. The AFTER arm was re-run on the final, quiet
+tree.
+
+### 6.3 jflowmx4's second refusal — RE-MEASURED, and the number was wrong
+
+jflowmx4 left `tools/gatekeeper-land.sh:29` — a comment naming the old gate
+label — deliberately stale, on the grounds that editing it moves the lander's
+sha256 and reddens 10 tests. Re-measured here on main `3f169b1195`, both
+directions, in an isolated clone:
+
+    CONTROL  the line UNEDITED
+             test_pytest_per_file_junit.py + test_ci_harness_timeout_ceiling_check.py
+             -> 183 passed, 0 failed          (240s)
+
+    TREATMENT  the same line, comment text renamed, one occurrence, nothing else
+             -> 172 passed, 11 FAILED         (172s)
+
+The refusal STANDS and is confirmed independently on today's tree — but it is
+**11 tests, not 10**, and the 11th is not a rounding error:
+`test_pytest_per_file_junit.py::test_the_landing_harness_declares_semantic_
+progress_not_elapsed_time` reddens too, and the other ten are all in
+`test_ci_harness_timeout_ceiling_check.py`. A quoted count that has drifted by
+one is the same failure mode as a name that encodes a size, so it is corrected
+here rather than carried forward.
+
+The control arm is the load-bearing half: 183/183 green with the line untouched
+proves the 11 reds are caused BY THE EDIT, not by the harness or the host.
+
+So the disposition is unchanged and now rests on this tree's own evidence:
+`tools/gatekeeper-land.sh:29` STAYS STALE, reported rather than fixed, because a
+rename that silently breaks a pin is worse than a stale comment. It is a live
+loose end with a named owner: it becomes free to fix in the same landing that
+re-authorises `tools/gatekeeper-land.sh`'s digest — which is an ordinary
+PREPARE/ACTIVATE of bytes at a fixed path, and needs none of this ref's
+machinery.
+
+### 6.5 The census generator, both sides
+
+`gen_*_census.py --check` is the gate that decides whether the published matrix
+figures are stale. Run on both trees, capturing the GENERATOR's exit code:
+
+    BEFORE  main 3f169b1195, tools/gen_matrix_63x8_census.py --check
+            rc=1
+            [FAIL] 15 anchored figure(s) disagree with the tree
+            .../matrix_63x8/README.md census block is stale
+
+    AFTER   [recorded in §6.6]
+
+Main is ALREADY red here, by 15 anchored figures plus a stale census block.
+That is the same population as five of the six pre-existing test reds in §6.2
+and it is not this ref's to repair.
+
+A FIRST AFTER-CENSUS READING OF `rc=0` WAS DISCARDED AS FALSE. It came from
+`... --check | tail -20; echo rc=$?`, where `$?` is the exit status of `tail`,
+not of the generator. A pipeline's exit code is the LAST stage's, so that
+reading could not have been anything but 0 and proved nothing about the census.
+Re-run without the pipe.
+
+### 6.6 TWO AFTER RUNS WERE INVALIDATED BY MY OWN EDITS, AND THE METHOD CHANGED
+
+This is recorded because the reason is a trap anyone measuring this repo will
+hit, and because reporting either run's numbers would have been reporting noise.
+
+    AFTER run 1   discarded: the branch history was rebuilt (`git checkout -B`)
+                  in the same worktree mid-run, so the test files were renamed
+                  back underneath it. Reported "14 skipped" — files vanishing.
+    AFTER run 2   discarded: 9 failed / 94 passed, against BEFORE's 6 / 97. The
+                  three extra reds all carried the same message:
+
+                      the outcome run for test_matrix_d4_criteria_match.py
+                      exited rc=1 but every raw test report is non-red. This is
+                      an unrepresented session-level refusal, not cell evidence
+
+                  THE CAUSE WAS ME. These tests spawn nested outcome runs whose
+                  `suite_write_guard` checks `git status --porcelain`. I was
+                  editing `tools/ci/` in that worktree while the arm ran, so
+                  the nested runs saw an unclean tree and refused at SESSION
+                  level — which the census correctly reads as missing cell
+                  evidence rather than as a passing cell. The gate was right;
+                  the measurement was contaminated. Run standalone in a quiet
+                  tree, `test_matrix_d4_criteria_match.py` is 76 passed.
+
+    AFTER run 3   in `/home/reyerchu/_jflowmx5_arm`, a detached worktree at the
+                  ref head that nothing else touches. Result in §6.7.
+
+The lesson generalises past this ref: **any measurement of this repo must run in
+a worktree nobody is editing**, because the suite's own write guard makes a
+dirty tree indistinguishable from a broken one at the session level.
+
+### 6.7 An operational hazard the rename creates, for whoever lands it
+
+`git mv` moves TRACKED files only. It left an orphaned
+
+    programs/tests/matrix_63x8/__pycache__/{cells,flowref,waivers,__init__}.pyc
+
+behind in the working tree — a stale package directory sitting next to the new
+one under the OLD name. It is invisible to `git status` (gitignored), it is not
+in any commit, and it is exactly the split-name state this rename exists to
+prevent, in the one place git will not warn about.
+
+    ANYONE APPLYING THIS REF MUST `rm -rf` THAT DIRECTORY,
+    or run `git clean -xdf` over `programs/tests/`, before measuring anything.
+
