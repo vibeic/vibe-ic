@@ -823,3 +823,78 @@ def test_an_unknown_register_kind_is_refused(tmp_path) -> None:
     with pytest.raises(P.Refusal) as caught:
         P.parse_manifest(manifest, 40)
     assert "not a protected-landing register kind" in str(caught.value)
+
+
+# ---------------------------------------------------------------------------
+# `describes_tree` — THE QUESTION, WITHOUT THE VERDICT.
+#
+# `_match_state` was deleted at `3c9d6a2563` (v1.13.36) because it ANSWERED A
+# LANDING: any unauthorised move of any protected path falsified both recorded
+# tuples and refused every landing after it, for drift nobody could repair.
+# `classify_move` replaced it and observes the base instead. What went with the
+# refusal was the ability to ASK, and a commit that CARRIES a manifest is making
+# a claim -- that the manifest was rendered against the tree it travels with --
+# that nothing could check any more. MEASURED 2026-08-31 on `36139c9546`
+# (v1.14.24): a manifest rendered by `protected_landing_manifest_author.py`
+# against that exact tree was indistinguishable from one rendered two mains
+# earlier.
+#
+# These four cases are the bidirectional control. Both recorded tuples are
+# RECOGNISED and by the right id; drift of a single byte in a single path is
+# None; and the predicate raises NOTHING, so restoring the question cannot
+# restore the refusal that was retired with it.
+# ---------------------------------------------------------------------------
+
+
+def test_describes_tree_names_the_state_a_tuple_actually_is(tmp_path) -> None:
+    repo, _base, _in_tree = _repo(tmp_path)
+    manifest = P.parse_manifest(_manifest(repo), 40)
+    current = [dict(row) for row in manifest["current"]["files"]]
+    nxt = [dict(row) for row in manifest["next"]["files"]]
+    assert current != nxt, "the fixture must record an actual move"
+
+    assert P.describes_tree(current, manifest) == manifest["current"]["id"]
+    assert P.describes_tree(nxt, manifest) == manifest["next"]["id"]
+
+
+def test_describes_tree_is_none_when_one_path_drifted(tmp_path) -> None:
+    """THE DIRECTION THAT MATTERS. A manifest rendered against another tree is
+    exactly this: every path matches but the ones some landing moved."""
+    repo, _base, _in_tree = _repo(tmp_path)
+    manifest = P.parse_manifest(_manifest(repo), 40)
+    victim = sorted(P.RUNTIME_PATHS)[0]
+    for label in ("current", "next"):
+        drifted = [
+            _record(repo, row["path"], b"drifted:" + row["path"].encode())
+            if row["path"] == victim else dict(row)
+            for row in manifest[label]["files"]]
+        assert P.describes_tree(drifted, manifest) is None, label
+
+
+def test_describes_tree_answers_and_never_refuses(tmp_path) -> None:
+    """It is a REPORTING predicate. If it could raise `Refusal` a caller could
+    put it back in a landing path by accident, which is the shape v1.13.36
+    removed. The drifted input above is the one that used to raise."""
+    repo, _base, _in_tree = _repo(tmp_path)
+    manifest = P.parse_manifest(_manifest(repo), 40)
+    drifted = [_record(repo, row["path"], b"drifted:" + row["path"].encode())
+               for row in manifest["current"]["files"]]
+    assert P.describes_tree(drifted, manifest) is None
+    assert P.describes_tree([], manifest) is None
+
+
+def test_a_drifted_base_still_lands_with_the_predicate_restored(tmp_path) -> None:
+    """THE RETIRED REFUSAL STAYS RETIRED. `classify_move` decides landings and
+    does not consult `describes_tree`: a base whose tuple matches neither
+    recorded state still classifies a candidate that moves nothing as STEADY."""
+    repo, _base, _in_tree = _repo(tmp_path)
+    manifest = P.parse_manifest(_manifest(repo), 40)
+    victim = sorted(P.RUNTIME_PATHS)[0]
+    drifted = [
+        _record(repo, row["path"], b"unauthorised:" + row["path"].encode())
+        if row["path"] == victim else dict(row)
+        for row in manifest["current"]["files"]]
+
+    assert P.describes_tree(drifted, manifest) is None
+    operation, _base_id, _cand_id = P.classify_move(drifted, drifted, manifest)
+    assert operation == "STEADY", operation

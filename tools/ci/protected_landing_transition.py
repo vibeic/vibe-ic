@@ -677,6 +677,42 @@ def moved_paths(manifest: Mapping[str, Any]) -> list[str]:
                   if current.get(row["path"]) != row)
 
 
+def describes_tree(files: Sequence[Mapping[str, Any]],
+                   manifest: Mapping[str, Any]) -> str | None:
+    """The id of the recorded state this observed tuple IS, or None.
+
+    A REPORTING PREDICATE, NEVER A LANDING RULE, and the distinction is the
+    whole reason this is a separate function from `classify_move`.
+
+    `_match_state` asked this same question and ANSWERED A LANDING WITH IT, so
+    every landing after any unauthorised move of any protected path was refused
+    for drift nobody could repair; `classify_move` replaced it and observes the
+    base instead, and that is still how a landing is decided. What went with it
+    was the ability to ask the question AT ALL, and the question is worth
+    asking somewhere else: a commit that CARRIES a manifest is claiming the
+    manifest was rendered against the tree it travels with, and nothing checked
+    that claim. MEASURED 2026-08-31 on `36139c9546` (v1.14.24): a manifest
+    rendered by `protected_landing_manifest_author.py` against that exact tree
+    could not be told apart from one rendered two mains earlier, because the
+    only function that could tell them apart had been deleted.
+
+    So this returns an ANSWER, not a verdict: the state id when the tuple is
+    one of the two recorded states, and None when it is neither. It raises no
+    `Refusal` and no caller inside this module consults it, so restoring the
+    question cannot restore the refusal that was retired with it. The one
+    consumer is the pre-commit reporter, which is scoped to commits that touch
+    a protected path or the manifest itself.
+
+    Equality is over the whole record -- `blob_oid`, `mode`, `sha256`, `size`
+    -- the same rows `_observe_files` produces and the same rows the manifest
+    records, so a mode flip is drift here exactly as it is everywhere else.
+    """
+    for label in ("current", "next"):
+        if list(files) == list(manifest[label]["files"]):
+            return str(manifest[label]["id"])
+    return None
+
+
 def _rows_by_path(files: Sequence[Mapping[str, Any]], what: str
                   ) -> dict[str, Mapping[str, Any]]:
     out: dict[str, Mapping[str, Any]] = {}
