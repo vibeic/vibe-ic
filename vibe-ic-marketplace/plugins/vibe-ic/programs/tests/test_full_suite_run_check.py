@@ -245,3 +245,60 @@ def test_a_subset_flag_narrows_regardless_of_the_coverage_set():
     full, _ = fsr._classify_pytest(
         ["python3", "-m", "pytest", "programs/tests", "-q", "-k", "foo"], pop)
     assert full is False
+
+
+# ── the listing call is SUPERVISED, and the deadline is real ──────────────
+# `runner_tiers` runs a script chosen at runtime, so nothing here can read what
+# that script launches — `loop_watchdog_compliance_check` class (c). The call
+# therefore goes through `_watchdog.run_supervised`, and these two tests are the
+# prove-by-run half of that: a declared-but-hanging candidate must be KILLED at
+# the deadline and read as "not a runner", and a candidate that answers must
+# still answer. Without the first, "supervised" would be a word in a comment.
+
+def _declaring_script(path: Path, body: str) -> Path:
+    path.write_text(f"#!/usr/bin/env bash\n# {fsr._LIST_TIERS_FLAG}\n{body}\n",
+                    encoding="utf-8")
+    return path
+
+
+def test_a_hanging_candidate_is_killed_at_the_deadline(tmp_path, monkeypatch):
+    import time
+    monkeypatch.setattr(fsr, "_LIST_TIERS_TIMEOUT", 3)
+    monkeypatch.setattr(fsr, "_LIST_TIERS_POLL", 1)
+    script = _declaring_script(tmp_path / "hangs.sh", "sleep 600")
+
+    started = time.monotonic()
+    result = fsr.runner_tiers(script)
+    elapsed = time.monotonic() - started
+
+    assert result is None, "a script that never answers is not a runner"
+    # It RETURNED, and it returned near the deadline rather than after 600 s.
+    assert elapsed < 30, f"the deadline did not fire: {elapsed:.1f}s"
+    assert elapsed >= 2, f"it did not wait for the deadline at all: {elapsed:.1f}s"
+
+
+def test_a_candidate_that_answers_is_unaffected_by_the_supervision(tmp_path):
+    """The other direction: supervision must not turn a real runner into None."""
+    (tmp_path / "alpha").mkdir()
+    (tmp_path / "beta").mkdir()
+    script = _declaring_script(tmp_path / "answers.sh", "echo alpha\necho beta")
+
+    assert fsr.runner_tiers(script) == ["alpha", "beta"]
+
+
+def test_a_candidate_that_exits_non_zero_is_not_a_runner(tmp_path):
+    script = _declaring_script(tmp_path / "fails.sh", "exit 3")
+    assert fsr.runner_tiers(script) is None
+
+
+def test_a_candidate_that_does_not_declare_the_protocol_is_never_launched(
+        tmp_path):
+    """The static precondition, still first: an undeclared script must return
+    immediately, not after the supervision deadline."""
+    import time
+    silent = tmp_path / "silent.sh"
+    silent.write_text("#!/usr/bin/env bash\nsleep 600\n", encoding="utf-8")
+
+    started = time.monotonic()
+    assert fsr.runner_tiers(silent) is None
+    assert time.monotonic() - started < 1.0, "it was launched"

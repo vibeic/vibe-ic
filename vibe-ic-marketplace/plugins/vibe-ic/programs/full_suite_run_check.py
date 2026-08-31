@@ -116,9 +116,30 @@ _SUBSET_FLAGS = ("-k", "-m")
 #: not a test run: measured 0.009 s at e37d10e1e. A script that takes longer
 #: than this to list its tiers is not answering the question.
 _LIST_TIERS_TIMEOUT = 30
+#: Supervision cadence for the listing call above. The default 30 s poll would
+#: be the whole budget, so the ceiling could only ever fire once; 1 s makes the
+#: deadline mean what it says on a call expected to answer in well under it.
+_LIST_TIERS_POLL = 1
 
 #: The flag a runner must answer to be treated as a source of coverage.
 _LIST_TIERS_FLAG = "--list-tiers"
+
+
+#: Memoised: `_load_sibling` re-executes the module on every call, and
+#: `runner_tiers` is asked about every candidate command in a commands file.
+_WATCHDOG = None
+
+
+def _watchdog():
+    """The supervision primitive, loaded the same way every other sibling is.
+
+    A bare `import _watchdog` works when this file is run as a script and dies
+    under `spec_from_file_location`, which is how the gates load it.
+    """
+    global _WATCHDOG
+    if _WATCHDOG is None:
+        _WATCHDOG = _load_sibling("_watchdog")
+    return _WATCHDOG
 
 
 def _load_sibling(name: str):
@@ -337,17 +358,35 @@ def runner_tiers(script: Path) -> Optional[List[str]]:
             return None
     except OSError:                                         # pragma: no cover
         return None
-    try:
-        proc = subprocess.run(
-            ["bash", str(script), _LIST_TIERS_FLAG],
-            capture_output=True, text=True, cwd=str(plugin),
-            timeout=_LIST_TIERS_TIMEOUT,
-        )
-    except (OSError, subprocess.SubprocessError):
+    # SUPERVISED. The script is chosen at RUNTIME, so what it launches cannot be
+    # read from here — which is exactly `loop_watchdog_compliance_check`'s class
+    # (c): an opaque runner whose contents no AST pass can inspect. The rule it
+    # enforces is that such a launch goes through the one supervision primitive
+    # this tree has, so its discipline is the same as every other sub-process's
+    # and its outcome is a VALUE rather than an exception thrown past a child.
+    #
+    # Two numbers are set rather than defaulted. The hard ceiling is the SAME
+    # number the timeout was, so nothing about the deadline changes; the stall
+    # grace is set to it as well, because the 30-minute default would let a
+    # silent listing sit for the whole grace before the ceiling could fire.
+    # MEASURED, not assumed: neither this call nor the `subprocess.run(timeout=)`
+    # it replaces kills a process GROUP, so a script that backgrounds work still
+    # orphans it. The gain here is the discipline and the structured outcome,
+    # and claiming more than that would be claiming something unmeasured.
+    proc = _watchdog().run_supervised(
+        ["bash", str(script), _LIST_TIERS_FLAG],
+        cwd=str(plugin), merge_stderr=False, output_progress=True,
+        stall_grace_s=_LIST_TIERS_TIMEOUT,
+        hard_ceiling_s=_LIST_TIERS_TIMEOUT,
+        poll_s=_LIST_TIERS_POLL,
+    )
+    # Every non-zero outcome — a natural failure, a launch error (rc 127), a
+    # stall kill (199) and the ceiling kill (124) — reads the same here as it
+    # did before: this candidate is not a runner. That is the safe direction and
+    # also the true one.
+    if proc.rc != 0:
         return None
-    if proc.returncode != 0:
-        return None
-    lines = [ln.strip() for ln in proc.stdout.splitlines() if ln.strip()]
+    lines = [ln.strip() for ln in proc.out.splitlines() if ln.strip()]
     if len(lines) < 2:
         return None
     if not all((plugin / ln).is_dir() for ln in lines):
