@@ -918,6 +918,30 @@ steps:
         - advisory_program_exit_zero:
               command: "l8_sta_clock_period_design_owned_check ."
               advisory_reason: "NOT-YET-CLEAN: this gate CAN refuse and is wired advisory as a ratchet position, not as a verdict. Notch measured rc 0 on a real spm run (2026-08-31): it is already clean on real input, so blocking would cost nothing today; the only thing holding it advisory is that no other run has been measured."
+        # L22 analog verification plan — the PRODUCER, wired where its verdict
+        # can be read. `flow_gate_enforcement_audit` reported it ORPHANED:
+        # "declares an intent and is reachable from nothing at all". It is in
+        # fact reached — `phase1_doc_one_shot_runner` calls it at the tail of
+        # this very step — but through `from <module> import run`, which is not
+        # one of that audit's five venues, and the adapter then read only
+        # `emitted_count`. So the one outcome worth naming (an ANALOG class
+        # whose L5 blocks the emitter could not identify, leaving L22 with no
+        # analog verification plan at all) returned the same 0 as a digital
+        # no-op and printed nothing.
+        #
+        # `--dry-run` IS LOAD-BEARING. This is a producer; an audit clause that
+        # rewrote the document it judges would be measuring its own side effect.
+        # The emitter's `_STATUS_EXIT` makes the three outcomes distinguishable
+        # at the process boundary — before it, the exit code was a constant 0
+        # and this clause would have recorded PASS on every project alive.
+        #
+        # BLAST RADIUS, measured on the 7 published Phase-1 fixture roots in
+        # this tree: rc 0 on 1 (reject_ddr5), rc 2 on 6 (five digital classes +
+        # one root with no L5/L22). No root goes to rc 1 today, and the slot
+        # cannot fail a step in any case.
+        - advisory_program_exit_zero:
+              command: "l22_analog_verification_plan_emit . --dry-run"
+              advisory_reason: "The declaration is ADVISORY PRODUCER and this clause is what makes that true instead of merely stated: it enriches L22 and must never stop Phase 1, so a refusal has to be RECORDED rather than enforced. Blocking is also not yet earned — rc 1 is reachable only for an analog class whose L5 blocks carry no usable identity, and no published root in this tree exercises that path, so the corpus evidence flow-change-acceptance requires for a blocking promotion does not exist."
         # D9 Phase 1 — L6 states must carry the transitions their consumer needs.
         # ADVISORY, and the reason is a MEASUREMENT, not a preference.
         #

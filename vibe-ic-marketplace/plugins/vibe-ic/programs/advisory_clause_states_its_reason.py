@@ -44,23 +44,25 @@ does not update when the wiring changes: a reader who rewires that clause
 tomorrow will not find it, and a reader who wonders about it today has to know
 to run `git log -S` over a 7000-line YAML file.
 
-MEASURED over all 84, and this is the census this gate was written from.
-84 clauses in 78 distinct programs — `stage_on_pass_review` is wired six times,
+MEASURED over all 85, and this is the census this gate was written from.
+85 clauses in 79 distinct programs — `stage_on_pass_review` is wired six times,
 once per stage, since v1.13.63 moved the on-pass stages into `steps:`, and
 `flow_compliance_check` twice, since v1.13.78 gave the review a verdict source
-with an executed producer:
+with an executed producer. The 85th is `l22_analog_verification_plan_emit`,
+wired at Step D1 to pay off the `flow_gate_enforcement_audit` ORPHAN finding
+against it — it declared ADVISORY and no clause anywhere ran it:
 
-    declare `ENFORCEMENT: advisory` (says WHAT)              63
+    declare `ENFORCEMENT: advisory` (says WHAT)              64
     declare no enforcement intent at all                     21
-    state a REASON where the clause or the gate can show it  84
+    state a REASON where the clause or the gate can show it  85
     state a reason in the COMMIT that wired the clause       28   (heuristic;
                                                                   see below)
 
 A declaration of WHAT is fully satisfied by a gate somebody downgraded an hour
 ago; only WHY distinguishes them, and until 2026-08-31 WHY was written 28 times
 into a medium no reader of the clause will reach. THE REGISTER IS NOW EMPTY: all
-82 clauses carry `advisory_reason:` and the recorded set tightened 77 -> 0. The
-row above reads 84 for that reason and not because the rule was loosened.
+85 clauses carry `advisory_reason:` and the recorded set tightened 77 -> 0. The
+row above reads 85 for that reason and not because the rule was loosened.
 
 WHAT THOSE 82 REASONS SAY, and why they are not invented prose. Each is a
 MEASUREMENT, from a four-way classification of the whole population:
@@ -91,6 +93,16 @@ MEASUREMENT, from a four-way classification of the whole population:
                         5 are producers/classifiers wired into a gate slot.
     CENSUS          3   measures a population and records it; correctly
                         advisory, permanently.
+
+THE 85th CLAUSE POSTDATES THAT CLASSIFICATION and is deliberately NOT folded
+into the four rows above: they are one measurement taken at one time, and
+incrementing one of them would publish a count nobody re-derived.
+`l22_analog_verification_plan_emit` (Step D1, wired to pay off the
+`flow_gate_enforcement_audit` ORPHAN finding against it) is NOT-YET-CLEAN in
+SHAPE — rc 1 is reachable, for an analog class whose L5 blocks carry no usable
+identity — but its NOTCH IS UNMEASURED: over the 7 published Phase-1 fixture
+roots in this tree it returns rc 0 on one and rc 2 on six, and none of them
+reaches the refusing path.
 
 A reason invented to satisfy a checker informs nobody, which is why the register
 comment refuses that. A reason that is a measurement is not invented, and every
@@ -182,7 +194,7 @@ repo uses:
     a SHRINK-ONLY register. The 77 are RECORDED. The gate exits 0 while
     printing the whole gap, and exits 1 on the 78th.
 
-THE REGISTER IS NOW EMPTY (2026-08-31). All 84 clauses state a reason, the
+THE REGISTER IS NOW EMPTY (2026-08-31). All 85 clauses state a reason, the
 recorded set tightened 77 -> 0, and `previous_size` is 77. So the paragraph
 above describes how this gate SHIPPED, not how it stands: there is no longer a
 standing dispensation, and the next silent advisory clause is rc 1 with nothing

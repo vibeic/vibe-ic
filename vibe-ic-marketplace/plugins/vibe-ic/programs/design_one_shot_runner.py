@@ -101,6 +101,7 @@ import _rtl_include_hub as _hub  # shared include-hub aggregator predicate
 import _commercial_pdk as _cpdk  # config-driven commercial-PDK id (NDA: no SKU in source)
 import _lesson_digest  # surface the captured-lesson digest to spec-to-rtl authors
 import _runner_measurement as _rmeas  # the tool's third value, read from its artefact
+import _hdl_code_text  # offset-preserving comment/string blanker (#731)
 # STAGED IS NOT CONSUMED (ORGANIC #733). `_lesson_digest` hands the author a
 # digest; NOTHING asked whether a section that matches this design was USED.
 # Measured in that program's header: a blind author was handed a section
@@ -7516,16 +7517,35 @@ def _v1956_dut_instance_conns(text: str, dut: str) -> Optional[str]:
         # optional parameter override `#( … )` (one nesting level)
         r"(?:#\s*\((?:[^()]|\([^()]*\))*\)\s*)?"
         r"([A-Za-z_]\w*)\s*\(")
-    for m in pat.finditer(text):
+    # #731 — BOTH the instantiation search and the paren walk run over BLANKED
+    # text, and this function does the blanking itself rather than trusting its
+    # caller to have done it. Two failures, not one:
+    #
+    #   * a comment or string carrying an unbalanced `(` — `// note (see spec` —
+    #     leaves `depth` never returning to 0, so the walk falls off the end and
+    #     the TB is reported as not instantiating the DUT at all; and
+    #   * `\bdut\b ... (` matching inside a commented-out instantiation, which
+    #     hands back a connection list the design does not have.
+    #
+    # `_v1956_contract_check` already passes comment-stripped text, so for that
+    # caller this is a no-op; the point is that the guarantee now belongs to the
+    # scan instead of to a sibling call one frame up.
+    scanned = _hdl_code_text.strip_hdl_comments_and_strings(text)
+    for m in pat.finditer(scanned):
         i = m.end() - 1              # index of the opening paren
         depth = 0
-        for j in range(i, len(text)):
-            if text[j] == "(":
+        for j in range(i, len(scanned)):
+            if scanned[j] == "(":
                 depth += 1
-            elif text[j] == ")":
+            elif scanned[j] == ")":
                 depth -= 1
                 if depth == 0:
-                    return text[i + 1:j]
+                    # The BLANKED slice, not the raw one: the only consumer
+                    # immediately re-scans this for `.<pin>(`, so handing back
+                    # bytes whose comments are still live would move the same
+                    # defect one frame up instead of closing it. Offsets and
+                    # length are unchanged either way.
+                    return scanned[i + 1:j]
         break
     return None
 
@@ -8676,7 +8696,7 @@ def _v713_mk_include_dirs(project: Path) -> List[Path]:
     return out
 
 
-# v1.14.77 — frontend-ladder reporting helpers.
+# v1.14.78 — frontend-ladder reporting helpers.
 _LADDER_EXHAUSTED_NOTE = (
     "\n\n| FRONTEND_LADDER_EXHAUSTED: this verdict is the VERILATOR "
     "(SV-2017) elaboration, which is the frontend that got furthest — not the "
@@ -8716,7 +8736,7 @@ def _verilator_escape_was_reached(vrc: int, vout: str, verr: str) -> bool:
             or "verilator" in lowered)
 
 
-# v1.14.77 — name the frontend that actually produced the verdict.
+# v1.14.78 — name the frontend that actually produced the verdict.
 # The message hardcoded "iverilog rc=..." even when the verdict came from the
 # verilator SV-2017 escape at the end of the frontend ladder, so a report could
 # attribute one tool's elaboration rejection to a different tool that had
@@ -8901,7 +8921,7 @@ def _iverilog_compile_with_sv_fallback(
                 rtl_files, tb_path, run_dir, container, top_name, _vl_reason)
             if vrc == 0:
                 return vrc, vout, verr, vfe
-            # v1.14.77 — REPORT THE FRONTEND THAT GOT FURTHEST, not the first.
+            # v1.14.78 — REPORT THE FRONTEND THAT GOT FURTHEST, not the first.
             # When the ladder exhausts, returning rung 1's error attributes a
             # KNOWN frontend limitation to the design. Measured: iverilog said
             # `aes_pkg.sv:19: syntax error / I give up.` — the SystemVerilog

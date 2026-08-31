@@ -5,6 +5,29 @@ ENFORCEMENT: ADVISORY PRODUCER, not a gate.  It enriches L22 and never changes
 the runner's exit verdict.  Import/runtime failure is printed by the thin
 runner adapter as a named fail-open event; it is never reported as a PASS.
 
+WHERE THE VERDICT GOES (vibe-ic#1263 stamp-hygiene, flow-gate enforcement audit)
+-------------------------------------------------------------------------------
+Two consumers, and until this revision NEITHER could read an outcome:
+
+  * IN-PROCESS — ``phase1_doc_one_shot_runner._post_emit_l22_analog_verification
+    _plan`` calls ``run()`` at the tail of Phase 1.  Reachable, but it read only
+    ``emitted_count``: a REFUSED projection and a digital no-op both returned 0
+    and printed nothing, so the one state worth naming was the silent one.
+  * AT THE FLOW BOUNDARY — nothing.  ``flow_gate_enforcement_audit`` reported
+    this program ORPHANED ("declares an intent and is reachable from nothing at
+    all"), because the runner reaches it through ``from <module> import run``,
+    which is not a venue that audit consults, and no flow clause named it.
+
+It is now wired in ``flow/phase1_phase2_phase3.yaml`` at Step D1 as
+``advisory_program_exit_zero: "l22_analog_verification_plan_emit . --dry-run"``.
+``--dry-run`` is load-bearing: this is a PRODUCER, and an audit that rewrote the
+document it is judging would be measuring its own side effect.  The advisory
+slot RUNS the program, RECORDS the verdict and never fails the step — which is
+what ``ADVISORY`` above has always claimed and what nothing enforced.
+
+That wiring is only worth having because ``_STATUS_EXIT`` (below) made the exit
+code a function of the outcome.  It used to be a constant 0.
+
 GENERAL CORE
 ============
 Phase 1 already has the two authoritative, structured inputs this projection
@@ -347,8 +370,16 @@ def run(project: Path, *, ic_class: Optional[str] = None,
     intent, l7_path = _l5_intent(project)
     analog_plan = _plan(ic_class, blocks, intent)
     if not analog_plan["analog"]:
+        # REFUSED, not SKIPPED, and the distinction is the whole verdict.
+        # Everything above this line is "there was nothing to project": a
+        # digital class, or no L5/L22 to read. HERE the class IS analog and L5
+        # DOES declare blocks — the projection is OWED and could not be made,
+        # so L22 ships with no analog verification plan for a chip that has
+        # analog. Recording that as SKIPPED made it byte-indistinguishable from
+        # a digital no-op, which is this repo's recurring "could not read reads
+        # like nothing to read" substitution.
         return {
-            "tool": TOOL, "status": "SKIPPED",
+            "tool": TOOL, "status": "REFUSED",
             "reason": "L5 analog blocks carry no usable block identity",
             "ic_class": ic_class, "emitted_count": 0,
         }
@@ -389,6 +420,25 @@ def run(project: Path, *, ic_class: Optional[str] = None,
     }
 
 
+#: status -> process exit code, on this tree's own convention
+#: (0 PASS / 1 FAIL / 2 NOT CHECKED, the one `flow_compliance_check` reads).
+#:
+#: IT USED TO BE `0 if status != "ERROR" else 1`, AND NO CODE PATH EVER
+#: RETURNED "ERROR". The exit code was therefore a CONSTANT, so wiring this
+#: program into any exit-code slot would have recorded a PASS on every project
+#: in existence — a gate that cannot refuse, which is the vacuous-verdict shape
+#: this repo already fails elsewhere (`drc_vacuous_pass_check`). The wiring in
+#: `flow/phase1_phase2_phase3.yaml` is only worth having because the three
+#: outcomes below are distinguishable at the process boundary.
+#:
+#: rc 2 for NOT_APPLICABLE and SKIPPED is deliberate and is NOT rc 0. The
+#: advisory slot reads rc 2 as "n/a (input not present)" and rc 0 as "ok"; a
+#: digital IC that projected nothing must not be recorded as an analog
+#: verification plan that was made and found clean.
+_STATUS_EXIT = {"OK": 0, "REFUSED": 1, "ERROR": 1,
+                "NOT_APPLICABLE": 2, "SKIPPED": 2}
+
+
 def main(argv: Optional[List[str]] = None) -> int:
     parser = argparse.ArgumentParser(prog=TOOL, description=__doc__)
     parser.add_argument("project", type=Path)
@@ -396,14 +446,26 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--json", default=None)
     args = parser.parse_args(argv)
-    report = run(args.project, ic_class=args.ic_class, dry_run=args.dry_run)
+    try:
+        report = run(args.project, ic_class=args.ic_class,
+                     dry_run=args.dry_run)
+    except Exception as exc:            # noqa: BLE001 - a crash is a VERDICT
+        # A traceback out of a producer wired on its exit code is rc 1 anyway;
+        # what the flow could not read from it was WHICH producer failed and
+        # why. Reported in the same shape as every other outcome so the
+        # advisory line names the tool instead of the interpreter.
+        report = {"tool": TOOL, "status": "ERROR", "reason": f"{exc}",
+                  "emitted_count": 0}
     if args.json:
         out = Path(args.json)
         out.parent.mkdir(parents=True, exist_ok=True)
         out.write_text(json.dumps(report, indent=2, ensure_ascii=False) + "\n",
                        encoding="utf-8")
     print(json.dumps(report, indent=2, ensure_ascii=False))
-    return 0 if report.get("status") != "ERROR" else 1
+    #: An UNRECOGNISED status is rc 1, never rc 0: a status this table does not
+    #: know is a status nothing has decided about, and defaulting it to PASS is
+    #: how a new outcome enters the tree already excused.
+    return _STATUS_EXIT.get(str(report.get("status")), 1)
 
 
 if __name__ == "__main__":

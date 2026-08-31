@@ -57790,10 +57790,22 @@ def _post_emit_l22_analog_verification_plan(project: Path) -> int:
         print(f"      L22 analog verification plan FAILED (fail-open): {exc}",
               file=sys.stderr)
         return 0
-    if isinstance(rep, dict) and rep.get("status") == "SKIPPED":
+    _status = rep.get("status") if isinstance(rep, dict) else None
+    if _status == "SKIPPED":
         print("      L22 analog verification plan SKIPPED (fail-open): "
               f"{rep.get('reason') or 'producer declined without a reason'}",
               file=sys.stderr)
+    elif _status == "REFUSED":
+        # THE ONE OUTCOME THIS ADAPTER USED TO SWALLOW. `emitted_count` is 0
+        # for a digital IC and 0 for an analog IC whose L5 blocks the emitter
+        # could not identify, so reading only that number made the second look
+        # exactly like the first: L22 ships with no analog verification plan
+        # for a chip that HAS analog, and nothing said so. Still fail-open —
+        # the declaration is ADVISORY and stays ADVISORY — but no longer
+        # silent, which is what advisory was supposed to mean.
+        print("      L22 analog verification plan REFUSED (fail-open): "
+              f"{rep.get('reason') or 'producer refused without a reason'} "
+              f"[class {rep.get('ic_class')!r}]", file=sys.stderr)
     n = rep.get("emitted_count", 0) if isinstance(rep, dict) else 0
     if n:
         print(f"      L22 analog verification plan: projected {n} "

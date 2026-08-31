@@ -39,8 +39,15 @@ from __future__ import annotations
 import fnmatch
 import json
 import re
+import sys
 from pathlib import Path
 from typing import Any, Dict, Iterator, List, Optional
+
+_HERE = Path(__file__).resolve().parent
+if str(_HERE) not in sys.path:
+    sys.path.insert(0, str(_HERE))
+
+import _hdl_code_text  # noqa: E402 - after the sys.path insert above
 
 
 class OracleAccess(RuntimeError):
@@ -330,8 +337,18 @@ def cvdp_package_response(snapshot_paths: List[Path],
 
     by_module: Dict[str, str] = {}
     duplicate_modules = set()
-    for match in _MODULE_BLOCK_RE.finditer(combined):
-        name, body = match.group(1), match.group(0)
+    # #731 — SCAN the blanked text, SLICE the original. A commented-out
+    # `endmodule` inside a module body ends the non-greedy `[\s\S]*?` early,
+    # so `match.group(0)` is the module TRUNCATED at the comment: the packaged
+    # RTL loses every line after it, including the real `endmodule`, and the
+    # scorer receives a file that does not parse. Blanking is OFFSET-PRESERVING
+    # precisely so the span can still index `combined` — this function's
+    # contract is "exact accepted RTL bytes", and bytes with their comments
+    # blanked out are not the accepted bytes.
+    scanned = _hdl_code_text.strip_hdl_comments_and_strings(combined)
+    for match in _MODULE_BLOCK_RE.finditer(scanned):
+        name = match.group(1)
+        body = combined[match.start():match.end()]
         if name in by_module:
             duplicate_modules.add(name)
         by_module[name] = body
