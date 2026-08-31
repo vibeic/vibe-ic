@@ -215,8 +215,18 @@ def test_parse_spef_node_attribution_to_real_net():
     keys = list(sp["pair_cc"].keys())
     assert len(keys) == 1
     assert keys[0] == frozenset({"*1", "*2"})
-    # the coupling magnitude is summed from both D_NETs that listed it
-    assert sp["pair_cc"][frozenset({"*1", "*2"})] == pytest.approx(0.0098 * 2)
+    # ONE physical coupling cap, listed RECIPROCALLY: the *D_NET *1 block says
+    # `3 *10:A *11:A 0.0098` and the *D_NET *2 block says `3 *11:A *10:A 0.0098`
+    # -- the same node pair, the same value, the ordinary IEEE-1481 convention.
+    # pair_cc is the PHYSICAL capacitance between the two nets, so it is 0.0098,
+    # not 0.0196. This assertion previously read `0.0098 * 2` and pinned the
+    # double-count as if it were the contract; downstream, victim_folded_caps()
+    # multiplies pair_cc by the Miller factor and credits BOTH nets, which is
+    # correct only for the single physical value. Doubled, it folded 2x the
+    # coupling: on subservient at v1.14.24 that turned a +1.18 ns SI-bounded
+    # setup slack into -4.06 ns (a fabricated FAIL) and made the hold corner
+    # come out BETTER than nominal, tripping SLACK_BETTER_THAN_BOUND.
+    assert sp["pair_cc"][frozenset({"*1", "*2"})] == pytest.approx(0.0098)
     # the bogus instance-id nets must NOT appear
     assert "*10" not in sp["cg"] and "*10" not in sp["cc"]
     assert "*11" not in sp["cg"] and "*11" not in sp["cc"]

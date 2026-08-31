@@ -308,7 +308,25 @@ def parse_spef(text: str) -> dict:
         # fall back: bare net name or RC-subnode prefix
         return _net(node)
 
+    # A coupling cap is a property of the NODE PAIR, not of the *D_NET block it
+    # happens to be written in. IEEE-1481 permits -- and OpenROAD emits -- the
+    # SAME physical Cc TWICE, once in each of the two coupled nets' *CAP
+    # sections (the "reciprocal listing"). Accumulating both listings DOUBLES
+    # every Cc and every pair_cc, and the doubling is invisible to every
+    # downstream consumer because they all read through this one parse.
+    # Collapse each physical cap to ONE entry, keyed by its unordered node pair.
+    # Correct for BOTH conventions: a SPEF that lists each Cc only once has
+    # nothing to collapse and is left bit-identical.
+    seen_nodepairs: Dict[Tuple[str, str], float] = {}
     for na, nb, val in raw_pairs:
+        k = (na, nb) if na <= nb else (nb, na)
+        prev = seen_nodepairs.get(k)
+        # A reciprocal listing carries the identical value. Should an extractor
+        # ever disagree, resolve CONSERVATIVELY (larger cap) -- never average,
+        # never silently pick the first.
+        seen_nodepairs[k] = val if prev is None else max(prev, val)
+
+    for (na, nb), val in seen_nodepairs.items():
         ra, rb = _resolve(na), _resolve(nb)
         cc[ra] = cc.get(ra, 0.0) + val
         cc[rb] = cc.get(rb, 0.0) + val
@@ -321,6 +339,13 @@ def parse_spef(text: str) -> dict:
         "cg": cg,
         "cc": cc,
         "pair_cc": pair_cc,
+        # DISCLOSURE, so a doubled parse can never again pass unnoticed: how
+        # many coupling *CAP LINES were read vs how many PHYSICAL caps they
+        # describe. listed == 2 * physical is the ordinary reciprocal-listing
+        # SPEF; listed == physical is a single-listing SPEF. Any consumer that
+        # reports a coupling count must say WHICH of the two it means.
+        "coupling_caps_listed": len(raw_pairs),
+        "coupling_caps_physical": len(seen_nodepairs),
         "net_driver_pins": net_driver_pins,
         "net_load_pins": net_load_pins,
         "node_net": node_net,
