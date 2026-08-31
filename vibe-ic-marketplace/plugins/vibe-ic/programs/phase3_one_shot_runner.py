@@ -5115,6 +5115,168 @@ def _pdn_em_width_floor(project: Path, pdk: "PdkConfig",
     return floor
 
 
+#: #1215-PDN-FIRSTPASS — the sentinel that BOUNDS the resize at exactly one
+#: extra PnR. Written into the pnr dir the moment a resize pass is decided on,
+#: BEFORE the re-dispatch, so a crash mid-re-PnR cannot buy a second one.
+_PDN_EM_RESIZE_SENTINEL = ".pdn_em_resize_done"
+
+
+def _pdn_em_first_pass_resize(project: Path, top: str, pdk: "PdkConfig",
+                              container: str
+                              ) -> Optional[Dict[str, Any]]:
+    """#1215-PDN-FIRSTPASS — decide, ONCE, whether this run must rebuild its
+    PDN because the straps it drew are narrower than its own measured current
+    requires.
+
+    THE DEFECT THIS EXISTS FOR. `_pdn_em_width_floor` derives the strap width
+    from I_total = P/V, and the ONLY producer of that number is the EM analysis
+    at canonical step 25 — which runs AFTER the PnR that draws the straps. On a
+    tree built from `input/` alone there is no prior run, so the floor returns
+    its documented first-pass None, the PDN is drawn un-sized, and step 25 then
+    measures the un-sized grid and FAILs. MEASURED on a keeper end-to-end run of
+    spm at v1.14.26: `pdn_em_sizing.json` absent, pnr.tcl `-layer Metal4 -width
+    1.6`, em_current_authority FAIL with 26 offenders, worst utilization 2.4916
+    — all of it on Metal4, the exact layer the floor targets, while the
+    follow-pin Metal1 rail sat at 0.53. The number needed to size it was already
+    in the tree: the failing gate itself printed supply_current_A = 0.00438.
+    Nothing was missing but the ORDER in which the flow asked.
+
+    WHAT THIS DOES. Immediately after PnR, on the design's OWN routed DEF:
+      1. make sure an EM measurement of THIS layout exists (emit it if not);
+      2. derive the floor from that measurement + the PDK's own Jmax;
+      3. compare the derived w_em against the width the DEF ACTUALLY carries;
+      4. return the decision when some strap layer was drawn NARROWER than its
+         own derived floor.
+    The caller then re-dispatches PnR exactly once.
+
+    WHY THIS IS NOT FITTING TO THE ORACLE. The trigger is a comparison of two
+    WIDTHS — the derived floor and the drawn DEF width — and neither is a
+    verdict. Nothing here reads em_current_authority's PASS/FAIL, or any gate's.
+    The width is still I_total/(jmax*(1-margin)) and the margin, the Jmax rule
+    and the offender threshold are untouched. If the gate still FAILs after the
+    single re-pass, that FAIL is reported as a FAIL.
+
+    WHY EXACTLY ONE PASS IS THE RIGHT NUMBER. The derivation is a one-shot
+    conservation bound, not a fit: no segment of a passive grid can carry more
+    than the injected I_total, so a strap sized for the whole I_total is valid
+    under ANY distribution and there is nothing to converge. A second pass could
+    only re-measure a slightly different I_total (spm: 4.36 mA -> 4.32 mA across
+    two layouts), which is tracking, not iteration. The bound is enforced
+    STRUCTURALLY by `_PDN_EM_RESIZE_SENTINEL`, written before the re-dispatch:
+    a crashed or a still-narrow second pass cannot buy a third.
+
+    Returns None — no resize, behaviour unchanged — when the sentinel is
+    already present, when no EM measurement can be produced, when the tech LEF
+    states no Jmax, or when every drawn strap already meets its floor.
+    chip-AGNOSTIC: every number is the project's own measurement or the PDK's
+    own LEF."""
+    pnr_out = _pl.pnr_dir(project)
+    sentinel = pnr_out / _PDN_EM_RESIZE_SENTINEL
+    if sentinel.exists():
+        return None
+    def_file = pnr_out / f"{top}.def"
+    if not def_file.is_file():
+        return None
+
+    # (1) an EM measurement OF THIS LAYOUT. `_pdn_em_width_floor` reads
+    # em_current_authority.json first and falls back to em.rpt, so emitting
+    # em.rpt here is enough. Only emitted when absent or older than the DEF —
+    # a stale measurement of a previous layout must never size this one.
+    rpt3 = _pl.reports_phase3_dir(project)
+    em_rpt = rpt3 / "em.rpt"
+    try:
+        stale = (not em_rpt.is_file()
+                 or em_rpt.stat().st_mtime < def_file.stat().st_mtime)
+    except OSError:
+        stale = True
+    if stale:
+        _notes: List[str] = []
+        try:
+            rpt3.mkdir(parents=True, exist_ok=True)
+            _emit_ir_em_reports(project, top, pdk, container,
+                                rpt3 / "ir_drop.rpt", em_rpt, _notes)
+        except Exception:
+            return None
+        if not em_rpt.is_file():
+            return None
+        # The authority JSON, if any, is now older than em.rpt and describes
+        # the PREVIOUS layout. Remove it so the floor reads the fresh number
+        # rather than silently preferring the stale one.
+        try:
+            _auth = rpt3 / "em_current_authority.json"
+            if (_auth.is_file()
+                    and _auth.stat().st_mtime < em_rpt.stat().st_mtime):
+                _auth.unlink()
+        except OSError:
+            pass
+
+    # (2) derive
+    try:
+        floor = _pdn_em_width_floor(project, pdk, container)
+    except Exception:
+        return None
+    if not floor or not floor.get("per_layer"):
+        return None
+
+    # (3) what did the DEF actually draw? Read it with the SAME helper the
+    # Step-25 gate uses, so the two can never disagree about the subject.
+    try:
+        import em_current_density_check as _emcd
+        drawn = _emcd._def_pg_widths_of(def_file) or {}
+    except Exception:
+        return None
+    if not drawn:
+        return None
+
+    # (4) which STRAP layers were drawn narrower than their own floor?
+    #
+    # FOLLOW-PIN RAILS MUST BE EXCLUDED, and excluding them is load-bearing, not
+    # cosmetic. `_pdn_em_width_floor` computes a bound for EVERY routing layer,
+    # and `_build_pdn_tcl` applies it to STRAP stripes only — a rail's width is
+    # the standard-cell architecture's and is resized by nobody. So a rail can
+    # never meet a multi-micron floor: MEASURED on a first-pass spm run, Metal1
+    # was reported "0.6 -> 7.24 um (12.07x short)" while the emitted pnr.tcl
+    # correctly still read `-layer Metal1 -width 0.6`.
+    # Left in, that is a permanent false trigger: on any design whose straps
+    # ALREADY meet their floor, the rail alone would order a re-PnR that changes
+    # the PDN not at all — a guaranteed-wasted extra pass on every such run,
+    # forever. And it publishes a shortfall for a layer the fix will never act
+    # on, in the artefact a reviewer reads.
+    # The criterion is the flow's OWN output: a layer the PDN drew with
+    # `-followpins` is a rail. Read from the pnr.tcl this very run emitted, so
+    # the decision and the PDN builder cannot disagree about which layers are
+    # straps. chip-AGNOSTIC — no layer name appears here.
+    pnr_tcl = pnr_out / "pnr.tcl"
+    try:
+        tcl_txt = pnr_tcl.read_text(errors="replace")
+    except OSError:
+        # Without the PDN script the strap/rail split cannot be established,
+        # and guessing it is how the false trigger comes back. Refuse instead.
+        return None
+    followpin_layers = {
+        m.group(1).lower()
+        for m in re.finditer(
+            r"add_pdn_stripe\b[^\n]*?-layer\s+(\S+)[^\n]*?-followpins",
+            tcl_txt)}
+
+    short: List[Dict[str, Any]] = []
+    for lname, ent in floor["per_layer"].items():
+        if str(lname).lower() in followpin_layers:
+            continue
+        w_em = ent.get("w_em_um")
+        w_drawn = drawn.get(str(lname).lower())
+        if not w_em or not w_drawn:
+            continue
+        if float(w_drawn) + 1e-9 < float(w_em):
+            short.append({"layer": ent.get("orig_name") or lname,
+                          "drawn_um": float(w_drawn),
+                          "w_em_um": float(w_em),
+                          "shortfall_x": round(float(w_em) / float(w_drawn), 4)})
+    if not short:
+        return None
+    return {"floor": floor, "short": short, "sentinel": sentinel}
+
+
 def _build_pdn_tcl(pdk: "PdkConfig", container: Optional[str] = None,
                    em_floor: Optional[Dict[str, Any]] = None) -> str:
     """v0.1.47 — emit OpenROAD PDN (`add_global_connection`/`define_pdn_grid`/
@@ -43766,6 +43928,88 @@ def main() -> int:
         # `plan[-1]`. `_chain_ok` reproduces the pre-existing gating exactly
         # (PnR must pass; each optional repair row that IS appended must pass)
         # while being structurally immune to disclosure-only rows.
+        # ── #1215-PDN-FIRSTPASS — ONE bounded EM resize pass ──────────────
+        # A single end-to-end run from `input/` alone could never size its own
+        # PDN: the floor's only input (I_total = P/V) is produced by canonical
+        # step 25, AFTER the PnR that draws the straps. So the first run drew
+        # 1.6 um straps and step 25 honestly failed them. This closes that loop
+        # exactly once, here, at the first instant BOTH the routed DEF and a
+        # measurement of it can exist.
+        #
+        # Bounded STRUCTURALLY, not by a counter: the sentinel is written
+        # BEFORE the re-dispatch, so a crash mid-re-PnR, or a second pass that
+        # is still short, cannot buy a third. The trigger is a comparison of
+        # two WIDTHS (derived floor vs the width the DEF carries) — never a
+        # gate's verdict — so this is derivation, not fitting.
+        # Placed BEFORE the `_pnr_row` snapshot below on purpose: that lookup
+        # is by NAME over `reversed(plan)`, so it picks up the re-run's row.
+        _pnr_pre = next((s for s in reversed(plan) if s.name == "pnr"), None)
+        if _pnr_pre is not None and _pnr_pre.status == "PASS":
+            try:
+                _rz = _pdn_em_first_pass_resize(
+                    project, effective_top, pdk, args.container)
+            except Exception as _rz_exc:  # pragma: no cover - defensive
+                _rz = None
+                print(f"[pnr] EM resize decision skipped (nonfatal): {_rz_exc}",
+                      file=sys.stderr)
+            if _rz:
+                _short_txt = ", ".join(
+                    f"{d['layer']} {d['drawn_um']}->{d['w_em_um']}um "
+                    f"({d['shortfall_x']}x short)" for d in _rz["short"])
+                print(f"[pnr] PDN EM resize: this run's own measured current "
+                      f"needs wider straps than it drew ({_short_txt}) — "
+                      f"re-running PnR ONCE with the derived floor",
+                      flush=True)
+                # Sentinel FIRST. This is the bound.
+                try:
+                    _rz["sentinel"].parent.mkdir(parents=True, exist_ok=True)
+                    _rz["sentinel"].write_text(
+                        json.dumps({"reason": "pdn_em_first_pass_resize",
+                                    "short": _rz["short"]}, indent=2) + "\n")
+                except OSError:
+                    pass
+                _rz_t0 = time.time()
+                _pnr_rows2: List[StepResult] = []
+                _pnr_redispatched = _spf.gate(
+                    project, "phase3_one_shot_runner", "pnr",
+                    _preflight_refusal("pnr"),
+                    step_pnr, project, effective_top, pdk, args.container,
+                    args.die_um, args.util,
+                    spare_density=args.spare_density,
+                    pad_ring_step=step_pad_ring_gen,
+                    pad_ring_results=_pnr_rows2)
+                _rz_secs = time.time() - _rz_t0
+                plan.extend(_pnr_rows2)
+                plan.append(_pnr_redispatched)
+                if _pnr_redispatched.status == "PASS":
+                    _write_producer_identity(_pl.pnr_dir(project), "pnr")
+                # Publish the COST beside the arithmetic, measured not
+                # estimated: the second PnR's wall-clock is the price of this
+                # fix and belongs in the artefact a reviewer reads.
+                try:
+                    _szp = _pl.reports_phase3_dir(project) / "pdn_em_sizing.json"
+                    _szd = json.loads(_szp.read_text())
+                    _szd["first_pass_resize"] = {
+                        "applied": True,
+                        "layers_short_on_pass_1": _rz["short"],
+                        "second_pnr_status": _pnr_redispatched.status,
+                        "second_pnr_wall_clock_s": round(_rz_secs, 1),
+                        "bound": ("exactly one extra PnR; enforced by the "
+                                  f"{_PDN_EM_RESIZE_SENTINEL} sentinel written "
+                                  "before the re-dispatch"),
+                        "trigger": ("drawn DEF strap width < derived w_em; a "
+                                    "comparison of two widths, never a gate "
+                                    "verdict"),
+                    }
+                    _aa.write_text(_szp, json.dumps(_szd, indent=2) + "\n")
+                except (OSError, ValueError):
+                    pass
+                plan.append(StepResult(
+                    "pdn_em_resize", _pnr_redispatched.status, _rz_secs,
+                    f"one-shot EM resize: {_short_txt}; PnR re-run once "
+                    f"({_rz_secs:.0f}s). Bound: one extra pass, sentinel-"
+                    f"enforced. Arithmetic in reports/phase3/pdn_em_sizing.json"))
+
         _pnr_row = next((s for s in reversed(plan) if s.name == "pnr"), None)
         _pnr_step_passed = (_pnr_row is not None and _pnr_row.status == "PASS")
         _pnr_reran = (_pnr_row is not None
