@@ -2,6 +2,10 @@
 """analog_netlist_pdk_check.py — deterministic gate for SPICE netlist PDK compliance
 
 Validates that analog SPICE netlists follow correct PDK conventions:
+  0. On a resolved NATIVE (rung-1/2 custom) PDK, every model include is on the
+     resolved ladder. An `.include` of the in-project netlist UNDER TEST is a
+     DUT include, not a model include: the models arrive through it, so it is
+     legal exactly when its own include chain reaches the ladder (#1954).
   1. Model include present (.include/.lib with recognized PDK model path)
   2. Body connections correct (PMOS→VDD, NMOS→VSS/0)
   3. Device names match PDK (nfet_03v3/pfet_03v3 for GF180, etc.)
@@ -355,15 +359,110 @@ def _is_definition_library(text: str) -> bool:
             and _ANALYSIS_CARD_RE.search(text) is None)
 
 
+# ── ORGANIC #1954 — the DUT include is not a model include ─────────────────
+# A testbench's whole purpose is to `.include` the netlist UNDER TEST, and the
+# device models arrive THROUGH that include: the block deck carries the model
+# `.lib` cards, and the A4 deck composer refuses a composed deck carrying more
+# than one such card — so the TB must NOT duplicate them. The out-of-ladder
+# guard below judges MODEL includes; with only two categories ("a resolved
+# native lib" / "an out-of-ladder model file") it had nowhere to put the DUT
+# and refused the very stimulus deck A3 emits. There was no content of
+# `tb_<block>.sp` that satisfied producer, composer and gate at once.
+#
+# The third category is decided by RESOLUTION, not by naming: an `.include`
+# is a DUT include when its target resolves to a file inside the project tree
+# whose OWN include chain REACHES the resolved native ladder. Resolving
+# in-project is deliberately not enough — a foreign model file staged inside
+# the project still never reaches the ladder and is still refused, which is
+# what keeps this a no-leak guard rather than a hole in one.
+# chip-AGNOSTIC: pure include-graph resolution, no chip / vendor / PDK literal.
+
+_MAX_INCLUDE_DEPTH = 8
+
+
+def _include_targets(text: str) -> List[str]:
+    """Every `.include`/`.lib` target in `text`, de-quoted."""
+    return [p.strip().strip('"\'') for (_kind, p) in INCLUDE_RE.findall(text)]
+
+
+def _resolve_in_project(inc: str, from_dir: Path, project: Path) -> Optional[Path]:
+    """The in-project file an include target names, or None.
+
+    Resolved the way a SPICE reader would: relative to the including deck
+    first, then to the project root. A target that resolves OUTSIDE the
+    project tree returns None — an out-of-project path is exactly the
+    out-of-ladder case this gate exists to refuse, so it can never be
+    reclassified as a DUT include.
+    """
+    raw = (inc or "").strip().strip('"\'')
+    if not raw:
+        return None
+    p = Path(raw)
+    candidates = [p] if p.is_absolute() else [from_dir / p, project / p]
+    try:
+        root = project.resolve()
+    except OSError:
+        return None
+    for cand in candidates:
+        try:
+            real = cand.resolve()
+        except OSError:
+            continue
+        if not real.is_file():
+            continue
+        try:
+            real.relative_to(root)
+        except ValueError:
+            continue                      # outside the project tree
+        return real
+    return None
+
+
+def _reaches_native_ladder(sp: Path, project: Path, native_libset: Set[str],
+                           seen: Set[str], depth: int = 0) -> bool:
+    """True when following this netlist's include graph reaches a model lib in
+    the resolved native set — i.e. the models this deck needs really are loaded
+    from the staged ladder, however many files down the chain.
+
+    Cycle-safe (`seen`, seeded by the caller with the deck being judged, so a
+    TB↔DUT cycle cannot bootstrap itself into a pass) and depth-bounded. A file
+    that cannot be read proves nothing and returns False — never a pass by
+    default."""
+    if depth > _MAX_INCLUDE_DEPTH:
+        return False
+    key = str(sp)
+    if key in seen:
+        return False
+    seen.add(key)
+    try:
+        text = sp.read_text(errors="replace")
+    except OSError:
+        return False
+    includes = _include_targets(text)
+    if any(Path(p).name in native_libset for p in includes):
+        return True
+    for inc in includes:
+        target = _resolve_in_project(inc, sp.parent, project)
+        if target is not None and _reaches_native_ladder(
+                target, project, native_libset, seen, depth + 1):
+            return True
+    return False
+
+
 def _native_model_include_ok(text: str, rel_path: str, native_libset: Set[str],
-                             findings: List[Finding]) -> bool:
-    """Native-PDK-aware model-include acceptance (#151). Returns True when the
-    netlist carries a valid native model source, False (with a finding) when it
-    FAILs:
+                             findings: List[Finding], sp: Optional[Path] = None,
+                             project: Optional[Path] = None) -> bool:
+    """Native-PDK-aware model-include acceptance (#151, #1954). Returns True
+    when the netlist carries a valid native model source, False (with a
+    finding) when it FAILs:
       * an include whose basename is in the resolved native set → VALID;
+      * an include that resolves to an in-project netlist whose own include
+        chain reaches the resolved native set → VALID (#1954: the deck under
+        test — the models arrive transitively through it);
       * no model include but a `.subckt` DEFINITION library → VALID;
-      * a model include present but NONE match the resolved native set
-        (out-of-ladder path) → FAIL (the no-leak guard);
+      * a model include present but NONE of the above hold (out-of-ladder
+        path, unresolvable path, or a resolvable path that never reaches the
+        ladder) → FAIL (the no-leak guard);
       * no include and a RUNNABLE deck → FAIL (NO_MODEL_INCLUDE — a runnable
         native deck must load the staged native models)."""
     model_includes = [
@@ -378,13 +477,47 @@ def _native_model_include_ok(text: str, rel_path: str, native_libset: Set[str],
                          f"recognised (resolved via analog_pdk_availability)"),
                 file=rel_path))
             return True
+        # #1954 — is any of them the netlist UNDER TEST rather than a claimed
+        # model source? Only a target that resolves in-project AND whose own
+        # include chain reaches the ladder qualifies.
+        if sp is not None and project is not None:
+            try:
+                self_key = str(sp.resolve())
+            except OSError:
+                self_key = str(sp)
+            dut = []
+            for p in model_includes:
+                target = _resolve_in_project(p, sp.parent, project)
+                if target is None:
+                    continue
+                # A FRESH visited set per include: sharing one across siblings
+                # would let a branch pruned by the depth bound in an earlier
+                # traversal suppress a later, shorter path to the ladder — a
+                # false FAIL. Seeded with this deck so a TB↔DUT cycle still
+                # cannot bootstrap itself.
+                if _reaches_native_ladder(target, project, native_libset,
+                                          {self_key}):
+                    dut.append(Path(p).name)
+            if dut:
+                findings.append(Finding(
+                    rule="DUT_NETLIST_INCLUDE_ACCEPTED", severity="INFO",
+                    message=(f"{rel_path}: include(s) {dut} resolve to the "
+                             f"in-project netlist(s) under test, whose own "
+                             f"include chain reaches the resolved native PDK "
+                             f"set — the models arrive through the deck under "
+                             f"test, so this is not a model include (#1954)"),
+                    file=rel_path))
+                return True
         findings.append(Finding(
             rule="NATIVE_PDK_INCLUDE_OUT_OF_LADDER", severity="ERROR",
             message=(f"{rel_path}: model include(s) "
                      f"{[Path(p).name for p in model_includes]} are NOT in the "
-                     f"resolved native PDK set — out-of-ladder include. Only a "
-                     f"resolved-native model lib (the staged custom-PDK "
-                     f"spice_libs/mc_libs) is a legal native model include."),
+                     f"resolved native PDK set, and none resolves to an "
+                     f"in-project netlist whose include chain reaches it — "
+                     f"out-of-ladder include. Only a resolved-native model lib "
+                     f"(the staged custom-PDK spice_libs/mc_libs), or the "
+                     f"in-project deck under test that itself loads one, is a "
+                     f"legal include here."),
             file=rel_path))
         return False
     if _is_definition_library(text):
@@ -522,7 +655,8 @@ def run_audit(project: Path) -> AuditResult:
         # projects (native_libset is None) are entirely unchanged.
         if native_libset is not None and pdk is None:
             if not _native_model_include_ok(text, rel, native_libset,
-                                            result.findings):
+                                            result.findings, sp=sp,
+                                            project=project):
                 file_ok = False
         else:
             if not _check_model_includes(text, rel, result.findings):

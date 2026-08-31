@@ -237,6 +237,231 @@ def test_known_models_gf180_bare_pass(tmp_path):
     assert rpt["summary"]["unknown_pdk_model_errors"] == 0
 
 
+# ===================================================================
+# #1954 — a TB's `.include` of the DUT netlist is NOT a model include
+#
+# On a resolved NATIVE (rung-1) PDK the gate used to have exactly two
+# categories for an `.include`: "a resolved native model lib" or "an
+# out-of-ladder MODEL include" — so it refused the very stimulus deck
+# `analog_a3_netlist_emit` emits (`.include <block>.sp`, deliberately with no
+# `.lib` card of its own, because `analog_real_corner_sweep.build_design_deck`
+# refuses a composed deck carrying more than one).
+#
+# The tests below pin BOTH directions. The accept cases are RED without the
+# fix; the four `_still_refused` / cycle controls are GREEN both before and
+# after — they are what proves the fix classified the DUT include rather than
+# widening the gate.
+# ===================================================================
+
+_LADDER_LIB = """\
+* staged native model lib (fixture) — the resolved ladder
+.lib typical
+.model nch_fixture nmos level=1
+.model pch_fixture pmos level=1
+.endl
+"""
+
+# A model lib that is NOT on the resolved ladder. Same shape as the real one —
+# only its location differs — so nothing but ladder membership can be what the
+# gate keys on.
+_FOREIGN_LIB = """\
+* a model lib that was never staged as this project's PDK
+.model nch_foreign nmos level=1
+"""
+
+
+def _native_project(root: Path, *, native: bool = True) -> Path:
+    """A minimal project that resolves to a rung-1 native custom PDK: an L19
+    declared target plus a staged SPICE model lib under `input/pdk/spice/`.
+    With `native=False` neither is written, so `_resolve_native_libset` returns
+    None and the gate takes its unchanged open-PDK / rung-3 arm.
+    Returns the analog block dir the decks go in."""
+    if native:
+        spice = root / "input" / "pdk" / "spice"
+        spice.mkdir(parents=True, exist_ok=True)
+        (spice / "nativemodels.lib").write_text(_LADDER_LIB)
+        docs = root / "phase1" / "generated_docs"
+        docs.mkdir(parents=True, exist_ok=True)
+        (docs / "L19_CONSTRAINTS_PDK.json").write_text(
+            json.dumps({"fields": {"pdk_target": "customnode_12x"}}))
+    blk = root / "phase3" / "analog" / "ldo"
+    blk.mkdir(parents=True, exist_ok=True)
+    return blk
+
+
+# The A3 block netlist: carries the `.lib` card onto the resolved ladder, and
+# deliberately no `.end` (its testbench includes it).
+_DUT_SP = """\
+* ldo — A3 block netlist
+.lib ../../../input/pdk/spice/nativemodels.lib typical
+.subckt ldo vin vout vss
+xm1 vout vin vss vss nch_fixture W=1u L=1u
+.ends ldo
+"""
+
+# The A3 testbench, verbatim in shape: one include (the DUT), no `.lib` card.
+_TB_SP = """\
+* tb_ldo — stimulus for the A3 block netlist
+.include ldo.sp
+vsup vin 0 dc 1.8
+xdut vin vout 0 ldo
+.control
+tran 1n 1u
+.endc
+.end
+"""
+
+
+def _rules(rpt: dict) -> set:
+    return {f["rule"] for f in rpt["findings"]}
+
+
+def _errors(rpt: dict) -> list:
+    return [f for f in rpt["findings"] if f["severity"] == "ERROR"]
+
+
+# -- ACCEPT: the A3-emitted TB including its own DUT netlist --
+
+def test_tb_including_dut_netlist_accepted(tmp_path):
+    blk = _native_project(tmp_path)
+    (blk / "ldo.sp").write_text(_DUT_SP)
+    (blk / "tb_ldo.sp").write_text(_TB_SP)
+    r = _run(tmp_path)
+    assert r.returncode == 0, r.stdout + r.stderr
+    rpt = _load_report(tmp_path)
+    assert rpt["passed"] is True
+    assert rpt["summary"]["files_pass"] == 2
+    assert "DUT_NETLIST_INCLUDE_ACCEPTED" in _rules(rpt)
+    assert "NATIVE_PDK_INCLUDE_OUT_OF_LADDER" not in _rules(rpt)
+    # the fixture really did resolve as a native PDK — otherwise this test
+    # would be passing through the unrelated open-PDK arm and prove nothing.
+    assert rpt["summary"]["native_pdk_source"] == "project_custom_pdk"
+
+
+# -- ACCEPT: the models may arrive several files down the include chain --
+
+def test_transitive_dut_include_chain_accepted(tmp_path):
+    blk = _native_project(tmp_path)
+    (blk / "ldo.sp").write_text(_DUT_SP)
+    (blk / "wrapper.sp").write_text(
+        "* wrapper around the DUT\n.include ldo.sp\n")
+    (blk / "tb_ldo.sp").write_text(
+        _TB_SP.replace(".include ldo.sp", ".include wrapper.sp"))
+    r = _run(tmp_path)
+    assert r.returncode == 0, r.stdout + r.stderr
+    rpt = _load_report(tmp_path)
+    assert rpt["passed"] is True
+    assert "NATIVE_PDK_INCLUDE_OUT_OF_LADDER" not in _rules(rpt)
+
+
+# -- CONTROL: a genuine out-of-ladder model include is STILL refused --
+
+def test_out_of_ladder_model_include_still_refused(tmp_path):
+    blk = _native_project(tmp_path)
+    foreign = tmp_path.parent / "outside_the_project_models.lib"
+    foreign.write_text(_FOREIGN_LIB)
+    (blk / "ldo.sp").write_text(
+        f"* ldo pulling models from off the ladder\n"
+        f".include {foreign}\n"
+        f".subckt ldo vin vout vss\n"
+        f"xm1 vout vin vss vss nch_foreign W=1u L=1u\n"
+        f".ends ldo\n")
+    r = _run(tmp_path)
+    assert r.returncode == 1
+    rpt = _load_report(tmp_path)
+    assert rpt["passed"] is False
+    assert any(f["rule"] == "NATIVE_PDK_INCLUDE_OUT_OF_LADDER"
+               for f in _errors(rpt))
+
+
+# -- CONTROL: staging the foreign lib INSIDE the project does not launder it --
+
+def test_in_project_out_of_ladder_model_include_still_refused(tmp_path):
+    blk = _native_project(tmp_path)
+    (blk / "foreign_models.lib").write_text(_FOREIGN_LIB)
+    (blk / "ldo.sp").write_text(
+        "* ldo pulling models from an in-project but off-ladder lib\n"
+        ".include foreign_models.lib\n"
+        ".subckt ldo vin vout vss\n"
+        "xm1 vout vin vss vss nch_foreign W=1u L=1u\n"
+        ".ends ldo\n")
+    r = _run(tmp_path)
+    assert r.returncode == 1
+    rpt = _load_report(tmp_path)
+    assert rpt["passed"] is False
+    assert any(f["rule"] == "NATIVE_PDK_INCLUDE_OUT_OF_LADDER"
+               for f in _errors(rpt))
+
+
+# -- CONTROL: a DUT include whose OWN chain never reaches the ladder --
+
+def test_dut_include_not_reaching_ladder_still_refused(tmp_path):
+    blk = _native_project(tmp_path)
+    (blk / "foreign_models.lib").write_text(_FOREIGN_LIB)
+    (blk / "ldo.sp").write_text(
+        _DUT_SP.replace(".lib ../../../input/pdk/spice/nativemodels.lib typical",
+                        ".include foreign_models.lib"))
+    (blk / "tb_ldo.sp").write_text(_TB_SP)
+    r = _run(tmp_path)
+    assert r.returncode == 1
+    rpt = _load_report(tmp_path)
+    assert rpt["passed"] is False
+    # BOTH decks are refused: the DUT for its own off-ladder include, and the
+    # TB because what it includes never reaches the ladder either.
+    bad = {f["file"] for f in _errors(rpt)
+           if f["rule"] == "NATIVE_PDK_INCLUDE_OUT_OF_LADDER"}
+    assert bad == {"phase3/analog/ldo/ldo.sp", "phase3/analog/ldo/tb_ldo.sp"}
+
+
+# -- CONTROL: an include that resolves to nothing is not a DUT include --
+
+def test_unresolvable_include_still_refused(tmp_path):
+    blk = _native_project(tmp_path)
+    (blk / "tb_ldo.sp").write_text(_TB_SP)   # ldo.sp deliberately absent
+    r = _run(tmp_path)
+    assert r.returncode == 1
+    rpt = _load_report(tmp_path)
+    assert rpt["passed"] is False
+    assert any(f["rule"] == "NATIVE_PDK_INCLUDE_OUT_OF_LADDER"
+               for f in _errors(rpt))
+
+
+# -- CONTROL: two decks including each other cannot bootstrap a pass --
+
+def test_include_cycle_does_not_bootstrap_pass(tmp_path):
+    blk = _native_project(tmp_path)
+    (blk / "ldo.sp").write_text(
+        "* ldo — includes its own testbench back (no ladder anywhere)\n"
+        ".include tb_ldo.sp\n"
+        ".subckt ldo vin vout vss\n"
+        "xm1 vout vin vss vss nch_fixture W=1u L=1u\n"
+        ".ends ldo\n")
+    (blk / "tb_ldo.sp").write_text(_TB_SP)
+    r = _run(tmp_path)
+    assert r.returncode == 1
+    rpt = _load_report(tmp_path)
+    assert rpt["passed"] is False
+    bad = {f["file"] for f in _errors(rpt)
+           if f["rule"] == "NATIVE_PDK_INCLUDE_OUT_OF_LADDER"}
+    assert bad == {"phase3/analog/ldo/ldo.sp", "phase3/analog/ldo/tb_ldo.sp"}
+
+
+# -- CONTROL: the non-native (open-PDK / rung-3) arm is untouched --
+
+def test_open_pdk_project_behaviour_unchanged(tmp_path):
+    # No staged PDK and no L19 target => native_libset is None => the
+    # presence-only `_check_model_includes` arm, exactly as before.
+    blk = _native_project(tmp_path, native=False)
+    (blk / "ldo.sp").write_text(GF180_GOOD_NETLIST)
+    (blk / "tb_ldo.sp").write_text(_TB_SP)
+    r = _run(tmp_path)
+    assert r.returncode == 0, r.stdout + r.stderr
+    rpt = _load_report(tmp_path)
+    assert rpt["passed"] is True
+    assert rpt["summary"]["native_pdk_source"] is None
+    assert "DUT_NETLIST_INCLUDE_ACCEPTED" not in _rules(rpt)
+
+
 # -- MANDATORY corpus sweep: the REAL adc pilot must stay 0 UNKNOWN_PDK_MODEL --
 
 CORPUS = repo_path_opt(".claude/worktrees/cap-crc/benchmark_clean/u_hawaii_adc_v0125_fresh")
