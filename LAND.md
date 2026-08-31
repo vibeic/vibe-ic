@@ -583,3 +583,85 @@ prevent, in the one place git will not warn about.
     ANYONE APPLYING THIS REF MUST `rm -rf` THAT DIRECTORY,
     or run `git clean -xdf` over `programs/tests/`, before measuring anything.
 
+## 8. REBASED ONTO LIVE MAIN — v1.14.7, and what the conflict actually was
+
+Re-cut 2026-08-31 onto `origin/main` `47968f0ee2` [v1.14.7]. New tip:
+**`6eb4cba20e`**.
+
+`47968f0ee2` "landing(ACTIVATE): a register with no way to record a ceremony
+that was skipped" landed a PREPARE/ACTIVATE pair that moved
+`tools/ci/protected_landing_transition.py` — the same file this ref's commit 1
+changes — so the conflict was real, not textual noise. It was resolved by
+READING both sides. Nothing was replaced.
+
+### 8.1 What main added, and why the two changes are complementary
+
+v1.14.7 added a second register KIND, `REOBSERVATION_KIND` — a register that
+records the tree and opens NO transition — because a protected file had drifted
+and the remedy (re-observe) required a PREPARE, which requires a move, which
+main did not have pending. Its own words: "the remedy was unreachable until some
+unrelated protected file happened to need changing."
+
+That is the SAME class of defect this ref fixes, one axis over. Main's fix makes
+the register able to record NO move; this ref's makes it able to record a move
+that changes a PATH. Neither subsumes the other and both were needed:
+
+    transition      current.files MUST differ from next.files   (v1.14.7)
+    re-observation  current.files MUST EQUAL  next.files        (v1.14.7)
+    + a transition MAY now declare `moves`, and `next` covers the MOVED
+      path set                                                  (this ref)
+
+### 8.2 The three conflicts and how each was resolved
+
+  1. `protected_landing_transition.py`, in `parse_manifest`. Main rewrote the
+     `next` coverage check and the `current == next` refusal into a two-kind
+     branch; this ref had rewritten the same coverage check to use `next_names`.
+     COMPOSED, not chosen: the coverage check now reads `next_names`, and
+     **`next_names` IS `names` whenever no move is declared**, so main's rule is
+     preserved on the nose for every register that declares none. Main's
+     reobservation/elif branch follows it unchanged.
+
+     ONE RULE WAS ADDED THAT NEITHER SIDE HAD, because composing the two makes
+     it reachable: a re-observation may not declare `moves`. The two claims are
+     contradictory — `moves` hands out permission to move a protected path to a
+     named destination, and a register whose whole claim is "this opens no
+     transition" must not be the thing that grants it. Refused by name rather
+     than left to fall out of main's row comparison, which would have reported
+     it as a smuggled BYTE change and sent its reader looking in the wrong
+     place.
+
+  2. `protected_landing_transition.json` — a single-line generated register, so
+     the conflict was whole-file. Resolved by taking MAIN's live register
+     (`transition_id: reobservation-valve-v1-14-4`, with its new digests) and
+     applying ONLY this ref's path substitution to it. Verified after: kind
+     unchanged, both `flow_matrix` rows present, zero `63x8` rows, and
+     `current.files != next.files` still true.
+
+  3. `PROGRAM_INVENTORY.json` — GENERATED. Not hand-merged: main's version was
+     taken and `gen_program_inventory.py` re-run against the rebased tree. Same
+     pure-rename signature as before — every count identical
+     (`test_files = 2980`, up one from main's own new test), only the two
+     `sha256_of_sorted_paths` digests moved.
+
+`tools/ci/test_phase_b_activated_parity.py` auto-merged cleanly.
+
+### 8.3 Re-measured on the rebased tree
+
+    COLLECTION
+      BEFORE  main 47968f0ee2, the four test_matrix_63x8_* modules   103
+      AFTER   6eb4cba20e,      the four test_flow_matrix_* modules   103
+    **103 == 103**, unchanged by the rebase.
+
+    PROTECTED-LANDING SUITE (tools/ci, host)
+      main 47968f0ee2   3 files                        3 failed, 59 passed
+      6eb4cba20e        the same 3 + the new rename    6 failed, 67 passed
+
+    All 11 rename cases pass on the new base, including the negative control.
+    The 3 pre-existing reds are main's own and are unchanged. The 3 additional
+    are the same parity family as §6 — the register not yet declaring these
+    moves, which is landing L2 (§7) and cannot be authored inside this ref.
+    Main's v1.14.7 renamed one of them; the current set is:
+      test_the_live_tree_is_exactly_one_recorded_state_and_never_a_mixture
+      test_every_protected_path_holds_bytes_the_register_records
+      test_the_semantic_landing_activation_is_still_what_history_records
+
