@@ -53,6 +53,46 @@ def test_a_record_with_no_prompt_returns_empty_not_a_dict():
         assert isinstance(got, str), f"{rec!r} produced {type(got).__name__}"
 
 
+def test_dataset_alone_activates_prompt_aware_gate_checks(tmp_path):
+    """`score_one.py` supplies --dataset but does not duplicate --prompts.
+
+    The source dataset is already the authoritative carrier of input.prompt;
+    requiring a second JSONL silently disables every prompt-aware check in the
+    normal one-design scorer path.
+    """
+    dataset = tmp_path / "dataset.jsonl"
+    dataset.write_text(json.dumps({
+        "id": "from-dataset",
+        "input": {"prompt": "all outputs are synchronous", "context": {}},
+    }) + "\n")
+    prompts = tmp_path / "prompts.jsonl"
+    prompts.write_text(json.dumps({
+        "id": "explicit",
+        "prompt": "explicit prompt",
+    }) + "\n")
+
+    assert G._load_prompt_sources(dataset=dataset) == {
+        "from-dataset": "all outputs are synchronous",
+    }
+    assert G._load_prompt_sources(prompts=prompts) == {
+        "explicit": "explicit prompt",
+    }
+
+
+def test_explicit_prompts_override_same_id_dataset_text(tmp_path):
+    """An explicit --prompts record remains the final authority for its id."""
+    dataset = tmp_path / "dataset.jsonl"
+    dataset.write_text(json.dumps({
+        "id": "same", "input": {"prompt": "dataset text", "context": {}}
+    }) + "\n")
+    prompts = tmp_path / "prompts.jsonl"
+    prompts.write_text(json.dumps({"id": "same", "prompt": "explicit text"}) + "\n")
+
+    assert G._load_prompt_sources(dataset=dataset, prompts=prompts) == {
+        "same": "explicit text",
+    }
+
+
 def test_every_blocked_record_carries_a_reason(tmp_path, capsys):
     """The exit invariant, exercised through the source it guards.
 
