@@ -113,6 +113,26 @@ def _run_fn_against(tmp_path, test_body, name="test_probe.py", *,
     )
     env = dict(os.environ)
     env.pop("PYTEST_CURRENT_TEST", None)
+    # AND THE OPERATOR'S REPORT PATHS. The extracted function honours
+    # `GATEKEEPER_REPO_TOOLS_JUNIT`; inherited, this fixture's throwaway repo
+    # writes ITS report to the path the operator asked the real lane to write.
+    #
+    # MEASURED 2026-08-31, on the landing host, with the variable exported so a
+    # full tier would keep its record: the named path was rewritten every few
+    # seconds for the whole lane with a 673-byte, tests="1" report carrying
+    # `pytest_aggregate.tools.test_probe::test_ok` — this fixture's synthetic
+    # file. `run_pytest`'s own comment describes exactly that artefact and why
+    # it is worse than nothing: "The file therefore EXISTED, PARSED, and
+    # described a different run. That is worse than a missing file: absence is
+    # honest, and this is not." The real lane's terminal merge repairs it, so
+    # the damage is confined to a lane that DIES — which is the case the
+    # keep-the-report change exists for.
+    #
+    # `programs/tests/test_landing_lane_junit_is_durable.py` already pops these
+    # two names for the same reason; this is the sibling that did not.
+    for _leaked in ("GATEKEEPER_PYTEST_JUNIT", "GATEKEEPER_REPO_TOOLS_JUNIT",
+                    "GATEKEEPER_UNSELECTABLE_JUNIT"):
+        env.pop(_leaked, None)
     p = subprocess.run(["bash", "-c", script], capture_output=True, text=True,
                        cwd=root, env=env)
     out = p.stdout + p.stderr
@@ -284,3 +304,30 @@ def test_discovery_is_not_hardcoded():
     assert "find tools" in body, "discovery must be a find over tools/"
     assert not re.search(r"tools/test_\w+\.py", body), (
         "a literal test path appears in the gate — that is a roster")
+
+
+# ── THE FIXTURE MUST NOT WRITE WHERE THE OPERATOR ASKED THE LANE TO WRITE ──
+
+@_NEEDS_TRUSTED_RUNTIME
+def test_the_fixture_does_not_write_the_operators_named_junit(tmp_path,
+                                                             monkeypatch):
+    """Drive the fixture with the three report paths exported and assert none
+    of them is touched.
+
+    The CONTROL is the assertion that the gate still ANSWERED (`FAILED` is 0 or
+    1, i.e. the extracted function ran): a fixture that stopped running would
+    also leave the paths untouched, and would prove nothing.
+    """
+    named = {}
+    for var in ("GATEKEEPER_PYTEST_JUNIT", "GATEKEEPER_REPO_TOOLS_JUNIT",
+                "GATEKEEPER_UNSELECTABLE_JUNIT"):
+        target = tmp_path / f"{var}.xml"
+        named[var] = target
+        monkeypatch.setenv(var, str(target))
+    failed, out = _run_fn_against(
+        tmp_path, "def test_ok():\n    assert True\n")
+    assert failed in (0, 1), out          # CONTROL: the gate actually ran
+    left = [str(t) for t in named.values() if t.exists()]
+    assert not left, (
+        "the gate fixture wrote its throwaway report to the path the operator "
+        f"named for a real lane: {left}\n{out}")
