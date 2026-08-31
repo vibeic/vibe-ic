@@ -57580,6 +57580,31 @@ def _post_emit_l22_checklist_milestones(project: Path) -> int:
     return n
 
 
+def _post_emit_l22_analog_verification_plan(project: Path) -> int:
+    """vibe-ic#1941 — thin adapter for the general analog L22 projection.
+
+    The core owns applicability, structured projection, provenance, and the
+    digital byte-no-op contract. This adapter only makes it reachable from
+    the canonical Phase-1 runner after all protocol overlays have settled.
+    """
+    try:
+        from l22_analog_verification_plan_emit import run as _l22_analog_emit
+        rep = _l22_analog_emit(project)
+    except Exception as exc:
+        print(f"      L22 analog verification plan FAILED (fail-open): {exc}",
+              file=sys.stderr)
+        return 0
+    if isinstance(rep, dict) and rep.get("status") == "SKIPPED":
+        print("      L22 analog verification plan SKIPPED (fail-open): "
+              f"{rep.get('reason') or 'producer declined without a reason'}",
+              file=sys.stderr)
+    n = rep.get("emitted_count", 0) if isinstance(rep, dict) else 0
+    if n:
+        print(f"      L22 analog verification plan: projected {n} "
+              "L5 block row(s) with verification intent")
+    return n
+
+
 def _post_emit_floorplan_contract(project: Path) -> None:
     """G-FIXED-DIE-1 — ingest a design-PROVIDED MANDATED fixed-floorplan
     contract into L19 (fields.die_area_budget_um / floorplan_hints /
@@ -64305,6 +64330,15 @@ def main() -> int:
     except Exception as _sweep_err:
         print(f"      L10↔L3 sweep FAILED (fail-open): {_sweep_err}",
               file=sys.stderr)
+
+    # vibe-ic#1941 — project the analog/mixed-signal verification contract
+    # only AFTER the entire protocol-synth chain has settled. The universal
+    # protocol overlay writes the five fixed digital L22 categories for every
+    # reachable class; running this general-core/thin-adapter projection at
+    # the tail preserves those categories and adds the per-block L5 intent.
+    # Applicability is registry class + structured L5 blocks. Digital-only is
+    # a byte-for-byte no-op because the core does not rewrite L22.
+    _post_emit_l22_analog_verification_plan(project)
 
     # LAST word on who named this design's top module. Runs here, after the
     # whole protocol-synth chain, for the same reason the L4 reconciler below

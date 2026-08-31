@@ -199,6 +199,14 @@ def assemble(prompt: str, iface: Optional[List[Dict[str, Any]]], target: Optiona
         },
         "output_target": output_target,
     }
+    if output_target == "l_doc_expectations.json":
+        # Phase-1 expectation authors compare generated L-docs. State the
+        # generated schema explicitly: source documents may use different
+        # historical layer numbers, but the generated contract does not.
+        handoff["generated_layer_contract"] = {
+            "L9": "integration specification",
+            "L19": "constraints and implementation context",
+        }
     (out_dir / "ic_expert_agent_handoff.json").write_text(
         json.dumps(handoff, indent=2, ensure_ascii=False))
     return handoff
