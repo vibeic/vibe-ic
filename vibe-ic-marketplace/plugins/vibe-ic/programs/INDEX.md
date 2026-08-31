@@ -681,7 +681,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `macro_non_seq_arc_contract_check` | any | — | a staged macro's NON-SEQUENTIAL timing requirement must reach the integration BEFORE post-CTS. |
 | `macro_obs_geometry_intersect_check` | any | — | Emitted metal that crosses a placed macro's declared obstruction. vibe-ic#686. |
 | `macro_obs_load_parity_check` | any | — | The obstructions the LEF DECLARES vs the obstructions the tool can LOAD. |
-| `magic_extract_spice_emit` | any | — | Magic parasitic-RC extraction TCL emitter + validator. |
+| `magic_extract_spice_emit` | any | — | Magic parasitic-RC extraction: emit, validate, audit. |
 | `magic_illegal_overlap_check` | any | — | read the EXTRACTION tool's own error channel and gate it at zero, before LVS. |
 | `magic_illegal_overlap_record_check` | any | — | Validate the runner-produced Step-31 illegal-overlap record in place. |
 | `magic_port_extract_emit` | any | v0.1.114 | Magic port-labeled GDS-extraction TCL generator. |
@@ -1965,7 +1965,7 @@ _(no programs in this group)_
 - `macro_non_seq_arc_contract_check` — a staged macro's NON-SEQUENTIAL timing requirement must reach the integration BEFORE post-CTS.
 - `macro_obs_geometry_intersect_check` — Emitted metal that crosses a placed macro's declared obstruction. vibe-ic#686.
 - `macro_obs_load_parity_check` — The obstructions the LEF DECLARES vs the obstructions the tool can LOAD.
-- `magic_extract_spice_emit` — Magic parasitic-RC extraction TCL emitter + validator.
+- `magic_extract_spice_emit` — Magic parasitic-RC extraction: emit, validate, audit.
 - `magic_illegal_overlap_check` — read the EXTRACTION tool's own error channel and gate it at zero, before LVS.
 - `magic_illegal_overlap_record_check` — Validate the runner-produced Step-31 illegal-overlap record in place.
 - `magic_port_extract_emit` — Magic port-labeled GDS-extraction TCL generator.  _[v0.1.114]_

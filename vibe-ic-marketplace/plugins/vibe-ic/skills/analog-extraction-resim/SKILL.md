@@ -29,14 +29,39 @@ After analog layout in Magic, extracts parasitic RC and re-simulates across PVT 
    python3 programs/magic_extract_spice_emit.py --block <block> \
        --out-spice analog/<block>/<block>_extracted.spice --out extract.tcl
    # or validate an existing extraction TCL (FAILs if it omits `extract all`
-   # or `ext2spice lvs` — the two silent causes of a vacuous 0% degradation)
+   # or `ext2spice lvs`, AND if it puts them in an order magic will not
+   # honour — the silent causes of a vacuous 0% degradation)
    python3 programs/magic_extract_spice_emit.py --validate extract.tcl
    ```
    Then run it via `eda_extraction` (or magic). Output:
    `analog/<block>/<block>_extracted.spice`.
-   > The fixed `load / extract all / ext2spice lvs / ext2spice` recipe is
+   > The recipe's **order** is the product, not just its command set
+   > (vibe-ic#1953). Measured on magic 8.3: `ext2spice lvs` RESETS
+   > cthresh/rthresh to `infinite`, so the thresholds must be asserted
+   > **after** it; `extresist` reads the `.ext` that `extract all` writes,
+   > so it runs **after** the extract; and `ext2spice rthresh <float>` is a
+   > parse error magic silently refuses (it wants an integer). All of this is
    > enforced by `programs/magic_extract_spice_emit.py` (distinct from the
    > GDS-read + port-promote LVS recipe in `magic_port_extract_emit.py`).
+
+1b. **Audit what magic actually WROTE — mandatory, before any re-sim.**
+   A recipe that validates can still yield a parasitic-free netlist if the
+   tool or PDK refuses; the only way to know is to read the output.
+   ```bash
+   python3 programs/magic_extract_spice_emit.py \
+       --audit-netlist analog/<block>/<block>_extracted.spice \
+       --res-ext analog/<block>/<block>.res.ext
+   ```
+   Exit 1 = the netlist carries **0 R and 0 C**. Re-simulating it
+   re-simulates the *pre-layout* circuit, and the pre-vs-post comparison in
+   step 3 is a false 0% degradation. Do not proceed; fix the extraction.
+   Exit 0 prints the **depth achieved** — `RC` or `C_ONLY`. `C_ONLY` is a
+   real, common outcome (magic 8.3 / sky130A emits no R elements even with
+   resistance extraction fully armed), and it is **passable but must be
+   disclosed**: carry `"parasitic_depth": "C_ONLY"` into `pre_vs_post.json`
+   `_provenance` so no reader mistakes it for full RC. If the block's claim
+   genuinely needs series R, add `--require-resistance` and take the honest
+   FAIL rather than a silent capacitance-only substitution.
 
 2. **Re-simulate with extracted netlist**:
    - Replace ideal subcircuit with extracted netlist in testbench
