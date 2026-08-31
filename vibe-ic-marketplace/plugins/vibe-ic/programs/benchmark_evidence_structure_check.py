@@ -497,6 +497,82 @@ def _check_manifest(manifest: Path) -> Tuple[bool, str]:
 # The single-folder validator.
 # --------------------------------------------------------------------------
 
+# --------------------------------------------------------------------------
+# CITATION_ROUTING — the record a citing cell owes its reader.
+# --------------------------------------------------------------------------
+
+CITATION_ROUTING_FILENAME = "CITATION_ROUTING.txt"
+
+
+def _cell_citations(cell: Path) -> Optional[Set[Tuple[str, str]]]:
+    """`{(doc relative to the cell, cited path)}`, or None when it cannot be
+    enumerated at all.
+
+    ONE DEFINITION OF "A CITATION", borrowed from
+    `evidence_citation_resolves_check` rather than re-derived here — the same
+    borrow `benchmark_evidence_publish._gate_citations` makes, and for the same
+    reason: a second private extractor would disagree with the gate that
+    consumes the record, and the record and the gate would then answer about
+    different sets while both looking green.
+
+    None, not an empty set, when the extractor cannot be imported. "I could not
+    look" must not arrive at a caller as "there is nothing here" — that
+    substitution is the one this whole file exists against.
+    """
+    try:
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        import evidence_citation_resolves_check as _g   # noqa: PLC0415
+    except Exception:                                   # noqa: BLE001
+        return None
+    tracked = _g.tracked_files(cell)
+    out: Set[Tuple[str, str]] = set()
+    try:
+        docs = (_g._markdown_paths(cell, tracked) + _g._json_paths(cell, tracked))
+    except Exception:                                   # noqa: BLE001
+        return None
+    for doc in docs:
+        try:
+            rel = doc.relative_to(cell).as_posix()
+            if doc.suffix.lower() == ".json":
+                for _field, tok in _g._json_artifact_refs(doc):
+                    out.add((rel, tok))
+            else:
+                text = doc.read_text(errors="replace")
+                for tok in _g._CITE_RE.findall(text):
+                    if _g._is_citation(tok):
+                        out.add((rel, tok))
+        except (OSError, ValueError):
+            continue
+    return out
+
+
+def _routing_rows(cell: Path) -> Set[Tuple[str, str]]:
+    """`{(doc, cited)}` the cell's own routing record answers for.
+
+    Parsed exactly as `evidence_citation_resolves_check._disclosed_map` parses
+    it — `<doc> :: <cited> <DECISION>` — because a row that gate cannot read is
+    a row that answers for nothing, whatever this one thinks of it. The
+    DECISION is deliberately not judged here: `citation_routing_is_true_check`
+    owns whether each decision is TRUE, and duplicating that would give the
+    tree two answers to one question.
+    """
+    path = cell / CITATION_ROUTING_FILENAME
+    rows: Set[Tuple[str, str]] = set()
+    try:
+        text = path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return rows
+    for line in text.splitlines():
+        s = line.strip()
+        if not s or s.startswith("#") or " :: " not in s:
+            continue
+        rest, _, _decision = s.rpartition(" ")
+        doc, _, cited = rest.partition(" :: ")
+        if doc.strip() and cited.strip():
+            rows.add((doc.strip(), cited.strip()))
+    return rows
+
+
 def check_folder(folder: Path, include_staged: bool = False) -> FolderResult:
     folder = folder.resolve()
     res = FolderResult(path=str(folder))
@@ -655,6 +731,67 @@ def check_folder(folder: Path, include_staged: bool = False) -> FolderResult:
                  f"the artefact verifiable without being stored")
     else:
         res.ok("NO_RAW_GEOMETRY")
+
+    # ---- CITATION_ROUTING ------------------------------------------------
+    # A CELL THAT CITES EVIDENCE OWES ITS READER THE RECORD SAYING WHETHER
+    # EACH CITATION CAN BE FOLLOWED (the 2026-08-31 stamp red).
+    #
+    # `CITATION_ROUTING.txt` is emitted by `benchmark_evidence_publish.py`
+    # (`write_citation_routing`, in its staged list) and HONOURED by
+    # `evidence_citation_resolves_check`, whose `OUT_OF_PUBLISHED_SCOPE` and
+    # `UNFOLLOWABLE_ABSOLUTE` rows retire a finding. `citation_routing_is_true
+    # _check` audits routing files THAT EXIST. Nothing required one, so a cell
+    # shipping none was never asked — and the whole published corpus tracked
+    # exactly one.
+    #
+    # MEASURED at benchmark-data e03ccabf, on the two cells the landing of
+    # 2026-08-31 swept while this gate reported PASS:
+    #     spm/v1.10.18_sky130A   record present   28 citations,  4 uncovered
+    #     spm/v1.5.65_sky130A    record ABSENT    18 citations, 18 uncovered
+    # 14 of those became NEW dangling citations in the more expensive gate.
+    # One rule covers both, because both are one fact: the cell publishes
+    # citations its record does not answer for. The second was "pulled off the
+    # fleet" and committed after passing THIS gate, never through the
+    # publisher; the first was restored wholesale without re-deriving the
+    # record it already had.
+    #
+    # COVERAGE, NOT MERE PRESENCE. A record answering for some of a cell's
+    # citations is, to a reader, indistinguishable from one saying the rest are
+    # fine — the same argument `benchmark_evidence_publish._gate_citations`
+    # already makes about its own narrower extractor.
+    #
+    # AND NOT A REQUIREMENT MANUFACTURED FOR EVERY CELL: a cell whose documents
+    # cite nothing owes nothing, and an empty record proves nothing.
+    _cites = _cell_citations(folder)
+    if _cites is None:
+        res.skip("CITATION_ROUTING",
+                 "the shared citation extractor could not be loaded, so this "
+                 "cell's citations were never enumerated — not a pass")
+    elif not _cites:
+        res.ok("CITATION_ROUTING",
+               "no document in this cell carries a citation this extractor "
+               "can see, so there is nothing for a routing record to answer "
+               "for")
+    else:
+        _uncovered = sorted(_cites - _routing_rows(folder))
+        if not _uncovered:
+            res.ok("CITATION_ROUTING")
+        elif not (folder / CITATION_ROUTING_FILENAME).is_file():
+            res.fail("CITATION_ROUTING",
+                     f"the cell cites {len(_cites)} evidence path(s) and ships "
+                     f"no {CITATION_ROUTING_FILENAME}, so a reader is told "
+                     f"nothing about whether any of them can be followed. "
+                     f"Derive it with benchmark_evidence_publish (never by "
+                     f"hand, and never by adding the cited artefacts). First: "
+                     + ", ".join(f"{d} :: {c}" for d, c in _uncovered[:3]))
+        else:
+            res.fail("CITATION_ROUTING",
+                     f"{CITATION_ROUTING_FILENAME} answers for "
+                     f"{len(_cites) - len(_uncovered)} of the cell's "
+                     f"{len(_cites)} citation(s); a record that covers only "
+                     f"some of them reads, to a reader, exactly like one "
+                     f"saying the rest are fine. Uncovered: "
+                     + ", ".join(f"{d} :: {c}" for d, c in _uncovered[:3]))
 
     return res
 

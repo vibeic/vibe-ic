@@ -433,6 +433,19 @@ def _resolves_outside_the_scan_root(cite: str, root: Path) -> bool:
     # file ships inside the repo whose citations it is judging, and that stays
     # true whether the corpus is a child, a sibling, or somewhere else again.
     here = Path(__file__).resolve()
+    # AND THE PLUGIN ROOT, by the same structural argument and more cheaply
+    # (measured 2026-08-31). A published cell's own audit digest cites
+    # `agents/ic-expert-agent.md` -- a path relative to the PLUGIN, which is how
+    # every reference to a plugin asset in this tree is written, and a file this
+    # repository really ships (434 KB of it; the same document spells the full
+    # path out further down). With only the repository root in the list that
+    # citation resolved nowhere and was reported as a missing proof, which is
+    # the gate reporting its own scope as the document's defect -- the failure
+    # the `outside` class exists to prevent, one directory level over from where
+    # c5d7f2d00 introduced it. This program ships inside `<plugin>/programs/`,
+    # so the plugin root is its own grandparent: no inference, no walk, and true
+    # wherever the corpus sits.
+    bases.append(here.parents[1])
     for anc in here.parents:
         if (anc / ".git").exists():
             bases.append(anc)
@@ -443,6 +456,42 @@ def _resolves_outside_the_scan_root(cite: str, root: Path) -> bool:
                 return True
         except OSError:
             continue
+    # AND THE CORPUS UNDER ITS OWN REPOSITORY NAME (measured 2026-08-31).
+    # `RESULT.md` cites `benchmark-data/BENCHMARK_IC_CAMPAIGN_STATUS.md` -- a
+    # file that really ships, tracked, at the ROOT of the published corpus
+    # clone. The citation carries the corpus's repository name as its first
+    # segment because that is how the path was spelled while the published tree
+    # lived INSIDE this repository at `benchmark-data/ic`: there the repository
+    # -root base above reached it and the notation was simply true. c5d7f2d00
+    # made the corpus a separate clone whose ROOT is that tree, so the same
+    # spelling now names a directory level that no longer exists -- the second
+    # half of the loss that commit's own comment records ("the disclosed OUT OF
+    # SCOPE count fell from 7 to 2").
+    #
+    # The two spellings are reconciled from the SEAM, not guessed here:
+    # `_corpus_location.CANONICAL_CORPUS_NAME` already means "what the published
+    # corpus tree was CALLED while it lived in this repository", and its
+    # docstring already rules that they "must be reconciled DELIBERATELY and in
+    # one place rather than by each gate guessing". Note this is the seam's
+    # constant and NOT the checkout's directory name: inferring it from where
+    # the corpus happens to sit is the depth/naming dependence c5d7f2d00
+    # removed, and would give two machines opposite verdicts on identical trees.
+    #
+    # Bounded exactly like the plugin-root base above: it retires a finding only
+    # when the named file is really in the clone, and the resolved path must
+    # stay INSIDE the clone, so the prefix cannot become a way to reach the rest
+    # of the machine.
+    prefix = _corpus.CANONICAL_CORPUS_NAME + "/"
+    if cite.startswith(prefix):
+        rest = cite[len(prefix):]
+        if rest:
+            try:
+                clone = root.parent.resolve()
+                cand = (clone / rest).resolve()
+                if cand.is_file() and clone in cand.parents:
+                    return True
+            except OSError:
+                pass
     return False
 
 def _is_citation(tok: str) -> bool:
