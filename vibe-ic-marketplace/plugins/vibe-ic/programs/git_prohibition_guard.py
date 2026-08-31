@@ -110,6 +110,12 @@ class Report:
 
 
 def _normalise(line: str) -> str:
+    # A QUOTATION IS NOT AN INVOCATION. Prose that documents a forbidden form
+    # inside inline code (`git checkout -- <path>`) is how a fix explains the
+    # defect it removed; matching it blocked the very landing that removed the
+    # defect (measured 2026-09-01, kflow6-a). Backtick spans are blanked before
+    # matching; a real command line carries no backticks around itself.
+    line = re.sub(r"`[^`]*`", " ", line)
     return re.sub(r"\s+", " ", line).strip().lower()
 
 
