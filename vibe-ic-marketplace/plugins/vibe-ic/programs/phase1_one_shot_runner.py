@@ -452,7 +452,9 @@ def _run_docs_mode(project: Path, ic_name: str,
                 return True
         return False
 
-    if not _has_real_doc(docs_dir):
+    had_real_doc = _has_real_doc(docs_dir)
+
+    if not had_real_doc:
         structured = project / "input" / "phase1_structured.yaml"
         prompt_md = project / "input" / "phase1_prompt.md"
         rendered: Optional[str] = None
@@ -467,6 +469,29 @@ def _run_docs_mode(project: Path, ic_name: str,
         if rendered is not None:
             docs_dir.mkdir(parents=True, exist_ok=True)
             (docs_dir / "design_description.md").write_text(rendered)
+
+    # v1.14.50 — the prompt is an ADDITIONAL document, not a COMPETING one.
+    # The bridge above deliberately yields to "a real document" in input/docs/.
+    # That is right for the DIALOGUE artefact (it restates the same design) and
+    # WRONG for `input/phase1_prompt.md`, which is the only carrier of directives
+    # the vendor docs cannot contain: parameter overrides, PDK target, tie-off
+    # decisions, the intended implementation path, the verification oracle.
+    # Measured (opentitan_aes, 2026-08-31, v1.14.49): with input/docs/ populated the
+    # prompt was read by NOTHING — 0 of 28 emitted L docs cited it — so its stated
+    # "SecMasking disabled" never reached Phase 2, the glue built the masked S-box,
+    # and yosys failed on a module the corpus deliberately excludes. The coverage
+    # gate still said "0 UNREAD / 100.0%" because the denominator is the VISITED
+    # set: a file that is never opened cannot be counted unread.
+    # So: when input/docs/ already holds real documents, the prompt JOINS them
+    # under its own basename (provenance survives into L-doc source_documents) and
+    # never overwrites an existing entry. `had_real_doc` is sampled BEFORE the
+    # bridge above so a prompt already rendered to design_description.md is not
+    # ingested twice.
+    _prompt_md = project / "input" / "phase1_prompt.md"
+    if _prompt_md.is_file() and had_real_doc:
+        _bridged = docs_dir / _prompt_md.name
+        if not _bridged.exists():
+            _bridged.write_text(_prompt_md.read_text(errors="replace"))
     # Build argv for phase1_doc_one_shot_runner.main(). Its argparse
     # takes the project dir as positional + accepts the standard
     # one-shot flags. Forward any extra runner-specific args.

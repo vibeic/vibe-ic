@@ -66,6 +66,91 @@ _PARAM_RE = re.compile(
     rf"\bparameter\b[^;,=()]*?({_ID})\s*=\s*([^,;)\n]+)")
 # case-generate label line: `value: begin` / `value :` (inside generate)
 _CASE_LABEL_RE = re.compile(rf"^\s*([\w:\[\]']+)\s*:\s*(?:begin\b)?", re.M)
+# v1.14.50 — if/else-generate block opener: `begin : label`.
+# `_enclosing_case_label` below requires the literal keyword `case`, so before
+# this the whole if/else-generate form was invisible: a dangling reference
+# guarded by `if (P == V) begin : L` fell through to `unconditional_dangling_ref`
+# and was reported as "instantiated outside any generate conditional — genuine
+# hole", which is the OPPOSITE of the truth and sends the operator to stage a
+# module that was excluded on purpose. Measured on OpenTitan aes_sbox.sv.
+_GEN_BLOCK_RE = re.compile(rf"\bbegin\s*:\s*({_ID})")
+_IF_GUARD_RE = re.compile(r"\bif\s*\(([^()]*(?:\([^()]*\)[^()]*)*)\)\s*$")
+_ELSE_GUARD_RE = re.compile(r"\belse\s*$")
+_EQ_COND_RE = re.compile(rf"^\s*({_ID})\s*==\s*([\w:'\[\]]+)\s*$")
+_BARE_COND_RE = re.compile(rf"^\s*({_ID})\s*$")
+_FALSEY = {"0", "1'b0", "'0", "1'B0", "false"}
+
+
+def _enclosing_if_generate(text: str, pos: int):
+    """(label, condition_or_None) of the nearest preceding
+    `if (...) begin : L` / `else begin : L`, else None.
+
+    Conservative by construction: the block opener must be IMMEDIATELY
+    preceded by an `if (...)` or a bare `else`, so `for (...) begin : L`,
+    `always ... begin : L` and plain named blocks are all excluded and keep
+    their existing classification.
+    """
+    window = text[max(0, pos - 4000):pos]
+    last = None
+    for m in _GEN_BLOCK_RE.finditer(window):
+        last = m
+    if last is None:
+        return None
+    before = window[:last.start()].rstrip()
+    m_if = _IF_GUARD_RE.search(before)
+    if m_if:
+        return last.group(1), m_if.group(1).strip()
+    if _ELSE_GUARD_RE.search(before):
+        return last.group(1), None
+    return None
+
+
+def _guard_parameters(cond, label, params: Dict[str, str]) -> List[str]:
+    """Parameter NAMES the branch's guard depends on — regardless of whether
+    their DEFAULT selects it.
+
+    `_params_selecting` answers "which defaults make this true"; this answers
+    "which parameters decide this at all". The two differ exactly when the
+    deciding parameter's default does NOT select the branch, which is the case
+    where an operator most needs to be told the name: the branch is reached by
+    an override from the instantiation tree, and nothing else in the report
+    says which knob that is."""
+    names: List[str] = []
+    if cond:
+        for n in re.findall(_ID, cond):
+            if n in params and n not in names:
+                names.append(n)
+    if not names and label:
+        # case-generate: the label is an enum VALUE, so the deciding parameter
+        # is whichever declared parameter is typed by that value's family.
+        tail = label.split("::")[-1]
+        for pn, pv in params.items():
+            if pv.split("::")[-1] == tail and pn not in names:
+                names.append(pn)
+    return sorted(names)
+
+
+def _params_selecting(cond, params: Dict[str, str]) -> List[str]:
+    """Parameter DEFAULTS that make `cond` true. Empty is a legitimate,
+    meaningful answer: the branch is then reached only via an override from
+    the instantiation tree, and the caller's message already says exactly
+    that instead of inventing a selector."""
+    if not cond:
+        return []
+    m = _EQ_COND_RE.match(cond)
+    if m:
+        name, val = m.group(1), m.group(2)
+        v = params.get(name)
+        if v is not None and v.split("::")[-1] == val.split("::")[-1]:
+            return [f"{name} = {v}"]
+        return []
+    m = _BARE_COND_RE.match(cond)
+    if m:
+        name = m.group(1)
+        v = params.get(name)
+        if v is not None and v.strip() not in _FALSEY:
+            return [f"{name} = {v}"]
+    return []
 
 
 def _strip_comments(text: str) -> str:
@@ -150,14 +235,26 @@ def audit(targets: List[str]) -> Dict:
                 continue
             seen.add(key)
             label = _enclosing_case_label(text, pos)
+            if_cond = None
+            label_is_if_generate = False
+            if not label:
+                _ifg = _enclosing_if_generate(text, pos)
+                if _ifg:
+                    label, if_cond = _ifg
+                    label_is_if_generate = True
             if label:
                 # selector parameters whose declared default's tail
                 # matches the guarding label's tail (enum-token match,
                 # scope-prefix tolerant: pkg::Val vs Val).
-                label_tail = label.split("::")[-1]
-                matching = sorted(
-                    f"{p} = {v}" for p, v in params.items()
-                    if v.split("::")[-1] == label_tail)
+                if label_is_if_generate:
+                    # if/else-generate: the guard is the CONDITION, not the
+                    # label, so read the selecting defaults off the condition.
+                    matching = _params_selecting(if_cond, params)
+                else:
+                    label_tail = label.split("::")[-1]
+                    matching = sorted(
+                        f"{p} = {v}" for p, v in params.items()
+                        if v.split("::")[-1] == label_tail)
                 # sibling alternatives: labels in the same case whose
                 # branch instantiates an in-closure module.
                 siblings = sorted({
@@ -170,6 +267,8 @@ def audit(targets: List[str]) -> Dict:
                     "module_ref": ref,
                     "guard_label": label,
                     "selecting_param_defaults": matching,
+                    "guard_parameters": _guard_parameters(
+                        if_cond, label, params),
                     "in_closure_alternatives": siblings[:8],
                     "message": (
                         f"module {ref!r} is referenced inside generate "
@@ -184,10 +283,16 @@ def audit(targets: List[str]) -> Dict:
                               f"{siblings[0]!r})" if siblings else "")
                            + ", or stage the missing module."
                            if matching else
-                           "No parameter default selects this branch — "
-                           "an instantiation-tree override may avoid "
-                           "elaboration, but yosys still elaborates "
-                           "declared defaults; verify.")
+                           ("This is the ELSE branch of a generate "
+                            "conditional; which parameter default selects "
+                            "it was NOT derived (it is the negation of the "
+                            "guard, which this check does not evaluate). "
+                            "Read the guard above the branch before acting."
+                            if if_cond is None and label_is_if_generate else
+                            "No parameter default selects this branch — "
+                            "an instantiation-tree override may avoid "
+                            "elaboration, but yosys still elaborates "
+                            "declared defaults; verify."))
                     ),
                 })
             else:

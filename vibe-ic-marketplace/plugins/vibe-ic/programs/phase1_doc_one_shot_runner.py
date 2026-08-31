@@ -42529,10 +42529,188 @@ def gen_l8_timing_waveform(project: Path,
     # Chip-AGNOSTIC: pure list-aggregation; no chip-class literal.
     _v1_6_561_promote_l8_fmax_scalar(content)
 
+    # v1.14.50 — prose parameter OVERRIDES stated in the design input.
+    # Every producer above is TABLE-based (grid / `.. table::` /
+    # `.. list-table::`), so a value the brief states in a sentence reached
+    # nothing. Measured (opentitan_aes): the brief said "參數化（SecMasking=0）"
+    # and `SecMasking` appears in NONE of the ten vendor documents — the
+    # prompt is its only source — so L8.parameters stayed 0, the chip_top
+    # emitter copied the vendor default, and synth aborted on a module the
+    # corpus excludes on purpose.
+    _v1_14_50_extract_prose_param_overrides(
+        project, extracted, content, evidence)
+
     return _write_l_doc(project, "L8_RTL_CONSTANTS", content, evidence)
 
 
+# ── v1.14.50 — prose parameter OVERRIDES ─────────────────────────────────
+# A value the design input STATES ("SecMasking=0") is an OVERRIDE. It is NOT
+# the same thing as a documented DEFAULT, which is what `parameters[]` has
+# meant until now, so it is marked `override: True` and carries `value`
+# rather than `default`. Merging the two would tell a downstream consumer
+# that the vendor's default IS the stated value, which is the opposite of
+# what an override means.
+#
+# Zero-false-positive rule: a bare NAME=VALUE regex over prose matches an
+# enormous amount of ordinary text, so a match is accepted ONLY when NAME is
+# actually DECLARED as a parameter somewhere in the staged RTL under input/.
+# That grounding, not the regex, is what makes this safe. Reading
+# input/**/*.sv is legitimate here: staged RTL is design INPUT, not
+# oracle/harness/golden (§4.05).
+_V1_14_50_ASSIGN_RE = re.compile(
+    # NB the lookbehind excludes `\w` and `.` (so `pkg.NAME=` and a longer
+    # identifier never match) but NOT a backtick: a directive written as
+    # `` `NAME=VALUE` `` is the MOST machine-readable form the input can use,
+    # and an earlier cut of this regex excluded exactly that, matching nothing.
+    r"(?<![\w.])([A-Za-z_]\w*)\s*=\s*"
+    r"(\d+'[bBhHdDoO][0-9a-fA-FxXzZ_]+|0[xX][0-9a-fA-F]+|\d+|[A-Za-z_]\w*)"
+    r"(?![\w=])")
+_V1_14_50_RTL_PARAM_RE = re.compile(
+    r"\bparameter\b[^;,=()]*?([A-Za-z_]\w*)\s*=")
+_V1_14_50_RTL_SUFFIXES = (".sv", ".v", ".svh", ".vh")
+
+
+def _v1_14_50_declared_rtl_parameters(project) -> set:
+    """Every parameter NAME declared by RTL staged under input/.
+
+    Bounded: reads only input/**, only RTL suffixes, and tolerates any
+    unreadable file rather than failing the L8 emit."""
+    names: set = set()
+    try:
+        root = Path(project) / "input"
+        if not root.is_dir():
+            return names
+        for f in root.rglob("*"):
+            if not f.is_file() or f.suffix.lower() not in _V1_14_50_RTL_SUFFIXES:
+                continue
+            try:
+                names.update(_V1_14_50_RTL_PARAM_RE.findall(
+                    f.read_text(errors="replace")))
+            except OSError:
+                continue
+    except Exception:  # noqa: BLE001 — never fail the emit on a scan
+        return names
+    return names
+
+
+def _v1_14_50_extract_prose_param_overrides(
+        project, extracted, content, evidence) -> None:
+    declared = _v1_14_50_declared_rtl_parameters(project)
+    if not declared:
+        return
+    params = content.setdefault("parameters", [])
+    seen = {(str(p.get("name")), str(p.get("value")))
+            for p in params if isinstance(p, dict)}
+    for fname, text in (extracted or {}).items():
+        for m in _V1_14_50_ASSIGN_RE.finditer(text or ""):
+            name, value = m.group(1), m.group(2)
+            if name not in declared:
+                continue
+            key = (name, value)
+            if key in seen:
+                continue
+            seen.add(key)
+            params.append({
+                "name": name,
+                "value": value,
+                "default": None,
+                "override": True,
+                "type": None,
+                "description": ("stated in the design input as an OVERRIDE "
+                                "of the RTL-declared default"),
+                "source": fname,
+                "extraction_strategy":
+                    "v1.14.50_prose_override_grounded_in_staged_rtl",
+            })
+            try:
+                _v1_6_395_push_l8_evidence(
+                    evidence, fname, f"{name} = {value}",
+                    "v1.14.50_prose_override_grounded_in_staged_rtl")
+            except Exception:  # noqa: BLE001 — evidence is best-effort
+                pass
+
+
 # v1.6.561 — for #381 P3 ORGANIC. L8 fmax_mhz scalar promotion helper.
+
+# ── v1.14.50 — documents PRESENT under input/ that nothing ever opened ────
+_V1_14_50_DOC_SUFFIXES = (".md", ".txt", ".rst")
+
+
+def _v1_14_50_visited_input_paths(project) -> set:
+    """Project-relative paths the extractor demonstrably touched.
+
+    Reconstructed from artefacts on disk: every `source_documents` entry and
+    `extraction_evidence` key across the emitted L docs, plus everything the
+    skip log records (a SKIPPED file was still visited). This is a SUPERSET of
+    the visited DOCUMENTS — it also contains .lib/.sdc sources — which is the
+    safe direction: a superset can only shrink the list this feeds, never
+    invent a row."""
+    seen: set = set()
+    try:
+        skip = _ingest.read_skip_log(project) or {}
+        for entry in (skip.get("skipped") or []):
+            path = entry.get("path") if isinstance(entry, dict) else entry
+            if path:
+                seen.add(str(path))
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        for doc in _pl.generated_docs_dir(Path(project)).glob("L*.json"):
+            try:
+                data = json.loads(doc.read_text(errors="replace"))
+            except Exception:  # noqa: BLE001
+                continue
+            for src in (data.get("source_documents") or []):
+                seen.add(str(src).split(" (")[0])
+            for key in (data.get("extraction_evidence") or {}):
+                seen.add(str(key).split(" (")[0])
+    except Exception:  # noqa: BLE001
+        pass
+    return {p for p in seen if p}
+
+
+def _v1_14_50_present_but_never_ingested(project) -> list:
+    """Document-shaped files under input/ whose CONTENT reached nothing.
+
+    A file is treated as ingested when its own path was visited OR when its
+    sha256 matches a visited file's. The content test is required, not
+    cosmetic: the Phase-1 front-end bridges `input/phase1_prompt.md` into
+    `input/docs/` under a copy, so the ORIGINAL path is never visited even
+    though its content was fully ingested. Without the hash it would be
+    reported forever, and a check that cries wolf on a file the flow handles
+    correctly is worse than no check."""
+    try:
+        root = Path(project) / "input"
+        if not root.is_dir():
+            return []
+        visited = _v1_14_50_visited_input_paths(project)
+        digests: set = set()
+        for rel in visited:
+            try:
+                digests.add(hashlib.sha256(
+                    (Path(project) / rel).read_bytes()).hexdigest())
+            except OSError:
+                continue
+        out = []
+        for f in sorted(root.rglob("*")):
+            if not f.is_file() or f.suffix.lower() not in _V1_14_50_DOC_SUFFIXES:
+                continue
+            rel = str(f.relative_to(Path(project)))
+            if rel in visited:
+                continue
+            try:
+                if hashlib.sha256(f.read_bytes()).hexdigest() in digests:
+                    continue
+            except OSError:
+                pass
+            out.append({"path": rel,
+                        "reason": "present under input/ and opened by nothing "
+                                  "— it is in neither the visited, extracted "
+                                  "nor unread census"})
+        return out
+    except Exception:  # noqa: BLE001 — census enrichment is best-effort
+        return []
+
 def _v1_6_561_promote_l8_fmax_scalar(l8: Dict[str, Any]) -> None:
     """Post-pass on the L8_RTL_CONSTANTS content dict. If
     `l8["fmax_mhz"]` is None or missing and `l8["synthesis_targets"]`
@@ -51137,6 +51315,19 @@ def emit_coverage_report(project: Path,
     # `overall.status` rather than averaged away.
     _unread_docs = _ingest.unread_input_documents(project)
     _skip_log = _ingest.read_skip_log(project) or {}
+    # v1.14.50 — the FOURTH state. `visited` / `extracted` / `unread` are all
+    # denominated on the set the extractor CHOSE to visit, so a document that
+    # is PRESENT under input/ and never opened at all is in none of them: it
+    # cannot be counted unread, and the census prints "0 UNREAD / 100.0%".
+    # Measured: that is exactly how a design brief was silently dropped, and
+    # the same file is present-and-unopened in a second benchmark IC too.
+    # ADVISORY, and deliberately so — it does NOT degrade `status`. Measured
+    # over the benchmark corpus, only 4 document-shaped files sit outside
+    # input/docs/ at all, and 2 of them are vendor READMEs that SHOULD never be
+    # ingested. Failing a run over a README would be the wrong trade; leaving
+    # the state invisible is what allowed the real defect. So: make it visible,
+    # do not make it fatal.
+    _present_unvisited = _v1_14_50_present_but_never_ingested(project)
     _visited = _skip_log.get("total_visited")
     _extracted_n = _skip_log.get("total_extracted")
     _status = "PASS" if pct >= 80.0 else "FAIL"
@@ -51213,6 +51404,9 @@ def emit_coverage_report(project: Path,
             "input_documents_visited": _visited,
             "input_documents_extracted": _extracted_n,
             "input_documents_unread": len(_unread_docs),
+            # v1.14.50 — present under input/ and never opened by anything.
+            "input_documents_present_never_ingested":
+                len(_present_unvisited),
             "layers_demanded_but_empty": list(
                 _layer_demand.get("silent_empty") or []),
             # A probe that returned zero WITHOUT examining anything. Carried
@@ -51238,6 +51432,8 @@ def emit_coverage_report(project: Path,
         # have to open a second report to learn WHICH document is
         # missing from the number above.
         "unread_input_documents": _unread_docs,
+        # v1.14.50 — named, for the same reason the unread list is named.
+        "present_never_ingested_input_documents": _present_unvisited,
         # v1.6.9 Fix 5 — separate curated-vs-hands_on metrics so the
         # SUMMARY can render both.
         "curated": {
@@ -64470,6 +64666,18 @@ def main() -> int:
     if _visited_n is not None:
         print(f"Input documents:     {_visited_n} visited / "
               f"{_extracted_n2} extracted / {_unread_n} UNREAD")
+    # v1.14.50 — printed on the SAME census line, not filed in a list a
+    # reader is free to skip: "0 UNREAD" next to a silently-unopened document
+    # is precisely the reading that hid a dropped design brief.
+    _never_n = _summary_overall.get(
+        "input_documents_present_never_ingested") or 0
+    if _never_n:
+        print(f"  ?? {_never_n} document(s) PRESENT under input/ that nothing "
+              f"opened — in NEITHER the visited, extracted nor unread count "
+              f"above (ADVISORY; a vendor README legitimately lives here too):")
+        for _d in (report.get("present_never_ingested_input_documents")
+                   or [])[:10]:
+            print(f"     NEVER INGESTED {_d.get('path')}")
     if _unread_n:
         print("  !! the percentages above were computed WITHOUT these "
               "documents — they cannot lower a coverage ratio:")

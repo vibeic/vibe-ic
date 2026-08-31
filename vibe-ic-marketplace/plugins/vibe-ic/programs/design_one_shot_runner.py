@@ -11346,6 +11346,104 @@ def _prune_tail_advisory(cg_report: dict, synth_top: str):
     return advisory, log_line
 
 
+# v1.14.50 — the text the synth FAIL diagnoses off. Extracted from
+# step_yosys_synth so it can be tested without driving a real yosys run.
+def _synth_diag_text(out: str, err: str, log) -> str:
+    """`out`/`err` PLUS the step's own log file.
+
+    `out`/`err` are whatever the LAST yosys invocation returned. When the slang
+    fallback frontend engages it writes the real diagnostics to `log` and
+    returns a stream whose tail is the ECHOED COMMAND LINE, so a verdict — and
+    any enricher — built from `out + err` alone is reading a list of .sv paths
+    while the abort sits unmentioned in the log."""
+    log_text = ""
+    try:
+        if log is not None and Path(log).is_file():
+            log_text = Path(log).read_text(errors="replace")
+    except OSError:
+        log_text = ""
+    return out + "\n" + err + ("\n" + log_text if log_text else "")
+
+
+# v1.14.50 — name the guard parameter the design input never stated.
+def _unstated_guard_param_note(rtl_dir, gen_findings) -> str:
+    """One sentence when a still-dangling generate branch is decided by a
+    parameter that is NOT among the overrides the input stated.
+
+    Returns "" when there is nothing to say — no overrides were applied, or
+    every deciding parameter was already stated (in which case the operator
+    already has the knob and a different problem)."""
+    try:
+        applied = {}
+        for sidecar in Path(rtl_dir).glob(".*__param_overrides.json"):
+            applied.update(
+                (json.loads(sidecar.read_text(errors="replace"))
+                 .get("applied") or {}))
+        if not applied:
+            return ""
+        unstated = {}
+        for f in gen_findings:
+            for p in (f.get("guard_parameters") or []):
+                if p not in applied:
+                    unstated.setdefault(p, []).append(f.get("module_ref"))
+        if not unstated:
+            return ""
+        parts = "; ".join(
+            f"{p} (decides {', '.join(sorted(set(m for m in mods if m)))})"
+            for p, mods in sorted(unstated.items()))
+        return (f" | UNSTATED_GUARD_PARAM: the design input stated "
+                f"{sorted(applied)} and those were applied, but the branch "
+                f"that still dangles is decided by {parts} — a parameter the "
+                f"input does not state, so it keeps the RTL's own default. "
+                f"State it in the design input; this check does NOT pick a "
+                f"value for you.")
+    except Exception:  # noqa: BLE001 — enrichment is best-effort
+        return ""
+
+
+# v1.14.50 — L8 parameter-override application for the auto-emitted chip_top.
+def _apply_l8_param_overrides(project, param_block: str):
+    """Rewrite defaults in a copied `#(parameter ...)` block from
+    L8_RTL_CONSTANTS.parameters[] entries marked `override: True`.
+
+    Returns (new_block, applied, unapplied). An override naming a parameter
+    this block does not declare is returned in `unapplied` — never applied
+    elsewhere, never silently dropped. Fail-open: any read/parse problem
+    leaves the block untouched, because a wrapper that still carries the
+    vendor default is a wrong build, while a wrapper this function crashed on
+    is no build at all."""
+    applied: Dict[str, str] = {}
+    unapplied: Dict[str, str] = {}
+    if not param_block or not param_block.strip():
+        return param_block, applied, unapplied
+    try:
+        import _path_layout as _pl2
+        l8 = _pl2.generated_docs_dir(Path(project)) / "L8_RTL_CONSTANTS.json"
+        if not l8.is_file():
+            return param_block, applied, unapplied
+        doc = json.loads(l8.read_text(errors="replace"))
+    except Exception:  # noqa: BLE001 — never fail the emit on the sidecar
+        return param_block, applied, unapplied
+    for entry in (doc.get("parameters") or []):
+        if not isinstance(entry, dict) or not entry.get("override"):
+            continue
+        name = str(entry.get("name") or "").strip()
+        value = entry.get("value")
+        if not name or value is None:
+            continue
+        value = str(value).strip()
+        pat = re.compile(
+            r"(\bparameter\b[^;,=()]*?\b" + re.escape(name) +
+            r"\s*=\s*)([^,;)\n]+)")
+        new_block, n = pat.subn(lambda m: m.group(1) + value, param_block)
+        if n:
+            param_block = new_block
+            applied[name] = value
+        else:
+            unapplied[name] = value
+    return param_block, applied, unapplied
+
+
 def _autoemit_chip_top_wrapper(project: Path, rtl_dir: Path,
                               synth_top: str):
     """Deterministic chip_top wrapper auto-emit (extracted from
@@ -11571,6 +11669,40 @@ def _autoemit_chip_top_wrapper(project: Path, rtl_dir: Path,
     # v0.1.62 — if the DUT is parameterized, declare the SAME params on the
     # wrapper (so widths like `[size-1:0]` resolve in the wrapper port list)
     # AND propagate them by name to the instance.
+    # v1.14.50 — apply L8-declared parameter OVERRIDES to the copied block.
+    # The wrapper copies the DUT's `#(parameter ...)` header VERBATIM, defaults
+    # included, and then propagates each name to the instance as `.P(P)`. So
+    # the vendor default is what gets built, and a value the design input
+    # STATED had no way in. Measured (opentitan_aes): the brief disabled a
+    # security parameter, the wrapper emitted the vendor default, and synth
+    # aborted on the variant that default selects — a module the corpus
+    # excludes ON PURPOSE.
+    # This is NOT the flow guessing a variant. #586 rightly refuses that
+    # ("Choosing a different PRESENT variant would silently rewrite a
+    # parameter selection and is NOT done"): that refusal is about the flow
+    # picking for itself. Here the input names the parameter and the value,
+    # Phase 1 recorded it as `override: True`, and honouring a stated
+    # instruction is the opposite of guessing. Nothing is inferred: an
+    # override whose name is not in this DUT's parameter block is NOT applied,
+    # and is recorded as unapplied rather than dropped.
+    param_block, _ovr_applied, _ovr_unapplied = _apply_l8_param_overrides(
+        project, param_block)
+    if _ovr_applied or _ovr_unapplied:
+        try:
+            (rtl_dir / f".{synth_top}__param_overrides.json").write_text(
+                json.dumps({"applied": _ovr_applied,
+                            "unapplied": _ovr_unapplied,
+                            "source": "L8_RTL_CONSTANTS.parameters"
+                                      "[override=true]"}, indent=2))
+        except OSError:
+            pass
+        for _n, _v in sorted(_ovr_applied.items()):
+            print(f"      chip_top param override applied: {_n} = {_v} "
+                  f"(L8, stated in the design input)")
+        for _n, _v in sorted(_ovr_unapplied.items()):
+            print(f"      chip_top param override NOT applied: {_n} = {_v} "
+                  f"— no such parameter in {mod_name}'s header; recorded, "
+                  f"not guessed")
     param_header = f" {param_block.strip()}" if param_block.strip() else ""
     # Re-emit the DUT header's package imports on the wrapper so package-scoped
     # param types/defaults (`sbox_impl_e SecSBoxImpl = SBoxImplDom`) and port
@@ -12461,8 +12593,22 @@ def step_yosys_synth(project: Path, top_name: str = "chip_top",
     # append the precise diagnosis (module, selecting param default,
     # in-closure alternative) so the operator isn't left to triage a raw
     # abort. Best-effort, advisory — never changes the FAIL verdict.
+    # v1.14.50 — DIAGNOSE OFF THE TEXT THAT ACTUALLY HOLDS THE ABORT.
+    # `out`/`err` are whatever the LAST yosys invocation returned. When the
+    # slang fallback frontend engages it writes the real diagnostics to `log`
+    # and returns a stream whose tail is the ECHOED COMMAND LINE, so both the
+    # verdict and the enrichers below ended up reading a list of .sv paths.
+    # Measured (opentitan_aes, 2026-08-31): the FAIL detail was
+    # `rc=1 log_tail=<.sv paths>` cut mid-path, while the abort — "unknown
+    # module 'aes_sbox_dom'" / "is not part of the design" — sat in yosys.log
+    # and appeared nowhere in the verdict. #586's trigger tests that same
+    # stream for "is not part of the design", so it could never fire: an
+    # enricher gated on text the capture does not contain is dead code.
+    # The log file is the flow's own authoritative record of the run; fold it
+    # in, exactly as the sibling FAIL at the `; log_tail=` site already does.
+    _diag_txt = _synth_diag_text(out, err, log)
     closure_note = ""
-    _abort_txt = (out + err)
+    _abort_txt = _diag_txt
     if ("is not part of the design" in _abort_txt
             or "referenced in module" in _abort_txt):
         try:
@@ -12485,6 +12631,15 @@ def step_yosys_synth(project: Path, top_name: str = "chip_top",
                     f"likely selects an excluded variant: {_lines}. "
                     f"Rewrite the default(s) to an in-closure variant or "
                     f"stage the missing module(s).")
+                # v1.14.50 — connect the surviving dangling branch to the
+                # overrides the design input actually STATED. Without this the
+                # operator is told two true things that do not meet: "SecMasking
+                # = 0 applied" and "aes_sbox_dom dangles in gen_sbox_dom" — and
+                # is left to discover unaided that the branch is decided by a
+                # DIFFERENT parameter the input never mentioned. Naming that
+                # parameter is REPORTING, not inference: no value is chosen for
+                # it, so #586's refusal to pick a variant is untouched.
+                closure_note += _unstated_guard_param_note(rtl_dir, _gen)
         except Exception:  # nosec — preflight enrichment is best-effort
             closure_note = ""
     # ORGANIC #662 — when the abort is an undefined-macro / unresolved-`include
@@ -12493,7 +12648,7 @@ def step_yosys_synth(project: Path, top_name: str = "chip_top",
     # be found). Advisory — never changes the FAIL verdict.
     macro_note = ""
     if _v662_dep.get("hints"):
-        _abort_txt2 = (out + err).lower()
+        _abort_txt2 = _diag_txt.lower()
         if ("macro" in _abort_txt2 or "undefined" in _abort_txt2
                 or "cannot open include" in _abort_txt2
                 or "include file" in _abort_txt2):
@@ -12504,7 +12659,7 @@ def step_yosys_synth(project: Path, top_name: str = "chip_top",
                                f"{', '.join(_v662_dep['staged'])})")
     return StepResult("yosys_synth", "FAIL",
                       time.time() - t0,
-                      f"rc={rc} log_tail={(out + err)[-1500:]}"
+                      f"rc={rc} log_tail={_diag_txt[-1500:]}"
                       f"{closure_note}{macro_note}",
                       [str(log)],
                       extras={"synth_frontend": synth_frontend,
