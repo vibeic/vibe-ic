@@ -77,7 +77,7 @@ REBOUND_VERDICT_KIND = "vibeic.landing-verdict-rebind"
 MANIFEST_PATH = "tools/ci/protected_landing_transition.json"
 MAX_JSON_BYTES = 1024 * 1024
 ROLE_VALUES = frozenset({"authority", "runtime"})
-OPERATION_VALUES = frozenset({"STEADY", "PREPARE", "ACTIVATE"})
+OPERATION_VALUES = frozenset({"STEADY", "PREPARE", "ACTIVATE", "RENAME"})
 PUSH_PREFLIGHT_GATES = (
     "landing_collateral_revert_check.py",
     "commit_msg_nda_check.py",
@@ -302,6 +302,41 @@ def _exact_keys(value: Any, keys: Iterable[str], what: str) -> Mapping[str, Any]
     return value
 
 
+def _keys_with_optional(value: Any, keys: Iterable[str],
+                       optional: Iterable[str], what: str) -> Mapping[str, Any]:
+    """`_exact_keys`, plus keys a manifest MAY omit.
+
+    A manifest written before an optional key existed must still parse, because
+    BASE authority is read from whatever commit is the base -- including one
+    older than the key.  Absent is not the same as malformed.
+    """
+    if not isinstance(value, dict):
+        raise Refusal(f"{what} has the wrong schema: {type(value).__name__!r}")
+    required, allowed = set(keys), set(keys) | set(optional)
+    if not required <= set(value) or not set(value) <= allowed:
+        raise Refusal(f"{what} has the wrong schema: {sorted(value)!r}")
+    return value
+
+
+def _move_row(value: Any, what: str) -> dict[str, str]:
+    row = _exact_keys(value, {"from", "to"}, what)
+    return {"from": _safe_path(row["from"], f"{what}.from"),
+            "to": _safe_path(row["to"], f"{what}.to")}
+
+
+def apply_moves(names: Sequence[str],
+                moves: Sequence[Mapping[str, str]]) -> list[str]:
+    """The protected path list AFTER the authorised renames, sorted.
+
+    With no moves this returns `sorted(names)`, which for an already-sorted
+    path list is `names` itself -- so every caller behaves exactly as it did
+    before moves existed.  That identity is the negative control: a bug in the
+    move code cannot reach a landing that declares no move.
+    """
+    renamed = {row["from"]: row["to"] for row in moves}
+    return sorted(renamed.get(name, name) for name in names)
+
+
 def _safe_path(value: Any, what: str) -> str:
     if not isinstance(value, str) or not value or "\n" in value or "\r" in value:
         raise Refusal(f"{what} is not a safe repository path")
@@ -408,11 +443,62 @@ def _state(value: Any, oid_len: int, what: str) -> dict[str, Any]:
     return {"id": state_id, "files": files}
 
 
+def _parse_moves(value: Any, names: Sequence[str]) -> list[dict[str, str]]:
+    """Validate the RENAMES this manifest authorises.
+
+    WHY THIS EXISTS.  Before it, the protected register could evolve BYTES at
+    frozen PATHS and nothing else: `build_receipt` observed the candidate at the
+    BASE's path list, so a candidate that renamed a protected file refused with
+    "protected path is absent" before a single test ran.  Adding, removing or
+    renaming a protected runtime path was therefore inexpressible, and the only
+    live precedent for doing it -- `c51f830824`, which grew `RUNTIME_PATHS` from
+    nine entries to eleven -- says in its own last line that it "Landed with
+    --no-verify".  A protocol whose only escape hatch is the bypass it exists to
+    prevent is not enforcing anything; it is deferring the breakage.
+
+    THE PROPERTY THAT MUST NOT BE WEAKENED, and is not: the candidate never
+    supplies the policy it is judged by.  A move is authorised because the BASE
+    manifest names it -- destination included -- and the candidate may only
+    PERFORM the move BASE already declared.  `RUNTIME_PATHS` is still compared
+    for exact equality against the CURRENT path set, from BASE's own code.
+
+    An absent or empty `moves` makes every downstream computation identical to
+    the pre-move behaviour.
+    """
+    if not isinstance(value, list):
+        raise Refusal("manifest.moves is not a list")
+    moves = [_move_row(row, f"manifest.moves[{index}]")
+             for index, row in enumerate(value)]
+    froms = [row["from"] for row in moves]
+    if froms != sorted(froms) or len(froms) != len(set(froms)):
+        raise Refusal("manifest.moves is not sorted and unique by `from`")
+    tos = [row["to"] for row in moves]
+    if len(tos) != len(set(tos)):
+        raise Refusal("manifest.moves sends two paths to one destination")
+    known = set(names)
+    unknown = sorted(set(froms) - known)
+    if unknown:
+        raise Refusal("manifest.moves renames paths the register does not "
+                      "protect: " + ", ".join(unknown))
+    # A destination that is ALREADY protected would silently merge two rows
+    # into one and drop a file from the register -- a deletion wearing a
+    # rename's clothes, which is the exact failure this whole change is here
+    # to make impossible.
+    collide = sorted(set(tos) & known)
+    if collide:
+        raise Refusal("manifest.moves renames onto an already-protected path: "
+                      + ", ".join(collide))
+    if MANIFEST_PATH in tos:
+        raise Refusal("manifest.moves cannot rename a path onto the manifest")
+    return moves
+
+
 def parse_manifest(value: Any, oid_len: int) -> dict[str, Any]:
-    root = _exact_keys(
+    root = _keys_with_optional(
         value,
         {"schema", "kind", "transition_id", "manifest_path", "runner", "paths",
          "current", "next"},
+        {"moves"},
         "manifest",
     )
     if type(root["schema"]) is not int or root["schema"] != SCHEMA:
@@ -433,6 +519,8 @@ def parse_manifest(value: Any, oid_len: int) -> dict[str, Any]:
         raise Refusal("manifest.paths is not sorted and unique")
     if MANIFEST_PATH in names:
         raise Refusal("the manifest cannot recursively include itself")
+    moves = _parse_moves(root.get("moves", []), names)
+    next_names = apply_moves(names, moves)
     role_map = {row["path"]: frozenset(row["roles"]) for row in paths}
     runtime = {path for path, roles in role_map.items() if "runtime" in roles}
     authority = {path for path, roles in role_map.items() if "authority" in roles}
@@ -462,8 +550,26 @@ def parse_manifest(value: Any, oid_len: int) -> dict[str, Any]:
         raise Refusal("manifest current and next state ids are equal")
     if [row["path"] for row in current["files"]] != names:
         raise Refusal("manifest.current does not exactly cover manifest.paths")
-    if [row["path"] for row in next_state["files"]] != names:
-        raise Refusal("manifest.next does not exactly cover manifest.paths")
+    # `next_names` IS `names` WHENEVER NO MOVE IS DECLARED, so the rule the
+    # re-observation work landed at v1.14.7 -- next exactly covers the register
+    # -- is preserved on the nose for every register that declares none.  A
+    # register that DOES declare a rename covers the moved set instead, because
+    # that is where its `next` bytes live.
+    if [row["path"] for row in next_state["files"]] != next_names:
+        raise Refusal(
+            "manifest.next does not exactly cover manifest.paths"
+            + (" after the authorised moves" if moves else ""))
+    # A RE-OBSERVATION AUTHORISES NOTHING, SO IT CANNOT AUTHORISE A RENAME.
+    # The two declarations are contradictory in the one direction that matters:
+    # `moves` names a destination a candidate may move a protected path to, and
+    # a register whose whole claim is "this records the tree and opens no
+    # transition" must not be the thing that hands out that permission.  Refused
+    # by name rather than left to fall out of the row comparison below, which
+    # would have reported it as a smuggled byte change and sent its reader
+    # looking in the wrong place.
+    if reobservation and moves:
+        raise Refusal("a re-observation records no move, so it cannot declare "
+                      "one: " + ", ".join(row["from"] for row in moves))
     # THE TWO KINDS CARRY OPPOSITE RULES, AND BOTH ARE ENFORCED.
     #
     # The transition sentence is unchanged, on the unchanged predicate: a
@@ -490,6 +596,7 @@ def parse_manifest(value: Any, oid_len: int) -> dict[str, Any]:
         "manifest_path": MANIFEST_PATH,
         "runner": runner,
         "paths": paths,
+        "moves": moves,
         "current": current,
         "next": next_state,
     }
@@ -804,6 +911,80 @@ def classify_move(base_files: Sequence[Mapping[str, Any]],
     return "ACTIVATE", base_state_id, manifest["next"]["id"]
 
 
+def classify_rename(base_files: Sequence[Mapping[str, Any]],
+                    candidate_files: Sequence[Mapping[str, Any]],
+                    base_manifest: Mapping[str, Any],
+                    candidate_manifest: Mapping[str, Any]) -> tuple[str, str]:
+    """Classify a candidate that PERFORMS the rename BASE authorised.
+
+    A RENAME is the one operation that changes the protected PATH SET, and it
+    is deliberately shaped so the register is never left mid-move:
+
+      * BASE declares it.  `base_manifest["moves"]` names every `from` and
+        every `to`.  The candidate supplies no policy; it performs one.
+      * The candidate carries the `next` BYTES at the `to` PATHS, exactly.
+      * The candidate RE-PHOTOGRAPHS the register in the same landing: its own
+        manifest protects the moved path set, declares no further move, and
+        stands at a fresh transition whose `current` is what the candidate
+        actually holds.
+
+    That last clause is why RENAME is not simply "ACTIVATE with paths".  An
+    ACTIVATE keeps the manifest, so a path-moving ACTIVATE would leave the next
+    base holding files its own register cannot name -- and `build_receipt`
+    observes the base at its own register FIRST, so every later landing would
+    refuse on the BASE, for a change that is nobody's fault.  That is precisely
+    the deadlock `docs/research/2026-08-22-protected-tuple-unenforced-on-the-
+    landing-path.md` measured, where three queued batches could not verify
+    against main at all.  A move that cannot be completed in one landing must
+    not be startable.
+
+    Returns `(base_state_id, candidate_state_id)`.
+    """
+    moves = base_manifest["moves"]
+    if not moves:
+        raise Refusal("RENAME requires the base manifest to authorise a move")
+    names = [row["path"] for row in base_manifest["paths"]]
+    next_names = apply_moves(names, moves)
+
+    base = _rows_by_path(base_files, "the base tuple")
+    nxt = _rows_by_path(base_manifest["next"]["files"], "manifest.next")
+    candidate = _rows_by_path(candidate_files, "the candidate tuple")
+
+    absent = sorted(set(next_names) - set(candidate))
+    if absent:
+        raise Refusal("the candidate does not carry the renamed protected "
+                      "paths: " + ", ".join(absent))
+
+    # THE BASE MUST STILL STAND AT `current`.  A rename is spendable once.
+    current = _rows_by_path(base_manifest["current"]["files"], "manifest.current")
+    stale = sorted(path for path in names if base[path] != current[path])
+    if stale:
+        raise Refusal(
+            "protected tuple matches neither authorised atomic state: the base "
+            "has drifted from `current`, so the authorised rename is not the "
+            "move it describes: " + ", ".join(stale))
+
+    wrong = sorted(path for path in next_names if candidate[path] != nxt[path])
+    if wrong:
+        raise Refusal(
+            "the rename is partial, or installs bytes other than the ones "
+            "`next` records, on: " + ", ".join(wrong))
+
+    # The candidate must close the transition rather than leave it open.
+    cand_names = [row["path"] for row in candidate_manifest["paths"]]
+    if cand_names != next_names:
+        raise Refusal("the candidate register does not protect exactly the "
+                      "moved path set")
+    if candidate_manifest["moves"]:
+        raise Refusal("the candidate register still declares a pending move")
+    if candidate_manifest["transition_id"] == base_manifest["transition_id"]:
+        raise Refusal("RENAME did not allocate a new transition id")
+    if candidate_manifest["current"]["files"] != list(candidate_files):
+        raise Refusal("the candidate register does not record the tuple the "
+                      "candidate actually holds")
+    return base_manifest["current"]["id"], candidate_manifest["current"]["id"]
+
+
 def _attest_worktree(repo: Path, worktree: Path, commit: str) -> None:
     # Imported from the same raw-attested BASE authority closure as this file.
     sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -843,10 +1024,31 @@ def build_receipt(*, object_repo: Path, base: str, candidate: str,
         strict_loads(cand_manifest_raw, what="candidate manifest"), oid_len)
     base_files = _observe_files(
         repo, base_commit, base_manifest["paths"], algorithm, oid_len)
-    candidate_files = _observe_files(
-        repo, cand_commit, base_manifest["paths"], algorithm, oid_len)
 
-    if cand_manifest_raw == base_manifest_raw:
+    # THE CANDIDATE IS OBSERVED AT THE PATHS BASE AUTHORISED FOR IT.  With no
+    # declared move that is the base's own path list, byte-for-byte the old
+    # behaviour.  With one, it is the moved list -- and the only reason the
+    # moved list may be trusted is that BASE, not the candidate, wrote it.
+    rename_paths = None
+    if base_manifest["moves"] and cand_manifest_raw != base_manifest_raw:
+        rename_paths = [{"path": path, "roles": ["runtime"]}
+                        for path in apply_moves(
+                            [row["path"] for row in base_manifest["paths"]],
+                            base_manifest["moves"])]
+        try:
+            candidate_files = _observe_files(
+                repo, cand_commit, rename_paths, algorithm, oid_len)
+        except Refusal:
+            rename_paths = None
+    if rename_paths is None:
+        candidate_files = _observe_files(
+            repo, cand_commit, base_manifest["paths"], algorithm, oid_len)
+
+    if rename_paths is not None:
+        operation = "RENAME"
+        base_state_id, candidate_state_id = classify_rename(
+            base_files, candidate_files, base_manifest, candidate_manifest)
+    elif cand_manifest_raw == base_manifest_raw:
         operation, base_state_id, candidate_state_id = classify_move(
             base_files, candidate_files, base_manifest)
     else:
@@ -876,9 +1078,15 @@ def build_receipt(*, object_repo: Path, base: str, candidate: str,
     _attest_worktree(repo, candidate_tests, cand_commit)
     role_map = {row["path"]: list(row["roles"])
                 for row in base_manifest["paths"]}
+    # Under RENAME the candidate stands at the moved paths, whose roles are the
+    # roles of the paths they came FROM -- a rename may not launder a runtime
+    # file into an authority one, or the reverse.
+    cand_role_map = dict(role_map)
+    for row in base_manifest["moves"]:
+        cand_role_map[row["to"]] = role_map[row["from"]]
     base_observed = [{**row, "roles": role_map[row["path"]]}
                      for row in base_files]
-    candidate_observed = [{**row, "roles": role_map[row["path"]]}
+    candidate_observed = [{**row, "roles": cand_role_map[row["path"]]}
                           for row in candidate_files]
     payload = {
         "operation": operation,
@@ -895,6 +1103,7 @@ def build_receipt(*, object_repo: Path, base: str, candidate: str,
         "base_next_state_id": base_manifest["next"]["id"],
         "base_state_id": base_state_id,
         "candidate_state_id": candidate_state_id,
+        "moves": list(base_manifest["moves"]),
         "base_files": base_observed,
         "candidate_files": candidate_observed,
         "worktrees": [
@@ -1197,7 +1406,7 @@ def _parse_receipt(value: Any, oid_len: int) -> dict[str, Any]:
         raise Refusal("receipt.schema is not 1")
     if root["kind"] != RECEIPT_KIND or root["complete"] is not True:
         raise Refusal("receipt is not a complete protected transition record")
-    payload = _exact_keys(
+    payload = _keys_with_optional(
         root["payload"],
         {"operation", "base_commit", "base_tree", "candidate_commit",
          "candidate_tree", "base_manifest", "candidate_manifest",
@@ -1205,6 +1414,7 @@ def _parse_receipt(value: Any, oid_len: int) -> dict[str, Any]:
          "base_transition_id", "candidate_transition_id",
          "base_current_state_id", "base_next_state_id", "base_state_id",
          "candidate_state_id", "base_files", "candidate_files", "worktrees"},
+        {"moves"},
         "receipt.payload",
     )
     operation = payload["operation"]
@@ -1235,12 +1445,23 @@ def _parse_receipt(value: Any, oid_len: int) -> dict[str, Any]:
     candidate_files = _validate_observed(
         payload["candidate_files"], oid_len,
         "receipt.payload.candidate_files")
+    moves = _parse_moves(payload.get("moves", []),
+                         [row["path"] for row in base_files])
     base_paths = [row["path"] for row in base_files]
     candidate_paths = [row["path"] for row in candidate_files]
-    if base_paths != candidate_paths or not base_paths:
+    # The candidate covers the base's path set, or -- only when the BASE
+    # authorised a rename -- that set with the authorised renames applied.
+    # `apply_moves` with no moves is the identity on a sorted list, so a
+    # receipt that declares none is judged by exactly the old equality.
+    expected_candidate_paths = apply_moves(base_paths, moves)
+    if candidate_paths != expected_candidate_paths or not base_paths:
         raise Refusal("receipt protected tuples do not exact-cover one path set")
     role_map = {row["path"]: frozenset(row["roles"]) for row in base_files}
-    if any(frozenset(row["roles"]) != role_map.get(row["path"])
+    # A renamed row keeps the roles of the path it came FROM.
+    cand_role_map = dict(role_map)
+    for row in moves:
+        cand_role_map[row["to"]] = role_map[row["from"]]
+    if any(frozenset(row["roles"]) != cand_role_map.get(row["path"])
            for row in candidate_files):
         raise Refusal("receipt candidate roles differ from BASE authority")
     runtime = {path for path, roles in role_map.items() if "runtime" in roles}
@@ -1288,6 +1509,21 @@ def _parse_receipt(value: Any, oid_len: int) -> dict[str, Any]:
             and base_transition != candidate_transition
             and base_state == candidate_state):
         raise Refusal("PREPARE receipt changed live bytes or kept old authority")
+    if operation == "RENAME" and not (
+            moves and not same_files and not same_manifest
+            and base_transition != candidate_transition
+            and base_state == payload["base_current_state_id"]):
+        raise Refusal(
+            "RENAME receipt is not one base-authorised move that also closes "
+            "the transition it spends")
+    if operation != "RENAME" and moves and not same_manifest:
+        # A base that has a pending rename and a candidate that rewrote the
+        # manifest is a RENAME or it is nothing.  Refusing here stops a
+        # candidate from spending the authorised destination under an
+        # operation whose rules never look at it.
+        raise Refusal(
+            "the base authorises a pending rename, so a candidate that changes "
+            "the manifest must be classified RENAME, not " + operation)
     # Preserve the canonical parsed shape.  These equalities also prevent a
     # caller from relying on bool-as-int or mapping subclasses accepted above.
     return {
