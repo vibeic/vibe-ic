@@ -25,8 +25,9 @@ one did; only the moment of the kill and the sentence explaining it change. That
 is deliberate: the VACUOUS_PASS / PASS_WITH_WAIVERS tiers in this file have a
 MEASURED regression history (v1.10.14 -> v1.10.16 turned PASS=36 FAIL=0 into
 PASS=25 VOIDED=8 FAIL over byte-identical artefacts), and nothing here touches
-them. It is also why rc 2 was never an option: this runner maps a gate's rc 2 to
-VACUOUS_PASS, a PASS tier.
+them. It is also why a bare rc 2 was never an option: the runner now requires a
+typed design/capability/external reason before rc 2 can enter VACUOUS_PASS; an
+untyped undetermined result is INCOMPLETE.
 
 THE GRACE CAN ONLY KILL LESS. `gate_budget` seconds of no-progress stops a
 strict subset of what `gate_budget` seconds of runtime stopped: both stop a gate
@@ -160,16 +161,16 @@ def test_a_gate_that_passes_still_passes(tmp_path, monkeypatch):
     assert ok is True
 
 
-def test_the_vacuous_pass_convention_is_untouched(tmp_path, monkeypatch):
-    """The tier this change deliberately does not move. rc 2 from a gate is
-    still VACUOUS_PASS, which is also why rc 2 could never have been used to
-    mean 'undetermined' here."""
+def test_untyped_rc_two_is_incomplete(tmp_path, monkeypatch):
+    """A bare rc 2 cannot launder an undetermined execution into a pass tier."""
     monkeypatch.setattr(F._pl, "gate_timeout_s", lambda: 30)
     prog = _gate(tmp_path, "import sys\nprint('verdict: SKIP')\nsys.exit(2)\n")
     monkeypatch.setattr(F, "_resolve_program_cmd",
                         lambda cmd, cwd=None: [sys.executable, prog])
+    F._GATE_LEDGER.clear()
     ok, out = F._check_program_exit_zero(tmp_path, "a_gate")
-    assert ok is True and out.startswith(F._VACUOUS_HINT_PREFIX), out
+    assert ok is True and out.startswith("INCOMPLETE:"), out
+    assert F._GATE_LEDGER[-1]["reason_class"] == "EXECUTION_ERROR"
 
 
 # ── the shape of the change ────────────────────────────────────────────────

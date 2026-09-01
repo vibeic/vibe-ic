@@ -9162,6 +9162,21 @@ def _evaluate_gate(project: Path, gate: Dict[str, Any],
                 # Recorded on the slot's OWN channel, which the `all_of`
                 # whitelist already carries, so the disclosure cannot be
                 # dropped one level up.
+                declared_reason_class = spec.get(
+                    "absent_condition_reason_class")
+                reason_class = (_reason_taxonomy.normalise(
+                    declared_reason_class)
+                    if declared_reason_class is not None
+                    else _reason_taxonomy.DESIGN_DECLARED_NA)
+                if (declared_reason_class is not None
+                        and reason_class not in
+                        _reason_taxonomy.SKIP_ELIGIBLE):
+                    reasons.append(
+                        "advisory_program_exit_zero: invalid "
+                        "`absent_condition_reason_class` "
+                        f"{declared_reason_class!r} for `{cmd}`; expected one "
+                        "of DESIGN_DECLARED_NA, CAPABILITY_ABSENT, EXTERNAL")
+                    return False, reasons
                 reasons.append(
                     f"{_ADVISORY_HINT_PREFIX}n/a (declared; condition "
                     f"{cond_files} matched 0 path(s), so it did not run): "
@@ -9172,7 +9187,7 @@ def _evaluate_gate(project: Path, gate: Dict[str, Any],
                         "gate": _gate_name(cmd), "command": cmd,
                         "exit_code": None, "verdict": "NOT_APPLICABLE",
                         "structured_verdict": None,
-                        "reason_class": _reason_taxonomy.DESIGN_DECLARED_NA,
+                        "reason_class": reason_class,
                         "enforcement": "NOT_RUN_DECLARED",
                     }, sort_keys=True))
                 return True, reasons

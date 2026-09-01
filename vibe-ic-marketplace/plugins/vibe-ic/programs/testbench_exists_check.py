@@ -2,13 +2,14 @@
 """
 testbench_exists_check.py — Deterministic testbench existence and coverage checker.
 
-Verifies that a Verilog/SystemVerilog testbench file exists in the RTL directory
-and contains a minimum number of test cases. This catches the common failure
+Verifies that a Verilog/SystemVerilog or canonical ``tb_*.py`` cocotb testbench
+exists in the supplied project/RTL tree and contains a minimum number of test
+cases. This catches the common failure
 where an agent claims to have generated a testbench but either didn't create one,
 or created an empty stub.
 
 What it catches:
-  1. NO_TESTBENCH — no *_tb.v, tb_*.v, *_tb.sv, or tb_*.sv files found
+  1. NO_TESTBENCH — no named Verilog/SystemVerilog or cocotb TB files found
   2. INSUFFICIENT_TESTS — testbench has fewer test cases than required minimum
   3. EMPTY_TESTBENCH — testbench file exists but has no meaningful content
   4. STRUCTURAL_ISSUE — testbench lacks initial/always blocks or timing delays
@@ -24,7 +25,7 @@ Exit codes:
     1 = missing testbench or insufficient test coverage
     2 = parse error / invalid arguments
 
-Generality: works for ANY Verilog/SystemVerilog testbench.
+Generality: works for ANY Verilog/SystemVerilog or canonical cocotb testbench.
 No external tool dependencies — pure Python.
 """
 from __future__ import annotations
@@ -55,6 +56,7 @@ class TestbenchInfo:
     file: str
     test_count: int
     test_patterns: List[str]
+    language: str = "verilog"
 
 
 # ---------------------------------------------------------------------------
@@ -79,8 +81,21 @@ TEST_PATTERNS = [
     re.compile(r'\b(?:run_test|test_\w+)\s*(?:\(|;)'),
 ]
 
+# Cocotb expresses one executable test at the decorator and may place several
+# independently scored checks inside it.  Both are observable test-case
+# indicators, just as an SV `assert` or PASS/FAIL marker is.  Restrict Python
+# discovery to the canonical `tb_*.py` naming convention so helper and model
+# modules do not inflate the denominator.
+COCOTB_TEST_PATTERNS = [
+    re.compile(r'^\s*@cocotb\.test\s*\('),
+    re.compile(r'^\s*assert\b'),
+]
 
-def count_test_cases(text: str) -> Tuple[int, List[str]]:
+
+def count_test_cases(
+    text: str,
+    language: str = "verilog",
+) -> Tuple[int, List[str]]:
     """Count unique test case indicators in testbench text.
 
     Returns (count, list_of_matched_lines).
@@ -88,14 +103,16 @@ def count_test_cases(text: str) -> Tuple[int, List[str]]:
     matched_lines: List[str] = []
     seen_line_nums: Set[int] = set()
     lines = text.split('\n')
+    patterns = (COCOTB_TEST_PATTERNS
+                if language == "python-cocotb" else TEST_PATTERNS)
 
     for i, line in enumerate(lines, 1):
         stripped = line.strip()
         if not stripped or stripped.startswith('//') and not any(
-            p.search(stripped) for p in TEST_PATTERNS
+            p.search(stripped) for p in patterns
         ):
             continue
-        for pattern in TEST_PATTERNS:
+        for pattern in patterns:
             if pattern.search(stripped):
                 if i not in seen_line_nums:
                     seen_line_nums.add(i)
@@ -109,7 +126,7 @@ def count_test_cases(text: str) -> Tuple[int, List[str]]:
 # Testbench file discovery
 # ---------------------------------------------------------------------------
 TB_PATTERNS = ['*_tb.v', 'tb_*.v', '*_tb.sv', 'tb_*.sv',
-               '*_tb.sv', '*_testbench.v', '*_testbench.sv']
+               '*_testbench.v', '*_testbench.sv', 'tb_*.py']
 
 
 def find_testbenches(rtl_dir: Path) -> List[Path]:
@@ -148,7 +165,8 @@ def audit_testbenches(
         findings.append(Finding(
             severity="ERROR",
             category="NO_TESTBENCH",
-            message=f"No testbench files (*_tb.v, tb_*.v, *_tb.sv, tb_*.sv) found in {rtl_dir}",
+            message=("No testbench files (*_tb.v, tb_*.v, *_tb.sv, "
+                     f"tb_*.sv, tb_*.py) found in {rtl_dir}"),
         ))
         return findings, []
 
@@ -157,6 +175,8 @@ def audit_testbenches(
 
     for tb_path in tb_files:
         text = tb_path.read_text(errors='replace')
+        language = ("python-cocotb" if tb_path.suffix == ".py"
+                    else "verilog")
 
         # Check for empty testbench
         non_empty_lines = [l for l in text.split('\n')
@@ -169,32 +189,43 @@ def audit_testbenches(
                 file=str(tb_path),
             ))
             tb_infos.append(TestbenchInfo(
-                file=str(tb_path), test_count=0, test_patterns=[]))
+                file=str(tb_path), test_count=0, test_patterns=[],
+                language=language))
             continue
 
-        # Structural check: must have initial/always blocks and timing delays
-        has_block = bool(re.search(r'\b(initial\s+begin|always\s)', text))
-        has_delay = bool(re.search(r'#\s*\d', text))
+        # Language-specific structural check.  Cocotb advances simulation with
+        # awaited triggers rather than Verilog initial/always blocks and #N.
+        if language == "python-cocotb":
+            has_block = bool(re.search(
+                r'@cocotb\.test\s*\([^)]*\)\s*\n\s*async\s+def\s+', text))
+            has_delay = bool(re.search(
+                r'\bawait\s+(?:Timer|RisingEdge|FallingEdge|ClockCycles)\s*\(',
+                text))
+        else:
+            has_block = bool(re.search(r'\b(initial\s+begin|always\s)', text))
+            has_delay = bool(re.search(r'#\s*\d', text))
         if not has_block and not has_delay:
             findings.append(Finding(
                 severity="WARNING",
                 category="STRUCTURAL_ISSUE",
-                message="Testbench has no initial/always blocks and no timing delays (#)",
+                message=("Testbench has no executable test block and no "
+                         "simulation timing control"),
                 file=str(tb_path),
-                details="A valid testbench needs at least one procedural block and timing control",
+                details=("Expected initial/always plus #N for Verilog, or "
+                         "@cocotb.test async def plus an awaited trigger"),
             ))
         elif not has_block:
             findings.append(Finding(
                 severity="WARNING",
                 category="STRUCTURAL_ISSUE",
-                message="Testbench has no 'initial begin' or 'always' block",
+                message="Testbench has no executable test block",
                 file=str(tb_path),
             ))
         elif not has_delay:
             findings.append(Finding(
                 severity="WARNING",
                 category="STRUCTURAL_ISSUE",
-                message="Testbench has no timing delays (#) — simulation may not advance time",
+                message="Testbench has no simulation timing control",
                 file=str(tb_path),
             ))
 
@@ -218,7 +249,7 @@ def audit_testbenches(
         # b) STIMULUS_METHOD_MISSING: stimulus generation
         has_stimulus = bool(re.search(
             r'\$random|randomize|constrained|directed|test_case|scenario|'
-            r'@\s*\(\s*posedge|fork|task',
+            r'@\s*\(\s*posedge|fork|task|\.value\s*=|\bdrive\w*\s*\(',
             text, re.IGNORECASE))
         if not has_stimulus:
             findings.append(Finding(
@@ -244,10 +275,11 @@ def audit_testbenches(
                         "$error, scoreboard, checker, monitor, golden",
             ))
 
-        count, matched = count_test_cases(text)
+        count, matched = count_test_cases(text, language)
         total_tests += count
         tb_infos.append(TestbenchInfo(
-            file=str(tb_path), test_count=count, test_patterns=matched))
+            file=str(tb_path), test_count=count, test_patterns=matched,
+            language=language))
 
     if total_tests < min_tests:
         findings.append(Finding(
@@ -271,7 +303,7 @@ def build_report(findings: List[Finding], tb_infos: List[TestbenchInfo],
     total_tests = sum(tb.test_count for tb in tb_infos)
     return {
         "program": "testbench_exists_check",
-        "version": "1.2.0",
+        "version": "1.3.0",
         "rtl_dir": rtl_dir,
         "min_tests": min_tests,
         "summary": {

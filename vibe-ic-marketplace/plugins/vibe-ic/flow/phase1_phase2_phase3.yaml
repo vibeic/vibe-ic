@@ -3914,16 +3914,16 @@ steps:
         #     (`mixed_signal_cosim_check`) FAILs on the ONE published run that
         #     reaches this gate tree at all; appending blocking sub-gates here
         #     executes them on 0 of 17 published runs — the same defect moved,
-        #     not fixed. Wired advisory they execute on that run.
+        #     not fixed. Wired advisory they execute once bench evidence exists.
         #
         #   * NON-BLOCKING, for now. NOTHING IN THIS REPO WRITES
         #     `hw_tuning_report.json` OR `hw_sizing_history.json` — 0 files
         #     repo-wide, no producer program; the skill documents them as
         #     agent-authored. A blocking gate over an artefact with no producer
-        #     certifies nothing. So all three report exit 2 = NOT CHECKED
-        #     today, which the advisory slot renders as
-        #     "n/a (input not present)" instead of "ok" — the first time an
-        #     analog run says out loud that the HIL discipline was not checked.
+        #     certifies nothing. Before bench evidence exists, the clauses do
+        #     not run and publish a typed EXTERNAL non-verdict. Once any block
+        #     has hw_measurements.json, all five HIL clauses run and retain
+        #     their existing refusal / incomplete contracts.
         #
         # PROMOTION CONDITION, so this does not sit advisory forever: when
         # `analog-hw-tuning-loop` (or a runner step) emits
@@ -3934,12 +3934,21 @@ steps:
         - advisory_program_exit_zero:
               command: "analog_hil_report_schema_check . --json reports/phase2/gates/hil_report_schema.json"
               advisory_reason: "NOT-YET-CLEAN: this gate CAN refuse and is wired advisory as a ratchet position, not as a verdict. Notch measured rc 2 on a real spm run (2026-08-31): NOT CHECKED on that run — no input reached it, so the notch is unmeasured and this clause is not yet evidence of anything."
+              condition_files_exist: ["phase3/analog/*/hw_measurements.json"]
+              absent_condition_reason_class: "EXTERNAL"
+              absent_condition_reason: "This HIL schema gate consumes hardware-bench output. When no block has hw_measurements.json, the lab campaign is external to this headless run and there is no tuning report to validate."
         - advisory_program_exit_zero:
               command: "analog_hil_iteration_cap_check . --json reports/phase2/gates/hil_iteration_cap.json"
               advisory_reason: "NOT-YET-CLEAN: this gate CAN refuse and is wired advisory as a ratchet position, not as a verdict. Notch measured rc 2 on a real spm run (2026-08-31): NOT CHECKED on that run — no input reached it, so the notch is unmeasured and this clause is not yet evidence of anything."
+              condition_files_exist: ["phase3/analog/*/hw_measurements.json"]
+              absent_condition_reason_class: "EXTERNAL"
+              absent_condition_reason: "This iteration-cap gate consumes hardware-bench tuning history. With no hw_measurements.json, the lab campaign is external to this headless run and no hardware iteration denominator exists."
         - advisory_program_exit_zero:
               command: "analog_hil_single_knob_check . --json reports/phase2/gates/hil_single_knob.json"
               advisory_reason: "NOT-YET-CLEAN: this gate CAN refuse and is wired advisory as a ratchet position, not as a verdict. Notch measured rc 2 on a real spm run (2026-08-31): NOT CHECKED on that run — no input reached it, so the notch is unmeasured and this clause is not yet evidence of anything."
+              condition_files_exist: ["phase3/analog/*/hw_measurements.json"]
+              absent_condition_reason_class: "EXTERNAL"
+              absent_condition_reason: "This single-knob gate consumes hardware-bench sizing history. With no hw_measurements.json, the lab campaign is external to this headless run and there are no hardware iterations to compare."
         # The DE10-Lite board gate is pointed at its DECLARED SUBJECT —
         # `analog/<block>/hw_test/pin_assignments.qsf`, per
         # skills/analog-hw-testbench-gen/SKILL.md — not at the project root.
@@ -3953,6 +3962,9 @@ steps:
         - advisory_program_exit_zero:
               command: "analog_hw_tb_de10lite_budget_check phase3/analog --json reports/phase2/gates/a9_de10lite_budget.json"
               advisory_reason: "NOT-YET-CLEAN: this gate CAN refuse and is wired advisory as a ratchet position, not as a verdict. Notch measured rc 2 on a real spm run (2026-08-31): NOT CHECKED on that run — no input reached it, so the notch is unmeasured and this clause is not yet evidence of anything."
+              condition_files_exist: ["phase3/analog/*/hw_measurements.json"]
+              absent_condition_reason_class: "EXTERNAL"
+              absent_condition_reason: "This board-budget gate applies to a hardware-bench campaign. With no hw_measurements.json, the DE10-Lite work is external to this headless run and no board build is claimed."
         # ORPHANED, RE-HOMED (2026-08-25). A9 is the step that owns HW
         # correlation, and this reads the convergence log that correlation
         # produces. ADVISORY: measured on a real completed project it returns
@@ -3963,6 +3975,9 @@ steps:
         - advisory_program_exit_zero:
               command: "analog_hil_convergence_log_check ."
               advisory_reason: "NOT-YET-CLEAN: this gate CAN refuse and is wired advisory as a ratchet position, not as a verdict. Notch measured rc 0 on a real spm run (2026-08-31): it is already clean on real input, so blocking would cost nothing today; the only thing holding it advisory is that no other run has been measured."
+              condition_files_exist: ["phase3/analog/*/hw_measurements.json"]
+              absent_condition_reason_class: "EXTERNAL"
+              absent_condition_reason: "This convergence gate consumes a real SPICE-to-hardware tuning campaign. With no hw_measurements.json, the hardware bench is external to this headless run and absence of a HIL log is not a design defect."
     blocks_on: [A8]
 
   # ── Step 14 (Wave 91 / v1.6.15): pre-PnR Yosys gate ──────────────

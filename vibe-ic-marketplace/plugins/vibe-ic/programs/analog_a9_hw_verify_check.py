@@ -173,7 +173,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         return vacuous_pass(GATE, args,
                             f"all {len(missing_seen)} block(s) missing "
                             f"hw_measurements.json; defer to skill "
-                            f"`{SKILL}`.")
+                            f"`{SKILL}`; the hardware bench is external to "
+                            f"this run.", reason_class="EXTERNAL")
     if missing_seen:
         # PARTIAL block coverage — see the A7 note. This is the tier A9's own
         # flow entry says it exists to differentiate: "a simulation-only close

@@ -974,7 +974,8 @@ def write_report(json_path: Optional[str], report: dict) -> None:
     out.write_text(json.dumps(report, indent=2, ensure_ascii=False) + "\n")
 
 
-def vacuous_pass(gate_name: str, args, reason: str) -> int:
+def vacuous_pass(gate_name: str, args, reason: str,
+                 reason_class: Optional[str] = None) -> int:
     """Print + emit JSON + return 0. Used when no analog blocks
     declared at all (project-level VACUOUS_PASS)."""
     report = {
@@ -983,6 +984,8 @@ def vacuous_pass(gate_name: str, args, reason: str) -> int:
         "reason": reason,
         "findings": [],
     }
+    if reason_class:
+        report["reason_class"] = reason_class
     write_report(args.json, report)
     print(f"VACUOUS_PASS: {reason}")
     return 0

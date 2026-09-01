@@ -76,6 +76,15 @@ _PATH_RE = re.compile(
     r"(?<![A-Za-z0-9_/])(/(?:tmp|var/tmp|dev/shm|run)/[A-Za-z0-9_./-]+)"
 )
 
+# `_docker_watchdog.py` owns this exact private namespace.  The file is a
+# process-lifetime coordination marker, deliberately removed when the supervised
+# child exits.  Telemetry keeps the marker name so the invocation can be
+# diagnosed later; that reference is not a deliverable location.  Keep the
+# match exact so an arbitrary /tmp JSON/GDS/netlist remains blocking.
+_WATCHDOG_PIDFILE_RE = re.compile(
+    r"^/tmp/\.vibeic-job-[A-Za-z0-9_-]+\.pid$"
+)
+
 
 # ── R7 (v1.3.50 fork-adapt) — a PINNED plugin worktree is a legit plugin source ──
 # When the whole flow runs with the vibe-ic plugin PINNED under a scratch/worktree
@@ -211,6 +220,9 @@ def main() -> int:
     findings: List[Tuple[str, str, bool, bool]] = []
     # R7 — pinned plugin-source references (disclosed, non-blocking).
     plugin_src: List[Tuple[str, str]] = []
+    # Supervision metadata references a process marker that is expected to be
+    # absent after normal cleanup; it is never a project output.
+    process_markers: List[Tuple[str, str]] = []
     # In-tree self-references: absolute paths that resolve INSIDE the project
     # being audited (counted only, never a finding — see _inside_project).
     in_tree_self = 0
@@ -241,6 +253,9 @@ def main() -> int:
                 # SOURCE, not a volatile project output. Disclose, never FAIL.
                 if _pinned_plugin_root(p) is not None:
                     plugin_src.append((str(f.relative_to(project)), p))
+                    continue
+                if _WATCHDOG_PIDFILE_RE.fullmatch(p):
+                    process_markers.append((str(f.relative_to(project)), p))
                     continue
                 exists = Path(p).exists()
                 findings.append(
@@ -279,6 +294,17 @@ def main() -> int:
               f"project itself lives at a volatile path; these are its OWN "
               f"files, not external storage)")
 
+    if process_markers:
+        print(f"[INFO] project_outputs_in_tree_check: "
+              f"{len(process_markers)} ephemeral process-marker "
+              f"reference(s) — non-blocking (the supervised watchdog "
+              f"removes these pidfiles after child exit; they are runtime "
+              f"metadata, not project outputs):")
+        for f, p in process_markers[:5]:
+            print(f"  - {f} → {p}")
+        if len(process_markers) > 5:
+            print(f"  ... +{len(process_markers)-5} more")
+
     if ephemeral:
         print(f"[INFO] project_outputs_in_tree_check: "
               f"{len(ephemeral)} ephemeral tool-path reference(s) inside "
@@ -294,7 +320,8 @@ def main() -> int:
         print("[PASS] project_outputs_in_tree_check: "
               "no /tmp / /var/tmp / /dev/shm / /run paths referenced "
               "in RESULT.md / waivers.json / reports/ / generated_docs/ "
-              "(log-only ephemeral tool paths excluded — #622)")
+              "(log-only ephemeral tool paths and supervised watchdog "
+              "pidfiles excluded)")
         return 0
 
     # Split: live (file exists at /tmp) vs. dangling (referenced but gone)

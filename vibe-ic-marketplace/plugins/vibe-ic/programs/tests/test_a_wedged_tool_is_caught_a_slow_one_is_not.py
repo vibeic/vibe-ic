@@ -8,13 +8,12 @@ is a finding about the ORACLE, produced by a fact about the HOST: a burn tool
 writing to a board over a slow link, or a tester waiting on a device that is
 answering, is working, and a wall clock cannot tell it from one that is wedged.
 
-THE RC-2 ROUTE IS CLOSED HERE, and that is why this one needed real progress
-logic rather than the one-line exit-code correction used elsewhere in this
-branch. `tester_oracle_health_check` is wired into `flow_compliance_check` as a
-gate program, and `__check_program_exit_zero` maps a gate's rc 2 onto
-VACUOUS_PASS — a PASS tier. Returning "undetermined" as rc 2 from this program
-would have turned a killed burn into a passing gate. rc 2 carries two different
-meanings across this flow and only one of them is UNDETERMINED.
+THE RC-2 ROUTE IS CLOSED HERE. `tester_oracle_health_check` is wired into
+`flow_compliance_check` as a gate program, and rc 2 is now only a non-verdict
+candidate: it reaches VACUOUS_PASS solely with a typed design/capability/
+external reason. A stalled tool owns none of those reasons, so returning a bare
+"undetermined" rc 2 is INCOMPLETE rather than a pass tier. The watchdog is still
+required because it must stop the wedged child and publish the actual stall.
 
 So the bound is now a STALL GRACE under `_watchdog.run_host_supervised`: "how long
 may this be silent AND idle", not "how long may this take". Any output or CPU
@@ -160,20 +159,18 @@ def test_the_wedged_tool_still_reaches_an_ERROR_finding(monkeypatch, tmp_path):
 
 # ── why rc 2 was not the fix here ──────────────────────────────────────────
 
-def test_rc_two_from_this_program_would_have_been_a_passing_gate():
+def test_rc_two_from_this_program_cannot_launder_a_stall():
     """THE MEASUREMENT BEHIND THE DESIGN CHOICE, asserted so the next author
     does not 'simplify' this into the one-line rc-2 correction used elsewhere.
 
-    `flow_compliance_check` runs this program as a gate and reads rc 2 as
-    VACUOUS_PASS. That is a PASS tier. Returning UNDETERMINED as rc 2 from a
-    killed burn would have converted a stopped gate into a passing one.
+    The flow runner must keep rc 2 in a non-pass tier unless the program emits
+    one of the three legitimate reason classes. A stalled tester is an
+    execution error, not an external or design-declared absence.
     """
     assert "tester_oracle_health_check" in Path(FCC.__file__).read_text(
         encoding="utf-8"), "this program is no longer wired as a gate"
-    doc = FCC.__check_program_exit_zero.__doc__ if hasattr(
-        FCC, "__check_program_exit_zero") else None
     src = Path(FCC.__file__).read_text(encoding="utf-8")
-    assert "rc == 2  → VACUOUS_PASS" in src, (
-        "the rc-2 meaning in the gate runner has changed; re-check whether the "
-        "rc-2 correction is now available to gate programs")
-    assert doc is None or True     # the private name is mangled; src is the read
+    assert "rc == 2  → NON-VERDICT CANDIDATE" in src
+    assert FCC._reason_taxonomy.infer_nonverdict_reason(
+        verdict="SKIP", message="tester execution stalled") == \
+        FCC._reason_taxonomy.EXECUTION_ERROR

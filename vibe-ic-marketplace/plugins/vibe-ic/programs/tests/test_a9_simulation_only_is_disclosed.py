@@ -202,3 +202,36 @@ def test_without_the_flag_a9_is_not_waived(tmp_path):
     """DIRECTION 1: the waiver is the run MODE's, not a standing exemption."""
     r = FCC.check_step(_project(tmp_path, hw=None), _a9(), {}, None)
     assert r.status != "WAIVED", (r.status, r.reasons)
+
+
+def test_absent_hil_campaign_is_typed_external_and_not_run(tmp_path):
+    """No bench evidence is an external boundary, not a silent gate run.
+
+    Once any hw_measurements.json exists the conditions become true and the
+    HIL gates execute normally, so malformed or missing campaign artefacts are
+    not excused by this branch.
+    """
+    r = FCC.check_step(_project(tmp_path, hw=None), _a9(), {}, None)
+    hil_names = (
+        "analog_hil_report_schema_check",
+        "analog_hil_iteration_cap_check",
+        "analog_hil_single_knob_check",
+        "analog_hw_tb_de10lite_budget_check",
+        "analog_hil_convergence_log_check",
+    )
+    for name in hil_names:
+        records = [x for x in r.reasons
+                   if x.startswith("GATE EVIDENCE:") and name in x]
+        assert records, (name, r.reasons)
+        assert all("reason_class=EXTERNAL" in x and "rc=None" in x
+                   for x in records), records
+
+    with_bench = FCC.check_step(
+        _project(tmp_path / "with-bench",
+                 hw={"measurements": {"gain_db": 42.1}}),
+        _a9(), {}, None)
+    for name in hil_names:
+        records = [x for x in with_bench.reasons
+                   if x.startswith("GATE EVIDENCE:") and name in x]
+        assert records and all("rc=None" not in x for x in records), (
+            name, with_bench.reasons)
