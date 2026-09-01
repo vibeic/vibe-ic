@@ -99,6 +99,7 @@ from _release_docs_build import (
     layer_text,
     measured,
     not_measured_body,
+    one_line,
     register_rich,
     sha256_of,
     table,
@@ -119,6 +120,7 @@ from _release_docs_contract import (
     MANIFEST_NAME,
     NOT_MEASURED,
     PIN_COUNT_LABEL,
+    REASON_PREFIX,
     doc_dir,
 )
 
@@ -261,6 +263,28 @@ def _pin_sets(kit: Kit) -> Tuple[set, set]:
             pg if isinstance(pg, set) else set())
 
 
+def _physical_pin_counts(kit: Kit) -> Tuple[int, int]:
+    """Exact LEF PIN-statement counts, split by the statement's USE.
+
+    ``digital_hardmacro_check.parse_lef`` deliberately normalises ``x[0]`` …
+    ``x[31]`` to the logical base ``x`` for cross-view NAME comparison. A
+    release pin count asks a different question: how many physical PIN
+    declarations the integrator must connect. The parser's ``raw`` inventory
+    retains every statement, so count those spellings rather than the base-name
+    sets.
+    """
+    raw = kit.lef.get("raw")
+    if not isinstance(raw, dict):
+        return 0, 0
+    signal, pg = _pin_sets(kit)
+
+    def count(bases: set) -> int:
+        return sum(len(raw.get(base, ()))
+                   for base in bases if isinstance(raw.get(base), list))
+
+    return count(signal), count(pg)
+
+
 def interface_fields(kit: Kit) -> List[Field]:
     """The interface, counted off the LEF the integrator will actually place.
 
@@ -276,12 +300,104 @@ def interface_fields(kit: Kit) -> List[Field]:
         return [unmeasured(PIN_COUNT_LABEL, why),
                 unmeasured("Signal pins", why),
                 unmeasured("Supply pins", why)]
-    signal, pg = _pin_sets(kit)
+    signal_count, pg_count = _physical_pin_counts(kit)
     return [
-        measured(PIN_COUNT_LABEL, len(signal | pg), lef_rel),
-        measured("Signal pins", len(signal), lef_rel),
-        measured("Supply pins", len(pg), lef_rel),
+        measured(PIN_COUNT_LABEL, signal_count + pg_count, lef_rel),
+        measured("Signal pins", signal_count, lef_rel),
+        measured("Supply pins", pg_count, lef_rel),
     ]
+
+
+def _l9_descriptions(project: Path) -> Tuple[Dict[str, str], str]:
+    doc, rel = layer(project, "L9_INTEGRATION_SPEC")
+    descriptions: Dict[str, str] = {}
+    for entry in _list_under(doc, ("ports", "top_ports", "top_module_pins")):
+        if not isinstance(entry, dict):
+            continue
+        name = entry.get("name")
+        if not isinstance(name, str) or not name.strip():
+            continue
+        desc = entry.get("description")
+        if isinstance(desc, str) and desc.strip():
+            descriptions[name.strip().lower()] = one_line(desc)
+    return descriptions, rel
+
+
+def pin_table(project: Path, kit: Kit) -> str:
+    """The delivered logical ports, with LEF-statement width and direction.
+
+    One row represents one logical port; Width is the exact number of physical
+    LEF PIN statements carrying that base name. This keeps a 32-bit bus readable
+    while preserving the 32 physical pins in the count above. Descriptions are
+    joined from the design input when present; DFT or implementation-added ports
+    remain visible and explicitly say that no input description accompanied
+    them.
+    """
+    lef_rel = kit.rel(".lef")
+    raw = kit.lef.get("raw")
+    directions = kit.lef.get("direction")
+    if not lef_rel or not isinstance(raw, dict):
+        return ("| Pin | Direction | Width | Description | Derived from |\n"
+                "| --- | --- | ---: | --- | --- |\n"
+                f"| {NOT_MEASURED} | {NOT_MEASURED} | {NOT_MEASURED} | "
+                "No readable LEF pin inventory exists for this release. | "
+                f"{REASON_PREFIX} no .lef view under {KIT_DIR} |")
+    directions = directions if isinstance(directions, dict) else {}
+    descriptions, l9_rel = _l9_descriptions(project)
+    rows = ["| Pin | Direction | Width | Description | Derived from |",
+            "| --- | --- | ---: | --- | --- |"]
+    for base, spelled in raw.items():
+        if not isinstance(base, str) or not isinstance(spelled, list):
+            continue
+        description = descriptions.get(
+            base.lower(), "No design-input description was declared.")
+        source = f"`{lef_rel}`"
+        if base.lower() in descriptions:
+            source += f"; `{l9_rel}`"
+        rows.append(
+            f"| {one_line(base)} | {one_line(str(directions.get(base, '')) or NOT_MEASURED)} "
+            f"| {len(spelled)} | {description} | {source} |")
+    return "\n".join(rows)
+
+
+def hardened_parameter_fields(project: Path) -> List[Field]:
+    """Parameters frozen into this hardmacro, from the design input only."""
+    candidates = (
+        ("L9_INTEGRATION_SPEC", ("parameters", "rtl_parameters")),
+        ("L8_RTL_CONSTANTS", ("parameters", "width_parameters")),
+    )
+    for stem, keys in candidates:
+        doc, rel = layer(project, stem)
+        params = _list_under(doc, keys)
+        if not params:
+            continue
+        out: List[Field] = []
+        seen = set()
+        for entry in params:
+            if not isinstance(entry, dict):
+                continue
+            name = entry.get("name")
+            if not isinstance(name, str) or not name.strip():
+                continue
+            name = name.strip()
+            if name.lower() in seen:
+                continue
+            seen.add(name.lower())
+            value = next((entry.get(key) for key in
+                          ("default", "value", "parameter_default")
+                          if entry.get(key) not in (None, "")), None)
+            if value is None:
+                out.append(unmeasured(
+                    name, f"{rel} declares the parameter but no hardened value"))
+            else:
+                out.append(measured(name, value, rel))
+        if out:
+            return out
+    return [unmeasured(
+        "Parameter set",
+        "neither phase1/generated_docs/L9_INTEGRATION_SPEC.json nor "
+        "phase1/generated_docs/L8_RTL_CONSTANTS.json declares a build "
+        "parameter to freeze into this release")]
 
 
 def geometry_fields(kit: Kit) -> List[Field]:
@@ -336,6 +452,83 @@ def name_fields(kit: Kit) -> List[Field]:
     return out
 
 
+def _positive_number(value: object) -> Optional[float]:
+    if isinstance(value, bool):
+        return None
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    return number if number > 0 else None
+
+
+def _declared_clock_fields(project: Path) -> List[Field]:
+    """The design-owned clock target, with PDK-scoped L8 taking precedence."""
+    for stem in ("L8_TIMING_WAVEFORM", "L9_INTEGRATION_SPEC"):
+        doc, rel = layer(project, stem)
+        if doc is None:
+            continue
+        clocks = _list_under(doc, ("clock_domains", "clocks"))
+        clock = next((entry for entry in clocks
+                      if isinstance(entry, dict)
+                      and str(entry.get("role", "primary")).lower()
+                      in ("primary", "functional", "main")), None)
+        if clock is None:
+            clock = next((entry for entry in clocks
+                          if isinstance(entry, dict)), None)
+        frequency = _positive_number(
+            clock.get("freq_mhz") if isinstance(clock, dict) else None)
+        period = _positive_number(
+            clock.get("period_ns") if isinstance(clock, dict) else None)
+        if frequency is None:
+            frequency = _positive_number(doc.get("clock_mhz"))
+        if period is None and frequency is not None:
+            period = 1000.0 / frequency
+        if frequency is None and period is not None:
+            frequency = 1000.0 / period
+        if frequency is not None or period is not None:
+            return [
+                (measured("Declared clock period (ns)", period, rel)
+                 if period is not None else
+                 unmeasured("Declared clock period (ns)",
+                            f"{rel} states no positive clock period")),
+                (measured("Declared operating frequency (MHz)", frequency, rel)
+                 if frequency is not None else
+                 unmeasured("Declared operating frequency (MHz)",
+                            f"{rel} states no positive clock frequency")),
+            ]
+    why = ("neither phase1/generated_docs/L8_TIMING_WAVEFORM.json nor "
+           "phase1/generated_docs/L9_INTEGRATION_SPEC.json declares a "
+           "positive primary clock period or frequency")
+    return [unmeasured("Declared clock period (ns)", why),
+            unmeasured("Declared operating frequency (MHz)", why)]
+
+
+def _achieved_clock_fields(project: Path) -> List[Field]:
+    rel = "reports/phase3/achievable_fmax.json"
+    report = _read_json(project / rel)
+    if report is None:
+        why = (f"{rel} is absent or unreadable, so this run recorded no "
+               "achieved-period measurement")
+        return [unmeasured("Achieved clock period (ns)", why),
+                unmeasured("Achieved operating frequency (MHz)", why)]
+    period = _positive_number(report.get("achievable_period_ns"))
+    frequency = _positive_number(report.get("achievable_fmax_mhz"))
+    if frequency is None and period is not None:
+        frequency = 1000.0 / period
+    return [
+        (measured("Achieved clock period (ns)", period, rel)
+         if period is not None else
+         unmeasured("Achieved clock period (ns)",
+                    f"{rel} declares no positive achievable_period_ns")),
+        (measured("Achieved operating frequency (MHz)", frequency, rel)
+         if frequency is not None else
+         unmeasured("Achieved operating frequency (MHz)",
+                    f"{rel} declares neither a positive achievable_fmax_mhz "
+                    "nor a positive achievable_period_ns")),
+    ]
+
+
 def timing_fields(project: Path, kit: Kit) -> List[Field]:
     lib_rel = kit.rel(".lib")
     out: List[Field] = []
@@ -349,6 +542,8 @@ def timing_fields(project: Path, kit: Kit) -> List[Field]:
         out.append(unmeasured(
             "Timed signal pins",
             f"no .lib view for `{kit.name}` under {KIT_DIR}"))
+    out.extend(_declared_clock_fields(project))
+    out.extend(_achieved_clock_fields(project))
     out.append(layer_count(project, "L8_TIMING_WAVEFORM",
                            "Declared timing windows",
                            ("timing_windows",)))
@@ -557,10 +752,12 @@ def datasheet(rel: Release) -> Tuple[str, List[Field]]:
     geom = geometry_fields(rel.kit)
     timing = timing_fields(rel.project, rel.kit)
     power = power_fields(rel.project, rel.kit)
+    parameters = hardened_parameter_fields(rel.project)
     role = rel.role
     summary = layer_text(rel.project, "L1_DATASHEET", "Datasheet summary",
                          ("summary", "description", "ic_name"))
-    every = ident + iface + views + names + geom + timing + power + [role, summary]
+    every = (ident + iface + views + names + geom + timing + power
+             + parameters + [role, summary])
     spec = _spec(IP_DATASHEET)
     body = document(
         f"IP Datasheet — {rel.design.value}",
@@ -569,12 +766,17 @@ def datasheet(rel: Release) -> Tuple[str, List[Field]]:
             (spec.sections[1], table([summary, role])),
             (spec.sections[2],
              table(iface + names)
+             + "\n\n### Pin Table\n\n"
+             + pin_table(rel.project, rel.kit)
+             + "\n\n### Hardened Parameter Set\n\n"
+             + table(parameters)
              + "\n\nThese counts are derived from the delivered abstract. "
-               "`release_docs_check` re-derives the signal pin count from the "
-               "delivered Verilog view and refuses a disagreement, naming both "
-               "sides; it settles the total against its own two component rows, "
-               "because a Verilog view of a hard macro conventionally omits the "
-               "supplies."),
+               "Every LEF PIN statement, including every bus bit, contributes "
+               "one physical pin. `release_docs_check` independently expands "
+               "the delivered Verilog port widths and refuses a signal-count "
+               "disagreement, naming both sides; it settles the total against "
+               "its own two component rows, because a Verilog view of a hard "
+               "macro conventionally omits the supplies."),
             (spec.sections[3], table(views + geom)),
             (spec.sections[4], table(timing)),
             (spec.sections[5], table(power)),

@@ -377,6 +377,8 @@ _LEF_PIN_BLOCK_RE = re.compile(
     r"(?m)^[ \t]*PIN\s+(?P<name>\S+)[ \t]*$(?P<body>.*?)"
     r"^[ \t]*END\s+(?P=name)[ \t]*$", re.S)
 _LEF_USE_RE = re.compile(r"\bUSE\s+(\w+)\s*;", re.IGNORECASE)
+_LEF_DIRECTION_RE = re.compile(
+    r"\bDIRECTION\s+(INPUT|OUTPUT|INOUT|FEEDTHRU)\s*;", re.IGNORECASE)
 _PG_USES = {"power", "ground"}
 
 
@@ -430,7 +432,8 @@ def parse_lef(lef_text: str, stem: str = "") -> Dict[str, object]:
     """Everything this gate reads out of a LEF, in one pass.
 
     Returns `{"macro": <name|None>, "size": (w,h)|None, "frame": (llx,lly,src),
-    "signal": set, "pg": set, "raw": {base: [spelled…]}}`.
+    "signal": set, "pg": set, "raw": {base: [spelled…]},
+    "direction": {base: input|output|inout|feedthru|mixed|""}}`.
     """
     macro_m = _LEF_MACRO_RE.search(lef_text)
     macro = macro_m.group(1) if macro_m else None
@@ -457,12 +460,17 @@ def parse_lef(lef_text: str, stem: str = "") -> Dict[str, object]:
     pg: Set[str] = set()
     pg_kind: Dict[str, str] = {}
     raw: Dict[str, List[str]] = {}
+    direction_values: Dict[str, Set[str]] = {}
     geom_by_pin: Dict[str, List[tuple]] = {}
     for m in _LEF_PIN_BLOCK_RE.finditer(scope):
         spelled = m.group("name")
         b = base_name(spelled, bus_chars)
         raw.setdefault(b, []).append(spelled)
         body = m.group("body")
+        direction_m = _LEF_DIRECTION_RE.search(body)
+        if direction_m:
+            direction_values.setdefault(b, set()).add(
+                direction_m.group(1).lower())
         use_m = _LEF_USE_RE.search(body)
         if use_m and use_m.group(1).lower() in _PG_USES:
             pg.add(b)
@@ -478,6 +486,10 @@ def parse_lef(lef_text: str, stem: str = "") -> Dict[str, object]:
     # LEF itself; count it as PG so the PG/LIB comparison surfaces it rather
     # than letting it hide in the (larger) signal set.
     signal -= pg
+    directions = {
+        base: (next(iter(values)) if len(values) == 1 else "mixed")
+        for base, values in direction_values.items()
+    }
     return {"macro": macro,
             "size": _require(parse_lef_size, "parse_lef_size")(scope
                                                               or lef_text),
@@ -490,6 +502,7 @@ def parse_lef(lef_text: str, stem: str = "") -> Dict[str, object]:
             "origin_ll": _require(parse_lef_frame_ll, "parse_lef_frame_ll")(
                 _LEF_FOREIGN_STRIP_RE.sub(" ", scope or lef_text))[:2],
             "signal": signal, "pg": pg, "pg_kind": pg_kind, "raw": raw,
+            "direction": directions,
             "geometry": geom_by_pin,
             "macro_count": len(blocks),
             "has_obs": bool(_LEF_OBS_RE.search(scope)),

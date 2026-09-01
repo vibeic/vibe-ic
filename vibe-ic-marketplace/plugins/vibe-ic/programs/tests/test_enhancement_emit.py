@@ -57,6 +57,22 @@ def test_bucket_A_routes_per_step(tmp_path):
         f"phase2.rtl_gen Bucket A should route to rtl_hygiene_lint; got {a_files}"
 
 
+def test_ip_release_docs_recovery_routes_to_owning_generator(tmp_path):
+    rec = [{
+        "step": "phase3.ip_release_docs",
+        "design": "generic_hardmacro", "bucket": "A",
+        "rule_name": "physical-pin-bit-count",
+        "docstring": "Count each LEF PIN and cross-check Verilog bit widths.",
+        "expected_signal": "FAIL",
+        "fix_action": "Repair the release-document generator and checker.",
+    }]
+    res = run(tmp_path, rec)
+    a_files = res["summary"].get("bucket_A_files", [])
+    assert any("ip_release_docs_gen" in f for f in a_files), (
+        "phase3.ip_release_docs must route to its owning generator; "
+        f"got {a_files}")
+
+
 def test_canonical_primitive_recovery_routes_to_owning_generator(tmp_path):
     rec = [{
         "step": "phase2.rtl_gen.canonical_primitive",

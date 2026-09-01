@@ -191,6 +191,16 @@
       "bucket_A_program": "programs/phase3_one_shot_runner.py",
       "bucket_B_skill_file": "skills/ir-drop-triage/SKILL.md"
     },
+    "phase3.ip_release_docs": {
+      "description": "Step 37.5ip: hardmacro release-document generation and its blocking cross-check.",
+      "bucket_A_program": "programs/ip_release_docs_gen.py",
+      "bucket_A_related": [
+        "programs/release_docs_check.py",
+        "programs/_release_docs_contract.py",
+        "programs/_release_docs_build.py"
+      ],
+      "bucket_B_skill_file": "agents/ic-expert-agent.md"
+    },
     "analog.A2_topology": {
       "description": "Analog A2: per-block topology selection (SC integrator + comparator + DAC, etc.)",
       "bucket_A_program": "programs/analog_a2_topology_select_check.py",

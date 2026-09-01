@@ -88,6 +88,7 @@ or qualification programme, and the contract it enforces names none either.
 from __future__ import annotations
 
 import argparse
+import ast
 import hashlib
 import json
 import re
@@ -104,6 +105,7 @@ from _release_docs_contract import (
     CONSTRAINT_BEARING,
     DERIVED_COLUMN,
     H2_RE,
+    IP_DATASHEET,
     IP_DELIVERABLES_MANIFEST,
     MANDATORY_RE,
     MANIFEST_NAME,
@@ -217,6 +219,231 @@ TEST_MODE_CLAIM_RE = re.compile(
     r"\b(?P<count>\d+)\s+test mode\(s\)(?!\w)")
 CONSTRAINT_SOURCE_RE = re.compile(
     r"\(derived from `(?P<source>[^`]+)`\)\s*$")
+# ── independent Verilog interface reader ──────────────────────────────────
+# This reader intentionally does NOT call digital_hardmacro_check.parse_verilog.
+# That parser normalises every bit-select to a base name because its job is
+# cross-VIEW name identity. This gate asks a different question: how many
+# logical pin bits the Verilog declaration exposes. Sharing the normalised set
+# is the historical defect issue #1989 measured.
+_V_COMMENT_RE = re.compile(r"/\*.*?\*/|//[^\n]*", re.S)
+_V_MODULE_START_RE = re.compile(
+    r"\bmodule\s+(?:automatic\s+)?(?:\\\S+|[A-Za-z_][\w$]*)")
+_V_DIRECTION_RE = re.compile(r"^\s*(input|output|inout)\b(?P<rest>.*)$", re.S)
+_V_IDENTIFIER_RE = re.compile(r"\\\S+|[A-Za-z_][\w$]*")
+_V_RANGE_RE = re.compile(r"\[([^\]]+)\]")
+_V_DECL_RE = re.compile(r"\b(input|output|inout)\b(?P<rest>[^;]*);", re.S)
+_V_PARAM_RE = re.compile(
+    r"\b(?:parameter|localparam)\b"
+    r"(?:\s+(?:integer|int|longint|shortint|byte|logic|reg|signed|unsigned))*"
+    r"\s+(?P<name>[A-Za-z_][\w$]*)\s*=\s*(?P<value>[^,;)]+)", re.S)
+_V_ATTRIBUTE_RE = re.compile(r"\(\*.*?\*\)", re.S)
+_V_KEYWORDS = {"wire", "reg", "logic", "signed", "unsigned", "var",
+               "tri", "wand", "wor", "supply0", "supply1"}
+
+
+def _balanced(text: str, start: int) -> Optional[Tuple[str, int]]:
+    """Text inside the parenthesis at ``start`` and the index after it."""
+    if start >= len(text) or text[start] != "(":
+        return None
+    depth = 0
+    for index in range(start, len(text)):
+        char = text[index]
+        if char == "(":
+            depth += 1
+        elif char == ")":
+            depth -= 1
+            if depth == 0:
+                return text[start + 1:index], index + 1
+    return None
+
+
+def _module_parts(v_text: str) -> Optional[Tuple[str, str, str]]:
+    text = _V_COMMENT_RE.sub(" ", v_text)
+    module = _V_MODULE_START_RE.search(text)
+    if module is None:
+        return None
+    pos = module.end()
+    while pos < len(text) and text[pos].isspace():
+        pos += 1
+    parameters = ""
+    if pos < len(text) and text[pos] == "#":
+        pos += 1
+        while pos < len(text) and text[pos].isspace():
+            pos += 1
+        group = _balanced(text, pos)
+        if group is None:
+            return None
+        parameters, pos = group
+    open_header = text.find("(", pos)
+    if open_header < 0:
+        return None
+    group = _balanced(text, open_header)
+    if group is None:
+        return None
+    header, after_header = group
+    semicolon = text.find(";", after_header)
+    if semicolon < 0:
+        return None
+    endmodule = text.find("endmodule", semicolon + 1)
+    body = text[semicolon + 1:endmodule if endmodule >= 0 else len(text)]
+    return parameters, header, body
+
+
+def _split_top_level_commas(text: str) -> List[str]:
+    out: List[str] = []
+    start = 0
+    paren = bracket = brace = 0
+    for index, char in enumerate(text):
+        if char == "(":
+            paren += 1
+        elif char == ")" and paren:
+            paren -= 1
+        elif char == "[":
+            bracket += 1
+        elif char == "]" and bracket:
+            bracket -= 1
+        elif char == "{":
+            brace += 1
+        elif char == "}" and brace:
+            brace -= 1
+        elif char == "," and paren == bracket == brace == 0:
+            out.append(text[start:index])
+            start = index + 1
+    out.append(text[start:])
+    return out
+
+
+def _sv_literal_to_decimal(match: re.Match) -> str:
+    width, base, digits = match.group(1), match.group(2).lower(), match.group(3)
+    del width
+    if any(char in digits.lower() for char in "xz?"):
+        raise ValueError("unknown digit in a width expression")
+    return str(int(digits.replace("_", ""), {"b": 2, "o": 8,
+                                               "d": 10, "h": 16}[base]))
+
+
+_SV_LITERAL_RE = re.compile(r"(?:(\d+))?'[sS]?([bBoOdDhH])([0-9a-fA-F_xXzZ?]+)")
+
+
+def _integer_expr(expr: str, parameters: Dict[str, int]) -> Optional[int]:
+    try:
+        expr = _SV_LITERAL_RE.sub(_sv_literal_to_decimal, expr.strip())
+        tree = ast.parse(expr, mode="eval")
+    except (SyntaxError, ValueError):
+        return None
+
+    def walk(node) -> int:
+        if isinstance(node, ast.Expression):
+            return walk(node.body)
+        if isinstance(node, ast.Constant) and isinstance(node.value, int):
+            return int(node.value)
+        if isinstance(node, ast.Name) and node.id in parameters:
+            return parameters[node.id]
+        if isinstance(node, ast.UnaryOp) and isinstance(node.op, (ast.UAdd, ast.USub)):
+            value = walk(node.operand)
+            return value if isinstance(node.op, ast.UAdd) else -value
+        if isinstance(node, ast.BinOp):
+            left, right = walk(node.left), walk(node.right)
+            if isinstance(node.op, ast.Add):
+                return left + right
+            if isinstance(node.op, ast.Sub):
+                return left - right
+            if isinstance(node.op, ast.Mult):
+                return left * right
+            if isinstance(node.op, (ast.Div, ast.FloorDiv)):
+                return left // right
+            if isinstance(node.op, ast.Mod):
+                return left % right
+            if isinstance(node.op, ast.LShift):
+                return left << right
+            if isinstance(node.op, ast.RShift):
+                return left >> right
+        raise ValueError("unsupported width expression")
+
+    try:
+        return walk(tree)
+    except (ValueError, ZeroDivisionError):
+        return None
+
+
+def _parameter_values(parameter_text: str, body: str) -> Dict[str, int]:
+    out: Dict[str, int] = {}
+    for match in _V_PARAM_RE.finditer(parameter_text + ";" + body):
+        value = _integer_expr(match.group("value"), out)
+        if value is not None:
+            out[match.group("name")] = value
+    return out
+
+
+def _packed_width(text: str, parameters: Dict[str, int]) -> Optional[int]:
+    ranges = _V_RANGE_RE.findall(text)
+    if not ranges:
+        return 1
+    width = 1
+    for packed in ranges:
+        if ":" not in packed:
+            return None
+        msb_text, lsb_text = packed.split(":", 1)
+        msb = _integer_expr(msb_text, parameters)
+        lsb = _integer_expr(lsb_text, parameters)
+        if msb is None or lsb is None:
+            return None
+        width *= abs(msb - lsb) + 1
+    return width
+
+
+def _declared_name(text: str) -> Optional[str]:
+    text = text.split("=", 1)[0]
+    text = _V_RANGE_RE.sub(" ", text)
+    names = [m.group(0) for m in _V_IDENTIFIER_RE.finditer(text)
+             if m.group(0).lower() not in _V_KEYWORDS]
+    return names[-1] if names else None
+
+
+def verilog_port_widths(v_text: str) -> Optional[List[Tuple[str, str, int]]]:
+    """ANSI/non-ANSI logical ports with packed widths expanded to bit counts.
+
+    ``None`` means the representation could not be settled (including an
+    unresolved symbolic range); an empty list means a readable zero-port
+    module. The caller reports the former loudly instead of silently treating
+    an unknown width as one bit.
+    """
+    parts = _module_parts(v_text)
+    if parts is None:
+        return None
+    parameter_text, header, body = parts
+    parameters = _parameter_values(parameter_text, body)
+    rows: List[Tuple[str, str, int]] = []
+    if re.search(r"\b(?:input|output|inout)\b", header):
+        direction = ""
+        width: Optional[int] = 1
+        for chunk in _split_top_level_commas(_V_ATTRIBUTE_RE.sub(" ", header)):
+            match = _V_DIRECTION_RE.match(chunk)
+            payload = chunk
+            if match:
+                direction = match.group(1).lower()
+                payload = match.group("rest")
+                width = _packed_width(payload, parameters)
+            if not direction or width is None:
+                return None
+            name = _declared_name(payload)
+            if name is not None:
+                rows.append((name, direction, width))
+    else:
+        for match in _V_DECL_RE.finditer(body):
+            direction = match.group(1).lower()
+            payload = match.group("rest")
+            width = _packed_width(payload, parameters)
+            if width is None:
+                return None
+            for chunk in _split_top_level_commas(payload):
+                name = _declared_name(chunk)
+                if name is not None:
+                    rows.append((name, direction, width))
+    deduped: Dict[str, Tuple[str, str, int]] = {}
+    for row in rows:
+        deduped.setdefault(row[0], row)
+    return list(deduped.values())
 
 
 # ── the checks ─────────────────────────────────────────────────────────────
@@ -240,6 +467,46 @@ def _check_sections(spec, document: str, text: str, release: str,
             f"{document} carries every required section but in the order "
             f"{order}, and the declared order is {list(spec.sections)}. A "
             f"section that has drifted is a section a reader stops finding."))
+
+
+def _subsection_body(text: str, title: str) -> Optional[str]:
+    marker = f"### {title}"
+    lines = text.splitlines()
+    for index, line in enumerate(lines):
+        if line.strip() != marker:
+            continue
+        body: List[str] = []
+        for following in lines[index + 1:]:
+            if following.startswith("## ") or following.startswith("### "):
+                break
+            body.append(following)
+        return "\n".join(body)
+    return None
+
+
+def _check_ip_interface_disclosures(texts: Dict[str, str], release: str,
+                                    findings: List[Finding]) -> None:
+    """The datasheet must show the interface, not only three summary counts."""
+    text = texts.get(IP_DATASHEET)
+    if text is None:
+        return
+    for title, rule, required_headers in (
+        ("Pin Table", "PIN_TABLE_ABSENT", ("Pin", "Direction", "Width")),
+        ("Hardened Parameter Set", "HARDENED_PARAMETER_SET_ABSENT",
+         ("Field", "Value", DERIVED_COLUMN)),
+    ):
+        body = _subsection_body(text, title)
+        header = next((line for line in (body or "").splitlines()
+                       if line.strip().startswith("|")), "")
+        cells = _cells(header.strip()) if header else []
+        if body is not None and all(name in cells for name in required_headers):
+            continue
+        findings.append(Finding(
+            rule, "ERROR", release,
+            f"{IP_DATASHEET} does not carry a parseable '### {title}' table "
+            f"with columns {list(required_headers)}. Summary counts alone do "
+            "not tell an integrator which ports or frozen build choices the "
+            "delivered macro exposes."))
 
 
 def _check_rows(project: Path, rows: Sequence[Row], release: str,
@@ -409,7 +676,7 @@ IC_NETLIST_GLOB = "phase3/stage3/pnr/*_pnr.v"
 
 def _netlist_signal_ports(project: Path, arm: str,
                           release: str) -> Optional[Tuple[int, Path]]:
-    """The logical port count a SECOND view declares, re-derived by this gate.
+    """The logical pin-bit count a SECOND view declares, re-derived here.
 
     IP arm: the delivered blackbox Verilog beside the LEF the document was
     written off. IC arm: the gate-level netlist the route produced beside the
@@ -426,11 +693,6 @@ def _netlist_signal_ports(project: Path, arm: str,
         v_path = views.get(".v")
         if v_path is None:
             return None
-        bus = "[]<>"
-        lef_path = views.get(".lef")
-        if lef_path is not None:
-            bus = _hm.lef_bus_chars(
-                lef_path.read_text(encoding="utf-8", errors="replace"))
     else:
         # NOT A GUESS BETWEEN CANDIDATES. Two gate-level netlists is two
         # answers, and picking one would make the cross-check depend on sort
@@ -439,11 +701,11 @@ def _netlist_signal_ports(project: Path, arm: str,
         if len(hits) != 1:
             return None
         v_path = hits[0]
-        bus = "[]<>"
-    parsed = _hm.parse_verilog(
-        v_path.read_text(encoding="utf-8", errors="replace"), bus)
-    ports = parsed.get("ports")
-    return (len(ports) if isinstance(ports, set) else 0), v_path
+    ports = verilog_port_widths(
+        v_path.read_text(encoding="utf-8", errors="replace"))
+    if ports is None:
+        return None
+    return sum(width for _name, _direction, width in ports), v_path
 
 
 
@@ -525,7 +787,8 @@ def _check_pin_count(project: Path, arm: str, release: str,
             f"{document} states '{SIGNAL_PIN_LABEL}' = {signal[1]}, derived "
             f"from {signal[0].third}; the netlist view "
             f"`{v_path.relative_to(project).as_posix()}` declares "
-            f"{netlist_count} logical port(s). A datasheet with a pin count no "
+            f"{netlist_count} logical pin bit(s). A datasheet with a pin "
+            f"count no "
             f"view supports is stale on arrival."))
         states.append("DISAGREES")
 
@@ -884,6 +1147,8 @@ def check_release(project: Path, arm: str, release_dir: Path,
     constraints_checked = _check_app_notes(arm, texts, release, findings)
     source_counts_checked = _check_source_count_consistency(
         texts, rows, release, findings)
+    if arm == "ip":
+        _check_ip_interface_disclosures(texts, release, findings)
     # BOTH ARMS NOW, and the `arm == "ip"` guard that stood here is the defect
     # it removed: the IC arm carried the same three interface rows and NOTHING
     # re-derived any of them, so a hand-edited chip pin count was believed.

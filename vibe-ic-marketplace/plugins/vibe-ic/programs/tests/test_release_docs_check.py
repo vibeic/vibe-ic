@@ -47,6 +47,8 @@ from _release_kit import (  # noqa: E402
     docs_dir,
 )
 from _release_docs_contract import MANIFEST_NAME  # noqa: E402
+from _hostpaths import require_repo  # noqa: E402
+import release_docs_check as gate_module  # noqa: E402
 
 GATE = Path(__file__).resolve().parents[1] / "release_docs_check.py"
 GEN = Path(__file__).resolve().parents[1] / "ip_release_docs_gen.py"
@@ -224,8 +226,78 @@ def test_a_pin_count_that_disagrees_with_the_netlist_is_refused(tmp_path):
     message = next(f["message"] for f in data["findings"]
                    if f["rule"] == "PIN_COUNT_DISAGREES_WITH_NETLIST")
     assert "= 4" in message, message
-    assert "3 logical port(s)" in message, message
+    assert "3 logical" in message, message
     assert f"{SUBJECT}.lef" in message and f"{SUBJECT}.v" in message, message
+    assert verdict_of(data, CONTROL) is True
+
+
+def test_a_four_bit_bus_refuses_the_collapsed_base_name_count(tmp_path):
+    """The checker expands Verilog widths independently of LEF PIN parsing."""
+    project = build_project(tmp_path / "p", bus_width=4)
+    generate(project)
+    datasheet = docs_dir(project, SUBJECT) / "IP_DATASHEET.md"
+    text = datasheet.read_text(encoding="utf-8")
+    # On the fixed generator these edits inject the historical collapse. On
+    # pre-fix code the same collapsed values are already present, so the test
+    # still reaches the behavioural assertion instead of failing on setup.
+    text = text.replace("| Signal pins | 6 |", "| Signal pins | 3 |", 1)
+    text = text.replace("| Pin count (total) | 8 |",
+                        "| Pin count (total) | 5 |", 1)
+    datasheet.write_text(text, encoding="utf-8")
+
+    result, data = report(project)
+    assert result.returncode == RC_FAIL, result.stdout
+    assert "PIN_COUNT_DISAGREES_WITH_NETLIST" in rules_for(data, SUBJECT)
+    message = next(f["message"] for f in data["findings"]
+                   if f["rule"] == "PIN_COUNT_DISAGREES_WITH_NETLIST")
+    assert "6 logical pin bit(s)" in message, message
+    assert verdict_of(data, CONTROL) is True
+
+
+def test_scalar_only_pin_count_control_is_unchanged(tmp_path):
+    project = released(tmp_path)
+    text = (docs_dir(project, SUBJECT) / "IP_DATASHEET.md").read_text(
+        encoding="utf-8")
+    assert "| Signal pins | 3 |" in text
+    assert "| Pin count (total) | 5 |" in text
+    assert check(project).returncode == RC_PASS
+
+
+def test_checked_in_spm_netlist_expands_bus_width_to_pin_bits():
+    """Real-artefact backing for the independent Verilog representation."""
+    netlist = require_repo(
+        "vibe-ic-marketplace", "plugins", "vibe-ic", "programs", "tests",
+        "fixtures", "stage2_on_pass_review", "accept_spm", "phase2",
+        "stage2", "synth", "netlist.v")
+    ports = gate_module.verilog_port_widths(netlist.read_text(encoding="utf-8"))
+    assert ports is not None
+    by_name = {name: width for name, _direction, width in ports}
+    assert by_name["x"] == 32
+    assert sum(by_name.values()) == 36
+
+
+@pytest.mark.parametrize(("heading", "rule"), [
+    ("Pin Table", "PIN_TABLE_ABSENT"),
+    ("Hardened Parameter Set", "HARDENED_PARAMETER_SET_ABSENT"),
+])
+def test_required_interface_disclosure_table_is_refused_when_absent(
+        tmp_path, heading, rule):
+    project = released(tmp_path)
+    datasheet = docs_dir(project, SUBJECT) / "IP_DATASHEET.md"
+    lines = datasheet.read_text(encoding="utf-8").splitlines()
+    out, dropping = [], False
+    for line in lines:
+        if line == f"### {heading}":
+            dropping = True
+            continue
+        if dropping and (line.startswith("## ") or line.startswith("### ")):
+            dropping = False
+        if not dropping:
+            out.append(line)
+    datasheet.write_text("\n".join(out) + "\n", encoding="utf-8")
+    result, data = report(project)
+    assert result.returncode == RC_FAIL
+    assert rule in rules_for(data, SUBJECT)
     assert verdict_of(data, CONTROL) is True
 
 

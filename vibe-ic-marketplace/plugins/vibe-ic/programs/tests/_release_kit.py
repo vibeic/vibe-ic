@@ -198,7 +198,7 @@ def build_gds(name: str, width_um: float = 120.0,
     return out
 
 
-def _layers(register_rich: bool) -> Dict[str, dict]:
+def _layers(register_rich: bool, bus_width: int = 1) -> Dict[str, dict]:
     """The Phase-1 design INPUT this producer reads, in the shapes it ships in.
 
     Two shapes deliberately: the extracted layers put their content at the top
@@ -224,12 +224,30 @@ def _layers(register_rich: bool) -> Dict[str, dict]:
         "L8_TIMING_WAVEFORM": {
             "timing_windows": [{"name": "setup"}],
             "timing_constants": [{"name": "clock_to_out"}],
+            "clock_mhz": 50.0,
+            "clock_domains": [{
+                "name": "clk", "freq_mhz": 50.0, "period_ns": 20.0,
+                "role": "primary",
+            }],
             "clock_and_reset_waveform": {
                 "reset": "active low, released synchronously"}},
         "L9_INTEGRATION_SPEC": {
             "top_module": DESIGN,
             "module_role": "A synchronous block intended to be placed as a "
-                           "macro by the integrating design."},
+                           "macro by the integrating design.",
+            "ports": [
+                {"name": "clk", "direction": "input", "width": 1,
+                 "description": "Rising-edge clock."},
+                {"name": "rst_n", "direction": "input", "width": 1,
+                 "description": "Active-low reset."},
+                {"name": "dout", "direction": "output", "width": bus_width,
+                 "msb": bus_width - 1, "lsb": 0,
+                 "description": "Hardened result bus."},
+            ],
+            "parameters": [{
+                "name": "DATA_WIDTH", "default": str(bus_width),
+                "description": "Width frozen into the delivered macro.",
+            }]},
         # `fields`-nested, the skeleton-emitter's shape.
         "L19_CONSTRAINTS_PDK": {
             "doc_id": "L19",
@@ -243,7 +261,8 @@ def _layers(register_rich: bool) -> Dict[str, dict]:
 
 def build_project(root: Path, packages: Sequence[str] = (SUBJECT, CONTROL),
                   register_rich: bool = True,
-                  with_layers: bool = True) -> Path:
+                  with_layers: bool = True,
+                  bus_width: int = 1) -> Path:
     """A project root on the IP path, carrying `packages` as delivered kits."""
     root.mkdir(parents=True, exist_ok=True)
     (root / "input").mkdir(parents=True, exist_ok=True)
@@ -257,19 +276,55 @@ def build_project(root: Path, packages: Sequence[str] = (SUBJECT, CONTROL),
     if with_layers:
         docs = root / "phase1" / "generated_docs"
         docs.mkdir(parents=True, exist_ok=True)
-        for stem, body in _layers(register_rich).items():
+        for stem, body in _layers(register_rich, bus_width).items():
             (docs / f"{stem}.json").write_text(json.dumps(body, indent=2),
                                                encoding="utf-8")
+
+        achieved = root / "reports" / "phase3" / "achievable_fmax.json"
+        achieved.parent.mkdir(parents=True, exist_ok=True)
+        achieved.write_text(json.dumps({
+            "spec_period_ns": 20.0,
+            "achievable_period_ns": 12.5,
+            "achievable_fmax_mhz": 80.0,
+            "worst_setup_slack_ns": 7.5,
+            "relaxation_applied": False,
+        }, indent=2), encoding="utf-8")
 
     kit = root / "phase3" / "stage4" / "hardmacro"
     kit.mkdir(parents=True, exist_ok=True)
     for name in packages:
-        (kit / f"{name}.lef").write_text(LEF.format(name=name),
-                                         encoding="utf-8")
+        lef = LEF.format(name=name)
+        if bus_width > 1:
+            scalar = """  PIN dout
+    DIRECTION OUTPUT ;
+    USE SIGNAL ;
+    PORT
+      LAYER met3 ;
+        RECT 8.0 1.0 9.0 2.0 ;
+    END
+  END dout
+"""
+            assert scalar in lef
+            bits = "".join(
+                "  PIN dout[{bit}]\n"
+                "    DIRECTION OUTPUT ;\n"
+                "    USE SIGNAL ;\n"
+                "    PORT\n"
+                "      LAYER met3 ;\n"
+                "        RECT {x}.0 1.0 {x2}.0 2.0 ;\n"
+                "    END\n"
+                "  END dout[{bit}]\n".format(
+                    bit=bit, x=8 + bit * 3, x2=9 + bit * 3)
+                for bit in range(bus_width))
+            lef = lef.replace(scalar, bits, 1)
+        (kit / f"{name}.lef").write_text(lef, encoding="utf-8")
         (kit / f"{name}.lib").write_text(LIB.format(name=name),
                                          encoding="utf-8")
-        (kit / f"{name}.v").write_text(VERILOG.format(name=name),
-                                       encoding="utf-8")
+        verilog = VERILOG.format(name=name)
+        if bus_width > 1:
+            verilog = verilog.replace(
+                "output wire dout", f"output wire [{bus_width - 1}:0] dout")
+        (kit / f"{name}.v").write_text(verilog, encoding="utf-8")
         (kit / f"{name}.gds").write_bytes(build_gds(name))
     return root
 

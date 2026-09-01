@@ -41,6 +41,7 @@ from _release_docs_contract import (  # noqa: E402
     NOT_MEASURED,
     REASON_PREFIX,
 )
+from _hostpaths import require_repo  # noqa: E402
 
 PROG = Path(__file__).resolve().parents[1] / "ip_release_docs_gen.py"
 FLOW_YAML = Path(__file__).resolve().parents[2] / "flow" / "phase1_phase2_phase3.yaml"
@@ -135,6 +136,51 @@ def test_every_quantitative_field_is_derived_or_says_it_was_not(tmp_path):
     assert seen > 0, "no derived rows were emitted at all"
 
 
+def test_bus_bits_are_counted_as_physical_lef_pins(tmp_path):
+    """A LEF PIN statement is one physical pin, including every bus bit."""
+    project = build_project(tmp_path / "p", packages=(SUBJECT,), bus_width=4)
+    result = run(project)
+    assert result.returncode == 0, result.stderr
+    text = (docs_dir(project) / "IP_DATASHEET.md").read_text(encoding="utf-8")
+    assert "| Signal pins | 6 |" in text, text
+    assert "| Pin count (total) | 8 |" in text, text
+
+
+def test_datasheet_emits_pin_table_and_hardened_parameter_set(tmp_path):
+    project = build_project(tmp_path / "p", packages=(SUBJECT,), bus_width=4)
+    result = run(project)
+    assert result.returncode == 0, result.stderr
+    text = (docs_dir(project) / "IP_DATASHEET.md").read_text(encoding="utf-8")
+    assert "### Pin Table" in text
+    assert "| dout | output | 4 |" in text
+    assert "### Hardened Parameter Set" in text
+    assert "| DATA_WIDTH | 4 |" in text
+
+
+def test_datasheet_emits_declared_and_achieved_clock(tmp_path):
+    project = build_project(tmp_path / "p", packages=(SUBJECT,))
+    result = run(project)
+    assert result.returncode == 0, result.stderr
+    text = (docs_dir(project) / "IP_DATASHEET.md").read_text(encoding="utf-8")
+    assert "| Declared clock period (ns) | 20" in text
+    assert "| Declared operating frequency (MHz) | 50" in text
+    assert "| Achieved clock period (ns) | 12.5" in text
+    assert "| Achieved operating frequency (MHz) | 80" in text
+
+
+def test_checked_in_spm_input_carries_a_bus_and_hardened_parameter():
+    """Real-artefact backing: the reported shape exists outside our fixture."""
+    l9 = require_repo(
+        "vibe-ic-marketplace", "plugins", "vibe-ic", "programs", "tests",
+        "fixtures", "stage2_on_pass_review", "accept_spm", "phase1",
+        "generated_docs", "L9_INTEGRATION_SPEC.json")
+    data = json.loads(l9.read_text(encoding="utf-8"))
+    x = next(port for port in data["ports"] if port["name"] == "x")
+    size = next(param for param in data["parameters"] if param["name"] == "size")
+    assert "size-1:0" in str(x.get("width_symbolic", x.get("width")))
+    assert str(size["default"]) == "32"
+
+
 def test_the_manifest_counts_agree_with_the_documents(tmp_path):
     project = build_project(tmp_path / "p", packages=(SUBJECT,))
     assert run(project).returncode == 0
@@ -189,8 +235,8 @@ def test_a_layer_the_run_does_not_carry_becomes_a_hole_not_a_default(tmp_path):
     assert holes, "a run with no design layers produced no NOT_MEASURED field"
     for label, _value, third in holes:
         assert third.startswith(REASON_PREFIX), label
-        assert "generated_docs" in third or "git work tree" in third \
-            or "kit" in third, (label, third)
+        assert ("generated_docs" in third or "git work tree" in third
+                or "kit" in third or "reports/phase3" in third), (label, third)
 
 
 def test_the_application_note_never_originates_a_mandatory_constraint(tmp_path):
