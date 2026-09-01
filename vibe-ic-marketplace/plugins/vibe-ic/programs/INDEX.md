@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 1249
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1249)
+- **Total programs (excluding helpers / shims):** 1251
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1251)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 1240 |
+| `any` | 1242 |
 
 ## Alphabetical listing
 
@@ -58,6 +58,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `analog_a6_native_pv` | any | — | A6 per-block PHYSICAL-VERIFICATION producer (consume the resolver's staged sign-off decks; run native DRC + LVS). |
 | `analog_a7_post_layout_resim_check` | any | — | Verifies that the upstream `analog-extraction-resim` skill has emitted |
 | `analog_a8_before_floorplan_check` | any | — | analog/digital ordering gate. |
+| `analog_a8_hardmacro_emit` | any | — | A8 PRODUCER for an ANALOG block: emit the real hardmacro abstract kit from the block's own signed-off layout. |
 | `analog_a8_hardmacro_gen_check` | any | — | Verifies that the upstream `analog-hardmacro-gen` skill has emitted |
 | `analog_a9_hw_verify_check` | any | — | A9 deterministic gate (Co-Sim / HW Verify). |
 | `analog_adc_enob_corner_check` | any | — | R12 system-ENOB per-corner gate (A4). |
@@ -84,6 +85,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `analog_interface_classify` | any | — | structural L9 top-interface classifier (ORGANIC #144-sibling, filed as #141). |
 | `analog_lef_gds_outline_check` | any | — | Codifies the EXTRACT-NEW spot-check in |
 | `analog_liberty_nonzero_delay_check` | any | — | deterministic Liberty non-degeneracy gate. |
+| `analog_lvs_comparison_prep` | any | — | COMPARISON-SIDE preparation for an open-PDK per-block LVS run (A6). Deterministic, chip-AGNOSTIC, no PDK literal. |
 | `analog_mc_yield_run` | any | — | REAL Monte-Carlo yield execution for the analog track (flow-completeness review P1-1). |
 | `analog_meas_from_spec_gen` | any | — | deterministic `.meas` statement generator from an analog block spec.json. |
 | `analog_netlist_connectivity_check` | any | — | deterministic floating-node / dangling-pin graph check for SPICE subcircuits. |
@@ -1321,7 +1323,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (1240 programs)
+### `any` (1242 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `absence_verdict_names_its_search_space_check` — "not found" must say WHERE it looked.
@@ -1355,6 +1357,7 @@ _(no programs in this group)_
 - `analog_a6_native_pv` — A6 per-block PHYSICAL-VERIFICATION producer (consume the resolver's staged sign-off decks; run native DRC + LVS).
 - `analog_a7_post_layout_resim_check` — Verifies that the upstream `analog-extraction-resim` skill has emitted
 - `analog_a8_before_floorplan_check` — analog/digital ordering gate.
+- `analog_a8_hardmacro_emit` — A8 PRODUCER for an ANALOG block: emit the real hardmacro abstract kit from the block's own signed-off layout.
 - `analog_a8_hardmacro_gen_check` — Verifies that the upstream `analog-hardmacro-gen` skill has emitted
 - `analog_a9_hw_verify_check` — A9 deterministic gate (Co-Sim / HW Verify).
 - `analog_adc_enob_corner_check` — R12 system-ENOB per-corner gate (A4).
@@ -1381,6 +1384,7 @@ _(no programs in this group)_
 - `analog_interface_classify` — structural L9 top-interface classifier (ORGANIC #144-sibling, filed as #141).
 - `analog_lef_gds_outline_check` — Codifies the EXTRACT-NEW spot-check in
 - `analog_liberty_nonzero_delay_check` — deterministic Liberty non-degeneracy gate.
+- `analog_lvs_comparison_prep` — COMPARISON-SIDE preparation for an open-PDK per-block LVS run (A6). Deterministic, chip-AGNOSTIC, no PDK literal.
 - `analog_mc_yield_run` — REAL Monte-Carlo yield execution for the analog track (flow-completeness review P1-1).
 - `analog_meas_from_spec_gen` — deterministic `.meas` statement generator from an analog block spec.json.
 - `analog_netlist_connectivity_check` — deterministic floating-node / dangling-pin graph check for SPICE subcircuits.

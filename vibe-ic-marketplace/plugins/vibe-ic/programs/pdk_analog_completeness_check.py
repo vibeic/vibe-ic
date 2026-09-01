@@ -127,6 +127,14 @@ _AXES: dict[str, Tuple[str, ...]] = {
     "lvs_deck": _expand((
         "calibre/*LVS*.rule",
         "calibre/*.device",
+        # A KLayout LVS runset is what an OPEN PDK actually ships as its
+        # sign-off LVS, and this axis did not list it — the mirror image of
+        # the DRC axis one line up, which does. Measured: the design staged
+        # its PDK's `klayout/*.lvs` and the resolver could not see it, so the
+        # LVS arm fell through to a netgen setup no engine here reads and the
+        # block never got an LVS run at all.
+        "klayout/*.lvs",
+        "bridge/klayout/*.lvs",
         "netgen/*.tcl",
         "bridge/netgen/*.tcl",
         "assura/LVS/**/*.rule",

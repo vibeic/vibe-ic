@@ -264,6 +264,119 @@ def _default_drc_runner(deck: str, gds: str, block: str, container: str,
                    "rules_skip": skips, "rc": rc}
 
 
+# ── LVS engine dispatch ─────────────────────────────────────────────────────
+#
+# THE DEFECT THIS CLOSES, MEASURED. The LVS arm fired on the mere PRESENCE of a
+# resolved `lvs_deck` and then ignored it, running a generic geometric
+# extraction whose device recognition is driven by a built-in EXAMPLE layer map
+# ("a common 180nm-style GDS numbering"). On any PDK whose layer numbers differ
+# — i.e. on any PDK but the one the example was drawn from — that extraction
+# recognizes nothing, `top_circuit()` is None, and the arm died inside the
+# container with an AttributeError that reached the caller as `rc=1`. So the
+# deck the resolver had just resolved was never run, and the block never got an
+# LVS verdict: A6 reported "no parseable LVS result — the tool has not run",
+# which was true, and gave no hint that a sign-off engine for that exact deck
+# was sitting on PATH.
+#
+# The fix is the same shape as the DRC one above: run the deck with the engine
+# that can read it. A KLayout LVS runset declares `$input` / `$schematic` /
+# `$topcell` / `$report` exactly as the DRC runset declares its own variables.
+_KLAYOUT_LVS_SUFFIXES = (".lvs", ".lylvs")
+_NETGEN_LVS_SUFFIXES = (".tcl",)
+
+
+def lvs_deck_kind(deck: str) -> str:
+    """`klayout` | `netgen` | `svrf` | `unknown` — from the deck's extension."""
+    suf = Path(str(deck or "")).suffix.lower()
+    if suf in _KLAYOUT_LVS_SUFFIXES:
+        return "klayout"
+    if suf in _NETGEN_LVS_SUFFIXES:
+        return "netgen"
+    if suf in _SVRF_DECK_SUFFIXES:
+        return "svrf"
+    return "unknown"
+
+
+_LVS_MATCH_RE = re.compile(r"Congratulations!\s*Netlists match", re.I)
+_LVS_NOMATCH_RE = re.compile(r"Netlists don.t match", re.I)
+
+
+def lvs_runset_verdict(stdout: str) -> Optional[str]:
+    """`MATCH` | `MISMATCH` | None, from a KLayout LVS runset's own output.
+
+    None when the run said NEITHER — an aborted deck must not be read as a
+    verdict in either direction (the deck aborts on an unreadable schematic
+    before it compares anything, and that is silence, not a mismatch).
+    """
+    if _LVS_MATCH_RE.search(stdout or ""):
+        return "MATCH"
+    if _LVS_NOMATCH_RE.search(stdout or ""):
+        return "MISMATCH"
+    return None
+
+
+def _klayout_lvs_runset_runner(deck: str, gds: str, netlist: str, block: str,
+                               container: str, work: Path
+                               ) -> Tuple[Optional[str], Dict[str, Any]]:
+    """Run a PDK's own KLayout LVS runset on the block, comparison-side prepared.
+
+    The two comparison-side copies (a netlist in element form without the model
+    libraries, and a layout whose top cell keeps only its declared ports as
+    text) are built by `analog_lvs_comparison_prep`; the design's own netlist
+    and GDS are never modified. NUMBERS ONLY — the verdict plus device counts,
+    never netlist content.
+    """
+    binc = _tool_on_path(container, "klayout")
+    if binc is None:
+        return None, {"reason": "klayout engine not on container PATH"}
+    try:
+        import analog_lvs_comparison_prep as _prep
+    except Exception as exc:                                  # pragma: no cover
+        return None, {"reason": f"comparison-side prep unavailable: {exc}"}
+    work.mkdir(parents=True, exist_ok=True)
+    src_text = Path(netlist).read_text(errors="replace")
+    ports = _prep.declared_ports(src_text, block)
+    if not ports:
+        return None, {"reason": (f"block netlist declares no .subckt {block} "
+                                 f"port list — nothing to bind pins to")}
+    cmp_sp = work / f"{block}_lvs_source.spice"
+    prepared, stats = _prep.prepare_source_netlist(src_text, block)
+    cmp_sp.write_text(prepared)
+
+    cmp_gds = work / f"{block}_lvs_layout.gds"
+    script = work / f"{block}_port_only.py"
+    script.write_text(_prep.PORT_ONLY_LAYOUT_SCRIPT)
+    rc_p, out_p, err_p = _docker_exec(
+        container,
+        f"{shlex.quote(binc)} -b -r "
+        f"{shlex.quote(_to_container_path(container, str(script)))} "
+        f"-rd gds={shlex.quote(_to_container_path(container, gds))} "
+        f"-rd out={shlex.quote(_to_container_path(container, str(cmp_gds)))} "
+        f"-rd ports={shlex.quote(chr(10).join(ports))}")
+    if not cmp_gds.is_file():
+        return None, {"reason": f"comparison-side layout not written (rc={rc_p})",
+                      "tail": (out_p + err_p)[-300:]}
+
+    db = work / f"{block}.lvsdb"
+    rc, out, err = _docker_exec(
+        container,
+        f"{shlex.quote(binc)} -b -r "
+        f"{shlex.quote(_to_container_path(container, deck))} "
+        f"-rd input={shlex.quote(_to_container_path(container, str(cmp_gds)))} "
+        f"-rd topcell={shlex.quote(block)} "
+        f"-rd schematic={shlex.quote(_to_container_path(container, str(cmp_sp)))} "
+        f"-rd report={shlex.quote(_to_container_path(container, str(db)))} "
+        f"-rd run_mode=deep")
+    verdict = lvs_runset_verdict((out or "") + (err or ""))
+    if verdict is None:
+        return None, {"reason": f"LVS runset reported no verdict (rc={rc})",
+                      "tail": ((out or "") + (err or ""))[-300:]}
+    return verdict, {"method": "klayout_lvs_runset", "rc": rc,
+                     "declared_ports": len(ports),
+                     "device_calls_rewritten": stats["device_calls_rewritten"],
+                     "report": str(db)}
+
+
 def _default_lvs_runner(gds: str, netlist: str, block: str, container: str,
                         ext_dir: Path, layermap: Optional[str] = None
                         ) -> Tuple[Optional[str], Dict[str, Any]]:
@@ -420,10 +533,16 @@ def run_block_pv(project: Path, block: str, res: Dict[str, Any],
     elif netlist is None:
         reasons.append("no block source netlist for LVS")
     else:
-        runner = lvs_runner or (
-            lambda g, nl, blk, ctn: _default_lvs_runner(
-                g, nl, blk, ctn, project / "phase3" / "extracted" / "analog" / blk,
-                layermap))
+        _kind = lvs_deck_kind(str(lvs_deck))
+        _work = project / "phase3" / "extracted" / "analog" / block
+        if _kind == "klayout":
+            runner = lvs_runner or (
+                lambda g, nl, blk, ctn: _klayout_lvs_runset_runner(
+                    str(lvs_deck), g, nl, blk, ctn, _work))
+        else:
+            runner = lvs_runner or (
+                lambda g, nl, blk, ctn: _default_lvs_runner(
+                    g, nl, blk, ctn, _work, layermap))
         verdict, meta = runner(str(gds), str(netlist), block, container)
         if verdict is None:
             reasons.append(f"LVS engine unavailable: {meta.get('reason', '?')}")

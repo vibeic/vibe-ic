@@ -358,6 +358,21 @@ def cmd_extract(args, pya):
     setup_extraction(l2n, ly, lm, pya)
     nl = finalize(l2n)
     top = nl.top_circuit()
+    if top is None:
+        # NO CIRCUIT MEANS THE LAYER MAP DID NOT FIT THE LAYOUT, and saying so
+        # is the whole value here. DEFAULT_LAYERMAP is an EXAMPLE numbering; on
+        # a PDK numbered differently, device recognition matches nothing, the
+        # netlist has no circuit at all, and the next line used to raise
+        # `'NoneType' object has no attribute 'each_device'` deep inside the
+        # container. That reached the caller as a bare non-zero rc, so an
+        # entire LVS arm read as "the tool has not run" with no hint that the
+        # cause was a layer map nobody had supplied. Measured on an open PDK
+        # whose own sign-off runset compares the same block cleanly.
+        print("EXTRACT %s: NO CIRCUIT — the layer map recognized no device. "
+              "Supply the PDK's own numbering with --layermap/--pdk-map; the "
+              "built-in map is an example, not a default for every PDK."
+              % args.gds, file=sys.stderr)
+        return 3
     shorts, short_locs = assign_power_by_geometry(l2n, ly, top, lm, pya)
     cc, nnet = _counts(top)
     print(f"EXTRACT {args.gds}: devices={cc} nets={nnet} power_shorts={shorts}")
