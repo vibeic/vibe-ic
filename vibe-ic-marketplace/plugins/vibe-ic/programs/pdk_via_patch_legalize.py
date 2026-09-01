@@ -8,13 +8,39 @@ same tech LEF declares that their generated patch is smaller than that layer's
 ``MINWIDTH``/``WIDTH`` or ``AREA``.  Growth is centered, manufacturing-grid
 aligned, and minimal under those constraints.  Healthy input is returned
 byte-for-byte.
+
+PIN-ACCESS LAYERS ARE NEVER TOUCHED (owner ruling, 2026-09-02)
+==============================================================
+A wider via landing on the layer standard-cell PINS are drawn on covers the
+access points the detailed router needs, and the router then cannot reach the
+pin at all.  MEASURED on a subservient x gf180mcuD run: legalizing every
+routing layer produced 81 x ``[ERROR DRT-0073] No access point``, detailed
+routing did not complete, and the DEF shipped with NO signal routing — whose
+DRC then reported ZERO violations.  A DRC of zero on an unrouted DEF is the
+most dangerous number this program can cause, because it reads exactly like a
+total fix.
+
+So ``pin_layers`` is a REQUIRED input, and layers in it are skipped entirely.
+This is the same exclusion the flow's own min-area patcher already applies —
+it prints ``MIN_AREA_PATCH_PIN_LAYERS_NOT_JUDGED`` for precisely this reason —
+so the two remediations now agree instead of contradicting each other.
+
+Skipping costs nothing on the violations that matter: cell pins sit on the
+LOWEST routing layer, while the min-width/min-area offenders this program
+exists for are on the layers ABOVE it (measured: 1 on Metal2, 1 on Metal3, 10
+on Metal5, and NONE on the Metal1 pin layer).
+
+An EMPTY ``pin_layers`` is accepted but recorded as ``pin_layers_declared:
+false``, so a caller that could not derive the set cannot be mistaken for one
+that derived an empty set.  The caller decides whether that is good enough;
+this function never guesses.
 """
 
 from __future__ import annotations
 
 import re
 from decimal import Decimal, ROUND_CEILING
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, Iterable, List, Optional, Tuple
 
 
 _NUM = r"[-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][-+]?\d+)?"
@@ -224,8 +250,14 @@ def _legalize_generate_rules(lines: List[str],
     return output, changes, remaining, unresolved
 
 
-def legalize_via_patches(text: str) -> Tuple[str, dict]:
+def legalize_via_patches(text: str,
+                        pin_layers: Optional[Iterable[str]] = None
+                        ) -> Tuple[str, dict]:
     """Return ``(possibly_changed_text, machine_readable_report)``.
+
+    ``pin_layers`` names the layers standard-cell PINS are drawn on; every one
+    of them is left byte-for-byte untouched so the router keeps the access
+    points it needs.  See the module docstring for the measurement.
 
     The function is pure.  Callers decide where to stage the derived LEF and
     must retain the report beside the run that consumed it.
@@ -233,6 +265,17 @@ def legalize_via_patches(text: str) -> Tuple[str, dict]:
     grid_match = _GRID_RE.search(text)
     grid = Decimal(grid_match.group(1)) if grid_match else Decimal("0.001")
     rules = _routing_rules(text)
+    # Case-folded, because LEF layer names are compared case-insensitively
+    # everywhere else in this file.
+    _pin_declared = pin_layers is not None
+    _pin = {str(n).strip().lower() for n in (pin_layers or ()) if str(n).strip()}
+    # A layer we must not touch is removed from the rule table outright: every
+    # growth decision below is keyed on `rules`, so one deletion covers the
+    # fixed-VIA RECT path and the VIARULE GENERATE path together and neither
+    # can drift from the other.
+    skipped_layers = sorted(n for n in rules if n.strip().lower() in _pin)
+    for _n in skipped_layers:
+        rules.pop(_n, None)
     lines = text.splitlines(keepends=True)
     lines, changes, remaining, unresolved = _legalize_generate_rules(
         lines, rules, grid)
@@ -315,6 +358,14 @@ def legalize_via_patches(text: str) -> Tuple[str, dict]:
                                   for row in changes),
         "remaining_via_rule_violations": remaining,
         "unresolved_generate_rules": unresolved,
+        "pin_layers_declared": _pin_declared,
+        "pin_layers": sorted(_pin),
+        "pin_layers_skipped_from_rules": skipped_layers,
+        "pin_access_policy": (
+            "layers carrying standard-cell PIN geometry are never widened: a "
+            "wider landing there covers the router's access points and the "
+            "net becomes unroutable (DRT-0073). Same exclusion the min-area "
+            "patcher applies."),
         "changes": changes,
     }
     return fixed, report

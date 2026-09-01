@@ -4,7 +4,7 @@
 
 [![License: Apache-2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
 [![Awesome](https://awesome.re/badge.svg)](https://github.com/vibeic/awesome-open-ic)
-[![Plugin v1.15.45](https://img.shields.io/badge/plugin-v1.15.45-brightgreen.svg)](vibe-ic-marketplace/README.md)
+[![Plugin v1.15.46](https://img.shields.io/badge/plugin-v1.15.46-brightgreen.svg)](vibe-ic-marketplace/README.md)
 [![MCP-EDA v1.0.0](https://img.shields.io/badge/mcp--eda-v1.0.0-brightgreen.svg)](vibe-ic-marketplace/plugins/vibe-ic/mcp-eda/README.md)
 
 > **Status: v1.15 — mature, benchmark-hardened.** The `vibe-ic` plugin is the

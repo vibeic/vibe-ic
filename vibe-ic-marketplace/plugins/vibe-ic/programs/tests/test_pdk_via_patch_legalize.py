@@ -11,6 +11,22 @@ sys.path.insert(0, str(PROGRAMS))
 import phase3_one_shot_runner as runner  # noqa: E402
 
 
+def _cell_lef_with_pins_on(layer: str) -> str:
+    """A minimal, neutral standard-cell LEF whose pins are on `layer`."""
+    return f"""VERSION 5.7 ;
+MACRO neutral_cell
+  PIN a
+    DIRECTION INPUT ;
+    PORT
+      LAYER {layer} ;
+        RECT 0.1 0.1 0.3 0.3 ;
+    END
+  END a
+END neutral_cell
+END LIBRARY
+"""
+
+
 def _illegal_techlef() -> str:
     return """VERSION 5.7 ;
 MANUFACTURINGGRID 0.005 ;
@@ -125,9 +141,16 @@ def test_phase3_stages_one_derived_techlef_and_all_consumers_share_it(tmp_path):
     out_dir = project / "phase3/stage3/pnr"
     source = tmp_path / "source.tlef"
     source.write_text(_illegal_techlef())
+    # The remediation now REFUSES unless it can name the layers that carry
+    # standard-cell pin access (owner ruling 2026-09-02), so the fixture must
+    # supply a cell LEF. Its pins sit on the layer BELOW the two this via
+    # transitions between, which is where cell pins actually live — so nothing
+    # this test asserts about route_b / route_c changes.
+    cells = tmp_path / "cells.lef"
+    cells.write_text(_cell_lef_with_pins_on("route_a"))
     pdk = runner.PdkConfig(
         name="neutral", liberty="unused.lib", tech_lef=str(source),
-        cell_lef="unused.lef", cell_gds=None, site="unit",
+        cell_lef=str(cells), cell_gds=None, site="unit",
         drc_deck=None, metal_prefix="route_",
     )
 
@@ -157,3 +180,30 @@ def test_phase3_stages_one_derived_techlef_and_all_consumers_share_it(tmp_path):
     assert repeated["status"] == "APPLIED"
     assert repeated_report["status"] == "APPLIED"
     assert repeated_report["source_tech_lef"] == str(source)
+
+
+def test_staging_refuses_when_the_pin_layers_cannot_be_derived(tmp_path):
+    """The other direction of the same ruling: a remediation that cannot name
+    the layers it must protect does not run at all, and says why.
+
+    Silently widening every layer is what produced 81 x DRT-0073, an unrouted
+    DEF, and a DRC of ZERO on it.
+    """
+    project = tmp_path / "project"
+    out_dir = project / "phase3/stage3/pnr"
+    source = tmp_path / "source.tlef"
+    source.write_text(_illegal_techlef())
+    pdk = runner.PdkConfig(
+        name="neutral", liberty="unused.lib", tech_lef=str(source),
+        cell_lef="does-not-exist.lef", cell_gds=None, site="unit",
+        drc_deck=None, metal_prefix="route_",
+    )
+
+    result = runner._stage_via_legalized_tech_lef(
+        project, pdk, "unused-container", out_dir)
+
+    assert result["status"] == "NOT_APPLIED"
+    assert "pin" in result["reason"].lower()
+    assert pdk.tech_lef == str(source), (
+        "the original tech LEF must be retained when the remediation declines")
+    assert not (out_dir / "active_via_legalized.tlef").is_file()

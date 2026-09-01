@@ -5127,6 +5127,13 @@ def _build_macro_pdn_grid_tcl(plan: Optional[Dict[str, Any]]) -> str:
     return out
 
 
+#: Safety factor applied to the MEASURED per-segment maximum when sizing PDN
+#: straps (owner ruling 2026-09-02). The measurement supersedes the I_total
+#: conservation bound, but never without headroom of its own: 2.0x the worst
+#: segment openroad-psm actually found on this layout.
+_EM_MEASURED_SAFETY = 2.0
+
+
 def _pdn_em_width_floor(project: Path, pdk: "PdkConfig",
                         container: Optional[str] = None
                         ) -> Optional[Dict[str, Any]]:
@@ -5146,11 +5153,37 @@ def _pdn_em_width_floor(project: Path, pdk: "PdkConfig",
     with jmax_per_width taken from `em_current_density_check.parse_lef_jmax`
     over the SAME resolved tech LEF the gate reads (identical unit
     interpretation, no re-derivation), and margin = the gate's own default
-    guardband (0.10). A strap of width w_em cannot exceed the margined Jmax
-    under ANY current distribution, because no segment can carry more than
-    I_total — so this is a one-shot derivation with no distribution
-    assumption and nothing to iterate on. It is a FLOOR: an existing wider
-    ratio-derived or registry width stands (max(), never narrower).
+    guardband (0.10). It is a FLOOR: an existing wider ratio-derived or
+    registry width stands (max(), never narrower).
+
+    WHICH CURRENT THE WIDTH IS DERIVED FROM (owner ruling, 2026-09-02)
+    =================================================================
+    I_total is a CONSERVATION BOUND: it assumes one segment carries the whole
+    injected current, which is the worst case that cannot happen on a real
+    mesh. When THIS run has actually MEASURED the distribution, the
+    measurement supersedes the bound:
+
+        measured : I_drive = max_segment_current_A * _EM_MEASURED_SAFETY
+        bound    : I_drive = I_total                  (no measurement exists)
+
+    `max_segment_current_A` is openroad-psm's own per-segment maximum over
+    every analysed segment of THIS layout (reports/phase3/em.json, written by
+    the EM measurement step). The safety factor keeps a real margin on top of
+    it — the relaxation is from "impossible worst case" to "measured worst
+    case x N", not to the measurement itself.
+
+    MEASURED, and the reason this ruling exists: on a subservient x gf180mcuD
+    run the bound demanded Metal4 20.77um where the measured maximum needed
+    5.62um (3.70x). The die grew 227x227 -> 416x416 um to seat those straps,
+    dropping core utilisation to 17% against an L9-declared 50% — which made
+    the metal-COVERAGE rules (>30% over the entire die) unsatisfiable and
+    inflated CTS insertion delay to 6.47 ns, itself 40% of the register-to-
+    output-port setup budget. Two sign-off failures, one over-sized number.
+
+    Both numbers, the basis and the factor are recorded in
+    pdn_em_sizing.json so the choice is auditable and reversible.
+
+    Returns None — behaviour unchanged — when neither current is available.
 
     Returns None — behaviour unchanged — when no prior EM measurement exists
     (a first pass; the EM gate then measures honestly and the NEXT pass
@@ -5178,12 +5211,14 @@ def _pdn_em_width_floor(project: Path, pdk: "PdkConfig",
     except (OSError, ValueError):
         pass
     if i_total is None:
+        # A missing/unparseable I_total is no longer fatal on its own: the
+        # MEASURED per-segment maximum read below can size the strap by
+        # itself, and it is the preferred basis. Only "neither current is
+        # available" returns None, and that decision is made after both
+        # have been attempted.
         em_rpt = rpt3 / "em.rpt"
         try:
             txt = em_rpt.read_text(errors="replace")
-        except OSError:
-            return None
-        try:
             import em_peak_current_authority_check as _empc
             powers = [float(m.group(1))
                       for m in _empc._TOTAL_POWER_RE.finditer(txt)]
@@ -5194,8 +5229,33 @@ def _pdn_em_width_floor(project: Path, pdk: "PdkConfig",
                 i_total = max(pairs)
                 i_src = "reports/phase3/em.rpt Total power / Supply voltage"
         except Exception:
-            return None
-    if not i_total or i_total <= 0:
+            i_total = None
+    # THE MEASURED per-segment maximum for THIS layout, if the EM step ran.
+    # openroad-psm walks every segment of the grid; this is the largest
+    # current any one of them actually carries, not an assumption about how
+    # the current might distribute.
+    i_meas: Optional[float] = None
+    i_meas_src: Optional[str] = None
+    i_meas_segments: Optional[int] = None
+    try:
+        _em = json.loads((rpt3 / "em.json").read_text())
+        _v = _em.get("max_segment_current_A")
+        if isinstance(_v, (int, float)) and _v > 0:
+            i_meas = float(_v)
+            i_meas_src = "reports/phase3/em.json max_segment_current_A"
+            _s = _em.get("segments_analysed")
+            if isinstance(_s, int):
+                i_meas_segments = _s
+    except Exception:
+        i_meas = None
+
+    if i_meas is not None:
+        i_drive = i_meas * _EM_MEASURED_SAFETY
+        sizing_basis = "measured_max_segment"
+    elif i_total and i_total > 0:
+        i_drive = i_total
+        sizing_basis = "i_total_conservation_bound"
+    else:
         return None
 
     tlef_txt = _read_pdk_text(getattr(pdk, "tech_lef", None), container)
@@ -5235,30 +5295,66 @@ def _pdn_em_width_floor(project: Path, pdk: "PdkConfig",
         jpw = e.get("jmax_per_width_A_per_um")
         if not jpw or jpw <= 0:
             continue
-        bound = i_total / (jpw * (1.0 - margin))
+        bound = i_drive / (jpw * (1.0 - margin))
         w_em = math.ceil(bound / quantum - 1e-9) * quantum
         if w_em <= bound + 1e-12:
             w_em += quantum
-        per_layer[lname_lc] = {
+        row = {
             "orig_name": e.get("orig_name"),
             "jmax_A_per_um": jpw,
             "w_bound_um": bound,
             "w_em_um": round(w_em, 4)}
+        # Both derivations are recorded on every layer, whichever one was
+        # USED, so a reader can see the size of the choice without re-running
+        # anything and can reverse it by reading one field.
+        if i_total and i_total > 0:
+            row["w_from_i_total_bound_um"] = i_total / (jpw * (1.0 - margin))
+        if i_meas is not None:
+            row["w_from_measured_max_segment_um"] = (
+                i_meas * _EM_MEASURED_SAFETY) / (jpw * (1.0 - margin))
+        per_layer[lname_lc] = row
     if not per_layer:
         return None
+    _measured = sizing_basis == "measured_max_segment"
     floor = {
         "program": "phase3_one_shot_runner._pdn_em_width_floor",
-        "basis": ("supply-current conservation bound: no PDN segment can "
-                  "carry more than the injected I_total = P/V, so a strap "
-                  "of width w_em = I_total/(jmax*(1-margin)) cannot exceed "
-                  "the margined Jmax under any current distribution"),
-        "arithmetic": ("w_em(layer) = I_total / (jmax_per_width * "
-                       "(1 - margin)), rounded UP to 2x the LEF "
-                       "MANUFACTURINGGRID (pdngen centres the stripe, so "
-                       "the half-width must be on-grid — PDN-0117; one "
-                       "extra quantum on exact equality) so the bound is "
-                       "STRICT — the gate counts util >= 1 - margin as an "
-                       "offender"),
+        "sizing_basis": sizing_basis,
+        "basis": (
+            ("MEASURED per-segment maximum: openroad-psm walked every segment "
+             "of THIS layout and reported the largest current any one of them "
+             "carries; the strap is sized for that measured worst segment "
+             "times a safety factor. The I_total conservation bound is also "
+             "computed and recorded, and is what would be used if no "
+             "measurement existed.")
+            if _measured else
+            ("supply-current conservation bound: no PDN segment can carry "
+             "more than the injected I_total = P/V, so a strap of width "
+             "w_em = I_total/(jmax*(1-margin)) cannot exceed the margined "
+             "Jmax under any current distribution. USED HERE BECAUSE NO "
+             "PER-SEGMENT MEASUREMENT WAS AVAILABLE — this is the fallback, "
+             "not the preferred basis.")),
+        "arithmetic": (
+            ("w_em(layer) = max_segment_current_A * safety_factor / "
+             "(jmax_per_width * (1 - margin))")
+            if _measured else
+            ("w_em(layer) = I_total / (jmax_per_width * (1 - margin))")
+        ) + (", rounded UP to 2x the LEF MANUFACTURINGGRID (pdngen centres "
+             "the stripe, so the half-width must be on-grid — PDN-0117; one "
+             "extra quantum on exact equality) so the bound is STRICT — the "
+             "gate counts util >= 1 - margin as an offender"),
+        "i_drive_A": i_drive,
+        "safety_factor": _EM_MEASURED_SAFETY if _measured else None,
+        "max_segment_current_A": i_meas,
+        "max_segment_current_source": i_meas_src,
+        "segments_analysed": i_meas_segments,
+        "bound_over_measured_x": (
+            round(i_total / i_drive, 4)
+            if (_measured and i_total and i_total > 0 and i_drive > 0)
+            else None),
+        "ruling": ("owner ruling 2026-09-02: when the run has MEASURED the "
+                   "per-segment current distribution, the measurement "
+                   "supersedes the I_total conservation bound; the bound "
+                   "remains the fallback when no measurement exists"),
         "manufacturing_grid_um": grid,
         "width_quantum_um": quantum,
         "i_total_A": i_total,
@@ -21964,6 +22060,34 @@ def _prepare_padring_for_route(
     return result, consumer
 
 
+def _pin_access_layers_from_cell_lef(cell_lef_text: str) -> "set[str]":
+    """Layers that standard-cell PINS are drawn on, from the cell LEF itself.
+
+    These are the layers the detailed router needs access points on, and they
+    are exactly the layers a via-landing remediation must not widen. Derived
+    from the library's OWN `MACRO ... PIN ... LAYER` records — no layer name,
+    PDK name or ordering assumption. Obstructions are included for the same
+    reason the flow's min-area patcher includes them: a widened landing on an
+    obstruction layer is just as unreachable.
+
+    An empty result means the text carried no PIN geometry this parser could
+    see, which the caller must treat as "not derived", never as "no pin
+    layers exist".
+    """
+    layers: "set[str]" = set()
+    for mac in re.finditer(r"(?ms)^\s*MACRO\s+(\S+).*?^\s*END\s+\1\s*$",
+                           cell_lef_text):
+        body = mac.group(0)
+        for pin in re.finditer(r"(?ms)^\s*PIN\s+(\S+).*?^\s*END\s+\1\s*$",
+                               body):
+            for lay in re.finditer(r"(?m)^\s*LAYER\s+(\S+)\s*;", pin.group(0)):
+                layers.add(lay.group(1))
+        for obs in re.finditer(r"(?ms)^\s*OBS\b.*?^\s*END\s*$", body):
+            for lay in re.finditer(r"(?m)^\s*LAYER\s+(\S+)\s*;", obs.group(0)):
+                layers.add(lay.group(1))
+    return layers
+
+
 def _stage_via_legalized_tech_lef(project: Path, pdk: PdkConfig,
                                   container: str, out_dir: Path) -> dict:
     """Stage one derived tech LEF whose fixed/generated VIA patches obey it.
@@ -22014,8 +22138,35 @@ def _stage_via_legalized_tech_lef(project: Path, pdk: PdkConfig,
         source_text = _v1_6_604_read_text_or_container_cat(source, container)
         if source_text is None:
             raise OSError(f"tech LEF is unreadable on host and in {container}")
+        # PIN-ACCESS GUARD (owner ruling 2026-09-02). Widening a via landing
+        # on a layer that carries standard-cell pins covers the router's
+        # access points; MEASURED, that produced 81 x DRT-0073, an unrouted
+        # DEF, and a DRC of ZERO on it. Derive the layers to protect from the
+        # library's own LEF, and REFUSE to remediate at all if they cannot be
+        # derived — an undeclared pin-layer set is not the same as an empty
+        # one, and this program does not guess which it is looking at.
+        _cell_lef = getattr(pdk, "cell_lef", None)
+        _cell_text = (_v1_6_604_read_text_or_container_cat(str(_cell_lef),
+                                                           container)
+                      if _cell_lef else None)
+        _pin_layers = (_pin_access_layers_from_cell_lef(_cell_text)
+                       if _cell_text else set())
+        if not _pin_layers:
+            payload["status"] = "NOT_APPLIED"
+            payload["reason"] = (
+                "the standard-cell LEF declares no PIN geometry this run "
+                f"could read (cell_lef={_cell_lef!r}), so the layers that "
+                "carry router access points are UNKNOWN. Widening a via "
+                "landing on one of them makes its net unroutable, so the "
+                "original tech LEF is retained and the run is not silently "
+                "certified.")
+            _aa.write_text(report_path, json.dumps(payload, indent=2,
+                                                   ensure_ascii=False) + "\n")
+            return payload
+        payload["pin_access_layers_source"] = str(_cell_lef)
         from pdk_via_patch_legalize import legalize_via_patches  # noqa: PLC0415
-        fixed, transform = legalize_via_patches(source_text)
+        fixed, transform = legalize_via_patches(source_text,
+                                                pin_layers=_pin_layers)
         payload.update(transform)
         payload["source_sha256"] = hashlib.sha256(
             source_text.encode()).hexdigest()
