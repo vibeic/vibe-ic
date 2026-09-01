@@ -2377,6 +2377,18 @@ def _solver_argv(runner: Path, proj: Path, entry, exit_step) -> list:
     return argv
 
 
+def _resume_solver_argv(runner: Path, proj: Path, supplied_rtl: bool,
+                        entry, exit_step) -> list:
+    """Re-enter one routed problem without losing its declared exit.
+
+    AI backup/repair supplies RTL, so it resumes at the first RTL-validation
+    step.  The routing exit is unchanged: re-entry must not expand a lint or
+    behavioural task into synthesis/DFT/LEC work.
+    """
+    effective_entry = "2" if supplied_rtl else entry
+    return _solver_argv(runner, proj, effective_entry, exit_step)
+
+
 def _declared_route_ai_backup(routing: dict) -> dict:
     """Validate the route-level AI-backup declaration, without defaulting it.
 
@@ -2851,16 +2863,13 @@ def _cmd_resume_locked(bench: str, dataset: str, run: str,
         return 2
 
     def _run_and_collect(job) -> _ResumeRunnerOutcome:
-        pid, proj, supplied_rtl, entry = job
-        argv = [sys.executable, str(runner), str(proj), "--skip-analog",
-                "--skip-hardware", "--skip-phase3"]
-        if supplied_rtl:
-            # AI backup/repair has already authored the candidate. Re-enter at the
-            # first RTL-validation step so program-first does not author again
-            # and overwrite the hash whose semantics the AI just repaired.
-            argv += ["--entry-step", "2"]
-        elif entry and entry != "D1":
-            argv += ["--entry-step", str(entry)]
+        pid, proj, supplied_rtl, entry, exit_step = job
+        # AI backup/repair has already authored the candidate. Re-enter at the
+        # first RTL-validation step so program-first does not author again and
+        # overwrite the hash whose semantics the AI just repaired. The routed
+        # exit still applies; otherwise resume expands a step-2/4 task into LEC.
+        argv = _resume_solver_argv(
+            runner, proj, supplied_rtl, entry, exit_step)
         process = runner_budget.run(argv)
         if process.error is not None:
             return _ResumeRunnerOutcome(
@@ -2921,7 +2930,8 @@ def _cmd_resume_locked(bench: str, dataset: str, run: str,
                             re.sub(r"[^\w.-]", "_", pid)),
             })
     retry_outcomes = _ordered_parallel_map(
-        [(p["id"], p["project"], False, p["result"].get("entry"))
+        [(p["id"], p["project"], False, p["result"].get("entry"),
+          p["result"].get("exit"))
          for p in retry_plans], _run_and_collect, jobs)
     existing_backup_ids = {str(item.get("id")) for item in backup}
     for plan, outcome in zip(retry_plans, retry_outcomes):
@@ -3050,7 +3060,8 @@ def _cmd_resume_locked(bench: str, dataset: str, run: str,
 
     backup_run_plans = [p for p in backup_plans if p["kind"] == "run"]
     backup_outcomes = iter(_ordered_parallel_map(
-        [(p["id"], p["project"], True, None) for p in backup_run_plans],
+        [(p["id"], p["project"], True, None, p["result"].get("exit"))
+         for p in backup_run_plans],
         _run_and_collect, jobs))
     for plan in backup_plans:
         kind = plan["kind"]
@@ -3260,7 +3271,8 @@ def _cmd_resume_locked(bench: str, dataset: str, run: str,
 
     repair_run_plans = [p for p in repair_plans if p["kind"] == "run"]
     repair_outcomes = iter(_ordered_parallel_map(
-        [(p["id"], p["project"], True, None) for p in repair_run_plans],
+        [(p["id"], p["project"], True, None, p["result"].get("exit"))
+         for p in repair_run_plans],
         _run_and_collect, jobs))
     for plan in repair_plans:
         for line in plan.get("pre_logs") or []:

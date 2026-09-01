@@ -333,6 +333,49 @@ def test_solve_never_passes_an_exit_outside_the_flow(tmp_path, monkeypatch):
     assert "--skip-phase3" not in argv, argv
 
 
+@pytest.mark.parametrize(
+    ("supplied_rtl", "entry", "exit_step", "expected_entry"),
+    [
+        (True, "D1", "2", "2"),
+        (True, "D1", "4", "2"),
+        (False, "4", "4", "4"),
+    ],
+)
+def test_resume_preserves_routed_exit_step(
+        tmp_path, supplied_rtl, entry, exit_step, expected_entry):
+    """AI re-entry changes the entry, never the router's stopping point.
+
+    This is the resume-only regression: solve already forwarded --exit-step,
+    but backup/repair rebuilt argv by hand and silently ran through LEC.
+    """
+    argv = bd._resume_solver_argv(
+        Path("runner.py"), tmp_path / "generic_proj", supplied_rtl,
+        entry, exit_step)
+    assert argv[argv.index("--entry-step") + 1] == expected_entry, argv
+    assert argv[argv.index("--exit-step") + 1] == exit_step, argv
+    assert "--skip-phase3" in argv, argv
+
+
+def test_midflow_reentry_cannot_call_the_upstream_rtl_generator_for_repair():
+    """A failed reference TB must hand supplied RTL back to AI unchanged.
+
+    Before this guard the retry loop ignored --entry-step, called rtl_gen, and
+    changed the last provenance verdict from SKIPPED-BY-ENTRY to WAIVED.  The
+    dispatcher then rejected real supplied RTL as generator scaffolding.
+    """
+    src = RUNNER.read_text(encoding="utf-8")
+    loop = src[src.index("    while True:\n", src.index(
+        "last_rtl_hash = _rtl_dir_sha256(project)")):
+        src.index("    # Step 4 acceptance is enforced inline")]
+    guard = loop.index('if _before_entry("rtl_gen", _entry_site):')
+    generator = loop.index("plan.append(step_rtl_gen(project, ic_class))")
+    assert guard < generator
+    guarded = loop[guard:generator]
+    assert '"rtl_repair_retry_iter", "SKIP"' in guarded
+    assert "candidate_owner\": \"SUPPLIED_RTL" in guarded
+    assert "break" in guarded
+
+
 # ── the runner subprocess ceiling ────────────────────────────────────────────
 def test_unset_timeout_env_keeps_the_unbounded_historical_shape(monkeypatch):
     monkeypatch.delenv("VIBEIC_SOLVE_RUNNER_TIMEOUT_S", raising=False)
