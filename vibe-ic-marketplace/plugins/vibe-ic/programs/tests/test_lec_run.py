@@ -13,6 +13,7 @@ import json
 import subprocess
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -25,6 +26,7 @@ import lec_equivalence_check as gate  # noqa: E402  (downstream consumer)
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import _progress_run as _pr  # noqa: E402
+import _docker_watchdog as _dw  # noqa: E402
 
 
 # ---------------------------------------------------------------------------
@@ -1318,16 +1320,18 @@ def test_yosys_budget_is_tunable_and_defaults_above_the_runner_observed_need():
 # through to a disclosed-skip — the enhancement runs but never lands a verdict.
 # The two were hard-coded independently (outer 1200s vs inner 1800s) and drifted.
 # ---------------------------------------------------------------------------
-def test_runner_outer_timeout_exceeds_the_producer_worst_case():
+def test_runner_outer_timeout_covers_total_budget_plus_margin():
     import design_one_shot_runner as runner
     inner = runner.lec_producer_yosys_timeout_s()
     assert inner == lec_run.DEFAULT_YOSYS_TIMEOUT_S, (
         "the runner must READ the producer's budget, not restate it")
-    # lec_run makes up to three yosys invocations (built-in gold read, slang
-    # gold read, slang -DSYNTHESIS define retry).
+    # All producer retries draw down the same total budget. The outer process
+    # gets that total once plus setup/report/reap margin—not three copies.
     src = (Path(runner.__file__).read_text()).split(
         "Step 13 — LEC (RTL ≡ handoff netlist)", 1)[1]
-    assert "3 * lec_producer_yosys_timeout_s()" in src
+    assert runner.lec_producer_outer_timeout_s() == inner + 300
+    assert "lec_producer_outer_timeout_s()" in src
+    assert "3 * lec_producer_yosys_timeout_s()" not in src
     assert "timeout=1200" not in src
 
 
@@ -1674,7 +1678,7 @@ def _drive_lec(monkeypatch, tmp_path, stub, timeout_s, spend_per_attempt=0.0):
                      clock=None):
             super().__init__(total_s, floor_s=floor_s, clock=clk)
 
-    def _fake_yosys(container, ys, timeout=None, workdir=None):
+    def _fake_yosys(container, ys, timeout=None, workdir=None, **_telemetry):
         script = Path(ys).read_text(encoding="utf-8")
         frontend = "slang" if "read_slang" in script else "verilog"
         calls.append({"budget": timeout, "frontend": frontend})
@@ -1684,6 +1688,8 @@ def _drive_lec(monkeypatch, tmp_path, stub, timeout_s, spend_per_attempt=0.0):
     monkeypatch.setattr(lec_run, "StepBudget", _ClockedBudget)
     monkeypatch.setattr(lec_run, "run_yosys_equiv", _fake_yosys)
     monkeypatch.setattr(lec_run, "_container_available", lambda c: True)
+    monkeypatch.setattr(lec_run, "_yosys_version", lambda c: None)
+    monkeypatch.setattr(lec_run, "_container_image_digest", lambda c: None)
 
     proj = tmp_path / "proj"
     (proj / "phase2/stage1/rtl").mkdir(parents=True)
@@ -1767,3 +1773,379 @@ def test_e2e_a_tight_operator_budget_still_runs_once(monkeypatch, tmp_path):
         timeout_s=5, spend_per_attempt=1.0)
     assert len(calls) == 1 and calls[0]["budget"] == 5
     assert rep["verdict"] == "PASS"
+
+
+# ---------------------------------------------------------------------------
+# ORGANIC #1972 — hash-bound PASS cache, live proof telemetry, short-cone
+# pre-proof, and one total outer budget.  These controls are deliberately
+# written so the pre-fix module can answer them with the WRONG VALUE rather
+# than dying because a newly-added symbol is absent.  That makes the red arm a
+# behavioral control suitable for control_substance_check.py.
+# ---------------------------------------------------------------------------
+def _i1972_cache_key(identity):
+    fn = getattr(lec_run, "lec_cache_key", None)
+    return fn(identity) if fn is not None else "sha256:pre-fix-no-cache-key"
+
+
+def _i1972_pass_cache_eligible(report):
+    fn = getattr(lec_run, "pass_cache_eligible", None)
+    return fn(report) if fn is not None else False
+
+
+def test_lec_short_cone_preproof_keeps_the_complete_fallback_ladder():
+    script = lec_run.build_equiv_script(
+        ["/p/gold.v"], "/p/gate.v", "top", None,
+        gate_is_generic=True)
+    required = [
+        "equiv_struct",
+        "equiv_simple -short",
+        "equiv_simple\n",
+        "equiv_induct -seq 4",
+        "equiv_induct -seq 16",
+        "equiv_induct -seq 64",
+        "equiv_status",
+    ]
+    positions = [script.find(token) for token in required]
+    assert all(pos >= 0 for pos in positions), (
+        f"short-cone plus complete fallback ladder missing: {positions}")
+    assert positions == sorted(positions), (
+        f"proof stages are not ordered short-first/full-fallback: {positions}")
+
+
+def test_lec_cache_key_changes_on_every_required_identity_axis():
+    base = {
+        "recipe_schema_version": "lec-recipe-v1",
+        "gold_rtl": [
+            {"path": "a.v", "sha256": "sha256:gold-a"},
+            {"path": "b.v", "sha256": "sha256:gold-b"},
+        ],
+        "gate_netlist": {"path": "gate.v", "sha256": "sha256:gate"},
+        "equivalence_script": {"sha256": "sha256:script"},
+        "top": "chip_top",
+        "scan": {
+            "metadata": {"sha256": "sha256:scan"},
+            "gate_wrapper": {"sha256": "sha256:gate-wrapper"},
+            "gold_wrapper": {"sha256": "sha256:gold-wrapper"},
+        },
+        "liberty": {"path": "/p/lib.lib", "sha256": "sha256:liberty"},
+        "yosys": {"version": "Yosys 0.68"},
+        "container": {"image_digest": "sha256:image"},
+    }
+    key = _i1972_cache_key(base)
+    mutations = []
+
+    def changed(path, value):
+        doc = json.loads(json.dumps(base))
+        cur = doc
+        for part in path[:-1]:
+            cur = cur[part]
+        cur[path[-1]] = value
+        mutations.append((".".join(str(p) for p in path), doc))
+
+    changed(("gold_rtl", 0, "sha256"), "sha256:gold-byte-changed")
+    changed(("gold_rtl",), list(reversed(base["gold_rtl"])))
+    changed(("gate_netlist", "sha256"), "sha256:gate-byte-changed")
+    changed(("equivalence_script", "sha256"), "sha256:script-changed")
+    changed(("top",), "other_top")
+    changed(("scan", "metadata", "sha256"), "sha256:scan-changed")
+    changed(("scan", "gate_wrapper", "sha256"), "sha256:wrapper-changed")
+    changed(("liberty", "sha256"), "sha256:liberty-changed")
+    changed(("yosys", "version"), "Yosys 0.69")
+    changed(("container", "image_digest"), "sha256:other-image")
+    changed(("recipe_schema_version",), "lec-recipe-v2")
+
+    collided = [name for name, doc in mutations
+                if _i1972_cache_key(doc) == key]
+    assert not collided, f"cache key ignored semantic identity axes: {collided}"
+
+
+def test_lec_cache_is_pass_only_and_non_vacuous():
+    proven = {
+        "verdict": "PASS", "equivalent": True, "compared_points": 9,
+        "non_equivalent_points": 0, "unproven_points": 0,
+    }
+    assert _i1972_pass_cache_eligible(proven) is True, (
+        f"a complete proven PASS was not cacheable: {proven}")
+    for field, value in (
+            ("verdict", "FAIL"), ("verdict", "TIMEOUT"),
+            ("verdict", "SKIPPED-CONDITION"),
+            ("verdict", "INCONCLUSIVE"), ("equivalent", False),
+            ("compared_points", 0), ("non_equivalent_points", 1),
+            ("unproven_points", 1)):
+        doc = dict(proven)
+        doc[field] = value
+        assert _i1972_pass_cache_eligible(doc) is False, (
+            f"non-PASS proof state became cacheable: {field}={value!r}")
+
+
+def test_lec_cache_round_trip_emits_a_fresh_use_attestation(tmp_path):
+    identity = {
+        "recipe_schema_version": "lec-recipe-v1",
+        "gold_rtl": [{"path": "a.v", "sha256": "sha256:gold"}],
+        "gate_netlist": {"path": "gate.v", "sha256": "sha256:gate"},
+        "equivalence_script": {"sha256": "sha256:script"},
+        "top": "top",
+        "scan": {"metadata": {"state": "absent"},
+                 "gate_wrapper": {"state": "absent"},
+                 "gold_wrapper": {"state": "absent"}},
+        "liberty": {"state": "unused"},
+        "yosys": {"version": "Yosys 0.68"},
+        "container": {"image_digest": "sha256:image"},
+    }
+    report = {
+        "verdict": "PASS", "equivalent": True, "compared_points": 4,
+        "non_equivalent_points": 0, "unproven_points": 0,
+        "proof_identity": identity,
+    }
+    store = getattr(lec_run, "store_pass_cache", None)
+    load = getattr(lec_run, "find_pass_cache", None)
+    if store is None or load is None:
+        hit = {"cache_use_attestation": {"hit": False}}
+    else:
+        store(tmp_path / "cache", identity, report,
+              "equiv_status: Found 4 $equiv cells in equiv:\n"
+              "  Of those cells 4 are proven and 0 are unproven.\n"
+              "  Equivalence successfully proven!\n",
+              source_proof_timestamp="2026-09-01T00:00:00+00:00")
+        hit = load(tmp_path / "cache", {lec_run.lec_cache_key(identity): identity},
+                   invocation_timestamp="2026-09-01T00:01:00+00:00")
+    att = hit["cache_use_attestation"]
+    assert att["hit"] is True, att
+    assert att["cache_key"] == _i1972_cache_key(identity)
+    assert att["source_report_sha256"].startswith("sha256:")
+    assert att["source_proof_timestamp"] == "2026-09-01T00:00:00+00:00"
+    assert att["invocation_timestamp"] == "2026-09-01T00:01:00+00:00"
+    assert att["revalidated_identity"] == identity
+
+
+def test_lec_cache_corrupt_source_report_is_a_miss(tmp_path):
+    identity = {
+        "recipe_schema_version": "lec-recipe-v1",
+        "gold_rtl": [{"path": "a.v", "sha256": "sha256:gold"}],
+        "gate_netlist": {"path": "gate.v", "sha256": "sha256:gate"},
+        "equivalence_script": {"sha256": "sha256:script"},
+        "top": "top",
+        "scan": {"metadata": {"state": "absent"},
+                 "gate_wrapper": {"state": "absent"},
+                 "gold_wrapper": {"state": "absent"}},
+        "liberty": {"state": "unused"},
+        "yosys": {"version": "Yosys 0.68"},
+        "container": {"image_digest": "sha256:image"},
+    }
+    report = {
+        "verdict": "PASS", "equivalent": True, "compared_points": 4,
+        "non_equivalent_points": 0, "unproven_points": 0,
+        "proof_identity": identity,
+    }
+    manifest = lec_run.store_pass_cache(
+        tmp_path / "cache", identity, report,
+        "equiv_status: Found 4 $equiv cells in equiv:\n"
+        "  Of those cells 4 are proven and 0 are unproven.\n"
+        "  Equivalence successfully proven!\n")
+    assert manifest is not None
+    manifest.with_name("source_report.json").write_text(
+        "{\"verdict\": \"PASS\", \"tampered\": true}\n", encoding="utf-8")
+    assert lec_run.find_pass_cache(
+        tmp_path / "cache", {lec_run.lec_cache_key(identity): identity}) is None
+
+
+def test_lec_cache_refuses_an_old_entry_with_any_missing_fingerprint():
+    complete = {
+        "recipe_schema_version": "v1",
+        "gold_rtl": [{"path": "a.v", "sha256": "sha256:g"}],
+        "gate_netlist": {"path": "g.v", "sha256": "sha256:n"},
+        "equivalence_script": {"sha256": "sha256:s"},
+        "top": "top",
+        "scan": {"metadata": {"state": "absent"},
+                 "gate_wrapper": {"state": "absent"},
+                 "gold_wrapper": {"state": "absent"}},
+        "liberty": {"state": "unused"},
+        "yosys": {"version": "Yosys 0.68"},
+        "container": {"image_digest": "sha256:i"},
+    }
+    check = getattr(lec_run, "proof_identity_complete", lambda _d: False)
+    assert check(complete) is True, f"complete identity rejected: {complete}"
+    for missing in ("recipe_schema_version", "gold_rtl", "gate_netlist",
+                    "equivalence_script", "top", "scan", "liberty",
+                    "yosys", "container"):
+        old = dict(complete)
+        old.pop(missing)
+        assert check(old) is False, f"old entry missing {missing} was reusable"
+
+
+def test_lec_telemetry_stage_recognises_short_full_and_induction_ladder():
+    stage = getattr(lec_run, "lec_stage_from_output", lambda _s: "unknown")
+    assert stage("Executing EQUIV_STRUCT pass.") == "equiv_struct"
+    assert stage("Executing EQUIV_SIMPLE pass.\n") == "equiv_simple_short"
+    assert stage("Executing EQUIV_SIMPLE pass.\n" * 2) == "equiv_simple_full"
+    assert stage("Executing EQUIV_SIMPLE pass.\n" * 2
+                 + "Executing EQUIV_INDUCT pass.\n") == "equiv_induct_seq4"
+    assert stage("Executing EQUIV_SIMPLE pass.\n" * 2
+                 + "Executing EQUIV_INDUCT pass.\n" * 3) \
+        == "equiv_induct_seq64"
+
+
+def test_lec_final_report_hash_binds_the_telemetry_sidecar(tmp_path):
+    sidecar = tmp_path / "lec.telemetry.invocation.json"
+    sidecar.write_text(json.dumps({
+        "invocation_id": "inv-1", "status": "complete",
+        "samples": [{"elapsed_sec": 1.0, "cpu_seconds": 0.9,
+                     "rss_kib": 10, "peak_rss_kib": 10, "threads": 1,
+                     "current_pass": "equiv_simple_short"}],
+    }), encoding="utf-8")
+    attach = getattr(lec_run, "attach_telemetry", None)
+    report = {"verdict": "PASS", "equivalent": True}
+    if attach is not None:
+        report = attach(report, sidecar, tmp_path)
+    bound = report.get("telemetry", {})
+    assert bound.get("sha256", "").startswith("sha256:"), bound
+    assert bound.get("record", {}).get("samples", [])[0]["threads"] == 1
+
+
+def test_lec_telemetry_aggregates_the_identity_anchored_process_tree():
+    ps = ("10 1 3 100 2 yosys -s /p/lec.ys\n"
+          "11 10 4 200 3 yosys-abc\n"
+          "12 11 5 300 4 sat-worker\n"
+          "99 1 100 9000 20 yosys -s /other/job.ys\n")
+    got = _dw._process_tree_metrics_from_ps(ps, "/p/lec.ys", root=10)
+    assert got == {
+        "root_pid": 10, "process_count": 3, "cpu_seconds": 12.0,
+        "rss_kib": 600, "threads": 9,
+    }
+
+
+def test_lec_telemetry_sidecar_is_live_then_finalized(monkeypatch, tmp_path):
+    log = tmp_path / "lec.live.inv.rpt"
+    sidecar = tmp_path / "lec.telemetry.inv.json"
+    log.write_text("Executing EQUIV_SIMPLE pass.\n", encoding="utf-8")
+
+    def raw(_container, cmd, timeout=15):
+        if "VIBEIC_JOBPID" in cmd:
+            return 0, "VIBEIC_JOBPID 10\n", ""
+        if "cputimes=,rss=,nlwp=" in cmd:
+            return 0, "10 1 2 123 4 yosys -s /p/lec.ys\n", ""
+        return 0, "", ""
+
+    def supervised(_argv, **kwargs):
+        kwargs["cpu_probe"](None)
+        running = json.loads(sidecar.read_text(encoding="utf-8"))
+        assert running["status"] == "running"
+        assert running["latest"]["current_pass"] == "equiv_simple_short"
+        return SimpleNamespace(rc=0, out="Yosys done\n", err="")
+
+    monkeypatch.setattr(_dw._wd, "run_supervised", supervised)
+    rc, _out, _err = _dw.run_docker_supervised(
+        "vibeic-eda", "yosys -s /p/lec.ys", "/p/lec.ys",
+        docker_exec_raw=raw, log_path=log, telemetry_path=sidecar,
+        telemetry_stage_probe=lec_run.lec_stage_from_output,
+        telemetry_context={"invocation_id": "inv", "attempt": 1},
+        hard_ceiling_s=50)
+    final = json.loads(sidecar.read_text(encoding="utf-8"))
+    assert rc == 0 and final["status"] == "complete"
+    assert final["latest"]["cpu_seconds"] == 2.0
+    assert final["latest"]["rss_kib"] == 123
+    assert final["peak_rss_kib"] == 123
+    assert final["latest"]["threads"] == 4
+
+
+def test_lec_telemetry_elapsed_and_attempt_ids_accumulate_across_retries(
+        monkeypatch, tmp_path):
+    log = tmp_path / "lec.live.inv.rpt"
+    sidecar = tmp_path / "lec.telemetry.inv.json"
+    log.write_text("Executing EQUIV_STRUCT pass.\n", encoding="utf-8")
+
+    class Clock:
+        now = 0.0
+        def __call__(self):
+            return self.now
+
+    clock = Clock()
+    durations = iter((2.0, 3.0))
+
+    def raw(_container, cmd, timeout=15):
+        if "VIBEIC_JOBPID" in cmd:
+            return 0, "VIBEIC_JOBPID 10\n", ""
+        if "cputimes=,rss=,nlwp=" in cmd:
+            return 0, "10 1 2 123 4 yosys -s /p/lec.ys\n", ""
+        return 0, "", ""
+
+    def supervised(_argv, **kwargs):
+        kwargs["cpu_probe"](None)
+        clock.now += next(durations)
+        return SimpleNamespace(rc=0, out="Yosys done\n", err="")
+
+    monkeypatch.setattr(_dw.time, "monotonic", clock)
+    monkeypatch.setattr(_dw._wd, "run_supervised", supervised)
+    for attempt in (1, 2):
+        _dw.run_docker_supervised(
+            "vibeic-eda", "yosys -s /p/lec.ys", "/p/lec.ys",
+            docker_exec_raw=raw, log_path=log, telemetry_path=sidecar,
+            telemetry_stage_probe=lec_run.lec_stage_from_output,
+            telemetry_context={"invocation_id": "inv", "attempt": attempt},
+            hard_ceiling_s=50)
+
+    final = json.loads(sidecar.read_text(encoding="utf-8"))
+    assert final["elapsed_sec"] == 5.0
+    assert [a["elapsed_sec"] for a in final["attempts"]] == [2.0, 3.0]
+    assert [s["attempt"] for s in final["samples"]] == [1, 2]
+    assert [s["elapsed_sec"] for s in final["samples"]] == [0.0, 2.0]
+
+
+def test_lec_cli_describes_timeout_as_one_total_step_budget():
+    run = subprocess.run(
+        [sys.executable, str(SCRIPT), "--help"], capture_output=True,
+        text=True, check=True)
+    line = next((ln.strip() for ln in run.stdout.splitlines()
+                 if "--timeout" in ln or "TOTAL" in ln), "")
+    help_text = run.stdout.lower()
+    assert "total" in help_text and "step" in help_text and "budget" in help_text, (
+        f"--timeout help still describes the wrong scope: {line!r}")
+
+
+def test_lec_runner_outer_backstop_is_total_budget_plus_setup_reap_margin():
+    runner = SCRIPT.with_name("design_one_shot_runner.py")
+    body = runner.read_text(encoding="utf-8")
+    old = "3 * lec_producer_yosys_timeout_s() + 300"
+    assert old not in body, (
+        f"runner still grants three full LEC budgets instead of one: {old}")
+    assert "lec_producer_outer_timeout_s()" in body, (
+        "runner does not derive its backstop from total budget + one margin")
+
+
+def test_lec_cache_second_identical_invocation_launches_no_yosys(monkeypatch,
+                                                                  tmp_path):
+    calls = []
+
+    def fake_yosys(_container, _ys, **_kwargs):
+        calls.append("yosys")
+        return True, _E2E_PASS
+
+    monkeypatch.setattr(lec_run, "run_yosys_equiv", fake_yosys)
+    monkeypatch.setattr(lec_run, "_container_available", lambda _c: True)
+    monkeypatch.setattr(lec_run, "_container_file_exists", lambda *_a: False)
+    monkeypatch.setattr(lec_run, "_yosys_version", lambda _c: "Yosys 0.68")
+    monkeypatch.setattr(lec_run, "_container_image_digest",
+                        lambda _c: "sha256:image-id")
+
+    project = tmp_path / "project"
+    (project / "phase2/stage1/rtl").mkdir(parents=True)
+    (project / "phase2/stage2/synth").mkdir(parents=True)
+    (project / "phase2/stage1/rtl/m.v").write_text(
+        _E2E_RTL, encoding="utf-8")
+    (project / "phase2/stage2/synth/netlist.v").write_text(
+        _E2E_GATE, encoding="utf-8")
+    argv = [str(project), "--top", "m", "--container", "fake",
+            "--liberty", "/missing"]
+
+    assert lec_run.main(argv) == 0
+    first = json.loads((project / "reports/lec.json").read_text())
+    assert len(calls) == 1 and first["cache"]["hit"] is False
+    assert lec_run.main(argv) == 0
+    second = json.loads((project / "reports/lec.json").read_text())
+    assert len(calls) == 1, "the cache hit relaunched Yosys"
+    assert second["cache"]["hit"] is True
+    assert second["execution_mode"] == "exact-pass-cache-hit"
+    att = second["cache_use_attestation"]
+    assert att["revalidated_identity"] == first["proof_identity"]
+    assert att["source_report_sha256"].startswith("sha256:")
+    assert att["source_proof_timestamp"] == first["source_proof_timestamp"]

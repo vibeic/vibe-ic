@@ -49,15 +49,19 @@ parsing. The only cell names referenced are the PDK's own documented cells.
 from __future__ import annotations
 
 import argparse
+import copy
+import hashlib
 import json
 import os
 import re
+import secrets
 import shlex
 import subprocess
 import sys
 import time
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from _rtl_include_hub import (  # noqa: E402
@@ -103,6 +107,265 @@ def _env_yosys_timeout_default() -> int:
 DEFAULT_YOSYS_TIMEOUT_S = _env_yosys_timeout_default()
 DEFAULT_JSON_REL = "reports/lec.json"
 DEFAULT_RPT_REL = "reports/lec.rpt"
+LEC_RECIPE_SCHEMA_VERSION = "vibeic.lec.recipe.v2-short-first"
+LEC_PASS_CACHE_SCHEMA_VERSION = "vibeic.lec.pass-cache.v1"
+LEC_TELEMETRY_SCHEMA_VERSION = "vibeic.lec.telemetry.v1"
+DEFAULT_CACHE_REL = "reports/lec_pass_cache"
+
+
+def _utc_now() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _sha256_bytes(data: bytes) -> str:
+    return "sha256:" + hashlib.sha256(data).hexdigest()
+
+
+def _sha256_file(path: Path) -> str:
+    return _sha256_bytes(path.read_bytes())
+
+
+def _canonical_json_bytes(value: Any) -> bytes:
+    return json.dumps(value, sort_keys=True, separators=(",", ":"),
+                      ensure_ascii=False).encode("utf-8")
+
+
+def _atomic_write_bytes(path: Path, data: bytes) -> None:
+    """Publish one complete file; a killed writer cannot leave a cache hit."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(f".{path.name}.{secrets.token_hex(8)}.tmp")
+    try:
+        tmp.write_bytes(data)
+        os.replace(tmp, path)
+    finally:
+        try:
+            tmp.unlink()
+        except FileNotFoundError:
+            pass
+
+
+def _atomic_write_json(path: Path, value: Any) -> None:
+    _atomic_write_bytes(
+        path,
+        (json.dumps(value, indent=2, ensure_ascii=False) + "\n").encode("utf-8"))
+
+
+def lec_cache_key(identity: Dict) -> str:
+    """Content-address one exact proof identity (pure and order-sensitive)."""
+    return _sha256_bytes(_canonical_json_bytes(identity))
+
+
+def _has_fingerprint(value: Any) -> bool:
+    """A required artefact is either hash-bound or explicitly not in use."""
+    return (isinstance(value, dict)
+            and ((isinstance(value.get("sha256"), str)
+                  and value["sha256"].startswith("sha256:")
+                  and len(value["sha256"]) > len("sha256:"))
+                 or value.get("state") in ("absent", "unused")))
+
+
+def proof_identity_complete(identity: Any) -> bool:
+    """Old/partial cache formats are misses, never optimistically upgraded."""
+    if not isinstance(identity, dict):
+        return False
+    if not isinstance(identity.get("recipe_schema_version"), str):
+        return False
+    if not isinstance(identity.get("top"), str) or not identity["top"]:
+        return False
+    gold = identity.get("gold_rtl")
+    if not isinstance(gold, list) or not gold or not all(
+            isinstance(x, dict) and isinstance(x.get("path"), str)
+            and _has_fingerprint(x) for x in gold):
+        return False
+    if not _has_fingerprint(identity.get("gate_netlist")):
+        return False
+    if not _has_fingerprint(identity.get("equivalence_script")):
+        return False
+    scan = identity.get("scan")
+    if not isinstance(scan, dict) or not all(
+            _has_fingerprint(scan.get(k))
+            for k in ("metadata", "gate_wrapper", "gold_wrapper")):
+        return False
+    if not _has_fingerprint(identity.get("liberty")):
+        return False
+    yosys = identity.get("yosys")
+    image = identity.get("container")
+    return bool(isinstance(yosys, dict) and yosys.get("version")
+                and isinstance(image, dict) and image.get("image_digest"))
+
+
+def pass_cache_eligible(report: Any) -> bool:
+    """Only a completed, non-vacuous proof may seed/reuse the PASS cache."""
+    return bool(
+        isinstance(report, dict)
+        and report.get("verdict") == "PASS"
+        and report.get("equivalent") is True
+        and isinstance(report.get("compared_points"), int)
+        and report["compared_points"] > 0
+        and report.get("non_equivalent_points") == 0
+        and report.get("unproven_points") == 0
+        and not report.get("inconclusive")
+        and not report.get("parse_error")
+        and not report.get("budget_exhausted")
+        and not report.get("progress_stalled"))
+
+
+def _raw_rpt_matches_pass(report: Dict, raw_rpt: str) -> bool:
+    """Require the cached raw Yosys evidence to corroborate the JSON PASS."""
+    parsed = parse_equiv_output(raw_rpt)
+    return bool(parsed.get("verdict") == "PASS"
+                and parsed.get("equivalent") is True
+                and parsed.get("success_line") is True
+                and parsed.get("proven") == report.get("compared_points")
+                and parsed.get("unproven") == 0)
+
+
+def store_pass_cache(cache_dir: Path, identity: Dict, report: Dict,
+                     raw_rpt: str, *,
+                     source_proof_timestamp: Optional[str] = None
+                     ) -> Optional[Path]:
+    """Atomically publish a complete PASS entry; every other state is ignored."""
+    cache_dir = Path(cache_dir)
+    if (not proof_identity_complete(identity)
+            or not pass_cache_eligible(report)
+            or not _raw_rpt_matches_pass(report, raw_rpt)):
+        return None
+    if report.get("proof_identity") != identity:
+        return None
+    key = lec_cache_key(identity)
+    entry_dir = cache_dir / key.split(":", 1)[1]
+    report_bytes = (json.dumps(report, indent=2, ensure_ascii=False)
+                    + "\n").encode("utf-8")
+    rpt_bytes = raw_rpt.encode("utf-8")
+    _atomic_write_bytes(entry_dir / "source_report.json", report_bytes)
+    _atomic_write_bytes(entry_dir / "source_lec.rpt", rpt_bytes)
+    manifest = {
+        "schema_version": LEC_PASS_CACHE_SCHEMA_VERSION,
+        "cache_key": key,
+        "proof_identity": identity,
+        "source_proof_timestamp": source_proof_timestamp or _utc_now(),
+        "source_report": {
+            "path": "source_report.json",
+            "sha256": _sha256_bytes(report_bytes),
+        },
+        "source_rpt": {
+            "path": "source_lec.rpt",
+            "sha256": _sha256_bytes(rpt_bytes),
+        },
+    }
+    # Manifest last is the commit point. A partial directory cannot hit.
+    _atomic_write_json(entry_dir / "entry.json", manifest)
+    return entry_dir / "entry.json"
+
+
+def find_pass_cache(cache_dir: Path, identities: Dict[str, Dict], *,
+                    invocation_timestamp: Optional[str] = None
+                    ) -> Optional[Dict]:
+    """Return a revalidated PASS plus a fresh invocation attestation."""
+    cache_dir = Path(cache_dir)
+    for key, current_identity in identities.items():
+        if key != lec_cache_key(current_identity):
+            continue
+        if not proof_identity_complete(current_identity):
+            continue
+        entry_dir = cache_dir / key.split(":", 1)[-1]
+        try:
+            manifest = json.loads((entry_dir / "entry.json").read_text())
+            source_report_meta = manifest["source_report"]
+            source_rpt_meta = manifest["source_rpt"]
+            if (not isinstance(source_report_meta, dict)
+                    or source_report_meta.get("path") != "source_report.json"
+                    or not isinstance(source_rpt_meta, dict)
+                    or source_rpt_meta.get("path") != "source_lec.rpt"):
+                continue
+            report_bytes = (entry_dir / "source_report.json").read_bytes()
+            rpt_bytes = (entry_dir / "source_lec.rpt").read_bytes()
+            source_report = json.loads(report_bytes)
+        except (OSError, ValueError, KeyError, TypeError):
+            continue
+        if (manifest.get("schema_version") != LEC_PASS_CACHE_SCHEMA_VERSION
+                or manifest.get("cache_key") != key
+                or manifest.get("proof_identity") != current_identity
+                or source_report.get("proof_identity") != current_identity
+                or source_report_meta.get("sha256")
+                    != _sha256_bytes(report_bytes)
+                or source_rpt_meta.get("sha256")
+                    != _sha256_bytes(rpt_bytes)
+                or not pass_cache_eligible(source_report)
+                or not isinstance(manifest.get("source_proof_timestamp"), str)
+                or not manifest["source_proof_timestamp"]
+                or not _raw_rpt_matches_pass(
+                    source_report, rpt_bytes.decode("utf-8", "replace"))):
+            continue
+        hit = copy.deepcopy(source_report)
+        hit["cache_use_attestation"] = {
+            "hit": True,
+            "cache_key": key,
+            "source_report_sha256": _sha256_bytes(report_bytes),
+            "source_rpt_sha256": _sha256_bytes(rpt_bytes),
+            "source_proof_timestamp": manifest.get("source_proof_timestamp"),
+            "invocation_timestamp": invocation_timestamp or _utc_now(),
+            "revalidated_identity": copy.deepcopy(current_identity),
+        }
+        # Internal transport only; main removes it before writing lec.json.
+        hit["_cache_source_rpt"] = rpt_bytes.decode("utf-8", "replace")
+        return hit
+    return None
+
+
+def lec_stage_from_output(raw: str) -> str:
+    """Best-effort live Yosys stage; evidence only, never a verdict input."""
+    upper = raw.upper()
+    inducts = upper.count("EXECUTING EQUIV_INDUCT PASS")
+    if inducts:
+        return ("equiv_induct_seq4", "equiv_induct_seq16",
+                "equiv_induct_seq64")[min(inducts, 3) - 1]
+    simples = upper.count("EXECUTING EQUIV_SIMPLE PASS")
+    if simples >= 2:
+        return "equiv_simple_full"
+    if simples == 1:
+        return "equiv_simple_short"
+    if "EXECUTING EQUIV_STRUCT PASS" in upper:
+        return "equiv_struct"
+    if "EXECUTING EQUIV_MAKE PASS" in upper:
+        return "equiv_make"
+    return "setup"
+
+
+def attach_telemetry(report: Dict, sidecar: Path, project: Path) -> Dict:
+    """Hash-bind the exact telemetry bytes into the final verdict report."""
+    try:
+        data = Path(sidecar).read_bytes()
+        record = json.loads(data)
+    except (OSError, ValueError) as exc:
+        report["telemetry"] = {
+            "available": False,
+            "reason": f"telemetry sidecar unavailable: {exc}",
+        }
+        return report
+    try:
+        rel = str(Path(sidecar).resolve().relative_to(Path(project).resolve()))
+    except ValueError:
+        rel = str(Path(sidecar).resolve())
+    report["telemetry"] = {
+        "available": True,
+        "path": rel,
+        "sha256": _sha256_bytes(data),
+        "record": record,
+    }
+    return report
+
+
+def _finish_telemetry_sidecar(sidecar: Path, status: str, **extra: Any) -> None:
+    try:
+        doc = json.loads(Path(sidecar).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        doc = {"schema_version": LEC_TELEMETRY_SCHEMA_VERSION,
+               "samples": [], "attempts": []}
+    doc["status"] = status
+    doc["finished_timestamp"] = _utc_now()
+    doc.update(extra)
+    _atomic_write_json(Path(sidecar), doc)
 
 # ---------------------------------------------------------------------------
 # Yosys equiv_status output parser (PURE — the tests call this directly).
@@ -1329,7 +1592,10 @@ def _docker_exec_raw(container: str, cmd: str, timeout: int = 120):
 
 
 def _docker(container: str, cmd: str, timeout: int = 120,
-            marker: Optional[str] = None):
+            marker: Optional[str] = None, *,
+            log_path: Optional[Path] = None,
+            telemetry_path: Optional[Path] = None,
+            telemetry_context: Optional[Dict] = None):
     """Run `cmd` in the container under a bounded budget.
 
     The command carries its OWN container-side deadline a few seconds before
@@ -1356,6 +1622,10 @@ def _docker(container: str, cmd: str, timeout: int = 120,
         rc, out, err = _dw.run_docker_supervised(
             container, cmd, marker,
             docker_exec_raw=_docker_exec_raw,
+            log_path=log_path,
+            telemetry_path=telemetry_path,
+            telemetry_stage_probe=lec_stage_from_output,
+            telemetry_context=telemetry_context,
             # The producer's declared attempt budget is the absolute backstop.
             # wrap_with_container_timeout fires five seconds earlier, normally
             # returning GNU timeout's rc=124/137 for the existing classifier.
@@ -1398,6 +1668,80 @@ def _container_file_exists(container: str, path: str) -> bool:
         return r.returncode == 0
     except (subprocess.SubprocessError, OSError):
         return False
+
+
+def _container_file_sha256(container: str, path: str) -> Optional[str]:
+    """Hash a container-only input; absence disables cache, never the proof."""
+    rc, out, _ = _docker_exec_raw(
+        container, f"sha256sum -- {shlex.quote(path)} 2>/dev/null", timeout=60)
+    token = (out or "").strip().split()
+    if rc == 0 and token and re.fullmatch(r"[0-9a-fA-F]{64}", token[0]):
+        return "sha256:" + token[0].lower()
+    return None
+
+
+def _yosys_version(container: str) -> Optional[str]:
+    rc, out, _ = _docker_exec_raw(container, "yosys -V 2>/dev/null", timeout=60)
+    value = _strip_login_banner(out or "").strip().splitlines()
+    return value[-1].strip() if rc == 0 and value else None
+
+
+def _container_image_digest(container: str) -> Optional[str]:
+    if container in ("", "host"):
+        return None
+    try:
+        r = subprocess.run(
+            ["docker", "inspect", "--format", "{{.Image}}", container],
+            capture_output=True, text=True, timeout=60)
+    except (subprocess.SubprocessError, OSError):
+        return None
+    digest = (r.stdout or "").strip()
+    return digest if r.returncode == 0 and digest else None
+
+
+def _path_fingerprint(path: Optional[str], project: Path, *,
+                      absent_state: str = "absent") -> Dict:
+    if not path:
+        return {"state": absent_state}
+    p = Path(path).resolve()
+    try:
+        label = str(p.relative_to(project.resolve()))
+    except ValueError:
+        label = str(p)
+    try:
+        return {"path": label, "sha256": _sha256_file(p)}
+    except OSError:
+        return {"path": label, "state": "unreadable"}
+
+
+def build_proof_identity(*, project: Path, gold_files: List[str],
+                         gate_netlist: str, script: str, top: str,
+                         scan_meta: Optional[str], gate_wrapper: str,
+                         gold_wrapper: str, liberty: Optional[str],
+                         liberty_sha256: Optional[str], yosys_version: Optional[str],
+                         image_digest: Optional[str]) -> Dict:
+    """Build the exact semantic/tool identity a cached proof attests to."""
+    liberty_id = ({"path": liberty, "sha256": liberty_sha256}
+                  if liberty and liberty_sha256
+                  else ({"state": "unused"} if not liberty
+                        else {"path": liberty, "state": "unreadable"}))
+    return {
+        "recipe_schema_version": LEC_RECIPE_SCHEMA_VERSION,
+        # List order is intentionally preserved: frontend compilation order is
+        # semantic for macros/packages, so sorting here would weaken the key.
+        "gold_rtl": [_path_fingerprint(p, project) for p in gold_files],
+        "gate_netlist": _path_fingerprint(gate_netlist, project),
+        "equivalence_script": {"sha256": _sha256_bytes(script.encode("utf-8"))},
+        "top": top,
+        "scan": {
+            "metadata": _path_fingerprint(scan_meta, project),
+            "gate_wrapper": _path_fingerprint(gate_wrapper, project),
+            "gold_wrapper": _path_fingerprint(gold_wrapper, project),
+        },
+        "liberty": liberty_id,
+        "yosys": {"version": yosys_version},
+        "container": {"image_digest": image_digest},
+    }
 
 
 
@@ -1742,6 +2086,11 @@ def build_equiv_script(gold_files: List[str], gate_netlist: str, top: str,
         # the set they must decide (measured 31 850 -> 3 333, a 10x cut). This is
         # the same pre-pass yosys's own `equiv_opt` runs. chip/PDK-AGNOSTIC.
         f"equiv_struct\n"
+        # Cheap bounded cone proof first. This can discharge local points
+        # quickly, but is never treated as a complete result: every survivor
+        # still flows into the original full simple pass and 4/16/64 induction
+        # ladder below. Soundness therefore remains exactly the full recipe's.
+        f"equiv_simple -short\n"
         f"equiv_simple\n"
         f"equiv_induct -seq 4\n"
         f"equiv_induct -seq 16\n"
@@ -1881,7 +2230,10 @@ def annotate_step_budget(report: Dict, budget: "StepBudget") -> Dict:
 
 def run_yosys_equiv(container: str, ys_path_in_container: str,
                     timeout: int = DEFAULT_YOSYS_TIMEOUT_S,
-                    workdir: Optional[str] = None):
+                    workdir: Optional[str] = None, *,
+                    live_log_path: Optional[Path] = None,
+                    telemetry_path: Optional[Path] = None,
+                    telemetry_context: Optional[Dict] = None):
     """Run `yosys -s <ys>` in the container. Returns (launched, raw_output).
 
     launched=False means Docker/Yosys could not run at all (the caller then
@@ -1901,17 +2253,26 @@ def run_yosys_equiv(container: str, ys_path_in_container: str,
     design that was never compared. Passing None preserves the previous
     behaviour exactly."""
     cmd = f"yosys -s {shlex.quote(ys_path_in_container)} 2>&1"
+    if live_log_path is not None:
+        # pipefail preserves Yosys's status while tee makes the proof visible
+        # during long quiet-ish passes. The path is per invocation, so two LEC
+        # jobs never append into one another's evidence.
+        cmd = ("set -o pipefail; " + cmd + " | tee -a "
+               + shlex.quote(str(Path(live_log_path).resolve())))
     if workdir:
         cmd = f"cd {shlex.quote(workdir)} && " + cmd
     try:
+        _extra = {}
+        if live_log_path is not None or telemetry_path is not None:
+            _extra.update(log_path=live_log_path,
+                          telemetry_path=telemetry_path,
+                          telemetry_context=telemetry_context)
         r = _docker(
-            container,
-            cmd,
-            timeout=timeout,
+            container, cmd, timeout=timeout,
             # Present in `yosys -s <path>` and therefore usable during the
             # tiny pre-stamp race; after the stamp lands, supervision is by
             # exact (pid, /proc starttime) identity and its descendants.
-            marker=ys_path_in_container)
+            marker=ys_path_in_container, **_extra)
     except subprocess.TimeoutExpired as exc:
         out = exc.stdout or ""
         if isinstance(out, bytes):
@@ -2355,7 +2716,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     ap.add_argument("--liberty", default=DEFAULT_LIBERTY,
                     help="Absolute .lib path INSIDE the container")
     ap.add_argument("--timeout", type=int, default=DEFAULT_YOSYS_TIMEOUT_S,
-                    help="Per-yosys-invocation budget in seconds "
+                    help="One TOTAL LEC step wall-clock budget in seconds, "
+                         "shared by all frontend/define retries "
                          f"(default {DEFAULT_YOSYS_TIMEOUT_S})")
     ap.add_argument("--json", default=DEFAULT_JSON_REL,
                     help="Output JSON path, relative to project")
@@ -2381,6 +2743,20 @@ def main(argv: Optional[List[str]] = None) -> int:
     rpt_out = project / DEFAULT_RPT_REL
     json_out.parent.mkdir(parents=True, exist_ok=True)
     rpt_out.parent.mkdir(parents=True, exist_ok=True)
+    invocation_timestamp = _utc_now()
+    invocation_id = (datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S")
+                     + "-" + secrets.token_hex(6))
+    live_log_path = rpt_out.parent / f"lec.live.{invocation_id}.rpt"
+    telemetry_path = rpt_out.parent / f"lec.telemetry.{invocation_id}.json"
+    _atomic_write_bytes(live_log_path, b"")
+    _atomic_write_json(telemetry_path, {
+        "schema_version": LEC_TELEMETRY_SCHEMA_VERSION,
+        "invocation_id": invocation_id,
+        "invocation_timestamp": invocation_timestamp,
+        "status": "setup",
+        "samples": [],
+        "attempts": [],
+    })
 
     gold_dir = project / args.gold_rtl_dir
     gate_netlist = project / args.gate_netlist
@@ -2461,8 +2837,11 @@ def main(argv: Optional[List[str]] = None) -> int:
         rpt_out.write_text(
             f"[lec_run] {top_note}\nLEC not run; honest SKIPPED-CONDITION.\n",
             encoding="utf-8")
-        json_out.write_text(json.dumps(report, indent=2, ensure_ascii=False),
-                            encoding="utf-8")
+        _finish_telemetry_sidecar(
+            telemetry_path, "not_run", verdict=report["verdict"],
+            equivalent=report["equivalent"], current_pass="setup")
+        report = attach_telemetry(report, telemetry_path, project)
+        _atomic_write_json(json_out, report)
         print(f"[lec_run] SKIPPED-CONDITION → {json_out}")
         return 0
 
@@ -2535,8 +2914,10 @@ def main(argv: Optional[List[str]] = None) -> int:
     scan_record: Dict = {"requested": bool(args.scan_meta), "applied": False,
                          "reason": "no --scan-meta given"}
     gate_wrapper_v = gold_wrapper_v = ""
+    scan_meta_abs = ""
     if args.scan_meta:
         meta_path = project / args.scan_meta
+        scan_meta_abs = str(meta_path.resolve())
         try:
             _meta = json.loads(meta_path.read_text(encoding="utf-8"))
         except (OSError, ValueError) as exc:
@@ -2599,18 +2980,102 @@ def main(argv: Optional[List[str]] = None) -> int:
         print(f"[lec_run] scan functional-mode NOT applied: "
               f"{scan_record['reason']}", file=sys.stderr)
 
+    # Cache identity includes tool/runtime bytes as well as design bytes. A
+    # failed fingerprint probe disables reuse but does not block a fresh proof.
+    runtime_yosys_version = _yosys_version(container)
+    runtime_image_digest = _container_image_digest(container)
+    runtime_liberty_sha256 = (
+        _container_file_sha256(container, liberty) if liberty else None)
+    cache_dir = project / DEFAULT_CACHE_REL
+    cache_hit_report: Optional[Dict] = None
+    final_proof_identity: Optional[Dict] = None
+
+    def _telemetry_finish(status: str, **extra: Any) -> None:
+        _finish_telemetry_sidecar(telemetry_path, status, **extra)
+
+    def _make_script(frontend: str, slang_prefix: str,
+                     defines: str) -> str:
+        return build_equiv_script(
+            gold_files, gate_abs, resolved_top, liberty,
+            blackbox_v=macro_blackbox_v or None,
+            gate_is_generic=gate_is_generic,
+            gold_frontend=frontend, slang_prefix=slang_prefix,
+            gold_defines=defines, scan_mode=scan_mode,
+            gate_wrapper_v=gate_wrapper_v,
+            gold_wrapper_v=gold_wrapper_v)
+
+    def _identity_for(script: str, frontend: str, defines: str,
+                      slang_prefix: str) -> Dict:
+        identity = build_proof_identity(
+            project=project, gold_files=gold_files, gate_netlist=gate_abs,
+            script=script, top=resolved_top,
+            scan_meta=scan_meta_abs or None,
+            gate_wrapper=gate_wrapper_v, gold_wrapper=gold_wrapper_v,
+            liberty=liberty, liberty_sha256=runtime_liberty_sha256,
+            yosys_version=runtime_yosys_version,
+            image_digest=runtime_image_digest)
+        # These are already transitively covered by script_sha256, but naming
+        # them makes the attestation reviewable without reverse-engineering .ys.
+        identity["gold_frontend"] = frontend
+        identity["gold_defines"] = defines if frontend == "slang" else None
+        identity["slang_load_prefix"] = slang_prefix if frontend == "slang" else None
+        return identity
+
+    # Preflight every recipe the deterministic retry ladder could select. This
+    # is what lets a second invocation reuse a prior slang PASS without first
+    # rerunning—and failing—the built-in Verilog frontend. Both valid slang
+    # load forms are generated locally; no Yosys capability probe is needed.
+    _candidate_identities: Dict[str, Dict] = {}
+    for _fe, _prefix, _defs in (
+            ("verilog", "", "-DSIMULATION -DYOSYS"),
+            ("slang", "", "-DSIMULATION -DYOSYS"),
+            ("slang", "plugin -i slang", "-DSIMULATION -DYOSYS"),
+            ("slang", "", "-DSYNTHESIS -DYOSYS"),
+            ("slang", "plugin -i slang", "-DSYNTHESIS -DYOSYS")):
+        _candidate_script = _make_script(_fe, _prefix, _defs)
+        _candidate_identity = _identity_for(
+            _candidate_script, _fe, _defs, _prefix)
+        if proof_identity_complete(_candidate_identity):
+            _candidate_identities[lec_cache_key(_candidate_identity)] = \
+                _candidate_identity
+    if _candidate_identities:
+        cache_hit_report = find_pass_cache(
+            cache_dir, _candidate_identities,
+            invocation_timestamp=invocation_timestamp)
+        if cache_hit_report is not None:
+            final_proof_identity = cache_hit_report[
+                "cache_use_attestation"]["revalidated_identity"]
+            _telemetry_finish(
+                "cache_hit",
+                cache_key=cache_hit_report["cache_use_attestation"]["cache_key"],
+                current_pass="cache_hit",
+                revalidated_identity=final_proof_identity)
+            print("[lec_run] exact PASS cache HIT "
+                  f"{cache_hit_report['cache_use_attestation']['cache_key']} "
+                  "— Yosys not launched; source proof and current identity "
+                  "revalidated.", file=sys.stderr)
+
     def _run(frontend: str, slang_prefix: str = "",
              defines: str = "-DSIMULATION -DYOSYS"):
-        script = build_equiv_script(gold_files, gate_abs, resolved_top, liberty,
-                                    blackbox_v=macro_blackbox_v or None,
-                                    gate_is_generic=gate_is_generic,
-                                    gold_frontend=frontend,
-                                    slang_prefix=slang_prefix,
-                                    gold_defines=defines,
-                                    scan_mode=scan_mode,
-                                    gate_wrapper_v=gate_wrapper_v,
-                                    gold_wrapper_v=gold_wrapper_v)
+        nonlocal cache_hit_report, final_proof_identity
+        script = _make_script(frontend, slang_prefix, defines)
         ys_host.write_text(script, encoding="utf-8")
+        final_proof_identity = _identity_for(
+            script, frontend, defines, slang_prefix)
+        if proof_identity_complete(final_proof_identity):
+            _key = lec_cache_key(final_proof_identity)
+            _hit = find_pass_cache(
+                cache_dir, {_key: final_proof_identity},
+                invocation_timestamp=invocation_timestamp)
+            if _hit is not None:
+                cache_hit_report = _hit
+                _telemetry_finish(
+                    "cache_hit", cache_key=_key, current_pass="cache_hit",
+                    revalidated_identity=final_proof_identity)
+                print(f"[lec_run] exact PASS cache HIT {_key} — Yosys not "
+                      "launched; source proof and current identity revalidated.",
+                      file=sys.stderr)
+                return True, _hit.get("_cache_source_rpt", "")
         # THE TOTAL, NOT A FRESH COPY. Handing `args.timeout` here is the defect
         # measured on 2026-08-27: it re-armed the deadline on every attempt.
         # Every attempt now draws from the SAME StepBudget deadline.
@@ -2618,7 +3083,19 @@ def main(argv: Optional[List[str]] = None) -> int:
         _started = budget.elapsed_s()
         _launched, _raw = run_yosys_equiv(container, ys_in_container,
                                           timeout=_attempt_budget,
-                                          workdir=equiv_workdir)
+                                          workdir=equiv_workdir,
+                                          live_log_path=live_log_path,
+                                          telemetry_path=telemetry_path,
+                                          telemetry_context={
+                                              "schema_version":
+                                                  LEC_TELEMETRY_SCHEMA_VERSION,
+                                              "invocation_id": invocation_id,
+                                              "invocation_timestamp":
+                                                  invocation_timestamp,
+                                              "attempt": len(budget.attempts) + 1,
+                                              "frontend": frontend,
+                                              "defines": defines,
+                                          })
         budget.record(frontend, defines, _attempt_budget,
                       budget.elapsed_s() - _started, _launched,
                       bool(_TIMEOUT_RE.search(_raw)))
@@ -2627,7 +3104,11 @@ def main(argv: Optional[List[str]] = None) -> int:
     # The deadline is established HERE, once, before the first attempt.
     budget = StepBudget(args.timeout)
     t0 = time.time()
-    launched, raw = _run("verilog")
+    if cache_hit_report is not None:
+        launched = True
+        raw = cache_hit_report.get("_cache_source_rpt", "")
+    else:
+        launched, raw = _run("verilog")
 
     # SLANG GOLD-READ FALLBACK: the built-in `read_verilog -sv` gold read ABORTED
     # (no miter built) on an SV closure the reader can't PARSE (package-scope
@@ -2763,7 +3244,9 @@ def main(argv: Optional[List[str]] = None) -> int:
     elapsed = round(time.time() - t0, 2)
 
     # Always persist the raw tool log for transparency / gate corroboration.
-    rpt_out.write_text(raw, encoding="utf-8")
+    # On a cache hit this is the byte-revalidated source report, while the new
+    # invocation attestation lives in lec.json and its unique telemetry file.
+    _atomic_write_bytes(rpt_out, raw.encode("utf-8"))
 
     if not launched:
         print(f"[lec_run] ERROR: yosys did not run in '{container}' "
@@ -2780,29 +3263,41 @@ def main(argv: Optional[List[str]] = None) -> int:
                  "produced. See reports/lec.rpt.")},
             resolved_top, gate_abs, liberty, liberty_source)
         diag = annotate_step_budget(diag, budget)
-        json_out.write_text(json.dumps(diag, indent=2, ensure_ascii=False))
+        _telemetry_finish("tool_unavailable", verdict=diag["verdict"],
+                          equivalent=False,
+                          current_pass=lec_stage_from_output(raw))
+        diag = attach_telemetry(diag, telemetry_path, project)
+        _atomic_write_json(json_out, diag)
         return 1
 
     parsed = parse_equiv_output(raw)
-    # §4.05 NO-LEAK: if the slang retry was attempted and slang ALSO failed to
-    # build a miter, downgrade the provisional INCONCLUSIVE to FAIL — a design
-    # the capable SV-2017 frontend cannot elaborate is not a free non-blocking
-    # pass. No-op when slang was not attempted or succeeded.
-    parsed = finalize_after_slang_retry(parsed, slang_retry_failed)
-    report = build_report(parsed, resolved_top, gate_abs, liberty,
-                          liberty_source)
-    report["elapsed_sec"] = elapsed
-    # WHAT was attempted, WHICH resource ran out, HOW MANY attempts. Additive:
-    # never changes verdict/equivalent.
-    report = annotate_step_budget(report, budget)
-    report["gold_rtl_files"] = [Path(f).name for f in gold_files]
-    # Provenance: which gold frontend + define set actually built the miter
-    # (verilog | slang; -DSIMULATION vs -DSYNTHESIS — how synth built the gate).
-    report["gold_frontend"] = gold_frontend
-    report["gold_defines"] = gold_defines if gold_frontend == "slang" else None
-    # WHY that frontend — empty when the built-in reader built the miter on the
-    # first pass; otherwise the explicit justification for the slang fallback.
-    report["gold_frontend_reason"] = gold_frontend_reason or None
+    if cache_hit_report is not None:
+        report = copy.deepcopy(cache_hit_report)
+        report.pop("_cache_source_rpt", None)
+        report["elapsed_sec"] = elapsed
+        report["execution_mode"] = "exact-pass-cache-hit"
+        report["lec_attempts"] = 0
+        report["lec_attempts_detail"] = []
+        report["step_budget_sec"] = args.timeout
+        report["step_elapsed_sec"] = round(budget.elapsed_s(), 2)
+        report["step_budget_exhausted"] = False
+        report["exhausted_resource"] = None
+    else:
+        # §4.05 NO-LEAK: if the slang retry was attempted and slang ALSO failed
+        # to build a miter, downgrade provisional INCONCLUSIVE to FAIL — a
+        # design the capable frontend cannot elaborate is not a free pass.
+        parsed = finalize_after_slang_retry(parsed, slang_retry_failed)
+        report = build_report(parsed, resolved_top, gate_abs, liberty,
+                              liberty_source)
+        report["elapsed_sec"] = elapsed
+        # WHAT was attempted, WHICH resource ran out, HOW MANY attempts.
+        report = annotate_step_budget(report, budget)
+        report["gold_rtl_files"] = [Path(f).name for f in gold_files]
+        report["gold_frontend"] = gold_frontend
+        report["gold_defines"] = (
+            gold_defines if gold_frontend == "slang" else None)
+        report["gold_frontend_reason"] = gold_frontend_reason or None
+        report["execution_mode"] = "fresh-yosys-proof"
     # THE BOUND AND WHETHER IT WAS HIT. Without these a reader of lec.json
     # cannot tell a proof that DECIDED nothing from a proof that was never
     # given enough resources to decide anything -- the exact confusion that
@@ -2815,13 +3310,53 @@ def main(argv: Optional[List[str]] = None) -> int:
     report["budget_exhausted"] = bool(_TIMEOUT_RE.search(raw))
     report["progress_stalled"] = bool(_STALL_RE.search(raw))
     report["proof_stages_attempted"] = yosys_executed_passes(raw)[:40]
+    report["parse_error"] = bool(parsed.get("parse_error"))
     # WHAT WAS CONSTRAINED, ALWAYS. Recorded on every run — including the runs
     # where nothing was constrained, with the reason — so a PASS on a scan
     # netlist can never be read without seeing the mode it was proven in, and a
     # scan netlist compared WITHOUT the constraints is visible as such rather
     # than looking like an ordinary comparison.
     report["scan_functional_mode"] = scan_record
-    json_out.write_text(json.dumps(report, indent=2, ensure_ascii=False))
+    if final_proof_identity is not None:
+        report["proof_identity"] = final_proof_identity
+    if cache_hit_report is None:
+        if (final_proof_identity is not None
+                and proof_identity_complete(final_proof_identity)):
+            report["cache"] = {
+                "enabled": True, "hit": False,
+                "cache_key": lec_cache_key(final_proof_identity),
+                "directory": DEFAULT_CACHE_REL,
+            }
+        else:
+            report["cache"] = {
+                "enabled": False, "hit": False,
+                "reason": "one or more required proof fingerprints unavailable",
+                "directory": DEFAULT_CACHE_REL,
+            }
+    else:
+        report["cache"] = {
+            "enabled": True, "hit": True,
+            "cache_key": report["cache_use_attestation"]["cache_key"],
+            "directory": DEFAULT_CACHE_REL,
+        }
+
+    _telemetry_finish(
+        "cache_hit" if cache_hit_report is not None else "complete",
+        verdict=report.get("verdict"), equivalent=report.get("equivalent"),
+        current_pass=("cache_hit" if cache_hit_report is not None
+                      else lec_stage_from_output(raw)))
+    report = attach_telemetry(report, telemetry_path, project)
+    _atomic_write_json(json_out, report)
+
+    if (cache_hit_report is None and final_proof_identity is not None
+            and pass_cache_eligible(report)):
+        report["source_proof_timestamp"] = _utc_now()
+        # Re-write once so the source report and the user-visible report are
+        # exactly the same bytes before hashing them into the cache manifest.
+        _atomic_write_json(json_out, report)
+        store_pass_cache(
+            cache_dir, final_proof_identity, report, raw,
+            source_proof_timestamp=report["source_proof_timestamp"])
 
     print(json.dumps({
         "verdict": report["verdict"],

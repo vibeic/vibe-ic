@@ -28,11 +28,13 @@ for `container_cpu_seconds`.
 """
 from __future__ import annotations
 
+import json
+import os
 import secrets
 import shlex
 import time
 from pathlib import Path
-from typing import Callable, Optional, Set, Tuple
+from typing import Any, Callable, Dict, Optional, Set, Tuple
 
 import _watchdog as _wd
 
@@ -156,6 +158,101 @@ def container_cpu_seconds(container: str, marker: Optional[str],
     if rc != 0 or not (out or "").strip():
         return None
     return _sum_marked_tree_cpu(out, marker, parse_cputime_hms, root=root)
+
+
+def _process_tree_metrics_from_ps(out: str, marker: Optional[str], *,
+                                  root: Optional[int] = None
+                                  ) -> Optional[Dict[str, Any]]:
+    """Parse `pid ppid cputimes rss nlwp args` and aggregate one job tree."""
+    rows = []
+    for line in (out or "").splitlines():
+        parts = line.strip().split(None, 5)
+        if len(parts) < 6:
+            continue
+        pid, ppid, cpu_tok, rss_tok, threads_tok, args = parts
+        try:
+            cpu = float(cpu_tok)
+            rss = int(rss_tok)
+            threads = int(threads_tok)
+        except ValueError:
+            continue
+        rows.append((pid, ppid, cpu, rss, threads, args))
+    if root is not None:
+        selected = {pid for pid, *_rest in rows if pid == str(root)}
+    elif marker:
+        selected = {pid for pid, _pp, _cpu, _rss, _thr, args in rows
+                    if marker in args}
+    else:
+        return None
+    if not selected:
+        return None
+    grew = True
+    while grew:
+        grew = False
+        for pid, ppid, *_rest in rows:
+            if pid not in selected and ppid in selected:
+                selected.add(pid)
+                grew = True
+    picked = [r for r in rows if r[0] in selected]
+    return {
+        "root_pid": root,
+        "process_count": len(picked),
+        "cpu_seconds": round(sum(r[2] for r in picked), 3),
+        "rss_kib": sum(r[3] for r in picked),
+        "threads": sum(r[4] for r in picked),
+    }
+
+
+def container_process_tree_metrics(container: str, marker: Optional[str],
+                                   docker_exec_raw: RawExec, *,
+                                   timeout: int = 15,
+                                   pidfile: Optional[str] = None
+                                   ) -> Optional[Dict[str, Any]]:
+    """Live CPU/RSS/thread metrics for the exact stamped process tree."""
+    root = (read_job_pid(container, pidfile, docker_exec_raw, timeout=timeout)
+            if pidfile else None)
+    if root is None and not marker:
+        return None
+    rc, out, _ = docker_exec_raw(
+        container,
+        "ps -eo pid=,ppid=,cputimes=,rss=,nlwp=,args= 2>/dev/null",
+        timeout=timeout)
+    if rc != 0:
+        return None
+    return _process_tree_metrics_from_ps(out, marker, root=root)
+
+
+def _write_telemetry(path: Path, document: Dict[str, Any]) -> None:
+    """Atomic live publication so readers never observe truncated JSON."""
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(f".{path.name}.{secrets.token_hex(8)}.tmp")
+    try:
+        tmp.write_text(json.dumps(document, indent=2, ensure_ascii=False) + "\n",
+                       encoding="utf-8")
+        os.replace(tmp, path)
+    finally:
+        try:
+            tmp.unlink()
+        except FileNotFoundError:
+            pass
+
+
+def _read_log_since(path: Optional[Path], offset: int) -> Tuple[str, int]:
+    """Read only bytes appended since the last telemetry sample."""
+    if path is None:
+        return "", offset
+    try:
+        with Path(path).open("rb") as handle:
+            handle.seek(0, os.SEEK_END)
+            end = handle.tell()
+            # A replaced/truncated live log starts a new stream.
+            if end < offset:
+                offset = 0
+            handle.seek(offset)
+            return handle.read().decode("utf-8", "replace"), end
+    except OSError:
+        return "", offset
 
 
 # ===========================================================================
@@ -402,6 +499,9 @@ def wrap_with_container_timeout(cmd: str, timeout_s: float,
 def run_docker_supervised(container: str, cmd: str, marker: str, *,
                           docker_exec_raw: RawExec,
                           log_path: Optional[Path] = None,
+                          telemetry_path: Optional[Path] = None,
+                          telemetry_stage_probe: Optional[Callable[[str], str]] = None,
+                          telemetry_context: Optional[Dict[str, Any]] = None,
                           stall_grace_s: float = DEFAULT_STALL_GRACE_S,
                           poll_s: float = DEFAULT_POLL_S,
                           hard_ceiling_s: float = DEFAULT_HARD_CEILING_S,
@@ -425,6 +525,35 @@ def run_docker_supervised(container: str, cmd: str, marker: str, *,
     # Per-invocation identity stamp: written by the job itself at spawn, read
     # back by the reap. This is what replaces `pkill -f <marker>`.
     pidfile = new_job_pidfile()
+    telemetry_started = time.monotonic()
+    telemetry: Dict[str, Any] = dict(telemetry_context or {})
+    prior_elapsed_s = 0.0
+    attempt_number = (telemetry_context or {}).get("attempt")
+    if telemetry_path is not None:
+        try:
+            prior = json.loads(Path(telemetry_path).read_text(encoding="utf-8"))
+            if (not telemetry.get("invocation_id")
+                    or prior.get("invocation_id") == telemetry.get("invocation_id")):
+                telemetry = prior
+                telemetry.update(telemetry_context or {})
+        except (OSError, ValueError):
+            pass
+        telemetry.setdefault("schema_version", "vibeic.lec.telemetry.v1")
+        telemetry.setdefault("samples", [])
+        telemetry.setdefault("attempts", [])
+        prior_elapsed_s = sum(
+            float(a.get("elapsed_sec") or 0.0)
+            for a in telemetry["attempts"] if isinstance(a, dict))
+        telemetry["status"] = "running"
+        telemetry["pidfile"] = pidfile
+        telemetry["attempts"].append({
+            "attempt": attempt_number,
+            "frontend": (telemetry_context or {}).get("frontend"),
+            "defines": (telemetry_context or {}).get("defines"),
+            "budget_sec": hard_ceiling_s,
+            "started_monotonic_offset_sec": round(prior_elapsed_s, 3),
+        })
+        _write_telemetry(Path(telemetry_path), telemetry)
 
     # OUTER backstop: wrap with a container-side `timeout` at the CEILING so the
     # tool self-terminates even if the host supervisor dies.
@@ -435,9 +564,63 @@ def run_docker_supervised(container: str, cmd: str, marker: str, *,
     else:
         full = ["docker", "exec", container, "bash", "-lc", wrapped]
 
+    stage_log_offset = 0
+    stage_evidence = ""
+
+    def _current_stage() -> Optional[str]:
+        nonlocal stage_log_offset, stage_evidence
+        if telemetry_stage_probe is None:
+            return None
+        added, stage_log_offset = _read_log_since(log_path, stage_log_offset)
+        # Yosys's pass-entry lines are enough to recover the current rung and
+        # stay tiny even when a SAT pass emits a very large detailed log.
+        stage_evidence += "\n".join(
+            line for line in added.splitlines()
+            if "executing " in line.lower()) + "\n"
+        stage_evidence = stage_evidence[-65536:]
+        return telemetry_stage_probe(stage_evidence)
+
     def _cpu_probe(_proc):
-        return container_cpu_seconds(container, marker, docker_exec_raw,
-                                     pidfile=pidfile)
+        if telemetry_path is None:
+            return container_cpu_seconds(container, marker, docker_exec_raw,
+                                         pidfile=pidfile)
+        metrics = container_process_tree_metrics(
+            container, marker, docker_exec_raw, pidfile=pidfile)
+        if metrics is None:
+            # Telemetry is observational. If this ps lacks rss/nlwp support,
+            # retain the watchdog's established CPU-only progress signal so
+            # instrumentation can never turn a healthy proof into a stall.
+            cpu = container_cpu_seconds(
+                container, marker, docker_exec_raw, pidfile=pidfile)
+            sample = {
+                "attempt": attempt_number,
+                "elapsed_sec": round(
+                    prior_elapsed_s + time.monotonic() - telemetry_started, 3),
+                "cpu_seconds": cpu, "rss_kib": None,
+                "peak_rss_kib": telemetry.get("peak_rss_kib"),
+                "threads": None, "process_count": None, "root_pid": None,
+                "current_pass": _current_stage(),
+                "resource_probe_degraded": True,
+            }
+            telemetry["samples"].append(sample)
+            telemetry["latest"] = sample
+            _write_telemetry(Path(telemetry_path), telemetry)
+            return cpu
+        previous_peak = int(telemetry.get("peak_rss_kib") or 0)
+        telemetry["peak_rss_kib"] = max(previous_peak,
+                                         int(metrics.get("rss_kib") or 0))
+        sample = {
+            "attempt": attempt_number,
+            "elapsed_sec": round(
+                prior_elapsed_s + time.monotonic() - telemetry_started, 3),
+            **metrics,
+            "peak_rss_kib": telemetry["peak_rss_kib"],
+            "current_pass": _current_stage(),
+        }
+        telemetry["samples"].append(sample)
+        telemetry["latest"] = sample
+        _write_telemetry(Path(telemetry_path), telemetry)
+        return metrics.get("cpu_seconds")
 
     def _kill(_proc, reason):
         kill_supervised_job(container, pidfile,
@@ -453,6 +636,23 @@ def run_docker_supervised(container: str, cmd: str, marker: str, *,
             full, log_path=log_path, cpu_probe=_cpu_probe, kill=_kill,
             stall_grace_s=stall_grace_s, poll_s=poll_s,
             hard_ceiling_s=hard_ceiling_s)
+        if telemetry_path is not None:
+            attempt_elapsed_s = round(time.monotonic() - telemetry_started, 3)
+            telemetry["status"] = (
+                "progress_stalled" if res.rc == RC_STALLED else
+                "hard_ceiling" if res.rc == RC_CEILING else "complete")
+            telemetry["returncode"] = res.rc
+            telemetry["elapsed_sec"] = round(
+                prior_elapsed_s + attempt_elapsed_s, 3)
+            telemetry["current_pass"] = _current_stage()
+            if telemetry.get("attempts"):
+                telemetry["attempts"][-1].update({
+                    "returncode": res.rc,
+                    "status": telemetry["status"],
+                    "elapsed_sec": attempt_elapsed_s,
+                    "current_pass": telemetry["current_pass"],
+                })
+            _write_telemetry(Path(telemetry_path), telemetry)
     finally:
         cleanup_job_pidfile(container, pidfile, docker_exec_raw)
     return res.rc, res.out, res.err

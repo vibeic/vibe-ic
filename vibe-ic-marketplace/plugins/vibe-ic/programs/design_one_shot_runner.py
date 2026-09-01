@@ -14610,7 +14610,7 @@ def scan_netlist_is_real_chain(project: Path) -> bool:
 
 
 def lec_producer_yosys_timeout_s() -> int:
-    """lec_run's PER-YOSYS-INVOCATION budget, read from the producer itself.
+    """lec_run's TOTAL step budget, read from the producer itself.
 
     The runner's outer subprocess timeout must always exceed the producer's own
     worst case; hard-coding it let the two drift apart, and the runner silently
@@ -14623,6 +14623,11 @@ def lec_producer_yosys_timeout_s() -> int:
         return int(DEFAULT_YOSYS_TIMEOUT_S)
     except Exception:
         return 1800
+
+
+def lec_producer_outer_timeout_s() -> int:
+    """One producer budget plus bounded setup, report-write and reap margin."""
+    return lec_producer_yosys_timeout_s() + 300
 
 
 def lec_step_status_from_report(lec_json: Path) -> Tuple[str, str]:
@@ -15835,10 +15840,10 @@ def step_dft_lec_chain(project: Path, top_name: str, container: str,
                        "no scan netlist → post-DFT disclosed-skip"))
 
     # ================= Step 13 — LEC (RTL ≡ handoff netlist) =================
-    # Headroom for lec_run's three worst-case yosys attempts plus docker/parse
-    # overhead. DERIVED from the producer's own per-invocation budget so the two
-    # can never drift apart again. See the timeout note at the call.
-    _LEC_PRODUCER_TIMEOUT_S = 3 * lec_producer_yosys_timeout_s() + 300
+    # lec_run's retries share ONE total deadline. The runner therefore grants
+    # exactly that budget plus one bounded setup/report/reap margin, not one
+    # full budget per possible frontend attempt.
+    _LEC_PRODUCER_TIMEOUT_S = lec_producer_outer_timeout_s()
     t0 = time.time()
     # --- Gate-netlist selection ---------------------------------------------
     # The SELECTION IS UNCHANGED: post_dft_netlist.v when it exists on disk,
