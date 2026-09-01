@@ -31,6 +31,28 @@ library below, it emits BOTH:
 Emitting a second file is legal: the flow declares `required_outputs`, not an
 exclusive list.
 
+AN ENTRY MAY REFUSE ITSELF — `requires_bound` AND THE STAGE TEMPLATE
+===================================================================
+`delta_sigma` used to sit in LIBRARY_GAPS under a reason that is right about
+an UNBOUND block and wrong as an unconditional one: "the switched-capacitor
+integrator's capacitor ratio IS the loop coefficient, so the structure is not
+separable from the sizing". Read as a requirement rather than a verdict, it
+says what the entry needs — and a real declaration was measured to bind all of
+it (`order`, `osr`, `enob`, `vref` reached `phase3/analog/<block>/spec.json`)
+and reach nothing, because the library had no way to be conditional.
+
+So an entry may now declare `requires_bound` / `requires_pdk_measured` /
+`requires_domain` / `requires_derived`. When any one is unmet the block gets
+`topology_gap.json` NAMING the unmet requirement and rc 2 — never a topology
+emitted on a default, which the A2 gate could not tell from a real one because
+it measures vocabulary. And an entry may declare a repeated `stage`, expanded
+here in Python before the PDK layout floor runs, so the DEVICE COUNT follows
+from a bound spec row and `analog_a3_netlist_emit` still sees a flat IR of
+exactly the schema it always did.
+
+An entry that declares none of these keys takes byte-identical paths to the
+ones it took before.
+
 WHAT IT DELIBERATELY DOES **NOT** DO
 ====================================
   * A block TYPE that is not in the library gets **no topology.md**. It gets
@@ -144,6 +166,82 @@ ROLE_TERMINALS = {
 # by a width rule, and inferring "is this a width?" from a name would do
 # exactly that. An entry that declares nothing is floored on its devices only.
 CONSTANT_ROLES_KEY = "constant_roles"
+
+# ── SPEC-BOUND ADMISSION: the keys that let a library entry REFUSE ITSELF ──
+#
+# WHY THIS EXISTS. `delta_sigma` sat in LIBRARY_GAPS under a reason that is
+# CORRECT about an unbound block and WRONG as an unconditional refusal: "the
+# switched-capacitor integrator's capacitor ratio IS the loop coefficient, so
+# the structure is not separable from the sizing". Both halves of that
+# sentence are true, and together they state what the entry NEEDS rather than
+# that it cannot exist — a block whose declaration BINDS the sizing inputs has
+# a determined structure. Measured on a real declaration: `order`, `osr`,
+# `enob` and `vref` were all bound, travelled the whole way to
+# `phase3/analog/<block>/spec.json`, and reached nothing, because the library
+# had no way to say "selectable only when these are bound".
+#
+# An entry that declares none of these keys behaves exactly as before, which
+# is why every pre-existing entry emits byte-identical artefacts.
+#
+#: {name: {"unit": <declared unit>, "why": <what it determines>}} — spec rows
+#: that must be BOUND, with the unit the entry's expressions assume.
+REQUIRES_BOUND_KEY = "requires_bound"
+#: [name, ...] — the MEASURED process constants the entry's expressions read.
+#: `_resolve_params` catches a KeyError on an unknown name and CONTINUES, so
+#: an entry whose sizing needs a characterised process must declare it here or
+#: it degrades into a library nominal with nothing recording that it did.
+REQUIRES_PDK_MEASURED_KEY = "requires_pdk_measured"
+#: {name: [admitted values]} — a DISCRETE requirement. The order-N coefficient
+#: set is the case this exists for: a set is admitted per order, and an order
+#: nobody authored a set for is refused BY NAME rather than falling back to a
+#: neighbouring one.
+REQUIRES_DOMAIN_KEY = "requires_domain"
+#: [{"name","expr","min","max","why"}] — a bound on a value the entry DERIVES.
+#: An admission condition on the INPUTS cannot see that a legal-looking
+#: declaration derives an undrawable device; this can.
+REQUIRES_DERIVED_KEY = "requires_derived"
+#: The repeated-stage template — see `expand_stages`.
+STAGE_KEY = "stage"
+#: {"<order>": [per-stage coefficient, ...]}. JSON object keys are strings and
+#: this table is read back from the emitted IR as well as from source, so the
+#: key is a string in both places rather than an int here and a str there.
+COEFFICIENT_SETS_KEY = "coefficient_sets"
+
+#: Unit tokens that all mean "a pure number". A spec row's `unit` is
+#: human-typed prose lifted from a datasheet table, so the em-dash, the
+#: hyphen and the empty string all appear for the same thing. `bit` is here
+#: because a resolution in bits IS a dimensionless count: an entry declaring
+#: `unit: "bit"` and a document declaring `—` are naming the same number.
+DIMENSIONLESS_UNITS = frozenset(
+    {"", "-", "—", "–", "none", "n/a", "na", "ratio", "x",
+     "bit", "bits", "count"})
+
+# The sampling capacitor of a switched-capacitor delta-sigma stage, in fF,
+# written ONCE because two places need the same formula and a second copy is a
+# second thing to keep correct: the admission bound that refuses an undrawable
+# result, and the per-stage `device_param_exprs` entry that sizes the device.
+#
+#   sampled kT/C noise, spread over the oversampled band  =  kT / (C * OSR)
+#   quantisation noise power of one LSB                   =  LSB^2 / 12
+#   LSB                                                   =  Vref / 2**ENOB
+#
+# Setting the first equal to the second and solving for C:
+#
+#   C  =  12 * k*T * 2**(2*ENOB) / (OSR * Vref**2)
+#
+# Every name in it is either a bound spec row (`enob`, `osr`, `vref`), a
+# universal physical constant, or a MEASURED process constant read from the
+# registry — no design, PDK SKU or vendor number appears.
+SAMPLING_CAP_FF_EXPR = (
+    "noise_budget_factor * kt_j_300k * farad_to_ff * 2 ** (2 * enob) "
+    "/ (osr * vref ** 2)")
+#: ...and the DRAWN LENGTH that realises it at the library drawn width.
+#: Deliberately a LENGTH: a width is subject to the PDK layout floor applied
+#: in `build_ir`, and a `device_param_exprs` entry is resolved one step later
+#: in `analog_a3_netlist_emit`, so a width written here would step over the
+#: floor that `floor_geometry_to_pdk` had already applied.
+SAMPLING_CAP_L_EXPR = (
+    "(" + SAMPLING_CAP_FF_EXPR + ") / (cap_area_ff_per_um2 * w_cap)")
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -465,6 +563,257 @@ LIBRARY: Dict[str, Dict[str, Any]] = {
                         "echo \"MEAS decision1=\" $&d1 \" decision2=\" $&d2"],
         },
     },
+    # ── the first SPEC-BOUND entry ────────────────────────────────────────
+    # Admitted under `requires_bound`, never unconditionally. Every device
+    # geometry below is the value this repo's OWN already-simulated reference
+    # deck used (`analog_real_corner_sweep.T["delta_sigma"]`, itself derived
+    # from the hand-authored `delta_sigma.sp` / `integrator_settle.sp`), so
+    # the structure is not invented here. What is new is that the two
+    # capacitors are SIZED FROM THE DECLARATION instead of from a constant —
+    # which is exactly the objection the LIBRARY_GAPS row used to raise.
+    #
+    # WHAT IS EMITTED, stated plainly so the artefact cannot be read as more:
+    # the LOOP FILTER — a cascade of `order` switched-capacitor integrators
+    # with per-conversion reset switches. The 1-bit quantiser and its DAC
+    # feedback are a separate circuit class (`comparator`, in this same
+    # library) and closing them into the modulator is the named next step,
+    # carried in `ai_handoff`. Emitting a half-loop under the name of the
+    # whole one is the substitution this file refuses everywhere else.
+    "delta_sigma": {
+        # "the CIFB FORWARD PATH", not "a CIFB loop filter". A
+        # cascade-of-integrators-feedback modulator is defined by its DAC
+        # feedback branches into each summing node, and those arrive with the
+        # quantiser, which this entry does not emit. Naming the finished
+        # structure here would describe an artefact that is not on disk — the
+        # exact substitution this file refuses everywhere else.
+        "topology": ("cascade of {stages} switched-capacitor integrator(s) "
+                     "around two-stage Miller NMOS-input OTAs — the FORWARD "
+                     "PATH of a cascade-of-integrators feedback (CIFB) loop "
+                     "filter, with per-conversion reset switches for "
+                     "incremental operation and NO DAC feedback branch yet "
+                     "(that arrives with the quantiser). Each stage's "
+                     "sampling / integrating capacitor RATIO is that stage's "
+                     "loop coefficient and the absolute value is the "
+                     "sampled-noise budget of the declared resolution"),
+        "circuit_class_citation": (
+            "switched-capacitor delta-sigma loop filter, forward path of "
+            "the cascade-of-integrators feedback form; second-order "
+            "coefficient set a1 = a2 = 1/2 (Boser & Wooley, JSSC 23(6), "
+            "1988); sampled kT/C noise budgeted against the quantisation "
+            "floor (Schreier & Temes, Understanding Delta-Sigma Data "
+            "Converters, ch.3)"),
+        "ports": ["vdd", "vss", "vin", "vcm", "rst", "vout"],
+        "rails": {"vdd": "vdd", "vss": "vss"},
+        "internal_nets": ["nbias"],
+        "constants": {
+            "w_cap": 10.0,
+            "w_res": 0.35,
+            # Boltzmann's constant times 300 K. A UNIVERSAL physical
+            # constant — the same on every process and in every design —
+            # which is why it is a library constant and not a registry read.
+            "kt_j_300k": 4.141947e-21,
+            # One LSB of quantisation noise has power LSB^2/12; the sampled
+            # noise budget is set equal to it.
+            "noise_budget_factor": 12.0,
+            "farad_to_ff": 1.0e15,
+        },
+        "constant_roles": {"w_cap": "cap", "w_res": "res"},
+        # The bias branch is SHARED by every stage, so it is here and not in
+        # the stage template.
+        "devices": [
+            {"name": "r_ib", "role": "res", "function":
+             "bias-setting resistor from the supply into the mirror diode",
+             "nets": ["vdd", "nbias", "vss"], "w": 0.35, "l": 181.0},
+            {"name": "mn_bias", "role": "nmos", "function":
+             "diode-connected reference of the tail current mirror, shared "
+             "by every integrator stage",
+             "nets": ["nbias", "nbias", "vss", "vss"], "w": 4.0, "l": 1.0},
+        ],
+        "spec_knobs": [],
+        "device_param_exprs": [],
+        "requires_bound": {
+            "order": {"unit": "", "why":
+                      "the loop order fixes BOTH the number of integrator "
+                      "stages and which coefficient set applies; with no "
+                      "order there is no device count"},
+            "osr": {"unit": "", "why":
+                    "the oversampling ratio sets how far the sampled noise "
+                    "falls below the quantisation floor, and therefore the "
+                    "absolute sampling capacitance"},
+            "enob": {"unit": "bit", "why":
+                     "the target resolution fixes the LSB, and the LSB "
+                     "fixes the noise budget the sampling capacitor is "
+                     "sized against"},
+            "vref": {"unit": "V", "why":
+                     "the reference is the full scale the LSB is measured "
+                     "against"},
+        },
+        "requires_pdk_measured": ["cap_area_ff_per_um2"],
+        "requires_domain": {
+            # An order nobody authored a coefficient set for is refused by
+            # name. A third-order single-bit loop is stable only under a
+            # coefficient set that is a design solution rather than a fixed
+            # structure, so it is absent here for the same reason the whole
+            # class used to be.
+            "order": [1, 2],
+        },
+        "requires_derived": [
+            {"name": "sampling_cap_ff", "expr": SAMPLING_CAP_FF_EXPR,
+             "min": 1.0, "max": 100000.0,
+             "why": ("the noise budget derived from this declaration has to "
+                     "land on a capacitor that can actually be drawn. A "
+                     "resolution / reference / OSR triple that asks for one "
+                     "outside this range is a statement that the converter "
+                     "cannot be built this way, and saying so IS the "
+                     "answer — rendering it anyway is not")},
+        ],
+        "coefficient_sets": {
+            "1": [0.5],
+            "2": [0.5, 0.5],
+        },
+        "stage": {
+            "count_from": "order",
+            "first_in": "vin",
+            "last_out": "vout",
+            "inner_out": "vo{i}",
+            "internal_nets": ["ntail{i}", "nd1_{i}", "nd2_{i}", "vsum{i}"],
+            "devices": [
+                {"name": "mn_tail{i}", "role": "nmos", "function":
+                 "stage {i} tail current source (mirror output)",
+                 "nets": ["ntail{i}", "nbias", "vss", "vss"],
+                 "w": 8.0, "l": 1.0},
+                {"name": "mn_in{i}", "role": "nmos", "function":
+                 "stage {i} input pair, summing-node (inverting) side",
+                 "nets": ["nd1_{i}", "vsum{i}", "ntail{i}", "vss"],
+                 "w": 16.0, "l": 0.5},
+                {"name": "mn_ref{i}", "role": "nmos", "function":
+                 "stage {i} input pair, common-mode reference side",
+                 "nets": ["nd2_{i}", "vcm", "ntail{i}", "vss"],
+                 "w": 16.0, "l": 0.5},
+                {"name": "mp_ld1_{i}", "role": "pmos", "function":
+                 "stage {i} current-mirror load, diode-connected leg",
+                 "nets": ["nd1_{i}", "nd1_{i}", "vdd", "vdd"],
+                 "w": 8.0, "l": 0.5},
+                {"name": "mp_ld2_{i}", "role": "pmos", "function":
+                 "stage {i} current-mirror load, output leg",
+                 "nets": ["nd2_{i}", "nd1_{i}", "vdd", "vdd"],
+                 "w": 8.0, "l": 0.5},
+                {"name": "mp_o{i}", "role": "pmos", "function":
+                 "stage {i} second-stage common-source driver",
+                 "nets": ["{out}", "nd2_{i}", "vdd", "vdd"],
+                 "w": 32.0, "l": 0.5},
+                {"name": "mn_o{i}", "role": "nmos", "function":
+                 "stage {i} second-stage current-source load",
+                 "nets": ["{out}", "nbias", "vss", "vss"],
+                 "w": 8.0, "l": 1.0},
+                {"name": "cc{i}", "role": "cap", "function":
+                 "stage {i} Miller compensation across the second stage",
+                 "nets": ["nd2_{i}", "{out}"], "w": 10.0, "l": 25.0},
+                {"name": "cs{i}", "role": "cap", "function":
+                 "stage {i} SAMPLING capacitor — the absolute value is the "
+                 "sampled-noise budget of the declared resolution",
+                 "nets": ["{in}", "vsum{i}"], "w": 10.0, "l": 2.6},
+                {"name": "ci{i}", "role": "cap", "function":
+                 "stage {i} INTEGRATING capacitor — cs{i}/ci{i} IS this "
+                 "stage's loop coefficient",
+                 "nets": ["vsum{i}", "{out}"], "w": 10.0, "l": 5.2},
+                {"name": "mn_rsti{i}", "role": "nmos", "function":
+                 "stage {i} reset switch across the integrating capacitor: "
+                 "the incremental converter's per-conversion reset",
+                 "nets": ["vsum{i}", "rst", "{out}", "vss"],
+                 "w": 2.0, "l": 0.15},
+                {"name": "mn_rstc{i}", "role": "nmos", "function":
+                 "stage {i} reset switch tying the summing node to the "
+                 "common-mode reference, which is what defines its DC bias",
+                 "nets": ["vsum{i}", "rst", "vcm", "vss"],
+                 "w": 2.0, "l": 0.15},
+            ],
+            # `{coeff}` is substituted with THIS stage's coefficient before
+            # the expression is written into the IR, so what reaches
+            # `analog_a3_netlist_emit` still NAMES the bound spec rows
+            # (`enob`, `osr`, `vref`) and is therefore counted as spec-bound
+            # by `_resolve_params`. A coefficient folded into a library
+            # constant would size the capacitors correctly and report the
+            # netlist as a library default.
+            "param_exprs": [
+                {"device": "cs{i}", "param": "l",
+                 "expr": SAMPLING_CAP_L_EXPR,
+                 "rationale": ("sampling-capacitor length at the library "
+                               "drawn width, from the sampled kT/C budget "
+                               "of the declared ENOB / OSR / Vref")},
+                {"device": "ci{i}", "param": "l",
+                 "expr": "(" + SAMPLING_CAP_L_EXPR + ") / {coeff}",
+                 "rationale": ("cs/ci IS this stage's loop coefficient, so "
+                               "the integrating capacitor is the sampling "
+                               "capacitor divided by it")},
+            ],
+        },
+        "sizing_handoff": (
+            "the OTA inside each integrator is carried at the reference "
+            "geometry: its transconductance sets whether the stage settles "
+            "inside the clock phase, and trading that against current is "
+            "sizing judgment owned by skill `analog-sizing`. The CAPACITORS "
+            "are not part of that handoff — they are derived above. The "
+            "1-bit quantiser and the DAC feedback that close the modulator "
+            "around this loop filter are a separate circuit class."),
+        "tradeoffs": [
+            "The sampling capacitor is set by the sampled kT/C noise "
+            "budget, so each extra bit of declared resolution asks for four "
+            "times the capacitance; oversampling is what buys it back, "
+            "which is why the absolute value falls as OSR rises.",
+            "The capacitor RATIO is the loop coefficient. Raising it raises "
+            "the loop gain and the integrator's output swing together, so "
+            "the coefficient set is bounded by the headroom the supply "
+            "leaves and not by stability alone.",
+            "Reset switches make the converter incremental — every "
+            "conversion starts from a known state — at the cost of "
+            "throughput, because the loop filter's memory is discarded at "
+            "the end of each window.",
+            "A larger sampling capacitor lowers the sampled noise and "
+            "raises the load the amplifier has to settle within one clock "
+            "phase, so noise trades directly against amplifier current.",
+        ],
+        "analyses_implied": ["tran"],
+        "testbench": {
+            "supply_exprs": ["vdd", "nominal_supply_v"],
+            "env_exprs": {
+                "vcm_v": "supply / 2",
+                "vstep_v": "supply / 2 + vref / 10",
+            },
+            "conditions": [
+                "supply = {supply} V (the bound core supply when the spec "
+                "carries one, else the PDK's nominal)",
+                "common-mode reference = {vcm_v} V, half the supply — a "
+                "testbench condition, not a spec",
+                "reset is held high for the first 100 ns and then released, "
+                "which is the incremental converter's own "
+                "start-of-conversion; the operating point is the reset "
+                "state, where each summing node is tied to the common mode "
+                "and each integrating capacitor is shorted",
+                "the input steps {vcm_v} -> {vstep_v} V at 200 ns (one "
+                "tenth of the bound reference) and the loop filter "
+                "integrates it over a 4 us window — a testbench condition, "
+                "not a spec",
+            ],
+            "stimulus": [
+                "v_vdd vdd 0 {supply}",
+                "v_vcm vcm 0 {vcm_v}",
+                "v_rst rst 0 pwl(0 {supply} 99n {supply} 101n 0 4000n 0)",
+                "v_in vin 0 pwl(0 {vcm_v} 199n {vcm_v} 201n {vstep_v} "
+                "4000n {vstep_v})",
+            ],
+            "cards": [],
+            "control": [
+                "tran 0.5n 4000n",
+                "meas tran vrst find v(vout) at=90n",
+                "meas tran vstep find v(vout) at=190n",
+                "meas tran vsettle find v(vout) at=3900n",
+                "let dv = vsettle - vstep",
+                "echo \"MEAS vout=\" $&vsettle \" vrst=\" $&vrst"
+                " \" vstep=\" $&vstep \" dv=\" $&dv",
+            ],
+        },
+    },
 }
 
 # Circuit classes DELIBERATELY absent, and why. The gap artefact quotes these,
@@ -496,9 +845,19 @@ LIBRARY_GAPS: Dict[str, str] = {
         "a Dickson-style pump only means anything under a two-phase clock in "
         "a transient analysis; emitting a DC-only structure would produce a "
         "netlist whose measured output is meaningless"),
+    # `delta_sigma` HAS an entry now; this row is what a reader gets when
+    # that entry REFUSES ITSELF for want of a bound input. The old
+    # unconditional reason is kept verbatim as the first clause because it is
+    # still exactly right for a block that binds nothing — what changed is
+    # that it names a CONDITION instead of a permanent absence.
     "delta_sigma": (
         "the switched-capacitor integrator's capacitor ratio IS the loop "
-        "coefficient, so the structure is not separable from the sizing"),
+        "coefficient, so the structure is not separable from the sizing — "
+        "and the sizing inputs this block declares do not close it. See "
+        "`admission_refusals` for which one is missing; a declaration that "
+        "binds the loop order, the oversampling ratio, the target "
+        "resolution and the reference determines both the device count and "
+        "the capacitor ratio, and IS emitted"),
     "adc": (
         "an incremental converter's device count follows from resolution and "
         "oversampling ratio; both are spec content, not structure"),
@@ -621,6 +980,309 @@ def bound_spec_values(project: Path, block: str) -> Tuple[Dict[str, float],
     return out, str(p)
 
 
+# ── spec-bound admission ──────────────────────────────────────────────────
+def _unit_token(unit: Any) -> str:
+    """A spec row's declared unit, normalised for comparison. Dimensionless
+    spellings all collapse to the empty string; everything else keeps its own
+    token, so `V` and `mV` stay DIFFERENT and a mis-united row is refused
+    rather than silently scaled by a factor nobody wrote down."""
+    tok = str(unit or "").strip().lower().rstrip(".")
+    return "" if tok in DIMENSIONLESS_UNITS else tok
+
+
+def bound_spec_units(project: Path, block: str) -> Dict[str, str]:
+    """The DECLARED unit of every spec row, keyed as `bound_spec_values` keys
+    it.
+
+    A separate function rather than a wider return type from
+    `bound_spec_values`, because that value map is passed straight into
+    `_safe_eval` as the expression environment and a unit belongs nowhere near
+    it. `analog_a1_spec_emit` carries the unit through from L5 for every row
+    it binds, so this reads a field that is already there.
+    """
+    p = project / _CANONICAL_ANALOG / block / "spec.json"
+    if not p.is_file():
+        p = project / _DECLARED_ANALOG / block / "spec.json"
+        if not p.is_file():
+            return {}
+    data = _read_json(p)
+    out: Dict[str, str] = {}
+    if isinstance(data, dict) and isinstance(data.get("specs"), list):
+        for s in data["specs"]:
+            if isinstance(s, dict) and s.get("name"):
+                for key in ("units", "unit"):
+                    if key in s:
+                        out[str(s["name"])] = str(s.get(key) or "")
+                        break
+    return out
+
+
+def admission_env(lib: Dict[str, Any], spec_values: Dict[str, float],
+                  measured: Dict[str, float]) -> Dict[str, float]:
+    """The environment an entry's OWN expressions resolve in, seeded exactly
+    as `analog_a3_netlist_emit._resolve_params` seeds it — measured process
+    constants first, then library constants, then the bound spec. Sharing the
+    seeding order is the point: an admission bound evaluated in a different
+    environment from the one the expression will finally run in would pass
+    something that later resolves to a different number."""
+    env: Dict[str, float] = {}
+    env.update({k: float(v) for k, v in (measured or {}).items()
+                if isinstance(v, (int, float)) and not isinstance(v, bool)})
+    env.update({k: float(v) for k, v in (lib.get("constants") or {}).items()
+                if isinstance(v, (int, float)) and not isinstance(v, bool)})
+    env.update(spec_values)
+    return env
+
+
+def entry_admission(lib: Dict[str, Any], spec_values: Dict[str, float],
+                    spec_units: Dict[str, str],
+                    measured: Dict[str, float]) -> List[Dict[str, Any]]:
+    """Every reason this library entry may NOT be selected for this block.
+
+    An empty list means admitted. Each refusal NAMES the requirement and what
+    was found instead, because `topology_gap.json` saying WHICH input is
+    missing is the difference between a document a reader can act on and one
+    that only says something was wrong. An entry declaring no requirement is
+    admitted unconditionally, which is every entry that predates this.
+
+    DECLARED BLOCKING at the producer's own tier: a refusal here means the
+    block gets `topology_gap.json` and rc 2 (`RC_HONEST_GAP`) and NO
+    `topology.md`, so the A2 gate keeps reporting the block uncovered. It
+    never downgrades to a topology emitted on a default.
+    """
+    refusals: List[Dict[str, Any]] = []
+    for name, req in sorted((lib.get(REQUIRES_BOUND_KEY) or {}).items()):
+        req = req if isinstance(req, dict) else {}
+        if name not in spec_values:
+            refusals.append({
+                "requirement": "spec_bound", "field": name,
+                "declared_unit": None,
+                "why": req.get("why"),
+                "detail": (f"the A1 spec artefact binds no numeric value for "
+                           f"`{name}`")})
+            continue
+        want = _unit_token(req.get("unit"))
+        got = _unit_token(spec_units.get(name))
+        if want != got:
+            refusals.append({
+                "requirement": "spec_unit", "field": name,
+                "expected_unit": req.get("unit"),
+                "declared_unit": spec_units.get(name),
+                "why": req.get("why"),
+                "detail": (
+                    f"`{name}` is bound but declares unit "
+                    f"{spec_units.get(name)!r}, and this entry's expressions "
+                    f"are written for {req.get('unit')!r}. The expression "
+                    f"environment carries no units, so binding it anyway "
+                    f"would scale the result by a factor nobody wrote down")})
+    for name in (lib.get(REQUIRES_PDK_MEASURED_KEY) or []):
+        if name not in (measured or {}):
+            refusals.append({
+                "requirement": "pdk_measured", "field": name,
+                "detail": (
+                    f"this entry sizes a device from the measured process "
+                    f"constant `{name}`, and the target family carries no "
+                    f"measured record for it. `analog_a3_netlist_emit` drops "
+                    f"an expression over an unknown name SILENTLY, so "
+                    f"emitting here would produce a library nominal with "
+                    f"nothing saying it was not sized"),
+                "remedy": "programs/pdk_analog_characterize.py"})
+    for name, allowed in sorted((lib.get(REQUIRES_DOMAIN_KEY) or {}).items()):
+        got = spec_values.get(name)
+        if got is None:
+            continue
+        if not any(abs(float(got) - float(a)) < 1e-9 for a in allowed):
+            refusals.append({
+                "requirement": "domain", "field": name, "value": got,
+                "admitted": list(allowed),
+                "detail": (
+                    f"`{name}` is bound to {got:g}, and this entry carries a "
+                    f"structure only for {list(allowed)}. Selecting the "
+                    f"nearest admitted value would emit a document that "
+                    f"reads as this design's and is another one's")})
+    env = admission_env(lib, spec_values, measured)
+    for spec in (lib.get(REQUIRES_DERIVED_KEY) or []):
+        if not isinstance(spec, dict):
+            continue
+        try:
+            val = _safe_eval(str(spec.get("expr")), env)
+        except Exception as exc:                                # noqa: BLE001
+            refusals.append({
+                "requirement": "derived_unresolvable",
+                "field": spec.get("name"), "expr": spec.get("expr"),
+                "detail": (f"the derived value `{spec.get('name')}` does not "
+                           f"resolve in this block's environment: {exc}")})
+            continue
+        lo, hi = spec.get("min"), spec.get("max")
+        if ((lo is not None and val < float(lo))
+                or (hi is not None and val > float(hi))):
+            refusals.append({
+                "requirement": "derived_range", "field": spec.get("name"),
+                "value": val, "min": lo, "max": hi,
+                "why": spec.get("why"),
+                "detail": (f"this declaration derives "
+                           f"`{spec.get('name')}` = {val:g}, outside the "
+                           f"admitted [{lo}, {hi}]")})
+    return refusals
+
+
+class LibraryEntryError(ValueError):
+    """A LIBRARY-AUTHORING mistake, not a defect in any design's inputs.
+
+    Separated from every other failure in this module on purpose: everything
+    else here is a statement about the block being processed, and this one is
+    a statement about the entry that was written to process it. A reader who
+    cannot tell those apart goes looking for a missing spec row that is not
+    missing. `library_invariants` catches every instance before it ships.
+    """
+
+
+def library_invariants(library: Optional[Dict[str, Any]] = None
+                       ) -> List[str]:
+    """Every authoring mistake in the topology library, as readable strings.
+
+    Held by a test rather than by a reviewer remembering. Both rules below
+    exist because breaking either one turns a REFUSAL into something worse:
+    the first into a crash mid-run, the second into a silent default — an
+    order emitted with a coefficient set that is not its own.
+    """
+    lib_map = LIBRARY if library is None else library
+    problems: List[str] = []
+    for btype, entry in sorted(lib_map.items()):
+        st = entry.get(STAGE_KEY)
+        if not isinstance(st, dict):
+            continue
+        count_from = st.get("count_from")
+        required = entry.get(REQUIRES_BOUND_KEY) or {}
+        if count_from not in required:
+            problems.append(
+                f"{btype}: stage count_from={count_from!r} is not in "
+                f"{REQUIRES_BOUND_KEY}, so a block that does not bind it "
+                f"reaches expansion instead of being refused")
+        sets = entry.get(COEFFICIENT_SETS_KEY) or {}
+        admitted = (entry.get(REQUIRES_DOMAIN_KEY) or {}).get(count_from)
+        if admitted is None:
+            problems.append(
+                f"{btype}: stage count_from={count_from!r} has no "
+                f"{REQUIRES_DOMAIN_KEY} entry, so an order with no "
+                f"coefficient set is not excluded")
+            continue
+        for value in admitted:
+            n = int(round(float(value)))
+            got = sets.get(str(n))
+            if got is None:
+                problems.append(
+                    f"{btype}: {count_from}={n} is admitted by "
+                    f"{REQUIRES_DOMAIN_KEY} but has no "
+                    f"{COEFFICIENT_SETS_KEY} entry")
+            elif len(got) != n:
+                problems.append(
+                    f"{btype}: {count_from}={n} has a coefficient set of "
+                    f"length {len(got)}; one coefficient per stage is "
+                    f"required")
+    return problems
+
+
+# ── the repeated-stage template ───────────────────────────────────────────
+def expand_stages(lib: Dict[str, Any], spec_values: Dict[str, float]
+                  ) -> Tuple[List[Dict[str, Any]], List[str],
+                             List[Dict[str, Any]], Optional[Dict[str, Any]]]:
+    """Flatten an entry's repeated stage into the plain device / net /
+    expression lists the IR already carries.
+
+    Returns `(devices, internal_nets, device_param_exprs, record)`; *record*
+    is None for an entry that declares no stage, and those entries come back
+    with their own lists unchanged.
+
+    THE EXPANSION HAPPENS HERE, IN PYTHON, AND NOT IN THE IR'S EXPRESSION
+    GRAMMAR. Two reasons, both load-bearing:
+
+      * `analog_a3_netlist_emit` then needs no knowledge of stages at all —
+        it renders a flat device list exactly as it always has, so the IR
+        schema is unchanged and every consumer of it keeps working.
+      * the flattened devices go through `floor_geometry_to_pdk` with
+        everything else, so a stage device is floored to the target process's
+        drawn minimum like any other. An expansion done downstream of that
+        floor would step over it.
+
+    The chain is explicit rather than inferred: stage 1's input is
+    `first_in`, stage i's input is stage i-1's output, and the LAST stage's
+    output is `last_out` — which is a declared PORT, so the block's output is
+    a port on every order and not a net whose name depends on the count.
+    """
+    st = lib.get(STAGE_KEY)
+    devices = [dict(d) for d in (lib.get("devices") or [])]
+    nets = list(lib.get("internal_nets") or [])
+    exprs = [dict(e) for e in (lib.get("device_param_exprs") or [])]
+    if not isinstance(st, dict):
+        return devices, nets, exprs, None
+
+    # An entry declaring a stage MUST declare its count field in
+    # `requires_bound`, so admission has already refused the block before this
+    # runs. `library_invariants` proves that for every shipped entry and a
+    # test holds the library to it — but the runtime path still has to say
+    # WHICH authoring mistake was made rather than raise a bare KeyError from
+    # a dict lookup ten frames down.
+    count_from = st["count_from"]
+    if count_from not in spec_values:
+        raise LibraryEntryError(
+            f"stage template declares count_from={count_from!r}, which is not "
+            f"bound for this block. An entry with a `{STAGE_KEY}` must also "
+            f"declare {count_from!r} in `{REQUIRES_BOUND_KEY}` so admission "
+            f"refuses the block BEFORE expansion; see `library_invariants`.")
+    count = int(round(float(spec_values[count_from])))
+    coeff_set = (lib.get(COEFFICIENT_SETS_KEY) or {}).get(str(count))
+    if coeff_set is None:
+        raise LibraryEntryError(
+            f"no `{COEFFICIENT_SETS_KEY}` entry for {count_from}={count}. An "
+            f"order the library carries no coefficient set for must be "
+            f"excluded by `{REQUIRES_DOMAIN_KEY}`, not defaulted here — "
+            f"defaulting is how one design's coefficients end up under "
+            f"another design's name.")
+    coeffs = [float(c) for c in coeff_set]
+    for i in range(1, count + 1):
+        sub = {
+            "i": i,
+            "in": (st["first_in"] if i == 1
+                   else st["inner_out"].format(i=i - 1)),
+            "out": (st["last_out"] if i == count
+                    else st["inner_out"].format(i=i)),
+            "coeff": repr(coeffs[i - 1]),
+        }
+        for n in st.get("internal_nets") or []:
+            nets.append(n.format(**sub))
+        if i < count:
+            nets.append(st["inner_out"].format(i=i))
+        for d in st.get("devices") or []:
+            nd = dict(d)
+            nd["name"] = str(d["name"]).format(**sub)
+            nd["function"] = str(d.get("function", "")).format(**sub)
+            nd["nets"] = [str(n).format(**sub) for n in d.get("nets") or []]
+            devices.append(nd)
+        for e in st.get("param_exprs") or []:
+            ne = dict(e)
+            ne["device"] = str(e["device"]).format(**sub)
+            ne["expr"] = str(e["expr"]).format(**sub)
+            ne["stage"] = i
+            ne["coefficient"] = coeffs[i - 1]
+            exprs.append(ne)
+    record = {
+        "stages": count,
+        "count_from": st["count_from"],
+        "count_value_source": "spec",
+        "coefficients": coeffs,
+        "coefficient_set_key": str(count),
+        "chain": ([st["first_in"]]
+                  + [st["inner_out"].format(i=i)
+                     for i in range(1, count)]
+                  + [st["last_out"]]),
+        "note": ("the device count and the per-stage coefficients BOTH "
+                 "follow from the bound `%s`; nothing here is a library "
+                 "default" % st["count_from"]),
+    }
+    return devices, nets, exprs, record
+
+
 # ── artefacts ─────────────────────────────────────────────────────────────
 def floor_geometry_to_pdk(lib: Dict[str, Any], constants: Dict[str, Any],
                           devices: List[Dict[str, Any]],
@@ -700,27 +1362,39 @@ def build_ir(block: str, btype: str, entry: Dict[str, Any],
 
     role_minima = dict(role_minima or {})
     constants = dict(lib.get("constants") or {})
-    devices = [dict(d) for d in lib["devices"]]
+    # An entry with no `stage` key comes back with its own lists untouched,
+    # so every pre-existing entry takes the identical path it always did.
+    devices, internal_nets, param_exprs, stage_rec = expand_stages(
+        lib, spec_values)
     clamps = floor_geometry_to_pdk(lib, constants, devices, role_minima)
 
     ir: Dict[str, Any] = {
         "ir_schema": IR_SCHEMA,
         "block": block,
         "block_type": btype,
-        "topology": lib["topology"],
+        "topology": (lib["topology"].format(stages=stage_rec["stages"])
+                     if stage_rec else lib["topology"]),
         "circuit_class_citation": lib["circuit_class_citation"],
         "ports": list(lib["ports"]),
         "rails": dict(lib["rails"]),
-        "internal_nets": list(lib["internal_nets"]),
+        "internal_nets": internal_nets,
+        # Taken from the EXPANDED device list, not from the library's own:
+        # a stage template may introduce a role the shared devices do not
+        # use, and a role missing from `role_terminals` turns off the net-
+        # count validation `analog_a3_netlist_emit._validate_ir` does before
+        # it emits.
         "role_terminals": {r: ROLE_TERMINALS[r] for r in
-                           sorted({d["role"] for d in lib["devices"]})},
+                           sorted({d["role"] for d in devices})},
         "constants": constants,
         "devices": devices,
         "spec_knobs": [dict(k) for k in lib.get("spec_knobs", [])],
         "knobs": knobs,
         "knob_sources": knob_sources,
-        "device_param_exprs": [dict(e) for e in
-                               lib.get("device_param_exprs", [])],
+        "device_param_exprs": param_exprs,
+        # None for an entry with no repeated stage. Present, it is the record
+        # of a structure that FOLLOWED FROM THE DECLARATION: how many stages,
+        # which spec row said so, and the coefficient each stage got.
+        "stage_expansion": stage_rec,
         # vibe-ic#1962 — the target process's MEASURED electrical constants,
         # carried into the IR so a `device_param_exprs` entry can be written
         # against a sheet resistance or a transconductance the PDK's own models
@@ -782,8 +1456,25 @@ def build_ir(block: str, btype: str, entry: Dict[str, Any],
                     "is the library nominal and has not been checked against "
                     "any layout rule."),
             },
-            "fields_bound": sorted([n for n, s in knob_sources.items()
-                                    if s == "spec"]),
+            # A stage count read from a bound spec row is a field bound
+            # FROM THE SPEC in exactly the sense this list means, and it does
+            # not pass through `spec_knobs`. Leaving it out reported a
+            # topology whose device count came from the declaration as one
+            # with nothing bound.
+            "fields_bound": sorted(
+                [n for n, s in knob_sources.items() if s == "spec"]
+                + ([stage_rec["count_from"]] if stage_rec else [])),
+            "stage_expansion": stage_rec,
+            "admission": {
+                "requires_bound": sorted(
+                    (lib.get(REQUIRES_BOUND_KEY) or {}).keys()),
+                "requires_pdk_measured": list(
+                    lib.get(REQUIRES_PDK_MEASURED_KEY) or []),
+                "requires_domain": {k: list(v) for k, v in
+                                    (lib.get(REQUIRES_DOMAIN_KEY)
+                                     or {}).items()},
+                "admitted": True,
+            },
             "fields_defaulted": sorted(defaulted),
             "defaults_used": bool(defaulted),
             "fields_clamped": sorted(c["target"] for c in clamps),
@@ -894,6 +1585,29 @@ def render_md(ir: Dict[str, Any], lib: Dict[str, Any],
     if ir["internal_nets"]:
         L.append(f"Internal nets: {', '.join('`%s`' % n for n in ir['internal_nets'])}")
         L.append("")
+    stage = ir.get("stage_expansion")
+    if stage:
+        L.append("## Loop structure — how many stages, and why")
+        L.append("")
+        L.append(f"The structure below is **not** a fixed library shape. "
+                 f"The stage count came from the bound spec row "
+                 f"`{stage['count_from']}` = {stage['stages']}, and each "
+                 f"stage's coefficient came with it:")
+        L.append("")
+        L.append("| stage | input | output | coefficient (cs/ci) |")
+        L.append("|---|---|---|---|")
+        chain = stage.get("chain") or []
+        for idx, coeff in enumerate(stage.get("coefficients") or [], start=1):
+            src_net = chain[idx - 1] if idx - 1 < len(chain) else "?"
+            dst_net = chain[idx] if idx < len(chain) else "?"
+            L.append(f"| {idx} | `{src_net}` | `{dst_net}` | {coeff} |")
+        L.append("")
+        L.append("The capacitor ratio IS the loop coefficient, which is why "
+                 "this circuit class was previously refused outright: a "
+                 "structure with no bound sizing is not a structure. It is "
+                 "emitted here because the declaration binds the inputs "
+                 "that determine it — see **Spec binding** below.")
+        L.append("")
     L.append("## Design trade-offs")
     L.append("")
     for t in lib.get("tradeoffs", []):
@@ -976,6 +1690,33 @@ def render_md(ir: Dict[str, Any], lib: Dict[str, Any],
         for k, v in ir["knobs"].items():
             L.append(f"| `{k}` | {v} | {ir['knob_sources'].get(k)} |")
         L.append("")
+    adm = (prov.get("admission") or {})
+    if adm.get("requires_bound") or adm.get("requires_pdk_measured"):
+        L.append("This entry is **spec-bound**: it is selectable only when "
+                 "every input below is bound, and it refuses itself — "
+                 "emitting `topology_gap.json` and no topology at all — when "
+                 "one is not.")
+        L.append("")
+        if adm.get("requires_bound"):
+            L.append("- required spec rows: "
+                     + ", ".join(f"`{n}`" for n in adm["requires_bound"]))
+        if adm.get("requires_pdk_measured"):
+            L.append("- required MEASURED process constants: "
+                     + ", ".join(f"`{n}`"
+                                 for n in adm["requires_pdk_measured"]))
+        if adm.get("requires_domain"):
+            for k, v in adm["requires_domain"].items():
+                L.append(f"- `{k}` is carried only for {v}")
+        L.append("")
+        L.append("Device parameters derived from those inputs, with the "
+                 "expression that derived each one:")
+        L.append("")
+        L.append("| device.param | expression | why |")
+        L.append("|---|---|---|")
+        for e in ir.get("device_param_exprs") or []:
+            L.append(f"| `{e.get('device')}.{e.get('param')}` | "
+                     f"`{e.get('expr')}` | {e.get('rationale', '')} |")
+        L.append("")
     L.append("## Provenance")
     L.append("")
     L.append(f"- producer: `{prov['producer']}` (schema {prov['schema']})")
@@ -1002,7 +1743,15 @@ def render_md(ir: Dict[str, Any], lib: Dict[str, Any],
     return "\n".join(L)
 
 
-def _gap_body(block: str, btype: str, entry: Dict[str, Any]) -> Dict[str, Any]:
+def _gap_body(block: str, btype: str, entry: Dict[str, Any],
+              refusals: Optional[List[Dict[str, Any]]] = None,
+              status: str = "NO_TOPOLOGY_IN_LIBRARY") -> Dict[str, Any]:
+    """The honest-gap artefact. *refusals* is the list `entry_admission`
+    returned — present when the library HAS an entry for this class and that
+    entry declined for want of a bound input, absent when the class has no
+    entry at all. A reader has to be able to tell those two apart: the first
+    is fixed by binding a spec row, the second only by authoring a topology.
+    """
     reason = LIBRARY_GAPS.get(btype)
     return {
         "block": block,
@@ -1016,10 +1765,15 @@ def _gap_body(block: str, btype: str, entry: Dict[str, Any]) -> Dict[str, Any]:
             "fields_defaulted": [],
             "defaults_used": False,
         },
-        "status": "NO_TOPOLOGY_IN_LIBRARY",
+        "status": status,
         "topology_md_written": False,
         "topology_json_written": False,
         "library_types": sorted(LIBRARY.keys()),
+        "library_entry_exists": btype in LIBRARY,
+        "admission_refusals": list(refusals or []),
+        "unmet_requirements": sorted(
+            {str(r.get("field")) for r in (refusals or [])
+             if r.get("field")}),
         "reason": (
             reason or
             f"circuit class `{btype}` has no entry in the deterministic "
@@ -1029,6 +1783,15 @@ def _gap_body(block: str, btype: str, entry: Dict[str, Any]) -> Dict[str, Any]:
             "would produce a document that reads as a selection and is a "
             "substitution; the A2 gate cannot tell them apart because it "
             "measures vocabulary, not structure"),
+        "how_to_close": (
+            ("bind the spec row(s) named in `unmet_requirements` in this "
+             "block's Phase-1 declaration, or characterise the process "
+             "constant named there with `programs/pdk_analog_characterize.py`"
+             " — this circuit class HAS a deterministic entry and it "
+             "declined only because an input it names is not bound")
+            if refusals else
+            ("author a library entry for this circuit class, or hand the "
+             "block to the skill below")),
         "ai_handoff": {
             "track": "skill",
             "skill": SKILL,
@@ -1088,21 +1851,30 @@ def emit_for_block(project: Path, entry: Dict[str, Any],
                        topology_md=str(md_path.relative_to(project)))
             return rec
 
-    lib = LIBRARY.get(btype)
-    if lib is None:
+    def _gap(status: str,
+             refusals: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
+        """Write the honest-gap artefact and clear anything THIS producer
+        emitted before. Shared by both decline paths so a refusal for want of
+        a bound input leaves exactly the same shape on disk as a class with no
+        entry — one `topology_gap.json`, no `topology.md`, no stale IR."""
         bdir.mkdir(parents=True, exist_ok=True)
         (bdir / "topology_gap.json").write_text(
-            json.dumps(_gap_body(name, btype, entry), indent=2,
-                       ensure_ascii=False) + "\n", encoding="utf-8")
+            json.dumps(_gap_body(name, btype, entry, refusals, status),
+                       indent=2, ensure_ascii=False) + "\n",
+            encoding="utf-8")
         for stale in (md_path, ir_path):
             if stale.is_file() and PRODUCER in stale.read_text(
                     encoding="utf-8", errors="replace"):
                 stale.unlink()
-        rec.update(action="gap", emitted=False,
-                   status="NO_TOPOLOGY_IN_LIBRARY",
+        rec.update(action="gap", emitted=False, status=status,
+                   admission_refusals=list(refusals or []),
                    gap_path=str((bdir / "topology_gap.json")
                                 .relative_to(project)))
         return rec
+
+    lib = LIBRARY.get(btype)
+    if lib is None:
+        return _gap("NO_TOPOLOGY_IN_LIBRARY")
 
     spec_values, spec_path = bound_spec_values(project, name)
     fam, params = pdk_device_params(pdk)
@@ -1111,6 +1883,17 @@ def emit_for_block(project: Path, entry: Dict[str, Any],
     # layout minima — or whose measured constants — were silently skipped.
     _minima_fam, role_minima = _minima.layout_minima(pdk)
     measured, measured_prov = pdk_measured_params(pdk, project)
+
+    # An entry may refuse ITSELF. Checked BEFORE `build_ir`, because the
+    # whole point is that a topology whose sizing inputs are not bound must
+    # not reach disk at all: the A2 gate measures vocabulary, so a document
+    # emitted on defaults would PASS it. Every pre-existing entry declares no
+    # requirement and so returns [] here.
+    refusals = entry_admission(lib, spec_values,
+                               bound_spec_units(project, name), measured)
+    if refusals:
+        return _gap("ENTRY_REQUIREMENTS_NOT_MET", refusals)
+
     ir = build_ir(name, btype, entry, lib, spec_values, spec_path, project,
                   fam, params, role_minima, _minima.minima_source(pdk),
                   measured, measured_prov)

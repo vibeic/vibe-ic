@@ -130,6 +130,24 @@ def _device_nets(line: str) -> Optional[List[str]]:
 
     `Xname n1 n2 ... nk modelname [k=v ...]`
     Returns the nets [n1..nk] or None if the line isn't a parseable device.
+
+    TWO TERMINALS IS A DEVICE. This required three nets plus a model, so a
+    capacitor — the only two-terminal primitive the analog IR emits — parsed
+    as None and was counted by NOTHING. Both of this checker's rules then
+    read the same absence as a defect, and both were measured on a
+    hand-built deck against this file unmodified:
+
+      * a port whose only connection is a capacitor -> UNUSED_PORT, rc 1;
+      * an internal net whose second pin is a capacitor -> FLOATING_NODE,
+        rc 1.
+
+    Which is to say: every switched-capacitor circuit, whose defining
+    feature is that the signal enters through a capacitor. It went unseen
+    because in every deck rendered before one, each port also touched a
+    transistor, so the capacitor's invisibility never changed an answer.
+
+    Three tokens is the floor a device line can have and still BE one —
+    two nets and a model name — so that is the floor here.
     """
     toks = line.split()
     if len(toks) < 4:
@@ -143,8 +161,8 @@ def _device_nets(line: str) -> Optional[List[str]]:
         if PARAM_RE.search(t):
             break
         core.append(t)
-    # core = [n1 .. nk, modelname]; need at least 3 nets + 1 model
-    if len(core) < 4:
+    # core = [n1 .. nk, modelname]; need at least 2 nets + 1 model
+    if len(core) < 3:
         return None
     nets = core[:-1]   # drop model name
     return nets
