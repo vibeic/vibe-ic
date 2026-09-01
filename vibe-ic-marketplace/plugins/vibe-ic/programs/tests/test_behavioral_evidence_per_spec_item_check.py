@@ -27,4 +27,30 @@ def test_with_l9_and_sim(tmp_path):
     sim.mkdir(parents=True, exist_ok=True)
     (sim / "sim.log").write_text("PASS: all tests passed\n")
     r = _run([str(tmp_path)])
+    assert r.returncode == 2
+    assert "SKIPPED-CONDITION" in r.stdout
+
+
+def test_structural_l9_arrays_are_not_behavioral_requirements(tmp_path):
+    gd = tmp_path / "phase1" / "generated_docs"
+    gd.mkdir(parents=True, exist_ok=True)
+    l9 = {
+        "ports": [{"name": "clk", "direction": "input"}],
+        "top_ports": [{"name": "clk", "direction": "input"}],
+        "top_module_pins": [{"name": "clk", "direction": "input"}],
+        "clock_domains": [{"name": "clk", "freq_mhz": 10}],
+    }
+    (gd / "L9_INTEGRATION_SPEC.json").write_text(json.dumps(l9))
+    r = _run([str(tmp_path)])
+    assert r.returncode == 2
+    assert "clk" not in r.stdout
+
+
+def test_explicit_behavioral_requirement_still_fails_without_evidence(tmp_path):
+    gd = tmp_path / "phase1" / "generated_docs"
+    gd.mkdir(parents=True, exist_ok=True)
+    l9 = {"behavioral_requirements": [{"id": "adc_settles"}]}
+    (gd / "L9_INTEGRATION_SPEC.json").write_text(json.dumps(l9))
+    r = _run([str(tmp_path)])
     assert r.returncode == 1
+    assert "adc_settles" in r.stdout

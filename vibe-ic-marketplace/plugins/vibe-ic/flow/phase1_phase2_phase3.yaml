@@ -1610,7 +1610,7 @@ steps:
               -- in which case there are no two documents to hold against each
               other.
         - optional_program_exit_zero:
-            command: "spec_response_delay_check phase2/stage1/rtl --spec phase1/generated_docs/L8_TIMING_WAVEFORM.json --spec phase1/generated_docs/L8_RTL_CONSTANTS.json --json reports/phase2/gates/spec_response_delay.json"
+            command: "spec_response_delay_check phase2/stage1/rtl --spec phase1/generated_docs/L8_TIMING_WAVEFORM.json --spec phase1/generated_docs/L8_RTL_CONSTANTS.json --spec phase1/generated_docs/L3_CMD_PROTOCOL.json --json reports/phase2/gates/spec_response_delay.json"
             condition_files_exist: ["phase1/generated_docs/L8_TIMING_WAVEFORM.json"]
             absent_condition_reason: >-
               Scoped to a Phase-1 DECLARATION. This clause measures the RTL

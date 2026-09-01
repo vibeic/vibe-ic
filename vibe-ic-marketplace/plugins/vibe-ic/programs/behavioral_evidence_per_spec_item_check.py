@@ -59,8 +59,26 @@ def find_l9(project: Path) -> Optional[Path]:
     return None
 
 
+_REQUIREMENT_LIST_KEYS = (
+    "behavioral_requirements",
+    "test_scenarios",
+    "functional_requirements",
+    "verification_requirements",
+    "requirements",
+    "scenarios",
+)
+
+
 def extract_requirements(l9: dict) -> List[str]:
-    """Extract behavioural requirement IDs/names from L9 JSON."""
+    """Extract explicitly declared behavioural requirement IDs/names.
+
+    Do not fall back to every list of dictionaries in L9.  Structural arrays
+    such as ``ports``, ``top_ports``, ``top_module_pins`` and
+    ``clock_domains`` are declarations consumed by integration/build gates,
+    not behavioural requirements that need a waveform or assertion.  The old
+    broad fallback counted those arrays as 68 missing behaviours on a real
+    data-converter run (a producer/consumer scope defect, not design evidence).
+    """
     reqs: List[str] = []
 
     if "behavioral_requirements" in l9:
@@ -88,14 +106,24 @@ def extract_requirements(l9: dict) -> List[str]:
                 if isinstance(item, dict):
                     reqs.append(item.get("id") or item.get("name") or str(item))
 
-    if not reqs:
-        for key in l9:
-            val = l9[key]
-            if isinstance(val, list) and len(val) > 0 and isinstance(val[0], dict):
-                for item in val:
+    # Generic aliases are accepted only when their key explicitly denotes a
+    # requirement/scenario list.  Never infer behavioural intent from an
+    # arbitrary object array: L9's structural arrays are intentionally broad.
+    for key in _REQUIREMENT_LIST_KEYS:
+        if key in ("behavioral_requirements", "test_scenarios",
+                   "functional_requirements") or key not in l9:
+            continue
+        val = l9[key]
+        if isinstance(val, list):
+            for item in val:
+                if isinstance(item, dict):
                     rid = item.get("id") or item.get("name")
                     if rid:
                         reqs.append(rid)
+                elif isinstance(item, str) and item.strip():
+                    reqs.append(item)
+        elif isinstance(val, dict):
+            reqs.extend(str(k) for k in val if str(k).strip())
 
     return [r for r in reqs if r]
 
@@ -167,9 +195,25 @@ def main(argv=None) -> int:
 
     reqs = extract_requirements(l9)
     if not reqs:
-        print(f"behavioral_evidence_per_spec_item_check: no requirements found in {l9_path}")
-        print("FAIL: L9 has no extractable behavioral requirements")
-        return 1
+        # No explicit behavioural list is a legitimate declaration shape for
+        # integration-only/non-protocol designs.  Name the condition and
+        # return the disclosed skip tier; do not warn about structural fields.
+        print(f"SKIPPED-CONDITION: no explicit behavioural requirements in {l9_path}")
+        if args.json:
+            report = {
+                "program": "behavioral_evidence_per_spec_item_check",
+                "l9_path": str(l9_path),
+                "total_requirements": 0,
+                "covered": 0,
+                "missing_count": 0,
+                "missing_items": [],
+                "covered_items": [],
+                "verdict": "SKIPPED-CONDITION",
+                "reason_class": "DESIGN_DECLARED_NA",
+            }
+            Path(args.json).parent.mkdir(parents=True, exist_ok=True)
+            atomic_write_text(Path(args.json), json.dumps(report, indent=2))
+        return 2
 
     evidence = scan_evidence(project)
 

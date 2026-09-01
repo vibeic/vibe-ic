@@ -8,6 +8,7 @@ import textwrap
 from pathlib import Path
 
 PROGRAM = Path(__file__).parent.parent / "spec_response_delay_check.py"
+FLOW = PROGRAM.parents[1] / "flow" / "phase1_phase2_phase3.yaml"
 
 
 def _run(tmp_path, rtl_src, spec_doc, rtl_name="dut.v"):
@@ -90,7 +91,12 @@ def test_with_s_tsrs_passes(tmp_path):
 
 def test_no_spec_delay_no_op(tmp_path):
     """Spec without any response-delay field — gate is a no-op."""
-    spec = {"timing_parameters": {"tClk_us": {"min": 0.02}}}
+    spec = {
+        "doc_class": "cmd_protocol",
+        "opcodes": [],
+        "no_opcodes_in_input": True,
+        "timing_parameters": {"tClk_us": {"min": 0.02}},
+    }
     src = """
     module dut(input clk);
         always @(posedge clk) begin
@@ -98,8 +104,31 @@ def test_no_spec_delay_no_op(tmp_path):
     endmodule
     """
     rc, out = _run(tmp_path, src, spec)
-    # No delay in spec → gate doesn't flag anything (PASS)
     assert rc == 0
+    assert out["verdict"] == "SKIPPED-CONDITION"
+    assert out["applicable"] is False
+    assert out["reason_class"] == "DESIGN_DECLARED_NA"
+    assert out["findings"] == []
+
+
+def test_missing_delay_without_na_declaration_still_warns(tmp_path):
+    """An extraction omission must not be laundered into design-declared N/A."""
+    rc, out = _run(tmp_path, "module dut(input clk); endmodule", {
+        "timing_parameters": {"tClk_us": {"min": 0.02}},
+    })
+    assert rc == 0
+    assert out["verdict"] == "PASS"
+    assert out["applicable"] is None
+    assert any(f["rule"] == "no_response_delay_spec" for f in out["findings"])
+
+
+def test_explicit_no_response_delay_boolean_is_not_parsed_as_one(tmp_path):
+    rc, out = _run(tmp_path, "module dut(input clk); endmodule", {
+        "no_response_delay_in_input": True,
+    })
+    assert rc == 0
+    assert out["declared_delay"] is None
+    assert out["verdict"] == "SKIPPED-CONDITION"
 
 
 def test_s_wait_state_also_recognised(tmp_path):
@@ -147,3 +176,10 @@ def test_no_spec_arg_error(tmp_path):
         [sys.executable, str(PROGRAM), str(tmp_path)],
         capture_output=True)
     assert r.returncode == 2
+
+
+def test_flow_supplies_the_command_protocol_applicability_declaration():
+    command_line = next(
+        line for line in FLOW.read_text().splitlines()
+        if "command:" in line and "spec_response_delay_check" in line)
+    assert "--spec phase1/generated_docs/L3_CMD_PROTOCOL.json" in command_line

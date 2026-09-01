@@ -104,6 +104,22 @@ module my_design (
 endmodule
 """
 
+YOSYS_GENERIC_NETLIST = """\
+module generic_design (input a, input b, input clk, output q);
+    wire n1;
+    \\$_NAND_ _01_ (.A(a), .B(b), .Y(n1));
+    \\$_DFF_P_ _02_ (.C(clk), .D(n1), .Q(q));
+endmodule
+"""
+
+MIXED_GENERIC_AND_MAPPED_NETLIST = """\
+module mixed_design (input a, input clk, output q);
+    wire n1;
+    \\$_NOT_ _01_ (.A(a), .Y(n1));
+    sky130_fd_sc_hd__dfxtp_1 _02_ (.CLK(clk), .D(n1), .Q(q));
+endmodule
+"""
+
 PROJECT_JSON_SKY130 = json.dumps({"pdk": "sky130", "top_module": "my_design"})
 
 
@@ -221,6 +237,68 @@ class TestEmptyNetlist:
         assert res.returncode == 1
 
 
+class TestTechnologyGenericNetlist:
+    def test_escaped_yosys_cells_are_extracted(self):
+        cells = pcc.extract_netlist_cells(YOSYS_GENERIC_NETLIST, "generic.v")
+        assert [c["cell_name"] for c in cells] == ["$_NAND_", "$_DFF_P_"]
+
+    def test_generic_only_is_not_a_pdk_consistency_question(self, tmp_path):
+        """Step-9's technology-generic output must not be compared to a PDK lib."""
+        nl = tmp_path / "netlist.v"
+        nl.write_text(YOSYS_GENERIC_NETLIST)
+        lib = tmp_path / "sky130.lib"
+        lib.write_text(SKY130_LIB)
+        report = tmp_path / "report.json"
+
+        res = subprocess.run(
+            [sys.executable, str(SCRIPT), '--netlist', str(nl),
+             '--pdk-lib', str(lib), '--json', str(report)],
+            capture_output=True, text=True)
+        assert res.returncode == 2, res.stdout + res.stderr
+        data = json.loads(report.read_text())
+        assert data["verdict"] == "SKIPPED-CONDITION"
+        assert data["applicable"] is False
+        assert data["reason_class"] == "DESIGN_DECLARED_NA"
+        assert data["summary"]["total_cell_instances"] == 2
+
+    def test_flow_records_generic_only_as_typed_nonverdict(self, tmp_path):
+        """The Step-9 no-JSON advisory must not flatten rc=2 into PASS."""
+        import flow_compliance_check as flow
+
+        synth = tmp_path / "phase2" / "stage2" / "synth"
+        synth.mkdir(parents=True)
+        (synth / "netlist.v").write_text(YOSYS_GENERIC_NETLIST)
+        libs = tmp_path / "input" / "pdk" / "liberty"
+        libs.mkdir(parents=True)
+        (libs / "cells.lib").write_text(SKY130_LIB)
+
+        result = flow._check_program_exit_zero(
+            tmp_path,
+            "pdk_consistency_check --netlist "
+            "phase2/stage2/synth/netlist.v --pdk-lib "
+            "input/pdk/liberty/*.lib")
+        assert result.exit_code == 2
+        assert result.verdict == "VACUOUS_PASS"
+        assert result.reason_class == "DESIGN_DECLARED_NA"
+
+    def test_mixed_generic_and_mapped_still_fails(self, tmp_path):
+        """A generic cell mixed into a PDK-mapped netlist remains a mismatch."""
+        nl = tmp_path / "netlist.v"
+        nl.write_text(MIXED_GENERIC_AND_MAPPED_NETLIST)
+        lib = tmp_path / "sky130.lib"
+        lib.write_text(SKY130_LIB)
+        report = tmp_path / "report.json"
+
+        res = subprocess.run(
+            [sys.executable, str(SCRIPT), '--netlist', str(nl),
+             '--pdk-lib', str(lib), '--json', str(report)],
+            capture_output=True, text=True)
+        assert res.returncode == 1
+        data = json.loads(report.read_text())
+        assert data["verdict"] == "FAIL"
+        assert any(f["cell_name"] == "$_NOT_" for f in data["findings"])
+
+
 # ===========================================================================
 # Test 5: Netlist file does not exist
 # ===========================================================================
@@ -295,3 +373,60 @@ endmodule
         assert "assign" not in cell_names
         assert "wire" not in cell_names
         assert "sky130_fd_sc_hd__inv_2" in cell_names
+
+
+# ===========================================================================
+# Test 9: an inline block comment between instance name and port list
+# ===========================================================================
+class TestInlineInstanceComment:
+    """Yosys writes the pre-rename instance number as a block comment BETWEEN
+    the instance name and its port list::
+
+        \\$_DFF_P_  out4_reg /* _099_ */ (
+
+    Measured on the real u_hawaii_adc round-4 netlist, the un-stripped form
+    hid 10 of 40 cells (every flop) from the counter. An UNDER-count is the
+    unsafe direction: a cell the parser cannot see is indistinguishable from
+    a cell that is not in the netlist, so a mapped netlist can be credited a
+    PDK-consistency PASS it never earned.
+    """
+
+    def test_commented_instance_is_still_a_cell(self):
+        netlist = """\
+module t (input c, input d, output q);
+  sky130_fd_sc_hd__dfxtp_1 q_reg /* _099_ */ (
+    .CLK(c),
+    .D(d),
+    .Q(q)
+  );
+endmodule
+"""
+        names = [c['cell_name'] for c in pcc.extract_netlist_cells(netlist, "t.v")]
+        assert names == ["sky130_fd_sc_hd__dfxtp_1"]
+
+    def test_commented_escaped_generic_instance_is_still_a_cell(self):
+        netlist = """\
+module t (input c, input d, output q);
+  \\$_DFF_P_  q_reg /* _099_ */ (
+    .C(c),
+    .D(d),
+    .Q(q)
+  );
+endmodule
+"""
+        names = [c['cell_name'] for c in pcc.extract_netlist_cells(netlist, "t.v")]
+        assert names == ["$_DFF_P_"]
+
+    def test_a_commented_off_pdk_cell_is_not_lost_from_the_verdict(self):
+        """The whole point: the hidden cell must still be able to FAIL."""
+        netlist = """\
+module t (input a, output z);
+  not_in_any_pdk_cell u0 /* _001_ */ (.A(a), .Y(z));
+endmodule
+"""
+        cells = pcc.extract_netlist_cells(netlist, "t.v")
+        findings = pcc.audit_pdk_consistency(
+            cells, {"sky130_fd_sc_hd__inv_2"}, "sky130")
+        cats = {f.category for f in findings}
+        assert "CELL_NOT_IN_PDK" in cats
+        assert "PDK_MISMATCH" in cats

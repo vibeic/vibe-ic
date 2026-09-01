@@ -143,6 +143,27 @@ def test_voltage_bins_with_gap(tmp_path):
     assert any(f["rule"] == "range_gap" for f in out["findings"])
 
 
+def test_no_threshold_classification_is_disclosed_not_applicable(tmp_path):
+    """A document with no threshold classifier is outside this gate's scope."""
+    rc, out = _run(tmp_path, {
+        "no_rx_classifier_ticks_in_input": True,
+        "clocks": [{"name": "sample", "hz": 1_000_000}],
+    })
+    assert rc == 0
+    assert out["verdict"] == "SKIPPED-CONDITION"
+    assert out["applicable"] is False
+    assert out["reason_class"] == "DESIGN_DECLARED_NA"
+    assert out["findings"] == []
+
+
+def test_empty_threshold_domain_without_declaration_still_warns(tmp_path):
+    rc, out = _run(tmp_path, {"clocks": [{"name": "sample", "hz": 1_000_000}]})
+    assert rc == 0
+    assert out["verdict"] == "PASS"
+    assert out["applicable"] is None
+    assert any(f["rule"] == "no_thresholds_found" for f in out["findings"])
+
+
 def test_malformed_json_error(tmp_path):
     p = tmp_path / "bad.json"
     p.write_text("{ not: json")

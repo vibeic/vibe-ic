@@ -2400,7 +2400,8 @@ UNREDDENED: Dict[Tuple[str, str], str] = {
         "L8_RTL_CONSTANTS has no ranges to be non-contiguous",
     ("2", "spec_response_delay_check phase2/stage1/rtl --spec "
           "phase1/generated_docs/L8_TIMING_WAVEFORM.json --spec "
-          "phase1/generated_docs/L8_RTL_CONSTANTS.json --json "
+          "phase1/generated_docs/L8_RTL_CONSTANTS.json --spec "
+          "phase1/generated_docs/L3_CMD_PROTOCOL.json --json "
           "reports/phase2/gates/spec_response_delay.json"):
         "PASS/VACUOUS: needs RTL whose measured response delay contradicts a "
         "populated L8 spec — a design-specific pair no generic fixture has",

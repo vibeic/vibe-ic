@@ -105,6 +105,8 @@ def _walk(obj: Any, path: str = ""):
 
 
 def _parse_num(x: Any) -> float | None:
+    if isinstance(x, bool):
+        return None
     if isinstance(x, (int, float)):
         return float(x)
     if isinstance(x, str):
@@ -139,7 +141,7 @@ def find_response_delay(specs: list[Any]) -> tuple[str, float] | None:
                                     n = _parse_num(inner[mkey])
                                     if n is not None:
                                         return f"{p}.{k}.{mkey}", n
-                        elif isinstance(inner, (int, float)):
+                        elif isinstance(inner, (int, float)) and not isinstance(inner, bool):
                             return f"{p}.{k}", float(inner)
                 continue
             if not RESPONSE_DELAY_NAMES.search(name):
@@ -151,6 +153,26 @@ def find_response_delay(specs: list[Any]) -> tuple[str, float] | None:
                     if n is not None:
                         return f"{p}.{name}.{mkey}", n
     return None
+
+
+def declares_no_response_protocol(specs: list[Any]) -> bool:
+    """Whether the supplied design docs explicitly rule out this gate's scope.
+
+    Absence of a delay field alone is not a declaration: it can also be an
+    extraction gap.  Only explicit typed fields may turn the check into N/A.
+    """
+    for doc in specs:
+        if not isinstance(doc, dict):
+            continue
+        if doc.get("no_response_delay_in_input") is True:
+            return True
+        if doc.get("command_protocol_applicable") is False:
+            return True
+        if (doc.get("doc_class") == "cmd_protocol"
+                and doc.get("no_opcodes_in_input") is True
+                and doc.get("opcodes") == []):
+            return True
+    return False
 
 
 # RTL analysis
@@ -245,16 +267,21 @@ def main() -> int:
 
     delay = find_response_delay(specs)
     findings: list[Finding] = []
+    declared_na = delay is None and declares_no_response_protocol(specs)
+    applicable: bool | None = False if declared_na else (
+        True if delay is not None else None)
 
     if delay is None:
-        findings.append(Finding(
-            "WARN", "no_response_delay_spec", "(specs)",
-            "None of the supplied spec JSONs declare a response delay "
-            "(tSRS / tIRT / tResponse / t_turnaround / response_delay_*). "
-            "If this protocol has host-to-DUT bus turnaround, the spec "
-            "should declare the minimum delay and RTL should honour it. "
-            "Otherwise this gate is a no-op for this IC.",
-        ))
+        # Applicability is determined by an explicit source declaration, not
+        # inferred from a missing field and not decided by warning policy.
+        if not declared_na:
+            findings.append(Finding(
+                "WARN", "no_response_delay_spec", "(specs)",
+                "None of the supplied spec JSONs declare a response delay "
+                "or explicitly declare that command/response protocol timing "
+                "is not applicable. Supply the command-protocol declaration "
+                "to prove N/A, or declare the required delay.",
+            ))
     else:
         field, min_val = delay
         target = Path(args.target)
@@ -283,14 +310,21 @@ def main() -> int:
             ))
 
     errors = [f for f in findings if f.severity == "ERROR"]
+    verdict = ("SKIPPED-CONDITION" if declared_na else
+               "PASS" if not errors else "FAIL")
     if args.json:
         _txt = json.dumps({
             "target": args.target,
             "specs": args.spec,
             "declared_delay": delay,
+            "applicable": applicable,
+            "reason_class": "DESIGN_DECLARED_NA" if declared_na else None,
+            "reason": (None if not declared_na else
+                       "The supplied design specifications declare no "
+                       "response-delay or bus-turnaround requirement."),
             "errors": len(errors),
             "findings": [asdict(f) for f in findings],
-            "verdict": "PASS" if not errors else "FAIL",
+            "verdict": verdict,
         }, indent=2)
         if args.json == '-':
             print(_txt)
@@ -303,7 +337,7 @@ def main() -> int:
             print(f"[{f.severity}] {f.rule} @ {f.field}")
             print(f"    {f.message}")
         print(f"\n{len(errors)} error(s)")
-        print("PASS" if not errors else "FAIL")
+        print(verdict)
 
     return 0 if not errors else 1
 

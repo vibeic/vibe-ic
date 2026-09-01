@@ -32,7 +32,7 @@ Usage:
 Exit codes:
     0 = all netlist cells found in liberty
     1 = mismatch detected (cells not in PDK, or no cells found)
-    2 = parse error / invalid arguments
+    2 = non-verdict (technology-generic netlist) or parse/argument error
 
 Generality: works for ANY Verilog gate-level netlist and ANY liberty file set.
 No external tool dependencies — pure Python parsing.
@@ -89,9 +89,13 @@ VERILOG_KEYWORDS = {
 
 # Pattern: CellType InstanceName ( ... )
 CELL_INST_RE = re.compile(
-    r'^\s*(\w+)\s+(\w+)\s*\(',
-    re.MULTILINE
+    r'^\s*(?:\\([^\s]+)|([A-Za-z_][\w$]*))'
+    r'\s+(?:\\([^\s]+)|(\w+))\s*\(',
+    re.MULTILINE,
 )
+
+
+_INLINE_BLOCK_COMMENT_RE = re.compile(r'/\*.*?\*/')
 
 
 def extract_netlist_cells(netlist_text: str, file_path: str = "") -> List[dict]:
@@ -129,10 +133,23 @@ def extract_netlist_cells(netlist_text: str, file_path: str = "") -> List[dict]:
                                 'endmodule', '//')):
             continue
 
+        # Yosys writes the original instance number as an inline block
+        # comment BETWEEN the instance name and its port list, e.g.
+        # ``\\$_DFF_P_  out4_reg /* _099_ */ (``.  Measured on a real
+        # round-4 netlist this hid 10 of 40 cells (every flop) from the
+        # counter -- an under-count, which is the unsafe direction: a cell
+        # the parser cannot see is indistinguishable from a cell that is
+        # not in the netlist at all.
+        stripped = _INLINE_BLOCK_COMMENT_RE.sub(' ', stripped)
+
         m = CELL_INST_RE.match(stripped)
         if m:
-            cell_type = m.group(1)
-            inst_name = m.group(2)
+            # A Verilog escaped identifier starts with '\\' and terminates at
+            # whitespace.  Yosys technology-generic cells are consequently
+            # emitted as e.g. ``\\$_NAND_ _42_ (...)``.  Store the semantic
+            # identifier without the escape marker, matching Liberty names.
+            cell_type = m.group(1) or m.group(2)
+            inst_name = m.group(3) or m.group(4)
             # Filter out Verilog keywords
             if cell_type.lower() not in VERILOG_KEYWORDS:
                 cells.append({
@@ -143,6 +160,11 @@ def extract_netlist_cells(netlist_text: str, file_path: str = "") -> List[dict]:
                 })
 
     return cells
+
+
+def is_yosys_technology_generic(cell_name: str) -> bool:
+    """Whether a parsed cell is a Yosys internal technology-generic cell."""
+    return str(cell_name).startswith("$")
 
 
 # ---------------------------------------------------------------------------
@@ -229,19 +251,27 @@ def audit_pdk_consistency(
 # ---------------------------------------------------------------------------
 def build_report(findings: List[Finding], netlist_path: str,
                  pdk_name: str, total_cells: int,
-                 unique_cells: int, pdk_cell_count: int) -> dict:
+                 unique_cells: int, pdk_cell_count: int,
+                 *, applicable: bool = True, reason: str = "") -> dict:
     """Build JSON report."""
     return {
         "program": "pdk_consistency_check",
-        "version": "1.0.0",
+        "version": "1.1.0",
         "netlist": netlist_path,
         "pdk": pdk_name,
+        "applicable": applicable,
+        "verdict": ("SKIPPED-CONDITION" if not applicable else
+                    "PASS" if not findings else "FAIL"),
+        "reason_class": None if applicable else "DESIGN_DECLARED_NA",
+        "reason": reason or None,
         "summary": {
             "total_cell_instances": total_cells,
             "unique_cell_types": unique_cells,
             "pdk_cell_count": pdk_cell_count,
             "findings_count": len(findings),
-            "pass": len(findings) == 0,
+            # Null is deliberate for an inapplicable question: the report
+            # must not claim a PDK-consistency PASS that was never measured.
+            "pass": (len(findings) == 0) if applicable else None,
         },
         "findings": [asdict(f) for f in findings],
     }
@@ -292,7 +322,19 @@ def main(argv: list = None) -> int:
 
     # Extract and audit
     netlist_cells = extract_netlist_cells(netlist_text, str(netlist_path))
-    findings = audit_pdk_consistency(netlist_cells, pdk_cells, pdk_name)
+    generic_only = bool(netlist_cells) and all(
+        is_yosys_technology_generic(c['cell_name']) for c in netlist_cells)
+    if generic_only:
+        findings: List[Finding] = []
+        applicable = False
+        reason = (
+            "No PDK-mapped cell population is declared: the netlist contains "
+            "only Yosys technology-generic cells. PDK consistency remains "
+            "applicable after technology mapping.")
+    else:
+        findings = audit_pdk_consistency(netlist_cells, pdk_cells, pdk_name)
+        applicable = True
+        reason = ""
 
     unique_cell_names = set(c['cell_name'] for c in netlist_cells)
     report = build_report(
@@ -300,6 +342,8 @@ def main(argv: list = None) -> int:
         total_cells=len(netlist_cells),
         unique_cells=len(unique_cell_names),
         pdk_cell_count=len(pdk_cells),
+        applicable=applicable,
+        reason=reason,
     )
 
     # Output
@@ -310,7 +354,10 @@ def main(argv: list = None) -> int:
 
     print(report_json)
 
-    return 0 if report["summary"]["pass"] else 1
+    # rc=2 is the flow's typed non-verdict channel.  Returning rc=0 here would
+    # let a no-question result enter the execution ledger as a PDK-consistency
+    # PASS because this advisory command intentionally has no --json target.
+    return 2 if not applicable else (0 if report["summary"]["pass"] else 1)
 
 
 if __name__ == '__main__':

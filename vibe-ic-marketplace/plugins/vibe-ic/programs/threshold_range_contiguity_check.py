@@ -173,13 +173,8 @@ def check(doc: Any, class_order: list[str]) -> list[Finding]:
     thresholds = _collect_thresholds(doc)
 
     if not thresholds:
-        findings.append(Finding(
-            "WARN", "no_thresholds_found", "(root)",
-            "No MIN/MAX threshold pairs detected in this document. If the IC "
-            "has no discrete classification logic, that's fine; otherwise "
-            "verify the document shape uses `{name:..., value_dec:...}` or "
-            "flat `{X_MIN: n, X_MAX: n}` entries.",
-        ))
+        # The caller distinguishes explicit N/A from an undeclared empty
+        # domain; this function has no threshold relation to adjudicate.
         return findings
 
     chain = set(class_order)
@@ -233,6 +228,18 @@ def check(doc: Any, class_order: list[str]) -> list[Finding]:
     return findings
 
 
+def declares_no_threshold_classifier(doc: Any) -> bool:
+    """Only an explicit design declaration can make an empty domain N/A."""
+    if not isinstance(doc, dict):
+        return False
+    return any(doc.get(key) is True for key in (
+        "no_rx_classifier_ticks_in_input",
+        "no_thresholds_in_input",
+        "no_threshold_classifier_in_input",
+        "no_classification_logic_in_input",
+    ))
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(
         description="Verify discrete classification ranges are contiguous.",
@@ -255,16 +262,34 @@ def main() -> int:
         return 2
 
     class_order = [c.strip().upper() for c in args.order.split(",") if c.strip()]
+    thresholds = _collect_thresholds(doc)
+    declared_na = not thresholds and declares_no_threshold_classifier(doc)
+    applicable: bool | None = False if declared_na else (
+        True if thresholds else None)
     findings = check(doc, class_order)
+    if not thresholds and not declared_na:
+        findings.append(Finding(
+            "WARN", "no_thresholds_found", "(root)",
+            "No MIN/MAX threshold pairs and no explicit no-classifier "
+            "declaration were found. Declare the condition N/A or provide "
+            "the classification thresholds.",
+        ))
     errors = [f for f in findings if f.severity == "ERROR"]
+    verdict = ("SKIPPED-CONDITION" if declared_na else
+               "PASS" if not errors else "FAIL")
 
     if args.json:
         _txt = json.dumps({
             "source_file": args.constants,
+            "applicable": applicable,
+            "reason_class": "DESIGN_DECLARED_NA" if declared_na else None,
+            "reason": (None if not declared_na else
+                       "The design document declares no MIN/MAX threshold "
+                       "classification pairs."),
             "total_findings": len(findings),
             "errors": len(errors),
             "findings": [asdict(f) for f in findings],
-            "verdict": "PASS" if not errors else "FAIL",
+            "verdict": verdict,
         }, indent=2)
         if args.json == '-':
             print(_txt)
@@ -276,7 +301,7 @@ def main() -> int:
         for f in findings:
             print(f"[{f.severity}] {f.rule} @ {f.field}: {f.message}")
         print(f"\n{len(errors)} error(s), {len(findings)-len(errors)} warning(s)")
-        print("PASS" if not errors else "FAIL")
+        print(verdict)
 
     return 0 if not errors else 1
 

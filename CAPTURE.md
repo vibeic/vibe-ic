@@ -1,36 +1,59 @@
-# Benchmark enhancement capture — runtime evidence consumers
+# CAPTURE — u_hawaii_adc v1.15.30 round 4
 
-## Recovered failing cases
+## Summary
 
-The fresh u_hawaii_adc v1.15.25 acceptance produced two new false failures after its real producer work had completed:
+Three general flow recoveries were distilled from the real acceptance run into
+the local branch. `LAND.md` contains the landing checklist and the complete
+three-justification matrix.
 
-- A completed, equivalent LEC invocation wrote telemetry whose `pidfile` field names the watchdog marker used during supervision. The marker was correctly removed at child exit, but the delivery-path gate interpreted its absence as lost project output.
-- The professional cocotb test ran and passed its six-channel/24-slot scoreboard, but the generic testbench gate omitted all Python TBs and counted only seven Verilog markers.
+| Candidate | Prior failure | General rule | Route |
+|---|---|---|---|
+| Explicit applicability for delay/threshold gates | P0 gained `warn_acceptance_policy_check` from two absent-condition warnings | Only typed design declarations may produce `SKIPPED-CONDITION`; undeclared absence remains WARN | producer programs + flow command wiring |
+| Technology-generic netlist discrimination | Step 9 treated escaped Yosys internal cells as zero cells, then PDK mismatch | Parse escaped identifiers; generic-only is typed rc=2 N/A, while empty/mixed/wrong-PDK remain FAIL | `pdk_consistency_check.py` |
+| Pre-audit stage-analog report production | Step 14's final judge was the first writer, so the output was `audit_created` | Top runner produces the scoped stage report after analog execution and before step-view/final audit | `vibe_ic_one_shot_runner.py` |
 
-These are consumer failures. Neither changes the design, the producer output, nor the acceptance threshold.
+## Evidence
 
-The same full-suite pre-fix run exposed a third consumer failure: A9's documented headless close was converted to FAIL because HIL-only advisory checks ran with no bench campaign and published an untyped absence. It also exposed two repository self-consistency drifts introduced by earlier reason-taxonomy and flow-census changes.
+- Pre-fix negative control: 6 failed; substantive-control audit graded 5 as
+  observed-value failures.
+- Post-fix focused: 41 passed.
+- Adjacent runner/advisory/taxonomy/policy: 72 passed.
+- Corpus sweep: 89 projects, 178 warning-check invocations, 0 false positives,
+  140 explicit-declaration transitions.
+- Real candidate replay: P0 warning subgate removed; PDK advisory records rc=2
+  `VACUOUS_PASS`/`DESIGN_DECLARED_NA`; Step 14 required outputs become 2/2
+  step-attributed. Real analog blockers remain FAIL.
+- Full plugin suite: INCOMPLETE at 18%, no terminal rc/JUnit; no PASS or outer
+  failure set is claimed.
 
-## AI judgment distilled into deterministic rules
+## Discards
 
-1. A path is runtime process metadata only when it exactly matches the watchdog-owned `/tmp/.vibeic-job-<safe-id>.pid` namespace. It is disclosed and excluded from deliverable accounting. No extension-wide or JSON-wide exemption is allowed.
-2. A Python source is canonical cocotb testbench evidence only when its basename matches `tb_*.py`. Structural review uses cocotb semantics (`@cocotb.test`, `async def`, and awaited simulation triggers), and the check denominator counts executable test decorators and independent assertion lines.
-3. Existing thresholds stay unchanged. A newly recognised testbench contributes evidence; it does not lower `--min-tests`.
-4. A missing hardware campaign is a legitimate `EXTERNAL` non-verdict only while no block carries `hw_measurements.json`. HIL discipline gates must not execute in that arm. Once bench evidence exists, they execute normally and can refuse missing or malformed HIL artefacts.
-5. rc 2 is only a non-verdict candidate. Untyped rc 2 remains `EXECUTION_ERROR`/`INCOMPLETE`; tests may not pin the superseded unconditional VACUOUS_PASS convention. Published census numbers must be derived from the canonical flow parser.
+Step 4 and A2–A4 were not captured as defects. Their missing analog oracle,
+delta-sigma topology, design-bound sizing, and downstream PVT evidence are
+legitimate unattended-runtime capability/upstream gaps, not absent conditions
+and not external dependencies. Step 9's remaining `chip_area` result is likewise
+INCOMPLETE until technology mapping supplies a measurement. Step 14 remains
+FAIL because its produced report honestly contains those analog failures.
 
-## Positive and negative controls
+No push, PR, landing, version bump, waiver, or fabricated design artefact was
+performed.
 
-- Positive pid control: completed LEC telemetry with an absent watchdog pidfile must return rc=0 and print `ephemeral process-marker`.
-- Negative delivery control: a live external GDS must remain rc=1.
-- Positive TB control: five Verilog checks plus one canonical cocotb test containing four assertions must reach exactly ten and PASS.
-- Negative TB control: nine Verilog checks with no cocotb evidence must remain rc=1.
-- Real artefact: the v1.15.25 u_hawaii_adc project changes from both consumer failures to both direct gates rc=0; professional simulation itself remains 1/1 PASS rather than being inferred from source syntax.
+## Round 5 interrogation and capture
 
-## Generality and blast radius
+The round-4 non-analog residue was interrogated before changing code:
 
-No chip name, port name, clock name, PDK name, or benchmark path appears in production code. A 34-project cocotb sweep found 0 green-to-red transitions; a four-project watchdog-telemetry sweep found the same intended correction. The general external-artifact and under-coverage controls remain blocking.
+| Residue | Condition present? | Capability absent? | External? | Disposition |
+|---|---|---|---|---|
+| P0 `warn_acceptance_policy_check` | no; the design declares neither condition | no | no | Bucket-A applicability fix retained from round 4; absent declarations are typed N/A, not warnings |
+| Step 4 behavioural evidence | no explicit behavioural-requirement list; only structural L9 arrays | no | no | Bucket-A extractor fix: ports/top-pins/clock domains are not behavioural requirements; explicit requirement lists still gate |
+| Step 4 L10/coverage residue | L10 verification intents and a coverage measurement are present | yes for analog/oracle production; coverage is genuinely 11.11/0/0% | no | no capture of a false PASS; this is an upstream/design-evidence residue, not a parser defect |
+| Step 9 PDK consistency | yes; generic Yosys netlist is present | no | no | Bucket-A escaped-identifier/type classification retained from round 4; generic-only is typed N/A, mapped mismatch still FAIL |
+| Step 14 stage-analog producer | yes; analog stage is declared | no | no | Bucket-A pre-audit producer retained from round 4; the produced analog report still honestly FAILs A2-A4 |
 
-## Disclosure boundary
+The Step-4 extractor change is bidirectionally pinned: the pristine program
+fails on structural-only L9 arrays (rc=1, reporting `clk`), while the captured
+program returns `SKIPPED-CONDITION` (rc=2) for the same shape and still fails an
+explicit behavioural requirement with no evidence. This is a general rule,
+not a u_hawaii_adc literal.
 
-This capture removes only false consumer failures. It does not alter the official origin/main acceptance verdict, promote Analog WAIVED/BLOCKED/VACUOUS states, fabricate missing backend evidence, or treat the local candidate as released code.
+Next: /vibe-ic-all after the local capture commit is reviewed and landed.

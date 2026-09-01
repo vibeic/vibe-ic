@@ -1019,6 +1019,28 @@ def main() -> int:
     else:
         plan.append(("analog", "SKIPPED", 0))
 
+    # Produce the stage-analog compliance record as part of the run, before
+    # Step 14 or a later whole-flow audit consumes it.  The Step-14 gate also
+    # invokes this scoped audit, but a final auditor's first write is tagged
+    # ``audit_created`` and cannot count as evidence produced by the run it is
+    # judging.  This pre-production is non-blocking: the A-track and the
+    # Step-14 gate retain ownership of their own verdicts.
+    if halted_at != "phase1":
+        _analog_stage_json = (project / "reports" / "analog"
+                              / "stage_analog_compliance.json")
+        _analog_stage_rc = _run_phase(
+            "ANALOG STAGE COMPLIANCE (pre-Step 14 evidence)",
+            PROGRAMS_DIR / "flow_compliance_check.py",
+            [str(project), "--stage-id", "stage_analog", "--strict",
+             "--json", str(_analog_stage_json)],
+            env=_phase_env)
+        reports["analog_stage_compliance"] = _read_report(_analog_stage_json)
+        if _analog_stage_rc != 0:
+            advisories.append(
+                "stage_analog compliance is not clean; Step 14 remains the "
+                "verdict owner — see reports/analog/"
+                "stage_analog_compliance.json")
+
     # ---------------- Phase 3 ----------------
     phase3_top = flow_top
     if not halted_at and not args.skip_phase3:
