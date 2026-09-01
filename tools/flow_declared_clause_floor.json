@@ -168,7 +168,7 @@
     {
       "step": "2",
       "kind": "optional_program_exit_zero",
-      "cmd": "spec_response_delay_check phase2/stage1/rtl --spec phase1/generated_docs/L8_TIMING_WAVEFORM.json --spec phase1/generated_docs/L8_RTL_CONSTANTS.json --json reports/phase2/gates/spec_response_delay.json"
+      "cmd": "spec_response_delay_check phase2/stage1/rtl --spec phase1/generated_docs/L8_TIMING_WAVEFORM.json --spec phase1/generated_docs/L8_RTL_CONSTANTS.json --spec phase1/generated_docs/L3_CMD_PROTOCOL.json --json reports/phase2/gates/spec_response_delay.json"
     },
     {
       "step": "2",
@@ -743,7 +743,7 @@
     {
       "step": "A4",
       "kind": "advisory_program_exit_zero",
-      "cmd": "analog_adc_enob_corner_check ."
+      "cmd": "analog_adc_enob_corner_check . --json reports/analog/analog_adc_enob_corner_check.json"
     },
     {
       "step": "A4",

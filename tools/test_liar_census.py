@@ -2857,6 +2857,29 @@ _REHOMED = {
     "eco_loop_audit . --json reports/phase2/gates/eco_audit.json":
     "postroute_timing_repair_audit . --json "
     "reports/phase2/gates/postroute_timing_repair_audit.json",
+    # d453eaca6 [v1.15.34] "uhadc round-5 consumer captures": the step-2
+    # response-delay clause gained a third `--spec`, L3_CMD_PROTOCOL.json.
+    # Same step, same kind, same program, one more declared input to measure
+    # the RTL against -- a WIDENING of the gate's evidence, not a retirement.
+    # vibe-ic#2009.
+    "spec_response_delay_check phase2/stage1/rtl "
+    "--spec phase1/generated_docs/L8_TIMING_WAVEFORM.json "
+    "--spec phase1/generated_docs/L8_RTL_CONSTANTS.json "
+    "--json reports/phase2/gates/spec_response_delay.json":
+    "spec_response_delay_check phase2/stage1/rtl "
+    "--spec phase1/generated_docs/L8_TIMING_WAVEFORM.json "
+    "--spec phase1/generated_docs/L8_RTL_CONSTANTS.json "
+    "--spec phase1/generated_docs/L3_CMD_PROTOCOL.json "
+    "--json reports/phase2/gates/spec_response_delay.json",
+    # 57732d30b [v1.15.37] "four-arm-proven A4 corner-check repairs": the A4
+    # ENOB advisory began declaring the report it writes. Same step, same
+    # kind, same program; only the artefact it names changed. The clause
+    # itself arrived AFTER `_REHOME_PIN` (9dd37808e, 2026-08-25), so the
+    # control anchored there never sees it leave; the row is here for
+    # `_SHRINK_PIN`, which does. vibe-ic#2009.
+    "analog_adc_enob_corner_check .":
+    "analog_adc_enob_corner_check . --json "
+    "reports/analog/analog_adc_enob_corner_check.json",
 }
 
 #: Clauses deliberately removed from the GATE denominator by Issue #1980 and
@@ -2905,8 +2928,9 @@ def test_the_flow_has_NOT_shrunk_since_the_literal_was_last_moved(tmp_path):
 
     Issue #1980 deliberately removed five producer/classifiers from the gate
     denominator because they own no refusal predicate. The exact five removals
-    must remain the whole delta, and each must still be executed and published
-    under its exact step/program/path `program_outputs` identity. That is a real
+    must remain the whole delta -- beyond the command RE-SPELLINGS `_REHOMED`
+    accounts for -- and each must still be executed and published under its
+    exact step/program/path `program_outputs` identity. That is a real
     denominator shrink, not a retirement and not a reason to advance the pin.
 
     The historical function name is retained so reports keep one continuous
@@ -2936,7 +2960,21 @@ def test_the_flow_has_NOT_shrunk_since_the_literal_was_last_moved(tmp_path):
 
     d = lc.population_delta(pinned, lc.FLOW_YAML)
     removed = {c["cmd"] for c in d["removed"]}
-    assert removed == set(_REHOMED_TO_PROGRAM_OUTPUT), d["removed"]
+    # A command RE-SPELLED after the pin reads as a removal here exactly as it
+    # does at `_REHOME_PIN`, and it is authorised the same way: by a `_REHOMED`
+    # row whose successor a step declares TODAY. Before vibe-ic#1980 that case
+    # was met by moving the pin; the pin now stays put so the five denominator
+    # removals stay visible, which left a re-spelling with no lawful remedy.
+    # MEASURED at ee29a2ad0 (v1.15.49), vibe-ic#2009: two clauses each gained
+    # an argument (step 2 `spec_response_delay_check`, v1.15.34; step A4
+    # `analog_adc_enob_corner_check`, v1.15.37) and this assertion named both
+    # as a shrink. A row whose successor is NOT live is not subtracted, so a
+    # retirement dressed as a re-spelling still fails here, and is named by
+    # the `_REHOMED` control below.
+    live = {c.cmd for c in lc.discover_clauses(lc.FLOW_YAML)}
+    respelled = {was for was in removed
+                 if was in _REHOMED and _REHOMED[was] in live}
+    assert removed - respelled == set(_REHOMED_TO_PROGRAM_OUTPUT), d["removed"]
     live_outputs = _live_program_outputs()
     assert not {
         was: now for was, now in _REHOMED_TO_PROGRAM_OUTPUT.items()
