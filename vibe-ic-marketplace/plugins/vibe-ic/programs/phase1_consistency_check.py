@@ -101,6 +101,36 @@ def fetch_path(docs: Dict[str, Any], layered_path: str) -> Any:
     return node
 
 
+def l8r_clock_frequency_hz(docs: Dict[str, Any]) -> Any:
+    """Resolve the current or legacy L8R clock-frequency representation.
+
+    The producer migrated from ``clock_frequency_hz`` to a top-level
+    ``clock_mhz`` plus per-domain ``freq_hz``/``freq_mhz`` fields.  A
+    consistency consumer must accept those equivalent schema spellings, while
+    still returning ``None`` when the producer supplied no clock at all.
+    """
+    legacy = fetch_path(docs, "L8R.clock_frequency_hz")
+    if isinstance(legacy, (int, float)):
+        return legacy
+
+    mhz = fetch_path(docs, "L8R.clock_mhz")
+    if isinstance(mhz, (int, float)):
+        return mhz * 1_000_000
+
+    domains = fetch_path(docs, "L8R.clock_domains")
+    if isinstance(domains, list):
+        for domain in domains:
+            if not isinstance(domain, dict):
+                continue
+            hz = domain.get("freq_hz")
+            if isinstance(hz, (int, float)):
+                return hz
+            domain_mhz = domain.get("freq_mhz")
+            if isinstance(domain_mhz, (int, float)):
+                return domain_mhz * 1_000_000
+    return None
+
+
 # ---------------------------------------------------------------------------
 # Rule definitions
 # ---------------------------------------------------------------------------
@@ -176,7 +206,8 @@ RULES: List[Rule] = [
     Rule(id="R_clock_freq_positive",
          kind="derives", severity="error",
          a="L8R.clock_frequency_hz",
-         reason="clock_frequency_hz must be a positive integer.",
+         reason="The L8R clock frequency must be positive (legacy "
+                "clock_frequency_hz or current clock_mhz/clock_domains).",
          fn=lambda v: isinstance(v, (int, float)) and v > 0),
 
     Rule(id="R_bit_period_cycles",
@@ -558,6 +589,18 @@ def evaluate(docs: Dict[str, Any], rules: List[Rule]) -> List[Finding]:
 
         elif r.kind == "derives":
             # R_bit_period_cycles: evaluate separately
+            if r.id == "R_clock_freq_positive":
+                if no_protocol and "L8R" not in docs:
+                    out.append(Finding(
+                        r.id, "info", True,
+                        "skipped — L8R is sentinel-optional and absent"))
+                    continue
+                clock_hz = l8r_clock_frequency_hz(docs)
+                passed = isinstance(clock_hz, (int, float)) and clock_hz > 0
+                detail = f"resolved clock frequency was {clock_hz!r} Hz"
+                out.append(Finding(
+                    r.id, r.severity, passed, "" if passed else detail))
+                continue
             if r.id == "R_l9_no_dtop_self_collision":
                 # Extract dtop module name + submodule keys
                 dtop = fetch_path(docs, "L9.dtop_top_level") or {}
@@ -667,7 +710,7 @@ def evaluate(docs: Dict[str, Any], rules: List[Rule]) -> List[Finding]:
             if r.id == "R_bit_period_cycles":
                 cycles = fetch_path(docs, "L8R.bit_period_cycles")
                 bit_us = fetch_path(docs, "L8.aid_bit_timing.bit_period_us")
-                clk = fetch_path(docs, "L8R.clock_frequency_hz")
+                clk = l8r_clock_frequency_hz(docs)
                 if cycles is None or bit_us is None or clk is None:
                     out.append(Finding(r.id, r.severity, True, "skipped — a prerequisite value absent"))
                     continue

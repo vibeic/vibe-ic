@@ -110,6 +110,7 @@ from dataclasses import dataclass, field, asdict
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
 import _path_layout as _pl
+import _input_corpus_scope as _ics
 import sdc_constraints as _sdc
 import floorplan_contract as _fpc
 from l_doc_consumer_contract import project_relative_source
@@ -53833,16 +53834,30 @@ def _v1_6_350_post_emit_spice_metadata(project: Path) -> None:
         return
     if not gd.is_dir():
         return
-    # Collect SPICE files anywhere under the project root (recursive).
+    # Collect design SPICE files under the project root (recursive). Issue
+    # #1996 fenced canonical ``input/pdk*`` collateral out of the generic
+    # design-document walk, but this later post-pass independently walked all
+    # of ``input/`` and promoted every PDK CDL ``.subckt`` into
+    # L9.submodules. Reuse the SAME path-segment boundary here: dedicated PDK
+    # readers still consume that tree, while the design-metadata producer may
+    # not reinterpret foundry cells as the chip's functional hierarchy.
     spice_files: List[Path] = []
     for sub in ("input", "design_data", "gds", "schematic", "spice"):
         root = project / sub
         if not root.is_dir():
             continue
         for f in root.rglob("*"):
-            if f.is_file() and f.suffix.lower() \
-                    in _V1_6_350_SPICE_NETLIST_SUFFIXES:
-                spice_files.append(f)
+            if (not f.is_file()
+                    or f.suffix.lower()
+                    not in _V1_6_350_SPICE_NETLIST_SUFFIXES):
+                continue
+            try:
+                rel = f.relative_to(project).as_posix()
+            except ValueError:
+                rel = f.as_posix()
+            if _ics.staged_pdk_root(rel) is not None:
+                continue
+            spice_files.append(f)
     if not spice_files:
         return
     # Parse all SPICE files; merge into one metadata dict.
@@ -58047,12 +58062,52 @@ def _post_emit_floorplan_contract(project: Path) -> None:
                 ev = {}
                 l19["extraction_evidence"] = ev
             for src in sources:
+                # Evidence tagged with an input-doc source is a claimed direct
+                # quotation.  The old producer invented the presentation
+                # string ``DIE_AREA -> WxH`` even when the source used a
+                # labelled row such as ``Core die | W x H um``.  Preserve an
+                # actual source line so the anti-fabrication consumer can
+                # verify the identifier rather than rejecting producer prose.
+                literal = _floorplan_source_literal(project, src, die)
                 ev.setdefault(src, []).append({
-                    "literal": f"DIE_AREA → {die}µm",
+                    "literal": literal,
                     "label": "die_area_budget_um",
                 })
         out = _pl.generated_docs_dir(project) / "L19_CONSTRAINTS_PDK.json"
         _stamp.dump(out, l19)
+
+
+def _floorplan_source_literal(project: Path, source: str, die: str) -> str:
+    """Return one exact input line supporting a resolved die-area contract.
+
+    ``source`` may carry a JSON pointer.  Prefer a line containing both
+    resolved dimensions, then any die/area-labelled line.  Both choices are
+    verbatim slices of the producer input.  The dimension-only fallback is
+    used only for internal/non-text sources and deliberately invents no name-
+    shaped token.
+    """
+    rel = str(source).split("#", 1)[0]
+    path = project / rel
+    try:
+        resolved_project = project.resolve()
+        resolved_path = path.resolve()
+        resolved_path.relative_to(resolved_project)
+        text = resolved_path.read_text(errors="replace")
+    except (OSError, ValueError):
+        return f"{die} um"
+
+    dims = [part.strip() for part in str(die).lower().split("x", 1)]
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    if len(dims) == 2:
+        for line in lines:
+            if all(re.search(rf"(?<![\d.]){re.escape(dim)}(?![\d.])", line)
+                   for dim in dims):
+                return line
+    for line in lines:
+        if re.search(r"\bdie\b|DIE_AREA|max_die_dimensions", line,
+                     re.IGNORECASE):
+            return line
+    return f"{die} um"
 
 
 # v1.6.369 — for #264 P2 ORGANIC. Structural emitter for

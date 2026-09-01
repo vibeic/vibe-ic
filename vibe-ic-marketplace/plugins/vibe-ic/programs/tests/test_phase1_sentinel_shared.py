@@ -183,6 +183,38 @@ def test_consistency_without_sentinel_still_fails_clock_freq_when_l8r_missing(tm
     )
 
 
+def test_consistency_accepts_current_l8r_clock_schema(tmp_path):
+    """The current producer emits clock_mhz + clock_domains, not the retired
+    top-level clock_frequency_hz field."""
+    _seed_no_protocol_docs(tmp_path)
+    (tmp_path / "L3_CMD_PROTOCOL.json").write_text(json.dumps({
+        "protocol_present": True, "commands": [{"name": "sample"}],
+    }))
+    (tmp_path / "L8_RTL_CONSTANTS.json").write_text(json.dumps({
+        "clock_mhz": 1,
+        "clock_domains": [{"name": "clk", "freq_hz": 1_000_000}],
+    }))
+    findings = cc.evaluate(cc.load_docs(tmp_path), cc.RULES)
+    clock = [f for f in findings if f.rule_id == "R_clock_freq_positive"]
+    assert len(clock) == 1
+    assert clock[0].passed, clock[0].detail
+
+
+def test_consistency_rejects_nonpositive_current_l8r_clock_schema(tmp_path):
+    _seed_no_protocol_docs(tmp_path)
+    (tmp_path / "L3_CMD_PROTOCOL.json").write_text(json.dumps({
+        "protocol_present": True, "commands": [{"name": "sample"}],
+    }))
+    (tmp_path / "L8_RTL_CONSTANTS.json").write_text(json.dumps({
+        "clock_mhz": 0,
+        "clock_domains": [{"name": "clk", "freq_hz": 0}],
+    }))
+    findings = cc.evaluate(cc.load_docs(tmp_path), cc.RULES)
+    clock = [f for f in findings if f.rule_id == "R_clock_freq_positive"]
+    assert len(clock) == 1
+    assert not clock[0].passed
+
+
 # ---------------------------------------------------------------------------
 # Bug #3 — apb-peripheral class chain no longer inherits protocol-ic
 # ---------------------------------------------------------------------------

@@ -95,10 +95,12 @@ here is the last chance to catch it; advising would reproduce failure
 
 The gate is TRIGGER-GATED: a design that mandates no floorplan (no
 DIE_AREA / DIE_WIDTH+DIE_HEIGHT / PL_TARGET_DENSITY / FP_CORE_UTIL
-anywhere in its L9 source set) is skipped entirely, because
-``_effective_die_um`` then falls through to the netlist-based auto-sizer
-and there is no verbatim-consumed value to protect. ``--advise``
-downgrades to exit 0 for staged rollout.
+anywhere in its L9 source set, and no L19 die-area contract) is skipped
+entirely, because ``_effective_die_um`` then falls through to the
+netlist-based auto-sizer and there is no verbatim-consumed value to protect.
+An L19-only contract is not vacuous: phase3 consumes it verbatim whenever
+``--die-um`` is auto, so this gate must check it. ``--advise`` downgrades to
+exit 0 for staged rollout.
 
 SWEEP / FALSE POSITIVES
 =======================
@@ -422,10 +424,16 @@ def inspect(project: Path,
         "util_max": util_max,
     }
 
-    if not _l9_source_files(project):
+    l9_source_files = _l9_source_files(project)
+    l19 = _l19_die(project)
+    if l19 is not None:
+        summary["l19_die"] = f"{l19[0]}x{l19[1]}"
+
+    if not l9_source_files and l19 is None:
         summary["skip_kind"] = "input-missing"
         summary["skipped_reason"] = (
-            "no L9 / constraint / floorplan source file in the project")
+            "no L9 / constraint / floorplan source file and no L19 die-area "
+            "contract in the project")
         return findings, summary
 
     die_decls = _collect_die_decls(project)
@@ -435,12 +443,13 @@ def inspect(project: Path,
     summary["util_declarations"] = [
         {"kind": k, "fraction": v, "source": s} for k, v, s in util_decls]
 
-    if not die_decls and not util_decls:
+    if not die_decls and not util_decls and l19 is None:
         summary["skip_kind"] = "input-missing"
         summary["skipped_reason"] = (
             "the design mandates no floorplan (no DIE_AREA / DIE_WIDTH+"
-            "DIE_HEIGHT / PL_TARGET_DENSITY / FP_CORE_UTIL) — phase3 "
-            "auto-sizes and there is no verbatim-consumed value to protect")
+            "DIE_HEIGHT / PL_TARGET_DENSITY / FP_CORE_UTIL and no L19 "
+            "die-area contract) — phase3 auto-sizes and there is no "
+            "verbatim-consumed value to protect")
         return findings, summary
 
     waiver = _waiver_rationale(project, WAIVER_ID)
@@ -474,14 +483,21 @@ def inspect(project: Path,
                     f"ordering: it will pin {resolved.wxh}um from "
                     f"{resolved.source}. A mandate that resolves two ways is "
                     f"not actionable."),
-                where=", ".join(sorted({d.source for d in die_decls})),
+                    where=", ".join(sorted({d.source for d in die_decls})),
             ))
 
+    # L19 is the backend's next precedence rung after L9.  If no direct L9
+    # rect exists, phase3 consumes this value verbatim and the gate therefore
+    # has a real denominator; treating it as "no floorplan" produced an rc=2
+    # INCOMPLETE over a real fixed-die design.
+    if resolved is None and l19 is not None:
+        resolved = DieDecl(
+            float(l19[0]), float(l19[1]),
+            "phase1/generated_docs/L19_CONSTRAINTS_PDK.json", "l19")
+        summary["resolved_die"] = resolved.wxh
+
     # ── Rule: L9's die must not contradict L19's budget ──
-    l19 = _l19_die(project)
-    if l19 is not None:
-        summary["l19_die"] = f"{l19[0]}x{l19[1]}"
-    if resolved is not None and l19 is not None:
+    if die_decls and resolved is not None and l19 is not None:
         if resolved.wxh != f"{l19[0]}x{l19[1]}":
             findings.append(Finding(
                 severity="ERROR",

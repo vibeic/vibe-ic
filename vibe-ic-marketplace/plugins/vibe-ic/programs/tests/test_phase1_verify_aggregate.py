@@ -11,10 +11,10 @@ mod = importlib.import_module("phase1_verify_aggregate")
 class TestLDocPresence:
     def test_finds_l_doc_when_present(self, tmp_path):
         (tmp_path / "generated_docs").mkdir()
-        (tmp_path / "generated_docs" / "L1_PRODUCT_VISION.json").write_text(
+        (tmp_path / "generated_docs" / "L1_DATASHEET.json").write_text(
             json.dumps({"vision": "x"}))
         presence = mod.scan_l_doc_presence(tmp_path)
-        assert presence["L1_PRODUCT_VISION"] is True
+        assert presence["L1_DATASHEET"] is True
 
     def test_missing_l_doc_returns_false(self, tmp_path):
         (tmp_path / "generated_docs").mkdir()
@@ -25,7 +25,24 @@ class TestLDocPresence:
         (tmp_path / "generated_docs").mkdir()
         (tmp_path / "generated_docs" / "L1.json").write_text("{}")
         presence = mod.scan_l_doc_presence(tmp_path)
-        assert presence["L1_PRODUCT_VISION"] is True
+        assert presence["L1_DATASHEET"] is True
+
+    def test_all_current_taxonomy_docs_are_recognised(self, tmp_path):
+        docs = tmp_path / "generated_docs"
+        docs.mkdir()
+        for name in mod.L_DOCS:
+            (docs / f"{name}.json").write_text("{}")
+        presence = mod.scan_l_doc_presence(tmp_path)
+        assert len(presence) == 14
+        assert all(presence.values()), presence
+
+    def test_l8_constants_cannot_be_satisfied_by_timing_alias(self, tmp_path):
+        docs = tmp_path / "generated_docs"
+        docs.mkdir()
+        (docs / "L8.json").write_text("{}")
+        presence = mod.scan_l_doc_presence(tmp_path)
+        assert presence["L8_TIMING_WAVEFORM"] is True
+        assert presence["L8_RTL_CONSTANTS"] is False
 
 
 class TestAggregator:
@@ -41,7 +58,7 @@ class TestAggregator:
 
     def test_missing_doc_fails(self):
         presence = {d: True for d in mod.L_DOCS}
-        presence["L7_REGISTER_MAP"] = False
+        presence["L7_TEST_DEBUG"] = False
         rep = mod.aggregate(mod.Path("/x"),
                              [self._check("a", 0)], presence)
         assert rep.verdict == "FAIL"

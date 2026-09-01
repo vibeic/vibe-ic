@@ -260,9 +260,14 @@ def test_phase1_hook_populates_l19_from_prose(tmp_path):
     _write(proj / "input" / "docs" / "L9_floorplan.md",
            "`FP_SIZING = absolute`, `DIE_AREA = [0, 0, 640, 480]` µm.\n")
     P1._post_emit_floorplan_contract(proj)
-    f = json.loads(l19.read_text())["fields"]
+    doc = json.loads(l19.read_text())
+    f = doc["fields"]
     assert f["die_area_budget_um"] == "640x480"
     assert f["constraints_present"] is True
+    evidence = doc["extraction_evidence"][
+        "input/docs/L9_floorplan.md"][0]["literal"]
+    assert evidence == (
+        "`FP_SIZING = absolute`, `DIE_AREA = [0, 0, 640, 480]` µm.")
 
 
 def test_phase1_hook_noop_without_contract(tmp_path):

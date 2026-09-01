@@ -120,6 +120,29 @@ def test_die_agreeing_with_l19_passes(tmp_path):
     assert report["findings"] == []
 
 
+def test_l19_only_die_is_nonvacuous_and_passes(tmp_path):
+    """phase3's documented precedence consumes L19 when L9 has no direct
+    rectangle; the floorplan gate must inspect that value, not rc=2 skip."""
+    _l19(tmp_path, "420x360")
+    proc, report = _run(tmp_path)
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "VACUOUS_PASS:" not in (proc.stdout + proc.stderr)
+    assert report["summary"]["resolved_die"] == "420x360"
+    assert report["summary"]["l19_die"] == "420x360"
+    assert report["findings"] == []
+
+
+def test_NEGATIVE_l19_only_die_too_small_for_macro_fails(tmp_path):
+    """The L19-only path reaches the same physical-fit rule as direct L9."""
+    _l19(tmp_path, "120x120")
+    _l9_json(tmp_path, submodules=[{"name": "fixture_sram_block"}])
+    _lef(tmp_path, "fixture_sram_block", 500.0, 80.0)
+    proc, report = _run(tmp_path)
+    assert proc.returncode == 1, proc.stdout + proc.stderr
+    assert "L9_DIE_TOO_SMALL_FOR_MACROS" in _rules(report)
+    assert report["summary"]["resolved_die"] == "120x120"
+
+
 def test_macro_that_fits_passes(tmp_path):
     _l9_md(tmp_path, _die_rect_doc(400, 400,
                                    "| `FP_CORE_UTIL` | 60 | percent |\n"))

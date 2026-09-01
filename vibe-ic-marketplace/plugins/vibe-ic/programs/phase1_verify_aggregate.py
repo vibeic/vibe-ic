@@ -19,16 +19,32 @@ from dataclasses import dataclass, field, asdict
 from pathlib import Path
 from typing import Any, Dict, List
 import plugin_manifest_discovery as _pmd  # noqa: E402  (#800 ONE version reader)
+from l_doc_taxonomy import L_DOCS_V1
 
 
-# The 13 L docs phase1 emits, in order.
-L_DOCS = (
-    "L1_PRODUCT_VISION", "L2_FRS", "L3_USE_CASES", "L4_USER_FLOW",
-    "L5_BLOCK_PLAN", "L6_INTERFACE_LIST", "L7_REGISTER_MAP",
-    "L8_TIMING_WAVEFORM", "L9_CONSTRAINTS", "L10_TEST_PLAN",
-    "L11_VERIFICATION_PLAN", "L12_BEHAVIORAL_SEQUENCES",
-    "L13_DELIVERABLES",
-)
+# The chip-centric L-doc set phase1 emits, in taxonomy order.  L8 has TWO
+# independent documents (constants and timing), so the current contract is 14
+# files even though its numeric labels end at L13.  This used to be a private,
+# obsolete list of pre-taxonomy names; it consequently called a complete
+# current output "missing".  Import the producer's single source of truth.
+L_DOCS = tuple(spec.full_name for spec in L_DOCS_V1)
+_L_DOC_CODES = {spec.full_name: spec.code for spec in L_DOCS_V1}
+
+# Accept historical long stems while projects migrate, but REPORT under the
+# canonical current taxonomy.  L8C deliberately has no ambiguous ``L8`` short
+# alias: one legacy file must never satisfy both independent L8 documents.
+_LEGACY_STEMS = {
+    "L1_DATASHEET": ("L1_PRODUCT_VISION",),
+    "L3_CMD_PROTOCOL": ("L3_USE_CASES",),
+    "L4_REGMAP": ("L4_USER_FLOW",),
+    "L5_ADI_SPEC": ("L5_BLOCK_PLAN",),
+    "L6_CONTROL_LOGIC": ("L6_INTERFACE_LIST",),
+    "L7_TEST_DEBUG": ("L7_REGISTER_MAP",),
+    "L9_INTEGRATION_SPEC": ("L9_CONSTRAINTS",),
+    "L10_TEST_CASES": ("L10_TEST_PLAN",),
+    "L11_OTP_CONTENT": ("L11_VERIFICATION_PLAN",),
+    "L13_LAB_CALIBRATION": ("L13_DELIVERABLES",),
+}
 
 # Backing programs (all existing as of v0.1.50)
 BACKING_CHECKS = (
@@ -131,11 +147,13 @@ def scan_l_doc_presence(project_dir: Path) -> Dict[str, bool]:
     out: Dict[str, bool] = {}
     docs_dir = resolve_docs_dir(project_dir)
     for doc in L_DOCS:
-        # Match e.g. L1_PRODUCT_VISION.json (preferred) or L1.json
-        candidates = (
-            docs_dir / f"{doc}.json",
-            docs_dir / f"{doc.split('_')[0]}.json",
-        )
+        stems = [doc, *_LEGACY_STEMS.get(doc, ())]
+        code = _L_DOC_CODES[doc]
+        if code == "L8T":
+            stems.append("L8")
+        elif code != "L8C":
+            stems.append(code)
+        candidates = tuple(docs_dir / f"{stem}.json" for stem in stems)
         out[doc] = any(p.exists() for p in candidates)
     return out
 
