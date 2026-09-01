@@ -251,3 +251,158 @@ def test_staged_folder_passes_structure_check(tmp_path):
     chk = subprocess.run([sys.executable, str(checker), str(cell)],
                          capture_output=True, text=True)
     assert chk.returncode == 0, chk.stdout + chk.stderr
+
+
+# --------------------------------------------------------------------------
+# #2006 — compiler build residue never lands in the cell
+# --------------------------------------------------------------------------
+
+_RESIDUE_EXTS = (".gch", ".pch", ".o", ".obj", ".a", ".so", ".d", ".mk", ".cpp")
+
+
+def _plant_verilator_build(run: Path) -> tuple:
+    """A Verilator model directory the way the coverage step leaves it — under
+    the flow's OWN directory name (`cov_build`, not the tool's default
+    `obj_dir`), beside the outputs a reader actually wants. Every residue
+    file is SMALL, so the size rule cannot be what excludes it.
+
+    Returns (residue relpaths, evidence relpaths), both relative to the run.
+    """
+    sim = run / "phase2" / "stage1" / "sim"
+    cov = sim / "cov_build"
+    cov.mkdir(parents=True)
+    residue = [
+        # the marker Verilator writes into every -Mdir it populates
+        "cov_build/Vtb_widget__verFiles.dat",
+        # the two precompiled headers the issue was filed about
+        "cov_build/Vtb_widget__pch.h.fast.gch",
+        "cov_build/Vtb_widget__pch.h.slow.gch",
+        "cov_build/Vtb_widget__pch.h",
+        # the generated model, its build files, and the compiled simulator
+        "cov_build/Vtb_widget.cpp",
+        "cov_build/Vtb_widget.h",
+        "cov_build/Vtb_widget.mk",
+        "cov_build/Vtb_widget_classes.mk",
+        "cov_build/Vtb_widget___024root__0.cpp",
+        "cov_build/Vtb_widget.o",
+        "cov_build/Vtb_widget.d",
+        "cov_build/Vtb_widget__ALL.a",
+        "cov_build/Vtb_widget",
+        # the runtime Verilator copies in beside them
+        "cov_build/verilated.o",
+        "cov_build/verilated.d",
+        "cov_build/verilated_cov.o",
+        # the tool's default directory name, anywhere
+        "obj_dir/Vother.cpp",
+        # a bare object file outside any build directory
+        "stray.o",
+    ]
+    evidence = [
+        "cov_build/coverage.dat",
+        "results.xml",
+        "pass.flag",
+        "tb/case_1.v",
+        "sim.log",
+        # a header and a main in a directory Verilator never populated is
+        # somebody's SOURCE — the rule keys on the tool's marker, not on a
+        # `V*` name shape
+        "src/Vtb_widget.h",
+        "src/main.cpp",
+    ]
+    for rel in residue + evidence:
+        p = sim / rel
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_bytes(b"fixture:" + rel.encode() + b"\n")
+    return (["phase2/stage1/sim/" + r for r in residue],
+            ["phase2/stage1/sim/" + e for e in evidence])
+
+
+def test_build_residue_never_lands_in_the_cell(tmp_path):
+    """#2006. A published cell carried a whole Verilator build directory —
+    55 files, 174 MB, two precompiled headers of 84 MB each — beside the one
+    71 KB `coverage.dat` that is the evidence. The size rule never saw them:
+    it routes layout artefacts and nothing else. The residue here is tiny on
+    purpose, so this test fails on the OLD code for the right reason."""
+    run = _make_run(tmp_path)
+    residue, evidence = _plant_verilator_build(run)
+    dest_root = tmp_path / "benchmark-data"
+    out = tmp_path / "s.json"
+    r = _run(_base_args(run, dest_root) + ["--json", str(out)])
+    assert r.returncode == 0, r.stdout + r.stderr
+    cell = dest_root / "ic" / "widgetmul" / "v9.9.9_openpdkx"
+
+    # the evidence beside the residue is untouched
+    for rel in evidence:
+        assert (cell / rel).is_file(), f"evidence {rel} was dropped"
+
+    # the pin: a run tree containing a .gch never lands it in the cell
+    landed = sorted(p.relative_to(cell).as_posix()
+                    for p in cell.rglob("*") if p.is_file())
+    gch = [p for p in landed if p.endswith(".gch")]
+    assert not gch, gch
+    for rel in residue:
+        assert not (cell / rel).exists(), f"build residue {rel} was staged"
+    # and nothing of that shape anywhere in the cell, by any route
+    shaped = [p for p in landed
+              if "/obj_dir/" in p
+              or Path(p).suffix in (".gch", ".pch", ".o", ".obj", ".a", ".so", ".d")
+              or (p.startswith("phase2/stage1/sim/cov_build/")
+                  and not p.endswith("coverage.dat"))]
+    assert not shaped, shaped
+
+    # the omission is legible: counted, sized and named in the summary and
+    # on stdout — never silent
+    data = json.loads(out.read_text())
+    br = data["build_residue_skipped"]
+    assert br["files"] == len(residue), br
+    assert sorted(br["paths"]) == sorted(residue), br
+    assert br["bytes"] == sum((run / rel).stat().st_size for rel in residue)
+    assert "build residue:" in r.stdout, r.stdout
+    assert any(s.startswith("phase2/") and "build-residue" in s
+               for s in data["staged"]), data["staged"]
+
+
+def test_build_residue_is_reported_even_when_there_is_none(tmp_path):
+    """The field is part of the summary's shape, not a conditional extra —
+    the same rule `excluded_raw_files` follows."""
+    run = _make_run(tmp_path)
+    dest_root = tmp_path / "benchmark-data"
+    out = tmp_path / "s.json"
+    assert _run(_base_args(run, dest_root) + ["--json", str(out)]).returncode == 0
+    data = json.loads(out.read_text())
+    assert data["build_residue_skipped"] == {"files": 0, "bytes": 0, "paths": []}
+
+
+def test_build_residue_predicate_is_bound_to_the_tool_marker(tmp_path):
+    """The decision itself, probed directly (the publish test above cannot
+    tell WHICH half of the rule excluded a file). Verilator marks every
+    directory it populates with `<prefix>__verFiles.dat`; that marker, not a
+    directory name and not a `V*` name shape, is what turns the model files
+    into residue."""
+    sys.path.insert(0, str(PROG.parent))
+    import benchmark_evidence_publish as bep
+
+    src = tmp_path / "src"
+    src.mkdir()
+    for name in ("Vtop.h", "Vtop.cpp", "verilated.cpp", "main.cpp"):
+        (src / name).write_text("// source\n")
+    # no marker: nothing here is residue, whatever it is called
+    for name in ("Vtop.h", "Vtop.cpp", "verilated.cpp", "main.cpp"):
+        assert not bep.is_build_residue(src / name), name
+
+    (src / "Vtop__verFiles.dat").write_text("")
+    # marker present: the model prefix and the runtime are residue ...
+    for name in ("Vtop.h", "Vtop.cpp", "Vtop", "Vtop_classes.mk",
+                 "Vtop___024root__0.cpp", "verilated.cpp", "Vtop__verFiles.dat"):
+        assert bep.is_build_residue(src / name), name
+    # ... and the simulation's own outputs are not
+    for name in ("main.cpp", "coverage.dat", "results.xml", "sim.log"):
+        assert not bep.is_build_residue(src / name), name
+
+    # extension and obj_dir rules need no marker at all
+    for rel in ("x.gch", "x.pch", "x.o", "x.obj", "x.a", "x.so", "x.d",
+                "deep/obj_dir/Vany.cpp", "obj_dir/x.txt"):
+        assert bep.is_build_residue(tmp_path / rel), rel
+    for rel in ("x.v", "x.sv", "x.json", "x.dat", "x.xml", "x.log", "x.gds",
+                "objects_dir/x.cpp"):
+        assert not bep.is_build_residue(tmp_path / rel), rel

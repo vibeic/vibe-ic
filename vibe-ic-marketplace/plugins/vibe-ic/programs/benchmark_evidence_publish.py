@@ -100,6 +100,38 @@ check anything. It also moves this program TOWARD the hand-staged reference
 cells rather than away from them: they carry that file, and on the rest of the
 subtree (`extracted/*.spef`) this program still publishes less than they do.
 
+COMPILER BUILD RESIDUE IS NOT EVIDENCE AND IS NEVER STAGED (#2006)
+===================================================================
+`phase2/` is a copied subtree, and the coverage measurement builds a Verilator
+model under `phase2/stage1/sim/cov_build/`: precompiled headers, object files,
+dependency listings, the generated C++ model and the compiled simulator.
+`_copy_tree` walked that directory wholesale.
+
+MEASURED (one published cell, 2026-09-01): 55 files and 174,624,038 bytes
+landed from that one directory, the two precompiled headers 84 MB EACH -- over
+the commit ceiling, which the size routing applies to layout artefacts and to
+nothing else -- beside ONE file with evidentiary value, the 71,241-byte
+`coverage.dat` the coverage report is derived from. A clone of that cell
+downloads more than two thousand times the evidence to receive it.
+
+The rule is `is_build_residue`: a compiler intermediate by EXTENSION (`.gch`,
+`.pch`, `.o`, `.obj`, `.a`, `.so`, `.d`), anything under an `obj_dir/`, and --
+inside a directory Verilator populated, which it marks with
+`<prefix>__verFiles.dat` -- every file carrying that model prefix or the
+`verilated*` runtime name. The simulation's OWN outputs carry neither
+(`coverage.dat`, the junit XML, `pass.flag`, the testbenches, logs) and stay.
+The Verilator half is bound to the MARKER, not to a directory name: the flow
+names its model directory `cov_build`, and a rule keyed on the tool's default
+`obj_dir` would have missed the measured case entirely.
+
+This is not size routing and gets no `LAYOUT_ROUTING.txt` line. A build
+intermediate is reproduced by re-running the build, so "dropped at publish"
+and "never existed" call for the same action from a reader -- unlike a layout
+artefact, where the two call for opposite ones. The omission is still legible:
+the count, the bytes and the paths are in the JSON summary
+(`build_residue_skipped`) and on stdout, and the `provenance.jsonl` pruning
+below discloses any declared output among them.
+
 THE PER-STEP EVIDENCE — RECORDED, NOT MIRRORED (`STEP_ROUTING.txt`, `steps/`)
 ============================================================================
 `steps/` used to be excluded here by name, as "per-step scratch". The effect
@@ -235,7 +267,8 @@ _VERSION_RE = re.compile(r"^\d+\.\d+\.\d+$")
 _SAFE_TOKEN_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 _CONVERGED = ("PASS", "PASS_WITH_WAIVERS")
 
-# Evidence subtrees copied verbatim (minus excluded extensions). Order = the
+# Evidence subtrees copied verbatim (minus oversize layout artefacts and
+# compiler build residue, see `_copy_tree`). Order = the
 # canonical committed shape of the reference cells; NOT phase3/stage3 (raw PnR),
 # NOT sim/ (empty in the reference).
 #
@@ -443,6 +476,76 @@ def _excluded(p: Path) -> bool:
     return is_layout_artefact(p) and over_ceiling(p)
 
 
+# Compiler build residue (#2006). Not evidence, not size-routed, never staged.
+#
+# Extensions no tool in this flow writes as a deliverable: precompiled headers,
+# object files, static and shared archives, dependency listings. Binary except
+# for `.d`, which is a list of the BUILD HOST's include paths — residue with a
+# host-path leak on top.
+_BUILD_RESIDUE_EXTS = frozenset({".gch", ".pch", ".o", ".obj", ".a", ".so", ".d"})
+# Verilator's default model directory; `.gitignore` already names it.
+_BUILD_RESIDUE_DIRS = frozenset({"obj_dir"})
+# Verilator writes `<prefix>__verFiles.dat` into every model directory it
+# populates (`-Mdir`), whatever that directory is called. `<prefix>` is the
+# model's own name (`V<top>` unless `--prefix` says otherwise), and every file
+# Verilator emits there carries it: the C++ model, its headers, `<prefix>.mk`,
+# `<prefix>_classes.mk`, the compiled executable. The runtime it copies in
+# beside them is named `verilated*`. The SIMULATION's outputs carry neither.
+_VERILATOR_MDIR_MARKER = "__verFiles.dat"
+_VERILATOR_RUNTIME_PREFIX = "verilated"
+
+
+def _verilator_model_prefixes(directory: Path) -> Tuple[str, ...]:
+    """The model prefixes Verilator has written into `directory` — empty when
+    Verilator never populated it. One `listdir`; no cache, because the walk
+    that calls this is bounded by the run tree and a stale answer would be
+    worse than a repeated syscall."""
+    try:
+        names = os.listdir(directory)
+    except OSError:
+        return ()
+    n = len(_VERILATOR_MDIR_MARKER)
+    return tuple(sorted(name[:-n] for name in names
+                        if name.endswith(_VERILATOR_MDIR_MARKER) and len(name) > n))
+
+
+def is_build_residue(p: Path) -> bool:
+    """True for a compiler / Verilator build intermediate.
+
+    Named and exported on purpose, like `over_ceiling`: the test for #2006
+    probes this decision directly as well as through a publish, so a mutant
+    that keeps the name and loses the Verilator half is still caught.
+
+    Bound to evidence the TOOL leaves, not to a directory name or a `V*`
+    file-name shape on its own: a `Vtop.h` in a directory Verilator never
+    populated is somebody's source and stays.
+    """
+    if any(part in _BUILD_RESIDUE_DIRS for part in p.parts[:-1]):
+        return True
+    if p.suffix.lower() in _BUILD_RESIDUE_EXTS:
+        return True
+    prefixes = _verilator_model_prefixes(p.parent)
+    if not prefixes:
+        return False
+    name = p.name
+    if name.startswith(_VERILATOR_RUNTIME_PREFIX):
+        return True
+    return any(name.startswith(prefix) for prefix in prefixes)
+
+
+def _residue_record(p: Path, rel_base: Path) -> dict:
+    """One JSON-summary entry for a build intermediate left behind."""
+    try:
+        size = p.stat().st_size
+    except OSError:
+        size = -1
+    try:
+        rel = p.resolve().relative_to(rel_base).as_posix()
+    except ValueError:
+        rel = p.name
+    return {"path": rel, "bytes": size}
+
+
 def _record(p: Path, rel_base: Path, decision: str,
             route: str, sha: Optional[str] = None) -> dict:
     """One line's worth of routing evidence for a single layout artefact.
@@ -483,7 +586,8 @@ def _record(p: Path, rel_base: Path, decision: str,
 
 def _copy_tree(src: Path, dst: Path, dry: bool,
                rel_base: Optional[Path] = None,
-               route: str = "not-retained") -> Tuple[int, List[dict]]:
+               route: str = "not-retained",
+               residue_out: Optional[List[dict]] = None) -> Tuple[int, List[dict]]:
     """Copy every non-excluded regular file under src into dst (preserving
     relative layout).
 
@@ -492,6 +596,10 @@ def _copy_tree(src: Path, dst: Path, dry: bool,
     be a bare integer that reached stdout and nothing else; an omission that
     leaves no trace in the deliverable is indistinguishable from an artefact
     that never existed.
+
+    Compiler build residue (`is_build_residue`, #2006) is never copied; each
+    skipped file is appended to `residue_out` when the caller passes a list,
+    so the summary can say what was left behind and how big it was.
     """
     copied = 0
     records: List[dict] = []
@@ -499,6 +607,11 @@ def _copy_tree(src: Path, dst: Path, dry: bool,
         if not f.is_file():
             continue
         rel = f.relative_to(src)
+        if is_build_residue(f):
+            if residue_out is not None:
+                residue_out.append(_residue_record(
+                    f, rel_base if rel_base is not None else src))
+            continue
         if _excluded(f):
             if rel_base is not None:
                 records.append(_record(f, rel_base, "ROUTED_AWAY", route))
@@ -1418,6 +1531,7 @@ def publish(args: argparse.Namespace) -> dict:
     staged: List[str] = []
     route = getattr(args, "oversize_route", "not-retained")
     layout_records: List[dict] = []
+    residue: List[dict] = []
 
     if not dry:
         if dest.exists() and args.force:
@@ -1442,10 +1556,15 @@ def publish(args: argparse.Namespace) -> dict:
         src = run_dir / sub
         if not src.is_dir():
             continue
-        c, recs = _copy_tree(src, dest / sub, dry, rel_base=run_dir, route=route)
+        n_residue_before = len(residue)
+        c, recs = _copy_tree(src, dest / sub, dry, rel_base=run_dir, route=route,
+                             residue_out=residue)
         layout_records.extend(recs)
+        n_residue = len(residue) - n_residue_before
         if c:
-            staged.append(f"{sub}/ ({c} files)")
+            staged.append(f"{sub}/ ({c} files"
+                          + (f"; {n_residue} build-residue file(s) NOT staged"
+                             if n_residue else "") + ")")
 
     # GDS_MANIFEST — always, whether or not the GDS itself fits.
     gds_dir = dest / "phase3" / "stage4" / "gds"
@@ -1552,7 +1671,7 @@ def publish(args: argparse.Namespace) -> dict:
     # one file whose whole value is that it can be trusted.
     shared_input = ic_root / "input"
     input_result, input_recs = _stage_shared_input(run_dir, args, shared_input,
-                                                   dry, route)
+                                                   dry, route, residue_out=residue)
     layout_records.extend(input_recs)
 
     # Per-step evidence. AFTER the subtrees + the GDS, because each declared
@@ -1608,6 +1727,14 @@ def publish(args: argparse.Namespace) -> dict:
         "staged": staged,
         "excluded_raw_files": excluded_total,
         "layout_routing": layout_records,
+        # #2006. Compiler / Verilator intermediates found in a published
+        # subtree and left behind. Reported even when empty, for the reason
+        # `excluded_raw_files` is.
+        "build_residue_skipped": {
+            "files": len(residue),
+            "bytes": sum(r["bytes"] for r in residue if r["bytes"] > 0),
+            "paths": [r["path"] for r in residue],
+        },
         "oversize_route": route,
         "shared_input": input_result,
         "step_evidence": steps_result,
@@ -1767,7 +1894,9 @@ def led_captured(cell: Path) -> str:
 
 def _stage_shared_input(run_dir: Path, args: argparse.Namespace,
                         shared_input: Path, dry: bool,
-                        route: str = "not-retained") -> Tuple[str, List[dict]]:
+                        route: str = "not-retained",
+                        residue_out: Optional[List[dict]] = None
+                        ) -> Tuple[str, List[dict]]:
     """Copy the design-input docs to ic/<IC>/input/ once. Non-fatal: on a 2nd/3rd
     PDK for the same IC the shared input already exists and is left untouched.
 
@@ -1793,7 +1922,8 @@ def _stage_shared_input(run_dir: Path, args: argparse.Namespace,
     if src is None:
         return "no design-input docs found to stage (shared input unchanged)", []
     dst = shared_input / "docs"
-    c, recs = _copy_tree(src, dst, dry, rel_base=run_dir, route=route)
+    c, recs = _copy_tree(src, dst, dry, rel_base=run_dir, route=route,
+                         residue_out=residue_out)
     for r in recs:
         if r["decision"] == "STAGED":
             r["destination"] = "shared-input"
@@ -2010,6 +2140,11 @@ def main(argv: Optional[List[str]] = None) -> int:
         print(f"      ROUTED_AWAY {r['bytes'] / 1e6:.1f} MB  {r['path']} "
               f"-> {r['destination']}  sha256:{r['sha256'][:12]}…")
     print(f"  shared input: {summary['shared_input']}")
+    br = summary["build_residue_skipped"]
+    if br["files"]:
+        print(f"  build residue: {br['files']} file(s), {br['bytes'] / 1e6:.1f} MB "
+              f"NOT staged — compiler/Verilator intermediates, reproduced by "
+              f"re-running the build, not evidence (#2006)")
     se = summary["step_evidence"]
     if not se["present"]:
         print(f"  step evidence: source run has NO {_STEPS_DIRNAME}/ tree — "
