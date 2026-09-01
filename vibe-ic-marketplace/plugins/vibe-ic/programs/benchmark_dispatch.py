@@ -588,6 +588,13 @@ def _make_ai_review_task(problem_id: str, project: Path, got: dict,
                   f"r{len(challenges)}-{candidate['rtl_sha256']}")
     challenge_dir = (run_p / "ai_verification_challenges" / safe /
                      review_key)
+    challenge_file = str((challenge_dir / "challenge_tb.sv").resolve())
+    prompt_sha = _sha256_text(prompt.read_text(errors="replace"))
+    evidence_item_shape = {
+        "excerpt": ("<exact prompt excerpt; at least 8 characters and a "
+                    "whitespace-normalized substring of prompt_path>"),
+        "supports": "<the claim it supports; at least 12 characters>",
+    }
     return {
         "schema": _REVIEW_TASK_SCHEMA,
         "id": str(problem_id),
@@ -601,7 +608,7 @@ def _make_ai_review_task(problem_id: str, project: Path, got: dict,
         "prompt_path": str(prompt),
         "rtl_paths": candidate["rtl_paths"],
         "working_rtl_paths": [str(p.resolve()) for p in paths],
-        "prompt_sha256": _sha256_text(prompt.read_text(errors="replace")),
+        "prompt_sha256": prompt_sha,
         "phase1_provenance": phase1_provenance,
         "rtl_sha256": candidate["rtl_sha256"],
         "program_routing": {
@@ -617,10 +624,65 @@ def _make_ai_review_task(problem_id: str, project: Path, got: dict,
         },
         "review_path": str((run_p / "ai_reviews" / safe /
                             f"{review_key}.json").resolve()),
-        "challenge_path": str((challenge_dir / "challenge_tb.sv").resolve()),
+        "challenge_path": challenge_file,
         "response_path": str((run_p / "responses" / f"{safe}.json").resolve()),
         "review_requirements": {
             "schema": _AI_REVIEW_SCHEMA,
+            "required_envelope": {
+                "_contract": (
+                    "the review JSON written to review_path is REJECTED "
+                    "unless it carries every field below with this exact "
+                    "shape; concrete values are the required values (copy "
+                    "them verbatim), <angle-bracket> values are authored by "
+                    "the reviewer under the stated rule"),
+                "schema": _AI_REVIEW_SCHEMA,
+                "id": str(problem_id),
+                "prompt_sha256": prompt_sha,
+                "rtl_sha256": candidate["rtl_sha256"],
+                "reviewer": {
+                    "kind": "AI",
+                    "model": ("<the reviewing AI model name; empty, "
+                              "unknown, unspecified and n/a are rejected>"),
+                },
+                "blind": {"oracle_accessed": False},
+                "routing": {
+                    "verdict": "<AGREE or OVERRIDE_PROGRAM>",
+                    "ai_nature": ("<the AI-judged nature; AGREE requires it "
+                                  "to equal program_routing.nature>"),
+                },
+                "semantic_review": {
+                    "verdict": "<PASS or FAIL>",
+                    "findings": ["<list; must be non-empty when the verdict "
+                                 "is FAIL>"],
+                    "rationale": ("<the review basis; at least 16 "
+                                  "characters>"),
+                    "prompt_evidence": [dict(evidence_item_shape)],
+                },
+                "override": {
+                    "_required_when": "routing.verdict is OVERRIDE_PROGRAM",
+                    "prompt_evidence": [dict(evidence_item_shape)],
+                    "explanation": ("<at least 160 characters when no "
+                                    "prompt_evidence item verifies against "
+                                    "the prompt>"),
+                    "program_limitation": ("<the deterministic limitation "
+                                           "being overridden; at least 16 "
+                                           "characters>"),
+                },
+                "verification_test": {
+                    "_required_when": ("semantic_review.verdict is FAIL; "
+                                       "write the test file to the task "
+                                       "challenge_path"),
+                    "schema": _CHALLENGE_SCHEMA,
+                    "path": challenge_file,
+                    "sha256": "<sha256 of the exact challenge file text>",
+                    "top_module": "vibeic_ai_challenge_tb",
+                    "rationale": ("<what the test proves and how; at least "
+                                  "80 characters>"),
+                    "expected_behavior": ("<the checked behavior; at least "
+                                          "24 characters>"),
+                    "prompt_evidence": [dict(evidence_item_shape)],
+                },
+            },
             "blind_inputs_only": ["prompt_path", "rtl_paths"],
             "routing_verdicts": ["AGREE", "OVERRIDE_PROGRAM"],
             "override_rule": (
@@ -637,7 +699,7 @@ def _make_ai_review_task(problem_id: str, project: Path, got: dict,
                 "hash-bound AI review"),
             "semantic_fail_verification_test": {
                 "schema": _CHALLENGE_SCHEMA,
-                "path": str((challenge_dir / "challenge_tb.sv").resolve()),
+                "path": challenge_file,
                 "top_module": "vibeic_ai_challenge_tb",
                 "required_result_on_reviewed_candidate": "FAIL",
                 "required_result_on_repair": "PASS",
