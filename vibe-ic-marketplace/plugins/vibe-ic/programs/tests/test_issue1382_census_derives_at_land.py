@@ -56,6 +56,8 @@ CENSUS_REL = ("vibe-ic-marketplace/plugins/vibe-ic/programs/tests/"
 # names that token joins the corpus it is testing.
 ANCHOR_REL = ("vibe-ic-marketplace/plugins/vibe-ic/programs/tests/"
               "test_matrix_d2_falsifiable.py")
+MUTATED_FIGURE_REL = (Path("vibe-ic-marketplace/plugins/vibe-ic/programs/tests")
+                      / "flow_matrix" / ("flow" + "ref.py"))
 
 
 def _load(path: Path, name: str):
@@ -78,12 +80,15 @@ def _git(repo: Path, *args: str):
 def repo(tmp_path):
     """A real git repo carrying the paths the census generator writes."""
     r = tmp_path / "repo"
-    for rel in (INDEX_REL, PJSON_REL, CENSUS_REL, ANCHOR_REL):
+    for rel in (INDEX_REL, PJSON_REL, CENSUS_REL, ANCHOR_REL,
+                MUTATED_FIGURE_REL):
         (r / rel).parent.mkdir(parents=True, exist_ok=True)
     (r / PJSON_REL).write_text('{"version": "1.2.3"}\n', encoding="utf-8")
     (r / INDEX_REL).write_text("stale index\n", encoding="utf-8")
     (r / CENSUS_REL).write_text("stale census block\n", encoding="utf-8")
     (r / ANCHOR_REL).write_text("stated = 164\n", encoding="utf-8")
+    (r / MUTATED_FIGURE_REL).write_text("original figure source\n",
+                                        encoding="utf-8")
     (r / "untouched.py").write_text("# not preparation's business\n",
                                     encoding="utf-8")
     _git(r, "init", "-q")
@@ -351,7 +356,7 @@ def test_the_written_json_declaration_survives_a_failing_run():
         "preparation's own output")
 
 
-def test_the_bound_on_the_census_subprocess_can_actually_fire():
+def test_the_bound_on_the_census_subprocess_can_actually_fire(repo, monkeypatch):
     """An unbounded subprocess inside the landing path hangs the gate instead of
     reporting that it could not re-derive. The number is not the harness's
     `180 // 3` — nothing bounds this program with pytest — but it must exist and
@@ -372,10 +377,20 @@ def test_the_bound_on_the_census_subprocess_can_actually_fire():
     #
     # The property is "a bound reaches the subprocess AND CAN FIRE", so fire it:
     # a 1-second bound must return promptly with a named reason and zero declared
-    # paths, rather than hanging or claiming a re-derivation it did not do.
+    # paths, rather than hanging or claiming a re-derivation it did not do. The
+    # write-capable probe operates on this test's temporary subject, never REPO.
+    slow = repo / "_slow_census.py"
+    slow.write_text(
+        "import pathlib, sys, time\n"
+        f"pathlib.Path(sys.argv[1]).joinpath({str(MUTATED_FIGURE_REL)!r})"
+        ".write_text('changed by census\\n')\n"
+        "time.sleep(30)\n",
+        encoding="utf-8")
+    monkeypatch.setattr(G, "GEN_CENSUS", slow)
+
     import time as _t
     t0 = _t.time()
-    wrote, why = G._default_census_writer(G.REPO, 1.0)
+    wrote, why = G._default_census_writer(repo, 1.0)
     dt = _t.time() - t0
     assert dt < 60, (
         f"a 1s bound took {dt:.0f}s to return — the bound is declared and not "
@@ -387,10 +402,36 @@ def test_the_bound_on_the_census_subprocess_can_actually_fire():
         f"the bound fired and the writer still declared {wrote} — a killed child's "
         f"`finally` never runs, so anything declared here is a claim about work "
         f"that was not finished")
+    assert (repo / MUTATED_FIGURE_REL).read_text(
+        encoding="utf-8") == "original figure source\n"
 
     assert "subprocess.TimeoutExpired" in src, (
         "a bound with no handler takes the preparation down instead of "
         "reporting NOT RE-DERIVED")
+
+
+def test_the_bound_probe_never_points_a_writer_at_the_shipped_tree(
+        repo, monkeypatch):
+    """A pytest session may read the shipped census corpus, never rewrite it."""
+    shipped_figure = REPO / MUTATED_FIGURE_REL
+    before = shipped_figure.read_bytes()
+    observed = []
+
+    def observe_subject(repo_path: Path, timeout_s: float):
+        observed.append(Path(repo_path).resolve())
+        return [], f"the generator did not finish within {timeout_s}s"
+
+    monkeypatch.setattr(G, "_default_census_writer", observe_subject)
+    test_the_bound_on_the_census_subprocess_can_actually_fire(repo, monkeypatch)
+
+    assert observed, "the timeout probe never reached the census writer"
+    assert observed[0] != G.REPO.resolve(), (
+        f"the timeout probe pointed a writer at the shipped tree: {observed[0]}. "
+        "A pytest session may read that tree but must use a temporary subject "
+        "for every write-capable probe")
+    assert shipped_figure.read_bytes() == before, (
+        "the timeout probe changed the shipped figure source during this pytest "
+        "session")
 
 
 def test_a_blown_bound_is_reported_as_the_bound_and_not_as_a_finding(repo):
