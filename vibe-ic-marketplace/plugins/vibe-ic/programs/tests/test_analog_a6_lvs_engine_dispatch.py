@@ -43,6 +43,36 @@ def test_a_klayout_lvs_runset_is_a_recognised_lvs_deck():
     assert any(g.endswith("klayout/*.lvs") for g in globs), globs
 
 
+def test_the_axis_also_matches_the_pdks_own_subdirectory():
+    """…and the fix above was INERT on the corpus as landed: the runset was
+    staged at `klayout/lvs/<pdk>.lvs`, the layout of the PDK it was copied
+    from, and `klayout/*.lvs` does not match one directory down. Enumerated,
+    never `**`: a recursive glob also matches the 53 `rule_decks/*.lvs`
+    INCLUDE files and the resolver takes the first hit."""
+    globs = PAC._AXES["lvs_deck"]
+    assert any(g.endswith("klayout/lvs/*.lvs") for g in globs), globs
+    assert not any("**" in g and g.endswith(".lvs") for g in globs), globs
+    deep = min(i for i, g in enumerate(globs)
+               if g.endswith("klayout/lvs/*.lvs"))
+    flat = min(i for i, g in enumerate(globs)
+               if g.endswith("klayout/*.lvs"))
+    assert deep < flat, globs
+
+
+def test_a_drc_deck_staged_at_its_own_depth_is_preferred():
+    """A KLayout runset resolves siblings RELATIVE TO ITSELF, so a deck staged
+    flat cannot find its tech-JSON and raises; staged at the depth it was
+    copied from, the same deck grades 590 rules. When both are present the
+    resolver must reach the one that can resolve its own includes, so the
+    deeper glob comes FIRST."""
+    globs = list(PAC._AXES["drc_deck"])
+    deep = min(i for i, g in enumerate(globs)
+               if g.endswith("klayout/tech/drc/*.drc"))
+    flat = min(i for i, g in enumerate(globs)
+               if g.endswith("klayout/*.drc"))
+    assert deep < flat, globs
+
+
 def test_the_runset_verdict_reads_both_directions_and_refuses_silence():
     assert PV.lvs_runset_verdict(
         "INFO : Congratulations! Netlists match.") == "MATCH"

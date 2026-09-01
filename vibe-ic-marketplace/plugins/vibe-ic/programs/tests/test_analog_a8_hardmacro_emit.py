@@ -109,3 +109,65 @@ def test_block_names_come_from_the_shared_loader(tmp_path: Path):
         {"blocks": [{"name": "ldo", "spec": {"specs": [1, 2, 3]}},
                     "delta_sigma"]}))
     assert sorted(E.declared_blocks(p)) == ["delta_sigma", "ldo"]
+
+
+# ---------------------------------------------------------------------------
+# An abstract whose obstruction abuts its pins has no pin access.
+#
+# MEASURED: `lef write -hide` tiles the macro's internal metal as OBS right up
+# to each pin — the cut-out around one pin was the pin rectangle plus 0.1 um,
+# which is less than a via. OpenROAD's detailed router refused all seven macro
+# instances with `DRT-0073 No access point for <inst>/<pin>`, AFTER floorplan,
+# PDN, CTS and global route had all completed. Magic's own `-pinonly` is not
+# the remedy: it shrinks the pin to a 0.1 x 0.3 um sliver and still writes the
+# obstruction.
+# ---------------------------------------------------------------------------
+
+_LEF = """MACRO blk
+  CLASS BLOCK ;
+  SIZE 10.000 BY 10.000 ;
+  PIN p
+    PORT
+      LAYER Metal2 ;
+        RECT 4.000 4.000 5.000 4.300 ;
+    END
+  END p
+  OBS
+      LAYER Metal2 ;
+        RECT 0.000 0.000 10.000 10.000 ;
+      LAYER Metal3 ;
+        RECT 0.000 0.000 10.000 10.000 ;
+  END
+END blk
+"""
+
+
+def test_the_halo_is_cut_only_from_the_pins_own_layer():
+    out, n = E.carve_pin_access(_LEF, 0.5)
+    assert n == 1
+    m2 = out.split("LAYER Metal2 ;")[2].split("LAYER Metal3")[0]
+    rects = [tuple(float(v) for v in r)
+             for r in E._RECT_RE.findall(m2)]
+    # the original single rect is gone, replaced by pieces around the halo
+    assert (0.0, 0.0, 10.0, 10.0) not in rects
+    assert len(rects) == 4
+    # nothing covers the halo any more
+    for (x1, y1, x2, y2) in rects:
+        assert not (x1 < 5.5 and x2 > 3.5 and y1 < 4.8 and y2 > 3.5)
+    # the OTHER layer is untouched — the obstruction is real blockage and
+    # dropping it is how a clean-looking die gets coupling nobody modelled
+    m3 = out.split("LAYER Metal3 ;")[1]
+    assert "RECT 0.000 0.000 10.000 10.000 ;" in m3
+
+
+def test_rect_minus_is_exact_on_every_side():
+    a = (0.0, 0.0, 10.0, 10.0)
+    assert E._rect_minus(a, (20.0, 20.0, 30.0, 30.0)) == [a]      # disjoint
+    assert E._rect_minus(a, (-1.0, -1.0, 11.0, 11.0)) == []       # covered
+    left = E._rect_minus(a, (5.0, -1.0, 11.0, 11.0))
+    assert left == [(0.0, 0.0, 5.0, 10.0)]
+
+
+def test_a_lef_with_no_pins_is_returned_unchanged():
+    out, n = E.carve_pin_access("MACRO blk\n  OBS\n  END\nEND blk\n", 0.5)
+    assert n == 0

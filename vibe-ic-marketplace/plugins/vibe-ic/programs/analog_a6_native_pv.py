@@ -183,6 +183,12 @@ def _count_lyrdb_items(text: str) -> int:
     return len(re.findall(r"<item>", text or ""))
 
 
+def _count_lyrdb_categories(text: str) -> int:
+    """Rules the report actually GRADED. Only the count leaves this function
+    (NDA hygiene) — never a rule name."""
+    return len(re.findall(r"<category>", text or ""))
+
+
 def _klayout_drc_runner(deck: str, gds: str, block: str, container: str,
                         report_host: Path) -> Tuple[Optional[int], Dict[str, Any]]:
     """Run an open-PDK KLayout DRC runset on the block GDS.
@@ -208,7 +214,28 @@ def _klayout_drc_runner(deck: str, gds: str, block: str, container: str,
         return None, {"reason": f"klayout produced no report (rc={rc})",
                       "tail": (out + err)[-300:]}
     text = report_host.read_text(errors="replace")
-    return _count_lyrdb_items(text), {"method": "klayout_runset", "rc": rc}
+    graded = _count_lyrdb_categories(text)
+    if graded == 0 or rc != 0:
+        # A REPORT THAT GRADED NOTHING IS NOT A CLEAN REPORT — the same law
+        # the SVRF branch below already carries, which this branch did not.
+        # A KLayout runset OPENS its report before it grades anything, so a
+        # deck that aborts mid-run still leaves a well-formed database on
+        # disk with zero categories and zero items. Counting only `<item>`
+        # read that as `violations: 0, result: PASS`, and the block was
+        # certified DRC-clean by a run that never evaluated a rule.
+        #
+        # MEASURED: the design's own staged deck resolves a tech-JSON beside
+        # the PDK tree it was copied from; staged alone that path does not
+        # exist, the deck raises, and the 474-byte report it leaves behind
+        # has 0 categories. A real run of the same deck on the same GDS
+        # grades 560. Both produced `violations: 0` here.
+        return None, {"reason": (f"DRC report graded {graded} rule(s) at "
+                                 f"rc={rc} — an unread deck, not a clean "
+                                 f"block"),
+                      "method": "klayout_runset", "rc": rc,
+                      "tail": (out + err)[-300:]}
+    return _count_lyrdb_items(text), {"method": "klayout_runset", "rc": rc,
+                                      "rules_pass": graded}
 
 
 # ── default (real, in-container) engine runners ─────────────────────────────

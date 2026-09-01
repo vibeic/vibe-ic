@@ -43,6 +43,8 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
+import re
 import shlex
 import subprocess
 import sys
@@ -184,6 +186,111 @@ def interface_liberty(block: str, rails: List[str], signals: List[str]) -> str:
     return "\n".join(out)
 
 
+# ── pin access: an abstract whose obstruction abuts its pins has none ──────
+
+_PIN_RE = re.compile(r"^\s*PIN\s+(\S+)", re.M)
+_END_PIN_RE = re.compile(r"^\s*END\s+(\S+)\s*$", re.M)
+_LAYER_RE = re.compile(r"^\s*LAYER\s+(\S+)\s*;", re.M)
+_RECT_RE = re.compile(
+    r"^\s*RECT\s+(-?[\d.]+)\s+(-?[\d.]+)\s+(-?[\d.]+)\s+(-?[\d.]+)\s*;", re.M)
+
+
+def _rect_minus(a, b):
+    """`a` minus `b`, as up to four axis-aligned rectangles."""
+    ax1, ay1, ax2, ay2 = a
+    bx1, by1, bx2, by2 = b
+    if bx2 <= ax1 or bx1 >= ax2 or by2 <= ay1 or by1 >= ay2:
+        return [a]
+    out = []
+    if by1 > ay1:
+        out.append((ax1, ay1, ax2, min(by1, ay2)))
+    if by2 < ay2:
+        out.append((ax1, max(by2, ay1), ax2, ay2))
+    ylo, yhi = max(ay1, by1), min(ay2, by2)
+    if yhi > ylo:
+        if bx1 > ax1:
+            out.append((ax1, ylo, min(bx1, ax2), yhi))
+        if bx2 < ax2:
+            out.append((max(bx2, ax1), ylo, ax2, yhi))
+    return [r for r in out if r[2] > r[0] and r[3] > r[1]]
+
+
+def carve_pin_access(lef_text: str, clearance: float) -> Tuple[str, int]:
+    """Cut a `clearance` halo around every PIN out of the OBS on its layer.
+
+    MEASURED, and it is the difference between an abstract and a placeable
+    one: `lef write -hide` emits the macro's internal metal as OBS tiled right
+    up to each pin — the cut-out around one pin was the pin rectangle itself
+    plus 0.1 um, which is less than a via. OpenROAD's detailed router refused
+    every macro with `DRT-0073 No access point for <inst>/<pin>`, after
+    floorplan, PDN, CTS and global route had all completed. Magic's own
+    `-pinonly` is not the remedy — it shrinks the pin to a sliver and still
+    writes the obstruction.
+
+    Dropping the obstruction entirely is also not the remedy: an analog
+    block's internal metal is a real blockage, and letting the router cross it
+    is how a clean-looking die gets coupling nobody modelled. So the halo is
+    carved and everything else stays.
+
+    Returns (text, n_rects_removed_or_split).
+    """
+    out_lines = []
+    # pass 1 — collect pin rects per layer
+    pins: Dict[str, List[Tuple[float, float, float, float]]] = {}
+    in_pin = False
+    layer = None
+    for line in lef_text.splitlines():
+        if _PIN_RE.match(line):
+            in_pin, layer = True, None
+        elif re.match(r"^\s*OBS\b", line):
+            in_pin, layer = False, None
+        elif in_pin and _LAYER_RE.match(line):
+            layer = _LAYER_RE.match(line).group(1)
+        elif in_pin and layer and _RECT_RE.match(line):
+            g = [float(v) for v in _RECT_RE.match(line).groups()]
+            pins.setdefault(layer, []).append(tuple(g))
+    if not pins:
+        return lef_text, 0
+    halos = {L: [(x1 - clearance, y1 - clearance, x2 + clearance,
+                  y2 + clearance) for (x1, y1, x2, y2) in rs]
+             for L, rs in pins.items()}
+    # pass 2 — rewrite the OBS section
+    changed = 0
+    in_obs = False
+    layer = None
+    for line in lef_text.splitlines():
+        if re.match(r"^\s*OBS\b", line):
+            in_obs, layer = True, None
+            out_lines.append(line)
+            continue
+        if in_obs and re.match(r"^\s*END\s*$", line):
+            in_obs, layer = False, None
+            out_lines.append(line)
+            continue
+        if in_obs and _LAYER_RE.match(line):
+            layer = _LAYER_RE.match(line).group(1)
+            out_lines.append(line)
+            continue
+        m = _RECT_RE.match(line) if in_obs else None
+        if m and layer in halos:
+            rects = [tuple(float(v) for v in m.groups())]
+            for h in halos[layer]:
+                nxt = []
+                for r in rects:
+                    nxt += _rect_minus(r, h)
+                rects = nxt
+            indent = line[:len(line) - len(line.lstrip())]
+            if len(rects) != 1 or rects[0] != tuple(
+                    float(v) for v in m.groups()):
+                changed += 1
+            for (x1, y1, x2, y2) in rects:
+                out_lines.append("%sRECT %.3f %.3f %.3f %.3f ;"
+                                 % (indent, x1, y1, x2, y2))
+            continue
+        out_lines.append(line)
+    return "\n".join(out_lines) + "\n", changed
+
+
 def emit_block(project: Path, block: str, container: str, pdk_root: str,
                ) -> Dict:
     bdir = project / "phase3" / "analog" / block
@@ -218,11 +325,17 @@ def emit_block(project: Path, block: str, container: str, pdk_root: str,
         return {"block": block, "emitted": False, "rc": 2,
                 "reason": f"magic wrote no LEF (rc={rc})",
                 "tail": (out + err)[-300:]}
+    halo = float(os.environ.get("A8_PIN_ACCESS_CLEARANCE_UM", "0.6"))
+    carved, n_carved = carve_pin_access(lef.read_text(errors="replace"), halo)
+    if n_carved:
+        lef.write_text(carved)
     (hdir / f"{block}.gds").write_bytes(gds.read_bytes())
     (hdir / f"{block}.v").write_text(interface_verilog(block, rails, signals))
     (hdir / f"{block}.lib").write_text(interface_liberty(block, rails, signals))
     return {"block": block, "emitted": True, "rc": 0,
             "lef_bytes": lef.stat().st_size,
+            "obs_rects_carved_for_pin_access": n_carved,
+            "pin_access_clearance_um": halo,
             "pins": len(rails) + len(signals),
             "rails": rails, "signals": signals,
             "magicrc": rcfile}

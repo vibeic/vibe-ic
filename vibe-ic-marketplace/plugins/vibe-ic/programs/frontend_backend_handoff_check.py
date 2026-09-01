@@ -59,7 +59,7 @@ import re
 import sys
 from dataclasses import dataclass, field, asdict
 from pathlib import Path
-from typing import List, Optional
+from typing import List, Optional, Set, Tuple
 import _path_layout as _pl
 import _vacuous_exit as _vx
 
@@ -81,11 +81,51 @@ class AuditResult:
     summary: dict = field(default_factory=dict)
 
 
+#: KEPT only as a fast pre-filter for the English gate words; the VERDICT is
+#: `netlist_cell_kinds` below. MEASURED, and it is why: two of this pattern's
+#: alternatives were vendor cell-name prefixes, so a chip-AGNOSTIC gate carried
+#: a two-vendor allow-list. On a third open PDK it answered NO to a correctly
+#: technology-mapped netlist (46 standard cells, zero generic primitives) AND
+#: NO to the unmapped one that preceded it — it could not see either, and could
+#: not tell them apart. The design was told "run synthesis (Step 10)" after it
+#: had synthesised.
 STDCELL_RE = re.compile(
     r"\b(AND|OR|NAND|NOR|XOR|XNOR|DFF|DFFR|BUF|INV|MUX|AOI|OAI|TIEH|TIEL"
     r"|sky130_fd_sc_\w+|gf180mcu_fd_sc_\w+)\b",
     re.I,
 )
+
+#: Yosys writes its technology-generic primitives as escaped identifiers
+#: (`\$_NAND_`, `\$_DFF_P_`). A netlist made of these is a SIMULATION netlist:
+#: no placer has a master for any of them.
+_MODULE_DECL_RE = re.compile(r"(?m)^\s*module\s+(\\?[A-Za-z_$][\w$]*)")
+
+
+def netlist_cell_kinds(text: str) -> Tuple[Set[str], Set[str]]:
+    """(technology cell types, yosys-generic types) instantiated in a netlist.
+
+    Technology-AGNOSTIC by construction: a technology cell is an instantiated
+    type that is neither a yosys-generic primitive nor a module DEFINED in the
+    same file (that would be the design's own hierarchy, or an analog macro's
+    blackbox). No vendor prefix appears here, so a PDK nobody anticipated is
+    recognised on the same evidence as one that was.
+    """
+    try:
+        import pdk_consistency_check as _pcc
+    except Exception:                                        # pragma: no cover
+        return set(), set()
+    defined = {m.group(1).lstrip("\\") for m in _MODULE_DECL_RE.finditer(text)}
+    tech: Set[str] = set()
+    generic: Set[str] = set()
+    for c in _pcc.extract_netlist_cells(text):
+        name = str(c.get("cell_name", ""))
+        if not name:
+            continue
+        if _pcc.is_yosys_technology_generic(name):
+            generic.add(name)
+        elif name.lstrip("\\") not in defined:
+            tech.add(name)
+    return tech, generic
 
 DIE_AREA_RE = re.compile(
     r"(DIE_AREA|die_area|DIEAREA|FP_DIE_AREA|set_die_area)", re.I,
@@ -109,9 +149,42 @@ def _has_gate_netlist(project: Path) -> List[Path]:
             txt = f.read_text(errors="replace")
         except OSError:
             continue
-        if STDCELL_RE.search(txt):
+        tech, generic = netlist_cell_kinds(txt)
+        # ANY generic primitive disqualifies the file, even beside real cells:
+        # the placer stops at the first master it does not have, so a mixed
+        # netlist is no more placeable than an all-generic one. And the
+        # design's own blackboxes (an analog macro) are "not defined here"
+        # too, so `tech` alone would have accepted the all-generic netlist on
+        # the strength of the two macros it instantiates.
+        if generic:
+            continue
+        if tech or STDCELL_RE.search(txt):
             found.append(f)
     return found
+
+
+def netlists_carrying_generic_cells(project: Path
+                                    ) -> List[Tuple[Path, Set[str]]]:
+    """Candidate netlists that instantiate ANY yosys-generic primitive.
+
+    A netlist like that is not a handoff: `ORD-2013 LEF master $_NOT_ not
+    found` is the first thing the placer says about it. Reported by name so
+    the refusal points at the synthesis command, not at the placer.
+    """
+    out: List[Tuple[Path, Set[str]]] = []
+    for d in [_pl.synth_dir(project), _pl.synth_dir(project) / "output",
+              project / "results"]:
+        if not d.is_dir():
+            continue
+        for f in sorted(d.glob("*.v")):
+            try:
+                txt = f.read_text(errors="replace")
+            except OSError:
+                continue
+            _tech, generic = netlist_cell_kinds(txt)
+            if generic:
+                out.append((f, generic))
+    return out
 
 
 def _find_sdc(project: Path) -> List[Path]:
@@ -182,11 +255,24 @@ def audit(project: Path) -> AuditResult:
         result.summary["checks"]["netlist"] = [str(f.name) for f in netlists]
     else:
         result.passed = False
-        result.findings.append(Finding(
-            "MISSING_GATE_NETLIST", "ERROR",
-            "No synthesized gate-level netlist found in synth/ or results/. "
-            "Run synthesis (Step 10) before entering backend flow.",
-        ))
+        generic = netlists_carrying_generic_cells(project)
+        if generic:
+            f, kinds = generic[0]
+            result.findings.append(Finding(
+                "GENERIC_ONLY_NETLIST", "ERROR",
+                f"{f.name} instantiates technology-generic primitives "
+                f"({', '.join(sorted(kinds)[:6])}) — a simulation netlist, not "
+                f"a handoff. No placer has a master for any of them. Re-run "
+                f"synthesis against the design's own PDK liberty "
+                f"(dfflibmap + abc -liberty) before entering backend flow.",
+            ))
+        else:
+            result.findings.append(Finding(
+                "MISSING_GATE_NETLIST", "ERROR",
+                "No synthesized gate-level netlist found in synth/ or "
+                "results/. Run synthesis (Step 10) before entering backend "
+                "flow.",
+            ))
 
     if sdc_files:
         result.summary["checks"]["sdc"] = [str(f.name) for f in sdc_files]

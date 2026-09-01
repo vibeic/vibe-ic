@@ -117,9 +117,19 @@ _AXES: dict[str, Tuple[str, ...]] = {
         # for DRC on LVS-only projects. Only DRC-named files allowed.
         "calibre/*DRC*.rule",
         "calibre/*drc*.rule",
+        # The PDK's own depth FIRST. A KLayout runset resolves siblings
+        # RELATIVE TO ITSELF (`../../python/<lib>/<tech>.json`), so a deck
+        # staged flat at `klayout/` looks for that sibling one level above
+        # the project's `input/pdk/` and raises. Staged at the depth it was
+        # copied from, the same deck grades 590 rules on the same GDS.
+        # Deeper first: when both are present the one that can resolve its
+        # own includes is the one to hand the engine.
+        "klayout/tech/drc/*.drc",
+        "klayout/drc/*.drc",
         "klayout/*.drc",
         "klayout/*.lyrdb.def",
         "bridge/klayout/*.drc",
+        "bridge/klayout/tech/drc/*.drc",
         "magic/*.tech",
         "bridge/magic/*.tech",
         "assura/DRC/**/*.rule",
@@ -133,8 +143,22 @@ _AXES: dict[str, Tuple[str, ...]] = {
         # its PDK's `klayout/*.lvs` and the resolver could not see it, so the
         # LVS arm fell through to a netgen setup no engine here reads and the
         # block never got an LVS run at all.
+        # Deeper first, for the same reason the DRC axis is ordered that way:
+        # a runset staged at the depth it was copied from can resolve its own
+        # `%include rule_decks/...` siblings.
+        "klayout/tech/lvs/*.lvs",
+        "klayout/lvs/*.lvs",
         "klayout/*.lvs",
+        # …and the subdirectory an open PDK's own tree uses. Measured: the
+        # corpus staged the runset at `klayout/lvs/sg13g2.lvs` — the layout
+        # of the PDK it was copied from — and `klayout/*.lvs` does not match
+        # one directory down, so the axis fix of the round before was INERT
+        # on the corpus as landed and the arm fell back to the netgen setup
+        # again. Enumerated, not `**`: a recursive glob would also match the
+        # 53 `rule_decks/*.lvs` INCLUDE files, and `_find_first` returns the
+        # first hit.
         "bridge/klayout/*.lvs",
+        "bridge/klayout/lvs/*.lvs",
         "netgen/*.tcl",
         "bridge/netgen/*.tcl",
         "assura/LVS/**/*.rule",
