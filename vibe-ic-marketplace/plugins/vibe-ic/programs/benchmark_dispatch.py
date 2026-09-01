@@ -430,6 +430,12 @@ _ACCEPTANCE_REPORT = "program_first_ai_review_acceptance.json"
 #: rendered as a DEFECT IN THE SUBJECT, so it gets its own status and its own
 #: name in the acceptance report.
 _CHALLENGE_UNAVAILABLE = "UNAVAILABLE"
+#: A joint candidate+challenge compile whose every error cites candidate RTL.
+#: This is the strongest available evidence that the candidate itself is
+#: broken, but it does not prove the AI's specific semantic claim, so it is
+#: neither FAIL nor INVALID: FAIL would endorse an assertion no simulation
+#: ran, and INVALID would charge the test with the candidate's own defect.
+_CHALLENGE_CANDIDATE_BROKEN = "CANDIDATE_BROKEN"
 _NOT_MEASURED = "NOT_MEASURED"
 
 
@@ -913,6 +919,24 @@ def _challenge_from_review(task: dict, review: dict,
     return challenge, []
 
 
+def _joint_compile_attribution(errors: str, rtl_paths: list[str],
+                               test_path: str) -> tuple[bool, bool]:
+    """Which side of a joint compile do the error lines cite?
+
+    iverilog reports diagnostics as ``<path>:<line>: ...`` using the paths
+    exactly as given on the command line, so ``path + ":"`` is the citation
+    token. A line can cite either side; unclassifiable lines cite neither.
+    """
+    cites_candidate = False
+    cites_challenge = False
+    for line in errors.splitlines():
+        if any(p and (p + ":") in line for p in rtl_paths):
+            cites_candidate = True
+        if test_path and (test_path + ":") in line:
+            cites_challenge = True
+    return cites_candidate, cites_challenge
+
+
 def _run_verification_challenge(candidate: dict, challenge: dict) -> dict:
     """Compile/run one immutable test against one immutable candidate."""
     reasons = _validate_candidate_snapshot(candidate, str(candidate.get("id")))
@@ -942,9 +966,23 @@ def _run_verification_challenge(candidate: dict, challenge: dict) -> dict:
         except subprocess.TimeoutExpired:
             return {"status": "INVALID", "reasons": ["challenge compile timed out"]}
         if comp.returncode != 0:
+            errors = comp.stderr or comp.stdout or ""
+            cites_candidate, cites_challenge = _joint_compile_attribution(
+                errors, rtl_paths, str(test_path))
+            if cites_candidate and not cites_challenge:
+                return {"status": _CHALLENGE_CANDIDATE_BROKEN, "reasons": [
+                    "joint compile failed; every cited file is candidate RTL",
+                    errors[-1200:],
+                ]}
+            if cites_challenge and not cites_candidate:
+                cited = "only the challenge file"
+            elif cites_candidate:
+                cited = "both candidate RTL and the challenge file"
+            else:
+                cited = "no classifiable file"
             return {"status": "INVALID", "reasons": [
-                "challenge does not compile with the candidate",
-                (comp.stderr or comp.stdout)[-1200:],
+                f"joint compile failed; errors cite {cited}",
+                errors[-1200:],
             ]}
         try:
             sim = subprocess.run(
@@ -954,10 +992,13 @@ def _run_verification_challenge(candidate: dict, challenge: dict) -> dict:
             return {"status": "INVALID", "returncode": None,
                     "reasons": ["challenge simulation timed out"]}
     output = (sim.stdout or "") + (sim.stderr or "")
-    passed = sim.returncode == 0 and "VIBEIC_AI_CHALLENGE=PASS" in output
-    failed = sim.returncode != 0 and "VIBEIC_AI_CHALLENGE=FAIL" in output
+    # The challenge contract requires printing the FAIL marker, not exiting
+    # non-zero: a test that collects its verdict in $finish still fails.
+    failed = "VIBEIC_AI_CHALLENGE=FAIL" in output
+    passed = (not failed and sim.returncode == 0
+              and "VIBEIC_AI_CHALLENGE=PASS" in output)
     return {
-        "status": ("PASS" if passed else ("FAIL" if failed else "INVALID")),
+        "status": ("FAIL" if failed else ("PASS" if passed else "INVALID")),
         "returncode": sim.returncode,
         "output": output[-2000:],
         "candidate_rtl_sha256": candidate.get("rtl_sha256"),
@@ -1093,6 +1134,13 @@ def _validate_ai_review(task: dict) -> dict:
                     "disproven: "
                     + "; ".join(str(r) for r in
                                 challenge_result.get("reasons") or []))
+            elif (challenge_result.get("status")
+                  == _CHALLENGE_CANDIDATE_BROKEN):
+                # A candidate that cannot even compile can never produce the
+                # FAIL a proof demands; demanding one here would make worse
+                # candidates harder to reject than better ones. The compile
+                # errors travel with challenge_result into the repair task.
+                pass
             elif challenge_result.get("status") != "FAIL":
                 reasons.append("AI finding is not proven: the reviewed candidate "
                                "must fail the prompt-derived verification test")
