@@ -94,5 +94,14 @@ def test_the_digest_is_a_real_fingerprint():
     assert len(dg) == 64 and all(c in "0123456789abcdef" for c in dg), dg
 
 
+def test_issue1980_metadata_removal_was_readjudicated():
+    """#1980 removed `verdict_mode`, which this rule never consumes."""
+    before = _rec(cats=["VIA_DEFS_NOT_FOUND"])
+    before["verdict_mode"] = "ADVISES"
+    after = _rec(cats=["VIA_DEFS_NOT_FOUND"])
+    assert _decide(before) == _decide(after)
+    assert D.RECORD_ADJUDICATION.drift() is None
+
+
 if __name__ == "__main__":
     sys.exit(pytest.main([__file__, "-q"]))

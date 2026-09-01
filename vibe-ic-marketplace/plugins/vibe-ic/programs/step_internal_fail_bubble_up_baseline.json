@@ -1,12 +1,16 @@
 {
+  "_comment": "Unacknowledged step-internal FAIL/MISSING reports across the PUBLISHED (git-tracked) run trees \u2014 a run tree being any directory that owns a tracked reports/**/*.json, which is what the gate can read, NOT a directory whose name matches a convention (vibe-ic#1223). MAY ONLY SHRINK UNDER A FIXED POPULATION \u2014 each one is a report declaring FAIL that no waiver and no orchestrator record names. The wrong repair is to loosen the matcher until the number falls (vibe-ic#693). `corpus_population` is the root this count was taken over and is part of the record: the gate refuses to ratchet a count from one population against a sweep of another.",
+  "_withdrawn_comment": "Findings that left findings_total because their run left the published corpus (or stopped carrying a reports/ tree), NOT because anyone examined them (vibe-ic#1202). Recorded so a fall in findings_total can never be read as debt paid. These reports still declare FAIL. NOT part of findings_total and not a ceiling on anything \u2014 the ratchet is over the published corpus only.",
   "_absent_comment": "Findings whose run tree is NOT UNDER THE SWEPT CORPUS at all, so this gate never opened it (vibe-ic#1704). Separate from withdrawn_unexamined, which names run trees the sweep DID open and found publishing no reports/ file it reads. Whether these were removed from publication or were never published into this corpus is not something a sweep of one corpus can tell; `shrink_reason` is where that is stated by whoever looked. NOT part of findings_total and not a ceiling on anything.",
-  "findings_total": 1,
+  "findings_total": 0,
   "corpus_population": "benchmark-data/ic",
-  "runs_swept": 4,
-  "runs_with_reports": 4,
-  "per_run": {
-    "u_hawaii_adc/v1.9.86_sky130A": 1
-  },
+  "runs_swept": 2,
+  "runs_with_reports": 2,
+  "previous_findings_total": 1,
+  "previous_runs_swept": 4,
+  "previous_runs_with_reports": 4,
+  "shrink_reason": "vibe-ic#2000: benchmark-data remote main is 9e4ad95cf74f and commit bcf2f94c withdrew u_hawaii_adc/v1.9.86_sky130A because it carried contradictory PASS and FAIL completion audits; its one unacknowledged internal FAIL was not repaired or re-read and remains recorded as absent_from_corpus.",
+  "per_run": {},
   "withdrawn_unexamined": {
     "caravel_user_project": 1,
     "edge_llm_accel": 6,
@@ -20,79 +24,42 @@
   "absent_from_corpus": {
     "caravel_user_project/v1.9.43_sky130A": 2,
     "sha256/clean_run_v1422_20260715": 2,
-    "sha256/clean_run_v1427_20260715": 3
+    "sha256/clean_run_v1427_20260715": 3,
+    "u_hawaii_adc/v1.9.86_sky130A": 1
   },
-  "previous_findings_total": 22,
-  "previous_runs_swept": 16,
-  "previous_runs_with_reports": 16,
-  "shrink_reason": "vibe-ic#1704: re-derived over the published corpus (vibeic/benchmark-data, ic/ at 146d665) after the v1.10.56 split. NOTHING HERE IS REPAIR — the gate's own decomposition attributes all 21 lost findings to runs that left the sweep without being examined, 0 to runs whose count fell while somebody was reading them. THE CORPUS SHRANK BY A PUBLISHING DECISION, NOT BY ENGINEERING: benchmark-data commit ac2ae519f4 'publish only what passed and conforms' kept the four cells whose own RESULT.md says PASS and whose benchmark_evidence_structure_check rc is 0, dropped one cell whose own result says FAIL, and removed every clean_run_* directory and every loose phase1/phase2/phase3/reports/sim/steps tree sitting directly under an IC as NON-CONFORMING rather than as failures — PUBLISHING.md permits only input/ and v*/ at that level. So the nine run trees this register named were published into that repository and then removed from it by that decision; they were not deleted from the flow's design input, which is untouched, and not one of their FAIL reports was re-read. Six of them keep an IC directory the sweep can still open and are carried in withdrawn_unexamined; three have no run tree under the corpus at all and are carried in absent_from_corpus, which claims nothing about what they say today.",
   "_withdrawn_provenance": "Re-derived from git, not re-measured: 94c7572aa moved this file 7 -> 5 and its diff shows both sha256 runs UNCHANGED (2 and 3) while both u_hawaii_adc runs left. Zero repaired, two withdrawn. Replaying that commit's parent baseline through the fixed gate against the corpus at 75776dbbb reproduces exactly these two entries.",
-  "_population_shrink_comment": "WHY THE NUMBERS ABOVE MOVED, itemised (vibe-ic#1704). `findings_total`, `runs_swept` and `runs_with_reports` are a ratchet, and a ratchet whose number can fall without anyone saying why is a record of nothing. `withdrawn_unexamined` already refuses to let a FALLING NUMERATOR be read as debt somebody paid (vibe-ic#1202); it says nothing about the DENOMINATOR, and a denominator that drops because runs were never published is a different fact from one that drops because runs were deleted. `_population_shrink` states which, per departed run, and the equations it must satisfy are pinned by programs/tests/test_issue1704_a_moved_ratchet_states_its_cause.py — so the next `--write-baseline` that moves a number and leaves this block behind is RED, not silent. Reasons come from a closed vocabulary: `not_published_layout` (the run tree is not a `v<version>_<PDK>` cell, so the publishing contract admits no such directory), `not_published_verdict` (it IS a cell and its own RESULT.md reads FAIL), `deleted` (the bytes are gone from the source history too), `reports_withdrawn` (the run is still published but stopped carrying a reports/ tree).",
+  "_population_shrink_comment": "WHY THE NUMBERS ABOVE MOVED, itemised (vibe-ic#1704). `findings_total`, `runs_swept` and `runs_with_reports` are a ratchet, and a ratchet whose number can fall without anyone saying why is a record of nothing. `withdrawn_unexamined` already refuses to let a FALLING NUMERATOR be read as debt somebody paid (vibe-ic#1202); it says nothing about the DENOMINATOR, and a denominator that drops because runs were never published is a different fact from one that drops because runs were deleted. `_population_shrink` states which, per departed run, and the equations it must satisfy are pinned by programs/tests/test_issue1704_a_moved_ratchet_states_its_cause.py \u2014 so the next `--write-baseline` that moves a number and leaves this block behind is RED, not silent. Reasons come from a closed vocabulary: `not_published_layout` (the run tree is not a `v<version>_<PDK>` cell, so the publishing contract admits no such directory), `not_published_verdict` (it IS a cell and its own RESULT.md reads FAIL), `publication_withdrawn` (the whole cell was removed by an explicit publication decision while its source bytes remain), `deleted` (the bytes are gone from the source history too), `reports_withdrawn` (the run is still published but stopped carrying a reports/ tree).",
   "_population_shrink": {
     "from": {
-      "runs_swept": 16,
-      "runs_with_reports": 16,
-      "findings_total": 22
-    },
-    "to": {
       "runs_swept": 4,
       "runs_with_reports": 4,
       "findings_total": 1
     },
+    "to": {
+      "runs_swept": 2,
+      "runs_with_reports": 2,
+      "findings_total": 0
+    },
     "runs_that_left": {
-      "caravel_user_project": {
-        "reason": "not_published_layout",
-        "findings": 1
-      },
-      "caravel_user_project/v1.9.43_sky130A": {
-        "reason": "not_published_verdict",
-        "findings": 2
-      },
-      "edge_llm_accel": {
-        "reason": "not_published_layout",
-        "findings": 6
-      },
-      "edge_llm_matmul_accel": {
-        "reason": "not_published_layout",
-        "findings": 1
-      },
-      "ibex": {
-        "reason": "not_published_layout",
-        "findings": 1
-      },
-      "opentitan_aes": {
-        "reason": "not_published_layout",
-        "findings": 1
-      },
-      "sha256": {
-        "reason": "not_published_layout",
+      "spm/v1.5.58_ihp-sg13g2": {
+        "reason": "publication_withdrawn",
         "findings": 0
       },
-      "sha256/clean_run_v1422_20260715": {
-        "reason": "not_published_layout",
-        "findings": 2
-      },
-      "sha256/clean_run_v1427_20260715": {
-        "reason": "not_published_layout",
-        "findings": 3
-      },
-      "sha256/clean_run_v1461_0223": {
-        "reason": "not_published_layout",
+      "spm/v1.9.96_gf180mcuD": {
+        "reason": "publication_withdrawn",
         "findings": 0
       },
-      "subservient": {
-        "reason": "not_published_layout",
-        "findings": 4
-      },
-      "u_hawaii_adc": {
-        "reason": "not_published_layout",
+      "u_hawaii_adc/v1.9.86_sky130A": {
+        "reason": "publication_withdrawn",
+        "findings": 1
+      }
+    },
+    "runs_that_arrived": {
+      "spm/v1.5.65_sky130A": {
         "findings": 0
       }
     },
-    "runs_that_arrived": {},
     "findings_that_arrived": 0
   },
-  "_population_shrink_provenance": "MEASURED, both ends, by this gate's own `check_corpus`; nothing here is inferred from the diff. FROM: benchmark-data/ic in this repository at d0eb0fb050de0528fd5d9ea4fe0cee0c45294cca, the commit that last recorded this baseline — 16 run trees, 22 findings. That tree is BYTE-IDENTICAL at 772c31dcb41a1625bf1c69832628722958752cb9, the commit named in the published repository's SNAPSHOT.txt, so the recorded 22/16/16 describes exactly the tree that was snapshotted for publication and no measurement changed underneath it. TO: a clone of vibeic/benchmark-data at 146d66564eb6427e51e8c62723edbfeb12e2d4bd — 4 run trees, 1 finding. 12 run trees left, 0 arrived. NONE WAS DELETED: all 12 are still in this repository's history at 772c31dcb with their reports/ trees (102, 192, 115, 49, 27, 37, 47, 130, 134, 24, 104 and 2 tracked files respectively), and each one's design input IS published, under ic/<design>/input/. What they failed is the publishing contract, quoted in the published repository's own README: only cells named `v<version>_<PDK>` whose RESULT.md says PASS and which pass benchmark_evidence_structure_check are shipped. Eleven of the twelve are not cell directories at all (eight loose IC-level run trees and three `clean_run_*` directories); the twelfth, caravel_user_project/v1.9.43_sky130A, is a cell whose own RESULT.md heading reads `**FAIL** — this cell does NOT converge`. The 21 findings they carried are on `withdrawn_unexamined` above, still declaring FAIL, and are not counted in findings_total.",
-  "_comment": "Unacknowledged step-internal FAIL/MISSING reports across the PUBLISHED (git-tracked) run trees — a run tree being any directory that owns a tracked reports/**/*.json, which is what the gate can read, NOT a directory whose name matches a convention (vibe-ic#1223). MAY ONLY SHRINK UNDER A FIXED POPULATION — each one is a report declaring FAIL that no waiver and no orchestrator record names. The wrong repair is to loosen the matcher until the number falls (vibe-ic#693). `corpus_population` is the root this count was taken over and is part of the record: the gate refuses to ratchet a count from one population against a sweep of another.",
-  "_withdrawn_comment": "Findings that left findings_total because their run left the published corpus (or stopped carrying a reports/ tree), NOT because anyone examined them (vibe-ic#1202). Recorded so a fall in findings_total can never be read as debt paid. These reports still declare FAIL. NOT part of findings_total and not a ceiling on anything — the ratchet is over the published corpus only."
+  "_population_shrink_provenance": "MEASURED by this gate's own `check_corpus`. FROM: the previously recorded published population, 4 run trees and 1 finding. TO: vibeic/benchmark-data remote main 9e4ad95cf74fd3c4843701a981c3cdfdbe3c967c, 2 run trees and 0 findings. Publication commit bcf2f94c removed three named cells without re-reading or repairing their reports; u_hawaii_adc/v1.9.86_sky130A carried the one finding and remains on `absent_from_corpus`. Publication commit a467106a added spm/v1.5.65_sky130A carrying no finding. Thus 4 - 3 + 1 = 2 run trees and 1 - 1 + 0 = 0 findings; no fall is represented as engineering repair."
 }

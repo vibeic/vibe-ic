@@ -71,6 +71,9 @@ REASONS = {
     "not_published_layout",
     # it IS a cell directory and its own RESULT.md reads FAIL
     "not_published_verdict",
+    # the cell was explicitly withdrawn from publication while its source
+    # bytes remain in history; neither "deleted" nor "repaired" is truthful
+    "publication_withdrawn",
     # the bytes are gone from the source history too - NOT the same fact as
     # either of the above, which is the distinction this whole block exists for
     "deleted",

@@ -38,6 +38,11 @@ def test_has_reset_suppressed_on_negated_mention():
     assert S._has_reset("combinational logic; no reset, no clock") is False
 
 
+def test_has_reset_uses_shared_polarity_vocabulary():
+    """A denial known only to `_prose_polarity` must not declare reset."""
+    assert S._has_reset("The interface excludes reset.") is False
+
+
 def test_has_clock_suppressed_on_negated_mention():
     assert S._has_clock("with no clock or reset inputs") is False
     assert S._has_clock("purely combinational, no clock") is False

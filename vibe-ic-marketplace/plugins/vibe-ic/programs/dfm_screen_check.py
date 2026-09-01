@@ -318,7 +318,11 @@ RECORD_ADJUDICATION = _ra.declare(
     __file__,
     gate="dfm_screen_check",
     decision_roots=("audit",),
-    decision_digest="e9d020a610b887db6483ba7b01e61e505408321e15b2dd05353a731de8d76f90",
+    # Re-reviewed for #2000 against #1980 (867f807a): that landing removed
+    # only the producer metadata field `verdict_mode`.  The rule below reads
+    # `verdict` and `findings`; both decision paths and their meanings remain
+    # unchanged, so no published record changes adjudication.
+    decision_digest="fa9ef091026cbcf75998b2adc6446e8f8f05f4505b3e40260d5f0aa8532a2372",
     rules=(
         _ra.Rule(
             rule_id="dfm_screen_check.via-screen-did-not-run",

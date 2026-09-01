@@ -118,6 +118,11 @@ try:
 except ImportError:  # packaged
     from . import _provenance as _prov  # type: ignore
 
+try:
+    from _prose_polarity import is_denied as _prose_is_denied
+except ImportError:  # packaged
+    from ._prose_polarity import is_denied as _prose_is_denied  # type: ignore
+
 # CVDP enhance — program-first STRUCTURAL extractors for the four artifact classes
 # the legacy checklist extractor missed (register-map, enumerated-mode literal map +
 # outside-set boundary, FSM transition graph, worked-example I/O pairs, rounding/
@@ -1005,7 +1010,8 @@ def _clause_denies_existence(clause: str, keyword_re: str) -> bool:
     return rea.search(clause) is None
 
 
-def _mention_present_unnegated(text: str, keyword_re: str) -> bool:
+def _mention_present_unnegated(text: str, keyword_re: str,
+                               *, polarity_check=_prose_is_denied) -> bool:
     """True iff the keyword appears in at least one CLAUSE where it is NOT
     governed by a negation token. If EVERY clause mentioning the keyword negates
     it, the feature is genuinely absent and no requirement is derived.
@@ -1028,7 +1034,12 @@ def _mention_present_unnegated(text: str, keyword_re: str) -> bool:
     for clause in _clauses(low):
         if not kw.search(clause):
             continue
-        negated = bool(_NEG_TOKENS_RE.search(clause)
+        # The shared vocabulary is the authority for general prose polarity.
+        # Keep the older feature-specific terms below because they also encode
+        # presence verbs ("lacks", "omitted") that are deliberately outside
+        # the generic no/not vocabulary; do not grow another private list here.
+        negated = bool(polarity_check(clause)
+                       or _NEG_TOKENS_RE.search(clause)
                        or _ABSENCE_VERB_RE.search(clause))
         is_heading = bool(_HEADING_CLAUSE_RE.search(clause))
         if not is_heading and not negated:
@@ -2364,7 +2375,8 @@ def run(stations: dict, rtl_text: Optional[str], tb_text: Optional[str],
     reset_explicitly_absent = bool(
         re.search(r"\b(?:reset|rst|por)\b", user_prompt, re.IGNORECASE)
     ) and not _mention_present_unnegated(
-        user_prompt, r"\breset\b|\brst\b|\bpor\b"
+        user_prompt, r"\breset\b|\brst\b|\bpor\b",
+        polarity_check=_prose_is_denied,
     )
     items = [it for it in extract_chain(stations)
              if not _is_non_requirement_artifact(it)
