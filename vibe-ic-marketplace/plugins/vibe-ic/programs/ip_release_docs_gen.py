@@ -558,7 +558,12 @@ def power_fields(project: Path, kit: Kit) -> List[Field]:
     out: List[Field] = []
     pg_type = kit.lib.get("pg_type") if lib_rel else None
     if isinstance(pg_type, dict) and pg_type:
-        out.append(measured("Declared supply rails", len(pg_type), lib_rel))
+        pg_name = kit.lib.get("pg_name")
+        spellings = pg_name if isinstance(pg_name, dict) else {}
+        rails = ", ".join(
+            f"{spellings.get(name, name)} ({kind})"
+            for name, kind in sorted(pg_type.items()))
+        out.append(measured("Declared supply rails", rails, lib_rel))
     elif lib_rel:
         out.append(unmeasured(
             "Declared supply rails",
@@ -605,8 +610,11 @@ def constraints_for(project: Path, kit: Kit) -> List[Constraint]:
     lib_rel = kit.rel(".lib")
     pg_type = kit.lib.get("pg_type") if lib_rel else None
     if isinstance(pg_type, dict) and len(pg_type) > 1:
-        rails = ", ".join(f"`{name}` ({kind or 'rail type unstated'})"
-                          for name, kind in sorted(pg_type.items()))
+        pg_name = kit.lib.get("pg_name")
+        spellings = pg_name if isinstance(pg_name, dict) else {}
+        rails = ", ".join(
+            f"`{spellings.get(name, name)}` ({kind or 'rail type unstated'})"
+            for name, kind in sorted(pg_type.items()))
         out.append(Constraint(
             "SUPPLY-DOMAIN-SEPARATION",
             f"the supply rails this macro declares are distinct and must not be "

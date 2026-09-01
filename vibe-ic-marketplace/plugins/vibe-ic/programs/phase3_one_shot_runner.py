@@ -34385,6 +34385,13 @@ def step_digital_hardmacro_gen(project: Path,
     _pdk_dir = _hardmacro_pdk_dir(pdk, container)
     if _pdk_dir:
         cmd += ["--pdk-root", _pdk_dir]
+    # Supply names are not inferred from design text.  They come from the
+    # exact std-cell LEF already selected for this run; metal_prefix lets the
+    # producer distinguish routed primary rails from well/substrate pins.
+    if pdk and pdk.cell_lef:
+        cmd += ["--cell-lef", pdk.cell_lef]
+    if pdk and pdk.metal_prefix:
+        cmd += ["--metal-prefix", pdk.metal_prefix]
     # AND THE CONTAINER THE TOOLS ARE IN. This step is a plain host
     # subprocess while every EDA step around it is dispatched into the
     # container, so without this the producer probes the ONE environment

@@ -5,8 +5,8 @@ Assembles the four-view IP delivery kit the cell/IP path terminates in:
 
     phase3/stage4/hardmacro/<design>.gds   staged from step 37's sign-off GDS
     phase3/stage4/hardmacro/<design>.lef   written by MAGIC, from that GDS
-    phase3/stage4/hardmacro/<design>.lib   interface Liberty, from the DEF PINS
-    phase3/stage4/hardmacro/<design>.v     blackbox view, from the DEF PINS
+    phase3/stage4/hardmacro/<design>.lib   interface Liberty, from DEF + PDK
+    phase3/stage4/hardmacro/<design>.v     blackbox view, from DEF + PDK
 
 WHY THIS PRODUCER EXISTS AT ALL
 ===============================
@@ -38,10 +38,14 @@ before coding it, and three of its eight steps are REFUSALS. Same shape here:
      than none).
   3. The GDS top cell must be the design name. It is not -> REFUSE (the
      abstract views would name a cell the layout does not contain).
-  4. Read the interface from the DEF `PINS` section — the SAME input
-     `Magic.WriteLEF` takes (`inputs = [GDS, DEF]`). No PINS, or a PINS
-     section with no entries -> REFUSE (a macro with no interface cannot be
-     connected to anything, and inventing one is fabrication).
+  4. Read the signal interface from the DEF `PINS` section — the SAME input
+     `Magic.WriteLEF` takes (`inputs = [GDS, DEF]`). Read the primary power and
+     ground rail NAMES from the selected PDK std-cell LEF. If those rails are
+     absent from top-level PINS, expose them at geometry the routed DEF's
+     matching `SPECIALNETS` actually carries. No PINS, no authoritative PDK
+     rails, or no matching routed rail geometry -> REFUSE_NOT_INTEGRABLE (a
+     macro with no physical supplies cannot be integrated, and inventing a
+     rail name or rectangle would be fabrication).
   5. Stage the GDS into the kit. An existing kit file is never overwritten.
   6. Write the LEF BY CALLING MAGIC, through the PDK's own `.magicrc`,
      mirroring `librelane/scripts/magic/lef.tcl`: `gds read`, `load <top>`,
@@ -51,7 +55,7 @@ before coding it, and three of its eight steps are REFUSALS. Same shape here:
      the launch go to whichever side answered — see "WHERE MAGIC ACTUALLY
      IS". Reachable on NEITHER side, or the PDK has no magicrc there ->
      SKIP with a stated reason and rc 2. DO NOT WRITE A LEF WRITER.
-  7. Emit the Liberty and Verilog views from the pin list of step 4.
+  7. Emit the Liberty and Verilog views from the complete pin list of step 4.
   8. Write the JSON record, whatever happened.
 
 WHAT THIS PRODUCER DELIBERATELY DOES NOT DO
@@ -66,12 +70,13 @@ WHAT THIS PRODUCER DELIBERATELY DOES NOT DO
     because upstream's own script writes it by default; `--full-lef` and
     `--pinonly` expose the other two knobs (`MAGIC_WRITE_FULL_LEF`,
     `MAGIC_WRITE_LEF_PINONLY`) and the choice is RECORDED in the JSON.
-  * IT DOES NOT VERIFY ITS OWN OUTPUT. The generator and the checker are
-    separate and the CHECKER is what fails — that is upstream's shape and it
-    is also this flow's rule: `flow_compliance_check` is the acceptance
-    auditor, and an auditor that runs the producer certifies its own output.
-    This program is declared in the step's `programs:` and is invoked by the
-    RUNNER, never from the step's gate.
+  * IT DOES NOT REPLACE THE INDEPENDENT OUTPUT CHECKER. It performs one narrow
+    producer acceptance: the staged LEF and Liberty must carry the exact
+    POWER/GROUND interface this run derived, because Magic can successfully
+    write a LEF after silently dropping a port. The separate checker still
+    owns identity, extent, registration, complete interface, pin geometry,
+    obstruction policy, and timing-tier verdicts. This program is invoked by
+    the RUNNER, never from the step's gate.
 
 BETTER THAN UPSTREAM IN ONE STATED WAY
 ======================================
@@ -83,7 +88,9 @@ in a log.
 
 Usage:
     python3 digital_hardmacro_gen.py <project_dir> [--json <out>]
-                                     [--pdk-root <dir>] [--container <name>]
+                                     [--pdk-root <dir>] [--cell-lef <file>]
+                                     [--metal-prefix <stem>]
+                                     [--container <name>]
                                      [--full-lef] [--pinonly]
 
 Exit codes:
@@ -115,6 +122,7 @@ import _container_exec  # noqa: E402  container-side deadlines
 import _path_layout as _pl
 import _watchdog  # noqa: E402  plugin-wide progress-stall process supervision
 from _atomic_artefact import write_text as atomic_write_text
+from hardmacro_supply_intent import lef_pg_pins, liberty_pg_pins
 
 # SHARED READERS, imported rather than re-typed — the same rule the gate
 # follows. `parse_def_pins` is the canonical DEF PINS reader in this tree and
@@ -140,7 +148,7 @@ except ImportError:  # pragma: no cover
     build_shell_preamble = None  # type: ignore[assignment]
 
 PROGRAM = "digital_hardmacro_gen"
-VERSION = "1.0.0"
+VERSION = "1.1.0"
 
 RC_OK, RC_REFUSED, RC_NO_CAPABILITY = 0, 1, 2
 
@@ -148,6 +156,20 @@ _DEF_DESIGN_RE = re.compile(r"(?m)^\s*DESIGN\s+(\S+)\s*;")
 _DEF_PIN_START_RE = re.compile(r"-\s+(\S+)")
 _DEF_USE_RE = re.compile(r"\+\s*USE\s+(\w+)", re.IGNORECASE)
 _PG_USES = {"POWER", "GROUND"}
+_DEF_UNITS_RE = re.compile(
+    r"(?m)^\s*UNITS\s+DISTANCE\s+MICRONS\s+(\d+)\s*;")
+_PINS_HEADER_RE = re.compile(r"(?m)^(?P<indent>\s*)PINS\s+(?P<n>\d+)\s*;")
+_PINS_END_RE = re.compile(r"(?m)^\s*END\s+PINS\s*$")
+_SPECIALNETS_BLOCK_RE = re.compile(
+    r"(?ms)^\s*SPECIALNETS\s+\d+\s*;(?P<body>.*?)^\s*END\s+SPECIALNETS\s*$")
+_SPECIALNET_ENTRY_RE = re.compile(r"(?m)^\s*-\s+(?P<name>\S+)")
+_SPECIALNET_ROUTE_RE = re.compile(
+    r"\+\s*(?:ROUTED|NEW)\s+(?P<layer>\S+)"
+    r"(?:\s+(?P<width>\d+))?"
+    r"(?:\s+\+\s+SHAPE\s+\S+)?\s*"
+    r"\(\s*(?P<x1>-?\d+)\s+(?P<y1>-?\d+)\s*\)\s*"
+    r"\(\s*(?P<x2>\*|-?\d+)\s+(?P<y2>\*|-?\d+)\s*\)",
+    re.IGNORECASE | re.DOTALL)
 #: Candidate DEFs, most-final first. The routed DEF is what the sign-off GDS
 #: was streamed from, so its PINS are the interface the layout actually has.
 _DEF_CANDIDATES = (
@@ -211,6 +233,173 @@ class Pin:
     #: gate exists to refuse. Whether a rail is power or ground lives in
     #: `USE`, so `USE` is what must reach the emitter.
     use: str = ""
+
+
+@dataclass(frozen=True)
+class SupplyRail:
+    """One primary std-cell rail, derived from the selected PDK LEF."""
+
+    name: str
+    use: str
+    layer: str
+    width_um: float
+
+
+def discover_stdcell_rails(lef_text: str,
+                           metal_prefix: str = "met") -> List[SupplyRail]:
+    """Return the PDK's primary routing-metal POWER and GROUND rails.
+
+    Std-cell LEFs can also declare well/substrate pins as POWER/GROUND.  Those
+    are not the follow-pin rails a delivered macro exposes.  The selection is
+    therefore structural and matches the PnR producer's rule: a full-cell-width
+    rectangle on the PDK's routing-metal stem outranks a non-routing well
+    rectangle, regardless of names.  No design, PDK, vendor, or rail allowlist
+    is used.
+    """
+    prefix = (metal_prefix or "met").lower()
+    best: Dict[str, Tuple[Tuple[bool, float], SupplyRail]] = {}
+    macro_w: Optional[float] = None
+    cur_pin: Optional[str] = None
+    cur_use: Optional[str] = None
+    cur_layer: Optional[str] = None
+
+    for raw in (lef_text or "").splitlines():
+        s = raw.strip()
+        if s.startswith("MACRO "):
+            macro_w = None
+            cur_pin = cur_use = cur_layer = None
+            continue
+        m = re.match(r"SIZE\s+([0-9.]+)\s+BY", s, re.IGNORECASE)
+        if m:
+            macro_w = float(m.group(1))
+            continue
+        m = re.match(r"PIN\s+(\S+)", s, re.IGNORECASE)
+        if m:
+            cur_pin = m.group(1)
+            cur_use = cur_layer = None
+            continue
+        if cur_pin and re.match(
+                rf"END\s+{re.escape(cur_pin)}\s*$", s, re.IGNORECASE):
+            cur_pin = cur_use = cur_layer = None
+            continue
+        if cur_pin is None:
+            continue
+        m = re.match(r"USE\s+(\S+)", s, re.IGNORECASE)
+        if m:
+            cur_use = m.group(1).rstrip(";").upper()
+            continue
+        m = re.match(r"LAYER\s+(\S+)", s, re.IGNORECASE)
+        if m:
+            cur_layer = m.group(1).rstrip(";")
+            continue
+        m = re.match(
+            r"RECT\s+(-?[0-9.]+)\s+(-?[0-9.]+)\s+"
+            r"(-?[0-9.]+)\s+(-?[0-9.]+)", s, re.IGNORECASE)
+        if not (m and cur_use in _PG_USES and cur_layer and cur_pin):
+            continue
+        x1, y1, x2, y2 = (float(v) for v in m.groups())
+        xspan, height = abs(x2 - x1), abs(y2 - y1)
+        if macro_w and xspan < 0.8 * macro_w:
+            continue
+        rail = SupplyRail(cur_pin, cur_use, cur_layer, height)
+        key = (cur_layer.lower().startswith(prefix), height)
+        if cur_use not in best or key > best[cur_use][0]:
+            best[cur_use] = (key, rail)
+
+    if not _PG_USES <= set(best):
+        return []
+    return [best["POWER"][1], best["GROUND"][1]]
+
+
+def _specialnet_entries(def_text: str) -> Dict[str, Tuple[str, str]]:
+    """``name -> (USE, entry text)`` from the routed DEF SPECIALNETS."""
+    bm = _SPECIALNETS_BLOCK_RE.search(def_text or "")
+    if not bm:
+        return {}
+    body = bm.group("body")
+    starts = list(_SPECIALNET_ENTRY_RE.finditer(body))
+    out: Dict[str, Tuple[str, str]] = {}
+    for i, match in enumerate(starts):
+        entry = body[match.start():starts[i + 1].start()
+                     if i + 1 < len(starts) else len(body)]
+        um = _DEF_USE_RE.search(entry)
+        out[match.group("name")] = (
+            um.group(1).upper() if um else "", entry)
+    return out
+
+
+def add_supply_pins_to_def(
+        def_text: str, rails: List[SupplyRail]
+        ) -> Tuple[Optional[str], List[Pin], str]:
+    """Expose missing PDK rails as top-level DEF pins on routed PG geometry.
+
+    The rail NAME/TYPE comes only from the selected std-cell LEF.  The physical
+    pin rectangle comes only from the routed DEF's same-name, same-USE
+    SPECIALNET.  If either authority is missing or contradictory the function
+    returns a reason and no modified text; it never fabricates an integrable
+    view from a plausible name or arbitrary coordinate.
+    """
+    pins = read_interface(def_text)
+    existing = {p.name: p for p in pins}
+    existing_pg = {(p.name, p.use) for p in pins if p.is_pg}
+    missing = [r for r in rails if (r.name, r.use) not in existing_pg]
+    if not missing:
+        return def_text, pins, ""
+    for rail in missing:
+        prior = existing.get(rail.name)
+        if prior is not None and not prior.is_pg:
+            return None, pins, (
+                f"top-level pin {rail.name!r} is a {prior.use or 'SIGNAL'} pin, "
+                f"but the selected PDK std-cell LEF declares it USE {rail.use}")
+
+    units_m = _DEF_UNITS_RE.search(def_text)
+    head_m = _PINS_HEADER_RE.search(def_text)
+    end_m = _PINS_END_RE.search(def_text, head_m.end() if head_m else 0)
+    if not (units_m and head_m and end_m):
+        return None, pins, (
+            "the DEF has no usable UNITS/PINS block in which to expose the "
+            "PDK supply rails")
+    units = int(units_m.group(1))
+    special = _specialnet_entries(def_text)
+    additions: List[str] = []
+    derived: List[Pin] = []
+    indent = head_m.group("indent") + "    "
+
+    for rail in missing:
+        found = special.get(rail.name)
+        if not found:
+            return None, pins, (
+                f"selected PDK std-cell rail {rail.name!r} ({rail.use}) has no "
+                "same-name routed SPECIALNET in the signed-off DEF")
+        net_use, entry = found
+        if net_use != rail.use:
+            return None, pins, (
+                f"selected PDK std-cell rail {rail.name!r} is USE {rail.use}, "
+                f"but the routed DEF SPECIALNET declares USE {net_use or 'NONE'}")
+        rm = _SPECIALNET_ROUTE_RE.search(entry)
+        if not rm:
+            return None, pins, (
+                f"routed SPECIALNET {rail.name!r} carries no segment from which "
+                "a physical macro pin rectangle can be derived")
+        x, y = int(rm.group("x1")), int(rm.group("y1"))
+        width = (int(rm.group("width")) if rm.group("width")
+                 else max(1, round(rail.width_um * units)))
+        low = -(width // 2)
+        high = low + width
+        additions.append(
+            f"{indent}- {rail.name} + NET {rail.name} + DIRECTION INOUT "
+            f"+ USE {rail.use}\n"
+            f"{indent}  + PORT\n"
+            f"{indent}    + LAYER {rm.group('layer')} "
+            f"( {low} {low} ) ( {high} {high} )\n"
+            f"{indent}    + FIXED ( {x} {y} ) N ;\n")
+        derived.append(Pin(rail.name, "INOUT", True, rail.use))
+
+    new_head = (f"{head_m.group('indent')}PINS "
+                f"{int(head_m.group('n')) + len(derived)} ;")
+    out = (def_text[:head_m.start()] + new_head + def_text[head_m.end():
+           end_m.start()] + "".join(additions) + def_text[end_m.start():])
+    return out, pins + derived, ""
 
 
 def read_interface(def_text: str) -> List[Pin]:
@@ -287,7 +476,7 @@ def emit_verilog(design: str, pins: List[Pin]) -> str:
     body = ",\n".join(ports)
     pg = ", ".join(p.name for p in pins if p.is_pg) or "none declared"
     return (f"// {design} — blackbox simulation view of a delivered hard macro.\n"
-            f"// Emitted by {PROGRAM} from the DEF PINS section; the logical\n"
+            f"// Emitted by {PROGRAM} from signed-off DEF + selected PDK; the logical\n"
             f"// interface only. Supply pins ({pg}) are physical and are\n"
             f"// declared in the LEF and the Liberty, not here.\n"
             f"(* blackbox *)\n"
@@ -309,7 +498,7 @@ def emit_liberty(design: str, pins: List[Pin]) -> str:
     """
     lines = [
         f"/* {design} — INTERFACE Liberty view of a delivered hard macro.",
-        f" * Emitted by {PROGRAM} from the DEF PINS section.",
+        f" * Emitted by {PROGRAM} from signed-off DEF + selected PDK.",
         " *",
         " * NO TIMING ARC IS DECLARED, AND THAT IS DELIBERATE. This view",
         " * states the interface only; no characterisation has been run, so",
@@ -748,6 +937,61 @@ def magic_absent_reason(container: str = "") -> str:
             f"inside container {name!r} either")
 
 
+def _cell_lef_candidates(site: Optional[MagicSite],
+                         pdk_root: str) -> List[str]:
+    """Std-cell LEF candidates under the selected PDK, where the PDK lives."""
+    if not pdk_root:
+        return []
+    root = Path(pdk_root)
+    if root.is_dir():
+        return [str(p) for p in sorted(root.glob("libs.ref/*/lef/*.lef"))]
+    if site is not None and site.in_container:
+        q = shlex.quote(pdk_root.rstrip("/"))
+        return site._ls(f"{q}/libs.ref/*/lef/*.lef")
+    return []
+
+
+def _read_site_text(site: Optional[MagicSite], path: str) -> Optional[str]:
+    """Read a PDK file from the same host/container boundary Magic uses."""
+    p = Path(path) if path else None
+    if p is not None and p.is_file():
+        try:
+            return p.read_text(errors="replace")
+        except OSError:
+            return None
+    if site is None or not site.in_container or not path:
+        return None
+    rc, out, _err = site.sh(f"cat {shlex.quote(path)}", timeout=120)
+    return out if rc == 0 and out else None
+
+
+def resolve_stdcell_rails(site: Optional[MagicSite], pdk_root: str,
+                          cell_lef: str = "", metal_prefix: str = "met"
+                          ) -> Tuple[List[SupplyRail], str, str]:
+    """``(rails, source, reason)``; never chooses among ambiguous libraries."""
+    source = cell_lef
+    if not source:
+        candidates = _cell_lef_candidates(site, pdk_root)
+        if len(candidates) != 1:
+            return [], "", (
+                f"the selected PDK exposes {len(candidates)} std-cell LEF "
+                f"candidate(s) under `libs.ref/*/lef/*.lef`; exactly one or an "
+                f"explicit --cell-lef is required to derive supply rail names"
+                + (f": {', '.join(candidates)}" if candidates else ""))
+        source = candidates[0]
+    text = _read_site_text(site, source)
+    if text is None:
+        return [], source, (
+            f"the selected PDK std-cell LEF {source!r} could not be read in "
+            f"{site.where if site is not None else 'this environment'}")
+    rails = discover_stdcell_rails(text, metal_prefix)
+    if not rails:
+        return [], source, (
+            f"the selected PDK std-cell LEF {source!r} does not establish one "
+            "routing-metal USE POWER rail and one USE GROUND rail")
+    return rails, source, ""
+
+
 _LEF_HAS_PIN_RE = re.compile(r"(?m)^\s*PIN\s+\S+")
 
 
@@ -945,7 +1189,8 @@ def write_lef_with_magic(top: str, gds: Path, def_file: Path, out_lef: Path,
 # ── the run ───────────────────────────────────────────────────────────────
 
 def run(project: Path, pdk_root: str, full_lef: bool, pinonly: bool,
-        container: str = "") -> Tuple[int, Record]:
+        container: str = "", cell_lef: str = "",
+        metal_prefix: str = "met") -> Tuple[int, Record]:
     rec = Record()
     rec.lef_policy = {"writer": "magic:lef write",
                       "abstract": not full_lef,
@@ -990,18 +1235,68 @@ def run(project: Path, pdk_root: str, full_lef: bool, pinonly: bool,
             f"not contain")
         return RC_REFUSED, rec
 
-    # 4. the interface
+    # 4. the interface. Top-level DEF PINS commonly omits PG: the rails live
+    # in SPECIALNETS because OpenROAD treats them as a grid, not signal ports.
+    # That is fine for this die and fatal for a hardmacro delivery unless the
+    # rails become physical top-level pins in LEF and pg_pin groups in Liberty.
     pins = read_interface(def_text)
     if not pins:
         rec.status, rec.reason = "REFUSED", (
             f"{def_path.name} declares no PINS entry — a macro with no "
             f"interface cannot be connected to anything")
         return RC_REFUSED, rec
+    effective_def_text = def_text
+    site: Optional[MagicSite] = None
+    pg_source = "DEF PINS"
+    present_uses = {p.use for p in pins if p.is_pg}
+    if not _PG_USES <= present_uses:
+        # The PDK file can live only in the EDA container. Resolve the same
+        # boundary Magic will use before reading either the tool or its inputs.
+        site = find_magic_site(container)
+        rails, rail_source, why = resolve_stdcell_rails(
+            site, pdk_root, cell_lef, metal_prefix)
+        if not rails:
+            rec.status, rec.reason = "REFUSED_NOT_INTEGRABLE", why
+            rec.interface = {
+                "source": str(def_path),
+                "pins": len(pins),
+                "signal": [p.name for p in pins if not p.is_pg],
+                "power_ground": [p.name for p in pins if p.is_pg],
+                "integrable": False,
+            }
+            rec.notes.append(
+                "No hardmacro kit was staged. A macro with no authoritative "
+                "power and ground pins is not physically integrable; a "
+                "plausible rail name is not a substitute for PDK evidence.")
+            return RC_REFUSED, rec
+        effective_def_text, pins, why = add_supply_pins_to_def(def_text, rails)
+        if effective_def_text is None:
+            rec.status, rec.reason = "REFUSED_NOT_INTEGRABLE", why
+            rec.interface = {
+                "source": str(def_path),
+                "pins": len(pins),
+                "signal": [p.name for p in pins if not p.is_pg],
+                "power_ground": [p.name for p in pins if p.is_pg],
+                "pdk_stdcell_lef": rail_source,
+                "integrable": False,
+            }
+            rec.notes.append(
+                "No hardmacro kit was staged. The selected PDK supplied rail "
+                "names, but the signed-off DEF did not supply matching routed "
+                "geometry, so publishing physical pin rectangles would be "
+                "fabrication.")
+            return RC_REFUSED, rec
+        pg_source = rail_source
     rec.interface = {
         "source": str(def_path),
         "pins": len(pins),
         "signal": [p.name for p in pins if not p.is_pg],
         "power_ground": [p.name for p in pins if p.is_pg],
+        "power_ground_source": pg_source,
+        "power_ground_geometry_source": (
+            str(def_path) + "#SPECIALNETS" if pg_source != "DEF PINS"
+            else str(def_path) + "#PINS"),
+        "integrable": True,
     }
 
     hm = _pl.phase3_stage4_dir(project) / "hardmacro"
@@ -1026,33 +1321,76 @@ def run(project: Path, pdk_root: str, full_lef: bool, pinonly: bool,
     lef_path = hm / f"{design}.lef"
     if lef_path.exists() and lef_path.stat().st_size > 0:
         rec.skipped.append(f"{lef_path.name} (already present)")
-        return RC_OK, rec
-    # THE TOOL IS RESOLVED BEFORE IT IS ASKED FOR ANYTHING, and the record
-    # says which environment answered. "magic is not on PATH" was reported by
-    # a run whose own provenance already carried a successful magic
-    # invocation; naming the site is what makes the two statements
-    # comparable instead of contradictory.
-    site = find_magic_site(container)
-    if site is None:
-        ok, why = False, magic_absent_reason(container)
     else:
-        rec.lef_policy["magic_site"] = site.where
-        ver = site.magic_version()
-        if ver:
-            rec.lef_policy["magic_version"] = ver
-        ok, why = write_lef_with_magic(design, gds, def_path, lef_path,
-                                       pdk_root, full_lef, pinonly,
-                                       container=container, site=site)
-    if not ok:
-        rec.status, rec.reason = "SKIPPED_NO_CAPABILITY", why
+        # THE TOOL IS RESOLVED BEFORE IT IS ASKED FOR ANYTHING, and the record
+        # says which environment answered. "magic is not on PATH" was reported
+        # by a run whose own provenance already carried a successful magic
+        # invocation; naming the site makes the statements comparable.
+        if site is None:
+            site = find_magic_site(container)
+        if site is None:
+            ok, why = False, magic_absent_reason(container)
+        else:
+            rec.lef_policy["magic_site"] = site.where
+            ver = site.magic_version()
+            if ver:
+                rec.lef_policy["magic_version"] = ver
+            if effective_def_text == def_text:
+                magic_def = def_path
+                ok, why = write_lef_with_magic(
+                    design, gds, magic_def, lef_path, pdk_root, full_lef,
+                    pinonly, container=container, site=site)
+            else:
+                # A private working copy only. The signed-off routed DEF is an
+                # immutable input and is never rewritten to make a delivery.
+                with tempfile.TemporaryDirectory(prefix="digital-hm-pg-") as td:
+                    magic_def = Path(td) / def_path.name
+                    magic_def.write_text(effective_def_text, encoding="utf-8")
+                    ok, why = write_lef_with_magic(
+                        design, gds, magic_def, lef_path, pdk_root, full_lef,
+                        pinonly, container=container, site=site)
+        if not ok:
+            rec.status, rec.reason = "SKIPPED_NO_CAPABILITY", why
+            rec.notes.append(
+                "The LEF is written by Magic and by nothing else — this "
+                "program contains no LEF writer, on purpose. The kit is "
+                "therefore INCOMPLETE, and `digital_hardmacro_check` will "
+                "refuse it for the missing view.")
+            return RC_NO_CAPABILITY, rec
+        rec.produced.append(lef_path.name)
+
+    # Magic may exit zero and still drop an individual DEF port. Also inspect
+    # an already-present view: never overwriting it must not turn stale bytes
+    # into a fresh PRODUCED/integrable claim. This is a narrow producer
+    # acceptance over the rail pair only; the independent gate owns every
+    # other property of the four-view kit.
+    expected_pg = {p.name: p.use.upper() for p in pins if p.is_pg}
+    try:
+        staged_lef_pg = {
+            str(p["pin"]): str(p["use"]).upper()
+            for p in lef_pg_pins(lef_path.read_text(errors="replace"))}
+        lib_path = hm / f"{design}.lib"
+        staged_lib_pg = {
+            str(p["pin"]): str(p["use"]).upper()
+            for p in liberty_pg_pins(lib_path.read_text(errors="replace"))}
+    except OSError as exc:  # the independent gate will also reject the view
+        rec.status, rec.reason = "REFUSED_NOT_INTEGRABLE", (
+            f"could not re-read the staged supply interface: {exc}")
+        rec.interface["integrable"] = False
+        return RC_REFUSED, rec
+    rec.interface["staged_lef_power_ground"] = staged_lef_pg
+    rec.interface["staged_liberty_power_ground"] = staged_lib_pg
+    if staged_lef_pg != expected_pg or staged_lib_pg != expected_pg:
+        rec.status, rec.reason = "REFUSED_NOT_INTEGRABLE", (
+            "the staged hardmacro views did not preserve the exact derived "
+            f"supply interface: expected {expected_pg}; LEF has "
+            f"{staged_lef_pg}; Liberty has {staged_lib_pg}")
+        rec.interface["integrable"] = False
         rec.notes.append(
-            "The LEF is written by Magic and by nothing else — this program "
-            "contains no LEF writer, on purpose. The kit is therefore "
-            "INCOMPLETE, and `digital_hardmacro_check` will refuse it for the "
-            "missing view. That refusal is correct: a kit without the view "
-            "that lets somebody place the macro is not a delivery.")
-        return RC_NO_CAPABILITY, rec
-    rec.produced.append(lef_path.name)
+            "The four-view files remain evidence for the independent gate, "
+            "but this producer does not label the kit deliverable: a tool "
+            "success that drops either physical supply pin is not integration.")
+        return RC_REFUSED, rec
     return RC_OK, rec
 
 
@@ -1064,6 +1402,12 @@ def main(argv: Optional[List[str]] = None) -> int:
     ap.add_argument("--json", default=None, help="write the JSON record here")
     ap.add_argument("--pdk-root", default=os.environ.get("PDK_ROOT", ""),
                     help="PDK_ROOT; the PDK's own magicrc is located under it")
+    ap.add_argument("--cell-lef", default="",
+                    help="the selected PDK std-cell LEF whose routing-metal "
+                         "USE POWER/GROUND pins name the hardmacro rails")
+    ap.add_argument("--metal-prefix", default="met",
+                    help="selected PDK routing-layer stem used to distinguish "
+                         "primary rails from well/substrate PG pins")
     ap.add_argument("--container", default=DEFAULT_CONTAINER,
                     help="the EDA container to reach magic and the PDK in "
                          "when neither is in THIS environment; 'host' or "
@@ -1083,7 +1427,8 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     try:
         rc, rec = run(args.project_dir, args.pdk_root, args.full_lef,
-                      args.pinonly, args.container)
+                      args.pinonly, args.container, args.cell_lef,
+                      args.metal_prefix)
     except RuntimeError as exc:
         rc, rec = RC_NO_CAPABILITY, Record(status="ERROR", reason=str(exc))
 

@@ -536,11 +536,13 @@ def parse_liberty(lib_text: str, bus_chars: str = "[]<>") -> Dict[str, object]:
     signal: Set[str] = set()
     pg: Set[str] = set()
     pg_type: Dict[str, str] = {}
+    pg_name: Dict[str, str] = {}
     matches = list(_LIB_PIN_RE.finditer(text))
     for i, m in enumerate(matches):
         b = base_name(m.group("name"), bus_chars)
         if m.group("kind").lower() == "pg_pin":
             pg.add(b)
+            pg_name[b] = m.group("name")
             # Scoped to THIS pg_pin's group: from its `{` up to the start of
             # the next pin/bus/pg_pin declaration, so a `pg_type` belonging
             # to the following group is never read as this one's.
@@ -551,7 +553,8 @@ def parse_liberty(lib_text: str, bus_chars: str = "[]<>") -> Dict[str, object]:
             signal.add(b)
     signal -= pg
     return {"cell": cell_m.group("name") if cell_m else None,
-            "signal": signal, "pg": pg, "pg_type": pg_type}
+            "signal": signal, "pg": pg, "pg_type": pg_type,
+            "pg_name": pg_name}
 
 
 # ── Verilog ───────────────────────────────────────────────────────────────
@@ -904,6 +907,7 @@ def check_package(name: str, views: Dict[str, Path], project: Path,
         "lef_pg_kind": dict(sorted(lef.get("pg_kind", {}).items())),
         "lib_pg_type": dict(sorted(lib.get("pg_type", {}).items())),
     }
+    lef_kind = lef.get("pg_kind", {}) or {}
 
     if not (sig_lef or pg_lef):
         ok = False
@@ -912,6 +916,25 @@ def check_package(name: str, views: Dict[str, Path], project: Path,
             message=(f"macro '{name}': LEF declares no `PIN <n> … END <n>` "
                      f"block. A macro with no pins cannot be connected to "
                      f"anything.")))
+
+    # A matching pair of empty sets used to pass PG_PIN_DISAGREE.  That made
+    # the first real four-view kit look complete while exposing no way to
+    # connect either supply.  Agreement about zero rails is not physical
+    # integrability: the LEF must expose at least one POWER and one GROUND pin.
+    rail_kinds = {str(kind).lower() for kind in lef_kind.values()}
+    missing_rail_kinds = sorted({"power", "ground"} - rail_kinds)
+    detail["interface"]["supply_integrable"] = not missing_rail_kinds
+    detail["interface"]["missing_rail_kinds"] = missing_rail_kinds
+    if missing_rail_kinds:
+        ok = False
+        F.append(Finding(
+            rule="PG_SUPPLY_PAIR_MISSING", severity="ERROR", macro=name,
+            file=cite(lef_p),
+            message=(f"macro '{name}': the placeable LEF does not expose a "
+                     f"complete POWER/GROUND supply pair (missing "
+                     f"{missing_rail_kinds}). A macro with no physical way "
+                     f"to connect both rails is NOT INTEGRABLE, even when "
+                     f"the Liberty agrees by also declaring no pg_pin.")))
 
     for a_name, a_set, b_name, b_set, rule in (
             ("LEF", sig_lef, "Liberty", sig_lib, "SIGNAL_PIN_DISAGREE"),
@@ -946,7 +969,6 @@ def check_package(name: str, views: Dict[str, Path], project: Path,
                  "primary_ground": "ground", "backup_ground": "ground",
                  "internal_ground": "ground", "nwell": "power",
                  "deepnwell": "power", "deeppwell": "ground"}
-    lef_kind = lef.get("pg_kind", {}) or {}
     lib_type = lib.get("pg_type", {}) or {}
     rail_conflict, rail_unstated = [], []
     for b in sorted(pg_lef & pg_lib):

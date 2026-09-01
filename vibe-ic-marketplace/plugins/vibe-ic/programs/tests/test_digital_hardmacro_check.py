@@ -801,11 +801,8 @@ def test_agreeing_rails_are_not_refused(tmp_path):
     assert "PG_TYPE_DISAGREE" not in rules(p)
 
 
-def test_a_kit_with_no_supply_pin_at_all_is_not_touched_by_the_rail_clause(
-        tmp_path):
-    """A kit whose LEF and Liberty both declare no supply pin has NOTHING for
-    this clause to compare, and it must not invent a disagreement. Recorded
-    because it is the shape of every real kit in this tree's corpus today."""
+def test_a_kit_with_no_supply_pin_at_all_is_not_integrable(tmp_path):
+    """Matching empty PG sets are agreement, but not an integrable macro."""
     lef = LEF_OK
     for pin in ("vpwr", "vgnd"):
         head = lef.index(f"  PIN {pin}")
@@ -818,7 +815,8 @@ def test_a_kit_with_no_supply_pin_at_all_is_not_touched_by_the_rail_clause(
                  "pg_type : primary_ground ; }\n"):
         lib = lib.replace(line, "")
     p = make_kit(tmp_path, lef=lef, lib=lib)
-    assert run(p).returncode == 0
+    assert run(p).returncode == 1
+    assert "PG_SUPPLY_PAIR_MISSING" in rules(p)
     assert "PG_TYPE_DISAGREE" not in rules(p)
 
 

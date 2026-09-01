@@ -162,6 +162,16 @@
       "bucket_A_program": "programs/phase3_one_shot_runner.py",
       "bucket_B_skill_file": "skills/ppa-predict/SKILL.md"
     },
+    "phase3.digital_hardmacro": {
+      "description": "Digital hardmacro four-view generation and physical-integrability acceptance at flow step 37.5ip.",
+      "bucket_A_program": "programs/digital_hardmacro_gen.py",
+      "bucket_A_related": [
+        "programs/digital_hardmacro_check.py",
+        "programs/ip_release_docs_gen.py",
+        "programs/phase3_one_shot_runner.py"
+      ],
+      "bucket_B_skill_file": "skills/phase3-backend-verify/SKILL.md"
+    },
     "phase3.synth": {
       "bucket_A_program": "programs/phase3_one_shot_runner.py",
       "bucket_B_skill_file": "skills/synth-doctor/SKILL.md"
