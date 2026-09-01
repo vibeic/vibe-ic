@@ -312,7 +312,7 @@ def test_every_reason_line_is_traceable_to_a_record_or_the_umbrella_note(
 
 
 def test_the_operator_still_sees_every_reason_line(tmp_path, capsys):
-    """#492's whole point: unrun gates must not become invisible."""
+    """#492/#1968: every non-PASS disposition stays visible to the operator."""
     proj = _project_with_rtl(tmp_path)
     report = tmp_path / "report.json"
     F.main([str(proj), "--json", str(report), "--lenient"])
@@ -322,5 +322,9 @@ def test_the_operator_still_sees_every_reason_line(tmp_path, capsys):
     for line in p0["reasons"]:
         assert f"└─ {line}" in printed, (
             f"reason line vanished from the operator listing: {line[:70]!r}")
-    assert any(GI.is_not_invocable_heading(x.strip()) for x in p0["reasons"])
-    assert GI.NOT_INVOCABLE_HEADING_SENTINEL in printed
+    assert not any(GI.is_not_invocable_heading(x.strip())
+                   for x in p0["reasons"])
+    assert GI.NOT_INVOCABLE_HEADING_SENTINEL not in printed
+    assert any("N/A from the design declaration roster" in x
+               for x in p0["reasons"]), (
+        "the fixture must visibly exercise the declaration-derived N/A arm")

@@ -420,7 +420,11 @@ def test_every_published_field_is_the_projection_of_the_published_records(
     # non-trivial on all four axes, or the assertions above are vacuous
     assert audit["failed_gates"], "fixture must reach the FAIL population"
     assert audit["passed_gate_count"] > 0
-    assert any(r["verdict"] == "NOT_INVOCABLE" for r in recs)
+    assert not any(r["verdict"] == "NOT_INVOCABLE" for r in recs)
+    assert any(r["verdict"] == "SKIP"
+               and r.get("evidence", {}).get("skip_kind") ==
+               "declaration-not-present" for r in recs), (
+        "the incomplete fixture must exercise the explicit derived-N/A arm")
     assert any(r["verdict"] == "SKIP" for r in recs)
 
 

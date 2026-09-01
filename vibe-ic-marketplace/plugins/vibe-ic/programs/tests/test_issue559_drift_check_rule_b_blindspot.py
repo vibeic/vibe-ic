@@ -250,16 +250,14 @@ def test_a_rule_b_gate_is_not_filed_as_mechanical_wiring(tmp_path, monkeypatch):
 # ---------------------------------------------------------------------------
 
 def test_the_recorded_set_matches_what_the_umbrella_classifies():
-    """P0's true coverage, re-derived rather than quoted. The ratchet's pinned
-    list must be the set the UMBRELLA calls NOT_INVOCABLE — not a subset of it
-    produced by a different rule. At v1.9.74 those were 32 and 36."""
+    """#1968 closes the historical 36 parser silences without shrinking P0."""
     res = D.measure(jobs=8)
     if "error" in res:
         pytest.skip(f"cannot measure here: {res['error']}")
     measured = set(res["measured"])
     assert measured <= set(D.KNOWN_NOT_INVOCABLE), (
         f"un-recorded silent gates: {sorted(measured - set(D.KNOWN_NOT_INVOCABLE))}")
-    assert len(measured) == 36 and res["registered"] == 246, (
+    assert len(measured) == 0 and res["registered"] == 246, (
         f"P0 coverage moved: {res['registered'] - len(measured)} of "
         f"{res['registered']} gates return a verdict. Update this anchor "
         f"deliberately and say which direction it moved.")

@@ -69,24 +69,21 @@ def test_gate_is_registered_as_structural(gate):
 
 
 @pytest.mark.parametrize("gate", sorted(REGISTER))
-def test_recorded_gate_still_rejects_the_umbrella_argv(gate):
-    """The measurement, re-derived live. The argv comes from the umbrella's own
-    builder, so a gate that rejects it here rejects it in production too. If a
-    gate stops rejecting (gains a default), this fails rather than silently
-    licensing a now-drivable gate under a 'cannot be driven' record."""
+def test_recorded_gate_now_has_a_verdict_or_derived_na_contract(gate):
+    """#1968 supersedes the old licensed silence with an explicit contract."""
     import tempfile
     with tempfile.TemporaryDirectory() as tmp:
         probe = pathlib.Path(tmp)
+        derived_na = F._p0_contract_na_reason(gate, probe, probe)
         argv = F._structural_gate_argv(gate, probe, rtl_dir=probe)
         proc = _pr.run(argv, capture_output=True, text=True)
-    # A gate that rejects the umbrella argv exits 2 with argparse's usage block,
-    # OR hand-rolls the same complaint (Rule B in _gate_invocation). Either way
-    # it did NOT run and did NOT return a 0/1 verdict about the probe.
-    assert proc.returncode == 2, (
-        f"{gate} exited {proc.returncode} on the umbrella argv — it no longer "
-        f"rejects it, so this 'undrivable' record is stale. Re-measure and move "
-        f"it to a wiring adapter or the right licensed table.\n"
-        f"stderr:\n{proc.stderr[-600:]}")
+    assert gate in F._STRUCTURAL_GATE_INVOCATION_CONTRACTS
+    rejected = (proc.returncode == 2 and
+                F._gate_invocation.classify_not_invocable(
+                    proc.stdout, proc.stderr,
+                    supplied_flags=[a for a in argv if a.startswith("--")]))
+    assert derived_na is not None or not rejected, (
+        f"{gate} has neither a derived N/A nor an invocable argv")
 
 
 @pytest.mark.parametrize("gate", sorted(REGISTER))
@@ -152,21 +149,12 @@ def test_table_covers_exactly_the_undecided_gates_found_so_far():
     assert set(REGISTER) == _ROUND6_TWELVE | _ROUND7_RULE_B_FOUR
 
 
-def test_the_round7_four_are_rule_b_and_would_be_invisible_to_rule_a():
-    """The reason round 7 exists, re-derived rather than asserted.
-
-    Each of these four exits 2 WITHOUT an argparse usage block. Any predicate
-    that keys on `usage:` — which is what the ratchet did until v1.9.74 — reports
-    them as invocable, so P0 stays green over gates that never ran and the check
-    built to notice that says `No new silent gate`.
-    """
+def test_the_round7_four_are_now_explicit_derived_na_on_an_empty_design():
+    """The four hand-rolled Rule-B silences are closed by #1968 contracts."""
     import tempfile
     for gate in sorted(_ROUND7_RULE_B_FOUR):
         with tempfile.TemporaryDirectory() as tmp:
             probe = pathlib.Path(tmp)
-            argv = F._structural_gate_argv(gate, probe, rtl_dir=probe)
-            proc = _pr.run(argv, capture_output=True, text=True)
-        assert proc.returncode == 2, gate
-        assert "usage:" not in (proc.stderr or ""), (
-            f"{gate} now prints an argparse usage block, so it is a Rule-A "
-            f"rejection and this round-7 record describes the wrong mechanism")
+            reason = F._p0_contract_na_reason(gate, probe, probe)
+        assert gate in F._STRUCTURAL_GATE_INVOCATION_CONTRACTS
+        assert reason is not None and "N/A" in reason, gate

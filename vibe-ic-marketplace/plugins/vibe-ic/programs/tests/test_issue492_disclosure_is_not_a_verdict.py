@@ -374,10 +374,14 @@ def test_end_to_end_audit_artifact_reports_only_real_failures(tmp_path):
     """`reports/audit/phase23_completion_audit.json` is, by its own write-site
     comment, "the contract the mcp-eda pre-burn guard consumes". Every
     invariant below was violated by commit 7b7eebff3, first released in
-    v1.7.69."""
+    v1.7.69. Issue #1968 closes the remaining disclosure population: every
+    registered gate now has a verdict or an explicit declaration-derived
+    N/A, so the real run must publish no NOT_INVOCABLE entry at all."""
     proj = _project_with_rtl(tmp_path / "proj")
     _rc, audit, _p0, disclosed = _run_main(proj, tmp_path)
-    assert disclosed, "premise: this project discloses never-invoked gates"
+    assert not disclosed, (
+        "a registered P0 gate still disappeared before applicability was "
+        "decided")
 
     for name in audit["failed_gates"]:
         # Kills the prose messages AND the heading in one invariant, without

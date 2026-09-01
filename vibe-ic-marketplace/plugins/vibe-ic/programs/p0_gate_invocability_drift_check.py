@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
-"""A gate registered in the P0 umbrella that the umbrella cannot invoke.
+"""Fail-closed guard against a P0 gate the umbrella cannot invoke.
 
 WHY THIS EXISTS
 ===============
-`_STRUCTURAL_RTL_GATES` registers 246 checkers. 36 of them reject the argv the
-umbrella builds — argument parsing exits 2 before the check runs — so they
+At the #1968 base, `_STRUCTURAL_RTL_GATES` registered 246 checkers. 36 of them
+rejected the argv the umbrella builds — argument parsing exits 2 before the
+check runs — so they
 return no verdict at all. `_gate_invocation` records that faithfully as
 `NOT_INVOCABLE`, and its docstring is emphatic that this is a VERDICT and not a
 marker, because folding it into `SKIP` is what made 39 registered gates read as
@@ -20,10 +21,9 @@ pass flag. So the separation exists in the reporting and is lost in the verdict:
 a project where 36 registered checkers produced nothing still gets
 `status = "PASS"` from P0 (vibe-ic#559). P0's true coverage is 210 of 246.
 
-THIS PROGRAM DOES NOT FIX THAT. Making `NOT_INVOCABLE` fail today would turn P0
-red everywhere and a gate that blocks every landing gets deleted, not fixed. It
-stops the number GROWING while the 36 are triaged, which is the part that can be
-done without a judgement call about any individual gate.
+Issue #1968 fixes that with per-gate invocation contracts and explicit
+declaration-derived N/A records. This program now holds the repaired frontier
+at zero: any future parser rejection is a new blocking silence.
 
 WHY A SUBSET AND NOT A COUNT
 ============================
@@ -38,12 +38,9 @@ The predicate is `measured ⊆ recorded`, deliberately:
 Subset gives the useful asymmetry. Fixing a gate leaves the set a subset and
 passes. Registering a 37th un-invocable gate does not, and fails.
 
-REMOVAL CONDITION, stated so it is observable rather than intended: as the 36 are
-triaged — classified into `_ZERO_DENOMINATOR_CLASSIFICATION` with a re-derived
-#492 measurement, wired, or de-registered — `KNOWN_NOT_INVOCABLE` shrinks. When it
-reaches zero this file is `git rm`-ed and `NOT_INVOCABLE` is made to enter the
-umbrella's pass flag. Emptying it instead of deleting it would leave a place to
-put the next one without thinking.
+CURRENT INVARIANT: `KNOWN_NOT_INVOCABLE` is empty. It stays explicit rather
+than becoming an undocumented count so a future parser rejection cannot trade
+places with a repaired gate or be accepted by accident.
 
 THE DISCRIMINATOR, and why the obvious one is wrong
 ===================================================
@@ -125,44 +122,10 @@ POSITIONAL_MARKER = "<positional/unrecognized>"
 #: the list would let a newly-silent one take its place without changing the
 #: total. This list does not endorse any of them — it pins the size of the
 #: problem so it cannot grow silently, and it was pinning the WRONG SIZE.
-KNOWN_NOT_INVOCABLE: Tuple[str, ...] = (
-    "backlog_sanitize_check",
-    "bit_count_modulo_check",
-    "cmd_arg_range_validation_check",
-    "crc_bitorder_check",
-    "crc_seed_consistency_check",
-    "cross_constant_invariant_check",
-    "fpga_async_input_synchronizer_check",
-    "fpga_qsf_lint",
-    "fresh_agent_provenance_check",
-    "interface_encoding_audit",
-    "json_schema_check",
-    "l12_sequence_implementation_check",
-    "l9_completeness_check",
-    "mask_application_check",
-    "module_port_audit",
-    "oe_pattern_check",
-    "openroad_tcl_deprecation_check",
-    "otp_write_lock_gate_check",
-    "output_artifact_check",
-    "packet_length_check_present",
-    "payload_bit_position_check",
-    "periodic_signal_required_check",
-    "phase1_gate_contract_check",
-    "practical_notes_specificity_check",
-    "pre_awake_silence_check",
-    "protocol_gap_check",
-    "pulse_decoder_edge_check",
-    "response_payload_template_check",
-    "rtl_precheck_gate",
-    "scope_periodic_pulse_check",
-    "testbench_exists_check",
-    "tester_oracle_health_check",
-    "transient_signal_latch_check",
-    "tristate_bus_check",
-    "tristate_self_rx_mask_check",
-    "warn_acceptance_policy_check",
-)
+# Issue #1968 closed the measured 36 with declared invocation contracts plus
+# declaration-derived N/A records.  Keep the empty pin as a fail-closed drift
+# guard: any future parser rejection is immediately a new, blocking silence.
+KNOWN_NOT_INVOCABLE: Tuple[str, ...] = ()
 
 
 def _why_rejected(argv: List[str]) -> Optional[str]:
@@ -205,11 +168,13 @@ def _rejects_the_umbrella_argv(argv: List[str]) -> bool:
 
 
 def measure(jobs: int = 8) -> Dict[str, object]:
-    """The set of registered gates that reject the umbrella's own argv.
+    """Registered gates that reject the production dispatch contract.
 
     The argv comes from `flow_compliance_check._structural_gate_argv`, never from
     a re-typed literal: a re-typed argv agrees with the umbrella by coincidence,
     which is the reason that function was named in the first place (#492).
+    A gate whose required declaration is absent is counted as a derived N/A,
+    matching production dispatch, and is never executed with placeholders.
     """
     programs = Path(__file__).resolve().parent
     if str(programs) not in sys.path:
@@ -232,14 +197,23 @@ def measure(jobs: int = 8) -> Dict[str, object]:
         try:
             argvs = {g: F._structural_gate_argv(g, probe, rtl_dir=probe)
                      for g in gates}
+            derived_na = {
+                g for g in gates
+                if F._p0_contract_na_reason(g, probe, probe) is not None
+            }
         except Exception as exc:                               # noqa: BLE001
             return {"error": f"argv builder raised: {exc}"}
         with ThreadPoolExecutor(max_workers=jobs) as ex:
-            verdicts = list(ex.map(_rejects_the_umbrella_argv,
-                                   (argvs[g] for g in gates)))
+            runnable = [g for g in gates if g not in derived_na]
+            rejected_runnable = list(ex.map(
+                _rejects_the_umbrella_argv, (argvs[g] for g in runnable)))
+
+    rejected_by_gate = dict(zip(runnable, rejected_runnable))
+    verdicts = [rejected_by_gate.get(g, False) for g in gates]
 
     measured = {g for g, rejected in zip(gates, verdicts) if rejected}
-    return {"registered": len(gates), "measured": sorted(measured)}
+    return {"registered": len(gates), "measured": sorted(measured),
+            "derived_na": sorted(derived_na)}
 
 
 #: Flags the umbrella ALREADY computes — a project path, an RTL directory, an

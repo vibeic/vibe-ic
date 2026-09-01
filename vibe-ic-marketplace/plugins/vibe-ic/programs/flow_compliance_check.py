@@ -73,6 +73,7 @@ import os
 import re
 import shlex
 import sys
+import tempfile
 from dataclasses import dataclass, field, asdict
 from pathlib import Path
 from types import MappingProxyType
@@ -6389,6 +6390,67 @@ _STRUCTURAL_GATE_BARE_FLAGS: Dict[str, tuple[str, ...]] = {
 
 
 # ---------------------------------------------------------------------------
+# vibe-ic#1968 — DECLARED INVOCATION CONTRACTS FOR NON-UNIFORM P0 GATES.
+#
+# The generic P0 argv is ``python gate.py <project>``.  That is a convention,
+# not an interface: the 36 programs below declare different CLIs and therefore
+# rejected the call before examining the design.  A parser crash is never an
+# applicability decision.  This registry is the single declaration of HOW the
+# umbrella asks each exceptional gate; gates absent from it keep the historical
+# project-positional contract.  Applicability remains a separate, design-owned
+# question and is resolved from ic_class/L-doc declarations before argv exists.
+#
+# Values are closed invocation shapes, not arbitrary shell fragments.  The
+# builder below expands each shape from paths/values the design declares.  It
+# never evals strings and never harvests a semantic expectation from the RTL it
+# is checking (CRC signal, masks, periodic obligations, bus drivers and gap
+# timing all come from L-docs).
+# ---------------------------------------------------------------------------
+_STRUCTURAL_GATE_INVOCATION_CONTRACTS: Mapping[str, str] = MappingProxyType({
+    "backlog_sanitize_check": "backlog-dir",
+    "bit_count_modulo_check": "rtl-dir",
+    "cmd_arg_range_validation_check": "rtl-dir",
+    "crc_bitorder_check": "crc-bitorder",
+    "crc_seed_consistency_check": "crc-vectors",
+    "cross_constant_invariant_check": "constant-invariants",
+    "fpga_async_input_synchronizer_check": "fpga-top",
+    "fpga_qsf_lint": "fpga-qsf",
+    "fresh_agent_provenance_check": "reference-provenance",
+    "interface_encoding_audit": "interface-encoding",
+    "json_schema_check": "l3-schema",
+    "l12_sequence_implementation_check": "l12-sequences",
+    "l9_completeness_check": "l9",
+    "mask_application_check": "declared-masks",
+    "module_port_audit": "module-ports",
+    "oe_pattern_check": "rtl-files-output",
+    "openroad_tcl_deprecation_check": "no-args",
+    "otp_write_lock_gate_check": "rtl-dir",
+    "output_artifact_check": "rtl-artifacts",
+    "packet_length_check_present": "rtl-dir",
+    "payload_bit_position_check": "payload-bitmap",
+    "periodic_signal_required_check": "periodic-signals",
+    "phase1_gate_contract_check": "no-args",
+    "practical_notes_specificity_check": "no-args",
+    "pre_awake_silence_check": "rtl-dir",
+    "protocol_gap_check": "protocol-gap",
+    "pulse_decoder_edge_check": "rtl-dir",
+    "response_payload_template_check": "rtl-dir",
+    "rtl_precheck_gate": "rtl-precheck",
+    "scope_periodic_pulse_check": "scope-samples",
+    "testbench_exists_check": "testbench",
+    "tester_oracle_health_check": "tester-oracle",
+    "transient_signal_latch_check": "rtl-dir",
+    "tristate_bus_check": "tristate-bus",
+    "tristate_self_rx_mask_check": "rtl-dir",
+    "warn_acceptance_policy_check": "warn-policy",
+})
+
+# The #559 disposition tables below are retained as the measured history that
+# motivated #1968. They no longer license runtime silence: every one of their
+# affected names is now askable through the closed contract registry above.
+
+
+# ---------------------------------------------------------------------------
 # #559 — GATES REGISTERED IN THE WRONG UMBRELLA.
 #
 # `_STRUCTURAL_RTL_GATES` is driven once per project over the corpus.  Four of
@@ -7043,10 +7105,353 @@ _UNDRIVABLE_BY_STRUCTURAL_UMBRELLA: Dict[str, Dict[str, str]] = {
 _P0_GATE_STALL_GRACE_S = 60.0
 
 
+def _p0_contract_json(path: Optional[Path]) -> tuple[Dict[str, Any], str]:
+    """Read one declared L-doc and retain absent vs malformed provenance.
+
+    Only an absent/valid declaration can support derived N/A.  A file that is
+    present but malformed must stay live so its checker can report the defect;
+    treating parse failure as absence would turn broken evidence into N/A.
+    """
+    if path is None or not path.is_file():
+        return {}, "absent"
+    try:
+        value = json.loads(path.read_text(errors="replace"))
+    except Exception:
+        return {}, "malformed"
+    return (value, "valid") if isinstance(value, dict) else ({}, "malformed")
+
+
+def _p0_contract_doc(project: Path, prefix: str) -> Optional[Path]:
+    gd = _pl.generated_docs_dir(project)
+    if not gd.is_dir():
+        gd = project / "generated_docs"
+    matches = sorted(gd.glob(f"{prefix}*.json")) if gd.is_dir() else []
+    return matches[0] if matches else None
+
+
+def _p0_declared_path(project: Path, value: Any) -> Optional[Path]:
+    if not isinstance(value, str) or not value.strip():
+        return None
+    path = Path(value)
+    return path if path.is_absolute() else project / path
+
+
+def _p0_contract_context(project: Path,
+                         rtl_dir: Path) -> Dict[str, Any]:
+    """Design-declared inputs available to exceptional gate contracts.
+
+    Semantic values come only from generated L-docs or explicit project
+    artefacts.  RTL supplies the implementation under test and file/topology
+    paths; it is never mined to invent the spec expectation being checked.
+    """
+    l3_path = _p0_contract_doc(project, "L3_")
+    l4_path = _p0_contract_doc(project, "L4_")
+    l9_path = _p0_contract_doc(project, "L9_")
+    l12_path = _p0_contract_doc(project, "L12_")
+    l3, l3_state = _p0_contract_json(l3_path)
+    l4, l4_state = _p0_contract_json(l4_path)
+    l9, l9_state = _p0_contract_json(l9_path)
+    l12, l12_state = _p0_contract_json(l12_path)
+
+    crc = l3.get("crc_parameters")
+    crc = crc if isinstance(crc, dict) else {}
+    gap = l3.get("protocol_gap")
+    gap = gap if isinstance(gap, dict) else {}
+    otp_layout = l4.get("otp_layout")
+    otp_layout = otp_layout if isinstance(otp_layout, dict) else {}
+    masks = otp_layout.get("mask_sources")
+    masks = masks if isinstance(masks, list) else []
+    periodic = l12.get("periodic_signals")
+    periodic = periodic if isinstance(periodic, list) else []
+    invariants = l12.get("constant_invariants")
+    invariants = invariants if isinstance(invariants, list) else []
+    l12_sequences = next((l12.get(key) for key in (
+        "sequences", "behavioral_sequences", "behavioural_sequences",
+        "protocol_sequences", "transaction_sequences", "flows",
+        "scenarios", "test_sequences")
+        if isinstance(l12.get(key), list) and l12.get(key)), [])
+
+    interfaces = l9.get("interfaces")
+    interfaces = interfaces if isinstance(interfaces, list) else []
+    l9_registers = next((l9.get(key) for key in (
+        "registers", "regs", "reg_map", "register_map",
+        "register_infrastructure")
+        if isinstance(l9.get(key), (list, dict)) and l9.get(key)), None)
+    tristate = next((v for v in interfaces
+                     if isinstance(v, dict)
+                     and str(v.get("direction", "")).lower() == "inout"
+                     and isinstance(v.get("drivers"), list)
+                     and v.get("drivers")), {})
+
+    top = l9.get("top_module")
+    if isinstance(top, dict):
+        top = top.get("name")
+    top = top if isinstance(top, str) and top.strip() else None
+
+    vectors = _p0_declared_path(project, crc.get("vectors_json"))
+    qsf = next(iter(sorted(project.rglob("*.qsf"))), None)
+    reference_dir = next((p for p in (
+        project / "references",
+        project / "phase2" / "stage1" / "references",
+    ) if p.is_dir()), None)
+    backlog_dir = next((p for p in (
+        project / "community" / "backlogs",
+        project / "backlogs",
+    ) if p.is_dir()), None)
+    tester_config = next((p for p in (
+        project / "reports" / "tester_oracle.json",
+        project / "oracle.json",
+        project / "reports" / "oracle.json",
+    ) if p.is_file()), None)
+    scope_samples = next((p for p in (
+        project / "scope_samples.csv",
+        project / "reports" / "scope_samples.csv",
+    ) if p.is_file()), None)
+
+    return {
+        "rtl_files": tuple(sorted(
+            list(rtl_dir.rglob("*.v")) + list(rtl_dir.rglob("*.sv")))),
+        "l3_path": l3_path,
+        "l3_state": l3_state,
+        "l3_opcodes": l3.get("opcodes")
+        if isinstance(l3.get("opcodes"), list) else [],
+        "l4_path": l4_path,
+        "l4_state": l4_state,
+        "l9_path": l9_path,
+        "l9_state": l9_state,
+        "l9_registers": l9_registers,
+        "l12_path": l12_path,
+        "l12_state": l12_state,
+        "l12_sequences": l12_sequences,
+        "crc_signal": crc.get("signal"),
+        "crc_vectors": vectors,
+        "protocol_gap": gap,
+        "masks": masks,
+        "periodic": periodic,
+        "invariants": invariants,
+        "payload_bitmap": l3.get("bit_layouts"),
+        "top_module": top,
+        "tristate": tristate,
+        "qsf": qsf,
+        "reference_dir": reference_dir,
+        "backlog_dir": backlog_dir,
+        "tester_config": tester_config,
+        "scope_samples": scope_samples,
+    }
+
+
+_P0_CONTRACT_REQUIRED_CONTEXT: Mapping[str, tuple[str, ...]] = MappingProxyType({
+    "backlog-dir": ("backlog_dir",),
+    "crc-bitorder": ("rtl_files", "crc_signal"),
+    "crc-vectors": ("crc_vectors",),
+    "constant-invariants": ("invariants",),
+    "fpga-top": ("top_module", "qsf"),
+    "fpga-qsf": ("qsf",),
+    "reference-provenance": ("reference_dir",),
+    "interface-encoding": ("top_module",),
+    # json_schema_check treats an explicitly-empty `opcodes` value as ERROR.
+    # A no-protocol design declares that emptiness as N/A, not malformed JSON.
+    "l3-schema": ("l3_path", "l3_opcodes"),
+    "l12-sequences": ("l12_path", "l12_sequences"),
+    # l9_completeness_check makes a non-empty register section mandatory.  The
+    # canonical layer owner is often L4, so only invoke this L9-specific check
+    # when the design actually declares a register section in L9.
+    "l9": ("l9_path", "l9_registers"),
+    "declared-masks": ("masks",),
+    "rtl-files-output": ("rtl_files",),
+    "payload-bitmap": ("l3_path", "payload_bitmap"),
+    "periodic-signals": ("periodic",),
+    "protocol-gap": ("protocol_gap",),
+    "scope-samples": ("scope_samples",),
+    "tester-oracle": ("tester_config",),
+    "tristate-bus": ("tristate",),
+})
+
+# Gates can share the same CLI shape while asking different applicability
+# questions.  Keep those feature requirements keyed by gate, not by argv kind:
+# a generic RTL-dir checker must not inherit a protocol-only prerequisite.
+_P0_GATE_REQUIRED_CONTEXT: Mapping[str, tuple[str, ...]] = MappingProxyType({
+    "pre_awake_silence_check": ("l3_opcodes",),
+})
+
+# Semantic declarations owned by a malformed document are not "absent".  The
+# contract therefore runs with the real document path (and, where necessary,
+# inert argv placeholders) so the gate can return a substantive parse/schema
+# verdict instead of the umbrella manufacturing N/A.
+_P0_CONTEXT_DOCUMENT_STATE: Mapping[str, str] = MappingProxyType({
+    "crc_signal": "l3_state",
+    "crc_vectors": "l3_state",
+    "l3_opcodes": "l3_state",
+    "payload_bitmap": "l3_state",
+    "protocol_gap": "l3_state",
+    "masks": "l4_state",
+    "l9_registers": "l9_state",
+    "top_module": "l9_state",
+    "tristate": "l9_state",
+    "invariants": "l12_state",
+    "l12_sequences": "l12_state",
+    "periodic": "l12_state",
+})
+
+
+def _p0_contract_na_reason(gate_name: str,
+                           project: Path,
+                           rtl_dir: Path) -> Optional[str]:
+    """Why a declared contract is N/A before invocation, or ``None``.
+
+    This is the allowed disposition-predicate arm from #1968.  It is narrow:
+    only an explicitly-required declaration missing from the design roster can
+    suppress invocation.  Path-only and no-argument contracts still run on a
+    non-protocol design; unknown/default contracts run fail-closed.
+    """
+    kind = _STRUCTURAL_GATE_INVOCATION_CONTRACTS.get(gate_name)
+    if kind is None:
+        return None
+    ctx = _p0_contract_context(project, rtl_dir)
+    required = (*_P0_CONTRACT_REQUIRED_CONTEXT.get(kind, ()),
+                *_P0_GATE_REQUIRED_CONTEXT.get(gate_name, ()))
+    missing = []
+    for name in required:
+        if ctx.get(name):
+            continue
+        state_key = _P0_CONTEXT_DOCUMENT_STATE.get(name)
+        if state_key and ctx.get(state_key) == "malformed":
+            return None
+        missing.append(name)
+    if not missing:
+        return None
+    return (
+        f"N/A from the design declaration roster: {gate_name} declares "
+        f"invocation_contract={kind!r}, but the required declaration(s) "
+        f"{', '.join(missing)} are absent. The gate was not given fabricated "
+        f"placeholder arguments; a project that declares them keeps the gate "
+        f"live.")
+
+
+def _p0_contract_argv(gate_name: str,
+                      project: Path,
+                      rtl_dir: Path,
+                      scratch_dir: Path) -> List[str]:
+    """Expand one closed invocation contract into an argv list."""
+    prog = PROGRAMS_DIR / f"{gate_name}.py"
+    base = [sys.executable, str(prog)]
+    kind = _STRUCTURAL_GATE_INVOCATION_CONTRACTS[gate_name]
+    ctx = _p0_contract_context(project, rtl_dir)
+    out = scratch_dir / gate_name
+    rtl_files = [str(p) for p in ctx["rtl_files"]] or [str(rtl_dir / "missing.v")]
+
+    if kind == "no-args":
+        return base
+    if kind == "rtl-dir":
+        return base + ["--rtl-dir", str(rtl_dir)]
+    if kind == "backlog-dir":
+        return base + ["--dir", str(ctx.get("backlog_dir") or project / "backlogs")]
+    if kind == "crc-bitorder":
+        return base + ["--rtl-files", *rtl_files,
+                       "--crc-signal", str(ctx.get("crc_signal") or "missing_crc"),
+                       "--out-dir", str(out)]
+    if kind == "crc-vectors":
+        return base + ["--vectors-json", str(
+            ctx.get("crc_vectors") or project / "missing_crc_vectors.json")]
+    if kind == "constant-invariants":
+        argv = base + ["--rtl", str(rtl_dir)]
+        for inv in ctx.get("invariants") or []:
+            if not isinstance(inv, dict):
+                continue
+            lhs = inv.get("lhs", inv.get("left"))
+            rhs = inv.get("rhs", inv.get("right"))
+            op = inv.get("op")
+            if lhs and rhs and op:
+                argv += ["--inv", f"{lhs} {op} {rhs}"]
+        return argv
+    if kind == "fpga-top":
+        return base + [str(rtl_dir), "--top",
+                       str(ctx.get("top_module") or "missing_top"),
+                       "--qsf", str(ctx.get("qsf") or project / "missing.qsf")]
+    if kind == "fpga-qsf":
+        return base + ["--qsf-file", str(ctx.get("qsf") or project / "missing.qsf"),
+                       "--rtl-dir", str(rtl_dir), "--out-dir", str(out)]
+    if kind == "reference-provenance":
+        return base + [str(rtl_dir), str(
+            ctx.get("reference_dir") or project / "missing-references")]
+    if kind == "interface-encoding":
+        return base + ["--rtl-dir", str(rtl_dir), "--top-module",
+                       str(ctx.get("top_module") or "missing_top"),
+                       "--out-dir", str(out)]
+    if kind == "l3-schema":
+        return base + ["--json-file", str(
+            ctx.get("l3_path") or project / "missing_l3.json"),
+                       "--required-keys", "schema_version,doc_class,opcodes"]
+    if kind == "l12-sequences":
+        return base + ["--rtl-dir", str(rtl_dir), "--l12-json", str(
+            ctx.get("l12_path") or project / "missing_l12.json")]
+    if kind == "rtl-precheck":
+        argv = base + ["--rtl-dir", str(rtl_dir)]
+        if ctx.get("l12_path"):
+            argv += ["--l12-json", str(ctx["l12_path"])]
+        return argv
+    if kind == "l9":
+        return base + ["--l9-file", str(
+            ctx.get("l9_path") or project / "missing_l9.json")]
+    if kind == "declared-masks":
+        argv = base + [str(rtl_dir)]
+        for item in ctx.get("masks") or []:
+            if isinstance(item, dict) and item.get("signal") and item.get("and_mask"):
+                argv += ["--mask", f"{item['signal']} AND {item['and_mask']}"]
+        return argv
+    if kind == "module-ports":
+        return base + ["--rtl-dir", str(rtl_dir)]
+    if kind == "rtl-files-output":
+        return base + ["--rtl-files", *rtl_files, "--out-dir", str(out)]
+    if kind == "rtl-artifacts":
+        return base + ["--base-dir", str(rtl_dir), "--pattern", "**/*v",
+                       "--min-count", "1"]
+    if kind == "testbench":
+        return base + ["--rtl-dir", str(project)]
+    if kind == "payload-bitmap":
+        return base + [str(rtl_dir), "--layer-l3", str(
+            ctx.get("l3_path") or project / "missing_l3.json")]
+    if kind == "periodic-signals":
+        argv = base + [str(rtl_dir)]
+        for item in ctx.get("periodic") or []:
+            if not isinstance(item, dict):
+                continue
+            if item.get("name") and item.get("period_const") and item.get("output_port"):
+                argv += ["--required", (f"{item['name']}="
+                                         f"{item['period_const']},"
+                                         f"{item['output_port']}")]
+        return argv
+    if kind == "protocol-gap":
+        gap = ctx.get("protocol_gap") or {}
+        return base + ["--name", str(gap.get("name") or "protocol_gap"),
+                       "--end-signal", str(gap.get("end_signal") or "missing_end"),
+                       "--bus-idle", str(gap.get("bus_idle") or "missing_idle"),
+                       "--min-cycles", str(gap.get("min_cycles") or 0),
+                       "--out-dir", str(out)]
+    if kind == "scope-samples":
+        return base + ["--mock-samples-csv", str(
+            ctx.get("scope_samples") or project / "missing_scope.csv")]
+    if kind == "tester-oracle":
+        return base + ["--config", str(
+            ctx.get("tester_config") or project / "missing_oracle.json"),
+                       "--dry-run"]
+    if kind == "tristate-bus":
+        bus = ctx.get("tristate") or {}
+        drivers = bus.get("drivers") if isinstance(bus, dict) else []
+        return base + ["--bus-name", str(bus.get("name") or "missing_bus"),
+                       "--drivers", ",".join(map(str, drivers or ["missing_driver"])),
+                       "--out-dir", str(out)]
+    if kind == "warn-policy":
+        return base + ["--project-dir", str(project), "--reports-dir",
+                       str(project / "reports")]
+    raise AssertionError(f"unknown structural gate invocation contract: {kind}")
+
+
 def _structural_gate_argv(gate_name: str,
                           project: Path,
                           rtl_dir: Optional[Path] = None,
-                          strict_timing: bool = False) -> List[str]:
+                          strict_timing: bool = False,
+                          scratch_dir: Optional[Path] = None) -> List[str]:
     """Build the argv the P0 umbrella runs a structural gate with.
 
     #492 — this used to be an inline literal inside the worker, which meant a
@@ -7055,6 +7460,13 @@ def _structural_gate_argv(gate_name: str,
     regression tests drive the SAME code the umbrella runs.
     """
     prog = PROGRAMS_DIR / f"{gate_name}.py"
+    if gate_name in _STRUCTURAL_GATE_INVOCATION_CONTRACTS:
+        target = rtl_dir if rtl_dir is not None else project
+        # Production supplies a private TemporaryDirectory.  The fallback is
+        # for read-only diagnostic callers such as the invocability ratchet,
+        # whose project is itself a TemporaryDirectory.
+        scratch = scratch_dir or (project / ".p0-gate-scratch")
+        return _p0_contract_argv(gate_name, project, target, scratch)
     adapter = _STRUCTURAL_GATE_ARGV_ADAPTERS.get(gate_name)
     if adapter is not None:
         target = str(rtl_dir if rtl_dir is not None else project)
@@ -7643,7 +8055,8 @@ def _run_structural_rtl_gates(project: Path,
                               ) -> tuple[bool, List[str], List[str], List[Dict[str, Any]]]:
     """v0.104: run all structural-RTL gates on the project's RTL directory.
 
-    Each gate is invoked with the RTL directory as its positional arg.
+    Each gate is invoked through its declared contract; legacy-uniform gates
+    retain the project-positional convention.
     Exit 0 = PASS, exit 1 = FAIL, exit 2 = input-missing (skip).
     Returns (all_passed, fail_reasons, skip_reasons, waiver_entries).
 
@@ -7727,6 +8140,11 @@ def _run_structural_rtl_gates(project: Path,
     # analog name-prefix so it stays chip-AGNOSTIC and never names a
     # gate the umbrella does not run.
     analog_skip_gates = _skip_analog_p0_gates() if skip_analog else frozenset()
+    # Issue #1968 — exceptional gate CLIs may need output paths.  Give every
+    # invocation a private, non-project scratch tree so a compliance run stays
+    # read-only with respect to the design and parallel gates cannot collide.
+    _contract_scratch = tempfile.TemporaryDirectory(prefix="vibe-ic-p0-")
+    gate_scratch_dir = Path(_contract_scratch.name)
     # ── #NNN: parallel structural-gate evaluation ─────────────────────────
     # Each structural gate is an INDEPENDENT read-only validator run as its own
     # subprocess with `cwd=project` (no `os.chdir`); the only per-gate output is
@@ -7752,7 +8170,8 @@ def _run_structural_rtl_gates(project: Path,
         # root finds RTL AND project files. The rtl_dir check above only gates
         # the entire runner ("if no RTL at all, skip the lot").
         argv = _structural_gate_argv(gate_name, project, rtl_dir=rtl_dir,
-                                     strict_timing=strict_timing)
+                                     strict_timing=strict_timing,
+                                     scratch_dir=gate_scratch_dir)
         # TIMEOUT-AS-VERDICT (census row plugin/programs/flow_compliance_check.py
         # :7368, class A — "handler records a FAILING verdict"). The fixed 60 s
         # was a RUNTIME guess, and when it fired the umbrella wrote FAIL against
@@ -7951,7 +8370,21 @@ def _run_structural_rtl_gates(project: Path,
                 _pending.append(
                     ("imm", _p0_gate_record(
                         gate_name, "SKIP", class_skips[gate_name],
-                        {"skip_kind": "class-not-applicable"},
+                        {"skip_kind": "class-not-applicable",
+                         "invocation_contract":
+                         _STRUCTURAL_GATE_INVOCATION_CONTRACTS.get(gate_name)},
+                        reason_class=_reason_taxonomy.DESIGN_DECLARED_NA)))
+                continue
+            _contract_na = _p0_contract_na_reason(
+                gate_name, project, rtl_dir)
+            if _contract_na is not None:
+                _pending.append(
+                    ("imm", _p0_gate_record(
+                        gate_name, "SKIP", _contract_na,
+                        {"skip_kind": "declaration-not-present",
+                         "applicability_source": "generated L-doc roster",
+                         "invocation_contract":
+                         _STRUCTURAL_GATE_INVOCATION_CONTRACTS.get(gate_name)},
                         reason_class=_reason_taxonomy.DESIGN_DECLARED_NA)))
                 continue
             if gate_name in analog_skip_gates:
@@ -7976,6 +8409,19 @@ def _run_structural_rtl_gates(project: Path,
     finally:
         if _ex is not None:
             _ex.shutdown(wait=True)
+        _contract_scratch.cleanup()
+
+    # Publish the dispatch contract beside every affected real gate verdict.
+    # This is evidence of HOW the gate was invoked, not a later inference from
+    # argv text.  Immediate N/A records already carry the same field above.
+    for record in records:
+        contract = _STRUCTURAL_GATE_INVOCATION_CONTRACTS.get(record["name"])
+        if contract:
+            record["evidence"].setdefault("invocation_contract", contract)
+            if record["evidence"].get("skip_kind") not in {
+                    "class-not-applicable", "declaration-not-present",
+                    "analog-track-deferred", "no-backing-program"}:
+                record["evidence"].setdefault("gate_started", True)
 
     if records_out is not None:
         records_out.extend(records)

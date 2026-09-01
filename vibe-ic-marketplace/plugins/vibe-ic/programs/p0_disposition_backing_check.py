@@ -3,15 +3,19 @@
 
 WHY THIS EXISTS
 ===============
-`flow_compliance_check` registers 246 structural gates; 36 reject the argv the
-umbrella builds, return no verdict, and are pinned by
-`p0_gate_invocability_drift_check` so the number cannot grow. Thirty-two of the
-36 -- not all of them; this file used to say "each", and counting them is how
-that was found -- carry a written DISPOSITION in one of the registers in that
+At the historical #804/#559 base, `flow_compliance_check` registered 246
+structural gates; 36 rejected the argv the umbrella built and returned no
+verdict. Thirty-two of the 36 -- not all of them; this file used to say
+"each", and counting them is how that was found -- carry a written DISPOSITION in one of the registers in that
 module (`_NOT_A_PROJECT_GATE`, `_SEMANTIC_ARGV_UNDRIVABLE`,
 `_ZERO_DENOMINATOR_CLASSIFICATION`, `_UNDRIVABLE_BY_STRUCTURAL_UMBRELLA`). Those
 registers are good — they record "I examined it and dismissed it" where the next
 reader will find it.
+
+Issue #1968 closes that runtime population with explicit umbrella invocation
+contracts. This checker now treats those declarations as real backing and
+holds the unbacked-claim residual at zero; the historical census below remains
+the negative-control rationale.
 
 But a disposition can say two very different things, in the same voice:
 
@@ -140,7 +144,7 @@ import json
 import re
 import sys
 from pathlib import Path
-from typing import Dict, List, Optional, Sequence, Tuple
+from typing import Dict, List, Optional, Sequence, Set, Tuple
 
 RC_OK, RC_DRIFT, RC_CANNOT_MEASURE = 0, 1, 2
 
@@ -197,24 +201,9 @@ DRIVER_GLOBS: Tuple[str, ...] = (
 #: wired or its disposition stops claiming a home -- never kept with a note,
 #: because under a subset predicate a stale name is a free slot for the next
 #: broken promise.
-KNOWN_UNBACKED: Tuple[str, ...] = (
-    "crc_bitorder_check",
-    "crc_seed_consistency_check",
-    "cross_constant_invariant_check",
-    "fpga_async_input_synchronizer_check",
-    "fpga_qsf_lint",
-    "fresh_agent_provenance_check",
-    "json_schema_check",
-    "mask_application_check",
-    "output_artifact_check",
-    "periodic_signal_required_check",
-    # The 14th, invisible until the claim detector stopped requiring the
-    # preposition to sit immediately after the verb (WRONG WAY 3).
-    "protocol_gap_check",
-    "tester_oracle_health_check",
-    "tristate_bus_check",
-    "warn_acceptance_policy_check",
-)
+# Issue #1968 backs the historical 14 through the P0 umbrella's closed
+# invocation-contract registry. A future unbacked claim is therefore new.
+KNOWN_UNBACKED: Tuple[str, ...] = ()
 
 
 def claims_a_home(disposition: str) -> bool:
@@ -293,6 +282,37 @@ def is_invoked(gate: str, blobs: Sequence[str]) -> bool:
     return any(f"{gate}.py" in blob for blob in blobs)
 
 
+def read_invocation_contracts(registry_path: Path) -> Set[str]:
+    """Gate names in the closed P0 invocation-contract registry.
+
+    The production value is ``MappingProxyType({...})``; accepting a literal
+    dict as well keeps synthetic tests small. Anything dynamic is unreadable
+    and therefore contributes no backing (fail-closed).
+    """
+    tree = ast.parse(registry_path.read_text(errors="replace"))
+    for node in tree.body:
+        targets = (node.targets if isinstance(node, ast.Assign)
+                   else [node.target] if isinstance(node, ast.AnnAssign)
+                   else [])
+        if not any(isinstance(t, ast.Name) and
+                   t.id == "_STRUCTURAL_GATE_INVOCATION_CONTRACTS"
+                   for t in targets):
+            continue
+        value = node.value
+        if (isinstance(value, ast.Call) and len(value.args) == 1
+                and not value.keywords):
+            value = value.args[0]
+        try:
+            contracts = ast.literal_eval(value)
+        except (ValueError, SyntaxError, TypeError, MemoryError,
+                RecursionError):
+            return set()
+        if not isinstance(contracts, dict):
+            return set()
+        return {str(k) for k in contracts if isinstance(k, str)}
+    return set()
+
+
 def measure(repo_root: Path,
             gates: Sequence[str],
             registry_path: Optional[Path] = None
@@ -303,6 +323,7 @@ def measure(repo_root: Path,
                          / "vibe-ic" / "programs" / REGISTRY_MODULE)
     dispositions = read_dispositions(registry_path)
     blobs = driver_blobs(repo_root)
+    contracts = read_invocation_contracts(registry_path)
     unbacked: List[str] = []
     backed: List[str] = []
     no_claim: List[str] = []
@@ -310,7 +331,7 @@ def measure(repo_root: Path,
         text = dispositions.get(gate, "")
         if not claims_a_home(text):
             no_claim.append(gate)
-        elif is_invoked(gate, blobs):
+        elif gate in contracts or is_invoked(gate, blobs):
             backed.append(gate)
         else:
             unbacked.append(gate)

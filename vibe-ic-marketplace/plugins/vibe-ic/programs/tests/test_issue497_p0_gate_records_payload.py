@@ -19,6 +19,10 @@ instead: the umbrella states each gate's outcome ONCE, in a typed record, with
 line. It is deliberately ADDITIVE — no consumer is cut over here, ``reasons``
 is untouched, and no existing field changes value.
 
+Issue #1968 subsequently closed the measured parser-silence population. The
+enum retains ``NOT_INVOCABLE`` as the fail-closed outcome for a future drift,
+while an ordinary real run must now contain none.
+
 WHAT THESE TESTS ARE FOR.  The payload is only worth anything if it cannot
 quietly disagree with the prose beside it. The load-bearing test here is
 ``test_prose_is_fully_regenerable_from_the_records``: it rebuilds all three
@@ -147,24 +151,21 @@ def test_verdicts_come_from_a_closed_enum(real_run):
     seen = {r["verdict"] for r in real_run.records}
     assert seen <= set(F.P0_GATE_VERDICTS)
     # the run must be non-trivial or the assertion above is vacuous
-    assert {"PASS", "FAIL", "SKIP", "NOT_INVOCABLE"} <= seen, seen
+    assert {"PASS", "FAIL", "SKIP"} <= seen, seen
+    assert "NOT_INVOCABLE" not in seen, seen
 
 
-def test_not_invocable_is_a_verdict_not_a_marker_inside_a_message(real_run):
-    """#492's disclosure, expressed so that recognising it needs no parser.
-
-    In ``reasons`` a never-invoked gate is a ``SKIP``-adjacent line whose
-    not-invocable-ness lives in its prose, which is why all four consumers read
-    it as a failing gate name. Here it is the verdict field, and no gate is
-    ever both.
-    """
+def test_issue1968_replaces_not_invocable_with_declared_na(real_run):
+    """The old verdict remains reserved, but normal dispatch reaches zero."""
     ni = [r for r in real_run.records if r["verdict"] == "NOT_INVOCABLE"]
-    assert ni, "fixture must reach the not-invocable population"
-    for r in ni:
-        assert r["message"], "the callee's own error text is the evidence"
-        assert r["evidence"]["exit_code"] == 2
-    plain = [r for r in real_run.records if r["verdict"] == "SKIP"]
-    assert not ({r["name"] for r in ni} & {r["name"] for r in plain})
+    assert ni == []
+    derived_na = [r for r in real_run.records
+                  if r["evidence"].get("skip_kind") ==
+                  "declaration-not-present"]
+    assert derived_na, "fixture must exercise declaration-derived N/A"
+    assert all(r["verdict"] == "SKIP" and
+               r["evidence"].get("invocation_contract") and
+               "N/A" in r["message"] for r in derived_na)
 
 
 def test_the_pass_population_is_the_registry_minus_the_other_outcomes(
@@ -364,10 +365,12 @@ def test_reasons_still_carries_the_whole_operator_facing_story(
     for line in p0["reasons"]:
         assert f"└─ {line}" in printed, (
             f"reason line vanished from the operator listing: {line[:70]!r}")
-    # and the disclosure specifically is still in the human-readable output
-    assert any(_gi.is_not_invocable_heading(x.strip())
-               for x in p0["reasons"]), "fixture must carry a disclosure"
-    assert _gi.NOT_INVOCABLE_HEADING_SENTINEL in printed
+    # #1968 replaces parser-silence disclosure with per-gate derived N/A.
+    assert not any(_gi.is_not_invocable_heading(x.strip())
+                   for x in p0["reasons"])
+    assert _gi.NOT_INVOCABLE_HEADING_SENTINEL not in printed
+    assert any("N/A from the design declaration roster" in x
+               for x in p0["reasons"])
 
 
 def test_records_are_empty_not_null_when_no_gate_was_considered(tmp_path):

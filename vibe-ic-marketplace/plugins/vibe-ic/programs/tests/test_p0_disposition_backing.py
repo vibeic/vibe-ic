@@ -4,8 +4,10 @@
 The register that records why each un-invocable gate stays un-invocable can say
 "driven from the FPGA-compile step" about a gate nothing drives, in the same
 present tense it uses for a gate that IS driven. Re-derived at b85d68ac (the
-tree carrying #804): 14 gates in the population carry such a claim, and 3 carry
-one that is real.
+tree carrying #804): 14 gates in the population carried such a claim, and 3
+carried one that was real. Issue #1968 backs the 14 through declared P0
+invocation contracts; this suite retains both historical claim-shape controls
+and the current zero-unbacked live invariant.
 
 Every test here is BIDIRECTIONAL by construction, because the two ways to break
 this check are opposite:
@@ -200,6 +202,16 @@ def test_a_real_invocation_is_an_invocation():
     """The reverse of the case above — same gate name, invocation form."""
     line = 'run "hygiene" "$PLUGIN" python3 programs/some_gate_check.py\n'
     assert B.is_invoked("some_gate_check", [line]) is True
+
+
+def test_a_declared_invocation_contract_is_backing(tmp_path):
+    """#1968: the umbrella contract is a real driver, not a prose mention."""
+    registry = tmp_path / "flow_compliance_check.py"
+    registry.write_text(
+        "_STRUCTURAL_GATE_INVOCATION_CONTRACTS = {\n"
+        "    'some_gate_check': 'rtl-dir',\n"
+        "}\n")
+    assert B.read_invocation_contracts(registry) == {"some_gate_check"}
 
 
 # ---------------------------------------------------------------------------
@@ -458,21 +470,15 @@ def test_current_tree_holds_the_subset(tmp_path):
 
 @pytest.mark.skipif(not (REPO_ROOT / "tools" / "ci").is_dir(),
                     reason="not running inside a full repo checkout")
-def test_protocol_gap_check_is_the_fourteenth_unbacked(tmp_path):
-    """The 14th, on the REAL tree — not a fixture.
-
-    Its disposition names a home ("the L-layer spec that states the inter-frame
-    gap") and nothing in the repository invokes `protocol_gap_check.py`: no flow
-    step, no runner, no orchestrator, no CI script, no workflow. Before the
-    adverb clause it sat in `no_claim`, indistinguishable from the twenty gates
-    the register is honest about.
-    """
+def test_protocol_gap_check_is_backed_by_the_issue1968_contract(tmp_path):
+    """The former 14th unbacked claim is wired through the P0 registry."""
     out = tmp_path / "r.json"
     proc = _run(REPO_ROOT, out)
     payload = json.loads(out.read_text())
-    assert "protocol_gap_check" in payload["unbacked"], proc.stdout
+    assert "protocol_gap_check" in payload["backed"], proc.stdout
     assert "protocol_gap_check" not in payload["no_claim"]
-    assert "protocol_gap_check" in B.KNOWN_UNBACKED
+    assert "protocol_gap_check" not in payload["unbacked"]
+    assert B.KNOWN_UNBACKED == ()
 
 
 @pytest.mark.skipif(not (REPO_ROOT / "tools" / "ci").is_dir(),

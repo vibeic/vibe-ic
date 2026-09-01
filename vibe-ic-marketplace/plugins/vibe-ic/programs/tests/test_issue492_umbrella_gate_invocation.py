@@ -140,32 +140,33 @@ def _project_with_rtl(tmp_path):
     return tmp_path
 
 
-def test_umbrella_discloses_never_invoked_gates_by_name(tmp_path):
-    """END-TO-END through the real umbrella. Before #492 every one of these
-    was indistinguishable from an input-missing skip."""
+def test_umbrella_closes_the_never_invoked_population(tmp_path):
+    """#1968 turns every historical parser silence into a verdict or N/A."""
     proj = _project_with_rtl(tmp_path)
-    _passed, _fails, skips, _waivers = F._run_structural_rtl_gates(proj)
+    records = []
+    _passed, _fails, skips, _waivers = F._run_structural_rtl_gates(
+        proj, records_out=records)
     not_invoked = [s for s in skips if GI.is_not_invocable_entry(s)]
-    assert not_invoked, "the umbrella disclosed no never-invoked gate at all"
-    # every disclosure names its gate AND carries the callee's own error text
-    for entry in not_invoked:
-        assert entry.split(" ", 1)[0]
-        assert "returned NO verdict" in entry
-    named = {e.split(" ", 1)[0] for e in not_invoked}
-    assert "l9_completeness_check" in named, (
-        "the issue's headline gate must be visible in the report")
+    assert not_invoked == []
+    assert not [r for r in records if r["verdict"] == "NOT_INVOCABLE"]
+    l9 = next(r for r in records if r["name"] == "l9_completeness_check")
+    assert l9["verdict"] == "SKIP"
+    assert l9["evidence"]["skip_kind"] == "declaration-not-present"
 
 
-def test_never_invoked_gates_do_not_become_failures(tmp_path):
-    """A gate that returned NO verdict must not be recorded as a FAIL: that
-    would trade a false PASS for a false FAIL. It is disclosed, not blamed."""
+def test_derived_na_gates_do_not_become_failures(tmp_path):
+    """A missing design declaration is named N/A, never blamed as a FAIL."""
     proj = _project_with_rtl(tmp_path)
-    _passed, fails, skips, _waivers = F._run_structural_rtl_gates(proj)
-    not_invoked = {s.split(" ", 1)[0] for s in skips
-                   if GI.is_not_invocable_entry(s)}
+    records = []
+    _passed, fails, _skips, _waivers = F._run_structural_rtl_gates(
+        proj, records_out=records)
+    derived_na = {r["name"] for r in records
+                  if r["evidence"].get("skip_kind") ==
+                  "declaration-not-present"}
+    assert derived_na
     for f in fails:
-        for gate in not_invoked:
-            assert gate not in f, f"never-invoked gate {gate} leaked into fails"
+        for gate in derived_na:
+            assert gate not in f, f"derived-N/A gate {gate} leaked into fails"
 
 
 # ── the measurement that licenses each conversion, and each refusal ──────────

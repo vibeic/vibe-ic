@@ -771,7 +771,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `output_artifact_check` | any | — | Deterministic output artifact existence checker. |
 | `output_latency_advisor` | any | — | output sampling/latency advisor. |
 | `p0_disposition_backing_check` | any | — | A P0 disposition that names a home the tree does not have. |
-| `p0_gate_invocability_drift_check` | any | — | A gate registered in the P0 umbrella that the umbrella cannot invoke. |
+| `p0_gate_invocability_drift_check` | any | — | Fail-closed guard against a P0 gate the umbrella cannot invoke. |
 | `package_invariants_check` | any | — | the rule lives NEXT TO the code it binds. |
 | `packaging_intake_check` | any | Wave 88 | gate (v1.6.13 Wave 88, renumbered in v1.6.14 Wave 90: Step 37 -> 38; v1.6.15 Wave 91: Step 38 -> 39; Step 42 in the phase1_phase2_phase3.... |
 | `packet_length_check_present` | any | — | Static audit for packet-length sanity checks in any module that dispatches on a received command. |
@@ -2059,7 +2059,7 @@ _(no programs in this group)_
 - `output_artifact_check` — Deterministic output artifact existence checker.
 - `output_latency_advisor` — output sampling/latency advisor.
 - `p0_disposition_backing_check` — A P0 disposition that names a home the tree does not have.
-- `p0_gate_invocability_drift_check` — A gate registered in the P0 umbrella that the umbrella cannot invoke.
+- `p0_gate_invocability_drift_check` — Fail-closed guard against a P0 gate the umbrella cannot invoke.
 - `package_invariants_check` — the rule lives NEXT TO the code it binds.
 - `packaging_intake_check` — gate (v1.6.13 Wave 88, renumbered in v1.6.14 Wave 90: Step 37 -> 38; v1.6.15 Wave 91: Step 38 -> 39; Step 42 in the phase1_phase2_phase3....  _[Wave 88]_
 - `packet_length_check_present` — Static audit for packet-length sanity checks in any module that dispatches on a received command.
