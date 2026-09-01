@@ -432,3 +432,72 @@ def test_a_single_pv_witness_is_never_a_disagreement(tmp_path: Path) -> None:
     r = _run(tmp_path)
     assert r.returncode == 0, r.stdout
     assert _report(tmp_path)["verdict"] == "PASS"
+
+
+# ---------------------------------------------------------------------------
+# The KLayout marker database — the one DRC format the open-PDK path emits
+#
+# `*.lyrdb` has always been in the report glob and has always been inert: a
+# marker database carries no "N violations" phrase, so the free-text reader
+# extracted no count from one in EITHER direction, and a sign-off-CLEAN block
+# reached the same "no parseable DRC evidence" FAIL as a violating one.
+# Measured on the campaign's two analog blocks at the moment they first went
+# DRC-0: both were reported as having no DRC evidence at all.
+# ---------------------------------------------------------------------------
+
+def _lyrdb(cats: list, items: list) -> str:
+    c = "".join("<category><name>%s</name></category>" % n for n in cats)
+    it = "".join(
+        "<item><category>'%s'</category><values><value>%s</value>"
+        "</values></item>" % (n, v) for n, v in items)
+    return ("<?xml version='1.0'?><report-database><categories>%s</categories>"
+            "<items>%s</items></report-database>" % (c, it))
+
+
+def test_clean_marker_database_certifies_zero(tmp_path: Path) -> None:
+    _block_list(tmp_path, ["ldo"])
+    d = _bdir(tmp_path, "ldo")
+    (d / "ldo.lyrdb").write_text(_lyrdb(["M1.b", "CntB.h1"], []))
+    (d / "lvs.report").write_text("netlists match\n")
+    r = _run(tmp_path)
+    assert r.returncode == 0, r.stdout
+    assert _report(tmp_path)["verdict"] == "PASS"
+
+
+def test_violating_marker_database_is_counted(tmp_path: Path) -> None:
+    _block_list(tmp_path, ["ldo"])
+    d = _bdir(tmp_path, "ldo")
+    (d / "ldo.lyrdb").write_text(
+        _lyrdb(["CntB.h1"], [("CntB.h1", "edge-pair: a"),
+                             ("CntB.h1", "edge-pair: b")]))
+    (d / "lvs.report").write_text("netlists match\n")
+    r = _run(tmp_path)
+    assert r.returncode == 1, r.stdout
+    rules = [f["rule"] for f in _report(tmp_path)["findings"]]
+    assert "A6_PV_DRC_VIOLATIONS" in rules
+
+
+def test_marker_database_that_graded_no_rule_is_not_a_pass(
+        tmp_path: Path) -> None:
+    """A database with zero CATEGORIES ran no rule; its emptiness is silence.
+    This is the zero-rules law, and without it the repair above would turn a
+    deck that aborted before grading anything into a certified-clean block."""
+    _block_list(tmp_path, ["ldo"])
+    d = _bdir(tmp_path, "ldo")
+    (d / "ldo.lyrdb").write_text(_lyrdb([], []))
+    (d / "lvs.report").write_text("netlists match\n")
+    r = _run(tmp_path)
+    assert r.returncode == 1, r.stdout
+    rules = [f["rule"] for f in _report(tmp_path)["findings"]]
+    assert "A6_PV_DRC_NO_EVIDENCE" in rules
+
+
+def test_a_lyrdb_that_is_not_xml_is_no_evidence(tmp_path: Path) -> None:
+    _block_list(tmp_path, ["ldo"])
+    d = _bdir(tmp_path, "ldo")
+    (d / "ldo.lyrdb").write_text("truncated by a killed run <report-datab")
+    (d / "lvs.report").write_text("netlists match\n")
+    r = _run(tmp_path)
+    assert r.returncode == 1, r.stdout
+    rules = [f["rule"] for f in _report(tmp_path)["findings"]]
+    assert "A6_PV_DRC_NO_EVIDENCE" in rules

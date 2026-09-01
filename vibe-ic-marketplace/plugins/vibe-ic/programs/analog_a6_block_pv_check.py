@@ -81,6 +81,7 @@ from __future__ import annotations
 import argparse
 import json
 import re
+from xml.etree import ElementTree
 import sys
 from pathlib import Path
 from typing import List, Optional, Tuple
@@ -203,6 +204,32 @@ def _parse_drc_count(text: str) -> Optional[int]:
     return None
 
 
+def parse_lyrdb(text: str) -> Optional[int]:
+    """Violation count of a KLayout marker database, or None.
+
+    A `.lyrdb` never contains an "N violations" phrase, so the free-text
+    reader below can extract no count from one — in EITHER direction. The
+    glob has always listed `*.lyrdb`, and it has always been inert: a
+    sign-off-clean block and a violating block both landed on the
+    "unparseable → no evidence → FAIL" branch, so the one report format
+    the open-PDK KLayout path actually emits could never certify anything.
+
+    The count is the number of `<item>` elements. The guard is the one
+    LAW the zero-rules fix established: a database that declares NO
+    `<category>` graded no rule, so its emptiness is silence, not a pass —
+    that returns None (no evidence) rather than 0.
+    """
+    try:
+        root = ElementTree.fromstring(text)
+    except ElementTree.ParseError:
+        return None
+    if root.tag != "report-database":
+        return None
+    if not list(root.iter("category")):
+        return None
+    return len(list(root.iter("item")))
+
+
 def _drc_violations(bdir: Path) -> Tuple[Optional[int], str]:
     """Per-block DRC verdict. Returns (count, evidence_rel).
     count is None when there is NO parseable DRC evidence."""
@@ -216,6 +243,11 @@ def _drc_violations(bdir: Path) -> Tuple[Optional[int], str]:
             except OSError:
                 continue
             if not text.strip():
+                continue
+            if f.suffix == ".lyrdb":
+                count = parse_lyrdb(text)
+                if count is not None:
+                    return count, f.name
                 continue
             count = _parse_drc_count(text)
             if count is not None:

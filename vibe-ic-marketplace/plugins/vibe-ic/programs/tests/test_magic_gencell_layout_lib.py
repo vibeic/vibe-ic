@@ -149,3 +149,132 @@ def test_grid_snap_only_touches_w_l():
 def test_grid_snap_is_identity_on_grid():
     line = "Mx d g s b nmos w=7.83u l=1u"
     assert M.grid_snap_spice_params(line) == line
+
+
+# ── LAW #25: contact-enclosure repair of a vendor gencell ─────────────────
+#
+# The reduction: the PDK's own Magic rppd gencell caps each resistor head
+# contact with a metal1 pad short of the deck's CntB.h1 enclosure by half
+# (0.025 um against 0.05), identically for every w/l probed, and the two
+# campaign blocks shipped 6 sign-off DRC violations because of it.
+
+# contact 0..10 x 0..10; metal covers it with 10 on three sides and 5 on top
+_C = [(0, 0, 10, 10)]
+_M = [(-10, -10, 20, 10), (-10, 10, 20, 15)]
+
+
+def test_enclosure_patch_only_on_the_short_side():
+    patches, refused = M.contact_enclosure_patches(_C, _M + _C, 10)
+    assert refused == []
+    assert patches == [(-10, 10, 20, 20)]
+    # and the repaired picture needs no second patch
+    again, _ = M.contact_enclosure_patches(_C, _M + _C + patches, 10)
+    assert again == []
+
+
+def test_enclosure_patch_refused_when_it_would_break_spacing():
+    # a foreign island 6 above the short side: patching to 10 leaves a 4 gap
+    foreign = [(-10, 21, 20, 30)]
+    patches, refused = M.contact_enclosure_patches(
+        _C, _M + _C + foreign, 10, min_space=18)
+    assert patches == []
+    assert refused == [(-10, 10, 20, 20)]
+
+
+def test_enclosure_patch_not_refused_by_its_own_island():
+    # the pad the band EXTENDS is 0 away from it — same island, it merges.
+    # Refusing on that (the first spacing-aware attempt did) repairs nothing.
+    patches, refused = M.contact_enclosure_patches(
+        _C, _M + _C, 10, min_space=18)
+    assert patches == [(-10, 10, 20, 20)]
+    assert refused == []
+
+
+_MAG_SHORT = """magic
+tech t
+magscale 1 2
+timestamp 1
+<< polycont >>
+rect 0 0 10 10
+<< metal1 >>
+rect -10 -10 20 10
+rect -10 10 20 15
+<< end >>
+"""
+
+
+def test_repair_mag_appends_into_the_metal_section():
+    out, n = M.repair_mag_contact_enclosure(_MAG_SHORT, "polycont",
+                                            "metal1", 10)
+    assert n == 1
+    body = out.split("<< metal1 >>")[1]
+    assert "rect -10 10 20 20" in body
+    # idempotent: a repaired file needs no second pass
+    _out2, n2 = M.repair_mag_contact_enclosure(out, "polycont",
+                                               "metal1", 10)
+    assert n2 == 0
+
+
+def test_repair_mag_is_a_no_op_without_contacts():
+    text = "magic\n<< metal1 >>\nrect 0 0 1 1\n<< end >>\n"
+    out, n = M.repair_mag_contact_enclosure(text, "polycont", "metal1", 10)
+    assert (out, n) == (text, 0)
+
+
+def test_implicit_metal_sections_sees_the_contact_types():
+    text = ("magic\n<< pwell >>\n<< ndiffc >>\n<< psubdiffcont >>\n"
+            "<< polycont >>\n<< metal1 >>\n<< via1 >>\n<< metal2 >>\n"
+            "<< labels >>\n<< end >>\n")
+    got = M.implicit_metal_sections(text, "metal1")
+    assert got[0] == "metal1"
+    for name in ("ndiffc", "psubdiffcont", "polycont", "via1"):
+        assert name in got
+    for name in ("pwell", "metal2", "labels", "end"):
+        assert name not in got
+
+
+def test_repair_reads_the_guard_ring_through_the_implicit_sections():
+    # the neighbour that must refuse the patch lives in psubdiffcont, which
+    # a metal1-only reader cannot see (measured: 30 notch violations).
+    text = """magic
+tech t
+<< polycont >>
+rect 0 0 10 10
+<< psubdiffcont >>
+rect -10 21 20 30
+<< metal1 >>
+rect -10 -10 20 10
+rect -10 10 20 15
+<< end >>
+"""
+    _out, n = M.repair_mag_contact_enclosure(text, "polycont", "metal1",
+                                             10, 18)
+    assert n == 0
+    # blind to that section, the same call paints the violation
+    _out2, n2 = M.repair_mag_contact_enclosure(
+        text, "polycont", "metal1", 10, 18, metal_sections=["metal1"])
+    assert n2 == 1
+
+
+# ── LAW #26: the manifest audit also has to ask about SPACE ───────────────
+
+def test_spacing_audit_finds_the_sub_minimum_gap_the_overlap_audit_misses():
+    man = [{"net": "a", "layer": "metal2", "box": [0, 0, 100, 10]},
+           {"net": "b", "layer": "metal2", "box": [0, 20, 100, 30]}]
+    assert M.cross_net_overlaps(man) == []
+    hits = M.cross_net_spacing_violations(man, {"metal2": 21})
+    assert len(hits) == 1 and hits[0][3] == 10
+
+
+def test_spacing_audit_is_silent_at_the_rule_and_on_other_layers():
+    man = [{"net": "a", "layer": "metal2", "box": [0, 0, 100, 10]},
+           {"net": "b", "layer": "metal2", "box": [0, 31, 100, 40]}]
+    assert M.cross_net_spacing_violations(man, {"metal2": 21}) == []
+    assert M.cross_net_spacing_violations(man, {"metal3": 21}) == []
+
+
+def test_spacing_audit_leaves_touching_pairs_to_the_overlap_audit():
+    man = [{"net": "a", "layer": "metal2", "box": [0, 0, 100, 10]},
+           {"net": "b", "layer": "metal2", "box": [0, 10, 100, 20]}]
+    assert M.cross_net_spacing_violations(man, {"metal2": 21}) == []
+    assert len(M.cross_net_overlaps(man)) == 0  # edge touch, not an overlap
