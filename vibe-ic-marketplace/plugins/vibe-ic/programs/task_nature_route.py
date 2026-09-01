@@ -413,8 +413,18 @@ def validate_entries(path: Optional[Path] = None) -> List[str]:
         _check(f"delivery {tgt}", "answer_step", d.get("answer_step"))
         _check(f"delivery {tgt}", "verify_through", d.get("verify_through"),
                required=False)
+    # Every unpinned transform routes its NATURE_ENTRY lookup through this
+    # constant, so the two drifting apart is a routing miss on every such task.
+    if _UNPINNED_TRANSFORM_ENTRY not in NATURE_ENTRY:
+        bad.append(f"_UNPINNED_TRANSFORM_ENTRY={_UNPINNED_TRANSFORM_ENTRY!r} "
+                   f"is not a key of NATURE_ENTRY")
     return bad
 
+# `nature` on an unpinned transform is a DISCLOSING label — it says "existing
+# RTL, verb unread" — and is deliberately NOT a NATURE_ENTRY key. The key a
+# consumer may look up is `entry_nature`, which every classify branch sets and
+# which is ALWAYS a NATURE_ENTRY key; looking the label up instead yields an
+# empty row, a None exit_step, and a full-GDS run for an RTL deliverable.
 _UNPINNED_TRANSFORM_NATURE = "transform_existing_rtl"
 _UNPINNED_TRANSFORM_ENTRY = "functional_modification"
 
@@ -454,7 +464,7 @@ _PROSE_HINTS = (
     # object, and `reduce` alone is not hinted either, for the same reason.
     ("optimization", re.compile(
         r"\b(optimi[sz]e"
-        r"|reduce\s+(area|cells?|wires?|power)"
+        r"|reduce\s+(?:the\s+)?(area|cells?|wires?|power)"
         r"|fewer\s+(cells?|wires?)"
         r"|smaller\s+(area|footprint|design|netlist|module|implementation"
         r"|cell\s+count|gate\s+count|die)"
@@ -462,12 +472,12 @@ _PROSE_HINTS = (
         r"(area|footprint|design|netlist|module|implementation|circuit|logic)\s+smaller"
         r"|lint\s+clean)\b", re.I)),
     ("completion", re.compile(
-        r"\b((?:complete|finish)\s+(?:the|this)\s+(?:following\s+)?"
-        r"(?:code|rtl|module|implementation|function|task|stub|todo)"
+        r"\b((?:complete|finish)\s+(?:the|this)\s+(?:following\s+|missing\s+)?"
+        r"(?:code|rtl|module|implementation|function|task|stub|todo|logic)"
         r"|fill\s+in(?:\s+the)?\s+(?:missing\s+)?"
-        r"(?:code|rtl|module|implementation|function|task|stub|todo)"
+        r"(?:code|rtl|module|implementation|function|task|stub|todo|logic)"
         r"|implement\s+the\s+missing\s+"
-        r"(?:code|rtl|module|implementation|function|task|stub|todo))\b",
+        r"(?:code|rtl|module|implementation|function|task|stub|todo|logic))\b",
         re.I)),
     ("functional_modification", re.compile(
         r"\b(modif(y|ies|ied)|change\s+the\s+behaviou?r|add\s+support\s+for|"
@@ -554,7 +564,12 @@ def prompt_embeds_rtl(prompt: str) -> bool:
 def classify_task_nature(prompt: str,
                          has_context: bool,
                          nature: Optional[str] = None) -> Dict[str, Any]:
-    """Return {nature, route, plugin_entry, source, needs_ai_parse}.
+    """Return {nature, entry_nature, route, plugin_entry, source, needs_ai_parse}.
+
+    `entry_nature` — the NATURE_ENTRY key this verdict routes through, on EVERY
+    branch. `nature` may instead be the disclosing unpinned-transform label,
+    which is not a key; a consumer that indexes NATURE_ENTRY must use
+    `entry_nature`, so the lookup cannot miss.
 
     `nature` — when the requester explicitly declared the nature (for example,
     "debug this"), pass it and the routing is deterministic. Benchmark metadata
@@ -592,7 +607,7 @@ def classify_task_nature(prompt: str,
     """
     if nature and nature in NATURE_ENTRY:
         t = NATURE_ENTRY[nature]
-        return {"nature": nature, "route": t["route"],
+        return {"nature": nature, "entry_nature": nature, "route": t["route"],
                 "plugin_entry": t["plugin_entry"],
                 "source": "declared", "needs_ai_parse": False}
 
@@ -602,8 +617,9 @@ def classify_task_nature(prompt: str,
 
     if has_context:
         n = hinted or _UNPINNED_TRANSFORM_NATURE
-        t = NATURE_ENTRY[hinted or _UNPINNED_TRANSFORM_ENTRY]
-        return {"nature": n, "route": t["route"],
+        entry_nature = hinted or _UNPINNED_TRANSFORM_ENTRY
+        t = NATURE_ENTRY[entry_nature]
+        return {"nature": n, "entry_nature": entry_nature, "route": t["route"],
                 "plugin_entry": t["plugin_entry"],
                 "source": "context_prose_hint" if hinted else "context_heuristic",
                 "needs_ai_parse": not hinted}
@@ -618,7 +634,8 @@ def classify_task_nature(prompt: str,
             # and a false warning is worse than a silent one once anything acts
             # on it: it is what diverts a run off the hinted entry onto a
             # degraded fallback. Measured, this branch is 85 of the 664.
-            return {"nature": hinted, "route": t["route"],
+            return {"nature": hinted, "entry_nature": hinted,
+                    "route": t["route"],
                     "plugin_entry": t["plugin_entry"],
                     "source": "embedded_rtl_prose_hint",
                     "needs_ai_parse": False}
@@ -634,12 +651,13 @@ def classify_task_nature(prompt: str,
             generated = NATURE_ENTRY["spec_generation"]
             return {
                 "nature": "spec_generation",
+                "entry_nature": "spec_generation",
                 "route": "phase1_entry",
                 "plugin_entry": generated["plugin_entry"],
                 "source": "completion_hint_without_artifact",
                 "needs_ai_parse": True,
             }
-        return {"nature": hinted, "route": t["route"],
+        return {"nature": hinted, "entry_nature": hinted, "route": t["route"],
                 "plugin_entry": t["plugin_entry"],
                 "source": "prose_hint_without_context",
                 "needs_ai_parse": True,
@@ -647,7 +665,8 @@ def classify_task_nature(prompt: str,
                            f"supplied — that entry needs the RTL to transform"}
 
     t = NATURE_ENTRY["spec_generation"]
-    return {"nature": "spec_generation", "route": "phase1_entry",
+    return {"nature": "spec_generation", "entry_nature": "spec_generation",
+            "route": "phase1_entry",
             "plugin_entry": t["plugin_entry"],
             "source": "no_context_heuristic", "needs_ai_parse": True}
 

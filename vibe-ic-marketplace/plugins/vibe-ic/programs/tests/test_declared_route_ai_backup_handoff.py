@@ -175,7 +175,7 @@ def test_missing_empty_or_malformed_route_backup_blocks_without_ai_work(
     dataset, run = tmp_path / "dataset", tmp_path / "run"
     _write_dataset(dataset, {"generic_blocked": _DEBUG_PROMPT})
     verdict = {
-        "nature": "debug", "route": "plugin_loop",
+        "nature": "debug", "entry_nature": "debug", "route": "plugin_loop",
         "source": "generic-test", "needs_ai_parse": True,
     }
     if plugin_entry is not None:

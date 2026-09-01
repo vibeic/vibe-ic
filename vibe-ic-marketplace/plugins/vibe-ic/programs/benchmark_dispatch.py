@@ -2158,6 +2158,26 @@ def _rtl_gen_waive(project: Path) -> dict | None:
     return None
 
 
+def _solver_argv(runner: Path, proj: Path, entry, exit_step) -> list:
+    """One problem's runner argv, assembled from the routing verdict.
+
+    The exit decides what must NOT run. An RTL-evidence task never needs
+    physical design because no RTL consumer reads a netlist or GDS; a run
+    whose exit lies before step 15 therefore skips Phase 3 outright.
+    """
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import task_nature_route as tnr                       # noqa: PLC0415
+    argv = [sys.executable, str(runner), str(proj),
+            "--skip-analog", "--skip-hardware"]
+    if exit_step and exit_step in tnr.flow_step_ids():
+        order = {s: i for i, s in enumerate(tnr.flow_step_ids())}
+        if order.get(exit_step, 99) < order.get("15", 99):
+            argv.append("--skip-phase3")
+    if entry and entry != "D1":
+        argv += ["--entry-step", str(entry)]
+    return argv
+
+
 def _declared_route_ai_backup(routing: dict) -> dict:
     """Validate the route-level AI-backup declaration, without defaulting it.
 
@@ -2368,23 +2388,15 @@ def _cmd_solve_locked(bench: str, dataset: str, run: str, limit: int = 0,
 
             verdict = tnr.classify_task_nature(prompt_text, rtl_present, None)
             nature = verdict["nature"]
-            entry = tnr.NATURE_ENTRY.get(nature, {}).get("entry_step")
-            ev = tnr.NATURE_ENTRY.get(nature, {}).get("default_evidence")
+            # `entry_nature` is the NATURE_ENTRY key on every branch; `nature`
+            # may be the disclosing unpinned-transform label, which is not.
+            entry_row = tnr.NATURE_ENTRY[verdict["entry_nature"]]
+            entry = entry_row.get("entry_step")
+            ev = entry_row.get("default_evidence")
             exit_step = (tnr.EVIDENCE_EXIT.get(ev) or {}).get("exit_step")
 
-            argv = [sys.executable, str(runner), str(proj),
-                    "--skip-analog", "--skip-hardware"]
-            # The exit decides what must NOT run. An RTL-evidence benchmark
-            # never needs physical design because no open RTL scorer consumes
-            # a netlist or GDS.
-            if exit_step and exit_step in tnr.flow_step_ids():
-                order = {s: i for i, s in enumerate(tnr.flow_step_ids())}
-                if order.get(exit_step, 99) < order.get("15", 99):
-                    argv.append("--skip-phase3")
-            if entry and entry != "D1":
-                argv += ["--entry-step", str(entry)]
-
-            process = runner_budget.run(argv)
+            process = runner_budget.run(
+                _solver_argv(runner, proj, entry, exit_step))
             if process.error is not None:
                 raise RuntimeError(process.error)
             rc = int(process.rc)
