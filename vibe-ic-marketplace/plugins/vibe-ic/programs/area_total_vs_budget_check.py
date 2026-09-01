@@ -38,7 +38,10 @@ ONLY rc 1 STOPS THE STEP, and the bound is deliberate:
         A fact about the design, knowable at synthesis rather than at streamout,
         and a FAIL of the step.
   rc 0  compared, and it fits.
-  rc 2  INCOMPLETE — most often "no ceiling declared". MEASURED, and this is a
+  rc 2  INCOMPLETE — most often "the Phase-1 area question is unanswered in
+        both the typed declaration and the consuming L19 field".
+        This is a named dependency on step 0.5ic, not an implicit waiver.
+        MEASURED, and this is a
         CORRECTION of the number an earlier version of this block carried: it
         cited 176 of 177 published L19 copies, from a corpus that has since been
         withdrawn and cannot be re-derived at all.
@@ -271,6 +274,10 @@ else establishes it, and no default is assumed.
 
     ceiling + figure + unit, cell_area <= die_area  -> PASS, naming both
     ceiling + figure + unit, cell_area >  die_area  -> FAIL, naming both
+    explicit typed NOT_APPLICABLE                   -> NOT_APPLICABLE, citing
+                                                       declaration + rationale
+    area question unset                             -> INCOMPLETE, naming the
+                                                       Phase-1 dependency
     ceiling absent                                  -> INCOMPLETE, naming
                                                        L19.die_area_budget_um
     no area figure readable                         -> INCOMPLETE, naming that
@@ -319,6 +326,7 @@ import re
 import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
+import _tapeout_declaration as _td
 from _atomic_artefact import write_text as atomic_write_text  # vibe-ic#1082/#1470
 
 TOOL = "area_total_vs_budget_check"
@@ -476,9 +484,25 @@ def read_ceiling(project: Path) -> Tuple[Optional[float], Optional[str],
     return None, None, sources
 
 
+def read_area_declaration(project: Path) -> Dict[str, Any]:
+    """The typed Phase-1 answer, with the exact design-owned source cited."""
+    path = project / _td.DECLARATION_REL
+    source = f"{_td.DECLARATION_REL}#/{_td.SYNTHESIS_AREA_BUDGET_KEY}"
+    if not path.is_file():
+        return {"status": "UNSET", "source": source,
+                "reason": "the Phase-1 declaration file is absent"}
+    doc, err = _td.load(path)
+    if err is not None or not isinstance(doc, dict):
+        return {"status": "INVALID", "source": source,
+                "reason": err or "the declaration is not a mapping"}
+    out = dict(_td.area_budget_resolution(doc))
+    out["source"] = source
+    return out
+
+
 def evaluate(project: Path, ceiling_override: Optional[str],
              unit_override: bool) -> Tuple[str, Dict[str, Any]]:
-    """Return ``(verdict, report)``; verdict in {PASS, FAIL, INCOMPLETE}."""
+    """Return ``(verdict, report)`` including explicit NOT_APPLICABLE."""
     rep: Dict[str, Any] = {"program": TOOL, "version": VERSION,
                            "project": str(project), "findings": []}
     areas = read_areas(project)
@@ -492,9 +516,40 @@ def evaluate(project: Path, ceiling_override: Optional[str],
         die_um2, wxh = parse_die_budget_um2(ceiling_override)
         sources = [{"file": "--die-area-um", "die_area_budget_um":
                     ceiling_override, "die_area_um2": die_um2, "wxh": wxh}]
+        declared_input = read_area_declaration(project)
+        declaration = {
+            "status": _td.AREA_BUDGET_LIMIT,
+            "source": "--die-area-um",
+            "ceiling_wxh_um": wxh,
+            "ceiling_um2": die_um2,
+        }
     else:
         die_um2, wxh, sources = read_ceiling(project)
+        declaration = read_area_declaration(project)
+        declared_input = dict(declaration)
+        # Phase 1 may obtain the same design-owned ceiling by extracting it
+        # directly into L19 from the design documents. Do not demand a second,
+        # duplicate answer in step 0.5ic when that consuming-layer fact is
+        # already explicit and every published L19 copy agrees. The typed
+        # declaration remains necessary for NOT_APPLICABLE, because an unset
+        # L19 value can never carry that disposition by implication.
+        if declaration.get("status") == "UNSET" and die_um2 is not None:
+            authority_sources = [
+                f"{s['file']}#/fields/die_area_budget_um"
+                for s in sources if s.get("die_area_um2") == die_um2
+                and s.get("wxh") == wxh
+            ]
+            declaration = {
+                "status": _td.AREA_BUDGET_LIMIT,
+                "source": authority_sources[0],
+                "authority_sources": authority_sources,
+                "authority_kind": "L19_DESIGN_EXTRACTION",
+                "ceiling_wxh_um": wxh,
+                "ceiling_um2": die_um2,
+            }
     rep["ceiling_sources"] = sources
+    rep["area_budget_declaration"] = declared_input
+    rep["area_budget_authority"] = declaration
     rep["die_area_um2"] = die_um2
     rep["die_area_wxh_um"] = wxh
 
@@ -503,8 +558,44 @@ def evaluate(project: Path, ceiling_override: Optional[str],
     if die_um2 is None and len(disagreeing) > 1:
         rep["ceiling_disagreement"] = disagreeing
 
+    declared_status = declaration.get("status")
+    if declared_status == _td.AREA_BUDGET_NOT_APPLICABLE:
+        stated_ceilings = [s for s in sources if s.get("die_area_um2") is not None]
+        if stated_ceilings:
+            rep["verdict"] = "INCOMPLETE"
+            rep["missing_authority"] = (
+                "the Phase-1 area declaration says NOT_APPLICABLE at "
+                f"{declaration['source']} while L19 still declares "
+                f"{[s.get('wxh') for s in stated_ceilings]}; the design-owned "
+                "authorities conflict and neither may silently win")
+            return "INCOMPLETE", rep
+        rep["verdict"] = "NOT_APPLICABLE"
+        rep["disposition"] = {
+            "status": "NOT_APPLICABLE",
+            "source": declaration["source"],
+            "rationale": declaration["rationale"],
+            "measured_area_figures_observed": len(areas),
+        }
+        return "NOT_APPLICABLE", rep
+
     usable = [a for a in areas if a["unit_established"]]
     lacks: List[str] = []
+    if declared_status == "UNSET":
+        lacks.append(
+            "the owning Phase-1 declaration dependency "
+            f"{declaration['source']} (UNSET; step 0.5ic is INCOMPLETE)")
+    elif declared_status == "INVALID":
+        lacks.append(
+            "a readable typed Phase-1 area declaration at "
+            f"{declaration['source']} ({declaration.get('reason')})")
+    elif declared_status == _td.AREA_BUDGET_LIMIT:
+        declared_wxh = declaration.get("ceiling_wxh_um")
+        if wxh != declared_wxh:
+            lacks.append(
+                "Phase-1 propagation of the design-owned ceiling from "
+                f"{declaration['source']} ({declared_wxh} um) to "
+                "L19_CONSTRAINTS_PDK.json fields.die_area_budget_um "
+                f"(resolved {wxh!r})")
     if die_um2 is None:
         lacks.append(
             "L19_CONSTRAINTS_PDK.json fields.die_area_budget_um"
@@ -530,9 +621,14 @@ def evaluate(project: Path, ceiling_override: Optional[str],
 
     worst = max(usable, key=lambda d: d["chip_area"])
     cell_um2 = worst["chip_area"]
+    ceiling_files = [s["file"] for s in sources if s.get("wxh") == wxh]
     rep["comparison"] = {"cell_area_um2": cell_um2,
+                         "cell_area_unit": "um^2",
                          "die_area_um2": die_um2,
+                         "die_area_unit": "um^2",
                          "die_area_wxh_um": wxh,
+                         "ceiling_source": declaration.get("source"),
+                         "l19_sources": ceiling_files,
                          "utilization": cell_um2 / die_um2,
                          "stated_in": worst["file"],
                          "selection_rule": worst["selection_rule"],
@@ -605,9 +701,19 @@ def main(argv: Optional[List[str]] = None) -> int:
         print(f"[PASS] {TOOL}: {scope}. Compared synthesised cell area "
               f"{c['cell_area_um2']:.4e} um^2 ({c['stated_in']}) against the "
               f"DECLARED die area {c['die_area_um2']:.4e} um^2 "
-              f"({c['die_area_wxh_um']} um, L19.die_area_budget_um); "
+              f"({c['die_area_wxh_um']} um, L19.die_area_budget_um, "
+              f"source {c['ceiling_source']}); "
               f"utilization {c['utilization']:.4f}, limit 1.0 "
               f"({c['limit_basis']})")
+        return RC_OK
+
+    if verdict == "NOT_APPLICABLE":
+        d = rep["disposition"]
+        print("VACUOUS_PASS: [NOT_APPLICABLE] "
+              f"{TOOL}: design declaration {d['source']} explicitly "
+              f"disposes the area comparison; rationale={d['rationale']!r}. "
+              f"Observed {d['measured_area_figures_observed']} synth area "
+              "figure(s), but applied no ceiling.")
         return RC_OK
 
     # The sentinel must START A LINE and survive the consumer's tail cut —
@@ -620,8 +726,9 @@ def main(argv: Optional[List[str]] = None) -> int:
           "utilisation target, a PDK default or a sibling design, because a "
           "threshold nobody declared would turn an unanswered question into an "
           "answered one.")
-    print(f"INCOMPLETE: synthesised area was NOT compared against anything — "
-          f"missing authority: {rep['missing_authority']}.")
+    print(f"  missing authority: {rep['missing_authority']}.")
+    print("INCOMPLETE: synthesis area comparison blocked by named Phase-1, "
+          "L19, measurement, or unit authority above.")
     return RC_NOT_COMPARED
 
 

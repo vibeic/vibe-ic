@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""tapeout_declaration_gen.py — write down the 18 answers, and pick the route.
+"""tapeout_declaration_gen.py — write the physical and implementation contract.
 
 STEP 0.5ic's OTHER HALF
 =======================
@@ -63,16 +63,19 @@ applies to its own stale markers, applied symmetrically.
 NEVER A DEFAULT
 ===============
 The declaration this program writes starts as `_tapeout_declaration.
-blank_declaration()` — all 18 questions `NOT_DETERMINED` — and the ONLY thing
-that can change a field is a value in the caller's `--answers` file. There is
-no inference here: not from the floorplan, not from the PDK, not from the
-netlist. A number derived from an artefact and written into a DECLARATION stops
-being a measurement and becomes a claim, and the next check compares the
-artefact against a number taken from that same artefact, which is not a check.
+blank_declaration()` — all 18 physical questions and both contract fields
+`NOT_DETERMINED` — and the ONLY thing that can change a field is a value in the
+caller's `--answers` file. There is no inference here: not from the floorplan,
+not from the PDK, not from the netlist. A number derived from an artefact and
+written into a DECLARATION stops being a measurement and becomes a claim, and
+the next check compares the artefact against a number taken from that same
+artefact, which is not a check.
 
 Running it with no `--answers` is therefore both legal and useful: it produces
-a complete, well-formed, entirely unanswered declaration, and every consumer
-then reports NOT_DETERMINED naming the exact question it went without.
+a well-formed, entirely unanswered declaration. The owning declaration gate
+then reports the synthesis-area dependency INCOMPLETE unless Phase 1 extracts
+a design-owned ceiling into L19; every physical consumer reports
+NOT_DETERMINED naming the exact question it went without.
 
 chip-AGNOSTIC: no vendor, foundry, process node, SKU or design literal.
 
@@ -163,8 +166,9 @@ def build(project: Path, answers_path: Optional[Path]) -> Dict[str, Any]:
                 flat = raw.get("answers") if isinstance(
                     raw.get("answers"), dict) else raw
                 merged = dict(flat)
-                if TD.FORBIDDEN_LAYERS_KEY in raw:
-                    merged[TD.FORBIDDEN_LAYERS_KEY] = raw[TD.FORBIDDEN_LAYERS_KEY]
+                for key in TD.EXTRA_KEYS:
+                    if key in raw:
+                        merged[key] = raw[key]
                 doc, ignored = TD.merge_answers(doc, merged)
                 source["ignored_keys"] = ignored
 
@@ -290,7 +294,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         print(f"  answers not read: {rec['answers_source']['error']}",
               file=sys.stderr)
     if rec["answers_source"]["ignored_keys"]:
-        print("  IGNORED (not one of the 18): "
+        print("  IGNORED (not a recognized declaration field): "
               + ", ".join(rec["answers_source"]["ignored_keys"]),
               file=sys.stderr)
     # A malformed declaration is the one thing this program can produce that

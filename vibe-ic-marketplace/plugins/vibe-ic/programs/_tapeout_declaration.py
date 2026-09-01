@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""_tapeout_declaration — the 18 questions a die has to answer about itself.
+"""_tapeout_declaration — the 18 physical questions a die answers about itself.
 
 WHY A DECLARATION AT ALL
 ========================
@@ -62,13 +62,20 @@ seemed sensible.
       already take: whether a ring is required, which PDK script builds it, and
       which marker layer must end up carrying geometry (`SEAL_MARKER`).
 
-A NINETEENTH FIELD, AND WHY IT IS NOT IN THE 18
-===============================================
-`forbidden_layers` is required by the general precheck's forbidden-layer check
-and belongs to none of the three sections. It is carried at the top level and
-labelled as outside the 18, rather than being pushed into a section to make a
-tidier count. A field filed under a heading it does not belong to is a small
-lie that later gets quoted as a finding.
+TWO CONTRACT FIELDS, AND WHY THEY ARE NOT IN THE 18
+===================================================
+`forbidden_layers` is required by the general precheck's forbidden-layer check.
+`synthesis_area_budget` is required by the synthesis-area comparison. Neither
+belongs to the three physical-deliverable sections, so both are carried at the
+top level rather than being pushed into a section to make a tidier count. A
+field filed under a heading it does not belong to is a small lie that later
+gets quoted as a finding.
+
+The area field is a typed union, never a sentinel overloaded as a waiver:
+
+* `{status: LIMIT, max_die_dimensions_um: [W, H]}` is an explicit ceiling;
+* `{status: NOT_APPLICABLE, rationale: ...}` is an explicit disposition;
+* `NOT_DETERMINED` is unanswered and is never read as either of the above.
 
 THE PAD REFUSALS ARE HONOURED, NOT RESTATED
 ===========================================
@@ -333,10 +340,16 @@ for _sec, _n in SECTION_COUNTS.items():
         raise AssertionError(
             f"section {_sec} declares {_n} question(s) but carries {_have}")
 
-#: The nineteenth field. See "A NINETEENTH FIELD" above — carried at the top
-#: level and labelled, never filed under a section it does not belong to.
+#: Contract fields outside the 18 physical-deliverable questions. See the
+#: module-level explanation above.
 FORBIDDEN_LAYERS_KEY = "forbidden_layers"
-EXTRA_KEYS: Tuple[str, ...] = (FORBIDDEN_LAYERS_KEY,)
+SYNTHESIS_AREA_BUDGET_KEY = "synthesis_area_budget"
+AREA_BUDGET_LIMIT = "LIMIT"
+AREA_BUDGET_NOT_APPLICABLE = "NOT_APPLICABLE"
+EXTRA_KEYS: Tuple[str, ...] = (
+    FORBIDDEN_LAYERS_KEY,
+    SYNTHESIS_AREA_BUDGET_KEY,
+)
 
 
 def question(key: str) -> Optional[Question]:
@@ -347,7 +360,7 @@ def question(key: str) -> Optional[Question]:
 
 
 def blank_declaration() -> Dict[str, Any]:
-    """All 18 questions plus the extra field, every one `NOT_DETERMINED`.
+    """All 18 questions plus contract fields, all `NOT_DETERMINED`.
 
     This is the ONLY constructor. There is no variant that pre-fills anything,
     because the moment one exists somebody calls it.
@@ -356,8 +369,49 @@ def blank_declaration() -> Dict[str, Any]:
         "schema": SCHEMA,
         "answers": {q.key: NOT_DETERMINED for q in QUESTIONS},
         FORBIDDEN_LAYERS_KEY: NOT_DETERMINED,
+        SYNTHESIS_AREA_BUDGET_KEY: NOT_DETERMINED,
     }
     return doc
+
+
+def area_budget_resolution(doc: Dict[str, Any]) -> Dict[str, Any]:
+    """Return the typed Phase-1 disposition of the synthesis area question.
+
+    Status is one of ``UNSET``, ``INVALID``, ``LIMIT`` or
+    ``NOT_APPLICABLE``. This helper invents no value and deliberately keeps an
+    unanswered field distinct from an explicit N/A declaration.
+    """
+    raw = doc.get(SYNTHESIS_AREA_BUDGET_KEY)
+    if not is_answered(raw):
+        return {"status": "UNSET", "raw": raw}
+    if not isinstance(raw, dict):
+        return {"status": "INVALID", "raw": raw,
+                "reason": "the declaration is not a mapping"}
+    status = raw.get("status")
+    if status == AREA_BUDGET_LIMIT:
+        dims = raw.get("max_die_dimensions_um")
+        if not (isinstance(dims, (list, tuple)) and len(dims) == 2
+                and all(_is_number(v) and v > 0 for v in dims)):
+            return {"status": "INVALID", "raw": raw,
+                    "reason": "LIMIT needs two positive dimensions in um"}
+        w, h = float(dims[0]), float(dims[1])
+        wxh = f"{w:g}x{h:g}"
+        return {
+            "status": AREA_BUDGET_LIMIT,
+            "raw": raw,
+            "max_die_dimensions_um": [w, h],
+            "ceiling_wxh_um": wxh,
+            "ceiling_um2": w * h,
+        }
+    if status == AREA_BUDGET_NOT_APPLICABLE:
+        rationale = raw.get("rationale")
+        if not isinstance(rationale, str) or not rationale.strip():
+            return {"status": "INVALID", "raw": raw,
+                    "reason": "NOT_APPLICABLE needs a non-empty rationale"}
+        return {"status": AREA_BUDGET_NOT_APPLICABLE, "raw": raw,
+                "rationale": rationale.strip()}
+    return {"status": "INVALID", "raw": raw,
+            "reason": f"unknown status {status!r}"}
 
 
 def is_answered(value: Any) -> bool:
@@ -481,6 +535,7 @@ def audit(doc: Dict[str, Any]) -> Dict[str, Any]:
         "sections": sections,
         FORBIDDEN_LAYERS_KEY + "_answered": is_answered(
             doc.get(FORBIDDEN_LAYERS_KEY)),
+        "synthesis_area_budget": area_budget_resolution(doc),
         "deliverable": deliverable if is_answered(deliverable)
         else NOT_DETERMINED,
     }
@@ -497,6 +552,7 @@ RULE_ENUM_INVALID = "DECLARATION_ENUM_INVALID"
 RULE_RECT_INVALID = "DECLARATION_RECT_INVALID"
 RULE_POINT_INVALID = "DECLARATION_POINT_INVALID"
 RULE_NUMBER_INVALID = "DECLARATION_NUMBER_INVALID"
+RULE_AREA_BUDGET_INVALID = "SYNTHESIS_AREA_BUDGET_INVALID"
 
 
 def _refusal(rule: str, message: str, **extra: Any) -> Dict[str, Any]:
@@ -517,8 +573,9 @@ def validate(doc: Any) -> List[Dict[str, Any]]:
     produces a NOT_DETERMINED at the consuming check, which is a non-pass in
     the place where the reader can see WHICH check went without. A field that
     is ABSENT, or present with a value of the wrong shape, is refused here,
-    because that is a declaration nobody can read — and it is the only way a
-    default could sneak back in.
+    because that is a declaration nobody can read — except the additive
+    `synthesis_area_budget` field, whose absence in a legacy declaration is
+    deliberately the UNSET state. A present malformed value is always refused.
     """
     out: List[Dict[str, Any]] = []
     if not isinstance(doc, dict):
@@ -550,7 +607,11 @@ def validate(doc: Any) -> List[Dict[str, Any]]:
                 RULE_FIELD_UNKNOWN,
                 f"{key!r} is not one of the {len(QUESTIONS)} questions",
                 key=key))
-    for key in EXTRA_KEYS:
+    # `synthesis_area_budget` was added to the existing schema by #1982. Its
+    # absence in a pre-existing declaration is the UNSET state, not malformed
+    # evidence; only a typed LIMIT or NOT_APPLICABLE changes that state. Keep
+    # the older forbidden-layers field structurally required as before.
+    for key in (FORBIDDEN_LAYERS_KEY,):
         if key not in doc:
             out.append(_refusal(
                 RULE_FIELD_MISSING,
@@ -590,6 +651,17 @@ def validate(doc: Any) -> List[Dict[str, Any]]:
                     RULE_NUMBER_INVALID,
                     f"{q.key!r} must be a positive number, got {v!r}",
                     key=q.key))
+
+    budget = area_budget_resolution(doc)
+    if budget["status"] == "INVALID":
+        out.append(_refusal(
+            RULE_AREA_BUDGET_INVALID,
+            f"{SYNTHESIS_AREA_BUDGET_KEY!r} is malformed: "
+            f"{budget.get('reason')}. Use "
+            "{status: 'LIMIT', max_die_dimensions_um: [W, H]} or "
+            "{status: 'NOT_APPLICABLE', rationale: '...'}; leaving the "
+            f"field {NOT_DETERMINED!r} is incomplete but not malformed",
+            key=SYNTHESIS_AREA_BUDGET_KEY))
     return out
 
 

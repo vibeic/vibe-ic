@@ -1313,9 +1313,11 @@ steps:
       - submission_template_ingest
       # THE OTHER HALF OF THE SAME STEP. `submission_template_ingest` records
       # what the OPERATOR published; this records what the DESIGN declares
-      # about itself — the 18 questions of `_tapeout_declaration` (7 die size,
-      # 8 pad ring, 3 seal ring), every unanswered one `NOT_DETERMINED` and
-      # never a default. It belongs HERE, and not further down, for the reason
+      # about itself — the 18 physical questions of `_tapeout_declaration`
+      # (7 die size, 8 pad ring, 3 seal ring) plus the separately typed
+      # synthesis-area budget disposition, every unanswered value
+      # `NOT_DETERMINED` and never a default. It belongs HERE, and not further
+      # down, for the reason
       # this step has no `condition`: it is the step that decides the route, so
       # it is the one step a design with no shuttle also passes through, and a
       # self-tape-out has nobody else to write its numbers down for it.
@@ -1357,11 +1359,11 @@ steps:
       - "input/submission_template/slots/*.yaml OR input/submission_template/NO_TEMPLATE.txt OR input/submission_template/SELF_TAPEOUT.txt"
       - "reports/phase1/submission_template.json"
       # ALWAYS WRITTEN, by every run, whatever the route. `tapeout_declaration_gen`
-      # with no `--answers` at all still emits a complete, well-formed,
-      # entirely `NOT_DETERMINED` declaration — which is a legal and useful
-      # result, and is what keeps this a required output rather than a
-      # conditional one. A run that produced no declaration is a run where
-      # nobody was asked.
+      # with no `--answers` at all still emits a well-formed, entirely
+      # `NOT_DETERMINED` declaration. That output is legal but its area
+      # dependency is INCOMPLETE; recording that distinction is what keeps this
+      # a required output rather than a conditional one. A run that produced no
+      # declaration is a run where nobody was asked.
       - "input/submission_template/tapeout_declaration.json"
       - "reports/phase1/tapeout_declaration.json"
     gate:
@@ -1377,16 +1379,19 @@ steps:
       # than declining to parse the shape.
       all_of:
         - program_exit_zero: "submission_template_check . --json reports/phase1/submission_template.json"
-        # BLOCKING, and it refuses a MALFORMED declaration — never an incomplete
-        # one. `NOT_DETERMINED` in a field is the declaration working as
-        # intended; it is reported by the CONSUMING check, in the place where
-        # the reader can see which check went without which answer. Refusing
-        # incompleteness here instead would make the step that decides the
-        # route unpassable for every design that has not yet answered all 18,
-        # and a router that cannot route is worse than an honest
-        # NOT_DETERMINED downstream. What it DOES refuse: a question absent
+        # ENFORCEMENT IS SPLIT AND EXPLICIT. A malformed declaration returns
+        # rc 1 and is BLOCKING when this flow gate is evaluated. An unresolved
+        # area authority returns rc 2 / INCOMPLETE; flow_compliance_check
+        # records that clause as PARTIALLY-VACUOUS, so it blocks the area
+        # COMPARISON from claiming PASS/FAIL against a ceiling but does not
+        # claim later tools were stopped. The 18 physical questions may remain
+        # NOT_DETERMINED for their own consumers. Neither a design-extracted
+        # L19 ceiling nor a typed declaration produces that rc 2; a typed
+        # NOT_APPLICABLE remains separate from an unset value. What rc 1
+        # refuses: a required legacy question absent,
         # altogether, a rectangle that is not four numbers, an enum outside its
-        # choices, and a tree carrying more than one router file at once.
+        # choices, a malformed area disposition, and a tree carrying more than
+        # one router file at once.
         - program_exit_zero: "tapeout_declaration_check . --json reports/phase1/tapeout_declaration.json"
     blocks_on: []
     notes: >-
@@ -2816,6 +2821,12 @@ steps:
       trigger: "design__instance__area above the design's DECLARED ceiling (L19.die_area_budget_um); the structure has to change"
     # prose says lint/sim/formal-clean RTL; the RTL artefact is Step 1's.
     required_inputs:
+      # #1982 — the area gate reads the typed design declaration directly to
+      # distinguish an explicit NOT_APPLICABLE from an unset budget. A
+      # design-extracted L19 ceiling is the alternate Phase-1 authority; neither
+      # path is inferred from the synthesis measurement.
+      - from: 0.5ic
+        path: "input/submission_template/tapeout_declaration.json"
       - from: 1
         path: "phase2/stage1/rtl/*.sv OR phase2/stage1/rtl/*.v"
       - from: 7
@@ -2973,7 +2984,7 @@ steps:
             advisory_reason: "NOT-YET-CLEAN: this gate CAN refuse and is wired advisory as a ratchet position, not as a verdict. Notch measured rc 1 on a real spm run (2026-08-31): it REFUSES TODAY on real input; the advisory slot is currently swallowing a live finding. Promote to blocking once this run is clean. It reported: WARNING: Liberty file not found: input/pdk/liberty/*.lib"
             condition_files_exist: ["input/pdk/liberty/*.lib"]
             absent_condition_reason: "No liberty is staged under input/pdk/liberty/, so there is no cell set to compare the netlist against. Whether a run may reach synthesis with no staged PDK at all is `declared_pdk_is_the_pdk_used_check`'s question at step 36, and it is BLOCKING there; this clause would only be able to report every cell missing against an empty library, which is a zero-denominator FAIL this repo refuses."
-    blocks_on: [2, 3, 8]
+    blocks_on: [0.5ic, 2, 3, 8]
 
   - id: 10
     name: "🔁 Pre-layout STA (multi-corner)"

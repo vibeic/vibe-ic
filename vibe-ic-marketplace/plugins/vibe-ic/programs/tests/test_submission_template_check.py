@@ -960,6 +960,14 @@ def _step_0_5ic_verdicts(project: Path):
 
 
 def _answers(project: Path, doc) -> None:
+    import _tapeout_declaration as TD
+    doc = dict(doc)
+    doc.setdefault(TD.SYNTHESIS_AREA_BUDGET_KEY, {
+        "status": TD.AREA_BUDGET_NOT_APPLICABLE,
+        "rationale": (
+            "This route-only fixture does not exercise implementation area; "
+            "the declaration gate still requires an explicit disposition."),
+    })
     path = project / ST.DESIGN_ANSWERS_REL
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(doc, indent=2) + "\n")

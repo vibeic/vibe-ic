@@ -57814,9 +57814,15 @@ def _post_emit_l22_analog_verification_plan(project: Path) -> int:
 
 
 def _post_emit_floorplan_contract(project: Path) -> None:
-    """G-FIXED-DIE-1 — ingest a design-PROVIDED MANDATED fixed-floorplan
-    contract into L19 (fields.die_area_budget_um / floorplan_hints /
-    constraints_present).
+    """G-FIXED-DIE-1 / #1982 — ingest design-owned area authority into L19.
+
+    Two explicit inputs may establish the same ceiling: a fixed-floorplan
+    mandate found in the design's own documents, or step 0.5ic's typed
+    ``synthesis_area_budget`` LIMIT declaration. The latter closes the path
+    for a design that has an implementation budget but has not yet committed
+    to the rest of a physical floorplan. An explicit NOT_APPLICABLE remains in
+    the declaration for the area gate to cite; it is never converted to a
+    value in ``die_area_budget_um``.
 
     Pre-fix, phase1 dropped this contract entirely: when a design SUPPLIED a
     fixed floorplan — an OpenLane-style ``config.json`` with
@@ -57841,8 +57847,37 @@ def _post_emit_floorplan_contract(project: Path) -> None:
         print(f"      floorplan-contract extract FAILED (fail-open): {e}",
               file=sys.stderr)
         return
-    if not contract.get("constraints_present"):
-        return                        # design mandates no fixed floorplan
+
+    # The step-0.5ic declaration is a design INPUT, not an inference from a
+    # measurement. Read it through its own schema helper so the producer and
+    # both consumers share the exact LIMIT / NOT_APPLICABLE / UNSET grammar.
+    try:
+        import _tapeout_declaration as _td
+        _decl_path = project / _td.DECLARATION_REL
+        if _decl_path.is_file():
+            _decl_doc, _decl_err = _td.load(_decl_path)
+            if _decl_err is not None or not isinstance(_decl_doc, dict):
+                print("      area-budget declaration unreadable; L19 not "
+                      f"populated from it: {_decl_err or 'not a mapping'}",
+                      file=sys.stderr)
+                declared = {"status": "INVALID"}
+            else:
+                declared = _td.area_budget_resolution(_decl_doc)
+                if declared.get("status") == "INVALID":
+                    print("      area-budget declaration malformed; L19 not "
+                          f"populated from it: {declared.get('reason')}",
+                          file=sys.stderr)
+        else:
+            declared = {"status": "UNSET"}
+    except Exception as e:
+        print(f"      area-budget declaration read FAILED (fail-open): {e}",
+              file=sys.stderr)
+        declared = {"status": "INVALID"}
+
+    floorplan_present = bool(contract.get("constraints_present"))
+    declaration_limit = declared.get("status") == "LIMIT"
+    if not floorplan_present and not declaration_limit:
+        return
     l19 = _try_load_l_doc(project, "L19_CONSTRAINTS_PDK")
     if not isinstance(l19, dict):
         return
@@ -57852,8 +57887,18 @@ def _post_emit_floorplan_contract(project: Path) -> None:
         l19["fields"] = fields
 
     changed = False
-    die = contract.get("die_area_budget_um")
-    # Do not clobber a good value already present; fill only when null/empty.
+    floor_die = contract.get("die_area_budget_um") if floorplan_present else None
+    declared_die = (declared.get("ceiling_wxh_um")
+                    if declaration_limit else None)
+    candidates = [v for v in (floor_die, declared_die) if v]
+    unique_candidates = sorted(set(candidates))
+    die = unique_candidates[0] if len(unique_candidates) == 1 else None
+    if len(unique_candidates) > 1:
+        print("      area-budget authority CONFLICT: fixed-floorplan input "
+              f"states {floor_die} um while step 0.5ic declares "
+              f"{declared_die} um; L19 was not overwritten", file=sys.stderr)
+    # Do not clobber a good value already present; the area gate compares the
+    # declaration and every L19 copy and reports a named disagreement.
     if die and not fields.get("die_area_budget_um"):
         fields["die_area_budget_um"] = die
         changed = True
@@ -57876,24 +57921,33 @@ def _post_emit_floorplan_contract(project: Path) -> None:
             changed = True
         fields["floorplan_hints"] = existing
 
-    if not fields.get("constraints_present"):
+    if (floorplan_present or declaration_limit) and not fields.get(
+            "constraints_present"):
         fields["constraints_present"] = True
         changed = True
 
     if changed:
         if l19.get("extraction_status") in (None, "NOT_YET_EXTRACTED"):
             l19["extraction_status"] = "PARTIALLY_EXTRACTED"
-        # Record die-area provenance in the doc's extraction_evidence map.
-        src = contract.get("die_area_source")
-        if die and src:
+        # Record every authority that states the value L19 actually carries.
+        # If a pre-existing L19 value differs, record neither candidate as its
+        # source; the area gate names that conflict instead.
+        sources = []
+        if floor_die == die and contract.get("die_area_source"):
+            sources.append(contract["die_area_source"])
+        if declared_die == die:
+            sources.append(f"{_td.DECLARATION_REL}#/"
+                           f"{_td.SYNTHESIS_AREA_BUDGET_KEY}")
+        if die and fields.get("die_area_budget_um") == die and sources:
             ev = l19.get("extraction_evidence")
             if not isinstance(ev, dict):
                 ev = {}
                 l19["extraction_evidence"] = ev
-            ev.setdefault(src, []).append({
-                "literal": f"DIE_AREA → {die}µm",
-                "label": "die_area_budget_um",
-            })
+            for src in sources:
+                ev.setdefault(src, []).append({
+                    "literal": f"DIE_AREA → {die}µm",
+                    "label": "die_area_budget_um",
+                })
         out = _pl.generated_docs_dir(project) / "L19_CONSTRAINTS_PDK.json"
         _stamp.dump(out, l19)
 

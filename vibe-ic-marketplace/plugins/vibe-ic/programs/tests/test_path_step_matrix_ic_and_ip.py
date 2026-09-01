@@ -1065,7 +1065,15 @@ def _drive_step_0_5ic(root: Path, *, deliverable: str) -> Path:
     """
     root.mkdir(parents=True, exist_ok=True)
     answers = root.parent / "answers.json"
-    answers.write_text(json.dumps({"deliverable": deliverable}))
+    answers.write_text(json.dumps({
+        "deliverable": deliverable,
+        TD.SYNTHESIS_AREA_BUDGET_KEY: {
+            "status": TD.AREA_BUDGET_NOT_APPLICABLE,
+            "rationale": (
+                "This route-contract fixture does not exercise synthesis "
+                "area; the explicit disposition keeps absence distinct."),
+        },
+    }))
 
     def run(prog, *args):
         return _pr.run(

@@ -14,10 +14,16 @@ Declared at all because vibe-ic#886 counts an undeclared AUDIT_ONLY gate as an
 enforcement decision nobody made. Kept in the first 4 kB: `declared_intent`
 reads only `text[:4000]`.
 
-WHAT THIS REFUSES, AND WHAT IT DELIBERATELY DOES NOT
-====================================================
-It refuses a declaration nobody can READ. It does NOT refuse one that is merely
-incomplete, and the distinction is the entire design of the declaration.
+WHAT THIS REFUSES, AND THE ONE INCOMPLETE DEPENDENCY IT OWNS
+============================================================
+It refuses a declaration nobody can READ. The 18 physical-deliverable questions
+may remain unanswered here: each is reported by its physical consumer. The
+synthesis-area budget is different because synthesis is the consumer and Phase
+1 must settle that dependency before synthesis runs. It can do so either by
+extracting a design-owned ceiling into the consuming L19 field or by recording
+the typed step-0.5ic declaration. When both are absent this owning declaration
+step is INCOMPLETE (rc 2); an explicit typed NOT_APPLICABLE remains distinct
+from an unset field.
 
     MALFORMED   -> FAIL here.   A question absent altogether; a rectangle that
                                 is not four numbers; an enum outside its
@@ -26,17 +32,17 @@ incomplete, and the distinction is the entire design of the declaration.
                                 these can be read by any consumer, and each is
                                 a way a DEFAULT could get back in wearing a
                                 real answer's clothes.
-    UNANSWERED  -> PASS here.   `NOT_DETERMINED` in a field is the declaration
-                                working exactly as intended. It is reported by
-                                the CONSUMING check — as NOT_DETERMINED, which
-                                is a non-pass — in the place where the reader
-                                can see WHICH check went without WHICH answer.
+    UNANSWERED PHYSICAL -> PASS here. `NOT_DETERMINED` in one of the 18
+                                remains the physical consumer's responsibility.
+    AREA AUTHORITY UNSET -> INCOMPLETE here. Neither the declaration nor L19
+                                supplies it, so the later comparison is blocked
+                                by this named Phase-1 dependency.
 
-Refusing incompleteness here instead would move every one of those findings
-into a single early gate that says "the declaration is not finished" and names
-none of them, and it would make step 0.5ic — the step that decides the route —
-unpassable for every design that has not yet answered all 18. A router that
-cannot route is worse than an honest NOT_DETERMINED downstream.
+Refusing all incompleteness here would move every physical finding into a
+single early gate that says "the declaration is not finished" and names none
+of them, and it would make step 0.5ic — the step that decides the route —
+unpassable for every design that has not yet answered all 18. Only the area
+dependency whose sole consumer comes after Phase 1 is owned here.
 
 WHY THE ROUTE IS CHECKED FOR CONTRADICTION
 ==========================================
@@ -54,10 +60,11 @@ router file (if any) is present.
 
 EXIT CODES
 ----------
-    0  PASS            the declaration is well-formed and at most one router
-                       file is present. It may be entirely unanswered.
+    0  PASS            the declaration is well-formed, the area question is
+                       explicitly disposed or extracted into L19, and at most
+                       one router exists.
     1  FAIL            malformed, unreadable, or a router contradiction.
-    2  usage
+    2  INCOMPLETE      area-budget authority is unset, or usage.
 
 chip-AGNOSTIC.
 """
@@ -75,6 +82,7 @@ if str(_HERE) not in sys.path:
 
 import _submission_template as ST                              # noqa: E402
 import _tapeout_declaration as TD                              # noqa: E402
+import area_total_vs_budget_check as AREA                      # noqa: E402
 import plugin_manifest_discovery as _pmd                       # noqa: E402
 from _atomic_artefact import write_text as atomic_write_text   # noqa: E402
 
@@ -83,6 +91,7 @@ PROGRAM = "tapeout_declaration_check"
 RULE_DECLARATION_ABSENT = "DECLARATION_ABSENT"
 RULE_ROUTER_CONTRADICTION = "ROUTER_CONTRADICTION"
 RULE_ROUTE_WITHOUT_DECLARATION = "ROUTE_WITHOUT_DECLARATION"
+RULE_AREA_BUDGET_AUTHORITY_UNSET = "SYNTHESIS_AREA_BUDGET_AUTHORITY_UNSET"
 
 
 def _routers_present(project: Path) -> Dict[str, bool]:
@@ -111,8 +120,9 @@ def evaluate(project: Path,
                 "shuttle, which is exactly the design that has nobody else to "
                 "write these numbers down for it. Run "
                 "`tapeout_declaration_gen <project>`; with no answers at all it "
-                "still produces a complete, well-formed, entirely "
-                "NOT_DETERMINED declaration."),
+                "still produces a well-formed, entirely NOT_DETERMINED "
+                "declaration, whose area dependency is explicitly reported "
+                "INCOMPLETE."),
             "path": str(decl_path)})
     else:
         loaded, err = TD.load(decl_path)
@@ -149,7 +159,45 @@ def evaluate(project: Path,
 
     audit = TD.audit(doc) if isinstance(doc, dict) else TD.audit(
         TD.blank_declaration())
-    verdict = "FAIL" if refusals else "PASS"
+    declared_area_budget = (
+        TD.area_budget_resolution(doc) if isinstance(doc, dict)
+        else {"status": "UNSET"})
+    area_budget = dict(declared_area_budget)
+    if not refusals and area_budget.get("status") == "UNSET":
+        # A direct design-doc extraction into the consuming L19 field is also
+        # Phase-1 authority. Requiring the design to repeat that ceiling in the
+        # route declaration would make two answers necessary for one fact and
+        # would reject valid pre-existing L19 contracts. An explicit N/A still
+        # has to use the typed declaration because an unset L19 is not N/A.
+        die_um2, wxh, sources = AREA.read_ceiling(project)
+        if die_um2 is not None:
+            authority_sources = [
+                f"{s['file']}#/fields/die_area_budget_um"
+                for s in sources if s.get("die_area_um2") == die_um2
+                and s.get("wxh") == wxh
+            ]
+            area_budget = {
+                "status": TD.AREA_BUDGET_LIMIT,
+                "authority_kind": "L19_DESIGN_EXTRACTION",
+                "source": authority_sources[0],
+                "authority_sources": authority_sources,
+                "ceiling_wxh_um": wxh,
+                "ceiling_um2": die_um2,
+            }
+    incomplete_dependencies: List[Dict[str, Any]] = []
+    if not refusals and area_budget.get("status") == "UNSET":
+        incomplete_dependencies.append({
+            "rule": RULE_AREA_BUDGET_AUTHORITY_UNSET,
+            "dependency": (
+                f"{TD.DECLARATION_REL}#/{TD.SYNTHESIS_AREA_BUDGET_KEY}"),
+            "message": (
+                "Phase 1 has neither a design-owned area ceiling nor an "
+                "explicit NOT_APPLICABLE disposition. The synthesis-area "
+                "comparison depends on this answer and must not be the first "
+                "step to discover that nobody asked."),
+        })
+    verdict = ("FAIL" if refusals else
+               "INCOMPLETE" if incomplete_dependencies else "PASS")
     return {
         "schema": TD.SCHEMA,
         "program": PROGRAM,
@@ -158,6 +206,9 @@ def evaluate(project: Path,
         "declaration_present": decl_path.is_file(),
         "verdict": verdict,
         "refusals": refusals,
+        "incomplete_dependencies": incomplete_dependencies,
+        "declared_area_budget": declared_area_budget,
+        "area_budget_authority": area_budget,
         "routers_present": routers,
         "router_selected": present[0] if len(present) == 1 else None,
         "audit": audit,
@@ -172,17 +223,19 @@ def summary_line(res: Dict[str, Any]) -> str:
     return (f"{res['verdict']}: {PROGRAM} — "
             f"answered={a['answered']}/{a['questions_total']} ({secs}), "
             f"not_applicable={a['not_applicable']}, "
+            f"area_budget={res['area_budget_authority']['status']}, "
             f"router={res['router_selected'] or '(none)'}, "
-            f"refusals={len(res['refusals'])}")
+            f"refusals={len(res['refusals'])}, "
+            f"incomplete_dependencies={len(res['incomplete_dependencies'])}")
 
 
 def main(argv: Optional[List[str]] = None) -> int:
     p = argparse.ArgumentParser(
         description="Judge the tape-out declaration written by step 0.5ic. "
                     "Refuses a MALFORMED declaration and a contradictory "
-                    "router; an entirely UNANSWERED declaration passes, and "
-                    "every unanswered question is reported as NOT_DETERMINED "
-                    "by the check that needed it.")
+                    "router; an unresolved area authority is INCOMPLETE, and "
+                    "every unanswered physical question is reported as "
+                    "NOT_DETERMINED by the check that needed it.")
     p.add_argument("project_dir", nargs="?", default=".")
     p.add_argument("--declaration", type=Path, default=None,
                    help=f"default: <project>/{TD.DECLARATION_REL}")
@@ -208,8 +261,15 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     for r in res["refusals"]:
         print(f"  REFUSED {r['rule']}: {r['message']}", file=sys.stderr)
+    for dep in res["incomplete_dependencies"]:
+        print(f"  INCOMPLETE {dep['rule']}: {dep['message']} "
+              f"dependency={dep['dependency']}")
     print(summary_line(res))
-    return 0 if res["verdict"] == "PASS" else 1
+    if res["verdict"] == "PASS":
+        return 0
+    if res["verdict"] == "INCOMPLETE":
+        return 2
+    return 1
 
 
 if __name__ == "__main__":
