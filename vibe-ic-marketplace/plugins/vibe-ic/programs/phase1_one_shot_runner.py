@@ -529,7 +529,13 @@ def _run_docs_mode(project: Path, ic_name: str,
         _bridged = docs_dir / _prompt_md.name
         if (not _bridged.exists()
                 and not _docs_hold_identical_bytes(docs_dir, _prompt_md)):
-            _bridged.write_text(_prompt_md.read_text(errors="replace"))
+            # An unreadable prompt cannot be bridged; the doc pipeline's
+            # tolerance contract (issues #3/#26) says that is a skip, never a
+            # front-door crash.
+            try:
+                _bridged.write_text(_prompt_md.read_text(errors="replace"))
+            except OSError:
+                pass
     # Build argv for phase1_doc_one_shot_runner.main(). Its argparse
     # takes the project dir as positional + accepts the standard
     # one-shot flags. Forward any extra runner-specific args.
