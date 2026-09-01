@@ -100,7 +100,10 @@ def test_a_track_that_is_working_outlives_its_old_bound(tmp_path, monkeypatch):
         "        print('still working', flush=True)\n"   # and so is the output
         f"p = pathlib.Path({str(report)!r})\n"
         "p.parent.mkdir(parents=True, exist_ok=True)\n"
-        "p.write_text(json.dumps({'verdict': 'PASS', 'findings': []}))\n"
+        "p.write_text(json.dumps({'verdict': 'PASS', 'findings': [], "
+        "'ai_subtrack': {'status': 'CONSUMED'}, "
+        "'ai_convergence': {'consumed': 1}, "
+        "'denominator': {'deterministic': 0, 'ai': 1, 'total': 1}}))\n"
         "sys.exit(0)\n")
     started = time.monotonic()
     with mock.patch.object(R, "PROGRAMS_DIR", _programs_dir_running(tmp_path, body)):

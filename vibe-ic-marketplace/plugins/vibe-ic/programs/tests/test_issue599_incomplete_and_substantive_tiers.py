@@ -10,19 +10,19 @@ was wrong:
              `reason_class` carries how much was verified. The roll-up read the
              token and never the reason.
 
-  * D1       `phase1_expert_parse_track` returns VACUOUS_PASS when no
+  * D1       `phase1_expert_parse_track` used to return VACUOUS_PASS when no
              deterministic rule applied AND the AI sub-track never answered.
-             The input WAS applicable. "A vacuous step is one nobody needs to
-             come back to"; this is one somebody does.
+             Issue #1973 promotes that applicable, unexecuted state to a real
+             INCOMPLETE exit: handoff creation is not expert execution.
 
 DISCLOSED BY A PRINTED SENTINEL, never by matching a gate's prose — matching
 prose is how a gate that says "I verified the inline command" was read as "I
 examined nothing" to begin with.
 
-AGGREGATION IS UNCHANGED. Both new tiers count exactly as VACUOUS_PASS did, so
-nothing turns red on this alone. Whether an unexamined applicable input should
-BLOCK is a separate decision with a corpus sweep in front of it, and is not
-taken here.
+The generic printed INCOMPLETE tier remains a disclosure when a gate exits 0.
+The D1 expert track now exits 1 on that same state because its execution is
+mandatory while its eventual design findings remain advisory. Those are two
+different policies and must not share one return code.
 """
 from __future__ import annotations
 
@@ -171,12 +171,11 @@ def test_d1_discloses_incomplete_only_when_the_ai_half_did_not_read():
     src = (_PROGRAMS / "phase1_expert_parse_track.py").read_text(
         encoding="utf-8")
     assert 'print(f"INCOMPLETE: {PROGRAM}' in src
-    seg = src[src.index('if rep["verdict"] == "VACUOUS_PASS":'):][:1400]
-    assert 'rep["ai_subtrack"]["status"] != "CONSUMED"' in seg, (
-        "INCOMPLETE is emitted unconditionally, so a genuinely inapplicable "
-        "input now reads as unexamined — the same conflation, reversed")
-    assert 'print(f"VACUOUS_PASS: {PROGRAM}' in seg, (
-        "the genuinely-vacuous case lost its own word")
+    seg = src[src.index('if rep["verdict"] == "INCOMPLETE":'):][:1100]
+    assert 'non-empty schema-readable review' in seg
+    assert 'ai[\'status\']' in seg
+    assert 'VACUOUS_PASS' not in seg, (
+        "an unanswered expert handoff is still published as a pass tier")
 
 
 def test_the_yosys_gate_still_runs_and_says_something(tmp_path):

@@ -51,6 +51,22 @@ def _track_report(project: Path) -> Path:
     return _pl.report_path(project, "phase1/expert_parse_track.json")
 
 
+def _answer(project: Path, expected_tokens=("VDDC",)) -> None:
+    """Leave a minimal schema-valid IC Expert reading for execution tests."""
+    out = _track_report(project).parent / "expert_parse_track_pack"
+    out.mkdir(parents=True, exist_ok=True)
+    (out / "l_doc_expectations.json").write_text(json.dumps({
+        "expectations": [{
+            "id": "supply_inventory::core_rail",
+            "layer": "L1_DATASHEET",
+            "field_path": "fields.pinout",
+            "requirement": "the input-stated core supply terminal",
+            "evidence": ["input RTL: core supply terminal"],
+            "expected_tokens": list(expected_tokens),
+        }],
+    }))
+
+
 # ── fixture construction ────────────────────────────────────────────────────
 
 def _lef(master: str, power_pins, ground_pins=("VSS",)) -> str:
@@ -385,6 +401,7 @@ def _run_track(project: Path, env_extra=None):
 def test_expert_track_names_each_divergence_individually(tmp_path):
     """Not a count. `2 expectations unmet` tells nobody what to do."""
     p = _project(tmp_path)
+    _answer(p)
     rc, out, _ = _run_track(p)
     assert rc == 0
     rep = json.loads(_track_report(p).read_text())
@@ -422,14 +439,19 @@ def test_an_unread_ai_half_is_a_named_finding_not_an_absence(tmp_path):
     rc, out, _ = _run_track(p)
     rep = json.loads(_track_report(p).read_text())
     assert rep["ai_subtrack"]["status"] == "HANDOFF_EMITTED"
+    assert rep["verdict"] == "INCOMPLETE" and rc == 1
     assert any(f["rule"] == "EXPERT_TRACK_AI_SUBTRACK_SKIPPED"
                for f in rep["findings"])
     assert "EXPERT_TRACK_AI_SUBTRACK_SKIPPED" in out, "and it must be PRINTED"
 
 
 def test_expert_track_findings_do_not_block(tmp_path):
-    """ADVISORY, proven by the exit code of a run that HAS findings."""
-    rc, out, _ = _run_track(_project(tmp_path))
+    """ADVISORY, proven by the exit code of a run that HAS findings AND a
+    consumed expert answer. Before #1973 the missing answer in this fixture
+    accidentally mixed mandatory execution with advisory finding policy."""
+    p = _project(tmp_path)
+    _answer(p)
+    rc, out, _ = _run_track(p)
     assert rc == 0
     assert "FINDINGS" in out
 
@@ -459,11 +481,13 @@ def test_expert_track_clean_when_the_design_is_correct(tmp_path):
     p = _project(tmp_path, pinout=("VDDC", "VPROG", "VSS"),
                  l21={"doc_id": "L21", "fields": {
                      "power_rails": ["VDDC", "VPROG"]}})
-    _run_track(p)
+    _answer(p)
+    rc, _, _ = _run_track(p)
     rep = json.loads(_track_report(p).read_text())
     unmet = [f for f in rep["findings"]
              if f["rule"].startswith("EXPERT_TRACK_EXPECTATION_UNMET")]
     assert unmet == []
+    assert rc == 0 and rep["verdict"] == "PASS"
 
 
 # ── the knowledge payload ───────────────────────────────────────────────────
@@ -533,7 +557,7 @@ def test_a_track_finding_and_a_design_finding_are_different_things(tmp_path):
     # The evidence check must read this as "ran, found nothing", not "ran,
     # found one thing" — and must still carry WHY coverage was partial.
     ev = E.assess(clean, _PROGRAMS)
-    assert ev["state"] == "RAN_EMPTY" and ev["patch_count"] == 0
+    assert ev["state"] == "INCOMPLETE" and ev["patch_count"] == 0
     # HANDOFF_EMITTED, not SKIPPED-CONDITION: the AI half is no longer vetoed
     # by an unrelated backend probe, so "it has not answered yet" is the true
     # statement. What this assertion is really pinning is unchanged — the
@@ -541,6 +565,7 @@ def test_a_track_finding_and_a_design_finding_are_different_things(tmp_path):
     assert ev["ai_subtrack"] == "HANDOFF_EMITTED"
 
     broken = _project(tmp_path, name="broken")
+    _answer(broken)
     _run_track(broken)
     ev2 = E.assess(broken, _PROGRAMS)
     assert ev2["state"] == "RAN" and ev2["patch_count"] > 0

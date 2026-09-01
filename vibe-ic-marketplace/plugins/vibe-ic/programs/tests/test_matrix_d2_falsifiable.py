@@ -2379,10 +2379,6 @@ CLAUSE_FIXTURE: Dict[Tuple[str, str], str] = {
 #: ``flow_compliance_check._check_program_exit_zero`` against all 12 fixtures
 #: in :data:`FIXTURES`.
 UNREDDENED: Dict[Tuple[str, str], str] = {
-    ("D1", "phase1_expert_parse_track ."):
-        "rc=2 VACUOUS_PASS under every fixture: the expert-parse track needs a "
-        "real Phase-1 extraction run to have happened, and a stubbed "
-        "generated_docs/ tree still reads as 'track not attempted'",
     ("2", "rom_init_lint phase2/stage1/rtl/*.sv phase2/stage1/rtl/*.v --json "
           "reports/phase2/lint/rom_init_lint.json"):
         "PASS/VACUOUS: needs RTL carrying a Quartus-unsafe ROM initialiser "

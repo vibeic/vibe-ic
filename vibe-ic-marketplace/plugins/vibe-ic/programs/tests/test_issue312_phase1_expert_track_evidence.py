@@ -111,17 +111,31 @@ def test_312_the_track_report_is_execution_evidence(tmp_path):
     rpt = proj / "reports" / "phase1" / "expert_parse_track.json"
     rpt.parent.mkdir(parents=True, exist_ok=True)
 
+    # A report proves the PROGRAM ran, but #1973 separates that from the IC
+    # Expert having answered. Handoff creation / skipped review is incomplete.
+    rpt.write_text(json.dumps({
+        "verdict": "INCOMPLETE", "findings": [],
+        "ai_subtrack": {"status": "HANDOFF_EMITTED"},
+        "ai_convergence": {"consumed": 0}}))
+    incomplete = E.assess(proj, _PROGRAMS)
+    assert incomplete["state"] == "INCOMPLETE"
+    assert incomplete["ai_subtrack"] == "HANDOFF_EMITTED"
+
+    # A consumed, non-empty review can genuinely agree with every generated
+    # layer. That is the real-zero RAN_EMPTY state.
     rpt.write_text(json.dumps({
         "verdict": "PASS", "findings": [],
-        "ai_subtrack": {"status": "SKIPPED-CONDITION"}}))
+        "ai_subtrack": {"status": "CONSUMED"},
+        "ai_convergence": {"consumed": 1}}))
     ran_empty = E.assess(proj, _PROGRAMS)
     assert ran_empty["state"] == "RAN_EMPTY"
-    assert ran_empty["ai_subtrack"] == "SKIPPED-CONDITION"
+    assert ran_empty["ai_subtrack"] == "CONSUMED"
 
     rpt.write_text(json.dumps({
         "verdict": "FINDINGS",
         "findings": [{"rule": "X", "layer": "L21_POWER_INTENT"}],
-        "ai_subtrack": {"status": "SKIPPED-CONDITION"}}))
+        "ai_subtrack": {"status": "CONSUMED"},
+        "ai_convergence": {"consumed": 1}}))
     ran = E.assess(proj, _PROGRAMS)
     assert ran["state"] == "RAN" and ran["patch_count"] == 1
     assert ran["layers"] == ["L21_POWER_INTENT"]

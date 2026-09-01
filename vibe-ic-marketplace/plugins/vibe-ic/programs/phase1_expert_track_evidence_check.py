@@ -44,6 +44,8 @@ correctly:
 
   NEVER_RAN     no sidecar exists AND no runner call site does either — the
                 zero is an artefact of the track not existing
+  INCOMPLETE    a track report exists, but no non-empty IC Expert answer was
+                consumed — a handoff or a refused/empty answer is not execution
   RAN_EMPTY     a sidecar exists and is well-formed but carries no patches —
                 the track ran and genuinely found nothing (a real zero)
   RAN           a sidecar exists with patches
@@ -201,6 +203,21 @@ def _from_track_report(path: Path, wired: bool) -> Dict[str, Any]:
     design = [f for f in findings
               if isinstance(f, dict) and f.get("about", "design") == "design"]
     n = len(design)
+    convergence = blob.get("ai_convergence") or {}
+    consumed = convergence.get("consumed", 0)
+    if (ai != "CONSUMED" or not isinstance(consumed, int) or
+            isinstance(consumed, bool) or consumed < 1):
+        return {
+            "state": "INCOMPLETE", "wired": wired, "sidecar": None,
+            "track_report": str(path), "patch_count": n,
+            "layers": sorted({f.get("layer") for f in design if f.get("layer")}),
+            "ai_subtrack": ai,
+            "detail": (
+                f"the expert-track program wrote a report (verdict "
+                f"{blob['verdict']}), but its AI sub-track is {ai} with "
+                f"consumed={consumed}; creating a handoff or recording a "
+                f"zero is not a consumed expert review"),
+        }
     return {
         "state": "RAN" if n else "RAN_EMPTY",
         "wired": wired, "sidecar": None, "track_report": str(path),
@@ -287,7 +304,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     if rep["state"] == "NEVER_RAN" and not rep["wired"]:
         print("READ ANY ai_captured / expert-derived COUNT AS 'NOT MEASURED', "
               "NOT AS ZERO FINDINGS.")
-    if a.require_expert_track and rep["state"] in ("NEVER_RAN", "MALFORMED"):
+    if a.require_expert_track and rep["state"] in (
+            "NEVER_RAN", "INCOMPLETE", "MALFORMED"):
         return 1
     return 0
 

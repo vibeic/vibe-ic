@@ -262,21 +262,34 @@ def _satisfy_p0_ancestry(project: Path) -> Path:
     (rp / "extraction_coverage_report.json").write_text(
         json.dumps({"coverage_pct": 100}))
     # The 18th declared output. `phase1_expert_parse_track` writes this itself
-    # when it runs for real, but on this tree it signals VACUOUS_PASS and writes
-    # nothing, so a hand-staged Phase 1 has to stage it like the other 17.
+    # when it runs for real. Issue #1973 requires a non-empty expert answer
+    # before that execution is credited, so this closed-chain fixture stages
+    # both the answer consumed by the live gate and the matching report shape.
     # `phase1_expert_track_evidence_check` anticipates exactly that ("the flat
     # path is accepted too so a hand-staged project is not mistaken for a track
-    # that never ran"). `findings: []` + a verdict is its RAN_EMPTY shape — the
-    # track ran and genuinely found nothing — which is the honest thing for a
-    # fixture with no design content to claim. Anything less parses as
-    # MALFORMED, which would swap the staleness this repairs for a new one.
+    # that never ran"). The one expectation agrees with the synthetic L1 layer,
+    # so `findings: []` is a real RAN_EMPTY rather than an unanswered handoff.
     ra = project / "reports" / "audit" / "phase1"
     ra.mkdir(parents=True, exist_ok=True)
+    pack = ra / "expert_parse_track_pack"
+    pack.mkdir(parents=True, exist_ok=True)
+    (pack / "l_doc_expectations.json").write_text(json.dumps({
+        "expectations": [{
+            "id": "fixture::l1_schema",
+            "layer": "L1_DATASHEET",
+            "field_path": "schema",
+            "requirement": "the staged L1 schema identity",
+            "evidence": ["synthetic fixture stages L1_DATASHEET"],
+            "expected_tokens": ["L1_DATASHEET"],
+        }],
+    }))
     (ra / "expert_parse_track.json").write_text(json.dumps({
         "program": "phase1_expert_parse_track.py",
         "verdict": "PASS",
         "findings": [],
-        "ai_subtrack": {"status": "SKIPPED-CONDITION"},
+        "ai_subtrack": {"status": "CONSUMED"},
+        "ai_convergence": {"consumed": 1},
+        "denominator": {"deterministic": 0, "ai": 1, "total": 1},
         "generated_by": "test fixture",
     }))
     # The 19th declared output (#1348). Same reason as the 18th above: the
@@ -792,15 +805,15 @@ def test_wave93_vacuous_pass_step14_no_ys(tmp_path):
     assert "VACUOUS-PASS=" in r.stdout, r.stdout
 
 
-#: The steps that ARE vacuous on the `vac2` fixture below, measured
-#: 2026-07-28. Both are structural facts of the fixture, not incidental:
-#:   * Step 14 — the fixture ships no `.ys` synthesis script, so both yosys
-#:     auditors have nothing to audit.
-#:   * FS1     — the fixture's RTL declares no ECC/parity/lockstep mechanism,
-#:     so the FMEDA pair measures no diagnostic coverage.
+#: The steps that ARE vacuous on the `vac2` fixture below.  FS1 is a structural
+#: fact of the fixture: its RTL declares no ECC/parity/lockstep mechanism, so
+#: the FMEDA pair measures no diagnostic coverage.  Step 14 deliberately left
+#: this set in issue #1973: the fixture has no independent-expert answer, so D1
+#: is INCOMPLETE and downstream Step 14 is not credited merely because its
+#: absent `.ys` inputs would otherwise be vacuous.
 #: Pinned as a SET so that a step JOINING or LEAVING the vacuous tier is a
 #: named, deliberate edit here rather than an invisible drift.
-_VAC2_EXPECTED_VACUOUS_STEPS = {"14", "FS1"}
+_VAC2_EXPECTED_VACUOUS_STEPS = {"FS1"}
 
 
 def _labelled_step_ids(stdout: str, label: str) -> set:

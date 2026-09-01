@@ -115,9 +115,11 @@ def test_handoff_is_emitted_with_no_inline_llm_backend(tmp_path):
     While it could veto this path, the pack was never written — and a pack that
     is never written is a subagent that can never be invoked."""
     p = _project(tmp_path)
-    _run_track(p)
+    rc, out, _ = _run_track(p)
     rep = _report(p)
     assert rep["ai_subtrack"]["status"] == "HANDOFF_EMITTED"
+    assert rep["verdict"] == "INCOMPLETE" and rc == 1
+    assert "VACUOUS_PASS" not in out
     assert (_pack_dir(p) / "ic_expert_agent_handoff.json").is_file()
     # the SDK fact is not lost, only demoted from veto to record
     assert rep["ai_subtrack"]["inline_llm_backend"] is False
@@ -369,7 +371,7 @@ def test_an_ai_disagreement_reaches_the_live_evidence_consumer(tmp_path):
 
     quiet = _project(tmp_path, name="quiet")
     _run_track(quiet)
-    assert E.assess(quiet, _PROGRAMS)["state"] == "RAN_EMPTY"
+    assert E.assess(quiet, _PROGRAMS)["state"] == "INCOMPLETE"
 
     loud = _project(tmp_path, name="loud")
     _answer(loud, [{"id": "external_reference::REFHI", "layer": "L1_DATASHEET",

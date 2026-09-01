@@ -604,10 +604,10 @@ def _run_expert_track(project: Path) -> int:
     cp = _wd.completed_process(argv, res)
     for line in (cp.stdout or "").strip().splitlines():
         print(f"      {line}")
-    # 0 = ran, 2 = ran and nothing applied. Anything else — including a crash
-    # that never reached the program's own error path — is a track that did
-    # not complete.
-    if cp.returncode not in (0, 2):
+    # 0 = completed review. 1 can be either an honestly INCOMPLETE review or a
+    # crash, so the report below decides which. rc 2 is retained only as a
+    # defensive read of an older track binary; it cannot earn execution credit.
+    if cp.returncode not in (0, 1, 2):
         print(f"      expert track FAILED to complete (rc={cp.returncode}): "
               f"{(cp.stderr or '').strip().splitlines()[-1:] or ['(no detail)']}",
               file=sys.stderr)
@@ -617,12 +617,68 @@ def _run_expert_track(project: Path) -> int:
               "unknown, which is not the same as clean", file=sys.stderr)
         return 1
     try:
-        json.loads(report.read_text(errors="replace"))
+        evidence = json.loads(report.read_text(errors="replace"))
     except (OSError, ValueError) as exc:
         print(f"      ERROR: the expert-track report does not parse ({exc}) — "
               f"unreadable evidence is not evidence", file=sys.stderr)
         return 1
+    complete, detail = _expert_track_completion(evidence)
+    if not complete:
+        print(f"      INCOMPLETE: the Phase-1 expert answer was not consumed "
+              f"({detail}); creating a handoff or writing a zero-denominator "
+              f"report is not execution", file=sys.stderr)
+        return 1
+    if cp.returncode != 0:
+        print(f"      ERROR: the expert report says complete but the program "
+              f"exited {cp.returncode}; contradictory execution evidence "
+              f"cannot be credited", file=sys.stderr)
+        return 1
     return 0
+
+
+def _expert_track_completion(report: Any) -> Tuple[bool, str]:
+    """Whether a report proves a non-empty IC Expert answer was consumed.
+
+    Report existence is deliberately insufficient. Issue #1973 measured a
+    `HANDOFF_EMITTED` report with deterministic=0, AI=0 and consumed=0 that the
+    runner nevertheless called executed. Keep every required denominator here,
+    at the credit boundary, so a producer regression cannot recreate that pass.
+    """
+    if not isinstance(report, dict):
+        return False, "report top level is not an object"
+    ai = report.get("ai_subtrack")
+    convergence = report.get("ai_convergence")
+    denominator = report.get("denominator")
+    if not isinstance(ai, dict):
+        return False, "ai_subtrack evidence is absent"
+    status = ai.get("status", "UNKNOWN")
+    if status != "CONSUMED":
+        return False, f"ai_subtrack.status={status}"
+    if not isinstance(convergence, dict):
+        return False, "ai_convergence evidence is absent"
+    consumed = convergence.get("consumed")
+    if not isinstance(consumed, int) or isinstance(consumed, bool) or consumed < 1:
+        return False, f"ai_convergence.consumed={consumed!r}"
+    if not isinstance(denominator, dict):
+        return False, "denominator evidence is absent"
+    ai_den = denominator.get("ai")
+    total = denominator.get("total")
+    if ai_den != consumed or not isinstance(total, int) or total < consumed:
+        return False, (f"denominator.ai={ai_den!r}, total={total!r}, "
+                       f"consumed={consumed}")
+    return True, f"CONSUMED {consumed} expectation(s)"
+
+
+def _expert_track_summary(project: Path) -> str:
+    """Human-readable execution state for the runner's own summary JSON."""
+    report = _pl.report_path(project, "phase1/expert_parse_track.json")
+    try:
+        blob = json.loads(report.read_text(errors="replace"))
+    except (OSError, ValueError) as exc:
+        return f"INCOMPLETE — expert-track report unreadable ({exc})"
+    complete, detail = _expert_track_completion(blob)
+    return (f"consumed — {detail}" if complete else
+            f"INCOMPLETE — {detail}")
 
 
 # ── Step 0.5ic — the route declaration (both input modes) ──────────
@@ -860,8 +916,8 @@ def main() -> int:
             second_track = ("not run — D1 was REFUSED, so no L-doc exists for "
                             "the expert track to parse")
         else:
-            second_track = "ran"
             rc = run_phase1_second_track(project, rc)
+            second_track = _expert_track_summary(project)
         # The dispatcher always emits reports/phase1_one_shot.json so
         # callers / tests see a unified entry point regardless of mode.
         reports = project / "reports"
@@ -925,7 +981,8 @@ def main() -> int:
         "ic_name": args.ic_name,
         "steps": [asdict(s) for s in plan],
         "verdict": _aggregate_verdict(plan),
-        "second_track": "not run — D1 was REFUSED" if _refused else "ran",
+        "second_track": ("not run — D1 was REFUSED" if _refused else
+                         _expert_track_summary(project)),
         "step_0_5ic": "ran" if rc_route == 0 else "FAILED to run",
     }
     if _refused:

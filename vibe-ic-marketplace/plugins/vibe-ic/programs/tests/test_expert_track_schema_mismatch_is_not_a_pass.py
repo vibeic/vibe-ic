@@ -28,7 +28,7 @@ passed instead of refusing, which is what this repo's own
 an ordinary silent pass, because the answer EXISTED and was discarded.
 
 WHAT IS PINNED HERE
-  * a parsing-but-unexpected answer is REFUSED — never CONSUMED, never a PASS;
+  * a parsing-but-unexpected answer is INCOMPLETE — never CONSUMED, never a PASS;
   * the refusal names WHAT ARRIVED (the top-level keys present), so a reader
     can tell a schema mismatch from an empty answer;
   * `CONSUMED_EMPTY` (the agent really said nothing) is a DIFFERENT token from
@@ -49,6 +49,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import sys
 from pathlib import Path
 
@@ -58,6 +59,7 @@ if str(_PROGRAMS) not in sys.path:
 
 import phase1_expert_parse_track as T          # noqa: E402
 import _path_layout as _pl                     # noqa: E402
+from _hostpaths import require_repo            # noqa: E402
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import _progress_run as _pr  # noqa: E402
@@ -215,10 +217,10 @@ def test_an_answer_in_another_schema_is_refused_and_is_not_a_pass(tmp_path):
         "an answer this consumer could not read was recorded as consumed")
     assert "read 0 expectation(s)" not in ai["reason"], (
         "a discarded answer is described in the words of an empty one")
-    assert rc == 2, f"a refusal exited {rc}"
-    assert rep["verdict"] == "REFUSED"
+    assert rc == 1, f"an incomplete answer exited {rc}"
+    assert rep["verdict"] == "INCOMPLETE"
     # and it is PRINTED where a human sees it, not only filed
-    assert "REFUSED" in out
+    assert "INCOMPLETE" in out
     # only now the vocabulary itself
     assert ai["status"] == T.AI_SCHEMA_MISMATCH
     assert ai["status"] not in T.AI_READ_STATES, (
@@ -267,7 +269,7 @@ def test_a_genuinely_empty_answer_gets_its_own_token(tmp_path):
     assert rep["ai_subtrack"]["status"] != "CONSUMED", (
         "the two zeros still share one token")
     assert rep["verdict"] != "PASS", "a zero denominator passed"
-    assert rc == 2
+    assert rc == 1
     assert rep["ai_subtrack"]["status"] == T.AI_CONSUMED_EMPTY
     assert T.AI_CONSUMED_EMPTY != T.AI_SCHEMA_MISMATCH != T.AI_CONSUMED
     # it IS a reading — that is the difference from the refusal
@@ -283,10 +285,10 @@ def test_expectations_present_but_not_a_list_is_refused(tmp_path):
     rc, _, _ = _run_track(p)
     rep = _report(p)
 
-    assert rep["verdict"] != "PASS" and rc == 2
+    assert rep["verdict"] != "PASS" and rc == 1
     assert rep["ai_subtrack"]["status"] != "CONSUMED"
     assert rep["ai_subtrack"]["status"] == T.AI_SCHEMA_MISMATCH
-    assert rep["verdict"] == "REFUSED"
+    assert rep["verdict"] == "INCOMPLETE"
     # the refusal says what the type WAS, in the reader's own vocabulary
     assert "object" in rep["ai_subtrack"]["answer_schema_why"]
     assert "expectations" in rep["ai_subtrack"]["answer_top_level_keys"]
@@ -302,11 +304,11 @@ def test_a_top_level_array_answer_is_refused_not_a_crash(tmp_path):
     rc, _, err = _run_track(p)
     rep = _report(p)          # the report EXISTS — the track completed
 
-    assert rep["verdict"] != "PASS" and rc == 2
+    assert rep["verdict"] != "PASS" and rc == 1
     assert "did not complete" not in err
     assert rep["ai_subtrack"]["status"] == T.AI_SCHEMA_MISMATCH
     assert rep["ai_subtrack"]["answer_json_type"] == "array"
-    assert rep["verdict"] == "REFUSED"
+    assert rep["verdict"] == "INCOMPLETE"
 
 
 def test_the_refusal_outranks_a_completely_clean_deterministic_half(tmp_path):
@@ -338,8 +340,8 @@ def test_the_refusal_outranks_a_completely_clean_deterministic_half(tmp_path):
     assert rep["verdict"] != "PASS", (
         "a clean deterministic half plus a discarded answer still published a "
         "PASS — the status was corrected and the lie was not")
-    assert rc == 2
-    assert rep["verdict"] == "REFUSED"
+    assert rc == 1
+    assert rep["verdict"] == "INCOMPLETE"
     assert rep["denominator"]["deterministic"] > 0
     assert rep["ai_subtrack"]["status"] == T.AI_SCHEMA_MISMATCH
     assert rep["denominator"]["ai"] == 0, (
@@ -425,3 +427,111 @@ def test_a_zero_denominator_never_exits_zero(tmp_path):
         assert rep["verdict"] != "PASS", f"{name}: a zero denominator passed"
         assert "examined 0 expectation(s)" in out, out
         assert rep["examined_expectations"] == 0
+
+
+# ── issue #1973: handoff creation is not expert execution ─────────────────
+
+def test_an_unanswered_handoff_is_incomplete_never_a_vacuous_pass(tmp_path):
+    """THE #1973 guard. The pre-fix program already printed an INCOMPLETE
+    sentence, then contradicted it with `verdict=VACUOUS_PASS`; the runner
+    accepted rc 2 and credited the report as executed. Assert the producer's
+    actual value, not the presence of a newly-added field."""
+    p = _project(tmp_path)
+    rc, out, _ = _run_track(p)
+    rep = _report(p)
+
+    assert rep["ai_subtrack"]["status"] == "HANDOFF_EMITTED"
+    assert rep["verdict"] == "INCOMPLETE", rep
+    assert rc == 1
+    assert "INCOMPLETE:" in out
+    assert "VACUOUS_PASS" not in out
+    assert rep["examined_expectations"] == 0
+    assert rep["ai_convergence"]["consumed"] == 0
+
+
+def test_the_phase1_runner_does_not_credit_an_unanswered_handoff(tmp_path):
+    """End-to-end through the exact credit boundary that returned 0 before
+    #1973. A report existing is not enough; its non-zero consumption evidence
+    must be read by the runner."""
+    import phase1_one_shot_runner as R
+
+    p = _project(tmp_path)
+    assert R._run_expert_track(p) != 0
+    assert _report(p)["ai_subtrack"]["status"] == "HANDOFF_EMITTED"
+
+
+def test_the_runner_credits_a_consumed_evidence_linked_answer(tmp_path):
+    """Positive control: the fix must not make completion unreachable. A valid
+    expert answer is consumed, diffed, and its input evidence reaches the
+    named disagreement and non-zero ledgers."""
+    import phase1_one_shot_runner as R
+
+    p = _project(tmp_path)
+    _write_answer(p, {"expectations": [{
+        "id": "external_reference::REFHI",
+        "layer": "L1_DATASHEET",
+        "field_path": "fields.pinout",
+        "requirement": "a terminal for the external reference",
+        "evidence": ["input/docs/spec.md: external reference on REFHI"],
+        "expected_tokens": ["REFHI"],
+    }]})
+    assert R._run_expert_track(p) == 0
+    rep = _report(p)
+    assert rep["ai_subtrack"]["status"] == "CONSUMED"
+    assert rep["ai_convergence"]["consumed"] == 1
+    assert rep["denominator"]["ai"] == 1
+    assert rep["denominator"]["total"] >= 1
+    named = [f for f in rep["findings"]
+             if f["rule"].endswith("external_reference::REFHI")]
+    assert len(named) == 1
+    assert "input/docs/spec.md: external reference on REFHI" in named[0]["message"]
+
+
+def test_the_emitted_handoff_contains_input_contract_and_dispatch_instruction(
+        tmp_path):
+    """A production dispatch needs both an answer contract and the input it is
+    allowed to read. The command must consume the descriptor and rerun; merely
+    improving the refusal would leave every fresh Phase-1 run incomplete."""
+    p = _project(tmp_path)
+    out = tmp_path / "pack"
+    status = T.ai_subtrack(p, T.input_text(p), out)
+    handoff = json.loads((out / "ic_expert_agent_handoff.json").read_text())
+
+    assert status["status"] == "HANDOFF_EMITTED"
+    assert handoff["subagent_type"] == "vibe-ic:ic-expert-agent"
+    assert handoff["read_design_input_from"] == "design_input.txt"
+    assert (out / "design_input.txt").read_text() == T.input_text(p)
+    assert handoff["answer_contract"]["minimum_expectations"] == 1
+    assert handoff["answer_contract"]["shape"]["expectations"]
+
+    command = (_PROGRAMS.parent / "commands" / "vibe-ic-phase1.md").read_text()
+    assert "dispatch the exact `subagent_type`" in command
+    assert "Re-run the same `phase1_one_shot_runner.py`" in command
+    assert "ai_convergence.consumed >= 1" in command
+
+
+def test_a_real_checked_in_phase1_artifact_completes_with_a_valid_answer(
+        tmp_path):
+    """Real-artifact backing for the behavioural change. The source is copied
+    because the track writes reports; the expectation cites only a fact present
+    in the checked-in design input and compares it to the checked-in L-doc."""
+    source = require_repo(
+        "vibe-ic-marketplace", "plugins", "vibe-ic", "programs", "tests",
+        "fixtures", "stage_phase1_on_pass_review", "accept_espi")
+    p = tmp_path / "real_phase1"
+    shutil.copytree(source, p)
+    _write_answer(p, {"expectations": [{
+        "id": "timing::reset_pulse_width",
+        "layer": "L1_DATASHEET",
+        "field_path": "electrical_specs",
+        "requirement": "the input-stated minimum reset pulse width",
+        "evidence": ["input/docs: Reset pulse width minimum 100 us"],
+        "expected_tokens": ["100 us"],
+    }]})
+
+    rc, _, _ = _run_track(p)
+    rep = _report(p)
+    assert rc == 0
+    assert rep["verdict"] == "PASS"
+    assert rep["ai_convergence"] == {
+        "consumed": 1, "agreed": 1, "disagreed": 0, "undecidable": 0}

@@ -117,7 +117,9 @@ a new place, so the failure modes are pinned:
   * THE AI HALF HAS NOT READ — the sub-track reports `HANDOFF_EMITTED` (the
     pack is written, the subagent has not answered) and emits a NAMED FINDING
     saying so. It is in the findings list, printed, and in the report. It is
-    never absent, and never mistaken for "nothing to report".
+    never absent, and never mistaken for "nothing to report". The whole track
+    reports `INCOMPLETE` and exits non-zero: creating work for an expert is not
+    the same event as consuming the expert's answer (issue #1973).
     This state replaced `SKIPPED-CONDITION`, which named the wrong fact: the
     obstacle was never a missing LLM, it was that nobody had invoked the agent
     — and the old wording pointed a reader at a host capability instead of at
@@ -126,7 +128,7 @@ a new place, so the failure modes are pinned:
     runner treats a missing or unparseable report as a Phase-1 failure. So the
     findings are advisory, but running is not optional.
   * THE AI HALF ANSWERED IN A SHAPE THIS CONSUMER CANNOT READ — verdict
-    REFUSED, exit 2, a named finding, and the printed `INCOMPLETE:` sentinel.
+    INCOMPLETE, exit 1, a named finding, and the printed `INCOMPLETE:` sentinel.
     NOT `CONSUMED`, and under no combination of the other half's results a
     `PASS`. This state was previously invisible: `data.get("expectations")`
     followed by `exps if isinstance(exps, list) else []` mapped every
@@ -138,25 +140,22 @@ a new place, so the failure modes are pinned:
     discarded — worse than an ordinary silent pass, because the work was done.
     The refusal NAMES the top-level keys that did arrive, so a reader sees a
     schema mismatch and not an empty answer.
-  * NOTHING WAS DECIDED — exit 2 (VACUOUS_PASS) with the reason stated per
-    rule. Decided on the DENOMINATOR (`examined_expectations` — deterministic
-    expectations from applicable rules plus every converged AI one), not on
-    "did a rule apply": a rule can apply and produce no expectation, and the
-    AI half can answer with an empty list. Both are zero denominators, and a
-    zero denominator refuses rather than passes — this repo's own
-    `gate_zero_denominator_refuses_check`. A vacuous pass is a stated verdict,
-    not silence, and every verdict prints its denominator
-    (`gate_discloses_denominator_check`).
+  * NOTHING WAS DECIDED — verdict INCOMPLETE, exit 1, with the reason stated
+    per rule. Decided on the DENOMINATOR (`examined_expectations` —
+    deterministic expectations from applicable rules plus every converged AI
+    one), not on "did a rule apply": a rule can apply and produce no
+    expectation, and the AI half can answer with an empty list. Both are zero
+    denominators, and a zero denominator cannot complete the expert track —
+    this repo's own `gate_zero_denominator_refuses_check`.
 
-WHAT IS DELIBERATELY *NOT* CHANGED HERE
+EXECUTION CREDIT (issue #1973)
 ---------------------------------------
-REFUSED exits 2, not 1. `phase1_one_shot_runner._run_expert_track` treats any
-rc outside {0, 2} as "the track did not complete" and FAILS Phase 1 — so rc 1
-would abort the whole run on a malformed sidecar answer, which is a separate
-enforcement decision with its own blast radius, of the kind this file already
-records under `deferred_enforcement`. The track DID complete; what it refused
-is the answer. rc 2 keeps the runner contract and the `INCOMPLETE:` roll-up
-tier while making the verdict word impossible to read as a pass.
+The earlier runner contract accepted rc 2 as execution and reduced the whole
+question to "did a JSON report get written?". That credited
+`HANDOFF_EMITTED`, a schema-refused answer, and a genuinely empty answer as a
+completed expert track. They are now all `INCOMPLETE`, rc 1. Design findings
+remain advisory after a real answer is consumed; the existence and non-zero
+consumption of that answer are mandatory execution evidence.
 
 On NOT writing the AI-patch sidecar
 -----------------------------------
@@ -875,15 +874,19 @@ def evaluate(project: Path) -> Dict[str, Any]:
     # `gate_zero_denominator_refuses_check` exists to stop that from exiting 0.
     det_examined = sum(len(r["expectations"]) for r in applicable)
     examined = det_examined + len(converged)
-    if ai["status"] == AI_SCHEMA_MISMATCH:
-        # REFUSED OUTRANKS EVERYTHING, including a clean deterministic half.
-        # Half of a dual track refused to read an answer that exists; no
-        # top-line word on this run may imply it was examined. The
-        # deterministic findings are still listed and still printed — the
-        # refusal replaces the CLAIM of coverage, never the evidence.
-        verdict, rc = "REFUSED", 2
+    # EXECUTION outranks findings. Creating a handoff, refusing an answer,
+    # reading an empty answer, or failing to parse one are four different
+    # facts, but none is an expert reading with a non-zero denominator. Before
+    # #1973 the runner credited all of them because it accepted rc 2 and only
+    # checked that this report existed.
+    execution_complete = ai["status"] == AI_CONSUMED and len(converged) > 0
+    if not execution_complete:
+        verdict, rc = "INCOMPLETE", 1
     elif not examined:
-        verdict, rc = "VACUOUS_PASS", 2
+        # Defensive: AI_CONSUMED currently implies at least one converged
+        # expectation. Keep the zero-denominator refusal local so a future
+        # status change cannot manufacture a pass.
+        verdict, rc = "INCOMPLETE", 1
     elif findings:
         verdict, rc = "FINDINGS", 0
     else:
@@ -895,6 +898,13 @@ def evaluate(project: Path) -> Dict[str, Any]:
         "rc": rc,
         "blocking": False,
         "enforcement": "advisory (findings) / mandatory (execution)",
+        "execution": {
+            "complete": execution_complete,
+            "required_ai_status": AI_CONSUMED,
+            "required_ai_consumed_min": 1,
+            "observed_ai_status": ai["status"],
+            "observed_ai_consumed": len(converged),
+        },
         "retrieved_expert_classes": retrieved_classes(prompt),
         # A PASS must say how much it looked at. This is that number, split by
         # half so a reader can see WHICH half contributed it — a total of 4
@@ -986,33 +996,16 @@ def main(argv=None) -> int:
               file=sys.stderr)
         return 1
 
-    if rep["verdict"] == "REFUSED":
+    if rep["verdict"] == "INCOMPLETE":
         # The `INCOMPLETE:` sentinel is the house mechanism (#599) for "not
-        # audited, and someone must come back" — deliberately reused rather
-        # than inventing a token the roll-up would not recognise. It must never
-        # print `PASS`: an answer that exists and was not read is the one state
-        # where a passing word would be a lie about work that was actually done.
-        keys = rep["ai_subtrack"].get("answer_top_level_keys") or []
-        print(f"INCOMPLETE: {PROGRAM} — REFUSED: the AI sub-track's answer "
-              f"file exists and parses but is not this consumer's schema "
-              f"(top-level key(s) present: {keys if keys else '(none)'}); it "
-              f"was NOT read, so the expert expectation it carries was NOT "
-              f"examined")
-    if rep["verdict"] == "VACUOUS_PASS":
-        # vibe-ic#599 D1. Two different things reached this line. No expert
-        # expectation applying is vacuous — nobody needs to come back to it.
-        # The AI sub-track never delivering a reading is NOT: the input was
-        # applicable, the gate wrote a handoff pack, and it said in writing
-        # that its own findings are "a floor, not coverage". Reporting that as
-        # "input not applicable" is the step being credited for work nobody did.
-        if rep["ai_subtrack"]["status"] != "CONSUMED":
-            print(f"INCOMPLETE: {PROGRAM} — the AI sub-track did not deliver a "
-                  f"reading ({rep['ai_subtrack']['status']}), so the expert "
-                  f"expectation was NOT examined; the deterministic findings "
-                  f"are a floor, not coverage")
-        else:
-            print(f"VACUOUS_PASS: {PROGRAM} — no expert expectation applies to "
-                  f"this design")
+        # audited, and someone must come back". Name the exact state: a handoff
+        # is actionable, a schema mismatch is a refused answer, and an empty
+        # answer is a measured zero; none is completed execution.
+        ai = rep["ai_subtrack"]
+        print(f"INCOMPLETE: {PROGRAM} — the AI sub-track did not deliver a "
+              f"non-empty schema-readable review ({ai['status']}): "
+              f"{ai['reason']} The expert answer was NOT credited as consumed; "
+              f"the deterministic findings are a floor, not coverage")
     den = rep["denominator"]
     print(f"{PROGRAM}: {rep['verdict']} — examined "
           f"{den['total']} expectation(s) "

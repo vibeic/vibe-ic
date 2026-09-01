@@ -205,9 +205,36 @@ def assemble(prompt: str, iface: Optional[List[Dict[str, Any]]], target: Optiona
         # Phase-1 expectation authors compare generated L-docs. State the
         # generated schema explicitly: source documents may use different
         # historical layer numbers, but the generated contract does not.
+        # The pack must also carry the INPUT it asks the agent to review. The
+        # old descriptor named an output and two lesson digests but did not
+        # contain the design input, so an orchestrator could dispatch it only
+        # by inventing another, undocumented read surface (#1973).
+        input_name = "design_input.txt"
+        (out_dir / input_name).write_text(prompt)
+        handoff["read_design_input_from"] = input_name
         handoff["generated_layer_contract"] = {
             "L9": "integration specification",
             "L19": "constraints and implementation context",
+        }
+        handoff["answer_contract"] = {
+            "schema": "vibeic.phase1-expert-expectations.v1",
+            "minimum_expectations": 1,
+            "shape": {
+                "expectations": [{
+                    "id": "stable rule-and-subject identifier",
+                    "layer": "generated L-layer name",
+                    "field_path": "optional field path",
+                    "requirement": "what the input requires the layer to carry",
+                    "evidence": ["input-only evidence supporting the expectation"],
+                    "expected_tokens": ["one or more tokens to compare"],
+                }],
+            },
+            "rules": [
+                "read only design_input.txt plus the two expert digests",
+                "never read an oracle, harness, golden artifact, or hidden answer",
+                "write the JSON object to l_doc_expectations.json",
+                "an empty expectations list is incomplete, not a completed review",
+            ],
         }
     (out_dir / "ic_expert_agent_handoff.json").write_text(
         json.dumps(handoff, indent=2, ensure_ascii=False))

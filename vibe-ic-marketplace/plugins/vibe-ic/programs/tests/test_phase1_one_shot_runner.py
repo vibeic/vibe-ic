@@ -81,6 +81,23 @@ def _stage_prompt(project: Path) -> None:
         "# a 4-bit up counter with a synchronous reset\n")
 
 
+def _stage_expert_answer(project: Path) -> None:
+    """The independent IC Expert reading required for a completed D1 run."""
+    out = (project / "reports" / "audit" / "phase1" /
+           "expert_parse_track_pack")
+    out.mkdir(parents=True, exist_ok=True)
+    (out / "l_doc_expectations.json").write_text(json.dumps({
+        "expectations": [{
+            "id": "identity::declared_name",
+            "layer": "L1_DATASHEET",
+            "field_path": "ic_name",
+            "requirement": "the caller-stated IC name",
+            "evidence": ["runner argument: --ic-name TST_CHIP"],
+            "expected_tokens": ["TST_CHIP"],
+        }],
+    }))
+
+
 def test_empty_fixture_is_blocked_not_a_pass(tmp_path):
     """WAS `test_skip_empty_fixture`, and the rename is the finding.
 
@@ -121,6 +138,7 @@ def test_reverse_one_staged_input_and_the_same_run_completes(tmp_path):
     project = tmp_path / "proj"
     project.mkdir(parents=True, exist_ok=True)
     _stage_prompt(project)
+    _stage_expert_answer(project)
     cp = _run([str(project), "--ic-name", "TST_CHIP", "--mode", "prompt"],
               timeout=_RUN_TIMEOUT_S)
     assert cp.returncode == 0, cp.stderr
@@ -148,6 +166,7 @@ def test_integration_report_shape(tmp_path):
     # longer does, and measuring report shape on a refusal would be measuring a
     # different thing.
     _stage_prompt(project)
+    _stage_expert_answer(project)
     cp = _run([str(project), "--ic-name", "TST_CHIP", "--mode", "prompt"],
               timeout=_RUN_TIMEOUT_S)
     assert cp.returncode == 0
