@@ -193,6 +193,7 @@ def test_resume_jobs_overlap_but_coordinator_writes_worklists_in_solve_order(
     run = tmp_path / "resume"
     _write_resume_fixture(run)
     intervals: dict[str, tuple[float, float]] = {}
+    argv_by_id: dict[str, list[str]] = {}
     interval_lock = threading.Lock()
 
     def fake_run(argv, *args, **kwargs):
@@ -202,6 +203,7 @@ def test_resume_jobs_overlap_but_coordinator_writes_worklists_in_solve_order(
         finished = time.monotonic()
         with interval_lock:
             intervals[pid] = (started, finished)
+            argv_by_id[pid] = list(argv)
         return SimpleNamespace(returncode=1)
 
     monkeypatch.setattr(bd.subprocess, "run", fake_run)
@@ -211,6 +213,10 @@ def test_resume_jobs_overlap_but_coordinator_writes_worklists_in_solve_order(
 
     assert bd.cmd_resume("rtllm", "/unused", str(run), jobs=2) == 2
     assert _overlap(intervals["p1"], intervals["p2"])
+    for pid in ("p1", "p2"):
+        argv = argv_by_id[pid]
+        assert argv[argv.index("--entry-step") + 1] == "2", argv
+        assert argv[argv.index("--exit-step") + 1] == "8", argv
     repairs = bd._read_jsonl(run / bd._REPAIR_WORKLIST)
     assert [row["id"] for row in repairs] == ["p1", "p2"]
     assert [row["id"] for row in bd._read_jsonl(
