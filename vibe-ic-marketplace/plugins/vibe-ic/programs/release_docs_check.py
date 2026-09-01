@@ -55,6 +55,9 @@ exists:
   R6  a shipped-view digest in the deliverables manifest disagrees with the file
   R7  the manifest's derived / NOT_MEASURED counts disagree with a recount
   R8  an unresolved placeholder survived into a shipped document
+  R9  a chip-path artefact the documents describe is hollow
+  R10 two sections of one document state different test-mode counts from the
+      same source artefact
 
 R3 AND R6 ARE THE TWO THAT CANNOT BE SATISFIED BY WRITING PROSE. A hand-typed
 pin count and a stale digest are the two ways a document goes quietly wrong
@@ -209,6 +212,13 @@ def constraint_ids(text: str) -> Dict[str, str]:
     return out
 
 
+TEST_MODE_LABEL = "Declared test modes"
+TEST_MODE_CLAIM_RE = re.compile(
+    r"\b(?P<count>\d+)\s+test mode\(s\)(?!\w)")
+CONSTRAINT_SOURCE_RE = re.compile(
+    r"\(derived from `(?P<source>[^`]+)`\)\s*$")
+
+
 # ── the checks ─────────────────────────────────────────────────────────────
 def _check_sections(spec, document: str, text: str, release: str,
                     findings: List[Finding]) -> None:
@@ -317,6 +327,57 @@ def _check_app_notes(arm: str, texts: Dict[str, str], release: str,
                 f"optional and is the first document dropped from a delivery; "
                 f"a constraint that lives only there is one the release does "
                 f"not carry."))
+    return checked
+
+
+def _check_source_count_consistency(
+        texts: Dict[str, str], rows: Sequence[Row], release: str,
+        findings: List[Finding]) -> int:
+    """R10 — one document cannot give one source two test-mode counts.
+
+    This is deliberately source-scoped and document-scoped.  Two unrelated
+    artefacts can legitimately count different things, and two documents can
+    present different subsets.  What cannot be true is the issue-#1990 shape:
+    one section says six test modes and another says zero, both claiming the
+    same ``L7_TEST_DEBUG.json`` as their authority.
+    """
+    stated: Dict[Tuple[str, str], Tuple[Row, int]] = {}
+    for row in rows:
+        if row.label != TEST_MODE_LABEL or row.value == NOT_MEASURED:
+            continue
+        source_match = SOURCE_PATH_RE.search(row.third)
+        if source_match is None:
+            continue
+        try:
+            count = int(row.value)
+        except ValueError:
+            continue
+        stated[(row.document, source_match.group(1))] = (row, count)
+
+    checked = 0
+    for document, text in texts.items():
+        for line in text.splitlines():
+            mandatory = MANDATORY_RE.match(line)
+            count_match = TEST_MODE_CLAIM_RE.search(line)
+            source_match = CONSTRAINT_SOURCE_RE.search(line)
+            if mandatory is None or count_match is None or source_match is None:
+                continue
+            source = source_match.group("source")
+            peer = stated.get((document, source))
+            if peer is None:
+                continue
+            checked += 1
+            row, row_count = peer
+            constraint_count = int(count_match.group("count"))
+            if constraint_count == row_count:
+                continue
+            findings.append(Finding(
+                "SOURCE_COUNT_INCONSISTENT", "ERROR", release,
+                f"{document} states {constraint_count} test mode(s) in "
+                f"mandatory constraint `{mandatory.group('id')}`, while its "
+                f"'{row.label}' row states {row_count}; both claim "
+                f"`{source}` as their derivation source. Sections of one "
+                f"document cannot disagree about the same source artefact."))
     return checked
 
 
@@ -821,6 +882,8 @@ def check_release(project: Path, arm: str, release_dir: Path,
 
     derived, holes = _check_rows(project, rows, release, findings)
     constraints_checked = _check_app_notes(arm, texts, release, findings)
+    source_counts_checked = _check_source_count_consistency(
+        texts, rows, release, findings)
     # BOTH ARMS NOW, and the `arm == "ip"` guard that stood here is the defect
     # it removed: the IC arm carried the same three interface rows and NOTHING
     # re-derived any of them, so a hand-edited chip pin count was believed.
@@ -846,6 +909,7 @@ def check_release(project: Path, arm: str, release_dir: Path,
         "not_measured_fields": holes,
         "rows_examined": len(rows),
         "mandatory_constraints_in_app_notes": constraints_checked,
+        "same_source_count_comparisons": source_counts_checked,
         "shipped_digests_recomputed": digests,
         "source_digests_recomputed": source_digests,
         "placeholders": placeholders,
@@ -950,6 +1014,7 @@ def run_audit(project: Path, arm: str) -> Result:
                             "documents_present": [], "derived_fields": 0,
                             "not_measured_fields": 0, "rows_examined": 0,
                             "mandatory_constraints_in_app_notes": 0,
+                            "same_source_count_comparisons": 0,
                             "shipped_digests_recomputed": 0,
                             "source_digests_recomputed": 0, "placeholders": 0,
                             "pin_count_cross_check": "NOT_STATED",
@@ -976,6 +1041,8 @@ def run_audit(project: Path, arm: str) -> Result:
         "rows_examined": sum(d["rows_examined"] for d in details),
         "derived_fields": sum(d["derived_fields"] for d in details),
         "not_measured_fields": sum(d["not_measured_fields"] for d in details),
+        "same_source_count_comparisons": sum(
+            d["same_source_count_comparisons"] for d in details),
         "releases": details,
         "verdict_tier": result.verdict_tier,
         "pass": result.passed,

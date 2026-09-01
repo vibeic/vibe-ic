@@ -245,6 +245,43 @@ def test_the_application_note_never_originates_a_mandatory_constraint(tmp_path):
     assert note <= bearing, f"only in the note: {sorted(note - bearing)}"
 
 
+def test_issue_1990_test_access_comes_from_the_delivered_dft_interface(tmp_path):
+    """Scenario count must never be relabelled as a packaged-part test mode."""
+    project = build_project(tmp_path / "p", releases=(SUBJECT,))
+    l7_path = project / "phase1" / "generated_docs" / "L7_TEST_DEBUG.json"
+    l7 = json.loads(l7_path.read_text(encoding="utf-8"))
+    l7["test_modes"] = []
+    l7["test_scenarios"] = [
+        {"name": f"scenario_{index}"} for index in range(6)
+    ]
+    l7_path.write_text(json.dumps(l7, indent=2), encoding="utf-8")
+
+    scan_path = project / "reports" / "phase2" / "dft" / "scan_chain.json"
+    scan_path.parent.mkdir(parents=True, exist_ok=True)
+    scan_path.write_text(json.dumps({
+        "published": True,
+        "dft_ports": ["clk", "rst_n", "dout"],
+    }, indent=2), encoding="utf-8")
+
+    result = run(project)
+    assert result.returncode == RC_PASS, result.stdout + result.stderr
+    out = docs_dir(project)
+    datasheet = (out / "PRELIMINARY_DATASHEET.md").read_text(encoding="utf-8")
+    note = (out / "AN001_TYPICAL_APPLICATION.md").read_text(encoding="utf-8")
+    manual = (out / "USER_REFERENCE_MANUAL.md").read_text(encoding="utf-8")
+    manifest = (out / MANIFEST_NAME).read_text(encoding="utf-8")
+
+    for text in (datasheet, note):
+        assert "6 test mode(s)" not in text
+        assert "3 DFT interface pin(s)" in text
+        for pin in ("clk", "rst_n", "dout"):
+            assert f"`{pin}`" in text
+        assert "`reports/phase2/dft/scan_chain.json`" in text
+        assert f"`{DEF_REL}`" in text
+    assert "| Declared test modes | 0 | " in manual
+    assert "path: \"reports/phase2/dft/scan_chain.json\"" in manifest
+
+
 # ═══════ the refusals — one artefact class each, metrics CLEAN throughout ═══
 #: (case id, the rule the refusal must name, how to plant it)
 HOLLOW = [

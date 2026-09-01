@@ -92,6 +92,7 @@ from _release_docs_build import (
     Constraint,
     Field,
     constraint_body,
+    delivered_dft_access_constraint,
     identity,
     layer,
     layer_count,
@@ -386,7 +387,7 @@ def constraints_for(project: Path, kit: Kit) -> List[Constraint]:
     """Every mandatory integration constraint this run's artefacts support."""
     out: List[Constraint] = []
     lef_rel = kit.rel(".lef")
-    _signal, pg = _pin_sets(kit)
+    signal, pg = _pin_sets(kit)
 
     if lef_rel and pg:
         pins = ", ".join(f"`{p}`" for p in sorted(pg))
@@ -436,15 +437,18 @@ def constraints_for(project: Path, kit: Kit) -> List[Constraint]:
             f"integrating design must satisfy",
             l19_rel))
 
-    l7, l7_rel = layer(project, "L7_TEST_DEBUG")
-    modes = _list_under(l7, ("test_modes", "test_scenarios"))
-    if modes:
-        out.append(Constraint(
-            "TEST-ACCESS",
-            f"this IP declares {len(modes)} test mode(s); the integrating "
-            f"design must route their control and observation somewhere a "
-            f"tester can reach, or the IP cannot be tested in place",
-            l7_rel))
+    if lef_rel:
+        test_access = delivered_dft_access_constraint(
+            project,
+            sorted(signal),
+            lef_rel,
+            "macro",
+            "the integrating design must route their control and observation "
+            "somewhere a tester can reach, or the IP cannot be tested in "
+            "place",
+        )
+        if test_access is not None:
+            out.append(test_access)
 
     return out
 
@@ -593,7 +597,7 @@ def integration_guide(rel: Release) -> Tuple[str, List[Field]]:
     ]
     test = [
         layer_count(rel.project, "L7_TEST_DEBUG", "Declared test modes",
-                    ("test_modes", "test_scenarios")),
+                    ("test_modes",)),
         layer_count(rel.project, "L7_TEST_DEBUG", "Declared debug observability",
                     ("debug_observability",)),
     ]
@@ -908,6 +912,7 @@ def emit(project: Path, out_dir: Path, kit: Kit,
         all_fields.extend(fields)
 
     sources = sorted({f.source for f in all_fields if f.measured}
+                     | {constraint.source for constraint in rel.constraints}
                      | {_rel_str(project, p) for p in kit.views.values()})
     atomic_write_text(out_dir / MANIFEST_NAME,
                       manifest_yaml(rel, written, all_fields, sources))

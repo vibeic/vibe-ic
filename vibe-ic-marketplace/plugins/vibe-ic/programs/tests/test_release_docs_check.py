@@ -295,7 +295,7 @@ def test_a_constraint_dropped_from_the_guide_but_left_in_the_note_is_refused(tmp
     project = released(tmp_path)
     guide = docs_dir(project, SUBJECT) / "IP_INTEGRATION_GUIDE.md"
     kept = [line for line in guide.read_text(encoding="utf-8").splitlines()
-            if "`TEST-ACCESS`" not in line]
+            if "`PLACEMENT-OUTLINE`" not in line]
     guide.write_text("\n".join(kept) + "\n", encoding="utf-8")
 
     result, data = report(project)
@@ -307,6 +307,33 @@ def test_a_constraint_dropped_from_the_guide_but_left_in_the_note_is_refused(tmp
 def test_a_constraint_restated_in_both_places_passes(tmp_path):
     """Restating is the AN's job. The rule must not refuse the correct case."""
     project = released(tmp_path)
+    assert check(project).returncode == RC_PASS
+
+
+def test_issue_1990_same_source_test_mode_disagreement_is_refused(tmp_path):
+    """Two sections may not state different counts from the same artefact."""
+    project = released(tmp_path)
+    guide = docs_dir(project, SUBJECT) / "IP_INTEGRATION_GUIDE.md"
+    source = "phase1/generated_docs/L7_TEST_DEBUG.json"
+    line = (
+        "- **MANDATORY** `TEST-MODE-CONSISTENCY-PROBE` — this IP declares "
+        f"6 test mode(s) (derived from `{source}`)"
+    )
+    guide.write_text(
+        guide.read_text(encoding="utf-8").rstrip() + "\n" + line + "\n",
+        encoding="utf-8")
+
+    result, data = report(project)
+    assert result.returncode == RC_FAIL, result.stdout + result.stderr
+    assert rules_for(data, SUBJECT) == {"SOURCE_COUNT_INCONSISTENT"}
+    message = next(f["message"] for f in data["findings"]
+                   if f["rule"] == "SOURCE_COUNT_INCONSISTENT")
+    assert "IP_INTEGRATION_GUIDE.md" in message
+    assert "6 test mode(s)" in message and "1" in message
+    assert source in message
+    assert verdict_of(data, CONTROL) is True
+
+    edit(guide, "6 test mode(s)", "1 test mode(s)")
     assert check(project).returncode == RC_PASS
 
 

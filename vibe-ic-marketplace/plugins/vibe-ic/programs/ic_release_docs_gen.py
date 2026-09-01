@@ -104,6 +104,7 @@ from _release_docs_build import (
     Constraint,
     Field,
     constraint_body,
+    delivered_dft_access_constraint,
     identity,
     layer,
     layer_count,
@@ -369,15 +370,17 @@ def constraints_for(project: Path, audit: _art.ArtefactAudit) -> List[Constraint
             f"its power intent states",
             l21_rel))
 
-    l7, l7_rel = layer(project, "L7_TEST_DEBUG")
-    modes = _list_under(l7, ("test_modes", "test_scenarios"))
-    if modes:
-        out.append(Constraint(
-            "TEST-ACCESS",
-            f"this design declares {len(modes)} test mode(s); their control "
-            f"and observation must be reachable on the assembled part, or the "
-            f"part cannot be tested after packaging",
-            l7_rel))
+    signal_pins = def_state.facts.get("signal_pin_names") or []
+    test_access = delivered_dft_access_constraint(
+        project,
+        signal_pins,
+        def_state.source(),
+        "die",
+        "their control and observation must be reachable on the assembled "
+        "part, or the part cannot be tested after packaging",
+    )
+    if test_access is not None:
+        out.append(test_access)
 
     l19, l19_rel = layer(project, "L19_CONSTRAINTS_PDK")
     hints = _list_under(l19, ("floorplan_hints", "physical_constraints"))
@@ -543,7 +546,7 @@ def user_reference_manual(rel: Release) -> Tuple[str, List[Field]]:
         layer_text(rel.project, "L8_TIMING_WAVEFORM", "Clock and reset",
                    ("clock_and_reset_waveform", "general_timing_rule")),
         layer_count(rel.project, "L7_TEST_DEBUG", "Declared test modes",
-                    ("test_modes", "test_scenarios")),
+                    ("test_modes",)),
     ]
     every = ident + counts + [base] + sequences
     doc, rel_path = layer(rel.project, "L4_REGMAP")
@@ -752,6 +755,7 @@ def emit(project: Path, out_dir: Path, name: str,
 
     artefact_paths = {p for state in audit.classes for p in state.paths}
     sources = sorted({f.source for f in all_fields if f.measured}
+                     | {constraint.source for constraint in rel.constraints}
                      | artefact_paths)
     atomic_write_text(out_dir / MANIFEST_NAME,
                       manifest_yaml(rel, written, all_fields, sources))

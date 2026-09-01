@@ -69,6 +69,12 @@ PROJECT_JSON = "input/project.json"
 DESIGN_KEYS = ("design", "design_name", "top", "top_module")
 PDK_KEYS = ("pdk", "target_pdk", "pdk_target")
 
+#: The Phase-2 producer's published record of the scan interface it added.
+#: A verification scenario is deliberately not an alternative source: a
+#: scenario says what verification ran, not which test access the delivered
+#: physical interface exposes.
+DFT_SCAN_RECORD = "reports/phase2/dft/scan_chain.json"
+
 
 # ── the field model ────────────────────────────────────────────────────────
 @dataclass(frozen=True)
@@ -405,6 +411,50 @@ def constraint_body(constraints: Sequence[Constraint], nothing: str) -> str:
     if not constraints:
         return nothing
     return "\n".join(c.line() for c in constraints)
+
+
+def delivered_dft_access_constraint(
+        project: Path,
+        delivered_pins: Sequence[str],
+        delivered_interface_source: str,
+        subject: str,
+        obligation: str) -> Optional[Constraint]:
+    """The test access actually exposed by a delivered LEF/DEF interface.
+
+    ``fault_scan_chain_insert`` is the authority for which pins it added, and
+    its record is publishable only when ``published`` is true.  The delivered
+    interface is a second, independent condition: a DFT pin named in an
+    insertion report but absent from the LEF/DEF is not access an integrator or
+    package can reach, so it is not claimed here.
+
+    ``L7_TEST_DEBUG.test_scenarios`` is intentionally absent.  Scenarios are
+    verification plans and can outnumber, undernumber, or reuse physical test
+    controls; treating their length as an interface count caused issue #1990.
+    """
+    record = read_json(project / DFT_SCAN_RECORD)
+    if not record or record.get("published") is not True:
+        return None
+    raw_ports = record.get("dft_ports")
+    if not isinstance(raw_ports, list):
+        return None
+
+    declared = {value.strip() for value in raw_ports
+                if isinstance(value, str) and value.strip()}
+    delivered = {value.strip() for value in delivered_pins
+                 if isinstance(value, str) and value.strip()}
+    exposed = sorted(declared & delivered)
+    if not exposed:
+        return None
+
+    names = ", ".join(f"`{name}`" for name in exposed)
+    return Constraint(
+        "TEST-ACCESS",
+        f"the delivered {subject} exposes {len(exposed)} DFT "
+        f"interface pin(s) ({names}) named by the published scan-insertion "
+        f"record and present in the delivered interface "
+        f"`{delivered_interface_source}`; {obligation}",
+        DFT_SCAN_RECORD,
+    )
 
 
 def yaml_str(value: str) -> str:
