@@ -2016,6 +2016,10 @@ class _Phase1PlainSpecGather:
     text: str
     sources: Tuple[str, ...]
     refusal: Optional[Dict[str, str]] = None
+    #: Sources whose bytes were already gathered under another path. Their
+    #: content DID contribute (via the copy that survived), so provenance must
+    #: name them or an auditor sees an unexplained gap vs the input tree.
+    deduped_sources: Tuple[str, ...] = ()
 
 
 def _phase1_plain_spec_gather_refusal(
@@ -2050,6 +2054,7 @@ def _gather_phase1_plain_spec_text(
     project = Path(project)
     chunks: List[str] = []
     sources: List[str] = []
+    deduped_sources: List[str] = []
     # Byte-identical operator files (the prompt bridged into input_doc/ under a
     # second name, a doc staged twice) must contribute their text ONCE — the
     # "\n\n".join below otherwise doubles every restated interface and the
@@ -2176,7 +2181,12 @@ def _gather_phase1_plain_spec_text(
             _chunk_sha = hashlib.sha256(
                 _chunk_text.encode("utf-8")).hexdigest()
             if _chunk_sha in seen_content_sha256:
-                continue    # byte-identical to an already-gathered source
+                # byte-identical to an already-gathered source; recorded so the
+                # provenance ledger explains why this input file is absent from
+                # ``sources``.
+                deduped_sources.append(
+                    str(source_rel / path.relative_to(allowed_root)))
+                continue
             seen_content_sha256.add(_chunk_sha)
             chunks.append(_chunk_text)
             sources.append(str(source_rel / path.relative_to(allowed_root)))
@@ -2184,7 +2194,8 @@ def _gather_phase1_plain_spec_text(
             project_binding.require_current()
     if project_binding is not None:
         project_binding.require_current()
-    return _Phase1PlainSpecGather("\n\n".join(chunks), tuple(sources))
+    return _Phase1PlainSpecGather("\n\n".join(chunks), tuple(sources),
+                                  deduped_sources=tuple(deduped_sources))
 
 
 def _phase1_plain_spec_refusal_result(
@@ -3882,6 +3893,7 @@ def _try_phase1_behavioral_fsm_rtl_bound(
         return _phase1_plain_spec_refusal_result(t0, gathered.refusal)
     desc = gathered.text
     sources = list(gathered.sources)
+    deduped_sources = list(gathered.deduped_sources)
     if not desc:
         return None
     module = _phase1_declared_module_name(desc)
@@ -3923,7 +3935,8 @@ def _try_phase1_behavioral_fsm_rtl_bound(
                     "artifact_type": kind, "module": module,
                     "program_first": True,
                     "spec_source": "phase1_plain_prose",
-                    "spec_sources": sources, "idempotent": True,
+                    "spec_sources": sources,
+                    "spec_deduped_sources": deduped_sources, "idempotent": True,
                     "rtl_provenance": "session_owned"})
     project_binding.require_current()
     verdict, why, evidence = _rtl_prov.classify(project)
@@ -3946,7 +3959,8 @@ def _try_phase1_behavioral_fsm_rtl_bound(
                         "artifact_type": kind, "module": module,
                         "program_first": True,
                         "spec_source": "phase1_plain_prose",
-                        "spec_sources": sources, "idempotent": True,
+                        "spec_sources": sources,
+                    "spec_deduped_sources": deduped_sources, "idempotent": True,
                         "rtl_provenance": verdict,
                         "rtl_provenance_evidence": evidence})
         # The provenance ledger's deletion contract says removal alone is not
@@ -3989,6 +4003,7 @@ def _try_phase1_behavioral_fsm_rtl_bound(
                                 "program_first": True,
                                 "spec_source": "phase1_plain_prose",
                                 "spec_sources": sources,
+                    "spec_deduped_sources": deduped_sources,
                                 "restored_missing_primary": True,
                                 "rtl_provenance": verdict,
                                 "rtl_provenance_evidence": evidence})
@@ -4024,6 +4039,7 @@ def _try_phase1_behavioral_fsm_rtl_bound(
                                 "program_first": True,
                                 "spec_source": "phase1_plain_prose",
                                 "spec_sources": sources,
+                    "spec_deduped_sources": deduped_sources,
                                 "restored_missing_primary": False,
                                 "rtl_provenance": verdict,
                                 "rtl_provenance_evidence": evidence})
@@ -4079,6 +4095,7 @@ def _try_phase1_behavioral_fsm_rtl_bound(
                     "program_first": True,
                     "spec_source": "phase1_plain_prose",
                     "spec_sources": sources,
+                    "spec_deduped_sources": deduped_sources,
                     "rtl_provenance": _rtl_prov.GENERATED})
         publication.require_current_chain()
         _claim_rtl_session(project)
@@ -4106,7 +4123,8 @@ def _try_phase1_behavioral_fsm_rtl_bound(
                     "artifact_type": kind, "module": module,
                     "program_first": True,
                     "spec_source": "phase1_plain_prose",
-                    "spec_sources": sources, "write_performed": False,
+                    "spec_sources": sources,
+                    "spec_deduped_sources": deduped_sources, "write_performed": False,
                     "rtl_provenance": verdict,
                     "rtl_provenance_evidence": evidence})
     finally:

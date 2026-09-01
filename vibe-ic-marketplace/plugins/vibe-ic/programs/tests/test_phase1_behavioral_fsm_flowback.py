@@ -162,6 +162,7 @@ def test_plain_phase1_prose_emits_behavioral_fsm(tmp_path, source):
         "program_first": True,
         "spec_source": "phase1_plain_prose",
         "spec_sources": [f"phase1/{source}/design.md"],
+        "spec_deduped_sources": [],
         "rtl_provenance": "generated",
     }
     out = project / "phase2" / "stage1" / "rtl" / "TopModule.v"
