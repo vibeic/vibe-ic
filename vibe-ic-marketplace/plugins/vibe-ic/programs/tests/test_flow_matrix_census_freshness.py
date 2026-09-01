@@ -139,8 +139,8 @@ def test_the_census_block_is_present_and_marked_generated():
 #: test_flow_matrix_coverage` resolves to it instead of importing the real one
 #: — the same interception `test_blocker_list_report_contract` uses to put a
 #: program under test on a known input. Everything else is the real generator:
-#: `_load`, `census_rows`, `render`, `splice`, `main`, the partition guard and
-#: the exit codes.
+#: `_load`, `census_rows_with_record`, `render`, `splice`, `main`, the partition
+#: guard and the exit codes.
 _CLI_PROBE = r"""
 import runpy
 import sys
@@ -169,6 +169,21 @@ def enforcement_census():
                                 ("3", "NA"))}
 
 
+def enforcement_census_with_record():
+    # THE SEAM THE GENERATOR ACTUALLY CALLS (vibe-ic#2004). A stub that stands
+    # in for the coverage module owes the generator its WHOLE contract, and
+    # this one did not: the generator moved to `(census, foreign reds)` and
+    # this probe kept offering only the census, so every arm below died with
+    # an AttributeError that read like a generator defect. The empty tuple is
+    # the RECORD case, which is what this probe is about — the red and green
+    # directions of `--check`, never NORECORD.
+    return enforcement_census(), ()
+
+
+def norecord_foreign_red_reason(foreign_reds):
+    return "stub NORECORD: %r" % (list(foreign_reds)[:8],)
+
+
 def substitution_census():
     from flow_matrix import substitution as SUB
     return {("1", dim): SUB.OWN_MECHANISM for dim in _dims()}
@@ -176,6 +191,8 @@ def substitution_census():
 
 stub = types.ModuleType("test_flow_matrix_coverage")
 stub.enforcement_census = enforcement_census
+stub.enforcement_census_with_record = enforcement_census_with_record
+stub.norecord_foreign_red_reason = norecord_foreign_red_reason
 stub.substitution_census = substitution_census
 sys.modules["test_flow_matrix_coverage"] = stub
 

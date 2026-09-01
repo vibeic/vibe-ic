@@ -73,11 +73,11 @@ Live entry census — 183<!--figure:required_output_entries--> entries over
 66<!--figure:required_output_steps--> steps, classified by
 :func:`classify_output` (digits derived; see the anchor note in §1):
 
-    FILE          131<!--figure:required_outputs_file-->
+    FILE          130<!--figure:required_outputs_file-->
         plain relative path, no wildcard, no " OR "
-    GLOB          28<!--figure:required_outputs_glob-->
+    GLOB          27<!--figure:required_outputs_glob-->
         wildcard, no " OR " (e.g. ``phase1/generated_docs/L13_*.json``)
-    ANY_OF        24<!--figure:required_outputs_any_of-->
+    ANY_OF        26<!--figure:required_outputs_any_of-->
         contains " OR " (each alternative may itself be a glob; one entry —
         step 4 — uses a recursive ``**`` alternative)
     PROGRAM_EXIT   0<!--figure:required_outputs_program_exit-->
@@ -121,13 +121,13 @@ replaces a hand-counted table of raw ``all_of`` members: the raw table counted
 a different population from the accessor this module tells you to use, so the
 two could not be reconciled by a reader and only one of them was derived.
 
-    program_exit_zero          120<!--figure:gate_clauses_program_exit_zero-->  MANDATORY
-    advisory_program_exit_zero 84<!--figure:gate_clauses_advisory_program_exit_zero-->  NON-BLOCKING
+    program_exit_zero          119<!--figure:gate_clauses_program_exit_zero-->  MANDATORY
+    advisory_program_exit_zero 79<!--figure:gate_clauses_advisory_program_exit_zero-->  NON-BLOCKING
     files_exist                32<!--figure:gate_clauses_files_exist-->
-    optional_program_exit_zero 29<!--figure:gate_clauses_optional_program_exit_zero-->  conditional
+    optional_program_exit_zero 30<!--figure:gate_clauses_optional_program_exit_zero-->  conditional
     json_field_true             1<!--figure:gate_clauses_json_field_true-->
     ------------------------------
-    total                     266<!--figure:gate_clauses_total-->, of which
+    total                     261<!--figure:gate_clauses_total-->, of which
                               182<!--figure:blocking_clauses--> block
 
 Three different exit-zero kinds with three different force levels:
@@ -143,8 +143,8 @@ Use :func:`gate_clauses` (typed) rather than re-walking the dict.
 4. Program resolution
 --------------------------------------------------------------------
 A gate command's FIRST whitespace token is the program basename. Of the
-217<!--figure:gate_program_tokens_distinct--> distinct tokens across the
-233<!--figure:gate_commands_total--> gate commands, all but
+212<!--figure:gate_program_tokens_distinct--> distinct tokens across the
+228<!--figure:gate_commands_total--> gate commands, all but
 0<!--figure:gate_programs_unresolved--> resolve to ``programs/<token>.py``, and
 zero commands shell out via ``python3 <file>``. This figure is the live count
 of gates naming a program that does not exist. It went 0 -> 3 when the
@@ -158,7 +158,7 @@ about the source tree, not about the yaml's spelling. Use
 :func:`gate_program_tokens` when you need the declared-but-possibly-missing
 form (that difference IS the dimension-1 wiring question).
 
-66<!--figure:steps_naming_a_program--> of the
+65<!--figure:steps_naming_a_program--> of the
 67<!--figure:gated_steps--> gated steps name at least one program THAT RESOLVES.
 The single exception is step 1, which has a file-existence-only gate and
 legitimately names none. It was four until 15.5ic, 26.5ic and 37.5ip got their
@@ -167,8 +167,8 @@ programs — see section 4.
 --------------------------------------------------------------------
 5. ``blocks_on``
 --------------------------------------------------------------------
-106<!--figure:blocks_on_edges--> edges, mixed types
-(84<!--figure:blocks_on_edges_int--> int, 22<!--figure:blocks_on_edges_str--> str),
+107<!--figure:blocks_on_edges--> edges, mixed types
+(84<!--figure:blocks_on_edges_int--> int, 23<!--figure:blocks_on_edges_str--> str),
 every target resolving to a declared step id — no dangling references at time of writing. Compare with
 :func:`normalize_id` on both sides; the real consumers stringify
 (``{str(id): [str(e) for e in blocks_on]}``).

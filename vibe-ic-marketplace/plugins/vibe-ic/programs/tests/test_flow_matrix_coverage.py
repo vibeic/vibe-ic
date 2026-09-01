@@ -2137,6 +2137,70 @@ def test_the_outcome_pool_waits_at_each_wave_boundary(monkeypatch, tmp_path):
                 f"{len(prior)} module(s) all finished")
 
 
+def norecord_foreign_red_reason(foreign_reds) -> str:
+    """The ONE sentence every NORECORD-on-a-foreign-red refusal prints.
+
+    Extracted so the assertion below and the CENSUS GENERATOR cannot drift
+    apart in what they call this condition. `tools/gen_flow_matrix_census.py`
+    has to refuse for the same reason without going through the assertion —
+    see :func:`cell_outcomes_with_record` — and a second sentence written
+    there would be a second vocabulary for one state (vibe-ic#2004).
+    """
+    return (
+        "the nested outcome run produced red test report(s) outside the "
+        "matrix cell join. Its rc=1 is not completely represented by the "
+        f"cell census, so this run is NORECORD: {list(foreign_reds)[:8]}")
+
+
+@lru_cache(maxsize=1)
+def cell_outcomes_with_record() -> Tuple[
+        Dict[Tuple[str, int], Tuple[str, ...]], Tuple[Tuple[str, str], ...]]:
+    """``(outcomes, foreign_reds)`` — the cell join AND its record status.
+
+    WHY THE STATUS IS RETURNED AND NOT ONLY RAISED (vibe-ic#2004)
+    ------------------------------------------------------------
+    :func:`cell_outcomes` refuses on a foreign red, and that refusal is
+    correct for every caller that is about to PUBLISH the census. It is not
+    correct for the one caller whose job is to REPAIR the published artefact:
+    `tools/gen_flow_matrix_census.py --fix` rewrote the anchored figures, then
+    hit that assertion, and exited with a traceback BEFORE regenerating the
+    README census block. MEASURED on a clean clone of main at d453eaca6: the
+    repair tool left the tree half-repaired — `flowref.py` rewritten, the
+    census block still stale — precisely when a repair was needed, and the
+    eight reds it refused on (d1 wiring, d2 obstruction, d5 deps x2, d8 x4)
+    were red on the pristine checkout BEFORE the rewrite, so no amount of
+    regenerating cures them.
+
+    So the condition is DATA here and a refusal one level up. The repair tool
+    writes the artefact it was asked for and THEN refuses, with these reds
+    named, rather than refusing instead of writing. Nothing is forgiven: the
+    generator's exit code is still non-zero and the reds are still printed.
+
+    Cached here rather than on :func:`cell_outcomes` so that a caller which
+    takes the refusal and a caller which takes the status share ONE nested
+    outcome run. `test_flow_matrix_census_freshness.py` paid for that run
+    twice — an exception is not memoised by `lru_cache`, so the second
+    consumer re-ran all nine dimension modules to be told the same thing.
+    """
+    outcomes, dropped_red = _join_cell_reports(
+        _run_outcome_reports(dimension_module_paths()),
+        _file_to_dim(),
+        {F.normalize_id(s) for s in F.step_ids()},
+    )
+    return outcomes, tuple(dropped_red)
+
+
+def enforcement_census_with_record() -> Tuple[
+        Dict[Tuple[str, int], "CellVerdict"], Tuple[Tuple[str, str], ...]]:
+    """``(census, foreign_reds)`` — :func:`enforcement_census` without the refusal.
+
+    For the repair tool only. Every reader that QUOTES the census must go
+    through :func:`enforcement_census`, which refuses.
+    """
+    outcomes, foreign = cell_outcomes_with_record()
+    return _join_axes(state_census(), outcomes), foreign
+
+
 @lru_cache(maxsize=1)
 def cell_outcomes() -> Dict[Tuple[str, int], Tuple[str, ...]]:
     """``{(step, dim): (outcome, ...)}`` for every CELL item, live.
@@ -2145,27 +2209,28 @@ def cell_outcomes() -> Dict[Tuple[str, int], Tuple[str, ...]]:
     parametrize id of exactly ``step<declared flow step id>`` — so the two
     axes are joinable cell for cell and a mismatch in either direction is
     visible rather than silently dropped.
+
+    A foreign red is NORECORD here, unchanged: this is the entry point every
+    publishing caller uses, and vibe-ic#2004 moved nothing out of it.
     """
-    return _cell_outcomes_from_reports(
-        _run_outcome_reports(dimension_module_paths()),
-        _file_to_dim(),
-        {F.normalize_id(s) for s in F.step_ids()},
-    )
+    outcomes, foreign = cell_outcomes_with_record()
+    assert not foreign, norecord_foreign_red_reason(foreign)
+    return outcomes
 
 
-def _cell_outcomes_from_reports(
+def _join_cell_reports(
         reports: Dict[str, List[Dict]],
         by_file: Dict[str, int],
         live_steps: Set[str],
-) -> Dict[Tuple[str, int], Tuple[str, ...]]:
-    """Join raw reports into cells without silently dropping a red item.
+) -> Tuple[Dict[Tuple[str, int], Tuple[str, ...]], List[Tuple[str, str]]]:
+    """``(cells, foreign reds)`` — the join, with nothing decided about it.
 
-    Dimension modules contain both the parametrized matrix predicates and
-    supporting tests.  A supporting test that turns red is still a refusal of
-    the nested pytest session; discarding it here would let that rc=1 pose as
-    fully represented cell evidence.  Green non-cell helpers may be ignored,
-    but every red report must enter the exact cell join below or the census is
-    NORECORD.
+    The join and the VERDICT about the join were one function until
+    vibe-ic#2004, so the only way to obtain the cells was to accept the
+    refusal. :func:`_cell_outcomes_from_reports` is that refusal and is
+    unchanged; this is the same computation with the dropped reds handed back
+    instead of asserted on, for the repair tool that has to write an artefact
+    before it is entitled to refuse.
     """
     out: Dict[Tuple[str, int], List[str]] = {}
     consumed: Set[str] = set()
@@ -2189,11 +2254,26 @@ def _cell_outcomes_from_reports(
         if nodeid not in consumed
         and _reduce_outcome(phase_reports) in {"failed", "error", "xpassed"}
     )
-    assert not dropped_red, (
-        "the nested outcome run produced red test report(s) outside the "
-        "matrix cell join. Its rc=1 is not completely represented by the "
-        f"cell census, so this run is NORECORD: {dropped_red[:8]}")
-    return {k: tuple(v) for k, v in out.items()}
+    return {k: tuple(v) for k, v in out.items()}, dropped_red
+
+
+def _cell_outcomes_from_reports(
+        reports: Dict[str, List[Dict]],
+        by_file: Dict[str, int],
+        live_steps: Set[str],
+) -> Dict[Tuple[str, int], Tuple[str, ...]]:
+    """Join raw reports into cells without silently dropping a red item.
+
+    Dimension modules contain both the parametrized matrix predicates and
+    supporting tests.  A supporting test that turns red is still a refusal of
+    the nested pytest session; discarding it here would let that rc=1 pose as
+    fully represented cell evidence.  Green non-cell helpers may be ignored,
+    but every red report must enter the exact cell join below or the census is
+    NORECORD.
+    """
+    out, dropped_red = _join_cell_reports(reports, by_file, live_steps)
+    assert not dropped_red, norecord_foreign_red_reason(dropped_red)
+    return out
 
 
 def test_a_red_non_cell_helper_cannot_represent_the_nested_session_rc():

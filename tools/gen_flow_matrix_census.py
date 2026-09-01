@@ -155,6 +155,35 @@ PR into a conflict with every other one. That is not a prediction: it is what
 So the figures are re-derived at the only moment they are published, which costs
 nothing per PR, and the gate still runs `--check` independently afterwards — the
 builder makes the tree consistent, it does not silence the check.
+
+IT REPAIRS BEFORE IT REFUSES (vibe-ic#2004)
+-------------------------------------------
+`--fix` used to abort with an uncaught `AssertionError` whenever the nested
+outcome run was NORECORD — that is, whenever ANY non-cell test in the nine
+dimension modules was red. MEASURED on a fresh clone of `main` at `d453eaca6`:
+`--fix` rewrote the 12 stale anchors in `flow_matrix/flowref.py`, then aborted
+on eight such reds, leaving the README census block stale. The repair tool
+could not complete precisely when a repair was needed, and it left the tree
+half-repaired — the second harm, because every measurement checkout it touched
+now had `flowref.py` rewritten under it.
+
+The eight reds were measured RED on the pristine checkout too, before any
+rewrite. They are not a property of the half-regenerated pair and no
+regeneration cures them: they are repaired in `test_matrix_d1_wiring`,
+`test_matrix_d2_falsifiable`, `test_matrix_d5_deps_correct` and
+`test_matrix_d8_missing_caught`, by the tests that own them.
+
+So the NORECORD condition is now DATA on the way in (`census_rows_with_record`)
+and a refusal on the way out. `--fix` writes the block, then refuses with the
+reds named and rc 2. `--check` reports BOTH facts — whether the block is stale,
+and whether the run was a record — and returns 2 on NORECORD, because a
+freshness PASS computed from a non-record is not a verdict. It refuses AFTER
+the comparison rather than instead of it: an earlier draft refused first and
+was measured saying nothing whatever about the block it had been asked about.
+
+Nothing is forgiven and nothing is weakened: `cell_outcomes()` and
+`enforcement_census()` — the entry points every PUBLISHING reader uses — still
+refuse a foreign red exactly as before.
 """
 from __future__ import annotations
 
@@ -842,7 +871,47 @@ _LABEL_COLUMNS = ("contradicted", "not_measured", "waived", "na")
 
 
 def census_rows() -> Tuple[List[Dict], Dict[str, int]]:
-    """``([per-dimension row], totals)`` recomputed from the live suite."""
+    """``([per-dimension row], totals)`` recomputed from the live suite.
+
+    REFUSES on a NORECORD nested run, exactly as it always has. The repair
+    path uses :func:`census_rows_with_record` instead — see there for why the
+    two are not the same caller (vibe-ic#2004).
+    """
+    rows, totals, norecord = census_rows_with_record()
+    assert not norecord, norecord
+    return rows, totals
+
+
+def census_rows_with_record() -> Tuple[List[Dict], Dict[str, int],
+                                       Optional[str]]:
+    """``([row], totals, norecord reason or None)`` from the live suite.
+
+    THE REPAIR TOOL MAY NOT BE STOPPED BY WHAT IT CANNOT REPAIR (vibe-ic#2004)
+    -------------------------------------------------------------------------
+    `--fix` rewrites the anchored figures first and the README census block
+    second. The second half went through `enforcement_census()`, whose nested
+    outcome run declares NORECORD when any non-cell test in the nine dimension
+    modules is red — and that assertion propagated out of `main` as an
+    uncaught `AssertionError`.
+
+    MEASURED on a fresh clone of `main` at `d453eaca6` (8hd-3, 2026-09-02):
+    `--fix` rewrote `flow_matrix/flowref.py` (12 stale anchors), then aborted
+    with a traceback on eight reds — `test_matrix_d1_wiring`,
+    `test_matrix_d2_falsifiable`, `test_matrix_d5_deps_correct` x2,
+    `test_matrix_d8_missing_caught` x4 — leaving the README census block
+    stale. So the repair tool could not complete precisely when a repair was
+    needed, and it left the tree DIRTIER than it found it.
+
+    The same eight were measured RED on the pristine checkout, before any
+    rewrite: they are not an artefact of the half-regenerated pair, and no
+    amount of regenerating cures them. A refusal that excludes "reds the
+    regeneration is about to cure" would therefore have excluded nothing.
+
+    So the status is returned rather than raised, and the caller decides WHEN
+    to refuse: `main` writes the block it was asked for and refuses AFTERWARDS
+    with these reds named and a non-zero exit. Nothing is forgiven — the
+    verdict is still NORECORD, it just no longer costs the repair.
+    """
     CV, SUB, DIMENSIONS, NAMES, QUESTIONS = _load()
     # vibe-ic#898 — QUOTE THE TWO-AXIS CENSUS, NOT THE CONFIGURATION AXIS.
     #
@@ -858,7 +927,10 @@ def census_rows() -> Tuple[List[Dict], Dict[str, int]]:
     # test_no_cell_is_counted_enforced_while_its_predicate_is_red FAILED.
     # A generated number is only better than a hand-written one if it is
     # generated from the right source.
-    states = {k: v.label for k, v in CV.enforcement_census().items()}
+    census, foreign_reds = CV.enforcement_census_with_record()
+    norecord = (CV.norecord_foreign_red_reason(foreign_reds)
+                if foreign_reds else None)
+    states = {k: v.label for k, v in census.items()}
     # THE SAME DEFECT, ONE LINE LOWER. The comment above moved `states` off the
     # configuration axis and onto the two-axis census; `subs` was left on the
     # configuration axis, and the split is what the table actually PRINTS.
@@ -904,7 +976,7 @@ def census_rows() -> Tuple[List[Dict], Dict[str, int]]:
               for k in _ENFORCED_COLUMNS + _LABEL_COLUMNS + _LABEL_KEYS}
     totals["cells"] = len(states)
     totals["cells_per_dim"] = len(states) // len(DIMENSIONS) if DIMENSIONS else 0
-    return rows, totals
+    return rows, totals, norecord
 
 
 def _fold_label_columns(rows: List[Dict]) -> None:
@@ -1218,6 +1290,24 @@ def splice(text: str, block: str) -> str:
     return text[:start] + block + text[stop + len(END):]
 
 
+def _norecord_lines(norecord: str) -> str:
+    """The refusal, with the remedy that actually closes it.
+
+    The reds it names are in the DIMENSION MODULES, not in the census, so
+    "re-run --fix" is not the remedy and saying so would send a reader round
+    the loop this issue is about. Each one is repaired in its own module by
+    its own test.
+    """
+    return (
+        f"NORECORD: {norecord}\n"
+        f"NORECORD: the census above is a complete join over every cell — each "
+        f"cell's own report was observed — but the nested session's rc=1 is "
+        f"not fully represented by it, so this run is not a RECORD and is not "
+        f"a pass. The reds named are in the dimension modules themselves; they "
+        f"are repaired there, by the tests that own them, and re-running this "
+        f"generator cannot cure a single one.")
+
+
 def run_figures(args) -> Tuple[int, Dict, List[str]]:
     """The anchor half: ``(rc, report, lines to print)``.
 
@@ -1291,7 +1381,9 @@ def main(argv: List[str]) -> int:
     ap.add_argument("--fix", action="store_true",
                     help="rewrite the anchored figures AND the README census "
                          "block — the complete repair. `--fix-figures` alone "
-                         "leaves the census block stale and still exits 1")
+                         "leaves the census block stale and still exits 1. "
+                         "Both writes happen even when the nested run is "
+                         "NORECORD; the refusal follows the write (#2004)")
     # These three default to None, not to a path. A path baked in here could
     # not be told apart from one the caller chose, so `repo_root` would have
     # been unable to move them — which is how the subject came to be ignored in
@@ -1410,7 +1502,7 @@ def _run(args: argparse.Namespace) -> int:
         Path(args.figures_json).write_text(json.dumps(fig_report, indent=2,
                                                       default=str))
 
-    rows, totals = census_rows()
+    rows, totals, norecord = census_rows_with_record()
 
     # A PASS must say how much it examined (vibe-ic#447). A census rendered over
     # zero cells matches an empty table trivially, and every count below would
@@ -1435,12 +1527,32 @@ def _run(args: argparse.Namespace) -> int:
         (sys.stderr if fig_rc else sys.stdout).write(line + "\n")
 
     if args.check:
-        if updated != text:
+        # BOTH FACTS, ALWAYS, AND THEY ARE DIFFERENT FACTS (vibe-ic#2004).
+        # Staleness is a property of the BLOCK; NORECORD is a property of the
+        # nested SESSION. Refusing before the comparison would answer "did this
+        # run record anything" to a reader who asked "is the page stale", and
+        # that reader then has no way to learn whether the derived pair in the
+        # tree is the right one — measured: `--check` on a freshly regenerated
+        # tree printed the NORECORD refusal and said nothing at all about the
+        # block it had just been asked about.
+        stale = updated != text
+        if stale:
             sys.stderr.write(
                 f"{path} census block is stale; re-run "
                 f"`python3 tools/gen_flow_matrix_census.py --fix` "
                 f"(the plain run repairs this block but leaves any stale "
                 f"anchored figure, which still exits 1)\n")
+        if norecord:
+            # A FRESHNESS VERDICT COMPUTED FROM A NON-RECORD IS NOT A VERDICT.
+            # Before vibe-ic#2004 this arrived as an uncaught AssertionError
+            # out of `census_rows`: rc 1, no named condition, and a reader who
+            # could not tell it from a real staleness finding. It is rc 2 —
+            # UNDETERMINED, the house code for a gate that could not look — it
+            # names the reds, and it outranks the line above, which is a
+            # finding rather than the verdict.
+            sys.stderr.write(_norecord_lines(norecord) + "\n")
+            return 2
+        if stale:
             return 1
         if fig_rc:
             return fig_rc
@@ -1476,6 +1588,16 @@ def _run(args: argparse.Namespace) -> int:
               f"WAIVED={totals['waived']} NA={totals['na']}; "
               f"{totals['cells']} cells "
               f"({_verdict_partition(totals)}).")
+
+    # REFUSED AFTER THE WRITE, NEVER INSTEAD OF IT (vibe-ic#2004). The block
+    # above is a function of the 504 CELL reports, every one of which was
+    # observed; a red helper elsewhere in a dimension module changes no cell's
+    # state and no cell's outcome. What it does change is whether this run is a
+    # RECORD, and that is what is refused here — loudly, by name, non-zero —
+    # after the artefact the caller asked for exists on disk.
+    if norecord:
+        sys.stderr.write(_norecord_lines(norecord) + "\n")
+        return 2
     return fig_rc
 
 
