@@ -321,7 +321,7 @@ def test_the_named_lane_records_where_the_same_entry_refused(tmp_path):
 
 def test_the_lane_is_inserted_at_the_front_not_appended(tmp_path):
     """MEASURED: appending mixes the lane's pure-Python against the system's C
-    extensions and dies in the mismatch (cffi 2.0.0 vs _cffi_backend 1.15.14).
+    extensions and dies in the mismatch (cffi 2.0.0 vs _cffi_backend 1.15.15).
     Asserted on the resolved ORDER rather than on the crash, because the crash
     needs a host carrying that exact pair to reproduce.
 

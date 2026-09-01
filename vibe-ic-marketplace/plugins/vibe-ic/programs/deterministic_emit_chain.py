@@ -27,6 +27,7 @@ about needing judgement and the guess is not.
 """
 from __future__ import annotations
 
+import re
 import sys
 from pathlib import Path
 from typing import Callable, List, NamedTuple, Optional, Tuple
@@ -271,6 +272,47 @@ def try_emit(prompt_text: str, ifc_text: str = "",
     return kind, rtl
 
 
+# Direction / net-type keywords that can precede an ANSI port name inside the
+# module-header parens — never themselves a port name.
+_PORT_DECL_KW = frozenset({
+    "input", "output", "inout", "wire", "reg", "logic", "signed", "unsigned",
+})
+
+
+def _duplicate_header_port_names(rtl: str) -> List[str]:
+    """Port names the module header declares MORE THAN ONCE, [] if none.
+
+    A legal Verilog module header cannot repeat a port name, so a duplicate is a
+    pure-syntax invariant violation with zero false positives — it happens when
+    an upstream port list was doubled (a spec restating its interface) and a
+    renderer emitted it verbatim. iverilog rejects it (`'x' has already been
+    declared`), but the runner has no testbench at rtl_gen time, so without this
+    rule the chain would stand behind an emit no compiler will ever accept.
+
+    Per comma-separated header item the port name is the LAST identifier after
+    ranges are stripped (`input wire [7:0] a` -> a; non-ANSI `a` -> a).
+    """
+    txt = re.sub(r"//[^\n]*", "", rtl or "")
+    txt = re.sub(r"/\*.*?\*/", " ", txt, flags=re.S)
+    m = re.search(r"\bmodule\s+\w+\s*(?:#\s*\([^)]*\)\s*)?\((.*?)\)\s*;",
+                  txt, re.S)
+    if not m:
+        return []
+    names: List[str] = []
+    for piece in m.group(1).split(","):
+        piece = re.sub(r"\[[^\]]*\]", " ", piece)
+        idents = [t for t in re.findall(r"[A-Za-z_]\w*", piece)
+                  if t.lower() not in _PORT_DECL_KW]
+        if idents:
+            names.append(idents[-1])
+    seen, dups = set(), []
+    for n in names:
+        if n in seen and n not in dups:
+            dups.append(n)
+        seen.add(n)
+    return dups
+
+
 def _refusals(prompt_text: str, rtl: str,
               verify: Optional[Callable[[str], bool]],
               check: bool = True) -> List[str]:
@@ -308,6 +350,14 @@ def _refusals(prompt_text: str, rtl: str,
     gate-blocked one, and `try_emit_ex` reports the reason instead of a bare
     handover.
     """
+    # Rule 0 — a SYNTAX invariant, ahead of both rules and independent of
+    # `check`: a module header that repeats a port name is not legal Verilog,
+    # so no oracle or gate verdict can rehabilitate the emit. Costs one regex.
+    dups = _duplicate_header_port_names(rtl)
+    if dups:
+        return ["duplicate-header-port: the module header declares "
+                + ", ".join(sorted(dups))
+                + " more than once — not legal Verilog, no compiler accepts it"]
     if verify is not None:
         try:
             if not verify(rtl):

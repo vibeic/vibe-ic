@@ -33,6 +33,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import subprocess
@@ -416,6 +417,28 @@ def step_human_docs(project: Path) -> StepResult:
 
 # ── Docs mode (vendor docs → phase1_doc_one_shot_runner) ───────────
 
+def _docs_hold_identical_bytes(docs_dir: Path, candidate: Path) -> bool:
+    """True when a non-hidden regular file under `docs_dir` is byte-identical to
+    `candidate`.
+
+    The v1.14.50 prompt-JOINS-the-docs bridge below guards only against its OWN
+    target name (`docs_dir / prompt.name`) already existing. An operator (or an
+    upstream stager) that has ALREADY written the same prompt content into
+    `input/docs/` under any other name defeats that guard, so the same bytes land
+    in `phase1/input_doc/` TWICE — and a doc that restates a whole interface
+    doubles every parsed port list downstream. Content identity (sha256 of raw
+    bytes) is the only guard that survives a rename.
+    """
+    if not docs_dir.is_dir() or not candidate.is_file():
+        return False
+    want = hashlib.sha256(candidate.read_bytes()).hexdigest()
+    for f in docs_dir.rglob("*"):
+        if (f.is_file() and not f.name.startswith(".")
+                and hashlib.sha256(f.read_bytes()).hexdigest() == want):
+            return True
+    return False
+
+
 def _run_docs_mode(project: Path, ic_name: str,
                    forwarded_args: Optional[List[str]] = None) -> int:
     """Dispatch to phase1_doc_one_shot_runner.main() with the project
@@ -487,10 +510,15 @@ def _run_docs_mode(project: Path, ic_name: str,
     # never overwrites an existing entry. `had_real_doc` is sampled BEFORE the
     # bridge above so a prompt already rendered to design_description.md is not
     # ingested twice.
+    # ... and never bridges bytes `input/docs/` ALREADY holds under any name —
+    # a byte-identical copy staged there by the operator would otherwise land
+    # the same content twice in phase1/input_doc/ (doubling every restated
+    # interface downstream). See `_docs_hold_identical_bytes`.
     _prompt_md = project / "input" / "phase1_prompt.md"
     if _prompt_md.is_file() and had_real_doc:
         _bridged = docs_dir / _prompt_md.name
-        if not _bridged.exists():
+        if (not _bridged.exists()
+                and not _docs_hold_identical_bytes(docs_dir, _prompt_md)):
             _bridged.write_text(_prompt_md.read_text(errors="replace"))
     # Build argv for phase1_doc_one_shot_runner.main(). Its argparse
     # takes the project dir as positional + accepts the standard
