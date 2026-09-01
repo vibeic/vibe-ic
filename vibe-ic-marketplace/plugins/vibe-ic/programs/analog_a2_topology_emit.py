@@ -195,6 +195,16 @@ REQUIRES_PDK_MEASURED_KEY = "requires_pdk_measured"
 #: set is the case this exists for: a set is admitted per order, and an order
 #: nobody authored a set for is refused BY NAME rather than falling back to a
 #: neighbouring one.
+# The unit an entry's device expressions are WRITTEN FOR, per spec field.
+# Distinct from the unit check inside `requires_bound`: that one also demands
+# the row EXIST, which refuses a block whose declaration is simply thin. This
+# key says nothing about a missing row -- the expression over it drops and the
+# device keeps its library nominal, which `analog_a3_netlist_emit` already
+# discloses as `structure_only`. It fires only on a row that IS bound and
+# declares a unit the expressions do not assume, because that is the case the
+# unit-free expression environment silently mis-scales instead of refusing.
+SIZING_UNIT_CONTRACT_KEY = "sizing_unit_contract"
+
 REQUIRES_DOMAIN_KEY = "requires_domain"
 #: [{"name","expr","min","max","why"}] — a bound on a value the entry DERIVES.
 #: An admission condition on the INPUTS cannot see that a legal-looking
@@ -267,7 +277,21 @@ LIBRARY: Dict[str, Dict[str, Any]] = {
         "ports": ["vdd", "vss", "vref", "vout"],
         "rails": {"vdd": "vdd", "vss": "vss"},
         "internal_nets": ["nbias", "ntail", "nd1", "vg", "vfb"],
-        "constants": {"l_unit": 20.0, "w_res": 0.35},
+        "constants": {"l_unit": 20.0, "w_res": 0.35,
+                      # The share of the bound quiescent-current budget the
+                      # FEEDBACK DIVIDER is allowed to draw. A regulator's Iq
+                      # is spent on the bias branch, the error amplifier and
+                      # the divider string; the split between them is a design
+                      # allocation no input states, so it is a library
+                      # constant and it is written down here rather than
+                      # buried in an expression. It is the only free number in
+                      # the divider sizing: everything else comes from the
+                      # bound spec and the measured sheet resistance.
+                      "iq_divider_fraction": 0.2,
+                      # microamp -> amp, so the bound `iq` row (declared in
+                      # µA, and REFUSED by `requires_bound` in any other unit)
+                      # reaches Ohm's law in SI.
+                      "ua_to_a": 1.0e-6},
         # `w_res` is the DRAWN WIDTH of the `res` devices below, so it is
         # floored to the target PDK's poly-resistor minimum; `l_unit` is a
         # length and is deliberately not listed.
@@ -318,12 +342,82 @@ LIBRARY: Dict[str, Dict[str, Any]] = {
                            "undetermined and the library default stands in")},
         ],
         "device_param_exprs": [
+            # Split the spec-sized total between the two legs in the ratio the
+            # divider has to realise. Both legs therefore carry a BOUND spec
+            # value, which is what separates a sized regulator from the
+            # circuit class wearing this design's name.
+            # The divider's TOTAL drawn length, in microns, comes from the
+            # bound output voltage and the bound quiescent budget:
+            #   I_div = iq * ua_to_a * iq_divider_fraction     [A]
+            #   R_div = vout / I_div                           [Ohm] Ohm's law
+            #   L_tot = R_div * w_res / rsheet_ohm_per_sq      [um]  sheet
+            # Two BOUND spec rows and one MEASURED process constant; the only
+            # library number in it is the allocation fraction declared above.
+            # It is written inline in both legs rather than as a `spec_knob`
+            # because a knob expression is resolved against the bound spec
+            # values ALONE, and this one also needs the entry's constants and
+            # the process's measured sheet -- which is exactly the environment
+            # `analog_a3_netlist_emit._resolve_params` seeds for a device
+            # expression. Splitting the total between the legs in the ratio
+            # the divider has to realise leaves BOTH legs carrying a bound
+            # spec value, which is what separates a sized regulator from the
+            # circuit class wearing this design's name.
+            # ORDER IS LOAD-BEARING. `_resolve_params` walks this list in
+            # order, SKIPS an expression naming anything the environment does
+            # not carry, and lets a later expression overwrite an earlier one
+            # for the same device parameter. So the unit-element forms come
+            # FIRST and the budget-sized forms SECOND: a declaration that
+            # binds no `iq` keeps exactly the geometry it got before this
+            # entry learned to size the string, and one that binds it gets
+            # the sized length instead. Neither case needs a conditional the
+            # IR has no way to express.
             {"device": "r1", "param": "l",
              "expr": "l_unit * (divider_ratio - 1)",
              "rationale": "r1/r2 = divider_ratio - 1 at equal sheet width"},
             {"device": "r2", "param": "l", "expr": "l_unit",
              "rationale": "divider lower leg is the unit element"},
+            {"device": "r1", "param": "l",
+             "expr": ("(vout / (iq * ua_to_a * iq_divider_fraction)) "
+                      "* w_res / rsheet_ohm_per_sq "
+                      "* (divider_ratio - 1) / divider_ratio"),
+             "rationale": ("upper leg: r1/r2 = divider_ratio - 1, scaled to "
+                           "the total length the bound Iq budget allows")},
+            {"device": "r2", "param": "l",
+             "expr": ("(vout / (iq * ua_to_a * iq_divider_fraction)) "
+                      "* w_res / rsheet_ohm_per_sq / divider_ratio"),
+             "rationale": ("lower leg: the remainder of the bound-Iq-sized "
+                           "divider string")},
         ],
+        # The unit the two expressions above are WRITTEN FOR, checked only on
+        # a row the declaration actually carries.
+        #
+        # NOT `requires_bound`. That key refuses a block whose declaration is
+        # missing the row, and this entry is the library's generic simple
+        # regulator: a design that binds nothing has always got the library
+        # nominal here, and `analog_a3_netlist_emit` already DISCLOSES that
+        # outcome as `design_content=structure_only`. Turning that disclosed
+        # nominal into a refusal is a separate decision about an entry many
+        # designs reach, and it is not this one. Measured: declaring these two
+        # rows `requires_bound` turned 16 passing tests of unrelated subjects
+        # red, all of them driving this entry with a declaration that binds
+        # nothing at all.
+        #
+        # What IS refused is the case the expression environment cannot
+        # survive: a row that IS bound and declares a unit the expressions do
+        # not assume. `_resolve_params` carries no units, so a quiescent
+        # budget stated in mA would be read as microamps and size the divider
+        # a thousand times wrong with nothing recording it. Absent row -> the
+        # expression drops and the device keeps its library nominal, exactly
+        # as before; present-but-mis-united row -> a named refusal.
+        SIZING_UNIT_CONTRACT_KEY: {
+            "vout": {"unit": "V", "why":
+                     "the regulated output is the numerator of the divider "
+                     "resistance the bound budget has to realise"},
+            "iq": {"unit": "\u00b5A", "why":
+                   "the quiescent-current budget is what sizes the divider "
+                   "string, and it enters Ohm's law through a microamp "
+                   "conversion written into the expression"},
+        },
         "tradeoffs": [
             "A PMOS series pass device gives the lowest dropout for a given "
             "area but puts a low-frequency pole at the output, so the "
@@ -1075,6 +1169,29 @@ def entry_admission(lib: Dict[str, Any], spec_values: Dict[str, float],
                     f"are written for {req.get('unit')!r}. The expression "
                     f"environment carries no units, so binding it anyway "
                     f"would scale the result by a factor nobody wrote down")})
+    for name, req in sorted((lib.get(SIZING_UNIT_CONTRACT_KEY)
+                             or {}).items()):
+        req = req if isinstance(req, dict) else {}
+        if name not in spec_values:
+            # A row the declaration does not carry is not a violation: the
+            # expression over it drops and the device keeps its library
+            # nominal, which A3 discloses. Only a BOUND row can be mis-united.
+            continue
+        want = _unit_token(req.get("unit"))
+        got = _unit_token(spec_units.get(name))
+        if want != got:
+            refusals.append({
+                "requirement": "spec_unit", "field": name,
+                "expected_unit": req.get("unit"),
+                "declared_unit": spec_units.get(name),
+                "why": req.get("why"),
+                "detail": (
+                    f"`{name}` is bound and declares unit "
+                    f"{spec_units.get(name)!r}, and this entry's device "
+                    f"expressions are written for {req.get('unit')!r}. The "
+                    f"expression environment carries no units, so sizing "
+                    f"from it would scale the geometry by a factor nobody "
+                    f"wrote down")})
     for name in (lib.get(REQUIRES_PDK_MEASURED_KEY) or []):
         if name not in (measured or {}):
             refusals.append({

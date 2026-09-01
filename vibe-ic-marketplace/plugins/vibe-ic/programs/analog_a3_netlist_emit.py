@@ -679,7 +679,13 @@ def _resolve_params(ir: Dict[str, Any], sv: Dict[str, float]
                for p in ("w", "l", "m")
                if d.get(p) is not None
                and f"{d['name']}.{p}" not in spec_bound]
-    return overrides, sorted(spec_bound), sorted(nominal), env
+    # DEDUPED. An entry may carry more than one expression for the same
+    # device parameter -- a unit-element form and a spec-sized form that
+    # overwrites it when the declaration carries the row it needs -- and each
+    # one that resolves off a bound name credits the parameter again. The
+    # artefact lists WHICH parameters a bound value reached, so a parameter
+    # named twice says nothing a reader can use and reads as two devices.
+    return overrides, sorted(set(spec_bound)), sorted(nominal), env
 
 
 def _validate_ir(ir: Dict[str, Any], pdkctx: Dict[str, Any]) -> List[str]:
