@@ -50,6 +50,18 @@ def test_step29_rejects_a_non_self_checking_testbench(tmp_path):
     assert sdfsim.find_reusable_testbench(tmp_path, "neutral_top") is None
 
 
+def test_step29_does_not_reuse_a_testbench_declared_only_in_a_comment(tmp_path):
+    tb_dir = tmp_path / "phase2/stage1/sim_full_stack"
+    tb_dir.mkdir(parents=True)
+    (tb_dir / "tb_phantom.v").write_text("""
+// module tb_phantom;
+// neutral_top dut();
+// ORACLE_TB_DONE pass=1/1
+module unrelated; endmodule
+""")
+    assert sdfsim.find_reusable_testbench(tmp_path, "neutral_top") is None
+
+
 def test_step29_capability_gap_is_only_an_observed_missing_tool(tmp_path):
     sdf = tmp_path / "neutral.sdf"
     sdf.write_text('(DELAYFILE (SDFVERSION "3.0"))\n')

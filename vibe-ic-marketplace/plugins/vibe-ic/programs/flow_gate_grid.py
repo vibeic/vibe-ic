@@ -129,7 +129,7 @@ COMBINATORS = {"all_of", "any_of"}
 D6_BASELINE = {
     "40", "41", "42", "43", "44",              # manufacturing, need a fab
     "A1", "A2", "A3", "A4", "A5", "A6", "A7", "A8", "A9",   # analog track
-    "DT1", "DT2", "DT3",                       # transition-delay ATPG
+    "DT1",                                      # transition-delay ATPG
     "FS1",                                     # ISO-26262 FMEDA
     "M1", "M2", "M3", "M4",                    # mixed-signal
 }

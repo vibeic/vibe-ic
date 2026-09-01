@@ -80,8 +80,8 @@ typed on. Generalized as fractions of the supply (0.50 / 0.625 / 0.75 of Vdd),
 that grid lands the LOW point at or below threshold on a high-threshold device.
 Measured on sky130A's p-role at Vdd=1.8:
 
-    |Vgs| = 0.90 -> Id =  0.168 uA      (essentially subthreshold)
-    |Vgs| = 1.35 -> Id = 41.5   uA
+    abs(Vgs) = 0.90 -> Id =  0.168 uA      (essentially subthreshold)
+    abs(Vgs) = 1.35 -> Id = 41.5   uA
     two-point fit -> k'p = 35.9 uA/V^2, and the interior point sits 89.6% away
 
 A k' extracted there is an artefact of where the grid fell, not a process

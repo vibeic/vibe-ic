@@ -95,10 +95,14 @@ def test_d2_dangling_gate_target_is_gap(tmp_path):
 
 
 # ---- canonical: the shipped plugin passes D1 (no non-synth untested) + D2 ----
+def test_shipped_plugin_d1_clean():
+    plugin = Path(__file__).resolve().parent.parent.parent
+    d1 = A.audit_d1(plugin)
+    assert d1["passed"], d1["untested_gaps"]
+
+
 def test_shipped_plugin_d2_clean():
     plugin = Path(__file__).resolve().parent.parent.parent
-    # D2 must be clean on the shipped tree (D1 may transiently show new
-    # programs mid-development; D2 is the structural invariant).
     d2 = A.audit_d2(plugin)
     assert d2["passed"], d2["findings"]
 

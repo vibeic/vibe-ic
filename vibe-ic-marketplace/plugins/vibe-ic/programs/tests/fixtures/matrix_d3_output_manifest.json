@@ -313,14 +313,14 @@
     "5": {
       "verdict": "ENFORCED",
       "entries": {
-        "phase2/stage1/formal/*.sby": {
+        "phase2/stage1/formal/*.sby OR phase2/stage1/formal/formal_authoring_request.json OR phase2/stage1/formal/formal_not_applicable.json": {
           "status": "PRODUCED_BY_RUN",
           "run": "benchmark-data/ic/spm/v1.10.18_sky130A",
           "alternative": "phase2/stage1/formal/*.sby",
           "path": "phase2/stage1/formal/formal_spm_formal.sby",
           "size_bytes": 368
         },
-        "phase2/stage1/formal/results.json": {
+        "phase2/stage1/formal/results.json OR phase2/stage1/formal/formal_authoring_request.json OR phase2/stage1/formal/formal_not_applicable.json": {
           "status": "PRODUCED_BY_RUN",
           "run": "benchmark-data/ic/spm/v1.10.18_sky130A",
           "alternative": "phase2/stage1/formal/results.json",

@@ -51,6 +51,7 @@ import _atomic_artefact as _aa  # noqa: E402  (vibe-ic#1082)
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import _progress_run as _pr  # noqa: E402
+from _specrtl_common import strip_comments  # noqa: E402
 
 try:
     import _path_layout as _pl
@@ -622,7 +623,7 @@ def find_reusable_testbench(project: Path, top: str) -> Optional[Dict[str, objec
                 name)
     for path in sorted(set(candidates), key=_rank):
         try:
-            text = path.read_text(errors="replace")
+            text = strip_comments(path.read_text(errors="replace"))
         except OSError:
             continue
         inst = _tb_dut_instance(text, top)

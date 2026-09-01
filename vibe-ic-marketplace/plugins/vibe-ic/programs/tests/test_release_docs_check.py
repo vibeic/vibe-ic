@@ -276,6 +276,19 @@ def test_checked_in_spm_netlist_expands_bus_width_to_pin_bits():
     assert sum(by_name.values()) == 36
 
 
+def test_commented_verilog_declarations_do_not_mint_release_ports():
+    ports = gate_module.verilog_port_widths("""
+// module phantom(input [63:0] ghost);
+/* input [31:0] also_ghost; */
+module real #(parameter W = 4) (
+  input [W-1:0] payload,
+  output ready
+);
+endmodule
+""")
+    assert ports == [("payload", "input", 4), ("ready", "output", 1)]
+
+
 @pytest.mark.parametrize(("heading", "rule"), [
     ("Pin Table", "PIN_TABLE_ABSENT"),
     ("Hardened Parameter Set", "HARDENED_PARAMETER_SET_ABSENT"),

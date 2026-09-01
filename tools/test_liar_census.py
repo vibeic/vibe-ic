@@ -26,6 +26,7 @@ import textwrap
 from pathlib import Path
 
 import pytest
+yaml = pytest.importorskip("yaml")
 
 _TOOLS = Path(__file__).resolve().parent
 sys.path.insert(0, str(_TOOLS))
@@ -2858,45 +2859,59 @@ _REHOMED = {
     "reports/phase2/gates/postroute_timing_repair_audit.json",
 }
 
+#: Clauses deliberately removed from the GATE denominator by Issue #1980 and
+#: re-homed into the step's lossless `program_outputs` record. These are not
+#: retired programs and not successor gate commands: they remain executed and
+#: visible, but no longer claim predicate authority they do not own. Removed
+#: command -> exact live (step, program, output path) authority.
+_REHOMED_TO_PROGRAM_OUTPUT = {
+    "hold_area_budget_check . --json reports/phase3/pnr/hold_area_budget.json":
+        ("20", "hold_area_budget_check",
+         "reports/phase3/pnr/hold_area_budget.json"),
+    "lvs_triage_classify --report reports/phase3/lvs.rpt":
+        ("31", "lvs_triage_classify", "reports/phase3/lvs_triage.json"),
+    "perc_corpus_sweep . --report reports/phase3/perc_sweep.json":
+        ("31", "perc_corpus_sweep", "reports/phase3/perc_sweep.json"),
+    "pnr_via_stack_completeness_check .":
+        ("31", "pnr_via_stack_completeness_check",
+         "reports/phase3/pnr_via_stack_completeness.json"),
+    "dfm_screen_check . --json reports/phase2/gates/dfm_screen.json":
+        ("35", "dfm_screen_check", "reports/phase3/dfm_screen.json"),
+}
+
+
+def _live_program_outputs():
+    doc = yaml.safe_load(lc.FLOW_YAML.read_text())
+    found = set()
+
+    def walk(value):
+        if isinstance(value, dict):
+            sid = value.get("id")
+            for row in value.get("program_outputs") or []:
+                if isinstance(row, dict):
+                    found.add((str(sid), row.get("program"), row.get("path")))
+            for child in value.values():
+                walk(child)
+        elif isinstance(value, list):
+            for child in value:
+                walk(child)
+
+    walk(doc)
+    return found
+
 
 def test_the_flow_has_NOT_shrunk_since_the_literal_was_last_moved(tmp_path):
-    """The pin above is a count and this is its other half: that the move was a
-    GROW and not a churn. Measured against the flow blob at the commit that last
-    moved the literal, read out of git rather than copied into this file -- a
-    fixture copy would rot into the prose the delta function exists to replace.
-    SKIPS rather than lies where the history is not available (a shallow clone,
-    an exported tarball).
+    """No SILENT shrink since the permanent pin.
 
-    PIN MOVED 867de4289 -> e265f228be (2026-08-24), AND IT IS A DELIBERATE
-    SHRINK BEING AUTHORISED -- the third time this file has had to do that, and
-    the first where the clause did not stop being a flow clause at all.
+    Issue #1980 deliberately removed five producer/classifiers from the gate
+    denominator because they own no refusal predicate. The exact five removals
+    must remain the whole delta, and each must still be executed and published
+    under its exact step/program/path `program_outputs` identity. That is a real
+    denominator shrink, not a retirement and not a reason to advance the pin.
 
-    MEASURED with `population_delta` over the two blobs, clause SETS diffed on
-    the identity the census uses, not counts compared:
-
-        867de4289   declared=180
-        e265f228be  declared=182
-        ADDED   3   15.5ic program_exit_zero pad_assignment_gen ...
-                    2      program_exit_zero slot_pad_budget_check ...
-                    2      program_exit_zero crosslayer_rewrite_equivalence_check ...
-        REMOVED 1   1.6x   program_exit_zero crosslayer_rewrite_equivalence_check ...
-
-    THE AUTHORISATION, and it is the weakest shrink this file has ever had to
-    authorise: the removed clause and one of the added clauses are the SAME
-    COMMAND. vibe-ic#1779 folded step `1.6x` into step `2`; the gate moved with
-    it, byte for byte. A clause's identity here is `(step, kind, cmd)`, so a
-    step RENUMBER reads as a removal plus an addition even though nothing was
-    retired and nothing stopped running.
-
-    That is not a defect in `population_delta` -- widening the identity to
-    ignore the step would blind it to a gate silently moving to a step that
-    never runs, which is a real way to switch a gate off. It is a shape the
-    identity cannot distinguish on its own, so the distinction is made HERE, by
-    a control that runs rather than by this paragraph:
-    `test_the_1_6x_clause_was_REHOMED_and_not_retired` below pins the old
-    commit permanently and asserts the removed command is still declared
-    somewhere in the live flow. Delete that control and this authorisation
-    becomes prose again."""
+    The historical function name is retained so reports keep one continuous
+    node identity: `NOT shrunk` now means `NOT silently shrunk`. History missing
+    from a shallow/exported checkout skips rather than inventing evidence."""
     # BOUNDED AT `_T` like every other subprocess this file starts. The harness
     # note beside this gate records that the 180 s session bound is gone and
     # that these inner bounds are now the ONLY one, so an unbounded `git` here
@@ -2920,8 +2935,18 @@ def test_the_flow_has_NOT_shrunk_since_the_literal_was_last_moved(tmp_path):
     pinned.write_text(blob.stdout)
 
     d = lc.population_delta(pinned, lc.FLOW_YAML)
-    assert d["removed"] == [], d["removed"]
-    assert d["shrank"] is False, d
+    removed = {c["cmd"] for c in d["removed"]}
+    assert removed == set(_REHOMED_TO_PROGRAM_OUTPUT), d["removed"]
+    live_outputs = _live_program_outputs()
+    assert not {
+        was: now for was, now in _REHOMED_TO_PROGRAM_OUTPUT.items()
+        if now not in live_outputs
+    }
+    # The gate-clause population really did shrink by five. That is authorised
+    # only because the exact five programs remain live as program_outputs above;
+    # pretending the count did not shrink would make this control lie about its
+    # own denominator.
+    assert d["shrank"] is True, d
     # A FIXED COMMIT's blob, so this number is history and cannot rot. The
     # previous pin (867de4289) measured 180 -- not the 179 its own commit set
     # the literal to, which was the red this control would have named on the
@@ -2995,8 +3020,19 @@ def test_the_1_6x_clause_was_REHOMED_and_not_retired(tmp_path):
         f"gone — each needs re-deriving, not re-dating: {dead}"
     )
 
+    live_outputs = _live_program_outputs()
+    dead_outputs = {
+        was: now for was, now in _REHOMED_TO_PROGRAM_OUTPUT.items()
+        if now not in live_outputs
+    }
+    assert not dead_outputs, (
+        "these program-output re-homing rows name an output the live flow no "
+        f"longer declares, so their shrink authorisation is stale: {dead_outputs}"
+    )
+
     unaccounted = [c for c in d["removed"]
-                   if c["cmd"] not in live and c["cmd"] not in _REHOMED]
+                   if c["cmd"] not in live and c["cmd"] not in _REHOMED
+                   and c["cmd"] not in _REHOMED_TO_PROGRAM_OUTPUT]
     assert not unaccounted, (
         "these clauses left the flow between the pin and HEAD and their command "
         "is declared by no step today and no `_REHOMED` row names a successor "
@@ -3174,7 +3210,8 @@ _JSON_ONLY = """
     rep.parent.mkdir(parents=True, exist_ok=True)
     if not p.read_text().strip():
         rep.write_text(json.dumps({"gate": "d", "verdict": "NOT_APPLICABLE",
-                                   "reason": "the producer emitted nothing"}))
+                                   "reason_class": "DESIGN_DECLARED_NA",
+                                   "reason": "the design declares no metric"}))
         print("[PASS] nothing to check")      # no sentinel the consumer matches
         sys.exit(0)
     rep.write_text(json.dumps({"gate": "d", "verdict": "PASS"}))

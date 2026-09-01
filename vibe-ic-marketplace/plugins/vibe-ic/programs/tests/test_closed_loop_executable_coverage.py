@@ -300,14 +300,14 @@ def _mutant_root(tmp_path: Path, *, loop: bool, repair: bool,
     if loop:
         src = (head + "    while True:\n"
                + "        sr = step_reference_tb()\n"
-               + "        if sr.status in ('PASS', 'SKIP', 'WAIVED'):\n"
+               + "        if sr.status in ('PASS', 'SKIP', 'WAIVED', 'INCOMPLETE'):\n"
                + "            break\n"
                + "        step_rtl_gen()\n"
                + "        step_reference_tb()\n")
     else:
         src = (head + "    if True:\n"
                + "        sr = step_reference_tb()\n"
-               + "        if sr.status in ('PASS', 'SKIP', 'WAIVED'):\n"
+               + "        if sr.status in ('PASS', 'SKIP', 'WAIVED', 'INCOMPLETE'):\n"
                + "            pass\n"
                + "        step_rtl_gen()\n"
                + "        step_reference_tb()\n")
@@ -538,7 +538,7 @@ def test_structural_call_to_the_wrong_step_cannot_claim_reentry(
                 "caller": "main",
                 "trigger_callee": "step_reference_tb",
                 "trigger_field": "status",
-                "terminal_values": ["PASS", "SKIP", "WAIVED"],
+                "terminal_values": ["PASS", "SKIP", "WAIVED", "INCOMPLETE"],
                 "callee": "step_reference_tb",
             }],
         },
@@ -569,7 +569,7 @@ def test_step2_cannot_borrow_step4s_real_retry_loop(tmp_path, monkeypatch):
                 "caller": "main",
                 "trigger_callee": "step_reference_tb",
                 "trigger_field": "status",
-                "terminal_values": ["PASS", "SKIP", "WAIVED"],
+                "terminal_values": ["PASS", "SKIP", "WAIVED", "INCOMPLETE"],
                 "callee": "step_rtl_gen",
             }],
         },
@@ -949,7 +949,7 @@ def test_deleting_the_loop_trigger_field_breaks_the_proof(tmp_path):
               "    while True:\n"
               "        sr = step_reference_tb()\n"
               "        del sr.status\n"
-              "        if sr.status in ('PASS', 'SKIP', 'WAIVED'):\n"
+              "        if sr.status in ('PASS', 'SKIP', 'WAIVED', 'INCOMPLETE'):\n"
               "            break\n"
               "        step_rtl_gen()\n"
               "        step_reference_tb()\n")
@@ -998,7 +998,7 @@ def test_statically_true_or_sibling_makes_loop_fallback_unreachable(tmp_path):
               "def main():\n"
               "    while True:\n"
               "        sr = step_reference_tb()\n"
-              "        if (sr.status in ('PASS', 'SKIP', 'WAIVED') "
+              "        if (sr.status in ('PASS', 'SKIP', 'WAIVED', 'INCOMPLETE') "
               "or 1 == 1):\n"
               "            break\n"
               "        step_rtl_gen()\n"
@@ -1026,7 +1026,7 @@ def test_provably_nonreturning_barrier_makes_loop_fallback_unreachable(
               "def main():\n"
               "    while True:\n"
               "        sr = step_reference_tb()\n"
-              "        if sr.status in ('PASS', 'SKIP', 'WAIVED'):\n"
+              "        if sr.status in ('PASS', 'SKIP', 'WAIVED', 'INCOMPLETE'):\n"
               "            break\n"
               + textwrap.indent(barrier, "        ") + "\n"
               "        step_rtl_gen()\n"
@@ -1049,9 +1049,9 @@ def test_loop_fallback_cannot_hide_under_the_terminal_predicate(tmp_path):
               "def main():\n"
               "    while True:\n"
               "        sr = step_reference_tb()\n"
-              "        if sr.status in ('PASS', 'SKIP', 'WAIVED'):\n"
+              "        if sr.status in ('PASS', 'SKIP', 'WAIVED', 'INCOMPLETE'):\n"
               "            break\n"
-              "        if sr.status in ('PASS', 'SKIP', 'WAIVED'):\n"
+              "        if sr.status in ('PASS', 'SKIP', 'WAIVED', 'INCOMPLETE'):\n"
               "            step_rtl_gen()\n"
               "            step_reference_tb()\n"
               "        break\n")
@@ -1073,10 +1073,10 @@ def test_loop_fact_cannot_survive_receipt_mutation_after_the_guard(tmp_path):
               "def main():\n"
               "    while True:\n"
               "        sr = step_reference_tb()\n"
-              "        if sr.status in ('PASS', 'SKIP', 'WAIVED'):\n"
+              "        if sr.status in ('PASS', 'SKIP', 'WAIVED', 'INCOMPLETE'):\n"
               "            break\n"
               "        sr.status = 'PASS'\n"
-              "        if sr.status not in ('PASS', 'SKIP', 'WAIVED'):\n"
+              "        if sr.status not in ('PASS', 'SKIP', 'WAIVED', 'INCOMPLETE'):\n"
               "            step_rtl_gen()\n"
               "            step_reference_tb()\n"
               "        break\n")
@@ -1098,10 +1098,10 @@ def test_loop_remeasurement_cannot_hide_under_the_terminal_predicate(tmp_path):
               "def main():\n"
               "    while True:\n"
               "        sr = step_reference_tb()\n"
-              "        if sr.status in ('PASS', 'SKIP', 'WAIVED'):\n"
+              "        if sr.status in ('PASS', 'SKIP', 'WAIVED', 'INCOMPLETE'):\n"
               "            break\n"
               "        step_rtl_gen()\n"
-              "        if sr.status in ('PASS', 'SKIP', 'WAIVED'):\n"
+              "        if sr.status in ('PASS', 'SKIP', 'WAIVED', 'INCOMPLETE'):\n"
               "            step_reference_tb()\n"
               "        break\n")
     compile(source, "<contradictory-loop-measurement>", "exec")
@@ -1123,10 +1123,10 @@ def test_loop_backedge_obeys_the_known_trigger_complement(tmp_path):
               "def main():\n"
               "    while True:\n"
               "        sr = step_reference_tb()\n"
-              "        if sr.status in ('PASS', 'SKIP', 'WAIVED'):\n"
+              "        if sr.status in ('PASS', 'SKIP', 'WAIVED', 'INCOMPLETE'):\n"
               "            break\n"
               "        step_rtl_gen()\n"
-              "        if sr.status not in ('PASS', 'SKIP', 'WAIVED'):\n"
+              "        if sr.status not in ('PASS', 'SKIP', 'WAIVED', 'INCOMPLETE'):\n"
               "            break\n")
     compile(source, "<fact-owned-backedge>", "exec")
     (progs / "design_one_shot_runner.py").write_text(source)
@@ -1151,7 +1151,7 @@ def test_literal_for_loop_must_actually_iterate(tmp_path, items, expected):
               "def main():\n"
               f"    for _ in {items}:\n"
               "        sr = step_reference_tb()\n"
-              "        if sr.status in ('PASS', 'SKIP', 'WAIVED'):\n"
+              "        if sr.status in ('PASS', 'SKIP', 'WAIVED', 'INCOMPLETE'):\n"
               "            break\n"
               "        step_rtl_gen()\n"
               "        step_reference_tb()\n")
@@ -1172,7 +1172,7 @@ def test_loop_remeasurement_requires_a_post_fallback_path(tmp_path):
               "def main():\n"
               "    while True:\n"
               "        sr = step_reference_tb()\n"
-              "        if sr.status in ('PASS', 'SKIP', 'WAIVED'):\n"
+              "        if sr.status in ('PASS', 'SKIP', 'WAIVED', 'INCOMPLETE'):\n"
               "            break\n"
               "        step_rtl_gen()\n"
               "        break\n")
@@ -1197,7 +1197,7 @@ def test_nested_fallback_that_breaks_cannot_borrow_another_paths_backedge(
               "def main():\n"
               "    while True:\n"
               "        sr = step_reference_tb()\n"
-              "        if sr.status in ('PASS', 'SKIP', 'WAIVED'):\n"
+              "        if sr.status in ('PASS', 'SKIP', 'WAIVED', 'INCOMPLETE'):\n"
               "            break\n"
               "        if should_retry:\n"
               "            step_rtl_gen()\n"
@@ -1221,7 +1221,7 @@ def test_loop_backedge_is_a_real_post_fallback_remeasurement(tmp_path):
               "def main():\n"
               "    while True:\n"
               "        sr = step_reference_tb()\n"
-              "        if sr.status in ('PASS', 'SKIP', 'WAIVED'):\n"
+              "        if sr.status in ('PASS', 'SKIP', 'WAIVED', 'INCOMPLETE'):\n"
               "            break\n"
               "        step_rtl_gen()\n")
     compile(source, "<loop-backedge-remeasure>", "exec")

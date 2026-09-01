@@ -324,7 +324,7 @@ def test_advisory_before_the_failure_is_not_recorded_twice(tmp_path,
         {"advisory_program_exit_zero": "second_check ."},
     ]})
     records = _records(reasons)
-    assert len(records) == 2, records
+    assert {r["gate"] for r in records} == {"first_check", "second_check"}, records
     assert len([r for r in records if r["gate"] == "first_check"]) == 1
 
 

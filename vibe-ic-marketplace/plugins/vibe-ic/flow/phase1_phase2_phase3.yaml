@@ -6844,6 +6844,11 @@ steps:
       - "reports/phase3/dfm_screen.json"
     gate:
       all_of:
+        # AUDIT NOTE (by-design, not a gap): this step's only blocking
+        # predicate is producer artefact presence. dfm_screen_check is declared
+        # in program_outputs above because it classifies PASS/advisory/skip but
+        # owns no refusal predicate; Issue #1980 deliberately keeps that
+        # producer record out of the gate denominator.
         # BLOCKING half: the screen must have produced its artefact. A step
         # that never ran cannot be certified done.
         - files_exist: ["reports/phase3/dfm_screen.json"]

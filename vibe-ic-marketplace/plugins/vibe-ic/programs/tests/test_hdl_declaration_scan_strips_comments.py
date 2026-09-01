@@ -194,6 +194,29 @@ def test_a_pattern_that_names_no_declaration_is_out_of_scope():
     assert not G.declares_hdl(r"Runtime:\s*([\d.]+)s")
 
 
+def test_non_hdl_exemptions_are_exact_live_and_argued():
+    root = PROGRAMS.parent
+    raw = G.scan(root)
+    filtered, problems = G.apply_exemptions(raw, root)
+    assert problems == []
+    for name, reason in G._NOT_HDL_DECLARATION.items():
+        assert name in raw
+        assert name not in filtered
+        assert len(reason.strip()) >= G._EXEMPT_REASON_MIN
+
+
+def test_non_hdl_exemption_does_not_hide_a_neighbouring_declaration_scan(
+        tmp_path):
+    programs = tmp_path / "programs"
+    programs.mkdir()
+    source = _SIBLING.replace("def detect", "def other")
+    (programs / "neighbour.py").write_text(source)
+    raw = G.scan(tmp_path)
+    filtered, problems = G.apply_exemptions(raw, tmp_path)
+    assert problems == []
+    assert filtered == ["neighbour::other::_MODULE_RE(t)"]
+
+
 def test_the_keyword_test_is_SHALLOW_and_that_is_why_the_baseline_is_large():
     """Stated rather than hidden. `Chip area for module 'x'` is yosys OUTPUT,
     not HDL, and this test admits it — the keyword is there.

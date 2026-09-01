@@ -119,6 +119,7 @@ import analog_a3_netlist_emit as _a3             # noqa: E402
 import analog_real_corner_sweep as _ars          # noqa: E402
 import pdk_analog_device_params as _pdp          # noqa: E402
 import pdk_analog_layout_minima as _minima       # noqa: E402
+import _atomic_artefact as _aa                   # noqa: E402
 
 PRODUCER = "programs/pdk_analog_characterize.py"
 REGISTRY = Path(__file__).resolve().parent / "pdk_registry.json"
@@ -1360,20 +1361,12 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     if a.out:
         p = Path(a.out)
-        p.parent.mkdir(parents=True, exist_ok=True)
-        p.write_text(json.dumps({"family": family,
-                                 _pdp.MEASURED_KEY: record},
-                                indent=2, ensure_ascii=False) + "\n",
-                     encoding="utf-8")
+        _aa.write_json(p, {"family": family, _pdp.MEASURED_KEY: record})
         report["out"] = str(p)
 
     if project is not None:
         p = project / _pdp.PROJECT_RECORD
-        p.parent.mkdir(parents=True, exist_ok=True)
-        p.write_text(json.dumps({"family": family,
-                                 _pdp.MEASURED_KEY: record},
-                                indent=2, ensure_ascii=False) + "\n",
-                     encoding="utf-8")
+        _aa.write_json(p, {"family": family, _pdp.MEASURED_KEY: record})
         report["project_record"] = str(p)
 
     if a.write_registry:

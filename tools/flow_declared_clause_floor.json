@@ -197,11 +197,6 @@
     },
     {
       "step": "20",
-      "kind": "advisory_program_exit_zero",
-      "cmd": "hold_area_budget_check . --json reports/phase3/pnr/hold_area_budget.json"
-    },
-    {
-      "step": "20",
       "kind": "program_exit_zero",
       "cmd": "hold_closure_check . --json reports/phase3/pnr/hold_closure.json"
     },
@@ -353,22 +348,7 @@
     {
       "step": "31",
       "kind": "advisory_program_exit_zero",
-      "cmd": "lvs_triage_classify --report reports/phase3/lvs.rpt"
-    },
-    {
-      "step": "31",
-      "kind": "advisory_program_exit_zero",
       "cmd": "mcp_execution_verify --manifest latest_results.jsonl --require-steps drc,lvs"
-    },
-    {
-      "step": "31",
-      "kind": "advisory_program_exit_zero",
-      "cmd": "perc_corpus_sweep . --report reports/phase3/perc_sweep.json"
-    },
-    {
-      "step": "31",
-      "kind": "advisory_program_exit_zero",
-      "cmd": "pnr_via_stack_completeness_check ."
     },
     {
       "step": "31",
@@ -454,11 +434,6 @@
       "step": "34",
       "kind": "program_exit_zero",
       "cmd": "metal_fill_density_check . --json reports/phase2/gates/metal_fill_density.json"
-    },
-    {
-      "step": "35",
-      "kind": "advisory_program_exit_zero",
-      "cmd": "dfm_screen_check . --json reports/phase2/gates/dfm_screen.json"
     },
     {
       "step": "36",

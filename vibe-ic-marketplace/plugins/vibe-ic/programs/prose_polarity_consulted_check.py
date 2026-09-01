@@ -118,6 +118,50 @@ _SEARCH_ATTRS = {"search", "findall", "finditer", "match", "fullmatch"}
 #: The count is printed on every run, clean or not.
 _EXEMPT_REASON_MIN = 80
 _NOT_PROSE: Dict[str, str] = {
+    "_ic_release_artefacts::_def_class":
+        "Routed DEF UNITS, DIEAREA and COMPONENTS productions. DEF has no syntax "
+        "for denying one of these declarations; the value is present in the "
+        "machine grammar or absent, and this reader reports absence explicitly.",
+    "_ic_release_artefacts::_def_pins":
+        "Routed DEF PINS entries and their USE attributes. These are formal DEF "
+        "grammar productions, not natural-language claims; a pin or USE field "
+        "cannot be negated by prose surrounding the matched declaration.",
+    "design_one_shot_runner::step_full_stack_tb_gen":
+        "Generated Verilog named-port connection syntax is parsed from the "
+        "runner-owned testbench skeleton. The matched `.name(` token is an HDL "
+        "grammar production and Verilog has no prose form that denies it.",
+    "digital_hardmacro_gen::_specialnet_entries":
+        "Routed DEF SPECIALNETS entries and USE attributes are machine-written "
+        "grammar. A special-net entry either exists or does not; DEF provides no "
+        "natural-language denial form for the parser to consult.",
+    "digital_hardmacro_gen::discover_stdcell_rails":
+        "LEF MACRO, SIZE, PIN, USE, LAYER and RECT productions are formal foundry "
+        "grammar. None can be denied by neighbouring prose, so polarity on these "
+        "machine tokens would be an unreachable branch.",
+    "digital_hardmacro_gen::run":
+        "The matched value is the DESIGN production in the routed DEF chosen for "
+        "hard-macro packaging. It is formal DEF syntax, not a prose assertion, "
+        "and absence is already a loud refusal in this producer.",
+    "em_current_density_check::_def_pg_widths_of":
+        "DEF UNITS and SPECIALNETS ROUTED/NEW wire productions are formal layout "
+        "grammar. Width tokens cannot be negated in that grammar; missing or "
+        "unreadable declarations already produce an empty measured authority.",
+    "pdk_analog_characterize::simulator_provenance":
+        "The scan reads ngspice's machine/tool version banner, not a design "
+        "document. A version token has no surrounding natural-language denial "
+        "whose polarity could change the provenance value.",
+    "phase3_one_shot_runner::_pdn_em_width_floor":
+        "The matches read machine-produced EM report fields plus the LEF "
+        "MANUFACTURINGGRID production. These formal measurement grammars cannot "
+        "deny their numeric tokens in surrounding prose.",
+    "release_docs_check::_parameter_values":
+        "SystemVerilog parameter declarations are formal HDL grammar. A parameter "
+        "is declared with an expression or is absent; HDL has no prose denial "
+        "form that could reverse the extracted integer value.",
+    "release_docs_check::constraint_ids":
+        "The matcher reads the repository's mandatory-constraint row grammar, "
+        "whose identifier and text fields are explicitly delimited. It is a "
+        "machine document production, not free prose from which a value is inferred.",
     "crosslayer_rewrite_equivalence::module_ports":
         "Verilog/SystemVerilog module port declarations. The matched text is a "
         "production of the HDL grammar — `module m(input wire [7:0] a, ...)` in the "

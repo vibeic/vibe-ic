@@ -132,6 +132,24 @@ _STRIPPER = re.compile(r"strip.*comment|_strip_hdl|decomment|no_comment", re.I)
 _COMMENT_PAT = re.compile(r"//|/\*|\*/")
 _SCAN = {"search", "finditer", "findall", "match", "fullmatch", "split", "sub"}
 
+#: Exact false positives where the regex contains an HDL keyword but does not
+#: parse HDL. This is deliberately not a wider pattern exception: widening
+#: `declares_hdl` would also remove real declaration scans from the debt
+#: population. Every row must remain a live raw finding and carry an argument.
+_EXEMPT_REASON_MIN = 80
+_NOT_HDL_DECLARATION: Dict[str, str] = {
+    "_flow_reason_taxonomy::infer_nonverdict_reason::_BLOCKED_RE(text)":
+        "The regex classifies English non-verdict reasons such as 'required "
+        "output missing' and 'input docs absent'. Its input/output words are "
+        "prose nouns, not Verilog declaration productions, and stripping HDL "
+        "comments from a reason string would corrupt URLs and diagnostics.",
+    "_flow_reason_taxonomy::infer_nonverdict_reason::_DECLARED_NA_RE(text)":
+        "The regex classifies the English reason 'no inout' as a declared "
+        "design N/A. It never extracts an HDL declaration; treating that prose "
+        "word as one would require comment-stripping diagnostic text that is "
+        "not HDL and may legitimately contain slash characters.",
+}
+
 
 def _strips_comments_inline(call: ast.Call) -> bool:
     """`re.sub(<a comment pattern>, ...)` — a strip written in place."""
@@ -268,6 +286,27 @@ def scan(root: Path) -> List[str]:
     return sorted(set(out))
 
 
+def apply_exemptions(raw: List[str], root: Path) -> Tuple[List[str], List[str]]:
+    """Remove only argued, live non-HDL matches; report stale rows loudly."""
+    live = set(raw)
+    problems: List[str] = []
+    in_scope = {
+        name for name in _NOT_HDL_DECLARATION
+        if (root / "programs" / f"{name.split('::', 1)[0]}.py").is_file()
+    }
+    for name in sorted(in_scope):
+        reason = _NOT_HDL_DECLARATION[name]
+        if len(reason.strip()) < _EXEMPT_REASON_MIN:
+            problems.append(
+                f"{name}: reason is {len(reason.strip())} chars, under the "
+                f"{_EXEMPT_REASON_MIN} required")
+        if name not in live:
+            problems.append(
+                f"{name}: exempted, but the raw scan no longer flags it; "
+                "delete or re-derive the exemption")
+    return sorted(live - in_scope), problems
+
+
 def _load(p: Path) -> Optional[List[str]]:
     try:
         d = json.loads(p.read_text(encoding="utf-8"))
@@ -291,7 +330,13 @@ def main(argv=None) -> int:
               f"{root}. NOT a pass.", file=sys.stderr)
         return 2
 
-    now = scan(root)
+    raw = scan(root)
+    now, exemption_problems = apply_exemptions(raw, root)
+    if exemption_problems:
+        print("[FAIL] stale or unargued non-HDL declaration-scan exemption:")
+        for problem in exemption_problems:
+            print(f"   {problem}")
+        return 1
     bpath = Path(a.baseline) if a.baseline else root / "programs" / _BASELINE_NAME
 
     if a.write_baseline:

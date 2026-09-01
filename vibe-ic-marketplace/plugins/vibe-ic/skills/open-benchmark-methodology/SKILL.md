@@ -44,7 +44,7 @@ Forbidden alternatives include:
 and is called by `--solve`. If it fails, stop and repair the product entry before
 running a benchmark.
 
-## General core and thin adapters
+## GENERAL-CORE / THIN-ADAPTER
 
 Benchmark-specific code may only translate formats or invoke the official
 scorer. A thin adapter may:
@@ -131,6 +131,16 @@ CVDP scoring additionally requires `--scorer-root <official-cvdp-root>` (or
 `CVDP_BENCHMARK_ROOT`) and the exact official simulation images. Run the shipped
 EDA image preflight before scoring. Do not substitute tools silently.
 
+Before invoking any official host scorer, run the deterministic cwd guard over
+the exact design and scorer working directory (and testbench when applicable):
+
+```bash
+python3 programs/benchmark_score_cwd_guard.py \
+  --design <DESIGN_DIR> --cwd <SCORER_CWD> [--tb <TESTBENCH>]
+```
+
+A non-zero guard verdict blocks scoring; do not treat it as advisory.
+
 ## Four-stage attribution
 
 Record every problem, including failures, in a per-problem table:
@@ -176,6 +186,16 @@ and a control showing the prompt-correct interpretation cannot satisfy the
 official oracle. A known-systematic tool blocker must cite its tracking issue
 number. Never infer a floor merely because one attempt failed.
 
+After writing the per-problem triage record, validate both its internal
+consistency and whether every general recovery was absorbed into the product:
+
+```bash
+python3 programs/triage_record_check.py <TRIAGE_RECORDS.json>
+python3 programs/benchmark_triage_absorption_audit.py <TRIAGE_RECORDS.json>
+```
+
+Either non-zero verdict blocks the result handoff.
+
 ## Capture enhancement
 
 Post-score recovery is not part of the blind score. When AI finds a correct
@@ -188,6 +208,11 @@ repair that Program missed:
 4. run no-leak and false-positive controls on non-benchmark/general inputs;
 5. issue a version-less PR and wait for it to land;
 6. upgrade the installed plugin/MCP and run a new full clean-room benchmark.
+
+Before recording the capture as complete, run
+`python3 programs/convergence_doctrine_present_check.py`; a non-zero verdict
+means the general-core/adapter and Program-First doctrine is not preserved and
+the capture is incomplete.
 
 Do not encode problem IDs, dataset labels, hidden expected values, or a lookup
 table. Capture is successful only when the next ordinary Program First run
@@ -208,6 +233,7 @@ Every result must include:
 Save the final result and run the skill compliance check:
 
 ```bash
+python3 programs/benchmark_result_md_lint.py <RESULT.md>
 python3 plugins/vibe-ic/_shared/skill_compliance_check.py \
   --requirements plugins/vibe-ic/skills/open-benchmark-methodology/compliance.yaml \
   <RESULT.md>

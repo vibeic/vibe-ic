@@ -101,6 +101,7 @@ import _ic_release_artefacts as _art
 import _vacuous_exit as _vx
 import digital_hardmacro_check as _hm
 from _atomic_artefact import write_text as atomic_write_text
+from _specrtl_common import strip_comments
 from _release_docs_contract import (
     CONSTRAINT_BEARING,
     DERIVED_COLUMN,
@@ -258,7 +259,7 @@ def _balanced(text: str, start: int) -> Optional[Tuple[str, int]]:
 
 
 def _module_parts(v_text: str) -> Optional[Tuple[str, str, str]]:
-    text = _V_COMMENT_RE.sub(" ", v_text)
+    text = strip_comments(v_text)
     module = _V_MODULE_START_RE.search(text)
     if module is None:
         return None
@@ -412,6 +413,12 @@ def verilog_port_widths(v_text: str) -> Optional[List[Tuple[str, str, int]]]:
     if parts is None:
         return None
     parameter_text, header, body = parts
+    # Keep the safety dataflow explicit at each declaration scan. The helper
+    # already strips, but the census intentionally does not infer safety across
+    # function returns.
+    parameter_text = strip_comments(parameter_text)
+    header = strip_comments(header)
+    body = strip_comments(body)
     parameters = _parameter_values(parameter_text, body)
     rows: List[Tuple[str, str, int]] = []
     if re.search(r"\b(?:input|output|inout)\b", header):
