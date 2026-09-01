@@ -137,3 +137,48 @@ def test_skip_when_not_a_graded_converter(tmp_path: Path):
     r, rpt = _run(tmp_path)
     assert r.returncode == 0
     assert rpt["verdict"] == "SKIP"
+
+
+def test_unmeasured_publishes_a_typed_reason_class(tmp_path: Path):
+    """UNMEASURED must say WHY, in the taxonomy's own vocabulary.
+
+    An UNMEASURED verdict exits 2. A consumer that reads only the exit code
+    and the prose has no typed reason to read, and
+    `_flow_reason_taxonomy.infer_nonverdict_reason` is deliberately
+    fail-closed: an unclassified non-verdict is classified EXECUTION_ERROR,
+    which tells a reader the gate CRASHED. This gate does not crash here — it
+    runs, examines the block, and finds no corner carrying the field the
+    declared axis is graded on. That is a zero measured denominator.
+
+    Measured on a real run (u_hawaii_adc, v1.15.37): Step A4 carried
+    `analog_adc_enob_corner_check rc=2 verdict=INCOMPLETE
+    reason_class=EXECUTION_ERROR` for exactly this input.
+    """
+    spec = {"block": "adc0", "type": "adc",
+            "specs": [{"name": "enob", "target": 14}]}
+    # A corner that ran, and carries no sndr/enob field at all.
+    corners = {"corners": [{"name": "TT_27c", "vout_v": 0.62}]}
+    _mk(tmp_path, "adc0", spec, corners)
+    r, rpt = _run(tmp_path)
+    assert r.returncode == 2
+    assert rpt["verdict"] == "UNMEASURED", rpt
+    assert rpt.get("reason_class") == "ZERO_DENOMINATOR", rpt
+
+
+def test_reason_class_is_not_skip_eligible(tmp_path: Path):
+    """The published class must not be able to launder UNMEASURED into a skip.
+
+    ZERO_DENOMINATOR is in `_flow_reason_taxonomy.INCOMPLETE`. If a later edit
+    moved this gate to a SKIP_ELIGIBLE class, the step would silently leave the
+    follow-up population, so the class is pinned against the taxonomy itself
+    rather than against a literal.
+    """
+    import _flow_reason_taxonomy as tax
+    spec = {"block": "adc0", "type": "adc",
+            "specs": [{"name": "enob", "target": 14}]}
+    corners = {"corners": [{"name": "TT_27c", "vout_v": 0.62}]}
+    _mk(tmp_path, "adc0", spec, corners)
+    _r, rpt = _run(tmp_path)
+    cls = rpt.get("reason_class")
+    assert cls not in tax.SKIP_ELIGIBLE, cls
+    assert cls in tax.INCOMPLETE, cls

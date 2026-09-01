@@ -201,12 +201,28 @@ def run_audit(project: Path) -> dict:
             verdict = "PASS"
 
     graded = [r for r in results if r.get("status") in ("PASS", "FAIL")]
-    return {
+    report = {
         "gate": GATE,
         "verdict": verdict,
         "blocks_graded": len(graded),
         "blocks": results,
     }
+    # PUBLISH THE REASON, NOT ONLY THE REFUSAL. An UNMEASURED verdict exits 2,
+    # and a consumer that reads only the exit code and the prose has no typed
+    # reason to read: `_flow_reason_taxonomy.infer_nonverdict_reason` is
+    # deliberately fail-closed, so an unclassified non-verdict is reported as
+    # EXECUTION_ERROR — i.e. "this gate crashed". This gate did not crash. It
+    # ran, it examined every block, and it found that no corner carries the
+    # `sndr`/`enob` field the declared axis is graded on: a zero measured
+    # denominator, which the taxonomy already has a word for.
+    #
+    # ZERO_DENOMINATOR is in `_flow_reason_taxonomy.INCOMPLETE`, NOT in
+    # `SKIP_ELIGIBLE`, so naming it cannot launder this into a skip or a pass:
+    # the step stays INCOMPLETE either way. The only thing that changes is
+    # whether the reader is told the gate errored or told what it measured.
+    if verdict == "UNMEASURED":
+        report["reason_class"] = "ZERO_DENOMINATOR"
+    return report
 
 
 def main(argv: Optional[List[str]] = None) -> int:

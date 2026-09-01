@@ -3597,7 +3597,7 @@ steps:
         # of these still follow every blocking sub-gate, so both are still
         # re-run. Order here is a re-run contract, not a preference.
         - advisory_program_exit_zero:
-              command: "analog_adc_enob_corner_check ."
+              command: "analog_adc_enob_corner_check . --json reports/analog/analog_adc_enob_corner_check.json"
               advisory_reason: "NOT-YET-CLEAN: this gate CAN refuse and is wired advisory as a ratchet position, not as a verdict. Notch measured rc 0 on a real spm run (2026-08-31): it is already clean on real input, so blocking would cost nothing today; the only thing holding it advisory is that no other run has been measured."
         - advisory_program_exit_zero:
               command: "analog_sigma_delta_gain_floor_check ."
