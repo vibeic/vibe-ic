@@ -64,6 +64,7 @@ Waivers (<project>/waivers.json):
 """
 from __future__ import annotations
 
+import ast
 import argparse
 import fnmatch
 import functools
@@ -7572,6 +7573,74 @@ def _p0_gate_record(name: str,
     }
 
 
+@functools.lru_cache(maxsize=1)
+def _two_source_advisory_gates() -> frozenset:
+    """Structural gates that BOTH their own module AND the flow call advisory.
+
+    Membership needs TWO independent declarations to agree:
+
+      1. the gate module's own docstring carries ``ENFORCEMENT: advisory``
+      2. the canonical flow wires it under ``advisory_program_exit_zero``
+         (and never under the blocking ``program_exit_zero``)
+
+    Neither is this function's opinion; it reads what the gate and the flow
+    already say. A gate that declares blocking, or that the flow wires
+    blocking, is untouched no matter what the other source says -- the
+    conservative direction, because a disagreement should be resolved by an
+    author, not silently downgraded.
+
+    MEASURED, and the reason this exists: `_STRUCTURAL_RTL_GATES` is a
+    hand-maintained tuple whose comment still asserts its L4/L5/L6 members
+    "All three BLOCK (see their docstrings)". That stopped being true for the
+    L6 member when vibe-ic#1035 reconciled it to `ENFORCEMENT: advisory` --
+    the gate's docstring and the flow row were both updated and this tuple was
+    not. Its own blast-radius measurement records 41 of 107 published roots red
+    from ONE broken producer (the L6 prose-walker emits `transitions: []` every
+    time), which is precisely why it is advisory; enforcing it here failed a
+    design whose input documents legitimately delegate microarchitecture.
+    """
+    return frozenset(g for g in _STRUCTURAL_RTL_GATES
+                     if _gate_is_two_source_advisory(g))
+
+
+@functools.lru_cache(maxsize=512)
+def _gate_is_two_source_advisory(gate: str) -> bool:
+    """True when the gate module AND the flow row BOTH declare it advisory."""
+    if not gate or not re.fullmatch(r"[A-Za-z0-9_]+", gate):
+        return False
+    mod = Path(__file__).resolve().parent / f"{gate}.py"
+    try:
+        text = mod.read_text(errors="replace")
+    except OSError:
+        return False
+    # The declaration must be the MODULE'S OWN docstring, not any occurrence
+    # in the file: prose that merely DISCUSSES the convention (this module
+    # does, a few hundred lines up) must not be mistaken for a module
+    # declaring itself advisory. Parsed, never grepped.
+    try:
+        doc = ast.get_docstring(ast.parse(text)) or ""
+    except (SyntaxError, ValueError):
+        return False
+    if not re.search(r"(?m)^ *ENFORCEMENT: *advis", doc):
+        return False
+    try:
+        flow_text = _canonical_flow_text()
+    except Exception:
+        return False
+    adv = re.search(r'advisory_program_exit_zero:\s*\n\s*command: "'
+                    + re.escape(gate) + r'\b', flow_text)
+    blocking = re.search(r'(?<!advisory_)program_exit_zero:\s*\n\s*command: "'
+                         + re.escape(gate) + r'\b', flow_text)
+    return bool(adv and not blocking)
+
+
+def _canonical_flow_text() -> str:
+    """The canonical flow YAML as text (path only, never parsed here)."""
+    here = Path(__file__).resolve().parent
+    return (here.parent / "flow" / "phase1_phase2_phase3.yaml").read_text(
+        errors="replace")
+
+
 def _p0_waiver_record(waiver: Dict[str, Any]) -> Dict[str, Any]:
     """The record for a gate whose FAIL was converted to a deferred waiver.
 
@@ -8328,6 +8397,23 @@ def _run_structural_rtl_gates(project: Path,
                     "first_line": _fsm_floor_line,
                 }
                 return _p0_waiver_record(_w)
+            elif gate_name in _two_source_advisory_gates():
+                # DEGRADE LOUDLY: the finding is kept, named, and reported --
+                # it just does not flip the umbrella verdict, because the gate
+                # itself and the canonical flow BOTH declare it advisory. The
+                # denominator is unchanged: the gate ran and returned.
+                return _p0_waiver_record({
+                    "gate": gate_name,
+                    "ticket": "ENFORCEMENT:advisory",
+                    "review_required": True,
+                    "reason": (
+                        "gate declares `ENFORCEMENT: advisory` in its own "
+                        "docstring AND the canonical flow wires it under "
+                        "`advisory_program_exit_zero`; recorded as a finding, "
+                        "not as a blocking structural FAIL"),
+                    "first_line": first_line,
+                    "evidence": f"{gate_name}.py + flow/phase1_phase2_phase3.yaml",
+                })
             else:
                 return _p0_gate_record(gate_name, "FAIL", first_line,
                                        {"exit_code": 1})
@@ -9209,6 +9295,23 @@ def _evaluate_gate(project: Path, gate: Dict[str, Any],
                 f"reason_class={record['reason_class']}]")
             if out:
                 reasons.append(f"output: {out[:200]}")
+            # An `advisory_program_exit_zero` row that FAILS its step on a
+            # refusal is indistinguishable from the blocking
+            # `program_exit_zero` row, which makes the two slot names a
+            # distinction without a difference.
+            #
+            # Honour the refusal as advisory ONLY on two-source agreement:
+            # the gate's own module says `ENFORCEMENT: advisory` AND the
+            # canonical flow wires it advisory and never blocking. A gate
+            # that still declares itself blocking while wired advisory is a
+            # real disagreement between two authors and keeps blocking here
+            # -- it is not this function's place to resolve that silently.
+            #
+            # The refusal is already appended above and carried in the
+            # structured record, so it is REPORTED either way; what changes
+            # is only whether it flips the step verdict.
+            if _gate_is_two_source_advisory(_gate_name(cmd)):
+                return True, reasons
             return False, reasons
         if enforcement == "DISCLOSED_SKIP":
             _structured_norm = str(

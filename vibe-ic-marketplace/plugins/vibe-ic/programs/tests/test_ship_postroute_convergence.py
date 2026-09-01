@@ -93,6 +93,24 @@ def test_postroute_marker_is_the_final_real_spef_measure():
     assert tcl.rindex("read_spef", 0, pr) > tcl.index("for {set _cvg 0}")
 
 
+def test_every_ship_slack_is_measured_with_the_signoff_propagated_clock():
+    """The repair's promotion number must use the same post-CTS clock view as
+    the independent multi-corner sign-off.  An ideal-clock promotion can be
+    positive while the shipped route fails once clock-network delay is applied.
+
+    The emitted Tcl is the runner's boundary contract with OpenROAD: reading
+    the SDC establishes the clocks, then they must be made propagated before
+    the first repair measurement and therefore before the final promotion
+    measurement as well.
+    """
+    tcl = _emit(Path("/tmp"))
+    assert tcl.count("set_propagated_clock [all_clocks]") == 1
+    propagated = tcl.index("set_propagated_clock [all_clocks]")
+    assert tcl.index("read_sdc") < propagated
+    assert propagated < tcl.index('puts "SHIP_WNS_BEFORE:')
+    assert propagated < tcl.index('puts "SHIP_WNS_POSTROUTE:')
+
+
 # ---------------------------------------------------------- parse/gate -----
 
 def test_parse_extracts_wns_postroute():

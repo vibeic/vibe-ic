@@ -21964,6 +21964,88 @@ def _prepare_padring_for_route(
     return result, consumer
 
 
+def _stage_via_legalized_tech_lef(project: Path, pdk: PdkConfig,
+                                  container: str, out_dir: Path) -> dict:
+    """Stage one derived tech LEF whose fixed/generated VIA patches obey it.
+
+    REMEDIATION, not a verdict.  On success ``pdk.tech_lef`` is changed in
+    place so PnR, extraction, stream-out and sign-off all consume the identical
+    derived input.  An unreadable or untransformable source is kept unchanged
+    and a named ``NOT_APPLIED`` report is emitted; this helper never silently
+    substitutes a partial tech LEF.
+    """
+    source_value = getattr(pdk, "tech_lef", None)
+    source = str(source_value) if source_value else ""
+    report_path = project / "reports/pdk_via_patch_legalization.json"
+    report_path.parent.mkdir(parents=True, exist_ok=True)
+    staged = out_dir / "active_via_legalized.tlef"
+    payload: Dict[str, Any] = {
+        "program": "phase3_one_shot_runner._stage_via_legalized_tech_lef",
+        "enforcement": "REMEDIATION",
+        "failure_policy": "ADVISORY_KEEP_ORIGINAL_AND_DISCLOSE",
+        "source_tech_lef": source or None,
+        "derived_tech_lef": None,
+        "status": "NOT_APPLIED",
+    }
+    if not source:
+        payload["reason"] = (
+            "the PDK object declares no active tech LEF; the original flow is "
+            "retained without attempting VIA-patch remediation")
+        _aa.write_text(report_path, json.dumps(payload, indent=2,
+                                               ensure_ascii=False) + "\n")
+        return payload
+    # step_pnr has one bounded redispatch path.  The first call mutates the
+    # shared PdkConfig, so the second call sees the derived path as its source.
+    # Preserve the original APPLIED provenance when the staged bytes still
+    # match it; otherwise a retry would overwrite evidence of the remediation
+    # with a misleading NOT_NEEDED report about its own output.
+    if (Path(source).resolve() == staged.resolve()
+            and staged.is_file() and report_path.is_file()):
+        try:
+            previous = json.loads(report_path.read_text())
+            staged_sha = hashlib.sha256(staged.read_bytes()).hexdigest()
+            if (previous.get("status") == "APPLIED"
+                    and previous.get("derived_tech_lef") == source
+                    and previous.get("derived_sha256") == staged_sha):
+                return previous
+        except (OSError, ValueError, TypeError):
+            pass
+    try:
+        source_text = _v1_6_604_read_text_or_container_cat(source, container)
+        if source_text is None:
+            raise OSError(f"tech LEF is unreadable on host and in {container}")
+        from pdk_via_patch_legalize import legalize_via_patches  # noqa: PLC0415
+        fixed, transform = legalize_via_patches(source_text)
+        payload.update(transform)
+        payload["source_sha256"] = hashlib.sha256(
+            source_text.encode()).hexdigest()
+        if (transform["remaining_via_rule_violations"]
+                or transform["unresolved_generate_rules"]):
+            payload["status"] = "REFUSED_PARTIAL"
+            payload["reason"] = (
+                "the derived text still contains explicit VIA landing rule "
+                "violations; the original tech LEF is retained")
+        elif transform["changed_patch_records"]:
+            out_dir.mkdir(parents=True, exist_ok=True)
+            _aa.write_text(staged, fixed)
+            payload["status"] = "APPLIED"
+            payload["derived_tech_lef"] = str(staged)
+            payload["derived_sha256"] = hashlib.sha256(
+                fixed.encode()).hexdigest()
+            pdk.tech_lef = str(staged)
+        else:
+            payload["status"] = "NOT_NEEDED"
+            payload["reason"] = (
+                "every explicit VIA routing-layer landing already meets the "
+                "same tech LEF's MINWIDTH/WIDTH and AREA declarations")
+    except Exception as exc:                                   # nosec
+        payload["status"] = "NOT_APPLIED"
+        payload["reason"] = repr(exc)
+    _aa.write_text(report_path, json.dumps(payload, indent=2,
+                                           ensure_ascii=False) + "\n")
+    return payload
+
+
 def step_pnr(project: Path, top: str, pdk: PdkConfig,
              container: str, die_um: str, util: float,
              spare_density=None, pad_ring_step=step_pad_ring_gen,
@@ -21992,6 +22074,24 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
             })
     out_dir = _pl.pnr_dir(project)
     out_dir.mkdir(parents=True, exist_ok=True)
+    # The active tech LEF itself can contain a contradiction: a VIA landing
+    # smaller than the routing layer's own MINWIDTH/AREA.  Post-route RECT
+    # patching is too late (the router did not reserve the required spacing),
+    # and a GDS-only edit would be invisible to RCX/LVS.  Derive one legal LEF
+    # before any backend consumer resolves its path, then mutate the shared
+    # PdkConfig so every downstream consumer sees the same geometry.
+    _via_legalization = _stage_via_legalized_tech_lef(
+        project, pdk, container, out_dir)
+    if _via_legalization["status"] == "APPLIED":
+        print("[phase3] VIA-LANDING REMEDIATION APPLIED: "
+              f"{_via_legalization['changed_patch_records']} fixed/generated "
+              "routing patch record(s) grown from active tech-LEF rules; all "
+              f"consumers use {pdk.tech_lef}", file=sys.stderr)
+    elif _via_legalization["status"] not in ("NOT_NEEDED",):
+        print("[phase3] VIA-LANDING REMEDIATION NOT APPLIED: "
+              f"{_via_legalization.get('reason', 'unspecified')}; original "
+              "tech LEF retained and the run is not silently certified",
+              file=sys.stderr)
     # #365 third ask — point per-invocation provenance at THIS project, so
     # every supervised tool run below records a MEASURED duration instead of
     # the flow ending with a handful of back-filled zero-duration entries.
@@ -26065,6 +26165,9 @@ def _ship_signoff_spef_repair_tcl(top: str, tech_lef_c: str, cell_lef_c: str,
         f"catch {{write_spef {pnr_dir_c}/signoff_repair_max.spef}}\n"
         f"if {{[catch {{read_spef {pnr_dir_c}/signoff_repair_max.spef}} e]}} {{ "
         f"puts \"SHIP_RDSPEF_NONFATAL: $e\" }}\n"
+        + _propagated_clock_tcl(
+            reason=("The routed DEF is post-CTS and real max-RC parasitics "
+                    "are annotated"))
         # EST-0027 — pin the resizer to the REAL detailed-route parasitics we just
         # annotated (extract_parasitics -> write/read_spef). Without this the DRV
         # (max_cap/max_slew) evaluation inside repair_design can still fall back to
@@ -26072,7 +26175,7 @@ def _ship_signoff_spef_repair_tcl(top: str, tech_lef_c: str, cell_lef_c: str,
         # nets and the max-RC SPEF DRVs the sign-off judges on survive. The command
         # only sets parasitics_src=detailed_routing (no re-estimate); read_spef
         # FIRST. NONFATAL: stock OpenROAD without the flag keeps the old behaviour.
-        "if {[catch {estimate_parasitics -detailed_routing} e]} { "
+        + "if {[catch {estimate_parasitics -detailed_routing} e]} { "
         "puts \"SHIP_EST_DR_NONFATAL: $e\" }\n"
         "catch {puts \"SHIP_WNS_BEFORE: [sta::worst_slack -max]\"}\n"
         # DRV-CLOSURE-LOOP — `repair_design` is a GREEDY SINGLE-PASS resizer:
