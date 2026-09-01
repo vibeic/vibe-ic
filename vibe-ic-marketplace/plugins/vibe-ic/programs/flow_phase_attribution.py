@@ -103,18 +103,19 @@ _STEP_REPORT_REASON = (
     "disagree (step 9 'Synthesis' pass while yosys_synth FAIL)")
 
 # The runner's status vocabulary, RE-PARTITIONED for the question this module
-# asks. `design_one_shot_runner._aggregate_verdict` partitions the same eleven
+# asks. `design_one_shot_runner._aggregate_verdict` partitions the same
 # statuses into FAIL / GREEN / SKIP / WAIVED because it is deciding a verdict;
 # this module is deciding whether a gate was ATTEMPTED, which cuts the same set
 # differently (BLOCKED is a FAIL for the verdict and a NOT-ATTEMPTED here — the
 # step refused to run). The two partitions must stay TOTAL over the same
-# eleven: anything outside lands in `unclassified_status` BY NAME, the same
+# vocabulary: anything outside lands in `unclassified_status` BY NAME, the same
 # refusal-to-absorb that function makes, so a status invented tomorrow cannot
 # arrive here as a silent pass or a silent skip.
 _STATUS_RAN = frozenset({"PASS", "FAIL", "FAIL_RTL_REPAIR_INERT",
                          "STALE_BOARD_DETECTED", "ADVISORY"})
 _STATUS_NOT_ATTEMPTED = frozenset({"SKIP", "SKIPPED-CONDITION",
-                                   "SKIPPED-BY-ENTRY", "BLOCKED", "WAIVED"})
+                                   "SKIPPED-BY-ENTRY", "SKIPPED-BY-EXIT",
+                                   "BLOCKED", "WAIVED"})
 _STATUS_MARKER = frozenset({"RTL_REPAIR_RETRY"})
 _STATUS_FAILING = ("FAIL", "FAIL_RTL_REPAIR_INERT", "STALE_BOARD_DETECTED")
 

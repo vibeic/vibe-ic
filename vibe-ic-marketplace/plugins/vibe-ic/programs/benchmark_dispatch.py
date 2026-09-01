@@ -122,6 +122,25 @@ class _RunnerBudget:
         if worker_threads < 0:
             raise ValueError("--worker-threads must be >= 0")
         self._heavy = threading.BoundedSemaphore(self.heavy_jobs)
+        # Per-invocation wall-clock ceiling, env-tunable. Unset (default)
+        # keeps the historical unbounded behaviour; set, it stops ONE
+        # problem's runner from eating the whole run's budget. A value that
+        # does not parse as a positive number REFUSES here rather than
+        # degrading to "no ceiling" — a bound that silently turns itself off
+        # reports a safety it does not provide.
+        self.timeout_s: float | None = None
+        raw_timeout = os.environ.get("VIBEIC_SOLVE_RUNNER_TIMEOUT_S")
+        if raw_timeout is not None and raw_timeout.strip():
+            try:
+                self.timeout_s = float(raw_timeout)
+            except ValueError:
+                raise ValueError(
+                    "VIBEIC_SOLVE_RUNNER_TIMEOUT_S must be a number of "
+                    f"seconds, got {raw_timeout!r}") from None
+            if self.timeout_s <= 0:
+                raise ValueError(
+                    "VIBEIC_SOLVE_RUNNER_TIMEOUT_S must be > 0, got "
+                    f"{raw_timeout!r}")
         self._env: dict[str, str] | None = None
         if worker_threads or self.jobs > 1:
             threads = (int(worker_threads) if worker_threads else
@@ -136,9 +155,17 @@ class _RunnerBudget:
         kwargs = {"capture_output": True, "text": True}
         if self._env is not None:
             kwargs["env"] = self._env
+        if self.timeout_s is not None:
+            kwargs["timeout"] = self.timeout_s
         try:
             with self._heavy:
                 proc = subprocess.run(argv, **kwargs)
+        except subprocess.TimeoutExpired:
+            return _ProcessOutcome(
+                rc=None,
+                error=(f"TimeoutExpired: runner exceeded "
+                       f"VIBEIC_SOLVE_RUNNER_TIMEOUT_S={self.timeout_s:g}s "
+                       f"and was killed"))
         except Exception as exc:                         # noqa: BLE001
             return _ProcessOutcome(
                 rc=None, error=f"{type(exc).__name__}: {exc}")
@@ -2283,6 +2310,11 @@ def _solver_argv(runner: Path, proj: Path, entry, exit_step) -> list:
         order = {s: i for i, s in enumerate(tnr.flow_step_ids())}
         if order.get(exit_step, 99) < order.get("15", 99):
             argv.append("--skip-phase3")
+        # --skip-phase3 was the only bit the exit contract used to reach
+        # execution, so a lint-evidence exit still dispatched phase-2 synthesis
+        # and DFT/LEC. Forward the exit itself; the phase2 runner prunes every
+        # dispatch site wholly past it as SKIPPED-BY-EXIT.
+        argv += ["--exit-step", str(exit_step)]
     if entry and entry != "D1":
         argv += ["--entry-step", str(entry)]
     return argv

@@ -614,6 +614,14 @@ def main() -> int:
                         "that runner directly. Only a step that HEADS a "
                         "dispatch span is enterable; a mid-span step is "
                         "refused rather than approximated.")
+    p.add_argument("--exit-step", default=None,
+                   help="STOP the Phase-2 dispatch after this canonical step "
+                        "id: forwarded verbatim to the phase2 runner, whose "
+                        "dispatch sites wholly past it are recorded as "
+                        "SKIPPED-BY-EXIT instead of run (the site holding "
+                        "the exit still runs in full). Omitted: behaviour is "
+                        "unchanged. Pair with --skip-phase3 when the exit "
+                        "precedes physical design.")
     p.add_argument("--skip-phase1", action="store_true")
     p.add_argument("--skip-analog", action="store_true")
     p.add_argument("--skip-phase3", action="store_true")
@@ -962,6 +970,11 @@ def main() -> int:
             p2_args.append("--skip-analog")
         if _entry_runner == "design_one_shot_runner":
             p2_args += ["--entry-step", str(args.entry_step)]
+        # Forward --exit-step the same way --entry-step travels: the phase2
+        # runner owns the site table, so the mapping (and the refusal for an
+        # unmappable value) happens there, not here.
+        if args.exit_step:
+            p2_args += ["--exit-step", str(args.exit_step)]
         rc = _run_phase("PHASE 2 (= 2a + 2b)", runner, p2_args, env=_phase_env)
         rep = _read_report(_pl.report_path(project, "phase2_one_shot.json"))
         verdict = rep.get("verdict") or ("PASS" if rc == 0 else "FAIL")

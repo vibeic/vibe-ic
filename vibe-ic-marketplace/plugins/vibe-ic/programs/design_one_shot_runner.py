@@ -17274,6 +17274,44 @@ def _line_buffer_own_stream() -> None:
             pass          # a stream that cannot be reconfigured keeps its own
 
 
+def _exit_pruned_sites(sites, exit_step):
+    """Dispatch sites `--exit-step` prunes, or None when it maps to nothing.
+
+    `sites` is RUNNER_PLANS-shaped: ORDERED (site_name, span) pairs whose spans
+    hold canonical flow-step id strings. Mirrors `_before_entry`'s span-head
+    rule: a span is ONE dispatch (`step_dft_lec_chain` is one chain covering
+    canonical 11..13) and can no more be stopped mid-span than entered
+    mid-span, so the site whose span holds the exit runs IN FULL and only a
+    site whose WHOLE span starts after the exit is pruned. `exit_step` is
+    either a site name (prune every site after it in dispatch order) or a
+    canonical numeric step id (prune every site whose span head is numerically
+    past it — the id need not head a span, and an id past every span, e.g. a
+    phase-3 one, prunes nothing). A span head this runner cannot order
+    numerically is never pruned. Returns pruned site names in dispatch order;
+    None means the value names neither a site nor an orderable step id, and
+    the caller must REFUSE rather than guess — silently running the whole
+    flow would defeat the flag, and silently pruning it would be worse.
+    """
+    names = [n for n, _ in sites]
+    if exit_step in names:
+        return list(names[names.index(exit_step) + 1:])
+    try:
+        cut = int(str(exit_step))
+    except (TypeError, ValueError):
+        return None
+    pruned = []
+    for name, span in sites:
+        if not span:
+            continue
+        try:
+            head = int(str(span[0]))
+        except (TypeError, ValueError):
+            continue
+        if head > cut:
+            pruned.append(name)
+    return pruned
+
+
 def main() -> int:
     _line_buffer_own_stream()
     p = argparse.ArgumentParser()
@@ -17294,6 +17332,19 @@ def main() -> int:
                         "are checked BEFORE anything is skipped; if they are "
                         "absent the run REFUSES rather than proceeding into a "
                         "step that has nothing to read.")
+    p.add_argument("--exit-step", default=None,
+                   help="STOP dispatching after this canonical step id (or "
+                        "dispatch-site name): every dispatch site whose WHOLE "
+                        "span starts after it is recorded as SKIPPED-BY-EXIT "
+                        "instead of run. The site whose span holds the exit "
+                        "still runs in full — a span is one tool session and "
+                        "cannot be stopped in its middle, mirroring "
+                        "--entry-step's span-head rule. Omitted: behaviour is "
+                        "unchanged. Routed by the benchmark dispatcher from "
+                        "the task's evidence class (task_nature_route."
+                        "EVIDENCE_EXIT) so a lint-evidence deliverable no "
+                        "longer pays for a DFT/LEC chain nothing downstream "
+                        "reads.")
     p.add_argument("--max-rtl-repair-retries", type=int, default=3)
     p.add_argument("--top-name", default="chip_top")
     p.add_argument("--container", default="vibeic-eda")
@@ -17341,6 +17392,38 @@ def main() -> int:
         if site_name not in order or entry_site not in order:
             return False
         return order.index(site_name) < order.index(entry_site)
+
+    # ── EXIT PRUNING — the other half of --entry-step ────────────────────
+    # task_nature_route's EVIDENCE_EXIT declares where a run's proof burden
+    # ENDS, and until now the only executable consequence was the dispatcher's
+    # --skip-phase3 bit: a lint-evidence run (exit 2) still dispatched
+    # synthesis and the DFT/LEC chain unconditionally. Resolved BEFORE the
+    # lock, same as entry admission: a run whose exit cannot be mapped should
+    # refuse without taking a lock.
+    _exit_pruned = None
+    if getattr(args, "exit_step", None):
+        _exit_plan = _spf.RUNNER_PLANS.get("design_one_shot_runner")
+        _exit_sites = _exit_plan.sites if _exit_plan else ()
+        _exit_pruned = _exit_pruned_sites(_exit_sites, str(args.exit_step))
+        if _exit_pruned is None:
+            print(f"REFUSED: cannot exit at step {args.exit_step!r} — it "
+                  f"names neither a dispatch site nor a canonical numeric "
+                  f"step id (sites: {[n for n, _ in _exit_sites]})",
+                  file=sys.stderr)
+            return 2
+
+    def _after_exit(site_name):
+        """Is `site_name`'s whole span dispatched AFTER the declared exit?"""
+        return bool(_exit_pruned) and site_name in _exit_pruned
+
+    def _exit_sentinel(site_name):
+        # Named so the report can never read as "the site was attempted and
+        # produced nothing" — same disclosure rule as SKIPPED-BY-ENTRY.
+        return StepResult(
+            site_name, "SKIPPED-BY-EXIT", 0.0,
+            f"run declared --exit-step {args.exit_step}; this site's whole "
+            f"span starts after it and was not dispatched. Its artefacts "
+            f"are outside this run's declared proof burden, not missing.")
 
     # ── ENTRY ADMISSION (2026-08-25) ─────────────────────────────────────
     # Asked BEFORE the lock, because a run that cannot legally start should not
@@ -17472,6 +17555,8 @@ def main() -> int:
             f"run declared --entry-step {args.entry_step} (site "
             f"{_entry_site!r}); this site is upstream of it and was not "
             f"dispatched. Its artefacts were supplied, not produced here."))
+    elif _after_exit("rtl_gen"):
+        plan.append(_exit_sentinel("rtl_gen"))
     else:
         plan.append(_spf.gate(
             project, "design_one_shot_runner", "rtl_gen",
@@ -17525,6 +17610,8 @@ def main() -> int:
             "rtl_validate", "SKIPPED-BY-ENTRY", 0.0,
             f"run declared --entry-step {args.entry_step} (site "
             f"{_entry_site!r}); this site is upstream of it."))
+    elif _after_exit("rtl_validate"):
+        plan.append(_exit_sentinel("rtl_validate"))
     else:
         plan.append(_spf.gate(
             project, "design_one_shot_runner", "rtl_validate",
@@ -17564,25 +17651,31 @@ def main() -> int:
     # explanation ("an analog design has NO digital RTL track"), so an entry
     # error was reported as a design classification. The gate refuses with the
     # actual absent paths instead.
-    plan.append(_spf.gate(
-        project, "design_one_shot_runner", "sim",
-        _preflight_refusal("sim"),
-        step_full_stack_tb_gen, project, args.top_name))
-    # ORGANIC #797 — wire the testbench_gen PRODUCER (it was never called by any
-    # one-shot runner, so L10 `functional_vector` cases got NO Step-4 evidence).
-    # Runs AFTER full_stack_tb_gen (RTL/L9 stable) and BEFORE reference_tb /
-    # simulate / the Step-4 l10_tb_conformance gate, so the per-case skeletons
-    # land under sim/tb/ in time to be counted. KIND-SCOPED to functional_vector
-    # (§4.05 no-leak: a cmd_response case never gets manufactured id-substring
-    # evidence — it stays gated by its opcode/summary oracle).
-    plan.append(step_l10_unit_tb_gen(project, args.top_name))
-    # NEW TB PATH — professional cocotb testbench (deterministic derivation from
-    # the L-docs; bounded-latency STREAMING scoreboard closes the serial-datapath
-    # functional-verification DEFER, e.g. the spm bit-serial multiplier). Runs
-    # AFTER the TB producers (RTL/L9 stable) and, when the container has
-    # cocotb+iverilog, actually RUNS the TB so the functional verdict is REAL.
-    # Was declared in flow step-4 but never invoked by any runner until now.
-    plan.append(step_professional_tb_gen(project, args.top_name, args.container))
+    if _after_exit("sim"):
+        # The whole step-4 TB-producer span (full-stack + L10 unit + the
+        # professional cocotb path below) sits past the declared exit.
+        plan.append(_exit_sentinel("sim"))
+    else:
+        plan.append(_spf.gate(
+            project, "design_one_shot_runner", "sim",
+            _preflight_refusal("sim"),
+            step_full_stack_tb_gen, project, args.top_name))
+        # ORGANIC #797 — wire the testbench_gen PRODUCER (it was never called by any
+        # one-shot runner, so L10 `functional_vector` cases got NO Step-4 evidence).
+        # Runs AFTER full_stack_tb_gen (RTL/L9 stable) and BEFORE reference_tb /
+        # simulate / the Step-4 l10_tb_conformance gate, so the per-case skeletons
+        # land under sim/tb/ in time to be counted. KIND-SCOPED to functional_vector
+        # (§4.05 no-leak: a cmd_response case never gets manufactured id-substring
+        # evidence — it stays gated by its opcode/summary oracle).
+        plan.append(step_l10_unit_tb_gen(project, args.top_name))
+        # NEW TB PATH — professional cocotb testbench (deterministic derivation from
+        # the L-docs; bounded-latency STREAMING scoreboard closes the serial-datapath
+        # functional-verification DEFER, e.g. the spm bit-serial multiplier). Runs
+        # AFTER the TB producers (RTL/L9 stable) and, when the container has
+        # cocotb+iverilog, actually RUNS the TB so the functional verdict is REAL.
+        # Was declared in flow step-4 but never invoked by any runner until now.
+        plan.append(step_professional_tb_gen(project, args.top_name,
+                                             args.container))
 
     # v1.6.170 (#60 P0-2) — deterministic RTL-repair-inert hint extractor.
     # When the RTL repair/retry loop detects byte-identical RTL retry it now
@@ -17822,11 +17915,15 @@ def main() -> int:
     # runner's OWN predicate — the same one the step itself uses — is handed to
     # the pre-flight instead of a second copy of the judgement.
     _analog_absent, _analog_reason = _analog_rtl_track_absent(project, ic_class)
-    plan.append(_spf.gate(
-        project, "design_one_shot_runner", "yosys_synth",
-        _preflight_refusal("yosys_synth"),
-        step_yosys_synth, project, args.top_name, args.container, ic_class,
-        _preflight_not_applicable=(_analog_reason if _analog_absent else None)))
+    if _after_exit("yosys_synth"):
+        plan.append(_exit_sentinel("yosys_synth"))
+    else:
+        plan.append(_spf.gate(
+            project, "design_one_shot_runner", "yosys_synth",
+            _preflight_refusal("yosys_synth"),
+            step_yosys_synth, project, args.top_name, args.container, ic_class,
+            _preflight_not_applicable=(_analog_reason if _analog_absent
+                                       else None)))
 
     # Step 4b — QSF / SDC auto-gen (Wave 72). Runs even when --skip-hardware
     # so the QSF/SDC artefacts are present for downstream lints/audits.
@@ -17958,14 +18055,21 @@ def main() -> int:
     # refusal IS the improvement — it charges the absence to step 9 instead of
     # letting steps 11-13 report "not applicable" for something that was in
     # fact starved.
-    _dft_chain = _spf.gate(
-        project, "design_one_shot_runner", "dft_lec_chain",
-        lambda detail, extras: [_preflight_refusal("dft_lec_chain")(
-            detail, extras)],
-        step_dft_lec_chain, project, args.top_name, args.container,
-        ic_class, full_chip=not args.skip_phase3,
-        _preflight_not_applicable=(_analog_reason if _analog_absent else None))
-    plan.extend(_dft_chain)
+    if _after_exit("dft_lec_chain"):
+        # The measured cost of NOT pruning here: a lint-evidence (exit 2) run
+        # still paid for SAT LEC with a 3x7200s timeout budget, 13 canonical
+        # steps past its own deliverable.
+        plan.append(_exit_sentinel("dft_lec_chain"))
+    else:
+        _dft_chain = _spf.gate(
+            project, "design_one_shot_runner", "dft_lec_chain",
+            lambda detail, extras: [_preflight_refusal("dft_lec_chain")(
+                detail, extras)],
+            step_dft_lec_chain, project, args.top_name, args.container,
+            ic_class, full_chip=not args.skip_phase3,
+            _preflight_not_applicable=(_analog_reason if _analog_absent
+                                       else None))
+        plan.extend(_dft_chain)
 
     # Phase 2 only — Phase 3 lives in phase3_one_shot_runner.py and is
     # chained by phase23_one_shot_runner.py.
@@ -18068,7 +18172,11 @@ def _aggregate_verdict(plan: List[StepResult]) -> str:
     # unclassified it reaches the `unknown` branch below, which prints a loud
     # stderr warning on every legitimate mid-flow entry — correct behaviour for
     # a status nobody classified, and noise once it is a designed one.
-    _SKIP_STATUSES = ("SKIP", "SKIPPED-CONDITION", "SKIPPED-BY-ENTRY")
+    # SKIPPED-BY-EXIT is the same designed skip at the OTHER end of the run:
+    # --exit-step declared the exit upstream of the site, so the site was
+    # deliberately not dispatched and cannot pull the verdict either way.
+    _SKIP_STATUSES = ("SKIP", "SKIPPED-CONDITION", "SKIPPED-BY-ENTRY",
+                      "SKIPPED-BY-EXIT")
     # INCOMPLETE — the step ran and disclosed that it judged a FRACTION of the
     # population it is named for (`step_final_audit`, when the structural
     # umbrella left registered > invoked). Not a failure: the gates that did not
