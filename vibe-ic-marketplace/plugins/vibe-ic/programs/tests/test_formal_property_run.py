@@ -437,3 +437,147 @@ def test_pragma_program_has_no_design_net_literal():
     src = (Path(FPR.__file__)).read_text()
     for lit in ("dut.s", "dut.c", "peek_s", "peek_c"):
         assert lit not in src, f"design-net literal {lit!r} leaked into program"
+
+
+# ── include-header staging (vibe-ic, opentitan_aes 2026-09-02) ─────────────
+# MEASURED defect: sby copies only the `[files]` entries into its own `src/`
+# working directory, so a source carrying `` `include "x.svh" `` reached yosys
+# with the header absent and every task ERRORed before an engine started:
+#     base: ERROR: Can't open include file `prim_assert_yosys_macros.svh'!
+#     DONE (ERROR, rc=16)   ... summary: engine_0 did not return a status
+# The step then reported a FORMAL capability gap the environment did not have.
+# The header was staged in the run's OWN phase2/stage1/rtl/ the whole time.
+
+def _write(p, text):
+    p.write_text(text)
+    return p
+
+
+def test_resolve_include_headers_finds_the_included_header(tmp_path):
+    """The POSITIVE control: an include directive resolves to the file."""
+    rtl = tmp_path / "rtl"
+    rtl.mkdir()
+    _write(rtl / "hdr.svh", "`define X 1\n")
+    src = _write(rtl / "m.sv", '`include "hdr.svh"\nmodule m; endmodule\n')
+    found = FPR.resolve_include_headers([src])
+    assert [f.name for f in found] == ["hdr.svh"]
+
+
+def test_resolve_include_headers_is_transitive(tmp_path):
+    """A header that includes another header stages both."""
+    rtl = tmp_path / "rtl"
+    rtl.mkdir()
+    _write(rtl / "inner.svh", "`define Y 2\n")
+    _write(rtl / "outer.svh", '`include "inner.svh"\n')
+    src = _write(rtl / "m.sv", '`include "outer.svh"\nmodule m; endmodule\n')
+    assert sorted(f.name for f in FPR.resolve_include_headers([src])) == [
+        "inner.svh", "outer.svh"]
+
+
+def test_resolve_include_headers_negative_control(tmp_path):
+    """A source with NO include stages nothing — the header is not glob-swept.
+
+    This is the direction that fails against a blind `*.svh` glob: a header
+    nothing includes is not evidence, and staging it would be a claim the
+    sources never made.
+    """
+    rtl = tmp_path / "rtl"
+    rtl.mkdir()
+    _write(rtl / "unused.svh", "`define Z 3\n")
+    src = _write(rtl / "m.sv", "module m; endmodule\n")
+    assert FPR.resolve_include_headers([src]) == []
+
+
+def test_resolve_include_headers_unresolvable_is_absent_not_fabricated(tmp_path):
+    """An include naming a file that is not on disk yields no entry."""
+    rtl = tmp_path / "rtl"
+    rtl.mkdir()
+    src = _write(rtl / "m.sv", '`include "nowhere.svh"\nmodule m; endmodule\n')
+    assert FPR.resolve_include_headers([src]) == []
+
+
+def test_emit_sby_stages_headers_in_files_but_never_reads_them():
+    """`[files]` carries the header; `read_verilog` must not.
+
+    Handing a macro body to `read_verilog` elaborates it as a compilation
+    unit; the header only has to EXIST in sby's src/ for the directive in the
+    source that includes it to resolve.
+    """
+    text = FPR.emit_sby(["m.sv"], "formal_m.sv", "m",
+                        include_files=["hdr.svh"])
+    files_block = text.split("[files]", 1)[1]
+    assert "hdr.svh" in files_block
+    script_block = text.split("[script]", 1)[1].split("[files]", 1)[0]
+    assert "hdr.svh" not in script_block
+
+
+def test_emit_sby_without_headers_is_unchanged():
+    """NEGATIVE control: the no-header call emits exactly what it always did.
+
+    A fix that changed the .sby for every design would be a regression wearing
+    a fix's clothes.
+    """
+    assert (FPR.emit_sby(["m.sv"], "formal_m.sv", "m")
+            == FPR.emit_sby(["m.sv"], "formal_m.sv", "m", include_files=[]))
+
+
+def test_emit_invariant_sby_stages_headers_in_files_only():
+    text = FPR.emit_invariant_sby(["m.sv"], "formal_m.sv", "m", [], [],
+                                  include_files=["hdr.svh"])
+    files_block = text.split("[files]", 1)[1]
+    assert "hdr.svh" in files_block
+    script_block = text.split("[script]", 1)[1].split("[files]", 1)[0]
+    assert "hdr.svh" not in script_block
+
+
+def test_stage_include_headers_skips_names_already_staged(tmp_path):
+    """A directive naming a SOURCE the file list already carries is skipped.
+
+    MEASURED on opentitan_aes: `prim_assert.sv` is both a compiled source and
+    an `` `include `` target. Listing it twice in `[files]` is a second claim
+    about one file.
+    """
+    rtl = tmp_path / "rtl"
+    rtl.mkdir()
+    _write(rtl / "prim_assert.sv", "// macros\n")
+    _write(rtl / "hdr.svh", "`define X 1\n")
+    src = _write(rtl / "m.sv",
+                 '`include "prim_assert.sv"\n`include "hdr.svh"\n'
+                 "module m; endmodule\n")
+    formal = tmp_path / "formal"
+    formal.mkdir()
+    names = FPR._stage_include_headers(
+        [src, rtl / "prim_assert.sv"], formal,
+        already=["m.sv", "prim_assert.sv"])
+    assert names == ["hdr.svh"]
+    assert (formal / "hdr.svh").is_file()
+
+
+def test_emit_sby_reads_systemverilog():
+    """`read_verilog -formal` without `-sv` uses the Verilog-2005 frontend.
+
+    MEASURED on opentitan_aes once the include headers were staged and the
+    frontend finally reached the sources:
+        aes.sv:10: ERROR: syntax error, unexpected TOK_ID,
+                   expecting '#' or '(' or ';'
+    from `module aes import aes_pkg::*; #( ... )`. Both tasks ERRORed at
+    rc=16 before an engine started. `emit_invariant_sby` beside it already
+    passed `-sv`; the two emitters disagreed and this one was wrong.
+    """
+    text = FPR.emit_sby(["m.sv"], "formal_m.sv", "m")
+    script = text.split("[script]", 1)[1].split("[files]", 1)[0]
+    reads = [ln for ln in script.splitlines() if "read_verilog" in ln]
+    assert reads, script
+    for ln in reads:
+        assert " -sv " in ln, ln
+
+
+def test_both_sby_emitters_agree_on_the_frontend():
+    """The control that keeps them from drifting apart again."""
+    a = FPR.emit_sby(["m.sv"], "formal_m.sv", "m")
+    b = FPR.emit_invariant_sby(["m.sv"], "formal_m.sv", "m", [], [])
+    for text in (a, b):
+        script = text.split("[script]", 1)[1].split("[files]", 1)[0]
+        for ln in script.splitlines():
+            if "read_verilog" in ln:
+                assert " -sv " in ln, ln

@@ -510,19 +510,123 @@ endmodule
 """
 
 
+# ── SystemVerilog include headers ───────────────────────────────────────────
+# A source that carries `` `include "x.svh" `` is NOT self-contained. sby copies
+# every `[files]` entry into its own `src/` working directory and runs yosys
+# there, so a header that was never staged is simply not on disk when the
+# frontend reaches the directive and yosys aborts before any engine starts:
+#
+#     ERROR: Can't open include file `prim_assert_yosys_macros.svh'!
+#
+# sby then reports rc=16 / "did not return a status" for every task, and the
+# step self-reports a FORMAL capability gap it does not have — the same
+# unmeasured-thing-reading-as-a-measured-zero shape the include-hub filter
+# above exists to refuse. MEASURED on opentitan_aes (2026-09-02): every task
+# ERRORed on `prim_assert_yosys_macros.svh`, which was staged in the run's own
+# phase2/stage1/rtl/ and never copied into formal/.
+#
+# The headers are resolved from the sources' OWN `include` directives, not from
+# a blind `*.svh` glob: a header nothing includes is not evidence and is not
+# staged. Resolution is transitive (a header may include another) and bounded.
+# Headers go into `[files]` ONLY — never into `read_verilog`, which would
+# elaborate a macro body as a compilation unit. Chip-AGNOSTIC: no vendor,
+# filename or SKU literal appears here.
+_INCLUDE_RE = re.compile(r'^\s*`include\s+"([^"\n]+)"', re.MULTILINE)
+
+#: Bound on the transitive walk, so a cyclic include set terminates.
+_MAX_INCLUDE_DEPTH = 16
+
+
+def resolve_include_headers(sources: List[Path],
+                            search_dirs: Optional[List[Path]] = None
+                            ) -> List[Path]:
+    """Header files the given sources `include`, resolved on disk.
+
+    Returns the resolved headers in a stable order. A directive naming a file
+    that is NOT findable is silently absent from the result — this function
+    reports what it FOUND; whether an unresolvable include is fatal is the
+    frontend's call, not this resolver's.
+    """
+    roots: List[Path] = []
+    for d in (search_dirs or []):
+        if d.is_dir() and d not in roots:
+            roots.append(d)
+    for s in sources:
+        parent = s.parent
+        if parent.is_dir() and parent not in roots:
+            roots.append(parent)
+
+    found: "Dict[str, Path]" = {}
+    frontier = [s for s in sources if s.is_file()]
+    seen = {s.resolve() for s in frontier}
+    for _ in range(_MAX_INCLUDE_DEPTH):
+        if not frontier:
+            break
+        nxt: List[Path] = []
+        for src in frontier:
+            try:
+                text = src.read_text(errors="replace")
+            except OSError:
+                continue
+            for raw in _INCLUDE_RE.findall(text):
+                name = Path(raw).name
+                if name in found:
+                    continue
+                for root in roots:
+                    cand = root / raw
+                    if not cand.is_file():
+                        cand = root / name
+                    if cand.is_file():
+                        found[name] = cand
+                        if cand.resolve() not in seen:
+                            seen.add(cand.resolve())
+                            nxt.append(cand)
+                        break
+        frontier = nxt
+    return [found[k] for k in sorted(found)]
+
+
 def emit_sby(rtl_files: List[str], harness_file: str, top: str,
              safety_defs: str = "-DSPM_SAFETY_ONLY",
              bmc_defs: str = "-DSPM_RESET_AT_T0",
              safety_depth: int = 20, bmc_depth: int = 12,
              engine_prove: str = "abc pdr",
-             engine_bmc: str = "abc bmc3") -> str:
+             engine_bmc: str = "abc bmc3",
+             include_files: Optional[List[str]] = None) -> str:
     """Emit a two-task .sby: a `safety` task (unbounded prove) and a `bmc`
     task (bounded model check). Files are listed under [files] so the Step-5
-    evidence gate can resolve every referenced source. `aigsmt none` avoids
+    evidence gate can resolve every referenced source.
+
+    `-sv` is not optional. Without it yosys uses the Verilog-2005 frontend,
+    which rejects SystemVerilog a synthesisable design legitimately uses.
+    MEASURED in the pinned image on a four-line probe:
+
+        read_verilog -formal     svprobe.sv  ->  svprobe.sv:1: ERROR: syntax
+              error, unexpected TOK_ID, expecting ')' or ',' or '='
+        read_verilog -formal -sv svprobe.sv  ->  Successfully finished
+              Verilog frontend.
+
+    for `module svprobe (input logic clk, ...); logic [3:0] cnt;
+    always_comb ...` -- ordinary synthesisable SystemVerilog.
+    `emit_invariant_sby` beside this function already passes `-sv`; the two
+    emitters disagreed and only this one was wrong. `-sv` accepts
+    Verilog-2005 too, so no design loses a parse.
+
+    THIS IS NOT SUFFICIENT FOR EVERY DESIGN, and the limit is worth stating
+    where the flag is. yosys's own SystemVerilog frontend still rejects a
+    package import in the MODULE HEADER (`module m import p::*; #( ... )`)
+    with `TOK_IMPORT`, which is how the OpenTitan sources are written. Phase-2
+    synth reaches them through `read_slang`; this emitter does not, and that
+    frontend split -- not this flag -- is what keeps such a design from a
+    formal verdict.
+
+    `aigsmt none` avoids
     the SMT witness-replay step (only an external SMT solver could satisfy it)
     so ABC's own engines produce the verdict standalone."""
     reads = " ".join([harness_file] + list(rtl_files))
-    srcs = list(rtl_files) + [harness_file]
+    # Headers are STAGED but never READ: `[files]` puts them in sby's `src/` so
+    # a `` `include `` resolves; `read_verilog` must not be handed a macro body.
+    srcs = list(rtl_files) + [harness_file] + list(include_files or [])
     files_block = "\n".join(srcs)
     return f"""[tasks]
 safety   prove
@@ -540,8 +644,8 @@ safety: {engine_prove}
 bmc:    {engine_bmc}
 
 [script]
-safety: read_verilog -formal {safety_defs} {reads}
-~safety: read_verilog -formal {bmc_defs} {reads}
+safety: read_verilog -formal -sv {safety_defs} {reads}
+~safety: read_verilog -formal -sv {bmc_defs} {reads}
 prep -top {top}
 
 [files]
@@ -606,7 +710,8 @@ def emit_invariant_sby(rtl_files: List[str], harness_file: str, top: str,
                        tasks: Optional[List[dict]] = None,
                        prove_engine: str = "abc pdr",
                        bmc_engine: str = "abc bmc3",
-                       prove_depth: int = 40, bmc_depth: int = 25) -> str:
+                       prove_depth: int = 40, bmc_depth: int = 25,
+                       include_files: Optional[List[str]] = None) -> str:
     """Emit a .sby for an invariant-strengthened harness. The [script] flattens
     the DUT and `connect -set`s each declared placeholder to its internal net,
     then runs each declared task. A `prove` task (unbounded k-induction / PDR)
@@ -620,7 +725,8 @@ def emit_invariant_sby(rtl_files: List[str], harness_file: str, top: str,
                   "defines": ""},
                  {"name": "bmc", "mode": "bmc", "depth": None, "defines": ""}]
     reads = " ".join([harness_file] + list(rtl_files))
-    srcs = list(rtl_files) + [harness_file]
+    # See emit_sby: staged into sby's src/ for `` `include ``, never read.
+    srcs = list(rtl_files) + [harness_file] + list(include_files or [])
     files_block = "\n".join(srcs)
     chparam_lines = [f"chparam -set {n} {v} {top}" for n, v in chparams]
     connect_lines = [f"connect -set {lhs} {rhs}" for lhs, rhs in connects]
@@ -1193,6 +1299,33 @@ def _attach_property_contract(results: dict, formal_dir: Path,
         results["formal_completion"] = results.get("verdict")
 
 
+def _stage_include_headers(rtl: List[Path], formal_dir: Path,
+                           already: Optional[List[str]] = None) -> List[str]:
+    """Copy the headers `rtl` includes into `formal_dir`; return their names.
+
+    The names go into the .sby `[files]` block so sby stages them in `src/`
+    next to the sources that include them.
+
+    A directive may name a SOURCE the file list already carries (OpenTitan's
+    `` `include "prim_assert.sv" `` is the measured case). Those are skipped:
+    they are already staged, and listing the same name twice in `[files]` is a
+    second claim about one file.
+    """
+    staged = set(already or [])
+    names: List[str] = []
+    for h in resolve_include_headers(list(rtl)):
+        if h.name in staged:
+            continue
+        dst = formal_dir / h.name
+        try:
+            if h.resolve() != dst.resolve():
+                shutil.copy2(h, dst)
+        except OSError:
+            continue
+        names.append(h.name)
+    return names
+
+
 def run(project: Path, harness: Optional[Path] = None,
         rtl: Optional[List[Path]] = None, top: Optional[str] = None,
         sby: Optional[Path] = None, container: Optional[str] = "vibeic-eda",
@@ -1278,11 +1411,13 @@ def run(project: Path, harness: Optional[Path] = None,
         hdst = formal_dir / inv_h.name
         if inv_h.resolve() != hdst.resolve():
             shutil.copy2(inv_h, hdst)
+        staged_hdrs = _stage_include_headers(rtl, formal_dir,
+                                             staged_rtl)
         sby_text = emit_invariant_sby(
             staged_rtl, inv_h.name, top, prags["connects"], prags["chparams"],
             tasks=prags.get("tasks"),
             prove_engine=prove_engine, prove_depth=max(40, safety_depth),
-            bmc_depth=bmc_depth)
+            bmc_depth=bmc_depth, include_files=staged_hdrs)
         sby_path = formal_dir / f"{top}_inductive.sby"
         sby_path.write_text(sby_text)
     elif sby is not None and sby.is_file():
@@ -1339,8 +1474,11 @@ def run(project: Path, harness: Optional[Path] = None,
         hdst = formal_dir / harness.name
         if harness.resolve() != hdst.resolve():
             shutil.copy2(harness, hdst)
+        staged_hdrs = _stage_include_headers(rtl, formal_dir,
+                                             staged_rtl)
         sby_text = emit_sby(staged_rtl, harness.name, top,
-                            safety_depth=safety_depth, bmc_depth=bmc_depth)
+                            safety_depth=safety_depth, bmc_depth=bmc_depth,
+                            include_files=staged_hdrs)
         sby_path = formal_dir / f"{top}_formal.sby"
         sby_path.write_text(sby_text)
     else:
@@ -1348,7 +1486,8 @@ def run(project: Path, harness: Optional[Path] = None,
         cfg_text = sby_path.read_text()
         for line in cfg_text.splitlines():
             ls = line.strip()
-            if ls.endswith((".v", ".sv")) and "/" in ls and Path(ls).is_file():
+            if (ls.endswith((".v", ".sv", ".svh", ".vh"))
+                    and "/" in ls and Path(ls).is_file()):
                 shutil.copy2(ls, formal_dir / Path(ls).name)
 
     # 1b) EMIT-ONLY — the artefact is written; the proof is NOT run ---------

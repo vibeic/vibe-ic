@@ -57787,6 +57787,41 @@ def _post_emit_sdc_constraints(project: Path) -> None:
     freq_hz = int(round(1.0e9 / period_ns)) if period_ns > 0 else None
     port_name = primary.get("port_name")
 
+    # EVERY DECLARED CLOCK, NOT ONLY THE FIRST. `collect_create_clocks`
+    # returns one record per `create_clock` in the staged SDC, and this
+    # function used to stamp `primary_clock()` alone. A design whose SDC
+    # declares more than one clock therefore got ONE typed clock_domains
+    # entry and left the rest exactly as shallow as they were before it
+    # staged an SDC at all -- while `l8_clock_domains_typed_check` measures
+    # EVERY clock name the L layers carry and reports each untyped one.
+    #
+    # MEASURED on opentitan_aes (2026-09-02): the design declares clk_i AND
+    # clk_edn_i, `collect_create_clocks` returned both at period_ns=10.0,
+    # only clk_i was stamped, and the gate reported
+    #     1/9 clock entries too shallow. Examples: clk_edn_i: missing
+    #     freq_hz/freq_mhz/period_ns,role/source
+    # -- naming a clock the design HAD declared, in a file this function had
+    # already opened and read.
+    #
+    # A clock the SDC declares and L8 does not carry is APPENDED. That is the
+    # design stating a domain, not this runner inventing one: the value and
+    # its provenance both come from the design's own staged constraints, and
+    # a project with no SDC still reaches none of this. Chip-AGNOSTIC: keyed
+    # on the SDC's own port names, no design or vendor literal.
+    _declared = [c for c in _sdc.collect_create_clocks(project)
+                 if isinstance(c, dict) and c.get("period_ns")]
+    _primary_port = str(port_name or "")
+
+    def _same_clock(entry: dict, port: str) -> bool:
+        """Whether `entry` already describes the SDC clock on `port`."""
+        if not port:
+            return False
+        for key in ("source_pin", "name", "clock", "port", "port_name"):
+            v = entry.get(key)
+            if isinstance(v, str) and v.strip() == port:
+                return True
+        return False
+
     # --- L8: stamp the primary clock_domains entry from staged SDC ---
     for doc_name in ("L8_RTL_CONSTANTS", "L8_TIMING_WAVEFORM"):
         l8 = _try_load_l_doc(project, doc_name)
@@ -57823,6 +57858,35 @@ def _post_emit_sdc_constraints(project: Path) -> None:
             target["source_pin"] = port_name
         if port_name and not target.get("name"):
             target["name"] = port_name
+
+        # Every OTHER clock the SDC declares: stamp its existing entry, or
+        # append one. `secondary` is what the SDC says it is -- a declared
+        # clock that is not the primary -- and never an inferred role.
+        for rec in _declared:
+            rport = str(rec.get("port_name") or "").strip()
+            if not rport or rport == _primary_port:
+                continue
+            rperiod = rec["period_ns"]
+            rfreq = int(round(1.0e9 / rperiod)) if rperiod > 0 else None
+            slot = next((d for d in clock_domains
+                         if isinstance(d, dict) and _same_clock(d, rport)),
+                        None)
+            if slot is None:
+                slot = {"name": rport, "source_pin": rport,
+                        "domain_kind": "secondary",
+                        "reset_strategy": "unspecified"}
+                clock_domains.append(slot)
+            slot["freq_hz"] = rfreq
+            slot["freq_mhz"] = (rfreq / 1_000_000.0) if rfreq else None
+            slot["period_ns"] = rperiod
+            slot["source"] = "input/constraints/*.sdc"
+            slot["evidence"] = project_relative_source(
+                rec["source"], project)[0]
+            slot.setdefault("role", "secondary")
+            slot.setdefault("domain_kind", "secondary")
+            slot.setdefault("name", rport)
+            slot.setdefault("source_pin", rport)
+
         out = _pl.generated_docs_dir(project) / f"{doc_name}.json"
         _stamp.dump(out, l8)
 

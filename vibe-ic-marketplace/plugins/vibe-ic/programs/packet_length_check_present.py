@@ -16,8 +16,11 @@ Static check (IC-agnostic):
 
   A file is considered a "dispatcher" iff any of:
 
-    * contains ``case (cmd_op)``, ``case (opcode)``, ``case (cmd)``, or
-      ``case (op)``   — canonical Verilog opcode-case,
+    * contains ``case (cmd_op)``, ``case (opcode)`` or ``case (cmd_code)``
+      — an unambiguous opcode-case,
+    * contains ``case (cmd)`` or ``case (op)`` — names reused widely enough
+      that they are only taken as an opcode-case when the SAME file also
+      carries a byte-wide opcode literal (``8'hXX``),
     * contains 3+ lines matching ``if\\s*\\(\\s*\\w*cmd\\w*\\s*==\\s*8'h``
       (cascade of per-opcode if-equals comparisons).
 
@@ -50,11 +53,43 @@ class Finding:
 
 
 # Case-statement dispatchers: "case (<id>)" where id is a typical opcode name.
-_CASE_DISPATCH_RE = re.compile(
+#
+# TWO tiers, because the names are not equally informative. `opcode`, `cmd_op`
+# and `cmd_code` name a received command and nothing else. `cmd` and `op` are
+# among the most reused two-and-three-letter identifiers in Verilog and name an
+# enum field at least as often as a byte-stream opcode, so on their own they
+# are not evidence that this module dispatches on a received command.
+#
+# MEASURED false positive (opentitan_aes, 2026-09-02): `aes_ctrl_reg_shadowed`
+# holds a shadowed CONTROL REGISTER and decodes its `aes_op_e` field with
+#     unique case (op)
+#       AES_ENC: ...
+#       AES_DEC: ...
+# There is no command, no packet and no length: the run's own class profile
+# declares `command_protocol_applicable=false`, and eight sibling gates skip on
+# exactly that fact. This gate reported an ERROR against a two-value enum
+# decode, and did so TWICE — once directly and once through `rtl_precheck_gate`.
+#
+# So an AMBIGUOUS selector must be CORROBORATED by the thing this gate is
+# actually about: byte-wide opcode literals in the same file, which is what a
+# received-command dispatch looks like and what an enum decode does not. The
+# UNAMBIGUOUS names keep their previous standalone force, so every dispatcher
+# this gate caught before is still caught.
+_CASE_DISPATCH_UNAMBIGUOUS_RE = re.compile(
     r"\bcase\s*\(\s*(?:\w+\s*\.\s*)?"
-    r"(cmd_op|opcode|cmd|op|cmd_code)\b",
+    r"(cmd_op|opcode|cmd_code)\b",
     re.IGNORECASE,
 )
+
+_CASE_DISPATCH_AMBIGUOUS_RE = re.compile(
+    r"\bcase\s*\(\s*(?:\w+\s*\.\s*)?"
+    r"(cmd|op)\b",
+    re.IGNORECASE,
+)
+
+#: A byte-wide literal — the corroboration an ambiguous selector needs. This is
+#: the same shape the if-cascade discriminator below already requires.
+_BYTE_OPCODE_LITERAL_RE = re.compile(r"\b8'h[0-9a-fA-F]{1,2}\b")
 
 # Cascade of opcode equality: if (cmd == 8'hXX) or if (cmd_x == 8'hYY).
 _IF_OPCODE_EQ_RE = re.compile(
@@ -79,7 +114,10 @@ def _find_v_files(rtl_dir: Path) -> List[Path]:
 
 
 def _is_dispatcher(text: str) -> bool:
-    if _CASE_DISPATCH_RE.search(text):
+    if _CASE_DISPATCH_UNAMBIGUOUS_RE.search(text):
+        return True
+    if (_CASE_DISPATCH_AMBIGUOUS_RE.search(text)
+            and _BYTE_OPCODE_LITERAL_RE.search(text)):
         return True
     if len(_IF_OPCODE_EQ_RE.findall(text)) >= 3:
         return True
