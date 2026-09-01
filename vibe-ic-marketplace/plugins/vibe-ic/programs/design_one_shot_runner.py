@@ -2050,6 +2050,13 @@ def _gather_phase1_plain_spec_text(
     project = Path(project)
     chunks: List[str] = []
     sources: List[str] = []
+    # Byte-identical operator files (the prompt bridged into input_doc/ under a
+    # second name, a doc staged twice) must contribute their text ONCE — the
+    # "\n\n".join below otherwise doubles every restated interface and the
+    # deterministic port parsers hand the renderers duplicate declarations.
+    # Same sha256-content-pool approach as phase1_doc_one_shot_runner's
+    # v1.6.446 README dedup: hash of the decoded text, first occurrence wins.
+    seen_content_sha256: set = set()
     if project_binding is not None:
         project_binding.require_current()
     try:
@@ -2153,7 +2160,7 @@ def _gather_phase1_plain_spec_text(
                 # would silently change the grammar the deterministic parser sees.
                 if project_binding is not None:
                     project_binding.require_current()
-                chunks.append(resolved.read_text(encoding="utf-8"))
+                _chunk_text = resolved.read_text(encoding="utf-8")
                 if project_binding is not None:
                     project_binding.require_current()
             except UnicodeError as exc:
@@ -2166,6 +2173,12 @@ def _gather_phase1_plain_spec_text(
                     project, path, _PHASE1_PROSE_READ_REFUSED,
                     "SOURCE_READ_FAILED",
                     f"operator prose could not be read: {exc}")
+            _chunk_sha = hashlib.sha256(
+                _chunk_text.encode("utf-8")).hexdigest()
+            if _chunk_sha in seen_content_sha256:
+                continue    # byte-identical to an already-gathered source
+            seen_content_sha256.add(_chunk_sha)
+            chunks.append(_chunk_text)
             sources.append(str(source_rel / path.relative_to(allowed_root)))
         if project_binding is not None:
             project_binding.require_current()

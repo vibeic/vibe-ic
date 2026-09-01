@@ -191,13 +191,56 @@ def _recover_prose_widths(text: str,
     return out
 
 
+def enforce_unique_port_names(
+        ins: List[Tuple[str, int]],
+        outs: List[Tuple[str, int]]) -> Tuple[List[Tuple[str, int]], List[Tuple[str, int]]]:
+    """First-wins dedup over the UNION of ins and outs; REFUSE on contradiction.
+
+    A legal Verilog module header cannot declare the same port name twice, yet a
+    spec often RESTATES its interface (an Appendix section, or the same document
+    staged twice) — verbatim restatement is benign and must not double the list.
+    The key is the port NAME across BOTH directions, because `input x` + `output x`
+    is a collision no dedup can arbitrate:
+
+      * same name, same direction, same width  -> keep the FIRST occurrence
+        (order preserved; a clean single-statement list is returned byte-exact);
+      * same name at a DIFFERENT width, or in BOTH directions -> return ([], [])
+        so the downstream solver SKIPs (waives to the AI backup). Never drop just
+        the one port: a shorter-but-clean interface compiles and is WRONG, which
+        is strictly harder to catch than a refusal.
+    """
+    seen: dict = {}     # name -> (direction, width)
+    for direction, ports in (("input", ins), ("output", outs)):
+        for name, w in ports:
+            prev = seen.get(name)
+            if prev is None:
+                seen[name] = (direction, w)
+            elif prev != (direction, w):
+                return [], []
+    kept = set()
+    ded_ins: List[Tuple[str, int]] = []
+    ded_outs: List[Tuple[str, int]] = []
+    for ports, dst in ((ins, ded_ins), (outs, ded_outs)):
+        for name, w in ports:
+            if name in kept:
+                continue
+            kept.add(name)
+            dst.append((name, w))
+    return ded_ins, ded_outs
+
+
 def parse_ports(text: str) -> Tuple[List, List]:
     """(ins, outs) as [(name, width)]. Bullet form wins; else the Verilog header.
     A port whose width the interface line left unspecified is then recovered from an
-    explicit `reg/wire/logic [hi:lo] <name>` declaration in the prose body, if any."""
+    explicit `reg/wire/logic [hi:lo] <name>` declaration in the prose body, if any.
+    The result carries no duplicate port name (`enforce_unique_port_names`): a
+    verbatim restatement keeps its first occurrence, a contradictory reuse of a
+    name refuses the whole parse — `_bullet_ports`/`_header_ports` both append
+    every match, so a spec that restates its interface would otherwise hand the
+    renderers a doubled list they render into `'x' has already been declared`."""
     ins, outs = _bullet_ports(text)
     if not (ins or outs):
         ins, outs = _header_ports(text)
     ins = _recover_prose_widths(text, ins)
     outs = _recover_prose_widths(text, outs)
-    return ins, outs
+    return enforce_unique_port_names(ins, outs)

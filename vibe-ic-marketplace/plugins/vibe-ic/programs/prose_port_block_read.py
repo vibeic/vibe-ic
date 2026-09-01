@@ -41,7 +41,15 @@ Pure-function module. chip-AGNOSTIC, deterministic.
 from __future__ import annotations
 
 import re
+import sys
+from pathlib import Path
 from typing import List, Optional, Tuple
+
+try:
+    from port_parser import enforce_unique_port_names
+except ImportError:  # allow running from another cwd
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    from port_parser import enforce_unique_port_names
 
 # Section header that opens a port block. ASCII ':' or CJK full-width '：'.
 _SEC_RE = re.compile(r"^\s*(Input|Output)\s+ports?\s*[:：]", re.I)
@@ -163,7 +171,13 @@ def parse_rtllm_ports(text: str) -> Tuple[List[Tuple[str, int]], List[Tuple[str,
                     continue  # contradictory desc tokens, no range -> drop
                 width = dw if dw is not None else 1
             (ins if direction == "input" else outs).append((name, width))
-    return ins, outs
+    # Every "Input/Output ports:" block appends — a document that RESTATES its
+    # interface (Appendix, or the same file staged twice) doubles the list, and
+    # the renderers render duplicates into `'x' has already been declared`.
+    # First-wins on a verbatim restatement; contradictory reuse of a name
+    # (different width, or input AND output) refuses the whole parse -> the
+    # emitter SKIPs and the runner waives to the AI backup.
+    return enforce_unique_port_names(ins, outs)
 
 
 def _emit_bullets(ins, outs) -> str:
