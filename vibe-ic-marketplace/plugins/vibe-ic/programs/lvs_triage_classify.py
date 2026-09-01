@@ -1,15 +1,10 @@
 """v0.1.50 — LVS triage classifier (Pattern-B → program).
 
-ENFORCEMENT: advisory
+ROLE: producer/classifier
 
-The line above is a DECLARATION, in the anchored form `flow_gate_enforcement_
-audit.declared_intent` reads. This program is wired into the flow as an
-`advisory_program_exit_zero` clause: it RUNS on every project that reaches its
-step, its findings are printed, and its exit code cannot deny the step its PASS
-tier. That is deliberate — it was wired to make a real check reachable, not to
-block a landing on debt it did not create — and the declaration says so where
-the audit looks. Without it, "wired where it cannot block" and "nobody decided"
-are the same record, and the reliable way to stay clean is to say nothing.
+Issue #1980 moved this classifier out of the gate denominator. It describes an
+LVS mismatch; `lvs_report_check` and `lvs_signoff_guard` own the Step-31
+refusal predicate.
 Doctrine: `skills/lvs-triage/SKILL.md` enumerated a 4-category triage +
 top-3 root-cause heuristic. All deterministic.
 
@@ -165,14 +160,9 @@ def _cli() -> int:
     p.add_argument("--out-md", type=Path)
     p.add_argument("--out-json", type=Path)
     args = p.parse_args()
-    # WIRED AS AN ADVISORY ON STEP 31 (2026-08-25), which is why the absent
-    # report is now a DISCLOSED rc=2 and not a traceback. `reports/phase3/
-    # lvs.rpt` is Step 31's own required_output, and whether it is there is
-    # already decided by that step's blocking `lvs_report_check` /
-    # `lvs_signoff_guard` slots. A triage classifier answering "the report
-    # you asked me to categorise does not exist" with `FileNotFoundError`
-    # spends a second gate's FINDING channel on the first gate's question,
-    # and prints a Python traceback into the flow log to do it.
+    # This is a Step-31 classifier output, not a gate. `reports/phase3/lvs.rpt`
+    # is already judged by the blocking predicates, so an absent report is a
+    # disclosed no-output state rather than a second authority or a traceback.
     if not args.report.is_file():
         reason = f"LVS report not present: {args.report}"
         _vx.announce_vacuous("lvs_triage_classify", reason)

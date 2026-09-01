@@ -4,16 +4,11 @@ pnr_via_stack_completeness_check.py — chip-AGNOSTIC audit of how
 many routing layers the PDK actually supports vs how many the PnR
 flow ended up using.
 
-ENFORCEMENT: advisory
+ROLE: producer/classifier
 
-The line above is a DECLARATION, in the anchored form `flow_gate_enforcement_
-audit.declared_intent` reads. This program is wired into the flow as an
-`advisory_program_exit_zero` clause: it RUNS on every project that reaches its
-step, its findings are printed, and its exit code cannot deny the step its PASS
-tier. That is deliberate — it was wired to make a real check reachable, not to
-block a landing on debt it did not create — and the declaration says so where
-the audit looks. Without it, "wired where it cannot block" and "nobody decided"
-are the same record, and the reliable way to stay clean is to say nothing.
+Issue #1980 moved this program out of the gate denominator because it has no
+reachable refusal predicate. Its structured output remains a Step-31 program
+output and must not be flattened into an advisory gate PASS.
 Background
 ----------
 The Phase 3 runner observed on v10648:

@@ -239,7 +239,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `coverage_closure` | any | — | coverage GAP ANALYSIS over the MEASURED artefact. |
 | `coverage_metric_check` | any | — | coverage_metric_check.py -- Deterministic coverage report metric checker. |
 | `cpu_boot_latency_oracle_tb_gen` | any | — | deterministic golden oracle TB generator for the RESET-TO-FIRST-BUS-ACTIVITY LATENCY test-case shape (ORGANIC #778 companion — Step-4/L10... |
-| `cpu_functional_oracle_waiver_check` | any | — | Step 4 connectivity-PASS / functional-DEFERRED capability-gap gate (ORGANIC #654). |
+| `cpu_functional_oracle_waiver_check` | any | — | legacy-named Step-4 functional evidence requirement. |
 | `crc_bitorder_check` | any | — | Detect CRC bit-ordering mismatches in TX data loading. |
 | `crc_completeness_check` | any | — | deterministic compliance check derived from <chip-class> v040 debug. |
 | `crc_compute_done_before_tx_start_check` | any | Wave 12 | v0.119.44 (Wave 12) plugin gate. |
@@ -407,7 +407,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `formal_complexity_classify` | any | — | deterministic k-induction feasibility classifier for formal property verification (FPV). |
 | `formal_harness_gen` | any | — | Step 5 DETERMINISTIC formal-property authoring. |
 | `formal_proof_evidence_check` | any | — | Step 5 formal proof EVIDENCE-CHAIN gate (ORGANIC-20260606 #448). |
-| `formal_property_run` | any | — | Step 5 (cap:formal_property_proof) RUNNER. |
+| `formal_property_run` | any | — | Step 5 formal-property RUNNER. |
 | `foundry_handoff_pack_gen` | any | — | emit Step 35 foundry handoff package skeleton. |
 | `foundry_handoff_package_check` | any | Wave 88 | gate (v1.6.13 Wave 88, integerised in v1.6.14 Wave 90, renumbered Step 34 → 35 in v1.6.15 Wave 91, and Step 35 → 38 by the later renumber... |
 | `foundry_signoff_plan_check` | any | v0.113 | v0.113 (BACKLOG-v10 P1.2). |
@@ -1162,7 +1162,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `table_lut_synth` | any | — | a DETERMINISTIC solver for the CVDP TABLE-DRIVEN COMBINATIONAL family: a combinational function FULLY specified by an enumerated table st... |
 | `tapeout_checklist_gen` | any | — | emit Step 36 (v2.3) reports/audit/tapeout_checklist.json. |
 | `tapeout_declaration_check` | any | — | judge the declaration step 0.5ic wrote. |
-| `tapeout_declaration_gen` | any | — | write down the 18 answers, and pick the route. |
+| `tapeout_declaration_gen` | any | — | write the physical and implementation contract. |
 | `tapeout_docs_gen` | any | — | emit the release documents for a tape-out candidate. |
 | `tapeout_precheck` | any | — | step 37.5ic's ONE gate over TWO independent arms. |
 | `tapeout_readiness_check` | any | — | the EXTERNAL refusal interface, pointed at a shuttle that still exists. |
@@ -1530,7 +1530,7 @@ _(no programs in this group)_
 - `coverage_closure` — coverage GAP ANALYSIS over the MEASURED artefact.
 - `coverage_metric_check` — coverage_metric_check.py -- Deterministic coverage report metric checker.
 - `cpu_boot_latency_oracle_tb_gen` — deterministic golden oracle TB generator for the RESET-TO-FIRST-BUS-ACTIVITY LATENCY test-case shape (ORGANIC #778 companion — Step-4/L10...
-- `cpu_functional_oracle_waiver_check` — Step 4 connectivity-PASS / functional-DEFERRED capability-gap gate (ORGANIC #654).
+- `cpu_functional_oracle_waiver_check` — legacy-named Step-4 functional evidence requirement.
 - `crc_bitorder_check` — Detect CRC bit-ordering mismatches in TX data loading.
 - `crc_completeness_check` — deterministic compliance check derived from <chip-class> v040 debug.
 - `crc_compute_done_before_tx_start_check` — v0.119.44 (Wave 12) plugin gate.  _[Wave 12]_
@@ -1696,7 +1696,7 @@ _(no programs in this group)_
 - `formal_complexity_classify` — deterministic k-induction feasibility classifier for formal property verification (FPV).
 - `formal_harness_gen` — Step 5 DETERMINISTIC formal-property authoring.
 - `formal_proof_evidence_check` — Step 5 formal proof EVIDENCE-CHAIN gate (ORGANIC-20260606 #448).
-- `formal_property_run` — Step 5 (cap:formal_property_proof) RUNNER.
+- `formal_property_run` — Step 5 formal-property RUNNER.
 - `foundry_handoff_pack_gen` — emit Step 35 foundry handoff package skeleton.
 - `foundry_handoff_package_check` — gate (v1.6.13 Wave 88, integerised in v1.6.14 Wave 90, renumbered Step 34 → 35 in v1.6.15 Wave 91, and Step 35 → 38 by the later renumber...  _[Wave 88]_
 - `foundry_signoff_plan_check` — v0.113 (BACKLOG-v10 P1.2).  _[v0.113]_
@@ -2448,7 +2448,7 @@ _(no programs in this group)_
 - `table_lut_synth` — a DETERMINISTIC solver for the CVDP TABLE-DRIVEN COMBINATIONAL family: a combinational function FULLY specified by an enumerated table st...
 - `tapeout_checklist_gen` — emit Step 36 (v2.3) reports/audit/tapeout_checklist.json.
 - `tapeout_declaration_check` — judge the declaration step 0.5ic wrote.
-- `tapeout_declaration_gen` — write down the 18 answers, and pick the route.
+- `tapeout_declaration_gen` — write the physical and implementation contract.
 - `tapeout_docs_gen` — emit the release documents for a tape-out candidate.
 - `tapeout_precheck` — step 37.5ic's ONE gate over TWO independent arms.
 - `tapeout_readiness_check` — the EXTERNAL refusal interface, pointed at a shuttle that still exists.

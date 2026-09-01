@@ -142,15 +142,17 @@ def test_DEFECT_finding_is_recorded_when_a_real_gap_exists(tmp_path):
     sub, _key, _cmd = _coverage_closure_subgate()
     assert sub is not None, "not wired — see the previous test"
     passed, reasons = _flow._evaluate_gate(proj, sub)
-    hints = [r for r in reasons if r.startswith(_flow._ADVISORY_HINT_PREFIX)]
-    assert hints, f"nothing recorded; reasons={reasons}"
-    assert any("FINDING" in r and _PROGRAM in r for r in hints), hints
-    assert any("65" in r for r in hints), (
-        f"the finding must carry the measured number: {hints}")
+    records = [r for r in reasons
+               if r.startswith(_flow._ADVISORY_RECORD_HINT_PREFIX)]
+    assert passed is False
+    assert records, f"nothing recorded; reasons={reasons}"
+    assert '"enforcement": "BLOCKING"' in records[0]
+    assert any("65" in r for r in reasons), (
+        f"the finding must carry the measured number: {reasons}")
 
 
-def test_DEFECT_absent_measurement_is_recorded_as_na_not_ok(tmp_path):
-    """No measurement -> `n/a`, never `ok:`.
+def test_DEFECT_unclassified_absence_is_incomplete_not_ok(tmp_path):
+    """No typed reason -> incomplete, never `ok:` or a plain skip.
 
     `ok:` would read as "audited and found clean" for a project where nothing
     was measured — the substitution the disclosed-skip tier exists to prevent.
@@ -159,17 +161,19 @@ def test_DEFECT_absent_measurement_is_recorded_as_na_not_ok(tmp_path):
     sub, _key, _cmd = _coverage_closure_subgate()
     assert sub is not None, "not wired — see the first test"
     passed, reasons = _flow._evaluate_gate(proj, sub)
-    hints = [r for r in reasons if r.startswith(_flow._ADVISORY_HINT_PREFIX)]
-    assert hints, f"nothing recorded; reasons={reasons}"
-    assert any("n/a" in r for r in hints), hints
-    assert not any(r.startswith(_flow._ADVISORY_HINT_PREFIX + "ok:")
-                   for r in hints), hints
+    records = [r for r in reasons
+               if r.startswith(_flow._ADVISORY_RECORD_HINT_PREFIX)]
+    assert passed is True
+    assert records, f"nothing recorded; reasons={reasons}"
+    assert '"reason_class": "EXECUTION_ERROR"' in records[0]
+    assert '"enforcement": "DISCLOSED_INCOMPLETE"' in records[0]
+    assert not any("ok:" in r for r in reasons)
 
 
 # ── GUARD direction — must hold on BOTH trees ────────────────────────────────
 
-def test_GUARD_coverage_closure_never_blocks_step4(tmp_path):
-    """Whatever it finds, the advisory slot may not fail the step."""
+def test_GUARD_coverage_closure_live_refusal_blocks_step4(tmp_path):
+    """A measured below-threshold result is a refusal, not advisory prose."""
     proj = tmp_path / "proj"
     (proj / "reports" / "phase2" / "coverage").mkdir(parents=True)
     payload = _measured_payload(proj, 5.0, 5.0, 5.0)   # catastrophically low
@@ -179,7 +183,7 @@ def test_GUARD_coverage_closure_never_blocks_step4(tmp_path):
     if sub is None:
         pytest.skip("not wired on this tree — the DEFECT tests cover that")
     passed, _reasons = _flow._evaluate_gate(proj, sub)
-    assert passed is True, "an advisory gate must never fail its step"
+    assert passed is False
 
 
 def test_GUARD_no_blocking_step4_subgate_invokes_coverage_closure():

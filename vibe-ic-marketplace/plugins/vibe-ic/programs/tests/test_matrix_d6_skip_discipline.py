@@ -1003,6 +1003,9 @@ def _disclosure_prefixes() -> Tuple[str, ...]:
 #:   _RAN_HINT_PREFIX        says the gate RAN. The opposite of a skip.
 #:   _ADVISORY_HINT_PREFIX   an advisory clause never blocked, so its pass was
 #:                           never in the plain PASS bucket to be moved out of.
+#:   _ADVISORY_RECORD_HINT_PREFIX  typed execution metadata; the disposition
+#:                           is consumed separately and the marker itself does
+#:                           not move a tier.
 #:   _STRUCTURE_ONLY_HINT_PREFIX  a different tier, about artefact CONTENT.
 #:   _NOT_APPLICABLE_HINT_PREFIX  the consumer's own comment settles this one:
 #:                           "VISIBLE, NOT TIER-CHANGING ... It cannot promote
@@ -1015,7 +1018,8 @@ def _disclosure_prefixes() -> Tuple[str, ...]:
 #:                           claiming substance on a tree containing NOTHING is
 #:                           precisely what this leg exists to charge.
 _EXCLUDED_TIER_HINTS: Tuple[str, ...] = (
-    "_RAN_HINT_PREFIX", "_ADVISORY_HINT_PREFIX", "_STRUCTURE_ONLY_HINT_PREFIX",
+    "_RAN_HINT_PREFIX", "_ADVISORY_HINT_PREFIX",
+    "_ADVISORY_RECORD_HINT_PREFIX", "_STRUCTURE_ONLY_HINT_PREFIX",
     "_NOT_APPLICABLE_HINT_PREFIX", "_SUBSTANTIVE_HINT_PREFIX")
 
 
@@ -1162,11 +1166,6 @@ def flow_declared_outputs() -> Tuple[str, ...]:
 #: have to read. A NEW member fails immediately; these three are named with
 #: their evidence and may only be DELETED, never added to.
 _DEFERRED_L6_SKIPS: Dict[str, str] = {
-    "12": "VACUOUS_PASS -> FAIL once the flow's declared artefacts exist — "
-          "the skip is standing in for a real failure",
-    "30": "VACUOUS_PASS -> PASS — keyed on an artefact step 30 never names but "
-          "another step declares (the SPEF; cf. this module's own note that "
-          "step 30's skip 'hinges on an artefact the step never names')",
     "P0": "SKIPPED-CONDITION -> FAIL — the structural-RTL umbrella skips for "
           "want of an artefact the flow guarantees",
 }
@@ -2161,9 +2160,18 @@ def test_d6_l3c_fires_when_the_numerator_folds_the_tier_back_in():
     to fail": both runs resolve the same step to the same tier, and both exit
     the same way.
     """
-    program = _first_vacuous_gate_program()
     tmp = Path(tempfile.mkdtemp(prefix="matrix_d6_l3c_"))
     try:
+        # #1978 requires every benign non-verdict to state why it is eligible
+        # for the skip tier. This synthetic subject isolates L3c's numerator
+        # arithmetic while making that reason explicit.
+        program_path = tmp / "typed_vacuous_probe.py"
+        program_path.write_text(
+            "import sys\n"
+            "print('VACUOUS_PASS: design declared no optional probe')\n"
+            "sys.exit(2)\n",
+            encoding="utf-8")
+        program = str(program_path)
         flow = tmp / "flow.yaml"
         _two_step_probe_flow(flow, program)
         project = tmp / "proj"
@@ -2563,14 +2571,12 @@ def test_d6_l6_flow_declared_output_denominator_is_disclosed():
 
 
 def test_d6_l6_separates_legitimate_skips_from_illegitimate_ones():
-    """Both directions, on the real tree, in one measurement.
+    """Only still-live skip tiers enter L6 after #1978 classification.
 
-    The leg is only worth anything if it DISCRIMINATES. A classifier that
-    called every skip legitimate would pass every cell; one that called every
-    skip illegitimate would be a rename of L2. So both classes must be
-    non-empty and the legitimate class must contain this module's own worked
-    example — step 14, which its docstring names as THE legitimately-
-    inapplicable step ("step 14 with no .ys script").
+    Steps 12 and 30 previously entered this leg as ambiguous VACUOUS_PASS rows.
+    The shared reason taxonomy now classifies both unsafe non-verdicts as
+    INCOMPLETE before L6. P0 remains the one live illegitimate skip. This pins
+    that split so an unsafe outcome cannot quietly re-enter the skip register.
     """
     legit, illegit = [], []
     for sid in F.step_ids():
@@ -2581,17 +2587,12 @@ def test_d6_l6_separates_legitimate_skips_from_illegitimate_ones():
             continue
         (legit if full.status in SKIP_TIERS else illegit).append(
             F.normalize_id(sid))
-    assert legit, (
-        "no skip classified LEGITIMATE — the leg has collapsed into 'every "
-        "skip is a defect', which is L2 under another name")
-    assert illegit, (
-        "no skip classified ILLEGITIMATE — the leg cannot fire at all, and a "
-        "detector that has never fired is indistinguishable from no detector")
-    assert "14" in legit, (
-        f"step 14 is this module's own named example of a legitimately "
-        f"inapplicable step (no .ys script) and L6 classified it "
-        f"{'ILLEGITIMATE' if '14' in illegit else 'not at all'}; "
-        f"legitimate={sorted(legit)} illegitimate={sorted(illegit)}")
+    assert legit == [], legit
+    assert illegit == ["P0"], illegit
+    assert {
+        sid: probe_for(sid).scenarios["SEEDED"].status
+        for sid in ("12", "30")
+    } == {"12": "INCOMPLETE", "30": "INCOMPLETE"}
 
 
 def test_d6_l6_deferred_register_only_shrinks():

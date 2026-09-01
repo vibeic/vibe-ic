@@ -1,4 +1,4 @@
-"""Wiring a NOT-CHECKED gate must not downgrade a step's disclosure tier.
+"""A NOT-CHECKED classifier must not enter the gate denominator.
 
 The defect
 ----------
@@ -26,10 +26,9 @@ it bites only on LIVE runs, which is worse, not better.
 
 The repair
 ----------
-The gate moves to the `advisory_program_exit_zero` slot. `_evaluate_gate`
-refuses to record rc=2 as `ok` and writes `n/a (input not present)` instead, and
-`check_step` holds ADVISORY hints OUT of the tier decision (#306) — so the
-disclosure is recorded AND the step stays PASS, so the voided line survives.
+Issue #1980 moves the classifier to the step's `program_outputs`. Its typed
+NOT-CHECKED output remains reportable, but a program with no refusal predicate
+cannot count as gate coverage or retier the step.
 
 These tests drive the REAL entry point over a real fixture, and the second one
 is the positive control: it re-runs the identical fixture against a yaml whose
@@ -42,6 +41,7 @@ import sys
 from pathlib import Path
 
 import pytest
+import yaml
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import _progress_run as _pr  # noqa: E402
@@ -50,13 +50,6 @@ PROGRAMS = Path(__file__).resolve().parents[1]
 PLUGIN = PROGRAMS.parent
 FLOW = PLUGIN / "flow" / "phase1_phase2_phase3.yaml"
 FCC = PROGRAMS / "flow_compliance_check.py"
-
-_ADVISORY_CLAUSE = (
-    '- advisory_program_exit_zero: "hold_area_budget_check . '
-    '--json reports/phase3/pnr/hold_area_budget.json"')
-_BLOCKING_CLAUSE = (
-    '- program_exit_zero: "hold_area_budget_check . '
-    '--json reports/phase3/pnr/hold_area_budget.json"')
 
 _VOIDED_RE = re.compile(
     r"PASS voided: dependency \[19\] CTS.*= FAIL, so this step's PASS "
@@ -121,39 +114,40 @@ def test_the_shipped_wiring_keeps_the_voided_disclosure(broken_chain):
     assert "VACUOUS-PASS" not in block, block
 
 
-def test_the_advisory_slot_still_RECORDS_the_not_checked_disclosure(
-        broken_chain):
-    """Not blocking is not the same as not recorded. The gate must still RUN
-    in-flow and its NOT-CHECKED verdict must reach the step line — an advisory
-    gate that ran and said nothing would make the run look audited."""
-    out = _audit(broken_chain, FLOW)
-    assert "GATE_RAN hold_area_budget_check" in out, out
-    assert re.search(r"GATE_RAN hold_area_budget_check\s+rc=2", out), out
-    block = _step20(out)
-    assert "ADVISORY (non-blocking, #306)" in block, block
-    assert "hold_area_budget_check" in block, block
+def test_the_classifier_is_a_program_output_not_a_gate():
+    step20 = next(step for step in yaml.safe_load(FLOW.read_text())["steps"]
+                  if step["id"] == 20)
+    assert "hold_area_budget_check" in step20["programs"]
+    assert "hold_area_budget_check" not in str(step20["gate"])
+    assert step20["program_outputs"] == [{
+        "program": "hold_area_budget_check",
+        "path": "reports/phase3/pnr/hold_area_budget.json",
+        "verdict_field": "verdict",
+    }]
 
 
 def test_POSITIVE_CONTROL_the_blocking_slot_deletes_the_voided_line(
         broken_chain, tmp_path):
-    """The same fixture against a yaml differing ONLY in the slot keyword.
-    If this passed too, the tests above would be measuring nothing."""
-    text = FLOW.read_text(encoding="utf-8")
-    assert text.count(_ADVISORY_CLAUSE) == 1, "the shipped clause moved"
+    """Adding the classifier back as a gate recreates the tier defect."""
+    flow = yaml.safe_load(FLOW.read_text(encoding="utf-8"))
+    step20 = next(step for step in flow["steps"] if step["id"] == 20)
+    step20["gate"]["all_of"].insert(0, {
+        "program_exit_zero": (
+            "hold_area_budget_check . --json "
+            "reports/phase3/pnr/hold_area_budget.json")})
     variant = tmp_path / "blocking_flow.yaml"
-    variant.write_text(text.replace(_ADVISORY_CLAUSE, _BLOCKING_CLAUSE))
+    variant.write_text(yaml.safe_dump(flow, sort_keys=False))
 
-    block = _step20(_audit(broken_chain, variant))
-    # 2026-08-22 — was `"[VACUOUS-PASS" in block`. This line is the control's
-    # PRECONDITION, not its subject: it establishes that the blocking slot
-    # re-tiered the step out of a plain PASS, so that the deletion asserted
-    # below is attributable to the re-tiering. Step 20 here runs two clauses
-    # and one of them examined nothing, so the tier it lands in is
-    # `PARTIALLY-VACUOUS` — still a vacuity tier, still not `PASS`, still
-    # re-tiered, and the subject on the next line is unaffected. Accept either
-    # vacuity word rather than pinning one spelling; a plain PASS, a FAIL or a
-    # MISSING still fails here, which is all this line was ever for.
-    assert ("[VACUOUS-PASS" in block or "[PARTIALLY-VACUOUS" in block), block
+    out = _audit(broken_chain, variant)
+    block = _step20(out)
+    # #1978 makes this unclassified rc=2 an unsafe non-verdict rather than a
+    # benign vacuous skip.  The control's subject is unchanged: putting the
+    # classifier back in the gate denominator re-tiers Step 20 away from PASS
+    # and deletes the dependency-voided disclosure.
+    assert "[INCOMPLETE" in block, block
+    assert re.search(
+        r"GATE_RAN hold_area_budget_check\s+rc=2\s+INCOMPLETE "
+        r"reason_class=EXECUTION_ERROR", out), out
     assert not _VOIDED_RE.search(block), (
         "the blocking slot was supposed to delete the voided disclosure; if "
         "it no longer does, the tier interaction was fixed elsewhere and this "

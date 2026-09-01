@@ -451,6 +451,41 @@ def _patch_run(monkeypatch, mod, stub_results: dict[str, tuple[int, str]],
     monkeypatch.setattr(mod, "_run_structural_rtl_gates", _stub)
 
 
+def _patch_unrelated_advisory_outcomes_as_pass(monkeypatch, mod):
+    """Keep the P0-scope fixtures about P0, not D1 advisory findings.
+
+    Issue #1980 correctly makes a live advisory-slot refusal block its step.
+    The fixtures that call this helper deliberately exercise structural-only
+    verdict scoping and D1 ancestry bookkeeping, not the dozens of independent
+    D1 program findings.  Preserve each real execution, but replace its typed
+    advisory disposition with a synthetic clean result so a newly actionable
+    D1 checker cannot silently hollow out those unrelated tests.
+
+    Blocking (non-advisory) D1 predicates are untouched.  That is load-bearing
+    for the two ancestry-break arms below: removing a declared output can still
+    make D1 MISSING, while removing an L document can still make D1 FAIL.
+    """
+    original = getattr(mod, "_advisory_execution_record", None)
+    if original is None:
+        # Pre-#1980 baseline: the advisory slot itself is nonblocking, so no
+        # isolation shim is needed.  Keeping this arm executable prevents the
+        # differential control from reddening on a helper-only AttributeError.
+        return
+
+    def _clean_record(*args, **kwargs):
+        record = original(*args, **kwargs)
+        return {
+            **record,
+            "exit_code": 0,
+            "verdict": "PASS",
+            "structured_verdict": None,
+            "reason_class": None,
+            "enforcement": "PASSED",
+        }
+
+    monkeypatch.setattr(mod, "_advisory_execution_record", _clean_record)
+
+
 def _import_fcc(monkeypatch=None):
     import importlib.util as _ilu
     import sys as _sys
@@ -583,6 +618,7 @@ def test_strict_structural_only_structural_gates(tmp_path,
     # premise true, so the scope question this test asks is asked of a P0 that
     # actually answered.
     _patch_run(monkeypatch, mod, {}, passing=2)
+    _patch_unrelated_advisory_outcomes_as_pass(monkeypatch, mod)
     rc = mod.main([str(project), "--phase", "2", "--strict-structural"])
     out = capsys.readouterr().out
     # PRECONDITION #1 (vibe-ic#1446): the fixture's own promise. Without it this
@@ -646,6 +682,7 @@ def _p0_ancestry_report(tmp_path, monkeypatch, capsys, *, remove=None) -> str:
         victim.unlink()
     mod = _import_fcc()
     _patch_run(monkeypatch, mod, {}, passing=2)
+    _patch_unrelated_advisory_outcomes_as_pass(monkeypatch, mod)
     mod.main([str(project), "--phase", "2", "--strict-structural"])
     return capsys.readouterr().out
 
@@ -780,12 +817,15 @@ def test_strict_structural_step_level_info_block(tmp_path,
 # ──────────────────────────────────────────────────────────────────────
 # Wave 93 / v1.6.17 — VACUOUS_PASS verdict tier formalisation
 # ──────────────────────────────────────────────────────────────────────
-def test_wave93_vacuous_pass_step14_no_ys(tmp_path):
-    """A project with synth/netlist.v but NO .ys synth scripts triggers
-    the Wave 92 VACUOUS_PASS path on Step 14's two yosys gates. Wave 93
-    formalises that as a first-class `VACUOUS_PASS` verdict tier rendered
-    `[VACUOUS-PASS]` in the per-step listing and counted into pass_count
-    (so Overall isn't penalised for a vacuously-satisfied step)."""
+def test_issue1980_step14_nested_nonverdict_is_classed_not_skipped(tmp_path):
+    """The nested missing report is classed, never flattened to a skip.
+
+    The fixture has a synth netlist but no ``.ys`` recipe, so the two Yosys
+    classifiers report NOT_CHECKED. It also lacks the nested stage-analog
+    compliance report. #1978 classifies that non-verdict as EXECUTION_ERROR;
+    #1980 preserves its real rc and disposition, while the landed dependency
+    policy keeps the step MISSING behind Step 9 rather than calling it a skip.
+    """
     proj = tmp_path / "vac"
     (proj / "phase2" / "stage1" / "rtl").mkdir(parents=True)
     (proj / "phase2" / "stage2" / "synth").mkdir(parents=True)
@@ -795,23 +835,23 @@ def test_wave93_vacuous_pass_step14_no_ys(tmp_path):
     )
     (proj / "phase2" / "stage2" / "synth" / "netlist.v").write_text("module top(); endmodule\n")
     r = _run(str(proj), "--strict")
-    # rc may still be 1 because other steps are MISSING; what we are
-    # asserting is the Wave-93 surface contract on Step 14.
-    assert "VACUOUS-PASS" in r.stdout, r.stdout
-    # Step 14 specifically must be labelled VACUOUS-PASS, not PASS or
-    # FAIL.
-    assert "[VACUOUS-PASS" in r.stdout, r.stdout
-    # The summary counter must be visible.
-    assert "VACUOUS-PASS=" in r.stdout, r.stdout
+    assert re.search(r"\[MISSING\s*\] Step\s+14:.*blocked-by-upstream\(9\)",
+                     r.stdout), r.stdout
+    assert "GATE EVIDENCE: flow_compliance_check rc=1 verdict=CRASHED" in r.stdout
+    assert "reason_class=EXECUTION_ERROR" in r.stdout
+    assert "enforcement=DISCLOSED_INCOMPLETE" in r.stdout
+    assert not re.search(r"\[VACUOUS-PASS\s*\] Step\s+14:", r.stdout)
 
 
-#: The steps that ARE vacuous on the `vac2` fixture below, measured
-#: 2026-07-28. Both are structural facts of the fixture, not incidental:
-#:   * FS1     — the fixture's RTL declares no ECC/parity/lockstep mechanism,
-#:     so the FMEDA pair measures no diagnostic coverage.
-#: Step 14 no longer belongs here: its missing `.ys` primary artefact is
-#: accompanied by a SUBSTANTIVE alternate-route proof, so #1978 treats that
-#: completed check as PASS rather than as a non-verdict.
+#: The steps that ARE vacuous on the `vac2` fixture below, re-measured for
+#: issue #1980 on 2026-09-01:
+#:   * FS1 — the fixture's RTL declares no ECC/parity/lockstep mechanism, so
+#:     the FMEDA pair measures no diagnostic coverage.
+#:
+#: Step 14 deliberately stays outside this set. #1978 classifies its unsafe
+#: non-verdicts as INCOMPLETE, and the delivery/dependency policy leaves the
+#: canonical full-run row MISSING behind Step 9. Neither is a skip-eligible
+#: non-verdict.
 #: Pinned as a SET so that a step JOINING or LEAVING the vacuous tier is a
 #: named, deliberate edit here rather than an invisible drift.
 _VAC2_EXPECTED_VACUOUS_STEPS = {"FS1"}

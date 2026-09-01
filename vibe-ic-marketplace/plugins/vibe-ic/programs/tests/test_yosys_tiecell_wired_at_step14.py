@@ -107,11 +107,12 @@ def test_the_wiring_fires_on_a_violating_recipe(tmp_path: Path) -> None:
     passed, reasons = F._evaluate_gate(
         project, {"all_of": [{"advisory_program_exit_zero":
                               _advisory_entry(_step14())}]})
-    assert passed is True, "advisory must NOT fail the step"
-    advisory = [r for r in reasons if r.startswith(F._ADVISORY_HINT_PREFIX)]
-    assert advisory, reasons
-    assert any("FINDING" in r for r in advisory), advisory
-    assert any(GATE in r for r in advisory), advisory
+    assert passed is False
+    records = [r for r in reasons
+               if r.startswith(F._ADVISORY_RECORD_HINT_PREFIX)]
+    assert records, reasons
+    assert any('"enforcement": "BLOCKING"' in r for r in records)
+    assert any(GATE in r for r in records)
 
 
 def test_the_wiring_reports_ok_on_a_conformant_recipe(tmp_path: Path) -> None:
@@ -121,10 +122,10 @@ def test_the_wiring_reports_ok_on_a_conformant_recipe(tmp_path: Path) -> None:
         project, {"all_of": [{"advisory_program_exit_zero":
                               _advisory_entry(_step14())}]})
     assert passed is True
-    advisory = [r for r in reasons if r.startswith(F._ADVISORY_HINT_PREFIX)]
-    assert advisory, reasons
-    assert any("ok:" in r for r in advisory), advisory
-    assert not any("FINDING" in r for r in advisory), advisory
+    records = [r for r in reasons
+               if r.startswith(F._ADVISORY_RECORD_HINT_PREFIX)]
+    assert records, reasons
+    assert any('"enforcement": "PASSED"' in r for r in records)
 
 
 def test_a_project_with_no_recipe_is_recorded_as_not_applicable(
@@ -140,7 +141,9 @@ def test_a_project_with_no_recipe_is_recorded_as_not_applicable(
         tmp_path, {"all_of": [{"advisory_program_exit_zero":
                                _advisory_entry(_step14())}]})
     assert passed is True
-    advisory = [r for r in reasons if r.startswith(F._ADVISORY_HINT_PREFIX)]
-    assert advisory, reasons
-    assert any("n/a" in r for r in advisory), advisory
-    assert not any("ok:" in r for r in advisory), advisory
+    records = [r for r in reasons
+               if r.startswith(F._ADVISORY_RECORD_HINT_PREFIX)]
+    assert records, reasons
+    assert any('"enforcement": "DISCLOSED_INCOMPLETE"' in r
+               for r in records)
+    assert not any("ok:" in r for r in reasons)

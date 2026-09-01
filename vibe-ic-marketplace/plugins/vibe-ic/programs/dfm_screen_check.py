@@ -44,27 +44,22 @@ own liberty filenames (the foundry_handoff_pack_gen heuristic); at
 <= 28 nm the FOUNDRY_SIDE items escalate to DESIGNER_COLLAB_REVIEW
 findings (dormant at this flow's 130-180 nm PDKs, mechanism present).
 
-ENFORCEMENT: advisory
+ROLE: producer/classifier
 
 The two verdict tiers this screen computes used to share ONE exit code.
 `audit()` resolved `PASS` vs `PASS_WITH_ADVISORIES` and then returned a
 hard-coded ``"rc": 0`` for both, so every finding this program raised was
-invisible to the only consumer that reads an exit code — the flow gate.
-Step 35 wired it into the BLOCKING `program_exit_zero` slot, where rc 0
-and rc 2 both pass, making that sub-gate structurally tautological: no
-project could ever move it. The tiers are now separated:
+invisible at the process boundary. The tiers are now separated:
 
   0  PASS                    — screen ran, no advisory
   1  PASS_WITH_ADVISORIES    — screen ran and RAISED a finding
   2  vacuous SKIP            — nothing to screen yet (no routed.def and
                                no density artifacts)
 
-rc 1 is an ADVISORY finding, not a step failure, and the flow must wire
-this program in the `advisory_program_exit_zero` slot (#306) so the
-finding is RUN, RECORDED and PRINTED without blocking. Wiring it in a
-blocking slot would contradict the declaration above and would turn every
-DFM advisory into a duplicate of the Step-34 density FAIL — precisely the
-gating this screen was written NOT to do.
+Issue #1980 declares the canonical JSON as a Step-35 program output rather
+than a gate. The screen has no refusal predicate; file presence is the step's
+blocking predicate, while the structured verdict remains visible without
+inflating gate coverage.
 
 chip-AGNOSTIC: DEF structure + window numbers only.
 """
@@ -495,14 +490,9 @@ def audit(project: Path) -> dict:
     verdict = "PASS_WITH_ADVISORIES" if advisories else "PASS"
     return {
         "verdict": verdict,
-        # The two tiers no longer share one exit code. rc 1 is an ADVISORY
-        # finding (see the module docstring): the flow wires this program in
-        # `advisory_program_exit_zero`, so a finding is RECORDED and PRINTED
-        # on the step line without failing Step 35 — Step 34 still owns the
-        # density gate and OpenROAD has no via-doubling repair pass, so a
-        # hard FAIL here would be fabricated.
+        # The two producer tiers retain distinct process exit codes for direct
+        # callers. Step 35 consumes the structured output, not a gate slot.
         "rc": 1 if advisories else 0,
-        "verdict_mode": "ADVISES",
         "density_ref": density_ref,
         "via_redundancy": via_summary,
         "process_nm": process_nm,

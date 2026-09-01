@@ -65,7 +65,8 @@ prose channel the consumer deliberately cannot read."""
 import json, sys
 from pathlib import Path
 
-VERDICT, RC, NAME = {verdict!r}, {rc!r}, {name!r}
+VERDICT, RC, NAME, REASON_CLASS = (
+    {verdict!r}, {rc!r}, {name!r}, {reason_class!r})
 argv = sys.argv[1:]
 out = None
 for i, a in enumerate(argv):
@@ -76,19 +77,29 @@ if out:
     if not p.is_absolute():
         p = Path.cwd() / p
     p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text(json.dumps({{"gate": NAME, "verdict": VERDICT}}, indent=1))
+    payload = {{"gate": NAME, "verdict": VERDICT}}
+    if REASON_CLASS:
+        payload["reason_class"] = REASON_CLASS
+    p.write_text(json.dumps(payload, indent=1))
 print("[%s] %s" % ("PASS" if RC == 0 else "FAIL", NAME))
 sys.exit(RC)
 '''
 
 
-def _synth_gate(tmp_path: Path, name: str, verdict: str, rc: int = 0) -> Path:
+def _synth_gate(tmp_path: Path, name: str, verdict: str, rc: int = 0,
+                reason_class: str | None = None) -> Path:
     """A gate program on disk. Named by ABSOLUTE path in the flow, which
     `_resolve_program_cmd` honours (`PROGRAMS_DIR / '/abs/x.py'` is
     `/abs/x.py`), so nothing is written into the shipped programs tree."""
     p = tmp_path / "synthetic_gates" / f"{name}.py"
     p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text(_SYNTH.format(verdict=verdict, rc=rc, name=name))
+    if reason_class is None and verdict == "NOT_APPLICABLE":
+        # These synthetic fixtures model a genuinely design-declared N/A.
+        # #1978 requires the reason to be typed; a bare token is intentionally
+        # unsafe and belongs to INCOMPLETE, not this #901 vacuity fixture.
+        reason_class = "DESIGN_DECLARED_NA"
+    p.write_text(_SYNTH.format(
+        verdict=verdict, rc=rc, name=name, reason_class=reason_class))
     return p
 
 
@@ -154,9 +165,9 @@ def test_a_gate_that_declares_not_applicable_in_its_own_report_is_not_a_pass(
     assert declared["verdict"].upper() in F._VACUOUS_JSON_VERDICTS, declared
 
     step = _step_under_audit(doc)
-    assert step["status"] == "VACUOUS_PASS", (
-        f"a gate that declared {declared['verdict']} in its own report was "
-        f"consumed as {step['status']}\n{out}")
+    assert step["status"] == "INCOMPLETE", (
+        f"an untyped gate non-verdict was consumed as {step['status']}\n{out}")
+    assert "reason_class=EXECUTION_ERROR" in out, out
 
 
 def test_the_gate_ledger_row_repeats_what_the_gate_said_about_itself(tmp_path):
@@ -167,9 +178,10 @@ def test_the_gate_ledger_row_repeats_what_the_gate_said_about_itself(tmp_path):
     _rc, out, _doc = _audit(project, flow)
     row = re.search(r"GATE_RAN\s+vacuous_testbench_check\s+rc=2\s+(\S+)", out)
     assert row, out
-    assert row.group(1) == "VACUOUS_PASS", (
+    assert row.group(1) == "INCOMPLETE", (
         f"the ledger row reads {row.group(1)} for a gate whose own report "
         f"says it examined nothing\n{out}")
+    assert "reason_class=EXECUTION_ERROR" in out, out
 
 
 def test_the_optional_slot_reads_the_same_disclosure(tmp_path):
@@ -264,7 +276,7 @@ def test_every_declared_gate_that_reports_vacuity_reaches_the_step_tier():
         f"only {len(clauses)} blocking gate clauses discovered — the flow "
         f"walk stopped seeing the population it is supposed to sweep")
 
-    disclosing, undisclosed = [], []
+    classified, undisclosed = [], []
     for cmd in clauses:
         with tempfile.TemporaryDirectory(prefix="i901_empty_") as td:
             project = Path(td)
@@ -288,22 +300,23 @@ def test_every_declared_gate_that_reports_vacuity_reaches_the_step_tier():
                      for k in ("verdict", "status")}
             if not (words & F._VACUOUS_JSON_VERDICTS):
                 continue
-            # BOTH numerator buckets. The structured channel keeps its own
-            # marker so it cannot alter a tier the legacy bucket already
-            # decides; "the step tier saw it" means either bucket carries it.
+            # #1978 splits structured non-verdicts by reason class. A safe
+            # typed absence reaches a skip/vacuity hint; an unsafe or untyped
+            # one reaches INCOMPLETE. Either proves the consumer read it.
             seen_by_tier = any(
                 r.startswith(F._VACUOUS_HINT_PREFIX)
                 or r.startswith(F._JSON_VACUOUS_HINT_PREFIX)
+                or r.startswith(F._INCOMPLETE_HINT_PREFIX)
                 for r in reasons)
-            (disclosing if seen_by_tier else undisclosed).append(cmd)
+            (classified if seen_by_tier else undisclosed).append(cmd)
 
     assert not undisclosed, (
         "these gates exited 0 on an empty project, declared in their own "
         "report that they examined nothing, and the step tier never saw it:\n"
         + "\n".join(f"  {c}" for c in undisclosed))
     # A sweep over an EMPTY population is itself the defect being removed.
-    assert len(disclosing) >= 5, (
-        f"only {len(disclosing)} gate(s) exercised this route — the sweep is "
+    assert len(classified) >= 5, (
+        f"only {len(classified)} gate(s) exercised this route — the sweep is "
         f"passing because it found nothing to judge, not because the "
         f"consumer reads the channel")
 
@@ -402,7 +415,9 @@ def test_GUARD_the_legacy_channel_keeps_its_tier_when_siblings_ran(tmp_path):
     fix for under-disclosure.
     """
     project = tmp_path / "proj"
-    legacy = _synth_gate(tmp_path, "legacy_vacuous_emitter", "PASS", rc=2)
+    legacy = _synth_gate(
+        tmp_path, "legacy_vacuous_emitter", "PASS", rc=2,
+        reason_class="DESIGN_DECLARED_NA")
     substantive = _synth_gate(tmp_path, "measured_the_design", "PASS", rc=0)
     flow = _flow(
         tmp_path,
@@ -448,7 +463,9 @@ def test_GUARD_the_legacy_channel_alone_still_gets_the_unanimous_word(tmp_path):
     has lost tier power and this fails.
     """
     project = tmp_path / "proj"
-    legacy = _synth_gate(tmp_path, "legacy_vacuous_emitter", "PASS", rc=2)
+    legacy = _synth_gate(
+        tmp_path, "legacy_vacuous_emitter", "PASS", rc=2,
+        reason_class="DESIGN_DECLARED_NA")
     flow = _flow(
         tmp_path,
         f'        - program_exit_zero: "{legacy} . --json reports/leg.json"\n')
@@ -805,47 +822,29 @@ def test_GUARD_the_shipped_step_is_not_vacuous_when_its_sim_actually_ran(
         "vacuously satisfied' over a tree whose sim ran, whose testbenches "
         "drive the unit and whose coverage was measured\n"
         + "\n".join(str(r) for r in step.get("reasons", [])))
-    # 2026-08-22 — CORRECTED. `!= "VACUOUS_PASS"` above is this test's subject
-    # and is untouched. `== "PASS"` was not a second requirement, it was the
-    # only remaining word: when this was written the tiers were {PASS,
-    # VACUOUS_PASS}, so "not vacuous" and "PASS" were the same assertion typed
-    # twice. They are no longer. Step 4 here ran 4 clauses, 3 read real content
-    # and 1 examined nothing; `PASS` claims the step was audited throughout and
-    # is as false in that direction as `VACUOUS_PASS` is in the other. The word
-    # that is true is asserted instead.
-    #
-    # WHAT THIS DOES *NOT* DO, stated because it is the reasonable objection:
-    # it does not return step 4 to the executed-PASS numerator. It was already
-    # out of it on origin/main (as VACUOUS_PASS) and it is still out of it here
-    # — `pass_count` is unchanged by this whole change, for any step. Putting a
-    # step that has an unexamined clause INTO `pass_count` is the one direction
-    # #901 guards everywhere and is not this shard's call to make.
-    assert step["status"] == "PARTIALLY-VACUOUS", step
-    assert step.get("partial_vacuity_disclosed") is True, step
+    # #1978 classifies the untyped professional-TB non-verdict as an execution
+    # error. #1980 independently preserves the two live advisory refusals.
+    # The live refusals win the step word; neither fact is flattened to a plain
+    # skip or an advisory "ok".
+    assert step["status"] == "FAIL", step
+    assert any(record.get("enforcement") == "BLOCKING"
+               for record in step.get("advisory_gate_records", [])), step
+    assert any(record.get("reason_class") == "EXECUTION_ERROR"
+               for record in step.get("advisory_gate_records", [])), step
+    assert step.get("partial_vacuity_disclosed") is False, step
 
 
-def test_the_shipped_step_names_the_one_clause_that_examined_nothing(tmp_path):
-    """Same fixture, the other half: the guard above must not be bought by
-    dropping the disclosure.
-
-    Refusing the tier is only half an answer. The professional-TB clause DID
-    run and DID examine nothing, and if the step is not going to say so in its
-    word it has to say so in its line — otherwise "not unanimous" becomes a new
-    way to be silent, which is the shape #901 is filed against.
-
-    Unlike the guard, this one is expected to move: it FAILS against
-    origin/main, where the clause's own report is never opened.
-    """
+def test_the_shipped_step_preserves_each_live_advisory_refusal(tmp_path):
+    """The first refusal must not hide later advisory-slot executions."""
     _rc, _out, step = _shipped_step4(tmp_path, ran=True)
-    assert step.get("partial_vacuity_disclosed") is True, (
-        "the one clause that examined nothing was dropped for failing to be "
-        "unanimous — one silent pass traded for another\n" + str(step))
-    assert any("PARTIALLY-VACUOUS" in str(r) and "professional_tb_check" in str(r)
-               for r in step["reasons"]), step["reasons"]
-    assert any("1 of 4 gate clause(s)" in str(r) for r in step["reasons"]), (
-        "the disclosure does not state the count it rests on; without the "
-        "denominator this is the v1.10.14 rule with a friendlier sentence\n"
-        + str(step["reasons"]))
+    assert step["status"] == "FAIL", step
+    blocking = [record for record in step.get("advisory_gate_records", [])
+                if record.get("enforcement") == "BLOCKING"]
+    assert {record["gate"] for record in blocking} == {
+        "behavioral_evidence_per_spec_item_check",
+        "rtl_unit_test_coverage_check",
+    }, blocking
+    assert {record["exit_code"] for record in blocking} == {1}
 
 
 def test_the_other_self_aware_shipped_gate_also_reaches_the_tier(tmp_path):
@@ -881,10 +880,8 @@ def test_the_other_self_aware_shipped_gate_also_reaches_the_tier(tmp_path):
     assert declared["verdict"].upper() in F._VACUOUS_JSON_VERDICTS, declared
 
     step = _step_under_audit(doc)
-    assert step["status"] == "VACUOUS_PASS", (
-        f"a gate that declared {declared['verdict']} in its own report was "
-        f"consumed as {step['status']}\n{out}")
-    assert any("1 of 1 gate clause(s) that ran" in str(r)
-               for r in step["reasons"]), (
-        "the tier was granted without stating the count it was granted on; "
-        "an uncounted grant is the v1.10.14 rule again\n" + str(step["reasons"]))
+    assert step["status"] == "INCOMPLETE", (
+        f"an untyped gate non-verdict was consumed as {step['status']}\n{out}")
+    assert re.search(
+        r"GATE_RAN professional_tb_check\s+rc=0\s+INCOMPLETE "
+        r"reason_class=EXECUTION_ERROR", out), out

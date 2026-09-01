@@ -124,7 +124,7 @@ def test_the_record_is_not_conditional_on_the_outcome():
     wrapper = src[i:j]
     line = next(l for l in wrapper.splitlines()
                 if "_record_gate_execution(cmd_str" in l)
-    assert line.startswith("    _record_gate_execution("), (
+    assert line.startswith("    _ledger_row = _record_gate_execution("), (
         f"the record is nested under a branch: {line!r}")
 
 

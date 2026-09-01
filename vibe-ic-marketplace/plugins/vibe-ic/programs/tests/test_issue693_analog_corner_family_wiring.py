@@ -170,8 +170,11 @@ def test_the_a4_advisory_actually_runs_and_reports(tmp_path, disclosed,
     assert advisory, (
         "the advisory did not run at all — a gate wired somewhere that never "
         "executes is the same defect moved: " + "; ".join(reasons))
-    found = any("FINDING" in r for r in advisory)
-    assert found is expect_finding, advisory
+    records = [json.loads(r[len(fcc._ADVISORY_RECORD_HINT_PREFIX):])
+               for r in advisory
+               if r.startswith(fcc._ADVISORY_RECORD_HINT_PREFIX)]
+    assert len(records) == 1, advisory
+    assert (records[0]["enforcement"] == "BLOCKING") is expect_finding
     assert passed is False, (
         "precondition of this test: the incumbent blocking sibling is expected "
         "to fail here, which is what makes the advisory's survival the point")

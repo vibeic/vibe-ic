@@ -13,15 +13,9 @@ five venues, and the adapter read only `emitted_count`. So there were TWO
 consumers and NEITHER could read an outcome, which is what "declares an intent
 it is not wired for" means here.
 
-Both directions are proven through the CONSUMER — `flow_compliance_check`
-evaluating the real clause — because a verdict nothing reads is not a verdict:
-
-    rc 0  ->  ADVISORY ok
-    rc 1  ->  ADVISORY FINDING        <- a red gate CHANGES what is recorded
-    rc 2  ->  ADVISORY n/a (input not present)
-
-and in all three the step still passes, because the declaration is ADVISORY and
-this wiring does not change that.
+Issue #1980 classifies this correctly as a producer: the Phase-1 runner owns
+execution, Step D1 declares the L22 output, and no gate denominator row is
+created for the emitter itself.
 """
 from __future__ import annotations
 
@@ -43,9 +37,6 @@ import flow_compliance_check as FC               # noqa: E402
 import phase1_doc_one_shot_runner as RUNNER      # noqa: E402
 from l22_analog_verification_plan_emit import run as EMIT  # noqa: E402
 
-#: The clause as this test drives it. Asserted EQUAL to the shipped flow
-#: definition by `test_the_flow_definition_carries_this_exact_clause`, so the
-#: behavioural tests below cannot pass against a wiring the flow does not have.
 COMMAND = "l22_analog_verification_plan_emit . --dry-run"
 
 
@@ -149,37 +140,30 @@ def test_the_exit_code_is_not_a_constant(
         == (0, 1, 2)
 
 
-# ── the consumer, both directions ─────────────────────────────────────────
-def _advisory_lines(project: Path):
-    passed, reasons = FC._evaluate_gate(
-        project, {"advisory_program_exit_zero": {"command": COMMAND}})
-    hints = [r[len(FC._ADVISORY_HINT_PREFIX):] for r in reasons
-             if r.startswith(FC._ADVISORY_HINT_PREFIX)]
-    return passed, hints
+# ── the producer-output consumer ──────────────────────────────────────────
+def _program_output_record(project: Path):
+    step = next(s for s in yaml.safe_load(FLOW.read_text())["steps"]
+                if s["id"] == "D1")
+    return FC._collect_program_output_records(project, step)[0]
 
 
-def test_a_green_emitter_is_recorded_ok(ok_project):
-    passed, hints = _advisory_lines(ok_project)
-    assert passed is True
-    assert len(hints) == 1 and hints[0].startswith("ok: "), hints
+def test_a_green_emitter_output_is_recorded(ok_project):
+    record = _program_output_record(ok_project)
+    assert record["produced"] is True
+    assert record["verdict"] == "EXTRACTED"
+    assert record["enforcement"] == "NOT_A_GATE"
 
 
-def test_a_red_emitter_changes_what_the_consumer_records(refusing_project):
-    """THE DIRECTION THAT MATTERS. Same clause, same consumer, different
-    verdict — and the step still passes, because advisory means advisory."""
-    passed, hints = _advisory_lines(refusing_project)
-    assert passed is True, "an advisory clause must never fail the step"
-    assert len(hints) == 1 and hints[0].startswith("FINDING: "), hints
-    assert "l22_analog_verification_plan_emit" in hints[0]
+def test_a_refusal_is_runner_owned_not_flattened_by_a_gate(refusing_project):
+    assert EMIT(refusing_project, dry_run=True)["status"] == "REFUSED"
+    flow = yaml.safe_load(FLOW.read_text())
+    assert COMMAND not in str([step.get("gate") for step in flow["steps"]])
 
 
-def test_nothing_to_project_is_recorded_as_not_applicable(digital_project):
-    """rc 2 is NOT rc 0: a digital IC that projected nothing must not read as
-    an analog verification plan that was made and found clean."""
-    passed, hints = _advisory_lines(digital_project)
-    assert passed is True
-    assert len(hints) == 1 and hints[0].startswith("n/a (input not present)"), \
-        hints
+def test_a_digital_project_keeps_the_declared_l22_output(digital_project):
+    record = _program_output_record(digital_project)
+    assert record["produced"] is True
+    assert record["role"] == "PRODUCER_OUTPUT"
 
 
 # ── the wiring itself ─────────────────────────────────────────────────────
@@ -195,21 +179,20 @@ def _clauses(node, out):
     return out
 
 
-def test_the_flow_definition_carries_this_exact_clause():
-    found = [c for c in _clauses(yaml.safe_load(FLOW.read_text()), [])
-             if (c if isinstance(c, str) else (c or {}).get("command")) == COMMAND]
-    assert len(found) == 1, (
-        "the flow definition does not wire the L22 analog projection with "
-        f"{COMMAND!r} — the behavioural tests above then measure a clause the "
-        "flow does not have")
-    reason = found[0]["advisory_reason"]
-    assert len(reason) >= 40 and sum(c.isalpha() for c in reason) >= 24
+def test_the_flow_definition_declares_the_producer_and_output():
+    step = next(s for s in yaml.safe_load(FLOW.read_text())["steps"]
+                if s["id"] == "D1")
+    assert "l22_analog_verification_plan_emit" in step["programs"]
+    assert step["program_outputs"] == [{
+        "program": "l22_analog_verification_plan_emit",
+        "path": "phase1/generated_docs/L22_VERIFICATION_PLAN.json",
+        "verdict_field": "extraction_status",
+    }]
+    assert COMMAND not in str(step["gate"])
 
 
-def test_dry_run_is_in_the_command():
-    """A PRODUCER wired into an audit must not rewrite the document it is
-    judged on: the clause would otherwise be measuring its own side effect."""
-    assert "--dry-run" in COMMAND
+def test_the_audit_does_not_execute_the_producer_again():
+    assert COMMAND not in FLOW.read_text()
 
 
 def test_the_enforcement_audit_no_longer_reports_it_orphaned():

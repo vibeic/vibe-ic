@@ -1704,6 +1704,15 @@ class StepResult:
     #   {"name": str, "verdict": one of P0_GATE_VERDICTS,
     #    "message": str, "evidence": dict}
     gate_records: Optional[List[Dict[str, Any]]] = None
+    # Issue #1980 — one lossless record for every dispatched
+    # `advisory_program_exit_zero` clause.  Unlike the historical prose hint,
+    # this preserves the process exit code, the program's structured verdict,
+    # and the enforcement disposition as separate machine-readable facts.
+    advisory_gate_records: List[Dict[str, Any]] = field(default_factory=list)
+    # Programs that produce or classify evidence are declared on the step but
+    # are not predicates.  Their pre-existing outputs remain visible in the
+    # final audit here without entering the gate denominator.
+    program_output_records: List[Dict[str, Any]] = field(default_factory=list)
     # WHICH QUESTION THIS STEP'S `required_outputs` VERDICT ANSWERS.
     #
     # Until this field existed, a `required_outputs` PASS meant only "a file
@@ -3053,7 +3062,7 @@ _GATE_LEDGER: List[Dict[str, Any]] = []
 
 
 def _record_gate_execution(cmd: str, rc: Optional[int], verdict: str,
-                           reason_class: Optional[str] = None) -> None:
+                           reason_class: Optional[str] = None) -> Dict[str, Any]:
     """One row per gate INVOCATION. `rc=None` means the program could not be
     launched at all — itself a distinct fact from any exit code."""
     if verdict not in ("PASS", "FAIL", "PASS_WITH_WAIVERS"):
@@ -3061,9 +3070,11 @@ def _record_gate_execution(cmd: str, rc: Optional[int], verdict: str,
             verdict=verdict, explicit=reason_class)
     else:
         reason_class = _reason_taxonomy.normalise(reason_class)
-    _GATE_LEDGER.append({"gate": _gate_name(cmd), "cmd": cmd,
-                         "rc": rc, "verdict": verdict,
-                         "reason_class": reason_class})
+    row = {"gate": _gate_name(cmd), "cmd": cmd,
+           "rc": rc, "verdict": verdict,
+           "reason_class": reason_class}
+    _GATE_LEDGER.append(row)
+    return row
 
 
 def _gate_ledger_payload() -> List[Dict[str, Any]]:
@@ -3116,6 +3127,56 @@ class _GateStalled(Exception):
         self.res = res
 
 
+@dataclass(frozen=True)
+class _ProgramCheckOutcome:
+    """The private runner result, including the process exit code.
+
+    Iteration deliberately yields the historical ``(passed, output)`` pair so
+    the public wrapper and existing tests keep their tuple contract.  The
+    private attribute is the lossless channel used by the execution ledger and
+    advisory evidence records.
+    """
+
+    passed: bool
+    output: str
+    exit_code: Optional[int]
+
+    def __iter__(self):
+        yield self.passed
+        yield self.output
+
+
+class _ProgramCheckResult(tuple):
+    """Tuple-compatible public result with lossless execution metadata."""
+
+    def __new__(cls, passed: bool, output: str, exit_code: Optional[int],
+                structured_verdict: Optional[str], verdict: str,
+                reason_class: Optional[str]):
+        return super().__new__(cls, (passed, output, exit_code,
+                                     structured_verdict, verdict,
+                                     reason_class))
+
+    def __iter__(self):
+        yield self[0]
+        yield self[1]
+
+    @property
+    def exit_code(self) -> Optional[int]:
+        return self[2]
+
+    @property
+    def structured_verdict(self) -> Optional[str]:
+        return self[3]
+
+    @property
+    def verdict(self) -> str:
+        return self[4]
+
+    @property
+    def reason_class(self) -> Optional[str]:
+        return self[5]
+
+
 def _check_program_exit_zero(project: Path, cmd_str: str) -> tuple[bool, str]:
     """#682 attribution wrapper. Records the invocation whatever it returns, then
     delegates. WRAPPING rather than inserting a `_record_gate_execution` call at
@@ -3123,11 +3184,16 @@ def _check_program_exit_zero(project: Path, cmd_str: str) -> tuple[bool, str]:
     unrecorded, and an unrecorded gate is the exact defect this exists to close.
     The exit shape comes from the snippet the inner function already builds;
     when the command names a JSON report, its typed reason class is consumed
-    here.  One invocation therefore produces one published classification."""
-    ok, out = __check_program_exit_zero(project, cmd_str)
+    here. One invocation therefore produces one published classification plus
+    the exact process exit and structured verdict required by issue #1980."""
+    _inner = __check_program_exit_zero(project, cmd_str)
+    ok, out = _inner
+    _actual_rc = (_inner.exit_code
+                  if isinstance(_inner, _ProgramCheckOutcome) else None)
     report = _command_json_report(project, cmd_str)
     report_cls = _reason_taxonomy.report_reason_class(report)
     report_message = _report_reason_text(report)
+    _structured_verdict = _report_verdict(report)
     reason_class: Optional[str] = None
     if out.startswith(_VACUOUS_HINT_PREFIX):
         legacy_message = out.partition("\n")[2]
@@ -3199,11 +3265,19 @@ def _check_program_exit_zero(project: Path, cmd_str: str) -> tuple[bool, str]:
                              "classified reason")
                 out = (f"INCOMPLETE: {cmd_str} — reason_class={reason_class}; "
                        f"{detail}")
-    _record_gate_execution(cmd_str, rc, verdict, reason_class)
-    return ok, out
+    _ledger_row = _record_gate_execution(cmd_str, rc, verdict, reason_class)
+    # Keep the legacy ``rc`` and ``verdict`` fields stable for existing ledger
+    # consumers, and add the lossless #1980 facts without flattening #1978's
+    # non-verdict classification into a generic skip.
+    _exact_rc = _actual_rc if _actual_rc is not None else rc
+    _ledger_row["exit_code"] = _exact_rc
+    _ledger_row["structured_verdict"] = _structured_verdict
+    return _ProgramCheckResult(
+        ok, out, _exact_rc, _structured_verdict, verdict,
+        _ledger_row.get("reason_class"))
 
 
-def __check_program_exit_zero(project: Path, cmd_str: str) -> tuple[bool, str]:
+def __check_program_exit_zero(project: Path, cmd_str: str) -> _ProgramCheckOutcome:
     """Run program in project dir (with globs expanded relative to project),
     return (passed, output_snippet).
 
@@ -3230,7 +3304,8 @@ def __check_program_exit_zero(project: Path, cmd_str: str) -> tuple[bool, str]:
     """
     argv = _resolve_program_cmd(cmd_str, cwd=project)
     if not argv:
-        return False, f"program not found: {cmd_str.split()[0]}"
+        return _ProgramCheckOutcome(
+            False, f"program not found: {cmd_str.split()[0]}", None)
     # #525 — per-gate budget from the SHARED resolver (default 900s, env
     # VIBE_IC_GATE_TIMEOUT_S, cap 3600s). The old fixed 300s killed honest
     # slow gates on large SoCs (reset_dependency_check ~6 min on a 7.5MB
@@ -3270,11 +3345,13 @@ def __check_program_exit_zero(project: Path, cmd_str: str) -> tuple[bool, str]:
         r = _watchdog.completed_process(argv, _res)
         snippet = output_snippet(r.stdout, r.stderr)
         if r.returncode == 0:
-            return True, snippet
+            return _ProgramCheckOutcome(True, snippet, r.returncode)
         if r.returncode == 2:
             # Treat as vacuous pass — surface the program command so
             # reviewers know which gate vacuously passed.
-            return True, f"{_VACUOUS_HINT_PREFIX}{cmd_str}\n{snippet}"
+            return _ProgramCheckOutcome(
+                True, f"{_VACUOUS_HINT_PREFIX}{cmd_str}\n{snippet}",
+                r.returncode)
         if (r.returncode == _WAIVER_EXIT_CODE
                 and _stdout_signals_waiver(r.stdout)):
             # #651 — PASS_WITH_WAIVERS: the gate passed its threshold but a
@@ -3282,7 +3359,8 @@ def __check_program_exit_zero(project: Path, cmd_str: str) -> tuple[bool, str]:
             # bare PASS) so the WITH_WAIVERS distinction survives the rc-only
             # gate. Requires the stdout sentinel too, so a stray rc=3 from an
             # unrelated program is NOT silently waived.
-            return True, f"{_WAIVER_HINT_PREFIX}{cmd_str}"
+            return _ProgramCheckOutcome(
+                True, f"{_WAIVER_HINT_PREFIX}{cmd_str}", r.returncode)
         # The gate exited non-zero. Decide HERE, while the UNTRUNCATED output
         # is still in hand, whether that was a verdict or a crash — see
         # `_CRASH_HINT_PREFIX`. Deciding it downstream from `snippet` makes the
@@ -3298,13 +3376,17 @@ def __check_program_exit_zero(project: Path, cmd_str: str) -> tuple[bool, str]:
             # `_evaluate_gate`; the snippet goes SECOND so the gate's own
             # output survives it too. The prose sits at the END, where a cut
             # costs nothing: a reader who lost it still has the sentinel.
-            return False, (f"{_CRASH_HINT_PREFIX}"
-                           f"{python_traceback_summary(r.stderr)}\n"
-                           f"{snippet}\n"
-                           f"— an unhandled exception is NOT a gate verdict "
-                           f"(INCONCLUSIVE: the gate died before reaching "
-                           f"one): {cmd_str}")
-        return False, snippet
+            return _ProgramCheckOutcome(
+                False,
+                (f"{_CRASH_HINT_PREFIX}"
+                 f"{python_traceback_summary(r.stderr)}\n"
+                 f"{snippet}\n"
+                 f"— an unhandled exception is NOT a gate verdict "
+                 f"(INCONCLUSIVE: the gate died before reaching "
+                 f"one): {cmd_str}"),
+                r.returncode,
+            )
+        return _ProgramCheckOutcome(False, snippet, r.returncode)
     except _GateStalled as stalled:
         # #525's reading stands and is now MEASURED rather than inferred: the
         # gate was killed mid-run, so the step is INCONCLUSIVE and still FAILs
@@ -3312,14 +3394,19 @@ def __check_program_exit_zero(project: Path, cmd_str: str) -> tuple[bool, str]:
         # longer "it has been N seconds", which a correct gate on a busy host
         # reaches just as easily. It is "this gate's process tree did nothing
         # at all for N seconds", which only a wedged gate reaches.
-        return False, (f"program STALLED — no CPU, no I/O and no output from "
-                       f"its process tree for {gate_budget}s, stopped after "
-                       f"{stalled.res.elapsed_s:.0f}s. It was not slow; it was "
-                       f"doing nothing. A stall is NOT a verdict about the "
-                       f"design (INCONCLUSIVE; raise {_pl.GATE_TIMEOUT_ENV} to "
-                       f"extend the grace): {cmd_str}")
+        return _ProgramCheckOutcome(
+            False,
+            (f"program STALLED — no CPU, no I/O and no output from "
+             f"its process tree for {gate_budget}s, stopped after "
+             f"{stalled.res.elapsed_s:.0f}s. It was not slow; it was "
+             f"doing nothing. A stall is NOT a verdict about the "
+             f"design (INCONCLUSIVE; raise {_pl.GATE_TIMEOUT_ENV} to "
+             f"extend the grace): {cmd_str}"),
+            None,
+        )
     except Exception as exc:
-        return False, f"program invocation error: {exc}"
+        return _ProgramCheckOutcome(
+            False, f"program invocation error: {exc}", None)
 
 
 # Wave 93 / v1.6.17 — VACUOUS_PASS verdict tier support.
@@ -3788,10 +3875,10 @@ def python_traceback_summary(stderr: str) -> str:
 # (#306's complaint in reverse: not "claims to block but cannot", but "claims
 # not to block and does").
 #
-# An advisory gate RUNS, its verdict is RECORDED and PRINTED, and a non-zero
-# exit does NOT fail the step. Adding this slot cannot make anything newly
-# blocking — that is the whole point, and it is why the slot itself is a safe
-# addition even though wiring a BLOCKING-declared gate is not.
+# Issue #1980 separates policy from refusal. The program runs and its exact
+# rc/structured verdict are recorded. A structured warning stays nonblocking;
+# a live FAIL (or an unclassified non-zero exit) blocks unless the step has an
+# approved scoped waiver. Producers/classifiers do not belong in this slot.
 #
 # The finding must stay VISIBLE. A gate that runs and reports nothing is worse
 # than one that never ran, because the run then looks audited. The hint is
@@ -3799,6 +3886,12 @@ def python_traceback_summary(stderr: str) -> str:
 # WAIVED tier promotions, and re-appended after the status is resolved so it
 # appears on the step line and in the JSON report whatever the tier.
 _ADVISORY_HINT_PREFIX = "__ADVISORY_HINT__: "
+
+# Issue #1980 — typed advisory execution record transported through the same
+# recursive gate-reason channel as the older tier hints.  JSON keeps field
+# boundaries intact; check_step removes the marker from prose and publishes it
+# in StepResult.advisory_gate_records.
+_ADVISORY_RECORD_HINT_PREFIX = "__ADVISORY_RECORD__: "
 
 # vibe-ic#901 - THE DENOMINATOR OF "EVERY SUB-GATE".
 #
@@ -3939,6 +4032,22 @@ def _command_json_report(project: Path, cmd: str) -> Optional[Dict[str, Any]]:
     except Exception:
         return None
     return data if isinstance(data, dict) else None
+
+
+def _report_verdict(report: Any) -> Optional[str]:
+    """Return a report's top-level verdict without retiering it."""
+    if not isinstance(report, dict):
+        return None
+    for key in ("verdict", "status"):
+        v = report.get(key)
+        if isinstance(v, str) and v.strip():
+            return v.strip().upper()
+    return None
+
+
+def _json_report_verdict(project: Path, cmd: str) -> Optional[str]:
+    """Compatibility wrapper for callers that name the command."""
+    return _report_verdict(_command_json_report(project, cmd))
 
 
 def _report_reason_text(report: Any) -> str:
@@ -8122,6 +8231,107 @@ def _declared_gate_commands(gate: Any) -> List[str]:
     return out
 
 
+_ADVISORY_SKIP_VERDICTS = frozenset({
+    "SKIP", "SKIPPED", "SKIPPED-CONDITION", "NOT-APPLICABLE",
+    "NOT-RUN", "NO-BUILD", "VACUOUS", "VACUOUS-PASS",
+})
+_ADVISORY_INCOMPLETE_VERDICTS = frozenset({
+    "INCOMPLETE", "NOT CHECKED", "NOT-CHECKED",
+})
+_ADVISORY_REFUSAL_VERDICTS = frozenset({
+    "FAIL", "FAILED", "ERROR", "REFUSED", "BLOCKED", "INVALID",
+    "VIOLATION",
+})
+_ADVISORY_PASS_VERDICTS = frozenset({"PASS", "CLEAN", "OK"})
+_ADVISORY_NONBLOCKING_VERDICTS = frozenset({
+    *_ADVISORY_PASS_VERDICTS, "PASS-WITH-ADVISORIES", "PASS-WITH-WAIVERS",
+    "WARN", "WARNING", "ADVISORY",
+})
+
+
+def _advisory_execution_record(cmd: str, ledger_start: int,
+                               ok: bool, out: str,
+                               project: Path,
+                               execution: Any = None) -> Dict[str, Any]:
+    """Build one lossless record for the advisory invocation just completed."""
+    row: Dict[str, Any] = {}
+    if len(_GATE_LEDGER) > ledger_start:
+        candidate = _GATE_LEDGER[-1]
+        if candidate.get("cmd") == cmd:
+            row = candidate
+    report = _command_json_report(project, cmd)
+    structured = (execution.structured_verdict
+                  if isinstance(execution, _ProgramCheckResult) else
+                  row.get("structured_verdict"))
+    if not isinstance(structured, str) or not structured:
+        structured = _report_verdict(report)
+    reason_class = (execution.reason_class
+                    if isinstance(execution, _ProgramCheckResult) else
+                    row.get("reason_class"))
+    reason_class = (_reason_taxonomy.normalise(reason_class)
+                    or _reason_taxonomy.report_reason_class(report))
+    actual_rc = (execution.exit_code
+                 if isinstance(execution, _ProgramCheckResult) else
+                 row.get("exit_code") if row else None)
+    if actual_rc is None:
+        if out.startswith(_VACUOUS_HINT_PREFIX):
+            actual_rc = 2
+        elif out.startswith(_WAIVER_HINT_PREFIX):
+            actual_rc = _WAIVER_EXIT_CODE
+        else:
+            actual_rc = 0 if ok else 1
+    if structured:
+        verdict = structured
+    elif isinstance(execution, _ProgramCheckResult):
+        verdict = execution.verdict
+    elif row.get("verdict"):
+        verdict = row["verdict"]
+    elif out.startswith(_VACUOUS_HINT_PREFIX):
+        verdict = "VACUOUS_PASS"
+    elif out.startswith(_WAIVER_HINT_PREFIX):
+        verdict = "PASS_WITH_WAIVERS"
+    else:
+        verdict = "PASS" if ok else "FAIL"
+    norm = str(verdict).strip().upper().replace("_", "-")
+    if (reason_class is None
+            and (norm in _ADVISORY_SKIP_VERDICTS
+                 or norm in _ADVISORY_INCOMPLETE_VERDICTS
+                 or norm == "BLOCKED"
+                 or _stdout_signals_token(out, _INCOMPLETE_STDOUT_TOKEN))):
+        reason_class = _reason_taxonomy.infer_nonverdict_reason(
+            verdict=str(verdict),
+            message=_report_reason_text(report) or out)
+    true_refusals = _ADVISORY_REFUSAL_VERDICTS - {"BLOCKED"}
+    if norm in true_refusals:
+        enforcement = "BLOCKING"
+    elif reason_class in _reason_taxonomy.INCOMPLETE:
+        enforcement = "DISCLOSED_INCOMPLETE"
+    elif norm in _ADVISORY_SKIP_VERDICTS:
+        enforcement = ("DISCLOSED_SKIP"
+                       if reason_class in _reason_taxonomy.SKIP_ELIGIBLE
+                       else "DISCLOSED_INCOMPLETE")
+    elif norm in _ADVISORY_INCOMPLETE_VERDICTS or norm == "BLOCKED":
+        enforcement = "DISCLOSED_INCOMPLETE"
+    elif norm == "PASS-WITH-WAIVERS":
+        enforcement = "APPROVED_WAIVER"
+    elif (norm in _ADVISORY_NONBLOCKING_VERDICTS
+          or (actual_rc == 0 and norm not in _ADVISORY_REFUSAL_VERDICTS)):
+        enforcement = ("PASSED" if norm in _ADVISORY_PASS_VERDICTS
+                       else "NON_BLOCKING_ADVISORY")
+    else:
+        # No program-authored nonblocking verdict bought this non-zero exit.
+        enforcement = "BLOCKING"
+    return {
+        "gate": _gate_name(cmd),
+        "command": cmd,
+        "exit_code": actual_rc,
+        "verdict": str(verdict).strip().upper(),
+        "structured_verdict": structured,
+        "reason_class": reason_class,
+        "enforcement": enforcement,
+    }
+
+
 # Gate predicate keys that are NOT program invocations. A step whose gate is
 # built only out of these declares a real, evaluated gate — it just has no
 # program name to print.
@@ -8445,10 +8655,10 @@ def _evaluate_gate(project: Path, gate: Dict[str, Any],
             reasons.append(f"{_INCOMPLETE_HINT_PREFIX}{cmd}")
         return passed, reasons
 
-    # `advisory_program_exit_zero` (#306) — RUNS the program, RECORDS the
-    # verdict, and NEVER fails the step. The slot exists so a gate that
-    # declares itself advisory can be wired at all; before it, wiring one
-    # silently promoted it to blocking.
+    # `advisory_program_exit_zero` (#306/#1980) — RUNS the program and records
+    # both its exit code and structured verdict. A genuine warning remains
+    # nonblocking; a live refusal blocks. The slot describes the producer's
+    # declared policy, it does not erase the verdict the producer returned.
     if "advisory_program_exit_zero" in gate:
         spec = gate["advisory_program_exit_zero"]
         # Accepts the same two shapes as the blocking slots: a bare command
@@ -8500,8 +8710,8 @@ def _evaluate_gate(project: Path, gate: Dict[str, Any],
                         f"clause declares no usable `absent_condition_reason` "
                         f"({'absent' if not why else f'only {len(why)} char(s)'}"
                         f"; {_MIN_ABSENT_CONDITION_REASON} required). An "
-                        f"advisory slot never blocks on a FINDING; it does not "
-                        f"get to be silent about not having looked.")
+                        f"an advisory declaration does not get to be silent "
+                        f"about not having looked.")
                     return False, reasons
                 # Recorded on the slot's OWN channel, which the `all_of`
                 # whitelist already carries, so the disclosure cannot be
@@ -8510,27 +8720,61 @@ def _evaluate_gate(project: Path, gate: Dict[str, Any],
                     f"{_ADVISORY_HINT_PREFIX}n/a (declared; condition "
                     f"{cond_files} matched 0 path(s), so it did not run): "
                     f"{cmd} — {why}")
+                reasons.append(
+                    f"{_ADVISORY_RECORD_HINT_PREFIX}"
+                    + json.dumps({
+                        "gate": _gate_name(cmd), "command": cmd,
+                        "exit_code": None, "verdict": "NOT_APPLICABLE",
+                        "structured_verdict": None,
+                        "reason_class": _reason_taxonomy.DESIGN_DECLARED_NA,
+                        "enforcement": "NOT_RUN_DECLARED",
+                    }, sort_keys=True))
                 return True, reasons
         cmd = _maybe_forward_skip_analog(project, cmd, skip_analog)
-        ok, out = _check_program_exit_zero(project, cmd)
-        if ok and _stdout_signals_token(out, _INCOMPLETE_STDOUT_TOKEN):
-            # Advisory findings do not block, but a gate that did not reach a
-            # verdict is still a finding, never an "ok" invocation.
-            reasons.append(f"{_ADVISORY_HINT_PREFIX}FINDING: {cmd} :: "
-                           f"{out[:200]}")
-        elif ok and out.startswith(_VACUOUS_HINT_PREFIX):
-            # rc=2 is the disclosed-skip tier, NOT a clean result. Recording
-            # it as "ok" would make "this project has no such input" read as
-            # "this project was audited and found clean" — the exact
-            # substitution this slot exists to prevent.
-            reasons.append(f"{_ADVISORY_HINT_PREFIX}n/a (input not present): "
-                           f"{cmd}")
-        elif ok:
-            reasons.append(f"{_ADVISORY_HINT_PREFIX}ok: {cmd}")
-        else:
-            reasons.append(f"{_ADVISORY_HINT_PREFIX}FINDING: {cmd} :: "
-                           f"{out[:200]}")
-        return True, reasons          # advisory: never blocks, always recorded
+        _ledger_start = len(_GATE_LEDGER)
+        _execution = _check_program_exit_zero(project, cmd)
+        ok, out = _execution
+        record = _advisory_execution_record(
+            cmd, _ledger_start, ok, out, project, _execution)
+        reasons.append(f"{_RAN_HINT_PREFIX}{cmd}")
+        reasons.append(
+            f"{_ADVISORY_RECORD_HINT_PREFIX}"
+            + json.dumps(record, sort_keys=True))
+        enforcement = record["enforcement"]
+        if enforcement == "BLOCKING":
+            reasons.append(
+                f"advisory gate refusal: {cmd} "
+                f"[rc={record['exit_code']}, verdict={record['verdict']}, "
+                f"reason_class={record['reason_class']}]")
+            if out:
+                reasons.append(f"output: {out[:200]}")
+            return False, reasons
+        if enforcement == "DISCLOSED_SKIP":
+            _structured_norm = str(
+                record.get("structured_verdict") or "").upper().replace(
+                    "_", "-")
+            if _structured_norm in _SELF_SKIP_VERDICTS:
+                reasons.append(f"{_SKIP_HINT_PREFIX}{cmd} "
+                               f"[verdict={record['verdict']}, "
+                               f"reason_class={record['reason_class']}]")
+            elif out.startswith(_VACUOUS_HINT_PREFIX):
+                reasons.append(out)
+            else:
+                reasons.append(f"{_VACUOUS_HINT_PREFIX}{cmd}")
+        elif enforcement == "DISCLOSED_INCOMPLETE":
+            reasons.append(f"{_INCOMPLETE_HINT_PREFIX}{cmd} "
+                           f"[verdict={record['verdict']}, "
+                           f"reason_class={record['reason_class']}]")
+        elif enforcement == "APPROVED_WAIVER":
+            reasons.append(f"{_WAIVER_HINT_PREFIX}{cmd}")
+        elif out.startswith(_VACUOUS_HINT_PREFIX):
+            reasons.append(out)
+        elif enforcement == "NON_BLOCKING_ADVISORY":
+            reasons.append(
+                f"{_ADVISORY_HINT_PREFIX}verdict={record['verdict']} "
+                f"rc={record['exit_code']}: {cmd}"
+                + (f" :: {out[:200]}" if out else ""))
+        return True, reasons
 
     # `all_of` - list of sub-gates, all must pass
     if "all_of" in gate and isinstance(gate["all_of"], list):
@@ -8560,8 +8804,9 @@ def _evaluate_gate(project: Path, gate: Dict[str, Any],
                 # routability-for-clock-quality disclosure was skipped on
                 # EVERY failing route — measured end-to-end on a real cell:
                 # Step 21 FAILed on an earlier sibling and not one advisory
-                # line appeared. They cannot change the verdict (that is what
-                # advisory means), so running them costs only their runtime.
+                # line appeared. The parent is already false, so later
+                # executions cannot rescue it; they can only add their exact
+                # disposition and evidence.
                 # Only the ones AFTER the failure: the earlier ones already
                 # ran in this loop and appended their hints.
                 for later in gate["all_of"][_i + 1:]:
@@ -8571,7 +8816,14 @@ def _evaluate_gate(project: Path, gate: Dict[str, Any],
                                                  skip_analog=skip_analog)
                         reasons.extend(
                             h for h in r2
-                            if h.startswith(_ADVISORY_HINT_PREFIX))
+                            if h.startswith((
+                                _ADVISORY_HINT_PREFIX,
+                                _ADVISORY_RECORD_HINT_PREFIX,
+                                _RAN_HINT_PREFIX,
+                                _SKIP_HINT_PREFIX,
+                                _WAIVER_HINT_PREFIX,
+                                _INCOMPLETE_HINT_PREFIX,
+                            )))
                 return False, reasons
             for hint in r:
                 if hint.startswith(_RAN_HINT_PREFIX):
@@ -8602,6 +8854,11 @@ def _evaluate_gate(project: Path, gate: Dict[str, Any],
                     # would give an advisory sub-gate that RAN and FOUND
                     # something no way to be seen, which is the failure mode
                     # the slot exists to avoid.
+                    reasons.append(hint)
+                elif hint.startswith(_ADVISORY_RECORD_HINT_PREFIX):
+                    # #1980 — the typed record is the authoritative channel;
+                    # dropping it here would preserve prose while losing the
+                    # exact rc / structured verdict / disposition tuple.
                     reasons.append(hint)
                 elif hint.startswith(_STRUCTURE_ONLY_HINT_PREFIX):
                     # Same reason, one tier over. This list is a WHITELIST: a
@@ -8643,16 +8900,14 @@ def _evaluate_gate(project: Path, gate: Dict[str, Any],
         for sub in gate["any_of"]:
             if not isinstance(sub, dict):
                 continue
-            # #306 — an advisory sub-gate ALWAYS passes, so one inside `any_of`
-            # makes the whole group pass unconditionally and silently voids
-            # every sibling. That is a gate-authoring error, not an advisory
-            # finding, so it FAILs loudly instead of quietly disabling a
-            # sign-off predicate.
+            # An any_of cannot safely mix an advisory policy with sign-off
+            # alternatives: a warning/pass would satisfy the disjunction and
+            # bypass every sibling. Keep policy-bearing checks in all_of.
             if "advisory_program_exit_zero" in sub:
                 reasons.append(
                     "any_of contains an `advisory_program_exit_zero`: an "
-                    "advisory gate never fails, so the whole any_of would "
-                    "pass unconditionally and its siblings would never be "
+                    "advisory warning/pass could satisfy the whole any_of "
+                    "and its siblings would never be "
                     "consulted. Put the advisory gate in an `all_of` "
                     "alongside them instead (#306).")
                 return False, reasons
@@ -10246,6 +10501,88 @@ def _outputs_read_by_in_scope_steps(sid, my_outputs, manifest):
     return [o for o in my_outputs if o in wanted]
 
 
+def _json_path_values(value: Any, dotted_path: str) -> List[Any]:
+    """Read a dotted JSON path; ``*`` expands every list/dict child."""
+    values = [value]
+    for part in str(dotted_path).split("."):
+        next_values: List[Any] = []
+        for current in values:
+            if part == "*":
+                if isinstance(current, dict):
+                    next_values.extend(current.values())
+                elif isinstance(current, list):
+                    next_values.extend(current)
+            elif isinstance(current, dict) and part in current:
+                next_values.append(current[part])
+        values = next_values
+    return values
+
+
+def _collect_program_output_records(project: Path,
+                                    step: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """Read declared producer/classifier outputs without executing a gate."""
+    records: List[Dict[str, Any]] = []
+    for spec in step.get("program_outputs", []) or []:
+        if not isinstance(spec, dict):
+            continue
+        program = str(spec.get("program") or "").strip()
+        rel = str(spec.get("path") or "").strip()
+        if not program or not rel:
+            continue
+        path = Path(rel)
+        if path.is_absolute():
+            produced = False
+            data = None
+        else:
+            path = project / path
+            try:
+                produced = path.is_file() and path.stat().st_size > 0
+                data = (json.loads(path.read_text(errors="replace"))
+                        if produced else None)
+            except Exception:
+                produced = False
+                data = None
+        verdict: Any = "NOT_PRODUCED"
+        if produced:
+            verdict = "PRODUCED"
+            field_name = spec.get("verdict_field")
+            if field_name:
+                found = _json_path_values(data, str(field_name))
+                if found:
+                    verdict = found[0]
+        verdict_token = (verdict.strip().upper().replace("_", "-")
+                         if isinstance(verdict, str) else "")
+        reason_class = _reason_taxonomy.report_reason_class(data)
+        if (reason_class is None
+                and (verdict_token in _ADVISORY_SKIP_VERDICTS
+                     or verdict_token in _ADVISORY_INCOMPLETE_VERDICTS
+                     or verdict_token == "BLOCKED")):
+            reason_class = _reason_taxonomy.infer_nonverdict_reason(
+                verdict=verdict_token,
+                message=_report_reason_text(data))
+        record: Dict[str, Any] = {
+            "program": program,
+            "path": rel,
+            "produced": produced,
+            "verdict": (verdict.strip().upper()
+                        if isinstance(verdict, str) else verdict),
+            "reason_class": reason_class,
+            "role": "PRODUCER_OUTPUT",
+            "enforcement": "NOT_A_GATE",
+        }
+        finding_values: List[Any] = []
+        for finding_path in spec.get("finding_fields", []) or []:
+            finding_values.extend(_json_path_values(data, str(finding_path)))
+        if finding_values:
+            record["findings"] = sorted({
+                json.dumps(v, sort_keys=True) if isinstance(v, (dict, list))
+                else str(v)
+                for v in finding_values
+            })
+        records.append(record)
+    return records
+
+
 def check_step(project: Path, step: Dict[str, Any], waivers: Dict,
                skip_analog: bool = False, skip_hardware: bool = False,
                strict_audit_evidence: bool = True) -> StepResult:
@@ -10266,6 +10603,8 @@ def check_step(project: Path, step: Dict[str, Any], waivers: Dict,
         stage=step.get("stage", ""),
         status="MISSING",
     )
+    result.program_output_records = _collect_program_output_records(
+        project, step)
 
     # Ownership, not resemblance: the flow's declared `stage`, not the first
     # letter of the id. Byte-identical on the shipped flow (A1..A9 all declare
@@ -10701,12 +11040,20 @@ def check_step(project: Path, step: Dict[str, Any], waivers: Dict,
         # Overall verdict resolves to PASS_WITH_WAIVERS, never a bare PASS.
         waiver_hints = [r for r in reasons
                         if r.startswith(_WAIVER_HINT_PREFIX)]
-        # #306 — an ADVISORY finding must not disturb which tier the step
-        # resolves to (it does not block, so it cannot demote a VACUOUS_PASS
-        # to a bare PASS either). Held out here and re-appended, visibly,
-        # after the status is decided.
+        # Human prose for a structured nonblocking warning. Refusals are plain
+        # failure reasons and therefore never reach this held-out bucket.
         advisory_hints = [r for r in reasons
                           if r.startswith(_ADVISORY_HINT_PREFIX)]
+        advisory_record_hints = [
+            r for r in reasons
+            if r.startswith(_ADVISORY_RECORD_HINT_PREFIX)]
+        for h in advisory_record_hints:
+            try:
+                rec = json.loads(h[len(_ADVISORY_RECORD_HINT_PREFIX):])
+            except (TypeError, ValueError):
+                rec = None
+            if isinstance(rec, dict):
+                result.advisory_gate_records.append(rec)
         # W4 — a clause whose `condition_files_exist` matched nothing, which
         # therefore ran no program and concluded nothing, and which DECLARED
         # why that is a genuine not-applicable. Held out here and re-appended
@@ -10757,6 +11104,7 @@ def check_step(project: Path, step: Dict[str, Any], waivers: Dict,
                             and not r.startswith(_WAIVER_HINT_PREFIX)
                             and not r.startswith(_STRUCTURE_ONLY_HINT_PREFIX)
                             and not r.startswith(_ADVISORY_HINT_PREFIX)
+                            and not r.startswith(_ADVISORY_RECORD_HINT_PREFIX)
                             and not r.startswith(_SUBSTANTIVE_HINT_PREFIX)
                             and not r.startswith(_INCOMPLETE_HINT_PREFIX)
                             and not r.startswith(_NOT_APPLICABLE_HINT_PREFIX)]
@@ -10995,6 +11343,13 @@ def check_step(project: Path, step: Dict[str, Any], waivers: Dict,
             result.reasons.append(
                 f"ADVISORY (non-blocking, #306): "
                 f"{h[len(_ADVISORY_HINT_PREFIX):]}")
+        for rec in result.advisory_gate_records:
+            result.reasons.append(
+                "GATE EVIDENCE: "
+                f"{rec.get('gate')} rc={rec.get('exit_code')} "
+                f"verdict={rec.get('verdict')} "
+                f"reason_class={rec.get('reason_class')} "
+                f"enforcement={rec.get('enforcement')}")
     else:
         # No gate — just presence of outputs counts
         result.status = "PASS" if result.evidence else "MISSING"

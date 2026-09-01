@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""The ADVISORY gate slot (vibe-ic#306).
+"""The advisory-declaration gate slot (vibe-ic#306 / #1980).
 
 Before this slot existed, EVERY gate key in the flow definition blocked once
 it ran. `optional_program_exit_zero` is conditional-on-inputs, not advisory:
@@ -8,17 +8,19 @@ gate that DECLARES itself advisory could not be wired at all — wiring it
 silently promoted it to blocking, which is #306's complaint in reverse
 ("claims not to block, and does").
 
-Every test here is paired, because each half alone would pass for the wrong
-reason: "does not block" is trivially satisfiable by not running at all, and
-"is recorded" is trivially satisfiable by a gate that also blocks.
+Issue #1980 closes the later loophole: the slot may retain a program-authored
+warning policy, but it may not flatten an unstructured non-zero exit or a
+structured refusal into a nonblocking finding. Every execution is typed.
 """
 from __future__ import annotations
 
 import importlib.util
+import json
 import sys
 from pathlib import Path
 
 import pytest
+import yaml
 
 _PROGRAMS = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_PROGRAMS))
@@ -33,15 +35,45 @@ def _adv(cmd="some_check --flag", **kw):
     return {"advisory_program_exit_zero": dict(command=cmd, **kw)}
 
 
+def _records(reasons):
+    return [json.loads(reason[len(_flow._ADVISORY_RECORD_HINT_PREFIX):])
+            for reason in reasons
+            if reason.startswith(_flow._ADVISORY_RECORD_HINT_PREFIX)]
+
+
+def _shipped_advisory_commands():
+    flow = yaml.safe_load((_PROGRAMS.parent / "flow"
+                           / "phase1_phase2_phase3.yaml").read_text())
+    commands = []
+
+    def walk(node):
+        if isinstance(node, dict):
+            for key, value in node.items():
+                if key == "advisory_program_exit_zero":
+                    commands.append(value if isinstance(value, str)
+                                    else value.get("command", ""))
+                else:
+                    walk(value)
+        elif isinstance(node, list):
+            for value in node:
+                walk(value)
+
+    walk(flow)
+    return commands
+
+
 # ---------------------------------------------------------------- gate level
 
-def test_advisory_failure_does_not_block(tmp_path, monkeypatch):
+def test_unstructured_advisory_failure_blocks(tmp_path, monkeypatch):
     monkeypatch.setattr(_flow, "_check_program_exit_zero",
                         lambda p, c: (False, "found 3 problems"))
     passed, reasons = _flow._evaluate_gate(tmp_path, _adv())
-    assert passed is True, "an advisory gate must never fail its step"
-    assert any(r.startswith(_flow._ADVISORY_HINT_PREFIX) and "FINDING" in r
-               for r in reasons), "the finding must be RECORDED, not dropped"
+    assert passed is False
+    assert _records(reasons) == [{
+        "command": "some_check --flag", "enforcement": "BLOCKING",
+        "exit_code": 1, "gate": "some_check", "structured_verdict": None,
+        "verdict": "FAIL", "reason_class": None,
+    }]
 
 
 def test_the_same_program_in_the_blocking_slot_still_blocks(tmp_path,
@@ -62,8 +94,8 @@ def test_advisory_success_is_recorded_too(tmp_path, monkeypatch):
                         lambda p, c: (True, "clean"))
     passed, reasons = _flow._evaluate_gate(tmp_path, _adv())
     assert passed is True
-    assert any(r.startswith(_flow._ADVISORY_HINT_PREFIX) and "ok:" in r
-               for r in reasons)
+    assert _records(reasons)[0]["enforcement"] == "PASSED"
+    assert _records(reasons)[0]["exit_code"] == 0
 
 
 def test_malformed_advisory_spec_is_a_real_failure(tmp_path):
@@ -130,8 +162,8 @@ def test_condition_present_means_it_runs(tmp_path, monkeypatch):
                         lambda p, c: (False, "finding"))
     passed, reasons = _flow._evaluate_gate(
         tmp_path, _adv(condition_files_exist=["trigger.json"]))
-    assert passed is True
-    assert any("FINDING" in r for r in reasons)
+    assert passed is False
+    assert _records(reasons)[0]["enforcement"] == "BLOCKING"
 
 
 def test_no_condition_key_means_it_runs_unconditionally(tmp_path, monkeypatch):
@@ -153,25 +185,24 @@ def _check(tmp_path, gate):
     return _flow.check_step(tmp_path, _step(gate), {})
 
 
-def test_step_stays_PASS_and_the_finding_is_visible(tmp_path, monkeypatch):
+def test_step_fails_and_the_refusal_is_visible(tmp_path, monkeypatch):
     """Visibility is the load-bearing half: a gate that runs and reports
     nothing makes the run LOOK audited while having said nothing."""
     monkeypatch.setattr(_flow, "_check_program_exit_zero",
                         lambda p, c: (False, "3 unwired declarations"))
     res = _check(tmp_path, _adv())
-    assert res.status == "PASS"
-    shown = [r for r in res.reasons if r.startswith("ADVISORY (non-blocking")]
-    assert shown, res.reasons
-    assert "3 unwired declarations" in shown[0]
-    assert not [r for r in res.reasons
-                if r.startswith(_flow._ADVISORY_HINT_PREFIX)], \
-        "the internal marker must be stripped before display"
+    assert res.status == "FAIL"
+    assert res.advisory_gate_records[0]["enforcement"] == "BLOCKING"
+    assert any("3 unwired declarations" in reason for reason in res.reasons)
+    assert any("GATE EVIDENCE" in reason for reason in res.reasons)
 
 
-def test_advisory_does_not_disturb_the_vacuous_promotion(tmp_path,
-                                                         monkeypatch):
-    """An advisory finding must not demote a tier. It does not block, so it
-    has no business turning a VACUOUS_PASS into a bare PASS either."""
+def test_structured_advisory_counts_as_a_substantive_nonblocking_run(
+        tmp_path, monkeypatch):
+    """A program-authored warning remains nonblocking and fully recorded."""
+    report = tmp_path / "advisory.json"
+    report.write_text('{"verdict": "PASS_WITH_ADVISORIES"}')
+
     def _run(project, cmd):
         if "advisory" in cmd:
             return False, "finding"
@@ -180,10 +211,13 @@ def test_advisory_does_not_disturb_the_vacuous_promotion(tmp_path,
     monkeypatch.setattr(_flow, "_check_program_exit_zero", _run)
     res = _check(tmp_path, {"all_of": [
         {"program_exit_zero": "blocking_check --x"},
-        {"advisory_program_exit_zero": {"command": "advisory_check --y"}},
+        {"advisory_program_exit_zero": {
+            "command": "advisory_check --json advisory.json"}},
     ]})
-    assert res.status == "VACUOUS_PASS", res.reasons
+    assert res.status == "PARTIALLY-VACUOUS", res.reasons
     assert any(r.startswith("ADVISORY (non-blocking") for r in res.reasons)
+    assert res.advisory_gate_records[0]["structured_verdict"] == \
+        "PASS_WITH_ADVISORIES"
 
 
 def test_a_blocking_sibling_still_fails_the_step(tmp_path, monkeypatch):
@@ -210,7 +244,8 @@ def test_stray_step_level_key_is_promoted_like_the_others(tmp_path,
             "advisory_program_exit_zero": {"command": "advisory_check --y"}}
     res = _flow.check_step(tmp_path, step, {})
     assert any("gate-shaped predicate key" in r for r in res.reasons)
-    assert any(r.startswith("ADVISORY (non-blocking") for r in res.reasons)
+    assert res.status == "FAIL"
+    assert res.advisory_gate_records[0]["enforcement"] == "BLOCKING"
 
 
 def test_bare_command_string_is_accepted(tmp_path, monkeypatch):
@@ -223,19 +258,18 @@ def test_bare_command_string_is_accepted(tmp_path, monkeypatch):
                         lambda p, c: (False, "finding"))
     passed, reasons = _flow._evaluate_gate(
         tmp_path, {"advisory_program_exit_zero": "some_check ."})
-    assert passed is True
-    assert any("FINDING" in r for r in reasons)
+    assert passed is False
+    assert _records(reasons)[0]["enforcement"] == "BLOCKING"
 
 
 def test_the_two_real_gates_are_wired_in_the_flow_definition():
     """End-to-end: the two gates #306 recorded as un-wireable are now in the
     canonical flow, in the advisory slot, in the INLINE form the enforcement
     audit reads. Asserted against the shipped definition, not a fixture."""
-    yaml_text = (_PROGRAMS.parent / "flow"
-                 / "phase1_phase2_phase3.yaml").read_text()
+    commands = _shipped_advisory_commands()
     for gate in ("route_congestion_trade_disclosure",
                  "phase1_expert_track_evidence_check"):
-        assert f'advisory_program_exit_zero: "{gate} .' in yaml_text, gate
+        assert any(command.startswith(gate + " ") for command in commands), gate
 
 
 def test_advisory_inside_any_of_is_an_authoring_error(tmp_path, monkeypatch):
@@ -272,8 +306,9 @@ def test_advisory_still_runs_after_a_blocking_sibling_fails(tmp_path,
         {"advisory_program_exit_zero": "disclosure_check ."},
     ]})
     assert passed is False, "the blocking failure must still fail the gate"
-    assert any(r.startswith(_flow._ADVISORY_HINT_PREFIX) for r in reasons), \
-        "the advisory verdict must survive the short-circuit"
+    records = _records(reasons)
+    assert any(r["gate"] == "disclosure_check" for r in records), \
+        "the advisory execution record must survive the short-circuit"
 
 
 def test_advisory_before_the_failure_is_not_recorded_twice(tmp_path,
@@ -288,21 +323,23 @@ def test_advisory_before_the_failure_is_not_recorded_twice(tmp_path,
         {"program_exit_zero": "blocking_check --x"},
         {"advisory_program_exit_zero": "second_check ."},
     ]})
-    adv = [r for r in reasons if r.startswith(_flow._ADVISORY_HINT_PREFIX)]
-    assert len(adv) == 2, adv
-    assert len([r for r in adv if "first_check" in r]) == 1, adv
+    records = _records(reasons)
+    assert len(records) == 2, records
+    assert len([r for r in records if r["gate"] == "first_check"]) == 1
 
 
-def test_vacuous_skip_is_not_recorded_as_ok(tmp_path, monkeypatch):
-    """rc=2 is the disclosed-skip tier, not a clean result. Recording it as
-    `ok` would make "this project has no such input" read as "this project
-    was audited and found clean"."""
+def test_unclassified_rc2_is_incomplete_not_recorded_as_ok(
+        tmp_path, monkeypatch):
+    """An untyped rc=2 is EXECUTION_ERROR, never a clean or plain skip."""
     monkeypatch.setattr(
         _flow, "_check_program_exit_zero",
         lambda p, c: (True, f"{_flow._VACUOUS_HINT_PREFIX}{c}"))
     _p, reasons = _flow._evaluate_gate(tmp_path, _adv())
-    adv = [r for r in reasons if r.startswith(_flow._ADVISORY_HINT_PREFIX)]
-    assert adv and "n/a (input not present)" in adv[0], adv
+    records = _records(reasons)
+    assert records[0]["exit_code"] == 2
+    assert records[0]["reason_class"] == "EXECUTION_ERROR"
+    assert records[0]["enforcement"] == "DISCLOSED_INCOMPLETE"
+    assert any(r.startswith(_flow._INCOMPLETE_HINT_PREFIX) for r in reasons)
 
 
 # ------------------------------------------- declared-intent second channel
@@ -373,8 +410,7 @@ def test_the_ten_layer_gates_are_wired_advisory_and_the_blocking_two_are_not():
     has no exception list: NO per-layer gate may sit outside the flow, and
     none may be wired to a slot its own declaration contradicts.
     """
-    yaml_text = (_PROGRAMS.parent / "flow"
-                 / "phase1_phase2_phase3.yaml").read_text()
+    commands = _shipped_advisory_commands()
     layer_gates = (
         "l7_debug_access_grounding_check",
         "l8_clock_period_actionability_check",
@@ -392,7 +428,7 @@ def test_the_ten_layer_gates_are_wired_advisory_and_the_blocking_two_are_not():
         "l8_sta_clock_period_design_owned_check",
     )
     for g in layer_gates:
-        assert f'advisory_program_exit_zero: "{g} .' in yaml_text, g
+        assert any(command.startswith(g + " ") for command in commands), g
 
     # The declaration must AGREE with the slot: nothing wired advisory may
     # claim blocking. Read it the same way the enforcement audit does.

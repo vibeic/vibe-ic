@@ -68,23 +68,22 @@ def _slot_of(program: str):
 
 # ── the declaration and the slot must agree ─────────────────────────────────
 
-def test_dfm_screen_check_declares_itself_advisory():
-    """#306/#316: nothing wired advisory may claim blocking, and nothing
-    wired blocking may claim advisory. Read it the way the enforcement audit
-    reads it, not by grepping for prose."""
+def test_dfm_screen_check_declares_itself_a_producer_not_a_gate():
     spec = importlib.util.spec_from_file_location(
         "flow_gate_enforcement_audit",
         _PROGRAMS / "flow_gate_enforcement_audit.py")
     fga = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(fga)
-    assert fga.declared_intent(_PROGRAMS, "dfm_screen_check") == "advisory"
+    assert fga.declared_intent(_PROGRAMS, "dfm_screen_check") is None
 
 
-def test_step35_wires_dfm_screen_in_the_advisory_slot():
-    assert _slot_of("dfm_screen_check") == "advisory_program_exit_zero", (
-        "dfm_screen_check DECLARES itself advisory and returns rc 1 on a "
-        "finding; in a blocking slot that finding becomes a duplicate of the "
-        "Step-34 density FAIL")
+def test_step35_declares_dfm_screen_as_a_program_output():
+    assert _slot_of("dfm_screen_check") is None
+    assert _STEP35["program_outputs"] == [{
+        "program": "dfm_screen_check",
+        "path": _ARTEFACT,
+        "verdict_field": "verdict",
+    }]
 
 
 def test_step35_keeps_a_blocking_artefact_predicate():
@@ -114,46 +113,33 @@ def test_no_blocking_slot_still_names_dfm_screen_check():
 
 # ── behaviour of the wired gate ─────────────────────────────────────────────
 
-def _project(tmp_path, with_artefact: bool):
+def _project(tmp_path, with_artefact: bool,
+             verdict: str = "PASS_WITH_ADVISORIES"):
     if with_artefact:
-        art = tmp_path / _ARTEFACT
-        art.parent.mkdir(parents=True, exist_ok=True)
-        art.write_text('{"verdict": "PASS_WITH_ADVISORIES"}')
+        for rel in (_ARTEFACT, "reports/phase2/gates/dfm_screen.json"):
+            art = tmp_path / rel
+            art.parent.mkdir(parents=True, exist_ok=True)
+            art.write_text('{"verdict": "' + verdict + '"}')
     return tmp_path
 
 
-def test_an_advisory_finding_does_not_fail_step35(tmp_path, monkeypatch):
-    """The finding is RECORDED and PRINTED; the step still passes. Both halves
-    are asserted — "does not block" alone is satisfiable by not running."""
-    monkeypatch.setattr(_flow, "_check_program_exit_zero",
-                        lambda p, c: (False, "VIA_CUTS_UNRESOLVED"))
-    passed, reasons = _flow._evaluate_gate(
-        _project(tmp_path, True), _STEP35["gate"])
-    assert passed is True
-    assert any(r.startswith(_flow._ADVISORY_HINT_PREFIX) and "FINDING" in r
-               and "VIA_CUTS_UNRESOLVED" in r for r in reasons), (
-        "the advisory finding must reach the step line — before this change "
-        "it was indistinguishable from a clean screen")
+def test_an_advisory_finding_is_a_typed_non_gate_output(tmp_path):
+    project = _project(tmp_path, True)
+    records = _flow._collect_program_output_records(project, _STEP35)
+    assert records[0]["verdict"] == "PASS_WITH_ADVISORIES"
+    assert records[0]["enforcement"] == "NOT_A_GATE"
 
 
-def test_a_missing_artefact_still_fails_step35(tmp_path, monkeypatch):
+def test_a_missing_artefact_still_fails_step35(tmp_path):
     """DIRECTION-1 GUARD: blocking coverage was not traded away. A run whose
     screen produced nothing must not be certified."""
-    monkeypatch.setattr(_flow, "_check_program_exit_zero",
-                        lambda p, c: (True, "clean"))
     passed, _ = _flow._evaluate_gate(
         _project(tmp_path, False), _STEP35["gate"])
     assert passed is False
 
 
-def test_a_clean_screen_records_ok_not_a_finding(tmp_path, monkeypatch):
-    """DIRECTION-1 GUARD: rc 0 must keep reading as clean, so the advisory
-    line cannot cry wolf on every run."""
-    monkeypatch.setattr(_flow, "_check_program_exit_zero",
-                        lambda p, c: (True, "clean"))
-    passed, reasons = _flow._evaluate_gate(
-        _project(tmp_path, True), _STEP35["gate"])
-    assert passed is True
-    assert any(r.startswith(_flow._ADVISORY_HINT_PREFIX) and "ok:" in r
-               for r in reasons)
-    assert not any("FINDING" in r for r in reasons)
+def test_a_clean_screen_records_a_pass_output(tmp_path):
+    project = _project(tmp_path, True, verdict="PASS")
+    records = _flow._collect_program_output_records(project, _STEP35)
+    assert records[0]["verdict"] == "PASS"
+    assert records[0]["role"] == "PRODUCER_OUTPUT"

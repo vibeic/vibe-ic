@@ -1,29 +1,23 @@
 #!/usr/bin/env python3
 """Project the analog/mixed-signal verification contract into L22.
 
-ENFORCEMENT: ADVISORY PRODUCER, not a gate.  It enriches L22 and never changes
+ROLE: PRODUCER, not a gate.  It enriches L22 and never changes
 the runner's exit verdict.  Import/runtime failure is printed by the thin
 runner adapter as a named fail-open event; it is never reported as a PASS.
 
-WHERE THE VERDICT GOES (vibe-ic#1263 stamp-hygiene, flow-gate enforcement audit)
--------------------------------------------------------------------------------
-Two consumers, and until this revision NEITHER could read an outcome:
+WHERE THE VERDICT GOES
+---------------------
+The producer has two consumers:
 
   * IN-PROCESS — ``phase1_doc_one_shot_runner._post_emit_l22_analog_verification
     _plan`` calls ``run()`` at the tail of Phase 1.  Reachable, but it read only
     ``emitted_count``: a REFUSED projection and a digital no-op both returned 0
     and printed nothing, so the one state worth naming was the silent one.
-  * AT THE FLOW BOUNDARY — nothing.  ``flow_gate_enforcement_audit`` reported
-    this program ORPHANED ("declares an intent and is reachable from nothing at
-    all"), because the runner reaches it through ``from <module> import run``,
-    which is not a venue that audit consults, and no flow clause named it.
+  * AT THE FLOW BOUNDARY — Step D1 declares the producer and its L22 output.
 
-It is now wired in ``flow/phase1_phase2_phase3.yaml`` at Step D1 as
-``advisory_program_exit_zero: "l22_analog_verification_plan_emit . --dry-run"``.
-``--dry-run`` is load-bearing: this is a PRODUCER, and an audit that rewrote the
-document it is judging would be measuring its own side effect.  The advisory
-slot RUNS the program, RECORDS the verdict and never fails the step — which is
-what ``ADVISORY`` above has always claimed and what nothing enforced.
+Issue #1980 removed the old ``advisory_program_exit_zero --dry-run`` duplicate.
+A producer is not a predicate and must not inflate gate coverage; the runner
+adapter owns execution while the final audit reads the declared L22 output.
 
 That wiring is only worth having because ``_STATUS_EXIT`` (below) made the exit
 code a function of the outcome.  It used to be a constant 0.

@@ -654,6 +654,12 @@ steps:
     # stage_phase1, the field v1.12.87 added for them on stage1.
     skills:
       - phase1
+    programs:
+      - l22_analog_verification_plan_emit
+    program_outputs:
+      - program: l22_analog_verification_plan_emit
+        path: "phase1/generated_docs/L22_VERIFICATION_PLAN.json"
+        verdict_field: extraction_status
     required_outputs:
       - "phase1/generated_docs/L1_DATASHEET.json"
       - "phase1/generated_docs/L2_FRS.json"
@@ -918,30 +924,9 @@ steps:
         - advisory_program_exit_zero:
               command: "l8_sta_clock_period_design_owned_check ."
               advisory_reason: "NOT-YET-CLEAN: this gate CAN refuse and is wired advisory as a ratchet position, not as a verdict. Notch measured rc 0 on a real spm run (2026-08-31): it is already clean on real input, so blocking would cost nothing today; the only thing holding it advisory is that no other run has been measured."
-        # L22 analog verification plan — the PRODUCER, wired where its verdict
-        # can be read. `flow_gate_enforcement_audit` reported it ORPHANED:
-        # "declares an intent and is reachable from nothing at all". It is in
-        # fact reached — `phase1_doc_one_shot_runner` calls it at the tail of
-        # this very step — but through `from <module> import run`, which is not
-        # one of that audit's five venues, and the adapter then read only
-        # `emitted_count`. So the one outcome worth naming (an ANALOG class
-        # whose L5 blocks the emitter could not identify, leaving L22 with no
-        # analog verification plan at all) returned the same 0 as a digital
-        # no-op and printed nothing.
-        #
-        # `--dry-run` IS LOAD-BEARING. This is a producer; an audit clause that
-        # rewrote the document it judges would be measuring its own side effect.
-        # The emitter's `_STATUS_EXIT` makes the three outcomes distinguishable
-        # at the process boundary — before it, the exit code was a constant 0
-        # and this clause would have recorded PASS on every project alive.
-        #
-        # BLAST RADIUS, measured on the 7 published Phase-1 fixture roots in
-        # this tree: rc 0 on 1 (reject_ddr5), rc 2 on 6 (five digital classes +
-        # one root with no L5/L22). No root goes to rc 1 today, and the slot
-        # cannot fail a step in any case.
-        - advisory_program_exit_zero:
-              command: "l22_analog_verification_plan_emit . --dry-run"
-              advisory_reason: "The declaration is ADVISORY PRODUCER and this clause is what makes that true instead of merely stated: it enriches L22 and must never stop Phase 1, so a refusal has to be RECORDED rather than enforced. Blocking is also not yet earned — rc 1 is reachable only for an analog class whose L5 blocks carry no usable identity, and no published root in this tree exercises that path, so the corpus evidence flow-change-acceptance requires for a blocking promotion does not exist."
+        # The L22 projection is a producer declared on this step above. Issue
+        # #1980 removes producers from the gate denominator; its runner adapter
+        # remains the execution/disposition owner.
         # D9 Phase 1 — L6 states must carry the transitions their consumer needs.
         # ADVISORY, and the reason is a MEASUREMENT, not a preference.
         #
@@ -4593,77 +4578,18 @@ steps:
     programs:
       - hold_closure_check
       - hold_area_budget_check
+    program_outputs:
+      - program: hold_area_budget_check
+        path: "reports/phase3/pnr/hold_area_budget.json"
+        verdict_field: verdict
     required_outputs:
       - "phase3/stage3/pnr/post_hold.def"
     gate:
       all_of:
-        # The hold-fix SKILL's guardrail #2 — "hold buffers should not exceed
-        # 5% of total cell area" — is enforced at NEITHER end of the flow, and
-        # this wiring exists to SAY SO on every run rather than in a list.
-        # Measured: 0 files under benchmark-data carry hold_buffer_area /
-        # total_cell_area / a before-after total pair, 0 area*.rpt exist,
-        # `max_buffer_percent` appears 0 times in phase3_one_shot_runner.py and
-        # 0 times in all 8 published pnr*.tcl, and the flow's only area
-        # emission is a single post-P&R report_design_area with no bracket
-        # around the hold-repair step. `hold_closure_check` below covers slack
-        # and inserted-INSTANCE delta; nothing covers AREA.
-        #
-        # So this gate cannot judge today and says NOT CHECKED (rc=2, the
-        # disclosed-skip tier) with the missing producer named, on all 34
-        # published run roots — 0 red. It is wired rather than inventoried
-        # because a per-run disclosure cannot rot the way a static list can,
-        # and because the day a producer lands the same wiring judges it with
-        # no further change. It is NOT added to `gate_skip_routing_check`'s
-        # `_UNROUTED_INVENTORY`: that list ratchets counts of unrouted SKIP
-        # PATHS, this gate measures 0 of them, and an inventory entry absent
-        # from the measured set is reported by `ratchet()` as
-        # `fixed -> delete the inventory entry`, i.e. adding it there FAILs
-        # that gate.
-        #
-        # THE ADVISORY SLOT, NOT A BLOCKING ONE — and this was MEASURED, not
-        # assumed. Wired as `program_exit_zero`, the rc=2 disclosed-skip hint
-        # promotes the whole STEP to VACUOUS_PASS, and
-        # `PASS_VOIDED_BY_DEPENDENCY` is only ever applied to a step whose
-        # status is exactly `PASS`. A/B on one fixture (step 19 CTS FAIL, step
-        # 20 hold-fix genuinely PASS):
-        #     origin/main  ⊘ [PASS-VOIDED  ] Step 20
-        #                     └─ PASS voided: dependency [19] CTS = FAIL, so
-        #                        this step's PASS certifies nothing about the
-        #                        design
-        #     blocking     ○ [VACUOUS-PASS ] Step 20      <- that line GONE
-        # Aggregate over the same fixture: PASS_VOIDED 1 -> 0, VACUOUS_PASS
-        # 0 -> 1. `flow_compliance_check`'s own comment forbids the swap:
-        # "a vacuous step is one nobody has to come back to, and a voided one
-        # is a step somebody does". Published radius is 0 (step 20 is MISSING
-        # on all 34 roots), which makes it WORSE, not better — it bites only
-        # on live runs, where the voided disclosure is the whole point.
-        #
-        # WHY THE SLOT AND NOT A FIX TO THE TIER INTERACTION. Both would work.
-        # Teaching the voider to demote VACUOUS_PASS is a change to the VERDICT
-        # TAXONOMY — it needs a new "vacuous AND voided" resolution that does
-        # not exist today, applies to every rc=2 gate on every step, and has an
-        # unmeasured corpus radius; landing that under a commit that wires four
-        # gates would put an unmeasured taxonomy change behind a wiring title.
-        # The narrower reason is decisive: this gate CANNOT JUDGE TODAY (0
-        # producers anywhere — see above), and a gate that can never reach a
-        # verdict has no business re-tiering the step. The advisory slot is
-        # exactly "runs, records, cannot decide": `_evaluate_gate` refuses to
-        # record rc=2 as `ok` and writes `n/a (input not present)` instead, and
-        # `check_step` holds ADVISORY hints out of the tier decision (#306), so
-        # the step stays PASS and the voided line survives — proven below. This
-        # branch already uses the same slot at Step 2 for the same reason.
-        # THE DAY A PRODUCER LANDS this becomes a promotion to a blocking slot
-        # with a radius that can be measured; today that radius is 0 by
-        # construction, i.e. unmeasurable.
-        #
-        # Position, honestly: unlike Step 23's addition, FIRST is NOT
-        # load-bearing here. An advisory sub-gate never fails, so it cannot be
-        # short-circuited past, and `_evaluate_gate` re-runs the advisories
-        # that follow a failing sub-gate on purpose. It is first only so the
-        # four wirings read the same way.
-        - advisory_program_exit_zero:
-              command: "hold_area_budget_check . --json reports/phase3/pnr/hold_area_budget.json"
-              advisory_reason: "NOT-YET-CLEAN: this gate CAN refuse and is wired advisory as a ratchet position, not as a verdict. Notch measured rc 2 on a real spm run (2026-08-31): NOT CHECKED on that run — no input reached it, so the notch is unmeasured and this clause is not yet evidence of anything."
+        # The hold-area classifier currently has no reachable refusal path:
+        # no producer writes the two area metrics it needs. Issue #1980 keeps
+        # its structured NOT-CHECKED output visible as a program output above,
+        # but excludes it from this gate denominator until a predicate exists.
         # File-presence precondition (kept, consistent with sibling Steps 21/23).
         - files_exist: ["phase3/stage3/pnr/post_hold.def"]
         # Substance: prove the Step-20 hold-FIXING step did real work — either a
@@ -6059,6 +5985,22 @@ steps:
       # what distinguishes a reader that names the path from its writer.
       - magic_illegal_overlap_check
       - erc_density_check
+      # Issue #1980: these programs produce/classify evidence; none owns a
+      # refusal predicate.  They are step programs, not gate denominator rows.
+      - pnr_via_stack_completeness_check
+      - perc_corpus_sweep
+      - lvs_triage_classify
+    program_outputs:
+      - program: pnr_via_stack_completeness_check
+        path: "reports/phase3/pnr_via_stack_completeness.json"
+        verdict_field: verdict
+      - program: perc_corpus_sweep
+        path: "reports/phase3/perc_sweep.json"
+        finding_fields:
+          - "rows.*.welltap.status"
+          - "rows.*.xdomain.status"
+      - program: lvs_triage_classify
+        path: "reports/phase3/lvs_triage.json"
     required_outputs:
       - "reports/phase3/drc_signoff.rpt"
       - "reports/phase3/lvs.rpt"
@@ -6448,36 +6390,15 @@ steps:
         # artefact exists by the time this gate runs even though the audit
         # numbering puts Step 34 later.
         - program_exit_zero: "erc_density_check . --json reports/phase2/gates/erc_density.json"
-        # TWO ORPHANED PHYSICAL-VERIFICATION GATES, RE-HOMED (2026-08-25).
-        # Step 31 owns DRC/LVS/ERC, which is where a via-stack completeness
-        # question and a waiver-count question both belong.
-        #
-        # ADVISORY for the via stack: measured on a real completed project it
-        # returns `VACUOUS_PASS — PDK=None`, so on this tree it has no layer
-        # table to reason from. Blocking on a gate that cannot currently read
-        # its own input would be a red that says nothing about the design.
-        # `waiver_growth_check` PASSES on that same project with a real waiver
-        # set, so it is wired the same way only because a first blocking run
-        # should not be a landing's first run of it.
-        - advisory_program_exit_zero:
-              command: "pnr_via_stack_completeness_check ."
-              advisory_reason: "INERT, not advisory: every exit path returns 0 or 2, so no input can make this gate refuse. Measured by planting a real violation — it printed the finding and exited 0. Advisory is the wrong word for a gate with no reachable refusal path; give it one or stop counting it as coverage."
+        # This predicate has a reachable refusal path. Issue #1980 makes such
+        # a refusal blocking even though a genuine structured warning remains
+        # advisory. The via-stack classifier is declared above as a producer,
+        # because it has no refusal predicate and must not inflate coverage.
         - advisory_program_exit_zero:
               command: "waiver_growth_check ."
               advisory_reason: "NOT-YET-CLEAN: this gate CAN refuse and is wired advisory as a ratchet position, not as a verdict. Notch measured rc 1 on a real spm run (2026-08-31): it REFUSES TODAY on real input; the advisory slot is currently swallowing a live finding. Promote to blocking once this run is clean. It reported: [ERROR] UNJUSTIFIED_WAIVER_GROWTH: waivers.json adds 4 root waiver(s) the baseline did not carry (> tolerance 0; net count change 4) without `growth_r"
-        # ORPHANED, RE-HOMED. Step 31 already declares `skills: [drc-fix,
-        # lvs-triage, perc-check]` — the PERC skill was named with NO PERC
-        # program behind it. Its input `phase3/stage3/pnr/routed.def` is Step
-        # 21's output and matches this program's own `phase3/**/*.def` glob.
-        # ADVISORY. It now writes its `{rows, reach}` report, because the
-        # program that CONSUMES that report is the clause directly below and
-        # without the flag there is nothing for it to read. An empty dir is
-        # still rc=2 (vacuous), never a fail.
-        - advisory_program_exit_zero:
-              command: "perc_corpus_sweep . --report reports/phase3/perc_sweep.json"
-              advisory_reason: "NOT A GATE: this is a producer/classifier, not a predicate. Every exit path is 0 (produced) or 2 (no input), so there is nothing here that could refuse. It is wired in a gate slot and counted as gate coverage; move it to a step output."
-        # THE OTHER HALF OF THAT SWEEP, and the reason it was missing is the
-        # sharpest thing this campaign measured.
+        # The PERC sweep is a producer declared in `programs` / `program_outputs`.
+        # The clause below is its separate, refusal-capable reach predicate.
         #
         # `sweep_reach_check` asks the one question a corpus sweep cannot ask
         # itself: a sweep that exits 0 having never ENTERED the guard it is
@@ -6502,24 +6423,8 @@ steps:
               DEF to sweep; with no corpus there is no reach block to judge, and
               a reach verdict over a sweep that never ran is the vacuity this
               gate exists to refuse
-        # TWO MORE ORPHANS RE-HOMED HERE (2026-08-25), both on Step 31's own
-        # question and neither of them a second opinion on a blocking slot.
-        #
-        # `lvs_triage_classify` is the program half of the `lvs-triage` skill
-        # this step already declares: the skill enumerated a 4-category triage
-        # plus a top-3 root-cause heuristic, all deterministic, and the program
-        # was written from it and then called by nothing. The blocking slots
-        # above decide WHETHER the LVS matched; none of them says WHAT KIND of
-        # mismatch it was, which is the first thing a reader needs and the only
-        # thing this program claims. ADVISORY because a categorised mismatch is
-        # a description, not a verdict — `lvs_report_check` and
-        # `lvs_signoff_guard` own the verdict, and a triage that could refuse
-        # the step would be a third authority over one report. It writes
-        # nothing: `--out-md` / `--out-json` are deliberately omitted, so this
-        # clause adds no `required_outputs` row.
-        - advisory_program_exit_zero:
-              command: "lvs_triage_classify --report reports/phase3/lvs.rpt"
-              advisory_reason: "NOT A GATE: this is a producer/classifier, not a predicate. Every exit path is 0 (produced) or 2 (no input), so there is nothing here that could refuse. It is wired in a gate slot and counted as gate coverage; move it to a step output."
+        # LVS triage is likewise a classifier output, declared above without a
+        # gate slot. lvs_report_check and lvs_signoff_guard own the predicate.
         # `mcp_execution_verify` is the L3 layer README.md advertises — "MCP
         # tool execution proof via manifest", against an agent that reports a
         # tool run it never made. It was declared by SIX skills as the
@@ -6931,6 +6836,10 @@ steps:
         outputs: all
     programs:
       - dfm_screen_check
+    program_outputs:
+      - program: dfm_screen_check
+        path: "reports/phase3/dfm_screen.json"
+        verdict_field: verdict
     required_outputs:
       - "reports/phase3/dfm_screen.json"
     gate:
@@ -6938,25 +6847,10 @@ steps:
         # BLOCKING half: the screen must have produced its artefact. A step
         # that never ran cannot be certified done.
         - files_exist: ["reports/phase3/dfm_screen.json"]
-        # ADVISORY half (#306). `dfm_screen_check` DECLARES itself advisory
-        # (ENFORCEMENT: advisory) — Step 31 owns the litho/min-width RULES and
-        # Step 34 owns the density EXECUTION gate, and OpenROAD has no
-        # via-doubling repair pass, so failing Step 35 on a DFM optimisation
-        # finding would fabricate a FAIL nobody is allowed to fix.
-        #
-        # This sat in the BLOCKING `program_exit_zero` slot while the program
-        # returned a hard-coded rc 0 for BOTH of its verdict tiers. rc 0 and
-        # rc 2 both pass, so the sub-gate was structurally tautological — no
-        # project could ever move it — and every PASS_WITH_ADVISORIES finding
-        # was indistinguishable from a clean screen at the step line. The
-        # program now returns rc 1 on an advisory; wiring it here makes that
-        # finding RUN, RECORDED and PRINTED (`ADVISORY ... FINDING:`) without
-        # blocking. Blocking coverage is unchanged: the only outcome the old
-        # slot could have failed on was a crash, and a crash leaves the
-        # artefact above unwritten.
-        - advisory_program_exit_zero:
-              command: "dfm_screen_check . --json reports/phase2/gates/dfm_screen.json"
-              advisory_reason: "CENSUS, correct permanently — and rc 1 here is NOT a refusal. This gate declares its own three tiers: 0 PASS, 1 PASS_WITH_ADVISORIES (the screen ran and RAISED a finding), 2 vacuous SKIP; the same docstring states the flow MUST wire it in the advisory slot. Notch rc 1 on a real spm run (2026-08-31) is therefore the advisory-finding tier working, not a swallowed refusal, and promoting this clause to blocking would fail every run that raises any advisory at all. What it counts: signal-net via uses whose via redundancy it could resolve. It reported 4129/4129 UNRESOLVED because the vias are declared neither in the DEF VIAS section nor in any locatable tech LEF -- redundancy is UNMEASURED for them, not violated, and the screen deliberately does not infer a cut count from an absent declaration."
+        # dfm_screen_check is a producer/classifier with PASS,
+        # PASS_WITH_ADVISORIES and SKIP outputs but no refusal predicate.
+        # Issue #1980 keeps its structured output above and excludes it from
+        # the gate denominator. Presence remains the blocking predicate.
     blocks_on: [34]
 
   - id: 36
