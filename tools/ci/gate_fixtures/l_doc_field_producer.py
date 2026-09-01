@@ -34,38 +34,38 @@ with a real, populated instance rather than by evading them:
 
     DENOMINATOR PRESENTED:  1 published L-doc carrying a `fields` object
                             (`docs_scanned == 1`, not 0)
-                            against the 18 field names the real checkers read
-                            (`fields_read == 18`, not 0)
-    INSIDE THAT DOCUMENT:   4 of those field names are present.
-                            `power_domains` — read by 3 real checkers — is
+                            against the field names the real checkers read
+                            (`fields_read != 0`)
+    INSIDE THAT DOCUMENT:   `signal_crossings` — read by the real
+                            `power_domain_signal_crossing_check` — is
                             POPULATED, so the gate has an actual producer to
-                            find and correctly does not report it.
-                            The 3 fields the register already records are
-                            present and EMPTY, which is the state the register
-                            records; that is what makes the run rc 0 rather
-                            than a `paid`/`new` disagreement with it.
+                            find and correctly does not report it. Every field
+                            the register already records is present and EMPTY,
+                            which is the state the register records; that is
+                            what makes the run rc 0 rather than a `paid`/`new`
+                            disagreement with it.
 
-THE THREE RECORDED FIELDS ARE READ OUT OF THE REGISTER, NOT TYPED HERE. The
+THE RECORDED FIELDS ARE READ OUT OF THE REGISTER, NOT TYPED HERE. The
 declaration passes no `--baseline`, so the gate adjudicates against the real
 `l_doc_field_producer_baseline.json`, whose register MAY ONLY SHRINK. A
-hand-copied list of its three names would be a frozen copy of a value the
-repository computes live, and it would go quietly wrong the day somebody pays
-one of them off — this fixture would then fail while nothing was broken. It
+hand-copied list of its names would be a frozen copy of a value the repository
+computes live, and it would go quietly wrong the day somebody pays one of them
+off — this fixture would then fail while nothing was broken. It
 reads the register, so the specimen stays the known-good subject FOR WHATEVER
 THE REGISTER CURRENTLY SAYS.
 
 THE MUTATION BREAKS EXACTLY ONE THING
 =====================================
-One value: `fields.power_domains` goes from `["domain_one", "domain_two"]` to
+One value: `fields.signal_crossings` goes from one synthetic crossing record to
 `[]`. Nothing else differs between the two trees.
 
     BROKEN:        exactly one field acquires a reader-without-producer —
-                   `power_domains`, present in 1 doc and populated in 0.
+                   `signal_crossings`, present in 1 doc and populated in 0.
     LEFT INTACT:   the corpus still resolves (not an absent-corpus refusal);
                    the document still parses as JSON and still carries a
                    `fields` object, so `docs_scanned` is still 1 and the
-                   denominator is unchanged; `fields_read` is still 18; the
-                   three recorded fields are untouched, so no entry reads as
+                   reader denominator is unchanged; every recorded field is
+                   untouched, so no entry reads as
                    `(resolved)` and the run cannot refuse for a shrinking
                    register; the file name still matches `L*_*.json`.
 
@@ -73,11 +73,12 @@ So the refusal is rc 1 for one attributable reason and the fixture pins it:
 the expected fragment is the finding line for that field, which no other
 outcome of this gate prints.
 
-WHY `power_domains` AND NOT ONE OF THE RECORDED THREE. A recorded field cannot
-be the mutation — it is already a finding in the register, so emptying it
-changes nothing. `power_domains` is read by three real checkers and is NOT in
+WHY `signal_crossings` AND NOT ONE OF THE RECORDED FIELDS. A recorded field
+cannot be the mutation — it is already a finding in the register, so emptying
+it changes nothing. `signal_crossings` is read by a real checker and is NOT in
 the register, which is exactly the shape the gate blocks on: a NEW
-reader-without-producer.
+reader-without-producer. The preceding field, `power_domains`, stopped being a
+valid fixture input when the published-corpus register recorded it.
 
 ONE ENVIRONMENT THIS SUBJECT DOES NOT REACH, MEASURED
 =====================================================
@@ -130,10 +131,14 @@ _DOC_REL = _CORPUS_REL / "specimen_cell" / "signoff" / "L21_power_intent.json"
 #: same one `$PG` names. Read, never re-spelled.
 _REGISTER = F.PROGRAMS / "l_doc_field_producer_baseline.json"
 
-#: The field whose producer the mutation removes: read by three real checkers,
-#: recorded by no register entry.
-_PRODUCED = "power_domains"
-_A_PRODUCER = ["domain_one", "domain_two"]
+#: The field whose producer the mutation removes: read by the real
+#: `power_domain_signal_crossing_check`, recorded by no register entry.
+_PRODUCED = "signal_crossings"
+_A_PRODUCER = [{
+    "signal": "signal_one",
+    "driver_domain": "domain_one",
+    "receiver_domain": "domain_two",
+}]
 
 
 def _recorded() -> list:
@@ -166,11 +171,11 @@ def _tree(work: Path, name: str, produced) -> Path:
 
 
 def can_pass(work: Path) -> Path:
-    """1 L-doc, 18 fields read, `power_domains` POPULATED: rc 0 against the register."""
+    """One L-doc with `signal_crossings` populated: rc 0 against the register."""
     return _tree(work, "subject_pass", _A_PRODUCER)
 
 
 def can_fail(work: Path):
-    """The same document with `power_domains` emptied — one NEW field nobody fills."""
+    """The same document with `signal_crossings` emptied: one NEW finding."""
     root = _tree(work, "subject_fail", [])
     return root, f"{_PRODUCED}: "

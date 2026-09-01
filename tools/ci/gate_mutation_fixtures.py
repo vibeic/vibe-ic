@@ -96,6 +96,27 @@ _REAL_PG = str(PROGRAMS)
 _REAL_RUNTIME_ROOT = str(REPO_ROOT)
 
 
+def _synthetic_nda_tokens() -> str:
+    """A complete private-token panel whose values exist only in fixture runs.
+
+    `source_chip_agnostic_check` correctly refuses when the host has no private
+    NDA-token store.  That host state is not part of a fixture's subject, and
+    letting it reach the subprocess makes both the direct source-guard pair and
+    the plugin-self-audit pair stop before their mutations are judged.
+
+    Derive the public role set from the gate's own provider, then replace every
+    value.  Filling every role prevents a real private config from supplying a
+    residual value and making this supposedly synthetic run host-dependent.
+    """
+    if str(PROGRAMS) not in sys.path:
+        sys.path.insert(0, str(PROGRAMS))
+    import _commercial_pdk as commercial_pdk  # noqa: E402
+    return json.dumps({
+        role: f"gate_fixture_private_value_{index}_{role}"
+        for index, role in enumerate(commercial_pdk.NDA_ROLES)
+    }, sort_keys=True)
+
+
 def _load_parse_declarations():
     """The repo's ONE parser for `run` lines, imported rather than re-written.
 
@@ -233,6 +254,12 @@ def invoke(decl, subject: Path, timeout: int = 180) -> Outcome:
     argv = _resolve_argv(decl.cmd, subject)
     env = dict(os.environ)
     env["VIBEIC_SUBJECT_ROOT"] = str(subject)
+    # The gate's refusal on an unavailable private token store is load-bearing:
+    # an empty detector must never report PASS.  A two-arm fixture nevertheless
+    # has to present the private INPUT so both arms reach the behavior they are
+    # meant to distinguish.  Override rather than inherit: the operator's real
+    # token values must neither decide this test nor enter its child process.
+    env["VIBEIC_NDA_TOKENS"] = _synthetic_nda_tokens()
     env.pop("GATEKEEPER_HYGIENE_JOBS", None)
     # THE SUBJECT IS `subject`, AND THE AMBIENT CORPUS IS NOT IT. A landing
     # exports `VIBE_IC_BENCHMARK_DATA` so the corpus gates sweep a real corpus
