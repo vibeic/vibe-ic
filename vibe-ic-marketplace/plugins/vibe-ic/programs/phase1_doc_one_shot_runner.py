@@ -57863,6 +57863,69 @@ def _post_emit_l22_coverage_goals(project: Path) -> int:
     return n
 
 
+def _post_emit_l19_constraint_tokens(project: Path) -> int:
+    """Lift constraints stated in design prose into their L19 consumer.
+
+    The existing SDC and floorplan adapters read staged machine-readable
+    files.  This adapter covers the complementary input shape: a specification
+    that states flow settings in a table or quotes SDC directives but ships no
+    deck/config.  It must run after the L19 skeleton exists and before neutral
+    protocol overlays can write a contradicting ``constraints_present=false``
+    placeholder.
+
+    ``l19_constraint_token_emit`` emits a named SKIPPED/ERROR state.  Preserve
+    that distinction here: an expected no-op is zero declarations, while an
+    unreadable L19 is raised to the caller and reported by the runner's
+    fail-open boundary.  A broken adapter must never disappear as a silent 0.
+    """
+    from l19_constraint_token_emit import run as _l19_emit
+
+    rep = _l19_emit(project)
+    if not isinstance(rep, dict):
+        raise RuntimeError("l19_constraint_token_emit returned no report")
+    status = rep.get("status")
+    if status == "SKIPPED":
+        print(f"      L19 prose constraints: SKIPPED — {rep.get('reason')}")
+        return 0
+    if status != "OK":
+        raise RuntimeError(
+            f"l19_constraint_token_emit {status}: {rep.get('reason')}")
+
+    n = rep.get("emitted_count", 0)
+    if n:
+        print(f"      L19 constraints: lifted {n} declaration(s) stated in "
+              f"the design's own prose")
+    return n
+
+
+def _post_emit_l8_clock_reset_waveform(project: Path) -> int:
+    """Project final typed L8/L9 clock-reset facts into L8's consumer field.
+
+    This runs near the end of ``main`` after protocol overlays settle.  A
+    protocol-specific waveform therefore wins through the producer's explicit
+    preserve-existing contract; a generic design receives a projection only
+    when BOTH typed fact sets exist.  ``SKIPPED`` and ``ERROR`` stay distinct
+    so a missing fact is not reported as a successful zero-row extraction.
+    """
+    from l8_clock_reset_waveform_emit import run as _l8_cr_emit
+
+    rep = _l8_cr_emit(project)
+    if not isinstance(rep, dict):
+        raise RuntimeError("l8_clock_reset_waveform_emit returned no report")
+    status = rep.get("status")
+    if status == "SKIPPED":
+        print(f"      L8 clock/reset waveform: SKIPPED — {rep.get('reason')}")
+        return 0
+    if status != "OK":
+        raise RuntimeError(
+            f"l8_clock_reset_waveform_emit {status}: {rep.get('reason')}")
+    n = rep.get("emitted_count", 0)
+    if n:
+        print("      L8 clock/reset waveform: projected final typed L8/L9 "
+              "facts into the release-doc consumer field")
+    return n
+
+
 def _post_emit_l22_checklist_milestones(project: Path) -> int:
     """vibe-ic#593 cause 2 — lift the verification checklist's own milestone
     IDENTIFIERS into ``L22.fields.checklist_milestones[]``.
@@ -63043,6 +63106,16 @@ def main() -> int:
         print(f"      L22 coverage-goal emit FAILED (fail-open): "
               f"{_l22_cov_err}", file=sys.stderr)
 
+    # Prose is a first-class constraints input, beside staged SDC and config
+    # files.  Run after the L19 skeleton and before the protocol overlays so
+    # their ``setdefault`` logic yields to evidence rather than writing a
+    # false neutral placeholder.
+    try:
+        _post_emit_l19_constraint_tokens(project)
+    except Exception as _l19_prose_err:
+        print(f"      L19 prose constraints emit FAILED (fail-open): "
+              f"{_l19_prose_err}", file=sys.stderr)
+
     # v0.1.77 (R53/R54/R55): serial_peripheral_protocol class-gated synth.
     # Runs AFTER 14d L19-L23 skeleton so the L19-L23 + L4 + L11 + L13
     # presence-fact synth survives. Inline structural sub-detector (MOSI/
@@ -64837,6 +64910,17 @@ def main() -> int:
     except Exception as _claim_err:
         print(f"      L4 register-map claim reconcile FAILED (fail-open): "
               f"{_claim_err}", file=sys.stderr)
+
+    # The protocol overlays above may have written a more-specific waveform;
+    # only now is the generic typed L8/L9 projection allowed to fill the field
+    # they left absent.  Run BEFORE Step 15 so the coverage report observes the
+    # final L-doc bytes.  ADVISORY producer: the final semantic gates retain
+    # their existing BLOCKING policy, while a producer error degrades loudly.
+    try:
+        _post_emit_l8_clock_reset_waveform(project)
+    except Exception as _l8_cr_err:
+        print(f"      L8 clock/reset waveform FAILED (fail-open): "
+              f"{_l8_cr_err}", file=sys.stderr)
 
     # Step 15: coverage report (runs AFTER backfill AND canonical seed so the
     # gate sees the final L docs + explicit pattern set)

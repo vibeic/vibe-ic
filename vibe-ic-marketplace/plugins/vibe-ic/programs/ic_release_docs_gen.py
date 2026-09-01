@@ -390,6 +390,14 @@ def constraints_for(project: Path, audit: _art.ArtefactAudit) -> List[Constraint
             f"this design declares {len(hints)} physical constraint(s) any "
             f"re-spin of this layout must continue to satisfy",
             l19_rel))
+    declarations = _list_under(l19, ("constraint_declarations",))
+    if declarations:
+        out.append(Constraint(
+            "DECLARED-DESIGN-CONSTRAINTS",
+            f"this design states {len(declarations)} design constraint "
+            f"declaration(s); any re-spin must translate and honour those "
+            f"declarations rather than replace them with unstated defaults",
+            l19_rel))
     return out
 
 
@@ -545,6 +553,9 @@ def user_reference_manual(rel: Release) -> Tuple[str, List[Field]]:
     sequences = [
         layer_text(rel.project, "L8_TIMING_WAVEFORM", "Clock and reset",
                    ("clock_and_reset_waveform", "general_timing_rule")),
+        layer_count(rel.project, "L19_CONSTRAINTS_PDK",
+                    "Declared design constraints",
+                    ("constraint_declarations",)),
         layer_count(rel.project, "L7_TEST_DEBUG", "Declared test modes",
                     ("test_modes",)),
     ]

@@ -282,6 +282,24 @@ def test_issue_1990_test_access_comes_from_the_delivered_dft_interface(tmp_path)
     assert "path: \"reports/phase2/dft/scan_chain.json\"" in manifest
 
 
+def test_l19_declarations_reach_the_product_documents(tmp_path):
+    project = build_project(tmp_path / "p", releases=(SUBJECT,))
+    path = project / "phase1/generated_docs/L19_CONSTRAINTS_PDK.json"
+    doc = json.loads(path.read_text(encoding="utf-8"))
+    doc["fields"]["constraint_declarations"] = [
+        {"kind": "sdc_directive", "token": "create_clock"},
+        {"kind": "flow_setting", "token": "UTIL_TARGET", "value": "45%"},
+    ]
+    path.write_text(json.dumps(doc), encoding="utf-8")
+    assert run(project).returncode == RC_PASS
+    preliminary = (docs_dir(project) / "PRELIMINARY_DATASHEET.md").read_text(
+        encoding="utf-8")
+    manual = (docs_dir(project) / "USER_REFERENCE_MANUAL.md").read_text(
+        encoding="utf-8")
+    assert "`DECLARED-DESIGN-CONSTRAINTS`" in preliminary
+    assert "| Declared design constraints | 2 |" in manual
+
+
 # ═══════ the refusals — one artefact class each, metrics CLEAN throughout ═══
 #: (case id, the rule the refusal must name, how to plant it)
 HOLLOW = [

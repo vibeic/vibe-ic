@@ -639,6 +639,15 @@ def constraints_for(project: Path, kit: Kit) -> List[Constraint]:
             f"this IP declares {len(hints)} floorplan constraint(s) the "
             f"integrating design must satisfy",
             l19_rel))
+    declarations = _list_under(l19, ("constraint_declarations",))
+    if declarations:
+        out.append(Constraint(
+            "DECLARED-DESIGN-CONSTRAINTS",
+            f"this IP states {len(declarations)} design constraint "
+            f"declaration(s); the integrating flow must translate and honour "
+            f"those declarations rather than replace them with unstated "
+            f"defaults",
+            l19_rel))
 
     if lef_rel:
         test_access = delivered_dft_access_constraint(
@@ -804,6 +813,9 @@ def integration_guide(rel: Release) -> Tuple[str, List[Field]]:
                    ("clock_and_reset_waveform", "general_timing_rule")),
         layer_count(rel.project, "L19_CONSTRAINTS_PDK", "Floorplan hints",
                     ("floorplan_hints", "physical_constraints")),
+        layer_count(rel.project, "L19_CONSTRAINTS_PDK",
+                    "Declared design constraints",
+                    ("constraint_declarations",)),
     ]
     test = [
         layer_count(rel.project, "L7_TEST_DEBUG", "Declared test modes",

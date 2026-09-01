@@ -294,6 +294,22 @@ def test_issue_1990_test_access_comes_from_the_delivered_dft_interface(tmp_path)
     assert "path: \"reports/phase2/dft/scan_chain.json\"" in manifest
 
 
+def test_l19_declarations_reach_the_integration_guide(tmp_path):
+    project = build_project(tmp_path / "p", packages=(SUBJECT,))
+    path = project / "phase1/generated_docs/L19_CONSTRAINTS_PDK.json"
+    doc = json.loads(path.read_text(encoding="utf-8"))
+    doc["fields"]["constraint_declarations"] = [
+        {"kind": "sdc_directive", "token": "create_clock"},
+        {"kind": "flow_setting", "token": "UTIL_TARGET", "value": "45%"},
+    ]
+    path.write_text(json.dumps(doc), encoding="utf-8")
+    assert run(project).returncode == 0
+    guide = (docs_dir(project) / "IP_INTEGRATION_GUIDE.md").read_text(
+        encoding="utf-8")
+    assert "`DECLARED-DESIGN-CONSTRAINTS`" in guide
+    assert "| Declared design constraints | 2 |" in guide
+
+
 # ───────────────────────────── it refuses ──────────────────────────────────
 
 def test_a_kit_its_own_gate_refuses_gets_no_documents(tmp_path):
