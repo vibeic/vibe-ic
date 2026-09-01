@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
 """vacuous_testbench_check.py — Phase-2 gate against VACUOUS testbenches.
 
+ENFORCEMENT: blocking. Step 4 cannot pass when this gate finds a vacuous TB or
+cannot discover a TB in any canonical Step-4 testbench location.
+
 A vacuous testbench prints a PASS and never drives the design. Functional
 verification then silently becomes theatre: the sim log says PASS, the DUT was
 never instantiated, and every downstream gate inherits a fabricated green.
@@ -60,8 +63,8 @@ say-so.
 
 chip-AGNOSTIC: no chip / vendor / SKU / design-name literal anywhere; the gate
 keys purely on Verilog structure.
-Contract: exit 0 = PASS / NOT_APPLICABLE, exit 1 = vacuous TB found,
-exit 2 = IO error.
+Contract: exit 0 = PASS, exit 1 = vacuous TB found,
+exit 2 = NOT_APPLICABLE / IO error (blocking vacuity tier in Step 4).
 """
 from __future__ import annotations
 
@@ -71,6 +74,8 @@ import re
 import sys
 from pathlib import Path
 from typing import Any, Dict, List, Tuple
+
+import _path_layout as _pl
 
 # The marker the scaffolder actually emits. Read from testbench_gen.emit_unit_tb:
 #     #1000 $display("[TB {name}] PASS_PLACEHOLDER (replace with real stimulus)");
@@ -373,24 +378,50 @@ def check_file(path: Path, rel: Path) -> Dict[str, Any]:
 
 
 def check(project: Path, sim_root: Path | None = None) -> Dict[str, Any]:
-    root = sim_root or (project / "phase2" / "stage1" / "sim")
-    res: Dict[str, Any] = {"gate": "vacuous_testbench", "sim_root": str(root)}
-    if not root.is_dir():
+    # vibe-ic#1975: Step 4 has one canonical TB resolver. L10 and L12 already
+    # use it; keeping a private ``phase2/stage1/sim`` default here made the
+    # same run say both "sim_full_stack TB ran" and "no testbench discovered".
+    # An explicit --sim-root remains exact. The default resolves the first
+    # directory that actually HOLDS a TB, including sim_full_stack/.
+    roots = ((sim_root,) if sim_root is not None
+             else _pl.resolve_tb_dirs(project))
+    root = roots[0] if roots else _pl.sim_dir(project)
+    res: Dict[str, Any] = {
+        "gate": "vacuous_testbench",
+        "sim_root": str(root),
+        "sim_roots": [str(r) for r in roots],
+        "resolution": "explicit" if sim_root is not None else "canonical",
+    }
+    if not roots and not root.is_dir():
         res.update(verdict="NOT_APPLICABLE",
                    reason="no sim tree (step did not run)")
         return res
 
-    tbs = discover_testbenches(root)
+    tbs: List[Path] = []
+    seen_tbs: set[str] = set()
+    for candidate_root in roots or (root,):
+        for tb in discover_testbenches(candidate_root):
+            try:
+                key = str(tb.resolve())
+            except (OSError, RuntimeError):
+                key = str(tb)
+            if key not in seen_tbs:
+                seen_tbs.add(key)
+                tbs.append(tb)
     if not tbs:
         res.update(verdict="NOT_APPLICABLE",
-                   reason="no testbench discovered under the sim tree")
+                   reason="no testbench discovered under the canonical Step-4 TB set")
         return res
 
     evidence: List[Dict[str, Any]] = []
     per_file, any_live = [], False
     for p in tbs:
         try:
-            r = check_file(p, p.relative_to(root))
+            try:
+                rel = p.relative_to(project)
+            except ValueError:
+                rel = p
+            r = check_file(p, rel)
         except OSError as e:
             res.update(verdict="IO_ERROR", error=f"{p}: {e}")
             return res
@@ -402,14 +433,16 @@ def check(project: Path, sim_root: Path | None = None) -> Dict[str, Any]:
     if not any_live:
         evidence.append({
             "detector": "no_live_instantiation",
-            "file": str(root), "line": 0,
+            "file": ";".join(str(r) for r in (roots or (root,))), "line": 0,
             "text": (f"no uncommented module instantiation in any of the "
-                     f"{len(tbs)} testbench(es) under the sim tree"),
+                     f"{len(tbs)} testbench(es) under the canonical Step-4 "
+                     "TB set"),
         })
 
     res.update(
         testbenches_scanned=len(tbs),
-        files=[str(p.relative_to(root)) for p in tbs],
+        files=[str(p.relative_to(project))
+               if p.is_relative_to(project) else str(p) for p in tbs],
         offending_files=sorted({e["file"] for e in evidence
                                 if e["detector"] != "no_live_instantiation"}),
         detectors_tripped=sorted({e["detector"] for e in evidence}),

@@ -7065,6 +7065,29 @@ def _cocotb_xml_failures(out_dir: Path) -> Optional[int]:
     return total
 
 
+def _cocotb_xml_summary(out_dir: Path) -> Optional[Dict[str, int]]:
+    """Aggregate the actual cocotb/JUnit test denominator under ``out_dir``.
+
+    A clean failure count without a non-zero test count is not functional
+    evidence: ``failures=0`` on a zero-test suite is vacuous. Keep the legacy
+    failure helper above for compatibility, but make the Step-4 verdict use
+    this denominator-bearing summary.
+    """
+    import _sim_results_bridge as _srb
+
+    total = {"tests": 0, "failures": 0, "errors": 0,
+             "skipped": 0, "passed": 0}
+    found = False
+    for result in sorted(out_dir.rglob("results.xml")):
+        summ = _srb.parse_junit(result)
+        if not summ:
+            continue
+        found = True
+        for key in total:
+            total[key] += int(summ.get(key, 0) or 0)
+    return total if found else None
+
+
 def step_professional_tb_gen(project: Path, top_name: str = "",
                              container: str = "vibeic-eda") -> StepResult:
     """NEW TB PATH (professional_tb_gen, 2026-07-11) wired into Phase-2.
@@ -7082,9 +7105,10 @@ def step_professional_tb_gen(project: Path, top_name: str = "",
       * PASS   — cocotb ran, 0 mismatches (functional verification CLOSED)
       * FAIL   — cocotb ran, results.xml records >0 failures (real RTL mismatch
                  → pulls phase2 down so the close-loop engages)
-      * WAIVED — TB generated but the run was deferred (tooling unreachable),
-                 inconclusive (no results.xml), or the class exposes only a
-                 reference HOOK (generic) — never a silent vacuous pass
+      * INCOMPLETE — TB generated but no non-zero self-checking test denominator
+                     completed, or the class exposes only a reference HOOK.
+                     The shipped testbench-gen expert fallback must fill that
+                     design-specific model and re-run; no class waiver exists.
       * SKIP   — the class exposes no derivable arithmetic/streaming interface
     chip-AGNOSTIC: everything is derived from the project's own L-docs."""
     t0 = time.time()
@@ -7128,8 +7152,9 @@ def step_professional_tb_gen(project: Path, top_name: str = "",
 
     # Run cocotb ONLY for classes with a genuine reference model. The generic
     # class emits a reference HOOK that RAISES until filled — generate() already
-    # wrote it; running it would only TestSkip, so keep it WAIVED (honest, no
-    # silent vacuous pass).
+    # wrote it; the program-first route then hands that explicit gap to the
+    # testbench-gen expert fallback. It is INCOMPLETE until the hook is filled,
+    # never a class waiver.
     if dut_kind in ("serial_stream", "parallel_arith") and out_dir.is_dir():
         if _tool_in_container(container, "iverilog"):
             log_path = out_dir / "cocotb_run.log"
@@ -7139,41 +7164,126 @@ def step_professional_tb_gen(project: Path, top_name: str = "",
                                       log_path=str(log_path))
             combined = (so or "") + "\n" + (se or "")
             pass_marker = "PROFESSIONAL_TB PASS" in combined
-            xml_fail = _cocotb_xml_failures(out_dir)
+            xml_summary = _cocotb_xml_summary(out_dir)
+            xml_fail = (xml_summary["failures"] + xml_summary["errors"]
+                        if xml_summary is not None else None)
             rec.update({"ran_cocotb": True, "cocotb_rc": rc,
                         "cocotb_pass_marker": pass_marker,
-                        "cocotb_xml_failures": xml_fail})
+                        "cocotb_xml_failures": xml_fail,
+                        "cocotb_test_denominator": xml_summary})
             if xml_fail is not None and xml_fail > 0:
                 rec["functional_mismatch"] = True
-                _write(rec)
+                _write({**rec, "status": "FAIL"})
                 return StepResult(
                     "professional_tb_gen", "FAIL", time.time() - t0,
                     detail=(f"{dut_kind} cocotb functional MISMATCH "
                             f"({xml_fail} vectors) — close-loop"))
-            if pass_marker and (xml_fail == 0 or xml_fail is None):
-                _write(rec)
+            if (pass_marker and xml_summary is not None
+                    and xml_summary["tests"] > 0
+                    and xml_summary["passed"] > 0
+                    and xml_summary["failures"] == 0
+                    and xml_summary["errors"] == 0):
+                _write({**rec, "status": "PASS"})
                 return StepResult(
                     "professional_tb_gen", "PASS", time.time() - t0,
-                    detail=(f"{dut_kind} cocotb functional PASS "
-                            f"(streaming scoreboard)"))
-            _write({**rec, "waiver": "cocotb run inconclusive (no clean pass "
-                                     "marker and no results.xml failures)"})
+                    detail=(f"{dut_kind} cocotb functional PASS over "
+                            f"{xml_summary['passed']}/{xml_summary['tests']} "
+                            "test(s) (streaming scoreboard)"))
+            gap = ("cocotb run produced no non-zero self-checking JUnit "
+                   "denominator and clean pass marker")
+            _write({**rec, "status": "INCOMPLETE", "reason": gap,
+                    "fallback_skill": "testbench-gen"})
             return StepResult(
-                "professional_tb_gen", "WAIVED", time.time() - t0,
-                detail=(f"{dut_kind} TB generated; cocotb run inconclusive "
-                        f"(rc={rc})"))
-        _write({**rec, "waiver": "iverilog/cocotb not reachable in container"})
+                "professional_tb_gen", "INCOMPLETE", time.time() - t0,
+                detail=(f"{dut_kind} TB generated; functional run INCOMPLETE "
+                        f"(rc={rc}, tests="
+                        f"{(xml_summary or {}).get('tests', 0)}); "
+                        "fallback_skill=testbench-gen"),
+                extras={"fallback_skill": "testbench-gen",
+                        "program_first": "professional_tb_gen"})
+        gap = "iverilog/cocotb not reachable in the configured container"
+        _write({**rec, "status": "INCOMPLETE", "reason": gap,
+                "fallback_skill": "testbench-gen"})
         return StepResult(
-            "professional_tb_gen", "WAIVED", time.time() - t0,
-            detail=(f"{dut_kind} TB generated; cocotb tooling unavailable "
-                    f"(functional run deferred)"))
+            "professional_tb_gen", "INCOMPLETE", time.time() - t0,
+            detail=(f"{dut_kind} TB generated; functional run INCOMPLETE — "
+                    f"{gap}; fallback_skill=testbench-gen"),
+            extras={"fallback_skill": "testbench-gen",
+                    "program_first": "professional_tb_gen"})
 
-    # generic reference-hook class (or missing out_dir): generated, run deferred
-    _write({**rec, "note": "reference-hook class — functional sign-off deferred "
-                           "to L10 vectors / spec-to-refmodel"})
+    # Generic reference-hook class (or missing out_dir): the deterministic
+    # program has exhausted what can be derived. Record the explicit expert
+    # handoff and keep the step non-green until that model runs.
+    gap = ("reference-model hook is unfilled; functional tests did not run "
+           "(0-test denominator)")
+    _write({**rec, "status": "INCOMPLETE", "reason": gap,
+            "fallback_skill": "testbench-gen"})
     return StepResult(
-        "professional_tb_gen", "WAIVED", time.time() - t0,
-        detail=f"{dut_kind} professional TB generated; functional run deferred")
+        "professional_tb_gen", "INCOMPLETE", time.time() - t0,
+        detail=(f"{dut_kind} professional TB generated; {gap}; "
+                "fallback_skill=testbench-gen"),
+        extras={"fallback_skill": "testbench-gen",
+                "program_first": "professional_tb_gen"})
+
+
+def step_step4_functional_evidence(project: Path,
+                                   ic_class: str = "") -> StepResult:
+    """Run Step 4's TB-substance and functional-evidence gates inline.
+
+    ENFORCEMENT: blocking. The final flow audit re-runs the same YAML clauses,
+    but invoking them here makes their status part of the Phase-2 runner's own
+    verdict as well: a missing/vacuous TB, a missing simulation result, or a
+    connectivity-only result returns ``FAIL`` before the run can be certified.
+    The analog-only track is explicitly out of scope because it has no digital
+    RTL/TB contract at Step 4.
+    """
+    t0 = time.time()
+    analog_absent, analog_reason = _analog_rtl_track_absent(project, ic_class)
+    if analog_absent:
+        return StepResult("step4_functional_evidence", "SKIP",
+                          time.time() - t0, analog_reason)
+
+    vacuous_report = _pl.report_path(project, "gates/vacuous_testbench.json")
+    vacuous_rc, vacuous_out, vacuous_err = _run([
+        sys.executable,
+        str(PROGRAMS_DIR / "vacuous_testbench_check.py"),
+        str(project), "--json", str(vacuous_report),
+    ], cwd=project, timeout=60)
+    vacuous_detail = (vacuous_out or vacuous_err).strip()
+    if vacuous_rc != 0:
+        return StepResult(
+            "step4_functional_evidence", "FAIL", time.time() - t0,
+            f"vacuous_testbench_check rc={vacuous_rc}: {vacuous_detail}",
+            [str(vacuous_report.relative_to(project))])
+
+    sim_results = _pl.sim_dir(project) / "results.xml"
+    if not sim_results.is_file():
+        return StepResult(
+            "step4_functional_evidence", "FAIL", time.time() - t0,
+            "INCOMPLETE: no phase2/stage1/sim/results.xml; functional tests "
+            "did not produce a denominator",
+            [str(vacuous_report.relative_to(project))])
+
+    oracle_report = _pl.report_path(
+        project, "gates/cpu_functional_oracle_waiver.json")
+    oracle_rc, oracle_out, oracle_err = _run([
+        sys.executable,
+        str(PROGRAMS_DIR / "cpu_functional_oracle_waiver_check.py"),
+        str(project), "--json", str(oracle_report),
+    ], cwd=project, timeout=60)
+    oracle_detail = (oracle_out or oracle_err).strip()
+    outputs = [str(vacuous_report.relative_to(project)),
+               str(oracle_report.relative_to(project))]
+    if oracle_rc != 0:
+        return StepResult(
+            "step4_functional_evidence", "FAIL", time.time() - t0,
+            f"cpu functional evidence rc={oracle_rc}: {oracle_detail}",
+            outputs,
+            extras={"fallback_skill": "testbench-gen",
+                    "program_first": "professional_tb_gen"})
+    return StepResult(
+        "step4_functional_evidence", "PASS", time.time() - t0,
+        f"Step 4 TB and functional evidence passed: {oracle_detail}", outputs)
 
 
 def step_l10_unit_tb_gen(project: Path,
@@ -9032,8 +9142,7 @@ def _emit_connectivity_sim_bridge(project: Path, transcript: Path,
                                   top_name: str, track_reason: str) -> bool:
     """ORGANIC #654 — write the Step-4 Simulation gate artifacts
     (phase2/stage1/sim/{results.xml,pass.flag}) for the no-oracle
-    generic_full_stack CPU/SoC class as an explicit CONNECTIVITY-PASS /
-    functional-DEFERRED capability-gap waiver.
+    generic_full_stack class as an explicit CONNECTIVITY-PASS record.
 
     For this class there is no command/opcode oracle and no L10 golden
     vectors, so the oracle-sim bridge (which requires vectors_passed ==
@@ -9049,10 +9158,10 @@ def _emit_connectivity_sim_bridge(project: Path, transcript: Path,
       * a cap:cpu_functional_oracle capability-gap marker, and
       * an <evidence> backlink to the real full_stack.log transcript.
 
-    The Step-4 gate's cpu_functional_oracle_waiver_check reads this marker
-    and promotes the step to WAIVED-DEFERRED (Overall PASS_WITH_WAIVERS),
-    so the connectivity-PASS is never silently counted as a functional PASS
-    AND the chain is no longer halted by an opaque missing-file FAIL.
+    The legacy-named cpu_functional_oracle_waiver_check reads this marker and,
+    since vibe-ic#1975, returns INCOMPLETE/rc=1 until a real professional or
+    oracle TB passes. The record is retained because connectivity evidence is
+    useful; it is never counted as functional evidence or a class waiver.
 
     Returns True iff the bridge was written. chip-AGNOSTIC: no chip/PDK
     literal — class-driven (verification_track + the connectivity transcript
@@ -10148,7 +10257,7 @@ def _reference_tb_generic_full_stack(project: Path, top_name: str,
             # is CONNECTIVITY evidence, NOT functional verification (no
             # golden compares; functional_verified=false). The old PASS
             # here is how 3 of 4 campaign ICs shipped with zero
-            # functional verification. WAIVED with the fallback-skill
+            # functional verification. INCOMPLETE with the fallback-skill
             # direction — the per-IC oracle TB (deterministic
             # oracle_tb_gen or AI testbench-gen) is the only
             # functional PASS path.
@@ -10159,19 +10268,19 @@ def _reference_tb_generic_full_stack(project: Path, top_name: str,
             # gate requires was NEVER written and Step 4 hard-FAILed by
             # construction even with valid synthesisable RTL. Emit a
             # CONNECTIVITY bridge to that canonical path carrying an explicit
-            # connectivity-PASS / functional-DEFERRED capability-gap waiver
+            # connectivity-PASS / functional-INCOMPLETE capability record
             # (cap:cpu_functional_oracle) with a reviewable evidence pointer.
             # This is NOT a false functional PASS — verification_track and
             # functional_verified=false are preserved, and the Step-4 gate's
-            # cpu_functional_oracle_waiver_check promotes the step to
-            # WAIVED-DEFERRED (Overall PASS_WITH_WAIVERS), not a bare PASS.
+            # cpu_functional_oracle_waiver_check keeps Step 4 blocking until
+            # a real professional/oracle test denominator passes.
             try:
                 _emit_connectivity_sim_bridge(
                     project, transcript, top_name, track_reason)
             except Exception:
-                pass  # bridge failure must not retract the connectivity WAIVE
+                pass  # bridge failure must not retract the connectivity record
             return StepResult(
-                "reference_tb", "WAIVED",
+                "reference_tb", "INCOMPLETE",
                 time.time() - t0,
                 (f"AID reference TB SKIPPED ({track_reason}); generic "
                  f"full-stack TB {tb_path.name} compiled + ran to "
@@ -17666,13 +17775,16 @@ def main() -> int:
         sr = step_reference_tb(project, args.top_name, ic_class,
                                args.container)
         plan.append(sr)
-        # ORGANIC #543 — WAIVED means the reference-TB oracle path is
-        # legitimately unavailable (e.g. no L9.top_ports, analog class).
+        # ORGANIC #543 / vibe-ic#1975 — WAIVED or INCOMPLETE means the
+        # reference-TB oracle path has no RTL-repairable mismatch (for
+        # INCOMPLETE, connectivity ran but functional semantics still belong
+        # to the testbench-gen expert fallback).
         # Entering the RTL repair/retry loop in that state is inert: each retry
         # calls step_rtl_gen which WAIVEs again, RTL never changes, and
         # the loop terminates only via FAIL_RTL_REPAIR_INERT after args.max_rtl_repair_retries
-        # rounds.  Treat WAIVED the same as SKIP — exit immediately.
-        if (sr.status in ("PASS", "SKIP", "WAIVED") or
+        # rounds. Treat both non-mismatch dispositions like SKIP here — exit
+        # the RTL repair loop and let the functional-evidence gate decide.
+        if (sr.status in ("PASS", "SKIP", "WAIVED", "INCOMPLETE") or
                 rtl_repair_retry >= args.max_rtl_repair_retries):
             break
         rtl_repair_retry += 1
@@ -17721,6 +17833,13 @@ def main() -> int:
                          rtl_repair_remediation_attempted}))
             break
         last_rtl_hash = new_rtl_hash
+
+    # Step 4 acceptance is enforced inline as well as by final_audit. This is
+    # deliberately after the professional/program-first and reference/full-
+    # stack paths have had their chance to create functional evidence, and
+    # before synthesis/backend work can be mistaken for a certified Phase-2
+    # result. The StepResult is blocking in the aggregate verdict.
+    plan.append(step_step4_functional_evidence(project, ic_class))
 
     # Step 4 — yosys offline synth (Docker fallback if host yosys absent)
     # PRE-FLIGHT (canonical step 9). Step 9 also declares step 7's

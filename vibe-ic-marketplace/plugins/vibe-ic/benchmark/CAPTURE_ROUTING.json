@@ -73,7 +73,10 @@
       "bucket_A_program": "programs/professional_tb_gen.py",
       "bucket_A_related": [
         "programs/bit_level_full_stack_tb_check.py",
-        "programs/oracle_tb_gen.py"
+        "programs/oracle_tb_gen.py",
+        "programs/professional_tb_check.py",
+        "programs/cpu_functional_oracle_waiver_check.py",
+        "programs/vacuous_testbench_check.py"
       ],
       "bucket_B_skill_file": "skills/testbench-gen/SKILL.md"
     },

@@ -2,8 +2,8 @@
 
 Covers:
   * _sim_results_bridge.parse_junit / find_professional_tb_pass (pure parser)
-  * cpu_functional_oracle_waiver_check: a real professional_tb PASS SUPERSEDES
-    the connectivity-DEFERRED waiver (rc=3 → rc=0 real functional PASS).
+  * cpu_functional_oracle_waiver_check: connectivity-only is blocking
+    INCOMPLETE (rc=1); a real professional_tb PASS closes it (rc=0).
 
 Pure/structural (no container): drives on synthetic JUnit + connectivity XML.
 """
@@ -96,7 +96,7 @@ def test_find_professional_tb_pass_absent_is_none(tmp_path):
     assert SRB.find_professional_tb_pass(tmp_path) is None
 
 
-# ----- waiver supersede ---------------------------------------------
+# ----- connectivity-only closure -----------------------------------
 
 def _plant_connectivity_bridge(project: Path):
     sim = project / "phase2" / "stage1" / "sim"
@@ -108,12 +108,12 @@ def _plant_connectivity_bridge(project: Path):
     (ev / "full_stack.log").write_text("... FULL_STACK_TB_DONE ...\n")
 
 
-def test_waiver_without_professional_tb_stays_waived(tmp_path):
-    # No professional_tb → the honest connectivity waiver is issued (rc=3).
+def test_connectivity_without_professional_tb_stays_incomplete(tmp_path):
+    # No professional_tb → connectivity is recorded but cannot waive function.
     _plant_connectivity_bridge(tmp_path)
     code, msg = W._evaluate(tmp_path)
-    assert code == 3, msg
-    assert "PASS_WITH_WAIVERS" in msg
+    assert code == 1, msg
+    assert "INCOMPLETE" in msg
 
 
 def test_professional_tb_pass_supersedes_waiver(tmp_path):

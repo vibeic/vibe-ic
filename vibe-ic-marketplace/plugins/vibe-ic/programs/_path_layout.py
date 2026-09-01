@@ -172,12 +172,13 @@ def _holds_testbench(d: Path) -> bool:
         any(d.glob("tb_*.v")) or any(d.glob("tb_*.sv"))
 
 
-def resolve_tb_dir(project: Path, given: "str | Path | None" = None):
-    """The first location under `project` that actually HOLDS a testbench.
+def resolve_tb_dirs(project: Path, given: "str | Path | None" = None):
+    """Every canonical location under ``project`` that holds a testbench.
 
-    `None` when none of them do — which is a different answer from "the default
-    path does not exist", and the caller must not report the second when the
-    first is true.
+    Order is authoritative and duplicates are removed. Consumers that need one
+    build root take the first; consumers that audit TB substance use the whole
+    set so a trace-only ``sim/tb`` cannot hide a real ``sim_full_stack`` TB (or
+    vice versa).
     """
     cands = []
     if given is not None:
@@ -188,14 +189,28 @@ def resolve_tb_dir(project: Path, given: "str | Path | None" = None):
             cands.append(parent if parent.is_absolute() else project / parent)
     cands += [project / c for c in _TB_DIR_CANDIDATES]
     seen = set()
+    found = []
     for c in cands:
-        k = str(c)
+        try:
+            k = str(c.resolve())
+        except (OSError, RuntimeError):
+            k = str(c)
         if k in seen:
             continue
         seen.add(k)
         if _holds_testbench(c):
-            return c
-    return None
+            found.append(c)
+    return tuple(found)
+
+
+def resolve_tb_dir(project: Path, given: "str | Path | None" = None):
+    """The first canonical location that actually HOLDS a testbench.
+
+    ``None`` when none do. Kept as the one-root face for L10/L12 and build
+    consumers; the candidate set itself lives in :func:`resolve_tb_dirs`.
+    """
+    found = resolve_tb_dirs(project, given)
+    return found[0] if found else None
 
 
 def fpga_early_dir(project: Path) -> Path:

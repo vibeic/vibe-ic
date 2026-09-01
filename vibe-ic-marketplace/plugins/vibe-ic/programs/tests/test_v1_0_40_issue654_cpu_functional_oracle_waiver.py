@@ -1,5 +1,5 @@
-"""ORGANIC #654 — no functional-sim path emits the Step-4 artifact for the
-no-oracle CPU/SoC verification track, so Step 4 hard-FAILs by construction.
+"""ORGANIC #654/#1975 — connectivity evidence is preserved without granting
+functional verification credit.
 
 For verification_track=generic_full_stack (processor/SoC, no command/opcode
 oracle, no L10 golden vectors), reference_tb is WAIVED and only a
@@ -14,10 +14,11 @@ Fix (class-driven): the runner now emits a CONNECTIVITY bridge
 (_emit_connectivity_sim_bridge) carrying verdict CONNECTIVITY_PASS,
 functional_verified=false, capability_gap cap:cpu_functional_oracle, and an
 <evidence> backlink to the real full_stack.log transcript; a new gate program
-cpu_functional_oracle_waiver_check validates it and signals PASS_WITH_WAIVERS
-(rc=3) so flow_compliance_check promotes Step 4 to WAIVED-DEFERRED (Overall
-PASS_WITH_WAIVERS) instead of an opaque missing-file FAIL. A forged waiver
-(no/empty evidence, or functional_verified=true) still FAILs — NO-LEAK.
+cpu_functional_oracle_waiver_check validates it as connectivity-only evidence.
+Issue #1975 supersedes the old waiver policy: a substantiated bridge is now
+blocking INCOMPLETE (rc=1) until a non-vacuous professional functional JUnit
+result exists. A forged record (no/empty evidence, or
+functional_verified=true) also FAILs — NO-LEAK.
 """
 import subprocess
 import sys
@@ -78,13 +79,13 @@ def test_bridge_refuses_empty_transcript(tmp_path):
 
 # ── gate program verdicts ───────────────────────────────────────────────────
 
-def test_gate_passes_with_waivers_on_connectivity_bridge(tmp_path):
+def test_gate_blocks_incomplete_on_connectivity_bridge(tmp_path):
     project, log = _mk_conn_run(tmp_path)
     R._emit_connectivity_sim_bridge(project, log, "soc_top", "no oracle class")
     code, msg = G._evaluate(project)
-    assert code == 3, msg
-    assert "PASS_WITH_WAIVERS" in msg
-    assert "cap:cpu_functional_oracle" in msg
+    assert code == 1, msg
+    assert "INCOMPLETE" in msg
+    assert "No waiver is granted" in msg
 
 
 def test_gate_na_for_genuine_functional_pass(tmp_path):
@@ -161,12 +162,14 @@ def test_gate_cli_exit_code_and_json(tmp_path):
          str(PROG / "cpu_functional_oracle_waiver_check.py"),
          str(project), "--json", str(jp)],
         capture_output=True, text=True)
-    assert r.returncode == 3
+    assert r.returncode == 1
     assert jp.is_file()
     import json
     rep = json.loads(jp.read_text())
-    assert rep["verdict"] == "PASS_WITH_WAIVERS"
-    assert rep["exit_code"] == 3
+    assert rep["verdict"] == "INCOMPLETE"
+    assert rep["enforcement"] == "BLOCKING"
+    assert rep["functional_test_denominator"]["tests_run"] == 0
+    assert rep["exit_code"] == 1
 
 
 # ── end-to-end: flow_compliance_check Step-4 promotion ──────────────────────
@@ -187,16 +190,15 @@ def _step4_gate():
     }
 
 
-def test_step4_promoted_to_waived_deferred_for_no_oracle_cpu(tmp_path):
+def test_step4_fails_incomplete_for_no_oracle_cpu(tmp_path):
     project, log = _mk_conn_run(tmp_path)
     R._emit_connectivity_sim_bridge(project, log, "soc_top", "no oracle class")
     res = F.check_step(project, _step4_gate(), waivers={})
-    # The connectivity-PASS bridge satisfies files_exist AND the waiver gate
-    # promotes the step to WAIVED-DEFERRED (NOT a missing-file FAIL, NOT a
-    # bare PASS that would hide the deferred functional verification).
-    assert res.status == "WAIVED", (res.status, res.reasons)
-    assert any("PASS_WITH_WAIVERS" in r or "WAIVED-DEFERRED" in r
-               for r in res.reasons)
+    # The connectivity-PASS bridge satisfies files_exist, but the functional
+    # evidence gate blocks Step 4 until a non-vacuous oracle result exists.
+    assert res.status == "FAIL", (res.status, res.reasons)
+    assert not any("PASS_WITH_WAIVERS" in r or "WAIVED-DEFERRED" in r
+                   for r in res.reasons)
 
 
 def test_step4_hard_fails_without_any_sim_artifact(tmp_path):

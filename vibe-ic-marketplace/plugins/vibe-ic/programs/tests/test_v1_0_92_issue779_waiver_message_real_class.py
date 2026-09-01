@@ -1,5 +1,5 @@
-"""ORGANIC #779 (P3, cosmetic message-accuracy) — the Step-4 connectivity-waiver
-PASS_WITH_WAIVERS message in cpu_functional_oracle_waiver_check.py hardcoded a
+"""ORGANIC #779/#1975 — the Step-4 connectivity-evidence message in
+cpu_functional_oracle_waiver_check.py hardcoded a
 'generic_full_stack no-oracle CPU/SoC class' literal. After #745 made
 arith_oracle_tb_gen DEFER for serial-parallel multipliers, a
 `digital_arithmetic_primitive` IC routes into this same #654 gate — so the
@@ -9,9 +9,9 @@ message mislabelled it as CPU/SoC even though every STRUCTURED field
 Fix: derive `<track> no-oracle <ic_class> class` from the structured results.xml
 (<verification_track> + the `class '<name>'` token in <waiver_reason>).
 
-§4.05: the verdict / exit-code / capability_gap / evidence / functional_verified
-are byte-identical after the fix — ONLY the human-readable string changes; a
-genuine CPU/SoC class still reads correctly.
+§4.05: the capability_gap / evidence / functional_verified fields remain
+unchanged; #1975 intentionally changes valid connectivity-only rc=3 waiver to
+blocking rc=1 INCOMPLETE. A genuine CPU/SoC class still reads correctly.
 """
 import subprocess
 import sys
@@ -85,20 +85,22 @@ def test_779_label_graceful_fallback_when_fields_absent():
     assert lbl.startswith("generic_full_stack no-oracle")
 
 
-# ── NEW-PATH end-to-end: message names the real non-CPU class, rc unchanged ──
-def test_779_endstate_message_real_class_rc3(tmp_path):
+# ── NEW-PATH end-to-end: message names the real non-CPU class ────────────────
+def test_779_endstate_message_real_class_rc1(tmp_path):
     proj = _mk_project(tmp_path, _bridge_xml("digital_arithmetic_primitive"))
     r = _run(proj)
-    assert r.returncode == 3, r.stdout
+    assert r.returncode == 1, r.stdout
+    assert "INCOMPLETE" in r.stdout
     assert "digital_arithmetic_primitive class" in r.stdout
     assert "CPU/SoC" not in r.stdout
 
 
-# ── §4.05: verdict/cap/evidence path unchanged — a genuine CPU still rc=3 ────
-def test_779_noleak_genuine_cpu_still_rc3(tmp_path):
+# ── §4.05: cap/evidence path unchanged; a genuine CPU also blocks ───────────
+def test_779_noleak_genuine_cpu_still_rc1(tmp_path):
     proj = _mk_project(tmp_path, _bridge_xml("processor_cpu"))
     r = _run(proj)
-    assert r.returncode == 3, r.stdout
+    assert r.returncode == 1, r.stdout
+    assert "INCOMPLETE" in r.stdout
     assert "processor_cpu class" in r.stdout
 
 

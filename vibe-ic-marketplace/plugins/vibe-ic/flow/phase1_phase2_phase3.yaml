@@ -2022,25 +2022,24 @@ steps:
       all_of:
         - files_exist: ["phase2/stage1/sim/results.xml", "phase2/stage1/sim/pass.flag"]
           any_of: true
-        # ORGANIC #654 — connectivity-PASS / functional-DEFERRED capability-gap
-        # waiver for the no-oracle generic_full_stack CPU/SoC class. When the
-        # canonical sim/results.xml is the connectivity bridge the runner emits
-        # for a processor/SoC with no command/opcode oracle + no L10 golden
-        # vectors, this gate (rc=3 PASS_WITH_WAIVERS) promotes Step 4 to
-        # WAIVED-DEFERRED with a reviewable cap:cpu_functional_oracle evidence
-        # pointer — instead of the chain halting on the opaque missing-file
-        # FAIL that was structurally unavoidable for this class. A genuine
-        # functional PASS (oracle bridge) is N/A here (rc=0); a forged waiver
-        # (no/empty evidence, or functional_verified=true) FAILs.
+        # vibe-ic#1975 — connectivity is CONNECTIVITY ONLY. The runner keeps
+        # the reviewable CONNECTIVITY_PASS record + transcript pointer, but it
+        # cannot release the functional-oracle requirement. A real professional
+        # or oracle TB PASS makes this clause rc=0. A substantiated connectivity-
+        # only run is INCOMPLETE/rc=1, just like a forged/broken record is rc=1;
+        # there is no waiver-by-class. professional_tb_gen acts first, and an
+        # unsupported design-specific reference hook is handed to the shipped
+        # testbench-gen expert fallback before Step 4 can pass.
         - optional_program_exit_zero:
             command: "cpu_functional_oracle_waiver_check . --json reports/phase2/gates/cpu_functional_oracle_waiver.json"
             condition_files_exist: ["phase2/stage1/sim/results.xml"]
             absent_condition_reason: >-
               Scoped to a run that produced simulation results. This clause
-              judges a WAIVER filed IN PLACE OF a functional PASS; with no
-              phase2/stage1/sim/results.xml there is no waiver claim to judge,
-              and a forged one is impossible because there is nothing to forge
-              it against. The absence of simulation evidence is step 4's own
+              judges a connectivity record filed IN PLACE OF a functional
+              result; with no phase2/stage1/sim/results.xml there is no
+              connectivity-vs-functional claim to judge, and a forged one is
+              impossible because there is nothing to forge it against. The
+              absence of simulation evidence is step 4's own
               subject and is carried by the UNCONDITIONAL
               vacuous_testbench_check clause and the coverage clauses beside
               this one.
