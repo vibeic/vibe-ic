@@ -8781,6 +8781,57 @@ _ADVISORY_NONBLOCKING_VERDICTS = frozenset({
 })
 
 
+# Issue #1980 wired "a live FAIL in an advisory slot blocks". A REFUSAL THAT
+# EXAMINED NOTHING IS NOT A LIVE FAIL, and this is where that is decided.
+#
+# MEASURED on step 2's first clause, `flow_compliance_check . --stage-id
+# stage_phase1 --strict`, against a tree carrying step 2's own outputs and no
+# Phase-1 documents. Its report says, in its own fields:
+#     counts  {"PASS": 0, "FAIL": 0, "MISSING": 2, ...}
+#     blockers[*].basis  "declared-artefact-absent"
+#     blockers[*].why    "a declared artefact is not present; absence records
+#                         no cause"
+#     stdout             "GATE EXECUTION LEDGER: no program gate was invoked"
+# Not one step executed and not one gate ran, so nothing about the design was
+# examined — and #1980 read the rc=1 as a live finding and blocked the step.
+# That is the mirror of the rule this repo already enforces in the other
+# direction (`gate_zero_denominator_refuses_check`, #564: an empty scan is NOT
+# OBSERVED, never PASS). An empty scan is not a FAIL either.
+#
+# `ZERO_DENOMINATOR` is already in `_reason_taxonomy.INCOMPLETE`, so a refusal
+# classified here lands on `DISCLOSED_INCOMPLETE`: recorded, printed, typed,
+# carried into `advisory_gate_records` — never swallowed, which is #1980's
+# actual invariant — and not blocking. A report with `FAIL > 0`, or one whose
+# blockers name a cause, is a live finding and still BLOCKS.
+def _refusal_examined_nothing(report: Any) -> bool:
+    """Does a refusing report's OWN census say it examined no subject?
+
+    Read off the report contract, never inferred from prose: `counts` is the
+    per-subject verdict census this program writes for every stage run. A
+    refusal is vacuous when that census has a population but records no
+    executed subject at all — no PASS and no FAIL — because then every entry
+    in it is an absence, and an absence records no cause.
+    """
+    if not isinstance(report, dict):
+        return False
+    counts = report.get("counts")
+    if not isinstance(counts, dict):
+        return False
+    # BIND THE KEY TO THE VOCABULARY, not just to the name `counts`. Another
+    # program's `{"errors": 0, "warnings": 3}` would answer `PASS == 0 and
+    # FAIL == 0` too, and would then have its refusal quietly declassified —
+    # a far worse defect than the one this closes. Both status names must be
+    # present for this to be reading a step-verdict census at all.
+    if "PASS" not in counts or "FAIL" not in counts:
+        return False
+    numeric = {k: v for k, v in counts.items() if isinstance(v, int)}
+    if not numeric or sum(numeric.values()) <= 0:
+        # No population is a different fact (nothing to census at all) and is
+        # deliberately not claimed here.
+        return False
+    return numeric.get("PASS", 0) == 0 and numeric.get("FAIL", 0) == 0
+
+
 def _advisory_execution_record(cmd: str, ledger_start: int,
                                ok: bool, out: str,
                                project: Path,
@@ -8834,7 +8885,17 @@ def _advisory_execution_record(cmd: str, ledger_start: int,
             verdict=str(verdict),
             message=_report_reason_text(report) or out)
     true_refusals = _ADVISORY_REFUSAL_VERDICTS - {"BLOCKED"}
-    if norm in true_refusals:
+    if (reason_class is None and norm in true_refusals
+            and _refusal_examined_nothing(report)):
+        # See `_refusal_examined_nothing`: this refusal's own census records
+        # no examined subject, so it is a non-verdict, not a live finding.
+        reason_class = _reason_taxonomy.ZERO_DENOMINATOR
+    if (norm in true_refusals
+            and reason_class != _reason_taxonomy.ZERO_DENOMINATOR):
+        # Narrow on purpose. Only a refusal that examined NOTHING steps aside
+        # here; every other refusal — including one whose reason_class is
+        # EXECUTION_ERROR or BLOCKED_BY_UPSTREAM — keeps #1980's BLOCKING
+        # disposition, because those did reach their subject.
         enforcement = "BLOCKING"
     elif reason_class in _reason_taxonomy.INCOMPLETE:
         enforcement = "DISCLOSED_INCOMPLETE"
@@ -11023,6 +11084,71 @@ def _gate_json_targets(step: Dict[str, Any]) -> Set[str]:
     return targets
 
 
+# The keys a gate program stamps its own identity into, in its `--json`
+# verdict document. DERIVED by running every shipped step whose gate `--json`
+# target is also a declared `required_output` and reading what came out — see
+# `_is_gate_verdict_document`, which records the census. Widen this list by
+# re-taking that measurement, never by adding a key that looks plausible.
+_GATE_DOCUMENT_IDENTITY_KEYS = ("program", "check", "gate", "emitted_by")
+
+
+def _is_gate_verdict_document(path: Path) -> bool:
+    """Does the file at `path` SELF-IDENTIFY as a gate program's own verdict?
+
+    The repo already prefers this reading over a name or a timestamp — see
+    `eda_report_audit._discover`, whose self-document guard is content-based
+    "not name-based" and has a test saying exactly that. Every gate program in
+    this flow writes its `--json` document through the shared emitter, which
+    stamps the emitting program's identity into `program`; a producer's
+    measurement at the same path does not carry it.
+
+    Used to decide whether a declared `required_output` that is also this
+    step's own gate `--json` target is the AUDITOR's output or the RUN's. That
+    question has to be answerable without reference to how many times the audit
+    has run, or the verdict depends on the count of passes — which is the
+    non-idempotence #1981 correctly refused, and then paid for by deleting the
+    file (see `check_step`).
+
+    THE VOCABULARY IS DERIVED FROM THE TREE, NOT GUESSED, and both earlier
+    cuts of this were wrong because they were guessed. MEASURED by running
+    every one of the 22 shipped steps whose gate `--json` target is also a
+    declared `required_output` and reading the top-level keys of the document
+    each one produced: the identity is spelled `program` (14 of them), `check`
+    (`submission_template_check`, `die_finishing_check`), `gate`
+    (`foundry_handoff_audit`, `mixed_signal_top_lvs_run`) or `emitted_by`
+    (`tapeout_precheck`). A `program`-only reader tagged 14 and missed 4 — and
+    one of the four, step 38, then read its own pass-1 document as run evidence
+    and moved MISSING -> PASS on pass 2, which is the exact "MISSING once and
+    PASS forever after" this exists to refuse.
+
+    THE STAMP IS NOT ALWAYS AT THE TOP LEVEL either: `submission_template_check`
+    emits `{"schema": ..., "ingest": ..., "check": {"program": ..., ...}}`, so
+    the scan descends one nesting level into the document's own blocks — and no
+    further, because an identity key buried arbitrarily deep is far more likely
+    to be a payload field than a provenance stamp.
+
+    Conservative in the direction that matters: anything this cannot read as a
+    JSON object carrying one of those stamps is treated as NOT the auditor's,
+    i.e. it stays creditable run evidence. A false positive would silently
+    refuse a real producer's artefact; a false negative only falls back to the
+    absent-before-gate answer this sits beside.
+    """
+    try:
+        data = json.loads(path.read_text(errors="replace"))
+    except (OSError, ValueError):
+        return False
+    if not isinstance(data, dict):
+        return False
+
+    def _stamped(node: Any) -> bool:
+        if not isinstance(node, dict):
+            return False
+        return any(isinstance(node.get(k), str) and node[k].strip()
+                   for k in _GATE_DOCUMENT_IDENTITY_KEYS)
+
+    return _stamped(data) or any(_stamped(v) for v in data.values())
+
+
 def _outputs_read_by_in_scope_steps(sid, my_outputs, manifest):
     """Which of `my_outputs` does an IN-SCOPE step declare it READS?
 
@@ -11544,11 +11670,17 @@ def check_step(project: Path, step: Dict[str, Any], waivers: Dict,
     # A `required_outputs` entry that is ALSO one of this step's own gate
     # `--json` targets is the one shape where evaluating the step CREATES the
     # artefact whose presence then decides it. Which entries were absent when
-    # the audit began is recorded HERE, before the gate runs, because that is
-    # the only moment at which the question "did the RUN produce this?" can
-    # still be answered — after the gate it is unanswerable, and the post-gate
-    # probe below has always been answering it with the auditor's own output.
-    # `_audit_produced` (computed after the gate) is that answer, kept.
+    # the audit began is recorded HERE, before the gate runs — after the gate
+    # that particular fact is gone, and the post-gate probe used to answer
+    # "did the RUN produce this?" with the auditor's own output.
+    #
+    # It is NOT the whole answer, and treating it as one is what made the
+    # verdict depend on how many times the auditor had run: on pass 2 the
+    # artefact is no longer absent-before-gate, so a timing-only reading
+    # credits the document pass 1 refused. `_audit_produced`, computed after
+    # the gate, is `absent-before` UNION `holds a gate verdict document` —
+    # see `_is_gate_verdict_document` for why the second half is read from the
+    # content and how its vocabulary was measured.
     _declared_self_written = sorted(set(outputs) & _gate_json_targets(step))
     _absent_before_gate = [rel for rel in _declared_self_written
                            if not (project / rel).exists()]
@@ -11561,29 +11693,28 @@ def check_step(project: Path, step: Dict[str, Any], waivers: Dict,
         # closes the per-step optional/required gate wiring gap. No-op when
         # skip_analog is False.
         passed, reasons = _evaluate_gate(project, gate, skip_analog=skip_analog)
-        _audit_produced = [rel for rel in _absent_before_gate
-                           if (project / rel).exists()]
-        if _audit_produced:
-            # IDEMPOTENCE. Refusing the audit's own output is only a
-            # measurement if the NEXT audit gets the same answer. Left on
-            # disk, the file the gate just wrote is indistinguishable from run
-            # evidence on the second pass, so the audit would report MISSING
-            # once and PASS forever after — a verdict that depends on how many
-            # times the auditor has run. Remove exactly what this invocation
-            # created (never a file that was already there, which is why
-            # `_absent_before_gate` is captured BEFORE the gate) and leave the
-            # tree as the run left it.
-            for _rel in list(_audit_produced):
-                try:
-                    (project / _rel).unlink()
-                except OSError as _exc:
-                    # Unmeasured is not zero: say so rather than let a stale
-                    # file quietly become next run's evidence.
-                    result.reasons.append(
-                        f"WARNING: could not remove audit-created output "
-                        f"{_rel} ({_exc}); this invocation still excludes it, "
-                        f"but a later audit cannot distinguish the leftover "
-                        f"from pre-existing run evidence")
+        # IDEMPOTENCE, AND WHERE #1981 BOUGHT IT FROM THE WRONG BUDGET.
+        # Refusing the audit's own output is only a measurement if the NEXT
+        # audit gets the same answer. #1981 bought that by DELETING what the
+        # gate had just written, which made the auditor mutate the tree it
+        # audits and destroyed the `--json` audit trail the flow DECLARES as a
+        # `required_output` — the exact artefact PR #473's lineage exists to
+        # make the run produce. It also only half worked: a leftover from an
+        # audit that was killed, or whose unlink raised, still read as run
+        # evidence on the next pass.
+        #
+        # The same idempotence, taken from the right budget: classify by WHAT
+        # THE DOCUMENT IS, not by when it appeared. A declared output that is
+        # one of this step's own gate `--json` targets and holds a program
+        # verdict document is the auditor's own output whichever pass wrote it,
+        # so pass 1 and pass 2 reach the same verdict with nothing deleted, and
+        # a producer's artefact at the same path (not a gate verdict document)
+        # is still credited. The auditor reads the tree; it does not edit it.
+        _audit_produced = [
+            rel for rel in _declared_self_written
+            if (project / rel).exists()
+            and (rel in _absent_before_gate
+                 or _is_gate_verdict_document(project / rel))]
         # Wave 93 — VACUOUS_PASS verdict tier promotion. If the gate
         # passed AND every reason carries the __VACUOUS_HINT__ marker
         # (and at least one was emitted), the step ran but every
@@ -11946,8 +12077,21 @@ def check_step(project: Path, step: Dict[str, Any], waivers: Dict,
     #
     # The legacy `strict_audit_evidence` argument remains accepted so older
     # callers do not break, but it cannot weaken this invariant. Every
-    # audit-created target is tagged below, excluded from evidence, and left
-    # in `missing_entries` so a PASS-tier gate verdict becomes MISSING.
+    # audit-created target is tagged below, struck from `evidence`, and
+    # demoted out of every done-claim tier. It is NOT reported as a missing
+    # required_output: the file is on disk — the flow declares the audit trail
+    # and the gate writes it — and what is absent is a PRODUCER, which the
+    # `AUDIT-CREATED OUTPUT REFUSED` line says in those words.
+    if _audit_produced:
+        # `result.evidence` is collected from the tree BEFORE the gate runs, so
+        # on the FIRST pass an audit-created artefact is simply not there and
+        # never enters it. On the SECOND pass the same artefact IS there, gets
+        # collected like any other file, and would be credited as run evidence
+        # — the count-of-passes verdict again, arriving through the evidence
+        # list instead of through `missing_entries`. Struck here, so the two
+        # passes agree.
+        _refused = set(_audit_produced)
+        result.evidence = [e for e in result.evidence if e not in _refused]
     if _audit_produced and result.output_binding:
         _ob = result.output_binding
         for _sp in _bind_specs:
@@ -11958,14 +12102,25 @@ def check_step(project: Path, step: Dict[str, Any], waivers: Dict,
                 _sp.pop("credited", None)
         _ob["codes"] = sorted({str(d.get("code")) for d in _bind_specs})
         _ob["notes"] = (_ob["notes"] + [
-            f"{rel}: audit_created; excluded from run evidence because it "
-            f"was absent at audit start and this step's own gate wrote it"
+            f"{rel}: audit_created; excluded from run evidence because it is "
+            f"this step's own gate `--json` target and holds that gate's "
+            f"verdict document, not a producer's measurement"
             for rel in _audit_produced
         ])[:12]
     if missing_entries:
         _gate_written = _gate_json_targets(step)
         _still_missing: List[str] = []
         for pat in missing_entries:
+            if pat in _audit_produced:
+                # PRESENT, and refused: two different facts, and #1981 fused
+                # them. "required_outputs missing" is a claim about the TREE,
+                # and the tree has this file — the flow declares it and the
+                # gate wrote it. What is absent is a PRODUCER, and that is
+                # disclosed on its own line below and demotes the status
+                # there. Reporting a file that exists as missing sent every
+                # reader looking for it, and made the declaration the flow
+                # carries unsatisfiable on any evaluation.
+                continue
             if pat in _gate_written and pat not in _audit_produced:
                 hits = [h for sp in (p.strip() for p in pat.split(" OR "))
                         for h in _glob_first(project, sp)]
@@ -12009,13 +12164,14 @@ def check_step(project: Path, step: Dict[str, Any], waivers: Dict,
     if _audit_produced:
         result.reasons.append(
             f"SELF-CERTIFIED EVIDENCE EXCLUDED (audit_created) "
-            f"{_audit_produced} — this step's own gate created these declared "
-            f"output(s) during THIS audit; they were absent when it began, so "
-            f"they are evidence the auditor authored, not evidence the run "
-            f"produced. PRODUCER GAP: no pre-audit producer supplied these "
-            f"paths; wire them into the owning runner before claiming this "
-            f"step complete. Refused by default and excluded from credited "
-            f"run evidence.")
+            f"{_audit_produced} — these declared output(s) hold this step's "
+            f"OWN gate's verdict document, so they are evidence the auditor "
+            f"authored, not evidence the run produced. They are PRESENT (the "
+            f"flow declares the audit trail and the gate writes it); what is "
+            f"absent is a producer. PRODUCER GAP: no pre-audit producer "
+            f"supplied these paths; wire them into the owning runner before "
+            f"claiming this step complete. Refused as run evidence and "
+            f"excluded from the credited set on every pass alike.")
 
     # v1.6.269 (#126) — ENV_UNAVAILABLE fallback promotion. If the
     # ── required_outputs is ALL-of-N: a gate may not certify a step done
@@ -12082,6 +12238,22 @@ def check_step(project: Path, step: Dict[str, Any], waivers: Dict,
             result.reasons.append(
                 "entry manifest present but does NOT excuse this step: "
                 + str(_verdict.get("reason")))
+
+    # #1981's INVARIANT, kept, and now carried by the fact that actually
+    # supports it. A declared output holding this step's own gate verdict
+    # document is refused as run evidence above; the refusal has to reach the
+    # STATUS too or the step still reads done. It is deliberately NOT routed
+    # through `missing_entries`: the file is on disk, and calling a present
+    # file missing is a false statement about the tree that also makes the
+    # flow's own declaration unsatisfiable on any evaluation.
+    if _T.is_done_claim(result.status) and _audit_produced:
+        result.status = "MISSING"
+        result.reasons.append(
+            f"AUDIT-CREATED OUTPUT REFUSED: {_audit_produced} — present, but "
+            f"written by this step's own gate rather than by the run, so the "
+            f"step has no run evidence for it. This verdict does not depend "
+            f"on how many times the audit has run: the same document is "
+            f"refused on every pass.")
 
     if _T.is_done_claim(result.status) and missing_entries:
         result.status = "MISSING"

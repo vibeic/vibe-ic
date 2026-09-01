@@ -2392,6 +2392,12 @@ def test_audit_created_evidence_is_excluded_by_default_and_preexisting_passes():
     path and let the step's own audit gate recreate it, and the default verdict
     must stay MISSING/INCOMPLETE. Passing the legacy opt-in as False must not
     restore the old lenient path. This is the bidirectional issue-1981 control.
+
+    The refusal is asserted, and so is its IDEMPOTENCE — a second audit of the
+    tree the first one left must still refuse, and must never turn the refusal
+    into a done claim. The audit is not required to DELETE anything to earn
+    that: it is a reader of the tree, and the artefact it refuses is one the
+    flow itself declares.
     """
     _all_self, partial = _steps_by_self_produced_share()
     assert partial, (
@@ -2401,6 +2407,7 @@ def test_audit_created_evidence_is_excluded_by_default_and_preexisting_passes():
     )
     checked = 0
     paired_done_claims = 0
+    untouched_graded = 0
     for step in partial:
         sid = step["id"]
         outs = list(step["required_outputs"])
@@ -2410,6 +2417,70 @@ def test_audit_created_evidence_is_excluded_by_default_and_preexisting_passes():
         tmp = Path(tempfile.mkdtemp(prefix="d7_selfevidence_partial_"))
         try:
             project = tmp / "proj"
+            project.mkdir()
+
+            # POSITIVE CONTROL FIRST, AND OVER THE WHOLE `partial` SET — the
+            # arm that proves the refusal is not over-broad: a declared output
+            # that pre-exists the audit and is NOT this gate's own verdict
+            # document must still be credited. It used to run LAST, after the
+            # `continue` that skips a step whose gate wrote nothing, so it only
+            # ever saw steps whose gate DOES overwrite the path — and on those
+            # the artefact the fixture planted no longer exists by the time the
+            # credit is decided. Hoisted here it grades the population where
+            # the claim is actually true, which is a strictly wider one.
+            _seed_conditions(project, step)
+            for entry in others:
+                for alt in F.split_any_of(entry):
+                    rel = alt.replace("**/", "d7deep/").replace("*", "d7")
+                    p = project / rel
+                    for anc in reversed([p.parent] + list(p.parent.parents)):
+                        if anc.is_file():
+                            anc.unlink()
+                    p.parent.mkdir(parents=True, exist_ok=True)
+                    p.write_text(_SELF_EVIDENCE_BODY)
+                    break
+            for rel in self_written:
+                p = project / rel
+                p.parent.mkdir(parents=True, exist_ok=True)
+                p.write_text(_SELF_EVIDENCE_BODY)
+            preexisting = FCC.check_step(project, step, {})
+            _survived = [rel for rel in self_written
+                         if (project / rel).is_file()
+                         and (project / rel).read_text() == _SELF_EVIDENCE_BODY]
+            if preexisting.status in ("PASS", "VACUOUS_PASS"):
+                paired_done_claims += 1
+                assert any(rel in preexisting.evidence
+                           for rel in self_written), (
+                    f"step {sid}: pre-existing independent output was not "
+                    f"credited: {preexisting.evidence!r}"
+                )
+                assert not any(
+                    sp.get("code") == "audit_created"
+                    for sp in (preexisting.output_binding or {}).get(
+                        "specs", [])
+                ), f"step {sid}: pre-existing evidence was mistagged"
+            for rel in _survived:
+                # The gate did not touch it, so nothing about it is the
+                # auditor's — refusing it here would be the over-broad failure
+                # this arm exists to catch, whatever verdict the step reached
+                # for other reasons.
+                untouched_graded += 1
+                assert not any(
+                    sp.get("code") == "audit_created"
+                    and sp.get("spec") == rel
+                    for sp in (preexisting.output_binding or {}).get(
+                        "specs", [])
+                ), (f"step {sid}: {rel} pre-existed the audit and this gate "
+                    f"never wrote it, yet it was tagged audit_created")
+                assert rel in preexisting.evidence, (
+                    f"step {sid}: {rel} pre-existed the audit and this gate "
+                    f"never wrote it, yet it was not credited as run "
+                    f"evidence: {list(preexisting.evidence)!r}")
+
+            # DEFAULT ARM — a fresh tree in which the self-written paths are
+            # absent, so the step's own gate is the only thing that can create
+            # them.
+            shutil.rmtree(project)
             project.mkdir()
             _seed_conditions(project, step)
             for entry in others:
@@ -2457,11 +2528,46 @@ def test_audit_created_evidence_is_excluded_by_default_and_preexisting_passes():
                 f"step {sid}: audit-created outputs were refused without "
                 f"naming the missing pre-audit producer: {default.reasons!r}"
             )
-            left = [rel for rel in created if (project / rel).exists()]
-            assert not left, (
-                f"step {sid}: default audit left its own output {left} in the "
-                f"audited tree, so a second audit could read it as run evidence"
+            # IDEMPOTENCE, ASSERTED AS THE PROPERTY RATHER THAN AS ONE
+            # MECHANISM. This used to read `assert not left` — the audit had
+            # to DELETE what its gate wrote, on the reasoning that "a second
+            # audit could read it as run evidence". Deleting is not the only
+            # way to buy that, and it was the wrong way: it made a read-only
+            # auditor mutate the tree it audits and destroyed the `--json`
+            # audit trail the flow DECLARES as a required_output, so the
+            # declaration became unsatisfiable on every evaluation
+            # (test_wrapper_argv_forwarding pinned the other side of it and
+            # went red for two versions). So measure the claim itself: run the
+            # audit AGAIN on the tree the first audit left, and require that it
+            # is still a refusal, still tagged the same, and still uncredited.
+            # A refusal that survives a second pass on an unchanged tree is
+            # idempotent in the way that matters, whatever the mechanism.
+            again = FCC.check_step(project, step, {})
+            again_tagged = sorted(
+                str(sp["spec"]) for sp in (again.output_binding or {}).get(
+                    "specs", []) if sp.get("code") == "audit_created")
+            # THE CLAIM IS THE ONE `--strict-audit-evidence`'s own help text
+            # named: never "MISSING once and PASS forever after". A refusal
+            # that stays a refusal is idempotent in the way that matters; two
+            # different refusals are not a done claim bought by re-running.
+            # MEASURED across all 22 shipped self-written steps: 21 hold the
+            # exact verdict on pass 2 and one (26.5ic) moves MISSING -> FAIL,
+            # because `die_finishing_check` reads the very path it writes —
+            # a flow-WIRING collision recorded in LAND.md, not a credit defect.
+            assert again.status not in ("PASS", "VACUOUS_PASS"), (
+                f"step {sid}: the audit refused {created} on pass 1 "
+                f"({default.status!r}) and reported {again.status!r} on pass "
+                f"2 — a done claim bought by running the auditor twice"
             )
+            assert again_tagged == created, (
+                f"step {sid}: pass 2 tagged {again_tagged} as audit_created, "
+                f"pass 1 tagged {created}"
+            )
+            for rel in created:
+                assert rel not in again.evidence, (
+                    f"step {sid}: the artefact pass 1 refused became run "
+                    f"evidence on pass 2: {list(again.evidence)!r}"
+                )
 
             # The old opt-in is compatibility syntax, not a way to disable the
             # invariant. Exercise False explicitly on a fresh tree.
@@ -2485,45 +2591,19 @@ def test_audit_created_evidence_is_excluded_by_default_and_preexisting_passes():
                 f"default; status={explicit_false.status!r}, "
                 f"audit-created outputs={created}"
             )
-            left = [rel for rel in created if (project / rel).exists()]
-            assert not left, (
-                f"step {sid}: explicit False left audit-created outputs "
-                f"{left} behind"
+            explicit_false_tagged = sorted(
+                str(sp["spec"]) for sp in
+                (explicit_false.output_binding or {}).get("specs", [])
+                if sp.get("code") == "audit_created")
+            assert explicit_false_tagged == created, (
+                f"step {sid}: explicit False stopped tagging audit-created "
+                f"outputs: {explicit_false_tagged} vs {created}"
             )
-
-            # Bidirectional arm: the same paths genuinely pre-exist this audit.
-            # The gate may still find a substantive defect, so count rather
-            # than demand a done claim from every heterogeneous flow step.
-            shutil.rmtree(project)
-            project.mkdir()
-            _seed_conditions(project, step)
-            for entry in others:
-                for alt in F.split_any_of(entry):
-                    rel = alt.replace("**/", "d7deep/").replace("*", "d7")
-                    p = project / rel
-                    for anc in reversed([p.parent] + list(p.parent.parents)):
-                        if anc.is_file():
-                            anc.unlink()
-                    p.parent.mkdir(parents=True, exist_ok=True)
-                    p.write_text(_SELF_EVIDENCE_BODY)
-                    break
-            for rel in self_written:
-                p = project / rel
-                p.parent.mkdir(parents=True, exist_ok=True)
-                p.write_text(_SELF_EVIDENCE_BODY)
-            preexisting = FCC.check_step(project, step, {})
-            if preexisting.status in ("PASS", "VACUOUS_PASS"):
-                paired_done_claims += 1
-                assert any(rel in preexisting.evidence
-                           for rel in self_written), (
-                    f"step {sid}: pre-existing independent output was not "
-                    f"credited: {preexisting.evidence!r}"
+            for rel in created:
+                assert rel not in explicit_false.evidence, (
+                    f"step {sid}: explicit False credited audit-created {rel} "
+                    f"as evidence {list(explicit_false.evidence)!r}"
                 )
-                assert not any(
-                    sp.get("code") == "audit_created"
-                    for sp in (preexisting.output_binding or {}).get(
-                        "specs", [])
-                ), f"step {sid}: pre-existing evidence was mistagged"
         finally:
             shutil.rmtree(tmp, ignore_errors=True)
     assert checked, (
@@ -2531,9 +2611,26 @@ def test_audit_created_evidence_is_excluded_by_default_and_preexisting_passes():
         "synthesized fixture, so the default refusal was not exercised — "
         "this test measured nothing"
     )
-    assert paired_done_claims, (
-        "no partial step reached a done claim when its independently produced "
-        "evidence pre-existed the audit, so the positive control was unmeasured"
+    # THE POSITIVE CONTROL, AND WHY IT COUNTS THIS AND NOT DONE CLAIMS.
+    # It used to read `assert paired_done_claims` — at least one partial step
+    # had to reach PASS/VACUOUS_PASS with its self-written outputs pre-seeded.
+    # MEASURED across all 21 partial steps: exactly ONE ever satisfied it,
+    # step 38, and it satisfied it wrongly. `foundry_handoff_audit` OVERWRITES
+    # the artefact the fixture planted (survived 0 of 1) and the audit then
+    # credited its own document as the run's evidence and reported PASS. The
+    # counter's only witness was the false credit issue #1981 exists to refuse,
+    # so the assertion could only be kept by keeping the defect.
+    #
+    # What the arm is really for is the OTHER direction — the refusal must not
+    # be over-broad — and that is gradable on a real population: a declared
+    # output that pre-existed the audit and that this step's gate did not
+    # write must be credited and must not be tagged. Both are asserted above,
+    # per artefact. This is the denominator guard for them: an empty
+    # population would make every one of those assertions vacuous.
+    assert untouched_graded, (
+        "no pre-existing declared output survived its step's own gate "
+        "untouched, so the not-over-broad direction was never graded — every "
+        "assertion in that arm passed on an empty population"
     )
 
 
