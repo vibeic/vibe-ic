@@ -79,6 +79,22 @@ def _coverage(project: Path, step: str, verdict: str = "PASS") -> Path:
     return p
 
 
+def _l20_applicability(project: Path, applicability: str) -> Path:
+    """Write the design-owned DFT applicability declaration consumed by flow."""
+    path = project / "phase1/generated_docs/L20_DFT_SCAN_TOPOLOGY.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({
+        "doc_id": "L20",
+        "applicability": applicability,
+        "fields": ({"dft_present": False, "scan_chains": []}
+                   if applicability == "NOT_APPLICABLE" else
+                   {"dft_present": True}),
+        "extraction_status": "EXTRACTED",
+        "extraction_evidence": {"source": "synthetic neutral fixture"},
+    }))
+    return path
+
+
 def _record(project: Path, step: str) -> Path:
     return project / R._ATPG_NOT_RUN_REL[step]
 
@@ -733,9 +749,10 @@ def test_a_routed_extracted_design_with_no_dft_does_not_arm_dt2(tmp_path):
     """THE LEGITIMATE INPUT, and the control that stops the test above from
     being satisfied by an over-eager condition.
 
-    A design that routed and extracted parasitics but carries no DFT at all is
-    the case where DT1 itself legitimately self-skips: there is no scan cut, so
-    no at-speed ATPG was ever asked for. DT2 must self-skip alongside it.
+    A design that routed and extracted parasitics and explicitly declares DFT
+    NOT_APPLICABLE is the case where DT1 legitimately self-skips. DT2 must
+    self-skip alongside it and cite that design-owned declaration. Merely
+    omitting a scan cut is not a no-DFT declaration (vibe-ic#1976).
 
     MUTATION THIS CATCHES: adding `phase3/stage3/extracted/*.spef` to DT2's
     any-of condition as "DT1's cut_netlist.v analogue". The SPEF alone then
@@ -744,6 +761,7 @@ def test_a_routed_extracted_design_with_no_dft_does_not_arm_dt2(tmp_path):
     false clean above. Measured: with the SPEF branch, DT2 MISSING rc 1;
     without it, DT2 SKIPPED-CONDITION rc 0.
     """
+    declaration = _l20_applicability(tmp_path, "NOT_APPLICABLE")
     spef = tmp_path / "phase3/stage3/extracted/top.spef"
     spef.parent.mkdir(parents=True, exist_ok=True)
     spef.write_text('*SPEF "IEEE 1481-1998"\n')
@@ -757,6 +775,8 @@ def test_a_routed_extracted_design_with_no_dft_does_not_arm_dt2(tmp_path):
         "a routed+extracted design with NO DFT armed DT2 and took a hard "
         "MISSING for a grade no producer was ever asked for:\n"
         + doc["_stdout"])
+    dt2 = next(step for step in doc["steps"] if str(step.get("id")) == "DT2")
+    assert str(declaration.relative_to(tmp_path)) in "\n".join(dt2["reasons"]), dt2
     assert doc["counts"]["MISSING"] == 0, doc["_stdout"]
     assert doc["overall"] == "PASS", doc["_stdout"]
     assert rc == 0, doc["_stdout"]
@@ -818,27 +838,20 @@ def test_dt2_arms_and_goes_red_when_its_own_grade_is_absent(tmp_path):
     assert rc == 1, doc["_stdout"]
 
 
-def test_dt2_defers_when_dt1_produced_no_grade_and_dt1_carries_the_red(tmp_path):
+def test_dt2_blocks_when_dt1_produced_no_grade_and_names_the_dependency(tmp_path):
     """The tree `test_dt2_arms_and_goes_red_when_its_own_grade_is_absent` used
     to use, kept as its own case so nothing is lost by that test gaining DT1's
     grade.
 
     Scan cut + SPEF + routed netlist, and NO grade from EITHER at-speed step.
-    DT2's condition now names DT1's declared grade, so DT2 waits — and the tree
-    is still red, because DT1 armed on the scan cut and went MISSING for the
-    grade IT owes. One defect, one red step, and the exit code is unchanged.
+    DT2's condition names DT1's declared grade. Once the scan cut arms DT1,
+    DT2's absent trigger is no longer design inapplicability: DT2 is MISSING,
+    blocked by DT1, and names the grade DT1 failed to deliver (#1976).
 
-    WHAT THIS PINS: the red must not evaporate when DT2 stops double-reporting
-    its upstream's failure. If a future edit makes DT1 skip here too, this test
-    goes green-on-nothing and `overall == "FAIL"` catches it.
-
-    MUTATION THIS CATCHES: dropping `reports/phase2/dft/transition_coverage.json`
-    from DT2's condition and leaving only the SPEF. DT2 would then arm on any
-    routed+extracted tree, including a design with no DFT at all — the false
-    alarm `test_a_routed_extracted_design_with_no_dft_does_not_arm_dt2` refuses
-    — while THIS tree would go MISSING at both DT1 and DT2 and look unchanged.
-    Read the two together: this one says the red survives, that one says it does
-    not spread.
+    MUTATION THIS CATCHES: treating a missing dependency artefact as a plain
+    condition skip even after its producer ran. Read this beside
+    `test_a_routed_extracted_design_with_no_dft_does_not_arm_dt2`: an explicit
+    no-DFT declaration skips, while an attempted DFT step blocks.
     """
     _cut(tmp_path)
     spef = tmp_path / "phase3/stage3/extracted/top.spef"
@@ -852,8 +865,13 @@ def test_dt2_defers_when_dt1_produced_no_grade_and_dt1_carries_the_red(tmp_path)
     assert _status_of(doc, "DT1") == "MISSING", (
         "DT1 armed on the scan cut and owes a transition grade this tree does "
         "not have; it must carry the red:\n" + doc["_stdout"])
-    assert _status_of(doc, "DT2") == "SKIPPED-CONDITION", (
-        "DT2 did not defer to the upstream grade it declares:\n"
+    assert _status_of(doc, "DT2") == "MISSING", (
+        "DT2 treated DT1's missing grade as design inapplicability:\n"
         + doc["_stdout"])
+    dt2 = next(step for step in doc["steps"] if str(step.get("id")) == "DT2")
+    assert dt2["cascade_note"] == "blocked-by-upstream(DT1)", dt2
+    reason = "\n".join(dt2["reasons"])
+    assert "step DT1" in reason, reason
+    assert "reports/phase2/dft/transition_coverage.json" in reason, reason
     assert doc["overall"] == "FAIL", doc["_stdout"]
     assert rc == 1, doc["_stdout"]

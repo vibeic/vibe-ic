@@ -4827,6 +4827,16 @@ steps:
   - id: DT2
     name: "Path-delay-fault (at-speed, timing-graded) ATPG"
     stage: stage2
+    # A missing trigger is N/A only when the design's own DFT layer says so.
+    # Otherwise these are declared dependency artefacts: their absence means
+    # the upstream step did not deliver what DT2 consumes, and the compliance
+    # report resolves it to MISSING + blocked-by-upstream with the step and
+    # artefact named. This separates a no-DFT design from attempted/pre-route
+    # DFT instead of making both SKIPPED-CONDITION (vibe-ic#1976).
+    condition_kind: dependency_required
+    condition_not_applicable:
+      l_doc: L20
+      applicability: [NOT_APPLICABLE, N/A, NA]
     condition:
       # TWO triggers, and they are exactly this step's own `blocks_on: [DT1, 22]`
       # written as artefacts: DT1's at-speed grade, and step 22's post-route
@@ -4965,9 +4975,16 @@ steps:
   - id: DT3
     name: "Small-delay-defect (SDD) at-speed grade"
     stage: stage2
+    # Same explicit-N/A/dependency split as DT2. If DT2 fails or never emits
+    # its grade, DT3 is blocked by DT2; it is not silently inapplicable.
+    condition_kind: dependency_required
+    condition_not_applicable:
+      l_doc: L20
+      applicability: [NOT_APPLICABLE, N/A, NA]
     condition:
-      # Fuses DT1 transition faults + DT2 per-path slack — self-skips
-      # (NOT_APPLICABLE) whenever DT2 has not produced its coverage.
+      # Fuses DT1 transition faults + DT2 per-path slack. It self-skips only
+      # for the explicit design declaration above; a missing upstream grade is
+      # a named dependency block.
       files_exist: ["reports/phase2/dft/path_delay_coverage.json",
                     "reports/phase2/dft/transition_coverage.json"]
     programs:

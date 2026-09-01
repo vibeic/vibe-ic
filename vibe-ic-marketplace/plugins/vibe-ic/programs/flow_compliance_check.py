@@ -76,7 +76,7 @@ import sys
 from dataclasses import dataclass, field, asdict
 from pathlib import Path
 from types import MappingProxyType
-from typing import Any, Dict, List, Mapping, Optional, Set, Tuple
+from typing import Any, Dict, List, Mapping, Optional, Sequence, Set, Tuple
 from concurrent.futures import ThreadPoolExecutor
 import _path_layout as _pl
 import _reused_ip_predicate as _reused_ip
@@ -85,6 +85,7 @@ import _evidence_independence as _ev_ind  # #524
 import _sim_results_bridge as _srb
 import _gate_invocation
 import _watchdog
+import l_doc_consumer_contract as _ldoc
 # vibe-ic#634 — the ONE classification of verdict words, shared with
 # `flow_step_execution_coverage_check` so a tier added here cannot be
 # unknown to the guard that adjudicates dependency ordering.
@@ -9181,6 +9182,169 @@ def _check_condition(project: Path, condition: Dict[str, Any]) -> bool:
     return True
 
 
+def _condition_na_declaration(
+        project: Path, policy: Any) -> Optional[Tuple[str, str]]:
+    """Return the cited design declaration that makes a condition N/A.
+
+    ``condition_not_applicable`` is flow metadata, not a step-id table in this
+    program.  The flow names the L-document and the explicit applicability
+    values that stand the step down.  Missing, unparseable and un-extracted
+    documents return ``None``: absence of a declaration is not a declaration
+    of absence.
+    """
+    if not isinstance(policy, dict):
+        return None
+    doc_id = str(policy.get("l_doc") or "").strip()
+    allowed = {
+        str(v).strip().upper().replace("-", "_")
+        for v in (policy.get("applicability") or [])
+        if str(v).strip()
+    }
+    if not doc_id or not allowed:
+        return None
+    try:
+        path, doc = _ldoc.load_l_doc(project, doc_id)
+    except Exception:
+        return None
+    if path is None or not isinstance(doc, dict):
+        return None
+    raw = str(_ldoc.applicability_of(doc) or "").strip()
+    normal = raw.upper().replace("-", "_")
+    if normal not in allowed:
+        return None
+    try:
+        cited = str(path.relative_to(project))
+    except (ValueError, OSError):
+        cited = str(path)
+    return cited, raw
+
+
+def _declared_output_branches(spec: Any) -> List[str]:
+    """The exact artefact branches of one ``required_outputs`` entry."""
+    if not isinstance(spec, str):
+        return []
+    return [part.strip() for part in spec.split(" OR ") if part.strip()]
+
+
+def _condition_dependency_producer(
+        step: Dict[str, Any], pattern: str,
+        step_specs: Mapping[str, Dict[str, Any]]) -> Optional[str]:
+    """Nearest ``blocks_on`` ancestor that declares ``pattern`` as output.
+
+    The relation is derived from the flow's existing dependency graph and
+    output declarations.  A parallel hand-maintained pattern-to-step table
+    would drift the first time either side of the flow changes.
+    """
+    queue = [str(s) for s in (step.get("blocks_on") or [])]
+    seen: Set[str] = set()
+    while queue:
+        sid = queue.pop(0)
+        if sid in seen:
+            continue
+        seen.add(sid)
+        spec = step_specs.get(sid) or {}
+        branches = {
+            branch
+            for output in (spec.get("required_outputs") or [])
+            for branch in _declared_output_branches(output)
+        }
+        if pattern in branches:
+            return sid
+        queue.extend(str(p) for p in (spec.get("blocks_on") or []))
+    direct = [str(s) for s in (step.get("blocks_on") or [])]
+    return direct[0] if len(direct) == 1 else None
+
+
+def _resolve_dependency_condition_results(
+        project: Path, results: Sequence[StepResult],
+        flow_steps: Sequence[Dict[str, Any]]) -> None:
+    """Classify unmet dependency conditions after upstream verdicts exist.
+
+    A plain ``condition_files_exist`` answers only whether a step should be
+    dispatched.  It cannot distinguish a design-declared inapplicable track
+    from a required upstream artefact that is absent because its producer
+    failed.  Steps opting into ``condition_kind: dependency_required`` make
+    that distinction here, after all independent step checks have completed:
+
+    * a cited ``condition_not_applicable`` declaration keeps the honest
+      ``SKIPPED-CONDITION`` tier;
+    * otherwise the step becomes the flow's established dependency state —
+      ``MISSING`` plus ``blocked-by-upstream(<producer>)`` — and names every
+      absent artefact and the producer that declares it.
+
+    Mutates ``results`` in place before the ordinary cascade-attribution pass.
+    It never promotes a verdict and never changes a satisfied condition.
+    """
+    specs = {
+        str(step.get("id")): step
+        for step in flow_steps
+        if isinstance(step, dict) and step.get("id") is not None
+    }
+    by_id = {str(result.id): result for result in results}
+
+    for result in results:
+        step = specs.get(str(result.id))
+        if not step or step.get("condition_kind") != "dependency_required":
+            continue
+        condition = step.get("condition") or {}
+        if _check_condition(project, condition):
+            continue
+        # Only the condition-generated skip is eligible. A run-mode or
+        # class-level skip has a different owner and must not be rewritten.
+        if result.status != "SKIPPED-CONDITION" or not any(
+                str(reason).startswith("condition not met:")
+                for reason in result.reasons):
+            continue
+
+        missing = [
+            str(pattern)
+            for pattern in (condition.get("files_exist") or [])
+            if not _condition_pattern_satisfied(project, str(pattern))
+        ]
+        declaration = _condition_na_declaration(
+            project, step.get("condition_not_applicable"))
+        result.reasons = [
+            reason for reason in result.reasons
+            if not str(reason).startswith("condition not met:")
+        ]
+        if declaration is not None:
+            path, value = declaration
+            result.reasons.insert(0, (
+                f"design-declared NOT_APPLICABLE: {path} records "
+                f"applicability={value!r}; condition remains "
+                f"SKIPPED-CONDITION. Missing dependency artefact(s): "
+                + (", ".join(missing) if missing else "none")
+            ))
+            continue
+
+        blocked: List[Tuple[str, str, str]] = []
+        for pattern in missing:
+            producer = _condition_dependency_producer(step, pattern, specs)
+            producer_label = producer or "UNDECLARED"
+            upstream = by_id.get(producer_label)
+            upstream_status = (upstream.status if upstream is not None
+                               else "NOT_EVALUATED")
+            blocked.append((producer_label, pattern, upstream_status))
+
+        result.status = "MISSING"
+        if blocked and blocked[0][0] != "UNDECLARED":
+            result.cascade_note = f"blocked-by-upstream({blocked[0][0]})"
+        if blocked:
+            for producer, pattern, upstream_status in blocked:
+                result.reasons.append(
+                    f"blocked-by-upstream(step {producer}): required dependency "
+                    f"artefact {pattern!r} is missing; upstream status="
+                    f"{upstream_status}. No explicit design not-applicable "
+                    f"declaration matched {step.get('condition_not_applicable')!r}, "
+                    f"so dependency absence is not N/A/SKIP."
+                )
+        else:
+            result.reasons.append(
+                "dependency-required condition was unmet, but no missing "
+                "files_exist branch was identified; refusing N/A/SKIP"
+            )
+
+
 def _condition_pattern_satisfied(project: Path, pat: str) -> bool:
     """True when ONE `files_exist` condition pattern is satisfied.
 
@@ -12180,6 +12344,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     # verdicts are final (waiver conversions included): waiver chains
     # propagate over blocks_on edges; post-FAIL MISSING runs are
     # attributed to their first-FAIL root cause.
+    _resolve_dependency_condition_results(
+        project, results, flow.get("steps") or steps)
     cascade_info = _attribute_cascade_verdicts(
         results, steps, waivers, skip_analog=skip_analog)
 
