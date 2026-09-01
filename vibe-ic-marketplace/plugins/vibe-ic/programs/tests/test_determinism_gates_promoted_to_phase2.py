@@ -66,6 +66,11 @@ endmodule
 SPEC = ("Implement a pulse detector. data_in is a 1-bit input. data_out is 1 the "
         "cycle the pulse completes. For example, if data_in is 01010, the data_out "
         "is 00101.")
+SPEC_CLOCKED = (
+    SPEC + " Inside an always block, sensitive to the positive edge of clk, "
+    "implement pulse detection and output generation. Set data_out to 1 in "
+    "the end cycle of the pulse."
+)
 
 # Moore (registered, one-cycle-late) output — the worked example forbids this.
 RTL_MOORE = """
@@ -138,6 +143,36 @@ def test_worked_example_moore_is_detected_and_repaired(tmp_path):
     rtl = next(_pl.rtl_dir(proj).rglob("*.v")).read_text()
     assert rtl != RTL_MOORE
     assert _w.analyze(rtl, SPEC)["verdict"] == "PASS"
+
+
+@pytest.mark.skipif(not _HAS_IVERILOG, reason="worked-example oracle needs iverilog")
+def test_worked_example_phase_ambiguity_is_reported_as_skip(tmp_path):
+    proj = _make_project(tmp_path, RTL_MOORE, spec=SPEC_CLOCKED)
+    res = r.step_determinism_gates(proj)
+    assert res.status == "PASS", res.detail
+    assert "worked-example oracle SKIP (applicable, non-blocking)" in res.detail
+    assert "phase-ambiguous" in res.detail
+    assert res.extras["worked_example_oracle"]["phase_verdicts"] == {
+        "pre-edge": "BLOCK",
+        "post-edge": "PASS",
+    }
+    assert next(_pl.rtl_dir(proj).rglob("*.v")).read_text() == RTL_MOORE
+
+
+RTL_ALWAYS_ZERO = """
+module top(input clk, input rst_n, input data_in, output data_out);
+  assign data_out = 1'b0;
+endmodule
+"""
+
+
+@pytest.mark.skipif(not _HAS_IVERILOG, reason="worked-example oracle needs iverilog")
+def test_worked_example_all_phase_mismatch_stops_phase2(tmp_path):
+    proj = _make_project(tmp_path, RTL_ALWAYS_ZERO, spec=SPEC_CLOCKED)
+    res = r.step_determinism_gates(proj)
+    assert res.status == "FAIL", res.detail
+    assert "in every supported sampling phase" in res.detail
+    assert next(_pl.rtl_dir(proj).rglob("*.v")).read_text() == RTL_ALWAYS_ZERO
 
 
 # RTL whose output lags by THREE cycles: the repair transform applies and the

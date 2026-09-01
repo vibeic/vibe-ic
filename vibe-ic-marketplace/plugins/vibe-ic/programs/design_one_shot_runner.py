@@ -4350,6 +4350,7 @@ def step_determinism_gates(project: Path, top_name: str = "") -> StepResult:
     findings: List[str] = []
     advisories: List[Dict[str, object]] = []
     repairs: List[str] = []
+    worked_example_skip: Optional[Dict[str, object]] = None
     n_checked = 0
     mod_texts: Dict[str, str] = {}
     for f in rtl_files:
@@ -4420,9 +4421,17 @@ def step_determinism_gates(project: Path, top_name: str = "") -> StepResult:
                             f"{o.get('module', 'top')}: worked-example oracle — RTL "
                             f"mismatches the spec's disclosed example "
                             f"({o['inport']}={o['in_bits']} → {o['outport']} expected "
-                            f"{o['out_bits']}); the output must assert in the SAME cycle "
-                            f"as the trigger (a registered Moore output lags one cycle). "
+                            f"{o['out_bits']}) in every supported sampling phase; check "
+                            f"the cycle-by-cycle output timing and logic. "
                             f"{o.get('log', '')}")
+                elif o.get("applicable") and o.get("verdict") == "SKIP":
+                    worked_example_skip = {
+                        "verdict": "SKIP",
+                        "applicable": True,
+                        "reason": o.get("reason", "no blocking verdict"),
+                        "sampling_semantics": o.get("sampling_semantics"),
+                        "phase_verdicts": o.get("phase_verdicts"),
+                    }
             except Exception:
                 pass
     # clock divider / generator WAVEFORM-MEASUREMENT oracle runs ONCE on the whole
@@ -4510,13 +4519,21 @@ def step_determinism_gates(project: Path, top_name: str = "") -> StepResult:
                       "(promoted to the shared phase-2 chain)"}
         if advisory_extra:
             _extras["edge_history_reset_advisory"] = advisory_extra
+        if worked_example_skip:
+            _extras["worked_example_oracle"] = worked_example_skip
         return StepResult(
             "determinism_gates", "FAIL", time.time() - t0,
             "; ".join(findings) + advisory_note, extras=_extras)
-    detail = (f"determinism gates clean over {n_checked} RTL file(s) "
-              f"(clock-divider phase-form + worked-example oracle + "
-              f"clock-divider waveform-ratio oracle; all self-skip when not "
-              f"applicable)")
+    if worked_example_skip:
+        detail = (
+            f"determinism gates completed over {n_checked} RTL file(s) "
+            f"| worked-example oracle SKIP (applicable, non-blocking): "
+            f"{worked_example_skip['reason']}")
+    else:
+        detail = (f"determinism gates clean over {n_checked} RTL file(s) "
+                  f"(clock-divider phase-form + worked-example oracle + "
+                  f"clock-divider waveform-ratio oracle; all self-skip when not "
+                  f"applicable)")
     if repairs:
         detail += " | gate-directed repair: " + "; ".join(repairs)
     detail += advisory_note
@@ -4525,6 +4542,8 @@ def step_determinism_gates(project: Path, top_name: str = "") -> StepResult:
         pass_extras["gate_directed_repairs"] = repairs
     if advisory_extra:
         pass_extras["edge_history_reset_advisory"] = advisory_extra
+    if worked_example_skip:
+        pass_extras["worked_example_oracle"] = worked_example_skip
     return StepResult("determinism_gates", "PASS", time.time() - t0, detail,
                       extras=pass_extras or None)
 

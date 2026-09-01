@@ -1657,6 +1657,24 @@ def _shape_c_task_binding_reasons(task: dict, run_p: Path,
     return reasons
 
 
+def _record_export_guard_notes(run_p: Path, solve: dict,
+                               notes_by_id: dict[str, list[str]]) -> None:
+    """Persist non-blocking export uncertainty beside each accepted result."""
+    results = solve.get("results")
+    if (not isinstance(results, list)
+            or any(not isinstance(row, dict) for row in results)):
+        raise SystemExit("accepted sample export BLOCKED: solve_report results "
+                         "are malformed")
+    result_ids = [str(row.get("id")) for row in results]
+    if (len(set(result_ids)) != len(result_ids)
+            or sorted(result_ids) != sorted(notes_by_id)):
+        raise SystemExit("accepted sample export BLOCKED: export guard notes "
+                         "do not exactly account for solve_report results")
+    for row in results:
+        row["export_guard_notes"] = list(notes_by_id[str(row.get("id"))])
+    _atomic_write_json(Path(run_p) / "solve_report.json", solve)
+
+
 def _export_accepted_shape_c_task(task: dict, samples: Path,
                                   top_module: str, *, run_p: Path,
                                   solve_result: dict | None) -> dict:
@@ -1759,9 +1777,12 @@ def _export_accepted_shape_c_task(task: dict, samples: Path,
                     "exported": None}
     finally:
         temporary.unlink(missing_ok=True)
+    guard_notes = [str(value) for value in guard_detail
+                   if str(value).startswith("NOTE:")]
     return {"verdict": "PASS", "id": pid,
             "rtl_sha256": task.get("rtl_sha256"),
             "exported": str(destination),
+            "guard_notes": guard_notes,
             "gates": ["vibe_ic_one_shot_runner",
                       "program_first_ai_review", "shape_c_guard_export"]}
 
@@ -1817,6 +1838,7 @@ def _export_accepted_shape_c_samples(bench: str, run_p: Path) -> None:
                              "worklist does not exactly match solve_report")
 
         failures = []
+        guard_notes_by_id: dict[str, list[str]] = {}
         # Validate and emit every task into a private transaction first. A
         # failure in task N must not leave task 1..N-1 visible to the scorer.
         with tempfile.TemporaryDirectory(
@@ -1831,6 +1853,9 @@ def _export_accepted_shape_c_samples(bench: str, run_p: Path) -> None:
                     failures.append(
                         f"{pid}: " + "; ".join(
                             str(v) for v in result.get("reasons") or []))
+                else:
+                    guard_notes_by_id[pid] = [
+                        str(value) for value in result.get("guard_notes") or []]
             if failures:
                 raise SystemExit("accepted Shape-C sample export BLOCKED:\n  "
                                  + "\n  ".join(failures))
@@ -1862,6 +1887,8 @@ def _export_accepted_shape_c_samples(bench: str, run_p: Path) -> None:
                         "contains stale, partial, or foreign scoring artifacts")
                 print(f"Program First Shape-C export: {len(tasks)}/{len(tasks)} "
                       "already carries exact accepted, attested samples")
+                _record_export_guard_notes(
+                    run_p, solve, guard_notes_by_id)
                 return
 
             samples.mkdir(parents=True, exist_ok=True)
@@ -1894,6 +1921,7 @@ def _export_accepted_shape_c_samples(bench: str, run_p: Path) -> None:
                 raise SystemExit(
                     "accepted Shape-C sample export BLOCKED: transactional "
                     f"publish failed: {exc}") from exc
+        _record_export_guard_notes(run_p, solve, guard_notes_by_id)
         print(f"Program First Shape-C export: {len(tasks)}/{len(tasks)} "
               f"accepted frozen candidate(s) passed blocking sole emit -> "
               f"{run_p / 'samples'}")
@@ -1923,10 +1951,31 @@ def _export_accepted_shape_b_samples(bench: str, dataset: Path,
         problems = {str(row["id"]): row
                     for row in bio.problems(fmt, dataset)}
         tasks = _read_jsonl(run_p / _REVIEW_WORKLIST)
-    except (OSError, ValueError) as exc:
+        solve_p = run_p / "solve_report.json"
+        solve = (json.loads(solve_p.read_text(errors="replace"))
+                 if solve_p.is_file() else None)
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
         raise SystemExit(f"accepted sample export setup failed: {exc}") from exc
 
+    if solve is not None and not isinstance(solve, dict):
+        raise SystemExit("accepted Shape-B sample export BLOCKED: solve_report "
+                         "root is not an object")
+    if solve is not None:
+        solve_results = solve.get("results")
+        if (not isinstance(solve_results, list)
+                or any(not isinstance(row, dict) for row in solve_results)):
+            raise SystemExit("accepted Shape-B sample export BLOCKED: "
+                             "solve_report results are malformed")
+        task_ids = [str(task.get("id")) for task in tasks]
+        solve_ids = [str(row.get("id")) for row in solve_results]
+        if (len(set(task_ids)) != len(task_ids)
+                or len(set(solve_ids)) != len(solve_ids)
+                or sorted(task_ids) != sorted(solve_ids)):
+            raise SystemExit("accepted Shape-B sample export BLOCKED: review "
+                             "worklist does not exactly match solve_report")
+
     failures = []
+    guard_notes_by_id: dict[str, list[str]] = {}
     samples = run_p / "samples"
     for task in tasks:
         pid = str(task.get("id"))
@@ -1954,9 +2003,17 @@ def _export_accepted_shape_b_samples(bench: str, dataset: Path,
             failures.append(
                 f"{pid}: {result.get('reason') or 'emit rejected'}: "
                 f"{result.get('note') or result.get('block_reason') or ''}")
+        else:
+            guard_notes_by_id[pid] = [
+                str(value) for value in result.get("guard_notes") or []]
     if failures:
         raise SystemExit("accepted Shape-B sample export BLOCKED:\n  "
                          + "\n  ".join(failures))
+    if solve is not None:
+        _record_export_guard_notes(run_p, solve, guard_notes_by_id)
+    elif any(guard_notes_by_id.values()):
+        print("Program First export guard notes (solve_report unavailable): "
+              + json.dumps(guard_notes_by_id, sort_keys=True))
     print(f"Program First export: {len(tasks)}/{len(tasks)} accepted frozen "
           f"candidate(s) passed Shape-B emit -> {samples}")
 

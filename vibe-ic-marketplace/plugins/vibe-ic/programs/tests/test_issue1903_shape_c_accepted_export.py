@@ -132,6 +132,22 @@ def test_nonzero_broader_runner_rc_is_disclosed_but_does_not_block_rtl_sample(
     assert recorded["results"][0]["rc"] == 1
     assert recorded["results"][0]["phases"]["phase3_verifying"]["ran"][
         "rtl_gen"] == "PASS"
+    assert recorded["results"][0].get("export_guard_notes") == []
+
+
+def test_shape_c_applicable_guard_skip_is_recorded_in_solve_report(
+        tmp_path, monkeypatch):
+    run, dataset, _ = _fixture(tmp_path)
+    note = "NOTE: worked-example oracle SKIP (applicable, non-blocking)"
+
+    monkeypatch.setattr(
+        "shape_b_sample_export.guard_export",
+        lambda *args, **kwargs: (True, [note]),
+    )
+    dispatch._export_accepted_shape_c_samples("verilogeval-v2", run)
+
+    recorded = json.loads((run / "solve_report.json").read_text())
+    assert recorded["results"][0].get("export_guard_notes") == [note]
 
 
 def test_nonzero_broader_runner_rc_with_failed_rtl_gate_still_blocks(tmp_path):
@@ -319,7 +335,8 @@ def test_shape_b_route_is_preserved(tmp_path, monkeypatch):
 
     def fake_export(*args, **kwargs):
         called.append((args, kwargs))
-        return {"verdict": "PASS"}
+        return {"verdict": "PASS", "guard_notes": [
+            "NOTE: worked-example oracle SKIP (applicable, non-blocking)"]}
 
     monkeypatch.setattr("shape_b_sample_export.export", fake_export)
     run = tmp_path / "run"
@@ -341,6 +358,15 @@ def test_shape_b_route_is_preserved(tmp_path, monkeypatch):
     (run / "needs_ai_review.jsonl").write_text(json.dumps(task) + "\n")
     dispatch._export_accepted_shape_b_samples("rtllm", dataset, run)
     assert len(called) == 1
+
+    (run / "solve_report.json").write_text(json.dumps({
+        "results": [{"id": "neutral_core"}],
+    }) + "\n")
+    dispatch._export_accepted_shape_b_samples("rtllm", dataset, run)
+    assert len(called) == 2
+    solve = json.loads((run / "solve_report.json").read_text())
+    assert solve["results"][0].get("export_guard_notes") == [
+        "NOTE: worked-example oracle SKIP (applicable, non-blocking)"]
 
 
 def test_checked_in_shape_c_sample_remains_guard_compatible(tmp_path):

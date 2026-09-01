@@ -63,6 +63,37 @@ module pulse_detect(input clk, input rst_n, input data_in, output reg data_out);
 endmodule
 """
 
+# GENUINELY WRONG in either sampling phase: the disclosed trace contains two
+# asserted cycles, while this implementation can never assert its output.
+RTL_ALWAYS_ZERO = """
+module pulse_detect(input clk, input rst_n, input data_in, output data_out);
+  assign data_out = 1'b0;
+endmodule
+"""
+
+SPEC_RESET_RELEASE = (
+    "Implement a rising detector. data_in is a 1-bit input. For example, if "
+    "data_in is 10101, the data_out is 00101. Inside an always block, sensitive "
+    "to the positive edge of clk, implement detection and output generation. "
+    "Set data_out to 1 on a rise."
+)
+RTL_RESET_RELEASE_SENSITIVE = """
+module pulse_detect(input clk, input rst_n, input data_in, output data_out);
+  reg prev;
+  always @(posedge clk or negedge rst_n)
+    if (!rst_n) prev <= 1'b1;
+    else prev <= data_in;
+  assign data_out = data_in & ~prev;
+endmodule
+"""
+
+RTL_FATAL_AFTER_VERDICT = """
+module pulse_detect(input clk, input rst_n, input data_in, output data_out);
+  assign data_out = 1'b0;
+  final $fatal(1, "intentional nonzero vvp termination after TB verdict");
+endmodule
+"""
+
 
 # -------- parse --------
 def test_parse_example_extracts_ports_and_bits():
@@ -109,13 +140,68 @@ def test_registered_moore_design_is_blocked():
 
 
 @pytest.mark.skipif(not _HAS_IVERILOG, reason="iverilog unavailable")
-def test_explicit_clocked_output_contract_drives_before_and_samples_after_edge():
-    registered = g.analyze(RTL_MOORE, SPEC_CLOCKED_OUTPUT)
-    combinational = g.analyze(RTL_MEALY, SPEC_CLOCKED_OUTPUT)
-    assert registered["sampling_semantics"] == \
-        "drive-before-edge/sample-after-edge"
-    assert registered["verdict"] == "PASS", registered
-    assert combinational["verdict"] == "BLOCK", combinational
+@pytest.mark.parametrize(
+    ("rtl", "pre_edge", "post_edge"),
+    [
+        pytest.param(RTL_MEALY, "PASS", "BLOCK", id="mealy"),
+        pytest.param(RTL_MOORE, "BLOCK", "PASS", id="registered"),
+    ],
+)
+def test_clocked_worked_example_phase_ambiguity_skips(
+        rtl, pre_edge, post_edge):
+    result = g.analyze(rtl, SPEC_CLOCKED_OUTPUT)
+    # A single-phase match cannot authorize this never-false-block oracle to
+    # choose Mealy or registered timing on behalf of the dataset testbench.
+    assert result["verdict"] == "SKIP", result
+    assert result["sampling_semantics"] == "dual-phase-pre-and-post-edge"
+    assert result["phase_verdicts"] == {
+        "pre-edge": pre_edge,
+        "post-edge": post_edge,
+    }
+    assert "phase-ambiguous" in result["reason"]
+
+
+@pytest.mark.skipif(not _HAS_IVERILOG, reason="iverilog unavailable")
+def test_clocked_worked_example_wrong_in_both_sampling_phases_blocks():
+    result = g.analyze(RTL_ALWAYS_ZERO, SPEC_CLOCKED_OUTPUT)
+    assert result["verdict"] == "BLOCK", result
+    assert result["phase_verdicts"] == {
+        "pre-edge": "BLOCK",
+        "post-edge": "BLOCK",
+    }
+
+
+@pytest.mark.skipif(not _HAS_IVERILOG, reason="iverilog unavailable")
+def test_clocked_sampling_drives_first_vector_when_reset_releases():
+    result = g.analyze(RTL_RESET_RELEASE_SENSITIVE, SPEC_RESET_RELEASE)
+    assert result["verdict"] == "SKIP", result
+    assert result["phase_verdicts"] == {
+        "pre-edge": "PASS",
+        "post-edge": "BLOCK",
+    }
+    assert "phase-ambiguous" in result["reason"]
+
+
+@pytest.mark.skipif(not _HAS_IVERILOG, reason="iverilog unavailable")
+def test_clocked_sampling_nonzero_vvp_exit_skips():
+    result = g.analyze(RTL_FATAL_AFTER_VERDICT, SPEC_CLOCKED_OUTPUT)
+    assert result["verdict"] == "SKIP", result
+    assert result["phase_verdicts"] == {
+        "pre-edge": "SKIP",
+        "post-edge": "SKIP",
+    }
+    assert "sim exited 1" in result["reason"]
+
+
+@pytest.mark.skipif(not _HAS_IVERILOG, reason="iverilog unavailable")
+def test_shape_b_clocked_mealy_is_not_blocked_by_sampling_phase(tmp_path):
+    import shape_b_sample_export as sb
+    path = tmp_path / "pulse_detect.v"
+    path.write_text(RTL_MEALY)
+    ok, findings = sb.guard_export(path, SPEC_CLOCKED_OUTPUT)
+    assert ok is True
+    assert any(item.startswith("NOTE: worked-example oracle SKIP")
+               and "phase-ambiguous" in item for item in findings), findings
 
 
 @pytest.mark.skipif(not _HAS_IVERILOG, reason="iverilog unavailable")

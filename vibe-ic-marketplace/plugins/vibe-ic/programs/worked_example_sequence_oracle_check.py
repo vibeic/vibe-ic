@@ -20,11 +20,12 @@ WHAT it does — given the spec prose + the authored RTL:
      with two EQUAL-LENGTH ≥3-bit [01] strings, where <inport>/<outport> are real 1-bit
      ports of the module (one input, one output) and a clk + reset port exist.
   2. Build a tiny self-TB that releases reset and replays the disclosed trace.  When the
-     spec explicitly requires output generation in a positive-edge always block, drive each
-     input before the edge and sample after it.  Otherwise retain the original same-cycle
-     combinational interpretation.  The spec, not a hard-coded Mealy/Moore preference, picks
-     the alignment.
-  3. iverilog/vvp it; BLOCK (rc 1) on any mismatch, PASS (rc 0) on a clean match.
+     spec mentions positive-edge output generation, measure BOTH the pre-edge convention
+     used by same-timestamp dataset checkers and the post-NBA edge convention used by other
+     checkers.  Otherwise retain the original same-cycle combinational interpretation.
+  3. iverilog/vvp it.  For the dual-phase branch, BLOCK (rc 1) only when BOTH phases
+     mismatch.  A one-phase match is timing-ambiguous and therefore SKIPs (rc 0); the
+     oracle's contract is never to false-block by guessing the host's sampling phase.
 
 §4.05 SAFETY — the load-bearing half is the NEGATIVE no-leak: the gate SKIPs (rc 0, advisory)
 unless it can build an UNAMBIGUOUS oracle that drives EVERY relevant input. It BLOCKs ONLY when:
@@ -41,8 +42,11 @@ unless it can build an UNAMBIGUOUS oracle that drives EVERY relevant input. It B
     TIMEOUT is caught and yields SKIP, never BLOCK (fail-safe both in the library and the CLI);
   - the verdict is read from a TB-written FILE the DUT cannot spoof via $display.
 Otherwise → SKIP. Under these conditions a design that reproduces the disclosed trace passes;
-the conservative gating means a mis-parse / undriveable input / tool failure SKIPs rather than
-false-blocks a correct design.
+the conservative gating means a phase ambiguity / mis-parse / undriveable input / tool failure
+SKIPs rather than false-blocks a correct design.
+
+DECLARED ENFORCEMENT: BLOCKING only for an unambiguous mismatch in every measured
+sampling phase; PASS and explicit SKIP records continue the flow.
 
 chip-AGNOSTIC, prompt-blind (reads only the spec the author already reads + the authored RTL),
 deterministic.
@@ -153,17 +157,26 @@ def _requires_clocked_output(spec: str, outp: str) -> bool:
 
 
 def _build_tb(modname, clk, rst, pol, inp, outp, in_bits, out_bits,
-              result_path, *, clocked_output=False):
+              result_path, *, clocked_output=False, sample_phase=None):
     n = len(in_bits)
     assert_v = "1'b0" if pol == "low" else "1'b1"
     deassert_v = "1'b1" if pol == "low" else "1'b0"
     inset = "".join(f"        in_v[{i}] = 1'b{in_bits[i]};\n" for i in range(n))
     exset = "".join(f"        ex_v[{i}] = 1'b{out_bits[i]};\n" for i in range(n))
     if clocked_output:
+        if sample_phase == "pre-edge":
+            # Clock period is 10: four time units after the negedge is one unit
+            # before the next posedge, so registered NBA updates are not visible.
+            sample = "#4;"
+        elif sample_phase == "post-edge":
+            sample = "@(posedge clk); #1;"
+        else:
+            raise ValueError("clocked replay requires pre-edge or post-edge sampling")
         replay = f"""    @(negedge clk); rstp={deassert_v};
     for (i=0;i<{n};i=i+1) begin
-      @(negedge clk); din = in_v[i];
-      @(posedge clk); #1;
+      if (i>0) @(negedge clk);
+      din = in_v[i];
+      {sample}
       if (dout !== ex_v[i]) begin
         err=err+1;
         $display("MISMATCH cycle=%0d din=%b dout=%b exp=%b", i, din, dout, ex_v[i]);
@@ -199,6 +212,51 @@ def _build_tb(modname, clk, rst, pol, inp, outp, in_bits, out_bits,
   end
 endmodule
 """
+
+
+def _run_tb(tb: str, td: Path, phase: str, result_path: Path) -> dict:
+    """Compile and run one sampling phase; tool failure is an explicit SKIP."""
+    safe_phase = phase.replace("-", "_")
+    tb_path = td / f"tb_{safe_phase}.v"
+    sim_path = td / f"sim_{safe_phase}"
+    tb_path.write_text(tb)
+    try:  # build hang / tool error → fail-safe SKIP, never BLOCK
+        # watchdog-exempt: bounded single-file iverilog compile (elaboration/sim
+        # build); fixed budget adequate — not an open-ended EDA generator
+        compiled = subprocess.run(
+            ["iverilog", "-g2012", "-o", str(sim_path),
+             str(td / "dut.v"), str(tb_path)],
+            capture_output=True, text=True, timeout=60)
+    except Exception as exc:
+        return {"verdict": "SKIP",
+                "reason": "oracle build timeout/error (skip): " + str(exc)[:160]}
+    if compiled.returncode != 0:
+        return {
+            "verdict": "SKIP",
+            "reason": "oracle TB did not elaborate (skip, not block): "
+                      + (compiled.stdout + compiled.stderr).strip()[-200:],
+        }
+    try:  # sim hang/timeout → fail-safe SKIP per the contract, never BLOCK
+        ran = subprocess.run(
+            ["vvp", str(sim_path)], capture_output=True, text=True, timeout=60)
+    except Exception as exc:
+        return {"verdict": "SKIP",
+                "reason": "oracle sim timeout/error (skip): " + str(exc)[:160]}
+    output = ran.stdout + ran.stderr
+    if ran.returncode != 0:
+        return {
+            "verdict": "SKIP",
+            "reason": f"oracle sim exited {ran.returncode} (skip, not block): "
+                      + output.strip()[-200:],
+        }
+    verdict_txt = result_path.read_text(errors="replace") if result_path.is_file() else ""
+    if "WEX_VERDICT PASS" in verdict_txt:
+        return {"verdict": "PASS", "log": ""}
+    if "WEX_VERDICT FAIL" in verdict_txt:
+        log = "\n".join(line for line in output.splitlines()
+                        if "MISMATCH" in line)[:400]
+        return {"verdict": "BLOCK", "log": log}
+    return {"verdict": "SKIP", "reason": "oracle produced no verdict file (skip)"}
 
 
 def _iverilog():
@@ -259,43 +317,47 @@ def analyze(rtl: str, spec: str) -> dict:
     clocked_output = _requires_clocked_output(spec, outp)
     res.update(applicable=True, inport=inp, outport=outp, in_bits=in_bits,
                out_bits=out_bits, clk=clk, rst=rst, pol=pol, module=modname,
-               sampling_semantics=("drive-before-edge/sample-after-edge"
+               sampling_semantics=("dual-phase-pre-and-post-edge"
                                    if clocked_output
                                    else "same-cycle-combinational"))
     with tempfile.TemporaryDirectory() as td:
         td = Path(td)
-        result_path = td / "wex_verdict.txt"
-        tb = _build_tb(modname, clk, rst, pol, inp, outp, in_bits, out_bits,
-                       str(result_path), clocked_output=clocked_output)
         (td / "dut.v").write_text(rtl)
-        (td / "tb.v").write_text(tb)
-        try:  # build hang / tool error → fail-safe SKIP, never BLOCK
-            # watchdog-exempt: bounded single-file iverilog compile (elaboration/sim build); fixed budget adequate — not an open-ended EDA generator
-            c = subprocess.run(["iverilog", "-g2012", "-o", str(td / "sim"),
-                                str(td / "dut.v"), str(td / "tb.v")],
-                               capture_output=True, text=True, timeout=60)
-        except Exception as e:
-            res.update(verdict="SKIP", reason="oracle build timeout/error (skip): " + str(e)[:160])
-            return res
-        if c.returncode != 0:
-            res.update(verdict="SKIP", reason="oracle TB did not elaborate (skip, not block): "
-                       + (c.stdout + c.stderr).strip()[-200:])
-            return res
-        try:  # sim hang/timeout → fail-safe SKIP per the documented contract, never BLOCK
-            r = subprocess.run(["vvp", str(td / "sim")], capture_output=True, text=True, timeout=60)
-        except Exception as e:
-            res.update(verdict="SKIP", reason="oracle sim timeout/error (skip): " + str(e)[:160])
-            return res
-        out = r.stdout + r.stderr
-        verdict_txt = result_path.read_text(errors="replace") if result_path.is_file() else ""
-    # verdict is read from the TB-written FILE (unspoofable by DUT $display output)
-    if "WEX_VERDICT PASS" in verdict_txt:
+        phases = ("pre-edge", "post-edge") if clocked_output else ("same-cycle",)
+        phase_results = {}
+        for phase in phases:
+            result_path = td / f"wex_verdict_{phase.replace('-', '_')}.txt"
+            tb = _build_tb(
+                modname, clk, rst, pol, inp, outp, in_bits, out_bits,
+                str(result_path), clocked_output=clocked_output,
+                sample_phase=phase if clocked_output else None)
+            phase_results[phase] = _run_tb(tb, td, phase, result_path)
+
+    if not clocked_output:
+        result = phase_results["same-cycle"]
+        res.update(result)
+        return res
+
+    res["phase_verdicts"] = {
+        phase: result["verdict"] for phase, result in phase_results.items()
+    }
+    skipped = [(phase, result) for phase, result in phase_results.items()
+               if result["verdict"] == "SKIP"]
+    if skipped:
+        phase, result = skipped[0]
+        res.update(verdict="SKIP",
+                   reason=f"{phase} sampling unavailable: {result.get('reason', 'skip')}")
+    elif all(result["verdict"] == "PASS" for result in phase_results.values()):
         res["verdict"] = "PASS"
-    elif "WEX_VERDICT FAIL" in verdict_txt:
+    elif all(result["verdict"] == "BLOCK" for result in phase_results.values()):
         res["verdict"] = "BLOCK"
-        res["log"] = "\n".join(l for l in out.splitlines() if "MISMATCH" in l)[:400]
+        res["log"] = "\n".join(
+            f"[{phase}] {result.get('log', '')}" for phase, result in phase_results.items())[:800]
     else:
-        res.update(verdict="SKIP", reason="oracle produced no verdict file (skip)")
+        res.update(
+            verdict="SKIP",
+            reason="phase-ambiguous: the worked example matches exactly one of "
+                   "pre-edge and post-edge sampling; never choose the host phase by guess")
     return res
 
 

@@ -30,6 +30,11 @@ _HAS_IVERILOG = shutil.which("iverilog") is not None
 SPEC = ("Implement a pulse detector. data_in is a 1-bit input. data_out is 1 "
         "the cycle the pulse completes. For example, if data_in is 01010, the "
         "data_out is 00101.")
+SPEC_CLOCKED = (
+    SPEC + " Inside an always block, sensitive to the positive edge of clk, "
+    "implement pulse detection and output generation. Set data_out to 1 in "
+    "the end cycle of the pulse."
+)
 
 # Registered (Moore) output — reproduces the right sequence one cycle late.
 RTL_MOORE = """
@@ -70,6 +75,24 @@ module pulse_detect(input clk, input rst_n, input data_in, output reg data_out);
   always @(posedge clk or negedge rst_n)
     if(!rst_n) begin d1<=1'b0; d2<=1'b0; data_out<=1'b0; end
     else begin d1 <= data_in; d2 <= d1; data_out <= d2; end
+endmodule
+"""
+
+RTL_REGISTERED_ALWAYS_ZERO = """
+module pulse_detect(input clk, input rst_n, input data_in, output reg data_out);
+  always @(posedge clk or negedge rst_n)
+    if (!rst_n) data_out <= 1'b0;
+    else data_out <= 1'b0;
+endmodule
+"""
+
+RTL_FALLING_EDGE_WITH_CONSTANT_HISTORY_RESET = """
+module pulse_detect(input clk, input rst_n, input data_in, output data_out);
+  reg prev;
+  always @(posedge clk or negedge rst_n)
+    if (!rst_n) prev <= 1'b0;
+    else prev <= data_in;
+  assign data_out = prev & ~data_in;
 endmodule
 """
 
@@ -143,6 +166,34 @@ def test_correct_design_is_left_alone():
     res = G.repair(RTL_MEALY, SPEC)
     assert res["verdict"] == "NOT_APPLICABLE"
     assert res["rtl"] is None
+
+
+@pytest.mark.skipif(not _HAS_IVERILOG, reason="oracle needs iverilog")
+def test_clocked_phase_ambiguity_is_deferred_not_called_clean():
+    res = G.repair(RTL_MOORE, SPEC_CLOCKED)
+    assert res["verdict"] == "DEFER", res
+    assert res["defect"] == "worked-example-oracle-skip"
+    assert res["evidence"]["phase_verdicts"] == {
+        "pre-edge": "BLOCK",
+        "post-edge": "PASS",
+    }
+
+
+@pytest.mark.skipif(not _HAS_IVERILOG, reason="oracle needs iverilog")
+def test_phase_ambiguity_does_not_mask_independent_history_escalation():
+    res = G.repair(RTL_FALLING_EDGE_WITH_CONSTANT_HISTORY_RESET, SPEC_CLOCKED)
+    assert res["verdict"] == "ESCALATE", res
+    assert res["defect"] == "edge-history-reset-to-constant"
+    assert res["evidence"]["gate"] == "edge_history_reset_phantom_check"
+
+
+@pytest.mark.skipif(not _HAS_IVERILOG, reason="oracle needs iverilog")
+def test_all_phase_mismatch_is_not_misrouted_as_alignment_repair():
+    res = G.repair(RTL_REGISTERED_ALWAYS_ZERO, SPEC_CLOCKED)
+    assert res["verdict"] == "NO_REPAIR", res
+    assert res["defect"] == "worked-example-mismatch-all-phases"
+    assert res["attempts"] == []
+    assert "would be a guess" in res["reason"]
 
 
 @pytest.mark.skipif(not _HAS_IVERILOG, reason="oracle needs iverilog")
