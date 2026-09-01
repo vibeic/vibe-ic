@@ -234,9 +234,11 @@ def derive_routing(project: Path) -> Dict[str, Any]:
                        f"{type(exc).__name__}: {exc}"}
     has_ctx = rtl_present_at_input(project)
     verdict = tnr.classify_task_nature(text, has_ctx, None)
-    nature = verdict.get("nature")
-    entry = (tnr.NATURE_ENTRY.get(nature) or {}).get("entry_step")
-    ev = (tnr.NATURE_ENTRY.get(nature) or {}).get("default_evidence")
+    # `entry_nature` is the NATURE_ENTRY key on every branch; `nature` may be
+    # the disclosing unpinned-transform label, which is not.
+    entry_row = tnr.NATURE_ENTRY[verdict["entry_nature"]]
+    entry = entry_row.get("entry_step")
+    ev = entry_row.get("default_evidence")
     exit_step = (tnr.EVIDENCE_EXIT.get(ev) or {}).get("exit_step")
     return {"verdict": verdict, "entry": entry, "evidence": ev,
             "exit_step": exit_step, "rtl_present": has_ctx,
@@ -249,8 +251,8 @@ def phase1_routing(verdict: Optional[Dict[str, Any]], entry: Any, evidence: Any,
                    derived_here: bool = False) -> Dict[str, Any]:
     """WHO routed, and on what evidence — the router's own return value.
 
-    `task_nature_route.classify_task_nature` returns {nature, route,
-    plugin_entry, source, needs_ai_parse} and, on exactly one branch, a
+    `task_nature_route.classify_task_nature` returns {nature, entry_nature,
+    route, plugin_entry, source, needs_ai_parse} and, on exactly one branch, a
     `warning`. Callers recorded the nature and threw the rest away; `source` is
     the difference between "a structural heuristic decided" and "prose said
     so", and `needs_ai_parse` is the router telling every caller that the
@@ -272,6 +274,7 @@ def phase1_routing(verdict: Optional[Dict[str, Any]], entry: Any, evidence: Any,
                            if derived_here else
                            "SUPPLIED by the caller that routed this run"),
         "nature": verdict.get("nature"),
+        "entry_nature": verdict.get("entry_nature"),
         "route": verdict.get("route"),
         "plugin_entry": verdict.get("plugin_entry"),
         "source": verdict.get("source"),

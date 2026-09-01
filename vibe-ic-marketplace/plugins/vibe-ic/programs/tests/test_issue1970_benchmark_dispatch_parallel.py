@@ -48,7 +48,8 @@ def _install_common_fakes(monkeypatch) -> None:
     monkeypatch.setattr(fpa, "summarize", lambda _results: {})
     monkeypatch.setattr(
         tnr, "classify_task_nature",
-        lambda *_a, **_k: {"nature": "fixture", "plugin_entry": {}})
+        lambda *_a, **_k: {"nature": "fixture", "entry_nature": "fixture",
+                           "plugin_entry": {}})
     monkeypatch.setattr(tnr, "NATURE_ENTRY", {
         "fixture": {"entry_step": "D1", "default_evidence": "RTL_SIM"}})
     monkeypatch.setattr(tnr, "EVIDENCE_EXIT", {
