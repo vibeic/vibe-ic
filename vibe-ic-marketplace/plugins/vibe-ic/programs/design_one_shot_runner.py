@@ -17917,6 +17917,21 @@ def main() -> int:
         if (sr.status in ("PASS", "SKIP", "WAIVED", "INCOMPLETE") or
                 rtl_repair_retry >= args.max_rtl_repair_retries):
             break
+        if _before_entry("rtl_gen", _entry_site):
+            # A mid-flow re-entry owns supplied RTL.  Calling the upstream
+            # deterministic generator here would violate --entry-step, may
+            # overwrite the supplied bytes, and replaces the provenance
+            # sentinel SKIPPED-BY-ENTRY with WAIVED.  Preserve the candidate
+            # for the dispatcher's hash-bound AI review/repair handoff.
+            plan.append(StepResult(
+                "rtl_repair_retry_iter", "SKIP", 0.0,
+                "reference TB did not pass, but rtl_gen is upstream of the "
+                f"declared --entry-step {args.entry_step}; PROGRAM RTL "
+                "regeneration was not dispatched. Preserve the supplied RTL "
+                "for hash-bound AI review/repair.",
+                extras={"fallback_skill": "rtl-repair",
+                        "candidate_owner": "SUPPLIED_RTL"}))
+            break
         rtl_repair_retry += 1
         plan.append(StepResult("rtl_repair_retry_iter", "RTL_REPAIR_RETRY",
                                0.0,
