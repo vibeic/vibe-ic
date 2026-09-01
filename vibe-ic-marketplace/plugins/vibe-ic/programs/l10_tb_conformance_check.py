@@ -1398,6 +1398,67 @@ def analog_skip_anchor(project_root: Optional[str], anchor_path: Optional[str]) 
     return None
 
 
+# ORGANIC #773 r3 — the anchor for the OTHER half of the same question.
+#
+# THE DEFECT THIS CLOSES, MEASURED. #773 relieved a `verification_intent` case
+# of the digital-TB evidence requirement only when the A/M track was DEFERRED
+# via --skip-analog. So a run that SKIPPED the analog work was credited, and a
+# run that actually DID it — nine real ngspice PVT corners per block, on the
+# staged foundry corner sections — was FAILED, for lacking evidence in a
+# digital testbench directory that by this gate's own docstring can NEVER
+# carry it. Doing the work scored strictly worse than not doing it, and the
+# resulting Step-4 FAIL is what stopped the design entering Phase 3.
+#
+# The kind of the case did not change with the flag, and neither did who owns
+# its oracle. What changes is only WHERE the reviewable anchor points: to the
+# skip declaration when the track was deferred, and to the track's OWN
+# evidence when it ran. This resolves the second one.
+#
+# It is deliberately EVIDENCE-anchored and not merely "the flag was absent":
+# a run that neither skipped analog nor produced any analog evidence resolves
+# NOTHING here and FAILs exactly as it does today.
+def analog_ran_anchor(project_root: Optional[str]) -> Optional[str]:
+    """Reviewable anchor for an A/M-track case whose track actually RAN.
+
+    Returns a short reviewable description when the analog track left
+    per-block corner evidence produced by a real simulator, else None.
+
+    This NEVER credits the case as passed and it makes NO claim that the
+    analog result was good: the A/M track keeps its own verdict, its own
+    gates, and its own place in the audit. A design whose analog stage is
+    failing still fails on the analog stage — this only stops a DIGITAL
+    testbench gate from charging a second, duplicate failure for a
+    measurement it cannot make either way.
+    """
+    if not project_root:
+        return None
+    blocks: List[str] = []
+    real = 0
+    for cr in sorted(Path(project_root).glob(
+            "phase3/analog/*/corner_results.json")):
+        try:
+            data = json.loads(cr.read_text(errors="replace"))
+        except (OSError, ValueError):
+            continue
+        corners = data.get("corners") if isinstance(data, dict) else None
+        if not isinstance(corners, list) or not corners:
+            continue
+        # A corner record that no simulator produced is not evidence that the
+        # track ran; it is a file. Require the producer's own marker.
+        ran = [c for c in corners if isinstance(c, dict)
+               and (c.get("simulator_run") is True
+                    or str(c.get("_provenance", "")).startswith("real_"))]
+        if not ran:
+            continue
+        blocks.append(cr.parent.name)
+        real += len(ran)
+    if not blocks:
+        return None
+    return (f"{len(blocks)} analog block(s) {sorted(blocks)} carry "
+            f"{real} simulator-produced corner record(s) under "
+            f"phase3/analog/*/corner_results.json (A/M track RAN)")
+
+
 # ----- CLI ----------------------------------------------------------
 
 
@@ -1536,6 +1597,7 @@ def evaluate(
     summary: str,
     skip_analog: bool = False,
     analog_anchor: Optional[str] = None,
+    analog_anchor_kind: str = "deferred",
     cpu_oracle_anchor_desc: Optional[str] = None,
     project_root: Optional[str] = None,
     producer_scaffold_kinds: Optional[frozenset] = None,
@@ -1580,7 +1642,12 @@ def evaluate(
     ok_count = 0
     fail_count = 0
     checklist_gap_count = 0
-    waiver_active = bool(skip_analog) and bool(analog_anchor)
+    # #773 r3 — ANCHOR-gated, not FLAG-gated. `skip_analog` is still what
+    # selects WHICH anchor `main` resolved; it is no longer an independent
+    # precondition, because the A/M track owns this case's oracle in both
+    # states. An unanchored run (neither deferred nor evidenced) still has
+    # waiver_active False and still FAILs, exactly as before.
+    waiver_active = bool(analog_anchor)
     cpu_waiver_active = bool(cpu_oracle_anchor_desc)
     # Single-source-of-truth class label — gates the processor_cpu opcode-
     # instruction oracle path so it can never fire for another class (fails
@@ -1697,10 +1764,14 @@ def evaluate(
             waived = True
             status = "waived"
             cap_gap = CAP_ANALOG_VERIFICATION_INTENT
+            _why = ("analog track deferred via --skip-analog"
+                    if analog_anchor_kind == "deferred"
+                    else "analog track RAN and owns this case's oracle; its "
+                         "own verdict is unaffected by this credit")
             evidence = [
                 "WAIVED-DEFERRED: verification_intent A/M-track oracle "
-                f"({CAP_ANALOG_VERIFICATION_INTENT}); analog track deferred "
-                f"via --skip-analog; reviewable anchor: {analog_anchor}"
+                f"({CAP_ANALOG_VERIFICATION_INTENT}); {_why}; "
+                f"reviewable anchor: {analog_anchor}"
             ]
         # ORGANIC #778 companion — conditional-optional feature case, whose
         # own text references an optional Plugin-selectable feature that the
@@ -2002,10 +2073,14 @@ def main(argv: Optional[List[str]] = None) -> int:
                 break
         if project_root is None:
             project_root = str(l10p.parent)
+    # The A/M track owns a verification_intent case's oracle whether it was
+    # DEFERRED or RUN; only the reviewable anchor differs. Resolving the
+    # second case is #773 r3 — see analog_ran_anchor.
     analog_anchor = (
         analog_skip_anchor(project_root, args.analog_anchor)
-        if args.skip_analog else None
+        if args.skip_analog else analog_ran_anchor(project_root)
     )
+    analog_anchor_kind = "deferred" if args.skip_analog else "ran"
     # ORGANIC #778 companion — auto-detect the CPU functional-oracle
     # capability gap from results.xml. No CLI flag needed: the gate reads
     # the runner's own artefact and coordinates with
@@ -2020,6 +2095,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     results, ok_count, fail_count = evaluate(
         cases, tb_blob, summary,
         skip_analog=args.skip_analog, analog_anchor=analog_anchor,
+        analog_anchor_kind=analog_anchor_kind,
         cpu_oracle_anchor_desc=cpu_anchor, project_root=project_root,
         producer_scaffold_kinds=scaffold_kinds_of(prod_scope),
     )
