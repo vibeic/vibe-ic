@@ -94,11 +94,27 @@ def _to_container_path(container: str, host_path: str) -> str:
 
 
 def _tool_on_path(container: str, tool: str) -> Optional[str]:
+    """The tool's absolute path inside the container, or None.
+
+    THE LAST LINE, not the whole stdout. The pinned EDA image's entrypoint
+    prints two `[INFO] Final PATH variable: ...` banner lines to STDOUT before
+    the command's own output, so `command -v klayout` comes back as a
+    three-line blob. Returning that blob passed `is not None`, so every caller
+    believed the tool was present, and then ran it shell-quoted as ONE
+    argument: `rc=127`, no report, and A6 reported "no parseable DRC result".
+    Measured on the pinned image for BOTH engines (`svrfdrc` and `klayout`),
+    which is why the native per-block DRC path had never produced evidence
+    there. A path never contains a newline, so the last non-empty line is the
+    answer and the banner is discarded.
+    """
     binname = os.environ.get("VIBE_IC_SVRFDRC_BIN", tool) \
         if tool == _SVRFDRC_BIN else tool
     rc, out, _err = _docker_exec(container, f"command -v {shlex.quote(binname)}",
                                  30)
-    return (out.strip() or binname) if rc == 0 else None
+    if rc != 0:
+        return None
+    lines = [ln.strip() for ln in (out or "").splitlines() if ln.strip()]
+    return (lines[-1] if lines else binname)
 
 
 def _parse_svrf_tally(text: str) -> Tuple[int, int, int]:
@@ -120,14 +136,104 @@ def _parse_svrf_tally(text: str) -> Tuple[int, int, int]:
     return fails, passes, skips
 
 
+# ── deck KIND, and why this dispatch exists ─────────────────────────────────
+#
+# THE DEFECT THIS CLOSES, MEASURED. The resolver's `drc_deck` axis globs
+# `input/pdk/klayout/*.drc` — correctly, because a KLayout DRC runset is what an
+# OPEN PDK actually ships. The only DRC ENGINE wired here was `svrfdrc`, which
+# reads SVRF (`.rule`). Handed an open PDK's KLayout-DSL runset it does not
+# crash: it derives the layers, finds **0 rules**, and writes a report whose
+# tally is empty. A6 then reports `A6_PV_DRC_NO_EVIDENCE` — correctly refusing
+# it, and fail-closed, so nothing was ever falsely certified clean. But the
+# design's own staged deck had been resolved and handed over, and the block
+# never got a DRC run at all.
+#
+# Measured on one block, same GDS, same container: `svrfdrc` on the open PDK's
+# runset -> "0 layers, 122 derivations, 0 rules", empty tally, A6 NO_EVIDENCE;
+# the same runset under `klayout -b -r` -> 4 real violations in 5 s.
+#
+# So the fix is not a new capability and not a new tool — both engines were
+# already on PATH in the pinned image. It is a DISPATCH: run the deck with the
+# engine that can read it.
+_SVRF_DECK_SUFFIXES = (".rule", ".svrf")
+_KLAYOUT_DECK_SUFFIXES = (".drc", ".lydrc")
+
+
+def deck_kind(deck: str) -> str:
+    """`svrf` | `klayout` | `unknown` — from the deck's own extension.
+
+    Extension, not content sniffing: the resolver's axes are themselves
+    extension-keyed (`calibre/*DRC*.rule` vs `klayout/*.drc`), so keying the
+    engine the same way keeps ONE definition of what a deck is. `unknown`
+    is reported and refused rather than guessed at, because running a deck
+    under the wrong engine is exactly the silent-zero this fixes.
+    """
+    suf = Path(str(deck or "")).suffix.lower()
+    if suf in _SVRF_DECK_SUFFIXES:
+        return "svrf"
+    if suf in _KLAYOUT_DECK_SUFFIXES:
+        return "klayout"
+    return "unknown"
+
+
+def _count_lyrdb_items(text: str) -> int:
+    """Violations in a KLayout RDB report. `<item>` elements are the
+    violations; the categories they name are NOT surfaced (NDA hygiene —
+    NUMBERS ONLY, same contract as the SVRF tally)."""
+    return len(re.findall(r"<item>", text or ""))
+
+
+def _klayout_drc_runner(deck: str, gds: str, block: str, container: str,
+                        report_host: Path) -> Tuple[Optional[int], Dict[str, Any]]:
+    """Run an open-PDK KLayout DRC runset on the block GDS.
+
+    `klayout -b -r <deck> -rd input=<gds> -rd report=<rdb> -rd topcell=<block>`
+    is the runset convention those decks declare (`$input` / `$report` /
+    `$topcell`). Returns (violations, meta); None when the engine or the report
+    is missing, so the caller keeps its existing waiver path rather than
+    inventing a verdict.
+    """
+    binc = _tool_on_path(container, "klayout")
+    if binc is None:
+        return None, {"reason": "klayout engine not on container PATH"}
+    deck_c = _to_container_path(container, deck)
+    gds_c = _to_container_path(container, gds)
+    rpt_c = _to_container_path(container, str(report_host))
+    cmd = (f"{shlex.quote(binc)} -b -r {shlex.quote(deck_c)} "
+           f"-rd input={shlex.quote(gds_c)} "
+           f"-rd report={shlex.quote(rpt_c)} "
+           f"-rd topcell={shlex.quote(block)}")
+    rc, out, err = _docker_exec(container, cmd)
+    if not report_host.is_file():
+        return None, {"reason": f"klayout produced no report (rc={rc})",
+                      "tail": (out + err)[-300:]}
+    text = report_host.read_text(errors="replace")
+    return _count_lyrdb_items(text), {"method": "klayout_runset", "rc": rc}
+
+
 # ── default (real, in-container) engine runners ─────────────────────────────
 
 def _default_drc_runner(deck: str, gds: str, block: str, container: str,
                         report_host: Path) -> Tuple[Optional[int], Dict[str, Any]]:
-    """Run the native `svrfdrc` buddy on the block GDS with the staged SVRF DRC
-    deck: `svrfdrc <deck> <gds> <report> --cell=<block>`. Returns
-    (violations, meta). violations is None when the engine / GDS is unavailable
-    (caller then leaves the existing waiver/stub path). NUMBERS ONLY."""
+    """Run the block GDS against the staged DRC deck, under the engine that
+    deck's own format requires.
+
+    An SVRF (`.rule`) deck goes to the native `svrfdrc` buddy exactly as
+    before; a KLayout (`.drc`) runset goes to `klayout -b -r`. A deck of
+    neither kind is REFUSED by name rather than handed to whichever engine
+    happens to be first — see `deck_kind`. Returns (violations, meta);
+    violations is None when the engine / report is unavailable (caller then
+    leaves the existing waiver/stub path). NUMBERS ONLY."""
+    kind = deck_kind(deck)
+    if kind == "klayout":
+        return _klayout_drc_runner(deck, gds, block, container, report_host)
+    if kind == "unknown":
+        return None, {"reason": (
+            "staged DRC deck is neither an SVRF (.rule/.svrf) nor a KLayout "
+            "(.drc/.lydrc) deck; refusing to guess an engine, because running "
+            "a deck under the wrong one yields a rule-less report rather than "
+            "an error"),
+            "deck_suffix": Path(str(deck)).suffix}
     binc = _tool_on_path(container, _SVRFDRC_BIN)
     if binc is None:
         return None, {"reason": "svrfdrc engine not on container PATH"}
@@ -141,6 +247,19 @@ def _default_drc_runner(deck: str, gds: str, block: str, container: str,
         return None, {"reason": f"svrfdrc produced no report (rc={rc})",
                       "tail": (out + err)[-300:]}
     fails, passes, skips = _parse_svrf_tally(report_host.read_text(errors="replace"))
+    if fails + passes + skips == 0:
+        # A REPORT THAT GRADED NOTHING IS NOT A CLEAN REPORT. `0 FAIL` out of
+        # `0 rules` is indistinguishable, by count alone, from a block that
+        # passed every rule — and it is the shape a deck the engine could not
+        # read produces. Measured: handed an open PDK's KLayout runset,
+        # `svrfdrc` writes a well-formed report saying "0 rules" with an empty
+        # tally; crediting that as 0 violations certified a block that a real
+        # run of the same deck found 4 violations in. Return no-evidence so the
+        # caller keeps its waiver path instead of publishing a false clean.
+        return None, {"reason": ("DRC report graded 0 rules — the deck "
+                                 "produced no rule results, so this is an "
+                                 "unread deck, not a clean block"),
+                      "method": "svrf_native", "rc": rc}
     return fails, {"method": "svrf_native", "rules_pass": passes,
                    "rules_skip": skips, "rc": rc}
 

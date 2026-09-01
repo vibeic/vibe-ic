@@ -736,17 +736,27 @@ def emit_generic_tb(shape: dict) -> str:
 @cocotb.test()
 async def professional_smoke_test(dut):
     """Structural smoke + reset. Reference model NOT closed-form for this class:
-    the scoreboard below is a HOOK — fill `reference_model()` from L10 test
-    vectors or the spec-to-refmodel skill. This test asserts reset + no-X only;
-    it MUST NOT be treated as functional sign-off until the hook is filled."""
+    the scoreboard below is a HOOK. This test asserts reset + no-X only; it MUST
+    NOT be treated as functional sign-off until the hook is filled.
+
+    DO NOT FILL THIS FILE. It is REGENERATED from scratch on every runner
+    invocation, so an answer written here is destroyed by the next run — along
+    with the results.xml that proved it. Write the filled testbench to
+    `expert_reference_tb.py` in THIS directory instead: that is the file the
+    producer reads and never overwrites. It is accepted only when it is
+    self-checking, so it must (1) contain no TestSkip, (2) print the literal
+    token `PROFESSIONAL_TB PASS`, and (3) carry at least one `@cocotb.test()`
+    coroutine that references `dut` and asserts."""
     _start_clock(dut)
     await _reset(dut)
     for _ in range(20):
         await RisingEdge(getattr(dut, CLK))
     # reference_model hook — RAISES until filled (never a vacuous pass)
     raise cocotb.result.TestSkip(
-        "reference_model hook unfilled for {top}: supply L10 vectors or a "
-        "spec-derived reference before this counts as functional sign-off")
+        "reference_model hook unfilled for {top}: author the filled testbench "
+        "as `expert_reference_tb.py` in this directory (NOT this file, which is "
+        "regenerated every run); it must carry no TestSkip, print the token "
+        "PROFESSIONAL_TB PASS, and assert against dut in a @cocotb.test()")
 '''
 
 

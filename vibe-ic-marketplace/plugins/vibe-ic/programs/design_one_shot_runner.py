@@ -7283,8 +7283,20 @@ def step_professional_tb_gen(project: Path, top_name: str = "",
     # Generic reference-hook class (or missing out_dir): the deterministic
     # program has exhausted what can be derived. Record the explicit expert
     # handoff and keep the step non-green until that model runs.
+    # NAME THE FILE THE CONSUMER READS. This message used to say only "fill
+    # the reference-model hook", and the scaffold it points at (`tb_<top>.py`)
+    # is REGENERATED on every runner invocation — so an author who followed it
+    # literally lost the work and the results.xml with it, and the handoff
+    # could never be consumed. `professional_tb_gen._load_expert_reference_tb`
+    # reads `expert_reference_tb.py` and never overwrites it; that is the path
+    # the instruction has to carry, along with the three conditions the loader
+    # actually enforces.
     gap = ("reference-model hook is unfilled; functional tests did not run "
-           "(0-test denominator)")
+           "(0-test denominator). Author the filled testbench as "
+           "`expert_reference_tb.py` beside the generated tb_<top>.py (which is "
+           "regenerated every run and must NOT be edited); it is accepted only "
+           "when it carries no TestSkip, prints the token PROFESSIONAL_TB PASS, "
+           "and asserts against dut in a @cocotb.test()")
     _write({**rec, "status": "INCOMPLETE", "reason": gap,
             "fallback_skill": "testbench-gen"})
     return StepResult(
