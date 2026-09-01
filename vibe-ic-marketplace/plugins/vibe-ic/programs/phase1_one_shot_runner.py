@@ -431,11 +431,21 @@ def _docs_hold_identical_bytes(docs_dir: Path, candidate: Path) -> bool:
     """
     if not docs_dir.is_dir() or not candidate.is_file():
         return False
-    want = hashlib.sha256(candidate.read_bytes()).hexdigest()
+    # An unreadable file cannot be proven identical, so it never suppresses the
+    # bridge: the doc pipeline tolerates unreadable docs (issue #3/#26), and a
+    # duplicate bridged anyway is absorbed by the parser-level port dedup.
+    try:
+        want = hashlib.sha256(candidate.read_bytes()).hexdigest()
+    except OSError:
+        return False
     for f in docs_dir.rglob("*"):
-        if (f.is_file() and not f.name.startswith(".")
-                and hashlib.sha256(f.read_bytes()).hexdigest() == want):
-            return True
+        if not f.is_file() or f.name.startswith("."):
+            continue
+        try:
+            if hashlib.sha256(f.read_bytes()).hexdigest() == want:
+                return True
+        except OSError:
+            continue
     return False
 
 
