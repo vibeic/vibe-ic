@@ -234,10 +234,10 @@ MATRIX = {
     "ip_hardmacro": {
         "0.5ic": RUNS, "15.5ic": SKIPPED, "26.5ic": SKIPPED,
         "37.5ic": SKIPPED, "37.5ip": RUNS},
-    # THE DANGEROUS ROW. Every path step skips, and each skip is individually
-    # indistinguishable from a legitimate one. What must hold is that 0.5ic —
-    # the unconditioned router — does NOT skip, so the absence is reported once
-    # rather than inferred four times.
+    # THE DANGEROUS ROW AT THE RAW PREDICATE LAYER. Every path predicate is
+    # false, exactly like one side of a legitimate selected route. The verdict
+    # roll-up must therefore consult 0.5ic and replace these four raw skips by
+    # hard upstream-blocked rows; that distinction is tested below.
     "no_router_file_step_0_5ic_never_ran": {
         "0.5ic": RUNS, "15.5ic": SKIPPED, "26.5ic": SKIPPED,
         "37.5ic": SKIPPED, "37.5ip": SKIPPED},
@@ -366,16 +366,9 @@ def test_verdict_layer_cell(trees, cls, sid):
             f"class and the flow reports {result.status!r}", result.reasons)
 
 
-def test_the_forgotten_route_is_reported_once_by_0_5ic_not_inferred_four_times(
+def test_the_forgotten_route_blocks_all_four_dependents_after_owner_rollup(
         trees):
-    """THE `no_router` ROW, and the claim four step comments rest on.
-
-    15.5ic, 26.5ic, 37.5ic and 37.5ip each say, in almost the same words, that
-    the "someone forgot" case is not lost to their silent-skip default because
-    "it is 0.5ic never having run, which its own gate refuses". Four steps
-    depending on one unwritten assertion is exactly how a defence stops being
-    checked. This is that assertion.
-    """
+    """The raw false predicates become four hard rows, not four false N/As."""
     proj = trees["no_router_file_step_0_5ic_never_ran"]
     steps = _path_steps()
 
@@ -385,10 +378,18 @@ def test_the_forgotten_route_is_reported_once_by_0_5ic_not_inferred_four_times(
         "ever skips, the forgotten-route case becomes four indistinguishable "
         "silences and nothing reports it at all.", router.status, router.reasons)
 
-    for sid in ("15.5ic", "26.5ic", "37.5ic", "37.5ip"):
-        assert FCC.check_step(proj, steps[sid], {}).status == SKIPPED, (
-            f"{sid} is expected to skip here — the defence is that 0.5ic "
-            f"speaks, not that the downstream steps do")
+    results = [router] + [
+        FCC.check_step(proj, steps[sid], {})
+        for sid in ("15.5ic", "26.5ic", "37.5ic", "37.5ip")]
+    info = FCC._attribute_condition_owner_blocks(
+        proj, results, list(steps.values()))
+    assert info["blocked_by_upstream"] == {"0.5ic": 4}
+    for row in results[1:]:
+        assert row.status == MISSING, (row.id, row.status, row.reasons)
+        assert row.cascade_note == "blocked-by-upstream(0.5ic)"
+        reason = " ".join(row.reasons)
+        assert "Step 0.5ic verdict MISSING" in reason
+        assert "delivery_route declaration is MISSING" in reason
 
 
 def test_two_router_files_at_once_are_refused_and_the_control_is_not(tmp_path):

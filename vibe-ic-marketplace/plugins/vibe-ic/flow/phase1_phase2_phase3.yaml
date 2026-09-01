@@ -1320,6 +1320,21 @@ steps:
       # it is the one step a design with no shuttle also passes through, and a
       # self-tape-out has nobody else to write its numbers down for it.
       - tapeout_declaration_gen
+    # THE AUTHORITY FOR EVERY PATH CONDITION. A false path predicate has two
+    # possible meanings: the OTHER route was selected, or this owner failed
+    # before selecting any route. The predicate alone cannot distinguish
+    # them. Path-dependent steps therefore name this declaration through
+    # `condition_owner`; flow_compliance_check permits design-derived N/A only
+    # after this step PASSes and exactly one alternative below exists. A
+    # missing/conflicting declaration, or any non-PASS owner verdict, leaves
+    # every dependent row hard MISSING with blocked-by-upstream attribution.
+    condition_declarations:
+      delivery_route:
+        exactly_one: true
+        files_exist:
+          - "input/submission_template/slots/*.yaml"
+          - "input/submission_template/NO_TEMPLATE.txt"
+          - "input/submission_template/SELF_TAPEOUT.txt"
     required_outputs:
       # THE `OR` IS THE HONEST HALF. A design that targets no shuttle still has to
       # SAY so: this flow has no `optional:` key on an input, and a step that
@@ -4230,13 +4245,14 @@ steps:
     # any run where 0.5ic itself passed, precisely one of them exists. The two
     # named above are the CHIP ones; the third (`NO_TEMPLATE.txt`) is the
     # IP/hardmacro terminal 37.5ip owns, and an IP is delivered as a hardmacro
-    # somebody else places — it has no die edge, so no pad ring — a silent skip
-    # is the correct reading. The "someone forgot" case is NOT lost to this
-    # default: it is 0.5ic never having run, which its own gate refuses as
-    # NEVER_LOOKED rather than leaving to be inferred from a downstream skip.
-    # Stated rather than left to the default so the reading is the step's, not
-    # the consumer's fallback.
+    # somebody else places — it has no die edge, so no pad ring — a design-
+    # derived N/A is the correct reading ONLY after 0.5ic passed. The explicit
+    # owner link below keeps the "someone forgot" / failed-owner state hard
+    # MISSING rather than rendering it like that legitimate opposite path.
     condition_kind: design_dependent
+    condition_owner:
+      step: 0.5ic
+      declaration: delivery_route
     required_inputs:
       - from: 15
         path: "phase3/stage3/pnr/floorplan.def"
@@ -5646,13 +5662,13 @@ steps:
     # any run where 0.5ic itself passed, precisely one of them exists. The two
     # named above are the CHIP ones; the third (`NO_TEMPLATE.txt`) is the
     # IP/hardmacro terminal 37.5ip owns, and a hardmacro is placed inside
-    # somebody else's die — it has no die edge of its own to seal — so a silent
-    # skip is the correct reading. The "someone forgot" case is NOT lost to
-    # this default: it is 0.5ic never having run, which its own gate refuses as
-    # NEVER_LOOKED rather than leaving to be inferred from a downstream skip.
-    # Stated rather than left to the default so the reading is the step's, not
-    # the consumer's fallback.
+    # somebody else's die — it has no die edge of its own to seal — so a
+    # design-derived N/A is correct ONLY after 0.5ic passed. A missing,
+    # conflicting or failed owner remains a hard upstream blocker.
     condition_kind: design_dependent
+    condition_owner:
+      step: 0.5ic
+      declaration: delivery_route
     required_inputs:
       - from: 21
         path: "phase3/stage3/pnr/routed.def"
@@ -7461,15 +7477,16 @@ steps:
       files_exist: ["input/submission_template/NO_TEMPLATE.txt"]
     # D6 (vibe-ic#1744). `design_dependent`, not `setup_required`: this
     # condition tests WHICH PATH the design is on, and step 0.5ic's
-    # required_outputs is the OR of exactly these two artefacts, so on any run
-    # where 0.5ic itself passed, precisely one of them exists. A chip
+    # required_outputs declares the mutually-exclusive route artefacts, so on
+    # any run where 0.5ic itself passed, precisely one of them exists. A chip
     # legitimately has no hardmacro kit and an IP legitimately has no pad ring,
-    # seal ring or shuttle precheck — a silent skip is the correct reading. The
-    # "someone forgot" case is NOT lost to this default: it is 0.5ic never
-    # having run, which its own gate refuses as NEVER_LOOKED rather than
-    # leaving to be inferred from a downstream skip. Stated rather than left to
-    # the default so the reading is the step's, not the consumer's fallback.
+    # seal ring or shuttle precheck — a design-derived N/A is correct only
+    # after that PASS. The owner link makes an unresolved/failed route a hard
+    # upstream blocker rather than the chip path's apparent opposite.
     condition_kind: design_dependent
+    condition_owner:
+      step: 0.5ic
+      declaration: delivery_route
     required_inputs:
       - from: 37
         path: "phase3/stage4/gds/*.gds"
@@ -7600,12 +7617,13 @@ steps:
     # any run where 0.5ic itself passed, precisely one of them exists. The two
     # named here are the CHIP ones; the third (`NO_TEMPLATE.txt`) is the IP
     # terminal 37.5ip owns, and an IP legitimately has no pad ring, no seal
-    # ring and no tape-out precheck — a silent skip is the correct reading.
-    # The "someone forgot" case is NOT lost to this default: it is 0.5ic never
-    # having run, which its own gate refuses as NEVER_LOOKED rather than
-    # leaving to be inferred from a downstream skip. Stated rather than left to
-    # the default so the reading is the step's, not the consumer's fallback.
+    # ring and no tape-out precheck — a design-derived N/A is correct only
+    # after that PASS. The owner link makes an unresolved/failed route a hard
+    # upstream blocker rather than the IP path's apparent opposite.
     condition_kind: design_dependent
+    condition_owner:
+      step: 0.5ic
+      declaration: delivery_route
     required_inputs:
       - from: 37
         path: "phase3/stage4/gds/*.gds"

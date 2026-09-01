@@ -11203,6 +11203,129 @@ def check_step(project: Path, step: Dict[str, Any], waivers: Dict,
     return _apply_capability_gap(result, sid)
 
 
+def _attribute_condition_owner_blocks(
+        project: Path,
+        results: List["StepResult"],
+        steps: List[Dict[str, Any]],
+) -> Dict[str, Any]:
+    """Refuse design-derived N/A until the condition's owner has resolved it.
+
+    A condition normally answers a local yes/no question: when it is false,
+    the step is ``SKIPPED-CONDITION``.  That is only sound when the fact the
+    condition selects has already been established.  A route predicate is the
+    counterexample: neither the chip marker nor the IP marker existing can
+    mean either "the other path was selected" or "the route owner failed and
+    selected nothing".  The file predicate alone cannot distinguish them.
+
+    The flow declares that missing discriminator in two places:
+
+    * the owner defines a named ``condition_declarations`` record containing
+      the complete set of declaration alternatives; and
+    * each dependent condition names it through ``condition_owner``.
+
+    Only an owner ``PASS`` plus a valid declaration lets the dependent keep
+    its natural verdict.  Every other state is a hard ``MISSING`` annotated
+    ``blocked-by-upstream(<owner>)``.  ``MISSING`` is deliberate: it is the
+    existing non-green upstream-blocked representation (#503), so this change
+    cannot create a new, accidentally-unclassified verdict tier or subtract
+    the row from the required denominator.
+
+    BLOCKING, not advisory.  The original downstream verdict and evidence are
+    retained in ``reasons`` so a real finding is not erased by attribution.
+    Chip/PDK/vendor agnostic: every id, declaration name and path comes from
+    the supplied flow definition.
+    """
+    by_id = {str(r.id): r for r in results}
+    step_by_id = {str(st.get("id")): st for st in steps
+                  if isinstance(st, dict) and st.get("id") is not None}
+    blocked: List[Dict[str, Any]] = []
+    counts: Dict[str, int] = {}
+
+    for step in steps:
+        if not isinstance(step, dict):
+            continue
+        owner_spec = step.get("condition_owner")
+        if not isinstance(owner_spec, dict):
+            continue
+        sid = str(step.get("id"))
+        row = by_id.get(sid)
+        owner_id = str(owner_spec.get("step", "")).strip()
+        declaration_name = str(owner_spec.get("declaration", "")).strip()
+        owner_row = by_id.get(owner_id)
+
+        # A scoped run may intentionally exclude the owner's stage.  Such a
+        # report makes no verdict about that owner, so do not invent one.  The
+        # full-flow report — the acceptance surface this relation protects —
+        # always carries both rows.  Malformed in-scope metadata fails loudly
+        # below rather than being treated as an absent owner.
+        if row is None or owner_row is None:
+            continue
+
+        owner_step = step_by_id.get(owner_id)
+        declarations = ((owner_step or {}).get("condition_declarations")
+                        if isinstance(owner_step, dict) else None)
+        declaration = (declarations.get(declaration_name)
+                       if isinstance(declarations, dict) else None)
+        patterns = (declaration.get("files_exist")
+                    if isinstance(declaration, dict) else None)
+        patterns = ([str(p) for p in patterns if isinstance(p, str) and p]
+                    if isinstance(patterns, list) else [])
+        exact_one = bool((declaration or {}).get("exactly_one")) \
+            if isinstance(declaration, dict) else False
+        matched = [p for p in patterns
+                   if _condition_pattern_satisfied(project, p)]
+
+        config_ok = bool(owner_id and declaration_name and patterns)
+        declaration_ok = (len(matched) == 1 if exact_one else bool(matched))
+        if (config_ok and owner_row.status == "PASS" and declaration_ok):
+            continue
+
+        if not config_ok:
+            declaration_evidence = (
+                f"condition-owner configuration is INVALID: Step {owner_id or '?'} "
+                f"does not define non-empty declaration {declaration_name!r}")
+        elif not matched:
+            declaration_evidence = (
+                f"{declaration_name} declaration is MISSING: none of "
+                f"{patterns} exists")
+        elif exact_one and len(matched) != 1:
+            declaration_evidence = (
+                f"{declaration_name} declaration is CONFLICTING: matched "
+                f"{len(matched)} mutually exclusive alternatives {matched}")
+        else:
+            declaration_evidence = (
+                f"{declaration_name} declaration is present as {matched[0]} "
+                f"but the owner result is not authoritative")
+
+        prior_status = row.status
+        prior_reasons = list(row.reasons)
+        primary = (
+            f"blocked-by-upstream(step {owner_id}): condition owner Step "
+            f"{owner_id} verdict {owner_row.status}; {declaration_evidence}. "
+            f"Until the owner passes with an authoritative declaration, this "
+            f"row's unmet predicate cannot be interpreted as design-derived "
+            f"N/A.")
+        row.status = "MISSING"
+        row.cascade_note = f"blocked-by-upstream({owner_id})"
+        row.reasons = [primary]
+        if prior_reasons:
+            row.reasons.append(
+                f"downstream verdict before owner attribution was "
+                f"{prior_status}: {prior_reasons[0]}")
+            row.reasons.extend(prior_reasons[1:])
+        row.evidence.append(
+            f"condition-owner:{owner_id}/{declaration_name}; "
+            f"owner_verdict={owner_row.status}; matched={matched}")
+        blocked.append({"step": sid, "owner": owner_id,
+                        "owner_verdict": owner_row.status,
+                        "declaration": declaration_name,
+                        "matched": matched,
+                        "prior_status": prior_status})
+        counts[owner_id] = counts.get(owner_id, 0) + 1
+
+    return {"records": blocked, "blocked_by_upstream": counts}
+
+
 def _track_of(sid: Any) -> Optional[str]:
     """v0.3.5 — #502/#503: classify a step id into its declared chain.
     Integer ids = the main digital track; "A*" = analog; "M*" =
@@ -12534,6 +12657,19 @@ def main(argv: Optional[List[str]] = None) -> int:
         project, results, flow.get("steps") or steps)
     cascade_info = _attribute_cascade_verdicts(
         results, steps, waivers, skip_analog=skip_analog)
+    # Issue #1983 — condition-based N/A is valid only after the step that owns
+    # the declaration has passed.  This runs after the ordinary cascade pass
+    # so the more specific declared-owner attribution wins over a generic
+    # first-FAIL note, and before any counts/verdict/report projection so all
+    # consumers see the same hard non-green rows.
+    _condition_owner_info = _attribute_condition_owner_blocks(
+        project, results, steps)
+    for _owner, _count in (
+            _condition_owner_info.get("blocked_by_upstream") or {}).items():
+        _existing = cascade_info.setdefault("blocked_by_upstream", {})
+        _existing[_owner] = _existing.get(_owner, 0) + _count
+    cascade_info["condition_owner_blocks"] = (
+        _condition_owner_info.get("records") or [])
 
     # v0.100 H2: advisory — warn if post-route STA passed single-corner only
     advisories: List[str] = []
