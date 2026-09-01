@@ -762,8 +762,21 @@ _RE_SPICE_SUBCKT_V1_6_353 = re.compile(
 # Same `$` is the open-PDK extraction convention for splitting a single
 # logical net into per-metal-layer fragments (e.g. CORE$1, CORE$2).
 # Strict superset of v1.6.353 char class.
+# The port class uses HORIZONTAL whitespace only. `\s` matches a newline, and
+# under re.MULTILINE `$` matches at ANY line end, so a greedy `\s`-bearing
+# class ran the header past its own line and swallowed the subckt BODY into the
+# port list. MEASURED on a three-port cell:
+#     `.subckt blk a b c` / `R1 a b 1k` / `.ends blk`
+#         -> ports ['a','b','c','R1','a','b','1k','.ends','blk']
+# and on an interface-only declaration `.subckt blk a b c` / `.ends blk`
+#         -> ports ['a','b','c','.ends','blk']
+# Only a comment line between header and body stopped it, so the bug was
+# invisible on netlists that happen to carry one. Every consumer of
+# `L9.submodules[].ports` was reading device names and literals as pins.
+# The `+` continuation join above still works: it REMOVES the newline, so a
+# folded pin list is one physical line by the time this scans.
 _RE_SPICE_SUBCKT_V1_6_355 = re.compile(
-    r"^\.subckt\s+(\w+)\s+([\w\s|/.\-$]+)$",
+    r"^\.subckt[ \t]+(\w+)[ \t]+([\w|/.\-$][\w|/.\-$ \t]*)$",
     re.MULTILINE | re.IGNORECASE,
 )
 # v1.6.355 — for #250 R2 strip Magic/KLayout `$N` split-net suffix

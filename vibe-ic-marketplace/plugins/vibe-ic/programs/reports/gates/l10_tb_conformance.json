@@ -1,0 +1,57 @@
+{
+  "total": 1,
+  "ok": 0,
+  "fail": 1,
+  "waived": 0,
+  "checklist_gaps": 0,
+  "capability_gap": null,
+  "capability_gaps": null,
+  "analog_anchor": "1 analog block(s) ['blk'] carry 9 simulator-produced corner record(s) under phase3/analog/*/corner_results.json (A/M track RAN)",
+  "cpu_oracle_anchor": null,
+  "cpu_oracle_binding_census": {
+    "no_l3": 1,
+    "document_derived_records": "0/0"
+  },
+  "producer_scope": {
+    "total": 1,
+    "kind_histogram": {
+      "verification_intent": 1
+    },
+    "requested_kind": "functional_vector",
+    "scaffold_kinds": [
+      "cpu_functional",
+      "functional",
+      "functional_test",
+      "functional_vector",
+      "instruction_test"
+    ],
+    "in_scaffold_scope": 0,
+    "out_of_scaffold_scope": 1,
+    "out_of_scope_kinds": {
+      "verification_intent": 1
+    }
+  },
+  "producer_scope_gap": 1,
+  "sim_tree_drives_dut": false,
+  "vacuous_sim_tree": true,
+  "vacuous_testbench_files": [
+    "/tmp/pytest-of-reyerchu/pytest-21619/test_noleak_a_mislabelled_digi0/p/phase2/stage1/sim/tb/tb_dummy.v"
+  ],
+  "results": [
+    {
+      "id": "digital_row",
+      "category": "verification_intent",
+      "kind": "verification_intent",
+      "producer_scaffold_scope": "out",
+      "oracle_resolution": "no_l3:no readable L3 in phase1/generated_docs",
+      "evidence": [
+        "NO PRODUCER: kind=verification_intent is outside the TB producer's scaffold scope (cpu_functional, functional, functional_test, functional_vector, instruction_test); this gate grades every L10 case, so the case FAILs — no testbench was written for it and none was fabricated (ORGANIC #761)"
+      ],
+      "pass": false,
+      "status": "fail",
+      "waived": false,
+      "review_required": false,
+      "capability_gap": null
+    }
+  ]
+}

@@ -325,8 +325,28 @@ def emit_block(project: Path, block: str, container: str, pdk_root: str,
         return {"block": block, "emitted": False, "rc": 2,
                 "reason": f"magic wrote no LEF (rc={rc})",
                 "tail": (out + err)[-300:]}
+    # THE CARVE STAYS ON, AND HERE IS THE HYPOTHESIS THAT DIED.
+    #
+    # Chip-level Magic extraction reports thousands of `Illegal overlap
+    # between obsmN and metalN` entries, which aborts LVS as "extracted
+    # netlist untrustworthy". The obvious suspect was this carve: it deletes
+    # obstruction, so the router can route where the macro really has metal.
+    # MEASURED with the carve fully OFF: 3,719 entries against 3,716 with it
+    # on. The carve is not the cause, and the default stays where round 12
+    # put it rather than moving on a refuted story.
+    #
+    # What the same arm DID establish: routing no longer needs the carve.
+    # `pnr` PASSes with an uncarved abstract, because the generator now paints
+    # a real 2.0 x 1.5 um port pad and Magic's own `lef write` leaves that pin
+    # exposed by itself (measured uncarved: pin 1.2 x 0.7 um, OBS flush on
+    # three sides and 0.21 um clear on the fourth). So a caller may set the
+    # clearance to 0 and keep a whole, more faithful obstruction — the two
+    # arms are simply not yet separable on the sign-off DRC number, because
+    # the runner streamed one of them with magic and the other with klayout.
     halo = float(os.environ.get("A8_PIN_ACCESS_CLEARANCE_UM", "0.6"))
-    carved, n_carved = carve_pin_access(lef.read_text(errors="replace"), halo)
+    carved, n_carved = ((lef.read_text(errors="replace"), 0) if halo <= 0
+                        else carve_pin_access(
+                            lef.read_text(errors="replace"), halo))
     if n_carved:
         lef.write_text(carved)
     (hdir / f"{block}.gds").write_bytes(gds.read_bytes())

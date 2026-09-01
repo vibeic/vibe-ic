@@ -168,6 +168,19 @@ def test_rect_minus_is_exact_on_every_side():
     assert left == [(0.0, 0.0, 5.0, 10.0)]
 
 
+def test_the_carve_default_did_not_move_on_a_refuted_hypothesis():
+    """The carve was suspected of causing thousands of Magic `Illegal overlap
+    between obsmN and metalN` entries (which abort LVS). MEASURED with it
+    fully OFF: 3,719 entries against 3,716 with it on. Not the cause — so the
+    default stays where the best measured die was produced, and the knob
+    stays available for a caller who wants the whole obstruction back."""
+    import inspect
+    src = inspect.getsource(E)
+    assert 'A8_PIN_ACCESS_CLEARANCE_UM", "0.6"' in src
+    # …and 0 must still mean "do not carve at all"
+    assert "if halo <= 0" in src
+
+
 def test_a_lef_with_no_pins_is_returned_unchanged():
     out, n = E.carve_pin_access("MACRO blk\n  OBS\n  END\nEND blk\n", 0.5)
     assert n == 0

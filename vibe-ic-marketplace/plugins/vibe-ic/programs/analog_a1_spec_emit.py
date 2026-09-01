@@ -188,6 +188,55 @@ def _spec_entry(canon: str, bound: Dict[str, Any],
     return out
 
 
+def _staged_interface_ports(project: Path, name: str,
+                            btype: str) -> Optional[List[str]]:
+    """Port list for this block from a DESIGN-STAGED interface declaration.
+
+    MEASURED, and it is why this exists: `spec.json:interface.pins[]` is the
+    "golden source" `analog_hardmacro_pinname_consistency_check` names in its
+    own docstring — and NOTHING emitted it. The L5 block record carries the
+    block's PERFORMANCE and no pins, so `_interface` below correctly declined
+    to invent one, the gate self-skipped, and two producers derived the
+    interface independently: the Phase-2 RTL blackbox from the doc prose, the
+    A2 topology emitter from its topology library. They disagreed about every
+    block, and the disagreement first surfaced at PnR as OpenROAD `STA-0201
+    port not found` — after A8 had cleared ORD-2013 and not before.
+
+    So the missing link is not a guess, it is a DECLARATION: when the design
+    stages one (any SPICE `.subckt <block> …` under `input/`, which Phase 1
+    already ingests into `L9.submodules`), its ports are this block's declared
+    interface. Read, never derived — a design that stages nothing still gets
+    no `interface` key and the gate still self-skips, exactly as before.
+    """
+    l9 = _read_json(project / "phase1/generated_docs/L9_INTEGRATION_SPEC.json")
+    subs = (l9 or {}).get("submodules")
+    if not isinstance(subs, list):
+        return None
+    # A block can appear in `submodules` more than once — an entry
+    # contributed by the multiplicity pass carries the NAME and no ports, and
+    # the staged declaration carries the ports. Take the first entry that
+    # actually declares a port list, never the first entry by name (measured:
+    # one block resolved to a port-less multiplicity record and lost its
+    # declaration while its sibling, which had no such record, resolved fine).
+    for sc in subs:
+        if not isinstance(sc, dict):
+            continue
+        nm = str(sc.get("name") or "")
+        if nm.lower() not in (str(name).lower(), str(btype).lower()):
+            continue
+        ports = sc.get("ports_normalized") or sc.get("ports")
+        if isinstance(ports, list) and ports:
+            out = []
+            for p in ports:
+                if isinstance(p, str) and p:
+                    out.append(p)
+                elif isinstance(p, dict) and p.get("name"):
+                    out.append(str(p["name"]))
+            if out:
+                return out
+    return None
+
+
 def _interface(entry: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     """`interface.pins[]` ONLY when the block list actually names pins.
     `analog_hardmacro_pinname_consistency_check` self-skips when the key is
@@ -374,6 +423,12 @@ def emit_for_block(project: Path, entry: Dict[str, Any]) -> Dict[str, Any]:
                                    sorted(bound.keys()), match),
     }
     iface = _interface(entry)
+    if not iface:
+        staged = _staged_interface_ports(project, name, btype)
+        if staged:
+            iface = {"pins": [{"name": p} for p in staged],
+                     "source": "design-staged interface declaration "
+                               "(L9.submodules)"}
     if iface:
         body["interface"] = iface
     bdir.mkdir(parents=True, exist_ok=True)

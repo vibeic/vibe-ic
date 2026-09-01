@@ -6146,7 +6146,9 @@ def _load_sparse_die_skip(project: Path) -> Optional[Dict[str, Any]]:
 
 
 def _build_sparse_die_aware_filler_tcl(filler_masters: List[str],
-                                       slot_pinned_core: bool = False) -> str:
+                                       slot_pinned_core: bool = False,
+                                       design_declared_die: bool = False
+                                       ) -> str:
     """Return a Tcl block that runs `filler_placement {<masters>}` ONLY
     when post-place CORE utilization ≥ the sparse-die threshold; otherwise
     SKIP the full-die decap/fill tiling (emitting a SPARSE_DIE_FILL_SKIPPED
@@ -6215,20 +6217,32 @@ def _build_sparse_die_aware_filler_tcl(filler_masters: List[str],
     # capacitance from the filler at all. Recovering it needs decap insertion
     # and tap pruning to be decided TOGETHER — decap only where tap coverage was
     # retained — which is a change to the placement step, not to this list.
-    if slot_pinned_core and spacers:
+    # A design's OWN declared die is not a fixed wrapper either — the same
+    # reasoning as the shuttle slot one line down, reached by a different
+    # route. MEASURED on a design whose L19 states its die verbatim
+    # (1300x1300 um) and whose core utilization is 0.08%: the skip fired, NO
+    # filler was placed anywhere on the die, and the sign-off deck reported 6
+    # `NW.b` WELL-notch violations — one at every one-site gap between a tie
+    # cell and its neighbour. The skip's own text says "density-fill for the
+    # occupied region is covered by the downstream metal-fill gate", and that
+    # is true of METAL and false of a WELL: metal fill cannot close an NWell
+    # notch. Its other justification does not survive measurement here either
+    # — the filled die streams to 5.2 MB against the 7.4 MB the unfilled run
+    # shipped.
+    if (slot_pinned_core or design_declared_die) and spacers:
         below_arm = (
             "  puts \"SPARSE_DIE_FILL_NOT_APPLICABLE: core_util="
             "$_sd_fill_util% is below the threshold, but the floorplan "
-            "rectangle is the shuttle slot's own CORE_AREA, so the die being "
-            "filled IS the operator's placeable area and there is no empty "
-            "fixed wrapper inside it to flood; the utilization skip is "
-            "withheld and a DEVICE-FREE fill runs.\"\n"
+            "rectangle is the design's own declared placeable area (a shuttle "
+            "slot's CORE_AREA, or a die the design's own L19 states), so "
+            "there is no empty fixed wrapper inside it to flood; the "
+            "utilization skip is withheld and a DEVICE-FREE fill runs.\"\n"
             f"  if {{[catch {{filler_placement {{{spacers_tcl}}}}} _fp_err]}} {{\n"
             "    puts \"FILLER_NONFATAL: $_fp_err\"\n"
             "  } else {\n"
             f"    puts \"FILLER_INSERTED: {len(spacers)} spacer master(s) "
-            "(slot-pinned core; the decap family is withheld because the tap "
-            "prune fired on this die)\"\n"
+            "(design-owned placeable area; the decap family is withheld "
+            "because the tap prune fired on this die)\"\n"
             "  }\n")
     else:
         below_arm = (
@@ -22898,7 +22912,8 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
     # A dense / normal-util design (§4.05 negative) still gets the full
     # fill (util ≥ threshold). chip-AGNOSTIC.
     filler_block = _build_sparse_die_aware_filler_tcl(
-        _filler_masters, slot_pinned_core=fp_rect is not None)
+        _filler_masters, slot_pinned_core=fp_rect is not None,
+        design_declared_die=bool(_l9_die_note))
 
     # PG global-connect RE-APPLY + audit. `global_connect` inside the PDN block
     # runs BEFORE placement, so it can only connect the instances that exist
@@ -23081,6 +23096,34 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
             "{*}$" + _I1958_MACRO_FENCE_VAR + "} "
             "_mpl_err]} {\n"
             "  puts \"MACRO_PLACE_NONFATAL: $_mpl_err\"\n"
+            "}\n"
+            # A ROW UNDER A MACRO IS A ROW THE PDN MUST STRAP AND CANNOT.
+            #
+            # MEASURED, twice, from one cause. `initialize_floorplan` lays rows
+            # across the whole core and nothing removed the ones the macros now
+            # cover, so (a) `pdngen` saw follow-pin rails inside every macro and
+            # in the few-micron slivers between macro and core edge, could not
+            # reach them with a strap, and returned `PDN-0178 Remaining channel
+            # …` x7 then `[ERROR PDN-0179] Unable to repair all channels` —
+            # which this runner reports as PDN_NONFATAL and the pnr step as
+            # BLOCKED, so DRC, LVS and the whole sign-off tail SKIP; and (b) in
+            # a hand-run of the same design the rails that DID get built ran
+            # straight through the macros' own metal and produced 105 of the
+            # 151 sign-off DRC violations on the assembled die (all `M1.b`).
+            #
+            # `cut_rows` is OpenROAD's own construct for exactly this and takes
+            # a halo, so the sliver between a macro and its neighbour goes with
+            # it. MEASURED on the blocked design: 7 channels -> 0, no PDN-0179,
+            # and no PDN ring needed (a ring was tried first and left 6 of the
+            # 7 — the channels are rows, not a missing edge feed).
+            #
+            # Guarded: an OpenROAD without the command leaves the flow exactly
+            # as it was rather than aborting the deck.
+            "if {[catch {cut_rows -halo_width_x 4 -halo_width_y 4} "
+            "_cut_err]} {\n"
+            "  puts \"CUT_ROWS_NONFATAL: $_cut_err\"\n"
+            "} else {\n"
+            "  puts \"CUT_ROWS_DONE: rows under placed macros removed\"\n"
             "}\n"
             f"write_def {out_dir_c}/macro_placed.def\n")
     # Phase-3 reference-flow QoR-knob ingest (floorplan/place/CTS/timing side) —
