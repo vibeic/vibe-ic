@@ -1564,6 +1564,74 @@ def extract_chain(stations: dict) -> List[ChecklistItem]:
     return items
 
 
+# A downstream schema/drafting instruction is not a design requirement.  These
+# shapes are deliberately evaluated after cross-station merge: the first
+# (user-prompt) evidence remains attached to a merged item, so an explicit
+# upstream denial such as "no reset pin" wins over a generated L-doc's generic
+# "reset behavior verification" boilerplate.
+_NON_REQUIREMENT_EVIDENCE_RE = re.compile(
+    r"\b(?:does\s+not\s+specify|not\s+specified|deferred\s+to|"
+    r"look\s+for|not\s+applicable)\b",
+    re.IGNORECASE,
+)
+_EMPTY_JSON_EVIDENCE_RE = re.compile(
+    r'"[^"]+"\s*:\s*(?:\[\s*\]|\{\s*\}|null|false|"")',
+    re.IGNORECASE,
+)
+_CHANNEL_REQ_RE = re.compile(r"\bwith\s+(\d+)\s+channel", re.IGNORECASE)
+
+
+def _is_non_requirement_artifact(it: ChecklistItem) -> bool:
+    """Reject only evidence that structurally states absence/instruction/no-op.
+
+    This is intentionally narrow: affirmative feature prose and non-empty JSON
+    continue to produce blocking requirements.
+    """
+    evidence = it.evidence.strip()
+    low = evidence.lower()
+    if it.kind == "reset":
+        explicit_absence = re.search(
+            r"\b(?:no|without)\s+(?:\w+\s+){0,3}reset(?:\s+pin)?\b",
+            evidence,
+            re.IGNORECASE,
+        )
+        if explicit_absence or not _mention_present_unnegated(
+                evidence, r"\breset\b|\brst\b|\bpor\b"):
+            return True
+    if it.kind == "rounding_mode" and re.fullmatch(r"floorplans?", low):
+        return True
+    if it.kind in {"scan_chain", "jtag_tap", "bist", "test_mode"} \
+            and _NON_REQUIREMENT_EVIDENCE_RE.search(evidence):
+        return True
+    if it.kind in {"calibration_field", "calibration_procedure"} \
+            and _EMPTY_JSON_EVIDENCE_RE.search(evidence):
+        return True
+    if it.kind == "analog_converter":
+        match = _CHANNEL_REQ_RE.search(it.requirement)
+        if match:
+            count = re.escape(match.group(1))
+            # The same integer must qualify channel(s)/copies in the evidence;
+            # a decimal tail ("1.2 V ... 6 channels") is not a 2-channel ADC.
+            qualified = re.search(
+                rf"(?<![\d.]){count}(?!\d)[^.;\n|]{{0,40}}?"
+                rf"\b(?:channels?|copies|ch)\b",
+                evidence,
+                re.IGNORECASE,
+            )
+            if not qualified:
+                return True
+    return False
+
+
+# Physical/PVT facts are genuine requirements, but a two-state digital RTL
+# self-TB cannot exercise voltage, current, temperature, or slew.  Keep them in
+# the report and route them to AMS/corner sign-off; do not demand that an RTL TB
+# game token coverage by putting "1.8 V" in a comment.
+_AMS_ONLY_KINDS = frozenset({
+    "supply_voltage", "current_spec", "temperature_range", "slew_rate",
+})
+
+
 def _inside_braces(text: str, pos: int) -> bool:
     """True if `pos` falls inside a `{...}` enumerated set."""
     for m in _ENUM_SET_RE.finditer(text):
@@ -2288,7 +2356,19 @@ def attribute_failure(failure_text: str, items: List[ChecklistItem],
 def run(stations: dict, rtl_text: Optional[str], tb_text: Optional[str],
         failure_text: Optional[str], strict: bool) -> dict:
     """`stations` maps STATION_ORDER keys -> text (only the provided ones)."""
-    items = extract_chain(stations)
+    # The verbatim user prompt is the highest-authority station.  Preserve an
+    # explicit interface absence across the station merge: generated L-doc
+    # boilerplate such as "reset behavior verification" must not turn a source
+    # declaration of "no reset pin" into an RTL/TB requirement.
+    user_prompt = stations.get("user_prompt") or ""
+    reset_explicitly_absent = bool(
+        re.search(r"\b(?:reset|rst|por)\b", user_prompt, re.IGNORECASE)
+    ) and not _mention_present_unnegated(
+        user_prompt, r"\breset\b|\brst\b|\bpor\b"
+    )
+    items = [it for it in extract_chain(stations)
+             if not _is_non_requirement_artifact(it)
+             and not (reset_explicitly_absent and it.kind == "reset")]
 
     # --- Reset coverage tokens from the design's REAL reset port(s) ----------
     # The shipped reset item hard-codes ['reset','rst','por'] which never match
@@ -2499,6 +2579,12 @@ def run(stations: dict, rtl_text: Optional[str], tb_text: Optional[str],
             it.block_eligible = _prov.is_block_eligible(it.provenance, corr)
             if not it.block_eligible:
                 it.advisory_note = _prov.advisory_reason(it.provenance, corr)
+        if it.kind in _AMS_ONLY_KINDS and it.covered is False:
+            it.provenance = _prov.PROSE_HEURISTIC
+            it.block_eligible = False
+            it.advisory_note = (
+                "physical/PVT requirement remains for AMS or corner sign-off; "
+                "a digital RTL testbench cannot exercise this quantity")
         # NOTE (#770 §4.05): the `port` kind is DELIBERATELY NOT
         # provenance-downgraded here. A spec port absent from the RTL port set
         # cannot be told apart from a phantom by absence alone — that exact

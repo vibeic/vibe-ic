@@ -37,6 +37,7 @@ project's own L-docs.
 from __future__ import annotations
 
 import argparse
+import ast
 import json
 import re
 import sys
@@ -122,10 +123,11 @@ def _load_clock_reset(project: Path, ports: List[dict]) -> Dict[str, Any]:
     sync = True
     l9 = _read_json(_gd(project) / "L9_INTEGRATION_SPEC.json") or {}
     f9 = l9.get("fields", l9)
-    for c in (f9.get("clocks") or []):
+    for c in (f9.get("clocks") or f9.get("clock_domains") or []):
         if isinstance(c, dict) and c.get("name"):
-            if not clk:
-                clk = c["name"]
+            declared = str(c.get("source_pin") or c["name"])
+            if not clk and declared.lower() in names:
+                clk = names[declared.lower()]
             if c.get("edge"):
                 edge = str(c["edge"]).lower()
             if c.get("period_ns"):
@@ -133,6 +135,26 @@ def _load_clock_reset(project: Path, ports: List[dict]) -> Dict[str, Any]:
                     period_ns = float(c["period_ns"])
                 except (TypeError, ValueError):
                     pass
+            break
+    # L8 owns clock frequency/period.  L9 often carries only the interface
+    # domain, so enrich the selected real port from L8 rather than defaulting
+    # an unrelated `clk` at 10 ns.
+    l8 = _read_json(_gd(project) / "L8_TIMING_WAVEFORM.json") or {}
+    f8 = l8.get("fields", l8)
+    for c in (f8.get("clocks") or f8.get("clock_domains") or []):
+        if not isinstance(c, dict) or not c.get("name"):
+            continue
+        declared = str(c.get("source_pin") or c["name"])
+        if not clk and declared.lower() in names:
+            clk = names[declared.lower()]
+        if clk and declared.lower() == clk.lower():
+            try:
+                if c.get("period_ns") is not None:
+                    period_ns = float(c["period_ns"])
+                elif c.get("freq_hz"):
+                    period_ns = 1.0e9 / float(c["freq_hz"])
+            except (TypeError, ValueError, ZeroDivisionError):
+                pass
             break
     for r in (f9.get("reset_domains") or f9.get("resets") or []):
         if isinstance(r, dict) and r.get("name"):
@@ -420,13 +442,14 @@ def build_assertions(project: Path, shape: dict) -> Tuple[str, dict]:
     cr = shape["cr"]
     top = shape["top"]
     clk = cr["clk"] or "clk"
-    rst = cr["rst"] or "rst"
-    rst_expr = rst if cr["active_high"] else f"!{rst}"
+    rst = cr["rst"]
+    rst_expr = (rst if cr["active_high"] else f"!{rst}") if rst else None
     props = []
     lines = [f"// Auto-derived assertions for {top} (professional_tb_gen).",
              f"// clock={clk} edge={cr['edge']} reset={rst} "
              f"active_high={cr['active_high']}",
-             f"module {top}_asserts (input {clk}, input {rst});"]
+             (f"module {top}_asserts (input {clk}, input {rst});"
+              if rst else f"module {top}_asserts (input {clk});")]
     # reset -> outputs are known (no X) once out of reset
     outs = [p["name"] for p in shape.get("ports", [])
             if p.get("dir") == "output"]
@@ -446,13 +469,16 @@ def build_assertions(project: Path, shape: dict) -> Tuple[str, dict]:
         # ASSERT_COUNT happily reported the assertions it had just refused to
         # see. Two emitters, two shapes, one checker that only knew one.
         lines.append(f"  property {pid}_p;")
-        lines.append(f"    @(posedge {clk}) disable iff ({rst_expr}) "
-                     f"!$isunknown({o});")
+        if rst_expr:
+            lines.append(f"    @(posedge {clk}) disable iff ({rst_expr}) "
+                         f"!$isunknown({o});")
+        else:
+            lines.append(f"    @(posedge {clk}) !$isunknown({o});")
         lines.append(f"  endproperty")
         lines.append(f"  {pid}: assert property ({pid}_p);")
         props.append({"id": pid, "kind": "SVA", "english":
                       f"{o} is known (no X) out of reset",
-                      "spec_ref": "L9.reset"})
+                      "spec_ref": "L9.reset" if rst else "L9.clock"})
     # L16 must/shall prose -> advisory property stubs (english kept; formalise
     # via spec-to-assertion skill — never fabricated as a passing SVA)
     l16 = _read_l16(project)
@@ -475,7 +501,7 @@ def build_assertions(project: Path, shape: dict) -> Tuple[str, dict]:
 def _emit_common_header(shape: dict) -> str:
     cr = shape["cr"]
     clk = cr["clk"] or "clk"
-    rst = cr["rst"] or "rst"
+    rst = cr["rst"]
     half = max(1, int(round(cr["period_ns"] / 2)))
     rst_on = "1" if cr["active_high"] else "0"
     rst_off = "0" if cr["active_high"] else "1"
@@ -507,7 +533,7 @@ except Exception:
     _HAVE_COV = False
 
 CLK = "{clk}"
-RST = "{rst}"
+RST = {rst!r}
 HALF_NS = {half}
 SEED = int(os.environ.get("TB_SEED", "1"))
 DUT_INPUTS = {inputs_lit}   # all data inputs (clk/rst excluded); reset drives 0
@@ -521,10 +547,11 @@ async def _reset(dut):
             getattr(dut, _sig).value = 0
         except Exception:
             pass
-    getattr(dut, RST).value = {rst_on}
-    for _ in range(3):
-        await RisingEdge(getattr(dut, CLK))
-    getattr(dut, RST).value = {rst_off}
+    if RST is not None:
+        getattr(dut, RST).value = {rst_on}
+        for _ in range(3):
+            await RisingEdge(getattr(dut, CLK))
+        getattr(dut, RST).value = {rst_off}
     await RisingEdge(getattr(dut, CLK))
 
 
@@ -723,6 +750,39 @@ async def professional_smoke_test(dut):
 '''
 
 
+def _load_expert_reference_tb(out: Path) -> Optional[str]:
+    """Load the judgment-layer Tier-3 hook only when it is self-checking.
+
+    The source is deliberately stored beside, but separately from, the
+    generated canonical TB so regeneration cannot erase the expert's work.
+    Execution/JUnit remains the final authority; these checks reject the
+    common placeholder and TestSkip shapes before a simulator is launched.
+    """
+    source = out / "expert_reference_tb.py"
+    try:
+        text = source.read_text(errors="replace")
+        tree = ast.parse(text)
+    except (OSError, SyntaxError):
+        return None
+    if "TestSkip" in text or "PROFESSIONAL_TB PASS" not in text:
+        return None
+    for node in tree.body:
+        if not isinstance(node, (ast.AsyncFunctionDef, ast.FunctionDef)):
+            continue
+        decorators = {ast.unparse(d) for d in node.decorator_list}
+        if not any(d.startswith("cocotb.test") for d in decorators):
+            continue
+        args = {a.arg for a in node.args.args}
+        observes_dut = any(
+            isinstance(child, ast.Name) and child.id in args
+            for child in ast.walk(node)
+        )
+        if observes_dut and any(isinstance(child, ast.Assert)
+                                for child in ast.walk(node)):
+            return text
+    return None
+
+
 def emit_makefile(shape: dict, rtl_files: List[str]) -> str:
     top = shape["top"]
     verilog = " \\\n\t".join(rtl_files) if rtl_files else f"$(PWD)/{top}.v"
@@ -759,22 +819,31 @@ def generate(project: Path, out_dir: Optional[Path] = None) -> dict:
     out = out_dir or (_pl.rtl_dir(project).parent / "sim_professional" / top)
     out.mkdir(parents=True, exist_ok=True)
 
-    if shape["kind"] == "serial_stream":
+    expert_tb = (_load_expert_reference_tb(out)
+                 if shape["kind"] == "generic" else None)
+    if expert_tb is not None:
+        tb = expert_tb
+        ref_tier = "expert_filled"
+        run_kind = "expert_reference"
+    elif shape["kind"] == "serial_stream":
         tb = emit_serial_stream_tb(shape)
         ref_tier = "streaming_bounded_latency"
+        run_kind = shape["kind"]
     elif shape["kind"] == "parallel_arith":
         tb = emit_parallel_arith_tb(shape)
         ref_tier = "closed_form"
+        run_kind = shape["kind"]
     else:
         tb = emit_generic_tb(shape)
         ref_tier = "hook_unfilled"
+        run_kind = shape["kind"]
 
     cov = build_coverage_model(shape)
     sva, l29 = build_assertions(project, shape)
     rtl = _rtl_files(project, top)
     mk = emit_makefile(shape, rtl)
     vplan = {
-        "top": top, "ic_class": ic_class, "dut_kind": shape["kind"],
+        "top": top, "ic_class": ic_class, "dut_kind": run_kind,
         "reference_model_tier": ref_tier,
         "coverage_model": "L28 (see <top>_coverage_model.json)",
         "assertions": "L29 (see <top>_assertions.sva)",
@@ -789,7 +858,7 @@ def generate(project: Path, out_dir: Optional[Path] = None) -> dict:
     (out / "Makefile").write_text(mk)
     (out / "verification_plan.json").write_text(
         json.dumps(vplan, indent=2) + "\n")
-    return {"status": "PASS", "ic_class": ic_class, "dut_kind": shape["kind"],
+    return {"status": "PASS", "ic_class": ic_class, "dut_kind": run_kind,
             "reference_model_tier": ref_tier, "out_dir": str(out),
             "files": [f"tb_{top}.py", f"{top}_coverage_model.json",
                       f"{top}_assertions.sva", "Makefile",

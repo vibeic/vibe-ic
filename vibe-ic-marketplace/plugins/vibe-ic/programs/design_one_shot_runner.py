@@ -7181,12 +7181,31 @@ def step_professional_tb_gen(project: Path, top_name: str = "",
     rec: Dict[str, Any] = {**gen, "ran_cocotb": False,
                            "functional_mismatch": False}
 
+    # A prior arm/run may have left a green JUnit in this persistent project
+    # tree.  Invalidate it before deciding whether THIS invocation can run a
+    # reference model.  Only a results.xml freshly emitted by the simulator
+    # below is admissible; otherwise a newly-unfilled Tier-3 hook can inherit a
+    # stale PASS while reporting ran_cocotb=false in the same gate record.
+    stale_results = out_dir / "results.xml"
+    if stale_results.is_file():
+        try:
+            stale_results.unlink()
+            rec["stale_results_invalidated"] = True
+        except OSError as e:
+            rec.update({"status": "FAIL", "reason":
+                        f"could not invalidate stale professional JUnit: {e}"})
+            _write(rec)
+            return StepResult(
+                "professional_tb_gen", "FAIL", time.time() - t0,
+                "stale professional results.xml could not be invalidated")
+
     # Run cocotb ONLY for classes with a genuine reference model. The generic
     # class emits a reference HOOK that RAISES until filled — generate() already
     # wrote it; the program-first route then hands that explicit gap to the
     # testbench-gen expert fallback. It is INCOMPLETE until the hook is filled,
     # never a class waiver.
-    if dut_kind in ("serial_stream", "parallel_arith") and out_dir.is_dir():
+    if dut_kind in ("serial_stream", "parallel_arith", "expert_reference") \
+            and out_dir.is_dir():
         if _tool_in_container(container, "iverilog"):
             log_path = out_dir / "cocotb_run.log"
             cmd = f"cd '{out_dir}' && make SIM=icarus"

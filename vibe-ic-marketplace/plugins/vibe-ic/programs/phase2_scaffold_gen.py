@@ -1003,14 +1003,24 @@ def emit_compliance_vectors(l10: dict, l16: dict, l22: dict) -> str:
 # Clock / reset port detection (shared by tb + cocotb + soc_wrap + derive_signals)
 # ---------------------------------------------------------------------------
 
+_SC_PHASE_CLOCK_RE = re.compile(
+    r"(?i)^(?:ck|phi)(?:\d+)?(?:[_.]?(?:in|i|sys|core|div|gen|en|ref)\d*)?$"
+)
+
+
 def _is_clock_name(n: str) -> bool:
     """True when a (case-insensitive) signal name looks like a clock.
 
-    Single source of truth — substring match on 'clk' / 'clock' so names like
-    BusClock / PCLK / HCLK / SCK_clk are all recognised. Used by BOTH the
-    derive_signals auto-add guard AND _detect_clk_port."""
-    n = n.lower()
-    return "clk" in n or "clock" in n
+    Single source of truth — substring match on 'clk' / 'clock' keeps names
+    like BusClock / PCLK / HCLK / SCK_clk working.  Bare ``ck<N>`` and
+    ``phi<N>`` are standard switched-capacitor clock names, so accept those
+    exact families too without sweeping data names such as ``ack`` or
+    ``phase_out`` into the clock set. Used by BOTH the derive_signals
+    auto-add guard AND _detect_clk_port."""
+    raw = n.strip()
+    lowered = raw.lower()
+    return ("clk" in lowered or "clock" in lowered
+            or bool(_SC_PHASE_CLOCK_RE.fullmatch(raw)))
 
 
 def _is_reset_name(n: str) -> bool:
