@@ -7,6 +7,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+from _hostpaths import require_repo
+
 PROG = (Path(__file__).resolve().parent.parent / "l8_clock_domains_typed_check.py")
 
 
@@ -34,10 +36,118 @@ def _make(tmp_path, l8=None, doc_text=None, l9=None):
     return proj
 
 
+def _write_cdc(project: Path, roots: list[str]) -> None:
+    report = project / "reports" / "phase2" / "cdc"
+    report.mkdir(parents=True, exist_ok=True)
+    (report / "crossing.json").write_text(
+        json.dumps({"verdict": "PASS", "clocks_found": roots}),
+        encoding="utf-8",
+    )
+
+
 def test_skip_when_single_clock(tmp_path):
     proj = _make(tmp_path, doc_text="core runs at 5 MHz")
     r = _run(proj)
     assert r.returncode == 2
+
+
+def test_issue1977_resolved_multi_clock_blocks_false_zero_freq_skip(tmp_path):
+    """Removing the evidence cross-check makes this falsely return rc 2."""
+    proj = _make(
+        tmp_path,
+        doc_text="No numeric clock rate is stated in this input.",
+        l9={"top_ports": [
+            {"name": "clk_a_i", "direction": "input"},
+            {"name": "clk_b_i", "direction": "input"},
+        ]},
+    )
+    _write_cdc(proj, ["clk_a_i", "clk_b_i"])
+    r = _run(proj)
+    assert r.returncode == 1, r.stdout + r.stderr
+    assert "EXTRACTION_APPLICABILITY_CONTRADICTION" in r.stdout
+    assert "input-doc:freq=0" in r.stdout
+    assert "reports/phase2/cdc/crossing.json:roots=2" in r.stdout
+    assert "L9_INTEGRATION_SPEC.json:input_ports" in r.stdout
+
+
+def test_issue1977_genuine_single_clock_evidence_still_skips(tmp_path):
+    proj = _make(
+        tmp_path,
+        doc_text="core clock 5 MHz",
+        l9={"ports": [{"name": "clk_i", "direction": "input"}]},
+    )
+    _write_cdc(proj, ["clk_i"])
+    r = _run(proj)
+    assert r.returncode == 2, r.stdout + r.stderr
+    assert "single-clock topology" in r.stdout
+
+
+def test_issue1977_typed_multiclock_map_with_resolved_roots_passes(tmp_path):
+    """Resolved roots make the gate applicable, not contradictory, when L8
+    already declares a real multi-clock map."""
+    proj = _make(
+        tmp_path,
+        doc_text="Clock rates are supplied structurally.",
+        l8={"clock_domains": [
+            {"name": "clk_a_i", "freq_mhz": 10, "role": "master"},
+            {"name": "clk_b_i", "freq_mhz": 5, "source": "clk_a_i"},
+        ]},
+        l9={"ports": [
+            {"name": "clk_a_i", "direction": "input"},
+            {"name": "clk_b_i", "direction": "input"},
+        ]},
+    )
+    _write_cdc(proj, ["clk_a_i", "clk_b_i"])
+    r = _run(proj)
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "[PASS]" in r.stdout
+
+
+def test_issue1977_sdc_clock_commands_corroborate_resolved_roots(tmp_path):
+    proj = _make(tmp_path, doc_text="Clock rates are not specified.")
+    _write_cdc(proj, ["clk_a_i", "clk_b_i"])
+    constraints = proj / "constraints"
+    constraints.mkdir()
+    (constraints / "clocks.sdc").write_text(
+        "create_clock -name clk_a_i -period 10 [get_ports clk_a_i]\n"
+        "create_clock -name clk_b_i -period 20 [get_ports clk_b_i]\n",
+        encoding="utf-8")
+    r = _run(proj)
+    assert r.returncode == 1, r.stdout + r.stderr
+    assert "constraints/clocks.sdc:create_clock" in r.stdout
+
+
+def test_issue1977_nonclock_sdc_port_does_not_inflate_corroboration(tmp_path):
+    proj = _make(tmp_path, doc_text="Clock rates are not specified.")
+    _write_cdc(proj, ["clk_i", "data_i"])
+    constraints = proj / "constraints"
+    constraints.mkdir()
+    (constraints / "clocks.sdc").write_text(
+        "create_clock -name clk_i -period 10 [get_ports clk_i]\n"
+        "set_input_delay 2 -clock clk_i [get_ports data_i]\n",
+        encoding="utf-8")
+    r = _run(proj)
+    assert r.returncode == 2, r.stdout + r.stderr
+    assert "single-clock topology" in r.stdout
+
+
+def test_issue1977_real_checked_multiclock_fixture_blocks_skip():
+    """Checked-in flow evidence backs the synthetic multi-clock control."""
+    project = require_repo(
+        "vibe-ic-marketplace", "plugins", "vibe-ic", "programs", "tests",
+        "fixtures", "stage1_on_pass_review", "reject_caravel")
+    r = _run(project)
+    assert r.returncode == 1, r.stdout + r.stderr
+    assert "EXTRACTION_APPLICABILITY_CONTRADICTION" in r.stdout
+
+
+def test_issue1977_real_checked_single_clock_fixture_still_skips():
+    project = require_repo(
+        "vibe-ic-marketplace", "plugins", "vibe-ic", "programs", "tests",
+        "fixtures", "stage1_on_pass_review", "accept_spm")
+    r = _run(project)
+    assert r.returncode == 2, r.stdout + r.stderr
+    assert "single-clock topology" in r.stdout
 
 
 def test_fail_when_multi_clock_but_no_typed_clocks(tmp_path):
@@ -182,3 +292,19 @@ def test_skip_on_bare_fpga(tmp_path):
     assert r.returncode == 2, r.stdout + r.stderr
     assert "SKIP" in r.stdout
     assert "ic_class=bare_fpga" in r.stdout
+
+
+def test_issue1977_clock_contradiction_precedes_class_skip(tmp_path):
+    proj = _make(
+        tmp_path,
+        l9={"ports": [
+            {"name": "clk_a_i", "direction": "input"},
+            {"name": "clk_b_i", "direction": "input"},
+        ]},
+    )
+    (proj / "facts.yaml").write_text("name: synthesized_fpga_target\n",
+                                     encoding="utf-8")
+    _write_cdc(proj, ["clk_a_i", "clk_b_i"])
+    r = _run(proj)
+    assert r.returncode == 1, r.stdout + r.stderr
+    assert "EXTRACTION_APPLICABILITY_CONTRADICTION" in r.stdout

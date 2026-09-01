@@ -10,7 +10,10 @@ derived clocks but L8 only carries the bit-decoder threshold ticks.
 
 Trigger: extracted vendor docs OR L8.* contain >=2 distinct
 frequency mentions (regex ``\\d+\\.?\\d*\\s*(MHz|kHz|GHz|Hz)``)
-indicating a multi-clock topology.
+indicating a multi-clock topology. Canonical CDC evidence that resolves at
+least two roots, corroborated by L9 input ports or active SDC clock commands,
+also triggers the gate. A disagreement is the named blocking finding
+``EXTRACTION_APPLICABILITY_CONTRADICTION`` and can never take the SKIP path.
 
 Required typed shape: L8 (or L9 / L8 ``timing_constants``) MUST
 have a ``clock_domains`` array (or ``clocks`` / ``clock_map`` /
@@ -28,7 +31,7 @@ Usage:
     python3 l8_clock_domains_typed_check.py <project_dir>
 
 Exit codes:
-    0 = PASS (single-clock design OR typed clock_domains present)
+    0 = PASS (typed clock_domains present)
     1 = FAIL (multi-clock topology detected but no typed clocks[])
     2 = input-missing (skip)
 
@@ -41,9 +44,10 @@ import json
 import re
 import sys
 from pathlib import Path
-from typing import List, Optional, Set
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import _path_layout as _pl  # noqa: E402
 from ic_class_profile import detect_ic_class  # noqa: E402
 
 
@@ -69,6 +73,14 @@ _L8_GLOBS = (
 _L9_GLOBS = (
     "phase1/generated_docs/L9_INTEGRATION_SPEC.json",
 )
+
+_CDC_GLOBS = (
+    "reports/phase2/cdc/crossing.json",
+    "reports/phase2/cdc/async_input.json",
+    "reports/phase2/cdc/reset_dep.json",
+)
+
+_PORT_LIST_KEYS = ("top_ports", "ports", "top_module_pins")
 
 _RE_FREQ = re.compile(r"(\d+\.?\d*)\s*(MHz|kHz|GHz|Hz)\b", re.IGNORECASE)
 
@@ -170,6 +182,146 @@ def _scan_freq_mentions(project: Path) -> Set[str]:
     return distinct
 
 
+def _rel(project: Path, path: Path) -> str:
+    try:
+        return path.relative_to(project).as_posix()
+    except ValueError:
+        return str(path)
+
+
+def _collect_named_list(node, key: str, out: Set[str]) -> None:
+    """Collect normalized string members below every exact *key*."""
+    if isinstance(node, dict):
+        for item_key, value in node.items():
+            if item_key == key and isinstance(value, list):
+                out.update(str(item).strip().lower() for item in value
+                           if isinstance(item, str) and item.strip())
+            else:
+                _collect_named_list(value, key, out)
+    elif isinstance(node, list):
+        for value in node:
+            _collect_named_list(value, key, out)
+
+
+def _resolved_clock_roots(project: Path) -> Tuple[Set[str], List[str]]:
+    """Read canonical structured CDC root evidence and cite its sources."""
+    roots: Set[str] = set()
+    sources: List[str] = []
+    for relpath in _CDC_GLOBS:
+        path = project / relpath
+        if not path.is_file():
+            continue
+        try:
+            data = json.loads(path.read_text(encoding="utf-8",
+                                             errors="replace"))
+        except Exception:
+            continue
+        before = len(roots)
+        _collect_named_list(data, "clocks_found", roots)
+        if len(roots) > before:
+            sources.append(f"{_rel(project, path)}:clocks_found")
+    return roots, sources
+
+
+def _l9_input_ports(project: Path) -> Tuple[Set[str], List[str]]:
+    """Read structured L9 top/input port names, without name heuristics."""
+    names: Set[str] = set()
+    sources: List[str] = []
+    for pattern in _L9_GLOBS:
+        for path in sorted(project.glob(pattern)):
+            if not path.is_file():
+                continue
+            try:
+                data = json.loads(path.read_text(encoding="utf-8",
+                                                 errors="replace"))
+            except Exception:
+                continue
+            found: Set[str] = set()
+
+            def visit(node) -> None:
+                if isinstance(node, dict):
+                    for key, value in node.items():
+                        if key in _PORT_LIST_KEYS and isinstance(value, list):
+                            for entry in value:
+                                if not isinstance(entry, dict):
+                                    continue
+                                direction = str(entry.get("direction") or
+                                                entry.get("mode") or "").lower()
+                                if direction and direction not in {"input", "in"}:
+                                    continue
+                                name = entry.get("name") or entry.get("port")
+                                if isinstance(name, str) and name.strip():
+                                    found.add(name.strip().lower())
+                        else:
+                            visit(value)
+                elif isinstance(node, list):
+                    for value in node:
+                        visit(value)
+
+            visit(data)
+            if found:
+                names.update(found)
+                sources.append(f"{_rel(project, path)}:input_ports")
+    return names, sources
+
+
+_SDC_CLOCK_CMD_RE = re.compile(r"\bcreate_(?:generated_)?clock\b", re.I)
+_SDC_NAME_RE = re.compile(r"(?:^|\s)-name\s+\{?([^\s}\]]+)", re.I)
+_SDC_TARGET_RE = re.compile(
+    r"\[\s*get_(?:ports|pins)\s+\{?([^\s}\]]+)", re.I)
+
+
+def _sdc_clock_names(project: Path) -> Tuple[Set[str], List[str]]:
+    """Read clock names/targets from active create-clock SDC commands."""
+    names: Set[str] = set()
+    sources: List[str] = []
+    for path in _pl.clock_plan_input_sdcs(project):
+        try:
+            text = path.read_text(encoding="utf-8", errors="replace")
+        except Exception:
+            continue
+        # Tcl line continuations become spaces; comments remain line-scoped.
+        active = "\n".join(line.split("#", 1)[0]
+                           for line in text.replace("\\\n", " ").splitlines())
+        found: Set[str] = set()
+        for command in re.split(r"[;\n]", active):
+            if not _SDC_CLOCK_CMD_RE.search(command):
+                continue
+            found.update(m.group(1).strip().lower()
+                         for m in _SDC_NAME_RE.finditer(command))
+            found.update(m.group(1).strip().lower()
+                         for m in _SDC_TARGET_RE.finditer(command))
+        if found:
+            names.update(found)
+            sources.append(f"{_rel(project, path)}:create_clock")
+    return names, sources
+
+
+def _resolved_multiclock_evidence(
+        project: Path, distinct_freqs: Set[str],
+        entries: List[dict]) -> Optional[Dict[str, Any]]:
+    """Return independent multi-clock evidence and L-doc declaration depth."""
+    if len(distinct_freqs) >= 2:
+        return None
+    roots, cdc_sources = _resolved_clock_roots(project)
+    ports, port_sources = _l9_input_ports(project)
+    sdc_names, sdc_sources = _sdc_clock_names(project)
+    corroborated = roots & (ports | sdc_names)
+    if len(roots) < 2 or len(corroborated) < 2:
+        return None
+    clock_map_names = sorted({name for name in
+                              (_canonical_clock_name(entry)
+                               for entry in entries) if name is not None})
+    return {
+        "frequency_mentions": sorted(distinct_freqs),
+        "clock_map_names": clock_map_names,
+        "resolved_roots": sorted(roots),
+        "corroborated_roots": sorted(corroborated),
+        "cdc_sources": cdc_sources,
+        "port_sdc_sources": port_sources + sdc_sources,
+    }
+
+
 def _collect_clock_entries(node, out: List[dict]) -> None:
     if isinstance(node, dict):
         for k, v in node.items():
@@ -227,22 +379,6 @@ def main() -> int:
     if not project.is_dir():
         return 2
 
-    profile = detect_ic_class(project)
-    ic_class = profile.get("ic_class", "unknown")
-    if ic_class in _SKIP_CLASSES:
-        print(f"[SKIP] l8_clock_domains_typed_check: "
-              f"ic_class={ic_class} (FPGA evaluation board uses a "
-              f"single eval-board clock; L8 clock_domains[] not "
-              f"applicable)")
-        return 2
-
-    distinct_freqs = _scan_freq_mentions(project)
-    if len(distinct_freqs) < 2:
-        print("[SKIP] l8_clock_domains_typed_check: "
-              f"single-clock topology (only {len(distinct_freqs)} "
-              "distinct freq mention)")
-        return 2
-
     entries: List[dict] = []
     for globs in (_L8_GLOBS, _L9_GLOBS):
         for pat in globs:
@@ -253,6 +389,44 @@ def main() -> int:
                     except Exception:
                         continue
                     _collect_clock_entries(data, entries)
+
+    distinct_freqs = _scan_freq_mentions(project)
+    resolved_multi = _resolved_multiclock_evidence(
+        project, distinct_freqs, entries)
+    if resolved_multi is not None and len(resolved_multi["clock_map_names"]) < 2:
+        cdc_sources = resolved_multi["cdc_sources"]
+        corroborating = resolved_multi["port_sdc_sources"]
+        cdc_path = cdc_sources[0].split(":", 1)[0]
+        corroborating_path, corroborating_kind = corroborating[0].split(":", 1)
+        print("[FAIL] l8_clock_domains_typed_check: "
+              "BLOCKING EXTRACTION_APPLICABILITY_CONTRADICTION: "
+              f"input-doc:freq={len(distinct_freqs)} vs "
+              f"{cdc_path}:roots={len(resolved_multi['resolved_roots'])}; "
+              f"{Path(corroborating_path).name}:"
+              f"{corroborating_kind} corroborate")
+        print("  frequency_mentions="
+              f"{resolved_multi['frequency_mentions']!r}")
+        print(f"  clock_map_names={resolved_multi['clock_map_names']!r}")
+        print(f"  resolved_roots={resolved_multi['resolved_roots']!r}")
+        print(f"  corroborated_roots={resolved_multi['corroborated_roots']!r}")
+        print(f"  CDC sources={cdc_sources!r}")
+        print(f"  port/SDC sources={corroborating!r}")
+        return 1
+
+    profile = detect_ic_class(project)
+    ic_class = profile.get("ic_class", "unknown")
+    if ic_class in _SKIP_CLASSES:
+        print(f"[SKIP] l8_clock_domains_typed_check: "
+              f"ic_class={ic_class} (FPGA evaluation board uses a "
+              f"single eval-board clock; L8 clock_domains[] not "
+              f"applicable)")
+        return 2
+
+    if len(distinct_freqs) < 2 and resolved_multi is None:
+        print("[SKIP] l8_clock_domains_typed_check: "
+              f"single-clock topology (only {len(distinct_freqs)} "
+              "distinct freq mention)")
+        return 2
 
     if not entries:
         print(f"[FAIL] l8_clock_domains_typed_check: "

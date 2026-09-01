@@ -186,8 +186,11 @@ would be false statements. A disclosed skip is the only honest shape.
 Fail-safe / no-false-positive design
 ====================================
 * No L6 file → SKIP(2).
-* ``ic_class`` in {pure_analog, bare_fpga} → SKIP (no control FSM).
-* L6 positively declares no FSM in the input → Part A SKIPs.
+* ``ic_class`` in {pure_analog, bare_fpga} → SKIP (no control FSM), unless
+  staged RTL structurally contradicts that absence.
+* L6 positively declares no FSM in the input → Part A SKIPs only when
+  staged RTL contains no structural FSM evidence. A contradiction is a
+  blocking extraction/applicability finding, not a waiverable absence.
 * No ``reject_rules[]`` → Part B SKIPs.
 * If the consuming programs cannot be imported the gate SKIPs rather
   than guessing at their contract.
@@ -320,6 +323,166 @@ def _l6_declares_no_fsm(l6: dict) -> bool:
     a layer that simply omitted the flag is still checked (fail-closed).
     """
     return any(l6.get(k) is True for k in _NO_FSM_KEYS)
+
+
+def _json_strings(node: Any) -> List[str]:
+    """Return every string value in a JSON-shaped object."""
+    if isinstance(node, str):
+        return [node]
+    if isinstance(node, dict):
+        out: List[str] = []
+        for value in node.values():
+            out.extend(_json_strings(value))
+        return out
+    if isinstance(node, list):
+        out = []
+        for value in node:
+            out.extend(_json_strings(value))
+        return out
+    return []
+
+
+def _lec_rtl_references(project: Path) -> Tuple[Optional[Path], List[str]]:
+    """Read the optional LEC manifest as corroboration, never as the trigger."""
+    candidates = [project / "reports/lec.json",
+                  project / "reports/phase2/lec.json"]
+    for path in candidates:
+        if not path.is_file():
+            continue
+        try:
+            data = json.loads(path.read_text(encoding="utf-8",
+                                             errors="replace"))
+        except Exception:
+            continue
+        return path, _json_strings(data)
+    return None, []
+
+
+_TYPEDEF_ENUM_RE = re.compile(
+    r"typedef\s+enum\b[^\{]*\{(?P<body>[^}]*)\}\s*"
+    r"(?P<tname>[A-Za-z_]\w*)\s*;", re.S)
+_FSM_SIGNAL_STRONG = ("_fsm_cs", "_fsm_ns", "_fsm_state", "_fsm")
+_FSM_SIGNAL_WEAK = ("_state", "_state_q", "_state_d", "_cs", "_ns")
+
+
+def _strip_verilog_comments(text: str) -> str:
+    text = re.sub(r"/\*.*?\*/",
+                  lambda match: "\n" * match.group(0).count("\n"),
+                  text, flags=re.S)
+    return re.sub(r"//[^\n]*", "", text)
+
+
+def _enum_fsm_state_count(text: str) -> int:
+    """Count states in an enum that is structurally bound to an FSM signal."""
+    clean = _strip_verilog_comments(text)
+    best = 0
+    for enum in _TYPEDEF_ENUM_RE.finditer(clean):
+        members = [item.strip() for item in enum.group("body").split(",")]
+        state_count = sum(bool(item.split("=", 1)[0].strip())
+                          for item in members)
+        if state_count < 2:
+            continue
+        decl = re.compile(r"\b" + re.escape(enum.group("tname"))
+                          + r"\b\s+(?P<ids>[^;{}=]+);")
+        for match in decl.finditer(clean):
+            for ident in re.findall(r"[A-Za-z_]\w*", match.group("ids")):
+                low = ident.lower()
+                strong = any(low.endswith(token)
+                             for token in _FSM_SIGNAL_STRONG)
+                weak = (any(low.endswith(token) for token in _FSM_SIGNAL_WEAK)
+                        and re.search(r"\bcase\s*\(\s*" + re.escape(ident)
+                                      + r"\s*\)", clean, re.I))
+                if strong or weak:
+                    best = max(best, state_count)
+    return best
+
+
+def _staged_rtl_fsm_evidence(project: Path) -> List[Dict[str, Any]]:
+    """Find multi-state FSM structure in canonical staged RTL.
+
+    A filename containing ``fsm`` is not evidence. Each returned record is
+    backed by comment-stripping typedef-enum/state-signal/case structure or an
+    edge-driven named state register with distinct next states.
+    """
+    def encoded_state_count(text: str) -> int:
+        """Recognize a named state register with real sequential movement.
+
+        This covers Verilog-2001 FSMs expressed as an integer state register
+        rather than a typedef enum. It requires all three structural facts:
+        a state/FSM-named reg/logic declaration, an edge-sensitive process,
+        and at least two distinct assignments plus a state test.
+        """
+        clean = _strip_verilog_comments(text)
+        if not re.search(r"\balways(?:_ff)?\b[^@]*@?\s*\([^)]*\b(?:pos|neg)edge\b",
+                         clean, re.I | re.S):
+            return 0
+        candidates: List[str] = []
+        for match in re.finditer(r"\b(?:reg|logic)\b(?P<body>[^;{}]+);",
+                                 clean, re.I):
+            body = match.group("body")
+            for segment in body.split(","):
+                ids = re.findall(r"[A-Za-z_]\w*", segment)
+                if not ids:
+                    continue
+                ident = ids[-1]
+                low = ident.lower()
+                if (low == "state" or low == "fsm"
+                        or low.endswith(("_state", "_state_q", "_state_d",
+                                         "_fsm", "_fsm_cs", "_fsm_ns"))):
+                    candidates.append(ident)
+        best = 0
+        for ident in candidates:
+            used_as_state = bool(re.search(
+                r"\bcase\s*\(\s*" + re.escape(ident) + r"\s*\)|\b"
+                + re.escape(ident) + r"\s*(?:==|!=|===|!==)", clean, re.I))
+            if not used_as_state:
+                continue
+            assignments = {
+                re.sub(r"\s+", "", match.group(1))
+                for match in re.finditer(
+                    r"\b" + re.escape(ident)
+                    + r"\s*(?:<=|=(?!=))\s*([^;]+);",
+                    clean)
+            }
+            if len(assignments) >= 2:
+                best = max(best, len(assignments))
+        return best
+
+    rtl_dir = _pl.rtl_dir(project)
+    if not rtl_dir.is_dir():
+        return []
+    lec_path, lec_strings = _lec_rtl_references(project)
+    evidence: List[Dict[str, Any]] = []
+    files = sorted({*rtl_dir.rglob("*.v"), *rtl_dir.rglob("*.sv")})
+    for path in files:
+        try:
+            text = path.read_text(encoding="utf-8", errors="replace")
+            enum_state_count = _enum_fsm_state_count(text)
+            encoded_count = encoded_state_count(text)
+            state_count = max(enum_state_count, encoded_count)
+        except Exception:
+            continue
+        if state_count < 2:
+            continue
+        rel = path.relative_to(project).as_posix()
+        lec_ref = any(rel in value or path.name in value
+                      for value in lec_strings)
+        enum_wins = enum_state_count >= encoded_count
+        record: Dict[str, Any] = {
+            "rtl_path": rel,
+            "structural_rule": (
+                "typed state enum bound to FSM state signal"
+                if enum_wins else
+                "edge-driven state register with distinct next states"),
+        }
+        if enum_wins:
+            record["state_count"] = enum_state_count
+        else:
+            record["distinct_next_state_expressions"] = encoded_count
+        if lec_ref and lec_path is not None:
+            record["lec_reference"] = lec_path.relative_to(project).as_posix()
+        evidence.append(record)
+    return evidence
 
 
 def _state_entries(l6: dict) -> List[Any]:
@@ -553,6 +716,9 @@ def evaluate(project: Path) -> Dict[str, Any]:
         "reject_rules_checked": 0,
         "failures": [],
         "warnings": [],
+        # #1977 — named, blocking contradictions between an extraction-side
+        # absence declaration and independently staged implementation evidence.
+        "applicability_findings": [],
         # #504 — Part A's consumer model, made explicit in the report rather
         # than assumed. True means phase2_scaffold_gen.emit_fsm_v() really is
         # what builds this design's FSM, so Part A's requirements bind.
@@ -584,9 +750,44 @@ def evaluate(project: Path) -> Dict[str, Any]:
     # runs whatever authored the RTL. Merging them into one list is what made
     # the FSM half unable to state its own consumer model.
     fsm_failures: List[str] = []
+    applicability_failures: List[str] = []
     rule_failures: List[str] = []
     warnings: List[str] = []
     parts_run: List[str] = []
+
+    # #1977 — an extraction declaration may narrow applicability only while
+    # implementation evidence agrees. The trigger is staged RTL STRUCTURE;
+    # LEC file names are cited only as optional corroboration.
+    staged_fsm = (_staged_rtl_fsm_evidence(project)
+                  if _l6_declares_no_fsm(l6) else [])
+    if staged_fsm:
+        declared = {key: l6.get(key) for key in _NO_FSM_KEYS
+                    if l6.get(key) is True}
+        l6_rel = l6p.relative_to(project).as_posix()
+        first = staged_fsm[0]
+        if "state_count" in first:
+            structural_summary = (
+                f"a structural {first['state_count']}-state FSM")
+        else:
+            structural_summary = (
+                "a structural FSM state register with "
+                f"{first['distinct_next_state_expressions']} distinct "
+                "next-state expressions")
+        lec_note = (f"; also listed by {first['lec_reference']}"
+                    if first.get("lec_reference") else "")
+        finding = {
+            "name": "EXTRACTION_APPLICABILITY_CONTRADICTION",
+            "severity": "BLOCKING",
+            "declaration": {"path": l6_rel, "fields": declared},
+            "staged_rtl_evidence": staged_fsm,
+        }
+        out["applicability_findings"] = [finding]
+        applicability_failures.append(
+            "EXTRACTION_APPLICABILITY_CONTRADICTION: "
+            f"{l6_rel} declares no FSM via {declared}, but {first['rtl_path']} "
+            f"contains {structural_summary}"
+            f"{lec_note}; the no-FSM declaration cannot disarm this gate")
+        parts_run.append("fsm_applicability")
 
     # ---------------- Part A — FSM skeleton ----------------
     psg = _load_scaffold_gen()
@@ -608,7 +809,8 @@ def evaluate(project: Path) -> Dict[str, Any]:
         out["machines"] = machines
 
         raw_states = _state_entries(l6)
-        fsm_asserted = (not _l6_declares_no_fsm(l6)) or bool(raw_states)
+        fsm_asserted = ((not _l6_declares_no_fsm(l6)) or bool(raw_states)
+                        or bool(staged_fsm))
 
         if not fsm_asserted:
             pass  # honest "no FSM in this input" — Part A does not apply
@@ -814,7 +1016,7 @@ def evaluate(project: Path) -> Dict[str, Any]:
                 "derived_states": [str(s) for s in out["derived_states"]],
             }))
 
-    failures = fsm_failures + rule_failures
+    failures = applicability_failures + fsm_failures + rule_failures
     out["failures"] = failures
     out["warnings"] = warnings
     if failures:
@@ -870,13 +1072,15 @@ def main(argv: Optional[List[str]] = None) -> int:
         ic_class = detect_ic_class(project).get("ic_class", "unknown")
     except Exception:
         ic_class = "unknown"
-    if ic_class in _SKIP_CLASSES:
+    res = evaluate(project)
+    res["ic_class"] = ic_class
+
+    # #1977 — class-level non-applicability is also only an absence claim.
+    # Independent staged FSM structure wins and must remain blocking.
+    if ic_class in _SKIP_CLASSES and not res.get("applicability_findings"):
         print("[SKIP] l6_fsm_scaffold_actionable_check: "
               f"ic_class={ic_class} (no control FSM for this IC class)")
         return 2
-
-    res = evaluate(project)
-    res["ic_class"] = ic_class
 
     if args.json_out:
         try:
@@ -914,8 +1118,11 @@ def main(argv: Optional[List[str]] = None) -> int:
         print(f"VACUOUS_PASS: {reason}", file=sys.stderr)
         return RC_VACUOUS
 
+    # An intentional-degradation waiver cannot make contradictory source
+    # claims true. Keep the existing waiver for ordinary actionability debt,
+    # but never let it suppress a #1977 applicability contradiction.
     waived, rationale = _waived(project)
-    if waived:
+    if waived and not res.get("applicability_findings"):
         print("[PASS] l6_fsm_scaffold_actionable_check: waived by "
               f"waivers.{WAIVER_KEY} ({len(res['failures'])} suppressed): "
               f"{rationale[:70]}…")
@@ -923,7 +1130,21 @@ def main(argv: Optional[List[str]] = None) -> int:
             print(f"  • {f}")
         return RC_PASS
 
-    print(f"[FAIL] l6_fsm_scaffold_actionable_check: {res['reason']}")
+    if res.get("applicability_findings"):
+        finding = res["applicability_findings"][0]
+        staged = finding["staged_rtl_evidence"][0]
+        metric = (f"FSM={staged['state_count']}"
+                  if "state_count" in staged else
+                  f"FSM-next={staged['distinct_next_state_expressions']}")
+        lec = (f" (LEC={staged['lec_reference']})"
+               if staged.get("lec_reference") else "")
+        first_failure = (
+            "BLOCKING EXTRACTION_APPLICABILITY_CONTRADICTION: "
+            f"{Path(finding['declaration']['path']).name}:no-FSM=true vs "
+            f"{staged['rtl_path']}:{metric}{lec}")
+    else:
+        first_failure = res["reason"]
+    print(f"[FAIL] l6_fsm_scaffold_actionable_check: {first_failure}")
     for f in res["failures"][:8]:
         print(f"  • {f}")
     # A FAIL on Part B does not un-disclose Part A: if the FSM half was
@@ -933,6 +1154,11 @@ def main(argv: Optional[List[str]] = None) -> int:
         print(f"  • NOT CHECKED (scaffold contract does not bind this "
               f"design): {f}")
     print()
+    if res.get("applicability_findings"):
+        print("  Reconcile L6's no-FSM extraction claim with the cited staged "
+              "RTL structure; this blocking applicability finding is not "
+              "waiverable.")
+        return RC_FAIL
     print("  Fix in L6_CONTROL_LOGIC.json, from the design's OWN input "
           "documents only:")
     print("    fsm_states: [{name, transitions: [{to, condition}], "
