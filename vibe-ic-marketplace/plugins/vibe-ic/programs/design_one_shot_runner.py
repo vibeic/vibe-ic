@@ -16561,34 +16561,17 @@ def step_emit_phase2_manifests(project: Path,
     # scenarios").
     formal_dir = _pl.formal_dir(project)
     formal_dir.mkdir(parents=True, exist_ok=True)
-    # v1.5.58 (owner directive 2026-07-23, Bucket-T "wire a formal tool in"):
-    #   The formal engine is now WIRED into the runner. When no proof exists
-    #   yet, the runner authors a DETERMINISTIC, construction-safe reset-safety
-    #   property from the design's OWN interface + reset branch
-    #   (formal_harness_gen.py — reads only design INPUT, §4.05; descends a thin
-    #   rename wrapper to the leaf logic module) and dispatches it to
-    #   SymbiYosys via the in-container `abc pdr` engine (`aigsmt none` — no
-    #   external SMT solver, works with the stock vibeic-eda image). A genuinely
-    #   PROVED result writes the canonical formal/results.json (all_proved),
-    #   which formal_proof_evidence_check upgrades from SKIPPED-CONDITION to a
-    #   REAL PASS — no AI in the loop, for any synchronous design with a clock, a
-    #   reset and a registered output whose reset value is a literal constant.
-    #
-    #   Preserved invariants:
-    #   * NEVER clobber a real proof — a pre-existing formal/results.json (an
-    #     AI/skill SymbiYosys run) is left untouched.
-    #   * FAIL-SAFE / anti-regression: when no construction-safe property is
-    #     derivable (NOT_APPLICABLE), or the proof does not cleanly succeed
-    #     (engine unreachable, inconclusive, or a heuristic-harness
-    #     counterexample), the runner keeps the honest formal_not_run.json
-    #     (SKIPPED-CONDITION) and never leaves a FAILing results.json — a
-    #     passing cell is never regressed to a false FAIL. The .sby + transcript
-    #     stay on disk as evidence.
-    #   * `all_proved` is still only ever written by an actual proof run.
-    #   * A definitive per-IC proof (e.g. an equivalence miter) is still authored
-    #     by the assertion-gen fallback skill; this is the deterministic FLOOR.
+    # Issue #1974: program-first property authoring with an honest denominator.
+    # The generator reads the design's L3/L6/L8 declarations, authors only the
+    # construction-safe reset properties it can bind, and writes the exact
+    # unresolved obligation IDs for the formal-verify expert. Three states are
+    # intentionally distinct:
+    #   * a real run leaves results.json + .sby + transcript, PASS or FAIL;
+    #   * a design-declared inapplicable step leaves a reviewable N/A marker;
+    #   * applicable work with no sound property is INCOMPLETE, never SKIP.
+    # A counterexample is evidence. Deleting it and replacing it with a skip was
+    # the false-green defect, so this block never unlinks results.json.
     if not (formal_dir / "results.json").is_file():
-        _formal_disclose = None
         try:
             import sys as _sys
             if str(PROGRAMS_DIR) not in _sys.path:
@@ -16604,65 +16587,50 @@ def step_emit_phase2_manifests(project: Path,
                     top=_gen["harness_module"],
                     container=(container or None),
                     timeout=300)
-                if _res.get("verdict") == "PASS" and _res.get("all_proved"):
-                    # a REAL proof ran — results.json is now the canonical Step-5
-                    # evidence (run() already unlinked any stale
-                    # formal_not_run.json). Nothing more to write.
+                if (formal_dir / "results.json").is_file():
+                    # PASS, INCOMPLETE, INCONCLUSIVE and a real counterexample
+                    # all retain the same canonical evidence artifact. The gate
+                    # decides the row from its contents; the runner never makes
+                    # a failed proof disappear.
                     written.append("formal/results.json")
-                else:
-                    # honest non-conclusive: the deterministic harness ran but
-                    # did not cleanly prove. Revert any results.json so the gate
-                    # can never see a FAILing bare claim, then fall through to
-                    # the SKIPPED-CONDITION manifest below.
-                    _rp = formal_dir / "results.json"
-                    if _rp.is_file():
-                        _rp.unlink()
-                    # A run a RESOURCE CEILING stopped is not the same fact as
-                    # a proof that ran and did not converge: one is fixed on the
-                    # host, the other in the property. Say which, or the reader
-                    # goes looking in the design for a shortage of memory.
-                    _stop = _res.get("resource_stop") or {}
-                    _why = (f" — stopped by its {_stop['resource']} ceiling "
-                            f"({_stop['limit']} {_stop['unit']}), so NOTHING "
-                            f"was proved and NOTHING was refuted"
-                            if _stop else "")
-                    _formal_disclose = (
-                        f"deterministic reset-safety harness ran "
-                        f"(verdict={_res.get('verdict')}, "
-                        f"strength={_res.get('proof_strength')}) but produced no "
-                        f"clean proof{_why} — kept SKIPPED-CONDITION, NOT a design "
-                        f"FAIL (best-effort auto-harness; see formal/*.sby.log)")
+                if (formal_dir / "formal_env_unavailable.json").is_file():
+                    written.append("formal/formal_env_unavailable.json")
+            elif _gen.get("verdict") == "NOT_APPLICABLE":
+                _payload = {
+                    "verdict": "SKIPPED-CONDITION",
+                    "applicability": "NOT_APPLICABLE",
+                    "program": "formal_harness_gen",
+                    "declaration": _gen.get("declaration"),
+                    "reason": _gen.get("reason"),
+                }
+                (formal_dir / "formal_not_applicable.json").write_text(
+                    json.dumps(_payload, indent=2, ensure_ascii=False) + "\n")
+                written.append("formal/formal_not_applicable.json")
             else:
-                _formal_disclose = (
-                    "no deterministic reset-safety property derivable: "
-                    + str(_gen.get("reason", "NOT_APPLICABLE")))
-        except Exception as _e:  # never let the formal step break the run
-            _formal_disclose = f"formal auto-run error: {_e!r}"
-        if not (formal_dir / "results.json").is_file():
+                # `generate` already wrote formal_authoring_request.json with
+                # the exact L3/L6/L8 IDs and REQUIRED_NOT_INVOKED receipt state.
+                # The /vibe-ic-phase2 command consumes that artifact and invokes
+                # formal-verify; until it does, Step 5 is INCOMPLETE.
+                written.append("formal/formal_authoring_request.json")
+        except Exception as _e:  # preserve the run; make the missing work loud
             _payload = {
-                "verdict": "SKIPPED-CONDITION",
-                # was `assertion-gen`, which _classification.json records
-                # under `deprecated_skills` -- routed at a skill that does not
-                # ship. `formal-verify` ships and owns the .sby/SymbiYosys half.
+                "verdict": "INCOMPLETE",
+                "program": "design_one_shot_runner",
                 "fallback_skill": "formal-verify",
-                "reason": ("no clean formal proof in this chain — reference-TB "
-                           "simulation results are NOT a proof and are never "
-                           "copied here (#433c/#440). The deterministic "
-                           "reset-safety harness (formal_harness_gen, abc pdr) "
-                           "did not produce a clean proof here; AI invokes skill "
-                           "formal-verify: author per-IC SVA from L3 "
-                           "constraints, write a real .sby, run SymbiYosys; "
-                           "only that run may write formal/results.json with "
-                           "all_proved. NOTE: the property-authoring half had "
-                           "its own skill, `assertion-gen`, until that was "
-                           "deprecated (skills/_classification.json); no "
-                           "shipped skill replaces that half today."),
+                "invocation_status": "REQUIRED_NOT_INVOKED",
+                "property_denominator": 1,
+                "authored_property_count": 0,
+                "unresolved_obligations": [{
+                    "id": "formal.authoring_program_error",
+                    "layer": "formal",
+                    "description": repr(_e),
+                    "status": "UNAUTHORED",
+                }],
+                "reason": f"formal program-first authoring failed: {_e!r}",
             }
-            if _formal_disclose:
-                _payload["deterministic_attempt"] = _formal_disclose
-            (formal_dir / "formal_not_run.json").write_text(
+            (formal_dir / "formal_authoring_request.json").write_text(
                 json.dumps(_payload, indent=2, ensure_ascii=False) + "\n")
-            written.append("formal/formal_not_run.json")
+            written.append("formal/formal_authoring_request.json")
 
     # Step 6: FPGA early prototype + audit
     fpga_compile_step = by_name.get("fpga_compile")

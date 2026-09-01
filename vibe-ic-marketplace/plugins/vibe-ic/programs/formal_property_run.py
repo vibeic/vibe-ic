@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""formal_property_run.py — Step 5 (cap:formal_property_proof) RUNNER.
+"""formal_property_run.py — Step 5 formal-property RUNNER.
 
 Deterministic driver that actually RUNS a SymbiYosys formal proof and writes
 the `phase2/stage1/formal/results.json` evidence that
 `formal_proof_evidence_check.py` (the Step-5 gate) validates. This is the
-program behind the formal-verify skill's "runner" doctrine: assertion-gen /
-the FV engineer authors the properties (a `formal_<top>.sv` harness); THIS
+program behind the formal-verify skill's program-first doctrine: the
+deterministic floor or FV engineer authors a `formal_<top>.sv` harness; THIS
 program dispatches them to SymbiYosys, parses the transcript, and records an
 HONEST proved / failed / bounded-depth / cex result.
 
@@ -26,8 +26,9 @@ themselves general:
 Verdicts / exit codes:
   0 = all authored properties PROVED (every sby task returned PASS)
   1 = a property FAILED (a real counterexample) — reported with its frame
-  2 = NOT_APPLICABLE: no formal properties authored for this design — an
-      honest SKIPPED-CONDITION manifest is written (never a fabricated pass)
+  2 = INCOMPLETE: applicable formal work has no sound authored property, or
+      the declaration/property denominator is not closed. Exact obligation IDs
+      and the formal-verify route are written (never a fabricated pass).
   3 = ENV_UNAVAILABLE: the proof engine was never REACHED (see #216)
   4 = INCONCLUSIVE because a RESOURCE CEILING stopped the proof — the run
       names which resource ran out and at what limit
@@ -725,7 +726,10 @@ def detect_engines(container: Optional[str]) -> Dict[str, bool]:
 # ── exit-code lexicon (see the module docstring) ───────────────────────────
 RC_ALL_PROVED = 0
 RC_PROPERTY_FAILED = 1
-RC_NOT_APPLICABLE = 2
+RC_INCOMPLETE = 2
+# Compatibility name for callers that imported the pre-#1974 constant. The
+# canonical applicable/no-property path now means INCOMPLETE, not N/A.
+RC_NOT_APPLICABLE = RC_INCOMPLETE
 RC_ENV_UNAVAILABLE = 3
 #: A ceiling stopped the proof. Deliberately NOT 1: "your design has a bug" and
 #: "this host ran out of room" send the reader to different places.
@@ -1043,13 +1047,150 @@ def _run_sby(sby_path: Path, formal_dir: Path, container: Optional[str],
         return "[formal_property_run] ERROR: sby/docker not found on PATH\n"
 
 
-def _write_not_applicable(formal_dir: Path, reason: str) -> None:
-    (formal_dir / "formal_not_run.json").write_text(json.dumps({
-        "verdict": "SKIPPED-CONDITION",
+def _write_authoring_incomplete(formal_dir: Path, reason: str) -> None:
+    """Record applicable-but-unauthored work. Silence is never inapplicable."""
+    (formal_dir / "formal_authoring_request.json").write_text(json.dumps({
+        "verdict": "INCOMPLETE",
         "program": "formal_property_run",
         "fallback_skill": "formal-verify",
+        "invocation_status": "REQUIRED_NOT_INVOKED",
+        "property_denominator": 1,
+        "authored_property_count": 0,
+        "unresolved_obligations": [{
+            "id": "formal.property_missing",
+            "layer": "L3/L6/L8",
+            "description": reason,
+            "status": "UNAUTHORED",
+            "author": "formal-verify",
+        }],
         "reason": reason,
     }, indent=2, ensure_ascii=False) + "\n")
+
+
+def _assertion_count(path: Optional[Path]) -> int:
+    """Count actual asserted properties in the authored harness."""
+    if path is None or not path.is_file():
+        return 0
+    text = re.sub(r"/\*.*?\*/", " ", path.read_text(errors="replace"),
+                  flags=re.DOTALL)
+    text = re.sub(r"//[^\n]*", "", text)
+    return len(re.findall(r"\bassert\s*(?:property\s*)?\(", text))
+
+
+def _attach_property_contract(results: dict, formal_dir: Path,
+                              harness: Optional[Path]) -> None:
+    """Attach the auditable declaration/property denominator to a real run.
+
+    A hand-authored harness with no manifest gets a denominator derived from
+    its actual assertions. The in-flow generator writes `property_contract.json`
+    with all remaining L3/L6/L8 obligations, which takes precedence.
+    """
+    actual = _assertion_count(harness)
+    manifest_path = formal_dir / "property_contract.json"
+    contract: dict = {}
+    if manifest_path.is_file():
+        try:
+            loaded = json.loads(manifest_path.read_text(errors="replace"))
+            if isinstance(loaded, dict):
+                contract = loaded
+        except (OSError, ValueError):
+            contract = {}
+    request_floor = 0
+    request_obligations: List[dict] = []
+    request_path = formal_dir / "formal_authoring_request.json"
+    if request_path.is_file():
+        try:
+            request = json.loads(request_path.read_text(errors="replace"))
+            request_floor = int(request.get("property_denominator", 0))
+            request_obligations = [
+                row for row in (request.get("unresolved_obligations") or [])
+                if isinstance(row, dict) and str(row.get("id", "")).strip()
+            ]
+        except (OSError, ValueError, TypeError):
+            request_floor = 0
+    unresolved = list(contract.get("unresolved_obligations") or [])
+    try:
+        denominator = int(contract.get("property_denominator", actual))
+    except (TypeError, ValueError):
+        denominator = actual
+    # The request is the pre-expert snapshot. An expert may close obligations;
+    # it may not shrink the denominator to make them disappear.
+    denominator = max(denominator, request_floor, actual)
+    covered = max(0, denominator - len(unresolved))
+    if actual < covered:
+        unresolved.append({
+            "id": "formal.authored_property_count_mismatch",
+            "layer": "formal",
+            "description": (f"contract claims {covered} covered obligation(s) "
+                            f"but harness contains {actual} assert statement(s)"),
+            "status": "UNAUTHORED",
+            "author": "formal-verify",
+        })
+    # A request is proof that the deterministic floor handed work to the
+    # expert. Completion therefore needs a receipt, not merely prose saying a
+    # fallback exists. The receipt cannot close an obligation by omission: it
+    # must carry one disposition per immutable request ID, and AUTHORED rows
+    # must name the actual property that discharges them.
+    receipt_path = formal_dir / "formal_expert_review.json"
+    receipt: dict = {}
+    if receipt_path.is_file():
+        try:
+            loaded = json.loads(receipt_path.read_text(errors="replace"))
+            if isinstance(loaded, dict):
+                receipt = loaded
+        except (OSError, ValueError):
+            receipt = {}
+    dispositions = {
+        str(row.get("id")): row
+        for row in (receipt.get("dispositions") or [])
+        if isinstance(row, dict) and str(row.get("id", "")).strip()
+    }
+    expert_invoked = bool(
+        request_obligations
+        and str(receipt.get("invocation_status", "")).upper() == "INVOKED")
+    receipt_unresolved: List[dict] = []
+    for requested in request_obligations:
+        oid = str(requested["id"])
+        disposition = dispositions.get(oid) if expert_invoked else None
+        status = str((disposition or {}).get("status", "")).upper()
+        prop = str((disposition or {}).get("property", "")).strip()
+        if status == "AUTHORED" and prop:
+            continue
+        row = dict(requested)
+        row["status"] = status or "EXPERT_NOT_REVIEWED"
+        if disposition and disposition.get("reason"):
+            row["description"] = str(disposition["reason"])
+        receipt_unresolved.append(row)
+    by_id = {
+        str(row.get("id", f"unnamed.{idx}")): row
+        for idx, row in enumerate(unresolved + receipt_unresolved)
+        if isinstance(row, dict)
+    }
+    unresolved = list(by_id.values())
+
+    results["property_denominator"] = denominator
+    results["authored_property_count"] = actual
+    results["covered_property_count"] = min(
+        actual, max(0, denominator - len(unresolved)))
+    results["unresolved_obligations"] = unresolved
+    results["expert_fallback_required"] = bool(request_obligations)
+    results["expert_fallback_invoked"] = expert_invoked
+    results["expert_fallback_receipt"] = (
+        str(receipt_path.relative_to(formal_dir.parent.parent.parent))
+        if expert_invoked else None)
+    results["property_contract"] = (
+        str(manifest_path.relative_to(formal_dir.parent.parent.parent))
+        if manifest_path.is_file() else "derived from authored harness assertions")
+    results["elaborated_sby"] = results.get("sby")
+    results["proof_transcript"] = results.get("evidence")
+    results["bounded_vs_unbounded_scope"] = list(
+        results.get("bounded_vs_unbounded") or [])
+    if unresolved and results.get("verdict") == "PASS":
+        results["proof_verdict"] = "PASS"
+        results["verdict"] = "INCOMPLETE"
+        results["formal_completion"] = "INCOMPLETE"
+    else:
+        results["formal_completion"] = results.get("verdict")
 
 
 def run(project: Path, harness: Optional[Path] = None,
@@ -1156,13 +1297,15 @@ def run(project: Path, harness: Optional[Path] = None,
     if sby_path is None:
         # need to author a .sby from a harness
         if harness is None or not harness.is_file():
-            _write_not_applicable(
+            _write_authoring_incomplete(
                 formal_dir,
                 "no formal property harness authored for this design — "
-                "assertion-gen must author formal_<top>.sv (properties) "
-                "before a proof can run; no proof was fabricated")
-            return {"verdict": "SKIPPED-CONDITION", "rc": 2,
-                    "reason": "no harness"}
+                "formal-verify must author formal_<top>.sv from the unresolved "
+                "L3/L6/L8 declaration IDs before a proof can run; no proof "
+                "was fabricated")
+            return {"verdict": "INCOMPLETE", "rc": 2,
+                    "reason": "applicable property harness not authored",
+                    "fallback_skill": "formal-verify"}
         if not rtl or top is None:
             return {"verdict": "ERROR", "rc": 1,
                     "reason": "harness given but --rtl/--top missing"}
@@ -1283,6 +1426,7 @@ def run(project: Path, harness: Optional[Path] = None,
     ev_rel = str(log_path.relative_to(project))
     sby_rel = str(sby_path.relative_to(project))
     results = build_results(top_name, cfg, lp, ev_rel, sby_rel)
+    _attach_property_contract(results, formal_dir, harness or inv_h)
     results["mode"] = ("invariant-strengthened"
                        if inv_h is not None else "standard")
     # HONEST engine record: which stronger OSS datapath engines were available,
@@ -1312,13 +1456,17 @@ def run(project: Path, harness: Optional[Path] = None,
     # existing PASS into a FAIL). The standard path keeps writing results.json.
     results_name = ("results.json" if inv_h is None
                     else f"{top_name}_inductive_results.json")
-    if inv_h is None and results["property_count"]:
+    if (inv_h is None and results["property_count"]
+            and not results.get("unresolved_obligations")):
         # A real proof ran: results.json is now the canonical artifact, so a
         # stale `formal_not_run.json` skip-sentinel (from an earlier chain
         # where no proof ran) must not linger and contradict it.
         stale = formal_dir / "formal_not_run.json"
         if stale.is_file():
             stale.unlink()
+        stale_request = formal_dir / "formal_authoring_request.json"
+        if stale_request.is_file():
+            stale_request.unlink()
     (formal_dir / results_name).write_text(
         json.dumps(results, indent=2, ensure_ascii=False) + "\n")
     results["results_file"] = results_name
@@ -1326,9 +1474,12 @@ def run(project: Path, harness: Optional[Path] = None,
     # 4) human report --------------------------------------------------------
     _write_report(formal_dir, results)
 
-    rc = RC_ALL_PROVED if results["all_proved"] else (
-        RC_NOT_APPLICABLE if results["verdict"] == "SKIPPED-CONDITION" else
-        RC_RESOURCE_INCONCLUSIVE if resource_stop else RC_PROPERTY_FAILED)
+    rc = (RC_ALL_PROVED
+          if results["all_proved"] and not results.get("unresolved_obligations")
+          else (
+        RC_INCOMPLETE if results["verdict"] in
+        ("SKIPPED-CONDITION", "INCOMPLETE") else
+        RC_RESOURCE_INCONCLUSIVE if resource_stop else RC_PROPERTY_FAILED))
     results["rc"] = rc
     return results
 
@@ -1378,9 +1529,18 @@ def _write_report(formal_dir: Path, results: dict) -> None:
     lines = [f"# Formal proof report — {results['top']}", "",
              f"verdict: **{results['verdict']}**  "
              f"(all_proved={results['all_proved']}, "
-             f"{results['proved']}/{results['property_count']} tasks PASS)", "",
+             f"{results['proved']}/{results['property_count']} tasks PASS)",
+             f"property denominator: **{results.get('property_denominator', '?')}**; "
+             f"authored: **{results.get('authored_property_count', '?')}**; "
+             f"unresolved: **{len(results.get('unresolved_obligations') or [])}**",
+             "",
              "| task | mode | engine | depth | status | strength | cex frame |",
              "|------|------|--------|-------|--------|----------|-----------|"]
+    if results.get("expert_fallback_required"):
+        lines[4:4] = [
+            f"expert fallback invoked: **{results.get('expert_fallback_invoked')}**; "
+            f"receipt: `{results.get('expert_fallback_receipt') or 'missing'}`",
+        ]
     for p in results["properties"]:
         lines.append(
             f"| {p['task']} | {p['mode']} | {p['engine']} | "
@@ -1402,6 +1562,14 @@ def _write_report(formal_dir: Path, results: dict) -> None:
     lines += ["", "## Bounded vs unbounded disclosure"]
     for d in results["bounded_vs_unbounded"]:
         lines.append(f"- {d}")
+    unresolved = results.get("unresolved_obligations") or []
+    if unresolved:
+        lines += ["", "## Unresolved declaration/property obligations",
+                  "", "Invoke `formal-verify`; Step 5 remains INCOMPLETE."]
+        for row in unresolved:
+            lines.append(
+                f"- `{row.get('id', '?')}` ({row.get('layer', '?')}): "
+                f"{row.get('description', 'property not authored')}")
     avail = results.get("engine_availability")
     if avail:
         present = sorted(k for k, v in avail.items() if v)

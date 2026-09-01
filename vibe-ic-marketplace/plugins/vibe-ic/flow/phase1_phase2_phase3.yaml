@@ -2252,14 +2252,19 @@ steps:
     mcp_tools: [eda_formal]
     programs:
       - assertion_property_check
+      # Program-first authoring floor: derives construction-safe reset
+      # properties, enumerates every applicable L3/L6/L8 obligation, and writes
+      # property_contract.json + an INCOMPLETE formal_authoring_request.json for
+      # anything that still needs formal-verify. Silence is never inapplicable.
+      - formal_harness_gen
       # Real SymbiYosys proof runner (chip-AGNOSTIC): emits the .sby, runs
       # `sby` in the container with the built-in ABC engines (abc pdr =
       # UNBOUNDED safety prove; abc bmc3 = disclosed BOUNDED functional BMC —
       # no external SMT solver needed), parses the transcript, and writes
       # formal/results.json + <top>_report.md. Fires when a formal harness
-      # (phase2/stage1/formal/formal_<top>.sv, authored via assertion-gen /
-      # formal-verify) exists; without one the runner's formal_not_run.json
-      # sentinel stays the honest SKIPPED-CONDITION (#608), never a fake PASS.
+      # (phase2/stage1/formal/formal_<top>.sv, authored by the deterministic
+      # floor / formal-verify) exists. Without a sound property the row is
+      # INCOMPLETE with exact obligation IDs, never SKIPPED-CONDITION.
       # SUPPLEMENTARY datapath tier (--invariant-harness / a formal_<top>_
       # inductive.sv beside the standard one): a strengthened INDUCTIVE
       # INVARIANT over the internal datapath state lets `abc pdr` prove
@@ -2277,8 +2282,8 @@ steps:
       # the 15-min Quartus + JTAG cycle.
       - bit_level_full_stack_tb_check
     required_outputs:
-      - "phase2/stage1/formal/*.sby"
-      - "phase2/stage1/formal/results.json"
+      - "phase2/stage1/formal/*.sby OR phase2/stage1/formal/formal_authoring_request.json OR phase2/stage1/formal/formal_not_applicable.json"
+      - "phase2/stage1/formal/results.json OR phase2/stage1/formal/formal_authoring_request.json OR phase2/stage1/formal/formal_not_applicable.json"
       - "phase2/stage1/sim_full_stack/results.json"   # produced by Rule-D phase2/stage1/tb
     gate:
       all_of:
@@ -2307,9 +2312,10 @@ steps:
         # DECLARE and ASSERT a property, or is it a stub?) is real.
         # Wired UNCONDITIONALLY, not via condition_files_exist — the
         # conditional form is the invisible-skip antipattern this file
-        # calls out elsewhere. A project with no assertion candidate at
-        # all exits 2 → VACUOUS_PASS, which is what preserves the #608
-        # honest SKIPPED-CONDITION for a project with no formal harness.
+        # calls out elsewhere. A project with no assertion candidate exits 2
+        # → VACUOUS_PASS at this sub-gate; the preceding evidence gate still
+        # reports the Step-5 row INCOMPLETE unless L22 explicitly declared
+        # formal inapplicable.
         - program_exit_zero: "assertion_property_check . --json reports/phase2/gates/assertion_property.json"
     blocks_on: [2]
 

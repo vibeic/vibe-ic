@@ -201,6 +201,31 @@ def _sibling_env_gap(formal_dir: Path):
     return None
 
 
+def _sibling_authoring_incomplete(formal_dir: Path):
+    """Return the applicable authoring request that still has no sound SVA.
+
+    INCOMPLETE is deliberately separate from self-skip: somebody must return
+    to these named declaration/property obligations.
+    """
+    try:
+        siblings = sorted(formal_dir.glob("*.json"))
+    except OSError:
+        return None
+    for sib in siblings:
+        if sib.name == "results.json":
+            continue
+        try:
+            data = json.loads(sib.read_text(errors="replace"))
+        except (OSError, ValueError):
+            continue
+        if not isinstance(data, dict):
+            continue
+        vd = str(data.get("verdict", "")).upper().replace("_", "-")
+        if vd == "INCOMPLETE":
+            return sib.name, data
+    return None
+
+
 def _authored_sby_files(formal_dir):
     """Every AUTHORED `.sby` under `formal/`, recursively.
 
@@ -259,6 +284,23 @@ def audit(project: Path) -> dict:
         # pair defers; a real proof has results.json present (this branch is
         # not taken), and a sibling with a non-skip verdict (a real FAIL) is
         # NOT matched → falls through to the hard FAIL below.
+        incomplete = _sibling_authoring_incomplete(formal_dir)
+        if incomplete is not None:
+            sib, data = incomplete
+            unresolved = data.get("unresolved_obligations") or []
+            ids = [str(row.get("id", "?")) for row in unresolved
+                   if isinstance(row, dict)]
+            rep.update(verdict="INCOMPLETE", rc=0,
+                       property_denominator=data.get("property_denominator"),
+                       unresolved_obligations=unresolved,
+                       fallback_skill=data.get("fallback_skill", "formal-verify"))
+            rep["findings"].append(
+                f"AUTHORING_INCOMPLETE (#1974): results.json absent and "
+                f"'{sib}' names applicable declaration/property work with no "
+                f"sound authored property: {', '.join(ids) or 'unnamed obligation'}; "
+                f"invoke {rep['fallback_skill']} (this is not a skip and not a "
+                f"missing tool capability)")
+            return rep
         skip_sib = _sibling_self_skip(formal_dir)
         if skip_sib is not None:
             rep.update(verdict="SKIPPED-CONDITION", rc=2)
@@ -311,6 +353,8 @@ def audit(project: Path) -> dict:
             "ran (#440 manifest shape) — vacuous for this gate")
         return rep
 
+    contract_incomplete = (verdict_field == "INCOMPLETE"
+                           or bool(results.get("unresolved_obligations")))
     if results.get("all_proved") is not True:
         rep.update(verdict="FAIL", rc=1)
         rep["findings"].append(
@@ -394,7 +438,49 @@ def audit(project: Path) -> dict:
         rep["findings"].append(
             "SBY_LOG_MISSING (#448): no SymbiYosys transcript "
             "(sby/smtbmc signature) with PASS status under formal/ — "
-            "all_proved without a proof run is a bare field, not a proof")
+                "all_proved without a proof run is a bare field, not a proof")
+
+    # (d) completed Step 5 cites the denominator and proof scope ------------
+    contract_ok = True
+    denominator = results.get("property_denominator")
+    authored = results.get("authored_property_count")
+    if not isinstance(denominator, int) or denominator <= 0:
+        contract_ok = False
+        rep["findings"].append(
+            "PROPERTY_DENOMINATOR_MISSING (#1974): completed Step 5 must state "
+            "the positive declaration/property denominator")
+    if (not contract_incomplete and isinstance(denominator, int)
+            and (not isinstance(authored, int) or authored < denominator)):
+        contract_ok = False
+        rep["findings"].append(
+            f"PROPERTY_DENOMINATOR_OPEN (#1974): authored={authored!r}, "
+            f"denominator={denominator}; a completed row must cover every "
+            "applicable obligation")
+    scope = results.get("bounded_vs_unbounded_scope")
+    if not isinstance(scope, list) or not scope:
+        contract_ok = False
+        rep["findings"].append(
+            "PROOF_SCOPE_MISSING (#1974): bounded/unbounded scope is not cited")
+    if results.get("elaborated_sby") != results.get("sby"):
+        contract_ok = False
+        rep["findings"].append(
+            "ELABORATED_SBY_MISSING (#1974): results do not cite the elaborated "
+            ".sby task as `elaborated_sby`")
+    if results.get("proof_transcript") != results.get("evidence"):
+        contract_ok = False
+        rep["findings"].append(
+            "PROOF_TRANSCRIPT_MISSING (#1974): results do not cite the proof "
+            "transcript as `proof_transcript`")
+    if results.get("expert_fallback_required"):
+        receipt_rel = results.get("expert_fallback_receipt")
+        receipt_path = project / receipt_rel if isinstance(receipt_rel, str) else None
+        if (results.get("expert_fallback_invoked") is not True
+                or receipt_path is None or not receipt_path.is_file()):
+            contract_ok = False
+            rep["findings"].append(
+                "EXPERT_FALLBACK_NOT_INVOKED (#1974): the deterministic floor "
+                "requested formal-verify, but the completed claim has no "
+                "dereferenceable INVOKED expert receipt")
 
     # (c) evidence pointer dereferences (path-shaped only, #433 convention) -
     ev_ok = True
@@ -407,11 +493,27 @@ def audit(project: Path) -> dict:
                 f"EVIDENCE_MISSING (#448): results.json evidence "
                 f"'{ev}' does not exist or is empty")
 
-    if sby_ok and log_ok and ev_ok:
-        rep.update(verdict="PASS", rc=0)
-        rep["findings"].append(
-            "PROOF_CHAIN_OK: all_proved substantiated by an "
-            "elaboratable .sby + SymbiYosys PASS transcript")
+    if sby_ok and log_ok and ev_ok and contract_ok:
+        if contract_incomplete:
+            unresolved = results.get("unresolved_obligations") or []
+            ids = [str(row.get("id", "?")) for row in unresolved
+                   if isinstance(row, dict)]
+            rep.update(verdict="INCOMPLETE", rc=0,
+                       property_denominator=denominator,
+                       unresolved_obligations=unresolved,
+                       fallback_skill="formal-verify")
+            rep["findings"].append(
+                "PROOF_CHAIN_PARTIAL (#1974): authored properties have an "
+                "elaborated .sby + PASS transcript, but the declaration "
+                f"denominator remains open: {', '.join(ids)}")
+        else:
+            rep.update(verdict="PASS", rc=0,
+                       property_denominator=denominator)
+            rep["findings"].append(
+                "PROOF_CHAIN_OK: all_proved substantiated by an "
+                "elaboratable .sby + SymbiYosys PASS transcript; property "
+                f"denominator {denominator}/{denominator} closed with "
+                "bounded/unbounded scope disclosed")
     else:
         rep.update(verdict="FAIL", rc=1)
     return rep
@@ -431,6 +533,8 @@ def main(argv=None) -> int:
     if args.json:
         Path(args.json).parent.mkdir(parents=True, exist_ok=True)
         Path(args.json).write_text(out)
+    if rep.get("verdict") == "INCOMPLETE":
+        print("INCOMPLETE: applicable formal declaration/property work remains")
     print(out)
     return rc
 

@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """formal_harness_gen.py — Step 5 DETERMINISTIC formal-property authoring.
 
-Wires the formal step so a BARE run (no AI, no assertion-gen skill) still has a
-provable property to prove. It reads the design's OWN top-module interface and
-reset logic (design INPUT only, §4.05) and emits a `formal_<top>.sv` harness
+Wires the formal step so a BARE run (no AI) still authors every property that
+can be derived safely and records the denominator it could not author. It reads
+the design's OWN L3/L6/L8 declarations plus top-module interface and reset logic
+(design INPUT only, §4.05) and emits a `formal_<top>.sv` harness
 carrying the always-valuable, construction-safe **reset-safety** invariant:
 
     one cycle after the design's declared reset is asserted, every registered
@@ -21,9 +22,9 @@ Why this is construction-safe (can never fabricate a proof OR a false FAIL):
     it is definitionally the value the FF holds after reset, so a correct
     design PROVES it and never counter-examples it.
   * When the interface / reset value cannot be determined with confidence the
-    generator emits NOTHING (verdict NOT_APPLICABLE, rc=2) — the flow keeps its
-    existing honest SKIPPED-CONDITION manifest, so a design is never regressed
-    from SKIP to a false FAIL.
+    generator emits no assertion and returns INCOMPLETE, naming the missing
+    declaration/property and the `formal-verify` expert route. It returns
+    NOT_APPLICABLE only when the design explicitly declares formal inapplicable.
 
 chip-AGNOSTIC: the mechanism keys off GENERIC hardware conventions (a clock /
 reset port, a registered output) and the design's own RTL text. There is no
@@ -38,13 +39,223 @@ import re
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 sys.path.insert(0, str(Path(__file__).parent))
 try:
     import _path_layout as _pl  # noqa: E402
 except Exception:  # pragma: no cover - _path_layout always present in-tree
     _pl = None
+
+
+PROPERTY_CONTRACT = "property_contract.json"
+AUTHORING_REQUEST = "formal_authoring_request.json"
+
+
+def _norm_applicability(value: Any) -> Tuple[str, str]:
+    """Return (status, reason) from a small, explicit declaration dialect.
+
+    A bare false is deliberately not enough: inapplicability needs a reason a
+    reviewer can inspect. Unknown/malformed values remain UNDECLARED.
+    """
+    reason = ""
+    status = value
+    if isinstance(value, dict):
+        status = value.get("status", value.get("applicability", ""))
+        reason = str(value.get("reason", "")).strip()
+    if status is False:
+        status = "NOT_APPLICABLE"
+    norm = str(status or "").upper().replace("-", "_").replace(" ", "_")
+    if norm in {"NOT_APPLICABLE", "INAPPLICABLE", "N_A"} and reason:
+        return "NOT_APPLICABLE", reason
+    if norm in {"APPLICABLE", "REQUIRED", "YES", "TRUE"}:
+        return "APPLICABLE", reason
+    return "UNDECLARED", reason
+
+
+def _read_l_docs(project: Optional[Path]) -> Dict[str, List[Tuple[Path, dict]]]:
+    """Read only canonical Phase-1 L3/L6/L8/L22 declarations."""
+    out: Dict[str, List[Tuple[Path, dict]]] = {
+        "L3": [], "L6": [], "L8": [], "L22": []}
+    if project is None or _pl is None:
+        return out
+    root = _pl.generated_docs_dir(project)
+    for layer in out:
+        for path in sorted(root.glob(f"{layer}*.json")):
+            try:
+                data = json.loads(path.read_text(errors="replace"))
+            except (OSError, ValueError):
+                continue
+            if isinstance(data, dict):
+                out[layer].append((path, data))
+    return out
+
+
+def _global_formal_applicability(
+        docs: Dict[str, List[Tuple[Path, dict]]]) -> Optional[dict]:
+    """A global NOT_APPLICABLE must be explicit in L22 and carry a reason."""
+    for path, data in docs.get("L22", []):
+        fields = data.get("fields") if isinstance(data.get("fields"), dict) else {}
+        for value in (data.get("formal_applicability"),
+                      fields.get("formal_applicability")):
+            status, reason = _norm_applicability(value)
+            if status == "NOT_APPLICABLE":
+                return {"status": status, "reason": reason,
+                        "source": str(path)}
+    return None
+
+
+def _layer_is_not_applicable(path: Path, data: dict) -> Optional[dict]:
+    status, reason = _norm_applicability(data.get("formal_applicability"))
+    if status == "NOT_APPLICABLE":
+        return {"status": status, "reason": reason, "source": str(path)}
+    return None
+
+
+def _obligation(layer: str, key: str, description: str, path: Path) -> dict:
+    safe = re.sub(r"[^A-Za-z0-9_.-]+", "_", key).strip("_") or "item"
+    return {
+        "id": f"{layer}.{safe}",
+        "layer": layer,
+        "source": str(path),
+        "description": description[:500],
+        "author": "formal-verify",
+        "status": "UNAUTHORED",
+    }
+
+
+def _timing_semantics(value: Any, prefix: str = "") -> List[Tuple[str, str]]:
+    """Find cycle/reset/latency semantics that can imply temporal properties.
+
+    Absolute MHz/ns constraints are STA obligations, not cycle-accurate FPV
+    properties. We therefore select only names that state RTL sequencing.
+    """
+    out: List[Tuple[str, str]] = []
+    if isinstance(value, dict):
+        for key, child in value.items():
+            if str(key).lower() in {
+                    "extraction_evidence", "evidence", "source", "source_doc",
+                    "note", "description", "matched_substring"}:
+                continue
+            p = f"{prefix}.{key}" if prefix else str(key)
+            out.extend(_timing_semantics(child, p))
+    elif isinstance(value, list):
+        for idx, child in enumerate(value):
+            out.extend(_timing_semantics(child, f"{prefix}.{idx}"))
+    elif re.search(r"reset|latency|turnaround|timeout|cycle|holdoff|pulse", prefix,
+                   re.IGNORECASE):
+        text = str(value).strip()
+        if text and text.lower() not in {"none", "null", "unspecified", "unknown"}:
+            out.append((prefix, text))
+    return out
+
+
+def declaration_obligations(project: Optional[Path]) -> dict:
+    """Build the exact L3/L6/L8 formal-authoring denominator.
+
+    This function does not translate prose into SVA. It only identifies the
+    declarations whose semantic mapping needs an expert when no safe generic
+    mapping exists; guessing signal names would be the false-proof path.
+    """
+    if project is None:
+        # Pure/standalone authoring has no L-document denominator to assess.
+        # The canonical in-flow caller always supplies a project.
+        return {"applicability": "APPLICABLE", "obligations": [],
+                "missing_declarations": [], "layer_not_applicable": []}
+    docs = _read_l_docs(project)
+    explicit_na = _global_formal_applicability(docs)
+    if explicit_na:
+        return {"applicability": "NOT_APPLICABLE",
+                "declaration": explicit_na, "obligations": [],
+                "missing_declarations": [], "layer_not_applicable": []}
+
+    obligations: List[dict] = []
+    missing = [layer for layer in ("L3", "L6", "L8") if not docs[layer]]
+    layer_na: List[dict] = []
+    for layer in ("L3", "L6", "L8"):
+        for path, data in docs[layer]:
+            na = _layer_is_not_applicable(path, data)
+            if na:
+                layer_na.append(dict(na, layer=layer))
+                continue
+            if layer == "L3":
+                if data.get("no_opcodes_in_input") is False:
+                    for idx, item in enumerate(data.get("opcodes") or []):
+                        if not isinstance(item, dict):
+                            continue
+                        name = str(item.get("name") or item.get("hex") or idx)
+                        desc = (f"command {name}: "
+                                f"{item.get('purpose', 'declared command behavior')}")
+                        obligations.append(_obligation(
+                            "L3", f"opcode.{name}", desc, path))
+                if (data.get("crc_parameters")
+                        and data.get("no_crc_parameters_in_input") is False):
+                    obligations.append(_obligation(
+                        "L3", "crc_parameters",
+                        "declared CRC acceptance/rejection behavior", path))
+                for idx, rule in enumerate(data.get("reject_rules") or []):
+                    obligations.append(_obligation(
+                        "L3", f"reject_rule.{idx}", str(rule), path))
+            elif layer == "L6":
+                if data.get("no_fsm_in_input") is False:
+                    for idx, state in enumerate(data.get("fsm_states") or []):
+                        if not isinstance(state, dict):
+                            continue
+                        name = str(state.get("name") or idx)
+                        detail = state.get("transitions") or state.get("actions") or []
+                        obligations.append(_obligation(
+                            "L6", f"fsm_state.{name}",
+                            f"state {name}: {detail}", path))
+                for idx, rule in enumerate(data.get("reject_rules") or []):
+                    obligations.append(_obligation(
+                        "L6", f"reject_rule.{idx}", str(rule), path))
+            else:
+                for key, text in _timing_semantics(data):
+                    obligations.append(_obligation(
+                        "L8", key, f"declared temporal behavior {key}={text}", path))
+
+    # Stable IDs are part of the handoff contract. Multiple L8 files can carry
+    # the same declaration; de-duplicate rather than inflate the denominator.
+    uniq: Dict[str, dict] = {}
+    for row in obligations:
+        uniq.setdefault(row["id"], row)
+    return {
+        "applicability": "APPLICABLE",
+        "obligations": list(uniq.values()),
+        "missing_declarations": missing,
+        "layer_not_applicable": layer_na,
+    }
+
+
+def _write_property_contract(project: Optional[Path], contract: dict) -> None:
+    if project is None or _pl is None:
+        return
+    formal_dir = _pl.formal_dir(project)
+    formal_dir.mkdir(parents=True, exist_ok=True)
+    (formal_dir / PROPERTY_CONTRACT).write_text(
+        json.dumps(contract, indent=2, ensure_ascii=False) + "\n")
+    unresolved = contract.get("unresolved_obligations") or []
+    if unresolved:
+        request = {
+            "program": "formal_harness_gen",
+            "verdict": "INCOMPLETE",
+            "fallback_skill": "formal-verify",
+            "invocation_status": "REQUIRED_NOT_INVOKED",
+            "property_denominator": contract.get("property_denominator", 0),
+            "authored_property_count": contract.get("authored_property_count", 0),
+            "unresolved_obligations": unresolved,
+            "missing_declarations": contract.get("missing_declarations", []),
+            "reason": (
+                "applicable formal obligations remain without a sound property; "
+                "invoke formal-verify on these exact IDs and record each authored "
+                "property in property_contract.json before rerunning Step 5"),
+        }
+        (formal_dir / AUTHORING_REQUEST).write_text(
+            json.dumps(request, indent=2, ensure_ascii=False) + "\n")
+    else:
+        stale = formal_dir / AUTHORING_REQUEST
+        if stale.is_file():
+            stale.unlink()
 
 
 # ── comment / text hygiene ──────────────────────────────────────────────────
@@ -705,25 +916,96 @@ def _pick_provable(rtl_files: List[Path], top_name: Optional[str],
 def generate(project: Optional[Path] = None, top: Optional[str] = None,
              rtl: Optional[List[Path]] = None,
              out: Optional[Path] = None) -> dict:
-    """Author the deterministic reset-safety harness. Returns a result dict with
-    verdict EMITTED (rc 0) / NOT_APPLICABLE (rc 2) / ERROR (rc 1)."""
+    """Author the deterministic floor and its declaration denominator.
+
+    NOT_APPLICABLE is reserved for an explicit design declaration. An
+    applicable design for which no safe property can be authored is
+    INCOMPLETE and carries the exact expert-authoring request.
+    """
+    decl = declaration_obligations(project)
+    if decl["applicability"] == "NOT_APPLICABLE":
+        contract = {
+            "program": "formal_harness_gen", "version": "2.0.0",
+            "verdict": "NOT_APPLICABLE", "applicability": "NOT_APPLICABLE",
+            "declaration": decl["declaration"], "property_denominator": 0,
+            "authored_property_count": 0, "unresolved_obligations": [],
+            "missing_declarations": [],
+        }
+        _write_property_contract(project, contract)
+        return {"verdict": "NOT_APPLICABLE", "rc": 2,
+                "reason": decl["declaration"]["reason"],
+                "declaration": decl["declaration"],
+                "property_denominator": 0}
+
+    declared = list(decl["obligations"])
+    for layer in decl["missing_declarations"]:
+        declared.append({
+            "id": f"{layer}.declaration_missing", "layer": layer,
+            "source": None,
+            "description": f"{layer} declaration is absent; applicability and property are unknown",
+            "author": "formal-verify", "status": "DECLARATION_MISSING",
+        })
     rtl_files = list(rtl) if rtl else (
         _discover_rtl(_pl.rtl_dir(project)) if (project and _pl) else [])
     if not rtl_files:
-        return {"verdict": "NOT_APPLICABLE", "rc": 2,
-                "reason": "no RTL sources found to derive a formal property from"}
+        if project is None:
+            return {"verdict": "NOT_APPLICABLE", "rc": 2,
+                    "reason": "no RTL sources found to derive a formal property from"}
+        unresolved = declared or [{
+            "id": "RTL.sources_missing", "layer": "RTL", "source": None,
+            "description": "no RTL sources found to derive or bind a formal property",
+            "author": "formal-verify", "status": "DECLARATION_MISSING"}]
+        contract = {
+            "program": "formal_harness_gen", "version": "2.0.0",
+            "verdict": "INCOMPLETE", "applicability": "APPLICABLE",
+            "property_denominator": len(unresolved),
+            "authored_property_count": 0,
+            "unresolved_obligations": unresolved,
+            "missing_declarations": decl["missing_declarations"],
+            "layer_not_applicable": decl["layer_not_applicable"],
+        }
+        _write_property_contract(project, contract)
+        return {"verdict": "INCOMPLETE", "rc": 2,
+                "reason": "no RTL sources found to derive or bind a formal property",
+                "fallback_skill": "formal-verify",
+                "property_denominator": len(unresolved),
+                "unresolved_obligations": unresolved}
 
     picked = _pick_provable(rtl_files, top, project)
     if picked is None:
         # The claim names the scope it actually covered: the declared top and
         # every module instantiated under it. It used to say "no module" after
         # examining one chain of them.
-        return {"verdict": "NOT_APPLICABLE", "rc": 2,
-                "reason": "no module in the declared top's hierarchy has a "
-                          "construction-safe reset-safety property (needs a "
-                          "clock, a reset and a registered output with a "
-                          "literal reset value; no inout) — fail-safe skip, "
-                          "the flow keeps SKIPPED-CONDITION"}
+        if project is None:
+            reason = ("no module in the declared top's hierarchy has a "
+                      "construction-safe reset-safety property (needs a clock, "
+                      "a reset and a registered output with a literal reset "
+                      "value; no inout)")
+            return {"verdict": "NOT_APPLICABLE", "rc": 2, "reason": reason}
+        unresolved = declared or [{
+            "id": "RTL.sound_property_missing", "layer": "RTL", "source": None,
+            "description": ("no construction-safe property could be bound in the "
+                            "declared top hierarchy; needs a declared clock/reset "
+                            "and a registered literal-reset output, or expert SVA"),
+            "author": "formal-verify", "status": "UNAUTHORED"}]
+        reason = ("no module in the declared top's hierarchy has a "
+                  "construction-safe reset-safety property (needs a clock, a "
+                  "reset and a registered output with a literal reset value; "
+                  "no inout)")
+        contract = {
+            "program": "formal_harness_gen", "version": "2.0.0",
+            "verdict": "INCOMPLETE", "applicability": "APPLICABLE",
+            "property_denominator": len(unresolved),
+            "authored_property_count": 0,
+            "unresolved_obligations": unresolved,
+            "missing_declarations": decl["missing_declarations"],
+            "layer_not_applicable": decl["layer_not_applicable"],
+        }
+        _write_property_contract(project, contract)
+        return {"verdict": "INCOMPLETE", "rc": 2, "reason": reason,
+                "fallback_skill": "formal-verify",
+                "property_denominator": len(unresolved),
+                "unresolved_obligations": unresolved}
     iface, dut_file, analysis, descended, selection = picked
     dut_top = iface.name
     clock = analysis["clock"]
@@ -737,6 +1019,28 @@ def generate(project: Optional[Path] = None, top: Optional[str] = None,
         if (project and _pl) else Path(f"formal_{dut_top}.sv"))
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text(harness)
+    generated = [{
+        "id": f"RTL.reset_safety.{dut_top}.{p.output}",
+        "layer": "RTL", "source": str(dut_file),
+        "description": (f"after declared reset, {p.output} equals "
+                        f"the RTL reset value {p.value}"),
+        "property": f"p_reset_safety_{idx}", "status": "AUTHORED",
+        "author": "formal_harness_gen",
+    } for idx, p in enumerate(props, 1)]
+    unresolved = declared
+    contract = {
+        "program": "formal_harness_gen", "version": "2.0.0",
+        "verdict": "INCOMPLETE" if unresolved else "AUTHORED",
+        "applicability": "APPLICABLE",
+        "property_denominator": len(generated) + len(unresolved),
+        "authored_property_count": len(generated),
+        "covered_obligations": generated,
+        "unresolved_obligations": unresolved,
+        "missing_declarations": decl["missing_declarations"],
+        "layer_not_applicable": decl["layer_not_applicable"],
+        "fallback_skill": "formal-verify" if unresolved else None,
+    }
+    _write_property_contract(project, contract)
     return {
         "verdict": "EMITTED", "rc": 0,
         "top": dut_top,
@@ -757,6 +1061,10 @@ def generate(project: Optional[Path] = None, top: Optional[str] = None,
         "properties": [
             {"output": p.output, "target": p.target, "reset_value": p.value,
              "reset_style": "async" if p.is_async else "sync"} for p in props],
+        "property_denominator": contract["property_denominator"],
+        "authored_property_count": contract["authored_property_count"],
+        "unresolved_obligations": unresolved,
+        "fallback_skill": "formal-verify" if unresolved else None,
     }
 
 

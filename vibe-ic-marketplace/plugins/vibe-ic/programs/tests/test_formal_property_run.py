@@ -123,6 +123,102 @@ def test_build_results_one_fail_blocks_all_proved():
     assert bmc["bound"] == "cex" and bmc["cex_frame"] == 2
 
 
+def test_completed_result_cites_denominator_sby_transcript_and_scope(tmp_path):
+    import json
+    formal = tmp_path / "phase2" / "stage1" / "formal"
+    formal.mkdir(parents=True)
+    harness = formal / "formal_dut.sv"
+    harness.write_text(
+        "module formal_dut(input clk); always @(posedge clk) assert (1'b1); endmodule\n")
+    (formal / "property_contract.json").write_text(json.dumps({
+        "property_denominator": 1,
+        "authored_property_count": 1,
+        "unresolved_obligations": [],
+    }))
+    result = {
+        "verdict": "PASS", "all_proved": True,
+        "sby": "phase2/stage1/formal/dut.sby",
+        "evidence": "phase2/stage1/formal/dut.sby.log",
+        "bounded_vs_unbounded": ["property PROVED UNBOUNDED"],
+    }
+    FPR._attach_property_contract(result, formal, harness)
+    assert result["property_denominator"] == 1
+    assert result["authored_property_count"] == 1
+    assert result["elaborated_sby"] == result["sby"]
+    assert result["proof_transcript"] == result["evidence"]
+    assert result["bounded_vs_unbounded_scope"] == [
+        "property PROVED UNBOUNDED"]
+
+
+def test_expert_request_without_invocation_receipt_stays_incomplete(tmp_path):
+    import json
+    formal = tmp_path / "phase2" / "stage1" / "formal"
+    formal.mkdir(parents=True)
+    harness = formal / "formal_dut.sv"
+    harness.write_text(
+        "module formal_dut(input clk); always @(posedge clk) assert (1'b1); endmodule\n")
+    requested = {"id": "L6.fsm_state.IDLE", "layer": "L6",
+                 "description": "declared IDLE transition", "status": "UNAUTHORED"}
+    (formal / "property_contract.json").write_text(json.dumps({
+        "property_denominator": 1,
+        "authored_property_count": 1,
+        "unresolved_obligations": [],
+    }))
+    (formal / "formal_authoring_request.json").write_text(json.dumps({
+        "property_denominator": 1,
+        "unresolved_obligations": [requested],
+    }))
+    result = {
+        "verdict": "PASS", "all_proved": True,
+        "sby": "phase2/stage1/formal/dut.sby",
+        "evidence": "phase2/stage1/formal/dut.sby.log",
+        "bounded_vs_unbounded": ["property PROVED UNBOUNDED"],
+    }
+    FPR._attach_property_contract(result, formal, harness)
+    assert result["verdict"] == "INCOMPLETE"
+    assert result["expert_fallback_required"] is True
+    assert result["expert_fallback_invoked"] is False
+    assert [row["id"] for row in result["unresolved_obligations"]] == [
+        "L6.fsm_state.IDLE"]
+
+
+def test_invoked_expert_receipt_closes_exact_request_id(tmp_path):
+    import json
+    formal = tmp_path / "phase2" / "stage1" / "formal"
+    formal.mkdir(parents=True)
+    harness = formal / "formal_dut.sv"
+    harness.write_text(
+        "module formal_dut(input clk); always @(posedge clk) assert (1'b1); endmodule\n")
+    requested = {"id": "L6.fsm_state.IDLE", "layer": "L6",
+                 "description": "declared IDLE transition", "status": "UNAUTHORED"}
+    (formal / "property_contract.json").write_text(json.dumps({
+        "property_denominator": 1,
+        "authored_property_count": 1,
+        "unresolved_obligations": [],
+    }))
+    (formal / "formal_authoring_request.json").write_text(json.dumps({
+        "property_denominator": 1,
+        "unresolved_obligations": [requested],
+    }))
+    (formal / "formal_expert_review.json").write_text(json.dumps({
+        "invocation_status": "INVOKED", "fallback_skill": "formal-verify",
+        "dispositions": [{"id": "L6.fsm_state.IDLE", "status": "AUTHORED",
+                           "property": "p_idle_transition"}],
+    }))
+    result = {
+        "verdict": "PASS", "all_proved": True,
+        "sby": "phase2/stage1/formal/dut.sby",
+        "evidence": "phase2/stage1/formal/dut.sby.log",
+        "bounded_vs_unbounded": ["property PROVED UNBOUNDED"],
+    }
+    FPR._attach_property_contract(result, formal, harness)
+    assert result["verdict"] == "PASS"
+    assert result["expert_fallback_invoked"] is True
+    assert result["expert_fallback_receipt"].endswith(
+        "formal/formal_expert_review.json")
+    assert result["unresolved_obligations"] == []
+
+
 def test_build_results_no_tasks_is_skipped_condition():
     lp = FPR.LogParse()
     r = FPR.build_results("m", {}, lp, "e/log", "e/sby")

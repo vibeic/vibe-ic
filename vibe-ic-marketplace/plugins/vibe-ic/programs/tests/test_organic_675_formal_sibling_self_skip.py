@@ -108,7 +108,16 @@ def test_real_proof_chain_still_passes(tmp_path):
         "[files]\nasserts.sv\n")
     (f / "p.log").write_text(_SBY_PASS_LOG)
     (f / "results.json").write_text(json.dumps({
-        "verdict": "PASS", "all_proved": True}))
+        "verdict": "PASS", "all_proved": True,
+        "property_denominator": 1,
+        "authored_property_count": 1,
+        "unresolved_obligations": [],
+        "bounded_vs_unbounded_scope": ["unbounded safety prove"],
+        "sby": "phase2/stage1/formal/p.sby",
+        "elaborated_sby": "phase2/stage1/formal/p.sby",
+        "evidence": "phase2/stage1/formal/p.log",
+        "proof_transcript": "phase2/stage1/formal/p.log",
+    }))
     rep = FPC.audit(tmp_path)
     assert rep["rc"] == 0 and rep["verdict"] == "PASS", rep
 
@@ -213,6 +222,64 @@ def test_check_step_real_fail_still_fails(tmp_path):
     }
     res = FCC.check_step(tmp_path, step, waivers={})
     assert res.status == "FAIL", (res.status, res.reasons)
+
+
+def test_check_step_unanswerable_authoring_is_incomplete(tmp_path):
+    """#1974: applicable work with no sound property is a named INCOMPLETE
+    row, never SKIPPED-CONDITION / MISSING_CAPABILITY."""
+    f = _formal(tmp_path)
+    (f / "formal_authoring_request.json").write_text(json.dumps({
+        "verdict": "INCOMPLETE",
+        "fallback_skill": "formal-verify",
+        "property_denominator": 1,
+        "unresolved_obligations": [{
+            "id": "L6.fsm_state.IDLE",
+            "layer": "L6",
+            "description": "state signal encoding is not declared",
+        }],
+    }))
+    sfs = tmp_path / "phase2" / "stage1" / "sim_full_stack"
+    sfs.mkdir(parents=True)
+    (sfs / "results.json").write_text(json.dumps({"verdict": "PASS"}))
+    step = {
+        "id": 5, "name": "Formal verification",
+        "required_outputs": [
+            "phase2/stage1/formal/results.json OR "
+            "phase2/stage1/formal/formal_authoring_request.json",
+            "phase2/stage1/sim_full_stack/results.json",
+        ],
+        "gate": _step5_gate(),
+    }
+    res = FCC.check_step(tmp_path, step, waivers={})
+    assert res.status == "INCOMPLETE", (res.status, res.reasons)
+    joined = " ".join(res.reasons)
+    assert "L6.fsm_state.IDLE" in joined
+    assert "SKIPPED-CONDITION" not in joined
+
+
+def test_proved_subset_with_open_denominator_is_incomplete(tmp_path):
+    f = _formal(tmp_path)
+    rtl = tmp_path / "phase2" / "stage1" / "rtl"
+    rtl.mkdir(parents=True)
+    (rtl / "top.sv").write_text("module top; endmodule\n")
+    (f / "asserts.sv").write_text("module a; endmodule\n")
+    (f / "p.sby").write_text(
+        "[script]\nread_verilog ../rtl/top.sv\nread_verilog asserts.sv\n"
+        "[files]\nasserts.sv\n")
+    (f / "p.log").write_text(_SBY_PASS_LOG)
+    (f / "results.json").write_text(json.dumps({
+        "verdict": "INCOMPLETE", "all_proved": True,
+        "property_denominator": 2, "authored_property_count": 1,
+        "unresolved_obligations": [{"id": "L8.reset_release_cycles"}],
+        "bounded_vs_unbounded_scope": ["unbounded safety prove"],
+        "sby": "phase2/stage1/formal/p.sby",
+        "elaborated_sby": "phase2/stage1/formal/p.sby",
+        "evidence": "phase2/stage1/formal/p.log",
+        "proof_transcript": "phase2/stage1/formal/p.log",
+    }))
+    rep = FPC.audit(tmp_path)
+    assert rep["rc"] == 0 and rep["verdict"] == "INCOMPLETE", rep
+    assert rep["unresolved_obligations"] == [{"id": "L8.reset_release_cycles"}]
 
 
 # ── (4) v1.4.23 — EARLY required_outputs MISSING path honors a STRICT sibling ─

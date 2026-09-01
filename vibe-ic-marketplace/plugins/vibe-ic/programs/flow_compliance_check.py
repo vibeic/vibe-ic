@@ -2571,6 +2571,46 @@ def _sibling_self_skip_for_missing(project: Path,
     return None
 
 
+def _sibling_authoring_incomplete_for_missing(
+        project: Path, missing_patterns: List[str]) -> Optional[str]:
+    """Loose gate-path peer of `_sibling_self_skip_for_missing` for INCOMPLETE.
+
+    Safe only at a `files_exist` gate whose next sub-gate independently reads
+    the artifact. It never applies on the early required-output return.
+    """
+    seen_dirs: set = set()
+    for pat in missing_patterns:
+        parent_rel = str(Path(pat).parent)
+        if parent_rel in seen_dirs:
+            continue
+        seen_dirs.add(parent_rel)
+        candidates = [project / parent_rel]
+        candidates += [project / hit for hit in _glob_first(project, parent_rel)]
+        for directory in candidates:
+            if not directory.is_dir():
+                continue
+            for sib in sorted(directory.glob("*.json")):
+                try:
+                    data = json.loads(sib.read_text())
+                except Exception:
+                    continue
+                if not isinstance(data, dict):
+                    continue
+                vd = str(data.get("verdict", "")).upper().replace("_", "-")
+                if vd != "INCOMPLETE":
+                    continue
+                unresolved = data.get("unresolved_obligations") or []
+                ids = [str(row.get("id", "?")) for row in unresolved
+                       if isinstance(row, dict)]
+                try:
+                    rel = str(sib.relative_to(project))
+                except ValueError:
+                    rel = sib.name
+                return (f"{rel}: applicable formal property authoring remains "
+                        f"({', '.join(ids) or 'unnamed obligation'})")
+    return None
+
+
 def _norm_out_path(s: str) -> str:
     """Normalize an output path for exact ownership comparison: trim, drop a
     leading `./`. Pure."""
@@ -4370,9 +4410,6 @@ _FSM_STOPWORDS = frozenset(w.upper() for w in (
 # list. It is NOT a green pass — it is a machine-attested deferral
 # that the tapeout vendor must close before production.
 _OPEN_SOURCE_CONTAINER_BLOCKED_STEPS: Dict[Any, str] = {
-    5:  "Formal verification harness (SymbiYosys IS in container, "
-        "but L3-driven SVA / cover-property authoring is project-specific "
-        "and not auto-generatable; human design-spec needed)",
     11: "DFT insertion (Tessent Scan / DFTMAX)",
     12: "Post-DFT optimisation (Design Compiler + DFT)",
     13: "RTL≡post-DFT equivalence (Formality / Conformal)",
@@ -8046,6 +8083,12 @@ def _evaluate_gate(project: Path, gate: Dict[str, Any],
             project, gate["files_exist"], any_of=any_of
         )
         if not passed:
+            incomplete_hint = _sibling_authoring_incomplete_for_missing(
+                project, missing)
+            if incomplete_hint is not None:
+                reasons.append(
+                    f"{_INCOMPLETE_HINT_PREFIX}{incomplete_hint}")
+                return True, reasons
             # ORGANIC #675 — before declaring a hard FAIL, honor an honest
             # sibling self-skip artifact co-located with the absent canonical
             # output (verdict ∈ SKIP/SKIPPED/SKIPPED-CONDITION), the way

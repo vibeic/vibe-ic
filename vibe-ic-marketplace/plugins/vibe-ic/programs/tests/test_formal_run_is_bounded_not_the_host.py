@@ -342,9 +342,13 @@ def test_the_step5_gate_does_not_read_an_inconclusive_run_as_a_pass(
     assert rc != 0, "an inconclusive formal run was accepted as a pass"
 
 
-def test_the_flow_only_keeps_a_formal_pass_on_verdict_pass_and_all_proved():
-    """The other consumer: the phase-2 runner keeps `results.json` as Step-5
-    evidence ONLY on `verdict == 'PASS' and all_proved`. Read as SOURCE so this
-    stays true of the shipped call site rather than of a copy of it."""
+def test_the_flow_preserves_nonpass_formal_evidence_for_the_gate():
+    """A failed/inconclusive proof is evidence, not a reason to delete it.
+
+    The gate refuses its verdict; the runner must retain `results.json` so the
+    refusal and any counterexample remain inspectable.
+    """
     src = (Path(F.__file__).parent / "design_one_shot_runner.py").read_text()
-    assert '_res.get("verdict") == "PASS" and _res.get("all_proved")' in src
+    window = src[src.index("Issue #1974"):src.index("Step 6: FPGA")]
+    assert 'written.append("formal/results.json")' in window
+    assert '.unlink()' not in window

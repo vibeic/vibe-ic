@@ -266,3 +266,80 @@ def test_generate_never_asserts_a_guessed_value(tmp_path):
             "if (rst) o <= seed; else o <= o + 1; endmodule")
     res, _ = _gen(tmp_path, text)
     assert res["verdict"] == "NOT_APPLICABLE"   # nothing construction-safe
+
+
+# ── issue #1974: declaration denominator + honest fallback ────────────────
+def _write_doc(project, name, data):
+    import json
+    d = project / "phase1" / "generated_docs"
+    d.mkdir(parents=True, exist_ok=True)
+    (d / name).write_text(json.dumps(data))
+
+
+def _write_project_rtl(project, text):
+    d = project / "phase2" / "stage1" / "rtl"
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "dut.v").write_text(text)
+
+
+def test_explicit_global_formal_inapplicable_is_the_only_not_applicable(tmp_path):
+    _write_doc(tmp_path, "L22_VERIFICATION_PLAN.json", {
+        "fields": {"formal_applicability": {
+            "status": "NOT_APPLICABLE",
+            "reason": "This declaration defines a pure analog block with no RTL state."}}})
+    res = G.generate(project=tmp_path, top="none")
+    assert res["verdict"] == "NOT_APPLICABLE"
+    assert res.get("reason") == (
+        "This declaration defines a pure analog block with no RTL state.")
+    assert res.get("property_denominator", -1) == 0
+    contract = (tmp_path / "phase2/stage1/formal/property_contract.json").read_text()
+    assert "pure analog block" in contract
+    assert not (tmp_path / "phase2/stage1/formal/formal_authoring_request.json").exists()
+
+
+def test_program_floor_counts_l3_l6_l8_and_routes_unresolved_to_expert(tmp_path):
+    import json
+    _write_doc(tmp_path, "L3_CMD_PROTOCOL.json", {
+        "no_opcodes_in_input": False,
+        "opcodes": [{"name": "START", "hex": "0x01", "purpose": "begin"}]})
+    _write_doc(tmp_path, "L6_CONTROL_LOGIC.json", {
+        "no_fsm_in_input": False,
+        "fsm_states": [{"name": "IDLE", "transitions": ["IDLE -> RUN on start"]}]})
+    _write_doc(tmp_path, "L8_TIMING_WAVEFORM.json", {
+        "timing_constants": {"reset_release_cycles": 2}})
+    _write_project_rtl(tmp_path, _SPM_LIKE.replace("module spm", "module dut"))
+
+    res = G.generate(project=tmp_path, top="dut")
+    assert res["verdict"] == "EMITTED"
+    assert res.get("authored_property_count", -1) == 1
+    assert res.get("property_denominator", -1) == 4
+    ids = {row["id"] for row in res.get("unresolved_obligations", [])}
+    assert ids == {"L3.opcode.START", "L6.fsm_state.IDLE",
+                   "L8.timing_constants.reset_release_cycles"}
+    req = json.loads((tmp_path /
+        "phase2/stage1/formal/formal_authoring_request.json").read_text())
+    assert req["verdict"] == "INCOMPLETE"
+    assert req["fallback_skill"] == "formal-verify"
+    assert req["invocation_status"] == "REQUIRED_NOT_INVOKED"
+
+
+def test_applicable_but_unanswerable_authoring_is_incomplete_not_skip(tmp_path):
+    import json
+    _write_doc(tmp_path, "L3_CMD_PROTOCOL.json", {"no_opcodes_in_input": True})
+    _write_doc(tmp_path, "L6_CONTROL_LOGIC.json", {"no_fsm_in_input": True})
+    _write_doc(tmp_path, "L8_TIMING_WAVEFORM.json", {
+        "formal_applicability": {"status": "NOT_APPLICABLE",
+                                  "reason": "No cycle timing was declared."}})
+    _write_project_rtl(
+        tmp_path,
+        "module dut(input [3:0] x, output [3:0] y); assign y = ~x; endmodule")
+
+    res = G.generate(project=tmp_path, top="dut")
+    assert res["verdict"] == "INCOMPLETE"
+    assert res["fallback_skill"] == "formal-verify"
+    assert [row["id"] for row in res["unresolved_obligations"]] == [
+        "RTL.sound_property_missing"]
+    req = json.loads((tmp_path /
+        "phase2/stage1/formal/formal_authoring_request.json").read_text())
+    assert req["verdict"] == "INCOMPLETE"
+    assert "construction-safe property" in req["unresolved_obligations"][0]["description"]

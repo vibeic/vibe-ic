@@ -50,7 +50,16 @@ def test_550a_genuinely_missing_still_none(tmp_path):
 # ── end-to-end: a real staged+multi-flag proof PASSes; a bare claim FAILs ──
 def test_550_end_to_end_pass(tmp_path):
     fdir = _formal(tmp_path)
-    (fdir / "results.json").write_text(json.dumps({"all_proved": True}))
+    (fdir / "results.json").write_text(json.dumps({
+        "verdict": "PASS", "all_proved": True,
+        "property_denominator": 1, "authored_property_count": 1,
+        "unresolved_obligations": [],
+        "bounded_vs_unbounded_scope": ["unbounded prove"],
+        "sby": "phase2/stage1/formal/p.sby",
+        "elaborated_sby": "phase2/stage1/formal/p.sby",
+        "evidence": "phase2/stage1/formal/p.log",
+        "proof_transcript": "phase2/stage1/formal/p.log",
+    }))
     (fdir / "p.sby").write_text(
         "[options]\nmode prove\n[engines]\nsmtbmc\n"
         "[script]\nread_verilog -sv -DFORMAL dut.sv\nprep -top dut\n"

@@ -64,9 +64,55 @@ def test_real_proof_chain_passes(tmp_path):
     (f / "constraints.sby.log").write_text(_SBY_PASS_LOG)
     (f / "results.json").write_text(json.dumps({
         "verdict": "PASS", "all_proved": True,
-        "evidence": "phase2/stage1/formal/constraints.sby.log"}))
+        "property_denominator": 1, "authored_property_count": 1,
+        "unresolved_obligations": [],
+        "bounded_vs_unbounded_scope": ["unbounded prove"],
+        "sby": "phase2/stage1/formal/constraints.sby",
+        "elaborated_sby": "phase2/stage1/formal/constraints.sby",
+        "evidence": "phase2/stage1/formal/constraints.sby.log",
+        "proof_transcript": "phase2/stage1/formal/constraints.sby.log"}))
     rep = FPC.audit(tmp_path)
     assert rep["rc"] == 0 and rep["verdict"] == "PASS", rep
+
+
+def test_completed_claim_without_property_denominator_fails(tmp_path):
+    """#1974 pre-fix-compatible RED: proof evidence alone is a subset claim."""
+    f = _formal(tmp_path)
+    (f / "assertions.sv").write_text("module asserts; endmodule\n")
+    (f / "constraints.sby").write_text(
+        "[script]\nread -formal assertions.sv\nprep -top asserts\n")
+    (f / "constraints.sby.log").write_text(_SBY_PASS_LOG)
+    (f / "results.json").write_text(json.dumps({
+        "verdict": "PASS", "all_proved": True,
+        "evidence": "phase2/stage1/formal/constraints.sby.log"}))
+    rep = FPC.audit(tmp_path)
+    assert rep["rc"] == 1 and rep["verdict"] == "FAIL", rep
+    assert any("PROPERTY_DENOMINATOR_MISSING" in row
+               for row in rep["findings"]), rep
+
+
+def test_completed_claim_that_skipped_required_expert_receipt_fails(tmp_path):
+    f = _formal(tmp_path)
+    (f / "assertions.sv").write_text("module asserts; endmodule\n")
+    (f / "constraints.sby").write_text(
+        "[script]\nread -formal assertions.sv\nprep -top asserts\n")
+    (f / "constraints.sby.log").write_text(_SBY_PASS_LOG)
+    (f / "results.json").write_text(json.dumps({
+        "verdict": "PASS", "all_proved": True,
+        "property_denominator": 1, "authored_property_count": 1,
+        "unresolved_obligations": [],
+        "expert_fallback_required": True,
+        "expert_fallback_invoked": False,
+        "expert_fallback_receipt": None,
+        "bounded_vs_unbounded_scope": ["unbounded prove"],
+        "sby": "phase2/stage1/formal/constraints.sby",
+        "elaborated_sby": "phase2/stage1/formal/constraints.sby",
+        "evidence": "phase2/stage1/formal/constraints.sby.log",
+        "proof_transcript": "phase2/stage1/formal/constraints.sby.log"}))
+    rep = FPC.audit(tmp_path)
+    assert rep["rc"] == 1 and rep["verdict"] == "FAIL", rep
+    assert any("EXPERT_FALLBACK_NOT_INVOKED" in row
+               for row in rep["findings"]), rep
 
 
 def test_sby_referencing_missing_files_fails(tmp_path):

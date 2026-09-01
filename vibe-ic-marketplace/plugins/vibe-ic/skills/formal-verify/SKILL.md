@@ -8,9 +8,11 @@ description: Run formal property verification (FPV) on RTL by driving model-chec
 > **Doctrine (v0.1.50):** 把修法寫進工具，而非寫進 prompt.
 > Programs first; AI is the backstop on cex narrative.
 
-`assertion-gen` writes the properties; this skill is the **runner**
-that dispatches them to a model-checker and interprets the results.
-Without a runner, SVA files are just documentation.
+`formal_harness_gen.py` authors the construction-safe floor and writes
+`property_contract.json`. This skill owns BOTH the expert property-authoring
+fallback for unresolved L3/L6/L8 obligation IDs and the independent review of
+model-checker evidence. Without a runner, SVA files are documentation; without
+denominator closure, a passing subset is INCOMPLETE rather than Step 5.
 
 ## Mandatory Deterministic Preflight
 
@@ -32,13 +34,29 @@ property "obviously holds" without the tool's PROVEN verdict.
 
 ## The Step-5 in-flow path (`formal_property_run`) — author the harness, the program proves
 
-The canonical flow Step 5 is closed by the PROGRAM `formal_property_run.py`:
-you author the formal harness at `phase2/stage1/formal/formal_<top>.sv`, then
-the program emits the `.sby`, runs `sby` in the container, parses the
-transcript, and writes `formal/results.json` + `<top>_report.md` that the
-`formal_proof_evidence_check` gate verifies (`all_proved:true` ONLY when every
-task shows `DONE (PASS)`; rc 2 = honest NOT_APPLICABLE, never a fake). Without
-a harness the runner's `formal_not_run.json` sentinel stays the honest SKIP.
+The canonical flow Step 5 starts with PROGRAM `formal_harness_gen.py`. When it
+writes `formal_authoring_request.json`, invocation of this skill is mandatory:
+
+1. Read `property_contract.json` and the request. Preserve every obligation ID.
+2. Bind each unresolved L3/L6/L8 declaration to visible RTL signals. Never guess
+   a signal mapping or transcribe an uncheckable prose promise into an assertion.
+3. Author properties in `phase2/stage1/formal/formal_<top>.sv`; update each
+   covered obligation with its exact property name and remove it from
+   `unresolved_obligations` only when the assertion exists.
+4. Write `formal_expert_review.json` with `invocation_status: INVOKED`,
+   `fallback_skill: formal-verify`, and a `dispositions` list with one
+   `AUTHORED`, `DECLARATION_MISSING`, or `UNANSWERABLE` row for every request
+   ID. Every `AUTHORED` row names the exact `property`; `UNANSWERABLE` keeps
+   the row INCOMPLETE and names what declaration/property is missing.
+5. Run `formal_property_run.py`, then `formal_proof_evidence_check.py`.
+
+The PROGRAM `formal_property_run.py` emits the `.sby`, runs `sby` in the
+container, parses the transcript, and writes `formal/results.json` plus the
+report that `formal_proof_evidence_check` verifies (`all_proved:true` ONLY when
+every task shows `DONE (PASS)`). A completed result must cite the elaborated
+`.sby`, proof transcript, positive property denominator, and bounded/unbounded
+scope. Without a sound harness the request remains INCOMPLETE; it is never a
+skip.
 
 **When the engine cannot be REACHED (#216).** "The proof engine was never
 reached" and "the proof ran and was inconclusive" are different facts and are
@@ -91,7 +109,7 @@ need none (`aigsmt none`): `abc pdr` proves safety properties UNBOUNDED;
 ## When to use
 
 - Control-dominated logic (arbiters, FIFOs, protocol adapters, CDC samplers)
-- After `/assertion-gen` produces properties for a module
+- When the program-first request names unresolved L3/L6/L8 obligations
 - Regression: re-prove after any RTL change to a formally-verified block
 - Safety-critical paths where simulation coverage is insufficient
 
@@ -219,7 +237,7 @@ For `otp_controller`'s 47-byte array:
 ## Inputs to gather
 
 1. RTL module under verification
-2. SVA properties (from `/assertion-gen` or hand-written)
+2. SVA properties (from the deterministic floor or expert-authored here)
 3. Target engine: SymbiYosys (open), Jasper (Cadence), VC Formal (Synopsys)
 4. Bound (for BMC) or depth (for k-induction)
 5. Constraints / assumptions (`assume` properties)
@@ -228,7 +246,8 @@ For `otp_controller`'s 47-byte array:
 
 1. **Classify module complexity** — run `programs/formal_complexity_classify.py`
    to choose k-induction (prove) vs BMC per module (do not eyeball it)
-2. **Generate assertions** — via `/assertion-gen` or manual
+2. **Generate assertions** — deterministic floor first, then this skill for the
+   exact unresolved obligation IDs
 3. **Write `.sby` config** with appropriate mode and depth
 4. **Run engine** — `sby -f module.sby`
 5. **Triage results**:

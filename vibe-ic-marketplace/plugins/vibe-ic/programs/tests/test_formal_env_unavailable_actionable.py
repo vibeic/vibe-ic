@@ -68,17 +68,17 @@ endmodule
 """
 
 
-def _mk_design(root: Path) -> tuple[Path, Path]:
+def _mk_design(root: Path, harness_text: str = _HARNESS) -> tuple[Path, Path]:
     (root / "rtl").mkdir(parents=True, exist_ok=True)
     rtl = root / "rtl" / "ctr.v"
     rtl.write_text(_RTL)
     harness = root / "formal_ctr.sv"
-    harness.write_text(_HARNESS)
+    harness.write_text(harness_text)
     return rtl, harness
 
 
-def _run_formal(project: Path, container: str):
-    rtl, harness = _mk_design(project)
+def _run_formal(project: Path, container: str, harness_text: str = _HARNESS):
+    rtl, harness = _mk_design(project, harness_text)
     r = _pr.run(
         [sys.executable, str(_FORMAL), str(project),
          "--harness", str(harness), "--rtl", str(rtl),
@@ -225,8 +225,8 @@ def test_available_env_runs_a_real_proof_and_needs_no_waiver(tmp_path):
     starts declaring the environment unavailable while sby is right there
     is caught immediately.
     """
-    # The container only sees paths under the mounted home directory.
-    home_tmp = Path.home() / ".pytest_formal_211" / tmp_path.name
+    # The pinned container sees the shared design mount, not arbitrary $HOME.
+    home_tmp = Path.home() / "vibeic-designs" / ".pytest_formal_211" / tmp_path.name
     if home_tmp.exists():
         shutil.rmtree(home_tmp)
     home_tmp.mkdir(parents=True)
@@ -249,6 +249,38 @@ def test_available_env_runs_a_real_proof_and_needs_no_waiver(tmp_path):
         assert "engine_0" in log
     finally:
         shutil.rmtree(home_tmp, ignore_errors=True)
+
+
+@pytest.mark.skipif(
+    not _docker_container_running(_REAL_CONTAINER),
+    reason=f"container {_REAL_CONTAINER!r} not running on this host",
+)
+def test_failed_proof_retains_results_and_counterexample_verdict(tmp_path):
+    """#1974 failed-proof control: a real refutation stays FAIL evidence.
+
+    The pre-fix phase2 runner deleted this `results.json` and emitted a skip.
+    """
+    mounted = (Path.home() / "vibeic-designs" / ".pytest_formal_1974_fail" /
+               tmp_path.name)
+    if mounted.exists():
+        shutil.rmtree(mounted)
+    mounted.mkdir(parents=True)
+    false_harness = _HARNESS.replace(
+        "assert (q <= 4'd9);", "assert (q == 4'hf);")
+    try:
+        rc, out, err = _run_formal(
+            mounted, _REAL_CONTAINER, harness_text=false_harness)
+        fd = _formal_dir(mounted)
+        results_path = fd / "results.json"
+        assert results_path.is_file(), f"failed proof evidence disappeared: {out}\n{err}"
+        results = json.loads(results_path.read_text())
+        assert results["verdict"] == "FAIL"
+        assert results["all_proved"] is False
+        assert results["failed"] > 0
+        assert rc == 1
+        assert "DONE (FAIL" in (fd / "formal_ctr_formal.sby.log").read_text()
+    finally:
+        shutil.rmtree(mounted, ignore_errors=True)
 
 
 # ── the compliance report: no silent drops, justified cascade ─────────────
