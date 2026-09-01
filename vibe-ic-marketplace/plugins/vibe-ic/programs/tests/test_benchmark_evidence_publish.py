@@ -406,3 +406,260 @@ def test_build_residue_predicate_is_bound_to_the_tool_marker(tmp_path):
     for rel in ("x.v", "x.sv", "x.json", "x.dat", "x.xml", "x.log", "x.gds",
                 "objects_dir/x.cpp"):
         assert not bep.is_build_residue(tmp_path / rel), rel
+
+
+# --------------------------------------------------------------------------
+# #2007 — citation closure: a staged document's cited proof ships with it.
+#
+# MEASURED on the published spm x gf180mcuD v1.14.88 cell: RESULT.md said
+# "retained in `full_acceptance.log`" and reports/phase3/antenna.json carried
+# `"source": "phase3/stage3/pnr/openroad.log"` under `"verdict": "PASS"`.
+# Neither path is in a copy subtree, both existed in the run tree under the
+# ceiling, and the cell shipped both documents and neither proof — with its
+# own CITATION_ROUTING.txt recording the two rows DANGLING. The fixtures below
+# reproduce exactly that shape with generic content.
+# --------------------------------------------------------------------------
+_ACCEPT_LOG = "full_acceptance.log"                 # cell root; not a copy file
+_OPENROAD_LOG = "phase3/stage3/pnr/openroad.log"    # phase3/stage3: no subtree
+_ANTENNA = "reports/phase3/antenna.json"            # reports/: a copy subtree
+
+
+def _plant_citations(run: Path, *, cited_log: str = _ACCEPT_LOG,
+                     cited_source: str = _OPENROAD_LOG,
+                     log_exists: bool = True,
+                     source_exists: bool = True) -> None:
+    (run / "RESULT.md").write_text(
+        _RESULT_PASS + f"\nThe full phase summaries are retained in "
+                       f"`{cited_log}`.\n")
+    (run / _ANTENNA).parent.mkdir(parents=True, exist_ok=True)
+    (run / _ANTENNA).write_text(json.dumps(
+        {"tool": "openroad", "net_violations": 0, "clean": True,
+         "source": cited_source, "verdict": "PASS"}, indent=2))
+    if log_exists:
+        (run / _ACCEPT_LOG).write_text("phase1 PASS\nphase2 PASS\nphase3 PASS\n")
+    if source_exists:
+        p = run / _OPENROAD_LOG
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text("[INFO ANT-0002] Found 0 net violations.\n")
+
+
+def _routing_rows(cell: Path) -> dict:
+    rows = {}
+    for line in (cell / "CITATION_ROUTING.txt").read_text().splitlines():
+        if line.startswith("#") or " :: " not in line:
+            continue
+        left, decision = line.rsplit(" ", 1)
+        doc, cited = left.split(" :: ", 1)
+        rows[(doc, cited)] = decision
+    return rows
+
+
+def test_a_cited_proof_that_exists_in_the_run_is_staged_beside_its_document(tmp_path):
+    """THE MEASURED CASE. A Markdown citation of a root-level log and a JSON
+    gate report's `source` field pointing into a subtree the publisher does
+    not copy: both artefacts exist in the run, so both must land in the cell
+    at the path the document names, and the routing record must say
+    RESOLVES for both rather than DANGLING."""
+    run = _make_run(tmp_path)
+    _plant_citations(run)
+    dest_root = tmp_path / "benchmark-data"
+    out = tmp_path / "s.json"
+    cp = _run(_base_args(run, dest_root) + ["--json", str(out)])
+    assert cp.returncode == 0, cp.stderr + cp.stdout
+    cell = dest_root / "ic" / "widgetmul" / "v9.9.9_openpdkx"
+    for rel in (_ACCEPT_LOG, _OPENROAD_LOG):
+        assert (cell / rel).is_file(), f"{rel} was cited and not staged"
+        assert (cell / rel).read_bytes() == (run / rel).read_bytes()
+    rows = _routing_rows(cell)
+    assert rows[("RESULT.md", _ACCEPT_LOG)] == "RESOLVES", rows
+    assert rows[(_ANTENNA, _OPENROAD_LOG)] == "RESOLVES", rows
+    cc = json.loads(out.read_text())["citation_closure"]
+    assert sorted(r["path"] for r in cc["staged"]) == sorted(
+        [_ACCEPT_LOG, _OPENROAD_LOG]), cc
+    # The base fixture's pdk record cites a container image record it never
+    # writes; that absence is the fixture's, not this test's subject.
+    assert not {r["cited"] for r in cc["absent"]} & {_ACCEPT_LOG, _OPENROAD_LOG}
+    assert cc["amended"] == [] and cc["unamended"] == [], cc
+    # The deliverable's own listing names each closed artefact AND the
+    # document that needed it — the stdout is not the record, but a reader
+    # of the publish must be able to see why a stage3 file is in the cell.
+    assert f"+ {_ACCEPT_LOG} (citation closure: cited by RESULT.md)" in cp.stdout
+    assert (f"+ {_OPENROAD_LOG} (citation closure: cited by {_ANTENNA})"
+            in cp.stdout)
+
+
+def test_closure_is_listed_on_a_dry_run_and_stages_nothing(tmp_path):
+    """A dry run must answer the same question the real publish does — what
+    WOULD be pulled in — and write nothing. The population is decided by the
+    same copy walk in both modes, so the two listings cannot drift."""
+    run = _make_run(tmp_path)
+    _plant_citations(run)
+    dest_root = tmp_path / "benchmark-data"
+    out = tmp_path / "s.json"
+    cp = _run(_base_args(run, dest_root) + ["--dry-run", "--json", str(out)])
+    assert cp.returncode == 0, cp.stderr + cp.stdout
+    assert not (dest_root / "ic").exists()
+    cc = json.loads(out.read_text())["citation_closure"]
+    assert sorted(r["path"] for r in cc["staged"]) == sorted(
+        [_ACCEPT_LOG, _OPENROAD_LOG]), cc
+    assert f"+ {_ACCEPT_LOG} (citation closure: cited by RESULT.md)" in cp.stdout
+    assert (f"+ {_OPENROAD_LOG} (citation closure: cited by {_ANTENNA})"
+            in cp.stdout)
+
+
+def test_an_absent_citation_is_never_invented_and_is_disclosed(tmp_path):
+    """THE PAIRED HALF. A citation whose target exists nowhere in the run must
+    not produce a file — and must not be passed over in silence either. The
+    JSON gate report is amended IN THE CELL by the honest-absence mechanism
+    the corpus gate honours (evidence_present: false, verdict UNSUBSTANTIATED,
+    the run's own word retained); the run's copy is untouched; the Markdown
+    citation, which this program will not edit, is reported UNAMENDED."""
+    run = _make_run(tmp_path)
+    _plant_citations(run, cited_log="missing_proof.log",
+                     cited_source="phase3/stage3/pnr/nowhere.log",
+                     log_exists=False, source_exists=False)
+    run_antenna_before = (run / _ANTENNA).read_text()
+    dest_root = tmp_path / "benchmark-data"
+    out = tmp_path / "s.json"
+    cp = _run(_base_args(run, dest_root) + ["--json", str(out)])
+    assert cp.returncode == 0, cp.stderr + cp.stdout
+    cell = dest_root / "ic" / "widgetmul" / "v9.9.9_openpdkx"
+    assert not (cell / "missing_proof.log").exists()
+    assert not (cell / "phase3" / "stage3" / "pnr" / "nowhere.log").exists()
+    assert not (cell / "phase3" / "stage3").exists(), (
+        "nothing under phase3/stage3 was cited AND present; the closure "
+        "must not create the directory either")
+    rows = _routing_rows(cell)
+    assert rows[("RESULT.md", "missing_proof.log")] == "DANGLING", rows
+    # Outside a git checkout the routing's carried-directory test falls back
+    # to the phase/stage prefix rule, which words a cell carrying nothing
+    # under phase3/stage3 as OUT_OF_PUBLISHED_SCOPE; in a corpus clone it is
+    # DANGLING. Either way the row must not claim the reader can follow it.
+    assert rows[(_ANTENNA, "phase3/stage3/pnr/nowhere.log")] in (
+        "DANGLING", "OUT_OF_PUBLISHED_SCOPE"), rows
+    cc = json.loads(out.read_text())["citation_closure"]
+    assert cc["staged"] == [], cc
+    assert {r["cited"] for r in cc["absent"]} >= {
+        "missing_proof.log", "phase3/stage3/pnr/nowhere.log"}, cc
+    # the JSON report: amended in the cell, verbatim in the run
+    staged = json.loads((cell / _ANTENNA).read_text())
+    assert staged["evidence_present"] is False
+    assert staged["verdict"] == "UNSUBSTANTIATED"
+    assert staged["verdict_as_run"] == "PASS"
+    assert staged["source"] is None
+    assert staged["evidence_absent"] == {"source": "phase3/stage3/pnr/nowhere.log"}
+    assert "nowhere.log" in staged["null_because"]
+    assert staged["net_violations"] == 0, "the run's other fields are retained"
+    assert (run / _ANTENNA).read_text() == run_antenna_before
+    assert cc["amended"] == [{"doc": _ANTENNA,
+                              "fields": {"source": "phase3/stage3/pnr/nowhere.log"},
+                              "verdict_as_run": "PASS",
+                              "verdict": "UNSUBSTANTIATED"}], cc
+    # the gate itself must now read the amended report as a disclosure, not
+    # a claim — the same predicate `evidence_citation_resolves_check` applies
+    sys.path.insert(0, str(PROG.parent))
+    import evidence_citation_resolves_check as gate  # noqa: E402
+    assert gate._json_artifact_refs(cell / _ANTENNA) == []
+    assert gate._json_artifact_refs(run / _ANTENNA) == [
+        ("source", "phase3/stage3/pnr/nowhere.log")]
+    # the Markdown citation: not edited, and said so
+    assert (cell / "RESULT.md").read_text() == (run / "RESULT.md").read_text()
+    assert cc["unamended"] == [{"doc": "RESULT.md",
+                                "cited": ["missing_proof.log"]}], cc
+    assert "WARNING RESULT.md cites missing_proof.log" in cp.stdout
+
+
+def test_a_cited_layout_artefact_stays_under_the_layout_policy(tmp_path):
+    """Closure defers to the two records that already exist. A cited `.def`
+    under phase3/stage3 is a layout artefact: it is NOT pulled in by the
+    citation, and LAYOUT_ROUTING.txt keeps its NOT_PUBLISHED line."""
+    run = _make_run(tmp_path)
+    _plant_citations(run, cited_log="phase3/stage3/pnr/placed.def")
+    p = run / "phase3" / "stage3" / "pnr" / "placed.def"
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text("DESIGN top ;\nEND DESIGN\n")
+    dest_root = tmp_path / "benchmark-data"
+    out = tmp_path / "s.json"
+    cp = _run(_base_args(run, dest_root) + ["--json", str(out)])
+    assert cp.returncode == 0, cp.stderr + cp.stdout
+    cell = dest_root / "ic" / "widgetmul" / "v9.9.9_openpdkx"
+    assert not (cell / "phase3" / "stage3" / "pnr" / "placed.def").exists()
+    cc = json.loads(out.read_text())["citation_closure"]
+    assert [r["path"] for r in cc["layout_policy"]] == [
+        "phase3/stage3/pnr/placed.def"], cc
+    assert any(
+        "phase3/stage3/pnr/placed.def" in line and "NOT_PUBLISHED" in line
+        for line in (cell / "LAYOUT_ROUTING.txt").read_text().splitlines()), (
+        (cell / "LAYOUT_ROUTING.txt").read_text())
+
+
+def test_a_cited_proof_over_the_ceiling_is_recorded_not_staged(tmp_path, monkeypatch):
+    """The ONE reason a cited, existing artefact is not staged: the commit
+    ceiling. It is then listed OVER_CEILING with its size, and the other
+    citation still closes — one refusal must not silence the rest."""
+    sys.path.insert(0, str(PROG.parent))
+    import benchmark_evidence_publish as B  # noqa: E402
+    run = _make_run(tmp_path)
+    _plant_citations(run)
+    monkeypatch.setattr(B, "over_ceiling",
+                        lambda p, ceiling=None: p.name == "openroad.log")
+    dest_root = tmp_path / "benchmark-data"
+    out = tmp_path / "s.json"
+    assert B.main(_base_args(run, dest_root) + ["--json", str(out)]) == 0
+    cell = dest_root / "ic" / "widgetmul" / "v9.9.9_openpdkx"
+    assert (cell / _ACCEPT_LOG).is_file()
+    assert not (cell / _OPENROAD_LOG).exists()
+    cc = json.loads(out.read_text())["citation_closure"]
+    assert [r["path"] for r in cc["staged"]] == [_ACCEPT_LOG], cc
+    assert [(r["path"], r["bytes"]) for r in cc["over_ceiling"]] == [
+        (_OPENROAD_LOG, (run / _OPENROAD_LOG).stat().st_size)], cc
+    rows = _routing_rows(cell)
+    assert rows[(_ANTENNA, _OPENROAD_LOG)] != "RESOLVES", rows
+
+
+def test_a_closure_staged_document_is_itself_closed_and_recorded_on_a_restage(tmp_path):
+    """Two defects the first spm re-stage exposed together. (a) A document
+    the closure stages is a staged document: what IT cites must be closed
+    too (the write ledger cited a summary JSON that cited an STA report).
+    (b) Re-staging into a corpus CLONE, the routing record's published-tree
+    filter kept only paths git already published at HEAD, so the document
+    the closure had just added was left out of the record — and the
+    structure gate, counting the cell's citations from the index after
+    `git add`, found the routing answering for 23 of 24."""
+    import subprocess as sp
+    run = _make_run(tmp_path)
+    dest_root = tmp_path / "benchmark-data"
+    dest_root.mkdir()
+    git = ["git", "-c", "user.name=t", "-c", "user.email=t@t", "-C", str(dest_root)]
+    sp.run(git + ["init", "-q"], check=True)
+    # first publish, committed: the cell now HAS a published tree at HEAD
+    assert _run(_base_args(run, dest_root)).returncode == 0
+    sp.run(git + ["add", "-A"], check=True)
+    sp.run(git + ["commit", "-q", "-m", "first"], check=True)
+    # the run grows a two-link chain, neither link in a copy subtree
+    summary = "phase3/stage3/repair/no_repair_summary.json"
+    report = "phase3/stage3/sta/sta_spef_based.rpt"
+    (run / "RESULT.md").write_text(
+        _RESULT_PASS + f"\nNo repair was needed; see `{summary}`.\n")
+    for rel, body in ((summary, json.dumps({"verdict": "PASS", "report": report})),
+                      (report, "slack 0.12 ns MET\n")):
+        (run / rel).parent.mkdir(parents=True, exist_ok=True)
+        (run / rel).write_text(body)
+    out = tmp_path / "s.json"
+    cp = _run(_base_args(run, dest_root) + ["--force", "--json", str(out)])
+    assert cp.returncode == 0, cp.stderr + cp.stdout
+    cell = dest_root / "ic" / "widgetmul" / "v9.9.9_openpdkx"
+    assert (cell / summary).is_file() and (cell / report).is_file()
+    cc = json.loads(out.read_text())["citation_closure"]
+    assert {r["path"] for r in cc["staged"]} >= {summary, report}, cc
+    assert (summary, report) in {(r["doc"], r["cited"]) for r in cc["staged"]}
+    rows = _routing_rows(cell)
+    assert rows[("RESULT.md", summary)] == "RESOLVES", rows
+    assert rows[(summary, report)] == "RESOLVES", rows
+    # the gate's own census, from the index, must be fully answered
+    sp.run(git + ["add", "-A"], check=True)
+    checker = PROG.parent / "benchmark_evidence_structure_check.py"
+    chk = sp.run([sys.executable, str(checker), str(cell)],
+                 capture_output=True, text=True)
+    assert "answers for" not in chk.stdout + chk.stderr, chk.stdout + chk.stderr
+    assert chk.returncode == 0, chk.stdout + chk.stderr

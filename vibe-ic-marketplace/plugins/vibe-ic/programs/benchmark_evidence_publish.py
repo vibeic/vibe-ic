@@ -132,6 +132,51 @@ the count, the bytes and the paths are in the JSON summary
 (`build_residue_skipped`) and on stdout, and the `provenance.jsonl` pruning
 below discloses any declared output among them.
 
+A STAGED DOCUMENT'S CITED PROOF SHIPS WITH IT — CITATION CLOSURE (#2007)
+=========================================================================
+The copy subtrees decide what is staged by WHERE a file sits. A document
+inside them decides what it needs by NAME: `RESULT.md` says "retained in
+`full_acceptance.log`", `reports/phase3/antenna.json` says `"source":
+"phase3/stage3/pnr/openroad.log"` under `"verdict": "PASS"`. Neither path is in
+a copied subtree, so the cell shipped both documents and neither proof, and
+`CITATION_ROUTING.txt` recorded the two rows DANGLING / DANGLING_UNDER_PASS --
+this program KNEW the cited proofs were absent and staged the citing documents
+anyway. `evidence_citation_resolves_check` deliberately does not honour those
+two words (a hole is not a reason for the hole), so the cell was unlandable.
+
+MEASURED (spm x gf180mcuD v1.14.88, benchmark-data 0798cc8e): 2 NEW dangling
+citations against a register of 4; both artefacts existed in the run tree,
+28,993 B and 57,311 B, three orders of magnitude under the commit ceiling.
+
+THE RULE (`close_citations`): after every subtree, the GDS, the routed DEF and
+the step records are decided, every citation a staged document carries -- the
+same population `CITATION_ROUTING.txt` records, so the record and the closure
+cannot disagree about what "cites" means -- is resolved along the gate's own
+ladder (the citing document's directory, then each ancestor to the cell root).
+A rung that names a regular file in the RUN tree is STAGED at that same
+relative path: it is evidence by definition, the document's own proof, and the
+reader following the pointer finds it exactly where the document said. ONE
+reason not to: the commit ceiling, recorded OVER_CEILING. Two policies the
+closure defers to rather than overrides, because each already has a record of
+its own: a cited LAYOUT artefact (`.gds`/`.def`/`.spef`/`.oas`) stays under the
+size-and-scope routing in `LAYOUT_ROUTING.txt`, and a cited `steps/` path stays
+under `STEP_ROUTING.txt` (the view is symlinks and is recorded, not mirrored).
+
+WHAT GENUINELY DOES NOT EXIST IS NEVER INVENTED. A citation with no file at any
+rung is ABSENT_IN_RUN; its routing row stays DANGLING, and the staged document
+is amended by the honest-absence mechanism the gate already honours
+(vibe-ic#381; the kcite3 precedent, benchmark-data aa8a19b4): a JSON gate
+report whose top-level field cites the absent artefact is rewritten IN THE
+CELL -- never in the run -- with `evidence_present: false`, the citing field
+nulled and kept under `evidence_absent`, and its `verdict` moved to
+UNSUBSTANTIATED with the run's own word retained as `verdict_as_run`. A
+Markdown document has no such field and is prose this program will not edit:
+it is reported as UNAMENDED on stdout and in the summary, and the corpus gate
+stays red on it until a person amends it. Only the citations the gate JUDGES
+(`.log`/`.rpt`/`.sby`, and `.md` carrying a directory) are amended, because
+those are the ones the gate would otherwise fail; a `.json` cited by the audit
+record is recorded absent and left as the run wrote it.
+
 THE PER-STEP EVIDENCE — RECORDED, NOT MIRRORED (`STEP_ROUTING.txt`, `steps/`)
 ============================================================================
 `steps/` used to be excluded here by name, as "per-step scratch". The effect
@@ -587,9 +632,19 @@ def _record(p: Path, rel_base: Path, decision: str,
 def _copy_tree(src: Path, dst: Path, dry: bool,
                rel_base: Optional[Path] = None,
                route: str = "not-retained",
-               residue_out: Optional[List[dict]] = None) -> Tuple[int, List[dict]]:
+               residue_out: Optional[List[dict]] = None,
+               copied_out: Optional[List[Tuple[Path, str]]] = None
+               ) -> Tuple[int, List[dict]]:
     """Copy every non-excluded regular file under src into dst (preserving
     relative layout).
+
+    Every file copied (or, on a dry run, that WOULD be copied) is appended to
+    `copied_out` as `(source, path relative to rel_base)` when the caller
+    passes a list. For the copy subtrees `rel_base` is the run directory and
+    the cell mirrors the run, so that path is also the file's path in the
+    cell -- which is what `close_citations` (#2007) needs: the population of
+    staged documents, decided by the same walk that stages them, in both
+    modes.
 
     Returns (files_copied, layout_records) — one record per LAYOUT artefact
     seen, whether it was staged or routed away. The routed-away ones used to
@@ -622,6 +677,8 @@ def _copy_tree(src: Path, dst: Path, dry: bool,
         if not dry:
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(f, target)
+        if copied_out is not None and rel_base is not None:
+            copied_out.append((f, f.relative_to(rel_base).as_posix()))
         copied += 1
     return copied, records
 
@@ -841,7 +898,18 @@ def _gate_citations(doc: Path) -> set:
         if doc.suffix.lower() == ".json":
             return {tok for _field, tok in _g._json_artifact_refs(doc)}
         text = doc.read_text(errors="replace")
-        return {t for t in _g._CITE_RE.findall(text) if _g._is_citation(t)}
+        # BRACE GROUPS ARE EXPANDED FIRST, as the gate's `scan` does
+        # (vibe-ic#1044): `{setup,hold}.rpt` names two artefacts, and
+        # `_is_citation` rejects the unexpanded token as a template, so
+        # without this step a multi-artefact citation the gate judges was
+        # one this record never saw. An over-bound token expands to
+        # nothing, which is the gate's answer too.
+        out: set = set()
+        for raw in _g._CITE_RE.findall(text):
+            for tok in _g.expand_braces(raw) or ():
+                if _g._is_citation(tok):
+                    out.add(tok)
+        return out
     except Exception:
         return set()
 
@@ -962,12 +1030,26 @@ def _layout_excludes(cited: str, carried_dirs: Optional[set]) -> bool:
     return cited.rpartition("/")[0] not in carried_dirs
 
 
-def collect_citation_records(dest: Path) -> List[Dict[str, str]]:
+def collect_citation_records(dest: Path, *,
+                             freshly_staged: bool = False
+                             ) -> List[Dict[str, str]]:
     """Every evidence path the STAGED tree's own JSONs cite, and whether it
     resolves inside the published cell.
 
     Read from the STAGED tree, not the run, because the question is what a
     reader of THIS cell can follow.
+
+    `freshly_staged=True` is what `publish` passes: `dest` was created empty
+    (or emptied under `--force`) by THIS publish, so everything on its disk
+    is what the cell will ship and the published-tree filter below must not
+    run. MEASURED (#2007, re-staging spm x gf180mcuD into a corpus clone):
+    the filter keeps only paths git already publishes at HEAD, so every
+    document this publish ADDED to an existing cell -- the closure-staged
+    `phase3/stage3/postroute_timing_repair/no_repair_summary.json` -- was
+    dropped from the record, and `benchmark_evidence_structure_check` then
+    found the routing answering for 23 of the cell's 24 citations once the
+    file was tracked. A record that the publish itself cannot complete is
+    the defect this file exists against.
     """
     out: List[Dict[str, str]] = []
     if not dest.is_dir():
@@ -983,7 +1065,8 @@ def collect_citation_records(dest: Path) -> List[Dict[str, str]]:
     # is not in the published tree at all. Same defect this repo fixed in four
     # programs (#447) — reproduced here, in the fix for it.
     docs = sorted(dest.rglob("*.json")) + sorted(dest.rglob("*.md"))
-    docs = _published_tree.filter_to_published(dest, docs)
+    if not freshly_staged:
+        docs = _published_tree.filter_to_published(dest, docs)
     for doc in docs:
         try:
             text = doc.read_text(errors="replace")
@@ -1158,6 +1241,241 @@ def write_citation_routing(dest: Path, records: List[Dict[str, str]],
     if not dry:
         dest.mkdir(parents=True, exist_ok=True)
         (dest / _CITATION_ROUTING_FILENAME).write_text(body, encoding="utf-8")
+
+
+# --------------------------------------------------------------------------
+# CITATION CLOSURE (#2007) — a staged document's cited proof ships with it.
+# See the module docstring section of the same name for the rule and the
+# measurement. One decision per (document, citation); only STAGED adds a
+# file, and nothing here ever writes into the run.
+# --------------------------------------------------------------------------
+_CLOSURE_STAGED = "STAGED"
+_CLOSURE_IN_CELL = "ALREADY_IN_CELL"
+_CLOSURE_ABSENT = "ABSENT_IN_RUN"
+_CLOSURE_OVER_CEILING = "OVER_CEILING"
+_CLOSURE_LAYOUT = "LAYOUT_POLICY"
+_CLOSURE_STEP_VIEW = "STEP_VIEW"
+_CLOSURE_ABOVE_CELL = "RESOLVES_ABOVE_CELL"
+#: The verdict an amended gate report carries. The gate's own word for a
+#: report whose evidence is disclosed absent (vibe-ic#381).
+_UNSUBSTANTIATED = "UNSUBSTANTIATED"
+_DOC_SUFFIXES = (".json", ".md")
+
+
+def _closure_rungs(rel_doc: str, cite: str) -> List[str]:
+    """Every cell-relative path `cite` can mean when written in `rel_doc`,
+    innermost first: the citing document's directory, then each ancestor up
+    to the cell root. This is `evidence_citation_resolves_check
+    .resolve_citation`'s ladder, bounded at the cell instead of the scan
+    root, so a citation the gate would resolve at rung N is staged at rung N
+    and nowhere else. A rung that escapes the cell (`..`) is dropped, as the
+    gate drops it."""
+    import posixpath
+    rel_dir = posixpath.dirname(rel_doc)
+    out: List[str] = []
+    while True:
+        cand = posixpath.normpath(
+            posixpath.join(rel_dir, cite) if rel_dir else cite)
+        if cand not in (".", "") and not cand.startswith("..") \
+                and cand not in out:
+            out.append(cand)
+        if not rel_dir:
+            return out
+        rel_dir = posixpath.dirname(rel_dir)
+
+
+def _close_one(run_dir: Path, dest: Path, dry: bool, rel_doc: str, cite: str,
+               cell_rels: set, above: List[Path]) -> Tuple[str, str]:
+    """Decide -- and, when the answer is STAGED, perform -- the closure of
+    ONE citation. Returns `(decision, path)`.
+
+    The first rung that answers wins, in the gate's order. A rung the cell
+    already carries is ALREADY_IN_CELL (nothing to do; the routing row will
+    say RESOLVES). A rung that is a regular file in the RUN is the proof:
+    STAGED at that path unless it is over the commit ceiling, a layout
+    artefact (LAYOUT_ROUTING.txt's policy, not this one's), or under the
+    `steps/` view (STEP_ROUTING.txt's). A citation with no rung in the run is
+    ABSENT_IN_RUN -- unless it resolves ABOVE the cell, where the gate's
+    ladder still reaches (`ic/<IC>/…`, `ic/…`) and this program does not
+    stage."""
+    for rung in _closure_rungs(rel_doc, cite):
+        if rung in cell_rels or (not dry and (dest / rung).is_file()):
+            return _CLOSURE_IN_CELL, rung
+        src = run_dir / rung
+        if not src.is_file():
+            continue
+        if rung.startswith(_STEPS_DIRNAME + "/"):
+            return _CLOSURE_STEP_VIEW, rung
+        if is_layout_artefact(src):
+            return _CLOSURE_LAYOUT, rung
+        if over_ceiling(src):
+            return _CLOSURE_OVER_CEILING, rung
+        if not dry:
+            target = dest / rung
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(src, target)
+        cell_rels.add(rung)
+        return _CLOSURE_STAGED, rung
+    import posixpath
+    norm = posixpath.normpath(cite)
+    if not norm.startswith(".."):
+        for base in above:
+            if (base / norm).is_file():
+                return _CLOSURE_ABOVE_CELL, norm
+    return _CLOSURE_ABSENT, cite
+
+
+def _disclose_absent_evidence(doc: Path, absent: Dict[str, str],
+                              run_dir: Path) -> Optional[str]:
+    """Amend the STAGED copy of a JSON gate report whose top-level field(s)
+    cite an artefact that does not exist in the run -- the honest-absence
+    mechanism `evidence_citation_resolves_check._json_artifact_refs` honours
+    and the kcite3 precedent (benchmark-data aa8a19b4) applied by hand.
+
+    `absent` maps field -> cited path. The field is nulled and its path kept
+    under `evidence_absent`; `verdict` becomes UNSUBSTANTIATED with the run's
+    word retained as `verdict_as_run`; every other field is left as the run
+    wrote it, because which numbers are conclusions is not this program's to
+    decide and erasing them would be a second fabrication. Returns a note on
+    failure, None on success. Never touches the run's copy."""
+    try:
+        data = json.loads(doc.read_text(encoding="utf-8", errors="replace"))
+    except (OSError, ValueError) as exc:
+        return f"could not amend {doc.name}: {exc}"
+    if not isinstance(data, dict):
+        return f"could not amend {doc.name}: not a JSON object"
+    prior = data.get("verdict")
+    for field in absent:
+        data[field] = None
+    data["verdict"] = _UNSUBSTANTIATED
+    data["verdict_as_run"] = prior
+    data["evidence_present"] = False
+    data["evidence_absent"] = dict(sorted(absent.items()))
+    data["null_because"] = (
+        f"benchmark_evidence_publish (#2007) could not close this record's "
+        f"citation(s): {', '.join(sorted(set(absent.values())))} do(es) not "
+        f"exist anywhere in the run tree at publish time, so the verdict "
+        f"{prior!r} the run recorded rests on evidence no reader can open. "
+        f"The run's other fields are retained as its assertion, not "
+        f"claimed here; no replacement artefact was fabricated.")
+    try:
+        doc.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n",
+                       encoding="utf-8")
+    except OSError as exc:
+        return f"could not amend {doc.name}: {exc}"
+    return None
+
+
+def close_citations(run_dir: Path, dest: Path,
+                    docs: List[Tuple[Path, str]], cell_rels: set, dry: bool,
+                    above: Optional[List[Path]] = None) -> Dict[str, object]:
+    """Stage every artefact a staged document cites that EXISTS in the run
+    (#2007), and disclose every one that does not.
+
+    `docs` is `(source path, path in the cell)` for every document copied
+    verbatim into the cell -- the population is decided by the copy walk, not
+    re-derived here, and it is the same in a dry run. `cell_rels` is every
+    path the publish has already decided to stage; it is EXTENDED by what
+    this stages, so one blob cited by several documents is copied once.
+
+    The citation population is the one `collect_citation_records` records
+    (`_CITED_RE` plus the gate's own extractor), so the routing record and
+    the closure cannot disagree about what a document cites. The AMENDMENT
+    population is narrower -- the citations the gate JUDGES -- for the
+    reason the docstring gives.
+
+    Returns a summary; every non-STAGED decision is listed, never counted
+    alone, because an omission that leaves no trace is the shape this
+    program exists to refuse."""
+    result: Dict[str, object] = {
+        "n_documents": 0, "n_citations": 0, "already_in_cell": 0,
+        "staged": [], "absent": [], "over_ceiling": [], "layout_policy": [],
+        "step_view": [], "above_cell": [], "amended": [], "unamended": [],
+        "errors": [],
+    }
+    try:
+        import evidence_citation_resolves_check as _g       # sibling program
+    except Exception:
+        _g = None
+    seen: set = set()
+    above = list(above or [])
+    # A WORKLIST, NOT A PASS. A document the closure stages is a staged
+    # document, and the rule applies to it too: MEASURED on the spm re-stage,
+    # the write ledger cites `phase3/stage3/postroute_timing_repair/
+    # no_repair_summary.json`, which itself cites `phase3/stage3/sta/
+    # sta_spef_based.rpt`. One pass staged the summary and left its own
+    # citation unclosed and unrecorded; the structure gate reported the
+    # routing answering for 23 of 24. Every STAGED artefact with a document
+    # suffix is appended here, and `seen` bounds the walk.
+    worklist: List[Tuple[Path, str]] = sorted(docs, key=lambda d: d[1])
+    queued: set = {rel for _s, rel in worklist}
+    while worklist:
+        src_doc, rel_doc = worklist.pop(0)
+        if src_doc.suffix.lower() not in _DOC_SUFFIXES:
+            continue
+        try:
+            text = src_doc.read_text(errors="replace")
+        except OSError:
+            continue
+        result["n_documents"] = int(result["n_documents"]) + 1
+        judged = _gate_citations(src_doc)
+        absent_fields: Dict[str, str] = {}
+        absent_prose: List[str] = []
+        for cite in sorted(set(_CITED_RE.findall(text)) | judged):
+            if cite.startswith("/"):
+                continue          # UNFOLLOWABLE_ABSOLUTE: the routing row says so
+            if (rel_doc, cite) in seen:
+                continue
+            seen.add((rel_doc, cite))
+            result["n_citations"] = int(result["n_citations"]) + 1
+            decision, path = _close_one(run_dir, dest, dry, rel_doc, cite,
+                                        cell_rels, above)
+            row = {"doc": rel_doc, "cited": cite, "path": path}
+            if decision == _CLOSURE_IN_CELL:
+                result["already_in_cell"] = int(result["already_in_cell"]) + 1
+                continue
+            if decision in (_CLOSURE_STAGED, _CLOSURE_OVER_CEILING,
+                            _CLOSURE_LAYOUT, _CLOSURE_STEP_VIEW):
+                try:
+                    row["bytes"] = (run_dir / path).stat().st_size
+                except OSError:
+                    row["bytes"] = -1
+            bucket = {_CLOSURE_STAGED: "staged", _CLOSURE_ABSENT: "absent",
+                      _CLOSURE_OVER_CEILING: "over_ceiling",
+                      _CLOSURE_LAYOUT: "layout_policy",
+                      _CLOSURE_STEP_VIEW: "step_view",
+                      _CLOSURE_ABOVE_CELL: "above_cell"}[decision]
+            result[bucket].append(row)          # type: ignore[union-attr]
+            if (decision == _CLOSURE_STAGED
+                    and path.lower().endswith(_DOC_SUFFIXES)
+                    and path not in queued):
+                queued.add(path)
+                worklist.append((run_dir / path, path))
+            if decision == _CLOSURE_ABSENT and cite in judged:
+                if src_doc.suffix.lower() == ".json" and _g is not None:
+                    for field, tok in _g._json_artifact_refs(src_doc):
+                        if tok == cite:
+                            absent_fields[str(field)] = cite
+                else:
+                    absent_prose.append(cite)
+        if absent_fields:
+            entry = {"doc": rel_doc, "fields": absent_fields,
+                     "verdict_as_run": None, "verdict": _UNSUBSTANTIATED}
+            try:
+                entry["verdict_as_run"] = json.loads(text).get("verdict")
+            except (ValueError, AttributeError):
+                pass
+            if not dry:
+                note = _disclose_absent_evidence(dest / rel_doc, absent_fields,
+                                                 run_dir)
+                if note:
+                    result["errors"].append(note)   # type: ignore[union-attr]
+                    continue
+            result["amended"].append(entry)         # type: ignore[union-attr]
+        if absent_prose:
+            result["unamended"].append(               # type: ignore[union-attr]
+                {"doc": rel_doc, "cited": absent_prose})
+    return result
 
 
 # --------------------------------------------------------------------------
@@ -1538,10 +1856,18 @@ def publish(args: argparse.Namespace) -> dict:
             shutil.rmtree(dest)
         dest.mkdir(parents=True, exist_ok=True)
 
+    # Every document copied VERBATIM into the cell, and every path the cell
+    # will carry -- both fed to the citation closure (#2007) below, decided
+    # by the same walks that stage them so a dry run answers identically.
+    copied_docs: List[Tuple[Path, str]] = []
+    cell_rels: set = set()
+
     # RESULT.md
     if not dry:
         shutil.copy2(result_md, dest / "RESULT.md")
     staged.append("RESULT.md")
+    copied_docs.append((result_md, "RESULT.md"))
+    cell_rels.add("RESULT.md")
 
     # single files
     for fname in _COPY_FILES:
@@ -1550,6 +1876,8 @@ def publish(args: argparse.Namespace) -> dict:
             if not dry:
                 shutil.copy2(src, dest / fname)
             staged.append(fname)
+            copied_docs.append((src, fname))
+            cell_rels.add(fname)
 
     # subtrees
     for sub in _COPY_SUBTREES:
@@ -1557,8 +1885,11 @@ def publish(args: argparse.Namespace) -> dict:
         if not src.is_dir():
             continue
         n_residue_before = len(residue)
+        copied_here: List[Tuple[Path, str]] = []
         c, recs = _copy_tree(src, dest / sub, dry, rel_base=run_dir, route=route,
-                             residue_out=residue)
+                             residue_out=residue, copied_out=copied_here)
+        copied_docs.extend(copied_here)
+        cell_rels.update(rel for _f, rel in copied_here)
         layout_records.extend(recs)
         n_residue = len(residue) - n_residue_before
         if c:
@@ -1570,6 +1901,7 @@ def publish(args: argparse.Namespace) -> dict:
     gds_dir = dest / "phase3" / "stage4" / "gds"
     manifest_line, hashed = _write_manifest(gds_files, gds_dir, dry)
     staged.append("phase3/stage4/gds/GDS_MANIFEST.txt")
+    cell_rels.add("phase3/stage4/gds/GDS_MANIFEST.txt")
 
     # The signoff GDS itself. `phase3/stage4` is not a copy subtree, so until
     # this existed the GDS was omitted at EVERY size — the size routing could
@@ -1584,6 +1916,7 @@ def publish(args: argparse.Namespace) -> dict:
             shutil.copy2(g, gds_dir / g.name)
         layout_records.append(_record(g, run_dir, "STAGED", route, sha=sha))
         staged.append(f"phase3/stage4/gds/{g.name}")
+        cell_rels.add(f"phase3/stage4/gds/{g.name}")
 
     # The routed DEF. Same shape as the GDS block above and for the same
     # reason: its directory is not a copy subtree, so without this the artefact
@@ -1601,6 +1934,7 @@ def publish(args: argparse.Namespace) -> dict:
             layout_records.append(
                 _record(routed_def, run_dir, "STAGED", route))
             staged.append(_ROUTED_DEF_RELPATH.as_posix())
+            cell_rels.add(_ROUTED_DEF_RELPATH.as_posix())
     else:
         # NOTHING AT THE CANONICAL PATH, AND THE RUN HAS ONE SOMEWHERE ELSE.
         # Since the block above exists, `_ROUTED_DEF_RELPATH` is IN published
@@ -1686,6 +2020,19 @@ def publish(args: argparse.Namespace) -> dict:
                          if steps_result["n_records_copied"] else "") + ")")
     staged.append(_STEP_ROUTING_FILENAME)
 
+    # CITATION CLOSURE (#2007). AFTER every other staging decision, because
+    # "is the cited proof already in the cell" is only answerable once the
+    # cell is populated; BEFORE the layout inventory and the routing records,
+    # which must describe the FINAL tree; and BEFORE the provenance pruning,
+    # so a declared output the closure pulls in is no longer disclosed as
+    # pruned. `above` is where the gate's ladder keeps resolving past the
+    # cell root; this program never stages there and must not call a
+    # citation absent that a reader can follow.
+    closure = close_citations(run_dir, dest, copied_docs, cell_rels, dry,
+                              above=[ic_root, dest_root / "ic"])
+    for r in closure["staged"]:                     # type: ignore[union-attr]
+        staged.append(f"{r['path']} (citation closure: cited by {r['doc']})")
+
     # Complete the inventory: layout artefacts the published scope excludes.
     seen = {Path(r["src"]) for r in layout_records}
     layout_records.extend(_inventory_unpublished(run_dir, seen, route))
@@ -1696,7 +2043,7 @@ def publish(args: argparse.Namespace) -> dict:
     # published layout cannot carry is RECORDED as out of scope rather than
     # left to dangle. Read from the STAGED tree, so it answers the reader's
     # question — "can I follow this from what I received?" — not the run's.
-    citation_records = collect_citation_records(dest)
+    citation_records = collect_citation_records(dest, freshly_staged=True)
     write_citation_routing(dest, citation_records, dry)
     staged.append(_ROUTING_FILENAME)
     staged.append(_CITATION_ROUTING_FILENAME)
@@ -1738,6 +2085,10 @@ def publish(args: argparse.Namespace) -> dict:
         "oversize_route": route,
         "shared_input": input_result,
         "step_evidence": steps_result,
+        # #2007. Every citation a staged document carries and what the
+        # closure did about it. Reported even when nothing was pulled in,
+        # for the reason `excluded_raw_files` is.
+        "citation_closure": closure,
         "provenance_pruned": provenance_note,
         "dry_run": dry,
     }
@@ -2165,6 +2516,31 @@ def main(argv: Optional[List[str]] = None) -> int:
               f"NOT published)")
     if se.get("error"):
         print(f"      ! step record INCOMPLETE: {se['error']}")
+    cc = summary["citation_closure"]
+    print(f"  citations   : {cc['n_citations']} in {cc['n_documents']} staged "
+          f"document(s) — {len(cc['staged'])} cited proof(s) pulled into the "
+          f"cell by closure (#2007), {cc['already_in_cell']} already in cell, "
+          f"{len(cc['absent'])} absent in run, {len(cc['over_ceiling'])} over "
+          f"the ceiling, {len(cc['layout_policy'])} under layout policy, "
+          f"{len(cc['step_view'])} in the step view, {len(cc['above_cell'])} "
+          f"resolving above the cell")
+    for r in cc["staged"]:
+        print(f"      CLOSED  {r['bytes']} B  {r['path']}  <- {r['doc']} :: "
+              f"{r['cited']}")
+    for r in cc["over_ceiling"]:
+        print(f"      OVER_CEILING {r['bytes'] / 1e6:.1f} MB  {r['path']}  <- "
+              f"{r['doc']} :: {r['cited']} (NOT staged; the row stays DANGLING)")
+    for a in cc["amended"]:
+        print(f"      AMENDED {a['doc']}: {', '.join(sorted(a['fields']))} "
+              f"absent in run -> evidence_present=false, verdict "
+              f"{a['verdict_as_run']} -> {a['verdict']} (staged copy only)")
+    for u in cc["unamended"]:
+        print(f"      WARNING {u['doc']} cites {', '.join(u['cited'])}, which "
+              f"do(es) not exist in the run. This program does not edit prose: "
+              f"amend the document (honest absence) before landing, or "
+              f"evidence_citation_resolves_check stays red on it.")
+    for e in cc["errors"]:
+        print(f"      ! closure INCOMPLETE: {e}")
     for s in summary["staged"]:
         print(f"    + {s}")
     if not summary["dry_run"]:
