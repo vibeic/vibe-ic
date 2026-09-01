@@ -8014,6 +8014,7 @@ def extract_text_pipeline(project: Path,
             # triple), never by directory name. See _input_corpus_scope.py.
             _tooling_roots = []
             _tooling_excluded: List[str] = []
+            _staged_pdk_excluded: List[str] = []
             try:
                 if str(Path(__file__).resolve().parent) not in sys.path:
                     sys.path.insert(
@@ -8050,6 +8051,16 @@ def extract_text_pipeline(project: Path,
                     if any(seg in _v1_6_343_skip_segments
                            for seg in rel.parts):
                         continue
+                    # Issue #1996 — `input/pdk*` is a declared process-kit
+                    # input, not a design-document tree.  Dedicated Phase-1
+                    # readers consume its enablement and labelled declaration;
+                    # the generic README fallback must not reinterpret the
+                    # PDK's own manual as the chip specification.
+                    if _ics is not None:
+                        _pdk_root = _ics.staged_pdk_root(rel.as_posix())
+                        if _pdk_root is not None:
+                            _staged_pdk_excluded.append(rel.as_posix())
+                            continue
                     # ORGANIC — tooling subtree: the plugin's own checkout is
                     # not design input. Recorded, never dropped silently.
                     if _tooling_roots and _ics is not None:
@@ -8132,15 +8143,20 @@ def extract_text_pipeline(project: Path,
         try:
             if _ics is not None:
                 _scope = _ics.scope_record(
-                    project, _tooling_roots, _tooling_excluded, status="RAN")
+                    project, _tooling_roots, _tooling_excluded, status="RAN",
+                    excluded_staged_pdk_files=_staged_pdk_excluded)
             else:
                 _scope = {"_schema_version": "1", "status": "NOT_RUN",
                           "rule": "programs/_input_corpus_scope.py",
                           "_comment": ("the input-corpus scope rule could not "
-                                       "be loaded; tooling subtrees were NOT "
-                                       "excluded on this run"),
+                                       "be loaded; tooling and staged-PDK "
+                                       "subtrees were NOT excluded on this "
+                                       "run"),
                           "excluded_roots": [], "excluded_files": [],
-                          "excluded_file_count": 0}
+                          "excluded_file_count": 0,
+                          "excluded_staged_pdk_roots": [],
+                          "excluded_staged_pdk_files": [],
+                          "excluded_staged_pdk_file_count": 0}
             _scope_p = project / "phase1" / "input_corpus_scope.json"
             _scope_p.parent.mkdir(parents=True, exist_ok=True)
             _scope_p.write_text(json.dumps(_scope, indent=2) + "\n",
@@ -8151,6 +8167,11 @@ def extract_text_pipeline(project: Path,
                       f"{len(_tooling_roots)} tooling subtree(s) — the "
                       f"plugin's own checkout is not design input "
                       f"(→ phase1/input_corpus_scope.json)")
+            if _staged_pdk_excluded:
+                print(f"      input_corpus_scope: excluded "
+                      f"{len(_staged_pdk_excluded)} staged-PDK document(s) "
+                      f"from the design-input walk — input/pdk* has its own "
+                      f"typed readers (→ phase1/input_corpus_scope.json)")
         except Exception:
             pass
 
@@ -8459,8 +8480,75 @@ def _v1_6_367_strip_sentinel_keys(
     return filtered, skipped
 
 
+def _source_documents_from_extracted(
+        project: Path, extracted: Dict[str, str]) -> List[str]:
+    """Project-relative source paths scanned by one Phase-1 emitter.
+
+    The five L9-L13 emitters can legitimately emit an absence declaration,
+    leaving their match-only ``extraction_evidence`` empty even though they
+    scanned the complete input corpus to reach that conclusion.  Preserve that
+    scan provenance without fabricating a match.  Internal fallback sentinels
+    are not documents and are excluded at the same structural boundary used by
+    the extraction-evidence writer.
+    """
+    # The extractor encodes a recursive input path into its dictionary key
+    # (``subdir/spec.md`` -> ``subdir__spec.md``) so its scratch filenames
+    # cannot collide.  Rebuild that deterministic key map here and cite the
+    # real source path rather than the encoded scratch name.
+    encoded_input_paths: Dict[str, Set[str]] = {}
+    input_docs = project / "input" / "docs"
+    if input_docs.is_dir():
+        try:
+            input_files = sorted(input_docs.rglob("*"))
+        except OSError:
+            input_files = []
+        for path in input_files:
+            if not path.is_file():
+                continue
+            try:
+                input_rel = path.relative_to(input_docs)
+            except ValueError:
+                continue
+            if input_rel.parent == Path("."):
+                encoded_stem = path.stem
+            else:
+                encoded_stem = (input_rel.parent.as_posix().replace("/", "__")
+                                + "__" + path.stem)
+            encoded_stem = encoded_stem[:200]
+            key = encoded_stem + path.suffix.lower()
+            encoded_input_paths.setdefault(key, set()).add(
+                f"input/docs/{input_rel.as_posix()}")
+
+    out: Set[str] = set()
+    for raw_name, text in (extracted or {}).items():
+        if not isinstance(raw_name, str):
+            continue
+        if not isinstance(text, str) or not text.strip():
+            continue
+        base = raw_name.rsplit("/", 1)[-1]
+        if _v1_6_361_is_sentinel_tag_filename(base):
+            continue
+        if raw_name.startswith("__chip_root_docs__/"):
+            rel = raw_name[len("__chip_root_docs__/"):]
+        elif raw_name.startswith("__chip_root__/"):
+            rel = raw_name[len("__chip_root__/"):]
+        elif raw_name.startswith("input/docs/"):
+            rel = raw_name
+        else:
+            mapped = encoded_input_paths.get(raw_name)
+            if mapped:
+                out.update(mapped)
+                continue
+            rel = f"input/docs/{raw_name}"
+        if rel:
+            out.add(rel)
+    return sorted(out)
+
+
 def _write_l_doc(project: Path, name: str, content: dict,
-                 evidence: Dict[str, List[Dict[str, str]]]) -> LDocResult:
+                 evidence: Dict[str, List[Dict[str, str]]],
+                 source_documents: Optional[List[str]] = None,
+                 ) -> LDocResult:
     """Write content + extraction_evidence to generated_docs/{name}.json."""
     # v1.6.96 (issue #28 Bug 2) — defensive sanitiser for null-literal
     # entries. Runs as a single chokepoint so every L emitter benefits.
@@ -8499,13 +8587,18 @@ def _write_l_doc(project: Path, name: str, content: dict,
     #   - a derivation key ("derived_from_L3") is NOT written into
     #     source_documents, because it is not a source document. It is recorded
     #     separately so the trail is still readable.
-    # Measured on the real artefacts: 1/14 -> 10/14, with L8_TIMING_WAVEFORM,
-    # L9 and L10 still honestly absent.
+    # Issue #1997: L9-L13 scan the input even when their typed content is an
+    # honest absence declaration.  Match-only evidence is then empty, which
+    # made all five emit `source_documents: []` and held the acceptance gate at
+    # 9/14.  Their callers now pass the scanned corpus separately: it records
+    # which documents were examined without claiming that a field matched.
     if "source_documents" not in content and "provenance" not in content:
         _ev_keys = [k for k in evidence if isinstance(k, str)] \
             if isinstance(evidence, dict) else []
         _src = sorted({k for k in _ev_keys if "/" in k})
         _derived = sorted({k for k in _ev_keys if "/" not in k})
+        if not _src and source_documents:
+            _src = sorted({str(p) for p in source_documents if str(p)})
         content["source_documents"] = _src
         if _derived:
             content["source_documents_derivation"] = _derived
@@ -49789,7 +49882,9 @@ def gen_l9_integration_spec(project: Path,
     # Chip-AGNOSTIC.
     _v1_6_581_route_l1_fallback_top_module(content, promoted_from_l1)
 
-    return _write_l_doc(project, "L9_INTEGRATION_SPEC", content, evidence)
+    return _write_l_doc(
+        project, "L9_INTEGRATION_SPEC", content, evidence,
+        source_documents=_source_documents_from_extracted(project, extracted))
 
 
 # v1.6.289 — for #156 ORGANIC. Bring-up paragraph list harvester.
@@ -50492,7 +50587,9 @@ def gen_l10_test_cases(project: Path,
         "bring_up_sequence": bring_up_sequence,
         "no_bring_up_sequence_in_input": no_bring_up_sequence_in_input,
     }
-    return _write_l_doc(project, "L10_TEST_CASES", content, evidence)
+    return _write_l_doc(
+        project, "L10_TEST_CASES", content, evidence,
+        source_documents=_source_documents_from_extracted(project, extracted))
 
 
 # v0.1.83 — for the digital benchmark l_doc loop (sha256 L11). A register-
@@ -50849,7 +50946,9 @@ def gen_l11_otp_content(project: Path,
         content["response_latency_extraction_strategy"] = (
             "otp_doc_rsp_tick_table")
 
-    return _write_l_doc(project, "L11_OTP_CONTENT", content, evidence)
+    return _write_l_doc(
+        project, "L11_OTP_CONTENT", content, evidence,
+        source_documents=_source_documents_from_extracted(project, extracted))
 
 
 # v0.1.82 — input assertion that the part has NO calibration / trimming / OTP
@@ -51016,7 +51115,9 @@ def gen_l12_behavioral(project: Path,
         "no_behavioral_sequences_in_input": no_behavioral_sequences_in_input,
         "no_calibration": no_calibration,
     }
-    return _write_l_doc(project, "L12_BEHAVIORAL_SEQUENCES", content, evidence)
+    return _write_l_doc(
+        project, "L12_BEHAVIORAL_SEQUENCES", content, evidence,
+        source_documents=_source_documents_from_extracted(project, extracted))
 
 
 def gen_l13_lab_calibration(project: Path,
@@ -51177,7 +51278,9 @@ def gen_l13_lab_calibration(project: Path,
         "no_l13_test_cases_in_input": no_l13_test_cases_in_input,
         "trim_loop": cal_steps[:32],
     }
-    return _write_l_doc(project, "L13_LAB_CALIBRATION", content, evidence)
+    return _write_l_doc(
+        project, "L13_LAB_CALIBRATION", content, evidence,
+        source_documents=_source_documents_from_extracted(project, extracted))
 
 
 # ---------------------------------------------------------------------------

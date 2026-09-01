@@ -73,6 +73,14 @@ def _make_design_project(root: Path) -> Path:
     return root
 
 
+def _make_staged_pdk(root: Path, text: str, dirname: str = "pdk") -> Path:
+    """A project-staged PDK at the canonical ``input/pdk*`` boundary."""
+    d = root / "input" / dirname
+    d.mkdir(parents=True)
+    (d / "README.md").write_text(text, encoding="utf-8")
+    return d
+
+
 # ---------------------------------------------------------------------------
 # The rule itself
 # ---------------------------------------------------------------------------
@@ -176,6 +184,7 @@ def _run_ingester(project: Path):
 
 _TOOLING_TOKEN = "ZZQTOOLINGDOCTOKEN"
 _DESIGN_TOKEN = "ZZQDESIGNDOCTOKEN"
+_PDK_TOKEN = "ZZQPDKCOLLATERALTOKEN"
 
 
 def test_ingester_excludes_tooling_readme(tmp_path):
@@ -228,6 +237,72 @@ def test_ingester_writes_the_scope_record(tmp_path):
     assert rec["status"] == "RAN"
     assert [r["path"] for r in rec["excluded_roots"]] == ["some_tool_checkout"]
     assert rec["excluded_file_count"] >= 1
+
+
+def test_ingester_excludes_staged_pdk_readme(tmp_path):
+    """Issue #1996 negative control: FAILS pre-fix, PASSES post-fix.
+
+    The project-root README fallback may read design sub-folder READMEs, but
+    ``input/pdk*`` is process collateral with a dedicated Phase-1 reader.  It
+    is never part of the design-document corpus.
+    """
+    _make_design_project(tmp_path)
+    _make_staged_pdk(
+        tmp_path, f"# Process kit notes\n\n{_PDK_TOKEN}\n")
+
+    out = _run_ingester(tmp_path)
+    corpus = "\n".join(out.values())
+
+    assert _PDK_TOKEN not in corpus, (
+        "the Phase-1 design-input walker ingested staged-PDK collateral; "
+        f"keys={sorted(out)}")
+
+
+def test_ingester_keeps_design_readme_beside_staged_pdk(tmp_path):
+    """Paired narrowness control: fencing the PDK keeps real design docs."""
+    _make_design_project(tmp_path)
+    (tmp_path / "rtl").mkdir()
+    (tmp_path / "rtl" / "README.md").write_text(
+        f"# Design notes\n\n{_DESIGN_TOKEN}\n", encoding="utf-8")
+    _make_staged_pdk(
+        tmp_path, f"# Process kit notes\n\n{_PDK_TOKEN}\n")
+
+    out = _run_ingester(tmp_path)
+    corpus = "\n".join(out.values())
+
+    assert _DESIGN_TOKEN in corpus
+    assert _PDK_TOKEN not in corpus
+
+
+def test_nested_design_path_named_input_pdk_is_not_fenced(tmp_path):
+    """Only the project-root ``input/pdk*`` declaration is collateral."""
+    _make_design_project(tmp_path)
+    nested = tmp_path / "rtl" / "input" / "pdk_notes"
+    nested.mkdir(parents=True)
+    nested.joinpath("README.md").write_text(
+        f"# Design notes\n\n{_DESIGN_TOKEN}\n", encoding="utf-8")
+
+    out = _run_ingester(tmp_path)
+
+    assert _DESIGN_TOKEN in "\n".join(out.values())
+
+
+def test_scope_record_names_staged_pdk_exclusion(tmp_path):
+    """Excluding collateral is an auditable action, never a silent drop."""
+    _make_design_project(tmp_path)
+    _make_staged_pdk(
+        tmp_path, f"# Process kit notes\n\n{_PDK_TOKEN}\n",
+        dirname="pdk_candidate")
+
+    _run_ingester(tmp_path)
+    rec = json.loads(
+        (tmp_path / "phase1" / "input_corpus_scope.json").read_text())
+
+    assert rec["status"] == "RAN"
+    assert rec["excluded_staged_pdk_roots"] == ["input/pdk_candidate"]
+    assert rec["excluded_staged_pdk_files"] == [
+        "input/pdk_candidate/README.md"]
+    assert rec["excluded_staged_pdk_file_count"] == 1
 
 
 # ---------------------------------------------------------------------------

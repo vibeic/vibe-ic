@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""_input_corpus_scope.py — decide which subtrees of a project are DESIGN INPUT
-and which are TOOLING, so Phase-1 never ingests its own documentation as if it
-were the user's specification.
+"""_input_corpus_scope.py — decide which subtrees are DESIGN INPUT and which
+are collateral, so Phase-1 never ingests tool or process-kit documentation as
+if it were the user's specification.
 
 WHY THIS EXISTS
 ===============
@@ -61,6 +61,13 @@ Both are name-independent: they hold whether the checkout is called
 neither fires on an HDL design repo, which has no reason to carry a Claude
 plugin manifest or that exact directory triple.
 
+A project-staged PDK is a second, already-declared non-design population.  The
+flow's staged-PDK readers and gates define it as ``input/pdk*``.  Those readers
+may inspect its enablement files and labelled process declaration, but the
+generic design-document README fallback must not ingest the PDK's own manuals.
+The boundary is the flow-owned path declaration, never a PDK/vendor name or a
+guess from README text.
+
 chip-AGNOSTIC: filesystem structure only. No design, PDK, vendor, cell or pin
 literal appears in this module or in any decision it makes.
 
@@ -86,6 +93,11 @@ PLUGIN_MANIFEST_REL = os.path.join(".claude-plugin", "plugin.json")
 #: Marker (b): the plugin's structural triple, for a checkout vendored without
 #: its manifest. ALL three must be present — any two of them occur innocently.
 STRUCTURAL_TRIPLE: Sequence[str] = ("programs", "flow", "skills")
+
+#: Canonical project-staged PDK boundary.  Kept byte-for-byte aligned with the
+#: ``input/pdk*/**/*`` declaration in ``phase1_doc_one_shot_runner``.
+STAGED_PDK_PARENT = "input"
+STAGED_PDK_PREFIX = "pdk"
 
 #: How deep below the project root to look for a tooling checkout. A plugin is
 #: vendored at the top (``plugin_work/``) or one level in (``vendor/vibe-ic/``);
@@ -201,31 +213,57 @@ def path_is_tooling(rel_or_abs: str,
     return None
 
 
+def staged_pdk_root(rel_or_abs: str) -> Optional[str]:
+    """Return the containing canonical ``input/pdk*`` root, or ``None``.
+
+    Matching is by path segments and the flow's own staged-input convention.
+    A design directory such as ``rtl/pdk_notes`` is therefore untouched.
+    """
+    text = str(rel_or_abs).replace("\\", "/")
+    segments = [s for s in text.split("/") if s and s != "."]
+    if (len(segments) >= 2
+            and segments[0] == STAGED_PDK_PARENT
+            and segments[1].startswith(STAGED_PDK_PREFIX)):
+        return "/".join(segments[:2])
+    return None
+
+
 def scope_record(project: Path,
                  roots: Sequence[Dict[str, str]],
                  excluded_files: Sequence[str],
-                 status: str = "RAN") -> Dict[str, object]:
+                 status: str = "RAN",
+                 excluded_staged_pdk_files: Sequence[str] = (),
+                 ) -> Dict[str, object]:
     """Build the named, persistable record of what was excluded and why.
 
     ``status`` distinguishes ``RAN`` (the scope rule was applied; an empty
     ``excluded_roots`` then positively means "no tooling subtree present")
     from ``NOT_RUN`` (never applied) — "empty" and "clean" are never conflated.
     """
+    staged_files = sorted(str(f) for f in excluded_staged_pdk_files)
+    staged_roots = sorted({
+        root for root in (staged_pdk_root(f) for f in staged_files) if root
+    })
     return {
         "_schema_version": "1",
         "_comment": (
-            "Subtrees excluded from the Phase-1 input corpus because they are "
-            "TOOLING (the plugin's own checkout), not design input. Identified "
-            "by structure, never by directory name. status=RAN with an empty "
-            "excluded_roots positively means no tooling subtree was found."),
+            "Subtrees excluded from the Phase-1 design-document corpus because "
+            "they are TOOLING or project-staged PDK collateral. Tooling is "
+            "identified by structure; staged PDK collateral by the flow's "
+            "canonical input/pdk* boundary. status=RAN with empty exclusion "
+            "lists positively means neither population was found."),
         "status": status,
         "project": Path(project).name,
         "rule": "programs/_input_corpus_scope.py",
         "markers": {
             "plugin_manifest": PLUGIN_MANIFEST_REL,
             "program_flow_skill": list(STRUCTURAL_TRIPLE),
+            "staged_pdk_input_root": "input/pdk*",
         },
         "excluded_roots": list(roots),
         "excluded_files": sorted(str(f) for f in excluded_files),
         "excluded_file_count": len(excluded_files),
+        "excluded_staged_pdk_roots": staged_roots,
+        "excluded_staged_pdk_files": staged_files,
+        "excluded_staged_pdk_file_count": len(staged_files),
     }
