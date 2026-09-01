@@ -87,6 +87,11 @@ import _gate_invocation  # #492/#544 — tell a gate's verdict from a bad invoca
 import _sta_basis  # the ONE reader of the `STA_BASIS:` stamp (no second copy)
 import emitted_script_portability_check as _esp  # the ONE host-path predicate
 import step_preflight as _spf  # required_inputs PRE-FLIGHT at every dispatch site
+from _staged_pdk_tech_lef import (
+    TechLefResolutionError as _TechLefResolutionError,
+    discover_staged_tech_lefs as _discover_staged_tech_lefs,
+    select_staged_tech_lef as _resolve_staged_tech_lef,
+)
 
 
 PROGRAMS_DIR = Path(__file__).resolve().parent
@@ -8942,73 +8947,21 @@ def _select_tech_lef(pdk_dir: Path, candidates: List[Path]) -> Path:
        precisely the failure this function was written to remove: it produces
        a full green sign-off against a stack nobody chose.
     """
-    cfg_f = pdk_dir / "bridge" / "signoff_config.json"
-    if cfg_f.is_file():
-        try:
-            declared = (json.loads(cfg_f.read_text()) or {}).get("tech_lef")
-        except Exception:
-            declared = None
-        if declared:
-            p = (pdk_dir / declared) if not os.path.isabs(str(declared)) \
-                else Path(str(declared))
-            if not p.is_file():
-                raise SystemExit(
-                    f"[FAIL] bridge signoff_config declares tech_lef="
-                    f"{declared!r} but {p} does not exist. REFUSING to fall "
-                    f"back to an arbitrary stack — a sign-off produced "
-                    f"against an unintended metal stack looks identical to a "
-                    f"correct one.")
-            print(f"[tech-lef] DECLARED by bridge signoff_config: "
-                  f"{p.relative_to(pdk_dir)}", file=sys.stderr)
-            return p
-
-    if len(candidates) == 1:
-        return candidates[0]
-
-    # Narrow by the sign-off deck's own enabled top-metal option.
-    survivors = list(candidates)
-    calibre_dir = pdk_dir / "calibre"
-    deck = next(iter(sorted(calibre_dir.glob("*DRC*.rule"))), None) \
-        if calibre_dir.is_dir() else None
-    deck_note = ""
-    if deck is not None:
-        try:
-            deck_text = deck.read_text(errors="ignore")
-        except OSError:
-            deck_text = ""
-        enabled = sorted(set(
-            m.group(1) for m in re.finditer(
-                r"(?m)^#DEFINE\s+TOPMETAL_(\d+)\s*$", deck_text)))
-        if len(enabled) == 1:
-            n = int(enabled[0])
-            keep = [c for c in candidates
-                    if (_lef_top_routing_layer(c) or "").upper().endswith(
-                        str(n))
-                    and len(_techlef_routing_layers(
-                        c.read_text(errors="ignore"))) == n]
-            if keep:
-                survivors = keep
-                deck_note = (f" (narrowed from {len(candidates)} by the "
-                             f"sign-off deck's enabled #DEFINE TOPMETAL_{n}: "
-                             f"{n} routing layers)")
-
-    if len(survivors) == 1:
-        print(f"[tech-lef] {survivors[0].relative_to(pdk_dir)}{deck_note}",
-              file=sys.stderr)
-        return survivors[0]
-
-    listing = "\n".join(
-        f"    {c.relative_to(pdk_dir)}  (top routing layer "
-        f"{_lef_top_routing_layer(c)})" for c in sorted(survivors))
-    raise SystemExit(
-        f"[FAIL] the staged PDK ships {len(candidates)} tech LEF(s) and "
-        f"{len(survivors)} of them remain after narrowing{deck_note or ''}. "
-        f"The metal stack is a DESIGN CHOICE, so this flow will not pick one "
-        f"for you — an arbitrary pick yields a fully green sign-off against a "
-        f"stack nobody chose, which is indistinguishable from a correct one. "
-        f"Declare it: set \"tech_lef\" (a path relative to input/pdk/) in "
-        f"{cfg_f.relative_to(pdk_dir.parent.parent) if pdk_dir.parent.parent in cfg_f.parents else cfg_f}."
-        f"\n  candidates:\n{listing}")
+    try:
+        selection = _resolve_staged_tech_lef(
+            pdk_dir,
+            candidates,
+            top_routing_layer=_lef_top_routing_layer,
+            routing_layer_count=lambda path: len(_techlef_routing_layers(
+                path.read_text(errors="ignore"))),
+        )
+    except _TechLefResolutionError as exc:
+        raise SystemExit(str(exc)) from exc
+    if selection is None:  # defensive; caller invokes only with candidates
+        raise SystemExit("[FAIL] no staged technology LEF candidate")
+    if selection.note:
+        print(f"[tech-lef] {selection.note}", file=sys.stderr)
+    return selection.path
 
 
 def _detect_pdk(project: Path, override: Optional[str] = None
@@ -9225,11 +9178,10 @@ def _detect_pdk(project: Path, override: Optional[str] = None
             liberty = typ or (liberty_files[0] if liberty_files else None)
             if liberty is None:
                 return None
-            # LEF: tech LEF (named like *tech*.lef or *.tlef) and cell LEF
-            tech_candidates = (
-                list(lef_dir.rglob("*tech*.lef")) +
-                list(lef_dir.rglob("*.tlef"))
-            )
+            # Technology LEFs may be staged anywhere under input/pdk (for
+            # example a vendor distribution may put *.tlef beside liberty
+            # metadata), so use the same discovery policy as downstream gates.
+            tech_candidates = list(_discover_staged_tech_lefs(pdk_dir))
             cell_candidates = list(lef_dir.rglob("*macro*.lef")) + \
                               list(lef_dir.rglob("STD/*.lef")) + \
                               list(lef_dir.rglob("*.lef"))

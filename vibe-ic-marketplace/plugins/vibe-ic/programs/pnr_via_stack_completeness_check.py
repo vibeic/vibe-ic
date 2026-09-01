@@ -49,8 +49,8 @@ Verdict tiers
 * WARN         — PDK declared more layers than PnR used (cut-layer
                  single-cut via gap or explicit
                  `set_routing_layers` constraint).
-* SKIP         — PDK has fewer than 2 routing layers OR no tech.lef
-                 found.
+* SKIP         — PDK has fewer than 2 routing layers OR no uniquely
+                 resolvable technology LEF found.
 * VACUOUS_PASS — PnR has not run (no orchestrator phase3 report).
 
 Usage
@@ -82,6 +82,11 @@ from typing import Any, Dict, List, Optional, Tuple
 # Lazy import of the LEF analyzer so this module is callable without
 # the analyzer being available (e.g. mirror without programs/).
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+from _staged_pdk_tech_lef import (  # noqa: E402
+    TechLefResolutionError,
+    discover_staged_tech_lefs,
+    select_staged_tech_lef,
+)
 try:
     from _pdk_via_analyzer import analyze_lef as _analyze_lef
 except Exception:  # pragma: no cover — defensive: never block on import
@@ -97,32 +102,66 @@ class ViaStackFinding:
     cut_layers_missing_single_cut: List[str] = None  # type: ignore[assignment]
 
 
-def _find_tech_lef(project: Path) -> Optional[Path]:
-    """Heuristic: search the PDK tree for any LEF whose filename
-    contains 'tech' (case-insensitive). Real-world PDKs ship
-    `<vendor>_<N>lm_tech_<rev>.lef` style names, not literal
-    `tech.lef`. Prefers the highest layer-count variant when
-    multiple `_<N>lm_tech_*.lef` siblings exist (the PDK's full
-    metal-stack capability)."""
+def _run_selected_tech_lef(project: Path) -> Tuple[Optional[str], Optional[str]]:
+    """Read the technology LEF the PnR producer says it actually loaded.
+
+    The via-patch report is emitted from the resolved ``PdkConfig.tech_lef``;
+    it is therefore selection evidence from the producer being audited, not a
+    second filename heuristic.  Its container path is mapped to the staged copy
+    by the shared resolver, which accepts basename matching only when unique.
+    """
+    report = project / "reports" / "pdk_via_patch_min_width.json"
+    if not report.is_file():
+        return None, None
+    try:
+        selected = (json.loads(report.read_text()) or {}).get("tech_lef")
+    except Exception:
+        return None, None
+    if not isinstance(selected, str) or not selected.strip():
+        return None, None
+    return (selected.strip(),
+            "reports/pdk_via_patch_min_width.json#tech_lef")
+
+
+def _routing_layer_count(path: Path) -> int:
+    text = path.read_text(errors="ignore")
+    prefix = _detect_metal_prefix_from_lef(text)
+    return _count_routing_layers_in_lef(text, prefix)
+
+
+def _top_routing_layer(path: Path) -> Optional[str]:
+    text = path.read_text(errors="ignore")
+    prefix = _detect_metal_prefix_from_lef(text)
+    count = _count_routing_layers_in_lef(text, prefix)
+    return f"{prefix}{count}" if count else None
+
+
+def _resolve_tech_lef(project: Path) -> Tuple[
+        Optional[Path], Optional[str], List[Path], Optional[str]]:
+    """Return selected path, authority, candidates, and refusal detail."""
     pdk_dir = project / "input" / "pdk"
-    if not pdk_dir.is_dir():
-        return None
-    candidates: List[Path] = []
-    for f in pdk_dir.rglob("*.lef"):
-        if "tech" in f.name.lower():
-            candidates.append(f)
-    if not candidates:
-        return None
+    candidates = list(discover_staged_tech_lefs(pdk_dir))
+    selected, authority = _run_selected_tech_lef(project)
+    try:
+        resolution = select_staged_tech_lef(
+            pdk_dir,
+            candidates,
+            selected_path=selected,
+            selected_path_authority=authority,
+            top_routing_layer=_top_routing_layer,
+            routing_layer_count=_routing_layer_count,
+        )
+    except TechLefResolutionError as exc:
+        return None, None, candidates, str(exc)
+    if resolution is None:
+        return None, None, candidates, None
+    return (resolution.path, resolution.authority,
+            list(resolution.candidates), None)
 
-    # Score each candidate: higher layer count wins. Pattern
-    # `_<N>lm_` (2/3/4/5/6/7/8 routing layers in the variant) is
-    # the convention many vendor PDKs use.
-    def _layer_count(p: Path) -> int:
-        m = re.search(r"_(\d+)lm_", p.name, re.IGNORECASE)
-        return int(m.group(1)) if m else 0
 
-    candidates.sort(key=lambda p: (_layer_count(p), str(p)))
-    return candidates[-1]
+def _find_tech_lef(project: Path) -> Optional[Path]:
+    """Compatibility wrapper around the shared declared/staged resolver."""
+    return _resolve_tech_lef(project)[0]
 
 
 def _count_routing_layers_in_lef(text: str,
@@ -188,6 +227,8 @@ def audit(project: Path) -> Tuple[str, List[ViaStackFinding], Dict[str, Any]]:
     Returns (verdict, findings, summary)."""
     summary: Dict[str, Any] = {
         "tech_lef": None,
+        "tech_lef_selection_authority": None,
+        "tech_lef_candidates": [],
         "pdk_metal_layers_total": None,
         "pnr_routing_layers_used": None,
         "cut_layers_missing_single_cut": [],
@@ -200,15 +241,25 @@ def audit(project: Path) -> Tuple[str, List[ViaStackFinding], Dict[str, Any]]:
     if not orch_json.is_file():
         return "VACUOUS_PASS", [], summary
 
-    tech_lef = _find_tech_lef(project)
+    tech_lef, selection_authority, candidates, refusal = \
+        _resolve_tech_lef(project)
+    summary["tech_lef_candidates"] = [str(path) for path in candidates]
+    if refusal:
+        findings.append(ViaStackFinding(
+            rule="TECH_LEF_SELECTION_REFUSED",
+            detail=("Phase 3 has run and staged technology LEFs exist, but "
+                    f"the shared resolver refused an arbitrary choice: "
+                    f"{refusal}")))
+        return "SKIP", findings, summary
     if not tech_lef:
         findings.append(ViaStackFinding(
             rule="NO_TECH_LEF",
-            detail=("Phase 3 has run but no tech.lef found under "
-                    "input/pdk/. Cannot audit via-stack completeness "
-                    "without the LEF.")))
+            detail=("Phase 3 has run but no technology LEF (.lef or .tlef) "
+                    "was resolved from input/pdk/. Cannot audit via-stack "
+                    "completeness without that authority.")))
         return "SKIP", findings, summary
     summary["tech_lef"] = str(tech_lef)
+    summary["tech_lef_selection_authority"] = selection_authority
     text = tech_lef.read_text(errors="ignore")
     metal_prefix = _detect_metal_prefix_from_lef(text)
     summary["metal_prefix"] = metal_prefix

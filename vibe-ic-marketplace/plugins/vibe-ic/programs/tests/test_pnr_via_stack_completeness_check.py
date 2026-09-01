@@ -25,18 +25,26 @@ def _write_orchestrator(project: Path, pnr_detail: str) -> None:
 
 
 def _write_tech_lef(project: Path, n_routing: int = 6,
-                    metal_prefix: str = "M") -> None:
+                    metal_prefix: str = "M",
+                    relative: str = "lef/tech.lef") -> Path:
     """Synthesise a minimal tech.lef with N TYPE ROUTING layer
     declarations matching `<prefix><N>` for each."""
-    lef_dir = project / "input" / "pdk" / "lef"
-    lef_dir.mkdir(parents=True, exist_ok=True)
+    path = project / "input" / "pdk" / relative
+    path.parent.mkdir(parents=True, exist_ok=True)
     body = ["VERSION 5.8 ;\n"]
     for i in range(1, n_routing + 1):
         body.append(
             f"LAYER {metal_prefix}{i}\n"
             f"  TYPE ROUTING ;\n"
             f"END {metal_prefix}{i}\n\n")
-    (lef_dir / "tech.lef").write_text("".join(body))
+    path.write_text("".join(body))
+    return path
+
+
+def _write_pnr_tech_lef_selection(project: Path, selected: str) -> None:
+    report = project / "reports" / "pdk_via_patch_min_width.json"
+    report.parent.mkdir(parents=True, exist_ok=True)
+    report.write_text(json.dumps({"tech_lef": selected, "findings": []}))
 
 
 # ---------------------------------------------------------------------------
@@ -63,6 +71,82 @@ def test_skip_when_no_tech_lef(tmp_path: Path) -> None:
     assert any(f.rule == "NO_TECH_LEF" for f in findings)
 
 
+def test_tlef_extension_reaches_substantive_verdict(tmp_path: Path) -> None:
+    """A staged technology LEF may use the explicit .tlef extension."""
+    p = tmp_path / "proj"
+    _write_orchestrator(p, "def=top.def sta=sta.rpt")
+    selected = _write_tech_lef(
+        p, n_routing=5, metal_prefix="Metal",
+        relative="distribution/lib/process_nom.tlef")
+
+    verdict, findings, summary = audit(p)
+
+    assert verdict == "PASS"
+    assert findings == []
+    assert summary["tech_lef"] == str(selected)
+    assert summary["tech_lef_selection_authority"] == \
+        "staged_pdk.single_candidate"
+
+
+def test_bridge_declared_lef_outside_default_tree_wins(
+        tmp_path: Path) -> None:
+    """The sanctioned bridge path is relative to input/pdk, not lef/."""
+    p = tmp_path / "proj"
+    _write_orchestrator(p, "def=top.def")
+    _write_tech_lef(p, n_routing=3, relative="lef/decoy_tech.lef")
+    declared = _write_tech_lef(
+        p, n_routing=6, relative="distribution/reference/stack.lef")
+    bridge = p / "input" / "pdk" / "bridge"
+    bridge.mkdir(parents=True)
+    (bridge / "signoff_config.json").write_text(
+        '{"tech_lef": "distribution/reference/stack.lef"}')
+
+    verdict, _, summary = audit(p)
+
+    assert verdict == "PASS"
+    assert summary["tech_lef"] == str(declared)
+    assert summary["pdk_metal_layers_total"] == 6
+    assert summary["tech_lef_selection_authority"] == \
+        "bridge.signoff_config.tech_lef"
+
+
+def test_multiple_tlef_candidates_use_recorded_pnr_selection(
+        tmp_path: Path) -> None:
+    """The gate audits the producer-selected stack, never sort order."""
+    p = tmp_path / "proj"
+    _write_orchestrator(p, "def=top.def")
+    selected = _write_tech_lef(
+        p, n_routing=5, relative="distribution/corners/process_nom.tlef")
+    _write_tech_lef(
+        p, n_routing=7, relative="distribution/corners/process_max.tlef")
+    _write_pnr_tech_lef_selection(
+        p, f"/container/pdk/techlef/{selected.name}")
+
+    verdict, _, summary = audit(p)
+
+    assert verdict == "PASS"
+    assert summary["tech_lef"] == str(selected)
+    assert summary["pdk_metal_layers_total"] == 5
+    assert summary["tech_lef_selection_authority"] == \
+        "reports/pdk_via_patch_min_width.json#tech_lef"
+
+
+def test_multiple_tlef_candidates_without_authority_refuse(
+        tmp_path: Path) -> None:
+    p = tmp_path / "proj"
+    _write_orchestrator(p, "def=top.def")
+    _write_tech_lef(p, relative="distribution/a.tlef")
+    _write_tech_lef(p, relative="distribution/b.tlef")
+
+    verdict, findings, summary = audit(p)
+
+    assert verdict == "SKIP"
+    assert [finding.rule for finding in findings] == [
+        "TECH_LEF_SELECTION_REFUSED"]
+    assert summary["tech_lef"] is None
+    assert len(summary["tech_lef_candidates"]) == 2
+
+
 def test_skip_when_pdk_has_fewer_than_2_routing_layers(tmp_path: Path):
     p = tmp_path / "proj"
     _write_orchestrator(p, "def=top.def")
@@ -87,6 +171,8 @@ def test_pass_when_pnr_uses_all_pdk_layers(tmp_path: Path) -> None:
     assert findings == []
     assert summary["pdk_metal_layers_total"] == 6
     assert summary["pnr_routing_layers_used"] == 6
+    assert summary["tech_lef_selection_authority"] == \
+        "staged_pdk.single_candidate"
 
 
 # ---------------------------------------------------------------------------
@@ -164,3 +250,5 @@ def test_audit_emits_canonical_report(tmp_path: Path) -> None:
     data = json.loads(canonical.read_text())
     assert data["gate"] == "pnr_via_stack_completeness_check"
     assert data["verdict"] in ("PASS", "WARN", "SKIP")
+    assert data["summary"]["tech_lef_selection_authority"] == \
+        "staged_pdk.single_candidate"
