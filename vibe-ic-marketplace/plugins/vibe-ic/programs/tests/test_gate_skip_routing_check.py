@@ -678,6 +678,8 @@ def _tier(project: Path, cmd: str) -> str:
     passed, out = _flow._check_program_exit_zero(project, cmd)
     if out.startswith("__VACUOUS_HINT__"):
         return "VACUOUS"
+    if out.startswith("INCOMPLETE:"):
+        return "INCOMPLETE"
     return "PASS" if passed else "FAIL"
 
 
@@ -808,10 +810,10 @@ def test_reports_taxonomy_empty_directory_is_the_same_zero_as_a_missing_one(
     nothing.
     """
     (tmp_path / "reports").mkdir()
-    assert _tier(tmp_path, "reports_subfolder_taxonomy_check .") == "VACUOUS"
+    assert _tier(tmp_path, "reports_subfolder_taxonomy_check .") == "INCOMPLETE"
     missing = tmp_path / "sibling"
     missing.mkdir()
-    assert _tier(missing, "reports_subfolder_taxonomy_check .") == "VACUOUS"
+    assert _tier(missing, "reports_subfolder_taxonomy_check .") == "INCOMPLETE"
 
 
 def test_reports_taxonomy_still_passes_over_a_populated_directory(tmp_path):
@@ -830,7 +832,7 @@ def test_top_level_outputs_already_routes_from_its_denominator(tmp_path):
     against `reports_subfolder_taxonomy_check` is what made the difference
     between "routes from the input shape" and "routes from the count" visible.
     """
-    assert _tier(tmp_path, "top_level_outputs_in_canonical_check .") == "VACUOUS"
+    assert _tier(tmp_path, "top_level_outputs_in_canonical_check .") == "INCOMPLETE"
     populated = tmp_path / "p"
     (populated / "reports").mkdir(parents=True)
     assert _tier(populated, "top_level_outputs_in_canonical_check .") == "PASS"
@@ -867,11 +869,11 @@ def test_marketplace_sync_gate_wrapper_no_longer_greens_an_empty_tree(tmp_path):
 
 
 def test_reports_taxonomy_skip_reaches_the_vacuous_tier(tmp_path):
-    assert _tier(tmp_path, "reports_subfolder_taxonomy_check .") == "VACUOUS"
+    assert _tier(tmp_path, "reports_subfolder_taxonomy_check .") == "INCOMPLETE"
 
 
 def test_top_level_outputs_skip_reaches_the_vacuous_tier(tmp_path):
-    assert _tier(tmp_path, "top_level_outputs_in_canonical_check .") == "VACUOUS"
+    assert _tier(tmp_path, "top_level_outputs_in_canonical_check .") == "INCOMPLETE"
 
 
 def test_cross_layer_reference_skip_reaches_the_vacuous_tier(tmp_path):

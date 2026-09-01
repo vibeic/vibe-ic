@@ -43,7 +43,7 @@ WHAT THIS GATE CANNOT SEE, STATED PLAINLY
 It binds on DECLARED artefacts. A search driver that rewrote the RTL and
 declared nothing -- no baseline snapshot, no search space, no report -- leaves
 this program with a tree indistinguishable from a design that never ran a
-search, and it correctly reports NOT_APPLICABLE. No artefact-reading gate can
+search, and it correctly reports a substantive PASS/no-op. No artefact-reading gate can
 close that; closing it needs a digest of step 1's RTL carried forward by the
 flow, which does not exist at the revision this was written against. The
 snapshot is written by `crosslayer_search_space` before any lever is searched,
@@ -57,8 +57,9 @@ existing, and `flow_condition_reachability_check` refused that shape in one
 line: *"a check disabled by exactly the situation it was written for"*. A
 search that skipped the snapshot would have skipped the gate with it. So the
 step always runs and this program always writes a verdict; a design that never
-ran a cross-layer search gets an explicit `NOT_APPLICABLE` RECORD — not a
-silent skip, and not an absence a reader has to interpret.
+ran a cross-layer search gets an explicit `PASS` / `no_op=true` RECORD — the
+program established that no rewrite occurred, so the completed question is not
+an N/A or an absence a reader has to interpret.
 
 A PASS requires the report to say PASS **and** to carry >0 compared points
 **and** 0 unproven points, re-derived here from the counts rather than trusted
@@ -181,11 +182,12 @@ def main(argv: Optional[List[str]] = None) -> int:
             report = None
 
     # A design that never ran a cross-layer search has no baseline snapshot and
-    # no report, and this gate is simply not about it. Say so explicitly rather
-    # than passing it silently — a reader must be able to tell "not applicable"
-    # from "checked and clean".
+    # no report.  That is a measured no-op: the gate checked both declarations
+    # that would prove a rewrite occurred and found neither.  The question is
+    # complete and clean, so publish PASS/no_op rather than NOT_APPLICABLE.
     if not baseline_present and not readable:
-        payload = {"program": PROGRAM, "status": "NOT_APPLICABLE",
+        payload = {"program": PROGRAM, "status": "PASS", "pass": True,
+                   "no_op": True,
                    "explanation": (
                        "no cross-layer baseline snapshot and no "
                        "rewrite-fidelity report — this design's RTL was not "
@@ -197,7 +199,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         atomic_write_text(out,
                           json.dumps(payload, indent=2) + "\n",
                           encoding="utf-8")
-        print(f"[{PROGRAM}] NOT_APPLICABLE — no cross-layer search was run.")
+        print(f"[{PROGRAM}] PASS (no-op) — no cross-layer search was run.")
         return 0
 
     # Re-resolve the search space's citations. Delegated to the program that

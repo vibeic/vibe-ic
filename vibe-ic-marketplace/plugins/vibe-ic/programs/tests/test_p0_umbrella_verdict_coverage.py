@@ -83,8 +83,9 @@ def _fail(name, msg="[FAIL] synthetic"):
 
 
 def _skip(name):
-    return F._p0_gate_record(name, "SKIP", "", {"exit_code": 2,
-                                                "skip_kind": "input-missing"})
+    return F._p0_gate_record(
+        name, "SKIP", "design declared no command protocol",
+        {"exit_code": 2, "skip_kind": "class-not-applicable"})
 
 
 def _not_invocable(name):
@@ -206,12 +207,10 @@ def test_a_clean_sweep_with_every_gate_invoked_IS_a_PASS(
 def test_SKIP_and_WAIVED_do_not_cost_the_PASS(tmp_path, monkeypatch, capsys):
     """The other reverse case, and the one a careless predicate breaks.
 
-    `SKIP` (the gate looked and the input was absent) and `WAIVED` (the failure
-    was excused with a ticket) ARE verdicts — statements about what was audited.
-    Only `NOT_INVOCABLE` is the absence of one. A rule keyed on "did every gate
-    PASS", or on `invoked < registered`, would have demoted this run too, and it
-    is the majority shape in the corpus: 150 of 246 records on a tracked project
-    are SKIP.
+    A declaration-derived `SKIP` and `WAIVED` are statements about what was
+    audited.  They remain compatible with PASS; execution failures and empty
+    denominators do not.  A rule keyed on "did every gate PASS", or on
+    `invoked < registered`, would demote this legitimate reverse case too.
     """
     records = [_pass("gate_a_check"), _skip("gate_b_check"),
                _skip("gate_c_check"),
@@ -222,8 +221,8 @@ def test_SKIP_and_WAIVED_do_not_cost_the_PASS(tmp_path, monkeypatch, capsys):
     rc, step, audit = _run_main(tmp_path, monkeypatch, records)
     capsys.readouterr()
     assert step["status"] == "PASS", (
-        f"SKIP and WAIVED are verdicts; only NOT_INVOCABLE is the absence of "
-        f"one. status={step['status']!r}")
+        f"a declaration-derived SKIP and WAIVED remain compatible with PASS; "
+        f"status={step['status']!r}")
     assert audit["not_invocable_gate_count"] == 0
     assert audit["invoked_gate_count"] == audit["registered_gate_count"] == 4
 

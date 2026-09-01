@@ -137,7 +137,7 @@ def test_the_evaluator_records_every_return_by_WRAPPING():
     j = src.index("def __check_program_exit_zero(", i)
     wrapper = src[i:j]
     assert "__check_program_exit_zero(project, cmd_str)" in wrapper
-    assert "_record_gate_execution(cmd_str, rc, verdict)" in wrapper
+    assert "_record_gate_execution(cmd_str, rc, verdict, reason_class)" in wrapper
 
 
 def test_the_verdict_is_read_from_the_snippet_not_re_derived():

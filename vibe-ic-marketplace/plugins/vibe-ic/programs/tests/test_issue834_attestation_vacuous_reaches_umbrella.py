@@ -181,7 +181,8 @@ def test_umbrella_no_longer_records_an_executed_pass_for_a_vacuous_run(
     assert rec["verdict"] != "PASS", (
         "a gate that examined nothing must not hold a PASS record — that is "
         f"what puts it in the executed-PASS numerator. record={rec}")
-    assert rec["verdict"] == "SKIP", rec
+    assert rec["verdict"] == "BLOCKED", rec
+    assert rec["reason_class"] == "BLOCKED_BY_UPSTREAM", rec
     assert rec["evidence"].get("exit_code") == _vx.RC_VACUOUS, rec
     assert rec["evidence"].get("skip_kind") == "input-missing", rec
     # And it must NOT be misread as the caller's own invocation defect: the

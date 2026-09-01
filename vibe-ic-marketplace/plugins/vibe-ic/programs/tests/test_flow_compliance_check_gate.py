@@ -805,12 +805,13 @@ def test_wave93_vacuous_pass_step14_no_ys(tmp_path):
     assert "VACUOUS-PASS=" in r.stdout, r.stdout
 
 
-#: The steps that ARE vacuous on the `vac2` fixture below.  FS1 is a structural
-#: fact of the fixture: its RTL declares no ECC/parity/lockstep mechanism, so
-#: the FMEDA pair measures no diagnostic coverage.  Step 14 deliberately left
-#: this set in issue #1973: the fixture has no independent-expert answer, so D1
-#: is INCOMPLETE and downstream Step 14 is not credited merely because its
-#: absent `.ys` inputs would otherwise be vacuous.
+#: The steps that ARE vacuous on the `vac2` fixture below, measured
+#: 2026-07-28. Both are structural facts of the fixture, not incidental:
+#:   * FS1     — the fixture's RTL declares no ECC/parity/lockstep mechanism,
+#:     so the FMEDA pair measures no diagnostic coverage.
+#: Step 14 no longer belongs here: its missing `.ys` primary artefact is
+#: accompanied by a SUBSTANTIVE alternate-route proof, so #1978 treats that
+#: completed check as PASS rather than as a non-verdict.
 #: Pinned as a SET so that a step JOINING or LEAVING the vacuous tier is a
 #: named, deliberate edit here rather than an invisible drift.
 _VAC2_EXPECTED_VACUOUS_STEPS = {"FS1"}
@@ -925,9 +926,8 @@ def test_expand_globs_glob_zero_matches_dropped(tmp_path):
 # pre-tapeout / digital-only projects to FAIL the canonical-flow
 # audit on those steps despite having legitimate skip-conditions.
 
-def test_check_program_exit_zero_rc2_is_vacuous_pass(tmp_path):
-    """Program exiting 2 is treated as PASS with VACUOUS_HINT prefix
-    so check_step promotes the verdict to VACUOUS_PASS."""
+def test_unclassified_rc2_is_incomplete(tmp_path):
+    """An rc-2 token without a typed absence basis is not a free N/A."""
     from programs.flow_compliance_check import (
         _check_program_exit_zero,
         _VACUOUS_HINT_PREFIX,
@@ -940,10 +940,9 @@ def test_check_program_exit_zero_rc2_is_vacuous_pass(tmp_path):
     )
     try:
         passed, snippet = _check_program_exit_zero(tmp_path, "_pytest_rc2_helper")
-        assert passed is True, f"rc=2 should be PASS (vacuous), got {passed}"
-        assert snippet.startswith(_VACUOUS_HINT_PREFIX), (
-            f"snippet missing vacuous-hint prefix: {snippet!r}"
-        )
+        assert passed is True, "INCOMPLETE is not a manufactured design FAIL"
+        assert snippet.startswith("INCOMPLETE:"), snippet
+        assert not snippet.startswith(_VACUOUS_HINT_PREFIX)
     finally:
         helper.unlink(missing_ok=True)
 
@@ -1275,7 +1274,7 @@ def test_the_snippet_is_additive_and_names_what_it_dropped():
         f"nothing was elided, so nothing may claim it was: {short!r}")
 
 
-def test_rc0_and_rc2_are_untouched_by_the_crash_branch(tmp_path):
+def test_rc0_and_rc2_are_not_misread_as_crashes(tmp_path):
     """The crash branch sits AFTER the PASS / vacuous / waiver arms.
 
     A gate that exits 0 or 2 has reached a verdict; printing traceback-shaped
@@ -1305,5 +1304,6 @@ def test_rc0_and_rc2_are_untouched_by_the_crash_branch(tmp_path):
     )
     passed, snippet = _run_helper("_pytest_noisy_skip_helper", noisy_skip,
                                   tmp_path)
-    assert passed is True, "rc 2 must stay a disclosed skip"
-    assert snippet.startswith(_VACUOUS_HINT_PREFIX)
+    assert passed is True, "rc 2 must not become a manufactured design FAIL"
+    assert snippet.startswith("INCOMPLETE:")
+    assert not snippet.startswith(_CRASH_HINT_PREFIX)

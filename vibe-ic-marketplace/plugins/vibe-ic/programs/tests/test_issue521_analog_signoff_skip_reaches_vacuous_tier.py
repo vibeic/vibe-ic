@@ -3,8 +3,8 @@
 
 THE DEFECT, AND WHY IT IS THE SAME ONE AS #515
 ==============================================
-`flow_compliance_check` decides tier membership PURELY from a gate's exit code
-(rc 0 PASS / rc 1 FAIL / rc 2 VACUOUS). Seventeen gates computed
+`flow_compliance_check` once decided tier membership purely from a gate's exit
+code (rc 0 PASS / rc 1 FAIL / rc 2 VACUOUS). Seventeen gates computed
 ``summary["skipped"] = True``, stated an explicit reason in their own report,
 and then returned ``0 if result.passed else 1`` — discarding that distinction
 at the one place every automated consumer reads.
@@ -17,6 +17,9 @@ never there is the analog sign-off set: block coverage, corner margin, corner
 sweep, netlist connectivity, PDK conventions, pre-vs-post layout, SPICE
 correlation, hard-macro pin consistency, Liberty non-degeneracy, A8-before-
 floorplan ordering.
+
+#1978 adds the cause boundary: a declared absence of analog content may remain
+N/A, while absent post-layout or upstream outputs are BLOCKED/INCOMPLETE.
 
 WHAT THESE TESTS DRIVE, AND WHAT THEY DELIBERATELY DO NOT
 =========================================================
@@ -101,6 +104,17 @@ LIVE_STEP_GATES = {
     "analog_hardmacro_check",               # A8
     "analog_hw_spice_correlation_check",    # A9 (optional slot)
     "spice_correlation_check",              # 30
+}
+
+# #1978 splits the old rc-2 bucket by cause.  Only the hardmacro question has
+# a derived design absence on this fixture; the others are waiting for process
+# outputs and therefore remain incomplete.
+LIVE_STEP_EXPECTED = {
+    "analog_hardmacro_check": "VACUOUS_PASS",
+    "analog_hw_spice_correlation_check": "INCOMPLETE",
+    "analog_netlist_pdk_check": "INCOMPLETE",
+    "analog_pre_vs_post_layout_check": "INCOMPLETE",
+    "spice_correlation_check": "INCOMPLETE",
 }
 
 
@@ -356,14 +370,12 @@ def _synthetic_step(cmd: str) -> dict:
 
 
 @pytest.mark.parametrize("gate", sorted(LIVE_STEP_GATES))
-def test_check_step_promotes_each_live_step_gate_to_VACUOUS_PASS(gate,
-                                                                 tmp_path):
-    """rc 2 must reach `check_step`'s VACUOUS_PASS tier through the real
-    `_check_program_exit_zero` and a real subprocess."""
+def test_check_step_consumes_each_live_gate_reason_class(gate, tmp_path):
+    """The real subprocess reason, not rc=2 alone, decides the step tier."""
     proj = _empty_project(tmp_path)
     result = _flow.check_step(proj, _synthetic_step(f"{gate} ."), waivers={})
-    assert result.status == "VACUOUS_PASS", (gate, result.status,
-                                             result.reasons)
+    assert result.status == LIVE_STEP_EXPECTED[gate], (
+        gate, result.status, result.reasons)
 
 
 def test_check_step_keeps_an_examined_gate_in_the_plain_PASS_tier(tmp_path):
@@ -402,7 +414,7 @@ def _shipped_step(step_id) -> dict:
     raise AssertionError(f"step {step_id} is not in the shipped flow")
 
 
-def test_shipped_step_30_reaches_VACUOUS_PASS_when_spice_gate_examined_nothing(
+def test_shipped_step_30_is_incomplete_without_correlation_inputs(
         tmp_path):
     """END-TO-END on the step definition the flow actually ships, so a rewire
     that drops the gate breaks this test rather than passing quietly.
@@ -421,7 +433,7 @@ def test_shipped_step_30_reaches_VACUOUS_PASS_when_spice_gate_examined_nothing(
     (proj / "reports" / "phase3" / "spice_correlation.json").write_text("{}")
 
     result = _flow.check_step(proj, step, waivers={})
-    assert result.status == "VACUOUS_PASS", (result.status, result.reasons)
+    assert result.status == "INCOMPLETE", (result.status, result.reasons)
 
 
 def test_the_live_step_wiring_is_what_this_change_measured(tmp_path):
@@ -445,6 +457,22 @@ def test_the_live_step_wiring_is_what_this_change_measured(tmp_path):
 
 _P0_REGISTERED = tuple(
     g for g in GATES_521 if g in set(_flow._STRUCTURAL_RTL_GATES))
+
+_P0_EXPECTED = {
+    "analog_block_coverage_check": ("SKIP", "DESIGN_DECLARED_NA"),
+    "analog_corner_sweep_check": ("BLOCKED", "BLOCKED_BY_UPSTREAM"),
+    "analog_digital_interface_check": ("SKIP", "DESIGN_DECLARED_NA"),
+    "analog_hardmacro_check": ("SKIP", "DESIGN_DECLARED_NA"),
+    "analog_hw_spice_correlation_check":
+        ("BLOCKED", "BLOCKED_BY_UPSTREAM"),
+    "analog_netlist_pdk_check": ("BLOCKED", "BLOCKED_BY_UPSTREAM"),
+    "analog_pre_vs_post_layout_check":
+        ("BLOCKED", "BLOCKED_BY_UPSTREAM"),
+    "otp_image_layer_consistency_check":
+        ("BLOCKED", "BLOCKED_BY_UPSTREAM"),
+    "spice_correlation_check": ("BLOCKED", "BLOCKED_BY_UPSTREAM"),
+    "tristate_active_drive_check": ("SKIP", "DESIGN_DECLARED_NA"),
+}
 
 
 def test_the_umbrella_registers_the_expected_subset():
@@ -472,15 +500,16 @@ def _rtl_only_project(tmp_path: Path) -> Path:
 
 
 @pytest.mark.parametrize("gate", _P0_REGISTERED)
-def test_p0_umbrella_records_a_skipping_gate_as_SKIP_not_PASS(gate, tmp_path,
-                                                              monkeypatch):
+def test_p0_umbrella_records_the_nonverdict_cause(gate, tmp_path, monkeypatch):
     proj = _rtl_only_project(tmp_path)
     monkeypatch.setattr(_flow, "_STRUCTURAL_RTL_GATES", (gate,))
     records: list = []
     _flow._run_structural_rtl_gates(proj, records_out=records)
     assert len(records) == 1, records
     rec = records[0]
-    assert rec["verdict"] == "SKIP", rec
+    expected_verdict, expected_class = _P0_EXPECTED[gate]
+    assert rec["verdict"] == expected_verdict, rec
+    assert rec["reason_class"] == expected_class, rec
     assert rec["evidence"]["exit_code"] == _vx.RC_VACUOUS, rec
     assert rec["evidence"]["skip_kind"] == "input-missing", rec
     assert _flow._p0_passed_count(records) == 0

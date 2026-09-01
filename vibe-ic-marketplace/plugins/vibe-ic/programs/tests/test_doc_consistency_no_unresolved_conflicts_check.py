@@ -25,20 +25,21 @@ def _make_project(tmp_path: Path, docs: dict) -> Path:
     return proj
 
 
-def test_skip_when_no_addr_limits(tmp_path):
+def test_pass_when_no_addr_limits(tmp_path):
     proj = _make_project(tmp_path, {"a.txt": "no relevant content"})
     r = _run(proj)
-    assert r.returncode == 2
+    assert r.returncode == 0
+    assert "[PASS]" in r.stdout
 
 
-def test_skip_when_only_one_value(tmp_path):
+def test_pass_when_only_one_value(tmp_path):
     proj = _make_project(tmp_path, {
         "a.txt": "位址不得超過 0x7F",
         "b.txt": "address must not exceed 0x7F.",
     })
     r = _run(proj)
-    # one distinct value -> not a conflict -> SKIP
-    assert r.returncode == 2
+    # One distinct value completes the conflict question cleanly.
+    assert r.returncode == 0
 
 
 def test_warn_when_conflict_unresolved(tmp_path):

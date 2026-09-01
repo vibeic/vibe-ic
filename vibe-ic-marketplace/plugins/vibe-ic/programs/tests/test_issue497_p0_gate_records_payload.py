@@ -101,6 +101,9 @@ def _buckets_from_records(records):
             skips.append(name if (ev.get("skip_kind") == "input-missing"
                                   and not msg.strip())
                          else f"{name} (SKIP: {msg})")
+        elif v in {"BLOCKED", "INCOMPLETE"}:
+            skips.append(
+                f"{name} ({v}: reason_class={r['reason_class']}: {msg})")
         elif v == "WAIVED":
             waived.append(name)
     return fails, skips, waived

@@ -20,7 +20,7 @@ Usage:
 Exit codes:
     0 = PASS (no conflict OR all resolved)
     0 = WARN (conflict found, no resolution doc) — non-blocking by spec
-    2 = input-missing (skip)
+    2 = caller/path error
 
 NOTE: per Wave 37 spec: "warns if conflicts unresolved (not blocking)".
 We return 0 always; warnings are surfaced on stdout for the audit
@@ -99,9 +99,14 @@ def main() -> int:
 
     bucket = _scan_addr_limits(project)
     if len(bucket) <= 1:
-        print("[SKIP] doc_consistency_no_unresolved_conflicts_check: "
+        # This gate completed its question: the project contains at most one
+        # distinct declared limit, hence no cross-document conflict.  Calling
+        # that SKIP merged a measured-clean result with gates that never read
+        # their input.  A completed clean check is PASS, including the no-op
+        # case where there is no second value to contradict the first.
+        print("[PASS] doc_consistency_no_unresolved_conflicts_check: "
               "no ADDR-limit conflict (≤1 distinct value across docs)")
-        return 2
+        return 0
 
     # >= 2 distinct values => conflict candidates.
     distinct = sorted(bucket.keys())

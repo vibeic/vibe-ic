@@ -84,6 +84,7 @@ import _waiver_entries as _we
 import _evidence_independence as _ev_ind  # #524
 import _sim_results_bridge as _srb
 import _gate_invocation
+import _flow_reason_taxonomy as _reason_taxonomy
 import _watchdog
 import l_doc_consumer_contract as _ldoc
 # vibe-ic#634 — the ONE classification of verdict words, shared with
@@ -3051,11 +3052,26 @@ def _resolve_program_cmd(cmd_str: str, cwd: Path | None = None) -> List[str]:
 _GATE_LEDGER: List[Dict[str, Any]] = []
 
 
-def _record_gate_execution(cmd: str, rc: Optional[int], verdict: str) -> None:
+def _record_gate_execution(cmd: str, rc: Optional[int], verdict: str,
+                           reason_class: Optional[str] = None) -> None:
     """One row per gate INVOCATION. `rc=None` means the program could not be
     launched at all — itself a distinct fact from any exit code."""
+    if verdict not in ("PASS", "FAIL", "PASS_WITH_WAIVERS"):
+        reason_class = _reason_taxonomy.infer_nonverdict_reason(
+            verdict=verdict, explicit=reason_class)
+    else:
+        reason_class = _reason_taxonomy.normalise(reason_class)
     _GATE_LEDGER.append({"gate": _gate_name(cmd), "cmd": cmd,
-                         "rc": rc, "verdict": verdict})
+                         "rc": rc, "verdict": verdict,
+                         "reason_class": reason_class})
+
+
+def _gate_ledger_payload() -> List[Dict[str, Any]]:
+    """Deterministic machine-readable view of concurrently appended rows."""
+    return sorted((dict(row) for row in _GATE_LEDGER), key=lambda row: (
+        str(row.get("gate") or ""), str(row.get("cmd") or ""),
+        -1 if row.get("rc") is None else int(row["rc"]),
+        str(row.get("verdict") or ""), str(row.get("reason_class") or "")))
 
 
 def _gate_name(cmd: str) -> str:
@@ -3079,7 +3095,9 @@ def gate_ledger_lines() -> List[str]:
            f"every program gate this run dispatched, whatever it returned."]
     for row in _GATE_LEDGER:
         rc = "launch-failed" if row["rc"] is None else f"rc={row['rc']}"
-        out.append(f"  GATE_RAN {row['gate']:44} {rc:14} {row['verdict']}")
+        cls = row.get("reason_class") or "-"
+        out.append(f"  GATE_RAN {row['gate']:44} {rc:14} {row['verdict']} "
+                   f"reason_class={cls}")
     return out
 
 
@@ -3103,24 +3121,66 @@ def _check_program_exit_zero(project: Path, cmd_str: str) -> tuple[bool, str]:
     delegates. WRAPPING rather than inserting a `_record_gate_execution` call at
     each of the eleven return points: a return added later would otherwise be
     unrecorded, and an unrecorded gate is the exact defect this exists to close.
-    The verdict is read back from the snippet the inner function already builds,
-    so there is one classification and not a second one that can disagree."""
+    The exit shape comes from the snippet the inner function already builds;
+    when the command names a JSON report, its typed reason class is consumed
+    here.  One invocation therefore produces one published classification."""
     ok, out = __check_program_exit_zero(project, cmd_str)
+    report = _command_json_report(project, cmd_str)
+    report_cls = _reason_taxonomy.report_reason_class(report)
+    report_message = _report_reason_text(report)
+    reason_class: Optional[str] = None
     if out.startswith(_VACUOUS_HINT_PREFIX):
-        verdict, rc = "VACUOUS_PASS", 2
+        legacy_message = out.partition("\n")[2]
+        rc = 2
+        substantive_alternate = _stdout_signals_token(
+            legacy_message, _SUBSTANTIVE_STDOUT_TOKEN)
+        if substantive_alternate:
+            # Some gates retain rc=2 for the missing primary artefact while
+            # explicitly proving the equivalent through another route.  That
+            # is a substantive PASS, not a non-verdict reason to classify.
+            verdict = "PASS"
+            out = legacy_message
+        else:
+            reason_class = _reason_taxonomy.infer_nonverdict_reason(
+                verdict="VACUOUS_PASS",
+                message=report_message or legacy_message,
+                explicit=report_cls)
+        if substantive_alternate:
+            pass
+        elif reason_class in _reason_taxonomy.SKIP_ELIGIBLE:
+            verdict = "VACUOUS_PASS"
+            # Downstream aggregation treats everything after the prefix as
+            # the command identity.  The diagnostic suffix was needed here
+            # for classification, not in that established marker payload.
+            out = f"{_VACUOUS_HINT_PREFIX}{cmd_str}"
+        else:
+            verdict = ("BLOCKED" if reason_class
+                       == _reason_taxonomy.BLOCKED_BY_UPSTREAM
+                       else "INCOMPLETE")
+            detail = (report_message or legacy_message
+                      or "no classified reason was emitted")
+            out = (f"INCOMPLETE: {cmd_str} — reason_class={reason_class}; "
+                   f"{detail}")
     elif out.startswith(_WAIVER_HINT_PREFIX):
         verdict, rc = "PASS_WITH_WAIVERS", _WAIVER_EXIT_CODE
     elif out.startswith("program not found:"):
         verdict, rc = "NOT_FOUND", None
+        reason_class = _reason_taxonomy.EXECUTION_ERROR
     elif out.startswith(_CRASH_HINT_PREFIX):
         verdict, rc = "CRASHED", None
+        reason_class = _reason_taxonomy.EXECUTION_ERROR
     elif out.startswith("program STALLED"):
         verdict, rc = "STALLED", None
+        reason_class = _reason_taxonomy.EXECUTION_ERROR
     elif out.startswith("program invocation error:"):
         verdict, rc = "INVOCATION_ERROR", None
+        reason_class = _reason_taxonomy.EXECUTION_ERROR
     else:
         verdict, rc = ("PASS", 0) if ok else ("FAIL", 1)
-        if verdict == "PASS" and _json_report_signals_vacuous(project, cmd_str):
+        if verdict == "PASS" and _json_report_declares_nonverdict(report):
+            reason_class = _reason_taxonomy.infer_nonverdict_reason(
+                verdict="VACUOUS_PASS", message=report_message,
+                explicit=report_cls)
             # vibe-ic#901 — the ledger row is the GATE-granular verdict, and a
             # gate that wrote `{"verdict": "NOT_APPLICABLE"}` into the report
             # this very command named did not PASS anything. rc stays 0 (that
@@ -3128,8 +3188,18 @@ def _check_program_exit_zero(project: Path, cmd_str: str) -> tuple[bool, str]:
             # word matches what the gate said about itself. Derived from the
             # SAME helper `_evaluate_gate` uses, so the ledger row and the step
             # tier cannot disagree about one gate's own report.
-            verdict = "VACUOUS_PASS"
-    _record_gate_execution(cmd_str, rc, verdict)
+            if reason_class in _reason_taxonomy.SKIP_ELIGIBLE:
+                verdict = "VACUOUS_PASS"
+            else:
+                verdict = ("BLOCKED" if reason_class
+                           == _reason_taxonomy.BLOCKED_BY_UPSTREAM
+                           else "INCOMPLETE")
+                detail = (report_message
+                          or "the gate declared a non-verdict without a "
+                             "classified reason")
+                out = (f"INCOMPLETE: {cmd_str} — reason_class={reason_class}; "
+                       f"{detail}")
+    _record_gate_execution(cmd_str, rc, verdict, reason_class)
     return ok, out
 
 
@@ -3140,16 +3210,11 @@ def __check_program_exit_zero(project: Path, cmd_str: str) -> tuple[bool, str]:
     Exit-code semantics align with the structural-RTL-gates runner
     (`_run_structural_rtl_gates`):
       * rc == 0  → PASS
-      * rc == 2  → VACUOUS_PASS — the "input-missing skip" convention
-                   used by gate programs that print
-                   ``verdict: SKIP`` and exit 2 when the artefact they
-                   audit doesn't exist yet (e.g.
-                   foundry_handoff_package_check on pre-tapeout
-                   projects, mixed_signal_merge_check on digital-only
-                   projects). The snippet is prefixed with the Wave 93
-                   ``__VACUOUS_HINT__:`` sentinel so check_step
-                   promotes the step to the VACUOUS_PASS verdict tier
-                   instead of plain PASS.
+      * rc == 2  → NON-VERDICT CANDIDATE. The snippet carries the Wave 93
+                   marker plus the callee's evidence to the outer wrapper;
+                   #1978 promotes only a typed design/capability/external
+                   absence to VACUOUS_PASS. Upstream, execution, and empty-
+                   denominator reasons become BLOCKED/INCOMPLETE.
       * rc == 3  → PASS_WITH_WAIVERS — the #651 waiver convention used by
                    `tapeout_signoff_check` (signoff_audit) when the tapeout
                    threshold was met but a DRC/LVS slot was credited via a
@@ -3209,7 +3274,7 @@ def __check_program_exit_zero(project: Path, cmd_str: str) -> tuple[bool, str]:
         if r.returncode == 2:
             # Treat as vacuous pass — surface the program command so
             # reviewers know which gate vacuously passed.
-            return True, f"{_VACUOUS_HINT_PREFIX}{cmd_str}"
+            return True, f"{_VACUOUS_HINT_PREFIX}{cmd_str}\n{snippet}"
         if (r.returncode == _WAIVER_EXIT_CODE
                 and _stdout_signals_waiver(r.stdout)):
             # #651 — PASS_WITH_WAIVERS: the gate passed its threshold but a
@@ -3859,10 +3924,55 @@ _VACUOUS_JSON_VERDICTS = {"NOT_APPLICABLE", "SKIPPED", "SKIP", "VACUOUS",
                           "VACUOUS_PASS", "NO_BUILD", "NOT_RUN"}
 
 
-def _json_report_signals_vacuous(project: Path, cmd: str) -> bool:
-    """True iff the gate's own JSON report declares it examined nothing.
+def _command_json_report(project: Path, cmd: str) -> Optional[Dict[str, Any]]:
+    """Read the JSON report path named by a gate command, when available."""
+    m = re.search(r"--json[= ]+(\S+)", cmd or "")
+    if not m:
+        return None
+    p = Path(m.group(1).strip("'\""))
+    if not p.is_absolute():
+        p = project / p
+    try:
+        if not (p.is_file() and p.stat().st_size > 0):
+            return None
+        data = json.loads(p.read_text(errors="replace"))
+    except Exception:
+        return None
+    return data if isinstance(data, dict) else None
 
-    ⚠️ NOT CURRENTLY WIRED INTO THE STEP TIER — see vibe-ic#901 follow-on.
+
+def _report_reason_text(report: Any) -> str:
+    """The report's own human explanation, used only after typed fields."""
+    if not isinstance(report, dict):
+        return ""
+    for key in ("reason", "explanation", "message", "skipped_reason"):
+        value = report.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    summary = report.get("summary")
+    if isinstance(summary, dict):
+        for key in ("reason", "explanation", "message", "skipped_reason"):
+            value = summary.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+    return ""
+
+
+def _json_report_declares_nonverdict(report: Any) -> bool:
+    if not isinstance(report, dict):
+        return False
+    for key in ("verdict", "status"):
+        value = report.get(key)
+        if (isinstance(value, str)
+                and value.strip().upper() in _VACUOUS_JSON_VERDICTS):
+            return True
+    return False
+
+
+def _json_report_signals_vacuous(project: Path, cmd: str) -> bool:
+    """True iff the report declares a skip-eligible non-verdict.
+
+    Only a typed, skip-eligible reason is wired into the N/A tier (#1978).
 
     Wiring this into the VACUOUS_PASS branch (v1.10.14) caused a MEASURED
     regression: it turned a genuinely converged cell red. Controlled proof —
@@ -3904,25 +4014,13 @@ def _json_report_signals_vacuous(project: Path, cmd: str) -> bool:
     rather than asking gates to print something new. Doing it here also covers
     gates written LATER, which patching six emitters would not.
     """
-    m = re.search(r"--json[= ]+(\S+)", cmd or "")
-    if not m:
+    report = _command_json_report(project, cmd)
+    if not _json_report_declares_nonverdict(report):
         return False
-    p = Path(m.group(1).strip("'\""))
-    if not p.is_absolute():
-        p = project / p
-    try:
-        if not (p.is_file() and p.stat().st_size > 0):
-            return False
-        d = json.loads(p.read_text(errors="replace"))
-    except Exception:
-        return False
-    if not isinstance(d, dict):
-        return False
-    for key in ("verdict", "status"):
-        v = d.get(key)
-        if isinstance(v, str) and v.strip().upper() in _VACUOUS_JSON_VERDICTS:
-            return True
-    return False
+    reason_class = _reason_taxonomy.infer_nonverdict_reason(
+        verdict="VACUOUS_PASS", message=_report_reason_text(report),
+        explicit=_reason_taxonomy.report_reason_class(report))
+    return reason_class in _reason_taxonomy.SKIP_ELIGIBLE
 
 
 def _stdout_signals_vacuous(snippet: str) -> bool:
@@ -4684,10 +4782,27 @@ def _compose_p0_reasons_from_records(
     shapes: the operator-facing per-step listing renders `reasons`, and #492
     exists precisely because unrun gates used to be invisible there.
     """
-    fails, skips, waivers = _p0_buckets_from_records(records)
-    return _compose_p0_reasons(
+    decisive_or_skip = [r for r in records
+                        if r.get("verdict") not in ("BLOCKED", "INCOMPLETE")]
+    fails, skips, waivers = _p0_buckets_from_records(decisive_or_skip)
+    reasons = _compose_p0_reasons(
         fails, skips, waivers, n_registered,
         umbrella_notes=[_P0_NO_RTL_NOTE] if executed is None else None)
+    process_lines = [
+        (f"{r['verdict']}: {r['name']} — reason_class="
+         f"{r['reason_class']}: {r['message']}")
+        for r in records if r.get("verdict") in ("BLOCKED", "INCOMPLETE")
+    ]
+    if process_lines:
+        # `_compose_p0_reasons` emits a clean-sweep sentence when its filtered
+        # input is empty.  A set containing only blocked/incomplete records is
+        # not clean, so remove that synthetic sentence before adding the real
+        # process-provenance lines.
+        if (len(reasons) == 1
+                and reasons[0].startswith("every registered structural-RTL")):
+            reasons = []
+        reasons.extend(process_lines)
+    return reasons
 
 
 def _compose_p0_reasons(s_fails: List[str],
@@ -5480,18 +5595,8 @@ def _reused_ip_rtl_only_fsm_cap_eligible(project: Path) -> bool:
 #       mixed-signal / analog-content-must-emit gates
 _CLASS_SKIPPABLE_PROTOCOL_GATES: frozenset[str] = frozenset({
     "l3_opcode_argument_constraints_check",     # opcode addr_max/len_max
-    "l1_electrical_specs_typed_depth_check",     # typed electrical spec
     "l12_behavioral_sequences_steps_typed_check",  # protocol behavioral step
     "protocol_ip_simulation_required_check",     # protocol sim required
-    # Command-oracle SVA / byte-protocol gates: single-keyed on
-    # command_protocol_applicable=False (same key as l3_opcode above). For a
-    # class with no SW-visible command protocol (processor_cpu, arithmetic
-    # primitive, bus_interconnect, ...) there are no L3 protocol constraints
-    # to cover with SVA and no single-wire-pad byte oracle to satisfy — these
-    # would false-FAIL. Real command/AID ICs (command_protocol_applicable=True)
-    # keep both gates.
-    "assertion_covers_l3_constraints_check",    # SVA per L3 constraint
-    "bit_level_full_stack_tb_oracle_check",     # byte-protocol golden oracle
 })
 # ORGANIC-20260605-fullstack-byte-oracle-inapplicable-to-datapath-primitive
 # (#419): full-stack byte-protocol ARTEFACT gates. For a registry-matched
@@ -5580,22 +5685,6 @@ _CLASS_SKIPPABLE_ANALOG_GATES: frozenset[str] = frozenset({
     "analog_hardmacro_check",
     "mixed_signal_cosim_check",
     "analog_content_detected_must_emit_l5_check",
-    # v1.6.553 — post-layout SPICE correlation is an ANALOG / mixed-signal
-    # signoff deliverable, NOT a digital one. For a pure-digital IC class
-    # (analog_applicable=False) the critical-path is signed off by STA +
-    # SPEF + Liberty — there is never a transistor-level SPICE deck to
-    # correlate against. Without this skip, every digital-only IC that
-    # completes Phase 3 (and therefore emits phase3/stage3/extracted/*.spef
-    # + phase3/stage3/sta/*.rpt) trips spice_correlation_check's
-    # NO_SPICE_VERIFICATION FAIL, which under --skip-analog surfaced as a
-    # spurious phase2 FAIL on digital command-driven protocol ICs (espi /
-    # usb_pd / sgmii). HONEST + GENERAL: this fires ONLY when the detected
-    # IC class is registry-matched AND analog_applicable=False (fail-closed
-    # for unknown classes); a genuinely-analog IC (analog_applicable=True)
-    # still runs the gate and still FAILs on a missing/uncorrelated SPICE
-    # deck. The analog-HW sibling self-skips on absent hw_measurements.json
-    # but is class-gated here too for symmetry.
-    "spice_correlation_check",
     "analog_hw_spice_correlation_check",
 })
 
@@ -6886,7 +6975,16 @@ def _structural_gate_argv(gate_name: str,
 # to this tuple that a consumer has to handle, not a new sentence a consumer can
 # ignore.
 P0_GATE_VERDICTS: tuple[str, ...] = (
-    "PASS", "FAIL", "SKIP", "WAIVED", "NOT_INVOCABLE")
+    "PASS", "FAIL", "SKIP", "WAIVED", "NOT_INVOCABLE", "BLOCKED",
+    "INCOMPLETE")
+
+# Outcomes that did not reach a substantive PASS/FAIL verdict.  Every one must
+# carry one of `_flow_reason_taxonomy.REASON_CLASSES`; this is the population
+# issue #1978 found collapsed into SKIP.  FAIL and WAIVED are decisive outcomes
+# and therefore do not acquire a fabricated "why no verdict" class.
+_P0_NONDECISIVE_VERDICTS = frozenset({
+    "SKIP", "NOT_INVOCABLE", "BLOCKED", "INCOMPLETE",
+})
 
 #: #497 step 3 — the umbrella's ONE note about ITSELF rather than about a gate.
 #:
@@ -6914,7 +7012,8 @@ _P0_NO_RTL_NOTE = ("no RTL directory found — structural gates skipped "
 def _p0_gate_record(name: str,
                     verdict: str,
                     message: str = "",
-                    evidence: Optional[Dict[str, Any]] = None
+                    evidence: Optional[Dict[str, Any]] = None,
+                    reason_class: Optional[str] = None,
                     ) -> Dict[str, Any]:
     """One registered structural gate's outcome, stated once.
 
@@ -6930,11 +7029,25 @@ def _p0_gate_record(name: str,
     is the machine-readable remainder: exit code, skip kind, waiver ticket.
     """
     assert verdict in P0_GATE_VERDICTS, verdict  # closed enum, not free text
+    ev = dict(evidence or {})
+    if verdict in _P0_NONDECISIVE_VERDICTS:
+        reason_class = _reason_taxonomy.infer_nonverdict_reason(
+            verdict=verdict, message=message, evidence=ev,
+            explicit=reason_class)
+        assert reason_class in _reason_taxonomy.REASON_CLASS_SET
+        if verdict != "NOT_INVOCABLE":
+            # Enforce the class/verdict pairing at the record boundary.  A
+            # caller cannot label an execution error SKIP and rely on the
+            # roll-up to notice the contradiction later.
+            verdict = _reason_taxonomy.record_verdict(reason_class)
+    else:
+        reason_class = _reason_taxonomy.normalise(reason_class)
     return {
         "name": name,
         "verdict": verdict,
+        "reason_class": reason_class,
         "message": message,
-        "evidence": dict(evidence or {}),
+        "evidence": ev,
     }
 
 
@@ -7086,8 +7199,18 @@ _P0_SKIP_MARKER = re.compile(r"^\[(?:skip|n/?a|vacuous|info)\]\s*", re.I)
 
 def _p0_skip_reason_from_output(gate_name: str, stdout: str,
                                 stderr: str) -> str:
-    """First line of the gate's output, minus the marker and its own name."""
-    raw = (stdout.strip() or stderr.strip()).split("\n")[0].strip()
+    """First informative line, minus the marker and the gate's own name.
+
+    A banner such as ``=== waiver_staleness_check (...) ===`` says nothing
+    about why the gate stopped.  Taking it unconditionally discarded the next
+    line, including ``NONE could be aged`` — the zero denominator issue #1978
+    needs to classify.  Skip banner-only lines, but never synthesize prose when
+    the gate emitted none.
+    """
+    lines = (stdout.strip() or stderr.strip()).splitlines()
+    informative = [ln.strip() for ln in lines if ln.strip()
+                   and not re.match(r"^=+.*=+$", ln.strip())]
+    raw = informative[0] if informative else ""
     if not raw:
         return ""
     line = _P0_SKIP_MARKER.sub("", raw, count=1).strip()
@@ -7097,7 +7220,7 @@ def _p0_skip_reason_from_output(gate_name: str, stdout: str,
 
 
 def _p0_skip_entry(record: Dict[str, Any]) -> str:
-    """The skip-bucket payload for a SKIP or NOT_INVOCABLE record.
+    """The legacy non-pass bucket payload for one non-decisive record.
 
     Three shapes, all of them the umbrella's own words about a gate that
     produced no verdict:
@@ -7118,6 +7241,9 @@ def _p0_skip_entry(record: Dict[str, Any]) -> str:
     if record["verdict"] == "NOT_INVOCABLE":
         return _gate_invocation.format_not_invocable_entry(
             record["name"], record["message"])
+    if record["verdict"] in ("BLOCKED", "INCOMPLETE"):
+        return (f"{record['name']} ({record['verdict']}: reason_class="
+                f"{record['reason_class']}: {record['message']})")
     if (record["evidence"].get("skip_kind") == "input-missing"
             and not record["message"].strip()):
         return record["name"]
@@ -7166,7 +7292,7 @@ def _p0_buckets_from_records(
         v = r["verdict"]
         if v == "FAIL":
             fails.append(f"FAIL: {_p0_fail_line_body(r)}")
-        elif v in ("SKIP", "NOT_INVOCABLE"):
+        elif v in ("SKIP", "NOT_INVOCABLE", "BLOCKED", "INCOMPLETE"):
             skips.append(_p0_skip_entry(r))
         elif v == "WAIVED":
             waivers.append(_p0_waiver_entry(r))
@@ -7377,7 +7503,12 @@ def _p0_umbrella_status(executed: Optional[bool],
         return "FAIL"
     if executed and not records:
         return "INCOMPLETE"
-    if _p0_not_invocable_count(records):
+    nonverdict_classes = [
+        str(r.get("reason_class") or "") for r in records
+        if r.get("verdict") in _P0_NONDECISIVE_VERDICTS
+    ]
+    if (_reason_taxonomy.p0_tier_for_reason_classes(nonverdict_classes)
+            == "INCOMPLETE"):
         return "INCOMPLETE"
     return "PASS"
 
@@ -7534,7 +7665,8 @@ def _run_structural_rtl_gates(project: Path,
                 "so it was killed as hung. This is NOT a statement that the "
                 "gate was too slow",
                 {"stall_grace_s": _P0_GATE_STALL_GRACE_S,
-                 "elapsed_s": round(res.elapsed_s, 1)})
+                 "elapsed_s": round(res.elapsed_s, 1)},
+                reason_class=_reason_taxonomy.EXECUTION_ERROR)
         r = _watchdog.completed_process(argv, res)
         if r.returncode == 2:
             # #492 — rc 2 carried two unrelated meanings: "there was no input
@@ -7561,7 +7693,9 @@ def _run_structural_rtl_gates(project: Path,
                 # #497 — in the record the same fact needs no recogniser at
                 # all: the verdict field says NOT_INVOCABLE.
                 return _p0_gate_record(gate_name, "NOT_INVOCABLE", _why,
-                                       {"exit_code": 2})
+                                       {"exit_code": 2},
+                                       reason_class=(
+                                           _reason_taxonomy.EXECUTION_ERROR))
             # The gate has ALREADY said why it had nothing to check, on its
             # own stdout ("no opcode override doc found", "no ADDR-limit
             # conflict", "single-clock topology"). Recording an empty message
@@ -7579,9 +7713,12 @@ def _run_structural_rtl_gates(project: Path,
             # unchanged, only what the record is able to say about it.
             _skip_line = _p0_skip_reason_from_output(
                 gate_name, r.stdout, r.stderr)
-            return _p0_gate_record(gate_name, "SKIP", _skip_line,
-                                   {"exit_code": 2,
-                                    "skip_kind": "input-missing"})
+            _evidence = {"exit_code": 2, "skip_kind": "input-missing"}
+            _reason_class = _reason_taxonomy.infer_nonverdict_reason(
+                verdict="SKIP", message=_skip_line, evidence=_evidence)
+            return _p0_gate_record(
+                gate_name, _reason_taxonomy.record_verdict(_reason_class),
+                _skip_line, _evidence, reason_class=_reason_class)
         elif r.returncode == 1:
             _full_out = (r.stdout.strip() or r.stderr.strip())
             first_line = _full_out.split("\n")[0][:200]
@@ -7697,14 +7834,16 @@ def _run_structural_rtl_gates(project: Path,
                         f"not run")
                 _pending.append(
                     ("imm", _p0_gate_record(
-                        gate_name, "SKIP", _msg,
-                        {"skip_kind": "no-backing-program"})))
+                        gate_name, "INCOMPLETE", _msg,
+                        {"skip_kind": "no-backing-program"},
+                        reason_class=_reason_taxonomy.EXECUTION_ERROR)))
                 continue
             if gate_name in class_skips:
                 _pending.append(
                     ("imm", _p0_gate_record(
                         gate_name, "SKIP", class_skips[gate_name],
-                        {"skip_kind": "class-not-applicable"})))
+                        {"skip_kind": "class-not-applicable"},
+                        reason_class=_reason_taxonomy.DESIGN_DECLARED_NA)))
                 continue
             if gate_name in analog_skip_gates:
                 _msg = ("analog track deferred via --skip-analog "
@@ -7712,7 +7851,8 @@ def _run_structural_rtl_gates(project: Path,
                 _pending.append(
                     ("imm", _p0_gate_record(
                         gate_name, "SKIP", _msg,
-                        {"skip_kind": "analog-track-deferred"})))
+                        {"skip_kind": "analog-track-deferred"},
+                        reason_class=_reason_taxonomy.EXTERNAL)))
                 continue
             if _ex is not None:
                 _pending.append(("fut", _ex.submit(_eval_gate_worker, gate_name)))
@@ -8373,7 +8513,12 @@ def _evaluate_gate(project: Path, gate: Dict[str, Any],
                 return True, reasons
         cmd = _maybe_forward_skip_analog(project, cmd, skip_analog)
         ok, out = _check_program_exit_zero(project, cmd)
-        if ok and out.startswith(_VACUOUS_HINT_PREFIX):
+        if ok and _stdout_signals_token(out, _INCOMPLETE_STDOUT_TOKEN):
+            # Advisory findings do not block, but a gate that did not reach a
+            # verdict is still a finding, never an "ok" invocation.
+            reasons.append(f"{_ADVISORY_HINT_PREFIX}FINDING: {cmd} :: "
+                           f"{out[:200]}")
+        elif ok and out.startswith(_VACUOUS_HINT_PREFIX):
             # rc=2 is the disclosed-skip tier, NOT a clean result. Recording
             # it as "ok" would make "this project has no such input" read as
             # "this project was audited and found clean" — the exact
@@ -10615,7 +10760,18 @@ def check_step(project: Path, step: Dict[str, Any], waivers: Dict,
                             and not r.startswith(_SUBSTANTIVE_HINT_PREFIX)
                             and not r.startswith(_INCOMPLETE_HINT_PREFIX)
                             and not r.startswith(_NOT_APPLICABLE_HINT_PREFIX)]
-        if (passed and waiver_hints and not non_hint_reasons
+        if passed and incomplete_hints and not non_hint_reasons:
+            # An applicable question that was not examined outranks every
+            # benign non-pass tier beside it.  In particular, a declared N/A
+            # sibling or a waiver must not launder the incomplete clause into
+            # SKIPPED-CONDITION / WAIVED.
+            result.status = "INCOMPLETE"
+            for h in incomplete_hints:
+                result.reasons.append(
+                    f"INCOMPLETE: the gate reports its input was applicable "
+                    f"and was NOT examined: "
+                    f"{h[len(_INCOMPLETE_HINT_PREFIX):]}")
+        elif (passed and waiver_hints and not non_hint_reasons
                 and not skip_hints):
             # WAIVED here means "DEFERRED via waiver": it leaves the required
             # denominator the same way an explicit waivers.json entry does and
@@ -10673,23 +10829,6 @@ def check_step(project: Path, step: Dict[str, Any], waivers: Dict,
                 result.reasons.append(
                     f"SKIPPED-CONDITION: gate evidence self-reports a skip "
                     f"(#608/#675): {h[len(_SKIP_HINT_PREFIX):]}")
-        elif (passed and incomplete_hints and not non_hint_reasons
-                and not skip_hints):
-            # #599 D1. The input WAS applicable and was not examined — the AI
-            # sub-track of a two-track gate never delivered a reading, and the
-            # gate said so in writing while returning the token that means
-            # "nothing applies". A vacuous step is one nobody needs to come
-            # back to; this is one somebody does.
-            #
-            # AGGREGATED EXACTLY AS VACUOUS_PASS WAS, so nothing turns red on
-            # this alone. It is a naming fix, and whether an unexamined
-            # applicable input should BLOCK is a separate decision with a
-            # corpus sweep in front of it.
-            result.status = "INCOMPLETE"
-            for h in incomplete_hints:
-                result.reasons.append(
-                    f"INCOMPLETE: the gate reports its input was applicable "
-                    f"and was NOT examined: {h[len(_INCOMPLETE_HINT_PREFIX):]}")
         elif (passed and vacuous_hints and substantive_hints
                 and not non_hint_reasons and not skip_hints):
             # #599 step 14. The gate printed `VACUOUS_PASS:` because the
@@ -11699,6 +11838,10 @@ _NO_RTL_UMBRELLA_SCOPES = ("stage3", "stage4", "stage_phase1", "stage_analog",
 
 
 def main(argv: Optional[List[str]] = None) -> int:
+    # One invocation owns one denominator.  Orchestrators and tests call this
+    # entry point repeatedly in-process, so retaining prior rows would publish
+    # gates that did not run in the current audit.
+    _GATE_LEDGER.clear()
     p = argparse.ArgumentParser(description=__doc__.splitlines()[1])
     p.add_argument("project_dir", nargs="?",
                    help="Project directory to audit (omit when using "
@@ -13549,6 +13692,7 @@ def main(argv: Optional[List[str]] = None) -> int:
             # rather than folded into the design's verdict. A reader who trusts
             # `blockers` must read this first.
             "blocker_contract_violations": blocker_contract_violations,
+            "gate_execution_ledger": _gate_ledger_payload(),
             "steps": [asdict(r) for r in results],
         }
         Path(args.json).write_text(json.dumps(out, indent=2))
@@ -13818,6 +13962,7 @@ def main(argv: Optional[List[str]] = None) -> int:
             "blocker_sub_class_counts": blocker_sub_class_counts,
             "blocker_list_error": blocker_list_error,
             "blocker_contract_violations": blocker_contract_violations,
+            "gate_execution_ledger": _gate_ledger_payload(),
             "command_argv": list(sys.argv),
             # THE POPULATION, beside the tally. `design_input_digest` is what
             # the verdict was computed over; `measurement` is what computed

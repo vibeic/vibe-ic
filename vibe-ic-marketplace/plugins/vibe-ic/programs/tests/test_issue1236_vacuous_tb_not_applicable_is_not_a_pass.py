@@ -139,20 +139,15 @@ def test_the_json_channel_alone_does_not_tier_this_step(tmp_path):
     """WHY THE STDOUT SENTINEL IS NEEDED AT ALL, stated as a measurement rather
     than as an argument.
 
-    The gate's `--json` report IS read by the consumer — that is asserted here,
-    not assumed — but `check_step` promotes on that bucket only when the count
-    is unanimous across every clause in the step that dispatched a program. The
-    flow gives this step several such clauses, so a lone JSON disclosure leaves
-    the step reporting PASS. Both facts have to hold for the repair to be the
-    right one, so both are pinned.
+    The report is present, but #1978 requires a typed, declaration-derived
+    reason before NOT_APPLICABLE may enter the N/A tier. A bare verdict word is
+    deliberately fail-closed.
     """
     p = _seed(tmp_path, None)
     rc, _out = _run(p)
     assert rc == 2
-    assert _json_report_signals_vacuous(p, _CLAUSE), (
-        "the JSON channel stopped reading this gate's report; if that is "
-        "intended, the stdout sentinel is now the ONLY disclosure and this "
-        "test's premise needs rewriting rather than deleting")
+    assert not _json_report_signals_vacuous(p, _CLAUSE), (
+        "an untyped NOT_APPLICABLE report must not buy a design N/A")
 
     import yaml  # noqa: PLC0415
     flow = PROGRAMS.parent / "flow" / "phase1_phase2_phase3.yaml"

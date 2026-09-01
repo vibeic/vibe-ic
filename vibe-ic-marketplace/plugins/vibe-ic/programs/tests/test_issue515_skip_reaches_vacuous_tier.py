@@ -1,16 +1,18 @@
 #!/usr/bin/env python3
 """#515 — a gate that examined nothing must reach the VACUOUS tier.
 
-`flow_compliance_check` defines rc 0 = PASS / rc 1 = FAIL / rc 2 = VACUOUS and
-decides tier membership PURELY from the exit code, in two places:
+`flow_compliance_check` originally defined rc 0 = PASS / rc 1 = FAIL / rc 2 =
+VACUOUS. #1978 preserves rc=2 as a non-PASS signal but requires a typed cause
+before it may enter the N/A tier:
 
   * `_run_structural_rtl_gates` (:4866) — rc 2 becomes a `SKIP` gate record
     carrying `skip_kind: "input-missing"`;
   * `_check_program_exit_zero` (:2205) — rc 2 becomes the `__VACUOUS_HINT__`
     prefix that `check_step` promotes to the `VACUOUS_PASS` step status.
 
-Five gates announced a skip in their own stdout and exited 0 anyway, so they
-landed in the plain PASS tier of both consumers.
+Five gates announced a skip in their own stdout and exited 0 anyway, so #515
+moved them out of PASS. The tests now also pin #1978's second distinction:
+banner-only absence is INCOMPLETE, while a declared absence remains VACUOUS.
 
 WHY THESE TESTS DRIVE THE REAL CONSUMERS. A unit test asserting `rc == 2` in
 isolation proves the gate changed its mind, not that the tier moved. Both
@@ -111,10 +113,8 @@ def _minimal_rtl_project(tmp_path: Path) -> Path:
     return proj
 
 
-def test_p0_umbrella_records_a_skipping_gate_as_SKIP_not_PASS(tmp_path,
-                                                              monkeypatch):
-    """The tier move, through the shipped umbrella. Before #515 every one of
-    these came back `PASS` with `exit_code: 0`."""
+def test_p0_umbrella_requires_a_declared_absence_basis(tmp_path, monkeypatch):
+    """#1978: a banner-only rc-2 is incomplete, not an unearned N/A."""
     proj = _minimal_rtl_project(tmp_path)
     monkeypatch.setattr(_flow, "_STRUCTURAL_RTL_GATES", _SKIPPING_GATES)
     records: list = []
@@ -125,7 +125,8 @@ def test_p0_umbrella_records_a_skipping_gate_as_SKIP_not_PASS(tmp_path,
     assert set(by_name) == set(_SKIPPING_GATES)
     for gate in _SKIPPING_GATES:
         rec = by_name[gate]
-        assert rec["verdict"] == "SKIP", rec
+        assert rec["verdict"] == "INCOMPLETE", rec
+        assert rec["reason_class"] == "EXECUTION_ERROR", rec
         assert rec["evidence"]["exit_code"] == _vx.RC_VACUOUS, rec
         assert rec["evidence"]["skip_kind"] == "input-missing", rec
     # and the umbrella's passed-gate count no longer counts them
@@ -172,12 +173,12 @@ def _step(gate_cmd: str) -> dict:
             "gate": {"program_exit_zero": gate_cmd}}
 
 
-def test_check_step_promotes_a_skipping_gate_to_the_VACUOUS_PASS_tier(tmp_path):
+def test_check_step_routes_an_unclassified_skip_to_INCOMPLETE(tmp_path):
     proj = _minimal_rtl_project(tmp_path)
     result = _flow.check_step(
         proj, _step("break_handler_safety_check ."), waivers={})
-    assert result.status == "VACUOUS_PASS", (result.status, result.reasons)
-    assert any("VACUOUS_PASS" in r for r in result.reasons), result.reasons
+    assert result.status == "INCOMPLETE", (result.status, result.reasons)
+    assert any("INCOMPLETE" in r for r in result.reasons), result.reasons
 
 
 def test_check_step_keeps_an_examined_gate_in_the_plain_PASS_tier(tmp_path):

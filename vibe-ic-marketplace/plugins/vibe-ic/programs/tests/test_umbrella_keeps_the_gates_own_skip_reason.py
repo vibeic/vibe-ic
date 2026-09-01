@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""An input-missing SKIP must carry the reason the GATE stated.
+"""A non-decisive P0 outcome must carry the reason the gate stated.
 
 THE DEFECT
 ==========
@@ -30,11 +30,11 @@ same line.  That is the same failure mode v1.11.92 fixed inside
 ``spec_review_lint``: a skip that does not state its reason is indistinguishable
 from a pass, and hides that the check did not run.
 
-THE FIX IS DISCLOSURE ONLY.  No verdict moves: rc 2 is still a SKIP, rc 1 is
-still a FAIL, an argv rejection is still NOT_INVOCABLE, and a gate that prints
-nothing at all still renders as the bare name rather than acquiring an invented
-reason.  The tests below pin both directions — the reason now reaches the
-report, AND every gate that had something to say "no" about still says it.
+Issue #1978 makes that disclosure semantic: only a declared design absence,
+verified capability absence, or external work may remain SKIP.  An ambiguous
+missing input or a silent rc-2 is incomplete, never silently clean.  The tests
+below pin both directions — the gate's words reach the report, and an
+unclassified absence cannot acquire a benign reason.
 """
 from __future__ import annotations
 
@@ -91,44 +91,46 @@ def _one(recs, name):
 
 @pytest.mark.parametrize("gate,phrase", [
     ("l3_opcode_response_template_check", "override doc"),
-    ("doc_consistency_no_unresolved_conflicts_check", "ADDR-limit"),
 ])
-def test_input_missing_skip_record_carries_the_gates_own_words(
+def test_input_missing_record_carries_the_gates_own_words_and_is_incomplete(
         tmp_path, gate, phrase):
     """END-TO-END through the real umbrella.  Both gates self-skip on a
     project with no vendor opcode/ADDR documents, and both used to reach the
     record with `message == ""`."""
     rec = _one(_records(_project_with_rtl(tmp_path)), gate)
-    assert rec["verdict"] == "SKIP", rec
+    assert rec["verdict"] == "BLOCKED", rec
+    assert rec["reason_class"] == "BLOCKED_BY_UPSTREAM", rec
     assert rec["evidence"].get("skip_kind") == "input-missing", rec
     assert rec["message"].strip(), (
         f"{gate} stated a reason on stdout and the umbrella discarded it")
     assert phrase in rec["message"], rec
 
 
-def test_input_missing_skip_entry_names_the_reason_beside_the_gate(tmp_path):
+def test_input_missing_entry_names_the_reason_beside_the_gate(tmp_path):
     """The projected skip BUCKET — what a human actually reads — must show it
     too, not only the JSON record."""
     _p, _f, skips, _w = F._run_structural_rtl_gates(_project_with_rtl(tmp_path))
-    for gate in ("l3_opcode_response_template_check",
-                 "doc_consistency_no_unresolved_conflicts_check"):
+    for gate in ("l3_opcode_response_template_check",):
         entry = [s for s in skips if s.split(" ")[0] == gate]
         assert entry, f"{gate} produced no skip entry at all"
         assert entry[0] != gate, (
             f"{gate} reached the report as a bare name with no reason")
-        assert "(SKIP:" in entry[0], entry[0]
+        assert "(SKIP:" not in entry[0], entry[0]
+        assert "reason_class=" in entry[0], entry[0]
         # the gate's own "[SKIP] <name>:" prefix is not repeated inside
         assert "[SKIP]" not in entry[0], entry[0]
 
 
 # ── direction 2: nothing may acquire a reason it did not state ───────────────
 
-def test_a_gate_that_stated_nothing_still_renders_as_the_bare_name():
-    """The fix must not fabricate.  A record whose message is empty — a gate
-    that exited 2 in silence — keeps the historical bare-name shape."""
-    rec = F._p0_gate_record("silent_check", "SKIP", "",
-                            {"exit_code": 2, "skip_kind": "input-missing"})
-    assert F._p0_skip_entry(rec) == "silent_check"
+def test_a_gate_that_stated_nothing_is_loudly_incomplete():
+    """Silence cannot be promoted to a declaration-derived absence."""
+    rec = F._p0_gate_record(
+        "silent_check", "INCOMPLETE", "",
+        {"exit_code": 2, "skip_kind": "input-missing"})
+    assert rec["reason_class"] == "EXECUTION_ERROR"
+    assert F._p0_skip_entry(rec) == (
+        "silent_check (INCOMPLETE: reason_class=EXECUTION_ERROR: )")
 
 
 @pytest.mark.parametrize("raw,expect", [
@@ -159,6 +161,7 @@ def test_a_not_invocable_gate_is_still_not_an_input_missing_skip():
                             "argparse rejected: --rtl-dir is required",
                             {"exit_code": 2})
     entry = F._p0_skip_entry(rec)
+    assert rec["reason_class"] == "EXECUTION_ERROR"
     assert "--rtl-dir" in entry
     assert entry != "bad_argv_check"
 
@@ -211,6 +214,12 @@ def test_doc_consistency_gate_still_reports_a_real_cross_doc_conflict(
     hard = _run_gate("doc_consistency_no_unresolved_conflicts_check", tmp_path,
                      {"VIBE_IC_DOC_CONFLICT_BLOCKING": "1"})
     assert hard.returncode == 1, (hard.returncode, hard.stdout, hard.stderr)
+
+
+def test_doc_consistency_clean_completion_is_a_pass_not_a_skip(tmp_path):
+    r = _run_gate("doc_consistency_no_unresolved_conflicts_check", tmp_path)
+    assert r.returncode == 0, (r.returncode, r.stdout, r.stderr)
+    assert "[PASS]" in r.stdout
 
 
 def test_umbrella_still_records_a_failing_gate_as_a_fail(tmp_path):

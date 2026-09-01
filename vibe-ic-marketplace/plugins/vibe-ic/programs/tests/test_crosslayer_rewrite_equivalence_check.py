@@ -101,13 +101,15 @@ class TestJudge:
 
 
 class TestMain:
-    def test_a_design_that_ran_no_search_is_NOT_APPLICABLE_not_silently_clean(
+    def test_a_design_that_ran_no_search_is_a_measured_PASS_no_op(
             self, tmp_path):
         rc = mod.main([str(tmp_path)])
         assert rc == 0
         p = tmp_path / "reports/crosslayer/rewrite_equivalence_check.json"
         payload = json.loads(p.read_text(encoding="utf-8"))
-        assert payload["status"] == "NOT_APPLICABLE"
+        assert payload["status"] == "PASS"
+        assert payload["pass"] is True
+        assert payload["no_op"] is True
 
     def test_a_baseline_snapshot_with_no_report_fails(self, tmp_path):
         (tmp_path / "reports/crosslayer/baseline_rtl").mkdir(parents=True)

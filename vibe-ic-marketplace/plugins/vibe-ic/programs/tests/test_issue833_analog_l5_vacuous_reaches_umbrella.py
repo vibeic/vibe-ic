@@ -230,7 +230,8 @@ def test_umbrella_no_longer_records_an_executed_pass_for_a_vacuous_run(
     assert rec["verdict"] != "PASS", (
         f"a gate that compared nothing must not hold a PASS record. "
         f"record={rec}")
-    assert rec["verdict"] == "SKIP", rec
+    assert rec["verdict"] == "INCOMPLETE", rec
+    assert rec["reason_class"] == "ZERO_DENOMINATOR", rec
     assert rec["evidence"].get("exit_code") == _vx.RC_VACUOUS, rec
     assert rec["evidence"].get("skip_kind") == "input-missing", rec
 

@@ -135,6 +135,7 @@ from typing import Any, Dict, List, Optional, Tuple
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from _atomic_artefact import write_json  # noqa: E402  vibe-ic#1082
 import _gate_usage_exit as _usage  # noqa: E402  vibe-ic#712
+import _flow_reason_taxonomy as _reason_taxonomy  # noqa: E402
 
 # --------------------------------------------------------------------------- #
 # pad roles -- derived from the operator's OWN instance names, never assumed
@@ -686,6 +687,7 @@ def evaluate(slots: Dict[str, Dict[str, Any]], ports: List[Dict[str, Any]]
     if budget["unresolved_width_ports"]:
         return {
             "check": "slot_pad_budget", "verdict": "UNDECIDED", "rc": 2,
+            "reason_class": _reason_taxonomy.ZERO_DENOMINATOR,
             "reason": "the width of "
                       f"{len(budget['unresolved_width_ports'])} port(s) is "
                       "parameterised and no value was supplied: "
@@ -704,6 +706,7 @@ def evaluate(slots: Dict[str, Dict[str, Any]], ports: List[Dict[str, Any]]
     if best_cap <= 0:
         return {
             "check": "slot_pad_budget", "verdict": "UNDECIDED", "rc": 2,
+            "reason_class": _reason_taxonomy.ZERO_DENOMINATOR,
             "reason": "no pad instances could be counted in any slot file — "
                       "0 pads is not a slot, it is a parse that found nothing",
             "slots": per_slot,
@@ -724,6 +727,7 @@ def evaluate(slots: Dict[str, Dict[str, Any]], ports: List[Dict[str, Any]]
         if fits_min != fits_max:
             return {
                 "check": "slot_pad_budget", "verdict": "UNDECIDED", "rc": 2,
+                "reason_class": _reason_taxonomy.ZERO_DENOMINATOR,
                 "reason": f"{cond_bits} interface bit(s) are inside a "
                           "conditional-compilation block, and the verdict "
                           f"differs with them ({need}) and without them "
@@ -872,7 +876,10 @@ def main(argv: Optional[List[str]] = None) -> int:
                "0.5ic has not run" if not slots else
                f"top module '{a.top}' not found in "
                f"{rtl_files or '(no --rtl given and no RTL under ' + os.path.join(*_RTL_DIR_REL) + ')'}")
+        reason_class = (_reason_taxonomy.BLOCKED_BY_UPSTREAM if not slots
+                        else _reason_taxonomy.EXECUTION_ERROR)
         rep = {"check": "slot_pad_budget", "verdict": "UNDECIDED", "rc": 2,
+               "reason_class": reason_class,
                "reason": why,
                "note": "a question that could not be asked has not passed"}
         rc = 2

@@ -39,10 +39,23 @@ def _cmd(p: Path) -> str:
     "NOT_APPLICABLE", "SKIPPED", "VACUOUS", "NO_BUILD", "NOT_RUN",
     "not_applicable",           # case must not decide it
 ])
-def test_a_gate_that_declares_it_examined_nothing_is_read_as_vacuous(
+def test_an_untyped_nonverdict_is_not_read_as_design_na(
         tmp_path, verdict):
     p = tmp_path / "g.json"
     p.write_text(json.dumps({"gate": "g", "verdict": verdict}))
+    assert F._json_report_declares_nonverdict(
+        F._command_json_report(tmp_path, _cmd(p))) is True
+    assert F._json_report_signals_vacuous(tmp_path, _cmd(p)) is False
+
+
+@pytest.mark.parametrize("reason_class", [
+    "DESIGN_DECLARED_NA", "CAPABILITY_ABSENT", "EXTERNAL",
+])
+def test_typed_skip_eligible_nonverdict_is_read_as_vacuous(
+        tmp_path, reason_class):
+    p = tmp_path / "g.json"
+    p.write_text(json.dumps({"verdict": "NOT_APPLICABLE",
+                             "reason_class": reason_class}))
     assert F._json_report_signals_vacuous(tmp_path, _cmd(p)) is True
 
 
@@ -59,7 +72,9 @@ def test_a_substantive_verdict_is_not_read_as_vacuous(tmp_path, verdict):
 def test_status_is_honoured_as_well_as_verdict(tmp_path):
     p = tmp_path / "g.json"
     p.write_text(json.dumps({"status": "NOT_APPLICABLE"}))
-    assert F._json_report_signals_vacuous(tmp_path, _cmd(p)) is True
+    assert F._json_report_declares_nonverdict(
+        F._command_json_report(tmp_path, _cmd(p))) is True
+    assert F._json_report_signals_vacuous(tmp_path, _cmd(p)) is False
 
 
 @pytest.mark.parametrize("body", ["", "{not json", "[]", "null"])
@@ -81,8 +96,9 @@ def test_a_relative_json_path_resolves_against_the_project(tmp_path):
     (tmp_path / "reports").mkdir()
     (tmp_path / "reports" / "g.json").write_text(
         json.dumps({"verdict": "SKIPPED"}))
-    assert F._json_report_signals_vacuous(
-        tmp_path, "python3 g.py . --json reports/g.json") is True
+    cmd = "python3 g.py . --json reports/g.json"
+    assert F._command_json_report(tmp_path, cmd)["verdict"] == "SKIPPED"
+    assert F._json_report_signals_vacuous(tmp_path, cmd) is False
 
 
 # --------------------------------------------------------------- #900
