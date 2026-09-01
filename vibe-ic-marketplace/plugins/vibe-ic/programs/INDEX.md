@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 1245
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1245)
+- **Total programs (excluding helpers / shims):** 1248
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1248)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 1236 |
+| `any` | 1239 |
 
 ## Alphabetical listing
 
@@ -221,6 +221,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `compose_synth` | any | — | a CVDP DECOMPOSE -> SOLVE-EACH -> COMPOSE engine. |
 | `connect_vs_send_test_parity_check` | any | Wave 27 | Wave 27 (v0.119.59) gate. |
 | `constants_validation` | any | — | Deterministic compliance check for rtl-constants-gen. |
+| `constraint_prose_tokens` | any | — | the ONE reader for constraint declarations that a design states in PROSE rather than in a machine-readable deck. |
 | `container_exec_deadline_check` | any | — | A `docker exec` whose deadline bounds the CLIENT and not the tool. |
 | `container_image_provenance` | any | — | record, and on request enforce, which IMAGE the run's `--container` actually executes. |
 | `container_login_banner_parse_check` | any | — | A login shell in the container prints two lines before the tool does. |
@@ -580,6 +581,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `l16_compliance_properties_actionable_check` | any | — | SEMANTIC gate for L16. |
 | `l17_channel_catalog_consumer_contract_check` | any | — | SEMANTIC gate for L17. |
 | `l18_interconnect_topology_factuality_check` | any | — | SEMANTIC gate for L18. |
+| `l19_constraint_token_emit` | any | — | lift the constraints a design states in its OWN PROSE into L19, the layer that carries them. |
 | `l19_pdk_floorplan_contract_check` | any | — | L19 SEMANTIC completeness gate. |
 | `l1_electrical_specs_typed_depth_check` | any | Wave 38 | Audit-driven typed sub-field depth gate. Closes the residual ~70 |
 | `l1_pin_bus_width_actionable_check` | any | — | VERDICT SEMANTICS: **BLOCKS** (exit 1 on FAIL). |
@@ -615,6 +617,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `l7_debug_access_grounding_check` | any | — | L7 SEMANTIC gate (ADVISORY). |
 | `l8_clock_domains_typed_check` | any | Wave 38 | Audit-driven typed sub-field depth gate. Multi-clock designs need |
 | `l8_clock_period_actionability_check` | any | — | L8 SEMANTIC consumer-contract gate. |
+| `l8_clock_reset_waveform_emit` | any | — | Project typed clock/reset facts into L8's release-document consumer field. |
 | `l8_doc_clock_freq_synth` | any | — | bind a clock frequency the design STATES in a document table to the L8 clock records the SAME ROW names. |
 | `l8_frame_end_gap_derivation_check` | any | — | LL-3. |
 | `l8_sta_clock_period_design_owned_check` | any | — | L8 SEMANTIC completeness gate. |
@@ -1317,7 +1320,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (1236 programs)
+### `any` (1239 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `absence_verdict_names_its_search_space_check` — "not found" must say WHERE it looked.
@@ -1512,6 +1515,7 @@ _(no programs in this group)_
 - `compose_synth` — a CVDP DECOMPOSE -> SOLVE-EACH -> COMPOSE engine.
 - `connect_vs_send_test_parity_check` — Wave 27 (v0.119.59) gate.  _[Wave 27]_
 - `constants_validation` — Deterministic compliance check for rtl-constants-gen.
+- `constraint_prose_tokens` — the ONE reader for constraint declarations that a design states in PROSE rather than in a machine-readable deck.
 - `container_exec_deadline_check` — A `docker exec` whose deadline bounds the CLIENT and not the tool.
 - `container_image_provenance` — record, and on request enforce, which IMAGE the run's `--container` actually executes.
 - `container_login_banner_parse_check` — A login shell in the container prints two lines before the tool does.
@@ -1869,6 +1873,7 @@ _(no programs in this group)_
 - `l16_compliance_properties_actionable_check` — SEMANTIC gate for L16.
 - `l17_channel_catalog_consumer_contract_check` — SEMANTIC gate for L17.
 - `l18_interconnect_topology_factuality_check` — SEMANTIC gate for L18.
+- `l19_constraint_token_emit` — lift the constraints a design states in its OWN PROSE into L19, the layer that carries them.
 - `l19_pdk_floorplan_contract_check` — L19 SEMANTIC completeness gate.
 - `l1_electrical_specs_typed_depth_check` — Audit-driven typed sub-field depth gate. Closes the residual ~70  _[Wave 38]_
 - `l1_pin_bus_width_actionable_check` — VERDICT SEMANTICS: **BLOCKS** (exit 1 on FAIL).
@@ -1903,6 +1908,7 @@ _(no programs in this group)_
 - `l7_debug_access_grounding_check` — L7 SEMANTIC gate (ADVISORY).
 - `l8_clock_domains_typed_check` — Audit-driven typed sub-field depth gate. Multi-clock designs need  _[Wave 38]_
 - `l8_clock_period_actionability_check` — L8 SEMANTIC consumer-contract gate.
+- `l8_clock_reset_waveform_emit` — Project typed clock/reset facts into L8's release-document consumer field.
 - `l8_doc_clock_freq_synth` — bind a clock frequency the design STATES in a document table to the L8 clock records the SAME ROW names.
 - `l8_frame_end_gap_derivation_check` — LL-3.
 - `l8_sta_clock_period_design_owned_check` — L8 SEMANTIC completeness gate.

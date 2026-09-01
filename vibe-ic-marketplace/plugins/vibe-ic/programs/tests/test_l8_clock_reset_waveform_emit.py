@@ -14,6 +14,7 @@ _PROGRAMS = _HERE.parent
 sys.path.insert(0, str(_PROGRAMS))
 
 import l8_clock_reset_waveform_emit as EMIT  # noqa: E402
+import _atomic_artefact as A  # noqa: E402
 import phase1_doc_one_shot_runner as RUNNER  # noqa: E402
 
 HELPER = "_post_emit_l8_clock_reset_waveform"
@@ -107,6 +108,30 @@ def test_unreadable_layer_is_error_not_successful_zero(tmp_path):
     with pytest.raises(RuntimeError, match="unreadable"):
         getattr(RUNNER, HELPER)(tmp_path)
     assert EMIT.main([str(tmp_path)]) == 1
+
+
+def test_cli_report_appears_only_after_an_atomic_write(tmp_path, monkeypatch):
+    """The report writer still runs, and an interrupted first write is absent."""
+    existing = {"clock": "rising edge", "reset": "active high"}
+    _write(tmp_path, existing=existing)
+    complete = tmp_path / "reports" / "complete.json"
+    assert EMIT.main([str(tmp_path), "--json", str(complete)]) == 0
+    assert json.loads(complete.read_text(encoding="utf-8"))["tool"] == EMIT.TOOL
+
+    def die(*_args, **_kwargs):
+        raise OSError("simulated interruption before atomic rename")
+
+    doomed = tmp_path / "reports" / "doomed.json"
+    monkeypatch.setattr(A.os, "fsync", die)
+    try:
+        rc = EMIT.main([str(tmp_path), "--json", str(doomed)])
+    except OSError as exc:
+        outcome = ("raised", str(exc))
+    else:
+        outcome = ("returned", rc)
+    assert outcome[0] == "raised", outcome
+    assert not doomed.exists()
+    assert not A.temp_name_for(doomed).exists()
 
 
 def test_runner_calls_projection_after_protocol_overlay():

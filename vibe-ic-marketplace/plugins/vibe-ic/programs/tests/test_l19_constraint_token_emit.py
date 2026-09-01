@@ -46,6 +46,7 @@ if str(_PROGRAMS) not in sys.path:
 _RUNNER_SRC = _PROGRAMS / "phase1_doc_one_shot_runner.py"
 
 import constraint_prose_tokens as CPT           # noqa: E402
+import _atomic_artefact as A                     # noqa: E402
 import l19_constraint_token_emit as EMIT        # noqa: E402
 import phase1_doc_one_shot_runner as R          # noqa: E402
 
@@ -97,6 +98,17 @@ The `UNBOUND_SETTING_KEY` is discussed in the integration guide.
 _DOC_NO_CONSTRAINTS = """# L9 — Constraints
 
 Constraints are deferred to the integration owner; this block states none.
+"""
+
+_DOC_DENIED_CONSTRAINTS = """# L9 — Constraints
+
+## Floorplan
+
+No `CORE_UTIL_TARGET = 45%` is specified.
+
+## Timing
+
+Do not use `create_clock` for this interface.
 """
 
 _L19_SKELETON = {
@@ -298,6 +310,15 @@ def test_a_design_that_states_no_constraint_gets_nothing(tmp_path):
         "the presence flag was set True with no evidence behind it")
 
 
+def test_denied_setting_and_directive_do_not_become_declarations(tmp_path):
+    """Both scanner record classes carry prose whose polarity is load-bearing."""
+    _mk(tmp_path, _DOC_DENIED_CONSTRAINTS)
+    assert getattr(R, HELPER)(tmp_path) == 0
+    doc = _l19(tmp_path)
+    assert not doc["fields"].get("constraint_declarations"), doc
+    assert doc["fields"].get("constraints_present") in (None, False)
+
+
 def test_missing_l19_degrades_with_a_named_skip(tmp_path, capsys):
     _mk(tmp_path, _DOC, with_l19=False)
     assert getattr(R, HELPER)(tmp_path) == 0
@@ -311,6 +332,29 @@ def test_unreadable_l19_degrades_loudly_not_as_zero(tmp_path):
     with pytest.raises(RuntimeError, match="unreadable"):
         getattr(R, HELPER)(tmp_path)
     assert EMIT.main([str(tmp_path)]) == 1
+
+
+def test_cli_report_appears_only_after_an_atomic_write(tmp_path, monkeypatch):
+    """The report writer still runs, and an interrupted first write is absent."""
+    _mk(tmp_path, _DOC_NO_CONSTRAINTS)
+    complete = tmp_path / "reports" / "complete.json"
+    assert EMIT.main([str(tmp_path), "--json", str(complete)]) == 0
+    assert json.loads(complete.read_text(encoding="utf-8"))["tool"] == EMIT.TOOL
+
+    def die(*_args, **_kwargs):
+        raise OSError("simulated interruption before atomic rename")
+
+    doomed = tmp_path / "reports" / "doomed.json"
+    monkeypatch.setattr(A.os, "fsync", die)
+    try:
+        rc = EMIT.main([str(tmp_path), "--json", str(doomed)])
+    except OSError as exc:
+        outcome = ("raised", str(exc))
+    else:
+        outcome = ("returned", rc)
+    assert outcome[0] == "raised", outcome
+    assert not doomed.exists()
+    assert not A.temp_name_for(doomed).exists()
 
 
 def test_rerun_is_idempotent(tmp_path):

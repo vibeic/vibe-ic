@@ -37,6 +37,7 @@ _HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(_HERE))
 
 import l_doc_generator_stamp as _stamp  # noqa: E402
+import _atomic_artefact as _aa  # noqa: E402
 
 TOOL = "l8_clock_reset_waveform_emit"
 L8_REL = "phase1/generated_docs/L8_TIMING_WAVEFORM.json"
@@ -189,10 +190,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         return 2
     report = run(args.project_dir.resolve())
     if args.json:
-        out = Path(args.json)
-        out.parent.mkdir(parents=True, exist_ok=True)
-        out.write_text(json.dumps(report, indent=2, ensure_ascii=False) + "\n",
-                       encoding="utf-8")
+        _aa.write_json(args.json, report)
     print(f"{TOOL}: {report['status']} — "
           f"{report.get('reason') or report.get('emitted_count')}")
     return 1 if report["status"] == "ERROR" else 0

@@ -130,6 +130,8 @@ from l_doc_consumer_contract import (  # noqa: E402
     project_relative_source,
 )
 import constraint_prose_tokens as _cpt  # noqa: E402
+import _prose_polarity as _polarity  # noqa: E402
+import _atomic_artefact as _aa  # noqa: E402
 # The L-document write chokepoint — records the producing release.
 import l_doc_generator_stamp as _stamp  # noqa: E402
 
@@ -229,6 +231,8 @@ def collect(project: Path) -> List[Dict[str, Any]]:
         out.append(rec)
 
     for s in scan["settings"]:
+        if _polarity.is_denied(str(s.get("evidence") or "")):
+            continue      # a denied binding is evidence of absence, not a value
         anchor = _domain_anchored(str(s.get("section") or ""),
                                   titles.get(s["source"], ""))
         if anchor is None:
@@ -250,6 +254,8 @@ def collect(project: Path) -> List[Dict[str, Any]]:
             rec["source_outside_project"] = True
         add(rec)
     for d in scan["directives"]:
+        if _polarity.is_denied(str(d.get("evidence") or "")):
+            continue      # a denied directive must not become an L19 mandate
         src, outside = project_relative_source(d["source"], project)
         rec = {
             "kind": "sdc_directive",
@@ -350,10 +356,7 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     rep = run(project, dry_run=args.dry_run)
     if args.json:
-        out = Path(args.json)
-        out.parent.mkdir(parents=True, exist_ok=True)
-        out.write_text(json.dumps(rep, indent=2, ensure_ascii=False) + "\n",
-                       encoding="utf-8")
+        _aa.write_json(args.json, rep)
 
     n = rep.get("emitted_count", 0)
     if rep.get("status") != "OK":
