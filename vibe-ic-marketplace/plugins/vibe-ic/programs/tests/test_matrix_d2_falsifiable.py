@@ -503,6 +503,31 @@ def _f_analog_p3(p: Path) -> None:
     _analog_partial(p, "phase3/analog")
 
 
+def _f_analog_p3_macro_rtl(p: Path) -> None:
+    """ANALOG_P3 plus the one disagreement `analog_macro_rtl_interface_check`
+    exists to name: the packaged macro carries supply rails the digital top
+    never connects.
+
+    vibe-ic#2010 items 1-2 wired that checker into A8 (it shipped run by
+    nothing but its own test). ANALOG_P3 cannot redden it: the fixture stages
+    `topology.md`, no `topology.json` and no hardmacro LEF, so there is no
+    port list on the macro side, and no RTL at all, so there is no module on
+    the digital side — the gate answers VACUOUS (rc 2), a disclosed skip and
+    not a falsification. Both sides have to EXIST and DISAGREE. Here the
+    block's own topology declares `vdd`/`vss` as rails and the digital RTL
+    instantiates a `bandgap` with `out` only — the measured campaign shape
+    (both RTL blackboxes declared no ground while the macro's LEF carried
+    `vss` as a PG pin), and the one case the checker's docstring calls
+    "a macro that will float in silicon"."""
+    _analog_partial(p, "phase3/analog")
+    _w(p, "phase3/analog/bandgap/topology.json",
+       {"ports": ["vdd", "vss", "out"], "rails": {"p": "vdd", "n": "vss"}})
+    _w(p, "phase2/stage1/rtl/chip_top.v",
+       "module bandgap (out);\n  output out;\nendmodule\n"
+       "module chip_top (vref);\n  output vref;\n"
+       "  bandgap u_bg (.out(vref));\nendmodule\n")
+
+
 def _f_a0_skipped(p: Path) -> None:
     """The forbidden artefact, encoding the forbidden verdict.
 
@@ -1963,6 +1988,7 @@ FIXTURES: Dict[str, Callable[[Path], None]] = {
     "EMPTY": _f_empty,
     "RTL_BAD": _f_rtl_bad,
     "ANALOG_P3": _f_analog_p3,
+    "ANALOG_P3_MACRO_RTL": _f_analog_p3_macro_rtl,
     "A0_SKIPPED": _f_a0_skipped,
     "LDOC_TODO": _f_ldoc_todo,
     "SIGNOFF_UNVERIFIABLE": _f_signoff_unverifiable,
@@ -2311,6 +2337,9 @@ CLAUSE_FIXTURE: Dict[Tuple[str, str], str] = {
            "reports/phase2/gates/hardmacro.json"): "ANALOG_P3",
     ("A8", "analog_lef_gds_outline_check . --json "
            "reports/phase2/gates/a8_lef_gds_outline.json"): "ANALOG_P3",
+    ("A8", "analog_macro_rtl_interface_check . --json "
+           "reports/phase2/gates/a8_macro_rtl_interface.json"):
+        "ANALOG_P3_MACRO_RTL",
     ("A9", "mixed_signal_cosim_check . --json reports/phase2/gates/cosim.json"):
         "ANALOG_P3",
     ("A9", "analog_a9_hw_verify_check . --json "

@@ -41,7 +41,9 @@ from pathlib import Path
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 from pdk_via_patch_legalize import legalize_via_patches  # noqa: E402
+from _hostpaths import corpus_path  # noqa: E402
 
 _PROGRAMS = Path(__file__).resolve().parent.parent
 
@@ -249,12 +251,20 @@ def test_the_basis_and_both_currents_are_recorded(tmp_path):
 
 
 # ── real artefacts (skipped when the PDK is not staged) ────────────────────
-_REAL_TLEF = Path("/home/reyerchu/_ksubs6/evidence/via_legalize/nom.tlef")
-_REAL_CELLS = Path("/home/reyerchu/_ksubs6/evidence/via_legalize/cells.lef")
+# The staged pair is an EXTERNAL corpus (class b in `_hostpaths`): it lives
+# outside the repo, so it is resolved through `$VIBEIC_CORPUS_ROOT` and never
+# through a personal home path (vibe-ic#2010 item 7 — `shipped_path_
+# portability_check` R1). Stage the two files as
+# `$VIBEIC_CORPUS_ROOT/evidence/via_legalize/{nom.tlef,cells.lef}`.
+_REAL_EVIDENCE = corpus_path("evidence", "via_legalize")
+_REAL_TLEF = _REAL_EVIDENCE / "nom.tlef"
+_REAL_CELLS = _REAL_EVIDENCE / "cells.lef"
 
 
 @pytest.mark.skipif(not (_REAL_TLEF.is_file() and _REAL_CELLS.is_file()),
-                    reason="staged PDK LEFs not present on this host")
+                    reason=("staged PDK LEFs not present: set $VIBEIC_CORPUS_ROOT "
+                            "to a corpus carrying evidence/via_legalize/"
+                            "{nom.tlef,cells.lef}"))
 def test_on_the_real_pdk_the_guard_costs_no_fixed_violation():
     """REAL ARTEFACT: withholding the pin layer must not resurrect a
     violation — the offenders live on the layers ABOVE it."""

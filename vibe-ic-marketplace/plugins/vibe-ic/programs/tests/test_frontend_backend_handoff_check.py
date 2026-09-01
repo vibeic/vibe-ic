@@ -162,3 +162,28 @@ def test_dft_evidence_present_suppresses_the_advisory(tmp_path):
     rpt = _load_report(tmp_path)
     assert not any(f["rule"] == "NO_DFT_EVIDENCE" for f in rpt["findings"])
     assert r.returncode == 0, r.stdout + r.stderr
+
+
+def test_a_module_quoted_in_a_comment_is_not_a_defined_cell():
+    """vibe-ic#2010 item 3 (declaration scans strip comments). `netlist_cell_
+    kinds` excludes any type DEFINED in the same file from the technology set
+    (the design's own hierarchy). Its `module` scan is line-anchored and ran
+    over the RAW text, so a block comment quoting a retired module put that
+    name in `defined`, and an instantiated technology cell of the same name
+    stopped counting as one. MEASURED against v1.15.49: `ghost_cell` absent
+    from the technology set below."""
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+    import frontend_backend_handoff_check as F
+    text = ("/* the old\n"
+            "module ghost_cell was retired */\n"
+            "module top (a);\n"
+            "  input a;\n"
+            "  ghost_cell u0 (.A(a));\n"
+            "  real_cell u1 (.A(a));\n"
+            "endmodule\n")
+    tech, generic = F.netlist_cell_kinds(text)
+    assert "ghost_cell" in tech and "real_cell" in tech
+    # a module genuinely defined in the file is still the design's own
+    text2 = "module own (a);\nendmodule\nmodule top (a);\n  own u0 (.a(a));\nendmodule\n"
+    tech2, _ = F.netlist_cell_kinds(text2)
+    assert "own" not in tech2

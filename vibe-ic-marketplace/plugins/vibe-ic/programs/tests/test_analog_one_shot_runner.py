@@ -181,3 +181,95 @@ def test_edge_blocks_filter(tmp_path):
     assert body["blocks"] == ["tst_ldo"]
     # 9 steps × 1 selected block (A1-A9 canonical).
     assert len(body["steps"]) == 9
+
+
+# ---------------------------------------------------------------------------
+# vibe-ic#2010 items 1-2 — the macro/RTL interface check is ENFORCED at A8:
+# invoked inline, per block, and its rc 1 is the block's A8 FAIL.
+# ---------------------------------------------------------------------------
+
+def _drive_a8(tmp_path, monkeypatch, iface_rc, iface_out):
+    """Run A8 for one block with the two spawn channels stubbed: the
+    `subprocess` module (the fail-open producers) and `_progress_run.run`
+    (the gates). Returns (StepResult, argv list handed to `_pr.run`)."""
+    import subprocess as _sp
+    import analog_one_shot_runner as AOSR
+
+    class _Quiet:
+        def run(self, argv, **kw):
+            return _sp.CompletedProcess(argv, 0, "", "")
+
+        def __getattr__(self, name):
+            return getattr(_sp, name)
+
+    monkeypatch.setattr(AOSR, "subprocess", _Quiet())
+    seen = []
+
+    class _Gates:
+        @staticmethod
+        def run(argv, **kw):
+            seen.append([str(a) for a in argv])
+            prog = Path(argv[1]).name
+            if prog == "analog_macro_rtl_interface_check.py":
+                return _sp.CompletedProcess(argv, iface_rc, iface_out, "")
+            return _sp.CompletedProcess(argv, 0, "PASS: stubbed gate\n", "")
+
+    monkeypatch.setattr(AOSR, "_pr", _Gates())
+    proj = tmp_path / "proj"
+    (proj / "phase3" / "analog").mkdir(parents=True, exist_ok=True)
+    r = AOSR.step_for_block(proj, {"name": "bandgap"}, "A8_hardmacro_gen", None)
+    return r, seen
+
+
+def test_a8_fails_the_block_when_the_macro_and_rtl_interfaces_disagree(
+        tmp_path, monkeypatch):
+    r, seen = _drive_a8(tmp_path, monkeypatch, 1,
+                        "  [bandgap] MACRO_RTL_INTERFACE_DISAGREES\n"
+                        "FAIL: 1/1 block(s) disagree\n")
+    assert r.status == "FAIL", r
+    assert "interface disagrees" in r.detail and "1/1" in r.detail
+    assert r.extras["macro_rtl_interface_rc"] == 1
+    iface = [c for c in seen
+             if Path(c[1]).name == "analog_macro_rtl_interface_check.py"]
+    assert len(iface) == 1, seen
+    argv = iface[0]
+    assert "--block" in argv and "bandgap" in argv and "--json" in argv, argv
+    assert str(tmp_path / "proj") in argv
+
+
+def test_a8_stands_on_the_gates_pass_when_the_interfaces_agree_or_cannot_compare(
+        tmp_path, monkeypatch):
+    r, _ = _drive_a8(tmp_path, monkeypatch, 0, "PASS: 1/1 block(s) agree\n")
+    assert r.status == "PASS", r
+    # rc 2 — no comparable pair yet — is a disclosed skip, not a FAIL
+    r2, _ = _drive_a8(tmp_path, monkeypatch, 2, "VACUOUS: nothing could be compared\n")
+    assert r2.status == "PASS", r2
+
+
+def test_the_interface_check_runs_at_a8_and_only_there(tmp_path, monkeypatch):
+    import subprocess as _sp
+    import analog_one_shot_runner as AOSR
+
+    class _Quiet:
+        def run(self, argv, **kw):
+            return _sp.CompletedProcess(argv, 0, "", "")
+
+        def __getattr__(self, name):
+            return getattr(_sp, name)
+
+    monkeypatch.setattr(AOSR, "subprocess", _Quiet())
+    seen = []
+
+    class _Gates:
+        @staticmethod
+        def run(argv, **kw):
+            seen.append(Path(argv[1]).name)
+            return _sp.CompletedProcess(argv, 0, "PASS: stubbed\n", "")
+
+    monkeypatch.setattr(AOSR, "_pr", _Gates())
+    proj = tmp_path / "proj"
+    (proj / "phase3" / "analog").mkdir(parents=True)
+    for step in ("A5_layout", "A7_post_layout_resim", "A9_hw_verify"):
+        seen.clear()
+        AOSR.step_for_block(proj, {"name": "b"}, step, None)
+        assert "analog_macro_rtl_interface_check.py" not in seen, (step, seen)

@@ -697,3 +697,23 @@ def test_the_gate_is_GREEN_on_the_tree_that_ships():
         capture_output=True, text=True)
     assert r.returncode == 0, r.stdout + r.stderr
     assert "[PASS]" in r.stdout
+
+
+# ---------------------------------------------------------------------------
+# vibe-ic#2010 item 6 — the two tech-LEF readers in pdk_via_patch_legalize are
+# NOT PROSE. Both fences: the scan still FLAGS them (so the entries are live
+# findings, not padding), and the audit accepts the exemption.
+# ---------------------------------------------------------------------------
+def test_the_via_legalizer_lef_readers_are_flagged_and_exempted_as_formal_grammar(tmp_path):
+    root = _tree(tmp_path, "")
+    src = PROGRAMS / "pdk_via_patch_legalize.py"
+    (root / "programs" / "pdk_via_patch_legalize.py").write_text(src.read_text())
+    names = {"pdk_via_patch_legalize::_routing_rules",
+             "pdk_via_patch_legalize::_legalize_generate_rules"}
+    flagged = set(G.scan(root))
+    assert names <= flagged, flagged            # still findings by shape
+    assert names <= set(G.exemptions_in_scope(root))
+    assert G.exemption_audit(sorted(flagged), root) == []
+    for n in names:
+        assert len(G._NOT_PROSE[n]) >= G._EXEMPT_REASON_MIN
+        assert "LEF" in G._NOT_PROSE[n]        # the argument names the grammar

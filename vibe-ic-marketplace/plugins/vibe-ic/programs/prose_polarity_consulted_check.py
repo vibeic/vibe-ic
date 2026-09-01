@@ -118,6 +118,43 @@ _SEARCH_ATTRS = {"search", "findall", "finditer", "match", "fullmatch"}
 #: The count is printed on every run, clean or not.
 _EXEMPT_REASON_MIN = 80
 _NOT_PROSE: Dict[str, str] = {
+    "pdk_via_patch_legalize::_routing_rules":
+        "Technology-LEF `LAYER <name> ... TYPE ROUTING ; MINWIDTH <n> ; WIDTH "
+        "<n> ; AREA <n> ; END <name>` productions, read out of the PDK's own "
+        "tech LEF to learn each routing layer's width and area floors before a "
+        "via patch is legalised. These are formal foundry grammar written by "
+        "the PDK packaging, in which there is no form that DENIES a rule: LEF "
+        "gives no way to write 'MINWIDTH is NOT 0.14'. A rule is present in the "
+        "layer body or it is absent, and absence is already how this function "
+        "reports it (the layer simply does not enter the returned map; a layer "
+        "that is not TYPE ROUTING is skipped by name). The direct precedents "
+        "are `digital_hardmacro_gen::discover_stdcell_rails` (LEF MACRO/SIZE/"
+        "PIN/LAYER/RECT) and `phase3_one_shot_runner::_pdn_em_width_floor` "
+        "(LEF MANUFACTURINGGRID), the same file format exempted for the same "
+        "stated reason. The two defects this gate was built from (#706 "
+        "pdk_target, #711 die_area_budget_um) both read English design "
+        "documents, where denial is spellable and was spelled; consulting "
+        "`_prose_polarity` on a tech-LEF layer body would add a branch that "
+        "can never fire. Flagged by the v1.15.43/46 landings (vibe-ic#2010 "
+        "item 6) and recorded here rather than papered over with a dead call.",
+    "pdk_via_patch_legalize::_legalize_generate_rules":
+        "Technology-LEF `VIARULE <name> GENERATE ... LAYER <l> ; RECT ... ; "
+        "ENCLOSURE <x> <y> ; END <name>` productions: the generated-via rules "
+        "whose routing-layer enclosures this function grows to the layer's "
+        "width/area floors. The matched text is formal foundry grammar written "
+        "by the PDK packaging, in which there is no form that DENIES an "
+        "enclosure or a cut rectangle: LEF gives no way to write 'ENCLOSURE is "
+        "NOT 0.06 0.06'. An unresolvable rule (no single cut layer, or an "
+        "unterminated VIARULE) is already DISCLOSED by name in the returned "
+        "`unresolved` list and left byte-identical, so a rule this reader could "
+        "not read is never rewritten. Same class as `_routing_rules` above and "
+        "as `macro_obs_geometry_intersect_check::parse_via_layers` (DEF VIAS "
+        "LAYERS), exempted for the same stated reason. The two defects this "
+        "gate was built from (#706 pdk_target, #711 die_area_budget_um) both "
+        "read English design documents, where denial is spellable and was "
+        "spelled; consulting `_prose_polarity` on a VIARULE body would add a "
+        "branch that can never fire. Flagged by the v1.15.43/46 landings "
+        "(vibe-ic#2010 item 6).",
     "_ic_release_artefacts::_def_class":
         "Routed DEF UNITS, DIEAREA and COMPONENTS productions. DEF has no syntax "
         "for denying one of these declarations; the value is present in the "

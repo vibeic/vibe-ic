@@ -104,3 +104,18 @@ def test_the_port_only_script_keeps_ports_and_only_in_the_top_cell():
     assert "if c.name not in tops" in src
     assert "continue" in src
     assert "s.text.string in want" in src
+
+
+def test_main_writes_the_prepared_deck_atomically(tmp_path: Path):
+    """vibe-ic#2010 item 4 (declared reports are written atomically). The
+    prepared deck is the comparison INPUT of the LVS run that follows, so it
+    goes through `_atomic_artefact`: a reader sees the whole deck or none."""
+    import _atomic_artefact as _aa
+    src = tmp_path / "blk.sp"
+    src.write_text(NETLIST)
+    out = tmp_path / "prep" / "blk_lvs.sp"
+    out.parent.mkdir()
+    assert P.main([str(src), "--block", "blk", "--out", str(out)]) == 0
+    text = out.read_text()
+    assert "l=115.38u" in text and ".lib" not in text
+    assert not [f for f in out.parent.iterdir() if _aa.is_temp_artefact(f)]

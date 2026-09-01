@@ -793,6 +793,39 @@ def step_for_block(project: Path, block: Dict[str, Any], step_name: str,
             if "VACUOUS_PASS" in cp.stdout:
                 return StepResult(step_name, bname, "VACUOUS_PASS",
                                   time.time() - t0, stdout_tail)
+            if step_name == "A8_hardmacro_gen":
+                # THE DIGITAL SIDE OF THE MACRO'S INTERFACE (vibe-ic#2010,
+                # items 1-2). The A8 gate above certifies the LEF/LIB/V triple
+                # on the ANALOG side; `analog_macro_rtl_interface_check`
+                # compares the packaged macro's pins against the module the
+                # digital RTL/netlist actually INSTANTIATES, in both
+                # directions. It shipped (v1.15.49) run by nothing but its own
+                # test. It is a clause of the A8 gate in the flow definition,
+                # and it is ALSO run here, inline, so its verdict can stop the
+                # step — `flow_gate_enforcement_audit` counts a gate that only
+                # the acceptance audit reads as AUDIT_ONLY. rc 1 (a named
+                # disagreement — a supply pin the digital top never connects
+                # floats in silicon) is the block's A8 FAIL; rc 2 (no
+                # comparable pair yet) leaves the gate's own PASS standing.
+                # The report lands in the block's own directory, beside the
+                # artefacts it read.
+                iface = PROGRAMS_DIR / "analog_macro_rtl_interface_check.py"
+                icp = _pr.run(
+                    [sys.executable, str(iface), str(project),
+                     "--block", bname,
+                     "--json", str(out_dir / "a8_macro_rtl_interface.json")],
+                    capture_output=True, text=True)
+                if icp.returncode == 1:
+                    itail = (icp.stdout.strip().splitlines()[-1]
+                             if icp.stdout else "macro/RTL interface disagrees")
+                    return StepResult(
+                        step_name, bname, "FAIL", time.time() - t0,
+                        f"macro/RTL interface disagrees: {itail}",
+                        output_files=_step_outputs(project, bname, step_name),
+                        extras={"macro_rtl_interface_rc": icp.returncode,
+                                "macro_rtl_interface_report":
+                                    str(out_dir / "a8_macro_rtl_interface.json"),
+                                **_content_extras(project, bname, step_name)})
             # THE SECOND SENTINEL, read exactly like the first. A gate that
             # PASSED can still be saying that the artefact it certified came
             # from a library default, and until this branch existed the runner

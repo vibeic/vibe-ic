@@ -2,6 +2,12 @@
 """analog_macro_rtl_interface_check.py — the digital side of an analog macro's
 interface, which nothing compared.
 
+ENFORCEMENT: blocking
+    A8 gate clause in `flow/phase1_phase2_phase3.yaml` (the acceptance audit)
+    AND invoked inline by `analog_one_shot_runner.step_for_block` at
+    A8_hardmacro_gen, where rc 1 turns the block's A8 step into FAIL
+    (vibe-ic#2010 items 1-2: it shipped run by nothing but its own test).
+
 WHY THIS EXISTS, MEASURED. `analog_hardmacro_pinname_consistency_check` asserts
 LEF == macro `.v` == `spec.json` — all three on the ANALOG side, and it passes.
 Nothing compares those pins against the module the DIGITAL netlist actually
@@ -50,6 +56,12 @@ from typing import Dict, List, Optional, Set, Tuple
 PROGRAMS_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(PROGRAMS_DIR))
 
+import _hdl_code_text  # noqa: E402 - offset-preserving comment blanker (#731)
+import _vacuous_exit as _vx  # noqa: E402
+from _atomic_artefact import write_json  # noqa: E402 - vibe-ic#1082
+
+GATE = "analog_macro_rtl_interface_check"
+
 #: `module <name> ( … );` — both the ANSI form (directions inline) and the
 #: bare-list form a synthesis writer emits.
 _MODULE_RE = re.compile(
@@ -64,13 +76,24 @@ def module_ports(text: str, module: str) -> Optional[List[str]]:
 
     Reads the header only: a blackbox has nothing else, and a port list is the
     whole of the interface claim being compared.
+
+    THE SCAN RUNS OVER COMMENT-BLANKED TEXT, NOT THE RAW FILE (vibe-ic#2010,
+    item 3). `_MODULE_RE` is anchored at line start, and a block comment that
+    quotes a stale header — `/* the old\n module blk (a, b);\n was retired */`
+    — puts `module blk (` at a line start too. Scanning the raw text returned
+    the RETIRED port list for `blk`, because the first match wins and the
+    comment precedes the header it describes. Blanking the SIBLING variable
+    (the old code stripped comments out of `m.group(2)` only) does not make
+    the header scan safe, which is why `hdl_declaration_scan_strips_comments
+    _check` reads dataflow and flagged this site by name. The blanker keeps
+    offsets, so nothing else in this function changes.
     """
-    for m in _MODULE_RE.finditer(text):
+    code = _hdl_code_text.strip_hdl_comments_and_strings(text)
+    for m in _MODULE_RE.finditer(code):
         name = m.group(1).lstrip("\\").strip()
         if name != module:
             continue
-        body = re.sub(r"//[^\n]*", " ", m.group(2))
-        body = re.sub(r"/\*.*?\*/", " ", body, flags=re.S)
+        body = m.group(2)
         out: List[str] = []
         for item in body.split(","):
             # Strip bit-selects and ranges FIRST: the port NAME is what is
@@ -170,7 +193,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     blocks = a.block or (load_block_list(project) or [])
     if not blocks:
         print("VACUOUS: no analog block declared — no macro interface to check")
-        return 2
+        _vx.announce_vacuous(GATE, "no_analog_block_declared")
+        return _vx.RC_VACUOUS
     results = [check_block(project, b) for b in blocks]
     compared = [r for r in results if r.get("compared")]
     bad = [r for r in compared if not r["agree"]]
@@ -194,17 +218,26 @@ def main(argv: Optional[List[str]] = None) -> int:
             print(f"      on the module, absent from the macro: "
                   f"{', '.join(r['extra_in_rtl'])}")
     if not compared:
+        # Nothing to compare is a DESIGN absence (no packaged macro yet, or
+        # no digital module instantiates the block), not a pass: the flow
+        # auditor promotes rc 2 to VACUOUS_PASS and the sentinel below is the
+        # rc-independent disclosure `_vacuous_exit` documents.
         print("VACUOUS: nothing could be compared")
-        rc = 2
+        _vx.announce_vacuous(GATE, "no_comparable_macro_rtl_pair")
+        verdict, rc = "VACUOUS_PASS", _vx.RC_VACUOUS
     elif bad:
         print(f"FAIL: {len(bad)}/{len(compared)} block(s) disagree")
-        rc = 1
+        verdict, rc = "FAIL", _vx.RC_FAIL
     else:
         print(f"PASS: {len(compared)}/{len(compared)} block(s) agree")
-        rc = 0
+        verdict, rc = "PASS", _vx.RC_PASS
     if a.json:
-        Path(a.json).write_text(json.dumps(
-            {"blocks": results, "rc": rc}, indent=2) + "\n")
+        # Atomic (vibe-ic#1082): the declared report destination appears
+        # under its final name only once it is complete, so a reader that
+        # races this gate sees the previous report or the new one, never a
+        # truncated document.
+        write_json(a.json, {"gate": GATE, "verdict": verdict,
+                            "blocks": results, "rc": rc})
     return rc
 
 

@@ -52,6 +52,7 @@ from typing import Dict, List, Optional, Tuple
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from magic_gencell_layout_lib import grid_snap_spice_params  # noqa: E402
+from _atomic_artefact import write_text as _atomic_write_text  # noqa: E402 - vibe-ic#1082
 
 #: role → SPICE element letter. Universal SPICE, not a PDK table: the roles are
 #: the design's own vocabulary (its `role_models` provenance) and the letters
@@ -219,7 +220,10 @@ def main(argv: Optional[List[str]] = None) -> int:
     a = ap.parse_args(argv)
     src = Path(a.netlist).read_text()
     text, stats = prepare_source_netlist(src, a.block, a.grid_um)
-    Path(a.out).write_text(text)
+    # Atomic (vibe-ic#1082): the prepared deck is the comparison INPUT of the
+    # LVS run that follows; a half-written one would compare a truncated
+    # netlist and report the truncation as a mismatch.
+    _atomic_write_text(a.out, text)
     ports = declared_ports(src, a.block)
     print("LVS_PREP ports=%s %s" % (",".join(ports), stats))
     return 0

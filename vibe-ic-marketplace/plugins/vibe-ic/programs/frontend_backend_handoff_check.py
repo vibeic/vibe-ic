@@ -60,6 +60,7 @@ import sys
 from dataclasses import dataclass, field, asdict
 from pathlib import Path
 from typing import List, Optional, Set, Tuple
+import _hdl_code_text  # offset-preserving comment/string blanker (#731)
 import _path_layout as _pl
 import _vacuous_exit as _vx
 
@@ -114,7 +115,15 @@ def netlist_cell_kinds(text: str) -> Tuple[Set[str], Set[str]]:
         import pdk_consistency_check as _pcc
     except Exception:                                        # pragma: no cover
         return set(), set()
-    defined = {m.group(1).lstrip("\\") for m in _MODULE_DECL_RE.finditer(text)}
+    # The `module` declaration scan runs over COMMENT-BLANKED text (vibe-ic
+    # #2010, item 3). `_MODULE_DECL_RE` is anchored at line start, and a block
+    # comment quoting a retired module — `/* the old\nmodule ghost ...*/` —
+    # puts `module ghost` at a line start too. Scanned raw, `ghost` joined
+    # `defined`, and an INSTANTIATED cell of that name was then read as the
+    # design's own hierarchy rather than as a technology cell: a phantom
+    # module that changes the verdict. The blanker keeps offsets.
+    code = _hdl_code_text.strip_hdl_comments_and_strings(text)
+    defined = {m.group(1).lstrip("\\") for m in _MODULE_DECL_RE.finditer(code)}
     tech: Set[str] = set()
     generic: Set[str] = set()
     for c in _pcc.extract_netlist_cells(text):

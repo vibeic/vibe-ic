@@ -54,8 +54,13 @@ from typing import Dict, List, Optional, Tuple
 PROGRAMS_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(PROGRAMS_DIR))
 
+from _atomic_artefact import write_json  # noqa: E402 - vibe-ic#1082
 
-def _docker_exec(container: str, cmd: str, timeout: int = 900):
+
+def _docker_exec_raw(container: str, cmd: str, timeout: int = 900
+                     ) -> Tuple[int, str, str]:
+    """A SHORT probe under a plain wall-clock bound (`ls`, `test -e`). Long
+    tool runs go through `_docker_exec(..., marker=...)` below."""
     argv = (["docker", "exec", container, "bash", "-lc", cmd] if container
             else ["bash", "-lc", cmd])
     try:
@@ -64,6 +69,30 @@ def _docker_exec(container: str, cmd: str, timeout: int = 900):
     except (OSError, subprocess.SubprocessError) as exc:
         return 127, "", str(exc)
     return cp.returncode, cp.stdout or "", cp.stderr or ""
+
+
+def _docker_exec(container: str, cmd: str, timeout: int = 900, *,
+                 marker: Optional[str] = None,
+                 log_path: Optional[Path] = None) -> Tuple[int, str, str]:
+    """marker=None -> `_docker_exec_raw` (short probes). marker set -> the
+    shared PROGRESS-STALL WATCHDOG (`_docker_watchdog.run_docker_supervised`),
+    the same delegation `design_one_shot_runner._docker_exec` makes.
+
+    vibe-ic#2010 item 8: the `magic ... lef write` run below is a long tool
+    invocation and was launched through the raw form, whose only bound is a
+    wall-clock timeout — a Magic making no progress holds the step until that
+    bound, and a Magic that is legitimately slow on a large layout is killed
+    at it, both reported as a plain "wrote no LEF". Under the watchdog a
+    still-progressing Magic runs to completion however long it takes, and a
+    stalled one is reaped by identity after the grace window and says so.
+    `marker` is a token already in the tool's argv (its script name here).
+    """
+    if marker is None:
+        return _docker_exec_raw(container, cmd, timeout)
+    import _docker_watchdog as _dw
+    return _dw.run_docker_supervised(
+        container, cmd, marker, docker_exec_raw=_docker_exec_raw,
+        log_path=log_path)
 
 
 def layout_tech(bdir: Path) -> Optional[str]:
@@ -320,7 +349,8 @@ def emit_block(project: Path, block: str, container: str, pdk_root: str,
     rc, out, err = _docker_exec(
         container,
         f"cd {shlex.quote(str(hdir))} && magic -dnull -noconsole "
-        f"-rcfile {shlex.quote(rcfile)} {shlex.quote(tcl.name)}")
+        f"-rcfile {shlex.quote(rcfile)} {shlex.quote(tcl.name)}",
+        marker=tcl.name)
     if not lef.is_file() or lef.stat().st_size == 0:
         return {"block": block, "emitted": False, "rc": 2,
                 "reason": f"magic wrote no LEF (rc={rc})",
@@ -394,8 +424,9 @@ def main(argv: Optional[List[str]] = None) -> int:
             ("lef %d B, %d pin(s)" % (r["lef_bytes"], r["pins"]))
             if r["emitted"] else "REFUSED — " + r["reason"]))
     if a.json:
-        Path(a.json).write_text(json.dumps(
-            {"blocks": results, "rc": worst}, indent=2) + "\n")
+        # Atomic (vibe-ic#1082): the declared report appears under its final
+        # name only once complete — never a truncated document to a reader.
+        write_json(a.json, {"blocks": results, "rc": worst})
     return worst
 
 

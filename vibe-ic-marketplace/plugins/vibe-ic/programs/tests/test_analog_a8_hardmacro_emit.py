@@ -184,3 +184,73 @@ def test_the_carve_default_did_not_move_on_a_refuted_hypothesis():
 def test_a_lef_with_no_pins_is_returned_unchanged():
     out, n = E.carve_pin_access("MACRO blk\n  OBS\n  END\nEND blk\n", 0.5)
     assert n == 0
+
+
+# ---------------------------------------------------------------------------
+# vibe-ic#2010 items 4 and 8 — the Magic run is supervised, the report atomic.
+# ---------------------------------------------------------------------------
+
+def test_a_marked_exec_is_routed_through_the_shared_watchdog(monkeypatch):
+    """Item 8 (watchdog compliance). `_docker_exec(..., marker=)` delegates to
+    `_docker_watchdog.run_docker_supervised` with THIS module's raw exec
+    injected — the same shape `design_one_shot_runner` uses — and a call
+    without a marker stays a short bounded probe."""
+    import _docker_watchdog as _dw
+    seen = {}
+
+    def fake(container, cmd, marker, *, docker_exec_raw, log_path=None, **kw):
+        seen.update(container=container, cmd=cmd, marker=marker,
+                    raw=docker_exec_raw)
+        return 0, "supervised", ""
+
+    monkeypatch.setattr(_dw, "run_docker_supervised", fake)
+    assert E._docker_exec("c", "magic -dnull x.tcl", marker="x.tcl") == (0, "supervised", "")
+    assert seen["marker"] == "x.tcl" and seen["raw"] is E._docker_exec_raw
+    # no marker -> the raw probe (host shell when container is '')
+    rc, out, _ = E._docker_exec("", "echo probe")
+    assert rc == 0 and out.strip() == "probe" and seen["cmd"] == "magic -dnull x.tcl"
+
+
+def test_the_lef_write_carries_a_marker_from_its_own_argv(tmp_path: Path,
+                                                          monkeypatch):
+    """The long tool run in `emit_block` names its script as the marker, so
+    the watchdog can find the process it supervises in the container's own
+    process table."""
+    p = tmp_path / "proj"
+    b = p / "phase3" / "analog" / "blk"
+    b.mkdir(parents=True)
+    (b / "blk.gds").write_bytes(b"\x00" * 16)
+    (b / "blk.mag").write_text("magic\ntech sometech\n")
+    (b / "topology.json").write_text(json.dumps(
+        {"ports": ["vdd", "vss", "vin"], "rails": {"p": "vdd", "n": "vss"}}))
+    monkeypatch.setattr(E, "magicrc_for", lambda *a, **k: "/pdk/x.magicrc")
+    calls = []
+
+    def fake_exec(container, cmd, timeout=900, *, marker=None, log_path=None):
+        calls.append({"cmd": cmd, "marker": marker})
+        (p / "phase3" / "analog" / "hardmacro" / "blk" / "blk.lef").write_text(
+            "MACRO blk\n  PIN vdd\n    USE POWER ;\n  END vdd\nEND blk\n")
+        return 0, "", ""
+
+    monkeypatch.setattr(E, "_docker_exec", fake_exec)
+    r = E.emit_block(p, "blk", "c", "/pdk")
+    assert r["emitted"] is True, r
+    long_runs = [c for c in calls if "magic" in c["cmd"]]
+    assert long_runs and all(c["marker"] and c["marker"] in c["cmd"]
+                             for c in long_runs), calls
+
+
+def test_the_json_report_is_written_atomically(tmp_path: Path, monkeypatch):
+    """Item 4 (declared reports are written atomically)."""
+    import _atomic_artefact as _aa
+    p = tmp_path / "proj"
+    a = p / "phase3" / "analog"
+    a.mkdir(parents=True)
+    (a / "analog_block_list.json").write_text(json.dumps({"blocks": ["blk"]}))
+    monkeypatch.setattr(E, "emit_block", lambda *a, **k: {
+        "block": "blk", "emitted": True, "rc": 0, "lef_bytes": 1, "pins": 1})
+    out = tmp_path / "r" / "a8.json"
+    out.parent.mkdir()
+    assert E.main([str(p), "--json", str(out)]) == 0
+    assert json.loads(out.read_text())["blocks"][0]["block"] == "blk"
+    assert not [f for f in out.parent.iterdir() if _aa.is_temp_artefact(f)]

@@ -3837,6 +3837,36 @@ steps:
         # with no .gds is a disclosed STUB_NOT_PACKAGED skip, so the
         # PASS_WITH_STUB tier survives.
         - program_exit_zero: "analog_lef_gds_outline_check . --json reports/phase2/gates/a8_lef_gds_outline.json"
+        # `analog_macro_rtl_interface_check` — the DIGITAL side of the macro's
+        # interface, which nothing above compares. `analog_hardmacro_check`
+        # and `analog_hardmacro_pinname_consistency_check` assert LEF == macro
+        # `.v` == spec, all three on the ANALOG side, and pass. Nothing
+        # compared those pins against the module the digital netlist actually
+        # INSTANTIATES, and on the campaign design the two sides disagreed
+        # about every block (a `vss` PG pin no RTL blackbox declares — a macro
+        # that floats in silicon; `vin` on one side and `vdd` on the other;
+        # a modulator the RTL drives as clocked and the analog block built as
+        # forward-path only). OpenROAD reports it, as STA-0201 WARNINGS, and
+        # only after A8 has cleared ORD-2013. The checker shipped with
+        # v1.15.49 wired to nothing but its own test — `checker_execution_
+        # wiring_audit` and `gate_is_wired_check` both named it (vibe-ic#2010
+        # items 1-2) — so it is declared here, at the step that produces the
+        # LEF it reads.
+        #
+        # BLOCKING, on purpose: a supply pin the digital top never connects
+        # has no legitimate reading. It never renames anything and never
+        # decides which side is right — it names the disagreement in both
+        # directions and refuses. rc 2 (no packaged LEF / no topology port
+        # list, or no module of the block's name in any RTL or netlist) is a
+        # DESIGN absence the auditor promotes to VACUOUS_PASS. MEASURED before
+        # wiring, over every corpus cell that declares an analog block list
+        # (12 protocol_parity cells) and the mixed-signal campaign tree it
+        # was written from:
+        # VACUOUS on all of them, zero newly red. It reads
+        # phase3/analog/hardmacro/<block>/<block>.lef (this step's own
+        # required_output) plus phase3/analog/<block>/topology.json and the
+        # RTL/netlist under phase2/, and writes only its own report.
+        - program_exit_zero: "analog_macro_rtl_interface_check . --json reports/phase2/gates/a8_macro_rtl_interface.json"
     blocks_on: [A7]
 
   - id: A9
