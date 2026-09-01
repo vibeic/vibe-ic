@@ -1036,6 +1036,7 @@ def main() -> int:
                 advisories.append(f"phase3 {top_note}")
         p3_args = [str(project),
                    "--top-name", phase3_top,
+                   "--ic-name", args.ic_name,
                    "--container", args.container,
                    "--die-um", args.die_um,
                    "--util", str(args.util),

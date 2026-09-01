@@ -13321,9 +13321,29 @@ def _recipe_sha256() -> str:
         return ""
 
 
+def _plugin_source_sha() -> str:
+    """The git commit of the plugin source tree running this invocation.
+
+    Empty means the installed plugin is not git-backed (or git could not be
+    queried) and is never promoted into a measured release field.  This is the
+    same source identity published in the run manifest; it is not guessed from
+    the project directory, which is commonly a non-git run directory.
+    """
+    try:
+        cp = subprocess.run(
+            ["git", "-C", str(PROGRAMS_DIR.parent), "rev-parse", "HEAD"],
+            capture_output=True, text=True, timeout=30)
+    except (OSError, subprocess.SubprocessError):
+        return ""
+    sha = (cp.stdout or "").strip()
+    return sha if cp.returncode == 0 and re.fullmatch(r"[0-9a-f]{40}", sha) \
+        else ""
+
+
 def _producer_identity_now() -> Dict[str, str]:
     return {"plugin_version": _plugin_version(),
-            "recipe_sha256": _recipe_sha256()}
+            "recipe_sha256": _recipe_sha256(),
+            "source_sha": _plugin_source_sha()}
 
 
 def _write_producer_identity(out_dir: Path, kind: str) -> None:
@@ -34390,7 +34410,67 @@ def step_digital_hardmacro_gen(project: Path,
                       msg, out)
 
 
-def step_ip_release_docs_gen(project: Path) -> StepResult:
+_IP_RELEASE_DOCS_CONTEXT_REL = Path(
+    "reports/orchestrator/phase3_release_docs_context.json")
+
+
+def _write_ip_release_docs_context(
+        project: Path, design_name: Optional[str], pdk_name: Optional[str],
+        source_sha: Optional[str] = None,
+        module_role: Optional[str] = None) -> Path:
+    """Write the run-local derivations handed to the IP docs producer.
+
+    The manifest separates facts supplied by the runner invocation from the
+    source SHA published by the run manifest.  L9 role text is copied only when
+    the shared L9 reader measures it, and its original source path travels with
+    it so the producer can cross-check rather than trust the copy.
+    """
+    try:
+        import _release_docs_build as _rdb  # noqa: PLC0415
+        role_field = _rdb.layer_text(
+            project, "L9_INTEGRATION_SPEC", "Module role",
+            ("module_role", "integration_overview"))
+    except Exception:  # noqa: BLE001 — absence stays absent, never invented
+        role_field = None
+
+    role = str(module_role).strip() if module_role else ""
+    role_source = ""
+    if role_field is not None and getattr(role_field, "measured", False):
+        measured_role = str(getattr(role_field, "value", "")).strip()
+        # A caller-supplied role must agree with the same L9 reader. If the
+        # caller omitted it, use that measured L9 value directly.
+        if not role:
+            role = measured_role
+        if role == measured_role:
+            role_source = str(getattr(role_field, "source", ""))
+        else:
+            role = ""
+
+    sha = str(source_sha or _plugin_source_sha()).strip()
+    if not re.fullmatch(r"[0-9a-f]{40}", sha):
+        sha = ""
+    body: Dict[str, Any] = {
+        "schema": "vibeic.phase3.release_docs_context.v1",
+        "runner_invocation": {
+            "ic_name": str(design_name or "").strip() or None,
+            "pdk": str(pdk_name or "").strip() or None,
+        },
+        "run_manifest": {"source_sha": sha or None},
+    }
+    if role and role_source:
+        body["l9_derivation"] = {
+            "module_role": role,
+            "source": role_source,
+        }
+    path = project / _IP_RELEASE_DOCS_CONTEXT_REL
+    _aa.write_text(path, json.dumps(body, indent=2, sort_keys=True) + "\n")
+    return path
+
+
+def step_ip_release_docs_gen(
+        project: Path, design_name: Optional[str] = None,
+        pdk_name: Optional[str] = None, source_sha: Optional[str] = None,
+        module_role: Optional[str] = None) -> StepResult:
     """Canonical step 37.5ip's release-document producer.
 
     WHY IT IS HERE AND NOT IN THE GATE, for the reason `step_digital_hardmacro_gen`
@@ -34412,7 +34492,15 @@ def step_ip_release_docs_gen(project: Path) -> StepResult:
     if not prog.is_file():  # pragma: no cover - shipped tree always has it
         return StepResult("ip_release_docs_gen", "SKIP", 0.0,
                           f"{prog.name} not present in this tree")
-    cmd = [sys.executable, str(prog), str(project)]
+    try:
+        context = _write_ip_release_docs_context(
+            project, design_name, pdk_name, source_sha, module_role)
+    except (OSError, ValueError) as exc:
+        return StepResult(
+            "ip_release_docs_gen", "ENV_UNAVAILABLE", time.time() - t0,
+            f"runner derivation manifest could not be written: {exc}")
+    cmd = [sys.executable, str(prog), str(project), "--run-context",
+           context.relative_to(project).as_posix()]
     try:
         cp = subprocess.run(cmd, capture_output=True, text=True,
                             errors="replace", timeout=600)
@@ -34425,11 +34513,14 @@ def step_ip_release_docs_gen(project: Path) -> StepResult:
     status = {0: "PASS", 1: "SKIP", 2: "SKIP"}.get(cp.returncode,
                                                    "ENV_UNAVAILABLE")
     doc_root = project / "phase3" / "stage4" / "documentation" / "ip"
-    outputs = ([str(f) for f in sorted(doc_root.rglob("*")) if f.is_file()]
-               if doc_root.is_dir() else [])
+    outputs = [str(context)]
+    if doc_root.is_dir():
+        outputs.extend(str(f) for f in sorted(doc_root.rglob("*"))
+                       if f.is_file())
     return StepResult("ip_release_docs_gen", status, time.time() - t0,
                       detail, outputs,
-                      {"producer_rc": cp.returncode, "flow_step": "37.5ip"})
+                      {"producer_rc": cp.returncode, "flow_step": "37.5ip",
+                       "run_context": context.relative_to(project).as_posix()})
 
 
 def _canonical_step_condition(project: Path, step_id: str
@@ -43907,6 +43998,10 @@ def main() -> int:
     p = argparse.ArgumentParser()
     p.add_argument("project", type=Path)
     p.add_argument("--top-name", default="chip_top")
+    p.add_argument("--ic-name", default=None,
+                   help=("design identity forwarded by the canonical product "
+                         "runner; distinct from a structurally resolved RTL "
+                         "top module"))
     p.add_argument("--container", default="vibeic-eda")
     p.add_argument("--die-um", default="auto",
                    help="Die size W x H in microns, or 'auto' (default) to size "
@@ -44657,7 +44752,8 @@ def main() -> int:
     # And the documents that make the kit usable by somebody who was not in the
     # room. AFTER the kit producer above, because it reads the four views it
     # documents; the gate at step 37.5ip then judges what this wrote.
-    plan.append(step_ip_release_docs_gen(project))
+    plan.append(step_ip_release_docs_gen(
+        project, args.ic_name or args.top_name, pdk.name))
 
     # vibe-ic#306 — corroborate a promoted route against the sign-off report,
     # INLINE and BLOCKING. `drv_promotion_corroboration_check` declares

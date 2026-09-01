@@ -37,7 +37,7 @@ directory from ``pytest``) — and nothing else changes:
 
 INSERTED AT POSITION 0, NOT APPENDED.  Measured: appending mixes user-site
 pure-Python packages against the system's C extensions and dies in the mismatch
-(cffi 2.0.0 against _cffi_backend 1.15.15).  Position 0 makes the named
+(cffi 2.0.0 against _cffi_backend 1.15.16).  Position 0 makes the named
 directory answer first and consistently for its whole dependency closure.
 
 ``PYTEST_DISABLE_PLUGIN_AUTOLOAD=1`` IS REQUIRED WITH THE LANE.  Restoring the

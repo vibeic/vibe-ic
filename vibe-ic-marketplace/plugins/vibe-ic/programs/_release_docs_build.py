@@ -83,20 +83,35 @@ class Field:
     value: str
     #: A project-relative artefact path when measured; the reason text when not.
     source: str
+    #: Optional human-readable provenance channel behind ``source``.  The
+    #: source itself remains a resolvable project-relative artefact, while this
+    #: names which part of that artefact supplied the value (for example the
+    #: runner invocation or the run manifest).
+    provenance: str = ""
 
     @property
     def measured(self) -> bool:
         return self.value != NOT_MEASURED
 
     def row(self) -> str:
-        third = (f"`{self.source}`" if self.measured
-                 else f"{REASON_PREFIX} {self.source}")
+        if self.measured:
+            third = f"`{self.source}`"
+            if self.provenance:
+                third += f" ({self.provenance})"
+        else:
+            third = f"{REASON_PREFIX} {self.source}"
         return f"| {self.label} | {self.value} | {third} |"
 
 
-def measured(label: str, value: Any, source_path: str) -> Field:
-    """A field READ from an artefact, carrying that artefact's path."""
-    return Field(label, render(value), source_path)
+def measured(label: str, value: Any, source_path: str,
+             provenance: str = "") -> Field:
+    """A field READ from an artefact, carrying its path and optional channel.
+
+    ``provenance`` is disclosure only.  ``source_path`` stays the machine-
+    checked citation that ``release_docs_check`` resolves and digests, so a
+    named channel can never replace the backing artefact with prose.
+    """
+    return Field(label, render(value), source_path, provenance)
 
 
 def unmeasured(label: str, reason: str) -> Field:

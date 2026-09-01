@@ -64,8 +64,8 @@ that does not exist.
 
 §4.05: reads ONLY the design INPUT (``input/project.json``,
 ``phase1/generated_docs/L*.json``) and the run's OWN generated evidence (the
-delivered kit under ``phase3/stage4/hardmacro/``). Never the oracle, the
-harness, or the golden.
+delivered kit under ``phase3/stage4/hardmacro/`` plus the runner derivation
+manifest when supplied). Never the oracle, the harness, or the golden.
 
 NDA: no commercial foundry name, process node, SKU, chip codename or
 qualification programme appears in anything this program emits. The PDK string
@@ -136,6 +136,75 @@ VERSION = "1.0.0"
 
 #: The directory the four delivered views live in, spelled once.
 KIT_DIR = "phase3/stage4/hardmacro"
+
+
+@dataclass(frozen=True)
+class RunnerContext:
+    """Facts the runner already owns, backed by one run-local manifest.
+
+    The values are fallbacks, never defaults.  ``input/project.json`` and a
+    git-backed project still win where they already measure the same fields.
+    ``source`` is kept project-relative so every fallback remains resolvable by
+    ``release_docs_check`` and digest-bound by the documentation manifest.
+    """
+    source: str = ""
+    design: Optional[str] = None
+    pdk: Optional[str] = None
+    source_sha: Optional[str] = None
+    module_role: Optional[str] = None
+    module_role_source: Optional[str] = None
+
+
+def _context_text(value: object) -> Optional[str]:
+    return value.strip() if isinstance(value, str) and value.strip() else None
+
+
+def read_runner_context(project: Path,
+                        context_arg: Optional[Path]) -> RunnerContext:
+    """Read runner derivations from a project-confined run manifest.
+
+    An omitted context is equivalent to no caller-owned derivation, so the
+    existing direct-generator honesty path remains unchanged.  An explicitly
+    supplied context that is absent, unreadable, or outside the project is
+    refused rather than silently dropping facts the runner claims to own.
+    """
+    if context_arg is None:
+        return RunnerContext()
+    path = context_arg if context_arg.is_absolute() else project / context_arg
+    try:
+        rel = path.resolve().relative_to(project.resolve()).as_posix()
+    except (OSError, ValueError):
+        raise ValueError(
+            f"--run-context must resolve inside the project: {context_arg}")
+    doc = _read_json(path)
+    if not isinstance(doc, dict):
+        raise ValueError(f"--run-context is absent or unreadable: {rel}")
+    if doc.get("schema") != "vibeic.phase3.release_docs_context.v1":
+        raise ValueError(f"--run-context has an unsupported schema: {rel}")
+    invocation = doc.get("runner_invocation")
+    manifest = doc.get("run_manifest")
+    l9 = doc.get("l9_derivation")
+    invocation = invocation if isinstance(invocation, dict) else {}
+    manifest = manifest if isinstance(manifest, dict) else {}
+    l9 = l9 if isinstance(l9, dict) else {}
+    source_sha = _context_text(manifest.get("source_sha"))
+    if source_sha is not None and not re.fullmatch(r"[0-9a-f]{40}", source_sha):
+        source_sha = None
+    role_source = _context_text(l9.get("source"))
+    if role_source is not None:
+        try:
+            role_abs = (project / role_source).resolve()
+            role_abs.relative_to(project.resolve())
+        except (OSError, ValueError):
+            role_source = None
+    return RunnerContext(
+        source=rel,
+        design=_context_text(invocation.get("ic_name")),
+        pdk=_context_text(invocation.get("pdk")),
+        source_sha=source_sha,
+        module_role=_context_text(l9.get("module_role")),
+        module_role_source=role_source,
+    )
 
 
 # ── reading the run's own kit ──────────────────────────────────────────────
@@ -388,6 +457,7 @@ class Release:
     design: Field
     pdk: Field
     tree: Field
+    role: Field
     constraints: List[Constraint]
     register_rich: bool
     register_rich_source: str
@@ -437,12 +507,34 @@ def _kit_view_conflicts(kit: Kit) -> List[str]:
     return out
 
 
-def build_release(project: Path, kit: Kit) -> Release:
+def build_release(project: Path, kit: Kit,
+                  context: RunnerContext = RunnerContext()) -> Release:
     design, pdk = identity(project)
+    if not design.measured and context.design and context.source:
+        design = measured("Design", context.design, context.source,
+                          "runner invocation")
+    if not pdk.measured and context.pdk and context.source:
+        pdk = measured("Target PDK", context.pdk, context.source,
+                       "runner invocation")
+    tree = tree_sha(project)
+    if not tree.measured and context.source_sha and context.source:
+        tree = measured("Tree SHA", context.source_sha, context.source,
+                        "run manifest")
+    role = layer_text(project, "L9_INTEGRATION_SPEC", "Module role",
+                      ("module_role", "integration_overview"))
+    # The runner passes the value it read from L9, but that does not license a
+    # second answer.  Accept the handoff only when the cited L9 file is still
+    # present and its current value agrees; otherwise keep the direct reader's
+    # measured value or honest hole.
+    if (context.module_role and context.module_role_source
+            and role.measured and role.value == context.module_role
+            and role.source == context.module_role_source):
+        role = measured("Module role", context.module_role, role.source,
+                        "L9-derived module role")
     rich, rich_source = register_rich(project)
     return Release(
         project=project, kit=kit, design=design, pdk=pdk,
-        tree=tree_sha(project),
+        tree=tree, role=role,
         constraints=constraints_for(project, kit),
         register_rich=rich, register_rich_source=rich_source,
         conflicts=_kit_view_conflicts(kit),
@@ -461,8 +553,7 @@ def datasheet(rel: Release) -> Tuple[str, List[Field]]:
     geom = geometry_fields(rel.kit)
     timing = timing_fields(rel.project, rel.kit)
     power = power_fields(rel.project, rel.kit)
-    role = layer_text(rel.project, "L9_INTEGRATION_SPEC", "Module role",
-                      ("module_role", "integration_overview"))
+    role = rel.role
     summary = layer_text(rel.project, "L1_DATASHEET", "Datasheet summary",
                          ("summary", "description", "ic_name"))
     every = ident + iface + views + names + geom + timing + power + [role, summary]
@@ -775,8 +866,9 @@ def manifest_yaml(rel: Release, written: Sequence[Tuple[str, Path]],
 
 
 # ── the run ────────────────────────────────────────────────────────────────
-def emit(project: Path, out_dir: Path,
-         kit: Kit) -> Tuple[List[Tuple[str, Path]], int, int]:
+def emit(project: Path, out_dir: Path, kit: Kit,
+         context: RunnerContext = RunnerContext()
+         ) -> Tuple[List[Tuple[str, Path]], int, int]:
     """Write one package's document set into its OWN directory.
 
     ONE DIRECTORY PER PACKAGE, ALWAYS, including the single-package case. A kit
@@ -786,7 +878,7 @@ def emit(project: Path, out_dir: Path,
     documents, and the shape that is exercised on every run would not be the
     shape a two-macro release takes.
     """
-    rel = build_release(project, kit)
+    rel = build_release(project, kit, context)
     built: List[Tuple[str, str, List[Field]]] = []
 
     for filename, builder in (
@@ -832,6 +924,10 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument("--out-dir", type=Path, default=None,
                         help=("where the documents go (default: the "
                               "project-relative path the flow declares)"))
+    parser.add_argument(
+        "--run-context", type=Path, default=None,
+        help=("project-relative runner derivation manifest. Values are used "
+              "only when the project itself does not measure the field."))
     args = parser.parse_args(argv)
 
     project: Path = args.project_dir
@@ -839,6 +935,12 @@ def main(argv: Optional[List[str]] = None) -> int:
         print(f"ERROR: {project} is not a directory", file=sys.stderr)
         _vx.announce_vacuous(GENERATOR, "project_dir_absent")
         return _vx.RC_VACUOUS
+
+    try:
+        context = read_runner_context(project, args.run_context)
+    except ValueError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return _vx.RC_FAIL
 
     hm_dir = _hm.hardmacro_dir(project)
     packages = _hm.discover_packages(hm_dir)
@@ -873,7 +975,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     written_names: List[str] = []
     for name in sorted(packages):
         kit = read_kit(project, name, packages[name])
-        written, derived, holes = emit(project, out_root / name, kit)
+        written, derived, holes = emit(project, out_root / name, kit, context)
         total_derived += derived
         total_holes += holes
         written_names.extend(str(p) for _, p in written)
