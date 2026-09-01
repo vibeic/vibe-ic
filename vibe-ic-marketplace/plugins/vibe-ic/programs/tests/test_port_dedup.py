@@ -152,6 +152,11 @@ def test_byte_identical_input_files_gathered_once(tmp_path):
     assert gathered.refusal is None
     assert gathered.text.count("Input ports:") == 1
     assert len(gathered.sources) == 1
+    # The skipped copy contributed its bytes via the survivor, so provenance
+    # must name it — an auditor diffing input_doc/ against sources otherwise
+    # sees an unexplained gap.
+    assert len(gathered.deduped_sources) == 1
+    assert gathered.deduped_sources[0].endswith("restaged_copy.md")
 
 
 def test_distinct_content_files_both_gathered(tmp_path):
@@ -180,6 +185,52 @@ def test_phase1_bridge_detects_byte_identical_doc(tmp_path):
     # distinct content -> the prompt still JOINS the docs (v1.14.50 behavior)
     (docs / "operator_staged.md").write_text("A different vendor document.\n")
     assert p1._docs_hold_identical_bytes(docs, prompt) is False
+
+
+def test_phase1_bridge_tolerates_unreadable_doc(tmp_path):
+    # The doc pipeline's standing contract (issues #3/#26) tolerates unreadable
+    # docs; the identity guard must not turn one into a front-door crash. An
+    # unreadable file is unprovable, so it never suppresses the bridge — a
+    # duplicate bridged anyway is absorbed by the parser-level port dedup.
+    import os
+    import pytest
+    if os.geteuid() == 0:
+        pytest.skip("chmod 000 is not a barrier for root")
+    import phase1_one_shot_runner as p1  # noqa: PLC0415 — heavy import
+    docs = tmp_path / "input" / "docs"
+    docs.mkdir(parents=True)
+    prompt = tmp_path / "input" / "phase1_prompt.md"
+    prompt.write_text(_PROSE_SPEC)
+    (docs / "readable_twin.md").write_text(_PROSE_SPEC)
+    locked = docs / "vendor_locked.md"
+    locked.write_text("sealed vendor bytes\n")
+    locked.chmod(0)
+    try:
+        # must neither raise nor be defeated by the unreadable neighbor
+        assert p1._docs_hold_identical_bytes(docs, prompt) is True
+        (docs / "readable_twin.md").write_text("different bytes\n")
+        assert p1._docs_hold_identical_bytes(docs, prompt) is False
+        # unreadable CANDIDATE: unprovable -> not identical -> bridge proceeds
+        prompt.chmod(0)
+        assert p1._docs_hold_identical_bytes(docs, prompt) is False
+    finally:
+        prompt.chmod(0o644)
+        locked.chmod(0o644)
+
+
+def test_case_and_prefix_distinct_ports_survive_dedup():
+    # §4.05 boundary-outside: the union key is exact-name identity. Ports that
+    # differ only by case, or share a prefix, are DISTINCT and must all
+    # survive — a future `.lower()` on the key would silently merge them.
+    text = ("Input ports:\n"
+            "    Data: 8-bit input bus\n"
+            "    a: 1-bit input\n"
+            "    a_b: 1-bit input\n"
+            "Output ports:\n"
+            "    data: 1-bit output\n")
+    ins, outs = BR.parse_rtllm_ports(text)
+    assert ins == [("Data", 8), ("a", 1), ("a_b", 1)]
+    assert outs == [("data", 1)]
 
 
 # --------------------------------------------------------------------------- #
