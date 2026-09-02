@@ -372,6 +372,14 @@ def _loosen_records(res):
             if r.get("direction") == "loosen"]
 
 
+def _revert_records(res):
+    """The ladder's come-back-to-the-best-rung records. A revert is NOT a rung:
+    it changes no ladder index and adds no target util, so it lives under its
+    own `direction` and every "how many rungs" assertion stays honest."""
+    return [r for r in (res.extras or {}).get("resize_history", [])
+            if r.get("direction") == "revert_to_best"]
+
+
 # Every simulated OpenROAD run carries the PG_NET_OWNERSHIP_AUDIT line a real
 # one emits at the end of pnr.tcl. These fixtures exercise the ROUTE-convergence
 # feedback loop, so they must not also trip the PG net-ownership gate — a routed

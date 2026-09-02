@@ -47,7 +47,8 @@ import textwrap
 
 mod = importlib.import_module("phase3_one_shot_runner")
 from test_gap_e2e_die_util_routing_feedback import (  # noqa: E402
-    _PG_OK, _R_OVERUTIL, _drive_step_pnr, _loosen_records)
+    _PG_OK, _R_OVERUTIL, _drive_step_pnr, _loosen_records,
+    _revert_records)
 
 
 def _nc(final: int):
@@ -249,8 +250,20 @@ class TestUnchanged:
         res, calls = _drive_step_pnr(
             tmp_path, monkeypatch, "auto", [_nc(4), _nc(6), _nc(8), _nc(10)])
         assert res.status == "FAIL"
-        assert calls["n"] == 3
+        # The ladder gains NO further RUNGS on a worsening series -- that is
+        # what this guard has always asserted and it is unchanged.
         assert len(_loosen_records(res)) == 2
+        # It does now spend ONE more PnR pass, and it is not a rung: with the
+        # series [4, 6, 8] strictly worsening, the best die the ladder measured
+        # is the one it STARTED at, and shipping the last rung would ship the
+        # worst geometry it had seen. The revert is bounded to one, so the call
+        # count is 3 rungs + 1 revert.
+        reverts = _revert_records(res)
+        assert len(reverts) == 1, (res.extras or {}).get("resize_history")
+        assert reverts[0]["best_rung"] == 0
+        assert reverts[0]["best_rung_violations"] == 4
+        assert reverts[0]["to_die_um"] == _loosen_records(res)[0]["from_die_um"]
+        assert calls["n"] == 4
 
     def test_914_guard_an_explicit_die_is_still_never_loosened(
             self, tmp_path, monkeypatch):

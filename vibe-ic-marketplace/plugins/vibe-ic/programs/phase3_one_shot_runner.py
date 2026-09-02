@@ -7839,6 +7839,16 @@ class PdkConfig:
     # LVS engine's geometric device recognition (klayout_pdk_lvs --layermap). None
     # → the program's built-in commercial-PDK map. Chip-AGNOSTIC: any PDK supplies its own.
     lvs_layermap: Optional[str] = None
+    # ROUND-3 (subservient x gf180mcuD, 2026-09-02): the via-patch legalizer
+    # re-points `tech_lef` at a derived copy INSIDE THE PROJECT so every LEF
+    # consumer reads one identical input. Four PDK-ROOT derivations keyed off
+    # `tech_lef.find("/libs.ref/")` and silently returned "" once that path
+    # moved: no min/max OpenRCX captables (the SS sign-off STA then read the
+    # NOMINAL SPEF while its stance said "max-RC"), no post-route real-SPEF
+    # repair ("precondition_unmet"), no seal ring, and hardmacro_gen seeing
+    # PDK_ROOT ''. The ORIGINAL path is kept here so `_pdk_root_c` can still
+    # find the PDK the derived copy came from.
+    tech_lef_source: Optional[str] = None
     # v1.3.92 — post-route decap-under-signal-route SHORT guard. A decoupling-cap
     # filler (DECAP/DCAP/FILLCAP) whose LEF abstract omits a MET1 OBS over its
     # capacitor plate lets the router lay a signal MET1 wire across where the decap
@@ -15919,6 +15929,48 @@ def _loosen_stall_streak(residuals: Sequence[int]) -> int:
     return streak
 
 
+def _ladder_best_rung(residual_series: Sequence[int],
+                      rung_records: Sequence[Dict[str, Any]],
+                      cur_die: Tuple[int, int],
+                      ) -> Optional[Tuple[int, int, int, int]]:
+    """``(best_index, best_residual, die_w, die_h)`` for the rung the ladder
+    MEASURED as best — or ``None`` when the last rung already is the best.
+
+    The ladder explores by resizing and re-running, so when it terminates the
+    artefacts on disk are the LAST rung's. That is the right answer only if the
+    residual falls monotonically with die area, and the ladder's own series is
+    what falsifies that: MEASURED [4, 6, 1, 3, 3] over dies 416/491/602/738/904
+    um, so it shipped 3 violations on a die 2.25x the AREA of one it had
+    already measured at 1.
+
+    ``None`` is returned — no revert — when the series is too short, when the
+    best rung IS the last one, when the ladder's record does not carry a
+    parseable die for that rung, or when that die is the one already installed.
+    Each of those is "nothing better was measured", never "a better rung was
+    found and dropped".
+
+    chip-AGNOSTIC: arithmetic over the ladder's own records; no design, PDK or
+    vendor literal."""
+    if len(residual_series) < 2:
+        return None
+    best_i = min(range(len(residual_series)), key=lambda i: residual_series[i])
+    if best_i >= len(residual_series) - 1:
+        return None                       # the last rung already is the best
+    if residual_series[best_i] >= residual_series[-1]:
+        return None                       # nothing STRICTLY better measured
+    if best_i >= len(rung_records):
+        return None                       # no record to recover the die from
+    raw = str(rung_records[best_i].get("from_die_um", ""))
+    try:
+        w_s, h_s = raw.split("x")
+        w, h = int(w_s), int(h_s)
+    except (ValueError, TypeError):
+        return None
+    if w <= 0 or h <= 0 or (w, h) == tuple(cur_die):
+        return None
+    return best_i, residual_series[best_i], w, h
+
+
 # #914 — the loosen ladder's DECLINE vocabulary and what each entry means for
 # the operator. SINGLE source of truth: the printed marker, the pnr extras, the
 # ROUTE_NOT_CONVERGED remedy sentence and the tests all read this map, so a new
@@ -15932,6 +15984,9 @@ _LOOSEN_TERMINATOR_KIND: Dict[str, str] = {
     "route_did_not_complete": "not_engaged",
     "route_still_converging": "not_engaged",
     "loosen_ladder_stalled": "evidence",
+    # the ladder finished exploring, came back to the best rung it MEASURED,
+    # and will not walk away from it again.
+    "ladder_settled_at_best_rung": "evidence",
     "loosen_ladder_exhausted": "bound",
     "loosen_rung_budget_reached": "bound",
     "die_cap_reached": "bound",
@@ -15946,6 +16001,7 @@ def _route_feedback_loosen_ex(die_w: int, die_h: int, log_text: str,
                               residual_history: Optional[Sequence[int]] = None,
                               max_rungs: int = _ROUTE_LOOSEN_MAX_RUNGS,
                               patience: int = _ROUTE_LOOSEN_STALL_PATIENCE,
+                              settled_at_best: bool = False,
                               ) -> Tuple[Optional[Tuple[int, int, Dict[str, Any]]], str]:
     """ROUTING-FEEDBACK decision for ONE detailed-route outcome. Returns
     (new_w, new_h, record) to loosen-the-die-and-retry, or None to leave the
@@ -15976,6 +16032,11 @@ def _route_feedback_loosen_ex(die_w: int, die_h: int, log_text: str,
     # from the decision the way a separate reason-computing helper would.
     if not auto_die_requested:
         return None, "explicit_die_requested"
+    if settled_at_best:
+        # The ladder already spent its exploration and came BACK to the best
+        # rung it measured. Loosening again would walk away from the answer it
+        # returned for, and the revert is bounded to one.
+        return None, "ladder_settled_at_best_rung"
     if not route_completed:
         # NOTE this is also the #297 interaction: GRT-0116 aborts BEFORE any
         # DEF, so the loudest congestion signal reaches this path as
@@ -22993,6 +23054,16 @@ def _stage_via_legalized_tech_lef(project: Path, pdk: PdkConfig,
             payload["derived_tech_lef"] = str(staged)
             payload["derived_sha256"] = hashlib.sha256(
                 fixed.encode()).hexdigest()
+            # Remember the PDK path the derived copy came from, so the
+            # PDK-root derivations (`_pdk_root_c`) keep resolving after the
+            # active tech LEF moves into the project. The redispatch path
+            # sees the staged copy as its source; never overwrite with it.
+            if ("/libs.ref/" in source
+                    and not getattr(pdk, "tech_lef_source", None)):
+                try:
+                    pdk.tech_lef_source = source
+                except Exception:  # noqa: BLE001 — a frozen/foreign pdk object
+                    pass
             pdk.tech_lef = str(staged)
         else:
             payload["status"] = "NOT_NEEDED"
@@ -24080,6 +24151,7 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
     target_util_pct = util * 100.0 if util <= 1.0 else util
     _downsized_once = False   # GAP-E2E-4 FOLLOW-UP — single conservative downsize
     _loosen_idx = 0           # ROUTING-FEEDBACK — current loosen-ladder rung
+    _reverted_to_best = False  # the ladder has come back to its best rung ONCE
     # #914 — the across-rung residual series the ladder terminates on, and the
     # name of whatever finally stopped it. Both are DISCLOSED downstream: a
     # verdict that reports a remedy as finished must be able to say why.
@@ -24137,7 +24209,8 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
             _lf, _lf_reason = _route_feedback_loosen_ex(
                 die_w, die_h, _pnr_log, _loosen_idx,
                 _auto_die_requested, _route_completed,
-                residual_history=_loosen_residuals)
+                residual_history=_loosen_residuals,
+                settled_at_best=_reverted_to_best)
             if _lf is None:
                 # #307 — the decline path used to have no `else` at all, so the
                 # flow could refuse its OWN rescue with nobody told. The UPSIZE
@@ -24181,6 +24254,68 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
                       f"residual_series={_l_series} "
                       f"stall_streak={_l_streak}/{_ROUTE_LOOSEN_STALL_PATIENCE} "
                       f"still_improving={_decline['still_improving']}")
+                # ── SHIP THE BEST RUNG THE LADDER MEASURED, NOT THE LAST ──
+                # The ladder explores by RESIZING and re-running, so when it
+                # terminates the artefacts on disk are the LAST rung's. That is
+                # the right answer only if the residual falls monotonically
+                # with die area — and the ladder's OWN series is what falsifies
+                # that. MEASURED (subservient x gf180mcuD, 2026-09-02, host
+                # 8HD-9, OpenROAD 26Q3-1472):
+                #     rung 0  416x416  residual 4
+                #     rung 1  491x491  residual 6
+                #     rung 2  602x602  residual 1   <- best MEASURED
+                #     rung 3  738x738  residual 3
+                #     rung 4  904x904  residual 3   <- what it SHIPPED
+                # It shipped 3 violations on a die 2.25x the AREA of one it had
+                # already measured at 1. A die that sparse is not free either:
+                # it drives core utilisation down (12% here) and so pushes the
+                # metal-COVERAGE rules, which are a fraction OF THE DIE, further
+                # out of reach. `_loosen_stall_streak` already reasons against
+                # best-so-far; only the artefact selection did not.
+                # §4.05: the revert is bounded to ONE, and the re-run's residual
+                # is re-MEASURED and recorded beside the one that motivated it —
+                # never assumed to reproduce. DECLARED ADVISORY: the verdict
+                # still comes from what the shipped route actually measures.
+                _best = None if _reverted_to_best else _ladder_best_rung(
+                    _l_series,
+                    [_r for _r in resize_history
+                     if _r.get("direction") == "loosen"],
+                    (die_w, die_h))
+                if _best is not None:
+                    _best_i, _best_v, _bw, _bh = _best
+                    resize_history.append({
+                        "iteration": _retry_i,
+                        "direction": "revert_to_best",
+                        "trigger": "ladder_shipped_worse_than_it_measured",
+                        "from_die_um": f"{die_w}x{die_h}",
+                        "to_die_um": f"{_bw}x{_bh}",
+                        "last_rung_violations": _l_series[-1],
+                        "best_rung": _best_i,
+                        "best_rung_violations": _l_series[_best_i],
+                        "residual_series": list(_l_series),
+                        "terminator": _lf_reason,
+                        "note": "re-running at the best rung the ladder "
+                                "measured; its residual is RE-MEASURED on "
+                                "the re-run, not carried over",
+                    })
+                    print(f"ROUTE_LADDER_REVERT_TO_BEST rung={_best_i} "
+                          f"die={_bw}x{_bh}um "
+                          f"measured_violations={_l_series[_best_i]} vs "
+                          f"last_rung die={die_w}x{die_h}um "
+                          f"violations={_l_series[-1]} "
+                          f"residual_series={_l_series} "
+                          f"terminator={_lf_reason}")
+                    die_w, die_h = _bw, _bh
+                    core_w = die_w - 2 * core_pad
+                    core_h = die_h - 2 * core_pad
+                    _generic_pnr_tcl = _rewrite_pnr_floorplan_die(
+                        _generic_pnr_tcl, die_w, die_h,
+                        core_pad, core_w, core_h, fp_rect)
+                    _pad_install_failure = _install_route_deck()
+                    if _pad_install_failure is not None:
+                        return _pad_install_failure
+                    _reverted_to_best = True
+                    continue
             if _lf is not None:
                 _lw, _lh, _lrec = _lf
                 _lrec["iteration"] = _retry_i
@@ -26637,13 +26772,45 @@ def _pdk_scribe_keepout_um(pdk: "PdkConfig",
     return v if v > 0 else None
 
 
+def _pdk_root_c(pdk: "PdkConfig") -> str:
+    """`<PDK_ROOT>/<PDK>` for this PDK: the prefix before `/libs.ref/` on the
+    FIRST of the PDK's own files that carries one.
+
+    WHY MORE THAN THE TECH LEF. `_stage_via_legalized_tech_lef` re-points
+    `pdk.tech_lef` at a derived copy under the PROJECT (so PnR, extraction,
+    stream-out and sign-off all read one identical LEF). Every derivation that
+    read only `tech_lef` then found no `/libs.ref/` and returned "" — and each
+    caller treated "" as "this PDK ships none". MEASURED (subservient x
+    gf180mcuD, plugin 1.15.36+rulings and 1.15.45, 2026-09-02): with the
+    legalized LEF in force the run produced NO min/max OpenRCX SPEF, so the
+    SS-corner sign-off STA read the nominal SPEF (its stance still claimed
+    "max-RC"), the post-route real-SPEF repair recorded `precondition_unmet`,
+    the seal-ring step emitted nothing, and hardmacro_gen reported
+    "no magicrc under PDK_ROOT ''". The control arm without the legalizer had
+    all four. The PnR TCL had already grown a cell-LEF fallback for the same
+    hole (PR-B2b); this is the Python side of that fallback, in one place.
+
+    Order: the active tech LEF (unchanged behaviour whenever it still lives
+    under the PDK), the recorded source it was derived from, then the cell
+    LEF, Liberty and cell GDS — all of which a named PDK keeps under
+    `<PDK>/libs.ref/`. "" only when NONE carries the marker, which is the
+    honest "not a standard-layout PDK" answer the callers already handle.
+    chip/PDK-AGNOSTIC: a path convention, no PDK name."""
+    for attr in ("tech_lef", "tech_lef_source", "cell_lef", "liberty",
+                 "cell_gds"):
+        v = str(getattr(pdk, attr, "") or "")
+        i = v.find("/libs.ref/")
+        if i > 0:
+            return v[:i]
+    return ""
+
+
 def _pdk_dir_of(pdk: "PdkConfig") -> str:
-    """`<PDK_ROOT>/<PDK>` for this PDK, from the tech-LEF path prefix before
-    `/libs.ref/`. Same derivation `_max_captable_c` already uses — PDK layout,
-    not a PDK name — so it resolves for any PDK laid out the standard way."""
-    tlef = str(getattr(pdk, "tech_lef", "") or "")
-    i = tlef.find("/libs.ref/")
-    return tlef[:i] if i > 0 else ""
+    """`<PDK_ROOT>/<PDK>` for this PDK — see `_pdk_root_c` (the tech-LEF-only
+    derivation this used to be returned "" once the via legalizer relocated the
+    tech LEF into the project, and the seal ring / hardmacro steps then saw no
+    PDK at all)."""
+    return _pdk_root_c(pdk)
 
 
 def _die_finishing(project: Path, top: str, pdk: PdkConfig,
@@ -26926,11 +27093,9 @@ def _max_captable_c(pdk: "PdkConfig", container: str) -> str:
     parasitic extraction). Derived from the tech-LEF path (prefix before
     ``/libs.ref/``); globs ``rules.openrcx.*.max.magic`` under librelane/openlane.
     Returns "" if none found. chip/PDK-AGNOSTIC (no chip/vendor literal)."""
-    tlef = str(getattr(pdk, "tech_lef", "") or "")
-    i = tlef.find("/libs.ref/")
-    if i <= 0:
+    root = _pdk_root_c(pdk)
+    if not root:
         return ""
-    root = tlef[:i]
     for sub in ("librelane", "openlane"):
         try:
             # SPM-SI-1 — both captable naming conventions (chip/PDK-AGNOSTIC):
@@ -38366,10 +38531,8 @@ def _discover_aocv_table(project: Path, pdk: PdkConfig,
             if hits:
                 return _to_container_path(str(hits[0]), container)
     # 2. PDK-supplied (container-side glob).
-    tlef = str(pdk.tech_lef or "")
-    i = tlef.find("/libs.ref/")
-    if i > 0:
-        root_c = tlef[:i]
+    root_c = _pdk_root_c(pdk)
+    if root_c:
         for token in (".aocv", ".pocv"):
             expr = (f"{shlex.quote(root_c)}/libs.tech/*/*{token} "
                     f"{shlex.quote(root_c)}/libs.tech/*{token}")
@@ -39714,11 +39877,9 @@ def _discover_openrcx_captables(pdk: PdkConfig, container: str
     the older image used libs.tech/openlane. We PREFER librelane and fall back to
     openlane (backward-compat) — the first dir that yields a hit for a corner wins."""
     out: Dict[str, str] = {}
-    tlef = str(pdk.tech_lef or "")
-    i = tlef.find("/libs.ref/")
-    if i <= 0:
+    root_c = _pdk_root_c(pdk)
+    if not root_c:
         return out
-    root_c = tlef[:i]
     # librelane FIRST (newer image), openlane fallback (older image).
     cap_dirs = (f"{root_c}/libs.tech/librelane",
                 f"{root_c}/libs.tech/openlane")
@@ -40299,11 +40460,9 @@ def _discover_blackbox_verilog(pdk: PdkConfig, container: str,
     physical-only cells: tap/fill/decap/diode/endcap have no Liberty model and
     would abort yosys `hierarchy` on a routed netlist). Returns container paths;
     prefers `*__blackbox.v` over `*_pp.v`. Empty on any PDK that ships none."""
-    tlef = str(pdk.tech_lef or "")
-    i = tlef.find("/libs.ref/")
-    if i <= 0:
+    root_c = _pdk_root_c(pdk)
+    if not root_c:
         return []
-    root_c = tlef[:i]
     expr = f"{shlex.quote(root_c)}/libs.ref/*/verilog/*blackbox*.v"
     hits = _container_ls_paths(container, expr, "blackbox")
     # Prefer the plain __blackbox.v (signal-only, sufficient for equiv) over the
@@ -40673,12 +40832,17 @@ def _emit_lec_post_layout(project: Path, top: str, pdk: PdkConfig,
                                container)
     log_host = out_json.parent / "lec_post_layout.log"
 
-    def _run_lec(functional_lib: bool):
-        """Build the recipe (functional or -lib), run yosys, return log text."""
+    def _run_lec(functional_lib: bool, blacklist_c: Optional[str] = None):
+        """Build the recipe (functional or -lib), run yosys, return log text.
+        `blacklist_c` (container path) is set ONLY by the pin-permutation
+        re-proof below, on points that classification proved to be naming
+        artefacts of the flattened recipe."""
+        _kw = {"blacklist": blacklist_c} if blacklist_c else {}
         ys = mod.build_yosys_equiv_script(gold_c, gate_c, lib_c, top,
                                           blackbox_v=blackbox,
                                           strip_gate_ports=strip_ports,
-                                          functional_lib=functional_lib)
+                                          functional_lib=functional_lib,
+                                          **_kw)
         ys_path.write_text(ys)
         cmd = (f"export PATH={TOOLS_IN_CONTAINER}/yosys/bin:"
                f"{TOOLS_IN_CONTAINER}/bin:$PATH && "
@@ -40741,6 +40905,84 @@ def _emit_lec_post_layout(project: Path, top: str, pdk: PdkConfig,
         functional_lib = False
         rc, log_text = _run_lec(functional_lib=False)
     parsed = mod.parse_equiv_log(log_text)
+    # ROUND-3 (subservient x gf180mcuD, 2026-09-02) — PIN-PERMUTATION RE-PROOF.
+    # The flattened functional recipe names every cell pin `<inst>.<pin>` and
+    # `equiv_make` pairs those by name; a post-route repair that SWAPPED two
+    # symmetric inputs of one cell (RSZ SwapPinsMove) therefore leaves exactly
+    # those pin wires UNPROVEN while every output and register is proven — and
+    # an unsatisfiable $equiv also poisons the induction premise for the rest.
+    # MEASURED: 1925 points / 2 unproven / 152 s on the control arm's own
+    # netlists; with the two mis-paired points removed from the match set the
+    # SAME netlists prove 1923 / 0 in 4.3 s. Every point must pass the
+    # classifier's tests (instance on both sides, INPUT pin, same pin sets,
+    # input nets a permutation, output nets unchanged, the cell's Liberty
+    # function symmetric under the permutation by truth table) or the re-proof
+    # does not run and the UNPROVEN verdict stands. Recorded either way.
+    pin_perm: Optional[Dict[str, Any]] = None
+    if (parsed.get("verdict") == getattr(mod, "V_UNPROVEN", "UNPROVEN")
+            and (parsed.get("unproven") or 0) > 0
+            and hasattr(mod, "classify_pin_permutation_points")):
+        try:
+            _names = mod.parse_unproven_points(log_text)
+            _lib_text = _v1_6_604_read_text_or_container_cat(
+                str(pdk.liberty), container) or ""
+            _cls = mod.classify_pin_permutation_points(
+                _names,
+                gold.read_text(errors="replace") if gold.is_file() else "",
+                gate.read_text(errors="replace") if gate.is_file() else "",
+                _lib_text)
+        except Exception as exc:  # noqa: BLE001 — classification is best-effort
+            _names, _cls = [], {"accepted": [], "rejected": [],
+                                "error": repr(exc)}
+        _all_ok = (bool(_names) and not _cls.get("rejected")
+                   and not _cls.get("error")
+                   and len(_cls.get("accepted") or []) == len(_names)
+                   and len(_names) == int(parsed.get("unproven") or -1))
+        pin_perm = {
+            "first_pass": {k: parsed.get(k) for k in
+                           ("verdict", "proven", "unproven", "total")},
+            "unproven_points": _names,
+            "accepted": _cls.get("accepted") or [],
+            "rejected": _cls.get("rejected") or [],
+            "classifier_error": _cls.get("error"),
+            "reproof_run": False,
+        }
+        if _all_ok:
+            _bl = out_json.parent / f"lec_post_{top}_pin_permutation_blacklist.txt"
+            _bl.write_text("\n".join(_names) + "\n")
+            _first_log = out_json.parent / "lec_post_layout.pass1.log"
+            try:
+                if log_host.is_file():
+                    _first_log.write_text(log_host.read_text(errors="replace"))
+            except OSError:
+                pass
+            rc, log_text = _run_lec(
+                functional_lib=functional_lib,
+                blacklist_c=_to_container_path(str(_bl), container))
+            parsed = mod.parse_equiv_log(log_text)
+            pin_perm.update({
+                "reproof_run": True,
+                "blacklist": str(_bl),
+                "first_pass_log": str(_first_log),
+                "second_pass": {k: parsed.get(k) for k in
+                                ("verdict", "proven", "unproven", "total")},
+                "note": ("the blacklisted wires are the INPUT pins of one or "
+                         "more cells whose inputs a post-route repair "
+                         "permuted; the cells' own outputs and every register "
+                         "and port stay in the proof set, and the verdict "
+                         "above is yosys's over that set"),
+            })
+            notes.append(
+                f"post-layout LEC: {len(_names)} unproven point(s) were "
+                f"pin-permutation artefacts (RSZ pin swap on "
+                f"{', '.join(sorted({a.get('instance') or '?' for a in pin_perm['accepted']}))}); "
+                f"re-proved without them -> {parsed.get('verdict')} "
+                f"(proven={parsed.get('proven')}, unproven={parsed.get('unproven')})")
+        else:
+            notes.append(
+                "post-layout LEC: UNPROVEN points are NOT all pin-permutation "
+                f"artefacts ({len(pin_perm['accepted'])} accepted, "
+                f"{len(pin_perm['rejected'])} rejected) — verdict stands")
     doc = {
         "tool": "yosys-equiv",
         "top": top,
@@ -40768,6 +41010,9 @@ def _emit_lec_post_layout(project: Path, top: str, pdk: PdkConfig,
         # instead of a path a reader has to recognise.
         "gate_kind": gate_kind,
         "scope": lec_post_layout_scope(gate_kind, gold_kind, top),
+        # None when the first pass did not leave UNPROVEN points; otherwise
+        # the classification and, when it ran, the re-proof record.
+        "pin_permutation_reproof": pin_perm,
     }
     out_json.write_text(json.dumps(doc, indent=2) + "\n")
     # Human .rpt via the gate's substance evaluation (mirror the verdict).
@@ -40785,6 +41030,13 @@ def _emit_lec_post_layout(project: Path, top: str, pdk: PdkConfig,
         f"unproven_points: {doc['unproven_points']}\n"
         + (f"sat_unsupported_cells: {','.join(doc['sat_unsupported_cells'])}\n"
            if doc['sat_unsupported_cells'] else "")
+        + ((f"pin_permutation_reproof: first pass "
+            f"{pin_perm['first_pass'].get('verdict')} "
+            f"(unproven={pin_perm['first_pass'].get('unproven')}); "
+            f"{len(pin_perm['accepted'])} point(s) accepted as cell-symmetric "
+            f"pin permutations, {len(pin_perm['rejected'])} rejected; "
+            f"re-proof {'RAN' if pin_perm['reproof_run'] else 'NOT run'}\n")
+           if pin_perm else "")
         + "# §4.05: UNPROVEN/VACUOUS/NON_EQUIVALENT are NOT a pass.\n")
     notes.append(
         f"post-layout LEC: {doc['verdict']} (gold={gold_kind}, "

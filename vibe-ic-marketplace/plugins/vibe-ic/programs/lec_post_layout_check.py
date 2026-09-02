@@ -53,6 +53,7 @@ CLI:
 from __future__ import annotations
 
 import argparse
+import itertools
 import json
 import re
 import sys
@@ -240,8 +241,16 @@ def build_yosys_equiv_script(gold_v: str, gate_v: str, lib: str, top: str,
                              blackbox_v: Optional[List[str]] = None,
                              seq_depths: Optional[List[int]] = None,
                              strip_gate_ports: Optional[List[str]] = None,
-                             functional_lib: bool = False) -> str:
+                             functional_lib: bool = False,
+                             blacklist: Optional[str] = None) -> str:
     """Emit the Yosys .ys that structurally proves gold_v == gate_v.
+
+    blacklist : optional path (already in the tool's own filesystem view) of a
+                 file naming wires `equiv_make` must NOT pair. Used ONLY by the
+                 pin-permutation re-proof (see `classify_pin_permutation_points`)
+                 and only for points that check proved to be a naming artefact;
+                 never for a top-level port or a register pin. Absent -> the
+                 recipe is byte-identical to the one without this argument.
 
     gold_v : golden reference netlist/RTL (e.g. <top>_synth.v or the RTL).
     gate_v : the netlist under test (the FINAL routed / ECO / filled netlist).
@@ -282,6 +291,9 @@ def build_yosys_equiv_script(gold_v: str, gate_v: str, lib: str, top: str,
     # cells, so the shallow-first order keeps the common case cheap.
     depths = sorted({int(d) for d in depths if int(d) > 0})
     induct = "\n".join(f"equiv_induct -seq {d}" for d in depths) or "equiv_induct"
+    em = ("equiv_make"
+          + (f" -blacklist {blacklist}" if blacklist else "")
+          + " gold gate equiv")
 
     if functional_lib:
         # FUNCTIONAL (SOUND) recipe. Per-side, three GOTCHAs make functional
@@ -320,7 +332,7 @@ def build_yosys_equiv_script(gold_v: str, gate_v: str, lib: str, top: str,
             f"{gold_block}\n{gate_block}\n"
             f"design -copy-from gold -as gold {top}\n"
             f"design -copy-from gate -as gate {top}\n"
-            "equiv_make gold gate equiv\n"
+            f"{em}\n"
             "hierarchy -top equiv\n"
             "equiv_simple\n"
             f"{induct}\n"
@@ -347,7 +359,7 @@ design -stash gate
 
 design -copy-from gold -as gold {top}
 design -copy-from gate -as gate {top}
-equiv_make gold gate equiv
+{em}
 hierarchy -top equiv
 equiv_simple
 {induct}
@@ -471,6 +483,309 @@ def parse_equiv_log(text: str) -> Dict[str, object]:
         "sat_unsupported_cells": sat_cells,
         "success_line": success_line,
     }
+
+
+# ---------------------------------------------------------------------------
+# (1c) Pin-permutation re-proof.
+#
+# ROUND-3 (subservient x gf180mcuD, 2026-09-02). The post-route real-SPEF
+# repair swapped the two symmetric inputs of ONE OAI21 (`repair_timing`'s
+# SwapPinsMove: gold A1=_1032_/A2=_1033_, gate A1=_1033_/A2=_1032_, the cell
+# also upsized _1 -> _2). The functional recipe FLATTENS each Liberty cell, so
+# every cell pin becomes a wire named `<instance>.<pin>`, and `equiv_make`
+# pairs those by NAME: `_1428_.A1_gold` was asked to equal `_1428_.A1_gate`,
+# which now carry different (swapped) nets. Two points UNPROVEN, the whole
+# step FAIL (LEC_POST_UNPROVEN) — on a netlist whose every output and every
+# register was proven, while the cell's own output `_1428_.ZN` was among the
+# 1923 proven points.
+#
+# That is a false negative, and it is ALSO a soundness problem the other way:
+# equiv_induct assumes every $equiv held in the previous frames, and a point
+# that can never hold makes the induction premise unsatisfiable on the real
+# traces. So the remedy is NOT "ignore two unproven points": it is to REMOVE
+# the mis-paired points from the match set and prove everything else again
+# WITHOUT them. MEASURED on the run's own netlists: 1925 points / 2 unproven
+# / 152 s  ->  1923 points / 0 unproven / 4.3 s.
+#
+# The removal is granted only on evidence, all of it read from the artefacts:
+#   * the point is `<instance>.<pin>` and the instance exists on BOTH sides;
+#   * `<pin>` is an INPUT of the cell on both sides (Liberty direction);
+#   * both cells expose the same input and output pin sets (a drive-strength
+#     resize is fine, a different logic cell is not);
+#   * the gate instance's input NETS are a permutation of the gold instance's
+#     input nets, and its output nets are unchanged;
+#   * for EVERY assignment of those nets, EVERY output function of the cell
+#     (the Liberty `function`, evaluated) gives the same value under the gold
+#     wiring and under the gate wiring — i.e. the permutation is a symmetry of
+#     the cell, not a rewire.
+# A sequential cell fails the last test by construction (its function names a
+# state variable this evaluator does not know), so a register pin is never
+# blacklisted. A point that fails ANY test is REJECTED with the reason, the
+# re-proof does not run, and the original UNPROVEN verdict stands.
+# ---------------------------------------------------------------------------
+_UNPROVEN_POINT_RE = re.compile(
+    r"Unproven\s+\$equiv\s+\S+:\s+\\?(\S+?)_gold\s+\\?(\S+?)_gate", re.M)
+
+
+def parse_unproven_points(text: str) -> List[str]:
+    """Distinct names of the $equiv points the FINAL `equiv_status` listed as
+    UNPROVEN, without the `\\` escape and the `_gold`/`_gate` suffixes, in log
+    order. `equiv_make` pairs same-named wires, so a line whose two names differ
+    is not one of its points and is skipped."""
+    names: List[str] = []
+    seen = set()
+    for m in _UNPROVEN_POINT_RE.finditer(text or ""):
+        g, a = m.group(1), m.group(2)
+        if g != a or g in seen:
+            continue
+        seen.add(g)
+        names.append(g)
+    return names
+
+
+_VERILOG_KEYWORDS = {
+    "module", "endmodule", "input", "output", "inout", "wire", "reg", "assign",
+    "supply0", "supply1", "tri", "parameter", "localparam", "specify",
+    "endspecify", "always", "initial", "function", "endfunction", "defparam",
+}
+_INST_RE = re.compile(
+    r"^[ \t]*(?P<cell>[A-Za-z_][\w$]*)[ \t]+(?P<inst>\\\S+|[A-Za-z_][\w$]*)\s*"
+    r"\(\s*(?P<body>(?:\.[A-Za-z_][\w$]*\s*\([^()]*\)\s*,?\s*)+)\)\s*;",
+    re.M)
+_PORT_RE = re.compile(r"\.([A-Za-z_][\w$]*)\s*\(\s*([^()]*?)\s*\)")
+
+
+def _vid(s: str) -> str:
+    """A Verilog identifier as written -> its bare name (escaped `\\x ` -> `x`)."""
+    s = (s or "").strip()
+    if s.startswith("\\"):
+        s = s[1:]
+    return s.strip()
+
+
+def _parse_netlist_instances(text: str) -> Dict[str, Tuple[str, Dict[str, str]]]:
+    """{instance: (cell_type, {pin: net})} over a structural gate netlist
+    (yosys or OpenROAD `write_verilog` shape; escaped identifiers honoured)."""
+    out: Dict[str, Tuple[str, Dict[str, str]]] = {}
+    for m in _INST_RE.finditer(text or ""):
+        cell = m.group("cell")
+        if cell in _VERILOG_KEYWORDS:
+            continue
+        pins = {pm.group(1): _vid(pm.group(2))
+                for pm in _PORT_RE.finditer(m.group("body"))}
+        out[_vid(m.group("inst"))] = (cell, pins)
+    return out
+
+
+def _brace_block(text: str, start: int) -> Tuple[str, int]:
+    """Body of the `{ ... }` block whose opening brace precedes `start`."""
+    depth, i, n = 1, start, len(text)
+    while i < n and depth:
+        c = text[i]
+        if c == "{":
+            depth += 1
+        elif c == "}":
+            depth -= 1
+        i += 1
+    return text[start:i - 1 if depth == 0 else i], i
+
+
+_LIB_CELL_RE = re.compile(r"\bcell\s*\(\s*\"?([\w$.]+)\"?\s*\)\s*\{")
+_LIB_PIN_RE = re.compile(r"\bpin\s*\(\s*\"?([\w$\[\]]+)\"?\s*\)\s*\{")
+
+
+def _parse_liberty_pins(text: str) -> Dict[str, Dict[str, object]]:
+    """{cell: {"inputs": [pin, ...], "outputs": {pin: function_or_None}}}."""
+    cells: Dict[str, Dict[str, object]] = {}
+    for m in _LIB_CELL_RE.finditer(text or ""):
+        body, _ = _brace_block(text, m.end())
+        inputs: List[str] = []
+        outputs: Dict[str, Optional[str]] = {}
+        for pm in _LIB_PIN_RE.finditer(body):
+            pbody, _ = _brace_block(body, pm.end())
+            dm = re.search(r"\bdirection\s*:\s*\"?(\w+)", pbody)
+            d = dm.group(1).lower() if dm else ""
+            if d == "input":
+                inputs.append(pm.group(1))
+            elif d == "output":
+                fm = re.search(r"\bfunction\s*:\s*\"([^\"]*)\"", pbody)
+                outputs[pm.group(1)] = fm.group(1) if fm else None
+        cells[m.group(1)] = {"inputs": inputs, "outputs": outputs}
+    return cells
+
+
+class _LibertyFn:
+    """Evaluate a Liberty boolean `function` string under a pin->bool env.
+    Precedence (low -> high): `|`/`+`, `&`/`*`/juxtaposition, `^`, `!`/`'`.
+    Any name outside the env (a state variable such as IQ) raises KeyError."""
+    _TOK = re.compile(r"[A-Za-z_][\w\[\]]*|[01]|[()!'&*|+^]")
+
+    def __init__(self, expr: str):
+        self.toks = self._TOK.findall(expr or "")
+
+    def __call__(self, env: Dict[str, bool]) -> bool:
+        self.i = 0
+        v = self._or(env)
+        if self.i != len(self.toks):
+            raise ValueError(f"trailing tokens in function: {self.toks[self.i:]}")
+        return bool(v)
+
+    def _peek(self):
+        return self.toks[self.i] if self.i < len(self.toks) else None
+
+    def _take(self):
+        t = self._peek()
+        self.i += 1
+        return t
+
+    def _or(self, env):
+        v = self._and(env)
+        while self._peek() in ("|", "+"):
+            self._take()
+            v = v | self._and(env)
+        return v
+
+    def _and(self, env):
+        v = self._xor(env)
+        while True:
+            t = self._peek()
+            if t in ("&", "*"):
+                self._take()
+                v = v & self._xor(env)
+            elif t is not None and (t == "(" or t == "!" or t[0].isalnum()
+                                    or t[0] == "_"):
+                v = v & self._xor(env)          # juxtaposition == AND
+            else:
+                return v
+
+    def _xor(self, env):
+        v = self._unary(env)
+        while self._peek() == "^":
+            self._take()
+            v = v ^ self._unary(env)
+        return v
+
+    def _unary(self, env):
+        if self._peek() == "!":
+            self._take()
+            v = not self._unary(env)
+        else:
+            v = self._primary(env)
+        while self._peek() == "'":
+            self._take()
+            v = not v
+        return bool(v)
+
+    def _primary(self, env):
+        t = self._take()
+        if t == "(":
+            v = self._or(env)
+            if self._take() != ")":
+                raise ValueError("unbalanced parenthesis in function")
+            return v
+        if t in ("0", "1"):
+            return t == "1"
+        if t is None or not (t[0].isalpha() or t[0] == "_"):
+            raise ValueError(f"unexpected token {t!r} in function")
+        return bool(env[t])                      # KeyError on a state variable
+
+
+def classify_pin_permutation_points(names: List[str], gold_text: str,
+                                    gate_text: str, liberty_text: str
+                                    ) -> Dict[str, List[Dict[str, object]]]:
+    """Split UNPROVEN point names into `accepted` (a proven symmetry of the
+    cell — a naming artefact of the flattened recipe) and `rejected` (with the
+    failing test named). See the block comment above for the tests; every one
+    must hold or the point is rejected, and an exception inside the evaluator
+    (a sequential cell's state variable, a malformed function) rejects too."""
+    gold_i = _parse_netlist_instances(gold_text)
+    gate_i = _parse_netlist_instances(gate_text)
+    lib = _parse_liberty_pins(liberty_text)
+    accepted: List[Dict[str, object]] = []
+    rejected: List[Dict[str, object]] = []
+
+    def _no(rec, why):
+        rejected.append({**rec, "reason": why})
+
+    for name in names:
+        inst, _, pin = name.rpartition(".")
+        rec: Dict[str, object] = {"point": name, "instance": inst, "pin": pin}
+        if not inst or not pin:
+            _no(rec, "not an <instance>.<pin> wire")
+            continue
+        g, t = gold_i.get(inst), gate_i.get(inst)
+        if g is None or t is None:
+            _no(rec, "instance absent from the "
+                + ("gold" if g is None else "gate") + " netlist")
+            continue
+        gcell, gpins = g
+        tcell, tpins = t
+        rec.update({"gold_cell": gcell, "gate_cell": tcell})
+        gl, tl = lib.get(gcell), lib.get(tcell)
+        if gl is None or tl is None:
+            _no(rec, "cell "
+                + (gcell if gl is None else tcell) + " has no Liberty model")
+            continue
+        if pin not in gl["inputs"] or pin not in tl["inputs"]:
+            _no(rec, f"pin {pin} is not an INPUT of the cell on both sides")
+            continue
+        if (set(gl["inputs"]) != set(tl["inputs"])
+                or set(gl["outputs"]) != set(tl["outputs"])):
+            _no(rec, f"input/output pin sets differ between {gcell} and {tcell}")
+            continue
+        gin = {p: gpins.get(p, "") for p in gl["inputs"]}
+        tin = {p: tpins.get(p, "") for p in tl["inputs"]}
+        rec.update({"gold_input_nets": gin, "gate_input_nets": tin})
+        if sorted(gin.values()) != sorted(tin.values()) or "" in gin.values():
+            _no(rec, "the gate instance's input nets are not a permutation of "
+                     "the gold instance's input nets (a rewire, not a swap)")
+            continue
+        if any(gpins.get(o) != tpins.get(o) for o in gl["outputs"]):
+            _no(rec, "an output net of the instance differs between gold and gate")
+            continue
+        if gin.get(pin) == tin.get(pin):
+            # NEGATIVE CONTROL that found this test missing: a pin the
+            # permutation did NOT move carries the same-named net on both
+            # sides, so a point there that yosys still could not prove is a
+            # genuinely different SIGNAL under the same name — never an
+            # artefact of the pairing.
+            _no(rec, f"pin {pin} carries the SAME net on both sides "
+                     f"({gin.get(pin)}); an unproven point there is not a "
+                     "permutation artefact")
+            continue
+        nets = sorted(set(gin.values()))
+        same = True
+        why = ""
+        for o in gl["outputs"]:
+            fexpr, texpr = gl["outputs"][o], tl["outputs"][o]
+            if not fexpr or not texpr:
+                same, why = False, f"output {o} carries no Liberty function"
+                break
+            try:
+                fg, ft = _LibertyFn(fexpr), _LibertyFn(texpr)
+                for bits in itertools.product((False, True), repeat=len(nets)):
+                    nv = dict(zip(nets, bits))
+                    if (fg({p: nv[n] for p, n in gin.items()})
+                            != ft({p: nv[n] for p, n in tin.items()})):
+                        same, why = False, (
+                            f"output {o}: the permuted wiring computes a "
+                            f"DIFFERENT function of the same nets ({fexpr})")
+                        break
+            except (KeyError, ValueError) as exc:
+                same, why = False, (f"output {o}: function {fexpr!r} could not "
+                                    f"be evaluated over the pins ({exc!r}) — "
+                                    "a sequential/stateful cell is never "
+                                    "blacklisted")
+            if not same:
+                break
+        if not same:
+            _no(rec, why)
+            continue
+        rec["outputs"] = sorted(gl["outputs"])
+        rec["evidence"] = ("cell symmetry proven by truth table over "
+                          f"{len(nets)} net(s); output nets unchanged")
+        accepted.append(rec)
+    return {"accepted": accepted, "rejected": rejected}
 
 
 # ---------------------------------------------------------------------------

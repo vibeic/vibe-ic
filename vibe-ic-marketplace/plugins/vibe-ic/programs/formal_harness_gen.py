@@ -124,28 +124,72 @@ def _obligation(layer: str, key: str, description: str, path: Path) -> dict:
     }
 
 
+_TIMING_KEY_RE = re.compile(
+    r"reset|latency|turnaround|timeout|cycle|holdoff|pulse", re.IGNORECASE)
+# A leaf VALUE that itself states sequencing (prose declarations such as
+# "synchronous, active-high; internals clear the cycle after assert").
+_TIMING_VALUE_RE = re.compile(
+    r"cycle|edge|assert|deassert|synchron|active[- ]?(high|low)|latency|"
+    r"hold|after|before|同步|非同步|週期|邊緣", re.IGNORECASE)
+# L-document PROVENANCE keys: every emitted layer carries them, and none of
+# them states behaviour. ROUND-3 (subservient x gf180mcuD, 2026-09-02):
+# `clock_and_reset_waveform.derived_from.0`, `.derived_from.1` and
+# `.extraction_strategy` were enumerated as "declared temporal behavior"
+# because the CONTAINER key contains "reset" — three of seven expert
+# obligations that no property can discharge, on every design that ships
+# an L8, so Step 5 could never complete honestly.
+_PROVENANCE_KEYS = {
+    "derived_from", "extraction_strategy", "provenance", "extracted_by",
+    "emitter", "generator", "schema", "schema_version", "version",
+    "generated_at", "generated_by",
+}
+_ARTEFACT_PATH_RE = re.compile(r"^[\w./-]+\.(json|md|txt|ya?ml)$")
+
+
+def _own_and_group(prefix: str) -> Tuple[str, str]:
+    """(leaf key, nearest non-index ancestor key) of a dotted path."""
+    parts = [s for s in prefix.split(".") if s and not s.isdigit()]
+    own = parts[-1] if parts else ""
+    group = parts[-2] if len(parts) > 1 else ""
+    return own, group
+
+
 def _timing_semantics(value: Any, prefix: str = "") -> List[Tuple[str, str]]:
     """Find cycle/reset/latency semantics that can imply temporal properties.
 
     Absolute MHz/ns constraints are STA obligations, not cycle-accurate FPV
     properties. We therefore select only names that state RTL sequencing.
+
+    A leaf qualifies when its OWN key or its nearest GROUP key names
+    sequencing, or when its VALUE is a sequencing statement — not merely
+    because some ancestor container carries "reset" in its name. Provenance
+    keys and values that are artefact paths never qualify (see the ROUND-3
+    note above `_PROVENANCE_KEYS`).
     """
     out: List[Tuple[str, str]] = []
     if isinstance(value, dict):
         for key, child in value.items():
-            if str(key).lower() in {
+            k = str(key).lower()
+            if k in {
                     "extraction_evidence", "evidence", "source", "source_doc",
                     "note", "description", "matched_substring"}:
+                continue
+            if k in _PROVENANCE_KEYS:
                 continue
             p = f"{prefix}.{key}" if prefix else str(key)
             out.extend(_timing_semantics(child, p))
     elif isinstance(value, list):
         for idx, child in enumerate(value):
             out.extend(_timing_semantics(child, f"{prefix}.{idx}"))
-    elif re.search(r"reset|latency|turnaround|timeout|cycle|holdoff|pulse", prefix,
-                   re.IGNORECASE):
+    else:
         text = str(value).strip()
-        if text and text.lower() not in {"none", "null", "unspecified", "unknown"}:
+        if not text or text.lower() in {"none", "null", "unspecified", "unknown"}:
+            return out
+        if _ARTEFACT_PATH_RE.match(text):
+            return out
+        own, group = _own_and_group(prefix)
+        if (_TIMING_KEY_RE.search(own) or _TIMING_KEY_RE.search(group)
+                or _TIMING_VALUE_RE.search(text)):
             out.append((prefix, text))
     return out
 

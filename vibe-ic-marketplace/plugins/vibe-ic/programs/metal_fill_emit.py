@@ -81,6 +81,13 @@ _CFG_GLOBS = (
 # the per-layer density MEASUREMENT report. Nothing written here may match that.
 _REPORT_REL = "reports/phase3/cmp_fill_emit.json"
 _MATERIALISED_CFG_NAME = "cmp_fill_emit_config.json"
+# ROUND-3 (subservient x gf180mcuD, 2026-09-02): when the fill stays BELOW the
+# foundry floor on some layer, measure how much of the die legal dummy metal
+# could reach at all (see _metal_fill_capacity.py), so the FAIL names whether
+# the rule is out of reach of fill on this layout. Same naming constraint as
+# the report above: must not match `*metal*density*.json`.
+_CAPACITY_SCRIPT = "_metal_fill_capacity.py"
+_CAPACITY_REPORT_NAME = "cmp_fill_capacity.json"
 
 
 def _first(project: Path, globs) -> Optional[Path]:
@@ -289,6 +296,76 @@ def _is_monotone_improvement(res: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     }
 
 
+def _capacity_probe(runner, rep_dir: Path, gds_path: Path, cfg_path: Path,
+                    cell: Optional[str]) -> Dict[str, Any]:
+    """Run `_metal_fill_capacity.py` on `gds_path` with the SAME config the
+    fill used; return its JSON (or {"error": ...}). Never raises: a diagnostic
+    that cannot run must not change the fill verdict it annotates."""
+    try:
+        script = Path(__file__).resolve().parent / _CAPACITY_SCRIPT
+        if not script.is_file():
+            return {"error": f"{_CAPACITY_SCRIPT} not shipped beside this program"}
+        if not runner.covers(script):
+            materialised = rep_dir / _CAPACITY_SCRIPT
+            materialised.write_text(script.read_text())
+            script = materialised
+        out_json = rep_dir / _CAPACITY_REPORT_NAME
+        if out_json.is_file():
+            out_json.unlink()
+        env = {"FILL_GDS": str(gds_path), "FILL_CONFIG": str(cfg_path),
+               "FILL_CAPACITY_REPORT": str(out_json)}
+        if cell:
+            env["FILL_CELL"] = cell
+        rc, sout, serr = runner.run(
+            script, env,
+            path_keys=("FILL_GDS", "FILL_CONFIG", "FILL_CAPACITY_REPORT"),
+            timeout=900)
+        if not out_json.is_file():
+            return {"error": "capacity probe wrote no report", "rc": rc,
+                    "stderr": (serr or "")[-400:]}
+        res = json.loads(out_json.read_text())
+        res["report"] = str(out_json)
+        return res
+    except Exception as exc:  # noqa: BLE001
+        return {"error": f"capacity probe failed: {exc!r}"}
+
+
+def capacity_summary_lines(res: Dict[str, Any]) -> list:
+    """One line per layer that is BELOW the foundry floor, naming the measured
+    room and the lattice ceiling, from a report carrying `capacity`."""
+    cap = res.get("capacity") if isinstance(res, dict) else None
+    if not isinstance(cap, dict) or not isinstance(cap.get("layers"), list):
+        return []
+    lines = []
+    for lay in cap["layers"]:
+        if not isinstance(lay, dict):
+            continue
+        floor = lay.get("floor")
+        lc = lay.get("lattice_ceiling")
+        if floor is None or lc is None:
+            continue
+        # only the layers the fill left below the rule
+        achieved = None
+        for r in (res.get("layers") or []):
+            if isinstance(r, dict) and r.get("name") == lay.get("name"):
+                vals = [r.get(k) for k in ("density_after", "worst_window_after")]
+                vals = [float(v) for v in vals
+                        if isinstance(v, (int, float)) and not isinstance(v, bool)]
+                achieved = min(vals) if vals else None
+        if achieved is not None and achieved >= floor:
+            continue
+        verdict = ("UNREACHABLE by this config's fill lattice"
+                   if lc < floor else "reachable in principle (fill under-packed)")
+        lines.append(
+            f"{lay.get('name')}: drawn {100*float(lay.get('drawn_frac') or 0):.1f}% "
+            f"+ room for dummy {100*float(lay.get('free_frac') or 0):.1f}% "
+            f"(>= {lay.get('space_to_metal_um')} um from circuit metal) -> "
+            f"lattice ceiling {100*float(lc):.1f}% vs floor {100*float(floor):.0f}% "
+            f"— {verdict}; fill packed "
+            f"{100*float(lay.get('packing_achieved') or 0):.0f}% of the room")
+    return lines
+
+
 def run(project: Path, gds: Optional[str], config: Optional[str],
         out: Optional[str], in_place: bool, cell: Optional[str],
         report: Optional[str]) -> Dict[str, Any]:
@@ -418,6 +495,15 @@ def run(project: Path, gds: Optional[str], config: Optional[str],
         res["gds_out"] = str(dest)
     elif staged.is_file() and staged != dest:
         res["gds_out_partial"] = str(staged)
+    if (res.get("verdict") == "PARTIAL"
+            and not res.get("promoted_on_foundry_floor")):
+        # Below the foundry floor somewhere: say whether ANY legal fill could
+        # have reached it. Measured on the layout sign-off will judge (the
+        # promoted one when it exists, else the unfilled input).
+        _measured = Path(res["gds_out"]) if res.get("gds_out") else (
+            staged if staged.is_file() else gds_path)
+        res["capacity"] = _capacity_probe(runner, rep.parent, _measured,
+                                          cfg_path, cell)
     # Re-persist so `--verify-only` sees the same annotated verdict.
     rep.write_text(json.dumps(res, indent=2))
     return res
@@ -485,6 +571,8 @@ def main(argv=None) -> int:
                   "promoted and the sign-off DRC judges it")
             return PASS
         mono = res.get("promoted_on_monotone_improvement")
+        for _ln in capacity_summary_lines(res):
+            print(f"metal_fill_emit: CAPACITY — {_ln}")
         print("metal_fill_emit: FAIL — density target NOT reached on every "
               "layer (achieved densities disclosed above), and at least one "
               "layer is BELOW the foundry floor"

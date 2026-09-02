@@ -324,6 +324,30 @@ _NOT_PROSE: Dict[str, str] = {
         "pin named clk'. A pin that is not declared is not in the returned "
         "set, and the gate's verdict is built from the DECLARATION being "
         "present, never from a bad token being absent. The two defects this gate was built from (#706 pdk_target, #711 die_area_budget_um) both read English design documents, where denial is spellable and was spelled.",
+    "lec_post_layout_check::_parse_netlist_instances":
+        "Structural gate-level Verilog `<cell> <instance> ( .<pin>(<net>), ... "
+        ");` instantiations read out of the synth/PnR netlists yosys and "
+        "OpenROAD wrote, to learn which nets each cell pin carries on the gold "
+        "and gate sides of the post-layout LEC (the pin-permutation re-proof, "
+        "round 3 2026-09-02). Netlist syntax is a formal grammar with no form "
+        "that DENIES a connection: a port is connected to a net or the "
+        "instance does not name it, and absence is how this function reports "
+        "it (the pin is simply missing from the returned map, which the "
+        "classifier then REJECTS as 'not a permutation'). Same class as "
+        "`_pad_ring::parse_def` and `crosslayer_rewrite_equivalence::"
+        "module_ports`, exempted for the same stated reason.",
+    "lec_post_layout_check::_parse_liberty_pins":
+        "Liberty `cell (<name>) { pin(<name>) { direction : <d>; function : "
+        "\"<expr>\"; } }` groups read out of the PDK's timing view, to learn "
+        "each cell's input/output pins and output functions for the truth-"
+        "table symmetry test of the pin-permutation re-proof (round 3 "
+        "2026-09-02). The matched text is a production of the Liberty grammar "
+        "emitted by the characterisation tool, in which there is no form that "
+        "DENIES a pin or a function; a pin without a direction is skipped and "
+        "an output without a function is recorded as None, which the "
+        "classifier REJECTS ('no Liberty function'). Direct precedent: "
+        "`digital_hardmacro_check::parse_liberty`, the same file format "
+        "exempted for the same stated reason.",
     "digital_hardmacro_check::parse_liberty":
         "Liberty `cell` / `pin` / `pg_pin` groups read as the timing view's "
         "interface. The matched text is a production of the Liberty grammar "
