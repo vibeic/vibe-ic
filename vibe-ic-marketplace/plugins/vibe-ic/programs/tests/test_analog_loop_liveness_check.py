@@ -136,3 +136,23 @@ def test_an_active_low_reset_is_read_the_right_way_round():
     assert out["result"] == "LIVE"
     out2 = _run(_base(_square(8), _square(4), reset=[0.0] * N))
     assert out2["result"] == "LIVE"          # active-high, never asserted
+
+
+def test_the_feedback_occupancy_is_reported_so_a_near_pinned_window_is_visible():
+    # MEASURED: a real window whose DAC sat at one reference 98.6% of the
+    # time passed on edges and span alone. It is still LIVE — a converter
+    # near full scale looks the same — but a reader must be able to SEE it.
+    rare = [0.0] * (N - 6) + [1.2] * 6          # ~1.5% in the high state
+    out = _run(_base(rare, _square(4)))
+    assert out["result"] == "LIVE"
+    fb = [c for c in out["conditions"]
+          if c["condition"] == "feedback_switching"][0]
+    assert fb["low_state_fraction"] > 0.95
+
+
+def test_occupancy_is_not_a_threshold():
+    # the control: a near-pinned-but-switching window must NOT be refused,
+    # because a legitimate near-full-scale input produces exactly that
+    for hi_n in (2, 6, 40, N // 2, N - 6):
+        v = [0.0] * (N - hi_n) + [1.2] * hi_n
+        assert _run(_base(v, _square(4)))["result"] == "LIVE", hi_n

@@ -141,7 +141,19 @@ def assess(samples: Dict[str, List[float]], *, time_key: str = "t",
          "a window whose reset is never released has no conversion phase")
     need(dac, "feedback_switching",
          lambda v: (_edges(v, mid) > 0 and _span(v) >= edge_thresh,
-                    {"edges": _edges(v, mid), "span_v": round(_span(v), 6)}),
+                    {"edges": _edges(v, mid), "span_v": round(_span(v), 6),
+                     # OCCUPANCY, reported and deliberately NOT a threshold.
+                     # MEASURED: a window whose feedback sits at one
+                     # reference 98.6% of the time passes this condition on
+                     # edges and span alone, and it is barely more informative
+                     # than a pinned one. But a converter legitimately near
+                     # full scale ALSO has an occupancy near 0 or 1, so a
+                     # floor here would refuse correct data. Liveness is a
+                     # per-window question; only a SWEEP separates "near full
+                     # scale" from "stuck", by asking whether the occupancy
+                     # TRACKS the input. Reported so a reader sees it.
+                     "low_state_fraction": round(
+                         sum(1 for x in v if x <= mid) / len(v), 6)}),
          "a DAC pinned at one reference is an OPEN loop; nothing it does "
          "depends on the loop's state")
     need(decision, "decision_resolving",
