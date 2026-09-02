@@ -138,6 +138,21 @@ def test_cvdp_multifile_package_maps_exact_accepted_modules(tmp_path):
     ]}
 
 
+def test_cvdp_multifile_package_maps_one_unique_residual_module(tmp_path):
+    snap = tmp_path / "00_combined.sv"
+    snap.write_text(
+        "module accepted_wrapper; endmodule\n"
+        "module leaf_a; endmodule\n"
+        "module leaf_b; endmodule\n")
+    packed = adapter.cvdp_package_response(
+        [snap], [Path("/runner/rtl/combined_source.sv")],
+        ["rtl/scorer_wrapper_name.sv", "rtl/leaf_a.sv", "rtl/leaf_b.sv"])
+    code = json.loads(packed)["code"]
+    assert "module accepted_wrapper" in code[0]["rtl/scorer_wrapper_name.sv"]
+    assert "module leaf_a" in code[1]["rtl/leaf_a.sv"]
+    assert "module leaf_b" in code[2]["rtl/leaf_b.sv"]
+
+
 def test_cvdp_multifile_package_refuses_to_guess_a_missing_file(tmp_path):
     snap = tmp_path / "00.sv"
     snap.write_text("module unrelated; endmodule\n")

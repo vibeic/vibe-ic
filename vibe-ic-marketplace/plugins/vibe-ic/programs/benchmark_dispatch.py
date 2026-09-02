@@ -1561,7 +1561,10 @@ def _require_program_first_ai_acceptance(run_p: Path) -> None:
 
 def _shape_c_task_binding_reasons(task: dict, run_p: Path,
                                   solve_result: dict | None) -> list[str]:
-    """Bind a Shape-C review task back to its runner-owned run evidence."""
+    """Bind a Shape-C review task back to its runner-owned run evidence.
+
+    This is BLOCKING: any returned reason prevents scorer export.
+    """
     import emit_attestation as emit_attestation          # noqa: PLC0415
 
     run_p = Path(run_p).resolve()
@@ -1650,6 +1653,16 @@ def _shape_c_task_binding_reasons(task: dict, run_p: Path,
         reasons.append("solve_report Program gate record is malformed")
         ran = {}
     recorded_rtl_gen = ran.get("rtl_gen")
+    # A supplied-RTL re-entry does not *run* the upstream owner; attribution
+    # correctly records it under not_attempted as SKIPPED-BY-ENTRY. Looking
+    # only in ``ran`` made every repaired/backup candidate fail export even
+    # though the task and solve report carried the same honest gate status.
+    if recorded_rtl_gen is None:
+        not_attempted = phase3.get("not_attempted")
+        if not isinstance(not_attempted, dict):
+            reasons.append("solve_report skipped Program gate record is malformed")
+            not_attempted = {}
+        recorded_rtl_gen = not_attempted.get("rtl_gen")
     if verification.get("rtl_gen") != recorded_rtl_gen:
         reasons.append("RTL-owning Program gate differs from solve_report")
     if recorded_rtl_gen not in {"PASS", "SKIPPED-BY-ENTRY"}:
@@ -2389,6 +2402,58 @@ def _resume_solver_argv(runner: Path, proj: Path, supplied_rtl: bool,
     return _solver_argv(runner, proj, effective_entry, exit_step)
 
 
+def _ensure_phase1_frontdoor(runner: Path, project: Path, runner_budget) -> dict:
+    """Materialize canonical Phase-1 provenance before a mid-flow entry.
+
+    This prerequisite is BLOCKING: missing or mutable provenance must stop the
+    owning loop instead of silently producing a non-canonical benchmark sample.
+
+    Routing still decides the task's owning loop first. A debug/optimization
+    task may therefore *solve* from a later step, but it must not bypass the
+    one Phase-1 front door that binds its prompt to L-doc provenance. The
+    D1-only pass is accepted by its produced provenance rather than the broad
+    runner rc: Phase 1 may honestly return nonzero for an outstanding expert
+    handoff after it has emitted all hash-bound L-docs.
+    """
+    import emit_attestation as emit_attestation          # noqa: PLC0415
+
+    project = Path(project).resolve()
+    existing = emit_attestation.phase1_provenance(project)
+    if existing.get("ran") is True:
+        return {"status": "REUSED", "runner_rc": None,
+                "provenance": existing}
+
+    prompt = project / "input" / "phase1_prompt.md"
+    try:
+        prompt_before = _sha256_text(prompt.read_text(errors="replace"))
+        rtl_before = _sha256_text(_candidate_text(_rtl_files(project)))
+    except OSError as exc:
+        return {"status": "BLOCKED", "runner_rc": None,
+                "reason": f"front-door input is unreadable: {exc}"}
+
+    argv = _solver_argv(runner, project, "D1", "D1")
+    argv.append("--no-dashboard")
+    process = runner_budget.run(argv)
+    if process.error is not None:
+        return {"status": "BLOCKED", "runner_rc": process.rc,
+                "reason": process.error}
+    try:
+        prompt_after = _sha256_text(prompt.read_text(errors="replace"))
+        rtl_after = _sha256_text(_candidate_text(_rtl_files(project)))
+    except OSError as exc:
+        return {"status": "BLOCKED", "runner_rc": process.rc,
+                "reason": f"front-door output is unreadable: {exc}"}
+    if prompt_before != prompt_after or rtl_before != rtl_after:
+        return {"status": "BLOCKED", "runner_rc": process.rc,
+                "reason": "D1-only front door changed the prompt or supplied RTL"}
+    provenance = emit_attestation.phase1_provenance(project)
+    if provenance.get("ran") is not True:
+        return {"status": "BLOCKED", "runner_rc": process.rc,
+                "reason": "D1-only front door emitted no hash-bound L-doc provenance"}
+    return {"status": "GENERATED", "runner_rc": process.rc,
+            "provenance": provenance}
+
+
 def _declared_route_ai_backup(routing: dict) -> dict:
     """Validate the route-level AI-backup declaration, without defaulting it.
 
@@ -2606,6 +2671,15 @@ def _cmd_solve_locked(bench: str, dataset: str, run: str, limit: int = 0,
             ev = entry_row.get("default_evidence")
             exit_step = (tnr.EVIDENCE_EXIT.get(ev) or {}).get("exit_step")
 
+            phase1_frontdoor = None
+            if entry != "D1":
+                phase1_frontdoor = _ensure_phase1_frontdoor(
+                    runner, proj, runner_budget)
+                if phase1_frontdoor.get("status") == "BLOCKED":
+                    raise RuntimeError(
+                        "canonical Phase-1 front door failed before routed "
+                        f"entry {entry}: {phase1_frontdoor.get('reason')}")
+
             process = runner_budget.run(
                 _solver_argv(runner, proj, entry, exit_step))
             if process.error is not None:
@@ -2640,6 +2714,7 @@ def _cmd_solve_locked(bench: str, dataset: str, run: str, limit: int = 0,
                 "accepted": False, "staged": staged_chars,
                 "completeness": completeness,
                 "routing_verdict": verdict, "phases": phases,
+                "phase1_frontdoor": phase1_frontdoor,
                 "candidate_origin": (
                     "PROGRAM" if got.get("ok") else
                     ("AI_BACKUP_PENDING" if awaiting_backup else "NONE")),
@@ -2860,6 +2935,43 @@ def _cmd_resume_locked(bench: str, dataset: str, run: str,
     if len(result_by_id) != len(results) or len(task_by_id) != len(review_tasks):
         print("ERROR: duplicate problem id in solve report or review worklist",
               file=sys.stderr)
+        return 2
+
+    # Old mid-flow runs could route debug/optimization correctly yet skip the
+    # canonical Phase-1 provenance pass altogether. Repair that missing
+    # program evidence before any candidate is (re-)accepted. A provenance
+    # record that once existed and later changed is never regenerated here;
+    # that is tampering/staleness and remains blocking.
+    import emit_attestation as emit_attestation          # noqa: PLC0415
+    phase1_failures: list[str] = []
+    for result in results:
+        pid = str(result.get("id"))
+        proj = run_p / "projects" / re.sub(r"[^\w.-]", "_", pid)
+        task = task_by_id.get(pid)
+        expected = (task.get("phase1_provenance")
+                    if isinstance(task, dict) else None)
+        current = emit_attestation.phase1_provenance(proj)
+        if isinstance(expected, dict) and expected.get("ran") is True:
+            if current != expected:
+                phase1_failures.append(
+                    f"{pid}: Phase-1 provenance changed after task creation")
+            continue
+        if result.get("entry") == "D1":
+            phase1_failures.append(
+                f"{pid}: canonical D1-entry run emitted no Phase-1 provenance")
+            continue
+        frontdoor = _ensure_phase1_frontdoor(runner, proj, runner_budget)
+        if frontdoor.get("status") == "BLOCKED":
+            phase1_failures.append(
+                f"{pid}: {frontdoor.get('reason') or 'Phase-1 front door blocked'}")
+            continue
+        current = frontdoor["provenance"]
+        result["phase1_frontdoor"] = frontdoor
+        if isinstance(task, dict):
+            task["phase1_provenance"] = current
+    if phase1_failures:
+        print("ERROR: canonical Phase-1 front door BLOCKED:\n  "
+              + "\n  ".join(phase1_failures), file=sys.stderr)
         return 2
 
     def _run_and_collect(job) -> _ResumeRunnerOutcome:

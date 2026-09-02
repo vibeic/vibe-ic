@@ -135,6 +135,27 @@ def test_nonzero_broader_runner_rc_is_disclosed_but_does_not_block_rtl_sample(
     assert recorded["results"][0].get("export_guard_notes") == []
 
 
+def test_supplied_rtl_gate_is_read_from_not_attempted_on_export(tmp_path):
+    """Mid-flow re-entry honestly records rtl_gen as SKIPPED-BY-ENTRY.
+
+    It is not a gate that ran, so flow attribution places it under
+    ``not_attempted``. The export guard must compare that exact status with
+    the review task instead of inventing a missing/failed RTL owner.
+    """
+    run, dataset, _ = _fixture(tmp_path)
+    task = _task(run)
+    task["program_verification"]["rtl_gen"] = "SKIPPED-BY-ENTRY"
+    (run / "needs_ai_review.jsonl").write_text(json.dumps(task) + "\n")
+    solve = json.loads((run / "solve_report.json").read_text())
+    verifying = solve["results"][0]["phases"]["phase3_verifying"]
+    verifying["ran"].pop("rtl_gen")
+    verifying["not_attempted"] = {"rtl_gen": "SKIPPED-BY-ENTRY"}
+    (run / "solve_report.json").write_text(json.dumps(solve) + "\n")
+
+    dispatch._export_accepted_shape_c_samples("verilogeval-v2", run)
+    assert (run / "samples" / "Prob900_neutral_sample01.sv").is_file()
+
+
 def test_shape_c_applicable_guard_skip_is_recorded_in_solve_report(
         tmp_path, monkeypatch):
     run, dataset, _ = _fixture(tmp_path)
