@@ -23,6 +23,7 @@ import benchmark_entry_surface_check as entry_check  # noqa: E402
 import benchmark_io_adapter as adapter  # noqa: E402
 import score_cvdp_open as cvdp_score  # noqa: E402
 import task_nature_route as general_route  # noqa: E402
+import rtl_final_bundle_integrity as bundle_gate  # noqa: E402
 
 
 def test_repository_has_no_benchmark_specific_entry_surface():
@@ -151,6 +152,84 @@ def test_cvdp_multifile_package_maps_one_unique_residual_module(tmp_path):
     assert "module accepted_wrapper" in code[0]["rtl/scorer_wrapper_name.sv"]
     assert "module leaf_a" in code[1]["rtl/leaf_a.sv"]
     assert "module leaf_b" in code[2]["rtl/leaf_b.sv"]
+
+
+def test_cvdp_package_keeps_a_reviewed_private_dependency(tmp_path):
+    snap = tmp_path / "00_combined.v"
+    snap.write_text(
+        "module encoder__inner(input x, output y); assign y=x; endmodule\n"
+        "module encoder(input x, output y); "
+        "encoder__inner u_inner(.x(x), .y(y)); endmodule\n"
+        "module single_port_ram(input x, output y); assign y=x; endmodule\n")
+    packed = adapter.cvdp_package_response(
+        [snap], [Path("/runner/rtl/combined.v")],
+        ["rtl/encoder.sv", "rtl/single_port_ram.sv"])
+    code = json.loads(packed)["code"]
+    encoder = code[0]["rtl/encoder.sv"]
+    ram = code[1]["rtl/single_port_ram.sv"]
+    assert "module encoder__inner" in encoder
+    assert "module encoder(" in encoder
+    assert "module single_port_ram" not in encoder
+    assert "module single_port_ram" in ram
+    if bundle_gate.shutil.which("iverilog") is not None:
+        assert bundle_gate.check_final_bundle(
+            [snap], adapter.cvdp_response_file_map(
+                packed, ["rtl/encoder.sv", "rtl/single_port_ram.sv"])
+        )["status"] == "PASS"
+
+
+def test_cvdp_package_refuses_duplicate_reviewed_module_ownership(tmp_path):
+    top = tmp_path / "00_top.sv"
+    helper = tmp_path / "01_helper.sv"
+    top.write_text(
+        "module top; helper u(); endmodule\nmodule helper; endmodule\n")
+    helper.write_text("module helper; endmodule\n")
+    with pytest.raises(ValueError, match="duplicate module.*helper"):
+        adapter.cvdp_package_response(
+            [top, helper],
+            [Path("/runner/rtl/top.sv"), Path("/runner/rtl/helper.sv")],
+            ["rtl/top.sv", "rtl/helper.sv"])
+
+
+def test_cvdp_export_blocks_a_noncompiling_final_bundle(tmp_path, monkeypatch):
+    run = tmp_path / "run"
+    (run / "responses").mkdir(parents=True)
+    snapshot = tmp_path / "snapshot" / "top.sv"
+    snapshot.parent.mkdir()
+    snapshot.write_text("module top; missing_dependency u(); endmodule\n")
+    dataset = tmp_path / "dataset.jsonl"
+    dataset.write_text(json.dumps({
+        "id": "p", "input": {"prompt": "make top", "context": {}},
+        "output": {"context": {"rtl/top.sv": "hidden"}},
+    }) + "\n")
+    task = {
+        "id": "p",
+        "candidate_snapshot": {
+            "rtl_paths": [str(snapshot)],
+            "source_rtl_paths": ["/runner/rtl/top.sv"],
+        },
+        "rtl_sha256": "fixture",
+    }
+    (run / dispatch._REVIEW_WORKLIST).write_text(json.dumps(task) + "\n")
+    (run / "solve_report.json").write_text(json.dumps({
+        "results": [{"id": "p", "accepted": True}],
+    }) + "\n")
+    monkeypatch.setattr(dispatch, "_shape_c_task_binding_reasons",
+                        lambda *_args: [])
+    monkeypatch.setattr(dispatch, "_validate_ai_review",
+                        lambda _task: {"status": "ACCEPTED"})
+    monkeypatch.setattr(dispatch, "_validate_candidate_snapshot",
+                        lambda *_args: [])
+    monkeypatch.setattr(bundle_gate, "check_final_bundle",
+                        lambda *_args: {
+                            "status": "BLOCKED",
+                            "reasons": ["missing_dependency"],
+                            "compile": {"status": "BLOCKED"},
+                        })
+
+    with pytest.raises(SystemExit, match="final RTL bundle integrity is BLOCKED"):
+        dispatch._export_accepted_cvdp_responses("cvdp-open", dataset, run)
+    assert not (run / "responses" / "accepted_cvdp.jsonl").exists()
 
 
 def test_cvdp_multifile_package_refuses_to_guess_a_missing_file(tmp_path):

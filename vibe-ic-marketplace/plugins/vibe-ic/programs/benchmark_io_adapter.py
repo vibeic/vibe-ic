@@ -47,7 +47,7 @@ _HERE = Path(__file__).resolve().parent
 if str(_HERE) not in sys.path:
     sys.path.insert(0, str(_HERE))
 
-import _hdl_code_text  # noqa: E402 - after the sys.path insert above
+import rtl_final_bundle_integrity as bundle_integrity  # noqa: E402
 
 
 class OracleAccess(RuntimeError):
@@ -296,9 +296,31 @@ def cvdp_scorer_contracts(dataset: Path) -> Dict[str, List[str]]:
     return contracts
 
 
-_MODULE_BLOCK_RE = re.compile(
-    r"\bmodule\s+([A-Za-z_]\w*)\b[\s\S]*?\bendmodule\b",
-    re.MULTILINE)
+def cvdp_response_file_map(completion: str,
+                           response_paths: List[str]) -> Dict[str, str]:
+    """Decode exactly the file bytes the CVDP scorer will receive."""
+    if len(response_paths) == 1:
+        return {response_paths[0]: completion}
+    try:
+        payload = json.loads(completion)
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"CVDP multi-file response is not JSON: {exc}") from exc
+    code = payload.get("code") if isinstance(payload, dict) else None
+    if not isinstance(code, list):
+        raise ValueError("CVDP multi-file response lacks a code list")
+    files: Dict[str, str] = {}
+    for item in code:
+        if not isinstance(item, dict) or len(item) != 1:
+            raise ValueError("CVDP code entries must be one-path objects")
+        path, text = next(iter(item.items()))
+        if not isinstance(path, str) or not isinstance(text, str):
+            raise ValueError("CVDP code entry path and content must be strings")
+        if path in files:
+            raise ValueError(f"duplicate CVDP response path {path!r}")
+        files[path] = text
+    if list(files) != response_paths:
+        raise ValueError("CVDP packaged path order differs from scorer contract")
+    return files
 
 
 def cvdp_package_response(snapshot_paths: List[Path],
@@ -322,22 +344,31 @@ def cvdp_package_response(snapshot_paths: List[Path],
         raise ValueError("CVDP scorer response contract is absent")
 
     texts = [path.read_text(errors="replace") for path in snapshots]
+    source_modules = [bundle_integrity.module_blocks(text) for text in texts]
+    module_rows = [row for rows in source_modules for row in rows]
+    module_counts: Dict[str, int] = {}
+    for name, _body in module_rows:
+        module_counts[name] = module_counts.get(name, 0) + 1
+    duplicate_modules = sorted(
+        name for name, count in module_counts.items() if count != 1)
+    if duplicate_modules:
+        raise ValueError("accepted RTL declares duplicate module(s): "
+                         + ", ".join(duplicate_modules))
     combined = "\n".join(texts)
     if len(response_paths) == 1:
         return combined
 
-    by_basename: Dict[str, str] = {}
+    by_basename: Dict[str, tuple[str, set[str]]] = {}
     duplicate_basenames = set()
-    for source, text in zip(sources, texts):
+    for source, text, modules in zip(sources, texts, source_modules):
         name = source.name
         if name in by_basename:
             duplicate_basenames.add(name)
-        by_basename[name] = text
+        by_basename[name] = (text, {module for module, _body in modules})
     for name in duplicate_basenames:
         by_basename.pop(name, None)
 
     by_module: Dict[str, str] = {}
-    duplicate_modules = set()
     # #731 — SCAN the blanked text, SLICE the original. A commented-out
     # `endmodule` inside a module body ends the non-greedy `[\s\S]*?` early,
     # so `match.group(0)` is the module TRUNCATED at the comment: the packaged
@@ -346,34 +377,36 @@ def cvdp_package_response(snapshot_paths: List[Path],
     # precisely so the span can still index `combined` — this function's
     # contract is "exact accepted RTL bytes", and bytes with their comments
     # blanked out are not the accepted bytes.
-    scanned = _hdl_code_text.strip_hdl_comments_and_strings(combined)
-    for match in _MODULE_BLOCK_RE.finditer(scanned):
-        name = match.group(1)
-        body = combined[match.start():match.end()]
-        if name in by_module:
-            duplicate_modules.add(name)
+    for name, body in module_rows:
         by_module[name] = body
-    for name in duplicate_modules:
-        by_module.pop(name, None)
 
-    selected: List[Optional[tuple]] = [None] * len(response_paths)
-    used = set()
+    selected: List[Optional[Dict[str, Any]]] = [None] * len(response_paths)
+    used_modules: set[str] = set()
+    requested_stems = {Path(path).stem for path in response_paths}
     for index, response_path in enumerate(response_paths):
         basename = Path(response_path).name
         stem = Path(response_path).stem
         if basename in by_basename:
-            body = by_basename[basename]
-            key = ("file", basename)
+            source_body, names = by_basename[basename]
+            claimed_by_another_path = names & (requested_stems - {stem})
+        else:
+            source_body, names, claimed_by_another_path = "", set(), set()
+        if basename in by_basename and not claimed_by_another_path:
+            body = source_body
+            chosen_modules = names
+            whole_source = True
         elif stem in by_module:
             body = by_module[stem]
-            key = ("module", stem)
+            chosen_modules = {stem}
+            whole_source = False
         else:
             continue
-        if key in used:
+        if used_modules & chosen_modules:
             raise ValueError(
                 f"accepted RTL mapping for {response_path!r} is ambiguous")
-        used.add(key)
-        selected[index] = (body, key)
+        used_modules.update(chosen_modules)
+        selected[index] = {"body": body, "modules": set(chosen_modules),
+                           "whole_source": whole_source}
 
     # An accepted source may contain several modules while the scorer asks for
     # one file per module. After every exact basename/module match, a SINGLE
@@ -383,20 +416,72 @@ def cvdp_package_response(snapshot_paths: List[Path],
     missing = [index for index, value in enumerate(selected) if value is None]
     unused_modules = [
         (name, body) for name, body in by_module.items()
-        if ("module", name) not in used
+        if name not in used_modules
     ]
     if len(missing) == 1 and len(unused_modules) == 1:
         name, body = unused_modules[0]
-        selected[missing[0]] = (body, ("module", name))
-        used.add(("module", name))
+        selected[missing[0]] = {"body": body, "modules": {name},
+                                "whole_source": False}
+        used_modules.add(name)
+    for response_path, value in zip(response_paths, selected):
+        if value is None:
+            raise ValueError(
+                f"accepted RTL cannot be mapped exactly to {response_path!r}")
+
+    # Preserve every reviewed module.  A helper may move only when the module
+    # already selected for exactly one response transitively instantiates it.
+    # This repairs a deterministic file-envelope split without inventing RTL.
+    all_names = set(by_module)
+    dependencies = {
+        name: bundle_integrity.module_dependencies(body, all_names)
+        for name, body in by_module.items()
+    }
+    for orphan in [name for name in by_module if name not in used_modules]:
+        owners = []
+        for index, value in enumerate(selected):
+            if value is None:
+                continue
+            reachable = set(value["modules"])
+            pending = list(reachable)
+            while pending:
+                current = pending.pop()
+                for dependency in dependencies.get(current, set()):
+                    if dependency not in reachable:
+                        reachable.add(dependency)
+                        pending.append(dependency)
+            if orphan in reachable:
+                owners.append(index)
+        if len(owners) != 1:
+            continue
+        selected[owners[0]]["modules"].add(orphan)
+        selected[owners[0]]["whole_source"] = False
+        used_modules.add(orphan)
+
+    unrepresented = sorted(all_names - used_modules)
+    if unrepresented:
+        raise ValueError("accepted RTL module(s) would be dropped by the scorer "
+                         "envelope: " + ", ".join(unrepresented))
+
+    module_order = {name: index for index, (name, _body) in enumerate(module_rows)}
+    for value in selected:
+        if value is not None and not value["whole_source"]:
+            value["body"] = "\n".join(
+                by_module[name] for name in sorted(
+                    value["modules"], key=module_order.__getitem__))
 
     packaged = []
     for response_path, value in zip(response_paths, selected):
         if value is None:
             raise ValueError(
                 f"accepted RTL cannot be mapped exactly to {response_path!r}")
-        body, _key = value
-        packaged.append({response_path: body})
+        packaged.append({response_path: value["body"]})
+    packaged_counts: Dict[str, int] = {}
+    for item in packaged:
+        for body in item.values():
+            for name, _module_body in bundle_integrity.module_blocks(body):
+                packaged_counts[name] = packaged_counts.get(name, 0) + 1
+    if packaged_counts != {name: 1 for name in all_names}:
+        raise ValueError("packaged module inventory differs from reviewed RTL")
     return json.dumps({"code": packaged}, ensure_ascii=False)
 
 
