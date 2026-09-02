@@ -1652,6 +1652,31 @@ LIBRARY: Dict[str, Dict[str, Any]] = {
             "order": [1, 2],
         },
         "requires_derived": [
+            # WHAT THIS BOUND ACTUALLY MEASURES, since its name suggests
+            # something it stopped measuring in v1.16.10.
+            #
+            # MEASURED (round 33, v1.16.81 / 626809984241): it reads 2.0000 at
+            # fclk = 0.1, 1.0 and 10.0 MHz alike -- it is IDENTICALLY
+            # `slew_design_margin`, for every declaration. `fclk` appears once
+            # in the time available (1/fclk) and once inside the bias length
+            # this entry derives FROM the slew requirement, so
+            # I_tail ∝ fclk cancels it:
+            #
+            #     fclk   r_ib_l_um   I_tail      C_load     slew_margin
+            #      0.1    150.889     9.81 uA   12.267 pF     2.0000
+            #      1.0     15.089    98.14      12.267        2.0000
+            #     10.0      1.509   981.37      12.267        2.0000
+            #
+            # So it cannot fail on a design's numbers, and reading it as
+            # "this block has 2x the slew it needs" is reading a constant.
+            # It is retained as a CONSISTENCY check and nothing more: it moves
+            # only if `_LOAD_F_EXPR` and `_R_IB_L_UM_EXPR` are edited apart,
+            # which is a real regression and the reason not to delete it.
+            #
+            # Changing it to read `fclk_max` -- the clock the emitted
+            # testbench actually uses -- was tried and MEASURED to change
+            # nothing, for the same cancellation. The clock mismatch is real
+            # but it is not here: see the note on `bias_resistor_l_um`.
             {"name": "slew_margin", "expr": SLEW_MARGIN_EXPR,
              "min": 1.0, "max": 1.0e9,
              "why": ("the integrator's output has to move a full reference "
@@ -1669,6 +1694,27 @@ LIBRARY: Dict[str, Dict[str, Any]] = {
                      "(fclk 1 MHz, ENOB 14, OSR 256, vref 1 V, "
                      "ihp-sg13g2): about 23, so the nominal bias is carried "
                      "and this bound is what says it was checked")},
+            # THE CLOCK MISMATCH, recorded where it lives and NOT fixed
+            # here. This entry binds `fclk_max` (see requires_bound), builds
+            # its testbench from `fclk_max` --
+            #     tper_ns   = 1000 / fclk_max
+            #     thigh_ns  = 1000 / fclk_max / 2 - 1
+            #     tmeas_ns  = window_clocks * 1000 / fclk_max * 1.02
+            #     tstop_ns  = window_clocks * 2000 / fclk_max
+            # -- and then derives the CIRCUIT from `fclk`: this expression,
+            # `_TAIL_I_EXPR`, and the `r_ib` length that follows from it. On
+            # the declaration in hand that is 1.0 MHz against a 10 MHz
+            # testbench, so the bias is sized for a clock ten times slower
+            # than the one it is simulated at: 98 uA where fclk_max would ask
+            # for 981 uA.
+            #
+            # It is NOT changed here, deliberately. Deriving the bias at
+            # fclk_max multiplies the integrator tail current by ten and
+            # lands directly on the current ceiling that is already the
+            # subject of an open decision -- see
+            # docs/research/2026-09-03-u-hawaii-adc-delta-sigma-three-way-
+            # constraint-conflict.md. Which declaration gives way is not this
+            # file's call to make silently.
             {"name": "bias_resistor_l_um", "expr": _R_IB_L_UM_EXPR,
              "min": 1.0, "max": 2000.0,
              "why": ("the bias resistor is now DERIVED from the slew the "
