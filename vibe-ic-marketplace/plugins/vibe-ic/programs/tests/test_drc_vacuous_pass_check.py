@@ -592,11 +592,125 @@ def test_nonzero_violations_imply_geometry_no_false_alarm(tmp_path):
 
 def test_unbound_layouts_require_unanimity(tmp_path):
     """A stray empty artifact the report never names must not condemn a run
-    whose real layout is populated (no false alarm from discovery noise)."""
-    _write_gds(tmp_path / "scratch_empty.gds", n_shapes=0)
+    whose real layout is populated (no false alarm from discovery noise).
+
+    THE FIXTURE IS THE ONE THAT WAS MEASURED. vibe-ic#693 was reproduced by
+    dropping ONE 0-component `spm.def` into a `phase3/stage3/pnr_d8/` scratch
+    directory of a passing run; that is a DEF beside a real GDS, and it is what
+    this test now builds. It used to build a second GDS instead — a fixture
+    indistinguishable from the kspm42/spmB defect (a 0-shape sign-off GDS
+    beside a populated one), where PASS is exactly the wrong answer. See
+    `test_a_populated_sibling_does_not_acquit_an_unnamed_empty_layout` for that
+    case, and `_subject_pool` in the program for why a DEF is now dropped from
+    a GDS run's pool outright rather than merely out-voted in it.
+    """
     _write_gds(tmp_path / "real_top.gds", n_shapes=900)
+    scratch = tmp_path / "pnr_d8"
+    scratch.mkdir()
+    (scratch / "top_design.def").write_text(
+        "VERSION 5.8 ;\nDESIGN top_design ;\nCOMPONENTS 0 ;\n"
+        "END COMPONENTS\nEND DESIGN\n")
     (tmp_path / "drc.rpt").write_text("DRC complete\n0 violations\n")
     assert dvp.audit(tmp_path).verdict == "PASS"
+
+
+# ===========================================================================
+# THE DENOMINATOR MUST BE PROVEN BY THE ARTEFACT THAT WAS CHECKED
+#
+# MEASURED (kspm42/spmB): `DRC_CLEAN_EARNED ... "MEASURED: 7232 shape(s) in the
+# layout"` over a run whose sign-off GDS was a broken 106-byte stream measuring
+# 0 shapes. The 7232 was a DEF's `COMPONENTS + NETS`, lifted by `max()` off a
+# pool that mixed 5 GDS and 9 DEF candidates.
+# ===========================================================================
+def test_a_def_does_not_vouch_for_a_gds_decks_denominator(tmp_path):
+    """THE DEFECT, in miniature: an empty sign-off GDS beside a fat DEF.
+
+    The DEF is not a smaller vote than the GDS's zero — it is not a vote at
+    all. `COMPONENTS + NETS` is a placement census; it is not read off the
+    stream the deck opened and cannot say whether that stream carries
+    geometry.
+    """
+    _write_gds(tmp_path / "top_design.gds", n_shapes=0)
+    (tmp_path / "routed.def").write_text(
+        "VERSION 5.8 ;\nDESIGN top_design ;\nCOMPONENTS 7232 ;\n"
+        "END COMPONENTS\nEND DESIGN\n")
+    (tmp_path / "drc.rpt").write_text("DRC complete\n0 violations\n")
+    res = dvp.audit(tmp_path)
+    assert res.verdict == "INCONCLUSIVE"
+    assert res.passed is False
+    assert any(f.rule == "DRC_VACUOUS_PASS" for f in res.findings)
+    c = res.summary["per_file"][0]
+    assert c["layout_subject_kind"] == "layout"
+    assert [Path(f).name for f in c["layout_subject_files"]] == ["top_design.gds"]
+    assert "7232" not in c["geometry_evidence"]
+
+
+def test_a_populated_sibling_does_not_acquit_an_unnamed_empty_layout(tmp_path):
+    """`max()` IS THE WRONG QUANTIFIER. Two GDS candidates, one empty and one
+    populated, and a report that names neither: which one the deck read is
+    UNKNOWN, so no measurement acquits it. NOT_MEASURED, never earned."""
+    _write_gds(tmp_path / "top_design.gds", n_shapes=0)
+    _write_gds(tmp_path / "top_design.filled.gds", n_shapes=900)
+    (tmp_path / "drc.rpt").write_text("DRC complete\n0 violations\n")
+    res = dvp.audit(tmp_path)
+    assert res.verdict == "INCONCLUSIVE"
+    assert res.passed is False
+    c = res.summary["per_file"][0]
+    assert c["layout_subject_unknown"] is True
+    assert c["geometry_established"] is False
+    assert c["geometry_evidence"].startswith("NOT_MEASURED:")
+
+
+def test_naming_the_layout_settles_it_in_both_directions(tmp_path):
+    """NOT_MEASURED is a statement about a MISSING citation, not a new blanket
+    refusal. Name the artefact in the report and the pool is that one artefact:
+    the empty one is condemned, the populated one is earned. Same two files,
+    same prose, only the citation moves."""
+    _write_gds(tmp_path / "top_design.gds", n_shapes=0)
+    _write_gds(tmp_path / "top_design.filled.gds", n_shapes=900)
+    rpt = tmp_path / "drc.rpt"
+    rpt.write_text("DRC complete\nLoading top_design.gds\n0 violations\n")
+    assert dvp.audit(tmp_path).verdict == "INCONCLUSIVE"
+    rpt.write_text("DRC complete\nLoading top_design.filled.gds\n0 violations\n")
+    res = dvp.audit(tmp_path)
+    assert res.verdict == "PASS"
+    assert any(f.rule == "DRC_CLEAN_EARNED" for f in res.findings)
+
+
+def test_every_candidate_populated_still_earns_the_clean(tmp_path):
+    """REVERSE CONTROL: the universal rule is not a way to refuse every zero.
+    Where every candidate that could be the subject holds geometry, the zero is
+    still earned — whichever one the deck read, it was not empty.
+
+    GREEN IN BOTH ARMS BY CONSTRUCTION, which is the whole job of a reverse
+    control: it asserts the PROPERTY (a real layout still earns its clean) and
+    not the mechanism, so it cannot be satisfied by the change it is guarding
+    against. The min-vs-max mechanism is pinned by
+    `test_a_populated_sibling_does_not_acquit_an_unnamed_empty_layout`, which
+    does fail against the pre-fix program.
+    """
+    _write_gds(tmp_path / "top_design.gds", n_shapes=900)
+    _write_gds(tmp_path / "top_design.filled.gds", n_shapes=907)
+    (tmp_path / "drc.rpt").write_text("DRC complete\n0 violations\n")
+    res = dvp.audit(tmp_path)
+    assert res.verdict == "PASS"
+    assert res.passed is True
+    assert any(f.rule == "DRC_CLEAN_EARNED" for f in res.findings)
+    assert res.summary["per_file"][0]["geometry_evidence"].startswith("MEASURED:")
+
+
+def test_a_def_only_run_is_still_measured_by_its_def(tmp_path):
+    """REVERSE CONTROL: the kind rule DROPS DEFs from a GDS run's pool; it does
+    not make a DEF unmeasurable. A router in-loop DRC over the routed DEF, with
+    no GDS in the tree at all, still has its denominator proven by that DEF —
+    and still earns its clean, in either arm."""
+    (tmp_path / "routed.def").write_text(
+        "VERSION 5.8 ;\nDESIGN top_design ;\nCOMPONENTS 7232 ;\n"
+        "END COMPONENTS\nEND DESIGN\n")
+    (tmp_path / "drc.rpt").write_text("DRC complete\n0 violations\n")
+    res = dvp.audit(tmp_path)
+    assert res.verdict == "PASS"
+    assert any(f.rule == "DRC_CLEAN_EARNED" for f in res.findings)
 
 
 def test_the_earned_finding_does_not_claim_the_deck_was_adequate(tmp_path):

@@ -26,6 +26,14 @@ and this checker decides on the measurement alone:
       module happens to be importable; the DEF `COMPONENTS <N>` header for
       DEF). `shapes > 0` establishes geometry; a measured `shapes == 0` is
       DECISIVE VACUOUS and overrides any claim the log makes.
+
+      ONE KIND, AND NO AGGREGATION WHERE THE SUBJECT IS KNOWN. The artefact
+      the deck consumed is the only one that can prove its denominator: a DEF's
+      `COMPONENTS + NETS` census never speaks for a GDS deck, and the pool is
+      never read with `max()` ("some file here holds geometry"), only with the
+      universal `min() > 0` ("every file that could be the subject does").
+      A pool that disagrees, with nothing named, is NOT_MEASURED. See
+      `_subject_pool` for the run this cost.
   (B) REPORTED POSITIVE COUNT -- a NUMERIC shape/cell/polygon/area count the
       checker itself reports, in any word order ("4211 shapes", "cells: 87",
       "shape count: 4211"). The NUMBER is the observable; a count of 0 is not
@@ -93,6 +101,8 @@ Honest-failure contract
                                     never speaks for itself: see
                                     `emitted_empty_proof`
   - measured layout has 0 shapes -> INCONCLUSIVE (exit 1)  -- the bug, decisive
+  - subject-kind candidates disagree and none is named -> INCONCLUSIVE (exit 1)
+                                    -- NOT_MEASURED, the subject is unknown
   - 0-count, geometry NOT established -> INCONCLUSIVE (exit 1)  -- the bug
   - unparseable verdict, geometry NOT established -> INCONCLUSIVE (exit 1)
   - NO violation count anywhere in scope -> INCONCLUSIVE (exit 1) -- geometry
@@ -695,6 +705,90 @@ def _bind_layouts(cands: List[Path], cited: set) -> Tuple[List[Path], bool]:
     if named:
         return named, False       # ambiguous citation — unanimity, not decision
     return cands, False
+
+
+# ---------------------------------------------------------------------------
+# THE DENOMINATOR MUST BE PROVEN BY THE ARTEFACT THAT WAS ACTUALLY CHECKED
+# ---------------------------------------------------------------------------
+# MEASURED (kspm42/spmB, gf180mcuD, step 31, `reports/phase3/drc_vacuous.json`):
+# this gate published
+#
+#     DRC_CLEAN_EARNED ... "MEASURED: 7232 shape(s) in the layout"
+#
+# over a KLayout sign-off run whose layout was a 106-byte `spm.gds` that
+# streamed out broken. The gate's OWN per-file record, in the same JSON, wrote
+# `spm.gds  shapes: 0, cells: 1` three times over. The 7232 came from
+# `phase3/stage3/pnr/filled.def` — a DEF. Every producer upstream had already
+# said so honestly: `gds_size.json` = `ERROR TOO_SMALL 106 bytes`,
+# `pad_ring_route_evidence.json` = `FAIL / PADRING_GDS_REFERENCES_LOST`. The
+# break was HERE, in the consumer: a DEF's component count was spent to acquit
+# a GDS deck's zero.
+#
+# Two separate faults, and neither one alone accounts for it:
+#
+#   1. KINDS CANNOT VOUCH FOR EACH OTHER. A DEF's measurement is
+#      `COMPONENTS + NETS` — a placement census. It is not a count of drawn
+#      shapes, it is not read off the same artefact, and it says nothing
+#      whatever about whether a GDS stream carries geometry. A deck that ran on
+#      a GDS must have its denominator proven BY THAT GDS. So the DEFs are
+#      DROPPED from the pool when any geometry-bearing candidate exists — not
+#      merely out-voted by it, because being out-voted still lets them vote.
+#
+#   2. `max()` OVER A CANDIDATE POOL IS THE WRONG QUANTIFIER. `max(...) > 0`
+#      answers "does SOME file in this tree hold geometry?" — an EXISTENTIAL,
+#      and a strictly weaker proposition than the one the verdict then states.
+#      The question is "did the artefact the run consumed hold geometry?".
+#      Where that artefact is NAMED there is nothing to aggregate: measure that
+#      one. Where it is NOT named, the only sound reading of the pool is the
+#      UNIVERSAL one — every candidate that could have been the subject holds
+#      geometry, so whichever it was, it was not empty. That is `min(...) > 0`,
+#      the exact dual of the `all(... == 0)` rule that already governs the
+#      condemning direction, and it is STRICTER than what it replaces, never
+#      more lenient.
+#
+# A pool that is mixed under the universal reading — some candidates empty,
+# some populated, none of them named — establishes NOTHING. That is
+# NOT_MEASURED, and NOT_MEASURED is not a licence to fall through to a rule
+# that is lenient to everyone: geometry stays unestablished and the 0 stays
+# unearned, which is this program's standing fail-safe.
+#
+# SWEPT over the 246 `drc_vacuous.json` reports on this host: 215 GDS-subject
+# runs and 22 DEF-subject runs keep their verdict unchanged (every candidate in
+# the subject kind measures > 0), 2 carry no measurement at all, and exactly
+# ONE changes — spmB, the defect. Zero false positives.
+#
+# vibe-ic#693 is preserved by fault 1, not weakened by fault 2's repair: the
+# stray artefact it measured was a 0-component `spm.def` under a
+# `phase3/stage3/pnr_d8/` scratch directory, and a DEF is now not in the pool
+# at all on a run that has a GDS.
+_GEOMETRY_SUFFIXES = (".gds", ".gds.gz", ".gdsii", ".oas", ".oasis")
+
+
+def _is_geometry_artefact(m: LayoutMeasure) -> bool:
+    """Does this measurement count DRAWN GEOMETRY (a GDS/OASIS shape walk), as
+    opposed to a DEF's `COMPONENTS + NETS` census? Keyed on the artefact name,
+    the same way `measure_layout` chooses its measurer — `fmt` is the suffix on
+    the klayout path and is not a reliable discriminator."""
+    return Path(m.file).name.lower().endswith(_GEOMETRY_SUFFIXES)
+
+
+def _subject_pool(measures: List[LayoutMeasure]
+                  ) -> Tuple[List[LayoutMeasure], str]:
+    """The measurements that could be ABOUT the artefact the deck consumed.
+
+    A DRC deck reads one artefact of one kind. When any geometry-bearing
+    candidate is present the subject is one of THOSE, and the DEFs are dropped.
+    Only where the tree holds no geometry-bearing candidate at all — a router
+    in-loop DRC over the routed DEF — does the DEF census speak.
+
+    Unmeasurable candidates (`shapes is None`) are excluded exactly as before:
+    they are not evidence of geometry, and not evidence of its absence either.
+    """
+    usable = [m for m in measures if m.shapes is not None]
+    geom = [m for m in usable if _is_geometry_artefact(m)]
+    if geom:
+        return geom, "layout"
+    return usable, ("placement" if usable else "none")
 
 
 # Compiled once so the STREAMING pass can test it per line without recompiling
@@ -1620,13 +1714,29 @@ def audit(path: Path, layout: Optional[Path] = None,
         measures = [measure_layout(p) for p in bound]
         c["layout_measures"] = [asdict(m) for m in measures]
         c["layout_bound_by_name"] = is_bound
-        measured = [m.shapes for m in measures if m.shapes is not None]
+        # ONE KIND ONLY. A DEF's component census never testifies about a GDS
+        # deck's denominator -- see `_subject_pool` for the run this cost.
+        subject, subject_kind = _subject_pool(measures)
+        c["layout_subject_kind"] = subject_kind
+        c["layout_subject_files"] = [m.file for m in subject]
+        measured = [m.shapes for m in subject]
         # A MEASURED empty layout is decisive: it beats anything the log claims.
         # Bound by name -> any zero condemns. Unbound -> demand unanimity, so an
         # unrelated stray empty file cannot condemn a real run.
         measured_empty = (any(s == 0 for s in measured) if is_bound
                           else bool(measured) and all(s == 0 for s in measured))
-        measured_geometry = bool(measured) and not measured_empty and max(measured) > 0
+        # ACQUITTAL IS UNIVERSAL, NEVER `max`. Where the report names exactly
+        # one artefact this pool holds exactly that one and there is nothing to
+        # aggregate. Where it names none, EVERY candidate that could have been
+        # the subject must hold geometry before the zero is earned.
+        measured_floor = min(measured) if measured else None
+        measured_geometry = measured_floor is not None and measured_floor > 0
+        # Neither proven empty nor proven populated, and nothing named: the
+        # subject is UNKNOWN. Recorded so the reader sees a refusal to measure,
+        # not a measurement.
+        measured_unknown = (bool(measured) and not measured_empty
+                            and not measured_geometry)
+        c["layout_subject_unknown"] = measured_unknown
         reported_geometry = (c["reported_geometry_max"] or 0) > 0
         violations_prove_geometry = bool(c["nonzero_count"])
 
@@ -1636,13 +1746,30 @@ def audit(path: Path, layout: Optional[Path] = None,
         else:
             geometry_ok = (measured_geometry or reported_geometry
                            or violations_prove_geometry)
-            evidence = ("MEASURED: {} shape(s) in the layout".format(max(measured))
-                        if measured_geometry else
-                        "REPORTED: checker counted {:g} geometry object(s)".format(
-                            c["reported_geometry_max"]) if reported_geometry else
-                        "IMPLIED: a non-zero violation count needs geometry"
-                        if violations_prove_geometry else
-                        "NONE: no measured layout, no positive reported count")
+            if measured_geometry and len(measured) == 1:
+                evidence = ("MEASURED: {} shape(s) in the layout"
+                            .format(measured_floor))
+            elif measured_geometry:
+                evidence = (
+                    "MEASURED: all {} candidate {} artefact(s) hold geometry "
+                    "(fewest {} shape(s)) — whichever one the deck read, it was "
+                    "not empty".format(len(measured), subject_kind,
+                                       measured_floor))
+            elif reported_geometry:
+                evidence = ("REPORTED: checker counted {:g} geometry object(s)"
+                            .format(c["reported_geometry_max"]))
+            elif violations_prove_geometry:
+                evidence = "IMPLIED: a non-zero violation count needs geometry"
+            elif measured_unknown:
+                evidence = (
+                    "NOT_MEASURED: the report names no layout and the {} "
+                    "candidate {} artefact(s) disagree — {} of them measure 0 "
+                    "shape(s) — so which one the deck read is unknown and no "
+                    "measurement here speaks for it".format(
+                        len(measured), subject_kind,
+                        sum(1 for s in measured if s == 0)))
+            else:
+                evidence = "NONE: no measured layout, no positive reported count"
         c["geometry_established"] = geometry_ok
         c["geometry_evidence"] = evidence
         per_file.append(c)
