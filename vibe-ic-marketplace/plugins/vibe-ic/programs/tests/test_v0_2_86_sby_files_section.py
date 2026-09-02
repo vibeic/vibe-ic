@@ -27,9 +27,30 @@ SBY 12:00:09 [task] DONE (PASS, rc=0)
 
 
 def _formal(tmp_path):
+    """A cell whose Step-5 manifest is COMPLETE, so the only thing left for
+    these tests to decide is the `.sby` parse #453 is about.
+
+    #1974 (2a9d21368d) put a completion contract on top of the evidence chain —
+    a completed `all_proved` row must also state its property denominator, cite
+    its bounded/unbounded scope, and name the elaborated `.sby` and the proof
+    transcript. It migrated six of its sibling fixture files to that manifest
+    and missed two, this one among them, so both PASS pins below started
+    reading FAIL on PROPERTY_DENOMINATOR_MISSING + PROOF_SCOPE_MISSING —
+    a verdict about the manifest, not about the `[files]` section under test.
+    The shape below is #1974's own, copied from the siblings it did migrate;
+    every assertion in this file is unchanged.
+    """
     f = tmp_path / "phase2" / "stage1" / "formal"
     f.mkdir(parents=True)
-    (f / "results.json").write_text(json.dumps({"all_proved": True}))
+    _sby_rel = "phase2/stage1/formal/c.sby"
+    _log_rel = "phase2/stage1/formal/c.sby.log"
+    (f / "results.json").write_text(json.dumps({
+        "all_proved": True,
+        "property_denominator": 1, "authored_property_count": 1,
+        "unresolved_obligations": [],
+        "bounded_vs_unbounded_scope": ["unbounded prove"],
+        "sby": _sby_rel, "elaborated_sby": _sby_rel,
+        "evidence": _log_rel, "proof_transcript": _log_rel}))
     (f / "c.sby.log").write_text(_SBY_PASS_LOG)
     return f
 
@@ -53,6 +74,7 @@ def test_files_section_missing_ref_still_fails(tmp_path):
     assert rep["rc"] == 1
     joined = " ".join(rep["findings"])
     assert "ghost.sv" in joined and "no .sby found" not in joined
+    assert not any("#1974" in f for f in rep["findings"]), rep["findings"]
 
 
 def test_sby_with_no_refs_message_is_accurate(tmp_path):
@@ -63,6 +85,7 @@ def test_sby_with_no_refs_message_is_accurate(tmp_path):
     joined = " ".join(rep["findings"])
     assert "no parseable" in joined
     assert "(no .sby found" not in joined
+    assert not any("#1974" in f for f in rep["findings"]), rep["findings"]
 
 
 def test_script_only_form_still_works(tmp_path):
