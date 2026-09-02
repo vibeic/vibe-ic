@@ -2762,6 +2762,20 @@ _DECLARED_CAPABILITY_GAP_FLAGS: Mapping[str, Tuple[str, ...]] = MappingProxyType
     #       the entry holds document bytes the record cannot attribute to a
     #       side.
     #
+    # G19 — the sentence above needed correcting and this is the correction,
+    # kept next to it rather than rewriting history. "a `functional_vector` L10
+    # case ... whose oracle is the instruction-set model this pass did not
+    # author" asserts that such a case HAS no reference model. opentitan_aes is
+    # a measured counterexample: its own brief states "NIST FIPS-197 /
+    # SP 800-38A 標準測試向量 ... 經自建 TB 由 TL-UL register interface 驅動",
+    # a published, fixed, machine-checkable reference output. What was absent
+    # was a SCHEMA and a PRODUCER, not a model. Both now exist
+    # (`known_answer_vector`, `known_answer_vector_tb_gen`), and a case that
+    # carries `expected_outputs` is REFUSED this waiver by
+    # `l10_tb_conformance_check._PINNED_ORACLE_FIELDS`. The waiver keeps its
+    # scope for the cases that really do lack a model — it is not narrowed out
+    # of existence, it is narrowed to what it always claimed.
+    #
     # ORGANIC #786 r7 — SCOPE OF (b), stated because absence does not establish
     # it: this is a claim about the design's L3 RECORD, NOT about the input
     # document. Whether the document stated a response is NOT established here

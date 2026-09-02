@@ -50943,6 +50943,51 @@ def gen_l10_test_cases(project: Path,
             extracted)
         no_bring_up_sequence_in_input = not bool(bring_up_sequence)
 
+    # G19 — a DECLARED reference output is a test case, and until now it
+    # reached no layer. `opentitan_aes` states "NIST FIPS-197 / SP 800-38A
+    # 標準測試向量 ... 經自建 TB 由 TL-UL register interface 驅動" in its own
+    # brief and L10 came back with 103 rows, every one of them a DV process
+    # checklist milestone and none of them that sentence. Two routes, both
+    # keyed on the design's own input and both fail-closed: a vector TABLE in
+    # the documents, and a public standard the input NAMES. A design that
+    # states neither gets nothing here, which is how the honest
+    # `cap:cpu_functional_oracle` route stays reachable.
+    _kav_census: Dict[str, Any] = {}
+    try:
+        import known_answer_vector as _kav
+        # The brief that STATES the oracle is `input/phase1_prompt.md`, and it
+        # is not always one of the ingested `input/docs/**` bodies — measured
+        # on opentitan_aes, whose prompt names SP 800-38A and whose docs cite
+        # it only inside a PDF URL (`nistspecialpublication800-38a`) that no
+        # designator shape matches. It is a design INPUT, so reading it here is
+        # §4.05-clean, and it is added under its real path so the citation
+        # points at a file a reader can open.
+        _kav_corpus = dict(extracted or {})
+        for _pn in ("phase1_prompt.md", "phase1_prompt.txt"):
+            _pp = project / "input" / _pn
+            if _pp.is_file() and _pn not in _kav_corpus:
+                try:
+                    _kav_corpus[f"input/{_pn}"] = _pp.read_text(errors="replace")
+                except OSError:
+                    pass
+        _kav_census = _kav.extract(
+            _kav_corpus,
+            _try_load_l_doc(project, "L9_INTEGRATION_SPEC"),
+            l3)
+    except Exception as _kav_e:  # nosec — extraction must never break L10
+        _kav_census = {"error": str(_kav_e), "vectors": []}
+    _kav_vectors = _kav_census.get("vectors") or []
+    if _kav_vectors:
+        _existing = {str(c.get("name")) for c in cases if isinstance(c, dict)}
+        for _v in _kav_vectors:
+            if str(_v.get("name")) not in _existing:
+                cases.append(_v)
+        no_test_cases_in_input = False
+        for _v in _kav_vectors[:8]:
+            evidence.setdefault(str(_v.get("evidence") or "input"), []).append(
+                {"literal": str(_v.get("citation")),
+                 "label": "known_answer_vector"})
+
     content = {
         "schema_version": 2,
         "doc_class": "test_cases",
@@ -50951,6 +50996,16 @@ def gen_l10_test_cases(project: Path,
         "no_test_cases_in_input": no_test_cases_in_input,
         "bring_up_sequence": bring_up_sequence,
         "no_bring_up_sequence_in_input": no_bring_up_sequence_in_input,
+        # The census is published whether or not it found anything: a reader
+        # must be able to tell "the design declares no vector oracle" from
+        # "one was declared and nothing extracted it", and a REFUSED row (an
+        # expected value with no stated input) from a row that was never there.
+        "known_answer_vector_census": {
+            k: _kav_census.get(k) for k in
+            ("standards_named_by_the_input", "algorithms_named_by_the_input",
+             "rows_refused", "transport", "error")
+            if _kav_census.get(k) is not None},
+        "known_answer_vector_count": len(_kav_vectors),
     }
     return _write_l_doc(
         project, "L10_TEST_CASES", content, evidence,
@@ -53253,6 +53308,36 @@ def _post_emit_ic_class_into_L9_L1(project: Path,
             try:
                 _stamp.dump(l9_path, l9)
             except Exception:
+                pass
+
+            # G19 — L10's known-answer vectors carry the TRANSPORT they are
+            # driven over, and it is resolved from the design's OWN L9/L3.
+            # L10 is emitted at [11/15] and THIS pass is where
+            # `interface_type` is first populated, so at L10 time the field is
+            # still empty and every vector was stamped `undeclared`. Re-resolve
+            # here, once, from the L9 that now holds it. A design that states
+            # no interface keeps `undeclared` and the producer refuses to
+            # invent one.
+            try:
+                import known_answer_vector as _kav_pp
+                _l10_p = _pl.generated_docs_dir(project) / "L10_TEST_CASES.json"
+                if _l10_p.is_file():
+                    _l10 = json.loads(_l10_p.read_text(errors="ignore"))
+                    _tr = _kav_pp.resolve_transport(
+                        l9, _try_load_l_doc(project, "L3_CMD_PROTOCOL"))
+                    _touched = 0
+                    for _c in _l10.get("test_cases") or []:
+                        if (isinstance(_c, dict)
+                                and _c.get("kind") == _kav_pp.KIND):
+                            _c["transport"] = _tr
+                            _touched += 1
+                    if _touched:
+                        _cen = _l10.get("known_answer_vector_census")
+                        if isinstance(_cen, dict):
+                            _cen["transport"] = _tr
+                            _cen["transport_resolved_in"] = "l9_post_pass"
+                        _stamp.dump(_l10_p, _l10)
+            except Exception:  # nosec — a transport refresh must never break L9
                 pass
 
 

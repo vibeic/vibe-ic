@@ -388,6 +388,10 @@ def emit_unit_tb(case: dict, out_dir: Path, top: str,
 #: `kind=functional` case was waivable by the consumer and unproducible by the
 #: producer. chip-AGNOSTIC: a kind vocabulary, never a chip/vendor/SKU literal.
 SCAFFOLD_KINDS = frozenset({
+    # G19 — a declared known-answer vector is a functional case. It is named
+    # here so `producer_scope` counts it IN scope; its own emitter runs before
+    # the scaffold and, when it binds, the scaffold never sees the case.
+    "known_answer_vector",
     "functional_vector",
     "functional",
     "functional_test",
@@ -593,6 +597,43 @@ def _emit_case_boot_latency_oracle(project: Path, case: dict,
     return f
 
 
+
+def _emit_case_known_answer_vector(case: dict, dut_module: str,
+                                   ports: "List[Tuple[str, str, str]]",
+                                   out_dir: Path,
+                                   report: "dict | None") -> "Path | None":
+    """G19 — emit a REAL self-checking TB for an L10 `known_answer_vector`.
+
+    This is the emitter the capture exists for: the case carries a TYPED
+    expected value, so the TB drives the vector's inputs onto the DUT's own
+    ports, compares the sampled outputs against the literal, increments
+    `errors` and ends `$fatal(1)`. Nothing is written into a comment.
+
+    Fail-closed like its two siblings: a vector whose every field does not bind
+    to a port of this DUT at the value's own width returns None, the reason is
+    recorded, and the case falls through to the substance floor — so a vector
+    nobody can actually drive still fails the Step-4 gate honestly."""
+    try:
+        import known_answer_vector as _kav
+        import known_answer_vector_tb_gen as _ktb
+    except Exception:
+        return None
+    if not _kav.is_known_answer_vector(case):
+        return None
+    text, why = _ktb.emit_case_oracle_from_ports(case, dut_module, ports)
+    if not text:
+        if report is not None:
+            report.setdefault("known_answer_vector_unbound", []).append(
+                {"case": case.get("name"), "reason": why})
+        return None
+    f = out_dir / f"{case.get('name')}.v"
+    f.write_text(text)
+    if report is not None:
+        report.setdefault("known_answer_vector_cases", []).append(
+            {"case": case.get("name"), "citation": case.get("citation")})
+    return f
+
+
 def emit_unit_tbs(project: Path, top: str = "chip_top",
                   kind: "str | None" = None,
                   report: "dict | None" = None) -> int:
@@ -667,7 +708,15 @@ def emit_unit_tbs(project: Path, top: str = "chip_top",
         # cannot manufacture evidence: a case they cannot ground still gets
         # None. What it CAN do is give a genuine golden to a case Phase 1 typed
         # with some other kind token.
-        wrote = _emit_case_golden_oracle(project, ic_class, c, out_dir, report)
+        # G19 — a case carrying a TYPED declared reference output is tried
+        # FIRST: its oracle is stated by the design, so it outranks a
+        # closed-form re-derivation. Fail-closed, so a vector that does not
+        # bind falls straight through to the emitters below.
+        wrote = _emit_case_known_answer_vector(c, dut_module, ports,
+                                               out_dir, report)
+        if wrote is None:
+            wrote = _emit_case_golden_oracle(project, ic_class, c, out_dir,
+                                             report)
         if wrote is None:
             # ORGANIC #778 companion — the datapath (arith) convention
             # didn't ground this case; try the CPU-core / clocked-core

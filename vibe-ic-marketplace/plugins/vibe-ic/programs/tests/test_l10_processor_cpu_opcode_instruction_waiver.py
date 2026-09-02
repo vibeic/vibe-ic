@@ -1241,6 +1241,11 @@ INSTRUCTION_SIGNAL_FIELDS = (
 #: `expected_bytes`) survived the entire suite, silently turning a case that
 #: carries its own concrete golden into a WAIVED one.
 PINNED_ORACLE_FIELDS = (
+    # G19 — the typed (inputs, expected_outputs) pair a `known_answer_vector`
+    # carries. Registered here because this file's own rule says a new member
+    # with no literal above would be an unexercised widening: it is now driven
+    # through the predicate like every sibling, so removing it goes red.
+    "expected_outputs",
     "expected_bytes", "expected_hex", "expected_value", "expected_output",
     "expected_result", "golden", "golden_bytes", "reference_output",
 )

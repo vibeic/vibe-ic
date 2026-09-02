@@ -477,6 +477,14 @@ _NO_OUTPUT_EXPECTATION_RE = re.compile(
 #: Fields through which a case carries its OWN concrete golden. A case that
 #: pins its answer has an oracle whatever its expectation prose says.
 _PINNED_ORACLE_FIELDS = (
+    # G19 — a `known_answer_vector` case carries its answer as a TYPED
+    # (inputs, expected_outputs) pair read off the design's own declared
+    # oracle. That is the sharpest possible pinning, and the waiver's
+    # registered justification — "the oracle is the instruction-set model this
+    # pass did not author" — is false for it: the reference output is stated.
+    # This is the existing hook (#786 r5 (b)), one more field, and it makes the
+    # waiver RARER, never wider.
+    "expected_outputs",
     "expected_bytes",
     "expected_hex",
     "expected_value",

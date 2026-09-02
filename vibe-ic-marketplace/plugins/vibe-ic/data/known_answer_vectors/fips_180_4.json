@@ -1,0 +1,49 @@
+{
+  "schema": "vibe-ic known-answer-vector table v1",
+  "standard": "FIPS-180-4",
+  "standard_title": "Secure Hash Standard (SHS)",
+  "section": "NIST example vectors for SHA-256 / SHA-224",
+  "algorithm": "sha2",
+  "verified_by": "python3 hashlib.sha256/sha224 on 8HD-8 2026-09-02",
+  "vectors": [
+    {
+      "name": "fips1804_sha256_abc",
+      "citation": "FIPS-180-4 / NIST SHA-256 example, one-block message",
+      "parameters": {
+        "digest_len": 256
+      },
+      "inputs": {
+        "message": "616263"
+      },
+      "expected_outputs": {
+        "digest": "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+      }
+    },
+    {
+      "name": "fips1804_sha256_448bit",
+      "citation": "FIPS-180-4 / NIST SHA-256 example, two-block message",
+      "parameters": {
+        "digest_len": 256
+      },
+      "inputs": {
+        "message": "6162636462636465636465666465666765666768666768696768696a68696a6b696a6b6c6a6b6c6d6b6c6d6e6c6d6e6f6d6e6f706e6f7071"
+      },
+      "expected_outputs": {
+        "digest": "248d6a61d20638b8e5c026930c3e6039a33ce45964ff2167f6ecedd419db06c1"
+      }
+    },
+    {
+      "name": "fips1804_sha224_abc",
+      "citation": "FIPS-180-4 / NIST SHA-224 example, one-block message",
+      "parameters": {
+        "digest_len": 224
+      },
+      "inputs": {
+        "message": "616263"
+      },
+      "expected_outputs": {
+        "digest": "23097d223405d8228642a477bda255b32aadbce4bda0b3f7e36c9da7"
+      }
+    }
+  ]
+}

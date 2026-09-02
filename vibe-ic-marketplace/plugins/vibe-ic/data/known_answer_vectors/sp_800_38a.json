@@ -1,0 +1,94 @@
+{
+  "schema": "vibe-ic known-answer-vector table v1",
+  "standard": "SP 800-38A",
+  "standard_title": "Recommendation for Block Cipher Modes of Operation",
+  "section": "Appendix F \u2014 Example Vectors (first block of each mode)",
+  "algorithm": "aes",
+  "verified_by": "openssl enc -aes-128-{ecb,cbc,cfb,ofb,ctr} -K .. -iv .. -nopad, on 8HD-8 2026-09-02",
+  "vectors": [
+    {
+      "name": "sp80038a_f11_aes128_ecb",
+      "citation": "SP 800-38A F.1.1",
+      "parameters": {
+        "key_len": 128,
+        "mode": "ECB",
+        "operation": "encrypt"
+      },
+      "inputs": {
+        "key": "2b7e151628aed2a6abf7158809cf4f3c",
+        "plaintext": "6bc1bee22e409f96e93d7e117393172a"
+      },
+      "expected_outputs": {
+        "ciphertext": "3ad77bb40d7a3660a89ecaf32466ef97"
+      }
+    },
+    {
+      "name": "sp80038a_f21_aes128_cbc",
+      "citation": "SP 800-38A F.2.1",
+      "parameters": {
+        "key_len": 128,
+        "mode": "CBC",
+        "operation": "encrypt"
+      },
+      "inputs": {
+        "key": "2b7e151628aed2a6abf7158809cf4f3c",
+        "iv": "000102030405060708090a0b0c0d0e0f",
+        "plaintext": "6bc1bee22e409f96e93d7e117393172a"
+      },
+      "expected_outputs": {
+        "ciphertext": "7649abac8119b246cee98e9b12e9197d"
+      }
+    },
+    {
+      "name": "sp80038a_f31_aes128_cfb128",
+      "citation": "SP 800-38A F.3.13",
+      "parameters": {
+        "key_len": 128,
+        "mode": "CFB",
+        "operation": "encrypt"
+      },
+      "inputs": {
+        "key": "2b7e151628aed2a6abf7158809cf4f3c",
+        "iv": "000102030405060708090a0b0c0d0e0f",
+        "plaintext": "6bc1bee22e409f96e93d7e117393172a"
+      },
+      "expected_outputs": {
+        "ciphertext": "3b3fd92eb72dad20333449f8e83cfb4a"
+      }
+    },
+    {
+      "name": "sp80038a_f41_aes128_ofb",
+      "citation": "SP 800-38A F.4.1",
+      "parameters": {
+        "key_len": 128,
+        "mode": "OFB",
+        "operation": "encrypt"
+      },
+      "inputs": {
+        "key": "2b7e151628aed2a6abf7158809cf4f3c",
+        "iv": "000102030405060708090a0b0c0d0e0f",
+        "plaintext": "6bc1bee22e409f96e93d7e117393172a"
+      },
+      "expected_outputs": {
+        "ciphertext": "3b3fd92eb72dad20333449f8e83cfb4a"
+      }
+    },
+    {
+      "name": "sp80038a_f51_aes128_ctr",
+      "citation": "SP 800-38A F.5.1",
+      "parameters": {
+        "key_len": 128,
+        "mode": "CTR",
+        "operation": "encrypt"
+      },
+      "inputs": {
+        "key": "2b7e151628aed2a6abf7158809cf4f3c",
+        "iv": "f0f1f2f3f4f5f6f7f8f9fafbfcfdfeff",
+        "plaintext": "6bc1bee22e409f96e93d7e117393172a"
+      },
+      "expected_outputs": {
+        "ciphertext": "874d6191b620e3261bef6864990db6ce"
+      }
+    }
+  ]
+}
