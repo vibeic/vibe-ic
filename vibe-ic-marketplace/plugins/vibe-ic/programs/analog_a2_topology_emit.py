@@ -2066,7 +2066,20 @@ LIBRARY: Dict[str, Dict[str, Any]] = {
             # net the emitter is free to rename, nor on the instance path it
             # chooses for the device under test.
             "control": [
-                "tran {tstep_ns}n {tstop_ns}n uic",
+                # NO `uic`. MEASURED (round 22, the quantiser on its own
+                # bench, ideal differential sources): with `uic` the latch
+                # decides on whatever the UNSOLVED initial node voltages
+                # happen to be and the set-reset latch then HOLDS that
+                # decision, so the whole bitstream inherits it. At an input
+                # of -40 mV the `uic` run decides POSITIVE (wrong) and the
+                # same deck without `uic` decides NEGATIVE (right) — an
+                # apparent 42.5 mV input-referred offset that is entirely an
+                # artefact of the initial condition, not of the circuit.
+                # A clocked regenerative latch has no defined state until
+                # something defines it, so the transient must start from a
+                # solved operating point. Checked by run: the full 260-device
+                # loop converges its `.op` with zero convergence errors.
+                "tran {tstep_ns}n {tstop_ns}n",
                 "meas tran vavg avg v(bit_out) from={tmeas_ns}n "
                 "to={twin2_ns}n",
                 "meas tran vmax max v(bit_out) from={tmeas_ns}n "
