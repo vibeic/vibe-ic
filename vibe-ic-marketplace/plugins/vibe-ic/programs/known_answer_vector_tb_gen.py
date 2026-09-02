@@ -35,6 +35,8 @@ from __future__ import annotations
 import re
 from typing import Dict, List, Optional, Sequence, Tuple
 
+import _hdl_code_text  # offset-preserving comment/string blanker (#731)
+
 try:
     import known_answer_vector as _kav
 except Exception:  # pragma: no cover — importable standalone
@@ -370,9 +372,18 @@ def _bus_ports_from_rtl(root, dut_module: str, h2d_t: str, d2h_t: str
             continue
         for p in sorted(d.rglob("*.sv")) + sorted(d.rglob("*.v")):
             try:
-                t = p.read_text(errors="replace")
+                raw = p.read_text(errors="replace")
             except OSError:
                 continue
+            # BLANK COMMENTS AND STRINGS BEFORE ANY OF THE THREE SCANS BELOW.
+            # A port line a revision commented out is still text, and
+            # `pat_h`/`pat_d` read it as a declaration: measured, a
+            # `// input <h2d_t> legacy_h2d_i,` line above the live port makes
+            # this function return `legacy_h2d_i` — a port the DUT does not
+            # have, so the generated TB drives a name that does not elaborate.
+            # `\bmodule\s+<dut>` has the same problem one line up. The blanker
+            # preserves offsets, so `hdr` still indexes this same file.
+            t = _hdl_code_text.strip_hdl_comments_and_strings(raw)
             m = re.search(r"\bmodule\s+" + re.escape(dut_module)
                           + r"\b(?P<hdr>.*?)\bendmodule\b", t, re.S)
             if not m:

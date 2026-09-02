@@ -9,6 +9,12 @@ own failure, not a lint:
     benchmark_io_adapter::cvdp_package_response::_MODULE_BLOCK_RE(combined)
     design_one_shot_runner::_v1956_dut_instance_conns::pat(text)
 
+On v1.16.85 it named three more, from the vector-TB generators:
+
+    known_answer_vector_tb_gen::_bus_ports_from_rtl::pat_h(hdr)
+    known_answer_vector_tb_gen::_bus_ports_from_rtl::pat_d(hdr)
+    register_bus_driver_gen::find_host_intg_gen::pat(text)
+
 Every test below drives the SHIPPED function on input a real design can carry
 and asserts the behaviour, so it fails against the pre-fix sources for the
 reason the gate names rather than because a helper is missing.
@@ -27,6 +33,8 @@ import _hdl_code_text as B                      # noqa: E402
 import benchmark_io_adapter as IO               # noqa: E402
 import design_one_shot_runner as DR             # noqa: E402
 import _runner_measurement as RM                # noqa: E402
+import known_answer_vector_tb_gen as KTB        # noqa: E402
+import register_bus_driver_gen as RBD           # noqa: E402
 
 
 # ── the blanker's own contract ────────────────────────────────────────────
@@ -179,3 +187,73 @@ def test_the_declaration_scan_gate_is_green_on_this_tree():
          str(PROGRAMS / "hdl_declaration_scan_strips_comments_check.py")],
         capture_output=True, text=True, timeout=900)
     assert proc.returncode == 0, proc.stdout + proc.stderr
+
+
+# ── site 4: the struct-typed bus ports read off the DUT header ────────────
+def test_a_commented_out_port_is_not_read_as_the_dut_bus_port(tmp_path):
+    r"""PRE-FIX: `\binput\s+[\w:]*tl_h2d_t\s+(\w+)` matched the port line a
+    revision had commented out, so the generated TB drove `legacy_h2d_i` — a
+    name the DUT does not declare, and the testbench does not elaborate."""
+    rtl = tmp_path / "phase2" / "stage1" / "rtl"
+    rtl.mkdir(parents=True)
+    (rtl / "dut.sv").write_text(
+        "module dut (\n"
+        "  // input  tl_h2d_t legacy_h2d_i,   <- removed in rev B\n"
+        "  // output tl_d2h_t legacy_d2h_o,\n"
+        "  input  tl_h2d_t tl_i,\n"
+        "  output tl_d2h_t tl_o\n"
+        ");\n"
+        "endmodule\n")
+    assert KTB._bus_ports_from_rtl(
+        tmp_path, "dut", "tl_h2d_t", "tl_d2h_t") == ("tl_i", "tl_o")
+
+
+def test_the_real_bus_ports_are_still_found(tmp_path):
+    """The NEGATIVE control: blanking must not cost a genuine port pair."""
+    rtl = tmp_path / "phase2" / "stage1" / "rtl"
+    rtl.mkdir(parents=True)
+    (rtl / "dut.sv").write_text(
+        "module dut (\n"
+        "  input  tlul_pkg::tl_h2d_t tl_i,\n"
+        "  output tlul_pkg::tl_d2h_t tl_o\n"
+        ");\n"
+        "endmodule\n")
+    assert KTB._bus_ports_from_rtl(
+        tmp_path, "dut", "tl_h2d_t", "tl_d2h_t") == ("tl_i", "tl_o")
+
+
+# ── site 5: the host-side integrity generator ─────────────────────────────
+def test_a_module_name_taken_from_a_comment_is_not_instantiated():
+    r"""PRE-FIX: `\bmodule\s+(\w+)` matched the COMMENTED header first, so the
+    named module was `ghost_intg_gen` while the ports and the encoder came
+    from the real one below it — a driver instantiating a module that no
+    staged source declares."""
+    src = ("// module ghost_intg_gen (\n"
+           "module real_intg_gen (\n"
+           "  input  tl_h2d_t tl_i,\n"
+           "  output tl_h2d_t tl_o\n"
+           ");\n"
+           "  prim_secded_enc u_enc ();\n"
+           "endmodule\n")
+    mod, why = RBD.find_host_intg_gen([("rtl/gen.sv", src)],
+                                      "tlul_pkg::tl_h2d_t")
+    assert mod is not None, why
+    assert mod["module"] == "real_intg_gen"
+    assert mod["in"] == "tl_i" and mod["out"] == "tl_o"
+
+
+def test_a_generator_that_exists_only_in_a_comment_is_not_reported():
+    """The other direction — a whole commented-out generator must not be
+    reported as a generator the design ships."""
+    src = ("/*\n"
+           "module ghost_intg_gen (\n"
+           "  input  tl_h2d_t tl_i,\n"
+           "  output tl_h2d_t tl_o\n"
+           ");\n"
+           "  prim_secded_enc u_enc ();\n"
+           "endmodule\n"
+           "*/\n")
+    mod, why = RBD.find_host_intg_gen([("rtl/gen.sv", src)],
+                                      "tlul_pkg::tl_h2d_t")
+    assert mod is None
+    assert "pass-through" in why

@@ -45,6 +45,8 @@ from __future__ import annotations
 import re
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
+import _hdl_code_text  # offset-preserving comment/string blanker (#731)
+
 try:
     import known_answer_vector as _kav
 except Exception:  # pragma: no cover
@@ -402,7 +404,14 @@ def find_host_intg_gen(sources: Sequence[Tuple[str, str]], h2d_t: str
     bare = h2d_t.split("::")[-1]
     pat = re.compile(
         r"\bmodule\s+(\w+)\b(?P<hdr>.*?)\bendmodule\b", re.S)
-    for path, text in sources:
+    for path, raw in sources:
+        # BLANK COMMENTS AND STRINGS FIRST. `\bmodule\s+(\w+)` does not know a
+        # comment from code: measured, `// module ghost_intg_gen (` sitting
+        # above the real header wins the match and this function returns
+        # `ghost_intg_gen` — the driver then instantiates a module no staged
+        # source declares. The blanker preserves offsets, so the `hdr` span is
+        # the same span of the same file.
+        text = _hdl_code_text.strip_hdl_comments_and_strings(raw)
         for m in pat.finditer(text):
             hdr = m.group("hdr")
             mi = re.search(r"\binput\s+[\w:]*\b" + re.escape(bare)
