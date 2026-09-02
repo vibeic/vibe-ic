@@ -8,7 +8,10 @@ Covers:
   2. POSITIVE_FAIL — RESULT.md cites a /tmp/<file> AND that file exists
                      on disk (live external artifact).
   3. SKIP_NON_APPLICABLE — project tree is empty (no scan target files
-                     at all → no findings → PASS, the SKIP analogue).
+                     at all → rc 2, a REAL disclosed skip). #619: this used
+                     to be "PASS, the SKIP analogue", and the analogue was
+                     the defect — the P0 umbrella reads exit codes, so a
+                     skip spelled `0` was aggregated as a clean scan.
   4. SKIP_NO_CONSTRUCT — same (covered by #3).
 """
 from __future__ import annotations
@@ -114,23 +117,41 @@ def test_positive_fail_live_tmp(tmp_path):
 # -- Test 3: SKIP_NON_APPLICABLE — empty project (no scan files) --
 
 def test_skip_empty_project(tmp_path):
+    """#619 — VERDICT CHANGED HERE, deliberately: rc 0 -> rc 2.
+
+    An empty project is a scan that opened NOTHING, and this file used to call
+    that "PASS, the SKIP analogue". The analogue is the bug:
+    `gate_zero_denominator_refuses_check` drives every gate against a fresh
+    empty project and reported this one as ZERO_DENOMINATOR_EXITS_ZERO, because
+    the P0 umbrella reads exit codes and never the prose that honestly said
+    `0 file(s) scanned`.
+
+    It is this gate specifically that may not take the `_ZERO_IS_A_PASS` route:
+    its subject IS "outputs written outside the tree", and an empty canonical
+    tree is that condition's strongest symptom, not evidence against it.
+    """
     # Empty project — no RESULT.md, no waivers.json, no reports/.
     r = _run(tmp_path)
-    assert r.returncode == 0, r.stdout + r.stderr
-    assert "[PASS]" in r.stdout
-    assert "no /tmp" in r.stdout
+    assert r.returncode == 2, r.stdout + r.stderr
+    assert "[SKIP]" in r.stdout
+    assert "read 0 file(s)" in r.stdout
+    assert str(tmp_path) in r.stdout, "the refusal must name the tree it read"
 
 
 # -- Test 4: SKIP_NO_CONSTRUCT — only unrelated files --
 
 def test_skip_unrelated_files(tmp_path):
+    """Files exist, but NONE of them is in `_SCAN_GLOBS`, so the scan still
+    opened zero declaration files — same verdict as an empty tree (#619). The
+    predicate is `scanned == 0`, not `the directory is empty`."""
     (tmp_path / "phase2" / "stage1" / "rtl").mkdir(parents=True)
     (tmp_path / "phase2" / "stage1" / "rtl" / "top.sv").write_text(
         "module top();\nendmodule\n"
     )
     r = _run(tmp_path)
-    assert r.returncode == 0, r.stdout + r.stderr
-    assert "[PASS]" in r.stdout
+    assert r.returncode == 2, r.stdout + r.stderr
+    assert "[SKIP]" in r.stdout
+    assert "read 0 file(s)" in r.stdout
 
 
 # -- Test 5: WARN — dangling /tmp reference (file gone) --
@@ -440,3 +461,36 @@ def test_project_root_itself_cited_is_in_tree(tmp_path):
     r = _run(tmp_path)
     assert r.returncode == 0, r.stdout + r.stderr
     assert "[PASS]" in r.stdout
+
+
+# ── #619 — the refusal must not become a way to duck the scan ────────────────
+
+def test_one_declaration_file_is_enough_to_make_it_answer(tmp_path):
+    """THE REFUSAL'S OWN FALSE-POSITIVE GUARD. The moment the scan opens ONE
+    file the gate is back on the hook: rc 0, and the count it discloses is 1.
+    A refusal that widened past `scanned == 0` would switch the gate off for
+    thinly-populated projects."""
+    (tmp_path / "RESULT.md").write_text("all artefacts under reports/\n")
+    r = _run(tmp_path)
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "[PASS]" in r.stdout
+    assert "1 file(s) scanned" in r.stdout
+
+
+def test_a_real_violation_in_a_one_file_project_is_still_rc_1(tmp_path):
+    """THE ANTI-RUBBER-STAMP. rc 2 must not have become the answer for any
+    project the gate can still read: the smallest project that CAN carry a
+    violation still FAILs on one."""
+    import tempfile
+    outside = Path(tempfile.mkdtemp(dir="/tmp", prefix="r619-outside-"))
+    stray = outside / "chip_top.gds"
+    stray.write_text("# a real GDS left outside the tree\n")
+    try:
+        (tmp_path / "RESULT.md").write_text(f"GDS produced at: {stray}\n")
+        r = _run(tmp_path)
+        assert r.returncode == 1, r.stdout + r.stderr
+        assert "[FAIL]" in r.stdout
+        assert str(stray) in r.stdout
+    finally:
+        import shutil
+        shutil.rmtree(outside, ignore_errors=True)

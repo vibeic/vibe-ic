@@ -34,9 +34,12 @@ Usage:
     python3 project_outputs_in_tree_check.py <project_dir>
 
 Exit codes:
-    0  PASS / SKIP (no /tmp references OR all waived)
+    0  PASS (>=1 declaration file was READ and none cites external storage,
+       OR every citation is waived)
     1  FAIL (/tmp references found AND artifacts still on disk)
-    2  IO / parse error
+    2  NOT_CHECKED — IO / parse error, OR the scan opened ZERO declaration
+       files: nothing was read, so nothing is vouched for (#619; the argument
+       is written out at the `scanned == 0` branch of main())
 """
 from __future__ import annotations
 
@@ -267,6 +270,57 @@ def main() -> int:
                 exists = Path(p).exists()
                 findings.append(
                     (str(f.relative_to(project)), p, exists, from_log))
+
+    # ── #619 / #564 — A SCAN THAT OPENED NOTHING IS NOT A CLEAN SCAN ────────
+    #
+    # Over a project where none of
+    # `_SCAN_GLOBS` matched, every list above is empty for the same reason a
+    # genuinely clean project's lists are empty, and the two were collapsed
+    # into one rc 0. `gate_zero_denominator_refuses_check` reported exactly
+    # that (`ZERO_DENOMINATOR_EXITS_ZERO`), and its argument is the P0
+    # umbrella's: the umbrella reads EXIT CODES, so the honesty already in the
+    # prose ("0 file(s) scanned") never reached the verdict.
+    #
+    # WHY THIS GATE CANNOT TAKE THE `_ZERO_IS_A_PASS` ROUTE, which is the other
+    # half of the finding and the half that must be argued rather than assumed.
+    # For `professional_tb_check` the zero is a correct pass because the missing
+    # input belongs to an OPTIONAL step: absence is a legitimate, expected state
+    # the gate is not owed. Here it is the opposite. This gate's entire subject
+    # is "the flow wrote its outputs somewhere other than the project tree", and
+    # a project whose RESULT.md / waivers.json / reports/ / generated_docs are
+    # ALL absent is the strongest possible symptom of that condition: if the
+    # declaration files themselves were written to a scratch dir — the same
+    # mistake this gate exists to catch, one level up — the canonical tree is
+    # empty and the old rc 0 answered "no outputs outside the tree" for a
+    # project whose every output is outside the tree. The gate cannot tell that
+    # apart from "nothing has been produced yet", so it must not vouch for
+    # either.
+    #
+    # IT IS A REFUSAL, NOT A FAILURE. rc 2 is the disclosed-skip convention;
+    # `flow_compliance_check` classifies this message ZERO_DENOMINATOR, which is
+    # NOT skip-eligible, so the P0 tier reads INCOMPLETE instead of PASS — the
+    # gate stops contributing a green it never earned, and stops contributing a
+    # red it cannot justify either.
+    #
+    # THE DETECTION SIDE IS UNTOUCHED: the refusal is keyed on `scanned == 0`
+    # alone, so any project carrying even one declaration file still runs the
+    # full scan and a live external artefact is still rc 1.
+    #
+    # MEASURED 2026-09-03 over 196 real run trees on this host (every directory
+    # under ~/vibeic-designs, ~/_hyg_bd_tip, ~/_matrix_benchmark_data and
+    # ~/_kicspm_accept2 carrying `phase1/generated_docs/`): 0 of 196 scanned
+    # zero files, so no real run's verdict moves.
+    if scanned == 0:
+        print(f"[SKIP] project_outputs_in_tree_check: read 0 file(s) — none "
+              f"of RESULT.md / waivers.json / reports/**/*.json|md / "
+              f"reports/*.log / phase1/generated_docs/*.json exists under "
+              f"{project}, so there is no artefact declaration to read and "
+              f"NOT_CHECKED is the only answer this gate can give. A project "
+              f"that declares nothing is indistinguishable here from a project "
+              f"whose declarations were themselves written outside the tree — "
+              f"which is the very condition this gate exists to detect — so a "
+              f"zero denominator may not be reported as a clean scan.")
+        return 2
 
     # ORGANIC #622 — a /tmp reference found INSIDE A LOG FILE (*.log) is a
     # tool-internal ephemeral path (e.g. a yosys/LEC scratch genlib the OS

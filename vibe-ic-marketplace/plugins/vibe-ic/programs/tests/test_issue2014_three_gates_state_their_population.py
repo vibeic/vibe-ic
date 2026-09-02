@@ -36,6 +36,13 @@ a test with that gate's name on it rather than a number that moved.
 THE PREDICATES ARE THE STANDING CHECK'S OWN, imported and run. A retyped regex
 here would be a second discriminator that agrees with the first today and
 stops agreeing the day either is tuned.
+
+LATER (#619): `project_outputs_in_tree_check` no longer answers rc 0 over an
+empty project at all — it refuses (rc 2). Disclosing the zero was this file's
+subject and was the right fix for it; a SECOND finding, from
+`gate_zero_denominator_refuses_check`, was that the zero should not have been
+an exit-0 verdict in the first place, because the P0 umbrella aggregates exit
+codes and never the prose. See `_EMPTY_PROJECT_RC` below.
 """
 import os
 import pathlib
@@ -98,13 +105,39 @@ def test_a_pass_over_a_project_that_is_not_there_says_nothing_was_opened(gate):
 # ---------------------------------------------------------------------------
 # UNCHANGED in both directions
 # ---------------------------------------------------------------------------
+#: The verdict each of the three gives over a structurally EMPTY project, and
+#: WHY — so that a change to any of them is an edit here rather than a number
+#: that moved.
+#:
+#: #619 MOVED ONE OF THEM, deliberately and as its own measured change — which
+#: is exactly what the rule below demands. The original rule was "a DISCLOSURE
+#: fix must not smuggle in a verdict change", and it still is: what it forbids
+#: is changing a verdict under a #511 label, not changing one on the evidence.
+#: `gate_zero_denominator_refuses_check` then drove the same population and
+#: reported `project_outputs_in_tree_check` as ZERO_DENOMINATOR_EXITS_ZERO —
+#: a separate finding, separately argued, separately measured (196 real run
+#: trees, 0 affected) — and the gate now refuses instead of passing. Recording
+#: the new verdict HERE, per gate, keeps this a pin in both directions: the two
+#: gates whose verdict did not move still may not move, and the one that did
+#: may not drift back to a silent 0.
+_EMPTY_PROJECT_RC = {
+    "crosslayer_rewrite_equivalence_check": 0,
+    # #619 — its subject IS "outputs written outside the tree", so an empty
+    # canonical tree is that condition's strongest symptom. It cannot vouch
+    # for a project it never opened a declaration file in.
+    "project_outputs_in_tree_check": 2,
+    "on_pass_review_declared_command_runs_check": 0,
+}
+
+
 @pytest.mark.parametrize("gate", GATES)
 def test_the_verdict_did_not_move_only_the_disclosure(gate, tmp_path):
-    """A disclosure is added TO a verdict, never INSTEAD of one. All three
-    passed an empty project before and must still pass it: turning any of them
-    into a refusal here would be a behaviour change wearing a #511 label."""
+    """A disclosure is added TO a verdict, never INSTEAD of one — a #511-label
+    change may not carry a verdict change with it. The expected verdict per
+    gate is `_EMPTY_PROJECT_RC`; moving one is an edit to that table with a
+    reason, never a silent drift."""
     rc, out = _drive(gate, ".", str(_empty_project(tmp_path)))
-    assert rc == 0, out
+    assert rc == _EMPTY_PROJECT_RC[gate], out
 
 
 @pytest.mark.parametrize("gate", GATES)
