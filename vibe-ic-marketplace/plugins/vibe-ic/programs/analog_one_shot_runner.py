@@ -470,6 +470,91 @@ def _emit_deterministic_stub(project: Path, bname: str,
 # The FIRST track for the three steps that had none. Each records its own
 # honest absence in a named gap file when it declines, and each stamps its
 # provenance into the artefact it writes.
+# ── is the artefact on disk the one THIS producer would make? ─────────────
+# MEASURED (round 23): the A1-A3 producers were invoked only on the gate's
+# rc 2 — the artefact-missing path. With a STALE artefact present the gate
+# returned rc 0, the step reported PASS, and the producer never ran. A lane
+# that had just fixed the topology library therefore simulated the OLD
+# netlist — old comparator, 4 um keeper, 181 um bias — and the run looked
+# identical to a successful one from the outside. A producer fix that the
+# runner does not re-emit reaches nobody.
+#
+# The judgement is derived from what the ARTEFACT ITSELF says: each producer
+# stamps a digest of its own source into the provenance it writes, and the
+# runner compares that against the producer it is about to skip. NOT mtime (a
+# copy or a checkout resets it) and NOT a file name (one spelling defines a
+# blind population). An artefact that names no fingerprint is treated as
+# unknown provenance and re-emitted, because silence is not agreement.
+#: step -> (artefact carrying the provenance, dotted key inside it)
+_PRODUCER_STAMP: Dict[str, tuple] = {
+    "A2_topology_select": ("topology.json", "_provenance"),
+    "A3_netlist_gen": ("netlist_provenance.json", "_provenance"),
+}
+
+
+def _live_producer_fingerprint(program: str) -> str:
+    """The digest the producer would stamp right now."""
+    import hashlib
+    p = PROGRAMS_DIR / program
+    try:
+        return hashlib.sha256(p.read_bytes()).hexdigest()[:16]
+    except OSError:
+        return ""
+
+
+def _artefact_producer_fingerprint(project: Path, block: str,
+                                   step_name: str) -> Optional[str]:
+    """The digest the artefact on disk says it was made by, or None."""
+    spec = _PRODUCER_STAMP.get(step_name)
+    if not spec:
+        return None
+    fname, key = spec
+    f = _pl.analog_dir(project) / block / fname
+    if not f.is_file():
+        return None
+    try:
+        doc = json.loads(f.read_text(encoding="utf-8", errors="replace"))
+    except (OSError, ValueError):
+        return None
+    prov = doc.get(key) if isinstance(doc, dict) else None
+    if isinstance(prov, dict):
+        v = prov.get("producer_fingerprint")
+        return str(v) if v else None
+    return None
+
+
+def producer_reuse_decision(project: Path, block: str,
+                            step_name: str) -> Dict[str, Any]:
+    """Say — out loud, as a decision — whether the artefact on disk is the one
+    this producer would emit. `reuse` True means the runner may keep it, and
+    `detail` names WHICH artefact it kept."""
+    prod = _A1_A3_PRODUCERS.get(step_name)
+    spec = _PRODUCER_STAMP.get(step_name)
+    if not prod or not spec:
+        return {"applies": False, "reuse": True,
+                "detail": "no producer stamp is defined for this step"}
+    live = _live_producer_fingerprint(prod["program"])
+    have = _artefact_producer_fingerprint(project, block, step_name)
+    if not live:
+        return {"applies": True, "reuse": True, "live": live, "artefact": have,
+                "detail": (f"{prod['program']} could not be read, so its "
+                           f"fingerprint is ABSENT; the artefact is kept and "
+                           f"this is recorded, never silently)")}
+    if have is None:
+        return {"applies": True, "reuse": False, "live": live, "artefact": None,
+                "detail": (f"{spec[0]} names no producer_fingerprint, so its "
+                           f"provenance is UNKNOWN — re-emitting rather than "
+                           f"inheriting an artefact that cannot say who made "
+                           f"it")}
+    if have != live:
+        return {"applies": True, "reuse": False, "live": live, "artefact": have,
+                "detail": (f"{spec[0]} was emitted by {prod['program']} "
+                           f"@{have}, this run carries @{live} — re-emitting")}
+    return {"applies": True, "reuse": True, "live": live, "artefact": have,
+            "detail": (f"REUSED {spec[0]} emitted by {prod['program']} "
+                       f"@{have}, identical to this run's producer")}
+
+
 _A1_A3_PRODUCERS: Dict[str, Dict[str, Any]] = {
     "A1_spec_extract": {
         "program": "analog_a1_spec_emit.py",
@@ -835,6 +920,30 @@ def step_for_block(project: Path, block: Dict[str, Any], step_name: str,
     skill = skill_map.get(step_name, "(no skill mapped)")
     if det and det.is_file():
         cmd = [sys.executable, str(det), str(project), "--block", bname]
+        # BEFORE the gate: is the artefact on disk the one THIS producer
+        # would emit? Deciding after the gate only covers the gate's PASS
+        # path, and a stale artefact can just as easily make the gate FAIL —
+        # measured, on A3, where a netlist left over from an older producer
+        # disagreed with a freshly re-emitted topology and the step failed
+        # without anything re-emitting the netlist.
+        _reuse = producer_reuse_decision(project, bname, step_name)
+        if _reuse.get("applies") and not _reuse.get("reuse"):
+            _prod = _A1_A3_PRODUCERS.get(step_name) or {}
+            _pprog = PROGRAMS_DIR / _prod.get("program", "")
+            if _pprog.is_file():
+                _pcmd = [sys.executable, str(_pprog), str(project),
+                         "--block", bname]
+                if _prod.get("takes_container"):
+                    _pcmd += ["--container",
+                              (getattr(args, "container", None)
+                               or os.environ.get("VIBEIC_ANALOG_CONTAINER",
+                                                 "vibeic-eda"))]
+                _pcmd += list(_prod.get("extra_args") or [])
+                try:
+                    subprocess.run(_pcmd, capture_output=True, text=True,
+                                   timeout=1800)
+                except (OSError, subprocess.SubprocessError):
+                    pass
         cp = _pr.run(cmd, capture_output=True, text=True)
         if cp.returncode == 0:
             # v1.6.129 (#50 Fix 2) — distinguish a real PASS (artefact
@@ -935,19 +1044,21 @@ def step_for_block(project: Path, block: Dict[str, Any], step_name: str,
             # on a project whose every A3/A4 artefact disclosed a library
             # default.
             so = _structure_only_disclosure(cp)
+            _extras = _content_extras(project, bname, step_name)
+            if _reuse.get("applies"):
+                _extras = dict(_extras or {})
+                _extras["producer_reuse"] = _reuse
             if so:
                 return StepResult(step_name, bname, "PASS_STRUCTURE_ONLY",
                                   time.time() - t0, so,
                                   output_files=_step_outputs(project, bname,
                                                              step_name),
-                                  extras=_content_extras(project, bname,
-                                                         step_name))
+                                  extras=_extras)
             return StepResult(step_name, bname, "PASS",
                               time.time() - t0, stdout_tail,
                               output_files=_step_outputs(project, bname,
                                                          step_name),
-                              extras=_content_extras(project, bname,
-                                                     step_name))
+                              extras=_extras)
         if cp.returncode == 2:
             # A1-A3 PRODUCERS — the deterministic first track, in exactly the
             # shape A4's real-sim bypass below already uses: run BEFORE the

@@ -140,6 +140,29 @@ import pdk_analog_device_params as _pdp  # noqa: E402
 import pdk_analog_layout_minima as _minima  # noqa: E402
 
 PRODUCER = "analog_a2_topology_emit"
+
+
+def producer_fingerprint() -> str:
+    """A digest of THIS producer's own source, stamped into every artefact.
+
+    MEASURED (round 23): a topology.json emitted by an older build of this
+    file is indistinguishable from a current one — `_provenance` names the
+    producer but not WHICH producer. So a run whose gate found the stale
+    artefact passed, the producer was never invoked, and the netlist that
+    reached the simulator was the old one: old comparator, 4 um keeper, 181 um
+    bias, ci 6.949 um, while the library had long since been fixed. From the
+    outside that run is indistinguishable from a successful one.
+
+    The fingerprint is derived from the artefact's own producer, not from
+    mtime (which a copy or a checkout resets) and not from a file name (one
+    spelling defines a blind population).
+    """
+    import hashlib
+    try:
+        return hashlib.sha256(
+            Path(__file__).read_bytes()).hexdigest()[:16]
+    except OSError:                                     # pragma: no cover
+        return ""
 PROVENANCE_SCHEMA = 1
 SKILL = "analog-topology-select"
 IR_SCHEMA = 1
@@ -3126,6 +3149,7 @@ def build_ir(block: str, btype: str, entry: Dict[str, Any],
         "_provenance": {
             "schema": PROVENANCE_SCHEMA,
             "producer": PRODUCER,
+        "producer_fingerprint": producer_fingerprint(),
             "produced_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
             "derived_from": "block_type_topology_library",
             "library_entry": btype,

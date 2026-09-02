@@ -148,6 +148,22 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import _progress_run as _pr  # noqa: E402
 
 PRODUCER = "analog_a3_netlist_emit"
+
+
+def producer_fingerprint() -> str:
+    """A digest of THIS producer's own source, stamped into the provenance.
+
+    MEASURED (round 23): an artefact that names its producer but not WHICH
+    producer cannot be told apart from a stale one, so the runner skipped the
+    producer and the simulator got the old netlist. See the same function in
+    `analog_a2_topology_emit`. Derived from the producer's own bytes -- not
+    mtime, not a file name.
+    """
+    import hashlib
+    try:
+        return hashlib.sha256(Path(__file__).read_bytes()).hexdigest()[:16]
+    except OSError:                                     # pragma: no cover
+        return ""
 PROVENANCE_SCHEMA = 1
 SKILL = "analog-netlist-gen"
 
@@ -919,6 +935,8 @@ def verify_with_checkers(block: str, sp_text: str, tb_text: Optional[str],
             (bdir / _acc.NETLIST_PROVENANCE_ARTEFACT).write_text(
                 json.dumps({"block": block,
                             "_provenance": {"producer": PRODUCER,
+                                            "producer_fingerprint":
+                                                producer_fingerprint(),
                                             "design_content": design_content}}),
                 encoding="utf-8")
         if tb_text:
@@ -1063,6 +1081,7 @@ def write_gap(bdir: Path, project: Path, block: str, btype: str, status: str,
         "_provenance": {
             "schema": PROVENANCE_SCHEMA,
             "producer": PRODUCER,
+            "producer_fingerprint": producer_fingerprint(),
             "produced_at": _now(),
             "fields_bound": [],
             "fields_defaulted": [],
@@ -1342,6 +1361,7 @@ def emit_for_block(project: Path, entry: Dict[str, Any], pdk: str,
         "_provenance": {
             "schema": PROVENANCE_SCHEMA,
             "producer": PRODUCER,
+            "producer_fingerprint": producer_fingerprint(),
             # The SAME stamp the netlist header carries — one event, one time.
             "produced_at": stamp,
             "rendered_from": {
@@ -1425,7 +1445,8 @@ def run(project: Path, only: Optional[str], pdk: str, container: str,
         verify_sim: bool) -> Tuple[int, Dict[str, Any]]:
     entries, src = block_entries(project)
     if not entries:
-        return 1, {"producer": PRODUCER, "verdict": "NO_INPUT",
+        return 1, {"producer": PRODUCER,
+            "producer_fingerprint": producer_fingerprint(), "verdict": "NO_INPUT",
                    "reason": "no analog block list and no L5 analog_blocks[]",
                    "records": []}
     all_entries = list(entries)
@@ -1434,7 +1455,8 @@ def run(project: Path, only: Optional[str], pdk: str, container: str,
                    if (e.get("name") or e.get("block") or e.get("type"))
                    == only]
         if not entries:
-            return 1, {"producer": PRODUCER, "verdict": "NO_SUCH_BLOCK",
+            return 1, {"producer": PRODUCER,
+            "producer_fingerprint": producer_fingerprint(), "verdict": "NO_SUCH_BLOCK",
                        "reason": f"block `{only}` is not declared in {src}",
                        "records": []}
     # vibe-ic#903 (second half) — the DESIGN's stated voltage domains, read off
@@ -1452,6 +1474,7 @@ def run(project: Path, only: Optional[str], pdk: str, container: str,
     gaps = [r for r in records if r.get("action") == "gap"]
     report = {
         "producer": PRODUCER,
+            "producer_fingerprint": producer_fingerprint(),
         "block_list_source": src,
         "verdict": "EMITTED" if (emitted or kept) else "ALL_GAP",
         "blocks_total": len(records),
