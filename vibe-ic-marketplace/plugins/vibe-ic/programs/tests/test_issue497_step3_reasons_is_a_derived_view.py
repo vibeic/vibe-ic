@@ -21,6 +21,13 @@ line shapes is therefore pinned here as GOLDEN TEXT, stated in full: Form 1,
 Form 2 (header + bullets), the disclosure (heading + bullets), plain SKIP,
 WAIVED-DEFERRED, the clean-sweep line, and the umbrella's own no-RTL note.
 
+SEVEN SHAPES SINCE #1978, NOT SIX. `_flow_reason_taxonomy` is fail-closed:
+a non-verdict it cannot class is an execution error and never a benign
+skip, so a `SKIP` record carrying no `reason_class` LEAVES the per-gate
+skip bucket and is rendered on its own process-provenance line, appended
+after the buckets. That is a NEW shape beside the six, not one of the six
+changing — the six are pinned unchanged above and below.
+
 THE NO-GATE SKIP LINE, decided deliberately
 -------------------------------------------
 `SKIP: no RTL directory found — structural gates skipped (analog track /
@@ -100,13 +107,55 @@ def test_the_timeout_fail_has_no_message_separator():
 
 
 def test_plain_skip_shapes():
+    """A SKIP the taxonomy can class as benign keeps the per-gate skip line.
+
+    `class-not-applicable` infers DESIGN_DECLARED_NA, which is skip-eligible,
+    so it renders exactly as it always did.
+    """
     assert _reasons([
-        _rec("alpha_check", "SKIP", "", exit_code=2,
-             skip_kind="input-missing"),
         _rec("bravo_check", "SKIP", "class N/A",
              skip_kind="class-not-applicable")]) == [
-        "SKIP: alpha_check",
         "SKIP: bravo_check (SKIP: class N/A)"]
+
+
+def test_a_skip_the_taxonomy_cannot_class_leaves_the_skip_bucket():
+    """THE SEVENTH SHAPE (#1978), and why it is not the sixth changing.
+
+    `input-missing` carries no `reason_class`, and `_flow_reason_taxonomy` is
+    fail-closed by design: "an unclassified non-verdict is an execution error,
+    never a benign skip". Such a record therefore LEAVES the per-gate skip
+    bucket — `_compose_p0_reasons_from_records` filters BLOCKED/INCOMPLETE out
+    of `decisive_or_skip` — and is rendered on its own process-provenance line
+    instead. Pinned as golden text like the other six, because the operator
+    reads this listing and #492 exists because a gate that never ran used to be
+    invisible in it.
+
+    Two properties, not one: the gate is still NAMED, and it no longer wears
+    the benign `SKIP: ` prefix that says nobody need come back to it.
+    """
+    got = _reasons([
+        _rec("alpha_check", "SKIP", "", exit_code=2,
+             skip_kind="input-missing")])
+    assert got == ["INCOMPLETE: alpha_check — reason_class=EXECUTION_ERROR"]
+    assert not any(r.startswith("SKIP: ") for r in got), got
+
+
+def test_the_incomplete_line_has_no_dangling_separator():
+    """The peer of `test_the_timeout_fail_has_no_message_separator`.
+
+    A record with no message rendered as `… reason_class=EXECUTION_ERROR: ` —
+    a line ending in a colon and a space, promising a sentence that is not
+    there. The FAIL form has refused that since #497; the #1978 tier arrived
+    without it.
+    """
+    line = _reasons([_rec("alpha_check", "SKIP", "", exit_code=2,
+                          skip_kind="input-missing")])[0]
+    assert not line.rstrip(" ").endswith(":"), repr(line)
+    assert line == line.rstrip(), repr(line)
+    # and the message IS still rendered when there is one
+    with_msg = _reasons([_rec("beta_check", "SKIP", "the input never arrived",
+                              exit_code=2, skip_kind="input-missing")])[0]
+    assert with_msg.endswith(": the input never arrived"), repr(with_msg)
 
 
 def test_waived_deferred_shape():
@@ -202,9 +251,15 @@ def test_all_shapes_at_once_keep_their_order():
         "  - b_check — bang",
         GI.format_not_invocable_heading(1, 6),
         f"  - {GI.format_not_invocable_entry('ni_check', 'argparse said no')}",
-        "SKIP: sk_check",
         "WAIVED-DEFERRED: wv_check — thin-input (ticket=T-1, "
         "review_required=true): why",
+        # SEVENTH SHAPE, and it comes LAST on purpose: #1978's
+        # process-provenance lines are appended after the per-gate buckets by
+        # `_compose_p0_reasons_from_records`, so `sk_check` — an
+        # `input-missing` SKIP the taxonomy cannot class as benign — left the
+        # skip bucket and is stated here instead of between the disclosure and
+        # the waiver.
+        "INCOMPLETE: sk_check — reason_class=EXECUTION_ERROR",
     ]
     assert not any("ok_check" in line for line in got), (
         "a passing gate contributes no line — the fact that made "

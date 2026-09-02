@@ -134,10 +134,32 @@ def _consumer_sees_disclosure(proc: subprocess.CompletedProcess) -> bool:
     return F._stdout_signals_vacuous(F.output_snippet(proc.stdout, proc.stderr))
 
 
+def _step3_clause(gate: str, json_rel: str) -> dict:
+    return {"program_exit_zero": f"{gate} . --json {json_rel}"}
+
+
 def _evaluate_step3_clause(gate: str, json_rel: str, project: Path):
     """Drive the REAL clause evaluator, with the clause step 3 declares."""
-    return F._evaluate_gate(
-        project, {"program_exit_zero": f"{gate} . --json {json_rel}"})
+    return F._evaluate_gate(project, _step3_clause(gate, json_rel))
+
+
+def _step3_status(gate: str, json_rel: str, project: Path) -> str:
+    """The tier `check_step` actually assigns — the consumer, not the marker."""
+    return F.check_step(
+        project,
+        {"id": "3", "name": "organic887 probe", "required_outputs": [],
+         "gate": {"all_of": [_step3_clause(gate, json_rel)]}},
+        {}).status
+
+
+#: The disclosure markers that take a step OUT of the executed-PASS numerator.
+#: TWO since #1978 split the non-verdict reasons: a zero-file scan is
+#: `ZERO_DENOMINATOR`, which that taxonomy puts in `INCOMPLETE` rather than in
+#: `SKIP_ELIGIBLE` precisely because it "leave[s] the executed-PASS population
+#: and require[s] follow-up". Naming both is not a widening — the assertion
+#: that carries the weight is the `check_step` tier below, which is the
+#: consumer this file's docstring is actually about.
+_OUT_OF_PLAIN_PASS = (F._VACUOUS_HINT_PREFIX, F._INCOMPLETE_HINT_PREFIX)
 
 
 # ---------------------------------------------------------------------------
@@ -247,9 +269,22 @@ def test_flow_clause_promotes_the_step_out_of_plain_pass(
     assert passed is True, (
         f"{gate}'s clause must not FAIL a project that has not authored RTL "
         f"yet; reasons={reasons}")
-    assert any(r.startswith(F._VACUOUS_HINT_PREFIX) for r in reasons), (
-        f"{gate}'s clause returned no __VACUOUS_HINT__ marker, so check_step "
-        f"leaves the step in the executed-PASS numerator. reasons={reasons}")
+    assert any(r.startswith(_OUT_OF_PLAIN_PASS) for r in reasons), (
+        f"{gate}'s clause returned no disclosure marker, so check_step leaves "
+        f"the step in the executed-PASS numerator. reasons={reasons}")
+    # THE PROPERTY, asked of the consumer instead of of the string. A marker
+    # this file recognises is worth nothing if `check_step` still calls the
+    # step a plain PASS, and the marker's SPELLING has already moved once
+    # (__VACUOUS_HINT__ -> __INCOMPLETE_HINT__, #1978) without the property
+    # changing at all. MEASURED at bcedcdf25d9c: status INCOMPLETE, and the
+    # gate's own report still reads verdict=VACUOUS_PASS with
+    # files_scanned=0 — vacuous FOR THE GATE, incomplete FOR THE STEP, which
+    # is not a contradiction but is exactly the pair a string test misreads.
+    status = _step3_status(gate, json_rel, proj)
+    assert status != "PASS", (
+        f"{gate}'s zero-file scan reached check_step as a plain PASS; the "
+        f"whole point of organic887 is that it must not")
+    assert status in ("VACUOUS_PASS", "INCOMPLETE", "BLOCKED"), status
 
 
 @pytest.mark.parametrize("gate,json_rel", STEP3_GATES)

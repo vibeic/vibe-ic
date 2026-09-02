@@ -4915,7 +4915,15 @@ def _compose_p0_reasons_from_records(
         umbrella_notes=[_P0_NO_RTL_NOTE] if executed is None else None)
     process_lines = [
         (f"{r['verdict']}: {r['name']} — reason_class="
-         f"{r['reason_class']}: {r['message']}")
+         f"{r['reason_class']}"
+         # NO DANGLING SEPARATOR. A record with no message rendered as
+         # `INCOMPLETE: alpha_check — reason_class=EXECUTION_ERROR: ` — an
+         # operator line that ends in a colon and a space, promising a
+         # sentence that is not there. `_compose_p0_reasons` already refuses
+         # this for the FAIL form (`test_the_timeout_fail_has_no_message_
+         # separator` pins it); the #1978 tier arrived without the same care.
+         + (f": {r['message']}" if str(r.get("message") or "").strip()
+            else ""))
         for r in records if r.get("verdict") in ("BLOCKED", "INCOMPLETE")
     ]
     if process_lines:
