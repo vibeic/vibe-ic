@@ -878,7 +878,53 @@ def run(project: Path, pdk_root: Optional[str], pdk: Optional[str]
         side_um[side] = 2.0 * edge_um + 2.0 * corner_w + pads
     need = max(side_um.values()) if side_um else 0.0
     die_um = float(int(need) + (1 if need > int(need) else 0))
+    # ── HOW DEEP THE RING IS, and why the core must be told ──────────────
+    # MEASURED on spm x gf180mcuD (v1.16.38): the floorplan inset the runner
+    # used was a flat 10 um, so `CORE 20160 23520 -> 6283200 6279840` inside a
+    # `DIEAREA 0 0 6324000 6324000` — the core overlapped the pad ring by
+    # ~366 um on every side. Placement and routing therefore ran UNDER the
+    # pads, where the pads' own obstruction fills M1 and M2, and the first
+    # detailed_route reported 3515 violations of which 3112 were Shorts and
+    # 3104 of those lay inside that band, 2054 of them naming an IO instance.
+    #
+    # The band is the IO ROW's depth plus the library's own edge spacing, and
+    # both terms are read: the spacing from the PDK's declaration (the same
+    # one the die side above uses) and the depth from each PLACED master's own
+    # LEF SIZE — its HEIGHT for a pad on a horizontal side, and a corner cell
+    # counted at its larger dimension because it occupies both. A master whose
+    # SIZE the LEF does not carry contributes NOTHING and is NAMED, so an
+    # unreadable library yields no depth rather than a default one.
+    depth_terms: Dict[str, float] = {}
+    unsized: List[str] = []
+    for inst, r in sorted(chosen.items()):
+        master = str(r["master"])
+        size = sizes.get(master)
+        if not size:
+            unsized.append(master)
+            continue
+        depth_terms[master] = max(depth_terms.get(master, 0.0), float(size[1]))
+    if corner_master:
+        csize = sizes.get(str(corner_master))
+        if csize:
+            depth_terms[str(corner_master)] = max(
+                depth_terms.get(str(corner_master), 0.0),
+                float(max(csize)))
+        else:
+            unsized.append(str(corner_master))
+    ring_depth = (max(depth_terms.values()) + edge_um) if depth_terms else None
     rec["die_required_um"] = {
+        "ring_depth_um": ring_depth,
+        "ring_depth_terms_um": depth_terms,
+        "ring_depth_masters_without_a_lef_size": sorted(set(unsized)),
+        "ring_depth_basis": (
+            "the deepest PLACED ring master (each pad at its own LEF SIZE "
+            "height, the corner cell at its larger dimension because it "
+            "occupies both sides) plus the library's declared "
+            "PAD_EDGE_SPACING. This is how far a placeable core must stay "
+            "back from the die edge; a master with no LEF SIZE contributes "
+            "nothing and is named in "
+            "`ring_depth_masters_without_a_lef_size`, so a consumer can "
+            "refuse rather than inset by a default"),
         "per_side": side_um,
         "corner_master": corner_master,
         "corner_width_um": corner_w,

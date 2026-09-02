@@ -15468,6 +15468,59 @@ def _padring_required_die_um(project: Optional[Path]) -> Tuple[Optional[int], st
     return side_i, str(req.get("basis") or "")
 
 
+def _padring_core_inset_um(project: Optional[Path]
+                           ) -> Tuple[Optional[float], str]:
+    """How far the placeable core must stay back from the die edge.
+
+    THE MEASUREMENT THAT MADE THIS NECESSARY. The floorplan inset was a flat
+    10 um for every design, ring or no ring. On spm x gf180mcuD (v1.16.38)
+    that put `CORE 20160 23520 -> 6283200 6279840` inside a 6324000-unit die
+    while the ring is 381 um deep, so the core overlapped the pad ring by
+    ~366 um on all four sides: cells were placed and nets routed UNDER the
+    pads, where the pads' own obstruction fills M1/M2. The first
+    detailed_route reported 3515 violations, 3112 of them Shorts, 3104 of
+    those inside that band and 2054 naming an IO instance.
+
+    THE NUMBER IS DERIVED, NEVER TYPED. `io_pad_chip_top_gen` computes it from
+    the IO library itself — each placed master's own LEF SIZE (its height, and
+    a corner cell at its larger dimension because it occupies both sides) plus
+    the PDK's declared PAD_EDGE_SPACING — and records it as
+    `die_required_um.ring_depth_um` beside the die side that comes from the
+    same three terms. Nothing here recomputes it.
+
+    FAIL-CLOSED. A ring whose record carries no depth, or names a master with
+    no LEF SIZE, returns None with the reason; the caller REFUSES rather than
+    inset by a default, because a default inset is exactly the defect above.
+    Returns (None, "") — an empty reason — only when there is no ring at all,
+    which is the ordinary state of a design off the chip path.
+    """
+    if project is None:
+        return None, ""
+    rec = Path(project) / "reports" / "phase3" / "io_pad_chip_top.json"
+    if not rec.is_file():
+        return None, ""
+    try:
+        doc = json.loads(rec.read_text(errors="replace"))
+    except (OSError, ValueError) as exc:
+        return None, f"the pad-ring producer record is unreadable: {exc}"
+    if doc.get("verdict") != "WROTE":
+        return None, ""
+    req = doc.get("die_required_um") or {}
+    unsized = req.get("ring_depth_masters_without_a_lef_size") or []
+    if unsized:
+        return None, (
+            f"the IO library carries no LEF SIZE for {sorted(unsized)}, so how "
+            f"deep the ring is cannot be measured and the core inset is not "
+            f"guessed")
+    depth = req.get("ring_depth_um")
+    try:
+        return float(depth), ""
+    except (TypeError, ValueError):
+        return None, ("the pad-ring producer record states no "
+                      "`die_required_um.ring_depth_um`, so the core inset "
+                      "cannot be derived from the ring that exists")
+
+
 def _effective_die_um(die_um_flag: str,
                       project: Optional[Path]
                       ) -> Tuple[str, Optional[str]]:
@@ -24448,7 +24501,25 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
     except Exception:
         return StepResult("pnr", "FAIL", time.time() - t0,
                           f"--die-um malformed: {die_um}")
+    # THE CORE MUST START OUTSIDE THE RING. 10 um is the historical inset and
+    # it stays for a design with no ring; a design WITH one insets by the
+    # ring's measured depth instead — see `_padring_core_inset_um` for the
+    # 3104 Shorts the flat inset produced.
     core_pad = 10
+    _ring_inset, _ring_inset_why = _padring_core_inset_um(project)
+    if _ring_inset_why:
+        return StepResult(
+            "pnr", "FAIL", time.time() - t0,
+            f"PADRING_CORE_INSET_UNDERIVABLE: {_ring_inset_why}. A core inset "
+            f"chosen here would decide where cells may be placed on somebody "
+            f"else's ring.")
+    if _ring_inset is not None:
+        core_pad = int(math.ceil(_ring_inset))
+        print(f"[phase3] core inset := {core_pad} um — the pad ring's own "
+              f"measured depth (deepest placed ring master + the library's "
+              f"declared PAD_EDGE_SPACING), not the historical 10 um: a core "
+              f"that overlaps the ring places cells under the pads' own "
+              f"obstruction", file=sys.stderr)
     core_w = die_w - 2 * core_pad
     core_h = die_h - 2 * core_pad
 
