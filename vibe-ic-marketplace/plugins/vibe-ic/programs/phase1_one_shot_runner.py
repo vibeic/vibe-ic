@@ -666,18 +666,65 @@ def _run_expert_track(project: Path) -> int:
         print(f"      ERROR: the expert-track report does not parse ({exc}) — "
               f"unreadable evidence is not evidence", file=sys.stderr)
         return 1
-    complete, detail = _expert_track_completion(evidence)
-    if not complete:
-        print(f"      INCOMPLETE: the Phase-1 expert answer was not consumed "
-              f"({detail}); creating a handoff or writing a zero-denominator "
-              f"report is not execution", file=sys.stderr)
+    disposition, detail = _expert_track_disposition(evidence)
+    if disposition == _EXPERT_DEFECT:
+        print(f"      ERROR: the expert track did not produce a usable reading "
+              f"({detail}); a refused, erroring or self-contradictory record "
+              f"is not a second track", file=sys.stderr)
         return 1
+    if disposition == _EXPERT_PENDING:
+        # NOT a failure, and NOT credit. `ai_subtrack` documents
+        # HANDOFF_EMITTED as the designed FIRST pass — "invoke subagent … and
+        # re-run to consume its answer" — and CONSUMED_EMPTY as a real reading
+        # of zero. A program cannot spawn the subagent, so every single-pass
+        # non-agent invocation lands here: making it exit 1 turned a
+        # two-pass protocol into a gate no legitimate input can pass, and it
+        # took the Shape-C benchmark hard gate `phase1_run_all` with it
+        # (MEASURED: 14 emit-blocking cases across 7 test files went red at
+        # 7d1da41d7 and are green at its parent 55bb6967b, same tree
+        # otherwise). What #1973 actually measured was a REPORTING lie — the
+        # summary said the second track "ran". That lie is fixed where it
+        # lives, in `_expert_track_summary`, which publishes
+        # "INCOMPLETE — <detail>" here and never "ran"; credit is still
+        # withheld. Reporting honesty and run failure are different things.
+        print(f"      PENDING: the Phase-1 expert answer is not yet consumed "
+              f"({detail}); recorded uncredited — re-run after the subagent "
+              f"answers to convert it into execution", file=sys.stderr)
+        return 0
     if cp.returncode != 0:
         print(f"      ERROR: the expert report says complete but the program "
               f"exited {cp.returncode}; contradictory execution evidence "
               f"cannot be credited", file=sys.stderr)
         return 1
     return 0
+
+
+#: The three dispositions a track record can carry. CREDITED is execution;
+#: PENDING is a stated, uncredited waiting state the protocol defines; DEFECT
+#: is a record that cannot be read as either.
+_EXPERT_CREDITED = "CREDITED"
+_EXPERT_PENDING = "PENDING"
+_EXPERT_DEFECT = "DEFECT"
+
+#: Statuses `phase1_expert_parse_track.ai_subtrack` defines as a state of the
+#: hand-off protocol rather than a fault. HANDOFF_EMITTED = pack written, the
+#: agent has not answered yet; CONSUMED_EMPTY = the agent answered and its
+#: `expectations` list was empty, "a real reading of zero". Neither earns
+#: credit; neither is a failed run. Any OTHER non-CONSUMED status — ERROR,
+#: ANSWER_SCHEMA_MISMATCH, or one this reader does not know — is a defect.
+_EXPERT_PENDING_STATUSES = frozenset({"HANDOFF_EMITTED", "CONSUMED_EMPTY"})
+
+
+def _expert_track_disposition(report: Any) -> Tuple[str, str]:
+    """Classify a track record as execution, a stated wait, or a defect."""
+    complete, detail = _expert_track_completion(report)
+    if complete:
+        return _EXPERT_CREDITED, detail
+    if isinstance(report, dict):
+        ai = report.get("ai_subtrack")
+        if isinstance(ai, dict) and ai.get("status") in _EXPERT_PENDING_STATUSES:
+            return _EXPERT_PENDING, detail
+    return _EXPERT_DEFECT, detail
 
 
 def _expert_track_completion(report: Any) -> Tuple[bool, str]:
