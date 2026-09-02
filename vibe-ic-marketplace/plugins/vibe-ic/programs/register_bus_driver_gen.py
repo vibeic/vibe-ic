@@ -63,6 +63,14 @@ _H2D_ROLES = {
     "size":      ("a_size", "size", "a_len"),
     "source":    ("a_source", "source", "a_id"),
     "rsp_ready": ("d_ready", "rready", "ready"),
+    # A sideband/user field. Leaving it at 0 is NOT neutral: measured on
+    # opentitan_aes, `tlul_err` computes
+    # `instr_type_err = mubi4_test_invalid(tl_i.a_user.instr_type)`, so an
+    # all-zero user field is an INVALID multi-bit encoding and every read came
+    # back `ffffffff` (the package's own `DataWhenError`). The design ships the
+    # value a host is supposed to send; the driver uses that and refuses when
+    # the field exists and the constant does not.
+    "user": ("a_user", "user", "auser", "awuser"),
 }
 #: Device->host struct field roles.
 _D2H_ROLES = {
@@ -84,6 +92,9 @@ _REG_ROLES = {
     "data_in":  re.compile(r"(?i)^(?:data_in|din|input_data)(?:_(?P<i>\d+))?$"),
     "data_out": re.compile(r"(?i)^(?:data_out|dout|output_data)(?:_(?P<i>\d+))?$"),
 }
+#: Reset-shaped port names, for the tie-off pass in `emit_sequence_tb`.
+_RST_TOKENS = frozenset({"rst", "reset", "rst_n", "rst_ni", "resetn",
+                         "i_rst", "rst_i", "reset_n"})
 _CTRL_RE = re.compile(r"(?i)^ctrl(_shadowed)?$")
 _TRIGGER_RE = re.compile(r"(?i)^(trigger|command|cmd)$")
 _STATUS_RE = re.compile(r"(?i)^(status|state)$")
@@ -154,6 +165,14 @@ def bus_contract(package_text: str) -> Tuple[Optional[dict], str]:
     if missing:
         return None, (f"the staged bus package binds no field for {missing} "
                       f"(h2d={sorted(hr)}, d2h={sorted(dr)})")
+    # The named default for the user/sideband field, taken from the package
+    # that declares the field.
+    user_default = ""
+    if "user" in hr:
+        m_ud = re.search(r"parameter\s+\w*user\w*_t\s+(\w+)\s*=", package_text,
+                         re.I)
+        if m_ud:
+            user_default = m_ud.group(1)
     ops: Dict[str, str] = {}
     op_type = ""
     for m in re.finditer(
@@ -180,7 +199,8 @@ def bus_contract(package_text: str) -> Tuple[Optional[dict], str]:
             "package": pkg, "h2d": hr, "d2h": dr, "opcodes": ops,
             # The opcode field is enum-typed, so a bare literal does not
             # assign to it. Carry the type so the driver can cast.
-            "opcode_type": (scope + op_type) if op_type else ""}, ""
+            "opcode_type": (scope + op_type) if op_type else "",
+            "user_default": (scope + user_default) if user_default else ""}, ""
 
 
 def register_endianness(corpus: Dict[str, str]) -> Tuple[Optional[str], str]:
@@ -318,6 +338,12 @@ def resolve_register_plan(case: dict, l4: dict, l15: dict,
         "key": by_role["key"], "iv": by_role["iv"],
         "data_in": by_role["data_in"], "data_out": by_role["data_out"],
         "ctrl_addr": int(str(ctrl.get("address")), 16),
+        # A SHADOWED control register takes effect only after TWO identical
+        # writes — the design says so in the register's own NAME, which is the
+        # convention its documents use. Measured on opentitan_aes: with one
+        # write the control register never updated, so the mode stayed at its
+        # invalid-mapped default and STATUS.OUTPUT_VALID was never asserted.
+        "ctrl_shadowed": "shadow" in _norm(ctrl.get("name")),
         "ctrl_value": ctrl_val, "ctrl_parts": ctrl_parts,
         "trigger_addr": int(str(trig.get("address")), 16),
         "start_bit": start[1], "start_field": start[0],
@@ -336,10 +362,54 @@ def _words(hexval: str, order: str) -> List[int]:
     return out
 
 
+def find_host_intg_gen(sources: Sequence[Tuple[str, str]], h2d_t: str
+                       ) -> Tuple[Optional[dict], str]:
+    """`(module, file, why)` for the design's OWN host-side integrity generator.
+
+    A device that checks command integrity rejects every transaction a host
+    sends without it. Measured on opentitan_aes: `aes_reg_top` instantiates
+    `tlul_cmd_intg_chk` unconditionally and folds its verdict into
+    `reg_error`, so every read came back `ffffffff` — the bus package's own
+    `DataWhenError` — with `d_error=1`. The design ships the generator that
+    makes a legal request (`tlul_cmd_intg_gen`); using it is using the design's
+    own RTL, and it is the only way a testbench can talk to that device at all.
+
+    Shape, not name: a module whose port list is `input <h2d> .., output <h2d>
+    ..` — a pass-through on the request channel. That is what an integrity
+    generator is."""
+    bare = h2d_t.split("::")[-1]
+    pat = re.compile(
+        r"\bmodule\s+(\w+)\b(?P<hdr>.*?)\bendmodule\b", re.S)
+    for path, text in sources:
+        for m in pat.finditer(text):
+            hdr = m.group("hdr")
+            mi = re.search(r"\binput\s+[\w:]*\b" + re.escape(bare)
+                           + r"\s+(\w+)", hdr)
+            mo = re.search(r"\boutput\s+[\w:]*\b" + re.escape(bare)
+                           + r"\s+(\w+)", hdr)
+            if not (mi and mo):
+                continue
+            # A pass-through ALONE is not enough: `tlul_adapter_racl` has the
+            # same port shape and filters access, it does not generate
+            # integrity. What makes this the generator is that its body
+            # instantiates an error-correcting-code ENCODER — that is the thing
+            # that computes the checksum the device's checker recomputes.
+            if not re.search(r"\b\w*secded\w*_enc\b|\b\w*_enc\s+u_\w+\s*\(",
+                             hdr):
+                continue
+            return ({"module": m.group(1), "in": mi.group(1),
+                     "out": mo.group(1), "file": path}, "")
+    return None, (f"no staged source declares a {bare} -> {bare} "
+                  f"pass-through (a host-side integrity generator)")
+
+
 def emit_sequence_tb(case: dict, plan: dict, bus: dict, dut_module: str,
                      h2d_port: str, d2h_port: str, clk: str, rst: str,
                      rst_active_low: bool = True,
-                     timeout_cycles: int = 20000) -> str:
+                     timeout_cycles: int = 20000,
+                     ports: Optional[Sequence[Tuple[str, str, str]]] = None,
+                     intg_gen: Optional[str] = None
+                     ) -> str:
     """The SystemVerilog testbench for one vector, driven over the design's own
     register bus.
 
@@ -367,6 +437,8 @@ def emit_sequence_tb(case: dict, plan: dict, bus: dict, dut_module: str,
     AR, DV, RD = d["req_ready"], d["rsp_valid"], d["rdata"]
     mask = h.get("mask")
     size = h.get("size")
+    user = h.get("user")
+    user_default = bus.get("user_default") or ""
     L: List[str] = []
     L.append("// AUTO-GENERATED known-answer-vector testbench, driven over the")
     L.append("// REGISTER BUS THE DESIGN DECLARES. Nothing below is hard-coded:")
@@ -382,31 +454,92 @@ def emit_sequence_tb(case: dict, plan: dict, bus: dict, dut_module: str,
     L.append(f"module {name};")
     L.append("  integer errors = 0;")
     L.append("  integer wait_cycles = 0;")
+    L.append("  integer stall = 0;")
     L.append(f"  reg {clk} = 1'b0;")
     L.append(f"  always #5 {clk} = ~{clk};")
     L.append(f"  reg {rst} = 1'b{'0' if rst_active_low else '1'};")
-    L.append(f"  {bus['h2d_type']} {h2d_port};")
+    # The signal the sequence DRIVES. When the design ships a host-side
+    # integrity generator, the driven signal goes through it and the DUT sees
+    # its output — otherwise the device's own checker rejects every request.
+    drive_sig = f"{h2d_port}_raw" if intg_gen else h2d_port
+    L.append(f"  {bus['h2d_type']} {drive_sig};")
+    if intg_gen:
+        L.append(f"  {bus['h2d_type']} {h2d_port};")
+        L.append(f"  {intg_gen['module']} u_intg "
+                 f"(.{intg_gen['in']}({drive_sig}), "
+                 f".{intg_gen['out']}({h2d_port}));"
+                 f"   // the design's own request-integrity generator")
     L.append(f"  {bus['d2h_type']} {d2h_port};")
     L.append("  reg [31:0] rdata;")
-    L.append(f"  {dut_module} dut (.{clk}({clk}), .{rst}({rst}), "
-             f".{h2d_port}({h2d_port}), .{d2h_port}({d2h_port}));")
+    # EVERY port of the DUT is connected. Measured on opentitan_aes: connecting
+    # only clock, reset and the bus pair left `rst_shadowed_ni` unconnected,
+    # which a simulator reads as 0 — a SECOND reset held asserted forever, so
+    # the design never left reset and the run hung rather than failing. An
+    # unconnected input is not a neutral default; it is a value nobody chose.
+    #
+    # Reset-shaped inputs are driven with the SAME polarity as the primary
+    # reset (a design that names two resets means both of them); everything
+    # else is tied to 0 and SAID so, because a tie is a decision the reader has
+    # to be able to see. Outputs are left open.
+    extra_in = []
+    for _d, _w, _n in (ports or []):
+        if not str(_d).startswith("input"):
+            continue
+        if _n in (clk, rst, h2d_port, d2h_port):
+            continue
+        nn = _norm(_n)
+        is_rst = nn in _RST_TOKENS or "rst" in nn or "reset" in nn
+        # A second CLOCK that is tied to 0 does not tick, and everything behind
+        # it stops. Measured on opentitan_aes: `clk_edn_i` tied off left the
+        # entropy interface frozen. A clock-shaped input is driven by the same
+        # clock this testbench already generates — that is what a testbench
+        # does with a clock, and it invents no value.
+        is_clk = (not is_rst) and ("clk" in nn or "clock" in nn)
+        extra_in.append((_n, _w, is_rst, is_clk))
+    # A reset gets a driven variable (it has to be RELEASED). Everything else
+    # is connected to a literal `'0` at the instantiation rather than through a
+    # declared reg: those ports are struct- or parameter-typed
+    # (`edn_pkg::edn_rsp_t`, `[NumAlerts-1:0]`) and a `reg` declaration in the
+    # testbench would have to know a type and a parameter that live inside the
+    # DUT. `'0` is width- and type-agnostic and says what it is.
+    for _n, _w, _is_rst, _is_clk in extra_in:
+        if _is_rst:
+            L.append(f"  reg {_n} = 1'b{'0' if rst_active_low else '1'};"
+                     f"   // second reset, released with the primary one")
+    conn = [f".{clk}({clk})", f".{rst}({rst})",
+            f".{h2d_port}({h2d_port})", f".{d2h_port}({d2h_port})"]
+    conn += [(f".{_n}({_n})" if _r else (f".{_n}({clk})" if _c
+                                         else f".{_n}('0)"))
+             for _n, _w, _r, _c in extra_in]
+    L.append(f"  {dut_module} dut (" + ", ".join(conn) + ");")
     L.append("")
     L.append("  task automatic bus_write(input [31:0] addr,")
     L.append("                           input [31:0] data);")
     L.append("    begin")
     L.append(f"      @(posedge {clk});")
-    L.append(f"      {h2d_port}.{V}   <= 1'b1;")
-    L.append(f"      {h2d_port}.{OP}  <= {_op(ops['write'])};")
-    L.append(f"      {h2d_port}.{A}   <= addr;")
-    L.append(f"      {h2d_port}.{W}   <= data;")
+    L.append(f"      {drive_sig}.{V}   <= 1'b1;")
+    L.append(f"      {drive_sig}.{OP}  <= {_op(ops['write'])};")
+    if user and user_default:
+        L.append(f"      {drive_sig}.{user} <= {user_default};")
+    L.append(f"      {drive_sig}.{A}   <= addr;")
+    L.append(f"      {drive_sig}.{W}   <= data;")
     if mask:
-        L.append(f"      {h2d_port}.{mask} <= 4'hF;")
+        L.append(f"      {drive_sig}.{mask} <= 4'hF;")
     if size:
-        L.append(f"      {h2d_port}.{size} <= 2'h2;")
-    L.append(f"      {h2d_port}.{RR}  <= 1'b1;")
+        L.append(f"      {drive_sig}.{size} <= 2'h2;")
+    L.append(f"      {drive_sig}.{RR}  <= 1'b1;")
     L.append(f"      @(posedge {clk});")
-    L.append(f"      while (!{d2h_port}.{AR}) @(posedge {clk});")
-    L.append(f"      {h2d_port}.{V}   <= 1'b0;")
+    L.append(f"      stall = 0;")
+    L.append(f"      while (!{d2h_port}.{AR}) begin")
+    L.append(f"        @(posedge {clk});")
+    L.append("        stall = stall + 1;")
+    L.append(f"        if (stall > {timeout_cycles}) begin")
+    L.append(f'          $display("[TB {name}] FAIL: the bus never accepted a '
+             f'write to %h after %0d cycles", addr, stall);')
+    L.append("          $fatal(1);")
+    L.append("        end")
+    L.append("      end")
+    L.append(f"      {drive_sig}.{V}   <= 1'b0;")
     L.append("    end")
     L.append("  endtask")
     L.append("")
@@ -414,25 +547,48 @@ def emit_sequence_tb(case: dict, plan: dict, bus: dict, dut_module: str,
     L.append("                          output [31:0] data);")
     L.append("    begin")
     L.append(f"      @(posedge {clk});")
-    L.append(f"      {h2d_port}.{V}   <= 1'b1;")
-    L.append(f"      {h2d_port}.{OP}  <= {_op(ops['read'])};")
-    L.append(f"      {h2d_port}.{A}   <= addr;")
+    L.append(f"      {drive_sig}.{V}   <= 1'b1;")
+    L.append(f"      {drive_sig}.{OP}  <= {_op(ops['read'])};")
+    if user and user_default:
+        L.append(f"      {drive_sig}.{user} <= {user_default};")
+    L.append(f"      {drive_sig}.{A}   <= addr;")
     if mask:
-        L.append(f"      {h2d_port}.{mask} <= 4'hF;")
+        L.append(f"      {drive_sig}.{mask} <= 4'hF;")
     if size:
-        L.append(f"      {h2d_port}.{size} <= 2'h2;")
-    L.append(f"      {h2d_port}.{RR}  <= 1'b1;")
+        L.append(f"      {drive_sig}.{size} <= 2'h2;")
+    L.append(f"      {drive_sig}.{RR}  <= 1'b1;")
     L.append(f"      @(posedge {clk});")
-    L.append(f"      while (!{d2h_port}.{AR}) @(posedge {clk});")
-    L.append(f"      {h2d_port}.{V}   <= 1'b0;")
-    L.append(f"      while (!{d2h_port}.{DV}) @(posedge {clk});")
+    L.append("      stall = 0;")
+    L.append(f"      while (!{d2h_port}.{AR}) begin")
+    L.append(f"        @(posedge {clk});")
+    L.append("        stall = stall + 1;")
+    L.append(f"        if (stall > {timeout_cycles}) begin")
+    L.append(f'          $display("[TB {name}] FAIL: the bus never accepted a '
+             f'read of %h after %0d cycles", addr, stall);')
+    L.append("          $fatal(1);")
+    L.append("        end")
+    L.append("      end")
+    L.append(f"      {drive_sig}.{V}   <= 1'b0;")
+    L.append("      stall = 0;")
+    L.append(f"      while (!{d2h_port}.{DV}) begin")
+    L.append(f"        @(posedge {clk});")
+    L.append("        stall = stall + 1;")
+    L.append(f"        if (stall > {timeout_cycles}) begin")
+    L.append(f'          $display("[TB {name}] FAIL: the bus never returned '
+             f'data for %h after %0d cycles", addr, stall);')
+    L.append("          $fatal(1);")
+    L.append("        end")
+    L.append("      end")
     L.append(f"      data = {d2h_port}.{RD};")
     L.append("    end")
     L.append("  endtask")
     L.append("")
     L.append("  initial begin")
-    L.append(f"    {h2d_port} = '0;")
+    L.append(f"    {drive_sig} = '0;")
     L.append(f"    #20 {rst} = 1'b{'1' if rst_active_low else '0'};")
+    for _n, _w, _is_rst, _is_clk in extra_in:
+        if _is_rst:
+            L.append(f"    {_n} = 1'b{'1' if rst_active_low else '0'};")
     L.append(f"    repeat (4) @(posedge {clk});")
     for i, w in enumerate(key_w):
         if i in plan["key"]:
@@ -448,6 +604,11 @@ def emit_sequence_tb(case: dict, plan: dict, bus: dict, dut_module: str,
                      f"   // iv word {i}")
     L.append(f"    bus_write(32'h{plan['ctrl_addr']:08x}, "
              f"32'h{plan['ctrl_value']:08x});   // control")
+    if plan.get("ctrl_shadowed"):
+        L.append(f"    bus_write(32'h{plan['ctrl_addr']:08x}, "
+                 f"32'h{plan['ctrl_value']:08x});"
+                 f"   // second write: the register's own name says it is "
+                 f"shadowed")
     for i, w in enumerate(pt_w):
         if i in plan["data_in"]:
             L.append(f"    bus_write(32'h{plan['data_in'][i]:08x}, "

@@ -289,6 +289,14 @@ def emit_case_register_bus(project, case: dict, dut_module: str,
         # The parsed port surface carries no type for a struct-typed port, so
         # the pairing is read off the design's OWN module declaration.
         h2d_port, d2h_port = _bus_ports_from_rtl(root, dut_module, h2d_t, d2h_t)
+        if bus["h2d"].get("user") and not bus.get("user_default"):
+            reasons.append(
+                f"{path}: the bus carries a user/sideband field "
+                f"({bus['h2d']['user']}) and the package names no default "
+                f"constant for it — leaving it at 0 is an invalid encoding the "
+                f"design's own error check rejects, so this refuses rather "
+                f"than driving a transaction the DUT will error")
+            continue
         if not h2d_port or not d2h_port:
             reasons.append(f"{path}: the DUT exposes no {h2d_t}/{d2h_t} port "
                            f"pair")
@@ -300,10 +308,19 @@ def emit_case_register_bus(project, case: dict, dut_module: str,
         if not clk or not rst:
             reasons.append(f"{path}: the DUT exposes no clock/reset pair")
             continue
+        # A device that CHECKS request integrity rejects a host that does not
+        # generate it. Look for the design's own generator; when it ships one,
+        # the sequence drives through it and the extra source is reported so a
+        # caller knows what to compile.
+        gen, gwhy = _rbd.find_host_intg_gen(
+            _staged_bus_packages(root) + _staged_rtl_sources(root),
+            bus["h2d_type"])
         text_out = _rbd.emit_sequence_tb(
             case, plan, bus, dut_module, h2d_port, d2h_port, clk, rst,
-            rst_active_low=_norm(rst).endswith(("n", "ni")))
-        return text_out, ""
+            rst_active_low=_norm(rst).endswith(("n", "ni")),
+            ports=ports, intg_gen=gen)
+        return text_out, (f"host integrity generator: {gen['file']}"
+                          if gen else f"no integrity generator ({gwhy})")
     if not reasons:
         return None, ("no staged package declares a host->device / "
                       "device->host bus struct pair")
@@ -344,3 +361,24 @@ def _bus_ports_from_rtl(root, dut_module: str, h2d_t: str, d2h_t: str
             if mh and md:
                 return mh.group(1), md.group(1)
     return None, None
+
+
+def _staged_rtl_sources(project) -> "List[Tuple[str, str]]":
+    """`(path, text)` for every SystemVerilog source the design staged.
+
+    Includes `input/vendor_rtl/**`, which holds the HOST-side helpers a device
+    closure legitimately does not: a request-integrity generator is not part of
+    the DUT and would never be staged into `phase2/stage1/rtl`."""
+    from pathlib import Path as _P
+    out = []
+    root = _P(project)
+    for sub in ("phase2/stage1/rtl", "input/vendor_rtl", "input/design_src"):
+        d = root / sub
+        if not d.is_dir():
+            continue
+        for p in sorted(d.rglob("*.sv")):
+            try:
+                out.append((str(p), p.read_text(errors="replace")))
+            except OSError:
+                pass
+    return out
