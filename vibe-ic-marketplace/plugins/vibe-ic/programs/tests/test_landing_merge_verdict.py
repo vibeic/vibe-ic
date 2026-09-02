@@ -41,6 +41,7 @@ WHAT THIS FILE REFUSES
 """
 from __future__ import annotations
 
+import ast
 import json
 import hashlib
 import importlib.util
@@ -1886,6 +1887,82 @@ def test_value_is_one():
 """
 
 
+def _import_time_siblings(staged_file, programs):
+    """The `programs/*.py` modules `staged_file` imports AT IMPORT TIME.
+
+    Only the imports an arm actually executes on `import`: module level, plus
+    the bodies of a module-level `if`/`try`, which is how the tree spells an
+    optional dependency.  An import inside a function is NOT one of these — it
+    runs when that function is called, and staging on it would drag
+    `flow_compliance_check` and its whole phase-1 chain into a fixture that
+    calls none of it.  MEASURED over this fixture's 36 staged programs at
+    parent 9dff42ceb: 2 files by this rule, 202 by the indiscriminate one.
+
+    The STAGED bytes are parsed, never the upstream ones: the fixture replaces
+    some programs with deliberately tiny stubs, and what the arm imports is
+    what is in the miniature repository, not what this checkout ships.
+    """
+    names = set()
+
+    def scan(body):
+        for node in body:
+            if isinstance(node, ast.Import):
+                names.update(alias.name.split(".")[0] for alias in node.names)
+            elif isinstance(node, ast.ImportFrom):
+                if node.level == 0 and node.module:
+                    names.add(node.module.split(".")[0])
+            elif isinstance(node, (ast.If, ast.Try)):
+                scan(node.body)
+                scan(node.orelse)
+                for handler in getattr(node, "handlers", ()):
+                    scan(handler.body)
+                scan(getattr(node, "finalbody", ()))
+
+    scan(ast.parse(staged_file.read_text(encoding="utf-8", errors="replace")).body)
+    return sorted(n for n in names if (programs / f"{n}.py").is_file())
+
+
+def _stage_program_import_closure(staged, programs):
+    """Complete the staged programs to a CLOSURE, derived from the tree.
+
+    THE LIST ABOVE NAMES GATES; A GATE ALSO HAS DEPENDENCIES, and nothing was
+    deriving those.  A program that grows one `import <sibling>` line arrives
+    in the miniature repository without it, and inside an arm the gate does not
+    report a defect — it dies at import, `_gate_dispatch.sh` reads rc 1 as a
+    FINDING rather than rc 2 "could not check", and the finding is present on
+    the candidate and absent from the base, so the landing gate refuses a
+    branch that broke nothing.
+
+    MEASURED on 9dff42ceb, in the pinned image, with the engine reachable:
+
+        macro_obs_geometry_intersect_check.py -> _flow_reason_taxonomy
+            ModuleNotFoundError -> rc 1 -> `[FAIL] macro OBS not crossed
+            (tiny/openpdkx)` -> REFUSE 1 HYGIENE FINDING(S) INTRODUCED
+        matrix_mutation_ledger.py             -> _run_isolation
+            the same defect, one gate that this fixture does not yet dispatch
+
+    Neither name was omitted on purpose; both were added upstream by a commit
+    that had no way to know this fixture existed.  So the closure is COMPUTED
+    from what is staged instead of typed here — a hand-written list is exactly
+    the artefact that produced the two above, and it would produce the third.
+
+    A file already in `staged` is never overwritten: the stubs this fixture
+    installs on purpose (`ci_targeted_test_select.py`, `thing.py`) are the
+    subject, not a dependency to be repaired.
+    """
+    pending = sorted(path.name for path in staged.glob("*.py"))
+    seen = set(pending)
+    while pending:
+        current = staged / pending.pop()
+        for dependency in _import_time_siblings(current, programs):
+            name = f"{dependency}.py"
+            if name in seen:
+                continue
+            seen.add(name)
+            shutil.copy2(programs / name, staged / name)
+            pending.append(name)
+
+
 def _git(repo, *args, **kw):
     return _pr.run(["git", "-C", str(repo), *args], capture_output=True,
                           text=True, **kw)
@@ -2059,6 +2136,8 @@ def sandbox(tmp_path_factory):
         control.write_text("def test_fixture_control():\n    assert True\n")
     (plugin / "pytest.ini").write_text("[pytest]\ntestpaths = programs/tests\n")
     (repo / "contended.txt").write_text("base\n")
+    # LAST, so it sees every program the lines above staged, stubs included.
+    _stage_program_import_closure(plugin / "programs", _PROGRAMS)
     _write_activated_manifest(repo)
     _git(repo, "init", "-q", "-b", "main")
     _git(repo, "config", "user.email", "t@localhost")
@@ -2243,40 +2322,37 @@ def test_end_to_end_trusted_verifier_supplies_the_one_bootstrap_evidence(
     is a fact about two subjects rather than two environments -- which is the
     only channel the containment leaves open.
 
-    WITH THE STIMULUS FINALLY DELIVERED, MAIN CANNOT SUPPLY THE EVIDENCE. The
-    verifier detects the EMPTY base correctly and calls
-    `build_trusted_transition_evidence`, which enumerates and executes the
-    routed corpus and then re-attests the corpus snapshot with
-    `validate_benchmark_snapshot "$BENCHMARK_B2"`. That validator is
-    `benchmark_data_landing_checkout.py validate`, which requires the directory
-    to be a git checkout whose `origin` is exactly the canonical benchmark-data
-    remote. `$BENCHMARK_B2` is not such a checkout: since the commit that
-    introduced both halves (7c376e3481, v1.10.69, 2026-08-18) it is built by
-    `materialize_hermetic_git_subject`, i.e. `git init` over an object-exact
-    tree, which has NO remote at all. Measured directly, outside this fixture,
-    with the production argument list:
+    THE BOOTSTRAP EVIDENCE PATH IS NOW SUPPLIED, and this docstring used to say
+    it was not. It described `build_trusted_transition_evidence` re-attesting
+    the corpus with `validate_benchmark_snapshot "$BENCHMARK_B2"` -- a
+    validator that demands a git checkout whose `origin` is the canonical
+    benchmark-data remote, which a `materialize_hermetic_git_subject` tree can
+    never be -- and it recorded that the repair belonged to a protected
+    landing transition rather than to a test. That repair LANDED: the call is
+    `reattest_corpus_snapshot_against_arm_receipt "$BENCHMARK_B2" "$B2_RECEIPT"`
+    (`tools/gatekeeper-verify-merge.sh:977`), exactly the shape the report
+    asked for. Measured on 9dff42ceb in the pinned image with the engine
+    reachable: `[PASS] benchmark-data checkout measured`, a 64-character
+    `parent_evidence_sha256`, and `base_items` 0 -> `candidate_items` 1 over 4
+    replacement gates. The paragraph is rewritten rather than deleted because a
+    stale "the fix is not on this branch on purpose" is an instruction to the
+    next reader NOT to look.
 
-        real checkout   -> [PASS] benchmark-data private worktree validated
-        materialized    -> [NORECORD] origin must be exactly
-                           'https://github.com/vibeic/benchmark-data.git';
-                           observed ['<missing or unreadable>']
+    WHAT WAS ACTUALLY RED HERE was one of those four gates, and the cause was
+    in this fixture: `macro_obs_geometry_intersect_check.py` grew an
+    `import _flow_reason_taxonomy` that the miniature repository did not
+    stage, so inside arm B2 the gate died at import, `_gate_dispatch.sh` read
+    rc 1 as a FINDING rather than rc 2 "could not check", and the verdict
+    refused a branch that broke nothing --
 
-    so the one-use bootstrap dies with `benchmark-data B2 changed during
-    trusted parent evidence execution` -- a message that blames a mutation
-    when nothing mutated. It fails CLOSED (the landing is refused, never
-    granted), so it is a liveness defect and not a hole; but the property this
-    test names does not hold, and the honest thing is to leave the test
-    asserting the property rather than rewrite it to match the behaviour.
+        REFUSE  1 HYGIENE FINDING(S) INTRODUCED BY THIS BRANCH ...
+                [FAIL] macro OBS not crossed (tiny/openpdkx)
 
-    THE FIX IS NOT ON THIS BRANCH ON PURPOSE. `tools/gatekeeper-verify-merge.sh`
-    is a protected authority path; changing it is a PREPARE/ACTIVATE protected
-    landing transition and belongs to the repo-gatekeeper, not to a test
-    repair. Its shape is stated in the report: re-attest `$BENCHMARK_B2` as
-    what it IS -- compare its tree digest against the one already bound in the
-    B2 arm receipt's `inputs.corpus`, the same digest
-    `compare_hermetic_shared_inputs` reads -- instead of asking a materialized
-    snapshot for a git remote it cannot have. With that one line replaced, this
-    test passes; nothing else about the bootstrap is broken.
+    -- and it was this test alone that saw it, because only the EMPTY-base
+    bootstrap turns a candidate-side gate result into a finding the base has no
+    row for. `_stage_program_import_closure` derives that dependency from the
+    tree instead, which is why `bounded_not_checked` below is asserted as all
+    FOUR labels and not three.
 
     Its sibling below is the paired control: the SAME fixture with one bit
     different (the base already activated) reaches a verdict and passes, so
