@@ -153,7 +153,18 @@ landing_manual_stage() {
 }
 
 __SCHEDULER__
-trap gk_cleanup EXIT
+_gk_reap() {
+  # Reap every recorded stage sleeper (and stage subshell) so a killed-lane or
+  # killed-stage test leaves NO live descendant for the per-file landing
+  # runner's post-session census to read as NORECORD. Runs BEFORE gk_cleanup.
+  local _f _p
+  for _f in "$WORK"/sleeper.* "$WORK"/pid.*; do
+    [ -e "$_f" ] || continue
+    _p=$(cat "$_f" 2>/dev/null) || continue
+    [ -n "$_p" ] && kill -KILL "$_p" 2>/dev/null || true
+  done
+}
+trap '_gk_reap; gk_cleanup' EXIT
 
 # `lane_hygiene` is the REAL function, so the pool arithmetic is tested where
 # it is actually wired. Only the suite it drives is a stub.
@@ -174,7 +185,18 @@ stage() {                            # stage <lane> <seconds> <rc>
   # The sleeper must NOT inherit the capture pipe: with it inherited, killing
   # the stage leaves the substitution blocked on a child that outlived it and
   # the test would measure a timeout instead of the scheduler.
-  sleep "$2" >/dev/null 2>&1
+  #
+  # It is BACKGROUNDED and its pid RECORDED so a killed lane/stage cannot
+  # orphan it: bash does not cascade SIGKILL to children and the lanes are not
+  # process-group leaders, so a bare lane/stage kill leaves `sleep "$2"` alive
+  # and reparented past the harness. The per-file landing runner
+  # (pytest_per_file_junit.py) reads ANY live descendant at session end as
+  # NORECORD -- the same non-orphaning defect the gate-dispatch killed-worker
+  # fix closed. `_gk_reap` (EXIT trap) kills every recorded sleeper.
+  sleep "$2" >/dev/null 2>&1 &
+  _gk_sleeper=$!
+  printf '%s\n' "$_gk_sleeper" > "$WORK/sleeper.$1"
+  wait "$_gk_sleeper"
   mark "$1" end
   echo "stub stage $1 says something"
   [ "$3" -eq 0 ] || { echo "FAIL: stub $1"; FAILED=1; }

@@ -207,8 +207,24 @@ def pytest_collect_directory(path, parent):
 
 
 def pytest_collectreport(report) -> None:
-    _emit("collect_report", nodeid=str(report.nodeid),
-          outcome=str(report.outcome))
+    # An EMPTY nodeid is the session/root collector. When a file is collected
+    # OUTSIDE the pytest rootdir -- a repo-tools file (tools/...) run under the
+    # plugin's OWN rootdir, which is what happens when the per-file driver is
+    # pointed at one from `cd $PLUGIN` -- pytest cannot express that file's path
+    # relative to the rootdir and reports its collector with the SAME empty
+    # nodeid as the session. Two empty-nodeid collect_reports then reach the
+    # validator as `duplicate/out-of-order collect_report`, NORECORDing a file
+    # that in fact collected and ran cleanly (MEASURED: every tools/ file
+    # NORECORDs this way from `cd $PLUGIN`). The empty-nodeid collectreport
+    # carries no per-node signal the progress protocol needs -- collection
+    # success is already carried by `collection_finish` and the process exit rc
+    # -- so it is not emitted. Every real (non-empty) collectreport is
+    # unchanged, so the rootdir-internal shape the landing actually uses
+    # (`cd $ROOT`, where the file's nodeid is non-empty) is byte-identical.
+    nodeid = str(report.nodeid)
+    if not nodeid:
+        return
+    _emit("collect_report", nodeid=nodeid, outcome=str(report.outcome))
 
 
 def pytest_itemcollected(item) -> None:

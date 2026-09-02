@@ -2795,3 +2795,34 @@ def test_the_sink_reader_refuses_a_complete_join():
                                    "protocol_error": "x"}) == "x"
     assert D._sink_protocol_error({"protocol_complete": False,
                                    "protocol_error": None}) == ""
+
+
+def test_collectreport_skips_the_empty_rootdir_external_nodeid(monkeypatch):
+    """A file collected OUTSIDE the pytest rootdir (a repo-tools `tools/…` file
+    run under the plugin's OWN rootdir, which is what the per-file driver does
+    from `cd $PLUGIN`) reports its collector with the SAME empty nodeid as the
+    session. Emitting `collect_report` for the empty nodeid hands the validator
+    two of them -> `duplicate/out-of-order collect_report` -> the file NORECORDs
+    though it collected and ran cleanly. The plugin must emit collect_report
+    only for REAL (non-empty) nodeids; the empty one carries no per-node signal
+    the protocol needs (collection success is in `collection_finish` + the exit
+    rc). Bidirectional: RED against the pre-fix plugin (it emits the empty),
+    GREEN after.
+    """
+    import importlib
+    pg = importlib.import_module("_pytest_progress_plugin")
+    calls = []
+    monkeypatch.setattr(pg, "_emit",
+                        lambda event, **kw: calls.append((event, kw)))
+
+    class _Report:
+        def __init__(self, nodeid, outcome="passed"):
+            self.nodeid = nodeid
+            self.outcome = outcome
+
+    pg.pytest_collectreport(_Report(""))               # session / rootdir-external file
+    pg.pytest_collectreport(_Report("tools/t.py::C"))  # a real collector node
+    emitted = [kw["nodeid"] for ev, kw in calls if ev == "collect_report"]
+    assert emitted == ["tools/t.py::C"], (
+        "collect_report must be emitted only for non-empty nodeids; the empty "
+        f"rootdir-external/session nodeid must be skipped. Got: {emitted}")
