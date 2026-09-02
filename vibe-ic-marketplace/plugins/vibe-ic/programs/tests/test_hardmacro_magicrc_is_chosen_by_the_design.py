@@ -146,6 +146,30 @@ def _runner():
     return r
 
 
+def _pdk_config(r, name: str, **over):
+    """A PDK double built from THE RUNNER'S OWN `PdkConfig`, not re-typed here.
+
+    MEASURED on live main v1.16.32 (bcedcdf25d9c), 2026-09-02: the arms below
+    used a one-attribute class object carrying exactly the field the step read
+    on the day each was written. #1991 then taught
+    `step_digital_hardmacro_gen` to pass the design's own std-cell LEF and
+    metal prefix through, and that stub had neither:
+
+        AttributeError: 'P' object has no attribute 'cell_lef'
+        programs/phase3_one_shot_runner.py:37055
+
+    The runner was right and the double was a second, hand-maintained
+    definition of what a PDK is — the drift shape this repo removes elsewhere.
+    Constructing the real dataclass means a field the step starts reading
+    tomorrow is a field this double already has.
+    """
+    fields = dict(name=name, liberty="/pdk/lib/cells.lib",
+                  tech_lef="/pdk/lef/tech.lef", cell_lef="/pdk/lef/cells.lef",
+                  cell_gds=None, site="unit", drc_deck=None)
+    fields.update(over)
+    return r.PdkConfig(**fields)
+
+
 def test_the_runner_hands_the_producer_the_designs_own_pdk(tmp_path, monkeypatch):
     """The other half of the fix.
 
@@ -161,7 +185,7 @@ def test_the_runner_hands_the_producer_the_designs_own_pdk(tmp_path, monkeypatch
     (root / "otherpdk" / "libs.tech" / "magic").mkdir(parents=True)
     monkeypatch.setenv("PDK_ROOT", str(root))
 
-    pdk = type("P", (), {"name": "somepdk"})()
+    pdk = _pdk_config(r, "somepdk")
     got = r._hardmacro_pdk_dir(pdk)
     assert got == str(root / "somepdk"), (
         f"the design is on 'somepdk' and the runner resolved {got!r}; if this "
@@ -181,6 +205,14 @@ def test_the_runner_hands_the_producer_the_designs_own_pdk(tmp_path, monkeypatch
         f"the producer was invoked without --pdk-root, so it falls back to "
         f"$PDK_ROOT: {seen['cmd']}")
     assert seen["cmd"][seen["cmd"].index("--pdk-root") + 1] == str(root / "somepdk")
+    # ...and the rest of what the step is obliged to hand over. #1991 added
+    # these two and this arm did not notice, because its PDK double had no
+    # such attributes to hand over. Asserting them is what makes the double's
+    # completeness load-bearing rather than incidental.
+    assert "--cell-lef" in seen["cmd"], seen["cmd"]
+    assert seen["cmd"][seen["cmd"].index("--cell-lef") + 1] == pdk.cell_lef
+    assert "--metal-prefix" in seen["cmd"], seen["cmd"]
+    assert seen["cmd"][seen["cmd"].index("--metal-prefix") + 1] == pdk.metal_prefix
 
 
 def test_an_unrecognisable_layout_degrades_to_a_refusal_not_a_guess(tmp_path, monkeypatch):
@@ -195,8 +227,8 @@ def test_an_unrecognisable_layout_degrades_to_a_refusal_not_a_guess(tmp_path, mo
     root = tmp_path / "pdks"
     (root / "somepdk").mkdir(parents=True)          # no libs.tech/magic
     monkeypatch.setenv("PDK_ROOT", str(root))
-    assert r._hardmacro_pdk_dir(type("P", (), {"name": "somepdk"})()) is None
-    assert r._hardmacro_pdk_dir(type("P", (), {"name": ""})()) is None
+    assert r._hardmacro_pdk_dir(_pdk_config(r, "somepdk")) is None
+    assert r._hardmacro_pdk_dir(_pdk_config(r, "")) is None
     assert r._hardmacro_pdk_dir(None) is None
     monkeypatch.delenv("PDK_ROOT", raising=False)
-    assert r._hardmacro_pdk_dir(type("P", (), {"name": "somepdk"})()) is None
+    assert r._hardmacro_pdk_dir(_pdk_config(r, "somepdk")) is None

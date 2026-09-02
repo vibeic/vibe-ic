@@ -362,14 +362,69 @@ esac
 #: would make this arm's colour depend on the tool's mood rather than on the
 #: behaviour it pins. It writes its LEF to the path the recipe's own tcl names,
 #: so the tcl, the staging and the fetch are all still exercised for real.
+#: A stand-in `magic` that MIRRORS THE DEF IT WAS HANDED, rather than a fixed
+#: one-pin string.
+#:
+#: MEASURED on live main v1.16.32 (bcedcdf25d9c), 2026-09-02: this stub emitted
+#: `PIN clk` and nothing else, so the abstract it wrote dropped BOTH supply
+#: ports of the fixture DEF. That is exactly the tool behaviour #1991 taught
+#: this producer to refuse, so the arm below asked for rc 0 and got
+#:
+#:     [REFUSED_NOT_INTEGRABLE] ... expected {'vpwr': 'POWER', 'vgnd':
+#:     'GROUND'}; macro_a.lef has {}
+#:
+#: The refusal was CORRECT and the double was stale: #1991 changed what a
+#: deliverable abstract is and this arm's magic was never taught it. The arm's
+#: subject is the container BOUNDARY — that magic one `docker cp` away still
+#: writes the abstract — and a stub that also drops the rails tests the
+#: boundary through a second, unrelated failure.
+#:
+#: So the stub now reads the `def read` line out of the very TCL the producer
+#: emitted and reflects those PINS back, the same contract
+#: `test_issue1991_hardmacro_supply_pins._lef_from_def` holds on the other
+#: side. A magic that drops a rail is still a case this suite owns — it is
+#: `test_magic_success_that_drops_one_supply_is_not_integrable`, where the
+#: drop is the subject rather than an accident of the fixture.
 _MAGIC_STUB = """#!/bin/bash
+# NOT ONE ESCAPE SEQUENCE IN THIS SCRIPT, AND THE REASON IS MEASURED. This
+# string is unescaped TWICE on its way to bash -- once by the Python source
+# that holds it, once more by nothing at all -- so a `\\n` written here with one
+# backslash too few arrives as a real newline and awk answers
+# `awk: line 8: runaway string constant`, on stderr nobody reads, and the LEF
+# comes out with no PIN in it. `print` supplies its own newline and `echo`
+# needs none, so there is nothing here to get the escaping wrong on.
 if [ "$1" = "--version" ]; then echo "0.0.0-stand-in"; exit 0; fi
 tcl="${@: -1}"
 out=$(grep -oE 'lef write [^ ]+' "$tcl" | head -1 | awk '{print $3}')
 [ -n "$out" ] || { echo "no lef write line in $tcl" >&2; exit 1; }
-printf 'MACRO %s\n  PIN clk\n    DIRECTION INPUT ;\n  END clk\nEND %s\n' \
-       macro_a macro_a > "$out"
-echo "DIGITAL_LEF_WRITE_DONE macro_a"
+def=$(grep -oE 'def read [^ ]+' "$tcl" | head -1 | awk '{print $3}')
+[ -n "$def" ] || { echo "no def read line in $tcl" >&2; exit 1; }
+top=$(grep -oE '^load [^ ]+' "$tcl" | head -1 | awk '{print $2}')
+[ -n "$top" ] || { echo "no load line in $tcl" >&2; exit 1; }
+{
+  echo "MACRO $top"
+  echo "  SIZE 100 BY 50 ;"
+  awk '/^END PINS/{p=0}
+       p && /^[[:space:]]*- / {
+         name=$2; use="SIGNAL"; dir="INOUT";
+         for (i=1;i<=NF;i++) {
+           if ($i=="USE") use=$(i+1);
+           if ($i=="DIRECTION") dir=$(i+1);
+         }
+         print "  PIN " name;
+         print "    DIRECTION " dir " ;";
+         print "    USE " use " ;";
+         print "    PORT";
+         print "      LAYER met2 ;";
+         print "      RECT 1 1 2 2 ;";
+         print "    END";
+         print "  END " name;
+       }
+       /^PINS /{p=1}' "$def"
+  echo "END $top"
+  echo "END LIBRARY"
+} > "$out"
+echo "DIGITAL_LEF_WRITE_DONE $top"
 """
 
 
