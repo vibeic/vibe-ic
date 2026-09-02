@@ -2,6 +2,7 @@
 """rtl_unit_test_coverage_check.py — v0.50.2 plugin gate
 
 ENFORCEMENT: advisory
+CHIP_AGNOSTIC: strict
 
 The line above is a DECLARATION, in the anchored form `flow_gate_enforcement_
 audit.declared_intent` reads. This program is wired into the flow as an
@@ -97,14 +98,82 @@ def needs_tb(rtl_path: Path) -> tuple[bool, list[str]]:
     return bool(reasons), reasons
 
 
-def has_tb(module_name: str, sim_dir: Path) -> Path | None:
+def design_namespaces(module_stems: "set[str] | list[str]") -> set[str]:
+    """The leading name tokens THIS DESIGN uses as a namespace, read from its
+    own module set. Returns bare tokens without the trailing underscore.
+
+    WHY THIS REPLACED A HARDCODED LIST. `has_tb` used to strip a fixed set of
+    four leading prefixes, and ONE OF THE FOUR WAS A PRIVATE CHIP CODENAME (it
+    is on `programs/tests/chip_deny_list.txt`; it is not repeated here, which
+    is the whole point). It sat in ordinary matching logic — not in a guard
+    implementing the deny rule, where naming the token is unavoidable — and the
+    tree-wide guard could not see it: `source_chip_agnostic_check` matches
+    word-bounded (`(?<![A-Za-z0-9_])...(?![A-Za-z0-9_])`, the rule
+    `chip_deny_list.txt` states for itself) and the literal carried a trailing
+    underscore, so it matched nothing. MEASURED at `d510241488f9`: word-bounded
+    hits over all 1357 top-level programs = 0 while substring hits = 49, and
+    this was the ONLY one of the 49 sitting in logic rather than in prose or in
+    a guard's own pattern.
+
+    A NAMESPACE IS ATTESTED BY THE DESIGN, in one of two ways, and both are
+    read from the module stems the caller already has:
+
+      * a token run `T` that at least TWO module stems begin with (`T_...`) --
+        a namespace one module wears is a name, a namespace two modules wear is
+        a namespace;
+      * a token run `T` such that stripping `T_` from one module stem yields
+        ANOTHER module stem in the same directory (`aid_rx_phy` beside
+        `rx_phy`) -- the design has spelled the same module both ways, which is
+        the strongest attestation available and needs no second file.
+
+    NOTHING IS ASSUMED AND NOTHING IS NAMED. `aid_` is the plugin's own public
+    design-class namespace (`aid_class_rtl_gen.py`,
+    `aid_class_half_duplex_single_wire`), and `chip_deny_list.txt` explicitly
+    warns against listing `aid`; `u_` and `i_` are the universal Verilog
+    instance-name conventions and are two characters long. None of the three is
+    a codename, and none of them needs to be written down: a design that really
+    uses them attests them here, and one that does not never had them stripped
+    for a reason it could state.
+
+    FAIL-CLOSED. An empty set means only the exact module name (and the role
+    aliases below) can match -- STRICTER, never looser, so this can report a
+    missing testbench that was previously credited and can never credit one
+    that was previously missing. `namespace_note` in the report says which
+    happened and what it was derived from.
+    """
+    stems = {str(s) for s in module_stems}
+    out: set[str] = set()
+    for stem in stems:
+        parts = stem.split("_")
+        for cut in range(1, len(parts)):
+            head, tail = "_".join(parts[:cut]), "_".join(parts[cut:])
+            if not head or not tail:
+                continue
+            # attestation 2 -- the design spelled the same module both ways
+            if tail in stems:
+                out.add(head)
+                continue
+            # attestation 1 -- two or more modules wear this namespace
+            if sum(1 for other in stems
+                   if other.startswith(head + "_")) >= 2:
+                out.add(head)
+    return out
+
+
+def has_tb(module_name: str, sim_dir: Path,
+           namespaces: "set[str] | None" = None) -> Path | None:
     """Look for sim_unit/tb_<module>.v with stem variants:
-       module 'aid_rx_phy' matches tb_aid_rx_phy.v OR tb_rx_phy.v."""
+       module 'aid_rx_phy' matches tb_aid_rx_phy.v OR tb_rx_phy.v -- when the
+       design itself attests `aid` as a namespace (see `design_namespaces`).
+
+    `cmd_` and `_dispatcher` stay: those are ROLE words, already in
+    `_MUST_TB_NAMES` (`cmd_dispatcher`, `dispatcher`), chip-agnostic, and
+    dropping them would change verdicts beyond the leak this replaces.
+    """
     candidates = {module_name}
-    # Also strip leading prefixes
-    for prefix in ("aid_", "as3616_", "u_", "i_"):
-        if module_name.startswith(prefix):
-            candidates.add(module_name[len(prefix):])
+    for ns in sorted(namespaces or ()):
+        if module_name.startswith(ns + "_"):
+            candidates.add(module_name[len(ns) + 1:])
     # Common aliases (cmd_dispatcher → dispatcher)
     if module_name.startswith("cmd_"):
         candidates.add(module_name[len("cmd_"):])
@@ -161,6 +230,8 @@ def check(project: Path, rtl_dir: Path, sim_dir: Path) -> dict:
     rtl_files = [r for r in rtl_files if not r.name.endswith(".vh")]
 
     reused = reused_ip_modules(rtl_dir)
+    # Derived from THIS design's own module set, never from a written list.
+    namespaces = design_namespaces({r.stem for r in rtl_files})
     n_total = 0
     excused: list[str] = []
     for rtl in rtl_files:
@@ -175,7 +246,7 @@ def check(project: Path, rtl_dir: Path, sim_dir: Path) -> dict:
             excused.append(rtl.name)
             continue
         n_total += 1
-        tb = has_tb(rtl.stem, sim_dir)
+        tb = has_tb(rtl.stem, sim_dir, namespaces)
         entry = {"module": rtl.name, "reasons": reasons, "tb_path": str(tb) if tb else None}
         coverage.append(entry)
         if not tb:
@@ -204,6 +275,13 @@ def check(project: Path, rtl_dir: Path, sim_dir: Path) -> dict:
             f"counted: a per-module unit testbench is a demand on the "
             f"modules this run authored." if excused else
             "every FSM/PHY-bearing module in this tree is in the denominator"),
+        "module_namespaces": sorted(namespaces),
+        "namespace_note": (
+            "leading name token(s) this design attests as a namespace — a "
+            "token run two or more modules wear, or one whose removal names "
+            "another module in the same directory. Derived from the module "
+            "set; no prefix is written down. Empty means only an exact "
+            "`tb_<module>` matched, which is the stricter reading."),
         "coverage": coverage,
         "findings": findings,
         "pass": len(findings) == 0,
