@@ -58,7 +58,9 @@ def _task(tmp_path: Path) -> dict:
     project = _project(tmp_path)
     got = bio.collect("rtllm", "p1", project)
     return bd._make_ai_review_task(
-        "p1", project, got, ROUTING, 0, run, "PROGRAM")
+        "p1", project, got, ROUTING, 0, run, "PROGRAM",
+        program_phases={"phase3_verifying": {"ran": {
+            "step4_functional_evidence": "PASS"}}})
 
 
 def _rejection_reasons(task: dict, review: dict) -> list[str]:
