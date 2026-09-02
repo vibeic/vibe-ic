@@ -105,6 +105,7 @@ from typing import Dict, List, NamedTuple, Optional, Set, Tuple
 
 import pytest
 
+from _session_floor import stall_window
 from flow_matrix import flowref as F
 from flow_matrix import substitution as SUB
 from flow_matrix import waivers as W
@@ -541,7 +542,22 @@ def collect_items() -> Tuple[Dict, ...]:
 def test_live_collection_relays_finite_semantic_progress_past_old_bound(
         monkeypatch, tmp_path):
     """Several completed collections may outlive a former total deadline."""
-    old_fixed_bound = 0.3
+    # THE WINDOW IS DERIVED FROM THE MEASURED SESSION FLOOR, NOT DECLARED.
+    # The margin engineering below is about renewals landing BETWEEN two
+    # events; this is about the FIRST event. The driver's lease starts at
+    # spawn, and in the pinned image pytest takes ~0.44 s to exist, so a bare
+    # `0.3` expired before any collection had begun -- `no pytest progress
+    # stream was produced`, elapsed == the window (MEASURED at 14de9b8a36:
+    # 3 of 3 in the image, 3 of 3 on the host). `stall_window` keeps `0.3`
+    # wherever pytest starts inside it and lifts it to 2x the measured floor
+    # where it cannot; every ratio asserted below scales with the result, so
+    # nothing about renewal is relaxed. See `_session_floor`.
+    old_fixed_bound = stall_window(0.3)
+    # The enclosing driver test's lease. Two interpreter starts sit between
+    # that lease's spawn and the first event it can see (this node's driver,
+    # then the driver's pytest), so it is derived with `starts=2` there and
+    # mirrored here.
+    outer_bound = stall_window(0.8, starts=2)
     seen = []
     # RECORD AND FORWARD, never replace. This test's subject is that a live
     # collection RELAYS finite semantic progress; a spy that swallows the call
@@ -585,9 +601,9 @@ def test_live_collection_relays_finite_semantic_progress_past_old_bound(
     assert file_seconds * 6 <= old_fixed_bound, (
         f"each collected file must finish well inside the {old_fixed_bound}s "
         f"window or this test measures scheduler jitter, not renewal")
-    assert files * file_seconds > 0.8, (
-        f"the collection run must still cross the 0.8s bound this test exists "
-        f"to prove work may cross")
+    assert files * file_seconds > outer_bound, (
+        f"the collection run must still cross the {outer_bound:.2f}s bound "
+        f"this test exists to prove work may cross")
 
     paths = []
     for index in range(files):
@@ -601,7 +617,7 @@ def test_live_collection_relays_finite_semantic_progress_past_old_bound(
     rows = _collect_items_from_paths(tuple(paths), tmp_path)
     elapsed = time.monotonic() - started
 
-    assert elapsed > 0.8, elapsed
+    assert elapsed > outer_bound, (elapsed, outer_bound)
     assert {row["file"] for row in rows} == {path.name for path in paths}
     assert seen[-1] == ("matrix-collection-runs", 1, 1)
     assert seen.count(("matrix-collection-runs", 1, 1)) == 1
@@ -611,7 +627,8 @@ def test_live_collection_chatty_import_without_events_fails_closed(
         monkeypatch, tmp_path):
     """Collection stdout cannot impersonate a nonce-bound FSM transition."""
     monkeypatch.setattr(
-        sys.modules[__name__], "_COLLECTION_PROGRESS_STALL_S", 0.25)
+        sys.modules[__name__], "_COLLECTION_PROGRESS_STALL_S",
+        stall_window(0.25))
     monkeypatch.setenv("PYTEST_ADDOPTS", "-s")
     path = tmp_path / "test_chatty_collect.py"
     path.write_text(
@@ -1907,7 +1924,12 @@ def test_nested_outcome_run_outlives_old_fixed_bound_with_semantic_progress(
     left to inference: it is now its own test, below, and it is the old
     construction promoted to the control it always was.
     """
-    old_fixed_bound = 0.45
+    # Derived from the measured session floor, as in the collection test
+    # above: `0.45` wherever pytest can start inside it, else 2x the floor.
+    # In the pinned image this window is ~0.88 s and the item cadence, the
+    # item count and the "outlives the bound by 4x" assertion all scale with
+    # it; the bound under test is still crossed on renewals alone.
+    old_fixed_bound = stall_window(0.45)
     #: A SIXTH of the window — matched to the collection test above, which
     #: uses the same ratio for the same reason. This was `/3` until 2026-08-22,
     #: when both fixes were measured at extreme load on equal terms: at load
@@ -1970,7 +1992,7 @@ def test_nested_outcome_run_is_killed_when_no_item_can_renew_the_window(
     host makes the kill more certain, never less, which is what a control for a
     timing test has to be.
     """
-    window = 0.45
+    window = stall_window(0.45)
     monkeypatch.setattr(sys.modules[__name__], "_OUTCOME_PROGRESS_STALL_S",
                         window)
     path = tmp_path / "test_never_renews.py"
@@ -1993,7 +2015,7 @@ def test_nested_outcome_chatty_import_without_pytest_events_fails_closed(
         monkeypatch, tmp_path):
     """Captured chatter cannot impersonate a completed pytest transition."""
     monkeypatch.setattr(
-        sys.modules[__name__], "_OUTCOME_PROGRESS_STALL_S", 0.45)
+        sys.modules[__name__], "_OUTCOME_PROGRESS_STALL_S", stall_window(0.45))
     monkeypatch.setenv("PYTEST_ADDOPTS", "-s")
     path = tmp_path / "test_chatty_import.py"
     path.write_text(
