@@ -2681,7 +2681,7 @@ class ProducerRegression(AssertionError):
 def producer_rows() -> Dict[str, Dict]:
     """``{declared path: producer state}`` for the whole flow, measured NOW.
 
-    One scan per session (~12 s), shared by all 68 cells. The rows are keyed by
+    One scan per session (~12 s), shared by all 69 cells. The rows are keyed by
     the flow's declared path with alternates split out, and each carries the
     ``steps`` that declare it — which is how a cell asks about ITS OWN outputs
     without this module re-deriving the step→path mapping the program already
@@ -2999,7 +2999,7 @@ def test_d3_the_source_arm_covers_a_named_and_non_empty_set_of_cells():
     covered = producer_arm_coverage()
     assert covered, (
         "the source arm covers NO cell: every baseline path has left the flow "
-        "declaration, so nothing on the 68 cells can ever fire this arm"
+        "declaration, so nothing on the 69 cells can ever fire this arm"
     )
     known = {F.normalize_id(c.step_id) for c in cells_for(DIM)}
     stray = sorted(set(covered) - known)
@@ -3066,7 +3066,7 @@ def test_d3_manifest_covers_exactly_the_flow_steps():
     # never credited, and only the removal was. Subtracting one from a base that
     # was already two behind is how a hand-moved census drifts while every
     # individual edit to it looks careful.
-    assert len(cells_for(DIM)) == len(live) == 68
+    assert len(cells_for(DIM)) == len(live) == 69
 
 
 @needs_corpus
@@ -3534,7 +3534,7 @@ def test_d3_waivers_meet_the_registry_bar():
 
 
 def test_d3_cell_states_partition_all_steps():
-    """ENFORCED + WAIVED + NA == 68, computed live, with no cell in two states."""
+    """ENFORCED + WAIVED + NA == 69, computed live, with no cell in two states."""
     enforced, waived, na = [], [], []
     for cell in cells_for(DIM):
         sid = cell.step_id
@@ -3573,7 +3573,7 @@ def test_d3_cell_states_partition_all_steps():
     # never credited, and only the removal was. Subtracting one from a base that
     # was already two behind is how a hand-moved census drifts while every
     # individual edit to it looks careful.
-    assert len(enforced) + len(waived) + len(na) == 68, (
+    assert len(enforced) + len(waived) + len(na) == 69, (
         f"enforced={len(enforced)} waived={len(waived)} na={len(na)}"
     )
     # The waived set must equal the registry exactly. This used to union the
@@ -3586,7 +3586,7 @@ def test_d3_cell_states_partition_all_steps():
         f"waived cells {sorted(F.normalize_id(s) for s in waived)} do not match "
         f"the registered waivers {sorted(declared)}"
     )
-    assert (len(enforced), len(waived), len(na)) == (53, 2, 13), (
+    assert (len(enforced), len(waived), len(na)) == (54, 2, 13), (
         f"the ENFORCED/WAIVED/NA split changed to "
         f"({len(enforced)}, {len(waived)}, {len(na)}); it was measured as "
         f"(51, 2, 15) after folding 1.6x into Step 2. A step moving between states "
@@ -3738,6 +3738,24 @@ def test_d3_cell_states_partition_all_steps():
         "NA was demonstrably false, so the cell is ENFORCED and reports what "
         "the run did: 1 of 2 declared outputs, which is a finding about the "
         "runner's skip path, not about this dimension. WAIVED unmoved."
+        "\n2026-09-02 (kspm38, composed with the entry above): "
+        "(53, 2, 13) -> (54, 2, 13), population 68 -> 69. +1 ENFORCED, no "
+        "reclassification: step 37.4 (sign-off metrics aggregation) ARRIVES. "
+        "THE BASE IS THE ENTRY ABOVE, NOT THE (51, 2, 15) THIS LANE BRANCHED "
+        "FROM \u2014 the two changes are independent (that one RE-TIERED two "
+        "existing cells on a corpus event, this one ADDS a step) and the "
+        "composed number is on neither side, so it is re-derived by measuring "
+        "the merged tree rather than by keeping whichever side merged last. "
+        "37.4 lands ENFORCED on the same three live reads its siblings are "
+        "classified by \u2014 `step_condition('37.4')` is None, it declares two "
+        "required_outputs (`phase3/final/metrics.json` and "
+        "`reports/phase3/signoff_metrics_aggregate.json`), and it holds no "
+        "dimension-3 waiver. Both entries are recorded UNPROVEN: the producer "
+        "is new, so no admissible run root has produced these paths yet, and "
+        "the UNPROVEN branch re-searches every root live. WAIVED and NA "
+        "unmoved. The step exists because `phase3/final/metrics.json` had five "
+        "readers and no writer, which is why 37.5ic could produce none of its "
+        "six document outputs for any design."
     )
 
 

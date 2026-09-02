@@ -268,4 +268,26 @@ def test_ordering_ancestry_is_two_orders_of_magnitude_wider():
     # Step 2. No step depended on 1.6x; removing its own two ancestors
     # (Step 1 and transitive D1) is therefore exactly -2 and changes no
     # remaining step's ordering ancestry.
-    assert total == 1494, total
+    # 1494 -> 1537 (2026-09-03): canonical step 37.4, sign-off metrics
+    # aggregation, and the +43 is DERIVED from the graph rather than typed.
+    # Re-measured by rebuilding the pre-37.4 graph from this same YAML (drop
+    # the '37.4' step, drop '37.4' from 37.5ic's `blocks_on`) and diffing the
+    # per-step ancestry: EXACTLY TWO steps move, and by exactly the amount the
+    # shape of the edit predicts.
+    #
+    #   37.4    new, `blocks_on: [37]`   ->  42 ancestors (37 and its 41)
+    #   37.5ic  gains 37.4 as a parent   ->  42 -> 43. It already had 37 and
+    #                                        all of 37's ancestors, so the new
+    #                                        edge contributes 37.4 ITSELF and
+    #                                        nothing else.
+    #   every other step                 ->  unchanged; nothing depends on
+    #                                        37.5ic, so the +1 does not cascade.
+    #
+    #   42 + 1 = 43.
+    #
+    # The CLAIM is unchanged and still holds: the DECLARED-dependency list in
+    # `test_declared_dependency_relation_is_small` is still the same 6 pairs --
+    # 37.4 reads this run's own checker reports, which no step declares as an
+    # output, so it licensed no new declared read -- and 6 against 1537 is
+    # still two orders of magnitude.
+    assert total == 1537, total

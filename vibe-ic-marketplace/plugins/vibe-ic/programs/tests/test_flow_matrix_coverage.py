@@ -216,7 +216,14 @@ DIMENSIONS_DECLARING_SUBSTITUTION: Tuple[int, ...] = (8, 9)
 #: above recorded beside it.
 # 2026-08-24: the former 1.6x contract is now a Step-2 clause, so the
 # independently reviewed flow population is again 68 x 9.
-GRID_AS_MEASURED: Tuple[int, int, int] = (68, 9, 612)
+#: 2026-09-02: (68, 9, 612) -> (69, 9, 621). ONE step arrives -- 37.4,
+#: sign-off metrics aggregation -- and its nine cells were reviewed in every
+#: dimension in the same change: D1 wiring (its gate names
+#: `signoff_metrics_aggregate --check`, which resolves), D3 outputs (recorded
+#: ENFORCED, both entries UNPROVEN because the producer is new), D5 deps (the
+#: edge 37.5ic -> 37.4 was MISSING and this dimension found it), D7 output
+#: list, and the remaining dimensions read the yaml live. No step left.
+GRID_AS_MEASURED: Tuple[int, int, int] = (69, 9, 621)
 
 #: The flow's step ids, in declaration order, as measured 2026-07-28. Pinned
 #: alongside the count so a rename or an add-plus-remove — which leaves the
@@ -246,7 +253,7 @@ STEP_IDS_AS_MEASURED: Tuple[str, ...] = (
     'A6', 'A7', 'A8', 'A9', '14', '15', '15.5ic', '16', '17', '18',
     '19', '20', '21', '22', 'DT2', 'DT3', '23', '24', '25', '26',
     '26.5ic', '27', '28', '29', '30', '31', '32', '33', '34', '35',
-    '36', '37', '37.5ip', '37.5ic', '38', '39', 'M1', 'M2', 'M3', 'M4',
+    '36', '37', '37.4', '37.5ip', '37.5ic', '38', '39', 'M1', 'M2', 'M3', 'M4',
     '40', '41', '42', '43', '44', 'P0',
 )
 

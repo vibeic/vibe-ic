@@ -24,6 +24,28 @@ else:                                                    # pragma: no cover
 
 _GEN = _ROOT / "tools" / "gen_flow_gate_header.py"
 _PLUGIN_JSON = ("vibe-ic-marketplace/plugins/vibe-ic/.claude-plugin/plugin.json")
+_FLOW = (_ROOT / "vibe-ic-marketplace" / "plugins" / "vibe-ic" / "flow"
+         / "phase1_phase2_phase3.yaml")
+
+
+def _live_steps() -> int:
+    """The step figure the generator will derive, asked of the SAME function.
+
+    THIS USED TO BE THE LITERAL 68 inside `_page` below, and canonical step 37.4
+    turned it red on 2026-09-03: `DRIFT  flow steps 68 -> 69`. The VERSION half
+    of this file's subject is pinned to a past commit; the step half is not, and
+    never was — the generator derives it from the working tree — so a typed
+    figure here was a second, unpinned population that had to be hand-moved
+    every time the flow grew, on the page whose entire rule is that a published
+    digit must be derived. It is asked of `gen_flow_gate_header.flow_steps`
+    rather than recomputed, so the fixture and the generator cannot disagree
+    about what a step is.
+    """
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("_fgh", _GEN)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod.flow_steps(_FLOW)[0]
 
 _ROWS = "".join(f'<tr><td>D{i}</td></tr>' for i in range(1, 10))
 
@@ -34,7 +56,7 @@ def _page(tmp_path: Path, version: str, source: str | None) -> Path:
     p.write_text(
         f'<html><body><div class="fg-snapshot">'
         f'<span>plugin <b>v{version}</b></span>{src}'
-        f'<span>flow steps <b>68</b></span></div>'
+        f'<span>flow steps <b>{_live_steps()}</b></span></div>'
         f"<table>{_ROWS}</table></body></html>", encoding="utf-8")
     return p
 

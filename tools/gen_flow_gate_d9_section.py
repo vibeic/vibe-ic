@@ -24,11 +24,11 @@ WHY THIS PROGRAM NO LONGER RENDERS
 The block is pinned to a flow that no longer exists, in a way no refresh of its
 data corrects.
 
-  * THE REPORT DESCRIBES A 63-STEP FLOW.  The flow has 68.  Every figure in the
+  * THE REPORT DESCRIBES A 63-STEP FLOW.  The flow has 69.  Every figure in the
     block is a fraction of a population that is gone.
   * THE FIGURES ARE TYPED, NOT DERIVED.  ``63 步``, ``上面那 504 格``,
     ``47 / 63``, ``25 / 63`` are string literals in the rendering below, not
-    functions of the report.  A regenerated 68-step report would still print
+    functions of the report.  A regenerated 69-step report would still print
     63.  This is the repository's own rule turned on this file: a published
     digit must be derived, never typed.
   * AND THE REPORT CANNOT BE REGENERATED HERE.  ``benchmark-data/`` was
@@ -671,7 +671,7 @@ def premise_refusal(rep: Dict, root: Optional[Path]) -> Optional[str]:
     (2) THE BLOCK'S FIGURES ARE TYPED, NOT DERIVED. `63 步 x 第 9 個問題`,
         `上面那 504 格`, `47 / 63`, `25 / 63` are string literals in the
         rendering below. They are not functions of the report, so REFRESHING
-        THE REPORT DOES NOT CORRECT THEM -- a regenerated 68-step report would
+        THE REPORT DOES NOT CORRECT THEM -- a regenerated 69-step report would
         still print 63. This is the repo's own rule, applied to this file: a
         published digit must be derived, never typed.
 

@@ -110,7 +110,7 @@ that steps A5, A6, A7 and A9 declare as `required_outputs`, so a step running it
 reads what four ANALOG BACKEND steps produce. The flow cannot declare that
 dependency (all four already have D1 in their ancestry, so every edge is
 circular) and cannot re-home the clause either (the `blocks_on` closure of all
-68 steps was computed; none covers A9, which is a leaf nothing blocks on). A
+69 steps was computed; none covers A9, which is a leaf nothing blocks on). A
 one-time migration an operator runs on an old tree was never a per-project gate
 in the first place — which is exactly why it knows the whole tree's file names.
 

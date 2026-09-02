@@ -1738,6 +1738,18 @@
           "note": "2026-09-02 — re-measured against benchmark-data/ic/spm/v1.14.88_gf180mcuD: reports/phase1/tapeout_declaration.json tracked at HEAD, non-empty, and attributed to this step by the cell's write ledger. Previously PRODUCED_LIVE citing 'benchmark-data/ic/spm/v1.9.96_gf180mcuD', a root of kind 'home' this dimension searches on no host."
         }
       }
+    },
+    "37.4": {
+      "verdict": "ENFORCED",
+      "_note": "2026-09-02: step ADDED. It declares required_outputs, carries no step-level condition (so NA_DORMANT_CONDITION is not derivable for it) and holds no waiver, which is what ENFORCED means here. Both entries are UNPROVEN: the producer (signoff_metrics_aggregate) is new, so no admissible run root has produced these paths yet. The UNPROVEN branch re-searches every root live, so the first published run that carries them resolves it.",
+      "entries": {
+        "phase3/final/metrics.json": {
+          "status": "UNPROVEN"
+        },
+        "reports/phase3/signoff_metrics_aggregate.json": {
+          "status": "UNPROVEN"
+        }
+      }
     }
   }
 }

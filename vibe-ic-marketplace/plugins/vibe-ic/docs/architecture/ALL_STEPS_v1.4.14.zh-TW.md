@@ -139,6 +139,7 @@
 | 35 | DFM screen | 可製造性篩查：redundant-via 比率（single-cut 比例 advisory）＋密度**優化建議**（僅交叉引用 Step 34 閘結果，永不重複 FAIL）；OPC/RET/SRAF/PSM 以 FOUNDRY_SIDE 具名揭露（≤28nm 升級為 DESIGNER_COLLAB_REVIEW 設計者協作項；節點由 `dfm_screen_check` 自 `input/pdk/liberty` 檔名推導，記入同一 `dfm_screen.json` 的 process_nm／advanced_node／foundry_side 欄）。 | routed.def・密度報告 | `dfm_screen.json`（via 統計＋foundry-side 清單） | 自研 DEF via 統計＋密度交叉引用 | `dfm_screen_check` |
 | 36 | Tapeout checklist | 最終簽核清單逐項確認（實質判定：DRC 計數、證據鏈）。 | 全部簽核報告 | `tapeout_checklist.json` | —（清單彙整） | `tapeout_signoff_check`<br>skills：`tapeout-checklist` |
 | 37 | GDSII output | 產出交付晶圓廠的 GDSII（僅當 Step 31 PV 全淨）。 | routed.def・merged GDS | 簽核級 `*.gds` | Magic/KLayout stream-out<br>`eda_gds` | `gds_size_check`・`provenance_check` |
+| 37.4 | 簽核指標彙整 | 用發布文件讀取的鍵名，寫下這次執行自己的檢查器裁決。它不量測、也不重新判定：18 個鍵每一個都抄自該檢查器自己寫下的報告，旁邊附上該檔路徑與 sha256；來源不存在的鍵寫成 `NOT_MEASURED` 並附理由，而不是給預設值或略過 — 略過的鍵讀起來和「沒有報告」一模一樣。DRC 各鍵一律依稽核自己的 `summary.producers[].producer` 歸屬，絕不看檔名。兩條路徑都會跑：cell/IP 與 chip/IC 的文件讀的是同一份紀錄。 | 簽核級 `*.gds`・這次執行的 `reports/phase3/*` 檢查器報告 | `phase3/final/metrics.json`・`reports/phase3/signoff_metrics_aggregate.json` | —（讀報告，不需 EDA 工具） | `signoff_metrics_aggregate` |
 | 37.5ip | Digital hardmacro generation（cell/IP 路徑終點） | 把簽核完成的區塊打包成可重用 hardmacro。**cell/IP 路徑在此結束** — 沒有 Step 38、沒有 Stage 5。 | 簽核級 `*.gds` | `hardmacro/*.lef`・`*.lib`・`*.gds`・`*.v`・`documentation/ip/*/IP_DATASHEET.md`・`IP_INTEGRATION_GUIDE.md`・`RELEASE_NOTES.md`・`ERRATA.md`・`DELIVERABLES_MANIFEST.md`・`documentation_manifest.yaml` | abstract + Liberty + stream-out | `digital_hardmacro_gen`・`digital_hardmacro_check`・`ip_release_docs_gen`・`release_docs_check` |
 | 37.5ic | Tape-out precheck — 我們自己的 general ladder，加上該 PDK 若有 shuttle precheck 時投片方自己的拒絕（僅 chip/IC 路徑） | 同一份 GDS，兩隻手臂。凡走到這一步的設計都跑我們的 general ladder；當該 PDK 有 shuttle precheck 且該投片方的樣板確實已取得時，再額外跑投片方自己的容器——那是外部權威，不是我們自訂的標準。PDK 沒有 shuttle precheck 不是另一條路徑，只是同一步少一隻手臂；登錄檔說有、但樣板從未取得，判為 `NOT_DETERMINED`，絕不靜默略過。兩隻手臂意見相左時，這一步拒絕並同時記下兩邊的裁決，而不是偏袒其中一邊。 | 簽核級 `*.gds`・`tapeout_declaration.json` | `tapeout_precheck.json`・`general_precheck.json`・`shuttle_precheck.json`・`SIGNOFF_*.html`・`BRIEF_*.html` | 投片方的 precheck 容器（僅第二隻手臂） | `tapeout_precheck` → `general_precheck` + `tapeout_readiness_check` |
 | 38 | Foundry handoff | foundry 實體 mask kit：mask spec＋WAT 計畫＋scribe PCM＋corner ATE 向量（chip-specific；foundry 待供欄位以 `PENDING_FOUNDRY_*` 具名——由 Step 36 checklist 追蹤、foundry 回覆後回填）。 | GDS・netlist 統計・L10 測項 | `mask_spec.json`・`wat_plan.json`・scribe・`corner_test_vectors.json` | —（pack 產生器） | `foundry_handoff_package_check`<br>skills：`tapeout-checklist` |
@@ -198,7 +199,7 @@
 
 **44 個循序步驟**（Stage 1：1–6・Stage 2：7–14・Stage 3：15–32・Stage 4：33–39・
 Stage 5：40–44），外加 Phase 1（Agent 路徑與 doc-gen 路徑 D1–D5）與兩條並行支線
-（Analog A1–A9・Mixed-signal M1–M4）。不計入 1→44 的路徑專屬步驟：0.5ic（路徑選擇）・15.5ic・26.5ic・37.5ic（僅 chip/IC 路徑）與 37.5ip（cell/IP 路徑終點）；一個設計只走其中一條，不會兩條都走。
+（Analog A1–A9・Mixed-signal M1–M4）。不計入 1→44 的路徑專屬步驟：0.5ic（路徑選擇）・15.5ic・26.5ic・37.5ic（僅 chip/IC 路徑）與 37.5ip（cell/IP 路徑終點）；一個設計只走其中一條，不會兩條都走。37.4（簽核指標彙整）同樣不計入 1→44，但它不是路徑專屬：兩個終點的文件讀的都是它寫的那份紀錄，所以兩條路徑都會跑。
 預檢：P0（環境健檢）。條件式字母步驟：FS1（ISO-26262 FMEDA 診斷覆蓋率，僅安全設計）·
 DT1（轉態延遲故障 ATPG，僅掃描設計）· DT2（路徑延遲故障 at-speed ATPG，掃描設計且繞線完成後）· DT3（小延遲缺陷 at-speed 分級，接 DT2 後）。
 編排器 `vibe_ic_one_shot_runner.py` 依序執行 Phase 1 → Phase 2 → Analog → Phase 3。

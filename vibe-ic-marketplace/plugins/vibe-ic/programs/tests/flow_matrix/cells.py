@@ -1,7 +1,7 @@
 """flow_matrix.cells — the cell ledger.
 
-`ALL_CELLS` = `flowref.step_ids()` x `DIMENSIONS`, both read live: 68 steps x 9
-dimensions = 612 cells today. This header used to state "63 flow steps x 8 audit
+`ALL_CELLS` = `flowref.step_ids()` x `DIMENSIONS`, both read live: 69 steps x 9
+dimensions = 621 cells today. This header used to state "63 flow steps x 8 audit
 dimensions = 504 cells" while the module below defined nine dimensions and
 enumerated 612 — a typed figure sitting three lines above the live constant that
 contradicted it, in the package whose whole subject is that a stated number must

@@ -196,8 +196,8 @@ RUN
 ``PYTEST_DISABLE_PLUGIN_AUTOLOAD=1`` is mandatory in this tree (a stray
 ``pytest_ethereum`` plugin otherwise breaks collection).
 
-LIVE, not remembered: 184<!--figure:blocking_clauses--> blocking clauses over
-67<!--figure:gated_steps--> gated steps. This is the denominator a reader
+LIVE, not remembered: 185<!--figure:blocking_clauses--> blocking clauses over
+68<!--figure:gated_steps--> gated steps. This is the denominator a reader
 wants, and it moves with the yaml: the digits are written by
 ``tools/gen_flow_matrix_census.py`` and the ``<!--figure:...-->`` anchors name
 the bindings that produced them (vibe-ic#961). Do not hand-edit them.

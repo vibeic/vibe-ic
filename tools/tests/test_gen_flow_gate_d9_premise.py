@@ -7,7 +7,7 @@ repairable by refreshing its data:
 
   * the report describes a 63-step flow and the flow has 68; and
   * `63 步`, `上面那 504 格`, `47 / 63`, `25 / 63` are STRING LITERALS in the
-    rendering, so a regenerated 68-step report would still print 63.
+    rendering, so a regenerated 69-step report would still print 63.
 
 A GUARD THAT WAS WRONG, PINNED HERE SO IT IS NOT RE-ADDED. The first version
 counted `# D9` comment lines in the flow yaml. Deleting four comments -- changing
@@ -67,7 +67,19 @@ def test_the_shipped_report_describes_a_smaller_flow():
     g = _module()
     rep = json.loads(_REALITY.read_text(encoding="utf-8"))
     assert rep["steps"] == 63
-    assert g.flow_step_count(_ROOT) == 68
+    # 68 -> 69 (2026-09-03): canonical step 37.4. THIS PIN IS THE POINT OF THE
+    # TEST, not an incidental number: the shipped `d9_flow_gate_reality.json`
+    # describes a 63-step flow and the live flow is larger, which is why the
+    # generator refuses to render it. The gap widening by one is the same fact
+    # restated, so the pin moves with the flow rather than being loosened to an
+    # inequality -- a `>` here would keep passing through the next ten steps and
+    # stop measuring anything.
+    #
+    # FOUND BY SWEEP, NOT BY THE SUITE. `programs/ci_targeted_test_select.py`
+    # maps changed modules to tests under `programs/tests/` only, so no
+    # selection driven by the flow YAML edit reaches `tools/tests/`. This
+    # assertion was the one live `== 68` outside that scan.
+    assert g.flow_step_count(_ROOT) == 69
 
 
 def test_every_path_refuses_and_says_why(tmp_path):

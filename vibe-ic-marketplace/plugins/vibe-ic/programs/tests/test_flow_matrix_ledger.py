@@ -132,8 +132,20 @@ from flow_matrix import waivers as W
 # 2026-08-24: rewrite fidelity moved from standalone step 1.6x into Step 2.
 # The gate, required output and fallback survive; only the duplicate scheduling
 # unit is gone, so the reviewed population returns to 68 steps / 612 cells.
-EXPECTED_CELLS = 612
-EXPECTED_STEPS = 68
+# 2026-09-02: step 37.4 (sign-off metrics aggregation) is ADDED, and it is one
+# scheduling unit, not a rename or a move: `phase3/final/metrics.json` had five
+# readers and no writer, so the release documents of step 37.5ic could not be
+# produced for any design. The step axis therefore grows by exactly one and the
+# dimension axis does not move:
+#
+#   len(F.step_ids())  68 -> 69      (the new step, and no existing id changes)
+#   len(C.DIMENSIONS)   9 ->  9
+#   69 * 9            612 -> 621
+#
+# Re-derived, not multiplied out: measured on this tree against HEAD, the step
+# SET grew by the single member '37.4' and no member left.
+EXPECTED_CELLS = 621
+EXPECTED_STEPS = 69
 EXPECTED_DIMS = 9
 
 # Pinned census of the yaml as measured on 2026-07-27. These are TRIPWIRES, not
@@ -145,7 +157,16 @@ EXPECTED_DIMS = 9
 # v1.11.15, `37.5self` retired in v1.11.18) and these counts were moved
 # for neither. Each value below was re-derived by running the accessor
 # over the live yaml, not by adding one to the old number.
-CENSUS_GATE_PRESENT = 67
+
+# v1.16.6 — STEP 37.4 (sign-off metrics aggregation) ADDS EXACTLY ONE TO EACH OF
+# THE FIVE COUNTERS BELOW, and the delta is re-derived, not typed: the step set
+# grew by one member and by one only (76 -> 77 measured on this file against
+# HEAD), and that one step declares a `gate`, `required_outputs`, a non-empty
+# `blocks_on: [37]`, and one gate program (`signoff_metrics_aggregate`). So the
+# same +1 lands on gate_present, required_outputs_present, blocks_on_present,
+# blocks_on_non_empty and gate_programs_non_empty. No existing step moved: the
+# diff adds a block and edits none.
+CENSUS_GATE_PRESENT = 68
 # UNCHANGED at 61. A 2026-07-28 change gave FS1 a `required_outputs` key and
 # was WITHDRAWN the same day: the only thing that made the declaration
 # satisfiable was `check_step` standing its early MISSING down so FS1's own
@@ -159,7 +180,16 @@ CENSUS_GATE_PRESENT = 67
 # v1.11.15, `37.5self` retired in v1.11.18) and these counts were moved
 # for neither. Each value below was re-derived by running the accessor
 # over the live yaml, not by adding one to the old number.
-CENSUS_REQUIRED_OUTPUTS_PRESENT = 66
+
+# v1.16.6 — STEP 37.4 (sign-off metrics aggregation) ADDS EXACTLY ONE TO EACH OF
+# THE FIVE COUNTERS BELOW, and the delta is re-derived, not typed: the step set
+# grew by one member and by one only (76 -> 77 measured on this file against
+# HEAD), and that one step declares a `gate`, `required_outputs`, a non-empty
+# `blocks_on: [37]`, and one gate program (`signoff_metrics_aggregate`). So the
+# same +1 lands on gate_present, required_outputs_present, blocks_on_present,
+# blocks_on_non_empty and gate_programs_non_empty. No existing step moved: the
+# diff adds a block and edits none.
+CENSUS_REQUIRED_OUTPUTS_PRESENT = 67
 # 62 -> 63 and 60 -> 61 on 2026-08-11 (`332b9985`, vibe-ic#923 via #929): step
 # P0 (the structural-RTL pre-flight) gained `blocks_on: [1]` deliberately —
 # P0 already declared `required_inputs: [{from: 1, ...}]`, so the ordering edge
@@ -175,7 +205,16 @@ CENSUS_REQUIRED_OUTPUTS_PRESENT = 66
 # v1.11.15, `37.5self` retired in v1.11.18) and these counts were moved
 # for neither. Each value below was re-derived by running the accessor
 # over the live yaml, not by adding one to the old number.
-CENSUS_BLOCKS_ON_PRESENT = 68
+
+# v1.16.6 — STEP 37.4 (sign-off metrics aggregation) ADDS EXACTLY ONE TO EACH OF
+# THE FIVE COUNTERS BELOW, and the delta is re-derived, not typed: the step set
+# grew by one member and by one only (76 -> 77 measured on this file against
+# HEAD), and that one step declares a `gate`, `required_outputs`, a non-empty
+# `blocks_on: [37]`, and one gate program (`signoff_metrics_aggregate`). So the
+# same +1 lands on gate_present, required_outputs_present, blocks_on_present,
+# blocks_on_non_empty and gate_programs_non_empty. No existing step moved: the
+# diff adds a block and edits none.
+CENSUS_BLOCKS_ON_PRESENT = 69
 # 61 -> 62 on 2026-08-14 (`73dfb68dd`, vibe-ic#1070 via #1258): step A1
 # gained `blocks_on: [D1]`. A1 already declared TWO `required_inputs` from
 # D1 while carrying `blocks_on: []`, so the ordering edge its own inputs
@@ -201,7 +240,16 @@ CENSUS_BLOCKS_ON_PRESENT = 68
 # v1.11.15, `37.5self` retired in v1.11.18) and these counts were moved
 # for neither. Each value below was re-derived by running the accessor
 # over the live yaml, not by adding one to the old number.
-CENSUS_BLOCKS_ON_NON_EMPTY = 66
+
+# v1.16.6 — STEP 37.4 (sign-off metrics aggregation) ADDS EXACTLY ONE TO EACH OF
+# THE FIVE COUNTERS BELOW, and the delta is re-derived, not typed: the step set
+# grew by one member and by one only (76 -> 77 measured on this file against
+# HEAD), and that one step declares a `gate`, `required_outputs`, a non-empty
+# `blocks_on: [37]`, and one gate program (`signoff_metrics_aggregate`). So the
+# same +1 lands on gate_present, required_outputs_present, blocks_on_present,
+# blocks_on_non_empty and gate_programs_non_empty. No existing step moved: the
+# diff adds a block and edits none.
+CENSUS_BLOCKS_ON_NON_EMPTY = 67
 # 60 -> 61 on 2026-08-08: step 12 gained a `program_exit_zero` exec clause
 # (dft_post_optimization_scan_survival_check), closing the files_exist-only
 # gap the flow_matrix dimension-2 audit named. Step 1 is still exec-free.
@@ -235,7 +283,16 @@ CENSUS_BLOCKS_ON_NON_EMPTY = 66
 # `gate_programs('35') == ()` holds there. A step that had silently kept a
 # resolved program while losing its clause would fail that loop before ever
 # reaching this count.
-CENSUS_GATE_PROGRAMS_NON_EMPTY = 65
+
+# v1.16.6 — STEP 37.4 (sign-off metrics aggregation) ADDS EXACTLY ONE TO EACH OF
+# THE FIVE COUNTERS BELOW, and the delta is re-derived, not typed: the step set
+# grew by one member and by one only (76 -> 77 measured on this file against
+# HEAD), and that one step declares a `gate`, `required_outputs`, a non-empty
+# `blocks_on: [37]`, and one gate program (`signoff_metrics_aggregate`). So the
+# same +1 lands on gate_present, required_outputs_present, blocks_on_present,
+# blocks_on_non_empty and gate_programs_non_empty. No existing step moved: the
+# diff adds a block and edits none.
+CENSUS_GATE_PROGRAMS_NON_EMPTY = 66
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -973,8 +1030,13 @@ def test_output_entries_classify_into_the_four_kinds():
     # they were moved with the live flow and this ledger was the one reader left
     # behind, which is why the drift was invisible until the per-kind asserts
     # ran.
-    assert sum(seen.values()) == 183, (seen, REDERIVE)
-    assert seen[F.FILE] == 130, (seen, REDERIVE)
+    # 2026-09-02: +2 FILE, and the (step, entry) SET diff names both — step
+    # 37.4 declares `phase3/final/metrics.json` and
+    # `reports/phase3/signoff_metrics_aggregate.json`, two plain paths. No GLOB,
+    # no ANY_OF, and no existing entry changed kind: the diff adds one step
+    # block and edits none.
+    assert sum(seen.values()) == 185, (seen, REDERIVE)
+    assert seen[F.FILE] == 132, (seen, REDERIVE)
     assert seen[F.GLOB] == 27, (seen, REDERIVE)
     assert seen[F.ANY_OF] == 26, (seen, REDERIVE)
     # Reported to the orchestrator: the PROGRAM_EXIT form described in the brief
@@ -1414,7 +1476,7 @@ def test_ledger_tracks_a_mutated_flow(tmp_path):
         C.rebuild()
 
         assert len(F.step_ids()) == EXPECTED_STEPS + 1
-        assert len(C.ALL_CELLS) == (EXPECTED_STEPS + 1) * EXPECTED_DIMS == 621
+        assert len(C.ALL_CELLS) == (EXPECTED_STEPS + 1) * EXPECTED_DIMS == 630
         assert len(C.cells_for(1)) == EXPECTED_STEPS + 1
 
         # The added step has no audit history at all — surfaced, not swallowed.

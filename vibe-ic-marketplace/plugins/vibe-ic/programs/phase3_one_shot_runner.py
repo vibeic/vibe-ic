@@ -37510,6 +37510,93 @@ def _canonical_step_condition(project: Path, step_id: str
     return applies, f"canonical step {step_id} condition {'met' if applies else 'not met'}"
 
 
+def step_signoff_metrics_aggregate(project: Path) -> StepResult:
+    """Canonical step 37.4 — the sign-off metrics record, produced then checked.
+
+    THE PRODUCER THE STEP DID NOT HAVE. 37.4 declares
+    ``phase3/final/metrics.json`` and
+    ``reports/phase3/signoff_metrics_aggregate.json`` as required outputs and
+    gates on ``signoff_metrics_aggregate . --check``. Until this call existed,
+    the flow named the program and no runner ever spawned it, so on every real
+    run the step's own required outputs were missing and the gate could only
+    report their absence. A step whose declared product nothing produces cannot
+    pass for any design.
+
+    IT IS ALSO WHAT MAKES THE ``ENFORCEMENT: blocking`` DECLARATION TRUE.
+    `flow_gate_enforcement_audit` calls a gate ENFORCED only when a runner
+    spawns it inline AND the exit status of that spawn reaches a control-flow
+    decision. Both spawns below are `subprocess.run` in THIS frame and both
+    statuses are read by an ``if`` in this frame, which is the shape that
+    analysis can decide; a helper returning ``(rc, detail)`` is not — it comes
+    back INLINE_UNPROVEN, and unknown is not enforcement. Without this the
+    docstring's ``blocking`` would be a ``contradiction::`` entry — declares
+    blocking, wired AUDIT_ONLY — which is what `known` in
+    `flow_gate_enforcement_baseline.json` refuses.
+
+    TWO SPAWNS, NOT ONE, AND THE ORDER MATTERS. The first writes the record
+    from this run's own checker reports; the second re-derives it and refuses a
+    record that no longer states what those reports state. Running only the
+    producer would make the step self-certifying — write a file, then check the
+    file just written is the file just written. Running only ``--check`` would
+    refuse every tree, because nothing else writes that record.
+
+    A REFUSAL HERE STOPS THE STEP. The aggregator exits 0 on any readable
+    project — a key with no source is written NOT_MEASURED with its reason, not
+    defaulted — so a non-zero status is never "this run did not get far
+    enough". It is an unreadable project, an unwritable record, or a record
+    that contradicts the reports it cites. None of those may be carried into
+    the release documents that read it.
+    """
+    t0 = time.time()
+    prog = PROGRAMS_DIR / "signoff_metrics_aggregate.py"
+    if not prog.is_file():  # pragma: no cover - shipped tree always has it
+        return StepResult("signoff_metrics_aggregate", "BLOCKED",
+                          time.time() - t0, f"producer not present: {prog}")
+
+    try:
+        cp = subprocess.run(
+            [sys.executable, str(prog), str(project)],
+            capture_output=True, text=True, errors="replace", timeout=300)
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return StepResult("signoff_metrics_aggregate", "ENV_UNAVAILABLE",
+                          time.time() - t0,
+                          f"producer did not complete: {exc}")
+    write_lines = (cp.stdout or cp.stderr or "").strip().splitlines()
+    write_detail = write_lines[-1] if write_lines else f"rc={cp.returncode}"
+    if cp.returncode != 0:
+        return StepResult(
+            "signoff_metrics_aggregate", "FAIL", time.time() - t0,
+            f"the sign-off metrics record could not be written "
+            f"(rc={cp.returncode}): {write_detail}",
+            extras={"flow_step": "37.4", "producer_rc": cp.returncode})
+
+    try:
+        checked = subprocess.run(
+            [sys.executable, str(prog), str(project), "--check"],
+            capture_output=True, text=True, errors="replace", timeout=300)
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return StepResult("signoff_metrics_aggregate", "ENV_UNAVAILABLE",
+                          time.time() - t0,
+                          f"the record check did not complete: {exc}")
+    check_lines = (checked.stdout or checked.stderr or "").strip().splitlines()
+    check_detail = check_lines[-1] if check_lines else f"rc={checked.returncode}"
+    outputs = [str(q) for q in (
+        project / "phase3" / "final" / "metrics.json",
+        project / "reports" / "phase3" / "signoff_metrics_aggregate.json",
+    ) if q.is_file()]
+    if checked.returncode != 0:
+        return StepResult(
+            "signoff_metrics_aggregate", "FAIL", time.time() - t0,
+            f"the written record does not state what this run's own reports "
+            f"state (rc={checked.returncode}): {check_detail}", outputs,
+            {"flow_step": "37.4", "producer_rc": cp.returncode,
+             "check_rc": checked.returncode})
+    return StepResult("signoff_metrics_aggregate", "PASS", time.time() - t0,
+                      check_detail, outputs,
+                      {"flow_step": "37.4", "producer_rc": cp.returncode,
+                       "check_rc": checked.returncode})
+
+
 def step_tapeout_docs_gen(project: Path) -> StepResult:
     """Canonical step 37.5ic's release-document producer.
 
@@ -47798,6 +47885,14 @@ def main() -> int:
     # chip path before the compliance auditor evaluates the step's gate. The
     # producer reads 37.5ic's condition from the canonical YAML, so this call
     # cannot drift into the mutually-exclusive 37.5ip path.
+    # Canonical step 37.4 — the sign-off metrics record, BEFORE the release
+    # documents. `tapeout_docs_gen`, `ic_release_docs_gen`,
+    # `_ic_release_artefacts` and `release_docs_check` all read
+    # `phase3/final/metrics.json`; 37.5ic `blocks_on` 37.4 for that reason, and
+    # dispatching the producer after its consumers would reproduce the defect
+    # 37.4 was added to close.
+    plan.append(step_signoff_metrics_aggregate(project))
+
     plan.append(step_tapeout_docs_gen(project))
 
     # And the PRODUCT documents beside the sign-off evidence. The generator

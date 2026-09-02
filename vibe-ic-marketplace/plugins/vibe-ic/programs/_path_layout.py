@@ -244,6 +244,24 @@ def phase3_stage4_dir(project: Path) -> Path:
     return project / "phase3/stage4"
 
 
+def phase3_final_dir(project: Path) -> Path:
+    """The run's SIGN-OFF METRICS directory — `phase3/final/`.
+
+    It holds exactly one artefact, `metrics.json`, written by
+    `signoff_metrics_aggregate` after the sign-off checkers have run and read
+    by every release-document generator (`tapeout_docs_gen`,
+    `ic_release_docs_gen`, `_ic_release_artefacts`, `release_docs_check`).
+
+    It exists as a helper because those four readers named the path and NO
+    producer wrote it: measured at v1.16.2, `grep -rn "final/metrics.json"`
+    over the whole tree returned five readers and zero writers, so step 37.5ic
+    could not produce a single one of its six document outputs for ANY design.
+    A path a program reads but the layout does not define is a path nothing is
+    responsible for creating.
+    """
+    return project / "phase3/final"
+
+
 def phase3_stage5_manufacturing_dir(project: Path) -> Path:
     """Steps 37-40: fab / wafer sort / packaging / final ATE."""
     return project / "phase3/stage5_manufacturing"

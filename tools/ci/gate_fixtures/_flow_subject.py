@@ -6,7 +6,7 @@ same shape so the two cannot disagree about what a declaration is". Two
 hand-written copies of a subject flow would be free to drift apart, and a
 drifting subject is how a fixture stops testing the thing it names.
 
-WHY A MINIMAL FLOW AND NOT A COPY OF THE REAL ONE. A copy would carry 68 steps
+WHY A MINIMAL FLOW AND NOT A COPY OF THE REAL ONE. A copy would carry 69 steps
 of unrelated declarations, any of which could be the reason a gate refuses —
 and `gate_fixture_runner` requires the CAN-FAIL refusal to name the mutation's
 own token, so a subject that can refuse for a second reason is a subject that

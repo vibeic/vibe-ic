@@ -373,6 +373,19 @@ _COPY_SUBTREES = (
     # spelling changes they stop arriving with nothing noticing, which is
     # precisely how #2017 happened.
     Path(_release_docs_contract.DOC_ROOT),
+    # THE SIGN-OFF METRICS RECORD — step 37.4's declared product, and the one
+    # artefact every release document in the cell cites its numbers to.
+    #
+    # `phase3/final/metrics.json` states the run's own DRC / LVS / antenna /
+    # timing verdicts under the names the documents read, each with the report
+    # it came from and that report's sha256. Publishing the documents while
+    # leaving it behind would ship the conclusions without the evidence they
+    # name: a reader of the published cell could not check one number in the
+    # datasheet against the record it cites.
+    #
+    # `_copy_tree` skips a missing source, so a cell from a run that never
+    # reached step 37.4 stages nothing here and is byte-identical to before.
+    Path("phase3") / "final",
     "reports",
 )
 _COPY_FILES = ("provenance.jsonl",)

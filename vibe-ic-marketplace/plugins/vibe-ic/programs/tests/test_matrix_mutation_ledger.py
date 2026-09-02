@@ -612,10 +612,26 @@ def test_0_5ic_d3_live_replay_closes_the_exact_coverage_delta():
     26.5ic ALREADY_RED and recorded in baseline_red. ``uncovered == []`` holds
     at 508. All seven are named in ``LEDGER_CELLS_NOT_ENFORCED``'s strike
     notes, which moved in the same change.
+
+    MOVED 508 -> 516 on 2026-09-03, growing, and this one is a STEP arriving
+    rather than a cell changing tier: canonical 37.4 (sign-off metrics
+    aggregation) brings eight cells and all eight are ENFORCED, so the
+    denominator moves by exactly eight and no existing cell changed state.
+
+    THE THIRD ASSERTION IS AGAIN WHAT THE MOVE HAD TO BUY, and it was bought
+    the same way DT2/d6 was: by REPLAYING, not by reasoning from the shape of
+    the step. All eight were run on this tree —
+    d1 D1-BLIND-GATE-PROGRAMS REDDENED, d2 D2-BLIND-GATE-PROGRAMS REDDENED,
+    d3 D3-UNDECLARED-ARTEFACT ALREADY_RED (baseline_rc=1, recorded in
+    baseline_red, exactly as 26.5ic was), d4 D4-UNGATED-DELIVERABLE and
+    D4-CLI-CONTRACT both REDDENED, d5 D5-PHANTOM-EDGE REDDENED,
+    d6 D6-UNCONDITIONAL-OPTIONAL REDDENED, d7 D7-GATE-PROBES-A-GHOST REDDENED,
+    d8 D8-EMPTY-PROMISE REDDENED — so ``uncovered == []`` holds at 516 rather
+    than holding over eight cells nobody had shown can fail.
     """
     rep = L.census(cell_states())
-    assert rep["considered"] == 508, rep
-    assert rep["covered"] == 508, rep
+    assert rep["considered"] == 516, rep
+    assert rep["covered"] == 516, rep
     assert rep["uncovered"] == [], rep
 
 

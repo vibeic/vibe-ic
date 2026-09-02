@@ -14634,7 +14634,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     # THE HEADLINE MUST NAME THE SCOPE IT MEASURED. `args.stage` is None on a
     # `--stage-id` run, so keying only on it would print a whole-flow headline
     # over a one-stage report — the reader's only clue that the numbers below
-    # cover nine steps and not sixty-eight. `target_stage` carries both spellings.
+    # cover nine steps and not sixty-nine. `target_stage` carries both spellings.
     scope = f"{args.flow}" + (f" {target_stage}" if target_stage else "")
     print(f"\n=== Vibe-IC {scope} compliance ===")
     print(f"Project: {project}")

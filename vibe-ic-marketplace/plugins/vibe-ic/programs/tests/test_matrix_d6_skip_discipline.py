@@ -1765,7 +1765,7 @@ def _leg6_skip_is_keyed_on_something_the_flow_never_promises(
 def _unconditioned_disclosures(program: str) -> Tuple[Tuple[str, ...], ...]:
     """`audit_source` findings for one gate program, as hashable rows.
 
-    Cached per PROGRAM, not per step: 68 cells name the same modules many times
+    Cached per PROGRAM, not per step: 69 cells name the same modules many times
     over and the audit is a full AST walk of each.
     """
     _ensure_programs_on_path()
@@ -2338,7 +2338,7 @@ def test_d6_l7_subject_census_is_live_and_wider_than_the_repo_sweep():
     Two things this pins, both measured rather than assumed:
 
       * the leg audits a non-empty set of programs (a census that collapsed to
-        zero would make L7 green over nothing on all 68 cells at once); and
+        zero would make L7 green over nothing on all 69 cells at once); and
       * that set is not a subset of what the program's own repo-wide sweep
         opens. `gate_files` selects on four basename suffixes; the flow blocks
         on gate programs carrying none of them, and those are exactly the

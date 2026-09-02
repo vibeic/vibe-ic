@@ -1383,7 +1383,8 @@ def test_unattributable_findings_are_surfaced_not_dropped():
 
 
 def test_every_cell_lands_in_exactly_one_state():
-    """68 cells; ENFORCED + WAIVED + NA == 68, and no cell is in two states.
+  # 2026-09-02: 68 -> 69, step 37.4 (sign-off metrics aggregation) added; the step SET gained exactly that one member and lost none.
+    """69 cells; ENFORCED + WAIVED + NA == 69, and no cell is in two states.
 
     The census is derived live, not written down: a step added to the yaml
     lands here as ENFORCED and this arithmetic keeps holding, while a waiver
@@ -1404,7 +1405,8 @@ def test_every_cell_lands_in_exactly_one_state():
     # make loud, so the number is re-derived rather than adjusted: the live
     # yaml carries 69 step ids, `1.6x` among them and `37.5self` not.
     # A step arriving OR leaving must force a human to say the number out loud.
-    assert len(cells) == len(F.step_ids()) == 68
+  # 2026-09-02: 68 -> 69, step 37.4 (sign-off metrics aggregation) added; the step SET gained exactly that one member and lost none.
+    assert len(cells) == len(F.step_ids()) == 69
 
     state = Counter()
     for cell in cells:
@@ -1431,7 +1433,8 @@ def test_every_cell_lands_in_exactly_one_state():
     # make loud, so the number is re-derived rather than adjusted: the live
     # yaml carries 69 step ids, `1.6x` among them and `37.5self` not.
     # A step arriving OR leaving must force a human to say the number out loud.
-    assert sum(state.values()) == 68, state
+  # 2026-09-02: 68 -> 69, step 37.4 (sign-off metrics aggregation) added; the step SET gained exactly that one member and lost none.
+    assert sum(state.values()) == 69, state
     assert state["NA"] >= 1 and state["ENFORCED"] >= 1, state
     # Waivers must not be the majority strategy: if they ever are, this
     # dimension has stopped enforcing anything and should be redesigned.

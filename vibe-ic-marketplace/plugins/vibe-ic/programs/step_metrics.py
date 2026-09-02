@@ -430,8 +430,13 @@ def reconcile(name: str, metric: Optional[Any], prose: Optional[Any], *,
 # 62 -> 67: the canonical flow gained five retained gate-carrying steps
 # (0.5ic, 15.5ic, 26.5ic, 37.5ic and 37.5ip).  The former 1.6x gate is now
 # owned by Step 2, so it no longer contributes a separate step to this census.
-# Re-derived, not typed: `coverage()` counts 67 against the shipped flow.
-GATE_CARRYING_STEPS: int = 67
+# 67 -> 68 (2026-09-03): canonical step 37.4, sign-off metrics aggregation.
+# ONE step arrives and it carries a `gate:` key, so this census moves by exactly
+# one. It is an ADDITION and not a rename: the flow's own id set goes 68 -> 69,
+# '37.4' is the single member gained and no existing id changed spelling, so no
+# step left this census to make room for it.
+# Re-derived, not typed: `coverage()` counts 68 against the shipped flow.
+GATE_CARRYING_STEPS: int = 68
 
 #: EMITTING — gate-carrying steps whose gate runs a program that calls `emit`.
 #: Supply side only: emitting a number changes no verdict.

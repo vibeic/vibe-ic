@@ -6,7 +6,7 @@ WHY
 The flow-gate dashboard publishes the flow-gate matrix under the words "every
 cell is a predicate recomputed against the current source, not a stored verdict
 read back". The population is DERIVED, never typed: `flow_matrix.cells` builds
-it as `flowref.step_ids() x DIMENSIONS`, which is 68 x 9 = 612 today. The
+it as `flowref.step_ids() x DIMENSIONS`, which is 69 x 9 = 621 today. The
 sentence here used to state a frozen `63 x 8 = 504` count;
 both halves had drifted, and a stated count that cannot move is how a page keeps
 describing a tree it no longer measures.

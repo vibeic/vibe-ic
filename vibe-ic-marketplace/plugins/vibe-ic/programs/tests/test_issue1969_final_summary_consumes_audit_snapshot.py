@@ -43,7 +43,7 @@ EXPECTED = {
     "VACUOUS-PASS": 3,
     "PARTIALLY-VACUOUS": 5,
     "INCOMPLETE": 1,
-    "PASS-VOIDED-BY-DEPENDENCY": 23,
+    "PASS-VOIDED-BY-DEPENDENCY": 24,
 }
 
 
@@ -86,7 +86,7 @@ def _stdout_that_recounts_wrong(audit: dict) -> str:
         "=== Vibe-IC synthetic compliance ===",
         "Project: /synthetic/project",
         "Flow def: /synthetic/flow.yaml",
-        "Steps: 68 total (4/43 executed PASS, 2 DEFERRED via waiver)",
+        "Steps: 69 total (4/43 executed PASS, 2 DEFERRED via waiver)",
         tally,
     ]
     skip_overwrites = 0
@@ -134,7 +134,7 @@ def _render(monkeypatch, tmp_path: Path, audit: dict) -> str:
     return F._render(project, run_audit=True)
 
 
-def test_fixture_is_the_same_68_step_universe_as_the_live_flow():
+def test_fixture_is_the_same_69_step_universe_as_the_live_flow():
     """Real-artifact backing: fixture ids are the shipped flow's ids."""
     flow_path = require_repo(
         "vibe-ic-marketplace", "plugins", "vibe-ic", "flow",
@@ -151,7 +151,13 @@ def test_renderer_consumes_json_counts_not_the_drifting_stdout_recount(
     parsed = F._parse_verdicts(_stdout_that_recounts_wrong(audit))
     recounted, total = F._verdict_rollup(
         {"steps": audit["steps"]}, parsed)
-    assert total == 68
+    # 68 -> 69 (2026-09-03): canonical step 37.4. The fixture gains ONE row
+    # and it is `PASS_VOIDED_BY_DEPENDENCY`, deliberately: that status is not
+    # in the overwrite set above, so the drifting recount this test is about
+    # is left exactly as it was -- SKIPPED-CONDITION still recounts to 21 and
+    # the other four buckets still to 0. A row in an overwriting status would
+    # have moved the alias cycle and quietly changed what the test measures.
+    assert total == 69
     assert recounted.get("SKIPPED-CONDITION") == 21
     assert recounted.get("INCOMPLETE", 0) == 0
     assert recounted.get("PARTIALLY-VACUOUS", 0) == 0

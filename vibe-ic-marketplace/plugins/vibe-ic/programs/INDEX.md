@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 1267
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1267)
+- **Total programs (excluding helpers / shims):** 1268
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1268)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 1258 |
+| `any` | 1259 |
 
 ## Alphabetical listing
 
@@ -1083,6 +1083,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `signoff_cell_aware_feol_cfg` | any | — | signoff_cell_aware_feol_cfg.py -- BUILD the opt-in `--cell-aware-feol` config for the native `svrfdrc` sign-off engine (vibeic-eda image ... |
 | `signoff_gate_self_skip_consistency_check` | any | — | META-audit for ORGANIC #721. |
 | `signoff_ladder_run` | any | — | Chip-level sign-off ladder runner (B1 from spm pilot) — REAL-gate wired. |
+| `signoff_metrics_aggregate` | any | — | write the sign-off metrics THIS flow measured. |
 | `signoff_report_states_its_stage` | any | — | timing and power evidence says which side of place-and-route it came from. |
 | `signoff_waiver_emit` | any | v0.1.49 | Chipignite/foundry signoff-waiver scaffold emitter. |
 | `signoff_waiver_md_emit` | any | v0.1.49 | Submitter-facing waiver Markdown emitter. |
@@ -1339,7 +1340,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (1258 programs)
+### `any` (1259 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `absence_verdict_names_its_search_space_check` — "not found" must say WHERE it looked.
@@ -2391,6 +2392,7 @@ _(no programs in this group)_
 - `signoff_cell_aware_feol_cfg` — signoff_cell_aware_feol_cfg.py -- BUILD the opt-in `--cell-aware-feol` config for the native `svrfdrc` sign-off engine (vibeic-eda image ...
 - `signoff_gate_self_skip_consistency_check` — META-audit for ORGANIC #721.
 - `signoff_ladder_run` — Chip-level sign-off ladder runner (B1 from spm pilot) — REAL-gate wired.
+- `signoff_metrics_aggregate` — write the sign-off metrics THIS flow measured.
 - `signoff_report_states_its_stage` — timing and power evidence says which side of place-and-route it came from.
 - `signoff_waiver_emit` — Chipignite/foundry signoff-waiver scaffold emitter.  _[v0.1.49]_
 - `signoff_waiver_md_emit` — Submitter-facing waiver Markdown emitter.  _[v0.1.49]_

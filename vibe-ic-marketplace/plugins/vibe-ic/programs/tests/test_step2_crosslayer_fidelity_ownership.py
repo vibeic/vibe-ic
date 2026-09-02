@@ -29,7 +29,8 @@ def _by_id():
 
 
 #: THE MEMBERS, BESIDE THE COUNT, BECAUSE THE COUNT ALONE CANNOT SEE A SWAP.
-#: One step arriving and one leaving in the same batch leaves 68 at 68 and this
+#: One step arriving and one leaving in the same batch leaves the count where it
+#: was and this
 #: module said nothing -- which is what
 #: `population_pin_without_its_member_set` reports against this very file
 #: ("1 pin(s): 68 via safe_load"). RE-DERIVED 2026-08-25 from the flow YAML this
@@ -46,13 +47,13 @@ _CANONICAL_STEP_IDS = {
     "14", "15", "15.5ic", "16", "17", "18", "19", "20", "21", "22",
     "DT2", "DT3",
     "23", "24", "25", "26", "26.5ic", "27", "28", "29", "30", "31", "32", "33",
-    "34", "35", "36", "37", "37.5ip", "37.5ic", "38", "39",
+    "34", "35", "36", "37", "37.4", "37.5ip", "37.5ic", "38", "39",
     "M1", "M2", "M3", "M4",
     "40", "41", "42", "43", "44", "P0",
 }
 
 
-def test_canonical_flow_remains_68_steps_without_a_1_6x_step():
+def test_canonical_flow_remains_69_steps_without_a_1_6x_step():
     ids = tuple(str(step["id"]) for step in _steps())
     # NO `len(_CANONICAL_STEP_IDS) == 68` HERE, and that is deliberate. I wrote
     # one at v1.11.85 and `population_guard_asserts_equality_not_a_floor` caught
@@ -61,7 +62,13 @@ def test_canonical_flow_remains_68_steps_without_a_1_6x_step():
     # The literal is already asserted against the POPULATION it describes, as a
     # set and in both directions, three lines down; that is the check, and one
     # tautology standing beside it only made the file look better guarded.
-    assert len(ids) == 68, f"canonical flow grew to {len(ids)} steps: {ids}"
+    # 68 -> 69 (2026-09-03): canonical step 37.4, sign-off metrics aggregation.
+    # AN ARRIVAL, NOT A SWAP, AND THE SET BELOW IS WHAT SAYS SO: '37.4' is the
+    # only member added and none departed, which is exactly the distinction the
+    # member literal exists to make and a count alone cannot. It is not a rename
+    # of the retired '37.5self' either -- that id left at v1.11.18, three
+    # populations ago, and nothing in this change restores or re-spells it.
+    assert len(ids) == 69, f"canonical flow grew to {len(ids)} steps: {ids}"
     assert len(set(ids)) == len(ids), (
         "the flow declares a duplicate step id: "
         f"{sorted(i for i in set(ids) if ids.count(i) > 1)}")

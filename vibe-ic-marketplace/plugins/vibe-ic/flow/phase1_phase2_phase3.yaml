@@ -1253,7 +1253,7 @@ steps:
         #     the five is CIRCULAR; d5 says so in its own finding text.
         #   * RE-HOME the clause to a step that already has those four
         #     upstream — no such step. Computed the blocks_on closure of all
-        #     68 steps: ZERO of them cover {A5, A6, A7, A9}, because A9 is a
+        #     69 steps: ZERO of them cover {A5, A6, A7, A9}, because A9 is a
         #     LEAF that nothing blocks on at all.
         #
         # So the clause is withdrawn rather than moved, and the program is
@@ -7479,6 +7479,40 @@ steps:
         # wired onto any stage3 step, which is why it is not.
     blocks_on: [34, 36]
 
+  # ── the sign-off SUMMARY, and why it is its own step ─────────────────
+  # MEASURED at v1.16.2: `phase3/final/metrics.json` had FIVE readers
+  # (tapeout_docs_gen, ic_release_docs_gen, _ic_release_artefacts,
+  # release_docs_check, and a comment in this file) and ZERO writers, and
+  # `phase3/final/` was not a directory `_path_layout` defined. Its 18 keys are
+  # OpenLane-2/LibreLane metric names; this flow drives OpenROAD, magic, netgen,
+  # KLayout and OpenSTA directly and never runs LibreLane's Classic flow, which
+  # is what would have written that file. So step 37.5ic could not produce ONE
+  # of its six document outputs for ANY design, and no completed route could
+  # change that: the missing artefact is not a layout, it is the summary of the
+  # checks run ON the layout.
+  #
+  # It is its OWN step and not a clause of 37.5ic because it runs on EVERY
+  # route: the IP arm's documents and the `_ic_release_artefacts` substance
+  # check read the same record, and a summary of a run belongs to the run, not
+  # to one of the two ways it can be delivered.
+  - id: "37.4"
+    name: "Sign-off metrics aggregation — the run's own checker verdicts, under the names the release documents read"
+    stage: stage4
+    required_inputs:
+      - from: 37
+        path: "phase3/stage4/gds/*.gds"
+    required_outputs:
+      - "phase3/final/metrics.json"
+      - "reports/phase3/signoff_metrics_aggregate.json"
+    gate:
+      all_of:
+        # BLOCKING, and it can really fail: `--check` refuses a tree with no
+        # record and a tree whose record no longer states what its own reports
+        # state. A clause that answered the same way for every design would be
+        # the vacuous shape `test_step_37_5ic_gate_is_not_vacuous` refuses.
+        - program_exit_zero: "signoff_metrics_aggregate . --check"
+    blocks_on: [37]
+
   # ── cell/IP path — TERMINAL ──────────────────────────────────────────
   # Where the two paths part. An IP is delivered, not fabricated: it needs a
   # LEF so somebody else can place it, a Liberty so they can time it, and a
@@ -7929,7 +7963,9 @@ steps:
     # 0.5ic writes the router files this step's condition reads, the template
     # the operator's arm is run against, and the declaration our arm compares
     # the layout to.
-    blocks_on: [37, 0.5ic]
+    # 37.4 writes `phase3/final/metrics.json`, which THIS step's document
+    # generators read and refuse without.
+    blocks_on: [37, 0.5ic, "37.4"]
     notes: >-
       Three verdicts and no fourth, and the merge inherits them unchanged from
       both arms: PASS only when every arm that ran carries passing evidence for

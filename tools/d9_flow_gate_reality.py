@@ -9,7 +9,7 @@ the corpus was already gone. It has been un-regenerable since the day it
 landed, and its consumer `gen_flow_gate_d9_section.py` now refuses for reasons
 of its own; see that file.
 
-The headline used to read "the 63 D9 cells". The flow has 68 steps. The count
+The headline used to read "the 63 D9 cells". The flow has 69 steps. The count
 is not written down here any more, because a population figure that nothing
 recomputes is the defect this whole campaign removes.
 

@@ -18,8 +18,8 @@ arithmetic emitted:
 
 544 is a number nobody wrote down and nobody checked: half of it (68) tracked
 the flow, the other half (8) was frozen. The live population is
-`flow_matrix.cells.ALL_CELLS` = `flowref.step_ids() x DIMENSIONS` = 68 x 9 =
-**612**, and the 9 has been 9 since dimension D9 (`verdict_consumed`) was added.
+`flow_matrix.cells.ALL_CELLS` = `flowref.step_ids() x DIMENSIONS` = 69 x 9 =
+**621**, and the 9 has been 9 since dimension D9 (`verdict_consumed`) was added.
 So this grid was under-reporting the DENOMINATOR by a whole dimension while
 quoting its own rule that "`declared` is the denominator, and a consumer reports
 coverage against THAT, never against the number that happened to run."
