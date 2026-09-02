@@ -535,6 +535,34 @@ def parse_lef_macros(text: str) -> Dict[str, Tuple[float, float]]:
     return out
 
 
+def parse_lef_macro_classes(text: str) -> Dict[str, str]:
+    """`{macro: CLASS}` for every MACRO carrying one, e.g. "PAD INOUT".
+
+    THE CLASS IS WHAT SAYS WHAT A MASTER IS FOR. `parse_lef_macros` above
+    returns geometry, and geometry cannot distinguish an input pad from a
+    filler from a corner: in one open 5 V IO library eight masters are all 75.0 x 350.0
+    and they are `PAD INOUT`, `PAD INPUT` and `PAD POWER`. A producer choosing
+    a master for a port direction needs the class and nothing else does the
+    job. Same body-bounding as `parse_lef_macros`, for the same reason.
+
+    Whitespace inside the class is collapsed to single spaces so
+    "CLASS  PAD   INOUT ;" and "CLASS PAD INOUT ;" are one string.
+    """
+    out: Dict[str, str] = {}
+    hits = list(_MACRO_RE.finditer(text))
+    for i, m in enumerate(hits):
+        end = hits[i + 1].start() if i + 1 < len(hits) else len(text)
+        stop = re.compile(rf"^\s*END\s+{re.escape(m.group(1))}\b",
+                          re.M).search(text, m.end(), end)
+        if stop:
+            end = stop.start()
+        c = re.compile(r"^\s*CLASS\s+([^;]+);", re.M).search(
+            text, m.end(), end)
+        if c:
+            out[m.group(1)] = " ".join(c.group(1).split()).upper()
+    return out
+
+
 def parse_lef_sites(text: str) -> Dict[str, Dict[str, object]]:
     """`{site: {"class": str, "size": (w_um, h_um)}}` for standalone SITEs.
 

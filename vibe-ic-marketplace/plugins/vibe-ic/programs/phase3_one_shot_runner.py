@@ -5556,12 +5556,30 @@ def macro_pg_pin_names(macro_lefs) -> Tuple[List[str], List[str]]:
     `vdd` is connected as `vdd` even where the standard cells say `VDD`. No
     supply name is hard-coded.
     """
-    pwr, gnd = [], []
+    texts = []
     for f in (macro_lefs or []):
         try:
-            txt = Path(f).read_text(errors="replace")
+            texts.append(Path(f).read_text(errors="replace"))
         except OSError:
             continue
+    return pg_pin_names_from_lef_texts(texts)
+
+
+def pg_pin_names_from_lef_texts(texts) -> Tuple[List[str], List[str]]:
+    """(power pin names, ground pin names) from LEF TEXT rather than paths.
+
+    Split out from `macro_pg_pin_names` for one measured reason: the chip-path
+    IO LEFs are resolved INSIDE THE CONTAINER and their paths do not exist on
+    this host. Handing those paths to a host-side `read_text` raised OSError on
+    every one of them, the loop skipped silently, and the returned lists were
+    empty — so the run emitted no IO supply connection and failed with the same
+    `PG_TERMINALS_ON_NO_NET: 72 of 18426` it had before the fix. An empty
+    result from an unreadable path is indistinguishable from an empty result
+    from a library with no PG pins, which is why the read is now the caller's
+    problem and this function only parses.
+    """
+    pwr, gnd = [], []
+    for txt in texts:
         for m in re.finditer(
                 r"^\s*PIN\s+(\S+)\s*$(.*?)^\s*END\s+\1\s*$",
                 txt, re.M | re.S):
@@ -6251,6 +6269,43 @@ def _resolve_l21_rail_bindings(
     return out, notes
 
 
+def _io_pg_global_connect_tcl(pdk: "PdkConfig", container: Optional[str],
+                              pwr_net: str, gnd_net: str) -> str:
+    """`add_global_connection` lines for the IO cell library's own PG pins.
+
+    The chip-path sibling of `_macro_pg_global_connect_tcl`, and it delegates
+    to it so the two can never read a LEF differently. Discovery failure is
+    the ordinary state of a PDK that ships no IO library and contributes an
+    empty string, never an exception: this is a PDN block, and a design with
+    no pad ring must reach it unchanged.
+    """
+    try:
+        io_lefs, _io_gds = _discover_padring_io_views(pdk, container)
+    except Exception:
+        return ""
+    # READ THROUGH THE CONTAINER. `_discover_padring_io_views` resolves paths
+    # inside the image; on this host they do not exist, and a host-side read
+    # returns nothing while looking exactly like a library with no PG pins.
+    texts = []
+    for lef in io_lefs:
+        txt = _read_pdk_text(lef, container)
+        if txt:
+            texts.append(txt)
+    if not texts:
+        return ""
+    mp, mg = pg_pin_names_from_lef_texts(texts)
+    out = ""
+    for n in mp:
+        if n != pwr_net:
+            out += (f"  add_global_connection -net {pwr_net} "
+                    f"-pin_pattern \"^{n}$\" -power\n")
+    for n in mg:
+        if n != gnd_net:
+            out += (f"  add_global_connection -net {gnd_net} "
+                    f"-pin_pattern \"^{n}$\" -ground\n")
+    return out
+
+
 def _build_pdn_tcl(pdk: "PdkConfig", container: Optional[str] = None,
                    em_floor: Optional[Dict[str, Any]] = None) -> str:
     """v0.1.47 — emit OpenROAD PDN (`add_global_connection`/`define_pdn_grid`/
@@ -6580,6 +6635,21 @@ def _build_pdn_tcl(pdk: "PdkConfig", container: Optional[str] = None,
             f"  add_global_connection -net {gnd} -pin_pattern \"^{gnd}$\" -ground\n"
             + _macro_pg_global_connect_tcl(
                 getattr(pdk, "macro_lefs", None), pwr, gnd)
+            # THE IO CELLS' OWN SUPPLIES. An IO pad declares `USE POWER` /
+            # `USE GROUND` on its rails exactly as an analog macro does, and
+            # for the same reason the macro case above exists those terminals
+            # were connected to nothing: the patterns two lines up are built
+            # from the STANDARD-CELL supply names, and an IO library's rails
+            # are not called that. MEASURED on the first run where the ring
+            # actually placed:
+            #     PG_TERMINALS_ON_NO_NET: 72 of 18426 power/ground instance
+            #     terminals (0.4%) are attached to no net after routing
+            # 72 is exactly the 36 placed pads times their two rails. The
+            # names are read from the IO LEFs verbatim by the SAME function
+            # that reads a macro's, so no supply name is written here; a PDK
+            # with no IO library contributes nothing, and on a design with no
+            # pads the extra patterns match no instance and change nothing.
+            + _io_pg_global_connect_tcl(pdk, container, pwr, gnd)
             + well_tcl
             + "  global_connect\n"
             # A net on a macro POWER/GROUND terminal is typed BEFORE the
@@ -15301,6 +15371,38 @@ def _l19_declared_die_area(project: Optional[Path]) -> Optional[str]:
     return None
 
 
+def _padring_required_die_um(project: Optional[Path]) -> Tuple[Optional[int], str]:
+    """The die side the PAD RING needs, off the producer's own record.
+
+    THE DIE IS NOT A FREE PARAMETER ONCE A RING EXISTS. `io_pad_chip_top_gen`
+    computes it from the library's own LEF widths — two corner cells plus every
+    pad on the longest side — and records it as `die_required_um.die_side_um`.
+    Nothing here recomputes it; this reads it, so the two cannot disagree.
+
+    Returns `(side_um, basis)`, or `(None, reason)` when no ring has been
+    produced. An absent record is the ordinary state of a design that is not on
+    the chip path and contributes NOTHING.
+    """
+    if project is None:
+        return None, "no project"
+    rec = Path(project) / "reports" / "phase3" / "io_pad_chip_top.json"
+    if not rec.is_file():
+        return None, "no pad-ring producer record"
+    try:
+        doc = json.loads(rec.read_text(errors="replace"))
+    except (OSError, ValueError) as exc:
+        return None, f"pad-ring producer record unreadable: {exc}"
+    if doc.get("verdict") != "WROTE":
+        return None, f"pad-ring producer verdict {doc.get('verdict')!r}"
+    req = doc.get("die_required_um") or {}
+    side = req.get("die_side_um")
+    try:
+        side_i = int(math.ceil(float(side)))
+    except (TypeError, ValueError):
+        return None, "the record states no die_side_um"
+    return side_i, str(req.get("basis") or "")
+
+
 def _effective_die_um(die_um_flag: str,
                       project: Optional[Path]
                       ) -> Tuple[str, Optional[str]]:
@@ -22822,8 +22924,128 @@ def _floorplan_seed_tcl(full_pnr_tcl: str) -> str:
     return full_pnr_tcl[:matches[0].end()] + "\nexit\n"
 
 
+#: A COMMAND WORD IN A TCL DECK IS NOT ALWAYS AT COLUMN ZERO, and reading it as
+#: if it were made this gate report a false absence on EVERY chip-path run.
+#:
+#: MEASURED: `pad_ring_route_evidence` searched the deck for
+#: `(?m)^\s*detailed_route(?:\s|$)` and never matched, so it reported
+#: "PADRING_CONSUMER_MISSING: live placement/route commands absent after
+#: ingest". Detailed routing was RUNNING the whole time -- 78 mentions in
+#: `openroad.log` -- because the deck invokes it wrapped:
+#:
+#:     if {[catch {detailed_route {*}$_vic_drc_opt} dr_err]} {
+#:
+#: which is a `catch` added so a router exception is NONFATAL. That is a
+#: producer change the reader never followed; the finding was present but
+#: buried behind PADRING_POPULATION_LOST until that was fixed.
+#:
+#: THE REGEX STAYS DISCRIMINATING, which is the whole difficulty. It must match
+#: a real invocation and must NOT match:
+#:   * a comment line naming the command (this deck has three);
+#:   * `info body detailed_route`, the probe the deck uses to ask whether this
+#:     OpenROAD build accepts `-output_drc` -- a deck that ONLY probed and never
+#:     routed must still be reported missing.
+#: So the token must sit at the start of a command: after `{`, `[` or `;`, or at
+#: line start, with only whitespace between. `info body detailed_route` has
+#: `info` in that position, so it does not match.
+_PNR_CMD_DETAILED_ROUTE = re.compile(
+    r"(?m)^(?!\s*#).*?(?:^|[\{\[;])\s*detailed_route(?:\s|\}|$)")
+_PNR_CMD_GLOBAL_PLACEMENT = re.compile(
+    r"(?m)^(?!\s*#).*?(?:^|[\{\[;])\s*global_placement(?:\s|\}|$)")
+
+
+def _padring_def_components(padring_def_text: str) -> "list[tuple[str, str]]":
+    """`[(instance, master)]` for every COMPONENT the pad-ring DEF declares.
+
+    A DEF COMPONENTS entry opens with ``- <instance> <master>``; the placement
+    that follows may be on the same line or the next. Only the first two tokens
+    are read, so the placement syntax is irrelevant here.
+    """
+    out: "list[tuple[str, str]]" = []
+    inside = False
+    for line in padring_def_text.splitlines():
+        t = line.strip()
+        if not inside:
+            if t.startswith("COMPONENTS "):
+                inside = True
+            continue
+        if t.startswith("END COMPONENTS"):
+            break
+        if t.startswith("- "):
+            parts = t[2:].split()
+            if len(parts) >= 2:
+                out.append((parts[0], parts[1]))
+    return out
+
+
+def _padring_physical_only_instance_tcl(padring_def_text: str) -> str:
+    """Create, in odb, the ring instances the LINKED NETLIST does not contain.
+
+    MEASURED on spm x gf180mcuD (2026-09-02), and OpenROAD names the mechanism
+    itself. `padring.def` carried 757 IO-library instances; `placed.def` and
+    every DEF after it carried 36. The 721 missing ones are not dropped
+    somewhere downstream -- they are never ingested, and `openroad.log` says so
+    721 times:
+
+        [WARNING ODB-0248] skipping undefined comp gf180mcu_fd_io__cor_SW
+                           encountered in FLOORPLAN DEF
+
+    exactly 4 corners + 717 fillers, and ZERO signal pads. `read_def
+    -floorplan_initialize` lays a floorplan ONTO an already-linked design: a
+    COMPONENT naming an instance the design does not own is UNDEFINED, and odb
+    skips it. It is a WARNING, the read returns success, and the ring silently
+    becomes 36 pads with no corners and no fill.
+
+    The signal pads survive because `io_pad_chip_top_gen` instantiates them in
+    `chip_top_io.v` -- they carry connectivity. Corners and fillers carry NONE,
+    so nothing ever put them in a netlist, and the producer cannot: the filler
+    POPULATION is decided later, by `pad_ring_gen`, from the gap each side has
+    left once the pads are placed. The chip top is emitted before the die is
+    even resolved. So the instances have to be created where BOTH facts are
+    known -- after the ring is verified, before it is read -- which is here.
+
+    `dbInst_create` is guarded by `findInst`: an instance the netlist DOES own
+    is left alone, so this can never shadow a pad the producer emitted, and a
+    ring whose whole population is already in the netlist emits no creations at
+    all. Physical-only cells are marked `SOURCE DIST` so a later netlist
+    comparison does not read them as logic that appeared from nowhere.
+    """
+    # THE MASTER LOOKUP ITERATES THE LOADED LIBS, and that is not a style
+    # choice. The first version of this deck reached for
+    # `[[[ord::get_db] getTech] getLib]`; `dbTech` HAS NO `getLib`, OpenROAD
+    # answered "Invalid method" and aborted pnr.tcl at the ingest -- MEASURED
+    # on the pilot chip-path run. The deck-level tests were all green at the
+    # time, because they grade the STRING and a string cannot tell you whether
+    # OpenROAD accepts it. `getLibs` + `findMaster` is the documented pair and
+    # is what the run then executed.
+    lines = [f'puts "{_PNR_STAGE_MARKER} padring_physical_instances"',
+             "set _pr_block [[[ord::get_db] getChip] getBlock]",
+             "set _pr_created 0",
+             "proc _pr_find_master {name} {",
+             "  foreach lib [[ord::get_db] getLibs] {",
+             "    set m [$lib findMaster $name]",
+             '    if {$m ne "NULL"} { return $m }',
+             "  }",
+             '  return "NULL"',
+             "}"]
+    for inst, master in _padring_def_components(padring_def_text):
+        lines.append(
+            f'if {{[$_pr_block findInst "{inst}"] eq "NULL"}} {{\n'
+            f'  set _pr_master [_pr_find_master "{master}"]\n'
+            f'  if {{$_pr_master ne "NULL"}} {{\n'
+            f'    set _pr_i [odb::dbInst_create $_pr_block $_pr_master '
+            f'"{inst}"]\n'
+            f'    $_pr_i setSourceType "DIST"\n'
+            f'    incr _pr_created\n'
+            f'  }}\n'
+            f'}}')
+    lines.append('puts "PADRING_PHYSICAL_INSTANCES_CREATED: $_pr_created"')
+    return "\n".join(lines)
+
+
 def _padring_routing_consumer_tcl(full_pnr_tcl: str,
-                                  padring_def_c: str) -> str:
+                                  padring_def_c: str,
+                                  physical_instance_tcl: str = "") -> str:
     """Replace floorplan creation with the complete, verified pad-ring DEF.
 
     The returned deck is the actual routing consumer.  It cannot fall back to
@@ -22864,11 +23086,18 @@ def _padring_routing_consumer_tcl(full_pnr_tcl: str,
         raise ValueError(
             f"PNR_FLOORPLAN_SEAM_AMBIGUOUS: expected one floorplan write, "
             f"found {len(matches)}")
+    # The physical-only instances are created BEFORE the read, not after:
+    # `read_def -floorplan_initialize` SKIPS a COMPONENT whose instance the
+    # linked design does not own (ODB-0248), and a skipped component is gone --
+    # there is nothing left to repair afterwards. See
+    # `_padring_physical_only_instance_tcl` for the measurement.
+    pre = (physical_instance_tcl + "\n") if physical_instance_tcl else ""
     consume = (
         f'puts "{_PNR_STAGE_MARKER} padring_ingest"\n'
         f'if {{![file exists {padring_def_c}]}} {{\n'
         f'  error "PADRING_ROUTING_INPUT_MISSING: {padring_def_c}"\n'
         f'}}\n'
+        f'{pre}'
         f'read_def -floorplan_initialize {padring_def_c}\n'
         f'puts "PADRING_ROUTING_CONSUMED: {padring_def_c}"')
     consumer_tcl = (full_pnr_tcl[:matches[0].start()] + consume
@@ -23279,6 +23508,96 @@ def _inject_padring_io_lefs(full_pnr_tcl: str,
     return full_pnr_tcl[:anchors[0].start()] + block + full_pnr_tcl[anchors[0].start():]
 
 
+def _inject_padring_chip_top(full_pnr_tcl: str, chip_top_v_c: str,
+                             chip_top: str, core: str) -> str:
+    """Elaborate the PAD-CARRYING chip top instead of the bare core.
+
+    THE RING'S INSTANCES MUST BE IN THE BLOCK BEFORE THE RING IS PLACED.
+    `pad_ring_gen` resolves every ordered instance against the block and
+    reports `PAD_INSTANCE_NOT_IN_BLOCK` when it is not there — MEASURED on
+    spm x gf180mcuD, 44 of 44 pads, against a floorplan elaborated from the
+    synthesised core. The core has no pads in it and never did: the flow's
+    synthesis emits a bare core, which is the whole reason step 15.5ic needed
+    a producer at all.
+
+    The seam is the deck's single `read_verilog` + `link_design` pair. The
+    chip-top file is read AFTER the netlist (it instantiates the core, so the
+    core must already be known) and `link_design` is retargeted from the core
+    to the chip top. Both are asserted to be unique — a deck with two of
+    either is not one this function may edit, and it says so rather than
+    editing the first it finds.
+    """
+    reads = list(re.finditer(r"(?m)^read_verilog\s+\S+\s*$", full_pnr_tcl))
+    links = list(re.finditer(rf"(?m)^link_design\s+{re.escape(core)}\s*$",
+                             full_pnr_tcl))
+    if len(reads) != 1 or len(links) != 1:
+        raise ValueError(
+            f"PADRING_CHIP_TOP_SEAM_AMBIGUOUS: expected one read_verilog and "
+            f"one `link_design {core}`, found {len(reads)} and {len(links)}")
+    out = (full_pnr_tcl[:reads[0].end()]
+           + f"\n# The pad-carrying chip top: the ring's instances live here.\n"
+           + f"read_verilog {chip_top_v_c}\n"
+           + full_pnr_tcl[reads[0].end():])
+    links = list(re.finditer(rf"(?m)^link_design\s+{re.escape(core)}\s*$", out))
+    return (out[:links[0].start()] + f"link_design {chip_top}"
+            + out[links[0].end():])
+
+
+def _padring_chip_top_record(project: Path) -> Optional[Dict[str, Any]]:
+    """The producer's record, when it wrote a chip top. `None` otherwise."""
+    rec = project / "reports" / "phase3" / "io_pad_chip_top.json"
+    if not rec.is_file():
+        return None
+    try:
+        doc = json.loads(rec.read_text(errors="replace"))
+    except (OSError, ValueError):
+        return None
+    if doc.get("verdict") != "WROTE" or not doc.get("chip_top_verilog"):
+        return None
+    return doc
+
+
+def step_io_pad_chip_top_gen(project: Path, container: Optional[str] = None,
+                             pdk: Optional[PdkConfig] = None) -> StepResult:
+    """Step 15.5ic's FIRST producer — the one that instantiates the IO pads.
+
+    It runs BEFORE the floorplan, not with the rest of step 15.5ic, and the
+    order is load-bearing in two directions at once: the floorplan deck has to
+    elaborate the chip top this writes, and the die the floorplan creates has
+    to be at least as large as the ring this sizes. Both were measured to fail
+    the other way round.
+    """
+    t0 = time.time()
+    try:
+        pdk_root, pdk_tree = (_padring_pdk_root_and_tree(pdk, container)
+                              if pdk else (None, None))
+    except ValueError as exc:
+        return StepResult("io_pad_chip_top_gen", "FAIL", time.time() - t0,
+                          str(exc))
+    extra = (["--pdk-root", str(pdk_root), "--pdk", str(pdk_tree)]
+             if pdk_root and pdk_tree else [])
+    prog = PROGRAMS_DIR / "io_pad_chip_top_gen.py"
+    if not prog.is_file():  # pragma: no cover - shipped tree always has it
+        return StepResult("io_pad_chip_top_gen", "ENV_UNAVAILABLE",
+                          time.time() - t0, "program absent")
+    if container:
+        prog_c = _to_container_path(str(prog), container)
+        project_c = _to_container_path(str(project), container)
+        cmd = " ".join(shlex.quote(str(x)) for x in
+                       ["python3", prog_c, project_c, *extra])
+        rc, out, err = _docker_exec(container, cmd, marker=prog_c)
+    else:
+        cp = _pr.run([sys.executable, str(prog), str(project), *extra],
+                     capture_output=True, text=True, errors="replace")
+        rc, out, err = cp.returncode, cp.stdout, cp.stderr
+    detail = (out or err or "").strip().splitlines()
+    note = "; ".join(detail[-3:]) if detail else ""
+    status = {0: "PASS", 2: "SKIP"}.get(rc, "FAIL" if rc == 1
+                                        else "ENV_UNAVAILABLE")
+    return StepResult("io_pad_chip_top_gen", status, time.time() - t0,
+                      f"rc={rc} {note}".strip())
+
+
 def step_pad_ring_gen(project: Path, container: Optional[str] = None,
                       pdk: Optional[PdkConfig] = None) -> StepResult:
     """Canonical step 15.5ic producer + independent gate, before routing.
@@ -23367,9 +23686,31 @@ def _prepare_padring_for_route(
     t0 = time.time()
     seed = out_dir / "padring_floorplan_seed.tcl"
     seed_log = out_dir / "padring_floorplan_seed.log"
+    # THE PRODUCER RUNS FIRST. Its chip top is what the floorplan below
+    # elaborates, and its `die_required_um` is what the die was sized to; a
+    # tree where it SKIPPED (no pad placement declared) reaches the same seam
+    # it always did, elaborating the bare core.
+    # ALREADY RUN, in the ordinary case, by the PnR step before it sized the
+    # die. Re-run only when no record is there — a caller that enters this
+    # function directly (the unit tests do) still gets a chip top.
+    producer = (StepResult("io_pad_chip_top_gen", "PASS", 0.0, "already run")
+                if _padring_chip_top_record(project) is not None
+                else step_io_pad_chip_top_gen(project, container, pdk))
+    if producer.status == "FAIL":
+        return (StepResult("pad_ring_gen", "FAIL", time.time() - t0,
+                           f"the IO pad chip-top producer refused: "
+                           f"{producer.detail}"), None)
+    chip_top_rec = _padring_chip_top_record(project)
     try:
         io_lefs, io_gds = io_view_discover(pdk, container)
         io_ready_tcl = _inject_padring_io_lefs(generic_pnr_tcl, io_lefs)
+        if chip_top_rec is not None:
+            io_ready_tcl = _inject_padring_chip_top(
+                io_ready_tcl,
+                _to_container_path(
+                    str(project / chip_top_rec["chip_top_verilog"]), container),
+                str(chip_top_rec.get("chip_top_module") or "chip_top"),
+                str(chip_top_rec.get("core_module") or ""))
         seed.write_text(_floorplan_seed_tcl(io_ready_tcl))
     except (OSError, ValueError) as exc:
         return (StepResult("pad_ring_gen", "FAIL", time.time() - t0,
@@ -23399,7 +23740,9 @@ def _prepare_padring_for_route(
     padring = out_dir / "padring.def"
     try:
         consumer = _padring_routing_consumer_tcl(
-            io_ready_tcl, _to_container_path(str(padring), container))
+            io_ready_tcl, _to_container_path(str(padring), container),
+            _padring_physical_only_instance_tcl(
+                padring.read_text(encoding="utf-8", errors="replace")))
     except ValueError as exc:
         return (StepResult("pad_ring_gen", "FAIL", time.time() - t0,
                            f"verified ring has no routing consumer: {exc}",
@@ -23812,6 +24155,15 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
     # Resolve it BEFORE computing `_auto_die_requested` so an L9-pinned die
     # behaves EXACTLY like an explicit `--die-um` (pinned — never auto-sized
     # over, in either direction).
+    # THE PAD-RING PRODUCER RUNS BEFORE THE DIE IS RESOLVED, because its
+    # `die_required_um` is one of the inputs to that resolution and a record
+    # that appears afterwards is a record nothing read. It is idempotent and
+    # writes only its own two artefacts; on a design with no declared pad
+    # placement it SKIPs and contributes nothing, exactly as before.
+    _padring_producer = step_io_pad_chip_top_gen(project, container, pdk)
+    if _padring_producer.status not in ("PASS", "SKIP"):
+        print(f"[phase3] io_pad_chip_top_gen: {_padring_producer.status} — "
+              f"{_padring_producer.detail}", file=sys.stderr)
     die_um, _l9_die_note = _effective_die_um(die_um, project)
     if _l9_die_note:
         print(f"[phase3] {_l9_die_note}", file=sys.stderr)
@@ -23821,6 +24173,56 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
                                                   container=container)
     if _auto_die_note:
         print(f"[phase3] {_auto_die_note}", file=sys.stderr)
+    # THE PAD RING'S FLOOR. A die is a free parameter only until the design has
+    # a ring: after that the two corner cells plus the pads on the longest side
+    # are a hard geometric minimum, and a die below it makes every side of the
+    # ring compute NEGATIVE. MEASURED on spm x gf180mcuD before this: the
+    # auto-sizer produced a 111 um core-sized die against a 355 um corner cell
+    # and `pad_ring_gen` reported `PAD_RING_DOES_NOT_FIT` on all four sides at
+    # once, which reads like a pad-ring defect and is a die-sizing one.
+    #
+    # TWO BRANCHES, AND THEY ARE DIFFERENT FACTS:
+    #   * the die was AUTO — nobody chose it, so the ring's requirement is
+    #     adopted and disclosed. This is what the design instructs when its own
+    #     floorplan section says the die follows from the core utilisation AND
+    #     the pad ring.
+    #   * the die was MANDATED — an explicit `--die-um`, an L9 `DIE_AREA` or an
+    #     L19 budget — and is SMALLER than the ring needs. That is a
+    #     contradiction inside the design's own inputs, and silently growing a
+    #     die somebody pinned would replace their floorplan with ours. It
+    #     REFUSES, and the message names both numbers.
+    _ring_side, _ring_basis = _padring_required_die_um(project)
+    if _ring_side is not None:
+        _mandated = not _auto_die_requested
+        try:
+            _cur_w, _cur_h = (int(x) for x in str(die_um).lower().split("x"))
+        except Exception:
+            _cur_w = _cur_h = 0
+        if _cur_w < _ring_side or _cur_h < _ring_side:
+            if _mandated:
+                return StepResult(
+                    "pnr", "FAIL", time.time() - t0,
+                    f"PADRING_DIE_TOO_SMALL: the die pinned for this run is "
+                    f"{die_um} um and its own pad ring needs at least "
+                    f"{_ring_side}x{_ring_side} um ({_ring_basis}). Growing a "
+                    f"die somebody pinned would replace their floorplan with "
+                    f"one nothing in the design states; shrinking the ring is "
+                    f"not possible without dropping a declared pad. Re-run "
+                    f"with --die-um {_ring_side}x{_ring_side} or state a die "
+                    f"at least that large in the design's floorplan section.")
+            print(f"[phase3] die-um=auto and the design's own pad ring needs "
+                  f"{_ring_side}x{_ring_side} um ({_ring_basis}) — adopting "
+                  f"it over the core-sized {die_um}", file=sys.stderr)
+            die_um = f"{_ring_side}x{_ring_side}"
+            # AND IT IS NO LONGER AUTO. `_auto_die_requested` is the opt-in for
+            # the over-sparse DOWNSIZE retry, whose premise is that a die the
+            # runner sized itself may be tightened freely. That premise is
+            # false the moment a pad ring pins the die: a ring-sized die IS
+            # sparse — MEASURED here, 463 cells in 3162 x 3162 um — and the
+            # retry duly shrank it, to 468 um, and the ring stopped fitting
+            # again with the floor's own message nowhere in sight. The die is
+            # now MANDATED, by the design's own ring, so it is marked as such.
+            _auto_die_requested = False
     try:
         die_w, die_h = (int(x) for x in die_um.lower().split("x"))
     except Exception:
@@ -29669,10 +30071,8 @@ def step_pad_ring_final_evidence(project: Path, top: str,
     try:
         tcl = route_tcl.read_text(errors="replace")
         ingest_i = tcl.index("PADRING_ROUTING_CONSUMED:")
-        place_m = re.search(r"(?m)^\s*global_placement(?:\s|$)",
-                            tcl[ingest_i:])
-        route_m = re.search(r"(?m)^\s*detailed_route(?:\s|$)",
-                            tcl[ingest_i:])
+        place_m = _PNR_CMD_GLOBAL_PLACEMENT.search(tcl[ingest_i:])
+        route_m = _PNR_CMD_DETAILED_ROUTE.search(tcl[ingest_i:])
         if place_m is None or route_m is None:
             raise ValueError("live placement/route commands absent after ingest")
         place_i = ingest_i + place_m.start()

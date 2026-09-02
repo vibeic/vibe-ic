@@ -476,6 +476,42 @@ def _gate_commands(sid: str) -> list:
     return out
 
 
+#: The one value of a gate clause's `subject:` key that is not the default.
+#: A clause without the key grades THE DESIGN, which is what every clause in
+#: this flow was until one of them was measured not to.
+SUBJECT_TREE = "tree"
+
+
+def _gate_clauses(sid: str) -> list:
+    """`[(command, subject)]` for one step, subject `None` where undeclared.
+
+    The same structural walk `_gate_commands` does, kept beside it rather than
+    folded into it: that one is read by four tests that care only about the
+    command string, and widening its return type would move them all.
+    """
+    out = []
+
+    def walk(node):
+        if isinstance(node, list):
+            for item in node:
+                walk(item)
+            return
+        if not isinstance(node, dict):
+            return
+        for key in ("all_of", "any_of"):
+            sub = node.get(key)
+            if isinstance(sub, (list, dict)):
+                walk(sub)
+        for key in FCC._PROGRAM_GATE_KEYS:
+            spec = node.get(key)
+            if isinstance(spec, dict):
+                out.append((spec.get("command"), spec.get("subject")))
+            elif isinstance(spec, str):
+                out.append((spec, None))
+    walk(_path_steps()[sid].get("gate"))
+    return [(c, s) for c, s in out if isinstance(c, str)]
+
+
 def _run_gate(project: Path, command: str) -> int:
     """Run one declared gate command against a project, and return its rc."""
     import shlex
@@ -512,12 +548,126 @@ def test_no_gate_of_a_running_path_step_passes_on_an_empty_tree(trees, cls, sid)
     if MATRIX[cls][sid] != RUNS:
         pytest.skip("cell does not run for this class; covered by the "
                     "condition and verdict layers")
-    for command in _gate_commands(sid):
+    for command, subject in _gate_clauses(sid):
+        if subject == SUBJECT_TREE:
+            # NOT AN EXEMPTION — a declaration, and one that is separately
+            # PROVED by `test_every_tree_scoped_gate_clause_really_is_tree_
+            # scoped` below. A clause whose subject is the shipped tree rather
+            # than this design answers the same thing on every project, so
+            # "did it look at THIS design" is not a question it has. Declaring
+            # the key on a clause that DOES read the project turns that test
+            # red, so this branch cannot be used to quiet a real vacuous pass.
+            continue
         rc = _run_gate(trees[cls], command)
         assert rc != 0, (
             f"({cls}, {sid}): `{command}` exited 0 on a tree carrying only a "
             f"router file. A gate that passes what it cannot have looked at is "
             f"the vacuous pass this campaign exists to refuse.")
+
+
+def _gate_report_text(project: Path, command: str) -> "str | None":
+    """The report a gate clause wrote, with the project path normalised away.
+
+    `None` when the clause declares no `--json` path or wrote nothing — an
+    absent report is not evidence in either direction and is skipped rather
+    than counted as a match.
+    """
+    import shlex
+    toks = shlex.split(command)
+    if "--json" not in toks:
+        return None
+    rel = toks[toks.index("--json") + 1]
+    path = project / rel
+    if not path.is_file():
+        return None
+    return path.read_text(errors="replace").replace(str(project), "<PROJECT>")
+
+
+def _populated(root: Path) -> Path:
+    """A project tree carrying the artefacts a design gate reads.
+
+    Not a real design and not meant to pass anything — the question this
+    fixture answers is only "does the clause's answer MOVE when the project
+    does", and for that it is enough that the tree stop being empty in the
+    places a design gate looks.
+    """
+    proj = root / "populated"
+    for rel in ("input/submission_template", "phase3/stage3/pnr",
+                "phase3/stage4/gds", "reports/phase3",
+                "phase2/stage2/synth"):
+        (proj / rel).mkdir(parents=True, exist_ok=True)
+    (proj / "input/submission_template/SELF_TAPEOUT.txt").write_text(
+        "# tapeout_declaration: self tape-out, no operator\n")
+    (proj / "input/submission_template/tapeout_declaration.json").write_text(
+        '{"schema": "vibe-ic/tapeout_declaration/1", '
+        '"answers": {"deliverable": "DIE", "top_cell": "top"}}')
+    (proj / "phase3/stage3/pnr/floorplan.def").write_text(
+        "VERSION 5.8 ;\nDESIGN top ;\nUNITS DISTANCE MICRONS 1000 ;\n"
+        "DIEAREA ( 0 0 ) ( 100000 100000 ) ;\nEND DESIGN\n")
+    (proj / "phase3/stage3/pnr/routed.def").write_text(
+        (proj / "phase3/stage3/pnr/floorplan.def").read_text())
+    (proj / "phase3/stage4/gds/top.gds").write_bytes(b"\x00\x06\x00\x02")
+    (proj / "phase2/stage2/synth/netlist.v").write_text(
+        "module top (a);\n  input a;\nendmodule\n")
+    return proj
+
+
+@pytest.mark.parametrize("sid", DECLARED_PATH_STEPS)
+def test_every_tree_scoped_gate_clause_really_is_tree_scoped(sid, tmp_path):
+    """THE PROOF BEHIND THE DECLARATION, so the declaration cannot be a lie.
+
+    `subject: tree` says a clause's answer is about the SHIPPED TREE and not
+    about the design it was pointed at. That claim is checkable in exactly one
+    way: run the clause against two project trees that differ materially, and
+    require the same answer. A clause that reads the project moves — from
+    `[CANNOT CHECK]` to a verdict, or from one verdict to another — the moment
+    the artefacts it reads appear.
+
+    So the key buys the vacuous-pass guard's silence and pays for it here. A
+    design gate carrying it fails this test, which is the whole reason the
+    guard is allowed to consult it.
+    """
+    declared = [c for c, s in _gate_clauses(sid) if s == SUBJECT_TREE]
+    if not declared:
+        pytest.skip("this step declares no tree-scoped gate clause")
+    empty = tmp_path / "empty"
+    (empty / "input" / "submission_template").mkdir(parents=True)
+    (empty / "input" / "submission_template" / "SELF_TAPEOUT.txt").write_text(
+        "# tapeout_declaration: self tape-out, no operator\n")
+    full = _populated(tmp_path)
+    for command in declared:
+        rc_empty = _run_gate(empty, command)
+        rc_full = _run_gate(full, command)
+        assert rc_empty == rc_full, (
+            f"({sid}): `{command}` is declared `subject: tree` and its answer "
+            f"MOVED with the project — rc {rc_empty} on a tree carrying only a "
+            f"router file, rc {rc_full} on one carrying a floorplan, a routed "
+            f"DEF, a GDS, a netlist and a declaration. A clause that reads the "
+            f"design is a design gate, and the vacuous-pass guard above must "
+            f"hold it to the design standard. Remove the `subject:` key.")
+        # THE RC ALONE IS NOT ENOUGH, AND THIS IS THE MEASUREMENT THAT SAYS SO.
+        # Declaring `subject: tree` on `tapeout_precheck` — a design gate if
+        # anything in this flow is one — was NOT caught by the rc comparison:
+        # it answers rc 1 on both trees, because both are incomplete designs.
+        # Its REPORT is not the same on both: 12,043 bytes against 17,882,
+        # because it names what it found. So the report is the discriminator.
+        # A clause whose subject is the shipped tree writes the SAME report
+        # whatever project it is pointed at; the census does, byte for byte,
+        # at 8,384 on both.
+        first = None
+        for tree in (empty, full):
+            body = _gate_report_text(tree, command)
+            if body is None:
+                continue
+            if first is None:
+                first = body
+                continue
+            assert body == first, (
+                f"({sid}): `{command}` is declared `subject: tree` and its "
+                f"REPORT differs between the two project trees "
+                f"({len(first)} vs {len(body)} bytes with the project path "
+                f"normalised). A clause that describes the project is grading "
+                f"the project. Remove the `subject:` key.")
 
 
 # --------------------------------------------------------------------------- #
@@ -958,6 +1108,11 @@ WIRED_PRODUCERS = {
     # test it guarded now has to pass for real.
     ("0.5ic", "submission_template_ingest"),
     ("0.5ic", "tapeout_declaration_gen"),
+    # 2026-09-02 — THE PRODUCER OF THE PAD INSTANCES.
+    # `phase3_one_shot_runner.step_io_pad_chip_top_gen` dispatches it before
+    # the die is sized, so it is WIRED on arrival; it is the step's own
+    # producer and not a gate clause of it.
+    ("15.5ic", "io_pad_chip_top_gen"),
     ("15.5ic", "pad_assignment_gen"),
     ("15.5ic", "pad_ring_gen"),
     ("26.5ic", "die_finishing_gen"),
@@ -972,6 +1127,13 @@ WIRED_PRODUCERS = {
     # "the set of programs the path steps declare has changed" — which was
     # true, and was the ledger's own staleness rather than a wiring defect.
     # Registering them is the intended response; deleting the assertion is not.
+    # Lane `spmpad` reached the same registration independently and MEASURED
+    # the channels, which is the evidence this ledger is otherwise asserted
+    # without:
+    #     ('37.5ic', 'ic_release_docs_gen') -> ['invoked by phase3_one_shot_runner']
+    #     ('37.5ip', 'ip_release_docs_gen') -> ['invoked by phase3_one_shot_runner']
+    # Registering them makes the pin STRICTER, not looser: it guards nine
+    # channels in both directions, and un-wiring either one reddens here.
     ("37.5ic", "ic_release_docs_gen"),
     ("37.5ip", "ip_release_docs_gen"),
 }

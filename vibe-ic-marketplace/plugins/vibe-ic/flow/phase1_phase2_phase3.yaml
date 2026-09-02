@@ -4361,6 +4361,31 @@ steps:
       # operator's slot geometry WHERE THE SLOT SPEAKS and from the design's own
       # tape-out declaration everywhere else, derives nothing, and stamps every
       # variable with which source it came from.
+      # THE PRODUCER OF THE PAD INSTANCES, and the reason the two below could
+      # only ever refuse. `pad_assignment_gen` recorded one half in its own
+      # words — `PAD_SOUTH`/`EAST`/`NORTH`/`WEST` and `SIGNAL_MAP` name NETLIST
+      # INSTANCES and "no document can name an instance the netlist does not
+      # contain" — and `_pad_ring` recorded the other: "the flow's synthesis
+      # emits a bare core; NO STEP INSTANTIATES AN IO CELL". Together those are
+      # a closed loop, and every design on the chip path sat inside it.
+      # MEASURED on spm x gf180mcuD at plugin 1.15.65: `pad_assignment_gen`
+      # rc=1, 3 of 8 answered, 10 of the 13 variables owed; and with all eight
+      # answered BY HAND, `pad_ring_gen` rc=1 `PAD_INSTANCE_NOT_IN_BLOCK` for
+      # every pad, because the floorplan was elaborated from the bare core.
+      #
+      # `io_pad_chip_top_gen` closes it from the producer side: the design's
+      # own per-side PORT partition, the port directions from its L9
+      # integration spec, and the master that serves each direction from the IO
+      # library's own LEF `CLASS PAD <subtype>` record. It emits
+      # `chip_top_io.v`, which the floorplan step elaborates, and records the
+      # die the ring needs — without which the ring is built against a
+      # core-sized die and every side computes negative.
+      #
+      # It runs FIRST and, in `phase3_one_shot_runner`, BEFORE the floorplan:
+      # its chip top is what that floorplan links, and its `die_required_um` is
+      # an input to the die resolution. It derives no geometry — `pad_ring_gen`
+      # still places the ring and every one of its refusals stays reachable.
+      - io_pad_chip_top_gen
       - pad_assignment_gen
       - pad_ring_gen
     required_outputs:
@@ -7879,7 +7904,28 @@ steps:
         # that has since lost one of those two signals. Both are proven reachable
         # by mutation in `test_closed_loop_executed_reentry_census.py`, which
         # breaks a running loop in two arms and holds two control loops still.
-        - program_exit_zero: "closed_loop_executed_reentry_census . --json reports/phase3/closed_loop_executed_reentry.json"
+        #
+        # SCOPE, MEASURED — and it is the DESIGN's, not the shipped tree's.
+        #
+        # This clause was briefly declared tree-scoped here, on the belief that
+        # its answer was about the plugin's own re-entry loops and could not
+        # move with the project. `test_every_tree_scoped_gate_clause_really_is_
+        # tree_scoped`, written in the same change to PROVE that declaration,
+        # REFUTED it: rc 2 on a tree carrying only a router file, rc 0 on one
+        # carrying a floorplan, a routed DEF, a GDS, a netlist and a
+        # declaration. The answer moved with the project, so the subject IS the
+        # project. The key is removed and this clause is held to the design
+        # standard like every other clause of this step.
+        #
+        # What it actually does, measured at v1.15.84: it REFUSES (rc 2) a
+        # project that produced no phase-3 artefact — the guard v1.15.80 added
+        # to `closed_loop_executed_reentry_census` — and answers (rc 0) once
+        # there is something to grade. That is correct design-gate behaviour,
+        # and `test_no_gate_of_a_running_path_step_passes_on_an_empty_tree`
+        # covers it directly. The clause stays BLOCKING and its ratchet is
+        # untouched.
+        - program_exit_zero:
+              command: "closed_loop_executed_reentry_census . --json reports/phase3/closed_loop_executed_reentry.json"
     # 0.5ic writes the router files this step's condition reads, the template
     # the operator's arm is run against, and the declaration our arm compares
     # the layout to.

@@ -452,6 +452,96 @@ def read_design_documents(project: Path, pdk_root: Optional[str],
 # --------------------------------------------------------------------------- #
 # the merge
 # --------------------------------------------------------------------------- #
+#: What `io_pad_chip_top_gen` writes. Read here rather than re-derived: that
+#: producer CREATED the pad instances, so it is the only thing in the flow that
+#: can name them truthfully.
+DERIVED_CHIP_TOP_REL = "reports/phase3/io_pad_chip_top.json"
+
+
+def read_derived_chip_top(project: Path) -> Tuple[Dict[str, Dict[str, Any]],
+                                                  Dict[str, Any]]:
+    """The FOURTH SOURCE: variables derived by the IO-pad chip-top producer.
+
+    THE THREE INSTANCE-KEYED QUESTIONS WERE UNANSWERABLE BY CONSTRUCTION.
+    This file's own header records why: `PAD_SOUTH`/`PAD_EAST`/`PAD_NORTH`/
+    `PAD_WEST` and `SIGNAL_MAP` "are lists of NETLIST INSTANCES", a document
+    "partitions PORTS", and writing instance names for a netlist that does not
+    contain them "would be inventing the one thing this step exists to refuse
+    to invent". Both halves stayed true and the step kept refusing, for every
+    design, on every chip route -- MEASURED on one benchmark IC and one open 5 V PDK at plugin
+    1.15.67 as `PAD_INSTANCE_NOT_IN_BLOCK` even with all eight answered by
+    hand.
+
+    What changed is not the rule. `io_pad_chip_top_gen` now INSTANTIATES the
+    pads, from the same partition this program already reads, so the instances
+    exist and naming them is a statement of fact rather than an invention.
+    Its record is read here, and only for the variables it actually created:
+    the four side lists, the signal map and the three rotations.
+
+    RANKED WITH THE DOCUMENTS, not above them. The slot and the declaration
+    both still win, so a tree carrying either behaves exactly as it did.
+    """
+    rec_path = project / DERIVED_CHIP_TOP_REL
+    info: Dict[str, Any] = {"file": DERIVED_CHIP_TOP_REL, "verdict": None}
+    if not rec_path.is_file():
+        info["verdict"] = "ABSENT"
+        return {}, info
+    try:
+        doc = json.loads(rec_path.read_text(errors="replace"))
+    except (OSError, ValueError) as exc:
+        info["verdict"] = "UNREADABLE"
+        info["reason"] = str(exc)
+        return {}, info
+    info["verdict"] = doc.get("verdict")
+    if doc.get("verdict") != "WROTE":
+        return {}, info
+    answers = doc.get("derived_answers") or {}
+    basis = doc.get("derivation_basis") or {}
+    out: Dict[str, Dict[str, Any]] = {}
+
+    order = answers.get("pad_order_by_side")
+    if isinstance(order, dict):
+        for key, var in SIDE_KEY_TO_VAR:
+            if isinstance(order.get(key), list):
+                out[var] = {"value": order[key],
+                            "source": f"{DERIVED_CHIP_TOP_REL} "
+                                      f"(pad_order_by_side): "
+                                      f"{basis.get('pad_order_by_side', '')}"}
+    smap = answers.get("pad_signal_map")
+    if isinstance(smap, dict) and smap:
+        out["SIGNAL_MAP"] = {"value": smap,
+                             "source": f"{DERIVED_CHIP_TOP_REL} "
+                                       f"(pad_signal_map): "
+                                       f"{basis.get('pad_signal_map', '')}"}
+    rots = answers.get("pad_rotations")
+    if isinstance(rots, dict):
+        rot_basis = basis.get("pad_rotations") or {}
+        for key, var in ROTATION_KEY_TO_VAR:
+            if rots.get(key):
+                out[var] = {"value": rots[key],
+                            "source": f"{DERIVED_CHIP_TOP_REL} "
+                                      f"(pad_rotations): "
+                                      f"{rot_basis.get(key, '')}"}
+    # PAD_CORNER / PAD_FILLERS. `read_design_documents` above cannot supply
+    # these on a PDK that spells them with a Tcl substitution, and correctly
+    # declines to guess; the producer resolved the substitution against the
+    # library it read the LEFs from and confirmed the result is a macro that
+    # library carries. Absent from the record means it did NOT confirm one, and
+    # the variable stays owed.
+    if answers.get("pad_corner_master"):
+        out["PAD_CORNER"] = {
+            "value": answers["pad_corner_master"],
+            "source": f"{DERIVED_CHIP_TOP_REL} (pad_corner_master): "
+                      f"{basis.get('pad_corner_master', '')}"}
+    if answers.get("pad_fillers"):
+        out["PAD_FILLERS"] = {
+            "value": list(answers["pad_fillers"]),
+            "source": f"{DERIVED_CHIP_TOP_REL} (pad_fillers): "
+                      f"{basis.get('pad_fillers', '')}"}
+    info["variables"] = sorted(out)
+    return out, info
+
+
 def _mapping_answer(value: Any, pairs: Tuple[Tuple[str, str], ...],
                     question: str) -> Tuple[Dict[str, Any], List[str]]:
     """Split one declaration mapping into its upstream variables.
@@ -580,8 +670,14 @@ def main(argv: Optional[List[str]] = None) -> int:
     slot_vars, slot_unreadable, unsided, slot_files = read_slot_pad_lists(project)
     declaration, decl_why = read_declaration(project)
     design_vars, design = read_design_documents(project, args.pdk_root, args.pdk)
+    derived_vars, derived = read_derived_chip_top(project)
+    # THE PRODUCER'S RECORD WINS WITHIN THIS TIER. Both are derived from the
+    # design's own documents plus the library; only one of them created the
+    # instances it names.
+    merged_design_vars = dict(design_vars)
+    merged_design_vars.update(derived_vars)
     config, provenance, answered, owed = compose(slot_vars, declaration,
-                                                 design_vars)
+                                                 merged_design_vars)
 
     sources = {
         "slot_files": slot_files,
@@ -592,6 +688,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         "declaration_unreadable": decl_why,
         "design_documents": design["documents_scanned"],
         "design_documents_unreadable": design["documents_unreadable"],
+        "derived_chip_top": derived,
     }
     common = dict(sources=sources,
                   design=design,
@@ -773,13 +870,27 @@ def main(argv: Optional[List[str]] = None) -> int:
         written = str(out_path.relative_to(project))
     except ValueError:
         written = str(out_path)
+    # EVERY TIER IS COUNTED, INCLUDING THE NEW ONE. The sentence used to end
+    # "none was derived" and count two tiers, which was true while there were
+    # only two; with a producer-derived tier in the mix, a summary that named
+    # 5 of 13 sources would have read as a partial resolution of a complete
+    # config. A reader must be able to see, from this line alone, that eight
+    # of these values came from a program rather than from a person.
+    n_slot = sum(1 for v in provenance.values() if v.startswith('slot '))
+    n_decl = sum(1 for v in provenance.values()
+                 if v.startswith('declaration'))
+    n_derived = sum(1 for v in provenance.values()
+                    if v.startswith(DERIVED_CHIP_TOP_REL))
+    n_docs = len(provenance) - n_slot - n_decl - n_derived
     reason = (
         f"every one of the {len(PR.REQUIRED_VARS)} variables `pad_ring_gen` "
-        f"requires resolved from a declared source; none was derived. "
-        f"{sum(1 for v in provenance.values() if v.startswith('slot '))} came "
-        f"from the operator's slot geometry and "
-        f"{sum(1 for v in provenance.values() if v.startswith('declaration'))} "
-        f"from the design's own tape-out declaration.")
+        f"requires resolved from a stated source; nothing was guessed. "
+        f"{n_slot} came from the operator's slot geometry, "
+        f"{n_decl} from the design's own tape-out declaration, "
+        f"{n_docs} from the design's documents and the IO library they "
+        f"delegate to, and {n_derived} were DERIVED by "
+        f"`io_pad_chip_top_gen` from that same partition plus the library — "
+        f"the instances it names exist because it created them.")
     return _emit("WROTE", reason, [], 0, config_written=written)
 
 
