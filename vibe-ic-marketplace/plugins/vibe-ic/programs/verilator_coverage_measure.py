@@ -928,32 +928,54 @@ def cmd_check(args: argparse.Namespace) -> int:
         if _audit["decidable"] and not _audit["driven"]:
             _proj = _cov_project_root(data)
             _unused = _cov_unused_stronger_stimulus(_proj) if _proj else None
+            # THE VERDICT GOES TO STDOUT.  This block first shipped writing
+            # all five lines to stderr, and the sentence it exists to say
+            # never reached the step record.  MEASURED, sha256 x sky130A on
+            # v1.16.41: stdout 0 bytes, stderr 859 bytes;
+            # `flow_compliance_check.output_snippet` keeps
+            # `_head_and_tail(stdout)` but only `_grown_tail(stderr, 300)` —
+            # a deliberate asymmetry its own docstring explains, because
+            # stderr is the CRASH channel and a crash's evidence is its tail.
+            # So the headline, being FIRST, was cut before the caller's
+            # `out[:200]` ever ran, and the step record showed line 4:
+            #
+            #   output: [check] this run HAS a functional testbench that was
+            #           not instrumented: ...
+            #
+            # Widening that 200 does NOT fix it: the sentence is not in the
+            # 344-byte snippet at all.  Nor is the fix to change the stderr
+            # window — that window is load-bearing for crash detection and is
+            # pinned by `test_crash_is_flagged_as_a_crash_at_any_checkout_depth`.
+            #
+            # The defect is a CHANNEL one, and it is mine: a gate's verdict is
+            # stdout, and stderr is where a crash lands.  Writing a structured
+            # verdict into the crash channel got it treated as crash tail.
+            # Moving it back is not betting on which line a consumer picks —
+            # `_head_and_tail` keeping the head is that function's stated
+            # contract, not an accident of position.
             print("[check] NO FUNCTIONAL STIMULUS IN THE COVERAGE BUILD — "
-                  "this run measured no coverage of the design.",
-                  file=sys.stderr)
+                  "this run measured no coverage of the design.")
             print(f"[check] the instrumented testbench was {_tb}, and of the "
                   f"signal(s) it binds to the design and declares drivable it "
                   f"assigns only {_audit['clock_reset'] or ['(none)']} — the "
                   f"clock and reset.  It never drives "
                   f"{_audit['inert'] or ['(none)']}, so the design's inputs "
-                  f"were never moved.", file=sys.stderr)
+                  f"were never moved.")
             if _audit["self_declared_connectivity_only"]:
                 print("[check] the testbench says so itself: its header "
-                      "declares it connectivity-only.", file=sys.stderr)
+                      "declares it connectivity-only.")
             if _unused:
                 print(f"[check] this run HAS a functional testbench that was "
                       f"not instrumented: {_unused}. Point the coverage build "
-                      f"at a stimulus that exercises the design.",
-                      file=sys.stderr)
+                      f"at a stimulus that exercises the design.")
             else:
-                print("[check] no functional testbench was found in this run "
-                      "to instrument instead.", file=sys.stderr)
+                print("[check] no functional testbench was found in this "
+                      "run to instrument instead.")
             print(f"[check] the recorded percentages "
                   f"(line {data['totals']['line']['pct']}%, "
                   f"toggle {data['totals']['toggle']['pct']}%, "
                   f"branch {data['totals']['branch']['pct']}%) describe that "
-                  f"testbench, NOT the RTL, and are NOT graded here.",
-                  file=sys.stderr)
+                  f"testbench, NOT the RTL, and are NOT graded here.")
             return 1
 
     totals = data["totals"]

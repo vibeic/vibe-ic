@@ -263,3 +263,63 @@ def test_the_audit_reports_what_it_examined(tmp_path):
     assert sorted(audit["inert"]) == ["cmd", "enable"]
     assert audit["driven"] == []
     assert audit["self_declared_connectivity_only"] is True
+
+
+# ===========================================================================
+# the verdict has to REACH the consumer, not merely be printed
+# ===========================================================================
+#
+# MEASURED, sha256 x sky130A on v1.16.41: this block first shipped writing all
+# five lines to stderr, and the sentence it exists to say never reached the
+# step record. `flow_compliance_check.output_snippet` keeps
+# `_head_and_tail(stdout)` but only `_grown_tail(stderr, 300)` — a deliberate
+# asymmetry, because stderr is the crash channel and a crash's evidence is its
+# tail. stdout was 0 bytes, stderr 859, so the headline was cut before the
+# caller's `out[:200]` ran and the record showed line 4. Widening the 200 does
+# not help: at that point the sentence is not in the 344-byte snippet at all.
+def _step_record_output(rec_path) -> str:
+    """What `flow_compliance_check` would put after `output:` for this run.
+
+    Routed through the CONSUMER's own reader so the test cannot pass by
+    agreeing with a private notion of what a snippet is.
+    """
+    import subprocess
+    sys.path.insert(0, str(_PROGRAMS))
+    import flow_compliance_check as FCC
+    r = subprocess.run(
+        [sys.executable, str(_PROGRAMS / "verilator_coverage_measure.py"),
+         "check", "--coverage-json", str(rec_path)],
+        capture_output=True, text=True)
+    return FCC.output_snippet(r.stdout, r.stderr)[:200]
+
+
+def test_the_load_bearing_sentence_reaches_the_step_record(tmp_path):
+    """Forward: the assertion the rule exists to make must be readable in the
+    artefact a reader actually reads, not only in the program's own output."""
+    rec = _build(tmp_path, _INERT_TB, "tb_gizmo_full.v")
+    shown = _step_record_output(rec)
+    assert "NO FUNCTIONAL STIMULUS" in shown, (
+        "the rule's headline is printed by the program but does not survive "
+        f"into the step record; the record would show: {shown!r}")
+
+
+def test_a_real_stimulus_build_never_carries_that_sentence(tmp_path):
+    """Reverse: doing only the forward half would be a sentence stapled on
+    unconditionally. A build with real stimulus must reach the consumer with a
+    percentage verdict and no trace of the no-stimulus claim."""
+    rec = _build(tmp_path, _LIVE_TB, "tb_pulse_shaper_full.v")
+    shown = _step_record_output(rec)
+    assert "NO FUNCTIONAL STIMULUS" not in shown, (
+        f"a build that drives the design was told it measured nothing: "
+        f"{shown!r}")
+    assert "below threshold" in shown.lower(), (
+        f"the real measurement's verdict did not reach the record: {shown!r}")
+
+
+def test_a_passing_build_reaches_the_record_unchanged(tmp_path):
+    """Reverse: the channel move must not disturb the PASS path."""
+    rec = _build(tmp_path, _LIVE_TB, "tb_pulse_shaper_full.v",
+                 line=95.0, toggle=90.0, branch=92.0)
+    shown = _step_record_output(rec)
+    assert "NO FUNCTIONAL STIMULUS" not in shown
+    assert "PASS" in shown, f"a passing measurement lost its verdict: {shown!r}"

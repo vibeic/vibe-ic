@@ -7500,8 +7500,59 @@ def step_l10_unit_tb_gen(project: Path,
         + (f"/{_total}" if _total else "")
         + f" unit TB(s) instantiating DUT {_tb_report.get('dut_module')!r} "
         f"under {out_dir} for Step-4 l10_tb_conformance evidence"
-        + (f"; {_tbg.describe_scope(_scope)}" if _scope else ""),
+        + (f"; {_tbg.describe_scope(_scope)}" if _scope else "")
+        + _known_answer_vector_census(_tb_report),
         [str(out_dir)])
+
+
+def _known_answer_vector_census(tb_report: dict) -> str:
+    """The known-answer-vector half of what the unit-TB producer just did.
+
+    THE DEFECT, MEASURED — sha256 x sky130A on plugin 1.16.32:
+    `known_answer_vector.extract` lifts THREE typed NIST FIPS-180-4 vectors out
+    of this design's own input, and `known_answer_vector_tb_gen.bind_vector`
+    refuses all three:
+
+        fips1804_sha256_abc     input field 'message' (24 bits) binds to no
+                                input port of this DUT at that width
+        fips1804_sha256_448bit  ... (448 bits) ...
+        fips1804_sha224_abc     ... (24 bits) ...
+
+    — correct, because this DUT is register-mapped: the message arrives as 16
+    writes to BLOCK0..15 and the digest leaves as 8 reads of DIGEST0..7, so no
+    single port of any width can ever carry it.  The producer records each
+    refusal under `known_answer_vector_unbound`, and a sweep of the WHOLE
+    plugin for that key returns exactly one line — the `setdefault` that writes
+    it.  Same for `known_answer_vector_cases`.  Both are written into a dict
+    the caller reads three other keys out of, and dropped.
+
+    So the run reported the same thing it reports for a design that HAS NO
+    VECTORS AT ALL: eight substance-floor TBs stamped `VIBEIC_TB_ORACLE: NONE`.
+    "this design states no known-answer vector" and "this design states three
+    and the binder cannot drive their transport" are different facts about
+    different subjects, and the second one names a gap in the flow.  Making
+    them look identical is what lets the second one go unnoticed for as long
+    as the first one is common.
+
+    Reports ONLY what the producer measured; it invents no number and changes
+    no verdict.  A run with no vectors adds nothing to the line, so a design
+    that genuinely has none is not made to look as if it were missing
+    something.  chip-AGNOSTIC: the two report keys, nothing else.
+    """
+    bound = tb_report.get("known_answer_vector_cases") or []
+    unbound = tb_report.get("known_answer_vector_unbound") or []
+    if not bound and not unbound:
+        return ""
+    out = (f"; known-answer vectors: {len(bound)} bound, "
+           f"{len(unbound)} unbound")
+    if unbound:
+        first = unbound[0] if isinstance(unbound[0], dict) else {}
+        name = first.get("case") or "?"
+        why = first.get("reason") or "no reason recorded"
+        out += (f" — the vectors exist and could NOT be driven, e.g. "
+                f"{name}: {why}"
+                + (f" (+{len(unbound) - 1} more)" if len(unbound) > 1 else ""))
+    return out
 
 
 # ── vibe-ic — THE FULL-STACK TB HAD TO STOP HARD-CODING THE CLOCK'S NAME ─────
