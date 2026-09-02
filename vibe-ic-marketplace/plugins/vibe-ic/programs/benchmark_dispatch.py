@@ -1241,7 +1241,15 @@ def _validate_ai_review(task: dict) -> dict:
         reasons.append("semantic_review.rationale must state the review basis")
     challenge = None
     challenge_result = None
-    program_verification = task.get("program_verification") or {}
+    # ``or {}`` only launders a FALSY non-dict: a truthy ``"not-an-object"``
+    # or ``7`` survived it and reached ``.get()`` as an AttributeError, which
+    # is the one outcome a fail-closed guard must never produce -- a BLOCKED
+    # exit is legible, a traceback out of the acceptance predicate is not.
+    program_verification = task.get("program_verification")
+    if not isinstance(program_verification, dict):
+        if program_verification is not None:
+            reasons.append("Program verification record is malformed")
+        program_verification = {}
     functional_evidence = program_verification.get("functional_evidence")
     confirmation_required = program_verification.get(
         "functional_confirmation_required")

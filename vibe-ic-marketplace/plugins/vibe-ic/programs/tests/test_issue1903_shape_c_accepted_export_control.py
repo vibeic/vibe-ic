@@ -82,9 +82,21 @@ def _fixture(root: Path) -> tuple[Path, Path, str]:
         "program_routing": {"nature": "spec_generation",
                             "route": "phase1_entry", "source": "program",
                             "needs_ai_parse": True},
-        "program_verification": {"actor": "vibe_ic_one_shot_runner",
-                                 "rtl_gen": "PASS",
-                                 "runner_rc": 0},
+        # ``_ai_review_task`` emits these two keys unconditionally (they are
+        # not optional in the producer), so a task without them models a
+        # handoff the runner cannot actually write.  PROGRAM functional
+        # evidence PASS is the ``confirmation_required=False`` branch; the
+        # required-confirmation branch is covered in
+        # ``test_benchmark_program_first_ai_review.py``.
+        "program_verification": {
+            "actor": "vibe_ic_one_shot_runner",
+            "rtl_gen": "PASS",
+            "runner_rc": 0,
+            "functional_evidence": "PASS",
+            "functional_evidence_source":
+                "phase3_verifying.ran.step4_functional_evidence",
+            "functional_confirmation_required": False,
+        },
         "review_path": str(review.resolve()),
         "challenge_path": str(challenge.resolve()),
         "response_path": str(response.resolve()),
@@ -110,7 +122,9 @@ def _fixture(root: Path) -> tuple[Path, Path, str]:
             "accepted": True,
             "candidate_origin": "PROGRAM",
             "review_task": task["review_path"],
-            "phases": {"phase3_verifying": {"ran": {"rtl_gen": "PASS"}}},
+            "phases": {"phase3_verifying": {"ran": {
+                "rtl_gen": "PASS",
+                "step4_functional_evidence": "PASS"}}},
         }],
     }) + "\n")
     return run, dataset, rtl_text
