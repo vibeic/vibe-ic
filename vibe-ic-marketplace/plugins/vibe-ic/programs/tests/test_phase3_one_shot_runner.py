@@ -25,6 +25,8 @@ import os
 import struct
 import subprocess
 import sys
+import pathlib
+import tempfile
 from pathlib import Path
 
 import pytest
@@ -205,6 +207,52 @@ def test_pad_ring_seam_is_fail_closed_when_missing_or_ambiguous():
         RUNNER._floorplan_seed_tcl(double)
 
 
+def _real_pdk(monkeypatch=None, **over):
+    """A REAL `PdkConfig`, built from the runner's own dataclass.
+
+    WHY NOT `object()` ANY MORE, and why not a two-attribute stand-in either.
+    47029143bf made `_prepare_padring_for_route` run
+    `step_io_pad_chip_top_gen(project, container, pdk)` FIRST — its
+    `die_required_um` is an input to the die resolution, so a record that
+    appears afterwards is a record nothing read — and the function returns FAIL
+    when that producer refuses. MEASURED on TREE 7903c1972305 with the old
+    `object()` double:
+
+        FAIL — the IO pad chip-top producer refused:
+        PADRING_PDK_TREE_UNRESOLVED: tech LEF is not under a distribution
+        libs.ref tree
+
+    so neither arm below ever reached the behaviour it asserts: the pad-gate
+    arm never saw `BLOCKING before routing`, and the views arm never ran at all.
+
+    THE COLLABORATOR IS BUILT, NOT DEFENDED AGAINST. Making the producer
+    tolerate a stand-in (`getattr(pdk, ..., None)`, or skipping it when the pdk
+    is not a real `PdkConfig`) would delete the ordering guarantee that landing
+    bought — the floorplan elaborates the producer's chip top, and the die is
+    sized to its ring — and would mask a genuinely broken `PdkConfig`.
+    Pre-planting an `io_pad_chip_top.json` record to short-circuit the producer
+    would make the double model a state the run cannot reach. This is the same
+    repair 894e6298e7 made for the hardmacro doubles: construct the real
+    dataclass, so a field the step starts reading tomorrow is one this double
+    already has.
+
+    The tech LEF is placed under a `libs.ref` tree because that is what
+    `_pdk_root_c` resolves the distribution root from; the names are invented
+    and no real PDK, vendor or cell appears."""
+    root = pathlib.Path(tempfile.mkdtemp(prefix="vic-pdk-")) / "pdks" / "probe_pdk"
+    lef = root / "libs.ref" / "probe_tech" / "lef"
+    lef.mkdir(parents=True, exist_ok=True)
+    tech = lef / "probe.tlef"
+    tech.write_text("VERSION 5.8 ;\nEND LIBRARY\n")
+    cells = lef / "probe_cells.lef"
+    cells.write_text("VERSION 5.8 ;\nEND LIBRARY\n")
+    fields = dict(name="probe_pdk", liberty=str(lef / "probe.lib"),
+                  tech_lef=str(tech), cell_lef=str(cells),
+                  cell_gds=None, site="unit", drc_deck=None)
+    fields.update(over)
+    return RUNNER.PdkConfig(**fields)
+
+
 def test_a_failing_pad_gate_stops_before_the_routing_deck_is_created(
         tmp_path, monkeypatch):
     project = tmp_path / "project"
@@ -222,11 +270,50 @@ def test_a_failing_pad_gate_stops_before_the_routing_deck_is_created(
             "pad_ring_gen", "FAIL", detail="PADRING_POPULATION_LOST")
 
     stopped, consumer = RUNNER._prepare_padring_for_route(
-        project, object(), "container", out_dir, "/work/pnr",
+        project, _real_pdk(), "container", out_dir, "/work/pnr",
         _pnr_contract_deck(), pad_ring_step=failing_gate,
         io_view_discover=lambda *_args: (["/pdk/io.lef"], ["/pdk/io.gds"]))
     assert stopped.status == "FAIL"
     assert "BLOCKING before routing" in stopped.detail
+    assert consumer is None
+    assert not (out_dir / "pnr.tcl").exists()
+
+
+def test_the_chip_top_producer_runs_first_and_can_stop_the_ring(
+        tmp_path, monkeypatch):
+    """The ordering guarantee 47029143bf bought, pinned deliberately.
+
+    `_prepare_padring_for_route` runs `step_io_pad_chip_top_gen` BEFORE the
+    ring — the floorplan elaborates the chip top it writes, and the die is
+    sized to the ring's own `die_required_um`, so a record that appears
+    afterwards is a record nothing read — and it returns FAIL when the producer
+    refuses.
+
+    UNTIL NOW THAT WAS ONLY EXERCISED BY ACCIDENT: the arms above passed
+    `object()` as the PDK, the producer refused it with
+    `PADRING_PDK_TREE_UNRESOLVED`, and the FAIL they then saw was this path
+    rather than the pad-gate path they were written for. Giving them a real
+    `PdkConfig` fixes that — and would have deleted the only coverage this
+    ordering had. So it is asserted here on purpose, with a PDK whose tech LEF
+    is deliberately NOT under a distribution tree."""
+    project = tmp_path / "project"
+    out_dir = project / "phase3/stage3/pnr"
+    out_dir.mkdir(parents=True)
+    stray = tmp_path / "not_a_pdk_tree" / "probe.tlef"
+    stray.parent.mkdir(parents=True)
+    stray.write_text("VERSION 5.8 ;\nEND LIBRARY\n")
+    unresolvable = _real_pdk(tech_lef=str(stray), cell_lef=str(stray),
+                             liberty=str(stray))
+
+    def gate_that_must_not_run(*_a, **_k):          # pragma: no cover
+        raise AssertionError("the ring ran before the chip-top producer")
+
+    stopped, consumer = RUNNER._prepare_padring_for_route(
+        project, unresolvable, "container", out_dir, "/work/pnr",
+        _pnr_contract_deck(), pad_ring_step=gate_that_must_not_run,
+        io_view_discover=lambda *_a: (["/pdk/io.lef"], ["/pdk/io.gds"]))
+    assert stopped.status == "FAIL", stopped
+    assert "chip-top producer refused" in stopped.detail, stopped.detail
     assert consumer is None
     assert not (out_dir / "pnr.tcl").exists()
 
@@ -247,11 +334,14 @@ def test_the_same_io_physical_views_feed_seed_route_and_streamout(
         (out_dir / "padring.def").write_text("ring exists\n")
         return RUNNER.StepResult("pad_ring_gen", "PASS")
 
-    class Pdk:
-        macro_lefs = []
-        macro_gds = []
-
-    pdk = Pdk()
+    # The same REAL `PdkConfig` the arm above uses — see `_real_pdk`. The
+    # two-attribute stand-in this replaces carried exactly the fields the
+    # function touched on the day it was written, and the producer that landed
+    # in front of it needs a resolvable PDK tree before either arm's behaviour
+    # is reachable at all.
+    pdk = _real_pdk()
+    pdk.macro_lefs = []
+    pdk.macro_gds = []
     result, consumer = RUNNER._prepare_padring_for_route(
         project, pdk, "container", out_dir, "/work/pnr",
         _pnr_contract_deck(), pad_ring_step=passing_gate,

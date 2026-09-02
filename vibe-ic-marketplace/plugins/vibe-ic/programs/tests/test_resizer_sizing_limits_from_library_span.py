@@ -150,7 +150,34 @@ def _pnr_tcl(tmp_path: Path, monkeypatch, *, liberty: str,
         cell_gds="/placeholder/x.gds", site="unithd",
         drc_deck="/placeholder/x.drc", metal_prefix="met",
         tapcell_master="TAPA", antenna_diode_cell="DIODEA",
-        tapcell_distance_um=14.0)
+        tapcell_distance_um=14.0,
+        # PINNED SO THE TWO ARMS DIFFER IN THE SPAN AND IN NOTHING ELSE.
+        #
+        # With these left None, `_i1958_pick_cts_buffers` derives the CTS
+        # buffer masters from `pdk.liberty` — so the emitted deck depends on the
+        # library's CELL NAMES, not only on the buffer family's drive SPAN,
+        # which is the property under test. MEASURED on TREE 7903c1972305, the
+        # WIDE-vs-NARROW diff carried four runs, two of them `replace`:
+        #     insert   the sizing preamble            <- under test
+        #     replace  foreach _wc_cm {"BUFX1" "BUFX4"} -> {"BUFX1" "BUFX8"}
+        #     insert   the DRV evidence block         <- under test
+        #     replace  clock_tree_synthesis … -root_buf "BUFX4" -> "BUFX8"
+        # and `_inserted_runs` refuses any non-insert, so both arms died on a
+        # difference that is not the one they are comparing.
+        #
+        # NOT FIXED BY LOOSENING `_inserted_runs`: its refusal of replace and
+        # delete IS the claim of this file — restoring the swap pool must not
+        # REWRITE the script, and `set_max_transition` is the exact regression
+        # it stands guard over. Nor by filtering the CTS line out by name,
+        # which is a hand-written allow-list and blind to the next
+        # liberty-dependent emission.
+        #
+        # A real PDK registry declares these (`clk_buf_cell` /
+        # `clk_buf_root_cell`), so pinning them is what a configured PDK looks
+        # like, not a special case for the test. `BUFX1` is present in every
+        # library this module builds, so the CTS lines are identical across the
+        # arms and the diff carries only what the span changed.
+        clk_buf="BUFX1", clk_buf_root="BUFX1")
 
     monkeypatch.setattr(R, "_openroad_supports_postroute_spef_repair",
                         lambda *_a, **_k: True)
