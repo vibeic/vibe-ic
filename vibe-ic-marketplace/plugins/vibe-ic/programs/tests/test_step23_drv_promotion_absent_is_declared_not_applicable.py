@@ -215,11 +215,57 @@ def _audit(tmp_path, flow, tag, promoted=False, signoff_rows=None):
     return r.returncode, {str(s.get("id")): s.get("status") for s in doc["steps"]}
 
 
+def test_the_drv_clause_declares_why_it_returned_no_verdict(tmp_path):
+    """WHAT THE TIER BELOW RESTS ON, asserted so a re-typing cannot move it
+    silently.
+
+    `flow_compliance_check` renders an rc/verdict non-verdict from the class the
+    PRODUCER declares, and this gate declares one (#1978 via vibe-ic#2013):
+    with neither a promotion marker nor a non-promotion record, the producer
+    that would have written one never ran, so the class is BLOCKED_BY_UPSTREAM.
+    That class is NOT skip-eligible, which is why the defect-reproduction arm
+    below reads INCOMPLETE. If someone re-types this gate, THIS is the test
+    that names it, instead of arm A looking like an unexplained tier change.
+    """
+    proj = tmp_path / "declared"
+    (proj / "reports").mkdir(parents=True)
+    rep = proj / "drv.json"
+    r = subprocess.run([sys.executable, str(DRV), ".", "--json", str(rep)],
+                       cwd=proj, capture_output=True, text=True)
+    assert r.returncode == 0, (r.stdout, r.stderr)
+    doc = json.loads(rep.read_text())
+    assert doc["verdict"] == "VACUOUS_PASS", doc
+    assert doc["reason_class"] == "BLOCKED_BY_UPSTREAM", doc
+
+
 def test_a_declared_unmet_clause_leaves_the_signoff_step_and_its_successor_passing(
         tmp_path):
-    """The defect and its repair, through the real runner. No promotion happened."""
+    """The defect and its repair, through the real runner. No promotion happened.
+
+    ARM A IS THE DEFECT-REPRODUCTION ARM and it is asserted on the EXACT tier,
+    never on `!= "PASS"` — a step 23 that is FAIL for any other reason would
+    satisfy that and this file would stop distinguishing its own finding.
+
+    THE TIER WORD MOVED, AND THE DEFECT DID NOT. When this was written the
+    mandatory wiring made step 23 `PARTIALLY-VACUOUS`: the clause returned an
+    untyped rc=0 non-verdict, which the roll-up read as vacuity. vibe-ic#2013
+    then typed it — the producer says BLOCKED_BY_UPSTREAM, because
+    `step_signoff_spef_repair` never ran — and BLOCKED_BY_UPSTREAM is not
+    skip-eligible, so the same clause now lands the step in the INCOMPLETE tier
+    instead. MEASURED on tree 5e850b3acee8:
+
+        mandatory   rc=1  {'23': 'INCOMPLETE', '32': 'PASS_VOIDED_BY_DEPENDENCY'}
+        optional    rc=0  {'23': 'PASS',       '32': 'PASS'}
+
+    Every load-bearing half of the finding is unchanged: under the mandatory
+    wiring the rarely-applicable clause still costs the sign-off step its tier
+    and still voids the successor it sits above, and rc is still non-zero. Only
+    the word for "not a clean PASS" is more precise. The class it rests on is
+    pinned by the test above.
+    """
     rc_a, a = _audit(tmp_path, _one_step_flow(tmp_path, False, "a"), "a")
-    assert a["23"] == "PARTIALLY-VACUOUS" and a["32"] == "PASS_VOIDED_BY_DEPENDENCY", a
+    assert a["23"] == "INCOMPLETE", a
+    assert a["32"] == "PASS_VOIDED_BY_DEPENDENCY", a
     assert rc_a != 0
 
     rc_b, b = _audit(tmp_path, _one_step_flow(tmp_path, True, "b"), "b")

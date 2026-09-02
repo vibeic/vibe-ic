@@ -87,6 +87,20 @@ FLOW_YAML = CHECK.parent.parent / "flow" / "phase1_phase2_phase3.yaml"
 #: stops being vacuous is REPORTED instead of quietly making the guard inert.
 _VACUOUS_GATE_PROGRAM = "mixed_signal_merge_check"
 
+#: THE CLAUSE THE FLOW DECLARES FOR IT, verbatim (flow step M1):
+#: `mixed_signal_merge_check . --json reports/analog/mixed_signal/merge.json`.
+#: The `--json` is not decoration and dropping it is what made this probe stop
+#: producing a VACUOUS-PASS. `_command_json_report` reads the gate's declared
+#: `reason_class` out of the report the command NAMES and out of nothing else,
+#: so a bare `<program> .` has no typed channel at all: the gate's own
+#: `DESIGN_DECLARED_NA` — earned here because `_analog_applicable` finds no
+#: analog content in the probe project and the gate says so with its evidence —
+#: never reaches `_check_program_exit_zero`, `infer_nonverdict_reason` falls
+#: closed to EXECUTION_ERROR, and the tally prints INCOMPLETE=1 where this
+#: guard needs VACUOUS-PASS=1. A probe that spells its clause differently from
+#: the flow is measuring a wiring no step uses.
+_VACUOUS_GATE_JSON = "reports/analog/mixed_signal/merge.json"
+
 _SEED = "zvoid_seed.txt"
 
 
@@ -108,7 +122,8 @@ def _four_tier_probe_flow(path: Path) -> None:
         {"id": "ZP1", "name": "voided-tier probe: plain pass",
          "stage": "stage1", "gate": {"files_exist": [_SEED]}},
         {"id": "ZV2", "name": "voided-tier probe: vacuous", "stage": "stage1",
-         "gate": {"program_exit_zero": f"{_VACUOUS_GATE_PROGRAM} ."}},
+         "gate": {"program_exit_zero":
+                  f"{_VACUOUS_GATE_PROGRAM} . --json {_VACUOUS_GATE_JSON}"}},
         {"id": "ZF3", "name": "voided-tier probe: missing", "stage": "stage1",
          "required_outputs": ["never/produced.json"]},
         # PASSES on its own gate, and depends on the step that did not.

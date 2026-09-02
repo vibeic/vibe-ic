@@ -125,6 +125,7 @@ from typing import Dict, List, Optional, Sequence, Tuple
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+import _atomic_artefact as _aa  # noqa: E402 — vibe-ic#1082
 import _path_layout as _pl  # noqa: E402
 import analog_a5_pdk_device_limits as _lim  # noqa: E402
 from _analog_a_check_common import load_block_list  # noqa: E402
@@ -1401,7 +1402,7 @@ def _finish(out: dict, args, rc: int) -> int:
     reader most needs, so it is written like any other."""
     print(json.dumps(out, indent=2))
     if getattr(args, "json", None):
-        Path(args.json).write_text(json.dumps(out, indent=2) + "\n")
+        _aa.write_text(Path(args.json), json.dumps(out, indent=2) + "\n")
     return rc
 
 

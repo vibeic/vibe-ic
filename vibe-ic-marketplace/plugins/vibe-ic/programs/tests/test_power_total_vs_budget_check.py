@@ -223,14 +223,61 @@ def test_the_refusal_reaches_the_flow_as_not_a_pass(tmp_path):
     """
     import flow_compliance_check as fcc
 
+    # THE CLAUSE THE FLOW DECLARES, verbatim. The shipped step-33 wiring is
+    # `power_total_vs_budget_check . --json reports/phase2/gates/power_budget.json`
+    # (flow/phase1_phase2_phase3.yaml). A clause with no `--json` has NO typed
+    # channel — `_command_json_report` reads the reason class out of the report
+    # the command names, and nothing else — so a fixture that drops it measures
+    # a wiring no step uses and can only ever observe the fail-closed default.
+    cmd = ("power_total_vs_budget_check . "
+           "--json reports/phase2/gates/power_budget.json")
+
     empty = tmp_path / "empty"
     (empty / "reports").mkdir(parents=True)
-    ok, out = fcc._check_program_exit_zero(
-        empty, "power_total_vs_budget_check .")
+    res = fcc._check_program_exit_zero(empty, cmd)
+    ok, out = res
     assert ok, out            # rc 2 is not a FAIL ...
-    assert out.startswith(fcc._VACUOUS_HINT_PREFIX), out   # ... and not a PASS
+
+    # ... AND NOT A PASS, ASSERTED ON THE TIER AND NOT ON A PREFIX. The old
+    # arm-2 assertion `not out2.startswith(_VACUOUS_HINT_PREFIX)` had gone
+    # BLIND: `INCOMPLETE: …` satisfies it too, so a refusal retiered anywhere
+    # in the non-pass family would have kept it green. `_ProgramCheckResult`
+    # carries the tier the flow acts on; both poles are asserted on it.
+    #
+    # BLOCKED, not VACUOUS_PASS, and the gate is what says so: an empty tree
+    # has neither a power report nor a declared limit, and a power budget is a
+    # REQUIREMENT that arrives in the design's own input documents (this gate's
+    # module docstring). Nothing upstream produced either, so the class is
+    # BLOCKED_BY_UPSTREAM — which is NOT skip-eligible, so this refusal cannot
+    # be laundered into a clean skip, which is the whole property.
+    assert res.reason_class == "BLOCKED_BY_UPSTREAM", (res.reason_class, out)
+    assert res.verdict == "BLOCKED", (res.verdict, out)
+    assert not out.startswith(fcc._VACUOUS_HINT_PREFIX), out
 
     real = _project(tmp_path / "real", budget=1000.0)
-    ok2, out2 = fcc._check_program_exit_zero(real, "power_total_vs_budget_check .")
+    res2 = fcc._check_program_exit_zero(real, cmd)
+    ok2, out2 = res2
     assert ok2, out2
-    assert not out2.startswith(fcc._VACUOUS_HINT_PREFIX), out2
+    assert res2.verdict == "PASS", (res2.verdict, out2)
+    assert res2.reason_class is None, (res2.reason_class, out2)
+
+
+def test_a_report_whose_inputs_arrived_and_hold_nothing_is_a_zero_denominator(
+        tmp_path):
+    """THE OTHER REFUSAL, so the class is a measurement and not a constant.
+
+    A gate that answers one word for every refusal has told the reader nothing
+    about which one to go and fix. Both inputs present, nothing comparable in
+    them: the producer ran, so this is not blocked upstream — it is a zero
+    denominator, and still not skip-eligible.
+    """
+    import flow_compliance_check as fcc
+    proj = _project(tmp_path / "empty_rpt", budget=1000.0)
+    for rpt in list(proj.glob("reports/**/power*.rpt")):
+        rpt.write_text("Group  Internal  Switching  Leakage  Total\n")
+    cmd = ("power_total_vs_budget_check . "
+           "--json reports/phase2/gates/power_budget.json")
+    res = fcc._check_program_exit_zero(proj, cmd)
+    assert res.exit_code == 2, res[1]
+    assert res.reason_class == "ZERO_DENOMINATOR", (res.reason_class, res[1])
+    assert res.verdict == "INCOMPLETE", (res.verdict, res[1])

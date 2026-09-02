@@ -206,3 +206,65 @@ def test_no_guard_echoes_the_literal_it_matched(planted):
         blob = out + err
         assert _BRAND not in blob, f"{gate} echoed the brand literal:\n{blob}"
         assert _SKU not in blob, f"{gate} echoed the SKU literal:\n{blob}"
+
+
+# ── the suite's OWN channel: a name with nothing in it is not a store ───────
+#
+# The two refusals above are correct and load-bearing, and they are also the
+# reason the suite must be able to tell "this host has no tokens" from "this
+# harness exported an empty variable". `programs/tests/conftest.py` supplies a
+# FICTIONAL store through the same channel a configured host uses, so that the
+# guards are MEASURED rather than refusing everywhere; it used `setdefault`,
+# which keeps `VIBEIC_NDA_TOKENS=` — the shape `docker run -e VIBEIC_NDA_TOKENS=`
+# produces — and that value resolves to `{}` in `_commercial_pdk`.
+#
+# MEASURED on tree 5e850b3acee8 with that variable exported empty:
+# `source_chip_agnostic_check` exits 2 NO_NDA_TOKENS and
+# test_v1_0_68_issue707r2_shapeb_tb_inferred_order::test_chip_agnostic_guard
+# goes red about the TREE. Accepting rc=2 there would blind the strictest guard
+# in this repo; the fix belongs at the channel.
+
+_CONFTEST_PROBE = (
+    "import json, os, sys;"
+    "sys.path.insert(0, %r);"
+    "import conftest;"
+    "sys.stdout.write(os.environ.get('VIBEIC_NDA_TOKENS', '<unset>'))"
+)
+
+
+def _tokens_after_conftest(env_value):
+    """What the suite's channel holds after conftest runs, prove-by-run."""
+    env = dict(os.environ)
+    env.pop("VIBEIC_NDA_TOKENS", None)
+    if env_value is not None:
+        env["VIBEIC_NDA_TOKENS"] = env_value
+    env["PYTHONDONTWRITEBYTECODE"] = "1"
+    tests_dir = str(Path(__file__).resolve().parent)
+    r = subprocess.run([sys.executable, "-c", _CONFTEST_PROBE % tests_dir],
+                       capture_output=True, text=True, env=env, cwd=tests_dir)
+    assert r.returncode == 0, r.stderr[-800:]
+    return r.stdout
+
+
+@pytest.mark.parametrize("absent", [
+    None,                       # the variable is not set at all
+    "",                         # `docker run -e VIBEIC_NDA_TOKENS=`
+    "   ",                      # blank
+    "not json",                 # unparseable
+    "{}",                       # an object with no tokens in it
+    '{"foundry_brand1": "  "}',  # a role whose literal is blank
+    '["a"]',                    # right JSON, wrong shape
+])
+def test_a_name_with_nothing_in_it_is_not_a_token_store(absent):
+    """Every one of these is the ABSENCE of a store, so the suite supplies its
+    fictional set — exactly as if the variable had never been set."""
+    assert json.loads(_tokens_after_conftest(absent)) == FICTIONAL_NDA_TOKENS
+
+
+def test_a_configured_host_keeps_its_own_store():
+    """THE OTHER POLE, and the reason this is not a blanket overwrite: the
+    suite must measure a genuinely configured host AS IT IS. Without this, the
+    assertion above is satisfied by a conftest that clobbers real tokens."""
+    real = json.dumps({"foundry_brand1": "zzq-not-a-real-brand",
+                       "sku_full": "zzq-not-a-real-sku"})
+    assert json.loads(_tokens_after_conftest(real)) == json.loads(real)

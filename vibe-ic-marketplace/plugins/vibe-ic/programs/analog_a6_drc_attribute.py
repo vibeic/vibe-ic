@@ -65,6 +65,7 @@ from typing import Dict, List, Optional, Sequence, Set, Tuple
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+import _atomic_artefact as _aa  # noqa: E402 — vibe-ic#1082
 import _path_layout as _pl  # noqa: E402
 import magic_gencell_layout_lib as _gl  # noqa: E402
 from analog_hardmacro_gds_emit import Stage  # noqa: E402
@@ -444,7 +445,7 @@ def _finish(report: dict, args, rc: int) -> int:
     most needs, so it is written like any other."""
     print(json.dumps(report, indent=2))
     if getattr(args, "json", None):
-        Path(args.json).write_text(json.dumps(report, indent=2) + "\n")
+        _aa.write_text(Path(args.json), json.dumps(report, indent=2) + "\n")
     if report.get("by_class"):
         print(f"\nA6 DRC ATTRIBUTION [{report.get('block')}] "
               f"total={report.get('drc_total')} "

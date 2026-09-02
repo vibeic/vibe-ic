@@ -85,6 +85,27 @@ class TestImageAvailable:
 # preflight + build command
 # ---------------------------------------------------------------------------
 class TestPreflight:
+    """`preflight_harden` reads `PDK_ROOT` from the host, so these tests set it.
+
+    `_resolve_pdk_root` is `pdk_root or os.environ.get("PDK_ROOT") or None`.
+    The runtime this suite ships in exports `PDK_ROOT=/foss/pdks` with a
+    `sky130A` under it, so the "nothing supplied" case silently became "a
+    perfectly good PDK was supplied by the environment" and the missing-PDK
+    line was never appended — MEASURED: the list came back as image + project
+    dir only, and `"PDK" in joined` was False. On a bare host with no
+    `PDK_ROOT` the identical code is green. That is a test reading the host as
+    if it were a constant, in both directions: it would also stay green if the
+    PDK branch were deleted, on any host that exports one.
+
+    Deleting the `"PDK" in joined` assertion would shrink the population to
+    exactly exclude the only red. The class owns the variable instead, and
+    each of the four states `preflight_harden` distinguishes is driven below.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _own_the_pdk_root(self, monkeypatch):
+        monkeypatch.delenv("PDK_ROOT", raising=False)
+
     def test_all_present_is_clean(self, tmp_path):
         proj = _project(tmp_path)
         missing = mod.preflight_harden(
@@ -100,6 +121,39 @@ class TestPreflight:
         assert "image not available" in joined
         assert "PDK" in joined
         assert "project dir absent" in joined or "config absent" in joined
+
+    def test_an_environment_pdk_root_answers_when_none_is_passed(self, tmp_path,
+                                                                monkeypatch):
+        """The other half of `_resolve_pdk_root`: the env supplies it, and a
+        supplied-and-valid PDK must NOT be reported missing."""
+        monkeypatch.setenv("PDK_ROOT", str(_pdk(tmp_path)))
+        missing = mod.preflight_harden(
+            tmp_path / "nope", "user_project_wrapper",
+            mod.OPENLANE_IMAGE_DEFAULT, None, runner=_image_runner(False))
+        assert not any("PDK" in m for m in missing), missing
+
+    def test_a_pdk_root_without_the_sub_pdk_is_reported(self, tmp_path,
+                                                       monkeypatch):
+        """THE POLE THE HOST WAS HIDING. A directory that exists but holds no
+        sky130A is a DIFFERENT missing prerequisite from none at all, and the
+        message has to say which."""
+        empty = tmp_path / "pdks-empty"
+        empty.mkdir()
+        monkeypatch.setenv("PDK_ROOT", str(empty))
+        joined = " ".join(mod.preflight_harden(
+            tmp_path / "nope", "user_project_wrapper",
+            mod.OPENLANE_IMAGE_DEFAULT, None, runner=_image_runner(False)))
+        assert "PDK_ROOT has no sky130A sub-PDK" in joined, joined
+
+    def test_a_pdk_root_that_is_not_a_directory_is_reported(self, tmp_path,
+                                                           monkeypatch):
+        f = tmp_path / "not-a-dir"
+        f.write_text("")
+        monkeypatch.setenv("PDK_ROOT", str(f))
+        joined = " ".join(mod.preflight_harden(
+            tmp_path / "nope", "user_project_wrapper",
+            mod.OPENLANE_IMAGE_DEFAULT, None, runner=_image_runner(False)))
+        assert "PDK_ROOT is not a directory" in joined, joined
 
     def test_build_command_has_flow_tcl_and_mounts(self, tmp_path):
         proj = _project(tmp_path)

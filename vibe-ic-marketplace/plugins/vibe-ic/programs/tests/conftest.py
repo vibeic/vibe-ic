@@ -32,8 +32,31 @@ _TESTS_DIR = Path(__file__).resolve().parent       # .../programs/tests
 # uses. This is set before any test module imports `_commercial_pdk`, and it is
 # inherited by every gate subprocess the tests spawn.
 #
-# `setdefault`, not an unconditional write: a host that genuinely has the real
-# tokens configured keeps them, so the suite measures that host as it is.
+# NOT `setdefault`, and the difference is a measured red. The intent — "a host
+# that genuinely has the real tokens configured keeps them, so the suite
+# measures that host as it is" — is preserved exactly. What `setdefault` also
+# preserved was a NAME WITH NOTHING IN IT: `VIBEIC_NDA_TOKENS=` (the shape a
+# harness produces with `docker run -e VIBEIC_NDA_TOKENS=`, and any blank or
+# unparseable value) is present, so nothing was supplied, and
+# `_commercial_pdk._nda_token_map` resolves it to `{}` — which every builder
+# turns into `NoNdaLiterals`.
+#
+# MEASURED on tree 5e850b3acee8, image ghcr.io/vibeic/vibeic-eda@sha256:66c33ff2,
+# with `VIBEIC_NDA_TOKENS=` exported into the container:
+#
+#     NO_NDA_TOKENS: no NDA token store on this host; the NDA panel cannot
+#     answer. A caller must report NOT_MEASURED, never PASS.
+#
+# rc=2 from `source_chip_agnostic_check`, and
+# test_v1_0_68_issue707r2_shapeb_tb_inferred_order::test_chip_agnostic_guard
+# reads it as a red about the TREE. It is not: it is a fact about the harness.
+# The right answer is not to accept rc=2 (that would blind the strictest guard
+# in this repo in CI) and not to ship a token; it is to notice that a blank
+# value is the ABSENCE of a store wearing its name, and supply the fictional
+# set exactly as if the variable had been unset.
+#
+# A store is kept only when it parses as an object holding at least one
+# non-blank literal — the same bar `_nda_token_map` applies to it.
 # ---------------------------------------------------------------------------
 import json as _json                                 # noqa: E402
 import os as _os                                     # noqa: E402
@@ -42,7 +65,21 @@ if str(_TESTS_DIR) not in sys.path:
     sys.path.insert(0, str(_TESTS_DIR))
 from _nda_fixture_tokens import FICTIONAL_NDA_TOKENS  # noqa: E402
 
-_os.environ.setdefault("VIBEIC_NDA_TOKENS", _json.dumps(FICTIONAL_NDA_TOKENS))
+
+def _is_usable_token_store(raw) -> bool:
+    """True when `raw` carries at least one token, the way the reader reads it."""
+    if not raw:
+        return False
+    try:
+        data = _json.loads(raw)
+    except (TypeError, ValueError):
+        return False
+    return isinstance(data, dict) and any(
+        isinstance(v, str) and v.strip() for v in data.values())
+
+
+if not _is_usable_token_store(_os.environ.get("VIBEIC_NDA_TOKENS")):
+    _os.environ["VIBEIC_NDA_TOKENS"] = _json.dumps(FICTIONAL_NDA_TOKENS)
 _PROGRAMS = _TESTS_DIR.parent                       # .../programs
 _PLUGIN_ROOT = _PROGRAMS.parent                     # .../vibe-ic
 

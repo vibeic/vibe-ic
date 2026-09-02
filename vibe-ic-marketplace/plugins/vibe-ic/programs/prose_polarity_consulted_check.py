@@ -470,8 +470,147 @@ _NOT_PROSE: Dict[str, str] = {
         "defects this gate was built from (#706 pdk_target, #711 "
         "die_area_budget_um): both read English design documents, where denial "
         "is spellable and was spelled.",
+    '_pad_ring::io_terminals':
+        "A PDK's own `PAD_PLACE_IO_TERMINALS` Tcl list, `{<master> <pin>}` "
+        'entries written by the PDK packaging. Tcl list syntax has no form '
+        'that DENIES an entry: a master/pin pair is in the list or it is not, '
+        'and an entry whose substitution this reader cannot resolve is '
+        'SKIPPED by name rather than half-expanded. Same file family and same '
+        'stated reason as `_pad_ring::parse_lef_macros` below. The two '
+        'defects this gate was built from (#706 pdk_target, #711 '
+        'die_area_budget_um) both read English DESIGN DOCUMENTS, where denial '
+        'is spellable and was spelled; consulting `_prose_polarity` here '
+        'would add a branch that can never fire.',
+    '_pad_ring::parse_lef_macro_classes':
+        'LEF `MACRO <name> ... CLASS <class> ; END <name>` productions. '
+        "Formal foundry grammar: LEF gives no way to write 'this macro is NOT "
+        "CLASS PAD INOUT'. A macro carrying no CLASS simply does not enter "
+        'the returned map, which is already how absence is reported. Direct '
+        'precedent: `_pad_ring::parse_lef_macros` and '
+        '`digital_hardmacro_gen::discover_stdcell_rails`, the same file '
+        'format exempted for the same stated reason. The two defects this '
+        'gate was built from (#706 pdk_target, #711 die_area_budget_um) both '
+        'read English DESIGN DOCUMENTS, where denial is spellable and was '
+        'spelled; consulting `_prose_polarity` here would add a branch that '
+        'can never fire.',
+    '_pad_ring::parse_lef_pin_roles':
+        'LEF `PIN <name> ... DIRECTION <d> ; USE <u> ; END <name>` '
+        'productions. Formal foundry grammar with no denial form; a pin '
+        "declaring neither is OMITTED rather than defaulted, because 'the LEF "
+        "did not say' and 'the LEF said INPUT' are already kept apart by this "
+        'reader. Same class as `parse_lef_macro_classes` above. The two '
+        'defects this gate was built from (#706 pdk_target, #711 '
+        'die_area_budget_um) both read English DESIGN DOCUMENTS, where denial '
+        'is spellable and was spelled; consulting `_prose_polarity` here '
+        'would add a branch that can never fire.',
+    '_pad_ring::parse_liberty_pad_cells':
+        'Liberty `cell (<name>) { pin (<name>) { direction : ...; function : '
+        '...; is_pad : true; } }` attributes. Liberty is a machine-written '
+        'timing/function grammar with no form that denies an attribute — an '
+        'attribute is stated or absent, and this reader keeps `None` for '
+        'absent. Direct precedent: `digital_hardmacro_check::parse_liberty`, '
+        'the same file format exempted for the same stated reason. The two '
+        'defects this gate was built from (#706 pdk_target, #711 '
+        'die_area_budget_um) both read English DESIGN DOCUMENTS, where denial '
+        'is spellable and was spelled; consulting `_prose_polarity` here '
+        'would add a branch that can never fire.',
+    'analog_a5_layout_emit::parse_cell':
+        'Magic `.mag` sections and their `rect` / `rlabel` productions, read '
+        'through `magic_gencell_layout_lib`. A `.mag` is written by Magic '
+        'itself and its grammar has no form that denies a painted rectangle: '
+        'a rect is in the section or it is not. The bookkeeping sections '
+        '(`checkpaint`, `labels`, `properties`) are skipped BY NAME, not by '
+        'reading around them. The two defects this gate was built from (#706 '
+        'pdk_target, #711 die_area_budget_um) both read English DESIGN '
+        'DOCUMENTS, where denial is spellable and was spelled; consulting '
+        '`_prose_polarity` here would add a branch that can never fire.',
+    'analog_a5_layout_emit::probe':
+        "Magic's OWN stdout, matched on the `A5SCALE <box> <lambda> <lambda>` "
+        "line this same function asked Magic to print. A tool's "
+        'machine-formatted answer to a command the program issued is not a '
+        'claim surrounded by prose that could deny it; a run that prints no '
+        'such line is reported as unmeasured rather than defaulted. The two '
+        'defects this gate was built from (#706 pdk_target, #711 '
+        'die_area_budget_um) both read English DESIGN DOCUMENTS, where denial '
+        'is spellable and was spelled; consulting `_prose_polarity` here '
+        'would add a branch that can never fire.',
+    'analog_a5_pdk_device_limits::deck_rules':
+        "A magic DRC deck's own rule statements (`width`, `spacing`, `area`, "
+        "`surround` productions in the deck's integer units). The deck is "
+        'written by the PDK packaging and states a rule or does not; there is '
+        "no deck syntax for 'MINWIDTH is NOT 0.14'. This reader defaults "
+        'NOTHING — a rule the deck does not state is absent, and a caller '
+        'that needs it must say so. The two defects this gate was built from '
+        '(#706 pdk_target, #711 die_area_budget_um) both read English DESIGN '
+        'DOCUMENTS, where denial is spellable and was spelled; consulting '
+        '`_prose_polarity` here would add a branch that can never fire.',
+    'analog_a5_pdk_device_limits::fet_limits':
+        "A magic PDK's gencell definitions, `proc <ns>::<model>_defaults {} { "
+        'return { ... lmin <n> wmin <n> ... compatible {...} } }` — formal '
+        'Tcl written by the PDK packaging, with no form that denies a '
+        'default. Where one model recurs across blocks the SMALLEST limit is '
+        'taken, because that is what the PDK permits; that is an arithmetic '
+        'choice over machine values, not a polarity question. The two defects '
+        'this gate was built from (#706 pdk_target, #711 die_area_budget_um) '
+        'both read English DESIGN DOCUMENTS, where denial is spellable and '
+        'was spelled; consulting `_prose_polarity` here would add a branch '
+        'that can never fire.',
+    'analog_a6_drc_attribute::top_level_shapes':
+        "Magic `.mag` sections and `rect` productions of the layout's own top "
+        'cell, read through `magic_gencell_layout_lib`. Identical grammar and '
+        'identical reason to `analog_a5_layout_emit::parse_cell` above. The '
+        'two defects this gate was built from (#706 pdk_target, #711 '
+        'die_area_budget_um) both read English DESIGN DOCUMENTS, where denial '
+        'is spellable and was spelled; consulting `_prose_polarity` here '
+        'would add a branch that can never fire.',
+    'pad_bterm_coincidence_check::def_net_terminals':
+        'DEF `NETS` entries, `- <net> ( <inst> <pin> ) ... ;` productions '
+        'emitted by the router. DEF has no form that denies a connection: a '
+        'terminal is listed on the net or it is not. Direct precedent: '
+        '`digital_hardmacro_gen::_specialnet_entries` (DEF SPECIALNETS) and '
+        '`macro_obs_geometry_intersect_check::parse_via_layers` (DEF VIAS), '
+        'the same grammar exempted for the same stated reason. The two '
+        'defects this gate was built from (#706 pdk_target, #711 '
+        'die_area_budget_um) both read English DESIGN DOCUMENTS, where denial '
+        'is spellable and was spelled; consulting `_prose_polarity` here '
+        'would add a branch that can never fire.',
+    'pad_bterm_coincidence_check::def_pins':
+        'DEF `PINS` entries, `- <pin> + NET <net> + LAYER <l> ( x1 y1 ) ( x2 '
+        'y2 ) + PLACED ( x y ) <orient> ;` productions emitted by the router. '
+        'Formal DEF grammar with no denial form; a pin with no LAYER/PLACED '
+        'pair is recorded with `rect: None` rather than guessed. Direct '
+        'precedent: `_ic_release_artefacts::_def_pins`, the same section '
+        'exempted for the same stated reason. The two defects this gate was '
+        'built from (#706 pdk_target, #711 die_area_budget_um) both read '
+        'English DESIGN DOCUMENTS, where denial is spellable and was spelled; '
+        'consulting `_prose_polarity` here would add a branch that can never '
+        'fire.',
+    'pad_bterm_coincidence_check::layer_min_widths':
+        'Technology-LEF `LAYER <name> ... WIDTH <n> ; END <name>` '
+        'productions. Formal foundry grammar in which there is no way to '
+        "write 'WIDTH is NOT 0.14'; a layer stating no WIDTH does not enter "
+        'the returned map. Direct precedent: '
+        '`pdk_via_patch_legalize::_routing_rules` and '
+        '`phase3_one_shot_runner::_pdn_em_width_floor`, the same file format '
+        'exempted for the same stated reason. The two defects this gate was '
+        'built from (#706 pdk_target, #711 die_area_budget_um) both read '
+        'English DESIGN DOCUMENTS, where denial is spellable and was spelled; '
+        'consulting `_prose_polarity` here would add a branch that can never '
+        'fire.',
+    'register_bus_driver_gen::bus_contract':
+        'SystemVerilog `typedef struct packed { ... } <name>_t;` and enum '
+        "productions in the design's OWN staged package. HDL is a machine "
+        'grammar with no prose form that denies a declared field — a field is '
+        'in the struct or it is not — and this function REFUSES with a named '
+        'reason unless every role a register access needs is present, rather '
+        'than defaulting. Direct precedent: '
+        '`design_one_shot_runner::step_full_stack_tb_gen`, HDL grammar '
+        'exempted for the same stated reason. The two defects this gate was '
+        'built from (#706 pdk_target, #711 die_area_budget_um) both read '
+        'English DESIGN DOCUMENTS, where denial is spellable and was spelled; '
+        'consulting `_prose_polarity` here would add a branch that can never '
+        'fire.',
 }
-
 
 def _aliases(tree: ast.Module) -> Set[str]:
     """Local names bound to something from the polarity module."""

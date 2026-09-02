@@ -67,6 +67,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
+import _flow_reason_taxonomy as _reason_taxonomy  # noqa: E402
 import _path_layout as _pl  # noqa: E402
 
 # SymbiYosys transcript signatures + pass markers. Tool-output shapes,
@@ -195,6 +196,21 @@ def _sibling_self_skip(formal_dir: Path):
     return None
 
 
+def _sibling_payload(formal_dir: Path, name: str):
+    """The parsed JSON of a sibling this module already matched, or None.
+
+    Read back rather than threaded through `_sibling_self_skip`'s return: that
+    helper's `-> basename or None` contract is asserted by four tests, and a
+    tuple return would move them for a reason that has nothing to do with what
+    they measure.
+    """
+    try:
+        data = json.loads((formal_dir / name).read_text(errors="replace"))
+    except (OSError, ValueError):
+        return None
+    return data if isinstance(data, dict) else None
+
+
 def _sibling_env_gap(formal_dir: Path):
     """#216 — return `(basename, env_gap_dict)` of a co-located sibling that
     discloses an unreachable formal ENGINE, else None.
@@ -289,6 +305,36 @@ def _first_results_json(formal_dir):
     return top          # non-existent top-level path, for the message
 
 
+
+def _declared_skip_class(data) -> str:
+    """The reason class for a self-reported skip, from the DECLARER.
+
+    TYPED (#1978). `_flow_reason_taxonomy.infer_nonverdict_reason` falls closed
+    to EXECUTION_ERROR — "the gate blew up" — for any rc=2 whose report names
+    no class, and this gate does not blow up on this branch: it reads an honest
+    disclosure and agrees with it. MEASURED before this: the flow booked the
+    #675 self-skip as EXECUTION_ERROR, `check_step` promoted step 5 to
+    INCOMPLETE, and `required_outputs` then made it MISSING — which is the
+    Phase-3 cascade block #675 exists to remove.
+
+    THE CLASS IS THE DECLARER'S, not this gate's guess. If the manifest names
+    one, it is used verbatim. Only when it names none does this gate say
+    DESIGN_DECLARED_NA, and that word is earned by the branch's own narrowness,
+    not by matching prose: results.json is absent, a sibling explicitly
+    self-reports a self-skip VERDICT, it is not an authoring-incomplete
+    manifest (that branch returned INCOMPLETE above) and it is not an
+    ENV_UNAVAILABLE manifest (that branch hard-FAILs below, on purpose — an
+    unreachable engine is never vacuous here). What is left is a runner
+    declaring that the condition for running a proof was not met, which is what
+    the flow renders as SKIPPED-CONDITION.
+    """
+    if isinstance(data, dict):
+        declared = _reason_taxonomy.report_reason_class(data)
+        if declared:
+            return declared
+    return _reason_taxonomy.DESIGN_DECLARED_NA
+
+
 def audit(project: Path) -> dict:
     formal_dir = _pl.formal_dir(project)
     results_path = _first_results_json(formal_dir)
@@ -327,7 +373,9 @@ def audit(project: Path) -> dict:
             return rep
         skip_sib = _sibling_self_skip(formal_dir)
         if skip_sib is not None:
-            rep.update(verdict="SKIPPED-CONDITION", rc=2)
+            rep.update(verdict="SKIPPED-CONDITION", rc=2,
+                       reason_class=_declared_skip_class(
+                           _sibling_payload(formal_dir, skip_sib)))
             rep["findings"].append(
                 f"SELF_REPORTED_SKIP (#675): results.json absent but the "
                 f"co-located sibling '{skip_sib}' honestly self-reports no "
@@ -371,7 +419,8 @@ def audit(project: Path) -> dict:
 
     verdict_field = str(results.get("verdict", "")).upper().replace("_", "-")
     if verdict_field == "SKIPPED-CONDITION":
-        rep.update(verdict="SKIPPED-CONDITION", rc=2)
+        rep.update(verdict="SKIPPED-CONDITION", rc=2,
+                   reason_class=_declared_skip_class(results))
         rep["findings"].append(
             "SELF_REPORTED_SKIP: results.json honestly reports no proof "
             "ran (#440 manifest shape) — vacuous for this gate")

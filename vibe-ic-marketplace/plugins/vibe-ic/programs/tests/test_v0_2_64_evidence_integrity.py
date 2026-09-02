@@ -25,6 +25,7 @@ Defenses pinned here:
 chip-AGNOSTIC: synthetic step dicts + tmp projects only.
 """
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -232,10 +233,36 @@ def test_the_rule_only_ever_demotes_a_plain_pass(tmp_path):
 
 # ── #433(a)/(c): phase2 manifest emitter shapes (source pins) ──────────────
 
+def _step_section(src: str, anchor: str) -> str:
+    """The emitter's OWN section for `anchor`, bounded by its next sibling.
+
+    A FIXED character count is not a section. The first version of the two
+    tests below cut 1800 / 2200 characters after the anchor comment, so every
+    later insertion inside the section walked a token past the cut: #1974's
+    program-first property authoring pushed `SKIPPED-CONDITION` to offset 2590
+    and the assertion started reporting a defect that is the window and not the
+    emitter. A larger constant only moves the expiry date, and the expiry looks
+    exactly like a real regression.
+
+    `step_emit_phase2_manifests` divides itself with `# Step <n>: …` comments at
+    one indentation; take the anchor's comment line to the next such comment (or
+    the end of the enclosing function). The boundary is then the file's own, and
+    it moves when the emitter is re-sectioned instead of when it grows.
+    """
+    lines = src.splitlines(keepends=True)
+    starts = [n for n, ln in enumerate(lines)
+              if re.match(r"^\s*# Step \S+[:.]", ln)]
+    hit = next(n for n in starts if anchor in lines[n])
+    indent = len(lines[hit]) - len(lines[hit].lstrip())
+    for n in starts:
+        if n > hit and (len(lines[n]) - len(lines[n].lstrip())) == indent:
+            return "".join(lines[hit:n])
+    return "".join(lines[hit:])
+
+
 def test_formal_manifest_never_copies_tb_results():
     src = (PROGRAMS / "design_one_shot_runner.py").read_text()
-    i = src.index("Step 5: formal")
-    window = src[i:i + 1800]
+    window = _step_section(src, "Step 5: formal")
     assert "SKIPPED-CONDITION" in window
     assert "all_proved" in window  # documented as proof-run-only
     assert "sim_full_stack" not in window.split("#433c")[0] or True
@@ -245,8 +272,7 @@ def test_formal_manifest_never_copies_tb_results():
 
 def test_sim_pass_pair_requires_real_transcript():
     src = (PROGRAMS / "design_one_shot_runner.py").read_text()
-    i = src.index("Step 4: simulation")
-    window = src[i:i + 2200]
+    window = _step_section(src, "Step 4: simulation")
     assert 'rglob("ref_tb.log")' in window
     assert "st_size > 0" in window
     assert '"SKIP"' in window  # the refusal branch exists

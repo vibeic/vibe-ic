@@ -55,7 +55,11 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Tuple
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import _atomic_artefact as _aa  # noqa: E402 — vibe-ic#1082
 
 #: fraction of vdd above/below which a node counts as resolved to a rail
 RAIL_FRACTION = 0.5
@@ -210,7 +214,7 @@ def main(argv=None) -> int:
                  reset_active_high=not a.reset_active_low)
     print(json.dumps(out, indent=2))
     if a.json:
-        open(a.json, "w").write(json.dumps(out, indent=2) + "\n")
+        _aa.write_text(a.json, json.dumps(out, indent=2) + "\n")
     return {"LIVE": 0, "NOT_MEASURED": 2}.get(str(out["result"]), 1)
 
 

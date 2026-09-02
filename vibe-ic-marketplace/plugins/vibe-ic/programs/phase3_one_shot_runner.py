@@ -19271,7 +19271,8 @@ def _named_violation_reroute_tcl(rpt_path: str) -> str:
     chip-AGNOSTIC: odb API + the tool's own report; no PDK, layer or design
     literal."""
     return (
-        '# === named-violation targeted rip-up + re-route ===\n'
+        _spare_safe_clear_net_proc_tcl()
+        + '# === named-violation targeted rip-up + re-route ===\n'
         'set _nvr_rpt "' + rpt_path + '"\n'
         'for {set _nvr_p 1} {$_nvr_p <= '
         + str(_NAMED_VIOL_REROUTE_MAX_PASSES) + '} {incr _nvr_p} {\n'
@@ -19306,21 +19307,23 @@ def _named_violation_reroute_tcl(rpt_path: str) -> str:
         '  }\n'
         '  set _nvr_cleared 0; set _nvr_skipped 0\n'
         '  if {[catch {\n'
+        # THE SAME DECISION AS EVERY OTHER CLEAR SITE, and it is taken in the
+        # ONE place that owns it. This loop used to re-type the POWER/GROUND
+        # and dont_touch filters in place; a second copy of the v1.5.65
+        # protection is how the first one drifts. Only the SET of nets differs
+        # here (the ones the router's own DRC report cites), so only the loop
+        # is local. The three counted outcomes reproduce the previous
+        # arithmetic exactly: a named net with no wire increments NEITHER
+        # counter, as before.
         '    foreach _nvr_nm $_nvr_names {\n'
         '      set _nvr_net [[ord::get_db_block] findNet $_nvr_nm]\n'
         '      if {$_nvr_net eq "NULL" || $_nvr_net eq ""} '
         '{ incr _nvr_skipped; continue }\n'
-        '      set _nvr_st [$_nvr_net getSigType]\n'
-        '      if {$_nvr_st eq "POWER" || $_nvr_st eq "GROUND"} '
-        '{ incr _nvr_skipped; continue }\n'
-        '      set _nvr_dnt 0\n'
-        '      foreach _nvr_it [$_nvr_net getITerms] {\n'
-        '        if {[[$_nvr_it getInst] isDoNotTouch]} { set _nvr_dnt 1; break }\n'
+        '      switch -- [_vibeic_spare_safe_clear_net $_nvr_net] {\n'
+        '        CLEARED  { incr _nvr_cleared }\n'
+        '        UNROUTED { }\n'
+        '        default  { incr _nvr_skipped }\n'
         '      }\n'
-        '      if {$_nvr_dnt} { incr _nvr_skipped; continue }\n'
-        '      set _nvr_w [$_nvr_net getWire]\n'
-        '      if {$_nvr_w ne "NULL"} '
-        '{ odb::dbWire_destroy $_nvr_w; incr _nvr_cleared }\n'
         '    }\n'
         '  } _nvr_e]} { puts "NAMED_VIOL_REROUTE_CLEAR_NONFATAL: $_nvr_e"; break }\n'
         '  puts "NAMED_VIOL_REROUTE_CLEARED: $_nvr_cleared '
@@ -19366,7 +19369,25 @@ def _named_violation_reroute_tcl(rpt_path: str) -> str:
         '    break\n'
         '  }\n'
         '}\n'
-        'puts "NAMED_VIOL_REROUTE_DONE"\n')
+        # THE REPLACEMENT PROTECTION, EMITTED WHERE THE REROUTE HAPPENED.
+        # `_spare_safe_routing_clear_tcl`'s v1.8.43 note says the `*spare*`
+        # name filter was removed and "replaced by the post-reroute integrity
+        # CHECK". MEASURED on tree 5e850b3acee8: that check was wired at ONE
+        # call site — `_ship_postroute_convergence_tcl`, marker SHIP — and this
+        # reroute, which rips up and re-routes real nets inside the PnR script,
+        # had none. A spare-tie net that comes back with no wire is exactly the
+        # v1.5.65 hazard, and it was unobservable on this path.
+        #
+        # DISCLOSURE, NOT YET A REFUSAL, and saying so is the point: the only
+        # consumer of this marker family, `_parse_ship_repair_log`, reads
+        # `SHIP_UNROUTED_NETS` out of the SHIP repair log, which is a different
+        # log from the PnR one this block writes to. Emitting `SHIP_…` here
+        # would put the token where nothing parses it; teaching the PnR
+        # promotion gate to REFUSE on a new one is a verdict change that needs
+        # a corpus sweep this does not have. The count is named and printed, so
+        # the failure is visible on the path that can cause it.
+        + _routing_integrity_check_tcl("NAMED_VIOL_REROUTE").rstrip() + '\n'
+        + 'puts "NAMED_VIOL_REROUTE_DONE"\n')
 
 
 def _route_drc_report_tcl(rpt_path: str) -> str:
@@ -19445,6 +19466,60 @@ def _route_drc_report_tcl(rpt_path: str) -> str:
     )
 
 
+def _spare_safe_clear_net_proc_tcl() -> str:
+    """The ONE decision every routing-clear site in this runner makes, as a Tcl
+    proc — and the only place `odb::dbWire_destroy` is written.
+
+    WHY A PROC AND NOT A SECOND COPY OF THE FILTER. Until this landed there
+    were two: `_spare_safe_routing_clear_tcl` (clear every signal net) and the
+    NAMED_VIOL_REROUTE loop in `_named_violation_reroute_tcl` (clear only the
+    nets the router's own DRC report cites), which re-typed the SAME two
+    protections in place — skip POWER/GROUND, skip any net touching a
+    `isDoNotTouch` instance. Two copies of one rule drift, and the v1.5.65
+    post-mortem is what drift costs here: a clear that let the spare-tie nets
+    (`spare_tielo`/`spare_tiehi`, the Design-for-ECO spare-input bindings) go
+    unrouted, after which the rerouter merged them into `la_data_out` /
+    `user_irq` — a real LVS mismatch.
+
+    The two loops differ ONLY in which nets they walk, so the loop stays with
+    the caller and the DECISION comes from here. It returns a word rather than
+    a boolean because the callers count three different outcomes and their log
+    lines must not change:
+
+        PG         POWER/GROUND — never counted by either caller
+        PROTECTED  a dont_touch instance is on the net; its route is pinned
+        UNROUTED   nothing to destroy
+        CLEARED    the wire was destroyed
+
+    The `*spare*` NAME filter is NOT here: v1.8.43 removed it because
+    preserving one net's stale detailed routing across a global re-route broke
+    `detailed_route` (DRT-0206) while protecting nothing —
+    `odb::dbWire_destroy` destroys a WIRE, never the net or its iterms, so the
+    DEF NETS terminal list that IS the ECO binding is untouched. Its
+    replacement is the post-reroute `_routing_integrity_check_tcl`, which is
+    why that check is now emitted after EVERY reroute and not only after the
+    shipped-signoff one.
+
+    Redefining a proc is idempotent in Tcl, so every emitter may prepend this
+    without knowing whether another already did.
+
+    chip-AGNOSTIC: odb API only; no PDK, layer, vendor or design literal.
+    """
+    return (
+        "proc _vibeic_spare_safe_clear_net {_n} {\n"
+        "  set _st [$_n getSigType]\n"
+        "  if {$_st eq \"POWER\" || $_st eq \"GROUND\"} { return PG }\n"
+        "  foreach _it [$_n getITerms] {\n"
+        "    if {[[$_it getInst] isDoNotTouch]} { return PROTECTED }\n"
+        "  }\n"
+        "  set _w [$_n getWire]\n"
+        "  if {$_w eq \"NULL\"} { return UNROUTED }\n"
+        "  odb::dbWire_destroy $_w\n"
+        "  return CLEARED\n"
+        "}\n"
+    )
+
+
 def _spare_safe_routing_clear_tcl(marker_prefix: str = "SHIP") -> str:
     """Emit a TCL fragment that clears signal-net routing while preserving
     spare / dont_touch nets. Self-contained, NONFATAL-guarded;
@@ -19500,24 +19575,16 @@ def _spare_safe_routing_clear_tcl(marker_prefix: str = "SHIP") -> str:
     stronger than the name filter — it covers spare AND non-spare nets, and it
     reports the offenders by name instead of failing silently."""
     return (
-        "if {[catch {\n"
+        _spare_safe_clear_net_proc_tcl()
+        + "if {[catch {\n"
         "  set _rrc 0; set _skip 0\n"
         "  foreach _net [[ord::get_db_block] getNets] {\n"
-        "    set _st [$_net getSigType]\n"
-        "    if {$_st eq \"POWER\" || $_st eq \"GROUND\"} { continue }\n"
-        "    # --- dont_touch filter (v1.5.65 post-mortem fix, KEPT: an\n"
-        "    #     instance the flow pinned must not have its route re-derived).\n"
-        "    #     The *spare* NAME filter is GONE — see the docstring; it broke\n"
-        "    #     detailed_route (DRT-0206) without protecting anything, and is\n"
-        "    #     replaced by the post-reroute integrity CHECK below. ---\n"
-        "    set _has_dnt 0\n"
-        "    foreach _it [$_net getITerms] {\n"
-        "      if {[[$_it getInst] isDoNotTouch]} { set _has_dnt 1; break }\n"
+        # THE DECISION LIVES IN THE PROC, not here. It used to be typed out
+        # in this loop and typed out AGAIN in the NAMED_VIOL_REROUTE loop.
+        "    switch -- [_vibeic_spare_safe_clear_net $_net] {\n"
+        "      PROTECTED { incr _skip }\n"
+        "      CLEARED   { incr _rrc }\n"
         "    }\n"
-        "    if {$_has_dnt} { incr _skip; continue }\n"
-        "    # --- end filter ---\n"
-        "    set _w [$_net getWire]\n"
-        "    if {$_w ne \"NULL\"} { odb::dbWire_destroy $_w; incr _rrc }\n"
         "  }\n"
         f"  puts \"{marker_prefix}_ROUTING_CLEARED: $_rrc (spare_preserved=$_skip)\"\n"
         f"}} e]}} {{ puts \"{marker_prefix}_RRC_NONFATAL: $e\" }}\n"

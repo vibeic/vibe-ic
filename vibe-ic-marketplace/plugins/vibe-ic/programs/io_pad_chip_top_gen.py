@@ -120,6 +120,7 @@ from typing import Dict, List, Optional, Sequence, Tuple
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+import _atomic_artefact as _aa  # noqa: E402 — vibe-ic#1082
 import _l_doc_pad_placement as LPP          # noqa: E402
 import _pad_ring as PR                      # noqa: E402
 
@@ -894,8 +895,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
 
     target = Path(args.out_json) if args.out_json else (
         project / "reports" / "phase3" / "io_pad_chip_top.json")
-    target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_text(json.dumps(rec, indent=2, ensure_ascii=False) + "\n")
+    _aa.write_text(target,
+                   json.dumps(rec, indent=2, ensure_ascii=False) + "\n")
     return rc
 
 

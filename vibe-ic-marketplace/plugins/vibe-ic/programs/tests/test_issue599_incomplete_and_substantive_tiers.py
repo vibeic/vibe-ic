@@ -91,6 +91,17 @@ def _status(tmp_path, prints, monkeypatch):
     return FC.check_step(tmp_path, step, {}).status
 
 
+def _reasons(tmp_path, prints, monkeypatch):
+    """The same probe as `_status`, returning the reasons a reviewer is shown."""
+    g = tmp_path / "g.py"
+    g.write_text("print(%r)\n" % prints, encoding="utf-8")
+    monkeypatch.setattr(FC, "_resolve_program_cmd",
+                        lambda cmd, cwd=None: [sys.executable, str(g)])
+    step = {"id": "T1", "name": "tier probe",
+            "gate": {"program_exit_zero": "probe"}}
+    return FC.check_step(tmp_path, step, {}).reasons
+
+
 def test_a_gate_that_examined_nothing_is_still_vacuous(tmp_path, monkeypatch):
     """THE ACCEPT CASE, and the one the other two must not swallow."""
     assert _status(tmp_path, "VACUOUS_PASS: nothing applied", monkeypatch) == "VACUOUS_PASS"
@@ -120,11 +131,33 @@ def test_a_plain_pass_is_untouched(tmp_path, monkeypatch):
     assert _status(tmp_path, "all good", monkeypatch) == "PASS"
 
 
-def test_the_new_hints_are_held_out_of_the_displayed_reasons():
+def test_the_new_hints_are_held_out_of_the_displayed_reasons(tmp_path,
+                                                             monkeypatch):
     """An internal marker printed as a reason is noise a reviewer learns to
-    skip — the same treatment every other hint already gets."""
-    seg = SRC[SRC.index("non_hint_reasons = [r for r in reasons"):][:700]
-    assert "_SUBSTANTIVE_HINT_PREFIX" in seg and "_INCOMPLETE_HINT_PREFIX" in seg
+    skip — the same treatment every other hint already gets.
+
+    DRIVEN, not read. The first version of this cut a FIXED 700 characters
+    after the `non_hint_reasons = [...]` anchor and asked whether the two
+    prefix NAMES appeared in that slice. Every later prefix inserted into the
+    same filter chain (`_ADVISORY_RECORD_HINT_PREFIX` was one) pushes
+    `_INCOMPLETE_HINT_PREFIX` further from the anchor — it sits at offset 743
+    today — so the assertion expires on a tree where the filter is correct,
+    and expires looking exactly like a regression. A bigger constant is the
+    same defect with a later expiry date.
+
+    The property is about what a reviewer SEES, so drive `check_step` with a
+    gate that raises both markers and read `result.reasons`. Removing either
+    prefix from the filter chain puts the raw marker in that list.
+    """
+    reasons = _reasons(
+        tmp_path,
+        "SUBSTANTIVE_PASS: verified the inline command\n"
+        "INCOMPLETE: the AI sub-track did not read", monkeypatch)
+    leaked = [r for r in reasons
+              if r.startswith(FC._SUBSTANTIVE_HINT_PREFIX)
+              or r.startswith(FC._INCOMPLETE_HINT_PREFIX)]
+    assert not leaked, (
+        f"an internal hint marker reached the displayed reasons: {leaked}")
 
 
 def test_incomplete_is_counted_labelled_and_rendered():

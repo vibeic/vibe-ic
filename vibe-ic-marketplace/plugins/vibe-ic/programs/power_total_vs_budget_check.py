@@ -170,6 +170,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import _atomic_artefact as _aa  # noqa: E402
+import _flow_reason_taxonomy as _reason_taxonomy  # noqa: E402
 from _ppa import power as _pw  # noqa: E402
 
 TOOL = "power_total_vs_budget_check"
@@ -379,6 +380,32 @@ def evaluate(project: Path, budget_override: Optional[float]
         if code != "NO_REQUIREMENT" and res.get("refusal"):
             lacks.append(res["refusal"])
         rep["missing_authority"] = "; ".join(lacks)
+        # TYPED (#1978). `_flow_reason_taxonomy.infer_nonverdict_reason` is
+        # deliberately fail-closed: an rc=2 that carries no declared class is
+        # booked EXECUTION_ERROR — "the gate blew up" — and this gate did not
+        # blow up, it computed exactly the right answer and refused. Only the
+        # PRODUCER can say which refusal this is, so it says so in the field
+        # `report_reason_class` reads, and never in prose.
+        #
+        # NEITHER CLASS IS SKIP-ELIGIBLE, and that is the point: this refusal
+        # must not become a benign skip. What changes is that the flow stops
+        # calling a correct refusal a crash, and a reader is told whether to go
+        # to the producer or to the report.
+        #
+        #   BLOCKED_BY_UPSTREAM  an input this gate needs was never produced —
+        #       no power report exists at all, or no limit was declared. The
+        #       limit is a REQUIREMENT that arrives in the design's own input
+        #       documents and is extracted by Phase 1 (see the module
+        #       docstring); a design that has not stated one has not produced
+        #       it, and this gate will not invent it.
+        #   ZERO_DENOMINATOR     both inputs exist and no comparable pair came
+        #       out of them — a report with no readable Total row, or a number
+        #       whose activity model cannot be compared to the declared limit.
+        #       The producer ran; its output holds nothing to compare.
+        rep["reason_class"] = (
+            _reason_taxonomy.BLOCKED_BY_UPSTREAM
+            if (not reports or requirement is None)
+            else _reason_taxonomy.ZERO_DENOMINATOR)
         return "INCOMPLETE", rep
 
     rep["comparison"] = {

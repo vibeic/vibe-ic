@@ -62,7 +62,11 @@ import json
 import re
 import subprocess
 import sys
+from pathlib import Path
 from typing import Dict, Optional, Tuple
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import _atomic_artefact as _aa  # noqa: E402 — vibe-ic#1082
 
 # Where a magic-based PDK keeps the two files this program reads. Both are
 # arguments; these are only the conventional names.
@@ -341,7 +345,7 @@ def main() -> int:
             f"cannot read is ABSENT, never a default.")
         print(json.dumps(out, indent=2))
         if a.json:
-            open(a.json, "w").write(json.dumps(out, indent=2) + "\n")
+            _aa.write_text(a.json, json.dumps(out, indent=2) + "\n")
         return 2
 
     lim = fet_limits(gt)
@@ -386,7 +390,7 @@ def main() -> int:
 
     print(json.dumps(out, indent=2))
     if a.json:
-        open(a.json, "w").write(json.dumps(out, indent=2) + "\n")
+        _aa.write_text(a.json, json.dumps(out, indent=2) + "\n")
     return rc
 
 

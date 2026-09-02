@@ -53,10 +53,46 @@ import _p0_umbrella_probe_flow as _probe  # noqa: E402
 # helpers
 # ---------------------------------------------------------------------------
 def _project_with_rtl(tmp_path: Path) -> Path:
+    """A project shaped like a run that actually happened.
+
+    THE DELIVERY-ROUTE DECLARATION IS NOT DECORATION. `main()` runs several
+    post-passes AFTER `check_step`, and `_attribute_condition_owner_blocks`
+    (#1983) is one of them: every step that names `condition_owner: {step:
+    0.5ic, declaration: delivery_route}` is hard `MISSING`, attributed
+    `blocked-by-upstream(step 0.5ic)`, unless exactly one of the declaration's
+    three alternatives exists in the tree. A `monkeypatch` that makes
+    `check_step` return PASS does not reach that pass — it is not a step gate.
+
+    MEASURED on tree 5e850b3acee8 without this file: steps 15.5ic, 26.5ic,
+    37.5ip and 37.5ic all go MISSING with
+
+        blocked-by-upstream(step 0.5ic): … delivery_route declaration is
+        MISSING: none of ['input/submission_template/slots/*.yaml',
+        'input/submission_template/NO_TEMPLATE.txt',
+        'input/submission_template/SELF_TAPEOUT.txt'] exists
+
+    None of the four is P0 and none is in `_OPEN_SOURCE_CONTAINER_BLOCKED_STEPS`,
+    so `non_blocked_failing` is non-empty, the OSS-constraints promotion never
+    fires and `overall` stops at FAIL — before this file's subject, what the
+    consumers do with a RECORD, has decided anything.
+
+    The repair is the fixture, not the rule. Stubbing
+    `_attribute_condition_owner_blocks` would blind these fixtures to a real
+    blocking rule and hide exactly the #1983 x OSS-promotion interaction a real
+    run meets every time; adding the four steps to
+    `_OPEN_SOURCE_CONTAINER_BLOCKED_STEPS` would loosen a shipped gate so a
+    fixture can pass. This project declares a route instead — the IP/hardmacro
+    terminal, the one alternative a bare RTL module with no operator template
+    and no die of its own honestly is.
+    """
     proj = tmp_path / "proj"
     (proj / "rtl").mkdir(parents=True)
     (proj / "rtl" / "top.v").write_text(
         "module top(input a, output b); assign b = a; endmodule\n")
+    tmpl = proj / "input" / "submission_template"
+    tmpl.mkdir(parents=True)
+    (tmpl / "NO_TEMPLATE.txt").write_text(
+        "delivered as an IP/hardmacro: no operator submission template\n")
     return proj
 
 

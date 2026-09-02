@@ -18,10 +18,13 @@ Test files may name designs and PDKs; the gate source may not.
 """
 from __future__ import annotations
 
+import ast
 import importlib.util
+import io
 import json
 import subprocess
 import sys
+import tokenize
 from pathlib import Path
 
 import pytest
@@ -425,14 +428,81 @@ def test_emit_for_run_writes_the_declared_path(tmp_path):
 # ---------------------------------------------------------------------------
 # Generality
 # ---------------------------------------------------------------------------
+_BANNED = ("sky130", "gf180", "ihp-sg13", "nangate", "asap7", "ibex",
+           "caravel", "spm", "subservient", "sha256", "opentitan",
+           "user_project_wrapper", "chip_top", "top_dut")
+
+
+def _code_only(source: str) -> str:
+    """The program's CODE: every docstring and comment removed.
+
+    THE POPULATION, and it was defined by one spelling. `src.split('\"\"\"', 2)
+    [-1]` strips exactly the MODULE docstring and calls everything after it the
+    gate. A FUNCTION docstring is prose too, and on tree 5e850b3acee8 one of
+    them — `_area_unit_from_liberty`, "measured on gf180mcuD, where the host has
+    no `/foss` at all" — is a MEASUREMENT RECORD that this test counted as gate
+    code.
+
+    Deleting the word from that record would be discarding a measured fact to
+    make a ruler green, and adding `gf180mcuD` to an allow-list would be blind
+    to every other spelling. So the ruler is fixed instead: docstrings are
+    prose wherever they sit, and the ban applies to code. A string CONSTANT
+    that is not a docstring stays in the population — that is data the program
+    acts on, and a PDK name there is the defect this guards.
+
+    Corroboration that the record is not a violation: the repo-wide
+    `source_chip_agnostic_check` is rc=0 over this tree and does not flag it.
+    """
+    tree = ast.parse(source)
+    lines = source.splitlines(keepends=True)
+    for node in ast.walk(tree):
+        body = getattr(node, "body", None)
+        if not isinstance(node, (ast.Module, ast.ClassDef, ast.FunctionDef,
+                                 ast.AsyncFunctionDef)) or not body:
+            continue
+        first = body[0]
+        if not (isinstance(first, ast.Expr)
+                and isinstance(first.value, ast.Constant)
+                and isinstance(first.value.value, str)):
+            continue
+        l1, c1, l2, c2 = (first.lineno, first.col_offset,
+                          first.end_lineno, first.end_col_offset)
+        if l1 == l2:
+            lines[l1 - 1] = (lines[l1 - 1][:c1] + " " * (c2 - c1)
+                             + lines[l1 - 1][c2:])
+        else:
+            lines[l1 - 1] = lines[l1 - 1][:c1] + "\n"
+            for n in range(l1, l2 - 1):
+                lines[n] = "\n"
+            lines[l2 - 1] = " " * c2 + lines[l2 - 1][c2:]
+    blanked = "".join(lines)
+    out = []
+    for tok in tokenize.generate_tokens(io.StringIO(blanked).readline):
+        if tok.type == tokenize.COMMENT:
+            continue
+        out.append("\n" if tok.type in (tokenize.NL, tokenize.NEWLINE)
+                   else tok.string)
+    return "".join(out)
+
+
 def test_no_design_or_vendor_literal_in_the_gate():
-    src = PROG.read_text()
-    body = src.split('"""', 2)[-1]
-    banned = ("sky130", "gf180", "ihp-sg13", "nangate", "asap7", "ibex",
-              "caravel", "spm", "subservient", "sha256", "opentitan",
-              "user_project_wrapper", "chip_top", "top_dut")
-    for tok in banned:
+    body = _code_only(PROG.read_text())
+    for tok in _BANNED:
         assert tok not in body, f"design/PDK literal {tok!r} leaked into gate"
+
+
+@pytest.mark.parametrize("tok", _BANNED)
+def test_the_ban_is_red_when_the_literal_is_in_the_code(tok):
+    """THE REVERSE POLE. A population that excludes prose could equally have
+    been narrowed until it excluded the only red; this drives every banned
+    token through the same extractor in each position and asserts the answer
+    differs. A guard that cannot go red for any mutation is not a guard."""
+    prose = f'"""a module.\n\n    measured on {tok}, which is a record.\n"""\n'
+    assert tok not in _code_only(prose + "X = 1\n")
+    assert tok not in _code_only('"""a module."""\n\n\ndef f():\n'
+                                 f'    """measured on {tok}."""\n    return 1\n')
+    assert tok not in _code_only(f'"""a module."""\n\nX = 1  # on {tok}\n')
+    assert tok in _code_only(f'"""a module."""\n\nPDK = "{tok}"\n')
 
 
 def test_cell_names_come_from_the_log_not_a_builtin_list():

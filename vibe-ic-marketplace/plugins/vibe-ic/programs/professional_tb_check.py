@@ -126,6 +126,7 @@ import xml.etree.ElementTree as ET
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+import _flow_reason_taxonomy as _reason_taxonomy
 import _path_layout as _pl
 
 
@@ -256,14 +257,25 @@ def _functional_coverage(bundle_dir: Optional[Path]) -> Optional[Dict[str, Any]]
 def check(project: Path) -> Dict[str, Any]:
     report = project / "reports" / "phase2" / "gates" / "professional_tb.json"
     if not report.is_file():
+        # TYPED (#1978): the producing step left nothing, so the artefact this
+        # gate reads was never produced. Untyped, the flow falls closed to
+        # EXECUTION_ERROR — "the gate blew up" — for a gate that read the tree
+        # correctly and found the step had not run. Not skip-eligible: an
+        # unrun producer is not a design declaration of N/A.
         return {"gate": "professional_tb", "verdict": "NOT_APPLICABLE",
+                "reason_class": _reason_taxonomy.BLOCKED_BY_UPSTREAM,
                 "reason": "no professional_tb.json (step did not run)"}
     try:
         rec = json.loads(report.read_text(errors="ignore"))
     except (OSError, ValueError) as e:
-        return {"gate": "professional_tb", "verdict": "IO_ERROR", "error": str(e)}
+        return {"gate": "professional_tb", "verdict": "IO_ERROR",
+                "reason_class": _reason_taxonomy.EXECUTION_ERROR,
+                "reason": f"the producer's report is unreadable: {e}",
+                "error": str(e)}
     if not isinstance(rec, dict):
         return {"gate": "professional_tb", "verdict": "IO_ERROR",
+                "reason_class": _reason_taxonomy.EXECUTION_ERROR,
+                "reason": "the producer's report is not a JSON object",
                 "error": "report is not a JSON object"}
     if bool(rec.get("functional_mismatch")):
         return {"gate": "professional_tb", "verdict": "FAIL",
@@ -292,6 +304,15 @@ def check(project: Path) -> Dict[str, Any]:
             # to remove) and not a defect (which would assert a finding from
             # an absent input). See the docstring for the measurement.
             res["verdict"] = "NOT_CHECKED"
+            # TYPED (#1978). The producer RAN — it wrote a report declaring a
+            # bundle — and the tree that bundle names is not in this copy of
+            # the project. That is an artefact an upstream step owes and has
+            # not delivered here, so BLOCKED_BY_UPSTREAM, which is NOT
+            # skip-eligible: it stays a disclosed non-verdict and never
+            # becomes a clean skip. It is specifically NOT
+            # DESIGN_DECLARED_NA — nothing in the design said this step does
+            # not apply; the producer said the opposite.
+            res["reason_class"] = _reason_taxonomy.BLOCKED_BY_UPSTREAM
             res["reason"] = (
                 "professional_tb_gen DECLARED a "
                 + str(len(bundle["declared"])) + "-file bundle at "

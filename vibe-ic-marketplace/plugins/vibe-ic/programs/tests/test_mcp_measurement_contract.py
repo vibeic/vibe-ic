@@ -47,6 +47,7 @@ import pytest
 PROGRAMS = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROGRAMS))
 import _mcp_measurement as M  # noqa: E402
+import flow_compliance_check as FCC  # noqa: E402
 
 ENV = dict(os.environ, PYTHONDONTWRITEBYTECODE="1")
 
@@ -384,27 +385,111 @@ def test_worst_takes_the_loudest_claim_not_the_first():
     assert M.worst([]).undeclared is True
 
 
-def test_every_provenance_bound_step_asks_the_measurement_question():
-    """The flow declaration is the wiring, so it is asserted as such.
+def _declared_program_commands(gate):
+    """Every program command a step DECLARES, normalised the RUNNER'S way.
 
-    Both poles: this fails if a `--require-measured` is dropped from a wired
-    gate, and it fails if a new `provenance_check` gate is added without one.
+    `flow_compliance_check._declared_gate_commands` states the two shapes the
+    shipped runner accepts: "a program key holding either a bare command string
+    or a {"command": ...} dict", nested through all_of / any_of containers. A
+    reader that knows only ONE of those spellings does not have a smaller
+    population — it has a population the other spelling is INVISIBLE in.
+
+    MEASURED on tree 5e850b3acee8: the flow declares 119 str-shaped and 2
+    dict-shaped `program_exit_zero` clauses, 79 dict-shaped
+    `advisory_program_exit_zero` and 30 dict-shaped `optional_program_exit_zero`
+    — and 13 clauses that sit at the TOP of `gate` rather than inside `all_of`.
+    The first reader of this guard walked `gate["all_of"]` and called
+    `.startswith` on the clause value, so a dict-shaped clause raised
+    AttributeError and a top-level clause was never reached at all.
+
+    `if not isinstance(cmd, str): continue` would have silenced the crash and
+    is the worse repair: it makes the dict spelling INVISIBLE to the guard, so
+    the next `provenance_check` written that way is unpoliced forever. The gate
+    key names come from the runner (`_PROGRAM_GATE_KEYS`), so a fourth key
+    added there is in this population the day it lands.
     """
-    import yaml
-    flow = yaml.safe_load(
-        (PROGRAMS.parent / "flow" / "phase1_phase2_phase3.yaml").read_text())
+    out = []
+
+    def _walk(node):
+        if isinstance(node, list):
+            for item in node:
+                _walk(item)
+            return
+        if not isinstance(node, dict):
+            return
+        for key in ("all_of", "any_of"):
+            sub = node.get(key)
+            if isinstance(sub, (list, dict)):
+                _walk(sub)
+        for key in FCC._PROGRAM_GATE_KEYS:
+            spec = node.get(key)
+            if isinstance(spec, dict):
+                spec = spec.get("command")
+            if isinstance(spec, str) and spec.strip():
+                out.append(spec)
+
+    _walk(gate)
+    return out
+
+
+def _provenance_split(steps):
+    """(wired, bare) provenance_check clauses over any declaration shape."""
     wired, bare = [], []
-    for step in flow["steps"]:
-        for clause in (step.get("gate") or {}).get("all_of", []) or []:
-            cmd = clause.get("program_exit_zero") if isinstance(clause, dict) else None
-            if not cmd or not cmd.startswith("provenance_check "):
+    for step in steps:
+        for cmd in _declared_program_commands(step.get("gate") or {}):
+            if not cmd.startswith("provenance_check "):
                 continue
             if "--require-entries" in cmd:
                 continue            # the coarse mode binds no artefact
             (wired if "--require-measured" in cmd else bare).append(
                 (step["id"], cmd))
+    return wired, bare
+
+
+def test_every_provenance_bound_step_asks_the_measurement_question():
+    """The flow declaration is the wiring, so it is asserted as such.
+
+    Both poles: this fails if a `--require-measured` is dropped from a wired
+    gate, and it fails if a new `provenance_check` gate is added without one —
+    see `test_a_bare_provenance_clause_is_caught_in_every_declaration_shape`,
+    which drives the second pole, because this one reads the SHIPPED flow and
+    has no fixture to make bare.
+    """
+    import yaml
+    flow = yaml.safe_load(
+        (PROGRAMS.parent / "flow" / "phase1_phase2_phase3.yaml").read_text())
+    wired, bare = _provenance_split(flow["steps"])
     assert bare == [], f"provenance_check gates that never ask: {bare}"
     assert len(wired) >= 6, wired
+
+
+@pytest.mark.parametrize("key", ["program_exit_zero",
+                                 "optional_program_exit_zero",
+                                 "advisory_program_exit_zero"])
+@pytest.mark.parametrize("shape", ["str", "dict"])
+@pytest.mark.parametrize("where", ["top", "all_of", "nested"])
+def test_a_bare_provenance_clause_is_caught_in_every_declaration_shape(
+        key, shape, where):
+    """THE SECOND POLE, which the shipped flow cannot supply.
+
+    The guard above reads the tree that ships and is therefore green whenever
+    the flow is right — including when it is right by accident because the
+    reader could not see the clause. Every spelling the runner executes is
+    driven here with the flag REMOVED, and every one must be reported bare.
+    """
+    bad = "provenance_check . --json reports/p.json"
+    clause = {key: (bad if shape == "str" else {"command": bad})}
+    gate = ({"all_of": [{"all_of": [clause]}]} if where == "nested"
+            else {"all_of": [clause]} if where == "all_of" else clause)
+    wired, bare = _provenance_split([{"id": "probe", "gate": gate}])
+    assert bare == [("probe", bad)], (wired, bare)
+    # and the same clause WITH the flag is not reported bare
+    good = bad + " --require-measured"
+    clause2 = {key: (good if shape == "str" else {"command": good})}
+    gate2 = ({"all_of": [{"all_of": [clause2]}]} if where == "nested"
+             else {"all_of": [clause2]} if where == "all_of" else clause2)
+    wired2, bare2 = _provenance_split([{"id": "probe", "gate": gate2}])
+    assert bare2 == [] and wired2 == [("probe", good)], (wired2, bare2)
 
 
 # ── the boundary itself: JS writes the stamp, Python reads it ────────────

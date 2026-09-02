@@ -342,19 +342,39 @@ _STEP4_CMD = ("professional_tb_check . --json "
               "reports/phase2/gates/professional_tb_check.json")
 
 
-@pytest.mark.parametrize("shape,step_passes,discloses", [
-    ("complete", True, False),      # rc=0 — clean
-    ("incomplete", False, False),   # rc=1 — BLOCKS the step, as declared
-    ("tree_absent", True, True),    # rc=2 — passes WITH a vacuous disclosure
+@pytest.mark.parametrize("shape,step_passes,verdict,reason_class", [
+    # rc=0 — clean
+    ("complete", True, "PASS", None),
+    # rc=1 — BLOCKS the step, as declared
+    ("incomplete", False, "FAIL", None),
+    # rc=2 — passes the exit-code clause WITH a disclosed non-verdict.
+    #
+    # BLOCKED, not VACUOUS_PASS, and the GATE is what says so. The producer
+    # RAN — it wrote a report declaring a bundle — and the tree that bundle
+    # names is not in this copy of the project. That is an artefact an upstream
+    # step owes and has not delivered, so `professional_tb_check` publishes
+    # `reason_class=BLOCKED_BY_UPSTREAM`, which is NOT skip-eligible: the
+    # refusal stays disclosed and cannot become a clean skip. Untyped it fell
+    # closed to EXECUTION_ERROR — "the gate blew up" — for a gate that read the
+    # tree correctly, and #1978's whole point is that only the producer may say
+    # which non-verdict this is, never a prose match on its output.
+    ("tree_absent", True, "BLOCKED", "BLOCKED_BY_UPSTREAM"),
 ])
 def test_WIRING_rc_maps_to_the_step_status_it_claims(tmp_path, shape,
-                                                     step_passes, discloses):
+                                                     step_passes, verdict,
+                                                     reason_class):
     """Execute Step 4's own `program_exit_zero` runner on each shape.
 
     The claim "rc=2 is rendered as a disclosed n/a, not a clean result" is
     worthless as a source-text assertion — this runs
     `flow_compliance_check._check_program_exit_zero`, the exact function the
     blocking Step-4 slot calls, and reads what it returns.
+
+    ASSERTED ON THE TIER, not on a prefix. `out_text.startswith(
+    _VACUOUS_HINT_PREFIX) is discloses` cannot tell a disclosed non-verdict
+    from a clean PASS on the FALSE arms: `INCOMPLETE: …`, `FAIL` and a bare
+    PASS all satisfy `is False`. `_ProgramCheckResult` carries the tier the
+    flow acts on and the class the gate declared, and both are asserted.
     """
     import flow_compliance_check as fcc
 
@@ -367,9 +387,25 @@ def test_WIRING_rc_maps_to_the_step_status_it_claims(tmp_path, shape,
         out = tmp_path / "phase2/stage1/sim_professional/dut"
     _report(tmp_path, _passing_record(out))
 
-    passed, out_text = fcc._check_program_exit_zero(tmp_path, _STEP4_CMD)
+    res = fcc._check_program_exit_zero(tmp_path, _STEP4_CMD)
+    passed, out_text = res
     assert passed is step_passes, out_text
-    assert out_text.startswith(fcc._VACUOUS_HINT_PREFIX) is discloses, out_text
+    assert res.verdict == verdict, (res.verdict, out_text)
+    assert res.reason_class == reason_class, (res.reason_class, out_text)
+
+
+def test_WIRING_an_unrun_producer_is_disclosed_and_not_a_clean_pass(tmp_path):
+    """The OTHER rc=0 non-verdict, which the parametrization above cannot see.
+
+    No `professional_tb.json` at all: the producing step did not run. rc stays
+    0 (an absent optional step must not fail a run) and the flow must still
+    stop recording "checked, fine". Untyped this was EXECUTION_ERROR too.
+    """
+    import flow_compliance_check as fcc
+    res = fcc._check_program_exit_zero(tmp_path, _STEP4_CMD)
+    assert res.exit_code == 0, res[1]
+    assert res.reason_class == "BLOCKED_BY_UPSTREAM", (res.reason_class, res[1])
+    assert res.verdict == "BLOCKED", (res.verdict, res[1])
 
 
 def test_GUARD_absent_coverage_export_is_absent_not_closed(tmp_path):

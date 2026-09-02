@@ -49,6 +49,7 @@ PROGRAMS = Path(__file__).resolve().parents[1]
 if str(PROGRAMS) not in sys.path:
     sys.path.insert(0, str(PROGRAMS))
 
+import _flow_reason_taxonomy as _reason_taxonomy
 import flow_compliance_check as F  # noqa: E402
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -881,7 +882,28 @@ def test_the_other_self_aware_shipped_gate_also_reaches_the_tier(tmp_path):
 
     step = _step_under_audit(doc)
     assert step["status"] == "INCOMPLETE", (
-        f"an untyped gate non-verdict was consumed as {step['status']}\n{out}")
-    assert re.search(
-        r"GATE_RAN professional_tb_check\s+rc=0\s+INCOMPLETE "
-        r"reason_class=EXECUTION_ERROR", out), out
+        f"a gate non-verdict was consumed as {step['status']}\n{out}")
+    # THE LEDGER ROW NAMES THE CLASS THE PRODUCER DECLARES.
+    #
+    # This asserted `INCOMPLETE reason_class=EXECUTION_ERROR` verbatim, which
+    # was the FAIL-CLOSED DEFAULT `_flow_reason_taxonomy.infer_nonverdict_reason`
+    # applies to a non-verdict nobody typed — not a statement about this gate.
+    # `professional_tb_check` now types it: no `professional_tb.json` means the
+    # producing step did not run, which is BLOCKED_BY_UPSTREAM, and the row
+    # says so.
+    #
+    # WHAT MUST NOT MOVE, and is asserted rather than assumed: the class must
+    # stay OUTSIDE `SKIP_ELIGIBLE`. Retyping a gate from EXECUTION_ERROR to a
+    # skip-eligible class is how a refusal becomes a clean vacuous pass, and
+    # this file exists to stop a non-verdict being consumed as one. The step
+    # tier above and the bound below both hold that line; only the word for
+    # WHICH non-verdict has become the producer's to choose.
+    m = re.search(r"GATE_RAN professional_tb_check\s+rc=0\s+(\S+)\s+"
+                  r"reason_class=(\S+)", out)
+    assert m, out
+    verdict, cls = m.group(1), m.group(2)
+    assert cls not in _reason_taxonomy.SKIP_ELIGIBLE, (
+        f"professional_tb_check's non-verdict is typed {cls}, which is "
+        f"skip-eligible — an unrun producer would be laundered into a clean "
+        f"vacuous pass\n{out}")
+    assert verdict in ("INCOMPLETE", "BLOCKED"), (verdict, cls, out)
