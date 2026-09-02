@@ -43,6 +43,7 @@ from pathlib import Path
 import pytest
 
 from _hostpaths import require_repo
+from _session_floor import stall_window, trivial_session_s
 
 _PROGRAMS = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_PROGRAMS))
@@ -117,7 +118,16 @@ def _await_exit(name, proc):
     return False
 
 #: Test-only no-progress window. It is not a cap on healthy runtime.
-_STALL = 1
+#:
+#: DERIVED, NOT DECLARED (see `_session_floor`): `1` wherever pytest itself
+#: starts well inside a second, else 2x the MEASURED start-up floor. The
+#: driver's lease starts at SPAWN, so a window shorter than the interpreter's
+#: own start-up is not a stall detector, it is a reading of the host's load:
+#: MEASURED at load 27 on 8HD-9 the floor was 0.73 s and four tests using this
+#: bare `1` reported `no pytest progress stream was produced` about subjects
+#: that had not started. `:g` where it is printed, because that is how the
+#: driver prints the value it was handed.
+_STALL = stall_window(1)
 
 #: The bound the ONE-SESSION arm of `test_one_session_loses_the_whole_record_
 #: and_per_file_does_not` puts on ITSELF, as `subprocess.run(timeout=...)`.
@@ -634,7 +644,7 @@ def test_progress_stall_catches_a_hang_pytest_timeout_cannot_see(tmp_path):
                                  "test_green_neighbour.py"]
     marker = [l for l in proc.stdout.splitlines() if l.startswith("NORECORD")]
     assert len(marker) == 1 and "test_hangs_at_import.py" in marker[0], marker
-    assert f"STALLED after {_STALL} s" in marker[0], (
+    assert f"STALLED after {_STALL:g} s" in marker[0], (
         "the marker must distinguish a progress stall from a session that "
         "merely exited without a report — they need different fixes")
 
@@ -673,9 +683,20 @@ def test_chatty_import_output_is_diagnostic_not_pytest_progress(tmp_path):
 
 def test_silent_pytest_boundaries_keep_a_long_session_alive(
         tmp_path, monkeypatch):
-    """Total runtime may exceed the grace while completed tests renew it."""
+    """Total runtime may exceed the grace while completed tests renew it.
+
+    THE WINDOW IS DERIVED, NOT DECLARED. This shipped as a bare ``0.45`` with
+    six ``0.2`` s items, and the driver's lease starts at SPAWN: in the pinned
+    image pytest itself takes ~0.44 s to exist (`_session_floor`), so on a busy
+    box the window expired before the subject's first event and the test read
+    "killed as hung" about a subject that had not started. The ratios are what
+    the test is about, so they are kept exactly and the window is lifted only
+    where the interpreter cannot start inside it.
+    """
+    window = stall_window(0.45)
+    step = window * (0.2 / 0.45)      # each item renews at ~44% of the window
     body = "import time\n" + "\n".join(
-        f"def test_{i}():\n    time.sleep(0.2)" for i in range(6)) + "\n"
+        f"def test_{i}():\n    time.sleep({step:.4f})" for i in range(6)) + "\n"
     corpus = _tree(tmp_path, {"test_slow_progress.py": body})
     merged = tmp_path / "merged.xml"
     monkeypatch.setattr(D, "DEFAULT_POLL_S", 0.05)
@@ -683,9 +704,9 @@ def test_silent_pytest_boundaries_keep_a_long_session_alive(
     rc, out, incomplete = D.run_one(
         [sys.executable, "-m", "pytest", "-p", "no:terminal",
          "-p", "no:cacheprovider"],
-        "test_slow_progress.py", merged, 0.45, str(corpus))
+        "test_slow_progress.py", merged, window, str(corpus))
     elapsed = time.monotonic() - started
-    assert elapsed > 0.9, elapsed
+    assert elapsed > 4.5 * step, (elapsed, step)     # was 0.9 of 6 x 0.2
     assert rc == 0 and not incomplete, out
     suites = D._load_suites(merged)
     assert suites is not None
@@ -695,12 +716,15 @@ def test_silent_pytest_boundaries_keep_a_long_session_alive(
 def test_finite_domain_checkpoints_keep_one_long_test_item_alive(
         tmp_path, monkeypatch):
     """A bounded batch can expose real completed work inside one test item."""
+    # Window derived from the measured session floor; see the test above.
+    window = stall_window(0.35)
+    step = window * (0.2 / 0.35)      # each checkpoint at ~57% of the window
     body = (
         "import time\n"
         "from _pytest_progress_plugin import domain_progress\n\n"
         "def test_one_long_batch():\n"
         "    for completed in range(1, 7):\n"
-        "        time.sleep(0.2)\n"
+        f"        time.sleep({step:.4f})\n"
         "        domain_progress('bounded-batch', completed, 6)\n"
     )
     corpus = _tree(tmp_path, {"test_domain_progress.py": body})
@@ -710,9 +734,9 @@ def test_finite_domain_checkpoints_keep_one_long_test_item_alive(
     rc, out, incomplete = D.run_one(
         [sys.executable, "-m", "pytest", "-p", "no:terminal",
          "-p", "no:cacheprovider"],
-        "test_domain_progress.py", merged, 0.35, str(corpus))
+        "test_domain_progress.py", merged, window, str(corpus))
     elapsed = time.monotonic() - started
-    assert elapsed > 0.9, elapsed
+    assert elapsed > 4.5 * step, (elapsed, step)     # was 0.9 of 6 x 0.2
     assert rc == 0 and not incomplete, out
     suites = D._load_suites(merged)
     assert suites is not None
@@ -731,7 +755,7 @@ def test_nested_validated_progress_is_relayed_to_the_outer_session(
     rc, out, incomplete = D.run_one(
         [sys.executable, "-m", "pytest", "-p", "no:terminal",
          "-p", "no:cacheprovider"],
-        node, merged, 2.5, str(_PROGRAMS.parent))
+        node, merged, stall_window(2.5, starts=2), str(_PROGRAMS.parent))
     elapsed = time.monotonic() - started
     assert elapsed > 4.5, elapsed
     assert rc == 0 and not incomplete, out
@@ -748,14 +772,19 @@ def test_nested_collect_progress_is_relayed_to_the_outer_session(
             + "::test_live_collection_relays_finite_semantic_progress_past_old_bound")
     merged = tmp_path / "outer-collect.xml"
     monkeypatch.setattr(D, "DEFAULT_POLL_S", 0.05)
+    # TWO interpreter starts in series before the first relayed event: the
+    # inner node spawns the driver, which spawns the pytest whose events reach
+    # this lease. `starts=2` says so; the inner test mirrors it as its
+    # `outer_bound`.
+    window = stall_window(0.8, starts=2)
     started = time.monotonic()
     rc, out, incomplete = D.run_one(
         [sys.executable, "-m", "pytest", "-p", "no:terminal",
          "-p", "no:cacheprovider"],
-        node, merged, 0.8, str(_PROGRAMS.parent))
+        node, merged, window, str(_PROGRAMS.parent))
     elapsed = time.monotonic() - started
     assert rc == 0 and not incomplete, out
-    assert elapsed > 0.8, elapsed
+    assert elapsed > window, (elapsed, window)
     suites = D._load_suites(merged)
     assert suites is not None
     assert sum(D._count(s)[0] for s in suites) == 1
@@ -790,7 +819,8 @@ def test_collect_only_has_its_own_complete_terminal_protocol(
     rc, out, incomplete = D.run_collect(
         [sys.executable, "-m", "pytest", "-p", "no:terminal",
          "-p", "no:cacheprovider"],
-        ["test_collect_a.py", "test_collect_b.py"], 0.5, str(corpus))
+        ["test_collect_a.py", "test_collect_b.py"], stall_window(0.5),
+        str(corpus))
     assert rc == 0 and not incomplete, out
 
 
@@ -815,22 +845,26 @@ def test_short_natural_collect_relays_its_terminal_protocol(tmp_path):
 def test_progressing_collection_may_outlive_many_stall_windows(
         tmp_path, monkeypatch):
     """Completed file collections, not a total duration, renew the lease."""
+    # Window derived from the measured session floor (`_session_floor`); the
+    # per-file import sleep keeps its shipped share of the window (0.14 of 0.3).
+    window = stall_window(0.3)
+    file_seconds = window * (0.14 / 0.3)
     corpus = tmp_path / "slow-collect"
     corpus.mkdir()
     paths = []
     for index in range(7):
         path = corpus / f"test_slow_collect_{index}.py"
         path.write_text(
-            "import time\ntime.sleep(0.14)\n\n"
+            f"import time\ntime.sleep({file_seconds:.4f})\n\n"
             f"def test_{index}(): assert True\n", encoding="utf-8")
         paths.append(path.name)
     monkeypatch.setattr(D, "DEFAULT_POLL_S", 0.03)
     started = time.monotonic()
     rc, out, incomplete = D.run_collect(
         [sys.executable, "-m", "pytest", "-p", "no:terminal",
-         "-p", "no:cacheprovider"], paths, 0.3, str(corpus))
+         "-p", "no:cacheprovider"], paths, window, str(corpus))
     elapsed = time.monotonic() - started
-    assert elapsed > 0.8, elapsed
+    assert elapsed > 0.8 * 7 * file_seconds, (elapsed, file_seconds)
     assert rc == 0 and not incomplete, out
 
 
@@ -855,6 +889,13 @@ def test_progressing_collection_may_outlive_many_stall_windows(
 def test_collect_import_activity_without_semantic_transition_is_norecord(
         tmp_path, monkeypatch, body, sentinel):
     """Captured output and CPU cannot renew the strict collection lease."""
+    # Window derived from the measured session floor. The chatterer's deadline
+    # scales with it so the loop is still running when the window expires: the
+    # sentinel can only be in `out` if the import STARTED before the kill.
+    window = stall_window(0.25)
+    assert "deadline=time.monotonic()+3\n" in body, body
+    body = body.replace("deadline=time.monotonic()+3\n",
+                        f"deadline=time.monotonic()+{max(3.0, 4 * window):.2f}\n")
     corpus = tmp_path / "chatty-collect"
     corpus.mkdir()
     (corpus / "test_active.py").write_text(body, encoding="utf-8")
@@ -862,7 +903,7 @@ def test_collect_import_activity_without_semantic_transition_is_norecord(
     started = time.monotonic()
     _rc, out, incomplete = D.run_collect(
         [sys.executable, "-m", "pytest", "-s", "-q",
-         "-p", "no:cacheprovider"], ["test_active.py"], 0.25, str(corpus))
+         "-p", "no:cacheprovider"], ["test_active.py"], window, str(corpus))
     elapsed = time.monotonic() - started
     # `incomplete` plus the stall marker ARE the property: the lease was not
     # renewed and the run was cut short. If the watchdog had missed, the 3 s
@@ -871,6 +912,21 @@ def test_collect_import_activity_without_semantic_transition_is_norecord(
     if sentinel is not None:
         assert sentinel in out
     assert "WATCHDOG_STALLED:" in out
+
+
+def test_a_window_below_the_measured_session_floor_is_lifted_not_declared():
+    """The contract every derived window above relies on, stated once.
+
+    A window the interpreter cannot start inside is lifted to a multiple of the
+    MEASURED floor, never to a constant; a window it can start inside is
+    returned exactly as declared. Both directions, so neither a fast host nor a
+    slow one can turn a stall-window test into a reading of its own start-up.
+    """
+    floor = trivial_session_s()
+    assert floor > 0, floor
+    lifted = stall_window(floor / 10)
+    assert lifted == pytest.approx(2.0 * floor), (lifted, floor)
+    assert stall_window(100 * floor) == 100 * floor
 
 
 def test_maxfail_prefix_is_norecord_not_a_complete_failure_set(tmp_path):
@@ -1186,7 +1242,7 @@ def test_term_during_cleanup_cancels_before_fallback_and_leaves_zero(
         [sys.executable, str(_PROG), "--selection",
          str(corpus / "selection.txt"), "--junit", str(merged),
          "--stall-after", "5", "--aggregate-check",
-         "--aggregate-stall-after", "0.5", "--fallback-jobs", "1",
+         "--aggregate-stall-after", str(stall_window(0.5)), "--fallback-jobs", "1",
          "--"] + _pytest_cmd(),
         cwd=str(corpus), stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
         text=True, start_new_session=True,
@@ -1387,7 +1443,7 @@ def test_aggregate_norecord_runs_diagnostic_fallback_and_stays_unknown(
 
     proc = _run_driver(
         corpus, merged, "--aggregate-check",
-        "--aggregate-stall-after", "1", "--fallback-jobs", "2")
+        "--aggregate-stall-after", str(_STALL), "--fallback-jobs", "2")
 
     assert proc.returncode == D.RC_NORECORD, proc.stdout + proc.stderr
     assert "AGGREGATE_NORECORD" in proc.stdout
@@ -1418,7 +1474,7 @@ def test_aggregate_loss_confines_norecord_to_the_hanging_file(tmp_path):
     merged = tmp_path / "aggregate-fallback.xml"
 
     proc = _run_driver(
-        corpus, merged, "--aggregate-check", "--aggregate-stall-after", "1")
+        corpus, merged, "--aggregate-check", "--aggregate-stall-after", str(_STALL))
 
     assert proc.returncode == D.RC_NORECORD, proc.stdout + proc.stderr
     assert proc.stdout.index("=== [aggregate]") < proc.stdout.index("=== [1/")
@@ -1467,7 +1523,7 @@ def test_stratified_probe_preserves_late_and_early_green_files(
 
     proc = _run_driver(
         corpus, merged, "--aggregate-check",
-        "--aggregate-stall-after", "1", "--fallback-jobs", "8")
+        "--aggregate-stall-after", str(_STALL), "--fallback-jobs", "8")
 
     assert proc.returncode == D.RC_NORECORD, proc.stdout + proc.stderr
     assert "AGGREGATE_NORECORD" in proc.stdout
@@ -1528,7 +1584,7 @@ def test_zero_record_probe_still_attempts_the_one_unprobed_green_file(
 
     proc = _run_driver(
         corpus, merged, "--aggregate-check",
-        "--aggregate-stall-after", "1", "--fallback-jobs", "8")
+        "--aggregate-stall-after", str(_STALL), "--fallback-jobs", "8")
 
     # Value first: this is what makes the pre-fix control substantive.  The old
     # breaker returns [] and labels test_05_green.py NOTRUN.
@@ -1573,7 +1629,7 @@ def test_aggregate_norecord_fallback_ignores_legacy_failure_threshold(
 
     proc = _run_driver(
         corpus, merged, "--aggregate-check",
-        "--aggregate-stall-after", "1", "--fallback-jobs", "8",
+        "--aggregate-stall-after", str(_STALL), "--fallback-jobs", "8",
         "--stop-after-failures", "10")
 
     assert proc.returncode == D.RC_NORECORD, proc.stdout + proc.stderr
@@ -1652,7 +1708,7 @@ def test_systemic_import_hang_recovery_is_bounded_parallel_not_serial(
     started = time.monotonic()
     proc = _run_driver(
         corpus, merged, "--aggregate-check",
-        "--aggregate-stall-after", "1")
+        "--aggregate-stall-after", str(_STALL))
     elapsed = time.monotonic() - started
 
     assert proc.returncode == D.RC_NORECORD, proc.stdout + proc.stderr
@@ -1724,7 +1780,7 @@ def test_signal_during_parallel_fallback_reaps_detached_descendant(tmp_path):
         [sys.executable, str(_PROG), "--selection",
          str(corpus / "selection.txt"), "--junit", str(merged),
          "--stall-after", "30", "--aggregate-check",
-         "--aggregate-stall-after", "1", "--"] + _pytest_cmd(),
+         "--aggregate-stall-after", str(_STALL), "--"] + _pytest_cmd(),
         cwd=str(corpus), stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
         text=True, start_new_session=True)
     try:
@@ -1765,7 +1821,7 @@ def test_aggregate_norecord_is_named_and_returns_unknown(tmp_path):
     merged = tmp_path / "merged.xml"
 
     proc = _run_driver(
-        corpus, merged, "--aggregate-check", "--aggregate-stall-after", "1")
+        corpus, merged, "--aggregate-check", "--aggregate-stall-after", str(_STALL))
 
     assert proc.returncode == D.RC_NORECORD, proc.stdout + proc.stderr
     assert "AGGREGATE_NORECORD" in proc.stdout, proc.stdout

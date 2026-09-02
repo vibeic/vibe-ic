@@ -41,6 +41,23 @@ def test_shape_b_carries_disk_truth_and_transcript_export():
     assert "Transcript export is the DEFAULT" in txt
 
 
+def test_shape_c_carries_the_doctrine_shape_b_points_to():
+    """The cross-reference above must land on the doctrine, not on a name.
+
+    e9ec0ce1c1 re-authored both blind-instruction files for the general-flow
+    entry and dropped the ORCHESTRATION RULES from BOTH; the tests above pinned
+    only Shape B, so a Shape B that pointed at a Shape C carrying nothing would
+    have satisfied them. RED against that tree, GREEN once Shape C states the
+    rules Shape B binds itself to.
+    """
+    txt = (HARNESS / "blind_instructions_shape_c.md").read_text()
+    assert "ORCHESTRATION RULES" in txt
+    assert "Rate-limit resilience ladder" in txt
+    assert "CANARY" in txt
+    assert "Transcript export is the DEFAULT" in txt
+    assert "Disk truth" in txt or "disk-truth" in txt
+
+
 def test_methodology_heading_covers_batch_shapes():
     txt = SKILL.read_text()
     assert "Batch-dispatch ORCHESTRATION RULES — Shapes B/C" in txt

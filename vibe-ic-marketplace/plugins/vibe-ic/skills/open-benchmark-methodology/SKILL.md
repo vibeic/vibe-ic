@@ -108,6 +108,17 @@ door runs `benchmark_clean_room_check.py` and `blindness_audit.py`. Missing
 transcripts require an explicit disclosure; a detected oracle access blocks
 the score.
 
+**Batch-dispatch ORCHESTRATION RULES — Shapes B/C (ORGANIC-20260605,
+REQUIRED):** these bind every shape whose AI worklists fan out over more than
+one agent — Shape C and Shape B alike; Shape D is a single project with no
+fan-out and is exempt. Batch granularity (one agent per worklist slice, never
+per problem), disk truth (progress is read from the run directory, never
+from agent returns; resume = `--resume`), transcript export by default, and
+the rate-limit resilience ladder (1-agent CANARY, then 2–4 concurrent with
+completion-driven dispatch) are stated in
+`benchmark/blind_instructions_shape_c.md` § ORCHESTRATION RULES and bound
+into Shape B by `benchmark/blind_instructions_shape_b.md`.
+
 Blind evaluation is the exam. Do not loop against official verdicts. Post-score
 analysis may diagnose and capture a general enhancement, but the resulting
 plugin change is measured only in a new clean-room run.

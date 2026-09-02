@@ -12,13 +12,48 @@ from __future__ import annotations
 import contextlib
 import io
 import json
+import os
+import shutil
 import sys
+import tempfile
 from pathlib import Path
+
+import pytest
 
 PLUGIN = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PLUGIN))
 import collect_external_outputs as CE  # noqa: E402
 import project_outputs_in_tree_check as gate  # noqa: E402
+
+
+@pytest.fixture
+def volatile_dir():
+    """A scratch directory under one of the gate's OWN volatile prefixes.
+
+    The artefact these tests stage has to be one the gate classifies as
+    volatile, and that is decided by `_VOLATILE_PREFIXES` (`/tmp/`, `/var/tmp/`,
+    `/dev/shm/`, `/run/`) — not by wherever pytest happens to put `tmp_path`.
+    Under a relocated `TMPDIR` (the #2014 census lane, `run_suite_in_eda_image.sh
+    --scratch`, any scratch under `$HOME`) `tmp_path` is NOT under a volatile
+    prefix, the collector correctly copies nothing, and four of these six tests
+    went red with the collector unchanged — MEASURED at 14de9b8a36 in the pinned
+    image: `assert 0 == 1` on the collected count, the gate returning 0 where
+    the test expected 1. The precondition is built here and ASSERTED, so a lane
+    with no writable volatile root fails on the premise, not on the collector.
+    """
+    for prefix in gate._VOLATILE_PREFIXES:
+        root = Path(prefix)
+        if root.is_dir() and os.access(root, os.W_OK):
+            made = Path(tempfile.mkdtemp(prefix="issue146-", dir=str(root)))
+            break
+    else:
+        pytest.fail(f"no writable volatile root among {gate._VOLATILE_PREFIXES}; "
+                    "the collector cannot be exercised here")
+    assert any(str(made).startswith(pre) for pre in gate._VOLATILE_PREFIXES), made
+    try:
+        yield made
+    finally:
+        shutil.rmtree(made, ignore_errors=True)
 
 
 def _run_gate(project: Path) -> int:
@@ -38,8 +73,8 @@ def _live_artifact(tmp: Path) -> Path:
     return art
 
 
-def test_live_external_output_collected_and_gate_passes(tmp_path):
-    art = _live_artifact(tmp_path)
+def test_live_external_output_collected_and_gate_passes(tmp_path, volatile_dir):
+    art = _live_artifact(volatile_dir)
     p = tmp_path / "projA"
     (p / "reports" / "phase3").mkdir(parents=True)
     (p / "reports" / "phase3" / "gds.json").write_text(
@@ -53,8 +88,8 @@ def test_live_external_output_collected_and_gate_passes(tmp_path):
     assert _run_gate(p) == 0                      # AFTER: in-tree → PASS
 
 
-def test_dangling_reference_not_masked(tmp_path):
-    art = _live_artifact(tmp_path)
+def test_dangling_reference_not_masked(tmp_path, volatile_dir):
+    art = _live_artifact(volatile_dir)
     p = tmp_path / "projB"
     (p / "reports").mkdir(parents=True)
     (p / "reports" / "out.json").write_text(json.dumps({
@@ -66,8 +101,8 @@ def test_dangling_reference_not_masked(tmp_path):
     assert _run_gate(p) == 1                      # still FAILs on the dangling ref
 
 
-def test_idempotent(tmp_path):
-    art = _live_artifact(tmp_path)
+def test_idempotent(tmp_path, volatile_dir):
+    art = _live_artifact(volatile_dir)
     p = tmp_path / "projC"
     (p / "reports").mkdir(parents=True)
     (p / "reports" / "r.json").write_text(json.dumps({"a": str(art)}))
@@ -75,8 +110,8 @@ def test_idempotent(tmp_path):
     assert CE.collect(p)[0] == 0                  # re-run is a no-op
 
 
-def test_provenance_recorded(tmp_path):
-    art = _live_artifact(tmp_path)
+def test_provenance_recorded(tmp_path, volatile_dir):
+    art = _live_artifact(volatile_dir)
     p = tmp_path / "projD"
     (p / "reports").mkdir(parents=True)
     (p / "reports" / "r.json").write_text(json.dumps({"a": str(art)}))
@@ -93,9 +128,9 @@ def test_no_external_paths_is_noop(tmp_path):
     assert not (p / "collected_external").exists()
 
 
-def test_log_file_reference_not_collected(tmp_path):
+def test_log_file_reference_not_collected(tmp_path, volatile_dir):
     # a /tmp reference inside a *.log is ephemeral tool scratch — not collected
-    art = _live_artifact(tmp_path)
+    art = _live_artifact(volatile_dir)
     p = tmp_path / "projF"
     (p / "reports").mkdir(parents=True)
     (p / "reports" / "tool.log").write_text(f"scratch at {art}\n")

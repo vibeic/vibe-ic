@@ -50,6 +50,47 @@ knowledge.
 - Repair must pass the immutable challenge, Program re-entry gates, and a new
   hash-bound AI review.
 
+## ORCHESTRATION RULES (for the caller spawning the worklist agents — ORGANIC-20260605)
+
+These are REQUIRED, learned from a 312-problem clean-room run where
+per-problem fan-out lost ~93% of its agents' results while batch fan-out
+completed 312/312. They bind every shape whose worklists fan out over more
+than one agent — Shape C here and Shape B (`blind_instructions_shape_b.md`);
+Shape D is a single project with no fan-out and is exempt.
+
+1. **Batch granularity is REQUIRED for ≥100-problem datasets.** Spawn ONE
+   agent per contiguous SLICE of a worklist (`needs_ai_backup.jsonl`,
+   `needs_ai_review.jsonl`, `needs_ai_repair.jsonl`) — NEVER one agent per
+   problem. Hundreds of short-lived per-problem subagents lose their final
+   structured return far too often; batch agents do sustained multi-problem
+   work and return reliably.
+2. **The run directory is the authoritative truth — Disk truth.** The runner
+   writes backup RTL to its own `write_rtl_to` path and the dispatcher keeps
+   `program_first_ai_acceptance.json` regardless of whether an agent's
+   structured return survives. Orchestrators MUST reconcile progress from
+   those files — never by tallying agent returns.
+3. **Resume = `--resume`.** The dispatcher re-derives the un-finished set from
+   the run directory; re-dispatch only that (in slices), never re-author what
+   is already on disk.
+4. **Transcript export is the DEFAULT, not an optional extra
+   (ORGANIC-20260605-transcripts-export-default).** `--solve` pre-creates
+   `<run>/transcripts/`; the caller MUST export EVERY author, reviewer and
+   repair agent's transcript there, named per agent, BEFORE scoring. The score
+   front door's `blindness_audit.py` reads them and refuses on violations; a
+   run scored without them must disclose `blindness audit unavailable`.
+5. **Rate-limit resilience ladder
+   (ORGANIC-20260605-ratelimit-resilient-dispatch-ladder).** Provider-side
+   burst rate-limiting kills a full-width fan-out within seconds — the kill
+   signature is sub-minute workflow death with ZERO/near-zero token usage and
+   most agents nulled at once. Naive retries at the same width die
+   identically, while a single sustained agent survives. On a burst kill:
+   (a) drop to a **1-agent CANARY** that must complete a FULL slice before
+   any scaling; (b) resume at **narrow width (2–4 concurrent)** with
+   completion-driven dispatch (launch the next agent when one finishes),
+   never barrier fan-out; (c) disk-truth reconcile (rule 2) remains the
+   resume mechanism. Recognise the signature instead of burning full-width
+   retries.
+
 ```bash
 python3 ${CLAUDE_PLUGIN_ROOT}/programs/benchmark_dispatch.py <bench> \
   --resume --dataset <dataset> --run <run-dir>

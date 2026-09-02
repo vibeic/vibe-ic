@@ -51,6 +51,39 @@ knowledge.
 - A repair must pass the same challenge, re-enter Program gates, and receive a
   fresh hash-bound AI review.
 
+## ORCHESTRATION RULES (for the caller spawning the worklist agents — ORGANIC-20260605)
+
+Shape B fans its AI backup / review / repair work out over the worklists the
+dispatcher writes (`needs_ai_backup.jsonl`, `needs_ai_review.jsonl`,
+`needs_ai_repair.jsonl`), so the caller-side rules Shape C learned from a
+312-problem clean-room run bind here too. The full doctrine and its rationale
+live in `blind_instructions_shape_c.md` § ORCHESTRATION RULES; the rules are:
+
+1. **Batch granularity** — one agent per contiguous SLICE of a worklist,
+   never one agent per design. Hundreds of short-lived per-problem subagents
+   lose their final structured return far too often; a batch agent does
+   sustained multi-problem work and returns reliably.
+2. **Disk truth** — reconcile progress from the run directory, never from
+   agent returns: the runner-owned `write_rtl_to` paths, the worklists and
+   `program_first_ai_acceptance.json` are the record, and `--resume` re-derives
+   the remaining work from them. Resume = run `--resume` again; never re-author
+   what is already on disk.
+3. **Transcript export is the DEFAULT** (above) — every author / reviewer /
+   repair transcript is under `<run>/transcripts/` BEFORE scoring; the score
+   front door's `blindness_audit.py` reads them.
+4. **Rate-limit resilience ladder
+   (ORGANIC-20260605-ratelimit-resilient-dispatch-ladder).** Provider-side
+   burst rate-limiting kills a full-width fan-out within seconds — kill
+   signature: sub-minute workflow death, ZERO/near-zero token usage, most
+   agents nulled at once; same-width retries die identically while a single
+   sustained agent survives. On a burst kill: (a) drop to a **1-agent
+   CANARY** that must complete a FULL slice before any scaling; (b) resume at
+   **narrow width (2–4 concurrent)** with completion-driven dispatch (launch
+   the next agent when one finishes), never barrier fan-out; (c) disk-truth
+   reconcile (rule 2) remains the resume mechanism.
+
+Shape D is a single project with no fan-out and is exempt.
+
 Resume until acceptance is complete:
 
 ```bash
