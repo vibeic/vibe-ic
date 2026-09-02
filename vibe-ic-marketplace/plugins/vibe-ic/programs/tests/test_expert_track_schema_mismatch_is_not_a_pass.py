@@ -435,18 +435,34 @@ def test_an_unanswered_handoff_is_incomplete_never_a_vacuous_pass(tmp_path):
     """THE #1973 guard. The pre-fix program already printed an INCOMPLETE
     sentence, then contradicted it with `verdict=VACUOUS_PASS`; the runner
     accepted rc 2 and credited the report as executed. Assert the producer's
-    actual value, not the presence of a newly-added field."""
+    actual value, not the presence of a newly-added field.
+
+    #2014 D1 RETARGETS THE EXIT CODE, AND THE TEST GAINS ASSERTIONS. This test
+    is named for CREDIT and for the VACUOUS_PASS contradiction; `rc == 1` was
+    the incidental means, and it made "waiting" and "failing" one number — so
+    D1, the flow's unconditional first step, FAILed on every program-only run
+    (MEASURED, live main v1.16.87: Step D1 FAIL, basis gate-reached-verdict).
+    The wait now has an exit code OF ITS OWN, and everything this test is
+    actually about is pinned harder than before: not zero, not a credit, not a
+    vacuous pass, and the disposition said out loud."""
     p = _project(tmp_path)
     rc, out, _ = _run_track(p)
     rep = _report(p)
 
     assert rep["ai_subtrack"]["status"] == "HANDOFF_EMITTED"
     assert rep["verdict"] == "INCOMPLETE", rep
-    assert rc == 1
+    assert rc != 0, "an unanswered hand-off exited 0 — that reads as credit"
+    assert rc != 1, "the wait and a failed run are one number again"
+    assert rc == T.AWAITING_EXIT_CODE
     assert "INCOMPLETE:" in out
     assert "VACUOUS_PASS" not in out
     assert rep["examined_expectations"] == 0
     assert rep["ai_convergence"]["consumed"] == 0
+    # CREDIT — the thing this test is named for — is still withheld, and now
+    # says which of the three states withheld it.
+    assert rep["execution"]["complete"] is False
+    assert rep["execution"]["disposition"] == T.DISPOSITION_AWAITING
+    assert rep["awaiting"] and rep["awaiting"]["credited"] is False
 
 
 def test_the_phase1_runner_does_not_credit_an_unanswered_handoff(tmp_path):

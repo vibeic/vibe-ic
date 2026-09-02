@@ -1642,7 +1642,22 @@ REAL_GATE_PASS_TIER_STEPS: Tuple[str, ...] = (
 #:
 #: MEASURED, per step, on the seeded tree through the step's OWN gate:
 #:
-#:   D1  FAIL        `phase1_expert_parse_track` rc 1 (HANDOFF_EMITTED, #1973)
+#:   D1  INCOMPLETE  `phase1_expert_parse_track`. RE-MEASURED 2026-09-03:
+#:                   FAIL -> INCOMPLETE, and NOT a move toward a PASS tier.
+#:                   #1973 made the hand-off protocol's designed FIRST pass
+#:                   (HANDOFF_EMITTED — the pack is written and no subagent has
+#:                   answered) exit 1. A program cannot spawn that subagent, so
+#:                   that is what EVERY program-only run produces, and D1 is the
+#:                   flow's unconditional first step: the FAIL pinned here was
+#:                   the front door refusing every design, not a gate reaching a
+#:                   verdict about this tree. #2014 D1 gives the wait its own
+#:                   exit code; credit is still withheld (`execution.complete`
+#:                   false, the `INCOMPLETE:` sentinel printed), which is why the
+#:                   step stays in this map instead of returning above. The FAIL
+#:                   ARM IS NOT LOST — it is now proven against the condition
+#:                   that is actually a defect, by
+#:                   `test_matrix_d2_falsifiable.FIXTURES["EXPERT_ANSWER_REFUSED"]`
+#:                   (an expert answer that exists and cannot be read).
 #:   2   INCOMPLETE  rc=2 clauses typed EXECUTION_ERROR (#1978). RE-MEASURED
 #:                   2026-09-03: MISSING -> INCOMPLETE, and NOT a move toward
 #:                   a PASS tier. Two findings held this step out and only the
@@ -1678,7 +1693,7 @@ REAL_GATE_PASS_TIER_STEPS: Tuple[str, ...] = (
 #:   38  MISSING     audit-created refusal of `reports/phase3/
 #:                   foundry_handoff_audit.json` (#2005); its gate still PASSes
 REAL_GATE_LEFT_THE_PASS_TIER: Dict[str, str] = {
-    "D1": "FAIL",
+    "D1": "INCOMPLETE",
     "2": "INCOMPLETE",
     "4": "INCOMPLETE",
     "12": "INCOMPLETE",

@@ -118,7 +118,14 @@ def test_handoff_is_emitted_with_no_inline_llm_backend(tmp_path):
     rc, out, _ = _run_track(p)
     rep = _report(p)
     assert rep["ai_subtrack"]["status"] == "HANDOFF_EMITTED"
-    assert rep["verdict"] == "INCOMPLETE" and rc == 1
+    assert rep["verdict"] == "INCOMPLETE"
+    # #2014 D1 — the exit code is RETARGETED, not relaxed. This test's subject
+    # is that the PACK GETS WRITTEN with no inline SDK; the old `rc == 1` also
+    # made an unanswered hand-off a failed run, which is what made D1
+    # unpassable by any program-only invocation. Three assertions replace one.
+    assert rc != 0, "an unanswered hand-off exited 0 — that reads as credit"
+    assert rc == T.AWAITING_EXIT_CODE and rc != 1
+    assert rep["execution"]["disposition"] == T.DISPOSITION_AWAITING
     assert "VACUOUS_PASS" not in out
     assert (_pack_dir(p) / "ic_expert_agent_handoff.json").is_file()
     # the SDK fact is not lost, only demoted from veto to record

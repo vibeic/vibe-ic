@@ -434,12 +434,29 @@ def test_an_unread_ai_half_is_a_named_finding_not_an_absence(tmp_path):
     is the accurate statement: the pack is written and the subagent has not
     answered yet, which is actionable, where "no LLM on this host" was not.
     The INVARIANT under test is unchanged and is the one that matters — a run
-    whose AI half did not read says so, by name, in the findings, out loud."""
+    whose AI half did not read says so, by name, in the findings, out loud.
+
+    #2014 D1 RETARGETS THE EXIT CODE. `rc == 1` made the designed first pass of
+    a two-pass protocol a FAILED RUN, and D1's gate clause runs this program
+    directly — so every program-only run of every design failed the flow's
+    first step (MEASURED on live main v1.16.87). The named finding, the printed
+    disclosure and the withheld credit — everything this test is about — are
+    asserted here and are asserted harder: the run is neither a pass nor a
+    failure, and it says which. THIS FIXTURE'S DETERMINISTIC HALF APPLIES, so
+    it also pins that an applicable deterministic rule does not turn the wait
+    into a failure."""
     p = _project(tmp_path)
     rc, out, _ = _run_track(p)
     rep = json.loads(_track_report(p).read_text())
     assert rep["ai_subtrack"]["status"] == "HANDOFF_EMITTED"
-    assert rep["verdict"] == "INCOMPLETE" and rc == 1
+    assert rep["verdict"] == "INCOMPLETE"
+    assert rc != 0, "an unanswered hand-off exited 0 — that reads as credit"
+    assert rc != 1, "the wait and a failed run are one number again"
+    assert rc == T.AWAITING_EXIT_CODE
+    assert rep["execution"]["disposition"] == T.DISPOSITION_AWAITING
+    assert rep["execution"]["complete"] is False
+    assert rep["denominator"]["deterministic"] > 0, (
+        "the fixture stopped exercising the applicable deterministic half")
     assert any(f["rule"] == "EXPERT_TRACK_AI_SUBTRACK_SKIPPED"
                for f in rep["findings"])
     assert "EXPERT_TRACK_AI_SUBTRACK_SKIPPED" in out, "and it must be PRINTED"

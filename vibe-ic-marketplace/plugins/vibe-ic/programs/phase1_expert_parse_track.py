@@ -118,8 +118,11 @@ a new place, so the failure modes are pinned:
     pack is written, the subagent has not answered) and emits a NAMED FINDING
     saying so. It is in the findings list, printed, and in the report. It is
     never absent, and never mistaken for "nothing to report". The whole track
-    reports `INCOMPLETE` and exits non-zero: creating work for an expert is not
-    the same event as consuming the expert's answer (issue #1973).
+    reports `INCOMPLETE` and exits `AWAITING_EXIT_CODE` (4): creating work for
+    an expert is not the same event as consuming the expert's answer
+    (issue #1973), and it is not a failed run either (issue #2014 D1). The
+    report carries an `awaiting` block naming the subagent, the pack and the
+    action that ends the wait; `execution.disposition` is `AWAITING`.
     This state replaced `SKIPPED-CONDITION`, which named the wrong fact: the
     obstacle was never a missing LLM, it was that nobody had invoked the agent
     — and the old wording pointed a reader at a host capability instead of at
@@ -148,14 +151,33 @@ a new place, so the failure modes are pinned:
     denominators, and a zero denominator cannot complete the expert track —
     this repo's own `gate_zero_denominator_refuses_check`.
 
-EXECUTION CREDIT (issue #1973)
----------------------------------------
+EXECUTION CREDIT (issue #1973) AND THE THIRD STATE (issue #2014 D1)
+-------------------------------------------------------------------
 The earlier runner contract accepted rc 2 as execution and reduced the whole
 question to "did a JSON report get written?". That credited
 `HANDOFF_EMITTED`, a schema-refused answer, and a genuinely empty answer as a
-completed expert track. They are now all `INCOMPLETE`, rc 1. Design findings
-remain advisory after a real answer is consumed; the existence and non-zero
-consumption of that answer are mandatory execution evidence.
+completed expert track. None of them is credited now: all three are
+`INCOMPLETE`, `execution.complete` is false, and the printed `INCOMPLETE:`
+sentinel says so. Design findings remain advisory after a real answer is
+consumed; the existence and non-zero consumption of that answer are mandatory
+execution evidence.
+
+CREDIT AND FAILURE ARE DIFFERENT AXES, and #1973's repair moved both at once.
+Withholding credit is right. Making the wait a FAILED RUN was not: a program
+cannot spawn the subagent, so `HANDOFF_EMITTED` is what EVERY program-only
+invocation produces, and D1's gate clause runs this program directly. MEASURED
+on live main v1.16.87, clean Path-A project, program only: rc 1 -> Step D1
+`FAIL` ("program failed: phase1_expert_parse_track ."), classified DESIGN_FACT
+/ gate-reached-verdict, with step 1 recorded `derived-from-upstream (D1)`. D1 is
+the flow's unconditional first step, so that is every design failing the front
+door on a state none of them can avoid — a fact about the protocol reported as
+a fact about the design.
+
+So the two axes are separated, and the exit code carries three states, not two:
+`AWAITING_EXIT_CODE` (4) for the hand-off awaiting its agent, 1 for a record
+that cannot be read as either credit or a stated wait, 0 for a real reading.
+See `AI_AWAITING_STATES`. The pending set is an ALLOW-LIST: a new failure state
+inherits 1.
 
 On NOT writing the AI-patch sidecar
 -----------------------------------
@@ -190,6 +212,10 @@ if str(_HERE) not in sys.path:
     sys.path.insert(0, str(_HERE))
 
 import _path_layout as _pl  # noqa: E402
+# Module level for `SUBAGENT_TYPE` alone — the name of the agent the
+# `awaiting` block has to hand a reader. `ai_subtrack` keeps its own
+# guarded import for `assemble`, whose failure is a reportable state.
+import ic_expert_backup_pack as _pack  # noqa: E402
 import nvm_program_supply_intent as _nps  # noqa: E402
 
 PROGRAM = "phase1_expert_parse_track"
@@ -250,6 +276,64 @@ AI_ERROR = "ERROR"
 #: The states in which the AI half actually DELIVERED A READING. Everything
 #: else — a refused answer, an error, a pack nobody answered — is not one.
 AI_READ_STATES = frozenset({AI_CONSUMED, AI_CONSUMED_EMPTY})
+
+# ── the THIRD state: waiting is not failing (#2014 D1) ──────────────────────
+#
+# `ai_subtrack` is a TWO-PASS protocol and says so in its own hand-off message:
+# pass one writes the pack and reports HANDOFF_EMITTED — "invoke subagent
+# vibe-ic:ic-expert-agent … and re-run to consume its answer". A PROGRAM cannot
+# spawn that subagent, so pass one is what every non-agent invocation produces.
+#
+# MEASURED on live main v1.16.87, a clean Path-A project, program-only:
+#
+#     phase1_expert_parse_track .        -> rc 1
+#     flow_compliance_check .            -> Step D1 FAIL
+#                                           "program failed:
+#                                            phase1_expert_parse_track ."
+#                                           classified DESIGN_FACT /
+#                                           gate-reached-verdict
+#     step 1 (Spec-to-RTL)               -> "derived-from-upstream … (D1)"
+#
+# D1 is the flow's first step and has no `condition:`, so a rc that no
+# single-pass input can avoid makes the front door unpassable for every design
+# at once. That is not a fact about any design.
+#
+# THREE states, not two. `phase1_one_shot_runner._expert_track_disposition`
+# already draws this line for the RUNNER's exit code (#2014, 1aa24ef268):
+# CREDITED / PENDING / DEFECT. It could not draw it for the FLOW, because D1's
+# gate clause runs THIS program directly and reads THIS exit code, where
+# "nobody has answered yet" and "the answer is unreadable" were one number.
+#
+#   * AWAITING — a state the protocol defines and the next pass leaves.
+#     Exit `AWAITING_EXIT_CODE`. Never credited (`execution.complete` stays
+#     False, the verdict word stays INCOMPLETE, the `INCOMPLETE:` sentinel is
+#     printed), and never a bare PASS in the roll-up: `flow_compliance_check`
+#     maps rc 4 + that sentinel onto the #599 INCOMPLETE tier, which is the
+#     word this repo already coined for "not audited, and someone must return".
+#   * DEFECT   — ERROR, ANSWER_SCHEMA_MISMATCH, CONSUMED_EMPTY, or a status
+#     this reader does not know. Still exit 1.
+#
+# THE SET IS AN ALLOW-LIST, deliberately: a producer that grows a new failure
+# state inherits `1`, never the wait.
+#
+# CONSUMED_EMPTY IS NOT IN IT, and that is not an oversight. HANDOFF_EMITTED is
+# an ORDERING state — the second pass has not happened. CONSUMED_EMPTY is a
+# MEASUREMENT state — the pass happened and decided nothing, which is the zero
+# denominator `gate_zero_denominator_refuses_check` exists to refuse. Only the
+# first is left by re-running.
+AI_AWAITING_STATES = frozenset({AI_HANDOFF_EMITTED})
+
+#: Exit code for AWAITING. Not 0 (a naive `rc == 0` consumer must not credit an
+#: unanswered hand-off), not 1 (that is a failed run), not 2 (`VACUOUS_PASS`
+#: means "nothing applied", and #599 measured that this state is the opposite:
+#: the input WAS applicable), not 3 (`_WAIVER_EXIT_CODE`).
+AWAITING_EXIT_CODE = 4
+
+#: The three dispositions, recorded in the report so no consumer has to infer
+#: one from an exit code. Same words as the runner's, on purpose.
+DISPOSITION_CREDITED = "CREDITED"
+DISPOSITION_AWAITING = "AWAITING"
+DISPOSITION_DEFECT = "DEFECT"
 
 _JSON_TYPE_NAMES = {
     dict: "object", list: "array", str: "string",
@@ -881,16 +965,31 @@ def evaluate(project: Path) -> Dict[str, Any]:
     # checked that this report existed.
     execution_complete = ai["status"] == AI_CONSUMED and len(converged) > 0
     if not execution_complete:
-        verdict, rc = "INCOMPLETE", 1
+        # AWAITING vs DEFECT — see AI_AWAITING_STATES. The verdict WORD is
+        # INCOMPLETE either way, because neither is coverage; what differs is
+        # whether re-running is the action that closes it.
+        verdict = "INCOMPLETE"
+        awaiting = ai["status"] in AI_AWAITING_STATES
+        rc = AWAITING_EXIT_CODE if awaiting else 1
     elif not examined:
         # Defensive: AI_CONSUMED currently implies at least one converged
         # expectation. Keep the zero-denominator refusal local so a future
         # status change cannot manufacture a pass.
         verdict, rc = "INCOMPLETE", 1
+        awaiting = False
     elif findings:
         verdict, rc = "FINDINGS", 0
+        awaiting = False
     else:
         verdict, rc = "PASS", 0
+        awaiting = False
+
+    if execution_complete:
+        disposition = DISPOSITION_CREDITED
+    elif awaiting:
+        disposition = DISPOSITION_AWAITING
+    else:
+        disposition = DISPOSITION_DEFECT
 
     sidecar = _pl.phase1_ai_deep_review_patches_file(project)
     return {
@@ -900,11 +999,29 @@ def evaluate(project: Path) -> Dict[str, Any]:
         "enforcement": "advisory (findings) / mandatory (execution)",
         "execution": {
             "complete": execution_complete,
+            # WHICH of the three, stated. A reader who has only `complete:
+            # false` cannot tell "nobody has answered yet" from "the answer is
+            # unreadable", and those two need different people.
+            "disposition": disposition,
             "required_ai_status": AI_CONSUMED,
             "required_ai_consumed_min": 1,
             "observed_ai_status": ai["status"],
             "observed_ai_consumed": len(converged),
         },
+        # WHAT IT IS WAITING FOR, in the words of the action that ends the
+        # wait — never a bare state name. Null when nothing is being waited
+        # for, so "waiting" and "not waiting" are two readable states rather
+        # than a field a reader has to interpret.
+        "awaiting": ({
+            "what": "the Phase-1 IC-Expert answer (second pass of the "
+                    "hand-off protocol)",
+            "ai_subtrack_status": ai["status"],
+            "action": (f"invoke subagent {_pack.SUBAGENT_TYPE} on "
+                       f"{out_dir / 'ic_expert_agent_handoff.json'}, then "
+                       f"re-run this track to consume its answer"),
+            "credited": False,
+            "exit_code": AWAITING_EXIT_CODE,
+        } if awaiting else None),
         "retrieved_expert_classes": retrieved_classes(prompt),
         # A PASS must say how much it looked at. This is that number, split by
         # half so a reader can see WHICH half contributed it — a total of 4
@@ -1006,6 +1123,13 @@ def main(argv=None) -> int:
               f"non-empty schema-readable review ({ai['status']}): "
               f"{ai['reason']} The expert answer was NOT credited as consumed; "
               f"the deterministic findings are a floor, not coverage")
+        # The state a reader can ACT on is printed as its own line. "Awaiting"
+        # with no named action is the same silence as a bare INCOMPLETE.
+        aw = rep.get("awaiting")
+        if aw:
+            print(f"  awaiting: {aw['what']} — {aw['action']} "
+                  f"(exit {aw['exit_code']}: a stated wait, not a failed run; "
+                  f"not credited)")
     den = rep["denominator"]
     print(f"{PROGRAM}: {rep['verdict']} — examined "
           f"{den['total']} expectation(s) "

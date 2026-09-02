@@ -651,7 +651,11 @@ def _run_expert_track(project: Path) -> int:
     # 0 = completed review. 1 can be either an honestly INCOMPLETE review or a
     # crash, so the report below decides which. rc 2 is retained only as a
     # defensive read of an older track binary; it cannot earn execution credit.
-    if cp.returncode not in (0, 1, 2):
+    # rc 4 is the track's AWAITING code (#2014 D1): the hand-off is written and
+    # the subagent has not answered. Accepted HERE only as "the track ran to a
+    # state it defines"; whether it is credited is still decided below, from
+    # the report, by `_expert_track_disposition` — the rc never grants credit.
+    if cp.returncode not in (0, 1, 2, _EXPERT_TRACK_AWAITING_RC):
         print(f"      expert track FAILED to complete (rc={cp.returncode}): "
               f"{(cp.stderr or '').strip().splitlines()[-1:] or ['(no detail)']}",
               file=sys.stderr)
@@ -713,6 +717,13 @@ _EXPERT_DEFECT = "DEFECT"
 #: credit; neither is a failed run. Any OTHER non-CONSUMED status — ERROR,
 #: ANSWER_SCHEMA_MISMATCH, or one this reader does not know — is a defect.
 _EXPERT_PENDING_STATUSES = frozenset({"HANDOFF_EMITTED", "CONSUMED_EMPTY"})
+
+#: The track's own AWAITING exit code (`phase1_expert_parse_track
+#: .AWAITING_EXIT_CODE`). Named here rather than imported so this dispatcher
+#: keeps working against an older track binary that does not define it; the
+#: number is pinned by `test_issue2014_d1_expert_handoff_is_a_wait_not_a_fail`
+#: against the track's constant, so the two cannot drift unnoticed.
+_EXPERT_TRACK_AWAITING_RC = 4
 
 
 def _expert_track_disposition(report: Any) -> Tuple[str, str]:

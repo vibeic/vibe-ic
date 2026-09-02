@@ -3316,6 +3316,12 @@ def __check_program_exit_zero(project: Path, cmd_str: str) -> _ProgramCheckOutco
                    `PASS_WITH_WAIVERS` stdout sentinel — a bare rc=3 with no
                    sentinel stays a FAIL (an unrelated program's exit 3 is
                    never silently waived).
+      * rc == 4  → AWAITING (#2014 D1) — the gate completed pass one of a
+                   two-pass protocol and pass two is not its move. Passes the
+                   clause and raises the #599 INCOMPLETE tier, so the step is
+                   reported "not audited, and someone must return" and never a
+                   bare PASS. Honoured only when the program ALSO printed the
+                   `INCOMPLETE:` sentinel — a bare rc=4 stays a FAIL.
       * rc == 1  → FAIL
       * other    → FAIL
     """
@@ -3368,6 +3374,32 @@ def __check_program_exit_zero(project: Path, cmd_str: str) -> _ProgramCheckOutco
             # reviewers know which gate vacuously passed.
             return _ProgramCheckOutcome(
                 True, f"{_VACUOUS_HINT_PREFIX}{cmd_str}\n{snippet}",
+                r.returncode)
+        if (r.returncode == _AWAITING_EXIT_CODE
+                and _stdout_signals_token(r.stdout,
+                                          _INCOMPLETE_STDOUT_TOKEN)):
+            # #2014 D1 — the THIRD state. A gate whose subject is a two-pass
+            # protocol reaches a state that is neither a verdict nor a fault:
+            # pass one completed and pass two is somebody else's move. Under
+            # rc-0-or-FAIL that state had to borrow one of the two words, and
+            # `phase1_expert_parse_track` borrowed FAIL — which made D1, the
+            # flow's unconditional first step, unpassable by every design at
+            # once, since a PROGRAM cannot spawn the subagent pass two needs.
+            #
+            # NOT PROMOTED TO PASS. The `INCOMPLETE:` sentinel the gate must
+            # ALSO print is what the callers below read to raise the #599
+            # INCOMPLETE tier, so the step is reported as "not audited, and
+            # someone must return" — never a bare PASS. Requiring BOTH the rc
+            # and the sentinel is the `_WAIVER_EXIT_CODE` shape and is here for
+            # the same reason: a stray rc 4 from an unrelated program must not
+            # inherit the tier. The snippet is PASSED THROUGH so the token
+            # survives into `out`, and the reason line is prepended so a cut
+            # cannot take it.
+            return _ProgramCheckOutcome(
+                True,
+                (f"INCOMPLETE: the gate reached a stated wait, not a verdict "
+                 f"(rc {_AWAITING_EXIT_CODE}) — a second pass it cannot "
+                 f"perform itself has not happened: {cmd_str}\n{snippet}"),
                 r.returncode)
         if (r.returncode == _WAIVER_EXIT_CODE
                 and _stdout_signals_waiver(r.stdout)):
@@ -3526,6 +3558,24 @@ _SELF_SKIP_VERDICTS = frozenset({"SKIP", "SKIPPED", "SKIPPED-CONDITION"})
 _WAIVER_HINT_PREFIX = "__WAIVER_HINT__: "
 _WAIVER_EXIT_CODE = 3
 _WAIVER_STDOUT_SENTINEL = "PASS_WITH_WAIVERS"
+
+# #2014 D1 — AWAITING. Exit code a gate uses to say "pass one of a two-pass
+# protocol completed; pass two is not mine to make". It is a STATE, not a
+# verdict, and it is the one thing rc-0-or-FAIL could not express.
+#
+# Distinct from every code already spoken for, on purpose:
+#   0  a verdict, and it passed
+#   1  a verdict, and it failed (or the gate died)
+#   2  VACUOUS_PASS — nothing applied. The opposite of this state: #599
+#      measured that here the input WAS applicable.
+#   3  _WAIVER_EXIT_CODE — passed, with a slot credited by a waiver.
+#   4  AWAITING — this.
+#
+# Recognised ONLY together with the `INCOMPLETE:` sentinel (see
+# `_check_program_exit_zero`), so an unrelated rc 4 cannot inherit the tier,
+# and it lands on the #599 INCOMPLETE tier rather than on PASS — "not audited,
+# and someone must return" is exactly what a pending second pass is.
+_AWAITING_EXIT_CODE = 4
 
 # ══════════════════════════════════════════════════════════════════════
 # CRASH — "the gate blew up" is not "the gate found a defect"

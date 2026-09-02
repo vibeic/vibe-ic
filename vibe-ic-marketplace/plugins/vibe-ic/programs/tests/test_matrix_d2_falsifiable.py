@@ -602,6 +602,29 @@ def _f_analog_p3_topology_behaviour(p: Path) -> None:
                     "here"}})
 
 
+def _f_expert_answer_refused(p: Path) -> None:
+    """An IC-Expert answer that EXISTS and cannot be read.
+
+    `phase1_expert_parse_track` is D1's second blocking clause and it reddened
+    on EMPTY only by accident of vibe-ic#1973: the hand-off's designed FIRST
+    pass (`HANDOFF_EMITTED` — the pack is written, no subagent has answered)
+    exited 1, so the clause "failed" on every project that had not been through
+    an agent, which is every project a program built. #2014 D1 gave that state
+    an exit code of its own; on EMPTY the clause now discloses INCOMPLETE, and
+    the falsifiability question can no longer be answered from EMPTY — the same
+    shape `_f_a0_skipped` was written for.
+
+    THE CLAUSE STILL FAILS, and this states the condition. An answer that is
+    present and is not `{"expectations": [...]}` is a REFUSAL, never a wait:
+    the agent did answer, and the answer could not be read. Absence is the
+    wait; presence-in-a-shape-nobody-reads is the defect. So the fixture has to
+    write an answer, and has to write it wrong."""
+    _w(p, "reports/audit/phase1/expert_parse_track_pack/"
+          "l_doc_expectations.json",
+       {"verdict": "gaps", "complete": False,
+        "notes": ["an expert schema this consumer does not read"]})
+
+
 def _f_a0_skipped(p: Path) -> None:
     """The forbidden artefact, encoding the forbidden verdict.
 
@@ -2149,6 +2172,7 @@ FIXTURES: Dict[str, Callable[[Path], None]] = {
     "ANALOG_P3_MACRO_RTL": _f_analog_p3_macro_rtl,
     "ANALOG_P3_TOPOLOGY_BEHAVIOUR": _f_analog_p3_topology_behaviour,
     "A0_SKIPPED": _f_a0_skipped,
+    "EXPERT_ANSWER_REFUSED": _f_expert_answer_refused,
     "LDOC_TODO": _f_ldoc_todo,
     "SIGNOFF_UNVERIFIABLE": _f_signoff_unverifiable,
     "SYNTH_BAD": _f_synth_bad,
@@ -2216,6 +2240,15 @@ CLAUSE_FIXTURE: Dict[Tuple[str, str], str] = {
     # forbidden artefact IS the pass, so the clause needs the artefact present
     # AND carrying the forbidden verdict.
     ("D1", "analog_a0_skip_forbidden_check ."): "A0_SKIPPED",
+    # vibe-ic#2014 D1. Until then this clause reddened on EMPTY for the wrong
+    # reason: the hand-off protocol's designed first pass exited 1, so the
+    # clause failed on every project no agent had touched — which is every
+    # project a program can build, D1 being the flow's unconditional first
+    # step. Giving the wait its own exit code moved EMPTY to
+    # DISCLOSED_INCOMPLETE and left the FAIL arm unproven, so it is proven
+    # here, against the condition that actually is a defect: an answer that
+    # exists and cannot be read.
+    ("D1", "phase1_expert_parse_track ."): "EXPERT_ANSWER_REFUSED",
     # Step 1.6x (v1.11.15) — its single blocking clause answers
     # NOT_APPLICABLE on EMPTY and banks a PASS, so nothing proved its FAIL
     # reachable and the cell was red on main from the version it arrived in.
