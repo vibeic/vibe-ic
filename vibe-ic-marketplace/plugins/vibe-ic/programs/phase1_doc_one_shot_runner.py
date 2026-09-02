@@ -9916,8 +9916,16 @@ def _emit_l19_to_l23_skeletons(project: Path) -> List["LDocResult"]:
     # (a gate whose execution nothing recorded) — except this one is a PRODUCER,
     # upstream of every gate that consumes it.
     _prod_log: List[Dict[str, Any]] = []
+    # Round 15 (u_hawaii_adc): a THIRD producer, for the key the other two do
+    # not write. `hard_macro_supplies` (the (master, pin) -> rail binding the
+    # pre-route gate classifies against) had three consumers and no producer
+    # before the abstracts exist; it was declared BY HAND in two acceptance
+    # rounds. It runs LAST because it binds against the rails the first two
+    # declared, and it reads the interface declaration (`.subckt`) for the
+    # pins — so it is exactly as complete as the design's own inputs.
     for _label, _mod in (("l21_doc_supply_rail_synth", "l21_doc_supply_rail_synth"),
-                         ("l21_macro_supply_rail_synth", "l21_macro_supply_rail_synth")):
+                         ("l21_macro_supply_rail_synth", "l21_macro_supply_rail_synth"),
+                         ("l21_hard_macro_supply_bind", "l21_hard_macro_supply_bind")):
         _row: Dict[str, Any] = {"producer": _label}
         try:
             _m = __import__(_mod).main

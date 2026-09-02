@@ -5624,6 +5624,8 @@ def _pg_net_retype_tcl() -> str:
         "      if {$_n eq \"NULL\" || $_n eq \"\"} { continue }\n"
         "      if {[$_n getSigType] eq $_st} { continue }\n"
         "      $_n setSigType $_st\n"
+        "      foreach _bt [$_n getBTerms] { if {[$_bt getSigType] ne $_st} "
+        "{ $_bt setSigType $_st } }\n"
         "      lappend _pgt \"[$_n getName]:$_st\"\n"
         "    }\n"
         "  }\n"
@@ -5635,6 +5637,589 @@ def _pg_net_retype_tcl() -> str:
         "  puts \"PG_NET_RETYPE_NOOP: every net on a macro PG terminal was "
         "already typed to match\"\n"
         "}\n")
+
+
+def _techlef_layer_spacing(tech_lef_text: str, layer: str) -> Optional[float]:
+    """The largest minimum-spacing value the tech LEF states for `layer` among
+    its narrow-width rules, in um — a `SPACING x ;` clause or every entry of a
+    `SPACINGTABLE PARALLELRUNLENGTH` row whose WIDTH threshold is below the
+    wide-metal regime (taken as 5um; every stack this flow has seen puts its
+    wide-metal rows at 5-10um). Conservative on purpose: a stub sized against
+    the LARGEST narrow-regime spacing is legal for every width in that regime.
+    None when the layer is absent or states no spacing. Pure LEF grammar."""
+    if not isinstance(tech_lef_text, str) or not tech_lef_text or not layer:
+        return None
+    m = re.search(r"^\s*LAYER\s+" + re.escape(layer) + r"\s*$(.*?)^\s*END\s+"
+                  + re.escape(layer) + r"\s*$", tech_lef_text, re.M | re.S)
+    if not m:
+        return None
+    body = m.group(1)
+    vals: List[float] = []
+    for sm in re.finditer(r"^\s*SPACING\s+([0-9.]+)\s*;", body, re.M):
+        vals.append(float(sm.group(1)))
+    for row in re.finditer(r"^\s*WIDTH\s+([0-9.]+)\s+((?:[0-9.]+\s+)*[0-9.]+)",
+                           body, re.M):
+        try:
+            thr = float(row.group(1))
+        except ValueError:
+            continue
+        if thr >= 5.0:
+            continue
+        for v in row.group(2).split():
+            try:
+                vals.append(float(v))
+            except ValueError:
+                pass
+    return max(vals) if vals else None
+
+
+def _techlef_manufacturing_grid(tech_lef_text: str) -> float:
+    """The LEF MANUFACTURINGGRID in um, or 0.005 (the grid every stack this
+    flow has seen declares) when the LEF states none."""
+    m = re.search(r"^\s*MANUFACTURINGGRID\s+([0-9.eE+\-]+)\s*;",
+                  tech_lef_text or "", re.M)
+    try:
+        g = float(m.group(1)) if m else 0.0
+    except ValueError:
+        g = 0.0
+    return g if g > 0 else 0.005
+
+
+def _macro_pin_rects_from_lef(lef_text: str) -> List[Dict[str, Any]]:
+    """``[{master, pin, use, layer, x1, y1, x2, y2}]`` — every PORT RECT of
+    every PIN of every MACRO in one LEF, in the LEF's own (ORIGIN-relative)
+    coordinates. ``use`` is ``POWER``/``GROUND`` or ``""``. Unlike
+    `_macro_pg_ports_from_lef` this keeps the POSITION: a per-pin stub is placed
+    ON the pin, so where the pin sits decides whether two stubs can coexist."""
+    out: List[Dict[str, Any]] = []
+    if not isinstance(lef_text, str) or not lef_text:
+        return out
+    for mm in re.finditer(r"^\s*MACRO\s+(\S+)(.*?)^\s*END\s+\1\s*$",
+                          lef_text, re.S | re.M):
+        master, body = mm.group(1), mm.group(2)
+        for pm in re.finditer(r"^\s*PIN\s+(\S+)\s*$(.*?)^\s*END\s+\1\s*$",
+                              body, re.S | re.M):
+            pin, pbody = pm.group(1), pm.group(2)
+            um = re.search(r"^\s*USE\s+(POWER|GROUND)\s*;", pbody, re.M)
+            use = um.group(1) if um else ""
+            layer = None
+            for line in pbody.splitlines():
+                lm = re.match(r"\s*LAYER\s+(\S+)\s*;", line)
+                if lm:
+                    layer = lm.group(1)
+                    continue
+                rm = re.match(r"\s*RECT\s+([\d.-]+)\s+([\d.-]+)\s+"
+                              r"([\d.-]+)\s+([\d.-]+)\s*;", line)
+                if rm and layer:
+                    x1, y1, x2, y2 = (float(v) for v in rm.groups())
+                    out.append({"master": master, "pin": pin, "use": use,
+                                "layer": layer,
+                                "x1": min(x1, x2), "y1": min(y1, y2),
+                                "x2": max(x1, x2), "y2": max(y1, y2)})
+    return out
+
+
+def _macro_supply_stub_plan(
+        macro_lef_texts: Sequence[str],
+        tech_lef_text: Optional[str],
+        stripes: Sequence[Dict[str, Any]]) -> Dict[str, Any]:
+    """Plan a PER-PIN SUPPLY STUB for every hard macro whose supply ports the
+    strap-pattern macro grid cannot reach.
+
+    WHY THIS EXISTS (measured, round 14/15 of u_hawaii_adc)
+    ======================================================
+    `_macro_pdn_grid_outcome` reaches a macro's supply pins with a strap
+    PATTERN, and a pattern only reaches a port wider than its own pitch. On a
+    real analog macro the supply ports are 1.2um x 0.7um pads on the pin layer,
+    so every legal pattern was refused (``NO_PORT_WIDE_ENOUGH_FOR_ANY_LEGAL_
+    PITCH``) and the pins carried no conductor at all. The same refusal covered
+    a supply one macro GENERATES and another CONSUMES (`vldo`, the LDO output
+    feeding the modulator cores): the net was typed POWER, `pdngen` was told
+    about one voltage domain, and the run stopped at the unrouted-supply FAIL.
+
+    A stub is the construct the old planner's own note said OpenROAD PDN had no
+    primitive for — and it does: ``add_pdn_stripe -number_of_straps 1 -offset
+    <pin centre> -nets <this pin's net>`` on a macro grid puts exactly ONE strap
+    of exactly ONE net across the pin, and `pdngen` trims it to the last core
+    strap it bonds to. Measured on the u_hawaii_adc die (7 macros, 15 supply
+    terminals on 4 nets incl. a SIGNAL-typed macro output driving a POWER net):
+    15/15 terminals via'd, ``check_power_grid`` reports every shape connected.
+
+    THE TWO RULES, both measured
+    ============================
+    1. ONE stub layer, PERPENDICULAR to a core strap layer ABOVE it (the
+       partner), so the stub bonds INTO the core grid instead of building an
+       island (same rule as the strap-pattern grid).
+    2. TWO STUBS ON ONE MACRO NEED CLEARANCE: `pdngen` drops a strap that
+       intersects the avoidance region of one already generated, and that
+       region is the earlier strap bloated by the layer's spacing on BOTH
+       sides. Two 1.7um stubs on pins 2.0um apart (0.3um gap, legal by the
+       tech LEF's 0.24um) were generated as ONE stub — the second vanished
+       with no message. Width is therefore capped at
+       (closest pin-centre distance across the stub) - 2 x spacing, and a
+       later runtime check refuses (loudly) any stub that still lands too
+       close, because a SIGNAL pin on a supply net is only known at runtime.
+
+    Returns ``{"plan": {master: {...}}, "refusals": [rec...]}``. An empty plan
+    with empty refusals means NO hard macro declares a POWER/GROUND port.
+    chip-AGNOSTIC: masters, pin layers, pin positions, spacings and widths all
+    come from the design's own LEFs and the PDK's own tech LEF."""
+    rects = []
+    _obs_per_lef: List[Dict[str, Dict[str, Any]]] = []
+    for t in (macro_lef_texts or []):
+        rects.extend(_macro_pin_rects_from_lef(t))
+        _obs_per_lef.append(_macro_obs_layers_from_lef(t))
+    pg = [r for r in rects if r["use"]]
+    if not pg:
+        return {"plan": {}, "refusals": []}
+    obs = _srm.merge_source_records(
+        _obs_per_lef, content=lambda e: (e or {}).get("blocked"),
+        on_conflict="richer")[0] if _obs_per_lef else {}
+    layers = _techlef_routing_layers(tech_lef_text or "")
+    order = {n.lower(): i for i, (n, _d, _p, _w) in enumerate(layers)}
+    dirs = {n.lower(): d for n, d, _p, _w in layers}
+    minw = {n.lower(): w for n, _d, _p, w in layers}
+    grid = _techlef_manufacturing_grid(tech_lef_text or "")
+    strap_by = {str(s.get("layer", "")).lower(): s for s in (stripes or [])
+                if s.get("layer") and s.get("width")}
+    plan: Dict[str, Dict[str, Any]] = {}
+    refusals: List[Dict[str, Any]] = []
+
+    def _refuse(master: str, reason: str, detail: str, **extra: Any) -> None:
+        refusals.append({"masters": [master], "reason": reason,
+                         "detail": detail, **extra})
+
+    for master in sorted({r["master"] for r in pg}):
+        ports = [r for r in pg if r["master"] == master]
+        if not layers:
+            _refuse(master, "NO_ROUTING_LAYERS_IN_TECH_LEF",
+                    "the tech LEF declares no parseable TYPE ROUTING layer")
+            continue
+        pin_layers = sorted({r["layer"] for r in ports},
+                            key=lambda l: order.get(l.lower(), 10 ** 6))
+        pin_layer = pin_layers[0]
+        if pin_layer.lower() not in order:
+            _refuse(master, "PIN_LAYER_NOT_A_ROUTING_LAYER",
+                    f"supply pins on {pin_layer}, not a TYPE ROUTING layer",
+                    pin_layer=pin_layer)
+            continue
+        pin_i = order[pin_layer.lower()]
+        blocked_lc = set()
+        _e = (obs or {}).get(master) or {}
+        for _lay in (_e.get("blocked") or {}):
+            if _layer_is_fully_blocked(_e, _lay) is True:
+                blocked_lc.add(_lay.lower())
+        best: Optional[Dict[str, Any]] = None
+        tried: List[str] = []
+        for lname, ldir, _lp, lw in layers:
+            li = order[lname.lower()]
+            if li <= pin_i or not ldir or lname.lower() in blocked_lc:
+                continue
+            partner = None
+            for sname, st in strap_by.items():
+                sd = dirs.get(sname, "")
+                if sd and sd != ldir and order.get(sname, -1) > li:
+                    partner = st
+                    break
+            if partner is None:
+                tried.append(f"{lname}: no perpendicular core strap above it")
+                continue
+            # centre distance ACROSS the stub: y for a horizontal stub, x
+            # for a vertical one.
+            if ldir == "HORIZONTAL":
+                centres = sorted((p["y1"] + p["y2"]) / 2.0 for p in ports)
+            else:
+                centres = sorted((p["x1"] + p["x2"]) / 2.0 for p in ports)
+            dmin = min((b - a for a, b in zip(centres, centres[1:])),
+                       default=float("inf"))
+            sp = _techlef_layer_spacing(tech_lef_text or "", lname)
+            if sp is None:
+                sp = lw
+            # MEASURED: a gap EQUAL to 2 x spacing is still dropped (pdngen's
+            # avoidance query counts touching as intersecting), 1.0um kept.
+            # Ten manufacturing grids of margin over the bloat.
+            w = min(float(partner["width"]), dmin - 2.0 * sp - 10.0 * grid)
+            w = math.floor(w / grid + 1e-9) * grid
+            if w < lw:
+                tried.append(f"{lname}: stub width {w:.3f}um below the layer "
+                             f"minimum {lw}um (pins {dmin:.3f}um apart, "
+                             f"spacing {sp}um)")
+                continue
+            cand = {"pin_layer": pin_layer, "stub_layer": lname,
+                    "stub_dir": ldir, "width": round(w, 3),
+                    "spacing": round(sp, 3), "partner_layer": partner["layer"],
+                    "pitch": round(2.0 * (w + sp), 3),
+                    "pins": sorted({p["pin"] for p in ports}),
+                    "min_pin_centre_distance": (None if dmin == float("inf")
+                                                else round(dmin, 3)),
+                    "blocked_layers": sorted(blocked_lc)}
+            if best is None or cand["width"] > best["width"]:
+                best = cand
+        if best is None:
+            _refuse(master, "NO_STUB_LAYER",
+                    "no routing layer above the pin layer can carry a stub "
+                    "that both clears its neighbours and bonds to a "
+                    "perpendicular core strap: " + "; ".join(tried),
+                    pin_layer=pin_layer, candidates=tried)
+            continue
+        plan[master] = best
+    return {"plan": plan, "refusals": refusals}
+
+
+def _build_macro_supply_stub_tcl(plan: Dict[str, Dict[str, Any]]) -> str:
+    """Render `_macro_supply_stub_plan` as Tcl that runs INSIDE the pdngen
+    block, before `pdngen`. The plan fixes layer, width, spacing and partner
+    per master; the pin OFFSETS are read from the placed database at runtime
+    (`$iterm getBBox` is already transformed by the instance orientation), so
+    one plan serves every orientation. Instances are grouped by
+    (master, orient, stub set) and emitted as ``define_pdn_grid -macro -cells
+    <master> -orient <orient>`` — this OpenROAD build's ``-instances`` cannot
+    resolve an instance name carrying ``[`` ``]`` (PDN-1030, measured), so a
+    group whose instances need DIFFERENT stub sets is refused by name rather
+    than mis-strapped. Empty string for an empty plan, so a design with no
+    hard-macro supply port emits a BYTE-IDENTICAL pnr.tcl."""
+    if not plan:
+        return ""
+    out: List[str] = [
+        "  # --- macro supply stubs: ONE strap of ONE net across each supply\n"
+        "  # terminal of each hard macro (POWER/GROUND terminals, and any\n"
+        "  # terminal whose net is a supply — a macro OUTPUT that generates\n"
+        "  # one), on a layer perpendicular to a core strap above it so the\n"
+        "  # stub bonds into the core grid. See _macro_supply_stub_plan.\n"
+        "  set _stub_dbu [[ord::get_db_tech] getDbUnitsPerMicron]\n"
+        "  set _stub_n 0; set _stub_grids 0; set _stub_refused 0\n"
+        "  array unset _stub_grp; array unset _stub_seen\n"
+    ]
+    for master in sorted(plan):
+        p = plan[master]
+        # The array KEY must equal the master's name as the database holds
+        # it, so the runtime lookup finds it — brace-quoted, which is
+        # substitution-free for any name without a brace or a newline. A
+        # name carrying one cannot be quoted safely and is refused by name.
+        if any(c in master for c in "{}\r\n"):
+            out.append(
+                f"  puts \"MACRO_SUPPLY_STUB_REFUSED: master="
+                f"{_tcl_puts_safe(master)} reason=MASTER_NAME_UNQUOTABLE "
+                f"-- the master name carries a brace or newline, which no "
+                f"Tcl array key can hold verbatim\"\n")
+            continue
+        out.append(
+            f"  array set _stub_cfg [list {{{master}}} [list "
+            f"{{{p['stub_layer']}}} {p['width']} {p['spacing']} {p['pitch']} "
+            f"{{{p['pin_layer']}}} {{{p['partner_layer']}}} "
+            f"{'H' if p['stub_dir'] == 'HORIZONTAL' else 'V'}]]\n")
+    out.append(
+        "  foreach _i [[ord::get_db_block] getInsts] {\n"
+        "    set _m [[$_i getMaster] getName]\n"
+        "    if {![info exists _stub_cfg($_m)]} { continue }\n"
+        "    lassign $_stub_cfg($_m) _sl _sw _ss _sp _pl _ptl _sdir\n"
+        "    if {![$_i isPlaced]} {\n"
+        "      puts \"MACRO_SUPPLY_STUB_REFUSED: [$_i getName] master=$_m "
+        "reason=NOT_PLACED\"\n"
+        "      incr _stub_refused; continue\n"
+        "    }\n"
+        "    set _ib [$_i getBBox]\n"
+        "    set _stubs {}\n"
+        "    foreach _it [$_i getITerms] {\n"
+        "      set _n [$_it getNet]\n"
+        "      if {$_n eq \"NULL\" || $_n eq \"\"} { continue }\n"
+        "      set _st [$_n getSigType]\n"
+        "      if {$_st ne \"POWER\" && $_st ne \"GROUND\"} { continue }\n"
+        "      set _pb [$_it getBBox]\n"
+        "      if {$_sdir eq \"H\"} {\n"
+        "        set _c [expr {([$_pb yMin] + [$_pb yMax]) / 2.0}]\n"
+        "        set _off [expr {($_c - [$_ib yMin]) / double($_stub_dbu)}]\n"
+        "      } else {\n"
+        "        set _c [expr {([$_pb xMin] + [$_pb xMax]) / 2.0}]\n"
+        "        set _off [expr {($_c - [$_ib xMin]) / double($_stub_dbu)}]\n"
+        "      }\n"
+        "      lappend _stubs [list [[$_it getMTerm] getName] [$_n getName] "
+        "[format %.3f $_off] $_st]\n"
+        "    }\n"
+        "    if {![llength $_stubs]} { continue }\n"
+        "    set _stubs [lsort -real -index 2 $_stubs]\n"
+        "    # clearance: pdngen silently drops a strap inside a neighbour's\n"
+        "    # spacing bloat, so a stub that cannot coexist is refused by name\n"
+        "    set _kept {}; set _prev \"\"\n"
+        "    foreach _s $_stubs {\n"
+        "      if {$_prev ne \"\" && ([lindex $_s 2] - [lindex $_prev 2]) < "
+        "($_sw + 2.0 * $_ss)} {\n"
+        "        puts \"MACRO_SUPPLY_STUB_REFUSED: [$_i getName]/[lindex $_s 0] "
+        "net=[lindex $_s 1] reason=STUB_CLEARANCE delta=[expr {[lindex $_s 2] "
+        "- [lindex $_prev 2]}]um need=[expr {$_sw + 2.0 * $_ss}]um\"\n"
+        "        incr _stub_refused; continue\n"
+        "      }\n"
+        "      lappend _kept $_s; set _prev $_s\n"
+        "    }\n"
+        "    set _key [list $_m [$_i getOrient] $_kept]\n"
+        "    lappend _stub_grp($_key) [$_i getName]\n"
+        "    lappend _stub_seen([list $_m [$_i getOrient]]) $_key\n"
+        "  }\n"
+        "  foreach _key [lsort [array names _stub_grp]] {\n"
+        "    lassign $_key _m _o _kept\n"
+        "    lassign $_stub_cfg($_m) _sl _sw _ss _sp _pl _ptl _sdir\n"
+        "    set _insts $_stub_grp($_key)\n"
+        "    set _mo [list $_m $_o]\n"
+        "    if {[llength [lsort -unique $_stub_seen($_mo)]] > 1} {\n"
+        "      # same master+orient, different stub sets: -cells/-orient\n"
+        "      # cannot separate them, and -instances cannot name an\n"
+        "      # escaped instance in this build — try, and refuse loudly\n"
+        "      set _gname \"mstub_[regsub -all {[^A-Za-z0-9_]} \"${_m}_${_o}_"
+        "[lindex $_insts 0]\" _]\"\n"
+        "      if {[catch {define_pdn_grid -macro -name $_gname -instances "
+        "$_insts -voltage_domains CORE -grid_over_boundary} _ge]} {\n"
+        "        foreach _in $_insts { puts \"MACRO_SUPPLY_STUB_REFUSED: $_in "
+        "master=$_m reason=AMBIGUOUS_GROUP_INSTANCE_UNRESOLVABLE $_ge\" }\n"
+        "        incr _stub_refused [llength $_insts]; continue\n"
+        "      }\n"
+        "    } else {\n"
+        "      set _gname \"mstub_[regsub -all {[^A-Za-z0-9_]} \"${_m}_${_o}\" _]\"\n"
+        "      define_pdn_grid -macro -name $_gname -cells $_m -orient $_o "
+        "-voltage_domains CORE -grid_over_boundary\n"
+        "    }\n"
+        "    incr _stub_grids\n"
+        "    foreach _s $_kept {\n"
+        "      lassign $_s _pin _net _off _st\n"
+        "      add_pdn_stripe -grid $_gname -layer $_sl -width $_sw -pitch $_sp "
+        "-spacing $_ss -offset $_off -number_of_straps 1 -nets [list $_net] "
+        "-starts_with $_st\n"
+        "      incr _stub_n\n"
+        "      puts \"MACRO_SUPPLY_STUB: master=$_m orient=$_o pin=$_pin "
+        "net=$_net layer=$_sl width=$_sw offset=$_off insts=[llength $_insts]\"\n"
+        "    }\n"
+        "    add_pdn_connect -grid $_gname -layers [list $_pl $_sl]\n"
+        "    add_pdn_connect -grid $_gname -layers [list $_sl $_ptl]\n"
+        "  }\n"
+        "  puts \"MACRO_SUPPLY_STUBS: $_stub_n stub(s) in $_stub_grids "
+        "grid(s), $_stub_refused refused\"\n")
+    return "".join(out)
+
+
+def _macro_supply_pin_audit_tcl() -> str:
+    """After `pdngen`: does a conductor actually land on each hard-macro
+    supply terminal? Counts the special-net VIAS and same-net pin-layer WIRES
+    intersecting every macro terminal whose net is POWER/GROUND. ADVISORY —
+    reported by name, never a stop here: the DEF-geometry verdict, the tool's
+    connectivity check and LVS remain the blocking gates. What this adds is
+    the NAME of the terminal, which none of those give."""
+    return (
+        "  if {[catch {\n"
+        "    set _msp_total 0; set _msp_unreached 0\n"
+        "    foreach _i [[ord::get_db_block] getInsts] {\n"
+        "      if {![[$_i getMaster] isBlock]} { continue }\n"
+        "      foreach _it [$_i getITerms] {\n"
+        "        set _n [$_it getNet]\n"
+        "        if {$_n eq \"NULL\" || $_n eq \"\"} { continue }\n"
+        "        set _st [$_n getSigType]\n"
+        "        if {$_st ne \"POWER\" && $_st ne \"GROUND\"} { continue }\n"
+        "        incr _msp_total\n"
+        "        set _pb [$_it getBBox]; set _hit 0\n"
+        "        foreach _sw [$_n getSWires] { foreach _b [$_sw getWires] {\n"
+        "          if {[$_b xMax] < [$_pb xMin] || [$_b xMin] > [$_pb xMax] || "
+        "[$_b yMax] < [$_pb yMin] || [$_b yMin] > [$_pb yMax]} { continue }\n"
+        "          incr _hit\n"
+        "        } }\n"
+        "        if {$_hit == 0} {\n"
+        "          incr _msp_unreached\n"
+        "          puts \"MACRO_SUPPLY_PIN_UNREACHED: [$_i getName]/"
+        "[[$_it getMTerm] getName] net=[$_n getName] ($_st) -- no special-net "
+        "via or wire intersects this terminal after pdngen\"\n"
+        "        }\n"
+        "      }\n"
+        "    }\n"
+        "    puts \"MACRO_SUPPLY_PIN_AUDIT: total=$_msp_total "
+        "unreached=$_msp_unreached (ADVISORY: names the terminal; the "
+        "DEF-geometry verdict, check_power_grid and LVS block)\"\n"
+        "  } _msp_err]} { puts \"MACRO_SUPPLY_PIN_AUDIT_NONFATAL: $_msp_err\" }\n")
+
+
+def _secondary_supply_tcl(pwr: str, gnd: str,
+                          stripes: Sequence[Dict[str, Any]]
+                          ) -> Dict[str, str]:
+    """Tcl for the SECONDARY supplies of the core voltage domain.
+
+    MEASURED (u_hawaii_adc, rounds 14-15): one modulator's core supply is
+    generated ON CHIP by the LDO macro, so the netlist net `vldo` is driven
+    by a macro output and lands on terminals the consuming macro's abstract
+    types POWER. Typed POWER before routing (correctly — DRT-0307 otherwise),
+    it then reached `pdngen` as a net the ONE declared voltage domain knew
+    nothing about, and the run stopped at the unrouted-supply FAIL. The same
+    holds for a rail the design declares for a macro pin only (`IOVDD`, the
+    LDO input), which the flow's own L21 binding creates and nothing strapped.
+
+    `pdngen` carries additional power nets as ``-secondary_power`` of a
+    domain, and ``add_pdn_stripe -nets`` restricts a strap group to them, so
+    every secondary net gets its own strap group on every core strap layer —
+    interleaved between the primary groups, at an offset half a pitch on —
+    and ``-extend_to_boundary`` carries each to the die edge, where pdngen
+    creates the boundary pin shapes (a BTerm for a net that had none).
+    Which nets are secondary is decided at RUNTIME from the database — every
+    POWER net with a terminal that is not the primary — because the netlist
+    and the L21 bindings are only both visible there. A secondary GROUND net
+    is reported: pdngen's domain carries one ground.
+
+    Returns ``{"enumerate", "domain_opt", "stripes", "report"}``. The strap
+    pieces are per core strap layer, and each states its fit against the
+    primary group before emitting."""
+    enum = (
+        "  # --- secondary supplies: every POWER net with a terminal that is\n"
+        "  # not the primary rail, from the database (netlist + bindings)\n"
+        "  set _sec_pwr {}; set _sec_gnd {}\n"
+        "  foreach _sn [[ord::get_db_block] getNets] {\n"
+        "    set _sst [$_sn getSigType]\n"
+        "    if {$_sst ne \"POWER\" && $_sst ne \"GROUND\"} { continue }\n"
+        "    if {[llength [$_sn getITerms]] == 0 && "
+        "[llength [$_sn getBTerms]] == 0} { continue }\n"
+        "    set _snm [$_sn getName]\n"
+        f"    if {{$_sst eq \"POWER\" && $_snm ne \"{pwr}\"}} "
+        "{ lappend _sec_pwr $_snm }\n"
+        f"    if {{$_sst eq \"GROUND\" && $_snm ne \"{gnd}\"}} "
+        "{ lappend _sec_gnd $_snm }\n"
+        "  }\n"
+        "  set _sec_pwr [lsort $_sec_pwr]; set _sec_gnd [lsort $_sec_gnd]\n"
+        "  set _sec_opt {}\n"
+        "  if {[llength $_sec_pwr] > 0} "
+        "{ set _sec_opt [list -secondary_power $_sec_pwr] }\n"
+        "  foreach _sg $_sec_gnd { puts \"PDN_SECONDARY_GROUND_UNSUPPORTED: "
+        "$_sg -- a pdngen voltage domain carries ONE ground net; this GROUND "
+        "net gets no grid here (record it for the tool fork)\" }\n")
+    st: List[str] = []
+    for s in (stripes or []):
+        lyr, sw, sp = s.get("layer"), s.get("width"), s.get("pitch")
+        off = s.get("offset", 0)
+        if not (lyr and sw and sp):
+            continue
+        st.append(
+            f"  if {{[llength $_sec_pwr] > 0}} {{\n"
+            f"    set _sec_n [llength $_sec_pwr]\n"
+            f"    set _sec_need [expr {{$_sec_n * {sw} + ($_sec_n - 1) * {sw}}}]\n"
+            f"    set _sec_avail [expr {{{sp} / 2.0 - 2.0 * {sw}}}]\n"
+            f"    if {{$_sec_need <= $_sec_avail}} {{\n"
+            f"      add_pdn_stripe -grid grid -layer {lyr} -width {sw} "
+            f"-pitch {sp} -offset [expr {{{off} + {sp} / 2.0}}] -spacing {sw} "
+            f"-nets $_sec_pwr -extend_to_boundary\n"
+            f"    }} else {{\n"
+            f"      puts \"PDN_SECONDARY_STRAPS_DO_NOT_FIT: layer={lyr} "
+            f"nets=$_sec_pwr need=${{_sec_need}}um available=${{_sec_avail}}um "
+            f"between primary groups at pitch {sp}\"\n"
+            f"    }}\n"
+            f"  }}\n")
+    report = (
+        "  if {[llength $_sec_pwr] > 0} {\n"
+        "    puts \"PDN_SECONDARY_SUPPLY: [llength $_sec_pwr] secondary POWER "
+        "net(s) in domain CORE: $_sec_pwr\"\n"
+        "    foreach _snm $_sec_pwr {\n"
+        "      set _sn [[ord::get_db_block] findNet $_snm]\n"
+        "      set _nv 0; set _nw 0; set _blk_terms {}\n"
+        "      foreach _sw [$_sn getSWires] { foreach _b [$_sw getWires] { "
+        "if {[$_b isVia]} { incr _nv } else { incr _nw } } }\n"
+        "      foreach _it [$_sn getITerms] {\n"
+        "        if {[[[$_it getInst] getMaster] isBlock]} { lappend _blk_terms "
+        "\"[[$_it getInst] getName]/[[$_it getMTerm] getName]"
+        "([[$_it getMTerm] getSigType])\" }\n"
+        "      }\n"
+        "      puts \"PDN_SECONDARY_NET: $_snm iterms=[llength [$_sn getITerms]] "
+        "bterms=[llength [$_sn getBTerms]] straps=$_nw vias=$_nv "
+        "macro_terminals=[lsort $_blk_terms]\"\n"
+        "    }\n"
+        "  } else {\n"
+        "    puts \"PDN_SECONDARY_SUPPLY_NONE: every POWER net with a terminal "
+        "is the primary rail\"\n"
+        "  }\n")
+    return {"enumerate": enum, "domain_opt": " {*}$_sec_opt",
+            "stripes": "".join(st), "report": report}
+
+
+def _pdk_nominal_voltage(pdk: "PdkConfig",
+                         container: Optional[str] = None) -> Optional[float]:
+    """The standard-cell library's own ``nom_voltage`` in volts, from the
+    PDK's liberty (host copy first, then the container). None when unstated."""
+    txt = _read_pdk_text(getattr(pdk, "liberty", None), container)
+    if not txt:
+        return None
+    m = re.search(r"^\s*nom_voltage\s*:\s*([0-9.]+)\s*;", txt, re.M)
+    if not m:
+        m = re.search(r"voltage_map\s*\(\s*\w+\s*,\s*([0-9.]+)\s*\)", txt)
+    try:
+        return float(m.group(1)) if m else None
+    except ValueError:
+        return None
+
+
+def _resolve_l21_rail_bindings(
+        l21: Dict[str, Any],
+        dmap: Dict[Tuple[str, str], str],
+        pwr_nets: Sequence[str], gnd_nets: Sequence[str],
+        nominal_v: Optional[float]) -> Tuple[Dict[Tuple[str, str], str],
+                                             List[str]]:
+    """Map each L21 rail a macro pin is bound to onto the NET the PDN will
+    build — or leave it as its own secondary net.
+
+    MEASURED (round 14): the emitter bound `delta_sigma/vdd` to ``-net CORE``
+    verbatim, the design's name for its 1.2 V rail, and OpenROAD created a
+    net called CORE beside the standard cells' VDD: a phantom with no
+    terminals. The design and the PDK name the same rail differently, and
+    the ONE fact that joins them without a naming convention is the VOLTAGE:
+    a rail at the standard-cell library's ``nom_voltage`` IS the standard-cell
+    rail; a GROUND-use rail is the ground; anything else is a secondary
+    supply and keeps the design's own name. Ambiguity (two rails at the
+    nominal voltage) resolves nothing and says so. Returns the resolved map
+    and the resolution notes."""
+    f = (l21 or {}).get("fields") or {}
+    doms = [d for d in (f.get("power_domains") or []) if isinstance(d, dict)]
+    by_name: Dict[str, Dict[str, Any]] = {}
+    for d in doms:
+        n = str(d.get("name") or d.get("power_net") or "").strip()
+        if n:
+            by_name.setdefault(n, d)
+    pwr = sorted(pwr_nets or [])
+    gnd = sorted(gnd_nets or [])
+    at_nominal = []
+    if nominal_v is not None:
+        for n, d in by_name.items():
+            try:
+                v = float(d.get("voltage_v"))
+            except (TypeError, ValueError):
+                continue
+            if d.get("is_power_domain") is False:
+                continue
+            if abs(v - nominal_v) <= 0.01 * max(nominal_v, 1e-9):
+                at_nominal.append(n)
+    out: Dict[Tuple[str, str], str] = {}
+    notes: List[str] = []
+    seen: Dict[str, str] = {}
+    pwr_lc = {n.lower(): n for n in pwr}
+    gnd_lc = {n.lower(): n for n in gnd}
+    for key, rail in (dmap or {}).items():
+        if rail in pwr or rail in gnd:
+            out[key] = rail
+            continue
+        d = by_name.get(rail) or {}
+        res = rail
+        why = "kept as its own (secondary) supply net"
+        if rail.lower() in pwr_lc or rail.lower() in gnd_lc:
+            # The LEF-derived rail producer names a rail after the macro's
+            # own pin (`vdd`, `vss`); the PDK spells its nets `VDD`/`VSS`.
+            # Same name, different case, is the name-equality rule the
+            # macro global-connect already applies — one rule, not two.
+            res = pwr_lc.get(rail.lower()) or gnd_lc[rail.lower()]
+            why = "the PDK net of the same name (case-insensitive)"
+        elif d.get("is_power_domain") is False and gnd:
+            res, why = gnd[0], "a GROUND rail declaration -> the PDK ground"
+        elif nominal_v is not None and rail in at_nominal and pwr:
+            if len(at_nominal) == 1:
+                res = pwr[0]
+                why = (f"{d.get('voltage_v')} V == liberty nom_voltage "
+                       f"{nominal_v} V -> the standard-cell rail")
+            else:
+                why = (f"AMBIGUOUS: {len(at_nominal)} rails sit at the "
+                       f"library's {nominal_v} V ({', '.join(at_nominal)}); "
+                       "not resolved")
+        out[key] = res
+        if rail not in seen:
+            seen[rail] = res
+            notes.append(f"{rail} -> {res}: {why}")
+    return out, notes
 
 
 def _build_pdn_tcl(pdk: "PdkConfig", container: Optional[str] = None,
@@ -5896,8 +6481,66 @@ def _build_pdn_tcl(pdk: "PdkConfig", container: Optional[str] = None,
         # that reached the planner and got a refusal must say so on BOTH
         # markers; hanging it off the success branch alone would restore the
         # silence for exactly the runs already in the worst shape.
+        # === per-pin supply stubs (round 15) ===
+        # The strap-pattern macro grid above reaches a port only when the port
+        # is wider than a legal pitch; a per-pin stub reaches ANY port. A
+        # master the stub planner serves is no longer a refusal of the
+        # pattern planner — the pattern grid is dropped for it (two grids on
+        # one master would double-strap it) and the refusal record with it.
+        _stub_tcl = ""
+        _stub_note = ""
+        _stub_plan: Dict[str, Dict[str, Any]] = {}
+        _stub_outcome: Dict[str, Any] = {"plan": {}, "refusals": []}
+        if _stripes and _mg_refusals:
+            # Only the masters the strap-pattern planner REFUSED. A master it
+            # planned a grid for keeps that grid, byte-identical; a second
+            # grid on the same cells would strap it twice.
+            _refused_masters = {m for r in _mg_refusals
+                                for m in (r.get("masters") or [])}
+            _stub_outcome = _macro_supply_stub_plan(
+                [t for t in
+                 (_read_pdk_text(m, container)
+                  for m in (getattr(pdk, "macro_lefs", None) or [])) if t],
+                _read_pdk_text(getattr(pdk, "tech_lef", None), container),
+                _stripes)
+            _stub_plan = {m: p for m, p in _stub_outcome["plan"].items()
+                          if m in _refused_masters}
+            _stub_tcl = _build_macro_supply_stub_tcl(_stub_plan)
+            if _stub_plan:
+                _stub_note = (" + supply_stubs(" + "; ".join(
+                    f"{_tcl_puts_safe(m)}:{_tcl_puts_safe(p['pin_layer'])}->"
+                    f"{_tcl_puts_safe(p['stub_layer'])}@{p['width']}um"
+                    for m, p in sorted(_stub_plan.items())) + ")")
+                if _mg_plan and all(m in _stub_plan
+                                    for m in _mg_plan["masters"]):
+                    _mg_tcl = ""
+                    _mg_note = ""
+                _mg_refusals = [
+                    dict(r, masters=[m for m in (r.get("masters") or [])
+                                     if m not in _stub_plan])
+                    for r in _mg_refusals]
+                _mg_refusals = [r for r in _mg_refusals if r["masters"]]
+                if not _mg_refusals and "macro_grid_REFUSED(" in _mg_note:
+                    _mg_note = ""
+                _ok_marker = (
+                    f"  puts \"PDN_INSERTED_ADAPTIVE: {fpl} follow-pins "
+                    f"net={pwr}/{gnd} width={w}{strap_note}{_mg_note}"
+                    f"{_stub_note}{well_note}\"\n" + _mg_unreach
+                    if strap_tcl else _ok_marker)
+            for _r in _stub_outcome["refusals"]:
+                # The pattern planner's refusal already names this master;
+                # this says why a STUB could not stand in for the pattern.
+                for _m in (_r.get("masters") or []):
+                    if _m not in _refused_masters:
+                        continue
+                    _stub_tcl += (
+                        f"  puts \"MACRO_SUPPLY_STUB_REFUSED: master="
+                        f"{_tcl_puts_safe(_m)} reason="
+                        f"{_tcl_puts_safe(_r.get('reason') or 'UNSPECIFIED')} "
+                        f"-- {_tcl_puts_safe(_r.get('detail') or '')}\"\n")
         _ok_marker += _build_macro_pdn_refusal_tcl(_mg_refusals)
-        _ok_marker = _pg_net_retype_tcl() + _ok_marker
+        # === secondary supplies (round 15) — see _secondary_supply_tcl ===
+        _sec = _secondary_supply_tcl(pwr, gnd, _stripes)
         return (
             "# === PDK-adaptive PDN: discovered PG pins + met1 follow-pins"
             + (" + upper-metal straps ===\n" if strap_tcl else " ===\n")
@@ -5908,16 +6551,27 @@ def _build_pdn_tcl(pdk: "PdkConfig", container: Optional[str] = None,
                 getattr(pdk, "macro_lefs", None), pwr, gnd)
             + well_tcl
             + "  global_connect\n"
-            f"  set_voltage_domain -name CORE -power {pwr} -ground {gnd}\n"
+            # A net on a macro POWER/GROUND terminal is typed BEFORE the
+            # domain is declared, so pdngen sees every supply net as one.
+            # Through v1.15.54 this ran AFTER pdngen (measured: vldo typed
+            # POWER, the unrouted-supply FAIL, pdngen had built nothing for it).
+            + _pg_net_retype_tcl()
+            + _sec["enumerate"]
+            + f"  set_voltage_domain -name CORE -power {pwr} -ground {gnd}"
+            + _sec["domain_opt"] + "\n"
             "  define_pdn_grid -name grid -voltage_domains CORE\n"
             f"  add_pdn_stripe -grid grid -layer {fpl} -width {w} -followpins\n"
             + strap_tcl
+            + _sec["stripes"]
             + _mg_tcl
+            + _stub_tcl
             + "  pdngen\n"
             "} _pdn_err]} {\n"
             "  puts \"PDN_NONFATAL: $_pdn_err\"\n"
             "} else {\n"
             + _ok_marker
+            + _sec["report"]
+            + _macro_supply_pin_audit_tcl()
             + "}\n")
     return ("puts \"PDN_SKIPPED: no PDK config for this design; "
             "silicon DOA without external PDN insertion\"\n")
@@ -6993,6 +7647,32 @@ def _build_hardmacro_supply_gc_tcl(
         out.append("  }\n")
         out.append("  global_connect\n")
         out.append("  puts \"HARDMACRO_SUPPLY_GC: bound=$_hm_n\"\n")
+        # Round 15: `global_connect` never moves a terminal the netlist
+        # already connects (measured: delta_sigma/vdd stayed on `vldo` under
+        # a binding to another rail). Say so, per terminal, instead of
+        # letting the declared rail and the built net silently differ.
+        out.append("  foreach _hm_i [$_hm_blk getInsts] {\n")
+        out.append("    set _hm_mn [[$_hm_i getMaster] getName]\n")
+        out.append("    foreach _hm_b [list")
+        for master in sorted(conn_by_master):
+            for c in conn_by_master[master]:
+                out.append(f" [list \"{master}\" \"{c['pin']}\" "
+                           f"\"{c['rail']}\"]")
+        out.append("] {\n")
+        out.append("      lassign $_hm_b _hm_bm _hm_bp _hm_br\n")
+        out.append("      if {$_hm_mn ne $_hm_bm} { continue }\n")
+        out.append("      set _hm_it [$_hm_i findITerm $_hm_bp]\n")
+        out.append("      if {$_hm_it eq \"NULL\" || $_hm_it eq \"\"} { continue }\n")
+        out.append("      set _hm_nn [$_hm_it getNet]\n")
+        out.append("      if {$_hm_nn eq \"NULL\" || $_hm_nn eq \"\"} { continue }\n")
+        out.append("      if {[$_hm_nn getName] ne $_hm_br} {\n")
+        out.append("        puts \"HARDMACRO_SUPPLY_BINDING_VS_NETLIST: "
+                   "[$_hm_i getName]/$_hm_bp declared=$_hm_br "
+                   "netlist=[$_hm_nn getName] (the netlist connection is "
+                   "kept; the declared rail did not bind)\"\n")
+        out.append("      }\n")
+        out.append("    }\n")
+        out.append("  }\n")
         out.append("} _hm_err]} {\n")
         out.append("  puts \"HARDMACRO_SUPPLY_GC_NONFATAL: $_hm_err\"\n")
         out.append("}\n")
@@ -17635,6 +18315,20 @@ def _pg_net_cleanup_tcl() -> str:
         "iterms=[llength [$_net getITerms]] bterms=[llength [$_net getBTerms]]\"\n"
         "        incr _pgsig\n"
         "      }\n"
+        "    } elseif {($_st eq \"POWER\" || $_st eq \"GROUND\") && "
+        "([llength [$_net getITerms]] > 0 || [llength [$_net getBTerms]] > 0)} {\n"
+        # Round 15: a SPECIAL supply net can be just as unrouted. The L21
+        # binding creates the net (add_global_connection marks it special)
+        # and pdngen may build nothing for it — measured: IOVDD carried the
+        # LDO's supply terminal and zero geometry, and this pass, keyed on
+        # `isSpecial`, never named it. Geometry is the test, not the flag.
+        "      set _nsb 0\n"
+        "      foreach _sw [$_net getSWires] { incr _nsb [llength [$_sw getWires]] }\n"
+        "      if {$_nsb == 0} {\n"
+        "        puts \"PG_CLEANUP_UNROUTED_SUPPLY: [$_net getName] ($_st) "
+        "iterms=[llength [$_net getITerms]] bterms=[llength [$_net getBTerms]]\"\n"
+        "        incr _pgsig\n"
+        "      }\n"
         "    }\n"
         "  }\n"
         "  puts \"PG_CLEANUP_DONE: deleted=$_pgdel unrouted_supply=$_pgsig\"\n"
@@ -22986,6 +23680,15 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
                          | set(_hm_pwr_nets) | set(_hm_gnd_nets))
         _hm_dmap = _hmsi_gc.declared_binding_map(_hm_l21,
                                                  sorted(_hm_rails_est))
+        # Round 15: the design names its rails (CORE, IOVDD); the PDK names
+        # its nets (VDD, VSS). Bound verbatim, `-net CORE` created a phantom
+        # net beside VDD. The voltage joins them without a naming rule.
+        _hm_dmap, _hm_res_notes = _resolve_l21_rail_bindings(
+            _hm_l21, _hm_dmap, sorted(_hm_pwr_nets), sorted(_hm_gnd_nets),
+            _pdk_nominal_voltage(pdk, container))
+        for _rn in _hm_res_notes:
+            print(f"[phase3] HARD-MACRO SUPPLY RAIL RESOLUTION: {_rn}",
+                  file=sys.stderr)
     except Exception:  # noqa: BLE001 — mapping is an enhancement, not a dep
         _hm_dmap = {}
     _hm_connect, _hm_unconn = _macro_supply_gc_plan(

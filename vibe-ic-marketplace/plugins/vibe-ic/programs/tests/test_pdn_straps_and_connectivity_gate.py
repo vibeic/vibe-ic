@@ -242,7 +242,17 @@ def test_auto_straps_scale_with_the_process():
 def test_pdn_emits_straps_and_connects_without_any_config(tmp_path):
     """THE DEFECT: this used to emit follow-pins ONLY and claim success."""
     tcl = mod._build_pdn_tcl(_pdk(tmp_path))
-    assert tcl.count("add_pdn_stripe") == 3      # follow-pins + two strap layers
+    # Round 15: every core strap layer ALSO carries a strap group for the
+    # design's SECONDARY supplies (`-nets $_sec_pwr`), emitted behind a
+    # runtime fit check and inert on a design with none. The primary count
+    # is unchanged: follow-pins + two strap layers.
+    primary = [ln for ln in tcl.splitlines()
+               if "add_pdn_stripe" in ln and "$_sec_pwr" not in ln]
+    secondary = [ln for ln in tcl.splitlines()
+                 if "add_pdn_stripe" in ln and "$_sec_pwr" in ln]
+    assert len(primary) == 3                     # follow-pins + two strap layers
+    assert len(secondary) == 2                   # one per strap layer
+    assert all("-extend_to_boundary" in ln for ln in secondary)
     assert tcl.count("add_pdn_connect") == 2     # rails->lower->upper via stacks
     assert "-followpins" in tcl
     assert "PDN_INSERTED_ADAPTIVE" in tcl

@@ -330,7 +330,15 @@ def test_the_other_total_silence_on_this_path_also_speaks_now(tmp_path):
     tcl = _pdn(tmp_path, SLIVER_MACRO, tag="v")
     assert "SLIVERBLOCK" in tcl
     assert tcl != _pdn(tmp_path, None, tag="c4")
-    assert "define_pdn_grid -macro" not in tcl
+    # Round 15 (u_hawaii_adc): a sliver port is exactly what a PER-PIN STUB
+    # reaches — one strap of one net across the pin, sized from the pin
+    # positions — so the pattern planner's refusal is now answered with a
+    # stub grid instead of standing as the last word. The stub grid IS a
+    # `define_pdn_grid -macro`, and the refusal marker is gone because the
+    # supply is reached; what remains loud is the stub's own marker.
+    assert "MACRO_SUPPLY_STUBS:" in tcl
+    assert "MACRO_PDN_GRID_REFUSED" not in tcl
+    assert "define_pdn_grid -macro" in tcl
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -387,9 +395,19 @@ def _diagnostic_puts(tcl: str):
 
     `puts "PDN_NONFATAL: $_pdn_err"` is excluded: its `$` is a Tcl variable the
     EMITTER owns and means to substitute, not a name read out of somebody
-    else's LEF. This test is about the second kind."""
+    else's LEF. This test is about the second kind.
+
+    Round 15: the same exclusion, stated as the rule it always was. A `puts`
+    whose `$` names an EMITTER-owned runtime variable (`$_...` — the retype
+    audit's `$_pgt`, the stub grid's `$_m`, ...) substitutes a VALUE, and a
+    value is never re-parsed, so a hostile name reaching it through the
+    database cannot break the script. The hazard this test guards is a raw
+    LEF name pasted into the script TEXT at emit time; those lines carry the
+    name (scrubbed or raw) literally, and only those are examined here."""
+    names = (HOSTILE_NAME, mod._tcl_puts_safe(HOSTILE_NAME), MACRO_NAME)
     return [ln.strip() for ln in tcl.splitlines()
-            if ln.strip().startswith("puts ") and "$_pdn_err" not in ln]
+            if ln.strip().startswith("puts ") and "$_pdn_err" not in ln
+            and any(n in ln for n in names)]
 
 
 def _is_one_tcl_literal(puts_line: str) -> bool:
@@ -515,10 +533,15 @@ def test_a_multi_macro_refusal_over_names_rather_than_under_names(tmp_path):
     got = mod._parse_macro_pdn_grid_refusals(tcl)
     named = {r["master"] for r in got}
     assert MACRO_NAME in named, "the macro that caused it must be named"
-    assert "SIGBLOCK" in named, (
-        "the second macro also lost its grid to the first one's OBS and must "
-        "be named too — that loss was silent before this fix as well")
-    assert "define_pdn_grid -macro" not in tcl
+    # Round 15: the per-pin STUB planner reads each master's OWN OBS, so the
+    # second macro no longer loses its supply to the first one's blockage —
+    # it gets a stub grid, and the refusal names only the macro whose own OBS
+    # blocks every layer above its pins. This is the "narrowing" the docstring
+    # above deferred; the pattern planner itself is unchanged.
+    assert "SIGBLOCK" not in named, (
+        "the unblocked macro is reached by a stub and must not be refused")
+    assert "MACRO_SUPPLY_STUBS:" in tcl
+    assert "define_pdn_grid -macro" in tcl
 
 
 def test_the_refusal_is_reported_and_does_not_fail_the_run():
