@@ -187,6 +187,27 @@ def _find_fsm_files(project: Path) -> list[Path]:
         candidates.extend(project.rglob("*.v"))
         candidates.extend(project.rglob("*.sv"))
 
+    # v1.15.67 — the eligible set is decided by the SHARED structural rule
+    # as well as by the name convention below, because the DOCUMENT side of
+    # this comparison is now produced by that rule.
+    #
+    # MEASURED on opentitan_aes (2026-09-02, plugin v1.15.66): of a 130-file
+    # staged tree declaring FIVE credited state machines, the convention
+    # clauses selected exactly ONE file. `prim_sync_reqack.sv` declares
+    #     typedef enum logic { EVEN, ODD } sync_reqack_fsm_e;
+    # and binds it to `src_fsm_cs` / `dst_fsm_ns` — a state machine by the
+    # rule, and invisible to a selector that requires the identifier prefix
+    # `S_` / `ST_` / `STATE_` to appear somewhere in the file. Phase 1's L6/L9
+    # producer reads the tree with `_rtl_fsm_extract`, so EVEN and ODD reached
+    # the documents; this gate then reported them as states "the RTL lacks"
+    # while they sat in the RTL it had declined to read. Two readers of one
+    # artefact, two answers — the shape `_rtl_fsm_extract` exists to end.
+    #
+    # ADDITIVE: every file the convention used to select is still selected, so
+    # the missing-state set can only shrink and the orphan-in-RTL set can only
+    # grow. A design whose FSM files carry the convention is byte-unchanged.
+    eligible: list[Path] = []
+    texts: dict[Path, str] = {}
     for f in candidates:
         if not f.is_file():
             continue
@@ -194,20 +215,53 @@ def _find_fsm_files(project: Path) -> list[Path]:
         if {"build", "sim", "synth", "formal", "pnr", "gds",
             "output_files", "incremental_db", "db"} & parts:
             continue
+        eligible.append(f)
+
+    structural: set[Path] = set()
+    try:
+        import _rtl_fsm_extract as _rtlfsm
+        for f in eligible:
+            try:
+                texts[f] = f.read_text(encoding="utf-8", errors="replace")
+            except OSError:
+                continue
+        # Eligibility is decided over the WHOLE map: the package/module split
+        # every real design uses declares the type in one file and binds it in
+        # another, and only the whole map can see both.
+        by_key = {str(f): t for f, t in texts.items()}
+        for mach in _rtlfsm.declared_state_machines(by_key):
+            src = mach.get("source_file")
+            if isinstance(src, str) and src:
+                structural.add(Path(src))
+    except Exception:   # noqa: BLE001 — the convention clauses still decide
+        structural = set()
+
+    seen: set[Path] = set()
+    for f in eligible:
+        if f in seen:
+            continue
+        if f in structural:
+            out.append(f)
+            seen.add(f)
+            continue
         name = f.name.lower()
         if any(p.search(name) for p in FSM_FILENAME_PATTERNS):
             out.append(f)
+            seen.add(f)
             continue
-        try:
-            text = f.read_text(encoding="utf-8", errors="replace")
-        except OSError:
-            continue
+        text = texts.get(f)
+        if text is None:
+            try:
+                text = f.read_text(encoding="utf-8", errors="replace")
+            except OSError:
+                continue
         if "typedef enum" in text and (
             re.search(r"\bS_\w+", text) or
             re.search(r"\bST_\w+", text) or
             re.search(r"\bSTATE_\w+", text)
         ):
             out.append(f)
+            seen.add(f)
     return out
 
 

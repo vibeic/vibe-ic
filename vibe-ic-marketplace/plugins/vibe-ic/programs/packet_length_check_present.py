@@ -42,6 +42,9 @@ from dataclasses import dataclass, asdict
 from pathlib import Path
 from typing import List, Dict, Tuple
 
+if str(Path(__file__).resolve().parent) not in sys.path:
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+
 
 @dataclass
 class Finding:
@@ -75,25 +78,16 @@ class Finding:
 # received-command dispatch looks like and what an enum decode does not. The
 # UNAMBIGUOUS names keep their previous standalone force, so every dispatcher
 # this gate caught before is still caught.
-_CASE_DISPATCH_UNAMBIGUOUS_RE = re.compile(
-    r"\bcase\s*\(\s*(?:\w+\s*\.\s*)?"
-    r"(cmd_op|opcode|cmd_code)\b",
-    re.IGNORECASE,
-)
-
-_CASE_DISPATCH_AMBIGUOUS_RE = re.compile(
-    r"\bcase\s*\(\s*(?:\w+\s*\.\s*)?"
-    r"(cmd|op)\b",
-    re.IGNORECASE,
-)
-
-#: A byte-wide literal — the corroboration an ambiguous selector needs. This is
-#: the same shape the if-cascade discriminator below already requires.
-_BYTE_OPCODE_LITERAL_RE = re.compile(r"\b8'h[0-9a-fA-F]{1,2}\b")
-
-# Cascade of opcode equality: if (cmd == 8'hXX) or if (cmd_x == 8'hYY).
-_IF_OPCODE_EQ_RE = re.compile(
-    r"\bif\s*\(\s*\w*cmd\w*\s*==\s*8'h[0-9a-fA-F]{1,2}",
+# v1.15.67 — the rule moved to `_opcode_dispatch_predicate`, written ONCE.
+# `dispatcher_awake_gate_check` carried the SAME predicate UNCORRECTED and
+# reached the same wrong conclusion on the same file one round later. These
+# names are re-exports so this module's call sites and tests read unchanged.
+from _opcode_dispatch_predicate import (          # noqa: E402
+    CASE_DISPATCH_UNAMBIGUOUS_RE as _CASE_DISPATCH_UNAMBIGUOUS_RE,
+    CASE_DISPATCH_AMBIGUOUS_RE as _CASE_DISPATCH_AMBIGUOUS_RE,
+    BYTE_OPCODE_LITERAL_RE as _BYTE_OPCODE_LITERAL_RE,
+    IF_OPCODE_EQ_RE as _IF_OPCODE_EQ_RE,
+    is_opcode_dispatcher as _shared_is_dispatcher,
 )
 
 # Any length/count comparison — generous suffix set.
@@ -114,14 +108,7 @@ def _find_v_files(rtl_dir: Path) -> List[Path]:
 
 
 def _is_dispatcher(text: str) -> bool:
-    if _CASE_DISPATCH_UNAMBIGUOUS_RE.search(text):
-        return True
-    if (_CASE_DISPATCH_AMBIGUOUS_RE.search(text)
-            and _BYTE_OPCODE_LITERAL_RE.search(text)):
-        return True
-    if len(_IF_OPCODE_EQ_RE.findall(text)) >= 3:
-        return True
-    return False
+    return _shared_is_dispatcher(text)
 
 
 def _has_length_check(text: str) -> bool:

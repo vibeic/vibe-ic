@@ -334,6 +334,11 @@ class Port:
     direction: str          # input / output / inout
     width: str              # e.g. "" (1-bit) or "[size-1:0]"
     name: str
+    # v1.15.67 — the declared DATA TYPE, when the port carries a
+    # user-defined or package-qualified one (`input alert_rx_t alert_rx_i`,
+    # `input pkg::t_e sig`). "" for a plain net/variable port. Held so the
+    # name can never be taken from it — see `_parse_ansi_ports`.
+    data_type: str = ""
 
 
 @dataclass
@@ -342,6 +347,10 @@ class ModuleIface:
     params: List[Tuple[str, str]] = field(default_factory=list)   # (name, default)
     ports: List[Port] = field(default_factory=list)
     body: str = ""
+    # v1.15.67 — the packages the module's OWN header imports
+    # (`module m import p::*; #(...)`). A harness that mirrors a typed port
+    # must mirror the scope the type is visible in; see `emit_harness`.
+    imports: List[str] = field(default_factory=list)
 
 
 def _split_top_level(text: str, sep: str = ",") -> List[str]:
@@ -471,10 +480,46 @@ def _parse_ansi_ports(header: str) -> List[Port]:
             if wm2:
                 ports.append(Port(last_dir, wm2.group(1), wm2.group(2)))
                 continue
-            mnm = re.match(r"^([A-Za-z_]\w*)", nm)
-            if mnm:
-                ports.append(Port(last_dir, last_width, mnm.group(1)))
+            # v1.15.67 — a port declared with a USER-DEFINED or PACKAGE-
+            # QUALIFIED data type reaches here as TWO identifiers, type first:
+            #     input alert_rx_t  alert_rx_i
+            #     output alert_tx_t alert_tx_o
+            # The net/variable keyword strip above only removes the built-in
+            # keywords (wire/reg/logic/bit/var/signed/unsigned), so a
+            # user-defined type survives and the old `^([A-Za-z_]\w*)` match
+            # took it AS THE NAME. MEASURED on opentitan_aes: the emitted
+            # harness instantiated the DUT as
+            #     .alert_rx_t(alert_rx_t), .alert_tx_t(alert_tx_t)
+            # — two ports the module does not have — and slang refuses it with
+            # "port 'alert_rx_t' does not exist in 'prim_alert_sender'".
+            #
+            # In SystemVerilog a port declaration ends with its name, so when
+            # the remainder is a type-then-name sequence the NAME is the LAST
+            # identifier and everything before it is the type. One identifier
+            # is a bare port and is unchanged.
+            idents = re.findall(r"[A-Za-z_]\w*(?:\s*::\s*[A-Za-z_]\w*)*", nm)
+            if idents:
+                nm_name = idents[-1].strip()
+                nm_type = " ".join(t.strip() for t in idents[:-1])
+                ports.append(Port(last_dir, last_width, nm_name, nm_type))
     return ports
+
+
+def _parse_header_imports(header: str) -> List[str]:
+    """v1.15.67 — the wildcard package imports in a module HEADER.
+
+    `module prim_alert_sender import prim_alert_pkg::*; #( ... ) ( ... );`
+
+    The harness declares the DUT's typed ports with the DUT's own type names,
+    and a type name is only visible in a scope that imports its package. The
+    DUT states which packages those are, in its own header; nothing else has
+    to be guessed. Deduplicated, declaration order preserved."""
+    out: List[str] = []
+    for m in re.finditer(r"\bimport\s+([A-Za-z_]\w*)\s*::\s*\*\s*;", header):
+        pkg = m.group(1)
+        if pkg not in out:
+            out.append(pkg)
+    return out
 
 
 def parse_module(text: str, name: str) -> Optional[ModuleIface]:
@@ -487,7 +532,8 @@ def parse_module(text: str, name: str) -> Optional[ModuleIface]:
     header = text[start:body_start]
     body = text[body_start:end]
     return ModuleIface(name=name, params=_parse_params(header),
-                       ports=_parse_ansi_ports(header), body=body)
+                       ports=_parse_ansi_ports(header), body=body,
+                       imports=_parse_header_imports(header))
 
 
 # ── reset polarity + registered-output reset value analysis ─────────────────
@@ -668,12 +714,21 @@ def derive_reset_props(iface: ModuleIface, reset_name: str, active_low: bool
 
 # ── harness emission ────────────────────────────────────────────────────────
 def emit_harness(iface: ModuleIface, clock: str, reset_name: str,
-                 active_low: bool, props: List[ResetProp]) -> str:
+                 active_low: bool, props: List[ResetProp],
+                 assertion_form: str = "concurrent") -> str:
     """Emit `formal_<top>.sv`: instantiate the DUT with all ports, drive every
     non-clock input as free `(* anyseq *)`, and assert each output's reset-safety
     invariant under the guard appropriate to its FF's reset style. Pure."""
     top = iface.name
     hmod = f"formal_{top}"
+    # v1.15.67 — mirror the DUT's header imports. Without them a harness that
+    # declares `alert_rx_t alert_rx_i` (the DUT's own port type) is refused
+    # with "use of undeclared identifier 'alert_rx_t'": the type lives in
+    # `prim_alert_pkg`, which the DUT header imports and the harness did not.
+    # Empty for a design whose module header imports nothing, so every such
+    # harness is byte-identical.
+    import_decl = "".join(f" import {pkg}::*;" for pkg in
+                          (getattr(iface, "imports", None) or []))
     param_decl = ""
     param_conn = ""
     if iface.params:
@@ -688,10 +743,18 @@ def emit_harness(iface: ModuleIface, clock: str, reset_name: str,
             conns.append(f".{p.name}({p.name})")
             continue
         w = f"{p.width} " if p.width else ""
+        # v1.15.67 — a port declared with a user-defined / package-qualified
+        # type must be MIRRORED with that type, not with a bare `wire`. The
+        # DUT's own declaration is the only statement of the signal's shape
+        # the harness has; declaring `wire alert_rx_i` against
+        # `input alert_rx_t alert_rx_i` connects a 1-bit net to a struct.
+        # `wire` is kept for a plain net port so every design that has no
+        # typed port emits a byte-identical harness.
+        decl = f"{p.data_type} " if getattr(p, "data_type", "") else f"wire {w}"
         if p.direction == "output":
-            out_decls.append(f"    wire {w}{p.name};")
+            out_decls.append(f"    {decl}{p.name};")
         else:
-            in_decls.append(f"    (* anyseq *) wire {w}{p.name};")
+            in_decls.append(f"    (* anyseq *) {decl}{p.name};")
         conns.append(f".{p.name}({p.name})")
 
     # reset-active expression (design's own polarity)
@@ -728,12 +791,32 @@ def emit_harness(iface: ModuleIface, clock: str, reset_name: str,
                      + [(p, "rst_active") for p in async_props]):
         idx += 1
         name = f"p_reset_safety_{idx}"
-        prop_lines.append(
-            f"    property {name};\n"
-            f"        @(posedge {clock})\n"
-            f"            (f_past_valid && {guard}) |-> ({p.output} == {p.value});\n"
-            f"    endproperty")
-        assert_lines.append(f"    a_reset_safety_{idx}: assert property ({name});")
+        if assertion_form == "immediate":
+            # v1.15.67 — the IMMEDIATE form, for the `read_slang` frontend.
+            # The equivalence is the one this function's own comment states
+            # below and is exact, not approximate: both sample the guard and
+            # the property at the same edge, and both are vacuously true when
+            # the guard is false. The two frontends are COMPLEMENTARY, and
+            # that is why the form has to follow the frontend:
+            #   * `read_verilog -sv` accepts SVA and rejects a package import
+            #     in a module header (the OpenTitan sources);
+            #   * `read_slang` elaborates those sources and refuses SVA —
+            #     "SVA unsupported (ignore all assertions with
+            #     '--ignore-assertions')", measured in the pinned image.
+            # Ignoring the assertions is not an option: a harness whose
+            # properties are dropped proves nothing while reporting PASS.
+            assert_lines.append(
+                f"    always @(posedge {clock}) if (f_past_valid && {guard})\n"
+                f"        a_reset_safety_{idx}: assert "
+                f"({p.output} == {p.value});")
+        else:
+            prop_lines.append(
+                f"    property {name};\n"
+                f"        @(posedge {clock})\n"
+                f"            (f_past_valid && {guard}) |-> ({p.output} == {p.value});\n"
+                f"    endproperty")
+            assert_lines.append(
+                f"    a_reset_safety_{idx}: assert property ({name});")
 
     body_parts = [
         "\n".join(in_decls),
@@ -763,7 +846,7 @@ def emit_harness(iface: ModuleIface, clock: str, reset_name: str,
         f"// Property: one cycle after reset, each registered output holds the\n"
         f"// exact value the RTL's reset branch assigns it (construction-safe).\n"
         f"`default_nettype none\n"
-        f"module {hmod}{param_decl} (input wire {clock});\n"
+        f"module {hmod}{import_decl}{param_decl} (input wire {clock});\n"
         f"{body}\n"
         f"endmodule\n"
         f"`default_nettype wire\n"
@@ -959,7 +1042,8 @@ def _pick_provable(rtl_files: List[Path], top_name: Optional[str],
 
 def generate(project: Optional[Path] = None, top: Optional[str] = None,
              rtl: Optional[List[Path]] = None,
-             out: Optional[Path] = None) -> dict:
+             out: Optional[Path] = None,
+             assertion_form: str = "concurrent") -> dict:
     """Author the deterministic floor and its declaration denominator.
 
     NOT_APPLICABLE is reserved for an explicit design declaration. An
@@ -1057,7 +1141,8 @@ def generate(project: Optional[Path] = None, top: Optional[str] = None,
     active_low = analysis["active_low"]
     props = analysis["props"]
 
-    harness = emit_harness(iface, clock, reset_name, active_low, props)
+    harness = emit_harness(iface, clock, reset_name, active_low, props,
+                           assertion_form=assertion_form)
     out_path = out or (
         (_pl.formal_dir(project) / f"formal_{dut_top}.sv")
         if (project and _pl) else Path(f"formal_{dut_top}.sv"))

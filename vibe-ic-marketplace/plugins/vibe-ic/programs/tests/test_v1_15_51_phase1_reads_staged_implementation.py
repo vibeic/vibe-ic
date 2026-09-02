@@ -231,3 +231,47 @@ def test_l9_is_unchanged_for_a_design_that_stages_no_rtl(tmp_path):
     names = {p["name"] for p in l9["top_ports"]}
     assert "rst_ni" not in names
     assert not any("declared_by_staged_top" in p for p in l9["top_ports"])
+
+
+# --------------------------------------------------------------------------
+# the #38 RTL-as-oracle guard, and why `input/vendor_rtl/` is an INPUT
+# --------------------------------------------------------------------------
+def _leak_project(tmp_path: Path, ic_class: str) -> Path:
+    proj = _project(tmp_path, ic_class=ic_class, stage_rtl=True)
+    gd = proj / "phase1" / "generated_docs"
+    gd.mkdir(parents=True, exist_ok=True)
+    (gd / "L6_CONTROL_LOGIC.json").write_text(json.dumps({
+        "fsm_states": [{"name": "C_IDLE", "transitions": [
+            {"from": "C_IDLE", "to": "C_RUN",
+             "evidence": "input/vendor_rtl/widget.sv"}]}]}))
+    return proj
+
+
+def test_a_reused_ip_design_may_cite_the_rtl_it_staged_as_input(tmp_path):
+    """#499 settled the discriminator — PROVENANCE, not extension — for
+    `input/docs/`. `input/vendor_rtl/` is the other tree a design stages its
+    inputs in: nothing in the flow produced it, and `reused_ip_rtl_consume`
+    reads it as the build source."""
+    proj = _leak_project(tmp_path, "crypto_accelerator")
+    assert P1._scan_generated_docs_for_oracle_leak(proj) == []
+
+
+def test_a_class_that_AUTHORS_its_rtl_may_not(tmp_path):
+    """THE CONTROL, and the reason the exemption is gated. #38 guards against
+    a spec derived from the implementation it is supposed to produce. A class
+    with a deterministic `rtl_gen` has that step; a `rtl_gen: null` class does
+    not."""
+    proj = _leak_project(tmp_path, "unknown")
+    violations = P1._scan_generated_docs_for_oracle_leak(proj)
+    assert violations, "the guard must stay strict where the circularity is live"
+    assert any("vendor_rtl/widget.sv" in v for v in violations)
+
+
+def test_a_build_tree_citation_is_still_a_violation_for_everyone(tmp_path):
+    """The build-tree clauses are untouched and unconditional."""
+    proj = _leak_project(tmp_path, "crypto_accelerator")
+    gd = proj / "phase1" / "generated_docs"
+    (gd / "L6_CONTROL_LOGIC.json").write_text(json.dumps({
+        "fsm_states": [{"name": "C_IDLE",
+                        "evidence": "phase2/stage1/rtl/widget.sv"}]}))
+    assert P1._scan_generated_docs_for_oracle_leak(proj)

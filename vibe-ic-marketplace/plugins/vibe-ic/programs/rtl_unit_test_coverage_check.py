@@ -69,10 +69,16 @@ def needs_tb(rtl_path: Path) -> tuple[bool, list[str]]:
     name = rtl_path.stem.lower()
     reasons = []
 
-    # Must-tb names (substring or exact)
+    # v1.15.67 — must-tb names match on a NAME-TOKEN boundary, not as a bare
+    # substring. MEASURED on opentitan_aes: `prim_flop_macros.sv` was credited
+    # as needing a per-module unit testbench because "mac" occurs inside
+    # "macros". `_MUST_TB_NAMES` is a list of module ROLES (`mac`, `ctl_top`,
+    # `rx_phy`, `fsm`), and a role is a whole token in a module name — every
+    # entry in the set is still matched wherever it is one, including the
+    # multi-token entries, so no module that used to be credited stops being.
     for must in _MUST_TB_NAMES:
-        if must in name:
-            reasons.append(f"name contains '{must}'")
+        if re.search(r"(?:^|_)" + re.escape(must) + r"(?:_|$)", name):
+            reasons.append(f"name contains role token '{must}'")
             return True, reasons
 
     try:
@@ -113,6 +119,38 @@ def has_tb(module_name: str, sim_dir: Path) -> Path | None:
     return None
 
 
+def reused_ip_modules(rtl_dir: Path) -> set[str]:
+    """v1.15.67 — the module names this run did NOT author.
+
+    A per-module unit testbench is a demand on the modules THIS RUN WROTE.
+    When the design stages the RTL it is built from, the flow authors none of
+    them, and this gate's own docstring says it was wired advisory precisely
+    so it would "not block a landing on debt it did not create". MEASURED on
+    opentitan_aes, plugin v1.15.66: 11 candidates, 11 missing, ALL of them
+    pre-verified vendor modules, and the FAIL blocked step 4 — the exact
+    outcome the wiring note was written to prevent.
+
+    The denominator is per MODULE, not per design: `SOURCE_MANIFEST.json` is
+    written by the RTL-staging step and records `ip_list` — the modules that
+    arrived with the design. A design that mixes reused IP with modules it
+    authored keeps every authored module in the denominator, so the gate
+    cannot be silenced by staging one vendor file.
+
+    Empty (so: nothing excused) when the manifest is absent or unreadable —
+    every design without a staged-IP manifest is byte-unchanged."""
+    man = rtl_dir / "SOURCE_MANIFEST.json"
+    try:
+        data = json.loads(man.read_text(encoding="utf-8"))
+    except Exception:      # noqa: BLE001 — no manifest, no exemption
+        return set()
+    if not isinstance(data, dict) or not data.get("reused_ip"):
+        return set()
+    names = data.get("ip_list")
+    if not isinstance(names, list):
+        return set()
+    return {n.lower() for n in names if isinstance(n, str) and n}
+
+
 def check(project: Path, rtl_dir: Path, sim_dir: Path) -> dict:
     findings = []
     coverage = []
@@ -122,12 +160,19 @@ def check(project: Path, rtl_dir: Path, sim_dir: Path) -> dict:
     rtl_files = sorted(list(rtl_dir.glob("*.v")) + list(rtl_dir.glob("*.sv")))
     rtl_files = [r for r in rtl_files if not r.name.endswith(".vh")]
 
+    reused = reused_ip_modules(rtl_dir)
     n_total = 0
+    excused: list[str] = []
     for rtl in rtl_files:
         if rtl.name.endswith("_pkg.vh") or rtl.name.endswith("_params.vh"):
             continue
         need, reasons = needs_tb(rtl)
         if not need:
+            continue
+        if rtl.stem.lower() in reused:
+            # Not in the denominator, and SAID SO rather than silently
+            # dropped: the reader can see what was not asked, and of whom.
+            excused.append(rtl.name)
             continue
         n_total += 1
         tb = has_tb(rtl.stem, sim_dir)
@@ -152,6 +197,13 @@ def check(project: Path, rtl_dir: Path, sim_dir: Path) -> dict:
         "candidates_total": n_total,
         "candidates_covered": n_total - len(findings),
         "candidates_missing": len(findings),
+        "reused_ip_modules_not_in_denominator": sorted(excused),
+        "denominator_note": (
+            f"{len(excused)} module(s) arrived with the design as staged IP "
+            f"(phase2/stage1/rtl/SOURCE_MANIFEST.json ip_list) and are not "
+            f"counted: a per-module unit testbench is a demand on the "
+            f"modules this run authored." if excused else
+            "every FSM/PHY-bearing module in this tree is in the denominator"),
         "coverage": coverage,
         "findings": findings,
         "pass": len(findings) == 0,

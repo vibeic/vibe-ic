@@ -52483,7 +52483,10 @@ _V1_7_72_BUILD_TREE_ORACLE_RE = re.compile(
 
 
 def _v1_7_72_staged_input_doc_names(project: Path) -> Set[str]:
-    """Every file name the design staged under ``input/docs/``.
+    """Every file name the design staged as an INPUT.
+
+    ``input/docs/`` always; ``input/vendor_rtl/`` too when the design is
+    REUSED-IP (see the gate inside).
 
     Returned as a set of lowercase basenames PLUS project-relative
     POSIX paths, because L-doc evidence cites documents both ways
@@ -52491,20 +52494,57 @@ def _v1_7_72_staged_input_doc_names(project: Path) -> Set[str]:
     ``input/docs/ibex_pkg.sv`` from ``extraction_evidence``).
     """
     names: Set[str] = set()
-    src = project / "input" / "docs"
-    if not src.is_dir():
-        return names
-    try:
-        for f in src.rglob("*"):
-            if not f.is_file():
-                continue
-            names.add(f.name.lower())
-            try:
-                names.add(f.relative_to(project).as_posix().lower())
-            except ValueError:
-                pass
-    except Exception:
-        return names
+    roots = [project / "input" / "docs"]
+    # v1.15.51 — #499's OWN discriminator, applied to the other tree a design
+    # stages its inputs in.
+    #
+    # #499 settled the principle: "the rule is `phase 1 must not read the IP's
+    # own RTL or downstream BUILD ARTEFACTS`, and a staged input document is
+    # neither. The discriminator is PROVENANCE, not extension." It then applied
+    # that principle to `input/docs/` only, because that was the tree the
+    # design in front of it had used.
+    #
+    # A REUSED-IP design stages the implementation Phase 2 will build from
+    # under `input/vendor_rtl/`. Nothing in the flow PRODUCED it — it arrived
+    # with the design, `reused_ip_rtl_consume` reads it as the build source,
+    # and that module's own `_ORACLE_DIR_NAMES` already excludes the oracle
+    # (`golden`, `tb`, `dv`, …) from it. By #499's discriminator it is an
+    # input, exactly as `input/docs/ibex_pkg.sv` was.
+    #
+    # Gated on the SAME predicate that gates the harvest, so #38 keeps its full
+    # strength wherever the circularity it guards against is live: a class with
+    # a deterministic `rtl_gen` derives its spec from documents and then AUTHORS
+    # RTL, and for such a design citing staged RTL stays a violation. A
+    # reused-IP class has `rtl_gen: null` — Phase 2 authors nothing, so there is
+    # no spec-to-RTL step for a citation to short-circuit.
+    #
+    # Every BUILD-TREE clause (`phase2`, `phase3`, `stage1/rtl`, `/rtl/`,
+    # `harvested from *.sv`) is untouched and unconditional: a citation of
+    # `phase2/stage1/rtl/aes.sv` is still a violation on every design.
+    if _reused_ip is not None:
+        try:
+            if (_reused_ip.class_rtl_gen_null(
+                    _reused_ip.detected_ic_class(project))
+                    and _reused_ip.has_staged_vendor_rtl(project)):
+                _vdir = _reused_ip.vendor_rtl_dir(project)
+                if _vdir is not None:
+                    roots.append(_vdir)
+        except Exception:  # noqa: BLE001 — fail-closed: guard stays strict
+            pass
+    for src in roots:
+        if not src.is_dir():
+            continue
+        try:
+            for f in src.rglob("*"):
+                if not f.is_file():
+                    continue
+                names.add(f.name.lower())
+                try:
+                    names.add(f.relative_to(project).as_posix().lower())
+                except ValueError:
+                    pass
+        except Exception:
+            continue
     return names
 
 

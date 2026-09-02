@@ -391,6 +391,85 @@ def _is_verification_harness_context(tok: str, text: str,
     return False
 
 
+# ---------------------------------------------------------------------------
+# DIRECTIVE-SHAPED TOKENS (ADVISORY, v1.15.79)
+#
+# MEASURED, opentitan_aes on the pristine benchmark-data corpus: this gate
+# reported "all 11 non-reference input doc(s) at 100% capture" while
+# `prim_generic`, `FIPS-197`, `SP 800-38A` and `input/reference_flow/pre_syn/`
+# appeared in NONE of the 28 generated L documents.
+#
+# `_harvest_tokens` found 19 design tokens in the whole NL brief and every one
+# was an ALL-CAPS acronym — `AES`, `CBC`, `ECB`, `FIPS`, `NIST`, `PDK`, `DRC`.
+# It harvested `FIPS` but not `FIPS-197`, `NIST` but not `SP 800-38A`. The
+# regex families cover hex, indexed uppercase and numeric+unit; a lowercase or
+# mixed-case IDENTIFIER or a PATH is not one of them. So the shape a design
+# input uses to state a DIRECTIVE — a backticked name, a bolded target, a
+# standard designator — never entered the denominator, and 100% of a
+# denominator that cannot see them is not evidence that they landed.
+#
+# ADVISORY, NOT BLOCKING, and deliberately so: these tokens are NOT added to
+# `_FAIL_PCT`'s denominator. Widening a 100%-capture gate is an enforcement
+# change whose blast radius must be measured across the corpus first; this
+# reports what is invisible today without re-grading any existing run.
+#
+# chip-AGNOSTIC: markdown inline-code / bold grammar plus an
+# uppercase-acronym-then-number designator shape. No chip, vendor or SKU
+# literal.
+_DIRECTIVE_MARKUP_RE = re.compile(r"`([^`\n]{2,80})`|\*\*([^*\n]{2,80})\*\*")
+_DIRECTIVE_STANDARD_RE = re.compile(r"\b([A-Z]{2,}[ \-]\d[\dA-Za-z.\-]*)\b")
+_DIRECTIVE_SHAPE_RE = re.compile(r"[A-Za-z0-9_./\\-]+")
+# At least two consecutive letters: a NAME has a word in it.
+# `I+1` and `3.3` are expressions and values, not directives.
+_DIRECTIVE_WORDLIKE_RE = re.compile(r"[A-Za-z]{2}")
+
+# Phase 1 is FORBIDDEN to read the oracle (§4.05), so an oracle path named by
+# the input must never be reported as a directive that failed to land — the
+# whole point is that it does not land. Same role-name set
+# `reused_ip_rtl_consume` refuses to take.
+_DIRECTIVE_ORACLE_DIR_NAMES = frozenset({"golden", "tb", "dv", "verif"})
+
+
+def _directive_token_ok(tok: str):
+    """A directive token is a NAME, not prose: one word, identifier/path shaped,
+    and carrying at least one identifier signal (separator, digit, or a
+    case mix). Returns the normalised token, or None."""
+    tok = (tok or "").strip().strip(".,;:()[]（）「」\u3001\u3002")
+    if not tok or len(tok) < 3 or " " in tok:
+        return None
+    if not _DIRECTIVE_SHAPE_RE.fullmatch(tok):
+        return None
+    if not _DIRECTIVE_WORDLIKE_RE.search(tok):
+        return None
+    if not (re.search(r"[_/.\-]", tok) or re.search(r"\d", tok)
+            or (tok != tok.lower() and tok != tok.upper())):
+        return None
+    return tok
+
+
+def _harvest_directive_tokens(text: str) -> set:
+    """Names the input states as DIRECTIVES: backticked / bolded identifiers
+    and paths, plus standard designators (`FIPS-197`, `SP 800-38A`).
+
+    Oracle paths are excluded — see `_DIRECTIVE_ORACLE_DIR_NAMES`."""
+    out: set = set()
+    for m in _DIRECTIVE_MARKUP_RE.finditer(text or ""):
+        tok = _directive_token_ok(m.group(1) or m.group(2) or "")
+        if tok:
+            out.add(tok)
+    for m in _DIRECTIVE_STANDARD_RE.finditer(text or ""):
+        out.add(m.group(1))
+    return {t for t in out
+            if not (_DIRECTIVE_ORACLE_DIR_NAMES
+                    & {seg for seg in t.split("/") if seg})}
+
+
+def _unlanded_directive_tokens(text: str, generated_blob: str) -> list:
+    """Directive tokens the generated L documents do not carry, anywhere."""
+    blob = generated_blob or ""
+    return sorted(t for t in _harvest_directive_tokens(text) if t not in blob)
+
+
 def _harvest_tokens(text: str):
     """Returns (design_tokens, garble_tokens).
 
@@ -1431,7 +1510,39 @@ def main(argv=None) -> int:
           f"non-reference input doc(s) at 100% capture; "
           f"{len(reference_docs_seen)} reference doc(s) exempted; "
           f"{len(ai_tokens_global)} cell(s) caught by AI deep-review.")
+    _report_unlanded_directives(
+        pairs, "\n".join(str(v) for v in (layer_blobs or {}).values()))
     return 0
+
+
+def _report_unlanded_directives(pairs, generated_blob: str) -> list:
+    """ADVISORY. Print the directive-shaped tokens that reached no L document.
+
+    Never changes the verdict — see the `_harvest_directive_tokens` block for
+    why widening a 100%-capture denominator is an enforcement change this does
+    not make. It exists so that "100% capture" cannot be read as "every name
+    the input stated landed", which is what it looked like on the run that
+    produced this code.
+    """
+    rows = []
+    for name, text in (pairs or []):
+        missing = _unlanded_directive_tokens(text, generated_blob)
+        if missing:
+            rows.append((name, missing))
+    if not rows:
+        return rows
+    total = sum(len(m) for _, m in rows)
+    print(f"      [ADVISORY] UNLANDED_INPUT_DIRECTIVE: {total} "
+          f"directive-shaped token(s) across {len(rows)} input doc(s) appear "
+          f"in NO generated L document. These are NOT in the capture "
+          f"denominator above — a name the input states in backticks, in bold, "
+          f"or as a standard designator is not a shape `_harvest_tokens` "
+          f"collects, so 100% capture is silent about them. Oracle paths are "
+          f"excluded by construction (Phase 1 must not land them).")
+    for name, missing in rows:
+        print(f"        {name}: {', '.join(missing[:12])}"
+              + (f" (+{len(missing) - 12} more)" if len(missing) > 12 else ""))
+    return rows
 
 
 if __name__ == "__main__":

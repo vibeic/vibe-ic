@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 1254
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1254)
+- **Total programs (excluding helpers / shims):** 1255
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1255)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 1245 |
+| `any` | 1246 |
 
 ## Alphabetical listing
 
@@ -998,6 +998,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `rs485_protocol_synth` | any | v0.1.84 | RS-485-class protocol synth helper. |
 | `rsp_example_otp_consistency_check` | any | — | L3 response examples must match L11 OTP content. |
 | `rtl_bug_report_schema_check` | any | v0.54 | v0.54 plugin gate |
+| `rtl_final_bundle_integrity` | any | — | Prove that post-translation RTL remains the reviewed RTL bundle. |
 | `rtl_hygiene_lint` | any | v0.1.10 | General-purpose RTL hygiene checker. |
 | `rtl_interface_recover` | any | — | recover a module's PORT INTERFACE from RTL text. |
 | `rtl_precheck_gate` | any | v0.66 | aggregate every RTL static auditor into a single pass/fail gate. Intended to be called BEFORE any SOF/GDS burn so a developer can't ship ... |
@@ -1326,7 +1327,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (1245 programs)
+### `any` (1246 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `absence_verdict_names_its_search_space_check` — "not found" must say WHERE it looked.
@@ -2294,6 +2295,7 @@ _(no programs in this group)_
 - `rs485_protocol_synth` — RS-485-class protocol synth helper.  _[v0.1.84]_
 - `rsp_example_otp_consistency_check` — L3 response examples must match L11 OTP content.
 - `rtl_bug_report_schema_check` — v0.54 plugin gate  _[v0.54]_
+- `rtl_final_bundle_integrity` — Prove that post-translation RTL remains the reviewed RTL bundle.
 - `rtl_hygiene_lint` — General-purpose RTL hygiene checker.  _[v0.1.10]_
 - `rtl_interface_recover` — recover a module's PORT INTERFACE from RTL text.
 - `rtl_precheck_gate` — aggregate every RTL static auditor into a single pass/fail gate. Intended to be called BEFORE any SOF/GDS burn so a developer can't ship ...  _[v0.66]_

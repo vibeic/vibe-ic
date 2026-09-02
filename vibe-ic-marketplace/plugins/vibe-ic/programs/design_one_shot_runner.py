@@ -10899,19 +10899,77 @@ _V662_COMPILER_DIRECTIVES = frozenset({
 })
 
 
+# The trees a design stages its un-staged dependency pool in. `design_src` was
+# the only one this helper knew, and it is not the one a REUSED-IP design uses.
+#
+# MEASURED (opentitan_aes, plugin v1.15.78, pristine corpus): synth aborted and
+# the hint read "`ASSERT` is undefined and NO DEFINING FILE WAS FOUND under
+# input/design_src/**/rtl/" — while `input/vendor_rtl/prim/prim_assert.sv` and
+# its three `prim_assert_*_macros.svh` sat staged in the very same project,
+# carrying exactly those `define`s. The project has no `input/design_src/` at
+# all, so the pool was empty and every macro reported not-found.
+#
+# This is #499/#38's discriminator applied to a second consumer: PROVENANCE,
+# not path spelling. `input/vendor_rtl/` is the other tree a design stages its
+# inputs in — `reused_ip_rtl_consume` already reads it as the BUILD SOURCE.
+#
+# The two trees differ in SHAPE, so the `rtl/`-parent restriction is per-root,
+# not global: design_src ships `.../<ip>/rtl/<file>.sv` and the restriction is
+# what keeps its tb/ and dv/ out of the pool; vendor_rtl ships `<ip>/<file>.sv`
+# with no `rtl/` level, and applying the same restriction there yields the
+# empty pool this fixes. vendor_rtl gets the oracle-directory exclusion
+# instead — the same `golden`/`tb`/`dv`/`verif` set `reused_ip_rtl_consume`
+# already refuses to take.
+_V662_ORACLE_DIR_NAMES = frozenset({"golden", "tb", "dv", "verif"})
+
+
 def _v662_design_src_rtl_files(project: Path) -> List[Path]:
-    """Every `.v`/`.sv` under `input/design_src/**/rtl/` — the un-staged
-    dependency pool the benchmark / user input ships. chip-AGNOSTIC."""
-    base = project / "input" / "design_src"
-    if not base.is_dir():
-        return []
+    """Every `.v`/`.sv`/`.vh`/`.svh` in the staged dependency pool.
+
+    Reads BOTH `input/design_src/**/rtl/` and `input/vendor_rtl/**`, because a
+    design stages its inputs in one or the other and this helper's whole job is
+    to find a file the compile set missed. chip-AGNOSTIC: directory roles only,
+    no chip / vendor / SKU literal."""
+    exts = (".v", ".sv", ".vh", ".svh")
     out: List[Path] = []
-    for ext in (".v", ".sv", ".vh", ".svh"):
-        # only files that live UNDER an `rtl/` directory (the issue's scope)
-        for f in base.rglob(f"*{ext}"):
-            if "rtl" in {p.name for p in f.parents}:
+
+    base = project / "input" / "design_src"
+    if base.is_dir():
+        for ext in exts:
+            # only files that live UNDER an `rtl/` directory (the issue's scope)
+            for f in base.rglob(f"*{ext}"):
+                if "rtl" in {p.name for p in f.parents}:
+                    out.append(f)
+
+    vendor = project / "input" / "vendor_rtl"
+    if vendor.is_dir():
+        for ext in exts:
+            for f in vendor.rglob(f"*{ext}"):
+                # never take the oracle side of a staged tree
+                if _V662_ORACLE_DIR_NAMES & {p.name for p in f.parents}:
+                    continue
                 out.append(f)
+
     return sorted(set(out))
+
+
+def _v662_pool_roots_note(project: Path) -> str:
+    """Name the trees that were ACTUALLY searched.
+
+    A hint that names a tree the project does not have ("not found under
+    input/design_src/**/rtl/" on a design that stages input/vendor_rtl/) sends
+    the operator to look in the wrong place, and reads as "your file is
+    missing" when it is present and simply unsearched."""
+    roots = []
+    if (project / "input" / "design_src").is_dir():
+        roots.append("input/design_src/**/rtl/")
+    if (project / "input" / "vendor_rtl").is_dir():
+        roots.append("input/vendor_rtl/**")
+    if not roots:
+        return ("input/design_src/**/rtl/ or input/vendor_rtl/** "
+                "(neither tree is present in this project)")
+    return " or ".join(roots)
+
 
 
 def _v662_collect_defines(files) -> set:
@@ -10967,8 +11025,9 @@ def _v662_resolve_dependency_files(project: Path,
     dependency pre-check.
 
     Scans the staged rtl/ for macros USED-but-not-DEFINED and `` `include ``s
-    that are not present, then searches `input/design_src/**/rtl/` for the file
-    that DEFINES each missing macro (or matches the missing include basename).
+    that are not present, then searches the staged dependency pool
+    (`input/design_src/**/rtl/` AND `input/vendor_rtl/**`) for the file that
+    DEFINES each missing macro (or matches the missing include basename).
     When `auto_stage` is True, copies the defining file into rtl/ so the
     compile resolves. Always returns an actionable remediation summary.
 
@@ -11016,7 +11075,7 @@ def _v662_resolve_dependency_files(project: Path,
         else:
             result["hints"].append(
                 f"`{mac}` is undefined and no defining file was found under "
-                f"input/design_src/**/rtl/ — provide the file that "
+                f"{_v662_pool_roots_note(project)} — provide the file that "
                 f"`` `define `s it")
     for inc in sorted(unres):
         src = pool_by_base.get(inc)
@@ -11030,7 +11089,7 @@ def _v662_resolve_dependency_files(project: Path,
         else:
             result["hints"].append(
                 f'`include "{inc}" could not be resolved under '
-                f'input/design_src/**/rtl/ — provide the included file')
+                f'{_v662_pool_roots_note(project)} — provide the included file')
     if auto_stage and to_stage:
         import shutil
         rtl_dir.mkdir(parents=True, exist_ok=True)

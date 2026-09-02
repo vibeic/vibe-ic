@@ -63,9 +63,21 @@ class Finding:
     details: str = ""
 
 
-_OPCODE_CASE_RE = re.compile(
-    r"\bcase\s*\(\s*(?:\w+\s*\.\s*)?(cmd_op|opcode|op|op_q|cmd_byte|cmd_code)\b",
-    re.IGNORECASE,
+# v1.15.67 — the dispatcher predicate is `_opcode_dispatch_predicate`, the
+# shared rule. This module used to carry its own copy, which credited the BARE
+# identifier `op` and so read `unique case (op)` over a two-value `aes_op_e`
+# enum as a received-command dispatch. MEASURED on opentitan_aes at v1.15.66:
+#
+#     [ERROR] NO_AWAKE_SIGNAL: Dispatcher RTL
+#     (phase2/stage1/rtl/aes_ctrl_reg_shadowed.sv) has a command opcode case
+#     but references no awake/wake state register
+#
+# — in a run that declares `command_protocol_applicable=false`, and where
+# eight sibling gates skip on exactly that fact. `packet_length_check_present`
+# had ALREADY been corrected for the same false positive on the same file;
+# this gate's copy had not, so the correction did not reach it. It does now.
+from _opcode_dispatch_predicate import (          # noqa: E402
+    is_opcode_dispatcher as _is_opcode_dispatcher,
 )
 _AWAKE_SIGNAL_RE = re.compile(
     r"\b(awake_q|wake_q|woken_q|is_awake|wake_state|awake_state)\b",
@@ -118,7 +130,7 @@ def _find_dispatcher(project: Path) -> Optional[Path]:
             text = path.read_text(errors="replace")
         except OSError:
             continue
-        if _OPCODE_CASE_RE.search(text):
+        if _is_opcode_dispatcher(text):
             return path
     return None
 

@@ -125,6 +125,51 @@ _ENV_GAP_SIGNATURES = (
 )
 
 
+# ── the frontend split, and the retry that closes it ───────────────────────
+# `read_verilog -sv` is yosys's own SystemVerilog frontend, and it does not
+# accept a package import in a MODULE HEADER — `module m import p::*; #(...)`,
+# which is how the OpenTitan sources are written. MEASURED on opentitan_aes,
+# plugin v1.15.66:
+#
+#     base: aes.sv:10: ERROR: syntax error, unexpected TOK_IMPORT
+#     base: task failed. ERROR.
+#     DONE (ERROR, rc=16) ... engine_0 did not return a status
+#
+# Both tasks died before an engine started, and the step then reported a
+# FORMAL capability gap the host did not have: `read_slang`, the full SV-2017
+# frontend, was installed the whole time and phase-2 synth was reading the
+# SAME sources through it. `lec_run` already re-reads its gold with
+# `read_slang` on this signature family; this is the same fallback for the
+# proof.
+#
+# The two frontends are COMPLEMENTARY, not ranked, which is why this is a
+# retry and not a new default:
+#   * `read_verilog -sv` accepts SVA and rejects those sources;
+#   * `read_slang` elaborates those sources and refuses SVA
+#     ("SVA unsupported"), so the harness is re-emitted in the equivalent
+#     IMMEDIATE assertion form for that arm.
+# A design that parses today keeps a byte-identical .sby, its concurrent
+# properties, and its verdict.
+_FRONTEND_ABORT_RE = re.compile(
+    r"unexpected TOK_IMPORT|unexpected TOK_PACKAGE|unexpected TOK_TYPEDEF"
+    r"|Executing Verilog-2005 frontend")
+
+
+def frontend_aborted_the_read(transcript: str) -> bool:
+    """True when the sby transcript shows the READ failed on a construct a
+    full SV-2017 frontend accepts — never merely that a proof did not close.
+
+    Both conditions are required, so an inconclusive PROOF can never be
+    re-run as if it were a parse problem: a yosys frontend error signature,
+    AND no engine having returned a status."""
+    if not transcript:
+        return False
+    if not _FRONTEND_ABORT_RE.search(transcript):
+        return False
+    return ("did not return a status" in transcript
+            or "ERROR: syntax error" in transcript)
+
+
 def classify_env_gap(transcript: str,
                      container: Optional[str]) -> Optional[Dict[str, str]]:
     """Return a structured, ACTIONABLE environment gap when the transcript
@@ -592,7 +637,8 @@ def emit_sby(rtl_files: List[str], harness_file: str, top: str,
              safety_depth: int = 20, bmc_depth: int = 12,
              engine_prove: str = "abc pdr",
              engine_bmc: str = "abc bmc3",
-             include_files: Optional[List[str]] = None) -> str:
+             include_files: Optional[List[str]] = None,
+             frontend: str = "read_verilog") -> str:
     """Emit a two-task .sby: a `safety` task (unbounded prove) and a `bmc`
     task (bounded model check). Files are listed under [files] so the Step-5
     evidence gate can resolve every referenced source.
@@ -624,6 +670,38 @@ def emit_sby(rtl_files: List[str], harness_file: str, top: str,
     the SMT witness-replay step (only an external SMT solver could satisfy it)
     so ABC's own engines produce the verdict standalone."""
     reads = " ".join([harness_file] + list(rtl_files))
+    # v1.15.67 — THE FRONTEND SPLIT, closed. `read_verilog -sv` is yosys's own
+    # SystemVerilog frontend and it rejects a package import in the MODULE
+    # HEADER (`module m import p::*; #(...)`), which is how the OpenTitan
+    # sources are written. MEASURED on opentitan_aes at v1.15.66:
+    #
+    #     aes.sv:10: ERROR: syntax error, unexpected TOK_IMPORT
+    #     DONE (ERROR, rc=16) ... engine_0 did not return a status
+    #
+    # Both tasks died before an engine started and the step reported a FORMAL
+    # capability gap the host did not have. Phase-2 synth reads the SAME
+    # sources through `read_slang`, the full SV-2017 frontend, and the LEC
+    # gold-read already falls back to it on this exact signature family. Same
+    # probe, in the pinned image, over the same 131-file `[files]` list:
+    # `read_slang --single-unit` elaborates every OpenTitan source.
+    #
+    # `--single-unit` reads them as ONE compilation unit so a macro defined in
+    # an early file is visible to a later one — the shared preprocessor scope
+    # the successive `read_verilog` calls have by construction, and which
+    # slang otherwise gives each file separately.
+    #
+    # The DEFAULT is unchanged: `read_verilog -sv` emits a byte-identical .sby
+    # for every design that has always parsed, and the caller re-emits with
+    # `frontend="read_slang"` only after that frontend has actually aborted.
+    if frontend == "read_slang":
+        # No `--formal`: `read_slang` has no such flag and keeps assertions
+        # and formal statements by default (`--ignore-assertions` is the
+        # opt-OUT). Probed in the pinned image via `help read_slang`.
+        _safety_read = f"read_slang --single-unit {safety_defs} {reads}"
+        _bmc_read = f"read_slang --single-unit {bmc_defs} {reads}"
+    else:
+        _safety_read = f"read_verilog -formal -sv {safety_defs} {reads}"
+        _bmc_read = f"read_verilog -formal -sv {bmc_defs} {reads}"
     # Headers are STAGED but never READ: `[files]` puts them in sby's `src/` so
     # a `` `include `` resolves; `read_verilog` must not be handed a macro body.
     srcs = list(rtl_files) + [harness_file] + list(include_files or [])
@@ -644,8 +722,8 @@ safety: {engine_prove}
 bmc:    {engine_bmc}
 
 [script]
-safety: read_verilog -formal -sv {safety_defs} {reads}
-~safety: read_verilog -formal -sv {bmc_defs} {reads}
+safety: {_safety_read}
+~safety: {_bmc_read}
 prep -top {top}
 
 [files]
@@ -1517,6 +1595,39 @@ def run(project: Path, harness: Optional[Path] = None,
                           mem_limit_kb=eff_mem_kb)
     log_path = formal_dir / f"{sby_path.stem}.sby.log"
     log_path.write_text(transcript)
+
+    # 2a) THE FRONTEND SPLIT — retry the READ, once, with `read_slang` -------
+    # See `frontend_aborted_the_read` for the measurement and for why this is a
+    # retry rather than a new default. Strictly ONE retry, and only when the
+    # first attempt shows a READ abort on a construct a full SV-2017 frontend
+    # accepts — an inconclusive PROOF never reaches here.
+    # The .sby may have been supplied rather than emitted by this run, in
+    # which case this run has no staged file list to re-emit from and must
+    # leave the caller's artefact alone.
+    if frontend_aborted_the_read(transcript) and "staged_rtl" in dir():
+        _slang_note = ("read_verilog -sv aborted the READ; re-read with "
+                       "read_slang (SV-2017)")
+        _reemitted = False
+        try:
+            import formal_harness_gen as _fhg
+            # `read_slang` refuses SVA, so the harness has to come back in the
+            # equivalent IMMEDIATE form. Regenerated by the SAME author from
+            # the SAME design input — never rewritten in place, so the harness
+            # on disk always matches the properties the proof is about.
+            _regen = _fhg.generate(project=project, top=top,
+                                   assertion_form="immediate")
+            _reemitted = _regen.get("verdict") == "EMITTED"
+        except Exception:   # noqa: BLE001 — no regen, no retry
+            _reemitted = False
+        if _reemitted:
+            sby_path.write_text(emit_sby(
+                staged_rtl, harness.name, top,
+                safety_depth=safety_depth, bmc_depth=bmc_depth,
+                include_files=staged_hdrs, frontend="read_slang"))
+            transcript = _run_sby(sby_path, formal_dir, container, timeout,
+                                  mem_limit_kb=eff_mem_kb)
+            transcript = (f"# {_slang_note}\n" + transcript)
+            log_path.write_text(transcript)
 
     # 2b) #216 — the proof ENGINE was never reached ---------------------------
     # Distinguished from an inconclusive proof: nothing ran, so there is no
