@@ -192,11 +192,48 @@ def test_the_largest_rectangle_is_chosen_not_the_first():
     assert moves[0]["rect_dbu"] == [20000, 20000, 100000, 100000]
 
 
+def _executable_source(path: str, start: str, stop: str) -> str:
+    """The named span with COMMENTS AND DOCSTRINGS REMOVED.
+
+    The distinction is load-bearing and it is the repo's own: a docstring may
+    name a PDK because it is REPORTING a measurement made on one ("this
+    library calls its terminal ASIG5V"), and that is evidence. LOGIC may not,
+    because logic that names a PDK only works on that PDK. So the guard is
+    applied to what executes.
+    """
+    import io
+    import tokenize
+    src = open(path).read()
+    span = src[src.index(start):src.index(stop)]
+    out = []
+    for tok in tokenize.generate_tokens(io.StringIO(span).readline):
+        if tok.type == tokenize.COMMENT:
+            continue
+        if tok.type == tokenize.STRING and tok.line.strip().startswith(
+                (chr(34) * 3, chr(39) * 3)):
+            continue
+        out.append(tok.string)
+    return " ".join(out)
+
+
 def test_the_pin_and_orient_readers_carry_no_pdk_literal():
-    src = open(PR.__file__).read()
-    body = src[src.index("def parse_lef_pin_ports"):src.index("def parse_lef_sites")]
-    for literal in ("gf180", "sky130", "sg13", "PAD\"", "'PAD'"):
+    body = _executable_source(PR.__file__, "def parse_lef_pin_ports",
+                              "def parse_lef_sites")
+    # The union of both rounds' literal lists: the landed version's
+    # single-quoted "'PAD'" is kept, because stripping docstrings is what
+    # makes it pass here and a single-quoted PAD in LOGIC must still fail.
+    for literal in ("gf180", "sky130", "sg13", chr(34) + "PAD" + chr(34),
+                    chr(39) + "PAD" + chr(39), "GF_IO"):
         assert literal not in body, f"{literal!r} baked into the reader"
+
+
+def test_the_pad_face_resolver_carries_no_pdk_literal_either():
+    """The same guard over the rule the core-side wiring is decided by."""
+    body = _executable_source(PR.__file__, "def parse_liberty_pad_cells",
+                              "#: Every DEF orientation")
+    for pin in ("PAD", "OE", "PU", "IE", "gf180", "sky130", "sg13"):
+        assert chr(34) + pin + chr(34) not in body, (
+            f"{pin!r} baked into the resolver")
 
 
 def test_the_superseded_placement_is_NOT_on_the_terminal():

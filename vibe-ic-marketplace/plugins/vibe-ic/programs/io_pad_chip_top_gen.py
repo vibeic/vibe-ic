@@ -372,6 +372,98 @@ def _rotations(configs: Sequence[Path]) -> Tuple[Dict[str, str], Dict[str, str]]
     return out, basis
 
 
+#: The design's own statement about a pad's AUXILIARY pins, if it makes one.
+#: BY PIN AND LEVEL, deliberately. A document saying "pull-up" names an
+#: intention; mapping that word onto a pin requires a library statement that
+#: the pin is a pull-up enable, and the Liberty of the library in this image
+#: gives its `PU` no function at all. So a design that wants a pull states the
+#: PIN, which is a fact this program can carry, and one that states a word
+#: this program cannot map gets a refusal instead of a guess.
+_AUX_SECTION_RE = re.compile(
+    r"(?ims)^#{1,6}[^\n]*pad[^\n]*auxiliary[^\n]*$(?P<body>.*?)(?=^#{1,6}\s|\Z)")
+_AUX_ENTRY_RE = re.compile(
+    r"(?m)^\s*[-*|]?\s*(?P<port>[A-Za-z_][\w$]*(?:\[\d+\])?)\s*[:|]\s*"
+    r"(?P<pins>(?:[A-Za-z_]\w*\s*=\s*[01]\s*,?\s*)+)")
+
+
+def declared_aux_levels(sources: Sequence[Path]
+                        ) -> Dict[str, Dict[str, int]]:
+    """`{port: {pin: level}}` the DESIGN declares for its pads' aux pins."""
+    out: Dict[str, Dict[str, int]] = {}
+    for src in sources:
+        try:
+            text = src.read_text(errors="replace")
+        except OSError:
+            continue
+        for sec in _AUX_SECTION_RE.finditer(text):
+            for e in _AUX_ENTRY_RE.finditer(sec.group("body")):
+                levels = dict(
+                    (m.group(1), int(m.group(2))) for m in
+                    re.finditer(r"([A-Za-z_]\w*)\s*=\s*([01])",
+                                e.group("pins")))
+                if levels:
+                    out.setdefault(e.group("port"), {}).update(levels)
+    return out
+
+
+def merge_liberty_pad_cells(paths: Sequence[Path]
+                            ) -> Tuple[Dict[str, Dict[str, Dict[str, object]]],
+                                       Dict[str, str]]:
+    """One role table from every corner Liberty, and the masters they disagree on.
+
+    A pin's DIRECTION, FUNCTION, THREE_STATE and IS_PAD are properties of the
+    cell, not of the corner, so every corner file must say the same thing.
+    Reading one file and ignoring the rest would hide a library that does not
+    — so all are read and a master whose role fields differ between corners is
+    REFUSED by name rather than resolved by file order.
+    """
+    seen: Dict[str, Dict[str, Dict[str, set]]] = {}
+    for path in paths:
+        try:
+            text = path.read_text(errors="replace")
+        except OSError:
+            continue
+        for cell, pins in PR.parse_liberty_pad_cells(text).items():
+            for pin, rec in pins.items():
+                for key, value in rec.items():
+                    (seen.setdefault(cell, {}).setdefault(pin, {})
+                     .setdefault(key, set()).add(value))
+    table: Dict[str, Dict[str, Dict[str, object]]] = {}
+    conflicts: Dict[str, str] = {}
+    for cell, pins in seen.items():
+        bad = [f"{pin}.{key}={sorted(str(v) for v in values)}"
+               for pin, keys in sorted(pins.items())
+               for key, values in sorted(keys.items()) if len(values) > 1]
+        if bad:
+            conflicts[cell] = ("the corner Liberty views disagree about this "
+                               "master's pin roles: " + "; ".join(bad[:4]))
+            continue
+        table[cell] = {pin: {k: next(iter(v)) for k, v in keys.items()}
+                       for pin, keys in pins.items()}
+    return table, conflicts
+
+
+def _core_bit(port_bit: str) -> str:
+    """`x[31]` -> `x__core[31]`, `clk` -> `clk__core`.
+
+    One pad drives one BIT; the core takes the whole vector, so the internal
+    net is declared once per PORT and indexed here exactly as the port was.
+    """
+    if port_bit.endswith("]") and "[" in port_bit:
+        base, idx = port_bit[:-1].split("[", 1)
+        return f"{_core_net(base)}[{idx}]"
+    return _core_net(port_bit)
+
+
+def _core_net(port: str) -> str:
+    """The internal net a padded port's CORE side sits on.
+
+    Named from the port, so a reader of the emitted module can see which pad
+    it came through, and suffixed so it cannot collide with the port itself.
+    """
+    return f"{port}__core"
+
+
 def _emit_verilog(top: str, core: str,
                   ordered: Dict[str, List[str]],
                   chosen: Dict[str, Dict[str, object]],
@@ -409,17 +501,65 @@ def _emit_verilog(top: str, core: str,
     lines.append(",\n".join(decl))
     lines.append(");")
     lines.append("")
+
+    # A PORT WHOSE PAD FACES BOTH WAYS GETS TWO NETS. The port net terminates
+    # on the pad's bond terminal and NOWHERE else; the core sits on the pad's
+    # core-side pin, through `<port>__core`. A port whose faces could not be
+    # resolved keeps the single-net shape it had, so a refusal changes
+    # nothing but the record.
+    faced = {inst: r for inst, r in chosen.items() if r.get("core_pin")}
+    by_port = {str(r["port"]): r for r in faced.values()}
+    for p in ports:
+        name = str(p.get("name") or "")
+        bits = _bit_names(p)
+        if not all(b in by_port for b in bits):
+            continue
+        try:
+            width = int(p.get("width") or 1)
+        except (TypeError, ValueError):
+            width = 1
+        rng = ""
+        if width > 1:
+            rng = " [%s:%s]" % (p.get("msb", width - 1), p.get("lsb", 0))
+        lines.append("    wire%s %s;" % (rng, _core_net(name)))
+    if faced:
+        lines.append("")
+
     for side in SIDES:
         for inst in ordered.get(side, []):
             rec = chosen[inst]
             lines.append("    // %s edge -- %s" % (side, rec["port"]))
-            lines.append("    %s %s (.%s(%s));"
-                         % (rec["master"], inst, rec["terminal"],
-                            rec["port"]))
+            conn = [".%s(%s)" % (rec["terminal"], rec["port"])]
+            if rec.get("core_pin"):
+                conn.append(".%s(%s)" % (rec["core_pin"],
+                                         _core_bit(str(rec["port"]))))
+            # THE TIES ARE RECORDED, NOT WRITTEN AS VERILOG CONSTANTS, and
+            # this is a measurement, not a preference. Emitting `.PU(1'b0)`
+            # here made OpenROAD's `read_verilog` materialise ONE net named
+            # `zero_` carrying 75 pad ITerms; the flow's own POWER-net
+            # heuristic types that net GROUND, `pdngen` never builds it, and
+            # the PG gate FAILED the run with `PG_UNROUTED_SUPPLY: zero_
+            # (GROUND, 75 iterm(s))`. The netlist is not where a pad's
+            # auxiliary pin is tied in this flow: `add_global_connection`
+            # binds a pin pattern to a real rail, which is the same machinery
+            # the hard-macro supply pins already use. What this producer owes
+            # is the DECISION and its reason, per pin, in the record below —
+            # `aux_pins_defaulted` and `aux_pins_tied_by_derivation` — so the
+            # step that owns the rails can bind them and a reviewer can see
+            # every level somebody chose. Writing the constant here would
+            # have bought a netlist that reads correctly and a chip whose
+            # supply net does not exist.
+            pass
+            lines.append("    %s %s (%s);"
+                         % (rec["master"], inst, ", ".join(conn)))
     lines.append("")
-    conns = ", ".join(".%s(%s)" % (str(p.get('name')), str(p.get('name')))
-                      for p in ports)
-    lines.append("    %s u_core (%s);" % (core, conns))
+    conns = []
+    for p in ports:
+        name = str(p.get('name'))
+        bits = _bit_names(p)
+        on_pad = bits and all(b in by_port for b in bits)
+        conns.append(".%s(%s)" % (name, _core_net(name) if on_pad else name))
+    lines.append("    %s u_core (%s);" % (core, ", ".join(conns)))
     lines.append("")
     lines.append("endmodule")
     lines.append("")
@@ -536,6 +676,54 @@ def run(project: Path, pdk_root: Optional[str], pdk: Optional[str]
                             "direction": direction_of[net],
                             "class_fallback": fallback}
             ordered[side].append(inst)
+
+    # ── THE PAD CELL'S TWO FACES ──────────────────────────────────────────
+    # The core connects to the pad's CORE-SIDE pin and the port net terminates
+    # on the bond terminal alone. Both faces, and every auxiliary tie, are
+    # derived from the IO library's own Liberty — see `PR.pad_cell_faces`.
+    # A master whose faces cannot be derived keeps the shape it had, and the
+    # reason is recorded against the port BY NAME.
+    declared_aux = declared_aux_levels(
+        [project / f for f in (rec.get("documents_scanned") or [])])
+    lib_paths = PR.discover_io_liberty(pdk_root, pdk)
+    rec["io_library_liberty"] = [str(x) for x in lib_paths]
+    lib_cells, lib_conflicts = merge_liberty_pad_cells(lib_paths)
+    faces_refused: Dict[str, str] = {}
+    aux_defaulted: List[Dict[str, object]] = []
+    aux_declared: List[Dict[str, object]] = []
+    for inst, rc in chosen.items():
+        master = str(rc["master"])
+        if not lib_paths:
+            faces_refused[inst] = (
+                "the PDK ships no Liberty view for this IO library, so which "
+                "pin faces the core is not readable and is not guessed")
+            continue
+        if master in lib_conflicts:
+            faces_refused[inst] = lib_conflicts[master]
+            continue
+        if master not in lib_cells:
+            faces_refused[inst] = (
+                f"the IO library's Liberty declares no cell {master!r}, so "
+                f"its faces are unknown")
+            continue
+        faces = PR.pad_cell_faces(lib_cells[master], str(rc["direction"]),
+                                  declared_aux.get(str(rc["port"])))
+        if faces.refused:
+            faces_refused[inst] = faces.refused
+            continue
+        rc["terminal"] = faces.terminal
+        rc["core_pin"] = faces.core_pin
+        rc["ties"] = dict(faces.ties)
+        rc["tie_reasons"] = dict(faces.reasons)
+        for pin, level in sorted(faces.ties.items()):
+            entry = {"instance": inst, "port": rc["port"], "pin": pin,
+                     "level": level, "reason": faces.reasons.get(pin, "")}
+            (aux_defaulted if faces.reasons.get(pin, "").startswith("DEFAULTED")
+             else aux_declared).append(entry)
+    rec["core_side_refusals"] = faces_refused
+    rec["aux_pins_defaulted"] = aux_defaulted
+    rec["aux_pins_tied_by_derivation"] = aux_declared
+    rec["aux_pins_declared_by_design"] = sorted(declared_aux)
 
     rotations, rotation_basis = _rotations(cfgs)
 

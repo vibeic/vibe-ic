@@ -664,6 +664,285 @@ def parse_lef_pin_ports(text: str
     return out
 
 
+def parse_lef_pin_roles(text: str) -> Dict[str, Dict[str, Tuple[str, str]]]:
+    """`{macro: {pin: (DIRECTION, USE)}}` — what each pin of a master IS.
+
+    `parse_lef_pin_ports` above answers WHERE a pin is; this answers WHAT it
+    is for, which is the half a producer needs to decide which pin faces the
+    core. A pin declaring neither is omitted rather than defaulted: "the LEF
+    did not say" and "the LEF said INPUT" are different facts.
+    """
+    out: Dict[str, Dict[str, Tuple[str, str]]] = {}
+    macros = list(_MACRO_RE.finditer(text))
+    for i, m in enumerate(macros):
+        name = m.group(1)
+        end = macros[i + 1].start() if i + 1 < len(macros) else len(text)
+        stop = re.compile(rf"^\s*END\s+{re.escape(name)}\b",
+                          re.M).search(text, m.end(), end)
+        if stop:
+            end = stop.start()
+        body = text[m.end():end]
+        pins: Dict[str, Tuple[str, str]] = {}
+        hits = list(_PIN_RE.finditer(body))
+        for j, ph in enumerate(hits):
+            pin = ph.group(1)
+            pend = hits[j + 1].start() if j + 1 < len(hits) else len(body)
+            pstop = re.compile(rf"^\s*END\s+{re.escape(pin)}\b",
+                               re.M).search(body, ph.end(), pend)
+            if pstop:
+                pend = pstop.start()
+            pbody = body[ph.end():pend]
+            d = re.search(r"^\s*DIRECTION\s+(\S+)\s*;", pbody, re.M)
+            u = re.search(r"^\s*USE\s+(\S+)\s*;", pbody, re.M)
+            if d or u:
+                pins[pin] = (d.group(1).upper() if d else "",
+                             u.group(1).upper() if u else "")
+        if pins:
+            out[name] = pins
+    return out
+
+
+# ── the pad cell's TWO FACES, out of the library's own Liberty ─────────────
+#: What a Liberty pad cell says about one pin. Every field is the library's
+#: own; nothing here is defaulted, and a field the library omits stays None so
+#: "not declared" never reads as a value.
+_LIB_CELL_RE = re.compile(r'^\s*cell\s*\(\s*"?([A-Za-z0-9_$]+)"?\s*\)\s*\{',
+                          re.M)
+_LIB_PIN_RE = re.compile(r'^\s*pin\s*\(\s*"?([A-Za-z0-9_$\[\]]+)"?\s*\)\s*\{',
+                         re.M)
+_LIB_ATTR_RE = re.compile(
+    r'^\s*(direction|function|three_state|is_pad|input_signal_level)\s*:\s*'
+    r'"?([^";]*)"?\s*;', re.M)
+
+
+def parse_liberty_pad_cells(text: str
+                            ) -> Dict[str, Dict[str, Dict[str, Optional[str]]]]:
+    """`{cell: {pin: {direction, function, three_state, is_pad, level}}}`.
+
+    THE LIBERTY IS WHERE A PAD CELL SAYS WHICH FACE IS WHICH, and it says it
+    without naming conventions: `is_pad : true` marks the bond terminal, the
+    receiver's `function` names the terminal it repeats, and the terminal's
+    own `function` and `three_state` name the core-side driver and the pin
+    that enables it. A producer reading only the LEF has pin names and
+    directions and must guess among them; reading this, it does not guess.
+    """
+    out: Dict[str, Dict[str, Dict[str, Optional[str]]]] = {}
+    cells = list(_LIB_CELL_RE.finditer(text))
+    for i, c in enumerate(cells):
+        end = cells[i + 1].start() if i + 1 < len(cells) else len(text)
+        body = text[c.end():end]
+        pins: Dict[str, Dict[str, Optional[str]]] = {}
+        hits = list(_LIB_PIN_RE.finditer(body))
+        for j, ph in enumerate(hits):
+            pend = hits[j + 1].start() if j + 1 < len(hits) else len(body)
+            rec: Dict[str, Optional[str]] = {
+                "direction": None, "function": None, "three_state": None,
+                "is_pad": None, "input_signal_level": None}
+            for a in _LIB_ATTR_RE.finditer(body, ph.end(), pend):
+                rec[a.group(1)] = a.group(2).strip()
+            pins[ph.group(1)] = rec
+        if pins:
+            out[c.group(1)] = pins
+    return out
+
+
+_LITERAL_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_$]*")
+
+
+def _product_literals(expr: Optional[str]) -> Optional[List[Tuple[bool, str]]]:
+    """`(negated, pin)` for a PRODUCT of literals, or None for anything else.
+
+    `((IE*PAD))` -> [(False, 'IE'), (False, 'PAD')]; `((!OE))` -> [(True,
+    'OE')]. A sum, an XOR, a constant or anything this cannot read returns
+    None, and every caller REFUSES on None. Solving a general Boolean
+    expression to decide how to tie a pad's enable is not something to
+    approximate: the wrong answer is a chip that never drives its output.
+    """
+    if not expr:
+        return None
+    e = expr.replace(" ", "")
+    if any(ch in e for ch in "+^|"):
+        return None
+    out: List[Tuple[bool, str]] = []
+    i = 0
+    while i < len(e):
+        ch = e[i]
+        if ch in "()*&":
+            i += 1
+            continue
+        neg = False
+        while i < len(e) and e[i] == "!":
+            neg = not neg
+            i += 1
+        m = _LITERAL_RE.match(e, i)
+        if not m:
+            return None
+        out.append((neg, m.group(0)))
+        i = m.end()
+        if i < len(e) and e[i] == "'":          # Liberty's postfix negation
+            out[-1] = (not out[-1][0], out[-1][1])
+            i += 1
+    return out or None
+
+
+class PadFaces:
+    """Which pin faces the core, which faces the bond wire, and every tie.
+
+    `refused` non-empty means NOTHING is claimed: the caller leaves the port
+    exactly as it was and reports the reason by name.
+    """
+
+    def __init__(self, terminal: str = "", core_pin: str = "",
+                 ties: Optional[Dict[str, int]] = None,
+                 reasons: Optional[Dict[str, str]] = None,
+                 refused: str = ""):
+        self.terminal = terminal
+        self.core_pin = core_pin
+        self.ties: Dict[str, int] = dict(ties or {})
+        self.reasons: Dict[str, str] = dict(reasons or {})
+        self.refused = refused
+
+    def as_dict(self) -> Dict[str, Any]:
+        return {"terminal": self.terminal, "core_pin": self.core_pin,
+                "ties": dict(self.ties), "tie_reasons": dict(self.reasons),
+                "refused": self.refused}
+
+
+def pad_cell_faces(pins: Dict[str, Dict[str, Optional[str]]],
+                   port_direction: str,
+                   declared: Optional[Dict[str, int]] = None) -> PadFaces:
+    """Resolve one pad master against one port direction.
+
+    THE RULE, and every clause of it is read out of the Liberty above:
+
+      TERMINAL   the pin declaring `is_pad`. Not `PAD`: the name is the
+                 library's business and one library in this image calls it
+                 `ASIG5V`.
+      INPUT PORT the core face is the OUTPUT pin whose `function` is a product
+                 containing the terminal; every OTHER literal in that product
+                 is an ENABLE and is tied to make the product transparent
+                 (`((IE*PAD))` -> IE=1). The terminal must also be left
+                 undriven, so the cell's own `three_state` is tied TRUE.
+      OUTPUT     the terminal's `function` names the core-side driver input,
+      PORT       and `three_state` is tied FALSE so the driver is enabled.
+      REFUSED    an expression this cannot read, a missing terminal, more than
+                 one candidate, or an INOUT port with no declared direction.
+
+    Every remaining SIGNAL INPUT is an AUXILIARY pin — a pull enable, a slew
+    or drive select. `declared` is the DESIGN's own answer for those, by pin
+    name; a pin the design does not answer is tied to 0 and RECORDED in
+    `reasons`, because a chip whose pulls nobody chose is a chip whose pulls
+    somebody must be able to see.
+    """
+    declared = dict(declared or {})
+    terminals = [p for p, r in pins.items()
+                 if str(r.get("is_pad") or "").lower() == "true"]
+    if len(terminals) != 1:
+        return PadFaces(refused=(
+            f"the library declares {len(terminals)} `is_pad` pin(s) "
+            f"{sorted(terminals)}; the bond terminal must be exactly one"))
+    terminal = terminals[0]
+    # A PIN WHOSE ROLE THE LIBRARY DOES NOT STATE IS A REFUSAL, BY NAME. It
+    # cannot be tied (its direction is unknown) and it cannot be left floating
+    # (an untied pad input is an undefined chip), so nothing about this master
+    # is claimed.
+    roleless = sorted(p for p, r in pins.items() if not r.get("direction"))
+    if roleless:
+        return PadFaces(refused=(
+            f"the library states no DIRECTION for pin(s) {roleless} of this "
+            f"master, so their role cannot be read and is not guessed"))
+    direction = (port_direction or "").lower()
+    ties: Dict[str, int] = {}
+    reasons: Dict[str, str] = {}
+    core_pin = ""
+
+    tri = _product_literals(pins[terminal].get("three_state"))
+    if pins[terminal].get("three_state") and tri is None:
+        return PadFaces(refused=(
+            f"the terminal's three_state "
+            f"{pins[terminal]['three_state']!r} is not a product of literals, "
+            f"so the level that enables the driver cannot be derived"))
+
+    # `inout` STARTS WITH `in` and is not an input. A bidirectional port has
+    # to say which way it faces before an enable can be tied, so it is tested
+    # first and refused by name.
+    if direction.startswith("inout") or direction in ("bidir", "bidirectional"):
+        direction = ""
+    if direction.startswith("in"):
+        cands = []
+        for pin, rec in pins.items():
+            lits = _product_literals(rec.get("function"))
+            if (rec.get("direction") == "output" and lits
+                    and any(p == terminal and not neg for neg, p in lits)):
+                cands.append((pin, lits))
+        if len(cands) != 1:
+            return PadFaces(refused=(
+                f"{len(cands)} output pin(s) repeat the terminal {terminal!r}; "
+                f"the core face must be exactly one"))
+        core_pin, lits = cands[0]
+        for neg, lit in lits:
+            if lit == terminal:
+                continue
+            if neg:
+                return PadFaces(refused=(
+                    f"the core face {core_pin!r} inverts its enable "
+                    f"{lit!r}; this step ties only non-inverted enables"))
+            ties[lit] = 1
+            reasons[lit] = (f"enables the core face {core_pin!r}, whose "
+                            f"function is {pins[core_pin]['function']!r}")
+        # three_state is the condition for Hi-Z. An input port WANTS Hi-Z, so
+        # every literal of the product is SATISFIED: `!OE` true means OE=0.
+        for neg, lit in (tri or []):
+            want = 0 if neg else 1
+            if ties.get(lit, want) != want:
+                return PadFaces(refused=(
+                    f"pin {lit!r} must be {ties[lit]} to enable the core face "
+                    f"and {want} to hold the terminal undriven — the library's "
+                    f"own expressions contradict for an input port"))
+            ties[lit] = want
+            reasons[lit] = (f"holds the terminal undriven — three_state is "
+                            f"{pins[terminal]['three_state']!r} and this is "
+                            f"an input port")
+    elif direction.startswith("out"):
+        lits = _product_literals(pins[terminal].get("function"))
+        if not lits or len(lits) != 1 or lits[0][0]:
+            return PadFaces(refused=(
+                f"the terminal's function {pins[terminal].get('function')!r} "
+                f"does not name exactly one non-inverted core-side driver"))
+        core_pin = lits[0][1]
+        if not tri:
+            return PadFaces(refused=(
+                f"the terminal declares no three_state, so nothing says which "
+                f"pin enables the driver for an output port"))
+        # Driving means three_state is FALSE, so every literal is FALSIFIED:
+        # `!OE` false means OE=1.
+        for neg, lit in tri:
+            ties[lit] = 1 if neg else 0
+            reasons[lit] = (f"enables the driver — three_state is "
+                            f"{pins[terminal]['three_state']!r} and this is "
+                            f"an output port")
+    else:
+        return PadFaces(refused=(
+            f"port direction {port_direction!r} is neither input nor output; "
+            f"a bidirectional port must declare which way it faces before a "
+            f"pad's enable can be tied"))
+
+    for pin, rec in pins.items():
+        if pin in (terminal, core_pin) or pin in ties:
+            continue
+        if rec.get("direction") != "input":
+            continue
+        if pin in declared:
+            ties[pin] = int(bool(declared[pin]))
+            reasons[pin] = "declared by the design"
+            continue
+        ties[pin] = 0
+        reasons[pin] = ("DEFAULTED: the design declares nothing for this "
+                        "auxiliary pin and the library gives it no function, "
+                        "so it is tied inactive (0) rather than left floating")
+    return PadFaces(terminal, core_pin, ties, reasons)
+
+
 #: Every DEF orientation, as the point map it IS. A cell of size (W, H) placed
 #: at the origin occupies (0,0)-(W,H) in N; each entry maps a point of the
 #: master frame into the placed frame. Written out rather than derived so an
@@ -778,6 +1057,26 @@ def discover_io_lefs(pdk_root: Optional[str] = None,
             if lib.is_dir() and _IO_LIB_TOKEN in lib.name.lower():
                 lefs.extend(sorted((lib / "lef").glob("*.lef")))
     return lefs
+
+
+def discover_io_liberty(pdk_root: Optional[str] = None,
+                        pdk: Optional[str] = None) -> List[Path]:
+    """The IO cell library's Liberty views, beside the LEFs it ships.
+
+    Same distribution convention `discover_io_lefs` uses, one directory over:
+    a library's `lef/` and its `lib/` are siblings. Empty means NOT RESOLVED,
+    and a caller that cannot read the Liberty must REFUSE rather than fall
+    back on pin names.
+    """
+    libs: List[Path] = []
+    for lef in discover_io_lefs(pdk_root, pdk):
+        d = lef.parent.parent / "lib"
+        if d.is_dir():
+            libs.extend(sorted(d.glob("*.lib")))
+    seen: Dict[str, Path] = {}
+    for lib in libs:
+        seen.setdefault(str(lib), lib)
+    return list(seen.values())
 
 
 def discover_io_site_declarations(pdk_root: Optional[str] = None,
