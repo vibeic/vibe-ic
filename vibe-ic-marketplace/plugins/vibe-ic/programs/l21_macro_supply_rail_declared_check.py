@@ -802,9 +802,10 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     # different facts. Only the first two are non-applicability.
     if not macro_pins and not untyped_pins:
         if not facts.staged_lefs:
-            reason = ("the design stages no macro LEF at all under any root the "
-                      "backend reads (" + ", ".join(_MACRO_LEF_GLOBS) + ") — "
-                      "there is genuinely nothing to read.")
+            reason = ("no macro LEF at all declared or staged by the design "
+                      "under any root the backend reads ("
+                      + ", ".join(_MACRO_LEF_GLOBS)
+                      + ") — there is genuinely nothing to read.")
         elif not facts.hard_macros_with_pins:
             reason = (f"the {len(facts.staged_lefs)} staged LEF(s) declare no "
                       "hard macro with a PIN (CLASS CORE std cells / technology "
@@ -819,6 +820,12 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         print(f"[SKIP] l21_macro_supply_rail_declared_check: {reason}")
         report["verdict"] = "SKIP"
         report["skip_reason"] = reason
+        # v1.15.45 (sha256 capture) — all three arms are the DESIGN's own
+        # declaration (no macro, no pinned macro, or an affirmative no-supply
+        # pin set); classify them so the audit reads a disclosed skip, not an
+        # execution error (which turned D1 INCOMPLETE on every macro-less IC).
+        report["reason_class"] = "DESIGN_DECLARED_NA"
+        report["skip_kind"] = "class-not-applicable"
         _emit(args.json, report)
         return 2
 

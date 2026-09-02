@@ -6421,6 +6421,13 @@ _STRUCTURAL_GATE_INVOCATION_CONTRACTS: Mapping[str, str] = MappingProxyType({
     "json_schema_check": "l3-schema",
     "l12_sequence_implementation_check": "l12-sequences",
     "l9_completeness_check": "l9",
+    # v1.15.45 (sha256 capture) — this gate takes the L9 document as a
+    # POSITIONAL path (`l9_path [--json]`), not the project root. Under the
+    # legacy project-positional convention it was handed the project directory
+    # and answered "ERROR: <project> not found" on every design, which the
+    # umbrella recorded as EXECUTION_ERROR → P0 INCOMPLETE. MEASURED on the
+    # sha256 x sky130A v1.15.44 acceptance audit.
+    "l9_response_delay_schema_check": "l9-positional",
     "mask_application_check": "declared-masks",
     "module_port_audit": "module-ports",
     "oe_pattern_check": "rtl-files-output",
@@ -7258,6 +7265,7 @@ _P0_CONTRACT_REQUIRED_CONTEXT: Mapping[str, tuple[str, ...]] = MappingProxyType(
     # canonical layer owner is often L4, so only invoke this L9-specific check
     # when the design actually declares a register section in L9.
     "l9": ("l9_path", "l9_registers"),
+    "l9-positional": ("l9_path",),
     "declared-masks": ("masks",),
     "rtl-files-output": ("rtl_files",),
     "payload-bitmap": ("l3_path", "payload_bitmap"),
@@ -7394,6 +7402,8 @@ def _p0_contract_argv(gate_name: str,
     if kind == "l9":
         return base + ["--l9-file", str(
             ctx.get("l9_path") or project / "missing_l9.json")]
+    if kind == "l9-positional":
+        return base + [str(ctx.get("l9_path") or project / "missing_l9.json")]
     if kind == "declared-masks":
         argv = base + [str(rtl_dir)]
         for item in ctx.get("masks") or []:
@@ -11149,7 +11159,10 @@ def _gate_json_targets(step: Dict[str, Any]) -> Set[str]:
 _GATE_DOCUMENT_IDENTITY_KEYS = ("program", "check", "gate", "emitted_by")
 
 
-def _is_gate_verdict_document(path: Path) -> bool:
+def _is_gate_verdict_document(path: Path,
+                              gate_programs: Optional[frozenset] = None,
+                              producer_programs: Optional[frozenset] = None
+                              ) -> bool:
     """Does the file at `path` SELF-IDENTIFY as a gate program's own verdict?
 
     The repo already prefers this reading over a name or a timestamp — see
@@ -11197,13 +11210,61 @@ def _is_gate_verdict_document(path: Path) -> bool:
     if not isinstance(data, dict):
         return False
 
-    def _stamped(node: Any) -> bool:
+    # v1.15.45 (sha256 capture) — WHOSE stamp, not whether there is one.
+    # MEASURED on sha256 x sky130A (v1.15.44): step 0.5ic's two producers
+    # (`submission_template_ingest`, `tapeout_declaration_gen`) write their
+    # records BEFORE any audit and stamp them `program: <producer>` through
+    # the same shared emitter every gate uses. A presence-only reading tagged
+    # both records audit_created, refused them on every pass, and step 0.5ic
+    # — the delivery-route owner — went MISSING, which blocked 15.5ic, 26.5ic,
+    # 37.5ic and 37.5ip as "not authoritative" on a run that HAD produced the
+    # route. The stamp VALUE separates the two: a document stamped by a
+    # program the flow lists under this step's `programs:` is the run's, one
+    # stamped only by this step's own gate program is the auditor's, whichever
+    # pass the audit is on. Callers that pass no names keep the presence-only
+    # answer (conservative direction unchanged).
+    def _stamp_values(node: Any) -> List[str]:
         if not isinstance(node, dict):
-            return False
-        return any(isinstance(node.get(k), str) and node[k].strip()
-                   for k in _GATE_DOCUMENT_IDENTITY_KEYS)
+            return []
+        vals: List[str] = []
+        for k in _GATE_DOCUMENT_IDENTITY_KEYS:
+            v = node.get(k)
+            if isinstance(v, str) and v.strip():
+                vals.append(v.strip())
+            elif isinstance(v, dict):
+                pv = v.get("program")
+                if isinstance(pv, str) and pv.strip():
+                    vals.append(pv.strip())
+        return vals
 
-    return _stamped(data) or any(_stamped(v) for v in data.values())
+    stamps = _stamp_values(data)
+    for v in data.values():
+        stamps.extend(_stamp_values(v))
+    if not stamps:
+        return False
+    if gate_programs is None and producer_programs is None:
+        return True
+
+    def _names(stamp: str) -> set:
+        head = stamp.split()[0]
+        base = head.rsplit("/", 1)[-1]
+        if base.endswith(".py"):
+            base = base[:-3]
+        return {stamp, head, base}
+
+    # A program that is BOTH a listed producer and this step's gate cannot
+    # vouch for the run: its stamp is the auditor's whenever the audit ran it.
+    _producers_only = set(producer_programs or ()) - set(gate_programs or ())
+    if any(_names(st) & _producers_only for st in stamps):
+        # A producer's record IS the document, or survives inside it: the run
+        # produced it. A gate that later writes its own verdict beside it does
+        # not turn the run's evidence into the auditor's.
+        return False
+    if any(_names(st) & set(gate_programs or ()) for st in stamps):
+        return True
+    # Stamped by something that is neither this step's gate nor a declared
+    # producer: keep the presence-only answer the callers relied on.
+    return True
 
 
 def _outputs_read_by_in_scope_steps(sid, my_outputs, manifest):
@@ -11767,11 +11828,17 @@ def check_step(project: Path, step: Dict[str, Any], waivers: Dict,
         # so pass 1 and pass 2 reach the same verdict with nothing deleted, and
         # a producer's artefact at the same path (not a gate verdict document)
         # is still credited. The auditor reads the tree; it does not edit it.
+        _own_gate_programs = frozenset(
+            _gate_name(c) for c in _declared_gate_commands(gate))
+        _own_producers = frozenset(
+            str(p).strip() for p in (step.get("programs") or [])
+            if isinstance(p, str) and str(p).strip())
         _audit_produced = [
             rel for rel in _declared_self_written
             if (project / rel).exists()
             and (rel in _absent_before_gate
-                 or _is_gate_verdict_document(project / rel))]
+                 or _is_gate_verdict_document(
+                     project / rel, _own_gate_programs, _own_producers))]
         # Wave 93 — VACUOUS_PASS verdict tier promotion. If the gate
         # passed AND every reason carries the __VACUOUS_HINT__ marker
         # (and at least one was emitted), the step ran but every
@@ -14996,6 +15063,15 @@ def main(argv: Optional[List[str]] = None) -> int:
             "gate_execution_ledger": _gate_ledger_payload(),
             "steps": [asdict(r) for r in results],
         }
+        # The caller names WHERE the report goes; a directory that does not
+        # exist yet is the caller's normal case, not an error. MEASURED on
+        # sha256 x sky130A (v1.15.58): the stage_analog compliance run
+        # reached `Overall: PASS`, then died with FileNotFoundError writing
+        # `reports/analog/stage_analog_compliance.json` because nothing had
+        # created `reports/analog/` — a clean stage verdict was turned into
+        # a phase-2 FAIL that halted the whole run. Every other report
+        # writer in this flow creates its parent; this one did not.
+        Path(args.json).parent.mkdir(parents=True, exist_ok=True)
         Path(args.json).write_text(json.dumps(out, indent=2))
 
     # Wave 30 (v0.119.62) — emit a canonical machine-readable audit

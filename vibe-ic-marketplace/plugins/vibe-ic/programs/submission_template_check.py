@@ -581,6 +581,27 @@ def _verdict(refusals: List[Dict[str, Any]], examined: Dict[str, Any],
 # --------------------------------------------------------------------------- #
 # CLI
 # --------------------------------------------------------------------------- #
+def _producer_record_of(doc):
+    """The identity stamp of whoever wrote `doc` before this gate did.
+
+    A record stamped by another program (the step's producer) yields that
+    stamp; a document this gate already re-wrote yields the producer_record it
+    carried forward. Nothing is invented: no stamp, no record."""
+    if not isinstance(doc, dict):
+        return None
+    prior = doc.get("producer_record")
+    if isinstance(prior, dict) and prior.get("program"):
+        return dict(prior)
+    prog = doc.get("program")
+    if isinstance(prog, str) and prog.strip() and prog.strip() != PROGRAM:
+        rec = {"program": prog.strip()}
+        emitted = doc.get("emitted_by")
+        if isinstance(emitted, str) and emitted.strip():
+            rec["emitted_by"] = emitted.strip()
+        return rec
+    return None
+
+
 def _load_report(project: Path):
     """(document, refusal) for the step's record. Exactly one is not None."""
     path = project / ST.REPORT_REL
@@ -623,6 +644,17 @@ def main(argv=None) -> int:
     out_doc = {"schema": ST.SCHEMA,
                "ingest": (doc or {}).get("ingest"),
                "check": check}
+    # v1.15.45 (sha256 capture) — the PRODUCER's identity travels with the
+    # merged document. `submission_template_ingest` stamps its record
+    # `program: submission_template_ingest`; merging the verdict in beside the
+    # ingest used to drop that stamp, so after one audit the file carried only
+    # this gate's identity and `flow_compliance_check` read the run's own
+    # record as auditor-authored (audit_created) on every later pass. The stamp
+    # is carried verbatim, never re-minted: when the record already holds a
+    # producer_record (a prior audit merged it), that one is kept.
+    _prod = _producer_record_of(doc)
+    if _prod:
+        out_doc["producer_record"] = _prod
 
     if args.json is not None:
         payload = json.dumps(out_doc, indent=2, ensure_ascii=False) + "\n"

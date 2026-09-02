@@ -273,7 +273,15 @@ def main() -> int:
     summary = inspect(project, since=args.since)
     if summary["skipped_reason"]:
         print(f"=== fresh_agent_rtl_bug_density_metric ({project.name}) ===")
-        print(f"  [skipped] {summary['skipped_reason']}")
+        reason = summary["skipped_reason"]
+        if "not inside a git repository" in reason:
+            # v1.15.45 (sha256 capture) — the metric's instrument is git
+            # history; a project directory that is not a repository has no
+            # such instrument. Named as the capability absence it is, so the
+            # audit files a disclosed skip rather than an execution error.
+            reason = ("version-control instrument unavailable — " + reason
+                      + " (no commit history exists to count RTL-bug commits)")
+        print(f"  [skipped] {reason}")
         return 2
 
     if args.json:

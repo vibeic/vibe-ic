@@ -1055,7 +1055,15 @@ def main():
                         "bit-level full-stack TB is N/A for this non-protocol "
                         "IC (mirrors runner full_stack_tb_gen/reference_tb "
                         "SKIP).")
+                # v1.15.45 (sha256 capture) — say WHICH non-verdict this is.
+                # `flow_compliance_check` reads `reason_class` off the report;
+                # without it a green vacuous_pass was classified as an input
+                # "applicable and NOT examined" (INCOMPLETE) on every
+                # non-protocol IC, and Step 5 never reached PASS.
                 _res = {"pass": True, "vacuous_pass": True, "rule": "N/A",
+                        "verdict": "VACUOUS_PASS",
+                        "reason_class": "DESIGN_DECLARED_NA",
+                        "skip_kind": "class-not-applicable",
                         "rationale": _msg}
                 if args.json:
                     Path(args.json).parent.mkdir(parents=True, exist_ok=True)

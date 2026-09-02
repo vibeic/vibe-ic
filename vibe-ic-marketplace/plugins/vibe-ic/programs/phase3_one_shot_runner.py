@@ -7771,6 +7771,11 @@ class PdkConfig:
     site: str
     drc_deck: Optional[str]
     metal_prefix: str = "met"
+    #: v1.15.45 (sha256 capture) — the DISTRIBUTION tech LEF a derived copy
+    #: (`active_via_legalized.tlef`) was staged from. `tech_lef` may legitimately
+    #: point at that copy under the project; anything that derives the PDK
+    #: tree from the tech-LEF path must read this first (see _pdk_dir_of).
+    tech_lef_source: Optional[str] = None
     # v0.1.46 — tap-cell master for latch-up well-tie insertion. None means
     # the PDK has no tapcell master and the tapcell step is SKIPPED. For
     # sky130_fd_sc_hd this is `sky130_fd_sc_hd__tapvpwrvgnd_1`; for other

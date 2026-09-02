@@ -19,6 +19,10 @@ v052 rtl/cc_reset_ctrl.v for CC_RESET_700MS):
     Sequences whose ``category`` field contains ``info_only`` or
     ``documentation_only`` are skipped — they are descriptive entries not
     intended to be directly implemented as their own module.
+    Sequences whose ``category`` is ``host_usage_sequence`` (README
+    usage procedures picked by Phase 1) are skipped with an INFO finding —
+    a host-side procedure is implemented by the register / command
+    interface as a whole, not by a module named after it.
 
 Edge cases:
   * ``--l12-json`` not given, file missing, or no sequence array present
@@ -106,6 +110,17 @@ _STRIP_SUFFIXES: Tuple[str, ...] = (
 _SKIP_CATEGORIES: Tuple[str, ...] = (
     "info_only", "documentation_only",
 )
+
+# v1.15.45 (sha256 capture) — a README usage sequence is the HOST-side
+# procedure that drives the register / command interface. It is implemented
+# by that interface as a whole, never by a dedicated module named after the
+# sequence, so "which RTL file implements `usage_sequence_1`?" has no answer
+# for it by construction. The Phase-1 picker stamps this category
+# (`readme_usage_sequence_extractor.HOST_USAGE_CATEGORY`); this gate records
+# the skip as an INFO finding so the exemption is visible, not silent.
+# MEASURED 2026-09-02: sha256 x sky130A (v1.15.33 and v1.15.44) — P0 FAILed on
+# two `NO_IMPL_MODULE` findings for the two README usage sequences.
+_HOST_USAGE_CATEGORY = "host_usage_sequence"
 
 # The key(s) under which L12 may store its sequence array. Ordered by
 # preference; the first non-empty one wins. PUBLIC — imported by
@@ -274,6 +289,23 @@ def audit(rtl_dir: Path, l12_json: Path | None) -> Tuple[List[Finding], Dict]:
         category = str(entry.get("category", "")).lower()
         if any(sk in category for sk in _SKIP_CATEGORIES):
             summary["sequences_skipped"] += 1
+            continue
+        if _HOST_USAGE_CATEGORY in category:
+            summary["sequences_skipped"] += 1
+            summary["host_usage_sequences_skipped"] = (
+                summary.get("host_usage_sequences_skipped", 0) + 1)
+            findings.append(Finding(
+                severity="INFO",
+                category="HOST_USAGE_SEQUENCE",
+                message=(
+                    f"L12 sequence '{seq_id}' is a host-side usage procedure "
+                    f"(category={category!r}): it is implemented by the "
+                    f"register / command interface as a whole, so no "
+                    f"dedicated RTL module is expected for it. Its steps are "
+                    f"graded by l12_sequences_in_consumed_layer_check."
+                ),
+                sequence_id=seq_id,
+            ))
             continue
 
         summary["sequences_checked"] += 1

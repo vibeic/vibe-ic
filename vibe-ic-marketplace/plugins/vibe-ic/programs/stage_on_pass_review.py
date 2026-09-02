@@ -712,7 +712,15 @@ def stage_passed(compliance: Optional[Path], stage_id: str,
     bad = sorted({str(r.get("status") or "?") for r in mine
                   if str(r.get("status") or "").upper()
                   not in ("PASS", "SKIPPED", "SKIPPED-CONDITION",
-                          "VACUOUS-PASS", "WAIVED-DEFERRED")})
+                          "VACUOUS-PASS", "VACUOUS_PASS",
+                          # v1.15.45 (sha256 capture): a stage whose only
+                          # non-PASS row is PARTIALLY-VACUOUS — every clause
+                          # ran, and the ones that examined nothing disclosed
+                          # a design-declared N/A — has not failed; it is the
+                          # done tier the audit itself counts it as. Reviewing
+                          # it is this program's job, not the repair tier's.
+                          "PARTIALLY-VACUOUS", "PARTIALLY_VACUOUS",
+                          "WAIVED-DEFERRED")})
     return {"passed": not bad,
             "why": (f"{len(mine)} row(s) for {stage_id}"
                     + (f"; non-green: {', '.join(bad)}" if bad else

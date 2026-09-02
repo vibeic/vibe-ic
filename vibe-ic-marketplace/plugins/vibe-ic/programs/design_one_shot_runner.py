@@ -713,6 +713,47 @@ def _tool_in_container(container: str, tool: str) -> bool:
 # False and the deterministic no-sim fallback still fires. chip-AGNOSTIC:
 # pure host/container tool-locality plumbing, no chip/PDK literal.
 # -------------------------------------------------------------------------
+def _local_cocotb_toolchain_present() -> bool:
+    """True iff THIS process's PATH/python can run a cocotb+icarus Makefile."""
+    import shutil as _shutil
+    if not (_shutil.which("iverilog") and _shutil.which("vvp")
+            and _shutil.which("make")):
+        return False
+    try:
+        cp = subprocess.run([sys.executable, "-c", "import cocotb"],
+                            capture_output=True, text=True, timeout=60)
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return cp.returncode == 0
+
+
+def _professional_tb_exec_site(container: str) -> Optional[str]:
+    """Where the professional cocotb TB can actually run.
+
+    Returns ``"container"`` when `container` can be exec'd into and has
+    iverilog (the pinned toolchain — always preferred), ``"host"`` when the
+    LOCAL PATH has iverilog+vvp+make and this interpreter imports cocotb, and
+    ``None`` when neither holds. Same container-first / host-fallback order
+    `_iverilog_available` already uses for the reference-TB sites, so the
+    professional path can no longer disagree with them about where the
+    simulator is.
+
+    MEASURED 2026-09-02, sha256 x sky130A (v1.15.33): the phase-2 runner was
+    executed INSIDE the EDA container (no `docker` binary on its PATH, default
+    --container=vibeic-eda). `_tool_in_container` answered False for a
+    container it could not exec into, the step then invalidated the green
+    results.xml a prior arm had produced and recorded "iverilog/cocotb not
+    reachable in the configured container" — while iverilog, vvp, make and
+    cocotb were all on the local PATH. A check that lies: Step 4 FAILed on
+    a toolchain that was present. chip-AGNOSTIC tool-locality plumbing.
+    """
+    if container and _tool_in_container(container, "iverilog"):
+        return "container"
+    if _local_cocotb_toolchain_present():
+        return "host"
+    return None
+
+
 def _iverilog_available(container: str) -> bool:
     """Container-aware iverilog availability for the reference-TB sim gates.
 
@@ -7225,12 +7266,24 @@ def step_professional_tb_gen(project: Path, top_name: str = "",
     # never a class waiver.
     if dut_kind in ("serial_stream", "parallel_arith", "expert_reference") \
             and out_dir.is_dir():
-        if _tool_in_container(container, "iverilog"):
+        _exec_site = _professional_tb_exec_site(container)
+        if _exec_site is not None:
             log_path = out_dir / "cocotb_run.log"
             cmd = f"cd '{out_dir}' && make SIM=icarus"
-            rc, so, se = _docker_exec(container, cmd, timeout=1200,
-                                      marker=str(out_dir),
-                                      log_path=str(log_path))
+            if _exec_site == "container":
+                rc, so, se = _docker_exec(container, cmd, timeout=1200,
+                                          marker=str(out_dir),
+                                          log_path=str(log_path))
+            else:
+                # Host / in-container-native mode: the pinned toolchain IS
+                # the local PATH (see _professional_tb_exec_site).
+                rc, so, se = _run(["bash", "-lc", cmd], cwd=out_dir,
+                                  timeout=1200)
+                try:
+                    log_path.write_text((so or "") + "\n" + (se or ""))
+                except OSError:
+                    pass
+            rec["cocotb_exec_site"] = _exec_site
             combined = (so or "") + "\n" + (se or "")
             pass_marker = "PROFESSIONAL_TB PASS" in combined
             xml_summary = _cocotb_xml_summary(out_dir)
@@ -7270,7 +7323,8 @@ def step_professional_tb_gen(project: Path, top_name: str = "",
                         "fallback_skill=testbench-gen"),
                 extras={"fallback_skill": "testbench-gen",
                         "program_first": "professional_tb_gen"})
-        gap = "iverilog/cocotb not reachable in the configured container"
+        gap = ("iverilog/cocotb not reachable in the configured container "
+               "nor on the local PATH")
         _write({**rec, "status": "INCOMPLETE", "reason": gap,
                 "fallback_skill": "testbench-gen"})
         return StepResult(

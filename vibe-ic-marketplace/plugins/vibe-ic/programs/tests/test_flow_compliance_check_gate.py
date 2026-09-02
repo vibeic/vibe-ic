@@ -821,10 +821,11 @@ def test_issue1980_step14_nested_nonverdict_is_classed_not_skipped(tmp_path):
     """The nested missing report is classed, never flattened to a skip.
 
     The fixture has a synth netlist but no ``.ys`` recipe, so the two Yosys
-    classifiers report NOT_CHECKED. It also lacks the nested stage-analog
-    compliance report. #1978 classifies that non-verdict as EXECUTION_ERROR;
-    #1980 preserves its real rc and disposition, while the landed dependency
-    policy keeps the step MISSING behind Step 9 rather than calling it a skip.
+    classifiers report NOT_CHECKED, and it has no analog track, so the
+    nested stage-analog on-pass review finds nothing to review. #1978
+    classifies those non-verdicts as EXECUTION_ERROR; #1980 preserves their
+    real rc and disposition, while the landed dependency policy keeps the
+    step MISSING behind Step 9 rather than calling it a skip.
     """
     proj = tmp_path / "vac"
     (proj / "phase2" / "stage1" / "rtl").mkdir(parents=True)
@@ -837,9 +838,25 @@ def test_issue1980_step14_nested_nonverdict_is_classed_not_skipped(tmp_path):
     r = _run(str(proj), "--strict")
     assert re.search(r"\[MISSING\s*\] Step\s+14:.*blocked-by-upstream\(9\)",
                      r.stdout), r.stdout
-    assert "GATE EVIDENCE: flow_compliance_check rc=1 verdict=CRASHED" in r.stdout
-    assert "reason_class=EXECUTION_ERROR" in r.stdout
-    assert "enforcement=DISCLOSED_INCOMPLETE" in r.stdout
+    # This line used to read `flow_compliance_check rc=1 verdict=CRASHED`, and
+    # the crash it pinned was a DEFECT rather than a property of the fixture:
+    # the nested stage-analog compliance gate died with FileNotFoundError
+    # writing `reports/analog/stage_analog_compliance.json`, because nothing
+    # creates `reports/analog/` on a project with no analog track. MEASURED on
+    # sha256 x sky130A (v1.15.58): that same crash turned a clean stage verdict
+    # into a phase-2 FAIL and halted a whole acceptance run. With the report
+    # writer creating its own parent, the nested gate RUNS and is RECORDED.
+    assert "GATE EVIDENCE: flow_compliance_check rc=0 verdict=PASS" in r.stdout
+    # The SUBJECT of this test is unchanged and is now pinned per gate rather
+    # than by a bare substring anywhere in stdout: an applicable input that was
+    # NOT examined is CLASSED with its real rc, its reason class and its
+    # enforcement tier — never flattened to a skip or a vacuous pass.
+    assert ("GATE EVIDENCE: stage_on_pass_review rc=2 verdict=INCOMPLETE "
+            "reason_class=EXECUTION_ERROR enforcement=DISCLOSED_INCOMPLETE"
+            ) in r.stdout, r.stdout
+    assert ("GATE EVIDENCE: yosys_tiecell_recipe_order_check rc=2 "
+            "verdict=NOT_CHECKED reason_class=EXECUTION_ERROR "
+            "enforcement=DISCLOSED_INCOMPLETE") in r.stdout, r.stdout
     assert not re.search(r"\[VACUOUS-PASS\s*\] Step\s+14:", r.stdout)
 
 

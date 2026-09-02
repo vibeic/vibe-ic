@@ -492,6 +492,63 @@ def test_build_equiv_script_keeps_full_sat_ladder():
 
 
 # ---------------------------------------------------------------------------
+# A run killed by its budget must be scored at the state it REACHED, not at
+# its first pass.
+#
+# `parse_equiv_output` short-circuits on `equiv_status`'s "N are proven and M
+# are unproven" line. A run the wall clock kills mid-ladder never prints it, so
+# the counts fall through to the per-pass fallbacks — and those used `search`,
+# which returns the FIRST match: the first `Proved N` line and the first
+# residual line, i.e. the state after ONE pass.
+#
+# MEASURED on sha256 x sky130A (v1.15.44, RTL vs post-DFT scan netlist): the
+# ladder logged `Proved 1`, `Proved 0`, `Proved 1834`, `Proved 0` and was then
+# SIGKILLed at its 7195 s budget. `reports/lec.json` recorded
+# `compared_points=1`, `unproven_points=1837`, and explained "1/1838 proven"
+# for a run that had proven 1835 of 1838 and left three points — three orders
+# of magnitude off, and it reads as "the proof never started" rather than "the
+# proof left three points". Each pass discharges a DISJOINT set, so the proven
+# count is the SUM; each induction rung re-reports what is STILL unproven, so
+# the residual is the LAST line.
+# ---------------------------------------------------------------------------
+_KILLED_LADDER_LOG = """
+Running equiv_struct on module equiv:
+Found 1838 unproven $equiv cells (1838 groups) in equiv:
+Proved 1 previously unproven $equiv cells.
+Found 1837 unproven $equiv cells (1837 groups) in equiv:
+Proved 0 previously unproven $equiv cells.
+Found 1837 unproven $equiv cells in module equiv:
+Proved 1834 previously unproven $equiv cells.
+Found 3 unproven $equiv cells in module equiv:
+Proved 0 previously unproven $equiv cells.
+Found 3 unproven $equiv cells in module equiv:
+  Proving induction step 19. (17443322 clauses over 6763139 variables)
+"""
+
+
+def test_partial_run_is_scored_at_the_state_it_reached():
+    # FORWARD negative control: against the pre-fix parser this reads
+    # proven=1 / unproven=1837 (the first pass), and both asserts below fail.
+    d = lec_run.parse_equiv_output(_KILLED_LADDER_LOG)
+    assert d["unproven"] == 3, d
+    assert d["proven"] == 1835, d
+    # and the three must remain self-consistent with the miter size
+    assert d["proven"] + d["unproven"] == d["total"] == 1838, d
+
+
+def test_a_completed_status_still_wins_over_the_per_pass_fallbacks():
+    # REVERSE control: when `equiv_status` DID print, its own line is the
+    # authority and the cumulative fallbacks must not override it. Holds on the
+    # pre-fix parser too — its only job is to fail if the fix reaches past the
+    # short-circuit.
+    d = lec_run.parse_equiv_output(
+        _KILLED_LADDER_LOG
+        + "\n  Of those cells 1838 are proven and 0 are unproven.\n")
+    assert d["proven"] == 1838, d
+    assert d["unproven"] == 0, d
+
+
+# ---------------------------------------------------------------------------
 # v1.4.21 REGRESSION — a GENERIC pre-techmap `$_`-primitive gate netlist must be
 # read with `read_verilog -icells` (no Liberty), else `hierarchy -check` aborts
 # on an undefined `\$_DFF_P_` module before any $equiv point is built and the

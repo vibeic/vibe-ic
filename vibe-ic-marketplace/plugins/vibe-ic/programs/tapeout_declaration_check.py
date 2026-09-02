@@ -229,6 +229,32 @@ def summary_line(res: Dict[str, Any]) -> str:
             f"incomplete_dependencies={len(res['incomplete_dependencies'])}")
 
 
+def _producer_record_at(path: Path):
+    """Identity stamp of the document already at `path`, if another program's.
+
+    Carried verbatim: a prior audit's own `producer_record` is kept as-is; a
+    fresh producer record yields its `program` / `emitted_by`; anything else
+    (absent, unreadable, or this gate's own document without a carried record)
+    yields None. Nothing is invented."""
+    try:
+        doc = json.loads(path.read_text(errors="replace"))
+    except (OSError, ValueError):
+        return None
+    if not isinstance(doc, dict):
+        return None
+    prior = doc.get("producer_record")
+    if isinstance(prior, dict) and prior.get("program"):
+        return dict(prior)
+    prog = doc.get("program")
+    if isinstance(prog, str) and prog.strip() and prog.strip() != PROGRAM:
+        rec = {"program": prog.strip()}
+        emitted = doc.get("emitted_by")
+        if isinstance(emitted, str) and emitted.strip():
+            rec["emitted_by"] = emitted.strip()
+        return rec
+    return None
+
+
 def main(argv: Optional[List[str]] = None) -> int:
     p = argparse.ArgumentParser(
         description="Judge the tape-out declaration written by step 0.5ic. "
@@ -250,6 +276,15 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     res = evaluate(project, args.declaration)
     out = args.out_json or (project / TD.REPORT_REL)
+    # v1.15.45 (sha256 capture) — when this verdict replaces the PRODUCER's
+    # record at the same path (`tapeout_declaration_gen` writes TD.REPORT_REL
+    # first; this gate is wired to write the same path), the producer's stamp
+    # is carried into the verdict document as `producer_record`. Without it
+    # the run's own record read as auditor-authored (audit_created) on every
+    # audit pass after the first and step 0.5ic could never be credited.
+    _prior = _producer_record_at(out)
+    if _prior:
+        res["producer_record"] = _prior
     try:
         out.parent.mkdir(parents=True, exist_ok=True)
         atomic_write_text(out, json.dumps(res, indent=2,

@@ -466,6 +466,11 @@ def main() -> int:
                 "errors": 0,
                 "findings": [],
                 "verdict": "VACUOUS_PASS",
+                # v1.15.45 (sha256 capture): the design's OWN L2 declaration
+                # rules the rule out — say so in the vocabulary the audit
+                # reads, or a green vacuous record is filed INCOMPLETE.
+                "reason_class": "DESIGN_DECLARED_NA",
+                "skip_kind": "class-not-applicable",
                 "rationale": msg,
             }, indent=2)
             if args.json == "-":
@@ -558,6 +563,11 @@ def main() -> int:
                 "errors": 0,
                 "findings": [],
                 "verdict": "VACUOUS_PASS",
+                # v1.15.45 (sha256 capture): the design's OWN L2 declaration
+                # rules the rule out — say so in the vocabulary the audit
+                # reads, or a green vacuous record is filed INCOMPLETE.
+                "reason_class": "DESIGN_DECLARED_NA",
+                "skip_kind": "class-not-applicable",
                 "rationale": msg,
             }, indent=2)
             if args.json == "-":

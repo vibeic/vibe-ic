@@ -237,6 +237,24 @@ def emit_unit_tb(case: dict, out_dir: Path, top: str,
             report.setdefault("skipped", []).append(
                 {"case": name, "reason": "case name is not a legal Verilog identifier"})
         return None
+    # v1.15.45 (sha256 capture) — NEVER regenerate over an authored oracle.
+    # The scaffold's own instruction is "write the case's drive/compare into
+    # the marked block and delete the marker line". An author who follows it
+    # produces a file WITHOUT `ORACLE_NONE_MARKER`; re-emitting the scaffold
+    # here on the next runner invocation erased that work and its evidence —
+    # the same clobber `professional_tb_gen` closed for tb_<top>.py. A file
+    # that still carries the marker is the scaffold itself and is refreshed.
+    authored = out_dir / f"{name}.v"
+    if authored.is_file():
+        try:
+            prior_text = authored.read_text(errors="replace")
+        except OSError:
+            prior_text = ""
+        if prior_text and ORACLE_NONE_MARKER not in prior_text:
+            if report is not None:
+                report.setdefault("preserved_authored", []).append(
+                    {"case": name, "path": str(authored)})
+            return authored
     opcode = case.get("opcode_hex", "0x00")
     expected = case.get("expected", "(see L3 response_payload_template)")
     kind = case.get("kind", "happy_path")

@@ -871,7 +871,35 @@ def main(argv: Optional[List[str]] = None) -> int:
         if ports:
             break
 
-    if not slots or not ports:
+    # v1.15.45 (sha256 capture) — "no slot files" has TWO different owners.
+    # Step 0.5ic writes exactly one router file: a slot list (shuttle route),
+    # NO_TEMPLATE.txt, or SELF_TAPEOUT.txt. When the router present is one of
+    # the last two, the design DECLARED that no operator slot exists, so there
+    # is no pad budget to fit — a design-declared N/A, not "step 0.5ic has not
+    # run" (which was false on every self-tape-out run and read as
+    # BLOCKED_BY_UPSTREAM → step 2 INCOMPLETE).
+    _routers = (
+        ("SELF_TAPEOUT.txt", "the design declared its own tape-out "
+                             "(input/submission_template/SELF_TAPEOUT.txt)"),
+        ("NO_TEMPLATE.txt", "the design declared that no operator template "
+                            "applies (input/submission_template/NO_TEMPLATE.txt)"),
+    )
+    _declared_no_slot = None
+    for _name, _why in _routers:
+        if os.path.isfile(os.path.join(str(a.project), "input",
+                                       "submission_template", _name)):
+            _declared_no_slot = _why
+            break
+    if not slots and _declared_no_slot:
+        rep = {"check": "slot_pad_budget", "verdict": "NOT_APPLICABLE", "rc": 2,
+               "reason_class": _reason_taxonomy.DESIGN_DECLARED_NA,
+               "skip_kind": "class-not-applicable",
+               "reason": (_declared_no_slot + " — no operator slot exists to "
+                          "budget the top-level signal pads against; the die "
+                          "sizes its own pad ring at step 15.5ic"),
+               "note": "a design-declared route, not an unanswered question"}
+        rc = 2
+    elif not slots or not ports:
         why = ("no slot files under input/submission_template/slots — step "
                "0.5ic has not run" if not slots else
                f"top module '{a.top}' not found in "
@@ -926,9 +954,10 @@ def main(argv: Optional[List[str]] = None) -> int:
     # does not formally bind it, but rc 2 here IS the silent-skip shape — no
     # slots ingested, or no port list found — and a bracketed marker makes the
     # disclosed skip greppable beside every other gate that discloses one.
-    _mark = "[CANNOT CHECK] " if rep["verdict"] == "UNDECIDED" else ""
+    _mark = ("[CANNOT CHECK] " if rep["verdict"] == "UNDECIDED" else
+             "[N/A] " if rep["verdict"] == "NOT_APPLICABLE" else "")
     print(f"{_mark}slot_pad_budget_check: {rep['verdict']}")
-    if rep["verdict"] == "UNDECIDED":
+    if rep["verdict"] in ("UNDECIDED", "NOT_APPLICABLE"):
         print(f"  {rep.get('reason', 'no reason recorded')}")
     else:
         print(f"  declared signal bits           : {rep['declared_signal_bits']}")

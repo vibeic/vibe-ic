@@ -1107,9 +1107,20 @@ def parse_equiv_output(text: str) -> Dict:
             total = int(m.group(1))
 
     if proven is None:
-        m = _PROVED_SIMPLE_RE.search(text)
-        if m:
-            proven = int(m.group(1))
+        # CUMULATIVE, not the first pass. Each proof pass reports the cells IT
+        # discharged, and the sets are disjoint, so the run's proven count is
+        # the SUM over every pass — `search` returned only the first one.
+        #
+        # MEASURED on sha256 x sky130A (v1.15.44, RTL vs post-DFT scan
+        # netlist): the ladder logged `Proved 1`, `Proved 0`, `Proved 1834`,
+        # `Proved 0` and was then killed by its wall budget with no final
+        # `equiv_status` to short-circuit on. The report recorded
+        # `compared_points=1` and explained "1/1838 proven" for a run that had
+        # proven 1835 of 1838 — three orders of magnitude off, and it read as
+        # "the proof never started" instead of "the proof left three points".
+        _proved_all = [int(n) for n in _PROVED_SIMPLE_RE.findall(text)]
+        if _proved_all:
+            proven = sum(_proved_all)
     if proven is None or total is None:
         m = _SIMPLE_SLASH_RE.search(text)
         if m:
@@ -1119,9 +1130,13 @@ def parse_equiv_output(text: str) -> Dict:
                 total = int(m.group(2))
 
     if unproven is None:
-        m = _INDUCT_FOUND_RE.search(text)
-        if m:
-            unproven = int(m.group(1))
+        # The LAST residual line, not the first: each induction rung re-reports
+        # what is STILL unproven, so the furthest state the run reached is the
+        # last one it printed. On the same measured run the first line said
+        # 1837 and the last said 3.
+        _resid = _INDUCT_FOUND_RE.findall(text)
+        if _resid:
+            unproven = int(_resid[-1])
 
     # Reconstruct the missing piece from the other two when possible.
     if total is None and proven is not None and unproven is not None:

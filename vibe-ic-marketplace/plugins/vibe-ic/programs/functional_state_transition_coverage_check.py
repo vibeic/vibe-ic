@@ -172,6 +172,36 @@ def audit(tb_target: Path, coverage: List[Dict[str, Any]]) -> List[Finding]:
     return findings
 
 
+def _l3_declares_no_opcodes(tb_path: Path) -> str:
+    """Return the L3 declaration that rules opcodes out, or "" when L3 does not.
+
+    Walks up from the TB path to the project root that holds
+    `phase1/generated_docs/L3_CMD_PROTOCOL.json` (the canonical Phase-1 L3)
+    and reads its own typed flags. Only an explicit declaration counts: an
+    absent L3 returns "" and the caller keeps its error path.
+    """
+    try:
+        start = tb_path.resolve()
+    except OSError:
+        return ""
+    for root in [start] + list(start.parents):
+        l3 = root / "phase1" / "generated_docs" / "L3_CMD_PROTOCOL.json"
+        if not l3.is_file():
+            continue
+        try:
+            doc = json.loads(l3.read_text(errors="replace"))
+        except (OSError, ValueError):
+            return ""
+        if not isinstance(doc, dict):
+            return ""
+        if doc.get("no_opcodes_in_input") is True and not doc.get("opcodes"):
+            return "L3_CMD_PROTOCOL.no_opcodes_in_input=true, opcodes=[]"
+        if doc.get("command_protocol_applicable") is False:
+            return "L3_CMD_PROTOCOL.command_protocol_applicable=false"
+        return ""
+    return ""
+
+
 def main(argv: Optional[List[str]] = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[1] if __doc__ else "")
     ap.add_argument("tb", help="TB file or directory")
@@ -198,6 +228,32 @@ def main(argv: Optional[List[str]] = None) -> int:
         coverage.append(norm)
 
     if not coverage:
+        # v1.15.45 (sha256 capture) — per-opcode state-transition coverage is
+        # a question about a COMMAND PROTOCOL. When the design's own L3
+        # declares no opcodes, an empty coverage list is that declaration,
+        # not a missing input: disclose the design-declared N/A (the phrase is
+        # the one `_flow_reason_taxonomy` classifies as DESIGN_DECLARED_NA)
+        # instead of an execution error that read as INCOMPLETE.
+        _l3_na = _l3_declares_no_opcodes(Path(args.tb))
+        if _l3_na:
+            msg = ("VACUOUS_PASS: no command protocol — the design's L3 "
+                   f"declares no opcodes ({_l3_na}); per-opcode "
+                   "state-transition coverage is N/A for this non-protocol IC "
+                   "(0 coverage entries, nothing to assert)")
+            print(msg)
+            if args.json:
+                report = {"target": str(args.tb), "coverage_entries": 0,
+                          "errors": 0, "findings": [],
+                          "verdict": "VACUOUS_PASS",
+                          "reason_class": "DESIGN_DECLARED_NA",
+                          "skip_kind": "class-not-applicable",
+                          "reason": msg}
+                if args.json == '-':
+                    print(json.dumps(report, indent=2))
+                else:
+                    Path(args.json).parent.mkdir(parents=True, exist_ok=True)
+                    Path(args.json).write_text(json.dumps(report, indent=2))
+            return 2
         print("error: no coverage entries (--coverage or --cov)", file=sys.stderr)
         return 2
 

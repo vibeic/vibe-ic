@@ -49,6 +49,28 @@ def test_nonexistent_project_errors(tmp_path):
 
 
 # ---------------------------------------------------------------------------
+# The `--json` report must be writable into a directory that does not exist yet.
+#
+# MEASURED on sha256 x sky130A (v1.15.58, 8HD-7): the stage_analog compliance
+# run printed `Overall: PASS (strict=True)` and then died with
+# `FileNotFoundError: reports/analog/stage_analog_compliance.json` because
+# nothing had created `reports/analog/` on a pure-digital project. The runner
+# read the traceback as a phase-2 FAIL and halted the whole acceptance on a
+# stage whose verdict was clean. The sibling writer in the same `main()`
+# (`phase23_completion_audit.json`) has always created its parent.
+# ---------------------------------------------------------------------------
+def test_json_report_creates_its_parent_directory(tmp_path):
+    # FORWARD negative control: raises FileNotFoundError against the pre-fix
+    # program, passes once the writer creates its parent.
+    j = tmp_path / "reports" / "analog" / "stage_analog_compliance.json"
+    assert not j.parent.exists()
+    code, out, err = _run(tmp_path, ("--strict", "--json", str(j)))
+    assert "FileNotFoundError" not in err, err[-800:]
+    assert j.exists(), f"report not written (rc={code}): {err[-800:]}"
+    assert isinstance(json.loads(j.read_text()), dict)
+
+
+# ---------------------------------------------------------------------------
 # v0.55: optional_program_exit_zero predicate
 # ---------------------------------------------------------------------------
 sys.path.insert(0, str(PROG.parent))

@@ -64,6 +64,118 @@ _IMPERATIVE_VERBS = frozenset({
     "transmit", "transmits", "receive", "receives",
 })
 
+#: Category stamped on every README usage sequence (v1.15.45, sha256 capture).
+#: A numbered host-side procedure is DOCUMENTATION of how software drives the
+#: register interface: it is implemented by the design's register / command
+#: path as a whole, never by a dedicated RTL module named after the sequence.
+#: Consumers that ask "which module implements this sequence?"
+#: (`l12_sequence_implementation_check`) skip this category with a stated
+#: reason; consumers that ask "is each step checkable?"
+#: (`l12_sequences_in_consumed_layer_check`) read the typed details that
+#: `type_step_action` derives below. MEASURED 2026-09-02 on the sha256 corpus
+#: IC (v1.15.33 and v1.15.44): the two README usage sequences were emitted as
+#: bare prose with no category, so BOTH consumers refused — one for a missing
+#: `usage_sequence_1` module, the other for untyped steps — and D1 + P0 failed
+#: on documentation that was correct.
+HOST_USAGE_CATEGORY = "host_usage_sequence"
+
+_TRAILING_COMMENT_RE = re.compile(r"\s*(?://|#|;)\s*(.*)$")
+_CYCLES_RE = re.compile(r"~?\s*(\d+)\s*(?:clk|clock)?\s*cycles?", re.I)
+_TIME_RE = re.compile(r"(\d+(?:\.\d+)?)\s*(us|µs|ms|ns)\b", re.I)
+_OPTIONAL_RE = re.compile(r"^\(?\s*optional\s*\)?\s*[:\-]?\s*", re.I)
+_WRITE_RE = re.compile(
+    r"^write\s+([A-Za-z_][\w./\[\]:]*)\s*((?:bit|bits|field)\s*[\w:\[\]]+)?\s*=\s*(.+)$",
+    re.I)
+_READ_RE = re.compile(
+    r"^read\s+([A-Za-z_][\w./\[\]:]*)(?:\s*=\s*(.+?))?(?:\s+to\s+(.+))?$", re.I)
+_POLL_RE = re.compile(
+    r"^(?:poll|wait(?:\s+for)?)\s+(.+?)(?:\s+until\s+(.+))?$", re.I)
+_CHECK_RE = re.compile(r"^(?:check|verify|confirm|assert)\s+(.+)$", re.I)
+_REPEAT_RE = re.compile(
+    r"^(?:for\s+(.+?)\s*:\s*)?repeat\s+(?:steps?\s*)?(\d+)\s*[-–]\s*(\d+)(.*)$",
+    re.I)
+
+
+def type_step_action(action: str) -> dict:
+    """Derive the typed, checkable detail a README step carries.
+
+    Pure text → dict; returns {} when the step is prose only. The keys are
+    the ones `l12_sequences_in_consumed_layer_check._STEP_DETAIL_KEYS`
+    already reads (`expected_signal`, `expected_response`, `wait_for`,
+    `check`, `next_state`, `latency_*`), so a typed step is checkable by the
+    consumer that exists rather than by a new vocabulary. Chip-AGNOSTIC:
+    only the imperative verb and the `<target> = <value>` / `until` /
+    `~N cycles` shapes of a host procedure are read; no register name or
+    value is interpreted.
+    """
+    if not isinstance(action, str):
+        return {}
+    text = action.strip()
+    out: dict = {}
+    note = ""
+    m = _TRAILING_COMMENT_RE.search(text)
+    if m and m.start() > 0:
+        note = m.group(1).strip()
+        text = text[:m.start()].strip()
+    if _OPTIONAL_RE.match(text) and _OPTIONAL_RE.match(text).end() > 0:
+        out["optional"] = True
+        text = text[_OPTIONAL_RE.match(text).end():].strip()
+    probe = f"{text} {note}".strip()
+    mc = _CYCLES_RE.search(probe)
+    if mc:
+        out["latency_cycles"] = int(mc.group(1))
+    mt = _TIME_RE.search(probe)
+    if mt:
+        unit = mt.group(2).lower().replace("µs", "us")
+        try:
+            out[f"latency_{unit}"] = float(mt.group(1))
+        except ValueError:
+            pass
+    m = _WRITE_RE.match(text)
+    if m:
+        target = m.group(1)
+        field = (m.group(2) or "").strip()
+        value = m.group(3).strip()
+        out.update({"action_type": "write", "target": target,
+                    "value": value,
+                    "expected_signal": f"{target}{(' ' + field) if field else ''} = {value}"})
+        if field:
+            out["field"] = field
+        return out
+    m = _READ_RE.match(text)
+    if m:
+        target = m.group(1)
+        out.update({"action_type": "read", "target": target, "observe": target})
+        if m.group(2):
+            out["expected_response"] = m.group(2).strip()
+        elif m.group(3):
+            out["expected_response"] = m.group(3).strip()
+        return out
+    m = _POLL_RE.match(text)
+    if m:
+        target = m.group(1).strip()
+        cond = (m.group(2) or "").strip()
+        wait_for = f"{target} until {cond}" if cond else target
+        out.update({"action_type": "poll", "target": target,
+                    "wait_for": wait_for, "expected_signal": cond or target})
+        return out
+    m = _CHECK_RE.match(text)
+    if m:
+        out.update({"action_type": "check", "check": m.group(1).strip()})
+        return out
+    m = _REPEAT_RE.match(text)
+    if m:
+        out.update({"action_type": "repeat",
+                    "next_state": f"step {m.group(2)}",
+                    "repeat_steps": f"{m.group(2)}-{m.group(3)}"})
+        if m.group(1):
+            out["condition"] = m.group(1).strip()
+        if m.group(4) and m.group(4).strip():
+            out["variant"] = m.group(4).strip(" ,;:")
+        return out
+    return out
+
+
 _MIN_STEPS = 3
 _MIN_ACTION_LEN = 6  # chars after "<N>. "
 _MIN_IMPERATIVE_FRACTION = 0.5
@@ -85,6 +197,7 @@ def extract_usage_sequence_from_readme(
         {
             "name":     "usage_sequence_<index>",
             "trigger":  "host_initiates",
+            "category": "host_usage_sequence",
             "steps":    [
                 {"step": 1, "action": "Load key into key registers",
                  "evidence_line": L},
@@ -120,10 +233,11 @@ def extract_usage_sequence_from_readme(
             if imperative_count / len(current_steps) >= _MIN_IMPERATIVE_FRACTION:
                 idx = len(sequences) + 1
                 sequences.append({
-                    "name":    f"usage_sequence_{idx}",
-                    "trigger": "host_initiates",
-                    "steps":   list(current_steps),
-                    "source":  "readme_usage_sequence",
+                    "name":     f"usage_sequence_{idx}",
+                    "trigger":  "host_initiates",
+                    "category": HOST_USAGE_CATEGORY,
+                    "steps":    list(current_steps),
+                    "source":   "readme_usage_sequence",
                 })
         current_steps = []
         last_num = 0
@@ -147,11 +261,13 @@ def extract_usage_sequence_from_readme(
         if num != last_num + 1:
             # Counter reset → flush previous, start new.
             _flush()
-        current_steps.append({
+        step_rec = {
             "step": len(current_steps) + 1,
             "action": action,
             "evidence_line": line_num,
-        })
+        }
+        step_rec.update(type_step_action(action))
+        current_steps.append(step_rec)
         last_num = num
 
     _flush()
@@ -159,5 +275,7 @@ def extract_usage_sequence_from_readme(
 
 
 __all__ = [
+    "HOST_USAGE_CATEGORY",
     "extract_usage_sequence_from_readme",
+    "type_step_action",
 ]
