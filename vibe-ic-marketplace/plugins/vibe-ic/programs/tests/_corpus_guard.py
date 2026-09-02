@@ -29,6 +29,15 @@ In either shape `require_corpus()` FAILS instead of skipping, and the message
 names which declaration armed it. Chip-AGNOSTIC: no design, PDK or vendor
 literal appears here.
 """
+#: MOVED HERE FROM `programs/` (G16). This module raises `pytest.skip` and
+#: `pytest.fail`, so it can only ever run inside a pytest process — it has no
+#: CLI, no `main()` and no exit code, and nothing outside `programs/tests/`
+#: imports it. In `programs/` its `_guard` suffix put it in
+#: `gate_is_wired_check`'s population (`_(check|lint|audit|guard|gate)$`), where
+#: it was measured as "consulted by no automatic verdict" — correctly, because
+#: `programs/tests/` is deliberately NOT a wiring source and a test importing a
+#: gate is not the flow consulting it. It is a test helper and it now sits with
+#: the other twenty-seven under `programs/tests/`, underscore-named like them.
 from __future__ import annotations
 
 import os

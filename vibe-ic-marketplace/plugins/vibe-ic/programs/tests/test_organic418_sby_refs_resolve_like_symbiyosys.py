@@ -31,7 +31,7 @@ import pytest
 _PROGRAMS = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_PROGRAMS))
 import formal_proof_evidence_check as F  # noqa: E402
-import corpus_guard as CG  # noqa: E402
+import _corpus_guard as CG  # noqa: E402
 
 
 @pytest.fixture
