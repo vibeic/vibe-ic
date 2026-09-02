@@ -258,6 +258,68 @@ def _try_native_a6_pv(project: Path, block: str, container: str):
         return None
 
 
+def _loop_liveness(project: Path, block: str, container: str):
+    """Was the block's loop LIVE over the window A4 just measured?
+
+    A4 reports numbers taken over a transient. `analog_loop_liveness_check`
+    exists because a number taken over a loop that never left reset certifies
+    nothing — measured on a real block, where two mechanisms were closed on
+    clean nulls and both had to be reopened rounds later. That gate had no
+    caller for one reason: nothing emitted its input. It has one now
+    (`analog_loop_liveness_samples_emit`), which exports the nodes A2 declared
+    from the transient THIS STEP already ran.
+
+    Returns the gate's own record, or a NOT_PRODUCED / NOT_DECLARED record
+    naming what was missing. Never None for a block whose type declares
+    liveness nodes, and never raises: a step's disposition is decided by its
+    own gate, and this rides alongside it as disclosure.
+    """
+    prod = PROGRAMS_DIR / "analog_loop_liveness_samples_emit.py"
+    gate = PROGRAMS_DIR / "analog_loop_liveness_check.py"
+    if not (prod.is_file() and gate.is_file()):
+        return None
+    try:
+        pcp = _pr.run([sys.executable, str(prod), str(project),
+                       "--block", block, "--container", container],
+                      capture_output=True, text=True)
+    except Exception as exc:                       # pragma: no cover - defensive
+        return {"result": "NOT_PRODUCED", "reason": repr(exc)}
+    try:
+        prec = json.loads(pcp.stdout)
+    except Exception:
+        prec = {}
+    if pcp.returncode != 0 or not prec.get("checker_argv"):
+        tail = (pcp.stderr or "").strip().splitlines()
+        # A producer that refused is a window that was NOT MEASURED — the same
+        # tier the gate itself returns, and deliberately not a third word. The
+        # only outcome that is not in that tier is NOT_DECLARED: a circuit
+        # class of which the question was never asked. Nothing here may be a
+        # pass: "we could not look" must not render like "we looked and it was
+        # fine", which is the whole finding this track came from.
+        return {"result": ("NOT_DECLARED"
+                           if prec.get("verdict") == "NOT_DECLARED"
+                           else "NOT_MEASURED"),
+                "stage": "samples_producer",
+                "producer": prod.name, "producer_rc": pcp.returncode,
+                "reason": (prec.get("reason") or (tail[-1] if tail else
+                           "the samples producer wrote nothing and said "
+                           "nothing"))}
+    out = project / "phase3" / "analog" / block / "loop_liveness.json"
+    gcp = _pr.run([sys.executable, str(gate), *prec["checker_argv"],
+                   "--json", str(out)], capture_output=True, text=True)
+    try:
+        rec = json.loads(gcp.stdout)
+    except Exception:
+        rec = {"result": "UNUSABLE",
+               "reason": (gcp.stderr or gcp.stdout or "").strip()[-400:]}
+    rec["gate"] = gate.stem
+    rec["gate_rc"] = gcp.returncode
+    rec["samples"] = prec.get("samples")
+    rec["deck"] = prec.get("deck")
+    rec["record"] = str(out)
+    return rec
+
+
 def _pv_verdict(native, kind):
     d = (native or {}).get(kind)
     return d.get("verdict") if isinstance(d, dict) else "n/a"
@@ -1294,6 +1356,22 @@ def step_for_block(project: Path, block: Dict[str, Any], step_name: str,
                             so = _structure_only_disclosure(cp_real)
                             _on = (f"real ngspice on "
                                    f"{_doc.get('netlist_source') or 'an unnamed deck'}")
+                            # A NULL OVER A DEAD LOOP CERTIFIES NOTHING. The
+                            # numbers above were taken over a transient; this
+                            # says whether the loop was RUNNING during it. The
+                            # gate's own words lead the reason when they are
+                            # not LIVE, for the same reason `so` does.
+                            _live = _loop_liveness(
+                                project, bname,
+                                (getattr(args, "container", None)
+                                 or os.environ.get(
+                                     "VIBEIC_ANALOG_CONTAINER",
+                                     "vibeic-eda")))
+                            if _live and _live.get("result") not in (
+                                    None, "LIVE", "NOT_DECLARED"):
+                                _on = (f"loop liveness "
+                                       f"{_live['result']}: "
+                                       f"{_live.get('reason', '')} — {_on}")
                             return StepResult(
                                 step_name, bname,
                                 "PASS_STRUCTURE_ONLY" if so
@@ -1314,6 +1392,7 @@ def step_for_block(project: Path, block: Dict[str, Any], step_name: str,
                                     "netlist_source": _doc.get("netlist_source"),
                                     "deck_source": _doc.get("deck_source"),
                                     "low_confidence": False,
+                                    "loop_liveness": _live,
                                     **_content_extras(project, bname,
                                                       step_name),
                                 })

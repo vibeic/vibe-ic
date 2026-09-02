@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 1266
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1266)
+- **Total programs (excluding helpers / shims):** 1267
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1267)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 1257 |
+| `any` | 1258 |
 
 ## Alphabetical listing
 
@@ -89,6 +89,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `analog_lef_gds_outline_check` | any | — | Codifies the EXTRACT-NEW spot-check in |
 | `analog_liberty_nonzero_delay_check` | any | — | deterministic Liberty non-degeneracy gate. |
 | `analog_loop_liveness_check` | any | — | a NULL over a DEAD LOOP certifies nothing. |
+| `analog_loop_liveness_samples_emit` | any | — | the samples `analog_loop_liveness_check` eats, exported from the transient the analog runner ALREADY simulated. |
 | `analog_lvs_comparison_prep` | any | — | COMPARISON-SIDE preparation for an open-PDK per-block LVS run (A6). Deterministic, chip-AGNOSTIC, no PDK literal. |
 | `analog_macro_rtl_interface_check` | any | — | the digital side of an analog macro's interface, which nothing compared. |
 | `analog_mc_yield_run` | any | — | REAL Monte-Carlo yield execution for the analog track (flow-completeness review P1-1). |
@@ -1338,7 +1339,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (1257 programs)
+### `any` (1258 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `absence_verdict_names_its_search_space_check` — "not found" must say WHERE it looked.
@@ -1403,6 +1404,7 @@ _(no programs in this group)_
 - `analog_lef_gds_outline_check` — Codifies the EXTRACT-NEW spot-check in
 - `analog_liberty_nonzero_delay_check` — deterministic Liberty non-degeneracy gate.
 - `analog_loop_liveness_check` — a NULL over a DEAD LOOP certifies nothing.
+- `analog_loop_liveness_samples_emit` — the samples `analog_loop_liveness_check` eats, exported from the transient the analog runner ALREADY simulated.
 - `analog_lvs_comparison_prep` — COMPARISON-SIDE preparation for an open-PDK per-block LVS run (A6). Deterministic, chip-AGNOSTIC, no PDK literal.
 - `analog_macro_rtl_interface_check` — the digital side of an analog macro's interface, which nothing compared.
 - `analog_mc_yield_run` — REAL Monte-Carlo yield execution for the analog track (flow-completeness review P1-1).
