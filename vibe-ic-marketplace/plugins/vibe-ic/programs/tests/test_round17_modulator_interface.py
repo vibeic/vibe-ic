@@ -90,14 +90,35 @@ def test_vcm_and_rst_left_the_boundary_and_are_not_silently_gone():
 
 
 def test_the_common_mode_is_generated_from_the_declared_reference_pair():
-    """Two matched devices across vrefp..vrefn with the tap on vcm. Without
-    them `vcm` is an internal net nothing drives, which is the same defect
-    as the pin it replaced."""
-    div = [d for d in ENTRY["devices"]
-           if "vcm" in d["nets"] and d["role"] == "res"]
+    """Two matched devices across vrefp..vrefn, and `vcm` DRIVEN from their
+    tap. Without them `vcm` is an internal net nothing drives, which is the
+    same defect as the pin it replaced.
+
+    The assertion is on that INTENT, not on the tap's name. It used to
+    require the tap to be `vcm` itself; since v1.16.44+ the tap feeds a
+    unity-gain buffer whose output is `vcm`, because a 67.2 kohm divider
+    cannot hold a node ten switched terminals commutate onto (measured: the
+    reference moved 0.1196 V across the input range, six times harder than
+    the signal). The intent holds more strongly now, so the test follows the
+    intent."""
+    div = [d for d in ENTRY["devices"] if d["role"] == "res"
+           and {"vrefp", "vrefn"} & set(d["nets"])]
     assert len(div) == 2, [d["name"] for d in div]
     touched = {n for d in div for n in d["nets"]}
-    assert {"vrefp", "vrefn", "vcm"} <= touched
+    assert {"vrefp", "vrefn"} <= touched
+    # the tap is whatever net the two halves share besides the rails
+    tap = (set(div[0]["nets"]) & set(div[1]["nets"])) - {"vss", "vdd"}
+    assert len(tap) == 1, tap
+    tap = tap.pop()
+    # and `vcm` must be DRIVEN — either it is the tap, or something whose
+    # input is the tap drives it
+    if tap != "vcm":
+        drivers = [d for d in ENTRY["devices"]
+                   if d["nets"][0] == "vcm" and d["role"] in ("nmos", "pmos")]
+        assert drivers, "vcm is neither the tap nor driven by any device"
+        fed = [d for d in ENTRY["devices"]
+               if len(d["nets"]) > 1 and d["nets"][1] == tap]
+        assert fed, f"nothing reads the divider tap {tap!r}"
 
 
 def test_the_declared_clock_actually_switches_something():

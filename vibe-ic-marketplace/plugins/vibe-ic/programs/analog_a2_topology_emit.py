@@ -1060,6 +1060,75 @@ LIBRARY: Dict[str, Dict[str, Any]] = {
             # disturbance to a tenth of the signal needs about forty of those
             # units. It is expressed against the sampling capacitor the noise
             # budget already fixed, so it follows the declaration.
+            # ── the divider now sets a REFERENCE, and a buffer drives it ─
+            # MEASURED (round 26): decoupling alone got the decision-instant
+            # swing from 0.1196 V to 0.0367 V and stopped there, and the
+            # extrapolation closed that route -- reaching a tenth of the
+            # signal would need ~734 unit capacitors, about 0.10 mm^2.
+            #
+            # THE SPEC, back-derived from the switched charge rather than
+            # preferred: four unit sampling/DAC capacitors commutate between
+            # vcm and the signal every clock, so they draw
+            #     I_avg = 4 * C_unit * dV_switch * f_clk
+            #           = 4 * 277.97 fF * 0.5 V * 10 MHz = 5.56 uA
+            # and holding the offset under a tenth of the signal (0.0020 V)
+            # needs an output impedance below 0.0020 / 5.56u = 360 ohm. The
+            # divider alone is 67.2 kohm (two 181 um rppd arms in parallel at
+            # the registry's measured sheet), i.e. 187x too high -- which is
+            # why no capacitor closes it.
+            #
+            # THE TOPOLOGY IS NOT INVENTED. This design already contains two
+            # of exactly the amplifier this needs: the integrator OTA, a
+            # differential pair on a mirrored tail into a current-mirror load
+            # with a Miller-compensated output stage. It is instantiated a
+            # third time, at the SAME geometry, closed in unity gain -- the
+            # inverting input IS the output -- with the divider midpoint on
+            # the non-inverting input. Nothing here is a width somebody chose
+            # for this block; every one of them is the integrator's own, and
+            # the tail hangs off the same already-derived `nbias`.
+            {"name": "mn_cmtail", "role": "nmos", "function":
+             "common-mode buffer tail, mirrored from the same bias branch "
+             "the integrators use",
+             "nets": ["ntail_cm", "nbias", "vss", "vss"], "w": 8.0, "l": 1.0},
+            # POLARITY, taken from this very OTA rather than assumed.
+            # In the integrator, the device on the DIODE side (nd1) is the
+            # INVERTING input: its gate rising pulls nd1 down, the mirror
+            # pulls nd2 up, the output pmos turns off and the output falls.
+            # The device on the mirror side (nd2) is NON-inverting. So the
+            # unity-gain feedback belongs on the DIODE side and the reference
+            # on the mirror side. MEASURED with them the other way round: the
+            # loop is positive feedback and the buffer drives vcm to 1.11 V
+            # against a divider midpoint of 0.60 V -- it pins to the rail.
+            {"name": "mn_cmfb", "role": "nmos", "function":
+             "common-mode buffer input pair, FEEDBACK side (inverting, the "
+             "diode side of the mirror) — the output IS this input, which is "
+             "what makes it unity gain",
+             "nets": ["nd1_cm", "vcm", "ntail_cm", "vss"],
+             "w": 16.0, "l": 0.5},
+            {"name": "mn_cmin", "role": "nmos", "function":
+             "common-mode buffer input pair, REFERENCE side (non-inverting, "
+             "the mirror side): the divider midpoint is what this buffer "
+             "reproduces",
+             "nets": ["nd2_cm", "nvcmr", "ntail_cm", "vss"],
+             "w": 16.0, "l": 0.5},
+            {"name": "mp_cmld1", "role": "pmos", "function":
+             "common-mode buffer current-mirror load, diode side",
+             "nets": ["nd1_cm", "nd1_cm", "vdd", "vdd"], "w": 8.0, "l": 0.5},
+            {"name": "mp_cmld2", "role": "pmos", "function":
+             "common-mode buffer current-mirror load, mirror side",
+             "nets": ["nd2_cm", "nd1_cm", "vdd", "vdd"], "w": 8.0, "l": 0.5},
+            {"name": "mp_cmo", "role": "pmos", "function":
+             "common-mode buffer output stage pull-up — this is the device "
+             "that actually makes the node low-impedance",
+             "nets": ["vcm", "nd2_cm", "vdd", "vdd"], "w": 16.0, "l": 0.5},
+            {"name": "mn_cmo", "role": "nmos", "function":
+             "common-mode buffer output stage pull-down, mirrored from the "
+             "same bias branch",
+             "nets": ["vcm", "nbias", "vss", "vss"], "w": 8.0, "l": 1.0},
+            {"name": "c_cmc", "role": "cap", "function":
+             "common-mode buffer Miller compensation — the same role, and "
+             "the same derived size, as each integrator's own",
+             "nets": ["nd2_cm", "vcm"], "w": 10.0, "l": 1.0},
             {"name": "c_vcm", "role": "cap", "function":
              "common-mode reference decoupling: the divider alone cannot "
              "hold this node against the charge ten switched terminals "
@@ -1069,12 +1138,12 @@ LIBRARY: Dict[str, Dict[str, Any]] = {
              "upper half of the matched divider that generates the "
              "common-mode reference as the midpoint of the DECLARED "
              "differential reference pair — the reason vcm is not a pin",
-             "nets": ["vrefp", "vcm", "vss"], "w": 0.35, "l": 181.0},
+             "nets": ["vrefp", "nvcmr", "vss"], "w": 0.35, "l": 181.0},
             {"name": "r_cm2", "role": "res", "function":
              "lower half of the same matched divider; r_cm1/r_cm2 must "
              "MATCH, because their ratio error appears directly as a "
              "common-mode offset on every integrator",
-             "nets": ["vcm", "vrefn", "vss"], "w": 0.35, "l": 181.0},
+             "nets": ["nvcmr", "vrefn", "vss"], "w": 0.35, "l": 181.0},
             # ── the clock complement (the second SC phase) ───────────────
             {"name": "mp_ckb", "role": "pmos", "function":
              "clock-complement inverter, pull-up: the charge-transfer "
@@ -1394,6 +1463,15 @@ LIBRARY: Dict[str, Dict[str, Any]] = {
                            "stores reaches the latch divided down. Measured "
                            "at one sampling capacitor: a transfer of 0.13, "
                            "and a decision that never changed")},
+            {"device": "c_cmc", "param": "l",
+             "expr": ("miller_fraction_of_load * ("
+                      + SAMPLING_CAP_L_EXPR + ") * "
+                      + _LOAD_OVER_CS_DERIVED_EXPR),
+             "rationale": ("the buffer is the integrator OTA instantiated a "
+                           "third time, so its compensation is the same "
+                           "quantity the integrators' own is — derived, not "
+                           "the number that happened to be right for an "
+                           "earlier declaration")},
             {"device": "c_vcm", "param": "l",
              "expr": "40.0 * (" + SAMPLING_CAP_L_EXPR + ")",
              "rationale": ("four unit sampling/DAC capacitors commutate onto "
