@@ -630,15 +630,44 @@ def test_the_outputs_of_this_step_are_what_the_flow_routes_on():
         "three router files are still what the flow routes on; got "
         f"{sorted(by_file)}")
 
-    # THE LOAD-BEARING EXCLUSIVITY IS CHIP-vs-IP, and it is the one that has to
-    # hold: `files_exist` cannot express "and not", so a step reachable from
-    # both a chip router and the IP router would be selected on two
-    # incompatible deliveries at once.
+    # THE LOAD-BEARING EXCLUSIVITY IS ONE-DIRECTIONAL, and it is the CHIP-ONLY
+    # half: a step that asks for a pad ring, a seal ring or a tape-out precheck
+    # must not be selected by a design that declared it has no die, because
+    # that is a refusal such a design can never answer.
+    #
+    # 2026-09-02 — THE OTHER DIRECTION WAS RETIRED BY OWNER RULING. It used to
+    # read "no step may be selected by both an IP router and a chip router",
+    # and it was measured turning a die into a design with NO deliverable kit
+    # at all: on spm x gf180mcuD at plugin 1.15.67 a `deliverable=DIE` run
+    # recorded `Step 37.5ip ... condition not met` and produced no `.lef`, no
+    # `.lib` and no datasheet anywhere. The ruling: an IC runs BOTH terminals —
+    # a die is also a block somebody re-uses — and only a pure IP skips the
+    # chip one. So overlap on the IP-DELIVERABLE step is now expected, and the
+    # exclusivity below is asserted against the CHIP-ONLY steps by name, read
+    # out of the flow rather than listed, so a new chip-only step is covered
+    # the moment it appears.
     ip = by_file["NO_TEMPLATE.txt"]
+    chip_only = set()
     for chip_router in ("*.yaml", "SELF_TAPEOUT.txt"):
-        assert not (ip & by_file[chip_router]), (
-            f"{sorted(ip & by_file[chip_router])} is selected by BOTH the IP "
-            f"router and the chip router {chip_router}")
+        chip_only |= by_file[chip_router]
+    chip_only -= ip          # what BOTH select is, by construction, not chip-only
+    assert chip_only, (
+        "no step is selected by a chip router alone — the chip path has "
+        "stopped being distinguishable from the IP path")
+    for sid in sorted(chip_only):
+        assert sid not in ip, (
+            f"{sid} is chip-only yet reachable from the IP router; a design "
+            "with no die would be asked for a pad ring")
+
+    # AND THE OVERLAP IS ASSERTED, NOT MERELY TOLERATED. Deleting 37.5ip from
+    # the chip routers restores the exact hole the ruling closed, so it fails
+    # here with the reason attached rather than passing as a tightening.
+    assert "37.5ip" in ip, "37.5ip must still be reachable from the IP router"
+    for chip_router in ("*.yaml", "SELF_TAPEOUT.txt"):
+        assert "37.5ip" in by_file[chip_router], (
+            f"37.5ip is not reachable from the chip router {chip_router}: an "
+            "IC would ship no LEF/Liberty/GDS kit and no integration "
+            "documents (owner ruling 2026-09-02)")
 
     # THE TWO CHIP ROUTERS DO OVERLAP, AND THAT IS THE POINT. `37.5ic` is
     # selected by both, because a chip gets that step whether or not there is

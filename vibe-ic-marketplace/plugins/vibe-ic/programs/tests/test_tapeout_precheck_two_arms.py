@@ -562,3 +562,85 @@ def test_main_returns_one_for_every_non_pass(tmp_path):
 
 def test_main_refuses_a_project_directory_that_is_not_there(tmp_path):
     assert TP.main([str(tmp_path / "nope")]) == 2
+
+
+# --------------------------------------------------------------------------- #
+# THE PDK A SIGN-OFF IS GRADED AGAINST IS THE ONE THE RUN BUILT
+# --------------------------------------------------------------------------- #
+def _multi_target_project(tmp_path: Path, built: str) -> Path:
+    """A design declaring TWO targets, whose run built the SECOND one.
+
+    Written where the tree's own accessors read: `L19_CONSTRAINTS_PDK.json` for
+    the declared target and its alternates, and a tool log for the libraries
+    that were actually loaded. No second channel is invented for either.
+    """
+    proj = tmp_path / "proj"
+    l19 = proj / "phase1" / "generated_docs" / "L19_CONSTRAINTS_PDK.json"
+    l19.parent.mkdir(parents=True, exist_ok=True)
+    l19.write_text(json.dumps({"fields": {
+        "pdk_target": "alpha130",
+        "pdk_target_alternates": ["alpha130", "beta180"],
+    }}))
+    log = proj / "phase3" / "stage3" / "pnr" / "tool.log"
+    log.parent.mkdir(parents=True, exist_ok=True)
+    log.write_text(
+        f"read_lef /pdks/{built}/libs.ref/{built}_fd_sc/lef/{built}_fd_sc.lef\n"
+        f"read_liberty /pdks/{built}/libs.ref/{built}_fd_sc/lib/"
+        f"{built}_fd_sc__tt.lib\n")
+    return proj
+
+
+class TestTheGradedPdkIsTheOneTheRunBuilt:
+    """MEASURED on spm x gf180mcuD, 2026-09-02, a run invoked
+    `--pdk gf180mcuD`: `resolve_pdk` returned `sky130` and the merged report
+    published `pdk=sky130`. L19 was RIGHT -- the design declares
+    `pdk_target: "sky130"` with `pdk_target_alternates: ["sky130", "gf180mcu"]`
+    -- and step 37.5ic's gate clause passes no `--pdk`, so the scalar primary
+    was the only thing anybody read. `operator_arm_applicability`,
+    `shuttle_for_pdk` and `retired_shuttles_for_pdk` were all answered for a
+    process the run never used.
+    """
+
+    def test_the_corroborated_alternate_wins_over_the_declared_primary(
+            self, tmp_path):
+        """THE DIRECTION THE FIX ADDS. Fails against the pre-fix resolver,
+        which returned the primary whatever the run had loaded."""
+        proj = _multi_target_project(tmp_path, built="beta180")
+        pdk, source = TP.resolve_pdk(proj)
+        assert pdk == "beta180", (pdk, source)
+        assert "tool logs" in (source or ""), source
+
+    def test_a_single_target_design_resolves_exactly_as_before(self, tmp_path):
+        """THE CONTROL, and it holds in BOTH directions: a design with no
+        alternates must reach the unchanged `declared_target` path even if its
+        logs name something else, because there is no declared set to choose
+        from and this function must not invent one."""
+        proj = tmp_path / "proj"
+        l19 = proj / "phase1" / "generated_docs" / "L19_CONSTRAINTS_PDK.json"
+        l19.parent.mkdir(parents=True, exist_ok=True)
+        l19.write_text(json.dumps({"fields": {"pdk_target": "alpha130"}}))
+        log = proj / "phase3" / "tool.log"
+        log.parent.mkdir(parents=True, exist_ok=True)
+        log.write_text("read_lef /pdks/beta180/libs.ref/x/lef/beta180_x.lef\n")
+        pdk, source = TP.resolve_pdk(proj)
+        assert pdk == "alpha130", (pdk, source)
+        assert "tool logs" not in (source or ""), source
+
+    def test_an_explicit_pdk_still_wins(self, tmp_path):
+        """Also both directions: the caller's own answer outranks every
+        derivation, before and after."""
+        proj = _multi_target_project(tmp_path, built="beta180")
+        assert TP.resolve_pdk(proj, "gamma90") == ("gamma90", "--pdk")
+
+    def test_two_corroborated_targets_are_not_resolved_here(self, tmp_path):
+        """THE OVER-REACH CONTROL, all-negative, so it holds in BOTH
+        directions. A run whose logs name libraries from TWO declared targets
+        is a contradiction `declared_pdk_is_the_pdk_used_check` owns and
+        reports as one; this function must not pick a winner."""
+        proj = _multi_target_project(tmp_path, built="beta180")
+        log = proj / "phase3" / "stage3" / "pnr" / "tool.log"
+        log.write_text(log.read_text() +
+                       "read_lef /pdks/alpha130/libs.ref/y/lef/alpha130_y.lef\n")
+        pdk, source = TP.resolve_pdk(proj)
+        assert pdk == "alpha130", (pdk, source)
+        assert "tool logs" not in (source or ""), source

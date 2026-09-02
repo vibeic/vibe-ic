@@ -7426,18 +7426,41 @@ steps:
   # is why step 15 can place an analog hard macro and nothing this flow
   # produces digitally can be placed by anyone.
   - id: 37.5ip
-    name: "Digital Hardmacro Generation — LEF + Liberty + GDS + Verilog (cell/IP path TERMINAL)"
+    name: "Digital Hardmacro Generation — LEF + Liberty + GDS + Verilog (delivered on EVERY route)"
     stage: stage4
     condition:
-      files_exist: ["input/submission_template/NO_TEMPLATE.txt"]
+      # `any_of` over ALL THREE routers — this step runs on every route a
+      # design can take. OWNER RULING 2026-09-02: "an IC runs BOTH 37.5ic and
+      # 37.5ip; only a pure-IP route skips 37.5ic." A chip ships its own IP
+      # deliverable set — the four views plus the six integration documents —
+      # ALONGSIDE its chip documents, because a die is also a block somebody
+      # re-uses, characterises and hands on, and until this changed a design
+      # that declared itself a die got NO `.lef`, NO `.lib` and NO datasheet
+      # anywhere in its run.
+      #
+      # THE ROUTERS STAY MUTUALLY EXCLUSIVE. Nothing here relaxes that:
+      # `tapeout_declaration_check` still refuses a tree carrying two of the
+      # three, step 0.5ic's `required_outputs` is still their OR, and exactly
+      # one still exists on any run where 0.5ic passed. What changed is only
+      # WHICH of them this step accepts — all three instead of one — and the
+      # asymmetry is deliberate and one-directional: 37.5ic below still names
+      # the TWO chip routers and still excludes `NO_TEMPLATE.txt`, so a pure
+      # IP is still not asked for a pad ring, a seal ring or a tape-out
+      # precheck it has no die for.
+      any_of: true
+      files_exist:
+        - "input/submission_template/NO_TEMPLATE.txt"
+        - "input/submission_template/SELF_TAPEOUT.txt"
+        - "input/submission_template/slots/*.yaml"
     # D6 (vibe-ic#1744). `design_dependent`, not `setup_required`: this
     # condition tests WHICH PATH the design is on, and step 0.5ic's
     # required_outputs declares the mutually-exclusive route artefacts, so on
-    # any run where 0.5ic itself passed, precisely one of them exists. A chip
-    # legitimately has no hardmacro kit and an IP legitimately has no pad ring,
-    # seal ring or shuttle precheck — a design-derived N/A is correct only
-    # after that PASS. The owner link makes an unresolved/failed route a hard
-    # upstream blocker rather than the chip path's apparent opposite.
+    # any run where 0.5ic itself passed, precisely one of them exists — and
+    # this step now accepts each of them. An IP legitimately has no pad ring,
+    # seal ring or shuttle precheck; that N/A is 37.5ic's to record, and a
+    # design-derived N/A is correct only after 0.5ic PASSes. The owner link
+    # makes an unresolved/failed route a hard upstream blocker rather than the
+    # chip path's apparent opposite.
     condition_kind: design_dependent
     condition_owner:
       step: 0.5ic

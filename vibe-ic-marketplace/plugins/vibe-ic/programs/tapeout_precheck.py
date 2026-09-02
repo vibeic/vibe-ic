@@ -320,7 +320,60 @@ def resolve_pdk(project: Path,
         import declared_pdk_is_the_pdk_used_check as _pdkid
     except ImportError:                       # pragma: no cover - defensive
         return None, None
-    return _pdkid.declared_target(project)
+
+    # THE PDK A SIGN-OFF IS GRADED AGAINST IS THE ONE THE RUN BUILT, not the
+    # one the design happened to name first.
+    #
+    # MEASURED on spm x gf180mcuD (2026-09-02), a run invoked `--pdk
+    # gf180mcuD`: this function returned `('sky130', 'phase1/generated_docs/
+    # L19_CONSTRAINTS_PDK.json:fields.pdk_target')` and the merged report
+    # published `pdk=sky130`. L19 was RIGHT — the design declares
+    # `pdk_target: "sky130"` with `pdk_target_alternates: ["sky130",
+    # "gf180mcu"]`, faithfully extracted from a datasheet naming SKY130 primary
+    # and GF180MCU secondary — and step 37.5ic's gate clause passes no `--pdk`,
+    # so the scalar primary was the only thing anybody read. Everything
+    # downstream in this module is PDK-scoped: `operator_arm_applicability`,
+    # `shuttle_for_pdk`, `retired_shuttles_for_pdk`. All three were answered
+    # for a process the run never used.
+    #
+    # `declared_alternates` exists for exactly this shape and says so: "a
+    # design may legitimately declare more than one target ... and a run builds
+    # ONE of them". So the declaration is read as the SET it is, and the member
+    # the run corroborates is the answer. The corroboration channel is
+    # `loaded_libraries` — the .lef/.lib basenames the tools themselves logged,
+    # "because the question is what RAN". On the spm run: 0 names share
+    # identity with `sky130` and many with `gf180mcu`.
+    #
+    # NO SECOND RESOLVER. Every accessor used here is that module's own, in its
+    # own precedence, for the reason this docstring already gives; what is added
+    # is that the design's own alternates are consulted before its primary is
+    # asserted against a run that built something else. A design declaring one
+    # target, or a run with no tool log to read, resolves exactly as before.
+    declared, source = _pdkid.declared_target(project)
+    alternates = _pdkid.declared_alternates(project)
+    if not alternates:
+        return declared, source
+    try:
+        loaded, scanned = _pdkid.loaded_libraries(project)
+    except OSError:                           # pragma: no cover - defensive
+        return declared, source
+    if not scanned or not loaded:
+        return declared, source
+    corroborated = [c for c in alternates
+                    if any(_pdkid.shares_identity(_pdkid.tokens(c), name)
+                           for name in loaded)]
+    # EXACTLY ONE, or nothing changes. Two corroborated members is a run that
+    # loaded libraries from two processes, which is a contradiction this
+    # function must not resolve by picking one — `declared_pdk_is_the_pdk_used_
+    # check` owns that finding and reports it as one.
+    if len(corroborated) == 1 and corroborated[0] != declared:
+        return (corroborated[0],
+                f"the run's own tool logs: {scanned} log(s) name "
+                f"{corroborated[0]!r} libraries and none of the other "
+                f"target(s) the design declares "
+                f"(pdk_target_alternates={alternates!r}); "
+                f"pdk_target={declared!r} from {source}")
+    return declared, source
 
 
 def template_was_fetched(project: Path) -> bool:

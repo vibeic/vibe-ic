@@ -479,6 +479,43 @@ def test_g7_this_route_does_not_weaken_the_shuttle_route():
 # --------------------------------------------------------------------------- #
 # G8 — the three routes
 # --------------------------------------------------------------------------- #
+def _assert_declaration_is_incomplete_not_malformed(proj):
+    """`tapeout_declaration_check` answered these fixtures with a TIER, and the
+    tier is the assertion.
+
+    BOTH G8 ROUTE TESTS USED TO ASSERT `== 0` AND WERE MEASURED RED AT
+    origin/main 1ec22dabc, getting 2. Their claim — "unanswered is not
+    malformed" — is still exactly right; what changed under them is that the
+    program grew a THIRD answer and the equality never learned it. Its own
+    header states the contract:
+
+        0  PASS
+        1  MALFORMED      a question absent altogether, a contradictory router
+        2  INCOMPLETE     the area-budget authority is unset
+
+    Neither fixture states an area ceiling and neither has an L19 to read one
+    from, so INCOMPLETE is the CORRECT answer for both, and `== 0` was asking
+    the program to lose a distinction it had just gained. Asserting `!= 1`
+    alone would keep the claim and drop the pin, so the tier is asserted
+    positively and the reason is named: a future run that silently returns to
+    0, or that starts refusing these as malformed, fails here either way.
+    """
+    rc = TDC.main([str(proj)])
+    report = json.loads((proj / TD.REPORT_REL).read_text())
+    assert report["refusals"] == [], (
+        "unanswered is not MALFORMED, and this is the claim both G8 route "
+        "tests were written to make", report["refusals"])
+    assert report["verdict"] == "INCOMPLETE", report["verdict"]
+    assert [d["rule"] for d in report["incomplete_dependencies"]] == [
+        "SYNTHESIS_AREA_BUDGET_AUTHORITY_UNSET"], (
+        "the tier is owed to the area-budget authority and nothing else; a new "
+        "incomplete dependency here is a new fact, not a rename",
+        report["incomplete_dependencies"])
+    assert rc == 2, (
+        "the INCOMPLETE tier is rc 2 by this program's own declared contract",
+        rc)
+
+
 def test_g8_no_answers_writes_a_blank_declaration_and_routes_nowhere(tmp_path):
     proj = tmp_path / "proj"
     proj.mkdir()
@@ -486,7 +523,7 @@ def test_g8_no_answers_writes_a_blank_declaration_and_routes_nowhere(tmp_path):
     doc = json.loads((proj / TD.DECLARATION_REL).read_text())
     assert set(doc["answers"].values()) == {TD.NOT_DETERMINED}
     assert not (proj / TD.SELF_TAPEOUT_REL).exists()
-    assert TDC.main([str(proj)]) == 0        # unanswered is not malformed
+    _assert_declaration_is_incomplete_not_malformed(proj)
 
 
 def test_g8_declaring_a_die_selects_the_self_tapeout_route(tmp_path):
@@ -496,7 +533,7 @@ def test_g8_declaring_a_die_selects_the_self_tapeout_route(tmp_path):
     ans.write_text(json.dumps({"deliverable": "DIE", "top_cell": "chip_top"}))
     assert TDG.main([str(proj), "--answers", str(ans)]) == 0
     assert (proj / TD.SELF_TAPEOUT_REL).is_file()
-    assert TDC.main([str(proj)]) == 0
+    _assert_declaration_is_incomplete_not_malformed(proj)
 
 
 def test_g8_two_router_files_at_once_are_refused_not_resolved(tmp_path):

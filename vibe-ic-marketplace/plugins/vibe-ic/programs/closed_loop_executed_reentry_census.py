@@ -500,6 +500,52 @@ def main(argv=None) -> int:
     args = ap.parse_args(argv)
 
     root = Path(args.root)
+
+    # A PROJECT THAT REACHED NO PHASE-3 STEP CANNOT BE GRADED BY A CLAUSE OF A
+    # PHASE-3 STEP'S GATE, and until this guard existed it was — with a PASS.
+    #
+    # `_plugin_root` falls back to THIS FILE'S OWN tree when the root carries no
+    # `programs/`, which is right for what this program censuses (the loops live
+    # in the shipped plugin, not in the project) and is exactly what makes the
+    # exit code project-blind: the same rc for every design, and for a directory
+    # containing one file. MEASURED on a tree carrying only
+    # `input/submission_template/SELF_TAPEOUT.txt`: the other five clauses of
+    # step 37.5ic's `all_of` returned 1, 1, 2, 2, 2 — and this one returned 0.
+    # `test_no_gate_of_a_running_path_step_passes_on_an_empty_tree` reported it
+    # on all five chip rows of the path matrix, for one reason each time.
+    #
+    # THE CENSUS IS NOT THE PROBLEM AND IS NOT CHANGED. What is added is the
+    # one project fact a per-design gate clause must consult before it may
+    # answer for that design: did this project PRODUCE any phase-3 artefact.
+    # `phase3/` is the phase-3 runner's own output tree — a project that
+    # reached this step has a floorplan, a routed DEF and a GDS under it, and a
+    # tree that never ran has nothing.
+    #
+    # NOT `reports/phase3/`, which was the first guard written here and was
+    # measured USELESS: the clauses of an `all_of` run in order against the one
+    # tree, and `tapeout_precheck . --json reports/phase3/tapeout_precheck.json`
+    # runs first and CREATES that directory. A guard satisfied by an earlier
+    # clause's output file is a guard the tree can manufacture.
+    #
+    # A root that IS a plugin checkout keeps the hand-invocation behaviour
+    # unchanged: the census is then being asked about the checkout, not about
+    # a design.
+    #
+    # rc 2, not 1: the question was not answered, and "I could not look" must
+    # stay distinguishable from "I looked and it is wrong".
+    _is_checkout = (root / "vibe-ic-marketplace" / "plugins" / "vibe-ic"
+                    / "programs").is_dir()
+    _ran_phase3 = any((root / "phase3").rglob("*")) if (
+        root / "phase3").is_dir() else False
+    if not _is_checkout and not _ran_phase3:
+        print(f"[CANNOT CHECK] closed_loop_executed_reentry_census: {root} is "
+              f"neither a plugin checkout nor a project that produced any "
+              f"phase-3 artefact (nothing under phase3/), so this clause has "
+              f"no design to answer for. A census that returns the SHIPPED "
+              f"tree's answer for a project it never opened is a pass nobody "
+              f"measured.")
+        return 2
+
     programs = _programs_dir(root)
     if programs is None:
         print(f"[CANNOT CHECK] closed_loop_executed_reentry_census: no "

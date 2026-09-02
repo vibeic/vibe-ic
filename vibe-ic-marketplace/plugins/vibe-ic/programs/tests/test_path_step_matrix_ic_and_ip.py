@@ -217,20 +217,30 @@ MATRIX = {
     # 0.5ic has NO condition on purpose — it is the step that DECIDES the
     # route, so it is the one step every design passes through, including the
     # design that has no route yet.
+    #
+    # 2026-09-02, OWNER RULING: `37.5ip` RUNS on every chip row too. An IC runs
+    # BOTH terminals — a die is also a block somebody re-uses, characterises
+    # and hands on — and only a pure IP skips the chip one. Before this, a
+    # `deliverable=DIE` design reached NEITHER kit: MEASURED on spm x gf180mcuD
+    # at plugin 1.15.67, the run recorded `Step 37.5ip ... condition not met`
+    # and produced no `.lef`, no `.lib` and no datasheet anywhere. The four
+    # SKIPPED cells below became RUNS; nothing in the `37.5ic` column moved.
     "self_tapeout_pdk_ships_no_shuttle": {
         "0.5ic": RUNS, "15.5ic": RUNS, "26.5ic": RUNS,
-        "37.5ic": RUNS, "37.5ip": SKIPPED},
+        "37.5ic": RUNS, "37.5ip": RUNS},
     "self_tapeout_pdk_ships_a_shuttle": {
         "0.5ic": RUNS, "15.5ic": RUNS, "26.5ic": RUNS,
-        "37.5ic": RUNS, "37.5ip": SKIPPED},
+        "37.5ic": RUNS, "37.5ip": RUNS},
     "shuttle_chip_template_fetched": {
         "0.5ic": RUNS, "15.5ic": RUNS, "26.5ic": RUNS,
-        "37.5ic": RUNS, "37.5ip": SKIPPED},
+        "37.5ic": RUNS, "37.5ip": RUNS},
     "shuttle_chip_template_not_fetched": {
         "0.5ic": RUNS, "15.5ic": RUNS, "26.5ic": RUNS,
-        "37.5ic": RUNS, "37.5ip": SKIPPED},
+        "37.5ic": RUNS, "37.5ip": RUNS},
     # An IP is placed inside somebody else's die: no die edge, so no pad ring,
-    # no seal ring, no tape-out precheck of its own. Three legitimate skips.
+    # no seal ring, no tape-out precheck of its own. Three legitimate skips —
+    # and this row is the one the ruling did NOT touch, so it stays the proof
+    # that the widening went one way only.
     "ip_hardmacro": {
         "0.5ic": RUNS, "15.5ic": SKIPPED, "26.5ic": SKIPPED,
         "37.5ic": SKIPPED, "37.5ip": RUNS},
@@ -953,6 +963,17 @@ WIRED_PRODUCERS = {
     ("26.5ic", "die_finishing_gen"),
     ("37.5ic", "tapeout_docs_gen"),
     ("37.5ip", "digital_hardmacro_gen"),
+    # 2026-09-02 — THE TWO RELEASE-DOCUMENT PRODUCERS JOIN THE LEDGER. Both
+    # terminals gained a document producer in their `programs:` and both are
+    # dispatched from `phase3_one_shot_runner`
+    # (`step_ic_release_docs_gen` / `step_ip_release_docs_gen`), measured by
+    # `_producer_channels` above: 'invoked by phase3_one_shot_runner'. They
+    # were absent here, so this ledger was one flow behind and the test read
+    # "the set of programs the path steps declare has changed" — which was
+    # true, and was the ledger's own staleness rather than a wiring defect.
+    # Registering them is the intended response; deleting the assertion is not.
+    ("37.5ic", "ic_release_docs_gen"),
+    ("37.5ip", "ip_release_docs_gen"),
 }
 #: EMPTY, and it stays a name rather than being deleted: the assertion below
 #: reads `WIRED_PRODUCERS | UNWIRED_PRODUCERS` as the whole declared
@@ -1121,7 +1142,9 @@ def test_a_die_that_tapes_itself_out_can_pass_step_0_5ics_own_gate(tmp_path):
 
     assert _state(proj, "15.5ic") == RUNS
     assert _state(proj, "37.5ic") == RUNS
-    assert _state(proj, "37.5ip") == SKIPPED
+    # BOTH terminals, per the 2026-09-02 owner ruling: the die ships its own
+    # IP deliverable kit alongside its chip documents.
+    assert _state(proj, "37.5ip") == RUNS
 
 
 def test_an_IP_can_pass_step_0_5ics_own_gate_too(tmp_path):
