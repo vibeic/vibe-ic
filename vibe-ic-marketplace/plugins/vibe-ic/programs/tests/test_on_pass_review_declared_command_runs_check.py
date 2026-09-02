@@ -18,6 +18,7 @@ and why the subject carries the same control internally as P7.
 """
 from __future__ import annotations
 
+import collections
 import subprocess
 import sys
 from pathlib import Path
@@ -74,17 +75,101 @@ def _stage3_block(doc):
                 if s["id"] == "stage3")["on_pass_review"]
 
 
-def _stage3_clause(doc):
-    """The mutable step clause dispatching stage3's review, and its slot key."""
+def _slot_command(val):
+    """The command a gate slot carries, in BOTH shapes the engine runs.
+
+    A slot holds either a bare command string or a mapping with `command:`.
+    `d155935a7` (v1.13.85, 2026-08-31, "84 advisory clauses could not say why
+    they were advisory") gave the stage-3 clause an `advisory_reason:`, which
+    turned `advisory_program_exit_zero: "<command>"` into
+    `advisory_program_exit_zero: {command:, advisory_reason:}`.
+
+    THE SUBJECT ALREADY READ BOTH — `step_clauses` is `val.get("command") if
+    isinstance(val, dict) else val`, and that commit changed only the yaml.
+    This helper read the string shape ONLY, so from v1.13.85 it raised "no
+    clause under `steps:` dispatches stage3" and the two mutation tests below
+    were RED WITHOUT EVER PLANTING THEIR MUTANT: for two days the gate's P1
+    and P2 clauses had no live test, while the failure looked like the gate.
+
+    Read from the same predicate the subject uses, and pinned to it by
+    `test_this_files_helper_sees_every_clause_the_subject_sees` so the next
+    shape change reddens as a shape change and not as a phantom gate defect.
+    """
+    return val.get("command") if isinstance(val, dict) else val
+
+
+def _dispatched_clause(doc, stage):
+    """The mutable step clause dispatching `stage`'s review, and its slot key.
+
+    Returns the `all_of` element (a mapping) and the slot key inside it, so a
+    caller can pop the clause, move it to another slot, or rewrite it.
+    """
     for st in doc["steps"]:
         for sub in ((st.get("gate") or {}).get("all_of") or []):
             if isinstance(sub, dict):
                 for k, v in sub.items():
-                    if (isinstance(v, str)
-                            and v.startswith("stage_on_pass_review")
-                            and "--stage stage3 " in v):
+                    cmd = _slot_command(v)
+                    if (isinstance(cmd, str)
+                            and cmd.startswith("stage_on_pass_review")
+                            and f"--stage {stage} " in cmd):
                         return sub, k
-    raise AssertionError("no clause under `steps:` dispatches stage3")
+    raise AssertionError(
+        f"no clause under `steps:` dispatches {stage}. Either the dispatch "
+        f"was removed — which is the defect this file's subject exists to "
+        f"refuse, and `test_the_shipped_flow_is_green` would be red too — or "
+        f"the slot shape changed again and `_slot_command` no longer reads "
+        f"it. Those are opposite repairs; check the control first.")
+
+
+def _stage3_clause(doc):
+    """The mutable step clause dispatching stage3's review, and its slot key."""
+    return _dispatched_clause(doc, "stage3")
+
+
+# ── the premise this file's mutations rest on ───────────────────────────────
+def test_this_files_helper_sees_every_clause_the_subject_sees():
+    """THE PREMISE, PINNED TO THE SUBJECT'S OWN READER.
+
+    Every mutation below starts by LOCATING the clause it edits. A locator
+    that finds nothing does not weaken a test — it deletes it, and leaves a
+    red that reads as "the gate is broken" when the truth is "the mutant was
+    never planted". MEASURED: from `d155935a7` (v1.13.85, 2026-08-31) to
+    v1.16.28 this file's locator was string-only while the flow had moved to
+    `{command:, advisory_reason:}`, and `test_an_undispatched_clause_is_refused`
+    and `test_a_clause_wired_through_the_blocking_slot_is_refused` were red for
+    two days without ever exercising P1 or P2.
+
+    So the locator is not asserted against a shape typed here. It is asserted
+    against `on_pass_review_declared_command_runs_check.step_clauses` — the
+    subject's own structural walk of what `flow_compliance_check._evaluate_gate`
+    executes. The next shape change reddens THIS test, by name, saying which
+    stage went unreachable and in which direction.
+    """
+    sys.path.insert(0, str(PROGRAMS))
+    import on_pass_review_declared_command_runs_check as SUBJECT
+
+    doc = yaml.safe_load(FLOW.read_text(encoding="utf-8"))
+    clauses = SUBJECT.step_clauses(doc)
+    assert clauses, ("the subject finds no dispatched on-pass clause at all; "
+                     "the control test below would be red too")
+    # EXACTLY ONCE PER STAGE, counted before the dict is built. Keying by
+    # stage first would collapse a double dispatch into one entry and the
+    # locator below would then agree with a population it never saw whole.
+    counts = collections.Counter(c["stage"] for c in clauses)
+    doubled = sorted(k for k, v in counts.items() if v != 1)
+    assert not doubled, (
+        f"these stage(s) are dispatched more than once under `steps:`: "
+        f"{ {k: counts[k] for k in doubled} }. Two clauses for one stage means "
+        "the mutation battery below edits one of them and the other keeps the "
+        "flow green.")
+    seen = {c["stage"]: (c["step"], c["slot"]) for c in clauses}
+    for stage, (step, slot) in sorted(seen.items()):
+        sub, key = _dispatched_clause(doc, stage)
+        assert key == slot, (
+            f"this file's locator puts {stage}'s clause in slot {key!r} and "
+            f"the subject reads it from {slot!r}")
+        assert _slot_command(sub[key]).startswith("stage_on_pass_review"), (
+            f"{stage}: the located slot does not hold the declared command")
 
 
 # ── the control, first ───────────────────────────────────────────────────────

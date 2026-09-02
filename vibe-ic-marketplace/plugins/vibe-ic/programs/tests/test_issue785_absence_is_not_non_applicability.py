@@ -32,6 +32,8 @@ ONE test that reads published data copies it read-only and skips when absent.
 from __future__ import annotations
 
 import json
+import os
+import re
 import shutil
 import sys
 from pathlib import Path
@@ -613,28 +615,193 @@ def test_nvm_liberty_that_shows_one_supply_does_not_manufacture_a_finding(
 # =========================================================================== #
 _FLEET = PROGRAMS.parents[3] / "benchmark-data" / "ic"
 
+#: THE ONE-LINE PIN GRAMMAR. Discovery is by LEF GRAMMAR, not by name, so the
+#: point survives a rename. Lifted to module scope because the POSITIVE
+#: CONTROL below feeds it a cell it MUST find: a detector that can no longer
+#: detect produces the same empty result as a corpus that has no such cell,
+#: and those are opposite findings.
+_ONE_LINE_PIN_RE = re.compile(
+    r"^\s*PIN\s+\S+.*\bUSE\s+(?:POWER|GROUND)\b.*\bEND\b.*\bEND\s+\S+",
+    re.M | re.IGNORECASE)
+
+
+def _fleet_roots():
+    """Every root this discovery reads, and whether each is there.
+
+    Two entries, and BOTH are named in the census so a reader can tell which
+    one was missing. `_FLEET` is the in-repo path the corpus used to live at;
+    it left this repository in v1.10.56, so on a plain checkout it does not
+    exist. `VIBE_IC_BENCHMARK_DATA` is the one seam every corpus-reading gate
+    in this tree uses to be pointed at a clone.
+    """
+    roots = [("in-repo", _FLEET)]
+    env = os.environ.get("VIBE_IC_BENCHMARK_DATA")
+    if env:
+        # `<pointer>/ic` when it is there, `<pointer>` otherwise — NEVER both.
+        # Adding both walks every design twice and reports a design count that
+        # is double what was opened, which is the class of lie this whole file
+        # is about. MEASURED while writing this: a pointer at a two-file tree
+        # reported `2 design(s), 2 LEF file(s)` over one design and one file.
+        base = Path(env)
+        roots.append(("VIBE_IC_BENCHMARK_DATA/ic", base / "ic")
+                     if (base / "ic").is_dir()
+                     else ("VIBE_IC_BENCHMARK_DATA", base))
+    out, seen = [], set()
+    for label, path in roots:
+        key = str(path.resolve()) if path.is_dir() else str(path)
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append((label, path, path.is_dir()))
+    return out
+
+
+def _scan_for_one_line_pin_cell(roots):
+    """(hit, designs_scanned, lefs_scanned) over `roots`.
+
+    Counts are returned WITH the hit because "no cell was found" and "no file
+    was opened" are different findings and the skip below has to say which.
+    """
+    designs = lefs = 0
+    hit = None
+    for _label, root, present in roots:
+        if not present:
+            continue
+        for design in sorted(p for p in root.iterdir() if p.is_dir()):
+            designs += 1
+            for lef in sorted(design.rglob("*.lef")):
+                lefs += 1
+                try:
+                    if hit is None and _ONE_LINE_PIN_RE.search(
+                            lef.read_text(errors="replace")):
+                        hit = design
+                except OSError:
+                    continue
+    return hit, designs, lefs
+
+
+def _census():
+    roots = _fleet_roots()
+    hit, designs, lefs = _scan_for_one_line_pin_cell(roots)
+    return {"roots": roots,
+            "readable": [(l, str(p)) for l, p, ok in roots if ok],
+            "unreadable": [(l, str(p)) for l, p, ok in roots if not ok],
+            "designs": designs, "lefs": lefs, "hit": hit}
+
+
+def _skip_reason(c):
+    """WHY this measurement did not run — and never the same sentence twice.
+
+    A test that skips forever and a test that passes look identical on a
+    failure list, so this reason has to carry the state it measured. There
+    are two skips and they are opposite findings:
+
+      NOT BOUND    no root was readable, so nothing was opened. "I could not
+                   look" — never "there is no such cell".
+      NO SUCH CELL every readable root was walked and the grammar matched
+                   nothing, with the counts to prove the walk happened.
+
+    OWNER DECISION 2026-09-02: the corpus is NOT to gain a cell so that this
+    test can run. The remedy for the second state is to say so, loudly, with
+    numbers — which is what this does.
+    """
+    roots = ", ".join(f"{l}={p}" for l, p in c["unreadable"]) or "(none)"
+    if not c["readable"]:
+        return ("NOT BOUND — no corpus root is readable (looked at: "
+                f"{roots}), so 0 LEF file(s) were opened and NOTHING WAS "
+                "MEASURED. This is 'I could not look', not 'the published "
+                "corpus has no such cell'. Point VIBE_IC_BENCHMARK_DATA at a "
+                "clone to turn this skip into a measurement.")
+    seen = ", ".join(f"{l}={p}" for l, p in c["readable"])
+    return (f"NO SUCH CELL — walked {seen}: {c['designs']} design(s), "
+            f"{c['lefs']} LEF file(s) opened, 0 staging a one-line PIN block. "
+            "The corpus was READ and does not carry one. OWNER DECISION "
+            "2026-09-02: a cell is NOT to be added to the corpus to make this "
+            "test run. The detector itself is proven live by "
+            "`test_the_one_line_pin_detector_fires_on_a_synthetic_cell`.")
+
+
+_CENSUS = _census()
+
 
 def _published_one_line_pin_cell():
-    """A published project whose macro LEFs stage a one-line PIN block.
-    Discovered by LEF GRAMMAR, not by name — the point survives a rename."""
-    if not _FLEET.is_dir():
-        return None
-    import re
-    one_line = re.compile(
-        r"^\s*PIN\s+\S+.*\bUSE\s+(?:POWER|GROUND)\b.*\bEND\b.*\bEND\s+\S+",
-        re.M | re.IGNORECASE)
-    for design in sorted(p for p in _FLEET.iterdir() if p.is_dir()):
-        for lef in sorted(design.rglob("*.lef")):
-            try:
-                if one_line.search(lef.read_text(errors="replace")):
-                    return design
-            except OSError:
-                continue
-    return None
+    """A published project whose macro LEFs stage a one-line PIN block."""
+    return _CENSUS["hit"]
 
 
-@pytest.mark.skipif(_published_one_line_pin_cell() is None,
-                    reason="no published cell stages a one-line PIN block")
+# --- the three states, told apart ------------------------------------------ #
+def test_the_published_cell_census_is_stated_whether_or_not_it_runs():
+    """THREE STATES, AND UNTIL THIS TEST THEY WERE TWO.
+
+    `test_producer_and_consumer_agree_on_a_published_cell` skips when no
+    published cell stages a one-line PIN block. On a failure list a permanent
+    skip and a pass are the same row, and a file that was never COLLECTED is
+    no row at all. This test is always collected and always runs, so:
+
+        this test present, the measurement SKIPPED  -> read its reason, which
+                                                       says NOT BOUND or NO
+                                                       SUCH CELL and cannot
+                                                       say both
+        this test present, the measurement PASSED   -> it ran
+        this test ABSENT                            -> the file was not
+                                                       collected at all
+
+    It asserts the reason cannot drift from the census it describes: a
+    sentence that says "walked 12 designs" while nothing was opened is the
+    failure this whole file is about, one level up.
+    """
+    c = _CENSUS
+    reason = _skip_reason(c)
+    print("published-cell census:", {k: v for k, v in c.items()
+                                     if k != "roots"})
+    assert c["roots"], "the discovery names no root at all"
+    if not c["readable"]:
+        assert c["designs"] == 0 and c["lefs"] == 0, c
+        assert c["hit"] is None, c
+        assert reason.startswith("NOT BOUND"), reason
+    else:
+        assert reason.startswith("NO SUCH CELL") or c["hit"] is not None, \
+            reason
+    if c["hit"] is not None:
+        assert c["lefs"] > 0, c
+
+
+def test_the_one_line_pin_detector_fires_on_a_synthetic_cell(tmp_path):
+    """POSITIVE CONTROL ON THE INSTRUMENT — the half a skip cannot supply.
+
+    `NO SUCH CELL` is only worth reading if the detector can still detect. A
+    broken grammar and an absent cell produce the same empty scan, and the
+    broken one reads as coverage. So the grammar is fed a cell it MUST find,
+    in a root shaped like the corpus, and the surrounding NEGATIVE cell must
+    NOT match: a detector that fires on everything proves nothing either.
+    """
+    root = tmp_path / "ic"
+    # The POSITIVE cell is this file's own `ONE_LINE_PIN_LEF` — the fixture
+    # every behavioural test above treats as the one-line form — so the
+    # detector and the fixtures cannot come to disagree about what the shape
+    # IS. The NEGATIVE cell is `TYPED_LEF`, whose PIN blocks span lines.
+    (root / "synthetic_design" / "macros").mkdir(parents=True)
+    (root / "synthetic_design" / "macros" / "hit.lef").write_text(
+        ONE_LINE_PIN_LEF, encoding="utf-8")
+    (root / "other_design" / "macros").mkdir(parents=True)
+    (root / "other_design" / "macros" / "miss.lef").write_text(
+        TYPED_LEF, encoding="utf-8")
+
+    hit, designs, lefs = _scan_for_one_line_pin_cell([("synthetic", root, True)])
+    assert lefs == 2 and designs == 2, (designs, lefs)
+    assert hit is not None and hit.name == "synthetic_design", hit
+    miss, _d, _l = _scan_for_one_line_pin_cell(
+        [("synthetic", root / "..", False)])
+    assert miss is None, "an unreadable root must contribute nothing"
+    only_negative = tmp_path / "neg"
+    (only_negative / "other_design" / "macros").mkdir(parents=True)
+    (only_negative / "other_design" / "macros" / "miss.lef").write_text(
+        TYPED_LEF, encoding="utf-8")
+    neg, nd, nl = _scan_for_one_line_pin_cell([("neg", only_negative, True)])
+    assert neg is None and (nd, nl) == (1, 1), (neg, nd, nl)
+
+
+@pytest.mark.skipif(_CENSUS["hit"] is None, reason=_skip_reason(_CENSUS))
 def test_producer_and_consumer_agree_on_a_published_cell(tmp_path):
     """THE MEASUREMENT THAT NAMED THE DEFECT. On a published cell the producer
     printed `NOT_APPLICABLE / 0 hard macro(s) with PG pins across 2 LEF file(s)`
