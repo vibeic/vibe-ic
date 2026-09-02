@@ -725,3 +725,125 @@ def test_zero_byte_report_outranks_skip(tmp_path):
     res = dvp.audit(tmp_path)
     assert res.verdict == "INCONCLUSIVE"
     assert dvp.main([str(tmp_path)]) == 1
+
+
+# ═══════════ AN EMPTY REPORT THE STEP'S OWN TOOL SAYS IT WROTE ══════════════
+#
+# vibe-ic#2015 item 1, MEASURED on the published cell `spm x gf180mcuD`.
+# `detailed_route -output_drc` writes ONE RECORD PER RESIDUAL VIOLATION and
+# nothing else, so a clean route's report is zero bytes BY CONSTRUCTION -- and
+# under a two-state reading the cleaner the route, the redder this gate got.
+# The sibling auditor `eda_report_audit._check_drc` was repaired for this on
+# 2026-08-30 against the SAME FILE in the SAME CELL; the runner that ASKS for
+# the report has always written "the router wrote an EMPTY report, it found no
+# residual violations" into its projection. This gate was the third consumer of
+# that one artefact and the last still reading it two ways.
+#
+# WHAT IS NOT WEAKENED: emptiness never speaks for itself. It is credited only
+# where the STEP'S OWN other artefact says the tool ran and says what it ended
+# on, so there is still no file whose REMOVAL buys a pass -- the property
+# `completion_proof` is keyed on, applied to a second question. The measured
+# Magic case (`test_zero_byte_report_blocks_even_with_geometry` above) has no
+# such sibling and is unchanged.
+
+#: The runner's canonicalised projection of one detailed_route pass, in the
+#: shape `phase3_one_shot_runner.canonicalize_artefacts` writes: a summary the
+#: runner wrote, then the router's own transcript. The count is PER-ITERATION
+#: and falls as the router converges, so only the LAST is a verdict -- which is
+#: why this fixture prints a trajectory and not a single number.
+def _router_projection(final: int) -> str:
+    return (
+        "# OpenROAD detailed_route DRC summary -- emitted by\n"
+        "# phase3_one_shot_runner (canonicalize_artefacts step).\n"
+        "# Tool: openroad detailed_route (drt)\n"
+        "openroad / drt-pass: detailed_route invoked\n"
+        "drc source: final [INFO DRT-0199] count\n"
+        "chip_top\n"
+        "[INFO DRT-0195] Start 0th optimization iteration.\n"
+        "    Completing 40% with 31 violations.\n"
+        "    Completing 100% with 162 violations.\n"
+        "[INFO DRT-0199]   Number of violations = 229.\n"
+        "[INFO DRT-0195] Start 1st optimization iteration.\n"
+        f"[INFO DRT-0199]   Number of violations = {final}.\n"
+        "[INFO DRT-0198] Complete detail routing.\n")
+
+
+def test_empty_router_report_is_zero_when_its_own_step_says_so(tmp_path):
+    """The published cell's shape: a 0-byte `-output_drc` report beside the
+    runner's projection of the same route, whose LAST iteration is 0."""
+    _write_gds(tmp_path / "chip_top.gds", n_shapes=512)
+    pnr = tmp_path / "phase3" / "stage3" / "pnr"
+    pnr.mkdir(parents=True)
+    (pnr / "routed_router.drc.rpt").write_bytes(b"")
+    (pnr / "routed.drc.rpt").write_text(_router_projection(0))
+    res = dvp.audit(tmp_path)
+    assert res.verdict == "PASS"
+    assert res.passed is True
+    assert any(f.rule == "DRC_REPORT_EMPTY_IS_ZERO" for f in res.findings)
+    assert not any(f.rule == "DRC_REPORT_EMPTY" for f in res.findings)
+
+
+def test_deleting_the_projection_takes_the_pass_away(tmp_path):
+    """THE DIRECTION THAT MATTERS. The rule is keyed on PROOF, so removing a
+    file can only ever remove proof -- never buy a pass. Same tree as above
+    with the projection deleted."""
+    _write_gds(tmp_path / "chip_top.gds", n_shapes=512)
+    pnr = tmp_path / "phase3" / "stage3" / "pnr"
+    pnr.mkdir(parents=True)
+    (pnr / "routed_router.drc.rpt").write_bytes(b"")
+    res = dvp.audit(tmp_path)
+    assert res.verdict == "INCONCLUSIVE"
+    assert res.passed is False
+    assert any(f.rule == "DRC_REPORT_EMPTY" for f in res.findings)
+
+
+def test_an_empty_report_beside_a_dirty_route_is_a_contradiction(tmp_path):
+    """A route that ended WITH violations owes a report that names them. An
+    empty one does not, and the two artefacts of one step then contradict each
+    other -- refused, and the contradiction is named rather than resolved."""
+    _write_gds(tmp_path / "chip_top.gds", n_shapes=512)
+    pnr = tmp_path / "phase3" / "stage3" / "pnr"
+    pnr.mkdir(parents=True)
+    (pnr / "routed_router.drc.rpt").write_bytes(b"")
+    (pnr / "routed.drc.rpt").write_text(_router_projection(7))
+    res = dvp.audit(tmp_path)
+    assert res.verdict == "INCONCLUSIVE"
+    assert res.passed is False
+    assert any(f.rule == "DRC_EMPTY_CONTRADICTS_TOOL" for f in res.findings)
+
+
+def test_the_projection_does_not_speak_for_another_step(tmp_path):
+    """STEP-LOCAL, like `completion_proof`. A clean route in one step must not
+    credit an empty report in another -- the cross-step attribution error
+    `DRC_STEP_NEVER_REPORTED` exists to refuse."""
+    _write_gds(tmp_path / "chip_top.gds", n_shapes=512)
+    pnr = tmp_path / "phase3" / "stage3" / "pnr"
+    pnr.mkdir(parents=True)
+    (pnr / "routed.drc.rpt").write_text(_router_projection(0))
+    other = tmp_path / "12-magic-drc"
+    other.mkdir()
+    (other / "drc.magic.rpt").write_bytes(b"")
+    res = dvp.audit(tmp_path)
+    assert res.verdict == "INCONCLUSIVE"
+    assert res.passed is False
+    assert any(f.rule == "DRC_REPORT_EMPTY" for f in res.findings)
+
+
+def test_a_finished_magic_sibling_does_not_make_an_empty_report_zero(tmp_path):
+    """THE EMPTINESS CONVENTION BELONGS TO ONE PRODUCER, NOT TO DRC REPORTS.
+    Magic writes a header and `[INFO] COUNT: 0` -- 102 bytes -- when it is
+    clean, so a 0-byte Magic report is a run that stopped, not a clean one.
+    A completed Magic transcript beside it therefore proves nothing about the
+    empty file, and this scope stays refused."""
+    _write_gds(tmp_path / "chip_top.gds", n_shapes=512)
+    step = tmp_path / "12-magic-drc"
+    step.mkdir()
+    (step / "drc.magic.rpt").write_bytes(b"")
+    (step / "magic-drc.log").write_text(
+        "magic 8.3\n[INFO] Loading chip_top\nchip_top.gds\n"
+        "No errors found.\n[INFO] COUNT: 0\n"
+        "[INFO] DRC Checking DONE (reports/drc.magic.rpt)\n")
+    res = dvp.audit(tmp_path)
+    assert res.verdict == "INCONCLUSIVE"
+    assert res.passed is False
+    assert any(f.rule == "DRC_REPORT_EMPTY" for f in res.findings)

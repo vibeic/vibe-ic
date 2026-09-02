@@ -486,6 +486,99 @@ def test_macro_pdn_planner_richer_keeps_the_wider_blockage(tmp_path):
         ["ALL_CANDIDATE_LAYERS_BLOCKED_BY_MACRO_OBS"]
 
 
+
+def test_macro_supply_stub_planner_richer_keeps_the_wider_blockage():
+    """SITE 5, through `_macro_supply_stub_plan()`. The STUB planner performs
+    its OWN, separate merge of the same shape as the GRID planner one site
+    above, so it needs its own pin and not a reference to that one -- the same
+    reason `dft_test_coverage` needed one beside `atpg_untestable_classify`.
+
+    TWO VIEWS OF ONE MASTER, both SPEAKING about its OBS and disagreeing about
+    how many layers it covers: the full view declares M2 + M4, an OBS-only
+    abstract of the same master declares M2 + M4 + M5. The second view carries
+    no PIN section ON PURPOSE. Handing the planner the same pins twice makes
+    the closest pin-centre distance 0, which refuses every candidate layer on
+    WIDTH -- `NO_STUB_LAYER` for a reason that has nothing to do with the
+    merge, and a control that would have passed under both directions.
+    (MEASURED: two full copies of this LEF refuse identically under `richer`
+    and `sparser`.)
+
+    MEASURED: with M4 alone blocked the planner straps the pin up to M5 and
+    returns a plan; with M5 blocked too, every candidate stub layer above the
+    pin layer is blocked and the planner REFUSES by name (`NO_STUB_LAYER`).
+    Richer must reach the refusal in both argument orders; sparser instead
+    hands back the M5 plan -- a supply stub laid straight across metal one of
+    the two sources declares blocked, which is the under-read this call site's
+    own comment names.
+    """
+    import importlib.util as ilu
+
+    spec = ilu.spec_from_file_location(
+        "_pin5_phase3", PROGRAMS / "phase3_one_shot_runner.py")
+    R = ilu.module_from_spec(spec)
+    sys.modules["_pin5_phase3"] = R
+    try:
+        spec.loader.exec_module(R)
+    except SystemExit:
+        pass
+    tspec = ilu.spec_from_file_location(
+        "_pin5_round15", PROGRAMS / "tests" / "test_round15_multidomain_pdn.py")
+    T = ilu.module_from_spec(tspec)
+    sys.modules["_pin5_round15"] = T
+    try:
+        tspec.loader.exec_module(T)
+    except SystemExit:
+        pass
+
+    # The macro's own footprint, as its SIZE/ORIGIN already place it: blocking
+    # a layer across THIS rectangle is what `_layer_is_fully_blocked` reads.
+    fp = "RECT -3.800 -20.750 267.570 243.260 ;"
+    m5_partial = ("      LAYER M5 ;\n"
+                  "        RECT 147.310 140.000 257.910 166.200 ;\n")
+    assert m5_partial in T.MACRO, "fixture drift: the partial M5 OBS moved"
+    full_view = T.MACRO.replace(m5_partial, f"      LAYER M4 ;\n        {fp}\n")
+    obs_only_view = (
+        "MACRO ADCBLK\n"
+        "  CLASS BLOCK ;\n"
+        "  ORIGIN 3.800 20.750 ;\n"
+        "  SIZE 271.370 BY 264.010 ;\n"
+        "  OBS\n"
+        f"      LAYER M2 ;\n        {fp}\n"
+        f"      LAYER M4 ;\n        {fp}\n"
+        f"      LAYER M5 ;\n        {fp}\n"
+        "  END\n"
+        "END ADCBLK\n")
+
+    def blocked_of(text):
+        entry = R._macro_obs_layers_from_lef(text).get("ADCBLK") or {}
+        return sorted(entry.get("blocked") or {})
+
+    # Precondition: BOTH sources SPEAK about this master's OBS, and they
+    # disagree in SIZE -- the only input shape that reaches the branch
+    # `on_conflict` controls (one speaking source short-circuits above it).
+    assert blocked_of(full_view) == ["M2", "M4"]
+    assert blocked_of(obs_only_view) == ["M2", "M4", "M5"]
+    assert R._macro_pin_rects_from_lef(obs_only_view) == [], \
+        "precondition: the second view contributes OBS only, never a duplicate pin"
+
+    def plan(texts):
+        return R._macro_supply_stub_plan(texts, T.TECH, T.STRIPES)
+
+    poor_alone = plan([full_view])
+    assert poor_alone["refusals"] == [], \
+        "precondition: the M4-only view alone really does produce a real plan"
+    assert poor_alone["plan"]["ADCBLK"]["stub_layer"] == "M5"
+
+    fwd = plan([full_view, obs_only_view])
+    rev = plan([obs_only_view, full_view])
+    assert fwd == rev, "the merge result depends on LEF argument order"
+    assert fwd["plan"] == {}, \
+        "the richer (M2+M4+M5) OBS declaration did not win the disagreement"
+    assert [r["reason"] for r in fwd["refusals"]] == ["NO_STUB_LAYER"]
+    assert fwd != poor_alone, \
+        "precondition: the two views really do read differently downstream"
+
+
 # ═══════════════════════════════════════════════ 3. THE REVERSE CASE ══════
 # What does the OVER-correction look like? Three ways this fix could be wrong
 # in the other direction. Each of these must STILL pass.

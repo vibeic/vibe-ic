@@ -76,6 +76,13 @@ try:
 except Exception:  # noqa: BLE001
     _pl = None  # type: ignore
 
+# vibe-ic#1082 — the declared report appears under its final name only once it
+# is complete. `Path.write_text` truncates first and fills second, so a writer
+# killed in between leaves a short file that `required_outputs` reads as "the
+# step produced this". Not optional here: `--json` names the artefact the flow
+# resolves, and `atomic_artifact_write_check` blocks on a NEW non-atomic writer.
+import _atomic_artefact as _aa  # noqa: E402
+
 try:  # ONE table grammar for every L21 producer
     from l21_doc_supply_rail_synth import (  # type: ignore
         _GROUND_NAME_RE, _IDENT_RE, _tables, _volts, doc_sources)
@@ -390,8 +397,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     if out_json is not None:
         try:
             out_json.parent.mkdir(parents=True, exist_ok=True)
-            out_json.write_text(json.dumps(result, indent=2,
-                                           ensure_ascii=False) + "\n")
+            _aa.write_json(out_json, result)
         except OSError as exc:
             print(f"[WARN] {PROGRAM}: could not write {out_json}: {exc}",
                   file=sys.stderr)

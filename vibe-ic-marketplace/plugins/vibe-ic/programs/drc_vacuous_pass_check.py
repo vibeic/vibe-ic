@@ -84,6 +84,14 @@ Honest-failure contract
                                     terminated without reporting; that is not
                                     a count of zero, and it OUTRANKS the SKIP
                                     above because it must block
+  - 0-byte report whose OWN STEP states its tool's final count
+                               -> that count. Exit 0 when it is ZERO -- a tool
+                                    that writes one record per violation and
+                                    nothing else wrote an empty report because
+                                    it had nothing to write; exit 1 as a
+                                    CONTRADICTION when it is not. Emptiness
+                                    never speaks for itself: see
+                                    `emitted_empty_proof`
   - measured layout has 0 shapes -> INCONCLUSIVE (exit 1)  -- the bug, decisive
   - 0-count, geometry NOT established -> INCONCLUSIVE (exit 1)  -- the bug
   - unparseable verdict, geometry NOT established -> INCONCLUSIVE (exit 1)
@@ -120,10 +128,11 @@ import struct
 import sys
 from dataclasses import dataclass, field, asdict
 from pathlib import Path
-from typing import List, Optional, Tuple
+from typing import List, Optional, Sequence, Tuple
 
 import _routed_checker_progress as _routed_progress
 import _semantic_child_progress as _semantic_progress
+import _signoff_drc_format as _sdf   # the ONE producer/dialect answer
 
 
 PROGRESS_SCOPE = "routed-def:drc-vacuous-pass"
@@ -326,6 +335,85 @@ def completion_proof(fp: Path) -> Optional[Path]:
         if cell:                      # names a real cell -> this checker ran
             return cand
     return None
+
+#: A sibling consulted for its producer's own final count is read WHOLE, so it
+#: is consulted only when it is small enough for that to stay inside this
+#: gate's memory bound. A sibling larger than this establishes nothing and the
+#: empty report stays INCONCLUSIVE -- the fail-safe direction every other rule
+#: here takes, and the reason this cap can be tightened without hiding a defect.
+_PROOF_MAX_BYTES = 8 << 20
+
+
+def emitted_empty_proof(fp: Path, in_scope: Sequence[Path]
+                        ) -> Optional[Tuple[Path, int]]:
+    """The step's own record that the tool WROTE `fp` and what it counted.
+
+    THE DEFECT THIS CLOSES (vibe-ic#2015 item 1). An EMPTY report and an
+    ABSENT one are different facts, and so is a report the tool wrote with
+    nothing to put in it. `detailed_route -output_drc` writes ONE RECORD PER
+    RESIDUAL VIOLATION and nothing else, so a clean route's report is zero
+    bytes BY CONSTRUCTION -- the cleaner the route, the redder a two-state
+    reading gets. MEASURED 2026-08-30 on `spm x gf180mcuD`, one tree, one
+    gate, in the sibling auditor that already carries the three-state rule::
+
+        routed_router.drc.rpt ABSENT -> passed True,  unreadable 0
+        routed_router.drc.rpt EMPTY  -> passed False, unreadable 1
+
+    `eda_report_audit._check_drc` was repaired then; `_router_drc_report_block`
+    in the runner -- the code that ASKS for the report -- has always written
+    "the router wrote an EMPTY report, it found no residual violations" into
+    its projection. This gate is the THIRD consumer of that one artefact and
+    was the last one still reading it two ways.
+
+    WHAT IS NOT WEAKENED, AND WHY THIS IS KEYED THIS WAY ROUND. The 0-byte
+    rule was written from a real unfinished run -- Magic 14:47 at 99.95 % CPU,
+    `drc.magic.rpt` 0 bytes, `magic-drc.log` stopping at "Loading DRC CIF
+    style." before the checker's own output. That case must keep failing, and
+    it does: it has no sibling in its step that states a producer's own final
+    count, so no proof is established and the verdict is unchanged. Emptiness
+    NEVER speaks for itself here. It is credited only where the step's own
+    other artefact says the tool ran and says what it ended on -- which is
+    `completion_proof`'s rule applied to a second question, and it has the
+    same property: there is no file whose REMOVAL buys a pass. Deleting the
+    sibling deletes the proof.
+
+    STEP-LOCAL, and the ascent `_databases_beside` allows is deliberately NOT
+    taken. Only `fp.parent` is searched, and only among reports THIS RUN
+    ALREADY DISCOVERED, so a finished checker in another step cannot speak for
+    this one -- the cross-step attribution error `DRC_STEP_NEVER_REPORTED`
+    exists to refuse.
+
+    Returns ``(sibling, final_count)`` or ``None``. A count > 0 is returned
+    too, and is a CONTRADICTION for the caller to refuse: a route that ended
+    with violations owes a report that names them, and an empty one does not.
+
+    chip-AGNOSTIC: the shared dialect reader plus file adjacency. No design,
+    PDK, vendor or process literal.
+    """
+    for cand in in_scope:
+        if cand == fp or cand.parent != fp.parent:
+            continue
+        try:
+            if cand.stat().st_size > _PROOF_MAX_BYTES:
+                continue
+            text = _read_input_text(cand, errors="replace")
+        except OSError:
+            continue
+        # ONE GRAMMAR, IMPORTED. `_signoff_drc_format` is the single reader
+        # `phase3_one_shot_runner._drt_final_violations`, `signoff_audit` and
+        # `eda_report_audit` already share, and its module comment says why:
+        # private copies are how the readers of one report came to return
+        # different numbers for it. The count is per-ITERATION and falls as the
+        # router converges, so only the LAST is a verdict -- which is exactly
+        # the fact a hand-rolled pattern here would get wrong.
+        if _sdf.classify_text(text).kind != _sdf.OPENROAD:
+            continue
+        n = _sdf.router_iter_last_count(text)
+        if n is None:
+            continue
+        return cand, int(n)
+    return None
+
 
 _LAYOUT_GLOBS = ["*.gds", "*.gds.gz", "*.gdsii", "*.GDS",
                  "*.oas", "*.oasis", "*.def", "*.DEF"]
@@ -1448,6 +1536,8 @@ def audit(path: Path, layout: Optional[Path] = None,
     any_real_check = False
     any_drc_log = False
     any_empty_report = False
+    #: Reports discovered PRESENT and EMPTY, resolved after the scan loop.
+    empty_pending: List[Path] = []
     # A verdict this checker actually PARSED, anywhere in scope -- a violation
     # count, zero or non-zero. `any_real_check` is NOT that: it is also set by
     # `DRC_NO_VERDICT_TOKEN`, which fires when nothing was parsed at all.
@@ -1508,12 +1598,15 @@ def audit(path: Path, layout: Optional[Path] = None,
             # So the empty report is decisive, in the same direction as every
             # other rule here: a clean must be EARNED, and a checker that wrote
             # no report has not reported zero violations — it has not reported.
-            any_empty_report = True
-            result.findings.append(Finding(
-                rule="DRC_REPORT_EMPTY", severity="ERROR",
-                message="DRC report file is 0 bytes — the run produced no "
-                        "result. That is NOT zero violations; it is no "
-                        "measurement. INCONCLUSIVE.", file=str(fp)))
+            # THREE STATES, NOT TWO (vibe-ic#2015 item 1). An empty report
+            # is still not evidence of zero BY ITSELF -- that is the rule
+            # above and it is unchanged. It becomes evidence of zero only
+            # where the STEP'S OWN other artefact says the tool ran and says
+            # what it ended on. `emitted_empty_proof` is where that is asked,
+            # and where the argument for why it cannot be bought by deleting
+            # anything is written down. Resolved AFTER this loop, because the
+            # sibling that carries the proof may not have been scanned yet.
+            empty_pending.append(fp)
             per_file.append({"file": str(fp), "empty_file": True})
             continue
         if not is_drc:
@@ -1694,6 +1787,56 @@ def audit(path: Path, layout: Optional[Path] = None,
                          f"INCONCLUSIVE; a clean requires positive "
                          f"evidence.{hint}"),
                 file=str(fp)))
+
+    # --- what an EMPTY report meant, one file at a time ---------------------
+    for fp in empty_pending:
+        proof = emitted_empty_proof(fp, files)
+        rec = next((r for r in per_file if r.get("file") == str(fp)), None)
+        if proof is None:
+            any_empty_report = True
+            if rec is not None:
+                rec["empty_reads_as_zero"] = False
+            result.findings.append(Finding(
+                rule="DRC_REPORT_EMPTY", severity="ERROR",
+                message="DRC report file is 0 bytes — the run produced no "
+                        "result. That is NOT zero violations; it is no "
+                        "measurement, and nothing beside it in this step "
+                        "states a producer's own final count that would say "
+                        "the tool wrote it empty. INCONCLUSIVE.",
+                file=str(fp)))
+            continue
+        sibling, n = proof
+        if n != 0:
+            any_empty_report = True
+            if rec is not None:
+                rec["empty_reads_as_zero"] = False
+                rec["emitted_proof"] = str(sibling)
+                rec["emitted_proof_count"] = n
+            result.findings.append(Finding(
+                rule="DRC_EMPTY_CONTRADICTS_TOOL", severity="ERROR",
+                message=f"DRC report file is 0 bytes, and this step's own "
+                        f"{Path(sibling).name} says its tool ended on {n} "
+                        f"violation(s). A run that ended with violations owes "
+                        f"a report that NAMES them; an empty one does not. The "
+                        f"two artefacts of one step contradict each other and "
+                        f"nothing here can say which is right. INCONCLUSIVE.",
+                file=str(fp)))
+            continue
+        if rec is not None:
+            rec["empty_reads_as_zero"] = True
+            rec["emitted_proof"] = str(sibling)
+            rec["emitted_proof_count"] = 0
+        result.findings.append(Finding(
+            rule="DRC_REPORT_EMPTY_IS_ZERO", severity="INFO",
+            message=f"DRC report file is 0 bytes AND this step's own "
+                    f"{Path(sibling).name} states its tool ended on 0 "
+                    f"violation(s) — a tool that writes one record per "
+                    f"violation and nothing else has written an empty report "
+                    f"because it had nothing to write. Read as ZERO, and NOT "
+                    f"as a measurement: this file attests nothing on its own, "
+                    f"and the verdict in this scope still comes from the "
+                    f"report(s) that stated a count.",
+            file=str(fp)))
 
     result.summary = {"files_found": len(files), "per_file": per_file, **scope}
 
