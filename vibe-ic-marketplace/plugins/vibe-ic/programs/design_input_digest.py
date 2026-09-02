@@ -140,6 +140,17 @@ RULER_FLAGS: Tuple[str, ...] = (
     "strict_timing",
     "strict_no_os_constraints",
     "allow_thin_input",
+    # BOTH OF THESE NARROW THE POPULATION THAT IS JUDGED, which is exactly
+    # what a ruler does. `--exclude-step` drops named steps from the pass;
+    # `--stage-id` restricts it to one stage, and its own help says it is
+    # mutually exclusive with `--stage`, which has been a ruler here all
+    # along. Classifying them the other way would be the one-line green that
+    # costs the most: two runs over DIFFERENT step populations would share a
+    # `measurement.id`, and `classify` would then read the tally movement
+    # between them as DESIGN_CHANGE — publishing a change of ruler as
+    # progress.
+    "exclude_step",
+    "stage_id",
 )
 
 #: Options that do not change the question asked, each with the reason.

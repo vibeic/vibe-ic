@@ -54,6 +54,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from _atomic_artefact import write_json as atomic_write_json
 
 import _pad_ring as PR
+import _source_record_merge as _srm     # noqa: E402
 
 PROGRAM = "pad_bterm_coincidence_check"
 SCHEMA = "vibe-ic/pad_bterm_coincidence/1"
@@ -171,17 +172,27 @@ def run(def_text: str, tech_text: str, io_lefs: List[Path]
     nets = def_net_terminals(def_text)
     widths = layer_min_widths(tech_text, dfn.units)
 
-    pin_ports: Dict[str, Dict[str, List[Any]]] = {}
-    roles: Dict[str, Dict[str, Any]] = {}
-    sizes: Dict[str, Tuple[float, float]] = {}
-    for lef in io_lefs:
-        try:
-            text = lef.read_text(errors="replace")
-        except OSError:
-            continue
-        pin_ports.update(PR.parse_lef_pin_ports(text))
-        roles.update(PR.parse_lef_pin_roles(text))
-        sizes.update(PR.parse_lef_macros(text))
+    # Grouped, not folded in arrival order. `dict.update` over the discovered
+    # LEFs is a last-wins merge: a library that names a macro but lists no
+    # pin ports for it would erase the library that listed them, and which
+    # one wins would be whatever order the discovery walk returned. An
+    # unreadable LEF is silence too, which is why it is passed through as
+    # `None` rather than special-cased.
+    def _parsed(fn):
+        out = []
+        for lef in io_lefs:
+            try:
+                out.append(fn(lef.read_text(errors="replace")))
+            except OSError:
+                out.append(None)
+        return out
+
+    pin_ports, _pp_conf = _srm.merge_source_records(
+        _parsed(PR.parse_lef_pin_ports), on_conflict="richer")
+    roles, _rl_conf = _srm.merge_source_records(
+        _parsed(PR.parse_lef_pin_roles), on_conflict="richer")
+    sizes, _sz_conf = _srm.merge_source_records(
+        _parsed(PR.parse_lef_macros), on_conflict="richer")
 
     rows: List[Dict[str, Any]] = []
     for pin_name, rec in sorted(pins.items()):

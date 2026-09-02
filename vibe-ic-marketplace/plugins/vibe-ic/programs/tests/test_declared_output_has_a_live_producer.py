@@ -91,21 +91,42 @@ def test_a_missing_flow_is_cannot_check_not_pass():
 # TOKEN-TRACE, because the path's name is still written in the source by its
 # READERS.
 # ─────────────────────────────────────────────────────────────────────────────
-def test_no_trace_is_unreachable_so_it_cannot_be_the_only_blocker():
-    """The measurement that condemned the old blocking condition, kept live."""
+def test_deleting_a_sole_producer_moves_the_strict_verdict():
+    """What this test has always been about: delete the ONLY module that
+    writes a declared output and the strict verdict must move.
+
+    It used to say that by counting how many such deletions land in NO-TRACE
+    and asserting the count is ZERO. That was a snapshot of a living graph,
+    and the graph moved: on 7903c1972305 one of them —
+    `phase2/stage1/formal/formal_not_applicable.json`, sole producer
+    `design_one_shot_runner.py` — now does land there. Relaxing `== 0` to
+    `<= 1`, or whitelisting that path, would launder "the world changed" into
+    "a tolerance", and the next reader would believe the tolerance.
+
+    WHERE it lands is not the subject. `main` computes
+    `bad = len(no_trace) + len(regressed)` and `regressed` is any baselined
+    path whose state is no longer WRITE-SITE — so a demotion to NO-TRACE and a
+    demotion to TOKEN-TRACE are the same finding. Asserting the demotion is
+    both what the program means and still falsifiable the next time the graph
+    moves."""
     before = D.audit(_ROOT)
     singles = [(p, r["producers"][0]) for p, r in before["rows"].items()
                if r["state"] == "WRITE-SITE" and len(r["producers"]) == 1]
     assert singles, "no single-producer path to reason about"
-    reached_no_trace = 0
+    survived = []
+    landings = {}
     for path, producer in singles:
         after = D.audit(_ROOT, exclude_modules=[producer])
-        if after["rows"][path]["state"] == "NO-TRACE":
-            reached_no_trace += 1
-    assert reached_no_trace == 0, (
-        f"{reached_no_trace} of {len(singles)} sole-producer deletions now reach "
-        f"NO-TRACE. If that is deliberate, this test is the place to say so — "
-        f"but while it is zero, NO-TRACE alone blocks nothing")
+        state = after["rows"][path]["state"]
+        landings[state] = landings.get(state, 0) + 1
+        if state == "WRITE-SITE":
+            survived.append((path, producer))
+    assert not survived, (
+        f"{len(survived)} of {len(singles)} paths kept their write site after "
+        f"their ONLY producer was deleted, so the strict verdict would not "
+        f"move for them: {survived}")
+    # reported, not asserted: which state they land in is the graph's business
+    assert sum(landings.values()) == len(singles), landings
 
 
 def test_losing_a_write_site_is_the_blocking_condition(tmp_path):
@@ -114,9 +135,25 @@ def test_losing_a_write_site_is_the_blocking_condition(tmp_path):
     live = sorted(p for p, r in before["rows"].items() if r["state"] == "WRITE-SITE")
     assert live, "no write site to lose"
     victim = live[0]
-    producer = before["rows"][victim]["producers"][0]
-    after = D.audit(_ROOT, exclude_modules=[producer])
-    assert after["rows"][victim]["state"] != "WRITE-SITE"
+    # ALL of the row's producers, not just the first. The behaviour under test
+    # is "a path loses its write site", and a path with two writers does not
+    # lose it when one is deleted — MEASURED: `live[0]` is
+    # `phase2/analog/*/*.sp`, written by BOTH `analog_a3_netlist_emit.py` and
+    # `pdk_analog_characterize.py` since `fdcbf3ac91`, so excluding
+    # `producers[0]` left the state at WRITE-SITE and this test failed on a
+    # row that was behaving correctly.
+    #
+    # The narrowing fix — pick the victim only from single-producer rows —
+    # would shrink the predicate to exactly the shape that makes the one
+    # failure disappear, and would quietly stop testing every path that grows
+    # a second writer. Deleting the whole producer set keeps the population
+    # whole.
+    producers = before["rows"][victim]["producers"]
+    assert producers, victim
+    after = D.audit(_ROOT, exclude_modules=producers)
+    assert after["rows"][victim]["state"] != "WRITE-SITE", (
+        f"{victim} kept its write site after all {len(producers)} of its "
+        f"producers were excluded: {producers}")
 
     # the baseline says it WAS resolved; the gate must call that a regression
     inv = tmp_path / "baseline.json"

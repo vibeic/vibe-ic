@@ -587,3 +587,51 @@ def test_project_cli_refuses_an_empty_tree(tmp_path):
     empty.mkdir()
     assert did.main(["--project", str(empty)]) == 2
     assert did.main(["--project", str(_design(tmp_path / "p"))]) == 0
+
+
+# ─────────── the two flags that NARROW the judged population ──────────
+# Both were added by `93235bdf36` and neither was classified, so both were
+# invisible to `measurement.id`: two runs over DIFFERENT step populations
+# shared one id, and `classify` read the tally movement between them as a
+# statement about the DESIGN. These are the positive controls for the
+# classification — they fail against an unclassified flag, in both directions.
+
+def test_restricting_the_pass_to_one_stage_is_a_different_ruler():
+    """`--stage-id` checks only one stage's steps. A run so restricted is not
+    measuring the same population as a full pass, and its id must say so."""
+    full = did.build_measurement("1.16.39", None, {})
+    one_stage = did.build_measurement("1.16.39", None,
+                                      {"stage_id": "stage_analog"})
+    assert full["id"] != one_stage["id"], (
+        "a pass restricted to one stage shares its measurement id with a "
+        "full pass; the tally movement between them would publish as a "
+        "DESIGN_CHANGE")
+    assert one_stage["ruler_flags"]["stage_id"] == "stage_analog"
+
+
+def test_two_different_stages_are_two_different_rulers():
+    a = did.build_measurement("1.16.39", None, {"stage_id": "stage_analog"})
+    b = did.build_measurement("1.16.39", None, {"stage_id": "stage_phase1"})
+    assert a["id"] != b["id"]
+
+
+def test_excluding_a_step_is_a_different_ruler():
+    """`--exclude-step` drops named steps from the pass. Same argument."""
+    full = did.build_measurement("1.16.39", None, {"exclude_step": []})
+    minus = did.build_measurement("1.16.39", None, {"exclude_step": ["31"]})
+    assert full["id"] != minus["id"], (
+        "excluding a step shares its measurement id with the pass that "
+        "judged it")
+    a = did.build_measurement("1.16.39", None, {"exclude_step": ["31"]})
+    b = did.build_measurement("1.16.39", None, {"exclude_step": ["20"]})
+    assert a["id"] != b["id"], "which step was excluded is part of the ruler"
+
+
+def test_a_flag_that_does_not_narrow_the_population_is_not_a_ruler():
+    """The negative half: the allowlist is an allowlist. `--json` moves where
+    the report is written and must NOT move the id, or an irrelevant argument
+    manufactures a measurement change."""
+    a = did.build_measurement("1.16.39", None, {"json": "/tmp/a.json"})
+    b = did.build_measurement("1.16.39", None, {"json": "/tmp/b.json"})
+    assert a["id"] == b["id"]
+    assert "json" in did.NON_RULER_FLAGS

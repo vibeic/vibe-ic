@@ -675,6 +675,20 @@ def test_d9_structural_only_scoping_is_still_the_documented_two_member_set():
 RUNNER_CONSUMPTION_AS_MEASURED = {
     "design_one_shot_runner.py": "RETURNCODE",
     "phase3_one_shot_runner.py": "RETURNCODE",
+    # ADDED after re-measuring, not to make the pin green. `d453eaca68` gave
+    # `vibe_ic_one_shot_runner` a real invocation — an ANALOG STAGE COMPLIANCE
+    # pass whose exit code is bound to `_analog_stage_rc` and read one line
+    # later — so a third runner now consumes the verdict. That is the good
+    # direction and the pin is an equality, so it had to be recorded.
+    #
+    # It is recorded only AFTER the classifier was taught to see the shape it
+    # uses. The runner calls the checker through its own `_run_phase` helper,
+    # which is not a subprocess primitive, so the classifier used to fall
+    # through to a fallback that answered from ANY `rc = ...` binding in the
+    # enclosing function — and that function has several. Pinning the right
+    # answer obtained by a ruler that cannot answer wrongly here is not a
+    # measurement, so the ruler was fixed first and the row written second.
+    "vibe_ic_one_shot_runner.py": "RETURNCODE",
 }
 
 #: The exact string constant a runner builds the checker's argv from. Matched by
@@ -729,6 +743,28 @@ def _consumption_channel(fn: ast.FunctionDef) -> str:
     for node in ast.walk(fn):
         for child in ast.iter_child_nodes(node):
             parent[id(child)] = node
+    direct: list = []
+    wrapped: list = []
+
+    # ONE HOP OF LOCAL DATAFLOW. `design_one_shot_runner.step_final_audit`
+    # writes `audit = PROGRAMS_DIR / "flow_compliance_check.py"` and then
+    # passes `audit` down into the call that launches it, so the argv of the
+    # launching call never contains the constant itself. Following the local
+    # binding is what lets the argv stay the discriminator; the alternative —
+    # the old fallback — was to give up and answer from any `rc = ...` in the
+    # function, which is measuring one call and reporting it as another.
+    bound_to_checker = set()
+    for sub in ast.walk(fn):
+        if not isinstance(sub, ast.Assign):
+            continue
+        names_it = any(isinstance(c, ast.Constant)
+                       and c.value == _CHECKER_ARGV_CONSTANT
+                       for c in ast.walk(sub.value))
+        if not names_it:
+            continue
+        for tgt in sub.targets:
+            if isinstance(tgt, ast.Name):
+                bound_to_checker.add(tgt.id)
 
     for node in ast.walk(fn):
         if not isinstance(node, ast.Call):
@@ -736,33 +772,47 @@ def _consumption_channel(fn: ast.FunctionDef) -> str:
         func = node.func
         name = (func.attr if isinstance(func, ast.Attribute)
                 else func.id if isinstance(func, ast.Name) else None)
-        if name not in _SUBPROCESS_CALLS:
-            continue
+        # THE ARGV IS THE DISCRIMINATOR, NOT THE CALLEE'S NAME. A runner may
+        # launch the checker through its own wrapper — `vibe_ic_one_shot_runner`
+        # calls `_run_phase(...)`, which returns the exit code — and a name
+        # list of subprocess primitives does not contain that. Requiring the
+        # callee to be in `_SUBPROCESS_CALLS` sent every such call to the
+        # fallback below, and that fallback is the very disease this
+        # docstring names: it answered from ANY `rc = ...` binding anywhere in
+        # the enclosing function, so it would have said RETURNCODE for a
+        # wrapper call whose result was thrown away, as long as some other
+        # call in the same function bound one. Right answer, wrong reason.
+        #
+        # A call whose arguments name the checker IS the invocation, whatever
+        # it is spelled. `_SUBPROCESS_CALLS` is kept only as the preferred
+        # shape when a function contains both.
         argv_names_the_checker = any(
-            isinstance(sub, ast.Constant) and sub.value == _CHECKER_ARGV_CONSTANT
-            for arg in node.args for sub in ast.walk(arg))
+            (isinstance(sub, ast.Constant)
+             and sub.value == _CHECKER_ARGV_CONSTANT)
+            or (isinstance(sub, ast.Name) and sub.id in bound_to_checker)
+            for arg in list(node.args) + [kw.value for kw in node.keywords]
+            for sub in ast.walk(arg))
         if not argv_names_the_checker:
             continue
+        if name in _SUBPROCESS_CALLS:
+            direct.append(node)
+        else:
+            wrapped.append(node)
+
+    for node in direct + wrapped:
         # The call launches the checker. Is its RESULT kept?
         if isinstance(parent.get(id(node)), ast.Expr):
-            # A bare expression statement: the CompletedProcess is dropped on
-            # the floor. With `check=False` that discards the exit code too.
+            # A bare expression statement: the result is dropped on the floor.
+            # For a subprocess call with `check=False` that discards the exit
+            # code too; for a wrapper that RETURNS the exit code it discards
+            # the verdict just as completely.
             return "REPORT"
         return "RETURNCODE"
 
-    # The checker's path is built here but launched through a helper. Fall back
-    # to whether this function binds an exit code at all.
-    for sub in ast.walk(fn):
-        if isinstance(sub, ast.Attribute) and sub.attr == "returncode":
-            return "RETURNCODE"
-        if isinstance(sub, ast.Assign):
-            for tgt in sub.targets:
-                names = ([e.id for e in tgt.elts if isinstance(e, ast.Name)]
-                         if isinstance(tgt, ast.Tuple) else
-                         [tgt.id] if isinstance(tgt, ast.Name) else [])
-                if any(n in ("rc", "returncode", "exit_code") for n in names):
-                    return "RETURNCODE"
-    return "REPORT"
+    # No call in this function names the checker at all. There is nothing here
+    # to classify, and guessing from an unrelated `rc = ...` binding is how
+    # this module measured an adjacent call twice before.
+    return "UNCLASSIFIED"
 
 
 def test_d9_every_runner_that_invokes_the_checker_consumes_its_verdict():
@@ -823,6 +873,41 @@ def finalize(project):
 '''
 
 
+#: The shape `vibe_ic_one_shot_runner` uses: the checker is launched through
+#: the runner's OWN helper, which returns the exit code. Until the classifier
+#: learned this shape it fell through to a fallback that answered from any
+#: `rc = ...` binding anywhere in the function — so it would have said
+#: RETURNCODE for THIS site too, with the result thrown away. The wrapper pair
+#: is what makes that impossible to reintroduce silently.
+_WRAPPED_DISCARDING_SITE = '''
+def finalize(project):
+    _run_phase(
+        "COMPLIANCE",
+        PROGRAMS_DIR / "flow_compliance_check.py",
+        [str(project), "--strict"])
+    rc = _run_phase("SOMETHING ELSE", PROGRAMS_DIR / "other.py", [])
+    if rc != 0:
+        print("the adjacent call DOES bind one, and it is not this one")
+'''
+_WRAPPED_BINDING_SITE = '''
+def finalize(project):
+    rc = _run_phase(
+        "COMPLIANCE",
+        PROGRAMS_DIR / "flow_compliance_check.py",
+        [str(project), "--strict"])
+    if rc != 0:
+        print("refresh rc=%d" % rc)
+'''
+#: One hop of local binding, which is how `design_one_shot_runner` spells it.
+_INDIRECT_BINDING_SITE = '''
+def finalize(project):
+    audit = PROGRAMS_DIR / "flow_compliance_check.py"
+    rc, out, err = _run(_build_cmd(project, audit), timeout=900)
+    if rc != 0:
+        print(out)
+'''
+
+
 def test_d9_the_channel_classifier_can_still_answer_REPORT():
     """NON-DEGENERACY, and it is load-bearing from the day the last real REPORT
     left the tree.
@@ -848,6 +933,36 @@ def test_d9_the_channel_classifier_can_still_answer_REPORT():
         "binding the result and reading .returncode no longer reads as "
         "RETURNCODE, so the two answers are not distinguished by the thing "
         "they are supposed to be distinguished by")
+
+    # THE WRAPPER SHAPE, both ways. These two differ in exactly one thing —
+    # whether the wrapper's return value is bound — and the discarding one
+    # deliberately contains an ADJACENT `rc = ...` binding, because that is
+    # the trap: a classifier that answers from anywhere in the function calls
+    # this RETURNCODE and is wrong.
+    assert _consumption_channel(_fn(_WRAPPED_DISCARDING_SITE)) == "REPORT", (
+        "a checker launched through the runner's own helper and thrown away "
+        "reads as RETURNCODE; the classifier is answering from the adjacent "
+        "call's binding, which is the defect this module was written about")
+    assert _consumption_channel(
+        _fn(_WRAPPED_BINDING_SITE)) == "RETURNCODE"
+    assert _consumption_channel(
+        _fn(_INDIRECT_BINDING_SITE)) == "RETURNCODE", (
+        "the argv is built one binding away from the launch, which is how "
+        "`design_one_shot_runner` spells it")
+
+
+def test_d9_a_function_that_never_names_the_checker_is_not_guessed_at():
+    """The fallback this replaced would answer RETURNCODE for ANY function
+    containing an `rc = ...`. A function that does not invoke the checker has
+    no channel, and saying so is the honest answer."""
+    src = '''
+def unrelated(project):
+    rc = subprocess.run(["echo", "hi"]).returncode
+    return rc
+'''
+    fn = next(n for n in ast.walk(ast.parse(src))
+              if isinstance(n, ast.FunctionDef))
+    assert _consumption_channel(fn) == "UNCLASSIFIED"
 
 
 def test_d9_the_invocation_scan_ignores_prose(tmp_path):

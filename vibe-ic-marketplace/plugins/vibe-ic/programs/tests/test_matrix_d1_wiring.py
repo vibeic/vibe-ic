@@ -1629,6 +1629,32 @@ def test_probe_no_cell_rests_on_channel_c_alone():
 #: branch, so both are reachable through channel C. The forward/reverse
 #: control below is the same one `pad_ring_gen` got when it left this pin:
 #: dispatch, and only dispatch, is what keeps them out.
+#: 2026-09-03 — FOUR ENTRIES ADDED, and the derivation is written here rather
+#: than left as four names for the next reader to re-discover. All four arrived
+#: from ONE landing, `867f807a77 fix: preserve advisory evidence tiers (#1980)`,
+#: which replaced several steps' `advisory_program_exit_zero:` gate clauses
+#: with a `program_outputs:` declaration plus a `files_exist` gate over the
+#: file the program writes.
+#:
+#: `program_outputs:` IS NOT A FOURTH DISPATCH CHANNEL, and that is not an
+#: inference — `flow_compliance_check._collect_program_output_records` says so
+#: in its own docstring: "Read declared producer/classifier outputs WITHOUT
+#: EXECUTING A GATE". So for these four the clause that used to run them is
+#: gone and nothing replaced it. MEASURED at 7903c1972305, each against all
+#: three channels (gate token / umbrella registry / runner dispatch):
+#:
+#:   ("20", "hold_area_budget_check")               gated=F registry=F runner=F
+#:   ("31", "lvs_triage_classify")                  gated=F registry=F runner=F
+#:   ("31", "perc_corpus_sweep")                    gated=F registry=F runner=F
+#:   ("31", "pnr_via_stack_completeness_check")     gated=F registry=F runner=F
+#:
+#: The contrast that proves the measurement discriminates: the SAME landing
+#: did the same swap to step 35's `dfm_screen_check`, and that one measures
+#: runner=TRUE — a runner still dispatches it — so it is NOT here. The swap
+#: itself does not orphan a program; losing the last thing that ran it does.
+#:
+#: Being here is the DISCLOSURE, not permission. Wiring these four means
+#: giving them a dispatch site, which is a flow change and not a pin repair.
 ORPHAN_DECLARED_PROGRAMS: Tuple[Tuple[str, str], ...] = (
     ("2", "crosslayer_rewrite_equivalence"),
     ("2", "crosslayer_search_space"),
@@ -1636,6 +1662,10 @@ ORPHAN_DECLARED_PROGRAMS: Tuple[Tuple[str, str], ...] = (
     ("6", "fpga_test_harness_gen"),
     ("9", "synth_wrapper_gen"),
     ("15", "phase3_backend_step"),
+    ("20", "hold_area_budget_check"),
+    ("31", "lvs_triage_classify"),
+    ("31", "perc_corpus_sweep"),
+    ("31", "pnr_via_stack_completeness_check"),
     ("39", "bringup_plan_gen"),
     ("39", "signaltap_recompile_sequence_check"),
     ("39", "signaltap_stp_completeness_check"),

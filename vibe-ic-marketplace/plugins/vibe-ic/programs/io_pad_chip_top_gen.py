@@ -123,6 +123,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import _atomic_artefact as _aa  # noqa: E402 — vibe-ic#1082
 import _l_doc_pad_placement as LPP          # noqa: E402
 import _pad_ring as PR                      # noqa: E402
+import _source_record_merge as _srm     # noqa: E402
 
 PROGRAM = "io_pad_chip_top_gen"
 
@@ -631,12 +632,27 @@ def run(project: Path, pdk_root: Optional[str], pdk: Optional[str]
         raise Unavailable("NO_IO_LIBRARY",
                           "the selected PDK tree ships no IO cell LEF, so no "
                           "pad master exists to instantiate")
-    classes: Dict[str, str] = {}
-    sizes: Dict[str, Tuple[float, float]] = {}
-    for lef in lefs:
-        text = lef.read_text(errors="replace")
-        classes.update(PR.parse_lef_macro_classes(text))
-        sizes.update(PR.parse_lef_macros(text))
+    # ONE MACRO, SEVERAL LEFS, AND NO ARRIVAL ORDER. `dict.update` in
+    # discovery order is a last-wins merge: a LEF that mentions a macro
+    # without a CLASS or a SIZE overwrites one that gave it, and which one
+    # wins is decided by whatever order `discover_io_lefs` happened to
+    # return. Folding through `merge_source_records` groups by macro first
+    # and reduces second, so a source that says nothing cannot erase one
+    # that spoke, and the answer does not depend on the walk.
+    per_lef = [lef.read_text(errors="replace") for lef in lefs]
+    classes, class_conflicts = _srm.merge_source_records(
+        (PR.parse_lef_macro_classes(text) for text in per_lef),
+        on_conflict="richer")
+    sizes, size_conflicts = _srm.merge_source_records(
+        (PR.parse_lef_macros(text) for text in per_lef),
+        on_conflict="richer")
+    if class_conflicts or size_conflicts:
+        rec["io_library_lef_conflicts"] = {
+            "macro_class": class_conflicts, "macro_size": size_conflicts,
+            "policy": "richer",
+            "note": ("two IO LEFs describe the same macro differently; the "
+                     "fuller description is kept and the disagreement is "
+                     "reported rather than decided by discovery order")}
     rec["io_library_lefs"] = [str(p) for p in lefs]
     rec["io_master_count"] = len(classes)
 

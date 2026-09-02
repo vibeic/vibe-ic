@@ -260,26 +260,73 @@ def _margin(spec):
     return a2._safe_eval(a2.SLEW_MARGIN_EXPR, env)
 
 
-def test_the_declaration_in_hand_clears_the_slew_bound():
-    m = _margin(SPEC)
-    assert m > 1.0, m
-    assert 10.0 < m < 100.0, m
+#: The units the entry itself declares for the fields it binds. `entry_admission`
+#: refuses on a unit mismatch BEFORE it evaluates any derived bound, so a test
+#: that passes `{}` here never reaches the bounds it means to exercise — it only
+#: ever sees `spec_unit` refusals.
+_UNITS = {k: (v or {}).get("unit")
+          for k, v in (ENTRY.get(a2.REQUIRES_BOUND_KEY) or {}).items()}
+
+
+def test_the_declaration_in_hand_is_admitted():
+    """The positive case. MEASURED at fclk 1 MHz, ENOB 14, OSR 256, vref 1 V:
+    no refusal at all."""
+    assert a2.entry_admission(ENTRY, dict(SPEC), _UNITS, MEASURED) == []
+
+
+def test_the_slew_margin_is_true_by_construction_and_still_falsifiable():
+    """`slew_margin` no longer BINDS: the bias resistor is derived FROM the
+    slew, so the margin comes out at the stated design margin whatever the
+    clock — MEASURED 2.0 at both 1 MHz and 1000 MHz. The entry keeps it as a
+    CONSISTENCY check, and its own `why` says why: it can still fail if the
+    load expression and the derivation are edited apart. So that is what is
+    asserted here — a bound nobody can make fail is not a bound."""
+    assert _margin(SPEC) == pytest.approx(ENTRY["constants"]
+                                          ["slew_design_margin"])
+    assert _margin({**SPEC, "fclk": 1000.0}) == pytest.approx(
+        ENTRY["constants"]["slew_design_margin"])
+
+    # edit the two apart: the derivation keeps its load, the margin's load
+    # doubles. The consistency check must notice.
+    drifted = a2.SLEW_MARGIN_EXPR.replace("* vref)", "* vref * 2.0)")
+    assert drifted != a2.SLEW_MARGIN_EXPR, "the mutation site moved"
+    env = a2.admission_env(ENTRY, dict(SPEC), MEASURED)
+    assert a2._safe_eval(drifted, env) < 1.0
 
 
 def test_a_clock_the_library_bias_cannot_follow_is_refused_by_name():
-    """The CONTROL. The bound has to be reachable from a declaration, or it
-    is a bound that cannot bind."""
+    """The CONTROL, pointed at the bound that ACTUALLY binds. Deriving the
+    resistor from the slew moved the refusal from `slew_margin` to
+    `bias_resistor_l_um`: a declaration whose slew needs a resistor shorter
+    than the PDK can draw is refused, and it is refused BY NAME — asserting
+    only that `refusals` is non-empty would pass on a refusal for any reason
+    at all."""
     fast = {**SPEC, "fclk": 1000.0}
-    assert _margin(fast) < 1.0
-    refusals = a2.entry_admission(ENTRY, fast, {}, MEASURED)
-    assert any("slew_margin" in json.dumps(r) for r in refusals), refusals
+    refusals = a2.entry_admission(ENTRY, fast, _UNITS, MEASURED)
+    named = [r for r in refusals if r.get("field") == "bias_resistor_l_um"]
+    assert named, refusals
+    assert named[0]["requirement"] == "derived_range"
+    assert named[0]["value"] < named[0]["min"], named[0]
+    # and the other direction, on the same call: the declaration in hand is
+    # NOT refused, so the bound discriminates rather than always firing
+    assert a2.entry_admission(ENTRY, dict(SPEC), _UNITS, MEASURED) == []
 
 
 def test_the_bound_reads_the_resistor_the_library_actually_draws():
-    """A constant that restates a drawn geometry is a second copy of one
-    number, and the copy is what the expression reads."""
-    r_ib = [d for d in ENTRY["devices"] if d["name"] == "r_ib"][0]
-    assert ENTRY["constants"]["r_ib_l_um"] == r_ib["l"]
+    """Still one number, but no longer a constant: the drawn length of `r_ib`
+    is now carried as a device parameter EXPRESSION, and the admission bound
+    reads that same expression. A second copy is what this test has always
+    been about; the copy is now prevented by identity rather than compared."""
+    drawn = [e for e in _expand()[2]
+             if e.get("device") == "r_ib" and e.get("param") == "l"]
+    assert drawn, "the library draws r_ib on a nominal with no derivation"
+    bound = [b for b in ENTRY["requires_derived"]
+             if b["name"] == "bias_resistor_l_um"][0]
+    assert drawn[0]["expr"] == bound["expr"], (
+        "the length the library draws and the length the bound judges are "
+        "two different expressions")
+    # and the nominal in the device list is not read as the drawn value
+    assert "r_ib_l_um" not in ENTRY["constants"]
 
 
 def test_a_constant_that_drifts_from_its_device_is_an_authoring_error():

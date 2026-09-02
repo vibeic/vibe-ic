@@ -133,11 +133,57 @@ _INNER = textwrap.dedent("""\
 
 
 def _alive(pid: int) -> bool:
+    """Is this pid a process that is still RUNNING?
+
+    `os.kill(pid, 0)` alone is the wrong probe, and it is wrong in the exact
+    direction that matters here: it SUCCEEDS for a zombie. MEASURED in the run
+    image (`ghcr.io/vibeic/vibeic-eda@sha256:66c33ff2`), at the moment the
+    assertion below used to fail:
+
+        BEFORE KILL  alive=True  /proc/<gc>/stat[3]=S
+        AFTER killpg _alive=True /proc/<gc>/stat[3]=Z   PPid=1
+        ps -o pid,ppid,stat,comm -p 1 -> "1  0  Ss  python3"
+        /proc/1/cmdline               -> the test process itself
+
+    The killed grandchild is reparented to PID 1, and PID 1 in this image is
+    whatever the run was started as — the pytest entry, not a reaping init. It
+    never calls `wait()`, so the grandchild stays a zombie forever and
+    `os.kill(pid, 0)` keeps returning success. Both failing tests end in
+    `assert not _alive(gc)`, which is why ONE fact explains both, and why the
+    two NDA tests in this file are green.
+
+    A zombie is dead: it holds no resources, runs no code, and the driver's
+    "unfinished live descendants" refusal is about processes that are still
+    RUNNING. So the state is read, not inferred from a signal.
+
+    THE DISCRIMINATION THIS MUST NOT LOSE:
+    `test_the_bare_timeout_idiom_still_orphans_the_grandchild` asserts a
+    genuinely running orphan reads True. That orphan is a `sleep 30` in state
+    S — measured above — so reading `Z` as dead still tells the two apart. Any
+    widening that also reported a running `sleep` as dead would turn both
+    tests green while proving nothing, and `test_a_zombie_is_dead_and_a_
+    sleeping_orphan_is_not` below is the guard against exactly that.
+    """
     try:
         os.kill(pid, 0)
     except (ProcessLookupError, PermissionError):
         return False
-    return True
+    return _proc_state(pid) not in ("Z", "X", "x")
+
+
+def _proc_state(pid: int) -> str:
+    """`/proc/<pid>/stat` field 3, or "" where /proc does not answer.
+
+    Field 3 is read from AFTER the last ')' because the comm field can itself
+    contain spaces and parentheses."""
+    try:
+        raw = Path(f"/proc/{pid}/stat").read_text()
+    except OSError:
+        return ""
+    try:
+        return raw[raw.rindex(")") + 2:].split()[0]
+    except (ValueError, IndexError):
+        return ""
 
 
 def _spawn_inner(tmp_path):
@@ -225,3 +271,45 @@ def test_the_repaired_files_carry_the_idioms_that_repair_them():
     nda = _NDA_SUITE.read_text(encoding="utf-8")
     assert "monkeypatch.setenv(\"VIBEIC_NDA_TOKENS\"" in nda, (
         "the NDA suite no longer publishes the token store it measures against")
+
+
+def test_a_zombie_is_dead_and_a_sleeping_orphan_is_not(tmp_path):
+    """The guard on `_alive` itself, both directions in one test.
+
+    Reading the process state instead of signalling it is only correct while
+    the two cases stay distinguishable. A widening that reported a RUNNING
+    orphan as dead would turn both tests in this file green and prove nothing
+    — "time to stop" is not a reason to stop asking. So: a real zombie must
+    read dead, and a real sleeping process must read alive, measured on
+    processes this test creates.
+    """
+    sleeper = subprocess.Popen(["sleep", "30"])
+    try:
+        assert _proc_state(sleeper.pid) in ("S", "R", "D"), (
+            f"a running `sleep` is in state {_proc_state(sleeper.pid)!r}")
+        assert _alive(sleeper.pid), "a running process must read alive"
+
+        # a child that has exited and has NOT been waited for is a zombie
+        zombie = subprocess.Popen([sys.executable, "-c", "raise SystemExit(0)"])
+        deadline = time.time() + 10
+        while time.time() < deadline and _proc_state(zombie.pid) != "Z":
+            time.sleep(0.05)
+        assert _proc_state(zombie.pid) == "Z", (
+            f"could not create a zombie to test against; state is "
+            f"{_proc_state(zombie.pid)!r}")
+        assert os.kill(zombie.pid, 0) is None, (
+            "os.kill(pid, 0) must still SUCCEED for a zombie — that is the "
+            "whole reason this probe was wrong")
+        assert not _alive(zombie.pid), "a zombie must read dead"
+        zombie.wait()
+    finally:
+        sleeper.kill()
+        sleeper.wait()
+
+
+def test_alive_falls_back_to_the_signal_where_proc_does_not_answer():
+    """`/proc` is not universal. Where it cannot be read the probe degrades to
+    what it did before rather than declaring everything dead."""
+    assert _proc_state(2 ** 22 + 7) == ""      # no such pid, no /proc entry
+    assert not _alive(2 ** 22 + 7)             # and the signal agrees
+    assert _alive(os.getpid()), "this very process must read alive"

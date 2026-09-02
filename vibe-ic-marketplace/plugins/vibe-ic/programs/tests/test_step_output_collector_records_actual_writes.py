@@ -60,6 +60,7 @@ import sys
 from pathlib import Path
 
 import pytest
+import yaml
 
 PROGRAMS = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROGRAMS))
@@ -69,17 +70,76 @@ import step_output_collector as soc          # noqa: E402  (exists both sides)
 
 GDS_REL = "phase3/stage4/gds/chip.gds"       # matches step 37's required_outputs
 GDS_STEP = "37"
+_FLOW = PROGRAMS.parent / "flow" / "phase1_phase2_phase3.yaml"
 
 
-def _mk_project(tmp_path: Path, *, zero_byte: bool) -> Path:
+def _declared_outputs(step_id: str) -> list:
+    """What the FLOW says this step must produce, read from the flow.
+
+    The fixture used to carry a hand-written copy of step 37's outputs. The
+    flow then declared a second one (`93235bdf36`, re-declared by
+    `29e9c72796`) and the copy went stale: `materialize` correctly raised a
+    D3 `declared_output_not_produced` for the output the fixture never made,
+    and the reverse control — which asserts NO D3 — failed for a reason that
+    had nothing to do with the collector. A population defined by a hand copy
+    goes stale on the next declaration; this one is defined by the
+    declaration itself."""
+    spec = yaml.safe_load(_FLOW.read_text(encoding="utf-8"))
+
+    def walk(o):
+        if isinstance(o, dict):
+            if str(o.get("id")) == step_id:
+                yield o
+            for v in o.values():
+                yield from walk(v)
+        elif isinstance(o, list):
+            for v in o:
+                yield from walk(v)
+
+    for step in walk(spec):
+        outs = step.get("required_outputs") or []
+        if outs:
+            return list(outs)
+    raise AssertionError(f"the flow declares no required_outputs for step "
+                         f"{step_id}; this fixture has nothing to derive from")
+
+
+def _concrete(rel: str) -> str:
+    """A declared spec as one path a fixture can write. A `*` becomes a name;
+    everything else is already a path."""
+    return rel.replace("*", "chip") if "*" in rel else rel
+
+
+def _mk_project(tmp_path: Path, *, zero_byte: bool,
+                only: "tuple | None" = None,
+                omit: "tuple" = ()) -> Path:
+    """A project carrying every output the flow declares for step 37.
+
+    `only` restricts what is written (the zero-byte control needs the step to
+    have produced nothing at all); `omit` drops one, which is how the
+    fixture proves it can still make a D3 appear — a fixture that always
+    materialises everything the flow declares could never fail the `no D3`
+    assertion, and then that assertion would be guarding nothing."""
     p = tmp_path / "proj"
     (p / "reports" / "orchestrator").mkdir(parents=True)
-    (p / "phase3" / "stage4" / "gds").mkdir(parents=True)
     (p / "phase3" / "stage3" / "pnr").mkdir(parents=True)
     (p / "reports" / "orchestrator" / "vibe_ic_one_shot.json").write_text(
         json.dumps({"duration_s": 3600.0, "verdict": "PASS"}))
-    (p / GDS_REL).write_bytes(b"" if zero_byte else b"\x00\x01GDSII" * 400)
-    (p / "phase3" / "stage3" / "pnr" / "routed.def").write_bytes(b"DESIGN c ;\n" * 40)
+    (p / "phase3" / "stage3" / "pnr" / "routed.def").write_bytes(
+        b"DESIGN c ;\n" * 40)
+
+    for spec in _declared_outputs(GDS_STEP):
+        rel = _concrete(spec)
+        if spec in omit or rel in omit:
+            continue
+        if only is not None and rel not in only and spec not in only:
+            continue
+        f = p / rel
+        f.parent.mkdir(parents=True, exist_ok=True)
+        if rel == GDS_REL:
+            f.write_bytes(b"" if zero_byte else b"\x00\x01GDSII" * 400)
+        else:
+            f.write_text(json.dumps({"verdict": "PASS"}) + "\n")
     return p
 
 
@@ -122,7 +182,7 @@ def test_collector_emits_an_observation_of_what_was_written(tmp_path):
 def test_zero_byte_declared_output_is_not_counted_as_produced(tmp_path):
     """THE distinction. Pre-change, outputs.json lists the 0-byte GDS and the
     symlink to it is materialized — it reads as step 37's produced artefact."""
-    p = _mk_project(tmp_path, zero_byte=True)
+    p = _mk_project(tmp_path, zero_byte=True, only=(GDS_REL,))
     soc.materialize(p)
 
     sdir = _step_dir(p, GDS_STEP)
@@ -199,3 +259,41 @@ def test_materialize_survives_a_ledger_that_cannot_be_written(tmp_path, monkeypa
 
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-q"]))
+
+
+# --------------------------------------------------------------------------- #
+# The fixture derives its population from the flow. That could have bought the
+# `no D3` assertion for free — a fixture that always materialises everything
+# the flow declares can never make one appear. It still can.
+# --------------------------------------------------------------------------- #
+def test_a_declared_output_the_fixture_omits_reproduces_a_D3_absent(tmp_path):
+    """Drop ONE of the outputs the flow declares for this step and the
+    collector must raise D3 `absent` for exactly that spec, attributed to
+    this step. This is what keeps `test_real_output_still_reads_as_produced`
+    honest: its `no D3` is a measurement, not a property of the fixture."""
+    declared = _declared_outputs(GDS_STEP)
+    assert len(declared) >= 2, (
+        "this control needs a step declaring more than one output; step "
+        f"{GDS_STEP} declares {declared}")
+    dropped = [s for s in declared if _concrete(s) != GDS_REL][0]
+
+    p = _mk_project(tmp_path, zero_byte=False, omit=(dropped,))
+    soc.materialize(p)
+    written = json.loads((_step_dir(p, GDS_STEP) / "written.json").read_text())
+
+    d3 = [f for f in written["findings"] if f["dimension"] == "D3"]
+    assert d3, f"omitting {dropped} raised no D3 at all"
+    assert [f for f in d3 if f["step"] == GDS_STEP and f["reason"] == "absent"
+            and f["spec"] == dropped], d3
+    # and the GDS, which the fixture DID write, is still produced
+    assert any(x["rel"] == GDS_REL and x["size"] > 0
+               for x in written["produced"])
+
+
+def test_the_fixture_population_is_the_flows_and_not_a_copy():
+    """If the flow declares another output tomorrow, the fixture makes it —
+    which is the whole point of deriving it. Asserted directly so the next
+    reader can see the population is not a list in this file."""
+    declared = _declared_outputs(GDS_STEP)
+    assert GDS_REL in [_concrete(s) for s in declared]
+    assert not any(s.startswith("/") for s in declared)

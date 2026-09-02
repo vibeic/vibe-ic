@@ -261,6 +261,11 @@ from typing import Dict, List, Set, Tuple
 
 import pytest
 
+# ONE definition of "a runner invokes this program", imported rather than
+# copied: dimension 1 owns that scan and a second copy would be a second
+# thing to keep true.
+import test_matrix_d1_wiring as D1
+
 from flow_matrix import cells as C
 from flow_matrix import flowref as F
 from flow_matrix import waivers as W
@@ -677,6 +682,47 @@ def _declared_by_flow(artefact: str, declared: Tuple[str, ...]) -> bool:
 # The derived data-dependency graph
 # ══════════════════════════════════════════════════════════════════════
 @functools.lru_cache(maxsize=None)
+def step_run_programs(step_id) -> Tuple[str, ...]:
+    """The programs this step RUNS — the population layer 2 must parse.
+
+    THIS USED TO BE `F.gate_programs(step_id)`, which is a SPELLING: the
+    basenames a gate CLAUSE happens to name. `867f807a77` replaced several
+    steps' `advisory_program_exit_zero:` clauses with a `program_outputs:`
+    declaration plus a `files_exist` gate over the file the program writes.
+    Nothing stopped running; the clause stopped naming.
+
+    MEASURED at 7903c1972305, step 35: `gate_program_tokens` is `()` while
+    `declared_programs` is still `('dfm_screen_check',)`, that program still
+    contains the string `routed.def` eight times, and a RUNNER still invokes
+    it. Keyed on the spelling, layer 2 had nothing to parse and step 35's edge
+    to step 21's `phase3/stage3/pnr/routed.def` vanished — taking
+    `_DERIVED_DEP_STEPS_FLOOR` with it, from 23 to 22.
+
+    The two repairs that would have made the red go away are both laundering,
+    and neither is here: dropping the floor to 22 endorses a detector that has
+    gone blind, and adding '35' to `_VACUOUS_BY_CLOSURE` says "this step reads
+    nothing another step produces", which is false — the read is still in the
+    source.
+
+    So the population is defined by BEHAVIOUR: a gate program, or a program
+    this step declares (in `programs:` or as a `program_outputs:` writer) that
+    a runner actually invokes. The second half deliberately requires the
+    RUNNER evidence, so the four programs steps 20 and 31 advertise and
+    nothing runs — dimension 1's newly-pinned orphans — do not creep in and
+    inflate this floor.
+    """
+    runs = set(D1.runner_invoked())
+    out: List[str] = list(F.gate_programs(step_id))
+    for prog in (tuple(F.declared_programs(step_id))
+                 + tuple(F.program_output_programs(step_id))):
+        if prog in out or prog not in runs:
+            continue
+        if F.program_path(prog) is None:
+            continue
+        out.append(prog)
+    return tuple(out)
+
+
 def derived_dependencies(step_id) -> Tuple[Tuple[str, str, str], ...]:
     """``((producer_step, artefact, evidence), ...)`` for one consumer step.
 
@@ -695,7 +741,7 @@ def derived_dependencies(step_id) -> Tuple[Tuple[str, str, str], ...]:
 
     anchors = unique_basename_artefacts()
     by_flow = flow_declared_program_reads(step_id)
-    for prog in F.gate_programs(step_id):
+    for prog in step_run_programs(step_id):
         constants = program_string_constants(prog)
         declared = by_flow.get(prog)
         for base, art in anchors.items():

@@ -203,6 +203,7 @@ from _atomic_artefact import write_json as atomic_write_json
 from _atomic_artefact import write_text as atomic_write_text
 
 import _pad_ring as PR
+import _source_record_merge as _srm     # noqa: E402
 
 PROGRAM = "pad_ring_gen"
 
@@ -1403,13 +1404,19 @@ def main(argv: Optional[List[str]] = None) -> int:
     # Computed from the placed ring and the library's own terminal map, so it
     # is decided here and only here; the deck reads the DEF and no new
     # argument crosses into it.
-    pin_ports: Dict[str, Dict[str, List[Any]]] = {}
-    for lef in lefs:
+    # Same rule as everywhere else these libraries are read: group by macro
+    # and reduce, so a LEF that is silent about a macro cannot erase the one
+    # that described it, and the terminal map does not depend on the order
+    # the libraries were discovered in.
+    def _pin_ports_of(lef):
         try:
-            pin_ports.update(PR.parse_lef_pin_ports(
-                Path(lef).read_text(errors="replace")))
+            return PR.parse_lef_pin_ports(
+                Path(lef).read_text(errors="replace"))
         except OSError:
-            continue
+            return None
+
+    pin_ports, _pin_port_conflicts = _srm.merge_source_records(
+        (_pin_ports_of(lef) for lef in lefs), on_conflict="richer")
     corner_master = decls.values.get("PAD_CORNER")
     prefix = (corner_master.split("__", 1)[0] + "__"
               if isinstance(corner_master, str) and "__" in corner_master

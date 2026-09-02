@@ -37,6 +37,7 @@ by the `_mutant` helper and recorded in the change report.
 The fixture is synthetic on purpose — a square die, a three-master IO library,
 four pads a side — and carries no process, foundry or library name.
 """
+import ast
 import json
 import math
 import re
@@ -1065,6 +1066,32 @@ def test_no_installed_pdk_tree_name_appears_in_these_programs():
 # --------------------------------------------------------------------------- #
 # the mutation harness the change report drives
 # --------------------------------------------------------------------------- #
+def _local_import_closure(*entries: str) -> set:
+    """Every module in `programs/` reachable from `entries` by import.
+
+    Sibling modules only: an import that does not name a file next to the
+    entry point is the interpreter's problem, not this fixture's."""
+    seen, queue = set(), list(entries)
+    while queue:
+        name = queue.pop()
+        if name in seen or not (PROGRAMS / name).is_file():
+            continue
+        seen.add(name)
+        tree = ast.parse((PROGRAMS / name).read_text(errors="replace"))
+        for node in ast.walk(tree):
+            mods = []
+            if isinstance(node, ast.Import):
+                mods = [a.name for a in node.names]
+            elif isinstance(node, ast.ImportFrom) and node.module and \
+                    node.level == 0:
+                mods = [node.module]
+            for m in mods:
+                cand = f"{m.split('.')[0]}.py"
+                if (PROGRAMS / cand).is_file():
+                    queue.append(cand)
+    return seen
+
+
 def _mutant(tmp_path: Path, filename: str, old: str, new: str) -> Path:
     """A scratch copy of the programs tree with ONE guard broken.
 
@@ -1073,8 +1100,13 @@ def _mutant(tmp_path: Path, filename: str, old: str, new: str) -> Path:
     """
     dst = tmp_path / "mutant"
     dst.mkdir(exist_ok=True)
-    for f in ("_pad_ring.py", "pad_ring_gen.py", "pad_ring_check.py",
-              "_atomic_artefact.py"):
+    # WHAT TO COPY IS DECIDED BY WHAT THE PROGRAMS IMPORT, not by a list.
+    # The list this used to carry was four names, and it went stale the first
+    # time `pad_ring_gen` grew a fifth local import: the mutant then died of
+    # `ModuleNotFoundError` and the control asserted `returncode == 0`, so a
+    # test about a load-bearing refusal failed for a reason that had nothing
+    # to do with the refusal. The closure is walked from the entry points.
+    for f in _local_import_closure("pad_ring_gen.py", "pad_ring_check.py"):
         shutil.copy2(PROGRAMS / f, dst / f)
     text = (dst / filename).read_text()
     assert old in text, f"mutation site not found in {filename}"

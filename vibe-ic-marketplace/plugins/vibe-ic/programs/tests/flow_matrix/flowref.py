@@ -407,6 +407,27 @@ def declared_programs(step_id: StepId) -> Tuple[str, ...]:
     return tuple(step_by_id(step_id).get("programs") or ())
 
 
+def program_output_programs(step_id: StepId) -> Tuple[str, ...]:
+    """Program basenames the step declares as the WRITERS of its outputs.
+
+    `program_outputs:` arrived with `867f807a77` and carries
+    ``{program, path, verdict_field}`` rows. It is NOT a dispatch channel —
+    `flow_compliance_check._collect_program_output_records` reads the declared
+    record "without executing a gate" — so it never answers "does anything run
+    this?". What it DOES answer is which program this step says produces the
+    file its gate checks, and that is the association a source-level scan
+    needs when the gate clause naming the program was replaced by a
+    `files_exist` clause over the file it writes.
+    """
+    rows = step_by_id(step_id).get("program_outputs") or ()
+    seen: List[str] = []
+    for row in rows:
+        name = row.get("program") if isinstance(row, dict) else None
+        if name and name not in seen:
+            seen.append(name)
+    return tuple(seen)
+
+
 def declared_skills(step_id: StepId) -> Tuple[str, ...]:
     return tuple(step_by_id(step_id).get("skills") or ())
 
