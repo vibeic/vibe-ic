@@ -845,7 +845,21 @@ def _self_skip_project(tmp_path: Path) -> Path:
         # defer; the flag below is the registered one bound to this fixture's
         # `phase3/stage3/sim_postlayout/*` outputs, so this test exercises the
         # disclosure contract rather than a gap that no longer exists.
-        "capability_flag": "cap:sdf_gatelevel_tb_port_contract",
+        #
+        # AND THE SENTENCE ABOVE WENT FALSE WITHOUT ANYONE NOTICING. It named
+        # `cap:sdf_gatelevel_tb_port_contract`, which a74480e935 (#1967)
+        # RENAMED to `cap:sdf_gatelevel_simulator_toolchain` — it updated
+        # `test_capability_gap_flag_registry.py` and not this fixture. An
+        # unregistered flag cannot defer anything, so the marker was refused
+        # and the step fell to MISSING while the comment still claimed the flag
+        # was "the registered one". The name is corrected here and so is the
+        # claim, because a stale comment is how the next reader re-treads this.
+        #
+        # STILL BOUND TO THESE EXACT OUTPUTS, checked and not assumed:
+        # `_DECLARED_CAPABILITY_GAP_FLAGS["cap:sdf_gatelevel_simulator_toolchain"]`
+        # is ("phase3/stage3/sim_postlayout/results.log",
+        #     "phase3/stage3/sim_postlayout/pass.flag") — the two below.
+        "capability_flag": "cap:sdf_gatelevel_simulator_toolchain",
         "skips_required_output": [
             "phase3/stage3/sim_postlayout/results.log",
             "phase3/stage3/sim_postlayout/pass.flag"],

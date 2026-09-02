@@ -403,8 +403,36 @@ def resolve_script(project: Path, explicit: Optional[str],
         _decl_src = f"{_DECL_SOURCE}.{_DECL_SCRIPT}"
         if os.path.isabs(decl_script):
             return decl_script, _decl_src, tried
-        _root = pdk_root or os.environ.get("PDK_ROOT")
-        _name = pdk or os.environ.get("PDK")
+        # THE DESIGN'S OWN PDK, NEVER THE CONTAINER'S (G17/C9).
+        #
+        # This used to read `pdk_root or os.environ.get("PDK_ROOT")` and
+        # `pdk or os.environ.get("PDK")`. When a caller supplied neither, the
+        # DECLARATION was silently joined against whatever PDK the execution
+        # environment happened to export — and the environment is not a
+        # statement about this design.
+        #
+        # MEASURED in the pinned runner image
+        # (ghcr.io/vibeic/vibeic-eda@sha256:66c33ff2…): it exports
+        # `PDK_ROOT=/foss/pdks` and `PDK=ihp-sg13g2`, and
+        # `/foss/pdks/ihp-sg13g2/libs.tech/klayout/tech/scripts/sealring.py`
+        # EXISTS. So a design declaring a relative seal-ring script resolved to
+        # ANOTHER FOUNDRY'S sealring.py, reported as
+        # "(joined to $PDK_ROOT/$PDK)" — a confident answer about a file the
+        # design never named. That is the same defect class as `_magicrc_for`
+        # choosing a technology in alphabetical order.
+        #
+        # THE PROBE PATH BELOW IS UNTOUCHED. Step 5 — the fall-through when the
+        # design declares NOTHING — still consults the environment, because
+        # there the environment is the only thing that has spoken.
+        # `test_CONTROL_an_unanswered_field_still_falls_through_to_the_pdk_probe`
+        # pins that arm and it must stay byte-identical.
+        #
+        # AND NOTHING IS NARROWED ABOUT WHAT COUNTS AS FOUND: a declared script
+        # that resolves in neither form still returns unchanged and still
+        # reaches the same DISCLOSED_SKIP. What is removed is a spelling that
+        # could only ever be right by coincidence.
+        _root = pdk_root
+        _name = pdk
         if _root and _name:
             joined = f"{_root.rstrip('/')}/{_name}/{decl_script.lstrip('/')}"
             if os.path.exists(joined):

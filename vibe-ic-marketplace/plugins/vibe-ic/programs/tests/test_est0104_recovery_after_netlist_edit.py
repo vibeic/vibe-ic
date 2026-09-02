@@ -180,20 +180,140 @@ def test_the_repair_is_never_retried_without_a_reannotated_spef():
 # WIRED IN: the shipped repair loop must actually carry it
 # --------------------------------------------------------------------------
 
-def test_signoff_drv_repair_loop_recovers_instead_of_breaking_out():
-    """The loop's repair_design failure branch must try the recovery before it
-    gives up, and must still give up when the recovery did not take."""
-    tcl = p3._v1_8_100_signoff_drv_repair_tcl("/OUT")
-    i_repair = tcl.index("repair_design -max_wire_length")
+_LOOP_STUBS = """
+# --- stubs standing in for the OpenROAD/OpenDB commands the loop drives ---
+set CALLS {}
+set _prs_max /dev/null
+proc _log {c} { global CALLS; lappend CALLS $c }
+namespace eval ord { proc get_db_block {} { return BLK } }
+namespace eval rsz { proc find_max_wire_length {} { return 0 } }
+namespace eval odb { proc dbWire_destroy {w} {} }
+# The block and die-area handles are plain command names, which is how the
+# emitted `[$_sdr_blk getDefUnits]` reaches them.
+proc BLK {m args} {
+  switch -- $m {
+    getDefUnits { return 1000 }
+    getDieArea  { return DA }
+    getNets     { return {} }
+  }
+}
+proc DA {m} { return 200000 }
+proc define_process_corner {args} { _log "define_process_corner" }
+proc extract_parasitics {args} { _log "extract_parasitics" }
+proc write_spef {f} { _log "write_spef" }
+proc read_spef {f} { _log "read_spef" }
+proc report_check_types {args} {
+  # The loop counts "(VIOLATED)" lines under a kind heading. The FIRST report
+  # carries one, so the loop does not converge on pass 1 and reaches the repair
+  # branch; every later report is clean, so a successful repair CONVERGES and
+  # the run ends for the reason under test rather than by exhausting six
+  # passes on a fixture that never improves.
+  global RPT RPT_N
+  incr RPT_N
+  set fh [open $RPT w]
+  if {$RPT_N == 1} {
+    puts $fh "max slew"
+    puts $fh "  net_a (VIOLATED)"
+  }
+  close $fh
+}
+proc repair_design {args} {
+  global CALLS RD_N RD_SCRIPT
+  _log "repair_design $args"
+  incr RD_N
+  set act [lindex $RD_SCRIPT [expr {$RD_N - 1}]]
+  if {$act ne "ok"} { error $act }
+}
+proc estimate_parasitics {args} { _log "estimate_parasitics" }
+proc global_route {args} { _log "global_route" }
+proc detailed_route {args} { _log "detailed_route $args" }
+proc repair_timing {args} { _log "repair_timing" }
+proc detailed_placement {args} { _log "detailed_placement" }
+proc check_placement {args} { return 0 }
+"""
+
+
+def _drive_loop(tmpdir, rd_script, spef_exists=True):
+    """Execute the emitted sign-off DRV repair loop under tclsh.
+
+    `rd_script` is what successive `repair_design` calls do: "ok", or an error
+    string. The OpenROAD commands are stubbed, so what is measured is which
+    branch runs, in which order, and what the caller is told — the method this
+    module's own docstring declares and its other tests already use."""
+    out = str(tmpdir)
+    if spef_exists:
+        open(os.path.join(out, "sdr_pass.spef"), "w").write("")
+    tcl = p3._v1_8_100_signoff_drv_repair_tcl(out)
+    # EACH ACTION IS ONE TCL LIST ELEMENT. Joining them with spaces made
+    # `set RD_SCRIPT {EST-0104 parasitics are stale ok}` a FIVE-element list, so
+    # `lindex` handed the second call the word "parasitics" and the arm under
+    # test never ran. Braced per element, the list is what it says it is.
+    script = " ".join("{%s}" % a for a in rd_script)
+    head = _LOOP_STUBS + "\nset RPT %s/sdr_drv.rpt\nset RPT_N 0\nset RD_N 0\nset RD_SCRIPT {%s}\n" % (
+        out, script)
+    return _run_tcl(head + tcl)
+
+
+def test_signoff_drv_repair_loop_recovers_instead_of_breaking_out(tmp_path):
+    """The loop's repair_design failure branch tries the recovery before it
+    gives up, and still gives up when the recovery did not take.
+
+    DRIVEN, NOT READ. This test used to assert two exact source literals —
+    `'SDR_REPAIR_NONFATAL: $_sdr_rd"; break'` and
+    `'if {!$_sdr_est_rec} {{ puts "SDR_REPAIR_NONFATAL'` — and both disappeared
+    when the block was reflowed over several lines and, in the same change, the
+    give-up became `set _sdr_stop 1` instead of `break`. `tcl.index(...)` then
+    raised ValueError. The ORDER and the CONDITIONALITY it named were intact
+    the whole time: the assertions were about whitespace.
+
+    Re-fitting the literals would re-arm the same trap for the next reflow, and
+    worse, it would leave a test that cannot tell a control-flow change from a
+    formatting one — `break` becoming `set _sdr_stop 1` is exactly that shape.
+    So the fragment is executed with the OpenROAD commands stubbed and the
+    printed sequence is the evidence."""
+    out = _drive_loop(tmp_path, ["EST-0104 parasitics are stale", "ok"])
+    order = [ln for ln in out.splitlines()
+             if ln.startswith(("SDR_DRV_PASS", "SDR_EST0104", "SDR_REPAIR_NONFATAL",
+                               "SDR_STOPPED_AFTER_PARTIAL_REPAIR", "SDR_DONE"))]
+    assert "SDR_EST0104_DETECTED" in out, out
+    assert "SDR_EST0104_RECOVERED" in out, out
+    # the give-up is conditional on the recovery having failed, so it must NOT
+    # fire on the arm where the recovery took
+    assert "SDR_REPAIR_NONFATAL" not in out, order
+    assert "SDR_STOPPED_AFTER_PARTIAL_REPAIR" not in out, order
+    # …and the repair is attempted BEFORE the detection, which is before any
+    # give-up could be printed at all
+    assert out.index("SDR_DRV_PASS1_BEFORE") < out.index("SDR_EST0104_DETECTED"), order
+
+
+def test_the_retry_reissues_the_same_command_margins_included(tmp_path):
+    """The recovery's retry is the SAME repair, not a weaker one."""
+    out = _drive_loop(tmp_path, ["EST-0104 parasitics are stale", "ok"])
+    assert "SDR_EST0104_RECOVERED" in out, out
+    tcl = p3._v1_8_100_signoff_drv_repair_tcl(str(tmp_path))
     i_detect = tcl.index("SDR_EST0104_DETECTED")
-    i_giveup = tcl.index('SDR_REPAIR_NONFATAL: $_sdr_rd"; break')
-    assert i_repair < i_detect < i_giveup, (i_repair, i_detect, i_giveup)
-    # the give-up is now conditional on the recovery having failed
-    assert "if {!$_sdr_est_rec} { puts \"SDR_REPAIR_NONFATAL" in tcl
-    # and the retry re-issues the SAME command, margins included
-    head = tcl[i_detect:i_giveup]
-    assert "repair_design -max_wire_length $_sdr_mwl" in head
-    assert "-slew_margin" in head and "-cap_margin" in head
+    i_recover = tcl.index("SDR_EST0104_RECOVERED")
+    retry = tcl[i_detect:i_recover]
+    assert "repair_design -max_wire_length $_sdr_mwl" in retry, retry
+    assert "-slew_margin" in retry and "-cap_margin" in retry, retry
+
+
+def test_the_give_up_still_terminates_the_loop(tmp_path):
+    """THE HALF THE OLD LITERAL WAS PINNING, AND THE ONE THAT ACTUALLY MATTERS.
+
+    The give-up stopped being `break` and became `set _sdr_stop 1`. That is a
+    control-flow change, and accepting it on the strength of "the words moved"
+    would be exactly the absorption this rewrite is supposed to prevent. So it
+    is measured: with the recovery's retry ALSO failing, the loop must announce
+    the give-up and then STOP — one pass, not six."""
+    out = _drive_loop(tmp_path, ["EST-0104 parasitics are stale",
+                                 "EST-0104 still stale", "ok", "ok", "ok", "ok"])
+    assert "SDR_EST0104_RETRY_NONFATAL" in out, out
+    assert "SDR_REPAIR_NONFATAL" in out, out
+    assert "SDR_STOPPED_AFTER_PARTIAL_REPAIR" in out, out
+    passes = [ln for ln in out.splitlines() if ln.startswith("SDR_DRV_PASS")]
+    assert len(passes) == 1, passes
+    assert "SDR_DONE" in out, out
 
 
 # --------------------------------------------------------------------------

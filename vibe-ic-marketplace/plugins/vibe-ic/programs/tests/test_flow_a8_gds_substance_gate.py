@@ -203,12 +203,73 @@ def test_outline_check_rejects_the_same_artefact(tmp_path):
     assert "A8_GDS_NO_GEOMETRY" in (cp.stdout + cp.stderr)
 
 
-def test_a8_all_of_fails_when_either_member_fails(tmp_path):
-    """Both members run on the same project; the step fails if either does."""
-    project = _project(tmp_path, gds=_noise())
-    rcs = [_run(_PROGRAMS / f"{c.split()[0]}.py", project).returncode
-           for c in _a8_gate_commands()]
-    assert all(rc != 0 for rc in rcs), rcs
+def _members_that_read_the_gds(tmp_path) -> list:
+    """The A8 members whose verdict DEPENDS ON THE GDS BYTES, derived by
+    running each one twice over projects that differ in nothing else.
+
+    THE POPULATION IS BEHAVIOURAL ON PURPOSE, and the test this replaces is why.
+    It asserted that EVERY member of A8's `all_of` refuses a noise `.gds`, which
+    was true when A8 had two members and both were GDS-substance checks. A8 has
+    since grown to four, and the two new ones measure other properties —
+    MEASURED on a noise fixture: `analog_macro_rtl_interface_check` rc 2
+    (VACUOUS: nothing could be compared) and `analog_topology_behaviour_check`
+    rc 0 (PASS: no block states a behavioural claim). Neither is a defect; both
+    are correct answers to questions that are not about GDS substance.
+
+    A HAND-WRITTEN NAME LIST WOULD BE THE SAME MISTAKE ONE VERSION LATER: it is
+    blind to the next member, which is exactly how the assertion above expired.
+    So membership is decided by what a member READS — flip the GDS bytes,
+    holding everything else identical, and keep the members whose verdict
+    moves. A member that answers the same thing to a real macro and to 500
+    bytes of noise is not reading the GDS, whatever it is called."""
+    real = _project(tmp_path / "real", gds=_real_gds(100.0, 100.0))
+    noise = _project(tmp_path / "noise", gds=_noise())
+    out = []
+    for cmd in _a8_gate_commands():
+        prog = _PROGRAMS / f"{cmd.split()[0]}.py"
+        if _run(prog, real).returncode != _run(prog, noise).returncode:
+            out.append(prog)
+    return out
+
+
+def test_a8_all_of_fails_when_a_gds_substance_member_fails(tmp_path):
+    """Every member whose subject IS the GDS refuses 500 bytes of noise, and
+    `all_of` makes any one of them enough to fail the step.
+
+    TWO CLAIMS, AND NEITHER IS `any(...)`. Weakening to "at least one member
+    refuses" would pass even if BOTH GDS members had degraded to rc 0, because
+    a non-GDS member returning rc 2 would carry it. So the population is
+    identified first, by behaviour, and then EVERY member of it must refuse."""
+    members = _members_that_read_the_gds(tmp_path)
+    # A FLOOR, BECAUSE THE POPULATION IS THE THING A DEGRADED MEMBER LEAVES.
+    # A member that stopped reading the GDS — say it degraded to rc 0 on every
+    # input — would simply drop OUT of the behavioural population above, and
+    # "every remaining member refuses noise" would still be true. Measured on
+    # this tree, two members' verdicts move with the GDS bytes
+    # (`analog_hardmacro_check`, `analog_lef_gds_outline_check`), so two is the
+    # floor. It is a COUNT derived from behaviour, not a list of names: adding
+    # a GDS-reading member raises it, and one going blind drops below it and
+    # reddens here rather than quietly narrowing what A8 checks.
+    assert len(members) >= 2, (
+        f"only {[p.name for p in members]} still answer differently to a real "
+        f"macro and to 500 bytes of noise; A8 had two such members and a "
+        f"member that stopped reading the GDS leaves this population instead "
+        f"of failing in it")
+    project = _project(tmp_path / "subject", gds=_noise())
+    rcs = {p.name: _run(p, project).returncode for p in members}
+    assert all(rc != 0 for rc in rcs.values()), rcs
+
+
+def test_the_all_of_conjunction_is_what_makes_one_member_enough(tmp_path):
+    """The second half, stated separately because it is a different claim: A8
+    is declared `all_of`, so a single refusing member fails the step. Read from
+    the flow definition rather than assumed from the word in the test name."""
+    doc = yaml.safe_load(FLOW.read_text())
+    step = next(st for st in doc.get("steps", []) if str(st.get("id")) == "A8")
+    gate = step.get("gate") or {}
+    assert "all_of" in gate, sorted(gate)
+    assert "any_of" not in gate, sorted(gate)
+    assert len(gate["all_of"]) >= len(_a8_gate_commands()) >= 2, gate["all_of"]
 
 
 def test_outline_check_catches_a_lying_lef_outline(tmp_path):

@@ -85,6 +85,52 @@ def test_NEGATIVE_the_join_never_invents_a_root(tmp_path):
     assert script == _REL, script
 
 
+def test_a_declared_script_is_never_joined_to_the_CONTAINERS_pdk(tmp_path, monkeypatch):
+    """The design declares the script; the container declares nothing about it.
+
+    THE ARM ABOVE IS NOT ENOUGH ON ITS OWN, and that is why this one exists.
+    `test_NEGATIVE_the_join_never_invents_a_root` passes on any host where
+    `PDK_ROOT`/`PDK` happen to be unset — which is most of them — so it could
+    only ever catch this defect by accident of where it ran. Here the
+    environment is set ON PURPOSE, to a PDK that is NOT the one the design
+    declared, and the assertion is about what the resolver does with it.
+
+    MEASURED in the pinned runner image
+    (ghcr.io/vibeic/vibeic-eda@sha256:66c33ff2…): it exports
+    `PDK_ROOT=/foss/pdks` and `PDK=ihp-sg13g2`, and
+    `/foss/pdks/ihp-sg13g2/libs.tech/klayout/tech/scripts/sealring.py` exists.
+    Before the fix a gf180 design's declared relative script resolved to that
+    IHP file, sourced "(joined to $PDK_ROOT/$PDK)".
+
+    The PDK planted here is synthesised and named for nothing real: what is
+    under test is that a root the DESIGN did not supply is not consulted, not
+    any particular foundry."""
+    foreign = tmp_path / "container_pdks"
+    name = "some_other_process"
+    real = foreign / name / _REL
+    real.parent.mkdir(parents=True)
+    real.write_text("# the container's sealring, not this design's\n")
+    monkeypatch.setenv("PDK_ROOT", str(foreign))
+    monkeypatch.setenv("PDK", name)
+    script, source, _ = G.resolve_script(
+        tmp_path, None, None, None, {"seal_ring_script": _REL})
+    assert script == _REL, (script, source)
+    assert str(foreign) not in script, (script, source)
+    assert "joined" not in source, source
+
+
+def test_CONTROL_the_probe_path_still_reads_the_environment(tmp_path, monkeypatch):
+    """The half that must NOT change. When the design declares nothing, the
+    environment is the only thing that has spoken, and the probe still listens
+    to it — removing that would break the arm that passed before the
+    declaration step existed."""
+    root, name, real = _pdk(tmp_path)
+    monkeypatch.setenv("PDK_ROOT", str(root))
+    monkeypatch.setenv("PDK", name)
+    script, source, _ = G.resolve_script(tmp_path, None, None, None, {})
+    assert script == str(real), (script, source)
+
+
 def test_CONTROL_an_unanswered_field_still_falls_through_to_the_pdk_probe(tmp_path):
     """The behaviour that WORKED must be unchanged — this is the arm that was
     passing before the declaration step existed."""
