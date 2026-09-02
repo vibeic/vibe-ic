@@ -246,10 +246,32 @@ def verilate_tb_and_run(rtl_files: List[str], tb_path: str, build_dir: str,
     Path(build_dir).mkdir(parents=True, exist_ok=True)
     Path(run_dir).mkdir(parents=True, exist_ok=True)
 
+    # INCLUDE PATH — the TB's directory AND every directory the RTL comes
+    # from. Passing a file to the compiler does not make its own directory
+    # searchable for that file's `` `include ``s.
+    #
+    # MEASURED (opentitan_aes, v1.15.80): the coverage build died with
+    #   %Error: .../rtl/lc_ctrl_pkg.sv:6:10: Cannot find include file:
+    #           'prim_assert.sv'
+    #   ... Looked in: .../sim_full_stack/  .../sim/cov_build/  (and bare names)
+    # while `prim_assert.sv` was staged RIGHT THERE in .../phase2/stage1/rtl/
+    # next to the file including it. Only `-I{tb.parent}` was passed, so the
+    # one directory guaranteed to hold the sources' own headers was the one
+    # directory never searched. coverage_verilator.json was therefore not
+    # produced, and the two checks that read it went rc=2 EXECUTION_ERROR —
+    # a resource failure reported as if the design had no coverage.
+    #
+    # Order-stable and de-duplicated: the TB dir keeps its historical first
+    # position, and a project whose TB and RTL share a directory still gets a
+    # single `-I`. chip-AGNOSTIC: directory arithmetic only.
+    _inc_dirs = []
+    for _d in [tb.parent] + [Path(f).parent for f in rtl_files]:
+        if _d not in _inc_dirs:
+            _inc_dirs.append(_d)
     vcmd = ["verilator", "--binary", "--timing",
             *COVERAGE_INSTRUMENTATION_FLAGS,
             "-Wno-fatal", "-Wno-lint",
-            f"-I{tb.parent}",
+            *[f"-I{d}" for d in _inc_dirs],
             "--top-module", top,
             "-Mdir", str(build_dir)]
     if build_jobs > 0:

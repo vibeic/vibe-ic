@@ -78,22 +78,71 @@ def _waiver_track_class_label(xml: str) -> str:
     return f"{track} no-oracle class"
 
 
-def _list_denominator(path: Path, keys: "tuple[str, ...]") -> int:
-    """Count a declared list without inventing a denominator on bad input."""
+# A PROCESS MILESTONE IS NOT AN EXECUTABLE TEST.
+#
+# MEASURED, opentitan_aes at v1.15.80: this gate reported "103 declared L10
+# row(s), 0 functional tests ran" and blocked Step 4. All 103 rows carried
+# `kind: "verification_checklist"`, harvested by Phase 1 from the vendor's DV
+# CHECKLIST — rows named `spec_complete`, `csr_defined`, `clkrst_connected`,
+# whose stimulus is the literal string "DV checklist item SPEC_COMPLETE — Done"
+# and whose expected value is "DV checklist item satisfied (Done)".
+#
+# Nothing can drive those. There is no stimulus and no expected VALUE in any
+# circuit sense; they record that a project reached a milestone. The unit-TB
+# producer was RIGHT to place 0 of 103 in its scaffold scope — the defect was
+# never that the tests do not run, it is that a project-management checklist
+# was counted as a test-case population, so the gate demanded execution of 103
+# things that can never be executed and reported a shortfall that was
+# arithmetic, not evidence.
+#
+# They are still REPORTED, under their own key, so a reader sees what the input
+# declared and why it is not in the executable denominator. This NARROWS a
+# blocking denominator, so the controls below hide a real functional row inside
+# a checklist-dominated L10 and prove it is still counted and still demanded.
+#
+# chip-AGNOSTIC: a declared `kind`, not a chip, vendor or document literal.
+_NON_EXECUTABLE_TEST_KINDS = frozenset({"verification_checklist"})
+
+
+def _split_executable(rows: list) -> "tuple[list, list]":
+    """(executable, process_only) over declared test rows."""
+    executable, process_only = [], []
+    for row in rows:
+        kind = (row.get("kind") or row.get("type") or "") if isinstance(
+            row, dict) else ""
+        (process_only if str(kind).strip().lower()
+         in _NON_EXECUTABLE_TEST_KINDS else executable).append(row)
+    return executable, process_only
+
+
+def _declared_rows(path: Path, keys: "tuple[str, ...]") -> list:
+    """The declared list itself, without inventing one on bad input."""
     try:
         obj = json.loads(path.read_text(errors="replace"))
     except (OSError, ValueError):
-        return 0
+        return []
     if isinstance(obj, list):
-        return len(obj)
+        return obj
     if not isinstance(obj, dict):
-        return 0
+        return []
     fields = obj.get("fields") if isinstance(obj.get("fields"), dict) else obj
     for key in keys:
         value = fields.get(key)
         if isinstance(value, list):
-            return len(value)
-    return 0
+            return value
+    return []
+
+
+def _list_denominator(path: Path, keys: "tuple[str, ...]") -> int:
+    """Count the EXECUTABLE declared rows. See `_NON_EXECUTABLE_TEST_KINDS`."""
+    executable, _process = _split_executable(_declared_rows(path, keys))
+    return len(executable)
+
+
+def _process_only_count(path: Path, keys: "tuple[str, ...]") -> int:
+    """How many declared rows were excluded as process milestones."""
+    _executable, process = _split_executable(_declared_rows(path, keys))
+    return len(process)
 
 
 def _evidence_summary(project: Path) -> dict:
@@ -175,6 +224,13 @@ def _evidence_summary(project: Path) -> dict:
     return {
         "declared_denominator": {
             "l10_test_cases": l10,
+            "l10_process_only_rows_excluded": _process_only_count(
+                gd / "L10_TEST_CASES.json", ("test_cases", "cases", "vectors")),
+            "l10_process_only_note": (
+                "rows whose declared kind is a process milestone "
+                f"({', '.join(sorted(_NON_EXECUTABLE_TEST_KINDS))}) are "
+                "reported but not demanded: they carry no stimulus a "
+                "testbench can drive"),
             "l12_behavioral_sequences": l12,
             "total_declared_rows": l10 + l12,
         },
