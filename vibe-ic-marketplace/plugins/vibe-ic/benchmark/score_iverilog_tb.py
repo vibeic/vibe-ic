@@ -43,7 +43,7 @@ Honesty: this scorer ONLY touches the hidden testbench/ref/golden at scoring tim
 The generation step must be blind (per the skill's absolute-blindness rule).
 """
 from __future__ import annotations
-import argparse, atexit, json, shlex, subprocess, tempfile, os, re, shutil, sys
+import argparse, atexit, hashlib, json, shlex, subprocess, tempfile, os, re, shutil, sys
 from pathlib import Path
 from typing import List, Optional
 
@@ -143,6 +143,108 @@ def _power_up_fixed(sample: Path, td: str) -> str:
 # never reaches the regex at all. Its result is a COUNTED FAIL (an attempted,
 # wrong answer), never a SKIP: taking it out of the denominator would pay the
 # forger exactly what the forgery was for.
+
+
+# ---------------------------------------------------------------------------
+# A PUBLISHED RATE MUST NAME THE ARTEFACTS IT STANDS ON
+#
+# MEASURED on 79d3ebbe8, in `benchmark-data/evaluation/verilogeval_v2/`:
+#
+#     pass_at_1.json   last written 4c21c22c0 (2026-07-22, clean-room v1.4.81)
+#                      153/156 = 98.08%
+#     samples/         last written 86cacb4b6 (v1.0.0 initial public release)
+#     this scorer, re-run over those samples      150/156 = 96.15%
+#
+# The record and the sample set in ONE directory describe DIFFERENT runs, and
+# nothing in either says so. The commit that wrote the record says why, plainly:
+# "Committed artifacts follow the existing convention: summary only
+# (pass_at_1.json / RESULT.md / lessons.md), not the ~27 MB work tree." That is a
+# deliberate, reasonable convention. What it leaves behind is a directory that
+# LOOKS re-scorable and is not.
+#
+# THE COST IS NOT HYPOTHETICAL. Re-running the ORGANIC-20260605 corpus sweep
+# against that directory reports the Shape-C emit-blocking rules firing on three
+# samples the record beside them calls PASS -- `fsm-output-style-mismatch` on
+# Prob089, `vector-self-shift-fold` on Prob092, `hysteresis-flag-polarity-
+# mismatch` on Prob149. Read as a corpus result that is "three rules have begun
+# false-firing on legitimate designs", and the remedy that follows from it is to
+# NARROW three rules that are in fact correct: this scorer refuses all three
+# samples. The sweep was measuring a stale corpus, and there was no way to tell.
+#
+# So the scorer now records WHAT IT SCORED (a digest per sample file, plus a set
+# digest and a count), and when it replaces an existing record it says how that
+# record differs from this one. Neither is a refusal -- a re-score legitimately
+# moves when the samples are new. What must not happen is for it to move
+# invisibly.
+# ---------------------------------------------------------------------------
+
+def samples_provenance(samples: Path) -> dict:
+    """Digest every candidate RTL file in `samples/`, shape-agnostically.
+
+    Both shapes read their candidates out of this one directory, so the set is
+    the same question in both and needs no per-shape resolution. The per-file
+    map is not decoration: a set digest alone can say the corpus moved and can
+    never say WHICH file moved, and that is the sentence a reader needs.
+    """
+    files = {}
+    if samples.is_dir():
+        for f in sorted(samples.rglob("*")):
+            if f.is_file() and f.suffix in (".v", ".sv"):
+                try:
+                    files[str(f.relative_to(samples))] = hashlib.sha256(
+                        f.read_bytes()).hexdigest()
+                except OSError:
+                    continue
+    joined = "\n".join(f"{k} {v}" for k, v in sorted(files.items()))
+    return {"dir": "samples", "count": len(files),
+            "set_sha256": hashlib.sha256(joined.encode()).hexdigest(),
+            "files": files}
+
+
+def previous_record_delta(prev: Optional[dict], results: list, ident: str,
+                          prov: dict) -> Optional[dict]:
+    """How the record about to be overwritten differs from this one.
+
+    `samples_digest_matches` is TRISTATE and the third state is the whole point:
+    ``None`` means the previous record does not name the samples it was computed
+    from, so whether it describes THESE samples cannot be decided -- which is the
+    state every record written before this change is in, and the state that let a
+    stale corpus read as a fresh one.
+    """
+    if not isinstance(prev, dict):
+        return None
+    prev_rows = prev.get("results")
+    if not isinstance(prev_rows, list):
+        return None
+    def _id(row):
+        return str(row.get(ident) or row.get("problem")
+                   or row.get("design") or "").split("/")[-1]
+    before = {_id(r): str(r.get("verdict", "")) for r in prev_rows if _id(r)}
+    now = {_id(r): str(r.get("verdict", "")) for r in results if _id(r)}
+    moved = [{"id": k, "from": before[k], "to": now[k]}
+             for k in sorted(set(before) & set(now)) if before[k] != now[k]]
+    prev_prov = prev.get("scored_samples")
+    matches = None
+    if isinstance(prev_prov, dict) and prev_prov.get("set_sha256"):
+        matches = bool(prev_prov["set_sha256"] == prov.get("set_sha256"))
+    return {
+        "passed_before": prev.get("passed"),
+        "passed_now": sum(1 for r in results if r.get("verdict") == "PASS"),
+        "total_before": prev.get("total"),
+        "verdict_moved": moved,
+        "only_in_previous": sorted(set(before) - set(now)),
+        "only_in_this_run": sorted(set(now) - set(before)),
+        "samples_digest_matches": matches,
+        "provenance_undecidable": matches is None,
+        "note": (
+            "the record being replaced does not name the samples it was computed "
+            "from, so whether it describes THESE samples cannot be decided; a "
+            "moved verdict below may be a real change or a stale corpus"
+            if matches is None else
+            ("the previous record was computed from THIS sample set"
+             if matches else
+             "the previous record was computed from a DIFFERENT sample set")),
+    }
 
 
 def harness_verdict_forgery(sample_path, args: dict) -> Optional[dict]:
@@ -2339,6 +2441,18 @@ def main():
             "denominator, so the headline would count it as not-measured rather "
             "than not-passed. Offending ids: "
             f"{census['accounting_violations']}; census={census}")
+    # Read the record we are about to replace BEFORE writing, and digest the
+    # samples we actually scored. Both are pure reads.
+    provenance = samples_provenance(samples)
+    _prev_path = run / "pass_at_1.json"
+    _prev = None
+    if _prev_path.is_file():
+        try:
+            _prev = json.loads(_prev_path.read_text())
+        except (OSError, ValueError):
+            _prev = None
+    delta = previous_record_delta(_prev, results, ident, provenance)
+
     summary = {
         "benchmark": entry["title"],
         "shape": shape,
@@ -2374,9 +2488,34 @@ def main():
         "attempt_census": census,
         "harness_verdict_forgery_count": n_forged,
         "harness_verdict_forgery_problems": forged_ids,
+        # WHAT THIS RATE STANDS ON. Without it a record and a sample set can sit
+        # in one directory describing different runs and nothing can tell.
+        "scored_samples": provenance,
         "results": results,
     }
+    if delta is not None:
+        summary["previous_record"] = delta
     (run / "pass_at_1.json").write_text(json.dumps(summary, indent=2) + "\n")
+    if delta is not None and (delta["verdict_moved"] or delta["only_in_previous"]
+                              or delta["only_in_this_run"]
+                              or delta["samples_digest_matches"] is False):
+        # LOUD, on stderr, naming every problem that moved. A rate that changed
+        # under a reader who did not ask for a change is the signal, and a diff
+        # nobody sees until they open the JSON is the same silence one tool out.
+        print(f"# RECORD REPLACED — this run does not agree with the "
+              f"pass_at_1.json it overwrote", file=sys.stderr)
+        print(f"#   passed: {delta['passed_before']} -> {delta['passed_now']}"
+              f"   (previous total {delta['total_before']}, this run {n})",
+              file=sys.stderr)
+        print(f"#   samples provenance: {delta['note']}", file=sys.stderr)
+        for mv in delta["verdict_moved"]:
+            print(f"#   {mv['id']}: {mv['from']} -> {mv['to']}", file=sys.stderr)
+        for pid in delta["only_in_previous"]:
+            print(f"#   {pid}: in the previous record, not in this run",
+                  file=sys.stderr)
+        for pid in delta["only_in_this_run"]:
+            print(f"#   {pid}: in this run, not in the previous record",
+                  file=sys.stderr)
     if nskip:
         print(f"{entry['title']}  pass@1 = {npass}/{n_eff} = {summary['pass_at_1_pct']}% "
               f"({nskip} scorer-gap excluded; raw {npass}/{n} = "
