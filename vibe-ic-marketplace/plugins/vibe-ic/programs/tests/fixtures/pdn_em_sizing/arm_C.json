@@ -1,0 +1,23 @@
+{
+  "program": "phase3_one_shot_runner._pdn_em_width_floor",
+  "sizing_basis": "measured_max_segment",
+  "i_drive_A": 0.012164,
+  "safety_factor": 2.0,
+  "max_segment_current_A": 0.006082,
+  "max_segment_current_source": "reports/phase3/em.json max_segment_current_A",
+  "segments_analysed": 29137,
+  "bound_over_measured_x": 1.0013,
+  "i_total_A": 0.01218,
+  "margin": 0.1,
+  "per_layer": {
+    "metal4": {
+      "orig_name": "Metal4",
+      "jmax_A_per_um": 0.00067,
+      "w_bound_um": 20.172470978441126,
+      "w_em_um": 20.18,
+      "w_from_i_total_bound_um": 20.199004975124378,
+      "w_from_measured_max_segment_um": 20.172470978441126
+    }
+  },
+  "_provenance": "VERBATIM subset of reports/phase3/pdn_em_sizing.json from subservient x gf180mcuD arm C, host 8HD-4, plugin tree 030b86c544, 2026-09-02. Trimmed to the sizing arithmetic; no key altered."
+}

@@ -246,6 +246,57 @@ def router_iter_counts(text: str) -> List[int]:
     return out
 
 
+#: `[INFO DRT-0194] Start detail routing.` — the marker that a NEW detail route
+#: began. It is the discriminator for whether a DRT-0701 still describes the
+#: geometry that ships (see `router_post_route_verified_count`). The flow's
+#: no-op re-routes do NOT emit it: MEASURED, the PG re-route on a design with no
+#: PG-dirty net logged DRT-0178/0036/0179 and no DRT-0194 at all, so this rule
+#: does not fire on a call that did nothing.
+RE_DRT_0194 = re.compile(r"\[INFO DRT-0194\] Start detail routing")
+
+
+def _last_0701_not_superseded(text: str, rx: "re.Pattern[str]"):
+    """The last match of `rx` — a DRT-0701 pattern — that NO later detail route
+    superseded, or None.
+
+    THE RULE LIVES HERE AND NOWHERE ELSE, and that is the point. It was written
+    once, into `router_post_route_verified_count`, and the OTHER reader of the
+    same grammar — `router_post_route_verified_pair`, which is the one
+    `_drt_reading` consults to decide whether to override the metrics JSON —
+    was left taking `[-1]`. So the flow kept a rule it had already proved it
+    needed and applied it to one of the two callers.
+
+    MEASURED (subservient x gf180mcuD, host 8HD-4, image
+    `ghcr.io/vibeic/vibeic-eda@sha256:66c33ff2e057…`, OpenROAD
+    26Q3-1472-g42cadea9df, 2026-09-02; fixture
+    `fixtures/drt_residual_types/openroad_armA_0701_two_routes_stale.txt`):
+    the last DRT-0701 read `4 violation(s) … (2 in-loop)` and TWO more
+    `Start detail routing` calls followed it. The metrics JSON — five duplicate
+    `detailedroute__route__drc_errors` keys, `0, 2, 4, 2, 2`, which `json.load`
+    correctly resolves last-wins to **2** — agreed with DRT-0702 (`2`), with the
+    last DRT-0199 (`2`) and with the router's own DRC report (2 records).
+
+    `_drt_reading` then saw `metric == in_loop` (2 == 2) and `verified != in_loop`
+    (4 != 2), took that as proof the metric was the superseded quantity, and
+    substituted **4**. `pnr` FAILed `ROUTE_DRC_METRIC_DISAGREEMENT: METRIC=4 but
+    LOG=2` — a disagreement the reader manufactured, against a metrics JSON that
+    was right, from a verification two routes stale. Nothing downstream ran: no
+    GDS, no DRC, no LVS.
+
+    Returns the match object so a caller can read whichever groups it needs.
+    """
+    if not text:
+        return None
+    last = None
+    for m in rx.finditer(text):
+        last = m
+    if last is None:
+        return None
+    if RE_DRT_0194.search(text, last.end()) is not None:
+        return None          # superseded by a later route — not this geometry
+    return last
+
+
 #: DRT-0701 prints BOTH of its numbers on one line — the verified count and,
 #: parenthesised, the in-loop count the routing loop had reported:
 #:
@@ -276,26 +327,23 @@ def router_post_route_verified_pair(text: str) -> Optional[Tuple[int, int]]:
     Returns the pair only when BOTH halves parsed. A line that names the
     verified count but not the in-loop one carries no evidence about any
     metric, so it is not a pair.
+
+    AND ONLY FOR THE ROUTE THAT SHIPS. This used to take `findall(...)[-1]` —
+    the last DRT-0701 anywhere in the log — while its sibling
+    `router_post_route_verified_count` already refused a 0701 that a later
+    `detailed_route` superseded. That asymmetry is the whole defect: this is the
+    reader `_drt_reading` consults to decide whether to OVERRIDE the metrics
+    JSON, so the stale half was the half with authority. See
+    `_last_0701_not_superseded` for the measured case — a stale `(4, 2)` beat a
+    correct metric of `2` and failed `pnr` on a manufactured disagreement.
     """
-    if not text:
+    m = _last_0701_not_superseded(text, RE_DRT_0701_PAIR)
+    if m is None:
         return None
-    ms = RE_DRT_0701_PAIR.findall(text)
-    if not ms:
-        return None
-    verified, in_loop = ms[-1]
     try:
-        return int(verified), int(in_loop)
+        return int(m.group(1)), int(m.group(2))
     except (TypeError, ValueError):
         return None
-
-
-#: `[INFO DRT-0194] Start detail routing.` — the marker that a NEW detail route
-#: began. It is the discriminator for whether a DRT-0701 still describes the
-#: geometry that ships (see `router_post_route_verified_count`). The flow's
-#: no-op re-routes do NOT emit it: MEASURED, the PG re-route on a design with no
-#: PG-dirty net logged DRT-0178/0036/0179 and no DRT-0194 at all, so this rule
-#: does not fire on a call that did nothing.
-RE_DRT_0194 = re.compile(r"\[INFO DRT-0194\] Start detail routing")
 
 
 def router_post_route_verified_count(text: str) -> Optional[int]:
@@ -340,17 +388,11 @@ def router_post_route_verified_count(text: str) -> Optional[int]:
 
     chip-AGNOSTIC: OpenROAD log grammar only.
     """
-    if not text:
+    m = _last_0701_not_superseded(text, RE_DRT_0701)
+    if m is None:
         return None
-    last = None
-    for m in RE_DRT_0701.finditer(text):
-        last = m
-    if last is None:
-        return None
-    if RE_DRT_0194.search(text, last.end()) is not None:
-        return None          # superseded by a later route — not this geometry
     try:
-        return int(last.group(1))
+        return int(m.group(1))
     except (TypeError, ValueError):
         return None
 

@@ -5134,6 +5134,65 @@ def _build_macro_pdn_grid_tcl(plan: Optional[Dict[str, Any]]) -> str:
 _EM_MEASURED_SAFETY = 2.0
 
 
+def _pdn_em_measured_subject(project: Path, rpt3: Path) -> Dict[str, Any]:
+    """Identity of the LAYOUT the EM measurement was taken on.
+
+    THE DEFECT THIS CLOSES. `pdn_em_sizing.json` published
+    `max_segment_current_A`, `segments_analysed` and the width derived from
+    them, and said nothing about WHICH routed DEF produced them. So two runs'
+    records could not be compared: a reader seeing two different widths had no
+    way to tell a non-deterministic stage from two different subjects.
+
+    MEASURED, and it is why this exists (2026-09-02, 8HD-4, subservient x
+    gf180mcuD, plugin tree 030b86c544, host load 0.47-0.75). Two arms of an
+    image A/B published Metal4 floors of 10.68 um and 20.18 um, and that 1.9x
+    was written up as "pdn_em_resize is not reproducible". It is not: openroad-
+    psm re-run on ONE fixed DEF is byte-identical every time --
+
+        subject (routed DEF)        runs  segments  max_segment_A  em CSV sha
+        arm C final  64d46d83...      8      34778     0.004061     9a0a925e28
+        arm B final  609228b9...      3      32383     0.006038     c6784d0e33
+
+    -- 11 runs over 4 distinct DEFs, ZERO within-subject variation. The spread
+    was entirely BETWEEN subjects: the two arms routed with different routers,
+    so they placed and routed differently, so their power grids carry different
+    per-segment currents. The stage was faithful; the ARTEFACT could not say so.
+
+    Recording the subject makes the difference attributable by construction:
+    same `def_sha256` and a different width would be a real defect in this
+    stage, and different `def_sha256` is simply two designs.
+
+    Best-effort and never fatal — a missing file yields a smaller dict, never
+    an exception, because this is disclosure and must not be able to fail a
+    sizing that is otherwise correct. chip/PDK-AGNOSTIC: file identity only.
+    """
+    out: Dict[str, Any] = {}
+    for key, path in (("em_segments_csv", rpt3 / "em_segments.csv"),
+                      ("em_json", rpt3 / "em.json")):
+        try:
+            out[key + "_sha256"] = hashlib.sha256(
+                path.read_bytes()).hexdigest()
+        except OSError:
+            pass
+    try:
+        _tcls = sorted(rpt3.glob("ir_em_*.tcl"))
+        _def: Optional[Path] = None
+        for _t in _tcls:
+            for _ln in _t.read_text(errors="ignore").splitlines():
+                if _ln.strip().startswith("read_def "):
+                    _def = Path(_ln.split(None, 1)[1].strip())
+        if _def is not None:
+            out["def_path"] = str(_def)
+            # The tcl names the path the CONTAINER saw; resolve it against the
+            # project when that path does not exist on this side of the mount.
+            _local = _def if _def.is_file() else (
+                _pl.pnr_dir(project) / _def.name)
+            out["def_sha256"] = hashlib.sha256(_local.read_bytes()).hexdigest()
+    except (OSError, IndexError, ValueError):
+        pass
+    return out
+
+
 def _pdn_em_width_floor(project: Path, pdk: "PdkConfig",
                         container: Optional[str] = None
                         ) -> Optional[Dict[str, Any]]:
@@ -5237,6 +5296,7 @@ def _pdn_em_width_floor(project: Path, pdk: "PdkConfig",
     i_meas: Optional[float] = None
     i_meas_src: Optional[str] = None
     i_meas_segments: Optional[int] = None
+    i_meas_subject: Dict[str, Any] = {}
     try:
         _em = json.loads((rpt3 / "em.json").read_text())
         _v = _em.get("max_segment_current_A")
@@ -5246,6 +5306,7 @@ def _pdn_em_width_floor(project: Path, pdk: "PdkConfig",
             _s = _em.get("segments_analysed")
             if isinstance(_s, int):
                 i_meas_segments = _s
+            i_meas_subject = _pdn_em_measured_subject(project, rpt3)
     except Exception:
         i_meas = None
 
@@ -5347,6 +5408,10 @@ def _pdn_em_width_floor(project: Path, pdk: "PdkConfig",
         "max_segment_current_A": i_meas,
         "max_segment_current_source": i_meas_src,
         "segments_analysed": i_meas_segments,
+        # WHICH LAYOUT THIS NUMBER IS ABOUT. Without it two sizing records are
+        # not comparable and a reader cannot tell a non-deterministic stage
+        # from two different subjects — see `_pdn_em_measured_subject`.
+        "measured_subject": i_meas_subject or None,
         "bound_over_measured_x": (
             round(i_total / i_drive, 4)
             if (_measured and i_total and i_total > 0 and i_drive > 0)
