@@ -112,6 +112,9 @@ def check_block(project: Path, block: str) -> Dict:
             "measured_on": rec.get("measured_on"),
             "how": rec.get("how"),
             "arms": list(rec.get("arms") or []),
+            "subsystems_demonstrated": list(
+                rec.get("subsystems_demonstrated") or []),
+            "refuted": list(rec.get("refuted") or []),
             "diagnosis": rec.get("diagnosis"),
             "next": rec.get("next")}
 
@@ -134,12 +137,51 @@ def _print_block(r: Dict) -> None:
         print(f"      measured on: {r['measured_on']}")
     if r.get("how"):
         print(f"      how: {r['how']}")
+    # WHAT WORKS, BEFORE WHAT DOES NOT. A refusal that reports only the
+    # failure sends the next reader to re-derive every subsystem that was
+    # already measured working — which on this block is the counter, the
+    # reset, the reference, the integrators, the quantiser and the latch.
+    for w in r.get("subsystems_demonstrated") or []:
+        print(f"      demonstrated: {w}")
     for a in r.get("arms") or []:
         print(f"      arm: {a}")
+    # A HYPOTHESIS RULED OUT IS EVIDENCE TOO. Without it the next reader
+    # spends a measurement re-testing something this one already answered.
+    for x in r.get("refuted") or []:
+        print(f"      ruled out: {x}")
     if r.get("diagnosis"):
         print(f"      diagnosis: {r['diagnosis']}")
     if r.get("next"):
         print(f"      what would close it: {r['next']}")
+
+
+def _utc_now() -> str:
+    """This run's wall-clock stamp, so a stale report reads as stale."""
+    import datetime
+    return (datetime.datetime.now(datetime.timezone.utc)
+            .strftime("%Y-%m-%dT%H:%M:%SZ"))
+
+
+def _input_identity(project: Path, blocks: List[str]) -> dict:
+    """`{block: {artefact: sha256-or-ABSENT}}` for what this gate READ.
+
+    A verdict is about a tree. Naming the bytes it judged is what makes a
+    later reader able to ask "is this report about the netlist I am looking
+    at?" — the question that could not be asked in round 18.
+    """
+    import hashlib
+    out: dict = {}
+    for b in blocks:
+        bdir = project / "phase3" / "analog" / b
+        ident = {}
+        for rel in ("topology.json", f"{b}.sp", "spec.json"):
+            f = bdir / rel
+            try:
+                ident[rel] = hashlib.sha256(f.read_bytes()).hexdigest()[:16]
+            except OSError:
+                ident[rel] = "ABSENT"
+        out[b] = ident
+    return out
 
 
 def main(argv: Optional[List[str]] = None) -> int:
@@ -177,8 +219,25 @@ def main(argv: Optional[List[str]] = None) -> int:
               f"behavioural claim have it demonstrated")
         verdict, rc = "PASS", _vx.RC_PASS
     if a.json:
+        # PROVENANCE, and it is not decoration. MEASURED (u_hawaii_adc round
+        # 18): this report was written at 14:50, the round's workspace was
+        # cloned at 15:24 and the netlist it was supposed to judge at 16:12 —
+        # so the file on disk was the PREVIOUS round's, and the round-18
+        # verdict cited it as "the behaviour gate's own report ... verdict
+        # FAIL". A lane measurement and a gate verdict are different things,
+        # and a report carrying only {gate, verdict, blocks, rc} cannot tell
+        # them apart: there is nothing in it that says WHEN it was produced or
+        # WHAT it read, so a stale file is indistinguishable from this run's.
+        #
+        # The gate did not run that round (A8 waived before reaching it) and
+        # left the old file in place. Nothing here stops a gate being skipped
+        # — that is the runner's business — but a reader can now SEE it,
+        # because the report states its own age and the identity of every
+        # input it judged.
         write_json(a.json, {"gate": GATE, "verdict": verdict,
-                            "blocks": results, "rc": rc})
+                            "blocks": results, "rc": rc,
+                            "produced_at": _utc_now(),
+                            "inputs": _input_identity(project, blocks)})
     return rc
 
 

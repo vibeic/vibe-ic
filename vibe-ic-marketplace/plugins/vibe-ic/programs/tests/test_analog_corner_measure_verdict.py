@@ -58,7 +58,12 @@ def _run(monkeypatch, sim_out, sidecar, rc=0, supports=True):
     """Drive _run_ngspice with a mocked container."""
     A._JSON_MEASURE_SUPPORT.clear()
 
-    def _docker(container, cmd):
+    # ROUND 18: `_run_ngspice` now passes an explicit per-deck `timeout` —
+    # the deadline scales with the transient the deck asks for, because an
+    # incremental converter's measurement unit is one conversion window and
+    # the window is the design's declared OSR. The stub takes it and ignores
+    # it; what this module measures is the verdict logic, not the clock.
+    def _docker(container, cmd, timeout=None):
         r = types.SimpleNamespace(stdout="", returncode=0)
         if "--json-measure=/dev/null" in cmd:          # the capability probe
             r.stdout = ("" if supports else

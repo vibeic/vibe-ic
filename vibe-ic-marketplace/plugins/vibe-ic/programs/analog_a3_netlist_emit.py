@@ -140,6 +140,8 @@ import pdk_device_map as _pdm  # noqa: E402
 # The FLOOR the connectivity checker applies, read from the checker rather
 # than restated here — see `_validate_ir`.
 import analog_netlist_connectivity_check as _conncheck  # noqa: E402
+# The A1 spec-row reading rule, owned by A2 — see `spec_values`.
+import analog_a2_topology_emit as _a2  # noqa: E402
 import pdk_analog_device_params as _pdp  # noqa: E402
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -362,18 +364,17 @@ def block_voltage_domains(project: Path, entries: List[Dict[str, Any]]
 
 
 def spec_values(spec: Dict[str, Any]) -> Dict[str, float]:
-    out: Dict[str, float] = {}
-    specs = spec.get("specs")
-    if isinstance(specs, list):
-        for s in specs:
-            if not isinstance(s, dict) or not s.get("name"):
-                continue
-            for k in ("target", "typ", "value", "min", "max"):
-                v = s.get(k)
-                if isinstance(v, (int, float)) and not isinstance(v, bool):
-                    out[str(s["name"])] = float(v)
-                    break
-    return out
+    """The rows this block's declaration binds — READ BY THE FUNCTION THAT
+    OWNS THE RULE, not by a second copy of it here.
+
+    MEASURED: the copy that lived here was byte-identical to A2's when it was
+    written and then was not. A2's grew the ends of a declared range
+    (`<name>_max`), an entry started naming one, and A2 admitted the block
+    while this file reported `tper_ns needs 1000 / fclk_max, which the bound
+    spec does not supply` — so the topology emitted and its own testbench did
+    not, on one declaration read two ways.
+    """
+    return _a2.spec_row_values(spec.get("specs"))
 
 
 # ── PDK binding ───────────────────────────────────────────────────────────

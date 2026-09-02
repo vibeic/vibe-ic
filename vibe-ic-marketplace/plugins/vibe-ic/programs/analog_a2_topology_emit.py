@@ -177,6 +177,17 @@ CONSTANT_ROLES_KEY = "constant_roles"
 # `analog_topology_behaviour_check`.
 BEHAVIOUR_RECORD_KEY = "behaviour_record"
 
+#: Stage-group key: the stage count is the number of divide-by-two stages
+#: whose period reaches this bound spec row, not the row's value itself. A
+#: conversion-window counter has `count_bits_for: "osr"` where an integrator
+#: cascade has `count_from: "order"`.
+COUNT_BITS_KEY = "count_bits_for"
+
+#: Stage-group key, default True: whether this group draws a coefficient from
+#: `coefficient_sets`. A counter has no loop coefficients and must not be
+#: refused for want of a set that would mean nothing.
+COEFFICIENTS_KEY = "coefficients"
+
 # ── SPEC-BOUND ADMISSION: the keys that let a library entry REFUSE ITSELF ──
 #
 # WHY THIS EXISTS. `delta_sigma` sat in LIBRARY_GAPS under a reason that is
@@ -262,6 +273,24 @@ SAMPLING_CAP_FF_EXPR = (
 #: floor that `floor_geometry_to_pdk` had already applied.
 SAMPLING_CAP_L_EXPR = (
     "(" + SAMPLING_CAP_FF_EXPR + ") / (cap_area_ff_per_um2 * w_cap)")
+
+#: The OTA's load, in farads: the integrating and compensation capacitors,
+#: expressed against the sampling capacitor the noise budget already fixed.
+_LOAD_F_EXPR = ("(" + SAMPLING_CAP_FF_EXPR + ") * load_over_sampling_cap "
+                "/ farad_to_ff")
+#: The tail current the DRAWN bias resistor delivers, in amperes. The drawn
+#: resistor is a length of sheet; the current follows from the supply left
+#: over the mirror diode's gate voltage. Every term is either a MEASURED
+#: process constant or a stated bias condition — no number is retyped from a
+#: datasheet.
+_TAIL_I_EXPR = ("mirror_ratio_tail_to_bias * (vdd - vth_n_extracted_v "
+                "- bias_overdrive_v) / (rsheet_ohm_per_sq * r_ib_l_um "
+                "/ w_res)")
+#: How many times over the drawn bias covers the slew the declaration asks
+#: for. Below 1 the entry refuses itself by name.
+SLEW_MARGIN_EXPR = (
+    "(" + _TAIL_I_EXPR + ") * settle_periods_available "
+    "/ (fclk * hz_per_mhz) / ((" + _LOAD_F_EXPR + ") * vref)")
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -742,7 +771,11 @@ LIBRARY: Dict[str, Dict[str, Any]] = {
         # first and nothing consumed the second.
         "internal_nets": ["nbias", "vcm", "nclkb", "vint", "ndac", "ndacb",
                           "nq_p", "nq_n", "nqtail", "nsrq", "nsrqb",
-                          "nn1", "nn2", "nqb"],
+                          "nn1", "nn2", "nqb",
+                          # the conversion-window generator
+                          "nall", "nrstb",
+                          # the auto-zeroed quantiser input
+                          "nqz"],
         # Stated in the artefact so a reader is told what LEFT the boundary
         # and on whose authority, instead of finding two fewer pins.
         "boundary_notes": [
@@ -777,6 +810,45 @@ LIBRARY: Dict[str, Dict[str, Any]] = {
             # noise budget is set equal to it.
             "noise_budget_factor": 12.0,
             "farad_to_ff": 1.0e15,
+            "hz_per_mhz": 1.0e6,
+            # Miller compensation sized against the LOAD, not held at a
+            # constant. The classic starting point for a two-stage Miller
+            # amplifier is Cc about a third of the load it has to dominate.
+            "miller_fraction_of_load": 0.3,
+            # The OTA's load is its own compensation capacitor plus the
+            # integrating capacitor: (1 + miller_fraction_of_load) / coeff
+            # times the sampling capacitor. Stated as ONE constant because
+            # the bias branch is SHARED by every stage and cannot see a
+            # per-stage coefficient; `library_invariants` refuses an entry
+            # whose coefficient sets make this number too small.
+            "load_over_sampling_cap": 2.6,
+            # How much of a clock period the output has to slew a full
+            # reference step in. A quarter: the transfer happens on one
+            # phase, and half of that phase is a working margin.
+            "settle_periods_available": 0.25,
+            # mn_tail (w 8) against mn_bias (w 4), at the same length.
+            "mirror_ratio_tail_to_bias": 2.0,
+            # The gate overdrive the diode-connected mirror reference sits
+            # at. A stated bias condition, used ONLY to turn the drawn
+            # resistor into a current for the admission bound below — never
+            # to size a device.
+            "bias_overdrive_v": 0.15,
+            # The auto-zero capacitor has to DOMINATE the quantiser's input
+            # capacitance, or the level it stores reaches the latch through
+            # a capacitive divider. MEASURED on this block with it drawn at
+            # the sampling capacitor's size: the loop filter's output moved
+            # +-60 mV across a conversion window and the latch's input moved
+            # +-8 mV — a transfer of 0.13, against a residual offset of
+            # 21 mV, so the decision never changed. A StrongARM's input pair
+            # is a large device and its regenerative nodes couple back into
+            # it; ten sampling capacitors is the stated answer and the
+            # measurement above is why the number is not one.
+            "autozero_over_sampling_cap": 10.0,
+            # The DRAWN length of `r_ib`, named so the admission bound above
+            # can read the resistor the library actually draws instead of a
+            # number retyped beside it. `library_invariants` holds the two
+            # to each other.
+            "r_ib_l_um": 181.0,
         },
         "constant_roles": {"w_cap": "cap", "w_res": "res"},
         # SHARED by every stage: the bias branch, the on-chip common-mode
@@ -826,10 +898,43 @@ LIBRARY: Dict[str, Dict[str, Any]] = {
              "feedback DAC samples the reference it selects",
              "nets": ["nqtail", "nclkb", "vss", "vss"], "w": 16.0,
              "l": 0.5},
+            # ── the quantiser's input is AUTO-ZEROED ────────────────────
+            # `caz` stands between the loop filter's output and the latch,
+            # and its far plate is tied to the common-mode reference while
+            # the block is in reset. The capacitor therefore stores the
+            # integrator's OWN reset level, and what reaches the latch after
+            # the reset opens is the common mode plus the CHANGE the
+            # integrator has accumulated since. The comparison is against
+            # zero accumulated charge, which is what a conversion actually
+            # asks.
+            #
+            # MEASURED, and this is why it is here rather than in a list of
+            # refinements. Comparing `vint` against `vcm` directly compares
+            # two nodes that are only equal if the amplifier's output
+            # equilibrium equals its input equilibrium, and a real two-stage
+            # amplifier's does not: on this block the loop filter reset to
+            # 0.507 V against a 0.610 V reference, so the quantiser read
+            # "below threshold" on every one of the 256 clocks of the
+            # window and the bitstream never left 0 — with the counter, the
+            # reset, the latch and the DAC all working. An incremental
+            # converter cannot out-run that offset, because the reset
+            # re-imposes it at the start of every window.
+            {"name": "caz", "role": "cap", "function":
+             "auto-zero capacitor: stores the loop filter's reset level so "
+             "the quantiser compares the CHANGE since reset, not two "
+             "equilibria that are not the same voltage",
+             "nets": ["vint", "nqz"], "w": 10.0, "l": 2.6},
+            {"name": "mn_azq", "role": "nmos", "function":
+             "auto-zero switch (n-side): ties the latch's input to the "
+             "common-mode reference while the block is in reset",
+             "nets": ["nqz", "nall", "vcm", "vss"], "w": 2.0, "l": 0.15},
+            {"name": "mp_azq", "role": "pmos", "function":
+             "auto-zero switch (p-side of the transmission gate)",
+             "nets": ["nqz", "nrstb", "vcm", "vdd"], "w": 4.0, "l": 0.15},
             {"name": "mn_qin", "role": "nmos", "function":
-             "quantiser input pair, signal side — the last integrator's "
-             "output `vint` is what gets compared",
-             "nets": ["nq_n", "vint", "nqtail", "vss"], "w": 16.0, "l": 0.5},
+             "quantiser input pair, signal side — the auto-zeroed image of "
+             "the last integrator's output is what gets compared",
+             "nets": ["nq_n", "nqz", "nqtail", "vss"], "w": 16.0, "l": 0.5},
             {"name": "mn_qref", "role": "nmos", "function":
              "quantiser input pair, reference side: the threshold is the "
              "on-chip common mode, i.e. the midpoint of the declared "
@@ -897,6 +1002,38 @@ LIBRARY: Dict[str, Dict[str, Any]] = {
             {"name": "mn_bbuf", "role": "nmos", "function":
              "complement of the decision, pull-down",
              "nets": ["nqb", "bit_out", "vss", "vss"], "w": 4.0, "l": 0.5},
+            # ── the CONVERSION WINDOW ───────────────────────────────────
+            # `nall` is high when EVERY counter bit is high — the AND the
+            # counter group accumulates down its own chain. One state out of
+            # the window's 2**N is all-ones, so `nall` IS the per-conversion
+            # reset: exactly one clock period in every window.
+            #
+            # ALL-ONES AND NOT ALL-ZEROS, and this was MEASURED, not chosen.
+            # A transmission-gate flip-flop powers up with its internal latch
+            # node low, so its output inverter drives the bit HIGH: at t=0
+            # every stage of this chain reads 1. An all-ZEROS decode is
+            # therefore not satisfied until the counter has walked all the
+            # way round — measured on this block, the reset was still low at
+            # 0.5, 1.5 and 2.5 us and the first integrator's output sat at
+            # 0.828 V, never having been reset, for the whole of the window
+            # the testbench was measuring. Decoding all-ONES makes the block
+            # start IN reset, which is also what a converter should do on
+            # power-up.
+            # It is generated HERE, on the block, from the declared clock:
+            # the design's interface carries no reset and no
+            # start-of-conversion pin, and L5 declares the converter
+            # "resets/accumulates per conversion window", so the window has
+            # to come from inside.
+            #
+            # `nall` is already the active-high reset, so only its
+            # complement costs an inverter.
+            {"name": "mp_rstinv", "role": "pmos", "function":
+             "complement of the conversion-window reset, pull-up: the "
+             "p-side of every reset transmission gate takes it",
+             "nets": ["nrstb", "nall", "vdd", "vdd"], "w": 8.0, "l": 0.5},
+            {"name": "mn_rstinv", "role": "nmos", "function":
+             "complement of the conversion-window reset, pull-down",
+             "nets": ["nrstb", "nall", "vss", "vss"], "w": 4.0, "l": 0.5},
             # ── the 1-bit feedback DAC ───────────────────────────────────
             # The whole feedback path of a CIFB modulator: the decision
             # selects one END of the DECLARED reference pair onto `ndac`,
@@ -963,7 +1100,16 @@ LIBRARY: Dict[str, Dict[str, Any]] = {
              "l": 0.15},
         ],
         "spec_knobs": [],
-        "device_param_exprs": [],
+        "device_param_exprs": [
+            {"device": "caz", "param": "l",
+             "expr": ("autozero_over_sampling_cap * ("
+                      + SAMPLING_CAP_L_EXPR + ")"),
+             "rationale": ("the auto-zero capacitor has to DOMINATE the "
+                           "quantiser's input capacitance or the level it "
+                           "stores reaches the latch divided down. Measured "
+                           "at one sampling capacitor: a transfer of 0.13, "
+                           "and a decision that never changed")},
+        ],
         "requires_bound": {
             "order": {"unit": "", "why":
                       "the loop order fixes BOTH the number of integrator "
@@ -981,8 +1127,27 @@ LIBRARY: Dict[str, Dict[str, Any]] = {
                      "the reference is the full scale the LSB is measured "
                      "against, and — now that the loop is closed — it is "
                      "also the span the 1-bit DAC feeds back"},
+            # THE TOP OF THE DECLARED CLOCK RANGE. The amplifier is hardest
+            # at the fastest clock the declaration admits, so that is the
+            # corner both the slew bound and this entry's own testbench are
+            # evaluated at. Required, not defaulted: a declaration that
+            # states a clock TARGET and no range has not said what the block
+            # must work over, and refusing is the honest answer to that.
+            "fclk_max": {"unit": "MHz", "why":
+                         "an integrator that settles at the target clock "
+                         "may not settle at the fastest one the declaration "
+                         "admits, and the fastest is the one the block is "
+                         "held to. A declaration with no stated range does "
+                         "not say what has to be met"},
         },
-        "requires_pdk_measured": ["cap_area_ff_per_um2"],
+        # The slew bound below is evaluated against the process's OWN
+        # measured constants, so the entry names them and refuses a family
+        # that has not been characterised for them rather than sizing
+        # against a number from somewhere else. `pdk_analog_characterize.py`
+        # is what closes that, and the gap artefact says so.
+        "requires_pdk_measured": ["cap_area_ff_per_um2",
+                                  "rsheet_ohm_per_sq",
+                                  "vth_n_extracted_v"],
         "requires_domain": {
             # An order nobody authored a coefficient set for is refused by
             # name. A third-order single-bit loop is stable only under a
@@ -992,6 +1157,23 @@ LIBRARY: Dict[str, Dict[str, Any]] = {
             "order": [1, 2],
         },
         "requires_derived": [
+            {"name": "slew_margin", "expr": SLEW_MARGIN_EXPR,
+             "min": 1.0, "max": 1.0e9,
+             "why": ("the integrator's output has to move a full reference "
+                     "step within the part of a clock period this entry "
+                     "budgets for it. That is a race between the BIAS the "
+                     "library draws and the CLOCK and CAPACITANCE the "
+                     "declaration asks for, and the declaration can lose "
+                     "it: a fast enough clock, or a resolution that budgets "
+                     "a large enough sampling capacitor, makes this entry's "
+                     "amplifier too slow for its own loop. A margin below 1 "
+                     "is that statement, and it is the answer — sizing the "
+                     "bias silently to whatever the declaration asked for "
+                     "would report a converter that does not settle as one "
+                     "that does. MEASURED at the declaration in hand "
+                     "(fclk 1 MHz, ENOB 14, OSR 256, vref 1 V, "
+                     "ihp-sg13g2): about 23, so the nominal bias is carried "
+                     "and this bound is what says it was checked")},
             {"name": "sampling_cap_ff", "expr": SAMPLING_CAP_FF_EXPR,
              "min": 1.0, "max": 100000.0,
              "why": ("the noise budget derived from this declaration has to "
@@ -1005,7 +1187,7 @@ LIBRARY: Dict[str, Dict[str, Any]] = {
             "1": [0.5],
             "2": [0.5, 0.5],
         },
-        "stage": {
+        "stage": [{
             "count_from": "order",
             "first_in": "vin",
             # NOT a port. The last integrator drives the QUANTISER, and the
@@ -1040,10 +1222,30 @@ LIBRARY: Dict[str, Dict[str, Any]] = {
                  "stage {i} current-mirror load, output leg",
                  "nets": ["nd2_{i}", "nd1_{i}", "vdd", "vdd"],
                  "w": 8.0, "l": 0.5},
+                # SYSTEMATIC-OFFSET-FREE SIZING, and it is load-bearing
+                # here rather than a refinement. For a two-stage Miller
+                # amplifier the second stage's input device must be sized so
+                # that the mirror load's balanced output voltage is exactly
+                # the gate voltage that stage needs:
+                #     (W/L)_mp_o / (W/L)_mp_ld2 = 2 * I_out / I_tail
+                # mn_o and mn_tail are the same device off the same mirror,
+                # so I_out = I_tail and the ratio is 2 — mp_o is twice
+                # mp_ld2, not four times it.
+                #
+                # MEASURED at w=32 (a ratio of 4): the amplifier's own
+                # unity-gain equilibrium sat at 0.747 V against a 0.633 V
+                # reference. In an INCREMENTAL converter that offset is not
+                # a small error — the reset leaves every integrator AT the
+                # equilibrium, so a systematic offset becomes the second
+                # stage's input step at the start of every conversion, and
+                # the loop filter railed within a few clocks with the
+                # bitstream stuck at 0.
                 {"name": "mp_o{i}", "role": "pmos", "function":
-                 "stage {i} second-stage common-source driver",
+                 "stage {i} second-stage common-source driver, sized twice "
+                 "the mirror load so the stage's balanced input voltage IS "
+                 "the mirror's balanced output voltage",
                  "nets": ["{out}", "nd2_{i}", "vdd", "vdd"],
-                 "w": 32.0, "l": 0.5},
+                 "w": 16.0, "l": 0.5},
                 {"name": "mn_o{i}", "role": "nmos", "function":
                  "stage {i} second-stage current-source load",
                  "nets": ["{out}", "nbias", "vss", "vss"],
@@ -1090,6 +1292,46 @@ LIBRARY: Dict[str, Dict[str, Any]] = {
                  "stage {i} INTEGRATING capacitor — cs{i}/ci{i} IS this "
                  "stage's loop coefficient",
                  "nets": ["vsum{i}", "{out}"], "w": 10.0, "l": 5.2},
+                # ── the per-conversion reset: what makes it INCREMENTAL ──
+                # L5 Block A declares the converter "resets/accumulates per
+                # conversion window". These two switches ARE that sentence.
+                # Closed together they discharge ci{i} and hold the summing
+                # node at the common-mode reference, so the integrator
+                # starts every conversion from a KNOWN state and its output
+                # common mode is re-established once per window.
+                #
+                # This is the difference between a modulator that converts
+                # and the one round 17 measured. Without them the output
+                # common mode of a single-ended integrator is a free state —
+                # whatever charge history left on ci{i} — while the
+                # quantiser's threshold is fixed, so the input-referred
+                # offset is unbounded and swamps the signal. Measured, round
+                # 17: the bitstream density sat at 0.51 and did not move at
+                # all across the input's full range.
+                {"name": "mn_rsti{i}", "role": "nmos", "function":
+                 "stage {i} conversion reset across ci{i} (n-side): "
+                 "discharges the integrating capacitor at the start of every "
+                 "conversion window",
+                 "nets": ["vsum{i}", "nall", "{out}", "vss"],
+                 "w": 4.0, "l": 0.15},
+                {"name": "mp_rsti{i}", "role": "pmos", "function":
+                 "stage {i} conversion reset across ci{i} (p-side of the "
+                 "transmission gate)",
+                 "nets": ["vsum{i}", "nrstb", "{out}", "vdd"],
+                 "w": 8.0, "l": 0.15},
+                # AND NOTHING TIES THE SUMMING NODE TO `vcm` DIRECTLY.
+                # An earlier arm of this round did, on the reasoning that
+                # the reset should force the node to the reference. It also
+                # connects the OTA's OUTPUT to the reference through two
+                # switches, and the output stage sources far more current
+                # than the on-chip divider that makes `vcm` — so the
+                # amplifier drags the reference instead of following it.
+                # MEASURED: during reset, `vcm`, `vsum1` and `vo1` all sat
+                # at 0.035 V against a 0.6 V reference, and the whole block
+                # reset to the wrong voltage. The unity-gain short above is
+                # sufficient BY ITSELF: with the input pair's other gate on
+                # `vcm`, the amplifier's own equilibrium IS the reference,
+                # and it drives its output there without loading it.
                 # THERE IS NO CLAMP ON THE SUMMING NODE, deliberately.
                 # An earlier arm of this round tied vsum{i} to the common
                 # mode through a switch to give the node a DC path. It does
@@ -1164,6 +1406,16 @@ LIBRARY: Dict[str, Dict[str, Any]] = {
                  "rationale": ("cs/ci IS this stage's loop coefficient, so "
                                "the integrating capacitor is the sampling "
                                "capacitor divided by it")},
+                {"device": "cc{i}", "param": "l",
+                 "expr": ("miller_fraction_of_load * ("
+                          + SAMPLING_CAP_L_EXPR + ") / {coeff}"),
+                 "rationale": ("Miller compensation is a fraction of the "
+                               "LOAD it has to dominate, and the load is "
+                               "this stage's integrating capacitor. Held at "
+                               "a library constant it was 25 um long "
+                               "against a 3.5 um sampling capacitor — five "
+                               "times the load, which is compensation for a "
+                               "circuit that is not this one")},
                 {"device": "cf{i}", "param": "l",
                  "expr": SAMPLING_CAP_L_EXPR,
                  "rationale": ("the 1-bit DAC's feedback capacitor is drawn "
@@ -1171,7 +1423,203 @@ LIBRARY: Dict[str, Dict[str, Any]] = {
                                "loop's full scale is the declared "
                                "reference and not a library constant")},
             ],
-        },
+        }, {
+            # ══ GROUP 2 — THE CONVERSION-WINDOW COUNTER ══════════════
+            # L5 Block A: the converter "resets/accumulates per conversion
+            # window". The design's own interface declaration carries no
+            # `rst` and no start-of-conversion pin, and states that `rst` is
+            # "INTERNAL to the block's chosen topology". So the window is
+            # generated HERE, on the block, from the one timing signal the
+            # boundary does declare: `clk`.
+            #
+            # A ripple chain of divide-by-two stages, `count_bits_for: osr`
+            # of them, so the window is the fewest powers of two that reach
+            # the declared oversampling ratio. Its period is 2**N clocks,
+            # which is >= osr and is recorded as `window_clocks` — a ripple
+            # divider cannot have a period that is not a power of two, and
+            # saying so beats implying the modulus is exact.
+            #
+            # WHY A SECOND CHAIN. The reset is "the counter reads zero", and
+            # the counter's bits are named per stage, so nothing outside the
+            # group can name them all. Each stage therefore ORs its own bit
+            # into a running accumulator, and the group ends that chain on
+            # the fixed name `nall`. `nall` high == every bit high == reset,
+            # for exactly one clock period in every window — and it is the
+            # state the chain powers up in, so the block starts in reset
+            # instead of a whole window later.
+            "role": "conversion_window_counter",
+            "count_bits_for": "osr",
+            "coefficients": False,
+            "first_in": "clk",
+            "inner_out": "q{i}",
+            # The accumulator starts from the supply rail: the AND of no
+            # bits is true, and each stage can only take it away.
+            "first_in2": "vdd",
+            "inner_out2": "nall{i}",
+            "last_out2": "nall",
+            "internal_nets": ["nib{i}", "nm{i}", "nmb{i}", "ns{i}",
+                              "nqb{i}", "nnand{i}", "nnandp{i}"],
+            "devices": [
+                # ── the stage's own clock complement ──────────────────────
+                {"name": "mp_cki{i}", "role": "pmos", "function":
+                 "counter stage {i} input-clock inverter, pull-up: a "
+                 "transmission-gate flip-flop needs both phases of the edge "
+                 "it divides",
+                 "nets": ["nib{i}", "{in}", "vdd", "vdd"],
+                 "w": 4.0, "l": 0.5},
+                {"name": "mn_cki{i}", "role": "nmos", "function":
+                 "counter stage {i} input-clock inverter, pull-down",
+                 "nets": ["nib{i}", "{in}", "vss", "vss"],
+                 "w": 2.0, "l": 0.5},
+                # ── master latch ─────────────────────────────────────────
+                {"name": "mn_mtg{i}", "role": "nmos", "function":
+                 "counter stage {i} master pass gate (n-side): open while "
+                 "the stage's input clock is LOW, so the master follows the "
+                 "fed-back complement",
+                 "nets": ["nqb{i}", "nib{i}", "nm{i}", "vss"],
+                 "w": 2.0, "l": 0.15},
+                {"name": "mp_mtg{i}", "role": "pmos", "function":
+                 "counter stage {i} master pass gate (p-side)",
+                 "nets": ["nqb{i}", "{in}", "nm{i}", "vdd"],
+                 "w": 4.0, "l": 0.15},
+                {"name": "mp_minv{i}", "role": "pmos", "function":
+                 "counter stage {i} master inverter, pull-up",
+                 "nets": ["nmb{i}", "nm{i}", "vdd", "vdd"],
+                 "w": 4.0, "l": 0.5},
+                {"name": "mn_minv{i}", "role": "nmos", "function":
+                 "counter stage {i} master inverter, pull-down",
+                 "nets": ["nmb{i}", "nm{i}", "vss", "vss"],
+                 "w": 2.0, "l": 0.5},
+                # THE KEEPER, and it is not an optimisation. Without it the
+                # latch node is DYNAMIC: held only by its own parasitic
+                # capacitance while the pass gate is open, and driven by
+                # nothing at all at t=0. A circuit simulator has no leakage
+                # to settle such a node with, so the flip-flop has NO
+                # DEFINED STATE — measured on this block, every one of the
+                # eight counter bits sat at 0.06 V, the all-ones decode was
+                # never satisfied, and the conversion reset never fired in
+                # any window. Deliberately WEAK — narrow, at a length this
+                # block already draws — so the pass gate overrides it when
+                # the stage is written: (W/L) 1 against the pass gate's 13.
+                #
+                # AND AT A GEOMETRY THE FLOW CAN DRAW. Two arms were
+                # stopped by the A5 layout generator on exactly this
+                # device — "mp_mkp1, no leg tap level" — first at
+                # l = 2.0 um and then at w = 1.0 um, neither of which any
+                # other device in this entry draws. A geometry nothing else
+                # in the block uses is one the layout instrument has never
+                # been asked for.
+                #
+                # ROUND 19 — THE COMMENT ABOVE WAS RIGHT AND THE NUMBERS
+                # BELOW DID NOT IMPLEMENT IT. "The counter's OWN inverter
+                # geometry" is w=4.0/2.0 at l=0.5, i.e. (W/L) 8 and 4 against
+                # the pass gate's 13.3 — a margin of 3.3x, not the "five to
+                # ten times weaker" this comment claimed and not the "(W/L) 1"
+                # it claimed above. A keeper at the forward inverter's own
+                # size is a SYMMETRIC back-to-back latch, and MEASURED on
+                # this block it could not be written: the master node tracked
+                # the CLOCK instead of the data, reverting to the keeper's
+                # state every time the pass gate closed, so the slave sampled
+                # the same value on all 254 clocks and q1 never toggled once.
+                # The all-ones decode was therefore satisfied PERMANENTLY,
+                # `nall` averaged 1.19999 of a 1.2 V supply, and both
+                # integrators were held in unity gain for the whole of every
+                # conversion window (vsum1 and vo1 agreed to 0.35 mV). A loop
+                # that is never let out of reset cannot integrate, which is
+                # why the modulator produced a DC bitstream at every input.
+                #
+                # The keeper is now drawn at the (W/L) this comment always
+                # said it wanted. MEASURED with it: q1 divides the clock by
+                # two, the counter's eight bits average half the supply, the
+                # reset fires instead of sticking, and vsum1 - vo1 opens to
+                # 58 mV — the unity-gain short is released.
+                {"name": "mp_mkp{i}", "role": "pmos", "function":
+                 "counter stage {i} master keeper, pull-up: makes the latch "
+                 "static, so the stage has a state at power-up",
+                 "nets": ["nm{i}", "nmb{i}", "vdd", "vdd"],
+                 "w": 1.0, "l": 0.5},
+                {"name": "mn_mkp{i}", "role": "nmos", "function":
+                 "counter stage {i} master keeper, pull-down",
+                 "nets": ["nm{i}", "nmb{i}", "vss", "vss"],
+                 "w": 0.5, "l": 0.5},
+                # ── slave latch ──────────────────────────────────────────
+                {"name": "mn_stg{i}", "role": "nmos", "function":
+                 "counter stage {i} slave pass gate (n-side): open while "
+                 "the input clock is HIGH, so the bit changes once per "
+                 "rising edge — which is what makes the stage divide by two",
+                 "nets": ["nmb{i}", "{in}", "ns{i}", "vss"],
+                 "w": 2.0, "l": 0.15},
+                {"name": "mp_stg{i}", "role": "pmos", "function":
+                 "counter stage {i} slave pass gate (p-side)",
+                 "nets": ["nmb{i}", "nib{i}", "ns{i}", "vdd"],
+                 "w": 4.0, "l": 0.15},
+                {"name": "mp_sinv{i}", "role": "pmos", "function":
+                 "counter stage {i} slave inverter, pull-up — its output IS "
+                 "this stage's counter bit and the next stage's clock",
+                 "nets": ["{out}", "ns{i}", "vdd", "vdd"],
+                 "w": 4.0, "l": 0.5},
+                {"name": "mn_sinv{i}", "role": "nmos", "function":
+                 "counter stage {i} slave inverter, pull-down",
+                 "nets": ["{out}", "ns{i}", "vss", "vss"],
+                 "w": 2.0, "l": 0.5},
+                {"name": "mp_skp{i}", "role": "pmos", "function":
+                 "counter stage {i} slave keeper, pull-up — see the master "
+                 "keeper: a dynamic latch node has no state to power up in",
+                 "nets": ["ns{i}", "{out}", "vdd", "vdd"],
+                 "w": 1.0, "l": 0.5},
+                {"name": "mn_skp{i}", "role": "nmos", "function":
+                 "counter stage {i} slave keeper, pull-down",
+                 "nets": ["ns{i}", "{out}", "vss", "vss"],
+                 "w": 0.5, "l": 0.5},
+                {"name": "mp_finv{i}", "role": "pmos", "function":
+                 "counter stage {i} feedback inverter, pull-up: the "
+                 "complement of the bit is what the master samples, and "
+                 "that feedback is the divide-by-two",
+                 "nets": ["nqb{i}", "{out}", "vdd", "vdd"],
+                 "w": 4.0, "l": 0.5},
+                {"name": "mn_finv{i}", "role": "nmos", "function":
+                 "counter stage {i} feedback inverter, pull-down",
+                 "nets": ["nqb{i}", "{out}", "vss", "vss"],
+                 "w": 2.0, "l": 0.5},
+                # ── the AND accumulator: "is every bit high so far?" ──────
+                # A CMOS NAND2: the pull-downs are in SERIES (both inputs
+                # high to pull low) and the pull-ups in PARALLEL. Wiring the
+                # pull-downs in parallel would make it an inverter of one
+                # input and the accumulator would forget every earlier bit —
+                # the reset would fire on half the counts instead of one.
+                {"name": "mn_nanda{i}", "role": "nmos", "function":
+                 "counter stage {i} accumulator NAND, upper series "
+                 "pull-down (the running accumulator's input)",
+                 "nets": ["nnand{i}", "{in2}", "nnandp{i}", "vss"],
+                 "w": 4.0, "l": 0.5},
+                {"name": "mn_nandb{i}", "role": "nmos", "function":
+                 "counter stage {i} accumulator NAND, lower series "
+                 "pull-down (this stage's own bit)",
+                 "nets": ["nnandp{i}", "{out}", "vss", "vss"],
+                 "w": 4.0, "l": 0.5},
+                {"name": "mp_nanda{i}", "role": "pmos", "function":
+                 "counter stage {i} accumulator NAND, pull-up on the "
+                 "running accumulator",
+                 "nets": ["nnand{i}", "{in2}", "vdd", "vdd"],
+                 "w": 4.0, "l": 0.5},
+                {"name": "mp_nandb{i}", "role": "pmos", "function":
+                 "counter stage {i} accumulator NAND, pull-up on this "
+                 "stage's own bit",
+                 "nets": ["nnand{i}", "{out}", "vdd", "vdd"],
+                 "w": 4.0, "l": 0.5},
+                {"name": "mp_andinv{i}", "role": "pmos", "function":
+                 "counter stage {i} accumulator inverter, pull-up — NAND "
+                 "then invert is AND, and the AND is what travels down the "
+                 "chain to `nall`",
+                 "nets": ["{out2}", "nnand{i}", "vdd", "vdd"],
+                 "w": 4.0, "l": 0.5},
+                {"name": "mn_andinv{i}", "role": "nmos", "function":
+                 "counter stage {i} accumulator inverter, pull-down",
+                 "nets": ["{out2}", "nnand{i}", "vss", "vss"],
+                 "w": 2.0, "l": 0.5},
+            ],
+            "param_exprs": [],
+        }],
         "sizing_handoff": (
             "the OTA inside each integrator is carried at the reference "
             "geometry: its transconductance sets whether the stage settles "
@@ -1217,68 +1665,113 @@ LIBRARY: Dict[str, Dict[str, Any]] = {
         # no `behaviour_record` is unaffected — the key is optional and
         # every other entry in this library omits it.
         "behaviour_record": {
-            "claim": ("the mean of the 1-bit output (its bitstream "
-                      "density) moves monotonically with the analogue "
-                      "input, which is the whole function of a "
-                      "delta-sigma modulator"),
+            "claim": ("the mean of the 1-bit output over one conversion "
+                      "window (its bitstream density) moves monotonically "
+                      "with the analogue input, which is the whole function "
+                      "of an incremental delta-sigma converter"),
             "verified": False,
             "measured_on": "u_hawaii_adc, ihp-sg13g2, 2026-09-02",
             "how": ("the entry's own testbench, ngspice in the pinned EDA "
-                    "image, 20 clock cycles at 2 MHz, density averaged "
-                    "over the last 18; the DC input swept 0.40 / 0.60 / "
-                    "0.80 V against a 0.6 V common mode and a 1.0 V "
-                    "declared reference span, for which the ideal "
-                    "densities are 0.30 / 0.50 / 0.70"),
-            # Every row is a measurement, not an opinion. Seven structural
-            # arms, one variable at a time, same deck and same simulator.
+                    "image: TWO conversion windows of 256 clocks at the "
+                    "fastest clock the declaration admits, density averaged "
+                    "over the second; the DC input swept 0.40 / 0.60 / "
+                    "0.80 V against a 0.6 V common mode and a 1.0 V declared "
+                    "reference span, for which the correct densities are "
+                    "0.30 / 0.50 / 0.70"),
+            # WHAT IS WORKING IS AS IMPORTANT AS WHAT IS NOT. A reader who
+            # sees only "not demonstrated" will re-derive all of this.
+            "subsystems_demonstrated": [
+                "the conversion-window counter: the reset asserts for "
+                "exactly one clock in every 256 (nall duty 0.00469 V of a "
+                "1.2 V supply = 1/256), so the window IS the declared OSR",
+                "the counter divides: q1 and q8 both average half the "
+                "supply",
+                "the on-chip common mode, generated from the declared "
+                "reference pair: vcm = 0.610 V",
+                "the integrators are alive and near the common mode, not "
+                "railed: vo1 = 0.559 V, vint = 0.507 V — where round 17's "
+                "railed",
+                "the quantiser resolves rail to rail: nq_p spans -0.03 to "
+                "1.24 V",
+                "the set-reset latch toggles: nsrq spans -0.06 to 1.21 V",
+            ],
             "arms": [
-                "quantiser strobed by the sampling phase: 0.5123 / 0.5133 "
-                "/ 0.5135 — a 0.5 limit cycle, the density does not move "
-                "at all across the sweep",
-                "+ Miller capacitor 25 um -> 2.1 um (load-sized): 0.5068 / "
-                "- / 0.5068 — unchanged",
-                "+ tail resistor 181 um -> 20 um (about nine times the "
-                "bias current): 0.5038 / - / 0.5043 — unchanged",
-                "quantiser strobed by the CHARGE-TRANSFER phase (shipped): "
-                "0.0031 / - / 0.0000022 — the density becomes "
-                "input-DEPENDENT, and saturates",
-                "+ the load-sized Miller capacitor: 0.0143 / - / 0.000030 "
-                "— same shape",
-                "+ the two reference ends swapped: 0.000010 / 0.000011 / "
-                "0.0000096 — latched",
-                "+ loop coefficient 0.5 -> 0.125: 1.8e-7 / 1.9e-7 / 2.0e-7 "
-                "— latched",
-                "+ offset-compensated (unity-gain-reset) integrators: "
-                "0.5007 / 0.5006 / 0.5005 — back to the limit cycle",
+                "ROUND 17, open loop with no per-conversion reset: density "
+                "0.5123 / 0.5133 / 0.5135 — a limit cycle that ignored the "
+                "input, over eight structural variants",
+                "ROUND 18, counter + per-conversion reset, quantiser "
+                "referenced to vcm: density 6.5e-7 / 2.7e-7 / 2.8e-7, "
+                "output swing 0.016 of the supply — the bitstream never "
+                "leaves 0",
+                "+ the auto-zeroed quantiser input at ONE sampling "
+                "capacitor: density 3.4e-7 / 3.4e-7 / 3.4e-7, swing 0.003 "
+                "— unchanged",
+                "+ the auto-zero capacitor at TEN sampling capacitors: "
+                "density 0.0082 at the LOW input with a full-swing "
+                "bitstream (1.04 of the supply), and -1.5e-6 / -1.5e-6 at "
+                "the other two — the output finally toggles, and it "
+                "responds in the WRONG DIRECTION",
+            ],
+            # A HYPOTHESIS THIS ROUND RULED OUT BY MEASUREMENT, recorded so
+            # the next reader does not spend a window re-testing it.
+            "refuted": [
+                "THE FEEDBACK SIGN is not the remaining cause. Both "
+                "polarities were measured on the circuit as it now "
+                "stands: shipped gave density 0.0082 / -1.5e-6 / -1.5e-6 "
+                "and swapped gave 2.9e-5 / 0.042 / 2.4e-5. Neither "
+                "converts, and in EACH the output is full-swing at "
+                "exactly ONE input level and dead at the others — "
+                "which is not a sign error, it is a loop that only "
+                "responds in a narrow band",
+                "CHARGE KICKED BACK from the StrongARM into the auto-zero "
+                "node does NOT accumulate here. Probed across a whole "
+                "conversion window, the latch's input sat at 0.586 / 0.591 "
+                "/ 0.602 / 0.592 / 0.590 / 0.586 / 0.596 V — it does not "
+                "walk. What that probe DID show is a capacitive divider: "
+                "the loop filter's output moved +-60 mV over the same "
+                "window and the latch's input moved +-8 mV, a transfer of "
+                "0.13, which is why the auto-zero capacitor is now drawn "
+                "ten times larger",
             ],
             "diagnosis": (
-                "the loop filter is SINGLE-ENDED and has no per-conversion "
-                "reset, so the integrator outputs carry a free state: "
-                "their common mode is whatever charge history left on the "
-                "integrating capacitors, while the quantiser's threshold "
-                "is the fixed on-chip common mode. The resulting "
-                "input-referred offset is unbounded and swamps the signal, "
-                "which is why every arm either sits in a 0.5 limit cycle "
-                "or latches at a rail. The two textbook answers are a "
-                "FULLY DIFFERENTIAL loop filter with common-mode feedback, "
-                "or the per-conversion integrator reset that makes the "
-                "converter incremental. The design's documents describe "
-                "the second (L5 Block A: the converter "
-                "'resets/accumulates per conversion window') and the "
-                "design's own interface declaration carries no "
-                "start-of-conversion pin and states that `rst` is "
-                "'INTERNAL to the block's chosen topology'. Deriving it "
-                "internally means a modulo-OSR counter inside the block. "
-                "That is the named next piece of design work, and it is a "
-                "question about the DECLARED INTERFACE, not only about "
-                "this library"),
-            "next": ("author the conversion-window generator (a modulo-"
-                     "`osr` counter driven by the declared `clk`) and "
-                     "re-run this sweep, or move the loop filter to a "
-                     "fully differential form with common-mode feedback; "
-                     "skill `analog-sizing` owns neither — this is "
-                     "topology work and belongs to "
-                     "`analog-topology-select`"),
+                "every SUBSYSTEM is demonstrated and the LOOP still does not "
+                "close. Three causes were found and fixed in order — the "
+                "quantiser referenced to a voltage the loop filter does not "
+                "reset to, then the auto-zero capacitor losing a divider "
+                "against the latch's input, and the systematic offset of "
+                "the amplifier's second stage — and the bitstream went from "
+                "DC to full-swing over that sequence. What remains is a "
+                "RANGE, not sign. Both feedback polarities were "
+                "measured and neither converts; in each the output is "
+                "full-swing at exactly ONE input level and dead at the "
+                "others. That is the signature of an integrator that "
+                "SATURATES, not one wired backwards: with "
+                "cs/ci = cf/ci = 1/2, a single DAC decision moves the "
+                "loop filter's output by half the reference — 0.25 V "
+                "of a 1.2 V rail — so three same-sign decisions after "
+                "a reset exhaust the swing and the loop cannot come "
+                "back. The set this entry ships (a1 = a2 = 1/2, Boser "
+                "& Wooley) is the IDEAL-INTEGRATOR set and assumes an "
+                "output range the supply does not give. This entry's "
+                "own tradeoffs already say the coefficient set is "
+                "bounded by the headroom the supply leaves and not by "
+                "stability alone — that sentence is the unmet "
+                "condition"),
+            "next": ("SCALE THE LOOP COEFFICIENTS to the output range "
+                     "the supply actually gives. Every measured symptom "
+                     "is saturation, not inversion. `coefficient_sets` "
+                     "carries the ideal-integrator pair 1/2, 1/2; a real "
+                     "single-bit second-order loop on a 1.2 V rail needs "
+                     "a smaller a1, so that one decision cannot move the "
+                     "integrator a quarter of its range. That is a "
+                     "change to the COEFFICIENT SET — a design solution "
+                     "and not a geometry — so it belongs to "
+                     "`analog-topology-select`. If range is not it "
+                     "either, the remaining textbook answer is the fully "
+                     "differential loop filter with common-mode "
+                     "feedback, which doubles the available swing and "
+                     "removes the single-ended offset that made the "
+                     "auto-zero necessary at all"),
         },
         "analyses_implied": ["tran"],
         "testbench": {
@@ -1289,10 +1782,35 @@ LIBRARY: Dict[str, Dict[str, Any]] = {
                 # `vref`, centred on the common mode.
                 "vrefp_v": "supply / 2 + vref / 2",
                 "vrefn_v": "supply / 2 - vref / 2",
-                # A DC input one tenth of full scale below mid-scale: a
-                # bitstream density that is neither 0 nor 1 nor 1/2 is the
-                # only stimulus that shows the loop is actually closed.
+                # A DC input one tenth of full scale above mid-scale, for
+                # which a modulator that converts must return a bitstream
+                # density of 0.6 — neither 0, nor 1, nor 1/2.
                 "vstep_v": "supply / 2 + vref / 10",
+                # The declared clock, as a period in nanoseconds.
+                # THE FASTEST CLOCK THE DECLARATION ADMITS, not its
+                # target. The amplifier is hardest at the top of the
+                # declared range, so that is the corner worth exercising —
+                # and it is a DECLARED fact, from the same spec row.
+                "tper_ns": "1000 / fclk_max",
+                "thigh_ns": "1000 / fclk_max / 2 - 1",
+                # ONE CONVERSION WINDOW, in nanoseconds. `window_clocks` is
+                # the counter group's own period, published into the
+                # constants during expansion because the expression grammar
+                # has no logarithm and nothing else could derive it.
+                "twin_ns": "window_clocks * 1000 / fclk_max",
+                # The measurement starts after the reset clock and three
+                # more, so the reset itself and the first transfers are not
+                # counted as conversion samples.
+                # THE SECOND WINDOW. The counter's power-up state is not
+                # defined — it is a latch, and which way a bistable falls at
+                # t=0 is not something the block declares — so the first
+                # reset can land anywhere in the first window and the first
+                # window is not a conversion. The second one is: it begins
+                # at a reset the counter itself produced.
+                "tmeas_ns": "window_clocks * 1000 / fclk_max * 1.02",
+                "twin2_ns": "window_clocks * 2000 / fclk_max",
+                "tstop_ns": "window_clocks * 2000 / fclk_max",
+                "tstep_ns": "1000 / fclk_max / 200",
             },
             "conditions": [
                 "supply = {supply} V (the bound core supply when the spec "
@@ -1301,33 +1819,44 @@ LIBRARY: Dict[str, Dict[str, Any]] = {
                 "{vrefn_v} V — a span of the bound reference centred on "
                 "half the supply; the block generates its own common mode "
                 "from it",
-                "the modulator clock runs at 2 MHz (500 ns period) — a "
-                "testbench condition, not a spec",
+                "the modulator clock runs at the FASTEST rate the "
+                "declaration admits ({tper_ns} ns period), which is the "
+                "binding settling corner, and the block's own counter makes "
+                "the conversion window {twin_ns} ns long. The run is TWO "
+                "windows and only the second is measured: an incremental "
+                "converter's answer is one window's worth of bits, and the "
+                "first window is not one, because the counter's power-up "
+                "state is not declared and its first reset can fall "
+                "anywhere inside it",
                 "the input is held at {vstep_v} V, one tenth of the bound "
-                "reference above mid-scale, for 20 clock cycles; the "
-                "reported measurement is the MEAN of the 1-bit output over "
-                "the last 18 of them, which for a closed loop must sit "
-                "strictly between the rails and NOT at either — an output "
-                "stuck at a rail is the signature of a loop that is not "
-                "closed",
+                "reference above mid-scale. The reported measurement is the "
+                "MEAN of the 1-bit output over the conversion phase of that "
+                "window, which for a converter must be 0.5 plus the input's "
+                "fraction of the reference span — 0.6 here — and not the "
+                "0.5 of a loop that is ignoring its input nor the 0 or 1 of "
+                "one latched at a rail",
             ],
             "stimulus": [
                 "v_vdd vdd 0 {supply}",
                 "v_vrefp vrefp 0 {vrefp_v}",
                 "v_vrefn vrefn 0 {vrefn_v}",
-                "v_clk clk 0 pulse(0 {supply} 0n 1n 1n 249n 500n)",
+                "v_clk clk 0 pulse(0 {supply} 0n 1n 1n {thigh_ns}n "
+                "{tper_ns}n)",
                 "v_in vin 0 {vstep_v}",
             ],
             "cards": [],
-            # Every node named here is a declared PORT. The measurement
-            # that says whether the loop is closed must not depend on an
-            # internal net the emitter is free to rename, nor on the
-            # instance path it chooses for the device under test.
+            # Every node named here is a declared PORT. The measurement that
+            # says whether the loop converts must not depend on an internal
+            # net the emitter is free to rename, nor on the instance path it
+            # chooses for the device under test.
             "control": [
-                "tran 1n 10000n uic",
-                "meas tran vavg avg v(bit_out) from=1000n to=10000n",
-                "meas tran vmax max v(bit_out) from=1000n to=10000n",
-                "meas tran vmin min v(bit_out) from=1000n to=10000n",
+                "tran {tstep_ns}n {tstop_ns}n uic",
+                "meas tran vavg avg v(bit_out) from={tmeas_ns}n "
+                "to={twin2_ns}n",
+                "meas tran vmax max v(bit_out) from={tmeas_ns}n "
+                "to={twin2_ns}n",
+                "meas tran vmin min v(bit_out) from={tmeas_ns}n "
+                "to={twin2_ns}n",
                 "let dens = vavg / {supply}",
                 "let swing = (vmax - vmin) / {supply}",
                 "echo \"MEAS density=\" $&dens \" swing=\" $&swing",
@@ -1485,19 +2014,47 @@ def bound_spec_values(project: Path, block: str) -> Tuple[Dict[str, float],
         if not p.is_file():
             return {}, None
     data = _read_json(p)
-    out: Dict[str, float] = {}
-    if isinstance(data, dict):
-        specs = data.get("specs")
-        if isinstance(specs, list):
-            for s in specs:
-                if not isinstance(s, dict) or not s.get("name"):
-                    continue
-                for k in ("target", "typ", "value", "min", "max"):
-                    v = s.get(k)
-                    if isinstance(v, (int, float)) and not isinstance(v, bool):
-                        out[str(s["name"])] = float(v)
-                        break
+    out = spec_row_values(data.get("specs") if isinstance(data, dict) else [])
     return out, str(p)
+
+
+def spec_row_values(specs: Any) -> Dict[str, float]:
+    """The numeric values a list of A1 spec rows binds, keyed by row name.
+
+    ONE COPY OF THIS RULE. `analog_a3_netlist_emit` reads the same rows to
+    build the environment its `device_param_exprs` and testbench resolve in,
+    and it held a second, identical loop. MEASURED: this function was
+    extended to publish the ends of a declared range and the entry began
+    using one; A2 admitted the block and A3 then reported `tper_ns needs
+    1000 / fclk_max, which the bound spec does not supply` — one declaration,
+    two readers, two answers. A3 now calls this.
+    """
+    out: Dict[str, float] = {}
+    if not isinstance(specs, list):
+        return out
+    for s in specs:
+        if not isinstance(s, dict) or not s.get("name"):
+            continue
+        for k in ("target", "typ", "value", "min", "max"):
+            v = s.get(k)
+            if isinstance(v, (int, float)) and not isinstance(v, bool):
+                out[str(s["name"])] = float(v)
+                break
+        # THE ENDS OF A DECLARED RANGE ARE ALSO DECLARED FACTS. A spec row
+        # that states min and max is stating the whole operating range the
+        # block has to work over, and the binding corner is usually an END
+        # of it, not the target: an amplifier is hardest at the FASTEST
+        # clock the declaration admits. Published as `<name>_min` /
+        # `<name>_max` so an entry can size for, or exercise at, the corner
+        # it is actually held to — and so a declaration that states no range
+        # simply does not offer the key, and an entry that needs one is
+        # refused by `requires_bound` rather than quietly falling back to
+        # the target.
+        for k, suffix in (("min", "_min"), ("max", "_max")):
+            v = s.get(k)
+            if isinstance(v, (int, float)) and not isinstance(v, bool):
+                out[str(s["name"]) + suffix] = float(v)
+    return out
 
 
 # ── spec-bound admission ──────────────────────────────────────────────────
@@ -1532,7 +2089,20 @@ def bound_spec_units(project: Path, block: str) -> Dict[str, str]:
             if isinstance(s, dict) and s.get("name"):
                 for key in ("units", "unit"):
                     if key in s:
-                        out[str(s["name"])] = str(s.get(key) or "")
+                        unit = str(s.get(key) or "")
+                        out[str(s["name"])] = unit
+                        # The ENDS of a declared range carry the ROW's unit —
+                        # they are the same quantity, stated at its limits.
+                        # `bound_spec_values` publishes `<name>_min` /
+                        # `<name>_max`, and a key with no unit beside it is
+                        # refused by the unit guard, correctly: MEASURED, the
+                        # guard stopped `fclk_max` as "bound but declares
+                        # unit None" the first time it was offered.
+                        for suffix in ("_min", "_max"):
+                            if isinstance(s.get(suffix[1:]), (int, float)) \
+                                    and not isinstance(s.get(suffix[1:]),
+                                                       bool):
+                                out[str(s["name"]) + suffix] = unit
                         break
     return out
 
@@ -1709,60 +2279,186 @@ def library_invariants(library: Optional[Dict[str, Any]] = None
                 problems.append(
                     f"{btype}: `{BEHAVIOUR_RECORD_KEY}` is not verified and "
                     f"records no measurement — a verdict with no evidence")
-        st = entry.get(STAGE_KEY)
-        if not isinstance(st, dict):
-            continue
-        count_from = st.get("count_from")
         required = entry.get(REQUIRES_BOUND_KEY) or {}
+        consts = entry.get("constants") or {}
+        # A constant that RESTATES a drawn geometry is a second copy of one
+        # number, and the copy is the one an expression reads. Hold them to
+        # each other: `<name>_l_um` must be the drawn length of `<name>`.
+        by_name = {d.get("name"): d for d in (entry.get("devices") or [])}
+        for cname, cval in sorted(consts.items()):
+            if not str(cname).endswith("_l_um"):
+                continue
+            dev = by_name.get(str(cname)[:-len("_l_um")])
+            if dev is None:
+                problems.append(
+                    f"{btype}: constant `{cname}` names no device, so "
+                    f"nothing holds it to a drawn length")
+            elif float(dev.get("l") or 0.0) != float(cval):
+                problems.append(
+                    f"{btype}: constant `{cname}` is {cval} and device "
+                    f"`{dev['name']}` is drawn l={dev.get('l')} — one "
+                    f"number, two places, and the expression reads the copy")
+        # The SHARED bias branch cannot see a per-stage coefficient, so the
+        # entry states the load as one ratio against the sampling capacitor.
+        # It has to cover the WORST stage of every admitted order, or the
+        # slew bound is evaluated against a load smaller than the one the
+        # amplifier actually drives.
+        if "load_over_sampling_cap" in consts:
+            sets = entry.get(COEFFICIENT_SETS_KEY) or {}
+            coeffs = [float(c) for v in sets.values() for c in v]
+            if coeffs:
+                need = ((1.0 + float(consts.get("miller_fraction_of_load",
+                                                0.0)))
+                        / min(coeffs))
+                if float(consts["load_over_sampling_cap"]) + 1e-9 < need:
+                    problems.append(
+                        f"{btype}: `load_over_sampling_cap` is "
+                        f"{consts['load_over_sampling_cap']} and the "
+                        f"smallest admitted coefficient {min(coeffs)} makes "
+                        f"the real load {need:.3f} sampling capacitors — "
+                        f"the slew bound would be evaluated against a load "
+                        f"the amplifier does not drive")
+        for st in _stage_groups(entry):
+            problems.extend(_group_invariants(btype, entry, st, required))
+        continue
+
+    return problems
+
+
+def _group_invariants(btype: str, entry: Dict[str, Any],
+                      st: Dict[str, Any],
+                      required: Dict[str, Any]) -> List[str]:
+    """Every authoring mistake in ONE stage group. Split out because an entry
+    may now declare several and each has to be held to the same rules."""
+    problems: List[str] = []
+    if st.get(COUNT_BITS_KEY):
+        name = st[COUNT_BITS_KEY]
+        if name not in required:
+            problems.append(
+                f"{btype}: stage {COUNT_BITS_KEY}={name!r} is not in "
+                f"{REQUIRES_BOUND_KEY}, so a block that does not bind it "
+                f"reaches expansion instead of being refused")
+        if st.get(COEFFICIENTS_KEY, True):
+            problems.append(
+                f"{btype}: a `{COUNT_BITS_KEY}` group counts divide-by-two "
+                f"stages and has no loop coefficients, so it must declare "
+                f"`{COEFFICIENTS_KEY}: False` rather than be handed a set "
+                f"that would mean nothing")
+    else:
+        count_from = st.get("count_from")
         if count_from not in required:
             problems.append(
                 f"{btype}: stage count_from={count_from!r} is not in "
                 f"{REQUIRES_BOUND_KEY}, so a block that does not bind it "
                 f"reaches expansion instead of being refused")
-        sets = entry.get(COEFFICIENT_SETS_KEY) or {}
-        admitted = (entry.get(REQUIRES_DOMAIN_KEY) or {}).get(count_from)
-        if admitted is None:
-            problems.append(
-                f"{btype}: stage count_from={count_from!r} has no "
-                f"{REQUIRES_DOMAIN_KEY} entry, so an order with no "
-                f"coefficient set is not excluded")
-            continue
-        # `last_out` used to be documented as "a declared PORT". It is not:
-        # a stage cascade whose last output feeds another shared device on
-        # the same block — a quantiser, say — must end on an INTERNAL net,
-        # or the block exposes the loop filter's output as a pin. What has
-        # to hold either way is that the name RESOLVES: an unlisted one
-        # reaches `analog_a3_netlist_emit._validate_ir` as a net that is
-        # neither port nor internal, and the netlist ships a dangling node.
-        last_out = st.get("last_out")
-        known = set(entry.get("ports") or []) | set(
-            entry.get("internal_nets") or [])
-        if last_out is not None and last_out not in known:
-            problems.append(
-                f"{btype}: stage last_out={last_out!r} is neither a "
-                f"declared port nor a declared internal net, so the last "
-                f"stage drives a node nothing else on the block resolves")
-        for value in admitted:
-            n = int(round(float(value)))
-            got = sets.get(str(n))
-            if got is None:
+        if st.get(COEFFICIENTS_KEY, True):
+            sets = entry.get(COEFFICIENT_SETS_KEY) or {}
+            admitted = (entry.get(REQUIRES_DOMAIN_KEY) or {}).get(count_from)
+            if admitted is None:
                 problems.append(
-                    f"{btype}: {count_from}={n} is admitted by "
-                    f"{REQUIRES_DOMAIN_KEY} but has no "
-                    f"{COEFFICIENT_SETS_KEY} entry")
-            elif len(got) != n:
-                problems.append(
-                    f"{btype}: {count_from}={n} has a coefficient set of "
-                    f"length {len(got)}; one coefficient per stage is "
-                    f"required")
+                    f"{btype}: stage count_from={count_from!r} has no "
+                    f"{REQUIRES_DOMAIN_KEY} entry, so an order with no "
+                    f"coefficient set is not excluded")
+            else:
+                for value in admitted:
+                    n = int(round(float(value)))
+                    got = sets.get(str(n))
+                    if got is None:
+                        problems.append(
+                            f"{btype}: {count_from}={n} is admitted by "
+                            f"{REQUIRES_DOMAIN_KEY} but has no "
+                            f"{COEFFICIENT_SETS_KEY} entry")
+                    elif len(got) != n:
+                        problems.append(
+                            f"{btype}: {count_from}={n} has a coefficient "
+                            f"set of length {len(got)}; one coefficient per "
+                            f"stage is required")
+    # `last_out` used to be documented as "a declared PORT". It is not: a
+    # stage cascade whose last output feeds another shared device on the same
+    # block — a quantiser, say — must end on an INTERNAL net, or the block
+    # exposes the loop filter's output as a pin. What has to hold either way
+    # is that the name RESOLVES: an unlisted one reaches
+    # `analog_a3_netlist_emit._validate_ir` as a net that is neither port nor
+    # internal, and the netlist ships a dangling node.
+    known = set(entry.get("ports") or []) | set(
+        entry.get("internal_nets") or [])
+    for key in ("last_out", "last_out2"):
+        name = st.get(key)
+        if name is not None and name not in known:
+            problems.append(
+                f"{btype}: stage {key}={name!r} is neither a declared port "
+                f"nor a declared internal net, so the last stage drives a "
+                f"node nothing else on the block resolves")
+    if st.get("inner_out2") and not st.get("first_in2"):
+        problems.append(
+            f"{btype}: the group declares `inner_out2` and no `first_in2`, "
+            f"so the second chain's stage 1 has no input")
     return problems
 
 
+
+
 # ── the repeated-stage template ───────────────────────────────────────────
+def _bits_to_cover(value: float) -> int:
+    """The fewest divide-by-two stages whose period reaches *value*.
+
+    A ripple divider's period is a POWER OF TWO, so a window of `osr` clocks
+    is realised by `ceil(log2(osr))` stages and the window it actually gives
+    is `2 ** that` — greater than or equal to the declared value, never less.
+    Written out as a loop rather than a log so the answer is exact for every
+    integer and so the expression grammar (which has no calls) is not asked to
+    carry it.
+    """
+    n, span = 0, 1
+    while span < value:
+        span *= 2
+        n += 1
+    return max(n, 1)
+
+
+def _stage_groups(lib: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """An entry's repeated groups, oldest form first.
+
+    `stage` may be a single dict — every entry that had one keeps that exact
+    shape and takes the identical path — or a LIST of them. A modulator needs
+    two: the integrator cascade, whose count is the declared loop ORDER, and
+    the conversion-window counter, whose count is the number of divide-by-two
+    stages the declared OSR asks for. One `count_from` cannot express both.
+    """
+    st = lib.get(STAGE_KEY)
+    if isinstance(st, dict):
+        return [st]
+    if isinstance(st, list):
+        return [g for g in st if isinstance(g, dict)]
+    return []
+
+
+def _group_count(st: Dict[str, Any], spec_values: Dict[str, float]) -> int:
+    """This group's stage count, and WHICH declared row it came from."""
+    if st.get(COUNT_BITS_KEY):
+        name = st[COUNT_BITS_KEY]
+        if name not in spec_values:
+            raise LibraryEntryError(
+                f"stage group declares {COUNT_BITS_KEY}={name!r}, which is "
+                f"not bound for this block. A group with a "
+                f"`{COUNT_BITS_KEY}` must also declare {name!r} in "
+                f"`{REQUIRES_BOUND_KEY}` so admission refuses the block "
+                f"BEFORE expansion; see `library_invariants`.")
+        return _bits_to_cover(float(spec_values[name]))
+    count_from = st["count_from"]
+    if count_from not in spec_values:
+        raise LibraryEntryError(
+            f"stage template declares count_from={count_from!r}, which is not "
+            f"bound for this block. An entry with a `{STAGE_KEY}` must also "
+            f"declare {count_from!r} in `{REQUIRES_BOUND_KEY}` so admission "
+            f"refuses the block BEFORE expansion; see `library_invariants`.")
+    return int(round(float(spec_values[count_from])))
+
+
 def expand_stages(lib: Dict[str, Any], spec_values: Dict[str, float]
                   ) -> Tuple[List[Dict[str, Any]], List[str],
                              List[Dict[str, Any]], Optional[Dict[str, Any]]]:
-    """Flatten an entry's repeated stage into the plain device / net /
+    """Flatten an entry's repeated stage groups into the plain device / net /
     expression lists the IR already carries.
 
     Returns `(devices, internal_nets, device_param_exprs, record)`; *record*
@@ -1780,96 +2476,123 @@ def expand_stages(lib: Dict[str, Any], spec_values: Dict[str, float]
         drawn minimum like any other. An expansion done downstream of that
         floor would step over it.
 
-    The chain is explicit rather than inferred: stage 1's input is
-    `first_in`, stage i's input is stage i-1's output, and the LAST stage's
-    output is `last_out` — a name the entry DECLARES, as a port or as an
-    internal net, so the cascade's output does not depend on the stage count.
-    `library_invariants` refuses an entry whose `last_out` is neither.
+    Each group carries up to TWO chained signals. The first is explicit rather
+    than inferred: stage 1's input is `first_in`, stage i's input is stage
+    i-1's output, and the last stage's output is `last_out` — a name the entry
+    DECLARES, as a port or as an internal net, or, when `last_out` is omitted,
+    simply `inner_out` for the last index. `library_invariants` refuses a
+    declared `last_out` that is neither.
+
+    The SECOND chain (`{in2}` / `{out2}`, from `first_in2` / `inner_out2` /
+    `last_out2`) exists because a repeated group often has to accumulate
+    something alongside the signal it passes along. MEASURED: the conversion-
+    window counter's reset is "every counter bit is low", and the bits are
+    named per stage, so nothing outside the group can name them all. Running
+    an OR down the chain lets the group end on ONE fixed name that the shared
+    devices can read. A group that declares no second chain never sees the
+    keys.
     """
-    st = lib.get(STAGE_KEY)
+    groups = _stage_groups(lib)
     devices = [dict(d) for d in (lib.get("devices") or [])]
     nets = list(lib.get("internal_nets") or [])
     exprs = [dict(e) for e in (lib.get("device_param_exprs") or [])]
-    if not isinstance(st, dict):
+    if not groups:
         return devices, nets, exprs, None
 
-    # An entry declaring a stage MUST declare its count field in
-    # `requires_bound`, so admission has already refused the block before this
-    # runs. `library_invariants` proves that for every shipped entry and a
-    # test holds the library to it — but the runtime path still has to say
-    # WHICH authoring mistake was made rather than raise a bare KeyError from
-    # a dict lookup ten frames down.
-    count_from = st["count_from"]
-    if count_from not in spec_values:
-        raise LibraryEntryError(
-            f"stage template declares count_from={count_from!r}, which is not "
-            f"bound for this block. An entry with a `{STAGE_KEY}` must also "
-            f"declare {count_from!r} in `{REQUIRES_BOUND_KEY}` so admission "
-            f"refuses the block BEFORE expansion; see `library_invariants`.")
-    count = int(round(float(spec_values[count_from])))
-    coeff_set = (lib.get(COEFFICIENT_SETS_KEY) or {}).get(str(count))
-    if coeff_set is None:
-        raise LibraryEntryError(
-            f"no `{COEFFICIENT_SETS_KEY}` entry for {count_from}={count}. An "
-            f"order the library carries no coefficient set for must be "
-            f"excluded by `{REQUIRES_DOMAIN_KEY}`, not defaulted here — "
-            f"defaulting is how one design's coefficients end up under "
-            f"another design's name.")
-    coeffs = [float(c) for c in coeff_set]
-    for i in range(1, count + 1):
-        # `{alt}` cycles through the entry's `alternates` list, so a stage
-        # template can name a net that CHANGES WITH THE STAGE'S PARITY.
-        # MEASURED, and the reason this exists: a cascade of INVERTING
-        # integrators flips the sign of the signal at every stage, so a
-        # feedback branch driven from the same node into every summing node
-        # is negative feedback at the odd stages and POSITIVE feedback at
-        # the even ones. On u_hawaii_adc's second-order loop that pinned the
-        # bitstream density at 0.017 for an input whose correct density is
-        # 0.6 — a modulator that looked closed and was fighting itself.
-        # An entry that declares no `alternates` gets `{alt}` = "" and is
-        # byte-identical to before.
+    records: List[Dict[str, Any]] = []
+    for st in groups:
+        count = _group_count(st, spec_values)
+        coeff_key = st.get("count_from")
+        coeffs: List[float]
+        if st.get(COEFFICIENTS_KEY, True) and coeff_key:
+            coeff_set = (lib.get(COEFFICIENT_SETS_KEY) or {}).get(str(count))
+            if coeff_set is None:
+                raise LibraryEntryError(
+                    f"no `{COEFFICIENT_SETS_KEY}` entry for "
+                    f"{coeff_key}={count}. An order the library carries no "
+                    f"coefficient set for must be excluded by "
+                    f"`{REQUIRES_DOMAIN_KEY}`, not defaulted here — "
+                    f"defaulting is how one design's coefficients end up "
+                    f"under another design's name.")
+            coeffs = [float(c) for c in coeff_set]
+        else:
+            # A group that carries no coefficients (a counter has none) says
+            # so, and is not asked for a set that would mean nothing.
+            coeffs = [1.0] * count
         alternates = [str(x) for x in (st.get("alternates") or [""])]
-        sub = {
-            "i": i,
-            "in": (st["first_in"] if i == 1
-                   else st["inner_out"].format(i=i - 1)),
-            "out": (st["last_out"] if i == count
-                    else st["inner_out"].format(i=i)),
-            "coeff": repr(coeffs[i - 1]),
-            "alt": alternates[(i - 1) % len(alternates)],
+        for i in range(1, count + 1):
+            sub = {
+                "i": i,
+                "i1": i + 1,
+                "in": (st["first_in"] if i == 1
+                       else st["inner_out"].format(i=i - 1)),
+                "out": (st["last_out"]
+                        if (i == count and st.get("last_out"))
+                        else st["inner_out"].format(i=i)),
+                "coeff": repr(coeffs[i - 1]),
+                "alt": alternates[(i - 1) % len(alternates)],
+            }
+            if st.get("inner_out2"):
+                sub["in2"] = (st["first_in2"] if i == 1
+                              else st["inner_out2"].format(i=i - 1))
+                sub["out2"] = (st["last_out2"]
+                               if (i == count and st.get("last_out2"))
+                               else st["inner_out2"].format(i=i))
+            for n in st.get("internal_nets") or []:
+                nets.append(n.format(**sub))
+            if i < count or not st.get("last_out"):
+                nets.append(st["inner_out"].format(i=i))
+            if st.get("inner_out2") and (i < count
+                                         or not st.get("last_out2")):
+                nets.append(st["inner_out2"].format(i=i))
+            for d in st.get("devices") or []:
+                nd = dict(d)
+                nd["name"] = str(d["name"]).format(**sub)
+                nd["function"] = str(d.get("function", "")).format(**sub)
+                nd["nets"] = [str(n).format(**sub)
+                              for n in d.get("nets") or []]
+                devices.append(nd)
+            for e in st.get("param_exprs") or []:
+                ne = dict(e)
+                ne["device"] = str(e["device"]).format(**sub)
+                ne["expr"] = str(e["expr"]).format(**sub)
+                ne["stage"] = i
+                ne["coefficient"] = coeffs[i - 1]
+                exprs.append(ne)
+        chain = ([st["first_in"]]
+                 + [st["inner_out"].format(i=i) for i in range(1, count)]
+                 + [st["last_out"] if st.get("last_out")
+                    else st["inner_out"].format(i=count)])
+        rec: Dict[str, Any] = {
+            "stages": count,
+            "count_from": st.get(COUNT_BITS_KEY) or st.get("count_from"),
+            "count_value_source": "spec",
+            "coefficients": coeffs,
+            "coefficient_set_key": str(count),
+            "chain": chain,
+            "role": st.get("role", "cascade"),
+            "note": ("the device count and the per-stage coefficients BOTH "
+                     "follow from the bound `%s`; nothing here is a library "
+                     "default" % (st.get(COUNT_BITS_KEY)
+                                  or st.get("count_from"))),
         }
-        for n in st.get("internal_nets") or []:
-            nets.append(n.format(**sub))
-        if i < count:
-            nets.append(st["inner_out"].format(i=i))
-        for d in st.get("devices") or []:
-            nd = dict(d)
-            nd["name"] = str(d["name"]).format(**sub)
-            nd["function"] = str(d.get("function", "")).format(**sub)
-            nd["nets"] = [str(n).format(**sub) for n in d.get("nets") or []]
-            devices.append(nd)
-        for e in st.get("param_exprs") or []:
-            ne = dict(e)
-            ne["device"] = str(e["device"]).format(**sub)
-            ne["expr"] = str(e["expr"]).format(**sub)
-            ne["stage"] = i
-            ne["coefficient"] = coeffs[i - 1]
-            exprs.append(ne)
-    record = {
-        "stages": count,
-        "count_from": st["count_from"],
-        "count_value_source": "spec",
-        "coefficients": coeffs,
-        "coefficient_set_key": str(count),
-        "chain": ([st["first_in"]]
-                  + [st["inner_out"].format(i=i)
-                     for i in range(1, count)]
-                  + [st["last_out"]]),
-        "note": ("the device count and the per-stage coefficients BOTH "
-                 "follow from the bound `%s`; nothing here is a library "
-                 "default" % st["count_from"]),
-    }
-    return devices, nets, exprs, record
+        if st.get(COUNT_BITS_KEY):
+            rec["window_clocks"] = 2 ** count
+            rec["note"] = (
+                "the stage count is the fewest divide-by-two stages whose "
+                "period reaches the bound `%s`, so the window this counter "
+                "gives is %d clocks — greater than or equal to the declared "
+                "value, and stated because a ripple divider's period is a "
+                "power of two" % (st[COUNT_BITS_KEY], 2 ** count))
+        records.append(rec)
+
+    # The FIRST group's record stays under the old key and the old shape, so
+    # every reader of `stage_expansion` keeps working; the full list is
+    # published beside it.
+    primary = dict(records[0])
+    if len(records) > 1:
+        primary["groups"] = records
+    return devices, nets, exprs, primary
 
 
 # ── artefacts ─────────────────────────────────────────────────────────────
@@ -2053,6 +2776,16 @@ def build_ir(block: str, btype: str, entry: Dict[str, Any],
     # so every pre-existing entry takes the identical path it always did.
     devices, internal_nets, param_exprs, stage_rec = expand_stages(
         lib, spec_values)
+    # A counter group's WINDOW — the number of clock periods its ripple chain
+    # takes to come back to zero — is computed during expansion and is not
+    # otherwise nameable: the expression grammar has no logarithm, so nothing
+    # downstream could derive it. Published as a constant so the entry's own
+    # testbench can say "measure the bitstream over one conversion window"
+    # instead of a number typed beside it.
+    for _grec in ([stage_rec] + list((stage_rec or {}).get("groups") or [])
+                  if stage_rec else []):
+        if isinstance(_grec, dict) and _grec.get("window_clocks"):
+            constants["window_clocks"] = float(_grec["window_clocks"])
     clamps = floor_geometry_to_pdk(lib, constants, devices, role_minima)
 
     ir: Dict[str, Any] = {

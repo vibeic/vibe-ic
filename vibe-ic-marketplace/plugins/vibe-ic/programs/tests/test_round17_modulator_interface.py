@@ -102,8 +102,12 @@ def test_the_common_mode_is_generated_from_the_declared_reference_pair():
 
 def test_the_declared_clock_actually_switches_something():
     """`clk` is a pin because the circuit uses it. A sampling capacitor with
-    no switches is a capacitor, and that is what the old entry drew."""
-    st = ENTRY["stage"]
+    no switches is a capacitor, and that is what the old entry drew.
+
+    ROUND 18: `stage` is a LIST of groups now — the integrator cascade and
+    the conversion-window counter — so this reads the group the switches are
+    in rather than indexing a dict that no longer exists."""
+    st = a2._stage_groups(ENTRY)[0]
     gated = [d for d in st["devices"] if len(d["nets"]) == 4
              and d["nets"][1] in ("clk", "nclkb")]
     assert len(gated) >= 4, [d["name"] for d in gated]
@@ -113,8 +117,9 @@ def test_bit_out_is_a_quantiser_decision_not_the_loop_filters_output():
     """The cascade's last output is an INTERNAL net, and `bit_out` is driven
     by devices that are not in the stage template. Renaming the integrator
     output to `bit_out` would pass every other test in this file."""
-    assert ENTRY["stage"]["last_out"] not in ENTRY["ports"]
-    assert ENTRY["stage"]["last_out"] in ENTRY["internal_nets"]
+    _cascade = a2._stage_groups(ENTRY)[0]
+    assert _cascade["last_out"] not in ENTRY["ports"]
+    assert _cascade["last_out"] in ENTRY["internal_nets"]
     drivers = [d for d in ENTRY["devices"] if d["nets"][0] == "bit_out"]
     assert drivers, "nothing on the block drives the declared output"
 
@@ -148,7 +153,9 @@ def test_the_binder_still_refuses_a_rename_it_cannot_prove():
 
 # ── 2. the alternating feedback node ──────────────────────────────────────
 def _expand(entry, order=2):
-    return a2.expand_stages(entry, {"order": float(order)})
+    # ROUND 18: the entry also carries a counter group whose count comes from
+    # the declared OSR, so the expansion needs that row bound too.
+    return a2.expand_stages(entry, {"order": float(order), "osr": 256.0})
 
 
 def test_the_dac_branch_alternates_with_the_stages_parity():
@@ -163,8 +170,9 @@ def test_the_dac_branch_alternates_with_the_stages_parity():
 def test_an_entry_that_declares_no_alternates_substitutes_nothing():
     """The control that keeps every other entry on its old path."""
     entry = json.loads(json.dumps(ENTRY))
-    entry["stage"].pop("alternates")
-    entry["stage"]["devices"] = [
+    entry["stage"] = [a2._stage_groups(entry)[0]]
+    entry["stage"][0].pop("alternates")
+    entry["stage"][0]["devices"] = [
         {"name": "m{i}", "role": "nmos", "function": "f",
          "nets": ["a{i}", "n{alt}", "vss", "vss"], "w": 1.0, "l": 1.0}]
     devices, _n, _e, _r = _expand(entry)
@@ -193,7 +201,7 @@ def test_the_shipped_library_satisfies_every_invariant():
 
 def test_a_stage_ending_on_an_undeclared_name_is_refused_by_name():
     entry = json.loads(json.dumps(ENTRY))
-    entry["stage"]["last_out"] = "a_name_nothing_declares"
+    entry["stage"][0]["last_out"] = "a_name_nothing_declares"
     problems = a2.library_invariants({"x": entry})
     assert any("last_out" in p for p in problems), problems
 

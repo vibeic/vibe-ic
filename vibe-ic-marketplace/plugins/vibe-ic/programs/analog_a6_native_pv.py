@@ -342,6 +342,38 @@ def lvs_runset_verdict(stdout: str) -> Optional[str]:
     return None
 
 
+#: A SPICE element card opens with the device letter of its class. The
+#: comparison-side source netlist is already in element form — that is what
+#: `analog_lvs_comparison_prep.device_calls_to_elements` produced — so the
+#: block's device count is the number of those cards inside its `.subckt`.
+#: This is a COUNT and nothing else: no device name, no net, no geometry
+#: leaves the netlist, which is the same NDA line `comp.json` already holds.
+_SPICE_ELEMENT_CARD = re.compile(r"^[MQRCDLJKVIEFGHXT]\S*\s", re.I)
+
+
+def source_device_count(text: str, block: str) -> Optional[int]:
+    """How many device cards the comparison-side netlist declares for `block`.
+
+    None when the netlist carries no `.subckt <block>` — an absent count must
+    read as absent, never as zero: a converter whose LVS says `0 devices` and
+    one whose LVS could not find the subcircuit are not the same finding, and
+    only one of them is a design problem.
+    """
+    inside = False
+    n = 0
+    for line in (text or "").splitlines():
+        st = line.strip()
+        if st.lower().startswith(".subckt"):
+            parts = st.split()
+            inside = len(parts) > 1 and parts[1].lower() == block.lower()
+            continue
+        if inside and st.lower().startswith(".ends"):
+            return n
+        if inside and _SPICE_ELEMENT_CARD.match(st):
+            n += 1
+    return n if inside else None
+
+
 def _klayout_lvs_runset_runner(deck: str, gds: str, netlist: str, block: str,
                                container: str, work: Path
                                ) -> Tuple[Optional[str], Dict[str, Any]]:
@@ -398,9 +430,29 @@ def _klayout_lvs_runset_runner(deck: str, gds: str, netlist: str, block: str,
     if verdict is None:
         return None, {"reason": f"LVS runset reported no verdict (rc={rc})",
                       "tail": ((out or "") + (err or ""))[-300:]}
+    # A verdict without its denominators is not a finding. `mismatch` with
+    # both device counts absent cannot tell the next reader whether 256
+    # devices met 256 with one net wrong, or met nothing at all — and this
+    # runner was publishing exactly that, because only the OTHER LVS runner
+    # collected the counts. The source side is free: it is the netlist this
+    # runner just prepared. The layout side is not available from this engine
+    # path — the runset's own report is a KLayout LVS database, not a device
+    # tally — so it is reported ABSENT WITH ITS REASON rather than as a bare
+    # null that reads like "not applicable".
     return verdict, {"method": "klayout_lvs_runset", "rc": rc,
                      "declared_ports": len(ports),
                      "device_calls_rewritten": stats["device_calls_rewritten"],
+                     "source_devices": source_device_count(prepared, block),
+                     "layout_devices": None,
+                     "layout_devices_absent_because": (
+                         "the klayout LVS runset reports a verdict and an "
+                         "LVS database, not an extracted device tally. The "
+                         "klayout_pdk_lvs comparer does produce one, but "
+                         "only for a PDK whose own layer numbering is "
+                         "staged: run without a layermap it refuses by name "
+                         "(`NO CIRCUIT -- the layer map recognized no "
+                         "device`), which is correct and is not a "
+                         "substitute for the count"),
                      "report": str(db)}
 
 
@@ -490,6 +542,13 @@ def _write_lvs_report(bdir: Path, block: str, verdict: str,
         "method": meta.get("method", "klayout_pdk_lvs"),
         "layout_devices": meta.get("layout_devices"),
         "source_devices": meta.get("source_devices"),
+        # An absent count is absent for a REASON, and the reason belongs next
+        # to it. Without this the artefact carries `null` and a reader cannot
+        # tell an engine that does not produce the number from a block that
+        # has none.
+        **({"counts_absent_because": meta["layout_devices_absent_because"]}
+           if meta.get("layout_devices") is None
+           and meta.get("layout_devices_absent_because") else {}),
         "note": ("device-level LVS (bulk-normalize + pin-fix); numbers only — "
                  "NDA hygiene, no netlist content"),
     }, indent=2) + "\n")

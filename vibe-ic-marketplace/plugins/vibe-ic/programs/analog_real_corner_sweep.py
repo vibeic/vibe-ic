@@ -946,7 +946,60 @@ def _container_path(container, host_root, host_path):
     _CONTAINER_PATH_CACHE[key] = "mount_table"
     return out
 
-def _run_ngspice(container, sp_in_container, cwd=None):
+#: The wall-clock a corner run is given, in seconds, and how it is chosen.
+#:
+#: A FIXED deadline is wrong for a deck whose LENGTH the design declares.
+#: MEASURED (u_hawaii_adc, ihp-sg13g2): an incremental delta-sigma's
+#: measurement unit is one CONVERSION WINDOW, and the window is the declared
+#: OSR — 256 clocks. The entry's own testbench therefore asks for
+#: `tran 0.5n 51200n`, every one of the nine corners was killed at the fixed
+#: 120 s having reached 30.3 us of the 51.2 us asked for, and the sweep then
+#: wrote no `corner_results.json` at all: A4 reported the block as WAIVED for
+#: a MISSING ARTEFACT. "I could not look" reported as "it is not there" —
+#: which is the defect `test_issue1283_probe_timeout_is_not_absence` exists
+#: to catch, one layer up.
+#:
+#: So the deadline SCALES with what the deck itself asks for. The floor is
+#: the old fixed value, so nothing that passes today gets less time; the
+#: slope is deliberately generous because the cost also depends on the device
+#: count, which this cannot see; and the ceiling is stated so a runaway deck
+#: still ends.
+SIM_DEADLINE_FLOOR_S = 120
+SIM_DEADLINE_S_PER_TRAN_NS = 0.5
+SIM_DEADLINE_CEILING_S = 7200
+
+_TRAN_RE = re.compile(
+    r"^\s*tran\s+\S+\s+([0-9.eE+-]+)\s*([munpf]?)s?\b", re.M | re.I)
+_TIME_SCALE = {"": 1e9, "m": 1e6, "u": 1e3, "n": 1.0, "p": 1e-3, "f": 1e-6}
+
+
+def tran_stop_ns(deck_text: str):
+    """The transient stop time a deck ASKS FOR, in nanoseconds, or None.
+
+    Read off the deck rather than guessed, because the deck is the only place
+    that knows: the entry that wrote it derived the span from the design's own
+    declared oversampling ratio.
+    """
+    m = _TRAN_RE.search(deck_text or "")
+    if not m:
+        return None
+    try:
+        value = float(m.group(1))
+    except ValueError:
+        return None
+    return value * _TIME_SCALE.get(m.group(2).lower(), 1.0)
+
+
+def sim_deadline_s(deck_text: str) -> int:
+    """The deadline for THIS deck. Never below the historical fixed value."""
+    stop_ns = tran_stop_ns(deck_text)
+    if stop_ns is None:
+        return SIM_DEADLINE_FLOOR_S
+    scaled = SIM_DEADLINE_FLOOR_S + stop_ns * SIM_DEADLINE_S_PER_TRAN_NS
+    return int(min(max(SIM_DEADLINE_FLOOR_S, scaled), SIM_DEADLINE_CEILING_S))
+
+
+def _run_ngspice(container, sp_in_container, cwd=None, deck_text=None):
     """Run ngspice -b on a deck. `cwd` (optional) runs ngspice FROM that
     directory — the model lib's own directory, so any deck-relative output /
     scratch file lands beside it.
@@ -978,10 +1031,24 @@ def _run_ngspice(container, sp_in_container, cwd=None):
     if _supports_json_measure(container, ngspice_bin):
         json_path = f"{sp_in_container}.measure.json"
         json_flag = f"--json-measure={shlex.quote(json_path)} "
+    deadline = sim_deadline_s(deck_text or "")
     cp = _docker(container,
                  f"{prefix}{shlex.quote(ngspice_bin)} -b {json_flag}"
-                 f"{shlex.quote(sp_in_container)} 2>&1")
+                 f"{shlex.quote(sp_in_container)} 2>&1",
+                 timeout=deadline)
     txt = cp.stdout
+    # A KILLED RUN IS NOT AN ABSENT ONE. `_container_exec` returns 124 when
+    # the deadline fires, and everything below this point reads a truncated
+    # log as "the measures are not there". Say what happened, with the two
+    # numbers a reader needs to act: what the deck asked for and what it was
+    # given.
+    if cp.returncode == 124:
+        _stop = tran_stop_ns(deck_text or "")
+        txt = (txt or "") + (
+            f"\nSIMULATION_DEADLINE_EXCEEDED: the deck asks for a transient "
+            f"of {_stop if _stop is not None else 'an unread span'} ns and "
+            f"was given {deadline} s of wall clock. This is a run that was "
+            f"STOPPED, not a measurement that came back empty.\n")
     json_meas = None
     if json_path:
         try:
@@ -2723,7 +2790,8 @@ def _run_block(project, block, container, pdk, topology_override):
         sp_host = sl_dir / f"run_{knob}_{val}.sp"
         sp_host.write_text(tb)
         ok, meas, raw, sim_status = _run_ngspice(
-            container, _container_path(container, host_root, sp_host))
+            container, _container_path(container, host_root, sp_host),
+            deck_text=tb)
         # ORGANIC-20260606 #438(a): persist the ngspice invocation log —
         # `simulator_run: true` is only claimable for corners whose
         # invocation log exists on disk.
