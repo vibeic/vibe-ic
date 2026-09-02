@@ -220,18 +220,35 @@ def test_the_moved_helper_is_not_paid_by_recording_it(shipped):
 
 def test_negative_arm_returning_a_paid_entry_restores_the_tightening(tmp_path):
     """Put a paid-down entry back into a COPY and the pending-tightening claim
-    must fail, or the positive claim proves nothing."""
+    must fail, or the positive claim proves nothing.
+
+    THIS ARM ASSERTS THE `[TIGHTENED]` LINE AND NOT THE EXIT CODE, and the
+    difference was measured rather than reasoned. It first asserted
+    `returncode == 0`, which is true only while the tree owes NO new entry —
+    an incidental property of the tree on the day it was written. At
+    b8e41ab05, `analog_loop_liveness_check` landed wired to nothing, the check
+    went rc 1 for that entirely separate reason, and this arm failed while the
+    thing it exists to detect was working perfectly. An arm that reports a
+    defect it does not measure is the same fault as one that misses the defect
+    it does: what it claims is that returning a paid entry brings the
+    tightening BACK, so that is the whole of what it asserts. The two rows
+    above still fail on a register that disagrees with the tree — correctly,
+    because that IS the state they are for."""
     doc = json.loads(_BASELINE.read_text())
     assert _PAID_DOWN not in doc["unwired"], "fixture entry is still recorded"
+    clean = _run(baseline=_BASELINE)
+    assert not _tightened_lines(clean.stdout + clean.stderr), (
+        "the unmutated register already reports a tightening, so this arm "
+        "cannot show that the mutation is what caused one")
     doc["unwired"] = sorted(set(doc["unwired"]) | {_PAID_DOWN})
     mutated = tmp_path / "baseline.json"
     mutated.write_text(json.dumps(doc, ensure_ascii=False))
     r = _run(baseline=mutated)
     both = r.stdout + r.stderr
-    assert r.returncode == 0, both
     lines = _tightened_lines(both)
     assert lines, both
     assert any("unwired" in ln for ln in lines), lines
+    assert _PAID_DOWN in both, both
 
 
 def test_negative_arm_the_register_still_refuses_growth(tmp_path):
