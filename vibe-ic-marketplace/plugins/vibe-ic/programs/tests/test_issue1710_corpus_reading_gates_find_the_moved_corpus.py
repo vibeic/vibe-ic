@@ -708,3 +708,92 @@ def test_repo_root_stops_at_the_marker(tmp_path):
     start = repo / "vibe-ic-marketplace" / "plugins" / "vibe-ic" / "programs"
     assert _corpus_loc.repo_root(start) == repo
     assert _corpus_loc.repo_root(tmp_path) is None
+
+
+# ===========================================================================
+# 6. THE REPOSITORY IS NOT THE CORPUS.
+#
+# v1.16.32 (37a46c00ca) excluded this plugin's own `programs/tests/` from the
+# walk, which closed the seven fixtures 4ce74e03b (v1.13.37) had landed. The
+# assertions below are about the PROPERTY that exclusion is an instance of,
+# because an exclusion answers only for the directories somebody has already
+# thought of. MEASURED at bcedcdf25d9c with one cell-shaped document planted
+# at `docs/campaigns/<run>/phase1/generated_docs/L4_REGMAP.json` — the
+# directory v1.15.79 MOVED THE CAMPAIGN TREES TO:
+#
+#     root <repo>: 1 on disk, 1 published
+#     [FAIL] 1 L4 key(s) have NO recorded SystemRDL disposition.
+#
+# The pair is: THE SAME DOCUMENT BYTES, in two places in one repository, must
+# get opposite answers. A test that only asserted "the plant is skipped" would
+# also pass against a gate that had stopped auditing anything at all, which is
+# why the second arm carries a real defect and must still be REFUSED.
+# ===========================================================================
+def _repo_with_l4_at(tmp_path: Path, rel: str) -> Path:
+    """A checkout-shaped repository carrying ONE defective L4 document at
+    `rel`. The defect — a register key with no row in `DISPOSITION` — is what
+    makes the audit's answer observable: audited means rc 1, not audited means
+    there was nothing to audit."""
+    repo = tmp_path / "repo"
+    (repo / "vibe-ic-marketplace" / "plugins" / "vibe-ic" / "programs").mkdir(
+        parents=True)
+    doc = json.loads(json.dumps(_L4_DOC))
+    doc["registers"][0]["an_unclassified_key"] = 1
+    target = repo / rel
+    target.parent.mkdir(parents=True)
+    target.write_text(json.dumps(doc))
+    _commit(repo)
+    return repo
+
+
+_PUBLISHED_REL = ("benchmark-data/ic/spm/v1.9.96_pdkX/phase1/generated_docs/"
+                  "L4_REGMAP.json")
+
+#: Two addresses in this repository that are NOT where a cell is published.
+#: The first is the one v1.16.32 excluded by name; the second is the one that
+#: exclusion does not reach, and is where v1.15.79 moved the campaign trees.
+_UNPUBLISHED_RELS = (
+    ("vibe-ic-marketplace/plugins/vibe-ic/programs/tests/fixtures/"
+     "stage_phase1_on_pass_review/reject_x/phase1/generated_docs/"
+     "L4_REGMAP.json"),
+    "docs/campaigns/2026-09-run/phase1/generated_docs/L4_REGMAP.json",
+)
+
+
+@pytest.mark.parametrize("rel", _UNPUBLISHED_RELS)
+def test_an_l4_document_outside_the_corpus_is_not_the_corpus(rel, tmp_path):
+    """ARM 1 — a tracked, cell-shaped, DEFECTIVE document that is not published
+    as a cell leaves the audit with nothing to audit, wherever it sits."""
+    repo = _repo_with_l4_at(tmp_path, rel)
+    rc, out = _run(L4, "audit-corpus", "--root", str(repo),
+                   "--corpus-may-be-absent")
+    assert rc == 0, f"{rel} was audited as a published corpus cell\n{out}"
+    assert "NO_CORPUS" in out, out
+    assert "an_unclassified_key" not in out, (
+        f"the plant's defect reached the report, so {rel} was in the "
+        f"population\n{out}")
+
+
+def test_the_same_document_inside_the_corpus_is_still_refused(tmp_path):
+    """ARM 2 — the SAME bytes at the published location must still FAIL. This
+    is the non-vacuity half: arm 1 alone is equally green against a gate that
+    audits nothing at all."""
+    repo = _repo_with_l4_at(tmp_path, _PUBLISHED_REL)
+    rc, out = _run(L4, "audit-corpus", "--root", str(repo),
+                   "--corpus-may-be-absent")
+    assert rc == 1, (
+        f"a published cell carrying an unclassified register key was not "
+        f"refused — the audit has stopped looking at the corpus too\n{out}")
+    assert "an_unclassified_key" in out, out
+
+
+def test_a_document_that_comes_home_is_audited_again(tmp_path):
+    """`audit_corpus`'s standing promise, asserted rather than assumed: the
+    narrowing must not have bought its greens by dropping the tree side. The
+    corpus location IS where a returning cell lands, so a repository carrying
+    one audits it with no pointer set at all."""
+    repo = _repo_with_l4_at(tmp_path, _PUBLISHED_REL)
+    assert _l4_gate.corpus_root_of(repo) == repo / "benchmark-data" / "ic", (
+        "the corpus a tree publishes is not resolved from the tree")
+    rc, _out = _run(L4, "audit-corpus", "--root", str(repo))
+    assert rc == 1, "the returning cell was not audited without a pointer"

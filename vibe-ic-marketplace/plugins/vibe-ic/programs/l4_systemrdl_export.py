@@ -363,6 +363,14 @@ alternate bit inside onreadtype onwritetype
 # --------------------------------------------------------------------------
 import _corpus_location            # sibling program, one seam for all gates
 import _published_tree
+
+#: Where a published L4 cell lives, RELATIVE TO THE TREE THAT PUBLISHES IT.
+#: The same relative path `l_doc_field_producer_check` and
+#: `evidence_citation_resolves_check` resolve through
+#: `_corpus_location.default_named`, and the one `benchmark_evidence_index`
+#: spells as `IC_SUBDIR`. Derived from the canonical corpus name so the four of
+#: them cannot drift to different answers about where the corpus is.
+_DEFAULT_CORPUS_REL = _corpus_location.CANONICAL_CORPUS_NAME + "/ic"
 import _semantic_child_progress as _semantic_progress
 
 PROGRESS_SCOPE = "issue1710:l4-systemrdl-audit-corpus"
@@ -1478,6 +1486,68 @@ def _l4_documents(root: Path, *,
 _TEST_DATA_DIR = Path(__file__).resolve().parent / "tests"
 
 
+def corpus_root_of(tree: Path) -> Path:
+    """The corpus `tree` publishes when `tree` is a REPOSITORY; `tree` itself
+    when it is already a corpus.
+
+    `--root` has always meant both, and that is the ambiguity a fixture walked
+    through. `test_corpus_audit_fails_on_an_unclassified_key` points it at a
+    bare directory holding `a/phase1/generated_docs/L4_REGMAP.json` and
+    requires the gate to redden — `--root` NAMES A CORPUS there. The CI call
+    site points it at the checkout — `--root` NAMES A REPOSITORY there, and
+    the corpus it publishes is `benchmark-data/ic`. Reading the second as the
+    first is what let seven pytest fixtures be certified as a published corpus.
+
+    The two are told apart BY BEHAVIOUR, not by a flag or a name: a repository
+    root is the directory carrying `vibe-ic-marketplace/`, which is what
+    `_corpus_location.repo_root` already answers and what its `_REPO_MARKER`
+    comment already justifies (present in a tarball export and a worktree, not
+    only in a `.git` checkout).
+
+    WHAT THIS ADDS TO `_TEST_DATA_DIR` ABOVE. v1.16.32 (37a46c00ca) closed the
+    measured instance — the seven documents 4ce74e03b (v1.13.37, PR #1845)
+    landed under `programs/tests/fixtures/stage_phase1_on_pass_review/**`,
+    seven months after the corpus left in v1.10.56. That exclusion is correct
+    and is KEPT: it is `_iter_l4`'s own contract about this plugin's test data
+    and it carries the recorded reason for it.
+
+    It is anchored at `programs/tests/`, so it answers for the documents that
+    were there. It does not answer for one somewhere else. MEASURED at
+    bcedcdf25d9c in the real checkout, one cell-shaped document planted at
+    `docs/campaigns/<run>/phase1/generated_docs/L4_REGMAP.json`::
+
+        root <repo>: 1 on disk, 1 published
+        [FAIL] 1 L4 key(s) have NO recorded SystemRDL disposition.
+           register an_unclassified_key  first seen: docs/campaigns/...
+
+    `docs/campaigns/` is not a hypothetical address: v1.15.79 is where the
+    campaign trees were MOVED TO. An exclusion answers "is this directory known
+    not to be corpus", and every directory nobody has thought of yet answers
+    no; asking where a cell is PUBLISHED answers for all of them at once.
+
+    THE STANDING PROMISE IS UNCHANGED. `audit_corpus` promises a document that
+    comes home to this repository does not stop being audited. It comes home to
+    the corpus, which is what this resolves — asserted by
+    `test_a_document_that_comes_home_is_audited_again`.
+
+    NO ANCESTOR WALK. `_corpus_location.default_named` resolves the same path
+    for a repository root, but it CLIMBS to find one, and climbing out of the
+    tree that was named is the host-dependence vibe-ic#1710 exists to have
+    removed. The equality below is the bounded form of the same question.
+
+    ONE SEAM, BOTH SIDES. `audit_corpus` and `semantic_progress_units` both
+    resolve through here, because a trusted parent computes its finite manifest
+    with the second while the child does the work with the first: resolving in
+    `main` instead — which I wrote first — makes the parent plan documents the
+    child never opens, and that surfaces as a progress-protocol violation
+    rather than as anything about the corpus.
+    """
+    tree = Path(tree).resolve()
+    if _corpus_location.repo_root(tree) != tree:
+        return tree                      # already a corpus; walk it as given
+    return tree / _DEFAULT_CORPUS_REL    # a repository; audit what it publishes
+
+
 def _iter_l4(root: Path) -> Iterable[Path]:
     """Walk the L4 documents on disk under `root`.
 
@@ -1529,7 +1599,7 @@ def semantic_progress_units(root: Path,
                             extra_roots: Sequence[Path] = ()) -> List[str]:
     """Exact finite work manifest for a trusted audit-corpus parent."""
     roots: List[Path] = []
-    for candidate in [root, *extra_roots]:
+    for candidate in [corpus_root_of(root), *extra_roots]:
         candidate = candidate.resolve()
         if candidate not in roots:
             roots.append(candidate)
@@ -1550,13 +1620,16 @@ def audit_corpus(root: Path,
                  extra_roots: Sequence[Path] = ()) -> Tuple[int, Dict[str, Any]]:
     """Is the disposition table still TOTAL over the published L4 corpus?
 
+    `root` is a TREE, and the corpus it publishes is resolved from it by
+    `corpus_root_of` — the repository is not the corpus.
+
     `extra_roots` is where a corpus that no longer lives in `root` is ADDED —
     $VIBE_IC_BENCHMARK_DATA after v1.10.56 moved the published cells out. Added,
     never swapped in: an L4 document that comes home to this repository must not
     stop being audited because a pointer is set.
     """
     roots: List[Path] = []
-    for r in [root, *extra_roots]:
+    for r in [corpus_root_of(root), *extra_roots]:
         r = r.resolve()
         if r not in roots:
             roots.append(r)
@@ -1753,6 +1826,10 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     if args.cmd == "audit-corpus":
         root = args.root or _repo_root(Path(__file__).resolve())
+        # What was ACTUALLY walked on the tree side, named in the messages
+        # below: saying "no L4 document under <repo>" while having scanned
+        # <repo>/benchmark-data/ic sends the reader to the wrong place.
+        scanned = corpus_root_of(root)
 
         # THE CORPUS IS ADDED, NOT SWAPPED IN, AND THE POINTER IS ANNOUNCED
         # (#1710). All 199 tracked `L4_REGMAP.json` lived under `benchmark-data/`
@@ -1794,8 +1871,8 @@ def main(argv: Optional[List[str]] = None) -> int:
                       "on disk, %d of them published). A corpus that was NAMED "
                       "and carries none of this gate's subject is a wrong "
                       "pointer, not an absent one."
-                      % (root, _corpus_location.CORPUS_ENV, env_tree, _L4_GLOB,
-                         on_disk, 0), file=sys.stderr)
+                      % (scanned, _corpus_location.CORPUS_ENV, env_tree,
+                         _L4_GLOB, on_disk, 0), file=sys.stderr)
                 return 2
             if args.corpus_may_be_absent:
                 # rc 0, and it must never read as an audit that happened.
@@ -1806,7 +1883,7 @@ def main(argv: Optional[List[str]] = None) -> int:
                       "key(s) examined and the disposition table was NOT "
                       "exercised. Point %s at a clone to make this gate check "
                       "something."
-                      % (_L4_GLOB, root, _corpus_location.CORPUS_ENV,
+                      % (_L4_GLOB, scanned, _corpus_location.CORPUS_ENV,
                          _corpus_location.CORPUS_ENV), file=sys.stderr)
                 return 0
             print("[NOT CHECKED] %s — nothing was audited, which is not a clean "
