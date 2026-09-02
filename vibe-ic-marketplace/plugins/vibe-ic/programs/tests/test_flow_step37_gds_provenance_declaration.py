@@ -143,16 +143,67 @@ def test_declaration_form_fails_closed_when_no_gds_exists(tmp_path):
         f"nullglob expansion before argparse saw it: {out!r}")
 
 
-def test_space_separated_form_would_have_been_vacuously_green(tmp_path):
+def test_space_separated_form_still_cannot_reach_the_honest_fail(tmp_path):
     """Why the `=` form: pin the measured failure of the obvious alternative,
-    so nobody 'tidies' the declaration back into it."""
+    so nobody 'tidies' the declaration back into it.
+
+    THE QUESTION WAS REWRITTEN, NOT THE BEHAVIOUR. This used to require the
+    space form to produce `__VACUOUS_HINT__` — vacuously GREEN — because that
+    was the only non-FAIL tier rc 2 could reach before `#1978`/`#1980`. The
+    nullglob collapse is unchanged and still measured here: argparse never
+    sees a value for `--output`, exits 2, and the step does NOT reach the
+    honest FAIL that the shipped `=` form reaches on this same project. What
+    changed is only the NAME of the tier it lands in instead — INCOMPLETE now,
+    a disclosed non-verdict rather than a vacuous pass. Either way the gate
+    concluded nothing, which is the whole reason the `=` form is required, so
+    the premise this test guards is intact and is now asserted as the
+    comparison it always was."""
     project = _no_gds_project(tmp_path)
     space_form = ("provenance_check . --output phase3/stage4/gds/*.gds "
                   "--tool klayout,magic,openroad")
     passed, out = _fcc._check_program_exit_zero(project, space_form)
-    assert passed and "__VACUOUS_HINT__" in out, (
-        "premise changed: the space-separated form no longer collapses under "
-        f"nullglob, so the `=` form may no longer be required. got: {out!r}")
+    assert passed, (
+        "premise changed: the space-separated form now FAILs on its own, so "
+        f"the `=` form may no longer be required. got: {out!r}")
+    cls = (out.split("reason_class=", 1)[1].split(";", 1)[0].strip()
+           if "reason_class=" in out else None)
+    assert cls not in _reason_taxonomy().SKIP_ELIGIBLE, out
+    assert _step_tier(project, space_form) == "INCOMPLETE", out
+    # ...against the shipped form on the SAME project, which is the point.
+    shipped_passed, _ = _fcc._check_program_exit_zero(
+        project, _provenance_command())
+    assert not shipped_passed
+    assert _step_tier(project, _provenance_command()) == "FAIL"
+
+
+def _reason_taxonomy():
+    import _flow_reason_taxonomy as T
+    return T
+
+
+def _step_tier(project, cmd):
+    """The tier the STEP reaches through the slot the canonical flow wires
+    `provenance_check` in — read through `check_step`, never re-derived."""
+    step = {"id": "probe", "name": "one clause",
+            "gate": {"all_of": [{"program_exit_zero": cmd}]}}
+    return _fcc.check_step(project, step, {}).status
+
+
+def test_the_nullglob_collapse_is_not_laundered_by_a_relabel(tmp_path):
+    """THE ASSERTION THAT REDDENS IF THE CLASSIFICATION MOVES AGAIN.
+
+    argparse rejecting its own command line is the reference EXECUTION_ERROR.
+    If a future recogniser books it skip-eligible, the step certifies again on
+    a project with no GDS at all — the exact defect the `=` form was written
+    for — so pin the class and the consequence together."""
+    T = _reason_taxonomy()
+    project = _no_gds_project(tmp_path)
+    space_form = ("provenance_check . --output phase3/stage4/gds/*.gds "
+                  "--tool klayout,magic,openroad")
+    _, out = _fcc._check_program_exit_zero(project, space_form)
+    cls = out.split("reason_class=", 1)[1].split(";", 1)[0].strip()
+    assert cls == T.EXECUTION_ERROR, out
+    assert "expected one argument" in out, out
 
 
 # ── behavioural discriminators on a fixture that mirrors the real run ───────

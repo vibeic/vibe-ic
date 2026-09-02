@@ -473,16 +473,57 @@ def test_a_too_short_waiver_does_not_excuse_anything(tmp_path):
 # --------------------------------------------------------------------------- #
 # 7. WIRING — an unwired program is a no-op
 # --------------------------------------------------------------------------- #
+def _advisory_commands(gate) -> list:
+    """The commands an `advisory_program_exit_zero` clause names, in BOTH
+    shapes the flow engine accepts.
+
+    `flow_compliance_check._evaluate_gate` takes a bare command STRING or a
+    MAPPING carrying `command:` (plus optional `condition_files_exist:`), and
+    `flow_gate_enforcement_audit._walk_clauses` reads the same two. This test
+    read only the string form and every Step-7 advisory clause acquired an
+    `advisory_reason:` in d155935a7d, so it crashed with AttributeError on a
+    dict -- a WIRING probe that stopped being able to see the wiring. Reading
+    both shapes is not a loosening: the third assertion below refuses any
+    shape that is neither, so a further schema change reddens HERE rather than
+    silently collecting nothing (a probe that collects nothing proves nothing).
+    """
+    out = []
+    for sub in gate.get("all_of", []):
+        if not (isinstance(sub, dict) and "advisory_program_exit_zero" in sub):
+            continue
+        spec = sub["advisory_program_exit_zero"]
+        assert isinstance(spec, (str, dict)), (
+            "an `advisory_program_exit_zero` clause is neither a command "
+            f"string nor a mapping; the flow engine rejects this: {spec!r}")
+        cmd = spec if isinstance(spec, str) else spec.get("command")
+        assert isinstance(cmd, str) and cmd, (
+            f"the clause names no command: {spec!r}")
+        out.append(cmd)
+    return out
+
+
 def test_gate_is_wired_into_the_flow_at_constraint_setup():
+    import importlib.util
     import yaml
     doc = yaml.safe_load(FLOW_YAML.read_text())
     step7 = next(s for s in doc["steps"] if str(s.get("id")) == "7")
-    cmds = [sub["advisory_program_exit_zero"]
-            for sub in step7["gate"]["all_of"]
-            if isinstance(sub, dict) and "advisory_program_exit_zero" in sub]
+    cmds = _advisory_commands(step7["gate"])
+    assert cmds, "Step 7 declares no advisory clause at all"
     assert any(c.startswith("macro_non_seq_arc_contract_check ") for c in cmds), \
         ("the gate must be invoked BY THE FLOW at Step 7 (constraint setup) — "
          "an unwired program is a no-op")
+    # ...and this file's reading of the schema must agree with the SHIPPED
+    # reader, so the two cannot drift into disagreeing about what is wired.
+    spec = importlib.util.spec_from_file_location(
+        "flow_gate_enforcement_audit",
+        PROGRAMS / "flow_gate_enforcement_audit.py")
+    fga = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(fga)
+    shipped = {c["command"] for c in fga.clauses_in_flow(FLOW_YAML)
+               if c["slot"] == "advisory_program_exit_zero"}
+    assert set(cmds) <= shipped, sorted(set(cmds) - shipped)
+    assert any(c.startswith("macro_non_seq_arc_contract_check ")
+               for c in shipped)
     # ...and nowhere later than Step 9 (synthesis), because the repair is an
     # RTL/integration change that has to land before the netlist is built.
     step_ids = [str(s.get("id")) for s in doc["steps"]]
@@ -517,10 +558,41 @@ def test_the_flow_gate_evaluator_actually_runs_it(tmp_path):
     step7 = next(s for s in doc["steps"] if str(s.get("id")) == "7")
     proj = _project(tmp_path)
     ok, reasons = fcc._evaluate_gate(proj, step7["gate"])
+    assert not ok, (
+        "premise: an EARLIER blocking sub-gate must already have failed, or "
+        "this is not testing the post-failure re-run at all")
     hints = [r for r in reasons
              if "macro_non_seq_arc_contract_check" in r]
     assert hints, reasons
-    assert any("FINDING" in h for h in hints), hints
+
+    # WHY THIS IS NOT `assert "FINDING" in h`. It was, and the word was a
+    # LITERAL in one prose line: 512cda48bf emitted
+    # `__ADVISORY_HINT__: FINDING: {cmd} :: ...`. #1980 replaced that line with
+    # `verdict=... rc=...` and made the TYPED record the authoritative channel
+    # -- and on this path the prose line does not survive at all, because a
+    # refusal appends `advisory gate refusal:` / `output:` and the
+    # post-failure re-run forwards only the hint-prefixed reasons. Re-adding
+    # the word to satisfy a substring would pin the spelling of a sentence and
+    # leave the disposition -- the thing the step is judged on -- unasserted.
+    # Assert the record instead: it is what `check_step` reads into
+    # `advisory_gate_records`.
+    records = [json.loads(h[len(fcc._ADVISORY_RECORD_HINT_PREFIX):])
+               for h in hints
+               if h.startswith(fcc._ADVISORY_RECORD_HINT_PREFIX)]
+    assert len(records) == 1, hints
+    rec = records[0]
+    assert rec["gate"] == "macro_non_seq_arc_contract_check", rec
+    # it RAN: a real process exit, not a disposition invented by the slot.
+    assert rec["exit_code"] == 1, rec
+    # it DECIDED, and the decision is the finding travelling up.
+    assert rec["verdict"] == "FAIL" and rec["structured_verdict"] == "FAIL", rec
+    # ...and the reason taxonomy is silent, which is what a substantive
+    # verdict looks like: a non-null class here would mean it concluded
+    # NOTHING and the finding above is not a finding.
+    assert rec["reason_class"] is None, rec
+    # the DENOMINATOR travels with it -- a record with no `__RAN_HINT__` is a
+    # verdict about a gate the step cannot prove it dispatched.
+    assert any(h.startswith(fcc._RAN_HINT_PREFIX) for h in hints), hints
 
 
 # --------------------------------------------------------------------------- #

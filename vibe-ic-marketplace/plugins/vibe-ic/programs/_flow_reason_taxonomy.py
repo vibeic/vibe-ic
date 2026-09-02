@@ -79,9 +79,28 @@ def report_reason_class(report: Any) -> Optional[str]:
     return None
 
 
+# The counted-zero shapes below were added from three MEASURED gate messages,
+# not from imagination. `read 0 <noun>` and `0 of 0 <noun> screened` are
+# `em_peak_current_authority_check` on a tree with no EM segments; `nothing to
+# re-derive` is `si_mcf_sta_check` on a SPEF it opened and parsed to zero
+# coupling pairs. All three were booked EXECUTION_ERROR, which says the program
+# errored — and none of them did. NOTHING GREENS ON THIS: ZERO_DENOMINATOR is
+# not skip-eligible either, so both classes render the same INCOMPLETE step
+# tier; what changes is only what the published row tells the person who has
+# to act on it.
+#
+# `0 of 0` and not `0 of N`: the second is a resolvable population that failed
+# to resolve, which is a fault and not an empty denominator —
+# `sdc_validator_check`'s bad positional says "0 of 2 declared search root(s)
+# could be resolved and 0 .sdc file(s) were read", and it must stay an
+# EXECUTION_ERROR. `read 0` and not `were read`, for the same reason and
+# against the same sentence.
 _ZERO_RE = re.compile(
     r"(?:\bzero[ -]denominator\b|\bexamined\s*[=:]?\s*0\b|"
     r"\bchecked\s*[=:]?\s*0\b|\b0\s*/\s*\d+\s+(?:examined|checked)\b|"
+    r"\b0\s+of\s+0\b|\bread\s+0\b|"
+    r"\bnothing (?:to|left to) (?:re[\s-]?derive|examine|check|compare|"
+    r"screen|measure|verify|audit)\b|"
     r"\ball\s+0\b|\bno (?:reports?|entries|documents?)\b|"
     r"\bno\b[^\n]{0,50}\bdocuments?\b|"
     r"\bnone\s+(?:could|were)\s+(?:be\s+)?(?:aged|examined|checked)\b|"

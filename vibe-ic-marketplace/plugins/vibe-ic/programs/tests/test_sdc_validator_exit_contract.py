@@ -207,14 +207,63 @@ def test_an_unusable_positional_is_not_checked(tmp_path, kind):
         f"{cp.stdout!r}")
 
 
+def _flow_disposition(project, cmd):
+    """The wrapper's snippet, the class it published, and the tier the STEP
+    reaches — read through the consumer's own functions, never re-derived."""
+    ok, out = _fcc._check_program_exit_zero(project, cmd)
+    cls = (out.split("reason_class=", 1)[1].split(";", 1)[0].strip()
+           if "reason_class=" in out else None)
+    step = {"id": "probe", "name": "one clause",
+            "gate": {"all_of": [{"program_exit_zero": cmd}]}}
+    return ok, out, cls, _fcc.check_step(project, step, {}).status
+
+
 def test_an_unusable_positional_does_not_reach_a_plain_pass_in_the_gate(
         tmp_path):
-    """Through the real runner: the tier must be VACUOUS, not PASS."""
+    """Through the real runner: the tier must not be a PASS and must not be a
+    skip.
+
+    THE QUESTION WAS REWRITTEN, NOT THE BEHAVIOUR. This asked for the
+    `__VACUOUS_HINT__` marker, because before `#1978`/`#1980` that marker was
+    the only tier between PASS and FAIL and so the only way to spell "not a
+    plain pass". rc 2 is now CLASSIFIED, and a positional that does not exist
+    is an EXECUTION_ERROR — not one of the three skip-eligible classes — so it
+    keeps the marker no longer. That is the taxonomy agreeing with this file's
+    own title: an unusable argument is a fault in the invocation, and calling
+    it a skip was always the weaker claim. The property this test defends is
+    unchanged and is now asserted directly."""
     project = _empty_project(tmp_path)
-    passed, out = _fcc._check_program_exit_zero(
+    passed, out, cls, tier = _flow_disposition(
         project, "sdc_validator_check does_not_exist")
-    assert passed, out
-    assert out.startswith(_fcc._VACUOUS_HINT_PREFIX), out
+    assert passed, out                                   # rc 2 is not a FAIL
+    assert not out.startswith(_fcc._VACUOUS_HINT_PREFIX), out
+    assert cls not in _reason_taxonomy().SKIP_ELIGIBLE, out
+    assert tier == "INCOMPLETE", (tier, out)
+    # the gate's own words reach the flow snippet now; they used to be deleted.
+    assert "NOT CHECKED" in out, out
+
+
+def _reason_taxonomy():
+    import _flow_reason_taxonomy as T
+    return T
+
+
+def test_an_unusable_positional_stays_an_execution_error(tmp_path):
+    """THE ASSERTION THAT REDDENS IF THE CLASSIFICATION MOVES AGAIN — and the
+    OTHER direction of the same control.
+
+    A bad positional is the reference EXECUTION_ERROR in this repo: the
+    program never got to look at anything because it was invoked wrongly.
+    Any future widening of the zero-denominator or capability recognisers that
+    swallows THIS message has widened too far, because the sentence also
+    truthfully reports `0 .sdc file(s) were read` — a zero that is the
+    CONSEQUENCE of the fault and not a denominator anybody measured."""
+    T = _reason_taxonomy()
+    project = _empty_project(tmp_path)
+    _, out, cls, _ = _flow_disposition(
+        project, "sdc_validator_check does_not_exist")
+    assert cls == T.EXECUTION_ERROR, (cls, out)
+    assert "0 .sdc file(s) were read" in out, out
 
 
 def test_a_subtree_positional_with_no_sdc_below_it_is_not_checked(tmp_path):

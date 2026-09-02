@@ -191,3 +191,81 @@ def test_real_flow_keeps_protocol_independent_questions_out_of_class_skips():
     suppressed = (set(F._CLASS_SKIPPABLE_PROTOCOL_GATES)
                   | set(F._CLASS_SKIPPABLE_ANALOG_GATES))
     assert independent.isdisjoint(suppressed)
+
+
+# ── a counted zero is not an execution error (C1) ──────────────────────────
+#
+# THE MESSAGES BELOW ARE MEASURED, NOT WRITTEN. Each is the exact prose the
+# named gate emits, captured on tree ca330272d through
+# `flow_compliance_check._check_program_exit_zero`. A recogniser tuned against
+# invented sentences is tuned against nothing.
+_ZERO_DENOMINATOR_MESSAGES = {
+    "em_peak_current_authority_check, no EM segments":
+        "em_peak_current_authority_check: read 0 peak-current figure(s) and 0 "
+        "declared supply authority(ies); 0 of 0 segment(s) screened against "
+        "Jmax.\n  no comparison was possible: the report declares neither a "
+        "peak segment current nor a supply authority.\nINCOMPLETE: "
+        "electromigration was NOT screened",
+    "si_mcf_sta_check, a SPEF it parsed to zero coupling pairs":
+        "VACUOUS_PASS: the SPEF named by the report parses to 2 net record(s), "
+        "0 two-node (coupling) *CAP entries and therefore 0 inter-net coupling "
+        "pairs, so the MCF fold has nothing to re-derive. Read this as NOT "
+        "CHECKED.",
+}
+
+_EXECUTION_ERROR_MESSAGES = {
+    "sdc_validator_check, a positional that does not exist":
+        "[SKIP] sdc_validator_check: NOT CHECKED — the positional "
+        "does_not_exist does not exist, so 0 of 2 declared search root(s) "
+        "(phase2/stage1/fpga, phase2/stage2/constraints) could be resolved and "
+        "0 .sdc file(s) were read. The positional is the PROJECT ROOT",
+    "provenance_check, argparse rejecting its own command line":
+        "usage: provenance_check.py [-h] [--output OUTPUT] [--tool TOOL]\n"
+        "provenance_check.py: error: argument --output: expected one argument",
+    "a program that crashed":
+        "Traceback (most recent call last):\n  File \"g.py\", line 3, in <m>\n"
+        "ZeroDivisionError: division by zero",
+}
+
+
+@pytest.mark.parametrize("label", sorted(_ZERO_DENOMINATOR_MESSAGES))
+def test_a_counted_zero_over_a_read_input_is_a_zero_denominator(label):
+    """`EXECUTION_ERROR` says the program errored. These two did not: one read
+    an EM report and found no segments, the other opened a SPEF, parsed two net
+    records, and found no coupling. Booking them as errors sends a reviewer to
+    debug a crash that did not happen."""
+    assert T.infer_nonverdict_reason(
+        message=_ZERO_DENOMINATOR_MESSAGES[label]) == T.ZERO_DENOMINATOR
+
+
+@pytest.mark.parametrize("label", sorted(_EXECUTION_ERROR_MESSAGES))
+def test_a_real_execution_fault_stays_an_execution_error(label):
+    """THE OTHER DIRECTION, and the reason the patterns above are narrow.
+
+    The sdc message truthfully reports `0 .sdc file(s) were read` and `0 of 2
+    ... could be resolved`: zeroes that are the CONSEQUENCE of a bad argument,
+    not a denominator anybody measured. A widening that swallows this sentence
+    has widened too far, and this parametrisation is what says so."""
+    assert T.infer_nonverdict_reason(
+        message=_EXECUTION_ERROR_MESSAGES[label]) == T.EXECUTION_ERROR
+
+
+def test_the_reclassification_greens_nothing():
+    """THE ANTI-BACKDOOR PIN. Fixing the recogniser must not be a route back to
+    the skip tier — the whole reason C1's five migrated assertions could not be
+    'fixed' this way. Both classes are outside SKIP_ELIGIBLE, so both render
+    INCOMPLETE; only the published row's wording changes."""
+    for cls in (T.ZERO_DENOMINATOR, T.EXECUTION_ERROR):
+        assert cls not in T.SKIP_ELIGIBLE
+        assert T.record_verdict(cls) == "INCOMPLETE"
+        assert T.p0_tier_for_reason_classes([cls]) == "INCOMPLETE"
+
+
+def test_zero_of_zero_and_zero_of_n_are_not_the_same_question():
+    """The discriminator, isolated. `0 of 0` is an empty population; `0 of N`
+    is a population of N that failed to resolve, which is a fault."""
+    assert T.infer_nonverdict_reason(
+        message="0 of 0 segment(s) screened") == T.ZERO_DENOMINATOR
+    assert T.infer_nonverdict_reason(
+        message="the positional does not exist, so 0 of 2 declared search "
+                "root(s) could be resolved") == T.EXECUTION_ERROR

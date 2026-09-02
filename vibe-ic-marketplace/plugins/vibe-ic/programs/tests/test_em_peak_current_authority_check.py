@@ -244,6 +244,19 @@ def test_not_a_directory_is_an_argument_error(tmp_path):
 
 
 # ── the TIER AS THE CONSUMER SEES IT (vibe-ic#1017) ────────────────────────
+def _flow_disposition(fcc, project, cmd, *, slot="program_exit_zero"):
+    """What the flow does with this command: the wrapper's snippet, the class
+    it published, and the tier the STEP reaches through the slot the canonical
+    flow wires this gate in.  Read through the consumer's own functions so it
+    cannot drift from them."""
+    ok, out = fcc._check_program_exit_zero(project, cmd)
+    cls = (out.split("reason_class=", 1)[1].split(";", 1)[0].strip()
+           if "reason_class=" in out else None)
+    step = {"id": "probe", "name": "one clause",
+            "gate": {"all_of": [{slot: cmd}]}}
+    return ok, out, cls, fcc.check_step(project, step, {}).status
+
+
 def test_the_refusal_reaches_the_flow_as_not_a_pass(tmp_path):
     """The exit code only matters because of what `flow_compliance_check` does
     with it, so assert it THERE and not just here.
@@ -254,21 +267,89 @@ def test_the_refusal_reaches_the_flow_as_not_a_pass(tmp_path):
     `test_matrix_d2_falsifiable::test_d2_gate_has_a_reachable_fail` said so on
     main for five merges and was merged past each time.
 
-    Driven through the consumer's own wrapper rather than a re-implementation
-    of its rules, so it cannot drift from them: rc 2 must land in the
-    VACUOUS_PASS tier — the "input-missing skip convention", explicitly NOT a
-    clean result — and a real comparison must still land in PASS.
+    WHAT THIS ASSERTION USED TO ASK, AND WHY IT WAS THE WRONG QUESTION. It
+    required the snippet to be `__VACUOUS_HINT__` — "the input-missing skip
+    convention, explicitly NOT a clean result". At the time that marker was the
+    only tier between PASS and FAIL, so pinning the MARKER was the only way to
+    spell the PROPERTY. `#1978`/`#1980` added the reason taxonomy and the two
+    came apart: rc 2 is now classified, and only a SKIP_ELIGIBLE class
+    (DESIGN_DECLARED_NA / CAPABILITY_ABSENT / EXTERNAL) keeps the skip marker.
+    This gate's own stdout has printed the line-start sentinel `INCOMPLETE:`
+    since it was written — the gate has always said it was NOT screened — and
+    the old wrapper DELETED that sentence and substituted the skip marker. The
+    property the assertion meant ("not a clean result") holds more strongly
+    than before; the marker it was spelled with no longer does. So it is the
+    QUESTION that is rewritten here, not the behaviour.
+
+    MEASURED, on the same empty tree (tree ca330272d): the step tier is
+    INCOMPLETE, and it is VACUOUS_PASS only if the class is relabelled
+    skip-eligible — which is the relabel `test_the_tier_is_not_bought_by_a_
+    relabel` below exists to redden.
     """
     import flow_compliance_check as fcc
 
     empty = tmp_path / "empty"
     (empty / "reports").mkdir(parents=True)
-    ok, out = fcc._check_program_exit_zero(
-        empty, "em_peak_current_authority_check .")
-    assert ok, out            # rc 2 is not a FAIL ...
-    assert out.startswith(fcc._VACUOUS_HINT_PREFIX), out   # ... and not a PASS
+    ok, out, cls, tier = _flow_disposition(
+        fcc, empty, "em_peak_current_authority_check .")
+    assert ok, out            # rc 2 is still not a FAIL ...
+    assert not out.startswith(fcc._VACUOUS_HINT_PREFIX), out  # ... nor a skip
+    # ... and it is not a PASS either, which is what #1017 was about.
+    assert cls not in _reason_taxonomy().SKIP_ELIGIBLE, out
+    assert tier == "INCOMPLETE", (tier, out)
+    # the gate's OWN sentence now survives into the flow's snippet, which is
+    # what the substituted marker used to delete.
+    assert "NOT screened" in out, out
 
     real = _project(tmp_path / "real", peak="1.0e-06", with_csv=True, with_jmax=True)
-    ok2, out2 = fcc._check_program_exit_zero(real, "em_peak_current_authority_check .")
+    ok2, out2, cls2, tier2 = _flow_disposition(
+        fcc, real, "em_peak_current_authority_check .")
     assert ok2, out2
     assert not out2.startswith(fcc._VACUOUS_HINT_PREFIX), out2
+    assert cls2 is None and tier2 == "PASS", (cls2, tier2, out2)
+
+
+def _reason_taxonomy():
+    import _flow_reason_taxonomy as T
+    return T
+
+
+def test_the_tier_is_not_bought_by_a_relabel(tmp_path):
+    """THE ASSERTION THAT REDDENS IF THE CLASSIFICATION MOVES AGAIN.
+
+    The cheapest way to make the assertion above go green again is to teach
+    this gate to publish `reason_class: CAPABILITY_ABSENT` (or to widen
+    SKIP_ELIGIBLE), which returns it to the skip tier without measuring one
+    more ampere. A denominator of zero is not a missing capability. This pins
+    the CONSEQUENCE of that relabel — the step certifies — so the trade is
+    visible in a diff instead of only in a tier nobody re-reads."""
+    import flow_compliance_check as fcc
+    T = _reason_taxonomy()
+
+    empty = tmp_path / "empty"
+    (empty / "reports").mkdir(parents=True)
+    cmd = "em_peak_current_authority_check ."
+
+    _, _, cls, tier = _flow_disposition(fcc, empty, cmd)
+    # ZERO_DENOMINATOR since the counted-zero recogniser was corrected: this
+    # gate READ an EM report and found no segments, so "the program errored"
+    # was never true of it. The TIER is unchanged at INCOMPLETE, which is what
+    # makes that correction a correction and not a route back to the skip
+    # tier — see `test_issue1978_reason_taxonomy::
+    # test_the_reclassification_greens_nothing`.
+    assert cls == T.ZERO_DENOMINATOR, (cls, tier)
+    assert cls not in T.SKIP_ELIGIBLE and tier == "INCOMPLETE", (cls, tier)
+
+    orig = T.infer_nonverdict_reason
+    try:
+        T.infer_nonverdict_reason = lambda **kw: T.CAPABILITY_ABSENT
+        fcc._reason_taxonomy.infer_nonverdict_reason = T.infer_nonverdict_reason
+        _, out_r, _, tier_r = _flow_disposition(fcc, empty, cmd)
+    finally:
+        T.infer_nonverdict_reason = orig
+        fcc._reason_taxonomy.infer_nonverdict_reason = orig
+    assert out_r.startswith(fcc._VACUOUS_HINT_PREFIX), out_r
+    assert tier_r == "VACUOUS_PASS", (
+        "the two dispositions must remain DISTINGUISHABLE at the step tier; "
+        "if this stops being true the assertion above has stopped measuring "
+        f"anything: {tier_r}")
