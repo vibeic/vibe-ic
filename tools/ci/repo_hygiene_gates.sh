@@ -28,6 +28,15 @@ set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 RUNTIME_ROOT="$(cd "$HERE/../.." && pwd)"
 ROOT="${VIBEIC_SUBJECT_ROOT:-$RUNTIME_ROOT}"
+# THE PPA CAMPAIGN CORPORA LIVE IN benchmark-data (vibe-ic#2019). 33 MB of
+# published campaign RUN OUTPUT sat at this repo's root; published evidence
+# belongs in the corpus repository, reached through the SAME pointer the ic/
+# cells use. Unset pointer -> the rows below refuse LOUDLY as NOT CHECKED
+# (never a silent pass): $PPA_ROOT stays empty and each --corpus path then
+# names a directory that does not exist, which every ppa_*_check.py already
+# reports as an unreadable corpus rather than an empty one.
+PPA_ROOT="${VIBE_IC_BENCHMARK_DATA:+$VIBE_IC_BENCHMARK_DATA/campaigns}"
+[ -n "$PPA_ROOT" ] || PPA_ROOT="$ROOT/PPA_CORPUS_POINTER_UNSET"
 case "$ROOT" in /*) ;; *)
   echo "repo_hygiene_gates: VIBEIC_SUBJECT_ROOT must be absolute" >&2
   exit 2 ;;
@@ -217,7 +226,7 @@ run_tolerating_uncheckable "PPA head-to-head records" "$ROOT" \
 # is the whole measurement.
 uncheckable_until 2027-02-28 "rc 2 here is a CONTENT verdict over a NON-EMPTY population, not a missing prerequisite: a record whose axis scope is incomplete or carries a null sentinel cannot be decided either way, and two nulls comparing EQUAL would otherwise pass two numbers taken under unrecorded conditions as taken under the same ones. A record that CAN be decided and fails is rc 1. THE DATE ON THIS EXEMPTION IS UNTOUCHED and no leniency changed; only a sentence of FACT did. It used to end 'and this corpus produces one today', naming h2h_F -- which was not a head-to-head at all but a within-project ablation mis-filed under this document kind, and has been re-filed as vibeic.ppa.ablation.v1 with every number byte-identical and the refusal that caused it kept beside it. The corpus is 14 records, 0 refused, and the 2 that remain undecidable are h2h_A and h2h_B. THEIR REASON IS NOT THE UNRECORDED-FIELD DEFECT THIS TEXT PREDICTED, and the sentence is corrected rather than left: both refuse at FEASIBILITY_NOT_CHECKED, naming 'feasibility.checks.drv.status' on BOTH arms, which check_feasibility reaches BEFORE check_scope_parity -- so the rc_corner sentinel h2h_A also carries is never the verdict. NAMED MISSING INPUT: a decided CLEAN/VIOLATIONS status on the drv axis. PRODUCER: none -- ppa-crosslayer/RESULT.md 8.4 measured that nothing in programs/ produces drv, which is why it was the last axis standing there too. Until this batch these two were rc 1 STAGE_CONTRADICTS_BASIS: each cited a stage='synth' power number under measurement_basis='post_route_sta'. Their power axis has been re-filed from the labelled post-route diagnostic the same trial already measured, so what is left is a stated gap and not a false claim"
 run_tolerating_uncheckable "PPA head-to-head records (cross-layer campaign)" "$ROOT" \
-    python3 "$PG/ppa_head_to_head_check.py" --corpus "$ROOT/ppa-crosslayer"
+    python3 "$PG/ppa_head_to_head_check.py" --corpus "$PPA_ROOT/ppa-crosslayer"
 # MEASURED: 2 record(s), 0 refused, 2 undetermined -> rc=2. That is a
 # content-earned NOT_CHECKED over a NAMED population of two, which is a
 # different fact from the zero-second no-op this row used to be.
@@ -232,7 +241,7 @@ run_tolerating_uncheckable "PPA head-to-head records (cross-layer campaign)" "$R
 # is simply not what stops these two.
 uncheckable_until 2027-02-28 "rc 2 here is a CONTENT verdict over a NON-EMPTY population of two. THE VERDICT BOTH RECORDS ACTUALLY RETURN is FEASIBILITY_NOT_CHECKED, naming 'feasibility.checks.drv.status', 'feasibility.checks.setup.status' and 'feasibility.checks.hold.status'; check_feasibility runs before check_scope_parity, so the rc_corner gap described below is real but is not what stops them. Until this batch the first of the two was rc 1 STAGE_CONTRADICTS_BASIS -- a stage='synth' power number cited under measurement_basis='post_route_sta' -- and its power axis has been re-filed from the post-route diagnostic this campaign had already measured and published beside it in head_to_head_diagnostic_power.json. THE SECOND, PRE-EXISTING GAP, still true: both published records declare a timing rc_corner key with no value, so on that axis too neither comparison can be decided. It is NOT a claim that the corpus is empty — the count is printed on every run — and a record that CAN be decided and fails is rc 1. THE PRODUCER-SIDE CAUSE, MEASURED 2026-08-22 over every scope/source pair in ppa-e2e: the timing axis of both records is taken from sta_spef_based.rpt, and that report names no RC corner anywhere in this corpus — 490 of 490 metric rows sourced from it carry rc_corner null. The only source that DOES name one is sta_spef_multicorner.rpt (549 max / 544 min), which is what the cross-layer records use and why they are decided. Re-filing the axis from it is not a repair anyone can make here: its rows sit at a different process corner than the tt/1.6V/100C these records publish, and its own wns_ns is null. NAMED MISSING INPUT: a setup WNS for these two arms, at the corner they publish, from an STA run that records its RC corner. PRODUCER: the end-to-end campaign runner. Stating the field from anything in the tree today would be composing the condition after the measurement"
 run_tolerating_uncheckable "PPA head-to-head records (end-to-end campaign)" "$ROOT" \
-    python3 "$PG/ppa_head_to_head_check.py" --corpus "$ROOT/ppa-e2e"
+    python3 "$PG/ppa_head_to_head_check.py" --corpus "$PPA_ROOT/ppa-e2e"
 
 # THE ABLATION KIND, WHICH UNTIL NOW HAD A SCHEMA AND NO GATE.
 #
@@ -293,7 +302,7 @@ run_tolerating_uncheckable "PPA head-to-head records (end-to-end campaign)" "$RO
 # nothing before this row existed.
 uncheckable_until 2027-02-28 "rc 2 here is NOTHING OPENED or nothing of this kind found -- never a verdict about a record. Over THIS repository the gate DECIDES and PASSES today: 633 JSON file(s) opened under ppa-crosslayer, 1 ablation record selected, 0 refused, 0 undetermined, 1 accepted, rc 0. The reachable rc 2 is environmental and was MEASURED, not guessed: a landing that binds a corpus (GATEKEEPER_BENCHMARK_DATA_SHA) forces VIBE_IC_BENCHMARK_DATA and refuses the candidate-local ppa-crosslayer shadow, so this row then reads a clone that carries no ablation record and answers VACUOUS rc 2. A record that IS read and does not hold is rc 1 and still fails this row. WHAT THE REVIEW DATE IS FOR: if the corpus this repository carries ever stops holding an ablation record, this row goes NOT CHECKED and the exemption above becomes a false sentence -- that is the state to look for, not the date"
 run_tolerating_uncheckable "PPA ablation records (within-project)" "$ROOT" \
-    python3 "$PG/ppa_ablation_check.py" --corpus "$ROOT/ppa-crosslayer"
+    python3 "$PG/ppa_ablation_check.py" --corpus "$PPA_ROOT/ppa-crosslayer"
 
 # THE REST OF THE PPA RECORD FAMILY, wired on the ruling three lines above.
 #
@@ -364,11 +373,11 @@ run_tolerating_uncheckable "PPA ablation records (within-project)" "$ROOT" \
 # MEASURED 2026-08-22: 21 contract(s), 0 refused, 0 undetermined, 21 accepted.
 uncheckable_until 2027-02-28 "PASSES today over 21 contracts; rc 2 is reachable and must stay non-fatal because it means a document in the corpus could not be READ — an unparseable contract that was named one is kept in the population deliberately rather than dropped, and 'I could not open it' is not a finding against the run it describes. A contract that IS read and does not hold is rc 1"
 run_tolerating_uncheckable "PPA measurement contract (cross-layer campaign)" "$ROOT" \
-    python3 "$PG/ppa_contract_check.py" --corpus "$ROOT/ppa-crosslayer"
+    python3 "$PG/ppa_contract_check.py" --corpus "$PPA_ROOT/ppa-crosslayer"
 # MEASURED 2026-08-22: 61 contract(s), 0 refused, 0 undetermined, 61 accepted.
 uncheckable_until 2027-02-28 "PASSES today over 61 contracts; rc 2 is reachable only through an unreadable document kept in the population on purpose, and that is not a finding against the run it describes. A contract that IS read and does not hold is rc 1"
 run_tolerating_uncheckable "PPA measurement contract (end-to-end campaign)" "$ROOT" \
-    python3 "$PG/ppa_contract_check.py" --corpus "$ROOT/ppa-e2e"
+    python3 "$PG/ppa_contract_check.py" --corpus "$PPA_ROOT/ppa-e2e"
 # The published corpus in the other repository, unchanged in subject and
 # corrected in wording. It is the one contract row that genuinely cannot run here.
 uncheckable_until 2027-02-28 "the PUBLISHED corpus lives in another repository since v1.10.56; rc 2 means VIBE_IC_BENCHMARK_DATA is unset or unreadable. It is NOT a claim that no contract exists — 82 are committed here and are validated by the two rows above"
@@ -384,7 +393,7 @@ run_tolerating_uncheckable "PPA measurement contract" "$ROOT" python3 "$PG/ppa_c
 # nothing declares what should have been measured"), which is a fact about the
 # campaign rather than about the wiring. Both are rc 2 and neither is a pass.
 uncheckable_until 2027-02-28 "MISSING ARTEFACT, NAMED: a document with a non-empty expected list — the (metric, scope) pairs a PPA run is REQUIRED to produce, declared before the run. Nothing in this repository declares one; the record sets it would be measured against are committed and this row now reads one, so rc 2 is NO_EXPECTATION_SET and not INPUT_ABSENT. PRODUCER: ppa_contract_build.py, which already writes the metrics key it leaves empty; the denominator belongs beside required_views_by_axis, declared from L19_CONSTRAINTS_PDK rather than inferred from whatever the run happened to emit. Writing one HERE would be composing the answer key after the exam"
-run_tolerating_uncheckable "PPA measurement coverage" "$ROOT" python3 "$PG/ppa_measurement_check.py" --coverage "$ROOT/ppa-crosslayer/records/trials/b000/records_flat.json"
+run_tolerating_uncheckable "PPA measurement coverage" "$ROOT" python3 "$PG/ppa_measurement_check.py" --coverage "$PPA_ROOT/ppa-crosslayer/records/trials/b000/records_flat.json"
 
 # MEASURED 2026-08-22: 21 set(s), 0 infeasible, 21 undetermined, 0 feasible.
 # Every one is `em:FEAS_NOT_MEASURED` and `equivalence:FEAS_NOT_MEASURED`, which
@@ -403,7 +412,7 @@ run_tolerating_uncheckable "PPA measurement coverage" "$ROOT" python3 "$PG/ppa_m
 # candidates document declares its own views; that is the input to use.
 uncheckable_until 2027-02-28 "rc 2 here is a CONTENT verdict over 21 adjudicated candidate sets, not an absent input: seven of nine feasibility axes are SATISFIED on every one and two (em, equivalence) carry no measurement at all, so no candidate may be called promotable. That reproduces the campaign's own published summary.json verdict. A candidate that IS measured and VIOLATES an axis is rc 1"
 run_tolerating_uncheckable "PPA promotion feasibility (cross-layer campaign)" "$ROOT" \
-    python3 "$PG/ppa_feasibility_check.py" --corpus "$ROOT/ppa-crosslayer"
+    python3 "$PG/ppa_feasibility_check.py" --corpus "$PPA_ROOT/ppa-crosslayer"
 
 # STILL CANNOT CHECK, AND THE SECOND MISSING ARTEFACT IS WHY IT STAYS THAT WAY.
 # `objectives` could be DERIVED here: each trial's `objective.json` names the
@@ -413,7 +422,7 @@ run_tolerating_uncheckable "PPA promotion feasibility (cross-layer campaign)" "$
 # would recompute a frontier and then check it against itself. A gate marking
 # its own paper is not a gate, so this row is left refusing.
 uncheckable_until 2027-02-28 "TWO MISSING ARTEFACTS, NAMED: (1) an objectives list [{key, metric, sense, scope}] — no contract, candidates document or any other file in this repository carries that key, measured; (2) a PUBLISHED frontier.json to be the thing under test. (1) alone is derivable from each trial's objective.json + summary.json, but deriving BOTH would have this gate recompute a frontier and check it against itself, which is a manufactured pass. PRODUCER: the search runner — ppa-crosslayer/tools/summarize.py already computes the ranking RESULT.md publishes as a Pareto set and emits it as prose and tables, never as a frontier.json. Making it write one, beside the objectives it is already optimising against, takes this gate live"
-run_tolerating_uncheckable "PPA frontier recomputes" "$ROOT" python3 "$PG/ppa_pareto_check.py" --candidates "$ROOT/ppa-crosslayer/records/trials/z23/candidates.json"
+run_tolerating_uncheckable "PPA frontier recomputes" "$ROOT" python3 "$PG/ppa_pareto_check.py" --candidates "$PPA_ROOT/ppa-crosslayer/records/trials/z23/candidates.json"
 
 # EVERY PUBLISHED PAIR, NOT THE HEADLINE PAIR. This row first re-aimed at the
 # one comparison each campaign quotes — cross-layer `b000` vs `z23`, end-to-end
@@ -449,11 +458,11 @@ uncheckable_until 2027-02-28 "PASSES today over 210 pairs — 21 contracts in 1 
 # grouping compares every pair inside the group, which is the stronger question.
 run_tolerating_uncheckable "PPA arms solved one problem (cross-layer campaign)" "$ROOT" \
     python3 "$PG/ppa_problem_integrity_check.py" \
-    --corpus "$ROOT/ppa-crosslayer"
+    --corpus "$PPA_ROOT/ppa-crosslayer"
 uncheckable_until 2027-02-28 "PASSES today over 1830 pairs — 61 contracts in 1 problem group, every pair inside the group compared. It was 60 while this row ran baseline-against-each; grouping is the stronger question and the declaration has to say which one it bought. rc 2 means a contract in the corpus could not be read, which is not a finding about either design. Two contracts that ARE read and disagree on the problem, analysis or toolchain identity are rc 1"
 run_tolerating_uncheckable "PPA arms solved one problem (end-to-end campaign)" "$ROOT" \
     python3 "$PG/ppa_problem_integrity_check.py" \
-    --corpus "$ROOT/ppa-e2e"
+    --corpus "$PPA_ROOT/ppa-e2e"
 
 # THE PUBLISHED SENTENCE, not the record behind it. Every gate above this line
 # asks whether an artefact is internally honest; none of them asks what the
@@ -476,8 +485,8 @@ run_tolerating_uncheckable "PPA arms solved one problem (end-to-end campaign)" "
 # could not be read), which is a missing prerequisite and must stay blocking
 # rather than buy an exemption. rc 1 is a finding about a sentence.
 run "PPA published page claims" "$ROOT" \
-    python3 "$PG/ppa_page_claim_check.py" "$ROOT/ppa-e2e/report/winner/report.md" \
-    --claims "$ROOT/ppa-e2e/report/winner/claims.json" --cite-numbers
+    python3 "$PG/ppa_page_claim_check.py" "$PPA_ROOT/ppa-e2e/report/winner/report.md" \
+    --claims "$PPA_ROOT/ppa-e2e/report/winner/claims.json" --cite-numbers
 
 # THE AUTHORISATION, checked against the tree it authorises. The actuator
 # registry is what decides which programs a closure controller MAY run; an entry
@@ -2052,7 +2061,13 @@ run "two input selectors given together must refu" "$ROOT" python3 "$PG/two_inpu
 # axis this gate refuses, wearing an answer. The gate's own file is on the
 # consumer list for the same class of reason — with the walk widened it began
 # reading itself.
-run "gate proof vocabulary has a producer" "$ROOT" python3 "$PG/gate_proof_vocabulary_has_a_producer.py" --root "$ROOT"
+# TWO ROOTS since #2019: the axis TABLE lives in this repo and the two live
+# `timing.drv.*` producers moved to benchmark-data/campaigns with the campaign
+# trees. Given only this repo the gate reports a provable axis unprovable --
+# the exact false positive its own docstring was written to prevent. With the
+# pointer unset $PPA_ROOT names a directory that does not exist and the gate
+# refuses LOUDLY (rc 2, NOT a pass) rather than answering over half the system.
+run "gate proof vocabulary has a producer" "$ROOT" python3 "$PG/gate_proof_vocabulary_has_a_producer.py" --root "$ROOT" --root "$PPA_ROOT"
 
 # The SEVENTEENTH of that family, wired separately because it did not land with
 # the sixteen: when they were measured it exited 1 on a GENUINE finding and
@@ -2123,7 +2138,11 @@ run "signoff report states its stage" "$ROOT" python3 "$PG/signoff_report_states
 #   with the parser's default `--allow`, so `ir_drop.json` / `power.json`
 #   wrappers keep their CONDITIONAL exemption; `--allow-honest-na` is NOT
 #   passed, so no verdict-only shape is exempted here.
-run "report basis matches its session inputs" "$ROOT" python3 "$PG/declared_basis_matches_the_session_inputs.py" "$ROOT"
+# The (session.tcl, session.rpt) pairs this audits are campaign RUN OUTPUT and
+# moved wholesale with #2019: all 22 pairs it examined were under ppa-*, and
+# this repo now holds none, over which the checker refuses rather than passing
+# vacuously. So it is pointed at the tree that holds its population.
+run "report basis matches its session inputs" "$ROOT" python3 "$PG/declared_basis_matches_the_session_inputs.py" "$PPA_ROOT"
 run "explicit argument outranks the env pointer" "$ROOT" python3 "$PG/explicit_argument_outranks_the_environment_pointer.py" "$ROOT"
 run "cross-design report identity" "$ROOT" python3 "$PG/cross_design_identity_check.py" \
   "$ROOT/docs/research/fleet_run_folder_triage_evidence/112/_gk198_gk/ibex" \

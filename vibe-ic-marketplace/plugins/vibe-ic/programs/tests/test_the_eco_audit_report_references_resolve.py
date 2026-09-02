@@ -32,6 +32,7 @@ the base.
 """
 import pathlib
 import re
+import os
 import subprocess
 import sys
 
@@ -56,7 +57,14 @@ def _repo_root():
 
 
 def _report():
-    p = _repo_root() / "ppa-eco-axis-audit" / "RESULT.md"
+    # vibe-ic#2019 — the campaign evidence moved to benchmark-data/campaigns/.
+    # The pointer is the corpus's address; the old in-repo path is still read
+    # so a checkout that predates the move keeps working.
+    _ptr = os.environ.get("VIBE_IC_BENCHMARK_DATA")
+    _cands = ([pathlib.Path(_ptr) / "campaigns" / "ppa-eco-axis-audit" / "RESULT.md"]
+              if _ptr else [])
+    _cands.append(_repo_root() / "ppa-eco-axis-audit" / "RESULT.md")
+    p = next((c for c in _cands if c.is_file()), _cands[-1])
     if not p.is_file():
         skip_not_verified(
             f"{p} is not in this checkout; its citations were not observed",
@@ -117,6 +125,25 @@ def test_every_sha_the_report_cites_resolves_to_a_commit():
         f"repository: {dead}")
 
 
+def _cited_path_exists(root, cited):
+    """Resolve a cited path against the tree that now HOLDS it.
+
+    vibe-ic#2019 moved the campaign corpora out of this repo and into
+    benchmark-data/campaigns/. A `ppa-*/...` citation still means the same
+    artefact -- only its address changed -- so it is resolved against the
+    corpus when the pointer names one, and against this repo otherwise, which
+    keeps a checkout that predates the move working. Every other prefix is a
+    repo path and is resolved here as before.
+    """
+    if (root / cited).exists():
+        return True
+    if not cited.startswith("ppa-"):
+        return False
+    ptr = os.environ.get("VIBE_IC_BENCHMARK_DATA")
+    if not ptr:
+        return False
+    return (pathlib.Path(ptr) / "campaigns" / cited).exists()
+
 def test_every_repo_path_the_report_cites_exists():
     """A path in backticks that is not there sends a reader hunting."""
     root = _repo_root()
@@ -132,7 +159,7 @@ def test_every_repo_path_the_report_cites_exists():
         r"`((?:vibe-ic-marketplace|tools|ppa-[a-z-]+|docs)/[A-Za-z0-9._/-]+)`",
         text)))
     assert paths, "no repo paths cited at all; this row would pass vacuously"
-    missing = [p for p in paths if not (root / p).exists()]
+    missing = [p for p in paths if not _cited_path_exists(root, p)]
     assert not missing, (
         f"{len(missing)} of {len(paths)} cited path(s) do not exist: {missing}")
 
