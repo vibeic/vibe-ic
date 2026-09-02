@@ -27803,27 +27803,79 @@ def um(v):
     return int(round(float(v) / dbu))
 
 
+def _li(g):
+    a, b = (int(x) for x in str(g).split("/"))
+    return ly.layer(pya.LayerInfo(a, b))
+
+
+def _reg(g):
+    r = pya.Region(tc.begin_shapes_rec(_li(g)))
+    r.merge()
+    return r
+
+
+# TWO SPEC SHAPES, and the older one is preserved EXACTLY.
+#
+#   legacy  {"layers": [{gds, tile_um, pitch_um, margin_um, min_density}]}
+#   derived {"levels": [{write_gds, tile_um, pitch_um, target_pct,
+#                        coverage_counts, avoid:[{gds, space_um}]}]}
+#
+# The legacy shape grew its keep-out from `begin_shapes_rec` on the ONE layer it
+# wrote to. That is expressible only where dummy metal shares a layer with
+# circuit metal. MEASURED (subservient x gf180mcuD, 2026-09-02/03, 8HD-4): this
+# PDK maps `metal2_dummy` to 36/4 and `metal2_drawn` to 36/0 and requires 2 um
+# between them, so tiles aimed at 36/0 became circuit metal inside 2 um of the
+# dummy already there -- 65670 DM2.3/DM3.3 violations, the count tracking the
+# tile count. A legacy spec is translated into the derived shape with a
+# single-layer `avoid` at its own `margin_um`, which reproduces the old
+# behaviour byte-for-byte; nothing that ships a legacy spec changes.
+levels = spec.get("levels")
+if not levels:
+    levels = [{"write_gds": l["gds"],
+               "tile_um": l.get("tile_um", 1.2),
+               "pitch_um": l.get("pitch_um", 1.9),
+               "target_pct": 100.0 * float(l.get("min_density", 0.0) or 0.0),
+               "coverage_counts": [l["gds"]],
+               "avoid": [{"gds": l["gds"],
+                          "space_um": l.get("margin_um", 0.65)}],
+               "name": l.get("name", l["gds"])}
+              for l in spec.get("layers", [])]
+
 die = tc.bbox()
 die_area = float(die.area())
 summary = []
-for lay in spec.get("layers", []):
-    lnum, dnum = (int(x) for x in str(lay["gds"]).split("/"))
-    li = ly.layer(pya.LayerInfo(lnum, dnum))
+for lay in levels:
+    wli = _li(lay["write_gds"])
     tile = um(lay.get("tile_um", 1.2))
     pitch = um(lay.get("pitch_um", 1.9))
-    margin = um(lay.get("margin_um", 0.65))
-    min_density = float(lay.get("min_density", 0.0) or 0.0)
-    # Fill-tile-to-fill-tile spacing floor = the config's OWN grid gap
-    # (pitch - tile): the base grid already leaves exactly this gap between
-    # neighbours and the un-densified run is spacing-clean, so honouring it
-    # on every densification pass keeps fill tiles from ever touching
-    # (no wide-metal) or crowding metal spacing.
-    gap = max(1, pitch - tile)
-    existing = pya.Region(tc.begin_shapes_rec(li))
-    existing.merge()
+    # `min_density` is a FRACTION, the same quantity the legacy spec declared;
+    # `target_pct` is the deck's own percentage. One is the other over 100, and
+    # both names are kept so the legacy spec and the derived one are the same
+    # arithmetic rather than two.
+    min_density = float(lay.get("target_pct", 0.0) or 0.0) / 100.0
+
+    # KEEP-OUT OVER A SET OF LAYERS, each grown by ITS OWN rule spacing.
+    keepout = pya.Region()
+    gap = 0
+    for av in lay.get("avoid", []):
+        s = um(av["space_um"])
+        keepout += _reg(av["gds"]).sized(s)
+        if str(av["gds"]) == str(lay["write_gds"]):
+            gap = s          # tile-to-tile obeys the same rule as tile-to-dummy
+    keepout.merge()
+
+    # THE GRID ITSELF MUST OBEY THAT RULE. `placed.sized(gap)` only keeps a
+    # LATER tile off an earlier one; tiles emitted together by one grid pass are
+    # `pitch - tile` apart whatever that check says. MEASURED: pitch 1.9 with
+    # tile 1.2 leaves 0.7 um against this PDK's 0.98 um dummy-to-dummy rule, and
+    # the deck answered 683 + 595. Derived, not tuned -- the floor is the same
+    # spacing the keep-out already read off the deck.
+    if gap > 0 and pitch - tile < gap:
+        pitch = tile + gap
+
+    margin = gap if gap > 0 else um(0.5)
     frame = pya.Region(die)
-    frame.size(-margin)                 # keep fill off the die edge
-    live_halo = existing.sized(margin)  # spacing from live metal
+    frame.size(-margin)
 
     def _grid_tiles(x0, y0):
         tg = pya.Region()
@@ -27836,17 +27888,14 @@ for lay in spec.get("layers", []):
             x += pitch
         return tg
 
-    # Density-driven multi-phase fill. The base grid (phase 0) reproduces the
-    # legacy single-pass fill EXACTLY; when the layer declares a min_density
-    # the deck enforces and the base grid falls short (a thin route halo
-    # rejects a WHOLE base-grid cell even where most of it is clear), extra
-    # phase-shifted grids drop tiles into those grid-misaligned pockets.
-    # Every pass keeps only tiles a full `margin` from live metal AND a full
-    # `gap` from already-placed fill, so densifying never shorts a net,
-    # merges into wide-metal, nor crowds spacing — the sign-off deck re-checks
-    # the filled GDS with every rule live. chip-AGNOSTIC: pure geometry + the
-    # PDK bridge's own per-layer targets. Legacy behaviour (no min_density, or
-    # base grid already meeting it) is byte-for-byte unchanged.
+    def _coverage(extra):
+        tot = pya.Region()
+        for g in lay.get("coverage_counts", [lay["write_gds"]]):
+            tot += _reg(g)
+        tot += extra
+        tot.merge()
+        return (100.0 * tot.area() / die_area) if die_area else 0.0
+
     phases = [(margin, margin)]
     for _f in (0.5, 0.25, 0.75):
         _off = int(pitch * _f)
@@ -27855,18 +27904,17 @@ for lay in spec.get("layers", []):
                        (margin, margin + _off)])
     placed = pya.Region()
     for (x0, y0) in phases:
-        allowed = frame - live_halo - placed.sized(gap)
+        allowed = frame - keepout - placed.sized(gap)
         kept = _grid_tiles(x0, y0).select_inside(allowed)
         if kept.count():
             placed += kept
             placed.merge()
-        dens = ((existing.area() + placed.area()) / die_area) if die_area else 0.0
+        dens = _coverage(placed) / 100.0
         if not min_density or dens >= min_density:
             break
-    tc.shapes(li).insert(placed)
-    total = existing.area() + placed.area()
-    dens = (total / die_area) if die_area else 0.0
-    summary.append((str(lay.get("name", lay["gds"])), placed.count(), dens))
+    tc.shapes(wli).insert(placed)
+    summary.append((str(lay.get("name", lay["write_gds"])), placed.count(),
+                    _coverage(pya.Region()) / 100.0))
 ly.write(gds_out)
 for name, n, dens in summary:
     print("DUMMY_FILL %s tiles=%d density=%.4f" % (name, n, dens))
