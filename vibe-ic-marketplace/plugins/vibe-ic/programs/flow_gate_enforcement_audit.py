@@ -1709,6 +1709,50 @@ def gate_wiring(mods: Sequence[_RunnerModule], gate: str) -> str:
 
 
 
+def program_header(text: str) -> str:
+    """The part of a program that carries its OWN declaration.
+
+    A program declares its enforcement intent in its HEADER — the leading
+    comment block and the module docstring. A `ENFORCEMENT: blocking` line
+    inside a nested function's docstring is a note about that STEP, not a
+    declaration by the program, and reading it as one is the same class of
+    error as counting a prose mention: MEASURED at 2010063c1,
+    `design_one_shot_runner.py` carries exactly one anchored declaration, at
+    byte 361904, inside `step_step4_functional_evidence`'s docstring in a
+    950 KB file. A survey that searched the whole file reported that runner as
+    "declaring an intent the audit never reads" and advised moving it above
+    the prose, which would have made the runner claim, as a whole program,
+    something only one of its steps says.
+
+    `declared_intent` reads `text[:DECL_WINDOW_BYTES]`, which is a PREFIX of
+    this header for every shipped gate (measured: the two agree on all of
+    them), so the guard and the reader stay one rule rather than two numbers.
+    """
+    try:
+        mod = ast.parse(text)
+    except SyntaxError:
+        # Unparseable is not a licence to widen: fall back to the window the
+        # reader itself uses, never to the whole file.
+        return text[:DECL_WINDOW_BYTES]
+    body = mod.body
+    if body and isinstance(body[0], ast.Expr) and \
+            isinstance(body[0].value, ast.Constant) and \
+            isinstance(body[0].value.value, str):
+        end = body[0].end_lineno or 1
+    elif body:
+        end = max((body[0].lineno or 1) - 1, 0)
+    else:
+        return text
+    lines = text.splitlines(keepends=True)
+    return "".join(lines[:end])
+
+
+def program_declaration_offset(text: str) -> Optional[int]:
+    """Byte offset of a PROGRAM's own enforcement declaration, or None."""
+    m = _DECL_RE.search(program_header(text))
+    return None if m is None else m.start()
+
+
 def declared_intent(programs: Path, gate: str) -> Optional[str]:
     stem = gate if gate.endswith(".py") else gate + ".py"
     p = programs / stem

@@ -41,7 +41,13 @@ Exit codes:
         tracked project roots. Note that the DIFFERENT case — SPEF and STA
         both present but no SPICE run at all — is deliberately NOT vacuous:
         it sets `skipped: False` and FAILs NO_SPICE_VERIFICATION, and that is
-        unchanged here. Also rc 2 for an IO / parse error.
+        unchanged here FOR A DESIGN THAT COULD HAVE RUN SPICE. The one
+        exception is a registry-matched IC class that declares
+        `analog_applicable=false`: such a design has no transistor-level deck
+        to correlate at all, so the missing deck is a DESIGN-DECLARED N/A and
+        lands on the vacuous tier with reason `analog_not_applicable_for_class`
+        (see `_analog_not_applicable_for_class`). Also rc 2 for an IO / parse
+        error.
 """
 from __future__ import annotations
 
@@ -2415,6 +2421,56 @@ def run_commercial_pdk_topN_path_correlation(
     return report
 
 
+def _analog_not_applicable_for_class(
+        project: Path) -> Optional[Tuple[str, str]]:
+    """The design's own class record says this IC has no analog content.
+
+    WHY THIS LIVES IN THE GATE AND NOT IN A CALLER'S TABLE. Until #1978 the
+    exemption was a NAME in `flow_compliance_check._CLASS_SKIPPABLE_ANALOG_GATES`:
+    the umbrella suppressed this gate by spelling. #1978 removed that entry --
+    correctly, because a caller's table silencing a gate by name is how a gate
+    stops being asked at all -- but nothing took over the QUESTION, so the
+    v1.6.553 escape re-opened: MEASURED at 2010063c1 on a registry-matched
+    `digital_arithmetic_primitive` project carrying phase3 SPEF + STA and no
+    SPICE deck, this gate returned rc 1 NO_SPICE_VERIFICATION. A pure-digital
+    IC signs its critical path off with STA + SPEF + Liberty and has no
+    transistor-level deck to correlate; that is a DESIGN-DECLARED N/A, not an
+    unanswered question, and the gate is the thing that knows it.
+
+    Fail-closed in both directions: only a registry-matched class with an
+    explicit `analog_applicable=False` answers here. An unknown class, an
+    unreadable profile, or a class that IS analog returns None and the gate
+    goes on to FAIL a missing deck exactly as before.
+
+    chip-AGNOSTIC: reads the class registry's own flags; no chip, vendor, SKU
+    or PDK literal appears.
+    """
+    try:
+        import sys as _sys
+        _here = str(Path(__file__).resolve().parent)
+        if _here not in _sys.path:
+            _sys.path.insert(0, _here)
+        from ic_class_profile import (detect_ic_class,           # noqa: PLC0415
+                                      class_verification_flags)
+    except Exception:                                           # noqa: BLE001
+        return None
+    try:
+        profile = detect_ic_class(project) or {}
+        ic_class = str(profile.get("ic_class") or "unknown")
+        flags = class_verification_flags(ic_class) or {}
+    except Exception:                                           # noqa: BLE001
+        return None
+    if not flags.get("registry_matched"):
+        return None
+    if flags.get("analog_applicable") is not False:
+        return None
+    return ic_class, (
+        f"class {ic_class!r} declares analog_applicable=false "
+        f"(verification_track={flags.get('verification_track')!r}); a "
+        f"pure-digital IC signs its critical path off with STA + SPEF + "
+        f"Liberty and ships no transistor-level SPICE deck to correlate")
+
+
 def run_audit(project: Path, run_spice: bool = True,
               container: str = _DEFAULT_CONTAINER) -> AuditResult:
     result = AuditResult()
@@ -2549,6 +2605,31 @@ def run_audit(project: Path, run_spice: bool = True,
     corr_json = _check_spice_correlation_json(project)
 
     if not spice_results and not spice_decks and not corr_json:
+        # A design whose class declares it has no analog content has nothing
+        # to correlate -- a DESIGN-DECLARED N/A, disclosed on the vacuous
+        # tier, never a silent pass and never a FAIL. Asked only on the
+        # no-evidence path: a pure-digital project that DID run SPICE is
+        # still correlated below, and a genuinely-analog class still FAILs.
+        _na = _analog_not_applicable_for_class(project)
+        if _na is not None:
+            _na_class, _na_reason = _na
+            result.findings.append(Finding(
+                rule="SKIP_ANALOG_NOT_APPLICABLE",
+                severity="INFO",
+                message=("No post-layout SPICE correlation is applicable: "
+                         + _na_reason),
+            ))
+            # The reason NAMES the class it keyed on. A disclosure that says
+            # only "not applicable" cannot be audited: the reader has to go
+            # re-derive which record exempted the design, which is the work
+            # the disclosure exists to save. Token prefix stays stable for
+            # consumers; the class rides after the colon.
+            result.summary = {
+                "skipped": True,
+                "reason": f"analog_not_applicable_for_class:{_na_class}",
+                "ic_class": _na_class,
+                "spice_decks": 0, "spice_results": 0}
+            return result
         result.passed = False
         result.findings.append(Finding(
             rule="NO_SPICE_VERIFICATION",

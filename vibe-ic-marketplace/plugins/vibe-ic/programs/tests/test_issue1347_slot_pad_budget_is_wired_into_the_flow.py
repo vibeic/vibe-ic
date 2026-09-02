@@ -81,7 +81,28 @@ def _clause() -> str:
         "program is unwired and its verdict cannot reach any build")
 
 
-def _project(rtl, with_slots: bool) -> Path:
+def _project(rtl, with_slots: bool, route: str = "NO_TEMPLATE.txt") -> Path:
+    """A project at step 2, with or without an ingested operator slot.
+
+    `route` IS THE CELL PATH, and leaving it out was the defect this fixture
+    carried. Step 0.5ic writes exactly ONE router file — a slot list, or
+    `NO_TEMPLATE.txt`, or `SELF_TAPEOUT.txt` — so "no slots" has two owners
+    that `slot_pad_budget_check` has told apart since v1.15.45:
+
+        slots absent AND a router declaration present -> the design DECLARED
+            no operator slot exists. NOT_APPLICABLE / DESIGN_DECLARED_NA,
+            which is the disclosed-skip tier.
+        slots absent AND no router file at all        -> step 0.5ic has not
+            run. UNDECIDED / BLOCKED_BY_UPSTREAM, which #1978 moved OUT of
+            the skip tier because it is work outstanding, not a design fact.
+
+    This fixture wrote neither, so a case whose docstring said "no operator,
+    so no slot" was actually modelling "the upstream step never ran" and
+    followed the second owner into INCOMPLETE. Passing the route makes the
+    cell-path cases model the path they name; `route=None` keeps the other
+    owner reachable, and `test_no_slots_and_no_route_is_the_OTHER_owner`
+    pins it so this fixture repair can never quietly become a relabel.
+    """
     # mkdtemp, not tmp_path: a pytest tmp_path carries a newline under the EDA
     # container image and that breaks any tool handed the path.
     d = Path(tempfile.mkdtemp(prefix="wire1347_"))
@@ -89,6 +110,11 @@ def _project(rtl, with_slots: bool) -> Path:
         s = d / "input" / "submission_template" / "slots"
         s.mkdir(parents=True)
         (s / "slot_1x1.json").write_text(json.dumps(T._slot_ingested()))
+    elif route is not None:
+        t = d / "input" / "submission_template"
+        t.mkdir(parents=True)
+        (t / route).write_text(
+            "no operator template applies to this design\n")
     if rtl is not None:
         r = d / "phase2" / "stage1" / "rtl"
         r.mkdir(parents=True)
@@ -96,9 +122,9 @@ def _project(rtl, with_slots: bool) -> Path:
     return d
 
 
-def _drive(rtl, with_slots: bool):
+def _drive(rtl, with_slots: bool, route: str = "NO_TEMPLATE.txt"):
     """`(passed, vacuous, report)` from the real clause runner."""
-    p = _project(rtl, with_slots)
+    p = _project(rtl, with_slots, route)
     passed, snippet = F._check_program_exit_zero(p, _clause())
     rep_p = p / "reports" / "phase2" / "gates" / "slot_pad_budget.json"
     rep = json.loads(rep_p.read_text()) if rep_p.is_file() else None
@@ -148,7 +174,24 @@ def test_the_cell_path_is_a_DISCLOSED_skip_never_a_silent_pass():
     the vacuous tier, where a reader can see it, and not in plain PASS."""
     passed, vacuous, rep = _drive(T._RTL_FITS, with_slots=False)
     assert (passed, vacuous) == (True, True)
+    assert rep["verdict"] == "NOT_APPLICABLE"
+    assert rep["reason_class"] == "DESIGN_DECLARED_NA"
+
+
+def test_no_slots_and_no_route_is_the_OTHER_owner():
+    """The pair to the case above, one property changed: no router file.
+
+    Same missing slots, and it must NOT reach the same tier. Without this the
+    route added to `_project` would be indistinguishable from having widened
+    the skip, and the v1.15.45 two-owner split would be un-pinned here.
+    """
+    passed, vacuous, rep = _drive(T._RTL_FITS, with_slots=False, route=None)
     assert rep["verdict"] == "UNDECIDED"
+    assert rep["reason_class"] == "BLOCKED_BY_UPSTREAM"
+    assert (passed, vacuous) == (True, False), (
+        "an upstream step that never ran is not a disclosed skip: #1978 took "
+        "BLOCKED_BY_UPSTREAM out of the skip tier because it is outstanding "
+        "work, not a design fact")
 
 
 def test_refusal_and_skip_do_not_share_a_tier():
@@ -202,10 +245,18 @@ def test_the_skip_carries_the_programs_own_reason_not_a_silence():
     """§6 degrade loudly: a decline that printed nothing reads downstream as
     'nothing needed doing'."""
     R = _runner()
-    sr = R.step_slot_pad_budget(_project(T._RTL_FITS, with_slots=False),
-                                "chip_top")
-    assert sr.status == "SKIP"
-    assert "UNDECIDED" in sr.detail and "slots" in sr.detail
+    # BOTH owners of "no slots": the design-declared route and the un-run
+    # upstream. Each must say WHICH it is — a shared silence would be the
+    # exact conflation v1.15.45 split apart.
+    declared = R.step_slot_pad_budget(
+        _project(T._RTL_FITS, with_slots=False), "chip_top")
+    assert declared.status == "SKIP"
+    assert "NOT_APPLICABLE" in declared.detail
+    assert "no operator template" in declared.detail
+    unrun = R.step_slot_pad_budget(
+        _project(T._RTL_FITS, with_slots=False, route=None), "chip_top")
+    assert "UNDECIDED" in unrun.detail and "slots" in unrun.detail
+    assert declared.detail != unrun.detail
 
 
 def test_the_runner_passes_its_own_top_name_not_the_programs_default():
@@ -314,8 +365,10 @@ def _isolated_step2() -> dict:
     return out
 
 
-def _step_status(rtl, with_slots: bool) -> str:
-    return F.check_step(_project(rtl, with_slots), _isolated_step2(), {}).status
+def _step_status(rtl, with_slots: bool,
+                 route: str = "NO_TEMPLATE.txt") -> str:
+    return F.check_step(_project(rtl, with_slots, route),
+                        _isolated_step2(), {}).status
 
 
 def test_an_unbondable_interface_makes_step_2_itself_go_FAIL():
@@ -333,13 +386,17 @@ def test_the_cell_path_lands_in_VACUOUS_PASS_not_plain_PASS():
     assert _step_status(T._RTL_FITS, False) == "VACUOUS_PASS"
 
 
-def test_the_three_step_verdicts_are_three_distinct_values():
-    """The property the whole wiring rests on: a refusal, a clean pass and a
-    disclosed skip must never collapse into one another."""
+def test_the_step_tiers_are_four_distinct_values():
+    """The property the whole wiring rests on: a refusal, a clean pass, a
+    disclosed skip and an un-run upstream must never collapse into one
+    another. FOUR since #1978 split the last one out of the skip tier — the
+    file's header says the four tiers are not three, and this is where the
+    fourth is counted."""
     seen = {_step_status(_HOPELESS, True),
             _step_status(T._RTL_FITS, True),
-            _step_status(T._RTL_FITS, False)}
-    assert len(seen) == 3, seen
+            _step_status(T._RTL_FITS, False),
+            _step_status(T._RTL_FITS, False, route=None)}
+    assert len(seen) == 4, seen
 
 
 # --------------------------------------------------------------------------- #
@@ -504,12 +561,22 @@ def test_the_fold_does_not_rewrite_the_declared_number():
 def test_all_four_verdicts_are_reachable_through_the_wiring():
     """Coverage stated as an assertion rather than assumed from the tests that
     happen to exist: every verdict the program can return must have been driven
-    through the clause at least once."""
+    through the clause at least once.
+
+    FIVE since v1.15.45 split "no slots" into its two owners. The set is
+    asserted for EQUALITY on purpose: a verdict the program can return and
+    this file never drives is an untested tier, and a verdict here that the
+    program no longer returns is a fixture that stopped meaning what it says.
+    """
     seen = set()
-    for rtl, slots in ((_HOPELESS, True), (T._RTL_FITS, True),
-                       (T._RTL_FOLDABLE, True), (T._RTL_FITS, False)):
-        seen.add(_drive(rtl, slots)[2]["verdict"])
-    assert seen == {"DOES_NOT_FIT", "FITS", "FITS_AFTER_FOLD", "UNDECIDED"}, seen
+    for rtl, slots, route in ((_HOPELESS, True, None),
+                              (T._RTL_FITS, True, None),
+                              (T._RTL_FOLDABLE, True, None),
+                              (T._RTL_FITS, False, "NO_TEMPLATE.txt"),
+                              (T._RTL_FITS, False, None)):
+        seen.add(_drive(rtl, slots, route)[2]["verdict"])
+    assert seen == {"DOES_NOT_FIT", "FITS", "FITS_AFTER_FOLD", "UNDECIDED",
+                    "NOT_APPLICABLE"}, seen
 
 
 # --------------------------------------------------------------------------- #
@@ -702,18 +769,35 @@ def test_the_real_sha256_fits_only_after_a_fold_and_says_so():
 # `text.find("ENFORCEMENT:")` counts prose MENTIONS as declarations — measured,
 # it produced three false alarms, one of them a runner whose docstring mentions
 # the token at byte 1.3 million.
+#
+# AND SCOPED TO THE PROGRAM'S HEADER, via the audit's own
+# `program_declaration_offset`. Anchoring alone was not enough: a `ENFORCEMENT:
+# blocking` line inside a NESTED function's docstring is a note about that
+# step, and searching the whole file reads it as the program's declaration.
+# MEASURED at 2010063c1 — `design_one_shot_runner.py`, one anchored match, at
+# byte 361904, inside `step_step4_functional_evidence` in a 950 KB file. This
+# survey named it "present, correctly spelt and unread" and advised moving it
+# above the prose, which would have made a 44-step runner declare, as a whole
+# program, something one of its steps says. The same measurement found the one
+# REAL instance the anchored survey was written to catch:
+# `on_pass_review_declared_command_runs_check` declared blocking at byte 10336,
+# 6336 bytes past the reader — repaired at the source, in the same change as
+# this scope.
+#
+# The header and the reader's 4000-byte window agree on all 99 programs that
+# declare (measured), so this is one rule and not a second number.
 
 def test_no_gate_declaration_anywhere_sits_outside_the_readers_window():
     import flow_gate_enforcement_audit as A
     progs = PROG
     unread, thin = [], []
     for p in sorted(progs.glob("*.py")):
-        m = A._DECL_RE.search(p.read_text(errors="replace"))
-        if not m:
+        start = A.program_declaration_offset(p.read_text(errors="replace"))
+        if start is None:
             continue                      # no declaration is a different question
-        margin = A.DECL_WINDOW_BYTES - m.start()
+        margin = A.DECL_WINDOW_BYTES - start
         if margin <= 0:
-            unread.append(f"{p.stem} at byte {m.start()}")
+            unread.append(f"{p.stem} at byte {start}")
         elif margin < 200:
             thin.append(f"{p.stem} margin {margin}B")
     assert not unread, (

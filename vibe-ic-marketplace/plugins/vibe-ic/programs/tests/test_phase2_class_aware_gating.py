@@ -147,19 +147,25 @@ def test_generic_class_reference_tb_runs_full_stack_tb(tmp_path):
     assert tb.is_file()
     sr = p2.step_reference_tb(proj, top, "processor_cpu")
     # ORGANIC-20260606 #439: a skeleton TB running to completion is
-    # CONNECTIVITY evidence only — WAIVED with the TB-authoring
-    # fallback direction, never a functional PASS (and never an AID-TB
-    # false FAIL). PASS is reserved for a real per-IC oracle TB with
+    # CONNECTIVITY evidence only — never a functional PASS, and never an
+    # AID-TB false FAIL. PASS is reserved for a real per-IC oracle TB with
     # golden compares.
-    assert sr.status in ("WAIVED", "SKIP")
+    #
+    # THE TIER IS INCOMPLETE, NOT WAIVED (#1975, cbe6154a6). WAIVED reads as
+    # "disposed of"; this step has work outstanding — the per-IC oracle TB —
+    # and Step 4's `cpu_functional_oracle_waiver_check` keeps blocking until
+    # it exists. SKIP remains correct for the sibling case where no
+    # full-stack TB was built at all, so both words are still asserted in
+    # this file and the two states cannot collapse into one another.
+    assert sr.status == "INCOMPLETE", sr.detail
     assert sr.extras.get("verification_track") == "generic_full_stack"
     assert "aid" in sr.detail.lower()
-    if sr.status == "WAIVED":
-        assert sr.extras.get("functional_verified") is False
-        # PROPERTY, not literal: the agent must be handed a route it can
-        # actually follow. See _skill_routes.py.
-        assert_route_ships(sr.extras.get("fallback_skill"),
-                           "step_reference_tb WAIVED extras")
+    assert sr.extras.get("functional_verified") is False
+    assert sr.extras.get("capability_gap") == "cap:cpu_functional_oracle"
+    # PROPERTY, not literal: the agent must be handed a route it can
+    # actually follow. See _skill_routes.py.
+    assert_route_ships(sr.extras.get("fallback_skill"),
+                       "step_reference_tb INCOMPLETE extras")
 
 
 def test_generic_class_real_compile_failure_still_fails(tmp_path):
@@ -262,21 +268,15 @@ def test_class_skipped_gates_for_arithmetic_primitive(tmp_path):
     cls = icp.detect_ic_class(proj)["ic_class"]
     assert cls == "digital_arithmetic_primitive"
     skipped = fcc._class_skipped_gates(proj)
-    # All protocol + analog gates are skipped with N/A reasons.
+    # The protocol + analog gates the class table OWNS are skipped with N/A
+    # reasons.
     for g in ("l3_opcode_argument_constraints_check",
-              "l1_electrical_specs_typed_depth_check",
               "l12_behavioral_sequences_steps_typed_check",
               "protocol_ip_simulation_required_check",
               "analog_block_coverage_check",
               "analog_hardmacro_check",
               "mixed_signal_cosim_check",
               "analog_content_detected_must_emit_l5_check",
-              # v1.6.553 — post-layout SPICE correlation is an analog /
-              # mixed-signal signoff deliverable; a pure-digital class
-              # signs off the critical path with STA + SPEF + Liberty, so
-              # the SPICE-correlation gate is N/A and must SKIP (not FAIL
-              # NO_SPICE_VERIFICATION once Phase 3 emits SPEF + STA).
-              "spice_correlation_check",
               "analog_hw_spice_correlation_check"):
         assert g in skipped, g
         assert "N/A for class" in skipped[g]
@@ -284,6 +284,26 @@ def test_class_skipped_gates_for_arithmetic_primitive(tmp_path):
     for g in ("crc_completeness_check", "fsm_error_invariant",
               "bitwidth_consistency_check"):
         assert g not in skipped, g
+    # #1978 took four PROTOCOL-INDEPENDENT questions out of this table on the
+    # rule that a caller may not suppress them wholesale by name. That is a
+    # statement about the MECHANISM; the property those entries protected —
+    # no false FAIL on a class the question does not apply to — is still owed,
+    # and each of these gates now answers for itself. Asserted here so the
+    # removal cannot quietly become a re-opened escape (it did once: see the
+    # block comment above `_phase3_complete_no_spice`).
+    for g in ("l1_electrical_specs_typed_depth_check",
+              "assertion_covers_l3_constraints_check",
+              "bit_level_full_stack_tb_oracle_check"):
+        assert g not in skipped, (
+            f"{g} is a protocol-independent question; the class table must "
+            f"not silence it by name (#1978)")
+        r = subprocess.run(
+            [sys.executable, str(PROGRAMS / f"{g}.py"), str(proj)],
+            capture_output=True, text=True)
+        assert r.returncode == 2, (
+            f"{g} must classify its OWN non-verdict on a class it cannot "
+            f"apply to; rc={r.returncode} is a verdict over nothing\n"
+            + r.stdout + r.stderr)
 
 
 def test_class_skipped_gates_fail_closed_for_unknown(tmp_path):
@@ -316,12 +336,92 @@ def test_structural_gates_skip_protocol_for_generic_class(tmp_path):
 # FAIL even though such ICs have no transistor-level SPICE deck and never
 # should. Under --skip-analog this surfaced as a spurious phase2 FAIL on
 # espi / usb_pd / sgmii while interlaken (no Phase-3 SPEF/STA) "passed".
-# The gate is now class-skipped for analog_applicable=False classes.
 # HONESTY: a genuinely-analog class still RUNS the gate (so a missing /
 # uncorrelated SPICE deck on a real analog IC still FAILs).
+#
+# WHERE THE EXEMPTION LIVES, AND WHY THESE TESTS MOVED (#1978 -> here).
+# It used to be a NAME in `flow_compliance_check._CLASS_SKIPPABLE_ANALOG_GATES`:
+# the umbrella silenced this gate by spelling it. #1978 removed that entry on
+# the rule that a caller's class table may not suppress a protocol-independent
+# question wholesale, and pinned the removal in
+# `test_issue1978_reason_taxonomy.py::
+# test_real_flow_keeps_protocol_independent_questions_out_of_class_skips`.
+# Nothing took over the QUESTION, so the v1.6.553 escape re-opened. MEASURED at
+# 2010063c1, pinned image 0.3.6, on a registry-matched
+# `digital_arithmetic_primitive` project carrying phase3 SPEF + STA and no
+# SPICE deck: `spice_correlation_check` rc 1 NO_SPICE_VERIFICATION.
+#
+# So the tests below no longer assert MEMBERSHIP of a table. They drive the
+# gate and assert the OUTCOME, which is the property v1.6.553 exists for and
+# the only form that survives the mechanism moving again. The table assertion
+# was also the weaker test in a second way: it went red for
+# `l1_electrical_specs_typed_depth_check` too, where there is no escape at all
+# (that gate self-skips rc 2 "no electrical entries to validate" on the same
+# project) -- one red per table entry, not one per defect.
 # ---------------------------------------------------------------------
-def test_spice_correlation_in_analog_skippable_set():
-    assert "spice_correlation_check" in fcc._CLASS_SKIPPABLE_ANALOG_GATES
+def _phase3_complete_no_spice(tmp_path, analog: bool):
+    """A project that REACHED post-layout (SPEF + STA) and ran no SPICE.
+
+    This is the shape v1.6.553 named: before Step 20/21 the gate self-skips
+    for a different reason (`no_spef` / `no_sta`) and the question never
+    arises, so a fixture without them proves nothing.
+    """
+    proj = _make_class_project(tmp_path, {})
+    if analog:
+        (proj / "phase1" / "generated_docs" / "L5_ADI_SPEC.json").write_text(
+            json.dumps({"analog_blocks": [{"name": "ldo", "type": "ldo"}],
+                        "supplies": [{"name": "VDD"}]}))
+    ext = proj / "phase3" / "stage3" / "extracted"
+    ext.mkdir(parents=True, exist_ok=True)
+    (ext / "top.spef").write_text('*SPEF "IEEE 1481-1998"\n')
+    sta = proj / "phase3" / "stage3" / "sta"
+    sta.mkdir(parents=True, exist_ok=True)
+    (sta / "sta.rpt").write_text("slack 0.5\n")
+    return proj
+
+
+def _run_spice_gate(proj):
+    import subprocess
+    return subprocess.run(
+        [sys.executable, str(PROGRAMS / "spice_correlation_check.py"),
+         str(proj), "--no-spice"], capture_output=True, text=True)
+
+
+def test_spice_correlation_is_not_a_FAIL_for_a_pure_digital_class(tmp_path):
+    """The v1.6.553 property, asked of the gate instead of of a table."""
+    proj = _phase3_complete_no_spice(tmp_path, analog=False)
+    assert icp.detect_ic_class(proj)["ic_class"] == "digital_arithmetic_primitive"
+    r = _run_spice_gate(proj)
+    assert r.returncode == 2, (
+        "a pure-digital IC that completed Phase 3 has no transistor-level deck "
+        "to correlate; a missing deck is a design-declared N/A, not a FAIL\n"
+        + r.stdout + r.stderr)
+    assert "analog_not_applicable_for_class" in r.stdout, r.stdout
+    assert "VACUOUS" in r.stdout, (
+        "the N/A must land on the DISCLOSED tier — an rc 2 nobody can see is "
+        "the silent pass this gate exists to prevent\n" + r.stdout)
+
+
+def test_spice_correlation_still_FAILs_an_analog_class(tmp_path):
+    """REVERSE, one property changed: the class IS analog-applicable.
+
+    Without this the exemption above could be unconditional and the file
+    would still be green."""
+    proj = _phase3_complete_no_spice(tmp_path, analog=True)
+    flags = icp.class_verification_flags(icp.detect_ic_class(proj)["ic_class"])
+    assert flags.get("analog_applicable") is not False
+    r = _run_spice_gate(proj)
+    assert r.returncode == 1, r.stdout + r.stderr
+    assert "NO_SPICE_VERIFICATION" in r.stdout, r.stdout
+
+
+def test_the_class_table_does_not_silence_the_spice_gate_by_name(tmp_path):
+    """The other half of the same rule, stated rather than left implicit.
+
+    `test_issue1978_reason_taxonomy` owns this from its side; asserted here
+    too so that re-adding the name -- the shape this file used to demand --
+    cannot be done while this file is green."""
+    assert "spice_correlation_check" not in fcc._CLASS_SKIPPABLE_ANALOG_GATES
     assert ("analog_hw_spice_correlation_check"
             in fcc._CLASS_SKIPPABLE_ANALOG_GATES)
 
@@ -360,17 +460,39 @@ def test_spice_gate_NOT_skipped_for_analog_class(tmp_path):
 def test_spice_gate_skip_is_class_driven_not_skip_analog_flag(tmp_path):
     """The skip is keyed on the detected IC class, NOT on a --skip-analog
     flag or a benchmark name — so it is general (fires for any digital-only
-    class) and honest (never special-cased to espi/usb_pd)."""
-    # digital_arithmetic_primitive project → gate skipped.
-    proj = _make_class_project(tmp_path, {})
-    skipped = fcc._class_skipped_gates(proj)
-    assert "spice_correlation_check" in skipped
-    assert "N/A for class 'digital_arithmetic_primitive'" \
-        in skipped["spice_correlation_check"]
-    # Unknown class (no L docs) → fail-closed → gate NOT skipped (still runs).
+    class) and honest (never special-cased to espi/usb_pd).
+
+    Asked of the gate, for the reason in the block comment above: the class
+    key now lives in `spice_correlation_check._analog_not_applicable_for_class`,
+    and a test of the caller's table would go green again the moment the
+    exemption moved without the escape ever being closed."""
+    proj = _phase3_complete_no_spice(tmp_path, analog=False)
+    r = _run_spice_gate(proj)
+    assert r.returncode == 2 and "analog_not_applicable_for_class" in r.stdout, \
+        r.stdout + r.stderr
+    assert "digital_arithmetic_primitive" in r.stdout, (
+        "the disclosure must name the class it keyed on; a reason that does "
+        "not say which record exempted the design cannot be audited\n"
+        + r.stdout)
+    # Unknown class (no L docs) → fail-closed → the gate still asks.
     empty = tmp_path / "empty_proj"
     (empty / "phase2" / "stage1" / "rtl").mkdir(parents=True)
-    assert "spice_correlation_check" not in fcc._class_skipped_gates(empty)
+    ext = empty / "phase3" / "stage3" / "extracted"
+    ext.mkdir(parents=True)
+    (ext / "top.spef").write_text('*SPEF "IEEE 1481-1998"\n')
+    sta = empty / "phase3" / "stage3" / "sta"
+    sta.mkdir(parents=True)
+    (sta / "sta.rpt").write_text("slack 0.5\n")
+    _unknown = icp.class_verification_flags(
+        icp.detect_ic_class(empty).get("ic_class") or "unknown")
+    # FAIL-CLOSED, stated as the flag the gate actually keys on. `unknown`
+    # answers `registry_matched: True` (measured), so a test written against
+    # that flag would pass while proving nothing; the exemption is keyed on
+    # `analog_applicable is False` and an unclassified design never says that.
+    assert _unknown.get("analog_applicable") is not False
+    assert _run_spice_gate(empty).returncode == 1, (
+        "an unmatched class must NOT be exempted — fail-closed is the whole "
+        "reason the key is the registry flag and not a name")
 
 
 # ---------------------------------------------------------------------

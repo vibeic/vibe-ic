@@ -1,6 +1,20 @@
 #!/usr/bin/env python3
 """on_pass_review_declared_command_runs_check — the declared command must RUN.
 
+ENFORCEMENT: blocking. This gate's rc IS a landing decision: rc=1 means a
+declared on-pass command cannot reach a verdict, and shipping it would restore
+exactly the state v1.13.32 and v1.13.42 were each written to end. It is wired
+in `flow/phase1_phase2_phase3.yaml` as a `program_exit_zero` clause, which is
+the slot whose rc stops the step.
+
+STATED FIRST, NOT WHERE THE ARGUMENT FOR IT ENDS. `flow_gate_enforcement_audit`
+reads a program's declaration out of its first `DECL_WINDOW_BYTES` (4000) bytes.
+This line sat at byte 10336 — correctly spelt, opening its own line, and unread,
+so the audit would have reported this gate UNDECLARED and a wiring decision
+could have been taken without ever seeing what the gate says about itself. The
+measured account below is the evidence for the declaration; it is not a
+prerequisite for reading it.
+
 WHAT WAS MISSING, AND IT IS ONE LEVEL DEEPER THAN #1858
 =======================================================
 v1.13.32 found five on-pass clauses DECLARED WHERE THE ENGINE NEVER LOOKED.
@@ -163,12 +177,6 @@ run root saying the stage PASSED. The review fires on `stage_pass`; without a
 verdict source it correctly declines. Planting the verdict is what puts the
 question — it is not an answer to it, and a clause carrying `--stage-verdict
 FAIL` is left alone and duly fails P6, which is correct.
-
-ENFORCEMENT: blocking. This gate's rc IS a landing decision: rc=1 means a
-declared on-pass command cannot reach a verdict, and shipping it would restore
-exactly the state v1.13.32 and v1.13.42 were each written to end. It is wired
-in `flow/phase1_phase2_phase3.yaml` as a `program_exit_zero` clause, which is
-the slot whose rc stops the step.
 
 NOTHING TO CHECK IS A FAIL, NEVER A PASS. If the flow declares no enabled
 on-pass review, or the published fixture trees this gate measures against are

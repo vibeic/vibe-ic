@@ -40,6 +40,7 @@ from __future__ import annotations
 import json
 import sys
 from pathlib import Path
+from typing import Any, Optional
 
 import pytest
 
@@ -96,10 +97,98 @@ def _mkproject(tmp_path: Path, docs: dict) -> Path:
     return proj
 
 
-def _run(project: Path):
-    return _pr.run(
-        [sys.executable, str(_PROG), str(project)],
-        capture_output=True, text=True)
+def _run(project: Path, flow: Optional[Path] = None):
+    argv = [sys.executable, str(_PROG), str(project)]
+    if flow is not None:
+        argv += ["--flow", str(flow)]
+    return _pr.run(argv, capture_output=True, text=True)
+
+
+# ---------------------------------------------------------------------------
+# A CASE THAT ASSERTS A NEGATIVE OWNS ITS CONSUMER SET
+#
+# Four cases below assert something the shipped flow cannot promise:
+# "this layer has no OTHER planned reader", "no OTHER planned read went
+# unexamined". Those are statements about a GROWING artefact. MEASURED:
+# d453eaca6 (`fix(flow): uhadc round-5 consumer captures`) added one
+# `--spec phase1/generated_docs/L3_CMD_PROTOCOL.json` argument to a step-2
+# clause whose `condition_files_exist` names only L8_TIMING_WAVEFORM.json.
+# That is a legitimate flow edit -- the clause really does read L3 -- and it
+# turned all four red at once, with the gate behaving exactly as designed.
+# Restoring them by editing the fixtures would buy a green until the next
+# consumer landed.
+#
+# So they run against a flow they OWN. Not a hand-written one: the clause
+# shapes (`condition_files_exist`, the three command keys, stage/step
+# conditions) are the thing under test, and a fixture flow that spelt them by
+# hand would drift from the real ones silently. `_flow_keeping` PRUNES the
+# shipped flow instead, so every surviving clause is a real shipped clause and
+# only the POPULATION is the case's own. `_flow_keeping` refuses an empty
+# result, so a flow change that removes the shapes these cases need fails
+# loudly here instead of making them vacuous.
+# ---------------------------------------------------------------------------
+def _layers_named(clause: Any) -> set:
+    """Layer CODES a gate clause reads — command and condition alike."""
+    text = json.dumps(clause)
+    return set(P._LAYER_REF_RE.findall(text))
+
+
+def _is_clause(node: Any) -> bool:
+    return isinstance(node, dict) and any(k in node for k in P._COMMAND_KEYS)
+
+
+def _prune(node: Any, keep) -> Any:
+    if isinstance(node, list):
+        out = []
+        for v in node:
+            if _is_clause(v) and not keep(v):
+                continue
+            out.append(_prune(v, keep))
+        return out
+    if isinstance(node, dict):
+        return {k: _prune(v, keep) for k, v in node.items()}
+    return node
+
+
+def _flow_keeping(tmp_path: Path, keep, why: str) -> Path:
+    """The shipped flow with every gate clause `keep` rejects removed."""
+    import yaml as _yaml
+    path = P.resolve_flow_yaml(None)
+    if not path.is_file():
+        pytest.skip("shipped flow YAML not present")
+    flow = _yaml.safe_load(path.read_text(encoding="utf-8"))
+    pruned = _prune(flow, keep)
+    kept = P.consumers_from_flow(pruned)
+    assert kept, (
+        "the pruned flow declares no layer consumer at all, so every case "
+        "built on it would pass by having nothing to judge — which is the "
+        f"vacuity these cases exist to disprove. Wanted: {why}")
+    out = tmp_path / "flow_pruned.yaml"
+    out.write_text(_yaml.safe_dump(pruned, sort_keys=False), encoding="utf-8")
+    return out
+
+
+def _condition_files(clause: Any) -> list:
+    """Every `condition_files_exist` entry on a gate clause."""
+    out = []
+    for key in P._COMMAND_KEYS:
+        val = clause.get(key)
+        if isinstance(val, dict):
+            out += [c for c in (val.get("condition_files_exist") or [])
+                    if isinstance(c, str)]
+    return out
+
+
+def _reads_L3_behind_two_conditions(clause: Any) -> bool:
+    """A clause that reads the command-protocol layer and cannot run until
+    TWO layer files exist — the shape the plannedness case is about."""
+    return "L3" in _layers_named(clause) and len(_condition_files(clause)) >= 2
+
+
+def _only_the_L8_pair(clause: Any) -> bool:
+    """Clauses that read the fixture's own layer pair and nothing else."""
+    named = _layers_named(clause)
+    return bool(named) and named <= {"L8"}
 
 
 # ---------------------------------------------------------------------------
@@ -211,11 +300,18 @@ def test_silent_skeleton_with_no_declared_consumer_still_passes(tmp_path):
 def test_consumer_whose_condition_is_unmet_is_not_planned(tmp_path):
     """Plannedness, not mere declaration.
 
-    The shipped flow's only consumer of the command-protocol layer is
-    conditioned on TWO layer files. With the second absent the predicate can
-    never run, so nothing is starved and the gate must stay quiet even though
-    the first layer is a silent skeleton.
+    The case is a SHIPPED clause conditioned on TWO layer files. With the
+    second absent the predicate can never run, so nothing is starved and the
+    gate must stay quiet even though the first layer is a silent skeleton.
+
+    The flow is pruned to the multi-condition clauses so that the OTHER
+    shipped readers of the same layer — which the flow is free to grow, and
+    did — cannot decide this case. The property under test is plannedness,
+    not the census of the shipped flow.
     """
+    flow = _flow_keeping(
+        tmp_path, _reads_L3_behind_two_conditions,
+        "a shipped clause that reads L3 and is conditioned on two layer files")
     proj = _mkproject(tmp_path, {
         "L3_CMD_PROTOCOL.json": {"schema_version": "1",
                                  "doc_class": "cmd_protocol",
@@ -223,7 +319,7 @@ def test_consumer_whose_condition_is_unmet_is_not_planned(tmp_path):
         _LAYER: dict(_EMPTY_SKELETON, no_timing_windows_in_input=True),
         _SIBLING: _SIBLING_WITH_CONTENT,
     })
-    r = _run(proj)
+    r = _run(proj, flow)
     assert r.returncode == 0, r.stdout + r.stderr
     report = json.loads(
         (proj / "reports" / "phase1"
@@ -318,9 +414,15 @@ def test_condition_only_references_count_as_consumption():
 # ---------------------------------------------------------------------------
 def test_an_unexaminable_planned_layer_is_disclosed_not_counted_as_clean(
         tmp_path):
+    # Pruned to the clauses that read only this fixture's layer pair: the
+    # assertion below is `{UNPARSEABLE}` EXACTLY, so any shipped consumer of a
+    # layer this project does not carry would add a LAYER_ABSENT and make the
+    # case about the flow's consumer census instead of about the disclosure.
+    flow = _flow_keeping(tmp_path, _only_the_L8_pair,
+                         "a shipped clause reading only the L8 pair")
     proj = _mkproject(tmp_path, {_SIBLING: _SIBLING_WITH_CONTENT})
     (proj / "phase1" / "generated_docs" / _LAYER).write_text("not json {")
-    r = _run(proj)
+    r = _run(proj, flow)
     assert r.returncode == 0, r.stdout + r.stderr
     assert "NOT EXAMINED" in r.stdout, (
         "an unparseable planned layer was never read for emptiness; a verdict "
@@ -347,9 +449,11 @@ def test_a_fully_examined_project_says_nothing_about_unexamined_layers(
 
     Without this the disclosure could be an unconditional string and the file
     would still be green."""
+    flow = _flow_keeping(tmp_path, _only_the_L8_pair,
+                         "a shipped clause reading only the L8 pair")
     proj = _mkproject(tmp_path, {_LAYER: _LAYER_WITH_CONTENT,
                                  _SIBLING: _SIBLING_WITH_CONTENT})
-    r = _run(proj)
+    r = _run(proj, flow)
     assert r.returncode == 0, r.stdout + r.stderr
     assert "NOT EXAMINED" not in r.stdout, (
         "every planned read WAS examined; inventing a disclosure here would "
@@ -367,11 +471,13 @@ def test_a_layer_with_no_recognisable_collection_is_unexamined_too(tmp_path):
     """NO_CONTENT_SCHEMA is the state the corpus actually carries: the doc
     parses, but nothing in it is a collection this gate can size, so 'not
     empty' was never established. Same disclosure, different state."""
+    flow = _flow_keeping(tmp_path, _only_the_L8_pair,
+                         "a shipped clause reading only the L8 pair")
     proj = _mkproject(tmp_path, {_LAYER: {"schema_version": "1",
                                           "doc_class": "timing_waveform",
                                           "note": "a scalar-only payload"},
                                  _SIBLING: _SIBLING_WITH_CONTENT})
-    r = _run(proj)
+    r = _run(proj, flow)
     assert r.returncode == 0, r.stdout + r.stderr
     # stdout FIRST, deliberately: on a tree without the change `P` carries no
     # `unexamined_planned` at all, and a test that dies of AttributeError
