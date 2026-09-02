@@ -20316,21 +20316,145 @@ def _routing_integrity_check_tcl(marker_prefix: str = "SHIP") -> str:
     chip-AGNOSTIC: odb API only, no name/vendor/SKU literal, no design literal.
     NONFATAL-guarded — a probe that cannot run must never kill the step, and it
     reports that it could not run rather than reporting zero (UNMEASURED is not
-    ZERO)."""
+    ZERO).
+
+    A WIRE IS NOT THE ONLY WAY TWO TERMINALS ARE CONNECTED. The rule above --
+    "two or more terminals and no wire" -- reads a net that needs no wire as a
+    net that failed to get one. The standard case is the chip path: a top-level
+    DEF PIN is FIXED directly on the pad cell's own PAD terminal, on the same
+    layer, and the two shapes ARE the connection. MEASURED, spm x gf180mcuD,
+    36-pad ring, phase3/stage3/pnr/routed.def -- the old body counts 36 and the
+    design has no unrouted net at all; OpenROAD reports the BTerm bbox and the
+    ITerm bbox as the SAME rectangle on the same layer, e.g.
+
+        NET clk iterms=1 bterms=1 wire=NULL
+        ITERM u_pad_clk PAD  bbox 6148000 3102000 6268000 3222000  (Metal5)
+        BTERM clk            bbox 6148000 3102000 6268000 3222000  (Metal5)
+
+    Every I/O net of every padded design lands in that count, so the number the
+    promotion gate is supposed to refuse on is, on the chip path, entirely
+    manufactured -- and a REAL unrouted net hiding among them is indistinguishable
+    from the noise.
+
+    So a wireless multi-terminal net is UNROUTED only when its terminals are not
+    ALREADY physically connected: the shapes are taken per terminal WITH their
+    layers (`dbITerm getGeometries` is instance-transformed; `dbBPin getBoxes` is
+    already absolute), and the terminals are unioned under "two shapes overlap on
+    a shared layer". A net whose terminals all fall in ONE component needs no
+    wire and is reported under its own marker, `<PFX>_ABUTTED_NETS`, never folded
+    into the unrouted count and never left silent.
+
+    FAIL-SAFE IN THE DIRECTION THAT KEEPS THE CHECK: a terminal whose shapes
+    cannot be read cannot be PROVEN abutted, so its net stays counted as
+    unrouted and the count of such nets is disclosed as
+    `<PFX>_UNROUTED_SHAPE_BLIND`. Being unable to look is never an acquittal.
+
+    The discrimination is measured, not asserted -- on the same database, with 5
+    genuinely-routed nets' wires destroyed:
+
+        pre   CONTROL 36 | CANDIDATE unrouted 0,  abutted 36
+        post  CONTROL 41 | CANDIDATE unrouted 5,  abutted 36
+              (clk__core, net5, p__core, rst__core, spare_tielo_spare_aoi_0)
+
+    -- the planted nets come back by name, including a spare-tie net, which is
+    the v1.5.65 hazard this check exists for. On the no-pad arm of the same
+    design the two bodies agree exactly, 0/0 before and 5/5 after."""
     return (
+        # Shapes of ONE terminal as {layer x0 y0 x1 y1} records. Empty list ==
+        # "could not look", which the caller must not read as "no overlap".
+        "proc _vibeic_term_shapes {_t _kind} {\n"
+        "  set _out {}\n"
+        "  if {$_kind eq \"I\"} {\n"
+        "    if {[catch {set _gs [$_t getGeometries]}]} { return {} }\n"
+        "    foreach _g $_gs {\n"
+        "      if {[catch {\n"
+        "        lassign $_g _ly _rc\n"
+        "        lappend _out [list [$_ly getName] [$_rc xMin] [$_rc yMin] "
+        "[$_rc xMax] [$_rc yMax]]\n"
+        "      }]} { continue }\n"
+        "    }\n"
+        "  } else {\n"
+        "    if {[catch {set _bps [$_t getBPins]}]} { return {} }\n"
+        "    foreach _bp $_bps {\n"
+        "      if {[catch {set _bxs [$_bp getBoxes]}]} { continue }\n"
+        "      foreach _b $_bxs {\n"
+        "        if {[catch {\n"
+        "          lappend _out [list [[$_b getTechLayer] getName] [$_b xMin] "
+        "[$_b yMin] [$_b xMax] [$_b yMax]]\n"
+        "        }]} { continue }\n"
+        "      }\n"
+        "    }\n"
+        "  }\n"
+        "  return $_out\n"
+        "}\n"
+        # Two terminals touch when ANY pair of their shapes overlaps ON THE SAME
+        # layer. Same-layer is the load-bearing half: two rectangles that share
+        # an (x,y) footprint on different layers are not connected.
+        "proc _vibeic_shapes_touch {_a _b} {\n"
+        "  foreach _p $_a {\n"
+        "    lassign $_p _pl _px0 _py0 _px1 _py1\n"
+        "    foreach _q $_b {\n"
+        "      lassign $_q _ql _qx0 _qy0 _qx1 _qy1\n"
+        "      if {$_pl ne $_ql} { continue }\n"
+        "      if {$_px1 < $_qx0 || $_qx1 < $_px0} { continue }\n"
+        "      if {$_py1 < $_qy0 || $_qy1 < $_py0} { continue }\n"
+        "      return 1\n"
+        "    }\n"
+        "  }\n"
+        "  return 0\n"
+        "}\n"
+        "proc _vibeic_uf_find {_arr _x} {\n"
+        "  upvar 1 $_arr _a\n"
+        "  while {$_a($_x) != $_x} { set _x $_a($_x) }\n"
+        "  return $_x\n"
+        "}\n"
         "if {[catch {\n"
-        "  set _unr 0; set _unrn {}\n"
+        "  set _unr 0; set _abut 0; set _blind 0; set _unrn {}; set _abn {}\n"
         "  foreach _net [[ord::get_db_block] getNets] {\n"
         "    set _st [$_net getSigType]\n"
         "    if {$_st eq \"POWER\" || $_st eq \"GROUND\"} { continue }\n"
-        "    set _nt [expr {[llength [$_net getITerms]] + [llength [$_net getBTerms]]}]\n"
-        "    if {$_nt < 2} { continue }\n"
-        "    if {[$_net getWire] eq \"NULL\"} {\n"
+        "    set _terms {}\n"
+        "    foreach _t [$_net getITerms] { lappend _terms [list I $_t] }\n"
+        "    foreach _t [$_net getBTerms] { lappend _terms [list B $_t] }\n"
+        "    if {[llength $_terms] < 2} { continue }\n"
+        "    if {[$_net getWire] ne \"NULL\"} { continue }\n"
+        "    set _sh {}; set _readable 1\n"
+        "    foreach _tp $_terms {\n"
+        "      lassign $_tp _k _t\n"
+        "      set _s [_vibeic_term_shapes $_t $_k]\n"
+        "      if {![llength $_s]} { set _readable 0 }\n"
+        "      lappend _sh $_s\n"
+        "    }\n"
+        "    set _n [llength $_sh]; set _one 0\n"
+        "    if {$_readable} {\n"
+        "      for {set _i 0} {$_i < $_n} {incr _i} { set _uf($_i) $_i }\n"
+        "      for {set _i 0} {$_i < $_n} {incr _i} {\n"
+        "        for {set _j [expr {$_i + 1}]} {$_j < $_n} {incr _j} {\n"
+        "          if {[_vibeic_shapes_touch [lindex $_sh $_i] "
+        "[lindex $_sh $_j]]} {\n"
+        "            set _ri [_vibeic_uf_find _uf $_i]\n"
+        "            set _rj [_vibeic_uf_find _uf $_j]\n"
+        "            if {$_ri != $_rj} { set _uf($_ri) $_rj }\n"
+        "          }\n"
+        "        }\n"
+        "      }\n"
+        "      set _root [_vibeic_uf_find _uf 0]; set _one 1\n"
+        "      for {set _i 1} {$_i < $_n} {incr _i} {\n"
+        "        if {[_vibeic_uf_find _uf $_i] != $_root} { set _one 0; break }\n"
+        "      }\n"
+        "      array unset _uf\n"
+        "    } else { incr _blind }\n"
+        "    if {$_one} {\n"
+        "      incr _abut\n"
+        "      if {[llength $_abn] < 12} { lappend _abn [$_net getName] }\n"
+        "    } else {\n"
         "      incr _unr\n"
         "      if {[llength $_unrn] < 12} { lappend _unrn [$_net getName] }\n"
         "    }\n"
         "  }\n"
         f"  puts \"{marker_prefix}_UNROUTED_NETS: $_unr [join $_unrn ,]\"\n"
+        f"  puts \"{marker_prefix}_ABUTTED_NETS: $_abut [join $_abn ,]\"\n"
+        f"  puts \"{marker_prefix}_UNROUTED_SHAPE_BLIND: $_blind\"\n"
         f"}} e]}} {{ puts \"{marker_prefix}_UNROUTED_CHECK_NONFATAL: $e\" }}\n"
     )
 

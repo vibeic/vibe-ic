@@ -288,3 +288,149 @@ def test_the_named_violation_reroute_emits_the_integrity_check(tmp_path):
     assert line, out
     assert line[0].startswith("NAMED_VIOL_REROUTE_UNROUTED_NETS: 1"), line[0]
     assert "n_unrouted" in line[0], "the offender must be NAMED, not just counted"
+
+
+# ---------------------------------------------------------------------------
+# kspm42 — a wireless net whose terminals ABUT is connected, not unrouted.
+#
+# MEASURED, spm x gf180mcuD, a 36-pad ring (phase3/stage3/pnr/routed.def): the
+# pre-fix body counted 36 unrouted nets and the design had none. Every one was a
+# top-level DEF PIN sitting ON its pad cell's own PAD terminal --
+#
+#     NET clk iterms=1 bterms=1 wire=NULL
+#     ITERM u_pad_clk PAD  bbox 6148000 3102000 6268000 3222000  (Metal5)
+#     BTERM clk            bbox 6148000 3102000 6268000 3222000  (Metal5)
+#
+# -- the SAME rectangle on the SAME layer, which IS the connection. On the chip
+# path that made the number the promotion gate refuses on entirely manufactured,
+# and hid any real unrouted net inside the noise. These tests pin the four
+# behaviours that separate "needs no wire" from "did not get one".
+# ---------------------------------------------------------------------------
+
+def _geom_stub(a_shapes, b_shapes, *, b_readable=True) -> str:
+    """odb/ord stub with ONE wireless 2-terminal signal net `n_probe`, whose
+    ITerm carries `a_shapes` and whose BTerm carries `b_shapes`, each a list of
+    ``(layer, x0, y0, x1, y1)``. `b_readable=False` models a terminal whose
+    shapes cannot be read at all (the accessor raises)."""
+    def _mk(name, shapes):
+        recs = " ".join(f"{{{ly} {x0} {y0} {x1} {y1}}}"
+                        for ly, x0, y0, x1, y1 in shapes)
+        return f"set ::{name} {{{recs}}}\n"
+    return (
+        "namespace eval ord {}\n"
+        "proc ord::get_db_block {} { return BLK }\n"
+        "proc BLK {m} { if {$m eq \"getNets\"} { return {n_probe} } }\n"
+        "proc n_probe {m args} {\n"
+        "  switch -- $m {\n"
+        "    getSigType { return SIGNAL }\n"
+        "    getName    { return n_probe }\n"
+        "    getITerms  { return {it_a} }\n"
+        "    getBTerms  { return {bt_b} }\n"
+        "    getWire    { return NULL }\n"
+        "  }\n"
+        "}\n"
+        + _mk("a_shapes", a_shapes) + _mk("b_shapes", b_shapes) +
+        # dbITerm getGeometries -> list of {dbTechLayer Rect}
+        "proc it_a {m args} {\n"
+        "  if {$m ne \"getGeometries\"} { error \"no $m\" }\n"
+        "  set out {}\n"
+        "  set i 0\n"
+        "  foreach s $::a_shapes { lappend out [list ly_a$i rc_a$i]; incr i }\n"
+        "  return $out\n"
+        "}\n"
+        # dbBTerm getBPins -> one dbBPin; dbBPin getBoxes -> dbBox list
+        + ("proc bt_b {m args} { error \"unreadable\" }\n" if not b_readable else
+           "proc bt_b {m args} {\n"
+           "  if {$m ne \"getBPins\"} { error \"no $m\" }\n"
+           "  return {bp_b}\n"
+           "}\n"
+           "proc bp_b {m args} {\n"
+           "  if {$m ne \"getBoxes\"} { error \"no $m\" }\n"
+           "  set out {}\n"
+           "  set i 0\n"
+           "  foreach s $::b_shapes { lappend out bx_b$i; incr i }\n"
+           "  return $out\n"
+           "}\n") +
+        # per-shape accessor procs, generated from the two shape lists
+        "foreach {v pfx} {a_shapes a b_shapes b} {\n"
+        "  set i 0\n"
+        "  foreach s [set ::$v] {\n"
+        "    lassign $s ly x0 y0 x1 y1\n"
+        "    proc ly_${pfx}$i {m} [format {return %s} $ly]\n"
+        "    proc rc_${pfx}$i {m} [format {\n"
+        "      switch -- $m { xMin {return %s} yMin {return %s} xMax {return %s} yMax {return %s} }\n"
+        "    } $x0 $y0 $x1 $y1]\n"
+        "    proc bx_${pfx}$i {m} [format {\n"
+        "      switch -- $m { getTechLayer {return ly_%s%s} xMin {return %s} yMin {return %s} xMax {return %s} yMax {return %s} }\n"
+        "    } $pfx $i $x0 $y0 $x1 $y1]\n"
+        "    incr i\n"
+        "  }\n"
+        "}\n"
+    )
+
+
+def _integrity(tmp_path, stub: str) -> dict:
+    f = tmp_path / "g.tcl"
+    f.write_text(stub + p3._routing_integrity_check_tcl("SHIP"))
+    r = _pr.run([_TCLSH, str(f)], capture_output=True, text=True)
+    assert r.returncode == 0, r.stderr
+    out = {}
+    for line in r.stdout.splitlines():
+        if line.startswith("SHIP_"):
+            k, _, v = line.partition(": ")
+            out[k] = v
+    assert "SHIP_UNROUTED_CHECK_NONFATAL" not in out, r.stdout
+    return out
+
+
+# The exact shape MEASURED on the pad ring: one rectangle, one layer, both ends.
+_PAD = [("Metal5", 6148000, 3102000, 6268000, 3222000)]
+
+
+@_needs_tcl
+def test_abutting_terminals_are_reported_abutted_not_unrouted(tmp_path):
+    """The chip-path case. Two terminals whose shapes overlap on a shared layer
+    are connected; the net needs no wire and must not be counted as one that
+    failed to get one. It is DISCLOSED under its own marker rather than
+    silently dropped."""
+    out = _integrity(tmp_path, _geom_stub(_PAD, _PAD))
+    assert out["SHIP_UNROUTED_NETS"].startswith("0"), out
+    assert out["SHIP_ABUTTED_NETS"].startswith("1"), out
+    assert "n_probe" in out["SHIP_ABUTTED_NETS"], (
+        "an abutted net must be NAMED, not just counted")
+    assert out["SHIP_UNROUTED_SHAPE_BLIND"] == "0", out
+
+
+@_needs_tcl
+def test_same_footprint_on_a_different_layer_is_still_unrouted(tmp_path):
+    """The same-layer requirement is load-bearing: two rectangles that share an
+    (x,y) footprint on DIFFERENT layers are not connected, and calling that
+    abutted would acquit exactly the nets this check exists to catch."""
+    other = [("Metal1", 6148000, 3102000, 6268000, 3222000)]
+    out = _integrity(tmp_path, _geom_stub(_PAD, other))
+    assert out["SHIP_UNROUTED_NETS"].startswith("1"), out
+    assert "n_probe" in out["SHIP_UNROUTED_NETS"], out
+    assert out["SHIP_ABUTTED_NETS"].startswith("0"), out
+
+
+@_needs_tcl
+def test_same_layer_but_apart_is_still_unrouted(tmp_path):
+    """The ordinary unrouted net: right layer, wrong place. This is the v1.5.65
+    hazard the check was written for and it must survive the fix."""
+    apart = [("Metal5", 9000000, 9000000, 9060000, 9060000)]
+    out = _integrity(tmp_path, _geom_stub(_PAD, apart))
+    assert out["SHIP_UNROUTED_NETS"].startswith("1"), out
+    assert "n_probe" in out["SHIP_UNROUTED_NETS"], out
+    assert out["SHIP_ABUTTED_NETS"].startswith("0"), out
+
+
+@_needs_tcl
+def test_a_terminal_whose_shapes_cannot_be_read_is_not_acquitted(tmp_path):
+    """UNMEASURED is not CONNECTED. A terminal whose geometry accessor raises
+    cannot be PROVEN abutted, so the net stays counted as unrouted and the
+    count of such nets is disclosed rather than folded away."""
+    out = _integrity(tmp_path, _geom_stub(_PAD, _PAD, b_readable=False))
+    assert out["SHIP_UNROUTED_NETS"].startswith("1"), out
+    assert "n_probe" in out["SHIP_UNROUTED_NETS"], out
+    assert out["SHIP_ABUTTED_NETS"].startswith("0"), out
+    assert out["SHIP_UNROUTED_SHAPE_BLIND"] == "1", out

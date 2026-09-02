@@ -1655,7 +1655,7 @@ LIBRARY: Dict[str, Dict[str, Any]] = {
             # WHAT THIS BOUND ACTUALLY MEASURES, since its name suggests
             # something it stopped measuring in v1.16.10.
             #
-            # MEASURED (round 33, v1.16.95 / 626809984241): it reads 2.0000 at
+            # MEASURED (round 33, v1.16.96 / 626809984241): it reads 2.0000 at
             # fclk = 0.1, 1.0 and 10.0 MHz alike -- it is IDENTICALLY
             # `slew_design_margin`, for every declaration. `fclk` appears once
             # in the time available (1/fclk) and once inside the bias length
