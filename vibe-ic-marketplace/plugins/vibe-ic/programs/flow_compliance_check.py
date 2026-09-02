@@ -12358,6 +12358,43 @@ def check_step(project: Path, step: Dict[str, Any], waivers: Dict,
                     f"{max(len(ran_hints), len(all_vacuous_cmds))} gate "
                     f"clause(s) examined nothing): "
                     f"{h[len(_JSON_VACUOUS_HINT_PREFIX):]}")
+        # WHATEVER TIER WAS CHOSEN, A WAIVER THAT LOST THE TIER RACE IS STILL
+        # SAID. `waiver_hints` is held out of `non_hint_reasons` above so a
+        # PASS_WITH_WAIVERS gate cannot become a reason a step FAILED — and it
+        # was then re-appended on exactly ONE branch, the WAIVED one. Every
+        # other outcome dropped the disclosure entirely: the run kept the
+        # capability gap only in the ledger at the bottom of the report, and
+        # the step said nothing about why it did not measure.
+        #
+        # MEASURED on the #460 oracle replica (Step 4, no verilator), one
+        # variable, bisected to bf6292fa32 (v1.15.6, #1978), which reclassified
+        # two self-skips as INCOMPLETE and so handed the tier to the INCOMPLETE
+        # branch above:
+        #     2a9d21368  ~ [WAIVED-DEFERRED] + "verilator_coverage_measure
+        #                  check … signalled PASS_WITH_WAIVERS"
+        #     bf6292fa32 · [MISSING]        + no mention of verilator at all
+        # The stricter tier is deliberate and stands — that branch's own
+        # comment says a waiver must not launder an incomplete clause. What is
+        # NOT deliberate is losing the sentence, and this file already treats
+        # that as the defect for the two sibling channels immediately below:
+        # `na_hints` and `advisory_hints` are held out the same way and
+        # re-appended unconditionally, because a held-out disclosure "must not
+        # become a reason a step failed, and it must not silently vanish
+        # either".
+        #
+        # ADVISORY, AND STRUCTURALLY SO: this appends to `result.reasons` and
+        # touches `result.status` on no path, so it cannot move a step into or
+        # out of any bucket or numerator. The WAIVED branch already printed its
+        # own line, so it is excluded here rather than printing twice.
+        if result.status != "WAIVED" and waiver_hints:
+            for h in waiver_hints:
+                result.reasons.append(
+                    f"WAIVED-DEFERRED (disclosed, tier NOT granted — the "
+                    f"waiver did not decide this step's verdict; read the "
+                    f"tier on the step line above): a "
+                    f"gate program signalled PASS_WITH_WAIVERS, so a slot here "
+                    f"was credited via a waiver and production tapeout review "
+                    f"must still close it: {h[len(_WAIVER_HINT_PREFIX):]}")
         # W4 — whatever tier was chosen, every clause that did NOT run because
         # its condition matched nothing is named on the step line and carried
         # into the JSON report, with the reason its wiring site declared. A

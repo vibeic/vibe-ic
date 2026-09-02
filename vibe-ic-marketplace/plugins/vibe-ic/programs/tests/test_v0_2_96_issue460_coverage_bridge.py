@@ -242,6 +242,26 @@ def _step4_line(out: str) -> str:
     return ""
 
 
+def _step4_block(out: str) -> str:
+    """The Step-4 line AND the reasons printed under it.
+
+    The step's TIER is one word; its DISCLOSURES are the `└─` lines beneath.
+    A test that reads only the word cannot tell "not measured, and here is the
+    named reason" from "not measured, and nothing said".
+    """
+    lines = out.splitlines()
+    for i, ln in enumerate(lines):
+        if re.search(r"\bStep\s+4\b", ln):
+            blk = [ln]
+            for nxt in lines[i + 1:]:
+                if nxt.lstrip().startswith("\u2514\u2500"):
+                    blk.append(nxt)
+                elif nxt.strip():
+                    break
+            return "\n".join(blk)
+    return ""
+
+
 # --- CORRECTED (coverage-credit split) -------------------------------------
 # The two tests below used to assert that an oracle-track PASS makes Step 4
 # a PASS and ADDS ONE to the headline "x/y executed PASS". They ENCODED THE
@@ -268,15 +288,40 @@ def _step4_line(out: str) -> str:
 
 def test_e2e_oracle_pass_lifts_step4_out_of_skipped_condition(tmp_path):
     """WAS `assert "PASS" in line`. #460's real complaint — Step 4 stuck at
-    SKIPPED-CONDITION for a genuine oracle PASS — is still fixed."""
+    SKIPPED-CONDITION for a genuine oracle PASS — is still fixed.
+
+    THE BUCKET NAME MOVED, THE REQUIREMENT DID NOT. This used to require the
+    WAIVED-DEFERRED tier ON THE STEP LINE. Bisected, one variable: green at
+    2a9d21368, red at bf6292fa32 (v1.15.6, #1978), which classified two of
+    this step's self-skips as INCOMPLETE — and the INCOMPLETE branch outranks
+    the waiver branch ON PURPOSE, in that branch's own words: "a declared N/A
+    sibling or a waiver must not launder the incomplete clause into
+    SKIPPED-CONDITION / WAIVED". INCOMPLETE then demotes to MISSING on the
+    unproduced `coverage_verilator.json`. Both tiers sit OUTSIDE the
+    executed-PASS numerator and both are stricter than WAIVED, so pinning the
+    softer word would be asking the flow to grade this replica more kindly
+    than it does.
+
+    What must not be lost is the DISCLOSURE, and it was: `waiver_hints` were
+    surfaced on the WAIVED branch only, so every other tier dropped the
+    capability gap from the step entirely. That is fixed at the producer in
+    this same change, and asserted here on the step's own reasons rather than
+    on its tier word.
+    """
     _build_oracle_replica(tmp_path, 3, 3, "PASS")
     out = _run_compliance_stage1(tmp_path)
     line = _step4_line(out)
+    block = _step4_block(out)
     assert line, f"Step 4 not in output:\n{out}"
     assert "SKIPPED-CONDITION" not in line, f"Step 4 back to #460's bug:\n{line}"
-    assert "WAIVED-DEFERRED" in line, (
-        f"an oracle PASS with no coverage measurement must be a disclosed "
-        f"deferral:\n{line}")
+    assert "[PASS" not in line, (
+        f"an oracle PASS with no coverage measurement is not a Step-4 PASS:"
+        f"\n{line}")
+    assert "PASS_WITH_WAIVERS" in block, (
+        f"the verilator capability gap that made this step non-PASS is not "
+        f"disclosed on the step at all:\n{block}")
+    assert "coverage_verilator.json" in block, (
+        f"the unmeasured coverage artefact must be named:\n{block}")
 
 
 def test_e2e_oracle_pass_is_deferred_not_counted_without_coverage(tmp_path):
@@ -295,16 +340,32 @@ def test_e2e_oracle_pass_is_deferred_not_counted_without_coverage(tmp_path):
 
     # Still DISTINGUISHABLE from a failing oracle (the honesty #460 bought).
     assert "FAIL" in _step4_line(base_out), _step4_line(base_out)
-    assert "WAIVED-DEFERRED" in _step4_line(good_out), _step4_line(good_out)
+    assert "FAIL" not in _step4_line(good_out), _step4_line(good_out)
+    assert _step4_line(good_out).split("]")[0] \
+        != _step4_line(base_out).split("]")[0], (
+        f"an oracle PASS and an oracle FAIL resolved to the same Step-4 tier\n"
+        f"--- base ---\n{_step4_line(base_out)}\n"
+        f"--- good ---\n{_step4_line(good_out)}")
 
     # But NOT certified: no coverage was measured, so the executed-PASS
     # numerator must not grow, and the deferral must be visible.
     assert _executed_pass(good_out) == _executed_pass(base_out), (
         f"an unmeasured coverage step was counted as executed PASS\n"
         f"--- base ---\n{base_out}\n--- good ---\n{good_out}")
-    assert _waived(good_out) == _waived(base_out) + 1, (
-        f"the deferral was not disclosed in the WAIVED-DEFERRED bucket\n"
-        f"--- base ---\n{base_out}\n--- good ---\n{good_out}")
+    # VISIBLE — on the step, not merely in the ledger at the foot of the
+    # report. WAS `_waived(good) == _waived(base) + 1`, a count of steps whose
+    # TIER is WAIVED; the tier is now the stricter INCOMPLETE/MISSING (see the
+    # sibling test above), and the tally correctly does not count it. The
+    # obligation the old assertion stood for — "production tapeout review must
+    # still close it" — is what is asserted, at the place a reviewer reads it.
+    good_block = _step4_block(good_out)
+    assert "PASS_WITH_WAIVERS" in good_block, (
+        f"the deferral was not disclosed on the step at all\n{good_block}")
+    assert "production tapeout review" in good_block, (
+        f"the disclosure does not carry the review obligation\n{good_block}")
+    assert "PASS_WITH_WAIVERS" not in _step4_block(base_out), (
+        f"a FAILing oracle must not acquire a waiver disclosure\n"
+        f"{_step4_block(base_out)}")
 
 
 def test_e2e_oracle_pass_is_a_hard_fail_when_verilator_is_installed(tmp_path):

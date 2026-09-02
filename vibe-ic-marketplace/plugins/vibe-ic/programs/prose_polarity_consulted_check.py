@@ -597,6 +597,49 @@ _NOT_PROSE: Dict[str, str] = {
         'English DESIGN DOCUMENTS, where denial is spellable and was spelled; '
         'consulting `_prose_polarity` here would add a branch that can never '
         'fire.',
+    'pdk_dummy_fill_spec::derive':
+        "A KLayout DRC rule deck's own Ruby productions — `<sym> = "
+        'input(<gds>, <dt>)` layer bindings in `generic_layers.rb`, the '
+        '`space(<n>.um)` / `separation(<sym>, <n>.um)` rules in '
+        '`rule_decks/dummy_metal.rb`, and the density rule in '
+        '`rule_decks/density.rb` — all written by the PDK packaging. THE '
+        'ARGUMENT IS NOT THAT THE DECK HAS NO DENIAL FORM. It has exactly '
+        'one, the Ruby comment, and this function consults it: every match from '
+        'every one of the six module-level patterns is passed through '
+        '`_commented(text, m.start())` and dropped when the rule is '
+        'commented out. FIVE of the six already did; the sixth, `_RE_RESULT_IS_SUM`, '
+        'did not, and that hole was closed in the same change that recorded this '
+        'entry rather than being papered over by it. A `_prose_polarity` call would add a SECOND, '
+        'English-shaped denial check (`is_denied`, `NEGATION_RE`) over Ruby '
+        "source, where 'NOT' is not a construct and cannot appear outside the "
+        'comment the deck already uses and this reader already honours — a '
+        'call that can never fire, which this register calls a green light '
+        'rather than a check. The function also defaults NOTHING: it returns '
+        '`None` outright when any of the three decks, the layer map or the '
+        'metal-name rows is unreadable or empty. Direct precedent: '
+        '`analog_a5_pdk_device_limits::deck_rules` (a magic DRC deck read the '
+        'same way) and `analog_a5_pdk_device_limits::fet_limits` (formal Tcl '
+        'from the same PDK packaging). The two defects this gate was built '
+        'from (#706 pdk_target, #711 die_area_budget_um) both read English '
+        'DESIGN DOCUMENTS, where denial is spellable and was spelled.',
+    'register_bus_driver_gen::dut_port_types':
+        'SystemVerilog module-header port declarations, matched as `module '
+        '<dut> ... endmodule` and then `(input|output) <pkg>::<type> <port>` '
+        'inside that header, to learn which ports carry a package-typed '
+        'struct. The matched text is a production of the HDL grammar written '
+        'by a synthesis-bound source file, in which there is no form that '
+        "DENIES a port: Verilog gives no way to write 'a is NOT an input'. A "
+        'port appears in a declaration or it does not, and absence is already '
+        'how this function reports it — a module that is not found returns '
+        '`{}` and a port with no package type simply does not enter the map. '
+        'Direct precedent: `crosslayer_rewrite_equivalence::module_ports` '
+        '(the same declarations, the same reason) and '
+        '`register_bus_driver_gen::bus_contract` above, the SAME MODULE '
+        "reading the same design's staged package. The two defects this gate "
+        'was built from (#706 pdk_target, #711 die_area_budget_um) both read '
+        'English DESIGN DOCUMENTS, where denial is spellable and was spelled; '
+        'consulting `_prose_polarity` here would add a branch that can never '
+        'fire.',
     'register_bus_driver_gen::bus_contract':
         'SystemVerilog `typedef struct packed { ... } <name>_t;` and enum '
         "productions in the design's OWN staged package. HDL is a machine "

@@ -1,10 +1,10 @@
 """Regression for the Phase-1 SPICE post-pass half of issue #1996.
 
-The generic input-document walker was fenced at v1.16.84, but the later
+The generic input-document walker was fenced at v1.16.85, but the later
 ``_v1_6_350_post_emit_spice_metadata`` hook still recursively walked all of
 ``input/``. A real project-staged PDK therefore contributed 129 CDL subcircuits
 to L9 as if they were design submodules. The load-bearing negative control
-below fails on v1.16.84: ``pdk_library_cell`` appears beside the real design
+below fails on v1.16.85: ``pdk_library_cell`` appears beside the real design
 subcircuit. It passes only when the post-pass shares the canonical
 ``input/pdk*`` boundary with the document walker.
 """

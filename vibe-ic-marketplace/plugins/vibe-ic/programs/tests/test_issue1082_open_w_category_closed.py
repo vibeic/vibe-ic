@@ -104,18 +104,65 @@ def test_the_ten_converted_programs_are_still_converted():
     assert not any(still.values()), {k: v for k, v in still.items() if v}
 
 
+def _tree_offenders():
+    """Every program the detector still finds an offending site in, NOW."""
+    return {py.name for py in sorted(PROGRAMS.glob("*.py"))
+            if (G.scan_program(py) or [])}
+
+
+def _recorded_but_converted(recorded, tree):
+    """Ratchet slots no program can ever pay off — the hole this test closes."""
+    return sorted(set(recorded) - set(tree))
+
+
 def test_the_recorded_baseline_followed_the_tree_down():
     """The ratchet tightened to match. `--strict` only fails on GROWTH, so a
-    converted tree passes either way; leaving the old number would leave a
-    ten-slot hole through which all ten could return still green."""
+    converted tree passes either way; leaving a stale row would leave a hole
+    through which the program it names could return still green.
+
+    THE ASSERTION IS A SUBSET TEST, NOT A COUNT, AND THAT IS THE FIX.
+    This test used to read `assert len(recorded) == 514`. A ratchet whose
+    guard is an ABSOLUTE COUNT goes RED WHEN THE TREE IS TIGHTENED, which is
+    the one direction a ratchet exists to reward: main converted three more
+    programs (`eda_report_audit`, `lec_run`, `power_total_vs_budget_check`)
+    and correctly pulled the record 514 -> 511, and this line turned red for
+    it. A guard that punishes the fix is a broken guard, and the number was
+    never the property anyway.
+
+    The property is: NO RECORDED ROW NAMES A PROGRAM THE DETECTOR NO LONGER
+    FLAGS. That is exactly the hole (`recorded - tree` must be empty), it is
+    defined by the detector's own behaviour over `programs/*.py` rather than
+    by a hand-kept number, and it can only ever be satisfied by the record
+    coming DOWN to the tree — it cannot be satisfied by the tree regressing
+    up to the record, because growth is `--strict`'s job in
+    `test_no_new_offender_and_the_ratchet_holds` beside it. Sister precedent,
+    in this repo's own words: "RATCHET ON MEMBERSHIP, NOT ON COUNT"
+    (vibe-ic#900, quoted in `prose_polarity_consulted_check`).
+    """
     recorded = set(json.loads(BASELINE.read_text())["offenders"])
-    # 515 -> 514: `verilogeval_tier_pipeline.py` was a recorded offender and the
-    # file is DELETED, so the row named a program that does not exist. A ratchet
-    # entry keyed on a vanished file is not debt — it is a slot nothing can ever
-    # pay off, and it inflates the number the ratchet reports as owed.
-    assert len(recorded) == 514, len(recorded)
+    assert recorded, "an empty record cannot distinguish a clean tree from a blind gate"
+    stale = _recorded_but_converted(recorded, _tree_offenders())
+    assert not stale, (
+        "recorded-but-converted ratchet slot(s) — each one is a hole the named "
+        f"program can regress back through with the ratchet still green: {stale}")
     for s in CONVERTED:
         assert f"{s}.py" not in recorded, f"{s} converted but still recorded residual"
+
+
+def test_the_subset_assertion_can_itself_fail():
+    """NEGATIVE CONTROL for the test above, and it is load-bearing.
+
+    `assert not stale` passes vacuously if `_recorded_but_converted` ever
+    stops finding anything — the same vacuity `test_the_detector_actually_
+    finds_this_shape` exists to rule out one level down. Hand it a record
+    carrying a name the tree does not flag and require it to say so.
+    """
+    tree = _tree_offenders()
+    assert tree, "the detector flags nothing at all — the subset test is vacuous"
+    ghost = "__a_program_that_was_converted_or_never_existed__.py"
+    assert ghost not in tree
+    assert _recorded_but_converted(tree | {ghost}, tree) == [ghost]
+    assert _recorded_but_converted(tree, tree) == []
 
 
 def test_no_new_offender_and_the_ratchet_holds():

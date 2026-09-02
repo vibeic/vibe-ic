@@ -126,7 +126,14 @@ def derive(deck_root: Path) -> Optional[Dict[str, Any]]:
     # drawn+dummy then dummy fill moves the coverage number; if it does not,
     # filling the dummy layer cannot satisfy the density rule and this routine
     # must say so rather than emit a spec that cannot work.
-    result_is_sum = _RE_RESULT_IS_SUM.search(layers_txt) is not None
+    # `_commented` HERE TOO. This was the one match in this function that did
+    # not consult the deck's only denial form, and it is the match that decides
+    # whether dummy fill can move the density number at all: a commented-out
+    # `register_layer(names[:metal_result]) { drawn + dummy }` read as live
+    # emits exactly the spec-that-cannot-work the comment above forbids.
+    result_is_sum = any(
+        not _commented(layers_txt, m.start())
+        for m in _RE_RESULT_IS_SUM.finditer(layers_txt))
 
     # dummy-to-dummy spacing (one rule, shared by every level in this deck)
     sp = [float(m.group(1)) for m in _RE_DUMMY_SPACE.finditer(dummy_txt)

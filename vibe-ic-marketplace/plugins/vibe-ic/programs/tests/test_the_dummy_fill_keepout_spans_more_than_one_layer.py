@@ -94,6 +94,39 @@ def test_a_commented_out_rule_is_not_read_as_live(spec):
     assert "42/0" not in avoid
 
 
+def test_a_commented_out_density_registration_is_not_read_as_live(tmp_path):
+    """THE SAME RULE, ON THE ONE MATCH THAT DID NOT CONSULT IT.
+
+    `_RE_RESULT_IS_SUM` decides whether filling the dummy layer can move the
+    density number AT ALL — `derive`'s own comment says a deck that does not
+    sum drawn+dummy "must say so rather than emit a spec that cannot work".
+    It was the single match in this function that did not go through
+    `_commented`, so a deck whose `register_layer(names[:metal_result]) {
+    drawn + dummy }` is COMMENTED OUT still reported the subject as summed and
+    the spec claimed a coverage target it cannot reach.
+
+    Built by commenting out that ONE line of the real fixture deck: the only
+    variable between this reading and `test_the_density_subject_is_read_not_
+    assumed` above (which reads True on the same deck) is the `#`.
+    """
+    import shutil
+    src = DECK
+    dst = tmp_path / "deck"
+    shutil.copytree(src, dst)
+    lay = dst / "generic_layers.rb"
+    txt = lay.read_text()
+    hit = [ln for ln in txt.splitlines()
+           if pds._RE_RESULT_IS_SUM.search(ln)]
+    assert len(hit) == 1, f"fixture must carry exactly one registration: {hit}"
+    lay.write_text(txt.replace(hit[0], "        # " + hit[0].strip()))
+    # the line is still THERE and still matches the pattern — only commented
+    assert pds._RE_RESULT_IS_SUM.search(lay.read_text())
+    spec = pds.derive(dst)
+    assert spec is not None, "commenting one rule must not break the parse"
+    assert spec["density_subject_includes_dummy"] is False, (
+        "a commented-out result registration was read as a live one")
+
+
 def test_the_emitted_fill_script_enforces_the_grid_pitch():
     """`placed.sized(gap)` only keeps a LATER tile off an earlier one; tiles
     from one grid pass are `pitch - tile` apart regardless. MEASURED: pitch 1.9

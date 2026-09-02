@@ -18,6 +18,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 PROG = Path(__file__).resolve().parent.parent / \
     "project_outputs_in_tree_check.py"
 
@@ -27,6 +29,46 @@ def _run(project_dir: Path) -> subprocess.CompletedProcess:
         [sys.executable, str(PROG), str(project_dir)],
         capture_output=True, text=True,
     )
+
+
+@pytest.fixture
+def volatile_project():
+    """A project root that really is on a VOLATILE root, whatever TMPDIR says.
+
+    THIS GATE ONLY EVER LOOKS AT PATHS UNDER `/tmp/`, `/var/tmp/`, `/dev/shm/`
+    or `/run/` — `_PATH_RE` admits nothing else, and its own PASS line says so
+    ("no /tmp / /var/tmp / /dev/shm / /run paths referenced"). A test whose
+    SUBJECT is built under pytest's `tmp_path` therefore measures the gate only
+    when the harness's TMPDIR happens to be volatile, and measures the harness
+    otherwise.
+
+    MEASURED, one variable, same tree (0b8cca0736) and same pinned image
+    `ghcr.io/vibeic/vibeic-eda@sha256:66c33ff2…`:
+
+        TMPDIR unset (basetemp /tmp/pytest-of-…)         19 passed
+        TMPDIR=<bind mount>/tmp (non-volatile)            2 failed, 17 passed
+
+    and the two that fell over were exactly the two below. The run had already
+    said so in its own words, three lines above the failure —
+    `scratch_root_guard: … NOT under a volatile root (/tmp/, /var/tmp/,
+    /dev/shm/, /run/) [the external-storage gate cannot see a subject built
+    here]`. That INFO line is the discriminator between a defect in this gate
+    and an artefact of the measurement shape; this fixture removes the variable
+    it is warning about, so the two tests below measure the gate either way.
+
+    Deliberately NOT a change to the gate: the volatile-prefix scope is what
+    the gate is FOR, and widening it to fit a harness would be the tail wagging
+    the dog. `test_genuine_external_artifact_still_fails_from_a_volatile_
+    project` already pins its own subject the same way, for the same reason.
+    """
+    import shutil
+    import tempfile
+    d = Path(tempfile.mkdtemp(dir="/tmp", prefix="voltproj-"))
+    assert str(d.resolve()).startswith("/tmp/")
+    try:
+        yield d
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
 
 
 # -- Test 1: POSITIVE_PASS — clean project --
@@ -312,19 +354,25 @@ def test_in_tree_self_reference_is_not_external_storage(tmp_path):
     assert "external-storage artifact" not in r.stdout
 
 
-def test_in_tree_self_reference_is_disclosed_not_silent(tmp_path):
+def test_in_tree_self_reference_is_disclosed_not_silent(volatile_project):
     """The exemption must be visible. A silently-dropped class reads as
-    'nothing was there' — the gate has to say what it excused."""
-    own = tmp_path / "phase2" / "stage2" / "synth" / "netlist.v"
+    'nothing was there' — the gate has to say what it excused.
+
+    The project root must itself be VOLATILE for this class to exist at all:
+    an in-tree self-reference is only a candidate finding when the tree is
+    somewhere `_PATH_RE` looks. See the `volatile_project` fixture.
+    """
+    proj = volatile_project
+    own = proj / "phase2" / "stage2" / "synth" / "netlist.v"
     own.parent.mkdir(parents=True)
     own.write_text("// netlist\n")
-    (tmp_path / "reports").mkdir()
-    (tmp_path / "reports" / "synth.json").write_text(json.dumps(
+    (proj / "reports").mkdir()
+    (proj / "reports" / "synth.json").write_text(json.dumps(
         {"netlist": str(own)}))
-    r = _run(tmp_path)
+    r = _run(proj)
     assert r.returncode == 0, r.stdout + r.stderr
     assert "in-tree self-reference" in r.stdout
-    assert str(tmp_path) in r.stdout
+    assert str(proj) in r.stdout
 
 
 def test_genuine_external_artifact_still_fails_from_a_volatile_project(
@@ -347,23 +395,35 @@ def test_genuine_external_artifact_still_fails_from_a_volatile_project(
         shutil.rmtree(outside, ignore_errors=True)
 
 
-def test_symlink_out_of_the_tree_is_still_external(tmp_path):
+def test_symlink_out_of_the_tree_is_still_external(volatile_project):
     """A path that is LEXICALLY inside the project but symlinks OUT of it is
     still external storage — the artifact does not live in the tree. Pins
-    that the containment test resolves rather than string-prefixes."""
+    that the containment test resolves rather than string-prefixes.
+
+    SCOPE, stated because this test does not cover it and a reader will look:
+    the ADMISSION filter (`_PATH_RE`) is a string prefix over the CITED text,
+    and only `_inside_project` resolves. So a report citing a lexically-inside
+    path that symlinks onto volatile storage is invisible to this gate whenever
+    the project root is NOT itself volatile — the ordinary case for a real run
+    under `$HOME`. That is a gate hole, not a harness artefact, and it is
+    reported separately rather than papered over here; this test's subject is
+    the resolution step, and it is pinned on a volatile root so it measures
+    that step rather than the harness's TMPDIR.
+    """
+    proj = volatile_project
     import tempfile
     outside = Path(tempfile.mkdtemp(dir="/tmp", prefix="linktarget-"))
     target = outside / "netlist.v"
     target.write_text("// lives outside\n")
-    inside = tmp_path / "steps" / "9_synth"
+    inside = proj / "steps" / "9_synth"
     inside.mkdir(parents=True)
     link = inside / "netlist.v"
     link.symlink_to(target)
     try:
-        (tmp_path / "reports").mkdir()
-        (tmp_path / "reports" / "s.json").write_text(json.dumps(
+        (proj / "reports").mkdir()
+        (proj / "reports" / "s.json").write_text(json.dumps(
             {"netlist": str(link)}))
-        r = _run(tmp_path)
+        r = _run(proj)
         assert r.returncode == 1, r.stdout + r.stderr
         assert "[FAIL]" in r.stdout
     finally:

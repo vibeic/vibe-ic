@@ -144,11 +144,21 @@ def test_DEFECT_finding_is_recorded_when_a_real_gap_exists(tmp_path):
     passed, reasons = _flow._evaluate_gate(proj, sub)
     records = [r for r in reasons
                if r.startswith(_flow._ADVISORY_RECORD_HINT_PREFIX)]
-    assert passed is False
+    # RECORDED — the half this file calls load-bearing. The refusal exists, it
+    # is carried on the structured channel, its rc-derived enforcement still
+    # reads BLOCKING, and it names the measured number.
     assert records, f"nothing recorded; reasons={reasons}"
     assert '"enforcement": "BLOCKING"' in records[0]
     assert any("65" in r for r in reasons), (
         f"the finding must carry the measured number: {reasons}")
+    assert any(r.startswith("advisory gate refusal:") for r in reasons), (
+        f"a refusal that is not REPORTED is a refusal nobody can read: "
+        f"{reasons}")
+    # AND DOES NOT CHANGE THE VERDICT — the other half, and it cannot be
+    # satisfied by not running the gate, because the three assertions above
+    # already require the run and the finding.
+    assert passed is True, (
+        f"an advisory clause denied its step the tier: {reasons}")
 
 
 def test_DEFECT_unclassified_absence_is_incomplete_not_ok(tmp_path):
@@ -172,8 +182,29 @@ def test_DEFECT_unclassified_absence_is_incomplete_not_ok(tmp_path):
 
 # ── GUARD direction — must hold on BOTH trees ────────────────────────────────
 
-def test_GUARD_coverage_closure_live_refusal_blocks_step4(tmp_path):
-    """A measured below-threshold result is a refusal, not advisory prose."""
+def test_GUARD_coverage_closure_live_refusal_is_reported_not_swallowed(
+        tmp_path):
+    """A measured below-threshold result is a refusal, not advisory prose.
+
+    WAS `assert passed is False`, under the name `..._blocks_step4`. That
+    contradicted this file's OWN opening requirement — coverage_closure must be
+    "reached through the ADVISORY slot, so it cannot change any verdict" — and
+    it demanded the very promotion `test_GUARD_no_blocking_step4_subgate_
+    invokes_coverage_closure` below forbids, whose docstring gives the reason:
+    the blocking floor for Step-4 coverage is `verilator_coverage_measure
+    check` on the SAME artefact, and a second higher threshold wired blocking
+    "would fail the step twice for one root cause".
+
+    Bisected: green at 182879111^, red at 182879111 (v1.15.43), which taught
+    `_evaluate_gate` to stand a refusal down on TWO-SOURCE agreement — the
+    gate module's own docstring saying `ENFORCEMENT: advisory` AND the
+    canonical flow wiring it advisory and never blocking. `coverage_closure`
+    is both. So the assertion, not the flow, is what moved out of line.
+
+    What a refusal must still do is be REPORTED, and that is what is asserted
+    here now — with the two-source premise pinned first, so this test cannot
+    go quietly green by the gate ceasing to be advisory.
+    """
     proj = tmp_path / "proj"
     (proj / "reports" / "phase2" / "coverage").mkdir(parents=True)
     payload = _measured_payload(proj, 5.0, 5.0, 5.0)   # catastrophically low
@@ -182,8 +213,23 @@ def test_GUARD_coverage_closure_live_refusal_blocks_step4(tmp_path):
     sub, key, _cmd = _coverage_closure_subgate()
     if sub is None:
         pytest.skip("not wired on this tree — the DEFECT tests cover that")
-    passed, _reasons = _flow._evaluate_gate(proj, sub)
-    assert passed is False
+    # PREMISE. If this ever stops holding, the stand-down below is wrong and
+    # this test must say so rather than pass.
+    assert _flow._gate_is_two_source_advisory(_PROGRAM), (
+        f"{_PROGRAM} is no longer two-source advisory (module docstring + "
+        f"flow row); a refusal from it is not stood down and this guard's "
+        f"expectation is inverted")
+    passed, reasons = _flow._evaluate_gate(proj, sub)
+    refusals = [r for r in reasons if r.startswith("advisory gate refusal:")]
+    assert refusals, (
+        f"a live below-threshold measurement produced no reported refusal: "
+        f"{reasons}")
+    assert any('"enforcement": "BLOCKING"' in r for r in reasons
+               if r.startswith(_flow._ADVISORY_RECORD_HINT_PREFIX)), (
+        f"the structured record must keep the rc-derived enforcement: "
+        f"{reasons}")
+    assert passed is True, (
+        f"a two-source-advisory refusal denied its step the tier: {reasons}")
 
 
 def test_GUARD_no_blocking_step4_subgate_invokes_coverage_closure():
