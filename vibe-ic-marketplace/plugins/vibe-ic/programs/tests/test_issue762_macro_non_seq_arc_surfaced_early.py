@@ -594,6 +594,21 @@ def test_the_flow_gate_evaluator_actually_runs_it(tmp_path):
     # verdict about a gate the step cannot prove it dispatched.
     assert any(h.startswith(fcc._RAN_HINT_PREFIX) for h in hints), hints
 
+    # ...AND IT REACHES A READER. `_evaluate_gate` is one level below the
+    # thing a reviewer opens; assert the whole way up, because a hint the
+    # step-level whitelist drops dies exactly here and looks identical to a
+    # gate that never ran. `check_step` renders the record as a GATE EVIDENCE
+    # line, and this is where the word FINDING was doing its job before #1980
+    # replaced it with the typed tuple.
+    res = fcc.check_step(proj, step7, {})
+    assert res.status == "FAIL", res.status
+    evidence = [r for r in res.reasons
+                if r.startswith("GATE EVIDENCE: ")
+                and "macro_non_seq_arc_contract_check" in r]
+    assert len(evidence) == 1, res.reasons
+    assert "rc=1" in evidence[0] and "verdict=FAIL" in evidence[0], evidence
+    assert "ADVISORY_REFUSAL" in evidence[0], evidence
+
 
 # --------------------------------------------------------------------------- #
 # 8. The LATE failure is NOT suppressed — it is only named correctly
