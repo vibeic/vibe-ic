@@ -12,12 +12,34 @@ the one live place that holds the change-set under review is the pre-push merge
 gate.
 
 THE PART THAT IS EASY TO FAKE. A gate that never passes `--answers` can only
-observe `answers_document_present: false`, which is the arm that does not
-block. It would read as wired and could never fail. So the tests below do not
-check that a call exists -- they drive a real two-commit repository through
-both arms and assert one of them is RED.
+observe `answers_document_present: false`. While that arm was advisory such a
+gate would read as wired and could never fail. So the tests below do not check
+that a call exists -- they drive a real two-commit repository through every arm
+and assert that the DOCUMENT moves the verdict.
+
+EVERY ARM BLOCKS NOW, THE ABSENT ONE INCLUDED (2026-08-31, `ac3232ddeb`). The
+advisory branch carried its own expiry -- "THE MOMENT an answers-document
+convention exists in this repository ... the `not present` arm becomes
+blocking" -- and `gatekeeper_review.py` records both halves as satisfied in
+the comment block above `_PPA_ANSWERS_REL` ("THE ABSENT ARM USED TO BE
+ADVISORY, AND IT STOPPED BEING SO BY ITS OWN WRITTEN CONDITION"): the path is
+declared, and the repository carries a real document at it. That commit
+flipped the gate and re-fixtured `test_gatekeeper_review`; the tests in this
+file still encoded the old contract (no document => green, "REPORTED, not
+blocking") and went red for the honest reason. The arms are therefore:
+
+    no document            rc 1  VIOLATED, naming `_PPA_ANSWERS_REL` + the count
+    a document that lies   rc 1  AUTHOR_OVERRIDE_REFUSED
+    a document that holds  rc 0  merge condition met
+
+and the control for "the flip is attributable to this gate" is the third arm,
+not the first. No change-set with ZERO applicable questions can stand in for
+it: questions 1-5 are catalogued `mode: always`, so even a docs-only change
+applies five, and a green control has to ANSWER rather than avoid a surface
+(measured in `test_no_answers_document_is_reported_with_the_count_...`).
 """
 import ast
+import hashlib
 import json
 import subprocess
 import sys
@@ -78,14 +100,62 @@ def _repo_with_a_surface() -> tuple[Path, str]:
         "import subprocess\n"
         "def run(cmd):\n"
         "    return subprocess.run(cmd, shell=True)\n")
+    # Its test travels with it. Questions 4, 5, 11 and 19 accept ONLY `test`
+    # evidence, so the arm where a document HOLDS needs a test that exists.
+    # The file adds no token: measured through the checker's own report, the
+    # applicable set is {1,2,3,4,5,11,19} with this file and without it.
+    (p / "tests").mkdir()
+    (p / "tests" / "test_thing_check.py").write_text(
+        "def test_thing_runs():\n    assert True\n")
     git("add", "-A")
     git("commit", "-qm", "add a surface")
     return d, base
 
 
+#: What `_repo_with_a_surface` changes, as the checker sees it: the path arm
+#: reads `programs/thing_check.py` as a gate program, the content arm reads
+#: `shell=True` and a non-literal argv. Tokens {gate, security, tool} make 11
+#: and 19 apply on top of the five `always` questions.
+_SURFACE_SRC = "programs/thing_check.py"
+_SURFACE_TEST = "programs/tests/test_thing_check.py::test_thing_runs"
+_SURFACE_QUESTIONS = (1, 2, 3, 4, 5, 11, 19)
+
+
 def _answers(d: Path, doc: dict) -> None:
     (d / ".github").mkdir(exist_ok=True)
     (d / G._PPA_ANSWERS_REL).write_text(json.dumps(doc))
+
+
+def _answers_that_hold(repo: Path, questions, src_rel: str,
+                       test_ref: str) -> dict:
+    """An answers document every entry of which a machine can re-verify.
+
+    Each answered question carries all three verifiable kinds -- `path`,
+    `artefact` with a sha256 COMPUTED from the file rather than typed, and a
+    `test` naming a function that exists -- so whichever kind the catalogue's
+    `min_evidence_kinds` accepts for that question, one entry satisfies it.
+    Nothing here is asserted into existence: a ref that did not resolve, or a
+    hash that did not match, would leave the gate red, which is the point.
+    """
+    digest = "sha256:" + hashlib.sha256((repo / src_rel).read_bytes()).hexdigest()
+    return {"schema": "vibeic.ppa.pr_answers.v1",
+            "answers": [{"question": q,
+                         "evidence": [{"kind": "path", "ref": src_rel},
+                                      {"kind": "artefact", "ref": src_rel,
+                                       "sha256": digest},
+                                      {"kind": "test", "ref": test_ref}]}
+                        for q in questions]}
+
+
+def _checker_report(d: Path, base: str) -> dict:
+    """The checker's OWN report over the fixture, document withheld -- so a
+    count asserted below is read from the subject, never typed here."""
+    out = Path(tempfile.mkdtemp(prefix="ppa1347rep_")) / "ppa_pr_scope.json"
+    r = _supervised([sys.executable, str(PROG / "ppa_pr_scope_check.py"),
+                     "--repo", str(d), "--base", base, "--head", "HEAD",
+                     "--json", str(out)])
+    assert r.returncode == 1, (r.returncode, r.stdout, r.stderr)
+    return json.loads(out.read_text(encoding="utf-8"))
 
 
 # No per-call wall-clock bound: see `_supervised` below. "The slowest child is
@@ -128,24 +198,85 @@ def test_an_answers_document_that_overrides_the_detector_is_REFUSED():
 
 
 def test_the_blocking_arm_is_reachable_from_the_declared_answers_path():
-    """The whole point of `_PPA_ANSWERS_REL`: without it the gate would never
-    pass `--answers`, would only ever see the non-blocking arm, and could not
-    fail for any input at all."""
+    """The whole point of `_PPA_ANSWERS_REL`: it is where the gate picks the
+    document up, so the document -- and only the document -- decides the
+    verdict over ONE repository and ONE change-set.
+
+    Until 2026-08-31 this test's control was "no document => green", because
+    the absent arm was advisory. `ac3232ddeb` made it blocking by the expiry
+    condition written into `gatekeeper_review.py` (the block above
+    `_PPA_ANSWERS_REL`), so the honest pair is now: absent => VIOLATED naming
+    the path; a document that HOLDS => green; a document that LIES => refused.
+    Four states of the same repo, each read from the gate, and the two red
+    ones are asserted DISTINGUISHABLE -- absent, empty and lying are three
+    different refusals, and a reader acting on the summary needs to know
+    which one they got.
+    """
     d, base = _repo_with_a_surface()
-    before = G.ppa_pr_scope_gate(d, base, "HEAD")
-    assert before.green is True                      # no document yet
+
+    absent = G.ppa_pr_scope_gate(d, base, "HEAD")
+    assert absent.rc == 1 and absent.green is False, absent.summary
+    assert G._PPA_ANSWERS_REL in absent.summary
+    assert "NO answers document was supplied" in absent.summary
+    assert f"{len(_SURFACE_QUESTIONS)} of the 20 Appendix-C questions apply" \
+        in absent.summary
+
+    _answers(d, _answers_that_hold(d, _SURFACE_QUESTIONS, _SURFACE_SRC,
+                                   _SURFACE_TEST))
+    holds = G.ppa_pr_scope_gate(d, base, "HEAD")
+    assert holds.rc == 0 and holds.green is True, holds.summary
+    assert f"merge condition met ({len(_SURFACE_QUESTIONS)} applicable)" \
+        in holds.summary
+
+    _answers(d, _ANSWERS_THAT_LIE)
+    lies = G.ppa_pr_scope_gate(d, base, "HEAD")
+    assert lies.rc == 1 and lies.green is False, lies.summary
+    assert "AUTHOR_OVERRIDE_REFUSED" in lies.summary
+    assert G._PPA_ANSWERS_REL not in lies.summary    # not the absent refusal
+
+    # present but answering nothing is a THIRD state: a finding about the
+    # document, never a claim that no document was supplied.
     _answers(d, {"schema": "vibeic.ppa.pr_answers.v1", "answers": []})
-    after = G.ppa_pr_scope_gate(d, base, "HEAD")
-    assert after.green is False                      # same repo, document added
-    assert G._PPA_ANSWERS_REL in before.summary
+    empty = G.ppa_pr_scope_gate(d, base, "HEAD")
+    assert empty.rc == 1 and empty.green is False, empty.summary
+    assert f"MISSING_EVIDENCE={len(_SURFACE_QUESTIONS)}" in empty.summary
+    assert "NO answers document" not in empty.summary
+    assert "AUTHOR_OVERRIDE_REFUSED" not in empty.summary
 
 
 def test_no_answers_document_is_reported_with_the_count_not_silently_passed():
+    """The absent arm is RED, and its summary carries the count a reader
+    needs -- how many questions this change-set has to answer -- read from
+    the checker's own report rather than typed into the assertion.
+
+    This arm returned rc 0 with "REPORTED, not blocking" until 2026-08-31;
+    `ac3232ddeb` flipped it (see the block above `_PPA_ANSWERS_REL` in
+    gatekeeper_review.py). The second half of the test is why no fixture can
+    dodge the document instead of answering it: every question the catalogue
+    marks `mode: always` is in the applicable set, so the count is never zero
+    for any change-set and "no document" is never silently a pass.
+    """
     d, base = _repo_with_a_surface()
     g = G.ppa_pr_scope_gate(d, base, "HEAD")
-    assert g.green is True
-    assert "REPORTED, not blocking" in g.summary
-    assert "of the 20 Appendix-C questions apply" in g.summary
+    assert g.rc == 1 and g.green is False, g.summary
+    assert "REPORTED, not blocking" not in g.summary
+    assert f"NO answers document was supplied at {G._PPA_ANSWERS_REL}" \
+        in g.summary
+
+    rep = _checker_report(d, base)
+    assert rep["answers_document_present"] is False
+    applicable = {q["question"] for q in rep["questions"]
+                  if q["applicability"] == "APPLICABLE"}
+    assert applicable == set(_SURFACE_QUESTIONS), applicable
+    assert f"{len(applicable)} of the 20 Appendix-C questions apply" \
+        in g.summary
+    catalogue = json.loads((PROG / "ppa_pr_scope_checklist.v1.json")
+                           .read_text(encoding="utf-8"))
+    always = {int(q["id"]) for q in catalogue["questions"]
+              if q.get("applies", {}).get("mode") == "always"}
+    assert always, "the catalogue declares no `always` question"
+    assert always <= applicable, (
+        f"`always` questions {sorted(always - applicable)} were not applied")
 
 
 def test_an_unreadable_change_set_is_NOT_CHECKED_never_a_pass():
@@ -165,21 +296,38 @@ def test_an_unreadable_change_set_is_NOT_CHECKED_never_a_pass():
 # aggregation and concluding "this must block" is exactly the inference that
 # produced 62 of 72 gates that cannot stop anything.
 #
-# So this drives the REAL `review()` twice over the SAME synthetic repository,
-# where the only difference is the presence of the answers document, and
-# asserts the verdict itself moves. The control matters as much as the subject:
-# it is what makes the flip attributable to this gate rather than to the
-# fixture being generally unhappy.
+# So this drives the REAL `review()` over the SAME synthetic repository, where
+# the only difference is the answers document -- withheld, one that HOLDS, one
+# that LIES -- and asserts the verdict itself moves. The control matters as
+# much as the subject: it is what makes the flip attributable to this gate
+# rather than to the fixture being generally unhappy. Since the absent arm
+# became blocking (2026-08-31) the control is the document that holds; the
+# withheld fixture is the OTHER red arm, not the baseline.
 
 import subprocess as _sp  # noqa: E402
 
 _ANSWERS_THAT_LIE = {"schema": "vibeic.ppa.pr_answers.v1",
                      "answers": [{"question": 1, "applicability": "N/A"}]}
 
+#: `_reviewable_repo`'s change-set is the whole synthetic plugin, so the path
+#: arm reads its stand-in gate programs and the flow YAML: tokens
+#: {blast_radius, controller, flow_step, gate}, which is 11 on top of the five
+#: `always` questions (measured: "6 of the 20 ... apply" with no document).
+_REVIEWABLE_SRC = "vibe-ic-marketplace/plugins/vibe-ic/programs/widget.py"
+_REVIEWABLE_TEST = ("vibe-ic-marketplace/plugins/vibe-ic/programs/tests/"
+                    "test_widget.py::test_go")
+_REVIEWABLE_QUESTIONS = (1, 2, 3, 4, 5, 11)
 
-def _reviewable_repo(with_answers: bool):
+
+def _reviewable_repo(document):
     """A clean synthetic plugin (every other machine gate green) with real git
-    history, so nothing is stubbed and the whole chain runs."""
+    history, so nothing is stubbed and the whole chain runs.
+
+    `document` is None (withheld), "lies" (an applicable question marked N/A)
+    or "holds" (every applicable question backed by re-verifiable evidence).
+    Whichever it is, the document is committed as part of "the change", so the
+    change-set has the same shape on every arm and only the content differs.
+    """
     import test_gatekeeper_review as TG
     tmp = Path(tempfile.mkdtemp(prefix="ppareview_"))
     repo, plugin = TG._build_clean_plugin(tmp, version="1.0.96")
@@ -195,16 +343,25 @@ def _reviewable_repo(with_answers: bool):
     git("commit", "-qm", "base")
     base = _sp.run(["git", "rev-parse", "HEAD"], cwd=repo,
                    capture_output=True, text=True).stdout.strip()
-    if with_answers:
+    if document == "lies":
+        doc = _ANSWERS_THAT_LIE
+    elif document == "holds":
+        doc = _answers_that_hold(repo, _REVIEWABLE_QUESTIONS, _REVIEWABLE_SRC,
+                                 _REVIEWABLE_TEST)
+    elif document is None:
+        doc = None
+    else:
+        raise ValueError(f"document must be None, 'lies' or 'holds': {document!r}")
+    if doc is not None:
         (repo / ".github").mkdir(exist_ok=True)
-        (repo / G._PPA_ANSWERS_REL).write_text(json.dumps(_ANSWERS_THAT_LIE))
+        (repo / G._PPA_ANSWERS_REL).write_text(json.dumps(doc))
     git("add", "-A")
     git("commit", "-qm", "the change")
     return repo, plugin, base
 
 
-def _verdict(with_answers: bool):
-    repo, plugin, base = _reviewable_repo(with_answers)
+def _verdict(document):
+    repo, plugin, base = _reviewable_repo(document)
     return G.review(
         base, "HEAD", repo=repo, plugin_root=plugin, role="core-agent",
         pytest_cmd="python3 -m pytest -q programs/tests",
@@ -214,13 +371,38 @@ def _verdict(with_answers: bool):
 
 
 def test_the_control_repo_is_MERGE_OK_so_the_flip_is_attributable():
-    v = _verdict(with_answers=False)
+    """The control ANSWERS the merge condition; it does not avoid it.
+
+    Until 2026-08-31 the control was the fixture with NO document, because the
+    absent arm was advisory. `ac3232ddeb` made that arm blocking (the block
+    above `_PPA_ANSWERS_REL` in gatekeeper_review.py), so that fixture now
+    REQUEST_CHANGES on this gate alone and can attribute nothing. The control
+    is the fixture whose document HOLDS -- and it is asserted green because the
+    gate RAN and PASSED (rc 0), since rc -1 "not checked" would also read as
+    green and would make MERGE_OK a skip rather than a pass. The withheld
+    fixture is driven alongside it: same repo, same change-set shape, and the
+    document is the one variable in both directions.
+    """
+    v = _verdict("holds")
+    gate = {g.name: g for g in v.gates}["ppa_pr_scope_check"]
+    assert gate.rc == 0 and gate.green is True, gate.summary
+    assert f"merge condition met ({len(_REVIEWABLE_QUESTIONS)} applicable)" \
+        in gate.summary
     assert v.verdict == "MERGE_OK", v.blocking
     assert v.blocking == []
 
+    withheld = _verdict(None)
+    gate = {g.name: g for g in withheld.gates}["ppa_pr_scope_check"]
+    assert gate.rc == 1 and gate.green is False, gate.summary
+    assert G._PPA_ANSWERS_REL in gate.summary
+    assert withheld.verdict == "REQUEST_CHANGES"
+    assert any("ppa_pr_scope_check" in b for b in withheld.blocking)
+    # and it is the ONLY thing blocking — the document is the whole difference
+    assert [b for b in withheld.blocking if "ppa_pr_scope_check" not in b] == []
+
 
 def test_a_refused_author_override_turns_the_whole_review_REQUEST_CHANGES():
-    v = _verdict(with_answers=True)
+    v = _verdict("lies")
     assert v.verdict == "REQUEST_CHANGES"
     gate = {g.name: g for g in v.gates}["ppa_pr_scope_check"]
     assert gate.rc == 1 and gate.green is False

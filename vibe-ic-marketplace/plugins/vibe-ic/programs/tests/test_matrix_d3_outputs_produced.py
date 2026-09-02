@@ -689,8 +689,17 @@ _EXTERNAL_RUN_ROOTS_AS_MEASURED: Tuple[str, ...] = (
 #: the committed manifest alone. This is not fourteen new soft spots — it is
 #: fourteen existing ones the withdrawal made visible; each leaves again the
 #: day a published run carries its artefacts.
+#: 2026-09-02 — SIX cells LEAVE (0.5ic, 16, 17, 19, 20, 32), the shrinking
+#: direction, for the cause the 2026-08-31 note above named in advance: a
+#: published run carries their artefacts. `benchmark-data/ic/spm/
+#: v1.14.88_gf180mcuD` was registered as a `published` run root and every one
+#: of their entries was re-measured against it — tracked non-empty bytes in the
+#: cell where the publisher staged them, the tracked STEP_RECORD.json row
+#: (decision OUT_OF_PUBLISHED_SCOPE, real sha256) where it withheld them — so
+#: none is decided by the committed manifest alone any more. 30 and A1-A9 stay:
+#: no published run carries a SPICE deck or an analog block for this design.
 EXTERNALLY_ATTESTED_STEPS: Tuple[str, ...] = (
-    "0.5ic", "16", "17", "19", "20", "30", "32",
+    "30",
     "A1", "A2", "A3", "A4", "A5", "A6", "A7", "A8", "A9",
 )
 
@@ -857,14 +866,44 @@ SELF_CERTIFYING_AUDIT_PROBE: Dict[str, Tuple[str, ...]] = {
     # of this pin's scope. Pinned so the population cannot grow silently; a
     # run published AFTER the wiring, where the artefacts pre-exist the
     # audit, makes every one of these disappear.
+    #
+    # RE-MEASURED 2026-09-02 on this change, by the owning test's own probe
+    # (copytree + real flow_compliance_check + before/after file-list diff).
+    # ONE JOINED and TWO LEFT on the same root, none of them this change's
+    # doing and each with its cause named rather than absorbed:
+    #   + 14::reports/analog/stage_analog_compliance.json — step 14's gate
+    #     gained `flow_compliance_check . --stage-id stage_analog --strict
+    #     --json reports/analog/stage_analog_compliance.json` in `29e9c72796`
+    #     [v1.13.96], the same stage-compliance wiring as the 2/37/39 rows
+    #     above; the SPECIMEN predates it, so the audit writes the file and
+    #     then reports it. Same FLOW defect, same disposition: recorded.
+    #   - 31::reports/phase3/perc_sweep.json — the PERC sweep now emits its
+    #     report only when it found a routed DEF to sweep, and the SPECIMEN
+    #     withholds `routed.def`; the audit's own log reads "condition
+    #     ['reports/phase3/perc_sweep.json'] matched 0 path(s), so it did not
+    #     run". Nothing is created, so nothing is self-certified.
+    #   - 2::reports/crosslayer/rewrite_equivalence_check.json — the clause
+    #     still names `--json reports/crosslayer/rewrite_equivalence_check.json`
+    #     and the audit no longer leaves the file behind on this root
+    #     (measured: absent from the after-list). Not endorsed as fixed:
+    #     "the audit did not create it here" is the whole of what was measured.
     "benchmark-data/ic/spm/v1.10.18_sky130A": (
+        "14::reports/analog/stage_analog_compliance.json",
         "25::reports/phase3/em_current_authority.json",
-        "2::reports/crosslayer/rewrite_equivalence_check.json",
         "2::reports/phase1/gates/stage_phase1_compliance.json",
-        "31::reports/phase3/perc_sweep.json",
         "37::reports/phase3/gates/stage3_compliance.json",
         "39::reports/phase3/gates/stage4_compliance.json",
     ),
+    # THE CONTROL the rows above always promised: "a run published AFTER the
+    # wiring, where the artefacts pre-exist the audit, makes every one of
+    # these disappear". `v1.14.88_gf180mcuD` is that run — it carries all five
+    # stage-compliance reports tracked and non-empty — and MEASURED 2026-09-02
+    # the audit creates NOTHING any step declares in a copy of it (the one
+    # file it leaves, `reports/audit/phase1/expert_parse_track_pack/
+    # design_input.txt`, is no step's required_output). An empty tuple here is
+    # a measurement, and it is the reason the five rows above are a property
+    # of the SPECIMEN's age and not of the flow forever.
+    "benchmark-data/ic/spm/v1.14.88_gf180mcuD": (),
 }
 
 
@@ -2507,6 +2546,25 @@ def unanswerable_citations(step_id) -> Tuple[Tuple[str, str, str], ...]:
 
     An entry that records NO root is not unanswerable: it cites nothing, so a
     corpus carrying the artefact resolves it and the skip is the honest verdict.
+
+    DECIDED FROM THE RECORD ALONE, AND IT WAS NOT FOR TWO DAYS (2026-08-31 to
+    2026-09-02). A short-circuit consulted :func:`recorded_unpublished_output`
+    FIRST — "a tracked publisher record is itself the missing measurement, so
+    such an entry must not be moved into NOT_MEASURED" — and that read is a
+    LIVE walk of the offered corpus. The sentence two paragraphs up was then
+    false: eleven cells (15, 16, 17, 18, 19, 20, 21, 23, 29, 34, 38) answered
+    ENFORCED with ``VIBE_IC_BENCHMARK_DATA`` bound and NOT_MEASURED without it,
+    and the mutation ledger's grid pin — ``(68, 8, 501)``, measured with the
+    pointer bound — reddened on every host that ran the canonical shape with
+    it unset (``measured (68, 8, 490)``). A cell's STATE must be the same
+    everywhere the same commit is read; only its per-entry VERDICT may depend
+    on what the corpus carries, and that is where the publisher record still
+    counts (:func:`_recorded_or`). The remedy for a record that cites a root
+    this module never searches is the one this docstring already named: re-point
+    the record at a reachable root — which the manifest now does, entry by
+    entry, against the published cell that carries the publisher records.
+    ``test_d3_the_cell_state_is_decided_by_the_record_not_by_a_live_publisher_read``
+    holds the line in both directions.
     """
     recorded = (step_record(step_id).get("entries") or {})
     roots = manifest()["run_roots"]
@@ -2514,13 +2572,6 @@ def unanswerable_citations(step_id) -> Tuple[Tuple[str, str, str], ...]:
     for entry in F.required_outputs(step_id):
         er = recorded.get(entry)
         if not er:
-            continue
-        # A tracked publisher record is itself the missing measurement: it
-        # says this run produced the named bytes, records their digest, and
-        # says explicitly that publish policy withheld them.  Such an entry is
-        # answerable even when the older matrix manifest cites a machine-local
-        # source run, so it must not be moved into NOT_MEASURED first.
-        if recorded_unpublished_output(step_id, entry).hit is not None:
             continue
         for field in ("run", "base_run"):
             label = er.get(field)
@@ -3535,7 +3586,7 @@ def test_d3_cell_states_partition_all_steps():
         f"waived cells {sorted(F.normalize_id(s) for s in waived)} do not match "
         f"the registered waivers {sorted(declared)}"
     )
-    assert (len(enforced), len(waived), len(na)) == (51, 2, 15), (
+    assert (len(enforced), len(waived), len(na)) == (53, 2, 13), (
         f"the ENFORCED/WAIVED/NA split changed to "
         f"({len(enforced)}, {len(waived)}, {len(na)}); it was measured as "
         f"(51, 2, 15) after folding 1.6x into Step 2. A step moving between states "
@@ -3669,6 +3720,24 @@ def test_d3_cell_states_partition_all_steps():
         "69. The population moved THREE times across three commits and only the "
         "third was written down \u2014 so 'a human must move it' is the "
         "mechanism AND, twice running, the failure."
+        "\n2026-09-02: (51, 2, 15) -> (53, 2, 13). TWO cells RE-TIERED from "
+        "NA_DORMANT_CONDITION to ENFORCED, and the event is the corpus: the "
+        "published cell `benchmark-data/ic/spm/v1.14.88_gf180mcuD` was "
+        "registered as a run root, and the dormancy probe in "
+        "`test_d3_required_outputs_are_produced` — 'an NA that claims the step "
+        "never ran must be falsified by an artefact HOWEVER it got there' — "
+        "fired on both. 37.5ip ran and PASSED there (STEP_RECORD status pass, "
+        "its write ledger 11 of 11 produced; the four hardmacro views withheld "
+        "by publish policy, the six documentation files and the report "
+        "in-cell). 26.5ic is the honest red: its STEP_RECORD says skipped and "
+        "its condition (slots/*.yaml OR SELF_TAPEOUT.txt) was unmet — 0.5ic "
+        "recorded NO_TEMPLATE.txt — yet the run wrote a real "
+        "`reports/phase3/die_finishing.json` (die_finishing_gen, a seal ring "
+        "computed on routed.def's DIEAREA) and the cell's own write ledger "
+        "records `declared_output_not_produced` for the def/SKIPPED marker. "
+        "NA was demonstrably false, so the cell is ENFORCED and reports what "
+        "the run did: 1 of 2 declared outputs, which is a finding about the "
+        "runner's skip path, not about this dimension. WAIVED unmoved."
     )
 
 
@@ -4998,9 +5067,15 @@ UNEVIDENCED_CELLS: Tuple[str, ...] = (
     # closing cost re-measured live on this change (see
     # `_UNEVIDENCED_CLOSING_COST_BYTES`); a red cell cannot rot, and each of
     # these closes the day a run carrying its artefact is published.
-    "0.5ic",
-    "31",
-    "32",
+    # 2026-09-02 — "0.5ic", "31" and "32" LEFT, and the run tree that closed
+    # them is `benchmark-data/ic/spm/v1.14.88_gf180mcuD`, registered as a
+    # `published` root in the same change: 0.5ic's two reports are tracked in
+    # the cell and its two input/submission_template entries are proven by
+    # 0.5ic's tracked STEP_RECORD row (withheld, OUT_OF_PUBLISHED_SCOPE);
+    # 31's `magic_illegal_overlap.json` is tracked in the cell (1622 B); 32's
+    # decision json and no_repair_needed.flag are both proven by 32's row.
+    # Nothing was manufactured and no bytes moved: the corpus published a run
+    # that carries them, which is the one exit this note has always named.
     "A1",
     "A2",
     "A3",
@@ -5127,7 +5202,11 @@ def unevidenced_entries() -> Tuple[Tuple[str, str], ...]:
 # entries over the thirteen unevidenced cells); the previous 1893 B was the
 # step-30-only world. Derived by `unevidenced_closing_cost()` on this
 # change, every term recorded.
-_UNEVIDENCED_CLOSING_COST_BYTES = 702113
+# 2026-09-02 — 702113 -> 694234: 0.5ic (3 entries), 31 (1) and 32 (2) left the
+# class when `v1.14.88_gf180mcuD` was registered (see UNEVIDENCED_CELLS), and
+# every remaining term is unchanged. Re-derived by `unevidenced_closing_cost()`
+# on this change, 15 entries, every one recorded.
+_UNEVIDENCED_CLOSING_COST_BYTES = 694234
 
 #: An entry the manifest records with no size. Returned instead of ``0`` so the
 #: guard can tell "nobody measured it" from "it costs nothing" — folding the
@@ -5336,15 +5415,13 @@ UNEVIDENCED_OUTSIDE_THE_PUBLISH_CONTRACT: Tuple[Tuple[str, str], ...] = (
     # outputs, never the project's own input/ tree) and 32's repair_log
     # alternative. Re-measured live on this change with `publishable()` over
     # the unevidenced population, exactly as the owning test derives it.
-    ("0.5ic", "input/submission_template/slots/*.yaml OR "
-              "input/submission_template/NO_TEMPLATE.txt OR "
-              "input/submission_template/SELF_TAPEOUT.txt"),
-    ("0.5ic", "input/submission_template/tapeout_declaration.json"),
+    # 2026-09-02 — the four 0.5ic/32 pairs LEFT: they are no longer
+    # unevidenced. The publish scope did NOT widen and the flow did not move
+    # them; each is proven by its step's tracked STEP_RECORD.json row in
+    # `v1.14.88_gf180mcuD` (decision OUT_OF_PUBLISHED_SCOPE, real sha256) —
+    # the publisher's own record that the run produced bytes it then withheld.
     ("30", "phase3/stage3/spice/*.sp OR phase3/stage3/spice/*.spice OR "
            "sim_spice/*.sp"),
-    ("32", "phase3/stage3/postroute_timing_repair/postroute_timing_repair_decision.json"),
-    ("32", "phase3/stage3/postroute_timing_repair/repair_log.json OR "
-           "phase3/stage3/postroute_timing_repair/no_repair_needed.flag"),
 )
 
 
@@ -5478,6 +5555,12 @@ DECLARED_OUTSIDE_THE_PUBLISH_CONTRACT: Tuple[Tuple[str, str], ...] = (
     ("22", "phase3/stage3/extracted/parasitic.spef OR "
            "phase3/stage3/extracted/*.spef"),
     ("23", "phase3/stage3/sta/post_route_timing.rpt"),
+    # 2026-09-02 — FIVE JOIN, and not because a step declared anything new:
+    # 26.5ic and 37.5ip were re-tiered NA -> ENFORCED (see the partition note),
+    # so their declarations under phase3/stage3 and phase3/stage4/hardmacro now
+    # count. The publish contract is unchanged.
+    ("26.5ic", "phase3/stage3/pnr/die_finished.def OR "
+               "phase3/stage3/pnr/die_finishing.SKIPPED.txt"),
     ("29", "phase3/stage3/sim_postlayout/results.log OR "
            "phase3/stage3/sim_postlayout/pass.flag"),
     ("30", "phase3/stage3/spice/*.sp OR phase3/stage3/spice/*.spice OR "
@@ -5486,6 +5569,10 @@ DECLARED_OUTSIDE_THE_PUBLISH_CONTRACT: Tuple[Tuple[str, str], ...] = (
            "phase3/stage3/postroute_timing_repair/no_repair_needed.flag"),
     ("32", "phase3/stage3/postroute_timing_repair/postroute_timing_repair_decision.json"),
     ("34", "phase3/stage3/pnr/filled.def OR phase3/stage3/pnr/metal_fill.done"),
+    ("37.5ip", "phase3/stage4/hardmacro/*.gds"),
+    ("37.5ip", "phase3/stage4/hardmacro/*.lef"),
+    ("37.5ip", "phase3/stage4/hardmacro/*.lib"),
+    ("37.5ip", "phase3/stage4/hardmacro/*.v"),
     ("38", "phase3/stage4/foundry_handoff/corner_test_vectors.json"),
     ("38", "phase3/stage4/foundry_handoff/mask_spec.json"),
     ("38", "phase3/stage4/foundry_handoff/scribe_line_layout.gds OR "
@@ -5703,17 +5790,17 @@ UNEVIDENCED_WITHOUT_A_NAMED_PRODUCER: Tuple[Tuple[str, str], ...] = (
     # oracle cannot see the producer" and "there is no producer" are different
     # findings — the analog A6-A9 artefacts are written by EDA tools inside
     # the container, a write position the AST oracle cannot see.
-    ("0.5ic", "input/submission_template/tapeout_declaration.json"),
-    ("0.5ic", "reports/phase1/submission_template.json"),
-    ("0.5ic", "reports/phase1/tapeout_declaration.json"),
-    ("30", "phase3/stage3/spice/correlation.json OR "
-           "reports/phase3/spice_correlation.json"),
-    ("31", "reports/phase3/magic_illegal_overlap.json"),
+    # 2026-09-02 — SEVEN pairs LEFT, by two different exits that the owning
+    # test tells apart:
+    #   NO LONGER UNEVIDENCED AT ALL — 0.5ic (3 entries) and 31, closed by the
+    #   published run `v1.14.88_gf180mcuD` (see UNEVIDENCED_CELLS).
+    #   GAINED A PRODUCER, still unevidenced — 30's correlation.json is now
+    #   written by `spice_correlation_check`, and A8's *.lef / *.lib by
+    #   `analog_a8_hardmacro_emit` (both named by `producer_evidence()` on this
+    #   change). Re-measured live, not typed.
     ("A6", "phase3/analog/*/drc_clean.flag OR phase3/analog/*/drc.report OR "
            "phase3/analog/*/*.lyrdb OR phase3/analog/*/drc.rpt"),
     ("A7", "phase3/analog/*/pre_vs_post.json"),
-    ("A8", "phase3/analog/hardmacro/*/*.lef"),
-    ("A8", "phase3/analog/hardmacro/*/*.lib"),
     ("A9", "phase3/mixed_signal/cosim/*_cosim_results.json OR "
            "phase3/mixed_signal/cosim/mixed_signal_results.json OR "
            "phase3/analog/*/hw_measurements.json"),
@@ -6942,6 +7029,127 @@ def matrix_cell_state(step_id) -> str:
     if matrix_not_measured_reason(step_id) is not None:
         return "NOT_MEASURED"
     return "ENFORCED"
+
+
+# ══════════════════════════════════════════════════════════════════════
+# THE CELL STATE IS A PROPERTY OF THE COMMIT, NOT OF THE HOST (2026-09-02)
+# ══════════════════════════════════════════════════════════════════════
+# MEASURED: eleven cells (15, 16, 17, 18, 19, 20, 21, 23, 29, 34, 38) answered
+# ENFORCED with `VIBE_IC_BENCHMARK_DATA` bound and NOT_MEASURED without it,
+# because `unanswerable_citations` consulted `recorded_unpublished_output` — a
+# LIVE walk of the offered corpus — before reading the record. The mutation
+# ledger pinned the grid at (68, 8, 501) from the bound shape and every host
+# running the canonical unbound shape measured 490. Three tests over there
+# went red on a property of the pointer. The three guards below keep the
+# state decided from the RECORD, and keep the record honest about the corpus.
+
+def test_d3_the_cell_state_is_decided_by_the_record_not_by_a_live_publisher_read(
+        monkeypatch):
+    """Both directions, no corpus needed: forcing the publisher-record probe to
+    ALWAYS hit and to NEVER hit must leave the NOT_MEASURED population exactly
+    where the record puts it. Against the pre-fix module the always-hit arm
+    empties `unanswerable_citations` for every cell and this fails by name.
+    """
+    module = sys.modules[__name__]
+
+    def not_measured():
+        return sorted(F.normalize_id(s) for s in F.step_ids()
+                      if matrix_not_measured_reason(s) is not None)
+
+    live = not_measured()
+    assert live, (
+        "no cell is NOT_MEASURED on this record, so an arm that forced every "
+        "citation answerable would be indistinguishable from the live one and "
+        "this control would prove nothing; re-anchor it on a record that still "
+        "cites a root this dimension never searches")
+    fake_hit = RecordedSearch(
+        RecordedOutput("published/control", "steps/x/STEP_RECORD.json",
+                       "x", 1, "a" * 64), 1, ())
+    monkeypatch.setattr(module, "recorded_unpublished_output",
+                        lambda sid, entry: fake_hit)
+    always = not_measured()
+    monkeypatch.setattr(module, "recorded_unpublished_output",
+                        lambda sid, entry: RecordedSearch(None, 0, ()))
+    never = not_measured()
+    assert always == live, (
+        f"a publisher record that answers EVERY entry moved the NOT_MEASURED "
+        f"population {live} -> {always}: the cell STATE is being decided by a "
+        f"live corpus read, so it differs between a host with the pointer "
+        f"bound and one without. Decide it from the record; the per-entry "
+        f"VERDICT is where the publisher record counts (`_recorded_or`).")
+    assert never == live, (
+        f"a publisher record that answers NOTHING moved the population "
+        f"{live} -> {never}")
+
+
+@needs_corpus
+def test_d3_no_record_cites_a_root_a_registered_published_cell_answers():
+    """A citation this dimension never searches must not be one the offered
+    corpus can answer. Where it can, the record is STALE — the remedy the
+    fourth state has always named is to re-point it — and leaving it stale is
+    what made the eleven cells' state depend on the host. Against the manifest
+    of 2026-09-01 with this corpus bound, every one of the eleven fails here.
+    """
+    stale: List[str] = []
+    for sid in F.step_ids():
+        for entry, root, wanted in unanswerable_citations(sid):
+            hit, _rej = resolve_anywhere(entry, sid)
+            rec = recorded_unpublished_output(sid, entry)
+            if hit is not None:
+                stale.append(
+                    f"step {F.normalize_id(sid)}: {entry!r} cites {root!r} "
+                    f"(never searched) while {hit.root!r} carries "
+                    f"{hit.path} ({hit.size_bytes} B) — re-point the record")
+            elif rec.hit is not None:
+                stale.append(
+                    f"step {F.normalize_id(sid)}: {entry!r} cites {root!r} "
+                    f"(never searched) while {rec.hit.root!r} proves it in "
+                    f"{rec.hit.record} ({rec.hit.size_bytes} B, withheld) — "
+                    f"re-point the record")
+    assert not stale, (
+        f"{len(stale)} record(s) cite a root no host searches while a "
+        f"registered published cell answers them:\n  " + "\n  ".join(stale))
+
+
+@needs_corpus
+def test_d3_every_converged_cell_the_offered_corpus_carries_is_registered():
+    """The manifest must describe the corpus population it can see.
+
+    `benchmark-data` published `ic/spm/v1.14.88_gf180mcuD` (converged,
+    PASS_WITH_WAIVERS) and the manifest — last curated against `a467106` —
+    never registered it, so d3 measured less than the corpus offered while
+    reading as complete. A converged cell is a `v<version>_<PDK>` directory
+    carrying the publisher's own converged verdict (`_is_published_cell`); each
+    one the offered corpus carries must be a registered run root of an
+    admissible kind, so the day the corpus publishes another this reddens by
+    name instead of the population drifting.
+    """
+    corpus = _offered_corpus()
+    assert corpus is not None
+    registered = {
+        meta["rel"] for meta in manifest()["run_roots"].values()
+        if meta.get("kind") in _ADMISSIBILITY}
+    unregistered = []
+    seen = 0
+    for design in sorted((corpus / "ic").iterdir()):
+        if not design.is_dir():
+            continue
+        for cell in sorted(design.iterdir()):
+            if not (cell.is_dir() and _is_published_cell(cell)):
+                continue
+            seen += 1
+            rel = f"{_CORPUS_DIR}/ic/{design.name}/{cell.name}"
+            if rel not in registered:
+                unregistered.append(rel)
+    assert seen, f"{corpus} carries no converged cell at all; nothing measured"
+    assert not unregistered, (
+        f"{len(unregistered)} converged cell(s) the offered corpus carries are "
+        f"not registered in {MANIFEST_PATH.name}'s run_roots, so this "
+        f"dimension measures less than the corpus offers:\n  "
+        + "\n  ".join(unregistered)
+        + "\nRegister each as kind 'published' and re-measure every entry it "
+          "answers (tracked non-empty bytes, or a tracked STEP_RECORD.json row "
+          "for bytes the publisher withheld).")
 
 
 # ══════════════════════════════════════════════════════════════════════

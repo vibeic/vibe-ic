@@ -42,7 +42,9 @@ WHAT THESE TESTS PIN
 """
 from __future__ import annotations
 
+import hashlib
 import importlib.util
+import json
 import os
 import re
 import subprocess
@@ -601,6 +603,36 @@ def _synthetic_plugin(repo: Path, version: str = "9.9.9") -> Path:
     return plugin
 
 
+def _appendix_c_answers(repo: Path) -> None:
+    """The Appendix-C answers document a MERGE_OK fixture has needed since
+    2026-08-31, when `ppa_pr_scope_check`'s absent-document arm became
+    BLOCKING by the expiry condition `gatekeeper_review.py` had written for
+    itself (the block above `_PPA_ANSWERS_REL`: "THE ABSENT ARM USED TO BE
+    ADVISORY, AND IT STOPPED BEING SO BY ITS OWN WRITTEN CONDITION"). The
+    change-set under review here is `own.py` alone, which carries no surface
+    token, so exactly the five `mode: always` questions apply -- measured on
+    the tip as "5 of the 20 Appendix-C questions apply" -- and each is given
+    all three verifiable kinds: a path that exists, an artefact whose sha256
+    is computed from the file, and a test that is defined. Nothing is
+    asserted into existence; an entry that failed to verify would leave the
+    gate red.
+    """
+    src = "vibe-ic-marketplace/plugins/vibe-ic/programs/widget.py"
+    tst = ("vibe-ic-marketplace/plugins/vibe-ic/programs/tests/"
+           "test_widget.py::test_go")
+    digest = "sha256:" + hashlib.sha256((repo / src).read_bytes()).hexdigest()
+    (repo / ".github").mkdir(exist_ok=True)
+    (repo / ".github" / "ppa_pr_answers.json").write_text(json.dumps({
+        "schema": "vibeic.ppa.pr_answers.v1",
+        "answers": [{"question": q,
+                     "evidence": [{"kind": "path", "ref": src},
+                                  {"kind": "artefact", "ref": src,
+                                   "sha256": digest},
+                                  {"kind": "test", "ref": tst}]}
+                    for q in (1, 2, 3, 4, 5)],
+    }, indent=2) + "\n")
+
+
 def test_gatekeeper_review_counts_the_gate_as_blocking(tmp_path):
     """Driven through the REAL aggregation, not a stand-in for it.
 
@@ -610,6 +642,15 @@ def test_gatekeeper_review_counts_the_gate_as_blocking(tmp_path):
     `gatekeeper_review.review()` over a real git range and asserts the rc lands
     in `blocking` and MOVES THE VERDICT — with the plugin manifests identical on
     both sides, so no other gate can be doing the work.
+
+    The control carries the Appendix-C answers document (`_appendix_c_answers`)
+    because the absent-document arm of `ppa_pr_scope_check` became blocking on
+    2026-08-31 (`ac3232ddeb`); without it the control is REQUEST_CHANGES on
+    that gate and the flip attributes nothing. The document is committed in the
+    plugin-tree commit, BEFORE the fork, so the honest tree and the stale tree
+    both inherit it and the change-set is unchanged on either arm. On both arms
+    the gate is asserted to have RUN and PASSED (rc 0): rc -1 "not checked"
+    also reads as green, and would make the verdict a skip rather than a pass.
     """
     spec = importlib.util.spec_from_file_location(
         "gatekeeper_review", _PROGRAMS / "gatekeeper_review.py")
@@ -619,6 +660,7 @@ def test_gatekeeper_review_counts_the_gate_as_blocking(tmp_path):
 
     r = _repo(tmp_path)
     plugin = _synthetic_plugin(r)
+    _appendix_c_answers(r)
     _git(r, "add", ".")
     _git(r, "commit", "-qm", "the plugin tree")
     fork = _git(r, "rev-parse", "HEAD").strip()
@@ -631,6 +673,9 @@ def test_gatekeeper_review_counts_the_gate_as_blocking(tmp_path):
                       pytest_cmd="python3 -m pytest -q programs/tests",
                       override_files=["own.py"],
                       override_cur="9.9.9", override_prev="9.9.8")
+    clean_by_name = {g.name: g for g in clean.gates}
+    assert clean_by_name["ppa_pr_scope_check"].rc == 0, (
+        clean_by_name["ppa_pr_scope_check"].summary)
     assert clean.verdict == "MERGE_OK", clean.blocking
 
     # The SAME edits, re-parented onto the tip from a stale tree.
@@ -640,6 +685,8 @@ def test_gatekeeper_review_counts_the_gate_as_blocking(tmp_path):
                   override_files=["own.py"],
                   override_cur="9.9.9", override_prev="9.9.8")
     by_name = {g.name: g for g in v.gates}
+    assert by_name["ppa_pr_scope_check"].rc == 0, (
+        by_name["ppa_pr_scope_check"].summary)
     assert by_name["gatekeeper_stale_branch_check"].rc == 1
     assert "TREE REWIND" in by_name["gatekeeper_stale_branch_check"].summary
     assert {b.split(":", 1)[0] for b in v.blocking} == {

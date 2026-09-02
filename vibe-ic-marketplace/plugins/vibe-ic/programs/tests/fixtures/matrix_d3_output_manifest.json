@@ -82,6 +82,11 @@
       "kind": "repo",
       "rel": "benchmark-data/ic/spm/v1.5.65_sky130A",
       "note": "registered 2026-08-31: a run tree the published corpus carries TODAY (benchmark-data a467106) with runner provenance (provenance.jsonl); the corpus-resolvable repo-kind root the route probes and discovery need."
+    },
+    "benchmark-data/ic/spm/v1.14.88_gf180mcuD": {
+      "kind": "published",
+      "rel": "benchmark-data/ic/spm/v1.14.88_gf180mcuD",
+      "note": "registered 2026-09-02: the converged spm x gf180mcuD cell the published corpus carries (benchmark-data da762d4e, reports/audit/phase23_completion_audit.json verdict PASS_WITH_WAIVERS, 68 tracked steps/**/STEP_RECORD.json, reports/write_ledger.json captured 2026-08-31T18:09:41Z). The manifest was last curated against a467106 and never registered it, so eleven cells cited machine trees and read NOT_MEASURED on every host without a corpus pointer."
     }
   },
   "steps": {
@@ -240,7 +245,12 @@
       "verdict": "ENFORCED",
       "entries": {
         "reports/crosslayer/rewrite_equivalence_check.json": {
-          "status": "UNPROVEN"
+          "status": "PRODUCED_BY_RUN",
+          "run": "benchmark-data/ic/spm/v1.14.88_gf180mcuD",
+          "alternative": "reports/crosslayer/rewrite_equivalence_check.json",
+          "path": "reports/crosslayer/rewrite_equivalence_check.json",
+          "size_bytes": 447,
+          "note": "2026-09-02 — re-measured against benchmark-data/ic/spm/v1.14.88_gf180mcuD: reports/crosslayer/rewrite_equivalence_check.json tracked at HEAD, non-empty, and attributed to this step by the cell's write ledger. Previously UNPROVEN."
         },
         "reports/phase2/lint/rtl_hygiene.json": {
           "status": "PRODUCED_BY_RUN",
@@ -257,8 +267,12 @@
           "size_bytes": 2
         },
         "reports/phase1/gates/stage_phase1_compliance.json": {
-          "status": "UNPROVEN",
-          "note": "2026-08-31 - UNPROVEN. Declared by `29e9c72796` [v1.13.96], which moved the flow yaml without moving this manifest; `d3_manifest_declaration_parity_check` has been reporting it as uncovered ever since (measured red on 781d24727 [v1.14.22] before this change, 7 uncovered paths). The stage-tier `*_compliance.json` reports are written by `flow_compliance_check --stage-id <X> --strict --json <this path>`, a clause that postdates every admissible run root in this manifest, so no published run carries the file and there is nothing to record as PRODUCED_BY_RUN. UNPROVEN is the true statement of the gap: the entry is now DECIDABLE, and the dimension-3 cell reports it unevidenced wherever a corpus is offered."
+          "status": "PRODUCED_BY_RUN",
+          "run": "benchmark-data/ic/spm/v1.14.88_gf180mcuD",
+          "alternative": "reports/phase1/gates/stage_phase1_compliance.json",
+          "path": "reports/phase1/gates/stage_phase1_compliance.json",
+          "size_bytes": 12873,
+          "note": "2026-09-02 — re-measured against benchmark-data/ic/spm/v1.14.88_gf180mcuD: reports/phase1/gates/stage_phase1_compliance.json tracked at HEAD, non-empty, and attributed to this step by the cell's write ledger. Previously UNPROVEN. Prior note: 2026-08-31 - UNPROVEN. Declared by `29e9c72796` [v1.13.96], which moved the flow yaml without moving this manifest; `d3_manifest_declaration_parity_check` has been reporting it as uncovered ever since (measured red on 781d24727 [v1.14.22] before this change, 7 uncovered paths). The stage-tier `*_com"
         }
       }
     },
@@ -306,7 +320,12 @@
           "size_bytes": 517
         },
         "reports/phase2/coverage/coverage_verilator.json": {
-          "status": "UNPROVEN"
+          "status": "PRODUCED_BY_RUN",
+          "run": "benchmark-data/ic/spm/v1.14.88_gf180mcuD",
+          "alternative": "reports/phase2/coverage/coverage_verilator.json",
+          "path": "reports/phase2/coverage/coverage_verilator.json",
+          "size_bytes": 1433,
+          "note": "2026-09-02 — re-measured against benchmark-data/ic/spm/v1.14.88_gf180mcuD: reports/phase2/coverage/coverage_verilator.json tracked at HEAD, non-empty, and attributed to this step by the cell's write ledger. Previously UNPROVEN."
         }
       }
     },
@@ -400,16 +419,12 @@
           "size_bytes": 48041
         },
         "phase2/stage2/synth/area.rpt OR phase2/stage2/synth/stats.json": {
-          "status": "PRODUCED_LIVE",
-          "producer": "synth_area_stats_emit",
-          "argv": [
-            "."
-          ],
-          "writes": "phase2/stage2/synth/stats.json",
-          "base_run": "benchmark-data/ic/caravel_user_project",
-          "size_bytes": 1727,
-          "run": "benchmark-data/ic/spm/v1.10.18_sky130A",
-          "path": "phase2/stage2/synth/stats.json"
+          "status": "PRODUCED_BY_RUN",
+          "run": "benchmark-data/ic/spm/v1.14.88_gf180mcuD",
+          "alternative": "phase2/stage2/synth/stats.json",
+          "path": "phase2/stage2/synth/stats.json",
+          "size_bytes": 2402,
+          "note": "2026-09-02 — re-measured against benchmark-data/ic/spm/v1.14.88_gf180mcuD: phase2/stage2/synth/stats.json tracked at HEAD, non-empty, and attributed to this step by the cell's write ledger. Previously PRODUCED_LIVE citing 'benchmark-data/ic/caravel_user_project', a root of kind 'home' this dimension searches on no host."
         }
       }
     },
@@ -418,31 +433,19 @@
       "entries": {
         "phase3/stage3/sta/pre_pnr_timing.rpt": {
           "status": "PRODUCED_BY_RUN",
-          "run": "benchmark-data/ic/sha256/clean_run_v1427_20260715",
+          "run": "benchmark-data/ic/spm/v1.14.88_gf180mcuD",
           "alternative": "phase3/stage3/sta/pre_pnr_timing.rpt",
           "path": "phase3/stage3/sta/pre_pnr_timing.rpt",
-          "size_bytes": 3202
+          "size_bytes": 1783,
+          "note": "2026-09-02 — re-measured against benchmark-data/ic/spm/v1.14.88_gf180mcuD: phase3/stage3/sta/pre_pnr_timing.rpt tracked at HEAD, non-empty, and attributed to this step by the cell's write ledger. Previously PRODUCED_BY_RUN citing 'benchmark-data/ic/sha256/clean_run_v1427_20260715', a root of kind 'home' this dimension searches on no host."
         },
         "reports/phase3/sta/pre_pnr_summary.json": {
-          "status": "PRODUCED_LIVE",
-          "producer": "sta_report_check",
-          "argv": [
-            ".",
-            "--mode",
-            "sta",
-            "--under",
-            "phase3/stage3/sta/pre_pnr_timing.rpt",
-            "--under",
-            "phase3/stage3/sta/per_corner",
-            "--json",
-            "reports/phase3/sta/pre_pnr_summary.json"
-          ],
-          "writes": "reports/phase3/sta/pre_pnr_summary.json",
-          "base_run": "benchmark-data/ic/sha256/clean_run_v1427_20260715",
-          "size_bytes": 885,
-          "base_run_note": "RE-MEASURED 2026-08-10, not renamed. Commit 51517e71 retired benchmark-data/ic/spm/v1.5.66_gf180mcuD and bulk-renamed all 65 run/base_run citations onto the replacement cell. That is correct for a PRODUCED_BY_RUN `run`; it INVERTS a PRODUCED_LIVE `base_run`, because the replacement cell carries this artefact TRACKED AT HEAD (885 B, added by that same commit) while the retired one did not - verified with `git ls-tree -r 51517e71^ -- <retired cell>`, which lists post_route_signoff_corner.json, spef_vs_estimate_discrepancy.json and sta_corner_record_completeness.json under reports/phase3/sta/ and no pre_pnr_summary.json. A live production cannot be proved against a tree that already holds the artefact, so the record had become unprovable by construction and the cell was red. It is re-pointed at the run root step 10's OTHER declared output is already evidenced by, so both of this steps entries now come from ONE run: the run that produced phase3/stage3/sta/pre_pnr_timing.rpt is the run whose summary of that report is produced here. THE OLD RECORD WAS ALREADY HOLLOW, which is why this is not a like-for-like re-point: 969 B is exactly what this producer writes into a tree carrying NO STA report at all (passed:false, findings [STA_REPORT_EXISTS, SCOPE_NOT_FOUND], files_found:0, BOTH --under scopes in scoped_under_missing), byte-identical from four independent admissible roots measured on this commit. produce_live now refuses a base run in which no declared --under scope exists, so that absence record can never again be counted as a produced artefact.",
-          "run": "benchmark-data/ic/spm/v1.10.18_sky130A",
-          "path": "reports/phase3/sta/pre_pnr_summary.json"
+          "status": "PRODUCED_BY_RUN",
+          "run": "benchmark-data/ic/spm/v1.14.88_gf180mcuD",
+          "alternative": "reports/phase3/sta/pre_pnr_summary.json",
+          "path": "reports/phase3/sta/pre_pnr_summary.json",
+          "size_bytes": 992,
+          "note": "2026-09-02 — re-measured against benchmark-data/ic/spm/v1.14.88_gf180mcuD: reports/phase3/sta/pre_pnr_summary.json tracked at HEAD, non-empty, and attributed to this step by the cell's write ledger. Previously PRODUCED_LIVE citing 'benchmark-data/ic/sha256/clean_run_v1427_20260715', a root of kind 'home' this dimension searches on no host."
         }
       }
     },
@@ -697,8 +700,12 @@
           "size_bytes": 48041
         },
         "reports/analog/stage_analog_compliance.json": {
-          "status": "UNPROVEN",
-          "note": "2026-08-31 - UNPROVEN. Declared by `29e9c72796` [v1.13.96], which moved the flow yaml without moving this manifest; `d3_manifest_declaration_parity_check` has been reporting it as uncovered ever since (measured red on 781d24727 [v1.14.22] before this change, 7 uncovered paths). The stage-tier `*_compliance.json` reports are written by `flow_compliance_check --stage-id <X> --strict --json <this path>`, a clause that postdates every admissible run root in this manifest, so no published run carries the file and there is nothing to record as PRODUCED_BY_RUN. UNPROVEN is the true statement of the gap: the entry is now DECIDABLE, and the dimension-3 cell reports it unevidenced wherever a corpus is offered."
+          "status": "PRODUCED_BY_RUN",
+          "run": "benchmark-data/ic/spm/v1.14.88_gf180mcuD",
+          "alternative": "reports/analog/stage_analog_compliance.json",
+          "path": "reports/analog/stage_analog_compliance.json",
+          "size_bytes": 6436,
+          "note": "2026-09-02 — re-measured against benchmark-data/ic/spm/v1.14.88_gf180mcuD: reports/analog/stage_analog_compliance.json tracked at HEAD, non-empty, and attributed to this step by the cell's write ledger. Previously UNPROVEN. Prior note: 2026-08-31 - UNPROVEN. Declared by `29e9c72796` [v1.13.96], which moved the flow yaml without moving this manifest; `d3_manifest_declaration_parity_check` has been reporting it as uncovered ever since (measured red on 781d24727 [v1.14.22] before this change, 7 uncovered paths). The stage-tier `*_com"
         }
       }
     },
@@ -707,21 +714,27 @@
       "entries": {
         "phase3/stage3/pnr/floorplan.def": {
           "status": "PRODUCED_BY_RUN",
-          "run": "campaign_pdk/spm/pdk_portability_ihp-sg13g2_20260721",
+          "run": "benchmark-data/ic/spm/v1.14.88_gf180mcuD",
           "alternative": "phase3/stage3/pnr/floorplan.def",
           "path": "phase3/stage3/pnr/floorplan.def",
-          "size_bytes": 44558
+          "size_bytes": 81829,
+          "note": "2026-09-02 — re-measured against benchmark-data/ic/spm/v1.14.88_gf180mcuD: the run produced phase3/stage3/pnr/floorplan.def (81829 B, sha256=6533ca91f220e5b896ae3a909f4bd9411ab4b439e516a558f7f6c6f939265725) and the publisher WITHHELD the bytes from the cell (decision OUT_OF_PUBLISHED_SCOPE in steps/phase3/stage3/15_floorplan_pdn/STEP_RECORD.json); production is proven by that tracked record, not by bytes in the cell. Previously PRODUCED_BY_RUN citing 'campaign_pdk/spm/pdk_portability_ihp-sg13g2_20260721', a root of kind 'home' this dimension searches on no host."
         },
         "phase3/stage3/pnr/pdn.tcl OR phase3/stage3/pnr/pdn.done": {
           "status": "PRODUCED_BY_RUN",
-          "run": "benchmark-data/ic/subservient",
+          "run": "benchmark-data/ic/spm/v1.14.88_gf180mcuD",
           "alternative": "phase3/stage3/pnr/pdn.done",
           "path": "phase3/stage3/pnr/pdn.done",
-          "size_bytes": 144
+          "size_bytes": 286,
+          "note": "2026-09-02 — re-measured against benchmark-data/ic/spm/v1.14.88_gf180mcuD: the run produced phase3/stage3/pnr/pdn.done (286 B, sha256=d2b68b543e062effc985fcd248c466c6747fdb3463df246bf3cf006af662ed43) and the publisher WITHHELD the bytes from the cell (decision OUT_OF_PUBLISHED_SCOPE in steps/phase3/stage3/15_floorplan_pdn/STEP_RECORD.json); production is proven by that tracked record, not by bytes in the cell. Previously PRODUCED_BY_RUN citing 'benchmark-data/ic/subservient', a root of kind 'home' this dimension searches on no host."
         },
         "reports/phase2/gates/stage2_compliance.json": {
-          "status": "UNPROVEN",
-          "note": "2026-08-31 - UNPROVEN. Declared by `29e9c72796` [v1.13.96], which moved the flow yaml without moving this manifest; `d3_manifest_declaration_parity_check` has been reporting it as uncovered ever since (measured red on 781d24727 [v1.14.22] before this change, 7 uncovered paths). The stage-tier `*_compliance.json` reports are written by `flow_compliance_check --stage-id <X> --strict --json <this path>`, a clause that postdates every admissible run root in this manifest, so no published run carries the file and there is nothing to record as PRODUCED_BY_RUN. UNPROVEN is the true statement of the gap: the entry is now DECIDABLE, and the dimension-3 cell reports it unevidenced wherever a corpus is offered."
+          "status": "PRODUCED_BY_RUN",
+          "run": "benchmark-data/ic/spm/v1.14.88_gf180mcuD",
+          "alternative": "reports/phase2/gates/stage2_compliance.json",
+          "path": "reports/phase2/gates/stage2_compliance.json",
+          "size_bytes": 123426,
+          "note": "2026-09-02 — re-measured against benchmark-data/ic/spm/v1.14.88_gf180mcuD: reports/phase2/gates/stage2_compliance.json tracked at HEAD, non-empty, and attributed to this step by the cell's write ledger. Previously UNPROVEN. Prior note: 2026-08-31 - UNPROVEN. Declared by `29e9c72796` [v1.13.96], which moved the flow yaml without moving this manifest; `d3_manifest_declaration_parity_check` has been reporting it as uncovered ever since (measured red on 781d24727 [v1.14.22] before this change, 7 uncovered paths). The stage-tier `*_com"
         }
       }
     },
@@ -748,10 +761,11 @@
       "entries": {
         "phase3/stage3/cts/clock_plan.json": {
           "status": "PRODUCED_BY_RUN",
-          "run": "benchmark-data/ic/subservient",
+          "run": "benchmark-data/ic/spm/v1.14.88_gf180mcuD",
           "alternative": "phase3/stage3/cts/clock_plan.json",
           "path": "phase3/stage3/cts/clock_plan.json",
-          "size_bytes": 388
+          "size_bytes": 638,
+          "note": "2026-09-02 — re-measured against benchmark-data/ic/spm/v1.14.88_gf180mcuD: phase3/stage3/cts/clock_plan.json tracked at HEAD, non-empty, and attributed to this step by the cell's write ledger. Previously PRODUCED_BY_RUN citing 'benchmark-data/ic/subservient', a root of kind 'home' this dimension searches on no host."
         }
       }
     },
@@ -760,10 +774,11 @@
       "entries": {
         "phase3/stage3/pnr/placed.def": {
           "status": "PRODUCED_BY_RUN",
-          "run": "campaign_pdk/spm/pdk_portability_ihp-sg13g2_20260721",
+          "run": "benchmark-data/ic/spm/v1.14.88_gf180mcuD",
           "alternative": "phase3/stage3/pnr/placed.def",
           "path": "phase3/stage3/pnr/placed.def",
-          "size_bytes": 97843
+          "size_bytes": 274876,
+          "note": "2026-09-02 — re-measured against benchmark-data/ic/spm/v1.14.88_gf180mcuD: the run produced phase3/stage3/pnr/placed.def (274876 B, sha256=32fcebb728205ea820968bc149c644477f598388c4801b96d0f01fc7c88bc991) and the publisher WITHHELD the bytes from the cell (decision OUT_OF_PUBLISHED_SCOPE in steps/phase3/stage3/17_placement_global_detailed/STEP_RECORD.json); production is proven by that tracked record, not by bytes in the cell. Previously PRODUCED_BY_RUN citing 'campaign_pdk/spm/pdk_portability_ihp-sg13g2_20260721', a root of kind 'home' this dimension searches on no host."
         }
       }
     },
@@ -772,10 +787,11 @@
       "entries": {
         "phase3/stage3/pnr/spare_cells.json": {
           "status": "PRODUCED_BY_RUN",
-          "run": "benchmark-data/ic/sha256",
+          "run": "benchmark-data/ic/spm/v1.14.88_gf180mcuD",
           "alternative": "phase3/stage3/pnr/spare_cells.json",
           "path": "phase3/stage3/pnr/spare_cells.json",
-          "size_bytes": 34545
+          "size_bytes": 4195,
+          "note": "2026-09-02 — re-measured against benchmark-data/ic/spm/v1.14.88_gf180mcuD: phase3/stage3/pnr/spare_cells.json tracked at HEAD, non-empty, and attributed to this step by the cell's write ledger. Previously PRODUCED_BY_RUN citing 'benchmark-data/ic/sha256', a root of kind 'home' this dimension searches on no host."
         },
         "reports/spare_cell_coverage.json": {
           "status": "PRODUCED_BY_RUN",
@@ -791,17 +807,19 @@
       "entries": {
         "phase3/stage3/pnr/post_cts.def": {
           "status": "PRODUCED_BY_RUN",
-          "run": "campaign_pdk/spm/pdk_portability_ihp-sg13g2_20260721",
+          "run": "benchmark-data/ic/spm/v1.14.88_gf180mcuD",
           "alternative": "phase3/stage3/pnr/post_cts.def",
           "path": "phase3/stage3/pnr/post_cts.def",
-          "size_bytes": 121170
+          "size_bytes": 287484,
+          "note": "2026-09-02 — re-measured against benchmark-data/ic/spm/v1.14.88_gf180mcuD: the run produced phase3/stage3/pnr/post_cts.def (287484 B, sha256=69d3a935b9efbb7cf14a8287a3a65c1cf9cff36cae3910744cadbe15b8581f8e) and the publisher WITHHELD the bytes from the cell (decision OUT_OF_PUBLISHED_SCOPE in steps/phase3/stage3/19_cts_clock_tree_synthesis/STEP_RECORD.json); production is proven by that tracked record, not by bytes in the cell. Previously PRODUCED_BY_RUN citing 'campaign_pdk/spm/pdk_portability_ihp-sg13g2_20260721', a root of kind 'home' this dimension searches on no host."
         },
         "phase3/stage3/cts/clock_tree.rpt": {
           "status": "PRODUCED_BY_RUN",
-          "run": "benchmark-data/ic/subservient",
+          "run": "benchmark-data/ic/spm/v1.14.88_gf180mcuD",
           "alternative": "phase3/stage3/cts/clock_tree.rpt",
           "path": "phase3/stage3/cts/clock_tree.rpt",
-          "size_bytes": 606
+          "size_bytes": 2718,
+          "note": "2026-09-02 — re-measured against benchmark-data/ic/spm/v1.14.88_gf180mcuD: phase3/stage3/cts/clock_tree.rpt tracked at HEAD, non-empty, and attributed to this step by the cell's write ledger. Previously PRODUCED_BY_RUN citing 'benchmark-data/ic/subservient', a root of kind 'home' this dimension searches on no host."
         }
       }
     },
@@ -810,10 +828,11 @@
       "entries": {
         "phase3/stage3/pnr/post_hold.def": {
           "status": "PRODUCED_BY_RUN",
-          "run": "campaign_pdk/spm/pdk_portability_ihp-sg13g2_20260721",
+          "run": "benchmark-data/ic/spm/v1.14.88_gf180mcuD",
           "alternative": "phase3/stage3/pnr/post_hold.def",
           "path": "phase3/stage3/pnr/post_hold.def",
-          "size_bytes": 121185
+          "size_bytes": 287487,
+          "note": "2026-09-02 — re-measured against benchmark-data/ic/spm/v1.14.88_gf180mcuD: the run produced phase3/stage3/pnr/post_hold.def (287487 B, sha256=0c9c03fa47284b51bb983a1a7672b4780155387fdd00f921b2229b609594ea49) and the publisher WITHHELD the bytes from the cell (decision OUT_OF_PUBLISHED_SCOPE in steps/phase3/stage3/20_post_cts_hold_fixing/STEP_RECORD.json); production is proven by that tracked record, not by bytes in the cell. Previously PRODUCED_BY_RUN citing 'campaign_pdk/spm/pdk_portability_ihp-sg13g2_20260721', a root of kind 'home' this dimension searches on no host."
         }
       }
     },
@@ -829,10 +848,11 @@
         },
         "phase3/stage3/pnr/routed.drc.rpt": {
           "status": "PRODUCED_BY_RUN",
-          "run": "benchmark-data/ic/subservient",
+          "run": "benchmark-data/ic/spm/v1.14.88_gf180mcuD",
           "alternative": "phase3/stage3/pnr/routed.drc.rpt",
           "path": "phase3/stage3/pnr/routed.drc.rpt",
-          "size_bytes": 19045
+          "size_bytes": 18900,
+          "note": "2026-09-02 — re-measured against benchmark-data/ic/spm/v1.14.88_gf180mcuD: phase3/stage3/pnr/routed.drc.rpt tracked at HEAD, non-empty, and attributed to this step by the cell's write ledger. Previously PRODUCED_BY_RUN citing 'benchmark-data/ic/subservient', a root of kind 'home' this dimension searches on no host."
         },
         "reports/phase3/drc_router.rpt": {
           "status": "PRODUCED_BY_RUN",
@@ -842,7 +862,12 @@
           "size_bytes": 18462
         },
         "reports/phase3/drc_router.json": {
-          "status": "UNPROVEN"
+          "status": "PRODUCED_BY_RUN",
+          "run": "benchmark-data/ic/spm/v1.14.88_gf180mcuD",
+          "alternative": "reports/phase3/drc_router.json",
+          "path": "reports/phase3/drc_router.json",
+          "size_bytes": 3005,
+          "note": "2026-09-02 — re-measured against benchmark-data/ic/spm/v1.14.88_gf180mcuD: reports/phase3/drc_router.json tracked at HEAD, non-empty, and attributed to this step by the cell's write ledger. Previously UNPROVEN."
         }
       }
     },
@@ -863,10 +888,11 @@
       "entries": {
         "phase3/stage3/sta/post_route_timing.rpt": {
           "status": "PRODUCED_BY_RUN",
-          "run": "benchmark-data/ic/sha256/clean_run_v1427_20260715",
+          "run": "benchmark-data/ic/spm/v1.14.88_gf180mcuD",
           "alternative": "phase3/stage3/sta/post_route_timing.rpt",
           "path": "phase3/stage3/sta/post_route_timing.rpt",
-          "size_bytes": 3229
+          "size_bytes": 2595,
+          "note": "2026-09-02 — re-measured against benchmark-data/ic/spm/v1.14.88_gf180mcuD: phase3/stage3/sta/post_route_timing.rpt tracked at HEAD, non-empty, and attributed to this step by the cell's write ledger. Previously PRODUCED_BY_RUN citing 'benchmark-data/ic/sha256/clean_run_v1427_20260715', a root of kind 'home' this dimension searches on no host."
         },
         "reports/phase3/sta/post_route_summary.json": {
           "status": "PRODUCED_BY_RUN",
@@ -952,8 +978,12 @@
           "note": "2026-08-12 - was PRODUCED_LIVE, producer em_report_check, base_run benchmark-data/ic/spm/v1.9.96_gf180mcuD. That record was measured 2026-07-27 against the LIVE run tree this cell was later published from, at a moment when the tree did not carry this path, so the producer could be run and watched to write it. The published cell now carries the artefact tracked at HEAD, and produce_live refuses - correctly - to call a production LIVE against a tree that already holds the target. Corrected to the status the code itself prescribes for exactly this case (produce_live: \"the artefact is TRACKED AT HEAD ... in that case the entry is not a live production at all; it should be recorded PRODUCED_BY_RUN\"). Nothing was written and nothing was published: the bytes cited are the ones the commit already carried."
         },
         "reports/phase3/em_current_authority.json": {
-          "status": "UNPROVEN",
-          "note": "2026-08-31 - UNPROVEN. Declared in the same change that records this entry, to close the dimension-7 finding W1:gate_output_read_elsewhere on step 25 - the LAST ENFORCED-CONTRADICTED cell in the 63x8 matrix. The gate clause `em_peak_current_authority_check . --json reports/phase3/em_current_authority.json` designates it and `phase3_one_shot_runner` reads it by name. It resolves in NO admissible run root: the gate postdates every published cell, and the copies on this host live in agent scratch trees, which `_admissibility` excludes by construction. So this declaration moves the finding from dimension 7 to dimension 3 - exactly as step 31's `magic_illegal_overlap.json` did on 2026-08-20 - and that is stated here rather than left for a reader to discover from a red cell."
+          "status": "PRODUCED_BY_RUN",
+          "run": "benchmark-data/ic/spm/v1.14.88_gf180mcuD",
+          "alternative": "reports/phase3/em_current_authority.json",
+          "path": "reports/phase3/em_current_authority.json",
+          "size_bytes": 2873,
+          "note": "2026-09-02 — re-measured against benchmark-data/ic/spm/v1.14.88_gf180mcuD: reports/phase3/em_current_authority.json tracked at HEAD, non-empty, and attributed to this step by the cell's write ledger. Previously UNPROVEN. Prior note: 2026-08-31 - UNPROVEN. Declared in the same change that records this entry, to close the dimension-7 finding W1:gate_output_read_elsewhere on step 25 - the LAST ENFORCED-CONTRADICTED cell in the 63x8 matrix. The gate clause `em_peak_current_authority_check . --json reports/phase3/em_current_authorit"
         }
       }
     },
@@ -985,19 +1015,29 @@
       }
     },
     "26.5ic": {
-      "verdict": "NA_DORMANT_CONDITION",
+      "verdict": "ENFORCED",
       "entries": {
         "phase3/stage3/pnr/die_finished.def OR phase3/stage3/pnr/die_finishing.SKIPPED.txt": {
           "status": "UNPROVEN"
         },
         "reports/phase3/die_finishing.json": {
-          "status": "UNPROVEN"
+          "status": "PRODUCED_BY_RUN",
+          "run": "benchmark-data/ic/spm/v1.14.88_gf180mcuD",
+          "alternative": "reports/phase3/die_finishing.json",
+          "path": "reports/phase3/die_finishing.json",
+          "size_bytes": 2747,
+          "note": "2026-09-02 — re-measured against benchmark-data/ic/spm/v1.14.88_gf180mcuD: reports/phase3/die_finishing.json tracked at HEAD, non-empty, and attributed to this step by the cell's write ledger. Previously UNPROVEN."
         }
       },
-      "condition_files": [
-        "input/submission_template/slots/*.yaml",
-        "input/submission_template/SELF_TAPEOUT.txt"
-      ]
+      "retiered": {
+        "on": "2026-09-02",
+        "from": "NA_DORMANT_CONDITION",
+        "condition_files": [
+          "input/submission_template/slots/*.yaml",
+          "input/submission_template/SELF_TAPEOUT.txt"
+        ],
+        "because": "registering benchmark-data/ic/spm/v1.14.88_gf180mcuD made the NA falsifiable and it was false: the cell carries [('reports/phase3/die_finishing.json', 'reports/phase3/die_finishing.json', 2747)]. The dormancy probe in test_d3_required_outputs_are_produced asserts an NA cell's declared outputs exist nowhere; they do."
+      }
     },
     "27": {
       "verdict": "ENFORCED",
@@ -1057,11 +1097,11 @@
       "entries": {
         "phase3/stage3/sim_postlayout/results.log OR phase3/stage3/sim_postlayout/pass.flag": {
           "status": "PRODUCED_BY_RUN",
-          "run": "benchmark-data/evaluation/phase1_parity/espi",
-          "alternative": "phase3/stage3/sim_postlayout/pass.flag",
-          "path": "phase3/stage3/sim_postlayout/pass.flag",
-          "size_bytes": 341,
-          "note": "vibe-ic#1266 — RE-POINTED off 'AI_IC_design/4th_benchmark/cv32e40p_e2e', a kind='home' root no checkout carries. Re-measured live: this root carries pass.flag non-empty, non-symlink and tracked at HEAD. Weaker than step 11's four re-points and said so rather than blurred: this root carries no write ledger, so the record rests on the pre-ledger evidence rules alone and does NOT claim the run's own log attributed the write to step 29."
+          "run": "benchmark-data/ic/spm/v1.10.18_sky130A",
+          "alternative": "phase3/stage3/sim_postlayout/results.log",
+          "path": "phase3/stage3/sim_postlayout/results.log",
+          "size_bytes": 3711,
+          "note": "2026-09-02 — re-measured against benchmark-data/ic/spm/v1.10.18_sky130A: the run produced phase3/stage3/sim_postlayout/results.log (3711 B, sha256=1f46e081c766f44e2bc54733920d1788fbb585a82ab953a70a286b61a621e033) and the publisher WITHHELD the bytes from the cell (decision OUT_OF_PUBLISHED_SCOPE in steps/phase3/stage3/29_post_layout_gate_level_simulation_post_sim_sdf/STEP_RECORD.json); production is proven by that tracked record, not by bytes in the cell. Previously PRODUCED_BY_RUN citing 'benchmark-data/evaluation/phase1_parity/espi', a root of kind 'home' this dimension searches on no host."
         },
         "reports/phase2/gates/post_layout_sim.json": {
           "status": "PRODUCED_BY_RUN",
@@ -1133,22 +1173,20 @@
           "size_bytes": 842
         },
         "reports/phase3/perc_sweep.json": {
-          "status": "UNPROVEN",
-          "provenance_note": "declared 2026-08-28 to close the dimension-7 finding W1:gate_output_read_elsewhere on step 31 — `perc_corpus_sweep --report` writes it and the `sweep_reach_check --report` clause directly below it is the only reader, so it is load-bearing outside its own writer. UNPROVEN and not PRODUCED_BY_RUN because no run root this module may consult carries the path: `find -name perc_sweep.json` over the published corpus, 2026-08-28, returned nothing across all 10 admissible run roots, and the sweep clause that writes it was re-homed onto step 31 on 2026-08-25 — after every published cell. Same class as magic_illegal_overlap.json above, and the same consequence: the UNPROVEN branch re-searches every admissible root on each call, so the first run tree that publishes the file closes this entry live and the record reddens in the other direction."
+          "status": "PRODUCED_BY_RUN",
+          "run": "benchmark-data/ic/spm/v1.14.88_gf180mcuD",
+          "alternative": "reports/phase3/perc_sweep.json",
+          "path": "reports/phase3/perc_sweep.json",
+          "size_bytes": 1590,
+          "note": "2026-09-02 — re-measured against benchmark-data/ic/spm/v1.14.88_gf180mcuD: reports/phase3/perc_sweep.json tracked at HEAD, non-empty, and attributed to this step by the cell's write ledger. Previously UNPROVEN."
         },
         "reports/phase3/magic_illegal_overlap.json": {
-          "status": "PRODUCED_LIVE",
-          "producer": "magic_illegal_overlap_check",
-          "argv": [
-            ".",
-            "--json",
-            "reports/phase3/magic_illegal_overlap.json"
-          ],
-          "writes": "reports/phase3/magic_illegal_overlap.json",
-          "producer_is_declared_before_gate": true,
-          "base_run": "benchmark-data/ic/spm/v1.9.96_gf180mcuD",
-          "size_bytes": 1729,
-          "provenance_note": "The producer postdates every published run, but phase3_one_shot_runner dispatches it before LVS and the tracked-only live proof writes this non-empty report from the published extraction evidence. The compliance-audit gate writes its independent triage copy under reports/audit, so it cannot create the declared evidence it then audits."
+          "status": "PRODUCED_BY_RUN",
+          "run": "benchmark-data/ic/spm/v1.14.88_gf180mcuD",
+          "alternative": "reports/phase3/magic_illegal_overlap.json",
+          "path": "reports/phase3/magic_illegal_overlap.json",
+          "size_bytes": 1622,
+          "note": "2026-09-02 — re-measured against benchmark-data/ic/spm/v1.14.88_gf180mcuD: reports/phase3/magic_illegal_overlap.json tracked at HEAD, non-empty, and attributed to this step by the cell's write ledger. Previously PRODUCED_LIVE citing 'benchmark-data/ic/spm/v1.9.96_gf180mcuD', a root of kind 'home' this dimension searches on no host."
         },
         "reports/phase3/lvs_verdict.json": {
           "status": "PRODUCED_BY_RUN",
@@ -1173,17 +1211,19 @@
       "entries": {
         "phase3/stage3/postroute_timing_repair/repair_log.json OR phase3/stage3/postroute_timing_repair/no_repair_needed.flag": {
           "status": "PRODUCED_BY_RUN",
-          "run": "benchmark-data/ic/subservient",
-          "alternative": "phase3/stage3/postroute_timing_repair/repair_log.json",
-          "path": "phase3/stage3/postroute_timing_repair/repair_log.json",
-          "size_bytes": 370
+          "run": "benchmark-data/ic/spm/v1.14.88_gf180mcuD",
+          "alternative": "phase3/stage3/postroute_timing_repair/no_repair_needed.flag",
+          "path": "phase3/stage3/postroute_timing_repair/no_repair_needed.flag",
+          "size_bytes": 420,
+          "note": "2026-09-02 — re-measured against benchmark-data/ic/spm/v1.14.88_gf180mcuD: the run produced phase3/stage3/postroute_timing_repair/no_repair_needed.flag (420 B, sha256=0d16de0fa7020ac3fc006afcdefe7cb8972e5f31ed4a9e4b9aeab76f1ef43cec) and the publisher WITHHELD the bytes from the cell (decision OUT_OF_PUBLISHED_SCOPE in steps/phase3/stage3/32_post_route_timing_repair_pass_multi_corner_repai/STEP_RECORD.json); production is proven by that tracked record, not by bytes in the cell. Previously PRODUCED_BY_RUN citing 'benchmark-data/ic/subservient', a root of kind 'home' this dimension searches on no host."
         },
         "phase3/stage3/postroute_timing_repair/postroute_timing_repair_decision.json": {
           "status": "PRODUCED_BY_RUN",
-          "run": "campaign_pdk/spm/pdk_portability_ihp-sg13g2_20260721",
+          "run": "benchmark-data/ic/spm/v1.14.88_gf180mcuD",
           "alternative": "phase3/stage3/postroute_timing_repair/postroute_timing_repair_decision.json",
           "path": "phase3/stage3/postroute_timing_repair/postroute_timing_repair_decision.json",
-          "size_bytes": 208
+          "size_bytes": 376,
+          "note": "2026-09-02 — re-measured against benchmark-data/ic/spm/v1.14.88_gf180mcuD: phase3/stage3/postroute_timing_repair/postroute_timing_repair_decision.json tracked at HEAD, non-empty, and attributed to this step by the cell's write ledger. Previously PRODUCED_BY_RUN citing 'campaign_pdk/spm/pdk_portability_ihp-sg13g2_20260721', a root of kind 'home' this dimension searches on no host."
         }
       }
     },
@@ -1211,10 +1251,11 @@
       "entries": {
         "phase3/stage3/pnr/filled.def OR phase3/stage3/pnr/metal_fill.done": {
           "status": "PRODUCED_BY_RUN",
-          "run": "benchmark-data/ic/subservient",
-          "alternative": "phase3/stage3/pnr/metal_fill.done",
-          "path": "phase3/stage3/pnr/metal_fill.done",
-          "size_bytes": 373
+          "run": "benchmark-data/ic/spm/v1.14.88_gf180mcuD",
+          "alternative": "phase3/stage3/pnr/filled.def",
+          "path": "phase3/stage3/pnr/filled.def",
+          "size_bytes": 760576,
+          "note": "2026-09-02 — re-measured against benchmark-data/ic/spm/v1.14.88_gf180mcuD: the run produced phase3/stage3/pnr/filled.def (760576 B, sha256=c07ccdccf7ce0a8a3132320d0c4efd789240226d43b06ec9ae0ba875e9c4a573) and the publisher WITHHELD the bytes from the cell (decision OUT_OF_PUBLISHED_SCOPE in steps/phase3/stage4/34_metal_fill_eco_aware_density_fill_insertion/STEP_RECORD.json); production is proven by that tracked record, not by bytes in the cell. Previously PRODUCED_BY_RUN citing 'benchmark-data/ic/subservient', a root of kind 'home' this dimension searches on no host."
         },
         "reports/density.json OR reports/phase3/density.json": {
           "status": "PRODUCED_BY_RUN",
@@ -1267,52 +1308,115 @@
           "size_bytes": 1616344
         },
         "reports/phase3/gates/stage3_compliance.json": {
-          "status": "UNPROVEN",
-          "note": "2026-08-31 - UNPROVEN. Declared by `29e9c72796` [v1.13.96], which moved the flow yaml without moving this manifest; `d3_manifest_declaration_parity_check` has been reporting it as uncovered ever since (measured red on 781d24727 [v1.14.22] before this change, 7 uncovered paths). The stage-tier `*_compliance.json` reports are written by `flow_compliance_check --stage-id <X> --strict --json <this path>`, a clause that postdates every admissible run root in this manifest, so no published run carries the file and there is nothing to record as PRODUCED_BY_RUN. UNPROVEN is the true statement of the gap: the entry is now DECIDABLE, and the dimension-3 cell reports it unevidenced wherever a corpus is offered."
+          "status": "PRODUCED_BY_RUN",
+          "run": "benchmark-data/ic/spm/v1.14.88_gf180mcuD",
+          "alternative": "reports/phase3/gates/stage3_compliance.json",
+          "path": "reports/phase3/gates/stage3_compliance.json",
+          "size_bytes": 45348,
+          "note": "2026-09-02 — re-measured against benchmark-data/ic/spm/v1.14.88_gf180mcuD: reports/phase3/gates/stage3_compliance.json tracked at HEAD, non-empty, and attributed to this step by the cell's write ledger. Previously UNPROVEN. Prior note: 2026-08-31 - UNPROVEN. Declared by `29e9c72796` [v1.13.96], which moved the flow yaml without moving this manifest; `d3_manifest_declaration_parity_check` has been reporting it as uncovered ever since (measured red on 781d24727 [v1.14.22] before this change, 7 uncovered paths). The stage-tier `*_com"
         }
       }
     },
     "37.5ip": {
-      "verdict": "NA_DORMANT_CONDITION",
+      "verdict": "ENFORCED",
       "entries": {
         "phase3/stage4/hardmacro/*.lef": {
-          "status": "UNPROVEN"
+          "status": "PRODUCED_BY_RUN",
+          "run": "benchmark-data/ic/spm/v1.14.88_gf180mcuD",
+          "alternative": "phase3/stage4/hardmacro/*.lef",
+          "path": "phase3/stage4/hardmacro/spm.lef",
+          "size_bytes": 11306,
+          "note": "2026-09-02 — re-measured against benchmark-data/ic/spm/v1.14.88_gf180mcuD: the run produced phase3/stage4/hardmacro/spm.lef (11306 B, sha256=372cf0e04c0faa23a38429e6c0e76c53b33fa789293347e690fa11ab8f8abe32) and the publisher WITHHELD the bytes from the cell (decision OUT_OF_PUBLISHED_SCOPE in steps/phase3/stage4/375ip_digital_hardmacro_generation_lef_liberty_gds_ver/STEP_RECORD.json); production is proven by that tracked record, not by bytes in the cell. Previously UNPROVEN."
         },
         "phase3/stage4/hardmacro/*.lib": {
-          "status": "UNPROVEN"
+          "status": "PRODUCED_BY_RUN",
+          "run": "benchmark-data/ic/spm/v1.14.88_gf180mcuD",
+          "alternative": "phase3/stage4/hardmacro/*.lib",
+          "path": "phase3/stage4/hardmacro/spm.lib",
+          "size_bytes": 1029,
+          "note": "2026-09-02 — re-measured against benchmark-data/ic/spm/v1.14.88_gf180mcuD: the run produced phase3/stage4/hardmacro/spm.lib (1029 B, sha256=53e1dfd60d5e2772151636124bd3569bf9f6bd6e6c3d5bd1c6b416321ef514c4) and the publisher WITHHELD the bytes from the cell (decision OUT_OF_PUBLISHED_SCOPE in steps/phase3/stage4/375ip_digital_hardmacro_generation_lef_liberty_gds_ver/STEP_RECORD.json); production is proven by that tracked record, not by bytes in the cell. Previously UNPROVEN."
         },
         "phase3/stage4/hardmacro/*.gds": {
-          "status": "UNPROVEN"
+          "status": "PRODUCED_BY_RUN",
+          "run": "benchmark-data/ic/spm/v1.14.88_gf180mcuD",
+          "alternative": "phase3/stage4/hardmacro/*.gds",
+          "path": "phase3/stage4/hardmacro/spm.gds",
+          "size_bytes": 2131574,
+          "note": "2026-09-02 — re-measured against benchmark-data/ic/spm/v1.14.88_gf180mcuD: the run produced phase3/stage4/hardmacro/spm.gds (2131574 B, sha256=2fcf520e402849996f339e4ccb2a940827502f02f6718863e055e1817bd8f401) and the publisher WITHHELD the bytes from the cell (decision OUT_OF_PUBLISHED_SCOPE in steps/phase3/stage4/375ip_digital_hardmacro_generation_lef_liberty_gds_ver/STEP_RECORD.json); production is proven by that tracked record, not by bytes in the cell. Previously UNPROVEN."
         },
         "phase3/stage4/hardmacro/*.v": {
-          "status": "UNPROVEN"
+          "status": "PRODUCED_BY_RUN",
+          "run": "benchmark-data/ic/spm/v1.14.88_gf180mcuD",
+          "alternative": "phase3/stage4/hardmacro/*.v",
+          "path": "phase3/stage4/hardmacro/spm.v",
+          "size_bytes": 503,
+          "note": "2026-09-02 — re-measured against benchmark-data/ic/spm/v1.14.88_gf180mcuD: phase3/stage4/hardmacro/spm.v tracked at HEAD, non-empty, and attributed to this step by the cell's write ledger. Previously UNPROVEN."
         },
         "phase3/stage4/documentation/ip/*/documentation_manifest.yaml": {
-          "status": "UNPROVEN"
+          "status": "PRODUCED_BY_RUN",
+          "run": "benchmark-data/ic/spm/v1.14.88_gf180mcuD",
+          "alternative": "phase3/stage4/documentation/ip/*/documentation_manifest.yaml",
+          "path": "phase3/stage4/documentation/ip/spm/documentation_manifest.yaml",
+          "size_bytes": 2698,
+          "note": "2026-09-02 — re-measured against benchmark-data/ic/spm/v1.14.88_gf180mcuD: phase3/stage4/documentation/ip/spm/documentation_manifest.yaml tracked at HEAD, non-empty, and attributed to this step by the cell's write ledger. Previously UNPROVEN."
         },
         "phase3/stage4/documentation/ip/*/DELIVERABLES_MANIFEST.md": {
-          "status": "UNPROVEN"
+          "status": "PRODUCED_BY_RUN",
+          "run": "benchmark-data/ic/spm/v1.14.88_gf180mcuD",
+          "alternative": "phase3/stage4/documentation/ip/*/DELIVERABLES_MANIFEST.md",
+          "path": "phase3/stage4/documentation/ip/spm/DELIVERABLES_MANIFEST.md",
+          "size_bytes": 1579,
+          "note": "2026-09-02 — re-measured against benchmark-data/ic/spm/v1.14.88_gf180mcuD: phase3/stage4/documentation/ip/spm/DELIVERABLES_MANIFEST.md tracked at HEAD, non-empty, and attributed to this step by the cell's write ledger. Previously UNPROVEN."
         },
         "phase3/stage4/documentation/ip/*/ERRATA.md": {
-          "status": "UNPROVEN"
+          "status": "PRODUCED_BY_RUN",
+          "run": "benchmark-data/ic/spm/v1.14.88_gf180mcuD",
+          "alternative": "phase3/stage4/documentation/ip/*/ERRATA.md",
+          "path": "phase3/stage4/documentation/ip/spm/ERRATA.md",
+          "size_bytes": 1448,
+          "note": "2026-09-02 — re-measured against benchmark-data/ic/spm/v1.14.88_gf180mcuD: phase3/stage4/documentation/ip/spm/ERRATA.md tracked at HEAD, non-empty, and attributed to this step by the cell's write ledger. Previously UNPROVEN."
         },
         "phase3/stage4/documentation/ip/*/RELEASE_NOTES.md": {
-          "status": "UNPROVEN"
+          "status": "PRODUCED_BY_RUN",
+          "run": "benchmark-data/ic/spm/v1.14.88_gf180mcuD",
+          "alternative": "phase3/stage4/documentation/ip/*/RELEASE_NOTES.md",
+          "path": "phase3/stage4/documentation/ip/spm/RELEASE_NOTES.md",
+          "size_bytes": 1951,
+          "note": "2026-09-02 — re-measured against benchmark-data/ic/spm/v1.14.88_gf180mcuD: phase3/stage4/documentation/ip/spm/RELEASE_NOTES.md tracked at HEAD, non-empty, and attributed to this step by the cell's write ledger. Previously UNPROVEN."
         },
         "phase3/stage4/documentation/ip/*/IP_INTEGRATION_GUIDE.md": {
-          "status": "UNPROVEN"
+          "status": "PRODUCED_BY_RUN",
+          "run": "benchmark-data/ic/spm/v1.14.88_gf180mcuD",
+          "alternative": "phase3/stage4/documentation/ip/*/IP_INTEGRATION_GUIDE.md",
+          "path": "phase3/stage4/documentation/ip/spm/IP_INTEGRATION_GUIDE.md",
+          "size_bytes": 4150,
+          "note": "2026-09-02 — re-measured against benchmark-data/ic/spm/v1.14.88_gf180mcuD: phase3/stage4/documentation/ip/spm/IP_INTEGRATION_GUIDE.md tracked at HEAD, non-empty, and attributed to this step by the cell's write ledger. Previously UNPROVEN."
         },
         "phase3/stage4/documentation/ip/*/IP_DATASHEET.md": {
-          "status": "UNPROVEN"
+          "status": "PRODUCED_BY_RUN",
+          "run": "benchmark-data/ic/spm/v1.14.88_gf180mcuD",
+          "alternative": "phase3/stage4/documentation/ip/*/IP_DATASHEET.md",
+          "path": "phase3/stage4/documentation/ip/spm/IP_DATASHEET.md",
+          "size_bytes": 3868,
+          "note": "2026-09-02 — re-measured against benchmark-data/ic/spm/v1.14.88_gf180mcuD: phase3/stage4/documentation/ip/spm/IP_DATASHEET.md tracked at HEAD, non-empty, and attributed to this step by the cell's write ledger. Previously UNPROVEN."
         },
         "reports/phase3/digital_hardmacro.json": {
-          "status": "UNPROVEN",
-          "note": "2026-08-31 - UNPROVEN. Same declaring commit and the same omission as the five stage-tier compliance reports above (`29e9c72796` [v1.13.96]). The IP hardmacro report postdates every admissible run root here, so no published run carries it."
+          "status": "PRODUCED_BY_RUN",
+          "run": "benchmark-data/ic/spm/v1.14.88_gf180mcuD",
+          "alternative": "reports/phase3/digital_hardmacro.json",
+          "path": "reports/phase3/digital_hardmacro.json",
+          "size_bytes": 3729,
+          "note": "2026-09-02 — re-measured against benchmark-data/ic/spm/v1.14.88_gf180mcuD: reports/phase3/digital_hardmacro.json tracked at HEAD, non-empty, and attributed to this step by the cell's write ledger. Previously UNPROVEN. Prior note: 2026-08-31 - UNPROVEN. Same declaring commit and the same omission as the five stage-tier compliance reports above (`29e9c72796` [v1.13.96]). The IP hardmacro report postdates every admissible run root here, so no published run carries it."
         }
       },
-      "condition_files": [
-        "input/submission_template/NO_TEMPLATE.txt"
-      ]
+      "retiered": {
+        "on": "2026-09-02",
+        "from": "NA_DORMANT_CONDITION",
+        "condition_files": [
+          "input/submission_template/NO_TEMPLATE.txt"
+        ],
+        "because": "registering benchmark-data/ic/spm/v1.14.88_gf180mcuD made the NA falsifiable and it was false: the cell carries [('phase3/stage4/hardmacro/*.v', 'phase3/stage4/hardmacro/spm.v', 503), ('reports/phase3/digital_hardmacro.json', 'reports/phase3/digital_hardmacro.json', 3729), ('phase3/stage4/documentation/ip/*/IP_DATASHEET.md', 'phase3/stage4/documentation/ip/spm/IP_DATASHEET.md', 3868), ('phase3/stage4/documentation/ip/*/IP_INTEGRATION_GUIDE.md', 'phase3/stage4/documentation/ip/spm/IP_INTEGRATION_GUIDE.md', 4150), ('phase3/stage4/documentation/ip/*/RELEASE_NOTES.md', 'phase3/stage4/documentation/ip/spm/RELEASE_NOTES.md', 1951), ('phase3/stage4/documentation/ip/*/ERRATA.md', 'phase3/stage4/documentation/ip/spm/ERRATA.md', 1448), ('phase3/stage4/documentation/ip/*/DELIVERABLES_MANIFEST.md', 'phase3/stage4/documentation/ip/spm/DELIVERABLES_MANIFEST.md', 1579), ('phase3/stage4/documentation/ip/*/documentation_manifest.yaml', 'phase3/stage4/documentation/ip/spm/documentation_manifest.yaml', 2698)]. The dormancy probe in test_d3_required_outputs_are_produced asserts an NA cell's declared outputs exist nowhere; they do."
+      }
     },
     "37.5ic": {
       "verdict": "NA_DORMANT_CONDITION",
@@ -1355,31 +1459,35 @@
       "entries": {
         "phase3/stage4/foundry_handoff/mask_spec.json": {
           "status": "PRODUCED_BY_RUN",
-          "run": "benchmark-data/ic/sha256/clean_run_v1427_20260715",
+          "run": "benchmark-data/ic/spm/v1.14.88_gf180mcuD",
           "alternative": "phase3/stage4/foundry_handoff/mask_spec.json",
           "path": "phase3/stage4/foundry_handoff/mask_spec.json",
-          "size_bytes": 781
+          "size_bytes": 1860,
+          "note": "2026-09-02 — re-measured against benchmark-data/ic/spm/v1.14.88_gf180mcuD: phase3/stage4/foundry_handoff/mask_spec.json tracked at HEAD, non-empty, and attributed to this step by the cell's write ledger. Previously PRODUCED_BY_RUN citing 'benchmark-data/ic/sha256/clean_run_v1427_20260715', a root of kind 'home' this dimension searches on no host."
         },
         "phase3/stage4/foundry_handoff/wat_plan.json": {
           "status": "PRODUCED_BY_RUN",
-          "run": "benchmark-data/ic/sha256/clean_run_v1427_20260715",
+          "run": "benchmark-data/ic/spm/v1.14.88_gf180mcuD",
           "alternative": "phase3/stage4/foundry_handoff/wat_plan.json",
           "path": "phase3/stage4/foundry_handoff/wat_plan.json",
-          "size_bytes": 772
+          "size_bytes": 2109,
+          "note": "2026-09-02 — re-measured against benchmark-data/ic/spm/v1.14.88_gf180mcuD: phase3/stage4/foundry_handoff/wat_plan.json tracked at HEAD, non-empty, and attributed to this step by the cell's write ledger. Previously PRODUCED_BY_RUN citing 'benchmark-data/ic/sha256/clean_run_v1427_20260715', a root of kind 'home' this dimension searches on no host."
         },
         "phase3/stage4/foundry_handoff/scribe_line_layout.gds OR phase3/stage4/foundry_handoff/scribe_line_layout.PENDING_FOUNDRY.txt": {
           "status": "PRODUCED_BY_RUN",
-          "run": "benchmark-data/ic/sha256/clean_run_v1427_20260715",
+          "run": "benchmark-data/ic/spm/v1.14.88_gf180mcuD",
           "alternative": "phase3/stage4/foundry_handoff/scribe_line_layout.PENDING_FOUNDRY.txt",
           "path": "phase3/stage4/foundry_handoff/scribe_line_layout.PENDING_FOUNDRY.txt",
-          "size_bytes": 267
+          "size_bytes": 1316,
+          "note": "2026-09-02 — re-measured against benchmark-data/ic/spm/v1.14.88_gf180mcuD: phase3/stage4/foundry_handoff/scribe_line_layout.PENDING_FOUNDRY.txt tracked at HEAD, non-empty, and attributed to this step by the cell's write ledger. Previously PRODUCED_BY_RUN citing 'benchmark-data/ic/sha256/clean_run_v1427_20260715', a root of kind 'home' this dimension searches on no host."
         },
         "phase3/stage4/foundry_handoff/corner_test_vectors.json": {
           "status": "PRODUCED_BY_RUN",
-          "run": "benchmark-data/ic/sha256/clean_run_v1427_20260715",
+          "run": "benchmark-data/ic/spm/v1.14.88_gf180mcuD",
           "alternative": "phase3/stage4/foundry_handoff/corner_test_vectors.json",
           "path": "phase3/stage4/foundry_handoff/corner_test_vectors.json",
-          "size_bytes": 1069
+          "size_bytes": 2336,
+          "note": "2026-09-02 — re-measured against benchmark-data/ic/spm/v1.14.88_gf180mcuD: phase3/stage4/foundry_handoff/corner_test_vectors.json tracked at HEAD, non-empty, and attributed to this step by the cell's write ledger. Previously PRODUCED_BY_RUN citing 'benchmark-data/ic/sha256/clean_run_v1427_20260715', a root of kind 'home' this dimension searches on no host."
         },
         "reports/phase3/foundry_handoff_audit.json": {
           "status": "PRODUCED_BY_RUN",
@@ -1404,14 +1512,18 @@
           "size_bytes": 724
         },
         "reports/phase3/gates/stage4_compliance.json": {
-          "status": "UNPROVEN",
-          "note": "2026-08-31 - UNPROVEN. Declared by `29e9c72796` [v1.13.96], which moved the flow yaml without moving this manifest; `d3_manifest_declaration_parity_check` has been reporting it as uncovered ever since (measured red on 781d24727 [v1.14.22] before this change, 7 uncovered paths). The stage-tier `*_compliance.json` reports are written by `flow_compliance_check --stage-id <X> --strict --json <this path>`, a clause that postdates every admissible run root in this manifest, so no published run carries the file and there is nothing to record as PRODUCED_BY_RUN. UNPROVEN is the true statement of the gap: the entry is now DECIDABLE, and the dimension-3 cell reports it unevidenced wherever a corpus is offered. 2026-08-31 - listed in this record's `unproven` set: with the corpus withdrawal (benchmark-data bcf2f94) no admissible root can carry it, its only current producer is the acceptance audit itself (see SELF_CERTIFYING_AUDIT_PROBE - audit-written evidence is refused by design), and step 39's cell is WAIVED, so the unwaived-entries guard was the only place this impossibility surfaced. The waiver-premise test re-checks the absence against git live."
+          "status": "PRODUCED_BY_RUN",
+          "run": "benchmark-data/ic/spm/v1.14.88_gf180mcuD",
+          "alternative": "reports/phase3/gates/stage4_compliance.json",
+          "path": "reports/phase3/gates/stage4_compliance.json",
+          "size_bytes": 22175,
+          "note": "2026-09-02 — re-measured against benchmark-data/ic/spm/v1.14.88_gf180mcuD: reports/phase3/gates/stage4_compliance.json tracked at HEAD, non-empty, and attributed to this step by the cell's write ledger. Previously UNPROVEN. Prior note: 2026-08-31 - UNPROVEN. Declared by `29e9c72796` [v1.13.96], which moved the flow yaml without moving this manifest; `d3_manifest_declaration_parity_check` has been reporting it as uncovered ever since (measured red on 781d24727 [v1.14.22] before this change, 7 uncovered paths). The stage-tier `*_com"
         }
       },
       "unproven": [
-        "phase2/stage1/fpga/final/*.sof",
-        "reports/phase3/gates/stage4_compliance.json"
-      ]
+        "phase2/stage1/fpga/final/*.sof"
+      ],
+      "unproven_note_2026_09_02": "reports/phase3/gates/stage4_compliance.json left this list: it is PRODUCED_BY_RUN in benchmark-data/ic/spm/v1.14.88_gf180mcuD (22175 B) and the waiver test's own resolver now finds it; the waiver covers phase2/stage1/fpga/final/*.sof only, as its reason always said."
     },
     "A6": {
       "verdict": "ENFORCED",
@@ -1594,54 +1706,36 @@
       "verdict": "ENFORCED",
       "entries": {
         "input/submission_template/slots/*.yaml OR input/submission_template/NO_TEMPLATE.txt OR input/submission_template/SELF_TAPEOUT.txt": {
-          "status": "PRODUCED_LIVE",
-          "producer": "submission_template_ingest",
-          "argv": [
-            ".",
-            "--template",
-            "input/template-not-present",
-            "--no-template-reason",
-            "The declared deliverable is an IP hardmacro, so this design is not submitted through a shuttle template."
-          ],
-          "writes": "input/submission_template/NO_TEMPLATE.txt",
-          "base_run": "benchmark-data/ic/spm/v1.9.96_gf180mcuD",
-          "size_bytes": 511
+          "status": "PRODUCED_BY_RUN",
+          "run": "benchmark-data/ic/spm/v1.14.88_gf180mcuD",
+          "alternative": "input/submission_template/NO_TEMPLATE.txt",
+          "path": "input/submission_template/NO_TEMPLATE.txt",
+          "size_bytes": 1554,
+          "note": "2026-09-02 — re-measured against benchmark-data/ic/spm/v1.14.88_gf180mcuD: the run produced input/submission_template/NO_TEMPLATE.txt (1554 B, sha256=1ee22d5895b14397a8b57fc4b25d700a8b6824363e1e5bd2d787bcd10f8369d6) and the publisher WITHHELD the bytes from the cell (decision OUT_OF_PUBLISHED_SCOPE in steps/phase2/stage_phase1/05ic_submission_template_ingest_the_operator_s_slot_g/STEP_RECORD.json); production is proven by that tracked record, not by bytes in the cell. Previously PRODUCED_LIVE citing 'benchmark-data/ic/spm/v1.9.96_gf180mcuD', a root of kind 'home' this dimension searches on no host."
         },
         "reports/phase1/submission_template.json": {
-          "status": "PRODUCED_LIVE",
-          "producer": "submission_template_ingest",
-          "producer_is_declared_before_gate": true,
-          "argv": [
-            ".",
-            "--template",
-            "input/template-not-present",
-            "--no-template-reason",
-            "The declared deliverable is an IP hardmacro, so this design is not submitted through a shuttle template."
-          ],
-          "writes": "reports/phase1/submission_template.json",
-          "base_run": "benchmark-data/ic/spm/v1.9.96_gf180mcuD",
-          "size_bytes": 1216
+          "status": "PRODUCED_BY_RUN",
+          "run": "benchmark-data/ic/spm/v1.14.88_gf180mcuD",
+          "alternative": "reports/phase1/submission_template.json",
+          "path": "reports/phase1/submission_template.json",
+          "size_bytes": 3804,
+          "note": "2026-09-02 — re-measured against benchmark-data/ic/spm/v1.14.88_gf180mcuD: reports/phase1/submission_template.json tracked at HEAD, non-empty, and attributed to this step by the cell's write ledger. Previously PRODUCED_LIVE citing 'benchmark-data/ic/spm/v1.9.96_gf180mcuD', a root of kind 'home' this dimension searches on no host."
         },
         "input/submission_template/tapeout_declaration.json": {
-          "status": "PRODUCED_LIVE",
-          "producer": "tapeout_declaration_gen",
-          "argv": [
-            "."
-          ],
-          "writes": "input/submission_template/tapeout_declaration.json",
-          "base_run": "benchmark-data/ic/spm/v1.9.96_gf180mcuD",
-          "size_bytes": 835
+          "status": "PRODUCED_BY_RUN",
+          "run": "benchmark-data/ic/spm/v1.14.88_gf180mcuD",
+          "alternative": "input/submission_template/tapeout_declaration.json",
+          "path": "input/submission_template/tapeout_declaration.json",
+          "size_bytes": 819,
+          "note": "2026-09-02 — re-measured against benchmark-data/ic/spm/v1.14.88_gf180mcuD: the run produced input/submission_template/tapeout_declaration.json (819 B, sha256=718dc271c1e7796c7bbcb85d9c88b6255987bddc851e953622b9c80110e6e413) and the publisher WITHHELD the bytes from the cell (decision OUT_OF_PUBLISHED_SCOPE in steps/phase2/stage_phase1/05ic_submission_template_ingest_the_operator_s_slot_g/STEP_RECORD.json); production is proven by that tracked record, not by bytes in the cell. Previously PRODUCED_LIVE citing 'benchmark-data/ic/spm/v1.9.96_gf180mcuD', a root of kind 'home' this dimension searches on no host."
         },
         "reports/phase1/tapeout_declaration.json": {
-          "status": "PRODUCED_LIVE",
-          "producer": "tapeout_declaration_gen",
-          "producer_is_declared_before_gate": true,
-          "argv": [
-            "."
-          ],
-          "writes": "reports/phase1/tapeout_declaration.json",
-          "base_run": "benchmark-data/ic/spm/v1.9.96_gf180mcuD",
-          "size_bytes": 3010
+          "status": "PRODUCED_BY_RUN",
+          "run": "benchmark-data/ic/spm/v1.14.88_gf180mcuD",
+          "alternative": "reports/phase1/tapeout_declaration.json",
+          "path": "reports/phase1/tapeout_declaration.json",
+          "size_bytes": 2001,
+          "note": "2026-09-02 — re-measured against benchmark-data/ic/spm/v1.14.88_gf180mcuD: reports/phase1/tapeout_declaration.json tracked at HEAD, non-empty, and attributed to this step by the cell's write ledger. Previously PRODUCED_LIVE citing 'benchmark-data/ic/spm/v1.9.96_gf180mcuD', a root of kind 'home' this dimension searches on no host."
         }
       }
     }

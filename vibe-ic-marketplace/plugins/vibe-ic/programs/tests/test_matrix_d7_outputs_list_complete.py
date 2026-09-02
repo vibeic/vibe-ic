@@ -2052,8 +2052,47 @@ def test_d7_a_record_whose_emitter_withheld_the_residual_is_refused(monkeypatch)
 #: them is no longer published, NOT because anything about their disposition
 #: changed: each remains declared in ``flow/phase1_phase2_phase3.yaml`` and
 #: would be promoted again the day that root comes back.
+#: MOVED 1 ROOT -> 2 ON 2026-09-02, AND THE PIN FIRED FIRST, again by name:
+#: ``benchmark-data`` published ``ic/spm/v1.14.88_gf180mcuD`` (converged,
+#: PASS_WITH_WAIVERS) carrying ``reports/write_ledger.json`` tracked at its
+#: HEAD, :func:`matrix_d7_write_record.record_roots` read it the moment the
+#: pointer was bound, and this pin reported "the set of run roots whose write
+#: record decides this dimension changed". RE-MEASURED on this change with the
+#: pointer bound at ``benchmark-data`` @ ``da762d4e``:
+#:
+#:     v1.10.18_sky130A     captured 2026-08-09T11:11:08Z
+#:                          399 candidates, 143 refused (absent 143)
+#:     v1.14.88_gf180mcuD   captured 2026-08-31T18:09:41Z
+#:                          476 candidates, 144 refused (absent 144, 0-byte 0,
+#:                          symlinked 0, untracked 0)
+#:
+#: The A/B against a forced-empty ``observed_writes()`` over all 68 steps now
+#: leaves **10** promotions on **4** steps, with **0** findings lost:
+#:
+#:     step D1  phase1/generated_docs/L19_CONSTRAINTS_PDK.json   OPEN (W2)
+#:     step 21  phase3/stage3/pnr/openroad.log                   OPEN (W2)
+#:     step 23  sta_mcorner_ocv / sta_spef_based / sta_spef_multicorner .rpt
+#:              under phase3/stage3/sta AND their reports/phase3 mirrors,
+#:              plus phase3/stage3/pnr/drv_promotion_not_run.json   WAIVED
+#:              (23/d7's waiver names the three by their PDK condition;
+#:              the mirrors and the marker land on the same waived cell)
+#:     step 34  reports/phase3/cmp_fill_emit.json                 OPEN (W2)
+#:
+#: THREE OF THE TEN ARE NOT DISPOSED HERE, stated so the pin is not read as a
+#: certificate. D1, 21 and 34 are red with the pointer bound — before this
+#: change and after it, because the record was already consulted; only the
+#: pin lagged. Each has an in-repo argument that is a DECISION, not a task:
+#: 21's openroad.log is the "not an inference at all" case the module
+#: docstring names (the run's own provenance says openroad wrote it); 34's
+#: cmp_fill_emit.json is the conditional artefact its withdrawn waiver's note
+#: says must be neither declared nor re-waived on a resolution limit — a limit
+#: the record has now crossed; D1's L19 is written by no AST-visible producer.
+#: Declaring any of them is the yaml+manifest PAIR (the d7 -> d3 relocation
+#: this module documents) plus a census regeneration, and it is left to the
+#: flow's owner with the three findings named here rather than half-done.
 RECORD_BOUND_ROOTS: Tuple[str, ...] = (
     "benchmark-data/ic/spm/v1.10.18_sky130A",
+    "benchmark-data/ic/spm/v1.14.88_gf180mcuD",
 )
 
 
