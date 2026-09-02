@@ -1873,6 +1873,80 @@ run "liar census controls still fire"   "$ROOT" env PYTEST_DISABLE_PLUGIN_AUTOLO
 # this cause. BLOCKING: `run` fails the suite on any non-zero rc, and the gate
 # returns 2 rather than 0 when it could not read a file or examined none.
 run "no retired pytest plugin request" "$ROOT" python3 "$PG/retired_pytest_plugin_request_check.py" "$ROOT"
+# EXECUTION, not existence. `gate_mutation_fixture_check` asks whether each
+# declared gate has BOTH `can_pass` and `can_fail` under `gate_fixtures/`; this
+# row RUNS them and requires the good input to be accepted and the mutated one
+# refused.
+#
+# THE DIFFERENCE IS FOUR LANDINGS WIDE, and it was measured, not imagined.
+# v1.15.79 moved the four PPA campaign trees to `docs/campaigns/`. Eleven
+# fixtures kept planting their subject at the old path, so ten of them built
+# can_pass and can_fail at a location their gate no longer reads and BOTH arms
+# landed on the same empty corpus — a pair that has stopped telling its gate's
+# good input from its bad one. At 85338ac71308102dd957f95f4d12cd5290a02943:
+# `test_gate_fixtures_discriminate` 11 failed / 77 passed. The existence census
+# stayed green throughout, correctly: every file was still there.
+#
+# AND NOTHING RAN EITHER HALF. The only executor is
+# `tools/ci/test_gate_fixtures_discriminate.py`, which no row and no selector
+# invokes, and `gate_mutation_fixture_check` has no caller outside its own test
+# file — measured on this tree, and `--list` names no row containing "fixture".
+# This row wires the executing half. The census half is a SECOND new row and is
+# left for a separate decision rather than slipped in beside this one.
+#
+# `$RUNTIME_ROOT` FOR THE PROGRAM AND `--root "$ROOT"` FOR THE SUBJECT, and the
+# split is what makes this row fixturable at all. The engine (`gate_mutation_
+# fixtures.run_pair`, the declaration parser and its ~200-module import
+# closure) always comes from the tree this script ships in; only the
+# `repo_hygiene_gates.sh` and `gate_fixtures/` being JUDGED follow `$ROOT`. A
+# `$ROOT`-anchored program would oblige every fixture arm to vendor that whole
+# closure into a synthetic subject — measured: 208 modules and still failing on
+# two suite self-tests pinned to a named real fixture.
+#
+# MEASURED before wiring, at 42e156232: rc 0, "gate fixture pairs EXECUTED both
+# ways: 83 of 83 declared; 0 do not discriminate". Its own pair is
+# `gate_fixtures/gate_fixtures_discriminate.py`, whose can_fail subject is a
+# toy gate that ACCEPTS its fixture's mutated input — the exact shape this row
+# exists to refuse.
+run "gate fixtures discriminate"        "$ROOT" \
+    python3 "$RUNTIME_ROOT/tools/ci/gate_fixture_discrimination_check.py" \
+    --root "$ROOT"
+# THE OTHER HALF OF THE SAME REGIME, and it was off the landing path too.
+# The row above EXECUTES the pairs; this one COUNTS them — every gate the
+# dispatcher declares must carry BOTH `can_pass` and `can_fail` under
+# `gate_fixtures/`, or hold a live entry in the shrink-only
+# `gate_fixture_debt.json`.
+#
+# WHY BOTH ROWS AND NOT ONE. They fail on different things and neither implies
+# the other. A gate added with NO fixture is invisible to the executor — there
+# is no pair to run, so the executing row reports nothing about it and passes;
+# only the census sees it. A pair that exists and answers the same thing to
+# both arms is invisible to the census — both files are present, which is all
+# it asks; only the executor sees it. The eleven PPA fixtures that went dark at
+# v1.15.79 were the second kind, and the census answered green through four
+# landings while every one of them had stopped being evidence.
+#
+# MEASURED ON THIS TREE, and it is why this row exists at all: grepping
+# `tools/` and `.github/` finds no invocation of `gate_mutation_fixture_check`
+# outside its own test file. It has shipped complete, with a baseline, a
+# shrink-only rule and its own tests, and nothing on the landing path has ever
+# run it.
+#
+# THE SUBJECT IS CHOSEN BY THE PROGRAM'S OWN THREE FLAGS, which it already
+# ships: `--script`, `--fixtures` and `--debt`. Same split as the row above —
+# the program and its import closure come from `$RUNTIME_ROOT`, the three
+# artefacts being JUDGED come from `$ROOT` — so no program change was needed
+# and a fixture arm judges its own tiny subject rather than this repository.
+#
+# MEASURED before wiring, at 2628def1df: rc 0, "154 gate(s) declared; 85 carry
+# a CAN-FAIL fixture; 85 carry BOTH", baseline still excusing 69. Its can-fail
+# fixture declares a second gate with no fixture module and no debt entry —
+# the NEW-GATE-WITHOUT-A-PAIR case, which is the one this row is for.
+run "gate fixtures exist"               "$ROOT" \
+    python3 "$RUNTIME_ROOT/tools/ci/gate_mutation_fixture_check.py" \
+    --script "$ROOT/tools/ci/repo_hygiene_gates.sh" \
+    --fixtures "$ROOT/tools/ci/gate_fixtures" \
+    --debt "$ROOT/tools/ci/gate_fixture_debt.json"
 # The other half of the same measurement. `retired_pytest_plugin_request_check`
 # above refuses a SOURCE file that asks for a plugin the runtime may not carry;
 # this one refuses a RESULT that does not say which runtime produced it. Both
