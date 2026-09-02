@@ -296,6 +296,7 @@ from dataclasses import dataclass, asdict
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
+import _flow_reason_taxonomy as _reason_taxonomy
 import _gate_denominator as _gd
 import _path_layout as _pl
 import _record_adjudication as _ra
@@ -975,6 +976,33 @@ def build_report(findings: List[Finding], stats: dict, project_dir: str) -> dict
     denom = denominator(stats, findings)
     not_run, defect = error_categories(findings)
     verdict = verdict_for(bool(defect), bool(not_run), denom.is_vacuous)
+    # TYPED (#1978). `_flow_reason_taxonomy.infer_nonverdict_reason` is
+    # deliberately fail-closed: an rc=2 that declares no class is booked
+    # EXECUTION_ERROR, "the gate blew up". On a grounded-only extraction this
+    # gate does not blow up -- it opens the SPEF the report names, parses its
+    # net records, and finds no inter-net coupling pair to re-derive a fold
+    # from. Only the PRODUCER can say which refusal that is, and this one did
+    # not say, so the flow inferred it from prose. It now declares it.
+    #
+    # KEYED ON THE WAIVABLE CHANNEL, NOT ON A SECOND LIST. `vacuity_code` is
+    # non-empty exactly when the gate "examined nothing, rejected nothing, AND
+    # held every input it audits" -- `vacuity_publication`'s own guarantee,
+    # already adjudicated per branch in `_vacuity`, and every member of
+    # `WAIVABLE_VACUITY_CODES` is annotated `read;` or `compared;` there. That
+    # is precisely the question "was this a zero the gate MEASURED", so reading
+    # the field cannot drift from the nine-branch decision the way a copied
+    # list would. Reading the FIELD and not the SET also honours the `not_run`
+    # demotion: a waivable NAME on a run that never obtained an input is moved
+    # to `unwaivable_code`, and that run declares nothing here.
+    #
+    # THE COMPLEMENT DECLARES NOTHING, DELIBERATELY. EMITTER_REPORT_UNREADABLE
+    # / SPEF_UNREADABLE / NO_CORNER_RECOUNTED mean an input was never obtained,
+    # which is the BLOCKED_BY_UPSTREAM question -- a different decision, not
+    # taken here. They keep the fail-closed inference.
+    #
+    # ZERO_DENOMINATOR IS NOT SKIP-ELIGIBLE, so this declaration cannot return
+    # the step to a pass-family tier and greens nothing; measured both ways.
+    _vacuity_code = str((denom.details or {}).get(VACUITY_CODE_KEY) or "")
     summary = {
         "corners_checked": stats.get("corners_checked", []),
         "windows_exact": stats.get("windows_exact"),
@@ -995,6 +1023,11 @@ def build_report(findings: List[Finding], stats: dict, project_dir: str) -> dict
         # visible at `summary.denominator.examined`.
         "vacuous": verdict in ("NOT_RUN", "VACUOUS_PASS"),
     }
+    if _vacuity_code:
+        # The classification, beside the machine-citable name of the state and
+        # the written reason. All three describe the same zero; none of them
+        # replaces another.
+        summary["reason_class"] = _reason_taxonomy.ZERO_DENOMINATOR
     _gd.attach(summary, denom)
     return {
         "program": "si_mcf_sta_check",

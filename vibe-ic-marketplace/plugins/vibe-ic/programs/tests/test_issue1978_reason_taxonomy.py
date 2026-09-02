@@ -211,6 +211,17 @@ _ZERO_DENOMINATOR_MESSAGES = {
         "0 two-node (coupling) *CAP entries and therefore 0 inter-net coupling "
         "pairs, so the MCF fold has nothing to re-derive. Read this as NOT "
         "CHECKED.",
+    # THE SAME FACT WITHOUT THE TRAILING CLAUSE. Only `nothing to re-derive`
+    # was reaching the sentence above; the counted zero itself -- the phrase
+    # the gate leads with -- was booked EXECUTION_ERROR on its own. A
+    # recogniser that needs the last clause of a sentence has not recognised
+    # the fact, it has recognised that sentence.
+    "si_mcf_sta_check, the counted zero alone":
+        "0 two-node (coupling) *CAP entries and therefore 0 inter-net "
+        "coupling pairs",
+    "si_mcf_sta_check, a SPEF with no *D_NET block":
+        "the SPEF the report names parses to 0 *D_NET records "
+        "(2 net(s) resolved by the shared parser)",
 }
 
 _EXECUTION_ERROR_MESSAGES = {
@@ -225,6 +236,13 @@ _EXECUTION_ERROR_MESSAGES = {
     "a program that crashed":
         "Traceback (most recent call last):\n  File \"g.py\", line 3, in <m>\n"
         "ZeroDivisionError: division by zero",
+    # ADVERSARIAL. A fault that truthfully reports a zero of something. The
+    # counted-zero recogniser names UNITS OF POPULATION -- entries, pairs,
+    # records -- and `rows` is not one, so a writer that aborted stays an
+    # execution error. This is the case that decides how wide that noun list
+    # may grow.
+    "a writer that aborted after producing nothing":
+        "the writer aborted after 0 rows; see the traceback above",
 }
 
 
@@ -269,3 +287,45 @@ def test_zero_of_zero_and_zero_of_n_are_not_the_same_question():
     assert T.infer_nonverdict_reason(
         message="the positional does not exist, so 0 of 2 declared search "
                 "root(s) could be resolved") == T.EXECUTION_ERROR
+
+
+def test_a_counted_zero_needs_a_unit_of_population_not_any_noun():
+    """The discriminator for the counted-zero shape, isolated.
+
+    `sdc_validator_check`'s bad positional says "0 of 2 declared search
+    root(s)" and "0 .sdc file(s) were read" in the SAME sentence as its fault.
+    Neither `root(s)` nor `file(s)` names a population this recogniser counts,
+    which is the only reason that sentence survives as an EXECUTION_ERROR. Any
+    future widening of the noun list has to answer this test first."""
+    assert T.infer_nonverdict_reason(
+        message="0 coupling pairs were parsed") == T.ZERO_DENOMINATOR
+    assert T.infer_nonverdict_reason(
+        message="0 *CAP entries") == T.ZERO_DENOMINATOR
+    assert T.infer_nonverdict_reason(
+        message="0 .sdc file(s) were read because the positional does not "
+                "exist") == T.EXECUTION_ERROR
+    assert T.infer_nonverdict_reason(
+        message="0 of 2 declared search root(s) could be resolved"
+    ) == T.EXECUTION_ERROR
+
+
+def test_a_declared_class_outranks_the_recogniser_in_both_directions():
+    """WHY THE PRODUCER DUTY MATTERS MORE THAN THE PATTERN. `_vacuity`'s
+    COUPLING_CAPS_INTRA_NET_ONLY branch states a NON-zero count -- "parses to 2
+    net record(s) and 3 two-node (coupling) *CAP entr(y/ies), but none of them
+    couples two DIFFERENT nets" -- so no counted-zero pattern reaches it, and
+    it is a zero denominator all the same. The prose recogniser gets it wrong
+    and the gate's own declaration gets it right, which is the whole argument
+    for declaring."""
+    prose = ("the SPEF named by the report parses to 2 net record(s) and 3 "
+             "two-node (coupling) *CAP entr(y/ies), but none of them couples "
+             "two DIFFERENT nets")
+    assert T.infer_nonverdict_reason(message=prose) == T.EXECUTION_ERROR
+    assert T.infer_nonverdict_reason(
+        message=prose, explicit=T.ZERO_DENOMINATOR) == T.ZERO_DENOMINATOR
+    # ...and the declaration cannot be used the other way either: an explicit
+    # class is honoured whatever the prose says, which is exactly why a
+    # producer may only declare the one that is true of it.
+    assert T.infer_nonverdict_reason(
+        message="0 *CAP entries", explicit=T.EXECUTION_ERROR
+    ) == T.EXECUTION_ERROR

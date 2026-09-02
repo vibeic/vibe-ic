@@ -658,3 +658,83 @@ def test_a_refused_invocation_is_not_credited_as_a_skip(tmp_path):
                         str(tmp_path / "does-not-exist")],
                        capture_output=True, text=True)
     assert r.returncode == G.RC_FAIL, r.returncode
+
+
+# ===========================================================================
+# The gate publishes its OWN reason class (#1978 producer duty)
+# ===========================================================================
+def _si_flow(proj):
+    """Wrapper snippet, published class, and STEP verdict, through the slot
+    the canonical flow wires this gate in."""
+    import flow_compliance_check as F
+    import _flow_reason_taxonomy as T
+    ok, out = F._check_program_exit_zero(proj, _SI_CMD)
+    report = F._command_json_report(proj, _SI_CMD)
+    return ok, out, T.report_reason_class(report), report, \
+        F.check_step(proj, _si_step(), {}).status
+
+
+def test_the_zero_is_declared_by_the_gate_not_inferred_from_its_prose(tmp_path):
+    """`_flow_reason_taxonomy`: "Producers should publish an explicit
+    `reason_class` whenever possible. The inference helper exists for legacy
+    programs." This gate was one. It opens the SPEF the report names, parses
+    two net records, finds no inter-net coupling pair -- and then left the flow
+    to recognise that from a sentence. The fail-closed guess for an undeclared
+    non-verdict is EXECUTION_ERROR, and nothing here errored.
+
+    Read through `report_reason_class`, the consumer's own function, so the
+    field name cannot drift out from under the publication."""
+    import _flow_reason_taxonomy as T
+    proj = _grounded_only_project(tmp_path)
+    ok, out, published, report, tier = _si_flow(proj)
+    assert ok, out[:200]
+    assert report["verdict"] == "VACUOUS_PASS", report["verdict"]
+    assert published == T.ZERO_DENOMINATOR, report["summary"]
+    assert "reason_class=ZERO_DENOMINATOR" in out, out[:300]
+
+
+def test_the_class_sits_beside_the_code_and_the_reason_not_instead(tmp_path):
+    """Three fields, one zero, none of them redundant. `vacuity_code` is the
+    machine-citable NAME of the state an acceptance may quote;
+    `not_applicable_reason` is the written reason for THIS run; `reason_class`
+    is the CLASSIFICATION the flow tiers on. Publishing the third must not
+    consume either of the first two."""
+    proj = _grounded_only_project(tmp_path)
+    _, doc = _run(proj)
+    denom = doc["summary"]["denominator"]
+    assert denom["details"]["vacuity_code"] == "SPEF_NO_COUPLING_PAIRS", denom
+    assert "NOT CHECKED" in denom["not_applicable_reason"], denom
+    assert doc["summary"]["reason_class"] == "ZERO_DENOMINATOR", doc["summary"]
+
+
+def test_the_declaration_is_keyed_to_the_channel_that_means_it_looked(tmp_path):
+    """WHY THE FIELD AND NOT A SECOND LIST. `vacuity_code` is non-empty exactly
+    when the gate examined nothing, rejected nothing, AND held every input it
+    audits -- `vacuity_publication`'s guarantee. A run that never obtained an
+    input publishes its name in `unwaivable_code` instead, and declares no
+    class: whether THAT is a zero denominator or an upstream cascade is a
+    different decision, and this gate does not pretend to have taken it."""
+    proj = _grounded_only_project(tmp_path)
+    for f in proj.glob("design.mcf_*.spef"):      # the inputs never arrive
+        f.unlink()
+    _, doc = _run(proj)
+    denom = doc["summary"]["denominator"]
+    assert not denom["details"]["vacuity_code"], denom
+    assert denom["details"]["unwaivable_code"], denom
+    assert "reason_class" not in doc["summary"], doc["summary"]
+
+
+def test_declaring_the_class_changes_no_step_verdict(tmp_path):
+    """THE CONTROL THAT MATTERS. ZERO_DENOMINATOR is not skip-eligible, so this
+    cannot buy a green: the grounded-only run stays INCOMPLETE and a genuinely
+    coupled+folded run stays PASS. If either moves, the declared class has
+    stopped being the honest one."""
+    assert _si_flow(_grounded_only_project(tmp_path / "vac"))[4] == "INCOMPLETE"
+
+    s, h = _bounded_from_emitter(_SPEF_COUPLED)
+    real = _project(tmp_path / "real", spef_text=_SPEF_COUPLED,
+                    setup_bounded=s, hold_bounded=h)
+    ok, out, published, report, tier = _si_flow(real)
+    assert ok and tier == "PASS", (tier, out[:200])
+    # ...and a gate that DECIDED declares no non-verdict class at all.
+    assert published is None and "reason_class" not in report["summary"], report

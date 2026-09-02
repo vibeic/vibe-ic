@@ -353,3 +353,82 @@ def test_the_tier_is_not_bought_by_a_relabel(tmp_path):
         "the two dispositions must remain DISTINGUISHABLE at the step tier; "
         "if this stops being true the assertion above has stopped measuring "
         f"anything: {tier_r}")
+
+
+# ── the gate publishes its OWN reason class (#1978 producer duty) ──────────
+def _em_report(tmp_path, project):
+    """Run through the FLOW's own command form -- the one that names `--json`,
+    because a class published into a report nobody reads is not published."""
+    import flow_compliance_check as fcc
+    cmd = ("em_peak_current_authority_check . "
+           "--json reports/phase3/em_current_authority.json")
+    ok, out = fcc._check_program_exit_zero(project, cmd)
+    report = fcc._command_json_report(project, cmd)
+    step = {"id": "probe", "name": "one clause",
+            "gate": {"all_of": [{"program_exit_zero": cmd}]}}
+    return ok, out, report, fcc.check_step(project, step, {}).status
+
+
+def test_a_zero_denominator_is_declared_by_the_gate_not_inferred(tmp_path):
+    """`_flow_reason_taxonomy`'s docstring: "Producers should publish an
+    explicit ``reason_class`` whenever possible. The inference helper exists
+    for legacy programs." This gate was a legacy program. It read 0
+    peak-current figures and 0 supply authorities and left the flow to guess,
+    and the fail-closed guess is EXECUTION_ERROR -- "the gate blew up", which
+    it did not.
+
+    Asserted through `report_reason_class`, the function the consumer uses, so
+    the field name cannot drift out from under the publication."""
+    import _flow_reason_taxonomy as T
+
+    empty = tmp_path / "empty"
+    (empty / "reports" / "phase3").mkdir(parents=True)
+    ok, out, report, tier = _em_report(tmp_path, empty)
+    assert ok, out
+    assert report is not None and report["verdict"] == "INCOMPLETE", report
+    assert T.report_reason_class(report) == T.ZERO_DENOMINATOR, report
+    # the flow consumed what was published, not what it guessed
+    assert "reason_class=ZERO_DENOMINATOR" in out, out
+
+
+def test_the_instance_reason_survives_the_class(tmp_path):
+    """A class is not a reason. `em_report_absent` says what happened on THIS
+    run; ZERO_DENOMINATOR says which kind of non-verdict it is. Publishing the
+    second must not consume the first -- a reader needs the class to know the
+    program did not crash and the reason to know where to go next."""
+    empty = tmp_path / "empty"
+    (empty / "reports" / "phase3").mkdir(parents=True)
+    _, _, report, _ = _em_report(tmp_path, empty)
+    assert report["missing_authority_reason"] == "em_report_absent", report
+    assert report["jmax_screen"]["skip_reason"] == "em_report_absent", report
+    assert report["reason_class"] == "ZERO_DENOMINATOR", report
+
+
+def test_publishing_the_class_changes_no_step_verdict(tmp_path):
+    """THE CONTROL THAT MATTERS. ZERO_DENOMINATOR is not skip-eligible, so this
+    publication cannot buy a green anywhere: the empty tree stays INCOMPLETE
+    and a real comparison stays PASS. If either of these ever moves, the class
+    being published has stopped being the honest one."""
+    empty = tmp_path / "empty"
+    (empty / "reports" / "phase3").mkdir(parents=True)
+    assert _em_report(tmp_path, empty)[3] == "INCOMPLETE"
+
+    real = _project(tmp_path / "real", peak="1.0e-06",
+                    with_csv=True, with_jmax=True)
+    ok, out, report, tier = _em_report(tmp_path, real)
+    assert ok and tier == "PASS", (tier, out)
+    # ...and a gate that DECIDED publishes no non-verdict class at all.
+    assert "reason_class" not in report, report
+
+
+def test_a_partial_read_is_not_declared_a_zero_denominator(tmp_path):
+    """SCOPE. The INCOMPLETE tier is also reachable with peak currents in hand
+    and no Jmax authority. That is a different state -- something WAS read --
+    and this gate does not claim to know its class, so it publishes none and
+    lets the fail-closed inference stand. Guards the publication from being
+    widened into "every INCOMPLETE is a zero denominator"."""
+    partial = _project(tmp_path / "partial", peak="1.0e-06")
+    _, _, report, _ = _em_report(tmp_path, partial)
+    assert report["verdict"] == "INCOMPLETE", report
+    assert report["peak_currents_read"], report
+    assert "reason_class" not in report, report

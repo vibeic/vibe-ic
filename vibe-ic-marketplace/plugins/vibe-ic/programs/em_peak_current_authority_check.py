@@ -160,8 +160,10 @@ from typing import Any, Dict, List, Optional, Tuple
 _HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(_HERE))
 
+import _flow_reason_taxonomy as _reason_taxonomy  # noqa: E402
+
 TOOL = "em_peak_current_authority_check"
-VERSION = "1.0.0"
+VERSION = "1.0.1"
 
 RC_OK, RC_FINDINGS, RC_ARG = 0, 1, 2
 #: INCOMPLETE — the disclosed-skip tier (`_vacuous_exit.RC_VACUOUS`).
@@ -386,6 +388,31 @@ def evaluate(project: Path, jmax: Optional[Path], tech_lef: Optional[Path],
             "; and the net supply current (Total power / Supply voltage) the "
             "EM report would have to declare for the physical-impossibility "
             "screen")
+    # TYPED (#1978). `_flow_reason_taxonomy.infer_nonverdict_reason` is
+    # deliberately fail-closed: an rc=2 carrying no DECLARED class is booked
+    # EXECUTION_ERROR — "the gate blew up". This gate does not blow up here; it
+    # opens what it can find, counts what it read, and refuses because the
+    # count is zero. Only the PRODUCER can say which refusal this is, so it
+    # says so in the field `report_reason_class` reads, and never in prose.
+    # Its own docstring already asked producers to do this and this one did
+    # not, which is the whole of the change.
+    #
+    # ZERO_DENOMINATOR IS NOT SKIP-ELIGIBLE. Publishing it cannot return this
+    # gate to the VACUOUS-PASS tier and cannot green any assertion — the step
+    # renders INCOMPLETE either way (measured, both directions). What changes
+    # is that the row a reviewer reads stops saying the program crashed.
+    #
+    # SCOPE, DELIBERATELY NARROW: only when the denominator is MEASURABLY zero
+    # — nothing was read at all. The INCOMPLETE tier is also reachable with
+    # peaks in hand and no Jmax authority, and that is a different state with a
+    # different honest class; it is left to the fail-closed inference rather
+    # than guessed at here.
+    #
+    # `missing_authority_reason` (`em_report_absent`) STAYS. It is the reason
+    # for THIS instance; `reason_class` is the classification. Neither replaces
+    # the other, and a reader needs both to know where to go next.
+    if not peaks and not authority:
+        rep["reason_class"] = _reason_taxonomy.ZERO_DENOMINATOR
     return "INCOMPLETE", rep
 
 
