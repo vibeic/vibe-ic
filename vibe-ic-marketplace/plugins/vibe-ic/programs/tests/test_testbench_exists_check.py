@@ -258,3 +258,73 @@ class TestRtlDirMissing:
         findings, infos = tbc.audit_testbenches(tmp_path / "nonexistent", min_tests=10)
         assert len(findings) >= 1
         assert findings[0].category == "NO_TESTBENCH"
+
+
+# ===========================================================================
+# Test 9: the generator's OWN unit TBs are discovered by DIRECTORY
+#
+# MEASURED on spm x gf180mcuD, plugin 1.15.67, 2026-09-02. The run emitted
+# 5/5 L10 unit testbenches into `phase2/stage1/sim/tb/`, named for the test
+# case rather than `tb_*` — `reset.v`, `corner_operand.v`,
+# `random_multiplication_functional_equivalence.v`, `case_3.v`,
+# `toggle_branch_coverage.v` — and this gate reported INSUFFICIENT_TESTS
+# (7 found, 10 required) over a tree that carried 12. The producer
+# (`design_one_shot_runner.step_l10_unit_tb_gen`) and this discoverer
+# disagreed about what a testbench is CALLED, and only the discoverer was
+# consulted. No amount of design-side test authoring clears that.
+#
+# BIDIRECTIONAL, on purpose (flow-change-acceptance): the first test fails
+# against the pre-fix name-pattern-only discovery, and the second one holds
+# in BOTH directions so the fix cannot be "find everything".
+# ===========================================================================
+class TestTbDirectoryDiscovery:
+    def test_files_in_a_tb_directory_are_found_whatever_they_are_named(self, tmp_path):
+        """A source file inside `tb/` is a testbench even with no tb_ prefix.
+
+        NEGATIVE CONTROL for the fix: with name-pattern discovery alone this
+        directory yields zero files and the gate reports NO_TESTBENCH.
+        """
+        stage = tmp_path / "phase2" / "stage1"
+        (stage / "rtl").mkdir(parents=True)
+        (stage / "rtl" / "dut.v").write_text("module dut(); endmodule\n")
+        tb = stage / "sim" / "tb"
+        tb.mkdir(parents=True)
+        for name in ("reset.v", "corner_operand.v",
+                     "random_multiplication_functional_equivalence.v"):
+            (tb / name).write_text(make_tb_with_n_tests(4))
+
+        found = {p.name for p in tbc.find_testbenches(stage)}
+        assert found == {"reset.v", "corner_operand.v",
+                         "random_multiplication_functional_equivalence.v"}, found
+
+        findings, infos = tbc.audit_testbenches(stage, min_tests=10)
+        assert [f for f in infos], "no testbench info produced"
+        assert not [f for f in findings
+                    if f.category in ("NO_TESTBENCH", "INSUFFICIENT_TESTS")], \
+            [f.message for f in findings]
+
+    def test_directory_discovery_does_not_swallow_non_testbench_trees(self, tmp_path):
+        """`rtl/` beside it stays RTL, and non-source files in `tb/` are not tests.
+
+        THE OVER-REACH CONTROL. The assertions below are all NEGATIVE — they
+        name what must never be returned — so they hold against the pre-fix
+        discovery too and can only be broken by a fix that widens too far.
+        The single positive assertion is kept out of this test on purpose;
+        the test above owns the direction the fix adds.
+        """
+        stage = tmp_path / "phase2" / "stage1"
+        rtl = stage / "rtl"
+        rtl.mkdir(parents=True)
+        (rtl / "dut.v").write_text("module dut(); endmodule\n")
+        (rtl / "adder.sv").write_text("module adder(); endmodule\n")
+        tb = stage / "sim" / "tb"
+        tb.mkdir(parents=True)
+        (tb / "reset.v").write_text(make_tb_with_n_tests(12))
+        (tb / "results.xml").write_text("<testsuite/>\n")
+        (tb / "waves.vcd").write_text("$date\n")
+
+        found = {p.name for p in tbc.find_testbenches(stage)}
+        assert "results.xml" not in found, found
+        assert "waves.vcd" not in found, found
+        assert "dut.v" not in found, found
+        assert "adder.sv" not in found, found

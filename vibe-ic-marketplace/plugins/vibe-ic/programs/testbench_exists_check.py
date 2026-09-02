@@ -129,11 +129,49 @@ TB_PATTERNS = ['*_tb.v', 'tb_*.v', '*_tb.sv', 'tb_*.sv',
                '*_testbench.v', '*_testbench.sv', 'tb_*.py']
 
 
+#: Directory names whose contents ARE testbenches whatever the files are
+#: called. NAME-PATTERN DISCOVERY ALONE UNDERCOUNTS, and it undercounts the
+#: flow's OWN output: `design_one_shot_runner.step_l10_unit_tb_gen` writes one
+#: file per L10 test case into `phase2/stage1/sim/tb/`, named for the case
+#: (`reset.v`, `corner_operand.v`, `random_multiplication_functional_
+#: equivalence.v`), and not one of those names matches `tb_*`/`*_tb`. MEASURED
+#: on spm x gf180mcuD at plugin 1.15.67 (2026-09-02): the run emitted 5/5 unit
+#: TBs and this gate reported `INSUFFICIENT_TESTS: Found 7 test case(s) across
+#: 3 testbench file(s), minimum required is 10` — a refusal for missing tests
+#: against a tree that HAD them, because the producer and the discoverer
+#: disagreed about what a testbench is called. A design cannot answer that by
+#: writing more tests; only renaming to suit the reader would clear it.
+#:
+#: The directory is the evidence, not the filename. Nothing here is design-,
+#: PDK- or vendor-specific: it is the same `tb/` convention the generator
+#: already writes to and the simulator steps already read from.
+TB_DIR_NAMES = ('tb', 'testbench', 'testbenches')
+
+#: Source suffixes eligible for directory-based discovery. Deliberately NOT
+#: every file: a `tb/` directory also holds logs, waveforms and JSON, and
+#: counting those as testbenches would trade an undercount for an overcount.
+TB_DIR_SUFFIXES = ('.v', '.sv', '.py')
+
+
 def find_testbenches(rtl_dir: Path) -> List[Path]:
-    """Find all testbench files in the RTL directory (recursive)."""
+    """Find all testbench files in the RTL directory (recursive).
+
+    TWO discovery rules, unioned: the historical NAME patterns above, and any
+    source file sitting directly inside a directory named `tb`/`testbench`/
+    `testbenches`. See `TB_DIR_NAMES` for the measurement that added the
+    second one. The name rule is unchanged, so no tree that was already
+    discovered loses a file.
+    """
     tb_files = []
     for pattern in TB_PATTERNS:
         tb_files.extend(rtl_dir.rglob(pattern))
+    for name in TB_DIR_NAMES:
+        for tb_dir in rtl_dir.rglob(name):
+            if not tb_dir.is_dir():
+                continue
+            for child in tb_dir.iterdir():
+                if child.is_file() and child.suffix in TB_DIR_SUFFIXES:
+                    tb_files.append(child)
     # Deduplicate
     return sorted(set(tb_files))
 
