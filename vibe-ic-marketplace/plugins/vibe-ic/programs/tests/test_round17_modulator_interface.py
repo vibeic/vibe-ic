@@ -155,7 +155,12 @@ def test_the_binder_still_refuses_a_rename_it_cannot_prove():
 def _expand(entry, order=2):
     # ROUND 18: the entry also carries a counter group whose count comes from
     # the declared OSR, so the expansion needs that row bound too.
-    return a2.expand_stages(entry, {"order": float(order), "osr": 256.0})
+    # vref and vdd are `requires_bound` for this entry: the incremental
+    # coefficient set is DERIVED against the reference and the swing the
+    # core supply leaves, so a declaration that binds neither has no
+    # coefficients. This fixture stands in for a real declaration.
+    return a2.expand_stages(entry, {"order": float(order), "osr": 256.0,
+                                    "vref": 1.0, "vdd": 1.2})
 
 
 def test_the_dac_branch_alternates_with_the_stages_parity():

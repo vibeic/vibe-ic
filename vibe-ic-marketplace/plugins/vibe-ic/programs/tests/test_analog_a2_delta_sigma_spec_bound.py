@@ -456,15 +456,36 @@ def test_the_invariant_check_is_not_vacuous():
         e[m.REQUIRES_BOUND_KEY] = {}
     assert m.library_invariants(no_req), "an unbound count field went unseen"
 
+    # An entry supplies coefficients EITHER as a table or as a derivation.
+    # Both mechanisms are broken here, and so is having neither.
     no_set = copy.deepcopy(broken)
     for e in no_set.values():
         e[m.COEFFICIENT_SETS_KEY] = {}
-    assert m.library_invariants(no_set), "a missing coefficient set went unseen"
+        e.pop(m.COEFFICIENT_DERIVATION_KEY, None)
+    assert m.library_invariants(no_set), (
+        "an entry with neither a coefficient table nor a derivation went "
+        "unseen")
+
+    bad_deriv = copy.deepcopy(broken)
+    for e in bad_deriv.values():
+        e[m.COEFFICIENT_DERIVATION_KEY] = "no_such_derivation"
+    assert m.library_invariants(bad_deriv), (
+        "a coefficient derivation naming nothing this program carries went "
+        "unseen")
+
+    stale_load = copy.deepcopy(broken)
+    for e in stale_load.values():
+        if e.get(m.COEFFICIENT_DERIVATION_KEY):
+            e.setdefault("constants", {})["load_over_sampling_cap"] = 2.6
+    assert m.library_invariants(stale_load), (
+        "an entry that DERIVES its coefficients and still states the OTA "
+        "load ratio as a constant went unseen — the ratio is "
+        "(1 + miller) / coefficient and follows osr with it")
 
     wrong_len = copy.deepcopy(broken)
     for e in wrong_len.values():
-        e[m.COEFFICIENT_SETS_KEY] = {k: [0.5]
-                                     for k in e[m.COEFFICIENT_SETS_KEY]}
+        e.pop(m.COEFFICIENT_DERIVATION_KEY, None)
+        e[m.COEFFICIENT_SETS_KEY] = {"1": [0.5], "2": [0.5]}
     assert m.library_invariants(wrong_len), (
         "a coefficient set with the wrong number of stages went unseen")
 

@@ -238,6 +238,72 @@ STAGE_KEY = "stage"
 #: key is a string in both places rather than an int here and a str there.
 COEFFICIENT_SETS_KEY = "coefficient_sets"
 
+#: An entry may DERIVE its coefficients instead of tabulating them.
+COEFFICIENT_DERIVATION_KEY = "coefficient_derivation"
+
+#: {role: net name} — the nets that say whether this block's loop was LIVE
+#: over a measured window. An arm runner cannot ask that question without
+#: them, and a null measured over a dead loop certifies nothing: rounds 18-20
+#: closed two mechanisms on such nulls (`the auto-zero node does not walk`,
+#: `range is refuted`) and both had to be reopened when the same probes on a
+#: live loop returned twelve times the drift and a de-saturating loop filter.
+#: Consumed by `analog_loop_liveness_check`; the roles are that program's.
+LIVENESS_NODES_KEY = "liveness_nodes"
+
+
+def _incremental_cifb_coefficients(order, spec_values, consts):
+    """Equal per-stage coefficients for an INCREMENTAL cascade of integrators.
+
+    WHY A DERIVATION AND NOT A TABLE. An incremental converter is reset at the
+    start of every conversion window and accumulates from ZERO for `osr`
+    clocks; a free-running modulator's state is bounded by its own feedback in
+    steady state. Those are different design problems, and the free-running
+    second-order set a1 = a2 = 1/2 (Boser & Wooley, JSSC 23(6), 1988) answers
+    the other one. MEASURED (order 2, osr 256, vref 1.0, vdd 1.2): with that
+    set one DAC decision moves the loop filter by half the reference and the
+    first integrator SATURATES IN TWO CLOCKS of a 256-clock window, so the
+    loop never leaves a rail and the bitstream carries no code at any input.
+
+    THE BOUND. In an Lth-order cascade run for N cycles from reset the ideal
+    ramp response of the last integrator grows as N**L / L!, so keeping it
+    inside the usable output swing requires
+
+        prod(a_i) * vref * N**L / L!  <=  usable_swing
+
+    and, for equal per-stage coefficients,
+
+        a = ( usable_swing * L! / (vref * N**L) ) ** (1 / L)
+
+    (Markus, Silva & Temes, "Theory and Applications of Incremental Delta-
+    Sigma Converters", IEEE TCAS-I 51(4), 2004 -- the regime this converter is
+    actually in.) At order 1 it reduces to a = usable_swing / (N * vref), the
+    textbook first-order result, which is an independent check on the form.
+
+    `osr` and `order` are BOUND spec rows, so the emitted set is a function of
+    the declaration: change the declared OSR and the coefficients change. The
+    tabulated set could not, and that is the defect.
+    """
+    import math
+    n = float(spec_values.get("osr") or 0.0)
+    vref = float(spec_values.get("vref") or 0.0)
+    vdd = float(spec_values.get("vdd") or 0.0)
+    if order < 1 or n <= 0 or vref <= 0 or vdd <= 0:
+        raise LibraryEntryError(
+            f"an incremental coefficient set is DERIVED from the declaration "
+            f"and needs order>=1, osr>0, vref>0, vdd>0; got order={order}, "
+            f"osr={n}, vref={vref}, vdd={vdd}. A coefficient this program "
+            f"cannot derive is ABSENT, never defaulted -- defaulting is how "
+            f"one design's coefficients end up under another design's name.")
+    swing = vdd * float(consts["integrator_swing_fraction_of_vdd"])
+    a = (swing * math.factorial(order) / (vref * n ** order)) ** (1.0 / order)
+    return [a] * order
+
+
+#: {name: callable(order, spec_values, consts) -> [per-stage coefficient]}
+COEFFICIENT_DERIVATIONS = {
+    "incremental_cifb": _incremental_cifb_coefficients,
+}
+
 #: Unit tokens that all mean "a pure number". A spec row's `unit` is
 #: human-typed prose lifted from a datasheet table, so the em-dash, the
 #: hyphen and the empty string all appear for the same thing. `bit` is here
@@ -276,16 +342,53 @@ SAMPLING_CAP_L_EXPR = (
 
 #: The OTA's load, in farads: the integrating and compensation capacitors,
 #: expressed against the sampling capacitor the noise budget already fixed.
-_LOAD_F_EXPR = ("(" + SAMPLING_CAP_FF_EXPR + ") * load_over_sampling_cap "
-                "/ farad_to_ff")
+#: The OTA load ratio for an entry whose coefficients are DERIVED. The shared
+#: bias branch states the load as one ratio against the sampling capacitor;
+#: once the coefficient follows `osr` that ratio does too, and stating it as a
+#: constant is the same defect as tabulating the coefficient.
+#: `factorial(order)` is written `order` because `requires_domain` admits only
+#: orders 1 and 2, where they are equal -- an entry admitting order >= 3 must
+#: state the factorial explicitly.
+_LOAD_OVER_CS_DERIVED_EXPR = (
+    "(1 + miller_fraction_of_load) / "
+    "((vdd * integrator_swing_fraction_of_vdd * order "
+    "/ (vref * osr ** order)) ** (1.0 / order))")
+#: The OTA's load, in farads.
+_LOAD_F_EXPR = ("(" + SAMPLING_CAP_FF_EXPR + ") * ("
+                + _LOAD_OVER_CS_DERIVED_EXPR + ") / farad_to_ff")
 #: The tail current the DRAWN bias resistor delivers, in amperes. The drawn
 #: resistor is a length of sheet; the current follows from the supply left
 #: over the mirror diode's gate voltage. Every term is either a MEASURED
 #: process constant or a stated bias condition — no number is retyped from a
 #: datasheet.
+#: The DRAWN LENGTH of the bias-setting resistor, in microns — derived from
+#: the slew the declaration asks for, not held at a library nominal.
+#:
+#: MEASURED (round 20): held at a nominal 181 um it delivered a tail current
+#: 6x short of what the integrating capacitor needs, and `slew_margin` read
+#: 0.167 against a floor of 1.0. A bias that is CHECKED against the slew but
+#: never DERIVED from it is a number waiting to be wrong the moment any of
+#: order, osr, enob, vref or fclk moves — and all five are bound spec rows.
+#:
+#:   I_slew = C_load * vref * slew_design_margin / t_settle       [A]
+#:   I_bias = I_slew / mirror_ratio_tail_to_bias                  [A]
+#:   R_bias = (vdd - vth - overdrive) / I_bias                    [Ohm]
+#:   L      = R_bias * w_res / rsheet_ohm_per_sq                  [um]  sheet
+#:
+#: Two BOUND spec rows (vref, fclk) reach it directly, three more through the
+#: load; the rest are MEASURED process constants and the two stated design
+#: conditions already declared above. Same shape as the LDO entry's divider,
+#: which derives its drawn length from a bound output voltage and a bound
+#: quiescent budget.
+_R_IB_L_UM_EXPR = (
+    "((vdd - vth_n_extracted_v - bias_overdrive_v) "
+    "* mirror_ratio_tail_to_bias * settle_periods_available "
+    "/ (fclk * hz_per_mhz) "
+    "/ ((" + _LOAD_F_EXPR + ") * vref * slew_design_margin)) "
+    "* w_res / rsheet_ohm_per_sq")
 _TAIL_I_EXPR = ("mirror_ratio_tail_to_bias * (vdd - vth_n_extracted_v "
-                "- bias_overdrive_v) / (rsheet_ohm_per_sq * r_ib_l_um "
-                "/ w_res)")
+                "- bias_overdrive_v) / (rsheet_ohm_per_sq * ("
+                + _R_IB_L_UM_EXPR + ") / w_res)")
 #: How many times over the drawn bias covers the slew the declaration asks
 #: for. Below 1 the entry refuses itself by name.
 SLEW_MARGIN_EXPR = (
@@ -757,8 +860,12 @@ LIBRARY: Dict[str, Dict[str, Any]] = {
             "switched-capacitor delta-sigma modulator in the "
             "cascade-of-integrators feedback form with a single-bit "
             "quantiser and single-bit capacitive feedback DAC; "
-            "second-order coefficient set a1 = a2 = 1/2 (Boser & Wooley, "
-            "JSSC 23(6), 1988); sampled kT/C noise budgeted against the "
+            "per-stage coefficients DERIVED for INCREMENTAL operation from "
+            "the declared order and OSR (Markus, Silva & Temes, IEEE "
+            "TCAS-I 51(4), 2004) rather than taken from the free-running "
+            "second-order set a1 = a2 = 1/2 (Boser & Wooley, JSSC 23(6), "
+            "1988), which answers a different regime; "
+            "sampled kT/C noise budgeted against the "
             "quantisation floor (Schreier & Temes, Understanding "
             "Delta-Sigma Data Converters, ch.2-3); the quantiser is the "
             "StrongARM / sense-amplifier latch (Kobayashi et al., JSSC "
@@ -821,7 +928,11 @@ LIBRARY: Dict[str, Dict[str, Any]] = {
             # the bias branch is SHARED by every stage and cannot see a
             # per-stage coefficient; `library_invariants` refuses an entry
             # whose coefficient sets make this number too small.
-            "load_over_sampling_cap": 2.6,
+            # How much of the supply an integrator output may actually use.
+            # Both rails cost an output device's saturation headroom. Stated
+            # once, by name, because the incremental coefficient derivation
+            # divides by it.
+            "integrator_swing_fraction_of_vdd": 0.833,
             # How much of a clock period the output has to slew a full
             # reference step in. A quarter: the transfer happens on one
             # phase, and half of that phase is a working margin.
@@ -848,7 +959,11 @@ LIBRARY: Dict[str, Dict[str, Any]] = {
             # can read the resistor the library actually draws instead of a
             # number retyped beside it. `library_invariants` holds the two
             # to each other.
-            "r_ib_l_um": 181.0,
+            # How many times over the drawn bias must cover the slew the
+            # declaration asks for. A STATED design margin — the bias is
+            # sized to deliver twice the current the worst transfer needs —
+            # not a number lifted from any datasheet.
+            "slew_design_margin": 2.0,
         },
         "constant_roles": {"w_cap": "cap", "w_res": "res"},
         # SHARED by every stage: the bias branch, the on-chip common-mode
@@ -1109,12 +1224,29 @@ LIBRARY: Dict[str, Dict[str, Any]] = {
                            "stores reaches the latch divided down. Measured "
                            "at one sampling capacitor: a transfer of 0.13, "
                            "and a decision that never changed")},
+            {"device": "r_ib", "param": "l",
+             "expr": _R_IB_L_UM_EXPR,
+             "rationale": ("the bias-setting resistor DELIVERS the slew, so "
+                           "its drawn length follows the load the "
+                           "coefficient implies and the clock the "
+                           "declaration binds. Measured held at a library "
+                           "nominal: a tail current 6x short of the "
+                           "integrating capacitor's need, and slew_margin "
+                           "0.167 against a floor of 1.0 — the entry "
+                           "correctly refusing a design nothing had sized")},
         ],
         "requires_bound": {
             "order": {"unit": "", "why":
                       "the loop order fixes BOTH the number of integrator "
                       "stages and which coefficient set applies; with no "
                       "order there is no device count"},
+            "vdd": {"unit": "V", "why":
+                    "the incremental coefficient set is derived against the "
+                    "swing an integrator output actually has, and that swing "
+                    "is a fraction of the CORE SUPPLY. With no supply bound "
+                    "there is no swing, and a coefficient derived against an "
+                    "assumed one is one design's number under another "
+                    "design's name"},
             "osr": {"unit": "", "why":
                     "the oversampling ratio sets how far the sampled noise "
                     "falls below the quantisation floor, and therefore the "
@@ -1174,6 +1306,19 @@ LIBRARY: Dict[str, Dict[str, Any]] = {
                      "(fclk 1 MHz, ENOB 14, OSR 256, vref 1 V, "
                      "ihp-sg13g2): about 23, so the nominal bias is carried "
                      "and this bound is what says it was checked")},
+            {"name": "bias_resistor_l_um", "expr": _R_IB_L_UM_EXPR,
+             "min": 1.0, "max": 2000.0,
+             "why": ("the bias resistor is now DERIVED from the slew the "
+                     "declaration asks for, so `slew_margin` below is met by "
+                     "construction and this is the check that actually "
+                     "binds: a declaration whose slew needs a resistor "
+                     "shorter than the PDK can draw or longer than the die "
+                     "can hold is a statement that the converter cannot be "
+                     "biased this way, and saying so IS the answer. "
+                     "`slew_margin` is retained as a CONSISTENCY check: it "
+                     "can still fail if the load expression and this "
+                     "derivation are edited apart, which is a real "
+                     "regression and the reason it is not deleted")},
             {"name": "sampling_cap_ff", "expr": SAMPLING_CAP_FF_EXPR,
              "min": 1.0, "max": 100000.0,
              "why": ("the noise budget derived from this declaration has to "
@@ -1183,10 +1328,17 @@ LIBRARY: Dict[str, Dict[str, Any]] = {
                      "cannot be built this way, and saying so IS the "
                      "answer — rendering it anyway is not")},
         ],
-        "coefficient_sets": {
-            "1": [0.5],
-            "2": [0.5, 0.5],
-        },
+        # The nets an arm runner reads to decide whether a measured window
+        # is evidence at all. `reset` released, `feedback` taking BOTH
+        # reference states, `decision` leaving precharge — measured, not
+        # assumed. A window failing any of them is NOT_MEASURED.
+        "liveness_nodes": {"reset": "nall", "feedback": "ndac",
+                           "decision": "nq_n"},
+        # DERIVED from the declaration, not tabulated: this converter resets
+        # every window and accumulates from zero for `osr` clocks, and the
+        # tabulated free-running set saturated its first integrator in TWO
+        # clocks of a 256-clock window (measured, round 20).
+        "coefficient_derivation": "incremental_cifb",
         "stage": [{
             "count_from": "order",
             "first_in": "vin",
@@ -2303,6 +2455,15 @@ def library_invariants(library: Optional[Dict[str, Any]] = None
         # It has to cover the WORST stage of every admitted order, or the
         # slew bound is evaluated against a load smaller than the one the
         # amplifier actually drives.
+        if entry.get(COEFFICIENT_DERIVATION_KEY) and \
+                "load_over_sampling_cap" in consts:
+            problems.append(
+                f"{btype}: coefficients are DERIVED but "
+                f"`load_over_sampling_cap` is stated as a constant. The OTA "
+                f"load is (1 + miller) / coefficient, so once the "
+                f"coefficient follows `osr` the ratio does too. MEASURED: at "
+                f"order 2 / osr 256 the derived coefficient is 0.0055 and "
+                f"the ratio is 236, against a stated 2.6.")
         if "load_over_sampling_cap" in consts:
             sets = entry.get(COEFFICIENT_SETS_KEY) or {}
             coeffs = [float(c) for v in sets.values() for c in v]
@@ -2351,7 +2512,43 @@ def _group_invariants(btype: str, entry: Dict[str, Any],
                 f"{btype}: stage count_from={count_from!r} is not in "
                 f"{REQUIRES_BOUND_KEY}, so a block that does not bind it "
                 f"reaches expansion instead of being refused")
-        if st.get(COEFFICIENTS_KEY, True):
+        live = entry.get(LIVENESS_NODES_KEY) or {}
+        if live:
+            drawn = set()
+            for d in (entry.get("devices") or []):
+                drawn.update(str(x) for x in (d.get("nets") or []))
+            for group in _stage_groups(entry):
+                for d in (group.get("devices") or []):
+                    drawn.update(str(x).replace("{i}", "1").replace(
+                        "{alt}", "") for x in (d.get("nets") or []))
+            for role, net in sorted(live.items()):
+                if role not in ("reset", "feedback", "decision"):
+                    problems.append(
+                        f"{btype}: {LIVENESS_NODES_KEY} role {role!r} is not "
+                        f"one an arm runner knows (reset/feedback/decision)")
+                elif net not in drawn:
+                    problems.append(
+                        f"{btype}: {LIVENESS_NODES_KEY}[{role}] names net "
+                        f"{net!r}, which this entry never draws — a liveness "
+                        f"probe pointed at a net that does not exist reports "
+                        f"ABSENT and every window reads as dead")
+        deriv_name = entry.get(COEFFICIENT_DERIVATION_KEY)
+        if st.get(COEFFICIENTS_KEY, True) and not deriv_name \
+                and not entry.get(COEFFICIENT_SETS_KEY):
+            problems.append(
+                f"{btype}: the stage draws coefficients but the entry has "
+                f"NEITHER a `{COEFFICIENT_SETS_KEY}` table NOR a "
+                f"`{COEFFICIENT_DERIVATION_KEY}`, so expansion would reach a "
+                f"set that does not exist")
+        if deriv_name and deriv_name not in COEFFICIENT_DERIVATIONS:
+            problems.append(
+                f"{btype}: {COEFFICIENT_DERIVATION_KEY}={deriv_name!r} names "
+                f"no derivation this program carries "
+                f"({sorted(COEFFICIENT_DERIVATIONS)})")
+        if st.get(COEFFICIENTS_KEY, True) and not deriv_name:
+            # An entry that DERIVES has a set for every admitted order by
+            # construction; the per-order table check applies to an entry
+            # that tabulates.
             sets = entry.get(COEFFICIENT_SETS_KEY) or {}
             admitted = (entry.get(REQUIRES_DOMAIN_KEY) or {}).get(count_from)
             if admitted is None:
@@ -2505,7 +2702,17 @@ def expand_stages(lib: Dict[str, Any], spec_values: Dict[str, float]
         coeff_key = st.get("count_from")
         coeffs: List[float]
         if st.get(COEFFICIENTS_KEY, True) and coeff_key:
-            coeff_set = (lib.get(COEFFICIENT_SETS_KEY) or {}).get(str(count))
+            deriv = lib.get(COEFFICIENT_DERIVATION_KEY)
+            if deriv:
+                fn = COEFFICIENT_DERIVATIONS.get(deriv)
+                if fn is None:
+                    raise LibraryEntryError(
+                        f"`{COEFFICIENT_DERIVATION_KEY}` names {deriv!r}, "
+                        f"which is not a derivation this program carries")
+                coeff_set = fn(count, spec_values, lib.get("constants") or {})
+            else:
+                coeff_set = (lib.get(COEFFICIENT_SETS_KEY) or {}).get(
+                    str(count))
             if coeff_set is None:
                 raise LibraryEntryError(
                     f"no `{COEFFICIENT_SETS_KEY}` entry for "
