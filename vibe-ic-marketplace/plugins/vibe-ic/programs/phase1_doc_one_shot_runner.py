@@ -41061,6 +41061,87 @@ def _v1_6_395_push_l8_evidence(
     })
 
 
+
+# ── the row states the PERIOD; the frequency beside it is its restatement ──
+# A spec row routinely writes one clock fact twice, at two precisions:
+#
+#     | Target clock period | **25.9 ns (~38.6 MHz)** |
+#
+# The doc-prose fmax harvester below matches only the FREQUENCY literal, so
+# the period it records is `1000 / 38.6 = 25.906736 ns` — a number the design
+# never wrote, derived from the rounded, explicitly-approximate half of the
+# same row, while the exact half sat two words to its left. Every consumer
+# then reads the derived value: `clock_mhz` mirrors the primary domain's
+# `freq_mhz` (this file), `sdc_gen` takes `clock_mhz` first, and
+# `l8_sta_clock_period_design_owned_check` reports it as "design-owned".
+#
+# MEASURED, sha256 × sky130A, plugin 1.15.76, this host: L1 line 35 states
+# `25.9 ns (~38.6 MHz)`; L8_RTL_CONSTANTS recorded
+# `period_ns 25.906736 / freq_mhz 38.6` with
+# `evidence.matched_substring "38.6 MHz"`, and the run's SDC was written at
+# 25.9067 ns while the declaration the same spec REQUIRES the plugin to file
+# (`plugin_output/declaration.json`, L7 §7.0) states `clock_period_ns 25.9`.
+#
+# The rule is precision, not preference: adopt the stated period ONLY when the
+# same row also states one AND the two agree to within `_STATED_PERIOD_TOL` —
+# i.e. they are demonstrably the same clock written twice. Anything further
+# apart is two different facts and is left exactly as it was. The document's
+# own frequency literal is never dropped; it is recorded as an alternate
+# mention. chip-AGNOSTIC: units and row shape only, no design vocabulary.
+_RE_STATED_PERIOD_LITERAL = re.compile(
+    r"(?i)(?<![\w.])(?P<val>\d+(?:\.\d+)?)\s*"
+    r"(?P<unit>ns|ps|us|\u00b5s|\u03bcs|ms|nanoseconds?|picoseconds?|"
+    r"microseconds?|milliseconds?)(?![\w])")
+
+_STATED_PERIOD_UNIT_NS = {
+    "ps": 1e-3, "picosecond": 1e-3, "picoseconds": 1e-3,
+    "ns": 1.0, "nanosecond": 1.0, "nanoseconds": 1.0,
+    "us": 1e3, "\u00b5s": 1e3, "\u03bcs": 1e3,
+    "microsecond": 1e3, "microseconds": 1e3,
+    "ms": 1e6, "millisecond": 1e6, "milliseconds": 1e6,
+}
+
+# 1% — wide enough to accept a frequency rounded to three significant figures
+# (25.9 ns vs 38.6 MHz differ by 0.026%), narrow enough that an unrelated time
+# literal on the same row (a setup time, a reset width) can never be mistaken
+# for a restatement of the period.
+_STATED_PERIOD_TOL = 0.01
+
+
+def _stated_period_ns_on_row(text: str, match_start: int, match_end: int,
+                             freq_mhz: float) -> "Optional[float]":
+    """The period the SAME row states, when it restates this frequency.
+
+    Returns the stated period in ns, or None when the row states no period,
+    or states one that is not this frequency written the other way round.
+    """
+    try:
+        if not freq_mhz or freq_mhz <= 0:
+            return None
+        derived_ns = 1000.0 / float(freq_mhz)
+    except (TypeError, ValueError, ZeroDivisionError):
+        return None
+    row_start = text.rfind("\n", 0, match_start) + 1
+    row_end = text.find("\n", match_end)
+    if row_end == -1:
+        row_end = len(text)
+    row = text[row_start:row_end]
+    for pm in _RE_STATED_PERIOD_LITERAL.finditer(row):
+        unit = (pm.group("unit") or "").lower()
+        scale = _STATED_PERIOD_UNIT_NS.get(unit)
+        if scale is None:
+            continue
+        try:
+            stated_ns = float(pm.group("val")) * scale
+        except (TypeError, ValueError):
+            continue
+        if stated_ns <= 0:
+            continue
+        if abs(stated_ns - derived_ns) <= _STATED_PERIOD_TOL * derived_ns:
+            return stated_ns
+    return None
+
+
 def gen_l8_timing_waveform(project: Path,
                            extracted: Dict[str, str]) -> LDocResult:
     """L8: RX classifier ticks + TX bit cell + frame-end gap.
@@ -41606,6 +41687,28 @@ def gen_l8_timing_waveform(project: Path,
                     },
                     "extraction_strategy": "clock_domain_doc_prose_fmax",
                 }
+                # A row that states the period as well as the frequency has
+                # written ONE fact twice. Take the stated one; the derived
+                # one is the rounded restatement. Range rows (`high_mhz`) are
+                # excluded: a range is not one clock written twice.
+                _stated_ns = (
+                    _stated_period_ns_on_row(text, m.start(), m.end(), low_mhz)
+                    if high_mhz is None else None)
+                if _stated_ns is not None:
+                    _cc.record_alternate_mention(entry, {
+                        "freq_mhz": low_mhz,
+                        "freq_hz": int(low_mhz * 1e6),
+                        "period_ns": round(1000.0 / low_mhz, 6),
+                        "role": "restated_by_row_period_literal",
+                        "source": f"input/docs/{fname}",
+                        "extraction_strategy":
+                            "clock_domain_doc_prose_fmax",
+                    })
+                    entry["period_ns"] = _stated_ns
+                    entry["freq_mhz"] = 1000.0 / _stated_ns
+                    entry["freq_low_mhz"] = entry["freq_mhz"]
+                    entry["freq_hz"] = int(round(1e9 / _stated_ns))
+                    entry["period_source"] = "document_stated_on_same_row"
                 clock_domains.append(entry)
                 # v1.6.395 — for #285 P3: push to L8 evidence map.
                 _v1_6_395_push_l8_evidence(
