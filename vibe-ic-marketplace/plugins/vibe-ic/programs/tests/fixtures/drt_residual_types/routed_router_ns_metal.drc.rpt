@@ -1,0 +1,9 @@
+violation type: NS Metal
+	srcs: net:__uuf__._0114_
+	bbox = (397.7500, 177.3900) - (397.7900, 177.4450) on Layer Metal1
+violation type: NS Metal
+	srcs: net:__uuf__._0053_
+	bbox = (661.5100, 177.3900) - (661.5500, 177.4450) on Layer Metal1
+violation type: NS Metal
+	srcs: net:_128_
+	bbox = (452.8995, 294.9795) - (452.9005, 294.9805) on Layer Metal2

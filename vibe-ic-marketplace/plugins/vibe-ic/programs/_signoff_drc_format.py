@@ -171,13 +171,23 @@ RE_DRT_0701 = re.compile(
     r"\[WARNING DRT-0701\][^\n]*?found\s+(\d+)\s+violation")
 
 
-def router_iter_counts(text: str) -> List[int]:
-    """Every per-iteration router DRC count, in log order ([] when none).
+def router_loop_iter_counts(text: str) -> List[int]:
+    """Every per-iteration router DRC count the ROUTING LOOP itself printed, in
+    log order ([] when none) — WITHOUT the post-route verification's count.
 
-    Prefers the explicit `[INFO DRT-0199]` end-of-iteration tally; only when a
-    log has none does it fall back to the per-iteration `Completing 100% with N`
-    line. Mixing the two would double-count, so the fallback is exclusive.
-    """
+    `router_iter_counts` appends DRT-0701's verified number so its LAST element
+    is what ships; that is right for "what ships" and WRONG for any question
+    about the loop's own behaviour, because the appended element is not an
+    iteration. MEASURED, subservient x gf180mcuD (round 3, plugin 1.15.55): the
+    loop held at 1 for its last 11 recorded iterations and DRT-0701 published 3,
+    so the shipped trajectory ended `[1, 1, ..., 1, 3]`. `_drt_flat_tail` over
+    that returns 1 — "the last iteration changed the count" — and the
+    ROUTE_NOT_CONVERGED verdict therefore offered "raise the router's end
+    iteration" as a remedy not ruled out, on a route whose own log shows ~50
+    iterations that bought nothing. Asking the loop question of the loop's own
+    series returns 11 and rules the remedy out.
+
+    chip-AGNOSTIC: OpenROAD/TritonRoute log grammar only."""
     if not text:
         return []
     raw = RE_DRT_0199.findall(text) or RE_DRT_COMPLETING.findall(text)
@@ -187,6 +197,21 @@ def router_iter_counts(text: str) -> List[int]:
             out.append(int(c))
         except (TypeError, ValueError):
             continue
+    return out
+
+
+def router_iter_counts(text: str) -> List[int]:
+    """Every per-iteration router DRC count, in log order ([] when none), with
+    the post-route verification's published count APPENDED when it supersedes
+    the loop (see below) — so the LAST element is always what ships.
+
+    Prefers the explicit `[INFO DRT-0199]` end-of-iteration tally; only when a
+    log has none does it fall back to the per-iteration `Completing 100% with N`
+    line. Mixing the two would double-count, so the fallback is exclusive.
+    A caller asking about the LOOP rather than about what ships wants
+    `router_loop_iter_counts`, which is this function without the append.
+    """
+    out = router_loop_iter_counts(text)
     # The post-route verification's count is APPENDED, not substituted: the
     # trajectory is still the loop's real history and `_drt_violation_trajectory`
     # readers want it. Appending makes the LAST element the published number, so
@@ -264,21 +289,92 @@ def router_post_route_verified_pair(text: str) -> Optional[Tuple[int, int]]:
         return None
 
 
+#: `[INFO DRT-0194] Start detail routing.` — the marker that a NEW detail route
+#: began. It is the discriminator for whether a DRT-0701 still describes the
+#: geometry that ships (see `router_post_route_verified_count`). The flow's
+#: no-op re-routes do NOT emit it: MEASURED, the PG re-route on a design with no
+#: PG-dirty net logged DRT-0178/0036/0179 and no DRT-0194 at all, so this rule
+#: does not fire on a call that did nothing.
+RE_DRT_0194 = re.compile(r"\[INFO DRT-0194\] Start detail routing")
+
+
 def router_post_route_verified_count(text: str) -> Optional[int]:
-    """OpenROAD's POST-ROUTE VERIFICATION count, or None when it did not speak.
+    """OpenROAD's POST-ROUTE VERIFICATION count FOR THE ROUTE THAT SHIPS, or
+    None when it did not speak about that route.
 
     None, never 0, for the same reason `router_iter_last_count` returns None on
     a report with no trajectory: "the verifier said nothing" and "the verifier
     found nothing" are different facts, and collapsing them would turn a log this
     reader cannot read into a clean design.
+
+    A DRT-0701 IS ONLY THIS ROUTE'S IF NO DETAIL ROUTE STARTED AFTER IT.
+    ------------------------------------------------------------------
+    This used to be `int(m[-1])` — the last 0701 anywhere in the log. A PnR pass
+    runs `detailed_route` several times (the DRV-repair loop rips up and
+    re-routes, the antenna and PG paths can re-route again), and OpenROAD emits
+    DRT-0701 only when a route's verification DISAGREES with its own loop. So a
+    log can end with two more routes after the last 0701, and that 0701 then
+    describes geometry two routes stale.
+
+    MEASURED (subservient x gf180mcuD, 2026-09-02, host 8HD-9, pinned image):
+
+        run                  last 0701   routes STARTED after it   loop's last
+        round 3 (ksubs8)         3                 0                    1   valid
+        round 4 arm A            1                 2                    1   stale
+        round 5 pass @491        6                 2                    3   STALE
+
+    The round-5 row is the one that bites: the published count read 6 while the
+    route that shipped measured 3, and the router's own DRC report — 3 records —
+    was then REFUSED for not reconciling with 6, which silently disabled the
+    residual-class guard that reads it. Arm A was stale too and invisible,
+    because there the two numbers happened to be equal.
+
+    WHY DROPPING A STALE 0701 IS SOUND, not a widened threshold: a later route
+    either emits its OWN 0701 (which then becomes the last one and is used), or
+    its verification agreed with its loop, in which case the loop's own last
+    count already IS the verified count. Either way the trajectory's last
+    element ends up being the shipped route's number. Nothing is relaxed; a
+    superseded measurement is simply not quoted for a route it does not
+    describe. `router_post_route_verified_superseded` reports the dropped value
+    rather than discarding it silently.
+
+    chip-AGNOSTIC: OpenROAD log grammar only.
     """
     if not text:
         return None
-    m = RE_DRT_0701.findall(text)
-    if not m:
+    last = None
+    for m in RE_DRT_0701.finditer(text):
+        last = m
+    if last is None:
+        return None
+    if RE_DRT_0194.search(text, last.end()) is not None:
+        return None          # superseded by a later route — not this geometry
+    try:
+        return int(last.group(1))
+    except (TypeError, ValueError):
+        return None
+
+
+def router_post_route_verified_superseded(text: str) -> Optional[Tuple[int, int]]:
+    """``(stale_count, routes_started_after_it)`` when the log's last DRT-0701
+    describes a route that a later `detailed_route` superseded — else None.
+
+    DEGRADE LOUDLY. Without this, a dropped verification and a log that never
+    verified at all are the same silence, and a reader cannot tell "the verifier
+    said nothing" from "the verifier spoke about a route that no longer exists".
+    """
+    if not text:
+        return None
+    last = None
+    for m in RE_DRT_0701.finditer(text):
+        last = m
+    if last is None:
+        return None
+    after = len(RE_DRT_0194.findall(text[last.end():]))
+    if after == 0:
         return None
     try:
-        return int(m[-1])
+        return int(last.group(1)), after
     except (TypeError, ValueError):
         return None
 

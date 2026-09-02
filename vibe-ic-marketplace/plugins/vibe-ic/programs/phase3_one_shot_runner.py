@@ -13920,6 +13920,10 @@ def _pnr_stage_end(label: str) -> str:
 _PNR_NONFATAL_STAGES = frozenset({
     "postroute_drv_repair",
     "postroute_drv_reconverge",
+    # A targeted repair that dies leaves the route it was handed: the stage
+    # only ever CLEARS nets it then re-routes, and every step inside it is
+    # NONFATAL-guarded, so a crash there is a lost repair, not a lost route.
+    "postroute_named_violation_reroute",
     "postroute_setup_repair_estimate",
 })
 
@@ -13931,6 +13935,7 @@ _PNR_STAGE_ORDER = (
     "postroute_drv_repair", "postroute_antenna_repair",
     "postroute_drv_reconverge", "postroute_antenna_reconverge",
     "postroute_fill",
+    "postroute_named_violation_reroute",
     "write_routed", "postroute_setup_repair_estimate",
 )
 
@@ -15612,6 +15617,22 @@ def _drt_violation_trajectory(log_text: str) -> List[int]:
     return _sdf.router_iter_counts(log_text)
 
 
+def _drt_loop_trajectory(log_text: str) -> List[int]:
+    """The ROUTING LOOP's own per-iteration counts — `_drt_violation_trajectory`
+    WITHOUT the post-route verification count appended to its tail.
+
+    Two different questions are asked of this series and only one of them is
+    about what ships. "How many violations does this route have" is answered by
+    the trajectory's LAST element, which must be the verified/published number.
+    "Did the last iterations buy anything" is a question about the LOOP, and the
+    appended element is not an iteration — it is a whole-design re-check that
+    ran after the loop stopped. Asking the loop question of the shipped series
+    reads the append as a change of count and answers `no plateau`.
+
+    chip-AGNOSTIC: delegates to the shared log-grammar helper."""
+    return _sdf.router_loop_iter_counts(log_text)
+
+
 #: TritonRoute prints a per-type/per-layer breakdown IMMEDIATELY under the
 #: `[INFO DRT-0199] Number of violations = N` line it is a breakdown of:
 #:
@@ -16007,6 +16028,75 @@ def _ladder_best_rung(residual_series: Sequence[int],
     return best_i, residual_series[best_i], w, h
 
 
+#: Rule families whose marker is a property of ONE shape — its own area, its
+#: own width, its own step/notch, its own on-grid-ness, or a via's enclosure of
+#: its own cut. Normalised (lower-case, non-alphanumerics stripped) so a build
+#: that writes "Min Area", "MinArea" or "Minimum Area" lands in the same slot.
+#:
+#: WHAT THE DISTINCTION IS. The loosen ladder's only lever is UTILISATION: it
+#: grows the die so the same nets are laid out further apart. That moves how
+#: close two independently-routed shapes come to each other — Short, Metal
+#: Spacing, EOL/Cut/Corner Spacing — and it does NOT move a shape's own minimum
+#: area, its own minimum width, or the geometry of a via landing on a library
+#: cell's pin, because those are properties the die does not appear in.
+#:
+#: DELIBERATELY A WHITELIST OF THE IMMOVABLE. A type this set does not know is
+#: treated as congestion-shaped, i.e. the ladder behaves exactly as it does
+#: today. A new or renamed tool marker therefore costs a wasted rung, never a
+#: refused rescue.
+_DRT_SELF_SHAPE_RULES: FrozenSet[str] = frozenset({
+    "nsmetal",              # TritonRoute's name for the min-area/min-width
+                            # family (the runner's own docstrings say so)
+    "minarea", "minimumarea",
+    "minwidth", "minimumwidth", "metalwidth",
+    "minstep", "minimumstep",
+    "minhole", "minenclosedarea", "minimumenclosedarea",
+    "offgrid", "rectonly",
+    "enclosure", "minenclosure", "viaenclosure",
+})
+
+
+def _normalise_drt_rule(name: str) -> str:
+    """`"NS Metal"` -> `"nsmetal"`. Tool grammar only."""
+    return "".join(ch for ch in (name or "").lower() if ch.isalnum())
+
+
+def _residual_is_congestion_shaped(
+        types: Optional[Sequence[Tuple[str, str, int]]]) -> Optional[bool]:
+    """Can the loosen ladder's lever move THIS residual? True / False / None
+    (nothing measured — do not decide).
+
+    False iff the router named at least one violation and EVERY one of them is
+    in `_DRT_SELF_SHAPE_RULES`. Any unknown type, or no types at all, returns
+    True / None respectively, and the caller keeps its existing behaviour.
+
+    WHY. MEASURED, subservient x gf180mcuD, rounds 3-4 (plugin 1.15.55 /
+    1.15.57, pinned image, OpenROAD 26Q3-1472). The ladder took FOUR rungs —
+    416 -> 491 -> 602 -> 738 -> 904 um, a 4.7x growth in die AREA at 12%
+    utilisation — against a residual of three `NS Metal` violations, and the
+    residual series it measured on the way was `[4, 6, 1, 3, 3]`: not a
+    trend, and never zero. The three violations are two Metal1 markers at the
+    SAME cell-local offset inside two instances of one library cell (a via's
+    Metal1 pad against that cell's output-pin rectangle) and one Metal2 marker
+    1 DBU across. None of the three has a die in it. The ladder was already
+    MEASURING the discriminating fact — the router writes the type of every
+    published violation into `routed_router.drc.rpt`, which this flow asks for
+    — and the decision read only the SHAPE of the count trajectory, which for a
+    geometry residual looks exactly like a congested one: a plateau.
+
+    The cost of not reading it is four extra full PnR passes per run, and a
+    shipped die 2.25x the area of one the same ladder had already measured at a
+    LOWER residual.
+
+    chip-AGNOSTIC: the tool's own rule names; no PDK, layer or design literal."""
+    if not types:
+        return None
+    known = [_normalise_drt_rule(t) for t, _lay, _c in types]
+    if any(not k for k in known):
+        return None
+    return not all(k in _DRT_SELF_SHAPE_RULES for k in known)
+
+
 # #914 — the loosen ladder's DECLINE vocabulary and what each entry means for
 # the operator. SINGLE source of truth: the printed marker, the pnr extras, the
 # ROUTE_NOT_CONVERGED remedy sentence and the tests all read this map, so a new
@@ -16019,6 +16109,9 @@ _LOOSEN_TERMINATOR_KIND: Dict[str, str] = {
     "explicit_die_requested": "not_engaged",
     "route_did_not_complete": "not_engaged",
     "route_still_converging": "not_engaged",
+    # the router named every residual violation and NONE of them is a rule
+    # utilisation can move — see `_residual_is_congestion_shaped`
+    "residual_not_congestion_shaped": "evidence",
     "loosen_ladder_stalled": "evidence",
     # the ladder finished exploring, came back to the best rung it MEASURED,
     # and will not walk away from it again.
@@ -16038,6 +16131,8 @@ def _route_feedback_loosen_ex(die_w: int, die_h: int, log_text: str,
                               max_rungs: int = _ROUTE_LOOSEN_MAX_RUNGS,
                               patience: int = _ROUTE_LOOSEN_STALL_PATIENCE,
                               settled_at_best: bool = False,
+                              residual_types: Optional[
+                                  Sequence[Tuple[str, str, int]]] = None,
                               ) -> Tuple[Optional[Tuple[int, int, Dict[str, Any]]], str]:
     """ROUTING-FEEDBACK decision for ONE detailed-route outcome. Returns
     (new_w, new_h, record) to loosen-the-die-and-retry, or None to leave the
@@ -16053,7 +16148,10 @@ def _route_feedback_loosen_ex(die_w: int, die_h: int, log_text: str,
          what every pre-#914 caller still gets;
       4. loosen ONLY on a genuine non-convergence signal
          (`_drt_is_non_converging` over the parsed trajectory);
-      5. never grow past the die cap (delegated to `_compute_loosened_die`).
+      5. loosen only on a residual THIS LEVER CAN MOVE — when the router has
+         named every published violation and none of them is a rule the die
+         appears in, the ladder declines (`_residual_is_congestion_shaped`);
+      6. never grow past the die cap (delegated to `_compute_loosened_die`).
 
     HONESTY: this is a deterministic congestion-relief mechanism. It does NOT
     assert that the looser die WILL converge a given design — only a live PnR
@@ -16079,6 +16177,20 @@ def _route_feedback_loosen_ex(die_w: int, die_h: int, log_text: str,
         # `route_completed=False` and buys exactly zero loosening.
         return None, "route_did_not_complete"
     trajectory = _drt_violation_trajectory(log_text)
+    # GUARD 5 — THE LEVER MUST MATCH THE RESIDUAL. Every other guard asks
+    # whether the ladder MAY take another rung; this one asks whether another
+    # rung could possibly help. `residual_types` is the router's own naming of
+    # the violations that ship: when every one of them is a single-shape rule,
+    # growing the die is not a remedy that was tried and failed — it is a remedy
+    # that does not address the finding, and it must be declined BEFORE the
+    # budget/stall reasons, because "the ladder ran out" would describe a
+    # ladder that should never have started. Absent or unrecognised types leave
+    # the decision exactly where it was. The non-convergence precondition keeps
+    # this guard strictly BELOW `route_still_converging` in precedence, so a
+    # route that is still improving keeps reporting that.
+    if (_drt_is_non_converging(trajectory)
+            and _residual_is_congestion_shaped(residual_types) is False):
+        return None, "residual_not_congestion_shaped"
     series: Optional[List[int]] = None
     if residual_history is None:
         # LEGACY CALL (no measured rung-to-rung evidence supplied). Without a
@@ -18873,6 +18985,221 @@ def _router_drc_report_block(pnr_out: Path, log_text: str) -> str:
     return ("# NOT REQUESTED: no " + ROUTER_DRC_REPORT_NAME + " and no\n"
             "# ROUTE_DRC_REPORT_* record in the log -- this route ran through\n"
             "# a path that never asked the router for its own report.")
+
+
+#: One record of `detailed_route -output_drc`, which TritonRoute writes as
+#:
+#:     violation type: NS Metal
+#:     \tsrcs: net:__uuf__._0114_
+#:     \tbbox = (397.7500, 177.3900) - (397.7900, 177.4450) on Layer Metal1
+#:
+#: A record may carry several `srcs:` lines (one per shape the marker cites).
+_ROUTER_DRC_TYPE_RE = re.compile(r"(?m)^\s*violation type:\s*(.+?)\s*$")
+_ROUTER_DRC_LAYER_RE = re.compile(r"on Layer\s+(\S+)")
+_ROUTER_DRC_NET_RE = re.compile(r"\bnet:(\S+)")
+
+
+def _router_drc_report_records(pnr_out: Path) -> List[Dict[str, Any]]:
+    """The router's own DRC report, PARSED — one dict per violation with
+    ``type``, ``layer`` and ``nets`` — or [] when there is no report.
+
+    WHY THIS EXISTS. `_router_drc_report_block` pastes this file into
+    `routed.drc.rpt` verbatim and declares itself ADVISORY, so the only reader
+    of the flow's per-violation evidence is a human looking at a report. The
+    ROUTE_NOT_CONVERGED verdict, which needs exactly this, reads the LOG
+    instead — and when OpenROAD's post-route verification supersedes the log's
+    table (DRT-0701) the verdict tells the operator to "re-run the router with
+    `detailed_route -output_drc <file>`" while THIS RUN'S copy of that very file
+    sits in the same directory. MEASURED, subservient x gf180mcuD round 3
+    (plugin 1.15.55): published 3, log table refused (it totals 1 and describes
+    a superseded route), `routed_router.drc.rpt` on disk with all 3 —
+    `NS Metal` x2 on Metal1 and x1 on Metal2, with nets and bounding boxes.
+
+    chip-AGNOSTIC: TritonRoute report grammar only; the type and layer names
+    are whatever the tool wrote."""
+    rpt = pnr_out / ROUTER_DRC_REPORT_NAME
+    try:
+        text = rpt.read_text(errors="ignore")
+    except OSError:
+        return []
+    heads = list(_ROUTER_DRC_TYPE_RE.finditer(text))
+    out: List[Dict[str, Any]] = []
+    for i, h in enumerate(heads):
+        body = text[h.end(): heads[i + 1].start() if i + 1 < len(heads)
+                    else len(text)]
+        lay = _ROUTER_DRC_LAYER_RE.search(body)
+        out.append({"type": h.group(1).strip(),
+                    "layer": lay.group(1) if lay else "",
+                    "nets": _ROUTER_DRC_NET_RE.findall(body)})
+    return out
+
+
+def _router_drc_report_types(pnr_out: Path, published: Optional[int]
+                             ) -> List[Tuple[str, str, int]]:
+    """The residual violations BY TYPE AND LAYER read from the router's own DRC
+    report, RECONCILED against the published count — or [] when the report is
+    absent, empty, or describes a different route.
+
+    The reconciliation is the same discipline `_drt_types_supersession` applies
+    to the log's table, for the same reason: `-output_drc` is written by EVERY
+    `detailed_route` call and the file on disk is the last one's. A report whose
+    record count equals the published count describes that count; one that does
+    not is refused rather than stated.
+
+    chip-AGNOSTIC: arithmetic over the tool's own two numbers."""
+    recs = _router_drc_report_records(pnr_out)
+    if not recs or published is None or len(recs) != published:
+        return []
+    agg: Dict[Tuple[str, str], int] = {}
+    for r in recs:
+        agg[(r["type"], r["layer"])] = agg.get((r["type"], r["layer"]), 0) + 1
+    return [(t, lay, c) for (t, lay), c in sorted(agg.items())]
+
+
+#: How many targeted rip-up/re-route passes the named-violation repair may take.
+#: BOUNDED, not tuned: pass 1 is the repair, pass 2 exists only so a repair that
+#: strictly improved gets one continuation. It stops the moment a pass does not
+#: strictly reduce the count, so the usual cost is one pass or none at all.
+_NAMED_VIOL_REROUTE_MAX_PASSES = 2
+
+
+def _named_violation_reroute_tcl(rpt_path: str) -> str:
+    """Tcl that rips up ONLY the nets the router's own DRC report names, and
+    re-routes them — bounded, disclosed, and re-measured every pass.
+
+    WHY THIS EXISTS. When `detailed_route` ends, the flow's last routing action
+    is the PG re-route, and on a design with no PG-dirty nets that call does
+    nothing: MEASURED (subservient x gf180mcuD round 3) it logged only
+    `DRT-0178/0179` init and no iteration at all. So the residual violations
+    ship having had no routing action aimed at them since the loop that could
+    not fix them stopped. Worse, OpenROAD says outright that the loop never saw
+    them:
+
+        [WARNING DRT-0701] Post-route verification found 3 violation(s) that
+        the routing loop did not report (1 in-loop).
+
+    The loop plateaued at 1 for ~50 iterations; the whole-design verification
+    then published 3. Nothing can be expected of a loop that is not shown the
+    finding. This stage shows it: it clears the wires of the named nets so they
+    are UNROUTED, and re-invokes `detailed_route`, which must then route them
+    and will do so against the markers now present.
+
+    WHY NO `global_route`. The repo has already MEASURED that mixing stale
+    detailed routes with fresh guides aborts the whole re-route (DRT-0206,
+    `_spare_safe_routing_clear_tcl`'s v1.8.43 note). The guides in the block are
+    the ones every current route was laid against, so they are left alone and
+    only the cleared nets are re-derived — the same shape as the flow's
+    existing incremental post-diode re-route.
+
+    SAFETY. POWER/GROUND nets and any net touching a `dont_touch` instance are
+    skipped, exactly as every other routing-clear site in this file does; the
+    Design-for-ECO spare bindings therefore cannot be re-derived here. Every
+    step is NONFATAL-guarded and every outcome is named. The count is
+    RE-MEASURED by the router after each pass — never carried over — so if this
+    repair does not help, the verdict says the same thing it said before.
+
+    DECLARED: ADVISORY. It changes geometry, so the `pnr` verdict re-measures;
+    it can never make a failing count read as a passing one.
+
+    chip-AGNOSTIC: odb API + the tool's own report; no PDK, layer or design
+    literal."""
+    return (
+        '# === named-violation targeted rip-up + re-route ===\n'
+        'set _nvr_rpt "' + rpt_path + '"\n'
+        'for {set _nvr_p 1} {$_nvr_p <= '
+        + str(_NAMED_VIOL_REROUTE_MAX_PASSES) + '} {incr _nvr_p} {\n'
+        '  if {![file exists $_nvr_rpt]} {\n'
+        '    puts "NAMED_VIOL_REROUTE_SKIP: no router DRC report at $_nvr_rpt"\n'
+        '    break\n'
+        '  }\n'
+        '  set _nvr_names {}\n'
+        '  set _nvr_n 0\n'
+        '  if {[catch {\n'
+        '    set _nvr_fh [open $_nvr_rpt r]\n'
+        '    while {[gets $_nvr_fh _nvr_ln] >= 0} {\n'
+        '      if {[string first "violation type:" $_nvr_ln] >= 0} '
+        '{ incr _nvr_n }\n'
+        '      foreach _nvr_tok [split [string trim $_nvr_ln]] {\n'
+        '        if {[string range $_nvr_tok 0 3] eq "net:"} {\n'
+        '          set _nvr_nm [string range $_nvr_tok 4 end]\n'
+        '          if {[lsearch -exact $_nvr_names $_nvr_nm] < 0} '
+        '{ lappend _nvr_names $_nvr_nm }\n'
+        '        }\n'
+        '      }\n'
+        '    }\n'
+        '    close $_nvr_fh\n'
+        '  } _nvr_e]} { puts "NAMED_VIOL_REROUTE_READ_NONFATAL: $_nvr_e"; break }\n'
+        '  puts "NAMED_VIOL_REROUTE_PASS${_nvr_p}_BEFORE: $_nvr_n '
+        'named_nets=[llength $_nvr_names] $_nvr_names"\n'
+        '  if {$_nvr_n == 0} { puts "NAMED_VIOL_REROUTE_CLEAN: pass $_nvr_p"; break }\n'
+        '  if {[llength $_nvr_names] == 0} {\n'
+        '    puts "NAMED_VIOL_REROUTE_UNNAMED: the report cites no net -- '
+        'nothing to rip up"\n'
+        '    break\n'
+        '  }\n'
+        '  set _nvr_cleared 0; set _nvr_skipped 0\n'
+        '  if {[catch {\n'
+        '    foreach _nvr_nm $_nvr_names {\n'
+        '      set _nvr_net [[ord::get_db_block] findNet $_nvr_nm]\n'
+        '      if {$_nvr_net eq "NULL" || $_nvr_net eq ""} '
+        '{ incr _nvr_skipped; continue }\n'
+        '      set _nvr_st [$_nvr_net getSigType]\n'
+        '      if {$_nvr_st eq "POWER" || $_nvr_st eq "GROUND"} '
+        '{ incr _nvr_skipped; continue }\n'
+        '      set _nvr_dnt 0\n'
+        '      foreach _nvr_it [$_nvr_net getITerms] {\n'
+        '        if {[[$_nvr_it getInst] isDoNotTouch]} { set _nvr_dnt 1; break }\n'
+        '      }\n'
+        '      if {$_nvr_dnt} { incr _nvr_skipped; continue }\n'
+        '      set _nvr_w [$_nvr_net getWire]\n'
+        '      if {$_nvr_w ne "NULL"} '
+        '{ odb::dbWire_destroy $_nvr_w; incr _nvr_cleared }\n'
+        '    }\n'
+        '  } _nvr_e]} { puts "NAMED_VIOL_REROUTE_CLEAR_NONFATAL: $_nvr_e"; break }\n'
+        '  puts "NAMED_VIOL_REROUTE_CLEARED: $_nvr_cleared '
+        '(skipped=$_nvr_skipped)"\n'
+        '  if {$_nvr_cleared == 0} {\n'
+        '    puts "NAMED_VIOL_REROUTE_NOTHING_CLEARED: every named net was '
+        'PG or dont_touch-protected"\n'
+        '    break\n'
+        '  }\n'
+        # NO `-verbose 0` ON THE RE-ROUTE BELOW, DELIBERATELY. The published
+        # violation count is read from the LOG (`_drt_final_violations` over the
+        # last DRT-0199 / DRT-0701), so a routing call that changes the geometry
+        # and prints no count would leave the verdict quoting the PREVIOUS
+        # route's number for the geometry that ships. MEASURED: the PG re-route,
+        # which does pass `-verbose 0`, printed DRT-0178/0179 and no DRT-0199.
+        #
+        # The `info exists` default and the use stay ADJACENT: a resume Tcl
+        # deletes the block carrying the first probe, and
+        # `test_a_site_that_forgets_the_option_still_defines_it` reads a
+        # three-line window above each use to prove no site can reference an
+        # undefined variable. It caught this site when the note above sat
+        # between them.
+        '  if {![info exists _vic_drc_opt]} { set _vic_drc_opt [list] }\n'
+        '  if {[catch {detailed_route {*}$_vic_drc_opt} _nvr_e]} {\n'
+        '    puts "NAMED_VIOL_REROUTE_DR_NONFATAL: $_nvr_e"\n'
+        '    break\n'
+        '  }\n'
+        '  set _nvr_after -1\n'
+        '  if {[catch {\n'
+        '    set _nvr_after 0\n'
+        '    set _nvr_fh [open $_nvr_rpt r]\n'
+        '    while {[gets $_nvr_fh _nvr_ln] >= 0} {\n'
+        '      if {[string first "violation type:" $_nvr_ln] >= 0} '
+        '{ incr _nvr_after }\n'
+        '    }\n'
+        '    close $_nvr_fh\n'
+        '  } _nvr_e]} { puts "NAMED_VIOL_REROUTE_RECOUNT_NONFATAL: $_nvr_e"; break }\n'
+        '  puts "NAMED_VIOL_REROUTE_PASS${_nvr_p}_AFTER: $_nvr_after '
+        '(was $_nvr_n)"\n'
+        '  if {$_nvr_after >= $_nvr_n} {\n'
+        '    puts "NAMED_VIOL_REROUTE_NO_IMPROVEMENT: $_nvr_n -> $_nvr_after '
+        '-- stopping; the residual is not one a re-route of these nets moves"\n'
+        '    break\n'
+        '  }\n'
+        '}\n'
+        'puts "NAMED_VIOL_REROUTE_DONE"\n')
 
 
 def _route_drc_report_tcl(rpt_path: str) -> str:
@@ -22198,6 +22525,10 @@ def _build_pnr_tcl_text(*, tech_lef_c: str, cell_lef_c: str,
     # `_route_drc_report_tcl`.
     _drc_report_block = _route_drc_report_tcl(
         out_dir_c + "/" + ROUTER_DRC_REPORT_NAME)
+    # The SAME report path the router is asked to write, read back by the
+    # targeted repair. One constant, two consumers.
+    _named_viol_reroute_block = _named_violation_reroute_tcl(
+        out_dir_c + "/" + ROUTER_DRC_REPORT_NAME)
     return f"""
 {_thread_block}read_lef {tech_lef_c}
 read_lef {cell_lef_c}
@@ -22429,7 +22760,8 @@ puts "{_PNR_STAGE_MARKER} postroute_antenna_repair"
 # 2079 decap + 150 fill cells; DRC still 0, worst IR 35 µV (2500× margin).
 # NONFATAL-guarded so PDKs without the masters degrade gracefully.
 puts "{_PNR_STAGE_MARKER} postroute_fill"
-{filler_block}{pg_reconnect_block}puts "{_PNR_STAGE_MARKER} write_routed"
+{filler_block}{pg_reconnect_block}{_pnr_stage_begin("postroute_named_violation_reroute")}puts "{_PNR_STAGE_MARKER} postroute_named_violation_reroute"
+{_named_viol_reroute_block}{_pnr_stage_end("postroute_named_violation_reroute")}puts "{_PNR_STAGE_MARKER} write_routed"
 # v1.8.43 — min-area patch: LAST thing before the route is written, so it
 # sees the final geometry (post antenna-repair, post filler) and every
 # downstream consumer (write_def / write_verilog / RCX / magic GDS / DRC /
@@ -24360,11 +24692,35 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
             # by the ladder length + the die cap. §4.05: explicit-die exempt,
             # converged-route exempt, floor/cap-guarded, every step disclosed.
             # (See _route_feedback_loosen for the full guard set + honesty note.)
+            # The router's OWN naming of what is left, read from the report
+            # this run asked it to write (`-output_drc`) and reconciled against
+            # the published count. [] when there is no usable report, which is
+            # the ladder's pre-existing behaviour.
+            _residual_types = _router_drc_report_types(
+                out_dir, _drt_final_violations(_pnr_log))
+            # PRESERVE THIS RUNG'S EVIDENCE BEFORE THE NEXT RUNG DESTROYS IT.
+            # `-output_drc` writes ONE path, rewritten by every
+            # `detailed_route` call, so after a ladder walk the only surviving
+            # per-violation detail belongs to the LAST rung. Every earlier
+            # rung's residual — the evidence each loosen decision was actually
+            # taken on — is gone by the time anyone reads the run, and a
+            # reviewer asking "what was left at rung 0" gets the answer for
+            # rung 4. Keeping a per-iteration copy costs a few hundred bytes.
+            _rung_rpt = out_dir / f"routed_router.drc.iter{_retry_i}.rpt"
+            try:
+                _src_rpt = out_dir / ROUTER_DRC_REPORT_NAME
+                if _src_rpt.is_file():
+                    _rung_rpt.write_text(_src_rpt.read_text(errors="ignore"))
+                else:
+                    _rung_rpt = None
+            except OSError:
+                _rung_rpt = None
             _lf, _lf_reason = _route_feedback_loosen_ex(
                 die_w, die_h, _pnr_log, _loosen_idx,
                 _auto_die_requested, _route_completed,
                 residual_history=_loosen_residuals,
-                settled_at_best=_reverted_to_best)
+                settled_at_best=_reverted_to_best,
+                residual_types=_residual_types)
             if _lf is None:
                 # #307 — the decline path used to have no `else` at all, so the
                 # flow could refuse its OWN rescue with nobody told. The UPSIZE
@@ -24398,6 +24754,16 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
                     "stall_patience": _ROUTE_LOOSEN_STALL_PATIENCE,
                     "max_rungs": _ROUTE_LOOSEN_MAX_RUNGS,
                     "still_improving": len(_l_series) >= 2 and _l_streak == 0,
+                    # The evidence the LEVER-MATCH guard read (guard 5). Empty
+                    # when the router named nothing this run could reconcile —
+                    # which is exactly when that guard does not fire.
+                    "residual_types": [
+                        {"type": t, "layer": lay, "count": c}
+                        for t, lay, c in (_residual_types or [])],
+                    # This rung's own copy of the router report, kept because
+                    # the canonical path is rewritten by the next route.
+                    "router_drc_report": (None if _rung_rpt is None
+                                          else str(_rung_rpt)),
                 }
                 loosen_declines.append(_decline)
                 _loosen_terminator = _lf_reason
@@ -24407,7 +24773,9 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
                       f"proposed_util={_decline['proposed_util']} "
                       f"residual_series={_l_series} "
                       f"stall_streak={_l_streak}/{_ROUTE_LOOSEN_STALL_PATIENCE} "
-                      f"still_improving={_decline['still_improving']}")
+                      f"still_improving={_decline['still_improving']} "
+                      f"residual_types="
+                      f"{[f'{t} x{c} on {lay}' for t, lay, c in (_residual_types or [])]}")
                 # ── SHIP THE BEST RUNG THE LADDER MEASURED, NOT THE LAST ──
                 # The ladder explores by RESIZING and re-running, so when it
                 # terminates the artefacts on disk are the LAST rung's. That is
@@ -24473,6 +24841,14 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
             if _lf is not None:
                 _lw, _lh, _lrec = _lf
                 _lrec["iteration"] = _retry_i
+                # Same evidence on the APPLIED path as on the declined one: the
+                # rung this record loosens AWAY from is the one whose residual
+                # detail the next route is about to overwrite.
+                _lrec["router_drc_report"] = (None if _rung_rpt is None
+                                              else str(_rung_rpt))
+                _lrec["residual_types"] = [
+                    {"type": t, "layer": lay, "count": c}
+                    for t, lay, c in (_residual_types or [])]
                 resize_history.append(_lrec)
                 _loosen_residuals.append(int(_lrec["final_violations"]))
                 die_w, die_h = _lw, _lh
@@ -24884,6 +25260,25 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
                 f"{_last_decline.get('proposed_util')}. The manual remedy "
                 f"above is the SAME remedy the ladder was still able to "
                 f"apply.")
+        elif _loosen_terminator == "residual_not_congestion_shaped":
+            # DIFFERENT FACT, DIFFERENT SENTENCE. "The ladder tried more area
+            # and it did not help" and "more area does not address this
+            # finding" are both `evidence`, and an operator acts differently on
+            # each. Saying the first when the second is true would also claim a
+            # residual SERIES the ladder never measured.
+            _rt = _last_decline.get("residual_types") or []
+            _ladder_note = (
+                f" AUTO-LOOSEN NOT APPLICABLE: the ladder's only lever is "
+                f"utilisation, and the router named every remaining violation "
+                f"— " + ", ".join(f"{r['type']} x{r['count']} on {r['layer']}"
+                                  for r in _rt) +
+                " — as a rule of a SINGLE SHAPE (its own area/width/step, or a "
+                "via's enclosure of its own cut). Those are not distances "
+                "between independently-routed shapes, so a looser die does not "
+                "address them; the ladder declined at rung "
+                f"{_loosen_idx} rather than spend PnR passes on a lever that "
+                "does not reach the finding. The remedy is at the geometry the "
+                "router NAMES, not at the floorplan.")
         elif _loosen_terminator is not None and _term_kind == "evidence":
             _ladder_note = (
                 f" AUTO-LOOSEN STALLED: the ladder took {_loosen_idx} rung(s) "
@@ -24924,24 +25319,67 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
         # read exactly like a route that printed no table at all; say which
         # route the log's table belongs to instead.
         _types_sup = _drt_types_supersession(_log_text)
-        if _viol_types:
+        # THE RUN'S OWN DRC REPORT. When the log's table is superseded there IS
+        # a breakdown of the shipped route — `detailed_route -output_drc` wrote
+        # one, this flow asks for it, and it is in this very directory. The
+        # verdict used to send the operator away to re-run the router for a file
+        # the run had already produced; that is a missing consumer, not a
+        # missing measurement.
+        _rpt_types = _router_drc_report_types(out_dir, _drt_viol)
+        _rpt_recs = _router_drc_report_records(out_dir) if _rpt_types else []
+        # THE REPORT WINS WHEN IT RECONCILES. MEASURED (subservient x
+        # gf180mcuD, 2026-09-02, the round-4 arm at ~/_ksubs9): for the route
+        # that SHIPPED, the log's last `Viol/Layer` table said `NS Metal x1 on
+        # Metal1` and the router's own report said `NS Metal` on **Metal2**,
+        # net `__uuf__._1246_`, bbox (353.7795,159.7395)-(353.7805,159.7405).
+        # NO DRT-0701 fired for that route, so the two agree on the COUNT and
+        # disagree on the LAYER — and the count reconciliation that both of
+        # them pass cannot tell them apart. `_drt_types_supersession`'s own
+        # docstring already says reconciliation is "a necessary condition, not
+        # a sufficient one"; this is a measured instance of the insufficiency.
+        # The report is the later artefact (written by `detailed_route
+        # -output_drc` at the end of the call) and the falsifiable one, because
+        # it names the net and the bounding box the table cannot.
+        if _rpt_types:
+            _types_src = "router_drc_report"
+            _viol_types = _rpt_types
+            _nets = sorted({n for r in _rpt_recs for n in r["nets"]})
+            _types_note = (
+                ", by type/layer (from the router's own DRC report "
+                f"`{ROUTER_DRC_REPORT_NAME}`, which this run wrote and whose "
+                f"{len(_rpt_recs)} record(s) reconcile with the published "
+                "count): " +
+                ", ".join(f"{t} x{c} on {lay}" for t, lay, c in _rpt_types) +
+                (f"; net(s): {', '.join(_nets[:6])}" if _nets else ""))
+        elif _viol_types:
+            _types_src = "log_table"
             _types_note = (", by type/layer: " +
                            ", ".join(f"{t} x{c} on {lay}"
                                      for t, lay, c in _viol_types))
         elif _types_sup is not None:
+            _types_src = None
             _types_note = (
                 f" — NO type/layer breakdown is available for this count: it "
                 f"was published by OpenROAD's post-route verification "
                 f"(DRT-0701), which prints a count and no table, and the last "
                 f"in-loop table in this log totals {_types_sup[1]} and "
-                f"describes a route that verification superseded. Re-run the "
-                f"router with `detailed_route -output_drc <file>` to get the "
-                f"published violations themselves (this run logged DRT-0290 "
-                f"'no DRC report specified')")
+                f"describes a route that verification superseded. The router's "
+                f"own report `{ROUTER_DRC_REPORT_NAME}` is not usable here "
+                f"either (absent, or its record count does not reconcile with "
+                f"the published one)")
         else:
+            _types_src = None
             _types_note = ""
         _traj = _drt_violation_trajectory(_log_text)
-        _flat = _drt_flat_tail(_traj)
+        # The remedy "raise the router's end iteration" is a claim about the
+        # LOOP, so it must be measured on the loop's own series. The shipped
+        # trajectory carries DRT-0701's verified count as its last element (see
+        # `_drt_loop_trajectory`), and that element is not an iteration:
+        # MEASURED, subservient x gf180mcuD round 3 — loop `[..., 1, 1]`,
+        # published 3, shipped series `[..., 1, 3]`, flat tail 1 instead of 11,
+        # and the verdict offered more iterations to a route that had held the
+        # same count for ~50 of them.
+        _flat = _drt_flat_tail(_drt_loop_trajectory(_log_text))
         # A remedy this run has already applied and MEASURED to buy nothing is
         # not a remedy; offering it sends the operator to redo the experiment.
         _area_ruled_out = _term_kind == "evidence"
@@ -24951,7 +25389,12 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
         if not _iters_ruled_out:
             _open_remedies.append("raise the router's end iteration")
         _measured: List[str] = []
-        if _area_ruled_out:
+        if _loosen_terminator == "residual_not_congestion_shaped":
+            _measured.append(
+                "more die area is not a remedy for this residual — every "
+                "violation the router named is a single-shape rule (see "
+                "AUTO-LOOSEN NOT APPLICABLE below)")
+        elif _area_ruled_out:
             _measured.append(
                 f"more die area was tried and did not help (auto-loosen "
                 f"residual series {_l_series})")
@@ -24987,6 +25430,12 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
                     # table printed belongs to a superseded route".
                     "drt_types_superseded_in_loop_total":
                         (None if _types_sup is None else _types_sup[1]),
+                    # WHICH artefact the breakdown above came from. A caller
+                    # cannot otherwise tell the router's own DRC report from
+                    # the log's in-loop table, and they are different routes'
+                    # evidence when DRT-0701 fires.
+                    "drt_violation_types_source": _types_src,
+                    "drt_violation_report": _rpt_recs[:20],
                     "drt_trajectory_flat_tail": _flat,
                     "drt_trajectory_len": len(_traj),
                     "remedies_open": _open_remedies,

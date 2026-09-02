@@ -1,0 +1,93 @@
+# VERBATIM tail of subservient x gf180mcuD, round 3 (plugin 1.15.55,
+# image ghcr.io/vibeic/vibeic-eda@sha256:66c33ff2..., OpenROAD 26Q3-1472,
+# host 8HD-9, 2026-09-02). The per-iteration `Total number of vias` /
+# `Up-via summary` blocks are DROPPED -- no parser reads them and they
+# quadrupled the file. Every line a parser DOES read (DRT-0199 counts,
+# the Viol/Layer tables, DRT-0195/0198/0200/0701) is byte-verbatim and
+# in original order.
+#
+# The routing loop held at 1 for its last ~50 iterations; the post-route
+# verification published 3. The per-violation detail of those 3 is the
+# sibling fixture routed_router_ns_metal.drc.rpt -- THIS RUN's own
+# `detailed_route -output_drc` output.
+[INFO DRT-0199]   Number of violations = 1.
+Viol/Layer      Metal1
+NS Metal             1
+[INFO DRT-0267] cpu time = 00:00:00, elapsed time = 00:00:00, memory = 1079.44 (MB), peak = 1599.42 (MB)
+Total wire length = 150907 um.
+Total wire length on LAYER Metal1 = 3340 um.
+Total wire length on LAYER Metal2 = 56753 um.
+Total wire length on LAYER Metal3 = 58844 um.
+Total wire length on LAYER Metal4 = 27291 um.
+Total wire length on LAYER Metal5 = 4676 um.
+[INFO DRT-0195] Start 58th guides tiles iteration.
+    Completing 100% with 1 violations.
+    elapsed time = 00:00:00, memory = 1079.44 (MB).
+[INFO DRT-0199]   Number of violations = 1.
+Viol/Layer      Metal1
+NS Metal             1
+[INFO DRT-0267] cpu time = 00:00:00, elapsed time = 00:00:00, memory = 1079.44 (MB), peak = 1599.42 (MB)
+Total wire length = 150907 um.
+Total wire length on LAYER Metal1 = 3340 um.
+Total wire length on LAYER Metal2 = 56753 um.
+Total wire length on LAYER Metal3 = 58844 um.
+Total wire length on LAYER Metal4 = 27291 um.
+Total wire length on LAYER Metal5 = 4676 um.
+[INFO DRT-0195] Start 59th guides tiles iteration.
+    Completing 100% with 1 violations.
+    elapsed time = 00:00:00, memory = 1079.44 (MB).
+[INFO DRT-0199]   Number of violations = 1.
+Viol/Layer      Metal1
+NS Metal             1
+[INFO DRT-0267] cpu time = 00:00:00, elapsed time = 00:00:00, memory = 1079.44 (MB), peak = 1599.42 (MB)
+Total wire length = 150907 um.
+Total wire length on LAYER Metal1 = 3340 um.
+Total wire length on LAYER Metal2 = 56753 um.
+Total wire length on LAYER Metal3 = 58844 um.
+Total wire length on LAYER Metal4 = 27291 um.
+Total wire length on LAYER Metal5 = 4676 um.
+[INFO DRT-0195] Start 60th stubborn tiles iteration.
+    Completing 10% with 1 violations.
+    elapsed time = 00:00:00, memory = 1079.44 (MB).
+    Completing 20% with 1 violations.
+    elapsed time = 00:00:00, memory = 1079.44 (MB).
+    Completing 30% with 1 violations.
+    elapsed time = 00:00:00, memory = 1079.44 (MB).
+    Completing 40% with 1 violations.
+    elapsed time = 00:00:00, memory = 1079.44 (MB).
+    Completing 50% with 1 violations.
+    elapsed time = 00:00:00, memory = 1079.44 (MB).
+    Completing 60% with 1 violations.
+    elapsed time = 00:00:00, memory = 1079.44 (MB).
+    Completing 70% with 1 violations.
+    elapsed time = 00:00:00, memory = 1079.44 (MB).
+    Completing 80% with 1 violations.
+    elapsed time = 00:00:00, memory = 1079.44 (MB).
+    Completing 90% with 1 violations.
+    elapsed time = 00:00:00, memory = 1079.44 (MB).
+    Completing 100% with 1 violations.
+    elapsed time = 00:00:00, memory = 1079.44 (MB).
+[INFO DRT-0199]   Number of violations = 1.
+Viol/Layer      Metal1
+NS Metal             1
+[INFO DRT-0267] cpu time = 00:00:00, elapsed time = 00:00:00, memory = 1079.44 (MB), peak = 1599.42 (MB)
+Total wire length = 150907 um.
+Total wire length on LAYER Metal1 = 3340 um.
+Total wire length on LAYER Metal2 = 56753 um.
+Total wire length on LAYER Metal3 = 58844 um.
+Total wire length on LAYER Metal4 = 27291 um.
+Total wire length on LAYER Metal5 = 4676 um.
+[INFO DRT-0200] Skipping iteration 61
+[INFO DRT-0200] Skipping iteration 62
+[INFO DRT-0200] Skipping iteration 63
+[INFO DRT-0200] Skipping iteration 64
+[INFO DRT-0198] Complete detail routing.
+Total wire length = 150907 um.
+Total wire length on LAYER Metal1 = 3340 um.
+Total wire length on LAYER Metal2 = 56753 um.
+Total wire length on LAYER Metal3 = 58844 um.
+Total wire length on LAYER Metal4 = 27291 um.
+Total wire length on LAYER Metal5 = 4676 um.
+[INFO DRT-0267] cpu time = 00:25:50, elapsed time = 00:05:03, memory = 1079.44 (MB), peak = 1599.42 (MB)
+
+[WARNING DRT-0701] Post-route verification found 3 violation(s) that the routing loop did not report (1 in-loop). The published result is the verified one.

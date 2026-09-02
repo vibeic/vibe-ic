@@ -1,0 +1,66 @@
+# VERBATIM marker sequence of ONE PnR pass, subservient x gf180mcuD,
+# round 5 (plugin 1.15.64 + ksubs10-round5), pinned image
+# ...@sha256:66c33ff2..., OpenROAD 26Q3-1472, host 8HD-9, 2026-09-02,
+# ladder rung 1 (die 491x491).
+#
+# Only lines a parser reads are kept (DRT-0194/0199/0701, the PNR_STAGE
+# breadcrumbs and the NAMED_VIOL_REROUTE markers), in original order and
+# byte-verbatim; runs of identical DRT-0199 lines are collapsed. The bulk
+# (wire-length tables, via summaries, per-tile progress) is dropped.
+#
+# WHAT IT SHOWS: the last DRT-0701 publishes 6, and TWO more detail
+# routes start after it. The route that ships measured 3.
+PNR_STAGE: floorplan
+PNR_STAGE: placement
+PNR_STAGE: cts
+PNR_STAGE: hold_repair
+PNR_STAGE: global_route
+PNR_STAGE: detailed_route
+[INFO DRT-0194] Start detail routing.
+[INFO DRT-0199]   Number of violations = 8948.
+[INFO DRT-0199]   Number of violations = 5636.
+[INFO DRT-0199]   Number of violations = 5194.
+[INFO DRT-0199]   Number of violations = 1152.
+[INFO DRT-0199]   Number of violations = 230.
+[INFO DRT-0199]   Number of violations = 67.
+[INFO DRT-0199]   Number of violations = 5.
+[INFO DRT-0199]   Number of violations = 0.
+[WARNING DRT-0701] Post-route verification found 3 violation(s) that the routing loop did not report (0 in-loop). The published result is the verified one.
+PNR_STAGE: postroute_spef_extract
+PNR_STAGE: postroute_drv_repair
+[INFO DRT-0194] Start detail routing.
+[INFO DRT-0199]   Number of violations = 8629.
+[INFO DRT-0199]   Number of violations = 4385.
+[INFO DRT-0199]   Number of violations = 3757.
+[INFO DRT-0199]   Number of violations = 910.
+[INFO DRT-0199]   Number of violations = 335.
+[INFO DRT-0199]   Number of violations = 148.
+[INFO DRT-0199]   Number of violations = 42.
+[INFO DRT-0199]   Number of violations = 6.
+[INFO DRT-0199]   Number of violations = 3.
+[WARNING DRT-0701] Post-route verification found 6 violation(s) that the routing loop did not report (3 in-loop). The published result is the verified one.
+[INFO DRT-0194] Start detail routing.
+[INFO DRT-0199]   Number of violations = 8739.
+[INFO DRT-0199]   Number of violations = 4515.
+[INFO DRT-0199]   Number of violations = 3565.
+[INFO DRT-0199]   Number of violations = 942.
+[INFO DRT-0199]   Number of violations = 374.
+[INFO DRT-0199]   Number of violations = 158.
+[INFO DRT-0199]   Number of violations = 82.
+[INFO DRT-0199]   Number of violations = 37.
+[INFO DRT-0199]   Number of violations = 13.
+[INFO DRT-0199]   Number of violations = 11.
+[INFO DRT-0199]   Number of violations = 6.
+PNR_STAGE: postroute_antenna_repair
+PNR_STAGE: postroute_drv_reconverge
+PNR_STAGE: postroute_antenna_reconverge
+PNR_STAGE: postroute_fill
+NAMED_VIOL_REROUTE_PASS1_BEFORE: 3 named_nets=3 __uuf__._0002_ __uuf__._0260_ __uuf__._0881_
+NAMED_VIOL_REROUTE_CLEARED: 3 (skipped=0)
+[INFO DRT-0194] Start detail routing.
+[INFO DRT-0199]   Number of violations = 12.
+[INFO DRT-0199]   Number of violations = 3.
+[INFO DRT-0199]   Number of violations = 3.
+NAMED_VIOL_REROUTE_PASS1_AFTER: 3 (was 3)
+NAMED_VIOL_REROUTE_NO_IMPROVEMENT: 3 -> 3 -- stopping; the residual is not one a re-route of these nets moves
+NAMED_VIOL_REROUTE_DONE
