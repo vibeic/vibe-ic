@@ -933,7 +933,7 @@ LIBRARY: Dict[str, Dict[str, Any]] = {
                           "nq_p", "nq_n", "nqtail", "nsrq", "nsrqb",
                           "nn1", "nn2", "nqb",
                           # the conversion-window generator
-                          "nall", "nrstb",
+                          "nall", "nallc", "nrm", "nrmb", "nrstb",
                           # the auto-zeroed quantiser input
                           "nqz"],
         # Stated in the artefact so a reader is told what LEFT the boundary
@@ -1439,6 +1439,54 @@ LIBRARY: Dict[str, Dict[str, Any]] = {
             #
             # `nall` is already the active-high reset, so only its
             # complement costs an inverter.
+            # ── the all-ones decode is REGISTERED before it resets anything ─
+            # MEASURED (round 20, and still true at v1.16.67 because that
+            # round's fix lived in a hand-edited netlist and never reached
+            # this file): `nallc` is a combinational AND over an
+            # ASYNCHRONOUS ripple counter, so it glitches on every carry
+            # propagation — 5 to 6 pulses of about 0.6 ns per conversion
+            # window, at 2, 4, 8 and 16 clocks after each reset. Wired
+            # straight to the integrator shorts and the auto-zero clamp, each
+            # glitch closes them for 0.6 ns, which is far too short for the
+            # clamp to pull nqz to vcm: measured, the reset leaves
+            # nqz - vcm = +0.0261 V where it should leave 0, and the
+            # quantiser then carries that as a standing offset all window.
+            #
+            # The counter advances on the RISING edge, so the ripple settles
+            # during the LOW phase. A transparent-LOW latch samples there and
+            # HOLDS through the HIGH phase, and no hazard is observable. The
+            # keeper is deliberately weak (1.0/0.5 um against a 4/2 um
+            # forward inverter) — round 19 measured what a keeper drawn at
+            # the forward inverter's own geometry does: the pass gate cannot
+            # overwrite it and the latch never changes state.
+            {"name": "mn_rtg", "role": "nmos", "function":
+             "reset-decode register pass gate (n-side): open while the "
+             "counter's ripple has settled",
+             "nets": ["nallc", "nclkb", "nrm", "vss"], "w": 2.0, "l": 0.15},
+            {"name": "mp_rtg", "role": "pmos", "function":
+             "reset-decode register pass gate (p-side)",
+             "nets": ["nallc", "clk", "nrm", "vdd"], "w": 4.0, "l": 0.15},
+            {"name": "mp_rinv", "role": "pmos", "function":
+             "reset-decode register storage inverter, pull-up",
+             "nets": ["nrmb", "nrm", "vdd", "vdd"], "w": 4.0, "l": 0.5},
+            {"name": "mn_rinv", "role": "nmos", "function":
+             "reset-decode register storage inverter, pull-down",
+             "nets": ["nrmb", "nrm", "vss", "vss"], "w": 2.0, "l": 0.5},
+            {"name": "mp_rkp", "role": "pmos", "function":
+             "reset-decode register keeper, pull-up — WEAK against the pass "
+             "gate on purpose; drawn at the forward inverter's own geometry "
+             "it becomes a latch the pass gate cannot overwrite",
+             "nets": ["nrm", "nrmb", "vdd", "vdd"], "w": 1.0, "l": 0.5},
+            {"name": "mn_rkp", "role": "nmos", "function":
+             "reset-decode register keeper, pull-down",
+             "nets": ["nrm", "nrmb", "vss", "vss"], "w": 0.5, "l": 0.5},
+            {"name": "mp_rout", "role": "pmos", "function":
+             "reset-decode register output inverter, pull-up — THIS is what "
+             "drives the integrator shorts and the auto-zero clamp",
+             "nets": ["nall", "nrmb", "vdd", "vdd"], "w": 4.0, "l": 0.5},
+            {"name": "mn_rout", "role": "nmos", "function":
+             "reset-decode register output inverter, pull-down",
+             "nets": ["nall", "nrmb", "vss", "vss"], "w": 2.0, "l": 0.5},
             {"name": "mp_rstinv", "role": "pmos", "function":
              "complement of the conversion-window reset, pull-up: the "
              "p-side of every reset transmission gate takes it",
@@ -1923,7 +1971,10 @@ LIBRARY: Dict[str, Dict[str, Any]] = {
             # bits is true, and each stage can only take it away.
             "first_in2": "vdd",
             "inner_out2": "nall{i}",
-            "last_out2": "nall",
+            # NOT `nall`. The combinational AND over a RIPPLE counter
+            # glitches on every carry, and that glitch used to BE the
+            # reset — see the register at the top level.
+            "last_out2": "nallc",
             "internal_nets": ["nib{i}", "nm{i}", "nmb{i}", "ns{i}",
                               "nqb{i}", "nnand{i}", "nnandp{i}"],
             "devices": [
