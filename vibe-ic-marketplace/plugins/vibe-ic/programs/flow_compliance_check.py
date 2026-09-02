@@ -8899,6 +8899,31 @@ def _refusal_examined_nothing(report: Any) -> bool:
     return numeric.get("PASS", 0) == 0 and numeric.get("FAIL", 0) == 0
 
 
+
+def _clause_enforcement_label(rec: Dict[str, Any]) -> str:
+    """What the reader needs: the disposition of the CLAUSE, not of the rc.
+
+    `enforcement` on the record is derived from the program's own verdict and
+    exit code and says nothing about how the clause is wired, so a gate wired
+    `advisory_program_exit_zero` whose module ALSO declares itself advisory
+    printed `enforcement=BLOCKING` while flipping no step verdict at all — the
+    consumer stands such a refusal down on exactly this two-source agreement.
+    Measured on opentitan_aes: step D1 printed three such lines and none of the
+    three gates it named is why D1 was not PASS.
+
+    Derived here rather than stored, so the record dict keeps the shape its
+    landed consumers and tests pin. A gate wired advisory that still declares
+    ITSELF blocking is a real disagreement and keeps reading BLOCKING.
+    """
+    label = str(rec.get("enforcement"))
+    if label != "BLOCKING":
+        return label
+    if not _gate_is_two_source_advisory(str(rec.get("gate") or "")):
+        return label
+    return ("ADVISORY_REFUSAL (wired advisory; the refusal is reported and "
+            "does NOT deny this step its tier)")
+
+
 def _advisory_execution_record(cmd: str, ledger_start: int,
                                ok: bool, out: str,
                                project: Path,
@@ -12168,7 +12193,7 @@ def check_step(project: Path, step: Dict[str, Any], waivers: Dict,
                 f"{rec.get('gate')} rc={rec.get('exit_code')} "
                 f"verdict={rec.get('verdict')} "
                 f"reason_class={rec.get('reason_class')} "
-                f"enforcement={rec.get('enforcement')}")
+                f"enforcement={_clause_enforcement_label(rec)}")
     else:
         # No gate — just presence of outputs counts
         result.status = "PASS" if result.evidence else "MISSING"

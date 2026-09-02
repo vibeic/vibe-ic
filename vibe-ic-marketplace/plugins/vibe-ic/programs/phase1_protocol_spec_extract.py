@@ -165,6 +165,98 @@ def _row_is_encoding(row: str) -> bool:
     return any(p.search(row) for p in _L15_ENCODING_ROW_PATTERNS)
 
 
+# ---------------------------------------------------------------------------
+# ENCODING TABLES IN GFM PIPE FORM
+# ---------------------------------------------------------------------------
+# A register-field value table — `| Value | Name | Description |` — is an
+# ENCODING table: its Name column holds the symbolic names of the CODES a field
+# may take, not signals. It was reaching no layer at all (L15 recognises only
+# `Table A-1 <caption>` blocks) while L1's narrative pin line-scan promoted the
+# rows that happened to contain a direction word in their prose. Measured on
+# opentitan_aes: of 21 such rows, 11 became L1 pins and 10 did not, and the
+# discriminator was whether the DESCRIPTION said "input"/"output" — `AES_ENC`
+# is a pin because its description reads "Invalid input values", `AES_DEC`
+# beside it is not because its description reads "Decryption."
+#
+# Header roles decide, not content: a VALUE/CODE column plus a NAME column and
+# NO direction column is an encoding table. A port table always carries a
+# direction column (`_v0_3_2_classify_pin_header` requires one), so the two
+# populations cannot overlap.
+_L15_GFM_VALUE_HEADERS = frozenset({
+    "value", "values", "code", "codes", "encoding", "enc", "opcode",
+    "hex", "bit pattern", "bits", "binary", "id", "index",
+})
+_L15_GFM_NAME_HEADERS = frozenset({
+    "name", "names", "mnemonic", "symbol", "state", "label", "enum",
+})
+_L15_GFM_DIR_HEADERS = frozenset({
+    "direction", "dir", "type", "i/o", "io", "in/out", "mode",
+})
+
+
+def _l15_split_pipe_cells(line: str):
+    body = line.strip()
+    if body.startswith("|"):
+        body = body[1:]
+    if body.endswith("|"):
+        body = body[:-1]
+    return [c.strip() for c in body.split("|")]
+
+
+def _l15_is_pipe_row(line: str) -> bool:
+    return "|" in (line or "") and line.strip().count("|") >= 2
+
+
+def _l15_is_sep_row(line: str) -> bool:
+    body = (line or "").strip()
+    if not body or "|" not in body:
+        return False
+    return all(set(c.strip()) <= set(":- ") and c.strip()
+               for c in _l15_split_pipe_cells(body))
+
+
+def iter_gfm_encoding_tables(text: str):
+    """Yield ``(header_cells, rows, header_line_index)`` for every GFM pipe
+    table whose header roles say ENCODING: a value-ish column AND a name
+    column AND no direction column. Chip-AGNOSTIC: header vocabulary only."""
+    if not isinstance(text, str) or not text:
+        return
+    lines = text.split("\n")
+    n = len(lines)
+    i = 0
+    while i < n:
+        if (_l15_is_pipe_row(lines[i]) and not _l15_is_sep_row(lines[i])
+                and i + 1 < n and _l15_is_sep_row(lines[i + 1])):
+            header = _l15_split_pipe_cells(lines[i])
+            norm = [(c or "").strip(" *`").lower() for c in header]
+            has_value = any(c in _L15_GFM_VALUE_HEADERS for c in norm)
+            has_name = any(c in _L15_GFM_NAME_HEADERS for c in norm)
+            has_dir = any(c in _L15_GFM_DIR_HEADERS for c in norm)
+            rows = []
+            j = i + 2
+            while j < n and _l15_is_pipe_row(lines[j]) and lines[j].strip():
+                if not _l15_is_sep_row(lines[j]):
+                    rows.append(_l15_split_pipe_cells(lines[j]))
+                j += 1
+                if len(rows) >= 256:
+                    break
+            if has_value and has_name and not has_dir and rows:
+                yield (header, rows, i)
+            i = max(j, i + 2)
+            continue
+        i += 1
+
+
+def gfm_encoding_table_line_indices(text: str) -> set:
+    """Every 0-based line index occupied by an encoding table (header,
+    separator and data rows). The L1 pin walkers use this to stand down."""
+    out = set()
+    for _hdr, rows, i in iter_gfm_encoding_tables(text):
+        for k in range(i, i + 2 + len(rows) + 1):
+            out.add(k)
+    return out
+
+
 def extract_l15_encoding_tables(text: str) -> Dict[str, Any]:
     """Harvest every 'Table A?-? <name>' whose body contains
     encoding-shape rows. Drop document-layout / section-summary
@@ -204,6 +296,30 @@ def extract_l15_encoding_tables(text: str) -> Dict[str, Any]:
         evidence.append({
             "line": i + 1, "quote": line.strip(),
             "table": table_id,
+        })
+
+    # The GFM half. These carry no `Table A-1` caption, so the captioned
+    # walker above never saw them; the name they are keyed by is the field the
+    # table encodes, taken from the nearest heading above it.
+    _lines = _lines_of(text)
+    for header, rows, idx in iter_gfm_encoding_tables(text):
+        name = ""
+        for k in range(idx - 1, max(-1, idx - 40), -1):
+            h = _lines[k].strip()
+            if h.startswith("#"):
+                name = h.lstrip("#").strip()
+                break
+        tables.append({
+            "table_id": f"gfm@{idx + 1}",
+            "name": name or "encoding table",
+            "line": idx + 1,
+            "header": header,
+            "rows": [" | ".join(r) for r in rows[:25]],
+            "extraction_strategy": "gfm_header_role_encoding_table",
+        })
+        evidence.append({
+            "line": idx + 1, "quote": _lines[idx].strip(),
+            "table": f"gfm@{idx + 1}",
         })
 
     return {

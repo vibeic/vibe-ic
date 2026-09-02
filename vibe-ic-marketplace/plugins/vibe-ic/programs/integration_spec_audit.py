@@ -77,6 +77,33 @@ class AuditResult:
 STUB_PATTERNS = re.compile(r'\b(TODO|stub|placeholder)\b', re.IGNORECASE)
 
 
+
+def _declared_absent(data: dict, field: str) -> str:
+    """The emitter's own statement that the INPUT declares none of `field`.
+
+    Returns a short citation when the document declares the absence, "" when it
+    is merely silent — silence is not a declaration and must keep its ERROR.
+    Two channels, both written by the L9 emitter beside the list itself:
+    `no_<field>_in_input: true`, and a `<field-singular>_name_provenance`
+    census whose entries were all dropped by a stated rule (a list that is
+    empty BECAUSE every candidate was refused, not because none was sought).
+    """
+    if not isinstance(data, dict):
+        return ""
+    flag = data.get(f"no_{field}_in_input")
+    if flag is True:
+        return f"no_{field}_in_input=true"
+    singular = field[:-1] if field.endswith("s") else field
+    prov = data.get(f"{singular}_name_provenance")
+    if isinstance(prov, dict):
+        total = prov.get("entries_total")
+        dropped = prov.get("entries_dropped")
+        if (isinstance(total, int) and isinstance(dropped, int)
+                and total > 0 and dropped == total and prov.get("rule")):
+            return (f"{singular}_name_provenance: {dropped}/{total} candidates "
+                    f"dropped by a stated rule")
+    return ""
+
 def contains_stub(value) -> bool:
     """Recursively check if any string value contains stub/placeholder text."""
     if isinstance(value, str):
@@ -219,12 +246,35 @@ def audit(project_dir: str) -> AuditResult:
                 file=rel,
             ))
         elif not isinstance(submodules, list) or len(submodules) == 0:
-            file_findings.append(Finding(
-                rule="MISSING_SUBMODULES",
-                severity="ERROR",
-                message="'submodules' is empty or not a list",
-                file=rel,
-            ))
+            # An empty list is two different facts and this rule graded both
+            # ERROR. The EMITTER of this document says which: it writes
+            # `no_submodules_in_input` next to the list, and — when it dropped
+            # candidates — a `submodule_name_provenance` census recording why.
+            # Measured on opentitan_aes: 7 candidates were harvested from a
+            # module-catalog bullet list, all 7 were AES *modes* whose names do
+            # not occur in the document they cite, and L9's own provenance rule
+            # correctly dropped all 7. Grading that ERROR asks the design to
+            # supply structure it does not have and hides the one case this
+            # rule exists for: a list that is empty because nothing looked.
+            #
+            # Silence still ERRORs. Only an explicit declaration is read, and
+            # only when it says the input states none.
+            declared = _declared_absent(data, "submodules")
+            if declared:
+                file_findings.append(Finding(
+                    rule="SUBMODULES_DECLARED_ABSENT",
+                    severity="INFO",
+                    message=("'submodules' is empty and the emitter declares "
+                             f"the input states none ({declared})"),
+                    file=rel,
+                ))
+            else:
+                file_findings.append(Finding(
+                    rule="MISSING_SUBMODULES",
+                    severity="ERROR",
+                    message="'submodules' is empty or not a list",
+                    file=rel,
+                ))
         else:
             # Check 3: each submodule has name and ports
             for idx, sub in enumerate(submodules):

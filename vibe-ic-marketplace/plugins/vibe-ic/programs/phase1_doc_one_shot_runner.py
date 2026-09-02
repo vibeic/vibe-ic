@@ -110,6 +110,7 @@ from dataclasses import dataclass, field, asdict
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
 import _path_layout as _pl
+import phase1_protocol_spec_extract as _l15x
 import _input_corpus_scope as _ics
 import sdc_constraints as _sdc
 import floorplan_contract as _fpc
@@ -11108,6 +11109,7 @@ def _v455_sanitize_and_merge_pins(pins: List[dict],
             continue
         have.add(extra["name"])
         kept.append(extra)
+
     return kept
 
 
@@ -21994,9 +21996,22 @@ def gen_l1_datasheet(project: Path,
         # is RST grid (parameter-default cells like `AFTER` /
         # `BEFORE` / `DEFAULT`), not Markdown pipe-table.
         grid_table_ranges = _rst_grid_table_line_ranges(text)
+        # A `| Value | Name | Description |` table is an ENCODING table: its
+        # Name column holds the symbolic names of the CODES a register field
+        # may take. The narrative line-scan below anchors on a direction word
+        # ANYWHERE in the line, so such a row was promoted to a pin whenever
+        # its description prose happened to contain one — measured on
+        # opentitan_aes, 11 of 21 rows, `AES_ENC` in ("Invalid input values")
+        # and `AES_DEC` out ("Decryption."). Header roles decide, and a port
+        # table always carries a direction column, so this can only ever
+        # REMOVE a promotion the design never declared.
+        _encoding_table_lines = _l15x.gfm_encoding_table_line_indices(text)
         _running_offset = 0
-        for line in text.splitlines():
+        for _line_no, line in enumerate(text.splitlines()):
             line_offset = _running_offset
+            if _line_no in _encoding_table_lines:
+                _running_offset += len(line) + 1
+                continue
             # +1 for the newline `splitlines` stripped (last line
             # may not have a trailing \n but offset error is
             # bounded and never causes a wrong range hit).

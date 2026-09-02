@@ -446,9 +446,13 @@ def inspect(project: Path,
     if not die_decls and not util_decls and l19 is None:
         summary["skip_kind"] = "input-missing"
         summary["skipped_reason"] = (
+            # Say what this branch MEANS. Both layers were read; neither
+            # states a floorplan. Phrasing it "no L19 die-area contract" reads
+            # to any absent-input recogniser as "L19 never arrived", which is
+            # the opposite fact and is not what this branch tests.
             "the design mandates no floorplan (no DIE_AREA / DIE_WIDTH+"
-            "DIE_HEIGHT / PL_TARGET_DENSITY / FP_CORE_UTIL and no L19 "
-            "die-area contract) — phase3 auto-sizes and there is no "
+            "DIE_HEIGHT / PL_TARGET_DENSITY / FP_CORE_UTIL, and L19 declares "
+            "no die-area contract) — phase3 auto-sizes and there is no "
             "verbatim-consumed value to protect")
         return findings, summary
 

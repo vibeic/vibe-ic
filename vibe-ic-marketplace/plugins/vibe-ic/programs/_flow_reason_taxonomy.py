@@ -92,7 +92,17 @@ _BLOCKED_RE = re.compile(
     r"\bno\b[^\n]{0,80}\b(?:doc(?:ument)?|report|file)\b[^\n]{0,40}\bfound\b|"
     r"\bno\b[^\n]{0,80}\b(?:results?\.json|generated docs|input docs|"
     r"canonical artefacts?|canonical artifacts?)\b|"
-    r"\bno (?:spef|analog dir|l\d+)\b|\bpre output project\b|"
+    # `no L<n>` means "that layer document never arrived" — an upstream
+    # cascade. It does NOT mean "L<n> arrived and declares none of X", which is
+    # the design speaking. The two were one pattern until
+    # `l9_floorplan_contract_check`'s own sentence — "the design mandates no
+    # floorplan (... and no L19 die-area contract)" — matched `no l19` and was
+    # booked BLOCKED_BY_UPSTREAM, costing step D1 its tier on a cascade that
+    # does not exist. The exclusion is written from that sentence: a
+    # declaration noun after the layer name says the layer was READ.
+    r"\bno (?:spef|analog dir)\b|"
+    r"\bno l\d+\b(?![^\n]{0,24}\b(?:die[- ]area|contract|mandate|declar)\w*)|"
+    r"\bpre output project\b|"
     r"\bphase 1\b[^\n]{0,40}\bnot attempted\b|"
     r"\brequired output\b.*\b(?:absent|missing)\b|"
     r"\bmissing\b.*\b(?:producer|output|artefact|artifact)\b)", re.I)
