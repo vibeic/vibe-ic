@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 1265
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1265)
+- **Total programs (excluding helpers / shims):** 1266
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1266)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 1256 |
+| `any` | 1257 |
 
 ## Alphabetical listing
 
@@ -974,6 +974,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `real_artefact_test_backing_check` | any | — | how many of a change's tests are driven by a REAL checked-in artefact, and how many by a fixture the author typed alongside the change. |
 | `record_prompt_context_bridge` | any | — | visible prompt/context record adapter. |
 | `reference_control_resolved_through_a_mutable_ref` | any | — | A control whose reference point is a name that moves. |
+| `refusal_names_its_remedy_census` | any | — | Refusals that do not name the channel a reader would fix them through. |
 | `register_bus_driver_gen` | any | — | drive a known-answer vector over the bus the design SAYS it is driven over. |
 | `registry_is_the_iteration_domain` | any | — | A registry that IS the population instead of a FILTER over one. |
 | `regmap_bit_layout_check` | any | — | gate that catches L4_REGMAP.json registers that don't specify explicit bit positions for their fields. |
@@ -1337,7 +1338,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (1256 programs)
+### `any` (1257 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `absence_verdict_names_its_search_space_check` — "not found" must say WHERE it looked.
@@ -2282,6 +2283,7 @@ _(no programs in this group)_
 - `real_artefact_test_backing_check` — how many of a change's tests are driven by a REAL checked-in artefact, and how many by a fixture the author typed alongside the change.
 - `record_prompt_context_bridge` — visible prompt/context record adapter.
 - `reference_control_resolved_through_a_mutable_ref` — A control whose reference point is a name that moves.
+- `refusal_names_its_remedy_census` — Refusals that do not name the channel a reader would fix them through.
 - `register_bus_driver_gen` — drive a known-answer vector over the bus the design SAYS it is driven over.
 - `registry_is_the_iteration_domain` — A registry that IS the population instead of a FILTER over one.
 - `regmap_bit_layout_check` — gate that catches L4_REGMAP.json registers that don't specify explicit bit positions for their fields.
