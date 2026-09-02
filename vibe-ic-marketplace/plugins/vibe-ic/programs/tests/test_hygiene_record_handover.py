@@ -331,13 +331,25 @@ def test_exactly_one_of_the_two_paths_is_ever_taken(tmp_path, monkeypatch):
 def test_the_state_parser_finds_both_assignment_forms():
     """The parser's own control. It once matched only the literal form and so
     found 5 of 8, missing PASS, FAIL and WROTE_CORPUS -- the three that mean
-    "this gate ran"."""
+    "this gate ran".
+
+    UNDETERMINED is the NINTH, and it is recorded here only because the owner
+    ruled it a real state (2026-09-03): a corpus that was never opened is
+    neither a pass nor a finding, so it needs a name of its own rather than
+    being folded into either. It arrived in the dispatcher with v1.14.4
+    (`ac3232ddeb`) and this pin has been red about it since — correctly,
+    because a ninth token appearing in `_GX_STATE` with no ruling behind it is
+    exactly what an equality pin is for.
+
+    The pin stays an EQUALITY. A tenth spelling must redden this line, and
+    `test_a_third_assignment_form_fails_here_rather_than_shrinking_the_set`
+    below keeps the parser itself from answering with a quietly smaller set."""
     repo = PROGRAMS.parents[3]
     disp = (repo / "tools" / "ci" / "_gate_dispatch.sh").read_text(encoding="utf-8")
     states = dispatcher_states(disp)
     assert states == {"PASS", "FAIL", "NOT_CHECKED", "WROTE_CORPUS",
-                      "LISTED", "OTHER_SHARD", "OUT_OF_SCOPE", "QUEUED"}, (
-        sorted(states))
+                      "LISTED", "OTHER_SHARD", "OUT_OF_SCOPE", "QUEUED",
+                      "UNDETERMINED"}, sorted(states)
 
 
 def test_a_third_assignment_form_fails_here_rather_than_shrinking_the_set():

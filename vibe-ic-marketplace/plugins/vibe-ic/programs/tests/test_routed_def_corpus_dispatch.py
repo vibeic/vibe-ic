@@ -590,21 +590,42 @@ def test_the_dispatcher_gives_absent_and_empty_different_rows(tmp_path):
         "an absent corpus is not a broken producer; the producer worked and "
         "reported, correctly, that there was nothing to open")
 
-    # NEITHER BECOMES A PASS. Both are unexempted, process-attested, blocking
-    # NOT_CHECKED rows and both refuse the run — this is what #1763 relies on.
+    # NEITHER BECOMES A PASS, and they refuse through DIFFERENT channels —
+    # which is the whole point of them being two states (owner ruling,
+    # 2026-09-03: absent = UNDETERMINED, a visible third state; present-but-
+    # empty = a measured zero, which is a finding about the tree).
+    #
+    # Everything that is TRUE OF BOTH is asserted over both; the two things
+    # that differ are asserted separately below, so a future collapse of the
+    # pair cannot hide inside a shared loop.
     for proc, doc, att, prog, label in (
             (e_proc, e_doc, e_att, e_prog, empty_label),
             (a_proc, a_doc, a_att, a_prog, absent_label)):
         assert proc.returncode == 2, proc.stdout + proc.stderr
-        assert doc["gates"][0]["state"] == "NOT_CHECKED"
-        assert doc["not_checked_unexempted"] == [label]
         assert doc["gates"][0]["exempt_until"] is None
+        assert doc["gates"][0]["blocking_refusal"] is True, doc["gates"][0]
         assert doc["wiring_errors"] == []
         assert len(att) == len(prog) == 1
         assert att[0]["label"] == label
         assert att[0]["complete"] is True
         assert att[0]["returncode"] == 2
         assert prog[0]["semantic_sha256"] == att[0]["semantic_sha256"]
+
+    # THE READ-BUT-EMPTY ROW: a population WAS opened and measured at zero.
+    # That is a finding about the tree, so it is a refusal — NOT_CHECKED —
+    # and it carries the unexempted-refusal list.
+    assert e_doc["gates"][0]["state"] == "NOT_CHECKED", e_doc["gates"][0]
+    assert e_doc["not_checked_unexempted"] == [empty_label], e_doc
+    assert e_doc.get("undetermined") == 0, e_doc
+
+    # THE ABSENT ROW: nothing was opened, so there is no measurement to be a
+    # finding about. It is the third state, it carries its OWN list, and it
+    # must not appear in the refusal list — a reader counting refusals must be
+    # counting refusals.
+    assert a_doc["gates"][0]["state"] == "UNDETERMINED", a_doc["gates"][0]
+    assert a_doc["not_checked_unexempted"] == [], a_doc
+    assert a_doc.get("undetermined") == 1, a_doc
+    assert a_doc.get("undetermined_labels") == [absent_label], a_doc
 
     # The two attested bodies differ, so the evidence a landing keeps is not
     # the same evidence for the two states either.
@@ -772,7 +793,12 @@ def _dispatch_script(root: Path, producer: str, *, preamble: str = "") -> Path:
 def _dispatch_run(root: Path, producer: str, owned_label: str,
                   stem: str, *, attest_population: bool = True,
                   preamble: str = "", also_owned: Sequence[str] = (),
-                  pointer: str | None = None):
+                  pointer: str | None = None, shard: str | None = "0/2"):
+    """`shard=None` runs UNSHARDED, which is how a case whose gate labels are
+    only known AFTER expansion gets to own them: `_gate_dispatch_owns` returns
+    true for every label when `--shard` is absent, and the per-item label a
+    populated corpus produces carries an absolute path nobody can put in a
+    `--shard-labels` file in advance."""
     script = _dispatch_script(root, producer, preamble=preamble)
     labels = root / f"{stem}.labels"
     labels.write_text("\n".join([owned_label, *also_owned]) + "\n",
@@ -798,8 +824,10 @@ def _dispatch_run(root: Path, producer: str, owned_label: str,
     else:
         env.pop("GATE_DISPATCH_ATTEST_POPULATION", None)
     proc = subprocess.run(
-        ["bash", str(script), "--shard", "0/2", "--shard-labels",
-         str(labels), "--summary-json", str(summary)],
+        ["bash", str(script)]
+        + ([] if shard is None
+           else ["--shard", shard, "--shard-labels", str(labels)])
+        + ["--summary-json", str(summary)],
         cwd=str(root), env=env, capture_output=True, text=True)
     doc = json.loads(summary.read_text(encoding="utf-8"))
     attestations = ([json.loads(line) for line in attest.read_text().splitlines()]
@@ -1544,3 +1572,110 @@ def test_the_landing_transition_authorizer_never_accepts_an_unopened_corpus(
     # whole file exists to keep.
     assert len({b_row["expansion"], a_row["expansion"],
                 u_row["expansion"]}) == 3
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# THE THREE STATES, AS THREE CONTROLS (owner ruling, 2026-09-03)
+#
+#   absent               -> UNDETERMINED, blocking, neither PASS nor FAIL
+#   present, has content -> an ordinary verdict
+#   present, empty       -> its own row, and NOT UNDETERMINED
+#
+# The first and third are asserted against each other in
+# `test_the_dispatcher_gives_absent_and_empty_different_rows`. The middle one
+# had no test at all, which is what made the pair dangerous: two states that
+# both refuse are indistinguishable from a dispatcher that refuses everything.
+# ─────────────────────────────────────────────────────────────────────────
+def _corpus_with_one_published_cell(tmp_path: Path) -> Path:
+    """`_read_but_empty_corpus`'s tree plus the routed DEF it lacks.
+
+    Deliberately the same shape, so the ONLY difference between state B and
+    state C is whether the population has a member. The version directory
+    states a PDK because the gate-owner identity of a published cell is
+    (design, pdk) and the producer refuses a cell without one (vibe-ic#2011) —
+    measured: without it the producer answers UNDETERMINED, which would have
+    made this "control" quietly re-measure state A.
+    """
+    root = _external(tmp_path)
+    pnr = root / "ic" / "logic" / "v1_openpdkx" / "phase3" / "stage3" / "pnr"
+    pnr.mkdir(parents=True)
+    (pnr / "routed.def").write_text("VERSION 5.8 ;\nEND DESIGN\n",
+                                    encoding="utf-8")
+    (root / "ic" / "logic" / "reports" / "drc").mkdir(parents=True)
+    (root / "ic" / "logic" / "reports" / "drc" / "summary.txt").write_text(
+        "0 violations\n", encoding="utf-8")
+    _git(root, "add", "-A")
+    listed = _git(root, "ls-files").stdout.split()
+    assert any(x.endswith("routed.def") for x in listed), listed
+    return root
+
+
+def test_a_corpus_that_was_read_and_has_content_reaches_an_ordinary_verdict(
+        tmp_path):
+    """THE CONTROL THE PAIR NEEDED. Absent and read-empty both refuse, so on
+    their own they cannot tell a working dispatcher from one that refuses
+    everything. This is the third state: the corpus was opened, it holds a
+    member, the gate ran over it and DECIDED.
+
+    Run UNSHARDED because the gate label a populated corpus produces is
+    `per item (<absolute path>)` — derived at expansion time, so no
+    `--shard-labels` file can name it in advance, and `_gate_dispatch_owns`
+    returns true for every label when `--shard` is absent.
+    """
+    subject = _subject_repo(tmp_path)
+    corpus = _corpus_with_one_published_cell(tmp_path)
+    producer = f'python3 {str(HELPER)!r} --repo {str(subject)!r}'
+
+    root = tmp_path / "run-populated"
+    root.mkdir()
+    proc, doc, _att, _prog = _dispatch_run(
+        root, producer, _EMPTY_LABEL, "populated",
+        pointer=str(corpus), shard=None)
+
+    row = doc["corpora"][0]
+    assert row["expansion"] == "EXPANDED", row
+    assert row["items"] == 1, row
+    assert doc["gates"][0]["state"] == "PASS", doc["gates"]
+    assert doc["gates"][0]["label"].startswith("per item ("), doc["gates"]
+    assert doc["decided"] == 1 and doc["passed"] == 1, doc
+    # and the two refusing channels are BOTH empty — this is the arm that
+    # proves the dispatcher is not simply refusing everything it is handed
+    assert doc.get("undetermined") == 0, doc
+    assert doc["not_checked_unexempted"] == [], doc
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+
+
+def test_the_undetermined_state_propagates_to_the_record_the_dag_reads(
+        tmp_path):
+    """The DAG consumes `_summary_rc`, not the shell's exit code, and the
+    third state has to survive that hop.
+
+    MEASURED on fa43da5df107 before this change, all four states end to end:
+
+        mode      state    shell rc   _summary_rc   expansion   gate state
+        legacy    absent      0           2         NO_CORPUS   NOT_CHECKED
+        legacy    empty       0           0         EXPANDED    NOT_CHECKED
+        attested  absent      2           0  <--    NO_CORPUS   UNDETERMINED
+        attested  empty       2           2         EXPANDED    NOT_CHECKED
+
+    The dispatcher had been taught to exit 2 and the RECORD still said pass:
+    `_summary_rc` had no branch for `undetermined` at all, so an UNDETERMINED
+    row fell past every test in it. A third state only one consumer can see is
+    a third state in name only.
+    """
+    import repo_hygiene_parallel as RHP
+
+    absent = {"declared": 1, "decided": 1, "undetermined": 1,
+              "not_checked_unexempted": [], "wiring_errors": []}
+    assert RHP._summary_rc(absent) == 2, (
+        "the record the hygiene DAG reads still closes GREEN over a corpus "
+        "that was never opened")
+
+    # …and it is not laundered into a FAIL either: rc 2 is could-not-determine,
+    # rc 1 is found-a-defect, and an absent corpus is a fact about the host.
+    assert RHP._summary_rc(absent) != 1
+
+    # NON-DEGENERACY: the same record without the undetermined row is not
+    # forced to 2 by this branch.
+    ordinary = dict(absent, undetermined=0, passed=1)
+    assert RHP._summary_rc(ordinary) == 0, ordinary
