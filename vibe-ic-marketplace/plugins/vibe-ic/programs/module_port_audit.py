@@ -53,6 +53,15 @@ class PortDecl:
     width_expr: str         # original width expression, e.g. "[7:0]" or ""
     line: int               # line number in source file
     file: str               # source file path
+    # The DECLARED type token, when the declaration names one:
+    # `tlul_pkg::tl_h2d_t`, `prim_alert_pkg::alert_tx_t`, `ctrl_fsm_e`.
+    # The ANSI parser's regex has always captured this group (it had to, to
+    # stop package-qualified types from eating the port NAME — see the
+    # comment on the `type` group below); it then threw the value away, so
+    # every consumer that asked "what IS this port" got `width=1` for a
+    # 100-bit struct. Empty string when the declaration names no type
+    # (`input logic clk_i`) — never None, so a consumer can test it plainly.
+    data_type: str = ""
 
 
 @dataclass
@@ -380,7 +389,8 @@ def parse_port_list_ansi(header: str, file_path: str, base_line: int) -> Dict[st
                 width=current_width,
                 width_expr=current_width_expr,
                 line=line_num,
-                file=file_path
+                file=file_path,
+                data_type=(m.group('type') or '').strip(),
             )
 
         current_line_offset += newlines_in_part

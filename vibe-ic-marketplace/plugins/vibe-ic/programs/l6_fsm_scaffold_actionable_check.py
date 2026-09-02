@@ -229,6 +229,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import _gate_denominator as _gd  # noqa: E402
 import _path_layout as _pl  # noqa: E402
+import _rtl_fsm_extract as _rtlfsm  # noqa: E402
 
 try:
     import _reused_ip_predicate as _reused_ip  # noqa: E402
@@ -358,43 +359,17 @@ def _lec_rtl_references(project: Path) -> Tuple[Optional[Path], List[str]]:
     return None, []
 
 
-_TYPEDEF_ENUM_RE = re.compile(
-    r"typedef\s+enum\b[^\{]*\{(?P<body>[^}]*)\}\s*"
-    r"(?P<tname>[A-Za-z_]\w*)\s*;", re.S)
-_FSM_SIGNAL_STRONG = ("_fsm_cs", "_fsm_ns", "_fsm_state", "_fsm")
-_FSM_SIGNAL_WEAK = ("_state", "_state_q", "_state_d", "_cs", "_ns")
-
-
-def _strip_verilog_comments(text: str) -> str:
-    text = re.sub(r"/\*.*?\*/",
-                  lambda match: "\n" * match.group(0).count("\n"),
-                  text, flags=re.S)
-    return re.sub(r"//[^\n]*", "", text)
-
-
-def _enum_fsm_state_count(text: str) -> int:
-    """Count states in an enum that is structurally bound to an FSM signal."""
-    clean = _strip_verilog_comments(text)
-    best = 0
-    for enum in _TYPEDEF_ENUM_RE.finditer(clean):
-        members = [item.strip() for item in enum.group("body").split(",")]
-        state_count = sum(bool(item.split("=", 1)[0].strip())
-                          for item in members)
-        if state_count < 2:
-            continue
-        decl = re.compile(r"\b" + re.escape(enum.group("tname"))
-                          + r"\b\s+(?P<ids>[^;{}=]+);")
-        for match in decl.finditer(clean):
-            for ident in re.findall(r"[A-Za-z_]\w*", match.group("ids")):
-                low = ident.lower()
-                strong = any(low.endswith(token)
-                             for token in _FSM_SIGNAL_STRONG)
-                weak = (any(low.endswith(token) for token in _FSM_SIGNAL_WEAK)
-                        and re.search(r"\bcase\s*\(\s*" + re.escape(ident)
-                                      + r"\s*\)", clean, re.I))
-                if strong or weak:
-                    best = max(best, state_count)
-    return best
+# The structural state-enum rule lives in `_rtl_fsm_extract` — the module the
+# Phase-1 PRODUCER now reads too. It used to live here, and separately in
+# `l_doc_structured_field_count_check`, with no producer reading either: two
+# consumers of a rule nothing emitted against. These four names are re-exported
+# under this gate's original spellings so its call sites and tests read
+# unchanged; the implementation is one.
+_TYPEDEF_ENUM_RE = _rtlfsm.TYPEDEF_ENUM_RE
+_FSM_SIGNAL_STRONG = _rtlfsm.FSM_SIGNAL_STRONG
+_FSM_SIGNAL_WEAK = _rtlfsm.FSM_SIGNAL_WEAK
+_strip_verilog_comments = _rtlfsm.strip_verilog_comments
+_enum_fsm_state_count = _rtlfsm.enum_fsm_state_count
 
 
 def _staged_rtl_fsm_evidence(project: Path) -> List[Dict[str, Any]]:

@@ -7531,6 +7531,63 @@ _P0_NO_RTL_NOTE = ("no RTL directory found — structural gates skipped "
                    "(analog track / pre-RTL)")
 
 
+#: Severity tokens a JSON-emitting gate uses for the finding that DECIDED an
+#: rc-1. Ordered: the first one present supplies the reported line.
+_P0_JSON_ERROR_SEVERITIES = ("ERROR", "FATAL", "CRITICAL", "FAIL")
+
+
+def _p0_first_line(full_out: str) -> str:
+    """The one line that says WHY a gate refused, from its raw output.
+
+    A gate whose stdout is a JSON report has `{` as its first line, and that
+    is what the P0 record published for it: MEASURED on opentitan_aes
+    (2026-09-02), `testbench_exists_check` FAILed and the audit recorded
+    `"message": "{"` — a refusal whose reason the artefact could not state, in
+    the field a reader goes to for exactly that. The gate was reporting fine;
+    the reader was taking `.split("\n")[0]`.
+
+    So: if the output parses as a JSON object carrying `findings[]`, render
+    the deciding finding (first ERROR-class one, else the first finding) as
+    `CATEGORY: message`. Anything else — plain text, a JSON shape without
+    findings, a parse error — falls back to the historical first line, so no
+    gate that was already legible changes what it says. General: no gate name
+    appears here, only the report shape.
+    """
+    text = (full_out or "").strip()
+    if not text:
+        return ""
+    fallback = text.split("\n")[0][:200]
+    if not text.startswith("{"):
+        return fallback
+    try:
+        report = json.loads(text)
+    except (ValueError, TypeError):
+        return fallback
+    if not isinstance(report, dict):
+        return fallback
+    findings = report.get("findings")
+    if not isinstance(findings, list) or not findings:
+        return fallback
+    chosen = None
+    for sev in _P0_JSON_ERROR_SEVERITIES:
+        for item in findings:
+            if (isinstance(item, dict)
+                    and str(item.get("severity", "")).upper() == sev):
+                chosen = item
+                break
+        if chosen is not None:
+            break
+    if chosen is None:
+        chosen = findings[0] if isinstance(findings[0], dict) else None
+    if chosen is None:
+        return fallback
+    category = str(chosen.get("category") or "").strip()
+    message = str(chosen.get("message") or "").strip()
+    line = f"{category}: {message}" if category and message else (
+        message or category or fallback)
+    return line[:200]
+
+
 def _p0_gate_record(name: str,
                     verdict: str,
                     message: str = "",
@@ -8318,7 +8375,7 @@ def _run_structural_rtl_gates(project: Path,
                 _skip_line, _evidence, reason_class=_reason_class)
         elif r.returncode == 1:
             _full_out = (r.stdout.strip() or r.stderr.strip())
-            first_line = _full_out.split("\n")[0][:200]
+            first_line = _p0_first_line(_full_out)
             # ORGANIC #708 — the L6 ≥2-fsm_states floor message lands on a
             # detail line ("  - L6_…: L6 control_logic must carry ≥N typed FSM
             # states in `fsm_states` …"), NOT the umbrella's first header line

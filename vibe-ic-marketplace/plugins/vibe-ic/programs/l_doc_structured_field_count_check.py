@@ -875,18 +875,19 @@ def _class_minimal_honest_absence(ic_class: str) -> bool:
 # `_state`/`_cs`/`_ns`, which a non-FSM data signal can also carry — e.g. an
 # opcode `req_state`) additionally require a `case (<signal>)` transition before
 # the enum is credited as an FSM (adversarial-review #748 hardening).
-_FSM_SIGNAL_TOKENS_STRONG = ("_fsm_cs", "_fsm_ns", "_fsm_state", "_fsm")
-_FSM_SIGNAL_TOKENS_WEAK = ("_state", "_state_q", "_state_d", "_cs", "_ns")
+# The state-signal vocabulary and the typedef-enum grammar are re-exported
+# from `_rtl_fsm_extract`, which is where this rule now lives ONCE — this gate
+# and `l6_fsm_scaffold_actionable_check` each used to carry a copy, and the
+# Phase-1 producer carried none, which is how a design could be credited an FSM
+# here, contradicted there, and have neither reach its own L6.
+import _rtl_fsm_extract as _rtlfsm  # noqa: E402
+_FSM_SIGNAL_TOKENS_STRONG = _rtlfsm.FSM_SIGNAL_STRONG
+_FSM_SIGNAL_TOKENS_WEAK = _rtlfsm.FSM_SIGNAL_WEAK
 _FSM_SIGNAL_TOKENS = _FSM_SIGNAL_TOKENS_STRONG + _FSM_SIGNAL_TOKENS_WEAK
 
 import re as _re  # noqa: E402  (module-level, used only by the harvest helper)
 
-# `typedef enum [...] { A, B, C } name_e;` — capture the brace body and the
-# typedef name. DOTALL so a multi-line enum body is captured.
-_TYPEDEF_ENUM_RE = _re.compile(
-    r"typedef\s+enum\b[^\{]*\{(?P<body>[^}]*)\}\s*(?P<tname>[A-Za-z_]\w*)\s*;",
-    _re.DOTALL,
-)
+_TYPEDEF_ENUM_RE = _rtlfsm.TYPEDEF_ENUM_RE
 
 
 # Both halves of the reused-IP predicate used to be implemented here — the
@@ -916,13 +917,9 @@ def _class_rtl_gen_null(ic_class: str) -> bool:
 _staged_vendor_rtl_text = _reused_ip.staged_vendor_rtl_text
 
 
-def _strip_v_comments(src: str) -> str:
-    """Remove `//` line and `/* */` block comments (newlines preserved) so a
-    commented-out FSM enum is not harvested. chip-AGNOSTIC."""
-    src = _re.sub(r"/\*.*?\*/", lambda m: "\n" * m.group(0).count("\n"),
-                  src, flags=_re.S)
-    src = _re.sub(r"//[^\n]*", "", src)
-    return src
+#: `//` and `/* */` stripped, line count preserved — the shared implementation,
+#: re-exported under this gate's original name.
+_strip_v_comments = _rtlfsm.strip_verilog_comments
 
 
 def _harvest_staged_fsm_state_count(rtl_text: str) -> int:

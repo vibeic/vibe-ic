@@ -207,6 +207,18 @@ from _electrical_mention import (  # noqa: E402
 import plugin_manifest_discovery as _pmd  # noqa: E402  (#800 ONE version reader)
 # ─── `typedef enum` harvester for staged HDL inputs (#499) ────────────
 import _hdl_enum as _hdlenum  # noqa: E402
+# ─── the staged IMPLEMENTATION a REUSED-IP design brings with it ──────
+# Phase 1 reads `input/docs/` only. For a design whose input STAGES the RTL
+# it will be built from, the strongest evidence about its control logic is in
+# that RTL, and two gates already read it with a structural rule the producer
+# did not own a copy of. These two modules are that rule and that predicate,
+# each written once elsewhere — see `_rtl_fsm_extract` for the measurement.
+import _rtl_fsm_extract as _rtlfsm  # noqa: E402
+import _staged_top_module as _stgtop  # noqa: E402
+try:
+    import _reused_ip_predicate as _reused_ip  # noqa: E402
+except Exception:  # noqa: BLE001 — fail-closed: no module, no staged harvest
+    _reused_ip = None  # type: ignore[assignment]
 # ─── Was the input actually READ? (#499) ──────────────────────────────
 import _input_ingest as _ingest  # noqa: E402
 
@@ -37451,6 +37463,116 @@ def gen_l6_control_logic(project: Path,
     # a typed sibling key `pipeline_stages[]`. Both lists are emitted so
     # downstream consumers can route them separately. Chip-AGNOSTIC:
     # structural source_kind tag, no chip-name literals.
+    # Tier A.0 — THE DESIGN'S OWN STAGED IMPLEMENTATION.
+    #
+    # Every tier above reads `input/docs/`. A REUSED-IP design — one whose
+    # detected class carries `rtl_gen: null` AND whose input stages the RTL
+    # Phase 2 will build from — states its controller in that RTL, and Phase 1
+    # could not see it. MEASURED on opentitan_aes (2026-09-02, v1.15.50):
+    # `fsm_states: []` + `no_fsm_in_input: true` published against a staged
+    # tree declaring four closed state enums totalling 28 states, so
+    # `l6_fsm_scaffold_actionable_check` — reading the same tree with the same
+    # structural rule — raised EXTRACTION_APPLICABILITY_CONTRADICTION and
+    # halted Phase 1. The gate was right; the producer was blind.
+    #
+    # The rule is NOT restated here. `_rtl_fsm_extract` is the one
+    # implementation both gates were each carrying a copy of, and the
+    # eligibility predicate is `_reused_ip_predicate`, the one three other
+    # gates already read. So the document and the gates now answer "does this
+    # design declare a state machine?" with the same code.
+    #
+    # FAIL-CLOSED: an unimportable module, an unclassifiable design, or a
+    # design staging no RTL harvests nothing and this tier does not run — a
+    # doc-only design's L6 is byte-unchanged.
+    _staged_machines: List[Dict[str, Any]] = []
+    if _reused_ip is not None:
+        try:
+            _is_reused_ip = (
+                _reused_ip.class_rtl_gen_null(
+                    _reused_ip.detected_ic_class(project))
+                and _reused_ip.has_staged_vendor_rtl(project))
+        except Exception:  # noqa: BLE001 — predicate failure is fail-closed
+            _is_reused_ip = False
+        if _is_reused_ip:
+            try:
+                _vdir = _reused_ip.vendor_rtl_dir(project)
+                _staged_machines = _rtlfsm.machines_from_tree(
+                    _vdir, rel_to=project)
+            except Exception:  # noqa: BLE001 — a harvest failure emits nothing
+                _staged_machines = []
+    if _staged_machines:
+        # Whole machines only, in declaration order, while the emit-time cap
+        # on `fsm_states[]` can still take one entire. A machine is a CLOSED
+        # declaration; admitting half of one would publish a member list the
+        # design never wrote. Machines that do not fit are recorded in
+        # `evidence` — named, with their state counts — so the shortfall is
+        # visible rather than silent.
+        _cap = 32
+        _room = _cap - len(extracted_states)
+        _seen_names = {str(s.get("name") or "") for s in extracted_states
+                       if isinstance(s, dict)}
+        _omitted: List[str] = []
+        for _mach in _staged_machines:
+            _tname = str(_mach.get("type_name") or "")
+            _src = str(_mach.get("source_file") or "")
+            _members = [str(st.get("name") or "")
+                        for st in _mach.get("states") or []]
+            _members = [m for m in _members if m]
+            if not _tname or len(_members) < 2:
+                continue
+            if len(_members) > _room:
+                _omitted.append(f"{_tname} ({len(_members)} states, {_src})")
+                continue
+            _decl = _v1_7_74_declared_machines.setdefault(
+                _tname, {"source": _src, "members": []})
+            for _m in _members:
+                if _m not in _decl["members"]:
+                    _decl["members"].append(_m)
+            for _st_rec in _mach.get("states") or []:
+                _name = str(_st_rec.get("name") or "")
+                if not _name or _name in _seen_names:
+                    continue
+                _seen_names.add(_name)
+                _room -= 1
+                _entry: Dict[str, Any] = {
+                    "name": _name,
+                    "transitions": [],
+                    "actions": [],
+                    "evidence": f"{_src} (typedef enum {_tname})",
+                    "extraction_strategy": _rtlfsm.EXTRACTION_STRATEGY,
+                    "declared_type": _tname,
+                    "fsm_machine": _tname,
+                }
+                _lit = _st_rec.get("literal")
+                if isinstance(_lit, str) and _lit:
+                    _entry["encoding"] = _lit
+                extracted_states.append(_entry)
+            for _edge in _mach.get("transitions") or []:
+                _l6_edge_candidates.append({
+                    "from": str(_edge.get("from") or ""),
+                    "to": str(_edge.get("to") or ""),
+                    "trigger": "",
+                    "evidence": str(_edge.get("evidence") or _src),
+                })
+            _ev = evidence.setdefault(_src, [])
+            if len(_ev) < 28:
+                _ev.append({
+                    "literal": _tname,
+                    "label": (f"state machine DECLARED by the staged "
+                              f"implementation: typedef enum {_tname}, "
+                              f"{len(_members)} state(s), bound to "
+                              f"{', '.join(_mach.get('state_signals') or [])}"),
+                })
+        if _omitted:
+            _ev = evidence.setdefault("staged_rtl_fsm_harvest", [])
+            _ev.append({
+                "literal": "; ".join(_omitted[:8]),
+                "label": (f"{len(_omitted)} declared state machine(s) did not "
+                          f"fit the {_cap}-entry cap on fsm_states[] and are "
+                          f"NOT published as states; the cap is a document "
+                          f"size limit, not a statement about the design"),
+            })
+
     if extracted_states:
         # Tier A — real state-name evidence present in the docs.
         # v1.6.436: split by source_kind tag.
@@ -49710,6 +49832,109 @@ def gen_l9_integration_spec(project: Path,
         _p_v1_6_427["extraction_strategy"] = (
             _strat_v1_6_427 + "+implicit_1bit_default_v1_6_427"
         )
+
+    # RECONCILE the document-derived port list against the STAGED
+    # IMPLEMENTATION, for a design that brings one.
+    #
+    # The documents name the ports; the RTL declares what they ARE. Phase 1
+    # only ever asked the documents. MEASURED on opentitan_aes (2026-09-02,
+    # v1.15.50): 9 published entries against 14 declared ports, of which 2 were
+    # Comportable inter-signal BASE names and not ports; `rst_ni`,
+    # `rst_shadowed_ni`, `rst_edn_ni`, `tl_i`, `tl_o`, `alert_rx_i` and
+    # `alert_tx_o` were absent, so `professional_tb_gen` emitted `RST = None`
+    # and `full_stack_tb_gen` declared a 1-bit `reg tl_i` for a TL-UL request
+    # struct.
+    #
+    # An existing entry is ENRICHED, never overwritten: the document's own
+    # description, mode and width stay exactly as the document stated them,
+    # and the RTL adds `data_type` / `width_expr` / its own evidence line. A
+    # port the documents never named is APPENDED. Nothing is removed — an
+    # inter-signal base name the doc lists is the doc's statement and this
+    # tier has no standing to delete it.
+    #
+    # Which module is the design's is decided in `_staged_top_module`, by
+    # reconciliation against these very names; both structural shortcuts were
+    # measured wrong there, and it refuses rather than guesses.
+    #
+    # FAIL-CLOSED: not reused-IP, no staged RTL, an unresolvable top module,
+    # or an unimportable helper enriches nothing.
+    if _reused_ip is not None:
+        try:
+            _stg_eligible = (
+                _reused_ip.class_rtl_gen_null(
+                    _reused_ip.detected_ic_class(project))
+                and _reused_ip.has_staged_vendor_rtl(project))
+        except Exception:  # noqa: BLE001 — predicate failure is fail-closed
+            _stg_eligible = False
+        if _stg_eligible:
+            try:
+                _stg_ports = _stgtop.staged_top_ports(
+                    project, _reused_ip.vendor_rtl_dir(project),
+                    [p.get("name") for p in top_module_pins
+                     if isinstance(p, dict)])
+            except Exception:  # noqa: BLE001 — a harvest failure adds nothing
+                _stg_ports = []
+            _stg_by_name = {}
+            for _p in top_module_pins:
+                if isinstance(_p, dict) and _p.get("name"):
+                    _stg_by_name.setdefault(str(_p["name"]), _p)
+            for _rp in _stg_ports:
+                _rname = str(_rp.get("name") or "")
+                if not _rname:
+                    continue
+                _rev = _rp.get("source_file") or ""
+                if _rp.get("line"):
+                    _rev = f"{_rev}:{_rp['line']}"
+                _rev = (f"{_rev} (module {_rp.get('module')} port "
+                        f"declaration)")
+                _existing = _stg_by_name.get(_rname)
+                if _existing is not None:
+                    if _rp.get("data_type"):
+                        _existing["data_type"] = _rp["data_type"]
+                    if _rp.get("width_expr"):
+                        _existing["width_expr"] = _rp["width_expr"]
+                    _existing["rtl_declaration_evidence"] = _rev
+                    _strat = _existing.get("extraction_strategy") or ""
+                    if _stgtop.EXTRACTION_STRATEGY not in _strat:
+                        _existing["extraction_strategy"] = (
+                            f"{_strat}+{_stgtop.EXTRACTION_STRATEGY}"
+                            if _strat else _stgtop.EXTRACTION_STRATEGY)
+                    continue
+                _new = {
+                    "name": _rname,
+                    "mode": _rp.get("direction") or "input",
+                    "direction": _rp.get("direction") or "input",
+                    "io": None,
+                    "evidence": _rev,
+                    "extraction_strategy": _stgtop.EXTRACTION_STRATEGY,
+                }
+                if _rp.get("data_type"):
+                    _new["data_type"] = _rp["data_type"]
+                if _rp.get("width_expr"):
+                    _new["width_expr"] = _rp["width_expr"]
+                if isinstance(_rp.get("width"), int):
+                    _new["width"] = _rp["width"]
+                    _new["msb"] = _rp["width"] - 1
+                    _new["lsb"] = 0
+                top_module_pins.append(_new)
+                _stg_by_name[_rname] = _new
+            # LABEL, do not delete. A doc-derived entry the identified top
+            # module does NOT declare is not a port of it — on this design
+            # `tl` and `edn` are Comportable inter-signal BASE names the
+            # doc's own Inter-Module Signals table lists. The document said
+            # them, so they stay; but a consumer reading `top_ports` as "this
+            # module's ports" is entitled to know which entries the RTL
+            # actually declares. `full_stack_tb_gen` already reconciles this
+            # list against the RTL surface and calls the divergence "the
+            # upstream Phase-1 extraction ... real defect" in its own comment;
+            # this is that upstream saying it too, instead of leaving the
+            # downstream to discover it.
+            if _stg_ports:
+                _declared = {str(_rp.get("name") or "") for _rp in _stg_ports}
+                for _p in top_module_pins:
+                    if isinstance(_p, dict) and _p.get("name"):
+                        _p["declared_by_staged_top"] = (
+                            str(_p["name"]) in _declared)
 
     content = {
         "schema_version": 2,

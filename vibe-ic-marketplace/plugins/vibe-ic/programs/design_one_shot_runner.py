@@ -8141,6 +8141,14 @@ def step_full_stack_tb_gen(project: Path,
     lines.append("  integer rx_byte;       // assembled receive byte (gate token)")
     lines.append("  integer byte_count;    // received-byte counter (gate token)")
     lines.append("  integer bit_count;     // bit counter (gate token)")
+    # SELF-CHECK COUNTERS. Until v1.15.51 this testbench asserted NOTHING: it
+    # instantiated the DUT, clocked it, and printed a byte/bit tally. Measured
+    # on opentitan_aes and on spm, `testbench_exists_check.count_test_cases`
+    # scored it 0 in EVERY run tree on this host — a testbench that runs a
+    # design and can never report a defect. The connectivity it exists to
+    # establish is now CHECKED rather than assumed; see the check block below.
+    lines.append("  integer fs_check_total; // self-check denominator")
+    lines.append("  integer fs_check_fail;  // self-check failures")
     lines.append("")
     lines.append("  task drive_byte;")
     lines.append("    input [7:0] b;")
@@ -8164,6 +8172,7 @@ def step_full_stack_tb_gen(project: Path,
     lines.append("")
     lines.append("  initial begin")
     lines.append("    bit_count = 0; byte_count = 0; rx_byte = 0;")
+    lines.append("    fs_check_total = 0; fs_check_fail = 0;")
     if _fs_rst:
         _a, _d = ("0", "1") if _fs_ck["reset_active_low"] else ("1", "0")
         lines.append(f"    // Reset on `{_fs_rst}` — asserted {_a}, released "
@@ -8194,6 +8203,55 @@ def step_full_stack_tb_gen(project: Path,
         lines.append(f"    repeat ({_fs_cycles}) @(posedge {_fs_clk});")
     else:
         lines.append("    #1000;")
+    # ---- POST-RESET RESOLVABILITY, ONE CHECK PER DUT OUTPUT ---------------
+    #
+    # The one property a connectivity testbench is entitled to assert, and the
+    # one it was not asserting. After reset release plus the run above, every
+    # DUT output must carry a resolved value: `^sig === 1'bx` is the standard
+    # width-safe X/Z reduction, so a bus is covered by the same line as a
+    # scalar. An output that is still X here is an uninitialised state element
+    # or an unbound port — a real defect, in the design or in this harness's
+    # own binding, and either way not something a run should certify silently.
+    #
+    # It is NOT functional verification and does not claim to be: the run's
+    # `functional_verified` flag, the per-vector golden accounting and the
+    # step's own detail line are all unchanged. What changes is that a
+    # testbench which could previously only ever say DONE can now say FAIL.
+    #
+    # chip-AGNOSTIC: the port list is the DUT's own reconciled surface; no
+    # name, width or expected value is written here.
+    _fs_check_outs = [
+        (p.get("name") or "").strip() for p in top_ports
+        if isinstance(p, dict)
+        and (p.get("direction") or p.get("mode") or "input").lower() == "output"
+        and (p.get("name") or "").strip()
+        and _v643_legal_verilog_id((p.get("name") or "").strip())
+        and not _v643_is_power_pin(p, (p.get("name") or "").strip())
+    ]
+    if _fs_check_outs:
+        lines.append("    // Post-reset resolvability, one check per DUT "
+                     "output (v1.15.51).")
+        for _nm in _fs_check_outs:
+            _tb_nm = f"{_nm}__dut_out" if _nm in ("clk", "reset_n") else _nm
+            lines.append(f"    fs_check_total = fs_check_total + 1;")
+            lines.append(
+                f"    if (^{_tb_nm} === 1'bx) begin fs_check_fail = "
+                f"fs_check_fail + 1; $display(\"CHECK FAIL "
+                f"post_reset_resolvable {_nm}\"); end")
+            lines.append(
+                f"    else $display(\"CHECK PASS post_reset_resolvable "
+                f"{_nm}\");")
+        lines.append("    $display(\"FULL_STACK_TB_CHECKS pass=%0d fail=%0d\","
+                     " fs_check_total - fs_check_fail, fs_check_fail);")
+    else:
+        # SAY SO. A DUT with no observable output has nothing to check, and a
+        # silent absence of check lines is indistinguishable from the
+        # pre-v1.15.51 testbench that checked nothing on purpose.
+        lines.append("    // NO CHECKABLE DUT OUTPUT — this DUT's reconciled "
+                     "surface declares none, so this testbench asserts "
+                     "nothing and cannot report a defect.")
+        lines.append("    $display(\"FULL_STACK_TB_CHECKS pass=0 fail=0 "
+                     "(no observable output)\");")
     lines.append("    $display(\"FULL_STACK_TB_DONE bytes=%0d bits=%0d\","
                  " byte_count, bit_count);")
     lines.append("    $finish;")
@@ -9250,9 +9308,23 @@ def _emit_connectivity_sim_bridge(project: Path, transcript: Path,
     try:
         if not (transcript.is_file() and transcript.stat().st_size > 0):
             return False
-        if "FULL_STACK_TB_DONE" not in transcript.read_text(errors="replace"):
+        _fs_text = transcript.read_text(errors="replace")
+        if "FULL_STACK_TB_DONE" not in _fs_text:
             # Only an actually-run connectivity TB may emit the bridge; a
             # missing / non-completing transcript must NOT be waived.
+            return False
+        # v1.15.51 — THE CONNECTIVITY CHECKS HAVE TEETH.
+        #
+        # `FULL_STACK_TB_DONE` alone says the testbench REACHED THE END, which
+        # was the only thing it could say while it asserted nothing. It now
+        # checks one property — every DUT output resolvable after reset — and
+        # a failure of that is a failure of the very connectivity this bridge
+        # certifies. Reaching the end with an unresolved output is not
+        # CONNECTIVITY_PASS; refusing here is what stops the check from being
+        # a printed opinion.
+        _fs_fail = re.search(r"FULL_STACK_TB_CHECKS\b[^\n]*?\bfail=(\d+)",
+                             _fs_text)
+        if _fs_fail is not None and int(_fs_fail.group(1)) > 0:
             return False
     except OSError:
         return False
