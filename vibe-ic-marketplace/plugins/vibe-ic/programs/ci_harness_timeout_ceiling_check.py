@@ -724,8 +724,18 @@ _LANDING_SCRIPT_SHA256 = (
 # driver names a session that stopped at its OWN declared failure bound and
 # prints the red case names before the record is nulled — see the block above
 # `_LANDING_SCRIPT_SHA256` for the full account. Supervision is untouched.
+# RE-PINNED for `recovery_pytest_argv`. WHAT MOVED: the per-file RECOVERY arm
+# (the sessions launched only AFTER `AGGREGATE_NORECORD`) no longer inherits the
+# caller's pytest failure bound, so a file carrying at least that many reds can
+# produce the complete per-file record the landing refusal is named from. The
+# aggregate arm's own ratcheted ceiling, the plain per-file mode's bound, and
+# `_per_file_truncation` are all untouched, and the driver still exits
+# `RC_NORECORD` on both sides of the change. Nothing about supervision,
+# timeouts, the stall grace or the JUnit contract this file checks moved with
+# it (falsified in both directions before this re-pin; see
+# `programs/tests/test_recovery_arm_is_not_a_fail_fast_run.py`).
 _SEMANTIC_DRIVER_SHA256 = (
-    "706b7756351d14d73ea7a45a054944e78916eb33e5c28b990f3d6b0971d84d4f"
+    "745d85ded613fc6e1a2f07197d8c6c50b1b15711fb0e508c37a1fbfeb55742a8"
 )
 #: `pip install pytest-timeout` names the plugin, not a bound; it carries no
 #: `--timeout=N` and so cannot match, but the negative is stated because a

@@ -2910,13 +2910,71 @@ def _read_fallback_outcome(job: _FallbackJob) -> _FallbackOutcome:
             _fallback_no_record(job.test_file, reason), log)
 
 
+def recovery_pytest_argv(pytest_argv: Sequence[str]) -> List[str]:
+    """The argv a RECOVERY session runs under: the caller's, with no bound.
+
+    THE RECOVERY ARM'S DELIVERABLE IS A COMPLETE PER-FILE RECORD, AND A
+    FAILURE BOUND MAKES THAT IMPOSSIBLE FOR EXACTLY THE FILES IT EXISTS TO
+    NAME. `--maxfail` is a FAIL-FAST instrument: stop early, the answer is
+    already "red, go fix it". These sessions are not that run. They exist only
+    after `AGGREGATE_NORECORD` has already made the whole-selection verdict
+    UNKNOWN and the landing already refused; nothing downstream is waiting to
+    be told sooner. What is waiting is the per-file evidence, and a session
+    that stops at the bound produces a PREFIX of its file's failure set, which
+    `_per_file_truncation` correctly classifies as NORECORD. So a file with at
+    least `bound` reds could never produce a per-file record at all.
+
+    MEASURED on the 2026-08-31 full landing tier (08466304b3, 132 files,
+    `GATEKEEPER_PYTEST_MAXFAIL=10`), the stamp's own log::
+
+        FILE_TRUNCATED  programs/tests/test_matrix_mutation_ledger.py  10
+          failures reached at file 1/1, 96/126 items — the recorded failures
+          are a PREFIX of the failure set, not the failure set; REFUSED
+        NORECORD  programs/tests/test_matrix_mutation_ledger.py  session
+          stopped at its own declared failure bound …
+        FAIL  targeted per-file session produced no complete record
+
+    30 of that file's 126 items were never run. The row a reader sees is the
+    instrument declining to report — and the run it declined to finish was one
+    the caller had told it to abandon.
+
+    THIS IS THE SAME CORRECTION THE CROSS-FILE THRESHOLD ALREADY GOT, one
+    level down. `--stop-after-failures` — this driver's OWN cross-file bound —
+    was deliberately removed from the recovery loop for the identical reason
+    (see the comment at its `while` loop: "these sessions are evidence
+    recovery, not a fail-fast ordinary run"). The pytest-level bound inside
+    each recovery session was left in place, so the loop stopped abandoning
+    whole FILES and went on abandoning the ITEMS inside one.
+
+    THE VERDICT CANNOT MOVE, and that is what makes this safe rather than a
+    relaxation. `aggregate_incomplete` is already latched when this arm runs
+    and no recovery result clears it, so the driver still returns
+    `RC_NORECORD`. This function can only ever ADD a recoverable record; it
+    can never turn UNKNOWN into a landing pass. Runtime stays bounded by the
+    file's own item count and by the same per-file stall supervision.
+
+    APPLIED IN ONE PLACE (the recovery worker spec), so the worker's own
+    `_per_file_truncation` reads the SAME argv and can never disagree with the
+    session about what bound was in force — the arrangement `run_aggregate`
+    already uses for the aggregate ceiling. The NON-aggregate per-file mode
+    (`--aggregate-check` absent) is untouched: there the flat bound IS the
+    caller's fail-fast run and removing it would change what they asked for.
+    """
+    return _with_failure_bound(pytest_argv, None)
+
+
 def _run_fallback_batch(
         pytest_argv: Sequence[str], indexed_files: Sequence[Tuple[int, str]],
         tmp: Path, stall_after: float, cwd: Optional[str], *,
         progress_relay_path: Optional[Path] = None,
         ) -> List[_FallbackOutcome]:
-    """Recover one fixed-width batch in independent supervisor processes."""
+    """Recover one fixed-width batch in independent supervisor processes.
+
+    THE ONE PLACE THE RECOVERY ARM'S BOUND IS DECIDED — see
+    `recovery_pytest_argv`.
+    """
     global _ACTIVE_FALLBACK_BASELINE
+    pytest_argv = recovery_pytest_argv(pytest_argv)
     if not _enable_subreaper():
         return [_FallbackOutcome(
             _fallback_no_record(path,

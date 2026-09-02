@@ -103,11 +103,50 @@ HERMETIC_MUTATION_FILE = "programs/tests/test_matrix_mutation_ledger.py"
 HERMETIC_TEST_PROGRESS = {
     HERMETIC_CENSUS_FILE: {
         "items": 6,
+        # EVERY PRODUCER ITEM MUST APPEAR IN EXACTLY ONE OF TWO LISTS, and
+        # this is the second. It is NOT a claim that these items are short:
+        # it is the MEASURED set of producer items carrying no schedule at
+        # 1ec22dabc, written down so that an ELEVENTH cannot appear in
+        # silence. `test_the_published_total_equals_the_live_census` reached
+        # the landing gate exactly that way — discovered by the AST, scheduled
+        # by nobody, killed at 300 s with rc 199 — and a file-level inventory
+        # check could not see it. Adding a producer call to a new item now
+        # forces a decision here or a measured row above.
+        "producer_items_without_schedule": (),
         "producer_profiles": (("enforcement_census",),),
+        # ORDINAL 4 ADDED, and it is the item the AST itself finds calling the
+        # producer: `test_the_published_total_equals_the_live_census` is the
+        # ONLY function in this file whose source names one of
+        # `_NESTED_PRODUCER_CALLS`, while both ordinal-2 rows belong to an item
+        # that reaches its producer INDIRECTLY through the generator. The
+        # file-level inventory check was satisfied by the file being registered
+        # at all, so the one item that provably needed a schedule had none.
+        #
+        # MEASURED on origin/main 1ec22dabc in the pinned image, this file
+        # ALONE on an idle host at the production 300 s window: `.F.` — three
+        # items done — then `WATCHDOG_STALLED … killed as hung, not slow`,
+        # `AGGREGATE_NORECORD  STALLED after 300 s`, `aggregate INCOMPLETE
+        # rc=199 cases=0 red=0`, the same rc the official 2026-08-31 tier
+        # reported. Item 4 is what was killed.
+        #
+        # TOTALS MEASURED THE WAY THE BLOCK ABOVE RECORDS: the production
+        # `_pytest_progress_plugin` attached to this nodeid alone emits
+        # `matrix-collection-runs` (total 1) and `matrix-outcome-modules`
+        # (total 9) — the same two scopes and the same two totals as ordinal 2,
+        # because it iterates the same nine dimension modules.
+        # `validate_nested_progress_inventory` now refuses a registered file
+        # with an unscheduled producer item, so this row cannot go missing
+        # again.
         "domains": (
             (2, HERMETIC_CENSUS_FILE + "::test_the_census_block_is_fresh",
              "matrix-collection-runs", 1),
             (2, HERMETIC_CENSUS_FILE + "::test_the_census_block_is_fresh",
+             "matrix-outcome-modules", 9),
+            (4, HERMETIC_CENSUS_FILE
+             + "::test_the_published_total_equals_the_live_census",
+             "matrix-collection-runs", 1),
+            (4, HERMETIC_CENSUS_FILE
+             + "::test_the_published_total_equals_the_live_census",
              "matrix-outcome-modules", 9),
         ),
     },
@@ -134,6 +173,24 @@ HERMETIC_TEST_PROGRESS = {
         # is after it and shifts by exactly one. The domain TOTALS are unmoved
         # too: they count `test_matrix_d[1-9]_*.py`, still 9 modules.
         "items": 33,
+        # EVERY PRODUCER ITEM MUST APPEAR IN EXACTLY ONE OF TWO LISTS, and
+        # this is the second. It is NOT a claim that these items are short:
+        # it is the MEASURED set of producer items carrying no schedule at
+        # 1ec22dabc, written down so that an ELEVENTH cannot appear in
+        # silence. `test_the_published_total_equals_the_live_census` reached
+        # the landing gate exactly that way — discovered by the AST, scheduled
+        # by nobody, killed at 300 s with rc 199 — and a file-level inventory
+        # check could not see it. Adding a producer call to a new item now
+        # forces a decision here or a measured row above.
+        "producer_items_without_schedule": (
+            "test_a_not_measured_cell_is_never_counted_as_enforced",
+            "test_live_collection_chatty_import_without_events_fails_closed",
+            "test_live_collection_refuses_missing_complete_manifest",
+            "test_live_collection_relays_finite_semantic_progress_past_old_bound",
+            "test_nested_outcome_run_is_killed_when_no_item_can_renew_the_window",
+            "test_no_cell_is_counted_enforced_while_its_predicate_is_red",
+            "test_the_enforcement_census_is_reported_for_humans",
+        ),
         "producer_profiles": (
             ("_run_outcome_reports", "enforcement_census"),
             ("_collect_items_from_paths", "_run_outcome_reports",
@@ -159,6 +216,16 @@ HERMETIC_TEST_PROGRESS = {
     },
     HERMETIC_ARTEFACT_FILE: {
         "items": 36,
+        # EVERY PRODUCER ITEM MUST APPEAR IN EXACTLY ONE OF TWO LISTS, and
+        # this is the second. It is NOT a claim that these items are short:
+        # it is the MEASURED set of producer items carrying no schedule at
+        # 1ec22dabc, written down so that an ELEVENTH cannot appear in
+        # silence. `test_the_published_total_equals_the_live_census` reached
+        # the landing gate exactly that way — discovered by the AST, scheduled
+        # by nobody, killed at 300 s with rc 199 — and a file-level inventory
+        # check could not see it. Adding a producer call to a new item now
+        # forces a decision here or a measured row above.
+        "producer_items_without_schedule": (),
         "producer_profiles": (("replay_many",),),
         "domains": (
             (19, HERMETIC_ARTEFACT_FILE
@@ -185,6 +252,20 @@ HERMETIC_TEST_PROGRESS = {
         # `test_0_5ic_d3_live_replay_closes_the_exact_coverage_delta`, which
         # sorts before the parametrised `test_lock2_...` family.
         "items": 126,
+        # EVERY PRODUCER ITEM MUST APPEAR IN EXACTLY ONE OF TWO LISTS, and
+        # this is the second. It is NOT a claim that these items are short:
+        # it is the MEASURED set of producer items carrying no schedule at
+        # 1ec22dabc, written down so that an ELEVENTH cannot appear in
+        # silence. `test_the_published_total_equals_the_live_census` reached
+        # the landing gate exactly that way — discovered by the AST, scheduled
+        # by nobody, killed at 300 s with rc 199 — and a file-level inventory
+        # check could not see it. Adding a producer call to a new item now
+        # forces a decision here or a measured row above.
+        "producer_items_without_schedule": (
+            "test_a_cut_off_replay_omits_unstarted_pairs_and_never_a_verdict",
+            "test_replay_many_callback_failure_refuses_the_population",
+            "test_replay_many_reports_only_finite_completed_units_in_result_order",
+        ),
         "producer_profiles": (("replay_many",),),
         "domains": (
             (92, HERMETIC_MUTATION_FILE
@@ -238,6 +319,78 @@ def _nested_call_name(node: ast.Call) -> str:
     return ""
 
 
+def nested_progress_producer_items(
+        test_file: str, *, plugin_root: Path | None = None,
+        ) -> dict[str, tuple[str, ...]]:
+    """Which ITEMS of ``test_file`` invoke a nested matrix producer.
+
+    THE FILE IS NOT THE UNIT THE SUPERVISOR KILLS. `nested_progress_producers`
+    below answers "does this FILE call a producer", and that is the granularity
+    `validate_nested_progress_inventory` checked: a file that calls one anywhere
+    is registered, and registration is satisfied by a domain row for ANY item in
+    it. The outer stall lease is not spent per file; it is spent between two
+    consecutive validated events, and an item that runs longer than the lease
+    while emitting none is killed whichever of its neighbours carries the rows.
+
+    MEASURED on origin/main 1ec22dabc, pinned image sha256:66c33ff2, ONE file,
+    an otherwise idle host, the production 300 s window::
+
+        .F.
+        WATCHDOG_STALLED: configured forward-progress signals did not advance
+                          for > 300s — killed as hung, not slow.
+        AGGREGATE_NORECORD  STALLED after 300 s with no validated pytest
+                            lifecycle progress
+        aggregate  INCOMPLETE rc=199 cases=0 red=0
+
+    Three items completed, the fourth was killed, and the whole file's record
+    was lost — `_watchdog.RC_STALLED`, our own kill, reaching the operator as
+    `FAIL targeted aggregate session produced no complete record`, a row that
+    reads exactly like a red suite. On the official 2026-08-31 tier the same
+    line carried the same `rc=199`.
+
+    The fourth item is `test_the_published_total_equals_the_live_census`, and it
+    is the ONLY function in that file whose source calls a name in
+    `_NESTED_PRODUCER_CALLS`. The file's two registered rows both belong to item
+    2, which reaches its producer INDIRECTLY through the generator. So the
+    registry named the file, the file-level check was satisfied, and the item
+    the AST itself finds calling the producer had no schedule at all.
+
+    ONE-DIRECTIONAL BY CONSTRUCTION, and the direction is the fail-closed one:
+    an AST-discovered item MUST carry a row; a row for an item the AST does not
+    discover is legitimate and is left alone. Item 2 is exactly that case — an
+    indirect reach the AST cannot see and a schedule that is nonetheless right —
+    so requiring the converse would delete a correct declaration in order to
+    enforce a rule about a different item.
+
+    Returns ``{function name: (producer call names, sorted)}`` for module-level
+    test functions only; a file that is absent or unparseable raises `Refusal`,
+    never an empty answer, because "I could not look" must not read as "nothing
+    calls one".
+    """
+    root = plugin_root or (
+        Path(__file__).resolve().parents[2] / PurePosixPath(PLUGIN_REL))
+    rel = _safe_rel(test_file, "nested-progress owner")
+    path = root.joinpath(*PurePosixPath(rel).parts)
+    try:
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=rel)
+    except (OSError, SyntaxError, UnicodeError) as exc:
+        raise Refusal(
+            f"cannot inspect BASE nested-progress owner {rel}: {exc}") from exc
+    items: dict[str, tuple[str, ...]] = {}
+    for node in tree.body:
+        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        if not node.name.startswith("test_"):
+            continue
+        calls = tuple(sorted({
+            name for inner in ast.walk(node) if isinstance(inner, ast.Call)
+            for name in [_nested_call_name(inner)] if name
+        }))
+        if calls:
+            items[node.name] = calls
+    return items
+
+
 def nested_progress_producers(
         selection: Sequence[str], *, plugin_root: Path | None = None,
         ) -> dict[str, tuple[str, ...]]:
@@ -285,11 +438,19 @@ def validate_nested_progress_inventory(
     for test_file in sorted(registered):
         spec = HERMETIC_TEST_PROGRESS[test_file]
         if (not isinstance(spec, dict)
-                or set(spec) != {"items", "producer_profiles", "domains"}):
+                or set(spec) != {"items", "producer_profiles", "domains",
+                                 "producer_items_without_schedule"}):
             raise Refusal(f"nested progress spec for {test_file} is malformed")
         total_items = spec["items"]
         profiles = spec["producer_profiles"]
         domains = spec["domains"]
+        unscheduled = spec["producer_items_without_schedule"]
+        if (not isinstance(unscheduled, tuple)
+                or unscheduled != tuple(sorted(set(unscheduled)))
+                or any(not isinstance(name, str) or not name.startswith("test_")
+                       for name in unscheduled)):
+            raise Refusal(
+                f"'producer_items_without_schedule' for {test_file} is invalid")
         if (type(total_items) is not int or total_items < 1
                 or not isinstance(profiles, tuple)
                 or not profiles
@@ -305,6 +466,7 @@ def validate_nested_progress_inventory(
             raise Refusal(f"nested progress denominator for {test_file} is invalid")
         seen: set[tuple[str, str]] = set()
         previous_ordinal = 0
+        scheduled_nodeids: set[str] = set()
         for row in domains:
             if not isinstance(row, tuple) or len(row) != 4:
                 raise Refusal(f"nested progress row for {test_file} is malformed")
@@ -317,6 +479,32 @@ def validate_nested_progress_inventory(
                     f"nested progress order for {test_file} is ambiguous")
             previous_ordinal = ordinal
             seen.add((nodeid, scope))
+            scheduled_nodeids.add(nodeid)
+        # ITEM GRANULARITY, because the stall lease is spent between two
+        # consecutive events and not per file. See
+        # `nested_progress_producer_items` for the measured kill this closes:
+        # a registered file whose rows all belong to one item, while a
+        # DIFFERENT item calls the producer, satisfies every check above and is
+        # killed at 300 s with rc 199. One-directional and fail-closed — an
+        # AST-discovered item must be scheduled; a scheduled item the AST does
+        # not discover (an indirect reach) is left exactly as declared.
+        for name in sorted(nested_progress_producer_items(
+                test_file, plugin_root=plugin_root)):
+            if (f"{test_file}::{name}" not in scheduled_nodeids
+                    and name not in unscheduled):
+                raise Refusal(
+                    f"nested progress schedule for {test_file} declares no "
+                    f"domain for {name}, which calls a nested producer, and "
+                    f"does not list it in 'producer_items_without_schedule': "
+                    f"an item with no checkpoint is judged by elapsed time and "
+                    f"is killed as hung once it outruns the stall window")
+        for name in sorted(unscheduled):
+            if name not in nested_progress_producer_items(
+                    test_file, plugin_root=plugin_root):
+                raise Refusal(
+                    f"{test_file} lists {name} in "
+                    f"'producer_items_without_schedule' and it calls no nested "
+                    f"producer: a stale exemption hides the next real one")
 
 
 def _atomic_write(path: Path, raw: bytes) -> None:

@@ -874,7 +874,17 @@ def test_collect_import_activity_without_semantic_transition_is_norecord(
 
 
 def test_maxfail_prefix_is_norecord_not_a_complete_failure_set(tmp_path):
-    """File coverage cannot reveal the unexecuted 11th case after maxfail=10."""
+    """File coverage cannot reveal the unexecuted 11th case after maxfail=10.
+
+    THE AGGREGATE ARM IS THE SUBJECT AND IT IS UNCHANGED: the whole-selection
+    session stopped at its own bound, its prefix is not a failure set, and the
+    driver refuses. What moved underneath it is the RECOVERY arm, which no
+    longer inherits that bound (`recovery_pytest_argv`), so the eleventh case
+    IS revealed — by a per-file session, never by the aggregate's file
+    coverage, which is what this test's title says cannot happen and still
+    cannot. The verdict is asserted unchanged in both directions here and in
+    `test_recovery_arm_is_not_a_fail_fast_run`.
+    """
     body = "\n".join(
         f"def test_{i:02d}(): assert False" for i in range(11)) + "\n"
     corpus = _tree(tmp_path, {"test_many.py": body})
@@ -883,9 +893,17 @@ def test_maxfail_prefix_is_norecord_not_a_complete_failure_set(tmp_path):
         corpus, merged, "--aggregate-check", "--aggregate-stall-after", "2",
         pytest_extra=("--maxfail=10",))
     assert proc.returncode == D.RC_NORECORD, proc.stdout + proc.stderr
-    assert "NORECORD  test_many.py" in proc.stdout
     assert "AGGREGATE_NORECORD" in proc.stdout
-    assert _files_in(merged) == []
+    assert "AGGREGATE_TRUNCATED" in proc.stdout, proc.stdout
+    # The aggregate contributed nothing, and its 10-red prefix did not become
+    # the answer: what the report carries is the RECOVERY session's complete
+    # set of eleven.
+    assert "AGGREGATE_COMPLETE" not in proc.stdout, proc.stdout
+    root = ET.parse(str(merged)).getroot()
+    reds = [c for c in root.iter("testcase")
+            if c.find("failure") is not None
+            and "process_exit" not in (c.get("name") or "")]
+    assert len(reds) == 11, proc.stdout
 
 
 def test_protocol_refusal_is_not_mislabeled_as_a_stall():
@@ -2659,14 +2677,31 @@ def test_a_per_file_maxfail_prefix_is_named_and_still_refused(tmp_path):
     assert _files_in(merged) == []
 
 
-def test_a_fallback_worker_maxfail_prefix_is_named_and_still_refused(tmp_path):
-    """POSITIVE CONTROL, fallback-worker arm — the arm the full tier ran."""
+def test_the_fallback_arms_maxfail_control_moved_to_the_arm_that_still_bounds(
+        tmp_path):
+    """RETARGETED from the fallback-worker arm. Assertions byte-identical.
+
+    This shipped as `test_a_fallback_worker_maxfail_prefix_is_named_and_still_
+    refused` and drove the RECOVERY arm (`--aggregate-check`). That arm no
+    longer runs under a failure bound at all (`recovery_pytest_argv`), so the
+    event it is the positive control FOR cannot occur there: not because the
+    check was weakened, but because the precondition was repaired out of
+    existence. The event itself -- `_per_file_truncation` naming a session that
+    stopped at its OWN declared bound -- is unchanged and still reached from
+    the plain per-file mode, where the caller's fail-fast bound legitimately
+    applies. Every assertion below is byte-identical to the ones it shipped
+    with; only the arm moved.
+
+    RENAMED, not silently merged: the plain arm already ships
+    `test_a_per_file_maxfail_prefix_is_named_and_still_refused`, and reusing
+    that name would have shadowed it (Python keeps the last definition) and
+    deleted a shipped test in the guise of moving one. Two independent
+    functions now assert the same contract on the same arm; the mutation
+    control in this file's report shows both go RED when the report is broken.
+    """
     corpus = _tree(tmp_path, {"test_many.py": _ELEVEN_RED})
     merged = tmp_path / "merged.xml"
-    proc = _run_driver_in(
-        corpus, merged, "--aggregate-check",
-        "--aggregate-stall-after", str(_STALL),
-        pytest_extra=("--maxfail=10",))
+    proc = _run_driver_in(corpus, merged, pytest_extra=("--maxfail=10",))
     assert "FILE_TRUNCATED  test_many.py  10 failures reached" in proc.stdout, (
         proc.stdout)
     assert "TRUNCATED_RED  test_many::test_00" in proc.stdout, proc.stdout
