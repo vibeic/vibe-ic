@@ -74,7 +74,7 @@ def _width_of(decl: str) -> int:
 
 
 def _bind_field(field: str, value_bits: int,
-                candidates: Sequence[Tuple[str, str, str]]
+                candidates: Sequence[Tuple[str, str]]
                 ) -> Optional[Tuple[str, int]]:
     """`(port, width)` for `field`, or None. Width must MATCH the value: a
     vector driven onto a port of the wrong width is not the vector."""
@@ -82,14 +82,14 @@ def _bind_field(field: str, value_bits: int,
     if not tokens:
         return None
     for tok in tokens:
-        for name, decl, _d in candidates:
+        for name, decl in candidates:
             n = _norm(name)
             if n == tok or n.rstrip("_io") == tok or n == tok + "_i" \
                     or n == tok + "_o":
                 if _width_of(decl) == value_bits:
                     return name, _width_of(decl)
     for tok in tokens:
-        for name, decl, _d in candidates:
+        for name, decl in candidates:
             if tok in _norm(name) and _width_of(decl) == value_bits:
                 return name, _width_of(decl)
     return None
@@ -108,8 +108,12 @@ def bind_vector(case: dict,
         return None, "known_answer_vector schema unavailable"
     if not _kav.is_known_answer_vector(case):
         return None, "not a valid known_answer_vector record"
-    ins = [(n, d, x) for n, d, x in ports if str(x).startswith("input")]
-    outs = [(n, d, x) for n, d, x in ports if str(x).startswith("output")]
+    # `testbench_gen.resolve_dut` yields (DIRECTION, WIDTH, NAME) — see
+    # `_classify`, which is the authority. This module read it as
+    # (name, width, direction) and its unit fixtures repeated the same wrong
+    # order, so every test passed while every REAL port surface bound nothing.
+    ins = [(n, w) for d, w, n in ports if str(d).startswith("input")]
+    outs = [(n, w) for d, w, n in ports if str(d).startswith("output")]
     drive: Dict[str, Tuple[str, str, int]] = {}
     check: Dict[str, Tuple[str, str, int]] = {}
     for field, raw in (case.get("inputs") or {}).items():
@@ -134,8 +138,8 @@ def bind_vector(case: dict,
         check[field] = (b[0], val, bits)
     if not drive or not check:
         return None, "a vector with no drivable input or no checkable output"
-    clk = next((n for n, _d, _x in ins if _norm(n) in _CLK), None)
-    rst = next((n for n, _d, _x in ins if _norm(n) in _RST), None)
+    clk = next((n for n, _w in ins if _norm(n) in _CLK), None)
+    rst = next((n for n, _w in ins if _norm(n) in _RST), None)
     return {"drive": drive, "check": check, "clk": clk, "rst": rst}, ""
 
 
@@ -206,3 +210,137 @@ def emit_case_oracle_from_ports(case: dict, dut_module: str,
     L.append("  end")
     L.append("endmodule")
     return "\n".join(L) + "\n", ""
+
+
+# --------------------------------------------------------------------------
+# THE SECOND ROUTE — the bus the design SAYS the vector is driven over
+# --------------------------------------------------------------------------
+def _staged_bus_packages(project) -> "List[Tuple[str, str]]":
+    """`(path, text)` for every staged package that declares a bus struct pair.
+
+    Read out of the design's OWN staged RTL, never out of an oracle tree."""
+    from pathlib import Path as _P
+    out = []
+    root = _P(project)
+    for sub in ("input/vendor_rtl", "input/design_src", "phase2/stage1/rtl"):
+        d = root / sub
+        if not d.is_dir():
+            continue
+        for p in sorted(d.rglob("*pkg*.sv")):
+            try:
+                t = p.read_text(errors="replace")
+            except OSError:
+                continue
+            if "h2d" in t.lower() and "d2h" in t.lower():
+                out.append((str(p.relative_to(root)), t))
+    return out
+
+
+def emit_case_register_bus(project, case: dict, dut_module: str,
+                           ports: "Sequence[Tuple[str, str, str]]"
+                           ) -> Tuple[Optional[str], str]:
+    """`(verilog, reason)` for a vector driven over the design's register bus.
+
+    Used when the vector's fields do not appear as DUT ports — which is the
+    normal case for a peripheral whose interface is a bus. Fail-closed at every
+    step: the register map, the encoding tables, the status bit, the byte order
+    and the bus field names all come from the design's own input, and any one
+    of them missing is a refusal with a reason."""
+    from pathlib import Path as _P
+    import json as _json
+    try:
+        import register_bus_driver_gen as _rbd
+    except Exception as e:
+        return None, f"register-bus driver unavailable: {e}"
+    root = _P(project)
+    gd = root / "phase1" / "generated_docs"
+
+    def _load(n):
+        p = gd / n
+        try:
+            return _json.loads(p.read_text(errors="ignore")) if p.is_file() else {}
+        except Exception:
+            return {}
+
+    corpus = {}
+    for sub in ("phase1/input_doc", "input/docs"):
+        d = root / sub
+        if not d.is_dir():
+            continue
+        for p in sorted(d.iterdir()):
+            if p.is_file() and p.suffix.lower() in (".txt", ".md", ".rst"):
+                try:
+                    corpus[p.name] = p.read_text(errors="replace")
+                except OSError:
+                    pass
+    plan, why = _rbd.resolve_register_plan(
+        case, _load("L4_REGMAP.json"), _load("L15_ENCODING_TABLES.json"),
+        corpus)
+    if plan is None:
+        return None, why
+    reasons = []
+    for path, text in _staged_bus_packages(root):
+        bus, bwhy = _rbd.bus_contract(text)
+        if bus is None:
+            reasons.append(f"{path}: {bwhy}")
+            continue
+        h2d_t = bus["h2d_type"].split("::")[-1]
+        d2h_t = bus["d2h_type"].split("::")[-1]
+        # The parsed port surface carries no type for a struct-typed port, so
+        # the pairing is read off the design's OWN module declaration.
+        h2d_port, d2h_port = _bus_ports_from_rtl(root, dut_module, h2d_t, d2h_t)
+        if not h2d_port or not d2h_port:
+            reasons.append(f"{path}: the DUT exposes no {h2d_t}/{d2h_t} port "
+                           f"pair")
+            continue
+        clk = next((n for d, _w, n in ports
+                    if str(d).startswith("input") and _norm(n) in _CLK), None)
+        rst = next((n for d, _w, n in ports
+                    if str(d).startswith("input") and _norm(n) in _RST), None)
+        if not clk or not rst:
+            reasons.append(f"{path}: the DUT exposes no clock/reset pair")
+            continue
+        text_out = _rbd.emit_sequence_tb(
+            case, plan, bus, dut_module, h2d_port, d2h_port, clk, rst,
+            rst_active_low=_norm(rst).endswith(("n", "ni")))
+        return text_out, ""
+    if not reasons:
+        return None, ("no staged package declares a host->device / "
+                      "device->host bus struct pair")
+    return None, "; ".join(reasons[:3])
+
+
+def _bus_ports_from_rtl(root, dut_module: str, h2d_t: str, d2h_t: str
+                        ) -> Tuple[Optional[str], Optional[str]]:
+    """`(h2d_port, d2h_port)` read off the DUT's own module declaration.
+
+    A struct-typed port survives the generic port parser as a bare name with no
+    width, so the type has to come from the RTL itself."""
+    from pathlib import Path as _P
+    root = _P(root)
+    # Anchored on the DIRECTION keyword: a module header is not delimited by
+    # the first `;` (an `import pkg::*;` line sits inside it), and the same
+    # type name also appears on the instantiation below. Direction + type +
+    # identifier is the port declaration and nothing else.
+    pat_h = re.compile(r"\binput\s+[\w:]*\b" + re.escape(h2d_t)
+                       + r"\s+(\w+)")
+    pat_d = re.compile(r"\boutput\s+[\w:]*\b" + re.escape(d2h_t)
+                       + r"\s+(\w+)")
+    for sub in ("phase2/stage1/rtl", "input/vendor_rtl", "input/design_src"):
+        d = root / sub
+        if not d.is_dir():
+            continue
+        for p in sorted(d.rglob("*.sv")) + sorted(d.rglob("*.v")):
+            try:
+                t = p.read_text(errors="replace")
+            except OSError:
+                continue
+            m = re.search(r"\bmodule\s+" + re.escape(dut_module)
+                          + r"\b(?P<hdr>.*?)\bendmodule\b", t, re.S)
+            if not m:
+                continue
+            hdr = m.group("hdr")
+            mh, md = pat_h.search(hdr), pat_d.search(hdr)
+            if mh and md:
+                return mh.group(1), md.group(1)
+    return None, None

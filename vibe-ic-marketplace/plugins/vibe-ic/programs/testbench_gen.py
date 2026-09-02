@@ -598,7 +598,7 @@ def _emit_case_boot_latency_oracle(project: Path, case: dict,
 
 
 
-def _emit_case_known_answer_vector(case: dict, dut_module: str,
+def _emit_case_known_answer_vector(project: Path, case: dict, dut_module: str,
                                    ports: "List[Tuple[str, str, str]]",
                                    out_dir: Path,
                                    report: "dict | None") -> "Path | None":
@@ -621,6 +621,16 @@ def _emit_case_known_answer_vector(case: dict, dut_module: str,
     if not _kav.is_known_answer_vector(case):
         return None
     text, why = _ktb.emit_case_oracle_from_ports(case, dut_module, ports)
+    if not text:
+        # The design may state its transport — opentitan_aes does: "經自建 TB
+        # 由 TL-UL register interface 驅動". A peripheral whose interface is a
+        # BUS exposes no key/plaintext ports, so the port emitter refusing is
+        # the normal case, not the end of it. Second route, same fail-closed
+        # contract, and it drives what the design says it is driven over.
+        text, why2 = _ktb.emit_case_register_bus(project, case, dut_module,
+                                                 ports)
+        if not text:
+            why = f"{why}; register-bus route: {why2}"
     if not text:
         if report is not None:
             report.setdefault("known_answer_vector_unbound", []).append(
@@ -712,7 +722,7 @@ def emit_unit_tbs(project: Path, top: str = "chip_top",
         # FIRST: its oracle is stated by the design, so it outranks a
         # closed-form re-derivation. Fail-closed, so a vector that does not
         # bind falls straight through to the emitters below.
-        wrote = _emit_case_known_answer_vector(c, dut_module, ports,
+        wrote = _emit_case_known_answer_vector(project, c, dut_module, ports,
                                                out_dir, report)
         if wrote is None:
             wrote = _emit_case_golden_oracle(project, ic_class, c, out_dir,

@@ -31913,6 +31913,114 @@ def _v1_7_74_merge_declared_register_bindings(
     return record
 
 
+
+# G19 follow-on — a register-summary table that lists EVERY element of an array
+# by name and offset, and an L4 that carries the offset for none of them.
+#
+# Measured on opentitan_aes: `aes_registers.md` opens with a 35-row summary
+# table listing `KEY_SHARE0_0 0x4` ... `DATA_OUT_3 0x70` ... `STATUS 0x84`, one
+# row per element. L4 emitted `KEY_SHARE0` (base 0x4, collapsed) AND
+# `KEY_SHARE0_1..7` (from the prose array walker) with `address: null` on every
+# one — 21 of 35 registers with no offset, while the document states all 35.
+# Anything that has to ADDRESS a register — a bus driver most of all — cannot
+# work from that.
+#
+# This is a BACKFILL from the design's own table, never a stride guess: a
+# register keeps `address: null` unless the summary table names it. A design
+# whose table lists only the array base still gets null for the elements, which
+# is the fail-closed answer a driver must be able to refuse on.
+_RE_L4_SUMMARY_ROW = re.compile(
+    r"^\s*\|[^|\n]*?`(?P<name>[A-Za-z_][A-Za-z0-9_]*)`[^|\n]*\|"
+    r"\s*(?P<addr>0[xX][0-9a-fA-F]+)\s*\|", re.M)
+
+
+def _g19_summary_table_offsets(extracted: Dict[str, str]) -> Dict[str, str]:
+    """`{REGISTER_NAME: "0xNN"}` for every row of a register-summary table.
+
+    The shape is a pipe row whose FIRST cell carries a backticked identifier
+    and whose SECOND cell is a bare hex literal — the offset column. Generic
+    Markdown register-summary grammar; no chip, vendor or SKU literal."""
+    out: Dict[str, str] = {}
+    for _fn, text in (extracted or {}).items():
+        if not isinstance(text, str) or "|" not in text:
+            continue
+        for m in _RE_L4_SUMMARY_ROW.finditer(text):
+            out.setdefault(m.group("name"), m.group("addr").lower())
+    return out
+
+
+def _g19_backfill_register_offsets(registers: Any,
+                                   extracted: Dict[str, str]) -> int:
+    """Fill `address` from the design's own summary table. Returns the count."""
+    if not isinstance(registers, list):
+        return 0
+    table = _g19_summary_table_offsets(extracted)
+    if not table:
+        return 0
+    filled = 0
+    for reg in registers:
+        if not isinstance(reg, dict) or reg.get("address"):
+            continue
+        addr = table.get(str(reg.get("name") or "").strip())
+        if not addr:
+            continue
+        reg["address"] = addr
+        try:
+            reg["address_int"] = int(addr, 16)
+        except ValueError:
+            continue
+        reg["address_source"] = "register_summary_table_backfill_g19"
+        filled += 1
+    return filled
+
+
+
+def _g19_post_emit_backfill_register_offsets(project: Path) -> None:
+    """G19 follow-on — fill L4 register offsets from the design's OWN summary
+    table, after every pass that can add a register has run.
+
+    Measured on opentitan_aes: inside `gen_l4_regmap` the register list is
+    already complete-with-addresses, and the SHIPPED L4 carries 23 entries with
+    `address: null` — `KEY_SHARE0_1..7`, `KEY_SHARE1_1..7`, `IV_1..3`,
+    `DATA_IN_1..3`, `DATA_OUT_1..3`. The array elements are appended by a later
+    pass, so the emitter is the wrong place to look: this runs at the end,
+    where the whole set exists.
+
+    A BACKFILL from the document, never a stride guess. A register the summary
+    table does not name keeps `address: null`, which is the fail-closed answer
+    a bus driver has to be able to refuse on."""
+    try:
+        gd = _pl.generated_docs_dir(project)
+        l4_path = gd / "L4_REGMAP.json"
+        if not l4_path.is_file():
+            return
+        l4 = json.loads(l4_path.read_text(errors="ignore"))
+        if not isinstance(l4, dict) or not isinstance(l4.get("registers"), list):
+            return
+        corpus: Dict[str, str] = {}
+        for root in (project / "phase1" / "input_doc",
+                     project / "input" / "docs"):
+            if not root.is_dir():
+                continue
+            for p in sorted(root.iterdir()):
+                if p.is_file() and p.suffix.lower() in (".txt", ".md", ".rst"):
+                    try:
+                        corpus[p.name] = p.read_text(errors="replace")
+                    except OSError:
+                        pass
+        filled = _g19_backfill_register_offsets(l4["registers"], corpus)
+        l4["register_offset_backfill_g19"] = {
+            "filled": filled,
+            "summary_table_rows": len(_g19_summary_table_offsets(corpus)),
+            "still_without_address": sorted(
+                str(r.get("name")) for r in l4["registers"]
+                if isinstance(r, dict) and not r.get("address")),
+        }
+        _stamp.dump(l4_path, l4)
+    except Exception:  # nosec — a backfill must never break Phase 1
+        pass
+
+
 def gen_l4_regmap(project: Path,
                   extracted: Dict[str, str]) -> LDocResult:
     """L4: register / OTP layout + IP macro reference.
@@ -65477,6 +65585,15 @@ def main() -> int:
 
     # Step 15: coverage report (runs AFTER backfill AND canonical seed so the
     # gate sees the final L docs + explicit pattern set)
+    # G19 follow-on — the register offsets the design's own summary table
+    # states. LAST, deliberately: measured, the array elements
+    # (`KEY_SHARE0_1..7`, `IV_1..3`, `DATA_IN_1..3`, `DATA_OUT_1..3`) are
+    # appended to L4 by a pass that runs after both `gen_l4_regmap` and the L9
+    # post-pass, so anywhere earlier backfills a set that does not yet hold
+    # them and reports `still_without_address: []` over a document that is
+    # about to gain 23 more rows.
+    _g19_post_emit_backfill_register_offsets(project)
+
     print(f"[15/15] coverage report ...")
     pct, report = emit_coverage_report(project, extracted, results)
     print(f"      overall.pct = {pct:.1f}% "

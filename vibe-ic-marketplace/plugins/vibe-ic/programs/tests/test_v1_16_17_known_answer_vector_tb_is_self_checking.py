@@ -33,8 +33,11 @@ CASE = {
     "evidence": "FIPS-180-4",
     "transport": {"kind": "port_mapped"},
 }
-PORTS = [("clk", "", "input"), ("rst_n", "", "input"),
-         ("message", "[23:0]", "input"), ("digest", "[255:0]", "output")]
+# (DIRECTION, WIDTH, NAME) — the order `testbench_gen.resolve_dut` yields and
+# `_classify` reads. This fixture had it as (name, width, direction), which is
+# why every test here passed while every REAL port surface bound nothing.
+PORTS = [("input", "", "clk"), ("input", "", "rst_n"),
+         ("input", "[23:0]", "message"), ("output", "[255:0]", "digest")]
 
 DUT = """module sha_core(input clk, input rst_n, input [23:0] message,
                 output [255:0] digest);
@@ -66,12 +69,12 @@ def test_the_expected_value_is_a_comparison_not_a_comment():
 def test_a_vector_that_does_not_bind_emits_nothing():
     """Over-reach control: partial binding is the failure mode that would
     compare a value against a port the TB never drove."""
-    no_output = [p for p in PORTS if p[0] != "digest"]
+    no_output = [p for p in PORTS if p[2] != "digest"]
     text, why = _emit(ports=no_output)
     assert text is None
     assert "binds to no output port" in why, why
-    wrong_width = [("clk", "", "input"), ("message", "[23:0]", "input"),
-                   ("digest", "[127:0]", "output")]
+    wrong_width = [("input", "", "clk"), ("input", "[23:0]", "message"),
+                   ("output", "[127:0]", "digest")]
     text2, why2 = _emit(ports=wrong_width)
     assert text2 is None, "a 256-bit vector must not drive a 128-bit port"
     assert "128" not in (text2 or ""), why2
