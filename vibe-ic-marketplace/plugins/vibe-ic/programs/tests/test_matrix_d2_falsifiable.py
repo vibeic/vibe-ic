@@ -41,6 +41,19 @@ them is a real FAIL:
     rc 3 + PASS_WITH_WAIVERS  waived          (``__WAIVER_HINT__``)
     rc 1 / anything else      FAIL
 
+Since vibe-ic#1978 the consumer splits the rc-2 disclosed skip BY CAUSE. It
+reads the gate's typed ``reason_class`` (from the ``--json`` report the
+clause names, else inferred from the message, else fail-closed to
+``EXECUTION_ERROR``) and hands back either the vacuous hint — for a
+design-declared N/A, an absent capability, or external work — or a rewritten
+``INCOMPLETE: <cmd> — reason_class=…`` line for everything else (blocked by
+an upstream artefact, a zero denominator, an execution error). That second
+shape is graded :data:`INCOMPLETE_TIER` here. It is a NON-demonstration like
+``VACUOUS``, and it is NOT ``PASS``: until 2026-09-02 ``_classify`` had no
+branch for it and read the consumer's ``passed=True`` as a green, so a gate
+whose refusal the consumer could not type was certified as passing on a tree
+it had told the consumer it could not read (vibe-ic#2013, step 15's cell).
+
 A gate that can only ever reach rc 0 or rc 2 IS the disease, so ``VACUOUS`` is
 counted here as a NON-demonstration, exactly like ``PASS``. Three further
 outcomes are also refused as demonstrations, because each would let an
@@ -183,7 +196,7 @@ RUN
 ``PYTEST_DISABLE_PLUGIN_AUTOLOAD=1`` is mandatory in this tree (a stray
 ``pytest_ethereum`` plugin otherwise breaks collection).
 
-LIVE, not remembered: 182<!--figure:blocking_clauses--> blocking clauses over
+LIVE, not remembered: 183<!--figure:blocking_clauses--> blocking clauses over
 67<!--figure:gated_steps--> gated steps. This is the denominator a reader
 wants, and it moves with the yaml: the digits are written by
 ``tools/gen_flow_matrix_census.py`` and the ``<!--figure:...-->`` anchors name
@@ -229,11 +242,12 @@ import sys
 import tempfile
 import traceback
 from pathlib import Path
-from typing import Callable, Dict, Tuple
+from typing import Callable, Dict, Optional, Tuple
 
 import pytest
 
 import flow_compliance_check as FCC
+import _flow_reason_taxonomy as _RT
 
 from flow_matrix import flowref as F
 from flow_matrix import waivers as W
@@ -257,6 +271,16 @@ CRASH = "CRASH"
 TIMEOUT = "TIMEOUT"
 UNWIRED = "PROGRAM_NOT_FOUND"
 SKIPPED_COND = "SKIPPED_CONDITION"
+
+#: The consumer's post-#1978 rewrite of an rc-2 (or a JSON-declared
+#: non-verdict) whose typed reason is NOT skip-eligible: BLOCKED_BY_UPSTREAM,
+#: ZERO_DENOMINATOR or EXECUTION_ERROR. `_check_program_exit_zero` returns
+#: `passed=True` for it — the gate manufactured no design FAIL — and replaces
+#: the snippet with `INCOMPLETE: <cmd> — reason_class=…`. Read through the
+#: consumer's own token (`_INCOMPLETE_STDOUT_TOKEN`), which is also what the
+#: step-level roll-up keys its INCOMPLETE status on, so this module and the
+#: flow cannot disagree about which lines mean it. A non-demonstration.
+INCOMPLETE_TIER = "DISCLOSED_INCOMPLETE"
 
 #: A FAIL whose whole cause is that the artefact the clause names is not
 #: there. Refused as a demonstration — see the module docstring. Its own tier
@@ -701,6 +725,71 @@ def _f_hold_corner_contradicted(p: Path) -> None:
        "read_verilog top_pnr.v\n"
        "link_design top\n"
        "report_checks -path_delay min -digits 4\n")
+
+
+#: The promotion marker, the repair transcript's claim, and the sign-off
+#: report `drv_promotion_corroboration_check` reads — the three inputs of its
+#: contradiction arm. Paths are the gate's own (`_PNR_DIRS[0]`,
+#: `_SIGNOFF_RPT_CANDIDATES[0]`), spelled here rather than imported so a
+#: relocation upstream reddens this fixture instead of silently following it.
+_DRV_PROMOTION_MARKER = "phase3/stage3/pnr/routed_base_prerepair.def"
+_DRV_REPAIR_LOG = "phase3/stage3/pnr/signoff_spef_repair.log"
+_DRV_SIGNOFF_RPT = "phase3/stage3/sta/sta_mcorner_ocv.rpt"
+
+
+def _drv_signoff_report(violating_rows: int) -> str:
+    """A sign-off DRV table with *violating_rows* rows carrying a negative
+    trailing slack in the shape OpenSTA prints (`(VIOLATED)` tag included —
+    vibe-ic#579 is why the tag is present and not assumed away)."""
+    rows = "".join(f"  pin{i}/A    3.00    6.12   -3.12 (VIOLATED)\n"
+                   for i in range(violating_rows))
+    return "max slew\n\n" + rows
+
+
+def _f_drv_promotion_contradicted(p: Path) -> None:
+    """A promoted route whose own claim the sign-off report CONTRADICTS.
+
+    `drv_promotion_corroboration_check` was registered in :data:`UNREDDENED`
+    as "PASS: needs an STA report claiming a DRV promotion that a second
+    source does not corroborate". On 2026-09-01 (v1.14.76) the clause was
+    rewired `optional_program_exit_zero` with `condition_files_exist` naming
+    the promotion marker, and this module's condition materialiser then
+    handed the gate a ZERO-BYTE marker on EMPTY — so the entry started
+    reddening through the gate's OTHER fail arm, "promoted with no sign-off
+    report to corroborate it", and the anti-rot assertion (4) called the
+    entry a lie (vibe-ic#2013, step 23's cell). It was, but deleting it alone
+    would have recorded the clause as falsifiable on the arm the register
+    never named. This fixture reaches the arm it DID name.
+
+    The tree is a promotion that happened (marker present), a repair
+    transcript whose LAST claim is 1 slew violation, and a sign-off report
+    whose DRV table shows 3. `claimed_drv_after` reads the last claim; the
+    gate compares `actual > claimed` and refuses.
+
+    MEASURED, verbatim, through the exact clause command:
+
+        EMPTY (bare, no materialised condition)
+              rc 0  verdict: VACUOUS_PASS  … `step_signoff_spef_repair` never
+                    ran; gate inapplicable
+                    -> consumer: INCOMPLETE reason_class=BLOCKED_BY_UPSTREAM
+        THIS  rc 1  verdict: FAIL  the promotion claimed it ended at 1 DRV
+                    violation(s) from its own session, but the sign-off
+                    report the acceptance gate reads shows 3.
+
+    TWO CONTROLS in
+    :func:`test_d2_the_promotion_corroboration_clause_reddens_and_only_on_content`:
+    the same tree with the report showing 1 (equal, not a regression) reads
+    PASS "promotion corroborated"; the marker ALONE — the input EMPTY reached
+    through the materialiser — reads FAIL on the uncorroborated arm, which is
+    recorded there as the arm this fixture deliberately does NOT rely on.
+    """
+    _w(p, _DRV_PROMOTION_MARKER,
+       "VERSION 5.8 ;\nDESIGN top ;\nEND DESIGN\n")
+    _w(p, _DRV_REPAIR_LOG,
+       "Found 330 slew violations.\n"
+       "Found 1 slew violations.\n"
+       "Found 0 capacitance violations.\n")
+    _w(p, _DRV_SIGNOFF_RPT, _drv_signoff_report(3))
 
 
 def _f_gds_bad(p: Path) -> None:
@@ -1292,6 +1381,15 @@ def _f_macro_obs_layer_undeclared(p: Path) -> None:
                      reader CANNOT LOAD — 9 of 9 parsed OBS rect(s) would be
                      discarded
 
+    RE-MEASURED 2026-09-02 (vibe-ic#2013). Since v1.15.6 (#1978) the consumer
+    types every rc-2 refusal, and this gate published no type, so EMPTY read
+    `INCOMPLETE … reason_class=EXECUTION_ERROR` — "the gate blew up" — and
+    this module graded that PASS. The gate now types it, and EMPTY reads:
+
+        EMPTY  rc 2  -> consumer VACUOUS_PASS, reason_class=DESIGN_DECLARED_NA
+                     (no LEF, and no macro declared at any of the flow's
+                     declaration sites, so no abstract is owed)
+
     The reverse arm is asserted in
     :func:`test_d2_the_two_obstruction_gates_redden_and_only_on_content`: the
     same abstract, byte for byte, against a tech LEF that declares the layer
@@ -1356,6 +1454,16 @@ def _f_macro_obs_spanned(p: Path) -> None:
         THIS   rc 1  [FAIL] 6 supply segment(s) SPAN a placed macro's declared
                      obstruction (6 of them follow-pins)
                      BY LAYER: metala=6
+
+    RE-MEASURED 2026-09-02 (vibe-ic#2013), same history as the step-15 fixture
+    above. Typed, EMPTY reads:
+
+        EMPTY  rc 2  -> consumer INCOMPLETE, reason_class=BLOCKED_BY_UPSTREAM
+                     (no routed DEF — the artefact step 21 exists to produce)
+
+    which this module grades :data:`INCOMPLETE_TIER`, not VACUOUS: a tree
+    with no routed DEF is blocked by the step's own producer, and the
+    consumer is right not to call that a design's N/A.
 
     The reverse arm is asserted in
     :func:`test_d2_the_two_obstruction_gates_redden_and_only_on_content`: the
@@ -1997,6 +2105,7 @@ FIXTURES: Dict[str, Callable[[Path], None]] = {
     "PNR_BAD": _f_pnr_bad,
     "PNR_TCL_HOLD_ONLY": _f_pnr_tcl_hold_only,
     "HOLD_CORNER_CONTRADICTED": _f_hold_corner_contradicted,
+    "DRV_PROMOTION_CONTRADICTED": _f_drv_promotion_contradicted,
     "GDS_BAD": _f_gds_bad,
     "GDS_NO_LABELS": _f_gds_no_labels,
     "MFG_BAD": _f_mfg_bad,
@@ -2264,6 +2373,16 @@ CLAUSE_FIXTURE: Dict[Tuple[str, str], str] = {
     ("23", "hold_corner_coverage_check . --json "
            "reports/phase3/sta/hold_corner_coverage.json"):
         "HOLD_CORNER_CONTRADICTED",
+    # 2026-09-02 (vibe-ic#2013). De-registered from UNREDDENED, where it read
+    # "PASS: needs an STA report claiming a DRV promotion that a second source
+    # does not corroborate". The clause is conditional on the promotion marker
+    # since v1.14.76, so EMPTY (with the condition materialised) reddens it on
+    # the UNCORROBORATED arm — a zero-byte marker and no sign-off report. The
+    # fixture reaches the CONTRADICTED arm the register named instead: a
+    # promotion claiming 1 DRV violation against a sign-off report showing 3.
+    ("23", "drv_promotion_corroboration_check . --json "
+           "reports/phase3/sta/drv_promotion_corroboration.json"):
+        "DRV_PROMOTION_CONTRADICTED",
     # ── 2026-08-06: the three steps whose ONLY red was an empty directory ──
     # Each of these programs was in UNREDDENED, so each step's cell rested
     # entirely on its `files_exist` sibling answering "nothing is there". The
@@ -2537,10 +2656,14 @@ UNREDDENED: Dict[Tuple[str, str], str] = {
            "reports/phase3/sta/sta_corner_record_completeness.json"):
         "PASS: needs a corner RECORD with holes; absence of the record is not "
         "the same input as an incomplete record",
-    ("23", "drv_promotion_corroboration_check . --json "
-           "reports/phase3/sta/drv_promotion_corroboration.json"):
-        "PASS: needs an STA report claiming a DRV promotion that a second "
-        "source does not corroborate",
+    # ("23", "drv_promotion_corroboration_check …") — DE-REGISTERED
+    # 2026-09-02 (vibe-ic#2013). The entry read "PASS: needs an STA report
+    # claiming a DRV promotion that a second source does not corroborate".
+    # After v1.14.76 made the clause conditional on the promotion marker, the
+    # materialised EMPTY reached the gate's uncorroborated-promotion FAIL and
+    # assertion (4) reddened step 23's cell for 79 versions. The clause is now
+    # assigned `DRV_PROMOTION_CONTRADICTED`, which reaches the arm this entry
+    # described. See the fixture's docstring for the measurement.
     ("26", "gds_antenna_deck_check . --json "
            "reports/phase2/gates/gate_oxide_geom_deck.json"):
         "VACUOUS: needs a real PDK antenna rule deck to grade; the check is "
@@ -2705,6 +2828,10 @@ def _classify(passed: bool, out: str) -> str:
         return RED
     if out.startswith(FCC._WAIVER_HINT_PREFIX):
         return WAIVED_TIER
+    # vibe-ic#2013: the consumer's INCOMPLETE/BLOCKED rewrite arrives with
+    # `passed=True` and no vacuous hint, and fell through to PASS here.
+    if FCC._stdout_signals_token(out, FCC._INCOMPLETE_STDOUT_TOKEN):
+        return INCOMPLETE_TIER
     if out.startswith(FCC._VACUOUS_HINT_PREFIX) or FCC._stdout_signals_vacuous(out):
         return VACUOUS
     return PASS
@@ -3241,6 +3368,57 @@ _OBSTRUCTION_BLOCKING: Tuple[Tuple[str, str, str], ...] = (
 )
 
 
+#: What each obstruction gate says on a tree with NOTHING to read, now that
+#: the consumer types every refusal (#1978): the tier this module grades and
+#: the ``reason_class`` the consumer's own ledger must carry. They DIFFER, on
+#: purpose —
+#:
+#:   15  the parity gate finds no LEF, and the project declares no macro at
+#:       any of the flow's declaration sites, so no abstract is owed: the
+#:       design's own N/A, a disclosed skip;
+#:   21  the geometry gate finds no routed DEF — the artefact step 21 exists
+#:       to produce — so it is BLOCKED by the step's own producer, and the
+#:       consumer says INCOMPLETE, not a skip.
+#:
+#: Neither is PASS and neither is FAIL, which is the pair the control defends.
+_OBSTRUCTION_EMPTY: Dict[str, Tuple[str, str]] = {
+    "15": (VACUOUS, _RT.DESIGN_DECLARED_NA),
+    "21": (INCOMPLETE_TIER, _RT.BLOCKED_BY_UPSTREAM),
+}
+
+#: A declaration site the flow's step-15 `ip_integration_check` clause names
+#: as "the design integrates a macro". Present and EMPTY here: the point is
+#: that a declared macro with no readable abstract is BLOCKED, never an N/A.
+_MACRO_DECLARATION_SITE = "input/pdk_local"
+
+
+def _ledger_class() -> Optional[str]:
+    """The ``reason_class`` the consumer's own ledger recorded for the LAST
+    gate it dispatched — ``_check_program_exit_zero`` appends one row per
+    invocation, whatever the gate returned."""
+    return (FCC._GATE_LEDGER[-1].get("reason_class")
+            if FCC._GATE_LEDGER else None)
+
+
+def _write_macro_obs_no_obs(p: Path, key: str) -> None:
+    """The gate's subject, PRESENT and read in full, declaring no obstruction.
+
+    The arm that separates "nothing to read" from "read it, and the design
+    declares nothing": a macro abstract with a SIZE and no OBS section, beside
+    the artefact each gate reads it against.
+    """
+    if key == "15":
+        _w(p, "input/pdk/tech.lef", _tech_lef())
+        _w(p, "input/pdk/block_a.lef",
+           "VERSION 5.8 ;\n\nMACRO block_a\n  CLASS BLOCK ;\n"
+           "  SIZE 40.000 BY 40.000 ;\nEND block_a\n\nEND LIBRARY\n")
+    else:
+        _w(p, "input/pdk/big_ip.lef",
+           "VERSION 5.8 ;\n\nMACRO big_ip\n  CLASS BLOCK ;\n"
+           "  SIZE 100.000 BY 60.000 ;\nEND big_ip\n\nEND LIBRARY\n")
+        _w(p, "phase3/stage3/pnr/routed.def", _routed_def(spanning=0))
+
+
 def test_d2_the_two_obstruction_gates_redden_and_only_on_content(
         tmp_path, _gate_timeout):
     """The claims in the two obstruction fixtures' docstrings, RUN.
@@ -3249,22 +3427,35 @@ def test_d2_the_two_obstruction_gates_redden_and_only_on_content(
     ``VACUOUS_PASS`` on ``EMPTY`` and the matrix could not tell that apart
     from a gate with no failing branch at all. The two are opposite facts: one
     is a gate saying "I was given nothing to read", the other is a gate that
-    can never say no. Three arms per gate keep them apart —
+    can never say no. The arms per gate keep them apart —
 
-      EMPTY     -> VACUOUS_PASS  the gate DISCLOSES that it could not measure
-      fixture   -> FAIL          the same gate, given its subject, refuses
-      corrected -> PASS          the same tree, one property flipped
+      EMPTY     -> disclosed  the gate DISCLOSES that it could not measure,
+                              and the consumer's ledger carries the gate's
+                              OWN typed reason (:data:`_OBSTRUCTION_EMPTY`)
+      no OBS    -> VACUOUS    the subject present and read in full, declaring
+                              nothing: DESIGN_DECLARED_NA
+      declared  -> INCOMPLETE a macro declared at the flow's own site with no
+                              readable abstract: BLOCKED_BY_UPSTREAM, never
+                              laundered into the N/A above
+      fixture   -> FAIL       the same gate, given its subject, refuses
+      corrected -> PASS       the same tree, one property flipped
 
-    — and the third is what makes the second a verdict rather than a shape:
-    each control is the smallest edit to the SAME tree that flips the answer,
-    so a red earned by a missing directory, an unparseable file or an argument
+    — and the last is what makes the FAIL a verdict rather than a shape: each
+    control is the smallest edit to the SAME tree that flips the answer, so a
+    red earned by a missing directory, an unparseable file or an argument
     error could not have produced it.
 
-    The EMPTY arm is asserted as ``VACUOUS_PASS`` and not merely "not FAIL":
-    that tier IS the wiring change's stated justification for landing two
-    unconditional legs — a cell that stages no LEF records an honest
-    could-not-measure rather than a green — so it is checked rather than
-    narrated.
+    THE EMPTY ARM IS TYPED, NOT MERELY "NOT FAIL" (vibe-ic#2013). This
+    control used to assert ``VACUOUS_PASS`` for both gates, which was true
+    until v1.15.6: #1978 then made the consumer type every rc-2 by
+    ``reason_class`` and fall closed to ``EXECUTION_ERROR`` when the gate
+    published none. Both gates published none, so a tree with nothing to read
+    graded "the gate blew up", the consumer rewrote it ``INCOMPLETE:``, and
+    ``_classify`` — which had no branch for that shape — read it as PASS:
+    the exact "certifies a run it could not read" this assertion names. The
+    repair is at the gates (they type their refusals) and at ``_classify``
+    (it grades the rewrite :data:`INCOMPLETE_TIER`); this control now pins
+    the tier AND the class, so an untyped refusal cannot return unnoticed.
     """
     for key, command, fixture in _OBSTRUCTION_BLOCKING:
         assert CLAUSE_FIXTURE.get((key, command)) == fixture, (
@@ -3275,13 +3466,46 @@ def test_d2_the_two_obstruction_gates_redden_and_only_on_content(
         assert tier == RED, (
             f"step {key}: fixture {fixture} no longer reddens {command!r} -> "
             f"{tier} :: {out[-300:]}")
+
+        # ── EMPTY: a disclosed refusal, typed by the gate itself.
+        want_tier, want_cls = _OBSTRUCTION_EMPTY[key]
         tier, out = _tier(_build_project(tmp_path, f"obse{key}", "EMPTY"),
                           command)
-        assert tier == VACUOUS, (
+        assert tier == want_tier, (
             f"step {key}: on a tree with nothing to read {command!r} answered "
-            f"{tier}, not {VACUOUS}. If it is FAIL the fixture is measuring "
+            f"{tier}, not {want_tier}. If it is FAIL the fixture is measuring "
             f"nothing the bare tree does not; if it is PASS the gate now "
             f"certifies a run it could not read :: {out[-300:]}")
+        assert _ledger_class() == want_cls, (
+            f"step {key}: the consumer typed the bare-tree refusal "
+            f"{_ledger_class()!r}, not {want_cls!r}. An untyped refusal falls "
+            f"closed to {_RT.EXECUTION_ERROR} — 'the gate blew up' — which "
+            f"is not what the gate said :: {out[-300:]}")
+
+        # ── the subject present, read in full, declaring no obstruction:
+        #    the design's N/A, and it must read as one.
+        pna = _build_project(tmp_path, f"obsna{key}", "EMPTY")
+        _write_macro_obs_no_obs(pna, key)
+        tier, out = _tier(pna, command)
+        assert tier == VACUOUS and _ledger_class() == _RT.DESIGN_DECLARED_NA, (
+            f"step {key}: an abstract with no OBS must be the design's own "
+            f"N/A (VACUOUS_PASS / {_RT.DESIGN_DECLARED_NA}), got {tier} / "
+            f"{_ledger_class()} :: {out[-300:]}")
+
+        # ── a macro DECLARED at the flow's own site, with no abstract to
+        #    read: blocked, and never the N/A above.
+        pdecl = _build_project(tmp_path, f"obsdecl{key}", "EMPTY")
+        (pdecl / _MACRO_DECLARATION_SITE).mkdir(parents=True)
+        if key == "21":
+            _w(pdecl, "phase3/stage3/pnr/routed.def", _routed_def(spanning=0))
+        tier, out = _tier(pdecl, command)
+        assert (tier == INCOMPLETE_TIER
+                and _ledger_class() == _RT.BLOCKED_BY_UPSTREAM), (
+            f"step {key}: a declared macro whose abstract never reached the "
+            f"gate must be BLOCKED ({INCOMPLETE_TIER} / "
+            f"{_RT.BLOCKED_BY_UPSTREAM}), got {tier} / {_ledger_class()} — "
+            f"reading it as an N/A is the self-disabling shape the wiring "
+            f"comment at step 15 refused :: {out[-300:]}")
 
     # ── step 15, negative control: the SAME abstract, byte for byte, with the
     #    tech LEF declaring the layer its OBS opens on. Nothing else moves.
@@ -3305,6 +3529,79 @@ def test_d2_the_two_obstruction_gates_redden_and_only_on_content(
         "the same segment count routed clear of the obstruction must PASS, "
         f"else the red above is the macro's presence and not the crossing :: "
         f"{out[-300:]}")
+
+
+#: The step-23 promotion-corroboration clause and the fixture that reddens it
+#: on the arm its former UNREDDENED entry named (vibe-ic#2013).
+_PROMOTION_BLOCKING: Tuple[str, str, str] = (
+    "23", "drv_promotion_corroboration_check . --json "
+          "reports/phase3/sta/drv_promotion_corroboration.json",
+    "DRV_PROMOTION_CONTRADICTED")
+
+_PROMOTION_REPORT = "reports/phase3/sta/drv_promotion_corroboration.json"
+
+
+def _promotion_record(project: Path) -> Dict:
+    """The gate's own ``--json`` record: verdict and reason, read from the
+    file rather than from the consumer's tail-cut snippet, which does not
+    reliably hold a 250-character reason."""
+    rec = project / _PROMOTION_REPORT
+    assert rec.is_file(), f"the gate wrote no record under {project}"
+    return json.loads(rec.read_text(encoding="utf-8"))
+
+
+def test_d2_the_promotion_corroboration_clause_reddens_and_only_on_content(
+        tmp_path, _gate_timeout):
+    """The claims in :func:`_f_drv_promotion_contradicted`'s docstring, RUN.
+
+    Four arms, because this clause has TWO fail arms and the register entry
+    it replaces named only one of them:
+
+      fixture      -> FAIL   claimed 1, sign-off shows 3: the CONTRADICTION
+      agreeing     -> PASS   the same tree, sign-off shows 1: corroborated
+      marker alone -> FAIL   promoted, no sign-off report: UNCORROBORATED —
+                             the arm the materialised EMPTY reached, recorded
+                             here as the one the fixture does not rely on
+      bare tree    -> INCOMPLETE  the gate's own VACUOUS_PASS ("never ran"),
+                             typed BLOCKED_BY_UPSTREAM; never RED, never PASS
+    """
+    key, command, fixture = _PROMOTION_BLOCKING
+    assert CLAUSE_FIXTURE.get((key, command)) == fixture, (
+        f"step {key}: {command!r} is no longer assigned {fixture!r}")
+    assert (key, command) not in UNREDDENED, (
+        f"step {key}: {command!r} is both excused and assigned a fixture")
+
+    pred = _build_project(tmp_path, "drvred", fixture)
+    tier, out = _tier(pred, command)
+    rec = _promotion_record(pred)
+    assert tier == RED and rec["verdict"] == "FAIL", (
+        f"the fixture no longer reddens the clause -> {tier} / {rec} :: "
+        f"{out[-300:]}")
+    assert "claimed it ended at 1" in rec["reason"] and "shows 3" in rec["reason"], (
+        f"the red is not the contradiction arm: {rec['reason']}")
+
+    pok = _build_project(tmp_path, "drvok", fixture)
+    _w(pok, _DRV_SIGNOFF_RPT, _drv_signoff_report(1))
+    tier, out = _tier(pok, command)
+    rec = _promotion_record(pok)
+    assert tier == PASS and "corroborated" in rec["reason"], (
+        f"a sign-off report that AGREES with the claim must PASS on the "
+        f"identical tree, else the red above is the tree and not the "
+        f"contradiction :: {tier} / {rec}")
+
+    pbare = _build_project(tmp_path, "drvmarker", "EMPTY")
+    _w(pbare, _DRV_PROMOTION_MARKER, "")
+    tier, out = _tier(pbare, command)
+    rec = _promotion_record(pbare)
+    assert tier == RED and "no sign-off report" in rec["reason"], (
+        f"the marker alone must still be refused as UNCORROBORATED — this is "
+        f"the arm EMPTY reached; if it stopped reddening, the register "
+        f"history in CLAUSE_FIXTURE is stale :: {tier} / {rec}")
+
+    tier, out = _tier(_build_project(tmp_path, "drvempty", "EMPTY"), command)
+    assert tier == INCOMPLETE_TIER and _ledger_class() == _RT.BLOCKED_BY_UPSTREAM, (
+        f"a tree where the producer never ran must be a typed, blocked "
+        f"non-verdict, got {tier} / {_ledger_class()} :: {out[-300:]}")
 
 
 # ─────────────────────────────────────────────────────────────────────
@@ -3703,6 +4000,12 @@ def test_d2_harness_reports_crash_and_timeout_as_non_demonstrations():
     assert _classify(True, "VACUOUS_PASS: nothing to audit") == VACUOUS
     assert _classify(True, FCC._WAIVER_HINT_PREFIX + "x") == WAIVED_TIER
     assert _classify(True, "[PASS] all good") == PASS
+    # vibe-ic#2013: the consumer's #1978 rewrite of a refusal it could not
+    # promote to a skip. `passed=True`, no vacuous hint — and NOT a pass.
+    assert _classify(
+        True, "INCOMPLETE: x . --json y — reason_class=BLOCKED_BY_UPSTREAM; "
+              "no routed DEF under .") == INCOMPLETE_TIER
+    assert INCOMPLETE_TIER not in DEMONSTRATIONS
 
     # ── The shape the consumer ACTUALLY produces ──────────────────────
     # `_check_program_exit_zero` hands back

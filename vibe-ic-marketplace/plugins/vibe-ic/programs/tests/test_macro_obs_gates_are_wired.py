@@ -145,5 +145,118 @@ def test_the_geometry_gate_header_no_longer_claims_to_be_unwired():
         "the header still says the gate is not registered in the flow")
 
 
+# ── vibe-ic#2013: every refusal is TYPED, and the type is the flow's own ──
+#
+# Since #1978 `flow_compliance_check` classifies each rc=2 by the gate's
+# `reason_class` and falls closed to EXECUTION_ERROR when none is published.
+# Both obstruction gates published none, so on a real published run step 21
+# read "INCOMPLETE: the gate reports its input was applicable and was NOT
+# examined" for a design that integrates no macro (MEASURED, spm@1.15.55,
+# ledger `rc=2 INCOMPLETE reason_class=EXECUTION_ERROR`). The gates now
+# publish a class, and the one fact the LEF set cannot supply — does this
+# design integrate a macro at all — is taken from the FLOW'S OWN declaration
+# sites, the `condition_files_exist` triggers of step 15's
+# `ip_integration_check` clause. The first test below pins the two copies of
+# that list to each other; the rest run the gates and read the type back.
+
+import json
+import subprocess
+
+_PROGRAMS = os.path.dirname(_HERE)
+if _PROGRAMS not in sys.path:
+    sys.path.insert(0, _PROGRAMS)
+
+
+def _refusal(gate: str, project, *extra):
+    """rc and the gate's own --json record, through a real subprocess."""
+    out = project / f"{gate}.json"
+    r = subprocess.run(
+        [sys.executable, os.path.join(_PROGRAMS, gate + ".py"), str(project),
+         "--json", str(out), *extra],
+        capture_output=True, text=True, timeout=300)
+    rec = json.loads(out.read_text()) if out.is_file() else None
+    return r.returncode, rec, r.stderr
+
+
+def test_the_declaration_sites_the_gates_consult_are_the_flows_own():
+    """`_MACRO_DECLARATION_SITES` is a second copy of the yaml's list, and a
+    second copy of one fact answers differently the day either moves."""
+    import macro_obs_geometry_intersect_check as G
+    key, spec = _find_leg(_steps()["15"], "ip_integration_check")
+    assert key == "optional_program_exit_zero", key
+    assert tuple(spec.get("condition_files_exist") or ()) == \
+        tuple(G._MACRO_DECLARATION_SITES), (
+        f"the flow declares a macro by {spec.get('condition_files_exist')}; "
+        f"the obstruction gates consult {G._MACRO_DECLARATION_SITES}")
+
+
+def test_a_project_with_nothing_to_read_and_no_declared_macro_is_the_designs_na(
+        tmp_path):
+    import _flow_reason_taxonomy as T
+    rc, rec, err = _refusal("macro_obs_load_parity_check", tmp_path)
+    assert rc == 2 and "CANNOT DETERMINE" in err, err
+    assert rec["reason_class"] == T.DESIGN_DECLARED_NA, rec
+    assert rec["verdict"] == T.record_verdict(T.DESIGN_DECLARED_NA), rec
+    # the geometry gate refuses one step earlier: no routed DEF is the step's
+    # own producer missing, which is blocked and never an N/A.
+    rc, rec, err = _refusal("macro_obs_geometry_intersect_check", tmp_path)
+    assert rc == 2 and "no routed DEF" in err, err
+    assert rec["reason_class"] == T.BLOCKED_BY_UPSTREAM, rec
+
+
+def test_a_declared_macro_with_no_abstract_is_blocked_not_na(tmp_path):
+    """The self-disabling shape the step-15 wiring comment refuses: a design
+    that DECLARES a macro must not get an N/A because its LEF is missing."""
+    import _flow_reason_taxonomy as T
+    import macro_obs_geometry_intersect_check as G
+    (tmp_path / G._MACRO_DECLARATION_SITES[0]).mkdir(parents=True)
+    rc, rec, err = _refusal("macro_obs_load_parity_check", tmp_path)
+    assert rc == 2 and rec["reason_class"] == T.BLOCKED_BY_UPSTREAM, (rec, err)
+    assert "DECLARES a macro" in err, err
+    pnr = tmp_path / "phase3" / "stage3" / "pnr"
+    pnr.mkdir(parents=True)
+    (pnr / "routed.def").write_text(
+        "VERSION 5.8 ;\nDESIGN top ;\nUNITS DISTANCE MICRONS 1000 ;\n"
+        "COMPONENTS 0 ;\nEND COMPONENTS\nEND DESIGN\n")
+    rc, rec, err = _refusal("macro_obs_geometry_intersect_check", tmp_path)
+    assert rc == 2 and rec["reason_class"] == T.BLOCKED_BY_UPSTREAM, (rec, err)
+    assert "no macro LEF" in err and "DECLARES a macro" in err, err
+
+
+def test_an_abstract_that_declares_no_obs_is_the_designs_na(tmp_path):
+    import _flow_reason_taxonomy as T
+    (tmp_path / "tech.lef").write_text(
+        "VERSION 5.8 ;\nLAYER metalA\n  TYPE ROUTING ;\nEND metalA\n"
+        "END LIBRARY\n")
+    (tmp_path / "macro.lef").write_text(
+        "MACRO block_a\n  SIZE 40.0 BY 40.0 ;\nEND block_a\n")
+    rc, rec, err = _refusal("macro_obs_load_parity_check", tmp_path)
+    assert rc == 2 and "nothing was compared" in err, err
+    assert rec["reason_class"] == T.DESIGN_DECLARED_NA, rec
+    assert rec["masters_with_obs"] == [], "the audit's own census is kept"
+    pnr = tmp_path / "phase3" / "stage3" / "pnr"
+    pnr.mkdir(parents=True)
+    (pnr / "routed.def").write_text(
+        "VERSION 5.8 ;\nDESIGN top ;\nUNITS DISTANCE MICRONS 1000 ;\n"
+        "COMPONENTS 1 ;\n- u0 block_a + FIXED ( 0 0 ) N ;\nEND COMPONENTS\n"
+        "END DESIGN\n")
+    rc, rec, err = _refusal("macro_obs_geometry_intersect_check", tmp_path)
+    assert rc == 2 and "declares an OBS" in err, err
+    assert rec["reason_class"] == T.DESIGN_DECLARED_NA, rec
+
+
+def test_an_abstract_the_tech_lef_cannot_resolve_is_a_zero_denominator(
+        tmp_path):
+    """836f57214's refusal — a LEF set declaring zero layers — keeps its rc
+    and gains the class that says the follow-up is real: vendor the tech LEF."""
+    import _flow_reason_taxonomy as T
+    (tmp_path / "macro.lef").write_text(
+        "MACRO block_a\n  SIZE 40.0 BY 40.0 ;\n  OBS\n    LAYER metalA ;\n"
+        "      RECT 0 0 1 1 ;\n  END\nEND block_a\n")
+    rc, rec, err = _refusal("macro_obs_load_parity_check", tmp_path)
+    assert rc == 2 and "ZERO layers" in err, err
+    assert rec["reason_class"] == T.ZERO_DENOMINATOR, rec
+
+
 if __name__ == "__main__":
     sys.exit(pytest.main([os.path.abspath(__file__), "-v"]))

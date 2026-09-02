@@ -157,7 +157,9 @@ if str(_HERE) not in sys.path:
     sys.path.insert(0, str(_HERE))
 
 from macro_obs_geometry_intersect_check import (      # noqa: E402
-    _MACRO_RE, parse_macro_obs)
+    _MACRO_RE, _MACRO_DECLARATION_SITES, _typed_refusal,
+    macro_declaration_sites, parse_macro_obs)
+import _flow_reason_taxonomy as _reason_taxonomy  # noqa: E402  vibe-ic#1978
 
 # A layer DECLARATION: `LAYER <name>` alone on its line, closed by `END <name>`.
 # A layer REFERENCE inside a MACRO body is `LAYER <name> ;` — the semicolon is
@@ -447,11 +449,30 @@ def main(argv=None) -> int:
         lefs = discover_lefs(proj)
     lef_texts, lef_labels = _read(lefs)
     if not lef_texts:
-        print(f"[CANNOT DETERMINE] macro_obs_load_parity: no LEF under {proj}. "
-              "A run with no LEF is not a run whose obstructions all loaded — "
-              "it is one this gate could not read. NOT a pass.",
+        # vibe-ic#2013 / #1978 — the refusal is TYPED, and which type depends
+        # on a fact the LEF set cannot supply: does this design integrate a
+        # macro at all? The flow's own declaration sites answer it (see
+        # `_MACRO_DECLARATION_SITES` in the sibling gate). No site, no macro
+        # declared, no abstract owed: the design's N/A. A site and still no
+        # LEF: a declared macro whose abstract never reached this gate, which
+        # is BLOCKED and never an N/A.
+        declared = macro_declaration_sites(proj)
+        reason = (f"no LEF under {proj}. A run with no LEF is not a run whose "
+                  f"obstructions all loaded — it is one this gate could not "
+                  f"read. NOT a pass.")
+        if declared:
+            reason += (f" The project DECLARES a macro at "
+                       f"{', '.join(declared)} and no abstract was staged "
+                       f"for this gate to read.")
+            cls = _reason_taxonomy.BLOCKED_BY_UPSTREAM
+        else:
+            reason += (f" The project declares no macro at any of "
+                       f"{', '.join(_MACRO_DECLARATION_SITES)}, so no abstract "
+                       f"is owed: the design integrates no macro.")
+            cls = _reason_taxonomy.DESIGN_DECLARED_NA
+        print(f"[CANNOT DETERMINE] macro_obs_load_parity: {reason}",
               file=sys.stderr)
-        return 2
+        return _typed_refusal(a.json_out, "macro_obs_load_parity", cls, reason)
 
     logs = list(a.logs or [])
     if not logs:
@@ -464,10 +485,16 @@ def main(argv=None) -> int:
         a.json_out.write_text(json.dumps(rep, indent=2) + "\n")
 
     if not rep["masters_with_obs"]:
-        print("[CANNOT DETERMINE] macro_obs_load_parity: no macro in the "
-              f"{len(lef_texts)} LEF(s) read declares an OBS. NOT a pass — "
-              "nothing was compared.", file=sys.stderr)
-        return 2
+        # Every LEF under the project was read and none declares an OBS. That
+        # is the design's own declaration set, examined in full — the design
+        # integrates no obstruction-bearing macro — so the refusal is typed as
+        # the design's N/A, not as an error of this gate.
+        reason = (f"no macro in the {len(lef_texts)} LEF(s) read declares an "
+                  f"OBS. NOT a pass — nothing was compared.")
+        print(f"[CANNOT DETERMINE] macro_obs_load_parity: {reason}",
+              file=sys.stderr)
+        return _typed_refusal(a.json_out, "macro_obs_load_parity",
+                              _reason_taxonomy.DESIGN_DECLARED_NA, reason, rep)
 
     # THE QUESTION COULD NOT BE PUT. `unresolvable` means "referenced by an OBS
     # and declared by no LEF that was read". When the LEF set that was read
@@ -501,13 +528,18 @@ def main(argv=None) -> int:
                  " this gate cannot even say which file would answer it. Pass"
                  " the tech LEF the run loads with --lef, or vendor it under"
                  " input/pdk/, and re-run.")
-        print(f"[CANNOT DETERMINE] macro_obs_load_parity: the "
-              f"{len(lef_texts)} LEF(s) read declare ZERO layers, so every OBS "
-              f"layer is unresolvable by construction and nothing was actually "
-              f"compared. A macro abstract declares no layers; the TECH LEF "
-              f"does.{where} NOT a pass, and NOT a finding.",
+        reason = (f"the {len(lef_texts)} LEF(s) read declare ZERO layers, so "
+                  f"every OBS layer is unresolvable by construction and "
+                  f"nothing was actually compared. A macro abstract declares "
+                  f"no layers; the TECH LEF does.{where} NOT a pass, and NOT "
+                  f"a finding.")
+        print(f"[CANNOT DETERMINE] macro_obs_load_parity: {reason}",
               file=sys.stderr)
-        return 2
+        # An abstract WAS read (the design declares a macro) and the
+        # declaration set it must be resolved against is empty: 0 layers is
+        # the denominator, and the remedy printed above is the follow-up.
+        return _typed_refusal(a.json_out, "macro_obs_load_parity",
+                              _reason_taxonomy.ZERO_DENOMINATOR, reason, rep)
 
     f = rep["findings"]
     if f:

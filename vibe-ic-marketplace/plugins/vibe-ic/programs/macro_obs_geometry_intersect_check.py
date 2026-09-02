@@ -179,10 +179,79 @@ from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
 
 import _routed_checker_progress as _routed_progress
 import _semantic_child_progress as _semantic_progress
+import _flow_reason_taxonomy as _reason_taxonomy  # noqa: E402  vibe-ic#1978
 
 
 PROGRESS_SCOPE = "routed-def:macro-obs-geometry-intersect"
 _ACTIVE_INPUT_PLAN: Optional[_routed_progress.FiniteInputPlan] = None
+
+#: Where the FLOW says a design declares that it integrates a macro. These are
+#: the `condition_files_exist` triggers of step 15's `ip_integration_check`
+#: clause in `flow/phase1_phase2_phase3.yaml`, whose `absent_condition_reason`
+#: states the doctrine this module borrows: "Both triggers are DECLARATIONS --
+#: a user-supplied local PDK tree and the analog hardmacro handoff -- and a
+#: design that integrates no macro has no macro LEF/GDS/Liberty file set."
+#:
+#: WHY A GATE THAT READS LEFs NEEDS THIS (vibe-ic#2013, #1978). Both
+#: obstruction gates refuse with rc=2 when they find no macro abstract to read.
+#: Since #1978 a refusal carries a typed `reason_class`, and the class decides
+#: the tier: a design-declared N/A stays a disclosed skip (VACUOUS_PASS), an
+#: absent upstream artefact is BLOCKED. "No macro LEF under the project" is
+#: BOTH of those, depending on a fact the LEF set cannot supply — whether the
+#: design integrates a macro at all. The flow's own declaration sites supply
+#: it: no site present, no macro declared, so no abstract is owed and the
+#: refusal is the design's N/A; a site present and still no readable abstract
+#: is a declared macro whose LEF never reached this gate, which is BLOCKED and
+#: must not be laundered into an N/A. Before this, the untyped refusal fell
+#: closed to EXECUTION_ERROR, and a real published run read
+#: "INCOMPLETE: the gate reports its input was applicable and was NOT examined"
+#: on step 21 for a design that integrates no macro. MEASURED, spm@1.15.55.
+#:
+#: Kept as a tuple of flow-layout paths, not design/PDK/vendor literals. The
+#: test `test_macro_obs_gates_type_their_refusals` pins it to the yaml so the
+#: two copies cannot drift apart silently.
+_MACRO_DECLARATION_SITES: Tuple[str, ...] = (
+    "input/pdk_local", "phase3/analog/hardmacro")
+
+
+def macro_declaration_sites(project: Path) -> List[str]:
+    """The flow's macro-declaration sites that EXIST under *project*."""
+    return [rel for rel in _MACRO_DECLARATION_SITES
+            if (Path(project) / rel).exists()]
+
+
+def _typed_refusal(json_out: Optional[Path], check: str, reason_class: str,
+                   reason: str, rep: Optional[Dict[str, Any]] = None) -> int:
+    """rc=2, with the reason TYPED where the consumer reads it (#1978).
+
+    The `[CANNOT DETERMINE]` line the caller already printed is the human
+    disclosure and is left exactly as it was. What was missing is the
+    machine-readable half: `flow_compliance_check` classifies every rc=2 by
+    `reason_class`, reading the JSON report the clause names FIRST and falling
+    closed to EXECUTION_ERROR when nothing typed is there. Every refusal in
+    this module was falling closed, so a design that integrates no macro
+    graded the same as a gate that crashed. The record written here carries
+    the audit's own counts when the refusal came after one (`rep`), so a
+    reader can see WHAT was examined before the question was declined.
+
+    The verdict word is the taxonomy's own `record_verdict` for the class
+    (SKIP / BLOCKED / INCOMPLETE), so this module invents no vocabulary the
+    consumer has to learn.
+    """
+    payload: Dict[str, Any] = dict(rep or {})
+    payload.update({
+        "check": check,
+        "verdict": _reason_taxonomy.record_verdict(reason_class),
+        "rc": 2,
+        "reason_class": reason_class,
+        "reason": reason,
+    })
+    if json_out:
+        json_out.parent.mkdir(parents=True, exist_ok=True)
+        json_out.write_text(json.dumps(payload, indent=2) + "\n")
+    print(f"  reason_class={reason_class} -> "
+          f"{payload['verdict']}", file=sys.stderr)
+    return 2
 
 
 def _read_input_text(path: Path) -> str:
@@ -1000,9 +1069,13 @@ def _main_parsed(a) -> int:
         def_p = cands[0] if cands else None
     if (def_p is None
             or (_ACTIVE_INPUT_PLAN is None and not def_p.is_file())):
-        print("[CANNOT DETERMINE] macro_obs_geometry_intersect: no routed DEF "
-              f"under {proj}. NOT a pass.", file=sys.stderr)
-        return 2
+        reason = f"no routed DEF under {proj}. NOT a pass."
+        print(f"[CANNOT DETERMINE] macro_obs_geometry_intersect: {reason}",
+              file=sys.stderr)
+        # The routed DEF is the artefact step 21 exists to produce; a tree
+        # without one has not reached this gate's subject at all.
+        return _typed_refusal(a.json_out, "macro_obs_geometry_intersect",
+                              _reason_taxonomy.BLOCKED_BY_UPSTREAM, reason)
 
     lefs = list(a.macro_lefs or [])
     if not lefs:
@@ -1016,11 +1089,24 @@ def _main_parsed(a) -> int:
             continue
         labels.append(str(p))
     if not texts:
-        print("[CANNOT DETERMINE] macro_obs_geometry_intersect: no macro LEF "
-              "found. A run with no macro LEF is not a run with no obstruction "
-              "— it is one this gate could not read. NOT a pass.",
+        declared = macro_declaration_sites(proj)
+        reason = ("no macro LEF found. A run with no macro LEF is not a run "
+                  "with no obstruction — it is one this gate could not read. "
+                  "NOT a pass.")
+        if declared:
+            reason += (f" The project DECLARES a macro at "
+                       f"{', '.join(declared)} and its abstract never reached "
+                       f"this gate.")
+            cls = _reason_taxonomy.BLOCKED_BY_UPSTREAM
+        else:
+            reason += (f" The project declares no macro at any of "
+                       f"{', '.join(_MACRO_DECLARATION_SITES)}, so no abstract "
+                       f"is owed: the design integrates no macro.")
+            cls = _reason_taxonomy.DESIGN_DECLARED_NA
+        print(f"[CANNOT DETERMINE] macro_obs_geometry_intersect: {reason}",
               file=sys.stderr)
-        return 2
+        return _typed_refusal(a.json_out, "macro_obs_geometry_intersect",
+                              cls, reason)
 
     rep = audit(_read_input_text(def_p), texts, labels)
     if a.json_out:
@@ -1041,16 +1127,23 @@ def _main_parsed(a) -> int:
     ) if unresolved else ""
 
     if not rep["masters_with_obs"]:
-        print("[CANNOT DETERMINE] macro_obs_geometry_intersect: no macro in the "
-              "supplied LEF(s) declares an OBS. NOT a pass — nothing was "
-              f"checked.{_incomplete}", file=sys.stderr)
-        return 2
-    if not rep["placed_instances"]:
-        print("[CANNOT DETERMINE] macro_obs_geometry_intersect: "
-              f"{len(rep['masters_with_obs'])} master(s) declare an OBS and "
-              f"none is PLACED in this DEF. NOT a pass.{_incomplete}",
+        # The LEF set was read in full and declares no obstruction: that is
+        # the design's own statement, examined, not an absence inferred.
+        reason = ("no macro in the supplied LEF(s) declares an OBS. NOT a "
+                  f"pass — nothing was checked.{_incomplete}")
+        print(f"[CANNOT DETERMINE] macro_obs_geometry_intersect: {reason}",
               file=sys.stderr)
-        return 2
+        return _typed_refusal(a.json_out, "macro_obs_geometry_intersect",
+                              _reason_taxonomy.DESIGN_DECLARED_NA, reason, rep)
+    if not rep["placed_instances"]:
+        # The DEF is the design's own placement record and it places no
+        # instance of any OBS-bearing master: examined, and N/A by the design.
+        reason = (f"{len(rep['masters_with_obs'])} master(s) declare an OBS "
+                  f"and none is PLACED in this DEF. NOT a pass.{_incomplete}")
+        print(f"[CANNOT DETERMINE] macro_obs_geometry_intersect: {reason}",
+              file=sys.stderr)
+        return _typed_refusal(a.json_out, "macro_obs_geometry_intersect",
+                              _reason_taxonomy.DESIGN_DECLARED_NA, reason, rep)
 
     f = rep["findings"]
     gaps = rep["truncated_paths"]
@@ -1155,7 +1248,13 @@ def _main_parsed(a) -> int:
               "an obstruction'. NOT a pass. Name the missing LEF(s) with "
               "--macro-lef, or stage them under the project.",
               file=sys.stderr)
-        return 2
+        return _typed_refusal(
+            a.json_out, "macro_obs_geometry_intersect",
+            _reason_taxonomy.BLOCKED_BY_UPSTREAM,
+            f"no crossing found, but {len(unresolved)} of "
+            f"{rep['placed_masters']} placed master(s) have no LEF declaration "
+            f"in the set that was read; an unread LEF may declare an OBS that "
+            f"is being crossed. NOT a pass.", rep)
 
     # The measured defect. A master that resolved to a LEF satisfies the
     # PRECONDITION; supplying the OBS rects the verdict reads is the CONSUMED
@@ -1182,7 +1281,13 @@ def _main_parsed(a) -> int:
               "remove the stale\n  declaration from the project"
               + ("; and supply the tech LEF so the layer\n  after each via is "
                  "known" if gaps else "") + ". NOT a pass.")
-        return 2
+        return _typed_refusal(
+            a.json_out, "macro_obs_geometry_intersect",
+            _reason_taxonomy.EXECUTION_ERROR,
+            f"no crossing found, but the OBS evidence this comparison consumed "
+            f"is not the OBS evidence the LEF set contained "
+            f"({len(discarded)} placed master(s) declared by more than one "
+            f"file). The input set contradicts itself. NOT a pass.", rep)
 
     # No finding, but part of the supply metal was never read. "I could not
     # look" must not share an exit code with "I looked and it was clean" — that
@@ -1200,7 +1305,13 @@ def _main_parsed(a) -> int:
         _name_the_gaps()
         print("\n  Remedy: pass the tech LEF's vias in the DEF's VIAS section, "
               "or supply the\n  tech LEF, so the layer after each via is known.")
-        return 2
+        return _typed_refusal(
+            a.json_out, "macro_obs_geometry_intersect",
+            _reason_taxonomy.BLOCKED_BY_UPSTREAM,
+            f"{rep['special_segments']} supply segment(s) examined and none "
+            f"spans an obstruction — but {len(gaps)} routed path(s) could not "
+            f"be read to the end (the layer after a via is unknown without "
+            f"the tech LEF). NOT a pass.", rep)
 
     # The completeness claim is computed from the property the verdict READS —
     # obstruction geometry that reached the comparison — and the weaker

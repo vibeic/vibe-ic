@@ -52,10 +52,14 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import sys
 from pathlib import Path
 from typing import List, Optional, Tuple
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import _flow_reason_taxonomy as _reason_taxonomy  # noqa: E402  vibe-ic#1978
 
 # The promotion leaves this behind when (and only when) it swapped the route.
 _PROMOTION_MARKER = "routed_base_prerepair.def"
@@ -216,7 +220,15 @@ def check(project: Path) -> dict:
         # (a routing FAIL that returns early from `step_pnr` skips
         # `step_signoff_spef_repair`), so nothing was examined and the verdict
         # says exactly that.
+        #
+        # TYPED (#1978, via vibe-ic#2013): the producer that would have left
+        # one of the two artefacts never ran, so this is a refusal blocked by
+        # an upstream step, and it says so in the field the consumer reads.
+        # Left untyped, `flow_compliance_check` fell closed to EXECUTION_ERROR
+        # — "the gate blew up" — for a gate that computed exactly the right
+        # answer. The verdict word and the sentinel line are unchanged.
         return {"verdict": "VACUOUS_PASS", "rc": 0,
+                "reason_class": _reason_taxonomy.BLOCKED_BY_UPSTREAM,
                 "reason": ("no route promotion this run and no non-promotion "
                            "record either — `step_signoff_spef_repair` never "
                            "ran; gate inapplicable"),

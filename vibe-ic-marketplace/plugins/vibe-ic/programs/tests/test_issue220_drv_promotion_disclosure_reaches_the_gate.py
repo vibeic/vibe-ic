@@ -164,6 +164,22 @@ def test_no_record_and_no_marker_is_still_vacuous(tmp_path):
     assert sentinel, out
 
 
+def test_the_never_ran_refusal_is_typed_blocked_by_upstream(tmp_path):
+    """vibe-ic#2013 (#1978). The VACUOUS_PASS above is a refusal the consumer
+    now classifies by `reason_class`; untyped, it fell closed to
+    EXECUTION_ERROR — "the gate blew up" — for a gate that computed exactly
+    the right answer. The producer never ran, so the record says BLOCKED."""
+    import json as _json
+    _pnr(tmp_path)
+    out = tmp_path / "rec.json"
+    r = subprocess.run([sys.executable, str(DRV), str(tmp_path),
+                        "--json", str(out)], capture_output=True, text=True)
+    assert r.returncode == 0, r.stdout + r.stderr
+    rec = _json.loads(out.read_text())
+    assert rec["verdict"] == "VACUOUS_PASS", rec
+    assert rec["reason_class"] == "BLOCKED_BY_UPSTREAM", rec
+
+
 def test_an_unreadable_record_is_never_a_pass(tmp_path):
     """A producer that claims to have declared something, in a file that cannot
     be parsed, has established nothing. Failing closed here is what stops the

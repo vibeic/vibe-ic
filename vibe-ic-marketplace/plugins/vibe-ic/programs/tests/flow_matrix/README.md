@@ -244,7 +244,7 @@ from flow_matrix import cells as C, flowref as F, waivers as W
 
 The ledger's unit is a step, but dimensions 2 (falsifiability), 4
 (criteria-match) and 6 (skip discipline) each ask their question of a gate
-CLAUSE — 182<!--figure:blocking_clauses--> blocking clauses over 67<!--figure:gated_steps--> gated steps. A cell-level
+CLAUSE — 183<!--figure:blocking_clauses--> blocking clauses over 67<!--figure:gated_steps--> gated steps. A cell-level
 `xfail(strict=True)` cannot express "5 of this step's 6 clauses are proven and
 the 6th is not", so those modules carry an in-module per-clause register with
 the same both-directions anti-rot semantics (a stale entry reddens; an entry
@@ -331,9 +331,9 @@ the moment eight rows were added up. See `substitution.py`.
 
 <!-- BEGIN GENERATED CENSUS — tools/gen_flow_matrix_census.py — DO NOT EDIT BY HAND -->
 
-**612 cells: 531 ENFORCED, 2 ENFORCED-CONTRADICTED, 7 WAIVED, 19 NA, 26 NOT_MEASURED, 25 ENFORCED-SKIPPED, 2 WAIVED-SKIPPED.**
+**612 cells: 532 ENFORCED, 1 ENFORCED-CONTRADICTED, 7 WAIVED, 19 NA, 26 NOT_MEASURED, 25 ENFORCED-SKIPPED, 2 WAIVED-SKIPPED.**
 
-The 2 CONTRADICTED cells are configured as enforcing while their own predicate is currently RED. They are NOT folded into the 531: a cell whose predicate fails is not evidence of enforcement. See vibe-ic#888.
+The 1 CONTRADICTED cells are configured as enforcing while their own predicate is currently RED. They are NOT folded into the 532: a cell whose predicate fails is not evidence of enforcement. See vibe-ic#888.
 
 Corpus at generation: NOT_OFFERED — no published cell was read. Every figure below is a function of this commit alone.
 
@@ -341,24 +341,24 @@ Corpus at generation: NOT_OFFERED — no published cell was read. Every figure b
 
 `ENFORCED` is published SPLIT, because it is not one thing. It means a live predicate ran and passed; it does not say WHAT it ran against, and that turns out to be three different answers:
 
-* **10** — measured against the step's OWN mechanism. This is the only figure that means what "enforcing" sounds like, and it is a floor: the two rows below are not evidence against it, they are the part nobody has evidence for.
-* **123** — measured against a SUBSTITUTED stand-in. The predicate runs and passes; what it exercises is not the mechanism the cell is named after. Each one carries a disclosure from the module that owns it.
-* **398** — in dimensions that have not answered the question at all. NOT counted as clean: UNDECLARED is a state, not a synonym for "own mechanism". See `substitution.py`, "WHY UNDECLARED IS A STATE AND NOT A DEFAULT".
+* **9** — measured against the step's OWN mechanism. This is the only figure that means what "enforcing" sounds like, and it is a floor: the two rows below are not evidence against it, they are the part nobody has evidence for.
+* **124** — measured against a SUBSTITUTED stand-in. The predicate runs and passes; what it exercises is not the mechanism the cell is named after. Each one carries a disclosure from the module that owns it.
+* **399** — in dimensions that have not answered the question at all. NOT counted as clean: UNDECLARED is a state, not a synonym for "own mechanism". See `substitution.py`, "WHY UNDECLARED IS A STATE AND NOT A DEFAULT".
 
 The 7 WAIVED and 19 NA cells are not enforcing anything and enter none of those columns. There is deliberately no single "enforcing" total to quote.
 
 | dim | question | ENFORCED: own | ENFORCED: substituted | ENFORCED: undeclared | CONTRADICTED | NOT MEASURED | WAIVED | NA |
 |-----|----------|--------------:|----------------------:|---------------------:|-------------:|-------------:|-------:|---:|
 | 1 | `wiring` — Is the gate actually wired — does something real parse and execute it? | 0 | 0 | 68 | 0 | 0 | 0 | 0 |
-| 2 | `falsifiable` — Can the gate fail? Is there a reachable non-zero-exit branch? | 0 | 0 | 64 | 1 | 0 | 2 | 1 |
+| 2 | `falsifiable` — Can the gate fail? Is there a reachable non-zero-exit branch? | 0 | 0 | 65 | 0 | 0 | 2 | 1 |
 | 3 | `outputs_produced` — Are the declared required_outputs genuinely produced? | 0 | 0 | 0 | 0 | 53 | 0 | 15 |
 | 4 | `criteria_match` — Does the gate measure what its name and docstring claim it measures? | 0 | 0 | 68 | 0 | 0 | 0 | 0 |
 | 5 | `deps_correct` — Is blocks_on the true upstream set — no missing and no phantom edge? | 0 | 0 | 67 | 0 | 0 | 1 | 0 |
 | 6 | `skip_discipline` — Is every skip / vacuous-pass disclosed rather than counted as a pass? | 0 | 0 | 68 | 0 | 0 | 0 | 0 |
 | 7 | `outputs_list_complete` — Is required_outputs complete — does the step emit artefacts it never declares? | 0 | 0 | 63 | 0 | 0 | 4 | 1 |
-| 8 | `missing_caught` — When a declared output IS missing, which mechanism catches it? | 9 | 56 | 0 | 1 | 0 | 0 | 2 |
+| 8 | `missing_caught` — When a declared output IS missing, which mechanism catches it? | 8 | 57 | 0 | 1 | 0 | 0 | 2 |
 | 9 | `verdict_consumed` — When this step FAILs, does the verdict reach the exit code — or is it reported and discarded? | 1 | 67 | 0 | 0 | 0 | 0 | 0 |
-| **total** | | **10** | **123** | **398** | **2** | **53** | **7** | **19** |
+| **total** | | **9** | **124** | **399** | **1** | **53** | **7** | **19** |
 
 **NOT MEASURED is not a pass and not a defect.** Those 53 cells have a predicate that declined to run, naming a resource it could not reach — most often a published corpus this checkout does not carry. They are counted here so a dimension whose cells could not be driven cannot read as a dimension with nothing to report; read them as UNKNOWN, never as coverage.
 
