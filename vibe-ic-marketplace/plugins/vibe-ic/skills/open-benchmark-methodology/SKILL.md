@@ -235,6 +235,14 @@ a terminal floor.** We fork the EDA tools and ship them as `vibeic-eda`, so
 "our tool cannot do X" is an engineering backlog item against the fork, routed
 to `tools/vibeic-eda/FIX_STATUS.md`.
 
+The mechanical half of the detection is a program, not a judgement: `programs/
+tb_vcs_only_construct_detect.py` scans the failing testbench for the
+iverilog-rejecting VCS/Xcelium-only constructs — array-aggregate `'{...}` init,
+`break;` / `continue;`, `std::randomize`, `$urandom_range`, `unique`/`priority
+case`, `join_none`, queue ops — and reports the offending line, the
+`FORK-FIXABLE` disposition and the `FIX_STATUS.md` route. Use it to
+auto-classify D; A/B/C and E-H stay judgement.
+
 **Mandatory before you may even LABEL a residual Category D** — this is the
 `asyn_fifo` lesson: run the FLOOR-proof below. Build and run the GOLDEN under a
 tool that DOES support the missing feature.
@@ -354,6 +362,8 @@ Yielding does not pause your turn; it ENDS it, and the "then write the result"
 step never runs. The rule above is not a preference about style — it is the
 only way the deliverable gets written.
 
+## Compliance gate (mandatory)
+
 Save the final result and run the skill compliance check:
 
 ```bash
@@ -362,6 +372,14 @@ python3 plugins/vibe-ic/_shared/skill_compliance_check.py \
   --requirements plugins/vibe-ic/skills/open-benchmark-methodology/compliance.yaml \
   <RESULT.md>
 ```
+
+Exit 0 = PASS, exit 1 = FAIL with specific missing elements listed.
+`compliance.yaml` in this skill directory enumerates every required
+element of your output: section headers, handoff lines, summary blocks.
+
+**Your task is not complete until the audit returns PASS.** Missing
+elements are the single largest source of skill-execution non-determinism
+across different agents.
 
 ## Handoff
 
