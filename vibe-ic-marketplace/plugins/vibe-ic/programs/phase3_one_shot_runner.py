@@ -23043,6 +23043,70 @@ def _padring_def_components(padring_def_text: str) -> "list[tuple[str, str]]":
     return out
 
 
+def _padring_bterm_exclusion_tcl(report_text: str) -> Tuple[str, List[str]]:
+    """Take the MEASURED per-net verdicts out of the DEF, and only those.
+
+    THE MEASUREMENT THIS CONSUMES. `pad_bterm_coincidence_check` re-derives,
+    from the DEF and the master's own LEF, whether each port's BTerm and its
+    pad's bond terminal share a rectangle on ONE layer that is at least as
+    wide and as tall as that layer's minimum width. A net it reports
+    `CONNECTED` is connected in the layout already, and the detailed router
+    has nothing to make.
+
+    WHY THE ROUTER CANNOT MAKE IT ANYWAY, and why this is not switching a
+    check off: the pad's own obstruction covers its bond terminal's footprint
+    on every layer BELOW it (measured: M2, M3 and M4 under an M5 terminal in
+    one open 5 V IO library, and the obstruction is the VENDOR's — the
+    database carries the same 118 OBS boxes the vendor file declares). No via
+    can land, so no access point can exist, and `DRT-0073` is the router
+    saying it was asked for a wire that must not exist under a bond pad.
+
+    THE CONTRACT, and every word of it is enforced by what this reads:
+    ONLY names listed in `connected_nets` are excluded. `not_connected_nets`
+    and `undecided_nets` stay in the router and fail loudly. A net whose BTerm
+    is moved off its pad drops out of that list and comes back — MEASURED: one
+    BTerm displaced by 1 mm in y turned 36 exclusions into 35 and brought back
+    exactly one `[ERROR DRT-0073] No access point for u_pad_rst/PAD`.
+
+    Returns (tcl, excluded_names). Empty tcl when nothing was measured
+    connected, so a design without a pad ring emits a byte-identical deck.
+    """
+    try:
+        doc = json.loads(report_text)
+    except (TypeError, ValueError):
+        return "", []
+    names = [str(n) for n in (doc.get("connected_nets") or [])]
+    if not names:
+        return "", []
+    rows = {str(r.get("net")): r for r in (doc.get("nets") or [])
+            if isinstance(r, dict)}
+    out = [
+        "# === port nets already connected ON the pad, measured per net ===",
+        "# Each name below was MEASURED by pad_bterm_coincidence_check to",
+        "# share a conducting rectangle with its pad's bond terminal. Nothing",
+        "# is excluded as a class: a net it reported NOT_CONNECTED or",
+        "# UNDECIDED is absent from this block and stays in the router.",
+    ]
+    out.append("set _pbx 0")
+    for name in names:
+        row = rows.get(name) or {}
+        ov = row.get("overlap")
+        out.append(
+            f"# {name}: {row.get('pin_layer')} overlap {ov} with "
+            f"{row.get('instance')}/{row.get('terminal')}")
+        out.append(
+            f'set _pbn [[ord::get_db_block] findNet {_tcl_quote(name)}]')
+        out.append('if {$_pbn ne "NULL"} { $_pbn setSpecial; incr _pbx }')
+    out.append('puts "PADRING_BTERM_ALREADY_CONNECTED: $_pbx of '
+               f'{len(names)} measured net(s) excluded from signal routing"')
+    return "\n".join(out), names
+
+
+def _tcl_quote(name: str) -> str:
+    """A DEF net name as one Tcl word — bus brackets are Tcl syntax."""
+    return "{" + name + "}"
+
+
 def _padring_physical_only_instance_tcl(padring_def_text: str) -> str:
     """Create, in odb, the ring instances the LINKED NETLIST does not contain.
 
@@ -23110,7 +23174,8 @@ def _padring_physical_only_instance_tcl(padring_def_text: str) -> str:
 
 def _padring_routing_consumer_tcl(full_pnr_tcl: str,
                                   padring_def_c: str,
-                                  physical_instance_tcl: str = "") -> str:
+                                  physical_instance_tcl: str = "",
+                                  bterm_exclusion_tcl: str = "") -> str:
     """Replace floorplan creation with the complete, verified pad-ring DEF.
 
     The returned deck is the actual routing consumer.  It cannot fall back to
@@ -23164,7 +23229,8 @@ def _padring_routing_consumer_tcl(full_pnr_tcl: str,
         f'}}\n'
         f'{pre}'
         f'read_def -floorplan_initialize {padring_def_c}\n'
-        f'puts "PADRING_ROUTING_CONSUMED: {padring_def_c}"')
+        f'puts "PADRING_ROUTING_CONSUMED: {padring_def_c}"'
+        + (("\n" + bterm_exclusion_tcl) if bterm_exclusion_tcl else ""))
     consumer_tcl = (full_pnr_tcl[:matches[0].start()] + consume
                     + full_pnr_tcl[matches[0].end():])
     route_matches = list(re.finditer(
@@ -23688,11 +23754,22 @@ def step_pad_ring_gen(project: Path, container: Optional[str] = None,
     # library's own config or is not answered at all. Passing no PDK here used
     # to make every delegated variable unanswerable while `pad_ring_gen`, two
     # lines later, was reading the same tree.
+    # `pad_bterm_coincidence_check` runs LAST, after the ring exists and its
+    # BTerms have been written into `padring.def`, because it MEASURES that
+    # DEF. Its report is what authorises the route-exclusion block below —
+    # per net, never for the class of port nets.
+    # `PdkConfig.tech_lef` is already the path the CONTAINER sees (its own
+    # docstring says so), so it is passed through unchanged.
+    tech_lef_c = str(pdk.tech_lef) if pdk and getattr(
+        pdk, "tech_lef", None) else None
     specs = [
         ("pad_assignment_gen.py", pdk_args),
         ("pad_ring_gen.py", pdk_args),
         ("pad_ring_check.py", pdk_args),
     ]
+    if tech_lef_c:
+        specs.append(("pad_bterm_coincidence_check.py",
+                      pdk_args + ["--tech-lef", tech_lef_c]))
     for name, extra in specs:
         prog = PROGRAMS_DIR / name
         if not prog.is_file():  # pragma: no cover - shipped tree always has it
@@ -23804,14 +23881,25 @@ def _prepare_padring_for_route(
         return result, None
     padring = out_dir / "padring.def"
     try:
+        coincidence = project / "reports" / "phase3" / "pad_bterm_coincidence.json"
+        exclusion_tcl, excluded = ("", [])
+        if coincidence.is_file():
+            exclusion_tcl, excluded = _padring_bterm_exclusion_tcl(
+                coincidence.read_text(encoding="utf-8", errors="replace"))
         consumer = _padring_routing_consumer_tcl(
             io_ready_tcl, _to_container_path(str(padring), container),
             _padring_physical_only_instance_tcl(
-                padring.read_text(encoding="utf-8", errors="replace")))
+                padring.read_text(encoding="utf-8", errors="replace")),
+            exclusion_tcl)
     except ValueError as exc:
         return (StepResult("pad_ring_gen", "FAIL", time.time() - t0,
                            f"verified ring has no routing consumer: {exc}",
                            result.output_files), None)
+    result.detail += (
+        f"; {len(excluded)} port net(s) MEASURED already connected on their "
+        f"pad terminal and excluded from signal routing "
+        f"(pad_bterm_coincidence_check, per net)" if excluded else
+        "; no port net measured already connected on a pad terminal")
     result.detail += ("; routing consumer prepared before placement/CTS/route "
                       f"from {padring.relative_to(project)}; IO physical views "
                       f"loaded ({len(io_lefs)} LEF, {len(io_gds)} GDS)")
