@@ -480,6 +480,48 @@ def route_of(doc: Dict[str, Any], has_slots: bool) -> str:
     return NOT_DETERMINED
 
 
+def declared_route_on_disk(project: Path, has_slots: bool
+                           ) -> Tuple[str, Optional[str]]:
+    """The route THE DECLARATION FILE ON DISK selects, and why not if none.
+
+    THE ROUTE WORD IS NOT A REASON, AND THIS FUNCTION EXISTS SO A REFUSAL CAN
+    SAY SO PRECISELY. `submission_template_check` reports it inside
+    NO_TEMPLATE_WITHOUT_REASON to name what it already read: the route is
+    computed by `route_of` from `deliverable` AND the absence of ingested slot
+    files, so on the self-tape-out arm it is derived from the very absence
+    whose reason is being asked for. Naming it is disclosure; it never buys a
+    verdict, here or in any caller.
+
+    Read through `route_of` — the same predicate `tapeout_declaration_gen` used
+    when it chose which router file to write — so what this reports can never
+    be a route the producer would have refused.
+
+    `NOT_DETERMINED` is returned, never raised and never defaulted, whenever
+    the declaration is absent, unreadable, not a mapping, not stamped with this
+    module's schema, or answers no `deliverable`. The second element names
+    which of those it was, because "I could not read it" and "I read it and it
+    declared nothing" are two different facts and a caller quoting one must not
+    be handed the other.
+    """
+    path = project / DECLARATION_REL
+    if not path.is_file():
+        return NOT_DETERMINED, f"{DECLARATION_REL} is not on disk"
+    doc, err = load(path)
+    if err is not None:
+        return NOT_DETERMINED, err
+    if not isinstance(doc, dict):
+        return NOT_DETERMINED, (f"{DECLARATION_REL}'s top level is "
+                                f"{type(doc).__name__}, not a mapping")
+    if doc.get("schema") != SCHEMA:
+        return NOT_DETERMINED, (f"{DECLARATION_REL} does not declare schema "
+                                f"{SCHEMA!r} (found {doc.get('schema')!r})")
+    route = route_of(doc, has_slots)
+    if route == NOT_DETERMINED:
+        return route, (f"{DECLARATION_REL} is a declaration and answers no "
+                       f"`deliverable`, so it selects no route")
+    return route, None
+
+
 def applicable(q: Question, deliverable: Any) -> bool:
     """Is `q` required for this deliverable?
 

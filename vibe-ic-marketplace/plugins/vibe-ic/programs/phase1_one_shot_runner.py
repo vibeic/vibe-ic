@@ -860,6 +860,28 @@ def _run_step_0_5ic(project: Path) -> int:
             template = operator.get("path")
             slot = operator.get("slot")
             reason = operator.get("absent_reason")
+
+    # THE ONE INPUT THAT DECIDES WHETHER THIS STEP CAN PASS, DISCLOSED WHEN IT
+    # IS NOT THERE. Nothing here is inferred and nothing is defaulted -- that
+    # stays exactly as it was -- but a run that proceeds in silence tells the
+    # reader nothing about WHY the step is about to refuse. Measured: a reader
+    # holding a FAILing 0.5ic beside a generated `SELF_TAPEOUT.txt` concluded
+    # the gate had ignored the declaration, and the run had never named the
+    # file the design was supposed to write. A decline that discloses nothing
+    # reads downstream as "nothing needed doing".
+    if not isinstance(reason, str) or not reason.strip():
+        _where = ("the design staged NO step-0.5ic answers"
+                  if answers_path is None else
+                  f"the design's answers at {_ST.DESIGN_ANSWERS_REL} answer no "
+                  f"`operator_template.absent_reason`")
+        print(f"      NOTE: {_where}. If no operator template is found at the "
+              f"path searched below, step 0.5ic will REFUSE with "
+              f"NO_TEMPLATE_WITHOUT_REASON: an absent template has to be "
+              f"BOUGHT with the design's own words. Supply them at "
+              f"{_ST.DESIGN_ANSWERS_REL}, key "
+              f"`operator_template.absent_reason`. Declaring "
+              f"`deliverable` alone does not buy it -- the route is derived "
+              f"FROM the absence, so it cannot pay for it.")
     # THE SEARCH ALWAYS HAPPENS. A driven run looks in the place a design
     # stages an operator template even when nothing is there, so the record
     # names a path that was searched instead of recording that nobody looked.

@@ -121,6 +121,14 @@ from _atomic_artefact import write_text as atomic_write_text  # noqa: E402  vibe
 
 PROGRAM = "submission_template_check"
 
+#: THE KEY THE DESIGN ANSWERS THE ABSENCE IN, spelled ONCE. `phase1_one_shot_
+#: runner._run_step_0_5ic` reads `answers["operator_template"]["absent_reason"]`
+#: out of `_submission_template.DESIGN_ANSWERS_REL` and hands it to the ingest
+#: as `--no-template-reason`. This gate names that path in the refusal a design
+#: hits when it did not, so the sentence carries its own remedy; a path spelled
+#: in a runner and again in prose here is two spellings that drift.
+_ANSWERS_REASON_KEY = "operator_template.absent_reason"
+
 
 def _declared_absence_router(project: Path) -> Optional[str]:
     """Which router file a DECLARED absence of a template lives in, or None.
@@ -414,6 +422,56 @@ def evaluate(project: Path, doc: Optional[dict],
                      f" And {ST.NO_TEMPLATE_REL} IS on disk, which is the file "
                      f"the flow selects its IP path on — an undeclared absence "
                      f"is currently choosing a delivery path.")
+            # THE REFUSAL NAMES ITS REMEDY, AND NAMES WHAT IT ALREADY READ.
+            #
+            # MEASURED, and the cost was a report rather than a bad die. On a
+            # tree where the design answered `deliverable=DIE` and stated no
+            # `absent_reason`, this refusal said only "the record states no
+            # usable reason why that is". Beside it on disk sat
+            # `SELF_TAPEOUT.txt`, written by this step's own generator, reading
+            # "This design declares that it is a DIE and that it targets NO
+            # shuttle operator". A competent reader concluded the gate had not
+            # consulted it, wrote up "no chip-path step can reach PASS on a
+            # self-tape-out", and proposed letting the route word buy the
+            # absence — which would have deleted the two guards
+            # `test_a_reason_that_is_not_a_reason_still_fails` and
+            # `test_dispatching_the_producers_cannot_buy_a_pass_on_its_own`
+            # pin on purpose. Measured on live main v1.16.32 (bcedcdf25d9c),
+            # the same tree with `operator_template.absent_reason` supplied
+            # reaches 0.5ic PASS and leaves 0 rows blocked-by-upstream(0.5ic).
+            # The route was reachable the whole time; the sentence did not say
+            # how.
+            #
+            # SO THE SENTENCE NOW CARRIES BOTH HALVES A READER NEEDS: where the
+            # design supplies the reason, and what this gate already read and
+            # why that did not buy it. NO VERDICT MOVES — an absence still has
+            # to be BOUGHT with the design's own words, and this clause refuses
+            # exactly the trees it refused before.
+            route_read, route_why_not = TD.declared_route_on_disk(
+                project, bool(on_disk))
+            examined["declared_route"] = route_read
+            router_read = _declared_absence_router(project)
+            if router_read is not None:
+                examined["declared_absence_router"] = router_read
+            if route_why_not is not None:
+                read = (f" WHAT THIS GATE ALREADY READ: the design's own "
+                        f"declaration at {TD.DECLARATION_REL} selects no "
+                        f"route — {route_why_not}.")
+            else:
+                read = (
+                    f" WHAT THIS GATE ALREADY READ, AND WHY IT DOES NOT BUY "
+                    f"THIS ABSENCE: the design's own declaration at "
+                    f"{TD.DECLARATION_REL} selects route {route_read}"
+                    + (f" and {router_read} is on disk carrying its producer's "
+                       f"marker" if router_read is not None else "")
+                    + f". That is WHICH PATH this design is on; it is not WHY "
+                      f"the operator's template is absent. "
+                      f"`_tapeout_declaration.route_of` derives "
+                      f"{TD.ROUTE_SELF_TAPEOUT} from `deliverable="
+                      f"{TD.DELIVERABLE_DIE}` AND no slot file having been "
+                      f"ingested — so the route word is computed FROM the very "
+                      f"absence whose reason is being asked for, and cannot "
+                      f"pay for it. A die can be on a shuttle.")
             refusals.append(_refusal(
                 "NO_TEMPLATE_WITHOUT_REASON",
                 f"the template was searched for at "
@@ -422,8 +480,19 @@ def evaluate(project: Path, doc: Optional[dict],
                 f"that is a genuine not-applicable for this design "
                 f"({'absent' if not why else f'only {len(why)} char(s)'}; "
                 f"{ST.MIN_REASON_CHARS} required). Nothing to check is a FAIL, "
-                f"not a pass.{extra}",
-                stated_chars=len(why), floor=ST.MIN_REASON_CHARS))
+                f"not a pass."
+                f" WHERE THE REASON IS SUPPLIED: {ST.DESIGN_ANSWERS_REL}, key "
+                f"`{_ANSWERS_REASON_KEY}` — the design's own words, at least "
+                f"{ST.MIN_REASON_CHARS} characters. "
+                f"`phase1_one_shot_runner` passes it to "
+                f"`submission_template_ingest --no-template-reason`, and "
+                f"nothing in this flow invents it."
+                f"{read}{extra}",
+                stated_chars=len(why), floor=ST.MIN_REASON_CHARS,
+                design_answers_path=ST.DESIGN_ANSWERS_REL,
+                design_answers_key=_ANSWERS_REASON_KEY,
+                declared_route=route_read,
+                declared_absence_router=router_read))
         return _verdict(refusals, examined, na_reason)
 
     if status != ST.STATUS_INGESTED:
