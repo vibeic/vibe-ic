@@ -1112,6 +1112,32 @@ def _summary_rc(doc: Dict[str, Any]) -> int:
     if doc.get("failed") or doc.get("wrote_corpus") \
             or doc.get("exemptions_expired"):
         return 1
+
+    # A CORPUS NOBODY OPENED DOES NOT PROPAGATE AS GREEN (owner ruling,
+    # 2026-09-03). UNDETERMINED had no branch here at all, so it fell past
+    # every test below — it is not `failed`, it carries no
+    # `not_checked_unexempted` row, and it does not reduce `decided` — and the
+    # record answered 0. MEASURED on fa43da5df107, the four states end to end
+    # through the real producer and the real `_gate_dispatch.sh`:
+    #
+    #     mode      state    shell rc   _summary_rc   expansion   gate state
+    #     legacy    absent      0           2         NO_CORPUS   NOT_CHECKED
+    #     legacy    empty       0           0         EXPANDED    NOT_CHECKED
+    #     attested  absent      2           0 <-      NO_CORPUS   UNDETERMINED
+    #     attested  empty       2           2         EXPANDED    NOT_CHECKED
+    #
+    # The dispatcher had just been taught to exit 2 on it; this is the record
+    # the parallel hygiene DAG actually consumes, and it was still saying pass.
+    # A third state that only one of the two consumers can see is a third state
+    # in name only.
+    #
+    # rc 2, NOT rc 1, and NOT folded into `not_checked_unexempted`: "nothing
+    # was opened" is a different fact from "I declined to look at what was
+    # there", and reporting it as either one loses the distinction #1764 was
+    # about. It is its own branch for the same reason it is its own state.
+    if int(doc.get("undetermined") or 0):
+        return 2
+
     unexempted = doc.get("not_checked_unexempted")
     if unexempted:
         # Preserve the truthful legacy list in the record (and therefore HDF's

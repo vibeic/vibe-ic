@@ -685,7 +685,7 @@ _gate_dispatch_corpus_state() {
 # NOTHING IS DROPPED FROM EITHER SIDE.  Mode 2 keeps every property #1769 built
 # into it — blocking, un-exemptible, process-attested, one shard owner.  Mode 3
 # keeps the standing ruling's shape — rc 2 UNDETERMINED, names what it could not
-# read, never blocking.  The defect was only that one rc carried both.
+# read.  The defect was only that one rc carried both.
 _dispatch() {
   local tolerate="$1" may_write="$2" label="$3" wd="$4"; shift 4
   # vibe-ic#584 — consume the pending exemption FIRST and unconditionally, so a
@@ -732,7 +732,16 @@ remain blocking"
   fi
   GATE_EX_UNTIL+=("$ex_until"); GATE_EX_WHY+=("$ex_why")
   GATE_LABELS+=("$label")
-  GATE_BLOCKING_REFUSAL+=("$([ "$tolerate" -eq 2 ] && echo 1 || echo 0)")
+  # BLOCKING IS NOW TRUE OF BOTH REFUSING MODES. Mode 2 (a structural
+  # refusal) always blocked; mode 3 (could-not-look) now blocks too, through
+  # its own branch in `summarise`. The flag is the RECORD of that, and a
+  # record that says `false` about a row the run exits 2 on is the record
+  # disagreeing with the exit code — which is the shape of defect this whole
+  # cluster is about. Its only summary consumer is inside the NOT_CHECKED
+  # branch, which mode 3 never enters, so this changes what the record SAYS
+  # and not what the dispatcher DOES.
+  GATE_BLOCKING_REFUSAL+=("$([ "$tolerate" -eq 2 ] || [ "$tolerate" -eq 3 ] \
+    && echo 1 || echo 0)")
   #: One append per gate, at the SAME point as the label, because the record is
   #: read by index: a scope appended on only some code paths would attribute one
   #: gate's scope to another gate's verdict.
@@ -973,12 +982,16 @@ _gate_execute() {
   fi
   if [ "$tolerate" -eq 3 ] && [ "$rc" -eq 2 ]; then
     # I COULD NOT LOOK. Recorded as its own state so it is neither counted as a
-    # verdict nor counted as a refusal. It is loud in the log and silent in the
-    # exit code, which is the whole point: this run learned nothing about the
-    # tree, and saying so must not be reported as a defect IN the tree.
+    # verdict nor counted as a refusal: an empty result is "I cannot see",
+    # never "there is no problem", and it is equally not "the tree is
+    # defective". It is loud in the log AND in the exit code — see the
+    # UNDETERMINED branch at the end of `summarise`. It used to be silent in
+    # the exit code, and a third state nobody's `-ne 0` can see is a third
+    # state in name only: the run closed GREEN over a population it never
+    # opened (owner ruling, 2026-09-03).
     _GX_STATE="UNDETERMINED"
-    echo "   ^^ COULD NOT LOOK (rc 2, UNDETERMINED; never blocking):" \
-         "$label [${secs}s]" >&2
+    echo "   ^^ COULD NOT LOOK (rc 2, UNDETERMINED; NOT a pass and NOT a" \
+         "finding): $label [${secs}s]" >&2
     echo "      Nothing was opened, so no population was measured. This is a" \
          "fact about THIS RUN, not a finding about the tree; the line above" \
          "names what could not be read." >&2
@@ -1329,14 +1342,17 @@ _gate_dispatch_population_refusal() {
            "$item_count item(s) is the ABSENCE of a measurement rather than a" \
            "measurement of zero. The producer's own diagnostic above names" \
            "what it looked for and how to point it at a corpus."
-      # NAMING WHAT COULD NOT BE READ IS THE OBLIGATION THAT MAKES THIS
-      # NON-BLOCKING ACCEPTABLE. A could-not-look that does not say what it
-      # could not look AT is a shrug, and a shrug is what the standing ruling
-      # exists to refuse.
+      # NAMING WHAT COULD NOT BE READ IS THE OBLIGATION, and it is not
+      # discharged by naming it quietly. A could-not-look that does not say
+      # what it could not look AT is a shrug; a could-not-look that says it and
+      # then exits 0 is a shrug the caller cannot hear.
       echo "[COULD_NOT_READ] corpus=\"$corpus\" opened=no producer_rc=$producer_rc" \
-           "measured_items=none — no population was measured, so this run makes" \
-           "NO claim about the tree here. NOT blocking: an unreadable corpus is" \
-           "a fact about this host, not a defect in the commit."
+           "measured_items=none — NOTHING WAS SCANNED, so this run makes NO" \
+           "claim about the tree here. This is NOT a pass and NOT a finding:" \
+           "the run exits 2 (could-not-determine), never 0 and never 1. A" \
+           "caller for which an absent corpus is EXPECTED says so with" \
+           "--corpus-may-be-absent, whose outcome is rc 0 NO_CORPUS; a caller" \
+           "that did not ask for it does not get it."
       ;;
     producer_failed)
       echo "[NOT_CHECKED] CORPUS PRODUCER FAILED for \"$corpus\":" \
@@ -1854,9 +1870,11 @@ after the last gate and attaches to nothing"
       # run declined to decide; something it was never asked to.
       OTHER_SHARD) elsewhere=$(( elsewhere + 1 )) ;;
       OUT_OF_SCOPE) outofscope=$(( outofscope + 1 )) ;;
-      # I COULD NOT LOOK. Counted and NAMED, never blocking, and deliberately
-      # NOT folded into NOT_CHECKED: a reader who sees the refusal count must
-      # be seeing refusals. It is also not `decided`, because nothing was.
+      # I COULD NOT LOOK. Counted and NAMED, and deliberately NOT folded into
+      # NOT_CHECKED: a reader who sees the refusal count must be seeing
+      # refusals. It is also not `decided`, because nothing was — and since
+      # the 2026-09-03 ruling it is not `passed` either: `summarise` exits 2
+      # when this count is non-zero.
       UNDETERMINED)
         nundetermined=$(( nundetermined + 1 ))
         undetermined="${undetermined:+$undetermined, }${GATE_LABELS[$i]}" ;;
@@ -1955,9 +1973,50 @@ after the last gate and attaches to nothing"
   # every exit path below, including the ones that leave immediately.
   if [ "$nundetermined" -ne 0 ]; then
     echo "repo_hygiene_gates: $nundetermined gate(s) COULD NOT LOOK" \
-         "(UNDETERMINED, never blocking) — nothing was opened for: " \
-         "$undetermined. This run makes NO claim about them; it is not a" \
-         "finding about the tree. (${total}s)" >&2
+         "(UNDETERMINED) — NOTHING WAS SCANNED for: $undetermined. This run" \
+         "makes NO claim about them; it is not a finding about the tree, and" \
+         "it is not a pass over them either. (${total}s)" >&2
+  fi
+
+  # A CORPUS NOBODY OPENED IS NOT A PASS (owner ruling, 2026-09-03).
+  #
+  # UNDETERMINED already had everything a third state needs except the one
+  # thing every caller actually reads. MEASURED on fa43da5df107, the absent
+  # arm through this very script:
+  #
+  #     shell rc 0 | state UNDETERMINED | undetermined 1
+  #     undetermined_labels ["corpus … was NOT FOUND — nothing was opened"]
+  #     corpora [{… "expansion": "NO_CORPUS"}]
+  #
+  # rc 0. So the hygiene DAG closed GREEN over a population that was never
+  # opened, and `test_an_absent_corpus_does_not_close_the_hygiene_dag_green`
+  # was measuring exactly that and had been red about it.
+  #
+  # rc 2 AND NOT rc 1, by this repo's own convention stated forty lines below:
+  # 1 = found a defect, 2 = could not determine. Folding this into 1 would make
+  # every checkout without a corpus red for a reason about the ENVIRONMENT and
+  # not about the code — the mirror of the lie being removed, and the failure
+  # mode `run_tolerating_uncheckable` exists to avoid.
+  #
+  # THIS IS NOT A NEW POLICY, IT IS THE ONE THE TREE ALREADY WROTE DOWN.
+  # `repo_hygiene_gates.sh` says it in as many words about a checker: "That
+  # flag's outcome is rc 0 NO_CORPUS, and rc 0 here would be this gate printing
+  # a PASS over a population it never opened … Absent stays rc 2." The flag is
+  # `--corpus-may-be-absent`, and it is an OPT-IN. What this dispatcher did was
+  # hand that opt-in's outcome to every gate whether or not the caller asked
+  # for it.
+  #
+  # `ran` still excludes UNDETERMINED and that is deliberate: routing it
+  # through the ZERO DECIDED branch would report it as NOT_CHECKED, which is a
+  # different fact ("I declined to look" vs "there was nothing to open"). The
+  # ruling asks for a VISIBLE third state, so it exits through its own door.
+  if [ "$nundetermined" -ne 0 ]; then
+    echo "repo_hygiene_gates: $nundetermined gate(s) are UNDETERMINED —" \
+         "NOTHING WAS SCANNED for: $undetermined. This is neither a pass nor" \
+         "a finding: no population was opened, so no claim is made about the" \
+         "tree. A caller for which an absent corpus is expected declares it" \
+         "with --corpus-may-be-absent. (${total}s)" >&2
+    exit 2
   fi
 
   # Dispatcher-owned population refusals deliberately carry NO exemption.
