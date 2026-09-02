@@ -70,8 +70,16 @@ _CLEAN_DECK = ("* deck\n"
                ".include /foss/pdks/gf180mcuD/libs.tech/ngspice/design.ngspice\n"
                ".lib /foss/pdks/gf180mcuD/libs.tech/ngspice/sm141064.ngspice typical\n"
                ".subckt amp vin vout vss\n.ends\n")
+# The username here is the PLACEHOLDER form on purpose. What this deck has
+# to be, for the rule under test, is an absolute path that is neither under
+# WHITELIST_PREFIXES nor inside the project root — `_is_whitelisted` never
+# looks at the shape of the name, so a placeholder violates exactly as a
+# real account name does. Writing a real-looking username instead put a
+# personal home path into shipped source, which is the thing
+# `shipped_path_portability_check` R1 exists to refuse, and it FAILed the
+# whole tree on this line. Do not "restore" a name here.
 _FOREIGN_DECK = ("* deck\n"
-                 ".include /home/someone/scratch/my_models.lib\n"
+                 ".include /home/<your-user>/scratch/my_models.lib\n"
                  ".subckt amp vin vout vss\n.ends\n")
 _NO_INCLUDE_DECK = ("* deck\n.subckt amp vin vout vss\n.ends\n")
 
