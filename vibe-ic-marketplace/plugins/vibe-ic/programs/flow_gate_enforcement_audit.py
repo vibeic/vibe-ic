@@ -2195,6 +2195,14 @@ def main(argv: Optional[List[str]] = None) -> int:
                     help="permit a GROWING baseline for this write, because "
                          "the audit now LOOKS at more than it did (>=30 chars; "
                          "recorded in the baseline beside the previous size)")
+    ap.add_argument("--retire-scope-reason", action="store_true",
+                    dest="retire_scope_reason",
+                    help="acknowledge that this --record-shrink write will "
+                         "DELETE the recorded `*_scope_expanded` text, and "
+                         "that it has been preserved wherever it belongs. "
+                         "Refused without this flag; the refusal prints the "
+                         "text verbatim so the write cannot destroy the only "
+                         "copy of it")
     a = ap.parse_args(argv)
     flow = _flow_def(a.flow)
     programs = Path(a.programs) if a.programs else _HERE
@@ -2341,8 +2349,51 @@ def main(argv: Optional[List[str]] = None) -> int:
         # PREVIOUS widening is cleared rather than carried forward — a reason
         # that outlives the growth it explained reads to the next writer as
         # standing permission.
+        #
+        # THAT RULE IS RIGHT AND IT DESTROYED A DEFECT REPORT (vibe-ic G17).
+        # The clearing used to be SILENT, and `undeclared_scope_expanded` had
+        # accumulated an observation that had nothing to do with the scope
+        # reason it was appended to:
+        #
+        #     sdc_syntax_check additionally carries a real hole worth its own
+        #     issue: flow declares both required_outputs
+        #     reports/phase2/sdc_check.json and program_exit_zero, but the
+        #     program writes that JSON UNCONDITIONALLY before exiting 1 ...
+        #
+        # #2014 G6 ran this write, the field went to `null`, and after that
+        # commit the observation existed NOWHERE IN THE TREE. Nothing was
+        # wrong with the rule; what was wrong is that a write which deletes
+        # prose said nothing about deleting it.
+        #
+        # SO THE CLEARING IS UNCHANGED AND THE SILENCE IS NOT. A write that
+        # would drop a non-empty reason REFUSES, prints the text VERBATIM so
+        # the refusal itself is a copy of it, and names the flag that performs
+        # the deletion deliberately. A register with no reason recorded is
+        # untouched by this — `--record-shrink` behaves exactly as before, or
+        # the guard would have cost the shrink to save the prose.
+        _reason_fields = ("scope_expanded", "undeclared_scope_expanded")
+        _standing = {k: doc.get(k) for k in _reason_fields
+                     if isinstance(doc.get(k), str) and doc[k].strip()}
+        if _standing and not a.retire_scope_reason:
+            print("\n[FAIL] flow_gate_enforcement baseline: this "
+                  f"{_ratchet.RECORD_FLAG} write would DELETE a recorded "
+                  "reason, and deleting the only copy of a written reason is "
+                  "not a side effect a tightening gets to have.", file=sys.stderr)
+            for _k, _v in sorted(_standing.items()):
+                print(f"\n  {_k}:\n    " + "\n    ".join(_v.strip().splitlines()),
+                      file=sys.stderr)
+            print("\n  The text above is printed in full so this refusal is "
+                  "itself a copy of it. Preserve anything worth keeping where "
+                  "it belongs — an issue, a docstring, a test — and then "
+                  "re-run with --retire-scope-reason. The reason is still "
+                  "spent by the tightening; only the silence is refused.",
+                  file=sys.stderr)
+            return 1
         doc_out["scope_expanded"] = None
         doc_out["undeclared_scope_expanded"] = None
+        if _standing:
+            print("retiring the recorded scope reason(s) as asked: "
+                  + ", ".join(sorted(_standing)))
         guarded = {}
         if prev is not None:
             guarded["known"] = prev
