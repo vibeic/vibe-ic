@@ -51,7 +51,19 @@ GATE = "PPA frontier recomputes"
 #: Byte-for-byte the path the declaration passes to `--candidates`. The row
 #: names ONE document, so the subject has to carry exactly this path or the gate
 #: reads nothing and answers about that instead.
-_REL = "ppa-crosslayer/records/trials/z23/candidates.json"
+#: ASKED OF THE ROW, NEVER RE-TYPED (vibe-ic#2019 fallout). The campaign trees
+#: moved to `docs/campaigns/` and this literal did not follow, so the subject
+#: was built where the gate no longer looks and the CAN-PASS arm was rejected
+#: rc 2 "no corpus at …". Spelling the new prefix here would buy exactly one
+#: more move. `declared_subject_path` reads the `--corpus`/argument this row
+#: actually passes, so the fixture and its row cannot disagree.
+_TAIL = "ppa-crosslayer/records/trials/z23/candidates.json"
+
+
+def _rel() -> str:
+    """Resolved lazily: a missing row must fail THIS fixture, not the census
+    that imports every fixture module."""
+    return F.declared_subject_path(GATE, _TAIL)
 
 _SCOPE = {"stage": "post_route"}
 _DIGEST = "sha256:" + "0" * 64
@@ -120,7 +132,7 @@ def _document(*, feasible: bool) -> dict:
 
 def _tree(work: Path, name: str, *, feasible: bool) -> Path:
     root = F.git_init(work / name)
-    p = root / _REL
+    p = root / _rel()
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text(json.dumps(_document(feasible=feasible), indent=1) + "\n",
                  encoding="utf-8")

@@ -46,7 +46,26 @@ GATE = "PPA ablation records (within-project)"
 #: The declaration passes `--corpus "$ROOT/docs/campaigns/ppa-crosslayer"`, so the document has
 #: to sit under that directory or the gate reads an absent corpus and answers
 #: about THAT instead of about this record.
-_REL = "ppa-crosslayer/records/ablations/fixture_ablation.json"
+#: ASKED OF THE ROW, NEVER RE-TYPED (vibe-ic#2019 fallout). The campaign trees
+#: moved to `docs/campaigns/` and this literal did not follow, so the subject
+#: was built where the gate no longer looks and the CAN-PASS arm was rejected
+#: rc 2 "no corpus at …". Spelling the new prefix here would buy exactly one
+#: more move. `declared_subject_path` reads the `--corpus`/argument this row
+#: actually passes, so the fixture and its row cannot disagree.
+#: THE ROW NAMES A DIRECTORY, THE FIXTURE OWNS WHAT SITS UNDER IT. This row
+#: passes `--corpus <dir>`, not a file, so only the dir half may be asked of
+#: it; `records/ablations/` is this fixture's own choice of where a within-
+#: project ablation is filed, and the gate selects on the DOCUMENT rather than
+#: on the path, so nothing downstream depends on the sub-path being any
+#: particular string.
+_CORPUS_TAIL = "ppa-crosslayer"
+_UNDER = "records/ablations/fixture_ablation.json"
+
+
+def _rel() -> str:
+    """Resolved lazily: a missing row must fail THIS fixture, not the census
+    that imports every fixture module."""
+    return f"{F.declared_subject_path(GATE, _CORPUS_TAIL)}/{_UNDER}"
 
 
 def _arm(flow: str, role: str, area: float, *, tuned: bool) -> dict:
@@ -80,7 +99,7 @@ def _document(*, both_tuned: bool) -> dict:
 
 def _tree(work: Path, name: str, *, both_tuned: bool) -> Path:
     root = F.git_init(work / name)
-    p = root / _REL
+    p = root / _rel()
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text(json.dumps(_document(both_tuned=both_tuned), indent=1,
                             ensure_ascii=False) + "\n", encoding="utf-8")

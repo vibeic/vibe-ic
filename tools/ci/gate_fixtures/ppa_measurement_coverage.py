@@ -44,7 +44,19 @@ GATE = "PPA measurement coverage"
 #: Byte-for-byte the path this row passes to `--coverage`. The declaration names
 #: a FILE and not a corpus directory, so the subject has to carry exactly this
 #: path: anywhere else and the gate reads nothing and answers about that.
-_BUNDLE_REL = "ppa-crosslayer/records/trials/b000/records_flat.json"
+#: ASKED OF THE ROW, NEVER RE-TYPED (vibe-ic#2019 fallout). The campaign trees
+#: moved to `docs/campaigns/` and this literal did not follow, so the subject
+#: was built where the gate no longer looks and the CAN-PASS arm was rejected
+#: rc 2 "no corpus at …". Spelling the new prefix here would buy exactly one
+#: more move. `declared_subject_path` reads the `--corpus`/argument this row
+#: actually passes, so the fixture and its row cannot disagree.
+_BUNDLE_TAIL = "ppa-crosslayer/records/trials/b000/records_flat.json"
+
+
+def _bundle_rel() -> str:
+    """Resolved lazily: a missing row must fail THIS fixture, not the census
+    that imports every fixture module."""
+    return F.declared_subject_path(GATE, _BUNDLE_TAIL)
 
 #: Two (metric, scope) pairs. The CAN-PASS records both; the CAN-FAIL records
 #: only the first and leaves the second expected and unanswered.
@@ -84,7 +96,7 @@ def _bundle(records_kept: int) -> dict:
 
 def _tree(work: Path, records_kept: int) -> Path:
     root = F.git_init(work / "subject")
-    p = root / _BUNDLE_REL
+    p = root / _bundle_rel()
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text(json.dumps(_bundle(records_kept), indent=2, sort_keys=True)
                  + "\n", encoding="utf-8")

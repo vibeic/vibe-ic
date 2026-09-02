@@ -135,6 +135,82 @@ def declarations(script: Optional[Path] = None):
     return _load_parse_declarations()(script or HYGIENE_SCRIPT)
 
 
+class SubjectPathNotDeclared(LookupError):
+    """This row does not name a `$ROOT`-anchored path ending in that tail.
+
+    RAISED, NEVER DEFAULTED. A fixture that silently fell back to a guess would
+    build its subject somewhere the gate does not look, and the gate would then
+    answer rc 2 about an absent corpus instead of rc 0/1 about the record — a
+    fixture pair that has stopped discriminating while still executing. That is
+    exactly the state this helper exists to end, so the failure is loud.
+    """
+
+
+def declared_subject_path(gate: str, tail: str,
+                          script: Optional[Path] = None) -> str:
+    """The repo-relative path THIS ROW passes, ending in `tail`.
+
+    WHY A FIXTURE MAY NOT SPELL ITS OWN CORPUS PATH (vibe-ic#2019 fallout)
+    =====================================================================
+    Eleven PPA fixtures each carried a literal — `CORPUS = "ppa-crosslayer"`,
+    `_REL = "ppa-crosslayer/records/trials/z23/candidates.json"` — that had to
+    stay equal to the `--corpus` argument on its row in
+    `repo_hygiene_gates.sh`. When the campaign trees moved to
+    `docs/campaigns/`, the rows moved and the eleven literals did not.
+
+    MEASURED at 85338ac71308102dd957f95f4d12cd5290a02943, before this change::
+
+        $ python3 -m pytest tools/ci/test_gate_fixtures_discriminate.py -q
+        11 failed, 77 passed
+
+        PPA ablation records (within-project): CAN-PASS fixture was REJECTED
+        with rc 2 — a gate that cannot pass its own good input is not
+        discriminating, it is stuck:
+          [ppa_ablation_check] UNDETERMINED: no corpus at
+          /tmp/gatefix-pass-…/subject_pass/docs/campaigns/ppa-crosslayer
+
+    Every one of the eleven failed for that one reason: the subject was built
+    at `ppa-crosslayer/…` and the gate was pointed at
+    `docs/campaigns/ppa-crosslayer`. Note what the reds are NOT — not one of
+    them is a gate that stopped refusing bad input. They are eleven gates whose
+    good input had become unreachable, which is the quieter half: a fixture
+    pair can go dark without a single check becoming permissive.
+
+    THE REPAIR IS NOT ELEVEN NEW LITERALS. Re-typing `docs/campaigns/` in
+    eleven files reproduces the defect one directory over and buys one more
+    move before it happens again. `test_gate_fixtures_discriminate`'s own
+    docstring already states the rule — "The gate is driven EXACTLY as
+    `repo_hygiene_gates.sh` declares it" — and the declaration is already
+    parsed here. So the fixture ASKS the row where its subject goes, and the
+    two cannot disagree because there is only one of them.
+
+    `tail` is the part the fixture owns and the row ends with: the campaign
+    directory name, or the record path beneath it. The match is on a path
+    COMPONENT boundary, so `ppa-e2e` never matches a row naming
+    `ppa-e2e-secondary`.
+
+    Returns the path WITHOUT the `$ROOT/` prefix, because a fixture builds its
+    subject at its own scratch root and never at this repository's.
+    """
+    tail = tail.strip("/")
+    for decl in declarations(script):
+        if decl.label != gate:
+            continue
+        for token in shlex.split(decl.cmd):
+            if not token.startswith("$ROOT/"):
+                continue
+            rel = token[len("$ROOT/"):]
+            if rel == tail or rel.endswith("/" + tail):
+                return rel
+        raise SubjectPathNotDeclared(
+            f"the row {gate!r} declares no $ROOT-anchored path ending in "
+            f"{tail!r}; its command is {decl.cmd!r}. A fixture must build its "
+            f"subject where its own row looks, so this is not something to "
+            f"guess around.")
+    raise SubjectPathNotDeclared(
+        f"no gate labelled {gate!r} is declared in {script or HYGIENE_SCRIPT}")
+
+
 # --- naming -----------------------------------------------------------------
 #: `$( … )` first: the four per-cell gates carry a command substitution in
 #: their label, and only bash knows what it expands to. The STATIC part is the

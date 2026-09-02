@@ -43,7 +43,22 @@ from _ppa import feasibility as FE, metrics as M  # noqa: E402
 GATE = "PPA promotion feasibility (cross-layer campaign)"
 
 #: Byte-for-byte the directory this row passes to `--corpus`.
-CORPUS = "ppa-crosslayer"
+#: ASKED OF THE ROW, NEVER RE-TYPED (vibe-ic#2019 fallout). The campaign trees
+#: moved to `docs/campaigns/` and this literal did not follow, so the subject
+#: was built where the gate no longer looks and the CAN-PASS arm was rejected
+#: rc 2 "no corpus at …". `declared_subject_path` reads the `--corpus` this row
+#: actually passes, so the fixture and its row cannot disagree.
+_TAIL = "ppa-crosslayer"
+
+
+def _corpus() -> str:
+    """This row's corpus path, from the row.
+
+    Resolved lazily: a missing row must fail THIS fixture, not the census that
+    imports every fixture module.
+    """
+    return F.declared_subject_path(GATE, _TAIL)
+
 _RECORD_REL = "records/synthetic_candidates.json"
 
 #: ONE view, declared as `required_views`, so every axis is required at it. The
@@ -112,7 +127,7 @@ def _candidate_set(break_axis: bool) -> dict:
 
 def _tree(work: Path, break_axis: bool) -> Path:
     root = F.git_init(work / "subject")
-    p = root / CORPUS / _RECORD_REL
+    p = root / _corpus() / _RECORD_REL
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text(json.dumps(_candidate_set(break_axis), indent=2,
                             sort_keys=True) + "\n", encoding="utf-8")

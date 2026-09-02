@@ -43,9 +43,20 @@ GATE = "PPA published page claims"
 #: Byte-for-byte the two paths the declaration passes. The gate names FILES, so
 #: the subject has to carry exactly these; anywhere else and it reads nothing
 #: and answers about that instead.
-_REL = Path("ppa-e2e") / "report" / "winner"
-_PAGE = _REL / "report.md"
-_CLAIMS = _REL / "claims.json"
+#: ASKED OF THE ROW, NEVER RE-TYPED (vibe-ic#2019 fallout). The campaign trees
+#: moved to `docs/campaigns/` and this literal did not follow, so the subject
+#: was built where the gate no longer looks. `declared_subject_path` reads the
+#: page path this row actually passes, so the two cannot disagree.
+_TAIL = "ppa-e2e/report/winner/report.md"
+
+
+def _rel() -> Path:
+    """The winner directory, from this row's own argument.
+
+    Resolved lazily: a missing row must fail THIS fixture, not the census that
+    imports every fixture module.
+    """
+    return Path(F.declared_subject_path(GATE, _TAIL)).parent
 
 #: `ppa_page_claim_check.STATUS_STRENGTH`, which is what the comparison the
 #: mutation has to invert is made of. Kept as a literal rather than imported so
@@ -56,7 +67,7 @@ _TOP = "MEASURED"
 
 
 def _source() -> Path:
-    src = F.REPO_ROOT / _REL
+    src = F.REPO_ROOT / _rel()
     if not (src / "report.md").is_file() or not (src / "claims.json").is_file():
         raise AssertionError(
             f"the published page/claims pair is not at {src}. This fixture "
@@ -68,10 +79,11 @@ def _source() -> Path:
 
 def _tree(work: Path) -> Path:
     root = work / "subject"
-    (root / _REL).mkdir(parents=True, exist_ok=True)
+    rel = _rel()
+    (root / rel).mkdir(parents=True, exist_ok=True)
     src = _source()
-    shutil.copy2(src / "report.md", root / _PAGE)
-    shutil.copy2(src / "claims.json", root / _CLAIMS)
+    shutil.copy2(src / "report.md", root / rel / "report.md")
+    shutil.copy2(src / "claims.json", root / rel / "claims.json")
     return root
 
 
@@ -83,7 +95,7 @@ def can_pass(work: Path) -> Path:
 def can_fail(work: Path):
     """One claim promoted to MEASURED over evidence that is not."""
     root = _tree(work)
-    doc = json.loads((root / _CLAIMS).read_text(encoding="utf-8"))
+    doc = json.loads((root / _rel() / "claims.json").read_text(encoding="utf-8"))
     promoted = None
     for claim in doc.get("claims", []):
         evidence = claim.get("evidence") or []
@@ -103,7 +115,7 @@ def can_fail(work: Path):
             f"{_TOP}, so this mutation has nothing to invert. The fixture "
             "would otherwise hand the gate a CLEAN subject and call its rc 0 "
             "a discrimination.")
-    (root / _CLAIMS).write_text(
+    (root / _rel() / "claims.json").write_text(
         json.dumps(doc, indent=1, sort_keys=True) + "\n", encoding="utf-8")
     # The token the refusal must carry, so the pair test knows the gate refused
     # for THIS mutation and not by coincidence.
