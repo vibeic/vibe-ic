@@ -73,7 +73,11 @@ def _l4(*, drop=None):
     regs = [_reg("CTRL_SHADOWED", "0x74",
                  (("OPERATION", 0), ("MODE", 2), ("KEY_LEN", 8))),
             _reg("TRIGGER", "0x80", (("START", 0),)),
-            _reg("STATUS", "0x84", (("OUTPUT_VALID", 3),))]
+            # The three status bits the design's own programmer's guide makes
+            # the sequence wait on. A design that declares fewer simply gets
+            # fewer waits — see the control at the bottom of this file.
+            _reg("STATUS", "0x84", (("IDLE", 0), ("OUTPUT_VALID", 3),
+                                    ("INPUT_READY", 4)))]
     for i in range(8):
         regs.append(_reg(f"KEY_SHARE0_{i}", f"0x{4 + 4 * i:x}"))
     for i in range(4):
@@ -173,8 +177,13 @@ def test_the_emitted_tb_waits_on_the_designs_own_done_bit():
                             "clk_i", "rst_ni")
     body = "\n".join(l for l in tb.splitlines()
                      if not l.strip().startswith("//"))
-    assert "while (!rdata[3])" in body, "the done bit is not polled"
-    assert "bus_read(32'h00000084, rdata)" in body, body[:400]
+    # The sequence now waits on the design's own bits through one bounded
+    # helper — IDLE before configuration, INPUT_READY before data, and the done
+    # bit before the compare — so the poll is asserted by its ARGUMENTS.
+    assert "while (!rdata[b])" in body, "the status poll is not bounded"
+    assert 'wait_bit(32\'h00000084, 3, "OUTPUT_VALID")' in body, body[:600]
+    assert 'wait_bit(32\'h00000084, 0, "IDLE")' in body, body[:600]
+    assert 'wait_bit(32\'h00000084, 4, "INPUT_READY")' in body, body[:600]
     assert "$fatal(1)" in body
     assert "errors = errors + 1" in body
     # the expected words are literals, little-endian, from the vector itself
@@ -237,39 +246,66 @@ def test_end_to_end_the_generated_tb_runs_and_one_byte_turns_it_red(tmp_path):
 
 
 MOCK = """
+// A minimal register-mapped device model. It is NOT the AES design: it exists
+// so the generated driver can be run end to end. It obeys the handshake the
+// sequence is built on and nothing more — IDLE and INPUT_READY out of reset, a
+// multi-cycle operation started by a COMPLETE input block, and OUTPUT_VALID
+// only when that operation has finished. It never asserts a bit the sequence
+// is waiting for just because the sequence is waiting for it: an input block
+// that is not fully written leaves it idle forever, which is what makes the
+// end-to-end arm able to fail.
 module aes_mock #(parameter [31:0] W0 = 0, W1 = 0, W2 = 0, W3 = 0) (
   input  logic clk_i,
   input  logic rst_ni,
   input  bus_pkg::bus_h2d_t tl_i,
   output bus_pkg::bus_d2h_t tl_o
 );
-  logic [31:0] dout [0:3];
-  logic        started;
+  localparam [31:0] ADDR_STATUS   = 32'h84;
+  localparam [31:0] ADDR_DATA_IN0 = 32'h54;
+  localparam [31:0] ADDR_DATA_OUT0 = 32'h64;
+  localparam integer LATENCY = 37;
+
+  logic [3:0]  din_written;
+  logic        busy;
+  logic        out_valid;
   integer      cnt;
+  logic [31:0] dout [0:3];
+
+  wire        acc   = tl_i.a_valid & tl_o.a_ready;
+  wire        is_wr = tl_i.a_opcode == bus_pkg::PutFullData;
+  wire [31:0] addr  = tl_i.a_address;
   always_ff @(posedge clk_i or negedge rst_ni) begin
     if (!rst_ni) begin
-      started <= 1'b0; cnt <= 0;
+      din_written <= 4'h0; busy <= 1'b0; out_valid <= 1'b0; cnt <= 0;
       tl_o.d_valid <= 1'b0; tl_o.d_data <= 32'h0;
       tl_o.a_ready <= 1'b1; tl_o.d_error <= 1'b0;
       dout[0] <= W0; dout[1] <= W1; dout[2] <= W2; dout[3] <= W3;
     end else begin
       tl_o.d_valid <= 1'b0;
-      if (started && cnt < 37) cnt <= cnt + 1;
-      if (tl_i.a_valid && tl_o.a_ready) begin
-        if (tl_i.a_opcode == bus_pkg::PutFullData) begin
-          if (tl_i.a_address == 32'h80 && tl_i.a_data[0]) begin
-            started <= 1'b1; cnt <= 0;
-          end
+      // A complete input block starts the operation; a partial one does not.
+      if (din_written == 4'hF && !busy && !out_valid) begin
+        busy <= 1'b1; cnt <= 0; din_written <= 4'h0;
+      end
+      if (busy) begin
+        cnt <= cnt + 1;
+        if (cnt >= LATENCY) begin busy <= 1'b0; out_valid <= 1'b1; end
+      end
+      if (acc) begin
+        if (is_wr) begin
+          if (addr >= ADDR_DATA_IN0 && addr < ADDR_DATA_IN0 + 16 && !busy)
+            din_written[(addr - ADDR_DATA_IN0) >> 2] <= 1'b1;
         end else begin
           tl_o.d_valid <= 1'b1;
-          case (tl_i.a_address)
-            32'h84: tl_o.d_data <= (started && cnt >= 37) ? 32'h8 : 32'h0;
-            32'h64: tl_o.d_data <= dout[0];
-            32'h68: tl_o.d_data <= dout[1];
-            32'h6c: tl_o.d_data <= dout[2];
-            32'h70: tl_o.d_data <= dout[3];
-            default: tl_o.d_data <= 32'h0;
-          endcase
+          if (addr == ADDR_STATUS)
+            // bit 4 INPUT_READY, bit 3 OUTPUT_VALID, bit 0 IDLE — the bit
+            // positions the register map in this file declares.
+            tl_o.d_data <= {27'h0, (!busy && !out_valid), out_valid,
+                            2'b00, !busy};
+          else if (addr >= ADDR_DATA_OUT0 && addr < ADDR_DATA_OUT0 + 16) begin
+            tl_o.d_data <= dout[(addr - ADDR_DATA_OUT0) >> 2];
+            if (addr == ADDR_DATA_OUT0 + 12) out_valid <= 1'b0;
+          end else
+            tl_o.d_data <= 32'h0;
         end
       end
     end

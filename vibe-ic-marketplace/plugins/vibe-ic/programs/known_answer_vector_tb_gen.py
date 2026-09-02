@@ -315,12 +315,33 @@ def emit_case_register_bus(project, case: dict, dut_module: str,
         gen, gwhy = _rbd.find_host_intg_gen(
             _staged_bus_packages(root) + _staged_rtl_sources(root),
             bus["h2d_type"])
+        # Services the DUT asks an outside world for. Declared as environment,
+        # never wired into the design.
+        rtl_text = ""
+        for _p, _t in _staged_rtl_sources(root):
+            if re.search(r"\bmodule\s+" + re.escape(dut_module) + r"\b", _t):
+                rtl_text = _t
+                break
+        env_pairs = _rbd.find_req_rsp_pairs(ports, rtl_text, dut_module)
+        # A typed control input tied to 0 may be an INVALID encoding of its own
+        # type. Use the package's own named inactive constant when it declares
+        # one; tie 0 and say so when it does not.
+        _srcs = _staged_rtl_sources(root)
+        _types = _rbd.dut_port_types(rtl_text, dut_module)
+        tieoffs = {}
+        for _pn, _pt in _types.items():
+            _c = _rbd.inactive_tieoff(_pt, _srcs)
+            if _c:
+                tieoffs[_pn] = _c
         text_out = _rbd.emit_sequence_tb(
             case, plan, bus, dut_module, h2d_port, d2h_port, clk, rst,
             rst_active_low=_norm(rst).endswith(("n", "ni")),
-            ports=ports, intg_gen=gen)
-        return text_out, (f"host integrity generator: {gen['file']}"
-                          if gen else f"no integrity generator ({gwhy})")
+            ports=ports, intg_gen=gen, env_pairs=env_pairs,
+            tieoffs=tieoffs)
+        _env = ", ".join(p["base"] for p in env_pairs) or "none"
+        return text_out, ((f"host integrity generator: {gen['file']}"
+                           if gen else f"no integrity generator ({gwhy})")
+                          + f"; declared tb_env responders: {_env}")
     if not reasons:
         return None, ("no staged package declares a host->device / "
                       "device->host bus struct pair")

@@ -96,7 +96,7 @@ def test_a_shadowed_control_register_is_written_twice():
     import register_bus_driver_gen as D
     body = _tb()
     assert body.count("bus_write(32'h00000074") == 2, body
-    assert "the register's own name says it is shadowed" in body
+    assert "says shadowed" in body
     # Over-reach control: a control register that is NOT shadowed is written once.
     l4 = _l4()
     for r in l4["registers"]:

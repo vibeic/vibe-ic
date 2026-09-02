@@ -88,6 +88,12 @@ _D2H_ROLES = {
 # `resolve_register_plan` refuses rather than picking a winner.
 _REG_ROLES = {
     "key":      re.compile(r"(?i)^key(?:_?share0)?(?:_(?P<i>\d+))?$"),
+    # A design may split the key across shares. The document that describes
+    # this one says every register of BOTH shares must be written at least
+    # once, and that the key in effect is their XOR, so a share that carries no
+    # vector bits is still written — with zero, which is what makes the XOR the
+    # vector's own key.
+    "key_share1": re.compile(r"(?i)^key_?share1(?:_(?P<i>\d+))?$"),
     "iv":       re.compile(r"(?i)^iv(?:_(?P<i>\d+))?$"),
     "data_in":  re.compile(r"(?i)^(?:data_in|din|input_data)(?:_(?P<i>\d+))?$"),
     "data_out": re.compile(r"(?i)^(?:data_out|dout|output_data)(?:_(?P<i>\d+))?$"),
@@ -103,6 +109,11 @@ _STATUS_RE = re.compile(r"(?i)^(status|state)$")
 _START_FIELD = ("start", "go", "run", "launch", "kick")
 _DONE_FIELD = ("output_valid", "out_valid", "done", "valid", "ready",
                "data_valid", "complete")
+#: "the unit is not busy" — writes to configuration are IGNORED while it is 0.
+_IDLE_FIELD = ("idle", "ready_for_config", "not_busy")
+#: "the unit will accept an input block now".
+_INPUT_READY_FIELD = ("input_ready", "in_ready", "ready_for_data",
+                      "data_in_ready")
 #: Sentence shape whose SUBJECT is the registers. "the increment of the IV in
 #: CTR mode is big-endian" has a different subject and must not be read as a
 #: register byte order.
@@ -313,6 +324,8 @@ def resolve_register_plan(case: dict, l4: dict, l15: dict,
                       + " register")
     start = _field_bit(trig, _START_FIELD)
     done = _field_bit(stat, _DONE_FIELD)
+    idle = _field_bit(stat, _IDLE_FIELD)
+    in_ready = _field_bit(stat, _INPUT_READY_FIELD)
     if start is None or done is None:
         return None, ("the design's trigger/status registers declare no "
                       f"start/done bit (start={start}, done={done}) — a fixed "
@@ -349,6 +362,15 @@ def resolve_register_plan(case: dict, l4: dict, l15: dict,
         "start_bit": start[1], "start_field": start[0],
         "status_addr": int(str(stat.get("address")), 16),
         "done_bit": done[1], "done_field": done[0],
+        "key_share1": by_role["key_share1"],
+        # The two handshake bits the design's own programmer's guide makes the
+        # sequence wait on. Absent is not fatal — a design that declares
+        # neither simply gets no wait — but their PRESENCE is what makes the
+        # configuration writes land at all on this design.
+        "idle_bit": idle[1] if idle else None,
+        "idle_field": idle[0] if idle else None,
+        "input_ready_bit": in_ready[1] if in_ready else None,
+        "input_ready_field": in_ready[0] if in_ready else None,
     }, ""
 
 
@@ -403,12 +425,139 @@ def find_host_intg_gen(sources: Sequence[Tuple[str, str]], h2d_t: str
                   f"pass-through (a host-side integrity generator)")
 
 
+#: Names a package gives to the INACTIVE value of a typed control input. A
+#: literal 0 is not that value: measured on opentitan_aes, `lc_ctrl_pkg` states
+#: `Off = 4'b1010`, so tying `lc_escalate_en_i` to 0 hands the design a value it
+#: reads as neither on nor off, and the unit never reaches idle again.
+_INACTIVE_CONST_TOKENS = ("off", "false", "disabled", "inactive", "idle",
+                          "none", "default")
+
+
+def inactive_tieoff(port_type: str, sources: Sequence[Tuple[str, str]]
+                    ) -> Optional[str]:
+    """The package's own named INACTIVE constant for `port_type`, or None.
+
+    `port_type` is `<pkg>::<type>`. The constant must be declared in that
+    package, with that type, and its name must be an inactive-state word. No
+    guessing: a package that names none yields None and the caller ties 0 and
+    says so."""
+    if "::" not in str(port_type or ""):
+        return None
+    pkg, tname = port_type.split("::", 1)
+    for _path, text in sources:
+        if not re.search(r"^\s*package\s+" + re.escape(pkg) + r"\s*;",
+                         text, re.M):
+            continue
+        best = None
+        for m in re.finditer(r"\bparameter\s+" + re.escape(tname)
+                             + r"\s+(\w+)\s*=", text):
+            nm = m.group(1)
+            if _norm(nm) in _INACTIVE_CONST_TOKENS or any(
+                    t in _norm(nm) for t in _INACTIVE_CONST_TOKENS):
+                best = best or f"{pkg}::{nm}"
+        if best:
+            return best
+    return None
+
+
+def dut_port_types(rtl_text: str, dut_module: str) -> Dict[str, str]:
+    """`{port: '<pkg>::<type>'}` for every package-typed port of the DUT."""
+    m = re.search(r"\bmodule\s+" + re.escape(dut_module)
+                  + r"\b(?P<hdr>.*?)\bendmodule\b", rtl_text or "", re.S)
+    if not m:
+        return {}
+    out = {}
+    for mm in re.finditer(
+            r"\b(?:input|output)\s+(\w+::\w+)\s+(\w+)", m.group("hdr")):
+        out[mm.group(2)] = mm.group(1)
+    return out
+
+
+def find_req_rsp_pairs(ports: Sequence[Tuple[str, str, str]],
+                       rtl_text: str, dut_module: str) -> List[dict]:
+    """Every request/response port PAIR the DUT exposes to an outside service.
+
+    Shape, from the design's own module header: an `output <pkg>::<x>_req_t` and
+    an `input <pkg>::<x>_rsp_t`. That is a service the DUT ASKS FOR and cannot
+    provide itself — on opentitan_aes it is the entropy interface, and the
+    design's own document says the unit "will first reseed the internal PRNGs
+    ... via EDN" and only then becomes idle. With nothing answering, the unit
+    never reaches idle and every configuration write is ignored by its own
+    documented rule.
+
+    Returned so the caller can DECLARE an environment model for each one. It is
+    never wired into the DUT: the DUT is instantiated unchanged."""
+    m = re.search(r"\bmodule\s+" + re.escape(dut_module)
+                  + r"\b(?P<hdr>.*?)\bendmodule\b", rtl_text or "", re.S)
+    if not m:
+        return []
+    hdr = m.group("hdr")
+    reqs, rsps = {}, {}
+    for direction, table in (("output", reqs), ("input", rsps)):
+        for mm in re.finditer(
+                r"\b" + direction + r"\s+([\w]+)::(\w+?)_(req|rsp)_t\s+(\w+)",
+                hdr):
+            pkg, base, kind, port = mm.groups()
+            if (direction == "output") == (kind == "req"):
+                table[(pkg, base)] = (port, f"{pkg}::{base}_{kind}_t")
+    out = []
+    for key in sorted(set(reqs) & set(rsps)):
+        pkg, base = key
+        out.append({"pkg": pkg, "base": base,
+                    "req_port": reqs[key][0], "req_type": reqs[key][1],
+                    "rsp_port": rsps[key][0], "rsp_type": rsps[key][1]})
+    return out
+
+
+def emit_env_responder(pair: dict, clk: str, rst: str,
+                       rst_active_low: bool) -> Tuple[List[str], List[str]]:
+    """`(declarations, note)` for ONE declared test-environment responder.
+
+    NAMED `tb_env_*` and commented as environment, so nobody can mistake it for
+    part of the design. It answers every request with an acknowledge and a
+    FIXED word: it supplies the SERVICE the design's document says it needs,
+    not any behaviour of the design.
+
+    WHAT THIS TESTBENCH THEN VERIFIES, stated plainly: the DUT is instantiated
+    unchanged and every result still comes out of the design. What is NOT
+    verified is anything that depends on the CONTENT of this service — with a
+    fixed word there is no entropy quality, no reseed variation and no masking
+    randomness in this run."""
+    req, rsp = pair["req_port"], pair["rsp_port"]
+    d = [
+        "",
+        f"  // ---- TEST ENVIRONMENT, not part of the design -----------------",
+        f"  // The DUT asks an outside service for {pair['base']} "
+        f"({pair['req_type']} out, {pair['rsp_type']} in). Nothing in the",
+        f"  // design's own closure answers it, and the design's document says",
+        f"  // the unit does not become idle until it has been answered.",
+        f"  // This model acknowledges every request with a FIXED word: it",
+        f"  // supplies the service, never any behaviour of the design.",
+        f"  {pair['req_type']} tb_env_{req};",
+        f"  {pair['rsp_type']} tb_env_{rsp};",
+        f"  always_ff @(posedge {clk}"
+        f" or {'negedge' if rst_active_low else 'posedge'} {rst}) begin",
+        f"    if ({'!' if rst_active_low else ''}{rst}) tb_env_{rsp} <= '0;",
+        f"    else begin",
+        f"      tb_env_{rsp} <= '0;",
+        f"      if (|tb_env_{req}) tb_env_{rsp} <= '1;",
+        f"    end",
+        f"  end",
+    ]
+    note = [f"{pair['base']}: acknowledged by a declared tb_env responder with "
+            f"a fixed word — the service is supplied, its CONTENT is not "
+            f"exercised"]
+    return d, note
+
+
 def emit_sequence_tb(case: dict, plan: dict, bus: dict, dut_module: str,
                      h2d_port: str, d2h_port: str, clk: str, rst: str,
                      rst_active_low: bool = True,
                      timeout_cycles: int = 20000,
                      ports: Optional[Sequence[Tuple[str, str, str]]] = None,
-                     intg_gen: Optional[str] = None
+                     intg_gen: Optional[dict] = None,
+                     env_pairs: Optional[Sequence[dict]] = None,
+                     tieoffs: Optional[Dict[str, str]] = None
                      ) -> str:
     """The SystemVerilog testbench for one vector, driven over the design's own
     register bus.
@@ -508,9 +657,24 @@ def emit_sequence_tb(case: dict, plan: dict, bus: dict, dut_module: str,
                      f"   // second reset, released with the primary one")
     conn = [f".{clk}({clk})", f".{rst}({rst})",
             f".{h2d_port}({h2d_port})", f".{d2h_port}({d2h_port})"]
-    conn += [(f".{_n}({_n})" if _r else (f".{_n}({clk})" if _c
-                                         else f".{_n}('0)"))
+    env = list(env_pairs or [])
+    env_ports = {}
+    env_decls: List[str] = []
+    for p in env:
+        d, _note = emit_env_responder(p, clk, rst, rst_active_low)
+        env_decls += d
+        env_ports[p["req_port"]] = f"tb_env_{p['req_port']}"
+        env_ports[p["rsp_port"]] = f"tb_env_{p['rsp_port']}"
+    L.extend(env_decls)
+    _tie = dict(tieoffs or {})
+    conn += [(f".{_n}({env_ports[_n]})" if _n in env_ports
+              else (f".{_n}({_n})" if _r else (f".{_n}({clk})" if _c
+                                               else f".{_n}({_tie.get(_n, chr(39) + '0')})")))
              for _n, _w, _r, _c in extra_in]
+    # a request OUTPUT the environment answers is connected too
+    for p in env:
+        if p["req_port"] not in [n for n, _w, _r, _c in extra_in]:
+            conn.append(f".{p['req_port']}(tb_env_{p['req_port']})")
     L.append(f"  {dut_module} dut (" + ", ".join(conn) + ");")
     L.append("")
     L.append("  task automatic bus_write(input [31:0] addr,")
@@ -583,6 +747,24 @@ def emit_sequence_tb(case: dict, plan: dict, bus: dict, dut_module: str,
     L.append("    end")
     L.append("  endtask")
     L.append("")
+    # ---- a bounded wait on one status bit, used by the sequence below -----
+    L.append("  task automatic wait_bit(input [31:0] addr, input integer b,")
+    L.append("                          input [1023:0] what);")
+    L.append("    begin")
+    L.append("      rdata = 32'h0;")
+    L.append("      wait_cycles = 0;")
+    L.append("      while (!rdata[b]) begin")
+    L.append("        bus_read(addr, rdata);")
+    L.append("        wait_cycles = wait_cycles + 1;")
+    L.append(f"        if (wait_cycles > {timeout_cycles}) begin")
+    L.append(f'          $display("[TB {name}] FAIL: %0s never asserted after '
+             f'%0d polls", what, wait_cycles);')
+    L.append("          $fatal(1);")
+    L.append("        end")
+    L.append("      end")
+    L.append("    end")
+    L.append("  endtask")
+    L.append("")
     L.append("  initial begin")
     L.append(f"    {drive_sig} = '0;")
     L.append(f"    #20 {rst} = 1'b{'1' if rst_active_low else '0'};")
@@ -590,51 +772,73 @@ def emit_sequence_tb(case: dict, plan: dict, bus: dict, dut_module: str,
         if _is_rst:
             L.append(f"    {_n} = 1'b{'1' if rst_active_low else '0'};")
     L.append(f"    repeat (4) @(posedge {clk});")
-    for i, w in enumerate(key_w):
-        if i in plan["key"]:
-            L.append(f"    bus_write(32'h{plan['key'][i]:08x}, 32'h{w:08x});"
-                     f"   // key word {i}")
-    for i in sorted(plan["key"]):
-        if i >= len(key_w):
-            L.append(f"    bus_write(32'h{plan['key'][i]:08x}, 32'h0);"
-                     f"   // unused key word {i}, written once as the design requires")
-    for i, w in enumerate(iv_w):
-        if i in plan["iv"]:
-            L.append(f"    bus_write(32'h{plan['iv'][i]:08x}, 32'h{w:08x});"
-                     f"   // iv word {i}")
+
+    idle_bit = plan.get("idle_bit")
+    idle_name = plan.get("idle_field")
+    inrdy_bit = plan.get("input_ready_bit")
+    inrdy_name = plan.get("input_ready_field")
+    st = plan["status_addr"]
+
+    def _wait(bit, nm, note):
+        if bit is None:
+            L.append(f"    // {note}: the status register declares no such "
+                     f"field, so there is nothing to wait on")
+            return
+        L.append(f'    wait_bit(32\'h{st:08x}, {bit}, "{nm}");   // {note}')
+
+    # THE SEQUENCE, in the order the design's own programmer's guide states.
+    # Every wait below is there because that document says a write is IGNORED
+    # or a read is invalid without it — not because a value looked unsettled.
+    _wait(idle_bit, idle_name,
+          "config writes are ignored while the unit is not idle")
     L.append(f"    bus_write(32'h{plan['ctrl_addr']:08x}, "
-             f"32'h{plan['ctrl_value']:08x});   // control")
+             f"32'h{plan['ctrl_value']:08x});   // configuration FIRST")
     if plan.get("ctrl_shadowed"):
         L.append(f"    bus_write(32'h{plan['ctrl_addr']:08x}, "
                  f"32'h{plan['ctrl_value']:08x});"
-                 f"   // second write: the register's own name says it is "
-                 f"shadowed")
-    for i, w in enumerate(pt_w):
-        if i in plan["data_in"]:
-            L.append(f"    bus_write(32'h{plan['data_in'][i]:08x}, "
-                     f"32'h{w:08x});   // input word {i}")
-    L.append(f"    bus_write(32'h{plan['trigger_addr']:08x}, "
-             f"32'h{1 << plan['start_bit']:08x});   // {plan['start_field']}")
-    L.append("    // Wait on the DESIGN'S OWN done bit. No fixed settle time:")
-    L.append("    // this block is multi-cycle and a fixed wait would be a guess.")
-    L.append("    rdata = 32'h0;")
-    L.append(f"    while (!rdata[{plan['done_bit']}]) begin")
-    L.append(f"      bus_read(32'h{plan['status_addr']:08x}, rdata);")
-    L.append("      wait_cycles = wait_cycles + 1;")
-    L.append(f"      if (wait_cycles > {timeout_cycles}) begin")
-    L.append(f'        $display("[TB {name}] FAIL: {plan["done_field"]} never '
-             f'asserted after %0d polls", wait_cycles);')
-    L.append("        errors = errors + 1;")
-    L.append("        $fatal(1);")
-    L.append("      end")
-    L.append("    end")
-    for i, w in enumerate(ct_w):
-        if i not in plan["data_out"]:
+                 f"   // second write: the register's own name says shadowed")
+    _wait(idle_bit, idle_name,
+          "writing the configuration may start a reseed; the key must wait")
+    for i2, w in enumerate(key_w):
+        if i2 in plan["key"]:
+            L.append(f"    bus_write(32'h{plan['key'][i2]:08x}, "
+                     f"32'h{w:08x});   // key word {i2}")
+    for i2 in sorted(plan["key"]):
+        if i2 >= len(key_w):
+            L.append(f"    bus_write(32'h{plan['key'][i2]:08x}, 32'h0);"
+                     f"   // unused key word {i2}: every register of the share "
+                     f"is written at least once")
+    for i2 in sorted(plan.get("key_share1") or {}):
+        L.append(f"    bus_write(32'h{plan['key_share1'][i2]:08x}, 32'h0);"
+                 f"   // second share word {i2}: the key in effect is the XOR "
+                 f"of the shares, so this share is zero")
+    if iv_w:
+        _wait(idle_bit, idle_name,
+              "the unit must be idle before the IV registers are written")
+        for i2, w in enumerate(iv_w):
+            if i2 in plan["iv"]:
+                L.append(f"    bus_write(32'h{plan['iv'][i2]:08x}, "
+                         f"32'h{w:08x});   // iv word {i2}")
+    _wait(inrdy_bit, inrdy_name,
+          "the unit must be ready to accept an input block")
+    for i2, w in enumerate(pt_w):
+        if i2 in plan["data_in"]:
+            L.append(f"    bus_write(32'h{plan['data_in'][i2]:08x}, "
+                     f"32'h{w:08x});   // input word {i2}")
+    L.append("    // AUTOMATIC mode: the guide says the unit starts on its own")
+    L.append("    // when a full input block has been written, and that the")
+    L.append("    // explicit START trigger belongs to MANUAL operation. The")
+    L.append(f"    // control word written above leaves manual operation clear,")
+    L.append(f"    // so no write to the trigger register (0x{plan['trigger_addr']:x}) is made.")
+    _wait(plan["done_bit"], plan["done_field"],
+          "wait for the unit to finish the block")
+    for i2, w in enumerate(ct_w):
+        if i2 not in plan["data_out"]:
             continue
-        L.append(f"    bus_read(32'h{plan['data_out'][i]:08x}, rdata);")
+        L.append(f"    bus_read(32'h{plan['data_out'][i2]:08x}, rdata);")
         L.append(f"    if (rdata !== 32'h{w:08x}) begin")
         L.append("      errors = errors + 1;")
-        L.append(f'      $display("[TB {name}] FAIL: output word {i} = %h, '
+        L.append(f'      $display("[TB {name}] FAIL: output word {i2} = %h, '
                  f'expected %h", rdata, 32\'h{w:08x});')
         L.append("    end")
     L.append("    if (errors != 0) begin")
