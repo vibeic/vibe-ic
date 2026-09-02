@@ -98,6 +98,22 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import _analog_producer_common as _pc  # noqa: E402
 
 PRODUCER = "analog_a1_spec_emit"
+
+
+def producer_fingerprint() -> str:
+    """A digest of THIS producer's own source, stamped into the provenance.
+
+    The last instance of the shape round 23 measured: an artefact that names
+    its producer but not WHICH producer cannot be told apart from a stale one,
+    so the runner skipped the producer and the flow inherited the old file.
+    Same mechanism as `analog_a2_topology_emit.producer_fingerprint`, derived
+    from the producer's own bytes -- not mtime, not a file name.
+    """
+    import hashlib
+    try:
+        return hashlib.sha256(Path(__file__).read_bytes()).hexdigest()[:16]
+    except OSError:                                     # pragma: no cover
+        return ""
 PROVENANCE_SCHEMA = 1
 SKILL = "analog-spec-extract"
 
@@ -326,6 +342,7 @@ def _gap_body(project: Path, entry: Dict[str, Any], name: str, btype: str,
         "block": name,
         "block_type": btype,
         "_provenance": {
+            "producer_fingerprint": producer_fingerprint(),
             "schema": PROVENANCE_SCHEMA,
             "producer": PRODUCER,
             "produced_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),

@@ -18,6 +18,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import analog_one_shot_runner as r  # noqa: E402
+import analog_a1_spec_emit as a1  # noqa: E402
 import analog_a2_topology_emit as a2  # noqa: E402
 import analog_a3_netlist_emit as a3  # noqa: E402
 
@@ -38,19 +39,28 @@ def _live(step):
     return r._live_producer_fingerprint(r._A1_A3_PRODUCERS[step]["program"])
 
 
+def test_every_A1_A3_producer_is_stamped_none_left_over():
+    """Round 23 fixed A2 and A3 and LISTED A1 as the remaining instance.
+    A listed instance nobody closes is a defect with a note attached."""
+    import analog_one_shot_runner as _r
+    assert set(_r._A1_A3_PRODUCERS) == set(_r._PRODUCER_STAMP)
+
+
 def test_both_producers_stamp_a_fingerprint_at_all():
-    for mod in (a2, a3):
+    for mod in (a1, a2, a3):
         fp = mod.producer_fingerprint()
         assert fp and len(fp) == 16, (mod.__name__, fp)
     # and they are DIFFERENT files, so a shared constant would be a bug
-    assert a2.producer_fingerprint() != a3.producer_fingerprint()
+    fps = {a1.producer_fingerprint(), a2.producer_fingerprint(),
+           a3.producer_fingerprint()}
+    assert len(fps) == 3, "different files must not share a fingerprint"
 
 
 def test_a_matching_artefact_is_REUSED_and_the_decision_names_it():
     # THE CONTROL that keeps this from being "the cache is off": an artefact
     # this producer really did make must NOT be re-emitted, or every run pays
     # the producers again.
-    for step in ("A2_topology_select", "A3_netlist_gen"):
+    for step in ("A1_spec_extract", "A2_topology_select", "A3_netlist_gen"):
         import tempfile
         with tempfile.TemporaryDirectory() as td:
             p = _mk(Path(td), step, _live(step))
@@ -61,7 +71,7 @@ def test_a_matching_artefact_is_REUSED_and_the_decision_names_it():
 
 
 def test_a_stale_artefact_is_RE_EMITTED_and_the_decision_says_why():
-    for step in ("A2_topology_select", "A3_netlist_gen"):
+    for step in ("A1_spec_extract", "A2_topology_select", "A3_netlist_gen"):
         import tempfile
         with tempfile.TemporaryDirectory() as td:
             p = _mk(Path(td), step, "0000stale0000000")

@@ -487,6 +487,7 @@ def _emit_deterministic_stub(project: Path, bname: str,
 # unknown provenance and re-emitted, because silence is not agreement.
 #: step -> (artefact carrying the provenance, dotted key inside it)
 _PRODUCER_STAMP: Dict[str, tuple] = {
+    "A1_spec_extract": ("spec.json", "_provenance"),
     "A2_topology_select": ("topology.json", "_provenance"),
     "A3_netlist_gen": ("netlist_provenance.json", "_provenance"),
 }
