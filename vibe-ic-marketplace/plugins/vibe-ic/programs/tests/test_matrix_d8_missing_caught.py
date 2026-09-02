@@ -536,7 +536,9 @@ def _materialize(project: Path, step: Dict[str, Any],
                  wrong_entries: Sequence[str] = ()) -> Dict[str, List[str]]:
     """Synthesize a run tree for *step*; return ``{entry: [created rel paths]}``.
 
-    ``drop_entries``  entries whose artefacts are NOT created (all alternatives).
+    ``drop_entries``  entries whose artefacts are NOT created (all
+                      alternatives), AND whose alternatives no other entry may
+                      re-create — see the note below the condition loop.
     ``drop_alts``     individual ``(entry, alternative)`` pairs not created.
     ``gate_ok``       create the PASS gate's control file.
     ``wrong_entries`` entries created at the SAME paths with :func:`wrong_body`
@@ -554,12 +556,64 @@ def _materialize(project: Path, step: Dict[str, Any],
     for pat in _condition_patterns(step):
         _write(project, concretize(pat), _COND_BODY)
 
+    # ── ENTRIES MAY SHARE AN ALTERNATIVE, AND A DROP HAS TO REACH ALL OF THEM
+    # `" OR "` inside one entry is any-of and the entry list is all-of, so
+    # `(A OR C) AND (B OR C)` is the flow's way of spelling `(A AND B) OR C` —
+    # one shared escape hatch under a conjunction. Step 5 is the first shipped
+    # step written that way (#1974 added `formal_authoring_request.json OR
+    # formal_not_applicable.json` to BOTH of its formal entries), and a
+    # per-entry materializer cannot separate them: dropping entry 0 still left
+    # entry 0's own alternatives on disk, written on entry 1's behalf, and
+    # `_assert_entry_unsatisfied` correctly refused to measure the cell —
+    # 5 of this file's cases, MEASURED red at ab83f1a70.
+    #
+    # A `drop_entries` drop is therefore a fact about the TREE, not about one
+    # entry's turn in this loop: no file this fixture writes may satisfy ANY
+    # alternative of a dropped entry, whichever entry asked for it.
+    #
+    # THE TEST IS THE FILE IT WOULD WRITE, not the pattern it came from. The
+    # candidate is `concretize(alt)`, and it is suppressed when that concrete
+    # path matches a dropped alternative read as a glob — which is the same
+    # question `_glob_first` will ask of the finished tree. Comparing the two
+    # PATTERNS instead over-suppresses in the one shape the flow really uses:
+    # step 22 declares `parasitic.spef OR *.spef`, whose two alternatives
+    # overlap as patterns while `concretize` gives them different names, and a
+    # pattern-level rule deleted a live any-of case (MEASURED: step22-anyof0
+    # went red on that cut).
+    #
+    # `drop_alts` is deliberately NOT widened here. It is the any-of DIRECTION-A
+    # probe — "one alternative of THIS entry is gone, the entry survives on
+    # another" — so it is scoped to the (entry, alternative) pair it names and
+    # the entry's own siblings must still be written.
+    #
+    # THE SEPARATION IS ASSERTED, NEVER ASSUMED. When suppression would leave a
+    # SURVIVING entry with no alternative at all, the two entries cannot be told
+    # apart on any tree and this fixture says so loudly instead of quietly
+    # building a tree that measures something else.
+    _dropped_alts = [alt for entry in drop_entries for alt in alternatives(entry)]
+
+    def _dropped_here(entry: str, alt: str) -> bool:
+        if (entry, alt) in drop_alts:
+            return True
+        rel = concretize(alt)
+        return any(rel == d or fnmatchcase(rel, d) for d in _dropped_alts)
+
     created: Dict[str, List[str]] = {}
     for entry in (step.get("required_outputs") or []):
         made: List[str] = []
         if entry not in drop_entries:
-            for alt in alternatives(entry):
-                if (entry, alt) in drop_alts:
+            _alts = alternatives(entry)
+            _keep = [a for a in _alts if not _dropped_here(entry, a)]
+            assert _keep or not _alts, (
+                f"step {step.get('id')!r}: entry {entry!r} shares EVERY one of "
+                f"its alternatives {list(_alts)!r} with the dropped "
+                f"{list(drop_entries)!r}, so no tree satisfies one and not the "
+                f"other and this cell's negative half is not measurable as "
+                f"declared. That is a finding about the DECLARATION, not a "
+                f"reason to build a tree that measures something else."
+            )
+            for alt in _alts:
+                if alt not in _keep:
                     continue
                 rel = concretize(alt)
                 _write(project, rel, (wrong_body(rel) if entry in wrong_entries
@@ -1230,15 +1284,38 @@ def test_d8_vacuous_pass_is_downgraded_too(tmp_path):
     )
 
 
-def test_d8_gate_written_json_output_is_reprobed_after_the_gate(tmp_path):
-    """The one narrow carve-out: an output THIS step's own gate writes via
-    ``--json`` is re-probed AFTER the gate, and only that one.
+def test_d8_gate_written_json_output_is_refused_as_run_evidence(tmp_path):
+    """An output THIS step's own gate writes via ``--json`` is the AUDITOR's,
+    not the RUN's — refused on every pass, and the refusal is idempotent.
 
-    Without the re-probe such an entry reports MISSING on a project's first
-    evaluation and PASS on the second, purely because the first created it —
-    a verdict that changes with how many times it has been run is not a
-    measurement. The scope must stay verbatim-narrow: a SECOND absent output
-    that no gate command names still yields MISSING.
+    HISTORY, BECAUSE THE ANSWER HERE REVERSED AND THE REASON MATTERS. This test
+    used to require the opposite: a post-gate RE-PROBE that CREDITED such an
+    entry, on the argument that without it the entry "reports MISSING on a
+    project's first evaluation and PASS on the second, purely because the first
+    created it — a verdict that changes with how many times it has been run is
+    not a measurement". The objection was right and it has been answered, twice
+    over, in the mechanism rather than in this expectation:
+
+      #1981 `f8ec1ed66`  tagged the recreated file `audit_created`, excluded it
+                         from run evidence, and deleted it again to buy the
+                         idempotence — which made a read-only auditor mutate
+                         the tree it audits and destroyed the `--json` audit
+                         trail the flow DECLARES as a required_output.
+      #2005 `2fedbf6b7`  bought the same idempotence from the right budget:
+                         `_is_gate_verdict_document` classifies by WHAT THE
+                         DOCUMENT IS, so pass 1 and pass 2 reach the SAME
+                         verdict with nothing deleted.
+
+    So the count-of-passes objection is discharged, and what this test now
+    measures is the property it was always about — the verdict does not depend
+    on how many times the auditor has run — plus the refusal itself. Crediting
+    an artefact that exists only because the audit wrote it is self-certified
+    evidence; ``test_matrix_d7_outputs_list_complete`` grades the same
+    invariant across all 22 shipped steps that declare one.
+
+    The scope must stay verbatim-narrow, and the second half below is
+    unchanged: a SECOND absent output that no gate command names is still
+    reported MISSING, and by name.
 
     Real gate, real write: ``mixed_signal_merge_check`` emits its ``--json``
     report and exits 2. 11 real (step, entry) pairs in the current flow are
@@ -1261,15 +1338,43 @@ def test_d8_gate_written_json_output_is_reprobed_after_the_gate(tmp_path):
     _materialize(project, step, drop_entries=(written,), gate_ok=False)
     assert not (project / written).exists(), "fixture defect: target pre-exists"
     result = FCC.check_step(project, step, {})
-    assert result.status == "VACUOUS_PASS", (
-        f"step {sid}: {written!r} was absent before the gate ran and the gate "
-        f"itself writes it, so the post-gate re-probe should have satisfied the "
-        f"entry; check_step reported {result.status!r} — reasons: "
-        f"{_reasons(result)}"
-    )
     assert (project / written).is_file(), (
         f"fixture defect: the gate did not actually write {written!r}, so the "
-        f"re-probe was never exercised"
+        f"refusal below was never exercised — and the auditor must NOT have "
+        f"deleted it either: the flow declares this path and #2005 removed the "
+        f"delete that made the audit mutate the tree it reads"
+    )
+    assert result.status not in ("PASS", "VACUOUS_PASS"), (
+        f"step {sid}: {written!r} exists only because this step's own gate "
+        f"wrote it during the audit, yet check_step reported {result.status!r} "
+        f"— a done claim resting on the auditor's own document. Reasons: "
+        f"{_reasons(result)}"
+    )
+    assert any("audit" in str(r).lower() and written in str(r)
+               for r in result.reasons), (
+        f"step {sid}: the verdict is {result.status!r} but no reason names "
+        f"{written!r} as audit-created — a refusal that does not say WHICH "
+        f"artefact it refused is not actionable. Reasons: {_reasons(result)}"
+    )
+    assert written not in result.evidence, (
+        f"step {sid}: {written!r} was refused in the reasons and still "
+        f"credited as run evidence {list(result.evidence)!r}"
+    )
+
+    # IDEMPOTENCE, WHICH IS THE PROPERTY THE ORIGINAL EXPECTATION WAS DEFENDING.
+    # Run the audit AGAIN on the tree the first audit left. The file is now
+    # present BEFORE the gate, so a timing-only reading would credit on pass 2
+    # what it refused on pass 1 — "MISSING once and PASS forever after".
+    again = FCC.check_step(project, step, {})
+    assert again.status == result.status, (
+        f"step {sid}: pass 1 reported {result.status!r} and pass 2 "
+        f"{again.status!r} on an unchanged tree — a verdict that depends on "
+        f"how many times the auditor has run is not a measurement. Reasons: "
+        f"{_reasons(again)}"
+    )
+    assert written not in again.evidence, (
+        f"step {sid}: the artefact pass 1 refused became run evidence on "
+        f"pass 2: {list(again.evidence)!r}"
     )
 
     # Narrow scope: a second absent output that NO gate command names is still
@@ -1474,9 +1579,85 @@ REAL_GATE_PASS_TIER_STEPS: Tuple[str, ...] = (
     # restating: a SHRINKING set is the alarming shape (production gates losing
     # the tier at which the MISSING downgrade fires); a growing one is a new
     # step arriving, which is this.
-    "D1", "1", "2", "4", "12", "A1", "A2", "A4", "A5", "A6", "A8",
-    "14", "28", "30", "32", "35", "38",
+    #
+    # 2026-09-02, SHRINK, 17 -> 8. NINE steps left, and the alarm above did its
+    # job: it named them. Every one is accounted for below, with the tier it
+    # reaches now, the landing that moved it and that landing's own reason —
+    # and none of the nine is a gate that "stopped reading". They are three
+    # deliberate tightenings of the flow arriving at a SYNTHESIZED tree:
+    #
+    #   #1978 `bf6292fa3` — an rc=2 non-verdict that carries no explicit
+    #       `reason_class`, and whose prose no recogniser matches, is an
+    #       EXECUTION_ERROR, which is not skip-eligible. A gate that examined
+    #       NOTHING is therefore no longer a PASS tier. On a fixture tree that
+    #       carries the declared artefacts and no design content, that is the
+    #       honest answer, and it is the answer this file must not launder.
+    #   #1980 `867f807a7` — the same typing reaching the ADVISORY slot, so an
+    #       advisory clause's rc=2 lands on DISCLOSED_INCOMPLETE.
+    #   #1981/#2005 `f8ec1ed66`/`2fedbf6b7` — a declared output that is this
+    #       step's own gate `--json` target AND holds that gate's verdict
+    #       document is refused as run evidence on every pass, so the step
+    #       reports MISSING until a producer outside the gate supplies it.
+    #   #1973 `7d1da41d7` — `phase1_expert_parse_track` exits 1, not 2, when
+    #       the expert handoff was emitted and never consumed, so D1's own gate
+    #       now hard-FAILs on any tree with no consumed expert answer.
+    #
+    # THE NINE ARE NOT DROPPED, THEY ARE MOVED — to
+    # :data:`REAL_GATE_LEFT_THE_PASS_TIER`, which pins the exact tier each one
+    # reaches now and is asserted by the same test. Deleting a name from a
+    # shrinking pin is how a shrink becomes invisible on the NEXT change; this
+    # keeps all seventeen under assertion and only moves nine of them from
+    # "reaches a PASS tier" to "reaches exactly this instead".
+    "1", "A1", "A2", "A5", "A6", "A8", "32", "35",
 )
+
+#: The steps whose real gate USED to reach a PASS tier on the seeded fixture
+#: and no longer does — name -> the tier it reaches now, MEASURED on
+#: ab83f1a70 in the pinned runtime image.
+#:
+#: This is the other half of the shrink guard above, and it is asserted, not
+#: annotated. Without it a shrink costs one deletion and is then unwatched:
+#: the step could go from INCOMPLETE to a silent PASS, or from MISSING to
+#: FAIL, and nothing here would notice. With it, the nine remain under
+#: assertion in the position they actually occupy.
+#:
+#: A step LEAVING this map is good news and still reddens: it means the tier
+#: moved, and if it moved back into a PASS tier it belongs in
+#: REAL_GATE_PASS_TIER_STEPS above, in the same change that says why.
+#:
+#: MEASURED, per step, on the seeded tree through the step's OWN gate:
+#:
+#:   D1  FAIL        `phase1_expert_parse_track` rc 1 (HANDOFF_EMITTED, #1973)
+#:   2   MISSING     rc=2 clauses typed EXECUTION_ERROR (#1978), then the
+#:                   audit-created refusal of `reports/crosslayer/
+#:                   rewrite_equivalence_check.json` (#2005)
+#:   4   INCOMPLETE  `vacuous_testbench_check` / `professional_tb_check` /
+#:                   `functional_state_transition_coverage_check` (#1978)
+#:   12  INCOMPLETE  `dft_post_optimization_scan_survival_check`: Step 11's own
+#:                   output is absent, so nothing was measured (#1978)
+#:   14  INCOMPLETE  `stage_on_pass_review` + `yosys_tiecell_recipe_order_check`
+#:                   through the advisory slot (#1980)
+#:   A4  INCOMPLETE  `analog_corner_lib_realism_lint` rc 2 — its own docstring
+#:                   says "no analog decks anywhere ... NOT a pass over the
+#:                   design" (#1980)
+#:   28  MISSING     `perc_signoff_check` zero categories (#1978), then the
+#:                   audit-created refusal of `reports/phase2/gates/
+#:                   perc_signoff.json` (#2005)
+#:   30  INCOMPLETE  `spice_correlation_check` `no_spef` — BLOCKED_BY_UPSTREAM,
+#:                   which is not skip-eligible (#1978)
+#:   38  MISSING     audit-created refusal of `reports/phase3/
+#:                   foundry_handoff_audit.json` (#2005); its gate still PASSes
+REAL_GATE_LEFT_THE_PASS_TIER: Dict[str, str] = {
+    "D1": "FAIL",
+    "2": "MISSING",
+    "4": "INCOMPLETE",
+    "12": "INCOMPLETE",
+    "14": "INCOMPLETE",
+    "A4": "INCOMPLETE",
+    "28": "MISSING",
+    "30": "INCOMPLETE",
+    "38": "MISSING",
+}
 # 2026-07-28: the SET is unchanged (lost: none, gained: none). This tuple is
 # compared in flow DECLARATION order, and the dimension-5 fix moved A6's yaml
 # block from after step 39 to between A5 and A7 to remove the flow's only
@@ -1497,11 +1678,18 @@ _PASS_TIER_LABELS = frozenset({"PASS", "VACUOUS_PASS", "VACUOUS-PASS",
 
 
 @lru_cache(maxsize=1)
-def _real_gate_sweep() -> Dict[str, Tuple[str, str]]:
-    """``{step: (seeded status, status after dropping one declared output)}``
-    using each step's OWN gate, for every step whose real gate reaches a PASS
-    tier on the seeded fixture."""
-    out: Dict[str, Tuple[str, str]] = {}
+def _real_gate_seeded_status() -> Dict[str, str]:
+    """``{step: seeded status}`` through each step's OWN gate, for EVERY step
+    that declares outputs and has a gate — not only the PASS-tier ones.
+
+    Split out of :func:`_real_gate_sweep` so the shrink guard can assert what
+    the steps that LEFT the PASS tier report now. A pin that only lists the
+    survivors stops watching a step the moment it drops out, which is the one
+    moment it most needs watching: the next move (INCOMPLETE -> a quiet PASS,
+    MISSING -> FAIL) would then be invisible. One sweep serves both readings so
+    the two cannot disagree and the fixture is built once per step.
+    """
+    out: Dict[str, str] = {}
     for sid in F.step_ids():
         key = F.normalize_id(sid)
         if not F.declares_required_outputs(sid) or not F.has_gate(sid):
@@ -1515,9 +1703,27 @@ def _real_gate_sweep() -> Dict[str, Tuple[str, str]]:
                 _materialize(full, step)
             except AssertionError:
                 continue
-            seeded = FCC.check_step(full, step, {}).status
-            if seeded not in _PASS_TIER_LABELS:
-                continue
+            out[key] = FCC.check_step(full, step, {}).status
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+    return out
+
+
+@lru_cache(maxsize=1)
+def _real_gate_sweep() -> Dict[str, Tuple[str, str]]:
+    """``{step: (seeded status, status after dropping one declared output)}``
+    using each step's OWN gate, for every step whose real gate reaches a PASS
+    tier on the seeded fixture."""
+    out: Dict[str, Tuple[str, str]] = {}
+    seeded_all = _real_gate_seeded_status()
+    for sid in F.step_ids():
+        key = F.normalize_id(sid)
+        seeded = seeded_all.get(key)
+        if seeded is None or seeded not in _PASS_TIER_LABELS:
+            continue
+        step = dict(F.step_by_id(sid))  # the REAL gate, not PASS_GATE
+        tmp = Path(tempfile.mkdtemp(prefix="d8_realgate_"))
+        try:
             outs = list(F.required_outputs(sid))
             dropped = tmp / "dropped"
             dropped.mkdir(parents=True)
@@ -1543,12 +1749,18 @@ def test_d8_downgrade_is_reachable_through_each_steps_own_real_gate():
     This test drives each step's OWN gate, unmodified, and asks the production
     question for every step where it is answerable at all: on a fully seeded
     tree, does the real gate reach a PASS tier, and does removing one declared
-    output then move the step off that tier? 16 steps qualify today (14 when
-    this was written; `fixture_body` now seeds kind-correct JSON / Verilog, and
-    D1 and 28 joined). It does NOT close the gap — 45 steps' real gates FAIL on
-    a synthesized tree and need a converged project no CI has — but it converts
-    "2 steps measured with a real gate" into a named, pinned population that
-    cannot shrink silently.
+    output then move the step off that tier? 8 steps qualify today (14 when
+    this was written, 17 at its widest). It does NOT close the gap — most
+    steps' real gates FAIL or report INCOMPLETE on a synthesized tree and need
+    a converged project no CI has — but it converts "2 steps measured with a
+    real gate" into a named, pinned population that cannot shrink silently.
+
+    TWO PINS, ONE POPULATION. `REAL_GATE_PASS_TIER_STEPS` names the steps that
+    reach the tier; `REAL_GATE_LEFT_THE_PASS_TIER` names the ones that left AND
+    the tier each reaches instead. Both are asserted here. The second exists
+    because 2026-09-02's shrink (17 -> 8) would otherwise have been discharged
+    by deleting nine names, after which nothing in this repository watched
+    those nine again.
     """
     sweep = _real_gate_sweep()
     measured = tuple(sorted(sweep, key=lambda k: list(
@@ -1561,8 +1773,32 @@ def test_d8_downgrade_is_reachable_through_each_steps_own_real_gate():
         f"the tier at which the MISSING downgrade fires, so those cells' "
         f"enforcement became substituted-gate-only without anyone saying so. "
         f"Lost: {sorted(set(REAL_GATE_PASS_TIER_STEPS) - set(measured))}; "
-        f"gained: {sorted(set(measured) - set(REAL_GATE_PASS_TIER_STEPS))}."
+        f"gained: {sorted(set(measured) - set(REAL_GATE_PASS_TIER_STEPS))}. "
+        f"A step that left belongs in REAL_GATE_LEFT_THE_PASS_TIER with the "
+        f"tier it reaches instead — it must not simply be deleted from here."
     )
+
+    # THE OTHER HALF OF THE SHRINK GUARD. The nine steps that left the PASS
+    # tier stay under assertion at the tier they actually reach, so a further
+    # move is a named failure and not a silent one.
+    seeded_all = _real_gate_seeded_status()
+    left_now = {k: seeded_all.get(k) for k in REAL_GATE_LEFT_THE_PASS_TIER}
+    moved = {k: (v, left_now[k]) for k, v in REAL_GATE_LEFT_THE_PASS_TIER.items()
+             if left_now[k] != v}
+    assert not moved, (
+        f"a step recorded in REAL_GATE_LEFT_THE_PASS_TIER no longer reports "
+        f"the tier it was pinned at: {moved!r} (pinned, measured). A move back "
+        f"INTO a PASS tier is the repair this map exists to make visible — "
+        f"return the step to REAL_GATE_PASS_TIER_STEPS in the change that "
+        f"earns it. Any other move is a new fact about that step's own gate "
+        f"and must be recorded with its cause."
+    )
+    assert not (set(REAL_GATE_LEFT_THE_PASS_TIER) & set(measured)), (
+        f"a step is in BOTH pins: "
+        f"{sorted(set(REAL_GATE_LEFT_THE_PASS_TIER) & set(measured))}. It "
+        f"cannot both reach a PASS tier and have left it."
+    )
+
     survivors = {k: v for k, v in sweep.items() if v[1] in _PASS_TIER_LABELS}
     assert not survivors, (
         f"with one declared output removed, these steps' OWN gates still "
@@ -1818,7 +2054,16 @@ CONTENT_ARM_AS_MEASURED: Dict[str, str] = {
 #: step 2 is gradable after all, it is UNMOVED, and UNMOVED on a gradable row
 #: is what this set means. Removing it was my error; the measurement puts it
 #: back, and the record of why is above CONTENT_ARM_UNGRADABLE_SELF_WRITTEN.
-CONTENT_ARM_BLIND: Tuple[str, ...] = ("2", "28", "A1", "A4", "D1")
+#: 2026-09-02, SHRINK: "2", "28", "A4" and "D1" removed — and NOT because a
+#: gate learned to read its artefact. All four LEFT the PASS-tier population
+#: this arm sweeps, for the reasons recorded on
+#: :data:`REAL_GATE_LEFT_THE_PASS_TIER`: a step the content arm cannot reach
+#: cannot be blind, because blindness is a statement about a row the arm
+#: graded. The four are still under assertion — at their new tier, on that map
+#: — so nothing about them went unwatched; what changed is which instrument
+#: watches them. If any of the four returns to the PASS tier it will arrive
+#: here unpinned and this test will say so by name.
+CONTENT_ARM_BLIND: Tuple[str, ...] = ("A1",)
 
 #: Steps the content arm CANNOT grade because every content-bearing artefact it
 #: rewrites is written by that step's own gate. Not a waiver and not a pass: it
@@ -2477,7 +2722,17 @@ def test_the_two_readings_of_self_written_agree():
     # That is why the inference (False) and the measurement (True) disagree, and
     # it is why the measurement is the reading this file acts on: a `--json`
     # flag is an intention, and only the disk says what happened.
-    KNOWN_DIVERGENCE = {("2", False, True)}
+    #
+    # 2026-09-02: the step-2 divergence is GONE, and not because either reading
+    # changed its mind. Step 2 left the PASS-tier population this sweep walks
+    # (see REAL_GATE_LEFT_THE_PASS_TIER — #1978 typed its unclassified rc=2
+    # clauses, then #2005 refused its own gate's verdict document as run
+    # evidence), so there is no longer a step-2 row for the two readings to
+    # disagree about. The set is EMPTY, which is the state this test was
+    # written hoping for; it is not weaker for being empty — the sweep is still
+    # asserted non-empty above, and any NEW divergence in either direction
+    # still reddens by name.
+    KNOWN_DIVERGENCE: set = set()
     unexpected = [d for d in disagree if tuple(d) not in KNOWN_DIVERGENCE]
     stale = [d for d in KNOWN_DIVERGENCE if d not in {tuple(x) for x in disagree}]
     assert not unexpected and not stale, (

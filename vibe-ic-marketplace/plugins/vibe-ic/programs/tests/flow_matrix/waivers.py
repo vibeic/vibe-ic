@@ -1020,7 +1020,18 @@ WAIVERS: Tuple[Waiver, ...] = (
             "producer programs/mixed_signal_top_lvs_run.py::`"
             '(rpt_dir / "top_lvs.json").write_text(' "` (in the same block "
             "as the already-declared merge.json); consumer "
-            "programs/mixed_signal_merge_check.py:89-91 then :108. MEASURED "
+            # vibe-ic#2014 — THE SAME LESSON, APPLIED TO THE OTHER HALF. The
+            # producer citation two lines above was converted to a CONTENT
+            # anchor by #1289 after rotting in three batches; the CONSUMER half
+            # was left as `:89-91 then :108` and rotted the first time
+            # `mixed_signal_merge_check.py` gained lines above them (the
+            # `reason_class` publication this batch added), manufacturing a red
+            # in a waiver nothing about the waiver had changed. Both anchors
+            # resolve to exactly one line, which the validator requires.
+            "programs/mixed_signal_merge_check.py::`"
+            'for rel in ("reports/analog/mixed_signal/top_lvs.json",'
+            "` then programs/mixed_signal_merge_check.py::`"
+            'elif str(top_lvs.get("verdict")) == "PASS":' "`. MEASURED "
             "2026-07-28 with test_matrix_d3_outputs_produced.resolve_anywhere("
             "'reports/analog/mixed_signal/top_lvs.json') -> None over all 12 "
             "run roots, while the sibling merge.json resolves at "

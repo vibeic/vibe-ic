@@ -12,7 +12,11 @@ Magic extraction + real netgen compare). PASS now requires
 
 Behaviour
 ---------
-* SKIP (rc=2) — top_merged.gds missing AND step not waived.
+* SKIP (rc=2) — top_merged.gds missing AND step not waived. The report
+  carries an explicit `reason_class` saying WHY there is no verdict:
+  `DESIGN_DECLARED_NA` when the project declares no analog blocks (there is
+  no A+D top to merge), `BLOCKED_BY_UPSTREAM` when it does and the merge
+  producer has not run. See the note above `main` for the measurement.
 * WAIVED (rc=0) — `waivers.json` declares step waived (evidence + ticket).
 * PASS (rc=0) — merged GDS present AND top-level LVS verdict PASS.
 * FAIL (rc=1) — merged GDS present but top-level LVS missing or FAIL
@@ -30,7 +34,47 @@ import argparse
 import json
 import sys
 from pathlib import Path
-from _atomic_artefact import write_text as atomic_write_text  # vibe-ic#1082 (helper from PR #1094)
+_HERE = Path(__file__).resolve().parent
+if str(_HERE) not in sys.path:
+    sys.path.insert(0, str(_HERE))
+
+from _atomic_artefact import write_text as atomic_write_text  # noqa: E402  vibe-ic#1082 (helper from PR #1094)
+import _flow_reason_taxonomy as _reason_taxonomy  # noqa: E402  vibe-ic#1978
+from mixed_signal_signoff_check import _analog_applicable  # noqa: E402
+
+
+# ── WHY THIS GATE PUBLISHES A `reason_class` (vibe-ic#1978/#2014) ──────────
+# `_flow_reason_taxonomy` is deliberately fail-closed: an rc=2 non-verdict that
+# carries no explicit class, and whose prose no recogniser matches, is an
+# EXECUTION_ERROR — which is NOT skip-eligible, so the consuming step lands on
+# INCOMPLETE rather than VACUOUS_PASS. That default is right; what was missing
+# is this producer's own statement about WHY it returned no verdict.
+#
+# MEASURED on the pinned runtime image, against a tree carrying no
+# mixed-signal artefacts, before this change:
+#
+#     rc 2, stdout "verdict: SKIP / missing:
+#     ['phase3/mixed_signal/top_merged.gds']"
+#     -> infer_nonverdict_reason(...) = EXECUTION_ERROR
+#     -> flow_compliance_check.check_step(...) = INCOMPLETE
+#
+# Nothing had gone wrong in the execution: the project declares no analog
+# blocks, so there is no A+D top to merge and this M1 gate does not apply. The
+# taxonomy module says producers should publish the class whenever they can,
+# and this one can — it already knows the two cases apart:
+#
+#   * no analog_block_list.json with a non-empty `blocks` list
+#         -> the DESIGN declares no analog content -> DESIGN_DECLARED_NA
+#            (skip-eligible: VACUOUS_PASS)
+#   * blocks ARE declared and `top_merged.gds` is still absent
+#         -> the merge producer has not run -> BLOCKED_BY_UPSTREAM
+#            (not skip-eligible: INCOMPLETE, which is the honest answer and is
+#            STRICTER than the pre-#1978 blanket VACUOUS_PASS)
+#
+# The applicability predicate is the one the sibling M4 gate already ships
+# (`mixed_signal_signoff_check._analog_applicable`) rather than a fourth
+# private copy of the same candidate-root list, so the two M-track gates cannot
+# disagree about whether the track applies to a project.
 
 
 def _load_waivers(project):
@@ -74,10 +118,26 @@ def main(argv=None):
     missing = [p for p in _REQUIRED_FILES if p not in found]
 
     waiver = _step_waived(project, args.step_label)
+    reason_class = None
+    skip_reason = None
     if missing and not waiver:
         verdict, rc = "SKIP", 2
+        applicable, evidence = _analog_applicable(project)
+        if applicable:
+            reason_class = _reason_taxonomy.BLOCKED_BY_UPSTREAM
+            skip_reason = (
+                f"the mixed-signal track APPLIES to this project ({evidence}) "
+                f"but {missing} is absent, so the merge producer has not run; "
+                f"nothing here examined a merged layout")
+        else:
+            reason_class = _reason_taxonomy.DESIGN_DECLARED_NA
+            skip_reason = (
+                f"the design declares no analog content ({evidence}), so there "
+                f"is no A+D top-level layout to merge and this M1 gate does not "
+                f"apply; {missing} is absent for that reason and not because a "
+                f"producer failed")
         findings = [{"severity": "INFO", "rule": "REQUIRED_FILES_MISSING",
-                      "message": f"missing: {missing}"}]
+                      "message": f"missing: {missing} — {skip_reason}"}]
     elif missing and waiver:
         verdict, rc = "WAIVED", 0
         findings = [{"severity": "WAIVED", "rule": "STEP_WAIVED",
@@ -150,6 +210,13 @@ def main(argv=None):
         "rationale_when_skipped": _WAIVER_RATIONALE,
         "findings": findings,
     }
+    if reason_class:
+        # Both keys, on purpose: `reason_class` is what
+        # `_flow_reason_taxonomy.report_reason_class` reads, and `reason` is
+        # what `_report_reason_text` publishes beside it so a reader is not
+        # left with a bare taxonomy token.
+        out["reason_class"] = reason_class
+        out["reason"] = skip_reason
     if args.json:
         out_path = Path(args.json)
         out_path.parent.mkdir(parents=True, exist_ok=True)

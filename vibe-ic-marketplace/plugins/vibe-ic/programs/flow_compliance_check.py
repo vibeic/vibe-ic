@@ -12246,7 +12246,24 @@ def check_step(project: Path, step: Dict[str, Any], waivers: Dict,
     # through `missing_entries`: the file is on disk, and calling a present
     # file missing is a false statement about the tree that also makes the
     # flow's own declaration unsatisfiable on any evaluation.
-    if _T.is_done_claim(result.status) and _audit_produced:
+    # READ ONCE, BEFORE EITHER DOWNGRADE CONSUMES IT. The two blocks below
+    # answer two DIFFERENT questions about the same step — "a declared output
+    # is the auditor's own document" and "a declared output is not on disk at
+    # all" — and both are facts the reader needs. Chaining them off the LIVE
+    # status made the second conditional on the first not having fired:
+    # `_audit_produced` set the status to MISSING, `is_done_claim` then read
+    # False, and the `required_outputs missing` line was never appended.
+    #
+    # MEASURED on a step declaring BOTH shapes (this file's own D8 fixture:
+    # one gate-written `--json` target plus one output no gate command names):
+    # verdict MISSING, and the only artefact named was the gate-written one —
+    # so the report sent the reader to a file that is on disk and never
+    # mentioned the one that is missing. Neither block changes a status here
+    # that the other has not already set to MISSING; what was lost was only
+    # the second disclosure.
+    _natural_done_claim = _T.is_done_claim(result.status)
+
+    if _natural_done_claim and _audit_produced:
         result.status = "MISSING"
         result.reasons.append(
             f"AUDIT-CREATED OUTPUT REFUSED: {_audit_produced} — present, but "
@@ -12255,7 +12272,7 @@ def check_step(project: Path, step: Dict[str, Any], waivers: Dict,
             f"on how many times the audit has run: the same document is "
             f"refused on every pass.")
 
-    if _T.is_done_claim(result.status) and missing_entries:
+    if _natural_done_claim and missing_entries:
         result.status = "MISSING"
         _by_record = [p for p in missing_entries
                       if _bind_modes.get(p) == "step_attributed"]
