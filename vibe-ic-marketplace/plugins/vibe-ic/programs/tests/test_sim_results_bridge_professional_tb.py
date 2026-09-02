@@ -47,8 +47,10 @@ def test_parse_junit_pass(tmp_path):
     p = tmp_path / "results.xml"
     p.write_text(_JUNIT_PASS)
     s = SRB.parse_junit(p)
-    assert s == {"tests": 1, "failures": 0, "errors": 0, "skipped": 0,
-                 "passed": 1}
+    # `suite_names` was added so the message that CREDITS a result can name the
+    # producer that wrote it — more than one producer writes into this slot.
+    assert s == {"suite_names": ["tb_spm"], "tests": 1, "failures": 0,
+                 "errors": 0, "skipped": 0, "passed": 1}
 
 
 def test_parse_junit_connectivity_bridge_is_none(tmp_path):

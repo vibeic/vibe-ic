@@ -50,9 +50,9 @@ Usage:
     python3 testbench_gen.py <project>
 """
 from __future__ import annotations
-import argparse, json, re, sys
+import argparse, json, re, shutil, sys, time
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 import _path_layout as _pl
 
 # Generic, chip-AGNOSTIC signal-role vocabulary. These match on STRUCTURE of the
@@ -763,6 +763,293 @@ def emit_unit_tbs(project: Path, top: str = "chip_top",
     return emitted
 
 
+
+# ---------------------------------------------------------------------------
+# THE EXECUTOR — a producer without a consumer runs zero tests
+# ---------------------------------------------------------------------------
+# MEASURED, opentitan_aes at v1.16.66: `emit_unit_tbs` wrote 8 known-answer
+# vector TBs that PASS against the design's own 131-file RTL, and Step 4 still
+# read "0 functional tests ran for 8 declared L10/L12 row(s)". Nothing was
+# wrong with the testbenches: no runner path EXECUTED them. `sim/tb/` appeared
+# in the runner exactly once, at the producer. The only functional-test
+# denominator Step 4 reads is `_sim_results_bridge.find_professional_tb_pass`,
+# i.e. a JUnit document under `phase2/stage1/sim_professional/*/results.xml`.
+# This is that missing consumer: it builds and runs each emitted unit TB and
+# writes the JUnit result the Step-4 bridge already knows how to read.
+#
+# FAIL-CLOSED, three states kept apart (they are NOT two):
+#   NOT_EXECUTED — no simulator at any dispatch site, or no TB to run. NOTHING
+#              is known (`sim_executed=False`, the runner's own v1.16.91
+#              vocabulary). No results.xml is written at all: an empty JUnit
+#              would let the bridge speak about an empty population, which is
+#              the v1.16.21 defect shape.
+#   ERRORED  — the simulator RAN and could not BUILD the closure. An <error>
+#              testcase, so `errors > 0` and the bridge keeps refusing.
+#   FAILED / PASSED — the simulation executed and judged the design.
+UNIT_TB_RESULT_DIR = "l10_unit_tb"
+#: The simulator this executor drives. The DISPATCH SITE that finds it is the
+#: runner's (v1.16.91), not a second one owned here.
+SIMULATOR = "verilator"
+_MISSING_MODULE_RE = re.compile(
+    r"[Cc]annot find (?:file containing )?module:?\s*'?([A-Za-z_][\w$]*)'?")
+_MODULE_DEF_RE = r"(?m)^\s*module\s+{}\b"
+
+
+def sim_professional_dir(project: Path) -> Path:
+    """The directory `_sim_results_bridge._PROFESSIONAL_GLOB` globs."""
+    return project / "phase2/stage1/sim_professional"
+
+
+def is_unit_tb(path: Path) -> bool:
+    """A TB is a PORTLESS top module named after its own file — the shape this
+    generator emits. A support module copied in beside it (a vendor primitive
+    the TB instantiates) has ports and is a SOURCE, not a top. Pure grammar."""
+    try:
+        text = path.read_text(errors="replace")
+    except OSError:
+        return False
+    return re.search(r"(?m)^\s*module\s+" + re.escape(path.stem) + r"\s*;",
+                     text) is not None
+
+
+def package_first_order(files: List[Path]) -> List[Path]:
+    """Order sources so a package is compiled before the package that imports
+    it — `verilator --binary` is single-pass. Pure `package X;` / `X::` grammar,
+    chip-AGNOSTIC; non-package files keep their given order, after the rest."""
+    defines: Dict[str, Path] = {}
+    text_of: Dict[Path, str] = {}
+    for f in files:
+        try:
+            text_of[f] = f.read_text(errors="replace")
+        except OSError:
+            text_of[f] = ""
+        for m in re.finditer(r"(?m)^\s*package\s+([A-Za-z_]\w*)\s*;",
+                             text_of[f]):
+            defines.setdefault(m.group(1), f)
+    pkg_files = [f for f in files if f in set(defines.values())]
+    others = [f for f in files if f not in set(defines.values())]
+    deps: Dict[Path, set] = {}
+    for f in pkg_files:
+        refs = set(re.findall(r"([A-Za-z_]\w*)::", text_of[f]))
+        deps[f] = {defines[r] for r in refs
+                   if r in defines and defines[r] is not f}
+    ordered: List[Path] = []
+    placed: set = set()
+    for _ in range(len(pkg_files) + 1):
+        for f in pkg_files:
+            if f not in placed and deps[f] <= placed:
+                ordered.append(f)
+                placed.add(f)
+        if len(placed) == len(pkg_files):
+            break
+    ordered += [f for f in pkg_files if f not in placed]   # cycle: keep them
+    return ordered + others
+
+
+def default_dispatch(argv: List[str], run_dir: Path,
+                     container: "str | None", tool: str,
+                     timeout: int) -> Tuple[int, str]:
+    """The ONE dispatch site, borrowed from the runner (v1.16.91): container
+    exec → a throwaway container of that container's OWN image → the host.
+
+    This module does NOT resolve an image, choose a site or write provenance of
+    its own: `design_one_shot_runner._run_sim_stage` already does all three for
+    the reference-TB chain, and a second executor with its own copy of that
+    logic is the failure this indirection exists to avoid. Imported lazily so
+    `testbench_gen` stays importable on its own; with no container (or no
+    runner importable) the argv runs on the host, which is the same last
+    fallback that site takes."""
+    import subprocess
+    if container:
+        try:
+            import sys as _sys
+            _here = str(Path(__file__).resolve().parent)
+            if _here not in _sys.path:
+                _sys.path.insert(0, _here)
+            import design_one_shot_runner as _dsor
+            rc, out, err = _dsor._run_sim_stage(
+                [str(a) for a in argv], Path(run_dir), container,
+                probe_tool=tool, timeout=timeout)
+            return rc, (err or "") + (out or "")
+        except Exception as e:                               # noqa: BLE001
+            return 127, f"dispatch unavailable: {e}"
+    try:
+        pr = subprocess.run([str(a) for a in argv], cwd=str(run_dir),
+                            capture_output=True, text=True, timeout=timeout)
+    except subprocess.TimeoutExpired:
+        return 124, f"TIMEOUT after {timeout}s"
+    except OSError as e:
+        return 127, f"could not dispatch: {e}"
+    # stderr FIRST: the container prints an environment banner, and a
+    # transcript tail that ends in the banner hides the verdict line.
+    return pr.returncode, (pr.stderr or "") + (pr.stdout or "")
+
+
+def _resolve_from_design_input(project: Path, module: str) -> Optional[Path]:
+    """Find the file that defines `module` in the design INPUT (§4.05: the
+    input only — never an oracle, a golden or the harness). A TB may
+    instantiate a vendor primitive the staged synthesis set did not need."""
+    root = project / "input"
+    if not root.is_dir():
+        return None
+    pat = re.compile(_MODULE_DEF_RE.format(re.escape(module)))
+    for f in sorted(root.rglob("*.sv")) + sorted(root.rglob("*.v")):
+        if any(part in {"golden", "oracle", "reference_flow", "submission_template"}
+               for part in f.relative_to(root).parts):
+            continue
+        try:
+            if pat.search(f.read_text(errors="replace")):
+                return f
+        except OSError:
+            continue
+    return None
+
+
+def _junit(cases: List[Dict[str, Any]]) -> str:
+    from xml.sax.saxutils import escape, quoteattr
+    fails = sum(1 for c in cases if c["state"] == "failed")
+    errs = sum(1 for c in cases if c["state"] == "errored")
+    body = []
+    for c in cases:
+        body.append(f'  <testcase classname="{UNIT_TB_RESULT_DIR}" '
+                    f'name={quoteattr(c["name"])} time="{c["time"]:.3f}">')
+        if c["state"] == "failed":
+            body.append(f'    <failure message={quoteattr(c["message"][:400])}>'
+                        f'{escape(c["log_tail"][:2000])}</failure>')
+        elif c["state"] == "errored":
+            body.append(f'    <error message={quoteattr(c["message"][:400])}>'
+                        f'{escape(c["log_tail"][:2000])}</error>')
+        body.append("  </testcase>")
+    return ('<?xml version="1.0" encoding="UTF-8"?>\n'
+            f'<testsuites>\n<testsuite name="{UNIT_TB_RESULT_DIR}" '
+            f'tests="{len(cases)}" failures="{fails}" errors="{errs}" '
+            f'skipped="0">\n' + "\n".join(body) +
+            "\n</testsuite>\n</testsuites>\n")
+
+
+def run_unit_tbs(project: Path, container: "str | None" = None,
+                 report: "dict | None" = None,
+                 build_timeout: int = 1800,
+                 run_timeout: int = 600,
+                 dispatch=None) -> int:
+    """Build and RUN every emitted unit TB; write the Step-4 JUnit.
+
+    Returns the number of testbenches that EXECUTED (built and ran), or a
+    negative sentinel — nothing is written on either:
+      -1  no unit TB to run (the producer is the one that says why)
+      -2  NOT_EXECUTED: no simulator at any dispatch site. Nothing ran, so
+          nothing is known — and NO results.xml is written, because an empty
+          JUnit would let the Step-4 bridge speak about an empty population.
+
+    States use the runner's own v1.16.91 vocabulary: `sim_executed` False is
+    NOT_EXECUTED; a build that the simulator RAN and rejected is an `<error>`
+    testcase and a simulation the design failed is a `<failure>` — both are
+    executed, both keep the Step-4 bridge refusing.
+
+    `dispatch(argv, run_dir, container, tool, timeout) -> (rc, transcript)`
+    defaults to `default_dispatch`, i.e. the runner's single dispatch site.
+    chip-AGNOSTIC: file grammar, the standard verilator argv, the standard
+    JUnit path — no chip/vendor literal.
+    """
+    if report is None:
+        report = {}
+    disp = dispatch or default_dispatch
+    tb_dir = _pl.sim_dir(project) / "tb"
+    tbs = [p for p in sorted(tb_dir.glob("*.v")) + sorted(tb_dir.glob("*.sv"))
+           if is_unit_tb(p)] if tb_dir.is_dir() else []
+    report["tb_total"] = len(tbs)
+    report["sim_executed"] = False
+    if not tbs:
+        report["reason"] = f"no unit TB under {tb_dir} — nothing to execute"
+        return -1
+    out_root = sim_professional_dir(project) / UNIT_TB_RESULT_DIR
+    out_root.mkdir(parents=True, exist_ok=True)
+    rc, _out = disp([SIMULATOR, "--version"], out_root, container,
+                    SIMULATOR, 60)
+    if rc != 0:
+        report["reason"] = (
+            f"NOT_EXECUTED: no {SIMULATOR} at any dispatch site "
+            + (f"(container '{container}', its own image, or the host)"
+               if container else "(the host)")
+            + " — the testbenches were NOT executed, so nothing is known "
+              "about them. No results.xml is written.")
+        return -2
+    rtl = _pl.rtl_dir(project)
+    sources = package_first_order(
+        sorted(rtl.glob("*.sv")) + sorted(rtl.glob("*.v")) if rtl.is_dir()
+        else [])
+    support = [p for p in sorted(tb_dir.glob("*.sv")) + sorted(tb_dir.glob("*.v"))
+               if not is_unit_tb(p)]
+    cases: List[Dict[str, Any]] = []
+    extra: List[Path] = []
+    for tb in tbs:
+        t0 = time.time()
+        wd = out_root / tb.stem
+        shutil.rmtree(wd, ignore_errors=True)
+        wd.mkdir(parents=True, exist_ok=True)
+        state = "errored"
+        message = ""
+        log = ""
+        for _attempt in range(4):
+            argv = ([SIMULATOR, "--binary", "--timing", "-j", "4",
+                     "--top-module", tb.stem, "-Wno-fatal",
+                     f"-I{rtl}", f"-I{tb_dir}"]
+                    + [str(s) for s in sources + support + extra]
+                    + [str(tb), "-o", f"sim_{tb.stem}"])
+            brc, blog = disp(argv, wd, container, SIMULATOR, build_timeout)
+            # The COMMAND belongs in the transcript: a build that silently
+            # picked up (or did not pick up) a source is unreadable without it.
+            (wd / "build.log").write_text(" ".join(argv) + "\n\n" + blog)
+            if brc == 0:
+                break
+            missing = [m for m in _MISSING_MODULE_RE.findall(blog)]
+            found = False
+            for mod in missing:
+                src = _resolve_from_design_input(project, mod)
+                if src is not None and src not in extra:
+                    extra.append(src)
+                    found = True
+            if not found:
+                message = (f"BUILD ERROR (rc={brc}): the simulator RAN and "
+                           f"could not elaborate the closure — this TB did "
+                           f"not execute")
+                log = blog[-2000:]
+                break
+        else:
+            brc = 1
+        if brc == 0:
+            rrc, rlog = disp([str(wd / "obj_dir" / f"sim_{tb.stem}")], wd,
+                             container, SIMULATOR, run_timeout)
+            (wd / "run.log").write_text(rlog)
+            verdict_fail = re.search(r"(?m)^\s*(\[[^\]]*\]\s*)?FAIL\b", rlog)
+            if rrc == 0 and not verdict_fail:
+                state = "passed"
+            else:
+                state = "failed"
+                message = (f"simulation FAILED (rc={rrc})"
+                           + (f": {verdict_fail.group(0).strip()}"
+                              if verdict_fail else ""))
+                log = rlog[-2000:]
+        cases.append({"name": tb.stem, "state": state, "message": message,
+                      "log_tail": log, "time": time.time() - t0,
+                      "work_dir": str(wd)})
+    executed = sum(1 for c in cases if c["state"] in ("passed", "failed"))
+    report["cases"] = cases
+    report["passed"] = sum(1 for c in cases if c["state"] == "passed")
+    report["failed"] = sum(1 for c in cases if c["state"] == "failed")
+    report["errored"] = sum(1 for c in cases if c["state"] == "errored")
+    report["executed"] = executed
+    report["sim_executed"] = executed > 0
+    report["extra_sources_from_design_input"] = [str(x) for x in extra]
+    if not cases:
+        report["reason"] = "no testbench produced a result — nothing written"
+        return -1
+    results = out_root / "results.xml"
+    results.write_text(_junit(cases))
+    report["results_xml"] = str(results)
+    return executed
+
+
 def main() -> int:
     p = argparse.ArgumentParser()
     p.add_argument("project", type=Path)
@@ -770,8 +1057,33 @@ def main() -> int:
     p.add_argument("--kind", default=None,
                    help="emit ONLY cases of this L10 kind (e.g. "
                         "functional_vector); omit to emit every case")
+    p.add_argument("--run", action="store_true",
+                   help="EXECUTE the emitted unit TBs and write the Step-4 "
+                        "JUnit under sim_professional/l10_unit_tb/ instead of "
+                        "emitting; fail-closed (no simulator / no TB writes "
+                        "NOTHING and exits non-zero)")
+    p.add_argument("--container", default=None,
+                   help="pinned EDA container to run the simulator in; "
+                        "omit to use the simulator on PATH")
     args = p.parse_args()
     report: dict = {}
+    if args.run:
+        rep: dict = {}
+        executed = run_unit_tbs(args.project, args.container, rep)
+        if executed < 0:
+            print(f"[NOT_EXECUTED] testbench_gen --run: "
+                  f"{rep.get('reason')}")
+            return 2
+        print(f"[{'PASS' if rep['failed'] == 0 and rep['errored'] == 0 else 'FAIL'}] "
+              f"testbench_gen --run: {rep['tb_total']} unit TB(s) — "
+              f"{rep['passed']} passed, {rep['failed']} failed, "
+              f"{rep['errored']} errored (elaboration); JUnit: "
+              f"{rep.get('results_xml')}")
+        for x in rep.get("extra_sources_from_design_input") or []:
+            print(f"    resolved from design INPUT: {x}")
+        for c in rep["cases"]:
+            print(f"    {c['state']:8s} {c['name']} {c['message']}")
+        return 0 if (rep["failed"] == 0 and rep["errored"] == 0) else 1
     try:
         emitted = emit_unit_tbs(args.project, args.top, args.kind, report)
     except Exception as e:

@@ -795,7 +795,8 @@ def _iverilog_sources_visible(argv: List[str], run_dir: Path,
 
 def _iverilog_exec_container(container: str,
                              run_dir: Optional[Path] = None,
-                             argv: Optional[List[str]] = None) -> bool:
+                             argv: Optional[List[str]] = None,
+                             probe_tool: str = "iverilog") -> bool:
     """True iff the iverilog/vvp compile+run must be DISPATCHED INTO
     `container`.
 
@@ -823,7 +824,7 @@ def _iverilog_exec_container(container: str,
     again. chip-AGNOSTIC."""
     if not container:
         return False
-    if not _tool_in_container(container, "iverilog"):
+    if not _tool_in_container(container, probe_tool):
         return False
     if run_dir is not None:
         ok, _reason = _iverilog_sources_visible(list(argv or []), run_dir,
@@ -1295,8 +1296,26 @@ def _run_stage_in_mounted_image(argv: List[str], run_dir: Path,
     return cp.returncode, cp.stdout or "", cp.stderr or ""
 
 
+def _run_sim_stage(argv: List[str], run_dir: Path, container: str,
+                   probe_tool: str = "iverilog",
+                   timeout: int = 120) -> Tuple[int, str, str]:
+    """The ONE simulator dispatch site: container-exec → mounted image → host.
+
+    `probe_tool` is the executable whose presence decides whether the container
+    is a usable site (`iverilog` for the reference-TB chain, `verilator` for the
+    L10 unit-TB executor). Everything else — the reachability answer
+    (`_iverilog_sources_visible`, tool-agnostic despite its name), the
+    mount-on-demand third site of v1.16.91, and the `_record_sim_toolchain`
+    provenance — is SHARED. A second executor that resolved its own image or
+    wrote its own provenance is exactly what this parameter exists to prevent.
+    """
+    return _run_iverilog_stage(argv, run_dir, container, timeout=timeout,
+                               _probe_tool=probe_tool)
+
+
 def _run_iverilog_stage(argv: List[str], run_dir: Path, container: str,
-                        timeout: int = 120) -> Tuple[int, str, str]:
+                        timeout: int = 120,
+                        _probe_tool: str = "iverilog") -> Tuple[int, str, str]:
     """Run one iverilog/vvp stage (a full argv) INSIDE `container` when it has
     iverilog and can see the run tree, else on the host.
 
@@ -1312,14 +1331,16 @@ def _run_iverilog_stage(argv: List[str], run_dir: Path, container: str,
     the job landed on rather than of the pinned image), and either way the
     locality is RECORDED by `_record_sim_toolchain` so a host fallback cannot
     be silent. chip-AGNOSTIC."""
-    tool = os.path.basename(str(argv[0])) if argv else "iverilog"
-    in_container = _iverilog_exec_container(container, run_dir, argv)
+    tool = os.path.basename(str(argv[0])) if argv else _probe_tool
+    in_container = _iverilog_exec_container(container, run_dir, argv,
+                                            _probe_tool)
     fallback_reason: Optional[str] = None
     container_has_tool = False
     if not in_container and container:
-        container_has_tool = _tool_in_container(container, "iverilog")
+        container_has_tool = _tool_in_container(container, _probe_tool)
         if not container_has_tool:
-            fallback_reason = ("container %r has no iverilog" % container)
+            fallback_reason = ("container %r has no %s"
+                               % (container, _probe_tool))
         else:
             _ok, fallback_reason = _iverilog_sources_visible(
                 list(argv or []), run_dir, container)
@@ -8966,6 +8987,76 @@ def step_full_stack_tb_gen(project: Path,
 # returned for the caller to record in StepResult extras. Chip-AGNOSTIC:
 # extension + error-signature only; the iverilog SUBSET is universal.
 # -------------------------------------------------------------------------
+def step_l10_unit_tb_run(project: Path, container: "str | None") -> StepResult:
+    """EXECUTE the unit TBs `step_l10_unit_tb_gen` just wrote.
+
+    MEASURED, opentitan_aes at v1.16.66: the producer emitted 8 known-answer
+    vector TBs that PASS against the design's own 131-file RTL, and Step 4 still
+    read `0 functional tests ran for 8 declared L10/L12 row(s)`. `sim/tb/`
+    appeared in this runner exactly once — at the producer. Producing a
+    testbench and RUNNING it are different jobs and only the first existed, so
+    the Step-4 functional denominator had no source to read.
+
+    Three states are kept APART, in the vocabulary v1.16.91 established for the
+    reference-TB chain (NOT_EXECUTED + `extras["sim_executed"]`), because
+    collapsing them into two is what makes a run look measured when it was not:
+      NOT_EXECUTED — no simulator at any dispatch site, or nothing to run:
+                NOTHING is known, and NO results.xml is written (an empty JUnit
+                would let the Step-4 bridge speak about an empty population).
+      FAIL    — the simulator RAN: a TB failed to elaborate (<error>) or the
+                simulation judged the design and failed (<failure>).
+      PASS    — every emitted TB built, ran and passed.
+
+    LAYER BOUNDARY. This is the L10 unit-TB population (`sim/tb/*.v`, driven
+    with verilator); `_reference_tb_generic_full_stack` is the generic
+    full-stack TB (iverilog). Different testbenches, different simulator — but
+    ONE dispatch site: both go through `_run_sim_stage`, so the image
+    resolution, the mount-on-demand fallback and the `_record_sim_toolchain`
+    provenance exist once, not twice.
+    chip-AGNOSTIC: file grammar + the standard verilator invocation."""
+    t0 = time.time()
+    try:
+        import sys as _sys
+        if str(PROGRAMS_DIR) not in _sys.path:
+            _sys.path.insert(0, str(PROGRAMS_DIR))
+        import testbench_gen as _tbg
+    except Exception as e:  # pragma: no cover — defensive import guard
+        return StepResult("l10_unit_tb_run", NOT_EXECUTED_STATUS,
+                          time.time() - t0, f"executor unavailable: {e}",
+                          extras={"sim_executed": False})
+    rep: dict = {}
+    try:
+        executed = _tbg.run_unit_tbs(project, container, rep)
+    except Exception as e:
+        return StepResult("l10_unit_tb_run", NOT_EXECUTED_STATUS,
+                          time.time() - t0, f"executor raised: {e}",
+                          extras={"sim_executed": False})
+    if executed == -1:
+        # Nothing to execute is the producer's story to tell, not a failure of
+        # this step — but it is NOT a pass over any testbench either.
+        return StepResult("l10_unit_tb_run", "SKIP", time.time() - t0,
+                          str(rep.get("reason")),
+                          extras={"sim_executed": False})
+    if executed == -2:
+        return StepResult("l10_unit_tb_run", NOT_EXECUTED_STATUS,
+                          time.time() - t0, str(rep.get("reason")),
+                          extras={"sim_executed": False})
+    extra = rep.get("extra_sources_from_design_input") or []
+    detail = (f"{rep['tb_total']} unit TB(s): {rep['passed']} passed, "
+              f"{rep['failed']} failed, {rep['errored']} errored "
+              f"(elaboration); JUnit {rep.get('results_xml')} is the Step-4 "
+              f"functional denominator"
+              + (f"; {len(extra)} source(s) resolved from the design INPUT: "
+                 + ", ".join(Path(x).name for x in extra) if extra else ""))
+    status = "PASS" if (rep["failed"] == 0 and rep["errored"] == 0) else "FAIL"
+    return StepResult("l10_unit_tb_run", status, time.time() - t0, detail,
+                      output_files=[rep.get("results_xml") or ""],
+                      extras={"passed": rep["passed"], "failed": rep["failed"],
+                              "errored": rep["errored"],
+                              "executed": rep["executed"],
+                              "sim_executed": bool(rep["executed"])})
+
+
 def _verilator_sim_escape(
         rtl_files: List[Path], tb_path: Path, run_dir: Path,
         container: str, top_name: str, reason: str,
@@ -18246,6 +18337,12 @@ def main() -> int:
         # (§4.05 no-leak: a cmd_response case never gets manufactured id-substring
         # evidence — it stays gated by its opcode/summary oracle).
         plan.append(step_l10_unit_tb_gen(project, args.top_name))
+        # THE CONSUMER. The producer above has been wired since #797 and the
+        # Step-4 functional denominator was STILL zero, because nothing ran
+        # what it wrote. This executes those TBs and writes the JUnit the
+        # Step-4 bridge reads. Fail-closed: no simulator / nothing to run
+        # writes NOTHING and does not report a pass.
+        plan.append(step_l10_unit_tb_run(project, args.container))
         # NEW TB PATH — professional cocotb testbench (deterministic derivation from
         # the L-docs; bounded-latency STREAMING scoreboard closes the serial-datapath
         # functional-verification DEFER, e.g. the spm bit-serial multiplier). Runs

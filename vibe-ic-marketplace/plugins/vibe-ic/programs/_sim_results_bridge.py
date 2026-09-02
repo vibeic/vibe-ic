@@ -82,7 +82,14 @@ def parse_junit(path: Path) -> Optional[Dict[str, Any]]:
         if tc:
             tests = tc
     passed = max(tests - failures - errors - skipped, 0)
+    # #—: WHICH producer wrote this transcript. The slot is a PATH, and more
+    # than one producer legitimately writes into it (the cocotb professional TB
+    # and the L10 unit-TB executor). A message that names the slot's historical
+    # producer for a result another producer wrote is a small lie in the one
+    # sentence a reader trusts, so carry the suite's own name.
+    names = [s.get("name") or "" for s in suites if (s.get("name") or "")]
     return {
+        "suite_names": names,
         "tests": tests,
         "failures": failures,
         "errors": errors,

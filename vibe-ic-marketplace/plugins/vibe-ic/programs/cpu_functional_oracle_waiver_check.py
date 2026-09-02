@@ -341,8 +341,10 @@ def _evaluate(project: Path) -> "tuple[int, str]":
     pro = _srb.find_professional_tb_pass(project)
     if pro:
         return 0, (
-            "PASS: functional verification ACHIEVED by the professional cocotb "
-            f"testbench (professional_tb_gen) — {pro['rel_path']}: tests="
+            "PASS: functional verification ACHIEVED by the professional-TB "
+            "result slot (producer: "
+            + (", ".join(pro.get("suite_names") or []) or "unnamed suite")
+            + f") — {pro['rel_path']}: tests="
             f"{pro['tests']} passed={pro['passed']} failures={pro['failures']} "
             f"errors={pro['errors']}. The connectivity-PASS capability record "
             f"({CAP_CPU_FUNCTIONAL_ORACLE}) is "
@@ -350,6 +352,31 @@ def _evaluate(project: Path) -> "tuple[int, str]":
             "functional simulation PASS, not WAIVED-DEFERRED.")
 
     denom = _evidence_summary(project)["declared_denominator"]
+    # A functional transcript that EXISTS and did not pass is not the same fact
+    # as no transcript at all, and this sentence used to report both as
+    # "0 functional tests ran". Name the executed population when there is one:
+    # the reader must be able to tell "nobody ran the testbenches" from "the
+    # testbenches ran and the design failed them".
+    ran = []
+    for cand in sorted(project.glob(_srb._PROFESSIONAL_GLOB)):
+        summ = _srb.parse_junit(cand)
+        if summ and summ["tests"] > 0:
+            ran.append((cand, summ))
+    if ran:
+        cand, summ = ran[0]
+        try:
+            rel = cand.relative_to(project).as_posix()
+        except ValueError:
+            rel = cand.as_posix()
+        return 1, (
+            f"INCOMPLETE: {_waiver_track_class_label(xml)} — connectivity-only "
+            f"evidence reached FULL_STACK_TB_DONE (evidence: {evidence}), and "
+            f"a functional transcript EXISTS but did NOT pass: {rel} — "
+            f"tests={summ['tests']} passed={summ['passed']} "
+            f"failures={summ['failures']} errors={summ['errors']} "
+            f"(errors = testbenches that never ran) for "
+            f"{denom['total_declared_rows']} declared L10/L12 row(s). "
+            f"No waiver is granted.")
     return 1, (
         f"INCOMPLETE: {_waiver_track_class_label(xml)} — connectivity-only "
         f"evidence reached FULL_STACK_TB_DONE (evidence: {evidence}), but 0 "
