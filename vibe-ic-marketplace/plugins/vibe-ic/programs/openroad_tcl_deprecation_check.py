@@ -201,6 +201,38 @@ def _is_documentary(line: str) -> bool:
     return any(m in low for m in _DOCUMENTARY_MARKERS)
 
 
+# A deprecated token that is a COMPLETE quoted string used as a dict key or a
+# subscript index is a DATA FIELD NAME, never a TCL command. Measured
+# 2026-09-03 on live main 637cdf091 (v1.16.82): commit 4277b34a1 gave the
+# dummy-fill spec a dict field literally named `write_gds` (`{"write_gds":
+# gds[...]}`, `lay["write_gds"]`), and this gate reported 9 hits over it. That
+# FAIL is a P0 structural gate, so phase 2's `final_audit` failed, the
+# orchestrator halted at phase 2, and NO design on main reached phase 3 — on a
+# tree with no OpenROAD TCL problem at all. The gate already carried the sibling
+# exclusion for Python call/def syntax (`write_gds(`, added 1910a37ca); this is
+# the same class it missed.
+#
+# The rule is deliberately NARROW: quote, token, the SAME quote, then `]` or
+# `:`. That is Python/JSON subscript-or-key grammar and nothing else.
+# It cannot mask a real emission —
+#   `write_gds $out`            no quotes           -> still flagged
+#   `f"write_gds {out}"`        no closing quote    -> still flagged
+#   `["write_gds", $out]`       followed by `,`     -> still flagged
+# — so the gate keeps its full power over every shape that actually reaches an
+# OpenROAD interpreter. chip/PDK/vendor-AGNOSTIC: pure source grammar.
+_DATA_KEY_TAIL = re.compile(r"\s*[\]:]")
+
+
+def _is_data_key(line: str, start: int, end: int) -> bool:
+    """Is the match at [start:end) a quoted dict key / subscript index?"""
+    if start == 0 or end >= len(line):
+        return False
+    q = line[start - 1]
+    if q not in ("'", '"') or line[end] != q:
+        return False
+    return bool(_DATA_KEY_TAIL.match(line, end + 1))
+
+
 def _self_exempt(path_str: str) -> bool:
     """This program's own source file + its test fixtures both necessarily
     mention the deprecated tokens. Exempt them so the plugin self-check
@@ -250,7 +282,11 @@ def scan(search_dir: Path) -> Tuple[List[Finding], int]:
                 # changelog entry) — not a live invocation. Skip.
                 continue
             for dep in _DEPRECATIONS:
-                if dep.pattern.search(line):
+                m = next(
+                    (mm for mm in dep.pattern.finditer(line)
+                     if not _is_data_key(line, mm.start(), mm.end())),
+                    None)
+                if m is not None:
                     findings.append(Finding(
                         file=str(fpath.relative_to(search_dir_abs)),
                         line=idx,

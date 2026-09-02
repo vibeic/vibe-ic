@@ -1,7 +1,7 @@
 """`slew_margin` cannot fail on a design's numbers, and the clock mismatch is
 somewhere else.
 
-MEASURED (round 33, v1.16.85 / 626809984241). Round 31 found a settling bound
+MEASURED (round 33, v1.16.86 / 626809984241). Round 31 found a settling bound
 evaluated at `fclk` (the 1.0 MHz target) while the emitted testbench runs at
 `fclk_max` (10 MHz), and listed `slew_margin` as having the same shape. It does
 read `fclk` -- and changing it to `fclk_max` changes NOTHING, because the bound

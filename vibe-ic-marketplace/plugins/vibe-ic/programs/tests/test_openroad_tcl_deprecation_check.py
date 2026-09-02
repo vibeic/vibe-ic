@@ -214,3 +214,43 @@ def test_substring_does_not_false_positive(tmp_path):
            "proc write_gdsii_for_tapeout {args} { }\n")
     code, out, _ = _run(["--search-dir", str(tmp_path)])
     assert code == 0, out
+
+
+# ---------------------------------------------------------------------------
+# A quoted DATA KEY named after a deprecated command is not a TCL command.
+#
+# MEASURED 2026-09-03 on live main 637cdf091 (v1.16.82). `4277b34a1` gave the
+# dummy-fill spec a dict field literally named `write_gds` (`{"write_gds":
+# gds[...]}`, `lay["write_gds"]`) and this gate reported **9 hits** over it; at
+# `4277b34a1^` the same scan reported **0**. Those 9 fail a P0 STRUCTURAL gate,
+# so phase 2's `final_audit` failed, the orchestrator halted at phase 2, and NO
+# design on main reached phase 3 — over a tree with no OpenROAD TCL problem at
+# all. The gate already carried the sibling exclusion for Python call/def
+# syntax (`write_gds(`, 1910a37ca); this is the same class it missed.
+#
+# BOTH directions are asserted, because a suppression that only ever suppresses
+# is indistinguishable from deleting the rule. The second test is what makes
+# the first safe to land: it pins every shape that actually reaches an OpenROAD
+# interpreter, INCLUDING ones that merely look quoted.
+# ---------------------------------------------------------------------------
+def test_a_quoted_dict_key_or_subscript_is_not_a_tcl_command(tmp_path):
+    _write(tmp_path, "spec_shape.py", '\n'.join([
+        'LEVELS = [{"write_gds": "36/4"}]',
+        'name = LEVELS[0]["write_gds"]',
+        "other = LEVELS[0]['write_gds']",
+        '']))
+    code, out, err = _run(["--search-dir", str(tmp_path)])
+    assert code == 0, f"quoted data keys flagged as TCL: {out!r} {err!r}"
+    assert "no OpenROAD TCL deprecations" in out
+
+
+def test_a_real_tcl_emission_is_still_flagged_after_that_exclusion(tmp_path):
+    for i, body in enumerate(('cmd = "write_gds $out"\n',
+                              'tcl = f"write_gds {out}"\n',
+                              'argv = ["write_gds", out]\n',
+                              'run("write_gds " + out)\n')):
+        d = tmp_path / f"emit{i}"
+        _write(d, "emit.py", body)
+        code, out, err = _run(["--search-dir", str(d)])
+        assert code == 1, f"a real emission went unflagged: {body!r}"
+        assert "write_gds" in (out + err)
