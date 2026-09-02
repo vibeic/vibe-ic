@@ -601,10 +601,21 @@ def test_0_5ic_d3_live_replay_closes_the_exact_coverage_delta():
     would have been a count with an uncovered cell inside it. It is closed by a
     replay (``--replay D6-UNCONDITIONAL-OPTIONAL --step DT2`` -> REDDENED), and
     ``uncovered == []`` holds at 501.
+
+    MOVED 501 -> 508 on 2026-09-02, growing, SEVEN dimension-3 cells, and for
+    the first time the number is the same with the corpus pointer bound and
+    unbound: the 501 held only with it bound (490 without), because d3 decided
+    NOT_MEASURED from a live corpus read; the state is now decided from the
+    record and the record was re-pointed at `v1.14.88_gf180mcuD`. Five of the
+    seven (0.5ic, 9, 10, 31, 32) were already inside D3-UNDECLARED-ARTEFACT's
+    applies_to; the two re-tiered cells were REPLAYED — 37.5ip REDDENED,
+    26.5ic ALREADY_RED and recorded in baseline_red. ``uncovered == []`` holds
+    at 508. All seven are named in ``LEDGER_CELLS_NOT_ENFORCED``'s strike
+    notes, which moved in the same change.
     """
     rep = L.census(cell_states())
-    assert rep["considered"] == 501, rep
-    assert rep["covered"] == 501, rep
+    assert rep["considered"] == 508, rep
+    assert rep["covered"] == 508, rep
     assert rep["uncovered"] == [], rep
 
 

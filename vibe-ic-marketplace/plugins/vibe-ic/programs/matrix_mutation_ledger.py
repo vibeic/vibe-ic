@@ -1160,11 +1160,13 @@ MUTATIONS: Tuple[Mutation, ...] = (
             "12", "13", "A1", "A2", "A3", "A4", "A5", "A6", "A7", "A8", "A9",
             "14", "15", "16", "17", "18", "19", "20", "21", "22", "DT2", "DT3",
             "23", "24", "25", "26", "27", "28", "29", "30", "31", "32", "33",
-            "34", "35", "36", "37", "38", "M2", "M3", "M4"),
+            "34", "35", "36", "37", "38", "M2", "M3", "M4",
+            # the two path-specific steps re-tiered NA -> ENFORCED 2026-09-02
+            "26.5ic", "37.5ip"),
         measured=Measurement(
-            date="2026-08-25", command=_D3_THEN_LIVE_ONE, reddened=54,
+            date="2026-09-02", command=_D3_THEN_LIVE_ONE, reddened=56,
             baseline_red=("12", "15", "17", "19", "20", "21", "22", "23", "24",
-                          "25", "26", "30", "32", "M2", "M3", "M4"),
+                          "25", "26", "30", "32", "M2", "M3", "M4", "26.5ic"),
             stayed_green=("6", "39", "M1"),
             note="53 red = every one of dimension 3's 53 ENFORCED cells. 16 of "
                  "them are ALREADY red before the mutation (their declared "
@@ -1207,7 +1209,16 @@ MUTATIONS: Tuple[Mutation, ...] = (
                  "produced baseline_rc=0, mutant_rc=1 and red_signal='step' "
                  "(2.0 s). This is live mutation control evidence, not a claim "
                  "that the authoritative corpus has a routed population. The "
-                 "measured cell takes this entry from 53 to 54 targets."),
+                 "measured cell takes this entry from 53 to 54 targets. "
+                 "TWO MORE CELLS WERE MEASURED 2026-09-02, when 26.5ic and "
+                 "37.5ip were re-tiered NA -> ENFORCED against the published "
+                 "cell v1.14.88_gf180mcuD (pointer bound, pinned image): "
+                 "`--replay D3-UNDECLARED-ARTEFACT --step 37.5ip` -> REDDENED "
+                 "(18.1 s); `--step 26.5ic` -> ALREADY_RED (baseline_rc=1, "
+                 "17.9 s) — its cell is red at baseline because that run wrote "
+                 "1 of its 2 declared outputs, so it joins baseline_red and is "
+                 "falsifiable by definition, not by this replay. 54 -> 56 "
+                 "targets, 16 -> 17 already red, attributable 38 -> 39."),
     ),
 
     # ---------------- dimension 4 — criteria match ---------------------
@@ -2286,7 +2297,35 @@ NOT_FALSIFIABLE: Tuple[NotFalsifiable, ...] = ()
 # and census reports `uncovered == []` at 501.
 #
 # 68 x 8 = 544 cells, 43 of them not ENFORCED, 544 - 43 = 501.
-LEDGER_AS_MEASURED: Tuple[int, int, int] = (68, 8, 501)
+# MOVED 501 -> 508 on 2026-09-02 (later the same day), SEVEN dimension-3 cells
+# GAINED enforcement, every one named below, and — the part the 489 -> 501 move
+# above did not have — the number is now the SAME with `VIBE_IC_BENCHMARK_DATA`
+# bound and unbound. The 501 was measured with the pointer bound; without it
+# the same tree measured 490, because `test_matrix_d3_outputs_produced.
+# unanswerable_citations` decided NOT_MEASURED from a live read of the corpus
+# (`recorded_unpublished_output`) rather than from the record, and the eleven
+# cells it rescued fell back to NOT_MEASURED on every host that ran the
+# canonical shape. Fixed at its source in the same change: the cell state is
+# decided by the record alone, and the manifest registers
+# `benchmark-data/ic/spm/v1.14.88_gf180mcuD` (the converged cell the corpus
+# published after `a467106`) and re-points every record that cited a machine
+# tree at what that cell carries or proves. The seven:
+#
+#   FIVE NOT_MEASURED -> ENFORCED: 0.5ic, 9, 10, 31, 32 — each cited a `home`
+#   root for at least one entry, and each entry is now recorded against
+#   `v1.14.88_gf180mcuD` (tracked bytes in the cell, or the step's tracked
+#   STEP_RECORD.json row proving bytes the publisher withheld). All five were
+#   already inside `D3-UNDECLARED-ARTEFACT`'s applies_to.
+#   TWO NA -> ENFORCED: 26.5ic, 37.5ip — the dormancy their records claimed
+#   was falsified by that cell (37.5ip ran and PASSED there, 11 of 11; 26.5ic
+#   ran despite an unmet condition and wrote 1 of 2). Neither was in any
+#   sweep, so each was REPLAYED, not assumed: `--replay D3-UNDECLARED-ARTEFACT
+#   --step 37.5ip` -> REDDENED (18.1 s); `--step 26.5ic` -> ALREADY_RED
+#   (baseline_rc=1, 17.9 s) — falsifiable by definition and recorded in that
+#   entry's `baseline_red` rather than counted as a proof.
+#
+# 68 x 8 = 544 cells, 36 of them not ENFORCED, 544 - 36 = 508.
+LEDGER_AS_MEASURED: Tuple[int, int, int] = (68, 8, 508)
 
 #: Every cell of the live 63x8 grid that is NOT ENFORCED, with the state its
 #: owning dimension module answers. The COMPANION to the count above, and the
@@ -2368,7 +2407,8 @@ LEDGER_CELLS_NOT_ENFORCED: Tuple[Tuple[str, int, str], ...] = (
     # six arrived as one event and a reader of the next drift needs to see that
     # four of them left the same way the note above said they would.
     ("30", 3, "NOT_MEASURED"),
-    ("32", 3, "NOT_MEASURED"),
+    # 32/d3 STOOD HERE and is STRUCK on 2026-09-02: both of its entries are
+    # proven by 32's tracked STEP_RECORD row in `v1.14.88_gf180mcuD`.
     # 2026-08-31 — TWENTY MORE CELLS enter the same fourth state, and the
     # event is the corpus, not the flow: benchmark-data `bcf2f94` (owner
     # instruction 2026-08-20) withdrew the run trees these cells' manifest
@@ -2387,10 +2427,12 @@ LEDGER_CELLS_NOT_ENFORCED: Tuple[Tuple[str, int, str], ...] = (
     # trees again after `bcf2f94`, each of those records now resolves, and the
     # state self-invalidated exactly as written. The thirteen still listed are
     # the ones whose citation no published run answers yet.
-    ("0.5ic", 3, "NOT_MEASURED"),
-    ("9", 3, "NOT_MEASURED"),
-    ("10", 3, "NOT_MEASURED"),
-    ("31", 3, "NOT_MEASURED"),
+    # 0.5ic, 9, 10 and 31 STOOD HERE and are STRUCK on 2026-09-02, for the
+    # same reason as the seven above and by the same mechanism — except that
+    # this time the record MOVED rather than the corpus: each cited a machine
+    # tree for one entry that `v1.14.88_gf180mcuD` carries or proves, and the
+    # manifest now says so. The nine still listed cite a SPICE deck or an
+    # analog block that no published run of this design has.
     ("A1", 3, "NOT_MEASURED"),
     ("A2", 3, "NOT_MEASURED"),
     ("A3", 3, "NOT_MEASURED"),
@@ -2410,8 +2452,12 @@ LEDGER_CELLS_NOT_ENFORCED: Tuple[Tuple[str, int, str], ...] = (
     # file and all four go ENFORCED and this inventory reddens in the other
     # direction, naming them.
     ("15.5ic", 3, "NA"),
-    ("26.5ic", 3, "NA"),
-    ("37.5ip", 3, "NA"),
+    # 26.5ic/d3 and 37.5ip/d3 STOOD HERE and are STRUCK on 2026-09-02 — the
+    # other direction this block said it would redden in: a published run
+    # (`v1.14.88_gf180mcuD`) carries 37.5ip's eleven outputs and 26.5ic's
+    # report, the dormancy probe fired on both, and both are ENFORCED (see the
+    # LEDGER_AS_MEASURED note). 15.5ic and 37.5ic are still dormant there
+    # (STEP_RECORD status skipped, no output).
     ("37.5ic", 3, "NA"),
     # 37.5self/d3 STOOD HERE and is STRUCK, at smrg/retire-37p5self. It was
     # added at v1.11.5 on exactly the same reading as the four above —
