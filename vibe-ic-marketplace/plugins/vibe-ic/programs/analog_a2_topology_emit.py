@@ -1059,12 +1059,57 @@ LIBRARY: Dict[str, Dict[str, Any]] = {
             # 0.5135). Strobed by the complement, the decision is settled
             # and held by the set-reset latch before the DAC samples it,
             # and the density becomes input-dependent.
+            # ── the quantiser strobe is DELAYED off the clock edge ──────
+            # MEASURED (round 25, OSR 64, five inputs, one full window each).
+            # The latch was strobed by `nclkb`, i.e. it began evaluating on
+            # the very edge the sampling and DAC switches fire on, and a
+            # StrongARM commits within ~1.5 ns of its tail turning on. At
+            # that instant the differential it is handed is a
+            # clock-injection transient, not the signal:
+            #
+            #   offset from the tail turning on   nqz - vcm, mean over a window
+            #     1.5 ns   +0.098 .. +0.153 V at EVERY input, sign 63/63
+            #    40   ns   -0.033 .. +0.033 V, and it TRACKS the input
+            #
+            # The transient is 3-5x the signal and is the same at every
+            # input, so the decision carried no information. The loop filter
+            # itself was fine: vint's window mean moves monotonically with
+            # the input, 0.5668 -> 0.6122 V over vin 0.30 -> 0.70, about
+            # 11.4 mV per 100 mV.
+            #
+            # It is a PHASE defect, not a settling-budget one: the signal is
+            # already there before the edge and is there again after it, and
+            # only the 1-3 ns window around the edge is corrupted. So the
+            # strobe is moved off the edge rather than the settling budget
+            # being enlarged.
+            {"name": "mp_qdly1", "role": "pmos", "function":
+             "quantiser strobe delay, stage 1 pull-up — the latch must not "
+             "begin evaluating on the same edge the switches fire on",
+             "nets": ["nqd1", "nclkb", "vdd", "vdd"], "w": 1.0, "l": 0.5},
+            {"name": "mn_qdly1", "role": "nmos", "function":
+             "quantiser strobe delay, stage 1 pull-down",
+             "nets": ["nqd1", "nclkb", "vss", "vss"], "w": 0.5, "l": 0.5},
+            {"name": "c_qdly", "role": "cap", "function":
+             "the delay itself: the load this weak stage has to drive. Sized "
+             "from the MEASURED decay of the clock-injection transient (gone "
+             "by 10 ns of a 100 ns period), not from a preference",
+             "nets": ["nqd1", "vss"], "w": 10.0, "l": 60.0},
+            {"name": "mp_qdly2", "role": "pmos", "function":
+             "quantiser strobe delay, stage 2 pull-up — restores the edge "
+             "and the polarity, so the tail still evaluates on the "
+             "charge-transfer phase, only later within it",
+             "nets": ["nqstb", "nqd1", "vdd", "vdd"], "w": 4.0, "l": 0.5},
+            {"name": "mn_qdly2", "role": "nmos", "function":
+             "quantiser strobe delay, stage 2 pull-down",
+             "nets": ["nqstb", "nqd1", "vss", "vss"], "w": 2.0, "l": 0.5},
             {"name": "mn_qtail", "role": "nmos", "function":
              "quantiser clocked tail switch: it evaluates on the "
              "CHARGE-TRANSFER phase, when the last integrator carries the "
              "value just integrated, so the decision is settled before the "
-             "feedback DAC samples the reference it selects",
-             "nets": ["nqtail", "nclkb", "vss", "vss"], "w": 16.0,
+             "feedback DAC samples the reference it selects — and it is "
+             "strobed by the DELAYED copy of that phase, so it does not "
+             "commit inside the edge's own injection transient",
+             "nets": ["nqtail", "nqstb", "vss", "vss"], "w": 16.0,
              "l": 0.5},
             # ── the quantiser's input is AUTO-ZEROED ────────────────────
             # `caz` stands between the loop filter's output and the latch,
@@ -1144,17 +1189,21 @@ LIBRARY: Dict[str, Dict[str, Any]] = {
              "nodes' own pre-charge does not reach these, and an "
              "intermediate node that never resets carries the previous "
              "decision into the next one",
-             "nets": ["ndi_p", "nclkb", "vdd", "vdd"], "w": 4.0, "l": 0.5},
+             "nets": ["ndi_p", "nqstb", "vdd", "vdd"], "w": 4.0, "l": 0.5},
             {"name": "mp_qrsti2", "role": "pmos", "function":
              "pre-charge for the INTERMEDIATE node, minus side",
-             "nets": ["ndi_n", "nclkb", "vdd", "vdd"], "w": 4.0, "l": 0.5},
+             "nets": ["ndi_n", "nqstb", "vdd", "vdd"], "w": 4.0, "l": 0.5},
             {"name": "mp_qrst1", "role": "pmos", "function":
              "quantiser pre-charge switch, plus side (pre-charge is "
-             "the SAMPLING phase — see the tail switch)",
-             "nets": ["nq_p", "nclkb", "vdd", "vdd"], "w": 4.0, "l": 0.5},
+             "the SAMPLING phase — see the tail switch). Strobed by the "
+             "DELAYED phase for the same reason the tail is: a PMOS "
+             "pre-charge and an NMOS tail from one net are opposite phase "
+             "by device type, and delaying only one of them leaves them "
+             "both conducting for the length of the delay",
+             "nets": ["nq_p", "nqstb", "vdd", "vdd"], "w": 4.0, "l": 0.5},
             {"name": "mp_qrst2", "role": "pmos", "function":
              "quantiser pre-charge switch, minus side",
-             "nets": ["nq_n", "nclkb", "vdd", "vdd"], "w": 4.0, "l": 0.5},
+             "nets": ["nq_n", "nqstb", "vdd", "vdd"], "w": 4.0, "l": 0.5},
             # ── the set-reset latch that HOLDS the decision ──────────────
             # A StrongARM latch pre-charges BOTH outputs high while the
             # clock is low, so its own outputs carry no decision for half
