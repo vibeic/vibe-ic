@@ -78,11 +78,20 @@ def test_edge_no_includes_no_false_pass_claim(tmp_path):
 
 
 def test_edge_no_sp_skips(tmp_path):
+    """WAS `assert r.returncode == 0`, and that line WAS the #511 defect: it
+    pinned a self-skip as a passing exit, which is what made
+    `[PASS] analog_netlist_path_lint` over nothing byte-identical to the same
+    line over a linted deck. The skip is unchanged — it is the same branch, the
+    same `skipped: True`; what changed is that it now says so and lands in the
+    NOT-CHECKED tier. See
+    `test_issue511_path_lint_states_what_it_read.py` for the reproduction."""
     (tmp_path / "analog").mkdir()
     r = _run(tmp_path)
-    assert r.returncode == 0
+    assert r.returncode == 2, r.stdout + r.stderr
     rep = json.loads((tmp_path / "r.json").read_text())
     assert rep["summary"].get("skipped") is True
+    assert rep["verdict"] == "VACUOUS_PASS"
+    assert rep["summary"]["denominator"]["examined"] == 0
 
 
 def test_edge_missing_dir_exit2(tmp_path):

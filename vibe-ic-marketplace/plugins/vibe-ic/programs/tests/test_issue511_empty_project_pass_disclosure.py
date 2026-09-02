@@ -353,14 +353,37 @@ def test_standing_check_drives_every_gate_and_passes(tmp_path):
     assert rep["findings"] == []
 
     # The census is real: the population is the whole registry, not a sample.
-    on_disk = len(list(PROGRAMS.glob("*_check.py")))
+    #
+    # WAS `len(PROGRAMS.glob("*_check.py"))`, and that line was the second half
+    # of the #511 defect: it agreed with the check because BOTH said the
+    # registry was one filename. `analog_netlist_path_lint` — a gate the A3
+    # producer drives beside two `*_check.py` — printed the same bare `[PASS]`
+    # over a clean deck and over nothing for as long as this check existed, and
+    # neither the check nor this test could see it. The expectation is now
+    # DERIVED the same way the population is, from the two sources in the tree.
+    on_disk = len(GD.project_check_programs(PROGRAMS))
     assert rep["gates_probed"] == on_disk
     assert rep["gates_probed"] > 400, rep["gates_probed"]
+    # …and it is strictly wider than the filename it used to be, so a run that
+    # silently fell back to that glob would fail here rather than look clean.
+    assert on_disk > len(list(PROGRAMS.glob("*_check.py"))), on_disk
+    defn = rep["population_definition"]
+    assert defn["degraded"] is False, defn
+    assert defn["by_suffix"] and defn["by_behaviour"], defn
     assert rep["rc_zero"] > 0
     assert (rep["rc_zero_disclosing"] + rep["rc_zero_silent"]
             == rep["rc_zero"])
-    # Every silent gate is on the inventory and nowhere else.
-    assert set(rep["silent_gates"]) == set(rep["inventory"])
+    # Every silent gate is on ONE of the two dated exemption lists and nowhere
+    # else — exact-set equality in both directions, which is the mechanism: a
+    # new silent gate cannot be absorbed and a fixed one cannot stay listed.
+    # The second list arrived with the derived population: a population chosen
+    # by RELATION reaches programs a project fixture cannot address at all, and
+    # those are a different fact about the program from "it went silent".
+    exempt = set(rep["inventory"]) | set(rep["not_project_driven"])
+    assert set(rep["silent_gates"]) == exempt, (rep["silent_gates"], exempt)
+    assert not (set(rep["inventory"])
+                & set(rep["not_project_driven"])), (
+        "a program on both lists has two different reasons on the record")
 
 
 def test_number_only_disclosure_passes_and_is_published_not_hidden(tmp_path):

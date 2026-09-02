@@ -85,6 +85,7 @@ chip-AGNOSTIC: it reasons about process exit codes and output text only.
 from __future__ import annotations
 
 import argparse
+import ast
 import concurrent.futures
 import json
 import os
@@ -295,6 +296,35 @@ _EMPTY_PROJECT_SILENT_PASS: Dict[str, Dict[str, str]] = {
          "the finding, not the population — equally true over a directory "
          "with no run in it"),
     )
+}
+
+#: Programs in the population whose CLI does not take a PROJECT DIRECTORY, so
+#: both fixtures mis-invoke them and neither question applies. NOT an excuse
+#: list: the entry states what the argument actually is, it is dated, and the
+#: ratchet below deletes it the moment the program stops producing a finding.
+#:
+#: This exists because the population is now derived (see `project_population`)
+#: and a derived population reaches programs a project fixture cannot address.
+#: The alternative — inferring "does this take a project dir" from the argparse
+#: source — is a text proxy standing in for a property, which is the defect
+#: family this whole program is about.
+_NOT_PROJECT_DRIVEN: Dict[str, Dict[str, str]] = {
+    "analog_block_type_classify": {
+        "measured": "2026-09-03",
+        "reason": "its positional is a BLOCK NAME, not a project directory: "
+                  "driven with `.` it answers `[OK] . -> UNKNOWN`, which is a "
+                  "correct classification of the name it was handed. It "
+                  "examined one name, so `examined 0` would be the false "
+                  "statement here",
+    },
+    "fpga_test_harness_gen": {
+        "measured": "2026-09-03",
+        "reason": "a PRODUCER, not a gate: it emits a fixed DE10-Lite harness "
+                  "template and reads nothing from the project (its own "
+                  "docstring says so). `[PASS] ...: emitted "
+                  "fpga_test_harness.sv` reports what it wrote, and it did "
+                  "write it — there is no examination to disclose",
+    },
 }
 
 #: Gates that cannot be driven against an empty project at all, with the
@@ -733,11 +763,154 @@ def audit(repo_root: Path, timeout: int = 120,
     return res.verdict, res.findings
 
 
-# ── population 2 (#511): every `programs/*_check.py`, over an empty PROJECT ──
+# ── population 2 (#511): every verdict-emitting program, over an empty PROJECT
+
+#: What this file used to say the population was, kept only so the fallback
+#: below has a name. `*_check.py` is NOT this repository's definition of a
+#: checker and never was — see `project_population`.
+_HISTORICAL_SUFFIX = "*_check.py"
+
+
+def project_population(programs_dir: Path) -> Tuple[List[Path], Dict]:
+    """Every program the REPOSITORY recognises as a verdict emitter.
+
+    WHY THIS IS NOT `glob("*_check.py")` ANY MORE, measured on 79d3ebbe8
+    ==================================================================
+    It was, and `analog_netlist_path_lint` — a gate driven side by side with
+    two `*_check.py` by `analog_a3_netlist_emit.verify_with_checkers` — printed
+
+        empty project      [PASS] analog_netlist_path_lint    rc 0
+        one clean deck     [PASS] analog_netlist_path_lint    rc 0
+
+    byte for byte, for as long as this check has existed. It was never asked.
+    The population was a FILENAME and the defect is a BEHAVIOUR, and #511 is
+    specifically the class where those two come apart.
+
+    TWO SOURCES, BOTH READ FROM THE TREE, NEITHER RE-TYPED HERE:
+
+      by name        `_CHECKER_SUFFIXES` in `checker_execution_wiring_audit`,
+                     which is this repository's ONE answer to "which programs
+                     are checkers by name" (five suffixes, not one). It is read
+                     out of that file's source by
+                     `checker_population_..._census._suffixes`, the same reader
+                     the census uses, so a sixth suffix reaches both at once.
+
+      by behaviour   `checker_population_is_structural_not_filename_shaped_census
+                     .scan_programs`, which selects on a RELATION: the source
+                     carries a `[PASS]`/`[FAIL]` banner and the file has a
+                     `__main__` entry, whatever it happens to be called. That
+                     census exists because a population chosen by a name is the
+                     defect; consuming it here is what stops this check from
+                     being a fresh instance of it.
+
+    Returns ``(paths, definition)``. ``definition`` is published in the report
+    and on stderr: a population that quietly shrank would be the same class of
+    silent zero this whole program is about, so the two contributing counts are
+    stated on every run, passing or not.
+    """
+    definition: Dict = {"by_suffix": 0, "by_behaviour": 0, "degraded": False}
+    names: set = set()
+    try:
+        import checker_population_is_structural_not_filename_shaped_census \
+            as _cps
+    except Exception as exc:  # pragma: no cover - import shim
+        _cps = None
+        definition["degraded_reason"] = f"census module unimportable: {exc}"
+
+    suffixes = None
+    if _cps is not None:
+        try:
+            suffixes = _cps._suffixes(programs_dir)
+        except Exception as exc:  # pragma: no cover
+            definition["degraded_reason"] = f"suffix source unreadable: {exc}"
+    if not suffixes:
+        definition["degraded"] = True
+        definition.setdefault(
+            "degraded_reason",
+            f"`_CHECKER_SUFFIXES` could not be read from "
+            f"{programs_dir}/checker_execution_wiring_audit.py")
+        suffixes = [_HISTORICAL_SUFFIX]
+    definition["suffixes"] = list(suffixes)
+    definition["suffix_source"] = (
+        "FALLBACK" if definition["degraded"]
+        else "checker_execution_wiring_audit.py")
+    for pat in suffixes:
+        names |= {f.name for f in programs_dir.glob(pat)}
+    definition["by_suffix"] = len(names)
+
+    if _cps is not None and not definition["degraded"]:
+        try:
+            wide, _ = _cps.scan_programs(programs_dir)
+        except Exception as exc:  # pragma: no cover
+            definition["degraded"] = True
+            definition["degraded_reason"] = (
+                f"structural census unusable: {exc}")
+        else:
+            behaviour = {w["file"] for w in wide}
+            definition["by_behaviour"] = len(behaviour)
+            names |= behaviour
+
+    # A file with NO `__main__` entry point does not answer anything when it is
+    # executed — running it imports it. Probing one measures the interpreter,
+    # not a gate, so its rc 0 and its silence are facts about Python. The
+    # structural half already required an entry point; applying the SAME rule
+    # to the by-name half is what keeps the population one definition instead
+    # of two. Derived by AST from the tree, never listed by hand.
+    #
+    # MEASURED at 79d3ebbe8 over the 651 suffix-named programs: exactly 2 have
+    # no entry point (`spec_conformance_gate`, `url_oracle_guard` — both
+    # libraries, both imported by callers that pass real objects), and 0 of the
+    # 595 `*_check.py` this population used to be. So this narrows nothing that
+    # was being asked before.
+    no_entry: List[str] = []
+    for n in sorted(names):
+        if not _has_entry_point(programs_dir / n):
+            no_entry.append(n)
+    names -= set(no_entry)
+    definition["no_entry_point"] = no_entry
+    definition["total"] = len(names)
+    return sorted(programs_dir / n for n in names), definition
+
+
+#: Top-level node kinds that DEFINE things without doing anything when the
+#: module is executed. A file made only of these is a library.
+_INERT_TOP_LEVEL = (ast.Import, ast.ImportFrom, ast.FunctionDef,
+                    ast.AsyncFunctionDef, ast.ClassDef, ast.Assign,
+                    ast.AnnAssign, ast.AugAssign, ast.Pass)
+
+
+def _has_entry_point(prog: Path) -> bool:
+    """True when EXECUTING the file would do something.
+
+    The question is runnability, not the `__main__` idiom: a script whose work
+    sits at top level has no guard and is still a program, and a rule keyed on
+    the idiom would drop it. So: a `__main__` guard, OR any top-level statement
+    that is not a definition, an import, a constant or a docstring.
+
+    Unparseable is TRUE, not False: a file this cannot read must stay IN the
+    population and be driven, because dropping it would be a population that
+    shrank on a parse error — silently, which is the class.
+    """
+    try:
+        tree = ast.parse(prog.read_text(encoding="utf-8", errors="replace"))
+    except (OSError, SyntaxError, ValueError):
+        return True
+    for node in tree.body:
+        if isinstance(node, ast.If) and "__main__" in ast.dump(node.test):
+            return True
+        if isinstance(node, ast.Expr) and isinstance(node.value, ast.Constant):
+            continue          # module / stray docstring
+        if isinstance(node, _INERT_TOP_LEVEL):
+            continue
+        if isinstance(node, (ast.If, ast.Try, ast.With)):
+            continue          # import shims and feature probes, not work
+        return True
+    return False
+
 
 def project_check_programs(programs_dir: Path) -> List[Path]:
-    """Every registered gate program, in a stable order."""
-    return sorted(programs_dir.glob("*_check.py"))
+    """`project_population`'s paths alone, for callers that want only those."""
+    return project_population(programs_dir)[0]
 
 
 def _drive_on_empty_project(prog: Path, timeout: int) -> Dict:
@@ -904,10 +1077,12 @@ def audit_project_gates(programs_dir: Path, timeout: int = 120,
     because a check that reports only its findings publishes no denominator of
     its own, which is the thing it is here to require of others.
     """
-    progs = project_check_programs(programs_dir)
+    progs, population_definition = project_population(programs_dir)
     if not progs:
         # Never a silent PASS — this program's own denominator.
-        return "NOTHING_SCANNED", [], {"gates_probed": 0}
+        return "NOTHING_SCANNED", [], {"gates_probed": 0,
+                                       "population_definition":
+                                           population_definition}
 
     workers = workers or min(8, (os.cpu_count() or 2))
     with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as ex:
@@ -915,6 +1090,18 @@ def audit_project_gates(programs_dir: Path, timeout: int = 120,
             lambda p: _drive_on_empty_project(p, timeout), progs))
 
     findings: List[Dict] = []
+    if population_definition.get("degraded"):
+        # DEGRADE LOUDLY. A population that quietly fell back to the one
+        # filename this check used to use would re-open the exact hole
+        # `project_population` was written to close, and it would do it
+        # invisibly — which is the failure mode of the whole class.
+        findings.append({
+            "gate": "(population)", "kind": "POPULATION_DEFINITION_DEGRADED",
+            "detail": (population_definition.get("degraded_reason", "")
+                       + " — the census fell back to "
+                       + _HISTORICAL_SUFFIX
+                       + ", so every gate named otherwise went unasked"),
+        })
     silent: List[str] = []
     number_only: List[str] = []
     outside_convention: List[Dict] = []
@@ -947,7 +1134,8 @@ def audit_project_gates(programs_dir: Path, timeout: int = 120,
                 number_only.append(gate)
             continue
         silent.append(gate)
-        if gate not in _EMPTY_PROJECT_SILENT_PASS:
+        if gate not in _EMPTY_PROJECT_SILENT_PASS \
+                and gate not in _NOT_PROJECT_DRIVEN:
             findings.append({
                 "gate": gate, "kind": "PASS_WITHOUT_DENOMINATOR",
                 "detail": ("answered rc 0 over a structurally EMPTY project "
@@ -1020,6 +1208,8 @@ def audit_project_gates(programs_dir: Path, timeout: int = 120,
             })
             continue
         absent_silent += 1
+        if res["gate"] in _NOT_PROJECT_DRIVEN:
+            continue
         findings.append({
             "gate": res["gate"], "kind": "PASS_ON_A_PROJECT_THAT_IS_NOT_THERE",
             "detail": ("answered rc 0 for a path that does not exist, without "
@@ -1041,6 +1231,20 @@ def audit_project_gates(programs_dir: Path, timeout: int = 120,
                            "inventory that keeps fixed defects on it stops "
                            "being a count of what is wrong"),
             })
+    _still_answering_blankly = set(silent) | {r["gate"] for r in absent_results
+                                              if r.get("rc") == 0
+                                              and not r.get("disclosed")}
+    for gate in sorted(_NOT_PROJECT_DRIVEN):
+        if not (programs_dir / f"{gate}.py").is_file() \
+                or gate not in _still_answering_blankly:
+            findings.append({
+                "gate": gate, "kind": "STALE_NOT_PROJECT_DRIVEN_ENTRY",
+                "detail": ("recorded in _NOT_PROJECT_DRIVEN, but it no longer "
+                           "answers blankly on either fixture (it discloses, "
+                           "no longer exits 0, or no longer exists). DELETE "
+                           "the entry — an exemption that names nothing is "
+                           "how a list becomes permanent"),
+            })
     for gate in sorted(_UNDRIVEABLE):
         if gate not in unrunnable:
             findings.append({
@@ -1052,6 +1256,10 @@ def audit_project_gates(programs_dir: Path, timeout: int = 120,
 
     stats = {
         "gates_probed": len(progs),
+        # HOW the population was chosen, on every run. A census whose own
+        # denominator can change shape without saying so is the shape it
+        # exists to reject.
+        "population_definition": population_definition,
         "rc_zero": rc0,
         "rc_zero_disclosing": rc0 - len(silent),
         # Of the disclosing ones, how many say WHY vs merely HOW MANY.
@@ -1073,6 +1281,8 @@ def audit_project_gates(programs_dir: Path, timeout: int = 120,
         "inventory_size": len(_EMPTY_PROJECT_SILENT_PASS),
         "inventory_measured_on": _MEASURED_ON,
         "undriveable_size": len(_UNDRIVEABLE),
+        "not_project_driven": {g: dict(m) for g, m
+                               in sorted(_NOT_PROJECT_DRIVEN.items())},
         "silent_gates": sorted(silent),
         "number_only_gates": sorted(number_only),
         "rc_outside_convention": sorted(outside_convention,
@@ -1143,6 +1353,12 @@ def _print_inventory(stats: Dict) -> None:
         meta = _EMPTY_PROJECT_SILENT_PASS[gate]
         print(f"    {meta['measured']}  {gate}: {meta['reason']}",
               file=sys.stderr)
+    print(f"  NOT PROJECT-DRIVEN (the fixture cannot address these): "
+          f"{len(_NOT_PROJECT_DRIVEN)} program(s)", file=sys.stderr)
+    for gate in sorted(_NOT_PROJECT_DRIVEN):
+        meta = _NOT_PROJECT_DRIVEN[gate]
+        print(f"    {meta['measured']}  {gate}: {meta['reason']}",
+              file=sys.stderr)
     honest = stats.get("absent_rc_zero_honest_but_passing", 0)
     if honest:
         # On stderr and in the headline path, not only in --json. A census that
@@ -1175,7 +1391,7 @@ def _main_project_population(a) -> int:
              "findings": findings, **stats}, indent=2) + "\n")
 
     if verdict == "NOTHING_SCANNED":
-        print(f"NOTHING_SCANNED: no `*_check.py` found under {programs_dir} — "
+        print(f"NOTHING_SCANNED: no verdict-emitting program found under {programs_dir} — "
               f"this check would otherwise report a clean result over an empty "
               f"gate list, which is the very defect it exists to catch.",
               file=sys.stderr)
@@ -1187,9 +1403,17 @@ def _main_project_population(a) -> int:
         if f.get("output_tail"):
             print(f"      last line: {f['output_tail']}", file=sys.stderr)
 
-    print(f"  probed {stats['gates_probed']} programs/*_check.py against a "
-          f"structurally EMPTY project (input/docs/ + reports/, nothing in "
-          f"them), one fresh directory each", file=sys.stderr)
+    _pd = stats.get("population_definition") or {}
+    print(f"  probed {stats['gates_probed']} verdict-emitting programs/ "
+          f"against a structurally EMPTY project (input/docs/ + reports/, "
+          f"nothing in them), one fresh directory each", file=sys.stderr)
+    print(f"  POPULATION: {_pd.get('by_suffix', '?')} by name "
+          f"({' '.join(_pd.get('suffixes') or [])}, read from "
+          f"{_pd.get('suffix_source', '?')}) + {_pd.get('by_behaviour', '?')} "
+          f"by behaviour (a [PASS]/[FAIL] banner and a __main__ entry, "
+          f"whatever the file is called)"
+          + ("  ** DEGRADED: " + str(_pd.get("degraded_reason", ""))
+             if _pd.get("degraded") else ""), file=sys.stderr)
     print(f"  rc 0: {stats['rc_zero']} | disclosing: "
           f"{stats['rc_zero_disclosing']} (reason "
           f"{stats['rc_zero_reasoned']} / number-only "
