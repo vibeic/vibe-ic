@@ -66,7 +66,7 @@ _spec.loader.exec_module(HH)
 #: The two corpora the wired rows read. Absent on a checkout without the
 #: campaign trees, which is a SKIP and not a pass -- the fixture tests below
 #: carry the rule on their own.
-CORPORA = (REPO / "ppa-crosslayer", REPO / "ppa-e2e")
+CORPORA = (REPO / "docs" / "campaigns" / "ppa-crosslayer", REPO / "docs" / "campaigns" / "ppa-e2e")
 
 _PHYS = "post_route_extracted"
 _PROXY = "synth"          # a stage `post_route_sta` may not cite

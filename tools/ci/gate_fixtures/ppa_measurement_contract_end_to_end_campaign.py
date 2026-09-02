@@ -2,7 +2,7 @@
 
 `ppa_contract_check.py` is wired three times, once per campaign corpus, and a
 fixture must drive the gate AS THE DISPATCHER DECLARES IT: this row passes
-`--corpus "$ROOT/ppa-e2e"`, so a subject carrying the contract anywhere else
+`--corpus "$ROOT/docs/campaigns/ppa-e2e"`, so a subject carrying the contract anywhere else
 leaves this gate reading an EMPTY corpus and answering about that.
 
 The document is `ppa_measurement_contract`'s, imported rather than copied, and

@@ -91,8 +91,8 @@ def test_the_drv_proof_names_are_produced_outside_programs():
     it, which is what a pin is for.
     """
     root = _repo_root()
-    for rel in ("ppa-crosslayer/tools/drv_records.py",
-                "ppa-e2e/tools/signoff_records.py"):
+    for rel in ("docs/campaigns/ppa-crosslayer/tools/drv_records.py",
+                "docs/campaigns/ppa-e2e/tools/signoff_records.py"):
         assert (root / rel).is_file(), f"the drv producer {rel} is gone"
     produced, _ = R._produced(root, _PROGRAMS)
     for m in ("timing.drv.violations", "timing.drv.max_tran_violations",

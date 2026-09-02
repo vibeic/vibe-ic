@@ -43,7 +43,7 @@ REPO = Path(__file__).resolve().parents[5]
 
 #: The campaign tool trees. Absent on a plugin-only checkout, which is a SKIP
 #: and not a pass.
-TOOL_DIRS = (REPO / "ppa-crosslayer", REPO / "ppa-e2e")
+TOOL_DIRS = (REPO / "docs" / "campaigns" / "ppa-crosslayer", REPO / "docs" / "campaigns" / "ppa-e2e")
 
 #: Call sites that may hold a checker's `returncode` without routing it to the
 #: exit status. EVERY entry states WHY, and an entry that turns out to

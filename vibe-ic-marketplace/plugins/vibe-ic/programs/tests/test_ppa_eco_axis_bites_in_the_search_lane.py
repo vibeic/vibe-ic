@@ -842,7 +842,7 @@ def _repo_root():
 
 
 def _campaign_trials():
-    return _repo_root() / "ppa-crosslayer" / "records" / "trials"
+    return _repo_root() / "docs" / "campaigns" / "ppa-crosslayer" / "records" / "trials"
 
 
 def _eco_only_policy():
@@ -1608,4 +1608,4 @@ def test_the_repo_root_anchor_fails_loudly_when_it_goes_stale(monkeypatch,
     deep.mkdir(parents=True)
     monkeypatch.setattr(sys.modules[__name__], "_PROGRAMS", deep)
     assert _repo_root() == real_shape
-    assert not (_repo_root() / "ppa-crosslayer").exists()
+    assert not (_repo_root() / "docs" / "campaigns" / "ppa-crosslayer").exists()

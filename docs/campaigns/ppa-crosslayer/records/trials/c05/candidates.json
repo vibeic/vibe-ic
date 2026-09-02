@@ -1,0 +1,4178 @@
+{
+ "schema": "vibeic.ppa.candidates.v1",
+ "required_views_by_axis": {
+  "setup": [
+   {
+    "stage": "post_route_extracted",
+    "process": "ss"
+   },
+   {
+    "stage": "post_route_extracted",
+    "process": "tt"
+   }
+  ],
+  "hold": [
+   {
+    "stage": "post_route_extracted",
+    "process": "tt"
+   },
+   {
+    "stage": "post_route_extracted",
+    "process": "ff"
+   }
+  ],
+  "drv": [
+   {
+    "stage": "post_route"
+   }
+  ],
+  "drc": [
+   {
+    "stage": "signed_off_gds"
+   }
+  ],
+  "lvs": [
+   {
+    "stage": "post_route_extracted"
+   }
+  ],
+  "antenna": [
+   {
+    "stage": "post_route"
+   }
+  ],
+  "ir": [
+   {
+    "stage": "post_route"
+   }
+  ],
+  "em": [
+   {
+    "stage": "post_route"
+   }
+  ],
+  "equivalence": [
+   {
+    "stage": "post_route"
+   }
+  ]
+ },
+ "required_views": [
+  {
+   "stage": "post_route_extracted",
+   "process": "ss"
+  },
+  {
+   "stage": "post_route_extracted",
+   "process": "tt"
+  }
+ ],
+ "limits": {
+  "power.ir.worst_drop_v": {
+   "max": 0.18
+  },
+  "reliability.em.worst_ratio": {
+   "max": 1.0
+  }
+ },
+ "allow_waivers": false,
+ "candidates": [
+  {
+   "candidate_id": "c05",
+   "metrics": [
+    {
+     "schema": "vibeic.ppa.metric.v1",
+     "metric": "area.die.um2",
+     "status": "DERIVED",
+     "unit": "um^2",
+     "scope": {
+      "stage": "floorplan",
+      "tool": "openroad",
+      "bbox_um": [
+       0.0,
+       0.0,
+       144.0,
+       144.0
+      ]
+     },
+     "source": {
+      "path": "/home/reyerchu/_jxlayer/run/trials/c05/phase3/stage3/pnr/openroad.log",
+      "sha256": "sha256:42618516f1bb2cee16d16a0b892323ad765886a2e244f940c316899f53af5f21",
+      "tool": "openroad",
+      "tool_commit": "26Q3-1535-g543c33894f",
+      "parser": "_ppa/backends/openroad.py",
+      "parser_sha256": "sha256:6be03b7ad2a67293cab6ff7713718851be99e14b9b61668932801bb235e33a34",
+      "occurrences": 1,
+      "selection": "last"
+     },
+     "value": 20736.0,
+     "formula": "(x1-x0)*(y1-y0) from [INFO IFP-0100] Die BBox"
+    },
+    {
+     "schema": "vibeic.ppa.metric.v1",
+     "metric": "area.core.um2",
+     "status": "MEASURED",
+     "unit": "um^2",
+     "scope": {
+      "stage": "floorplan",
+      "tool": "openroad"
+     },
+     "source": {
+      "path": "/home/reyerchu/_jxlayer/run/trials/c05/phase3/stage3/pnr/openroad.log",
+      "sha256": "sha256:42618516f1bb2cee16d16a0b892323ad765886a2e244f940c316899f53af5f21",
+      "tool": "openroad",
+      "tool_commit": "26Q3-1535-g543c33894f",
+      "parser": "_ppa/backends/openroad.py",
+      "parser_sha256": "sha256:6be03b7ad2a67293cab6ff7713718851be99e14b9b61668932801bb235e33a34",
+      "occurrences": 1,
+      "selection": "last"
+     },
+     "value": 12670.902
+    },
+    {
+     "schema": "vibeic.ppa.metric.v1",
+     "metric": "area.instances.total.um2",
+     "status": "MEASURED",
+     "unit": "um^2",
+     "scope": {
+      "stage": "floorplan",
+      "tool": "openroad"
+     },
+     "source": {
+      "path": "/home/reyerchu/_jxlayer/run/trials/c05/phase3/stage3/pnr/openroad.log",
+      "sha256": "sha256:42618516f1bb2cee16d16a0b892323ad765886a2e244f940c316899f53af5f21",
+      "tool": "openroad",
+      "tool_commit": "26Q3-1535-g543c33894f",
+      "parser": "_ppa/backends/openroad.py",
+      "parser_sha256": "sha256:6be03b7ad2a67293cab6ff7713718851be99e14b9b61668932801bb235e33a34",
+      "occurrences": 1,
+      "selection": "last"
+     },
+     "value": 5008.554
+    },
+    {
+     "schema": "vibeic.ppa.metric.v1",
+     "metric": "utilization.floorplan.effective",
+     "status": "MEASURED",
+     "unit": "1",
+     "scope": {
+      "stage": "floorplan",
+      "tool": "openroad"
+     },
+     "source": {
+      "path": "/home/reyerchu/_jxlayer/run/trials/c05/phase3/stage3/pnr/openroad.log",
+      "sha256": "sha256:42618516f1bb2cee16d16a0b892323ad765886a2e244f940c316899f53af5f21",
+      "tool": "openroad",
+      "tool_commit": "26Q3-1535-g543c33894f",
+      "parser": "_ppa/backends/openroad.py",
+      "parser_sha256": "sha256:6be03b7ad2a67293cab6ff7713718851be99e14b9b61668932801bb235e33a34",
+      "occurrences": 1,
+      "selection": "last"
+     },
+     "value": 0.395
+    },
+    {
+     "schema": "vibeic.ppa.metric.v1",
+     "metric": "design.instance.count",
+     "status": "MEASURED",
+     "unit": "1",
+     "scope": {
+      "stage": "floorplan",
+      "tool": "openroad"
+     },
+     "source": {
+      "path": "/home/reyerchu/_jxlayer/run/trials/c05/phase3/stage3/pnr/openroad.log",
+      "sha256": "sha256:42618516f1bb2cee16d16a0b892323ad765886a2e244f940c316899f53af5f21",
+      "tool": "openroad",
+      "tool_commit": "26Q3-1535-g543c33894f",
+      "parser": "_ppa/backends/openroad.py",
+      "parser_sha256": "sha256:6be03b7ad2a67293cab6ff7713718851be99e14b9b61668932801bb235e33a34",
+      "occurrences": 1,
+      "selection": "last"
+     },
+     "value": 488
+    },
+    {
+     "schema": "vibeic.ppa.metric.v1",
+     "metric": "utilization.global_placement.pct",
+     "status": "MEASURED",
+     "unit": "%",
+     "scope": {
+      "stage": "global_placement",
+      "tool": "openroad"
+     },
+     "source": {
+      "path": "/home/reyerchu/_jxlayer/run/trials/c05/phase3/stage3/pnr/openroad.log",
+      "sha256": "sha256:42618516f1bb2cee16d16a0b892323ad765886a2e244f940c316899f53af5f21",
+      "tool": "openroad",
+      "tool_commit": "26Q3-1535-g543c33894f",
+      "parser": "_ppa/backends/openroad.py",
+      "parser_sha256": "sha256:6be03b7ad2a67293cab6ff7713718851be99e14b9b61668932801bb235e33a34",
+      "occurrences": 1,
+      "selection": "last"
+     },
+     "value": 42.605
+    },
+    {
+     "schema": "vibeic.ppa.metric.v1",
+     "metric": "area.instances.large.um2",
+     "status": "MEASURED",
+     "unit": "um^2",
+     "scope": {
+      "stage": "global_placement",
+      "tool": "openroad"
+     },
+     "source": {
+      "path": "/home/reyerchu/_jxlayer/run/trials/c05/phase3/stage3/pnr/openroad.log",
+      "sha256": "sha256:42618516f1bb2cee16d16a0b892323ad765886a2e244f940c316899f53af5f21",
+      "tool": "openroad",
+      "tool_commit": "26Q3-1535-g543c33894f",
+      "parser": "_ppa/backends/openroad.py",
+      "parser_sha256": "sha256:6be03b7ad2a67293cab6ff7713718851be99e14b9b61668932801bb235e33a34",
+      "occurrences": 1,
+      "selection": "last"
+     },
+     "value": 0.0
+    },
+    {
+     "schema": "vibeic.ppa.metric.v1",
+     "metric": "area.macro.um2",
+     "status": "NOT_MEASURED",
+     "unit": "um^2",
+     "scope": {
+      "stage": "global_placement",
+      "tool": "openroad"
+     },
+     "source": {
+      "path": "/home/reyerchu/_jxlayer/run/trials/c05/phase3/stage3/pnr/openroad.log",
+      "sha256": "sha256:42618516f1bb2cee16d16a0b892323ad765886a2e244f940c316899f53af5f21",
+      "tool": "openroad",
+      "tool_commit": "26Q3-1535-g543c33894f",
+      "parser": "_ppa/backends/openroad.py",
+      "parser_sha256": "sha256:6be03b7ad2a67293cab6ff7713718851be99e14b9b61668932801bb235e33a34",
+      "occurrences": 0,
+      "selection": "last"
+     },
+     "reason": "NO_SUCH_FIGURE: no OpenROAD log line states a macro area. `[INFO GPL-0021] Large instances area` is the global placer's size-threshold proxy and is emitted as area.instances.large.um2; substituting it here would answer a different question"
+    },
+    {
+     "schema": "vibeic.ppa.metric.v1",
+     "metric": "area.core.um2",
+     "status": "MEASURED",
+     "unit": "um^2",
+     "scope": {
+      "stage": "detailed_placement",
+      "tool": "openroad"
+     },
+     "source": {
+      "path": "/home/reyerchu/_jxlayer/run/trials/c05/phase3/stage3/pnr/openroad.log",
+      "sha256": "sha256:42618516f1bb2cee16d16a0b892323ad765886a2e244f940c316899f53af5f21",
+      "tool": "openroad",
+      "tool_commit": "26Q3-1535-g543c33894f",
+      "parser": "_ppa/backends/openroad.py",
+      "parser_sha256": "sha256:6be03b7ad2a67293cab6ff7713718851be99e14b9b61668932801bb235e33a34",
+      "occurrences": 11,
+      "selection": "last"
+     },
+     "value": 12670.9
+    },
+    {
+     "schema": "vibeic.ppa.metric.v1",
+     "metric": "area.instances.movable.um2",
+     "status": "MEASURED",
+     "unit": "um^2",
+     "scope": {
+      "stage": "detailed_placement",
+      "tool": "openroad"
+     },
+     "source": {
+      "path": "/home/reyerchu/_jxlayer/run/trials/c05/phase3/stage3/pnr/openroad.log",
+      "sha256": "sha256:42618516f1bb2cee16d16a0b892323ad765886a2e244f940c316899f53af5f21",
+      "tool": "openroad",
+      "tool_commit": "26Q3-1535-g543c33894f",
+      "parser": "_ppa/backends/openroad.py",
+      "parser_sha256": "sha256:6be03b7ad2a67293cab6ff7713718851be99e14b9b61668932801bb235e33a34",
+      "occurrences": 11,
+      "selection": "last"
+     },
+     "value": 0.0
+    },
+    {
+     "schema": "vibeic.ppa.metric.v1",
+     "metric": "area.instances.fixed_in_core.um2",
+     "status": "MEASURED",
+     "unit": "um^2",
+     "scope": {
+      "stage": "detailed_placement",
+      "tool": "openroad"
+     },
+     "source": {
+      "path": "/home/reyerchu/_jxlayer/run/trials/c05/phase3/stage3/pnr/openroad.log",
+      "sha256": "sha256:42618516f1bb2cee16d16a0b892323ad765886a2e244f940c316899f53af5f21",
+      "tool": "openroad",
+      "tool_commit": "26Q3-1535-g543c33894f",
+      "parser": "_ppa/backends/openroad.py",
+      "parser_sha256": "sha256:6be03b7ad2a67293cab6ff7713718851be99e14b9b61668932801bb235e33a34",
+      "occurrences": 11,
+      "selection": "last"
+     },
+     "value": 6148.4
+    },
+    {
+     "schema": "vibeic.ppa.metric.v1",
+     "metric": "utilization.detailed_placement.pct",
+     "status": "MEASURED",
+     "unit": "%",
+     "scope": {
+      "stage": "detailed_placement",
+      "tool": "openroad"
+     },
+     "source": {
+      "path": "/home/reyerchu/_jxlayer/run/trials/c05/phase3/stage3/pnr/openroad.log",
+      "sha256": "sha256:42618516f1bb2cee16d16a0b892323ad765886a2e244f940c316899f53af5f21",
+      "tool": "openroad",
+      "tool_commit": "26Q3-1535-g543c33894f",
+      "parser": "_ppa/backends/openroad.py",
+      "parser_sha256": "sha256:6be03b7ad2a67293cab6ff7713718851be99e14b9b61668932801bb235e33a34",
+      "occurrences": 11,
+      "selection": "last"
+     },
+     "value": 48.5
+    },
+    {
+     "schema": "vibeic.ppa.metric.v1",
+     "metric": "area.instances.placed.um2",
+     "status": "DERIVED",
+     "unit": "um^2",
+     "scope": {
+      "stage": "detailed_placement",
+      "tool": "openroad"
+     },
+     "source": {
+      "path": "/home/reyerchu/_jxlayer/run/trials/c05/phase3/stage3/pnr/openroad.log",
+      "sha256": "sha256:42618516f1bb2cee16d16a0b892323ad765886a2e244f940c316899f53af5f21",
+      "tool": "openroad",
+      "tool_commit": "26Q3-1535-g543c33894f",
+      "parser": "_ppa/backends/openroad.py",
+      "parser_sha256": "sha256:6be03b7ad2a67293cab6ff7713718851be99e14b9b61668932801bb235e33a34",
+      "occurrences": 11,
+      "selection": "last"
+     },
+     "value": 6148.4,
+     "formula": "[INFO DPL-0007] Movable instances area + [INFO DPL-0008] Fixed instances area within core -- the quantity the older DPL-0006-combined dialect prints as a single `Instances area`"
+    },
+    {
+     "schema": "vibeic.ppa.metric.v1",
+     "metric": "area.design_report.um2",
+     "status": "MEASURED",
+     "unit": "um^2",
+     "scope": {
+      "stage": "post_route",
+      "tool": "openroad",
+      "fill": "post_fill"
+     },
+     "source": {
+      "path": "/home/reyerchu/_jxlayer/run/trials/c05/phase3/stage3/pnr/openroad.log",
+      "sha256": "sha256:42618516f1bb2cee16d16a0b892323ad765886a2e244f940c316899f53af5f21",
+      "tool": "openroad",
+      "tool_commit": "26Q3-1535-g543c33894f",
+      "parser": "_ppa/backends/openroad.py",
+      "parser_sha256": "sha256:6be03b7ad2a67293cab6ff7713718851be99e14b9b61668932801bb235e33a34",
+      "occurrences": 1,
+      "selection": "last"
+     },
+     "value": 6148.0
+    },
+    {
+     "schema": "vibeic.ppa.metric.v1",
+     "metric": "utilization.design_report.pct",
+     "status": "MEASURED",
+     "unit": "%",
+     "scope": {
+      "stage": "post_route",
+      "tool": "openroad",
+      "fill": "post_fill",
+      "rounding": "integer"
+     },
+     "source": {
+      "path": "/home/reyerchu/_jxlayer/run/trials/c05/phase3/stage3/pnr/openroad.log",
+      "sha256": "sha256:42618516f1bb2cee16d16a0b892323ad765886a2e244f940c316899f53af5f21",
+      "tool": "openroad",
+      "tool_commit": "26Q3-1535-g543c33894f",
+      "parser": "_ppa/backends/openroad.py",
+      "parser_sha256": "sha256:6be03b7ad2a67293cab6ff7713718851be99e14b9b61668932801bb235e33a34",
+      "occurrences": 1,
+      "selection": "last"
+     },
+     "value": 49.0
+    },
+    {
+     "schema": "vibeic.ppa.metric.v1",
+     "metric": "route.wirelength.by_layer.um",
+     "status": "MEASURED",
+     "unit": "um",
+     "scope": {
+      "stage": "detailed_route",
+      "tool": "openroad",
+      "layer": "li1"
+     },
+     "source": {
+      "path": "/home/reyerchu/_jxlayer/run/trials/c05/phase3/stage3/pnr/openroad.log",
+      "sha256": "sha256:42618516f1bb2cee16d16a0b892323ad765886a2e244f940c316899f53af5f21",
+      "tool": "openroad",
+      "tool_commit": "26Q3-1535-g543c33894f",
+      "parser": "_ppa/backends/openroad.py",
+      "parser_sha256": "sha256:6be03b7ad2a67293cab6ff7713718851be99e14b9b61668932801bb235e33a34",
+      "occurrences": 51,
+      "selection": "last"
+     },
+     "value": 0.0
+    },
+    {
+     "schema": "vibeic.ppa.metric.v1",
+     "metric": "route.wirelength.by_layer.um",
+     "status": "MEASURED",
+     "unit": "um",
+     "scope": {
+      "stage": "detailed_route",
+      "tool": "openroad",
+      "layer": "met1"
+     },
+     "source": {
+      "path": "/home/reyerchu/_jxlayer/run/trials/c05/phase3/stage3/pnr/openroad.log",
+      "sha256": "sha256:42618516f1bb2cee16d16a0b892323ad765886a2e244f940c316899f53af5f21",
+      "tool": "openroad",
+      "tool_commit": "26Q3-1535-g543c33894f",
+      "parser": "_ppa/backends/openroad.py",
+      "parser_sha256": "sha256:6be03b7ad2a67293cab6ff7713718851be99e14b9b61668932801bb235e33a34",
+      "occurrences": 51,
+      "selection": "last"
+     },
+     "value": 5602.0
+    },
+    {
+     "schema": "vibeic.ppa.metric.v1",
+     "metric": "route.wirelength.by_layer.um",
+     "status": "MEASURED",
+     "unit": "um",
+     "scope": {
+      "stage": "detailed_route",
+      "tool": "openroad",
+      "layer": "met2"
+     },
+     "source": {
+      "path": "/home/reyerchu/_jxlayer/run/trials/c05/phase3/stage3/pnr/openroad.log",
+      "sha256": "sha256:42618516f1bb2cee16d16a0b892323ad765886a2e244f940c316899f53af5f21",
+      "tool": "openroad",
+      "tool_commit": "26Q3-1535-g543c33894f",
+      "parser": "_ppa/backends/openroad.py",
+      "parser_sha256": "sha256:6be03b7ad2a67293cab6ff7713718851be99e14b9b61668932801bb235e33a34",
+      "occurrences": 51,
+      "selection": "last"
+     },
+     "value": 8025.0
+    },
+    {
+     "schema": "vibeic.ppa.metric.v1",
+     "metric": "route.wirelength.by_layer.um",
+     "status": "MEASURED",
+     "unit": "um",
+     "scope": {
+      "stage": "detailed_route",
+      "tool": "openroad",
+      "layer": "met3"
+     },
+     "source": {
+      "path": "/home/reyerchu/_jxlayer/run/trials/c05/phase3/stage3/pnr/openroad.log",
+      "sha256": "sha256:42618516f1bb2cee16d16a0b892323ad765886a2e244f940c316899f53af5f21",
+      "tool": "openroad",
+      "tool_commit": "26Q3-1535-g543c33894f",
+      "parser": "_ppa/backends/openroad.py",
+      "parser_sha256": "sha256:6be03b7ad2a67293cab6ff7713718851be99e14b9b61668932801bb235e33a34",
+      "occurrences": 51,
+      "selection": "last"
+     },
+     "value": 316.0
+    },
+    {
+     "schema": "vibeic.ppa.metric.v1",
+     "metric": "route.wirelength.by_layer.um",
+     "status": "MEASURED",
+     "unit": "um",
+     "scope": {
+      "stage": "detailed_route",
+      "tool": "openroad",
+      "layer": "met4"
+     },
+     "source": {
+      "path": "/home/reyerchu/_jxlayer/run/trials/c05/phase3/stage3/pnr/openroad.log",
+      "sha256": "sha256:42618516f1bb2cee16d16a0b892323ad765886a2e244f940c316899f53af5f21",
+      "tool": "openroad",
+      "tool_commit": "26Q3-1535-g543c33894f",
+      "parser": "_ppa/backends/openroad.py",
+      "parser_sha256": "sha256:6be03b7ad2a67293cab6ff7713718851be99e14b9b61668932801bb235e33a34",
+      "occurrences": 51,
+      "selection": "last"
+     },
+     "value": 113.0
+    },
+    {
+     "schema": "vibeic.ppa.metric.v1",
+     "metric": "route.wirelength.by_layer.um",
+     "status": "MEASURED",
+     "unit": "um",
+     "scope": {
+      "stage": "detailed_route",
+      "tool": "openroad",
+      "layer": "met5"
+     },
+     "source": {
+      "path": "/home/reyerchu/_jxlayer/run/trials/c05/phase3/stage3/pnr/openroad.log",
+      "sha256": "sha256:42618516f1bb2cee16d16a0b892323ad765886a2e244f940c316899f53af5f21",
+      "tool": "openroad",
+      "tool_commit": "26Q3-1535-g543c33894f",
+      "parser": "_ppa/backends/openroad.py",
+      "parser_sha256": "sha256:6be03b7ad2a67293cab6ff7713718851be99e14b9b61668932801bb235e33a34",
+      "occurrences": 51,
+      "selection": "last"
+     },
+     "value": 0.0
+    },
+    {
+     "schema": "vibeic.ppa.metric.v1",
+     "metric": "route.drc.violation.count",
+     "status": "MEASURED",
+     "unit": "1",
+     "scope": {
+      "stage": "detailed_route",
+      "tool": "openroad"
+     },
+     "source": {
+      "path": "/home/reyerchu/_jxlayer/run/trials/c05/phase3/stage3/pnr/openroad.log",
+      "sha256": "sha256:42618516f1bb2cee16d16a0b892323ad765886a2e244f940c316899f53af5f21",
+      "tool": "openroad",
+      "tool_commit": "26Q3-1535-g543c33894f",
+      "parser": "_ppa/backends/openroad.py",
+      "parser_sha256": "sha256:6be03b7ad2a67293cab6ff7713718851be99e14b9b61668932801bb235e33a34",
+      "occurrences": 46,
+      "selection": "last",
+      "trajectory_len": 46,
+      "kind": "log"
+     },
+     "value": 0
+    },
+    {
+     "schema": "vibeic.ppa.metric.v1",
+     "metric": "route.congestion.overflow.total",
+     "status": "MEASURED",
+     "unit": "1",
+     "scope": {
+      "stage": "global_placement",
+      "tool": "openroad"
+     },
+     "source": {
+      "path": "/home/reyerchu/_jxlayer/run/trials/c05/phase3/stage3/pnr/openroad.log",
+      "sha256": "sha256:42618516f1bb2cee16d16a0b892323ad765886a2e244f940c316899f53af5f21",
+      "tool": "openroad",
+      "tool_commit": "26Q3-1535-g543c33894f",
+      "parser": "_ppa/backends/openroad.py",
+      "parser_sha256": "sha256:6be03b7ad2a67293cab6ff7713718851be99e14b9b61668932801bb235e33a34",
+      "occurrences": 1,
+      "selection": "last"
+     },
+     "value": 0.0
+    },
+    {
+     "schema": "vibeic.ppa.metric.v1",
+     "metric": "route.congestion.overflowed_tiles.count",
+     "status": "MEASURED",
+     "unit": "1",
+     "scope": {
+      "stage": "global_placement",
+      "tool": "openroad"
+     },
+     "source": {
+      "path": "/home/reyerchu/_jxlayer/run/trials/c05/phase3/stage3/pnr/openroad.log",
+      "sha256": "sha256:42618516f1bb2cee16d16a0b892323ad765886a2e244f940c316899f53af5f21",
+      "tool": "openroad",
+      "tool_commit": "26Q3-1535-g543c33894f",
+      "parser": "_ppa/backends/openroad.py",
+      "parser_sha256": "sha256:6be03b7ad2a67293cab6ff7713718851be99e14b9b61668932801bb235e33a34",
+      "occurrences": 1,
+      "selection": "last"
+     },
+     "value": 0
+    },
+    {
+     "schema": "vibeic.ppa.metric.v1",
+     "metric": "route.congestion.overflowed_tiles.pct",
+     "status": "MEASURED",
+     "unit": "%",
+     "scope": {
+      "stage": "global_placement",
+      "tool": "openroad"
+     },
+     "source": {
+      "path": "/home/reyerchu/_jxlayer/run/trials/c05/phase3/stage3/pnr/openroad.log",
+      "sha256": "sha256:42618516f1bb2cee16d16a0b892323ad765886a2e244f940c316899f53af5f21",
+      "tool": "openroad",
+      "tool_commit": "26Q3-1535-g543c33894f",
+      "parser": "_ppa/backends/openroad.py",
+      "parser_sha256": "sha256:6be03b7ad2a67293cab6ff7713718851be99e14b9b61668932801bb235e33a34",
+      "occurrences": 1,
+      "selection": "last"
+     },
+     "value": 0.0
+    },
+    {
+     "schema": "vibeic.ppa.metric.v1",
+     "metric": "route.congestion.resource.count",
+     "status": "INVALID",
+     "unit": "1",
+     "scope": {
+      "stage": "global_route",
+      "tool": "openroad"
+     },
+     "source": {
+      "path": "/home/reyerchu/_jxlayer/run/trials/c05/phase3/stage3/pnr/openroad.log",
+      "sha256": "sha256:42618516f1bb2cee16d16a0b892323ad765886a2e244f940c316899f53af5f21",
+      "tool": "openroad",
+      "tool_commit": "26Q3-1535-g543c33894f",
+      "parser": "_ppa/backends/openroad.py",
+      "parser_sha256": "sha256:6be03b7ad2a67293cab6ff7713718851be99e14b9b61668932801bb235e33a34",
+      "occurrences": 0,
+      "selection": "last"
+     },
+     "reason": "FIGURE_ABSENT_THOUGH_STAGE_RAN: the global_route stage ran but this log carries no parseable `[INFO GRT-0096] Final congestion report:` table"
+    },
+    {
+     "schema": "vibeic.ppa.metric.v1",
+     "metric": "route.congestion.demand.count",
+     "status": "INVALID",
+     "unit": "1",
+     "scope": {
+      "stage": "global_route",
+      "tool": "openroad"
+     },
+     "source": {
+      "path": "/home/reyerchu/_jxlayer/run/trials/c05/phase3/stage3/pnr/openroad.log",
+      "sha256": "sha256:42618516f1bb2cee16d16a0b892323ad765886a2e244f940c316899f53af5f21",
+      "tool": "openroad",
+      "tool_commit": "26Q3-1535-g543c33894f",
+      "parser": "_ppa/backends/openroad.py",
+      "parser_sha256": "sha256:6be03b7ad2a67293cab6ff7713718851be99e14b9b61668932801bb235e33a34",
+      "occurrences": 0,
+      "selection": "last"
+     },
+     "reason": "FIGURE_ABSENT_THOUGH_STAGE_RAN: the global_route stage ran but this log carries no parseable `[INFO GRT-0096] Final congestion report:` table"
+    },
+    {
+     "schema": "vibeic.ppa.metric.v1",
+     "metric": "route.congestion.usage.pct",
+     "status": "INVALID",
+     "unit": "%",
+     "scope": {
+      "stage": "global_route",
+      "tool": "openroad"
+     },
+     "source": {
+      "path": "/home/reyerchu/_jxlayer/run/trials/c05/phase3/stage3/pnr/openroad.log",
+      "sha256": "sha256:42618516f1bb2cee16d16a0b892323ad765886a2e244f940c316899f53af5f21",
+      "tool": "openroad",
+      "tool_commit": "26Q3-1535-g543c33894f",
+      "parser": "_ppa/backends/openroad.py",
+      "parser_sha256": "sha256:6be03b7ad2a67293cab6ff7713718851be99e14b9b61668932801bb235e33a34",
+      "occurrences": 0,
+      "selection": "last"
+     },
+     "reason": "FIGURE_ABSENT_THOUGH_STAGE_RAN: the global_route stage ran but this log carries no parseable `[INFO GRT-0096] Final congestion report:` table"
+    },
+    {
+     "schema": "vibeic.ppa.metric.v1",
+     "metric": "route.congestion.max_h.count",
+     "status": "INVALID",
+     "unit": "1",
+     "scope": {
+      "stage": "global_route",
+      "tool": "openroad"
+     },
+     "source": {
+      "path": "/home/reyerchu/_jxlayer/run/trials/c05/phase3/stage3/pnr/openroad.log",
+      "sha256": "sha256:42618516f1bb2cee16d16a0b892323ad765886a2e244f940c316899f53af5f21",
+      "tool": "openroad",
+      "tool_commit": "26Q3-1535-g543c33894f",
+      "parser": "_ppa/backends/openroad.py",
+      "parser_sha256": "sha256:6be03b7ad2a67293cab6ff7713718851be99e14b9b61668932801bb235e33a34",
+      "occurrences": 0,
+      "selection": "last"
+     },
+     "reason": "FIGURE_ABSENT_THOUGH_STAGE_RAN: the global_route stage ran but this log carries no parseable `[INFO GRT-0096] Final congestion report:` table"
+    },
+    {
+     "schema": "vibeic.ppa.metric.v1",
+     "metric": "route.congestion.max_v.count",
+     "status": "INVALID",
+     "unit": "1",
+     "scope": {
+      "stage": "global_route",
+      "tool": "openroad"
+     },
+     "source": {
+      "path": "/home/reyerchu/_jxlayer/run/trials/c05/phase3/stage3/pnr/openroad.log",
+      "sha256": "sha256:42618516f1bb2cee16d16a0b892323ad765886a2e244f940c316899f53af5f21",
+      "tool": "openroad",
+      "tool_commit": "26Q3-1535-g543c33894f",
+      "parser": "_ppa/backends/openroad.py",
+      "parser_sha256": "sha256:6be03b7ad2a67293cab6ff7713718851be99e14b9b61668932801bb235e33a34",
+      "occurrences": 0,
+      "selection": "last"
+     },
+     "reason": "FIGURE_ABSENT_THOUGH_STAGE_RAN: the global_route stage ran but this log carries no parseable `[INFO GRT-0096] Final congestion report:` table"
+    },
+    {
+     "schema": "vibeic.ppa.metric.v1",
+     "metric": "route.congestion.total_congestion.count",
+     "status": "INVALID",
+     "unit": "1",
+     "scope": {
+      "stage": "global_route",
+      "tool": "openroad"
+     },
+     "source": {
+      "path": "/home/reyerchu/_jxlayer/run/trials/c05/phase3/stage3/pnr/openroad.log",
+      "sha256": "sha256:42618516f1bb2cee16d16a0b892323ad765886a2e244f940c316899f53af5f21",
+      "tool": "openroad",
+      "tool_commit": "26Q3-1535-g543c33894f",
+      "parser": "_ppa/backends/openroad.py",
+      "parser_sha256": "sha256:6be03b7ad2a67293cab6ff7713718851be99e14b9b61668932801bb235e33a34",
+      "occurrences": 0,
+      "selection": "last"
+     },
+     "reason": "FIGURE_ABSENT_THOUGH_STAGE_RAN: the global_route stage ran but this log carries no parseable `[INFO GRT-0096] Final congestion report:` table"
+    },
+    {
+     "schema": "vibeic.ppa.metric.v1",
+     "metric": "antenna.net.violation.count",
+     "status": "MEASURED",
+     "unit": "1",
+     "scope": {
+      "stage": "post_route",
+      "tool": "openroad"
+     },
+     "source": {
+      "path": "/home/reyerchu/_jxlayer/run/trials/c05/phase3/stage3/pnr/openroad.log",
+      "sha256": "sha256:42618516f1bb2cee16d16a0b892323ad765886a2e244f940c316899f53af5f21",
+      "tool": "openroad",
+      "tool_commit": "26Q3-1535-g543c33894f",
+      "parser": "_ppa/backends/openroad.py",
+      "parser_sha256": "sha256:6be03b7ad2a67293cab6ff7713718851be99e14b9b61668932801bb235e33a34",
+      "occurrences": 7,
+      "selection": "last"
+     },
+     "value": 0
+    },
+    {
+     "schema": "vibeic.ppa.metric.v1",
+     "metric": "antenna.pin.violation.count",
+     "status": "MEASURED",
+     "unit": "1",
+     "scope": {
+      "stage": "post_route",
+      "tool": "openroad"
+     },
+     "source": {
+      "path": "/home/reyerchu/_jxlayer/run/trials/c05/phase3/stage3/pnr/openroad.log",
+      "sha256": "sha256:42618516f1bb2cee16d16a0b892323ad765886a2e244f940c316899f53af5f21",
+      "tool": "openroad",
+      "tool_commit": "26Q3-1535-g543c33894f",
+      "parser": "_ppa/backends/openroad.py",
+      "parser_sha256": "sha256:6be03b7ad2a67293cab6ff7713718851be99e14b9b61668932801bb235e33a34",
+      "occurrences": 7,
+      "selection": "last"
+     },
+     "value": 0
+    },
+    {
+     "schema": "vibeic.ppa.metric.v1",
+     "metric": "antenna.violation.count",
+     "status": "MEASURED",
+     "unit": "1",
+     "scope": {
+      "stage": "global_route",
+      "tool": "openroad",
+      "repair_pass": "pre_repair"
+     },
+     "source": {
+      "path": "/home/reyerchu/_jxlayer/run/trials/c05/phase3/stage3/pnr/openroad.log",
+      "sha256": "sha256:42618516f1bb2cee16d16a0b892323ad765886a2e244f940c316899f53af5f21",
+      "tool": "openroad",
+      "tool_commit": "26Q3-1535-g543c33894f",
+      "parser": "_ppa/backends/openroad.py",
+      "parser_sha256": "sha256:6be03b7ad2a67293cab6ff7713718851be99e14b9b61668932801bb235e33a34",
+      "occurrences": 1,
+      "selection": "last"
+     },
+     "value": 1
+    },
+    {
+     "schema": "vibeic.ppa.metric.v1",
+     "metric": "drv.max_slew.violation.count.pre_repair",
+     "status": "MEASURED",
+     "unit": "1",
+     "scope": {
+      "stage": "post_place",
+      "tool": "openroad",
+      "repair_pass": "pre_repair"
+     },
+     "source": {
+      "path": "/home/reyerchu/_jxlayer/run/trials/c05/phase3/stage3/pnr/openroad.log",
+      "sha256": "sha256:42618516f1bb2cee16d16a0b892323ad765886a2e244f940c316899f53af5f21",
+      "tool": "openroad",
+      "tool_commit": "26Q3-1535-g543c33894f",
+      "parser": "_ppa/backends/openroad.py",
+      "parser_sha256": "sha256:6be03b7ad2a67293cab6ff7713718851be99e14b9b61668932801bb235e33a34",
+      "occurrences": 5,
+      "selection": "last"
+     },
+     "value": 5
+    },
+    {
+     "schema": "vibeic.ppa.metric.v1",
+     "metric": "drv.max_capacitance.violation.count.pre_repair",
+     "status": "INVALID",
+     "unit": "1",
+     "scope": {
+      "stage": "post_place",
+      "tool": "openroad",
+      "repair_pass": "pre_repair"
+     },
+     "source": {
+      "path": "/home/reyerchu/_jxlayer/run/trials/c05/phase3/stage3/pnr/openroad.log",
+      "sha256": "sha256:42618516f1bb2cee16d16a0b892323ad765886a2e244f940c316899f53af5f21",
+      "tool": "openroad",
+      "tool_commit": "26Q3-1535-g543c33894f",
+      "parser": "_ppa/backends/openroad.py",
+      "parser_sha256": "sha256:6be03b7ad2a67293cab6ff7713718851be99e14b9b61668932801bb235e33a34",
+      "occurrences": 0,
+      "selection": "last"
+     },
+     "reason": "ABSENCE_IS_NOT_ZERO: the resizer ran but printed no `Found N capacitance violations` line. OpenROAD emits that line only when N > 0 (measured: 703 such lines over 103 real logs, none with N=0), so this artefact cannot distinguish 'zero capacitance violations' from 'repair_design was never called'"
+    },
+    {
+     "schema": "vibeic.ppa.metric.v1",
+     "metric": "drv.max_fanout.violation.count.pre_repair",
+     "status": "MEASURED",
+     "unit": "1",
+     "scope": {
+      "stage": "post_place",
+      "tool": "openroad",
+      "repair_pass": "pre_repair"
+     },
+     "source": {
+      "path": "/home/reyerchu/_jxlayer/run/trials/c05/phase3/stage3/pnr/openroad.log",
+      "sha256": "sha256:42618516f1bb2cee16d16a0b892323ad765886a2e244f940c316899f53af5f21",
+      "tool": "openroad",
+      "tool_commit": "26Q3-1535-g543c33894f",
+      "parser": "_ppa/backends/openroad.py",
+      "parser_sha256": "sha256:6be03b7ad2a67293cab6ff7713718851be99e14b9b61668932801bb235e33a34",
+      "occurrences": 1,
+      "selection": "last"
+     },
+     "value": 5
+    },
+    {
+     "schema": "vibeic.ppa.metric.v1",
+     "metric": "drv.residual.violation.count",
+     "status": "NOT_MEASURED",
+     "unit": "1",
+     "scope": {
+      "stage": "post_route",
+      "tool": "openroad",
+      "repair_pass": "post_repair"
+     },
+     "source": {
+      "path": "/home/reyerchu/_jxlayer/run/trials/c05/phase3/stage3/pnr/openroad.log",
+      "sha256": "sha256:42618516f1bb2cee16d16a0b892323ad765886a2e244f940c316899f53af5f21",
+      "tool": "openroad",
+      "tool_commit": "26Q3-1535-g543c33894f",
+      "parser": "_ppa/backends/openroad.py",
+      "parser_sha256": "sha256:6be03b7ad2a67293cab6ff7713718851be99e14b9b61668932801bb235e33a34",
+      "occurrences": 0,
+      "selection": "last"
+     },
+     "reason": "NO_SUCH_FIGURE: OpenROAD's resizer states DRV counts only BEFORE repair_design repairs them and no build on record re-prints a residual. The post-repair residual is an OpenSTA `report_check_types -max_slew -max_capacitance -max_fanout` question and belongs to the opensta backend"
+    },
+    {
+     "schema": "vibeic.ppa.metric.v1",
+     "metric": "route.drc.violation.count",
+     "status": "MEASURED",
+     "unit": "1",
+     "scope": {
+      "stage": "detailed_route",
+      "tool": "openroad"
+     },
+     "source": {
+      "path": "/home/reyerchu/_jxlayer/run/trials/c05/phase3/stage3/pnr/openroad.metrics.json",
+      "sha256": "sha256:c7c1e8534962287b25a098c8b2b8788aa3273766a7f87d6d493945af709dae23",
+      "tool": "openroad",
+      "tool_commit": "26Q3-1535-g543c33894f",
+      "parser": "_ppa/backends/openroad.py",
+      "parser_sha256": "sha256:6be03b7ad2a67293cab6ff7713718851be99e14b9b61668932801bb235e33a34",
+      "key": "detailedroute__route__drc_errors",
+      "occurrences": 7,
+      "selection": "last",
+      "kind": "metrics_json"
+     },
+     "value": 0
+    },
+    {
+     "schema": "vibeic.ppa.metric.v1",
+     "metric": "route.wirelength.um",
+     "status": "MEASURED",
+     "unit": "um",
+     "scope": {
+      "stage": "detailed_route",
+      "tool": "openroad"
+     },
+     "source": {
+      "path": "/home/reyerchu/_jxlayer/run/trials/c05/phase3/stage3/pnr/openroad.metrics.json",
+      "sha256": "sha256:c7c1e8534962287b25a098c8b2b8788aa3273766a7f87d6d493945af709dae23",
+      "tool": "openroad",
+      "tool_commit": "26Q3-1535-g543c33894f",
+      "parser": "_ppa/backends/openroad.py",
+      "parser_sha256": "sha256:6be03b7ad2a67293cab6ff7713718851be99e14b9b61668932801bb235e33a34",
+      "key": "detailedroute__route__wirelength",
+      "occurrences": 7,
+      "selection": "last",
+      "kind": "metrics_json",
+      "overridden_by_authority": [
+       {
+        "path": "/home/reyerchu/_jxlayer/run/trials/c05/phase3/stage3/pnr/openroad.log",
+        "sha256": "sha256:42618516f1bb2cee16d16a0b892323ad765886a2e244f940c316899f53af5f21",
+        "kind": "log",
+        "status": "MEASURED",
+        "value": 14058.0
+       }
+      ],
+      "authority": {
+       "declared_in": "_ppa/contract.py:METRIC_ARTEFACT_AUTHORITY",
+       "order": [
+        "metrics_json",
+        "log"
+       ],
+       "reason": "openroad.metrics.json records EVERY detailed_route invocation, including the re-route that postroute_antenna_repair triggers; the log prints a `Total wire length` summary only for invocations that ran the full router loop. Measured on 10 run trees, the JSON's last entry is the routed.def that ships and the log's last total is a pre-repair state."
+      }
+     },
+     "value": 14070
+    },
+    {
+     "schema": "vibeic.ppa.metric.v1",
+     "metric": "route.via.count",
+     "status": "MEASURED",
+     "unit": "1",
+     "scope": {
+      "stage": "detailed_route",
+      "tool": "openroad"
+     },
+     "source": {
+      "path": "/home/reyerchu/_jxlayer/run/trials/c05/phase3/stage3/pnr/openroad.metrics.json",
+      "sha256": "sha256:c7c1e8534962287b25a098c8b2b8788aa3273766a7f87d6d493945af709dae23",
+      "tool": "openroad",
+      "tool_commit": "26Q3-1535-g543c33894f",
+      "parser": "_ppa/backends/openroad.py",
+      "parser_sha256": "sha256:6be03b7ad2a67293cab6ff7713718851be99e14b9b61668932801bb235e33a34",
+      "key": "detailedroute__route__vias",
+      "occurrences": 7,
+      "selection": "last",
+      "kind": "metrics_json",
+      "overridden_by_authority": [
+       {
+        "path": "/home/reyerchu/_jxlayer/run/trials/c05/phase3/stage3/pnr/openroad.log",
+        "sha256": "sha256:42618516f1bb2cee16d16a0b892323ad765886a2e244f940c316899f53af5f21",
+        "kind": "log",
+        "status": "MEASURED",
+        "value": 4253
+       }
+      ],
+      "authority": {
+       "declared_in": "_ppa/contract.py:METRIC_ARTEFACT_AUTHORITY",
+       "order": [
+        "metrics_json",
+        "log"
+       ],
+       "reason": "Same mechanism as route.wirelength.um, and directly counted: on _tim_priv/run_base, routed_preantenna.def carries 1944 via placements (the log's number) and routed.def carries 1951 (the JSON's)."
+      }
+     },
+     "value": 4277
+    },
+    {
+     "schema": "vibeic.ppa.metric.v1",
+     "metric": "route.via.singlecut.count",
+     "status": "MEASURED",
+     "unit": "1",
+     "scope": {
+      "stage": "detailed_route",
+      "tool": "openroad"
+     },
+     "source": {
+      "path": "/home/reyerchu/_jxlayer/run/trials/c05/phase3/stage3/pnr/openroad.metrics.json",
+      "sha256": "sha256:c7c1e8534962287b25a098c8b2b8788aa3273766a7f87d6d493945af709dae23",
+      "tool": "openroad",
+      "tool_commit": "26Q3-1535-g543c33894f",
+      "parser": "_ppa/backends/openroad.py",
+      "parser_sha256": "sha256:6be03b7ad2a67293cab6ff7713718851be99e14b9b61668932801bb235e33a34",
+      "key": "detailedroute__route__vias__singlecut",
+      "occurrences": 7,
+      "selection": "last"
+     },
+     "value": 4277
+    },
+    {
+     "schema": "vibeic.ppa.metric.v1",
+     "metric": "route.via.multicut.count",
+     "status": "MEASURED",
+     "unit": "1",
+     "scope": {
+      "stage": "detailed_route",
+      "tool": "openroad"
+     },
+     "source": {
+      "path": "/home/reyerchu/_jxlayer/run/trials/c05/phase3/stage3/pnr/openroad.metrics.json",
+      "sha256": "sha256:c7c1e8534962287b25a098c8b2b8788aa3273766a7f87d6d493945af709dae23",
+      "tool": "openroad",
+      "tool_commit": "26Q3-1535-g543c33894f",
+      "parser": "_ppa/backends/openroad.py",
+      "parser_sha256": "sha256:6be03b7ad2a67293cab6ff7713718851be99e14b9b61668932801bb235e33a34",
+      "key": "detailedroute__route__vias__multicut",
+      "occurrences": 7,
+      "selection": "last"
+     },
+     "value": 0
+    },
+    {
+     "schema": "vibeic.ppa.metric.v1",
+     "metric": "route.net.count",
+     "status": "MEASURED",
+     "unit": "1",
+     "scope": {
+      "stage": "detailed_route",
+      "tool": "openroad"
+     },
+     "source": {
+      "path": "/home/reyerchu/_jxlayer/run/trials/c05/phase3/stage3/pnr/openroad.metrics.json",
+      "sha256": "sha256:c7c1e8534962287b25a098c8b2b8788aa3273766a7f87d6d493945af709dae23",
+      "tool": "openroad",
+      "tool_commit": "26Q3-1535-g543c33894f",
+      "parser": "_ppa/backends/openroad.py",
+      "parser_sha256": "sha256:6be03b7ad2a67293cab6ff7713718851be99e14b9b61668932801bb235e33a34",
+      "key": "detailedroute__route__net",
+      "occurrences": 1,
+      "selection": "last"
+     },
+     "value": 655
+    },
+    {
+     "schema": "vibeic.ppa.metric.v1",
+     "metric": "route.net.special.count",
+     "status": "MEASURED",
+     "unit": "1",
+     "scope": {
+      "stage": "detailed_route",
+      "tool": "openroad"
+     },
+     "source": {
+      "path": "/home/reyerchu/_jxlayer/run/trials/c05/phase3/stage3/pnr/openroad.metrics.json",
+      "sha256": "sha256:c7c1e8534962287b25a098c8b2b8788aa3273766a7f87d6d493945af709dae23",
+      "tool": "openroad",
+      "tool_commit": "26Q3-1535-g543c33894f",
+      "parser": "_ppa/backends/openroad.py",
+      "parser_sha256": "sha256:6be03b7ad2a67293cab6ff7713718851be99e14b9b61668932801bb235e33a34",
+      "key": "detailedroute__route__net__special",
+      "occurrences": 1,
+      "selection": "last"
+     },
+     "value": 2
+    },
+    {
+     "schema": "vibeic.ppa.metric.v1",
+     "metric": "antenna.net.violation.count",
+     "status": "MEASURED",
+     "unit": "1",
+     "scope": {
+      "stage": "detailed_route",
+      "tool": "openroad"
+     },
+     "source": {
+      "path": "/home/reyerchu/_jxlayer/run/trials/c05/phase3/stage3/pnr/openroad.metrics.json",
+      "sha256": "sha256:c7c1e8534962287b25a098c8b2b8788aa3273766a7f87d6d493945af709dae23",
+      "tool": "openroad",
+      "tool_commit": "26Q3-1535-g543c33894f",
+      "parser": "_ppa/backends/openroad.py",
+      "parser_sha256": "sha256:6be03b7ad2a67293cab6ff7713718851be99e14b9b61668932801bb235e33a34",
+      "key": "detailedroute__antenna__violating__nets",
+      "occurrences": 7,
+      "selection": "last"
+     },
+     "value": 0
+    },
+    {
+     "schema": "vibeic.ppa.metric.v1",
+     "metric": "antenna.pin.violation.count",
+     "status": "MEASURED",
+     "unit": "1",
+     "scope": {
+      "stage": "detailed_route",
+      "tool": "openroad"
+     },
+     "source": {
+      "path": "/home/reyerchu/_jxlayer/run/trials/c05/phase3/stage3/pnr/openroad.metrics.json",
+      "sha256": "sha256:c7c1e8534962287b25a098c8b2b8788aa3273766a7f87d6d493945af709dae23",
+      "tool": "openroad",
+      "tool_commit": "26Q3-1535-g543c33894f",
+      "parser": "_ppa/backends/openroad.py",
+      "parser_sha256": "sha256:6be03b7ad2a67293cab6ff7713718851be99e14b9b61668932801bb235e33a34",
+      "key": "detailedroute__antenna__violating__pins",
+      "occurrences": 7,
+      "selection": "last"
+     },
+     "value": 0
+    },
+    {
+     "schema": "vibeic.ppa.metric.v1",
+     "metric": "antenna.diode.count",
+     "status": "MEASURED",
+     "unit": "1",
+     "scope": {
+      "stage": "detailed_route",
+      "tool": "openroad"
+     },
+     "source": {
+      "path": "/home/reyerchu/_jxlayer/run/trials/c05/phase3/stage3/pnr/openroad.metrics.json",
+      "sha256": "sha256:c7c1e8534962287b25a098c8b2b8788aa3273766a7f87d6d493945af709dae23",
+      "tool": "openroad",
+      "tool_commit": "26Q3-1535-g543c33894f",
+      "parser": "_ppa/backends/openroad.py",
+      "parser_sha256": "sha256:6be03b7ad2a67293cab6ff7713718851be99e14b9b61668932801bb235e33a34",
+      "key": "detailedroute__antenna_diodes_count",
+      "occurrences": 1,
+      "selection": "last"
+     },
+     "value": 1
+    },
+    {
+     "schema": "vibeic.ppa.metric.v1",
+     "metric": "route.wirelength.um",
+     "status": "MEASURED",
+     "unit": "um",
+     "scope": {
+      "stage": "global_route",
+      "tool": "openroad"
+     },
+     "source": {
+      "path": "/home/reyerchu/_jxlayer/run/trials/c05/phase3/stage3/pnr/openroad.metrics.json",
+      "sha256": "sha256:c7c1e8534962287b25a098c8b2b8788aa3273766a7f87d6d493945af709dae23",
+      "tool": "openroad",
+      "tool_commit": "26Q3-1535-g543c33894f",
+      "parser": "_ppa/backends/openroad.py",
+      "parser_sha256": "sha256:6be03b7ad2a67293cab6ff7713718851be99e14b9b61668932801bb235e33a34",
+      "key": "global_route__wirelength",
+      "occurrences": 1,
+      "selection": "last"
+     },
+     "value": 22149
+    },
+    {
+     "schema": "vibeic.ppa.metric.v1",
+     "metric": "route.via.count",
+     "status": "MEASURED",
+     "unit": "1",
+     "scope": {
+      "stage": "global_route",
+      "tool": "openroad"
+     },
+     "source": {
+      "path": "/home/reyerchu/_jxlayer/run/trials/c05/phase3/stage3/pnr/openroad.metrics.json",
+      "sha256": "sha256:c7c1e8534962287b25a098c8b2b8788aa3273766a7f87d6d493945af709dae23",
+      "tool": "openroad",
+      "tool_commit": "26Q3-1535-g543c33894f",
+      "parser": "_ppa/backends/openroad.py",
+      "parser_sha256": "sha256:6be03b7ad2a67293cab6ff7713718851be99e14b9b61668932801bb235e33a34",
+      "key": "global_route__vias",
+      "occurrences": 1,
+      "selection": "last"
+     },
+     "value": 4448
+    },
+    {
+     "schema": "vibeic.ppa.metric.v1",
+     "metric": "utilization.before_detailed_placement.pct",
+     "status": "MEASURED",
+     "unit": "%",
+     "scope": {
+      "stage": "detailed_placement",
+      "tool": "openroad"
+     },
+     "source": {
+      "path": "/home/reyerchu/_jxlayer/run/trials/c05/phase3/stage3/pnr/openroad.metrics.json",
+      "sha256": "sha256:c7c1e8534962287b25a098c8b2b8788aa3273766a7f87d6d493945af709dae23",
+      "tool": "openroad",
+      "tool_commit": "26Q3-1535-g543c33894f",
+      "parser": "_ppa/backends/openroad.py",
+      "parser_sha256": "sha256:6be03b7ad2a67293cab6ff7713718851be99e14b9b61668932801bb235e33a34",
+      "key": "utilization__before__dpl",
+      "occurrences": 6,
+      "selection": "last"
+     },
+     "value": 46.7068
+    },
+    {
+     "schema": "vibeic.ppa.metric.v1",
+     "metric": "placement.violation.count",
+     "status": "MEASURED",
+     "unit": "1",
+     "scope": {
+      "stage": "detailed_placement",
+      "tool": "openroad"
+     },
+     "source": {
+      "path": "/home/reyerchu/_jxlayer/run/trials/c05/phase3/stage3/pnr/openroad.metrics.json",
+      "sha256": "sha256:c7c1e8534962287b25a098c8b2b8788aa3273766a7f87d6d493945af709dae23",
+      "tool": "openroad",
+      "tool_commit": "26Q3-1535-g543c33894f",
+      "parser": "_ppa/backends/openroad.py",
+      "parser_sha256": "sha256:6be03b7ad2a67293cab6ff7713718851be99e14b9b61668932801bb235e33a34",
+      "key": "design__violations",
+      "occurrences": 3,
+      "selection": "last"
+     },
+     "value": 0
+    },
+    {
+     "schema": "vibeic.ppa.metric.v1",
+     "metric": "design.io.count",
+     "status": "MEASURED",
+     "unit": "1",
+     "scope": {
+      "stage": "floorplan",
+      "tool": "openroad"
+     },
+     "source": {
+      "path": "/home/reyerchu/_jxlayer/run/trials/c05/phase3/stage3/pnr/openroad.metrics.json",
+      "sha256": "sha256:c7c1e8534962287b25a098c8b2b8788aa3273766a7f87d6d493945af709dae23",
+      "tool": "openroad",
+      "tool_commit": "26Q3-1535-g543c33894f",
+      "parser": "_ppa/backends/openroad.py",
+      "parser_sha256": "sha256:6be03b7ad2a67293cab6ff7713718851be99e14b9b61668932801bb235e33a34",
+      "key": "floorplan__design__io",
+      "occurrences": 1,
+      "selection": "last"
+     },
+     "value": 41
+    },
+    {
+     "schema": "vibeic.ppa.metric.v1",
+     "metric": "flow.error.count",
+     "status": "MEASURED",
+     "unit": "1",
+     "scope": {
+      "stage": "flow",
+      "tool": "openroad"
+     },
+     "source": {
+      "path": "/home/reyerchu/_jxlayer/run/trials/c05/phase3/stage3/pnr/openroad.metrics.json",
+      "sha256": "sha256:c7c1e8534962287b25a098c8b2b8788aa3273766a7f87d6d493945af709dae23",
+      "tool": "openroad",
+      "tool_commit": "26Q3-1535-g543c33894f",
+      "parser": "_ppa/backends/openroad.py",
+      "parser_sha256": "sha256:6be03b7ad2a67293cab6ff7713718851be99e14b9b61668932801bb235e33a34",
+      "key": "flow__errors__count",
+      "occurrences": 1,
+      "selection": "last"
+     },
+     "value": 0
+    },
+    {
+     "schema": "vibeic.ppa.metric.v1",
+     "metric": "flow.warning.count",
+     "status": "MEASURED",
+     "unit": "1",
+     "scope": {
+      "stage": "flow",
+      "tool": "openroad"
+     },
+     "source": {
+      "path": "/home/reyerchu/_jxlayer/run/trials/c05/phase3/stage3/pnr/openroad.metrics.json",
+      "sha256": "sha256:c7c1e8534962287b25a098c8b2b8788aa3273766a7f87d6d493945af709dae23",
+      "tool": "openroad",
+      "tool_commit": "26Q3-1535-g543c33894f",
+      "parser": "_ppa/backends/openroad.py",
+      "parser_sha256": "sha256:6be03b7ad2a67293cab6ff7713718851be99e14b9b61668932801bb235e33a34",
+      "key": "flow__warnings__count",
+      "occurrences": 1,
+      "selection": "last"
+     },
+     "value": 31
+    },
+    {
+     "schema": "vibeic.ppa.metric.v1",
+     "metric": "timing.setup.worst_slack_ns",
+     "status": "MEASURED",
+     "value": 3.71,
+     "unit": "ns",
+     "scope": {
+      "stage": "post_route_extracted",
+      "mode": "functional",
+      "process": "ss",
+      "voltage_v": 1.6,
+      "temperature_c": 100.0,
+      "check": "setup",
+      "sta_analysis": "sta_mcorner_ocv"
+     },
+     "scope_gaps": {
+      "rc_corner": "this report names no RC corner for the section; the RC axis is reported by the multi-corner SPEF report, not this one",
+      "clock": "not_applicable: this row is the DESIGN-WIDE figure and is not scoped to one clock; the per-clock evidence is `timing.*.worst_path_slack_ns`, which carries the clock it names"
+     },
+     "source": {
+      "path": "phase3/stage3/sta/sta_mcorner_ocv.rpt",
+      "sha256": "sha256:5c83aef0a8c5571dfcddfa01e84903a6bf9df42379b7e37f1688d3158a7aa150",
+      "tool": "opensta",
+      "tool_commit": null,
+      "parser": "_ppa/backends/opensta.py",
+      "parser_sha256": "sha256:054a956d923c110d53b6fd56503d7c25440493963f405eabb7aa31e938db64b1",
+      "line": 5,
+      "raw": "worst slack max 3.71",
+      "sta_analysis_declared_in": "_ppa/contract.py:LEGACY_DISTINCT_STA_ANALYSES"
+     }
+    },
+    {
+     "schema": "vibeic.ppa.metric.v1",
+     "metric": "timing.setup.wns_ns",
+     "status": "MEASURED",
+     "value": 0.0,
+     "unit": "ns",
+     "scope": {
+      "stage": "post_route_extracted",
+      "mode": "functional",
+      "process": "ss",
+      "voltage_v": 1.6,
+      "temperature_c": 100.0,
+      "check": "setup",
+      "sta_analysis": "sta_mcorner_ocv"
+     },
+     "scope_gaps": {
+      "rc_corner": "this report names no RC corner for the section; the RC axis is reported by the multi-corner SPEF report, not this one",
+      "clock": "not_applicable: this row is the DESIGN-WIDE figure and is not scoped to one clock; the per-clock evidence is `timing.*.worst_path_slack_ns`, which carries the clock it names"
+     },
+     "source": {
+      "path": "phase3/stage3/sta/sta_mcorner_ocv.rpt",
+      "sha256": "sha256:5c83aef0a8c5571dfcddfa01e84903a6bf9df42379b7e37f1688d3158a7aa150",
+      "tool": "opensta",
+      "tool_commit": null,
+      "parser": "_ppa/backends/opensta.py",
+      "parser_sha256": "sha256:054a956d923c110d53b6fd56503d7c25440493963f405eabb7aa31e938db64b1",
+      "line": 7,
+      "raw": "wns max 0.00",
+      "sta_analysis_declared_in": "_ppa/contract.py:LEGACY_DISTINCT_STA_ANALYSES"
+     }
+    },
+    {
+     "schema": "vibeic.ppa.metric.v1",
+     "metric": "timing.setup.tns_ns",
+     "status": "MEASURED",
+     "value": 0.0,
+     "unit": "ns",
+     "scope": {
+      "stage": "post_route_extracted",
+      "mode": "functional",
+      "process": "ss",
+      "voltage_v": 1.6,
+      "temperature_c": 100.0,
+      "check": "setup",
+      "sta_analysis": "sta_mcorner_ocv"
+     },
+     "scope_gaps": {
+      "rc_corner": "this report names no RC corner for the section; the RC axis is reported by the multi-corner SPEF report, not this one",
+      "clock": "not_applicable: this row is the DESIGN-WIDE figure and is not scoped to one clock; the per-clock evidence is `timing.*.worst_path_slack_ns`, which carries the clock it names"
+     },
+     "source": {
+      "path": "phase3/stage3/sta/sta_mcorner_ocv.rpt",
+      "sha256": "sha256:5c83aef0a8c5571dfcddfa01e84903a6bf9df42379b7e37f1688d3158a7aa150",
+      "tool": "opensta",
+      "tool_commit": null,
+      "parser": "_ppa/backends/opensta.py",
+      "parser_sha256": "sha256:054a956d923c110d53b6fd56503d7c25440493963f405eabb7aa31e938db64b1",
+      "line": 6,
+      "raw": "tns max 0.00",
+      "sta_analysis_declared_in": "_ppa/contract.py:LEGACY_DISTINCT_STA_ANALYSES"
+     }
+    },
+    {
+     "schema": "vibeic.ppa.metric.v1",
+     "metric": "timing.setup.worst_path_slack_ns",
+     "status": "MEASURED",
+     "value": 3.71,
+     "unit": "ns",
+     "scope": {
+      "stage": "post_route_extracted",
+      "mode": "functional",
+      "process": "ss",
+      "voltage_v": 1.6,
+      "temperature_c": 100.0,
+      "clock": "clk",
+      "check": "setup",
+      "sta_analysis": "sta_mcorner_ocv",
+      "path_ordinal": 0
+     },
+     "scope_gaps": {
+      "rc_corner": "this report names no RC corner for the section; the RC axis is reported by the multi-corner SPEF report, not this one"
+     },
+     "source": {
+      "path": "phase3/stage3/sta/sta_mcorner_ocv.rpt",
+      "sha256": "sha256:5c83aef0a8c5571dfcddfa01e84903a6bf9df42379b7e37f1688d3158a7aa150",
+      "tool": "opensta",
+      "tool_commit": null,
+      "parser": "_ppa/backends/opensta.py",
+      "parser_sha256": "sha256:054a956d923c110d53b6fd56503d7c25440493963f405eabb7aa31e938db64b1",
+      "line": 9,
+      "raw": "Startpoint: __uuf__._476_ (rising edge-triggered flip-flop clocked by clk)",
+      "sta_analysis_declared_in": "_ppa/contract.py:LEGACY_DISTINCT_STA_ANALYSES"
+     }
+    },
+    {
+     "schema": "vibeic.ppa.metric.v1",
+     "metric": "timing.setup.worst_path_slack_ns",
+     "status": "MEASURED",
+     "value": 3.84,
+     "unit": "ns",
+     "scope": {
+      "stage": "post_route_extracted",
+      "mode": "functional",
+      "process": "ss",
+      "voltage_v": 1.6,
+      "temperature_c": 100.0,
+      "clock": "clk",
+      "check": "setup",
+      "sta_analysis": "sta_mcorner_ocv",
+      "path_ordinal": 1
+     },
+     "scope_gaps": {
+      "rc_corner": "this report names no RC corner for the section; the RC axis is reported by the multi-corner SPEF report, not this one"
+     },
+     "source": {
+      "path": "phase3/stage3/sta/sta_mcorner_ocv.rpt",
+      "sha256": "sha256:5c83aef0a8c5571dfcddfa01e84903a6bf9df42379b7e37f1688d3158a7aa150",
+      "tool": "opensta",
+      "tool_commit": null,
+      "parser": "_ppa/backends/opensta.py",
+      "parser_sha256": "sha256:054a956d923c110d53b6fd56503d7c25440493963f405eabb7aa31e938db64b1",
+      "line": 43,
+      "raw": "Startpoint: __uuf__._476_ (rising edge-triggered flip-flop clocked by clk)",
+      "sta_analysis_declared_in": "_ppa/contract.py:LEGACY_DISTINCT_STA_ANALYSES"
+     }
+    },
+    {
+     "schema": "vibeic.ppa.metric.v1",
+     "metric": "timing.setup.worst_path_slack_ns",
+     "status": "MEASURED",
+     "value": 3.84,
+     "unit": "ns",
+     "scope": {
+      "stage": "post_route_extracted",
+      "mode": "functional",
+      "process": "ss",
+      "voltage_v": 1.6,
+      "temperature_c": 100.0,
+      "clock": "clk",
+      "check": "setup",
+      "sta_analysis": "sta_mcorner_ocv",
+      "path_ordinal": 2
+     },
+     "scope_gaps": {
+      "rc_corner": "this report names no RC corner for the section; the RC axis is reported by the multi-corner SPEF report, not this one"
+     },
+     "source": {
+      "path": "phase3/stage3/sta/sta_mcorner_ocv.rpt",
+      "sha256": "sha256:5c83aef0a8c5571dfcddfa01e84903a6bf9df42379b7e37f1688d3158a7aa150",
+      "tool": "opensta",
+      "tool_commit": null,
+      "parser": "_ppa/backends/opensta.py",
+      "parser_sha256": "sha256:054a956d923c110d53b6fd56503d7c25440493963f405eabb7aa31e938db64b1",
+      "line": 77,
+      "raw": "Startpoint: __uuf__._476_ (rising edge-triggered flip-flop clocked by clk)",
+      "sta_analysis_declared_in": "_ppa/contract.py:LEGACY_DISTINCT_STA_ANALYSES"
+     }
+    },
+    {
+     "schema": "vibeic.ppa.metric.v1",
+     "metric": "timing.hold.worst_slack_ns",
+     "status": "MEASURED",
+     "value": 0.29,
+     "unit": "ns",
+     "scope": {
+      "stage": "post_route_extracted",
+      "mode": "functional",
+      "process": "ff",
+      "voltage_v": 1.95,
+      "temperature_c": -40.0,
+      "check": "hold",
+      "sta_analysis": "sta_mcorner_ocv"
+     },
+     "scope_gaps": {
+      "rc_corner": "this report names no RC corner for the section; the RC axis is reported by the multi-corner SPEF report, not this one",
+      "clock": "not_applicable: this row is the DESIGN-WIDE figure and is not scoped to one clock; the per-clock evidence is `timing.*.worst_path_slack_ns`, which carries the clock it names"
+     },
+     "source": {
+      "path": "phase3/stage3/sta/sta_mcorner_ocv.rpt",
+      "sha256": "sha256:5c83aef0a8c5571dfcddfa01e84903a6bf9df42379b7e37f1688d3158a7aa150",
+      "tool": "opensta",
+      "tool_commit": null,
+      "parser": "_ppa/backends/opensta.py",
+      "parser_sha256": "sha256:054a956d923c110d53b6fd56503d7c25440493963f405eabb7aa31e938db64b1",
+      "line": 122,
+      "raw": "worst slack min 0.29",
+      "sta_analysis_declared_in": "_ppa/contract.py:LEGACY_DISTINCT_STA_ANALYSES"
+     }
+    },
+    {
+     "schema": "vibeic.ppa.metric.v1",
+     "metric": "timing.hold.wns_ns",
+     "status": "MEASURED",
+     "value": 0.0,
+     "unit": "ns",
+     "scope": {
+      "stage": "post_route_extracted",
+      "mode": "functional",
+      "process": "ff",
+      "voltage_v": 1.95,
+      "temperature_c": -40.0,
+      "check": "hold",
+      "sta_analysis": "sta_mcorner_ocv"
+     },
+     "scope_gaps": {
+      "rc_corner": "this report names no RC corner for the section; the RC axis is reported by the multi-corner SPEF report, not this one",
+      "clock": "not_applicable: this row is the DESIGN-WIDE figure and is not scoped to one clock; the per-clock evidence is `timing.*.worst_path_slack_ns`, which carries the clock it names"
+     },
+     "source": {
+      "path": "phase3/stage3/sta/sta_mcorner_ocv.rpt",
+      "sha256": "sha256:5c83aef0a8c5571dfcddfa01e84903a6bf9df42379b7e37f1688d3158a7aa150",
+      "tool": "opensta",
+      "tool_commit": null,
+      "parser": "_ppa/backends/opensta.py",
+      "parser_sha256": "sha256:054a956d923c110d53b6fd56503d7c25440493963f405eabb7aa31e938db64b1",
+      "line": 124,
+      "raw": "wns min 0.00",
+      "sta_analysis_declared_in": "_ppa/contract.py:LEGACY_DISTINCT_STA_ANALYSES"
+     }
+    },
+    {
+     "schema": "vibeic.ppa.metric.v1",
+     "metric": "timing.hold.tns_ns",
+     "status": "NOT_MEASURED",
+     "reason": "not_reported: the artefact carries no tns line for this view — the tool was not asked, or the query failed",
+     "unit": "ns",
+     "scope": {
+      "stage": "post_route_extracted",
+      "mode": "functional",
+      "process": "ff",
+      "voltage_v": 1.95,
+      "temperature_c": -40.0,
+      "check": "hold",
+      "sta_analysis": "sta_mcorner_ocv"
+     },
+     "scope_gaps": {
+      "rc_corner": "this report names no RC corner for the section; the RC axis is reported by the multi-corner SPEF report, not this one",
+      "clock": "not_applicable: this row is the DESIGN-WIDE figure and is not scoped to one clock; the per-clock evidence is `timing.*.worst_path_slack_ns`, which carries the clock it names"
+     },
+     "source": {
+      "path": "phase3/stage3/sta/sta_mcorner_ocv.rpt",
+      "sha256": "sha256:5c83aef0a8c5571dfcddfa01e84903a6bf9df42379b7e37f1688d3158a7aa150",
+      "tool": "opensta",
+      "tool_commit": null,
+      "parser": "_ppa/backends/opensta.py",
+      "parser_sha256": "sha256:054a956d923c110d53b6fd56503d7c25440493963f405eabb7aa31e938db64b1",
+      "line": null,
+      "raw": null,
+      "sta_analysis_declared_in": "_ppa/contract.py:LEGACY_DISTINCT_STA_ANALYSES"
+     }
+    },
+    {
+     "schema": "vibeic.ppa.metric.v1",
+     "metric": "timing.hold.worst_path_slack_ns",
+     "status": "MEASURED",
+     "value": 0.29,
+     "unit": "ns",
+     "scope": {
+      "stage": "post_route_extracted",
+      "mode": "functional",
+      "process": "ff",
+      "voltage_v": 1.95,
+      "temperature_c": -40.0,
+      "clock": "clk",
+      "check": "hold",
+      "sta_analysis": "sta_mcorner_ocv",
+      "path_ordinal": 0
+     },
+     "scope_gaps": {
+      "rc_corner": "this report names no RC corner for the section; the RC axis is reported by the multi-corner SPEF report, not this one"
+     },
+     "source": {
+      "path": "phase3/stage3/sta/sta_mcorner_ocv.rpt",
+      "sha256": "sha256:5c83aef0a8c5571dfcddfa01e84903a6bf9df42379b7e37f1688d3158a7aa150",
+      "tool": "opensta",
+      "tool_commit": null,
+      "parser": "_ppa/backends/opensta.py",
+      "parser_sha256": "sha256:054a956d923c110d53b6fd56503d7c25440493963f405eabb7aa31e938db64b1",
+      "line": 126,
+      "raw": "Startpoint: __uuf__._465_ (rising edge-triggered flip-flop clocked by clk)",
+      "sta_analysis_declared_in": "_ppa/contract.py:LEGACY_DISTINCT_STA_ANALYSES"
+     }
+    },
+    {
+     "schema": "vibeic.ppa.metric.v1",
+     "metric": "timing.hold.worst_path_slack_ns",
+     "status": "MEASURED",
+     "value": 0.29,
+     "unit": "ns",
+     "scope": {
+      "stage": "post_route_extracted",
+      "mode": "functional",
+      "process": "ff",
+      "voltage_v": 1.95,
+      "temperature_c": -40.0,
+      "clock": "clk",
+      "check": "hold",
+      "sta_analysis": "sta_mcorner_ocv",
+      "path_ordinal": 1
+     },
+     "scope_gaps": {
+      "rc_corner": "this report names no RC corner for the section; the RC axis is reported by the multi-corner SPEF report, not this one"
+     },
+     "source": {
+      "path": "phase3/stage3/sta/sta_mcorner_ocv.rpt",
+      "sha256": "sha256:5c83aef0a8c5571dfcddfa01e84903a6bf9df42379b7e37f1688d3158a7aa150",
+      "tool": "opensta",
+      "tool_commit": null,
+      "parser": "_ppa/backends/opensta.py",
+      "parser_sha256": "sha256:054a956d923c110d53b6fd56503d7c25440493963f405eabb7aa31e938db64b1",
+      "line": 154,
+      "raw": "Startpoint: __uuf__._446_ (rising edge-triggered flip-flop clocked by clk)",
+      "sta_analysis_declared_in": "_ppa/contract.py:LEGACY_DISTINCT_STA_ANALYSES"
+     }
+    },
+    {
+     "schema": "vibeic.ppa.metric.v1",
+     "metric": "timing.hold.worst_path_slack_ns",
+     "status": "MEASURED",
+     "value": 0.33,
+     "unit": "ns",
+     "scope": {
+      "stage": "post_route_extracted",
+      "mode": "functional",
+      "process": "ff",
+      "voltage_v": 1.95,
+      "temperature_c": -40.0,
+      "clock": "clk",
+      "check": "hold",
+      "sta_analysis": "sta_mcorner_ocv",
+      "path_ordinal": 2
+     },
+     "scope_gaps": {
+      "rc_corner": "this report names no RC corner for the section; the RC axis is reported by the multi-corner SPEF report, not this one"
+     },
+     "source": {
+      "path": "phase3/stage3/sta/sta_mcorner_ocv.rpt",
+      "sha256": "sha256:5c83aef0a8c5571dfcddfa01e84903a6bf9df42379b7e37f1688d3158a7aa150",
+      "tool": "opensta",
+      "tool_commit": null,
+      "parser": "_ppa/backends/opensta.py",
+      "parser_sha256": "sha256:054a956d923c110d53b6fd56503d7c25440493963f405eabb7aa31e938db64b1",
+      "line": 182,
+      "raw": "Startpoint: __uuf__._499_ (rising edge-triggered flip-flop clocked by clk)",
+      "sta_analysis_declared_in": "_ppa/contract.py:LEGACY_DISTINCT_STA_ANALYSES"
+     }
+    },
+    {
+     "schema": "vibeic.ppa.metric.v1",
+     "metric": "timing.setup.worst_slack_ns",
+     "status": "MEASURED",
+     "value": 4.92,
+     "unit": "ns",
+     "scope": {
+      "stage": "post_route_extracted",
+      "mode": "functional",
+      "process": "ss",
+      "voltage_v": 1.6,
+      "temperature_c": 100.0,
+      "check": "setup",
+      "sta_analysis": "sta_spef_based"
+     },
+     "scope_gaps": {
+      "rc_corner": "this report names no RC corner for the section; the RC axis is reported by the multi-corner SPEF report, not this one",
+      "clock": "not_applicable: this row is the DESIGN-WIDE figure and is not scoped to one clock; the per-clock evidence is `timing.*.worst_path_slack_ns`, which carries the clock it names"
+     },
+     "source": {
+      "path": "phase3/stage3/sta/sta_spef_based.rpt",
+      "sha256": "sha256:34a40fa7ec1abe90e8a1e605c4d6d3fb724c0fd5d1db9c2f1478c108822706ee",
+      "tool": "opensta",
+      "tool_commit": null,
+      "parser": "_ppa/backends/opensta.py",
+      "parser_sha256": "sha256:054a956d923c110d53b6fd56503d7c25440493963f405eabb7aa31e938db64b1",
+      "line": 38,
+      "raw": "worst slack max 4.92",
+      "sta_analysis_declared_in": "_ppa/contract.py:LEGACY_DISTINCT_STA_ANALYSES"
+     }
+    },
+    {
+     "schema": "vibeic.ppa.metric.v1",
+     "metric": "timing.setup.wns_ns",
+     "status": "MEASURED",
+     "value": 0.0,
+     "unit": "ns",
+     "scope": {
+      "stage": "post_route_extracted",
+      "mode": "functional",
+      "process": "ss",
+      "voltage_v": 1.6,
+      "temperature_c": 100.0,
+      "check": "setup",
+      "sta_analysis": "sta_spef_based"
+     },
+     "scope_gaps": {
+      "rc_corner": "this report names no RC corner for the section; the RC axis is reported by the multi-corner SPEF report, not this one",
+      "clock": "not_applicable: this row is the DESIGN-WIDE figure and is not scoped to one clock; the per-clock evidence is `timing.*.worst_path_slack_ns`, which carries the clock it names"
+     },
+     "source": {
+      "path": "phase3/stage3/sta/sta_spef_based.rpt",
+      "sha256": "sha256:34a40fa7ec1abe90e8a1e605c4d6d3fb724c0fd5d1db9c2f1478c108822706ee",
+      "tool": "opensta",
+      "tool_commit": null,
+      "parser": "_ppa/backends/opensta.py",
+      "parser_sha256": "sha256:054a956d923c110d53b6fd56503d7c25440493963f405eabb7aa31e938db64b1",
+      "line": 37,
+      "raw": "wns max 0.00",
+      "sta_analysis_declared_in": "_ppa/contract.py:LEGACY_DISTINCT_STA_ANALYSES"
+     }
+    },
+    {
+     "schema": "vibeic.ppa.metric.v1",
+     "metric": "timing.setup.tns_ns",
+     "status": "MEASURED",
+     "value": 0.0,
+     "unit": "ns",
+     "scope": {
+      "stage": "post_route_extracted",
+      "mode": "functional",
+      "process": "ss",
+      "voltage_v": 1.6,
+      "temperature_c": 100.0,
+      "check": "setup",
+      "sta_analysis": "sta_spef_based"
+     },
+     "scope_gaps": {
+      "rc_corner": "this report names no RC corner for the section; the RC axis is reported by the multi-corner SPEF report, not this one",
+      "clock": "not_applicable: this row is the DESIGN-WIDE figure and is not scoped to one clock; the per-clock evidence is `timing.*.worst_path_slack_ns`, which carries the clock it names"
+     },
+     "source": {
+      "path": "phase3/stage3/sta/sta_spef_based.rpt",
+      "sha256": "sha256:34a40fa7ec1abe90e8a1e605c4d6d3fb724c0fd5d1db9c2f1478c108822706ee",
+      "tool": "opensta",
+      "tool_commit": null,
+      "parser": "_ppa/backends/opensta.py",
+      "parser_sha256": "sha256:054a956d923c110d53b6fd56503d7c25440493963f405eabb7aa31e938db64b1",
+      "line": 36,
+      "raw": "tns max 0.00",
+      "sta_analysis_declared_in": "_ppa/contract.py:LEGACY_DISTINCT_STA_ANALYSES"
+     }
+    },
+    {
+     "schema": "vibeic.ppa.metric.v1",
+     "metric": "timing.setup.worst_path_slack_ns",
+     "status": "MEASURED",
+     "value": 4.92,
+     "unit": "ns",
+     "scope": {
+      "stage": "post_route_extracted",
+      "mode": "functional",
+      "process": "ss",
+      "voltage_v": 1.6,
+      "temperature_c": 100.0,
+      "clock": "clk",
+      "check": "setup",
+      "sta_analysis": "sta_spef_based"
+     },
+     "scope_gaps": {
+      "rc_corner": "this report names no RC corner for the section; the RC axis is reported by the multi-corner SPEF report, not this one"
+     },
+     "source": {
+      "path": "phase3/stage3/sta/sta_spef_based.rpt",
+      "sha256": "sha256:34a40fa7ec1abe90e8a1e605c4d6d3fb724c0fd5d1db9c2f1478c108822706ee",
+      "tool": "opensta",
+      "tool_commit": null,
+      "parser": "_ppa/backends/opensta.py",
+      "parser_sha256": "sha256:054a956d923c110d53b6fd56503d7c25440493963f405eabb7aa31e938db64b1",
+      "line": 1,
+      "raw": "Startpoint: test (input port clocked by clk)",
+      "sta_analysis_declared_in": "_ppa/contract.py:LEGACY_DISTINCT_STA_ANALYSES"
+     }
+    },
+    {
+     "schema": "vibeic.ppa.metric.v1",
+     "metric": "timing.setup.worst_slack_ns",
+     "status": "MEASURED",
+     "value": 6.27,
+     "unit": "ns",
+     "scope": {
+      "stage": "post_route_extracted",
+      "mode": "functional",
+      "process": "tt",
+      "voltage_v": 1.8,
+      "temperature_c": 25.0,
+      "rc_corner": "max",
+      "check": "setup",
+      "sta_analysis": "sta_spef_multicorner"
+     },
+     "source": {
+      "path": "phase3/stage3/sta/sta_spef_multicorner.rpt",
+      "sha256": "sha256:4a80c63df18b7808d789abf16d6e5341d1242e720044417358e36e574362faf5",
+      "tool": "opensta",
+      "tool_commit": null,
+      "parser": "_ppa/backends/opensta.py",
+      "parser_sha256": "sha256:054a956d923c110d53b6fd56503d7c25440493963f405eabb7aa31e938db64b1",
+      "line": 11,
+      "raw": "worst slack max 6.27",
+      "sta_analysis_declared_in": "_ppa/contract.py:LEGACY_DISTINCT_STA_ANALYSES"
+     },
+     "scope_gaps": {
+      "clock": "not_applicable: this row is the DESIGN-WIDE figure and is not scoped to one clock; the per-clock evidence is `timing.*.worst_path_slack_ns`, which carries the clock it names"
+     }
+    },
+    {
+     "schema": "vibeic.ppa.metric.v1",
+     "metric": "timing.setup.wns_ns",
+     "status": "MEASURED",
+     "value": 0.0,
+     "unit": "ns",
+     "scope": {
+      "stage": "post_route_extracted",
+      "mode": "functional",
+      "process": "tt",
+      "voltage_v": 1.8,
+      "temperature_c": 25.0,
+      "rc_corner": "max",
+      "check": "setup",
+      "sta_analysis": "sta_spef_multicorner"
+     },
+     "source": {
+      "path": "phase3/stage3/sta/sta_spef_multicorner.rpt",
+      "sha256": "sha256:4a80c63df18b7808d789abf16d6e5341d1242e720044417358e36e574362faf5",
+      "tool": "opensta",
+      "tool_commit": null,
+      "parser": "_ppa/backends/opensta.py",
+      "parser_sha256": "sha256:054a956d923c110d53b6fd56503d7c25440493963f405eabb7aa31e938db64b1",
+      "line": 13,
+      "raw": "wns max 0.00",
+      "sta_analysis_declared_in": "_ppa/contract.py:LEGACY_DISTINCT_STA_ANALYSES"
+     },
+     "scope_gaps": {
+      "clock": "not_applicable: this row is the DESIGN-WIDE figure and is not scoped to one clock; the per-clock evidence is `timing.*.worst_path_slack_ns`, which carries the clock it names"
+     }
+    },
+    {
+     "schema": "vibeic.ppa.metric.v1",
+     "metric": "timing.setup.tns_ns",
+     "status": "MEASURED",
+     "value": 0.0,
+     "unit": "ns",
+     "scope": {
+      "stage": "post_route_extracted",
+      "mode": "functional",
+      "process": "tt",
+      "voltage_v": 1.8,
+      "temperature_c": 25.0,
+      "rc_corner": "max",
+      "check": "setup",
+      "sta_analysis": "sta_spef_multicorner"
+     },
+     "source": {
+      "path": "phase3/stage3/sta/sta_spef_multicorner.rpt",
+      "sha256": "sha256:4a80c63df18b7808d789abf16d6e5341d1242e720044417358e36e574362faf5",
+      "tool": "opensta",
+      "tool_commit": null,
+      "parser": "_ppa/backends/opensta.py",
+      "parser_sha256": "sha256:054a956d923c110d53b6fd56503d7c25440493963f405eabb7aa31e938db64b1",
+      "line": 12,
+      "raw": "tns max 0.00",
+      "sta_analysis_declared_in": "_ppa/contract.py:LEGACY_DISTINCT_STA_ANALYSES"
+     },
+     "scope_gaps": {
+      "clock": "not_applicable: this row is the DESIGN-WIDE figure and is not scoped to one clock; the per-clock evidence is `timing.*.worst_path_slack_ns`, which carries the clock it names"
+     }
+    },
+    {
+     "schema": "vibeic.ppa.metric.v1",
+     "metric": "timing.setup.worst_path_slack_ns",
+     "status": "MEASURED",
+     "value": 6.27,
+     "unit": "ns",
+     "scope": {
+      "stage": "post_route_extracted",
+      "mode": "functional",
+      "process": "tt",
+      "voltage_v": 1.8,
+      "temperature_c": 25.0,
+      "rc_corner": "max",
+      "clock": "clk",
+      "check": "setup",
+      "sta_analysis": "sta_spef_multicorner",
+      "path_ordinal": 0
+     },
+     "source": {
+      "path": "phase3/stage3/sta/sta_spef_multicorner.rpt",
+      "sha256": "sha256:4a80c63df18b7808d789abf16d6e5341d1242e720044417358e36e574362faf5",
+      "tool": "opensta",
+      "tool_commit": null,
+      "parser": "_ppa/backends/opensta.py",
+      "parser_sha256": "sha256:054a956d923c110d53b6fd56503d7c25440493963f405eabb7aa31e938db64b1",
+      "line": 15,
+      "raw": "Startpoint: test (input port clocked by clk)",
+      "sta_analysis_declared_in": "_ppa/contract.py:LEGACY_DISTINCT_STA_ANALYSES"
+     }
+    },
+    {
+     "schema": "vibeic.ppa.metric.v1",
+     "metric": "timing.setup.worst_path_slack_ns",
+     "status": "MEASURED",
+     "value": 6.3,
+     "unit": "ns",
+     "scope": {
+      "stage": "post_route_extracted",
+      "mode": "functional",
+      "process": "tt",
+      "voltage_v": 1.8,
+      "temperature_c": 25.0,
+      "rc_corner": "max",
+      "clock": "clk",
+      "check": "setup",
+      "sta_analysis": "sta_spef_multicorner",
+      "path_ordinal": 1
+     },
+     "source": {
+      "path": "phase3/stage3/sta/sta_spef_multicorner.rpt",
+      "sha256": "sha256:4a80c63df18b7808d789abf16d6e5341d1242e720044417358e36e574362faf5",
+      "tool": "opensta",
+      "tool_commit": null,
+      "parser": "_ppa/backends/opensta.py",
+      "parser_sha256": "sha256:054a956d923c110d53b6fd56503d7c25440493963f405eabb7aa31e938db64b1",
+      "line": 50,
+      "raw": "Startpoint: test (input port clocked by clk)",
+      "sta_analysis_declared_in": "_ppa/contract.py:LEGACY_DISTINCT_STA_ANALYSES"
+     }
+    },
+    {
+     "schema": "vibeic.ppa.metric.v1",
+     "metric": "timing.setup.worst_path_slack_ns",
+     "status": "MEASURED",
+     "value": 6.34,
+     "unit": "ns",
+     "scope": {
+      "stage": "post_route_extracted",
+      "mode": "functional",
+      "process": "tt",
+      "voltage_v": 1.8,
+      "temperature_c": 25.0,
+      "rc_corner": "max",
+      "clock": "clk",
+      "check": "setup",
+      "sta_analysis": "sta_spef_multicorner",
+      "path_ordinal": 2
+     },
+     "source": {
+      "path": "phase3/stage3/sta/sta_spef_multicorner.rpt",
+      "sha256": "sha256:4a80c63df18b7808d789abf16d6e5341d1242e720044417358e36e574362faf5",
+      "tool": "opensta",
+      "tool_commit": null,
+      "parser": "_ppa/backends/opensta.py",
+      "parser_sha256": "sha256:054a956d923c110d53b6fd56503d7c25440493963f405eabb7aa31e938db64b1",
+      "line": 85,
+      "raw": "Startpoint: test (input port clocked by clk)",
+      "sta_analysis_declared_in": "_ppa/contract.py:LEGACY_DISTINCT_STA_ANALYSES"
+     }
+    },
+    {
+     "schema": "vibeic.ppa.metric.v1",
+     "metric": "timing.hold.worst_slack_ns",
+     "status": "MEASURED",
+     "value": 0.53,
+     "unit": "ns",
+     "scope": {
+      "stage": "post_route_extracted",
+      "mode": "functional",
+      "process": "tt",
+      "voltage_v": 1.8,
+      "temperature_c": 25.0,
+      "rc_corner": "min",
+      "check": "hold",
+      "sta_analysis": "sta_spef_multicorner"
+     },
+     "source": {
+      "path": "phase3/stage3/sta/sta_spef_multicorner.rpt",
+      "sha256": "sha256:4a80c63df18b7808d789abf16d6e5341d1242e720044417358e36e574362faf5",
+      "tool": "opensta",
+      "tool_commit": null,
+      "parser": "_ppa/backends/opensta.py",
+      "parser_sha256": "sha256:054a956d923c110d53b6fd56503d7c25440493963f405eabb7aa31e938db64b1",
+      "line": 130,
+      "raw": "worst slack min 0.53",
+      "sta_analysis_declared_in": "_ppa/contract.py:LEGACY_DISTINCT_STA_ANALYSES"
+     },
+     "scope_gaps": {
+      "clock": "not_applicable: this row is the DESIGN-WIDE figure and is not scoped to one clock; the per-clock evidence is `timing.*.worst_path_slack_ns`, which carries the clock it names"
+     }
+    },
+    {
+     "schema": "vibeic.ppa.metric.v1",
+     "metric": "timing.hold.wns_ns",
+     "status": "MEASURED",
+     "value": 0.0,
+     "unit": "ns",
+     "scope": {
+      "stage": "post_route_extracted",
+      "mode": "functional",
+      "process": "tt",
+      "voltage_v": 1.8,
+      "temperature_c": 25.0,
+      "rc_corner": "min",
+      "check": "hold",
+      "sta_analysis": "sta_spef_multicorner"
+     },
+     "source": {
+      "path": "phase3/stage3/sta/sta_spef_multicorner.rpt",
+      "sha256": "sha256:4a80c63df18b7808d789abf16d6e5341d1242e720044417358e36e574362faf5",
+      "tool": "opensta",
+      "tool_commit": null,
+      "parser": "_ppa/backends/opensta.py",
+      "parser_sha256": "sha256:054a956d923c110d53b6fd56503d7c25440493963f405eabb7aa31e938db64b1",
+      "line": 132,
+      "raw": "wns min 0.00",
+      "sta_analysis_declared_in": "_ppa/contract.py:LEGACY_DISTINCT_STA_ANALYSES"
+     },
+     "scope_gaps": {
+      "clock": "not_applicable: this row is the DESIGN-WIDE figure and is not scoped to one clock; the per-clock evidence is `timing.*.worst_path_slack_ns`, which carries the clock it names"
+     }
+    },
+    {
+     "schema": "vibeic.ppa.metric.v1",
+     "metric": "timing.hold.tns_ns",
+     "status": "NOT_MEASURED",
+     "reason": "not_reported: the artefact carries no tns line for this view — the tool was not asked, or the query failed",
+     "unit": "ns",
+     "scope": {
+      "stage": "post_route_extracted",
+      "mode": "functional",
+      "process": "tt",
+      "voltage_v": 1.8,
+      "temperature_c": 25.0,
+      "rc_corner": "min",
+      "check": "hold",
+      "sta_analysis": "sta_spef_multicorner"
+     },
+     "source": {
+      "path": "phase3/stage3/sta/sta_spef_multicorner.rpt",
+      "sha256": "sha256:4a80c63df18b7808d789abf16d6e5341d1242e720044417358e36e574362faf5",
+      "tool": "opensta",
+      "tool_commit": null,
+      "parser": "_ppa/backends/opensta.py",
+      "parser_sha256": "sha256:054a956d923c110d53b6fd56503d7c25440493963f405eabb7aa31e938db64b1",
+      "line": null,
+      "raw": null,
+      "sta_analysis_declared_in": "_ppa/contract.py:LEGACY_DISTINCT_STA_ANALYSES"
+     },
+     "scope_gaps": {
+      "clock": "not_applicable: this row is the DESIGN-WIDE figure and is not scoped to one clock; the per-clock evidence is `timing.*.worst_path_slack_ns`, which carries the clock it names"
+     }
+    },
+    {
+     "schema": "vibeic.ppa.metric.v1",
+     "metric": "timing.hold.worst_path_slack_ns",
+     "status": "MEASURED",
+     "value": 0.53,
+     "unit": "ns",
+     "scope": {
+      "stage": "post_route_extracted",
+      "mode": "functional",
+      "process": "tt",
+      "voltage_v": 1.8,
+      "temperature_c": 25.0,
+      "rc_corner": "min",
+      "clock": "clk",
+      "check": "hold",
+      "sta_analysis": "sta_spef_multicorner",
+      "path_ordinal": 0
+     },
+     "source": {
+      "path": "phase3/stage3/sta/sta_spef_multicorner.rpt",
+      "sha256": "sha256:4a80c63df18b7808d789abf16d6e5341d1242e720044417358e36e574362faf5",
+      "tool": "opensta",
+      "tool_commit": null,
+      "parser": "_ppa/backends/opensta.py",
+      "parser_sha256": "sha256:054a956d923c110d53b6fd56503d7c25440493963f405eabb7aa31e938db64b1",
+      "line": 134,
+      "raw": "Startpoint: __uuf__._465_ (rising edge-triggered flip-flop clocked by clk)",
+      "sta_analysis_declared_in": "_ppa/contract.py:LEGACY_DISTINCT_STA_ANALYSES"
+     }
+    },
+    {
+     "schema": "vibeic.ppa.metric.v1",
+     "metric": "timing.hold.worst_path_slack_ns",
+     "status": "MEASURED",
+     "value": 0.55,
+     "unit": "ns",
+     "scope": {
+      "stage": "post_route_extracted",
+      "mode": "functional",
+      "process": "tt",
+      "voltage_v": 1.8,
+      "temperature_c": 25.0,
+      "rc_corner": "min",
+      "clock": "clk",
+      "check": "hold",
+      "sta_analysis": "sta_spef_multicorner",
+      "path_ordinal": 1
+     },
+     "source": {
+      "path": "phase3/stage3/sta/sta_spef_multicorner.rpt",
+      "sha256": "sha256:4a80c63df18b7808d789abf16d6e5341d1242e720044417358e36e574362faf5",
+      "tool": "opensta",
+      "tool_commit": null,
+      "parser": "_ppa/backends/opensta.py",
+      "parser_sha256": "sha256:054a956d923c110d53b6fd56503d7c25440493963f405eabb7aa31e938db64b1",
+      "line": 162,
+      "raw": "Startpoint: __uuf__._446_ (rising edge-triggered flip-flop clocked by clk)",
+      "sta_analysis_declared_in": "_ppa/contract.py:LEGACY_DISTINCT_STA_ANALYSES"
+     }
+    },
+    {
+     "schema": "vibeic.ppa.metric.v1",
+     "metric": "timing.hold.worst_path_slack_ns",
+     "status": "MEASURED",
+     "value": 0.57,
+     "unit": "ns",
+     "scope": {
+      "stage": "post_route_extracted",
+      "mode": "functional",
+      "process": "tt",
+      "voltage_v": 1.8,
+      "temperature_c": 25.0,
+      "rc_corner": "min",
+      "clock": "clk",
+      "check": "hold",
+      "sta_analysis": "sta_spef_multicorner",
+      "path_ordinal": 2
+     },
+     "source": {
+      "path": "phase3/stage3/sta/sta_spef_multicorner.rpt",
+      "sha256": "sha256:4a80c63df18b7808d789abf16d6e5341d1242e720044417358e36e574362faf5",
+      "tool": "opensta",
+      "tool_commit": null,
+      "parser": "_ppa/backends/opensta.py",
+      "parser_sha256": "sha256:054a956d923c110d53b6fd56503d7c25440493963f405eabb7aa31e938db64b1",
+      "line": 190,
+      "raw": "Startpoint: __uuf__._499_ (rising edge-triggered flip-flop clocked by clk)",
+      "sta_analysis_declared_in": "_ppa/contract.py:LEGACY_DISTINCT_STA_ANALYSES"
+     }
+    },
+    {
+     "schema": "vibeic.ppa.metric.v1",
+     "metric": "timing.setup.worst_slack_ns",
+     "status": "MEASURED",
+     "value": 3.71,
+     "unit": "ns",
+     "scope": {
+      "stage": "post_route_extracted",
+      "mode": "functional",
+      "process": "ss",
+      "voltage_v": 1.6,
+      "temperature_c": 100.0,
+      "check": "setup",
+      "sta_analysis": "sta_mcorner_ocv"
+     },
+     "scope_gaps": {
+      "rc_corner": "this report names no RC corner for the section; the RC axis is reported by the multi-corner SPEF report, not this one",
+      "clock": "not_applicable: this row is the DESIGN-WIDE figure and is not scoped to one clock; the per-clock evidence is `timing.*.worst_path_slack_ns`, which carries the clock it names"
+     },
+     "source": {
+      "path": "reports/phase3/sta_mcorner_ocv.rpt",
+      "sha256": "sha256:5c83aef0a8c5571dfcddfa01e84903a6bf9df42379b7e37f1688d3158a7aa150",
+      "tool": "opensta",
+      "tool_commit": null,
+      "parser": "_ppa/backends/opensta.py",
+      "parser_sha256": "sha256:054a956d923c110d53b6fd56503d7c25440493963f405eabb7aa31e938db64b1",
+      "line": 5,
+      "raw": "worst slack max 3.71",
+      "sta_analysis_declared_in": "_ppa/contract.py:LEGACY_DISTINCT_STA_ANALYSES"
+     }
+    },
+    {
+     "schema": "vibeic.ppa.metric.v1",
+     "metric": "timing.setup.wns_ns",
+     "status": "MEASURED",
+     "value": 0.0,
+     "unit": "ns",
+     "scope": {
+      "stage": "post_route_extracted",
+      "mode": "functional",
+      "process": "ss",
+      "voltage_v": 1.6,
+      "temperature_c": 100.0,
+      "check": "setup",
+      "sta_analysis": "sta_mcorner_ocv"
+     },
+     "scope_gaps": {
+      "rc_corner": "this report names no RC corner for the section; the RC axis is reported by the multi-corner SPEF report, not this one",
+      "clock": "not_applicable: this row is the DESIGN-WIDE figure and is not scoped to one clock; the per-clock evidence is `timing.*.worst_path_slack_ns`, which carries the clock it names"
+     },
+     "source": {
+      "path": "reports/phase3/sta_mcorner_ocv.rpt",
+      "sha256": "sha256:5c83aef0a8c5571dfcddfa01e84903a6bf9df42379b7e37f1688d3158a7aa150",
+      "tool": "opensta",
+      "tool_commit": null,
+      "parser": "_ppa/backends/opensta.py",
+      "parser_sha256": "sha256:054a956d923c110d53b6fd56503d7c25440493963f405eabb7aa31e938db64b1",
+      "line": 7,
+      "raw": "wns max 0.00",
+      "sta_analysis_declared_in": "_ppa/contract.py:LEGACY_DISTINCT_STA_ANALYSES"
+     }
+    },
+    {
+     "schema": "vibeic.ppa.metric.v1",
+     "metric": "timing.setup.tns_ns",
+     "status": "MEASURED",
+     "value": 0.0,
+     "unit": "ns",
+     "scope": {
+      "stage": "post_route_extracted",
+      "mode": "functional",
+      "process": "ss",
+      "voltage_v": 1.6,
+      "temperature_c": 100.0,
+      "check": "setup",
+      "sta_analysis": "sta_mcorner_ocv"
+     },
+     "scope_gaps": {
+      "rc_corner": "this report names no RC corner for the section; the RC axis is reported by the multi-corner SPEF report, not this one",
+      "clock": "not_applicable: this row is the DESIGN-WIDE figure and is not scoped to one clock; the per-clock evidence is `timing.*.worst_path_slack_ns`, which carries the clock it names"
+     },
+     "source": {
+      "path": "reports/phase3/sta_mcorner_ocv.rpt",
+      "sha256": "sha256:5c83aef0a8c5571dfcddfa01e84903a6bf9df42379b7e37f1688d3158a7aa150",
+      "tool": "opensta",
+      "tool_commit": null,
+      "parser": "_ppa/backends/opensta.py",
+      "parser_sha256": "sha256:054a956d923c110d53b6fd56503d7c25440493963f405eabb7aa31e938db64b1",
+      "line": 6,
+      "raw": "tns max 0.00",
+      "sta_analysis_declared_in": "_ppa/contract.py:LEGACY_DISTINCT_STA_ANALYSES"
+     }
+    },
+    {
+     "schema": "vibeic.ppa.metric.v1",
+     "metric": "timing.setup.worst_path_slack_ns",
+     "status": "MEASURED",
+     "value": 3.71,
+     "unit": "ns",
+     "scope": {
+      "stage": "post_route_extracted",
+      "mode": "functional",
+      "process": "ss",
+      "voltage_v": 1.6,
+      "temperature_c": 100.0,
+      "clock": "clk",
+      "check": "setup",
+      "sta_analysis": "sta_mcorner_ocv",
+      "path_ordinal": 0
+     },
+     "scope_gaps": {
+      "rc_corner": "this report names no RC corner for the section; the RC axis is reported by the multi-corner SPEF report, not this one"
+     },
+     "source": {
+      "path": "reports/phase3/sta_mcorner_ocv.rpt",
+      "sha256": "sha256:5c83aef0a8c5571dfcddfa01e84903a6bf9df42379b7e37f1688d3158a7aa150",
+      "tool": "opensta",
+      "tool_commit": null,
+      "parser": "_ppa/backends/opensta.py",
+      "parser_sha256": "sha256:054a956d923c110d53b6fd56503d7c25440493963f405eabb7aa31e938db64b1",
+      "line": 9,
+      "raw": "Startpoint: __uuf__._476_ (rising edge-triggered flip-flop clocked by clk)",
+      "sta_analysis_declared_in": "_ppa/contract.py:LEGACY_DISTINCT_STA_ANALYSES"
+     }
+    },
+    {
+     "schema": "vibeic.ppa.metric.v1",
+     "metric": "timing.setup.worst_path_slack_ns",
+     "status": "MEASURED",
+     "value": 3.84,
+     "unit": "ns",
+     "scope": {
+      "stage": "post_route_extracted",
+      "mode": "functional",
+      "process": "ss",
+      "voltage_v": 1.6,
+      "temperature_c": 100.0,
+      "clock": "clk",
+      "check": "setup",
+      "sta_analysis": "sta_mcorner_ocv",
+      "path_ordinal": 1
+     },
+     "scope_gaps": {
+      "rc_corner": "this report names no RC corner for the section; the RC axis is reported by the multi-corner SPEF report, not this one"
+     },
+     "source": {
+      "path": "reports/phase3/sta_mcorner_ocv.rpt",
+      "sha256": "sha256:5c83aef0a8c5571dfcddfa01e84903a6bf9df42379b7e37f1688d3158a7aa150",
+      "tool": "opensta",
+      "tool_commit": null,
+      "parser": "_ppa/backends/opensta.py",
+      "parser_sha256": "sha256:054a956d923c110d53b6fd56503d7c25440493963f405eabb7aa31e938db64b1",
+      "line": 43,
+      "raw": "Startpoint: __uuf__._476_ (rising edge-triggered flip-flop clocked by clk)",
+      "sta_analysis_declared_in": "_ppa/contract.py:LEGACY_DISTINCT_STA_ANALYSES"
+     }
+    },
+    {
+     "schema": "vibeic.ppa.metric.v1",
+     "metric": "timing.setup.worst_path_slack_ns",
+     "status": "MEASURED",
+     "value": 3.84,
+     "unit": "ns",
+     "scope": {
+      "stage": "post_route_extracted",
+      "mode": "functional",
+      "process": "ss",
+      "voltage_v": 1.6,
+      "temperature_c": 100.0,
+      "clock": "clk",
+      "check": "setup",
+      "sta_analysis": "sta_mcorner_ocv",
+      "path_ordinal": 2
+     },
+     "scope_gaps": {
+      "rc_corner": "this report names no RC corner for the section; the RC axis is reported by the multi-corner SPEF report, not this one"
+     },
+     "source": {
+      "path": "reports/phase3/sta_mcorner_ocv.rpt",
+      "sha256": "sha256:5c83aef0a8c5571dfcddfa01e84903a6bf9df42379b7e37f1688d3158a7aa150",
+      "tool": "opensta",
+      "tool_commit": null,
+      "parser": "_ppa/backends/opensta.py",
+      "parser_sha256": "sha256:054a956d923c110d53b6fd56503d7c25440493963f405eabb7aa31e938db64b1",
+      "line": 77,
+      "raw": "Startpoint: __uuf__._476_ (rising edge-triggered flip-flop clocked by clk)",
+      "sta_analysis_declared_in": "_ppa/contract.py:LEGACY_DISTINCT_STA_ANALYSES"
+     }
+    },
+    {
+     "schema": "vibeic.ppa.metric.v1",
+     "metric": "timing.hold.worst_slack_ns",
+     "status": "MEASURED",
+     "value": 0.29,
+     "unit": "ns",
+     "scope": {
+      "stage": "post_route_extracted",
+      "mode": "functional",
+      "process": "ff",
+      "voltage_v": 1.95,
+      "temperature_c": -40.0,
+      "check": "hold",
+      "sta_analysis": "sta_mcorner_ocv"
+     },
+     "scope_gaps": {
+      "rc_corner": "this report names no RC corner for the section; the RC axis is reported by the multi-corner SPEF report, not this one",
+      "clock": "not_applicable: this row is the DESIGN-WIDE figure and is not scoped to one clock; the per-clock evidence is `timing.*.worst_path_slack_ns`, which carries the clock it names"
+     },
+     "source": {
+      "path": "reports/phase3/sta_mcorner_ocv.rpt",
+      "sha256": "sha256:5c83aef0a8c5571dfcddfa01e84903a6bf9df42379b7e37f1688d3158a7aa150",
+      "tool": "opensta",
+      "tool_commit": null,
+      "parser": "_ppa/backends/opensta.py",
+      "parser_sha256": "sha256:054a956d923c110d53b6fd56503d7c25440493963f405eabb7aa31e938db64b1",
+      "line": 122,
+      "raw": "worst slack min 0.29",
+      "sta_analysis_declared_in": "_ppa/contract.py:LEGACY_DISTINCT_STA_ANALYSES"
+     }
+    },
+    {
+     "schema": "vibeic.ppa.metric.v1",
+     "metric": "timing.hold.wns_ns",
+     "status": "MEASURED",
+     "value": 0.0,
+     "unit": "ns",
+     "scope": {
+      "stage": "post_route_extracted",
+      "mode": "functional",
+      "process": "ff",
+      "voltage_v": 1.95,
+      "temperature_c": -40.0,
+      "check": "hold",
+      "sta_analysis": "sta_mcorner_ocv"
+     },
+     "scope_gaps": {
+      "rc_corner": "this report names no RC corner for the section; the RC axis is reported by the multi-corner SPEF report, not this one",
+      "clock": "not_applicable: this row is the DESIGN-WIDE figure and is not scoped to one clock; the per-clock evidence is `timing.*.worst_path_slack_ns`, which carries the clock it names"
+     },
+     "source": {
+      "path": "reports/phase3/sta_mcorner_ocv.rpt",
+      "sha256": "sha256:5c83aef0a8c5571dfcddfa01e84903a6bf9df42379b7e37f1688d3158a7aa150",
+      "tool": "opensta",
+      "tool_commit": null,
+      "parser": "_ppa/backends/opensta.py",
+      "parser_sha256": "sha256:054a956d923c110d53b6fd56503d7c25440493963f405eabb7aa31e938db64b1",
+      "line": 124,
+      "raw": "wns min 0.00",
+      "sta_analysis_declared_in": "_ppa/contract.py:LEGACY_DISTINCT_STA_ANALYSES"
+     }
+    },
+    {
+     "schema": "vibeic.ppa.metric.v1",
+     "metric": "timing.hold.tns_ns",
+     "status": "NOT_MEASURED",
+     "reason": "not_reported: the artefact carries no tns line for this view — the tool was not asked, or the query failed",
+     "unit": "ns",
+     "scope": {
+      "stage": "post_route_extracted",
+      "mode": "functional",
+      "process": "ff",
+      "voltage_v": 1.95,
+      "temperature_c": -40.0,
+      "check": "hold",
+      "sta_analysis": "sta_mcorner_ocv"
+     },
+     "scope_gaps": {
+      "rc_corner": "this report names no RC corner for the section; the RC axis is reported by the multi-corner SPEF report, not this one",
+      "clock": "not_applicable: this row is the DESIGN-WIDE figure and is not scoped to one clock; the per-clock evidence is `timing.*.worst_path_slack_ns`, which carries the clock it names"
+     },
+     "source": {
+      "path": "reports/phase3/sta_mcorner_ocv.rpt",
+      "sha256": "sha256:5c83aef0a8c5571dfcddfa01e84903a6bf9df42379b7e37f1688d3158a7aa150",
+      "tool": "opensta",
+      "tool_commit": null,
+      "parser": "_ppa/backends/opensta.py",
+      "parser_sha256": "sha256:054a956d923c110d53b6fd56503d7c25440493963f405eabb7aa31e938db64b1",
+      "line": null,
+      "raw": null,
+      "sta_analysis_declared_in": "_ppa/contract.py:LEGACY_DISTINCT_STA_ANALYSES"
+     }
+    },
+    {
+     "schema": "vibeic.ppa.metric.v1",
+     "metric": "timing.hold.worst_path_slack_ns",
+     "status": "MEASURED",
+     "value": 0.29,
+     "unit": "ns",
+     "scope": {
+      "stage": "post_route_extracted",
+      "mode": "functional",
+      "process": "ff",
+      "voltage_v": 1.95,
+      "temperature_c": -40.0,
+      "clock": "clk",
+      "check": "hold",
+      "sta_analysis": "sta_mcorner_ocv",
+      "path_ordinal": 0
+     },
+     "scope_gaps": {
+      "rc_corner": "this report names no RC corner for the section; the RC axis is reported by the multi-corner SPEF report, not this one"
+     },
+     "source": {
+      "path": "reports/phase3/sta_mcorner_ocv.rpt",
+      "sha256": "sha256:5c83aef0a8c5571dfcddfa01e84903a6bf9df42379b7e37f1688d3158a7aa150",
+      "tool": "opensta",
+      "tool_commit": null,
+      "parser": "_ppa/backends/opensta.py",
+      "parser_sha256": "sha256:054a956d923c110d53b6fd56503d7c25440493963f405eabb7aa31e938db64b1",
+      "line": 126,
+      "raw": "Startpoint: __uuf__._465_ (rising edge-triggered flip-flop clocked by clk)",
+      "sta_analysis_declared_in": "_ppa/contract.py:LEGACY_DISTINCT_STA_ANALYSES"
+     }
+    },
+    {
+     "schema": "vibeic.ppa.metric.v1",
+     "metric": "timing.hold.worst_path_slack_ns",
+     "status": "MEASURED",
+     "value": 0.29,
+     "unit": "ns",
+     "scope": {
+      "stage": "post_route_extracted",
+      "mode": "functional",
+      "process": "ff",
+      "voltage_v": 1.95,
+      "temperature_c": -40.0,
+      "clock": "clk",
+      "check": "hold",
+      "sta_analysis": "sta_mcorner_ocv",
+      "path_ordinal": 1
+     },
+     "scope_gaps": {
+      "rc_corner": "this report names no RC corner for the section; the RC axis is reported by the multi-corner SPEF report, not this one"
+     },
+     "source": {
+      "path": "reports/phase3/sta_mcorner_ocv.rpt",
+      "sha256": "sha256:5c83aef0a8c5571dfcddfa01e84903a6bf9df42379b7e37f1688d3158a7aa150",
+      "tool": "opensta",
+      "tool_commit": null,
+      "parser": "_ppa/backends/opensta.py",
+      "parser_sha256": "sha256:054a956d923c110d53b6fd56503d7c25440493963f405eabb7aa31e938db64b1",
+      "line": 154,
+      "raw": "Startpoint: __uuf__._446_ (rising edge-triggered flip-flop clocked by clk)",
+      "sta_analysis_declared_in": "_ppa/contract.py:LEGACY_DISTINCT_STA_ANALYSES"
+     }
+    },
+    {
+     "schema": "vibeic.ppa.metric.v1",
+     "metric": "timing.hold.worst_path_slack_ns",
+     "status": "MEASURED",
+     "value": 0.33,
+     "unit": "ns",
+     "scope": {
+      "stage": "post_route_extracted",
+      "mode": "functional",
+      "process": "ff",
+      "voltage_v": 1.95,
+      "temperature_c": -40.0,
+      "clock": "clk",
+      "check": "hold",
+      "sta_analysis": "sta_mcorner_ocv",
+      "path_ordinal": 2
+     },
+     "scope_gaps": {
+      "rc_corner": "this report names no RC corner for the section; the RC axis is reported by the multi-corner SPEF report, not this one"
+     },
+     "source": {
+      "path": "reports/phase3/sta_mcorner_ocv.rpt",
+      "sha256": "sha256:5c83aef0a8c5571dfcddfa01e84903a6bf9df42379b7e37f1688d3158a7aa150",
+      "tool": "opensta",
+      "tool_commit": null,
+      "parser": "_ppa/backends/opensta.py",
+      "parser_sha256": "sha256:054a956d923c110d53b6fd56503d7c25440493963f405eabb7aa31e938db64b1",
+      "line": 182,
+      "raw": "Startpoint: __uuf__._499_ (rising edge-triggered flip-flop clocked by clk)",
+      "sta_analysis_declared_in": "_ppa/contract.py:LEGACY_DISTINCT_STA_ANALYSES"
+     }
+    },
+    {
+     "schema": "vibeic.ppa.metric.v1",
+     "metric": "timing.setup.worst_slack_ns",
+     "status": "MEASURED",
+     "value": 4.92,
+     "unit": "ns",
+     "scope": {
+      "stage": "post_route_extracted",
+      "mode": "functional",
+      "process": "ss",
+      "voltage_v": 1.6,
+      "temperature_c": 100.0,
+      "check": "setup",
+      "sta_analysis": "sta_spef_based"
+     },
+     "scope_gaps": {
+      "rc_corner": "this report names no RC corner for the section; the RC axis is reported by the multi-corner SPEF report, not this one",
+      "clock": "not_applicable: this row is the DESIGN-WIDE figure and is not scoped to one clock; the per-clock evidence is `timing.*.worst_path_slack_ns`, which carries the clock it names"
+     },
+     "source": {
+      "path": "reports/phase3/sta_spef_based.rpt",
+      "sha256": "sha256:34a40fa7ec1abe90e8a1e605c4d6d3fb724c0fd5d1db9c2f1478c108822706ee",
+      "tool": "opensta",
+      "tool_commit": null,
+      "parser": "_ppa/backends/opensta.py",
+      "parser_sha256": "sha256:054a956d923c110d53b6fd56503d7c25440493963f405eabb7aa31e938db64b1",
+      "line": 38,
+      "raw": "worst slack max 4.92",
+      "sta_analysis_declared_in": "_ppa/contract.py:LEGACY_DISTINCT_STA_ANALYSES"
+     }
+    },
+    {
+     "schema": "vibeic.ppa.metric.v1",
+     "metric": "timing.setup.wns_ns",
+     "status": "MEASURED",
+     "value": 0.0,
+     "unit": "ns",
+     "scope": {
+      "stage": "post_route_extracted",
+      "mode": "functional",
+      "process": "ss",
+      "voltage_v": 1.6,
+      "temperature_c": 100.0,
+      "check": "setup",
+      "sta_analysis": "sta_spef_based"
+     },
+     "scope_gaps": {
+      "rc_corner": "this report names no RC corner for the section; the RC axis is reported by the multi-corner SPEF report, not this one",
+      "clock": "not_applicable: this row is the DESIGN-WIDE figure and is not scoped to one clock; the per-clock evidence is `timing.*.worst_path_slack_ns`, which carries the clock it names"
+     },
+     "source": {
+      "path": "reports/phase3/sta_spef_based.rpt",
+      "sha256": "sha256:34a40fa7ec1abe90e8a1e605c4d6d3fb724c0fd5d1db9c2f1478c108822706ee",
+      "tool": "opensta",
+      "tool_commit": null,
+      "parser": "_ppa/backends/opensta.py",
+      "parser_sha256": "sha256:054a956d923c110d53b6fd56503d7c25440493963f405eabb7aa31e938db64b1",
+      "line": 37,
+      "raw": "wns max 0.00",
+      "sta_analysis_declared_in": "_ppa/contract.py:LEGACY_DISTINCT_STA_ANALYSES"
+     }
+    },
+    {
+     "schema": "vibeic.ppa.metric.v1",
+     "metric": "timing.setup.tns_ns",
+     "status": "MEASURED",
+     "value": 0.0,
+     "unit": "ns",
+     "scope": {
+      "stage": "post_route_extracted",
+      "mode": "functional",
+      "process": "ss",
+      "voltage_v": 1.6,
+      "temperature_c": 100.0,
+      "check": "setup",
+      "sta_analysis": "sta_spef_based"
+     },
+     "scope_gaps": {
+      "rc_corner": "this report names no RC corner for the section; the RC axis is reported by the multi-corner SPEF report, not this one",
+      "clock": "not_applicable: this row is the DESIGN-WIDE figure and is not scoped to one clock; the per-clock evidence is `timing.*.worst_path_slack_ns`, which carries the clock it names"
+     },
+     "source": {
+      "path": "reports/phase3/sta_spef_based.rpt",
+      "sha256": "sha256:34a40fa7ec1abe90e8a1e605c4d6d3fb724c0fd5d1db9c2f1478c108822706ee",
+      "tool": "opensta",
+      "tool_commit": null,
+      "parser": "_ppa/backends/opensta.py",
+      "parser_sha256": "sha256:054a956d923c110d53b6fd56503d7c25440493963f405eabb7aa31e938db64b1",
+      "line": 36,
+      "raw": "tns max 0.00",
+      "sta_analysis_declared_in": "_ppa/contract.py:LEGACY_DISTINCT_STA_ANALYSES"
+     }
+    },
+    {
+     "schema": "vibeic.ppa.metric.v1",
+     "metric": "timing.setup.worst_path_slack_ns",
+     "status": "MEASURED",
+     "value": 4.92,
+     "unit": "ns",
+     "scope": {
+      "stage": "post_route_extracted",
+      "mode": "functional",
+      "process": "ss",
+      "voltage_v": 1.6,
+      "temperature_c": 100.0,
+      "clock": "clk",
+      "check": "setup",
+      "sta_analysis": "sta_spef_based"
+     },
+     "scope_gaps": {
+      "rc_corner": "this report names no RC corner for the section; the RC axis is reported by the multi-corner SPEF report, not this one"
+     },
+     "source": {
+      "path": "reports/phase3/sta_spef_based.rpt",
+      "sha256": "sha256:34a40fa7ec1abe90e8a1e605c4d6d3fb724c0fd5d1db9c2f1478c108822706ee",
+      "tool": "opensta",
+      "tool_commit": null,
+      "parser": "_ppa/backends/opensta.py",
+      "parser_sha256": "sha256:054a956d923c110d53b6fd56503d7c25440493963f405eabb7aa31e938db64b1",
+      "line": 1,
+      "raw": "Startpoint: test (input port clocked by clk)",
+      "sta_analysis_declared_in": "_ppa/contract.py:LEGACY_DISTINCT_STA_ANALYSES"
+     }
+    },
+    {
+     "schema": "vibeic.ppa.metric.v1",
+     "metric": "timing.setup.worst_slack_ns",
+     "status": "MEASURED",
+     "value": 6.27,
+     "unit": "ns",
+     "scope": {
+      "stage": "post_route_extracted",
+      "mode": "functional",
+      "process": "tt",
+      "voltage_v": 1.8,
+      "temperature_c": 25.0,
+      "rc_corner": "max",
+      "check": "setup",
+      "sta_analysis": "sta_spef_multicorner"
+     },
+     "source": {
+      "path": "reports/phase3/sta_spef_multicorner.rpt",
+      "sha256": "sha256:4a80c63df18b7808d789abf16d6e5341d1242e720044417358e36e574362faf5",
+      "tool": "opensta",
+      "tool_commit": null,
+      "parser": "_ppa/backends/opensta.py",
+      "parser_sha256": "sha256:054a956d923c110d53b6fd56503d7c25440493963f405eabb7aa31e938db64b1",
+      "line": 11,
+      "raw": "worst slack max 6.27",
+      "sta_analysis_declared_in": "_ppa/contract.py:LEGACY_DISTINCT_STA_ANALYSES"
+     },
+     "scope_gaps": {
+      "clock": "not_applicable: this row is the DESIGN-WIDE figure and is not scoped to one clock; the per-clock evidence is `timing.*.worst_path_slack_ns`, which carries the clock it names"
+     }
+    },
+    {
+     "schema": "vibeic.ppa.metric.v1",
+     "metric": "timing.setup.wns_ns",
+     "status": "MEASURED",
+     "value": 0.0,
+     "unit": "ns",
+     "scope": {
+      "stage": "post_route_extracted",
+      "mode": "functional",
+      "process": "tt",
+      "voltage_v": 1.8,
+      "temperature_c": 25.0,
+      "rc_corner": "max",
+      "check": "setup",
+      "sta_analysis": "sta_spef_multicorner"
+     },
+     "source": {
+      "path": "reports/phase3/sta_spef_multicorner.rpt",
+      "sha256": "sha256:4a80c63df18b7808d789abf16d6e5341d1242e720044417358e36e574362faf5",
+      "tool": "opensta",
+      "tool_commit": null,
+      "parser": "_ppa/backends/opensta.py",
+      "parser_sha256": "sha256:054a956d923c110d53b6fd56503d7c25440493963f405eabb7aa31e938db64b1",
+      "line": 13,
+      "raw": "wns max 0.00",
+      "sta_analysis_declared_in": "_ppa/contract.py:LEGACY_DISTINCT_STA_ANALYSES"
+     },
+     "scope_gaps": {
+      "clock": "not_applicable: this row is the DESIGN-WIDE figure and is not scoped to one clock; the per-clock evidence is `timing.*.worst_path_slack_ns`, which carries the clock it names"
+     }
+    },
+    {
+     "schema": "vibeic.ppa.metric.v1",
+     "metric": "timing.setup.tns_ns",
+     "status": "MEASURED",
+     "value": 0.0,
+     "unit": "ns",
+     "scope": {
+      "stage": "post_route_extracted",
+      "mode": "functional",
+      "process": "tt",
+      "voltage_v": 1.8,
+      "temperature_c": 25.0,
+      "rc_corner": "max",
+      "check": "setup",
+      "sta_analysis": "sta_spef_multicorner"
+     },
+     "source": {
+      "path": "reports/phase3/sta_spef_multicorner.rpt",
+      "sha256": "sha256:4a80c63df18b7808d789abf16d6e5341d1242e720044417358e36e574362faf5",
+      "tool": "opensta",
+      "tool_commit": null,
+      "parser": "_ppa/backends/opensta.py",
+      "parser_sha256": "sha256:054a956d923c110d53b6fd56503d7c25440493963f405eabb7aa31e938db64b1",
+      "line": 12,
+      "raw": "tns max 0.00",
+      "sta_analysis_declared_in": "_ppa/contract.py:LEGACY_DISTINCT_STA_ANALYSES"
+     },
+     "scope_gaps": {
+      "clock": "not_applicable: this row is the DESIGN-WIDE figure and is not scoped to one clock; the per-clock evidence is `timing.*.worst_path_slack_ns`, which carries the clock it names"
+     }
+    },
+    {
+     "schema": "vibeic.ppa.metric.v1",
+     "metric": "timing.setup.worst_path_slack_ns",
+     "status": "MEASURED",
+     "value": 6.27,
+     "unit": "ns",
+     "scope": {
+      "stage": "post_route_extracted",
+      "mode": "functional",
+      "process": "tt",
+      "voltage_v": 1.8,
+      "temperature_c": 25.0,
+      "rc_corner": "max",
+      "clock": "clk",
+      "check": "setup",
+      "sta_analysis": "sta_spef_multicorner",
+      "path_ordinal": 0
+     },
+     "source": {
+      "path": "reports/phase3/sta_spef_multicorner.rpt",
+      "sha256": "sha256:4a80c63df18b7808d789abf16d6e5341d1242e720044417358e36e574362faf5",
+      "tool": "opensta",
+      "tool_commit": null,
+      "parser": "_ppa/backends/opensta.py",
+      "parser_sha256": "sha256:054a956d923c110d53b6fd56503d7c25440493963f405eabb7aa31e938db64b1",
+      "line": 15,
+      "raw": "Startpoint: test (input port clocked by clk)",
+      "sta_analysis_declared_in": "_ppa/contract.py:LEGACY_DISTINCT_STA_ANALYSES"
+     }
+    },
+    {
+     "schema": "vibeic.ppa.metric.v1",
+     "metric": "timing.setup.worst_path_slack_ns",
+     "status": "MEASURED",
+     "value": 6.3,
+     "unit": "ns",
+     "scope": {
+      "stage": "post_route_extracted",
+      "mode": "functional",
+      "process": "tt",
+      "voltage_v": 1.8,
+      "temperature_c": 25.0,
+      "rc_corner": "max",
+      "clock": "clk",
+      "check": "setup",
+      "sta_analysis": "sta_spef_multicorner",
+      "path_ordinal": 1
+     },
+     "source": {
+      "path": "reports/phase3/sta_spef_multicorner.rpt",
+      "sha256": "sha256:4a80c63df18b7808d789abf16d6e5341d1242e720044417358e36e574362faf5",
+      "tool": "opensta",
+      "tool_commit": null,
+      "parser": "_ppa/backends/opensta.py",
+      "parser_sha256": "sha256:054a956d923c110d53b6fd56503d7c25440493963f405eabb7aa31e938db64b1",
+      "line": 50,
+      "raw": "Startpoint: test (input port clocked by clk)",
+      "sta_analysis_declared_in": "_ppa/contract.py:LEGACY_DISTINCT_STA_ANALYSES"
+     }
+    },
+    {
+     "schema": "vibeic.ppa.metric.v1",
+     "metric": "timing.setup.worst_path_slack_ns",
+     "status": "MEASURED",
+     "value": 6.34,
+     "unit": "ns",
+     "scope": {
+      "stage": "post_route_extracted",
+      "mode": "functional",
+      "process": "tt",
+      "voltage_v": 1.8,
+      "temperature_c": 25.0,
+      "rc_corner": "max",
+      "clock": "clk",
+      "check": "setup",
+      "sta_analysis": "sta_spef_multicorner",
+      "path_ordinal": 2
+     },
+     "source": {
+      "path": "reports/phase3/sta_spef_multicorner.rpt",
+      "sha256": "sha256:4a80c63df18b7808d789abf16d6e5341d1242e720044417358e36e574362faf5",
+      "tool": "opensta",
+      "tool_commit": null,
+      "parser": "_ppa/backends/opensta.py",
+      "parser_sha256": "sha256:054a956d923c110d53b6fd56503d7c25440493963f405eabb7aa31e938db64b1",
+      "line": 85,
+      "raw": "Startpoint: test (input port clocked by clk)",
+      "sta_analysis_declared_in": "_ppa/contract.py:LEGACY_DISTINCT_STA_ANALYSES"
+     }
+    },
+    {
+     "schema": "vibeic.ppa.metric.v1",
+     "metric": "timing.hold.worst_slack_ns",
+     "status": "MEASURED",
+     "value": 0.53,
+     "unit": "ns",
+     "scope": {
+      "stage": "post_route_extracted",
+      "mode": "functional",
+      "process": "tt",
+      "voltage_v": 1.8,
+      "temperature_c": 25.0,
+      "rc_corner": "min",
+      "check": "hold",
+      "sta_analysis": "sta_spef_multicorner"
+     },
+     "source": {
+      "path": "reports/phase3/sta_spef_multicorner.rpt",
+      "sha256": "sha256:4a80c63df18b7808d789abf16d6e5341d1242e720044417358e36e574362faf5",
+      "tool": "opensta",
+      "tool_commit": null,
+      "parser": "_ppa/backends/opensta.py",
+      "parser_sha256": "sha256:054a956d923c110d53b6fd56503d7c25440493963f405eabb7aa31e938db64b1",
+      "line": 130,
+      "raw": "worst slack min 0.53",
+      "sta_analysis_declared_in": "_ppa/contract.py:LEGACY_DISTINCT_STA_ANALYSES"
+     },
+     "scope_gaps": {
+      "clock": "not_applicable: this row is the DESIGN-WIDE figure and is not scoped to one clock; the per-clock evidence is `timing.*.worst_path_slack_ns`, which carries the clock it names"
+     }
+    },
+    {
+     "schema": "vibeic.ppa.metric.v1",
+     "metric": "timing.hold.wns_ns",
+     "status": "MEASURED",
+     "value": 0.0,
+     "unit": "ns",
+     "scope": {
+      "stage": "post_route_extracted",
+      "mode": "functional",
+      "process": "tt",
+      "voltage_v": 1.8,
+      "temperature_c": 25.0,
+      "rc_corner": "min",
+      "check": "hold",
+      "sta_analysis": "sta_spef_multicorner"
+     },
+     "source": {
+      "path": "reports/phase3/sta_spef_multicorner.rpt",
+      "sha256": "sha256:4a80c63df18b7808d789abf16d6e5341d1242e720044417358e36e574362faf5",
+      "tool": "opensta",
+      "tool_commit": null,
+      "parser": "_ppa/backends/opensta.py",
+      "parser_sha256": "sha256:054a956d923c110d53b6fd56503d7c25440493963f405eabb7aa31e938db64b1",
+      "line": 132,
+      "raw": "wns min 0.00",
+      "sta_analysis_declared_in": "_ppa/contract.py:LEGACY_DISTINCT_STA_ANALYSES"
+     },
+     "scope_gaps": {
+      "clock": "not_applicable: this row is the DESIGN-WIDE figure and is not scoped to one clock; the per-clock evidence is `timing.*.worst_path_slack_ns`, which carries the clock it names"
+     }
+    },
+    {
+     "schema": "vibeic.ppa.metric.v1",
+     "metric": "timing.hold.tns_ns",
+     "status": "NOT_MEASURED",
+     "reason": "not_reported: the artefact carries no tns line for this view — the tool was not asked, or the query failed",
+     "unit": "ns",
+     "scope": {
+      "stage": "post_route_extracted",
+      "mode": "functional",
+      "process": "tt",
+      "voltage_v": 1.8,
+      "temperature_c": 25.0,
+      "rc_corner": "min",
+      "check": "hold",
+      "sta_analysis": "sta_spef_multicorner"
+     },
+     "source": {
+      "path": "reports/phase3/sta_spef_multicorner.rpt",
+      "sha256": "sha256:4a80c63df18b7808d789abf16d6e5341d1242e720044417358e36e574362faf5",
+      "tool": "opensta",
+      "tool_commit": null,
+      "parser": "_ppa/backends/opensta.py",
+      "parser_sha256": "sha256:054a956d923c110d53b6fd56503d7c25440493963f405eabb7aa31e938db64b1",
+      "line": null,
+      "raw": null,
+      "sta_analysis_declared_in": "_ppa/contract.py:LEGACY_DISTINCT_STA_ANALYSES"
+     },
+     "scope_gaps": {
+      "clock": "not_applicable: this row is the DESIGN-WIDE figure and is not scoped to one clock; the per-clock evidence is `timing.*.worst_path_slack_ns`, which carries the clock it names"
+     }
+    },
+    {
+     "schema": "vibeic.ppa.metric.v1",
+     "metric": "timing.hold.worst_path_slack_ns",
+     "status": "MEASURED",
+     "value": 0.53,
+     "unit": "ns",
+     "scope": {
+      "stage": "post_route_extracted",
+      "mode": "functional",
+      "process": "tt",
+      "voltage_v": 1.8,
+      "temperature_c": 25.0,
+      "rc_corner": "min",
+      "clock": "clk",
+      "check": "hold",
+      "sta_analysis": "sta_spef_multicorner",
+      "path_ordinal": 0
+     },
+     "source": {
+      "path": "reports/phase3/sta_spef_multicorner.rpt",
+      "sha256": "sha256:4a80c63df18b7808d789abf16d6e5341d1242e720044417358e36e574362faf5",
+      "tool": "opensta",
+      "tool_commit": null,
+      "parser": "_ppa/backends/opensta.py",
+      "parser_sha256": "sha256:054a956d923c110d53b6fd56503d7c25440493963f405eabb7aa31e938db64b1",
+      "line": 134,
+      "raw": "Startpoint: __uuf__._465_ (rising edge-triggered flip-flop clocked by clk)",
+      "sta_analysis_declared_in": "_ppa/contract.py:LEGACY_DISTINCT_STA_ANALYSES"
+     }
+    },
+    {
+     "schema": "vibeic.ppa.metric.v1",
+     "metric": "timing.hold.worst_path_slack_ns",
+     "status": "MEASURED",
+     "value": 0.55,
+     "unit": "ns",
+     "scope": {
+      "stage": "post_route_extracted",
+      "mode": "functional",
+      "process": "tt",
+      "voltage_v": 1.8,
+      "temperature_c": 25.0,
+      "rc_corner": "min",
+      "clock": "clk",
+      "check": "hold",
+      "sta_analysis": "sta_spef_multicorner",
+      "path_ordinal": 1
+     },
+     "source": {
+      "path": "reports/phase3/sta_spef_multicorner.rpt",
+      "sha256": "sha256:4a80c63df18b7808d789abf16d6e5341d1242e720044417358e36e574362faf5",
+      "tool": "opensta",
+      "tool_commit": null,
+      "parser": "_ppa/backends/opensta.py",
+      "parser_sha256": "sha256:054a956d923c110d53b6fd56503d7c25440493963f405eabb7aa31e938db64b1",
+      "line": 162,
+      "raw": "Startpoint: __uuf__._446_ (rising edge-triggered flip-flop clocked by clk)",
+      "sta_analysis_declared_in": "_ppa/contract.py:LEGACY_DISTINCT_STA_ANALYSES"
+     }
+    },
+    {
+     "schema": "vibeic.ppa.metric.v1",
+     "metric": "timing.hold.worst_path_slack_ns",
+     "status": "MEASURED",
+     "value": 0.57,
+     "unit": "ns",
+     "scope": {
+      "stage": "post_route_extracted",
+      "mode": "functional",
+      "process": "tt",
+      "voltage_v": 1.8,
+      "temperature_c": 25.0,
+      "rc_corner": "min",
+      "clock": "clk",
+      "check": "hold",
+      "sta_analysis": "sta_spef_multicorner",
+      "path_ordinal": 2
+     },
+     "source": {
+      "path": "reports/phase3/sta_spef_multicorner.rpt",
+      "sha256": "sha256:4a80c63df18b7808d789abf16d6e5341d1242e720044417358e36e574362faf5",
+      "tool": "opensta",
+      "tool_commit": null,
+      "parser": "_ppa/backends/opensta.py",
+      "parser_sha256": "sha256:054a956d923c110d53b6fd56503d7c25440493963f405eabb7aa31e938db64b1",
+      "line": 190,
+      "raw": "Startpoint: __uuf__._499_ (rising edge-triggered flip-flop clocked by clk)",
+      "sta_analysis_declared_in": "_ppa/contract.py:LEGACY_DISTINCT_STA_ANALYSES"
+     }
+    },
+    {
+     "metric": "physical.drc.violations",
+     "provenance": {
+      "categories_found": 4,
+      "discriminator": "fixtures/ppa/drc/zero_three_ways",
+      "earned": "4 rule categories over a layout of 15426 shapes",
+      "layout_shapes": 15426,
+      "real_violation_total": 0,
+      "rule": "categories > 0 and items == 0 and shapes > 0",
+      "stage_basis": "the sign-off DRC deck is applied to the streamed layout, so its verdict is about the geometry that would be manufactured"
+     },
+     "schema": "vibeic.ppa.metric.v1",
+     "scope": {
+      "stage": "signed_off_gds",
+      "tool": "klayout"
+     },
+     "source": {
+      "parser": "_ppa/signoff.py",
+      "parser_sha256": "sha256:f58252e8c297b38592a038e9ecc6df722fd7bdea4db8edef2b95a5f778c079b6",
+      "path": "reports/phase3/drc_signoff.json",
+      "sha256": "sha256:d5ad6783522454997243db2f6686810e630487bfae600a76c53a4479aeb27a75",
+      "tool": "klayout"
+     },
+     "status": "MEASURED",
+     "unit": "count",
+     "value": 0
+    },
+    {
+     "metric": "physical.lvs.verdict",
+     "provenance": {
+      "declared_status": "PASS",
+      "finding": "LVS_MATCH_POWER_VERIFIED",
+      "stage_basis": "LVS compares the netlist EXTRACTED from the routed layout against the gate netlist, so the measurement stands on the extraction",
+      "top_cell": null
+     },
+     "schema": "vibeic.ppa.metric.v1",
+     "scope": {
+      "stage": "post_route_extracted",
+      "tool": "netgen"
+     },
+     "source": {
+      "parser": "_ppa/signoff.py",
+      "parser_sha256": "sha256:f58252e8c297b38592a038e9ecc6df722fd7bdea4db8edef2b95a5f778c079b6",
+      "path": "reports/phase3/lvs_verdict.json",
+      "sha256": "sha256:e39878c3aadc03ab54dff8cdef77ef02a36736153de9855a2aa42e34b3b92869",
+      "tool": "netgen"
+     },
+     "status": "MEASURED",
+     "unit": "verdict",
+     "value": "MATCH"
+    },
+    {
+     "metric": "physical.antenna.violations",
+     "provenance": {
+      "mode": "antenna_check_in_session_post_repair",
+      "net_violations": 0,
+      "pin_violations": 0,
+      "pins_unaccessed": 0,
+      "routing_incomplete": false,
+      "stage_basis": "the antenna check runs over the routed design database; it needs no extracted parasitics, so it is post_route and not post_route_extracted"
+     },
+     "schema": "vibeic.ppa.metric.v1",
+     "scope": {
+      "stage": "post_route",
+      "tool": "openroad"
+     },
+     "source": {
+      "parser": "_ppa/signoff.py",
+      "parser_sha256": "sha256:f58252e8c297b38592a038e9ecc6df722fd7bdea4db8edef2b95a5f778c079b6",
+      "path": "reports/phase3/antenna.json",
+      "sha256": "sha256:6302a697d66b72c6e0a7cb6f60c816001a42ada0cad2f53dad2a105fbc50d0bd",
+      "tool": "openroad"
+     },
+     "status": "MEASURED",
+     "unit": "count",
+     "value": 0
+    },
+    {
+     "metric": "power.ir.violations",
+     "provenance": {
+      "budget_basis": "plugin ir_drop_budget_check default (10% VDD, the loosest commonly-cited static budget; typical 5-10%); override via pdk.ir_budget_pct",
+      "budget_pct_vdd": 10.0,
+      "stage_basis": "static IR is solved over the routed power grid; the solve reads the routed database and no SPEF",
+      "supply_measured": true,
+      "supply_model": "PSM default single-bump (PSM-0073) on a padless core -> CONSERVATIVE upper bound; real multi-bump power delivery is lower",
+      "worst_ir_pct_vdd": 0.013
+     },
+     "schema": "vibeic.ppa.metric.v1",
+     "scope": {
+      "stage": "post_route",
+      "tool": "openroad-psm"
+     },
+     "source": {
+      "parser": "_ppa/signoff.py",
+      "parser_sha256": "sha256:f58252e8c297b38592a038e9ecc6df722fd7bdea4db8edef2b95a5f778c079b6",
+      "path": "reports/phase3/ir_drop.json",
+      "sha256": "sha256:150c425439b1b9554b6426424f77f9fdbeb7206114b2e02e5179d09c792a3c64",
+      "tool": "openroad-psm"
+     },
+     "status": "MEASURED",
+     "unit": "count",
+     "value": 0
+    },
+    {
+     "metric": "power.ir.worst_drop_v",
+     "provenance": {
+      "conversion": "worst_ir_uv / 1e6",
+      "stage_basis": "same solve as `power.ir.violations`, reported in volts rather than as a count against the artefact's own budget",
+      "supply_measured": true,
+      "supply_voltage_v": 1.8,
+      "worst_ir_uv": 233.0
+     },
+     "schema": "vibeic.ppa.metric.v1",
+     "scope": {
+      "stage": "post_route",
+      "tool": "openroad-psm"
+     },
+     "source": {
+      "parser": "_ppa/signoff.py",
+      "parser_sha256": "sha256:f58252e8c297b38592a038e9ecc6df722fd7bdea4db8edef2b95a5f778c079b6",
+      "path": "reports/phase3/ir_drop.json",
+      "sha256": "sha256:150c425439b1b9554b6426424f77f9fdbeb7206114b2e02e5179d09c792a3c64",
+      "tool": "openroad-psm"
+     },
+     "status": "MEASURED",
+     "unit": "V",
+     "value": 0.000233
+    },
+    {
+     "metric": "reliability.em.violations",
+     "provenance": {
+      "margin": null,
+      "screen_artefact": "reports/phase3/em_signoff.json",
+      "screen_verdict": "",
+      "segments_screened": null,
+      "segments_unscreened": null,
+      "stage_basis": "the per-segment currents are solved over the routed power grid; the screen that turns them into a count reads that same solve",
+      "worst_utilization": null
+     },
+     "reason": "the current-density screen states verdict 'nothing', which is neither PASS, FAIL nor SKIPPED",
+     "schema": "vibeic.ppa.metric.v1",
+     "scope": {
+      "stage": "post_route",
+      "tool": "openroad-psm"
+     },
+     "source": {
+      "parser": "_ppa/signoff.py",
+      "parser_sha256": "sha256:f58252e8c297b38592a038e9ecc6df722fd7bdea4db8edef2b95a5f778c079b6",
+      "path": "reports/phase3/em.json",
+      "sha256": "sha256:739b3bc358fed54b8afe8f3aea0b144cdd483577df3bf2d861ca26a7bf069307",
+      "tool": "openroad-psm"
+     },
+     "status": "NOT_MEASURED",
+     "unit": "count"
+    },
+    {
+     "metric": "reliability.em.worst_ratio",
+     "provenance": {
+      "screen_artefact": "reports/phase3/em_signoff.json",
+      "screen_verdict": null,
+      "segments_screened": null,
+      "stage_basis": "same solve as `reliability.em.violations`, as the worst J/Jmax ratio rather than as a count against the screen's own margin"
+     },
+     "reason": "the current-density screen states no `summary.worst_utilization`, so no segment was screened against a Jmax and no ratio exists",
+     "schema": "vibeic.ppa.metric.v1",
+     "scope": {
+      "stage": "post_route",
+      "tool": "openroad-psm"
+     },
+     "source": {
+      "parser": "_ppa/signoff.py",
+      "parser_sha256": "sha256:f58252e8c297b38592a038e9ecc6df722fd7bdea4db8edef2b95a5f778c079b6",
+      "path": "reports/phase3/em.json",
+      "sha256": "sha256:739b3bc358fed54b8afe8f3aea0b144cdd483577df3bf2d861ca26a7bf069307",
+      "tool": "openroad-psm"
+     },
+     "status": "NOT_MEASURED",
+     "unit": "1"
+    },
+    {
+     "metric": "equivalence.verdict",
+     "provenance": {
+      "declared_verdict": "PASS",
+      "equivalent": true,
+      "gate": "post_dft_netlist.v (synth)",
+      "golden": null,
+      "stage_basis": "the axis is about the netlist that became the layout, so the stage is the routed one; a proof over a pre-layout gate netlist is refused by the reader rather than filed under an earlier stage"
+     },
+     "reason": "the proven pair is RTL against 'post_dft_netlist.v (synth)', which names no post-layout netlist. The routed netlist that became the layout was not the gate side of this proof, so it establishes no post-route equivalence",
+     "schema": "vibeic.ppa.metric.v1",
+     "scope": {
+      "stage": "post_route",
+      "tool": "yosys"
+     },
+     "source": {
+      "parser": "_ppa/signoff.py",
+      "parser_sha256": "sha256:f58252e8c297b38592a038e9ecc6df722fd7bdea4db8edef2b95a5f778c079b6",
+      "path": "reports/lec.json",
+      "sha256": "sha256:07fe94e2661e1280704024ff26779384a5595e088f1116e486555d8748c6ab4b",
+      "tool": "yosys"
+     },
+     "status": "NOT_MEASURED",
+     "unit": "verdict"
+    },
+    {
+     "schema": "vibeic.ppa.metric.v1",
+     "metric": "power.internal_w",
+     "status": "MEASURED",
+     "unit": "W",
+     "scope": {
+      "stage": "synth",
+      "scenario": "default",
+      "activity_basis": "VECTORLESS",
+      "liberty": "sky130_fd_sc_hd__tt_025C_1v80.lib",
+      "tool": "opensta",
+      "process": "tt",
+      "voltage_v": 1.8,
+      "temperature_c": 25.0,
+      "group": "Sequential"
+     },
+     "source": {
+      "path": "/home/reyerchu/_jxlayer/run/trials/c05/reports/phase3/power.rpt",
+      "sha256": "sha256:383f291e87dab4923484b54ef6066736f5e2841d276747212059cfdb86268bba",
+      "tool": "opensta",
+      "tool_version": "2.7.0",
+      "liberty": "sky130_fd_sc_hd__tt_025C_1v80.lib",
+      "netlist": "phase2/stage2/synth/spm_synth.v",
+      "parser": "_ppa/power.py",
+      "parser_sha256": "sha256:8b9b0b186a5b7d74d052b7cc7cb842e61855b225cea4d12f7a8a93e72424bcc1"
+     },
+     "value": 0.000273,
+     "value_raw": "2.73e-04",
+     "provenance": {
+      "activity_corroboration": "NO_CORROBORATION_NEEDED",
+      "activity_reason": "vectorless is the tool default; there is nothing to read",
+      "declared_mode": "vectorless_sdc",
+      "liberty_pvt_stem": "sky130_fd_sc_hd__tt_025C_1v80.lib",
+      "liberty_pvt_gaps": null
+     }
+    },
+    {
+     "schema": "vibeic.ppa.metric.v1",
+     "metric": "power.switching_w",
+     "status": "MEASURED",
+     "unit": "W",
+     "scope": {
+      "stage": "synth",
+      "scenario": "default",
+      "activity_basis": "VECTORLESS",
+      "liberty": "sky130_fd_sc_hd__tt_025C_1v80.lib",
+      "tool": "opensta",
+      "process": "tt",
+      "voltage_v": 1.8,
+      "temperature_c": 25.0,
+      "group": "Sequential"
+     },
+     "source": {
+      "path": "/home/reyerchu/_jxlayer/run/trials/c05/reports/phase3/power.rpt",
+      "sha256": "sha256:383f291e87dab4923484b54ef6066736f5e2841d276747212059cfdb86268bba",
+      "tool": "opensta",
+      "tool_version": "2.7.0",
+      "liberty": "sky130_fd_sc_hd__tt_025C_1v80.lib",
+      "netlist": "phase2/stage2/synth/spm_synth.v",
+      "parser": "_ppa/power.py",
+      "parser_sha256": "sha256:8b9b0b186a5b7d74d052b7cc7cb842e61855b225cea4d12f7a8a93e72424bcc1"
+     },
+     "value": 5.63e-06,
+     "value_raw": "5.63e-06",
+     "provenance": {
+      "activity_corroboration": "NO_CORROBORATION_NEEDED",
+      "activity_reason": "vectorless is the tool default; there is nothing to read",
+      "declared_mode": "vectorless_sdc",
+      "liberty_pvt_stem": "sky130_fd_sc_hd__tt_025C_1v80.lib",
+      "liberty_pvt_gaps": null
+     }
+    },
+    {
+     "schema": "vibeic.ppa.metric.v1",
+     "metric": "power.leakage_w",
+     "status": "MEASURED",
+     "unit": "W",
+     "scope": {
+      "stage": "synth",
+      "scenario": "default",
+      "activity_basis": "VECTORLESS",
+      "liberty": "sky130_fd_sc_hd__tt_025C_1v80.lib",
+      "tool": "opensta",
+      "process": "tt",
+      "voltage_v": 1.8,
+      "temperature_c": 25.0,
+      "group": "Sequential"
+     },
+     "source": {
+      "path": "/home/reyerchu/_jxlayer/run/trials/c05/reports/phase3/power.rpt",
+      "sha256": "sha256:383f291e87dab4923484b54ef6066736f5e2841d276747212059cfdb86268bba",
+      "tool": "opensta",
+      "tool_version": "2.7.0",
+      "liberty": "sky130_fd_sc_hd__tt_025C_1v80.lib",
+      "netlist": "phase2/stage2/synth/spm_synth.v",
+      "parser": "_ppa/power.py",
+      "parser_sha256": "sha256:8b9b0b186a5b7d74d052b7cc7cb842e61855b225cea4d12f7a8a93e72424bcc1"
+     },
+     "value": 5.29e-10,
+     "value_raw": "5.29e-10",
+     "provenance": {
+      "activity_corroboration": "NO_CORROBORATION_NEEDED",
+      "activity_reason": "vectorless is the tool default; there is nothing to read",
+      "declared_mode": "vectorless_sdc",
+      "liberty_pvt_stem": "sky130_fd_sc_hd__tt_025C_1v80.lib",
+      "liberty_pvt_gaps": null
+     }
+    },
+    {
+     "schema": "vibeic.ppa.metric.v1",
+     "metric": "power.total_w",
+     "status": "MEASURED",
+     "unit": "W",
+     "scope": {
+      "stage": "synth",
+      "scenario": "default",
+      "activity_basis": "VECTORLESS",
+      "liberty": "sky130_fd_sc_hd__tt_025C_1v80.lib",
+      "tool": "opensta",
+      "process": "tt",
+      "voltage_v": 1.8,
+      "temperature_c": 25.0,
+      "group": "Sequential"
+     },
+     "source": {
+      "path": "/home/reyerchu/_jxlayer/run/trials/c05/reports/phase3/power.rpt",
+      "sha256": "sha256:383f291e87dab4923484b54ef6066736f5e2841d276747212059cfdb86268bba",
+      "tool": "opensta",
+      "tool_version": "2.7.0",
+      "liberty": "sky130_fd_sc_hd__tt_025C_1v80.lib",
+      "netlist": "phase2/stage2/synth/spm_synth.v",
+      "parser": "_ppa/power.py",
+      "parser_sha256": "sha256:8b9b0b186a5b7d74d052b7cc7cb842e61855b225cea4d12f7a8a93e72424bcc1"
+     },
+     "value": 0.000279,
+     "value_raw": "2.79e-04",
+     "provenance": {
+      "activity_corroboration": "NO_CORROBORATION_NEEDED",
+      "activity_reason": "vectorless is the tool default; there is nothing to read",
+      "declared_mode": "vectorless_sdc",
+      "liberty_pvt_stem": "sky130_fd_sc_hd__tt_025C_1v80.lib",
+      "liberty_pvt_gaps": null
+     }
+    },
+    {
+     "schema": "vibeic.ppa.metric.v1",
+     "metric": "power.internal_w",
+     "status": "MEASURED",
+     "unit": "W",
+     "scope": {
+      "stage": "synth",
+      "scenario": "default",
+      "activity_basis": "VECTORLESS",
+      "liberty": "sky130_fd_sc_hd__tt_025C_1v80.lib",
+      "tool": "opensta",
+      "process": "tt",
+      "voltage_v": 1.8,
+      "temperature_c": 25.0,
+      "group": "Combinational"
+     },
+     "source": {
+      "path": "/home/reyerchu/_jxlayer/run/trials/c05/reports/phase3/power.rpt",
+      "sha256": "sha256:383f291e87dab4923484b54ef6066736f5e2841d276747212059cfdb86268bba",
+      "tool": "opensta",
+      "tool_version": "2.7.0",
+      "liberty": "sky130_fd_sc_hd__tt_025C_1v80.lib",
+      "netlist": "phase2/stage2/synth/spm_synth.v",
+      "parser": "_ppa/power.py",
+      "parser_sha256": "sha256:8b9b0b186a5b7d74d052b7cc7cb842e61855b225cea4d12f7a8a93e72424bcc1"
+     },
+     "value": 1.35e-05,
+     "value_raw": "1.35e-05",
+     "provenance": {
+      "activity_corroboration": "NO_CORROBORATION_NEEDED",
+      "activity_reason": "vectorless is the tool default; there is nothing to read",
+      "declared_mode": "vectorless_sdc",
+      "liberty_pvt_stem": "sky130_fd_sc_hd__tt_025C_1v80.lib",
+      "liberty_pvt_gaps": null
+     }
+    },
+    {
+     "schema": "vibeic.ppa.metric.v1",
+     "metric": "power.switching_w",
+     "status": "MEASURED",
+     "unit": "W",
+     "scope": {
+      "stage": "synth",
+      "scenario": "default",
+      "activity_basis": "VECTORLESS",
+      "liberty": "sky130_fd_sc_hd__tt_025C_1v80.lib",
+      "tool": "opensta",
+      "process": "tt",
+      "voltage_v": 1.8,
+      "temperature_c": 25.0,
+      "group": "Combinational"
+     },
+     "source": {
+      "path": "/home/reyerchu/_jxlayer/run/trials/c05/reports/phase3/power.rpt",
+      "sha256": "sha256:383f291e87dab4923484b54ef6066736f5e2841d276747212059cfdb86268bba",
+      "tool": "opensta",
+      "tool_version": "2.7.0",
+      "liberty": "sky130_fd_sc_hd__tt_025C_1v80.lib",
+      "netlist": "phase2/stage2/synth/spm_synth.v",
+      "parser": "_ppa/power.py",
+      "parser_sha256": "sha256:8b9b0b186a5b7d74d052b7cc7cb842e61855b225cea4d12f7a8a93e72424bcc1"
+     },
+     "value": 9.52e-06,
+     "value_raw": "9.52e-06",
+     "provenance": {
+      "activity_corroboration": "NO_CORROBORATION_NEEDED",
+      "activity_reason": "vectorless is the tool default; there is nothing to read",
+      "declared_mode": "vectorless_sdc",
+      "liberty_pvt_stem": "sky130_fd_sc_hd__tt_025C_1v80.lib",
+      "liberty_pvt_gaps": null
+     }
+    },
+    {
+     "schema": "vibeic.ppa.metric.v1",
+     "metric": "power.leakage_w",
+     "status": "MEASURED",
+     "unit": "W",
+     "scope": {
+      "stage": "synth",
+      "scenario": "default",
+      "activity_basis": "VECTORLESS",
+      "liberty": "sky130_fd_sc_hd__tt_025C_1v80.lib",
+      "tool": "opensta",
+      "process": "tt",
+      "voltage_v": 1.8,
+      "temperature_c": 25.0,
+      "group": "Combinational"
+     },
+     "source": {
+      "path": "/home/reyerchu/_jxlayer/run/trials/c05/reports/phase3/power.rpt",
+      "sha256": "sha256:383f291e87dab4923484b54ef6066736f5e2841d276747212059cfdb86268bba",
+      "tool": "opensta",
+      "tool_version": "2.7.0",
+      "liberty": "sky130_fd_sc_hd__tt_025C_1v80.lib",
+      "netlist": "phase2/stage2/synth/spm_synth.v",
+      "parser": "_ppa/power.py",
+      "parser_sha256": "sha256:8b9b0b186a5b7d74d052b7cc7cb842e61855b225cea4d12f7a8a93e72424bcc1"
+     },
+     "value": 6.27e-10,
+     "value_raw": "6.27e-10",
+     "provenance": {
+      "activity_corroboration": "NO_CORROBORATION_NEEDED",
+      "activity_reason": "vectorless is the tool default; there is nothing to read",
+      "declared_mode": "vectorless_sdc",
+      "liberty_pvt_stem": "sky130_fd_sc_hd__tt_025C_1v80.lib",
+      "liberty_pvt_gaps": null
+     }
+    },
+    {
+     "schema": "vibeic.ppa.metric.v1",
+     "metric": "power.total_w",
+     "status": "MEASURED",
+     "unit": "W",
+     "scope": {
+      "stage": "synth",
+      "scenario": "default",
+      "activity_basis": "VECTORLESS",
+      "liberty": "sky130_fd_sc_hd__tt_025C_1v80.lib",
+      "tool": "opensta",
+      "process": "tt",
+      "voltage_v": 1.8,
+      "temperature_c": 25.0,
+      "group": "Combinational"
+     },
+     "source": {
+      "path": "/home/reyerchu/_jxlayer/run/trials/c05/reports/phase3/power.rpt",
+      "sha256": "sha256:383f291e87dab4923484b54ef6066736f5e2841d276747212059cfdb86268bba",
+      "tool": "opensta",
+      "tool_version": "2.7.0",
+      "liberty": "sky130_fd_sc_hd__tt_025C_1v80.lib",
+      "netlist": "phase2/stage2/synth/spm_synth.v",
+      "parser": "_ppa/power.py",
+      "parser_sha256": "sha256:8b9b0b186a5b7d74d052b7cc7cb842e61855b225cea4d12f7a8a93e72424bcc1"
+     },
+     "value": 2.3e-05,
+     "value_raw": "2.30e-05",
+     "provenance": {
+      "activity_corroboration": "NO_CORROBORATION_NEEDED",
+      "activity_reason": "vectorless is the tool default; there is nothing to read",
+      "declared_mode": "vectorless_sdc",
+      "liberty_pvt_stem": "sky130_fd_sc_hd__tt_025C_1v80.lib",
+      "liberty_pvt_gaps": null
+     }
+    },
+    {
+     "schema": "vibeic.ppa.metric.v1",
+     "metric": "power.internal_w",
+     "status": "MEASURED",
+     "unit": "W",
+     "scope": {
+      "stage": "synth",
+      "scenario": "default",
+      "activity_basis": "VECTORLESS",
+      "liberty": "sky130_fd_sc_hd__tt_025C_1v80.lib",
+      "tool": "opensta",
+      "process": "tt",
+      "voltage_v": 1.8,
+      "temperature_c": 25.0,
+      "group": "Clock"
+     },
+     "source": {
+      "path": "/home/reyerchu/_jxlayer/run/trials/c05/reports/phase3/power.rpt",
+      "sha256": "sha256:383f291e87dab4923484b54ef6066736f5e2841d276747212059cfdb86268bba",
+      "tool": "opensta",
+      "tool_version": "2.7.0",
+      "liberty": "sky130_fd_sc_hd__tt_025C_1v80.lib",
+      "netlist": "phase2/stage2/synth/spm_synth.v",
+      "parser": "_ppa/power.py",
+      "parser_sha256": "sha256:8b9b0b186a5b7d74d052b7cc7cb842e61855b225cea4d12f7a8a93e72424bcc1"
+     },
+     "value": 0.0,
+     "value_raw": "0.00e+00",
+     "provenance": {
+      "activity_corroboration": "NO_CORROBORATION_NEEDED",
+      "activity_reason": "vectorless is the tool default; there is nothing to read",
+      "declared_mode": "vectorless_sdc",
+      "liberty_pvt_stem": "sky130_fd_sc_hd__tt_025C_1v80.lib",
+      "liberty_pvt_gaps": null
+     }
+    },
+    {
+     "schema": "vibeic.ppa.metric.v1",
+     "metric": "power.switching_w",
+     "status": "MEASURED",
+     "unit": "W",
+     "scope": {
+      "stage": "synth",
+      "scenario": "default",
+      "activity_basis": "VECTORLESS",
+      "liberty": "sky130_fd_sc_hd__tt_025C_1v80.lib",
+      "tool": "opensta",
+      "process": "tt",
+      "voltage_v": 1.8,
+      "temperature_c": 25.0,
+      "group": "Clock"
+     },
+     "source": {
+      "path": "/home/reyerchu/_jxlayer/run/trials/c05/reports/phase3/power.rpt",
+      "sha256": "sha256:383f291e87dab4923484b54ef6066736f5e2841d276747212059cfdb86268bba",
+      "tool": "opensta",
+      "tool_version": "2.7.0",
+      "liberty": "sky130_fd_sc_hd__tt_025C_1v80.lib",
+      "netlist": "phase2/stage2/synth/spm_synth.v",
+      "parser": "_ppa/power.py",
+      "parser_sha256": "sha256:8b9b0b186a5b7d74d052b7cc7cb842e61855b225cea4d12f7a8a93e72424bcc1"
+     },
+     "value": 0.0,
+     "value_raw": "0.00e+00",
+     "provenance": {
+      "activity_corroboration": "NO_CORROBORATION_NEEDED",
+      "activity_reason": "vectorless is the tool default; there is nothing to read",
+      "declared_mode": "vectorless_sdc",
+      "liberty_pvt_stem": "sky130_fd_sc_hd__tt_025C_1v80.lib",
+      "liberty_pvt_gaps": null
+     }
+    },
+    {
+     "schema": "vibeic.ppa.metric.v1",
+     "metric": "power.leakage_w",
+     "status": "MEASURED",
+     "unit": "W",
+     "scope": {
+      "stage": "synth",
+      "scenario": "default",
+      "activity_basis": "VECTORLESS",
+      "liberty": "sky130_fd_sc_hd__tt_025C_1v80.lib",
+      "tool": "opensta",
+      "process": "tt",
+      "voltage_v": 1.8,
+      "temperature_c": 25.0,
+      "group": "Clock"
+     },
+     "source": {
+      "path": "/home/reyerchu/_jxlayer/run/trials/c05/reports/phase3/power.rpt",
+      "sha256": "sha256:383f291e87dab4923484b54ef6066736f5e2841d276747212059cfdb86268bba",
+      "tool": "opensta",
+      "tool_version": "2.7.0",
+      "liberty": "sky130_fd_sc_hd__tt_025C_1v80.lib",
+      "netlist": "phase2/stage2/synth/spm_synth.v",
+      "parser": "_ppa/power.py",
+      "parser_sha256": "sha256:8b9b0b186a5b7d74d052b7cc7cb842e61855b225cea4d12f7a8a93e72424bcc1"
+     },
+     "value": 0.0,
+     "value_raw": "0.00e+00",
+     "provenance": {
+      "activity_corroboration": "NO_CORROBORATION_NEEDED",
+      "activity_reason": "vectorless is the tool default; there is nothing to read",
+      "declared_mode": "vectorless_sdc",
+      "liberty_pvt_stem": "sky130_fd_sc_hd__tt_025C_1v80.lib",
+      "liberty_pvt_gaps": null
+     }
+    },
+    {
+     "schema": "vibeic.ppa.metric.v1",
+     "metric": "power.total_w",
+     "status": "MEASURED",
+     "unit": "W",
+     "scope": {
+      "stage": "synth",
+      "scenario": "default",
+      "activity_basis": "VECTORLESS",
+      "liberty": "sky130_fd_sc_hd__tt_025C_1v80.lib",
+      "tool": "opensta",
+      "process": "tt",
+      "voltage_v": 1.8,
+      "temperature_c": 25.0,
+      "group": "Clock"
+     },
+     "source": {
+      "path": "/home/reyerchu/_jxlayer/run/trials/c05/reports/phase3/power.rpt",
+      "sha256": "sha256:383f291e87dab4923484b54ef6066736f5e2841d276747212059cfdb86268bba",
+      "tool": "opensta",
+      "tool_version": "2.7.0",
+      "liberty": "sky130_fd_sc_hd__tt_025C_1v80.lib",
+      "netlist": "phase2/stage2/synth/spm_synth.v",
+      "parser": "_ppa/power.py",
+      "parser_sha256": "sha256:8b9b0b186a5b7d74d052b7cc7cb842e61855b225cea4d12f7a8a93e72424bcc1"
+     },
+     "value": 0.0,
+     "value_raw": "0.00e+00",
+     "provenance": {
+      "activity_corroboration": "NO_CORROBORATION_NEEDED",
+      "activity_reason": "vectorless is the tool default; there is nothing to read",
+      "declared_mode": "vectorless_sdc",
+      "liberty_pvt_stem": "sky130_fd_sc_hd__tt_025C_1v80.lib",
+      "liberty_pvt_gaps": null
+     }
+    },
+    {
+     "schema": "vibeic.ppa.metric.v1",
+     "metric": "power.internal_w",
+     "status": "MEASURED",
+     "unit": "W",
+     "scope": {
+      "stage": "synth",
+      "scenario": "default",
+      "activity_basis": "VECTORLESS",
+      "liberty": "sky130_fd_sc_hd__tt_025C_1v80.lib",
+      "tool": "opensta",
+      "process": "tt",
+      "voltage_v": 1.8,
+      "temperature_c": 25.0,
+      "group": "Macro"
+     },
+     "source": {
+      "path": "/home/reyerchu/_jxlayer/run/trials/c05/reports/phase3/power.rpt",
+      "sha256": "sha256:383f291e87dab4923484b54ef6066736f5e2841d276747212059cfdb86268bba",
+      "tool": "opensta",
+      "tool_version": "2.7.0",
+      "liberty": "sky130_fd_sc_hd__tt_025C_1v80.lib",
+      "netlist": "phase2/stage2/synth/spm_synth.v",
+      "parser": "_ppa/power.py",
+      "parser_sha256": "sha256:8b9b0b186a5b7d74d052b7cc7cb842e61855b225cea4d12f7a8a93e72424bcc1"
+     },
+     "value": 0.0,
+     "value_raw": "0.00e+00",
+     "provenance": {
+      "activity_corroboration": "NO_CORROBORATION_NEEDED",
+      "activity_reason": "vectorless is the tool default; there is nothing to read",
+      "declared_mode": "vectorless_sdc",
+      "liberty_pvt_stem": "sky130_fd_sc_hd__tt_025C_1v80.lib",
+      "liberty_pvt_gaps": null
+     }
+    },
+    {
+     "schema": "vibeic.ppa.metric.v1",
+     "metric": "power.switching_w",
+     "status": "MEASURED",
+     "unit": "W",
+     "scope": {
+      "stage": "synth",
+      "scenario": "default",
+      "activity_basis": "VECTORLESS",
+      "liberty": "sky130_fd_sc_hd__tt_025C_1v80.lib",
+      "tool": "opensta",
+      "process": "tt",
+      "voltage_v": 1.8,
+      "temperature_c": 25.0,
+      "group": "Macro"
+     },
+     "source": {
+      "path": "/home/reyerchu/_jxlayer/run/trials/c05/reports/phase3/power.rpt",
+      "sha256": "sha256:383f291e87dab4923484b54ef6066736f5e2841d276747212059cfdb86268bba",
+      "tool": "opensta",
+      "tool_version": "2.7.0",
+      "liberty": "sky130_fd_sc_hd__tt_025C_1v80.lib",
+      "netlist": "phase2/stage2/synth/spm_synth.v",
+      "parser": "_ppa/power.py",
+      "parser_sha256": "sha256:8b9b0b186a5b7d74d052b7cc7cb842e61855b225cea4d12f7a8a93e72424bcc1"
+     },
+     "value": 0.0,
+     "value_raw": "0.00e+00",
+     "provenance": {
+      "activity_corroboration": "NO_CORROBORATION_NEEDED",
+      "activity_reason": "vectorless is the tool default; there is nothing to read",
+      "declared_mode": "vectorless_sdc",
+      "liberty_pvt_stem": "sky130_fd_sc_hd__tt_025C_1v80.lib",
+      "liberty_pvt_gaps": null
+     }
+    },
+    {
+     "schema": "vibeic.ppa.metric.v1",
+     "metric": "power.leakage_w",
+     "status": "MEASURED",
+     "unit": "W",
+     "scope": {
+      "stage": "synth",
+      "scenario": "default",
+      "activity_basis": "VECTORLESS",
+      "liberty": "sky130_fd_sc_hd__tt_025C_1v80.lib",
+      "tool": "opensta",
+      "process": "tt",
+      "voltage_v": 1.8,
+      "temperature_c": 25.0,
+      "group": "Macro"
+     },
+     "source": {
+      "path": "/home/reyerchu/_jxlayer/run/trials/c05/reports/phase3/power.rpt",
+      "sha256": "sha256:383f291e87dab4923484b54ef6066736f5e2841d276747212059cfdb86268bba",
+      "tool": "opensta",
+      "tool_version": "2.7.0",
+      "liberty": "sky130_fd_sc_hd__tt_025C_1v80.lib",
+      "netlist": "phase2/stage2/synth/spm_synth.v",
+      "parser": "_ppa/power.py",
+      "parser_sha256": "sha256:8b9b0b186a5b7d74d052b7cc7cb842e61855b225cea4d12f7a8a93e72424bcc1"
+     },
+     "value": 0.0,
+     "value_raw": "0.00e+00",
+     "provenance": {
+      "activity_corroboration": "NO_CORROBORATION_NEEDED",
+      "activity_reason": "vectorless is the tool default; there is nothing to read",
+      "declared_mode": "vectorless_sdc",
+      "liberty_pvt_stem": "sky130_fd_sc_hd__tt_025C_1v80.lib",
+      "liberty_pvt_gaps": null
+     }
+    },
+    {
+     "schema": "vibeic.ppa.metric.v1",
+     "metric": "power.total_w",
+     "status": "MEASURED",
+     "unit": "W",
+     "scope": {
+      "stage": "synth",
+      "scenario": "default",
+      "activity_basis": "VECTORLESS",
+      "liberty": "sky130_fd_sc_hd__tt_025C_1v80.lib",
+      "tool": "opensta",
+      "process": "tt",
+      "voltage_v": 1.8,
+      "temperature_c": 25.0,
+      "group": "Macro"
+     },
+     "source": {
+      "path": "/home/reyerchu/_jxlayer/run/trials/c05/reports/phase3/power.rpt",
+      "sha256": "sha256:383f291e87dab4923484b54ef6066736f5e2841d276747212059cfdb86268bba",
+      "tool": "opensta",
+      "tool_version": "2.7.0",
+      "liberty": "sky130_fd_sc_hd__tt_025C_1v80.lib",
+      "netlist": "phase2/stage2/synth/spm_synth.v",
+      "parser": "_ppa/power.py",
+      "parser_sha256": "sha256:8b9b0b186a5b7d74d052b7cc7cb842e61855b225cea4d12f7a8a93e72424bcc1"
+     },
+     "value": 0.0,
+     "value_raw": "0.00e+00",
+     "provenance": {
+      "activity_corroboration": "NO_CORROBORATION_NEEDED",
+      "activity_reason": "vectorless is the tool default; there is nothing to read",
+      "declared_mode": "vectorless_sdc",
+      "liberty_pvt_stem": "sky130_fd_sc_hd__tt_025C_1v80.lib",
+      "liberty_pvt_gaps": null
+     }
+    },
+    {
+     "schema": "vibeic.ppa.metric.v1",
+     "metric": "power.internal_w",
+     "status": "MEASURED",
+     "unit": "W",
+     "scope": {
+      "stage": "synth",
+      "scenario": "default",
+      "activity_basis": "VECTORLESS",
+      "liberty": "sky130_fd_sc_hd__tt_025C_1v80.lib",
+      "tool": "opensta",
+      "process": "tt",
+      "voltage_v": 1.8,
+      "temperature_c": 25.0,
+      "group": "Pad"
+     },
+     "source": {
+      "path": "/home/reyerchu/_jxlayer/run/trials/c05/reports/phase3/power.rpt",
+      "sha256": "sha256:383f291e87dab4923484b54ef6066736f5e2841d276747212059cfdb86268bba",
+      "tool": "opensta",
+      "tool_version": "2.7.0",
+      "liberty": "sky130_fd_sc_hd__tt_025C_1v80.lib",
+      "netlist": "phase2/stage2/synth/spm_synth.v",
+      "parser": "_ppa/power.py",
+      "parser_sha256": "sha256:8b9b0b186a5b7d74d052b7cc7cb842e61855b225cea4d12f7a8a93e72424bcc1"
+     },
+     "value": 0.0,
+     "value_raw": "0.00e+00",
+     "provenance": {
+      "activity_corroboration": "NO_CORROBORATION_NEEDED",
+      "activity_reason": "vectorless is the tool default; there is nothing to read",
+      "declared_mode": "vectorless_sdc",
+      "liberty_pvt_stem": "sky130_fd_sc_hd__tt_025C_1v80.lib",
+      "liberty_pvt_gaps": null
+     }
+    },
+    {
+     "schema": "vibeic.ppa.metric.v1",
+     "metric": "power.switching_w",
+     "status": "MEASURED",
+     "unit": "W",
+     "scope": {
+      "stage": "synth",
+      "scenario": "default",
+      "activity_basis": "VECTORLESS",
+      "liberty": "sky130_fd_sc_hd__tt_025C_1v80.lib",
+      "tool": "opensta",
+      "process": "tt",
+      "voltage_v": 1.8,
+      "temperature_c": 25.0,
+      "group": "Pad"
+     },
+     "source": {
+      "path": "/home/reyerchu/_jxlayer/run/trials/c05/reports/phase3/power.rpt",
+      "sha256": "sha256:383f291e87dab4923484b54ef6066736f5e2841d276747212059cfdb86268bba",
+      "tool": "opensta",
+      "tool_version": "2.7.0",
+      "liberty": "sky130_fd_sc_hd__tt_025C_1v80.lib",
+      "netlist": "phase2/stage2/synth/spm_synth.v",
+      "parser": "_ppa/power.py",
+      "parser_sha256": "sha256:8b9b0b186a5b7d74d052b7cc7cb842e61855b225cea4d12f7a8a93e72424bcc1"
+     },
+     "value": 0.0,
+     "value_raw": "0.00e+00",
+     "provenance": {
+      "activity_corroboration": "NO_CORROBORATION_NEEDED",
+      "activity_reason": "vectorless is the tool default; there is nothing to read",
+      "declared_mode": "vectorless_sdc",
+      "liberty_pvt_stem": "sky130_fd_sc_hd__tt_025C_1v80.lib",
+      "liberty_pvt_gaps": null
+     }
+    },
+    {
+     "schema": "vibeic.ppa.metric.v1",
+     "metric": "power.leakage_w",
+     "status": "MEASURED",
+     "unit": "W",
+     "scope": {
+      "stage": "synth",
+      "scenario": "default",
+      "activity_basis": "VECTORLESS",
+      "liberty": "sky130_fd_sc_hd__tt_025C_1v80.lib",
+      "tool": "opensta",
+      "process": "tt",
+      "voltage_v": 1.8,
+      "temperature_c": 25.0,
+      "group": "Pad"
+     },
+     "source": {
+      "path": "/home/reyerchu/_jxlayer/run/trials/c05/reports/phase3/power.rpt",
+      "sha256": "sha256:383f291e87dab4923484b54ef6066736f5e2841d276747212059cfdb86268bba",
+      "tool": "opensta",
+      "tool_version": "2.7.0",
+      "liberty": "sky130_fd_sc_hd__tt_025C_1v80.lib",
+      "netlist": "phase2/stage2/synth/spm_synth.v",
+      "parser": "_ppa/power.py",
+      "parser_sha256": "sha256:8b9b0b186a5b7d74d052b7cc7cb842e61855b225cea4d12f7a8a93e72424bcc1"
+     },
+     "value": 0.0,
+     "value_raw": "0.00e+00",
+     "provenance": {
+      "activity_corroboration": "NO_CORROBORATION_NEEDED",
+      "activity_reason": "vectorless is the tool default; there is nothing to read",
+      "declared_mode": "vectorless_sdc",
+      "liberty_pvt_stem": "sky130_fd_sc_hd__tt_025C_1v80.lib",
+      "liberty_pvt_gaps": null
+     }
+    },
+    {
+     "schema": "vibeic.ppa.metric.v1",
+     "metric": "power.total_w",
+     "status": "MEASURED",
+     "unit": "W",
+     "scope": {
+      "stage": "synth",
+      "scenario": "default",
+      "activity_basis": "VECTORLESS",
+      "liberty": "sky130_fd_sc_hd__tt_025C_1v80.lib",
+      "tool": "opensta",
+      "process": "tt",
+      "voltage_v": 1.8,
+      "temperature_c": 25.0,
+      "group": "Pad"
+     },
+     "source": {
+      "path": "/home/reyerchu/_jxlayer/run/trials/c05/reports/phase3/power.rpt",
+      "sha256": "sha256:383f291e87dab4923484b54ef6066736f5e2841d276747212059cfdb86268bba",
+      "tool": "opensta",
+      "tool_version": "2.7.0",
+      "liberty": "sky130_fd_sc_hd__tt_025C_1v80.lib",
+      "netlist": "phase2/stage2/synth/spm_synth.v",
+      "parser": "_ppa/power.py",
+      "parser_sha256": "sha256:8b9b0b186a5b7d74d052b7cc7cb842e61855b225cea4d12f7a8a93e72424bcc1"
+     },
+     "value": 0.0,
+     "value_raw": "0.00e+00",
+     "provenance": {
+      "activity_corroboration": "NO_CORROBORATION_NEEDED",
+      "activity_reason": "vectorless is the tool default; there is nothing to read",
+      "declared_mode": "vectorless_sdc",
+      "liberty_pvt_stem": "sky130_fd_sc_hd__tt_025C_1v80.lib",
+      "liberty_pvt_gaps": null
+     }
+    },
+    {
+     "schema": "vibeic.ppa.metric.v1",
+     "metric": "power.internal_w",
+     "status": "MEASURED",
+     "unit": "W",
+     "scope": {
+      "stage": "synth",
+      "scenario": "default",
+      "activity_basis": "VECTORLESS",
+      "liberty": "sky130_fd_sc_hd__tt_025C_1v80.lib",
+      "tool": "opensta",
+      "process": "tt",
+      "voltage_v": 1.8,
+      "temperature_c": 25.0,
+      "group": "Total"
+     },
+     "source": {
+      "path": "/home/reyerchu/_jxlayer/run/trials/c05/reports/phase3/power.rpt",
+      "sha256": "sha256:383f291e87dab4923484b54ef6066736f5e2841d276747212059cfdb86268bba",
+      "tool": "opensta",
+      "tool_version": "2.7.0",
+      "liberty": "sky130_fd_sc_hd__tt_025C_1v80.lib",
+      "netlist": "phase2/stage2/synth/spm_synth.v",
+      "parser": "_ppa/power.py",
+      "parser_sha256": "sha256:8b9b0b186a5b7d74d052b7cc7cb842e61855b225cea4d12f7a8a93e72424bcc1"
+     },
+     "value": 0.000287,
+     "value_raw": "2.87e-04",
+     "provenance": {
+      "activity_corroboration": "NO_CORROBORATION_NEEDED",
+      "activity_reason": "vectorless is the tool default; there is nothing to read",
+      "declared_mode": "vectorless_sdc",
+      "liberty_pvt_stem": "sky130_fd_sc_hd__tt_025C_1v80.lib",
+      "liberty_pvt_gaps": null
+     }
+    },
+    {
+     "schema": "vibeic.ppa.metric.v1",
+     "metric": "power.switching_w",
+     "status": "MEASURED",
+     "unit": "W",
+     "scope": {
+      "stage": "synth",
+      "scenario": "default",
+      "activity_basis": "VECTORLESS",
+      "liberty": "sky130_fd_sc_hd__tt_025C_1v80.lib",
+      "tool": "opensta",
+      "process": "tt",
+      "voltage_v": 1.8,
+      "temperature_c": 25.0,
+      "group": "Total"
+     },
+     "source": {
+      "path": "/home/reyerchu/_jxlayer/run/trials/c05/reports/phase3/power.rpt",
+      "sha256": "sha256:383f291e87dab4923484b54ef6066736f5e2841d276747212059cfdb86268bba",
+      "tool": "opensta",
+      "tool_version": "2.7.0",
+      "liberty": "sky130_fd_sc_hd__tt_025C_1v80.lib",
+      "netlist": "phase2/stage2/synth/spm_synth.v",
+      "parser": "_ppa/power.py",
+      "parser_sha256": "sha256:8b9b0b186a5b7d74d052b7cc7cb842e61855b225cea4d12f7a8a93e72424bcc1"
+     },
+     "value": 1.52e-05,
+     "value_raw": "1.52e-05",
+     "provenance": {
+      "activity_corroboration": "NO_CORROBORATION_NEEDED",
+      "activity_reason": "vectorless is the tool default; there is nothing to read",
+      "declared_mode": "vectorless_sdc",
+      "liberty_pvt_stem": "sky130_fd_sc_hd__tt_025C_1v80.lib",
+      "liberty_pvt_gaps": null
+     }
+    },
+    {
+     "schema": "vibeic.ppa.metric.v1",
+     "metric": "power.leakage_w",
+     "status": "MEASURED",
+     "unit": "W",
+     "scope": {
+      "stage": "synth",
+      "scenario": "default",
+      "activity_basis": "VECTORLESS",
+      "liberty": "sky130_fd_sc_hd__tt_025C_1v80.lib",
+      "tool": "opensta",
+      "process": "tt",
+      "voltage_v": 1.8,
+      "temperature_c": 25.0,
+      "group": "Total"
+     },
+     "source": {
+      "path": "/home/reyerchu/_jxlayer/run/trials/c05/reports/phase3/power.rpt",
+      "sha256": "sha256:383f291e87dab4923484b54ef6066736f5e2841d276747212059cfdb86268bba",
+      "tool": "opensta",
+      "tool_version": "2.7.0",
+      "liberty": "sky130_fd_sc_hd__tt_025C_1v80.lib",
+      "netlist": "phase2/stage2/synth/spm_synth.v",
+      "parser": "_ppa/power.py",
+      "parser_sha256": "sha256:8b9b0b186a5b7d74d052b7cc7cb842e61855b225cea4d12f7a8a93e72424bcc1"
+     },
+     "value": 1.16e-09,
+     "value_raw": "1.16e-09",
+     "provenance": {
+      "activity_corroboration": "NO_CORROBORATION_NEEDED",
+      "activity_reason": "vectorless is the tool default; there is nothing to read",
+      "declared_mode": "vectorless_sdc",
+      "liberty_pvt_stem": "sky130_fd_sc_hd__tt_025C_1v80.lib",
+      "liberty_pvt_gaps": null
+     }
+    },
+    {
+     "schema": "vibeic.ppa.metric.v1",
+     "metric": "power.total_w",
+     "status": "MEASURED",
+     "unit": "W",
+     "scope": {
+      "stage": "synth",
+      "scenario": "default",
+      "activity_basis": "VECTORLESS",
+      "liberty": "sky130_fd_sc_hd__tt_025C_1v80.lib",
+      "tool": "opensta",
+      "process": "tt",
+      "voltage_v": 1.8,
+      "temperature_c": 25.0,
+      "group": "Total"
+     },
+     "source": {
+      "path": "/home/reyerchu/_jxlayer/run/trials/c05/reports/phase3/power.rpt",
+      "sha256": "sha256:383f291e87dab4923484b54ef6066736f5e2841d276747212059cfdb86268bba",
+      "tool": "opensta",
+      "tool_version": "2.7.0",
+      "liberty": "sky130_fd_sc_hd__tt_025C_1v80.lib",
+      "netlist": "phase2/stage2/synth/spm_synth.v",
+      "parser": "_ppa/power.py",
+      "parser_sha256": "sha256:8b9b0b186a5b7d74d052b7cc7cb842e61855b225cea4d12f7a8a93e72424bcc1"
+     },
+     "value": 0.000302,
+     "value_raw": "3.02e-04",
+     "provenance": {
+      "activity_corroboration": "NO_CORROBORATION_NEEDED",
+      "activity_reason": "vectorless is the tool default; there is nothing to read",
+      "declared_mode": "vectorless_sdc",
+      "liberty_pvt_stem": "sky130_fd_sc_hd__tt_025C_1v80.lib",
+      "liberty_pvt_gaps": null
+     }
+    },
+    {
+     "schema": "vibeic.ppa.metric.v1",
+     "metric": "timing.drv.max_tran_violations",
+     "status": "MEASURED",
+     "unit": "count",
+     "scope": {
+      "stage": "post_route",
+      "tool": "opensta",
+      "check": "drv"
+     },
+     "source": {
+      "path": "/home/reyerchu/_jxlayer/run/trials/c05/phase3/stage3/sta/sta_spef_multicorner.rpt",
+      "sha256": "sha256:4a80c63df18b7808d789abf16d6e5341d1242e720044417358e36e574362faf5",
+      "tool": "opensta",
+      "parser": "drv_records.py"
+     },
+     "value": 0
+    },
+    {
+     "schema": "vibeic.ppa.metric.v1",
+     "metric": "timing.drv.max_cap_violations",
+     "status": "MEASURED",
+     "unit": "count",
+     "scope": {
+      "stage": "post_route",
+      "tool": "opensta",
+      "check": "drv"
+     },
+     "source": {
+      "path": "/home/reyerchu/_jxlayer/run/trials/c05/phase3/stage3/sta/sta_spef_multicorner.rpt",
+      "sha256": "sha256:4a80c63df18b7808d789abf16d6e5341d1242e720044417358e36e574362faf5",
+      "tool": "opensta",
+      "parser": "drv_records.py"
+     },
+     "value": 0
+    },
+    {
+     "schema": "vibeic.ppa.metric.v1",
+     "metric": "timing.drv.max_fanout_violations",
+     "status": "MEASURED",
+     "unit": "count",
+     "scope": {
+      "stage": "post_route",
+      "tool": "opensta",
+      "check": "drv"
+     },
+     "source": {
+      "path": "/home/reyerchu/_jxlayer/run/trials/c05/phase3/stage3/sta/sta_spef_multicorner.rpt",
+      "sha256": "sha256:4a80c63df18b7808d789abf16d6e5341d1242e720044417358e36e574362faf5",
+      "tool": "opensta",
+      "parser": "drv_records.py"
+     },
+     "value": 0
+    }
+   ],
+   "waivers": []
+  }
+ ]
+}

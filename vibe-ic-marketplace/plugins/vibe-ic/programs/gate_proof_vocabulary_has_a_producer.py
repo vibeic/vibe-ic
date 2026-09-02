@@ -236,30 +236,6 @@ def _axes(programs: Path) -> Optional[Dict[str, List[List[str]]]]:
     return out
 
 
-def _walk_all(roots):
-    """The population is every producing tree the SYSTEM spans, not one repo.
-
-    vibe-ic#2019 moved the campaign corpora — and with them the two live
-    `timing.drv.*` producers this gate's docstring names, `ppa-crosslayer/tools`
-    and `ppa-e2e/tools` — into benchmark-data. The axis TABLE stays here. Split
-    across two trees, a single-root walk sees the axes without their producers
-    and declares a provable axis unprovable: the false positive the docstring
-    above was written to prevent, reappearing because the tree moved rather
-    than because the population rule changed. So the walk takes every root it
-    is given and the relation below still decides the population.
-    """
-    out = []
-    seen = set()
-    for r in roots:
-        for f in _walk(r):
-            k = str(f.resolve())
-            if k in seen:
-                continue
-            seen.add(k)
-            out.append(f)
-    return out
-
-
 def _const_table(files) -> Dict[Tuple[str, str], str]:
     """`NAME = "a.b.c"` at module level, over EVERY module including the
     consumers. A producer may name a metric through the consumer's own
@@ -281,7 +257,7 @@ def _const_table(files) -> Dict[Tuple[str, str], str]:
     return out
 
 
-def _produced(root, programs: Path) -> Tuple[Set[str], int]:
+def _produced(root: Path, programs: Path) -> Tuple[Set[str], int]:
     """Names mentioned by the PRODUCING side of the ppa layer.
 
     THE POPULATION IS THE LAYER RELATION, NOT A DIRECTORY. An earlier version
@@ -304,7 +280,7 @@ def _produced(root, programs: Path) -> Tuple[Set[str], int]:
     NOWHERE on the producing side, and an axis all of whose proof names are
     absent from every producer is unprovable whatever the runtime does.
     """
-    files = _walk_all(root if isinstance(root, (list, tuple)) else [root])
+    files = _walk(root)
     consts = _const_table(files)
     names: Set[str] = set()
     mods = 0
@@ -356,27 +332,12 @@ def _produced(root, programs: Path) -> Tuple[Set[str], int]:
     return names, mods
 
 
-def scan(root) -> Tuple[List[dict], Dict[str, int]]:
-    # One root or several (#2019). The AXIS TABLE lives in exactly one of them
-    # -- this repository -- while the PRODUCERS may be spread across all of
-    # them, so the two are looked up separately and neither is assumed to be
-    # the first root given.
-    roots = list(root) if isinstance(root, (list, tuple)) else [root]
-    programs = None
-    for r in roots:
-        cand = Path(r) / "vibe-ic-marketplace" / "plugins" / "vibe-ic" / "programs"
-        if cand.is_dir():
-            programs = cand
-            break
-    if programs is None:
-        raise RuntimeError(
-            "none of the named roots carries the axis table at "
-            "vibe-ic-marketplace/plugins/vibe-ic/programs: "
-            + ", ".join(str(r) for r in roots))
+def scan(root: Path) -> Tuple[List[dict], Dict[str, int]]:
+    programs = root / "vibe-ic-marketplace" / "plugins" / "vibe-ic" / "programs"
     axes = _axes(programs)
     if axes is None:
         raise RuntimeError("the axis table could not be read")
-    produced, mods = _produced(roots, programs)
+    produced, mods = _produced(root, programs)
     findings: List[dict] = []
     for name, groups in sorted(axes.items()):
         every = [m for g in groups for m in g]
@@ -397,29 +358,20 @@ def _repo_root(start: Path) -> Optional[Path]:
 
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    ap.add_argument("--root", action="append", default=None,
-                help="a tree to search for producers; repeatable, "
-                     "because the axis table and the producers can "
-                     "live in different repositories (#2019)")
+    ap.add_argument("--root", default=None)
     ap.add_argument("--json", dest="json_out", default=None)
     try:
         a = ap.parse_args(argv)
     except SystemExit:
         return 3
     try:
-        if a.root:
-            roots = [Path(r).resolve() for r in a.root]
-        else:
-            fallback = _repo_root(Path(__file__).resolve())
-            roots = [fallback] if fallback is not None else []
-        missing = [r for r in roots if r is None or not r.is_dir()]
-        if not roots or missing:
-            print("[CANNOT DETERMINE] gate_proof_vocabulary_has_a_producer: "
-                  f"{len(missing)} named root(s) are not directories "
-                  f"({[str(m) for m in missing]}) — NOT a pass.",
-                  file=sys.stderr)
+        root = Path(a.root).resolve() if a.root else _repo_root(
+            Path(__file__).resolve())
+        if root is None or not root.is_dir():
+            print("[CANNOT DETERMINE] gate_proof_vocabulary_has_a_producer: no "
+                  "repository root. NOT a pass.", file=sys.stderr)
             return 2
-        findings, denom = scan(roots)
+        findings, denom = scan(root)
         if denom["axes"] == 0 or denom["declared_names"] == 0:
             print("[CANNOT DETERMINE] gate_proof_vocabulary_has_a_producer: an "
                   "empty axis table or an empty producer set. A verdict over "

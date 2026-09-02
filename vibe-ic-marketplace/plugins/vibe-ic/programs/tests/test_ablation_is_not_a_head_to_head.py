@@ -52,7 +52,7 @@ COMPARISON = json.loads((SCHEMAS / "comparison.v2.schema.json").read_text("utf-8
 
 #: The re-filed record. Absent on a checkout without the campaign trees, which
 #: is a SKIP and not a pass — the shape tests below still run on fixtures.
-REFILED = (REPO / "ppa-crosslayer" / "records" / "ablations"
+REFILED = (REPO / "docs" / "campaigns" / "ppa-crosslayer" / "records" / "ablations"
            / "ablation_pnr_only_vs_crosslayer.json")
 
 
@@ -224,7 +224,7 @@ def test_the_head_to_head_corpus_no_longer_holds_it():
     rename, not a move, and certainly not an exemption."""
     if not REFILED.is_file():
         pytest.skip("campaign trees absent on this checkout. NOT a pass.")
-    found = [p for p in HH.corpus_records(REPO / "ppa-crosslayer")]
+    found = [p for p in HH.corpus_records(REPO / "docs" / "campaigns" / "ppa-crosslayer")]
     assert REFILED not in found
     assert not any(p.name.startswith("h2h_F") for p in found), (
         "the re-filed record is still being walked as a head-to-head")

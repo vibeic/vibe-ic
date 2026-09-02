@@ -43,7 +43,7 @@ import gate_mutation_fixtures as F  # noqa: E402
 
 GATE = "PPA ablation records (within-project)"
 
-#: The declaration passes `--corpus "$ROOT/ppa-crosslayer"`, so the document has
+#: The declaration passes `--corpus "$ROOT/docs/campaigns/ppa-crosslayer"`, so the document has
 #: to sit under that directory or the gate reads an absent corpus and answers
 #: about THAT instead of about this record.
 _REL = "ppa-crosslayer/records/ablations/fixture_ablation.json"

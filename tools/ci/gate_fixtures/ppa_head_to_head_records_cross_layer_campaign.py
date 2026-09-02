@@ -3,7 +3,7 @@
 THE SAME CHECKER IS WIRED THREE TIMES, once per campaign corpus
 (`benchmark-data`, `ppa-crosslayer`, `ppa-e2e`), and a fixture must drive the
 gate AS THE DISPATCHER DECLARES IT — the declaration for this row passes
-`--corpus "$ROOT/ppa-crosslayer"`, so a subject carrying the record anywhere else
+`--corpus "$ROOT/docs/campaigns/ppa-crosslayer"`, so a subject carrying the record anywhere else
 would leave this gate reading an EMPTY corpus and answering about that instead
 of about the record.
 

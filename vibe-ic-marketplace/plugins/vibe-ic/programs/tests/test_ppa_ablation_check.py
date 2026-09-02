@@ -111,7 +111,7 @@ def test_the_shipped_corpus_validates_and_the_gate_says_what_it_opened():
     thing it is wired to. The denominator is asserted with the verdict because
     `0 records` and `0 files` must never read as the same sentence.
     """
-    corpus = REPO / "ppa-crosslayer"
+    corpus = REPO / "docs" / "campaigns" / "ppa-crosslayer"
     if not corpus.is_dir():                       # pragma: no cover - layout
         pytest.skip(f"{corpus} is not in this checkout")
     r = run("--corpus", str(corpus))
@@ -386,7 +386,7 @@ def test_a_bound_landing_redirects_the_corpus_and_says_so(tmp_path):
     env["GATEKEEPER_BENCHMARK_DATA_SHA"] = "0" * 40
     env["VIBE_IC_BENCHMARK_DATA"] = str(clone)
     r = _pr.run([sys.executable, str(GATE), "--corpus",
-                        str(REPO / "ppa-crosslayer")],
+                        str(REPO / "docs" / "campaigns" / "ppa-crosslayer")],
                        capture_output=True, text=True,
                        env=env)
     assert r.returncode == 2, r.stdout + r.stderr

@@ -369,7 +369,7 @@ def test_the_schema_declares_the_channel_the_producers_write_gaps_to():
 def test_the_e2e_deriver_returns_no_stage_rather_than_the_word():
     """`ppa-e2e/tools/extract_run.py` said "not asserted" and asserted one."""
     import importlib.util
-    src = REPO / "ppa-e2e" / "tools" / "extract_run.py"
+    src = REPO / "docs" / "campaigns" / "ppa-e2e" / "tools" / "extract_run.py"
     if not src.is_file():
         pytest.skip(f"NOT_VERIFIED: {src} is absent")
     spec = importlib.util.spec_from_file_location("_er_under_test", src)
@@ -393,7 +393,7 @@ def test_the_crosslayer_builder_hands_the_producer_no_stage_token():
     Read rather than run: building an arm drives a whole PnR tree. What is
     asserted is the only thing that reaches `scope`.
     """
-    src = REPO / "ppa-crosslayer" / "tools" / "build_arm.py"
+    src = REPO / "docs" / "campaigns" / "ppa-crosslayer" / "tools" / "build_arm.py"
     if not src.is_file():
         pytest.skip(f"NOT_VERIFIED: {src} is absent")
     text = src.read_text()

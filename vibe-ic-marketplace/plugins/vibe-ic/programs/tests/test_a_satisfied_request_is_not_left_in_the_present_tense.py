@@ -45,9 +45,9 @@ import pytest
 
 REPO = Path(__file__).resolve().parents[5]
 RUNNER = (Path(__file__).resolve().parent.parent / "phase3_one_shot_runner.py")
-GENERATOR = REPO / "ppa-e2e" / "tools" / "gen_result_md.py"
-RESULT_MD = REPO / "ppa-e2e" / "RESULT.md"
-FINDINGS_MD = REPO / "ppa-e2e" / "FINDINGS.md"
+GENERATOR = REPO / "docs" / "campaigns" / "ppa-e2e" / "tools" / "gen_result_md.py"
+RESULT_MD = REPO / "docs" / "campaigns" / "ppa-e2e" / "RESULT.md"
+FINDINGS_MD = REPO / "docs" / "campaigns" / "ppa-e2e" / "FINDINGS.md"
 
 _PROGRAMS = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_PROGRAMS))

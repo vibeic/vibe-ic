@@ -126,6 +126,9 @@ def test_the_shipped_tree_is_RED_and_names_the_corroborated_axis():
     weakened.
     """
     root = Path(__file__).resolve().parents[5]
+    # vibe-ic#2019 moved the campaigns off the repository ROOT to
+    # docs/campaigns/; the program is handed the tree that CONTAINS them.
+    root = root / "docs" / "campaigns"
     if not (root / "ppa-e2e" / "search" / "trials.json").is_file():
         pytest.skip("no committed arm set in this checkout")
     r = _pr.run([sys.executable, str(PROG), "--root", str(root)],
