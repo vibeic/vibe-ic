@@ -1608,7 +1608,22 @@ REAL_GATE_PASS_TIER_STEPS: Tuple[str, ...] = (
     # shrinking pin is how a shrink becomes invisible on the NEXT change; this
     # keeps all seventeen under assertion and only moves nine of them from
     # "reaches a PASS tier" to "reaches exactly this instead".
-    "1", "A1", "A2", "A5", "A6", "A8", "32", "35",
+    #
+    # 2026-09-03, GROWTH, 8 -> 9: "38" RETURNS, and it returns from
+    # REAL_GATE_LEFT_THE_PASS_TIER rather than arriving from nowhere — the
+    # move that map exists to force. Its entry there said the whole reason in
+    # its own words: "audit-created refusal of reports/phase3/
+    # foundry_handoff_audit.json (#2005); ITS GATE STILL PASSES". The gate was
+    # never the problem; the refusal was, and it was the over-broad half of it.
+    # `foundry_handoff_package_check` is listed BOTH under step 38's
+    # `programs:` and as its own gate, so its stamp on the document is the same
+    # whichever process ran it, and `_is_gate_verdict_document` answered "the
+    # auditor's" for a document that pre-dated the audit. It now answers
+    # "content cannot decide" for that one shape and the timing evidence
+    # decides instead. Steps 2 and 28 STAY in the map below: each is held out
+    # by an independent #1978 finding (rc=2 EXECUTION_ERROR typing; zero PERC
+    # categories) that this change does not touch and must not launder.
+    "1", "A1", "A2", "A5", "A6", "A8", "32", "35", "38",
 )
 
 #: The steps whose real gate USED to reach a PASS tier on the seeded fixture
@@ -1628,9 +1643,17 @@ REAL_GATE_PASS_TIER_STEPS: Tuple[str, ...] = (
 #: MEASURED, per step, on the seeded tree through the step's OWN gate:
 #:
 #:   D1  FAIL        `phase1_expert_parse_track` rc 1 (HANDOFF_EMITTED, #1973)
-#:   2   MISSING     rc=2 clauses typed EXECUTION_ERROR (#1978), then the
-#:                   audit-created refusal of `reports/crosslayer/
-#:                   rewrite_equivalence_check.json` (#2005)
+#:   2   INCOMPLETE  rc=2 clauses typed EXECUTION_ERROR (#1978). RE-MEASURED
+#:                   2026-09-03: MISSING -> INCOMPLETE, and NOT a move toward
+#:                   a PASS tier. Two findings held this step out and only the
+#:                   OUTER one moved: the audit-created refusal of
+#:                   `reports/crosslayer/rewrite_equivalence_check.json`
+#:                   (#2005) set the status to MISSING, which pre-empted the
+#:                   #1978 verdict underneath it. With the refusal narrowed to
+#:                   the shape content can actually decide, the #1978 finding
+#:                   is what the reader now sees, and it is the true one: the
+#:                   artefact was PRESENT the whole time, so "an output is
+#:                   missing" was the wrong sentence about this tree.
 #:   4   INCOMPLETE  `vacuous_testbench_check` / `professional_tb_check` /
 #:                   `functional_state_transition_coverage_check` (#1978)
 #:   12  INCOMPLETE  `dft_post_optimization_scan_survival_check`: Step 11's own
@@ -1640,23 +1663,29 @@ REAL_GATE_PASS_TIER_STEPS: Tuple[str, ...] = (
 #:   A4  INCOMPLETE  `analog_corner_lib_realism_lint` rc 2 — its own docstring
 #:                   says "no analog decks anywhere ... NOT a pass over the
 #:                   design" (#1980)
-#:   28  MISSING     `perc_signoff_check` zero categories (#1978), then the
-#:                   audit-created refusal of `reports/phase2/gates/
-#:                   perc_signoff.json` (#2005)
+#:   28  INCOMPLETE  `perc_signoff_check` zero categories (#1978). RE-MEASURED
+#:                   2026-09-03, MISSING -> INCOMPLETE, same cause as step 2:
+#:                   the outer audit-created refusal of `reports/phase2/gates/
+#:                   perc_signoff.json` (#2005) is gone and the #1978 finding
+#:                   it masked is what reports now. Still out of the PASS tier,
+#:                   on its own merits.
 #:   30  INCOMPLETE  `spice_correlation_check` `no_spef` — BLOCKED_BY_UPSTREAM,
 #:                   which is not skip-eligible (#1978)
+#:
+#: 2026-09-03 — "38" LEFT THIS MAP and is back in REAL_GATE_PASS_TIER_STEPS
+#: above; see the note there. Its line is kept here, commented, so the reason
+#: it was ever in the map does not have to be re-derived if it returns:
 #:   38  MISSING     audit-created refusal of `reports/phase3/
 #:                   foundry_handoff_audit.json` (#2005); its gate still PASSes
 REAL_GATE_LEFT_THE_PASS_TIER: Dict[str, str] = {
     "D1": "FAIL",
-    "2": "MISSING",
+    "2": "INCOMPLETE",
     "4": "INCOMPLETE",
     "12": "INCOMPLETE",
     "14": "INCOMPLETE",
     "A4": "INCOMPLETE",
-    "28": "MISSING",
+    "28": "INCOMPLETE",
     "30": "INCOMPLETE",
-    "38": "MISSING",
 }
 # 2026-07-28: the SET is unchanged (lost: none, gained: none). This tuple is
 # compared in flow DECLARATION order, and the dimension-5 fix moved A6's yaml

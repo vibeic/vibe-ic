@@ -69,6 +69,7 @@ import argparse
 import fnmatch
 import functools
 import glob
+import hashlib
 import json
 import os
 import re
@@ -11299,19 +11300,175 @@ def _is_gate_verdict_document(path: Path,
             base = base[:-3]
         return {stamp, head, base}
 
-    # A program that is BOTH a listed producer and this step's gate cannot
-    # vouch for the run: its stamp is the auditor's whenever the audit ran it.
-    _producers_only = set(producer_programs or ()) - set(gate_programs or ())
+    _gates = set(gate_programs or ())
+    _producers = set(producer_programs or ())
+    _producers_only = _producers - _gates
+    _gates_only = _gates - _producers
+    _shared = _producers & _gates
     if any(_names(st) & _producers_only for st in stamps):
         # A producer's record IS the document, or survives inside it: the run
         # produced it. A gate that later writes its own verdict beside it does
         # not turn the run's evidence into the auditor's.
         return False
-    if any(_names(st) & set(gate_programs or ()) for st in stamps):
+    if any(_names(st) & _gates_only for st in stamps):
         return True
+    if any(_names(st) & _shared for st in stamps) and _shared:
+        # THE STAMP IS THE SAME EITHER WAY, SO CONTENT DOES NOT ANSWER HERE.
+        # A program the flow lists BOTH under this step's `programs:` and as
+        # its own gate writes a byte-identical document whether the RUN
+        # invoked it or the AUDIT did. This branch used to return True — "its
+        # stamp is the auditor's whenever the audit ran it" — which made the
+        # answer independent of whether the run had produced anything, and
+        # that is the wrong direction for the one shape #306 deliberately
+        # creates: the runner is wired to execute the same checker so its exit
+        # status can BLOCK, and the yaml clause re-checks it. MEASURED on
+        # `$HOME/vibeic-designs/spm_rep1` (a real completed run): the run's own
+        # `reports/orchestrator/phase2_one_shot.json` records
+        # `crosslayer_rewrite_fidelity PASS ['reports/crosslayer/
+        # rewrite_equivalence_check.json']` at 17:06:53, the audit overwrote
+        # that same path at 17:14:55, and the document is stamped
+        # `program: crosslayer_rewrite_equivalence_check` either way. The run
+        # produced its evidence and the auditor's pen landed on top of it.
+        #
+        # 13 of the 34 declared-output/own-gate-`--json` pairs in the shipped
+        # flow are this shape (11 steps: 2, 8, 11, 15.5ic, 26, 28, 29, 31, 36,
+        # 38, M1).
+        #
+        # Returning False does NOT credit the artefact: it says content cannot
+        # decide, and hands the question back to the caller's two TIMING
+        # facts — "was it absent when this audit began" and "did an earlier
+        # pass of this audit create it" (`_prior_audit_created`). Those answer
+        # it without asking the document who wrote it.
+        return False
     # Stamped by something that is neither this step's gate nor a declared
     # producer: keep the presence-only answer the callers relied on.
     return True
+
+
+# ── THE AUDIT'S OWN AUTHORSHIP RECORD ───────────────────────────────────────
+# WHY IT EXISTS, MEASURED, NOT ARGUED. The refusal of an audit-created output
+# has to give the SAME verdict on pass 2 as on pass 1 or it is not a
+# measurement — #1981 bought that by DELETING the file (rejected: it made the
+# auditor mutate the tree it audits) and #2005 bought it by classifying the
+# document's CONTENT. The content answer only works for a gate program that
+# stamps its own name into its `--json` document, and not every one does.
+#
+# MEASURED 2026-09-03 on `$HOME/vibeic-designs/spm_rep1` at tree
+# d51024148, `flow_compliance_check . --phase 2` run TWICE against the same
+# unchanged directory:
+#
+#   pass 1  SELF-CERTIFIED EVIDENCE EXCLUDED (audit_created)
+#           ['reports/crosslayer/rewrite_equivalence_check.json',
+#            'reports/phase1/gates/stage_phase1_compliance.json']
+#   pass 2  SELF-CERTIFIED EVIDENCE EXCLUDED (audit_created)
+#           ['reports/crosslayer/rewrite_equivalence_check.json']
+#
+# `stage_phase1_compliance.json` is written by `flow_compliance_check --json`,
+# whose document carries NONE of `_GATE_DOCUMENT_IDENTITY_KEYS`, so pass 2
+# read it as the run's and CREDITED what pass 1 refused — "MISSING once and
+# PASS forever after", live, on a real tree, in the shipped code.
+#
+# So the durable fact is recorded HERE instead of re-derived from the bytes:
+# when this audit's own gate is the first process to write a declared
+# `required_output`, it writes a tiny note beside its own log saying so, with
+# the size and mtime of exactly what it wrote. A later pass refuses the same
+# artefact for the same stated reason. The note is VERIFIED against the live
+# file, so it cannot outlive the thing it describes: re-run the RUN, the
+# producer rewrites the artefact, the size/mtime no longer match, the note is
+# stale and the artefact is credited again.
+#
+# WHERE IT IS WRITTEN, AND WHY THAT IS NOT "THE AUDITOR EDITING THE TREE".
+# `reports/audit/` is the auditor's own directory — it already writes
+# `flow_compliance_check.log` and `steps_view.json` there. Nothing here
+# touches a declared artefact, a gate document, or any file the run produced.
+# One note per (step, declared path), so 63 steps evaluated in a thread pool
+# (and two audits racing on one tree) never write the same file.
+_AUDIT_AUTHORSHIP_DIR = "reports/audit/audit_created"
+
+
+def _authorship_note_path(project: Path, sid: Any, rel: str) -> Path:
+    key = hashlib.sha1(f"{sid}|{rel}".encode()).hexdigest()[:20]
+    return project / _AUDIT_AUTHORSHIP_DIR / f"{key}.json"
+
+
+def _live_stat(path: Path) -> Optional[Tuple[int, int]]:
+    """(size, mtime_ns) of a regular file, or None if it is not one."""
+    try:
+        st = path.stat()
+    except OSError:
+        return None
+    return (int(st.st_size), int(st.st_mtime_ns))
+
+
+def _prior_audit_created(project: Path, sid: Any, rels: Sequence[str]) -> Set[str]:
+    """Which of `rels` an EARLIER pass of this audit created, still unchanged.
+
+    Read BEFORE this pass's gate runs, because the gate is about to overwrite
+    the artefact and the note describes what was on disk before it did. A note
+    whose recorded (size, mtime_ns) no longer matches the live file is STALE —
+    something other than the audit has written there since — and is ignored,
+    which is the branch that lets a re-run of the RUN reclaim its own output.
+    """
+    out: Set[str] = set()
+    for rel in rels:
+        note = _authorship_note_path(project, sid, rel)
+        try:
+            rec = json.loads(note.read_text(errors="replace"))
+        except (OSError, ValueError):
+            continue
+        if not isinstance(rec, dict) or rec.get("rel") != rel:
+            continue
+        live = _live_stat(project / rel)
+        if live is None:
+            continue
+        if [live[0], live[1]] == [rec.get("size"), rec.get("mtime_ns")]:
+            out.add(rel)
+    return out
+
+
+def _record_audit_created(project: Path, sid: Any, rels: Sequence[str]) -> None:
+    """Note, durably, that this audit's own gate authored `rels`.
+
+    Called AFTER the gate has run, with the stat of what it just wrote, so the
+    next pass compares against the bytes it will actually find. Best-effort by
+    design: a read-only project, a full disk or a permission error must not
+    fail an audit, and losing the note only falls back to the pre-existing
+    answer (`_absent_before_gate` plus the content test).
+    """
+    for rel in rels:
+        live = _live_stat(project / rel)
+        if live is None:
+            continue
+        note = _authorship_note_path(project, sid, rel)
+        try:
+            note.parent.mkdir(parents=True, exist_ok=True)
+            note.write_text(json.dumps({
+                "schema": 1,
+                "written_by": "flow_compliance_check",
+                "step": str(sid),
+                "rel": rel,
+                "size": live[0],
+                "mtime_ns": live[1],
+                "note": ("this audit's own gate was the first process to "
+                         "write this declared required_output; it is the "
+                         "auditor's document, not the run's"),
+            }, indent=1) + "\n")
+        except OSError:
+            continue
+
+
+def _drop_audit_created_note(project: Path, sid: Any, rels: Sequence[str]) -> None:
+    """Remove notes for artefacts this pass decided are the RUN's after all.
+
+    The note is the auditor's own bookkeeping, never run evidence, so removing
+    a stale one is not the tree mutation #2005 refused — that was the deletion
+    of the DECLARED artefact itself, which nothing here touches.
+    """
+    for rel in rels:
+        try:
+            _authorship_note_path(project, sid, rel).unlink()
+        except OSError:
+            continue
 
 
 def _outputs_read_by_in_scope_steps(sid, my_outputs, manifest):
@@ -11849,6 +12006,11 @@ def check_step(project: Path, step: Dict[str, Any], waivers: Dict,
     _declared_self_written = sorted(set(outputs) & _gate_json_targets(step))
     _absent_before_gate = [rel for rel in _declared_self_written
                            if not (project / rel).exists()]
+    # THE OTHER HALF OF "absent before the gate", and it must be read HERE,
+    # before the gate overwrites the artefact this note describes. See
+    # `_prior_audit_created`: pass 1's refusal is recorded durably so pass 2
+    # does not have to re-derive it from bytes that cannot carry it.
+    _prior_created = _prior_audit_created(project, sid, _declared_self_written)
     _audit_produced: List[str] = []
     if gate:
         # GAP-B (#789) — thread the run's skip_analog into the gate evaluation
@@ -11884,8 +12046,18 @@ def check_step(project: Path, step: Dict[str, Any], waivers: Dict,
             rel for rel in _declared_self_written
             if (project / rel).exists()
             and (rel in _absent_before_gate
+                 or rel in _prior_created
                  or _is_gate_verdict_document(
                      project / rel, _own_gate_programs, _own_producers))]
+        # Re-stamp what this pass refused with the stat the gate just wrote,
+        # and clear the note for anything this pass credited — the note is the
+        # auditor's bookkeeping about its OWN writes and must never outlive
+        # them. Both directions, so the record self-heals when the RUN is
+        # re-executed and legitimately reclaims one of these paths.
+        _record_audit_created(project, sid, _audit_produced)
+        _drop_audit_created_note(
+            project, sid,
+            [r for r in _declared_self_written if r not in _audit_produced])
         # Wave 93 — VACUOUS_PASS verdict tier promotion. If the gate
         # passed AND every reason carries the __VACUOUS_HINT__ marker
         # (and at least one was emitted), the step ran but every
@@ -12335,9 +12507,14 @@ def check_step(project: Path, step: Dict[str, Any], waivers: Dict,
     if _audit_produced:
         result.reasons.append(
             f"SELF-CERTIFIED EVIDENCE EXCLUDED (audit_created) "
-            f"{_audit_produced} — these declared output(s) hold this step's "
-            f"OWN gate's verdict document, so they are evidence the auditor "
-            f"authored, not evidence the run produced. They are PRESENT (the "
+            f"{_audit_produced} — these declared output(s) were authored by "
+            f"this step's OWN gate: absent when this audit began "
+            f"{sorted(_absent_before_gate)}, recorded by an earlier pass of "
+            f"this audit as its own write "
+            f"{sorted(_prior_created & set(_audit_produced))}, or holding a "
+            f"verdict document only this step's gate emits. They are evidence "
+            f"the auditor authored, not evidence the run produced. "
+            f"They are PRESENT (the "
             f"flow declares the audit trail and the gate writes it); what is "
             f"absent is a producer. PRODUCER GAP: no pre-audit producer "
             f"supplied these paths; wire them into the owning runner before "
