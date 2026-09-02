@@ -2755,6 +2755,17 @@ def _cmd_solve_locked(bench: str, dataset: str, run: str, limit: int = 0,
         ev = None
         exit_step = None
         verdict: dict = {}
+        # Two facts a failing row must still report. The route-level
+        # AI-backup declaration is a pure function of the routing verdict, so
+        # it is known the moment routing returns; the Phase-1 front door's
+        # verdict is known the moment it returns. Both live outside the try so
+        # that a later failure -- a BLOCKED front door, a runner error --
+        # reports the declaration it actually classified (UNDECLARED, INVALID
+        # or DECLARED) and the front door that stopped it, instead of stamping
+        # NOT_MEASURED over a determinate answer. NOT_MEASURED survives only
+        # when the worker died before routing: the one case nobody looked.
+        route_backup: dict = {"status": "NOT_MEASURED", "skills": []}
+        phase1_frontdoor = None
         try:
             proj.mkdir(parents=True, exist_ok=True)
             staged = bio.stage(fmt, prob, proj)
@@ -2784,8 +2795,8 @@ def _cmd_solve_locked(bench: str, dataset: str, run: str, limit: int = 0,
             entry = entry_row.get("entry_step")
             ev = entry_row.get("default_evidence")
             exit_step = (tnr.EVIDENCE_EXIT.get(ev) or {}).get("exit_step")
+            route_backup = _declared_route_ai_backup(verdict)
 
-            phase1_frontdoor = None
             if entry != "D1":
                 phase1_frontdoor = _ensure_phase1_frontdoor(
                     runner, proj, runner_budget)
@@ -2801,7 +2812,6 @@ def _cmd_solve_locked(bench: str, dataset: str, run: str, limit: int = 0,
             rc = int(process.rc)
             got = bio.collect(fmt, pid, proj)
             waive = _rtl_gen_waive(proj)
-            route_backup = _declared_route_ai_backup(verdict)
             backup_source = None
             backup_skills: list[str] = []
             backup_detail = ""
@@ -2882,8 +2892,9 @@ def _cmd_solve_locked(bench: str, dataset: str, run: str, limit: int = 0,
                 "completeness": "NOT_MEASURED: WORKER_ERROR",
                 "routing_verdict": verdict,
                 "phases": _phase_error_attribution(),
-                "candidate_origin": "NONE", "route_ai_backup": {
-                    "status": "NOT_MEASURED", "skills": []},
+                "phase1_frontdoor": phase1_frontdoor,
+                "candidate_origin": "NONE",
+                "route_ai_backup": route_backup,
                 "program_first_ai_review": {"status": "NOT_MEASURED"},
                 "ai_repair_required": False,
                 "awaiting_ai_review": False,

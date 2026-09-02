@@ -52,6 +52,19 @@ def _write_rtl_gen_report(project: Path, status: str, *,
     }))
 
 
+def _is_d1_frontdoor(argv: list[str]) -> bool:
+    """The canonical D1-only Phase-1 pass: exit at D1, no routed entry."""
+    return ("--exit-step" in argv
+            and argv[argv.index("--exit-step") + 1] == "D1"
+            and "--entry-step" not in argv)
+
+
+def _emit_phase1_docs(project: Path) -> None:
+    docs = project / "phase1" / "generated_docs"
+    docs.mkdir(parents=True, exist_ok=True)
+    (docs / "L1_DATASHEET.json").write_text('{"schema": 1}\n')
+
+
 def _fake_runner(*, program_ids: set[str] | None = None,
                  waived_ids: dict[str, str] | None = None):
     programs = set(program_ids or set())
@@ -59,6 +72,14 @@ def _fake_runner(*, program_ids: set[str] | None = None,
 
     def run(argv, **_kwargs):
         project = Path(argv[2])
+        if _is_d1_frontdoor(argv):
+            # Every routed mid-flow entry is preceded by the canonical D1-only
+            # Phase-1 pass, which the dispatcher accepts by the L-doc
+            # provenance it emits, never by its rc.  Model that pass honestly:
+            # the runner binds the prompt to hash-bound L-docs and touches
+            # nothing else.  The owning loop's own call is the one below.
+            _emit_phase1_docs(project)
+            return SimpleNamespace(returncode=0)
         if project.name in programs:
             rtl = project / "phase2" / "stage1" / "rtl"
             rtl.mkdir(parents=True, exist_ok=True)
@@ -72,6 +93,22 @@ def _fake_runner(*, program_ids: set[str] | None = None,
                 project, "WAIVED", fallback_skill=waived[project.name])
         return SimpleNamespace(returncode=1)
 
+    return run
+
+
+def _phase1_dead_runner():
+    """A runner whose D1-only front door emits no L-doc at all.
+
+    Every call returns 1 and writes nothing; the calls are recorded so a test
+    can prove the owning loop never ran once the front door blocked.
+    """
+    calls: list[list[str]] = []
+
+    def run(argv, **_kwargs):
+        calls.append(list(argv))
+        return SimpleNamespace(returncode=1)
+
+    run.calls = calls
     return run
 
 
@@ -221,3 +258,75 @@ def test_backup_prompt_hash_change_blocks_before_regating(tmp_path,
     repairs = _read_jsonl(run / bd._REPAIR_WORKLIST)
     assert repairs[0]["id"] == "generic_prompt_bound"
     assert repairs[0]["status"] == "PROMPT_CHANGED"
+
+
+@pytest.mark.parametrize(("plugin_entry", "want_status", "want_skills"), [
+    ({"ai_backup": ["rtl-repair"]}, "DECLARED", ["rtl-repair"]),
+    (None, "UNDECLARED", []),
+    ({"ai_backup": "rtl-repair"}, "INVALID", []),
+])
+def test_blocked_frontdoor_row_keeps_the_declaration_it_classified(
+        tmp_path, monkeypatch, plugin_entry, want_status, want_skills):
+    """Relabelling a blocked row NOT_MEASURED must lose a classified state.
+
+    The route declaration is a function of the routing verdict alone, so it
+    is known before the Phase-1 front door runs.  When that front door BLOCKS
+    (the D1-only pass emits no hash-bound L-doc) the row still stops -- one
+    runner call, no owning loop, no AI work, rc 1 -- but it reports the
+    declaration it classified and the front door that stopped it.  A DECLARED
+    backup is never dispatched past a blocked front door: resume re-runs the
+    same front door before regating and refuses, so the AI work could only be
+    wasted.
+    """
+    dataset, run = tmp_path / "dataset", tmp_path / "run"
+    _write_dataset(dataset, {"generic_dead_frontdoor": _DEBUG_PROMPT})
+    verdict = {
+        "nature": "debug", "entry_nature": "debug", "route": "plugin_loop",
+        "source": "generic-test", "needs_ai_parse": True,
+    }
+    if plugin_entry is not None:
+        verdict["plugin_entry"] = plugin_entry
+    monkeypatch.setattr(tnr, "classify_task_nature", lambda *_args: verdict)
+    runner = _phase1_dead_runner()
+    monkeypatch.setattr(bd.subprocess, "run", runner)
+
+    assert bd.cmd_solve(
+        "verilogeval-human", str(dataset), str(run)) == 1
+    assert len(runner.calls) == 1
+    assert _is_d1_frontdoor(runner.calls[0])
+    assert _read_jsonl(run / bd._BACKUP_WORKLIST) == []
+    assert _read_jsonl(run / bd._REVIEW_WORKLIST) == []
+
+    result = json.loads((run / "solve_report.json").read_text())["results"][0]
+    assert result["worker_status"] == "ERROR"
+    assert result["candidate_origin"] == "NONE"
+    assert result["awaiting_ai_backup"] is False
+    assert result["awaiting_ai"] is False
+    assert result["route_ai_backup"]["status"] == want_status
+    assert result["route_ai_backup"]["skills"] == want_skills
+    assert result["phase1_frontdoor"]["status"] == "BLOCKED"
+    assert "emitted no hash-bound L-doc provenance" in (
+        result["phase1_frontdoor"]["reason"])
+
+
+def test_a_row_that_dies_before_routing_stays_not_measured(tmp_path,
+                                                          monkeypatch):
+    """Carrying the declaration must not invent one nobody classified."""
+    dataset, run = tmp_path / "dataset", tmp_path / "run"
+    _write_dataset(dataset, {"generic_unrouted": _DEBUG_PROMPT})
+
+    def no_routing(*_args):
+        raise RuntimeError("generic routing outage")
+
+    monkeypatch.setattr(tnr, "classify_task_nature", no_routing)
+    runner = _phase1_dead_runner()
+    monkeypatch.setattr(bd.subprocess, "run", runner)
+
+    assert bd.cmd_solve(
+        "verilogeval-human", str(dataset), str(run)) == 1
+    assert runner.calls == []
+    result = json.loads((run / "solve_report.json").read_text())["results"][0]
+    assert result["worker_status"] == "ERROR"
+    assert result["route_ai_backup"] == {
+        "status": "NOT_MEASURED", "skills": []}
+    assert result["phase1_frontdoor"] is None
