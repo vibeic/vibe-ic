@@ -1025,6 +1025,11 @@ def step_for_block(project: Path, block: Dict[str, Any], step_name: str,
         # disagreed with a freshly re-emitted topology and the step failed
         # without anything re-emitting the netlist.
         _reuse = producer_reuse_decision(project, bname, step_name)
+        # Whether THIS step emitted the artefact itself, kept so the rc 0
+        # branch below can tell "the gate certified something a producer just
+        # wrote" apart from "the gate certified what it found on disk". Only
+        # a producer that RAN and returned rc 0 counts.
+        _emitted: Optional[Dict[str, Any]] = None
         if _reuse.get("applies") and not _reuse.get("reuse"):
             _prod = _A1_A3_PRODUCERS.get(step_name) or {}
             _pprog = PROGRAMS_DIR / _prod.get("program", "")
@@ -1038,10 +1043,12 @@ def step_for_block(project: Path, block: Dict[str, Any], step_name: str,
                                                  "vibeic-eda"))]
                 _pcmd += list(_prod.get("extra_args") or [])
                 try:
-                    subprocess.run(_pcmd, capture_output=True, text=True,
-                                   timeout=1800)
+                    _pre_cp = subprocess.run(_pcmd, capture_output=True,
+                                             text=True, timeout=1800)
                 except (OSError, subprocess.SubprocessError):
-                    pass
+                    _pre_cp = None
+                if _pre_cp is not None and _pre_cp.returncode == 0:
+                    _emitted = {"prod": _prod, "cp": _pre_cp}
         cp = _pr.run(cmd, capture_output=True, text=True)
         if cp.returncode == 0:
             # v1.6.129 (#50 Fix 2) — distinguish a real PASS (artefact
@@ -1146,13 +1153,33 @@ def step_for_block(project: Path, block: Dict[str, Any], step_name: str,
             if _reuse.get("applies"):
                 _extras = dict(_extras or {})
                 _extras["producer_reuse"] = _reuse
+            _status = "PASS"
+            if _emitted:
+                # THIS step ran the producer and the gate then certified what
+                # it wrote — the same event the rc 2 branch below reports with
+                # the producer's own status. Before the pre-gate re-emit
+                # existed, rc 2 (artefact MISSING) was the only way a producer
+                # ran. The re-emit made that branch unreachable for a fresh
+                # block — an absent artefact names no fingerprint, so it is
+                # always re-emitted, the gate then passes, and the step came
+                # back a bare `PASS`: true about the GATE and silent about the
+                # producer that had just written the thing it certified, with
+                # `producer` and `low_confidence` dropped from the record.
+                _prd = _emitted["prod"]
+                _status = _prd["status"]
+                _extras = dict(_extras or {})
+                _extras.update({
+                    "extraction_strategy": _prd["strategy"],
+                    "low_confidence": False,
+                    "producer": _prd["program"],
+                })
             if so:
                 return StepResult(step_name, bname, "PASS_STRUCTURE_ONLY",
                                   time.time() - t0, so,
                                   output_files=_step_outputs(project, bname,
                                                              step_name),
                                   extras=_extras)
-            return StepResult(step_name, bname, "PASS",
+            return StepResult(step_name, bname, _status,
                               time.time() - t0, stdout_tail,
                               output_files=_step_outputs(project, bname,
                                                          step_name),
