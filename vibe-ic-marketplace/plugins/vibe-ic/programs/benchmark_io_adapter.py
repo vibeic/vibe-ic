@@ -308,8 +308,9 @@ def cvdp_package_response(snapshot_paths: List[Path],
 
     One-file contracts receive bare RTL. Multi-file contracts receive the
     official code-map envelope. Mapping is by an exact source basename first,
-    then by exact module-name == response basename. Anything ambiguous or
-    missing is refused; a format adapter must never guess a transformation.
+    then by exact module-name == response basename, then by a single unique
+    residual bijection. This is BLOCKING: anything ambiguous or missing is
+    refused; a format adapter must never guess a transformation.
     """
     snapshots = [Path(p) for p in snapshot_paths]
     sources = [Path(p) for p in source_paths]
@@ -355,9 +356,9 @@ def cvdp_package_response(snapshot_paths: List[Path],
     for name in duplicate_modules:
         by_module.pop(name, None)
 
-    packaged = []
+    selected: List[Optional[tuple]] = [None] * len(response_paths)
     used = set()
-    for response_path in response_paths:
+    for index, response_path in enumerate(response_paths):
         basename = Path(response_path).name
         stem = Path(response_path).stem
         if basename in by_basename:
@@ -367,12 +368,34 @@ def cvdp_package_response(snapshot_paths: List[Path],
             body = by_module[stem]
             key = ("module", stem)
         else:
-            raise ValueError(
-                f"accepted RTL cannot be mapped exactly to {response_path!r}")
+            continue
         if key in used:
             raise ValueError(
                 f"accepted RTL mapping for {response_path!r} is ambiguous")
         used.add(key)
+        selected[index] = (body, key)
+
+    # An accepted source may contain several modules while the scorer asks for
+    # one file per module. After every exact basename/module match, a SINGLE
+    # unmatched response and a SINGLE unused module form a unique residual
+    # bijection. This changes only the scorer envelope's path; it never edits
+    # the reviewed RTL or guesses among two possible modules.
+    missing = [index for index, value in enumerate(selected) if value is None]
+    unused_modules = [
+        (name, body) for name, body in by_module.items()
+        if ("module", name) not in used
+    ]
+    if len(missing) == 1 and len(unused_modules) == 1:
+        name, body = unused_modules[0]
+        selected[missing[0]] = (body, ("module", name))
+        used.add(("module", name))
+
+    packaged = []
+    for response_path, value in zip(response_paths, selected):
+        if value is None:
+            raise ValueError(
+                f"accepted RTL cannot be mapped exactly to {response_path!r}")
+        body, _key = value
         packaged.append({response_path: body})
     return json.dumps({"code": packaged}, ensure_ascii=False)
 

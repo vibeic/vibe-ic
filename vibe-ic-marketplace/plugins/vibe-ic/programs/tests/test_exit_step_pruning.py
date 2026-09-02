@@ -333,6 +333,66 @@ def test_solve_never_passes_an_exit_outside_the_flow(tmp_path, monkeypatch):
     assert "--skip-phase3" not in argv, argv
 
 
+def test_solve_midflow_entry_runs_phase1_frontdoor_before_owning_loop(
+        tmp_path, monkeypatch):
+    argv_seen: list[list[str]] = []
+    latest: dict = {}
+    _install_solve_fakes(monkeypatch, latest, exit_step="4")
+    monkeypatch.setattr(tnr, "NATURE_ENTRY", {
+        "fixture": {"entry_step": "4", "default_evidence": "FIXTURE_EV"}})
+    monkeypatch.setattr(tnr, "flow_step_ids",
+                        lambda: ["D1", "2", "4", "8", "15"])
+
+    def fake_budget_run(_self, argv, *_args, **_kwargs):
+        argv_seen.append(list(argv))
+        if argv[argv.index("--exit-step") + 1] == "D1":
+            project = Path(argv[2])
+            docs = project / "phase1" / "generated_docs"
+            docs.mkdir(parents=True)
+            (docs / "L1_DATASHEET.json").write_text('{"schema": 1}\n')
+        return SimpleNamespace(rc=0, error=None)
+
+    monkeypatch.setattr(bd._RunnerBudget, "run", fake_budget_run)
+    dataset = tmp_path / "dataset"
+    dataset.mkdir()
+    bd.cmd_solve("rtllm", str(dataset), str(tmp_path / "run"), jobs=1)
+
+    assert len(argv_seen) == 2
+    assert argv_seen[0][argv_seen[0].index("--exit-step") + 1] == "D1"
+    assert "--entry-step" not in argv_seen[0]
+    assert argv_seen[1][argv_seen[1].index("--entry-step") + 1] == "4"
+    assert argv_seen[1][argv_seen[1].index("--exit-step") + 1] == "4"
+
+
+def test_solve_midflow_frontdoor_failure_blocks_owning_loop(
+        tmp_path, monkeypatch):
+    argv_seen: list[list[str]] = []
+    latest: dict = {}
+    _install_solve_fakes(monkeypatch, latest, exit_step="4")
+    monkeypatch.setattr(tnr, "NATURE_ENTRY", {
+        "fixture": {"entry_step": "4", "default_evidence": "FIXTURE_EV"}})
+    monkeypatch.setattr(tnr, "flow_step_ids",
+                        lambda: ["D1", "2", "4", "8", "15"])
+
+    def fake_budget_run(_self, argv, *_args, **_kwargs):
+        argv_seen.append(list(argv))
+        return SimpleNamespace(rc=1, error=None)
+
+    monkeypatch.setattr(bd._RunnerBudget, "run", fake_budget_run)
+    dataset = tmp_path / "dataset"
+    dataset.mkdir()
+    run = tmp_path / "run"
+
+    assert bd.cmd_solve("rtllm", str(dataset), str(run), jobs=1) == 1
+    assert len(argv_seen) == 1
+    assert argv_seen[0][argv_seen[0].index("--exit-step") + 1] == "D1"
+    assert "--entry-step" not in argv_seen[0]
+    report = json.loads((run / "solve_report.json").read_text())
+    result = report["results"][0]
+    assert result["worker_status"] == "ERROR"
+    assert "emitted no hash-bound L-doc provenance" in result["worker_error"]
+
+
 @pytest.mark.parametrize(
     ("supplied_rtl", "entry", "exit_step", "expected_entry"),
     [
@@ -354,6 +414,35 @@ def test_resume_preserves_routed_exit_step(
     assert argv[argv.index("--entry-step") + 1] == expected_entry, argv
     assert argv[argv.index("--exit-step") + 1] == exit_step, argv
     assert "--skip-phase3" in argv, argv
+
+
+def test_midflow_route_gets_d1_only_frontdoor_without_changing_rtl(tmp_path):
+    project = tmp_path / "generic_proj"
+    prompt = project / "input" / "phase1_prompt.md"
+    rtl = project / "phase2" / "stage1" / "rtl" / "dut.sv"
+    prompt.parent.mkdir(parents=True)
+    rtl.parent.mkdir(parents=True)
+    prompt.write_text("Repair the supplied generic RTL.\n")
+    rtl_text = "module dut(input logic a, output logic y); assign y=a; endmodule\n"
+    rtl.write_text(rtl_text)
+
+    class _Budget:
+        def run(self, argv):
+            assert argv[argv.index("--exit-step") + 1] == "D1"
+            assert "--entry-step" not in argv
+            assert "--skip-phase3" in argv
+            assert "--no-dashboard" in argv
+            docs = project / "phase1" / "generated_docs"
+            docs.mkdir(parents=True)
+            (docs / "L1_DATASHEET.json").write_text('{"schema": 1}\n')
+            return SimpleNamespace(rc=1, error=None)
+
+    result = bd._ensure_phase1_frontdoor(
+        Path("runner.py"), project, _Budget())
+    assert result["status"] == "GENERATED"
+    assert result["runner_rc"] == 1
+    assert result["provenance"]["ran"] is True
+    assert rtl.read_text() == rtl_text
 
 
 def test_midflow_reentry_cannot_call_the_upstream_rtl_generator_for_repair():
