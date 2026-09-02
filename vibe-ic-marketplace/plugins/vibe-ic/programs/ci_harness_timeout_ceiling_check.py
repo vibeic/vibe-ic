@@ -320,7 +320,7 @@ _LANDING_LANE_SHA256 = {
 #: them, the launcher, the window, and everything before them.
 _LANDING_WINDOW_ANCHOR = "lane_emit_window"
 _LANDING_EXECUTION_PREFIX_SHA256 = (
-    "c556baf95d5a9de0a4590935a825dc043e16cee0d32f66617ac071ce210ae61e"
+    "c1168317d601cff8d094df7c58ae18540279d1fb68e60c1a72e53d65b2263602"
 )
 # RE-PINNED when the landing gained its runtime PREFLIGHT. Both digests below
 # moved for one reason and it is stated here rather than left to `git log`: the
@@ -685,7 +685,7 @@ _LANDING_EXECUTION_PREFIX_SHA256 = (
 # fix in -> named + refused; source reverted -> the two positive controls red;
 # a genuine stall and a zero-collecting file keep the truncation label off.
 _LANDING_SCRIPT_SHA256 = (
-    "c77b060c4f58b8f0aeb195ed4970aafc99e946ab3a8b294441ad5e388046b383"
+    "44fcaab80ee1b263481f3b9271b3ff7585bacd558860b6f3237217e9ea7aeb2b"
 )
 # The helper AST is not enough: a counterfeit CLI can define the expected
 # helper and never call it.  Bind the policy to the complete reviewed driver

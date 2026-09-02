@@ -844,14 +844,26 @@ def test_the_hygiene_lane_is_TOLD_the_checkout_is_shared(land_text):
     than on the probe: a fix that never reaches the process that runs is not a
     fix.
     """
-    assert re.search(r'"VIBEIC_CHECKOUT_CONCURRENT_LANES=\$LANE_WIDTH"',
-                     land_text), (
-        "the hygiene lane is no longer told how many lanes share its checkout")
     parts = land_text.split("lane_hygiene() {", 1)
     assert len(parts) == 2, "lane_hygiene() is gone"
     body = parts[1].split("\n}", 1)[0]
     assert "VIBEIC_CHECKOUT_CONCURRENT_LANES" in body, (
         "the declaration is in the file but not in the hygiene lane's env")
+    # vibe-ic#2008: the declaration is a VARIABLE bound in the lane's own body
+    # — the full width for the shared checkout, and ONE for the fresh subject
+    # worktree nothing but this lane writes into. Both bindings are asserted,
+    # because either alone could be the wrong one: a lane that always said
+    # `$LANE_WIDTH` would refuse attribution in a checkout it owns outright,
+    # and a lane that always said 1 would name the innocent again.
+    assert re.search(r'^\s*local subject="\$ROOT" lanes="\$LANE_WIDTH"$', body,
+                     re.MULTILINE), (
+        "the shared-checkout fallback no longer declares the full lane width")
+    assert re.search(r'^\s*lanes=1$', body, re.MULTILINE), (
+        "the fresh-subject shape no longer declares that it is the only writer")
+    assert re.search(r'"VIBEIC_CHECKOUT_CONCURRENT_LANES=\$lanes"', body), (
+        "the hygiene lane is no longer told how many lanes share its checkout")
+    assert re.search(r'"VIBEIC_SUBJECT_ROOT=\$subject"', body), (
+        "the hygiene lane no longer measures the subject it was handed")
 
 
 def test_there_is_no_way_to_opt_IN(land_text):

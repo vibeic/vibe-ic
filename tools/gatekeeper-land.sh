@@ -297,6 +297,13 @@ gk_cleanup() {
   done
   [ -z "$FP" ] || rm -f "$FP"
   [ -z "$WG_BASE" ] || rm -f "$WG_BASE"
+  # The two hygiene subjects (vibe-ic#2008) are linked worktrees REGISTERED in
+  # this checkout's `.git/worktrees/`; sweeping the lane dir alone would leave
+  # registrations `git worktree list` keeps reporting. Guarded, because
+  # `tools/test_gatekeeper_land_lanes.py` drives this REAL function with the
+  # variables never set.
+  gk_subject_release GK_HYG_SUBJECT
+  gk_subject_release GK_REVIEW_SUBJECT
   # Same `case` safety pattern the verifier uses before every `rm -rf`: the
   # variable must still name a path this script minted.
   case "$LANE_DIR" in
@@ -674,6 +681,20 @@ if [ "$CHEAP_ONLY" = "1" ]; then
 fi
 
 echo "--- full tier (minutes; stamps the tree on success) ---"
+
+# ── NO CHILD OF THE FULL TIER WRITES BYTECODE (vibe-ic#2008) ───────────────
+#
+# Every pytest lane below already carries `PYTHONDONTWRITEBYTECODE=1` on its
+# own command line and `-B` on its isolated entry (see the note above
+# `run_pytest`), `repo_hygiene_gates.sh:52` exports it for the hygiene set and
+# `gatekeeper_review.repo_hygiene_gate` sets it for the review's copy of that
+# set. What none of those covered is the REST of this tier — the audit lane,
+# the closing gates, and every `python3` this file itself spawns between them
+# — so a child of one of those could still leave a `.pyc` in the checkout for
+# `attestation preflight` to refuse. Exported once, here, at the start of the
+# tier that the preflight judges; the per-lane tokens stay, because `python3
+# -I` discards this variable and the lanes need the `-B` flag regardless.
+export PYTHONDONTWRITEBYTECODE=1
 
 # ── IS THIS CHECKOUT STILL GOING TO BE A REPOSITORY IN AN HOUR? ───────────
 #
@@ -1762,11 +1783,52 @@ lane_hygiene() {
   # whichever gate it was driving. Said out loud rather than inferred from
   # `HYGIENE_POOL`: a number that means one thing and is read as another is how
   # this went wrong the first time.
+  #
+  # THE SUBJECT IS THE FRESH WORKTREE WHEN THERE IS ONE (vibe-ic#2008), AND
+  # THIS CHECKOUT WHEN THERE IS NOT. `gk_hygiene_subject_prepare` decided
+  # which, from the main shell and immediately before the window, and said so
+  # in a REPORT line; this lane only reads the decision. `${GK_HYG_SUBJECT:-}`,
+  # not `$GK_HYG_SUBJECT`: `tools/test_gatekeeper_land_lanes.py` drives this
+  # REAL function under `set -u` with the variable never set, and an unset
+  # subject IS the fallback, not an error.
+  #
+  # ONE, NOT `$LANE_WIDTH`, FOR THE FRESH SUBJECT — the same declaration, told
+  # truthfully. The variable counts the stages WRITING INTO THE CHECKOUT THE
+  # HYGIENE SET MEASURES. The other lanes write into `$ROOT`; nothing but this
+  # lane can reach the subject worktree, so a write the probe sees there is
+  # nobody else's and attribution is sound — which is the standalone shape the
+  # hygiene shard runs in ("ABSENT MEANS ONE", `gate_host_independence_check.
+  # declared_concurrent_lanes`). The shared fallback keeps the full width.
+  #
+  # THE SUBJECT'S OWN COPY OF THE SCRIPT RUNS AGAINST THE SUBJECT, when this
+  # checkout IS the runtime. MEASURED on the parked first attempt (8hd-3
+  # `_ktier_run`, tree 89ae23da8): the runtime copy driven at a subject
+  # elsewhere failed `gates are host-independent` with 114 of 141 gates at
+  # CHECKOUT_ATTESTATION_WRONG_COMMAND, because `gate_host_independence_check.
+  # _expand` rebuilds every declared argv with `$PG` under the SUBJECT while
+  # the attestation the dispatcher wrote carried `$PG` under the RUNTIME — two
+  # different paths to byte-identical programs. In the direct-push shape
+  # `RUNTIME_ROOT` is `$ROOT`, the subject is a worktree of `$ROOT`'s HEAD, and
+  # `cheap:worktree-clean` has already refused a tree whose tracked files
+  # differ from HEAD, so the subject's copy IS the runtime's copy, byte for
+  # byte, at a path the probe's expansion agrees with. When a SEPARATE runtime
+  # was named (`GATEKEEPER_RUNTIME_ROOT`, the verified-arm shape) the trusted
+  # copy keeps running, exactly as before: that shape's whole point is that
+  # the subject does not get to supply the instrument.
+  local subject="$ROOT" lanes="$LANE_WIDTH"
+  local script="$RUNTIME_ROOT/tools/ci/repo_hygiene_gates.sh"
+  if [ -n "${GK_HYG_SUBJECT:-}" ]; then
+    subject="$GK_HYG_SUBJECT"
+    lanes=1
+    if [ "$RUNTIME_ROOT" -ef "$ROOT" ]; then
+      script="$GK_HYG_SUBJECT/tools/ci/repo_hygiene_gates.sh"
+    fi
+  fi
   run_capture "full:repo-hygiene" "${GK_HYG_ENV[@]}" \
-      env "VIBEIC_SUBJECT_ROOT=$ROOT" \
-      "VIBEIC_CHECKOUT_CONCURRENT_LANES=$LANE_WIDTH" \
+      env "VIBEIC_SUBJECT_ROOT=$subject" \
+      "VIBEIC_CHECKOUT_CONCURRENT_LANES=$lanes" \
       "GATEKEEPER_HYGIENE_JOBS=$HYGIENE_POOL" \
-      bash "$RUNTIME_ROOT/tools/ci/repo_hygiene_gates.sh" \
+      bash "$script" \
       "${GK_HYG[@]+"${GK_HYG[@]}"}"
 }
 # `full:plugin-audit` IS KEPT, AND SO IS THE HYGIENE TIER'S OWN COPY.
@@ -1948,7 +2010,133 @@ lane_window_saw_a_write() {
     >/dev/null 2>&1 || return 0
   return 1
 }
+# ── THE HYGIENE SUBJECTS: ONE FRESH WORKTREE OF HEAD PER READER ────────────
+#
+# vibe-ic#2008. Every official full-tier run in the week of 2026-09-01 failed
+# `attestation preflight` — "this checkout would make the attestation measure
+# itself [15707 file(s) under 1 declared root(s)]" — while the hygiene shard,
+# the same set on a clean clone of the SAME sha with no pytest before it,
+# passed. The tier's three pytest lanes and its hygiene lane ran in ONE
+# checkout. The pytest lanes leave `__pycache__`, `.pytest_cache` and `*.pyc`
+# behind (`suite_write_guard` names them "regenerable cache artefact(s)" and
+# is right not to count them as a write), and `attestation_preflight_check`
+# refuses exactly that residue under its declared root, first and blocking,
+# because a later attestation would otherwise measure it. Both are right. The
+# tier's own lanes produced what the tier's own gate refuses, so the tier is
+# what changes — not the gate, not the policy, and not the lanes' cache flags:
+# `-p no:cacheprovider` and `PYTHONDONTWRITEBYTECODE=1` are on every lane
+# command and the residue still appears, because a test that spawns
+# `python3 -I` or a nested pytest writes it anyway (measured: "+3 regenerable
+# cache artefact(s)" on 14 per-file sessions of one run).
+#
+# SO EACH READER OF THE HYGIENE SET MEASURES ITS OWN FRESH `git worktree` OF
+# HEAD, made from the main shell immediately before that reader starts and
+# released as soon as it has returned. There are TWO readers and therefore TWO
+# subjects, never one shared: `lane_hygiene` inside the window, and
+# `full:gatekeeper-review` after it, which RUNS the set a second time rather
+# than being handed a record of it (owner ruling, 2026-08-21, above). The
+# parked first attempt at this issue made ONE subject before the window and
+# pointed both readers at it — and the review's run still failed `attestation
+# preflight`, on the residue the LANE's hygiene run had by then left in the
+# very worktree that was supposed to be clean (8hd-3 `_ktier_run/run.log`,
+# tree 89ae23da8: the lane's set passed the preflight, the review's did not).
+# A subject is fresh for exactly one reader; the second reader gets a second
+# one. The serial re-run the write guard can force gets a fresh one too, for
+# the same reason: the first hygiene run has already been in the old one.
+#
+# HEAD's tree, not a copy of the checkout, ON PURPOSE: the stamp names a
+# COMMIT, `cheap:worktree-clean` has already refused a checkout whose tracked
+# files differ from HEAD, and `full:worktree-fingerprint-final` refuses again
+# at the end, so HEAD's tree IS the tree under test in every run that can
+# stamp. The one case where it is not — tracked drift — is the case this
+# function refuses to build a subject for, out loud.
+#
+# THE FALLBACK IS THE OLD BEHAVIOUR, SAID OUT LOUD, AND IT CANNOT PASS FALSELY.
+# When a worktree cannot be made — a read-only `.git` in a verified arm, a
+# dirty tracked tree, a `git` that did not answer — that reader measures this
+# checkout exactly as it did before this block existed, a REPORT line says
+# which and why, and `attestation preflight` still refuses any residue it
+# finds there. The fallback can only ever cost a landing, never buy one. There
+# is deliberately no environment flag that forces either shape.
+#
+# NOT A UNIT, NOT A GATE. `landing_completion_record` refuses any label outside
+# the fixed 25-entry tuple, so this prints plain REPORT lines the way
+# `landing_measured_tree_disclosure` does, and it returns 0 on every path: a
+# subject that could not be prepared is a fact about the run, and the only
+# verdict it can move is its reader's own, in the direction that refuses.
+#
+# UNDER `$LANE_DIR`, so the worktrees are outside the tree the closing gates
+# judge and are swept with the lane files. Their REGISTRATIONS live in this
+# checkout's `.git/worktrees/`, which `git status` never reports; each is
+# removed by `gk_subject_release` before the closing gates and, if this script
+# dies first, by `gk_cleanup`.
+GK_HYG_SUBJECT=""
+GK_REVIEW_SUBJECT=""
+gk_subject_prepare() {               # gk_subject_prepare <var> <name> <reader>
+  local var="$1" name="$2" reader="$3" wt dirty out
+  wt="$LANE_DIR/subject-$name"
+  printf -v "$var" '%s' ''
+  # THE EXIT STATUS IS CAPTURED, NOT INFERRED FROM THE OUTPUT — the same rule
+  # `landing_measured_tree_disclosure` was corrected to: a `git` that failed
+  # must not arrive as "the tree is clean".
+  if ! dirty="$(git -C "$ROOT" status --porcelain -uno 2>/dev/null)"; then
+    echo "  REPORT  $reader subject: THIS checkout — \`git status\` did not answer, so"
+    echo "          whether HEAD's tree is this tree could not be established; $reader"
+    echo "          measures the checkout, and attestation preflight will refuse any"
+    echo "          residue the test lanes left there (#2008)"
+    return 0
+  fi
+  if [ -n "$dirty" ]; then
+    echo "  REPORT  $reader subject: THIS checkout — tracked path(s) differ from HEAD, so"
+    echo "          a worktree of HEAD would not be the tree under test; $reader"
+    echo "          measures the checkout, and attestation preflight will refuse any"
+    echo "          residue the test lanes left there (#2008)"
+    return 0
+  fi
+  if out="$(git -C "$ROOT" worktree add -q --detach "$wt" HEAD 2>&1)"; then
+    printf -v "$var" '%s' "$wt"
+    echo "  REPORT  $reader subject: a fresh worktree of HEAD ($(git -C "$ROOT" rev-parse --short HEAD 2>/dev/null || echo UNREADABLE))"
+    echo "          under the lane dir, made just now and read by nothing else — the"
+    echo "          cache residue the test lanes leave in this checkout cannot reach"
+    echo "          its attestation preflight (#2008)"
+    return 0
+  fi
+  echo "  REPORT  $reader subject: THIS checkout — a fresh worktree of HEAD could not be"
+  echo "          made (${out:-git gave no reason}); $reader measures the checkout, and"
+  echo "          attestation preflight will refuse any residue the test lanes left"
+  echo "          there (#2008)"
+  return 0
+}
+gk_subject_release() {               # gk_subject_release <var>
+  local var="$1" wt
+  wt="${!var:-}"
+  [ -n "$wt" ] || return 0
+  git -C "$ROOT" worktree remove --force "$wt" >/dev/null 2>&1 || true
+  # `worktree remove` can refuse a directory a gate is still holding open; the
+  # directory is then swept by name, and ONLY under a lane dir this script
+  # minted — the same `case` guard `gk_cleanup` applies before its own `rm -rf`.
+  case "$wt" in
+    */gk_lanes.??????/subject-*) rm -rf "$wt" ;;
+  esac
+  git -C "$ROOT" worktree prune >/dev/null 2>&1 || true
+  printf -v "$var" '%s' ''
+  return 0
+}
+gk_hygiene_subject_prepare() {
+  gk_subject_prepare GK_HYG_SUBJECT hygiene "the hygiene lane"
+}
+gk_hygiene_subject_release() {
+  gk_subject_release GK_HYG_SUBJECT
+}
+gk_review_subject_prepare() {
+  gk_subject_prepare GK_REVIEW_SUBJECT review "the review"
+}
+gk_review_subject_release() {
+  gk_subject_release GK_REVIEW_SUBJECT
+}
+
 landing_measured_tree_disclosure
+gk_hygiene_subject_prepare
 lane_run_window
 if [ "$LANE_WIDTH" -gt 1 ]; then
   for _lane in $LANE_LAUNCHED; do lane_join "$_lane"; done
@@ -1961,6 +2149,10 @@ if [ "$LANE_WIDTH" -gt 1 ]; then
     # exists only because of it.
     lane_stamps_archive concurrent
     LANE_WIDTH=1
+    # A fresh subject for the re-run: the concurrent hygiene run has already
+    # been in the old one (vibe-ic#2008).
+    gk_hygiene_subject_release
+    gk_hygiene_subject_prepare
     lane_run_window
   fi
 fi
@@ -1968,6 +2160,9 @@ lane_emit_window
 # AFTER every unit is emitted, so no REPORT line can land between two
 # labelled stage verdicts and be read as belonging to one of them.
 lane_report_window
+# The lane's subject has no reader left: `lane_emit_window` joined the lane
+# (vibe-ic#2008). The review below gets its own.
+gk_hygiene_subject_release
 
 # Merge verification already has enough evidence to refuse once the aggregate
 # session produced NO complete record.  Continuing through every remaining gate
@@ -2133,9 +2328,26 @@ run_gatekeeper_review() {
   if [ "${GK_RANGE_N:-0}" -gt 1 ]; then
     batch_arg=(--batch)
   fi
+  # `--repo` IS THE REVIEW'S OWN FRESH SUBJECT WHEN THERE IS ONE (vibe-ic#2008).
+  # The review RUNS the hygiene set — it is not handed a record of one, see
+  # above — and it runs after the window, in the checkout the pytest lanes
+  # have just left their cache residue in. Pointed at `$ROOT` it failed
+  # `attestation preflight` for the same reason the lane did, on every
+  # official run of the week; pointed at the LANE's subject (the parked first
+  # attempt) it failed on the residue the lane's own hygiene run had left
+  # there. `gk_review_subject_prepare` made this one immediately before this
+  # function was called and nothing has read it. The subject is HEAD's tree,
+  # and every other question the review asks is a question about commits,
+  # which a linked worktree answers identically. The coordinator the review
+  # runs (`repo_hygiene_parallel.py`) resolves its own root from its file, so
+  # its working-checkout arm, its fresh arm and the host-independence probe
+  # all agree on where `$PG` is — the shape that passed in the parked run.
+  # `${GK_REVIEW_SUBJECT:-$ROOT}`: the fallback is the checkout, exactly as
+  # before, and `tools/test_gatekeeper_land_review_budget.py` drives this REAL
+  # function with the subject never set.
   out="$(timeout -k 10 "$GK_REVIEW_BUDGET_S" \
          python3 "$PROGRAMS/gatekeeper_review.py" \
-         --base "$BASE" --head HEAD --repo "$ROOT" \
+         --base "$BASE" --head HEAD --repo "${GK_REVIEW_SUBJECT:-$ROOT}" \
          "${cadence_arg[@]+"${cadence_arg[@]}"}" \
          "${batch_arg[@]+"${batch_arg[@]}"}" \
          --gate-record "$GK_REVIEW_RECORD" 2>&1)"; rc=$?
@@ -2155,8 +2367,13 @@ REQUEST_CHANGES. Treated as undecided."
   printf '%s\n' "$out"
   return "$rc"
 }
+gk_review_subject_prepare
 run "full:gatekeeper-review" "gatekeeper review (deadline adjudicated)" \
     run_gatekeeper_review
+# Released BEFORE the two closing gates, so that everything this tier made
+# outside the tree is gone before the tree is judged; `gk_cleanup` repeats the
+# release for a run that dies before this line (vibe-ic#2008).
+gk_review_subject_release
 
 # #1029 — the standing assertion, executed: everything above ran against this
 # tree, so nothing above may have CHANGED it. Names every offending path rather
