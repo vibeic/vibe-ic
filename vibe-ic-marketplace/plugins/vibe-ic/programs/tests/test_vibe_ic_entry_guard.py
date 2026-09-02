@@ -459,25 +459,124 @@ def test_noleak_phase1_report_rejects_self_authored_claims():
         assert rc == 1
 
 
-def test_invalid_entry_evidence_blocks_the_benchmark_score_front_door(tmp_path):
-    """Prove-by-run: strict failure stops dispatch before downstream gates."""
-    run_dir = tmp_path / "run"
-    report = run_dir / "reports" / "orchestrator" / "phase1_one_shot.json"
-    report.parent.mkdir(parents=True)
-    body = _valid_phase1_report(run_dir)
-    body["project"] = str(tmp_path / "different-run")
-    report.write_text(json.dumps(body))
+#: The guard's OWN refusal line, as it prints it. Asserted alongside the
+#: dispatcher's wrapper sentence so a refusal that came from somewhere ELSE in
+#: `cmd_score` cannot be read as this guard having answered.
+_GUARD_SAID = "no Vibe-IC runner evidence found"
+
+#: `cmd_score`'s refusal when the clean-room metadata is absent. Named so the
+#: test that keeps that path ALIVE reads as a pin rather than a coincidence.
+_PRECONDITION_SAID = "canonical scoring requires the clean-room metadata"
+
+
+def _canonical_solve_run(tmp_path, bench="verilogeval-v2", fmt="verilogeval"):
+    """A run directory that satisfies `cmd_score`'s PRECONDITIONS, so the gates
+    downstream of them are actually reached. Returns (run_dir, dataset).
+
+    WHY THIS EXISTS. `cmd_score` requires `<run>/.bench_config.json` — the
+    clean-room metadata `--solve` writes — and refuses before it asks any gate
+    anything. That precondition landed in `e9ec0ce1c` (2026-08-31), AFTER this
+    test (`f6b0e77dd`, v1.10.64), and the test's fixture was not updated. From
+    then on it measured the MISSING-FILE path and never the entry guard:
+    MEASURED at `104b97dfd0fa`, rc 1 with
+    `canonical scoring requires the clean-room metadata written by --solve`
+    and no mention of the guard at all.
+
+    NOTHING IS SWITCHED OFF TO GET HERE. The envelope is built by the
+    dispatcher's OWN producer, `_prepare_general_solve_run` with `limit=0`
+    (`full_dataset = limit == 0`), so the schema string, the bench key and the
+    full-dataset flag are the producer's and cannot drift from what
+    `cmd_score` reads back. `test_a_missing_bench_config_still_refuses_before_
+    any_gate` below keeps the precondition itself alive.
+    """
+    import benchmark_dispatch as dispatch
+
     dataset = tmp_path / "dataset"
     dataset.mkdir()
+    run_dir = tmp_path / "run"
+    dispatch._prepare_general_solve_run(bench, dataset, run_dir, fmt, 0)
+    return run_dir, dataset
 
+
+def _score(run_dir, dataset, bench="verilogeval-v2"):
     cp = subprocess.run(
-        [sys.executable, str(DISPATCH), "verilogeval-v2", "--score",
+        [sys.executable, str(DISPATCH), bench, "--score",
          "--run", str(run_dir), "--dataset", str(dataset)],
         capture_output=True, text=True)
-    output = cp.stdout + cp.stderr
-    assert cp.returncode != 0
+    return cp.returncode, cp.stdout + cp.stderr
+
+
+def _write_phase1_report(run_dir, project):
+    report = run_dir / "reports" / "orchestrator" / "phase1_one_shot.json"
+    report.parent.mkdir(parents=True, exist_ok=True)
+    body = _valid_phase1_report(run_dir)
+    body["project"] = str(project)
+    report.write_text(json.dumps(body))
+    return report
+
+
+def test_invalid_entry_evidence_blocks_the_benchmark_score_front_door(tmp_path):
+    """Prove-by-run: strict failure stops dispatch before downstream gates.
+
+    The refusal must be THE GUARD'S. rc != 0 alone is satisfied by every
+    precondition upstream of it, which is exactly how this test spent its time
+    measuring a missing file.
+    """
+    run_dir, dataset = _canonical_solve_run(tmp_path)
+    _write_phase1_report(run_dir, tmp_path / "different-run")
+
+    rc, output = _score(run_dir, dataset)
+    assert rc != 0
+    assert _GUARD_SAID in output, (
+        f"dispatch refused, but not because the entry guard refused — this "
+        f"run did not exercise the guard:\n{output}")
     assert "Vibe-IC entry guard FAILed" in output
+    assert _PRECONDITION_SAID not in output, (
+        f"the refusal came from the clean-room-metadata precondition, "
+        f"upstream of the guard:\n{output}")
     assert "blindness_audit:" not in output
+
+
+def test_valid_entry_evidence_is_accepted_and_dispatch_continues(tmp_path):
+    """THE OTHER DIRECTION, and the half that proves the guard was ASKED.
+
+    A guard that refused everything satisfies the test above. Same envelope,
+    same command, and the ONLY difference is that the phase-1 report names the
+    run it actually belongs to: the guard must PASS and dispatch must go on
+    past it. MEASURED at `104b97dfd0fa`: `PASS: Vibe-IC structural runner-entry
+    evidence found`, then the clean-room guard passes, and the run stops later
+    for an unrelated reason it names.
+    """
+    run_dir, dataset = _canonical_solve_run(tmp_path)
+    _write_phase1_report(run_dir, run_dir)
+
+    _rc, output = _score(run_dir, dataset)
+    assert "Vibe-IC entry guard FAILed" not in output, output
+    assert _GUARD_SAID not in output, output
+    assert "structural runner-entry evidence found" in output, (
+        f"the entry guard did not report a PASS, so this arm does not show "
+        f"that it was asked:\n{output}")
+    assert "clean-room run dir" in output, (
+        f"dispatch did not reach the gate AFTER the entry guard, so 'it "
+        f"continued' is not shown:\n{output}")
+
+
+def test_a_missing_bench_config_still_refuses_before_any_gate(tmp_path):
+    """THE PATH THAT MUST NOT BE SWITCHED OFF.
+
+    The repair above is to SATISFY `cmd_score`'s precondition so the guard is
+    reached, never to remove it. Without `.bench_config.json` scoring must
+    still refuse, and refuse for that reason — the run carries no evidence of
+    having been produced by `--solve` at all.
+    """
+    run_dir, dataset = _canonical_solve_run(tmp_path)
+    _write_phase1_report(run_dir, run_dir)
+    (run_dir / ".bench_config.json").unlink()
+
+    rc, output = _score(run_dir, dataset)
+    assert rc != 0
+    assert _PRECONDITION_SAID in output, output
+    assert "Vibe-IC entry guard FAILed" not in output
 
 
 @pytest.mark.parametrize(("field", "invalid"), [
