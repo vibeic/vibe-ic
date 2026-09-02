@@ -282,6 +282,36 @@ def _incremental_cifb_coefficients(order, spec_values, consts):
     `osr` and `order` are BOUND spec rows, so the emitted set is a function of
     the declaration: change the declared OSR and the coefficients change. The
     tabulated set could not, and that is the defect.
+
+    WHAT THIS DERIVATION CLAIMS, AND WHAT IT DOES NOT.
+
+    IT BOUNDS OVERFLOW. That claim is measured: with the tabulated
+    free-running set the first integrator saturated in TWO clocks of a
+    256-clock window and the loop filter sat at a rail for the whole window;
+    with a set from this derivation the loop filter stays inside the rails and
+    centred near the common mode. That is the condition this bound exists to
+    enforce, and it enforces it.
+
+    IT DOES NOT SET THE GAIN. Measured end to end on a real declaration
+    (order 2, osr 256, u_hawaii_adc / ihp-sg13g2), with the bias derived to
+    match and the window verified LIVE before any number was read:
+
+        coefficient          density at mid-scale     ideal
+        1/8   (hand-chosen)        0.1288              0.5
+        1/181 (this derivation)    0.0325              0.5
+
+    The derived set is FURTHER from the transfer, not closer: 1/181 costs
+    enough loop gain that the modulator is worse, while still not overflowing.
+    So an overflow bound is NECESSARY and is not SUFFICIENT, and a design that
+    satisfies it is not thereby a converter. Setting the gain is a separate
+    question — loop-filter synthesis against the declared resolution — and it
+    is NOT answered here. Do not read a passing overflow bound as a validated
+    converter.
+
+    (An earlier landing message credited this derivation with the 0.1288
+    figure. That number came from a hand-chosen 1/8 coefficient running with a
+    bias sized for 1/181 — an arm internally inconsistent by 22.6x. Recorded
+    so the claim is not inherited.)
     """
     import math
     n = float(spec_values.get("osr") or 0.0)
@@ -1046,21 +1076,55 @@ LIBRARY: Dict[str, Dict[str, Any]] = {
             {"name": "mp_azq", "role": "pmos", "function":
              "auto-zero switch (p-side of the transmission gate)",
              "nets": ["nqz", "nrstb", "vcm", "vdd"], "w": 4.0, "l": 0.15},
+            # MEASURED (round 21, the quantiser extracted and driven by
+            # ideal sources): with the input pair's drains ON the latch
+            # nodes and NO cross-coupled nmos pair, this is not a StrongARM
+            # and does not regenerate. During evaluate both cross-coupled
+            # PMOS sit in SATURATION at |Vgs| 1.039 / |Vth| 0.367, both
+            # input devices in TRIODE (Vds 0.106 < 0.299 overdrive) and the
+            # tail in deep triode (Vds 0.054) — a static resistive path from
+            # vdd to vss that clamps BOTH outputs at 0.1605 V. The output
+            # separation was then LINEAR in the input, 0.0025 V at 2 mV and
+            # 0.0255 V at 20 mV: a ~1.3 V/V amplifier, not a comparator.
+            # The input pair therefore drains to INTERMEDIATE nodes and the
+            # latch gets its missing nmos half.
             {"name": "mn_qin", "role": "nmos", "function":
              "quantiser input pair, signal side — the auto-zeroed image of "
-             "the last integrator's output is what gets compared",
-             "nets": ["nq_n", "nqz", "nqtail", "vss"], "w": 16.0, "l": 0.5},
+             "the last integrator's output is what gets compared. Its drain "
+             "is the INTERMEDIATE node, not the latch node: a StrongARM "
+             "separates the input stage from the regenerative nodes",
+             "nets": ["ndi_n", "nqz", "nqtail", "vss"], "w": 16.0, "l": 0.5},
             {"name": "mn_qref", "role": "nmos", "function":
              "quantiser input pair, reference side: the threshold is the "
              "on-chip common mode, i.e. the midpoint of the declared "
              "reference pair",
-             "nets": ["nq_p", "vcm", "nqtail", "vss"], "w": 16.0, "l": 0.5},
+             "nets": ["ndi_p", "vcm", "nqtail", "vss"], "w": 16.0, "l": 0.5},
+            {"name": "mn_qlat1", "role": "nmos", "function":
+             "quantiser cross-coupled regenerative latch, NMOS half, plus "
+             "side. Without it the pmos pair is a cross-coupled LOAD and "
+             "the loop gain never exceeds one",
+             "nets": ["nq_n", "nq_p", "ndi_n", "vss"], "w": 8.0, "l": 0.5},
+            {"name": "mn_qlat2", "role": "nmos", "function":
+             "quantiser cross-coupled regenerative latch, NMOS half, minus "
+             "side",
+             "nets": ["nq_p", "nq_n", "ndi_p", "vss"], "w": 8.0, "l": 0.5},
             {"name": "mp_qlat1", "role": "pmos", "function":
-             "quantiser cross-coupled regenerative latch, plus side",
+             "quantiser cross-coupled regenerative latch, PMOS half, plus "
+             "side",
              "nets": ["nq_p", "nq_n", "vdd", "vdd"], "w": 8.0, "l": 0.5},
             {"name": "mp_qlat2", "role": "pmos", "function":
-             "quantiser cross-coupled regenerative latch, minus side",
+             "quantiser cross-coupled regenerative latch, PMOS half, minus "
+             "side",
              "nets": ["nq_n", "nq_p", "vdd", "vdd"], "w": 8.0, "l": 0.5},
+            {"name": "mp_qrsti1", "role": "pmos", "function":
+             "pre-charge for the INTERMEDIATE node, plus side. The latch "
+             "nodes' own pre-charge does not reach these, and an "
+             "intermediate node that never resets carries the previous "
+             "decision into the next one",
+             "nets": ["ndi_p", "nclkb", "vdd", "vdd"], "w": 4.0, "l": 0.5},
+            {"name": "mp_qrsti2", "role": "pmos", "function":
+             "pre-charge for the INTERMEDIATE node, minus side",
+             "nets": ["ndi_n", "nclkb", "vdd", "vdd"], "w": 4.0, "l": 0.5},
             {"name": "mp_qrst1", "role": "pmos", "function":
              "quantiser pre-charge switch, plus side (pre-charge is "
              "the SAMPLING phase — see the tail switch)",

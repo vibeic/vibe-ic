@@ -150,7 +150,7 @@ def test_unmeasured_publishes_a_typed_reason_class(tmp_path: Path):
     runs, examines the block, and finds no corner carrying the field the
     declared axis is graded on. That is a zero measured denominator.
 
-    Measured on a real run (u_hawaii_adc, v1.16.17): Step A4 carried
+    Measured on a real run (u_hawaii_adc, v1.16.18): Step A4 carried
     `analog_adc_enob_corner_check rc=2 verdict=INCOMPLETE
     reason_class=EXECUTION_ERROR` for exactly this input.
     """

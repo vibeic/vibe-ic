@@ -202,3 +202,15 @@ def test_a_liveness_net_the_entry_never_draws_is_faulted():
     for e in lib.values():
         e[m.LIVENESS_NODES_KEY] = {"reset": "not_a_net"}
     assert any("never draws" in p for p in m.library_invariants(lib))
+
+
+def test_the_derivation_states_what_it_does_NOT_claim():
+    """A bound that prevents overflow is not a converter, and the docstring
+    must say so. v1.16.10's landing message credited this derivation with a
+    density measured on a DIFFERENT coefficient; the narrowed claim is the
+    thing that stops that being inherited."""
+    doc = DERIVE.__doc__
+    assert "DOES NOT SET THE GAIN" in doc
+    assert "NECESSARY" in doc and "SUFFICIENT" in doc
+    # the measured pair that makes the point must stay with it
+    assert "0.1288" in doc and "0.0325" in doc
