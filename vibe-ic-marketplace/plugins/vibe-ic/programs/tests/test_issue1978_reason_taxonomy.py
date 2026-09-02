@@ -211,17 +211,6 @@ _ZERO_DENOMINATOR_MESSAGES = {
         "0 two-node (coupling) *CAP entries and therefore 0 inter-net coupling "
         "pairs, so the MCF fold has nothing to re-derive. Read this as NOT "
         "CHECKED.",
-    # THE SAME FACT WITHOUT THE TRAILING CLAUSE. Only `nothing to re-derive`
-    # was reaching the sentence above; the counted zero itself -- the phrase
-    # the gate leads with -- was booked EXECUTION_ERROR on its own. A
-    # recogniser that needs the last clause of a sentence has not recognised
-    # the fact, it has recognised that sentence.
-    "si_mcf_sta_check, the counted zero alone":
-        "0 two-node (coupling) *CAP entries and therefore 0 inter-net "
-        "coupling pairs",
-    "si_mcf_sta_check, a SPEF with no *D_NET block":
-        "the SPEF the report names parses to 0 *D_NET records "
-        "(2 net(s) resolved by the shared parser)",
 }
 
 _EXECUTION_ERROR_MESSAGES = {
@@ -236,13 +225,6 @@ _EXECUTION_ERROR_MESSAGES = {
     "a program that crashed":
         "Traceback (most recent call last):\n  File \"g.py\", line 3, in <m>\n"
         "ZeroDivisionError: division by zero",
-    # ADVERSARIAL. A fault that truthfully reports a zero of something. The
-    # counted-zero recogniser names UNITS OF POPULATION -- entries, pairs,
-    # records -- and `rows` is not one, so a writer that aborted stays an
-    # execution error. This is the case that decides how wide that noun list
-    # may grow.
-    "a writer that aborted after producing nothing":
-        "the writer aborted after 0 rows; see the traceback above",
 }
 
 
@@ -289,43 +271,85 @@ def test_zero_of_zero_and_zero_of_n_are_not_the_same_question():
                 "root(s) could be resolved") == T.EXECUTION_ERROR
 
 
-def test_a_counted_zero_needs_a_unit_of_population_not_any_noun():
-    """The discriminator for the counted-zero shape, isolated.
+# ── why a producer must declare, and prose cannot decide for it ────────────
+#
+# THE TWO SENTENCES BELOW ARE MEASURED, and they are the reason this file
+# cannot grow a counted-zero recogniser for either of them. Both state a zero
+# of the SAME noun. One is a zero denominator; the other is a design saying
+# the question does not apply to it. No lexical rule separates them, because
+# what separates them is what CAUSED the zero — and only the gate knows that.
+_SI_ZERO = (
+    "the SPEF named by the report parses to 2 net record(s), 0 two-node "
+    "(coupling) *CAP entries and therefore 0 inter-net coupling pairs, so the "
+    "MCF fold has nothing to re-derive")
+_SI_ZERO_BARE = (
+    "0 two-node (coupling) *CAP entries and therefore 0 inter-net coupling "
+    "pairs")
+_FSTC_NA = (
+    "VACUOUS_PASS: no command protocol - the design's L3 declares no opcodes "
+    "(L3.json); per-opcode state-transition coverage is N/A for this "
+    "non-protocol IC (0 coverage entries, nothing to assert)")
 
-    `sdc_validator_check`'s bad positional says "0 of 2 declared search
-    root(s)" and "0 .sdc file(s) were read" in the SAME sentence as its fault.
-    Neither `root(s)` nor `file(s)` names a population this recogniser counts,
-    which is the only reason that sentence survives as an EXECUTION_ERROR. Any
-    future widening of the noun list has to answer this test first."""
-    assert T.infer_nonverdict_reason(
-        message="0 coupling pairs were parsed") == T.ZERO_DENOMINATOR
-    assert T.infer_nonverdict_reason(
-        message="0 *CAP entries") == T.ZERO_DENOMINATOR
-    assert T.infer_nonverdict_reason(
-        message="0 .sdc file(s) were read because the positional does not "
-                "exist") == T.EXECUTION_ERROR
-    assert T.infer_nonverdict_reason(
-        message="0 of 2 declared search root(s) could be resolved"
-    ) == T.EXECUTION_ERROR
+
+def test_two_gates_state_the_same_shaped_zero_and_mean_opposite_classes():
+    """MEASURED, and the measurement is the point.
+
+    `si_mcf_sta_check` opened its input, parsed it, and found the population
+    empty -> ZERO_DENOMINATOR, which is NOT skip-eligible and must not become a
+    benign skip. `functional_state_transition_coverage_check` was told by the
+    design that the question does not apply -> DESIGN_DECLARED_NA, which IS
+    skip-eligible and must not be turned into an incomplete.
+
+    Written out, both sentences contain `0 <words> entries`. A counted-zero
+    pattern wide enough for the first is wide enough for the second, and it
+    would fire FIRST -- `_ZERO_RE` is tried before `_DECLARED_NA_RE` -- turning
+    every non-protocol IC's honest N/A into an unexamined question. This test
+    exists so the next author who reaches for that pattern measures it against
+    this pair before landing it."""
+    import re
+    counted_zero = re.compile(
+        r"\b0\s+[^\n]{0,40}?\b(?:entr(?:y|ies)|pairs?|records?)\b", re.I)
+    assert counted_zero.search(_SI_ZERO), _SI_ZERO
+    assert counted_zero.search(_SI_ZERO_BARE), _SI_ZERO_BARE
+    assert counted_zero.search(_FSTC_NA), (
+        "if this stops matching, the two sentences have become lexically "
+        "separable and a recogniser may be worth revisiting")
 
 
-def test_a_declared_class_outranks_the_recogniser_in_both_directions():
-    """WHY THE PRODUCER DUTY MATTERS MORE THAN THE PATTERN. `_vacuity`'s
-    COUPLING_CAPS_INTRA_NET_ONLY branch states a NON-zero count -- "parses to 2
-    net record(s) and 3 two-node (coupling) *CAP entr(y/ies), but none of them
-    couples two DIFFERENT nets" -- so no counted-zero pattern reaches it, and
-    it is a zero denominator all the same. The prose recogniser gets it wrong
-    and the gate's own declaration gets it right, which is the whole argument
-    for declaring."""
-    prose = ("the SPEF named by the report parses to 2 net record(s) and 3 "
-             "two-node (coupling) *CAP entr(y/ies), but none of them couples "
-             "two DIFFERENT nets")
-    assert T.infer_nonverdict_reason(message=prose) == T.EXECUTION_ERROR
+def test_the_declared_class_decides_both_and_the_prose_decides_neither():
+    """THE REMEDY, and it is the one `_flow_reason_taxonomy`'s own docstring
+    already asks for: "Producers should publish an explicit `reason_class`
+    whenever possible."
+
+    Given the declaration, both sentences classify correctly and the ambiguity
+    above is irrelevant. Without it, the fail-closed default books BOTH as
+    EXECUTION_ERROR -- "the gate blew up" -- which is wrong about both."""
+    # The full si sentence is recognised today, but only because it ENDS with
+    # "nothing to re-derive" (v1.16.64). State the same fact WITHOUT that
+    # clause -- which `_vacuity`'s sibling branches do -- and the fail-closed
+    # default books it "the gate blew up".
+    assert T.infer_nonverdict_reason(message=_SI_ZERO) == T.ZERO_DENOMINATOR
     assert T.infer_nonverdict_reason(
-        message=prose, explicit=T.ZERO_DENOMINATOR) == T.ZERO_DENOMINATOR
-    # ...and the declaration cannot be used the other way either: an explicit
-    # class is honoured whatever the prose says, which is exactly why a
-    # producer may only declare the one that is true of it.
+        message=_SI_ZERO_BARE) == T.EXECUTION_ERROR
     assert T.infer_nonverdict_reason(
-        message="0 *CAP entries", explicit=T.EXECUTION_ERROR
-    ) == T.EXECUTION_ERROR
+        message=_SI_ZERO_BARE,
+        explicit=T.ZERO_DENOMINATOR) == T.ZERO_DENOMINATOR
+    assert T.infer_nonverdict_reason(
+        message=_FSTC_NA, explicit=T.DESIGN_DECLARED_NA) == T.DESIGN_DECLARED_NA
+    # ...and the two land on OPPOSITE sides of the skip bar, which is why
+    # getting it wrong is not a cosmetic error.
+    assert T.ZERO_DENOMINATOR not in T.SKIP_ELIGIBLE
+    assert T.DESIGN_DECLARED_NA in T.SKIP_ELIGIBLE
+    assert T.p0_tier_for_reason_classes([T.ZERO_DENOMINATOR]) == "INCOMPLETE"
+    assert T.p0_tier_for_reason_classes([T.DESIGN_DECLARED_NA]) == "PASS"
+
+
+def test_both_gates_actually_declare_what_this_test_assumes():
+    """The pair above is only an argument if both gates really do declare.
+    Read it out of the shipped sources rather than trusting the prose."""
+    si = (PROGRAMS / "si_mcf_sta_check.py").read_text(encoding="utf-8")
+    fstc = (PROGRAMS
+            / "functional_state_transition_coverage_check.py").read_text(
+                encoding="utf-8")
+    assert 'summary["reason_class"] = _reason_taxonomy.ZERO_DENOMINATOR' in si
+    assert '"reason_class"' in fstc and "DESIGN_DECLARED_NA" in fstc

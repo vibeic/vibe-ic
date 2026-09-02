@@ -99,20 +99,6 @@ _ZERO_RE = re.compile(
     r"(?:\bzero[ -]denominator\b|\bexamined\s*[=:]?\s*0\b|"
     r"\bchecked\s*[=:]?\s*0\b|\b0\s*/\s*\d+\s+(?:examined|checked)\b|"
     r"\b0\s+of\s+0\b|\bread\s+0\b|"
-    # A COUNTED ZERO OF A NAMED UNIT. `si_mcf_sta_check` on a grounded-only
-    # extraction says "0 two-node (coupling) *CAP entries and therefore 0
-    # inter-net coupling pairs"; the `0 of 0` and `read 0` shapes above reach
-    # neither, and only the trailing "nothing to re-derive" clause was saving
-    # the full sentence -- so the same fact stated without that clause was
-    # still booked EXECUTION_ERROR.
-    #
-    # THE WINDOW IS 40 CHARACTERS AND THE NOUNS ARE UNITS OF POPULATION, which
-    # is what keeps the reverse direction sharp: `sdc_validator_check`'s bad
-    # positional truthfully says "0 of 2 declared search root(s) ... and 0
-    # .sdc file(s) were read" -- zeroes that are the CONSEQUENCE of a fault --
-    # and neither `root(s)` nor `file(s)` is on this list, so it stays an
-    # EXECUTION_ERROR. Nor are `rows`, which an aborted writer would report.
-    r"\b0\s+[^\n]{0,40}?\b(?:entr(?:y|ies)|pairs?|records?)\b|"
     r"\bnothing (?:to|left to) (?:re[\s-]?derive|examine|check|compare|"
     r"screen|measure|verify|audit)\b|"
     r"\ball\s+0\b|\bno (?:reports?|entries|documents?)\b|"

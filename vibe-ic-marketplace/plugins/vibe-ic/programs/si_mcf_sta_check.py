@@ -1168,8 +1168,36 @@ RECORD_ADJUDICATION = _ra.declare(
     # folds, so `zero-fold-is-not-a-signoff` does not reach either and neither
     # carries a superseded verdict. The rule STANDS AS WRITTEN; nothing about
     # any published record is relabelled.
+    #
+    # v1.16.77+ (`si_mcf_sta_check: the gate knew which zero it had and would
+    # not say`) moved the closure a FOURTH time: `build_report` now declares
+    # `summary.reason_class = ZERO_DENOMINATOR` when `details.vacuity_code` is
+    # non-empty, so the flow stops inferring this gate's refusal from prose.
+    # The digest is regenerated for it, and the re-review was RUN, not read:
+    #
+    #   * the closure was rebuilt on both sides -- 13 members before and after,
+    #     none added, none removed, exactly ONE changed (`build_report`).
+    #     `verdict_for`, `error_categories`, `denominator` and `_vacuity` --
+    #     the four that between them decide the verdict -- are byte-identical
+    #     under normalisation, as are `WAIVABLE_VACUITY_CODES` and both code
+    #     keys. The change reads `details.vacuity_code`; it writes only a new
+    #     `summary` key and no branch consumes it here.
+    #   * the rule was EXECUTED against five record shapes on both sides,
+    #     including the two published corpus shapes named above: identical
+    #     answers, and `PASS` + `coupling_pairs: 0` still supersedes to
+    #     `VACUOUS_PASS` with the same prose. `zero-fold-is-not-a-signoff`
+    #     `requires` `summary.coupling_pairs` and `findings`; a NEW sibling key
+    #     in `summary` is not one of them and `missing_fields` reads the
+    #     required names, not the shape.
+    #
+    # NOT RE-ADJUDICATED AGAINST THE REAL CORPUS, and said plainly: this clone
+    # carries no `benchmark-data`, so `published_record_staleness_check` reports
+    # UNDETERMINED here and the two records above were re-decided from their
+    # RECORDED SHAPE, not from the published files. The rule reads only fields
+    # a record carries, which is why that substitution is sound for THIS rule
+    # and would not be for one that re-opened an artefact.
     decision_digest=(
-        "4e7ac17edadbf730cdd70708f19fbe1f4f8afad280433bd4294fa079d604b9f6"),
+        "67a5a6c5d5a4e3673bbbf8a559e4d88e21dd61366419f94cd4b2344556d88dad"),
     rules=(
         _ra.Rule(
             rule_id="si_mcf_sta_check.zero-fold-is-not-a-signoff",
