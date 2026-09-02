@@ -5538,6 +5538,105 @@ def _pdn_em_first_pass_resize(project: Path, top: str, pdk: "PdkConfig",
     return {"floor": floor, "short": short, "sentinel": sentinel}
 
 
+def macro_pg_pin_names(macro_lefs) -> Tuple[List[str], List[str]]:
+    """(power pin names, ground pin names) DECLARED by the macro abstracts.
+
+    MEASURED, and it is the other half of declaring them at all: once an
+    analog macro's abstract carries `USE POWER` / `USE GROUND` on its
+    supplies, those terminals become PG terminals the flow can see — and the
+    PDN's `add_global_connection` patterns were built from the STANDARD-CELL
+    LEF alone, so nothing connected them. The run then FAILs, correctly, with
+    `PG_TERMINALS_ON_NO_NET: 8 of 155772 power/ground instance terminals are
+    attached to no net after routing`. Eight is exactly the seven macros'
+    supplies. Declaring a pin and not connecting it is worse than not
+    declaring it: the first ships a floating supply, the second at least
+    fails honestly. This closes it.
+
+    Names are read from the abstracts verbatim, so a macro whose supply is
+    `vdd` is connected as `vdd` even where the standard cells say `VDD`. No
+    supply name is hard-coded.
+    """
+    pwr, gnd = [], []
+    for f in (macro_lefs or []):
+        try:
+            txt = Path(f).read_text(errors="replace")
+        except OSError:
+            continue
+        for m in re.finditer(
+                r"^\s*PIN\s+(\S+)\s*$(.*?)^\s*END\s+\1\s*$",
+                txt, re.M | re.S):
+            body = m.group(2)
+            if re.search(r"^\s*USE\s+POWER\s*;", body, re.M):
+                pwr.append(m.group(1))
+            elif re.search(r"^\s*USE\s+GROUND\s*;", body, re.M):
+                gnd.append(m.group(1))
+    return sorted(set(pwr)), sorted(set(gnd))
+
+
+def _macro_pg_global_connect_tcl(macro_lefs, pwr_net: str,
+                                 gnd_net: str) -> str:
+    """`add_global_connection` lines for every PG pin the macros declare."""
+    mp, mg = macro_pg_pin_names(macro_lefs)
+    out = ""
+    for n in mp:
+        if n != pwr_net:
+            out += (f"  add_global_connection -net {pwr_net} "
+                    f"-pin_pattern \"^{n}$\" -power\n")
+    for n in mg:
+        if n != gnd_net:
+            out += (f"  add_global_connection -net {gnd_net} "
+                    f"-pin_pattern \"^{n}$\" -ground\n")
+    return out
+
+
+def _pg_net_retype_tcl() -> str:
+    """Type every net that lands on a macro PG terminal."""
+    # A NET ON A POWER TERMINAL IS A POWER NET, WHATEVER SYNTHESIS CALLED IT.
+    #
+    # MEASURED, and it is the last thing between this design and a routed die:
+    # one modulator's core supply is generated ON CHIP by the LDO macro, so the
+    # netlist net is an ordinary signal (`vldo`) driven by a macro output —
+    # while the macro that CONSUMES it declares its `vdd` pin `USE POWER`.
+    # TritonRoute refuses the combination outright and stops:
+    #
+    #   [ERROR DRT-0307] Net vldo of signal type SIGNAL cannot be connected to
+    #   iterm g_channel[5].u_delta_sigma/vdd with signal type POWER
+    #
+    # …after which `detailed_route` is a no-op, the DEF ships with 78 signal
+    # nets and NO signal routing, and LVS refuses it as an unrouted shell. The
+    # design is not wrong: a regulated on-chip supply IS a supply, and the
+    # design's own L1 lists `VLDO` beside `IOVDD` and `CORE`. What was missing
+    # is that nothing typed the net to match the terminal it lands on.
+    #
+    # The rule needs no naming convention and no rail table: a net attached to
+    # a terminal the MACRO'S OWN ABSTRACT types POWER/GROUND is a supply net.
+    # Retype it, name every one retyped, and leave every other net alone.
+    return (
+        "# === supply-net typing from the macro abstracts ===\n"
+        "set _pgt {}\n"
+        "if {[catch {\n"
+        "  foreach _i [[ord::get_db_block] getInsts] {\n"
+        "    foreach _it [$_i getITerms] {\n"
+        "      set _mt [$_it getMTerm]\n"
+        "      set _st [$_mt getSigType]\n"
+        "      if {$_st ne \"POWER\" && $_st ne \"GROUND\"} { continue }\n"
+        "      set _n [$_it getNet]\n"
+        "      if {$_n eq \"NULL\" || $_n eq \"\"} { continue }\n"
+        "      if {[$_n getSigType] eq $_st} { continue }\n"
+        "      $_n setSigType $_st\n"
+        "      lappend _pgt \"[$_n getName]:$_st\"\n"
+        "    }\n"
+        "  }\n"
+        "} _pgt_err]} {\n"
+        "  puts \"PG_NET_RETYPE_NONFATAL: $_pgt_err\"\n"
+        "} elseif {[llength $_pgt] > 0} {\n"
+        "  puts \"PG_NET_RETYPED: [lsort -unique $_pgt]\"\n"
+        "} else {\n"
+        "  puts \"PG_NET_RETYPE_NOOP: every net on a macro PG terminal was "
+        "already typed to match\"\n"
+        "}\n")
+
+
 def _build_pdn_tcl(pdk: "PdkConfig", container: Optional[str] = None,
                    em_floor: Optional[Dict[str, Any]] = None) -> str:
     """v0.1.47 — emit OpenROAD PDN (`add_global_connection`/`define_pdn_grid`/
@@ -5798,12 +5897,15 @@ def _build_pdn_tcl(pdk: "PdkConfig", container: Optional[str] = None,
         # markers; hanging it off the success branch alone would restore the
         # silence for exactly the runs already in the worst shape.
         _ok_marker += _build_macro_pdn_refusal_tcl(_mg_refusals)
+        _ok_marker = _pg_net_retype_tcl() + _ok_marker
         return (
             "# === PDK-adaptive PDN: discovered PG pins + met1 follow-pins"
             + (" + upper-metal straps ===\n" if strap_tcl else " ===\n")
             + "if {[catch {\n"
             f"  add_global_connection -net {pwr} -pin_pattern \"^{pwr}$\" -power\n"
             f"  add_global_connection -net {gnd} -pin_pattern \"^{gnd}$\" -ground\n"
+            + _macro_pg_global_connect_tcl(
+                getattr(pdk, "macro_lefs", None), pwr, gnd)
             + well_tcl
             + "  global_connect\n"
             f"  set_voltage_domain -name CORE -power {pwr} -ground {gnd}\n"
@@ -24686,6 +24788,13 @@ quit -noprompt
 """
 
 
+#: A LEF `OBS` block: `  OBS` … up to its matching `  END` at the same
+#: indent. Non-greedy so a multi-MACRO LEF loses one OBS per MACRO, never
+#: everything between the first OBS and the last END.
+_RE_LEF_OBS_BLOCK = re.compile(r"\n[ \t]*OBS\b.*?\n[ \t]*END\b[ \t]*(?=\n)",
+                               re.S)
+
+
 def _magic_def_to_gds(project: Path, top: str, pdk: PdkConfig,
                       container: str, gds_out: Path
                       ) -> Tuple[bool, str]:
@@ -31998,10 +32107,73 @@ def _run_extraction_lvs(project: Path, top: str, pdk: PdkConfig,
         pass
     tlef_c = _to_container_path(str(pdk.tech_lef), container)
     clef_c = _to_container_path(str(pdk.cell_lef), container)
+    # AN OBSTRUCTION IS NOT A CONDUCTOR, AND AT CHIP LEVEL IT IS NOT EVEN A
+    # VIEW. MEASURED, on a die whose per-block LVS already PASSES: handing
+    # magic the macro abstracts VERBATIM produced 3,719
+    # `Illegal overlap between obsmN and metalN (types do not connect)`
+    # feedback entries, which this step reports as ">= 1,000 extraction
+    # errors; extracted netlist untrustworthy" and which stops LVS and the
+    # whole sign-off tail. Isolated by arms on the SAME die and the SAME DEF:
+    #
+    #     abstracts read verbatim ............... 3,719 errors
+    #     abstracts with the OBS section removed ....... 0
+    #     no macro abstracts read at all ............... 7
+    #
+    # The OBS marks the macro's internal metal so a ROUTER will not route
+    # over it. Magic reads it as the `obsm*` types and then sees die-level
+    # metal — the PDN, and every wire that legitimately runs above the macro
+    # — sitting on top of an obstruction, which it calls an illegal overlap.
+    # Nothing is wrong with the die: the macro's own metal was verified at
+    # A6 (per-block DRC 0, LVS match), and at chip level a hard macro is a
+    # black box with pins.
+    #
+    # So extraction reads a DERIVED, EXTRACTION-ONLY view with the OBS
+    # dropped. The shipped abstract is untouched — the router still gets its
+    # obstruction — and a provenance record beside the view says what was
+    # dropped and why, exactly as the DEF blockage strip above does.
+    _ext_lefs = []
+    _obs_dropped = {}
+    for f in pdk.macro_lefs:
+        try:
+            _txt = Path(f).read_text(errors="replace")
+        except OSError:
+            _ext_lefs.append(f)
+            continue
+        _stripped_lef, _n = _RE_LEF_OBS_BLOCK.subn("\n", _txt)
+        if not _n:
+            _ext_lefs.append(f)
+            continue
+        _dst = ext_dir / f"{Path(f).stem}.extract.lef"
+        try:
+            _dst.write_text(_stripped_lef)
+        except OSError:
+            _ext_lefs.append(f)
+            continue
+        _obs_dropped[Path(f).name] = _n
+        _ext_lefs.append(_dst)
+    if _obs_dropped:
+        try:
+            (ext_dir / "extract_macro_lef_provenance.json").write_text(
+                json.dumps({
+                    "signed_off_macro_lefs": [str(f) for f in pdk.macro_lefs],
+                    "extraction_macro_lefs": [str(f) for f in _ext_lefs],
+                    "obs_sections_dropped": _obs_dropped,
+                    "reason": ("an OBS is a routing directive, not a "
+                               "conductor; magic reads it as obsm* and calls "
+                               "every die-level wire above the macro an "
+                               "illegal overlap. Measured on this die: 3,719 "
+                               "such entries with the OBS, 0 without it, and "
+                               "the extracted netlist is byte-identical in "
+                               "size. The macro's own metal is verified at "
+                               "A6, not here. The shipped abstracts are "
+                               "untouched."),
+                }, indent=2) + "\n")
+        except OSError:
+            pass
     # `eval`-ed inside the TCL; empty string → no-op when no macro LEFs.
     macro_lef_reads = "; ".join(
         f"lef read {_to_container_path(str(f), container)}"
-        for f in pdk.macro_lefs)
+        for f in _ext_lefs)
     env_prefix = (
         # CAD_ROOT for magic's BATCH path. `magic -dnull -noconsole` execs
         # magicdnull, which (unlike the interactive path) does NOT source

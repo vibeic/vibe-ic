@@ -224,6 +224,45 @@ _RECT_RE = re.compile(
     r"^\s*RECT\s+(-?[\d.]+)\s+(-?[\d.]+)\s+(-?[\d.]+)\s+(-?[\d.]+)\s*;", re.M)
 
 
+def annotate_pg_pins(lef_text: str, rails: Dict[str, str]) -> Tuple[str, int]:
+    """Declare the macro's supply pins as PG pins in the LEF.
+
+    `lef write` emits every pin the same way — `PIN <name> / PORT / …` — with
+    no DIRECTION and no USE. A LEF pin with no USE is a SIGNAL pin, so a
+    hard macro's supplies arrive at the digital flow as ordinary signals:
+    `pdngen` does not know the macro has a power connection to make, and the
+    PDN is planned as though the macro's area were free silicon.
+
+    `rails` maps the ROLE the design declares (`vdd`/`vss`, its own
+    vocabulary from the block's topology IR) to the net name that block uses,
+    so a design that calls its supply `avdd` is served by its own
+    declaration and no supply name is hard-coded here. A role this table
+    cannot place is left alone rather than guessed at.
+
+    Returns (text, n_pins_annotated).
+    """
+    role_use = {"vdd": "POWER", "vcc": "POWER", "vpwr": "POWER",
+                "vss": "GROUND", "gnd": "GROUND", "vgnd": "GROUND"}
+    use_of = {}
+    for role, net in (rails or {}).items():
+        u = role_use.get(str(role).strip().lower())
+        if u and net:
+            use_of[str(net)] = u
+    if not use_of:
+        return lef_text, 0
+    out = []
+    n = 0
+    for line in lef_text.splitlines():
+        out.append(line)
+        m = re.match(r"^(\s*)PIN\s+(\S+)\s*$", line)
+        if m and m.group(2) in use_of:
+            pad = m.group(1) + "  "
+            out.append(f"{pad}DIRECTION INOUT ;")
+            out.append(f"{pad}USE {use_of[m.group(2)]} ;")
+            n += 1
+    return "\n".join(out) + ("\n" if lef_text.endswith("\n") else ""), n
+
+
 def _rect_minus(a, b):
     """`a` minus `b`, as up to four axis-aligned rectangles."""
     ax1, ay1, ax2, ay2 = a
@@ -373,6 +412,11 @@ def emit_block(project: Path, block: str, container: str, pdk_root: str,
     # clearance to 0 and keep a whole, more faithful obstruction — the two
     # arms are simply not yet separable on the sign-off DRC number, because
     # the runner streamed one of them with magic and the other with klayout.
+    _rails_map = json.loads(topo.read_text()).get("rails") or {}
+    _pg_text, n_pg = annotate_pg_pins(lef.read_text(errors="replace"),
+                                      _rails_map)
+    if n_pg:
+        lef.write_text(_pg_text)
     halo = float(os.environ.get("A8_PIN_ACCESS_CLEARANCE_UM", "0.6"))
     carved, n_carved = ((lef.read_text(errors="replace"), 0) if halo <= 0
                         else carve_pin_access(
@@ -385,6 +429,7 @@ def emit_block(project: Path, block: str, container: str, pdk_root: str,
     return {"block": block, "emitted": True, "rc": 0,
             "lef_bytes": lef.stat().st_size,
             "obs_rects_carved_for_pin_access": n_carved,
+            "pg_pins_declared": n_pg,
             "pin_access_clearance_um": halo,
             "pins": len(rails) + len(signals),
             "rails": rails, "signals": signals,

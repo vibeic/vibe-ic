@@ -254,3 +254,66 @@ def test_the_json_report_is_written_atomically(tmp_path: Path, monkeypatch):
     assert E.main([str(p), "--json", str(out)]) == 0
     assert json.loads(out.read_text())["blocks"][0]["block"] == "blk"
     assert not [f for f in out.parent.iterdir() if _aa.is_temp_artefact(f)]
+
+
+# ---------------------------------------------------------------------------
+# A SUPPLY PIN WITH NO `USE` IS A SIGNAL PIN.
+#
+# `lef write` emits every pin the same way — no DIRECTION, no USE — so a hard
+# macro's supplies arrive at the digital flow as ordinary signals. `pdngen`
+# then does not know the macro has a power connection to make and plans the
+# grid as though the macro's area were free silicon.
+# ---------------------------------------------------------------------------
+
+_PG_LEF = """MACRO blk
+  PIN vdd
+    PORT
+      LAYER Metal3 ;
+        RECT 0 0 1 1 ;
+    END
+  END vdd
+  PIN vss
+    PORT
+    END
+  END vss
+  PIN sig
+    PORT
+    END
+  END sig
+END blk
+"""
+
+
+def test_the_declared_rails_become_pg_pins():
+    out, n = E.annotate_pg_pins(_PG_LEF, {"vdd": "vdd", "vss": "vss"})
+    assert n == 2
+    vdd = out.split("PIN vdd")[1].split("END vdd")[0]
+    vss = out.split("PIN vss")[1].split("END vss")[0]
+    sig = out.split("PIN sig")[1].split("END sig")[0]
+    assert "USE POWER ;" in vdd and "DIRECTION INOUT ;" in vdd
+    assert "USE GROUND ;" in vss
+    # a signal pin is untouched
+    assert "USE" not in sig and "DIRECTION" not in sig
+    # the geometry is untouched
+    assert "RECT 0 0 1 1 ;" in out
+
+
+def test_the_design_names_its_own_rails():
+    """The ROLE is the design's vocabulary; the NET is whatever this block
+    calls it. A design that names its supply `avdd` is served by its own
+    declaration and no supply name is hard-coded in the producer."""
+    lef = _PG_LEF.replace("PIN vdd", "PIN avdd").replace(
+        "END vdd", "END avdd")
+    out, n = E.annotate_pg_pins(lef, {"vdd": "avdd", "vss": "vss"})
+    assert n == 2
+    assert "USE POWER ;" in out.split("PIN avdd")[1].split("END avdd")[0]
+
+
+def test_a_role_the_table_cannot_place_is_left_alone():
+    out, n = E.annotate_pg_pins(_PG_LEF, {"bias": "vdd"})
+    assert n == 0 and out == _PG_LEF
+
+
+def test_no_rails_declared_is_a_no_op():
+    out, n = E.annotate_pg_pins(_PG_LEF, {})
+    assert n == 0 and out == _PG_LEF
