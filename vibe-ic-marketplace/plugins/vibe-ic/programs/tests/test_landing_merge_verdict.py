@@ -60,6 +60,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import landing_merge_verdict as V  # noqa: E402
 import _watchdog  # noqa: E402
+import _hermetic_engine_capability as _CAP  # noqa: E402
 
 import _progress_run as _pr  # noqa: E402
 
@@ -2189,6 +2190,36 @@ def sandbox(tmp_path_factory):
     return repo
 
 
+# ── NORECORD HAS TO REACH THE VERDICT (rlmv) ────────────────────────────────
+#
+# The 23 end-to-end tests below DRIVE the container engine: they run
+# `tools/gatekeeper-verify-merge.sh` for real, and it launches the B1/B2/A1/A2
+# arms through `tools/ci/hermetic_candidate_runner.py`. Where there is no engine
+# the runner says so, by name, in the verifier's own log:
+#
+#     [NORECORD] hermetic candidate: cannot execute Docker CLI:
+#         [Errno 2] No such file or directory: 'docker'
+#     gatekeeper-verify-merge: B1 arm receipt is NORECORD
+#
+# and the script exits 2. MEASURED on 88a8bcdf4d inside the digest-pinned
+# runtime `ghcr.io/vibeic/vibeic-eda@sha256:66c33ff2…`, which carries no Docker
+# CLI: 23 failed, 115 passed. Every one of the 23 died on `assert
+# r.returncode == 0` or `== 1` — that is, on a disclosure that said "I did not
+# measure this" being read as "this code is broken". The gate was already
+# honest; nothing downstream could hear it.
+#
+# `_judgeable` is that missing segment and NOTHING MORE. It is not a
+# `which("docker")` guard: see `_hermetic_engine_capability` for why the marker
+# alone is refused and why a run that blames an engine this process CAN start
+# stays red. Where the engine is reachable this function does nothing at all,
+# so the arms run, and a branch that deserves a refusal still gets one.
+def _judgeable(*chunks):
+    """Skip as NOT_MEASURED — with the cause named — if the arms never ran."""
+    status, reason = _CAP.classify("".join(c or "" for c in chunks))
+    if status == _CAP.NOT_MEASURED:
+        pytest.skip("NOT_MEASURED \u2014 " + reason)
+
+
 def _verify(repo, ref, tmp_path, *extra, env_extra=None):
     out = tmp_path / f"v_{ref}.json"
     r = _pr.run(
@@ -2200,6 +2231,7 @@ def _verify(repo, ref, tmp_path, *extra, env_extra=None):
              "VIBEIC_BENCHMARK_CHECKOUT_TEST_ORIGIN":
                  str(_BENCHMARK_TEST["remote"]),
              **(env_extra or {})})
+    _judgeable(r.stdout, r.stderr)
     doc = json.loads(out.read_text()) if out.is_file() else None
     return r, doc
 
@@ -2927,6 +2959,7 @@ def test_end_to_end_candidate_wave_precedes_parallel_isolated_base_wave(
                  str(_BENCHMARK_TEST["remote"])})
     seen = _first_seen_wave_artefacts(proc, run_root)
     stdout, stderr = _finish_by_progress(proc, run_root)
+    _judgeable(stdout, stderr)
     doc = json.loads(out.read_text()) if out.is_file() else None
 
     assert proc.returncode == 0, stdout + stderr
@@ -3072,6 +3105,7 @@ def test_end_to_end_candidate_cannot_prewrite_base_wave_artifacts(
             break
         time.sleep(0.02)
     stdout, stderr = _finish_by_progress(proc, run_root)
+    _judgeable(stdout, stderr)
     doc = json.loads(out.read_text()) if out.is_file() else None
 
     assert planted == list(_BASE_WAVE_ARTEFACTS), (
@@ -3135,6 +3169,7 @@ def _verify_watching_the_run_dir(sandbox, ref, tmp_path, when_b1_starts=None):
             break
         time.sleep(0.02)
     stdout, stderr = _finish_by_progress(proc, run_root)
+    _judgeable(stdout, stderr)
     doc = json.loads(out.read_text()) if out.is_file() else None
     return proc.returncode, doc, stdout, stderr, fired
 
