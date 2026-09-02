@@ -1117,14 +1117,52 @@ LIBRARY: Dict[str, Dict[str, Any]] = {
             {"name": "mp_cmld2", "role": "pmos", "function":
              "common-mode buffer current-mirror load, mirror side",
              "nets": ["nd2_cm", "nd1_cm", "vdd", "vdd"], "w": 8.0, "l": 0.5},
+            # OUTPUT STAGE SIZED FROM A MEASURED CURVE — the one place this
+            # buffer departs from the integrator it copies, and the departure
+            # is measured, not preferred.
+            #
+            # The spec is R_out < 360 ohm (back-derived from the switched
+            # charge). BOTH routes were measured on the buffer alone, driven
+            # by the same 5.56 uA switched current:
+            #
+            #   3x the tail current (tail 8u -> 24u)
+            #       R_out 1249 -> 24399 ohm, output swinging 0.27 V: it makes
+            #       the node TWENTY TIMES worse and the stage rings. The
+            #       route is rejected by its own measurement.
+            #   widen the output stage (tail unchanged at 8u)
+            #       out_p/out_n   R_out      Idd      vcm centre
+            #        16 /  8      1249 ohm   224 uA    0.598
+            #        32 / 16       951       347       0.586
+            #       256 / 16       607       347       0.591
+            #       256 / 24       468       484       0.587
+            #        64 / 32       387       617       0.524
+            #       256 / 32       383       627       0.583
+            #       512 / 32       357       628       0.589   <- meets 360
+            #        96 / 48       279       899       0.474
+            #
+            # Widening both halves in proportion ALSO drags the operating
+            # point off the reference (0.598 -> 0.474 as it grows), because
+            # `mn_cmo` is a fixed mirror outside the feedback: raising its
+            # sink current pulls the output down. So the pull-up carries the
+            # width and the pull-down carries only what the impedance needs.
+            #
+            # The current cost is DECLARED rather than hidden: 628 uA against
+            # this design's own Iout budget of 0.5 mA target / 1.0 mA maximum
+            # (L5, L22) -- 26% over target, 63% of the ceiling. The PDK sets
+            # only a minimum width (wmin 0.15 um, and
+            # analog_a5_pdk_device_limits reports 512 um PERMITTED); a device
+            # this wide is drawn multi-finger, which is A5's `m`, not A2's.
             {"name": "mp_cmo", "role": "pmos", "function":
-             "common-mode buffer output stage pull-up — this is the device "
-             "that actually makes the node low-impedance",
-             "nets": ["vcm", "nd2_cm", "vdd", "vdd"], "w": 16.0, "l": 0.5},
+             "common-mode buffer output stage pull-up — the device that "
+             "actually makes the node low-impedance; its width comes from "
+             "the measured R_out curve, not from the integrator it copies",
+             "nets": ["vcm", "nd2_cm", "vdd", "vdd"], "w": 512.0, "l": 0.5},
             {"name": "mn_cmo", "role": "nmos", "function":
              "common-mode buffer output stage pull-down, mirrored from the "
-             "same bias branch",
-             "nets": ["vcm", "nbias", "vss", "vss"], "w": 8.0, "l": 1.0},
+             "same bias branch. It sets the stage's static current, so it "
+             "carries only the width the impedance needs: widening it "
+             "further buys impedance and spends the operating point",
+             "nets": ["vcm", "nbias", "vss", "vss"], "w": 32.0, "l": 1.0},
             {"name": "c_cmc", "role": "cap", "function":
              "common-mode buffer Miller compensation — the same role, and "
              "the same derived size, as each integrator's own",

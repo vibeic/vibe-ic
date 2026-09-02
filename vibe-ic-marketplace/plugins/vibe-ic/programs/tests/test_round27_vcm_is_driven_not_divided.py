@@ -85,15 +85,37 @@ def test_the_feedback_is_on_the_INVERTING_input():
 
 
 def test_the_buffer_reuses_the_integrator_OTA_geometry_not_new_numbers():
-    """The control against inventing an amplifier: every width here must equal
-    the integrator's own, which the design already ships two of."""
+    """The control against inventing an amplifier: the input stage, the load
+    and the tail must be the integrator's own devices, which the design
+    already ships two of."""
     for buf, integ in (("mn_cmtail", "mn_tail{i}"), ("mn_cmin", "mn_in{i}"),
                        ("mn_cmfb", "mn_ref{i}"), ("mp_cmld1", "mp_ld1_{i}"),
-                       ("mp_cmld2", "mp_ld2_{i}"), ("mp_cmo", "mp_o{i}"),
-                       ("mn_cmo", "mn_o{i}")):
+                       ("mp_cmld2", "mp_ld2_{i}")):
         b, g = _dev(buf), _stage_dev(integ)
         assert b is not None and g is not None, (buf, integ)
         assert (b["w"], b["l"]) == (g["w"], g["l"]), (buf, integ, b, g)
+
+
+def test_only_the_output_stage_departs_and_it_says_why():
+    """The output stage is the ONE place the buffer may differ, because it is
+    the device that sets R_out and R_out is a spec this block has and the
+    integrator does not. The departure has to be bigger (a copy would not
+    meet 360 ohm: measured 1249 ohm at the integrator's own 16u/8u) and it
+    has to be explained where a reader will find it."""
+    for buf, integ in (("mp_cmo", "mp_o{i}"), ("mn_cmo", "mn_o{i}")):
+        b, g = _dev(buf), _stage_dev(integ)
+        assert b["w"] > g["w"], (buf, b["w"], g["w"])
+    # the pull-up carries the width; the pull-down sets the static current,
+    # and widening IT is what drags the operating point off the reference
+    assert _dev("mp_cmo")["w"] > _dev("mn_cmo")["w"] * 4
+    src = Path(m.__file__).read_text()
+    i = src.index('"name": "mp_cmo"')
+    head = src[max(0, i - 3000):i]
+    assert "R_out" in head and "360 ohm" in head, (
+        "the output stage is sized differently and the reason is not beside "
+        "it")
+    assert "Idd" in head or "uA" in head, (
+        "the current this costs is not stated where the size is chosen")
 
 
 def test_the_tail_hangs_off_the_already_derived_bias():
