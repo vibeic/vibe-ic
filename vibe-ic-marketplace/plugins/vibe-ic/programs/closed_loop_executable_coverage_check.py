@@ -334,14 +334,18 @@ REGISTRY: Dict[str, Dict[str, Any]] = {
         "why": ("design_one_shot_runner.main re-runs step_rtl_gen (flow step 1) "
                 "on a reference-TB failure and re-runs the testbench afterwards; "
                 "INCOMPLETE is terminal because it is the typed functional-TB "
-                "authoring handoff, not an RTL failure this loop can repair"),
+                "authoring handoff, not an RTL failure this loop can repair; "
+                "NOT_EXECUTED is terminal because no simulation ran at all, so "
+                "there is no mismatch to repair and every retry would "
+                "re-dispatch the same unreachable simulator"),
         "evidence": {
             "actuate": [
                 {"kind": "fallback_after_trigger_in_loop",
                  "file": "programs/design_one_shot_runner.py",
                  "caller": "main", "trigger_callee": "step_reference_tb",
                  "trigger_field": "status",
-                 "terminal_values": ["PASS", "SKIP", "WAIVED", "INCOMPLETE"],
+                 "terminal_values": ["PASS", "SKIP", "WAIVED", "INCOMPLETE",
+                                     "NOT_EXECUTED"],
                  "callee": "step_rtl_gen"},
             ],
             "remeasure": [
@@ -349,7 +353,8 @@ REGISTRY: Dict[str, Dict[str, Any]] = {
                  "file": "programs/design_one_shot_runner.py",
                  "caller": "main", "trigger_callee": "step_reference_tb",
                  "trigger_field": "status",
-                 "terminal_values": ["PASS", "SKIP", "WAIVED", "INCOMPLETE"],
+                 "terminal_values": ["PASS", "SKIP", "WAIVED", "INCOMPLETE",
+                                     "NOT_EXECUTED"],
                  "actuator_callee": "step_rtl_gen",
                  "callee": "step_reference_tb"},
             ],

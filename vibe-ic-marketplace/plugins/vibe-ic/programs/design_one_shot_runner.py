@@ -1001,6 +1001,7 @@ def _declared_container_image(project: Optional[Path], container: str
 def _record_sim_toolchain(run_dir: Path, container: str, tool: str,
                           in_container: bool,
                           fallback_reason: Optional[str] = None,
+                          locality: Optional[str] = None,
                           ) -> Dict[str, Any]:
     """#902 — record WHICH simulator toolchain this sim actually executed, and
     whether it is the one the run pinned.
@@ -1017,7 +1018,12 @@ def _record_sim_toolchain(run_dir: Path, container: str, tool: str,
       UNDECIDABLE  the probe could not resolve the image identity
 
     Never raises and never changes a sim verdict. chip/tool-AGNOSTIC."""
-    locality = "container" if in_container else "host"
+    # `locality` is supplied only by the mount-on-demand site, which runs the
+    # declared container's OWN image in a throwaway container. That is neither
+    # "container" (it is not THAT container) nor "host" (it is not the host's
+    # toolchain), and calling it either would make the record say something
+    # measurably untrue about where the simulator came from.
+    locality = locality or ("container" if in_container else "host")
     key = "%s|%s|%s|%s" % (run_dir, container, tool, locality)
     if key in _SIM_TOOLCHAIN_SEEN:
         return _SIM_TOOLCHAIN_SEEN[key]
@@ -1061,8 +1067,13 @@ def _record_sim_toolchain(run_dir: Path, container: str, tool: str,
         rec["sim_toolchain_matches_declared_image"] = True
         rec["verdict"] = "MATCH"
         rec["reason"] = (
-            "%s ran INSIDE container %r (image %s) — the sim toolchain is the "
-            "declared one" % (tool, container, rec.get("declared_image_ref")))
+            "%s ran %s (image %s) — the sim toolchain is the declared one"
+            % (tool,
+               ("in a throwaway container of container %r's own image, "
+                "because that container could not see the run tree"
+                % container) if locality == "mounted_image"
+               else "INSIDE container %r" % container,
+               rec.get("declared_image_ref")))
     else:
         rec["sim_toolchain_matches_declared_image"] = None
         rec["verdict"] = "UNDECIDABLE"
@@ -1137,6 +1148,153 @@ def _write_sim_toolchain_record(run_dir: Path, project: Optional[Path],
             _pl.reports_dir(project) / SIM_TOOLCHAIN_RECORD, rec)
 
 
+# -------------------------------------------------------------------------
+# THE THIRD EXECUTION SITE — mount-on-demand, same image
+#
+# MEASURED on 8HD-6 against `assign data_out = data_in;`, main at 3c9724e8:
+# the declared container HAS iverilog and the run tree is outside its bind
+# mounts, so `_iverilog_exec_container` correctly declines it; the host has no
+# iverilog either, so the dispatch fell through to `_run` and came back
+# rc=127 COMMAND_NOT_FOUND. The generic full-stack TB had been GENERATED and
+# NOTHING EXECUTED IT — the producer had no consumer for every run tree the
+# long-lived container does not happen to mount, which is every tree outside
+# the one designs directory (a /tmp scratch, a second clone, a CI workspace).
+#
+# The image is right there. `docker exec` cannot reach the tree, but
+# `docker run -v <dir>:<dir>` can, and mounting the host paths at their OWN
+# paths means the argv needs no translation at all. The image is taken from
+# the DECLARED container (`{{.Image}}` — the resolved id, not a floating tag),
+# so this site runs the SAME toolchain `docker exec` would have run: #902
+# provenance is preserved, not traded away for reachability.
+#
+# FAIL-CLOSED: no docker, no image id, or a dispatch that itself fails to
+# start returns `None` and the caller falls back to the host exactly as
+# before. A simulator that cannot be reached must still be reported as NOT
+# EXECUTED — never conjured into a verdict.
+# -------------------------------------------------------------------------
+#: THE THIRD STATE. A testbench that EXISTS is not a testbench that RAN, and
+#: for the whole life of the generic full-stack gate the two were spelled the
+#: same: `WAIVED`, a word that reads as "disposed of", was returned both when
+#: the skeleton TB ran to completion and when NO SIMULATOR EXECUTED IT AT ALL.
+#: The step's own detail string said "NO sim ran" while its STATUS said the
+#: matter was settled, and `_aggregate_verdict` folded it into
+#: PASS_WITH_WAIVERS beside genuinely-disposed items.
+#:
+#: Three states, three words, none of them green:
+#:   INCOMPLETE       the sim RAN and reached completion — connectivity only
+#:   FAIL             the sim RAN and the design did not survive it
+#:   NOT_EXECUTED     nothing ran; there is no evidence about the design
+#:
+#: NOT a failure of the DUT (vibe-ic#1394: an unreachable compiler accuses
+#: nobody), and never a pass either. Enumerated in `_aggregate_verdict`, so it
+#: cannot arrive as a silent green, and carried in `extras["sim_executed"]`
+#: so a consumer can ask the question without parsing prose.
+NOT_EXECUTED_STATUS = "NOT_EXECUTED"
+
+
+def _shutil_which(tool: str) -> Optional[str]:
+    """`shutil.which`, named so a test can pin it without pinning every
+    other host probe in this module."""
+    import shutil as _shutil
+    return _shutil.which(tool)
+
+
+def _bind_dirs_for(argv: List[str], run_dir: Path) -> List[str]:
+    """The minimal set of host directories that must be visible for `argv`.
+
+    Every absolute token is a path (exactly the set `_to_container_path`
+    rewrites); its DIRECTORY is what gets mounted, so an output file that does
+    not exist yet is still writable. Nested directories are folded into their
+    ancestor so docker is not handed a mount it already covers. chip-AGNOSTIC:
+    pure argv/path grammar."""
+    cands = {str(Path(run_dir).resolve())}
+    for tok in argv:
+        t = str(tok or "")
+        if not t.startswith("/"):
+            continue
+        p = Path(t)
+        d = p if p.is_dir() else p.parent
+        try:
+            cands.add(str(d.resolve()))
+        except OSError:
+            cands.add(str(d))
+    keep: List[str] = []
+    for d in sorted(cands, key=len):
+        if any(d == k or d.startswith(k + "/") for k in keep):
+            continue                       # already covered by an ancestor
+        keep.append(d)
+    return keep
+
+
+def _container_image_id(container: str) -> Optional[str]:
+    """The image the DECLARED container is running, as a resolved id.
+
+    `{{.Image}}` is the id the daemon actually started, so it cannot drift the
+    way a `:latest` tag can between the exec that was verified and the run that
+    is dispatched. Falls back to the configured reference. None when docker or
+    the container is not there."""
+    for fmt in ("{{.Image}}", "{{.Config.Image}}"):
+        try:
+            cp = subprocess.run(["docker", "inspect", container,
+                                 "--format", fmt],
+                                capture_output=True, text=True, timeout=10)
+        except Exception:                                    # noqa: BLE001
+            return None
+        if cp.returncode == 0 and (cp.stdout or "").strip():
+            return cp.stdout.strip()
+    return None
+
+
+def _run_stage_in_mounted_image(argv: List[str], run_dir: Path,
+                                container: str, timeout: int = 120
+                                ) -> Optional[Tuple[int, str, str]]:
+    """Run `argv` in a throwaway container of `container`'s OWN image with the
+    directories `argv` touches bind-mounted at their host paths.
+
+    Returns None when this site is not available at all (no docker, no image
+    id, dispatch refused to start) — the caller then falls back to the host,
+    which is the behaviour that existed before this site. A tool that RAN and
+    rejected the source returns its real rc, so a genuine defect still FAILs.
+    """
+    image = _container_image_id(container)
+    if not image:
+        return None
+    import shlex as _shlex
+    import _docker_memory as _dmem
+    binds: List[str] = []
+    for d in _bind_dirs_for(argv, run_dir):
+        binds += ["-v", "%s:%s" % (d, d)]
+    inner = " ".join(_shlex.quote(str(t)) for t in argv)
+    cmd = ["docker", "run", "--rm",
+           # The plugin's standing ceiling. A container with no cgroup limit
+           # does not share the host's memory, it IS the host's memory.
+           *_dmem.docker_memory_flags(),
+           # Files written by the sim must belong to the caller, not to root:
+           # the next stage of the SAME run reads and rewrites them from the
+           # host.
+           "-u", "%d:%d" % (os.getuid(), os.getgid()),
+           # The image is entered through a login shell whose profile prints a
+           # banner on stdout; the image's own documented knob silences it, and
+           # a banner in a sim transcript is stdout contamination the repo
+           # already refuses elsewhere.
+           "-e", "IIC_OSIC_TOOLS_QUIET=1",
+           # The image's ENTRYPOINT is a UI launcher that parses `-w`/`-s`;
+           # a bare tool argv would be eaten by it.
+           "--entrypoint", "bash",
+           "-w", str(run_dir)]
+    cmd += binds
+    cmd += [image, "-lc",
+            "export PATH=%s/bin:$PATH && %s" % (TOOLS_IN_CONTAINER, inner)]
+    try:
+        cp = subprocess.run(cmd, capture_output=True, text=True,
+                            timeout=timeout)
+    except subprocess.TimeoutExpired:
+        return 124, "", ("mounted-image dispatch exceeded %ss" % timeout)
+    except Exception:                                        # noqa: BLE001
+        return None                        # docker itself is not usable here
+    return cp.returncode, cp.stdout or "", cp.stderr or ""
+
+
 def _run_iverilog_stage(argv: List[str], run_dir: Path, container: str,
                         timeout: int = 120) -> Tuple[int, str, str]:
     """Run one iverilog/vvp stage (a full argv) INSIDE `container` when it has
@@ -1157,17 +1315,39 @@ def _run_iverilog_stage(argv: List[str], run_dir: Path, container: str,
     tool = os.path.basename(str(argv[0])) if argv else "iverilog"
     in_container = _iverilog_exec_container(container, run_dir, argv)
     fallback_reason: Optional[str] = None
+    container_has_tool = False
     if not in_container and container:
-        if not _tool_in_container(container, "iverilog"):
+        container_has_tool = _tool_in_container(container, "iverilog")
+        if not container_has_tool:
             fallback_reason = ("container %r has no iverilog" % container)
         else:
             _ok, fallback_reason = _iverilog_sources_visible(
                 list(argv or []), run_dir, container)
+    # THE THIRD SITE. `docker exec` was declined and the host has no such
+    # tool, so before this the argv went to a host that could not run it and
+    # came back rc=127 — the TB was produced and NOTHING EXECUTED IT. The
+    # blocker is reachability alone (the image HAS the tool), so mount the
+    # tree into a throwaway container of that SAME image. Only entered when
+    # the host genuinely cannot do the job: a host that has the tool keeps
+    # the host fallback, unchanged.
+    mounted = None
+    if (container_has_tool and not _shutil_which(tool)):
+        mounted = _run_stage_in_mounted_image(argv, run_dir, container,
+                                              timeout=timeout)
+        if mounted is not None:
+            fallback_reason = (
+                "%s; dispatched into a throwaway container of that "
+                "container's own image instead of the host" % fallback_reason)
     try:
-        _record_sim_toolchain(run_dir, container, tool, in_container,
-                              fallback_reason)
+        _record_sim_toolchain(run_dir, container, tool,
+                              in_container or mounted is not None,
+                              fallback_reason,
+                              locality=("mounted_image" if mounted is not None
+                                        else None))
     except Exception:                                        # noqa: BLE001
         pass                    # attribution must never fail the simulation
+    if mounted is not None:
+        return mounted
     if not in_container:
         # host execution; a plain argv passes through _run's
         # docker-exec-deadline rewriter untouched.
@@ -10528,7 +10708,7 @@ def _reference_tb_generic_full_stack(project: Path, top_name: str,
                        f"stderr={(err or out)[-600:]}")
             if results_path.is_file():
                 return StepResult(
-                    "reference_tb", "WAIVED",
+                    "reference_tb", NOT_EXECUTED_STATUS,
                     time.time() - t0,
                     (f"AID reference TB SKIPPED ({track_reason}); {_absent} "
                      f"Generic full-stack TB skeleton ({tb_path.name}) + "
@@ -10537,16 +10717,18 @@ def _reference_tb_generic_full_stack(project: Path, top_name: str,
                     extras={"verification_track": "generic_full_stack",
                             "aid_tb_skipped_reason": track_reason,
                             "functional_verified": False,
+                            "sim_executed": False,
                             "fallback_skill": "testbench-gen",
                             "iverilog_available": False,
                             "tb_frontend": tb_frontend})
             return StepResult(
-                "reference_tb", "SKIP",
+                "reference_tb", NOT_EXECUTED_STATUS,
                 time.time() - t0,
                 (f"AID reference TB SKIPPED: {track_reason}. {_absent}"),
                 extras={"verification_track": "generic_full_stack",
                         "aid_tb_skipped_reason": track_reason,
                         "functional_verified": False,
+                        "sim_executed": False,
                         "iverilog_available": False,
                         "tb_frontend": tb_frontend})
         if rc != 0:
@@ -10563,6 +10745,7 @@ def _reference_tb_generic_full_stack(project: Path, top_name: str,
                  f"rc={rc} stderr={(err or out)[-1200:]}"),
                 extras={"verification_track": "generic_full_stack",
                         "aid_tb_skipped_reason": track_reason,
+                        "sim_executed": True,
                         "tb_frontend": tb_frontend})
         # ORGANIC #703 — the #657 verilator SV-escape ALREADY ran the native
         # binary (no full_stack.vvp on disk); reuse its captured stdout instead
@@ -10613,6 +10796,7 @@ def _reference_tb_generic_full_stack(project: Path, top_name: str,
                 extras={"verification_track": "generic_full_stack",
                         "aid_tb_skipped_reason": track_reason,
                         "functional_verified": False,
+                        "sim_executed": True,
                         "connectivity_pass_functional_deferred": True,
                         "capability_gap": "cap:cpu_functional_oracle",
                         "fallback_skill": "testbench-gen",
@@ -10626,14 +10810,15 @@ def _reference_tb_generic_full_stack(project: Path, top_name: str,
              f"defect. transcript_tail={out[-1000:]}"),
             [str(transcript)],
             extras={"verification_track": "generic_full_stack",
-                    "aid_tb_skipped_reason": track_reason})
+                    "aid_tb_skipped_reason": track_reason,
+                    "sim_executed": True})
 
     # iverilog unavailable — fall back to the deterministic results.json
     # the TB generator emitted. #439: this can never be a PASS — nothing
     # SIMULATED; WAIVED with the open item named.
     if results_path.is_file():
         return StepResult(
-            "reference_tb", "WAIVED",
+            "reference_tb", NOT_EXECUTED_STATUS,
             time.time() - t0,
             (f"AID reference TB SKIPPED ({track_reason}); iverilog "
              f"unavailable — generic full-stack TB skeleton "
@@ -10644,17 +10829,21 @@ def _reference_tb_generic_full_stack(project: Path, top_name: str,
             extras={"verification_track": "generic_full_stack",
                     "aid_tb_skipped_reason": track_reason,
                     "functional_verified": False,
+                    "sim_executed": False,
                     "fallback_skill": "testbench-gen",
                     "iverilog_available": False})
     return StepResult(
-        "reference_tb", "SKIP",
+        "reference_tb", NOT_EXECUTED_STATUS,
         time.time() - t0,
         (f"AID reference TB SKIPPED: {track_reason}. Generic full-stack "
          f"TB present ({tb_path.name}) but no simulator and no "
          f"results.json — interface family not covered by AID reference "
          f"TB; gate-level synth + Phase 3 is the verification path."),
         extras={"verification_track": "generic_full_stack",
-                "aid_tb_skipped_reason": track_reason})
+                "aid_tb_skipped_reason": track_reason,
+                "functional_verified": False,
+                "sim_executed": False,
+                "iverilog_available": False})
 
 
 # ---------------------------------------------------------------------------
@@ -18234,7 +18423,11 @@ def main() -> int:
         # the loop terminates only via FAIL_RTL_REPAIR_INERT after args.max_rtl_repair_retries
         # rounds. Treat both non-mismatch dispositions like SKIP here — exit
         # the RTL repair loop and let the functional-evidence gate decide.
-        if (sr.status in ("PASS", "SKIP", "WAIVED", "INCOMPLETE") or
+        # NOT_EXECUTED joins them for the same reason and a stronger one: no
+        # simulation ran, so there is no mismatch to repair and every retry
+        # would re-dispatch the same absent simulator.
+        if (sr.status in ("PASS", "SKIP", "WAIVED", "INCOMPLETE",
+                          "NOT_EXECUTED") or
                 rtl_repair_retry >= args.max_rtl_repair_retries):
             break
         if _before_entry("rtl_gen", _entry_site):
@@ -18590,7 +18783,19 @@ def _aggregate_verdict(plan: List[StepResult]) -> str:
     # counted with WAIVED so the RUN-level word this function returns is
     # unchanged — the new distinction lives at the STEP verdict, which is where
     # the fact belongs and where nothing could state it before.
-    _INCOMPLETE_STATUSES = ("INCOMPLETE",)
+    # NOT_EXECUTED — the step dispatched a simulation and NOTHING RAN (no
+    # reachable simulator). Counted with WAIVED/INCOMPLETE: it is not a
+    # failure of the design (nothing accused it) and it is emphatically not
+    # green, so the run reports PASS_WITH_WAIVERS and the step keeps the word
+    # that says which of the three it is. Enumerating it here is what stops it
+    # reaching the catch-all `return "PASS"` below.
+    # The LITERAL, not `NOT_EXECUTED_STATUS`: this function is extracted from
+    # the shipped source and exec'd in isolation by
+    # `test_design_verdict_has_no_silent_catch_all`, so a module-global
+    # reference here is a NameError in the very test that proves no status
+    # reaches the catch-all. The two spellings are pinned to each other by
+    # `test_rphase2_full_stack_tb_executed_not_merely_written`.
+    _INCOMPLETE_STATUSES = ("INCOMPLETE", "NOT_EXECUTED")
     _KNOWN = (set(_FAIL_STATUSES) | set(_GREEN_STATUSES)
               | set(_SKIP_STATUSES) | set(_INCOMPLETE_STATUSES) | {"WAIVED"})
 
