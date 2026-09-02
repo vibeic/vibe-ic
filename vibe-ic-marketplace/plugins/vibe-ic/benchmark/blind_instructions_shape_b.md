@@ -25,9 +25,15 @@ genre list includes `barrel shifter`, `frequency divider / odd / dual-edge`,
 `async FIFO`, `serial<->parallel`, `edge/pulse detect`, `FSM Moore`, `gshare`,
 `serial twos complement`, `K-map -> mux`, `IEEE-754 float multiply`, and
 `saturating counter /
-no upper limit / cannot overflow`.  A lesson never overrides an explicit
-prompt requirement and never supplies benchmark- or problem-specific oracle
-knowledge.
+no upper limit / cannot overflow`.
+
+**Section 4-E NO-LEAK (#733), and it is the half that keeps this blind.**
+Apply a matched convention ONLY *unless the spec states otherwise* — an
+explicit prompt requirement always wins, and a lesson never overrides one. When
+the spec is AMBIGUOUS rather than silent, the case stays **spec-faithful**: you
+author what the prompt supports and supply no oracle answer. A digest lesson is
+a general convention, never benchmark- or problem-specific knowledge, and
+reaching for it to settle an ambiguity is the leak this rule exists to stop.
 
 - **CROSS-PROBLEM PROHIBITION:** never read OTHER designs' prompts,
   reference RTL, tests, dataset BUILD files, transcripts, or results. Each worklist

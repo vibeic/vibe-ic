@@ -16983,8 +16983,13 @@ def step_emit_phase2_manifests(project: Path,
                     "declaration": _gen.get("declaration"),
                     "reason": _gen.get("reason"),
                 }
-                (formal_dir / "formal_not_applicable.json").write_text(
-                    json.dumps(_payload, indent=2, ensure_ascii=False) + "\n")
+                # vibe-ic#1082 — a DECLARED required_output is written
+                # through the atomic helper. A raw write_text can be killed
+                # part-way and leave a truncated file that `required_outputs`
+                # reads as present; the guarantee is rename-survives-SIGKILL,
+                # not a shorter line.
+                _aa.write_json(formal_dir / "formal_not_applicable.json",
+                               _payload)
                 written.append("formal/formal_not_applicable.json")
             else:
                 # `generate` already wrote formal_authoring_request.json with
@@ -17008,8 +17013,12 @@ def step_emit_phase2_manifests(project: Path,
                 }],
                 "reason": f"formal program-first authoring failed: {_e!r}",
             }
-            (formal_dir / "formal_authoring_request.json").write_text(
-                json.dumps(_payload, indent=2, ensure_ascii=False) + "\n")
+            # vibe-ic#1082 — declared required_output, atomic. This is the
+            # error path: a half-written receipt here would say the authoring
+            # request exists while carrying none of the obligations that make
+            # it actionable.
+            _aa.write_json(formal_dir / "formal_authoring_request.json",
+                           _payload)
             written.append("formal/formal_authoring_request.json")
 
     # Step 6: FPGA early prototype + audit

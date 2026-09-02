@@ -647,6 +647,70 @@ def compare_committed(inv: dict, committed: dict) -> tuple[str, list[str]]:
     return "MEASURED", fails
 
 
+#: The generator that owns `programs/INDEX.md`. Named, because the artefact is
+#: cross-checked below and an artefact this program can REPORT stale but not
+#: REGENERATE is the open half of the round trip.
+INDEX_GENERATOR = MARKETPLACE.parent / "tools" / "gen_programs_index.py"
+
+#: `regenerate_index` returns one of these. THREE outcomes, not two: a tree
+#: that does not ship the generator is a different fact from a generator that
+#: ran and failed, and folding them together is how one of them goes quiet.
+INDEX_REGENERATED = "REGENERATED"
+INDEX_NOT_APPLICABLE = "NOT_APPLICABLE"
+INDEX_FAILED = "FAILED"
+
+
+def regenerate_index() -> tuple[str, str]:
+    """Re-render `programs/INDEX.md` from the tree. (outcome, one-line account).
+
+    WHY THIS IS HERE AND NOT LEFT TO A HUMAN. `check_index_cross` below has
+    reported the INDEX.md total against `programs_catalogued` for a long time,
+    and this program regenerates every OTHER document it cross-checks — the
+    artefact plus the two READMEs, driven by `_CLAIMS`. INDEX.md was the one
+    bound document nothing regenerated, so the asymmetry was structural rather
+    than anybody forgetting: a landing that adds a program updates
+    PROGRAM_INVENTORY.json and both READMEs automatically and leaves INDEX.md
+    behind, and the gap widens by one on every such landing. MEASURED at
+    `7903c1972305`: INDEX.md stated 1255 while the inventory measured 1264,
+    and the last 20 landings touched the inventory 8 times and INDEX.md never.
+
+    So the default run regenerates it, and `--check` after a plain
+    regeneration is a question this program can answer yes to — which is the
+    same closure `apply_documents` performs for the prose.
+
+    A REGENERATION THAT FAILS IS NOT SILENT. The caller reports it and exits
+    non-zero; leaving a stale catalogue behind while printing a successful
+    write is exactly the state this closes.
+    """
+    if not INDEX_GENERATOR.is_file():
+        # THE FLATTENED PLUGIN CACHE, and this is not a failure. The generator
+        # is repo-root-only and is deliberately not shipped there — the same
+        # fact `_is_helper`'s comment above records, and the reason
+        # `test_index_is_fresh` skips rather than fails on a mirror tree. Said
+        # out loud so a cache run cannot read as "the catalogue was refreshed".
+        return INDEX_NOT_APPLICABLE, (
+            f"{INDEX_MD.name} NOT regenerated: {INDEX_GENERATOR.name} is not "
+            f"in this tree (repo-root-only; this is the flattened cache). The "
+            f"cross-check below still runs against the shipped catalogue.")
+    before = INDEX_MD.read_text(encoding="utf-8") if INDEX_MD.exists() else None
+    try:
+        rc = subprocess.run(
+            [sys.executable, str(INDEX_GENERATOR), "--out", str(INDEX_MD)],
+            capture_output=True, text=True, timeout=600)
+    except (OSError, subprocess.SubprocessError) as exc:
+        return INDEX_FAILED, f"could not run {INDEX_GENERATOR.name}: {exc!r}"
+    if rc.returncode != 0:
+        return INDEX_FAILED, (f"{INDEX_GENERATOR.name} exited "
+                              f"{rc.returncode}: "
+                              f"{(rc.stderr or rc.stdout).strip()[:300]}")
+    after = INDEX_MD.read_text(encoding="utf-8") if INDEX_MD.exists() else None
+    if after is None:
+        return INDEX_FAILED, f"{INDEX_MD.name} does not exist after regeneration"
+    if before == after:
+        return INDEX_REGENERATED, f"{INDEX_MD.name} already matched the tree"
+    return INDEX_REGENERATED, f"rewrote {INDEX_MD.name} from the tree"
+
+
 def check_index_cross(inv: dict) -> list[str]:
     """programs_catalogued must equal the total INDEX.md states for itself."""
     if not INDEX_MD.exists():
@@ -766,6 +830,17 @@ def main() -> None:
     # program can answer yes to. --artifact-only opts out for the one caller
     # whose contract is a single path.
     if not a.artifact_only:
+        # THE SIBLING ARTEFACT FIRST. `check_index_cross` compares
+        # `programs_catalogued` against the total INDEX.md states for itself,
+        # so regenerating the catalogue before the prose means one default run
+        # leaves BOTH consistent with the tree and with each other.
+        outcome, account = regenerate_index()
+        print(f"\n{account}")
+        if outcome == INDEX_FAILED:
+            print(f"\nNOT WRITTEN: {INDEX_MD.name} is still stale and this "
+                  f"run cannot make it fresh. The inventory above is correct; "
+                  f"the shipped catalogue is NOT.", file=sys.stderr)
+            sys.exit(2)
         try:
             edits, unfixable = apply_documents(inv)
         except OSError as exc:

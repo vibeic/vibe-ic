@@ -174,12 +174,35 @@ def test_counts_snapshot_single_definition():
     assert snap["executed_pass"] < snap["executed_total"]
 
 
-#: A real gate program that answers rc 2 (`verdict: SKIP`) on a project
-#: containing nothing — which is how `flow_compliance_check` decides
-#: VACUOUS_PASS tier membership. Verified live by the fixture below rather
-#: than assumed, so a program that stops being vacuous is REPORTED instead of
-#: quietly making the guard degenerate.
-_VACUOUS_GATE_PROGRAM = "mixed_signal_merge_check"
+#: A real gate program that lands in the VACUOUS_PASS tier on a project
+#: containing nothing.
+#:
+#: RC 2 IS NOT THE CRITERION, AND BELIEVING IT WAS COST THIS GUARD ITS TEETH.
+#: This used to be `mixed_signal_merge_check`, and that program STILL answers
+#: rc 2 on an empty project (`verdict: SKIP`, missing
+#: `phase3/mixed_signal/top_merged.gds`) — MEASURED, so the old failure
+#: message's guess that it "may have stopped answering rc 2" was wrong.
+#: `flow_compliance_check` routes an rc-2 gate through
+#: `_flow_reason_taxonomy.infer_nonverdict_reason` and grants VACUOUS_PASS
+#: only when the reason class is in `SKIP_ELIGIBLE`
+#: (DESIGN_DECLARED_NA / CAPABILITY_ABSENT / EXTERNAL). That program's reason
+#: is now EXECUTION_ERROR, so it lands in INCOMPLETE and the probe stopped
+#: producing the one tier this guard needs.
+#:
+#: THE TIER IS ALIVE AND THE REPLACEMENT WAS CHOSEN BY READING THE CLASS, not
+#: by watching this test go green. Driving `flow_compliance_check`'s OWN
+#: answer for every `programs/*_check.py` against an empty project: 346 gates
+#: reach a non-verdict tier — 261 EXECUTION_ERROR, 48 BLOCKED_BY_UPSTREAM,
+#: 18 ZERO_DENOMINATOR and **19 VACUOUS_PASS / SKIP_ELIGIBLE**.
+#: `sdc_validator_check` is one of the 19 and is the honest shape for this
+#: probe: chip-agnostic, and its skip states its own denominator —
+#: `NOT CHECKED — no .sdc file(s) under 2 declared search root(s) ... and 0
+#: elsewhere (4 director(y/ies) scanned)`.
+#:
+#: Pinned live by `test_the_probe_gate_is_still_in_the_vacuous_tier` below, so
+#: the next reclassification reddens with the taxonomy named instead of a
+#: guess about an exit code.
+_VACUOUS_GATE_PROGRAM = "sdc_validator_check"
 
 
 def _two_step_flow_with_one_vacuous(path: Path) -> None:
@@ -271,9 +294,16 @@ def test_report_executed_pass_equals_the_checkers_own_headline(tmp_path,
     # agree by construction and this test proves nothing.
     assert "VACUOUS-PASS=1" in text, (
         f"the probe flow produced no VACUOUS-PASS, so the two numerator "
-        f"definitions cannot disagree here and this guard is inert. Gate "
-        f"program {_VACUOUS_GATE_PROGRAM!r} may have stopped answering rc 2 "
-        f"on an empty project.\n{text[:3000]}")
+        f"definitions cannot disagree here and this guard is inert. The cause "
+        f"is a REASON CLASS, not an exit code: `flow_compliance_check` grants "
+        f"VACUOUS_PASS to an rc-2 gate only when "
+        f"`_flow_reason_taxonomy.infer_nonverdict_reason` puts it in "
+        f"SKIP_ELIGIBLE (DESIGN_DECLARED_NA / CAPABILITY_ABSENT / EXTERNAL); "
+        f"a gate can go on answering rc 2 forever and still fall to "
+        f"INCOMPLETE. Read the class {_VACUOUS_GATE_PROGRAM!r} publishes now "
+        f"— `test_the_probe_gate_is_still_in_the_vacuous_tier` says it in one "
+        f"line — and pick another gate from the tier, never relabel a "
+        f"verdict to get back here.\n{text[:3000]}")
     assert m_fence.groups() == m_report.groups(), (
         f"flow_compliance_check published {m_fence.group(0)!r} but "
         f"final_report_generate rendered "
@@ -502,3 +532,71 @@ def test_canonical_sections_intact(tmp_path):
                 "## SHA-256 Attestation", "## Self-attestation",
                 "## Chip-specific addendum"):
         assert sec in text, f"missing section {sec}"
+
+
+def test_the_probe_gate_is_still_in_the_vacuous_tier(tmp_path):
+    """The probe's TIER, read from the checker's own answer.
+
+    WHY THIS EXISTS. The guard above went inert for two days and its failure
+    message blamed the wrong thing — it said the probe "may have stopped
+    answering rc 2" when the probe was still answering rc 2 and had merely
+    been reclassified out of SKIP_ELIGIBLE. A guard whose diagnosis points at
+    the wrong layer costs the next reader the whole investigation.
+
+    So the tier is asserted directly, and it is READ, not recomputed:
+    `_check_program_exit_zero` has already consumed the vacuous hint by the
+    time it returns, and publishes the outcome in the string it hands back —
+    `f"{_VACUOUS_HINT_PREFIX}{cmd}"` when the class is SKIP_ELIGIBLE, and
+    `f"INCOMPLETE: {cmd} — reason_class=X; ..."` otherwise. An earlier probe
+    re-derived the class itself and reported zero eligible gates in the whole
+    tree, including the one it was standing on; that is how the re-derivation
+    was caught.
+    """
+    import flow_compliance_check as fcc
+
+    project = tmp_path / "empty"
+    (project / "input" / "docs").mkdir(parents=True)
+    (project / "reports").mkdir()
+
+    _ok, out = fcc._check_program_exit_zero(project, f"{_VACUOUS_GATE_PROGRAM} .")
+    out = str(out)
+    assert out.startswith(fcc._VACUOUS_HINT_PREFIX), (
+        f"{_VACUOUS_GATE_PROGRAM!r} no longer lands in the VACUOUS_PASS tier "
+        f"on an empty project, so the numerator guard above is inert. The "
+        f"checker says: {out[:400]!r}. Pick another gate whose reason class is "
+        f"in `_flow_reason_taxonomy.SKIP_ELIGIBLE` — do NOT move a gate's "
+        f"reason class to make this pass, which would relabel a real "
+        f"INCOMPLETE back into the PASS family.")
+
+
+def test_the_vacuous_tier_has_more_than_one_inhabitant(tmp_path):
+    """The tier this guard depends on must not be a population of one.
+
+    If it ever narrows to exactly the probe, the next reclassification takes
+    the guard with it and there is nothing to move to. Behavioural population:
+    every `programs/*_check.py` driven against an empty project, classified by
+    the checker's own answer. MEASURED at this tree: 19 of the 346 gates that
+    reach a non-verdict tier are SKIP_ELIGIBLE.
+    """
+    import flow_compliance_check as fcc
+
+    project = tmp_path / "empty"
+    (project / "input" / "docs").mkdir(parents=True)
+    (project / "reports").mkdir()
+
+    eligible = []
+    for prog in sorted(PROGRAMS.glob("*_check.py")):
+        if prog.name.startswith("_"):
+            continue
+        try:
+            _ok, out = fcc._check_program_exit_zero(project, f"{prog.stem} .")
+        except Exception:
+            continue
+        if str(out).startswith(fcc._VACUOUS_HINT_PREFIX):
+            eligible.append(prog.stem)
+    assert _VACUOUS_GATE_PROGRAM in eligible, (
+        f"the probe is not in the tier it is chosen for: {eligible[:10]}")
+    assert len(eligible) > 1, (
+        "the VACUOUS_PASS tier has collapsed to the probe alone, so the next "
+        f"reclassification leaves the numerator guard with nowhere to go: "
+        f"{eligible}")

@@ -168,6 +168,26 @@ Record every problem, including failures, in a per-problem table:
 
 The aggregate counts must reconcile exactly to the dataset denominator.
 
+## Module-name source priority when prose and directory disagree (#482)
+
+Dataset-agnostic authoring rule. When the prompt's stated module name and the
+problem's directory / file leaf name DISAGREE, author the module under the
+**directory-leaf name** as the **TB-facing module name**. Hidden testbenches
+are generated against the file layout, and prose typos are common, so the
+literal prose name will fail to elaborate. Keep the prose name only when no
+directory/file convention exists, and note the conflict in the sample header
+comment.
+
+Close-loop and re-author actors **MUST NOT** "fix" a passing directory-leaf
+module name back to the **prose typo**. A re-author regressed exactly this way,
+turning a passing problem into a failing one while believing it was correcting
+a mistake.
+
+*why_not_bucket_a*: distinguishing a typo from a genuine intended wrapper name
+requires contextual judgment — reading the prose against the file layout — and
+no regex separates the two. The deterministic half is the priority order above;
+the judgment is which of the two the disagreement is.
+
 ## Official scoring and tool disclosure
 
 Scoring is a host-only post-generation step. Use the benchmark's official
@@ -207,6 +227,75 @@ python3 programs/benchmark_triage_absorption_audit.py <TRIAGE_RECORDS.json>
 
 Either non-zero verdict blocks the result handoff.
 
+## Category D — a tool-substitution gap is FORK-FIXABLE, not a floor
+
+When the official testbench uses a simulator-only construct, or a language
+feature our open-source substitute cannot yet run, that is **FORK-FIXABLE — not
+a terminal floor.** We fork the EDA tools and ship them as `vibeic-eda`, so
+"our tool cannot do X" is an engineering backlog item against the fork, routed
+to `tools/vibeic-eda/FIX_STATUS.md`.
+
+**Mandatory before you may even LABEL a residual Category D** — this is the
+`asyn_fifo` lesson: run the FLOOR-proof below. Build and run the GOLDEN under a
+tool that DOES support the missing feature.
+
+* If the golden PASSES there, it is a confirmed genuine tool gap: open or
+  update the `FIX_STATUS.md` row and add the feature to the fork.
+* If the golden ALSO fails under the supporting tool, it was never a pure tool
+  gap. Re-triage it as a dataset/RTL floor, not D.
+
+Worked example: the RTLLM `asyn_fifo` official testbench uses `break;`, which
+stock iverilog 12 rejects. The golden compiles and passes under Verilator with
+`--timing` and under the forked iverilog, so it was a confirmed tool gap and is
+now fork-closed.
+
+**Never patch a tool to "pass benchmark X".** That is the over-fit prohibition:
+the fork dissolves a CAPABILITY floor, never the honesty boundary. A genuine
+algorithm-hard port that is honestly DEFERRED in `FIX_STATUS.md` is a
+known-deferred engineering item, and still not an unfixable floor.
+
+**A plain tool-substitution gap is NO LONGER T5 by default.** Since we fork the
+tools it is Category D FORK-FIXABLE; it may be recorded as a real floor ONLY
+once it carries the deferred `FIX_STATUS.md` entry AND has passed the
+FLOOR-proof. Never "AI cannot".
+
+## FLOOR-proof: never declare a floor without the original-RTL-also-fails run (#724)
+
+Across one campaign FIVE residuals were labelled "benchmark defect" and ALL
+FIVE were later overturned and PASSED — each was our own off-by-one, interface
+or reset-boundary bug. A floor claim is almost always a misread, and the
+asymmetry is severe: **a false floor ships an unfixed real bug**, while the
+disproving run is cheap.
+
+A residual may be labelled FLOOR only after this three-step **FLOOR-proof**, in
+order:
+
+1. **Run the exact official scorer** on the candidate RTL — the real harness,
+   the real toolchain, the required env image — and read the real failing
+   assertion. Not a paraphrase, not your own testbench.
+2. **Run the ORIGINAL, unmodified reference/golden RTL through the SAME
+   scorer.** If the **original** also fails, it is a genuine benchmark/oracle
+   defect and a floor. **If the original passes, the defect is ours** — an
+   authoring or extraction bug. It is not a floor; go and fix it.
+3. **Only then confirm FLOOR**, and only when you can quote BOTH (a) the exact
+   harness assertion that fails AND (b) the exact prompt line mandating two
+   **mutually-exclusive** values for identical stimulus, AND you have shown in
+   step 2 that the original RTL also fails.
+
+Variant — the harness contradicts the given context itself. When the
+contradiction is provable from the given input alone, the floor-proof is (a) a
+cross-round expected-vs-got table, the testbench's asserted value for a
+stimulus against what the given mapping mandates, shown stable across at least
+two independent authoring rounds so it is not a one-off; and (b) a replay under
+the design's OWN testbench confirming the given behaviour is internally
+consistent while only the hidden oracle disagrees. The given context is then
+the whole evidence and no external information is needed.
+
+*why_not_bucket_a*: deciding whether two assertions are truly mutually
+exclusive for identical stimulus is an open-ended meaning judgment no regex
+makes. The deterministic half — a floor claim MUST carry the
+original-RTL-also-fails scorer evidence — is the gate condition.
+
 ## Capture enhancement
 
 Post-score recovery is not part of the blind score. When AI finds a correct
@@ -240,6 +329,30 @@ Every result must include:
 - all failures with evidence-backed triage;
 - captured enhancements/PRs and what they do not claim;
 - reproducible next action.
+
+**No RESULT means the run FAILED.** Never publish a number without the result
+that backs it. The load-bearing failure is the launch-and-idle abandon bug: the
+scorer or runner finished, a verdict and artefacts exist, and no RESULT was
+ever written because the turn ended while the run was detached. To keep your
+**turn alive to completion**, drive the long run through the BLOCKING
+supervised waiter that returns only on exit or stall — never a detached
+fire-and-forget.
+
+**Why the instruction alone loses to a plausible model (#558).** An agent ended
+its turn on a still-running flow, saying "I'll yield until the harness
+re-invokes me when it exits". Nothing did. `claude -p` is one-shot, so the
+three beliefs that justified it are each impossible:
+
+* *"the harness **re-invokes** me when the background job exits"* — nothing
+  re-invokes a finished turn. There is no such mechanism.
+* *"a background waiter is armed to fire"* — a waiter can only wake a turn that
+  is **still alive**. It cannot start a new one.
+* *"the monitor will fire"* — a monitor **notifies the DISPATCHER**, not you.
+  It cannot resume you.
+
+Yielding does not pause your turn; it ENDS it, and the "then write the result"
+step never runs. The rule above is not a preference about style — it is the
+only way the deliverable gets written.
 
 Save the final result and run the skill compliance check:
 

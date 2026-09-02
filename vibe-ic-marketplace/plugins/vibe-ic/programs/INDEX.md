@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 1255
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1255)
+- **Total programs (excluding helpers / shims):** 1264
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1264)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 1246 |
+| `any` | 1255 |
 
 ## Alphabetical listing
 
@@ -54,7 +54,10 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `analog_a3_netlist_gen_check` | any | — | A3 deterministic gate (v1.6.35). |
 | `analog_a4_corner_sweep_check` | any | — | A4 deterministic gate (v1.6.35). |
 | `analog_a5_layout_check` | any | — | Verifies that the upstream `analog-layout` skill has emitted the |
+| `analog_a5_layout_emit` | any | — | A5's missing PRODUCER: it draws the layout. |
+| `analog_a5_pdk_device_limits` | any | — | what the PDK ITSELF permits a drawn device to be, and what clearance its metal-1 rule demands of a bulk tap. |
 | `analog_a6_block_pv_check` | any | — | A6 deterministic gate (Per-Block Physical Verification: DRC + LVS). |
+| `analog_a6_drc_attribute` | any | — | what each A6 DRC violation actually IS. |
 | `analog_a6_native_pv` | any | — | A6 per-block PHYSICAL-VERIFICATION producer (consume the resolver's staged sign-off decks; run native DRC + LVS). |
 | `analog_a7_post_layout_resim_check` | any | — | Verifies that the upstream `analog-extraction-resim` skill has emitted |
 | `analog_a8_before_floorplan_check` | any | — | analog/digital ordering gate. |
@@ -85,6 +88,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `analog_interface_classify` | any | — | structural L9 top-interface classifier (ORGANIC #144-sibling, filed as #141). |
 | `analog_lef_gds_outline_check` | any | — | Codifies the EXTRACT-NEW spot-check in |
 | `analog_liberty_nonzero_delay_check` | any | — | deterministic Liberty non-degeneracy gate. |
+| `analog_loop_liveness_check` | any | — | a NULL over a DEAD LOOP certifies nothing. |
 | `analog_lvs_comparison_prep` | any | — | COMPARISON-SIDE preparation for an open-PDK per-block LVS run (A6). Deterministic, chip-AGNOSTIC, no PDK literal. |
 | `analog_macro_rtl_interface_check` | any | — | the digital side of an analog macro's interface, which nothing compared. |
 | `analog_mc_yield_run` | any | — | REAL Monte-Carlo yield execution for the analog track (flow-completeness review P1-1). |
@@ -548,6 +552,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `internal_vs_external_timing_check` | any | — | L8 must separate host-side from DUT-side timing. |
 | `invocation_proved_by_parse_not_by_text` | any | — | A wiring audit that decides invocation by searching the caller's TEXT. |
 | `io_link_protocol_synth` | any | — | IO-Link (IEC 61131-9 / SDCI) protocol synth helper. |
+| `io_pad_chip_top_gen` | any | — | the PRODUCER of the chip-top that carries IO pads. |
 | `ip_catalog_pull` | any | — | Pull catalog IP RTL files into project's canonical phase2/stage1/rtl/ directory + record provenance. |
 | `ip_catalog_query` | any | — | IP catalog query + match + pull engine. |
 | `ip_catalog_reproduce_pull` | any | — | Reproducibility check. |
@@ -569,6 +574,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `kmap_grid_synth` | any | — | DETERMINISTIC Karnaugh-map → RTL synthesizer (v1.1.38 clean-room §4.2 absorption). |
 | `kmap_sop_synth` | any | — | deterministic Karnaugh-map (K-map) -> RTL SOLVER. |
 | `kmap_truth_table_oracle_check` | any | — | prompt-disclosed combinational oracle gate. |
+| `known_answer_vector` | any | — | the L10 case kind for a DECLARED reference output. |
+| `known_answer_vector_tb_gen` | any | — | a SELF-CHECKING TB for a declared vector. |
 | `l10_tb_conformance_check` | any | v0.53 | v0.53 plugin gate |
 | `l10_test_case_oracle_anchor_check` | any | — | BLOCKS (exit 1).  Rationale for blocking, not advising: the readers of |
 | `l10_test_cases_cover_l3_constraints_check` | any | Wave 39 | Spec to enforce (chip-AGNOSTIC): |
@@ -784,6 +791,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `packaging_intake_check` | any | Wave 88 | gate (v1.6.13 Wave 88, renumbered in v1.6.14 Wave 90: Step 37 -> 38; v1.6.15 Wave 91: Step 38 -> 39; Step 42 in the phase1_phase2_phase3.... |
 | `packet_length_check_present` | any | — | Static audit for packet-length sanity checks in any module that dispatches on a received command. |
 | `pad_assignment_gen` | any | — | the AUTHOR of `phase3/stage3/pnr/pad_assignment.json`. |
+| `pad_bterm_coincidence_check` | any | — | is a chip-top port's BTerm ACTUALLY on its pad's bond terminal? Measured per net, never declared for a class of nets. |
 | `pad_drive_high_active_check` | any | v0.114 | v0.114 (BACKLOG-v6 P1). |
 | `pad_ring_check` | any | — | step 15.5ic's gate: the pad ring is re-measured from the artefacts, the ring is checked for ABUTMENT, and a skip must name what it skippe... |
 | `pad_ring_gen` | any | — | step 15.5ic's producer: place a DECLARED pad ring by upstream's own algorithm, or name the config variables it went without. |
@@ -965,6 +973,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `real_artefact_test_backing_check` | any | — | how many of a change's tests are driven by a REAL checked-in artefact, and how many by a fixture the author typed alongside the change. |
 | `record_prompt_context_bridge` | any | — | visible prompt/context record adapter. |
 | `reference_control_resolved_through_a_mutable_ref` | any | — | A control whose reference point is a name that moves. |
+| `register_bus_driver_gen` | any | — | drive a known-answer vector over the bus the design SAYS it is driven over. |
 | `registry_is_the_iteration_domain` | any | — | A registry that IS the population instead of a FILTER over one. |
 | `regmap_bit_layout_check` | any | — | gate that catches L4_REGMAP.json registers that don't specify explicit bit positions for their fields. |
 | `regmap_table_extractor` | any | — | Extract register-table rows from extracted PDF/text docs. |
@@ -1327,7 +1336,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (1246 programs)
+### `any` (1255 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `absence_verdict_names_its_search_space_check` — "not found" must say WHERE it looked.
@@ -1357,7 +1366,10 @@ _(no programs in this group)_
 - `analog_a3_netlist_gen_check` — A3 deterministic gate (v1.6.35).
 - `analog_a4_corner_sweep_check` — A4 deterministic gate (v1.6.35).
 - `analog_a5_layout_check` — Verifies that the upstream `analog-layout` skill has emitted the
+- `analog_a5_layout_emit` — A5's missing PRODUCER: it draws the layout.
+- `analog_a5_pdk_device_limits` — what the PDK ITSELF permits a drawn device to be, and what clearance its metal-1 rule demands of a bulk tap.
 - `analog_a6_block_pv_check` — A6 deterministic gate (Per-Block Physical Verification: DRC + LVS).
+- `analog_a6_drc_attribute` — what each A6 DRC violation actually IS.
 - `analog_a6_native_pv` — A6 per-block PHYSICAL-VERIFICATION producer (consume the resolver's staged sign-off decks; run native DRC + LVS).
 - `analog_a7_post_layout_resim_check` — Verifies that the upstream `analog-extraction-resim` skill has emitted
 - `analog_a8_before_floorplan_check` — analog/digital ordering gate.
@@ -1388,6 +1400,7 @@ _(no programs in this group)_
 - `analog_interface_classify` — structural L9 top-interface classifier (ORGANIC #144-sibling, filed as #141).
 - `analog_lef_gds_outline_check` — Codifies the EXTRACT-NEW spot-check in
 - `analog_liberty_nonzero_delay_check` — deterministic Liberty non-degeneracy gate.
+- `analog_loop_liveness_check` — a NULL over a DEAD LOOP certifies nothing.
 - `analog_lvs_comparison_prep` — COMPARISON-SIDE preparation for an open-PDK per-block LVS run (A6). Deterministic, chip-AGNOSTIC, no PDK literal.
 - `analog_macro_rtl_interface_check` — the digital side of an analog macro's interface, which nothing compared.
 - `analog_mc_yield_run` — REAL Monte-Carlo yield execution for the analog track (flow-completeness review P1-1).
@@ -1847,6 +1860,7 @@ _(no programs in this group)_
 - `internal_vs_external_timing_check` — L8 must separate host-side from DUT-side timing.
 - `invocation_proved_by_parse_not_by_text` — A wiring audit that decides invocation by searching the caller's TEXT.
 - `io_link_protocol_synth` — IO-Link (IEC 61131-9 / SDCI) protocol synth helper.
+- `io_pad_chip_top_gen` — the PRODUCER of the chip-top that carries IO pads.
 - `ip_catalog_pull` — Pull catalog IP RTL files into project's canonical phase2/stage1/rtl/ directory + record provenance.
 - `ip_catalog_query` — IP catalog query + match + pull engine.
 - `ip_catalog_reproduce_pull` — Reproducibility check.
@@ -1868,6 +1882,8 @@ _(no programs in this group)_
 - `kmap_grid_synth` — DETERMINISTIC Karnaugh-map → RTL synthesizer (v1.1.38 clean-room §4.2 absorption).
 - `kmap_sop_synth` — deterministic Karnaugh-map (K-map) -> RTL SOLVER.
 - `kmap_truth_table_oracle_check` — prompt-disclosed combinational oracle gate.
+- `known_answer_vector` — the L10 case kind for a DECLARED reference output.
+- `known_answer_vector_tb_gen` — a SELF-CHECKING TB for a declared vector.
 - `l10_tb_conformance_check` — v0.53 plugin gate  _[v0.53]_
 - `l10_test_case_oracle_anchor_check` — BLOCKS (exit 1).  Rationale for blocking, not advising: the readers of
 - `l10_test_cases_cover_l3_constraints_check` — Spec to enforce (chip-AGNOSTIC):  _[Wave 39]_
@@ -2082,6 +2098,7 @@ _(no programs in this group)_
 - `packaging_intake_check` — gate (v1.6.13 Wave 88, renumbered in v1.6.14 Wave 90: Step 37 -> 38; v1.6.15 Wave 91: Step 38 -> 39; Step 42 in the phase1_phase2_phase3....  _[Wave 88]_
 - `packet_length_check_present` — Static audit for packet-length sanity checks in any module that dispatches on a received command.
 - `pad_assignment_gen` — the AUTHOR of `phase3/stage3/pnr/pad_assignment.json`.
+- `pad_bterm_coincidence_check` — is a chip-top port's BTerm ACTUALLY on its pad's bond terminal? Measured per net, never declared for a class of nets.
 - `pad_drive_high_active_check` — v0.114 (BACKLOG-v6 P1).  _[v0.114]_
 - `pad_ring_check` — step 15.5ic's gate: the pad ring is re-measured from the artefacts, the ring is checked for ABUTMENT, and a skip must name what it skippe...
 - `pad_ring_gen` — step 15.5ic's producer: place a DECLARED pad ring by upstream's own algorithm, or name the config variables it went without.
@@ -2263,6 +2280,7 @@ _(no programs in this group)_
 - `real_artefact_test_backing_check` — how many of a change's tests are driven by a REAL checked-in artefact, and how many by a fixture the author typed alongside the change.
 - `record_prompt_context_bridge` — visible prompt/context record adapter.
 - `reference_control_resolved_through_a_mutable_ref` — A control whose reference point is a name that moves.
+- `register_bus_driver_gen` — drive a known-answer vector over the bus the design SAYS it is driven over.
 - `registry_is_the_iteration_domain` — A registry that IS the population instead of a FILTER over one.
 - `regmap_bit_layout_check` — gate that catches L4_REGMAP.json registers that don't specify explicit bit positions for their fields.
 - `regmap_table_extractor` — Extract register-table rows from extracted PDF/text docs.

@@ -70,6 +70,7 @@ import _container_exec as _CE  # vibe-ic#628 — bound the solver, not the clien
 sys.path.insert(0, str(Path(__file__).parent))
 import _path_layout as _pl  # noqa: E402
 import _rtl_include_hub as _hub  # noqa: E402  (include-hub aggregator predicate)
+import _atomic_artefact as _aa  # noqa: E402  (vibe-ic#1082)
 
 # ── SBY transcript signatures (tool-output shapes, not chip literals) ──────
 # A multi-task run tags every line with `[<sby>_<task>]`; a single-task run
@@ -1346,7 +1347,12 @@ def _run_sby(sby_path: Path, formal_dir: Path, container: Optional[str],
 
 def _write_authoring_incomplete(formal_dir: Path, reason: str) -> None:
     """Record applicable-but-unauthored work. Silence is never inapplicable."""
-    (formal_dir / "formal_authoring_request.json").write_text(json.dumps({
+    # vibe-ic#1082 — `formal_authoring_request.json` is a DECLARED
+    # required_output (flow/phase1_phase2_phase3.yaml). Written through the
+    # atomic helper: a raw write_text killed part-way leaves a truncated file
+    # that `required_outputs` reads as PRESENT, so the run reports the receipt
+    # exists while none of the obligations that make it actionable are in it.
+    _aa.write_json(formal_dir / "formal_authoring_request.json", {
         "verdict": "INCOMPLETE",
         "program": "formal_property_run",
         "fallback_skill": "formal-verify",
@@ -1361,7 +1367,7 @@ def _write_authoring_incomplete(formal_dir: Path, reason: str) -> None:
             "author": "formal-verify",
         }],
         "reason": reason,
-    }, indent=2, ensure_ascii=False) + "\n")
+    })
 
 
 def _assertion_count(path: Optional[Path]) -> int:

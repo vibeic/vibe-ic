@@ -298,3 +298,123 @@ def test_the_guard_above_would_fire_on_a_reverted_site(tmp_path):
     assert found == [3], (
         "the walk used by the guard above cannot see a reverted site, so its "
         f"green means nothing: {found}")
+
+
+# ---------------------------------------------------------------------------
+# THE PAIR, ON A REAL CONVERTED PRODUCER (vibe-ic#2014 tail)
+#
+# `test_no_declared_output_is_written_with_a_raw_write_text` above is a STATIC
+# residual count. It went red on three sites that landed with the formal flow
+# and never adopted the helper:
+#
+#     design_one_shot_runner.py:16935   formal_not_applicable.json
+#     design_one_shot_runner.py:16960   formal_authoring_request.json
+#     formal_property_run.py:1349       formal_authoring_request.json
+#
+# Both names are DECLARED `required_outputs` of step 5 in
+# `flow/phase1_phase2_phase3.yaml`. A static residual of `[]` is necessary and
+# not sufficient: the guarantee #1082 buys is that a rename survives SIGKILL,
+# and only a kill can show that. So the conversion is graded the way the
+# module's own pair grades the helper — by killing a real producer mid-write
+# and asking `flow_compliance_check` what it sees.
+#
+# The two arms differ in ONE thing: whether the converted call reaches
+# `_atomic_artefact.write_json` or the raw idiom it replaced. That makes this
+# the control for the fix itself — restore the raw write and the FIXED arm
+# reproduces the red.
+# ---------------------------------------------------------------------------
+FORMAL_REL = "phase2/stage1/formal/formal_authoring_request.json"
+
+
+def _kill_a_real_producer(tmp_path, arm):
+    """Drive `formal_property_run._write_authoring_incomplete` and SIGKILL it.
+
+    The payload is made observable by handing the producer a `reason` large
+    enough that the write is in progress when the poll fires — the producer,
+    the destination and the serialisation are its own, unchanged.
+    """
+    dest = tmp_path / FORMAL_REL
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    child = tmp_path / "producer.py"
+    revert = (
+        "" if arm == "fixed" else
+        # VERBATIM the pre-fix idiom, injected at the one seam the fix moved.
+        "import json as _j\n"
+        "def _raw(path, obj, **kw):\n"
+        "    path.write_text(_j.dumps(obj, indent=2, ensure_ascii=False)+'\\n')\n"
+        # `hasattr`, so the PRE-FIX tree answers this test instead of raising.
+        # There the producer is already raw and there is no seam to patch; an
+        # AttributeError here would make the control observe nothing on the
+        # exact tree it exists to characterise.
+        "if hasattr(F, '_aa'):\n"
+        "    F._aa.write_json = _raw\n")
+    child.write_text(
+        "import sys\n"
+        f"sys.path.insert(0, {str(PROGRAMS)!r})\n"
+        "from pathlib import Path\n"
+        "import formal_property_run as F\n"
+        + revert +
+        f"reason = 'x' * ({PAYLOAD_MB} * 1024 * 1024)\n"
+        f"F._write_authoring_incomplete(Path({str(dest.parent)!r}), reason)\n",
+        encoding="utf-8")
+
+    proc = subprocess.Popen([sys.executable, str(child)])
+    watched = dest if arm == "unfixed" else None
+    killed_at = None
+    deadline = time.time() + 120
+    try:
+        while time.time() < deadline:
+            if watched is None:
+                cands = list(dest.parent.glob(dest.name + AA.TMP_SUFFIX + ".*"))
+                if cands:
+                    watched = cands[0]
+            if watched is not None and watched.exists():
+                size = watched.stat().st_size
+                if 0 < size < PAYLOAD_MB * 1024 * 1024:
+                    proc.send_signal(signal.SIGKILL)
+                    killed_at = size
+                    break
+            time.sleep(0.001)
+    finally:
+        if proc.poll() is None:
+            proc.send_signal(signal.SIGKILL)
+        proc.wait()
+
+    assert killed_at is not None, (
+        f"never observed a partial write for arm={arm}; this run proves "
+        "nothing either way")
+    return dest.exists(), killed_at
+
+
+def _formal_required_outputs_verdict(project):
+    import flow_compliance_check as fcc
+    return fcc._check_files_exist(project, [FORMAL_REL], False)
+
+
+@pytest.mark.timeout(240)
+def test_a_killed_real_producer_leaves_no_declared_output_behind(tmp_path):
+    """THE CONVERTED SITE, KILLED. `formal_authoring_request.json` must be
+    absent, so `required_outputs` reports MISSING and the run says the work is
+    unfinished — which it is."""
+    exists, killed_at = _kill_a_real_producer(tmp_path, "fixed")
+    assert not exists, (
+        f"killed at {killed_at} bytes and {FORMAL_REL} still exists — a "
+        "partial receipt reads to required_outputs as a complete one")
+    ok, _found, missing = _formal_required_outputs_verdict(tmp_path)
+    assert not ok and missing, (ok, missing)
+
+
+@pytest.mark.timeout(240)
+def test_reverting_that_one_site_brings_the_truncated_pass_back(tmp_path):
+    """THE OTHER DIRECTION, and the control for the fix. With the raw idiom
+    restored at the same seam, the kill leaves a truncated file and
+    `flow_compliance_check` reports the declared output PRESENT."""
+    exists, killed_at = _kill_a_real_producer(tmp_path, "unfixed")
+    assert exists, f"expected a truncated leftover (killed at {killed_at})"
+    ok, found, _missing = _formal_required_outputs_verdict(tmp_path)
+    assert ok and found, (
+        "the pre-fix idiom must reproduce the defect this conversion closes")
+    size = (tmp_path / FORMAL_REL).stat().st_size
+    assert size < PAYLOAD_MB * 1024 * 1024, size
+    with pytest.raises(json.JSONDecodeError):
+        json.loads((tmp_path / FORMAL_REL).read_text(errors="replace"))

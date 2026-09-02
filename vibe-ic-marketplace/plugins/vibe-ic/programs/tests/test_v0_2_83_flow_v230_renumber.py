@@ -75,11 +75,138 @@ def test_renumbered_steps_kept_identity():
     assert "Final Test" in _STEPS[43]["name"]
 
 
+def _gate_dispatched_programs(gate):
+    """Programs the gate actually RUNS, from the slots the engine executes.
+
+    `"name" in json.dumps(gate)` is not this: a name in a comment, in a path
+    argument or dropped into the dict as decoration all satisfy it, and a gate
+    that NAMES a program it never invokes is worse than one that honestly says
+    it only checks a file — the missing invocation stops being readable.
+    """
+    slots = ("program_exit_zero", "advisory_program_exit_zero",
+             "optional_program_exit_zero")
+    found = set()
+
+    def walk(node):
+        if isinstance(node, dict):
+            for k, v in node.items():
+                if k in slots:
+                    cmd = v.get("command") if isinstance(v, dict) else v
+                    if isinstance(cmd, str) and cmd.split():
+                        found.add(cmd.split()[0])
+                else:
+                    walk(v)
+        elif isinstance(node, list):
+            for item in node:
+                walk(item)
+
+    walk(gate or {})
+    return found
+
+
+def _gate_blocking_files(gate):
+    """Every path a BLOCKING `files_exist` clause requires."""
+    out = []
+
+    def walk(node):
+        if isinstance(node, dict):
+            for k, v in node.items():
+                if k == "files_exist":
+                    out.extend(str(x) for x in (v or []))
+                else:
+                    walk(v)
+        elif isinstance(node, list):
+            for item in node:
+                walk(item)
+
+    walk(gate or {})
+    return out
+
+
 def test_step35_dfm_screen():
+    """Step 35's producer record is kept, and the step blocks on its artefact.
+
+    THIS ASSERTION WAS REWRITTEN, and the reason is recorded here rather than
+    dropped. It used to require `"dfm_screen_check" in json.dumps(gate)`, and
+    that went red because the flow no longer names it there. The flow is
+    RIGHT: `dfm_screen_check` is a producer/classifier with PASS /
+    PASS_WITH_ADVISORIES / SKIP and NO refusal predicate (its only rc 1 is an
+    argument error -- `not a directory`), and vibe-ic#1980 deliberately moved
+    it out of the gate denominator. The flow says so in an AUDIT NOTE at the
+    clause, and `matrix_mutation_ledger` already depends on step 35 carrying
+    no advisory clause ("step 35 is one, since #1980 moved `dfm_screen_check`
+    out of its gate entirely"). Re-promoting it would put a blocking clause on
+    a program that can never refuse.
+
+    So the old string test is replaced by the invariant #1980 actually left in
+    place, which is stronger than the string it replaces: a declared producer
+    is EITHER dispatched by the gate OR recorded in `program_outputs` with its
+    verdict field AND blocked on by artefact presence. Never neither -- that
+    is the state in which a step whose producer never ran certifies clean.
+    """
     s = _STEPS[35]
     assert s["stage"] == "stage4"
-    assert "dfm_screen_check" in json.dumps(s.get("gate", {}))
     assert s["blocks_on"] == [34]
+    assert "dfm_screen_check" in (s.get("programs") or []), s.get("programs")
+
+    dispatched = _gate_dispatched_programs(s.get("gate"))
+    if "dfm_screen_check" in dispatched:
+        return          # re-promoted to a gate clause; that satisfies it too
+
+    # Not dispatched -> the producer record and the presence block must both
+    # be there, and on the SAME path.
+    rows = [r for r in (s.get("program_outputs") or [])
+            if r.get("program") == "dfm_screen_check"]
+    assert len(rows) == 1, (
+        "step 35's gate does not dispatch dfm_screen_check, so its verdict "
+        f"has to survive in program_outputs; found {rows}")
+    assert rows[0].get("verdict_field"), (
+        "the retained producer record names no verdict_field, so nothing "
+        "reads the classification it exists to publish")
+    path = str(rows[0].get("path") or "")
+    assert path, rows[0]
+    assert path in _gate_blocking_files(s.get("gate")), (
+        f"the gate does not block on {path!r}, the artefact the retained "
+        "producer record declares — a step whose screen never ran would be "
+        f"certified done. gate blocks on: {_gate_blocking_files(s.get('gate'))}")
+    assert path in [str(x) for x in (s.get("required_outputs") or [])], (
+        "the blocked-on artefact is not among required_outputs")
+
+
+def test_a_name_in_a_gate_must_be_a_program_the_gate_runs():
+    """THE DECORATION DIRECTION, over EVERY step, not just 35.
+
+    The rewrite above stops requiring a name in step 35's gate. The way that
+    could be abused is to satisfy it -- or any sibling -- by dropping a
+    program name into a gate dict without wiring it, which reads as coverage
+    and makes the missing invocation unreadable. So: every top-level program
+    named anywhere inside a gate must be one the gate DISPATCHES through an
+    executing slot.
+
+    Population is behavioural: the names come from `programs/*.py` that the
+    flow's own `programs:` lists reference, not from a hand-typed list.
+    """
+    import re
+    shipped = {p.stem for p in (PLUGIN / "programs").glob("*.py")
+               if not p.name.startswith("_")}
+    declared = {name for st in _STEPS.values()
+                for name in (st.get("programs") or [])} & shipped
+    assert len(declared) > 20, f"declared-producer set collapsed to {len(declared)}"
+    offenders = []
+    for sid, st in _STEPS.items():
+        gate = st.get("gate")
+        if not gate:
+            continue
+        blob = json.dumps(gate)
+        dispatched = _gate_dispatched_programs(gate)
+        for name in declared:
+            if re.search(r"(?<![A-Za-z0-9_])" + re.escape(name)
+                         + r"(?![A-Za-z0-9_])", blob) and name not in dispatched:
+                offenders.append(f"step {sid}: {name}")
+    assert offenders == [], (
+        "these gates NAME a program they do not dispatch — a gate that cites "
+        "a program it never runs is less readable than one that admits it "
+        "only checks a file:\n  " + "\n  ".join(sorted(offenders)))
 
 
 def test_step44_htol_conditional():

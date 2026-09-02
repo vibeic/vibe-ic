@@ -27,7 +27,6 @@ NOTHING HERE TOUCHES THE REPO'S BASELINE. Every case runs against a copy in
 from __future__ import annotations
 
 import json
-import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -86,10 +85,41 @@ def _reaching_corpus(tmp_path: Path) -> Path:
     return corpus
 
 
-def _baseline_copy(tmp_path: Path) -> Path:
-    """The REAL baseline, copied. Real so the destroy would be visible."""
+def _seeded_baseline(tmp_path: Path) -> Path:
+    """A baseline with a KNOWN non-zero `findings_total`, written by the gate.
+
+    THIS USED TO COPY THE SHIPPED `step_internal_fail_bubble_up_baseline.json`,
+    and the destroy-to-zero it exists to catch became invisible the moment that
+    record reached zero. It is at zero now, and honestly so: the file records
+    `previous_findings_total: 1` and a `shrink_reason` naming vibe-ic#2000 --
+    a publication withdrawal, itemised in `_population_shrink`. So the test was
+    measuring HOW MUCH DEBT THE TREE HAPPENS TO CARRY TODAY, and the three
+    obvious repairs are all worse than the red:
+
+      * write a non-zero `findings_total` into the shipped baseline -> FORGE
+        the ratchet ledger, which is this repo's account of unacknowledged
+        FAILs and the single least forgeable file in it;
+      * delete the premise assertion -> destroy-to-zero is invisible again,
+        which is #1025 put back;
+      * relax it to `>= 0` -> the same, one step removed.
+
+    So the subject is synthesised, the way `_reaching_corpus` above already
+    synthesises its corpus for exactly this reason (vibe-ic#1357: reading
+    `benchmark-data/` measured "which cells happen to be checked in" and not
+    the property).
+
+    NOT HAND-TYPED. The seed is written BY THE GATE from `_reaching_corpus`,
+    whose one planted unacknowledged FAIL makes `findings_total` 1 by
+    construction -- so the shape is the gate's own and cannot drift from what
+    it reads back. MEASURED: seed rc 0, findings_total 1,
+    corpus_population `reaching_corpus`; the destroy sweep against it then
+    refuses for VACUITY (`reached 0 published run tree(s) ... examined
+    NOTHING`), not for a population mismatch.
+    """
     dst = tmp_path / "baseline.json"
-    shutil.copy(REAL_BASELINE, dst)
+    r = _run("--corpus", str(_reaching_corpus(tmp_path)),
+             "--baseline", str(dst), "--write-baseline")
+    assert r.returncode == 0, f"could not seed the subject\n{r.stdout}{r.stderr}"
     return dst
 
 
@@ -103,10 +133,10 @@ def test_write_baseline_refuses_a_sweep_that_examined_nothing(tmp_path):
 
     Both halves matter: an rc alone could be returned *after* writing.
     """
-    bl = _baseline_copy(tmp_path)
+    bl = _seeded_baseline(tmp_path)
     before = bl.read_bytes()
     assert json.loads(before)["findings_total"] > 0, (
-        "fixture premise: the shipped baseline records a non-zero total, "
+        "fixture premise: the subject baseline must record a non-zero total, "
         "otherwise a destroy-to-zero would be invisible here")
 
     r = _run("--corpus", str(_empty_corpus(tmp_path)),
@@ -118,7 +148,38 @@ def test_write_baseline_refuses_a_sweep_that_examined_nothing(tmp_path):
     assert bl.read_bytes() == before, (
         "the baseline was REWRITTEN by a sweep that examined nothing — this "
         "is the #1025 destroy, byte-compared, not inferred from the rc")
-    assert "REFUSED" in (r.stdout + r.stderr)
+    out = r.stdout + r.stderr
+    assert "REFUSED" in out, out
+    # The refusal must be for VACUITY. rc 2 is also this gate's answer to a
+    # population mismatch, and a test that accepted either would pass while
+    # the #1025 path went unexercised.
+    assert "examined NOTHING" in out, (
+        "rc 2 and REFUSED, but not for zero reach — this run did not "
+        f"exercise the #1025 path:\n{out}")
+
+
+def test_the_shipped_ratchet_is_still_a_readable_record(tmp_path):
+    """The shipped baseline is no longer this file's SUBJECT, so it is asserted
+    to be a readable ratchet here instead of being silently dropped.
+
+    Nothing about its VALUE is asserted -- a ratchet whose number a test
+    demands is a ratchet a test can be made to forge. What is asserted is that
+    it parses, carries the ratchet keys the gate reads, and that a fall is
+    accounted for: `findings_total` below `previous_findings_total` requires a
+    written `shrink_reason`, which is the rule vibe-ic#1202 landed and the
+    reason today's zero is legible instead of suspicious.
+    """
+    doc = json.loads(REAL_BASELINE.read_text(encoding="utf-8"))
+    for key in ("findings_total", "corpus_population", "runs_swept",
+                "runs_with_reports", "per_run"):
+        assert key in doc, f"the shipped ratchet has no {key!r}"
+    assert isinstance(doc["findings_total"], int) and doc["findings_total"] >= 0
+    prev = doc.get("previous_findings_total")
+    if isinstance(prev, int) and doc["findings_total"] < prev:
+        assert str(doc.get("shrink_reason") or "").strip(), (
+            "findings_total fell below previous_findings_total with no "
+            "shrink_reason — a ratchet whose number can fall without anyone "
+            "saying why is a record of nothing (vibe-ic#1202)")
 
 
 def test_a_vacuous_sweep_does_not_return_the_pass_code(tmp_path):
