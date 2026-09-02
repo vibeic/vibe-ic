@@ -83,7 +83,25 @@ _SUMMARY_RET_RE = re.compile(
 _ENGINE_RE = re.compile(r"engine_\d+:\s*(?P<engine>abc\s+\w+|smtbmc.*|btor.*|"
                         r"aiger.*)$", re.IGNORECASE)
 _CEX_FRAME_RE = re.compile(r"asserted in frame (?P<frame>\d+)", re.IGNORECASE)
-_SBY_SIG_RE = re.compile(r"\bSBY\b|symbiyosys|smtbmc|engine_\d", re.IGNORECASE)
+# THE GUARD THAT MEANS "the engine has spoken". `\bSBY\b` used to be enough,
+# and that was the defect: this program's OWN diagnostic — "sby/docker not
+# found on PATH" — contains the word `sby`, so the guard fired on the very
+# message that says the engine was never found. `classify_env_gap` then
+# returned None for every unreachable environment and the run fell through to
+# a fabricated INCONCLUSIVE `results.json` with one UNKNOWN row per configured
+# task — the exact #216 shape this file exists to prevent, reopened by a word
+# boundary. MEASURED inside the pinned vibeic-eda image (no docker CLI):
+# `classify_env_gap` -> None, results.json written, gate said NO_PROOF_CLAIM.
+#
+# A signature must therefore be a shape ONLY the engine emits: sby's own
+# log-line prefix `SBY hh:mm:ss [task]`, an `engine_N` line, or a solver name.
+# The bare token `sby` is a word anyone may say, this program included.
+_SBY_SIG_RE = re.compile(r"SBY\s+\d{1,2}:\d{2}:\d{2}|symbiyosys|smtbmc"
+                         r"|engine_\d", re.IGNORECASE)
+
+#: Lines THIS program wrote into the transcript. They are the runner's voice,
+#: never the engine's, so they can never be evidence that the engine spoke.
+_RUNNER_VOICE_RE = re.compile(r"^\s*\[formal_property_run\].*$", re.MULTILINE)
 
 # ── environment reachability (#216) ────────────────────────────────────────
 # "The proof engine was never reached" and "the proof ran and was
@@ -99,6 +117,27 @@ _SBY_SIG_RE = re.compile(r"\bSBY\b|symbiyosys|smtbmc|engine_\d", re.IGNORECASE)
 # literal, so the classification is chip-AGNOSTIC.
 _ENV_GAP_SIGNATURES = (
     # (regex, missing_capability, remedy_template)
+    # ORDER MATTERS, most specific first. A container was NAMED and the
+    # `docker` CLI through which we would reach it is absent — this host has
+    # no such container because it has no containers. The generic docker-daemon
+    # signature below would also match the phrase and would then hand out
+    # `docker start` as the whole remedy, which is not actionable on a host
+    # with no docker CLI; requiring the "CLI is not on PATH" clause means only
+    # THIS program's own line can match here, never a real daemon reply.
+    # `[^\n]*` to the end of the line, so `tool_message` carries the WHOLE
+    # runner line — claim AND reason — rather than a prefix ending at the
+    # container name. A truncated tool message is a diagnosis the reader
+    # cannot check, and a bare "No such container" with the reason cut off
+    # would read as a docker reply.
+    (re.compile(r"No such container:\s*'(?P<detail>[^']+)'[^\n]*"
+                r"docker`? CLI is not on PATH[^\n]*", re.IGNORECASE),
+     "docker container",
+     "the EDA container named {searched_container!r} is not running here — "
+     "the `docker` CLI is not on PATH, so nothing on this host can reach or "
+     "start it. Run this step on a host with Docker and the container up "
+     "(docker start {searched_container!r}), or pass --container '' to invoke "
+     "sby from the ambient PATH — our SymbiYosys fork ships in the vibeic-eda "
+     "image at /usr/local/bin/sby"),
     (re.compile(r"No such container:\s*(?P<detail>\S+)", re.IGNORECASE),
      "docker container",
      "the EDA container named {searched_container!r} is not running — start "
@@ -170,6 +209,65 @@ def frontend_aborted_the_read(transcript: str) -> bool:
             or "ERROR: syntax error" in transcript)
 
 
+def engine_spoke(transcript: str) -> bool:
+    """True only when the PROOF ENGINE itself left a mark on the transcript.
+
+    Pure. The runner's own `[formal_property_run] ...` lines are removed
+    first: they are this program talking ABOUT the engine, and one of them
+    ("...not found on PATH") is precisely the message that says the engine
+    was never reached. Counting them as engine output is what let an
+    unreachable environment be reported as an inconclusive proof.
+    """
+    return bool(_SBY_SIG_RE.search(
+        _RUNNER_VOICE_RE.sub("", transcript or "")))
+
+
+def search_location(container: Optional[str]) -> str:
+    """WHERE the flow looked for the engine (pure)."""
+    return (f"docker exec {container} (PATH=/foss/tools/bin:"
+            f"/foss/tools/yosys/bin:$PATH)" if container
+            else "ambient PATH of the calling shell")
+
+
+def unreachable_env_gap(transcript: str,
+                        container: Optional[str]) -> Dict[str, str]:
+    """The BACKSTOP gap, for when the probe says the environment was never
+    reached but the transcript carries no signature this file recognises.
+
+    `detect_engines` already answers "was the environment reachable?" and
+    writes `_env_reachable` into the record. That answer was computed and then
+    ignored: the emission hung entirely on matching a message shape, so any
+    runtime wording nobody had anticipated fell straight through to a
+    fabricated proof verdict. A gap keyed on a shape only reports the shapes
+    already known; keyed on the probe's own verdict it cannot be out-run.
+
+    Pure: the transcript's first non-empty line is carried verbatim as the
+    tool message, so the diagnosis stays checkable and nothing is invented.
+    """
+    first = next((ln.strip() for ln in (transcript or "").splitlines()
+                  if ln.strip()), "")
+    where = search_location(container)
+    if container:
+        remedy = (f"the EDA container named {container!r} was never contacted "
+                  f"— it is not running, or this host cannot reach it. Start "
+                  f"it (docker start {container!r}) and re-run, or pass "
+                  f"--container '' to invoke sby from the ambient PATH; our "
+                  f"SymbiYosys fork ships in the vibeic-eda image at "
+                  f"/usr/local/bin/sby")
+    else:
+        remedy = ("no proof engine answered on the ambient PATH — install "
+                  "SymbiYosys (our fork ships in the vibeic-eda image at "
+                  "/usr/local/bin/sby) or re-run with --container <name> "
+                  "naming a running vibeic-eda container")
+    return {
+        "missing_capability": "docker container" if container else "sby",
+        "searched": where,
+        "searched_container": container or "",
+        "remedy": remedy,
+        "tool_message": first[:300],
+    }
+
+
 def classify_env_gap(transcript: str,
                      container: Optional[str]) -> Optional[Dict[str, str]]:
     """Return a structured, ACTIONABLE environment gap when the transcript
@@ -187,11 +285,9 @@ def classify_env_gap(transcript: str,
     to install or stage.
     """
     text = transcript or ""
-    if _SBY_SIG_RE.search(text):
+    if engine_spoke(text):
         return None  # sby ran and spoke — not an environment gap
-    searched = (f"docker exec {container} (PATH=/foss/tools/bin:"
-                f"/foss/tools/yosys/bin:$PATH)" if container
-                else "ambient PATH of the calling shell")
+    searched = search_location(container)
     for rx, capability, remedy in _ENV_GAP_SIGNATURES:
         m = rx.search(text)
         if not m:
@@ -1228,7 +1324,24 @@ def _run_sby(sby_path: Path, formal_dir: Path, container: Optional[str],
                             f"hung. The proof is INCONCLUSIVE — not "
                             f"disproved. {e}\n")
     except FileNotFoundError:
-        return "[formal_property_run] ERROR: sby/docker not found on PATH\n"
+        # A container was explicitly requested, so the missing thing is the
+        # `docker` CLI — not `sby`, which this branch never looked for. Saying
+        # "sby/docker not found on PATH" here sent the reader to install a
+        # solver that may well be sitting on the ambient PATH already, and it
+        # never named the container the caller asked us to reach.
+        #
+        # AND IT SAYS "NO SUCH CONTAINER", not "could not be reached". Those
+        # are different claims and the weaker one is not the one the evidence
+        # supports: with no `docker` CLI on PATH this process can reach NO
+        # container at all, so the named one does not exist as far as this
+        # host is concerned. "Could not be reached" leaves open a container
+        # that is up and merely unqueryable — which is exactly the hedge that
+        # let an absent environment be reported as something short of absent.
+        # The reason travels with the claim in the SAME line, so no reader can
+        # mistake this for a reply from a docker daemon we never spoke to.
+        return (f"[formal_property_run] ERROR: No such container: "
+                f"{container!r} — the `docker` CLI is not on PATH here, so no "
+                f"container is reachable from this host\n")
 
 
 def _write_authoring_incomplete(formal_dir: Path, reason: str) -> None:
@@ -1638,6 +1751,16 @@ def run(project: Path, harness: Optional[Path] = None,
     # `results.json` proof artifact is produced, so Step 5's required outputs
     # remain absent and the gate still refuses to pass.
     env_gap = classify_env_gap(transcript, container)
+    if env_gap is None and not engine_spoke(transcript) \
+            and engine_availability.get("_env_reachable") is False:
+        # THE PROBE ALREADY ANSWERED. `detect_engines` decided reachability
+        # before any solver was launched and recorded it as `_env_reachable`;
+        # the emission then hung entirely on recognising a message shape, so a
+        # runtime wording nobody had anticipated fell through to a fabricated
+        # proof verdict. Keyed on the probe's own verdict instead, the manifest
+        # cannot be out-run by a new error string. `is False` (never falsy):
+        # an absent key means no probe ran and must not be read as a gap.
+        env_gap = unreachable_env_gap(transcript, container)
     if env_gap is not None:
         env_manifest = {
             "program": "formal_property_run",

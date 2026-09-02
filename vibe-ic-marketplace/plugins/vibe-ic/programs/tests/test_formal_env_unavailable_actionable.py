@@ -35,6 +35,7 @@ import yaml
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import _progress_run as _pr  # noqa: E402
+import formal_property_run as _F  # noqa: E402
 
 _PROGRAMS = Path(__file__).resolve().parent.parent
 _FORMAL = _PROGRAMS / "formal_property_run.py"
@@ -454,3 +455,177 @@ def test_incomplete_env_waiver_is_reported_with_what_is_missing(tmp_path):
     assert "evidence" in advisory
     assert "rationale" in advisory
     assert next(s for s in report["steps"] if s["id"] == 5)["status"] != "WAIVED"
+
+
+# ── the classifier itself, on ANY host (no Docker required) ───────────────
+# The six CLI tests above only go red where the proof engine is genuinely
+# unreachable. These pin the same contract as a PURE fact about
+# `classify_env_gap`, so the defect is caught on a host that has Docker too —
+# and so a future change cannot restore it and stay green on a provisioned
+# runner.
+
+def test_runner_own_not_found_line_is_not_mistaken_for_engine_output():
+    """The guard that means "the engine has spoken" must key on a shape only
+    the ENGINE can produce.
+
+    MEASURED regression: it was `\bSBY\b`, and this program's own diagnostic
+    "sby/docker not found on PATH" contains the word `sby`. The guard fired on
+    the message that says the engine was never found, `classify_env_gap`
+    returned None for every unreachable environment, and the run fell through
+    to a fabricated INCONCLUSIVE results.json. The shell's own
+    "sby: command not found" was swallowed the same way, which left the
+    signature written for it unreachable by construction.
+    """
+    for transcript in (
+        "[formal_property_run] ERROR: sby/docker not found on PATH\n",
+        # the container branch's own line, verbatim as `_run_sby` emits it
+        "[formal_property_run] ERROR: No such container: 'vibeic_eda_x' — "
+        "the `docker` CLI is not on PATH here, so no container is reachable "
+        "from this host\n",
+        "bash: line 1: sby: command not found\n",
+        "Error response from daemon: No such container: vibeic_eda_x\n",
+        "Cannot connect to the Docker daemon at unix:///var/run/docker.sock\n",
+    ):
+        gap = _F.classify_env_gap(transcript, "vibeic_eda_x")
+        assert gap is not None, f"no environment gap classified for {transcript!r}"
+        assert gap["missing_capability"].strip()
+        assert len(gap["remedy"]) > 40
+        assert gap["tool_message"].strip()
+
+
+def test_a_real_sby_transcript_is_never_relabelled_an_environment_gap():
+    """The other direction, so the fix above cannot pass vacuously by calling
+    everything an environment gap: once sby has genuinely spoken the run is a
+    real (possibly inconclusive) proof and stays one — even when the text also
+    happens to contain a docker error line."""
+    real = (
+        "SBY 13:55:36 [formal_ctr_formal_bmc] engine_0: abc bmc3\n"
+        "SBY 13:55:41 [formal_ctr_formal_bmc] summary: engine_0 (abc bmc3) "
+        "returned PASS\n"
+        "SBY 13:55:41 [formal_ctr_formal_bmc] DONE (PASS, rc=0)\n"
+    )
+    assert _F.classify_env_gap(real, "vibeic-eda") is None
+    assert _F.classify_env_gap(
+        real + "Error response from daemon: No such container: x\n", "x") is None
+
+
+# ── the probe's verdict is acted on, not merely recorded ──────────────────
+
+def _stub_env(monkeypatch, reachable, transcript):
+    monkeypatch.setattr(_F, "detect_engines",
+                        lambda container: {"_env_reachable": reachable})
+    monkeypatch.setattr(_F, "_run_sby",
+                        lambda *a, **k: transcript)
+
+
+#: A runtime wording no signature in the program matches.
+_UNKNOWN_WORDING = "runtime: could not attach to the execution environment\n"
+
+
+def test_unreachable_probe_emits_the_manifest_for_an_unknown_wording(
+        tmp_path, monkeypatch):
+    """`detect_engines` decides reachability BEFORE any solver is launched and
+    records it as `_env_reachable`. That answer was computed and then ignored:
+    the emission hung entirely on recognising a message shape, so a runtime
+    wording nobody anticipated fell straight through to a proof-shaped verdict
+    about an engine that was never reached."""
+    rtl, harness = _mk_design(tmp_path)
+    _stub_env(monkeypatch, False, _UNKNOWN_WORDING)
+
+    out = _F.run(tmp_path, harness=harness, rtl=[rtl], top="formal_ctr",
+                 container=_ABSENT_CONTAINER)
+
+    assert out["verdict"] == "ENV_UNAVAILABLE"
+    assert out["rc"] == _F.RC_ENV_UNAVAILABLE
+    assert out["all_proved"] is False
+    manifest = _formal_dir(tmp_path) / "formal_env_unavailable.json"
+    assert manifest.is_file(), "the probe said unreachable and nothing was emitted"
+    gap = json.loads(manifest.read_text())["env_gap"]
+    assert _ABSENT_CONTAINER in gap["searched"]
+    assert _ABSENT_CONTAINER in gap["remedy"]
+    # The raw runtime line is carried verbatim — nothing is invented to make
+    # the diagnosis look like a shape the program already knows.
+    assert _UNKNOWN_WORDING.strip() == gap["tool_message"]
+    assert not (_formal_dir(tmp_path) / "results.json").exists()
+
+
+def test_a_reachable_probe_never_emits_the_manifest(tmp_path, monkeypatch):
+    """The negative arm of the backstop: reachability is the ONLY thing that
+    opens it. With the same unrecognised wording and a probe that DID reach
+    the environment, the run stays a proof run — otherwise the backstop would
+    relabel every unparsed transcript an environment gap."""
+    rtl, harness = _mk_design(tmp_path)
+    _stub_env(monkeypatch, True, _UNKNOWN_WORDING)
+
+    out = _F.run(tmp_path, harness=harness, rtl=[rtl], top="formal_ctr",
+                 container=_REAL_CONTAINER)
+
+    assert out["verdict"] != "ENV_UNAVAILABLE"
+    assert out.get("rc") != _F.RC_ENV_UNAVAILABLE
+    assert not (_formal_dir(tmp_path) / "formal_env_unavailable.json").exists()
+    # and it is still not a pass: nothing was proved.
+    assert out["all_proved"] is not True
+
+
+# ── an absent docker CLI means the container does not exist, not "unreached" ──
+
+def test_absent_docker_cli_says_no_such_container_not_merely_unreached(
+        tmp_path, monkeypatch):
+    """"Could not be reached" is weaker than what is known, and the weaker
+    claim is the same understatement class as reporting an unreachable engine
+    as an inconclusive proof.
+
+    With no `docker` CLI on PATH this process can reach NO container at all,
+    so the named one does not exist as far as this host is concerned.
+    "Could not be reached" leaves open a container that is up and merely
+    unqueryable — a hedge the evidence does not support and which sends the
+    reader to look for a container instead of at the host. The reason must
+    travel with the claim in the SAME message, so that a reader can never
+    mistake it for a reply from a docker daemon we never spoke to.
+    """
+    rtl, harness = _mk_design(tmp_path)
+    monkeypatch.setattr(_F, "detect_engines",
+                        lambda container: {"_env_reachable": False})
+
+    def _no_docker_cli(*_a, **_k):
+        raise FileNotFoundError(2, "No such file or directory", "docker")
+
+    # The REAL `_run_sby` container branch runs; only the exec primitive is
+    # replaced, with the exact error a missing `docker` binary raises.
+    monkeypatch.setattr(_F._pr, "run", _no_docker_cli)
+
+    out = _F.run(tmp_path, harness=harness, rtl=[rtl], top="formal_ctr",
+                 container=_ABSENT_CONTAINER)
+
+    assert out["verdict"] == "ENV_UNAVAILABLE"
+    assert out["rc"] == _F.RC_ENV_UNAVAILABLE
+    gap = out["env_gap"]
+
+    # WHAT is true: there is no such container here.
+    assert "No such container" in gap["tool_message"]
+    assert _ABSENT_CONTAINER in gap["tool_message"]
+    # WHY we may say so, carried in the same line — this is our claim about
+    # the host, never a quoted docker reply.
+    assert "not on PATH" in gap["tool_message"]
+    # and it is classified as the environment being absent, with a remedy that
+    # works on a host where `docker start` is not even available.
+    assert gap["missing_capability"] == "docker container"
+    assert _ABSENT_CONTAINER in gap["remedy"]
+    assert "--container ''" in gap["remedy"]
+    assert not (_formal_dir(tmp_path) / "results.json").exists()
+
+
+def test_a_real_docker_daemon_reply_keeps_its_own_reading(tmp_path):
+    """The negative arm: the new, more specific signature must not swallow a
+    genuine daemon reply. On a host that HAS Docker the daemon says "No such
+    container" with no CLI clause, and that case keeps the daemon-shaped
+    remedy (`docker start`), which is the actionable one THERE."""
+    daemon = ("Error response from daemon: No such container: "
+              f"{_ABSENT_CONTAINER}\n")
+    gap = _F.classify_env_gap(daemon, _ABSENT_CONTAINER)
+    assert gap is not None
+    assert gap["missing_capability"] == "docker container"
+    assert "No such container" in gap["tool_message"]
+    # the daemon-path remedy, not the no-CLI one
+    assert "--container ''" not in gap["remedy"]
+    assert f"docker start '{_ABSENT_CONTAINER}'" in gap["remedy"]
