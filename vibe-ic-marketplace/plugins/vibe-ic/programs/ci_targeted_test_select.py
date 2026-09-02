@@ -981,6 +981,74 @@ def _with_ancestors(dotted: str) -> set[str]:
     return {".".join(parts[: i + 1]) for i in range(len(parts))}
 
 
+
+#: A test module imported by another file under ``tests/``. Conservative on
+#: purpose (see `_helper_population`): a line that only LOOKS like an import
+#: costs a candidate, never an edge.
+_IMPORTS_TEST_MODULE = re.compile(
+    r"(?m)^[ \t]*(?:from|import)[ \t]+(test_[A-Za-z0-9_]+)\b")
+
+_HELPER_POPULATION_CACHE: dict[str, list[Path]] = {}
+
+
+def _helper_population(tests_dir: Path) -> list[Path]:
+    """Every module under ``tests/`` that another test can reach by ``import``.
+
+    THE POPULATION IS DEFINED BY BEHAVIOUR, NOT BY FILENAME (vibe-ic#534's
+    own rule, applied to its own predicate). This used to be
+
+        if py.name.startswith("test_"): continue
+
+    which makes "a test module used as a helper by another test" an edge the
+    transitive closure cannot see. MEASURED at tree af9fe7d0b032: changing the
+    central registry ``programs/tests/flow_matrix/waivers.py`` selected 45 of
+    28 independently-scanned consumers and missed exactly one,
+    ``test_issue2004_census_fix_repairs_before_it_refuses.py``, which carries
+    a real ``import test_flow_matrix_coverage as CV`` (ast Import, lines 335
+    and 372) while ``test_flow_matrix_coverage.py:111`` is
+    ``from flow_matrix import waivers as W``. Two real import statements, one
+    invisible hop, and a targeted CI that reports green for a change to the
+    one file whose verdicts it decides.
+
+    A `test_*.py` therefore joins the population when SOME file under
+    ``tests/`` imports it by name. Swallowing every `test_*.py` unconditionally
+    would be the filename rule again with the sign flipped: it would put 3000+
+    modules in the closure's search space to model an edge that a handful of
+    files actually have.
+
+    The candidate detector is a REGEX and is deliberately a superset — a name
+    that appears in a string literal costs one candidate. It cannot invent a
+    selection: every edge the closure and the final scan act on is still
+    resolved by `_imported_module_names` over the ast, so an over-included
+    candidate is only ever a module nothing turns out to import.
+
+    Cached per tests-dir: `select_tests` is called many times per process and
+    this reads every file under `tests/` once.
+    """
+    key = str(tests_dir)
+    cached = _HELPER_POPULATION_CACHE.get(key)
+    if cached is not None:
+        return cached
+    plain: list[Path] = []
+    tests: dict[str, Path] = {}
+    imported: set[str] = set()
+    for py in tests_dir.rglob("*.py"):
+        if not py.is_file():
+            continue
+        if py.name.startswith("test_"):
+            tests[py.stem] = py
+        else:
+            plain.append(py)
+        try:
+            txt = py.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        imported |= set(_IMPORTS_TEST_MODULE.findall(txt))
+    out = plain + [py for stem, py in sorted(tests.items()) if stem in imported]
+    _HELPER_POPULATION_CACHE[key] = out
+    return out
+
+
 def _helper_module_names(plugin_root: Path, source_stems: set[str]) -> dict[str, set[str]]:
     """Map plugin-rel helper path -> every name it can be imported by.
 
@@ -994,16 +1062,14 @@ def _helper_module_names(plugin_root: Path, source_stems: set[str]) -> dict[str,
       Emitted ONLY when unambiguous: dropped if two helpers share the basename,
       or if it collides with a top-level source stem (``import waivers_schema_
       check`` must stay a rule-1 source module, never a tests-dir helper).
+
+    The population comes from ``_helper_population`` — BEHAVIOUR, not filename.
     """
     tests_dir = plugin_root / _TESTS_REL
     if not tests_dir.is_dir():
         return {}
 
-    paths: list[Path] = []
-    for py in tests_dir.rglob("*.py"):
-        if py.name.startswith("test_") or not py.is_file():
-            continue
-        paths.append(py)
+    paths = _helper_population(tests_dir)
 
     # Count basenames first so an ambiguous bare alias can be withheld.
     base_counts: dict[str, int] = {}
