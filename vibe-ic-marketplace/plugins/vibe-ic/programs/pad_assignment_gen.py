@@ -348,6 +348,16 @@ PDK_DELEGATED_VARS: Tuple[str, ...] = (
     "PAD_CORNER", "PAD_FILLERS",
 )
 
+#: The three of `PDK_DELEGATED_VARS` that NOTHING else in the flow can answer:
+#: the two site names and the die-edge-to-IO-row distance. `PAD_CORNER` and
+#: `PAD_FILLERS` reach `read_derived_chip_top` by their own route (the producer
+#: confirms each against a macro the LEF carries); these three are values, not
+#: masters, so there is nothing to confirm them against and they are
+#: transcribed with their file:line or not at all.
+PDK_LIBRARY_OWNED_VARS: Tuple[str, ...] = (
+    "PAD_SITE_NAME", "PAD_CORNER_SITE_NAME", "PAD_EDGE_SPACING",
+)
+
 #: Variables upstream spells as one whitespace-separated string and this
 #: flow's config contract spells as a list. Splitting on whitespace is a
 #: TRANSCRIPTION of one file format into another; no element is added, dropped
@@ -538,6 +548,37 @@ def read_derived_chip_top(project: Path) -> Tuple[Dict[str, Dict[str, Any]],
             "value": list(answers["pad_fillers"]),
             "source": f"{DERIVED_CHIP_TOP_REL} (pad_fillers): "
                       f"{basis.get('pad_fillers', '')}"}
+    # THE THREE THE PDK OWNS, and why they are read HERE rather than re-read
+    # from the PDK. `PAD_SITE_NAME`, `PAD_CORNER_SITE_NAME` and
+    # `PAD_EDGE_SPACING` are properties of the IO CELL LIBRARY, so this program
+    # answers them only when a caller supplies `--pdk-root/--pdk`. The FLOW
+    # DECLARATION of step 15.5ic invokes it with neither -- MEASURED: on a tree
+    # carrying this record, that invocation refuses with exactly these three
+    # `PAD_CONFIG_VARIABLE_ABSENT` and nothing else -- while the runner passes
+    # both, so the same tree answers 13 of 13 to one caller and 10 of 13 to the
+    # other. The producer already RESOLVED all three, out of the one IO library
+    # whose LEFs it read, and published each with its file:line. Reading its
+    # record is therefore a transcription of what this run measured, not a
+    # second guess at which library the run used -- the same standing this
+    # function already gives `PAD_CORNER` and `PAD_FILLERS` from the same file.
+    #
+    # A value the producer did NOT publish stays owed. No default, here or
+    # anywhere: an edge spacing invented on a tree whose PDK never resolved
+    # would be indistinguishable in the artefact from a measured one.
+    pdk_declared = doc.get("pdk_declared")
+    pdk_sources = doc.get("pdk_declared_sources") or {}
+    if isinstance(pdk_declared, dict):
+        for var in PDK_LIBRARY_OWNED_VARS:
+            value = pdk_declared.get(var)
+            if value is None or value == "" or var in out:
+                continue
+            where = pdk_sources.get(var)
+            out[var] = {
+                "value": value,
+                "source": f"{DERIVED_CHIP_TOP_REL} (pdk_declared): the IO "
+                          f"cell library the design's documents delegate to, "
+                          f"read by the producer at "
+                          f"{where if where else 'a source it did not record'}"}
     info["variables"] = sorted(out)
     return out, info
 
