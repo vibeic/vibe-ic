@@ -3072,6 +3072,15 @@ def _cmd_resume_locked(bench: str, dataset: str, run: str,
     phase1_failures: list[str] = []
     for result in results:
         pid = str(result.get("id"))
+        if (result.get("worker_status") == "ERROR"
+                and result.get("worker_retryable") is True):
+            # There is no Program outcome to guard yet: this result is owed
+            # the retry below, which re-enters at its routed entry and emits
+            # the provenance the next --resume binds and checks. Refusing it
+            # here made a D1 worker crash unrecoverable except by a fresh
+            # --solve that discards every other committed result -- the very
+            # loss the retry exists to prevent.
+            continue
         proj = run_p / "projects" / re.sub(r"[^\w.-]", "_", pid)
         task = task_by_id.get(pid)
         expected = (task.get("phase1_provenance")
@@ -3082,7 +3091,14 @@ def _cmd_resume_locked(bench: str, dataset: str, run: str,
                 phase1_failures.append(
                     f"{pid}: Phase-1 provenance changed after task creation")
             continue
-        if result.get("entry") == "D1":
+        if result.get("entry") == "D1" and current.get("ran") is not True:
+            # Judged by what the run EMITTED, not by what the task recorded.
+            # A task written before provenance was carried, or not written
+            # at all yet (awaiting AI backup), says nothing about the L-docs
+            # on disk; when they are there the front door below REUSES them
+            # without a runner call and binds them into the task. Only a D1
+            # run that truly left none is refused, and the message is then
+            # a measured fact rather than a missing field.
             phase1_failures.append(
                 f"{pid}: canonical D1-entry run emitted no Phase-1 provenance")
             continue
