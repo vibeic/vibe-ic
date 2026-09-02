@@ -584,10 +584,27 @@ def test_0_5ic_d3_live_replay_closes_the_exact_coverage_delta():
     All twenty are named in :data:`matrix_mutation_ledger.
     LEDGER_CELLS_NOT_ENFORCED`, which moved in the same change; ``uncovered ==
     []`` still holds at 489, so nothing enforced lost its mutation coverage.
+
+    MOVED 489 -> 501 on 2026-09-02, the growing direction, and it is the SAME
+    twenty going back — eleven of them — plus DT2/d6. The 2026-08-31 note said
+    what would end the fourth state: re-point the record or publish a run
+    carrying the artefact, because ``unanswerable_citations`` is re-derived
+    live. vibeic/benchmark-data has published run trees again since ``bcf2f94``
+    and eleven of the twenty now resolve; DT2/d6's dimension-6 waiver was
+    withdrawn on 2026-08-31 when its self-disabling condition was resolved. All
+    twelve are named in ``LEDGER_CELLS_NOT_ENFORCED``, which moved in the same
+    change.
+
+    THE THIRD ASSERTION IS STILL THE LOAD-BEARING ONE, and it is what this move
+    had to buy. DT2/d6 came out of its waiver with NO mutation measured against
+    it at all — the parametrised case ``[stepDT2]`` said so by name — so 501
+    would have been a count with an uncovered cell inside it. It is closed by a
+    replay (``--replay D6-UNCONDITIONAL-OPTIONAL --step DT2`` -> REDDENED), and
+    ``uncovered == []`` holds at 501.
     """
     rep = L.census(cell_states())
-    assert rep["considered"] == 489, rep
-    assert rep["covered"] == 489, rep
+    assert rep["considered"] == 501, rep
+    assert rep["covered"] == 501, rep
     assert rep["uncovered"] == [], rep
 
 

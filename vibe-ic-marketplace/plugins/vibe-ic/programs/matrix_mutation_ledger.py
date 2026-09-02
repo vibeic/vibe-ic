@@ -501,14 +501,44 @@ def _k_gate_append_unconditional_optional(step: Dict, params: Dict) -> bool:
 
 
 def _k_gate_advisory_only(step: Dict, _p: Dict) -> bool:
-    clauses: List[Tuple[Dict, str, Any]] = []
-    _exec_clauses(step.get("gate"), clauses)
-    for _, _, v in clauses:
-        cmd = _command_of(v)
-        if cmd:
-            step["gate"] = {"all_of": [{"advisory_program_exit_zero": cmd}]}
-            return True
-    return False
+    """Drop every BLOCKING clause, leaving the step's OWN advisory ones.
+
+    THIS EDIT USED TO BE A REWIRE, and vibe-ic#1980 closed the hole it walked
+    through. It took the step's first BLOCKING command and re-declared it in the
+    advisory slot as a bare string, on the reading that an advisory clause always
+    passes. That reading stopped being true: `_evaluate_gate` now honours an
+    advisory REFUSAL as blocking unless the gate is two-source advisory (its own
+    module declares `ENFORCEMENT: advisory` AND the canonical flow wires it
+    advisory), so re-declaring a self-declared-BLOCKING program advisory makes
+    the gate REFUSE rather than pass.
+
+    MEASURED on 9dff42ceb, the whole recorded sweep replayed
+    (`--replay D6-ADVISORY-ONLY-GATE`, 59 pairs, 0 unmeasurable): the old edit
+    reddened 0 of 59. Every pair came back STAYED_GREEN with
+    `passed=False` and the reason `advisory gate refusal: <cmd> [rc=1,
+    verdict=FAIL]` — the mutant gate was not switched off, it was refusing, and
+    a gate that refuses is not the L1b defect at all. The lever was dead.
+
+    WHAT SURVIVES #1980 is the shape the flow still admits: a gate whose only
+    remaining clauses are the step's own DECLARED advisory ones. Those are
+    two-source advisory by construction — the flow wires them advisory and their
+    modules say so — so the gate PASSES on a project containing nothing while no
+    blocking clause is left to enforce anything, which is exactly what leg L1b
+    asks about. It is also the realistic shape of the defect: a maintainer
+    deleting the blocking half of a gate and leaving the disclosure half behind.
+
+    A step with NO advisory clause of its own has no edit site here (step 35 is
+    one, since #1980 moved `dfm_screen_check` out of its gate entirely), and
+    LOCK 1 says so rather than letting the entry claim a step it cannot touch.
+    """
+    holders: List[Dict] = []
+    _holders_of(step.get("gate"), "advisory_program_exit_zero", holders)
+    if not holders:
+        return False
+    step["gate"] = {"all_of": [
+        {"advisory_program_exit_zero": h["advisory_program_exit_zero"]}
+        for h in holders]}
+    return True
 
 
 def _k_gate_append_cli_flag(step: Dict, _p: Dict) -> bool:
@@ -879,6 +909,37 @@ _THEN_FIVE = ("   THEN   matrix_mutation_ledger.py --replay {name} --step "
               "<each of 0.5ic, 15.5ic, 26.5ic, 37.5ip, 37.5ic>   (2026-08-20, "
               "the five path-specific steps this entry gained)")
 
+#: The 2026-09-02 re-measurement of the ONE step vibe-ic#1980 moved between two
+#: dimension-1 entries. Separate from :data:`_SWEEP` for the same reason as
+#: every suffix above: the bulk of the `applies_to` it is appended to rests on
+#: the 2026-08-06 sweep, and step 35 rests on one replay run on 9dff42ceb, after
+#: 867f807a7 deleted step 35's `advisory_program_exit_zero` clause. A reader can
+#: tell which claim rests on which run.
+_THEN_35 = ("   THEN   matrix_mutation_ledger.py --replay {name} --step 35   "
+            "(2026-09-02, the one step this entry gained when vibe-ic#1980 "
+            "removed step 35's executable gate clause)")
+
+#: The 2026-09-02 single-step replay for `DT2`, whose dimension-6 waiver was
+#: withdrawn on 2026-08-31 when its self-disabling condition was resolved. The
+#: cell was measured GREEN under this entry while the waiver stood — an
+#: `xfail(strict=True)` cell cannot be reddened — so the withdrawal is what made
+#: the step measurable, and the step was RE-RUN rather than re-reasoned.
+_THEN_DT2 = ("   THEN   matrix_mutation_ledger.py --replay {name} --step DT2   "
+             "(2026-09-02, the one step this entry gained when the dimension-6 "
+             "waiver on DT2 was withdrawn)")
+
+#: The sweep for the REWRITTEN advisory-only edit. It is deliberately NOT
+#: :data:`_SWEEP`: after vibe-ic#1980 the edit has a site only on the steps that
+#: declare an `advisory_program_exit_zero` clause of their OWN, so a 68-step
+#: sweep would report a mostly-NO_EDIT_SITE run and bury the real denominator.
+#: This one names its denominator — every step that DECLARES an advisory clause,
+#: derived from the live yaml, 20 of them on 9dff42ceb — and the entry records
+#: which of the 20 reddened and which held.
+_ADV_SWEEP = ("matrix_mutation_ledger.py --replay {name} --step <each of the 20 "
+              "steps that declare an advisory_program_exit_zero clause>   "
+              "(2026-09-02, one pytest run per step, PRECEDED by a full replay "
+              "of the 59-step sweep this entry used to record, which reddened 0)")
+
 #: `37.5self` (the General Precheck) HAD a suffix of its own here — it arrived
 #: after every sweep above AND after the five path-specific steps, so it rested
 #: on one single-step replay of its own. IT IS GONE, together with the step:
@@ -937,17 +998,29 @@ MUTATIONS: Tuple[Mutation, ...] = (
             "DT1", "13", "A1", "A2", "A3", "A4", "A5", "A6", "A7", "A8", "A9",
             "14", "15", "16", "17", "18", "19", "20", "21", "22", "DT2", "DT3",
             "23", "24", "25", "26", "27", "28", "29", "30", "31", "32", "33",
-            "34", "35", "36", "37", "38", "39", "M1", "M2", "M3", "M4", "40",
+            "34", "36", "37", "38", "39", "M1", "M2", "M3", "M4", "40",
             "41", "42", "43", "44",
             # the five path-specific steps, replayed 2026-08-20
             "0.5ic", "15.5ic", "26.5ic", "37.5ip", "37.5ic"),
         measured=Measurement(
-            date="2026-08-06", command=_SWEEP + _THEN_FIVE, reddened=65,
+            date="2026-08-06", command=_SWEEP + _THEN_FIVE, reddened=64,
             stayed_green=(),
-            note="3 steps have no executable gate clause at all and are "
+            note="4 steps have no executable gate clause at all and are "
                  "structurally out of this entry's reach: 1 and 12 (files_exist "
-                 "only) and P0 (no gate key). They are covered by "
-                 "D1-UNREACHABLE-CLAUSE and D1-ORPHAN-UMBRELLA-GATE. "
+                 "only), P0 (no gate key) and — since 2026-09-02 — 35. They are "
+                 "covered by D1-UNREACHABLE-CLAUSE and D1-ORPHAN-UMBRELLA-GATE. "
+                 "STEP 35 IS A WITHDRAWAL, NOT A RE-COUNT, and the change that "
+                 "caused it is vibe-ic#1980 (867f807a7): it deleted step 35's "
+                 "`advisory_program_exit_zero` running `dfm_screen_check` and "
+                 "re-declared that producer under `program_outputs`, leaving the "
+                 "gate `all_of: [files_exist: [...]]` with no program token to "
+                 "suffix. LOCK 1 named it — `step 35 has no edit site for kind "
+                 "'gate_programs_rename'` — and the recorded red is therefore no "
+                 "longer REPRODUCIBLE, which is the one thing this entry may not "
+                 "claim. 35/d1 did NOT lose coverage: the same commit made "
+                 "`gate_clause_key_rename` reach it, replayed REDDENED under "
+                 "D1-UNREACHABLE-CLAUSE on 2026-09-02. 65 -> 64 is exactly this "
+                 "one step. "
                  "THE FIVE PATH-SPECIFIC STEPS WERE ADDED 2026-08-20. 0.5ic, "
                  "15.5ic, 26.5ic, 37.5ip and 37.5ic are declared in the flow yaml "
                  "and were in no sweep above, so their cells were uncovered and "
@@ -967,14 +1040,25 @@ MUTATIONS: Tuple[Mutation, ...] = (
         witness="21",
         applies_to=("1", "4", "5", "6", "7", "9", "10", "11", "12", "A1", "A2",
                     "A3", "A4", "A5", "A7", "15", "17", "18", "19", "20", "21",
-                    "22", "23", "27", "28", "29", "30", "32", "34", "37"),
+                    "22", "23", "27", "28", "29", "30", "32", "34", "35", "37"),
         measured=Measurement(
-            date="2026-08-06", command=_SWEEP, reddened=30,
-            stayed_green=("35",),
+            date="2026-08-06", command=_SWEEP + _THEN_35, reddened=31,
+            stayed_green=(),
             note="carries steps 1 and 12, whose program-free gates put legs 1 "
-                 "and 3 of the dimension-1 cell out of reach; step 35 keeps a "
-                 "second reachable channel and stayed green, which is why its "
-                 "green is recorded rather than rounded away."),
+                 "and 3 of the dimension-1 cell out of reach. "
+                 "STEP 35 MOVED FROM stayed_green TO applies_to ON 2026-09-02, "
+                 "and the mover is vibe-ic#1980, not this entry. Its green was "
+                 "recorded because `step 35 keeps a second reachable channel` "
+                 "— the `advisory_program_exit_zero` running `dfm_screen_check` "
+                 "— and #1980 (867f807a7) deleted that clause from the gate and "
+                 "re-declared the producer under `program_outputs`. With the "
+                 "second channel gone the renamed `files_exist` key is the only "
+                 "thing left in step 35's gate, so the clause the evaluator "
+                 "walks past is now the WHOLE gate. REPLAYED, not inferred: "
+                 "`--replay D1-UNREACHABLE-CLAUSE --step 35` -> REDDENED "
+                 "(11.4s) on 9dff42ceb. This is the cell 35/d1 was covered for "
+                 "before the same commit made `gate_programs_rename` "
+                 "unresolvable there — see D1-BLIND-GATE-PROGRAMS."),
     ),
     Mutation(
         name="D1-ORPHAN-UMBRELLA-GATE",
@@ -1173,16 +1257,28 @@ MUTATIONS: Tuple[Mutation, ...] = (
         applies_to=("2", "3", "5", "6", "7", "8", "9", "10", "11", "FS1",
                     "DT1", "13", "A1", "A2", "A3", "A4", "A5", "A6", "A7",
                     "A8", "A9", "17", "19", "20", "22", "DT2", "DT3", "23",
-                    "24", "25", "26", "28", "29", "30", "31", "34", "35", "36",
+                    "24", "25", "26", "28", "29", "30", "31", "34", "36",
                     "37", "38", "39", "M1", "M2", "M3", "M4", "40", "41", "42",
                     "43", "44"),
         measured=Measurement(
-            date="2026-08-06", command=_SWEEP, reddened=50,
+            date="2026-08-06", command=_SWEEP, reddened=49,
             stayed_green=("D1", "21", "33"),
             note="carries FS1, the one step with a gate and no required_outputs. "
                  "D1/21/33 stayed green because their first clause's program "
                  "hardens or hand-rolls argv — recorded, not rounded away; the "
-                 "dimension-4 census reached them at clause #1 instead."),
+                 "dimension-4 census reached them at clause #1 instead. "
+                 "STEP 35 WITHDRAWN 2026-09-02, for the same single cause as in "
+                 "D1-BLIND-GATE-PROGRAMS above: vibe-ic#1980 (867f807a7) removed "
+                 "step 35's only executable gate clause, so there is no "
+                 "string-valued gate command left to append a flag to and LOCK 1 "
+                 "reported `step 35 has no edit site for kind "
+                 "'gate_append_cli_flag'`. It is NOT recorded in stayed_green: "
+                 "the sweep DID redden it in 2026-08, and a step that can no "
+                 "longer be EDITED is a different fact from a step that was "
+                 "edited and held. 35/d4 keeps its coverage from "
+                 "D4-UNGATED-DELIVERABLE, which reaches it through "
+                 "`required_outputs` and is untouched by #1980. 50 -> 49 is "
+                 "exactly this one step."),
     ),
     Mutation(
         name="D4-PROSE-NAMES-A-GHOST",
@@ -1316,7 +1412,8 @@ MUTATIONS: Tuple[Mutation, ...] = (
             "D1", "1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11",
             "FS1", "DT1", "12", "13", "A1", "A2", "A3", "A4", "A5", "A6", "A7",
             "A8", "A9", "14", "15", "16", "17", "18", "19", "20", "21", "22",
-            "DT3", "23", "24", "25", "26", "27", "28", "29", "30", "31", "32",
+            "DT2", "DT3", "23", "24", "25", "26", "27", "28", "29", "30",
+            "31", "32",
             "33", "34", "35", "36", "37", "38", "39", "M1", "M2", "M3", "M4",
             "40", "41", "42", "43", "44",
             # the five path-specific steps, replayed 2026-08-20
@@ -1324,12 +1421,30 @@ MUTATIONS: Tuple[Mutation, ...] = (
         params={"command":
                 "clock_plan_check . --json reports/phase2/gates/zzmatrixcanary.json"},
         measured=Measurement(
-            date="2026-08-06", command=_SWEEP + _THEN_FIVE, reddened=66,
-            stayed_green=("DT2",),
+            date="2026-08-06", command=_SWEEP + _THEN_FIVE + _THEN_DT2,
+            reddened=67,
+            stayed_green=(),
             note="61 red = every ENFORCED dimension-6 cell except P0, which "
                  "declares no gate to append to and is carried by "
-                 "D6-UMBRELLA-ALWAYS-SKIPS. DT2 is the one waived cell and its "
-                 "strict xfail correctly held. "
+                 "D6-UMBRELLA-ALWAYS-SKIPS. "
+                 "DT2 MOVED FROM stayed_green TO applies_to ON 2026-09-02, and "
+                 "the old line — `DT2 is the one waived cell and its strict "
+                 "xfail correctly held` — says exactly why the move is a "
+                 "MEASUREMENT and not a re-count: the 2026-08-06 sweep could "
+                 "not have reddened DT2, because an `xfail(strict=True)` cell "
+                 "reports xfail whatever the mutation does. The dimension-6 "
+                 "waiver on DT2 was WITHDRAWN on 2026-08-31 when its "
+                 "self-disabling ALL-of condition was resolved (dimension 6 "
+                 "reached zero waivers, recorded in "
+                 "`test_matrix_d6_skip_discipline."
+                 "test_d6_waivers_are_evidence_backed_and_strict`), so the cell "
+                 "became measurable for the first time and was RE-RUN: "
+                 "`--replay D6-UNCONDITIONAL-OPTIONAL --step DT2` -> REDDENED "
+                 "(24.1s) on 9dff42ceb. Withdrawing the waiver is a TIGHTENING "
+                 "and this is the coverage it demanded — DT2/d6 was ENFORCED "
+                 "with no named mutation until this line, which is the one "
+                 "state `test_every_enforced_cell_carries_a_named_mutation` "
+                 "exists to refuse. "
                  "THE FIVE PATH-SPECIFIC STEPS WERE ADDED 2026-08-20. 0.5ic, "
                  "15.5ic, 26.5ic, 37.5ip and 37.5ic are declared in the flow yaml "
                  "and were in no sweep above, so their cells were uncovered and "
@@ -1341,28 +1456,53 @@ MUTATIONS: Tuple[Mutation, ...] = (
     Mutation(
         name="D6-ADVISORY-ONLY-GATE",
         dim=6, channel=FLOW_YAML, kind="gate_advisory_only",
-        what="replace the step's whole gate with a single "
-             "`advisory_program_exit_zero` running that step's own first gate "
-             "command",
+        what="delete every BLOCKING clause from the step's gate, keeping only "
+             "the step's OWN declared `advisory_program_exit_zero` clauses, so "
+             "the gate still runs a program and enforces nothing",
         breaks="the break the dimension-6 module's docstring names: the gate "
                "passes with no blocking clause and no disclosure prefix, so a "
                "step that measures nothing is counted as a step that passed.",
         red_signal="step",
         witness="21",
-        applies_to=(
-            "D1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "FS1",
-            "DT1", "13", "A1", "A2", "A3", "A4", "A5", "A6", "A7", "A8", "A9",
-            "14", "15", "16", "17", "18", "19", "20", "21", "22", "DT3", "23",
-            "24", "25", "26", "27", "28", "29", "30", "31", "32", "33", "34",
-            "35", "36", "37", "38", "39", "M1", "M2", "M3", "M4", "40", "41",
-            "42", "43", "44"),
+        applies_to=("6", "9", "A9", "21", "29", "31", "33"),
         measured=Measurement(
-            date="2026-08-06", command=_SWEEP, reddened=59,
-            stayed_green=("DT2",),
-            note="a second, independent lever on 59 of the same cells; kept "
-                 "because it charges a different leg (L1b) than "
-                 "D6-UNCONDITIONAL-OPTIONAL (L4), so a change that blinds one "
-                 "leg does not blind the dimension."),
+            date="2026-09-02", command=_ADV_SWEEP, reddened=7,
+            stayed_green=("D1", "2", "4", "7", "A4", "14", "15", "23", "36",
+                          "37", "37.5ic", "39", "M1"),
+            note="59 -> 7, AND THE 59 WAS ZERO. This entry is still the "
+                 "dimension's L1b lever — the leg D6-UNCONDITIONAL-OPTIONAL "
+                 "(L4) does not charge — but the EDIT it performed had stopped "
+                 "reaching that leg, and the shrink is what measuring it "
+                 "honestly costs. "
+                 "WHAT WAS RECORDED: the 2026-08-06 sweep rewired each step's "
+                 "first BLOCKING gate command into the advisory slot and "
+                 "measured 59 reds, on the then-true reading that an advisory "
+                 "clause always passes. vibe-ic#1980 (867f807a7) ended that "
+                 "reading: `_evaluate_gate` now honours an advisory REFUSAL as "
+                 "blocking unless the gate is two-source advisory. "
+                 "WHAT WAS MEASURED on 9dff42ceb: the FULL recorded sweep was "
+                 "replayed — `--replay D6-ADVISORY-ONLY-GATE`, all 59 pairs, 0 "
+                 "unmeasurable — and it reddened 0 of 59. Every pair reported "
+                 "`passed=False` with `advisory gate refusal: <cmd> [rc=1, "
+                 "verdict=FAIL]`: the mutant gate was REFUSING, not switched "
+                 "off, so it was not the L1b shape at all and the entry was "
+                 "carrying no proof whatever. That is the reading LOCK 2 caught "
+                 "and it is why the edit was rewritten rather than re-counted. "
+                 "THE 7 ARE A NEW SWEEP, one replay per step, over the 20 steps "
+                 "that declare an advisory clause of their own (the only steps "
+                 "the rewritten edit HAS a site on; DT2 and 35 are recorded "
+                 "NO_EDIT_SITE and are in neither list). 13 held green because "
+                 "their advisory clauses are themselves NOT-YET-CLEAN ratchets "
+                 "that refuse on an empty project — the gate keeps refusing, so "
+                 "the defect is genuinely not reachable there, and those 13 are "
+                 "recorded rather than rounded away. "
+                 "COVERAGE IS UNCHANGED at the census: every dimension-6 cell "
+                 "the 59 used to name is still carried by "
+                 "D6-UNCONDITIONAL-OPTIONAL (67 steps) and P0 by "
+                 "D6-UMBRELLA-ALWAYS-SKIPS, so no cell went uncovered in this "
+                 "change — what moved is how many cells have a SECOND, "
+                 "L1b-charging lever, and that number is now measured instead "
+                 "of asserted."),
     ),
     Mutation(
         name="D6-UMBRELLA-ALWAYS-SKIPS",
@@ -1401,7 +1541,7 @@ MUTATIONS: Tuple[Mutation, ...] = (
                "promises to produce it. That artefact is load-bearing and "
                "invisible to the flow's own accounting.",
         red_signal="W3",
-        witness="21",
+        witness="12",
         applies_to=(
             "D1", "1", "2", "3", "4", "5", "6", "8", "9", "10", "11", "DT1",
             "12", "13", "A1", "A2", "A3", "A4", "A5", "A6", "A7", "A8", "A9",
@@ -1413,9 +1553,45 @@ MUTATIONS: Tuple[Mutation, ...] = (
             "0.5ic", "15.5ic", "26.5ic", "37.5ip", "37.5ic"),
         measured=Measurement(
             date="2026-08-06", command=_SWEEP + _THEN_FIVE, reddened=63,
+            baseline_red=("D1", "21", "34"),
             stayed_green=("7", "FS1", "23", "M1"),
             note="58 red = every one of dimension 7's 58 ENFORCED cells, in one "
                  "sweep. The 4 greens are exactly its 4 waived cells. "
+                 "THE WITNESS MOVED 21 -> 12 ON 2026-09-02, and it moved "
+                 "because the cell it named went RED AT BASELINE, not "
+                 "because the mutation stopped working. A replay against "
+                 "an already-red cell can never show PASS -> FAIL: "
+                 "`replay` scores it ALREADY_RED / UNMEASURABLE, LOCK 2 "
+                 "excludes it, and the entry is then left demonstrating "
+                 "nothing at all -- which is exactly what `D7-GATE- "
+                 "PROBES-A-GHOST produced N replay result(s) and NOT ONE "
+                 "of them proved anything` said on 9dff42ceb. WHAT IS "
+                 "RED, MEASURED: `pytest programs/tests/test_matrix_d7_o "
+                 "utputs_list_complete.py` with VIBE_IC_BENCHMARK_DATA "
+                 "pointed at a clone of vibeic/benchmark-data @ 98e83a61 "
+                 "reports `4 failed, 98 passed, 4 xfailed` -- cells D1, "
+                 "21 and 34 plus the module's own write-record "
+                 "population guard. 21/d7 fails on "
+                 "`[W2:produced_consumed_undeclared] "
+                 "'phase3/stage3/pnr/openroad.log' (written by run- "
+                 "record:openroad; read by gate:step21)`: a real, "
+                 "corpus-surfaced finding about the FLOW YAML -- no step "
+                 "declares that artefact -- and it is NOT this ledger's "
+                 "to repair. The same three cells are GREEN with no "
+                 "corpus pointer (`1 passed` for step21), so this is the "
+                 "published write ledger telling the truth about a gap, "
+                 "not a regression in this entry. THE RED IS RECORDED "
+                 "RATHER THAN ROUTED AROUND: D1/21/34 stay in "
+                 "`applies_to` -- the 2026-08-06 sweep did redden them "
+                 "and their cells are still covered -- and they are "
+                 "named in `baseline_red`, so their redness is excluded "
+                 "from `attributable` and the witness may not be one of "
+                 "them (`test_lock3_...` asserts that directly). The new "
+                 "witness was REPLAYED, not assumed: `--replay D7-GATE- "
+                 "PROBES-A-GHOST --step 12` -> REDDENED (86.1s) on "
+                 "9dff42ceb. When the flow declares `openroad.log` these "
+                 "three leave `baseline_red` and nothing else here "
+                 "changes. "
                  "THE FIVE PATH-SPECIFIC STEPS WERE ADDED 2026-08-20. 0.5ic, "
                  "15.5ic, 26.5ic, 37.5ip and 37.5ic are declared in the flow yaml "
                  "and were in no sweep above, so their cells were uncovered and "
@@ -1432,7 +1608,7 @@ MUTATIONS: Tuple[Mutation, ...] = (
                "none. The regression a step rewrite leaves behind when the "
                "author moves the deliverables and forgets the list.",
         red_signal="W4",
-        witness="21",
+        witness="22",
         applies_to=("2", "3", "4", "5", "6", "8", "9", "10", "11", "DT1", "13",
                     "A3", "A7", "A8", "A9", "15", "16", "17", "18", "19", "20",
                     "21", "22", "DT2", "DT3", "24", "25", "26", "27", "28",
@@ -1440,9 +1616,48 @@ MUTATIONS: Tuple[Mutation, ...] = (
                     "M2", "M3", "M4", "40", "41", "42", "43", "44"),
         measured=Measurement(
             date="2026-08-06", command=_SWEEP, reddened=48,
+            baseline_red=("21", "34"),
             stayed_green=("D1", "1", "7", "12", "A1", "A2", "A4", "A5", "A6",
                           "14", "23", "39", "M1"),
-            note="13 steps stayed green and the reason is measured, not "
+            note="THE WITNESS MOVED 21 -> 22 ON 2026-09-02, and it moved "
+                 "because the cell it named went RED AT BASELINE, not "
+                 "because the mutation stopped working. A replay against "
+                 "an already-red cell can never show PASS -> FAIL: "
+                 "`replay` scores it ALREADY_RED / UNMEASURABLE, LOCK 2 "
+                 "excludes it, and the entry is then left demonstrating "
+                 "nothing at all -- which is exactly what "
+                 "`D7-UNDECLARED-KEY produced N replay result(s) and NOT "
+                 "ONE of them proved anything` said on 9dff42ceb. WHAT "
+                 "IS RED, MEASURED: `pytest programs/tests/test_matrix_d "
+                 "7_outputs_list_complete.py` with "
+                 "VIBE_IC_BENCHMARK_DATA pointed at a clone of "
+                 "vibeic/benchmark-data @ 98e83a61 reports `4 failed, 98 "
+                 "passed, 4 xfailed` -- cells D1, 21 and 34 plus the "
+                 "module's own write-record population guard. 21/d7 "
+                 "fails on `[W2:produced_consumed_undeclared] "
+                 "'phase3/stage3/pnr/openroad.log' (written by run- "
+                 "record:openroad; read by gate:step21)`: a real, "
+                 "corpus-surfaced finding about the FLOW YAML -- no step "
+                 "declares that artefact -- and it is NOT this ledger's "
+                 "to repair. The same three cells are GREEN with no "
+                 "corpus pointer (`1 passed` for step21), so this is the "
+                 "published write ledger telling the truth about a gap, "
+                 "not a regression in this entry. THE RED IS RECORDED "
+                 "RATHER THAN ROUTED AROUND: D1/21/34 stay in "
+                 "`applies_to` -- the 2026-08-06 sweep did redden them "
+                 "and their cells are still covered -- and they are "
+                 "named in `baseline_red`, so their redness is excluded "
+                 "from `attributable` and the witness may not be one of "
+                 "them (`test_lock3_...` asserts that directly). The new "
+                 "witness was REPLAYED, not assumed: `--replay "
+                 "D7-UNDECLARED-KEY --step 22` -> REDDENED (86.2s) on "
+                 "9dff42ceb. When the flow declares `openroad.log` these "
+                 "three leave `baseline_red` and nothing else here "
+                 "changes. D1/d7 is red at baseline too but is not in "
+                 "this entry's applies_to -- it is in stayed_green -- so "
+                 "it is not in baseline_red either: a cell this sweep "
+                 "never reddened cannot be 'already red' in it. "
+                 "13 steps stayed green and the reason is measured, not "
                  "guessed: emptying the promise makes the cell NA for a step "
                  "whose gate designates no provable output, and the cell "
                  "returns before the rules run. Those steps are carried by "
@@ -2040,7 +2255,38 @@ NOT_FALSIFIABLE: Tuple[NotFalsifiable, ...] = ()
 # 36 below the previous value counted), 544 - 35 = 509. This is the direction
 # the note on the 479 -> 478 move said this pin would move in if the waiver
 # ever came off, and it named the cell in advance; both halves held.
-LEDGER_AS_MEASURED: Tuple[int, int, int] = (68, 8, 489)
+# MOVED 489 -> 501 on 2026-09-02. TWELVE cells gained enforcement, every one of
+# them named below, and the direction is the whole point: this is the pin moving
+# UP because two things the previous value recorded as open were CLOSED, not a
+# count being widened until it went green.
+#
+#   ELEVEN dimension-3 cells: 15, 16, 17, 18, 19, 20, 21, 23, 29, 34 and 38,
+#   all NOT_MEASURED -> ENFORCED. The 2026-08-22 note above and the 2026-08-31
+#   block below both say in terms what would end that state — "publish a run
+#   carrying the artefact and each one self-invalidates", because
+#   `unanswerable_citations` is re-derived live and never cached. That is what
+#   happened: vibeic/benchmark-data has published run trees again since
+#   `bcf2f94` (measured at `98e83a61`), and each of these eleven now resolves
+#   its declared output against a publisher record instead of citing a root no
+#   corpus could supply. The prediction was written down before the event and
+#   it held; the nine that are still NOT_MEASURED stay named below.
+#
+#   ONE dimension-6 cell: DT2, WAIVED -> ENFORCED. Its waiver was withdrawn on
+#   2026-08-31 when the self-disabling ALL-of condition it was granted for was
+#   resolved -- dimension 6 reached ZERO waivers, and
+#   `test_matrix_d6_skip_discipline.test_d6_waivers_are_evidence_backed_and_
+#   strict` carries the note. A withdrawn waiver is a TIGHTENING.
+#
+# THE +12 IS COVERED, not merely counted, which is the condition the +1 at
+# 482 -> 483 set for a rising pin. DT2/d6 had NO mutation at all the moment its
+# waiver came off — `test_every_enforced_cell_carries_a_named_mutation[stepDT2]`
+# said so by name — and it is closed here by a REPLAY, not by an argument:
+# `--replay D6-UNCONDITIONAL-OPTIONAL --step DT2` -> REDDENED. The eleven
+# dimension-3 cells were already inside `D3-UNDECLARED-ARTEFACT`'s applies_to
+# and census reports `uncovered == []` at 501.
+#
+# 68 x 8 = 544 cells, 43 of them not ENFORCED, 544 - 43 = 501.
+LEDGER_AS_MEASURED: Tuple[int, int, int] = (68, 8, 501)
 
 #: Every cell of the live 63x8 grid that is NOT ENFORCED, with the state its
 #: owning dimension module answers. The COMPANION to the count above, and the
@@ -2115,10 +2361,12 @@ LEDGER_CELLS_NOT_ENFORCED: Tuple[Tuple[str, int, str], ...] = (
     # NOT A WAIVER and NOT a closure: they self-invalidate the moment the record
     # is re-pointed or such a run is published, because
     # `unanswerable_citations` is re-derived live.
-    ("15", 3, "NOT_MEASURED"),
-    ("17", 3, "NOT_MEASURED"),
-    ("19", 3, "NOT_MEASURED"),
-    ("20", 3, "NOT_MEASURED"),
+    # 15/d3, 17/d3, 19/d3 and 20/d3 STOOD HERE and are STRUCK on 2026-09-02:
+    # each resolves its declared output against a publisher record in the
+    # re-published corpus, so `unanswerable_citations` returns () for it and the
+    # cell is ENFORCED again. Struck rather than deleted silently, because the
+    # six arrived as one event and a reader of the next drift needs to see that
+    # four of them left the same way the note above said they would.
     ("30", 3, "NOT_MEASURED"),
     ("32", 3, "NOT_MEASURED"),
     # 2026-08-31 — TWENTY MORE CELLS enter the same fourth state, and the
@@ -2134,17 +2382,15 @@ LEDGER_CELLS_NOT_ENFORCED: Tuple[Tuple[str, int, str], ...] = (
     # self-invalidates. 509 -> 489 is exactly these twenty, each named here
     # because a lowered count with no named cell is the shape the grid gate
     # refuses.
+    # SEVEN OF THE TWENTY ARE STRUCK on 2026-09-02 — 16, 18, 21, 23, 29, 34 and
+    # 38 — for the reason this block itself names: the corpus published run
+    # trees again after `bcf2f94`, each of those records now resolves, and the
+    # state self-invalidated exactly as written. The thirteen still listed are
+    # the ones whose citation no published run answers yet.
     ("0.5ic", 3, "NOT_MEASURED"),
     ("9", 3, "NOT_MEASURED"),
     ("10", 3, "NOT_MEASURED"),
-    ("16", 3, "NOT_MEASURED"),
-    ("18", 3, "NOT_MEASURED"),
-    ("21", 3, "NOT_MEASURED"),
-    ("23", 3, "NOT_MEASURED"),
-    ("29", 3, "NOT_MEASURED"),
     ("31", 3, "NOT_MEASURED"),
-    ("34", 3, "NOT_MEASURED"),
-    ("38", 3, "NOT_MEASURED"),
     ("A1", 3, "NOT_MEASURED"),
     ("A2", 3, "NOT_MEASURED"),
     ("A3", 3, "NOT_MEASURED"),
@@ -2189,7 +2435,13 @@ LEDGER_CELLS_NOT_ENFORCED: Tuple[Tuple[str, int, str], ...] = (
     # ── dimension 5 ───────────────────────────────────────────────────
     ("12", 5, "WAIVED"),
     # ── dimension 6 ───────────────────────────────────────────────────
-    ("DT2", 6, "WAIVED"),
+    # DT2/d6 STOOD HERE and is STRUCK, on 2026-08-31 at the dimension and on
+    # 2026-09-02 here. Its waiver was WITHDRAWN when the self-disabling ALL-of
+    # condition it was granted for was resolved, and dimension 6 now declares no
+    # waiver at all. The cell is ENFORCED on the live analyser with nothing
+    # exempting it, and it is COVERED: `--replay D6-UNCONDITIONAL-OPTIONAL
+    # --step DT2` -> REDDENED (2026-09-02). Dimension 6 contributes no row to
+    # this inventory any more, which is why the heading below is the next one.
     # ── dimension 7 ───────────────────────────────────────────────────
     ("7", 7, "WAIVED"),
     ("23", 7, "WAIVED"),
