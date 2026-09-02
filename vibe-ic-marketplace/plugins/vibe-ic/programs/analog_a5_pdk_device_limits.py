@@ -91,18 +91,120 @@ def fet_limits(text: str) -> Dict[str, Tuple[float, float]]:
     """
     flat = re.sub(r"\\\s*\n", " ", text)          # join tcl continuations
     out: Dict[str, Tuple[float, float]] = {}
+    owner: Optional[str] = None
     for line in flat.splitlines():
+        # WHICH MODEL OWNS THESE NUMBERS, measured on a real PDK file rather
+        # than on a fixture. A magic PDK writes each gencell as
+        #
+        #     proc <ns>::<model>_defaults {} {
+        #         return {w 0.35 l 0.13 ... \
+        #                 ... lmin 0.13 wmin 0.15 ... \
+        #                 compatible {<model> <other model>} ...}
+        #     }
+        #
+        # The proc header carries no continuation, so after the joins above
+        # the model name and its lmin/wmin are on DIFFERENT lines, and the
+        # only model name on the lmin line is the one inside `compatible`.
+        # Keying on that took the FIRST compatible entry every time: on
+        # ihp-sg13g2 it filed the high-voltage block's limits under the
+        # low-voltage model and reported NO limits at all for the two
+        # high-voltage models — 2 of 4 MOS models answered, and the LDO in
+        # the measured design is built entirely from the two that did not.
+        # The declaring proc is the owner, so it is tracked across the lines
+        # its body spans.
+        pm = re.search(r"\bproc\s+\w+::([A-Za-z]\w*)_defaults\b", line)
+        if pm:
+            owner = pm.group(1)
+        elif re.search(r"\bproc\s+\w+::", line):
+            owner = None
         lm = re.search(r"lmin\s+([0-9.]+)\s+wmin\s+([0-9.]+)", line)
         if not lm:
             continue
-        nm = re.search(r"\b([A-Za-z][A-Za-z0-9]*_(?:lv|hv|mv)_[np]mos\w*)\b",
-                       line)
-        if not nm:
+        name = owner
+        if name is None:
+            # a PDK that states the model on the same line as the rule
+            nm = re.search(
+                r"\b([A-Za-z][A-Za-z0-9]*_(?:lv|hv|mv)_[np]mos\w*)\b", line)
+            name = nm.group(1) if nm else None
+        if name is None or not re.fullmatch(
+                r"[A-Za-z][A-Za-z0-9]*_(?:lv|hv|mv)_[np]mos\w*", name):
             continue
         cand = (float(lm.group(1)), float(lm.group(2)))
-        cur = out.get(nm.group(1))
-        out[nm.group(1)] = cand if cur is None else (min(cur[0], cand[0]),
-                                                     min(cur[1], cand[1]))
+        cur = out.get(name)
+        out[name] = cand if cur is None else (min(cur[0], cand[0]),
+                                              min(cur[1], cand[1]))
+    return out
+
+
+# ── every gencell, not only the MOS ones ──────────────────────────────
+# `fet_limits` above answers for the MOS models, which is what the tap
+# clearance needed. A LAYOUT EMITTER needs more: it draws resistors and
+# capacitors too, and before it calls a gencell it has to know which
+# PARAMETERS that gencell accepts — passing `m` to a cell that has no `m`
+# is an error, and passing `guard` to one that has no guard ring is another.
+#
+# The PDK states all of it in one place: each gencell's `_defaults` proc.
+# Reading it here keeps ONE derivation of "what the PDK permits" in the
+# tree; a caller that re-parsed the same file would be the very defect this
+# program exists to remove.
+_DEFAULTS_RE = re.compile(
+    r"proc\s+([A-Za-z_]\w*)::([A-Za-z_]\w*)_defaults\s*\{\s*\}\s*\{"
+    r"(.*?)\n\}", re.S)
+
+
+def _brace_tokens(body: str) -> list:
+    """Tokenise a Tcl list, keeping each `{...}` group as ONE token."""
+    out, i, n = [], 0, len(body)
+    while i < n:
+        ch = body[i]
+        if ch.isspace() or ch == "\\":
+            i += 1
+            continue
+        if ch == "{":
+            depth, j = 1, i + 1
+            while j < n and depth:
+                depth += {"{": 1, "}": -1}.get(body[j], 0)
+                j += 1
+            out.append(body[i:j])
+            i = j
+            continue
+        j = i
+        while j < n and not body[j].isspace() and body[j] != "\\":
+            j += 1
+        out.append(body[i:j])
+        i = j
+    return out
+
+
+def gencell_defaults(text: str, source: str = "") -> Dict[str, dict]:
+    """{model: {namespace, params, lmin, wmin, class, source}} for every
+    gencell the PDK file defines — MOS, resistor, capacitor alike.
+
+    `params` is the set of parameter NAMES the gencell declares, which is
+    what a caller must respect when it builds the `magic::gencell` command.
+    `lmin`/`wmin` are the same PDK-stated minima `fet_limits` reads, and
+    `class` is the PDK's OWN device classification (mosfet / resistor /
+    capacitor), so a caller never has to infer a device class from a name.
+    """
+    out: Dict[str, dict] = {}
+    for m in _DEFAULTS_RE.finditer(text):
+        ns, model, body = m.group(1), m.group(2), m.group(3)
+        body = body[body.find("return") + 6:] if "return" in body else body
+        toks = _brace_tokens(body)
+        if toks and toks[0].startswith("{"):
+            toks = _brace_tokens(toks[0][1:-1])
+        pairs = {}
+        for i in range(0, len(toks) - 1, 2):
+            pairs[toks[i]] = toks[i + 1]
+        rec = {"namespace": ns, "source": source,
+               "params": sorted(pairs.keys()),
+               "class": pairs.get("class")}
+        for k in ("lmin", "wmin"):
+            try:
+                rec[k] = float(pairs[k])
+            except (KeyError, ValueError):
+                rec[k] = None
+        out[model] = rec
     return out
 
 
@@ -122,6 +224,91 @@ def m1_space_um(text: str) -> Optional[float]:
     # the deck's units are calibrated by the width rule: magic PDKs state
     # these in nm, which the width rule's own magnitude confirms.
     return int(sp.group(1)) / 1000.0
+
+
+# ── the rest of what the deck states, for a caller that DRAWS ─────────
+# `m1_space_um` above answers the one question the tap clearance needed. A
+# layout EMITTER needs more of the same deck, and needs it PER LAYER:
+#
+#   MEASURED (ihp-sg13g2, this emitter's first output). Using the Metal1
+#   spacing rule as the floor for every metal produced 594 Metal3 spacing
+#   errors and 399 Metal2 spacing errors, because M2.b/M3.b are 0.21 um and
+#   M1.b is 0.18. Choosing a via pad without reading the surround rules
+#   produced another 2746 "metal overlap of via < 0.045um" errors, and
+#   ignoring the minimum-area rule produced 117 more.
+#
+# Every one of those numbers is stated in the deck, in four rule forms that
+# a magic DRC deck writes the same way whatever the PDK:
+#
+#   width    <layers> N           "... (<TAG>)"
+#   spacing  <l> <l>  N touching_ok "... (<TAG>)"
+#   area     <layers> A W         "... (<TAG>)"
+#   surround <cut>/<metal> <layers> N <kind> "... (<TAG>)"
+#
+# The layer INDEX is read from the deck's own layer tokens (`allm2`, `v1/m1`),
+# so no metal is named here.
+_RULE_WIDTH = re.compile(r"^\s*width\s+(\S+)\s+(\d+)\s", re.M)
+_RULE_SPACING = re.compile(r"^\s*spacing\s+(\S+)\s+(\S+)\s+(\d+)\s", re.M)
+_RULE_AREA = re.compile(r"^\s*area\s+(\S+)\s+(\d+)\s+(\d+)\s", re.M)
+_RULE_SURROUND = re.compile(
+    r"^\s*surround\s+v(\d+)/m(\d+)\s+(\S+)\s+(\d+)\s", re.M)
+_METAL_TOK = re.compile(r"(?:^|[,*])(?:all|obs|seal)?m(\d+)\b")
+_VIA_TOK = re.compile(r"^v(\d+)$")
+
+
+def _metal_index(token: str) -> Optional[int]:
+    """The metal level a deck layer token names, or None if it names more
+    than one — a rule that spans several metals binds none of them here."""
+    hits = {int(m.group(1)) for m in _METAL_TOK.finditer(token)}
+    return hits.pop() if len(hits) == 1 else None
+
+
+def deck_rules(text: str) -> Dict[str, Dict]:
+    """What the DRC deck states, per layer, in MICRONS.
+
+        {"metal_space_um": {n: um}, "metal_width_um": {n: um},
+         "metal_area_um2": {n: um2},
+         "via_width_um":   {n: um},  "via_space_um": {n: um},
+         "via_surround_um": {(via, metal): um}}
+
+    Deck lengths are in the deck's own integer units, which the Metal1 rules
+    calibrate as nanometres; areas are those units squared. Nothing here is
+    defaulted: a rule the deck does not state is simply absent, and a caller
+    that needs it must say so rather than invent it."""
+    out: Dict[str, Dict] = {"metal_space_um": {}, "metal_width_um": {},
+                            "metal_area_um2": {}, "via_width_um": {},
+                            "via_space_um": {}, "via_surround_um": {}}
+    for tok, val in _RULE_WIDTH.findall(text):
+        vm = re.match(r"^v(\d+)/m\d+$", tok)
+        if vm:
+            out["via_width_um"][int(vm.group(1))] = int(val) / 1000.0
+            continue
+        idx = _metal_index(tok)
+        if idx is not None:
+            cur = out["metal_width_um"].get(idx)
+            out["metal_width_um"][idx] = (int(val) / 1000.0 if cur is None
+                                          else max(cur, int(val) / 1000.0))
+    for t1, t2, val in _RULE_SPACING.findall(text):
+        v1, v2 = _VIA_TOK.match(t1), _VIA_TOK.match(t2)
+        if v1 and v2 and v1.group(1) == v2.group(1):
+            k = int(v1.group(1))
+            out["via_space_um"][k] = max(out["via_space_um"].get(k, 0.0),
+                                         int(val) / 1000.0)
+            continue
+        i1, i2 = _metal_index(t1), _metal_index(t2)
+        if i1 is not None and i1 == i2:
+            out["metal_space_um"][i1] = max(
+                out["metal_space_um"].get(i1, 0.0), int(val) / 1000.0)
+    for tok, area, _w in _RULE_AREA.findall(text):
+        idx = _metal_index(tok)
+        if idx is not None:
+            out["metal_area_um2"][idx] = max(
+                out["metal_area_um2"].get(idx, 0.0), int(area) / 1e6)
+    for via, met, _tgt, val in _RULE_SURROUND.findall(text):
+        key = (int(via), int(met))
+        out["via_surround_um"][key] = max(out["via_surround_um"].get(key, 0.0),
+                                          int(val) / 1000.0)
+    return out
 
 
 def main() -> int:

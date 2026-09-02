@@ -263,6 +263,31 @@ def _pv_verdict(native, kind):
     return d.get("verdict") if isinstance(d, dict) else "n/a"
 
 
+def _a5_emit_reason(cp) -> str:
+    """What `analog_a5_layout_emit` said, preferring its own words.
+
+    The producer reports ENV_UNAVAILABLE with the tool NAMED — magic, the
+    container, or the PDK file it could not read. That name is the whole
+    value of the message to whoever reads the run record, so it is carried
+    through verbatim rather than flattened into "artefact missing"."""
+    blob = (cp.stdout or "") + (cp.stderr or "")
+    try:
+        doc = json.loads(cp.stdout or "")
+    except (ValueError, TypeError):
+        doc = None
+    if isinstance(doc, dict):
+        if doc.get("reason"):
+            return str(doc["reason"])
+        for rep in (doc.get("blocks") or {}).values():
+            if isinstance(rep, dict) and rep.get("reason"):
+                return str(rep["reason"])
+    for line in reversed(blob.strip().splitlines()):
+        if line.strip():
+            return line.strip()[:400]
+    return ("analog_a5_layout_emit produced no layout and said nothing; "
+            "invoke skill `analog-layout`")
+
+
 def _emit_deterministic_stub(project: Path, bname: str,
                               step_name: str) -> List[Path]:
     """Emit minimal-substance artefacts for the given (block, step)
@@ -353,16 +378,19 @@ def _emit_deterministic_stub(project: Path, bname: str,
                       "status=FAIL. Replace with real PVT sweep via "
                       "analog_real_corner_sweep.py or ams-sim skill."),
         })
-    elif step_name == "A5_layout":
-        # A5 needs layout.mag (≥200 bytes).
-        _wt(bdir / "layout.mag", "#",
-            (f"# {bname} — magic layout (stub)\n"
-              f"magic\n"
-              f"tech generic\n"
-              f"timestamp 0\n"
-              f"<< end >>\n"
-              f"# deterministic-stub padding "
-              + "x" * 400 + "\n"))
+    # A5_layout HAS NO STUB, deliberately, since v1.16.6.
+    #
+    # It used to write `"x" * 400` into `layout.mag` so the A5 gate would find
+    # something over its 200-byte floor. That was the ONLY thing standing
+    # where A5's producer should be, and it is why every run that needed a
+    # real analog layout authored a generator of its own — the one measured on
+    # u_hawaii_adc round 20 refused a legal `w=1.0u l=0.5u` device the PDK
+    # permits. `analog_a5_layout_emit` now DRAWS the block from its A3
+    # netlist and the PDK's own gencells (see the A5 branch in
+    # `step_for_block`). When Magic or the PDK cannot be reached that producer
+    # reports ENV_UNAVAILABLE naming the tool and writes nothing, and this
+    # step lands as WAIVED — a named absence, which a fabricated layout.mag
+    # never was.
     elif step_name == "A6_block_pv":
         # A6 per-block PV requires REAL DRC + LVS evidence. The
         # hardened gate (analog_a6_block_pv_check.py) demands an
@@ -1015,6 +1043,55 @@ def step_for_block(project: Path, block: Dict[str, Any], step_name: str,
             # bypass, the runner ALWAYS fell back to a fabricated
             # `simulator_run:true / status:PASS` stub even when ngspice
             # was available — the P0 anti-evidence bug.
+            # A5 IS A PRODUCER STEP, and until v1.16.6 the plugin had no
+            # producer for it: a CHECKER, a matching RECORD, and a stub. The
+            # emitter draws the block from its A3 netlist with the PDK's own
+            # gencells, refuses a sub-minimum geometry BY NAME, records every
+            # clearance shortfall it drew through, and never grades — A6's
+            # deck does that. Same shape as A4's real-sweep fall-through: the
+            # gate below still owns the verdict, on the artefact that is
+            # actually on disk.
+            if step_name == "A5_layout":
+                emit_prog = PROGRAMS_DIR / "analog_a5_layout_emit.py"
+                if emit_prog.is_file():
+                    em_cmd = [sys.executable, str(emit_prog), str(project),
+                              "--block", bname,
+                              "--container",
+                              (getattr(args, "container", None)
+                               or os.environ.get("VIBEIC_ANALOG_CONTAINER",
+                                                 "vibeic-eda"))]
+                    em_cp = _pr.run(em_cmd, capture_output=True, text=True)
+                    lay = (project / "phase3" / "analog" / bname
+                           / "layout.mag")
+                    if lay.is_file():
+                        cp_real = _pr.run(cmd, capture_output=True, text=True)
+                        tail = (em_cp.stdout.strip().splitlines()[-1]
+                                if em_cp.stdout else "layout emitted")
+                        if cp_real.returncode == 0:
+                            return StepResult(
+                                step_name, bname, "PASS", time.time() - t0,
+                                f"analog_a5_layout_emit drew the layout; "
+                                f"A5 gate re-ran PASS ({tail})",
+                                extras={"producer": emit_prog.name,
+                                        "producer_rc": em_cp.returncode,
+                                        "extraction_strategy":
+                                            "pdk_gencell_layout",
+                                        "low_confidence": False})
+                        return StepResult(
+                            step_name, bname, "FAIL", time.time() - t0,
+                            (cp_real.stdout.strip().splitlines()[-1]
+                             if cp_real.stdout else tail))
+                    # NOTHING was written, which is the honest outcome when
+                    # the tool or the PDK is absent. Report WHY, naming the
+                    # tool, instead of falling through to an anonymous
+                    # deferral — and never write a layout.mag to cover it.
+                    why = _a5_emit_reason(em_cp)
+                    return StepResult(
+                        step_name, bname, "WAIVED", time.time() - t0, why,
+                        extras={"producer": emit_prog.name,
+                                "producer_rc": em_cp.returncode,
+                                "suggested_skill": skill})
+
             if step_name == "A4_corner_sweep":
                 real_prog = PROGRAMS_DIR / "analog_real_corner_sweep.py"
                 if real_prog.is_file():
