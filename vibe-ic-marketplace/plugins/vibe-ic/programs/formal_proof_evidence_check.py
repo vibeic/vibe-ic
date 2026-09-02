@@ -13,7 +13,22 @@ is a CLAIM; this gate verifies the chain that substantiates it:
   (b) a SymbiYosys log exists (sby/smtbmc tool signature) whose status
       is PASS;
   (c) results.json's `evidence` pointer (when path-shaped, per the
-      #433 convention) dereferences to an existing non-empty file.
+      #433 convention) dereferences to an existing non-empty file;
+  (d) #1974 — a COMPLETED claim also states what it claims OVER: a
+      positive `property_denominator` covered by `authored_property_count`,
+      a non-empty `bounded_vs_unbounded_scope`, `elaborated_sby` agreeing
+      with `sby`, `proof_transcript` agreeing with `evidence`, and a
+      dereferenceable receipt whenever `expert_fallback_required`. Proof
+      evidence without a denominator is a claim about a subset nobody
+      stated, so (d) decides the VERDICT exactly as (a)-(c) do.
+
+WHAT DOES NOT DECIDE THE VERDICT: a dangling reference in a `.sby` the
+manifest never cited. #417 reports it (`SBY_REFS_DANGLING`, tagged
+`non-verdict`) while `sby_ok` stays set by the chain results.json does
+cite — failing the cell for a sibling artefact its own manifest never
+claimed is what that quantifier is deliberately NOT doing. Read a FAIL on
+a cell carrying `SBY_REFS_DANGLING` as coming from (a)-(d), never from the
+dangling sibling.
 
 Verdicts / exit codes (chip-AGNOSTIC — structural artifacts only):
   0 = all_proved:true with a complete evidence chain (PASS)

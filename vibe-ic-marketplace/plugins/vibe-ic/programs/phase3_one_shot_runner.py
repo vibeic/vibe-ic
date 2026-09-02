@@ -25870,7 +25870,7 @@ def _decap_route_short_guard(project: Path, top: str,
 # ---------------------------------------------------------------------------
 # Step 3: KLayout DEF → GDS
 # ---------------------------------------------------------------------------
-_GDS_STREAMOUT_PY = """
+_GDS_STREAMOUT_PY = r"""
 import pya, os, sys
 top = os.environ['TOP']
 def_path = os.environ['DEF']
@@ -25883,7 +25883,7 @@ def _lef_macro_origins_text(_t):
     # {macro: (ox, oy)} for every MACRO stating a NON-ZERO LEF ORIGIN.
     import re as _re
     _o = {}
-    for _mm in _re.finditer(r"^\s*MACRO\s+(\S+)(.*?)^\s*END\s+\\1\s*$",
+    for _mm in _re.finditer(r"^\s*MACRO\s+(\S+)(.*?)^\s*END\s+\1\s*$",
                             _t or "", _re.S | _re.M):
         _om = _re.search(r"^\s*ORIGIN\s+(-?[0-9.]+)\s+(-?[0-9.]+)\s*;",
                          _mm.group(2), _re.M)

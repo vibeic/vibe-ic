@@ -39,13 +39,39 @@ import formal_proof_evidence_check as F  # noqa: E402
 _LOG = "SBY [x] engine_0: smtbmc\nSBY [x] DONE (PASS, rc=0)\n"
 
 
-def _cell(tmp_path: Path, sbys: dict) -> Path:
-    """A minimal cell whose proof chain is intact except for `sbys`."""
+def _cell(tmp_path: Path, sbys: dict, cites: str | None = None) -> Path:
+    """A minimal cell whose proof chain is intact except for `sbys`.
+
+    #1974 put a Step-5 COMPLETION contract on top of the evidence chain: a
+    completed `all_proved` row must also state its property denominator, cite
+    its bounded/unbounded scope, and name the elaborated `.sby` and the proof
+    transcript. That landing migrated six of its sibling fixture files to the
+    completed shape and did not migrate this one, so every PASS assertion in
+    this file began reading FAIL for a reason with nothing to do with a
+    dangling `.sby` — a cell holding ONE entirely intact `.sby` and no dangling
+    reference at all failed identically, on PROPERTY_DENOMINATOR_MISSING and
+    PROOF_SCOPE_MISSING. The manifest below is #1974's own completed shape,
+    copied from the siblings it did migrate. Nothing about the dangling-`.sby`
+    contract under test moves: the verdict quantifier and every assertion in
+    this file are exactly as #417 wrote them.
+    """
     d = tmp_path / "phase2" / "stage1" / "formal"
     d.mkdir(parents=True)
     (d / "dut.v").write_text("module dut; endmodule\n")
-    (d / "results.json").write_text(json.dumps({"all_proved": True}))
     (d / "run.sby.log").write_text(_LOG)
+    if cites is None:
+        # The manifest cites the chain the verdict is meant to rest on.
+        intact = [n for n, body in sbys.items() if body == _INTACT]
+        cites = intact[0] if intact else next(iter(sbys))
+    _sby_rel = f"phase2/stage1/formal/{cites}"
+    _log_rel = "phase2/stage1/formal/run.sby.log"
+    (d / "results.json").write_text(json.dumps({
+        "all_proved": True,
+        "property_denominator": 1, "authored_property_count": 1,
+        "unresolved_obligations": [],
+        "bounded_vs_unbounded_scope": ["unbounded prove"],
+        "sby": _sby_rel, "elaborated_sby": _sby_rel,
+        "evidence": _log_rel, "proof_transcript": _log_rel}))
     for name, body in sbys.items():
         p = d / name
         p.parent.mkdir(parents=True, exist_ok=True)
@@ -103,6 +129,12 @@ def test_no_intact_chain_still_reports_the_original_finding_only(tmp_path):
     assert rep["verdict"] == "FAIL"
     assert any(f.startswith("SBY_CHAIN_BROKEN") for f in rep["findings"])
     assert _dangling(rep) == []
+    # The negative arm has to fail for THIS file's reason. While the fixture
+    # predated #1974 every cell here failed on the Step-5 completion contract,
+    # so this test went green without the broken chain being consulted at all —
+    # a negative control that cannot distinguish its own subject proves
+    # nothing. Red before the fixture was migrated, green after.
+    assert not any("#1974" in f for f in rep["findings"]), rep["findings"]
 
 
 def test_a_nested_broken_sby_is_reachable_at_all(tmp_path):
