@@ -282,8 +282,11 @@ import shutil
 import subprocess
 
 import _published_tree
+import _release_docs_contract
+import _submission_template
+import _tapeout_declaration
 import sys
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Dict, List, Optional, Tuple
 
 # The layout artefacts. These used to be dropped from every copied subtree by
@@ -343,6 +346,33 @@ _COPY_SUBTREES = (
     # Absent on a digital cell, where `_copy_tree` skips a missing source, so
     # the staged output of every digital cell is byte-identical to before.
     Path("phase3") / "analog",
+    # THE RELEASE DOCUMENTATION — step 37.5ip's / 37.5ic's declared product
+    # (#2017). This list was derived from cells published before either
+    # documentation arm had a producer, so `phase3/stage4` contributed nothing
+    # but the GDS the manifest is about, and the document set landed in no
+    # copied subtree at all.
+    #
+    # MEASURED (spm x gf180mcuD v1.14.88, the cell on benchmark-data main):
+    # the run produced the full 37.5ip set under
+    # `phase3/stage4/documentation/ip/spm/` -- IP_DATASHEET,
+    # IP_INTEGRATION_GUIDE, AN001_REFERENCE_INTEGRATION, RELEASE_NOTES, ERRATA,
+    # DELIVERABLES_MANIFEST and the manifest YAML, 7 files totalling 17,417
+    # bytes -- with step 37.5ip at `pass`, and the published cell carried NONE
+    # of them. `STEP_ROUTING.txt` recorded the one file that step DECLARES as
+    # `OUT_OF_PUBLISHED_SCOPE`: a true statement about a scope that should
+    # never have excluded it. The documentation IS the step's output, and it is
+    # the artefact a downstream integrator actually reads.
+    #
+    # BOTH ARMS, by the ONE directory the contract declares (`ip/` and `ic/`
+    # are its two subdirectories). `_copy_tree` skips a missing source, so a
+    # run whose 37.5ic never ran -- no `ic/` tree -- stages nothing here and
+    # its cell is byte-identical to before.
+    #
+    # SCOPE IS NOT THE GUARANTEE. `release_docs_invariant` below is: a scope
+    # entry makes the documents eligible, and the day a predicate or a path
+    # spelling changes they stop arriving with nothing noticing, which is
+    # precisely how #2017 happened.
+    Path(_release_docs_contract.DOC_ROOT),
     "reports",
 )
 _COPY_FILES = ("provenance.jsonl",)
@@ -1791,6 +1821,348 @@ def _write_step_routing(dest: Path, steps: List[dict],
 
 
 # --------------------------------------------------------------------------
+# The release documentation is REQUIRED, not merely in scope (#2017).
+# --------------------------------------------------------------------------
+
+#: The flow's own spelling of the two documentation terminals, one per arm
+#: `_release_docs_contract` declares. FORMATTED from the arm name rather than
+#: listed, so an arm added to the contract cannot arrive here unenforced —
+#: which is the exact shape of the defect this invariant closes one layer up.
+_RELEASE_DOCS_STEP_ID = "37.5{arm}"
+
+#: The two DESIGN KINDS, and the documentation arms a published cell of each
+#: kind must carry (owner ruling, 2026-09-02 on #2017).
+#:
+#: THE KIND IS THE DELIVERY ROUTE, NEVER THE DESIGN NAME. It is read from the
+#: run's own `tapeout_declaration.json` + the operator slot files, through
+#: `_tapeout_declaration.route_of` — the SAME function `tapeout_declaration_gen`
+#: routes with, so the publisher and step 0.5ic cannot disagree about what a
+#: run is. A name-derived kind would be a chip literal in a chip-AGNOSTIC
+#: program and would be wrong the first time a die is called `*_ip`.
+#:
+#: WHY AN IC OWES BOTH SETS. A die that will be fabricated is also a part
+#: somebody integrates, and the owner's ruling is that its cell carries the
+#: die's own sign-off document set AND the IP-style document set. An IP owes
+#: the IP set only: it has no die, no pad ring and no tape-out precheck, and
+#: demanding a die's documents of it would be demanding evidence of something
+#: it is not.
+_KIND_IC = "IC"
+_KIND_IP = "IP"
+_KIND_UNDECLARED = "UNDECLARED"
+_KIND_ARMS: Dict[str, Tuple[str, ...]] = {
+    _KIND_IC: ("ic", "ip"),
+    _KIND_IP: ("ip",),
+}
+
+#: The arms whose STEP-DECLARED outputs — not merely whose documents — a cell
+#: must carry, exactly as the owner's ruling names them: "the 37.5ic set (9
+#: outputs) AND the 37.5ip set (7 docs)".
+#:
+#: THE ASYMMETRY IS THE RULING, NOT A CHOICE MADE HERE, and the second half is
+#: stated so it is not read as an oversight. 37.5ip's eleven declared outputs
+#: include the four hardmacro views under `phase3/stage4/hardmacro/`, which NO
+#: copy subtree reaches today — the same class of omission as #2017, one
+#: artefact family over, and one nobody has ruled on. Enforcing them here
+#: would refuse every IP cell for a second, unruled defect instead of closing
+#: this one. The gap belongs to whoever rules on the hardmacro views; it is
+#: reported in the summary either way (`declared_outputs_enforced` is empty
+#: for an arm this set does not name).
+_KIND_DECLARED_OUTPUT_ARMS: Tuple[str, ...] = ("ic",)
+
+
+def design_kind(run_dir: Path) -> Tuple[str, str]:
+    """(the kind this run declared, the sentence that says how it was decided).
+
+    READ FROM THE RUN, never re-derived and never guessed from a name. Step
+    0.5ic writes `input/submission_template/tapeout_declaration.json` on every
+    route, and the operator's slot files are the one answer that outranks it —
+    `_tapeout_declaration.route_of` encodes that ordering and is called here
+    rather than reimplemented.
+
+    An absent, unreadable or UNDECLARED declaration returns `_KIND_UNDECLARED`
+    with the reason. The caller does NOT refuse on it and does not silently
+    pass either: a run that never said what it is cannot be told which document
+    set it owes, and inventing one would be the publisher deciding a design
+    question. It is disclosed on stderr and in the summary, which is the
+    difference between an unenforced invariant a reader can see and one nobody
+    knows about.
+    """
+    decl_path = run_dir / _tapeout_declaration.DECLARATION_REL
+    if not decl_path.is_file():
+        return _KIND_UNDECLARED, (
+            f"the run carries no {_tapeout_declaration.DECLARATION_REL}; step "
+            f"0.5ic writes one on every route, so this run predates the "
+            f"declaration or was driven in a shape that skipped it")
+    doc, err = _tapeout_declaration.load(decl_path)
+    if doc is None:
+        return _KIND_UNDECLARED, f"{err}"
+    slots_dir = run_dir / _submission_template.SLOTS_DIR_REL
+    has_slots = bool(
+        sorted(slots_dir.glob("*.yaml")) + sorted(slots_dir.glob("*.yml")))
+    route = _tapeout_declaration.route_of(doc, has_slots)
+    if route == _tapeout_declaration.ROUTE_IP:
+        return _KIND_IP, (
+            f"{_tapeout_declaration.DECLARATION_REL} declares deliverable "
+            f"{_tapeout_declaration.DELIVERABLE_HARDMACRO} and no operator "
+            f"slot file was ingested — route "
+            f"{_tapeout_declaration.ROUTE_IP}")
+    if route in (_tapeout_declaration.ROUTE_SHUTTLE,
+                 _tapeout_declaration.ROUTE_SELF_TAPEOUT):
+        return _KIND_IC, (
+            f"route {route} — "
+            + ("an operator slot file was ingested"
+               if has_slots else
+               f"{_tapeout_declaration.DECLARATION_REL} declares deliverable "
+               f"{_tapeout_declaration.DELIVERABLE_DIE}"))
+    return _KIND_UNDECLARED, (
+        f"{_tapeout_declaration.DECLARATION_REL} names no deliverable, so "
+        f"`route_of` selected no terminal")
+
+
+def _flow_def() -> Path:
+    """`flow/phase1_phase2_phase3.yaml` beside this plugin's programs."""
+    return Path(__file__).resolve().parent.parent / "flow" / \
+        "phase1_phase2_phase3.yaml"
+
+
+def step_required_outputs(step_id: str) -> List[str]:
+    """The output patterns ONE flow step declares, from the flow definition.
+
+    READ FROM THE YAML, never copied into this file. The canonical 44-step flow
+    is the single source of truth this repo enforces with
+    `flow_compliance_check`; a second, hand-maintained copy of step 37.5ic's
+    nine `required_outputs` living in the publisher is the v1.13.19 shape
+    (a literal that lagged the flow six times) waiting to happen.
+
+    Raises `Refuse` when the flow cannot be read or the step is not in it: a
+    publisher that cannot tell what a step owes cannot certify that the cell
+    carries it, and answering "nothing" there would turn a broken read into a
+    silent pass — the one outcome this invariant exists to prevent.
+    """
+    try:
+        import yaml
+    except ImportError:                            # pragma: no cover
+        raise Refuse(
+            "PyYAML is required to read the flow definition, and without it "
+            "this program cannot say which outputs a documentation terminal "
+            "declares. Refusing rather than publishing a cell whose "
+            "completeness was never checked (pip install pyyaml).")
+    fd = _flow_def()
+    try:
+        flow = yaml.safe_load(fd.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        raise Refuse(f"cannot read the flow definition at {fd}: {exc}")
+    for step in ((flow or {}).get("steps") or []):
+        if isinstance(step, dict) and str(step.get("id")) == step_id:
+            return [str(o) for o in (step.get("required_outputs") or [])]
+    raise Refuse(
+        f"step {step_id} is not declared in {fd}. This program's documentation "
+        f"invariant is keyed on that step; a flow that no longer carries it "
+        f"has changed a contract this publisher enforces, and the two must be "
+        f"reconciled deliberately rather than by publishing.")
+
+
+def _declared_output_satisfied(pattern: str, cell_rels: set) -> bool:
+    """Does the cell carry an artefact matching ONE `required_outputs` entry?
+
+    `PurePosixPath.match`, not `fnmatch`: a flow output pattern is a PATH
+    pattern, and `fnmatch`'s `*` crosses `/`, so
+    `reports/phase3/docs/SIGNOFF_*.html` would be discharged by a file in a
+    subdirectory the step never wrote to. The flow's own evaluator globs the
+    filesystem, where `*` does not cross a separator either; this asks the
+    same question of the paths the cell WILL carry, so a dry run answers it.
+
+    The `" OR "` spelling is honoured — the flow uses it for one artefact with
+    two accepted names, and any alternative satisfies the entry, which is the
+    rule `flow_compliance_check._resolve_required_output` states.
+    """
+    rels = [PurePosixPath(r) for r in cell_rels]
+    for alt in (a.strip() for a in str(pattern).split(" OR ")):
+        if alt and any(r.match(alt) for r in rels):
+            return True
+    return False
+
+
+def _arm_release_files(run_dir: Path, arm: str) -> Dict[str, List[str]]:
+    """{release: sorted run-relative paths} the RUN carries for one arm.
+
+    The population is the one `_copy_tree` would take: build residue and an
+    over-ceiling layout artefact are NOT in it, so this invariant can never
+    refuse a cell for a file the publisher was RIGHT to leave behind. Every
+    other regular file under the release directory is in it, which is what
+    makes "the run had it and the cell does not" the only way to fail.
+    """
+    root = run_dir / _release_docs_contract.doc_dir(arm)
+    found: Dict[str, List[str]] = {}
+    if not root.is_dir():
+        return found
+    for release in sorted(d for d in root.iterdir() if d.is_dir()):
+        rels = []
+        for f in sorted(release.rglob("*")):
+            if not f.is_file() or is_build_residue(f) or _excluded(f):
+                continue
+            rels.append(f.relative_to(run_dir).as_posix())
+        found[release.name] = rels
+    return found
+
+
+def _required_documents(arm: str) -> List[str]:
+    """The filenames one arm's document set may not ship without.
+
+    From `_release_docs_contract` — the module both the producer
+    (`ip_release_docs_gen` / `ic_release_docs_gen`) and the gate that judged
+    this run (`release_docs_check`) read. Listing them here instead would make
+    three definitions of one contract, and the direction that drift goes is
+    the one nobody sees.
+
+    The manifest is in the set because it is what BINDS the documents to the
+    artefacts they describe; a document set without it is a folder of prose.
+    """
+    return sorted({spec.filename for spec in _release_docs_contract.arm_docs(arm)
+                   if spec.requirement == "required"}
+                  | {_release_docs_contract.MANIFEST_NAME})
+
+
+def release_docs_invariant(run_dir: Path,
+                           cell_rels: set) -> Tuple[Dict[str, object], List[str]]:
+    """(what each documentation arm did, every way this cell breaks the rule).
+
+    THE RULE IS PER DESIGN KIND (owner ruling, 2026-09-02 on #2017):
+
+        IC — a die / tape-out route is declared: the cell carries BOTH step
+             37.5ic's declared outputs AND step 37.5ip's document set.
+        IP — no die route: step 37.5ip's document set only.
+
+    and the kind is read from the run's delivery route, NEVER from the design
+    name (`design_kind`).
+
+    WHY AN INVARIANT AND NOT A SCOPE ENTRY. Adding
+    `phase3/stage4/documentation` to `_COPY_SUBTREES` makes the documents
+    ELIGIBLE; it does not make their arrival CHECKED. The defect #2017 records
+    is not that somebody chose to exclude the document set — it is that a cell
+    shipped as a PASS carrying none of it and nothing in the publish path had
+    an opinion. A scope entry has the same failure mode one edit later: the day
+    a copy predicate, a residue rule or a path spelling changes, the documents
+    stop arriving and the cell is published exactly as before.
+
+    THE TWO ARMS ARE MEASURED AGAINST DIFFERENT SOURCES, AND THAT IS THE
+    OWNER'S RULING RATHER THAN AN ASYMMETRY THIS FUNCTION CHOSE. 37.5ic is
+    required as its NINE declared `required_outputs`, read from the flow
+    definition — five sign-off records and four documents, all of which a
+    converged chip run already writes into copied subtrees. 37.5ip is required
+    as its DOCUMENT SET: its other declared outputs are the four hardmacro
+    views under `phase3/stage4/hardmacro/`, which no copy subtree reaches
+    today, and demanding them here would refuse every IP cell for a second,
+    unruled defect instead of closing this one. That gap is stated, not
+    absorbed: it belongs to whoever rules on the hardmacro views.
+
+    ON TOP OF EITHER, THE NO-DROP RULE over the arm's documentation tree:
+    every file the RUN carries there must be in the cell. This is the #2017
+    defect stated as the one thing that must never be true again, and it is
+    deliberately WIDER than any declaration — it covers the `optional`
+    Application Note and the `conditional` programming reference, which no
+    contract can demand but which a run that WROTE them must not lose at
+    publish. Measured on the spm run tree that is 7 files where the declared
+    set alone is 6.
+
+    A KNOWN CONSEQUENCE, STATED RATHER THAN DISCOVERED LATER. The flow's own
+    conditions make 37.5ic and 37.5ip MUTUALLY EXCLUSIVE (`slots/*.yaml` or
+    `SELF_TAPEOUT.txt` selects the first; `NO_TEMPLATE.txt` selects the
+    second), so an IC-route run as the flow stands today produces no `ip/`
+    documentation tree and CANNOT satisfy the IC clause. This function
+    implements the ruling as given and names the run's own state in the
+    refusal; reconciling the ruling with the flow's routing is a flow change
+    and is not made here.
+
+    Decided against `cell_rels` — the set of paths the cell WILL carry, built
+    by the same walks that stage them — so `--dry-run` and a real publish reach
+    the identical verdict. A dry run that could not refuse would be a rehearsal
+    of a different program.
+    """
+    kind, why = design_kind(run_dir)
+    arms = _KIND_ARMS.get(kind, ())
+    state: Dict[str, object] = {
+        "design_kind": kind,
+        "design_kind_reason": why,
+        "arms_required": list(arms),
+        "enforced": bool(arms),
+        "arms": {},
+    }
+    violations: List[str] = []
+
+    for arm in sorted(_release_docs_contract.ARMS):
+        step_id = _RELEASE_DOCS_STEP_ID.format(arm=arm)
+        releases = _arm_release_files(run_dir, arm)
+        required_docs = _required_documents(arm)
+        declared = (step_required_outputs(step_id)
+                    if arm in arms and arm in _KIND_DECLARED_OUTPUT_ARMS
+                    else [])
+        staged = {rel for rels in releases.values() for rel in rels
+                  if rel in cell_rels}
+        arm_state = {
+            "step_id": step_id,
+            "required_by_this_kind": arm in arms,
+            "documentation_root": _release_docs_contract.doc_dir(arm),
+            "releases": releases,
+            "n_files_in_run": sum(len(r) for r in releases.values()),
+            "n_files_in_cell": len(staged),
+            "required_documents": required_docs,
+            "declared_outputs_enforced": declared,
+        }
+        state["arms"][arm] = arm_state       # type: ignore[index]
+        if arm not in arms:
+            continue
+
+        # (a) the step's own declared outputs, for the arm the owner ruled is
+        #     required as its full output set.
+        unmatched = [pat for pat in declared
+                     if not _declared_output_satisfied(pat, cell_rels)]
+        if unmatched:
+            violations.append(
+                f"a {kind} cell must carry step {step_id}'s "
+                f"{len(declared)} declared output(s) and this one carries "
+                f"nothing matching {len(unmatched)} of them: "
+                + ", ".join(unmatched)
+                + f". ({why}.)")
+
+        # (b) the document set exists at all.
+        if not releases:
+            violations.append(
+                f"a {kind} cell must carry step {step_id}'s document set and "
+                f"the run has NO release directory under "
+                f"{_release_docs_contract.doc_dir(arm)}/. The document set is "
+                f"that step's declared product and is what a downstream "
+                f"integrator reads; a cell published without it states a PASS "
+                f"over a delivery nobody can use. ({why}.)")
+            continue
+
+        for name, rels in sorted(releases.items()):
+            # (c) the contract's floor, IN THE RUN.
+            present = {Path(r).name for r in rels}
+            missing_req = [d for d in required_docs if d not in present]
+            if missing_req:
+                violations.append(
+                    f"release {name!r} ({arm} arm) is missing "
+                    f"{len(missing_req)} document(s) the contract declares "
+                    f"required, IN THE RUN ITSELF: "
+                    + ", ".join(missing_req)
+                    + f". Re-run step {step_id} over this tree; publishing "
+                      f"stages what the run has and cannot write a document "
+                      f"the run never produced.")
+            # (d) NO DROP. The #2017 defect itself.
+            dropped = [r for r in rels if r not in cell_rels]
+            if dropped:
+                violations.append(
+                    f"release {name!r} ({arm} arm): the run carries "
+                    f"{len(dropped)} documentation file(s) this publish does "
+                    f"NOT stage — " + ", ".join(dropped)
+                    + ". This is #2017 exactly: the cell would be published as "
+                      "a PASS while the step's own product stayed in the run "
+                      "directory. Nothing about a published cell may drop it.")
+    return state, violations
+
+
+# --------------------------------------------------------------------------
 # Publish.
 # --------------------------------------------------------------------------
 
@@ -2056,6 +2428,37 @@ def publish(args: argparse.Namespace) -> dict:
     # final tree.
     provenance_note = _prune_provenance(run_dir, dest, dry)
 
+    # THE RELEASE DOCUMENTATION INVARIANT (#2017). BLOCKING, and it runs in
+    # BOTH modes: it is decided against `cell_rels`, the paths the cell will
+    # carry, so `--dry-run` refuses exactly what a real publish refuses. Placed
+    # after every staging decision because the question is about the FINAL
+    # tree, and before the summary so the state it reports is what was judged.
+    docs_state, docs_violations = release_docs_invariant(run_dir, cell_rels)
+    if docs_state["design_kind"] == _KIND_UNDECLARED:
+        # NOT a refusal — and not silence either. A run that never declared a
+        # delivery route cannot be told which document set it owes, and
+        # inventing one would be this publisher deciding a design question. The
+        # cell is published with the invariant recorded as UNENFORCED, which a
+        # reader can see; the alternative is a cell nobody can tell was never
+        # checked.
+        print(f"WARNING: this run declares no delivery route, so the release-"
+              f"documentation invariant (#2017) could NOT be applied to this "
+              f"cell: {docs_state['design_kind_reason']}. Recorded "
+              f"design_kind=UNDECLARED / enforced=false in the summary.",
+              file=sys.stderr)
+    if docs_violations:
+        raise Refuse(
+            f"release documentation INVARIANT (#2017) — a "
+            f"{docs_state['design_kind']} cell is incomplete:\n  - "
+            + "\n  - ".join(docs_violations)
+            + "\nThe documentation is step 37.5ip's / 37.5ic's declared "
+              "product and is what a downstream integrator reads; a published "
+              "PASS cell without it is a claim about a delivery nobody "
+              "received. This publish FAILED (rc 1) — like the other "
+              "post-stage self-checks, any partial tree under the destination "
+              "is NOT a published cell and must not be committed; fix the run "
+              "and publish again with --force.")
+
     summary = {
         "ic": args.ic,
         "pdk": args.pdk,
@@ -2090,6 +2493,10 @@ def publish(args: argparse.Namespace) -> dict:
         # for the reason `excluded_raw_files` is.
         "citation_closure": closure,
         "provenance_pruned": provenance_note,
+        # #2017. Which document set(s) this cell's design KIND owes, and what
+        # the run and the cell carry of them. Reported even when the invariant
+        # could not be enforced, for the reason `excluded_raw_files` is.
+        "release_documentation": docs_state,
         "dry_run": dry,
     }
 

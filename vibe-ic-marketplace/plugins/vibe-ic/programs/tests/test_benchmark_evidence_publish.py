@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -663,3 +664,233 @@ def test_a_closure_staged_document_is_itself_closed_and_recorded_on_a_restage(tm
                  capture_output=True, text=True)
     assert "answers for" not in chk.stdout + chk.stderr, chk.stdout + chk.stderr
     assert chk.returncode == 0, chk.stdout + chk.stderr
+
+
+# --------------------------------------------------------------------------
+# #2017 — the release documentation is REQUIRED, per DESIGN KIND
+#
+# The defect: the spm x gf180mcuD run produced the full 37.5ip document set
+# and the published cell carried NONE of it, every file recorded
+# OUT_OF_PUBLISHED_SCOPE. The owner's ruling makes the set an INVARIANT keyed
+# on the design KIND read from the delivery route — an IC owes 37.5ic's nine
+# declared outputs AND the 37.5ip document set; an IP owes the 37.5ip set.
+# --------------------------------------------------------------------------
+
+sys.path.insert(0, str(PROG.parent))
+import _release_docs_contract as _RDC  # noqa: E402
+import _tapeout_declaration as _TD  # noqa: E402
+
+#: The set the spm run measured, and the shape any IP release takes: the five
+#: contract-required documents, the manifest that binds them to the artefacts,
+#: and the optional Application Note a run that WROTE it must not lose.
+_IP_DOC_SET = ("IP_DATASHEET.md", "IP_INTEGRATION_GUIDE.md", "RELEASE_NOTES.md",
+               "ERRATA.md", "DELIVERABLES_MANIFEST.md",
+               "documentation_manifest.yaml",
+               "AN001_REFERENCE_INTEGRATION.md")
+
+_IC_DOC_SET = ("PRELIMINARY_DATASHEET.md", "RELEASE_NOTES.md", "ERRATA.md",
+               "documentation_manifest.yaml")
+
+
+def _plant_docs(run: Path, arm: str, release: str, names) -> list:
+    """One arm's document set for one release. Returns the run-relative paths."""
+    d = run / _RDC.doc_dir(arm) / release
+    d.mkdir(parents=True, exist_ok=True)
+    rels = []
+    for n in names:
+        (d / n).write_text(f"# {n}\n\nrelease {release}, arm {arm}\n")
+        rels.append(f"{_RDC.doc_dir(arm)}/{release}/{n}")
+    return rels
+
+
+def _declare_route(run: Path, deliverable: str) -> None:
+    """The run's delivery route, written the way step 0.5ic writes it."""
+    doc = _TD.blank_declaration()
+    doc, _ignored = _TD.merge_answers(doc, {"deliverable": deliverable})
+    p = run / _TD.DECLARATION_REL
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(json.dumps(doc, indent=2))
+
+
+def _plant_ic_signoff(run: Path) -> None:
+    """Step 37.5ic's five NON-document declared outputs, where it writes them."""
+    rp = run / "reports" / "phase3"
+    rp.mkdir(parents=True, exist_ok=True)
+    for n in ("tapeout_precheck.json", "general_precheck.json",
+              "shuttle_precheck.json"):
+        (rp / n).write_text("{}")
+    (rp / "docs").mkdir(parents=True, exist_ok=True)
+    (rp / "docs" / "SIGNOFF_widgetmul_openpdkx.html").write_text("<html></html>")
+    (rp / "docs" / "BRIEF_widgetmul_openpdkx.html").write_text("<html></html>")
+
+
+def _ip_run(tmp_path, names=_IP_DOC_SET, release: str = "widgetblock"):
+    run = _make_run(tmp_path)
+    _declare_route(run, _TD.DELIVERABLE_HARDMACRO)
+    rels = _plant_docs(run, "ip", release, names)
+    return run, rels
+
+
+def test_an_ip_run_stages_its_whole_37_5ip_document_set(tmp_path):
+    """THE #2017 PIN. Seven files in the run, seven files in the cell."""
+    run, rels = _ip_run(tmp_path)
+    dest_root = tmp_path / "benchmark-data"
+    r = _run(_base_args(run, dest_root))
+    assert r.returncode == 0, r.stdout + r.stderr
+    cell = dest_root / "ic" / "widgetmul" / "v9.9.9_openpdkx"
+    assert len(rels) == 7
+    for rel in rels:
+        assert (cell / rel).is_file(), f"{rel} was not staged: {r.stdout}"
+
+
+def test_a_dry_run_lists_the_document_set_it_would_stage(tmp_path):
+    """The acceptance shape: --dry-run must NAME the documents, and write none."""
+    run, rels = _ip_run(tmp_path)
+    dest_root = tmp_path / "benchmark-data"
+    out = tmp_path / "s.json"
+    r = _run(_base_args(run, dest_root) + ["--dry-run", "--json", str(out)])
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert not dest_root.exists()
+    summary = json.loads(out.read_text())
+    state = summary["release_documentation"]
+    assert state["design_kind"] == "IP"
+    assert state["arms"]["ip"]["n_files_in_run"] == 7
+    assert state["arms"]["ip"]["n_files_in_cell"] == 7
+
+
+def test_an_ip_cell_missing_one_document_is_REFUSED(tmp_path):
+    """The invariant, not the scope: drop the copy subtree and the publish
+    must FAIL rather than quietly produce the v1.14.88 cell again."""
+    run, rels = _ip_run(tmp_path)
+    dest_root = tmp_path / "benchmark-data"
+    prog = (PROG.parent / "benchmark_evidence_publish.py").read_text()
+    hobbled = tmp_path / "hobbled_publish.py"
+    # The ONE edit that reproduces #2017: the documentation subtree is not
+    # copied. Everything else about the program is unchanged, so a PASS here
+    # would mean the invariant is not the thing holding the line.
+    assert "    Path(_release_docs_contract.DOC_ROOT),\n" in prog
+    hobbled.write_text(prog.replace(
+        "    Path(_release_docs_contract.DOC_ROOT),\n", "", 1))
+    env = dict(os.environ, PYTHONPATH=str(PROG.parent))
+    r = subprocess.run([sys.executable, str(hobbled)] + _base_args(run, dest_root),
+                       capture_output=True, text=True, env=env)
+    assert r.returncode == 1, r.stdout + r.stderr
+    assert "#2017" in (r.stdout + r.stderr)
+    for rel in rels:
+        assert rel in (r.stdout + r.stderr), f"{rel} not named in the refusal"
+
+
+def test_an_ip_run_whose_own_document_set_is_short_is_REFUSED(tmp_path):
+    """A run missing a CONTRACT-required document is refused by name, and the
+    refusal says the run is short rather than blaming the publish."""
+    short = tuple(n for n in _IP_DOC_SET if n != "IP_INTEGRATION_GUIDE.md")
+    run, _rels = _ip_run(tmp_path, names=short)
+    dest_root = tmp_path / "benchmark-data"
+    r = _run(_base_args(run, dest_root))
+    assert r.returncode == 1, r.stdout + r.stderr
+    assert "IP_INTEGRATION_GUIDE.md" in (r.stdout + r.stderr)
+    assert "IN THE RUN ITSELF" in (r.stdout + r.stderr)
+
+
+def test_an_ip_run_with_no_document_set_at_all_is_REFUSED(tmp_path):
+    run = _make_run(tmp_path)
+    _declare_route(run, _TD.DELIVERABLE_HARDMACRO)
+    dest_root = tmp_path / "benchmark-data"
+    r = _run(_base_args(run, dest_root))
+    assert r.returncode == 1, r.stdout + r.stderr
+    assert "NO release directory" in (r.stdout + r.stderr)
+
+
+def test_an_ic_run_owes_BOTH_sets_and_a_complete_one_is_staged(tmp_path):
+    """The IC kind: 37.5ic's nine declared outputs AND the 37.5ip document
+    set, both in the cell."""
+    run = _make_run(tmp_path)
+    _declare_route(run, _TD.DELIVERABLE_DIE)
+    _plant_ic_signoff(run)
+    ic_rels = _plant_docs(run, "ic", "widgetdie", _IC_DOC_SET)
+    ip_rels = _plant_docs(run, "ip", "widgetdie", _IP_DOC_SET)
+    dest_root = tmp_path / "benchmark-data"
+    out = tmp_path / "s.json"
+    r = _run(_base_args(run, dest_root) + ["--json", str(out)])
+    assert r.returncode == 0, r.stdout + r.stderr
+    cell = dest_root / "ic" / "widgetmul" / "v9.9.9_openpdkx"
+    for rel in ic_rels + ip_rels:
+        assert (cell / rel).is_file(), rel
+    state = json.loads(out.read_text())["release_documentation"]
+    assert state["design_kind"] == "IC"
+    assert sorted(state["arms_required"]) == ["ic", "ip"]
+    # The count the owner ruled on, DERIVED from the flow rather than typed.
+    assert len(state["arms"]["ic"]["declared_outputs_enforced"]) == 9
+
+
+def test_an_ic_run_missing_the_ip_document_set_is_REFUSED(tmp_path):
+    run = _make_run(tmp_path)
+    _declare_route(run, _TD.DELIVERABLE_DIE)
+    _plant_ic_signoff(run)
+    _plant_docs(run, "ic", "widgetdie", _IC_DOC_SET)
+    dest_root = tmp_path / "benchmark-data"
+    r = _run(_base_args(run, dest_root))
+    assert r.returncode == 1, r.stdout + r.stderr
+    assert "37.5ip" in (r.stdout + r.stderr)
+
+
+def test_an_ic_run_missing_a_declared_signoff_output_is_REFUSED(tmp_path):
+    """The nine are enforced as OUTPUTS, not just as documents."""
+    run = _make_run(tmp_path)
+    _declare_route(run, _TD.DELIVERABLE_DIE)
+    _plant_ic_signoff(run)
+    (run / "reports" / "phase3" / "shuttle_precheck.json").unlink()
+    _plant_docs(run, "ic", "widgetdie", _IC_DOC_SET)
+    _plant_docs(run, "ip", "widgetdie", _IP_DOC_SET)
+    dest_root = tmp_path / "benchmark-data"
+    r = _run(_base_args(run, dest_root))
+    assert r.returncode == 1, r.stdout + r.stderr
+    assert "shuttle_precheck.json" in (r.stdout + r.stderr)
+
+
+def test_an_ip_run_is_NOT_asked_for_the_ic_set(tmp_path):
+    """The honest half: an IP has no die, and a run with no ic/ tree stages
+    nothing for that arm and is not refused for it."""
+    run, _rels = _ip_run(tmp_path)
+    dest_root = tmp_path / "benchmark-data"
+    out = tmp_path / "s.json"
+    r = _run(_base_args(run, dest_root) + ["--json", str(out)])
+    assert r.returncode == 0, r.stdout + r.stderr
+    state = json.loads(out.read_text())["release_documentation"]
+    assert state["arms"]["ic"]["required_by_this_kind"] is False
+    assert state["arms"]["ic"]["n_files_in_run"] == 0
+    cell = dest_root / "ic" / "widgetmul" / "v9.9.9_openpdkx"
+    assert not (cell / _RDC.doc_dir("ic")).exists()
+
+
+def test_the_kind_comes_from_the_route_not_from_the_design_name(tmp_path):
+    """Same design name, two declarations, two kinds — and no chip literal
+    anywhere in the decision."""
+    import importlib
+    sys.path.insert(0, str(PROG.parent))
+    bep = importlib.import_module("benchmark_evidence_publish")
+    run = _make_run(tmp_path)
+    _declare_route(run, _TD.DELIVERABLE_HARDMACRO)
+    assert bep.design_kind(run)[0] == "IP"
+    _declare_route(run, _TD.DELIVERABLE_DIE)
+    assert bep.design_kind(run)[0] == "IC"
+    # The operator's answer outranks the declaration.
+    slots = run / "input" / "submission_template" / "slots"
+    slots.mkdir(parents=True, exist_ok=True)
+    (slots / "s.yaml").write_text("SLOT: a\n")
+    _declare_route(run, _TD.DELIVERABLE_HARDMACRO)
+    assert bep.design_kind(run)[0] == "IC"
+
+
+def test_an_undeclared_route_is_disclosed_and_not_silently_passed(tmp_path):
+    """A run that never said what it is cannot be told what it owes. The cell
+    publishes, and says so."""
+    run = _make_run(tmp_path)          # `_make_run` writes no declaration
+    dest_root = tmp_path / "benchmark-data"
+    out = tmp_path / "s.json"
+    r = _run(_base_args(run, dest_root) + ["--json", str(out)])
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "declares no delivery route" in r.stderr
+    state = json.loads(out.read_text())["release_documentation"]
+    assert state["design_kind"] == "UNDECLARED"
+    assert state["enforced"] is False
