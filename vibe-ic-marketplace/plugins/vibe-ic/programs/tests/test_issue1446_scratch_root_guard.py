@@ -818,17 +818,38 @@ def test_volatile_state_tells_the_three_answers_apart():
     assert G.volatile_state(Path("/var/tmpfoo"))[0] == G.OUTSIDE
 
 
-def test_a_root_outside_every_volatile_root_is_a_finding():
+def test_a_root_outside_every_volatile_root_is_declared_and_not_charged_for():
+    """This condition shipped as a FINDING and was DEMOTED, by its own numbers.
+
+    It refused because "N tests are falsified by such a root". N was 2 when the
+    refusal was written; the v1.16.85 landing gave
+    `test_project_outputs_in_tree_check.py` a `volatile_project` fixture and N
+    became 0, and the refusal went on standing for six days on a debt somebody
+    else had already paid. Re-measured on 4b3843f22c over all 19 files in the
+    tree that touch the gate, the collector, this guard or the word "volatile":
+    every one measures the same count from a non-volatile root as from `/tmp`.
+
+    A refusal whose cost is zero stops runs the suite can measure perfectly in
+    exchange for nothing, which is the guard's own name for the harm it exists
+    to prevent. So the root is DECLARED, told what the mechanism is, and let
+    through. `test_every_line_of_this_cost_table_fires` keeps measuring the
+    number, so the demotion can be argued back on evidence rather than memory.
+    """
     r = _cli("--scratch-root", _NOT_VOLATILE)
-    assert r.returncode == G.RC_FINDING, r.stdout + r.stderr
+    assert r.returncode == G.RC_PASS, r.stdout + r.stderr
     assert "NOT under a volatile root" in r.stdout
+    assert "[ADVISORY]" in r.stdout
+    assert "[FAIL]" not in r.stdout, (
+        "the volatile condition is declared, not refused:\n" + r.stdout)
     assert _NOT_VOLATILE in r.stdout
 
 
-def test_the_volatile_finding_names_what_it_costs_and_where_to_look():
-    """A refusal that does not name the tests it is standing in for sends
+def test_the_volatile_advisory_names_what_it_costs_and_where_to_look():
+    """An advisory that does not name the tests it is standing in for sends
     the reader to find them one at a time, which is the half hour this whole
-    file exists to stop anyone spending."""
+    file exists to stop anyone spending. It has to keep naming them even now
+    that the answer is zero — "zero" is only useful to a reader who can see
+    WHAT was measured."""
     r = _cli("--scratch-root", _NOT_VOLATILE)
     assert "project_outputs_in_tree_check.py" in r.stdout
     assert "test_issue146_collect_external_outputs.py" in r.stdout
@@ -837,8 +858,9 @@ def test_the_volatile_finding_names_what_it_costs_and_where_to_look():
         assert prefix in r.stdout
 
 
-def test_a_root_under_a_volatile_root_is_not_a_finding(tmp_path):
-    """The negative control. A guard that refuses every root is a ban."""
+def test_a_root_under_a_volatile_root_draws_no_advisory(tmp_path):
+    """The negative control. Both roots are rc 0 now, so the discriminator is
+    the ADVISORY, not the code: a volatile root must not draw one."""
     d = _outside(tmp_path)
     assert G.volatile_state(d)[0] == G.INSIDE, (
         f"this test's own scratch root {d} is not under a volatile root — the "
@@ -846,6 +868,7 @@ def test_a_root_under_a_volatile_root_is_not_a_finding(tmp_path):
     r = _cli("--scratch-root", str(d))
     assert r.returncode == G.RC_PASS, r.stdout + r.stderr
     assert "NOT under a volatile root" not in r.stdout
+    assert "[ADVISORY]" not in r.stdout, r.stdout
 
 
 def test_the_volatile_condition_is_declared_on_a_passing_run(tmp_path):
@@ -853,14 +876,17 @@ def test_the_volatile_condition_is_declared_on_a_passing_run(tmp_path):
     assert "under a volatile root" in r.stdout
 
 
-def test_the_volatile_finding_has_no_waiver():
-    """`--allow` waives the WORK-TREE refusal only. Waiving this one would not
-    change what the gate matches, so it would buy a green preflight and the
-    identical failures a minute later."""
+def test_the_volatile_advisory_is_not_something_a_waiver_can_silence():
+    """`--allow` waives the WORK-TREE refusal only, and there is nothing here
+    for it to waive anyway. The point of this arm after the demotion is that
+    the DECLARATION survives the flag: a run that waived its way past a
+    different condition must still be told which side of the four prefixes it
+    is on, because that line is how its reader classifies whatever goes red."""
     r = _cli("--scratch-root", _NOT_VOLATILE, "--allow",
              env_extra={"VIBE_IC_ALLOW_SCRATCH_ROOT_IN_REPO": "1"})
-    assert r.returncode == G.RC_FINDING, r.stdout + r.stderr
+    assert r.returncode == G.RC_PASS, r.stdout + r.stderr
     assert "NOT under a volatile root" in r.stdout
+    assert "[ADVISORY]" in r.stdout
 
 
 def test_the_pytest_hook_declares_but_does_not_refuse_a_non_volatile_root(
@@ -878,7 +904,7 @@ def test_the_pytest_hook_declares_but_does_not_refuse_a_non_volatile_root(
     root = _mini_tree(tmp_path)
     r = _run_pytest(root, Path(_NOT_VOLATILE) / "bt")
     assert "NOT under a volatile root" in r.stdout + r.stderr, r.stdout + r.stderr
-    assert _cli("--scratch-root", _NOT_VOLATILE).returncode == G.RC_FINDING
+    assert _cli("--scratch-root", _NOT_VOLATILE).returncode == G.RC_PASS
 
 
 def test_the_pytest_hook_declares_the_volatile_condition(tmp_path):
@@ -888,7 +914,7 @@ def test_the_pytest_hook_declares_the_volatile_condition(tmp_path):
     assert "under a volatile root" in r.stdout
 
 
-#: A line of `_VOLATILE_REFUSAL`'s cost table: an indented repo-relative test
+#: A line of `_VOLATILE_ADVISORY`'s cost table: an indented repo-relative test
 #: file followed by the number of failures a non-volatile root costs in it.
 #: Prose mentions of a file do not match — they are not followed by a count.
 _COST_LINE = re.compile(
@@ -953,7 +979,7 @@ def _failed_count(out) -> int:
 
 
 def test_every_line_of_this_cost_table_fires():
-    """The cost table inside `_VOLATILE_REFUSAL` is the whole of what the
+    """The cost table inside `_VOLATILE_ADVISORY` is the whole of what the
     refusal offers an operator — where to look — and a table that is READ
     rather than RUN decays without saying so.
 
@@ -971,22 +997,39 @@ def test_every_line_of_this_cost_table_fires():
     So every line is re-measured here, by running the file it names from a
     non-volatile scratch root. That is the only way the number means anything.
 
+    IT FIRED, AND IT IS WHY THIS CONDITION NO LONGER REFUSES. It carried
+    `test_project_outputs_in_tree_check.py   2` for six days after the v1.16.85
+    landing gave that file a `volatile_project` fixture and made it 0 — "two
+    tests that measured the harness's TMPDIR". With that line at 0 the whole
+    table is 0, and a refusal whose cost is zero is a ban. The condition is now
+    an ADVISORY; this arm is what stands behind the demotion, and what would
+    let anyone argue it back on evidence.
+
+    SO A ZERO IS A LEGAL ENTRY HERE. `assert table` still refuses an EMPTY
+    table — a reader who is told nothing has nothing to check — but a table of
+    zeros is a real answer to a real question, and the arm re-measures it
+    exactly as it re-measured the twos.
+
     NOT PINNED, and said out loud so it is not mistaken for pinned: the
     CONVERSE — a file that becomes affected and never gets added. The
     behavioural population for that direction is the test files that reference
     the gate (11 besides this one on ded6aa231a68), and running all of them
     from a non-volatile root measured 1 m 50 s on 8hd-3 at load 2.4, one of
     them 54 s by itself. That is more than this whole file's budget, so this
-    arm holds the direction the decay actually took and names the other.
+    arm holds the direction the decay actually took and names the other. The
+    converse WAS swept by hand on 4b3843f22c — all 19 files in the tree that
+    reference the gate, the collector, this guard or the word "volatile", run
+    twice each with only `--basetemp` different — and every one measured the
+    same count under both roots.
 
     This file is skipped if it is ever named, for the obvious reason: running
     it here would run this test. It is not named today.
     """
     r = _cli("--scratch-root", _NOT_VOLATILE)
-    assert r.returncode == G.RC_FINDING, r.stdout + r.stderr
+    assert r.returncode == G.RC_PASS, r.stdout + r.stderr
     table = _COST_LINE.findall(r.stdout)
     assert table, (
-        "the volatile refusal states no cost table at all; there is nothing "
+        "the volatile advisory states no cost table at all; there is nothing "
         f"for an operator to look at:\n{r.stdout}")
 
     plugin = Path(G.__file__).resolve().parents[1]
@@ -1012,12 +1055,115 @@ def test_every_line_of_this_cost_table_fires():
         finally:
             shutil.rmtree(basetemp, ignore_errors=True)
         assert got == int(declared), (
-            f"the volatile refusal sends the reader to {rel} for {declared} "
+            f"the volatile advisory sends the reader to {rel} for {declared} "
             f"failure(s); from the non-volatile root {basetemp.parent} that "
             f"file measures {got}. A cost table that is wrong is worse than "
-            f"none — it spends the half hour this guard exists to save."
+            f"none — it spends the half hour this guard exists to save. And "
+            f"the number is load-bearing now: this condition is an ADVISORY "
+            f"rather than a refusal BECAUSE the table totals 0, so a line that "
+            f"leaves 0 is the evidence for arguing the refusal back."
             f"\n{out.stdout[-3000:]}")
         ran += 1
     assert ran, (
         "the cost table named no file this arm could run, so it measured "
         f"nothing:\n{r.stdout}")
+
+
+# ── the condition that KEPT its refusal, and the number it rests on ─────────
+
+
+def test_every_line_of_the_work_tree_cost_table_fires(tmp_path):
+    """The work-tree refusal is the one BLOCKING thing this guard still does,
+    and the number under it is now RUN rather than remembered.
+
+    This arm exists because of what happened to the OTHER table. The volatile
+    condition refused for months on "2 tests are falsified by such a root"; the
+    2 had been 0 since the v1.16.85 landing, nobody re-ran it, and the refusal
+    went on stopping runs for a debt somebody else had paid. The work-tree
+    refusal carried its own remembered number — 46, first published on #1446
+    and quoted ever since — and had exactly the same nothing behind it.
+
+    So it is measured here, the same way, by running each file the refusal
+    names with a scratch root INSIDE a git work tree. MEASURED on 4b3843f22c,
+    one pytest process per file, only `--basetemp` different:
+
+        test_published_record_staleness_check.py         35   (0 outside)
+        test_issue905_ic_level_layout_contract.py         6   (0 outside)
+        test_issue967_empty_ic_unit_examined_nothing.py   5   (0 outside)
+
+    46, over the same three files #1446's own correction named. The refusal is
+    justified today, by measurement, and the day it is not this arm says so
+    instead of leaving a ban standing on a memory.
+
+    THE WORK TREE IS A THROWAWAY, not this checkout: `_a_work_tree` git-inits a
+    repo under a volatile prefix, so the ONLY axis that differs from a clean
+    run is the enclosing repository — and nothing is written inside the tree
+    under test, which `suite_write_guard` would report.
+
+    The inner runs carry the allowance, because without it the guard refuses
+    them in `pytest_configure` and there is no tally to count — which
+    `_failed_count` reports as "that run did not happen" rather than as zero.
+    """
+    r = _cli("--scratch-root", str(_a_work_tree(tmp_path)))
+    assert r.returncode == G.RC_FINDING, r.stdout + r.stderr
+    table = _COST_LINE.findall(r.stdout)
+    assert table, (
+        "the work-tree refusal states no cost table at all; it refuses on a "
+        f"number the reader cannot check:\n{r.stdout}")
+
+    plugin = Path(G.__file__).resolve().parents[1]
+    mine = Path(__file__).name
+    env = dict(os.environ)
+    env["VIBE_IC_ALLOW_SCRATCH_ROOT_IN_REPO"] = "1"
+
+    ran = 0
+    for rel, declared in table:
+        if Path(rel).name == mine:
+            continue
+        target = plugin / rel
+        assert target.is_file(), (
+            f"the cost table names {rel}, which does not exist")
+        basetemp = _a_work_tree(tmp_path) / f"bt-{Path(rel).stem[:24]}"
+        out = _pr.run(
+            [sys.executable, "-m", "pytest", rel, "-q",
+             "-p", "no:cacheprovider", f"--basetemp={basetemp}"],
+            cwd=str(plugin), capture_output=True, text=True, env=env)
+        got = _failed_count(out)
+        assert got == int(declared), (
+            f"the work-tree refusal sends the reader to {rel} for {declared} "
+            f"failure(s); from the in-repo root {basetemp} that file measures "
+            f"{got}. This guard BLOCKS on that number, and a block resting on "
+            f"a number nobody re-runs is what the volatile condition became "
+            f"before it was demoted.\n{out.stdout[-3000:]}")
+        ran += 1
+    assert ran, (
+        "the work-tree cost table named no file this arm could run, so it "
+        f"measured nothing:\n{r.stdout}")
+
+
+def test_only_the_conditions_that_cost_something_are_refused(tmp_path):
+    """The demotion did not turn this guard into a door that opens for anyone.
+
+    Stated as one arm because that is the question the demotion raises, and a
+    reader should not have to assemble the answer from four files: the two
+    conditions with a measured cost still return rc 1 and print `[FAIL]`, and
+    the one whose cost was re-measured at 0 returns rc 0 and prints
+    `[ADVISORY]`. Each of the three roots differs from the others on exactly
+    one axis.
+    """
+    in_tree = _cli("--scratch-root", str(_a_work_tree(tmp_path)))
+    assert in_tree.returncode == G.RC_FINDING, in_tree.stdout + in_tree.stderr
+    assert "INSIDE a git work tree" in in_tree.stdout
+
+    under_home = _a_root_under_the_home(tmp_path)
+    try:
+        home = _cli("--scratch-root", str(under_home))
+    finally:
+        under_home.rmdir()
+    assert home.returncode == G.RC_FINDING, home.stdout + home.stderr
+    assert "UNDER the host account home" in home.stdout
+
+    only_non_volatile = _cli("--scratch-root", _NOT_VOLATILE)
+    assert only_non_volatile.returncode == G.RC_PASS, (
+        only_non_volatile.stdout + only_non_volatile.stderr)
+    assert "[FAIL]" not in only_non_volatile.stdout

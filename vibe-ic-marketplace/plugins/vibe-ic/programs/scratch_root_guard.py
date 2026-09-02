@@ -100,16 +100,56 @@ naming this guard's own test file, which is the largest contributor — its arms
 ask this preflight about the work tree, the account home and git-absent, and
 from a non-volatile root the preflight answers rc 1 to all three.
 
-The cost table in `_VOLATILE_REFUSAL` is therefore RE-MEASURED rather than
+The cost table in `_VOLATILE_ADVISORY` is therefore RE-MEASURED rather than
 read: `test_issue1446_scratch_root_guard.py::test_every_line_of_this_cost_table_fires`
 runs each file the table names from a non-volatile root and requires the stated
 count, so an entry that stops firing fails instead of misleading.
 
-That is the same shape as the first condition and it costs the same half hour:
-an operator exported `TMPDIR=/work/tmp` into a container and eight honest
-passes were published as main's redness — six of them this guard's own, now
-fixed at the fixture, leaving the two the table above states. pytest's own
-default lands in `/tmp` and is fine.
+IT FIRED, AND THE ANSWER IS ZERO. RE-MEASURED on 4b3843f22c (v1.16.90), one
+pytest process per file, only `--basetemp` different — `/tmp/...` against a
+writable non-volatile directory outside every work tree:
+
+    programs/tests/test_project_outputs_in_tree_check.py            0  (was 2)
+    programs/tests/test_issue146_collect_external_outputs.py        0
+    programs/tests/test_issue1446_scratch_root_guard.py             0
+    ------------------------------------------------------------- ---
+    total                                                          0
+
+The remaining 2 went the way the 4 went, and in the same shape: the v1.16.85
+landing gave `test_project_outputs_in_tree_check.py` a `volatile_project`
+fixture that mkdtemps under one of the four prefixes and asserts it landed
+there — "two tests that measured the harness's TMPDIR". Every test that
+exercises the gate now pins its own volatile subject; none of them depends on
+where `tmp_path` lands.
+
+WIDENED, so that "zero" is a measurement and not the two files this table
+happens to name: all 19 test files in the tree that reference the gate, the
+collector, this guard, or the word "volatile" were run twice each — once from
+`/tmp`, once from a non-volatile root — on 4b3843f22c. Every one of the 19
+measured the SAME count under both roots. The only difference in the whole
+sweep was this file's own `test_every_line_of_this_cost_table_fires`, red under
+both roots because it builds its own non-volatile root, which is the red this
+change is answering.
+
+SO THE CONDITION WAS DEMOTED, and the demotion is this file's own arithmetic
+run with today's numerator. It said: "refusing the other ~3198 to catch two
+would be this guard causing the harm it exists to prevent". Two is now zero,
+and refusing ~3200 measurable tests to catch zero falsified ones is that same
+sentence with nothing left on the other side of it. `NOT VOLATILE` is now
+DECLARED in both halves and refused in neither — see the BLOCKING block below,
+and `_VOLATILE_ADVISORY` for what an operator is told instead.
+
+WHAT DID NOT CHANGE: the mechanism, the declaration, or the table. The gate
+still admits exactly four prefixes; the run still prints which side of them the
+root is on — that INFO line is how a reader tells "this gate is broken" from
+"this subject was built where the gate cannot look"; and the table is still
+re-measured every run, so the day a line leaves 0 the guard says so instead of
+staying silent about a cost it stopped charging for.
+
+That is the same shape as the first condition and it cost the same half hour
+while it lasted: an operator exported `TMPDIR=/work/tmp` into a container and
+eight honest passes were published as main's redness. All eight are now fixed
+at the fixture. pytest's own default lands in `/tmp` and is fine.
 
 THE SECOND WAY A SCRATCH ROOT MANUFACTURES FAILURES
 ===================================================
@@ -189,18 +229,55 @@ BLOCKING, and asymmetrically so, because the two conditions do different harm:
                      nobody reads. That is not hypothetical — it is what
                      happened, and a count was published off the back of it.
 
-  NOT VOLATILE       BLOCKING IN THE CLI PREFLIGHT ONLY; DECLARED, NEVER
-                     BLOCKING, IN THE PYTEST HOOK, and the arithmetic is why.
-                     Every root under a real account home is outside all four
-                     volatile prefixes, so a blocking hook would refuse every
-                     under-home session — a shape the row below pins as
-                     supported. Two of ~3200 tests are falsified by such a
-                     root — the count re-measured by the cost table below, and
-                     6 lower than it was before that table was measured at all
-                     — and refusing the other ~3198 to catch two would be this
-                     guard causing the harm it exists to prevent. The LANDING
-                     is what publishes a count and the landing asks the
-                     preflight, so that is where the block is.
+                     AND THE 46 IS RE-MEASURED, NOT REMEMBERED. It is the one
+                     number left in this file that a refusal rests on, and the
+                     condition below is what a remembered number decays into.
+                     RE-MEASURED on 4b3843f22c (v1.16.90), one pytest process
+                     per file, only `--basetemp` different — outside every
+                     repository against inside a throwaway work tree:
+
+                         test_published_record_staleness_check.py  35   (0)
+                         test_issue905_ic_level_layout_contract.py  6   (0)
+                         test_issue967_empty_ic_unit_examined_nothing.py
+                                                                    5   (0)
+                         ---------------------------------------- ---
+                         total                                     46   (0)
+
+                     — the same 46, over the same three files, that #1446's own
+                     correction named. The table lives in `_REFUSAL` and
+                     `test_every_line_of_the_work_tree_cost_table_fires` runs
+                     it, so this row cannot become the row below it without
+                     saying so.
+
+  NOT VOLATILE       NOT BLOCKING IN EITHER HALF. DECLARED IN BOTH. This
+                     row used to read "BLOCKING IN THE CLI PREFLIGHT ONLY",
+                     and it was demoted by its own arithmetic rather than by a
+                     judgement: "refusing the other ~3198 to catch two would be
+                     this guard causing the harm it exists to prevent."
+
+                     The two are now ZERO. Re-measured on 4b3843f22c over all
+                     19 test files in the tree that touch the gate, the
+                     collector, this guard or the word "volatile" — twice each,
+                     only `--basetemp` different — every one measured the same
+                     count from a non-volatile root as from `/tmp`. The debt
+                     was paid at the fixtures, file by file (fc32402c8, the
+                     v1.16.85 landing, cca4ba4e72), and nothing is left on the
+                     other side of that sentence.
+
+                     A REFUSAL WHOSE COST IS ZERO IS A BAN. It stops runs the
+                     suite can measure perfectly, in exchange for nothing, and
+                     "a guard that manufactures the harm it exists to prevent"
+                     is this file's own name for that. So the preflight prints
+                     `[ADVISORY]`, names the mechanism, states the re-measured
+                     table, and returns the rc it would have returned anyway.
+
+                     WHAT KEEPS IT HONEST is that the table is still RUN. If a
+                     line ever leaves 0 — a new test that hands `tmp_path` to
+                     the gate — `test_every_line_of_this_cost_table_fires`
+                     fails and names the file, and this row can be argued back
+                     up on a measurement instead of a memory. Restoring a
+                     refusal is a one-line change; the number is the part that
+                     has to be earned.
 
   UNDER THE HOME     BLOCKING IN THE CLI PREFLIGHT ONLY; DECLARED, NEVER
                      BLOCKING, IN THE PYTEST HOOK. A pytest session whose
@@ -267,10 +344,13 @@ failing, and never changes an outcome.
 
 EXIT CODES (the CLI preflight)
 ==============================
-    0  PASS           the root is outside every condition checked, or a
-                      condition did not apply here and said so
-    1  a FINDING about the root — inside a work tree, under the account home,
-                      or outside every volatile root
+    0  PASS           the root is outside every condition that COSTS
+                      something, or a condition did not apply here and said so.
+                      A non-volatile root is rc 0 and an `[ADVISORY]` line — it
+                      is declared, never charged for; see the BLOCKING block.
+    1  a FINDING about the root — inside a work tree, or under the account
+                      home. Those are the two conditions with a measured cost,
+                      and both tables are re-measured rather than read.
     2  UNDETERMINED / NOT CHECKED, naming what could not be determined
     3  bad invocation
 
@@ -536,9 +616,20 @@ measured from there.
 answers about that checkout, scoped to <dir>, which is ZERO paths for a
 directory nobody committed. Fixtures that build an untracked corpus under
 `tmp_path` are then enumerated as empty, and the gates correctly report
-"published nothing". 46 tests measure red this way on a tree whose real
-count for them is 0 (vibe-ic#1446), and each one names its own subject
-rather than this root, so the cause is nowhere in the failure output.
+"published nothing". Each such test names its own subject rather than this
+root, so the cause is nowhere in the failure output. What it costs, RE-MEASURED
+on 4b3843f22c — one pytest process per file, only `--basetemp` different, a
+root inside a throwaway work tree against a root outside every repository:
+
+    programs/tests/test_published_record_staleness_check.py         35
+    programs/tests/test_issue905_ic_level_layout_contract.py         6
+    programs/tests/test_issue967_empty_ic_unit_examined_nothing.py   5
+
+46 in a tree whose real count for them is 0 (vibe-ic#1446) — the same 46, over
+the same three files, that #1446's own correction named. THAT TABLE IS RUN, not
+read: `test_issue1446_scratch_root_guard.py::test_every_line_of_the_work_tree_
+cost_table_fires` measures each line every session, because the OTHER condition
+this guard used to refuse on was a remembered number that had quietly become 0.
 
 FIX: put the scratch root outside any repository. pytest's own default
 already is — the usual cause is an exported TMPDIR.
@@ -582,51 +673,54 @@ accept the mount; it would buy a green preflight and the identical NORECORD
 ten minutes later."""
 
 
-_VOLATILE_REFUSAL = """\
-the scratch root is NOT under a volatile root, and tests in this suite are
-falsified by that fact in two different ways.
+_VOLATILE_ADVISORY = """\
+the scratch root is NOT under a volatile root. This is DECLARED, and it is not
+a finding: the cost of running here is re-measured below and it is zero.
 
     scratch root     : {root}
     volatile roots   : {prefixes}
 
 `programs/project_outputs_in_tree_check.py` calls a path external storage iff
 it starts with one of those four prefixes and nothing else. A test that builds
-its subject at `tmp_path` and requires the gate to FIND it gets a PASS where it
-requires a FAIL, and reports its own fixture as the defect. The cause appears
-in none of them.
+its subject at `tmp_path` and requires the gate to FIND it would get a PASS
+where it requires a FAIL, and would report its own fixture as the defect. THAT
+MECHANISM HAS NOT CHANGED. What changed is that no test in this suite is
+exposed to it any more, because each one builds its own subject under one of
+the four prefixes and asserts it landed there.
 
-    programs/tests/test_project_outputs_in_tree_check.py            2
+RE-MEASURED on 4b3843f22c (v1.16.90), one pytest process per file, only
+`--basetemp` different — `/tmp/...` against a non-volatile root outside every
+work tree:
 
-THAT IS THE WHOLE LIST, AND IT IS RE-MEASURED RATHER THAN READ.
-`test_issue1446_scratch_root_guard.py::test_every_line_of_this_cost_table_fires`
-runs each file named above from a non-volatile root and requires the stated
-count, so a line that stops firing FAILS here instead of misleading a reader.
-That arm exists because this table decayed twice and said nothing either time:
+    programs/tests/test_project_outputs_in_tree_check.py             0
+    programs/tests/test_issue146_collect_external_outputs.py         0
+    ------------------------------------------------------------- ---
+    total                                                           0
 
-  * `programs/tests/test_issue146_collect_external_outputs.py` stood here with
-    4 from ae5cc4dbfc3f until fc32402c8 gave it a `volatile_dir` fixture that
-    mkdtemps under one of the four prefixes. MEASURED on ded6aa231a68: 4 failed
-    at fc32402c8^, 0 at fc32402c8, this text unchanged between them — days of
-    sending the reader to a file that is clean.
-  * `programs/tests/test_issue1446_scratch_root_guard.py` was never listed and
-    was costing 6, by a second mechanism: its arms ask THIS preflight about the
-    work tree, the account home and git-absent, and from a non-volatile root it
-    answered rc 1 to all three, so each reported a legitimate root refused. Its
-    fixtures now build their own scratch root under a volatile prefix, the way
-    fc32402c8 fixed the file above, and it costs 0.
+    (this guard's own file is the third member of that population and also
+     costs 0; the arm that runs this table skips it, because running it here
+     would run that arm.)
 
-FIX: put the scratch root under a volatile root. pytest's own default already
-is — the usual cause is an exported TMPDIR.
+THIS TABLE IS RUN, NOT READ. `test_issue1446_scratch_root_guard.py::
+test_every_line_of_this_cost_table_fires` measures each line from a
+non-volatile root every session. It is the reason you are reading an advisory
+rather than a refusal: the line above said 2 for six days after the v1.16.85
+landing made it 0, and before that the same table said 4 for a file fc32402c8
+had already made clean. A refusal resting on a number nobody re-runs becomes a
+ban nobody can argue with.
+
+WHAT TO DO ABOUT IT: nothing is required. If you would rather this condition
+were clean too, pytest's own default already is — the usual cause is an
+exported TMPDIR.
 
     env -u TMPDIR pytest ...
     TMPDIR=/var/tmp/<something> pytest ...
     pytest --basetemp=/tmp/<something> ...
 
-There is NO waiver for this one, for the reason the account-home condition has
-none: waiving it would not change what the gate matches, so the flag would buy
-a green preflight and the identical failures a minute later. Every host
-that can run this suite has a writable /tmp — it is where pytest puts
-`tmp_path` when nobody interferes."""
+AND IF A LINE ABOVE EVER LEAVES 0, the fix is in that file's FIXTURE — build
+the subject under a volatile prefix and assert it, the way `volatile_dir` and
+`volatile_project` do — not in the gate, whose four-prefix scope is what it is
+FOR, and not by widening what this guard calls volatile."""
 
 
 def pytest_addoption(parser):
@@ -784,11 +878,15 @@ def _main(argv=None) -> int:
 
     It asks ALL THREE conditions, because each of them makes a lane produce
     something other than a measurement, and a preflight that answers two of
-    three is a preflight the next reader still has to debug behind.
+    three is a preflight the next reader still has to debug behind. It CHARGES
+    for two of them: the volatile condition is declared and costs nothing, and
+    the module docstring's BLOCKING block carries the measurement that demoted
+    it.
 
-    rc 0  PASS — outside every condition that could be checked
-    rc 1  a FINDING about the root — INSIDE a work tree, UNDER the host
-          account home, or OUTSIDE every volatile root
+    rc 0  PASS — outside every condition that costs something. A non-volatile
+          root prints `[ADVISORY]` and lands here.
+    rc 1  a FINDING about the root — INSIDE a work tree, or UNDER the host
+          account home
     rc 2  UNDETERMINED / NOT CHECKED, naming what could not be determined
     rc 3  bad invocation
 
@@ -868,12 +966,25 @@ def _main(argv=None) -> int:
             root=root, home=home_dir))
         finding = True
     if vol == OUTSIDE:
-        print("[FAIL] scratch_root_guard: " + _VOLATILE_REFUSAL.format(
+        # DECLARED, NEVER CHARGED FOR. `finding` is deliberately not touched
+        # here: the cost this condition used to refuse on was re-measured at
+        # 4b3843f22c and is 0, and a refusal whose cost is zero stops runs the
+        # suite can measure perfectly in exchange for nothing. The advisory
+        # still names the mechanism and states the re-measured table, so the
+        # reader who meets a failure in one of those files can tell "the gate
+        # is broken" from "this subject was built where the gate cannot look".
+        # See the BLOCKING block in the module docstring.
+        print("[ADVISORY] scratch_root_guard: " + _VOLATILE_ADVISORY.format(
             root=root, prefixes=", ".join(vol_prefixes or ())))
-        finding = True
     if finding:
         return RC_FINDING
 
+    # `vol_why` is still here even though the volatile condition charges
+    # nothing, and that is not an oversight. The ONLY way it goes UNKNOWN is
+    # that `project_outputs_in_tree_check.py` could not be loaded from beside
+    # this file — a broken plugin tree, not a fact about the root — and a
+    # preflight that swallowed that would be answering about a subject it never
+    # reached. It is reported as NOT CHECKED, by name, exactly as before.
     unchecked = [w for w in (tree_why if tree == UNKNOWN else None,
                              home_why if (home == UNKNOWN and
                                           a.require_home_check) else None,

@@ -17,7 +17,9 @@ WHAT THIS FILE REFUSES
 3. **A scratch root the external-storage gate cannot see** — the falsifying root
    that turns honest passes into failures naming their own fixtures. How many
    is not written here: it is stated, and re-measured every run, by
-   `_VOLATILE_REFUSAL` in `programs/scratch_root_guard.py`.
+   `_VOLATILE_ADVISORY` in `programs/scratch_root_guard.py` (0 at 4b3843f22c,
+   which is why the GUARD declares this condition instead of refusing on it;
+   this harness pins its own `--scratch` for a different reason, stated there).
 4. **An absent engine reported as anything other than a refusal.** "I could not
    look" is not a test verdict, and a `which("docker")` skip in the suite would
    delete the landing gate's only end-to-end proof.
@@ -146,8 +148,31 @@ def test_the_refusal_names_the_prefixes_the_gate_actually_matches():
     r = _run("--no-engine", "--scratch", _NOT_VOLATILE, "--", "-q", "x.py")
     for prefix in gate._VOLATILE_PREFIXES:
         assert prefix.rstrip("/") in r.stderr, (prefix, r.stderr)
-    assert "test_issue146_collect_external_outputs.py" in r.stderr
-    assert "test_project_outputs_in_tree_check.py" in r.stderr
+
+
+def test_the_refusal_states_no_cost_of_its_own_and_says_where_the_cost_lives():
+    """This arm used to require the refusal to NAME TWO TEST FILES, and both of
+    them cost 0 by the time anyone read it.
+
+    That is the whole defect this file's own docstring warns about — "How many
+    is not written here: it is stated, and re-measured every run, by
+    `_VOLATILE_ADVISORY`" — asserted in the docstring and contradicted forty
+    lines below it, where the `case` block carried
+    `test_issue146_collect_external_outputs.py  4` (fixed in fc32402c8) and
+    `test_project_outputs_in_tree_check.py  2` (fixed in the v1.16.85 landing).
+    The arm PINNED the stale table in place: correcting the text would have
+    turned this test red.
+
+    So it is inverted. The refusal must carry NO count of its own, and must
+    send the reader to the one place the count is re-measured every run.
+    """
+    r = _run("--no-engine", "--scratch", _NOT_VOLATILE, "--", "-q", "x.py")
+    assert "scratch_root_guard.py" in r.stderr, r.stderr
+    assert "_VOLATILE_ADVISORY" in r.stderr, r.stderr
+    stale = re.findall(r"programs/tests/[A-Za-z0-9_.\-]+\.py\s+\d+", r.stderr)
+    assert not stale, (
+        "the harness states a cost table of its own; it will decay exactly as "
+        f"the last one did, and nothing re-runs it: {stale}")
 
 
 def test_a_volatile_scratch_root_is_not_refused_for_that_reason():

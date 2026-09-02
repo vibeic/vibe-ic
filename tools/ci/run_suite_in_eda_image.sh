@@ -96,7 +96,7 @@
 # ask `programs/project_outputs_in_tree_check.py` to classify it as external
 # storage; that gate matches those four prefixes and nothing else, so a scratch
 # root anywhere else turns honest passes into failures that name their own
-# subject and never the root. `programs/scratch_root_guard.py` refuses such a
+# subject and never the root. `programs/scratch_root_guard.py` DECLARES such a
 # root by name; this harness never creates one.
 #
 # HOW MANY IT COSTS IS NOT WRITTEN HERE, DELIBERATELY. This comment said "six"
@@ -104,8 +104,18 @@
 # outputs.py` grew a `volatile_dir` fixture in fc32402c8 and stopped costing
 # its 4, while `test_issue1446_scratch_root_guard.py` was costing 6 and had
 # never been counted (measured on ded6aa231a68: 8, not 6). The count lives in
-# `_VOLATILE_REFUSAL` in the guard, where
+# `_VOLATILE_ADVISORY` in the guard, where
 # `test_every_line_of_this_cost_table_fires` re-measures it every run.
+#
+# IT IS NOW 0, AND THE GUARD NO LONGER REFUSES ON IT (re-measured 4b3843f22c:
+# every test that exercises the gate pins its own volatile subject, so none of
+# them depends on where `tmp_path` lands). THIS HARNESS STILL PINS ITS OWN
+# SCRATCH ROOT, and the reason is no longer the count: `--scratch` is a shape
+# this harness GUARANTEES to whatever runs inside it, not an environment it
+# inherited, and it costs the caller one argument to satisfy. That is a
+# different argument from the guard's, written down here so the two are not
+# confused — the guard adjudicates an operator's environment and now declares
+# rather than refuses; this adjudicates its own parameter.
 #
 # --no-engine IS A CONTROL, NOT A MODE
 # ====================================
@@ -155,10 +165,20 @@ case "$SCRATCH_ABS/tmp/" in
   /tmp/*|/var/tmp/*|/dev/shm/*|/run/*) ;;
   *) die "the scratch root $SCRATCH_ABS/tmp is not under a volatile root
     (/tmp, /var/tmp, /dev/shm, /run). programs/project_outputs_in_tree_check.py
-    matches exactly those four prefixes and nothing else, so six tests would
-    report a defect that is this path and not the tree:
-        programs/tests/test_issue146_collect_external_outputs.py        4
-        programs/tests/test_project_outputs_in_tree_check.py            2
+    matches exactly those four prefixes and nothing else, and this harness PINS
+    the scratch root rather than inheriting one, so it will not silently run
+    under a shape it does not guarantee.
+    WHAT A NON-VOLATILE ROOT COSTS IS NOT WRITTEN HERE, deliberately — the
+    comment block at the top of this file says why, and the two lines that used
+    to stand here are why it says it: they named
+    test_issue146_collect_external_outputs.py for 4 failures fc32402c8 had
+    already fixed, and test_project_outputs_in_tree_check.py for 2 the v1.16.85
+    landing had already fixed. Both were 0 and this text went on quoting them.
+    The number lives in _VOLATILE_ADVISORY in
+    vibe-ic-marketplace/plugins/vibe-ic/programs/scratch_root_guard.py, where
+    test_every_line_of_this_cost_table_fires re-measures it every run, and
+    where it is currently 0 — which is why the GUARD declares this condition
+    and does not refuse on it.
     Pass --scratch under one of the four." ;;
 esac
 SCRATCH="$SCRATCH_ABS"
