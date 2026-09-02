@@ -92,12 +92,20 @@
 # THE SCRATCH ROOT IS PINNED, NOT INHERITED
 # =========================================
 # `TMPDIR` is set to a directory under a VOLATILE root (`/tmp`, `/var/tmp`,
-# `/dev/shm`, `/run`). Six tests in this suite build their subject at `tmp_path`
-# and ask `programs/project_outputs_in_tree_check.py` to classify it as external
+# `/dev/shm`, `/run`). Tests in this suite build their subject at `tmp_path` and
+# ask `programs/project_outputs_in_tree_check.py` to classify it as external
 # storage; that gate matches those four prefixes and nothing else, so a scratch
-# root anywhere else turns six honest passes into six failures that name their
-# own subject and never the root. `programs/scratch_root_guard.py` refuses such
-# a root by name; this harness never creates one.
+# root anywhere else turns honest passes into failures that name their own
+# subject and never the root. `programs/scratch_root_guard.py` refuses such a
+# root by name; this harness never creates one.
+#
+# HOW MANY IT COSTS IS NOT WRITTEN HERE, DELIBERATELY. This comment said "six"
+# and was wrong by the time anyone read it: `test_issue146_collect_external_
+# outputs.py` grew a `volatile_dir` fixture in fc32402c8 and stopped costing
+# its 4, while `test_issue1446_scratch_root_guard.py` was costing 6 and had
+# never been counted (measured on ded6aa231a68: 8, not 6). The count lives in
+# `_VOLATILE_REFUSAL` in the guard, where
+# `test_every_line_of_this_cost_table_fires` re-measures it every run.
 #
 # --no-engine IS A CONTROL, NOT A MODE
 # ====================================

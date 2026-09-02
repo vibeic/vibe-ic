@@ -63,7 +63,7 @@ honest passes into 46 failures that then get published as main's redness. Grep
 THE THIRD WAY A SCRATCH ROOT MANUFACTURES FAILURES
 ===================================================
 A root can be outside every repository AND outside the account home and still
-falsify the run, because six tests in this suite do not merely WRITE under
+falsify the run, because some tests in this suite do not merely WRITE under
 `tmp_path` — they hand `tmp_path` to a gate that CLASSIFIES it:
 
     programs/project_outputs_in_tree_check.py
@@ -81,10 +81,35 @@ ONLY `TMPDIR` different:
     programs/tests/test_issue146_collect_external_outputs.py        4
     programs/tests/test_project_outputs_in_tree_check.py            2
 
+THAT TABLE IS HISTORY, AND IT DECAYED WITHOUT SAYING SO. It was carried into
+the operator-facing refusal below verbatim and read as present tense for six
+days. RE-MEASURED on ded6aa231a68, same image, same clone, one bind mount,
+ONLY `TMPDIR` different:
+
+    programs/tests/test_issue146_collect_external_outputs.py        0  (was 4)
+    programs/tests/test_project_outputs_in_tree_check.py            2
+    programs/tests/test_issue1446_scratch_root_guard.py             6  (never
+                                                                       listed;
+                                                                       now 0)
+
+fc32402c8 gave `test_issue146_collect_external_outputs.py` a `volatile_dir`
+fixture that mkdtemps under one of the four prefixes, so its subject stopped
+depending on where `tmp_path` lands: 4 failed at fc32402c8^, 0 at fc32402c8.
+The refusal went on sending the reader to a file that is clean, and went on NOT
+naming this guard's own test file, which is the largest contributor — its arms
+ask this preflight about the work tree, the account home and git-absent, and
+from a non-volatile root the preflight answers rc 1 to all three.
+
+The cost table in `_VOLATILE_REFUSAL` is therefore RE-MEASURED rather than
+read: `test_issue1446_scratch_root_guard.py::test_every_line_of_this_cost_table_fires`
+runs each file the table names from a non-volatile root and requires the stated
+count, so an entry that stops firing fails instead of misleading.
+
 That is the same shape as the first condition and it costs the same half hour:
-an operator exported `TMPDIR=/work/tmp` into a container and six honest passes
-were published as main's redness. pytest's own default lands in `/tmp` and is
-fine.
+an operator exported `TMPDIR=/work/tmp` into a container and eight honest
+passes were published as main's redness — six of them this guard's own, now
+fixed at the fixture, leaving the two the table above states. pytest's own
+default lands in `/tmp` and is fine.
 
 THE SECOND WAY A SCRATCH ROOT MANUFACTURES FAILURES
 ===================================================
@@ -169,8 +194,10 @@ BLOCKING, and asymmetrically so, because the two conditions do different harm:
                      Every root under a real account home is outside all four
                      volatile prefixes, so a blocking hook would refuse every
                      under-home session — a shape the row below pins as
-                     supported. Six of ~3200 tests are falsified by such a
-                     root; refusing the other 3194 to catch six would be this
+                     supported. Two of ~3200 tests are falsified by such a
+                     root — the count re-measured by the cost table below, and
+                     6 lower than it was before that table was measured at all
+                     — and refusing the other ~3198 to catch two would be this
                      guard causing the harm it exists to prevent. The LANDING
                      is what publishes a count and the landing asks the
                      preflight, so that is where the block is.
@@ -556,21 +583,37 @@ ten minutes later."""
 
 
 _VOLATILE_REFUSAL = """\
-the scratch root is NOT under a volatile root, and six tests in this suite
-measure their own subject by that fact.
+the scratch root is NOT under a volatile root, and tests in this suite are
+falsified by that fact in two different ways.
 
     scratch root     : {root}
     volatile roots   : {prefixes}
 
 `programs/project_outputs_in_tree_check.py` calls a path external storage iff
-it starts with one of those four prefixes and nothing else. Six tests build
-their subject at `tmp_path` and require the gate to FIND it:
+it starts with one of those four prefixes and nothing else. A test that builds
+its subject at `tmp_path` and requires the gate to FIND it gets a PASS where it
+requires a FAIL, and reports its own fixture as the defect. The cause appears
+in none of them.
 
-    programs/tests/test_issue146_collect_external_outputs.py        4
     programs/tests/test_project_outputs_in_tree_check.py            2
 
-From a root outside all four the gate PASSes instead, and each of the six
-reports its own fixture as the defect. The cause appears in none of them.
+THAT IS THE WHOLE LIST, AND IT IS RE-MEASURED RATHER THAN READ.
+`test_issue1446_scratch_root_guard.py::test_every_line_of_this_cost_table_fires`
+runs each file named above from a non-volatile root and requires the stated
+count, so a line that stops firing FAILS here instead of misleading a reader.
+That arm exists because this table decayed twice and said nothing either time:
+
+  * `programs/tests/test_issue146_collect_external_outputs.py` stood here with
+    4 from ae5cc4dbfc3f until fc32402c8 gave it a `volatile_dir` fixture that
+    mkdtemps under one of the four prefixes. MEASURED on ded6aa231a68: 4 failed
+    at fc32402c8^, 0 at fc32402c8, this text unchanged between them — days of
+    sending the reader to a file that is clean.
+  * `programs/tests/test_issue1446_scratch_root_guard.py` was never listed and
+    was costing 6, by a second mechanism: its arms ask THIS preflight about the
+    work tree, the account home and git-absent, and from a non-volatile root it
+    answered rc 1 to all three, so each reported a legitimate root refused. Its
+    fixtures now build their own scratch root under a volatile prefix, the way
+    fc32402c8 fixed the file above, and it costs 0.
 
 FIX: put the scratch root under a volatile root. pytest's own default already
 is — the usual cause is an exported TMPDIR.
@@ -581,7 +624,7 @@ is — the usual cause is an exported TMPDIR.
 
 There is NO waiver for this one, for the reason the account-home condition has
 none: waiving it would not change what the gate matches, so the flag would buy
-a green preflight and the identical six failures a minute later. Every host
+a green preflight and the identical failures a minute later. Every host
 that can run this suite has a writable /tmp — it is where pytest puts
 `tmp_path` when nobody interferes."""
 
@@ -704,15 +747,15 @@ def pytest_configure(config):
     # prefixes, so refusing in the hook would refuse every under-home session,
     # which this file already pins as a supported and measurable shape
     # (`test_the_hook_does_not_refuse_a_measurable_run_under_the_account_home`).
-    # Six of ~3200 tests are falsified by such a root; the other 3194 are
-    # measured correctly, and taking them all down to catch six is the harm
+    # Two of ~3200 tests are falsified by such a root; the other ~3198 are
+    # measured correctly, and taking them all down to catch two is the harm
     # this guard is supposed to prevent, not cause.
     #
     # The BLOCK is in the preflight CLI instead, which is where the harm lands:
     # `gatekeeper-land.sh:872` asks it before the arms, and a LANDING is what
-    # publishes a count. The declaration below is what stops the six from being
-    # causeless — it names the root and what cannot see it, on the third line of
-    # every session, before any result.
+    # publishes a count. The declaration below is what stops those two from
+    # being causeless — it names the root and what cannot see it, on the third
+    # line of every session, before any result.
     vol_state, vol_prefixes, _vol_why = volatile_state(root)
     print("[INFO] " + volatile_declaration(
         root, verdict=(vol_state, vol_prefixes, _vol_why)))

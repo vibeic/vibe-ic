@@ -15,7 +15,9 @@ WHAT THIS FILE REFUSES
    an arm runs unreviewed candidate code. Giving one the host daemon is the
    removal of the gate, not a repair of it.
 3. **A scratch root the external-storage gate cannot see** — the falsifying root
-   that turns six honest passes into six failures naming their own fixtures.
+   that turns honest passes into failures naming their own fixtures. How many
+   is not written here: it is stated, and re-measured every run, by
+   `_VOLATILE_REFUSAL` in `programs/scratch_root_guard.py`.
 4. **An absent engine reported as anything other than a refusal.** "I could not
    look" is not a test verdict, and a `which("docker")` skip in the suite would
    delete the landing gate's only end-to-end proof.

@@ -33,8 +33,10 @@ outlives the harness and takes the session down.
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import sys
+import tempfile
 from pathlib import Path
 
 import pytest
@@ -94,8 +96,16 @@ def _a_work_tree(tmp_path: Path) -> Path:
     `git init` rather than a hand-made `.git`, because the property under test
     is what `git rev-parse --show-toplevel` answers, not what a fixture asserts
     it would answer.
+
+    Built beside `_outside`'s root, and NOT under `tmp_path`, for that
+    function's reason: the arms that use this one assert that THE WORK TREE is
+    what the guard objects to, and a root that is also non-volatile draws a
+    second finding the arm never asked about. `--allow` waives the work-tree
+    refusal and nothing else, so `test_the_cli_preflight_answers_the_same_
+    question_as_the_hook` measured rc 1 on its waived arm under a relocated
+    `TMPDIR` and reported it as the waiver failing.
     """
-    repo = tmp_path / "a_repo"
+    repo = _outside(tmp_path).parent / "a_repo"
     repo.mkdir()
     _pr.run(["git", "init", "-q"], cwd=repo, check=True,
                    capture_output=True, text=False)
@@ -104,22 +114,70 @@ def _a_work_tree(tmp_path: Path) -> Path:
     return inside
 
 
-def _outside(tmp_path: Path) -> Path:
-    """A scratch root outside any repository.
+#: Directories `_outside` made, removed after each test. `_outside` cannot use
+#: `tmp_path` — see its docstring — so it cleans up after itself.
+_MADE_OUTSIDE: list = []
 
-    This assertion is not decoration. `tmp_path` is only outside a repository
-    because the guard under test refuses the run otherwise — if that ever
-    stopped holding, every 'outside' arm below would silently be an 'inside'
-    arm and would prove the opposite of what it says.
+
+@pytest.fixture(autouse=True)
+def _remove_the_scratch_roots_this_file_makes():
+    yield
+    while _MADE_OUTSIDE:
+        shutil.rmtree(_MADE_OUTSIDE.pop(), ignore_errors=True)
+
+
+def _outside(tmp_path: Path) -> Path:
+    """A scratch root this guard has NOTHING to say about: outside any git work
+    tree, outside the host account home, and under one of the four volatile
+    prefixes.
+
+    IT DELIBERATELY DOES NOT USE `tmp_path`, and that is the whole point.
+    Every arm that calls this is measuring ONE axis — the work tree, the
+    account home, git-absent — and asserting that a root clean on that axis is
+    accepted. `tmp_path` is clean on the work-tree axis only by accident of
+    where the operator put `TMPDIR`, and under a relocated `TMPDIR` (the #2014
+    census lane, `run_suite_in_eda_image.sh --scratch`, any scratch under
+    `$HOME`) it is NOT under a volatile prefix — so the preflight refuses it on
+    the volatile axis and SIX arms in this file report "a legitimate root was
+    refused" about a root that was not legitimate. MEASURED on ded6aa231a68,
+    one bind mount, only `TMPDIR` different: 6 failed with `TMPDIR=/w/tmp`,
+    0 failed with pytest's own default.
+
+    That is the same defect `test_issue146_collect_external_outputs.py` fixed
+    in fc32402c8 with its `volatile_dir` fixture, and it is fixed here the same
+    way: build the precondition, ASSERT it, and fail on the PREMISE — never on
+    the subject — when a lane cannot provide it.
+
+    The four prefixes are read from the guard, which reads them from the gate,
+    so this fixture cannot drift from what the gate matches.
     """
-    d = tmp_path / "outside"
-    d.mkdir()
-    assert G.enclosing_work_tree(d) is None, (
-        f"this test's own scratch root is inside a work tree "
-        f"({G.enclosing_work_tree(d)}) — the arms below would not mean what "
-        f"they say. See vibe-ic#1446; run with the scratch root outside any "
-        f"repository.")
-    return d
+    prefixes, why = G.volatile_prefixes()
+    assert prefixes, f"the guard could not state its volatile prefixes: {why}"
+    tried = []
+    for prefix in prefixes:
+        root = Path(prefix)
+        if not (root.is_dir() and os.access(root, os.W_OK)):
+            tried.append(f"{root} (not a writable directory)")
+            continue
+        made = Path(tempfile.mkdtemp(
+            prefix=f"vibeic1446-{tmp_path.name[:32]}-", dir=str(root)))
+        _MADE_OUTSIDE.append(made)
+        d = made / "outside"
+        d.mkdir()
+        if G.enclosing_work_tree(d) is not None:
+            tried.append(f"{root} (inside the work tree "
+                         f"{G.enclosing_work_tree(d)})")
+            continue
+        if G.home_state(d)[0] == G.INSIDE:
+            tried.append(f"{root} (under the account home {G.home_state(d)[1]})")
+            continue
+        assert G.volatile_state(d)[0] == G.INSIDE, (d, G.volatile_state(d))
+        return d
+    pytest.fail(
+        "no volatile root here yields a scratch root outside every work tree "
+        "and outside the account home, so the arms that use one would not mean "
+        "what they say. This is the PREMISE failing, not the guard:\n  "
+        + "\n  ".join(tried))
 
 
 def _run_pytest(root: Path, basetemp: Path, *extra: str, env_extra=None):
@@ -768,7 +826,7 @@ def test_a_root_outside_every_volatile_root_is_a_finding():
 
 
 def test_the_volatile_finding_names_what_it_costs_and_where_to_look():
-    """A refusal that does not name the six tests it is standing in for sends
+    """A refusal that does not name the tests it is standing in for sends
     the reader to find them one at a time, which is the half hour this whole
     file exists to stop anyone spending."""
     r = _cli("--scratch-root", _NOT_VOLATILE)
@@ -798,7 +856,7 @@ def test_the_volatile_condition_is_declared_on_a_passing_run(tmp_path):
 def test_the_volatile_finding_has_no_waiver():
     """`--allow` waives the WORK-TREE refusal only. Waiving this one would not
     change what the gate matches, so it would buy a green preflight and the
-    identical six failures a minute later."""
+    identical failures a minute later."""
     r = _cli("--scratch-root", _NOT_VOLATILE, "--allow",
              env_extra={"VIBE_IC_ALLOW_SCRATCH_ROOT_IN_REPO": "1"})
     assert r.returncode == G.RC_FINDING, r.stdout + r.stderr
@@ -812,7 +870,7 @@ def test_the_pytest_hook_declares_but_does_not_refuse_a_non_volatile_root(
     Every root under a real account home is outside all four volatile prefixes,
     so a blocking hook would refuse every under-home session — which
     `test_the_hook_does_not_refuse_a_measurable_run_under_the_account_home`
-    pins as supported, and which is true: six of ~3200 tests are falsified by
+    pins as supported, and which is true: two of ~3200 tests are falsified by
     such a root and the rest are measured correctly. So the hook DECLARES, in a
     line that names the root and what cannot see it, and the preflight CLI
     (which is what a landing asks, and a landing is what publishes a count) is
@@ -828,3 +886,138 @@ def test_the_pytest_hook_declares_the_volatile_condition(tmp_path):
     r = _run_pytest(root, _outside(tmp_path) / "bt")
     assert r.returncode == 0, r.stdout + r.stderr
     assert "under a volatile root" in r.stdout
+
+
+#: A line of `_VOLATILE_REFUSAL`'s cost table: an indented repo-relative test
+#: file followed by the number of failures a non-volatile root costs in it.
+#: Prose mentions of a file do not match — they are not followed by a count.
+_COST_LINE = re.compile(
+    r"^[ \t]+(programs/tests/[A-Za-z0-9_.\-]+\.py)[ \t]+(\d+)[ \t]*$", re.M)
+
+
+def _a_non_volatile_root() -> Path:
+    """A writable directory outside every git work tree and outside all four
+    volatile prefixes — WALKED TO, never named.
+
+    A named constant does not survive the three shapes this suite runs in: a
+    container with one bind mount (`/w`), a host clone (the clone's parent),
+    and a hermetic candidate (where `$HOME` is `/tmp` and the account home is
+    `/nonexistent`). The first ancestor of the plugin tree that is outside the
+    repository is outside it in all three; the account home is the fallback for
+    a checkout that itself lives under a volatile root.
+    """
+    tried = []
+    seen = set()
+    candidates = list(Path(G.__file__).resolve().parents)
+    try:
+        candidates.append(Path.home())
+    except (RuntimeError, KeyError):                       # pragma: no cover
+        pass
+    for d in candidates:
+        if d in seen:
+            continue
+        seen.add(d)
+        if not d.is_dir():
+            continue
+        why = []
+        if G.enclosing_work_tree(d) is not None:
+            why.append("in a work tree")
+        if G.volatile_state(d)[0] != G.OUTSIDE:
+            why.append("volatile")
+        if not os.access(d, os.W_OK):
+            why.append("not writable")
+        if not why:
+            return d
+        tried.append(f"{d} ({', '.join(why)})")
+    pytest.fail(
+        "no writable directory outside every work tree and outside all four "
+        "volatile roots — this arm measures nothing without one, so it says "
+        "so rather than passing:\n  " + "\n  ".join(tried))
+
+
+def _failed_count(out) -> int:
+    """The failure tally of an inner pytest run, or a loud failure.
+
+    A run that produced NO tally is not zero failures — it is a run that did
+    not happen (`rc 4`, a collection error, an empty selector). Reporting it as
+    0 would turn a broken arm into a green one.
+    """
+    text = out.stdout + out.stderr
+    m = re.search(r"\b(\d+) failed\b", text)
+    if m:
+        return int(m.group(1))
+    assert re.search(r"\b\d+ passed\b", text), (
+        f"that pytest run produced no tally at all (rc {out.returncode}); it "
+        f"did not run:\n{text[-3000:]}")
+    return 0
+
+
+def test_every_line_of_this_cost_table_fires():
+    """The cost table inside `_VOLATILE_REFUSAL` is the whole of what the
+    refusal offers an operator — where to look — and a table that is READ
+    rather than RUN decays without saying so.
+
+    It did. It carried
+    `programs/tests/test_issue146_collect_external_outputs.py   4` from
+    ae5cc4dbfc3f until fc32402c8 gave that file a `volatile_dir` fixture which
+    mkdtemps under one of the four prefixes; from then on the line cost 0 and
+    pointed the reader at a file that is clean. MEASURED on ded6aa231a68, one
+    pytest invocation per tree, only the tree different: 4 failed at
+    fc32402c8^, 0 failed at fc32402c8, and the refusal text unchanged between
+    them. The same table never named THIS file, which was costing 6 by a
+    second mechanism until `_outside` and `_a_work_tree` were made to build
+    their own volatile scratch root.
+
+    So every line is re-measured here, by running the file it names from a
+    non-volatile scratch root. That is the only way the number means anything.
+
+    NOT PINNED, and said out loud so it is not mistaken for pinned: the
+    CONVERSE — a file that becomes affected and never gets added. The
+    behavioural population for that direction is the test files that reference
+    the gate (11 besides this one on ded6aa231a68), and running all of them
+    from a non-volatile root measured 1 m 50 s on 8hd-3 at load 2.4, one of
+    them 54 s by itself. That is more than this whole file's budget, so this
+    arm holds the direction the decay actually took and names the other.
+
+    This file is skipped if it is ever named, for the obvious reason: running
+    it here would run this test. It is not named today.
+    """
+    r = _cli("--scratch-root", _NOT_VOLATILE)
+    assert r.returncode == G.RC_FINDING, r.stdout + r.stderr
+    table = _COST_LINE.findall(r.stdout)
+    assert table, (
+        "the volatile refusal states no cost table at all; there is nothing "
+        f"for an operator to look at:\n{r.stdout}")
+
+    plugin = Path(G.__file__).resolve().parents[1]
+    mine = Path(__file__).name
+    nv = _a_non_volatile_root()
+    env = dict(os.environ)
+    env.pop("VIBE_IC_ALLOW_SCRATCH_ROOT_IN_REPO", None)
+
+    ran = 0
+    for rel, declared in table:
+        if Path(rel).name == mine:
+            continue
+        target = plugin / rel
+        assert target.is_file(), (
+            f"the cost table names {rel}, which does not exist")
+        basetemp = Path(tempfile.mkdtemp(prefix="vibeic1446-nv-", dir=str(nv)))
+        try:
+            out = _pr.run(
+                [sys.executable, "-m", "pytest", rel, "-q",
+                 "-p", "no:cacheprovider", f"--basetemp={basetemp}"],
+                cwd=str(plugin), capture_output=True, text=True, env=env)
+            got = _failed_count(out)
+        finally:
+            shutil.rmtree(basetemp, ignore_errors=True)
+        assert got == int(declared), (
+            f"the volatile refusal sends the reader to {rel} for {declared} "
+            f"failure(s); from the non-volatile root {basetemp.parent} that "
+            f"file measures {got}. A cost table that is wrong is worse than "
+            f"none — it spends the half hour this guard exists to save."
+            f"\n{out.stdout[-3000:]}")
+        ran += 1
+    assert ran, (
+        "the cost table named no file this arm could run, so it measured "
+        f"nothing:\n{r.stdout}")
