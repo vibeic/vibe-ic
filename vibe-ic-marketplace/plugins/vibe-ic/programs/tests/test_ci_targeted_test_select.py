@@ -378,15 +378,26 @@ _IMPORTS_MATRIX = re.compile(rf"^[ \t]*(?:from|import)[ \t]+{_MATRIX_PKG}\b", re
 #: would stop being possible. One hop is what the tree actually contains, and a
 #: second hop appearing should FAIL here and be widened deliberately rather than
 #: be absorbed silently.
+#:
+#: A HELPER IS DEFINED BY BEHAVIOUR, NOT BY FILENAME. This used to skip every
+#: `test_*.py`, which is the same filename rule that made
+#: `ci_targeted_test_select._helper_module_names` blind to
+#: `test_matrix_d3_outputs_produced.py:493` (`from flow_matrix import waivers`)
+#: being imported as a module by four other tests. Skipping it here made the
+#: oracle narrower than the truth in exactly the place the selector was blind,
+#: so the two agreed by sharing a mistake.
 _HELPER_GLOB = "*.py"
 
 
 def _matrix_helper_modules() -> set[str]:
-    """Helper module names under `tests/` whose own source imports the package."""
+    """Module names under `tests/` whose own source imports the package.
+
+    Includes `test_*.py` modules: a test module another test imports is a
+    helper for that test, whatever its filename says. Still ONE hop — the
+    module has to import the package ITSELF to qualify.
+    """
     out = set()
     for hf in (PLUGIN_ROOT / TESTS_REL).glob(_HELPER_GLOB):
-        if hf.name.startswith("test_"):
-            continue
         if _IMPORTS_MATRIX.search(hf.read_text(encoding="utf-8", errors="replace")):
             out.add(hf.stem)
     return out

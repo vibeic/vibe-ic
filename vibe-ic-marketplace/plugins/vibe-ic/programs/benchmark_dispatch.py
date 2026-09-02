@@ -3068,8 +3068,25 @@ def _cmd_resume_locked(bench: str, dataset: str, run: str,
     # program evidence before any candidate is (re-)accepted. A provenance
     # record that once existed and later changed is never regenerated here;
     # that is tampering/staleness and remains blocking.
+    #
+    # THE REFUSAL IS SCOPED TO ACCEPTANCE, WHICH IS WHAT #2012 SAID.
+    # This pass used to `return 2` for the WHOLE run the moment any candidate
+    # came up short, before a single repair or backup task had been written.
+    # "A candidate must not be ACCEPTED without canonical Phase-1 provenance"
+    # and "no candidate in this run may be routed" are different statements,
+    # and only the first one is the invariant. Measured consequences of the
+    # second, all three on origin/main sources:
+    #   * a --resume whose results are all still awaiting AI backup returned 2
+    #     with an EMPTY needs_ai_repair.jsonl and needs_ai_backup.jsonl -- the
+    #     worklists the AI half of the loop reads;
+    #   * one worker crashing took the HEALTHY sibling's routing down with it,
+    #     because that sibling's own provenance was equally absent;
+    #   * a candidate whose review had already come back REPAIR_REQUIRED was
+    #     never routed for repair, so the loop had no way forward at all.
+    # The blocked candidates are recorded here and refused AT THE ACCEPT SITE
+    # below, which is the single place `accepted` is ever set True.
     import emit_attestation as emit_attestation          # noqa: PLC0415
-    phase1_failures: list[str] = []
+    phase1_blocked: dict[str, str] = {}
     for result in results:
         pid = str(result.get("id"))
         if (result.get("worker_status") == "ERROR"
@@ -3088,8 +3105,8 @@ def _cmd_resume_locked(bench: str, dataset: str, run: str,
         current = emit_attestation.phase1_provenance(proj)
         if isinstance(expected, dict) and expected.get("ran") is True:
             if current != expected:
-                phase1_failures.append(
-                    f"{pid}: Phase-1 provenance changed after task creation")
+                phase1_blocked[pid] = (
+                    "Phase-1 provenance changed after task creation")
             continue
         if result.get("entry") == "D1" and current.get("ran") is not True:
             # Judged by what the run EMITTED, not by what the task recorded.
@@ -3099,23 +3116,18 @@ def _cmd_resume_locked(bench: str, dataset: str, run: str,
             # without a runner call and binds them into the task. Only a D1
             # run that truly left none is refused, and the message is then
             # a measured fact rather than a missing field.
-            phase1_failures.append(
-                f"{pid}: canonical D1-entry run emitted no Phase-1 provenance")
+            phase1_blocked[pid] = (
+                "canonical D1-entry run emitted no Phase-1 provenance")
             continue
         frontdoor = _ensure_phase1_frontdoor(runner, proj, runner_budget)
         if frontdoor.get("status") == "BLOCKED":
-            phase1_failures.append(
-                f"{pid}: {frontdoor.get('reason') or 'Phase-1 front door blocked'}")
+            phase1_blocked[pid] = str(
+                frontdoor.get("reason") or "Phase-1 front door blocked")
             continue
         current = frontdoor["provenance"]
         result["phase1_frontdoor"] = frontdoor
         if isinstance(task, dict):
             task["phase1_provenance"] = current
-    if phase1_failures:
-        print("ERROR: canonical Phase-1 front door BLOCKED:\n  "
-              + "\n  ".join(phase1_failures), file=sys.stderr)
-        return 2
-
     def _run_and_collect(job) -> _ResumeRunnerOutcome:
         pid, proj, supplied_rtl, entry, exit_step = job
         # AI backup/repair has already authored the candidate. Re-enter at the
@@ -3719,6 +3731,30 @@ def _cmd_resume_locked(bench: str, dataset: str, run: str,
                 pid, str(task.get("prompt_sha256")),
                 str(task.get("rtl_sha256")), "VERIFIED_RECOVERY",
             )] = recovery
+        # #2012's invariant, at the only site that can violate it: a
+        # candidate whose canonical Phase-1 provenance is missing, or was
+        # changed after its review task was written, is NOT accepted and NOT
+        # published. Asked before the frozen response payload is written, so
+        # nothing reaches responses/ for a refused candidate.
+        blocked_reason = phase1_blocked.get(pid)
+        if blocked_reason is not None:
+            print("ERROR: canonical Phase-1 front door BLOCKED:\n  "
+                  f"{pid}: {blocked_reason}", file=sys.stderr)
+            repairs.append({
+                "schema": "vibeic.benchmark.ai_repair_task.v2",
+                "id": pid, "project": task.get("project"),
+                "status": "PHASE1_PROVENANCE_BLOCKED",
+                "reasons": [blocked_reason],
+                "required_next": (
+                    "re-enter this project through the canonical Phase-1 "
+                    "front door so it emits hash-bound L-doc provenance, then "
+                    "run --resume again; a candidate with no canonical "
+                    "Phase-1 provenance is never accepted"),
+            })
+            result.update({"accepted": False, "awaiting_ai": True,
+                           "awaiting_ai_review": True,
+                           "ai_repair_required": False})
+            continue
         payload_path = Path(str((task.get("candidate_snapshot") or {}).get(
             "response_payload_path") or ""))
         try:

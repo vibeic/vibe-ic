@@ -128,3 +128,64 @@ def code_only(src: str) -> str:
         else:
             out.append(line)
     return "\n".join(out)
+
+
+def if_block_src(src: str, func: str, needle: str) -> str:
+    """Source of the ONE ``if`` statement inside ``func`` whose *test* contains
+    ``needle``, resolved with ``ast``.
+
+    THE THIRD FAILURE MODE OF A SOURCE PIN, after the two `func_src` documents.
+    `func_src` fixed the scope's END; this fixes its START. A pin anchored with
+    ``src.index(<token>)`` binds to the FIRST TEXTUAL occurrence, and a comment
+    that quotes the token — the natural way to explain a verdict — silently
+    becomes the anchor. Measured on `design_one_shot_runner`:
+
+        `"FULL_STACK_TB_DONE" in out`  line  8377  <- a comment in another
+                                                      function (e5d569ace7)
+        `"FULL_STACK_TB_DONE" in out`  line 10525  <- the branch being pinned
+
+    so the 3800-char window landed ~97,000 chars from the return it asserts on
+    and the test failed against correct code.
+
+    Widening the window is the wrong repair twice over: it also reaches the
+    NEIGHBOURING return in the same function, and a pin satisfied by a
+    neighbour's text is a pin no mutation of its own subject can turn red.
+    Here the neighbouring `iverilog unavailable` branch carries the same
+    ``StepResult("reference_tb", "WAIVED")`` literal, ~3000 chars after the
+    real one — so a widened window passes on a tree where the pinned branch
+    says ``PASS``.
+
+    Matched on the ``if``'s TEST expression only, never its body, so the
+    statement a pin is about cannot be selected by something it contains.
+    Raises when the match is not unique — a pin that quietly picks one of two
+    is the defect this exists to stop.
+    """
+    body = func_src(src, func)
+    tree = ast.parse(_dedent_for_parse(body))
+    hits = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.If):
+            continue
+        test_src = ast.get_source_segment(_dedent_for_parse(body), node.test) or ""
+        if needle in test_src:
+            hits.append(node)
+    if not hits:
+        raise AssertionError(
+            f"if_block_src: no `if` in {func!r} tests {needle!r}")
+    if len(hits) > 1:
+        raise AssertionError(
+            f"if_block_src: {len(hits)} `if` statements in {func!r} test "
+            f"{needle!r}; the pin would silently take one of them")
+    lines = _dedent_for_parse(body).splitlines()
+    node = hits[0]
+    return "\n".join(lines[node.lineno - 1:node.end_lineno])
+
+
+def _dedent_for_parse(body: str) -> str:
+    """``body`` shifted to column 0 so `ast.parse` accepts a nested extract.
+
+    Line numbering is preserved: only leading whitespace is removed, and the
+    same number of characters from every line, so line N in equals line N out.
+    """
+    import textwrap
+    return textwrap.dedent(body)

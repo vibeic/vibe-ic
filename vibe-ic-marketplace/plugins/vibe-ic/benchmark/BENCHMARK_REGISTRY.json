@@ -1,5 +1,13 @@
 {
   "_comment": "Registry of known open IC-design benchmarks. Drives /vibe-ic-benchmark. Each entry maps a benchmark to its canonical run-shape (per open-benchmark-methodology skill § 2 + § 5 cheat sheet) + the on-disk layout + the dataset source.",
+  "_dispatcher_scope": {
+    "implements_shapes": ["B", "C"],
+    "statement": "programs/benchmark_dispatch.py dispatches SHAPE B and SHAPE C datasets only. Its dispatchable set is _BENCH_FORMAT; every key there is a registry entry whose shape is B or C. There is NO Shape-D verb: e9ec0ce1c1 removed cmd_setup (the --setup verb) together with the dataset-specific solve shortcuts, and nothing replaced its Shape-D branch. This is a SCOPE statement, not an omission — recorded here so a red test is not the only place the fact is written down.",
+    "shape_d_route": "Shape D (agentic, per-problem project directories) is run by the benchmark's OWN agent harness, not by this dispatcher: cvdp-open declares `agentic: official docker agent image (shape D)`, and the pre-release `cvdp` shape-D entry is SUPERSEDED by cvdp-open. The nonagentic half of cvdp-open is Shape C and IS dispatched, through the general product entry.",
+    "orphaned_by_this_scope": ["programs/agentic_jsonl_to_shape_d.py"],
+    "orphan_note": "agentic_jsonl_to_shape_d.py is the GENERAL, bench-agnostic JSONL -> Shape-D project-dir extractor. cmd_setup was its only caller; it is retained, with its own tests, as the extractor a future Shape-D verb must use. If a Shape-D verb is added to the dispatcher it MUST route through this program and never through a bench-named extractor — that is what programs/tests/test_dispatcher_shape_d_general.py holds.",
+    "review_required": true
+  },
   "benchmarks": {
     "verilogeval-v2": {
       "shape": "C",

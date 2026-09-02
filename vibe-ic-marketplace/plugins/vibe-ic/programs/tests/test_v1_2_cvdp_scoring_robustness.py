@@ -81,6 +81,22 @@ def test_preflight_still_requires_args_without_the_flag():
 
 
 # ── ③ cheaper-model default doc ─────────────────────────────────────────────
+def test_blind_cvdp_worklist_doc_is_the_one_the_dispatcher_names():
+    """The policy below is only policy while the dispatcher sends the blind
+    worklist author to THIS file.
+
+    Added with the cost-policy restoration: that section was lost because a
+    rewrite of this document dropped it and nothing tied the document to its
+    reader, so the only surviving trace of the policy was a red test. A rename
+    or a re-point that orphans the doc must be red here, not discovered later.
+    """
+    dispatch = (PLUGIN / "programs" / "benchmark_dispatch.py").read_text()
+    assert BLIND_CVDP.name in dispatch, (
+        f"benchmark_dispatch.py no longer names {BLIND_CVDP.name}; the blind "
+        f"worklist instructions this file pins are not the ones an author is "
+        f"sent to")
+
+
 def test_blind_cvdp_instructions_default_to_cheaper_model():
     txt = BLIND_CVDP.read_text()
     low = txt.lower()

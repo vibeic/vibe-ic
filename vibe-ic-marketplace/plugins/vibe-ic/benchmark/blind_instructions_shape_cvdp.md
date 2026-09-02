@@ -87,6 +87,47 @@ Only then may AI repair the RTL. The repair must pass the same immutable
 challenge, re-enter the general runner at the task's declared step, pass Program
 gates, and receive a fresh hash-bound AI review.
 
+## Model selection for blind authoring (cost policy)
+
+**DEFAULT to a cheaper model with LOW reasoning effort for the blind authoring
+pass; reserve Opus for hard triage only.**
+
+Rationale (run_v1239_converge cost lesson): the blind authoring pass is a large
+fan-out over many small, well-scoped, single-module problems whose spec is fully
+given in the prompt (+ `input.context`). The bulk of these are routine RTL that
+the deterministic emit gate verifies anyway, so the marginal pass@1 from
+spending a frontier model on every problem is small while the token cost is
+large. Spending the top-tier model on the whole fan-out is the dominant,
+avoidable cost.
+
+This is a COST policy, not a quality claim. It changes what you spend, never
+what counts as a pass: every candidate is gated by the same Program gates and
+the same hash-bound review whichever model authored it.
+
+Policy:
+
+* **Blind authoring fan-out -> a CHEAPER model + LOW reasoning effort.** Prefer
+  **Haiku** (`claude-haiku-4-5`, $1 / $5 per MTok) for the routine bulk with
+  `output_config: {effort: "low"}`; step up to **Sonnet** (`claude-sonnet-5`,
+  $2 / $10) for a problem the cheaper model visibly struggles with (its own
+  mini-TB fails, or the spec is dense).
+* **Reserve Opus** (`claude-opus-5`, $5 / $25) for the **hard triage /
+  close-loop** step ONLY -- the residual fails that need careful spec
+  re-reading, FLOOR proofs, or independent blind re-solves -- not for the
+  first-pass author of every problem.
+* Model IDs are the current ones and carry no date suffix. Re-check them
+  against the live model list rather than copying a suffix out of an older
+  run's notes.
+
+HISTORY: this section was authored, then dropped by the
+`blind_instructions_shape_cvdp.md` rewrite in `e9ec0ce1c1` ("benchmark: remove
+dataset-specific solve shortcuts"), which was about the SOLVE shortcuts and not
+about this policy. `31385d6ffb` carried other dropped contracts onto the new
+entry surface and did not carry this one, so for several versions the only
+place the policy still existed was a red test. Restored here, on the surface
+`benchmark_dispatch.py` actually names to the blind worklist author, with the
+model IDs brought current.
+
 ## Official scoring
 
 Only after acceptance is COMPLETE:

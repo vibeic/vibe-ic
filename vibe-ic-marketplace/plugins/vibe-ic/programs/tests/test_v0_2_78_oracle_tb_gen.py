@@ -28,7 +28,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from _source_pin import func_src
+from _source_pin import func_src, if_block_src
 
 import pytest
 
@@ -154,22 +154,42 @@ def test_oracle_tb_catches_wrong_dut(tmp_path):
 
 # ── runner source pins ──────────────────────────────────────────────────────
 
+#: The verdicts that DISCLOSE an unverified skeleton. `PASS` is deliberately
+#: absent: #439 exists because skeleton completion used to be reported as PASS
+#: and 3 of 4 campaign ICs shipped with zero functional verification. A future
+#: author may sharpen WAIVED into a stricter word (cbe6154a6 did exactly that,
+#: WAIVED -> INCOMPLETE, for #1975) without this pin objecting; making it PASS
+#: again, or dropping the verdict entirely, must turn this test red.
+_SKELETON_DISCLOSURE_VERDICTS = {"WAIVED", "INCOMPLETE"}
+
+
 def test_skeleton_completion_is_waived_not_pass():
-    i = _P2_SRC.index('"FULL_STACK_TB_DONE" in out')
-    # Window widened (ORGANIC #654 inserted the connectivity-bridge emission
-    # + capability-gap waiver comment block ahead of the `fallback_skill`
-    # extra in this same WAIVED return; the assertions below still pin the
-    # skeleton-completion-is-WAIVED-not-PASS contract).
-    window = _P2_SRC[i:i + 3800]
-    assert '"reference_tb", "WAIVED"' in window
-    # The WAIVED return must still hand the agent a route, and that route must
+    # Anchored on the `if` that OWNS the verdict, not on the first textual
+    # occurrence of its marker. The old `_P2_SRC.index(...)` + 3800-char window
+    # bound to a COMMENT quoting the same token in step_full_stack_tb_gen
+    # (e5d569ace7), ~97,000 chars away, and the pin failed against correct
+    # code; widening it would have reached the neighbouring `iverilog
+    # unavailable` return, whose own `"reference_tb", "WAIVED"` literal would
+    # have satisfied this assertion on a tree where the pinned branch said
+    # PASS. See _source_pin.if_block_src.
+    block = if_block_src(_P2_SRC, "_reference_tb_generic_full_stack",
+                         '"FULL_STACK_TB_DONE" in out')
+    _v = re.search(r'StepResult\(\s*"reference_tb",\s*"([A-Z_]+)"', block)
+    assert _v, ("the skeleton-completion branch no longer returns a named "
+                "reference_tb verdict")
+    assert _v.group(1) in _SKELETON_DISCLOSURE_VERDICTS, (
+        f"skeleton completion reports {_v.group(1)!r}; connectivity-only "
+        f"completion with 0 golden compares is never a functional PASS (#439)")
+    assert '"functional_verified": False' in block, (
+        "the disclosure must still say functional_verified=False")
+    # The return must still hand the agent a route, and that route must
     # lead to a skill that ships -- pinning the literal here is what let the
     # runner waive at a non-existent skill without this test noticing.
-    _m = re.search(r'"fallback_skill":\s*"([A-Za-z0-9\-_]+)"', window)
-    assert _m, "the WAIVED return no longer names a fallback skill"
+    _m = re.search(r'"fallback_skill":\s*"([A-Za-z0-9\-_]+)"', block)
+    assert _m, "the skeleton-completion return no longer names a fallback skill"
     assert_route_ships(_m.group(1),
-                       "design_one_shot_runner step_reference_tb WAIVED return")
-    assert "#439" in window
+                       "design_one_shot_runner skeleton-completion return")
+    assert "#439" in block
 
 
 def test_runner_tries_oracle_before_skeleton():
