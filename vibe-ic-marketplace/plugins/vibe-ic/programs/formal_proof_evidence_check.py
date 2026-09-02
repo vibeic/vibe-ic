@@ -22,6 +22,15 @@ is a CLAIM; this gate verifies the chain that substantiates it:
       evidence without a denominator is a claim about a subset nobody
       stated, so (d) decides the VERDICT exactly as (a)-(c) do.
 
+      The last three are ALIASES: the emitter sets `elaborated_sby` from
+      `sby`, `proof_transcript` from `evidence` and
+      `bounded_vs_unbounded_scope` from `bounded_vs_unbounded`, so a
+      manifest that cites the fact once under the older name has cited it
+      (G15). The DENOMINATOR is not an alias — nothing before #1974
+      carried it (`property_count` counts .sby tasks) — and it is not
+      grandfathered: a completed claim that never stated its scope is the
+      claim #1974 exists to refuse, whenever it was written.
+
 WHAT DOES NOT DECIDE THE VERDICT: a dangling reference in a `.sby` the
 manifest never cited. #417 reports it (`SBY_REFS_DANGLING`, tagged
 `non-verdict`) while `sby_ok` stays set by the chain results.json does
@@ -471,17 +480,44 @@ def audit(project: Path) -> dict:
             f"PROPERTY_DENOMINATOR_OPEN (#1974): authored={authored!r}, "
             f"denominator={denominator}; a completed row must cover every "
             "applicable obligation")
+    # G15 — three of (d)'s five obligations are cited by the emitter under TWO
+    # names. `formal_property_run._attach_property_contract` ends with
+    #     results["elaborated_sby"]             = results.get("sby")
+    #     results["proof_transcript"]           = results.get("evidence")
+    #     results["bounded_vs_unbounded_scope"] = list(bounded_vs_unbounded)
+    # — unconditional aliases carrying no fact the pre-#1974 name did not already
+    # carry. Reading ONLY the #1974 spelling therefore converted three CITED
+    # facts into three "not cited" findings on every manifest written before the
+    # alias existed, which is a verdict about the spelling and not about the
+    # chain. The docstring words (d) as `elaborated_sby` AGREEING with `sby` and
+    # `proof_transcript` AGREEING with `evidence`; a manifest that states the
+    # fact once, under the older name, does not disagree with itself.
+    #
+    # This is scoped to the alias half deliberately. `property_denominator` /
+    # `authored_property_count` are NOT aliases — they are read from the harness
+    # and the obligation contract, and no pre-#1974 field carries them
+    # (`property_count` counts .sby TASKS: the ihp cell's 2 are `bmc` and
+    # `safety`, not two obligations). "Proof evidence without a denominator is a
+    # claim about a subset nobody stated" is a statement about the artefact, not
+    # about its vintage, so it keeps deciding the verdict for old cells too and
+    # gets NO grandfather clause here.
     scope = results.get("bounded_vs_unbounded_scope")
+    if not isinstance(scope, list) or not scope:
+        scope = results.get("bounded_vs_unbounded")
     if not isinstance(scope, list) or not scope:
         contract_ok = False
         rep["findings"].append(
             "PROOF_SCOPE_MISSING (#1974): bounded/unbounded scope is not cited")
-    if results.get("elaborated_sby") != results.get("sby"):
+    elaborated = (results["elaborated_sby"] if "elaborated_sby" in results
+                  else results.get("sby"))
+    if elaborated != results.get("sby"):
         contract_ok = False
         rep["findings"].append(
             "ELABORATED_SBY_MISSING (#1974): results do not cite the elaborated "
             ".sby task as `elaborated_sby`")
-    if results.get("proof_transcript") != results.get("evidence"):
+    transcript = (results["proof_transcript"] if "proof_transcript" in results
+                  else results.get("evidence"))
+    if transcript != results.get("evidence"):
         contract_ok = False
         rep["findings"].append(
             "PROOF_TRANSCRIPT_MISSING (#1974): results do not cite the proof "

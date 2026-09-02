@@ -31,6 +31,7 @@ import pytest
 _PROGRAMS = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_PROGRAMS))
 import formal_proof_evidence_check as F  # noqa: E402
+import corpus_guard as CG  # noqa: E402
 
 
 @pytest.fixture
@@ -110,35 +111,113 @@ def test_a_glob_resolves_from_the_sby_dir_not_the_formal_root(cell):
 
 
 def test_the_cell_that_motivated_417_now_reports_its_dangling_chain():
-    """End-to-end. The verdict must NOT move — the claim results.json makes
-    is still substantiated by the chain it cites — while the finding that was
-    silenced by a permissive resolver appears."""
-    c = (_PROGRAMS.parents[3] / "benchmark-data" / "ic" / "spm"
-         / "v1.5.58_ihp-sg13g2")
+    """End-to-end. The dangling-chain finding that a permissive resolver
+    silenced must appear, and it must appear on its OWN — this test's subject
+    is the resolver, so the assertion has to be about the resolver's finding
+    and not about whatever else the manifest happens to satisfy.
+
+    It used to assert `verdict == "PASS"`. #1974 put a completion contract on
+    the same manifest and this cell was published before that contract existed,
+    so the verdict is now FAIL on the one obligation the cell genuinely never
+    stated — its property denominator. G15 argued that FAIL rather than
+    grandfathering it: `property_denominator` is not an alias of any earlier
+    field (`property_count` counts .sby TASKS — this cell's 2 are `bmc` and
+    `safety`), so a grandfather clause could not READ the denominator, only
+    assume one, and "proof evidence without a denominator is a claim about a
+    subset nobody stated" is a fact about the manifest, not about its date.
+    What G15 DID fix is the other three findings this cell used to carry:
+    `bounded_vs_unbounded_scope` / `elaborated_sby` / `proof_transcript` are
+    unconditional aliases the emitter derives from `bounded_vs_unbounded` /
+    `sby` / `evidence`, and this cell cites all three under the older name.
+
+    So the verdict is pinned FAIL, and pinned to the EXACT #1974 finding it is
+    allowed to be FAIL for — which is a stronger control than the bare PASS it
+    replaces, because it can now tell the resolver's subject apart from the
+    completion contract.
+    """
+    c = (CG.corpus_root(_PROGRAMS) / "spm" / "v1.5.58_ihp-sg13g2")
     if not (c / "phase2/stage1/formal/reset_safety").is_dir():
-        pytest.skip("published cell not present")
+        CG.require_corpus(c, "the cell that motivated #417")
+        pytest.skip("published cell present but not in its #417 shape")
     rep = F.audit(c)
-    assert rep["verdict"] == "PASS", rep["findings"]
     dang = [f for f in rep["findings"] if f.startswith("SBY_REFS_DANGLING")]
     assert dang and "spm_reset_safety.sby" in dang[0], rep["findings"]
     assert "spm.v" in dang[0], dang[0]
+    assert rep["verdict"] == "FAIL", rep["findings"]
+    contract = sorted(f.split(" ")[0] for f in rep["findings"]
+                      if "#1974" in f)
+    assert contract == ["PROPERTY_DENOMINATOR_MISSING"], rep["findings"]
 
 
 def test_the_other_published_cells_keep_their_verdicts():
-    """The corpus guard. A resolver change CAN move verdicts, unlike #417;
-    measured 0 of 27 and pinned here so a future loosening has to argue."""
-    root = _PROGRAMS.parents[3] / "benchmark-data" / "ic"
-    if not root.is_dir():
-        pytest.skip("corpus not present")
+    """The corpus guard, and the place G15's decision is written down.
+
+    A resolver change CAN move verdicts, unlike #417; measured 0 of 27 and
+    pinned here so a future loosening has to argue. That is still what this
+    test does — but the two cells it named are no longer PASS, and the reason
+    is not the resolver.
+
+    #1974 (`2a9d21368d`) added the Step-5 COMPLETION contract and migrated the
+    EMITTER in the same commit. It did not migrate, regenerate or grandfather
+    what had ALREADY been published, so every published cell with a `formal/`
+    began auditing FAIL on four findings. Three of those four were the gate
+    reading a NAME: `bounded_vs_unbounded_scope`, `elaborated_sby` and
+    `proof_transcript` are aliases the emitter sets unconditionally from
+    `bounded_vs_unbounded`, `sby` and `evidence`, so a manifest citing the fact
+    under the older name had cited it. G15 fixed that in the gate.
+
+    The fourth is real and stays. `property_denominator` is not an alias of
+    anything: it is read from the harness and the obligation contract, and
+    nothing before #1974 carried it. Neither disposal the situation offers is
+    available to a grandfather clause — the gate cannot READ a denominator the
+    manifest never stated, and asserting one on the cell's behalf would invent
+    a measurement nobody made, which is the same sin as relabelling in the
+    other direction. So these cells are FAIL, and honestly so: they claim
+    `all_proved` over a scope they never declared, which is exactly the claim
+    #1974 exists to refuse.
+
+    Pinned per-cell to the exact #1974 finding set, so this test now
+    distinguishes "the contract is missing" from "the chain is broken" — the
+    distinction it could not make when it pinned a bare verdict, and the reason
+    the relabelling went two campaigns unnoticed.
+
+    #417's own corpus test refuses to assert a verdict at all, and its reason
+    applies here: a published cell's verdict is partly a property of how
+    COMPLETE the checkout is (`.gitignore:31 *.log` drops
+    `sby_subservient.log`, so `EVIDENCE_MISSING` fires or not depending on
+    whether a local run directory sits beside the tree). What is pinned below
+    is chosen to be immune to that. FAIL is stable under an incomplete
+    checkout because missing files can only ADD findings, never remove
+    `PROPERTY_DENOMINATOR_MISSING` — it was the PASS this test used to assert
+    that was fragile in exactly the way #417 describes. And the #1974 finding
+    set is a pure function of `results.json`'s CONTENT: every clause in (d)
+    reads the manifest, none of them dereferences a path, save the expert
+    receipt these manifests never request. So neither assertion can be moved
+    by a file that is or is not beside the checkout.
+    """
+    root = CG.require_corpus(CG.corpus_root(_PROGRAMS), "published-cell verdicts")
     seen = {}
+    contract = {}
     for f in sorted(root.rglob("phase2/stage1/formal")):
         if f.is_dir():
-            seen[str(f.parents[2])] = F.audit(f.parents[2])["verdict"]
+            rep = F.audit(f.parents[2])
+            seen[str(f.parents[2])] = rep["verdict"]
+            contract[str(f.parents[2])] = sorted(
+                x.split(" ")[0] for x in rep["findings"] if "#1974" in x)
     if not seen:
         pytest.skip("no cells with formal/")
     bad = {k: v for k, v in seen.items() if v not in
            ("PASS", "FAIL", "SKIPPED-CONDITION")}
     assert not bad, bad
-    # the three that are not SKIPPED-CONDITION are the ones this touches
-    assert seen.get(str(root / "spm" / "v1.5.58_ihp-sg13g2")) == "PASS"
-    assert seen.get(str(root / "subservient")) == "PASS"
+    ihp = str(root / "spm" / "v1.5.58_ihp-sg13g2")
+    sub = str(root / "subservient")
+    assert seen.get(ihp) == "FAIL", seen
+    assert seen.get(sub) == "FAIL", seen
+    # The denominator, and ONLY the denominator, for the cell whose manifest
+    # carries every other obligation under its pre-#1974 name.
+    assert contract.get(ihp) == ["PROPERTY_DENOMINATOR_MISSING"], contract
+    # subservient's manifest is an older shape again: it states no bounded /
+    # unbounded scope under EITHER name, so its scope finding is a genuinely
+    # absent fact and must survive the alias fix.
+    assert contract.get(sub) == ["PROOF_SCOPE_MISSING",
+                                 "PROPERTY_DENOMINATOR_MISSING"], contract
