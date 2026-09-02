@@ -14,10 +14,6 @@
       "reason": "Pre-existing count-only pin(s) on the tree this rule shipped with: 3 at line 127 (via loads). Blind by arithmetic to one arrival landing with one departure. Closes by pinning the member identities beside the count and comparing them as a set in both directions, or by re-deriving the count from the accessor at assertion time. Not repaired here: each repair is a change to what that test asserts, and belongs to whoever owns the population it names."
     },
     {
-      "key": "vibe-ic-marketplace/plugins/vibe-ic/programs/tests/test_issue1082_open_w_category_closed.py",
-      "reason": "Pre-existing count-only pin(s) on the tree this rule shipped with: 515 at line 112 (via loads). Blind by arithmetic to one arrival landing with one departure. Closes by pinning the member identities beside the count and comparing them as a set in both directions, or by re-deriving the count from the accessor at assertion time. Not repaired here: each repair is a change to what that test asserts, and belongs to whoever owns the population it names."
-    },
-    {
       "key": "vibe-ic-marketplace/plugins/vibe-ic/programs/tests/test_issue1221_inprocess_locus.py",
       "reason": "Pre-existing count-only pin(s) on the tree this rule shipped with: 2 at line 247 (via walk). Blind by arithmetic to one arrival landing with one departure. Closes by pinning the member identities beside the count and comparing them as a set in both directions, or by re-deriving the count from the accessor at assertion time. Not repaired here: each repair is a change to what that test asserts, and belongs to whoever owns the population it names."
     },

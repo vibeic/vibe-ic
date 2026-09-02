@@ -221,13 +221,44 @@ def test_real_output_still_reads_as_produced(tmp_path):
     assert any(x["rel"] == GDS_REL and x["size"] > 0 for x in written["produced"])
 
 
+#: The three segments step 37's folder nests under, BY NAME.
+#:
+#: This was `len(...) == 3` — the depth, and nothing about who the three are.
+#: A count cannot see a swap: the collector joins `phase` / `stage` / `id_slug`
+#: (step_output_collector:172), all three read off the flow, so nesting this
+#: step under the wrong phase, or under a stage it invented, still yields three
+#: parts and the assertion still passed. One departure and one arrival leave
+#: the number identical — which is the whole reason
+#: `population_pin_without_its_member_set` refuses a size pinned without its
+#: members.
+#:
+#: Pinned as a SET compared in BOTH directions (a wrong segment is reported as
+#: the departure and the arrival by name) and as an ORDERED tuple, because
+#: `phase/stage/step` is a nesting order and a set cannot say so.
+#:
+#: These are the flow's own words for step 37. If the flow renames its phase,
+#: its stage, or this step, this pin goes red and NAMES the rename — that is
+#: what a pin is for, and it is the same reconciliation the count never made.
+_STEP_DIR_PARTS = ("phase3", "stage4",
+                   "37_gdsii_output_only_if_step_31_pv_fully_clean")
+_STEP_DIR_MEMBERS = {"phase3", "stage4",
+                     "37_gdsii_output_only_if_step_31_pv_fully_clean"}
+
+
 def test_collector_still_builds_the_nested_symlink_tree(tmp_path):
     """The owner's tree (nested phase/stage/step, symlinks only) is untouched."""
     p = _mk_project(tmp_path, zero_byte=False)
     soc.materialize(p)
     sdir = _step_dir(p, GDS_STEP)
     assert sdir is not None
-    assert len(sdir.relative_to(p / "steps").parts) == 3, "phase/stage/step"
+    parts = sdir.relative_to(p / "steps").parts
+    got = set(parts)
+    assert got == _STEP_DIR_MEMBERS, (
+        f"step {GDS_STEP}'s folder is not nested under the segments the flow "
+        f"names; arrived={sorted(got - _STEP_DIR_MEMBERS)} "
+        f"departed={sorted(_STEP_DIR_MEMBERS - got)}")
+    assert parts == _STEP_DIR_PARTS, (
+        f"phase/stage/step, in that order: {parts}")
     link = sdir / "chip.gds"
     assert link.is_symlink() and link.resolve() == (p / GDS_REL).resolve()
     assert (sdir / "outputs.json").is_file()

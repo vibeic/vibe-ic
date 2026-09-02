@@ -15,9 +15,14 @@ Both subjects contain the same test modules, and every one of them carries the
 same count pin over the same live re-derivation. The gate prints its
 denominators, and they are byte-identical across the pair:
 
-    test modules parsed:       15      (both arms)
-    modules with a count pin:  15      (both arms)
-    count pins, no member pin: 14 -> 15
+    test modules parsed:       13      (both arms)
+    modules with a count pin:  13      (both arms)
+    count pins, no member pin: 12 -> 13
+
+(The subject is one module per shipped inventory row plus the one this fixture
+owns, so these follow the inventory down as rows are repaired out. They read 15
+until now and the inventory had already shrunk past that once before this
+change; re-measure them here rather than quote them.)
 
 Nothing is added to the corpus and nothing is removed from it. What moves is
 the ANSWER for ONE module — whether the identities behind its number are
