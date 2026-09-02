@@ -46,7 +46,12 @@ before coding it, and three of its eight steps are REFUSALS. Same shape here:
      rails, or no matching routed rail geometry -> REFUSE_NOT_INTEGRABLE (a
      macro with no physical supplies cannot be integrated, and inventing a
      rail name or rectangle would be fabrication).
-  5. Stage the GDS into the kit. An existing kit file is never overwritten.
+  5. Stage the GDS into the kit. An existing kit file that already
+     carries the supply interface this run derived is never
+     overwritten; one that does NOT is REPLACED, and the replacement
+     is named in the record and on the run's own output. A kit is a
+     delivery: it may be repaired, and it may not be swapped in
+     silence.
   6. Write the LEF BY CALLING MAGIC, through the PDK's own `.magicrc`,
      mirroring `librelane/scripts/magic/lef.tcl`: `gds read`, `load <top>`,
      `lef write -hide` (the abstract form, which is upstream's default).
@@ -71,9 +76,12 @@ WHAT THIS PRODUCER DELIBERATELY DOES NOT DO
     `--pinonly` expose the other two knobs (`MAGIC_WRITE_FULL_LEF`,
     `MAGIC_WRITE_LEF_PINONLY`) and the choice is RECORDED in the JSON.
   * IT DOES NOT REPLACE THE INDEPENDENT OUTPUT CHECKER. It performs one narrow
-    producer acceptance: the staged LEF and Liberty must carry the exact
-    POWER/GROUND interface this run derived, because Magic can successfully
-    write a LEF after silently dropping a port. The separate checker still
+    producer acceptance: the LEF and Liberty THIS INVOCATION WROTE must carry
+    the exact POWER/GROUND interface this run derived, because Magic can
+    successfully write a LEF after silently dropping a port. It grades nothing
+    it did not write — a view left over from an earlier run is that run's
+    output, and describing it in this run's refusal was MEASURED to make two
+    opposite faults print one sentence (see `run`). The separate checker still
     owns identity, extent, registration, complete interface, pin geometry,
     obstruction policy, and timing-tier verdicts. This program is invoked by
     the RUNNER, never from the step's gate.
@@ -194,6 +202,11 @@ class Record:
     reason: str = ""
     produced: List[str] = field(default_factory=list)
     skipped: List[str] = field(default_factory=list)
+    #: The subset of `produced` that DISPLACED an earlier run's bytes, and the
+    #: stated reason it was displaced. A kit is a delivery; replacing one is a
+    #: decision this producer publishes, never a silent side effect.
+    replaced: List[str] = field(default_factory=list)
+    replaced_reason: str = ""
     lef_policy: dict = field(default_factory=dict)
     interface: dict = field(default_factory=dict)
     notes: List[str] = field(default_factory=list)
@@ -1301,27 +1314,82 @@ def run(project: Path, pdk_root: str, full_lef: bool, pinonly: bool,
 
     hm = _pl.phase3_stage4_dir(project) / "hardmacro"
     hm.mkdir(parents=True, exist_ok=True)
-
-    def stage(path: Path, write) -> None:
-        """Never overwrite: re-running the flow must not silently replace a
-        sign-off artefact."""
-        if path.exists() and path.stat().st_size > 0:
-            rec.skipped.append(f"{path.name} (already present)")
-            return
-        write(path)
-        rec.produced.append(path.name)
-
-    # 5-7
-    stage(hm / f"{design}.gds", lambda p: shutil.copy(gds, p))
-    stage(hm / f"{design}.v",
-          lambda p: atomic_write_text(p, emit_verilog(design, pins)))
-    stage(hm / f"{design}.lib",
-          lambda p: atomic_write_text(p, emit_liberty(design, pins)))
-
+    gds_path = hm / f"{design}.gds"
+    v_path = hm / f"{design}.v"
+    lib_path = hm / f"{design}.lib"
     lef_path = hm / f"{design}.lef"
-    if lef_path.exists() and lef_path.stat().st_size > 0:
-        rec.skipped.append(f"{lef_path.name} (already present)")
-    else:
+    expected_pg = {p.name: p.use.upper() for p in pins if p.is_pg}
+
+    def _present(path: Path) -> bool:
+        return path.exists() and path.stat().st_size > 0
+
+    def _pg_of(path: Path, reader) -> Optional[Dict[str, str]]:
+        """The supply interface an ALREADY-PRESENT view carries.
+
+        `None` means the view is not on disk at all — a distinction the caller
+        needs, because "no view" and "a view with no rails" are different
+        states. Bytes this producer cannot read report an empty interface: a
+        view it cannot parse is not one it may republish as deliverable.
+        """
+        if not _present(path):
+            return None
+        try:
+            text = path.read_text(errors="replace")
+            return {str(p["pin"]): str(p["use"]).upper() for p in reader(text)}
+        except (OSError, ValueError, KeyError, TypeError):
+            return {}
+
+    # A VIEW THIS RUN DID NOT WRITE IS NOT THIS RUN'S OUTPUT TO GRADE.
+    #
+    # MEASURED 2026-09-02 on `spm x gf180mcuD` and `subservient x gf180mcuD`,
+    # both staged before #1991 taught this producer to expose the rails: every
+    # view was already on disk, so every write was skipped, and the supply
+    # acceptance below was then applied to those untouched bytes. It printed
+    #
+    #     the staged hardmacro views did not preserve the exact derived
+    #     supply interface: expected {'VDD': 'POWER', 'VSS': 'GROUND'};
+    #     LEF has {}; Liberty has {}
+    #
+    # about a file whose mtime the run never changed. Two opposite faults
+    # print that one sentence — "magic dropped a port out of the LEF I just
+    # wrote" (this producer's bug, #1991's subject) and "I wrote nothing and
+    # am describing an older run's kit" (not this producer's output at all) —
+    # and a reader cannot tell them apart. The second had no exit either: no
+    # re-run healed the tree, only `rm -rf phase3/stage4/hardmacro` did, so
+    # every cell published before 2026-09-01 was stuck at step 37.5ip.
+    #
+    # THE REFUSAL WAS NOT WRONG — a kit with no physical supplies is not
+    # deliverable, and that check stays exactly as #1991 landed it. The
+    # attribution was wrong. So an already-present view that does not carry
+    # the interface THIS run derived is REPLACED rather than graded, and the
+    # replacement is a decision this program STATES: a kit is a delivery, and
+    # swapping one out from under a consumer in silence is the same fault
+    # seen from the other side.
+    pre_pg = {lef_path.name: _pg_of(lef_path, lef_pg_pins),
+              lib_path.name: _pg_of(lib_path, liberty_pg_pins)}
+    present_pre = {n: got for n, got in pre_pg.items() if got is not None}
+    if present_pre:
+        rec.interface["pre_existing_power_ground"] = present_pre
+    stale = sorted(n for n, got in present_pre.items() if got != expected_pg)
+    replacing = bool(stale)
+    if replacing:
+        rec.replaced_reason = (
+            "a kit already on disk does not carry the supply interface this "
+            f"run derived ({expected_pg}): "
+            + "; ".join(f"{n} has {present_pre[n]}" for n in stale)
+            + "; those views were written by an earlier run, so they are "
+              "re-produced from this run's inputs instead of graded as its "
+              "output")
+        rec.notes.append("REPLACING AN EXISTING HARDMACRO KIT — "
+                         + rec.replaced_reason + ".")
+
+    def write_lef_view() -> Optional[Tuple[int, Record]]:
+        """Stage the LEF, or return the run's early exit. `site` is resolved
+        here on first need, exactly as before this returned a value."""
+        nonlocal site
+        if _present(lef_path) and not replacing:
+            rec.skipped.append(f"{lef_path.name} (already present)")
+            return None
         # THE TOOL IS RESOLVED BEFORE IT IS ASKED FOR ANYTHING, and the record
         # says which environment answered. "magic is not on PATH" was reported
         # by a run whose own provenance already carried a successful magic
@@ -1356,41 +1424,99 @@ def run(project: Path, pdk_root: str, full_lef: bool, pinonly: bool,
                 "program contains no LEF writer, on purpose. The kit is "
                 "therefore INCOMPLETE, and `digital_hardmacro_check` will "
                 "refuse it for the missing view.")
+            if replacing:
+                rec.notes.append(
+                    "NOTHING WAS REPLACED. The stale kit is still on disk "
+                    "exactly as it was: no replacement could be written, and "
+                    "removing a delivery this run cannot re-produce would "
+                    "leave the tree with less than it started with.")
             return RC_NO_CAPABILITY, rec
+        if lef_path.name in present_pre:
+            rec.replaced.append(lef_path.name)
         rec.produced.append(lef_path.name)
+        return None
 
-    # Magic may exit zero and still drop an individual DEF port. Also inspect
-    # an already-present view: never overwriting it must not turn stale bytes
-    # into a fresh PRODUCED/integrable claim. This is a narrow producer
-    # acceptance over the rail pair only; the independent gate owns every
-    # other property of the four-view kit.
-    expected_pg = {p.name: p.use.upper() for p in pins if p.is_pg}
-    try:
-        staged_lef_pg = {
-            str(p["pin"]): str(p["use"]).upper()
-            for p in lef_pg_pins(lef_path.read_text(errors="replace"))}
-        lib_path = hm / f"{design}.lib"
-        staged_lib_pg = {
-            str(p["pin"]): str(p["use"]).upper()
-            for p in liberty_pg_pins(lib_path.read_text(errors="replace"))}
-    except OSError as exc:  # the independent gate will also reject the view
+    def stage(path: Path, write) -> None:
+        """Never overwrite a view this run agrees with; always replace one it
+        does not. Re-running the flow must not silently displace a sign-off
+        artefact — and must not be unable to repair one either."""
+        if _present(path):
+            if not replacing:
+                rec.skipped.append(f"{path.name} (already present)")
+                return
+            rec.replaced.append(path.name)
+        write(path)
+        rec.produced.append(path.name)
+
+    def stage_other_views() -> None:
+        stage(gds_path, lambda q: shutil.copy(gds, q))
+        stage(v_path, lambda q: atomic_write_text(q, emit_verilog(design, pins)))
+        stage(lib_path,
+              lambda q: atomic_write_text(q, emit_liberty(design, pins)))
+
+    # ORDER IS A DECISION, AND IT DEPENDS ON WHETHER A DELIVERY IS AT RISK.
+    #
+    # On a tree with no kit (or a kit this run agrees with) the three
+    # DEF-derived views are staged FIRST and an unreachable Magic then leaves
+    # a deliberately INCOMPLETE kit for `digital_hardmacro_check` to refuse by
+    # name — pinned by `test_absent_magicrc_is_a_capability_gap_not_a_failure`
+    # and `test_a_path_without_magic_still_refuses_end_to_end`.
+    #
+    # When an existing kit is being REPLACED there is something to lose, so
+    # the LEF goes first: `write_lef_with_magic` copies onto its output only
+    # after it has accepted what Magic wrote, so a run that cannot reach Magic
+    # leaves the old kit whole instead of three-quarters swapped.
+    if replacing:
+        early = write_lef_view()
+        if early is not None:
+            return early
+        stage_other_views()
+    else:
+        stage_other_views()
+        early = write_lef_view()
+        if early is not None:
+            return early
+
+    # Magic may exit zero and still drop an individual DEF port, and catching
+    # that is this producer's own narrow acceptance (#1991). It grades ONLY
+    # the views this invocation wrote; a stale one cannot reach here, because
+    # a stale one was replaced above. The independent gate still owns
+    # identity, extent, registration, complete interface, pin geometry,
+    # obstruction policy, and the timing tier.
+    graded: Dict[str, Dict[str, str]] = {}
+    for path, reader, key in (
+            (lef_path, lef_pg_pins, "staged_lef_power_ground"),
+            (lib_path, liberty_pg_pins, "staged_liberty_power_ground")):
+        if path.name not in rec.produced:
+            continue
+        try:
+            text = path.read_text(errors="replace")
+        except OSError as exc:  # the gate will also reject the view
+            rec.status, rec.reason = "REFUSED_NOT_INTEGRABLE", (
+                f"could not re-read the supply interface this run wrote into "
+                f"{path.name}: {exc}")
+            rec.interface["integrable"] = False
+            return RC_REFUSED, rec
+        got = {str(p["pin"]): str(p["use"]).upper() for p in reader(text)}
+        rec.interface[key] = got
+        graded[path.name] = got
+    bad = {n: got for n, got in graded.items() if got != expected_pg}
+    if bad:
         rec.status, rec.reason = "REFUSED_NOT_INTEGRABLE", (
-            f"could not re-read the staged supply interface: {exc}")
-        rec.interface["integrable"] = False
-        return RC_REFUSED, rec
-    rec.interface["staged_lef_power_ground"] = staged_lef_pg
-    rec.interface["staged_liberty_power_ground"] = staged_lib_pg
-    if staged_lef_pg != expected_pg or staged_lib_pg != expected_pg:
-        rec.status, rec.reason = "REFUSED_NOT_INTEGRABLE", (
-            "the staged hardmacro views did not preserve the exact derived "
-            f"supply interface: expected {expected_pg}; LEF has "
-            f"{staged_lef_pg}; Liberty has {staged_lib_pg}")
+            "the hardmacro views THIS RUN WROTE did not preserve the exact "
+            f"derived supply interface: expected {expected_pg}; "
+            + "; ".join(f"{n} has {got}" for n, got in sorted(bad.items())))
         rec.interface["integrable"] = False
         rec.notes.append(
             "The four-view files remain evidence for the independent gate, "
             "but this producer does not label the kit deliverable: a tool "
             "success that drops either physical supply pin is not integration.")
         return RC_REFUSED, rec
+    if not rec.produced:
+        rec.notes.append(
+            "NOTHING WAS WRITTEN. Every view was already on disk and already "
+            "carried this run's derived supply interface, so the kit was left "
+            "as it stands; this run graded none of it.")
     return RC_OK, rec
 
 
@@ -1443,7 +1569,8 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     print(f"[{rec.status}] {PROGRAM}"
           + (f" — {rec.reason}" if rec.reason else "")
-          + (f"; produced {', '.join(rec.produced)}" if rec.produced else ""),
+          + (f"; produced {', '.join(rec.produced)}" if rec.produced else "")
+          + (f"; REPLACED {', '.join(rec.replaced)}" if rec.replaced else ""),
           file=sys.stderr if rc else sys.stdout)
     for n in rec.notes:
         print(f"  {n}", file=sys.stderr)
