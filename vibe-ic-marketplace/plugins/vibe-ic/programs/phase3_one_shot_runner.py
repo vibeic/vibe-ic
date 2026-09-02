@@ -20677,6 +20677,7 @@ def _build_postroute_timing_repair_tcl(top: str, tech_lef_c: str, cell_lef_c: st
                           corner_spefs_c: Optional[Dict[str, str]] = None,
                           captables_c: Optional[Dict[str, str]] = None,
                           filler_masters: Optional[List[str]] = None,
+                          extra_lefs_c: Optional[Sequence[str]] = None,
                           setup_max_util_pct: Optional[float] = None,
                           hold_max_util_pct: Optional[float] = None,
                           recover_power_pct: Optional[int] = None) -> str:
@@ -20965,6 +20966,7 @@ def _build_postroute_timing_repair_tcl(top: str, tech_lef_c: str, cell_lef_c: st
         f"set_thread_count {_openroad_thread_count()}\n"
         f"read_lef {tech_lef_c}\n"
         f"read_lef {cell_lef_c}\n"
+        + _extra_lef_read_block(extra_lefs_c) +
         f"{liberty_block}"
         + _start_rationale +
         "# Reading it as PRIMARY — NOT read_verilog+link_design followed by a second\n"
@@ -28961,7 +28963,9 @@ def _ship_signoff_spef_repair_tcl(top: str, tech_lef_c: str, cell_lef_c: str,
                                   ss_liberty_c: str, pnr_dir_c: str,
                                   max_captable_c: str, metal_prefix: str,
                                   thread_count: int,
-                                  filler_masters: Optional[List[str]] = None) -> str:
+                                  filler_masters: Optional[List[str]] = None,
+                                  extra_lefs_c: Optional[Sequence[str]] = None
+                                  ) -> str:
     """Fresh-session post-route SETUP repair against the REAL max-RC SPEF at the
     SLOW (SS) sign-off corner, writing routed_repaired.def / <top>_pnr_repaired.v.
 
@@ -28991,6 +28995,7 @@ def _ship_signoff_spef_repair_tcl(top: str, tech_lef_c: str, cell_lef_c: str,
         f"set_thread_count {thread_count}\n"
         f"read_lef {tech_lef_c}\n"
         f"read_lef {cell_lef_c}\n"
+        + _extra_lef_read_block(extra_lefs_c) +
         f"read_liberty {ss_liberty_c}\n"
         f"read_def {pnr_dir_c}/routed.def\n"
         f"read_sdc {pnr_dir_c}/constraint.sdc\n"
@@ -29640,7 +29645,8 @@ def step_signoff_spef_repair(project: Path, top: str, pdk: "PdkConfig",
         _to_container_path(str(pdk.cell_lef), container),
         ss_lib, _to_container_path(str(pnr_out), container),
         cap, pdk.metal_prefix, _openroad_thread_count(),
-        filler_masters=_filler_masters_for_pdk(pdk))
+        filler_masters=_filler_masters_for_pdk(pdk),
+        extra_lefs_c=_def_reopen_extra_lefs_c(routed, pdk, container))
     tcl_path = pnr_out / "signoff_spef_repair.tcl"
     tcl_path.write_text(tcl)
     tcl_c = _to_container_path(str(tcl_path), container)
@@ -29856,7 +29862,8 @@ def _ship_wire_length_escalation_tcl(top: str, tech_lef_c: str, cell_lef_c: str,
                                      ss_liberty_c: str, pnr_dir_c: str,
                                      max_captable_c: str, metal_prefix: str,
                                      thread_count: int,
-                                     filler_masters: Optional[List[str]] = None
+                                     filler_masters: Optional[List[str]] = None,
+                                     extra_lefs_c: Optional[Sequence[str]] = None
                                      ) -> str:
     """Emit the bounded (`_DRV_ESCALATION_ROUNDS`) repeater-insertion escalation:
     read the CURRENT routed.def (whatever step_signoff_spef_repair already
@@ -29922,6 +29929,7 @@ def _ship_wire_length_escalation_tcl(top: str, tech_lef_c: str, cell_lef_c: str,
         f"set_thread_count {thread_count}\n"
         f"read_lef {tech_lef_c}\n"
         f"read_lef {cell_lef_c}\n"
+        + _extra_lef_read_block(extra_lefs_c) +
         f"read_liberty {ss_liberty_c}\n"
         f"read_def {pnr_dir_c}/routed.def\n"
         f"read_sdc {pnr_dir_c}/constraint.sdc\n"
@@ -30186,7 +30194,8 @@ def step_signoff_drv_wire_length_repair(
         _to_container_path(str(pdk.cell_lef), container),
         ss_lib, _to_container_path(str(pnr_out), container),
         cap, pdk.metal_prefix, _openroad_thread_count(),
-        filler_masters=_filler_masters_for_pdk(pdk))
+        filler_masters=_filler_masters_for_pdk(pdk),
+        extra_lefs_c=_def_reopen_extra_lefs_c(routed, pdk, container))
     tcl_path = pnr_out / "signoff_drv_escalation.tcl"
     tcl_path.write_text(tcl)
     tcl_c = _to_container_path(str(tcl_path), container)
@@ -39393,6 +39402,9 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
                 corner_spefs_c=_repair_spefs_c,
                 captables_c=_repair_captables_c,
                 filler_masters=_filler_masters_for_pdk(pdk),
+                extra_lefs_c=_def_reopen_extra_lefs_c(
+                    (_repair_start_def if _repair_start_def is not None
+                     else pnr_out / "routed.def"), pdk, container),
                 # The step-32 area ceiling and the power-recovery move, taken
                 # from the design's OWN staged reference-flow declaration
                 # through the one ingest that already owns that vocabulary
@@ -45971,6 +45983,105 @@ def _parse_def_components(def_file: Path) -> List[Tuple[str, str]]:
             continue
         out.append((inst, master))
     return out
+
+
+_LEF_MACRO_NAME_RE = re.compile(r"^\s*MACRO\s+(\S+)", re.MULTILINE)
+
+
+def _def_reopen_extra_lefs_c(def_path: Path, pdk: "PdkConfig",
+                             container: Optional[str]) -> List[str]:
+    """Container paths of the LEFs a RE-OPENED DEF needs beyond tech + std cell.
+
+    WHY THIS EXISTS. Three sign-off decks re-open `routed.def` in a FRESH
+    OpenROAD session -- the post-route timing repair, the real-SPEF sign-off
+    repair, and the DRV wire-length escalation -- and each loads exactly two
+    LEFs, the tech LEF and the standard-cell LEF. A DEF that instantiates
+    anything else does not parse, and `read_def` is the FIRST command after
+    them, so the whole step is lost before it does any work.
+
+    MEASURED, spm x gf180mcuD, a 36-pad chip top
+    (phase3/stage3/pnr/signoff_spef_repair.log, the run as shipped):
+
+        [WARNING ODB-0099] error: netlist component (u_pad_y) is not defined
+        ... (one per pad instance)
+        [ERROR ODB-0421] DEF parser returns an error!
+        Error: signoff_spef_repair.tcl, 5 ODB-0421
+
+    -- no SHIP_ marker of any kind in the log, no routed_repaired.def, no
+    <top>_pnr_repaired.v. The step's own record still reads PASS ("no-op, base
+    route kept"), because a deck that dies at `read_def` and a repair that
+    honestly found nothing to do are the same shape from the outside. The
+    no-pad arm of the SAME design on the SAME host reaches
+    SHIP_SIGNOFF_REPAIR_DONE, so this is the pad ring, not the design.
+
+    The same deck with the IO LEFs inserted after the std-cell LEF, nothing
+    else changed, run against the SAME routed.def: rc=0, zero ODB-0099, zero
+    ODB-0421, `SHIP_SIGNOFF_REPAIR_DONE`, and both artefacts written
+    (routed_repaired.def 2.87 MB, spm_pnr_repaired.v 511 KB).
+
+    WHAT IS RETURNED. Only LEFs that DEFINE A MASTER THE DEF ACTUALLY NAMES.
+    A design with no macro and no pad ring gets `[]` and its deck is emitted
+    byte-for-byte as before, so this cannot perturb a design it is not for.
+    Candidates are the design's own `pdk.macro_lefs` and the PDK's pad-ring IO
+    library, resolved by the SAME resolver the router and the streamout use --
+    a deck must not be able to disagree with them about which views exist.
+
+    Best-effort and never fatal: a candidate that cannot be read is skipped,
+    and discovery failure (the ordinary state of a PDK that ships no IO
+    library) contributes nothing. Chip/PDK-AGNOSTIC: no design, vendor or PDK
+    literal anywhere -- the DEF names the masters and the LEFs name themselves.
+    """
+    try:
+        masters = {m for _, m in _parse_def_components(def_path)}
+    except Exception:
+        return []
+    if not masters:
+        return []
+    candidates: List[Tuple[str, str]] = []
+    for f in (getattr(pdk, "macro_lefs", None) or []):
+        candidates.append((str(f), _to_container_path(str(f), container)))
+    try:
+        io_lefs, _io_gds = _discover_padring_io_views(pdk, container)
+    except Exception:
+        io_lefs = []
+    for f in io_lefs:
+        # Already container-resolved by the IO resolver.
+        candidates.append((str(f), str(f)))
+    # The deck ALREADY reads the tech + std-cell pair. A candidate list that
+    # re-offers either of them would make the deck read it twice, so they are
+    # excluded here rather than trusted not to appear.
+    already: set = set()
+    for attr in ("tech_lef", "cell_lef"):
+        v = getattr(pdk, attr, None)
+        if v:
+            already.add(str(v))
+            already.add(_to_container_path(str(v), container))
+    out: List[str] = []
+    seen: set = set()
+    for host_or_c, path_c in candidates:
+        if path_c in seen or path_c in already or host_or_c in already:
+            continue
+        text = _read_pdk_text(host_or_c, container)
+        if not text:
+            continue
+        if not (set(_LEF_MACRO_NAME_RE.findall(text)) & masters):
+            continue
+        seen.add(path_c)
+        out.append(path_c)
+    return out
+
+
+def _extra_lef_read_block(extra_lefs_c: Optional[Sequence[str]]) -> str:
+    """`read_lef` lines for `_def_reopen_extra_lefs_c`'s result, or "".
+
+    The EMPTY STRING IS THE POINT: a design whose DEF needs nothing beyond the
+    tech + std-cell pair reproduces today's deck byte-for-byte."""
+    if not extra_lefs_c:
+        return ""
+    return ("# Masters this DEF instantiates that the tech + std-cell LEF pair\n"
+            "# does not define. Without them `read_def` below aborts ODB-0421\n"
+            "# and the whole step is lost before it runs.\n"
+            + "".join(f"read_lef {p}\n" for p in extra_lefs_c))
 
 
 def _classify_io_cell(master: str) -> str:
