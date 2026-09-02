@@ -826,6 +826,41 @@ def step_for_block(project: Path, block: Dict[str, Any], step_name: str,
     # test_analog_hardmacro_gds_emit
     # .test_the_analog_runner_invokes_this_producer_at_a8_and_only_there,
     # which asserts the dispatched argv rather than grepping this file.
+    # A6 IS THE ADJUDICATOR, and until v1.16.27 it adjudicated a NUMBER.
+    # `analog_a6_drc_attribute` runs the same deck and says, per
+    # violation, which of four populations it belongs to — the PDK's own
+    # gencell (which no layout change removes), the placement, this
+    # flow's own paint, or an interaction neither control reproduces.
+    # MEASURED on u_hawaii_adc/ldo: of 180 errors / 829 violating
+    # rectangles, 66 rectangles reproduce with the bare gencell and 52 of
+    # the errors are found by Magic inside the PDK's own cells; the rest
+    # are this flow's, and all of them have one cause.
+    #
+    # ADVISORY, deliberately: the verdict stays A6's own, over A6's own
+    # evidence. This adds the vocabulary, not the decision — and it can
+    # never clear a violation, because a deviation A5 recorded is
+    # reported as a DISCLOSURE beside the class and changes neither the
+    # class nor any exit code.
+    if step_name == "A6_block_pv":
+        _attr = PROGRAMS_DIR / "analog_a6_drc_attribute.py"
+        if _attr.is_file():
+            try:
+                _acp = _pr.run(
+                    [sys.executable, str(_attr), str(project),
+                     "--block", bname, "--container",
+                     (getattr(args, "container", None)
+                      or os.environ.get("VIBEIC_ANALOG_CONTAINER",
+                                        "vibeic-eda"))],
+                    capture_output=True, text=True, timeout=3600)
+                for _ln in (_acp.stdout or "").splitlines():
+                    if _ln.startswith("A6 DRC ATTRIBUTION") or \
+                            _ln.lstrip().split(" ")[0] in (
+                                "DEVICE_CELL", "DEVICE_PLACEMENT",
+                                "LAYOUT", "INTERACTION"):
+                        print(f"[A6 advisory] {_ln.strip()}")
+            except (OSError, subprocess.SubprocessError) as _ae:
+                print(f"[A6 advisory] DRC attribution did not run: {_ae}")
+
     if step_name == "A8_hardmacro_gen":
         gds_prog = PROGRAMS_DIR / "analog_hardmacro_gds_emit.py"
         if gds_prog.is_file():
