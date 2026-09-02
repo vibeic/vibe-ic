@@ -1137,8 +1137,28 @@ LIBRARY: Dict[str, Dict[str, Any]] = {
             #       256 / 24       468       484       0.587
             #        64 / 32       387       617       0.524
             #       256 / 32       383       627       0.583
-            #       512 / 32       357       628       0.589   <- meets 360
+            #       512 / 28       388       555       0.590   <- CHOSEN
+            #       512 / 32       357       628       0.589
             #        96 / 48       279       899       0.474
+            #
+            # AND THE TWO DECLARATIONS DO NOT BOTH FIT. Measured on the whole
+            # block, not the bench: at 512/32 the modulator draws 1.037 mA
+            # against this design's own Iout MAXIMUM of 1.0 mA (L5, L22) --
+            # over the ceiling, not merely over the 0.5 mA target. At 512/28
+            # it draws about 0.964 mA and R_out is 388 ohm, 7.8% above the
+            # 360 ohm this round derived. Widening the pull-up further does
+            # not buy it back: 1024/24 is 416 ohm against 512/24's 427, so
+            # that axis has converged.
+            #
+            # 512/28 is chosen, and the reason is which declaration outranks
+            # which. The current ceiling is the DESIGN's own stated maximum;
+            # 360 ohm is an intermediate target this analysis back-derived to
+            # hold vcm steady. Breaking a number the design declares is worse
+            # than missing one I derived, so the derived one gives way and
+            # says so. Closing both needs a topology whose output impedance
+            # is not paid for in static current -- a class-AB or a switched
+            # bias that is only strong at the decision instant -- and that is
+            # a sizing question, not a width in this table.
             #
             # Widening both halves in proportion ALSO drags the operating
             # point off the reference (0.598 -> 0.474 as it grows), because
@@ -1162,7 +1182,7 @@ LIBRARY: Dict[str, Dict[str, Any]] = {
              "same bias branch. It sets the stage's static current, so it "
              "carries only the width the impedance needs: widening it "
              "further buys impedance and spends the operating point",
-             "nets": ["vcm", "nbias", "vss", "vss"], "w": 32.0, "l": 1.0},
+             "nets": ["vcm", "nbias", "vss", "vss"], "w": 28.0, "l": 1.0},
             {"name": "c_cmc", "role": "cap", "function":
              "common-mode buffer Miller compensation — the same role, and "
              "the same derived size, as each integrator's own",
