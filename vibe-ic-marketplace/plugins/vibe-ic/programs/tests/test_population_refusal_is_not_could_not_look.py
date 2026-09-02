@@ -11,8 +11,25 @@ and mean opposite things:
                    refusal must not be purchasable with a date (#1769).
     I COULD NOT    no corpus was resolved, so NOTHING WAS OPENED and no
     LOOK           population was measured. That is a fact ABOUT THIS RUN. It is
-                   UNDETERMINED, it must NAME what it could not read, and it is
-                   never blocking-because-unreadable (the standing ruling).
+                   UNDETERMINED and it must NAME what it could not read.
+
+2026-09-03 -- THE OWNER RULED ON THE SECOND HALF OF THAT SENTENCE. It used to
+end "and it is never blocking-because-unreadable". It no longer does: an empty
+result is "I cannot see" and never "there is no problem", so a corpus nobody
+opened may not close the hygiene DAG green. UNDETERMINED now exits 2 -- a
+VISIBLE third state, not folded into PASS and not folded into FAIL (rc 1 would
+redden every checkout without a corpus for a reason about the ENVIRONMENT and
+not about the code).
+
+WHAT THAT COSTS, STATED RATHER THAN GLOSSED. This file was written because the
+two facts SHARED AN EXIT CODE and a lander could not tell them apart from it.
+After the ruling they share one again -- deliberately, because the ruling is
+that both are non-green. So the distinction has been RE-HOMED, not dropped:
+`state` (UNDETERMINED vs NOT_CHECKED), `expansion` (NO_CORPUS vs EXPANDED), and
+the two separate label channels (`undetermined_labels` vs
+`not_checked_unexempted`). The anti-collapse test below now asserts it there,
+and asserts the shared rc explicitly so a future reader sees it was decided
+rather than lost.
 
 MEASURED BEFORE THE SEPARATION: both dispatched `_dispatch 2 0`, so both
 recorded `NOT_CHECKED` with `blocking_refusal=1` and both drove
@@ -30,7 +47,9 @@ BOTH DIRECTIONS ARE FALSIFIED HERE, because a change that only moved the absent
 arm could pass a one-sided test while quietly unblocking the empty one:
 
     empty-but-readable  -> still refuses, still un-exemptible   (must NOT go quiet)
-    absent              -> named could-not-look, does NOT refuse (must NOT block)
+    absent              -> named could-not-look, refuses through its OWN door
+                           and its OWN channel (must NOT be mistaken for the
+                           other, and must NOT close green)
 
 Driven through the REAL `tools/ci/_gate_dispatch.sh`: the verdicts are read out
 of a live shell, not reasoned about from the source.
@@ -159,20 +178,33 @@ def test_an_empty_population_refusal_still_cannot_be_bought_with_a_date(tmp_path
 
 
 # ---------------------------------------------------------------- DIRECTION 2
-def test_an_absent_corpus_is_a_named_could_not_look_and_does_not_refuse(tmp_path):
-    """I COULD NOT LOOK -- named, and not a finding about the tree."""
+def test_an_absent_corpus_is_a_named_could_not_look_and_does_not_close_green(
+        tmp_path):
+    """I COULD NOT LOOK -- named, not a finding about the tree, and NOT a pass.
+
+    Renamed with the ruling. The old name ended `_does_not_refuse`, and after
+    2026-09-03 that sentence is false: a corpus nobody opened does not close
+    the hygiene DAG green. Everything else this test asserted is unchanged and
+    is exactly what the ruling requires -- the row is UNDETERMINED, it NAMES
+    what it could not read, and it stays OUT of the refusal channel a landing
+    consumer reads.
+    """
     proc, doc = _run(tmp_path, _CONTROL + _ABSENT)
     text = proc.stdout + proc.stderr
 
     row = _structural_row(doc, "NOT FOUND")
     assert row["state"] == "UNDETERMINED", (
         f"an unresolvable corpus is still being recorded as a refusal: {row}")
-    assert row["blocking_refusal"] is False, (
-        f"a could-not-look is still marked blocking: {row}")
+    assert row["blocking_refusal"] is True, (
+        f"the run exits 2 on this row and the record says it does not block; "
+        f"a record that disagrees with the exit code is the defect this "
+        f"cluster is about: {row}")
 
-    assert proc.returncode == 0, (
-        "the run refused because THIS HOST could not resolve a corpus, which "
-        "is a fact about the host and not a defect in the commit\n" + text)
+    assert proc.returncode == 2, (
+        "the hygiene DAG closed GREEN over a corpus that was never opened. "
+        "rc 2 is could-not-determine, NOT rc 1 (found a defect) -- the host "
+        "could not resolve a corpus, which is still not a statement about "
+        "the commit\n" + text)
 
     # It must NAME what it could not read, or it is a shrug.
     assert "[COULD_NOT_READ]" in text, text
@@ -196,18 +228,26 @@ def test_an_absent_corpus_alone_does_not_trip_the_zero_decided_refusal(tmp_path)
     proc, doc = _run(tmp_path, _ABSENT)
     text = proc.stdout + proc.stderr
     assert "DECIDED NOTHING" not in text, (
-        "an unresolvable corpus was refused by the ZERO DECIDED branch, so the "
-        "could-not-look still blocks -- through a different door\n" + text)
-    assert proc.returncode == 0, text
+        "an unresolvable corpus was refused by the ZERO DECIDED branch. It "
+        "must refuse through its OWN door: DECIDED NOTHING means gates that "
+        "COULD have decided and did not, which is a different fact and a "
+        "different remedy\n" + text)
+    # It DOES refuse (owner ruling) -- but as itself, and the sentence a
+    # reader gets must be the could-not-look one.
+    assert proc.returncode == 2, text
+    assert "UNDETERMINED" in text and "NOTHING WAS SCANNED" in text, text
 
 
 # ------------------------------------------------------- THE ANTI-COLLAPSE ---
-def test_the_two_facts_do_not_share_a_state_or_an_exit_code(tmp_path):
+def test_the_two_facts_do_not_share_a_state_or_a_channel(tmp_path):
     """The property, stated directly: same driver, one variable, two answers.
 
-    Before the separation this test could not have been written -- both arms
-    produced NOT_CHECKED/blocking/exit 2 and the assertion would have compared
-    a value against itself.
+    Renamed: the two now SHARE an exit code, by ruling, because both are
+    non-green. That is the one discriminator this file was originally written
+    to create, so losing it silently would be the collapse it exists to
+    refuse -- and it is therefore asserted here EXPLICITLY, beside the three
+    channels that still tell the two apart. A reader who arrives at this file
+    after the next change must be able to see that the shared rc was decided.
     """
     empty_proc, empty_doc = _run(tmp_path / "empty", _CONTROL + _EMPTY)
     absent_proc, absent_doc = _run(tmp_path / "absent", _CONTROL + _ABSENT)
@@ -215,13 +255,30 @@ def test_the_two_facts_do_not_share_a_state_or_an_exit_code(tmp_path):
     e = _structural_row(empty_doc, "EMPTY")
     a = _structural_row(absent_doc, "NOT FOUND")
 
+    # STILL TWO STATES -- this is where the distinction lives now.
     assert e["state"] != a["state"], (
         f"both facts still record one state: {e['state']}")
-    assert e["blocking_refusal"] != a["blocking_refusal"], (
-        "both facts still carry one blocking bit")
-    assert (empty_proc.returncode != 0) and (absent_proc.returncode == 0), (
-        f"the exit codes still agree: empty={empty_proc.returncode} "
-        f"absent={absent_proc.returncode}")
+    assert (e["state"], a["state"]) == ("NOT_CHECKED", "UNDETERMINED"), (e, a)
+
+    # STILL TWO CHANNELS. A landing consumer reading the refusal list must be
+    # reading refusals; a could-not-look must not be in it.
+    assert any("EMPTY" in lbl for lbl in empty_doc["not_checked_unexempted"]), \
+        empty_doc
+    assert absent_doc["not_checked_unexempted"] == [], absent_doc
+    assert absent_doc["undetermined"] == 1 and empty_doc["undetermined"] == 0, (
+        empty_doc, absent_doc)
+
+    # STILL TWO EXPANSIONS.
+    exp = {c["name"]: c["expansion"] for c in empty_doc["corpora"]}
+    exp_a = {c["name"]: c["expansion"] for c in absent_doc["corpora"]}
+    assert exp[_CORPUS] == "EXPANDED" and exp_a[_CORPUS] == "NO_CORPUS", (
+        exp, exp_a)
+
+    # AND THEY SHARE AN EXIT CODE, deliberately (owner ruling, 2026-09-03):
+    # both are non-green, so rc alone can no longer separate them. Asserted so
+    # the sharing is a recorded decision rather than a regression nobody read.
+    assert empty_proc.returncode == absent_proc.returncode == 2, (
+        f"empty={empty_proc.returncode} absent={absent_proc.returncode}")
 
 
 # -------------------------------------------------------------- CONTROL ------
