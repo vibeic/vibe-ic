@@ -1669,6 +1669,54 @@ LIBRARY: Dict[str, Dict[str, Any]] = {
                      "(fclk 1 MHz, ENOB 14, OSR 256, vref 1 V, "
                      "ihp-sg13g2): about 23, so the nominal bias is carried "
                      "and this bound is what says it was checked")},
+            # SMALL-SIGNAL SETTLING, the companion `slew_margin` never had.
+            # MEASURED (round 31, on the emitted netlist at OSR 64): the loop
+            # filter's output moves 0.285 V within every clock and returns to
+            # the same range, 0.4571..0.7427, over eight consecutive clocks --
+            # no net accumulation at all. vsum2 and vint swing TOGETHER with
+            # their difference fixed at 0.011 V, so the integrating capacitor
+            # sees no change of charge and the virtual ground is not a
+            # virtual ground. The charge cf2 commutates in each clock ends up
+            # on the summing node's own capacitance instead of on ci.
+            #
+            # The reason is a time constant nothing was checking. The
+            # incremental coefficient derivation grew ci by ~90x (6.949 um ->
+            # 629 um) and the amplifier that has to drive it did not grow
+            # with it:
+            #     gm  = 697 uS   (measured at the operating point)
+            #     ci  = 9.49 pF
+            #     tau = 13.6 ns  against 25 ns of usable settling
+            #         = 1.8 time constants, where 0.1% needs about 7
+            # `slew_margin` above already guards the LARGE-signal case -- can
+            # the bias move a full reference step in the time available -- and
+            # passes here at 2.0. It says nothing about whether the loop then
+            # SETTLES, which is a different question with a different answer.
+            # AND IT IS EVALUATED AT `fclk_max`, NOT `fclk`. The testbench
+            # this entry emits runs the modulator at the FASTEST rate the
+            # declaration admits -- its own comment says so -- while `fclk`
+            # is the 1.0 MHz target. Checked at the target this comes out at
+            # 13.3 time constants and PASSES; checked at the 10 MHz the
+            # simulation actually uses it is 1.3, and the measurement agrees
+            # (1.8, from gm 697 uS and ci 9.49 pF at the operating point). A
+            # settling check evaluated at a slower clock than the circuit
+            # runs at is a check that cannot fail.
+            # `slew_margin` above has the same shape and still reads `fclk`;
+            # listed, not fixed here -- one bug is one bug.
+            {"name": "settling_time_constants", "expr": (
+                "(settle_periods_available / (fclk_max * hz_per_mhz)) / (("
+                + _LOAD_F_EXPR + ") / ((" + _TAIL_I_EXPR
+                + ") / bias_overdrive_v))"),
+             "min": 7.0, "max": 1.0e9,
+             "why": ("the summing node has to SETTLE inside the part of the "
+                     "clock this entry budgets for the transfer, not merely "
+                     "slew. Settling to the resolution the declaration asks "
+                     "for takes about seven time constants of C_load/gm; "
+                     "fewer and the charge stays on the summing node instead "
+                     "of reaching the integrating capacitor, which is a "
+                     "converter that does not integrate. MEASURED at 1.8 "
+                     "constants: the loop filter swings 0.285 V per clock "
+                     "and returns to the same range every clock, and the "
+                     "bitstream carries no code")},
             {"name": "bias_resistor_l_um", "expr": _R_IB_L_UM_EXPR,
              "min": 1.0, "max": 2000.0,
              "why": ("the bias resistor is now DERIVED from the slew the "
