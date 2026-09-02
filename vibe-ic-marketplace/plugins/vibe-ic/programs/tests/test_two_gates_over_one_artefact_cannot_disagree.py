@@ -524,14 +524,8 @@ def test_the_gate_the_flow_declares_is_one_of_the_gates_verified_to_agree():
     never measured. This reddens then, instead of an adversarial round
     rediscovering it by hand.
     """
-    declared = _declared_programs("A7")
-    assert declared, (
-        f"no `program_exit_zero` clause found in the A7 step of {FLOW_YAML}")
-    known = {g.stem for g in PVP_GATES}
-    assert set(declared) <= known, (
-        f"the flow declares {sorted(set(declared) - known)} for the "
-        f"post-layout step, and no test measures whether it agrees with "
-        f"{sorted(known)} about `pre_vs_post.json`")
+    _assert_every_content_clause_is_measured(
+        "A7", {g.stem for g in PVP_GATES}, "`pre_vs_post.json`")
 
 
 # ═══ 2. (b) A DERIVED ARTEFACT CANNOT CERTIFY ABOVE ITS BASELINE ═══════════
@@ -773,34 +767,143 @@ def _declared_programs(step_id: str) -> list:
             if isinstance(c, dict) and "program_exit_zero" in c]
 
 
+def _answers_the_content_question(stem: str) -> bool:
+    """Can the program a flow clause names CERTIFY OR REFUSE content?
+
+    DERIVED, not listed. Each of the three membership guards in this file used
+    to carry a hand-written allow-list of the clauses exempt from the agreement
+    measurement, and a hand-written list answers the wrong question in both
+    directions: it exempts a name ON it without measuring anything, and it
+    refuses a name OFF it without measuring anything either. A8's went stale
+    the day the flow gained two legitimate clauses — `analog_macro_rtl_
+    interface_check` and `analog_topology_behaviour_check`, both wired at A8
+    BECAUSE `flow_gate_enforcement_audit` had reported them orphaned — and the
+    guard could not tell them from a real second opinion on the content.
+
+    A program answers the content question if it reaches the shared content
+    surface, OR touches the record at all. The second half is not redundant
+    with the first: a PRIVATE copy of the rule reaches no shared name, and
+    leak (c) in the module header is exactly such a program, so "reaches the
+    surface" alone would exempt the one shape this file exists to catch.
+    Section 4 separately requires every program that touches the record to
+    reach the surface, so the two halves close over each other.
+
+    A clause that does neither reads no content and writes none, so there is
+    nothing it can disagree with anybody about.
+    """
+    prog = PROGRAMS / f"{stem}.py"
+    assert prog.is_file(), (
+        f"the flow declares `{stem}` and no such program exists under "
+        f"{PROGRAMS}: a clause naming a missing program would be exempted by "
+        f"every measurement below without anything saying so")
+    src = prog.read_text(encoding="utf-8", errors="replace")
+    if _touches_record(src):
+        return True
+    return bool(_names_in(ast.parse(src)) & _shared_surface())
+
+
+def _assert_every_content_clause_is_measured(step_id, measured, artefact):
+    """The membership guard, shared by sections 1, 3 and 5.
+
+    Returns the declared clause list so a caller can assert further on it.
+    """
+    declared = _declared_programs(step_id)
+    assert declared, (
+        f"no `program_exit_zero` clause found in the {step_id} step of "
+        f"{FLOW_YAML}")
+    unmeasured = sorted(d for d in declared
+                        if _answers_the_content_question(d)
+                        and d not in measured)
+    assert not unmeasured, (
+        f"the flow declares {unmeasured} for the {step_id} step; each of them "
+        f"answers the content question and no test measures whether it agrees "
+        f"with {sorted(measured)} about {artefact}")
+    # NON-VACUITY. If the predicate answered False for every clause the
+    # assertion above would admit anything at all, and a guard that admits
+    # anything reads exactly like a step that has become safe.
+    assert any(_answers_the_content_question(d) for d in declared), (
+        f"no clause the flow declares for {step_id} answers the content "
+        f"question, so the membership check above is vacuous — the predicate "
+        f"has stopped discriminating, not the step become safe")
+    return declared
+
+
 def test_the_gate_the_flow_declares_for_a8_is_verified_to_agree_too():
     """The same guard as section 1's, for the package.
 
-    A8's gate declares a SECOND clause, `analog_lef_gds_outline_check` — the
-    numeric LEF-`SIZE`-vs-GDS-bounding-box half. It does not answer the content
-    question and is NOT asked to, for a reason that is structural rather than a
-    judgement call: the step's gate is an `all_of`, so the step's verdict is
-    the CONJUNCTION of its clauses, and a clause can only ever make the step
-    stricter. A more lenient sibling in an `all_of` cannot certify what a
-    stricter one refuses. It is named here so that stays a recorded decision
-    rather than an omission nobody re-checks — and so that a future round which
-    moves it into an `any_of`, where the reasoning inverts, has to come past
-    this test.
+    A8's gate declares clauses that do NOT answer the content question and are
+    not asked to — the numeric LEF-`SIZE`-vs-GDS-bounding-box half, the digital
+    pin agreement, the does-the-circuit-convert half. They are exempt for a
+    reason that is structural rather than a judgement call: the step's gate is
+    an `all_of`, so the step's verdict is the CONJUNCTION of its clauses and a
+    clause can only ever make the step stricter. A more lenient sibling in an
+    `all_of` cannot certify what a stricter one refuses.
+
+    Which clauses those are is MEASURED, not named. Until 20031834c1 this read
+    `set(declared) <= {the three gates} | {"analog_lef_gds_outline_check"}` and
+    the exemption was a hand-written name. It went stale the day the flow
+    legitimately gained two more clauses, and — the half that matters — the
+    name it did carry was exempt without anything ever measuring that it
+    deserved to be. `_answers_the_content_question` measures every clause, on
+    every run, in both directions.
     """
-    declared = _declared_programs("A8")
-    assert declared, (
-        f"no `program_exit_zero` clause found in the A8 step of {FLOW_YAML}")
-    known = {g.stem for g in HM_GATES} | {"analog_lef_gds_outline_check"}
-    assert set(declared) <= known, (
-        f"the flow declares {sorted(set(declared) - known)} for the hardmacro "
-        f"step, and no test measures whether it agrees with {sorted(known)} "
-        f"about the package")
+    _assert_every_content_clause_is_measured(
+        "A8", {g.stem for g in HM_GATES}, "the package")
     # ...and the conjunction the allowance above rests on, asserted rather
     # than assumed. Under `any_of` a single lenient clause would certify the
     # step on its own and the reasoning inverts.
     assert _gate_combinator("A8") == "all_of", (
         f"the A8 gate is no longer a conjunction, so a clause that does not "
         f"ask the content question can now certify the step by itself")
+
+
+#: The steps whose membership guard is derived, and the set each one measures.
+#: Written once so the control below drives the SAME call the guards do.
+_MEMBERSHIP_STEPS = (
+    ("A3", lambda: {A3_GATE.stem}, "`<block>.sp`"),
+    ("A7", lambda: {g.stem for g in PVP_GATES}, "`pre_vs_post.json`"),
+    ("A8", lambda: {g.stem for g in HM_GATES}, "the package"),
+)
+
+
+def test_the_membership_guard_still_refuses_an_unmeasured_content_clause():
+    """BIDIRECTIONAL CONTROL for the derived membership guard.
+
+    The guard replaced three hand-written allow-lists, and the failure mode a
+    derived predicate has that a list does not is answering False for
+    everything: it would then be green on every step forever and read exactly
+    like a flow with nothing left to check. So drive it at the value that MUST
+    refuse — the step's own content clauses, with nothing measured — and
+    require the refusal to come from the membership arm, naming the clause,
+    rather than from the vacuity arm.
+
+    The last two assertions pin that the predicate DISCRIMINATES on the real
+    flow: across the three steps it must answer True for at least one declared
+    clause and False for at least one. A round that makes every clause answer
+    the content question is a real change of shape and has to come past here.
+    """
+    seen_true, seen_false = set(), set()
+    for step_id, measured_fn, artefact in _MEMBERSHIP_STEPS:
+        measured = measured_fn()
+        declared = _assert_every_content_clause_is_measured(
+            step_id, measured, artefact)          # as declared: green
+
+        with pytest.raises(AssertionError) as exc:
+            _assert_every_content_clause_is_measured(step_id, set(), artefact)
+        msg = str(exc.value)
+        assert "no test measures whether it agrees" in msg, (
+            f"{step_id} refused, but on the VACUITY arm rather than on "
+            f"membership — the guard did not identify a content clause: {msg}")
+
+        for d in declared:
+            (seen_true if _answers_the_content_question(d)
+             else seen_false).add(d)
+
+    assert seen_true, "no declared clause anywhere answers the content question"
+    assert seen_false, (
+        f"every declared clause of {[s for s, _, _ in _MEMBERSHIP_STEPS]} now "
+        f"answers the content question, so the predicate no longer separates "
+        f"anything and the exemption it grants is untested")
 
 
 def test_this_fixtures_package_does_not_trip_the_numeric_clause(tmp_path):
@@ -938,14 +1041,62 @@ def test_the_ceiling_is_a_ceiling_and_not_a_lock(tmp_path):
 
 #: Programs are the subjects; their tests are not (a test naming the field is
 #: describing the rule, not answering it).
+def _touches_record(src: str) -> bool:
+    """Does *src* READ OR WRITE the record, or merely TALK about it?
+
+    DERIVED FROM THE CODE. The text rule this replaces — `if field in src` —
+    could not tell a program that GRADES the record apart from a comment that
+    MENTIONS one, and the sentence directly above already states the reason it
+    has to: a test naming the field is describing the rule, not answering it.
+    Prose inside a program is prose for exactly the same reason.
+
+    Measured, at 20031834c1: `analog_a2_topology_emit` answers nothing about
+    content and carries ONE comment sentence — "`analog_a3_netlist_emit`
+    already DISCLOSES that outcome as `design_content=structure_only`" — about
+    what a DIFFERENT program discloses. The text rule read that sentence as a
+    private copy of the content rule and reported the program as answering the
+    question without going through the shared site.
+
+    Prose is a comment or a docstring. `ast` drops comments; this drops
+    docstrings. Everything left that names the field is code — a dict key, a
+    `.get()` argument, an f-string part — plus the shared module's own
+    `DESIGN_CONTENT_FIELD` constant, which the text rule MISSED entirely: a
+    program can grade the record through the constant without ever spelling
+    it, and the text rule would not have seen it.
+
+    A file that will not parse keeps the old text answer. Dropping a subject
+    because its syntax is broken would hide it, which is the one direction
+    this must never fail in.
+    """
+    import _analog_a_check_common as _acc
+    field = _acc.DESIGN_CONTENT_FIELD
+    try:
+        tree = ast.parse(src)
+    except SyntaxError:                                 # pragma: no cover
+        return field in src
+    if "DESIGN_CONTENT_FIELD" in _names_in(tree):
+        return True
+    docstrings = set()
+    for n in ast.walk(tree):
+        if not isinstance(n, (ast.Module, ast.FunctionDef,
+                              ast.AsyncFunctionDef, ast.ClassDef)):
+            continue
+        body = getattr(n, "body", None)
+        if (body and isinstance(body[0], ast.Expr)
+                and isinstance(body[0].value, ast.Constant)
+                and isinstance(body[0].value.value, str)):
+            docstrings.add(id(body[0].value))
+    return any(isinstance(n, ast.Constant) and isinstance(n.value, str)
+               and field in n.value and id(n) not in docstrings
+               for n in ast.walk(tree))
+
+
 def _subject_programs() -> list:
     """Every non-test program under `programs/` that touches the record.
 
     DERIVED, not listed. `_analog_a_check_common` is excluded because it IS the
     shared site — the one file where the producer's raw tokens are translated
     into the class the consumers rank on."""
-    import _analog_a_check_common as _acc
-    field = _acc.DESIGN_CONTENT_FIELD
     out = []
     for p in sorted(PROGRAMS.glob("*.py")):
         if p.name == "_analog_a_check_common.py":
@@ -954,7 +1105,7 @@ def _subject_programs() -> list:
             src = p.read_text(encoding="utf-8", errors="replace")
         except OSError:                                 # pragma: no cover
             continue
-        if field in src:
+        if _touches_record(src):
             out.append(p)
     return out
 
@@ -1042,6 +1193,69 @@ def test_one_rule_per_artefact_not_one_per_gate():
         f"`_analog_a_check_common` — a private copy is how two consumers over "
         f"one artefact came to disagree: {offenders}. The shared surface is "
         f"{sorted(surface)}.")
+
+
+def test_the_subject_rule_reads_code_and_not_prose():
+    """BIDIRECTIONAL CONTROL for `_touches_record`, on synthetic sources.
+
+    Driven on invented text rather than on a program in the tree, because a
+    control anchored on a real file dies the moment somebody edits that file's
+    comment — and the rule, not today's tree, is what is under test.
+
+    The two samples are INDISTINGUISHABLE to the text rule this replaces, and
+    that is asserted here rather than assumed: without the last two lines a
+    reader cannot tell whether this test discriminates anything at all, and a
+    narrowing that discriminates nothing is a narrowing that fired on noise.
+    """
+    import _analog_a_check_common as _acc
+    field = _acc.DESIGN_CONTENT_FIELD
+
+    prose = (f'"""A module docstring naming {field}."""\n'
+             f'# ...and a comment naming {field}, about another program.\n'
+             f'X = 1\n')
+    key = f'def f(rec):\n    return rec.get("{field}")\n'
+    fstr = f'def f(rec, b):\n    return f"{{b}} {field}={{rec}}"\n'
+    const = ('from _analog_a_check_common import DESIGN_CONTENT_FIELD\n'
+             'def f(rec):\n    return rec[DESIGN_CONTENT_FIELD]\n')
+
+    assert not _touches_record(prose), (
+        "prose that NAMES the record is read as code that GRADES it — the "
+        "defect this rule replaces")
+    assert _touches_record(key), "a dict-key read of the record is not a touch"
+    assert _touches_record(fstr), "an f-string naming the record is not a touch"
+    assert _touches_record(const), (
+        "the record reached through the shared module's own field constant is "
+        "not a touch — a program can grade it without ever spelling it")
+
+    # The discriminator is real: to the text rule, `prose` and `key` are the
+    # same file. `const` is the direction the text rule got WRONG the other
+    # way — it names the record and does not contain the string.
+    assert field in prose and field in key, "the samples no longer collide"
+    assert field not in const, "the constant sample no longer tests indirection"
+
+
+def test_the_subject_rule_is_not_narrowed_past_the_shared_surface():
+    """NON-VACUITY, and the guard on the narrowing above.
+
+    A program that reaches the shared content surface answers the content
+    question by definition, so it MUST be a subject. If a future tightening of
+    `_touches_record` drops one, the invariant above goes quietly vacuous for
+    it — the failure mode a narrowing has and a widening does not.
+    """
+    subjects = {p.name for p in _subject_programs()}
+    assert subjects, "the subject rule selects no program at all"
+    surface = _shared_surface()
+    reaching = set()
+    for p in sorted(PROGRAMS.glob("*.py")):
+        if p.name == "_analog_a_check_common.py":
+            continue
+        tree = ast.parse(p.read_text(encoding="utf-8", errors="replace"))
+        if _names_in(tree) & surface:
+            reaching.add(p.name)
+    assert reaching, "no program reaches the shared surface — nothing to guard"
+    assert reaching <= subjects, (
+        f"program(s) reach the shared content surface and are not subjects of "
+        f"the invariant above: {sorted(reaching - subjects)}")
 
 
 def test_no_consumer_compares_against_the_producers_raw_token():
@@ -1273,17 +1487,12 @@ def test_a_disclosed_library_netlist_still_certifies_the_step(tmp_path):
 def test_the_gate_the_flow_declares_for_a3_is_the_one_verified_here():
     """The same membership guard sections 1 and 3 carry. The A3 step's gate is
     an `all_of`; the sibling clause `analog_netlist_pdk_check` judges model
-    includes and body connections and does not answer the content question,
-    which is safe only while the combinator is a conjunction — a clause in an
-    `all_of` can only make the step stricter."""
-    declared = _declared_programs("A3")
-    assert declared, (
-        f"no `program_exit_zero` clause found in the A3 step of {FLOW_YAML}")
-    known = {A3_GATE.stem, "analog_netlist_pdk_check"}
-    assert set(declared) <= known, (
-        f"the flow declares {sorted(set(declared) - known)} for the A3 step, "
-        f"and no test measures whether it agrees with {sorted(known)} about "
-        f"`<block>.sp`")
+    includes and body connections and does not answer the content question —
+    MEASURED by `_answers_the_content_question`, not asserted by name here —
+    which is safe only while the combinator is a conjunction, since a clause in
+    an `all_of` can only make the step stricter."""
+    _assert_every_content_clause_is_measured(
+        "A3", {A3_GATE.stem}, "`<block>.sp`")
     assert _gate_combinator("A3") == "all_of", (
         f"the A3 gate is no longer a conjunction, so a clause that does not "
         f"ask the content question can now certify the step by itself")
