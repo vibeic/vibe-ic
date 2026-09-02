@@ -3364,10 +3364,37 @@ def test_d2_the_three_step_37_5_clauses_redden_and_only_on_content(
             assert _census_verdicts(tmp_path / f"r{i}") == ["INERT"], (
                 f"the planted runner is not the population the census graded: "
                 f"{_census_verdicts(tmp_path / f'r{i}')}")
-            assert len(_census_verdicts(tmp_path / f"e{i}")) > 1, (
-                "EMPTY no longer censuses the shipped plugin, so the fallback "
-                "this fixture exists to work around is gone and the fixture "
-                "must be re-decided")
+            # RE-DECIDED 2026-09-02, exactly as the assertion this replaces
+            # demanded. It asserted that EMPTY still censuses the SHIPPED
+            # plugin (`> 1` site) — the `_plugin_root` fallback this fixture
+            # was built to work around. v1.15.80 (`df8163448`, D2) REMOVED that
+            # fallback on purpose: a root that is neither a plugin checkout nor
+            # a project carrying anything under `phase3/` now prints
+            # `[CANNOT CHECK]` and returns rc 2 before grading anything, so a
+            # gate clause can no longer answer for a design it never opened.
+            #
+            # So the fallback is gone, and the fixture is re-decided to assert
+            # the STRONGER fact that replaced it: on EMPTY the census grades
+            # NOTHING AT ALL. That serves the same purpose as the old line and
+            # serves it better — the old one proved the planted arm's red was
+            # not this repository's by showing the fallback population was
+            # different; this one shows there is no fallback population to
+            # confuse it with.
+            #
+            # The report is absent rather than empty because both refusal paths
+            # `return 2` before the `--json` write. That is a real gap — a
+            # clause that DECLARES an output should record its refusal in it —
+            # but it belongs to the census, not to this fixture, and it is
+            # reported rather than worked around here.
+            _empty_report = (tmp_path / f"e{i}"
+                             / "reports/phase3/closed_loop_executed_reentry.json")
+            assert not _empty_report.is_file(), (
+                "EMPTY censused something and wrote a report. Either the "
+                "v1.15.80 refusal guard is gone — in which case the shipped-"
+                "plugin fallback is back and this fixture must be re-decided "
+                "again — or the census now records its refusal, in which case "
+                "assert the refusal's CONTENT here instead of its absence :: "
+                f"{_empty_report.read_text(encoding='utf-8')[:300]}")
 
     # ── the two release arms, negative control: the SAME generated release
     #    with the one edited row put back. Nothing else is touched, so a PASS

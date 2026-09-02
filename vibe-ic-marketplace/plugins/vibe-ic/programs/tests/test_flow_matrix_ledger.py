@@ -210,7 +210,32 @@ CENSUS_BLOCKS_ON_NON_EMPTY = 66
 # v1.11.15, `37.5self` retired in v1.11.18) and these counts were moved
 # for neither. Each value below was re-derived by running the accessor
 # over the live yaml, not by adding one to the old number.
-CENSUS_GATE_PROGRAMS_NON_EMPTY = 66
+# 66 -> 65 on 2026-09-02. RE-DERIVED, not decremented: `gate_clauses` was
+# driven over every revision of `flow/phase1_phase2_phase3.yaml` since the last
+# commit to touch this file (4fba580fa) via `$VIBE_IC_MATRIX_FLOW_YAML`, and the
+# with_exec SET diffed per revision. EXACTLY ONE revision moves it:
+#
+#   867f807a7  "fix: preserve advisory evidence tiers (#1980)"
+#              step 35 REMOVED, nothing added.
+#
+# and the removal is deliberate. That change retired step 35's
+# `advisory_program_exit_zero: dfm_screen_check . --json …/dfm_screen.json` and
+# re-declared the same producer as a `program_outputs:` entry
+# (`path: reports/phase3/dfm_screen.json`, `verdict_field: verdict`) alongside
+# the `programs:` list it was already in. Its stated reason: `dfm_screen_check`
+# is a producer/classifier with PASS / PASS_WITH_ADVISORIES / SKIP tiers and NO
+# refusal predicate, so #1980 excludes it from the gate denominator and keeps
+# its structured output. The BLOCKING half of step 35's gate is untouched --
+# `files_exist: ["reports/phase3/dfm_screen.json"]` still holds -- so presence
+# remains the blocking predicate and the evidence tier is PRESERVED by
+# declaration instead of asserted by an exec clause.
+#
+# THE OTHER TWO ASSERTIONS IN THIS TEST ARE THE PROOF THAT IT IS A MOVE AND NOT
+# A LOSS, and they were green throughout: step 35 lands in `without_exec`, and
+# `gate_programs('35') == ()` holds there. A step that had silently kept a
+# resolved program while losing its clause would fail that loop before ever
+# reaching this count.
+CENSUS_GATE_PROGRAMS_NON_EMPTY = 65
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -528,7 +553,19 @@ def test_gate_programs_non_empty_exactly_where_the_gate_names_one(raw_steps):
     assert len(with_exec) == CENSUS_GATE_PROGRAMS_NON_EMPTY
     # "12" left this set 2026-08-08: it gained a program_exit_zero exec
     # clause (dft_post_optimization_scan_survival_check).
-    assert without_exec == {"1", "P0"}
+    #
+    # "35" JOINED it 2026-09-02, in `867f807a7` ("fix: preserve advisory
+    # evidence tiers (#1980)") -- the same one revision the count above is
+    # derived to, and this membership pin is what makes that derivation
+    # checkable: a count that moved without naming its member would pass the
+    # assert above and fail here. Step 35's
+    # `advisory_program_exit_zero: dfm_screen_check …` was retired and the same
+    # producer re-declared as a `program_outputs:` entry, so the step keeps its
+    # evidence tier by declaration and legitimately has no exec clause.
+    # `gate_programs("35") == ()` is asserted in the loop above, which is what
+    # distinguishes this from a step that lost its clause and kept a dangling
+    # program.
+    assert without_exec == {"1", "35", "P0"}
 
 
 def test_every_gate_named_program_resolves_to_a_real_file():
@@ -907,10 +944,39 @@ def test_output_entries_classify_into_the_four_kinds():
     REDERIVE = ("re-derive it: diff the (step, entry) SET per flow-yaml "
                 "revision since the last commit that touched this pin, via "
                 "$VIBE_IC_MATRIX_FLOW_YAML — never type the new total")
+    # 2026-09-02: a SWAP, and the first one this pin has caught. The total is
+    # UNCHANGED at 183 -- so `sum` below stays put and passed throughout, and it
+    # is the per-kind asserts that found this. That is exactly the property the
+    # note above claims for them ("a real check rather than a restatement of the
+    # sum"), demonstrated rather than asserted.
+    #
+    # RE-DERIVED by the prescribed method: `required_outputs` was driven over
+    # every revision of the flow yaml since the last commit to touch this file
+    # (4fba580fa) via `$VIBE_IC_MATRIX_FLOW_YAML` and the (step, entry) SET
+    # diffed per revision. EXACTLY ONE revision moves it:
+    #
+    #   2a9d21368  "fix: close formal property authoring gap (#1974)"
+    #     - (5, 'phase2/stage1/formal/*.sby')                    GLOB
+    #     - (5, 'phase2/stage1/formal/results.json')             FILE
+    #     + (5, 'phase2/stage1/formal/*.sby OR …/formal_authoring_request.json
+    #            OR …/formal_not_applicable.json')               ANY_OF
+    #     + (5, 'phase2/stage1/formal/results.json OR …/formal_authoring_request
+    #            .json OR …/formal_not_applicable.json')         ANY_OF
+    #
+    # TWO entries, each rewritten IN PLACE to name its own two fallbacks, so
+    # step 5 declares the same two artefacts it always did and each may now be
+    # satisfied by an authoring request or a not-applicable record instead. One
+    # FILE and one GLOB become two ANY_OF: FILE 131 -> 130, GLOB 28 -> 27,
+    # ANY_OF 24 -> 26, total 183 -> 183.
+    #
+    # The paired anchors in `flow_matrix/flowref.py` ALREADY carry 130/27/26 --
+    # they were moved with the live flow and this ledger was the one reader left
+    # behind, which is why the drift was invisible until the per-kind asserts
+    # ran.
     assert sum(seen.values()) == 183, (seen, REDERIVE)
-    assert seen[F.FILE] == 131, (seen, REDERIVE)
-    assert seen[F.GLOB] == 28, (seen, REDERIVE)
-    assert seen[F.ANY_OF] == 24, (seen, REDERIVE)
+    assert seen[F.FILE] == 130, (seen, REDERIVE)
+    assert seen[F.GLOB] == 27, (seen, REDERIVE)
+    assert seen[F.ANY_OF] == 26, (seen, REDERIVE)
     # Reported to the orchestrator: the PROGRAM_EXIT form described in the brief
     # does NOT exist in required_outputs. It lives only in `gate` clauses. The
     # classifier still returns it for forward-compat, but a sibling branching on
