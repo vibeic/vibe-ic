@@ -62,8 +62,8 @@ def _helper(pointer: str | None) -> subprocess.CompletedProcess[str]:
 
 def test_external_population_is_read_only_from_the_git_index(tmp_path):
     external = _external(tmp_path)
-    tracked = _routed(external, "logic", "v1", tracked=True)
-    untracked = _routed(external, "leftover", "v9", tracked=False)
+    tracked = _routed(external, "logic", "v1_openpdkx", tracked=True)
+    untracked = _routed(external, "leftover", "v9_openpdkx", tracked=False)
 
     proc = _helper(str(external))
 
@@ -77,7 +77,7 @@ def test_external_population_is_read_only_from_the_git_index(tmp_path):
 
 def test_trusted_manifest_binds_population_argv_and_owned_receipts(tmp_path):
     external = _external(tmp_path)
-    _routed(external, "logic", "v1", tracked=True)
+    _routed(external, "logic", "v1_openpdkx", tracked=True)
     _git(external, "-c", "user.email=t@t", "-c", "user.name=t",
          "commit", "-qm", "corpus")
     sha = _git(external, "rev-parse", "HEAD").stdout.strip()
@@ -100,7 +100,7 @@ def test_trusted_manifest_binds_population_argv_and_owned_receipts(tmp_path):
     items = doc["corpora"][0]["items"]
     assert len(items) == 1 and items[0]["ordinal"] == 1
     assert items[0]["path"] == (
-        "ic/logic/v1/phase3/stage3/pnr/routed.def")
+        "ic/logic/v1_openpdkx/phase3/stage3/pnr/routed.def")
     assert items[0]["mode"] == "100644"
     assert len(items[0]["gates"]) == 4
     receipts = doc["execution_receipts"]
@@ -147,7 +147,8 @@ def _transition_subject(root: Path, *, activate: bool) -> Path:
         _per() {{
           local def="$1" cell design
           cell="${{def%/phase3/stage3/pnr/routed.def}}"
-          design="$(basename "$(dirname "$cell")")"
+          verdir="$(basename "$cell")"
+          design="$(basename "$(dirname "$cell")")/${{verdir#*_}}"
           uncheckable_until 2027-02-28 "fixture has no macro LEF"
           run_tolerating_uncheckable "macro OBS not crossed ($design)" \
             "$PLUGIN" python3 programs/macro_obs_geometry_intersect_check.py "$cell"
@@ -210,7 +211,7 @@ def test_real_distinct_root_receipts_authorize_only_the_exact_transition(
     control: bound mode must still scan only the externally attested checkout.
     """
     benchmark_a = _external(tmp_path)
-    _routed(benchmark_a, "logic", "v1", tracked=True)
+    _routed(benchmark_a, "logic", "v1_openpdkx", tracked=True)
     _git(benchmark_a, "-c", "user.email=t@t", "-c", "user.name=t",
          "commit", "-qm", "corpus")
     sha = _git(benchmark_a, "rev-parse", "HEAD").stdout.strip()
@@ -221,7 +222,7 @@ def test_real_distinct_root_receipts_authorize_only_the_exact_transition(
     candidate_root = tmp_path / "phase2-candidate"
     base_gate = _transition_subject(base_root, activate=False)
     candidate_gate = _transition_subject(candidate_root, activate=True)
-    _routed(candidate_root / "benchmark-data", "candidate_fake", "v9",
+    _routed(candidate_root / "benchmark-data", "candidate_fake", "v9_openpdkx",
             tracked=False)
     base_record = tmp_path / "base.json"
     candidate_record = tmp_path / "candidate.json"
@@ -271,7 +272,7 @@ def test_real_distinct_root_receipts_authorize_only_the_exact_transition(
 
 def test_an_indexed_but_unmaterialized_def_is_undetermined(tmp_path):
     external = _external(tmp_path)
-    routed = _routed(external, "logic", "v1", tracked=True)
+    routed = _routed(external, "logic", "v1_openpdkx", tracked=True)
     routed.unlink()
 
     proc = _helper(str(external))
@@ -286,7 +287,7 @@ def test_an_indexed_routed_def_symlink_is_not_a_corpus_file(tmp_path):
     external = _external(tmp_path)
     outside = tmp_path / "mutable-outside.def"
     outside.write_text("VERSION 5.8 ;\nEND DESIGN\n", encoding="utf-8")
-    routed = (external / "ic/logic/v1/phase3/stage3/pnr/routed.def")
+    routed = (external / "ic/logic/v1_openpdkx/phase3/stage3/pnr/routed.def")
     routed.parent.mkdir(parents=True)
     routed.symlink_to(outside)
     _git(external, "add", str(routed.relative_to(external)))
@@ -398,8 +399,13 @@ def _corpus_location_files() -> tuple[str, ...]:
     `test_resolve_generated_conflicts.py` for the identical regression.
     """
     import ast as _ast
+    # TWO roots since vibe-ic#2011: once a corpus IS resolved, `main()` also
+    # imports `hygiene_finding_delta` for the (design, pdk) cell-identity rule.
+    # A sandbox carrying only the resolver would make the producer answer
+    # UNDETERMINED over a corpus it could otherwise read -- the exact false
+    # reading this derivation exists to prevent.
     root = "_corpus_location.py"
-    seen, out, queue = set(), [], [root]
+    seen, out, queue = set(), [], [root, "hygiene_finding_delta.py"]
     while queue:
         name = queue.pop()
         if name in seen:
@@ -420,7 +426,11 @@ def _corpus_location_files() -> tuple[str, ...]:
 
 
 def _subject_repo(tmp_path: Path) -> Path:
-    """The minimum tree `routed_def_corpus.main()` needs, carrying NO corpus."""
+    """The minimum tree `routed_def_corpus.main()` needs, carrying NO corpus.
+
+    "Minimum" is the resolver's import closure plus the cell-identity rule's
+    (`hygiene_finding_delta`, vibe-ic#2011) -- both derived, neither typed.
+    """
     root = tmp_path / "subject"
     programs = root / "vibe-ic-marketplace/plugins/vibe-ic/programs"
     programs.mkdir(parents=True)
@@ -623,18 +633,126 @@ def test_a_producer_that_claims_absence_and_prints_items_is_a_failure(tmp_path):
     assert label in [g["label"] for g in doc["gates"]]
 
 
-def test_two_versions_of_one_design_refuse_before_duplicate_gate_owners(
+# --- vibe-ic#2011: a cell's gate-owner identity is (design, pdk) -------------
+#
+# The population used to be keyed by DESIGN. The first design published on two
+# PDKs (spm x sky130A + gf180mcuD, benchmark-data 5a92b920) made the producer
+# refuse the whole corpus UNDETERMINED -- correctly, because the four per-cell
+# labels carried the design alone and eight gates would have had four owners.
+# The corpus was right; the identity model was the defect. These tests pin the
+# migrated model in both directions: two PDKs are two cells with distinct
+# owners; two routed cells on ONE pdk, or a cell with no PDK at all, still
+# refuse -- by name, never as a silent duplicate or an invented identity.
+
+_PER_CELL_PREFIXES = ("macro OBS not crossed (", "DRC PASS is not vacuous (",
+                      "inner FAILs reach the verdict (", "new tool diagnostic id (")
+
+
+def _shipped_list_labels(pointer: Path) -> list[str]:
+    """The per-cell labels the SHIPPED hygiene script declares over `pointer`."""
+    env = os.environ.copy()
+    env.pop("GATEKEEPER_BENCHMARK_DATA_SHA", None)
+    env.pop("GATE_DISPATCH_ATTESTATION_FILE", None)
+    env[ENV] = str(pointer)
+    env["PYTHONDONTWRITEBYTECODE"] = "1"
+    proc = subprocess.run(
+        ["bash", str(SHIPPED_HYGIENE), "--list"], cwd=str(REPO), env=env,
+        capture_output=True, text=True)
+    assert proc.returncode == 0, proc.stdout[-2000:] + proc.stderr[-2000:]
+    return [line.split("  [item", 1)[0] for line in proc.stdout.splitlines()
+            if line.startswith(_PER_CELL_PREFIXES)]
+
+
+def test_one_design_on_two_pdks_is_two_cells_with_distinct_owners(tmp_path):
+    """The pin the issue asks for, on the producer AND on the loop it feeds."""
+    external = _external(tmp_path)
+    on_x = _routed(external, "logic", "v1.2.3_openpdkx", tracked=True)
+    on_y = _routed(external, "logic", "v1.5.0_openpdky", tracked=True)
+
+    proc = _helper(str(external))
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert proc.stdout.splitlines() == sorted([str(on_x), str(on_y)])
+    assert "UNDETERMINED" not in proc.stderr
+
+    labels = _shipped_list_labels(external)
+    assert len(labels) == 8, labels
+    assert len(set(labels)) == 8, (
+        "two cells of one design share a gate label -- duplicate owners, the "
+        f"exact state the producer used to refuse the corpus over: {labels}")
+    owners = {label[label.rindex("(") + 1:-1] for label in labels}
+    assert owners == {"logic/openpdkx", "logic/openpdky"}, owners
+    assert not any(label.endswith("(logic)") for label in labels), (
+        "the label still carries the design alone")
+
+
+def test_two_routed_cells_of_one_design_on_one_pdk_refuse_before_duplicate_owners(
         tmp_path):
     external = _external(tmp_path)
-    _routed(external, "logic", "v1", tracked=True)
-    _routed(external, "logic", "v2", tracked=True)
+    _routed(external, "logic", "v1_openpdkx", tracked=True)
+    _routed(external, "logic", "v2_openpdkx", tracked=True)
 
     proc = _helper(str(external))
 
     assert proc.returncode == 2, proc.stdout + proc.stderr
     assert proc.stdout == ""
-    assert "more than one routed-DEF version" in proc.stderr
-    assert "two-phase identity migration" in proc.stderr
+    assert "two routed-DEF cells on the same PDK" in proc.stderr
+    assert "(logic/openpdkx)" in proc.stderr, "the refusal must name the pair"
+    assert "v1_openpdkx" in proc.stderr and "v2_openpdkx" in proc.stderr
+
+
+def test_a_cell_that_states_no_pdk_has_no_identity_and_is_refused(tmp_path):
+    external = _external(tmp_path)
+    _routed(external, "logic", "v1", tracked=True)      # no `_<pdk>` -- on purpose
+
+    proc = _helper(str(external))
+
+    assert proc.returncode == 2, proc.stdout + proc.stderr
+    assert proc.stdout == "", "a cell with no identity must not enter the population"
+    assert "does not state a PDK" in proc.stderr
+    assert "logic/v1" in proc.stderr
+
+
+def test_the_cell_identity_grammar_is_one_rule_in_two_languages():
+    """`_routed_cell_id` (bash) == `routed_cell_identity` (Python), measured.
+
+    The rule lives in Python; the hygiene loop cannot import it, so bash carries
+    a mirror. A mirror is a second spelling of one fact, and this is the test
+    that keeps the two from drifting -- the shipped function is sourced out of
+    the shipped script and driven over the same inputs, including the ones the
+    rule must REFUSE.
+    """
+    import sys as _sys
+    src = SHIPPED_HYGIENE.read_text(encoding="utf-8")
+    start = src.index("_ROUTED_CELL_GRAMMAR='")
+    end = src.index("_per_published_cell_gates() {", start)
+    snippet = src[start:end]
+    assert "_routed_cell_id()" in snippet
+    cases = ["v1.14.88_gf180mcuD", "v1.5.65_sky130A", "v1.5.58_ihp-sg13g2",
+             "v3_a_b", "v1.2.3_openpdkx", "v10_x-y_z",
+             "v1", "v0.3.0", "v1.2_", "1.2_pdk", "va_b", "V1_pdk"]
+    driver = snippet + (
+        'for n in "$@"; do\n'
+        '  if out="$(_routed_cell_id "/corpus/ic/design/$n")"; then\n'
+        '    printf "%s\\n" "$out"\n'
+        '  else\n'
+        '    printf "NONE\\n"\n'
+        '  fi\n'
+        'done\n')
+    bash = subprocess.run(["bash", "-c", driver, "_", *cases],
+                          capture_output=True, text=True)
+    assert bash.returncode == 0, bash.stderr
+    if str(PROGRAMS) not in _sys.path:
+        _sys.path.insert(0, str(PROGRAMS))
+    import hygiene_finding_delta as H  # noqa: PLC0415
+    python = [H.routed_cell_identity("design", n) or "NONE" for n in cases]
+    assert bash.stdout.splitlines() == python, list(
+        zip(cases, bash.stdout.splitlines(), python))
+    assert python[:6] == ["design/gf180mcuD", "design/sky130A",
+                          "design/ihp-sg13g2", "design/a_b",
+                          "design/openpdkx", "design/x-y_z"]
+    assert python[6:] == ["NONE"] * 6, (
+        "a name with no PDK must be refused by BOTH spellings")
 
 
 def _dispatch_script(root: Path, producer: str, *, preamble: str = "") -> Path:

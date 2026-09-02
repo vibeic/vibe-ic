@@ -200,12 +200,47 @@ ROUTED_DEF_CORPUS = "published cells carrying a routed DEF"
 BENCHMARK_DATA_ORIGIN = "https://github.com/vibeic/benchmark-data.git"
 ROUTED_DEF_EMPTY_LABEL = (
     f'corpus "{ROUTED_DEF_CORPUS}" is EMPTY — nothing was checked over it')
+#: THE GATE-OWNER IDENTITY OF A PUBLISHED CELL IS (design, pdk), NOT design
+#: (vibe-ic#2011). A cell is published at ``ic/<design>/v<version>_<pdk>/``
+#: (`benchmark_evidence_publish` writes ``f"v{plugin_version}_{pdk}"``), and
+#: the same design is published once per PDK it was taped out on. The per-cell
+#: gate labels used to carry ``({design})`` alone, so the first design to
+#: publish a routed DEF on two PDKs (spm x sky130A + gf180mcuD) would have
+#: given eight gates four labels -- two owners per identity -- and the producer
+#: refused the whole population rather than do that. The identity is now the
+#: ``<design>/<pdk>`` pair, spelled ONCE here: the producer's manifest, the
+#: hygiene loop's label and this judge's re-derivation all read it from
+#: :func:`routed_cell_identity` (bash mirrors the grammar in
+#: `repo_hygiene_gates.sh::_routed_cell_id`, pinned equal by
+#: `test_the_cell_identity_grammar_is_one_rule_in_two_languages`).
+#:
+#: The version is deliberately NOT part of the identity: a republish of the
+#: same design on the same PDK is the same gate owner, so ledgers and time
+#: profiles keyed by label keep their meaning. The corpus publishes one routed
+#: DEF per (design, pdk); a second one on the same PDK is a producer refusal
+#: naming the pair, never a silent duplicate owner.
+ROUTED_CELL_GRAMMAR = re.compile(r"^v\d+(?:\.\d+)*_(?P<pdk>.+)$")
 ROUTED_DEF_GATE_LABELS = (
-    "macro OBS not crossed ({design})",
-    "DRC PASS is not vacuous ({design})",
-    "inner FAILs reach the verdict ({design})",
-    "new tool diagnostic id ({design})",
+    "macro OBS not crossed ({cell})",
+    "DRC PASS is not vacuous ({cell})",
+    "inner FAILs reach the verdict ({cell})",
+    "new tool diagnostic id ({cell})",
 )
+
+
+def routed_cell_identity(design: str, version_dir: str) -> Optional[str]:
+    """``("spm", "v1.14.88_gf180mcuD")`` -> ``"spm/gf180mcuD"``.
+
+    None when the version directory does not state a PDK -- a cell with no
+    PDK has no identity in the (design, pdk) model, and the producer refuses
+    it UNDETERMINED rather than guess one. The PDK is everything after the
+    first ``_`` that follows the dotted version, so a PDK name may itself
+    carry ``-`` or ``_`` (``ihp-sg13g2``).
+    """
+    m = ROUTED_CELL_GRAMMAR.match(version_dir)
+    if m is None:
+        return None
+    return f"{design}/{m.group('pdk')}"
 
 _FULL_GIT_OID = re.compile(r"(?:[0-9a-f]{40}|[0-9a-f]{64})\Z")
 _SHA256 = re.compile(r"[0-9a-f]{64}\Z")
@@ -719,7 +754,7 @@ def _trusted_routed_evidence(doc: object) -> dict:
         raise Refusal("parent-owned evidence does not name a positive routed-DEF corpus")
 
     expected: Dict[str, dict] = {}
-    paths, designs, ordinals = set(), set(), set()
+    paths, cells, ordinals = set(), set(), set()
     for item in corpus["items"]:
         fields = {"ordinal", "path", "mode", "blob", "gates"}
         if not isinstance(item, dict) or set(item) != fields:
@@ -734,18 +769,25 @@ def _trusted_routed_evidence(doc: object) -> dict:
                 or parts[3:] != ("phase3", "stage3", "pnr", "routed.def")
                 or any(part in ("", ".", "..") for part in parts)):
             raise Refusal(f"unsafe or non-canonical routed-DEF path: {raw_path!r}")
-        design = parts[1]
+        # (design, pdk) -- vibe-ic#2011. `parts[1]` alone let two cells of one
+        # design claim the same four labels.
+        cell = routed_cell_identity(parts[1], parts[2])
+        if cell is None:
+            raise Refusal(
+                f"routed-DEF path {raw_path!r} does not state its PDK in its "
+                f"version directory (expected v<version>_<pdk>), so it has no "
+                f"(design, pdk) gate-owner identity")
         blob = item.get("blob")
         if (item.get("mode") not in ("100644", "100755")
                 or not isinstance(blob, str)
                 or _FULL_GIT_OID.fullmatch(blob) is None
                 or len(blob) != len(sha)):
             raise Refusal(f"manifest item {raw_path!r} has no exact indexed blob")
-        if raw_path in paths or design in designs or ordinal in ordinals:
+        if raw_path in paths or cell in cells or ordinal in ordinals:
             raise Refusal("parent-owned routed-DEF identities are not unique")
-        paths.add(raw_path); designs.add(design); ordinals.add(ordinal)
+        paths.add(raw_path); cells.add(cell); ordinals.add(ordinal)
         gates = item.get("gates")
-        labels = [template.format(design=design)
+        labels = [template.format(cell=cell)
                   for template in ROUTED_DEF_GATE_LABELS]
         if not isinstance(gates, list) or len(gates) != len(labels):
             raise Refusal(f"manifest item {raw_path!r} lacks its four gate identities")

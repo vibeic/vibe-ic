@@ -181,7 +181,7 @@
       "seconds": 6
     },
     {
-      "label": "macro OBS not crossed (spm)",
+      "label": "macro OBS not crossed (spm/sky130A)",
       "state": "NOT_CHECKED",
       "seconds": 0,
       "corpus": "published cells carrying a routed DEF",
@@ -189,7 +189,7 @@
       "corpus_items": 1
     },
     {
-      "label": "DRC PASS is not vacuous (spm)",
+      "label": "DRC PASS is not vacuous (spm/sky130A)",
       "state": "PASS",
       "seconds": 0,
       "corpus": "published cells carrying a routed DEF",
@@ -197,7 +197,7 @@
       "corpus_items": 1
     },
     {
-      "label": "inner FAILs reach the verdict (spm)",
+      "label": "inner FAILs reach the verdict (spm/sky130A)",
       "state": "PASS",
       "seconds": 0,
       "corpus": "published cells carrying a routed DEF",

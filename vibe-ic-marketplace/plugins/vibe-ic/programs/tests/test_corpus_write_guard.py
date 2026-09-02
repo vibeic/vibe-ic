@@ -317,17 +317,21 @@ def test_the_tracked_cells_are_still_reached():
         # EMPTY, and this test reports a coverage cut in a fan-out that is
         # intact — which is precisely the false reading its docstring above
         # describes and was rewritten to stop producing.
-        for _dep in ("_progress_run.py", "_watchdog.py"):
+        # The producer reads the cell-identity rule from
+        # `hygiene_finding_delta.routed_cell_identity` (vibe-ic#2011), which
+        # imports `_atomic_artefact`; without them the producer is UNDETERMINED
+        # and the population EMPTY -- the same false reading described above.
+        for _dep in ("_progress_run.py", "_watchdog.py",
+                     "hygiene_finding_delta.py", "_atomic_artefact.py"):
             shutil.copy2(_CORPUS_LOCATION.parent / _dep, resolver / _dep)
-        # ONE routed-DEF version per DESIGN. The producer refuses a design that
-        # publishes more than one ("a two-phase identity migration is required
-        # before this population can expand without duplicate gate owners"), so
-        # the older `ic/fam/{alpha,beta}` shape — two versions of one design —
-        # is now an illegal corpus and produced an empty population, not two
-        # cells. Two designs keep the planted count at two and stay legal.
+        # ONE routed-DEF cell per (design, pdk) -- vibe-ic#2011. The producer
+        # refuses two routed cells of one design on ONE pdk, and a cell whose
+        # version directory states no PDK (`v1` alone) has no identity at all,
+        # so both planted cells carry `v<version>_<pdk>`. Two designs keep the
+        # planted count at two and stay legal.
         for name in ("alpha", "beta"):
             cell = (clone
-                    / f"benchmark-data/ic/fam_{name}/v1/phase3/stage3/pnr")
+                    / f"benchmark-data/ic/fam_{name}/v1_openpdkx/phase3/stage3/pnr")
             cell.mkdir(parents=True)
             (cell / "routed.def").write_text("DESIGN t ;\nEND DESIGN\n")
         for k, v in (("user.email", "t@t"), ("user.name", "t")):

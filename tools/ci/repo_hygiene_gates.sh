@@ -1179,6 +1179,34 @@ run "declaration scans strip comments"  "$ROOT" python3 "$PG/hdl_declaration_sca
 # `phase3/stage3/pnr/routed.def` is a PUBLISHING decision with a real
 # repository-size cost, and that decision is not a side effect of making the
 # roll-up honest.
+#
+# THE CELL'S IDENTITY IN A LABEL IS (design, pdk), NOT design (vibe-ic#2011).
+# A published cell is `ic/<design>/v<version>_<pdk>/`, and the four labels
+# below used to carry `$(basename "$(dirname "$_cell")")` -- the DESIGN alone.
+# The first design published on two PDKs (spm x sky130A + gf180mcuD) would have
+# declared eight gates under four labels, two owners per identity, and the
+# producer refused the population outright rather than let that happen. The
+# label now carries `<design>/<pdk>`; the version stays OUT of it so a republish
+# on the same PDK is the same owner and anything keyed by label keeps meaning.
+#
+# ONE GRAMMAR, TWO LANGUAGES. `hygiene_finding_delta.routed_cell_identity`
+# owns this rule in Python (the producer's manifest and the landing judge both
+# read it from there); this is its bash mirror, and
+# `test_the_cell_identity_grammar_is_one_rule_in_two_languages` pins the two
+# equal over the same inputs. The PDK is everything after the first `_` that
+# follows the dotted version, so `ihp-sg13g2` and a PDK carrying `_` survive.
+_ROUTED_CELL_GRAMMAR='^v[0-9]+(\.[0-9]+)*_(.+)$'
+# `_routed_cell_id <cell dir>` -> `<design>/<pdk>` on stdout, rc 1 (and no
+# output) when the version directory states no PDK. Pure, so it is safe to call
+# inside a label's `$( )`; the caller checks it ONCE in its own shell first so
+# a refusal reaches GATE_WIRING_ERRORS instead of dying inside a subshell.
+_routed_cell_id() {
+  local _dir _design
+  _dir="$(basename "$1")"
+  _design="$(basename "$(dirname "$1")")"
+  [[ "$_dir" =~ $_ROUTED_CELL_GRAMMAR ]] || return 1
+  printf '%s/%s\n' "$_design" "${BASH_REMATCH[2]}"
+}
 _per_published_cell_gates() {
   local _def="$1" _cell
   # `routed_def_corpus.py` emits ABSOLUTE DEF paths -- its own docstring says
@@ -1198,8 +1226,19 @@ _per_published_cell_gates() {
   # ever opened -- the empty-population refusal above cannot see this, because
   # the population is 1, not 0.
   _cell="${_def%/phase3/stage3/pnr/routed.def}"
+  # The producer already refused a member with no PDK in its version directory
+  # (UNDETERMINED, rc 2), so this branch is reachable only past a producer that
+  # is not the shipped one. It still must not invent a label: a wiring error
+  # fails the run and names the cell, and no gate is declared under a made-up
+  # owner.
+  if ! _routed_cell_id "$_cell" >/dev/null; then
+    _gate_wiring_error "published cell $_cell states no PDK in its version \
+directory (expected v<version>_<pdk>); its (design, pdk) gate-owner identity \
+cannot be formed and its four per-cell gates were NOT declared (vibe-ic#2011)"
+    return 0
+  fi
   uncheckable_until 2027-02-28 "per published cell: rc 2 when this cell ships no readable macro/OBS geometry, so the intersection has no population -- an intersection it CAN compute and finds is rc 1"
-  run_tolerating_uncheckable "macro OBS not crossed ($(basename "$(dirname "$_cell")"))" \
+  run_tolerating_uncheckable "macro OBS not crossed ($(_routed_cell_id "$_cell"))" \
     "$PLUGIN" python3 programs/macro_obs_geometry_intersect_check.py "$_cell"
   # vibe-ic#693 — one of the 35 gates nothing invoked. A "0 DRC violations"
   # certificate over an empty layout is the strongest form of an absence
@@ -1208,7 +1247,7 @@ _per_published_cell_gates() {
   # cells: it parses real geometry (8290 shapes, 35 violations) — a live
   # verdict, not a shape that can only ever say "nothing to look at".
   uncheckable_until 2027-02-28 "per published cell: rc 2 when this cell ships no parseable layout to judge the DRC certificate against, which is the state the gate exists to refuse to call a PASS"
-  run_tolerating_uncheckable "DRC PASS is not vacuous ($(basename "$(dirname "$_cell")"))" \
+  run_tolerating_uncheckable "DRC PASS is not vacuous ($(_routed_cell_id "$_cell"))" \
     "$ROOT" python3 "$PG/drc_vacuous_pass_check.py" "$_cell"
   # Another of the 35. Its subject is an inner FAIL that never reaches the outer
   # verdict, and nothing ran it. It also had the defect: "nothing to examine"
@@ -1217,7 +1256,7 @@ _per_published_cell_gates() {
   # and it was clean". MEASURED on the published cells: 67-68 reports examined
   # each, so this is a live verdict over a real denominator.
   uncheckable_until 2027-02-28 "per published cell: rc 2 when this cell ships no step reports to examine, which the gate refuses to score as clean rather than exiting 0 on an empty population"
-  run_tolerating_uncheckable "inner FAILs reach the verdict ($(basename "$(dirname "$_cell")"))" \
+  run_tolerating_uncheckable "inner FAILs reach the verdict ($(_routed_cell_id "$_cell"))" \
     "$ROOT" python3 "$PG/step_internal_fail_bubble_up_check.py" "$_cell"
   # vibe-ic#1241 — this gate was run by NOTHING but its own test, which proves
   # the logic against a fixture the author wrote and never against an artefact.
@@ -1226,13 +1265,15 @@ _per_published_cell_gates() {
   #
   # `run_tolerating_uncheckable` is not a softening: the gate's own documented
   # contract is rc 2 = NO_BASELINE, "no previous run; nothing compared", and on
-  # this corpus that is EVERY cell — no design carries two cells of the same
-  # PDK, so `find_previous` has nothing to compare against. rc 2 is therefore
-  # the expected answer today and must be LOUD and non-fatal; rc 1, a genuinely
-  # new diagnostic id, still fails the suite. The day a second same-PDK cell is
-  # published the comparison path becomes live without this line changing.
+  # this corpus that is EVERY cell — no design carries two ROUTED cells of the
+  # same PDK (that is also the producer's identity rule, vibe-ic#2011), so
+  # `find_previous` has no earlier same-PDK run of the same design to compare
+  # against. rc 2 is therefore the expected answer today and must be LOUD and
+  # non-fatal; rc 1, a genuinely new diagnostic id, still fails the suite. The
+  # day an earlier same-PDK run is published beside a routed cell the
+  # comparison path becomes live without this line changing.
   uncheckable_until 2027-02-28 "per published cell: the gate's own documented contract is rc 2 = NO_BASELINE, 'no previous run; nothing compared', and on this corpus that is EVERY cell — no design carries two cells of the same PDK, so find_previous has nothing to compare against. A genuinely new diagnostic id is still rc 1"
-  run_tolerating_uncheckable "new tool diagnostic id ($(basename "$(dirname "$_cell")"))" \
+  run_tolerating_uncheckable "new tool diagnostic id ($(_routed_cell_id "$_cell"))" \
     "$PLUGIN" python3 programs/tool_diagnostic_id_gate.py "$_cell"
 }
 # NO `|| true` ANY MORE, and that is a repair rather than an omission: it used

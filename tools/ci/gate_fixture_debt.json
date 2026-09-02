@@ -130,22 +130,22 @@
       "why": "NOT_WRITTEN_YET — the two-fixture convention lands with this change and this gate's pair has not been authored. This is debt, not a dispensation: the entry is deleted by writing tools/ci/gate_fixtures/declaration_scans_strip_comments.py."
     },
     {
-      "gate": "macro OBS not crossed ($(basename \"$(dirname \"$_cell\")\"))",
+      "gate": "macro OBS not crossed ($(_routed_cell_id \"$_cell\"))",
       "slug": "macro_obs_not_crossed",
       "why": "RUNTIME_EXPANDED — the shell variable $_cell, bound by the enclosing loop. This gate is wired once and invoked once per PUBLISHED CELL; a bare checkout expands it over 0 items, so its fixture needs a published cell to mutate and cannot be a synthetic tree alone."
     },
     {
-      "gate": "DRC PASS is not vacuous ($(basename \"$(dirname \"$_cell\")\"))",
+      "gate": "DRC PASS is not vacuous ($(_routed_cell_id \"$_cell\"))",
       "slug": "drc_pass_is_not_vacuous",
       "why": "RUNTIME_EXPANDED — the shell variable $_cell, bound by the enclosing loop. This gate is wired once and invoked once per PUBLISHED CELL; a bare checkout expands it over 0 items, so its fixture needs a published cell to mutate and cannot be a synthetic tree alone."
     },
     {
-      "gate": "inner FAILs reach the verdict ($(basename \"$(dirname \"$_cell\")\"))",
+      "gate": "inner FAILs reach the verdict ($(_routed_cell_id \"$_cell\"))",
       "slug": "inner_fails_reach_the_verdict",
       "why": "RUNTIME_EXPANDED — the shell variable $_cell, bound by the enclosing loop. This gate is wired once and invoked once per PUBLISHED CELL; a bare checkout expands it over 0 items, so its fixture needs a published cell to mutate and cannot be a synthetic tree alone."
     },
     {
-      "gate": "new tool diagnostic id ($(basename \"$(dirname \"$_cell\")\"))",
+      "gate": "new tool diagnostic id ($(_routed_cell_id \"$_cell\"))",
       "slug": "new_tool_diagnostic_id",
       "why": "RUNTIME_EXPANDED — the shell variable $_cell, bound by the enclosing loop. This gate is wired once and invoked once per PUBLISHED CELL; a bare checkout expands it over 0 items, so its fixture needs a published cell to mutate and cannot be a synthetic tree alone."
     },

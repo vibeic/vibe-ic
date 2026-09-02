@@ -166,7 +166,7 @@ def _transition_pair(*, replacement_state="PASS", benchmark_sha=_BENCHMARK_SHA):
                   "expansion": "EXPANDED"}],
         corpus_inputs={"benchmark_data_sha": benchmark_sha})
 
-    labels = [template.format(design="demo")
+    labels = [template.format(cell="demo/openpdkx")
               for template in H.ROUTED_DEF_GATE_LABELS]
     rows = [_gate(label, replacement_state if i == 0 else "PASS",
                   H.ROUTED_DEF_CORPUS)
@@ -208,7 +208,7 @@ def _transition_pair(*, replacement_state="PASS", benchmark_sha=_BENCHMARK_SHA):
             "name": H.ROUTED_DEF_CORPUS,
             "items": [{
                 "ordinal": 1,
-                "path": "ic/demo/v0.3.0/phase3/stage3/pnr/routed.def",
+                "path": "ic/demo/v0.3.0_openpdkx/phase3/stage3/pnr/routed.def",
                 "mode": "100644", "blob": "b" * 40,
                 "gates": manifest_gates,
             }],

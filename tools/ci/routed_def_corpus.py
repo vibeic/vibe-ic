@@ -31,6 +31,25 @@ is not a broken configuration, and the considered opt-in in
 published tree is not thereby misconfigured -- is left standing.  BOTH states
 stay NOT CHECKED and BOTH stay blocking at the dispatcher; only the sentence
 each of them gets is different.
+
+A CELL'S IDENTITY IS (design, pdk), AND IT IS SPELLED ONCE (vibe-ic#2011).
+A member of this population is ``ic/<design>/v<version>_<pdk>/phase3/stage3/
+pnr/routed.def``.  The gate labels the hygiene loop declares over it, and the
+gate identities this producer writes into the trusted manifest, used to carry
+the DESIGN alone -- so the first design published on two PDKs (spm on sky130A
+and on gf180mcuD) would have handed eight gates four labels, two owners per
+identity.  This producer refused that whole population rather than declare a
+duplicate owner, and the refusal named the repair: migrate the identity.
+
+The identity is now the ``<design>/<pdk>`` pair, derived by
+``hygiene_finding_delta.routed_cell_identity`` and by nothing else in Python;
+``repo_hygiene_gates.sh::_routed_cell_id`` mirrors the same grammar in bash and
+a test pins the two spellings equal.  The version is NOT part of it: a
+republish of one design on one PDK is the same owner, so anything keyed by
+label keeps its meaning.  Two routed DEFs on the same (design, pdk) are still
+a refusal here -- naming the pair -- and so is a cell whose version directory
+states no PDK at all: a cell with no identity in this model is not given a
+made-up one.
 """
 from __future__ import annotations
 
@@ -67,9 +86,14 @@ def _git(argv: Sequence[str]) -> subprocess.CompletedProcess[str] | None:
         return None
 
 
-def _index_paths(corpus: Path,
+def _index_paths(corpus: Path, identity_of,
                  announce_empty: bool = False) -> tuple[int, list[Path]]:
     """``(rc, routed DEFs)`` read out of git's index under `corpus`.
+
+    `identity_of` is ``hygiene_finding_delta.routed_cell_identity`` -- passed
+    in rather than imported here because the callers resolve the plugin's
+    program tree first and this function must not guess where it is.  Every
+    member's (design, pdk) identity must be formable and unique (vibe-ic#2011).
 
     `announce_empty` makes a MEASURED empty population say so and NAME the
     index it read (vibe-ic#1764).  Without it, "the index under X publishes no
@@ -120,7 +144,7 @@ def _index_paths(corpus: Path,
         return 2, []
 
     routed: list[Path] = []
-    design_versions: dict[str, str] = {}
+    cells: dict[str, str] = {}
     prefix_posix = PurePosixPath(prefix.as_posix()) if prefix.parts else None
     for stage_row in listed.stdout.split("\0"):
         if not stage_row:
@@ -157,19 +181,33 @@ def _index_paths(corpus: Path,
         if (len(parts) == 6 and parts[2:] ==
                 ("phase3", "stage3", "pnr", "routed.def")):
             design, version = parts[0], parts[1]
-            prior = design_versions.get(design)
-            if prior is not None:
+            cell = identity_of(design, version)
+            if cell is None:
                 print(
-                    f"[routed-def corpus] UNDETERMINED: design {design!r} "
-                    f"publishes more than one routed-DEF version ({prior!r}, "
-                    f"{version!r}). Landing labels intentionally retain the "
-                    "bootstrap-compatible design identity; a two-phase "
-                    "identity migration is required before this population "
-                    "can expand without duplicate gate owners.",
+                    f"[routed-def corpus] UNDETERMINED: {design}/{version} "
+                    "publishes a routed DEF but its version directory does "
+                    "not state a PDK (expected v<version>_<pdk>). The "
+                    "gate-owner identity of a published cell is (design, "
+                    "pdk); a cell with no PDK has no identity in that model "
+                    "and is not given a made-up one (vibe-ic#2011).",
                     file=sys.stderr,
                 )
                 return 2, []
-            design_versions[design] = version
+            prior = cells.get(cell)
+            if prior is not None:
+                print(
+                    f"[routed-def corpus] UNDETERMINED: design {design!r} "
+                    f"publishes two routed-DEF cells on the same PDK "
+                    f"({prior!r}, {version!r}), and both would own the gates "
+                    f"labelled ({cell}). The corpus publishes one routed DEF "
+                    "per (design, pdk); retire one of the two, or extend the "
+                    "identity to (design, pdk, version) in "
+                    "hygiene_finding_delta.routed_cell_identity before this "
+                    "population can carry both (vibe-ic#2011).",
+                    file=sys.stderr,
+                )
+                return 2, []
+            cells[cell] = version
             # Keep the indexed pathname itself.  `resolve()` here would follow
             # a tracked symlink and silently change which path the index said
             # belonged to the population.
@@ -218,10 +256,6 @@ def _manifest(repo: Path, checkout: Path, subject_repo: Path, sha: str,
         print("[routed-def corpus] UNDETERMINED: trusted manifest checkout "
               "does not equal the measured benchmark SHA.", file=sys.stderr)
         return 2
-    rc, paths = _index_paths(checkout / "ic")
-    if rc != 0:
-        return rc
-
     programs = _programs(repo)
     plugin = programs.parent
     subject_programs = _programs(subject_repo)
@@ -232,8 +266,13 @@ def _manifest(repo: Path, checkout: Path, subject_repo: Path, sha: str,
         return 2
     sys.path.insert(0, str(programs))
     import gate_process_attestation as attestation  # noqa: PLC0415
+    import hygiene_finding_delta as identity  # noqa: PLC0415
     import repo_hygiene_parallel as owned_runner  # noqa: PLC0415
     from _atomic_artefact import write_json  # noqa: PLC0415
+
+    rc, paths = _index_paths(checkout / "ic", identity.routed_cell_identity)
+    if rc != 0:
+        return rc
 
     items = []
     receipts = []
@@ -259,7 +298,15 @@ def _manifest(repo: Path, checkout: Path, subject_repo: Path, sha: str,
             print("[routed-def corpus] UNDETERMINED: manifest item has an "
                   f"unexpected identity: {rel}", file=sys.stderr)
             return 2
-        design = parts[1]
+        # The label identity is (design, pdk) and comes from the same
+        # function the landing judge re-derives it with (vibe-ic#2011).
+        cell_id = identity.routed_cell_identity(parts[1], parts[2])
+        if cell_id is None:
+            print("[routed-def corpus] UNDETERMINED: manifest item states no "
+                  f"PDK in its version directory: {rel}", file=sys.stderr)
+            return 2
+        labels = [template.format(cell=cell_id)
+                  for template in identity.ROUTED_DEF_GATE_LABELS]
         cell = path.parents[3]
         stage = _git(["git", "-C", str(checkout), "ls-files", "--stage",
                       "--", rel])
@@ -282,7 +329,7 @@ def _manifest(repo: Path, checkout: Path, subject_repo: Path, sha: str,
 
         gate_specs = [
             (
-                f"macro OBS not crossed ({design})",
+                labels[0],
                 plugin,
                 ["python3", "programs/macro_obs_geometry_intersect_check.py",
                  str(cell)],
@@ -291,7 +338,7 @@ def _manifest(repo: Path, checkout: Path, subject_repo: Path, sha: str,
                  str(cell)],
             ),
             (
-                f"DRC PASS is not vacuous ({design})",
+                labels[1],
                 repo,
                 ["python3", str(programs / "drc_vacuous_pass_check.py"),
                  str(cell)],
@@ -300,7 +347,7 @@ def _manifest(repo: Path, checkout: Path, subject_repo: Path, sha: str,
                                 "drc_vacuous_pass_check.py"), str(cell)],
             ),
             (
-                f"inner FAILs reach the verdict ({design})",
+                labels[2],
                 repo,
                 ["python3", str(programs /
                                 "step_internal_fail_bubble_up_check.py"),
@@ -311,7 +358,7 @@ def _manifest(repo: Path, checkout: Path, subject_repo: Path, sha: str,
                  str(cell)],
             ),
             (
-                f"new tool diagnostic id ({design})",
+                labels[3],
                 plugin,
                 ["python3", "programs/tool_diagnostic_id_gate.py", str(cell)],
                 subject_plugin,
@@ -434,7 +481,21 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
         return NO_CORPUS_RC
 
-    rc, paths = _index_paths(corpus, announce_empty=True)
+    # Imported HERE, after resolution, and not beside `_corpus_location`
+    # above: the identity rule is only consulted over members, and a tree
+    # that carries no corpus must still reach its own NOT FOUND row.
+    try:
+        import hygiene_finding_delta as identity  # noqa: PLC0415
+    except ImportError as exc:
+        print(
+            f"[routed-def corpus] UNDETERMINED: the shared cell-identity rule "
+            f"(hygiene_finding_delta.routed_cell_identity) is missing at "
+            f"{programs}: {exc}",
+            file=sys.stderr,
+        )
+        return 2
+    rc, paths = _index_paths(corpus, identity.routed_cell_identity,
+                             announce_empty=True)
     if rc != 0:
         return rc
     if not paths:
@@ -454,7 +515,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(
             f"[routed-def corpus] scanned the {origin} corpus at {corpus} and "
             f"its git index holds 0 routed DEF(s). A member is "
-            f"<design>/<version>/phase3/stage3/pnr/routed.def. This is an "
+            f"<design>/v<version>_<pdk>/phase3/stage3/pnr/routed.def. This is an "
             f"EMPTY POPULATION, not a clean one: no published cell was "
             f"examined and nothing is claimed about any. The per-cell gates "
             f"go live again on the first cell published with a routed DEF.",

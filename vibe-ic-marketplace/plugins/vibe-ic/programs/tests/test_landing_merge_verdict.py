@@ -1745,7 +1745,8 @@ if [ "${GATEKEEPER_STUB_ROUTED_TRANSITION:-0}" = "1" ] \
     _per_routed() {
       local def="$1" cell design
       cell="${def%/phase3/stage3/pnr/routed.def}"
-      design="$(basename "$(dirname "$cell")")"
+      verdir="$(basename "$cell")"
+      design="$(basename "$(dirname "$cell")")/${verdir#*_}"
       uncheckable_until 2027-02-28 "fixture has no macro LEF"
       run_tolerating_uncheckable "macro OBS not crossed ($design)" \
         "$PLUGIN" python3 programs/macro_obs_geometry_intersect_check.py "$cell"
@@ -1965,7 +1966,7 @@ def sandbox(tmp_path_factory):
     _git(benchmark_seed, "config", "user.email", "t@localhost")
     _git(benchmark_seed, "config", "user.name", "t")
     corpus_file = (benchmark_seed /
-                   "ic/tiny/v1/phase3/stage3/pnr/routed.def")
+                   "ic/tiny/v1_openpdkx/phase3/stage3/pnr/routed.def")
     corpus_file.parent.mkdir(parents=True)
     corpus_file.write_text("VERSION 5.8 ;\nEND DESIGN\n")
     _git(benchmark_seed, "add", "-A")
@@ -2301,10 +2302,10 @@ def test_end_to_end_trusted_verifier_supplies_the_one_bootstrap_evidence(
     # NOT_CHECKED here would mean an unknown candidate result had been accepted
     # in place of a measured one.
     assert transition["bounded_not_checked"] == [
-        "DRC PASS is not vacuous (tiny)",
-        "inner FAILs reach the verdict (tiny)",
-        "macro OBS not crossed (tiny)",
-        "new tool diagnostic id (tiny)",
+        "DRC PASS is not vacuous (tiny/openpdkx)",
+        "inner FAILs reach the verdict (tiny/openpdkx)",
+        "macro OBS not crossed (tiny/openpdkx)",
+        "new tool diagnostic id (tiny/openpdkx)",
     ], transition
     assert transition["benchmark_data_sha"], transition
 
@@ -3163,14 +3164,14 @@ def test_end_to_end_b2_corpus_mutation_is_post_attested_and_norecord(
         "import pathlib\n"
         "def test_mutates_the_published_corpus_but_stays_green():\n"
         "    root=pathlib.Path(os.environ['VIBE_IC_BENCHMARK_DATA'])\n"
-        "    p=root/'ic/tiny/v1/phase3/stage3/pnr/routed.def'\n"
+        "    p=root/'ic/tiny/v1_openpdkx/phase3/stage3/pnr/routed.def'\n"
         "    with p.open('a') as fh:\n"
         "        fh.write('MUTATED BY THE CANDIDATE\\n')\n")
     _git(repo, "add", str(test_file))
     assert _git(repo, "commit", "-qm", "mutate the corpus").returncode == 0
 
     corpus_file = (_BENCHMARK_TEST["checkout"]
-                   / "ic/tiny/v1/phase3/stage3/pnr/routed.def")
+                   / "ic/tiny/v1_openpdkx/phase3/stage3/pnr/routed.def")
     before = corpus_file.read_bytes()
     r, doc = _verify(repo, "corpus_tamper", tmp_path)
 
