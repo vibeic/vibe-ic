@@ -251,9 +251,31 @@ def _select_master(direction: str,
                    classes: Dict[str, str],
                    sizes: Dict[str, Tuple[float, float]],
                    prefix: Optional[str] = None,
-                   terminals: Optional[Dict[str, str]] = None
+                   terminals: Optional[Dict[str, str]] = None,
+                   declines: Optional[List[str]] = None
                    ) -> Tuple[str, str, bool]:
-    """(master, the LEF class it was chosen for, whether it is a fallback)."""
+    """(master, the LEF class it was chosen for, whether it is a fallback).
+
+    `declines` collects, BY NAME, every narrowing this selection wanted and
+    could not have. MEASURED on live main 7903c1972305 (2026-09-03):
+    `silent_decline_audit programs --ratchet` took the shipped residual from
+    15 to 16 on `io_pad_chip_top_gen.py:263  library_prefix() -> prefix: no
+    else branch — the refusal is silent`. The caller already records
+    `io_library_prefix_basis` when the PDK names no corner master, but the
+    SELECTION itself then silently searched every library on the machine and
+    the port record said nothing about it. A pad master chosen out of an
+    unscoped pool is a different artefact from one chosen out of the design's
+    own IO library, and the difference belongs on the record that names the
+    master, not only in a field a reader has to correlate.
+    """
+    # The sink is a plain list and the branches append to it INLINE rather
+    # than through a helper: `silent_decline_audit` reads the branch body, and
+    # a disclosure hidden one call deep reads to it — correctly — as a branch
+    # that says nothing. MEASURED: routing these through a `_declined()`
+    # helper moved the finding from "no else branch" to "else branch present
+    # but discloses nothing", which is the same silence with an else on it.
+    if declines is None:
+        declines = []
     wanted = CLASS_PREFERENCE.get(direction)
     if wanted is None:
         raise Refusal("PORT_DIRECTION_UNKNOWN",
@@ -264,6 +286,15 @@ def _select_master(direction: str,
         scoped = {m: c for m, c in classes.items() if m.startswith(prefix)}
         if scoped:
             pool = scoped
+        else:
+            declines.append(
+                f"library scoping declined: no master under the declared IO "
+                f"library prefix {prefix!r}; the pool is every master read, "
+                f"unscoped")
+    else:
+        declines.append(
+            "library scoping declined: the PDK declares no IO library prefix, "
+            "so the pool is every master read, unscoped")
     if terminals:
         # ONLY MASTERS THE PDK SAYS BRING A SIGNAL OUT. `PAD_PLACE_IO_TERMINALS`
         # is the library's own list of pad masters and the pin each one
@@ -683,15 +714,17 @@ def run(project: Path, pdk_root: Optional[str], pdk: Optional[str]
             if inst in chosen:
                 raise Refusal("INSTANCE_NAME_COLLISION",
                               f"two ports map to instance {inst!r}")
+            declines: List[str] = []
             master, cls, fallback = _select_master(
                 direction_of[net], classes, sizes, prefix,
-                terminals)
+                terminals, declines)
             chosen[inst] = {"port": net, "master": master,
                             "chosen_for_class": cls,
                             "terminal": terminals.get(master, "PAD"),
                             "terminal_from_pdk": master in terminals,
                             "direction": direction_of[net],
-                            "class_fallback": fallback}
+                            "class_fallback": fallback,
+                            "selection_declines": declines}
             ordered[side].append(inst)
 
     # ── THE PAD CELL'S TWO FACES ──────────────────────────────────────────

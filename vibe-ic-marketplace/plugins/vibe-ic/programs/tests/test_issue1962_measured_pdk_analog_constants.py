@@ -54,6 +54,7 @@ from pathlib import Path
 import pytest
 
 import _plugin_tree  # noqa: F401  — puts programs/ on sys.path
+from not_verified_tier import skip_not_verified  # noqa: E402
 import pdk_analog_characterize as char
 import pdk_analog_device_params as params
 
@@ -994,7 +995,11 @@ def test_the_published_constants_reproduce_from_the_record_itself(family):
     """
     container = _eda_container()
     if container is None:
-        pytest.skip("no running container exposes ngspice")
+        skip_not_verified(
+            "no running container exposes ngspice, so this record cannot be "
+            "re-derived from its own provenance here",
+            "start the shipped EDA image (docker run ... ghcr.io/vibeic/"
+            "vibeic-eda) and re-run, or set VIBEIC_EDA_CONTAINER to one")
     ngspice = char._ars._resolve_ngspice(container)
 
     prov = params.measured_provenance(family)
@@ -1018,7 +1023,10 @@ def test_the_published_constants_reproduce_from_the_record_itself(family):
     except Exception:
         pass
     if not r["ok"]:
-        pytest.skip(f"this container cannot run {family}'s deck: {r['fatal']}")
+        skip_not_verified(
+            f"this container cannot run {family}'s deck: {r['fatal']}",
+            "run in the pinned EDA image, whose ngspice carries the device "
+            "models this deck loads")
 
     vgs = prov["bias"][role]["vgs_v"]
     k, vth, why = char.extract_square_law(

@@ -269,7 +269,76 @@ _LEDGER = frozenset({
     "_write_sparse_die_skip_attestation", "density_counted_specs",
     "emit_clock_plan", "routed_sdc_clock",
     "step_drv_promotion_corroboration",
-    "step_signoff_drv_wire_length_repair", "step_signoff_spef_repair",})
+    "step_signoff_drv_wire_length_repair", "step_signoff_spef_repair",
+
+    # ── RECORDED 2026-09-03, tail-A rc1, on live main 7903c1972305 ─────────
+    # Twelve names arrived together with the PDN/EM, macro-supply, pad-ring,
+    # CTS-buffer and DRV-promotion work and none of them made this ledger
+    # decision.  Each is judged on its own below; none is recorded because the
+    # list was long.
+    #
+    # THE MEASURED RULE THEY ARE JUDGED AGAINST, taken off the `_ppa` modules
+    # rather than asserted: across `_ppa/power.py`, `_ppa/timing.py` and
+    # `_ppa/area.py` (3115 lines) there is ZERO `subprocess` and ZERO `tcl`.
+    # Those modules take metric RECORDS in and emit metric/verdict records
+    # out.  They do not author a tool's input, they do not dispatch a tool,
+    # and they do not decide what a run should do next.  A function that does
+    # any of those three cannot move into them, whatever its name reads like.
+    #
+    # 1-3. THE PDN/EM FIRST PASS reads the run tree and writes pdngen's input.
+    "_pdn_em_measured_subject",     # (project, rpt3) -> which LAYOUT the EM
+                                    # number was measured on. Pure provenance
+                                    # off `_pl.` paths and a report glob; it
+                                    # states an identity, not a power figure.
+    "_pdn_em_width_floor",          # (project, pdk, container) -> derives the
+                                    # per-layer strap width floor by READING
+                                    # the PDK and the run's own reports. A
+                                    # records module has no PDK reader.
+    "_pdn_em_first_pass_resize",    # (project, top, pdk, container) -> decides
+                                    # ONCE whether to rebuild the grid, and
+                                    # emits the Tcl that does it. A decision
+                                    # about what this run does next.
+    #
+    # 4-7. THE MACRO / SECONDARY SUPPLY WIRING is pdngen input authoring.
+    "_macro_supply_stub_plan",      # (macro_lef_texts, tech_lef_text, stripes)
+                                    # -> a per-pin stub PLAN parsed out of LEF
+                                    # text. Pure, and still not PPA: it is a
+                                    # connectivity plan for a tool, not a
+                                    # power metric or a verdict over one.
+    "_build_macro_supply_stub_tcl",  # (plan) -> Tcl. Renders 4 for pdngen.
+    "_macro_supply_pin_audit_tcl",  # () -> Tcl. A post-pdngen conductor probe.
+    "_secondary_supply_tcl",        # (pwr, gnd, stripes, tech_lef_text) -> Tcl
+                                    # for the core domain's secondary supplies.
+    #
+    # 8. CTS BUFFER SELECTION is tool configuration, not a timing verdict.
+    "_i1958_pick_cts_buffers",      # (liberty_text) -> the `-buf_list` and
+                                    # `-root_buf` cell names to hand
+                                    # `clock_tree_synthesis`, plus HOW they
+                                    # were chosen. `_ppa/timing.py` judges
+                                    # slack records; it does not pick cells.
+    #
+    # 9. PAD-RING DIE SIZE is read off another producer's record.
+    "_padring_required_die_um",     # (project) -> the die side the pad ring
+                                    # needs, taken from the pad-ring
+                                    # producer's own JSON on the run tree.
+                                    # `_ppa/area.py` has no run-tree reader at
+                                    # all -- `project` appears zero times in
+                                    # it -- and this function is nothing else.
+    #
+    # 10-11. DRV PROMOTION DISCLOSURE writes and deletes a run record.
+    "_drv_promotion_disclose",      # (pnr_out, stage, reason) -> None. Records
+                                    # that this run did NOT promote a repaired
+                                    # route, and why. A disclosure side effect.
+    "_drv_promotion_clear",         # (pnr_out) -> None. Removes that record
+                                    # once a promotion did happen.
+    #
+    # 12. THE EM AUTHORITY COMPARISON is a tool dispatch.
+    "_emit_em_current_authority",   # (project, pdk, container, notes) -> bool.
+                                    # Runs the Step-25 EM authority comparison
+                                    # as a SUBPROCESS against a reachable Jmax
+                                    # source. The three `_ppa` modules contain
+                                    # no `subprocess` call between them.
+    })
 
 
 def test_the_ledger_derivation_is_not_vacuous():

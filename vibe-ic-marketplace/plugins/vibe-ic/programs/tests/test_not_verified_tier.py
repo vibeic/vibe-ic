@@ -242,7 +242,6 @@ def _undeclared_infra_skips():
 #: `new_files` assertion above it fired first on three other files. Removing the
 #: row lowers the frontier, which is the only direction it may move.
 RESIDUAL_UNDECLARED: dict = {
-    "test_formal_env_unavailable_actionable.py": 1,
     "test_gds_geometry_signoff_wiring.py": 1,
     "test_hspice_lib_ngspice_normalize.py": 1,
     "test_issue193_custom_pdk_primary_selection_ngspice.py": 1,

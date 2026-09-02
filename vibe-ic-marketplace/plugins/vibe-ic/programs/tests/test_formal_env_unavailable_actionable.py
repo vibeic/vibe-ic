@@ -36,6 +36,7 @@ import yaml
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import _progress_run as _pr  # noqa: E402
 import formal_property_run as _F  # noqa: E402
+from not_verified_tier import not_verified_reason  # noqa: E402
 
 _PROGRAMS = Path(__file__).resolve().parent.parent
 _FORMAL = _PROGRAMS / "formal_property_run.py"
@@ -209,7 +210,10 @@ def test_absent_env_gate_fails_but_names_the_gap(tmp_path):
 
 @pytest.mark.skipif(
     not _docker_container_running(_REAL_CONTAINER),
-    reason=f"container {_REAL_CONTAINER!r} not running on this host",
+    reason=not_verified_reason(
+        f"container {_REAL_CONTAINER!r} is not running on this host, "
+        f"so the formal engine this arm drives cannot be reached",
+        f"start it: docker start {_REAL_CONTAINER}"),
 )
 def test_available_env_runs_a_real_proof_and_needs_no_waiver(tmp_path):
     """The decisive test for "is this a discovery bug or an environment
@@ -254,7 +258,10 @@ def test_available_env_runs_a_real_proof_and_needs_no_waiver(tmp_path):
 
 @pytest.mark.skipif(
     not _docker_container_running(_REAL_CONTAINER),
-    reason=f"container {_REAL_CONTAINER!r} not running on this host",
+    reason=not_verified_reason(
+        f"container {_REAL_CONTAINER!r} is not running on this host, "
+        f"so the formal engine this arm drives cannot be reached",
+        f"start it: docker start {_REAL_CONTAINER}"),
 )
 def test_failed_proof_retains_results_and_counterexample_verdict(tmp_path):
     """#1974 failed-proof control: a real refutation stays FAIL evidence.
