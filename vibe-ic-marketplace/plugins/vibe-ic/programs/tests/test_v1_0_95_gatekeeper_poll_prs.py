@@ -66,6 +66,54 @@ def _load():
 P = _load()
 
 
+# ---------------------------------------------------------------------------
+# THIS MODULE OWNS THE TRANSPORT IT MEASURES OVER.
+#
+# `poll()` chooses its transport at call time: `if prefer_gh and _have_gh()`,
+# where `_have_gh` is `shutil.which("gh") is not None`. Eight tests below stub
+# `_list_open_prs_gh` and then assert over what `poll`/`main` returns — an
+# experiment that only takes place on a host that HAPPENS to have the gh CLI
+# installed. On one that does not, the stub is never consulted, `poll` walks
+# into the PAT branch and raises before a single enumeration rule is reached.
+#
+# MEASURED in the digest-pinned runtime image (`ghcr.io/vibeic/vibeic-eda@
+# sha256:66c33ff2…`, where `command -v gh` finds nothing), on unmodified main:
+#
+#     7 failed, 6 passed
+#     RuntimeError: no GitHub auth — install the `gh` CLI (preferred) or set
+#         $GITHUB_TOKEN / $GH_TOKEN / ~/.config/github/token
+#
+# and 13 passed on a host with gh on PATH. Same tree, same commit; the variable
+# was the harness. THE PROGRAM IS NOT THE DEFECT — `_have_gh` answering
+# truthfully is the behaviour `test_rest_used_when_gh_unavailable` exists to
+# pin, and making `poll` prefer a monkeypatched lister over its own probe would
+# delete that. What was missing is this module declaring which transport its
+# assertions are about.
+#
+# THE EIGHTH IS THE EXPENSIVE ONE. `test_rc2_io_error` asserts rc 2 and was
+# GREEN in that image — for the wrong reason. Its stub was counted, driving the
+# same program through the same `main(["--repo", "o/r"])` in both environments:
+#
+#     image (no gh)   _have_gh()=False  rc=2  stub_calls=0
+#     host  (gh 2.4)  _have_gh()=True   rc=2  stub_calls=1
+#
+# Identical rc, opposite fact. In the image the 2 came from the missing-auth
+# raise, so the one test that proves a lister failure maps to "retry next tick"
+# was passing without ever calling the lister. A red that hides a vacuous green
+# beside it is the usual shape; both are repaired by the same line.
+#
+# SCOPED and OVERRIDABLE. A function-scoped autouse `monkeypatch` pins the
+# probe for THIS module only. The two tests that are ABOUT the absent-gh path
+# (`test_rest_used_when_gh_unavailable`, `test_no_auth_raises`) set it back to
+# False in their own bodies, which runs after this fixture and therefore wins —
+# so the fallback path keeps being proved on every host, including one where gh
+# really is installed.
+# ---------------------------------------------------------------------------
+@pytest.fixture(autouse=True)
+def _gh_cli_present(monkeypatch):
+    monkeypatch.setattr(P, "_have_gh", lambda: True)
+
+
 def _gh_pr(number, *, base="main", draft=False, mergeable="MERGEABLE",
            author="alice", labels=None, title="t"):
     """A PR record shaped like `gh pr list --json ...` output."""

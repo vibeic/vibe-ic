@@ -22,6 +22,7 @@ would itself be the leak it tests for and would trip the source guard).
 """
 from __future__ import annotations
 
+import json
 import subprocess
 import sys
 from pathlib import Path
@@ -40,6 +41,52 @@ from _nda_fixture_tokens import FICTIONAL_NDA_TOKENS  # noqa: E402
 import nda_diff_scan_check as guard  # noqa: E402
 
 _CHECKER = _PROGRAMS / "nda_diff_scan_check.py"
+
+
+# ---------------------------------------------------------------------------
+# THIS MODULE OWNS THE TOKEN STORE IT MEASURES AGAINST.
+#
+# Every leak string below is built from `FICTIONAL_NDA_TOKENS`, so the guard
+# under test has to be looking for THAT set or the experiment is not the one
+# the assertions describe. `programs/tests/conftest.py` publishes exactly that
+# set — but with `os.environ.setdefault`, and deliberately so: "a host that
+# genuinely has the real tokens configured keeps them, so the suite measures
+# that host as it is." That is right for the suite and WRONG for this file: on
+# a configured host — which the landing tier is, because `_commercial_pdk`
+# hands `VIBEIC_NDA_TOKENS` "to a gate subprocess through the environment" —
+# `setdefault` loses, the guard hunts the real tokens, and every negative case
+# here presents a fictional one it was never told to look for.
+#
+# MEASURED on this file, on unmodified main, with an ambient store exported:
+#
+#     7 failed, 6 passed        (13 passed with the variable unset)
+#
+# and identically for a store of the REAL tokens and for one of foreign-but-
+# well-shaped values, in the pinned image and on the host: the defect is that
+# the ambient set and the fixture set DIFFER, not what either one says.
+#
+# All SEVEN cases that assert a leak IS caught fail. The six survivors are the
+# five that assert nothing is flagged (clean content, a `-` line, a substring)
+# plus the unreadable-input case — none of them presents a token, so none of
+# them can see the disagreement, and the file's own positives cannot detect it.
+#
+# That is the same defect `test_commit_msg_nda_check.py` carries the fix for:
+# there, 10 negatives failing hit `--maxfail=10` and truncated the session at
+# item 26 of 90, and a truncated session is NORECORD — UNKNOWN, not clean.
+# `test_the_norecord_causes_stay_fixed.py` pins that module's idiom by name.
+# This file builds its leak strings the same way, from the same set, and was
+# left deferring to the ambient store.
+#
+# SCOPED, not global. A function-scoped autouse `monkeypatch` sets the variable
+# for THIS module's tests and restores it afterwards, so the conftest's policy
+# is untouched for every other file and nothing here depends on collection
+# order. `_nda_token_map()` re-reads the environment on every call and never
+# caches at import, so the override reaches both the in-process `guard.*` calls
+# and every checker subprocess `_run` spawns, which inherit this environment.
+# ---------------------------------------------------------------------------
+@pytest.fixture(autouse=True)
+def _fictional_token_store(monkeypatch):
+    monkeypatch.setenv("VIBEIC_NDA_TOKENS", json.dumps(FICTIONAL_NDA_TOKENS))
 
 
 def _tok(role: str) -> str:

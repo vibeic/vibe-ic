@@ -52,7 +52,7 @@ REPORT = "reports/flow_compliance.json"
 
 def _verdict_source(doc, stage_id: str) -> str:
     """The `--compliance` path THIS stage's declared clause reads."""
-    clause, key = _clause(doc, stage_id)
+    clause, key = _command_cell(doc, stage_id)
     argv = clause[key].split()
     return argv[argv.index("--compliance") + 1]
 
@@ -103,22 +103,66 @@ SLOT = "advisory_program_exit_zero"
 
 
 def _clause(doc, stage_id):
-    """The MUTABLE step clause that dispatches `stage_id`'s review, and its slot.
+    """The step clause that dispatches `stage_id`'s review, and its SLOT key.
 
     THE COMMAND LIVES IN `steps:` NOW, and every mutation below reaches it
     through here. It used to live in `stages[].on_pass_review.gate` — a section
     `flow_compliance_check.main` never reads (`steps = flow.get("steps", [])`),
     so the argv these tests graded was one nothing would ever dispatch.
+
+    A SLOT VALUE IS EITHER THE BARE COMMAND STRING OR A MAPPING, and this
+    reader knew only the first. `_evaluate_gate` has accepted both shapes for
+    as long as the check has: `on_pass_review_answerable_check._commands_in`
+    and `_step_carrying` below both read `val.get("command") if isinstance(val,
+    dict) else val`, and both did so BEFORE the clauses moved. What moved was
+    the subject — v1.13.85 (d155935a7, "84 advisory clauses could not say why
+    they were advisory") gave every advisory clause an `advisory_reason:`, which
+    only the mapping form can carry, and all six of these are advisory. So all
+    six went from string to mapping on one commit, and the one str-only reader
+    in this module went blind on that commit.
+
+    That commit's own message records the class -- "Converting bare-string
+    clauses to dict form broke two tests that hard-code one of the two legal
+    clause shapes; both are patched" -- and this was a third it did not find,
+    because BREAKING IS NOT HOW THIS ONE FAILED. `_enabled_with_gate` swallows
+    `_clause`'s AssertionError, so the population went silently to `[]`: the six
+    `_enabled_with_gate(doc)[0]` sites raised IndexError, but
+    `test_every_shipped_gate_reads_a_report_an_earlier_clause_writes` went GREEN
+    over an empty loop. An empty subject and a clean subject print the same, and
+    the vacuous pass is the more expensive half.
+
+    The SLOT is what is returned, not the command cell: two assertions below
+    are about the clause's IDENTITY (`sub is clause`, to establish "earlier in
+    this `all_of`") and its SLOT NAME (`key == SLOT`), and both are properties
+    of this mapping. `_command_cell` answers the other question.
     """
     for st in doc.get("steps") or []:
         for sub in ((st.get("gate") or {}).get("all_of") or []):
             if not isinstance(sub, dict):
                 continue
             for k, v in sub.items():
-                if (isinstance(v, str) and v.startswith("stage_on_pass_review")
-                        and f"--stage {stage_id} " in v + " "):
+                cmd = v.get("command") if isinstance(v, dict) else v
+                if (isinstance(cmd, str)
+                        and cmd.startswith("stage_on_pass_review")
+                        and f"--stage {stage_id} " in cmd + " "):
                     return sub, k
     raise AssertionError(f"no clause under `steps:` dispatches {stage_id!r}")
+
+
+def _command_cell(doc, stage_id):
+    """The MUTABLE (container, key) whose VALUE IS `stage_id`'s command string.
+
+    Every mutation in this module rewrites an argv, so it needs the cell that
+    holds the argv — which is `clause[slot]` while the value is a string and
+    `clause[slot]["command"]` once it is a mapping. Kept separate from
+    `_clause` so that neither question has to be answered in terms of the
+    other: writing through the slot would corrupt the mapping, and comparing
+    the inner mapping by identity against the `all_of` entries would silently
+    turn "an EARLIER clause writes it" into "any clause writes it".
+    """
+    clause, key = _clause(doc, stage_id)
+    value = clause[key]
+    return (value, "command") if isinstance(value, dict) else (clause, key)
 
 
 def _enabled_with_gate(doc):
@@ -201,7 +245,7 @@ def _step_carrying(doc, stage_id):
 def test_p1_a_gate_with_no_verdict_source_is_refused_by_name(tmp_path):
     doc = _flow_doc()
     victim = _enabled_with_gate(doc)[0]
-    gate, key = _clause(doc, victim["id"])
+    gate, key = _command_cell(doc, victim["id"])
     gate[key] = gate[key].replace(
         f" --compliance {_verdict_source(doc, victim['id'])}", "")
     rc, out = _run(_write(tmp_path, doc))
@@ -215,7 +259,7 @@ def test_p1_the_same_flow_passes_once_the_verdict_source_is_restored(tmp_path):
     """The negative control's other arm: repairing it must go green."""
     doc = _flow_doc()
     victim = _enabled_with_gate(doc)[0]
-    gate, key = _clause(doc, victim["id"])
+    gate, key = _command_cell(doc, victim["id"])
     original = gate[key]
     gate[key] = original.replace(
         f" --compliance {_verdict_source(doc, victim['id'])}", "")
@@ -228,7 +272,7 @@ def test_p1_the_same_flow_passes_once_the_verdict_source_is_restored(tmp_path):
 def test_p1_fires_on_every_offending_stage_not_just_the_first(tmp_path):
     doc = _flow_doc()
     for s in _enabled_with_gate(doc):
-        g, key = _clause(doc, s["id"])
+        g, key = _command_cell(doc, s["id"])
         g[key] = g[key].replace(
             f" --compliance {_verdict_source(doc, s['id'])}", "")
     rc, out = _run(_write(tmp_path, doc))
@@ -252,7 +296,7 @@ def test_p1_fires_on_every_offending_stage_not_just_the_first(tmp_path):
 def test_p2_a_gate_reading_a_report_nothing_produces_is_refused(tmp_path):
     doc = _flow_doc()
     victim = _enabled_with_gate(doc)[0]
-    gate, key = _clause(doc, victim["id"])
+    gate, key = _command_cell(doc, victim["id"])
     gate[key] = gate[key].replace(
         f"--compliance {_verdict_source(doc, victim['id'])}",
         "--compliance reports/nobody_writes_this.json")
@@ -268,7 +312,7 @@ def test_p2_a_producer_declared_only_in_final_gate_is_not_a_producer(tmp_path):
     args = str(doc["final_gate"]["args"])
     declared = args.split()[args.split().index("--json") + 1]
     victim = _enabled_with_gate(doc)[0]
-    gate, key = _clause(doc, victim["id"])
+    gate, key = _command_cell(doc, victim["id"])
     gate[key] = gate[key].replace(
         f"--compliance {_verdict_source(doc, victim['id'])}",
         f"--compliance {declared}")
@@ -282,7 +326,7 @@ def test_p2_a_producer_declared_only_in_final_gate_is_not_a_producer(tmp_path):
 def test_p2_repairs_green(tmp_path):
     doc = _flow_doc()
     victim = _enabled_with_gate(doc)[0]
-    gate, key = _clause(doc, victim["id"])
+    gate, key = _command_cell(doc, victim["id"])
     original = gate[key]
     gate[key] = original.replace(
         f"--compliance {_verdict_source(doc, victim['id'])}",
