@@ -53,14 +53,43 @@ def test_lef_pins_and_pg_pins():
     assert pg == ["vdd"]
 
 
-def test_compare_reports_both_directions_and_singles_out_the_rails():
+def test_compare_reports_both_directions_and_separates_the_supplies():
+    """ROUND 17. This used to assert `missing_in_rtl == ["vdd", "vss"]` under
+    the comment "a supply the digital top never connects is the one case with
+    no legitimate reading — it floats in silicon whatever either side meant".
+    That reading was wrong and it was this gate's own defect: a macro terminal
+    whose LEF `USE` is POWER or GROUND is not connected through the netlist in
+    ANY flow — it is bound by POWER INTENT, by the PDN's
+    `add_global_connection` against those same `USE` records — and a Verilog
+    blackbox carrying no supply port is stating the convention. MEASURED on
+    round 16's die: every such terminal was bound that way,
+    PG_NET_OWNERSHIP_AUDIT was clean and netgen matched POWER-AWARE, while
+    this gate failed A8 for the absence of a port that is not supposed to
+    exist.
+
+    So supplies are DISCLOSED and the verdict is decided on the signal pins.
+    """
     d = M.compare(["vdd", "vss", "vin", "vout"], ["vin", "vout", "clk"],
                   ["vdd", "vss"])
-    assert d["missing_in_rtl"] == ["vdd", "vss"]
+    assert d["missing_in_rtl"] == []
     assert d["extra_in_rtl"] == ["clk"]
-    # a supply the digital top never connects is the one case with no
-    # legitimate reading — it floats in silicon whatever either side meant.
-    assert d["rails_missing_in_rtl"] == ["vdd", "vss"]
+    assert d["supplies_bound_by_power_intent"] == ["vdd", "vss"]
+
+
+def test_a_signal_missing_from_the_rtl_is_still_a_disagreement():
+    """The CONTROL for the row above: excusing supplies must not excuse a
+    signal, which is the disagreement this gate exists to report."""
+    d = M.compare(["vdd", "vss", "vin", "vout"], ["vin"], ["vdd", "vss"])
+    assert d["missing_in_rtl"] == ["vout"]
+
+
+def test_a_pin_the_topology_does_not_call_a_rail_is_not_excused():
+    """And the exclusion is driven by the topology's OWN `rails` declaration,
+    never by how a name looks: a block that declares no rails excuses
+    nothing."""
+    d = M.compare(["vdd", "vss", "vin"], ["vin"], [])
+    assert d["missing_in_rtl"] == ["vdd", "vss"]
+    assert d["supplies_bound_by_power_intent"] == []
 
 
 def test_agreement_is_reported_as_agreement():
@@ -83,13 +112,32 @@ def _project(tmp_path: Path, rtl: str, ports, rails) -> Path:
 
 
 def test_end_to_end_disagreement_is_a_refusal(tmp_path: Path):
-    p = _project(tmp_path, "module blk (vin, vout);\nendmodule\n",
+    """ROUND 17: the disagreement is now a SIGNAL one. This case used to be
+    driven by the two supplies alone, which is the shape that is no longer a
+    disagreement — see `test_compare_reports_both_directions_and_separates_
+    the_supplies`."""
+    p = _project(tmp_path, "module blk (vin);\nendmodule\n",
                  ["vdd", "vss", "vin", "vout"],
                  {"vdd": "vdd", "vss": "vss"})
     r = M.check_block(p, "blk")
     assert r["compared"] and not r["agree"]
-    assert r["rails_missing_in_rtl"] == ["vdd", "vss"]
+    assert r["missing_in_rtl"] == ["vout"]
+    assert r["supplies_bound_by_power_intent"] == ["vdd", "vss"]
     assert M.main([str(p)]) == 1
+
+
+def test_end_to_end_a_blackbox_with_no_supply_port_agrees(tmp_path: Path):
+    """The measured case, end to end: an RTL blackbox that declares only the
+    signal pins and leaves the macro's PG terminals to the power intent. On
+    this campaign's design that is `ldo`, and this gate used to fail A8 on
+    it."""
+    p = _project(tmp_path, "module blk (vin, vout);\nendmodule\n",
+                 ["vdd", "vss", "vin", "vout"],
+                 {"vdd": "vdd", "vss": "vss"})
+    r = M.check_block(p, "blk")
+    assert r["compared"] and r["agree"]
+    assert r["supplies_bound_by_power_intent"] == ["vdd", "vss"]
+    assert M.main([str(p)]) == 0
 
 
 def test_end_to_end_agreement_passes(tmp_path: Path):

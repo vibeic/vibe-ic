@@ -128,8 +128,19 @@ def test_the_stage_count_follows_the_bound_order(tmp_path):
     # ...and the chain is wired end to end on both, so the extra stage is
     # connected and not merely present.
     assert ir1["stage_expansion"]["chain"][0] == "vin"
-    assert ir1["stage_expansion"]["chain"][-1] == "vout"
-    assert ir2["stage_expansion"]["chain"] == ["vin", "vo1", "vout"]
+    # Round 17: the cascade ends on `vint`, an INTERNAL net, not on `vout`.
+    # The entry closed the loop — the last integrator drives a quantiser on
+    # the same block, and the block's declared output is that quantiser's
+    # 1-bit decision (`bit_out`) — so ending the chain on a PORT would be
+    # exposing the loop filter's output as the modulator's. What this
+    # assertion is for is unchanged: the chain is wired end to end, so the
+    # extra stage is connected and not merely present. The terminal name is
+    # READ from the entry rather than retyped, so the next entry that moves
+    # it does not have to move this line too.
+    _last = ir1["stage_expansion"]["chain"][-1]
+    assert _last not in ir1["ports"]
+    assert _last in ir1["internal_nets"]
+    assert ir2["stage_expansion"]["chain"] == ["vin", "vo1", _last]
 
 
 def test_each_stage_carries_the_coefficient_its_order_selected(tmp_path):

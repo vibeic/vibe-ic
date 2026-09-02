@@ -537,15 +537,30 @@ def _f_analog_p3_macro_rtl(p: Path) -> None:
     `topology.md`, no `topology.json` and no hardmacro LEF, so there is no
     port list on the macro side, and no RTL at all, so there is no module on
     the digital side — the gate answers VACUOUS (rc 2), a disclosed skip and
-    not a falsification. Both sides have to EXIST and DISAGREE. Here the
-    block's own topology declares `vdd`/`vss` as rails and the digital RTL
-    instantiates a `bandgap` with `out` only — the measured campaign shape
-    (both RTL blackboxes declared no ground while the macro's LEF carried
-    `vss` as a PG pin), and the one case the checker's docstring calls
-    "a macro that will float in silicon"."""
+    not a falsification. Both sides have to EXIST and DISAGREE.
+
+    ROUND 17 — THE DISAGREEMENT MOVED, AND WHY. This fixture used to stage a
+    `bandgap` whose topology declares `vdd`/`vss` as rails against an RTL
+    module carrying `out` only, on the checker's own reading that a supply the
+    digital top never connects "will float in silicon". That reading was the
+    checker's defect: a macro's POWER/GROUND terminal is bound by POWER
+    INTENT, never through the netlist, and a Verilog blackbox declares no port
+    for it. MEASURED on round 16's die — every such terminal bound by
+    `global_connect`, PG_NET_OWNERSHIP_AUDIT clean, netgen matching
+    POWER-AWARE — while the gate failed A8 for the absence of a port that is
+    not supposed to exist. With that fixed, the old fixture PASSES, and a
+    blocking clause with no reachable FAIL is exactly what this test exists to
+    catch.
+
+    So the disagreement staged here is now a SIGNAL one, which is what the
+    gate still refuses: the macro offers `out` and `trim` and the module
+    declares `out` alone. The supplies stay in the fixture on purpose — they
+    must be present and NOT be what reddens it, or the fixture would not
+    distinguish the two."""
     _analog_partial(p, "phase3/analog")
     _w(p, "phase3/analog/bandgap/topology.json",
-       {"ports": ["vdd", "vss", "out"], "rails": {"p": "vdd", "n": "vss"}})
+       {"ports": ["vdd", "vss", "out", "trim"],
+        "rails": {"p": "vdd", "n": "vss"}})
     _w(p, "phase2/stage1/rtl/chip_top.v",
        "module bandgap (out);\n  output out;\nendmodule\n"
        "module chip_top (vref);\n  output vref;\n"

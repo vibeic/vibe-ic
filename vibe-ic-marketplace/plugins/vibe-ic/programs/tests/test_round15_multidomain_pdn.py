@@ -308,8 +308,17 @@ def test_secondary_straps_ride_every_core_strap_layer_to_the_boundary(tmp_path):
            if "add_pdn_stripe" in ln and "$_sec_pwr" in ln]
     assert [re.search(r"-layer (\S+)", ln).group(1) for ln in sec] == ["TM1", "TM2"]
     for ln in sec:
-        assert "-offset [expr {13.6 + 75.6 / 2.0}]" in ln    # half a pitch on
+        # ROUND 16 — the group is no longer dropped at a bare half pitch with
+        # the strap WIDTH standing in for the spacing rule. It is CENTRED in
+        # the window between two primary straps (`offset + width + gap`, both
+        # gaps equal and each the largest available) and separated by the
+        # LAYER's own minimum spacing, read from the tech LEF. The old shape
+        # shipped 7 TM1.b violations on ihp-sg13g2, where TopMetal1 is 2.2 um
+        # wide against a `SPACING 1.64` rule; see
+        # `test_round16_signoff_frames.py`.
+        assert "-offset [expr {13.6 + 2.2 + $_sec_gap}]" in ln
         assert "-spacing 2.2" in ln and "-extend_to_boundary" in ln
+        assert "$_sec_gap >= " in tcl
     assert "PDN_SECONDARY_STRAPS_DO_NOT_FIT" in tcl
     # primary straps untouched
     assert "add_pdn_stripe -grid grid -layer TM1 -width 2.2 -pitch 75.6 -offset 13.6\n" in tcl

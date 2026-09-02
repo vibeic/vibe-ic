@@ -275,3 +275,219 @@ def test_the_pre_summary_record_carries_the_step_extras_the_summary_reads():
     r = mod.StepResult("drc", "FAIL", 1.0, "d", extras={"total_violations": 39})
     assert dataclasses.asdict(r).get("extras", {}).get(
         "total_violations") == 39
+
+
+# ------------------------- 6. the block's ports are the DESIGN's port names
+
+import analog_a2_topology_emit as a2  # noqa: E402
+
+
+def test_the_topology_library_ports_bind_to_the_declared_interface():
+    """MEASURED: the `ldo` topology entry names its supply input `vdd`; the
+    design's own interface declaration (every pin citing its document line)
+    names it `vin`, and the chip RTL instantiates `.vin(...)`. The emitted
+    hardmacro said `vdd` in its LEF, its GDS labels and its Verilog view, and
+    the post-layout LEC stopped on `Module 'ldo' ... does not have a port
+    named 'vin'` — on a die whose sign-off DRC was 0 and whose LVS matched."""
+    m, refusal = a2.bind_ports_to_declaration(
+        ["vdd", "vss", "vref", "vout"], ["vin", "vss", "vref", "vout"])
+    assert refusal is None
+    assert m == {"vdd": "vin", "vss": "vss", "vref": "vref", "vout": "vout"}
+
+
+def test_an_ambiguous_leftover_is_refused_and_nothing_is_renamed():
+    """Two-and-two (or three-and-four) has no unique answer. A rename that
+    guesses is worse than no rename: the interface gate then reports the
+    disagreement instead of a silent, plausible, wrong binding."""
+    m, refusal = a2.bind_ports_to_declaration(
+        ["vdd", "vss", "vin", "vcm", "rst", "vout"],
+        ["vdd", "vss", "vin", "vrefp", "vrefn", "clk", "bit_out"])
+    assert m == {}
+    assert refusal and "PORT_BINDING_AMBIGUOUS" in refusal
+    assert "rst" in refusal and "vrefp" in refusal
+
+
+def test_no_declaration_leaves_the_library_names_alone():
+    assert a2.bind_ports_to_declaration(["vdd", "vss"], []) == ({}, None)
+
+
+def test_case_is_not_a_disagreement_about_role():
+    m, refusal = a2.bind_ports_to_declaration(["VDD", "vss"], ["vdd", "VSS"])
+    assert refusal is None and m == {"VDD": "vdd", "vss": "VSS"}
+
+
+def test_the_rename_is_a_whole_token_never_a_substring():
+    """`vdda` must stay `vdda`, and the SPICE source NAME in
+    `v_vdd vdd 0 {supply}` must not change while the NODE it drives does —
+    measured: renaming whole strings only left the A4 testbench driving a node
+    the DUT no longer had, and the corner sweep failed on a floating input."""
+    out = a2._rename_nets(
+        ["v_vdd vdd 0 {supply}", "vdda", "v(vdd)", "vdd", {"n": "vdd"}],
+        {"vdd": "vin"})
+    assert out == ["v_vdd vin 0 {supply}", "vdda", "v(vin)", "vin",
+                   {"n": "vin"}]
+
+
+def test_the_binding_is_recorded_in_the_ir_whatever_it_decided():
+    """`port_binding` states the declared pins, the library ports, what was
+    renamed and any refusal — so a reader of topology.json can see whether the
+    names came from the design or from the circuit library."""
+    src = Path(a2.__file__).read_text()
+    i = src.index('ir["port_binding"] = {')
+    block = src[i:i + 700]
+    for key in ('"declared_pins"', '"library_ports"', '"renamed"',
+                '"refusal"', '"source"'):
+        assert key in block
+
+
+# ---------------- 7. an absent DRV table is silence; a count is a measurement
+
+import sta_corner_record_completeness_check as _rec  # noqa: E402
+
+_CENSUS_REPORT = """\
+SIGNOFF_CHECK_TYPES_REPORTED recovery removal max_slew min_pulse_width \
+max_capacitance max_fanout
+SIGNOFF_DRV_CENSUS_BEGIN the tool's own violator count for every check type \
+requested above, zero included -- an absent table is silence, a count is a \
+measurement
+SIGNOFF_DRV_CENSUS max_slew violators=0
+SIGNOFF_DRV_CENSUS max_fanout violators=0
+SIGNOFF_DRV_CENSUS max_capacitance violators=0
+"""
+
+
+def test_the_signoff_deck_records_the_tools_own_drv_counts():
+    tcl = mod._report_check_types_tcl("/out/sta.rpt")
+    assert "sta::${_vt}_violation_count" in tcl
+    assert "SIGNOFF_DRV_CENSUS $_vt violators=$_vn" in tcl
+    for kind in ("max_slew", "max_fanout", "max_capacitance"):
+        assert kind in tcl
+    # the census is emitted on the SUCCESS branch only — never beside a
+    # report_check_types that errored
+    assert tcl.index("SIGNOFF_CHECK_TYPES_FAILED") < tcl.index(
+        "SIGNOFF_DRV_CENSUS")
+
+
+def test_the_census_begin_line_is_digit_free():
+    """`extract_drv` ends an open violator table at the first line with no
+    digit. A digit in the BEGIN line would make the census look like extra
+    violator rows of whatever table happened to be open above it."""
+    assert not any(c.isdigit() for c in mod._SIGNOFF_DRV_CENSUS_BEGIN)
+
+
+def test_a_census_zero_is_a_measurement_not_an_absent_table():
+    d = _rec.extract_drv(_CENSUS_REPORT)
+    assert d["kinds_without_table"] == []
+    assert d["census"] == {"max_slew": 0, "max_fanout": 0,
+                           "max_capacitance": 0}
+    assert d["violations"] == {}
+
+
+def test_without_a_census_silence_is_still_unmeasured():
+    """The pre-existing reading is untouched: a report with the marker and no
+    census keeps every requested kind in `kinds_without_table`."""
+    d = _rec.extract_drv(_CENSUS_REPORT.split("SIGNOFF_DRV_CENSUS_BEGIN")[0])
+    assert sorted(d["kinds_without_table"]) == [
+        "max_capacitance", "max_fanout", "max_slew"]
+    assert d.get("census") == {}
+
+
+def test_a_census_does_not_hide_a_table_that_has_rows():
+    rpt = _CENSUS_REPORT.replace("max_capacitance violators=0",
+                                 "max_capacitance violators=2")
+    rpt = ("max capacitance\n\nPin      Limit   Cap   Slack\n"
+           "-----------------------------------\n"
+           "a/vin     0.30   0.46   -0.16 (VIOLATED)\n"
+           "b/vin     0.30   0.43   -0.13 (VIOLATED)\n\n") + rpt
+    d = _rec.extract_drv(rpt)
+    assert d["violations"].get("max_capacitance") == 2
+    assert d["census"]["max_capacitance"] == 2
+    assert "max_capacitance" not in d["kinds_without_table"]
+
+
+# ------------- 8. the DRV bound, the GR-tree abort, and the Verilog parser
+
+def test_a_measured_capacitance_violator_brings_the_bound_back_to_the_seed():
+    """The electrical floor `rsz::find_max_wire_length` answers with the length
+    at which wire DELAY degrades. A wire violates its LOAD limit long before
+    that: MEASURED on ihp-sg13g2 the floor is 3671 um, so a 1.3 mm die was
+    repaired at a 3671 um repeater spacing — nothing was inserted — while the
+    sign-off report carried 10 max-capacitance violators. The floor still
+    governs the kinds it governs; a MEASURED capacitance violator brings the
+    bound back to the geometric seed, and never below it."""
+    tcl = mod._v1_8_100_signoff_drv_repair_tcl("/out")
+    assert "set _sdr_seed $_sdr_mwl" in tcl
+    assert "SDR_DRV_BY_KIND" in tcl
+    assert "SDR_MWL_LOWERED_FOR_CAP" in tcl
+    # keyed on the tool's OWN per-kind count, and only downward to the seed
+    assert "if {$_sdr_ncap > 0 && $_sdr_mwl > $_sdr_seed}" in tcl
+    assert "set _sdr_mwl $_sdr_seed" in tcl
+
+
+def test_the_drv_count_is_attributed_to_its_table():
+    """A total alone cannot choose the bound: the section headings are read so
+    a max-capacitance row is not counted as a max-slew one."""
+    tcl = mod._v1_8_100_signoff_drv_repair_tcl("/out")
+    assert 'eq "max capacitance"' in tcl
+    assert 'eq "max slew"' in tcl
+
+
+def test_a_stale_global_route_tree_is_regenerated_and_the_repair_retried():
+    """RSZ-0074 (`Failed to build tree from global routes ... found route to 2
+    pins, expected 1`) aborts repair_design at iteration 0 having done nothing.
+    Regenerating the global route on the current design and retrying runs the
+    identical repair to completion. Bounded to ONE retry."""
+    tcl = mod._v1_8_100_signoff_drv_repair_tcl("/out")
+    i = tcl.index("RSZ-0074")
+    seg = tcl[i:i + 900]
+    assert "SDR_RSZ0074_DETECTED" in seg
+    assert "global_route" in seg
+    assert "SDR_RSZ0074_RECOVERED" in seg
+    # a failure of the retry still stops the loop — no unbounded retrying
+    assert "SDR_RSZ0074_RETRY_NONFATAL" in seg and "set _sdr_stop 1" in seg
+    # a NON-RSZ-0074 error keeps the old behaviour exactly
+    assert "SDR_REPAIR_NONFATAL: $_sdr_rd" in seg
+
+
+import analog_hardmacro_pinname_consistency_check as _pin  # noqa: E402
+
+
+def test_a_non_ansi_module_header_is_not_a_module_without_ports():
+    """The flow's OWN A8 emitter writes the non-ANSI form. Reading only ANSI
+    headers made this gate report `Block 'ldo': missing_in_v=['vin','vout',
+    'vref','vss']` for a view that declares exactly those four ports — the same
+    verdict it printed for a block that really did disagree."""
+    non_ansi = ("module ldo (\n    vin,\n    vss,\n    vref,\n    vout\n);\n"
+                "    inout vin;\n    inout vss;\n    inout vref;\n"
+                "    inout vout;\nendmodule\n")
+    assert _pin.parse_verilog_ports(non_ansi) == {"vin", "vss", "vref", "vout"}
+
+
+def test_the_ansi_form_still_parses_exactly_as_before():
+    assert _pin.parse_verilog_ports(
+        "module m (input a, output [3:0] b, inout c); endmodule") == {
+            "a", "b", "c"}
+
+
+def test_a_bare_header_name_the_body_never_declares_is_not_a_port():
+    assert _pin.parse_verilog_ports(
+        "module m (a, zz);\n input a;\n endmodule") == {"a"}
+
+
+def test_a8_reports_the_interface_disagreement_at_the_producer():
+    """`analog_hardmacro_pinname_consistency_check` compares the three views
+    of a macro's interface and NOTHING in the flow ran it. The disagreement
+    surfaced three phases later as a yosys parse error at the post-layout LEC
+    (`Module 'delta_sigma' ... does not have a port named 'vrefp'`). It is now
+    reported at A8, where the views are produced — ADVISORY: the A8 verdict is
+    still the A8 gate's own, and a design whose blocks declare no interface
+    makes the check self-skip exactly as before."""
+    import analog_one_shot_runner as a1s
+    src = Path(a1s.__file__).read_text()
+    i = src.index("analog_hardmacro_gds_emit.py")
+    seg = src[i:i + 4000]
+    assert "analog_hardmacro_pinname_consistency_check.py" in seg
+    assert "[A8 advisory] interface consistency" in seg
+    # advisory: the subprocess result never becomes the step's verdict
+    j = seg.index("analog_hardmacro_pinname_consistency_check.py")
+    assert "returncode" not in seg[j:j + 900]

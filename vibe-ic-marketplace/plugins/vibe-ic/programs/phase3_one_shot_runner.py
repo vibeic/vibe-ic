@@ -21481,6 +21481,13 @@ def _v1_8_100_signoff_drv_repair_tcl(out_dir_c: str) -> str:
         "    set _sdr_mwl [expr {int(min($_sdr_w,$_sdr_h)/8.0)}]\n"
         "  } _sdr_e]} { puts \"SDR_DIE_NONFATAL: $_sdr_e\"; set _sdr_ok 0 }\n"
         f"  if {{$_sdr_mwl < {lo}}} {{ set _sdr_mwl {lo} }}\n"
+        # The GEOMETRIC seed is kept: the electrical floor below can raise the
+        # repeater spacing far past it (measured here: 162 -> 3671 um), and a
+        # spacing that long inserts nothing at all. That is right for a DELAY
+        # floor and wrong for a CAPACITANCE limit, which a wire violates long
+        # before its delay degrades. When a pass MEASURES max-capacitance
+        # violators, the loop comes back to this seed for the next pass.
+        "  set _sdr_seed $_sdr_mwl\n"
         # WHETHER A WIRE IS TOO LONG IS ELECTRICAL, NOT GEOMETRIC. The seed
         # above is a fraction of the die; the resizer knows the real answer for
         # THIS process and prints it on every pass it disagrees with:
@@ -21533,13 +21540,42 @@ def _v1_8_100_signoff_drv_repair_tcl(out_dir_c: str) -> str:
         f"    catch {{report_check_types -max_slew -max_capacitance -max_fanout "
         f"-violators > {out_dir_c}/sdr_drv.rpt}}\n"
         "    set _sdr_n 0\n"
+        # COUNTED PER KIND, not just totalled: the repair that closes a
+        # max-capacitance violator is not the one that closes a max-slew
+        # violator, and the bound below is chosen from the kind.
+        "    set _sdr_ncap 0\n"
+        "    set _sdr_kind {}\n"
         "    if {[catch {\n"
         f"      set _sdr_fh [open {out_dir_c}/sdr_drv.rpt r]\n"
         "      while {[gets $_sdr_fh _sdr_ln] >= 0} {\n"
-        "        if {[string first \"(VIOLATED)\" $_sdr_ln] >= 0} { incr _sdr_n }\n"
+        "        set _sdr_t [string trim $_sdr_ln]\n"
+        "        if {$_sdr_t eq \"max capacitance\" || $_sdr_t eq \"max slew\" "
+        "|| $_sdr_t eq \"max fanout\"} { set _sdr_kind $_sdr_t; continue }\n"
+        "        if {[string first \"(VIOLATED)\" $_sdr_ln] >= 0} {\n"
+        "          incr _sdr_n\n"
+        "          if {$_sdr_kind eq \"max capacitance\"} { incr _sdr_ncap }\n"
+        "        }\n"
         "      }\n"
         "      close $_sdr_fh\n"
         "    } _sdr_ce]} { puts \"SDR_COUNT_NONFATAL: $_sdr_ce\" }\n"
+        "    puts \"SDR_DRV_BY_KIND: total=$_sdr_n max_capacitance=$_sdr_ncap\"\n"
+        # A WIRE VIOLATES ITS LOAD LIMIT LONG BEFORE ITS DELAY DEGRADES.
+        # MEASURED (u_hawaii_adc / ihp-sg13g2): `rsz::find_max_wire_length`
+        # answers 3671 um on this process, so the loop repaired to a 3671 um
+        # spacing on a 1.3 mm die -- it inserted nothing -- while the sign-off
+        # multi-corner report carried 10 max-capacitance violators on the six
+        # buffer-to-modulator nets (0.46 pF against a 0.30 pF limit). The
+        # delay floor stays a floor for the kinds it governs; for a MEASURED
+        # capacitance violator the bound comes back to the geometric seed,
+        # which is the spacing that actually splits those nets. Never below
+        # the seed, so the over-splitting the seed comment records cannot
+        # return, and only when the tool itself counted a cap violator.
+        "    if {$_sdr_ncap > 0 && $_sdr_mwl > $_sdr_seed} {\n"
+        "      puts \"SDR_MWL_LOWERED_FOR_CAP: $_sdr_mwl -> $_sdr_seed um "
+        "($_sdr_ncap max-capacitance violator(s) measured; the electrical "
+        "DELAY floor does not bound a LOAD limit)\"\n"
+        "      set _sdr_mwl $_sdr_seed\n"
+        "    }\n"
         "    puts \"SDR_DRV_PASS${_sdr_p}_BEFORE: $_sdr_n (max_wire_length=$_sdr_mwl)\"\n"
         "    if {$_sdr_n == 0} { puts \"SDR_CONVERGED: pass $_sdr_p\"; break }\n"
         "    set _sdr_stop 0\n"
@@ -21566,8 +21602,39 @@ def _v1_8_100_signoff_drv_repair_tcl(out_dir_c: str) -> str:
         # it is in — legalize, clear routing, reroute — and only then
         # stops iterating. Same tools, same order as a clean pass; the
         # only difference is that no further pass is attempted.
-        + "      if {!$_sdr_est_rec} { puts \"SDR_REPAIR_NONFATAL: $_sdr_rd\"; "
-        "set _sdr_stop 1 }\n"
+        # RSZ-0074 — the resizer could not build a Steiner tree from the
+        # GLOBAL ROUTE that is currently in the database:
+        #   [ERROR RSZ-0074] Failed to build tree from global routes for pin
+        #   'vref' and net 'vref' at grid (658800, 3600): found route to 2
+        #   pins, expected 1
+        # MEASURED (u_hawaii_adc / ihp-sg13g2): the repair aborts at iteration
+        # 0 having done nothing, on every pass, so the four max-capacitance
+        # violators the same loop had just counted were never repairable. The
+        # global route it choked on is the one left over from the route that
+        # already shipped; regenerating it on the CURRENT design and retrying
+        # runs the identical repair to completion (probe: same DEF, same SPEF,
+        # `global_route` then `repair_design -max_wire_length 162` -> 47
+        # buffers in 7 nets, capacitance violators 1 -> 0). Bounded to ONE
+        # retry, and the stop flag is set only if the retry fails too.
+        + "      if {!$_sdr_est_rec} {\n"
+        + "        if {[string first \"RSZ-0074\" $_sdr_rd] >= 0} {\n"
+        + "          puts \"SDR_RSZ0074_DETECTED: regenerating the global "
+          "route on the current design and retrying the repair once\"\n"
+        + "          if {[catch {global_route} _sdr_gr74]} {\n"
+        + "            puts \"SDR_RSZ0074_GR_NONFATAL: $_sdr_gr74\"; "
+          "set _sdr_stop 1\n"
+        + "          } elseif {[catch {repair_design -max_wire_length "
+        + f"$_sdr_mwl -slew_margin {m} -cap_margin {m}" + "} _sdr_rd2]} {\n"
+        + "            puts \"SDR_RSZ0074_RETRY_NONFATAL: $_sdr_rd2\"; "
+          "set _sdr_stop 1\n"
+        + "          } else {\n"
+        + "            puts \"SDR_RSZ0074_RECOVERED\"\n"
+        + "          }\n"
+        + "        } else {\n"
+        + "          puts \"SDR_REPAIR_NONFATAL: $_sdr_rd\"\n"
+        + "          set _sdr_stop 1\n"
+        + "        }\n"
+        + "      }\n"
         "    }\n"
         # v1.8.100 r2 — MEASURED: without this, closing DRV on the max-RC
         # deck traded the SLOW-corner setup from +1.02 ns to -4.68 ns
@@ -38655,6 +38722,19 @@ _SIGNOFF_MAX_FANOUT_NOTE = (
 # design's true DRV population (measured: caravel_user_project x sky130A
 # carries >250 violating pins on ONE severe net family), low enough that a
 # pathological design can't blow the report file up unboundedly.
+#: The MEASURED DRV census. `report_check_types -violators` prints a table only
+#: for a check type that HAS a violator, so a clean type is indistinguishable
+#: from an unrun one in the report — and the record gate correctly refuses to
+#: read silence as zero. These two markers carry OpenSTA's own violation
+#: counters instead, so every requested check type has a NUMBER on the record.
+#: The BEGIN line is deliberately DIGIT-FREE (it closes any open violator table
+#: for `extract_drv`, which ends a table at the first digit-free line).
+_SIGNOFF_DRV_CENSUS_BEGIN = (
+    "SIGNOFF_DRV_CENSUS_BEGIN the tool's own violator count for every check "
+    "type requested above, zero included -- an absent table is silence, a "
+    "count is a measurement")
+_SIGNOFF_DRV_CENSUS = "SIGNOFF_DRV_CENSUS"
+
 _CHECK_TYPES_VIOLATORS_MAX_COUNT = 2000
 
 # ORGANIC #540 — worst-PATH evidence markers. `report_worst_slack` prints a
@@ -38827,7 +38907,26 @@ def _report_check_types_tcl(rpt_c: str) -> str:
         f"  set _cf [open {rpt_c} a]\n"
         f'  puts $_cf "{_SIGNOFF_CHECK_TYPES_MARKER}"\n'
         f'  puts $_cf "{_SIGNOFF_MAX_FANOUT_NOTE}"\n'
-        f"  close $_cf\n"
+        # AN ABSENT TABLE IS NOT A MEASUREMENT — SO ASK THE TOOL FOR THE
+        # NUMBER. `report_check_types -violators` prints a table only when
+        # there IS a violator, so a clean check type leaves NOTHING in the
+        # report, and a reader (`sta_corner_record_completeness_check`) can
+        # only say "requested max_fanout, max_slew and OpenSTA printed no
+        # table for it — the check reported on nothing". That is the correct
+        # reading of silence, and it is why this run could not certify a DRV
+        # axis it had actually checked. OpenSTA's own violation counters
+        # answer the question directly, so the report now carries the COUNT
+        # for every check type whose violators were requested — zero
+        # included. Digit-free BEGIN line first: `extract_drv` ends an open
+        # violator table at the first line carrying no digit, so the census
+        # can never be misread as extra violator rows.
+        + "  puts $_cf \"" + _SIGNOFF_DRV_CENSUS_BEGIN + "\"\n"
+        + "  foreach _vt {max_slew max_fanout max_capacitance} {\n"
+        + "    if {[catch {set _vn [sta::${_vt}_violation_count]} _vterr]} "
+          "{ set _vn UNAVAILABLE }\n"
+        + "    puts $_cf \"" + _SIGNOFF_DRV_CENSUS + " $_vt violators=$_vn\"\n"
+        + "  }\n"
+        + f"  close $_cf\n"
         f"}}\n"
     )
 

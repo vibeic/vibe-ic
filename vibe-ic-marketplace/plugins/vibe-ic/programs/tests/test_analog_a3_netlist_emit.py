@@ -193,19 +193,35 @@ def _mutate_ir(project, blockname, fn):
 
 def test_an_internal_net_visible_to_no_checker_is_rejected_before_emission(
         tmp_path):
-    """A 2-terminal device is invisible to the connectivity parser. If the
-    only OTHER pin on an internal net comes from one, the net reads as
-    FLOATING_NODE. The producer must catch that itself rather than ship a
-    netlist a checker will reject."""
+    """An internal net the connectivity checker would call FLOATING_NODE must
+    be caught HERE, by the producer, rather than shipped for a checker to
+    reject.
+
+    ROUND 17 — THE MUTATION CHANGED, AND WHY. This test used to turn the
+    3-terminal divider legs into 2-terminal caps, on the premise that "a
+    2-terminal device is invisible to the connectivity parser". It is not,
+    and has not been since `analog_netlist_connectivity_check._device_nets`
+    was corrected to parse a two-net device — the whole point of that fix was
+    that a switched-capacitor circuit, where the signal ENTERS through a
+    capacitor, is not a defect. This file's pre-check kept the old floor of 3
+    as a literal and so did this test, and together they refused a netlist the
+    checker itself accepts (measured: a modulator's summing node, reached by a
+    transistor gate and two capacitor plates, reported IR_NOT_RENDERABLE).
+
+    The floor now comes from `analog_netlist_connectivity_check.
+    MIN_DEVICE_NETS`, so the mutation here makes a node that is genuinely
+    touched ONCE — which is what FLOATING_NODE means and has always meant.
+    """
     p, _ = _emit(tmp_path, [block("vreg_alpha", "ldo", LDO_SPEC)])
 
     def mutate(ir):
-        # Turn the 3-terminal divider legs into 2-terminal caps so `vfb`
-        # loses every visible pin but the differential-pair gate.
+        # Move ONE terminal of ONE device onto a fresh internal net, so that
+        # net is touched by exactly one device pin and by nothing else.
+        ir["internal_nets"] = list(ir["internal_nets"]) + ["n_orphan"]
         for d in ir["devices"]:
-            if d["name"] in ("r1", "r2"):
-                d["role"] = "cap"
-                d["nets"] = d["nets"][:2]
+            if d["name"] == "r1":
+                d["nets"] = ["n_orphan"] + list(d["nets"][1:])
+                break
     _mutate_ir(p, "vreg_alpha", mutate)
 
     cp = run_prog(A3, p)
@@ -214,6 +230,26 @@ def test_an_internal_net_visible_to_no_checker_is_rejected_before_emission(
     gap = read_json(bdir(p, "vreg_alpha") / "netlist_gap.json")
     assert gap["status"] == "IR_NOT_RENDERABLE"
     assert any("FLOATING_NODE" in s for s in gap["problems"]), gap["problems"]
+    assert any("n_orphan" in s for s in gap["problems"]), gap["problems"]
+
+
+def test_a_capacitor_terminated_internal_net_is_NOT_rejected(tmp_path):
+    """The CONTROL for the row above, and the shape the old premise refused: a
+    node reached by a transistor gate and two capacitor plates is a
+    switched-capacitor summing node, not a floating one, and the producer must
+    emit it."""
+    p, _ = _emit(tmp_path, [block("vreg_alpha", "ldo", LDO_SPEC)])
+
+    def mutate(ir):
+        for d in ir["devices"]:
+            if d["name"] in ("r1", "r2"):
+                d["role"] = "cap"
+                d["nets"] = d["nets"][:2]
+    _mutate_ir(p, "vreg_alpha", mutate)
+
+    cp = run_prog(A3, p)
+    assert cp.returncode == 0, cp.stdout + cp.stderr
+    assert (bdir(p, "vreg_alpha") / "vreg_alpha.sp").is_file()
 
 
 def test_a_wrong_terminal_count_is_rejected_before_ngspice_sees_it(tmp_path):

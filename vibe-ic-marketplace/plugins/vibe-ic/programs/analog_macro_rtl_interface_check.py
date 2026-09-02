@@ -23,8 +23,27 @@ A8 has run and ORD-2013 is out of the way — and it says it as a WARNING:
 The disagreements are not one kind:
 
   * BOTH blocks' RTL blackboxes declare no ground at all, while the macro's
-    LEF carries `vss` as a PG pin. A power pin the digital top never connects
-    is not a naming slip; it is a macro that will float in silicon.
+    LEF carries `vss` as a PG pin.
+
+    THAT ONE WAS THIS GATE'S OWN DEFECT, and it is fixed here. A macro
+    terminal whose LEF `USE` is POWER or GROUND is not connected through the
+    netlist in ANY flow: it is bound by POWER INTENT, physically, by the
+    PDN's `add_global_connection` / `global_connect`, and a Verilog blackbox
+    that declares no supply port is stating the normal convention rather
+    than a defect. MEASURED on this campaign's die (round 16): every macro
+    supply terminal was bound that way, `PG_NET_OWNERSHIP_AUDIT` came back
+    clean, and netgen matched the two netlists POWER-AWARE over 77,863
+    instances — while this gate was calling the same pins "never connected"
+    and failing A8. It was reporting the absence of a port that is not
+    supposed to exist.
+
+    So a LEF PG pin missing from the RTL is now reported as BOUND BY POWER
+    INTENT and named, not counted as a disagreement. Whether the binding
+    actually happened is a real question and it already has a gate that
+    measures it — `PG_NET_OWNERSHIP_AUDIT`, in `phase3_one_shot_runner`,
+    which reads the terminals out of the routed database. That gate can
+    measure it; this one, running at A8 before any PDN exists, cannot. A
+    SIGNAL pin missing from the RTL is untouched and still fails.
   * One block's supply is called `vin` on the RTL side (from an L5 line that
     reads "Vin = 1.8 V") and `vdd` on the analog side. Same net, two names,
     two producers, never reconciled.
@@ -124,17 +143,37 @@ def block_ports_from_topology(topo: Dict) -> Tuple[List[str], List[str]]:
 
 def compare(macro_pins: List[str], rtl_ports: List[str], rails: List[str]
             ) -> Dict[str, List[str]]:
-    """The two directions, plus the rails singled out.
+    """The two directions, with the SUPPLY terminals separated out.
 
-    A rail missing on the digital side is called out separately because it is
-    the one case with no legitimate reading: a PG pin the top never connects
-    floats in silicon whatever the two producers meant.
+    A supply terminal absent from the digital module is NOT a disagreement.
+    It is the convention: a macro's POWER/GROUND pins are bound by power
+    intent — the PDN's `add_global_connection` against the LEF's own `USE`
+    records — and a Verilog blackbox carries no port for them. Reporting it
+    as "the digital side never connects this" charges the netlist for a
+    binding that was never the netlist's to make, and it failed A8 on a die
+    whose routed database then showed every one of those terminals owned by
+    a rail (`PG_NET_OWNERSHIP_AUDIT`, clean) and whose LVS matched
+    POWER-AWARE.
+
+    `rails` is therefore an EXCLUSION here, not an extra alarm: supplies are
+    named in `supplies_bound_by_power_intent` for the reader, and the
+    verdict is decided on the SIGNAL pins alone. Whether each supply
+    terminal really was bound is measured downstream, on the routed design,
+    by the gate that can see it.
     """
-    m, r = set(macro_pins), set(rtl_ports)
+    m, r, g = set(macro_pins), set(rtl_ports), set(rails)
     return {
-        "missing_in_rtl": sorted(m - r),
+        # Signal pins only. A supply on the macro and not in the module is
+        # the convention, not a finding.
+        "missing_in_rtl": sorted(m - r - g),
         "extra_in_rtl": sorted(r - m),
-        "rails_missing_in_rtl": sorted(set(rails) - r),
+        # Disclosed by name, never counted against the verdict.
+        "supplies_bound_by_power_intent": sorted((m & g) - r),
+        # A supply the module DOES declare but the macro does not offer is a
+        # real disagreement and stays in `extra_in_rtl` above; this list is
+        # kept for readers that used it, and is now always empty of anything
+        # the verdict depends on.
+        "rails_missing_in_rtl": sorted(g - r),
     }
 
 
@@ -203,14 +242,22 @@ def main(argv: Optional[List[str]] = None) -> int:
             print(f"  [{r['block']}] SKIP — {r['reason']}")
             continue
         if r["agree"]:
-            print(f"  [{r['block']}] agree ({len(r['macro_pins'])} pin(s))")
+            extra = ""
+            if r.get("supplies_bound_by_power_intent"):
+                extra = (f"; {len(r['supplies_bound_by_power_intent'])} "
+                         f"supply pin(s) bound by power intent: "
+                         f"{', '.join(r['supplies_bound_by_power_intent'])}")
+            print(f"  [{r['block']}] agree "
+                  f"({len(r['macro_pins'])} pin(s)){extra}")
             continue
         print(f"  [{r['block']}] MACRO_RTL_INTERFACE_DISAGREES "
               f"(macro pins from {r['macro_pin_source']}, "
               f"RTL from {r['rtl_source']})")
-        if r["rails_missing_in_rtl"]:
-            print(f"      supply pin(s) the digital side never connects: "
-                  f"{', '.join(r['rails_missing_in_rtl'])}")
+        if r.get("supplies_bound_by_power_intent"):
+            print(f"      supply pin(s) bound by POWER INTENT, not by the "
+                  f"netlist (measured on the routed design by "
+                  f"PG_NET_OWNERSHIP_AUDIT, not here): "
+                  f"{', '.join(r['supplies_bound_by_power_intent'])}")
         if r["missing_in_rtl"]:
             print(f"      on the macro, absent from the module: "
                   f"{', '.join(r['missing_in_rtl'])}")

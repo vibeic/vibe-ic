@@ -560,6 +560,13 @@ def attribute_drv(rows: Dict[str, List[str]],
             "design": d_tot, "constant_net": s_tot, "total": d_tot + s_tot}
 
 
+#: `SIGNOFF_DRV_CENSUS <kind> violators=<n>` — the sign-off deck recording
+#: OpenSTA's own violation counter for a check type it requested, so a clean
+#: check type is a measured zero instead of an absent table.
+_DRV_CENSUS_RE = re.compile(
+    r"^SIGNOFF_DRV_CENSUS\s+(\S+)\s+violators=(\d+)\s*$", re.M)
+
+
 def extract_drv(text: str) -> Dict[str, object]:
     """DRV evidence from one STA report body: was OpenSTA ASKED for max_slew /
     max_capacitance / max_fanout, and what did it answer?
@@ -697,11 +704,33 @@ def extract_drv(text: str) -> Dict[str, object]:
     # and the table is still empty by construction, which that note cannot
     # distinguish and a reader would take for a clean result.
     silent = [k for k in kinds_seen if k not in counts]
+    # ...UNLESS THE EMITTER ASKED THE TOOL FOR THE NUMBER. `report_check_types
+    # -violators` prints a table only for a check type that HAS one, so a clean
+    # type is silent — and silence is correctly unreadable. The sign-off decks
+    # therefore also record OpenSTA's own violation counter for every check
+    # type they requested (`SIGNOFF_DRV_CENSUS <kind> violators=<n>`), zero
+    # included. A census line is a MEASUREMENT of that kind: it moves the kind
+    # out of `kinds_without_table` and, when it counts more than zero, it is
+    # the count for a kind whose rows the report also carries (the table and
+    # the counter come from the same STA state, and the table wins for
+    # attribution because it names the pins).
+    census: Dict[str, int] = {}
+    for m in _DRV_CENSUS_RE.finditer(text):
+        try:
+            census[m.group(1)] = int(m.group(2))
+        except ValueError:
+            continue
+    if census:
+        silent = [k for k in silent if k not in census]
     return {
         "queried": queried,
         "query_error": query_error,
         "kinds_queried": kinds_seen,
         "kinds_without_table": silent,
+        # The tool's own counters, as recorded by the emitter. A kind here with
+        # 0 is a MEASURED zero; a kind absent here and absent from the tables
+        # is unmeasured.
+        "census": census,
         "violations": violations,
         "total": sum(violations.values()),
         # The INSTANCE each violating row belongs to, so a caller can attribute

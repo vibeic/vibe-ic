@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 1253
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1253)
+- **Total programs (excluding helpers / shims):** 1254
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1254)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 1244 |
+| `any` | 1245 |
 
 ## Alphabetical listing
 
@@ -102,6 +102,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `analog_real_corner_sweep` | any | — | v1.6.207 (ORGANIC-20260512). |
 | `analog_sigma_delta_gain_floor_check` | any | — | R14 integrator-gain floor gate (A4). |
 | `analog_tb_supply_pdk_check` | any | — | deterministic testbench supply-vs-PDK consistency gate. |
+| `analog_topology_behaviour_check` | any | — | "it renders and simulates" is not "it works", and nothing in this flow measured the difference. |
 | `antenna_report_check` | any | — | Antenna report check — wrapper for eda_report_audit --mode antenna. |
 | `arbiter_starvation_check` | any | v0.116 | Detect fixed-priority arbiters whose high-priority requester is |
 | `arch_dse_pareto` | any | — | arch_dse_pareto.py -- Deterministic micro-architecture design-space exploration. |
@@ -1325,7 +1326,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (1244 programs)
+### `any` (1245 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `absence_verdict_names_its_search_space_check` — "not found" must say WHERE it looked.
@@ -1403,6 +1404,7 @@ _(no programs in this group)_
 - `analog_real_corner_sweep` — v1.6.207 (ORGANIC-20260512).
 - `analog_sigma_delta_gain_floor_check` — R14 integrator-gain floor gate (A4).
 - `analog_tb_supply_pdk_check` — deterministic testbench supply-vs-PDK consistency gate.
+- `analog_topology_behaviour_check` — "it renders and simulates" is not "it works", and nothing in this flow measured the difference.
 - `antenna_report_check` — Antenna report check — wrapper for eda_report_audit --mode antenna.
 - `arbiter_starvation_check` — Detect fixed-priority arbiters whose high-priority requester is  _[v0.116]_
 - `arch_dse_pareto` — arch_dse_pareto.py -- Deterministic micro-architecture design-space exploration.

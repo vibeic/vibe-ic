@@ -729,6 +729,36 @@ def step_for_block(project: Path, block: Dict[str, Any], step_name: str,
                 # the missing artefact on its own evidence.
                 pass
 
+        # A8 IS ALSO THE MOMENT THE MACRO'S INTERFACE FIRST EXISTS AS THREE
+        # VIEWS. `analog_hardmacro_pinname_consistency_check` compares them —
+        # spec.json's declared `interface.pins[]`, the LEF's PINs and the
+        # Verilog view's ports — and NOTHING in this flow ran it. MEASURED
+        # (u_hawaii_adc, 2026-09-02): the `delta_sigma` topology exposes
+        # `vcm`/`rst`/`vout` where the design's own declaration (and the RTL
+        # that instantiates the block) says `vrefp`/`vrefn`/`clk`/`bit_out`.
+        # The disagreement surfaced FORTY MINUTES LATER, at the post-layout
+        # LEC, as `Module 'delta_sigma' ... does not have a port named
+        # 'vrefp'` — a yosys parse error, three phases from the producer that
+        # could fix it.
+        #
+        # ADVISORY, by design: it is reported here, at the producer, and the
+        # verdict it feeds stays the A8 gate's own. A design whose blocks
+        # declare no interface makes this check self-skip, exactly as before.
+        _pin_prog = PROGRAMS_DIR / "analog_hardmacro_pinname_consistency_check.py"
+        if _pin_prog.is_file():
+            try:
+                _pin_r = subprocess.run(
+                    [sys.executable, str(_pin_prog), str(project)],
+                    capture_output=True, text=True, timeout=300)
+                for _ln in ((_pin_r.stdout or "") + (_pin_r.stderr or "")
+                            ).splitlines():
+                    if "[ERROR]" in _ln or "[WARN" in _ln:
+                        print(f"[A8 advisory] interface consistency: "
+                              f"{_ln.strip()}")
+            except (OSError, subprocess.SubprocessError) as _pe:
+                print(f"[A8 advisory] interface consistency check did not "
+                      f"run: {_pe}")
+
         # A8 is also the moment the design's OWN macro LEFs first EXIST, and
         # that is the missing half of v1.8.95.
         #
@@ -793,6 +823,47 @@ def step_for_block(project: Path, block: Dict[str, Any], step_name: str,
             if "VACUOUS_PASS" in cp.stdout:
                 return StepResult(step_name, bname, "VACUOUS_PASS",
                                   time.time() - t0, stdout_tail)
+            if step_name == "A8_hardmacro_gen":
+                # DOES THE CIRCUIT DO WHAT ITS TOPOLOGY SAYS IT IS FOR?
+                # Every gate from here on answers a DIFFERENT question —
+                # A5 lays the netlist out, A6 proves the layout matches it,
+                # A8 packages it, LVS compares two views of it, the LEC
+                # compares two more — and all of them pass on a block that
+                # converts nothing. MEASURED (u_hawaii_adc): a complete
+                # delta-sigma modulator that renders, converges, and drives
+                # its declared 1-bit output rail to rail at a density of
+                # 0.51 that does not move across the input's full range.
+                # The A2 library entry records that in its own words; this
+                # is where the flow stops instead of walking past it. A
+                # block whose topology states no behavioural claim — every
+                # shipped entry but one — is SKIPPED and unaffected.
+                #
+                # AT A8 AND NOT AT A3, deliberately. Asked at A3 it would
+                # refuse to emit the netlist, and then no layout, no
+                # extraction, no macro and no die exist to inspect — the
+                # flow would lose the physical evidence along with the
+                # green. Asked here, the block is fully built and fully
+                # measured, and what it cannot do is stated over the top of
+                # all of it. Refusing to SIGN OFF is not the same act as
+                # refusing to BUILD, and only the first one is this gate's.
+                beh = PROGRAMS_DIR / "analog_topology_behaviour_check.py"
+                bcp = _pr.run(
+                    [sys.executable, str(beh), str(project),
+                     "--block", bname,
+                     "--json", str(out_dir / "a8_topology_behaviour.json")],
+                    capture_output=True, text=True)
+                if bcp.returncode == 1:
+                    btail = (bcp.stdout.strip().splitlines()[-1]
+                             if bcp.stdout else
+                             "a behavioural claim is not demonstrated")
+                    return StepResult(
+                        step_name, bname, "FAIL", time.time() - t0,
+                        f"topology behaviour not demonstrated: {btail}",
+                        output_files=_step_outputs(project, bname, step_name),
+                        extras={"topology_behaviour_rc": bcp.returncode,
+                                "topology_behaviour_report":
+                                    str(out_dir / "a8_topology_behaviour.json"),
+                                **_content_extras(project, bname, step_name)})
             if step_name == "A8_hardmacro_gen":
                 # THE DIGITAL SIDE OF THE MACRO'S INTERFACE (vibe-ic#2010,
                 # items 1-2). The A8 gate above certifies the LEF/LIB/V triple

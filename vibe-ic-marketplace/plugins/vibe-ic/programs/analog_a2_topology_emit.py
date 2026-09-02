@@ -127,10 +127,11 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import re
 import sys
 import time
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
@@ -166,6 +167,15 @@ ROLE_TERMINALS = {
 # by a width rule, and inferring "is this a width?" from a name would do
 # exactly that. An entry that declares nothing is floored on its devices only.
 CONSTANT_ROLES_KEY = "constant_roles"
+
+# Library key: an entry's own statement of what its circuit must be SHOWN to
+# do, and whether that has been shown. OPTIONAL — an entry that omits it is
+# unaffected in every path. It exists because "renders and simulates" is not
+# the same claim as "works": a delta-sigma loop can converge in the simulator
+# and emit a full-swing bitstream while converting nothing, and no gate in
+# this flow measured the difference. Read by
+# `analog_topology_behaviour_check`.
+BEHAVIOUR_RECORD_KEY = "behaviour_record"
 
 # ── SPEC-BOUND ADMISSION: the keys that let a library entry REFUSE ITSELF ──
 #
@@ -667,38 +677,95 @@ LIBRARY: Dict[str, Dict[str, Any]] = {
     # which is exactly the objection the LIBRARY_GAPS row used to raise.
     #
     # WHAT IS EMITTED, stated plainly so the artefact cannot be read as more:
-    # the LOOP FILTER — a cascade of `order` switched-capacitor integrators
-    # with per-conversion reset switches. The 1-bit quantiser and its DAC
-    # feedback are a separate circuit class (`comparator`, in this same
-    # library) and closing them into the modulator is the named next step,
-    # carried in `ai_handoff`. Emitting a half-loop under the name of the
-    # whole one is the substitution this file refuses everywhere else.
+    # the WHOLE modulator — a cascade of `order` switched-capacitor
+    # integrators, a clocked 1-bit quantiser, and the 1-bit DAC that feeds
+    # the quantiser's decision back into every summing node. Until this
+    # round only the forward path was emitted, and the quantiser was carried
+    # as a handoff; the loop is now closed HERE, which is what makes the
+    # block's declared output a DECISION and not an integrator voltage.
+    #
+    # WHY THE BOUNDARY CHANGED (u_hawaii_adc, ihp-sg13g2, measured):
+    # the entry used to draw `vdd vss vin vcm rst vout` and the DESIGN
+    # declares `vdd vss vin vrefp vrefn clk bit_out` — every pin citing its
+    # document line. Three of those four disagreements were not naming at
+    # all, they were STRUCTURE:
+    #   * `vcm` was a pin because nothing on the block generated a
+    #     common-mode reference. The design declares the reference as a
+    #     DIFFERENTIAL PAIR (`vrefp`/`vrefn`, "the reference is the VHI/VLO
+    #     PAIR"), and the midpoint of a declared pair is generated on-chip
+    #     by two matched resistors. So `vcm` becomes an internal net.
+    #   * `clk` was absent because the forward path had no switches: the
+    #     sampling capacitor sat wired between two nodes. A switched-
+    #     capacitor integrator that never switches is a capacitor. With the
+    #     sampling and charge-transfer switches drawn, the modulator clock
+    #     is a pin because the circuit uses it.
+    #   * `vout` was the last integrator's output because there was no
+    #     quantiser. `bit_out` is declared as a "1-bit serial digital
+    #     bitstream", which is the quantiser's decision — a different node,
+    #     not a different name for the same one. Renaming the integrator
+    #     output to `bit_out` would have closed the interface gate while
+    #     shipping an analog voltage under the name of a bitstream: the
+    #     substitution this file refuses everywhere else.
+    #   * `rst` leaves the boundary because the corpus declaration states
+    #     that it is internal to the topology, and the auto-zero phase of
+    #     the SC integrator — which the clock now drives — is what defines
+    #     the summing node's DC operating point. See `boundary_notes`.
     "delta_sigma": {
-        # "the CIFB FORWARD PATH", not "a CIFB loop filter". A
-        # cascade-of-integrators-feedback modulator is defined by its DAC
-        # feedback branches into each summing node, and those arrive with the
-        # quantiser, which this entry does not emit. Naming the finished
-        # structure here would describe an artefact that is not on disk — the
-        # exact substitution this file refuses everywhere else.
-        "topology": ("cascade of {stages} switched-capacitor integrator(s) "
-                     "around two-stage Miller NMOS-input OTAs — the FORWARD "
-                     "PATH of a cascade-of-integrators feedback (CIFB) loop "
-                     "filter, with per-conversion reset switches for "
-                     "incremental operation and NO DAC feedback branch yet "
-                     "(that arrives with the quantiser). Each stage's "
-                     "sampling / integrating capacitor RATIO is that stage's "
-                     "loop coefficient and the absolute value is the "
-                     "sampled-noise budget of the declared resolution"),
+        "topology": ("second-order-capable cascade of {stages} "
+                     "auto-zeroed switched-capacitor integrator(s) around "
+                     "two-stage Miller NMOS-input OTAs, closed by a clocked "
+                     "StrongARM quantiser and its set-reset output latch "
+                     "through a 1-bit switched-capacitor feedback DAC into "
+                     "every summing node — a complete "
+                     "cascade-of-integrators-feedback (CIFB) delta-sigma "
+                     "modulator. Each stage's sampling / integrating "
+                     "capacitor RATIO is that stage's loop coefficient and "
+                     "the absolute value is the sampled-noise budget of the "
+                     "declared resolution; the feedback capacitor equals "
+                     "the sampling capacitor, so the DAC's full scale IS "
+                     "the declared reference"),
         "circuit_class_citation": (
-            "switched-capacitor delta-sigma loop filter, forward path of "
-            "the cascade-of-integrators feedback form; second-order "
-            "coefficient set a1 = a2 = 1/2 (Boser & Wooley, JSSC 23(6), "
-            "1988); sampled kT/C noise budgeted against the quantisation "
-            "floor (Schreier & Temes, Understanding Delta-Sigma Data "
-            "Converters, ch.3)"),
-        "ports": ["vdd", "vss", "vin", "vcm", "rst", "vout"],
+            "switched-capacitor delta-sigma modulator in the "
+            "cascade-of-integrators feedback form with a single-bit "
+            "quantiser and single-bit capacitive feedback DAC; "
+            "second-order coefficient set a1 = a2 = 1/2 (Boser & Wooley, "
+            "JSSC 23(6), 1988); sampled kT/C noise budgeted against the "
+            "quantisation floor (Schreier & Temes, Understanding "
+            "Delta-Sigma Data Converters, ch.2-3); the quantiser is the "
+            "StrongARM / sense-amplifier latch (Kobayashi et al., JSSC "
+            "1993; Razavi, IEEE SSC Magazine 2015) with a NAND set-reset "
+            "latch holding the decision across the reset phase"),
+        "ports": ["vdd", "vss", "vin", "vrefp", "vrefn", "clk", "bit_out"],
         "rails": {"vdd": "vdd", "vss": "vss"},
-        "internal_nets": ["nbias"],
+        # `vcm` and the last integrator's output `vint` are INTERNAL — they
+        # were pins only for as long as nothing on the block generated the
+        # first and nothing consumed the second.
+        "internal_nets": ["nbias", "vcm", "nclkb", "vint", "ndac", "ndacb",
+                          "nq_p", "nq_n", "nqtail", "nsrq", "nsrqb",
+                          "nn1", "nn2", "nqb"],
+        # Stated in the artefact so a reader is told what LEFT the boundary
+        # and on whose authority, instead of finding two fewer pins.
+        "boundary_notes": [
+            "`vcm` is not a pin: the common-mode reference is generated on "
+            "the block as the midpoint of the DECLARED differential "
+            "reference pair (r_cm1/r_cm2). A block that took vcm from "
+            "outside would be asking the chip for a potential it can "
+            "derive, and the design's interface declaration lists no such "
+            "pin.",
+            "`rst` is not a pin: the summing node's DC operating point is "
+            "defined every clock cycle by the auto-zero switch (mn_az{i}) "
+            "that the modulator clock already drives. The per-conversion "
+            "reset of an INCREMENTAL converter is a different signal from "
+            "this per-cycle auto-zero, it needs a start-of-conversion the "
+            "declared boundary does not carry, and it is therefore closed "
+            "on the DIGITAL side of `bit_out` by resetting the decimator's "
+            "accumulator each conversion window. That is a real "
+            "architectural choice and it is recorded here rather than "
+            "implied: see `tradeoffs`.",
+            "`bit_out` is the quantiser's decision, not the loop filter's "
+            "output. The last integrator's output is the internal net "
+            "`vint`.",
+        ],
         "constants": {
             "w_cap": 10.0,
             "w_res": 0.35,
@@ -712,8 +779,9 @@ LIBRARY: Dict[str, Dict[str, Any]] = {
             "farad_to_ff": 1.0e15,
         },
         "constant_roles": {"w_cap": "cap", "w_res": "res"},
-        # The bias branch is SHARED by every stage, so it is here and not in
-        # the stage template.
+        # SHARED by every stage: the bias branch, the on-chip common-mode
+        # reference, the clock complement, the quantiser, its output latch
+        # and the 1-bit feedback DAC.
         "devices": [
             {"name": "r_ib", "role": "res", "function":
              "bias-setting resistor from the supply into the mirror diode",
@@ -722,6 +790,177 @@ LIBRARY: Dict[str, Dict[str, Any]] = {
              "diode-connected reference of the tail current mirror, shared "
              "by every integrator stage",
              "nets": ["nbias", "nbias", "vss", "vss"], "w": 4.0, "l": 1.0},
+            # ── the on-chip common-mode reference ────────────────────────
+            {"name": "r_cm1", "role": "res", "function":
+             "upper half of the matched divider that generates the "
+             "common-mode reference as the midpoint of the DECLARED "
+             "differential reference pair — the reason vcm is not a pin",
+             "nets": ["vrefp", "vcm", "vss"], "w": 0.35, "l": 181.0},
+            {"name": "r_cm2", "role": "res", "function":
+             "lower half of the same matched divider; r_cm1/r_cm2 must "
+             "MATCH, because their ratio error appears directly as a "
+             "common-mode offset on every integrator",
+             "nets": ["vcm", "vrefn", "vss"], "w": 0.35, "l": 181.0},
+            # ── the clock complement (the second SC phase) ───────────────
+            {"name": "mp_ckb", "role": "pmos", "function":
+             "clock-complement inverter, pull-up: the charge-transfer "
+             "phase is the sampling phase inverted",
+             "nets": ["nclkb", "clk", "vdd", "vdd"], "w": 8.0, "l": 0.5},
+            {"name": "mn_ckb", "role": "nmos", "function":
+             "clock-complement inverter, pull-down",
+             "nets": ["nclkb", "clk", "vss", "vss"], "w": 4.0, "l": 0.5},
+            # ── the 1-bit quantiser: a clocked StrongARM latch ───────────
+            # THE QUANTISER EVALUATES ON THE CHARGE-TRANSFER PHASE, not on
+            # the sampling phase. MEASURED: with the latch strobed by `clk`
+            # the decision was being formed at the same time the feedback
+            # DAC was sampling the reference it selects, and the modulator
+            # sat in a 0.5 bitstream limit cycle whose density did not move
+            # at all across a 0.40 -> 0.80 V input (0.5123 / 0.5133 /
+            # 0.5135). Strobed by the complement, the decision is settled
+            # and held by the set-reset latch before the DAC samples it,
+            # and the density becomes input-dependent.
+            {"name": "mn_qtail", "role": "nmos", "function":
+             "quantiser clocked tail switch: it evaluates on the "
+             "CHARGE-TRANSFER phase, when the last integrator carries the "
+             "value just integrated, so the decision is settled before the "
+             "feedback DAC samples the reference it selects",
+             "nets": ["nqtail", "nclkb", "vss", "vss"], "w": 16.0,
+             "l": 0.5},
+            {"name": "mn_qin", "role": "nmos", "function":
+             "quantiser input pair, signal side — the last integrator's "
+             "output `vint` is what gets compared",
+             "nets": ["nq_n", "vint", "nqtail", "vss"], "w": 16.0, "l": 0.5},
+            {"name": "mn_qref", "role": "nmos", "function":
+             "quantiser input pair, reference side: the threshold is the "
+             "on-chip common mode, i.e. the midpoint of the declared "
+             "reference pair",
+             "nets": ["nq_p", "vcm", "nqtail", "vss"], "w": 16.0, "l": 0.5},
+            {"name": "mp_qlat1", "role": "pmos", "function":
+             "quantiser cross-coupled regenerative latch, plus side",
+             "nets": ["nq_p", "nq_n", "vdd", "vdd"], "w": 8.0, "l": 0.5},
+            {"name": "mp_qlat2", "role": "pmos", "function":
+             "quantiser cross-coupled regenerative latch, minus side",
+             "nets": ["nq_n", "nq_p", "vdd", "vdd"], "w": 8.0, "l": 0.5},
+            {"name": "mp_qrst1", "role": "pmos", "function":
+             "quantiser pre-charge switch, plus side (pre-charge is "
+             "the SAMPLING phase — see the tail switch)",
+             "nets": ["nq_p", "nclkb", "vdd", "vdd"], "w": 4.0, "l": 0.5},
+            {"name": "mp_qrst2", "role": "pmos", "function":
+             "quantiser pre-charge switch, minus side",
+             "nets": ["nq_n", "nclkb", "vdd", "vdd"], "w": 4.0, "l": 0.5},
+            # ── the set-reset latch that HOLDS the decision ──────────────
+            # A StrongARM latch pre-charges BOTH outputs high while the
+            # clock is low, so its own outputs carry no decision for half
+            # of every cycle. The DAC branch and the block's declared
+            # output both need the decision to stand for the WHOLE cycle,
+            # which is what this pair of cross-coupled NANDs does.
+            {"name": "mp_n1a", "role": "pmos", "function":
+             "output latch NAND-1 pull-up driven by the quantiser's minus "
+             "output (active-low set)",
+             "nets": ["nsrq", "nq_n", "vdd", "vdd"], "w": 8.0, "l": 0.5},
+            {"name": "mp_n1b", "role": "pmos", "function":
+             "output latch NAND-1 pull-up driven by the latch's own "
+             "complement (the cross-coupling)",
+             "nets": ["nsrq", "nsrqb", "vdd", "vdd"], "w": 8.0, "l": 0.5},
+            {"name": "mn_n1a", "role": "nmos", "function":
+             "output latch NAND-1 pull-down, upper series device",
+             "nets": ["nsrq", "nq_n", "nn1", "vss"], "w": 8.0, "l": 0.5},
+            {"name": "mn_n1b", "role": "nmos", "function":
+             "output latch NAND-1 pull-down, lower series device",
+             "nets": ["nn1", "nsrqb", "vss", "vss"], "w": 8.0, "l": 0.5},
+            {"name": "mp_n2a", "role": "pmos", "function":
+             "output latch NAND-2 pull-up driven by the quantiser's plus "
+             "output (active-low reset)",
+             "nets": ["nsrqb", "nq_p", "vdd", "vdd"], "w": 8.0, "l": 0.5},
+            {"name": "mp_n2b", "role": "pmos", "function":
+             "output latch NAND-2 pull-up driven by the latch's own true "
+             "side (the cross-coupling)",
+             "nets": ["nsrqb", "nsrq", "vdd", "vdd"], "w": 8.0, "l": 0.5},
+            {"name": "mn_n2a", "role": "nmos", "function":
+             "output latch NAND-2 pull-down, upper series device",
+             "nets": ["nsrqb", "nq_p", "nn2", "vss"], "w": 8.0, "l": 0.5},
+            {"name": "mn_n2b", "role": "nmos", "function":
+             "output latch NAND-2 pull-down, lower series device",
+             "nets": ["nn2", "nsrq", "vss", "vss"], "w": 8.0, "l": 0.5},
+            # ── the declared output and its complement ───────────────────
+            {"name": "mp_obuf", "role": "pmos", "function":
+             "output driver pull-up: the block's DECLARED 1-bit output, "
+             "held for the whole clock cycle by the latch above",
+             "nets": ["bit_out", "nsrqb", "vdd", "vdd"], "w": 8.0, "l": 0.5},
+            {"name": "mn_obuf", "role": "nmos", "function":
+             "output driver pull-down",
+             "nets": ["bit_out", "nsrqb", "vss", "vss"], "w": 4.0, "l": 0.5},
+            {"name": "mp_bbuf", "role": "pmos", "function":
+             "complement of the decision, pull-up — the 1-bit DAC needs "
+             "both polarities to steer the reference",
+             "nets": ["nqb", "bit_out", "vdd", "vdd"], "w": 8.0, "l": 0.5},
+            {"name": "mn_bbuf", "role": "nmos", "function":
+             "complement of the decision, pull-down",
+             "nets": ["nqb", "bit_out", "vss", "vss"], "w": 4.0, "l": 0.5},
+            # ── the 1-bit feedback DAC ───────────────────────────────────
+            # The whole feedback path of a CIFB modulator: the decision
+            # selects one END of the DECLARED reference pair onto `ndac`,
+            # and every stage samples `ndac` onto its own feedback
+            # capacitor. This is what makes vrefp and vrefn load-bearing.
+            # THE SIGN IS THE WHOLE POINT. A decision of 1 means the loop
+            # filter has integrated too far UP, so the branch it selects
+            # must pull the summing node DOWN on the next transfer — which
+            # is why a decision of 1 selects the NEGATIVE end of the
+            # declared pair. Selecting the positive end would be positive
+            # feedback: the modulator would latch at a rail and the
+            # bitstream density would read 0 or 1 whatever the input did
+            # (measured, before this sign was fixed: density 3.6e-7 on a
+            # mid-scale input).
+            #
+            # Every switch in this block that passes an ANALOG level is a
+            # CMOS transmission gate, never a lone NMOS. An n-channel pass
+            # device driven from a 1.2 V rail cannot pass 1.1 V at all
+            # (Vgs = 0.1 V, below threshold) and passes the 0.6 V common
+            # mode only weakly, so an NMOS-only reference selector delivers
+            # nothing on the positive end and an RC-limited edge on the
+            # other. Both polarities are drawn for every gate below.
+            {"name": "mn_dac1", "role": "nmos", "function":
+             "feedback DAC, decision-1 branch (n-side): steers the "
+             "NEGATIVE end of the declared reference pair onto the DAC "
+             "node, which is the SUBTRACTING branch of the loop",
+             "nets": ["ndac", "bit_out", "vrefn", "vss"], "w": 4.0,
+             "l": 0.15},
+            {"name": "mp_dac1", "role": "pmos", "function":
+             "feedback DAC, decision-1 branch (p-side of the transmission "
+             "gate) — without it the branch cannot pass a level near the "
+             "positive rail",
+             "nets": ["ndac", "nqb", "vrefn", "vdd"], "w": 8.0, "l": 0.15},
+            {"name": "mn_dac0", "role": "nmos", "function":
+             "feedback DAC, decision-0 branch (n-side): steers the "
+             "POSITIVE end of the declared reference pair onto the DAC "
+             "node, the ADDING branch",
+             "nets": ["ndac", "nqb", "vrefp", "vss"], "w": 4.0, "l": 0.15},
+            {"name": "mp_dac0", "role": "pmos", "function":
+             "feedback DAC, decision-0 branch (p-side of the transmission "
+             "gate)",
+             "nets": ["ndac", "bit_out", "vrefp", "vdd"], "w": 8.0,
+             "l": 0.15},
+            # THE INVERTED FEEDBACK NODE. Each integrator inverts, so the
+            # branch that subtracts at stage 1 ADDS at stage 2. The
+            # coefficient's sign is realised by which END of the declared
+            # reference pair the stage's branch samples, and the stage
+            # template picks between the two by parity (`ndac{alt}`).
+            {"name": "mn_dacb1", "role": "nmos", "function":
+             "inverted feedback DAC, decision-1 branch (n-side): the "
+             "opposite end from `mn_dac1`, for the stages an odd number of "
+             "inversions away from the quantiser",
+             "nets": ["ndacb", "bit_out", "vrefp", "vss"], "w": 4.0,
+             "l": 0.15},
+            {"name": "mp_dacb1", "role": "pmos", "function":
+             "inverted feedback DAC, decision-1 branch (p-side)",
+             "nets": ["ndacb", "nqb", "vrefp", "vdd"], "w": 8.0, "l": 0.15},
+            {"name": "mn_dacb0", "role": "nmos", "function":
+             "inverted feedback DAC, decision-0 branch (n-side)",
+             "nets": ["ndacb", "nqb", "vrefn", "vss"], "w": 4.0, "l": 0.15},
+            {"name": "mp_dacb0", "role": "pmos", "function":
+             "inverted feedback DAC, decision-0 branch (p-side)",
+             "nets": ["ndacb", "bit_out", "vrefn", "vdd"], "w": 8.0,
+             "l": 0.15},
         ],
         "spec_knobs": [],
         "device_param_exprs": [],
@@ -740,7 +979,8 @@ LIBRARY: Dict[str, Dict[str, Any]] = {
                      "sized against"},
             "vref": {"unit": "V", "why":
                      "the reference is the full scale the LSB is measured "
-                     "against"},
+                     "against, and — now that the loop is closed — it is "
+                     "also the span the 1-bit DAC feeds back"},
         },
         "requires_pdk_measured": ["cap_area_ff_per_um2"],
         "requires_domain": {
@@ -768,9 +1008,16 @@ LIBRARY: Dict[str, Dict[str, Any]] = {
         "stage": {
             "count_from": "order",
             "first_in": "vin",
-            "last_out": "vout",
+            # NOT a port. The last integrator drives the QUANTISER, and the
+            # block's declared output is the quantiser's decision.
+            "last_out": "vint",
             "inner_out": "vo{i}",
-            "internal_nets": ["ntail{i}", "nd1_{i}", "nd2_{i}", "vsum{i}"],
+            # Each integrator INVERTS, so the feedback branch has to sample
+            # the opposite end of the reference pair one stage further from
+            # the quantiser. `{alt}` selects `ndac` / `ndacb` by parity.
+            "alternates": ["", "b"],
+            "internal_nets": ["ntail{i}", "nd1_{i}", "nd2_{i}", "vsum{i}",
+                              "nsmp{i}", "ndacs{i}"],
             "devices": [
                 {"name": "mn_tail{i}", "role": "nmos", "function":
                  "stage {i} tail current source (mirror output)",
@@ -781,7 +1028,8 @@ LIBRARY: Dict[str, Dict[str, Any]] = {
                  "nets": ["nd1_{i}", "vsum{i}", "ntail{i}", "vss"],
                  "w": 16.0, "l": 0.5},
                 {"name": "mn_ref{i}", "role": "nmos", "function":
-                 "stage {i} input pair, common-mode reference side",
+                 "stage {i} input pair, common-mode reference side — the "
+                 "reference is the on-chip midpoint of the declared pair",
                  "nets": ["nd2_{i}", "vcm", "ntail{i}", "vss"],
                  "w": 16.0, "l": 0.5},
                 {"name": "mp_ld1_{i}", "role": "pmos", "function":
@@ -803,24 +1051,100 @@ LIBRARY: Dict[str, Dict[str, Any]] = {
                 {"name": "cc{i}", "role": "cap", "function":
                  "stage {i} Miller compensation across the second stage",
                  "nets": ["nd2_{i}", "{out}"], "w": 10.0, "l": 25.0},
+                # ── the switched-capacitor input branch ─────────────────
+                # A sampling capacitor with no switches is a capacitor.
+                # These two are why `clk` is a pin.
+                # Both phases of both branches are CMOS TRANSMISSION
+                # GATES. See the note on the feedback DAC above: a lone
+                # n-channel pass device cannot carry a level near the
+                # positive rail, and every node these switches move sits
+                # at or above the common mode.
+                {"name": "mn_smp{i}", "role": "nmos", "function":
+                 "stage {i} SAMPLING switch (n-side): on the clock-high "
+                 "phase the stage input is sampled onto the bottom plate "
+                 "of cs{i}",
+                 "nets": ["nsmp{i}", "clk", "{in}", "vss"],
+                 "w": 2.0, "l": 0.15},
+                {"name": "mp_smp{i}", "role": "pmos", "function":
+                 "stage {i} SAMPLING switch (p-side of the transmission "
+                 "gate)",
+                 "nets": ["nsmp{i}", "nclkb", "{in}", "vdd"],
+                 "w": 4.0, "l": 0.15},
+                {"name": "mn_smpb{i}", "role": "nmos", "function":
+                 "stage {i} CHARGE-TRANSFER switch (n-side): on the "
+                 "clock-low phase the bottom plate is driven to the "
+                 "common-mode reference and the sampled charge moves "
+                 "into ci{i}",
+                 "nets": ["nsmp{i}", "nclkb", "vcm", "vss"],
+                 "w": 2.0, "l": 0.15},
+                {"name": "mp_smpb{i}", "role": "pmos", "function":
+                 "stage {i} CHARGE-TRANSFER switch (p-side of the "
+                 "transmission gate)",
+                 "nets": ["nsmp{i}", "clk", "vcm", "vdd"],
+                 "w": 4.0, "l": 0.15},
                 {"name": "cs{i}", "role": "cap", "function":
                  "stage {i} SAMPLING capacitor — the absolute value is the "
                  "sampled-noise budget of the declared resolution",
-                 "nets": ["{in}", "vsum{i}"], "w": 10.0, "l": 2.6},
+                 "nets": ["nsmp{i}", "vsum{i}"], "w": 10.0, "l": 2.6},
                 {"name": "ci{i}", "role": "cap", "function":
                  "stage {i} INTEGRATING capacitor — cs{i}/ci{i} IS this "
                  "stage's loop coefficient",
                  "nets": ["vsum{i}", "{out}"], "w": 10.0, "l": 5.2},
-                {"name": "mn_rsti{i}", "role": "nmos", "function":
-                 "stage {i} reset switch across the integrating capacitor: "
-                 "the incremental converter's per-conversion reset",
-                 "nets": ["vsum{i}", "rst", "{out}", "vss"],
+                # THERE IS NO CLAMP ON THE SUMMING NODE, deliberately.
+                # An earlier arm of this round tied vsum{i} to the common
+                # mode through a switch to give the node a DC path. It does
+                # give it one, and it also takes the OTA OUT OF FEEDBACK
+                # for half of every clock cycle: measured on this block,
+                # both integrator outputs sat at a rail (0.196 V and
+                # 0.013 V against a 0.600 V common mode) and the bitstream
+                # never left zero. The summing node of a switched-capacitor
+                # integrator is a virtual ground held by the OTA through
+                # ci{i}; it is capacitive by construction, and the
+                # testbench states an initial condition rather than the
+                # circuit carrying a device that exists only for the
+                # solver.
+                # ── the DAC feedback branch into this summing node ──────
+                # This is the branch whose absence made the old entry a
+                # forward path rather than a modulator.
+                # The DAC branch is sampled and transferred on the SAME
+                # two phases as the input branch, so the two charges meet
+                # at the summing node in the same transfer. The
+                # subtraction is done by the DECISION's polarity at the
+                # reference selector, not by running this branch on the
+                # opposite phase — and WHICH selector this stage samples
+                # alternates with the stage's parity, because each
+                # integrator inverts. See the two selectors above.
+                {"name": "mn_dacs{i}", "role": "nmos", "function":
+                 "stage {i} DAC SAMPLING switch (n-side): on the "
+                 "clock-high phase the selected reference end is sampled "
+                 "onto the bottom plate of cf{i}",
+                 "nets": ["ndacs{i}", "clk", "ndac{alt}", "vss"],
                  "w": 2.0, "l": 0.15},
-                {"name": "mn_rstc{i}", "role": "nmos", "function":
-                 "stage {i} reset switch tying the summing node to the "
-                 "common-mode reference, which is what defines its DC bias",
-                 "nets": ["vsum{i}", "rst", "vcm", "vss"],
+                {"name": "mp_dacs{i}", "role": "pmos", "function":
+                 "stage {i} DAC SAMPLING switch (p-side of the "
+                 "transmission gate) — the reference ends sit at the "
+                 "extremes of the declared span, so this half is what "
+                 "carries the positive one at all",
+                 "nets": ["ndacs{i}", "nclkb", "ndac{alt}", "vdd"],
+                 "w": 4.0, "l": 0.15},
+                {"name": "mn_dacr{i}", "role": "nmos", "function":
+                 "stage {i} DAC RETURN switch (n-side): on the "
+                 "charge-transfer phase cf{i}'s bottom plate returns to "
+                 "the common-mode reference, so what the branch injects "
+                 "is the reference DIFFERENCE and not its absolute level",
+                 "nets": ["ndacs{i}", "nclkb", "vcm", "vss"],
                  "w": 2.0, "l": 0.15},
+                {"name": "mp_dacr{i}", "role": "pmos", "function":
+                 "stage {i} DAC RETURN switch (p-side of the transmission "
+                 "gate)",
+                 "nets": ["ndacs{i}", "clk", "vcm", "vdd"],
+                 "w": 4.0, "l": 0.15},
+                {"name": "cf{i}", "role": "cap", "function":
+                 "stage {i} FEEDBACK DAC capacitor. It equals cs{i}, so "
+                 "the fed-back charge is one full reference step against "
+                 "one full input sample: the modulator's full scale IS the "
+                 "declared reference",
+                 "nets": ["ndacs{i}", "vsum{i}"], "w": 10.0, "l": 2.6},
             ],
             # `{coeff}` is substituted with THIS stage's coefficient before
             # the expression is written into the IR, so what reaches
@@ -840,6 +1164,12 @@ LIBRARY: Dict[str, Dict[str, Any]] = {
                  "rationale": ("cs/ci IS this stage's loop coefficient, so "
                                "the integrating capacitor is the sampling "
                                "capacitor divided by it")},
+                {"device": "cf{i}", "param": "l",
+                 "expr": SAMPLING_CAP_L_EXPR,
+                 "rationale": ("the 1-bit DAC's feedback capacitor is drawn "
+                               "EQUAL to the sampling capacitor, so the "
+                               "loop's full scale is the declared "
+                               "reference and not a library constant")},
             ],
         },
         "sizing_handoff": (
@@ -848,8 +1178,10 @@ LIBRARY: Dict[str, Dict[str, Any]] = {
             "inside the clock phase, and trading that against current is "
             "sizing judgment owned by skill `analog-sizing`. The CAPACITORS "
             "are not part of that handoff — they are derived above. The "
-            "1-bit quantiser and the DAC feedback that close the modulator "
-            "around this loop filter are a separate circuit class."),
+            "quantiser's input-referred offset is likewise a sizing "
+            "question: in a second-order loop it is shaped by the first "
+            "integrator's gain and is not a first-order error, which is "
+            "why the latch is carried at the library geometry."),
         "tradeoffs": [
             "The sampling capacitor is set by the sampled kT/C noise "
             "budget, so each extra bit of declared resolution asks for four "
@@ -859,52 +1191,146 @@ LIBRARY: Dict[str, Dict[str, Any]] = {
             "the loop gain and the integrator's output swing together, so "
             "the coefficient set is bounded by the headroom the supply "
             "leaves and not by stability alone.",
-            "Reset switches make the converter incremental — every "
-            "conversion starts from a known state — at the cost of "
-            "throughput, because the loop filter's memory is discarded at "
-            "the end of each window.",
+            "The feedback capacitor equals the sampling capacitor, so the "
+            "modulator's full scale is the declared reference span. Making "
+            "it smaller would buy input range at the cost of loop gain, "
+            "and it is a coefficient choice rather than a free parameter.",
+            "The per-cycle auto-zero defines the summing node without a "
+            "reset pin, but it is NOT the per-conversion reset of an "
+            "incremental converter: that reset is applied to the "
+            "decimator's accumulator on the digital side of `bit_out`. "
+            "Resetting the integrators instead would need a "
+            "start-of-conversion pin, which the declared boundary does not "
+            "carry, and would buy a shorter settling tail at the cost of "
+            "that pin.",
             "A larger sampling capacitor lowers the sampled noise and "
             "raises the load the amplifier has to settle within one clock "
             "phase, so noise trades directly against amplifier current.",
         ],
+        # ── WHAT THIS ENTRY HAS AND HAS NOT BEEN SHOWN TO DO ────────────
+        # The library's standing claim is that every entry "has been
+        # rendered and simulated end-to-end". For a MODULATOR that claim is
+        # not enough: a loop can render, converge, and produce a
+        # full-swing 1-bit output while converting nothing. So the claim is
+        # written down here as a record with a verdict, and
+        # `analog_topology_behaviour_check` reads it. An entry that carries
+        # no `behaviour_record` is unaffected — the key is optional and
+        # every other entry in this library omits it.
+        "behaviour_record": {
+            "claim": ("the mean of the 1-bit output (its bitstream "
+                      "density) moves monotonically with the analogue "
+                      "input, which is the whole function of a "
+                      "delta-sigma modulator"),
+            "verified": False,
+            "measured_on": "u_hawaii_adc, ihp-sg13g2, 2026-09-02",
+            "how": ("the entry's own testbench, ngspice in the pinned EDA "
+                    "image, 20 clock cycles at 2 MHz, density averaged "
+                    "over the last 18; the DC input swept 0.40 / 0.60 / "
+                    "0.80 V against a 0.6 V common mode and a 1.0 V "
+                    "declared reference span, for which the ideal "
+                    "densities are 0.30 / 0.50 / 0.70"),
+            # Every row is a measurement, not an opinion. Seven structural
+            # arms, one variable at a time, same deck and same simulator.
+            "arms": [
+                "quantiser strobed by the sampling phase: 0.5123 / 0.5133 "
+                "/ 0.5135 — a 0.5 limit cycle, the density does not move "
+                "at all across the sweep",
+                "+ Miller capacitor 25 um -> 2.1 um (load-sized): 0.5068 / "
+                "- / 0.5068 — unchanged",
+                "+ tail resistor 181 um -> 20 um (about nine times the "
+                "bias current): 0.5038 / - / 0.5043 — unchanged",
+                "quantiser strobed by the CHARGE-TRANSFER phase (shipped): "
+                "0.0031 / - / 0.0000022 — the density becomes "
+                "input-DEPENDENT, and saturates",
+                "+ the load-sized Miller capacitor: 0.0143 / - / 0.000030 "
+                "— same shape",
+                "+ the two reference ends swapped: 0.000010 / 0.000011 / "
+                "0.0000096 — latched",
+                "+ loop coefficient 0.5 -> 0.125: 1.8e-7 / 1.9e-7 / 2.0e-7 "
+                "— latched",
+                "+ offset-compensated (unity-gain-reset) integrators: "
+                "0.5007 / 0.5006 / 0.5005 — back to the limit cycle",
+            ],
+            "diagnosis": (
+                "the loop filter is SINGLE-ENDED and has no per-conversion "
+                "reset, so the integrator outputs carry a free state: "
+                "their common mode is whatever charge history left on the "
+                "integrating capacitors, while the quantiser's threshold "
+                "is the fixed on-chip common mode. The resulting "
+                "input-referred offset is unbounded and swamps the signal, "
+                "which is why every arm either sits in a 0.5 limit cycle "
+                "or latches at a rail. The two textbook answers are a "
+                "FULLY DIFFERENTIAL loop filter with common-mode feedback, "
+                "or the per-conversion integrator reset that makes the "
+                "converter incremental. The design's documents describe "
+                "the second (L5 Block A: the converter "
+                "'resets/accumulates per conversion window') and the "
+                "design's own interface declaration carries no "
+                "start-of-conversion pin and states that `rst` is "
+                "'INTERNAL to the block's chosen topology'. Deriving it "
+                "internally means a modulo-OSR counter inside the block. "
+                "That is the named next piece of design work, and it is a "
+                "question about the DECLARED INTERFACE, not only about "
+                "this library"),
+            "next": ("author the conversion-window generator (a modulo-"
+                     "`osr` counter driven by the declared `clk`) and "
+                     "re-run this sweep, or move the loop filter to a "
+                     "fully differential form with common-mode feedback; "
+                     "skill `analog-sizing` owns neither — this is "
+                     "topology work and belongs to "
+                     "`analog-topology-select`"),
+        },
         "analyses_implied": ["tran"],
         "testbench": {
             "supply_exprs": ["vdd", "nominal_supply_v"],
             "env_exprs": {
                 "vcm_v": "supply / 2",
+                # The DECLARED reference is a differential PAIR spanning
+                # `vref`, centred on the common mode.
+                "vrefp_v": "supply / 2 + vref / 2",
+                "vrefn_v": "supply / 2 - vref / 2",
+                # A DC input one tenth of full scale below mid-scale: a
+                # bitstream density that is neither 0 nor 1 nor 1/2 is the
+                # only stimulus that shows the loop is actually closed.
                 "vstep_v": "supply / 2 + vref / 10",
             },
             "conditions": [
                 "supply = {supply} V (the bound core supply when the spec "
                 "carries one, else the PDK's nominal)",
-                "common-mode reference = {vcm_v} V, half the supply — a "
+                "the declared reference pair is driven to {vrefp_v} / "
+                "{vrefn_v} V — a span of the bound reference centred on "
+                "half the supply; the block generates its own common mode "
+                "from it",
+                "the modulator clock runs at 2 MHz (500 ns period) — a "
                 "testbench condition, not a spec",
-                "reset is held high for the first 100 ns and then released, "
-                "which is the incremental converter's own "
-                "start-of-conversion; the operating point is the reset "
-                "state, where each summing node is tied to the common mode "
-                "and each integrating capacitor is shorted",
-                "the input steps {vcm_v} -> {vstep_v} V at 200 ns (one "
-                "tenth of the bound reference) and the loop filter "
-                "integrates it over a 4 us window — a testbench condition, "
-                "not a spec",
+                "the input is held at {vstep_v} V, one tenth of the bound "
+                "reference above mid-scale, for 20 clock cycles; the "
+                "reported measurement is the MEAN of the 1-bit output over "
+                "the last 18 of them, which for a closed loop must sit "
+                "strictly between the rails and NOT at either — an output "
+                "stuck at a rail is the signature of a loop that is not "
+                "closed",
             ],
             "stimulus": [
                 "v_vdd vdd 0 {supply}",
-                "v_vcm vcm 0 {vcm_v}",
-                "v_rst rst 0 pwl(0 {supply} 99n {supply} 101n 0 4000n 0)",
-                "v_in vin 0 pwl(0 {vcm_v} 199n {vcm_v} 201n {vstep_v} "
-                "4000n {vstep_v})",
+                "v_vrefp vrefp 0 {vrefp_v}",
+                "v_vrefn vrefn 0 {vrefn_v}",
+                "v_clk clk 0 pulse(0 {supply} 0n 1n 1n 249n 500n)",
+                "v_in vin 0 {vstep_v}",
             ],
             "cards": [],
+            # Every node named here is a declared PORT. The measurement
+            # that says whether the loop is closed must not depend on an
+            # internal net the emitter is free to rename, nor on the
+            # instance path it chooses for the device under test.
             "control": [
-                "tran 0.5n 4000n",
-                "meas tran vrst find v(vout) at=90n",
-                "meas tran vstep find v(vout) at=190n",
-                "meas tran vsettle find v(vout) at=3900n",
-                "let dv = vsettle - vstep",
-                "echo \"MEAS vout=\" $&vsettle \" vrst=\" $&vrst"
-                " \" vstep=\" $&vstep \" dv=\" $&dv",
+                "tran 1n 10000n uic",
+                "meas tran vavg avg v(bit_out) from=1000n to=10000n",
+                "meas tran vmax max v(bit_out) from=1000n to=10000n",
+                "meas tran vmin min v(bit_out) from=1000n to=10000n",
+                "let dens = vavg / {supply}",
+                "let swing = (vmax - vmin) / {supply}",
+                "echo \"MEAS density=\" $&dens \" swing=\" $&swing",
             ],
         },
     },
@@ -1266,6 +1692,23 @@ def library_invariants(library: Optional[Dict[str, Any]] = None
     lib_map = LIBRARY if library is None else library
     problems: List[str] = []
     for btype, entry in sorted(lib_map.items()):
+        # A behaviour record that says "not verified" and does not say WHAT
+        # was measured, what it means and what would close it is a blank
+        # refusal: the reader learns the entry is unproven and nothing
+        # about how to prove it. `analog_topology_behaviour_check` prints
+        # these fields verbatim, so an empty one produces an empty verdict.
+        br = entry.get(BEHAVIOUR_RECORD_KEY)
+        if isinstance(br, dict) and not br.get("verified"):
+            for field in ("claim", "diagnosis", "next"):
+                if not str(br.get(field) or "").strip():
+                    problems.append(
+                        f"{btype}: `{BEHAVIOUR_RECORD_KEY}` is not verified "
+                        f"and declares no `{field}`, so the refusal cannot "
+                        f"be acted on")
+            if not (br.get("arms") or br.get("how")):
+                problems.append(
+                    f"{btype}: `{BEHAVIOUR_RECORD_KEY}` is not verified and "
+                    f"records no measurement — a verdict with no evidence")
         st = entry.get(STAGE_KEY)
         if not isinstance(st, dict):
             continue
@@ -1284,6 +1727,21 @@ def library_invariants(library: Optional[Dict[str, Any]] = None
                 f"{REQUIRES_DOMAIN_KEY} entry, so an order with no "
                 f"coefficient set is not excluded")
             continue
+        # `last_out` used to be documented as "a declared PORT". It is not:
+        # a stage cascade whose last output feeds another shared device on
+        # the same block — a quantiser, say — must end on an INTERNAL net,
+        # or the block exposes the loop filter's output as a pin. What has
+        # to hold either way is that the name RESOLVES: an unlisted one
+        # reaches `analog_a3_netlist_emit._validate_ir` as a net that is
+        # neither port nor internal, and the netlist ships a dangling node.
+        last_out = st.get("last_out")
+        known = set(entry.get("ports") or []) | set(
+            entry.get("internal_nets") or [])
+        if last_out is not None and last_out not in known:
+            problems.append(
+                f"{btype}: stage last_out={last_out!r} is neither a "
+                f"declared port nor a declared internal net, so the last "
+                f"stage drives a node nothing else on the block resolves")
         for value in admitted:
             n = int(round(float(value)))
             got = sets.get(str(n))
@@ -1324,8 +1782,9 @@ def expand_stages(lib: Dict[str, Any], spec_values: Dict[str, float]
 
     The chain is explicit rather than inferred: stage 1's input is
     `first_in`, stage i's input is stage i-1's output, and the LAST stage's
-    output is `last_out` — which is a declared PORT, so the block's output is
-    a port on every order and not a net whose name depends on the count.
+    output is `last_out` — a name the entry DECLARES, as a port or as an
+    internal net, so the cascade's output does not depend on the stage count.
+    `library_invariants` refuses an entry whose `last_out` is neither.
     """
     st = lib.get(STAGE_KEY)
     devices = [dict(d) for d in (lib.get("devices") or [])]
@@ -1358,6 +1817,18 @@ def expand_stages(lib: Dict[str, Any], spec_values: Dict[str, float]
             f"another design's name.")
     coeffs = [float(c) for c in coeff_set]
     for i in range(1, count + 1):
+        # `{alt}` cycles through the entry's `alternates` list, so a stage
+        # template can name a net that CHANGES WITH THE STAGE'S PARITY.
+        # MEASURED, and the reason this exists: a cascade of INVERTING
+        # integrators flips the sign of the signal at every stage, so a
+        # feedback branch driven from the same node into every summing node
+        # is negative feedback at the odd stages and POSITIVE feedback at
+        # the even ones. On u_hawaii_adc's second-order loop that pinned the
+        # bitstream density at 0.017 for an input whose correct density is
+        # 0.6 — a modulator that looked closed and was fighting itself.
+        # An entry that declares no `alternates` gets `{alt}` = "" and is
+        # byte-identical to before.
+        alternates = [str(x) for x in (st.get("alternates") or [""])]
         sub = {
             "i": i,
             "in": (st["first_in"] if i == 1
@@ -1365,6 +1836,7 @@ def expand_stages(lib: Dict[str, Any], spec_values: Dict[str, float]
             "out": (st["last_out"] if i == count
                     else st["inner_out"].format(i=i)),
             "coeff": repr(coeffs[i - 1]),
+            "alt": alternates[(i - 1) % len(alternates)],
         }
         for n in st.get("internal_nets") or []:
             nets.append(n.format(**sub))
@@ -1451,6 +1923,104 @@ def floor_geometry_to_pdk(lib: Dict[str, Any], constants: Dict[str, Any],
     return clamps
 
 
+def declared_interface_pins(project: Path, block: str) -> List[str]:
+    """The block's DESIGN-DECLARED pin names, from the A1 artefact
+    (`spec.json:interface.pins[].name`). [] when the design declares none —
+    the topology library's own names then stand, exactly as before."""
+    for base in (_CANONICAL_ANALOG, _DECLARED_ANALOG):
+        p = project / base / block / "spec.json"
+        if not p.is_file():
+            continue
+        data = _read_json(p)
+        if not isinstance(data, dict):
+            continue
+        iface = data.get("interface")
+        pins = (iface or {}).get("pins") if isinstance(iface, dict) else None
+        if isinstance(pins, list):
+            out = [str(x.get("name")) for x in pins
+                   if isinstance(x, dict) and x.get("name")]
+            if out:
+                return out
+    return []
+
+
+def bind_ports_to_declaration(lib_ports: Sequence[str],
+                              declared: Sequence[str]
+                              ) -> Tuple[Dict[str, str], Optional[str]]:
+    """``({library_name: declared_name}, refusal)`` — the topology library's
+    port names bound to the names the DESIGN declares for this block.
+
+    WHY. The topology library names a block's ports after the CIRCUIT it
+    draws; the design declares them after the ROLE they play at chip level,
+    and the two are not always the same word. MEASURED (u_hawaii_adc,
+    ihp-sg13g2): the `ldo` entry names its supply input `vdd`, the design's
+    own interface declaration (staged, every pin citing its document line)
+    names it `vin`, and the chip RTL instantiates `.vin(...)`. Nothing
+    reconciled them, so the emitted hardmacro's LEF, GDS labels and Verilog
+    view all said `vdd`, and the post-layout LEC — the last gate before the
+    sign-off tail — stopped on `Module 'ldo' ... does not have a port named
+    'vin'`, on a die whose DRC was 0 and whose LVS matched.
+
+    The rule is deliberately narrow, because a rename that guesses is worse
+    than no rename: bind every name that matches EXACTLY, and then, only if
+    exactly ONE name is left unbound on each side, bind that pair (there is
+    no other candidate it could be) and record it. Any other leftover shape —
+    two-and-two, three-and-four, a declaration for a block the library gives
+    fewer ports than — is REFUSED by name and nothing is renamed; the
+    interface gate then reports the disagreement instead of a silent guess.
+    Case-insensitive on the exact pass: LEF/Verilog/SPICE all round-trip case
+    differently and `VDD` vs `vdd` is not a disagreement about ROLE.
+    """
+    lib_ports = [str(p) for p in (lib_ports or [])]
+    declared = [str(p) for p in (declared or [])]
+    if not declared or not lib_ports:
+        return {}, None
+    dmap = {d.lower(): d for d in declared}
+    mapping: Dict[str, str] = {}
+    lib_left: List[str] = []
+    for lp in lib_ports:
+        d = dmap.get(lp.lower())
+        if d is not None:
+            mapping[lp] = d
+        else:
+            lib_left.append(lp)
+    bound = {v.lower() for v in mapping.values()}
+    dec_left = [d for d in declared if d.lower() not in bound]
+    if not lib_left and not dec_left:
+        return mapping, None
+    if len(lib_left) == 1 and len(dec_left) == 1:
+        mapping[lib_left[0]] = dec_left[0]
+        return mapping, None
+    return {}, (
+        f"PORT_BINDING_AMBIGUOUS: the topology names {sorted(lib_left)} that "
+        f"the design's interface declaration does not, and the declaration "
+        f"names {sorted(dec_left)} that the topology does not. A rename is "
+        f"only unambiguous when exactly one is left on each side; nothing "
+        f"was renamed.")
+
+
+def _rename_nets(obj: Any, mapping: Dict[str, str]) -> Any:
+    """Apply a net rename map to an IR fragment. A net name is a WHOLE TOKEN,
+    never a substring: `vdda` must not become `vina`, and the SPICE source
+    NAME in `v_vdd vdd 0 {supply}` must not change while the NODE it drives
+    does (measured: renaming only whole-string entries left the testbench
+    driving a node the DUT no longer has, and the A4 corner sweep failed on a
+    floating input)."""
+    if isinstance(obj, str):
+        if obj in mapping:
+            return mapping[obj]
+        out = obj
+        for old_n, new_n in mapping.items():
+            out = re.sub(r"(?<![0-9A-Za-z_])" + re.escape(old_n)
+                         + r"(?![0-9A-Za-z_])", new_n, out)
+        return out
+    if isinstance(obj, list):
+        return [_rename_nets(x, mapping) for x in obj]
+    if isinstance(obj, dict):
+        return {k: _rename_nets(v, mapping) for k, v in obj.items()}
+    return obj
+
+
 def build_ir(block: str, btype: str, entry: Dict[str, Any],
              lib: Dict[str, Any], spec_values: Dict[str, float],
              spec_path: Optional[str], project: Path,
@@ -1521,6 +2091,14 @@ def build_ir(block: str, btype: str, entry: Dict[str, Any],
         # of the two it is.
         "pdk_measured_params": dict(measured_params or {}),
         "analyses_implied": list(lib.get("analyses_implied") or []),
+        # Optional, and None for every entry that declares none. When an
+        # entry states what its circuit must be SHOWN to do, the statement
+        # and its verdict travel with the IR so that A5/A8 and the gate that
+        # reads it (`analog_topology_behaviour_check`) see the same words the
+        # library author wrote — never a summary of them.
+        "behaviour_record": (dict(lib["behaviour_record"])
+                             if isinstance(lib.get("behaviour_record"), dict)
+                             else None),
         # Carried into the IR so `analog_a3_netlist_emit` renders the stimulus
         # generically instead of holding a second per-type table.
         "testbench": (dict(lib["testbench"]) if isinstance(
@@ -1610,7 +2188,77 @@ def build_ir(block: str, btype: str, entry: Dict[str, Any],
                 "sizing solution and does not re-solve the block."),
         },
     }
+    # THE DESIGN'S OWN PORT NAMES, when it declares them. The library names
+    # ports after the circuit; the design declares them after the role they
+    # play at chip level. Binding here — before the IR reaches A3, A5, A6 and
+    # A8 — is what makes the emitted netlist, the layout labels, the LEF, the
+    # GDS text and the Verilog view all say the SAME word as the RTL that
+    # instantiates the block. See `bind_ports_to_declaration` for the rule and
+    # for the measured failure that motivated it.
+    _declared = declared_interface_pins(project, block)
+    _pmap, _prefusal = bind_ports_to_declaration(ir["ports"], _declared)
+    _renames = {k: v for k, v in _pmap.items() if k != v}
+    if _renames:
+        for _key in ("ports", "rails", "internal_nets", "devices",
+                     "constants", "device_param_exprs", "measurements",
+                     "testbench", "stimulus"):
+            if _key in ir:
+                ir[_key] = _rename_nets(ir[_key], _renames)
+    ir["port_binding"] = {
+        "declared_pins": list(_declared),
+        "library_ports": list(lib["ports"]),
+        "renamed": _renames,
+        "refusal": _prefusal,
+        "source": ("design-declared interface (spec.json:interface.pins[])"
+                   if _declared else
+                   "topology library (the design declares no interface)"),
+    }
     return ir
+
+
+def _render_behaviour_section(ir: Dict[str, Any]) -> List[str]:
+    """What the entry claims its circuit does, and whether that was shown.
+
+    Empty for an entry that declares no `behaviour_record`, so every
+    pre-existing topology.md is byte-identical. Present, it is placed ABOVE
+    the process-constant sections on purpose: a reader who stops after the
+    first screen must have seen the verdict, not the device table.
+    """
+    br = ir.get("behaviour_record")
+    if not isinstance(br, dict):
+        return []
+    ok = bool(br.get("verified"))
+    L: List[str] = ["## What this topology has been SHOWN to do", ""]
+    L.append(f"**Claim.** {br.get('claim')}")
+    L.append("")
+    caveat = "" if ok else (
+        " — this topology renders, converges in the simulator and drives "
+        "its declared output rail to rail, and the claim above is still "
+        "NOT shown. Those are different statements, and this section "
+        "exists so they cannot be read as one.")
+    L.append("**Verdict: "
+             + ("DEMONSTRATED" if ok else "NOT DEMONSTRATED")
+             + "**" + caveat)
+    L.append("")
+    if br.get("measured_on"):
+        L.append(f"Measured on: {br['measured_on']}")
+        L.append("")
+    if br.get("how"):
+        L.append(f"**How.** {br['how']}")
+        L.append("")
+    if br.get("arms"):
+        L.append("**Arms, one variable at a time:**")
+        L.append("")
+        for a in br["arms"]:
+            L.append(f"  * {a}")
+        L.append("")
+    if br.get("diagnosis"):
+        L.append(f"**Diagnosis.** {br['diagnosis']}")
+        L.append("")
+    if br.get("next"):
+        L.append(f"**What would close it.** {br['next']}")
+        L.append("")
+    return L
 
 
 def _render_measured_section(ir: Dict[str, Any]) -> List[str]:
@@ -1749,6 +2397,7 @@ def render_md(ir: Dict[str, Any], lib: Dict[str, Any],
                  "or supply constant is quoted here. Quoting one from memory "
                  "is the failure this section exists to prevent.")
     L.append("")
+    L.extend(_render_behaviour_section(ir))
     L.extend(_render_measured_section(ir))
     L.append("## Drawn-geometry minima of the target process")
     L.append("")

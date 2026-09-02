@@ -83,8 +83,32 @@ _V_PORT_DECL_RE = re.compile(
     r"\s+([A-Za-z_]\w*)")
 
 
+#: A bare port name in a NON-ANSI module header: `module m (a, b, c);` with the
+#: directions declared in the body. Verilog-95 style, and the style THIS FLOW's
+#: own A8 hardmacro emitter writes.
+_V_BARE_PORT_RE = re.compile(r"^\s*([A-Za-z_]\w*)\s*$")
+
+
 def parse_verilog_ports(text: str) -> Set[str]:
-    """Extract port names from the FIRST module header (ANSI-style)."""
+    """Port names from the FIRST module header — ANSI or non-ANSI.
+
+    ANSI (`module m (input a, output b);`) states the direction in the header.
+    NON-ANSI (`module m (a, b); input a; output b;`) lists bare names there and
+    declares them in the body. Reading only the ANSI form makes every non-ANSI
+    module look like a module with NO PORTS, and this gate then reports every
+    declared pin as `missing_in_v` — a mismatch it invented.
+
+    MEASURED (u_hawaii_adc, 2026-09-02): `analog_a8_hardmacro_emit` writes the
+    NON-ANSI form, so this gate reported
+    `Block 'ldo': missing_in_v=['vin','vout','vref','vss'] extra_in_v=[]`
+    for a Verilog view that declares exactly those four ports and nothing else
+    — while the REAL disagreement, on another block, was reported beside it and
+    read the same. A gate whose two verdicts are indistinguishable cannot be
+    acted on.
+
+    A name is taken from the non-ANSI header only when the body also declares
+    it `input`/`output`/`inout`, so a stray identifier can never become a port.
+    """
     m = _V_MODULE_RE.search(text)
     if not m:
         return set()
@@ -92,6 +116,17 @@ def parse_verilog_ports(text: str) -> Set[str]:
     names: Set[str] = set()
     for pm in _V_PORT_DECL_RE.finditer(ports_blob):
         names.add(pm.group(1).strip().lower())
+    if names:
+        return names
+    # Non-ANSI: bare names in the header, directions in the body.
+    body = text[m.end():]
+    declared = {d.group(1).strip().lower()
+                for d in _V_PORT_DECL_RE.finditer(body)}
+    for tok in ports_blob.split(","):
+        bm = _V_BARE_PORT_RE.match(tok.strip().split("//")[0].strip()
+                                   if tok.strip() else "")
+        if bm and bm.group(1).lower() in declared:
+            names.add(bm.group(1).lower())
     return names
 
 

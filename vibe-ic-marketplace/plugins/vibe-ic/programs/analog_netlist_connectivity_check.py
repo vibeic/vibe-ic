@@ -125,6 +125,18 @@ def _analog_dir(project: Path) -> Optional[Path]:
     return None
 
 
+#: The fewest NETS a line can carry and still parse as a device here. It is
+#: 2 — a capacitor — and it is exported because a second copy of this floor,
+#: written down somewhere else, is a rule that can be fixed on one side only.
+#: MEASURED: it was. This file was corrected to see two-terminal devices (see
+#: `_device_nets`), `analog_a3_netlist_emit._validate_ir` kept the OLD floor
+#: of 3 as a hard-coded literal, and its pre-check then refused a netlist
+#: THIS checker accepts — an SC modulator whose summing node is reached by a
+#: gate and two capacitor plates, reported as FLOATING_NODE by a program
+#: predicting what this one would say.
+MIN_DEVICE_NETS = 2
+
+
 def _device_nets(line: str) -> Optional[List[str]]:
     """Parse an X-instance device line into its net list.
 
@@ -162,7 +174,7 @@ def _device_nets(line: str) -> Optional[List[str]]:
             break
         core.append(t)
     # core = [n1 .. nk, modelname]; need at least 2 nets + 1 model
-    if len(core) < 3:
+    if len(core) < MIN_DEVICE_NETS + 1:
         return None
     nets = core[:-1]   # drop model name
     return nets

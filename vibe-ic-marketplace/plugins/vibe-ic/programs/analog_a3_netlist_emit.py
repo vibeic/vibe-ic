@@ -70,14 +70,18 @@ Netlist STYLE RULES, each forced by a measured failure
 ======================================================
   * Passives are instantiated as PDK subcircuits with their full terminal
     list (a 3-terminal resistor, not an `R` card). `analog_netlist_
-    connectivity_check._device_nets` parses ONLY `X` cards carrying >= 3 nets,
-    so a 2-terminal `R` card is invisible to it and the feedback node it
-    terminates was measured to raise a false `FLOATING_NODE: internal net
-    'vfb' touched by only 1 device pin`.
-  * A 2-terminal device (`cap`) is invisible to that same parser, so the
-    renderer refuses to emit an internal net whose only OTHER pin comes from
-    one. This is a checker blind spot being worked around, written down here
-    so it is not rediscovered.
+    connectivity_check._device_nets` parses only `X` cards, so an `R` card
+    is invisible to it and the feedback node it terminates was measured to
+    raise a false `FLOATING_NODE: internal net 'vfb' touched by only 1
+    device pin`.
+  * That blind spot is GONE — `_device_nets` now parses a two-net device —
+    and the pre-check below reads the floor out of
+    `analog_netlist_connectivity_check.MIN_DEVICE_NETS` rather than holding
+    its own copy. MEASURED, and the reason the constant is imported: the
+    checker was fixed and this file was not, so its pre-check refused a
+    switched-capacitor netlist (a summing node reached by a transistor gate
+    and two capacitor plates) that the checker itself accepts. A rule
+    written down twice gets fixed once.
   * PMOS bodies tie to the positive rail and NMOS bodies to ground
     (`PMOS_BODY_TO_VSS` / `NMOS_BODY_TO_VDD`).
   * Every model token must be in `programs/pdk_registry.json#device_models`
@@ -133,6 +137,9 @@ import _analog_a_check_common as _acc  # noqa: E402
 # a broken reader must break this producer loudly, not silently drop back to
 # the substring heuristic and bind a role by name order.
 import pdk_device_map as _pdm  # noqa: E402
+# The FLOOR the connectivity checker applies, read from the checker rather
+# than restated here — see `_validate_ir`.
+import analog_netlist_connectivity_check as _conncheck  # noqa: E402
 import pdk_analog_device_params as _pdp  # noqa: E402
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -714,7 +721,12 @@ def _validate_ir(ir: Dict[str, Any], pdkctx: Dict[str, Any]) -> List[str]:
                 f"'Too few parameters for subcircuit'")
         for n in nets:
             pin_count[n] = pin_count.get(n, 0) + 1
-            if len(nets) >= 3:          # the connectivity parser's own floor
+            # The floor is READ from the checker that owns it, never
+            # restated. A literal here is a second copy of one rule: the
+            # checker was fixed to see two-terminal devices and this line
+            # kept saying 3, so a netlist the checker accepts was refused
+            # by the program predicting the checker's answer.
+            if len(nets) >= _conncheck.MIN_DEVICE_NETS:
                 visible_pin_count[n] = visible_pin_count.get(n, 0) + 1
         if role == "pmos" and nets and nets[-1] not in rails:
             problems.append(f"device `{d.get('name')}` is a PMOS whose body "
@@ -727,8 +739,9 @@ def _validate_ir(ir: Dict[str, Any], pdkctx: Dict[str, Any]) -> List[str]:
             problems.append(
                 f"internal net `{net}` is touched by "
                 f"{visible_pin_count.get(net, 0)} pin(s) that the "
-                f"connectivity checker can see (2-terminal devices are "
-                f"invisible to it) — it would be reported FLOATING_NODE")
+                f"connectivity checker can see (its floor is "
+                f"{_conncheck.MIN_DEVICE_NETS} net(s) per device) — it "
+                f"would be reported FLOATING_NODE")
     for p in sorted(ports - rails):
         if pin_count.get(p, 0) < 1:
             problems.append(f"port `{p}` is declared and never connected — "
