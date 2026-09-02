@@ -6034,7 +6034,8 @@ def _macro_supply_pin_audit_tcl() -> str:
 
 
 def _secondary_supply_tcl(pwr: str, gnd: str,
-                          stripes: Sequence[Dict[str, Any]]
+                          stripes: Sequence[Dict[str, Any]],
+                          tech_lef_text: Optional[str] = None
                           ) -> Dict[str, str]:
     """Tcl for the SECONDARY supplies of the core voltage domain.
 
@@ -6089,19 +6090,47 @@ def _secondary_supply_tcl(pwr: str, gnd: str,
         off = s.get("offset", 0)
         if not (lyr and sw and sp):
             continue
+        # THE LAYER'S OWN MINIMUM SPACING decides the fit and the offset —
+        # never the strap width standing in for it. Through v1.15.60 the fit
+        # test was `need <= pitch/2 - 2*width` and the group was dropped at
+        # `offset + pitch/2` with `-spacing <width>`: three places where the
+        # WIDTH was used as if it were the spacing rule. On a layer whose min
+        # spacing EXCEEDS its min width that ships a violation. MEASURED
+        # (u_hawaii_adc / ihp-sg13g2 round 15): TopMetal1 straps 2.2 um wide
+        # on a pitch that left 1.28 um to the primary group, against a
+        # `SPACING 1.64` rule — 7 TM1.b sign-off violations, all of them at
+        # a secondary strap end. With the rule read from the tech LEF the
+        # group is CENTRED in the window between two primary straps (both
+        # gaps equal, each the largest available) and refused by name when
+        # even that leaves less than the rule.
+        _msp = _techlef_layer_spacing(tech_lef_text or "", str(lyr))
+        if _msp is None:
+            # No stated rule for this layer: fall back to the previous
+            # width-as-spacing proxy, and say so in the marker.
+            _msp = float(sw)
+            _msp_src = "width-proxy (tech LEF states no spacing for the layer)"
+        else:
+            _msp_src = "tech LEF"
+        _gap_expr = (f"[expr {{({sp} - {sw} - $_sec_need) / 2.0}}]")
         st.append(
             f"  if {{[llength $_sec_pwr] > 0}} {{\n"
             f"    set _sec_n [llength $_sec_pwr]\n"
-            f"    set _sec_need [expr {{$_sec_n * {sw} + ($_sec_n - 1) * {sw}}}]\n"
-            f"    set _sec_avail [expr {{{sp} / 2.0 - 2.0 * {sw}}}]\n"
-            f"    if {{$_sec_need <= $_sec_avail}} {{\n"
+            f"    set _sec_need [expr {{$_sec_n * {sw} + "
+            f"($_sec_n - 1) * {max(float(sw), float(_msp))}}}]\n"
+            f"    set _sec_gap {_gap_expr}\n"
+            f"    if {{$_sec_gap >= {_msp}}} {{\n"
             f"      add_pdn_stripe -grid grid -layer {lyr} -width {sw} "
-            f"-pitch {sp} -offset [expr {{{off} + {sp} / 2.0}}] -spacing {sw} "
+            f"-pitch {sp} -offset [expr {{{off} + {sw} + $_sec_gap}}] "
+            f"-spacing {max(float(sw), float(_msp))} "
             f"-nets $_sec_pwr -extend_to_boundary\n"
+            f"      puts \"PDN_SECONDARY_STRAP_PLACED: layer={lyr} "
+            f"nets=$_sec_pwr gap=${{_sec_gap}}um min_spacing={_msp}um "
+            f"({_msp_src})\"\n"
             f"    }} else {{\n"
             f"      puts \"PDN_SECONDARY_STRAPS_DO_NOT_FIT: layer={lyr} "
-            f"nets=$_sec_pwr need=${{_sec_need}}um available=${{_sec_avail}}um "
-            f"between primary groups at pitch {sp}\"\n"
+            f"nets=$_sec_pwr need=${{_sec_need}}um leaves ${{_sec_gap}}um to "
+            f"the primary group, below the layer minimum spacing {_msp}um "
+            f"({_msp_src}) at pitch {sp} width {sw}\"\n"
             f"    }}\n"
             f"  }}\n")
     report = (
@@ -6540,7 +6569,9 @@ def _build_pdn_tcl(pdk: "PdkConfig", container: Optional[str] = None,
                         f"-- {_tcl_puts_safe(_r.get('detail') or '')}\"\n")
         _ok_marker += _build_macro_pdn_refusal_tcl(_mg_refusals)
         # === secondary supplies (round 15) — see _secondary_supply_tcl ===
-        _sec = _secondary_supply_tcl(pwr, gnd, _stripes)
+        _sec = _secondary_supply_tcl(
+            pwr, gnd, _stripes,
+            _read_pdk_text(getattr(pdk, "tech_lef", None), container))
         return (
             "# === PDK-adaptive PDN: discovered PG pins + met1 follow-pins"
             + (" + upper-metal straps ===\n" if strap_tcl else " ===\n")
@@ -21506,6 +21537,7 @@ def _v1_8_100_signoff_drv_repair_tcl(out_dir_c: str) -> str:
         "    } _sdr_ce]} { puts \"SDR_COUNT_NONFATAL: $_sdr_ce\" }\n"
         "    puts \"SDR_DRV_PASS${_sdr_p}_BEFORE: $_sdr_n (max_wire_length=$_sdr_mwl)\"\n"
         "    if {$_sdr_n == 0} { puts \"SDR_CONVERGED: pass $_sdr_p\"; break }\n"
+        "    set _sdr_stop 0\n"
         f"    if {{[catch {{repair_design -max_wire_length $_sdr_mwl "
         f"-slew_margin {m} -cap_margin {m}}} _sdr_rd]}} {{\n"
         + _est0104_recovery_tcl(
@@ -21515,8 +21547,22 @@ def _v1_8_100_signoff_drv_repair_tcl(out_dir_c: str) -> str:
             f"-slew_margin {m} -cap_margin {m}",
             "SDR",
             indent="      ")
+        # A repair_design that ABORTS mid-way has ALREADY MUTATED the
+        # design — OpenROAD resizes/inserts as it walks, and the error
+        # ends the walk, it does not roll it back. Breaking out here
+        # (what v1.15.60 did) leaves those swaps UN-LEGALIZED and the
+        # old routing over them: MEASURED on u_hawaii_adc/ihp-sg13g2 —
+        # `SDR_REPAIR_NONFATAL: RSZ-0074` on pass 1 left 4 instances
+        # overlapping their neighbours (a buf_1 -> buf_2 upsize at the
+        # same origin, 0.48 um into the next cell), which streamed out
+        # as 15 FEOL sign-off violations (Cnt.b/d/e, Gat.b/d, M1.a/b,
+        # CntB.h1) and 2 LVS metal1-vs-OBS extraction overlaps at the
+        # very same coordinate. So a partial repair FINISHES the pass
+        # it is in — legalize, clear routing, reroute — and only then
+        # stops iterating. Same tools, same order as a clean pass; the
+        # only difference is that no further pass is attempted.
         + "      if {!$_sdr_est_rec} { puts \"SDR_REPAIR_NONFATAL: $_sdr_rd\"; "
-        "break }\n"
+        "set _sdr_stop 1 }\n"
         "    }\n"
         # v1.8.100 r2 — MEASURED: without this, closing DRV on the max-RC
         # deck traded the SLOW-corner setup from +1.02 ns to -4.68 ns
@@ -21526,8 +21572,26 @@ def _v1_8_100_signoff_drv_repair_tcl(out_dir_c: str) -> str:
         # route; it belongs after any buffer insertion, not only that one.
         "    if {[catch {repair_timing -setup} _sdr_rt]} "
         "{ puts \"SDR_REPAIR_TIMING_NONFATAL: $_sdr_rt\" }\n"
+        # LEGALIZE AND VERIFY. A bare catch-guarded detailed_placement
+        # says nothing about whether the placement is legal AFTERWARDS:
+        # it can return cleanly and still leave overlaps the default
+        # displacement bound could not resolve. Ask the tool
+        # (check_placement -no_abort returns the violation count),
+        # escalate the displacement bound once, and PRINT the count
+        # either way so the Python side can refuse an illegal die
+        # instead of streaming it out (see PNR_PLACEMENT_VIOLATIONS).
         "    if {[catch {detailed_placement} _sdr_dp]} "
         "{ puts \"SDR_DPL_NONFATAL: $_sdr_dp\" }\n"
+        "    set _sdr_pv -1\n"
+        "    if {[catch {set _sdr_pv [check_placement -no_abort]} _sdr_pe]} "
+        "{ puts \"SDR_DPL_CHECK_NONFATAL: $_sdr_pe\"; set _sdr_pv -1 }\n"
+        "    if {[string is integer -strict $_sdr_pv] && $_sdr_pv > 0} {\n"
+        "      if {[catch {detailed_placement -use_diamond_legalizer} _sdr_dp2]} "
+        "{ puts \"SDR_DPL_DIAMOND_NONFATAL: $_sdr_dp2\" }\n"
+        "      if {[catch {set _sdr_pv [check_placement -no_abort]} _sdr_pe2]} "
+        "{ set _sdr_pv -1 }\n"
+        "    }\n"
+        "    puts \"SDR_PLACEMENT_VIOLATIONS: $_sdr_pv\"\n"
         # The routing clear. Without it `global_route` no-ops on already-routed
         # nets, the follow-on detailed_route aborts, and the design measures
         # clean because it is UNROUTED. PG and dont_touch nets are preserved.
@@ -21562,6 +21626,9 @@ def _v1_8_100_signoff_drv_repair_tcl(out_dir_c: str) -> str:
         # — over-splitting creates short nets whose OWN pins then violate, the
         # exact effect R6 measured with `-max_wire_length 500`. Holding the
         # seed is the configuration exp5/Z3 measured converging to zero.
+        # the pass is complete (legalized + rerouted); a partial repair
+        # above asked for no further pass.
+        "    if {$_sdr_stop} { puts \"SDR_STOPPED_AFTER_PARTIAL_REPAIR: pass $_sdr_p completed (legalized + rerouted)\"; break }\n"
         "  }\n"
         "  }\n"
         "  puts \"SDR_DONE\"\n"
@@ -22300,6 +22367,21 @@ puts "{_PNR_STAGE_MARKER} postroute_fill"
 # but keeps this tail, and an uncaught pop on an empty stack would kill a route
 # that had already succeeded.
 if {{[catch {{utl::pop_metrics_stage}} _tm_err]}} {{ puts "METRICS_STAGE_POP_SKIPPED: $_tm_err" }}
+# === placement legality, MEASURED on the geometry that ships ===
+# The last thing before the shipped DEF is written: ask the placer whether the
+# placement it is about to publish is legal. This is a DETECTOR, never a mover
+# — the route is final at this point and moving a cell here would strand its
+# wires. MEASURED (u_hawaii_adc/ihp-sg13g2, v1.15.60): a repair_design that
+# aborted mid-pass left 4 overlapping instances, and every consumer downstream
+# — streamout, sign-off DRC, LVS extraction — read that overlap as design
+# geometry (15 FEOL violations + 2 extraction overlaps) with nothing in the
+# flow ever saying the word "overlap". The count is printed whatever it is;
+# `step_pnr` refuses a non-zero one.
+if {{[catch {{set _plv [check_placement -no_abort]}} _plv_e]}} {{
+  puts "PNR_PLACEMENT_CHECK_UNAVAILABLE: $_plv_e"
+}} else {{
+  puts "PNR_PLACEMENT_VIOLATIONS: $_plv"
+}}
 {min_area_patch_block}write_def {out_dir_c}/routed.def
 write_def {out_dir_c}/{top}.def
 write_verilog {out_dir_c}/{top}_pnr.v
@@ -24885,6 +24967,39 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
     _pg_audit = _parse_pg_net_ownership_audit(_pg_log_txt)
     _pg_evidence = [str(out_dir / "openroad.log"), str(def_file)]
 
+    # PLACEMENT LEGALITY on the geometry that ships. The deck asks
+    # `check_placement -no_abort` immediately before it writes the shipped DEF
+    # and prints PNR_PLACEMENT_VIOLATIONS: <n>. A non-zero n means instances
+    # OVERLAP in the DEF this run is about to hand to streamout, extraction and
+    # sign-off. MEASURED (u_hawaii_adc / ihp-sg13g2, v1.15.60): a repair_design
+    # that aborted mid-pass upsized a buffer in place (buf_1 -> buf_2, same
+    # origin) and 4 instances ended 0.48 um inside their neighbours; every
+    # downstream consumer read that as drawn geometry — 15 FEOL sign-off DRC
+    # violations and 2 LVS extraction overlaps at the same coordinate — and no
+    # gate in the flow ever said "overlap". An overlapping placement is not a
+    # DRC opinion, it is an illegal database, so it is refused here.
+    # chip-AGNOSTIC: the count is the placer's own, no PDK/design literal.
+    _plv_m = re.findall(r"^PNR_PLACEMENT_VIOLATIONS:\s+(-?\d+)",
+                        _pg_log_txt, re.M)
+    if _plv_m:
+        _plv_n = int(_plv_m[-1])
+        if _plv_n > 0:
+            return StepResult(
+                "pnr", "FAIL", time.time() - t0,
+                (f"PNR_PLACEMENT_ILLEGAL: check_placement reports {_plv_n} "
+                 f"placement violation(s) on the DEF this run is about to "
+                 f"ship. Overlapping instances are not a sign-off opinion — "
+                 f"streamout paints both cells' artwork on top of each other, "
+                 f"so the sign-off deck reads FEOL violations that no tool "
+                 f"drew, and the extractor reads shorted/overlapping shapes. "
+                 f"The usual producer is an in-place master swap (a resizer "
+                 f"upsizing a cell at its own origin) whose legalization was "
+                 f"skipped or bounded too tightly. Legalize before the route "
+                 f"is written; do not stream an illegal placement."),
+                _pg_evidence,
+                extras={"finding": "PNR_PLACEMENT_ILLEGAL",
+                        "placement_violations": _plv_n})
+
     # ORGANIC #687 — a supply the PDN failed to build is a RESULT, not a
     # routing obstacle to route around. The cleanup pass no longer reclassifies
     # such a net to SIGNAL; it names it, and this is what reads that.
@@ -25241,6 +25356,38 @@ def_path = os.environ['DEF']
 gds_out = os.environ['GDS_OUT']
 lefs = os.environ['LEFS'].split(';')
 macro_gds_files = os.environ.get('MACRO_GDS', '').split(';')
+
+
+def _lef_macro_origins_text(_t):
+    # {macro: (ox, oy)} for every MACRO stating a NON-ZERO LEF ORIGIN.
+    import re as _re
+    _o = {}
+    for _mm in _re.finditer(r"^\s*MACRO\s+(\S+)(.*?)^\s*END\s+\\1\s*$",
+                            _t or "", _re.S | _re.M):
+        _om = _re.search(r"^\s*ORIGIN\s+(-?[0-9.]+)\s+(-?[0-9.]+)\s*;",
+                         _mm.group(2), _re.M)
+        if not _om:
+            continue
+        try:
+            _ox, _oy = float(_om.group(1)), float(_om.group(2))
+        except ValueError:
+            continue
+        if _ox or _oy:
+            _o[_mm.group(1)] = (_ox, _oy)
+    return _o
+
+
+_mlib_origins = {}
+for _lp in os.environ.get('LEFS', '').split(';'):
+    if not _lp.strip():
+        continue
+    try:
+        with open(_lp.strip()) as _fh:
+            _mlib_origins.update(_lef_macro_origins_text(_fh.read()))
+    except OSError as _e:
+        print(f"warn lef origin scan: {_e}")
+if _mlib_origins:
+    print(f"MACRO_LEF_ORIGIN: {_mlib_origins}")
 cell_gds_path = os.environ.get('CELL_GDS', '').strip()
 ly = pya.Layout()
 # LEFs first — needed so DEF references resolve to LEF cell abstracts
@@ -25536,10 +25683,85 @@ if cell_gds_path and os.path.exists(cell_gds_path):
 # Merge any hard-macro PA-GDS files so the final GDS holds full physical
 # data (vs the LEF outline only). chip-AGNOSTIC; macro_gds lists every
 # vendor PA-GDS discovered under input/pdk_local/.
+#
+# MANUAL MACRO SUBSTITUTION (same treatment the std cells get above, and for
+# the same measured reason). A plain `ly.read(macro_gds)` MERGES the macro's
+# artwork into the DEF-created abstract cell of the same name but does NOT
+# clear what the LEF/DEF reader already put there: the macro's SIZE footprint,
+# painted as a FULL-CELL BOX on the first tech-LEF layer. On a PDK whose first
+# tech-LEF layer is a DEVICE layer that box is a solid device-layer plate the
+# size of the macro. MEASURED (ihp-sg13g2, 7 analog hard macros, sign-off deck
+# ihp-sg13g2.drc on the routed die): 65,089 um^2 of phantom `Activ` inside a
+# 271x264 um macro whose OWN GDS draws 525 um^2 there, and with it 129 of the
+# 184 sign-off violations — Cnt.g2 x73 (contact-on-implant, 12 per macro),
+# Pin.e x38, NBL.e x16 (buried layer to "unrelated N+Activ" — the plate),
+# Cnt.g1, Gat.a2 — every one of them an artefact of the abstract box, none of
+# them geometry any tool drew. Clearing the abstract's shapes before copying
+# the macro cell's own artwork in (exactly as the CELL_GDS path does) removes
+# the plate and leaves the macro's real, DRC-clean artwork: 184 -> 55, and the
+# 55 that remain are all top-level routing/PDN, none inside a macro.
+# chip-AGNOSTIC: keyed only on a name match between a DEF master and a cell in
+# the macro GDS; a macro GDS that names no DEF master falls back to the legacy
+# plain read, so a PA-GDS shipped as a side library still merges as before.
 for gp in macro_gds_files:
-    if gp.strip():
-        try: ly.read(gp.strip())
-        except Exception as e: print(f"warn macro_gds: {e}")
+    if not gp.strip():
+        continue
+    gp = gp.strip()
+    try:
+        _mlib = pya.Layout()
+        _mlib.read(gp)
+        _mmag = _mlib.dbu / ly.dbu
+        _mlaymap = {_s: ly.layer(_mlib.get_info(_s))
+                    for _s in _mlib.layer_indexes()}
+        _msub = 0
+        for _mdci in list(ly.each_cell_top_down()):
+            _mdc = ly.cell(_mdci)
+            if _mdc.name == top or not _mlib.has_cell(_mdc.name):
+                continue
+            for _li in ly.layer_indexes():
+                _mdc.shapes(_li).clear()
+            _mc = _mlib.cell(_mlib.cell_by_name(_mdc.name))
+            # LEF `ORIGIN` — the artwork's frame vs the PLACEMENT frame. A
+            # macro whose LEF states `ORIGIN ox oy` draws its artwork (and
+            # states its pin RECTs) in a frame whose (0,0) is NOT the point
+            # the DEF places: OpenROAD's master frame — the one every routed
+            # wire in the DEF was built against — is `geometry + ORIGIN`
+            # (verified with `dbITerm getBBox`). KLayout places the cell's
+            # artwork with ITS (0,0) at the placement point, so without this
+            # translate the macro's real metal lands ORIGIN away from the pin
+            # the router connected. MEASURED (u_hawaii_adc / ihp-sg13g2,
+            # `delta_sigma`, ORIGIN 3.800 20.750): the streamed `vin` pin
+            # metal sat at (117.130, 576.480) while the wire that drives it
+            # ended at (114.095, 555.975) — exactly one ORIGIN apart, six
+            # times over, an open in the shipped GDS that DRC cannot see.
+            # ORIGIN 0 0 (or none) → zero translation, byte-identical output.
+            _mo = _mlib_origins.get(_mdc.name)
+            _otr = (pya.ICplxTrans(1.0, 0.0, False,
+                                   int(round(_mo[0] / ly.dbu)),
+                                   int(round(_mo[1] / ly.dbu)))
+                    if _mo else None)
+            for _sli in _mlib.layer_indexes():
+                _dli = _mlaymap[_sli]
+                for _si in _mc.begin_shapes_rec(_sli):
+                    _t = (pya.ICplxTrans(_si.trans()) if _mmag == 1.0
+                          else pya.ICplxTrans(_mmag)
+                          * pya.ICplxTrans(_si.trans()))
+                    if _otr is not None:
+                        _t = _otr * _t
+                    _mdc.shapes(_dli).insert(_si.shape(), _t)
+            _msub += 1
+        print(f"MACRO_GDS manual-substituted {_msub} macro(s): {gp}")
+        if _msub == 0:
+            # No DEF master carries this GDS's cell names — nothing to
+            # substitute; merge it the legacy way so no artwork is lost.
+            ly.read(gp)
+            print(f"MACRO_GDS merged (no DEF master matched): {gp}")
+    except Exception as e:
+        print(f"warn macro_gds substitution (fallback to plain read): {e}")
+        try:
+            ly.read(gp)
+        except Exception as e2:
+            print(f"warn macro_gds: {e2}")
 # v1.6.560 sub-defect C: prune the layout to only the design top cell
 # and its descendants. This guarantees `ly.top_cells()` returns exactly
 # one element (the design), matching what magic-streamed / LibreLane-
@@ -25631,6 +25853,103 @@ quit -noprompt
 #: everything between the first OBS and the last END.
 _RE_LEF_OBS_BLOCK = re.compile(r"\n[ \t]*OBS\b.*?\n[ \t]*END\b[ \t]*(?=\n)",
                                re.S)
+
+
+def _lef_macro_origins(lef_text: str) -> Dict[str, Tuple[float, float]]:
+    """``{macro: (ox, oy)}`` for every MACRO in one LEF that states a NON-ZERO
+    ``ORIGIN``. Pure LEF grammar, no PDK/design literal."""
+    out: Dict[str, Tuple[float, float]] = {}
+    if not isinstance(lef_text, str) or not lef_text:
+        return out
+    for mm in re.finditer(r"^\s*MACRO\s+(\S+)(.*?)^\s*END\s+\1\s*$",
+                          lef_text, re.S | re.M):
+        om = re.search(r"^\s*ORIGIN\s+(-?[0-9.]+)\s+(-?[0-9.]+)\s*;",
+                       mm.group(2), re.M)
+        if not om:
+            continue
+        try:
+            ox, oy = float(om.group(1)), float(om.group(2))
+        except ValueError:
+            continue
+        if ox or oy:
+            out[mm.group(1)] = (ox, oy)
+    return out
+
+
+def _lef_normalize_macro_origin(lef_text: str
+                                ) -> Tuple[str, Dict[str, Tuple[float, float]]]:
+    """Rewrite a LEF so every MACRO's geometry is stated in the frame whose
+    (0,0) is the placement point, and ``ORIGIN`` is 0 0.
+
+    WHY THIS EXISTS. LEF `ORIGIN` is read two OPPOSITE ways by the tools this
+    flow drives, and the disagreement is silent. MEASURED (u_hawaii_adc /
+    ihp-sg13g2, macro `delta_sigma`, `ORIGIN 3.800 20.750`, pin `vin`
+    `RECT 164.760 -14.350 165.960 -13.650`, instance placed at
+    (11.720, 298.820) R180):
+
+      OpenROAD  `dbITerm getBBox` -> (113.330, 555.730)-(114.530, 556.430)
+                i.e. the master frame is `geometry + ORIGIN`, and THAT is
+                where the router put the wire that connects the pin.
+      magic     the same abstract extracts the port at `geometry - ORIGIN`
+                (`delta_sigma.ext`: `port "vin" ... 32192 -7020 ...`, unit
+                0.005 um -> 160.960, -35.100 = 164.760-3.800, -14.350-20.750).
+
+    Two ORIGINs apart. The consequence is not a warning anywhere: netgen
+    reported six `(no matching net)` opens — every modulator's `vin`, the
+    buffer output on one net and the macro pin on another — on a die whose
+    router, DRC and PDN all called themselves clean.
+
+    Normalizing removes the disagreement instead of picking a side: with the
+    rects moved by +ORIGIN and `ORIGIN 0 0` there is nothing left to
+    interpret, and both readings land on OpenROAD's (the frame the routed
+    geometry already lives in). A LEF whose macros all state ORIGIN 0 0 (or
+    none) comes back byte-identical. chip-AGNOSTIC: pure LEF grammar.
+    """
+    origins = _lef_macro_origins(lef_text)
+    if not origins:
+        return lef_text, {}
+    out: List[str] = []
+    cur: Optional[Tuple[float, float]] = None
+    for line in lef_text.splitlines(True):
+        mm = re.match(r"^\s*MACRO\s+(\S+)", line)
+        if mm:
+            cur = origins.get(mm.group(1))
+            out.append(line)
+            continue
+        if re.match(r"^\s*END\s+\S+\s*$", line) and cur and \
+                re.match(r"^\s*END\s+(\S+)", line).group(1) in origins:
+            cur = None
+            out.append(line)
+            continue
+        if cur is None:
+            out.append(line)
+            continue
+        ox, oy = cur
+        om = re.match(r"^(\s*ORIGIN\s+)(-?[0-9.]+)(\s+)(-?[0-9.]+)(\s*;.*)$",
+                      line)
+        if om:
+            out.append(f"{om.group(1)}0.000{om.group(3)}0.000{om.group(5)}\n"
+                       if not om.group(5).endswith("\n")
+                       else f"{om.group(1)}0.000{om.group(3)}0.000{om.group(5)}")
+            continue
+        rm = re.match(r"^(\s*(?:RECT|POLYGON)\s+)([-0-9. ]+?)(\s*;.*)$",
+                      line.rstrip("\n"))
+        if rm:
+            try:
+                vals = [float(v) for v in rm.group(2).split()]
+            except ValueError:
+                out.append(line)
+                continue
+            if len(vals) >= 2 and len(vals) % 2 == 0:
+                moved = [v + (ox if i % 2 == 0 else oy)
+                         for i, v in enumerate(vals)]
+                out.append(rm.group(1)
+                           + " ".join(f"{v:.3f}" for v in moved)
+                           + rm.group(3)
+                           + ("\n" if line.endswith("\n") else ""))
+                continue
+        out.append(line)
+    return "".join(out), origins
 
 
 def _magic_def_to_gds(project: Path, top: str, pdk: PdkConfig,
@@ -33001,6 +33320,7 @@ def _run_extraction_lvs(project: Path, top: str, pdk: PdkConfig,
     # dropped and why, exactly as the DEF blockage strip above does.
     _ext_lefs = []
     _obs_dropped = {}
+    _origins_normalized: Dict[str, Dict[str, List[float]]] = {}
     for f in pdk.macro_lefs:
         try:
             _txt = Path(f).read_text(errors="replace")
@@ -33008,7 +33328,15 @@ def _run_extraction_lvs(project: Path, top: str, pdk: PdkConfig,
             _ext_lefs.append(f)
             continue
         _stripped_lef, _n = _RE_LEF_OBS_BLOCK.subn("\n", _txt)
-        if not _n:
+        # LEF `ORIGIN` NORMALIZATION — see `_lef_normalize_macro_origin`.
+        # magic reads a macro's geometry as `rect - ORIGIN`; OpenROAD (whose
+        # frame the routed wires already live in) reads it as `rect + ORIGIN`.
+        # Extracting through the raw abstract puts every macro pin two ORIGINs
+        # away from the wire that connects it, and netgen then reports the
+        # connection as an open with no other symptom anywhere in the flow.
+        # The extraction view is stated in ONE frame, OpenROAD's.
+        _stripped_lef, _orig = _lef_normalize_macro_origin(_stripped_lef)
+        if not _n and not _orig:
             _ext_lefs.append(f)
             continue
         _dst = ext_dir / f"{Path(f).stem}.extract.lef"
@@ -33017,15 +33345,28 @@ def _run_extraction_lvs(project: Path, top: str, pdk: PdkConfig,
         except OSError:
             _ext_lefs.append(f)
             continue
-        _obs_dropped[Path(f).name] = _n
+        if _n:
+            _obs_dropped[Path(f).name] = _n
+        if _orig:
+            _origins_normalized[Path(f).name] = {
+                k: [v[0], v[1]] for k, v in _orig.items()}
         _ext_lefs.append(_dst)
-    if _obs_dropped:
+    if _obs_dropped or _origins_normalized:
         try:
             (ext_dir / "extract_macro_lef_provenance.json").write_text(
                 json.dumps({
                     "signed_off_macro_lefs": [str(f) for f in pdk.macro_lefs],
                     "extraction_macro_lefs": [str(f) for f in _ext_lefs],
                     "obs_sections_dropped": _obs_dropped,
+                    "lef_origin_normalized": _origins_normalized,
+                    "lef_origin_reason": (
+                        "LEF ORIGIN is read with OPPOSITE signs by OpenROAD "
+                        "(master frame = rect + ORIGIN, where the routed "
+                        "wires are) and by magic (rect - ORIGIN). Measured on "
+                        "this die: six modulator `vin` connections extracted "
+                        "as opens, two ORIGINs apart, with no other symptom. "
+                        "The extraction view states the geometry in ONE "
+                        "frame — OpenROAD's — with ORIGIN 0 0."),
                     "reason": ("an OBS is a routing directive, not a "
                                "conductor; magic reads it as obsm* and calls "
                                "every die-level wire above the macro an "
@@ -46314,6 +46655,34 @@ def main() -> int:
     # flow_compliance_check, which refreshes
     # reports/audit/phase23_completion_audit.json — the audit the
     # headline verdict derives from (#437f).
+    # THIS RUN'S STEP RECORD, BEFORE THE SUMMARY THAT QUOTES IT. The final
+    # summary echoes the runner's own step record for DRC/LVS
+    # (`final_report_generate._runner_step_record`, ORGANIC #399: echo, never
+    # re-derive) out of `reports/orchestrator/phase3_one_shot.json` — which
+    # this function did not write until AFTER the summary was emitted. On a
+    # FIRST run that only cost the summary a "(report missing)"; on a RE-RUN
+    # of the same project — the ordinary case for every iteration of a
+    # sign-off loop — the file on disk is the PREVIOUS run's, so the published
+    # summary quoted a DRC verdict and count from a die that no longer exists.
+    # MEASURED (u_hawaii_adc, 2026-09-02): `reports/final_summary.md` said
+    # `total_violations=216` beside an orchestrator record, a DRC report and a
+    # steps view that all said 39. A stale number in the deliverable a reader
+    # treats as the verdict is the worst possible place for one.
+    # A steps-only record is published here so the summary can only ever
+    # quote THIS run; the full record still overwrites it at the end.
+    try:
+        _pre = project / "reports" / "orchestrator" / "phase3_one_shot.json"
+        _pre.parent.mkdir(parents=True, exist_ok=True)
+        _pre.write_text(json.dumps(
+            {"program": "phase3_one_shot_runner",
+             "record": "in-progress (steps only; the full record is written "
+                       "at the end of this run)",
+             "steps": [asdict(s) for s in plan]},
+            indent=2, ensure_ascii=False) + "\n")
+    except Exception as _pre_exc:      # best-effort; never crash finalize
+        print(f"[WARN] pre-summary step record non-fatal: {_pre_exc}",
+              file=sys.stderr)
+
     fs_ok = _pl.emit_final_summary(project, PROGRAMS_DIR)
 
     # sha256×sky130A / #SS-SETUP — pin the completion audit to the FINAL artifact
