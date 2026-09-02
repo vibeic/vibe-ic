@@ -592,6 +592,7 @@ def _validate_candidate_snapshot(candidate: dict, problem_id: str) -> list[str]:
 def _make_ai_review_task(problem_id: str, project: Path, got: dict,
                          routing: dict, runner_rc: int, run_p: Path,
                          candidate_origin: str, *,
+                         program_phases: dict | None = None,
                          verification_challenges: list[dict] | None = None,
                          program_candidate: dict | None = None,
                          repair_parent_candidate: dict | None = None,
@@ -622,6 +623,21 @@ def _make_ai_review_task(problem_id: str, project: Path, got: dict,
                     "whitespace-normalized substring of prompt_path>"),
         "supports": "<the claim it supports; at least 12 characters>",
     }
+    phase3 = ((program_phases or {}).get("phase3_verifying") or {})
+    ran = phase3.get("ran") if isinstance(phase3.get("ran"), dict) else {}
+    not_attempted = (phase3.get("not_attempted")
+                     if isinstance(phase3.get("not_attempted"), dict) else {})
+    functional_evidence = ran.get("step4_functional_evidence")
+    functional_source = "phase3_verifying.ran.step4_functional_evidence"
+    if functional_evidence is None:
+        functional_evidence = not_attempted.get("step4_functional_evidence")
+        functional_source = (
+            "phase3_verifying.not_attempted.step4_functional_evidence")
+    if functional_evidence is None:
+        functional_evidence = "NOT_RECORDED"
+        functional_source = "no step4_functional_evidence record"
+    confirmation_required = functional_evidence != "PASS"
+
     return {
         "schema": _REVIEW_TASK_SCHEMA,
         "id": str(problem_id),
@@ -648,6 +664,9 @@ def _make_ai_review_task(problem_id: str, project: Path, got: dict,
             "actor": "vibe_ic_one_shot_runner",
             "rtl_gen": got.get("rtl_gen"),
             "runner_rc": int(runner_rc),
+            "functional_evidence": functional_evidence,
+            "functional_evidence_source": functional_source,
+            "functional_confirmation_required": confirmation_required,
         },
         "review_path": str((run_p / "ai_reviews" / safe /
                             f"{review_key}.json").resolve()),
@@ -696,9 +715,11 @@ def _make_ai_review_task(problem_id: str, project: Path, got: dict,
                                            "characters>"),
                 },
                 "verification_test": {
-                    "_required_when": ("semantic_review.verdict is FAIL; "
-                                       "write the test file to the task "
-                                       "challenge_path"),
+                    "_required_when": (
+                        "semantic_review.verdict is FAIL, OR semantic_review."
+                        "verdict is PASS while program_verification."
+                        "functional_confirmation_required is true; write the "
+                        "test file to the task challenge_path"),
                     "schema": _CHALLENGE_SCHEMA,
                     "path": challenge_file,
                     "sha256": "<sha256 of the exact challenge file text>",
@@ -724,6 +745,19 @@ def _make_ai_review_task(problem_id: str, project: Path, got: dict,
                 "is authorized. Corrected RTL must pass the SAME immutable "
                 "test, return through PROGRAM gates, then receive a fresh "
                 "hash-bound AI review"),
+            "semantic_pass_action": (
+                "When PROGRAM has no PASS functional evidence, a semantic PASS "
+                "must include a self-contained prompt-derived executable test "
+                "at challenge_path. The frozen candidate must PASS that test; "
+                "an unrunnable test is NOT_MEASURED and a failing test cannot "
+                "authorize acceptance."),
+            "semantic_pass_verification_test": {
+                "required": confirmation_required,
+                "required_result_on_reviewed_candidate": "PASS",
+                "reason": ("PROGRAM step4_functional_evidence is "
+                           f"{functional_evidence!r}"),
+                "blind_source": "prompt_path only",
+            },
             "semantic_fail_verification_test": {
                 "schema": _CHALLENGE_SCHEMA,
                 "path": challenge_file,
@@ -946,12 +980,14 @@ def _verified_prompt_evidence(items, prompt_text: str) -> list[dict]:
 
 
 def _challenge_from_review(task: dict, review: dict,
-                           prompt_text: str) -> tuple[dict | None, list[str]]:
+                           prompt_text: str, *,
+                           required_for: str = "semantic FAIL"
+                           ) -> tuple[dict | None, list[str]]:
     """Validate and freeze an AI-authored prompt-only executable challenge."""
     raw = review.get("verification_test")
     reasons: list[str] = []
     if not isinstance(raw, dict):
-        return None, ["semantic FAIL requires verification_test"]
+        return None, [f"{required_for} requires verification_test"]
     if raw.get("schema") != _CHALLENGE_SCHEMA:
         reasons.append(f"verification_test.schema must be {_CHALLENGE_SCHEMA!r}")
     expected_path = Path(str(task.get("challenge_path") or "")).resolve()
@@ -1205,6 +1241,17 @@ def _validate_ai_review(task: dict) -> dict:
         reasons.append("semantic_review.rationale must state the review basis")
     challenge = None
     challenge_result = None
+    program_verification = task.get("program_verification") or {}
+    functional_evidence = program_verification.get("functional_evidence")
+    confirmation_required = program_verification.get(
+        "functional_confirmation_required")
+    if not isinstance(confirmation_required, bool):
+        reasons.append(
+            "program_verification.functional_confirmation_required must be boolean")
+        confirmation_required = True
+    if confirmation_required != (functional_evidence != "PASS"):
+        reasons.append(
+            "functional confirmation requirement contradicts Program evidence")
     #: Reasons this host could not ADJUDICATE, kept apart from `reasons`, which
     #: are findings against the review or the candidate. The two must never be
     #: mixed: one says "this is wrong", the other says "we did not look".
@@ -1233,6 +1280,25 @@ def _validate_ai_review(task: dict) -> dict:
             elif challenge_result.get("status") != "FAIL":
                 reasons.append("AI finding is not proven: the reviewed candidate "
                                "must fail the prompt-derived verification test")
+    elif semantic_verdict == "PASS" and confirmation_required:
+        challenge, challenge_reasons = _challenge_from_review(
+            task, review, prompt_text,
+            required_for="semantic PASS without Program functional evidence")
+        reasons.extend(challenge_reasons)
+        if challenge is not None:
+            challenge_result = _run_verification_challenge(
+                task.get("candidate_snapshot") or {}, challenge)
+            if challenge_result.get("status") == _CHALLENGE_UNAVAILABLE:
+                unmeasurable.append(
+                    "the prompt-derived PASS confirmation could not be RUN on "
+                    "this host, so the candidate is not functionally measured: "
+                    + "; ".join(str(r) for r in
+                                challenge_result.get("reasons") or []))
+            elif challenge_result.get("status") != "PASS":
+                reasons.append(
+                    "AI semantic PASS is not confirmed: when PROGRAM functional "
+                    "evidence is not PASS, the frozen candidate must pass the "
+                    "prompt-derived verification test")
     inherited_challenge_results = []
     for inherited in task.get("verification_challenges") or []:
         inherited_reasons = []
@@ -1330,6 +1396,16 @@ def _attach_ai_review_attribution(result: dict, verdict: dict,
             "verdict": verdict.get("semantic_verdict"),
             "findings": verdict.get("semantic_findings"),
             "how": "blind prompt-versus-RTL review, hash-bound to rtl_sha256",
+            "program_functional_evidence": (
+                task.get("program_verification") or {}).get(
+                    "functional_evidence"),
+            "functional_confirmation_required": (
+                task.get("program_verification") or {}).get(
+                    "functional_confirmation_required"),
+            "functional_confirmation_result": (
+                verdict.get("challenge_result") or {}).get("status"),
+            "functional_confirmation_challenge_sha256": (
+                verdict.get("verified_challenge") or {}).get("sha256"),
         },
     })
     program_candidate = task.get("program_candidate_snapshot") or {}
@@ -2654,7 +2730,8 @@ def _cmd_solve_locked(bench: str, dataset: str, run: str, limit: int = 0,
             backup_task = None
             if got.get("ok"):
                 review_task = _make_ai_review_task(
-                    pid, proj, got, verdict, rc, run_p, "PROGRAM")
+                    pid, proj, got, verdict, rc, run_p, "PROGRAM",
+                    program_phases=phases)
                 result["review_task"] = review_task["review_path"]
                 p1 = (phases.get("phase1_routing") or {})
                 p1["needs_ai_parse_consumed_by"] = (
@@ -2958,7 +3035,7 @@ def _cmd_resume_locked(bench: str, dataset: str, run: str,
         if got.get("ok"):
             task = _make_ai_review_task(
                 pid, proj, got, result.get("routing_verdict") or {}, rc,
-                run_p, "PROGRAM")
+                run_p, "PROGRAM", program_phases=result.get("phases"))
             task_by_id[pid] = task
             result.update({
                 "review_task": task["review_path"],
@@ -3113,7 +3190,7 @@ def _cmd_resume_locked(bench: str, dataset: str, run: str,
         if got.get("ok"):
             task = _make_ai_review_task(
                 pid, proj, got, result.get("routing_verdict") or {}, rc,
-                run_p, "AI_BACKUP")
+                run_p, "AI_BACKUP", program_phases=result.get("phases"))
             task_by_id[pid] = task
             result["review_task"] = task["review_path"]
             result["candidate_origin"] = "AI_BACKUP"
@@ -3323,6 +3400,7 @@ def _cmd_resume_locked(bench: str, dataset: str, run: str,
             new_task = _make_ai_review_task(
                 pid, proj, got, result.get("routing_verdict") or {}, rc,
                 run_p, "AI_REPAIR",
+                program_phases=result.get("phases"),
                 verification_challenges=inherited,
                 program_candidate=(task.get("program_candidate_snapshot")
                                    or task.get("candidate_snapshot")),

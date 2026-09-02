@@ -103,7 +103,7 @@ def _task(tmp_path: Path) -> tuple[Path, dict, dict]:
 
 
 def _valid_review(task: dict) -> dict:
-    return {
+    review = {
         "schema": bd._AI_REVIEW_SCHEMA,
         "id": task["id"],
         "prompt_sha256": task["prompt_sha256"],
@@ -116,6 +116,10 @@ def _valid_review(task: dict) -> dict:
             "rationale": "Ports and combinational behavior match the prompt.",
         },
     }
+    if (task.get("program_verification") or {}).get(
+            "functional_confirmation_required") is True:
+        review["verification_test"] = _write_direct_assignment_challenge(task)
+    return review
 
 
 def _write_review(task: dict, review: dict) -> None:
@@ -244,6 +248,11 @@ def test_valid_blind_ai_review_is_hash_bound_and_accepted(tmp_path):
     assert route_review["verdict"] == "AGREE"
     assert item["phases"]["phase3_verifying"]["ai_semantic_review"][
         "verdict"] == "PASS"
+    ai_review = item["phases"]["phase3_verifying"]["ai_semantic_review"]
+    assert ai_review["program_functional_evidence"] == "NOT_RECORDED"
+    assert ai_review["functional_confirmation_required"] is True
+    assert ai_review["functional_confirmation_result"] == "PASS"
+    assert ai_review["functional_confirmation_challenge_sha256"]
     assert solve["four_phase_summary"]["phase1_ai_review_models"] == {
         "test-review-model": 1}
     assert solve["four_phase_summary"]["phase2_candidate_origin"] == {
@@ -256,6 +265,78 @@ def test_valid_blind_ai_review_is_hash_bound_and_accepted(tmp_path):
     Path(task["rtl_paths"][0]).write_text("module dut(); endmodule\n")
     with pytest.raises(SystemExit, match="Program First.*acceptance BLOCKED"):
         bd._require_program_first_ai_acceptance(run)
+
+
+def test_static_ai_pass_is_blocked_without_program_functional_evidence(tmp_path):
+    _, task, _ = _task(tmp_path)
+    review = _valid_review(task)
+    review.pop("verification_test", None)
+    _write_review(task, review)
+
+    verdict = bd._validate_ai_review(task)
+    assert verdict["status"] == "REJECTED"
+    assert any("semantic PASS without Program functional evidence" in reason
+               for reason in verdict["reasons"])
+
+
+def test_program_functional_pass_does_not_require_a_duplicate_ai_test(tmp_path):
+    run = tmp_path / "run"
+    (run / "responses").mkdir(parents=True)
+    project = _project(tmp_path)
+    got = bio.collect("rtllm", "p1", project)
+    task = bd._make_ai_review_task(
+        "p1", project, got, ROUTING, 0, run, "PROGRAM",
+        program_phases={"phase3_verifying": {"ran": {
+            "step4_functional_evidence": "PASS"}}})
+    review = _valid_review(task)
+    assert "verification_test" not in review
+    _write_review(task, review)
+
+    verdict = bd._validate_ai_review(task)
+    assert verdict["status"] == "ACCEPTED"
+    assert verdict["challenge_result"] is None
+
+
+@_NEEDS_SIMULATOR
+def test_prompt_derived_confirmation_can_close_missing_program_evidence(tmp_path):
+    _, task, _ = _task(tmp_path)
+    _write_review(task, _valid_review(task))
+
+    verdict = bd._validate_ai_review(task)
+    assert verdict["status"] == "ACCEPTED"
+    assert verdict["challenge_result"]["status"] == "PASS"
+    assert verdict["verified_challenge"]["prompt_evidence"]
+
+
+@_NEEDS_SIMULATOR
+def test_semantic_pass_is_rejected_when_its_confirmation_fails(tmp_path):
+    run = tmp_path / "run"
+    (run / "responses").mkdir(parents=True)
+    project = _project(tmp_path)
+    (project / "phase2" / "stage1" / "rtl" / "dut.v").write_text(
+        "module dut(input wire a, output wire y); assign y = ~a; endmodule\n")
+    got = bio.collect("rtllm", "p1", project)
+    task = bd._make_ai_review_task(
+        "p1", project, got, ROUTING, 0, run, "PROGRAM")
+    _write_review(task, _valid_review(task))
+
+    verdict = bd._validate_ai_review(task)
+    assert verdict["status"] == "REJECTED"
+    assert verdict["challenge_result"]["status"] == "FAIL"
+    assert any("AI semantic PASS is not confirmed" in reason
+               for reason in verdict["reasons"])
+
+
+def test_unrunnable_pass_confirmation_is_not_measured(tmp_path, monkeypatch):
+    _, task, _ = _task(tmp_path)
+    _write_review(task, _valid_review(task))
+    _no_simulator(monkeypatch)
+
+    verdict = bd._validate_ai_review(task)
+    assert verdict["status"] == bd._NOT_MEASURED
+    assert verdict["reasons"] == []
+    assert any("PASS confirmation could not be RUN" in reason
+               for reason in verdict["unmeasurable"])
 
 
 def test_supplied_rtl_accepts_only_explicit_step2_reentry(tmp_path):
@@ -654,6 +735,7 @@ def test_semantic_fail_without_executable_verification_is_rejected(tmp_path):
         "verdict": "FAIL", "findings": [{"issue": "AI disagrees"}],
         "rationale": "This output looks wrong.",
     }
+    review.pop("verification_test", None)
     _write_review(task, review)
     verdict = bd._validate_ai_review(task)
     assert verdict["status"] == "REJECTED"
