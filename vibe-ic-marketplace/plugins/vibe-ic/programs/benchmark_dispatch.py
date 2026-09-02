@@ -2119,6 +2119,7 @@ def _export_accepted_cvdp_responses(bench: str, dataset: Path,
     if _BENCH_FORMAT.get(bench) != "cvdp":
         raise SystemExit(f"{bench!r} is not bound to the CVDP I/O adapter")
     import benchmark_io_adapter as bio                    # noqa: PLC0415
+    import rtl_final_bundle_integrity as bundle_integrity  # noqa: PLC0415
 
     run_p = Path(run_p).resolve()
     dataset = Path(dataset).resolve()
@@ -2162,6 +2163,7 @@ def _export_accepted_cvdp_responses(bench: str, dataset: Path,
         if not response_paths:
             reasons.append("official scorer response-path contract is absent")
         completion = ""
+        bundle_gate = None
         if not reasons:
             try:
                 completion = bio.cvdp_package_response(
@@ -2171,6 +2173,27 @@ def _export_accepted_cvdp_responses(bench: str, dataset: Path,
                     response_paths)
             except (OSError, ValueError, TypeError) as exc:
                 reasons.append(str(exc))
+        if not reasons:
+            final_files = bio.cvdp_response_file_map(
+                completion, response_paths)
+            bundle_gate = bundle_integrity.check_final_bundle(
+                [Path(str(p)) for p in candidate.get("rtl_paths") or []],
+                final_files)
+            bundle_report_path = (run_p / "reports" /
+                                  "final_bundle_integrity" /
+                                  f"{_safe_problem_id(pid)}.json")
+            _atomic_write_json(bundle_report_path, bundle_gate)
+            if bundle_gate.get("status") != "PASS":
+                detail = "; ".join(
+                    str(value) for value in bundle_gate.get("reasons") or [])
+                if not detail:
+                    detail = str(
+                        (bundle_gate.get("compile") or {}).get("reason")
+                        or "no compile evidence")
+                reasons.append(
+                    "general final RTL bundle integrity is "
+                    f"{bundle_gate.get('status')}: "
+                    f"{detail}")
         if reasons:
             failures.append(f"{pid}: " + "; ".join(reasons))
             continue
@@ -2180,9 +2203,16 @@ def _export_accepted_cvdp_responses(bench: str, dataset: Path,
             "candidate_rtl_sha256": task.get("rtl_sha256"),
             "scorer_completion_sha256": _sha256_text(completion),
             "response_paths": response_paths,
+            "final_bundle_integrity": {
+                "status": bundle_gate.get("status"),
+                "report": str(bundle_report_path),
+                "report_sha256": _sha256_text(
+                    bundle_report_path.read_text(errors="replace")),
+            },
             "gates": ["vibe_ic_one_shot_runner",
                       "program_first_ai_review",
-                      "cvdp_thin_io_package"],
+                      "cvdp_thin_io_package",
+                      "rtl_final_bundle_integrity"],
         })
     if failures:
         raise SystemExit("accepted CVDP response export BLOCKED:\n  "
