@@ -732,6 +732,143 @@ VERILATOR_BIN_ENV = "VIBE_IC_VERILATOR_BIN"
 VERILATOR_BIN_DEFAULT = os.environ.get(VERILATOR_BIN_ENV, "verilator")
 
 
+# ── did this coverage build contain any functional stimulus at all? ────────
+#
+# THE DEFECT, MEASURED — sha256 x sky130A, plugin 1.15.94, frozen tree c3584d0aa:
+#
+#   reports/phase2/coverage/coverage_verilator.json
+#     "measurement_mode": "measure-tb"
+#     "testbench": "phase2/stage1/sim_full_stack/tb_sha256_full.v"
+#   -> [check] below threshold(s): line 16.48% < 70.0%;
+#                                  toggle 2.34% < 60.0%; branch 13.46% < 70.0%
+#
+# That testbench is an 87-line generated skeleton whose OWN header says "It is
+# CONNECTIVITY-ONLY (it closes no functional coverage on its own)".  It declares
+# `cs`, `we`, `address`, `write_data`, wires them to the DUT, initialises them
+# at declaration and NEVER assigns them again: the only signals it drives are
+# the clock and the reset.  16.48% is the coverage of releasing reset and
+# waiting — it is not a property of the RTL.  The same run held a cocotb
+# testbench that had just driven 1020 NIST vectors through the whole design.
+#
+# "I did not measure the design" and "I measured the design at 16.48%" are two
+# different facts, and reporting the second when the first is true sends the
+# reader to the RTL for a defect that is in the coverage build.  This audit
+# separates them.  It NEVER makes the verdict pass: a run with no functional
+# stimulus still blocks, because unmeasured is not verified.
+#
+# THE CRITERION IS THE TESTBENCH'S OWN BEHAVIOUR, not its name.  A population
+# defined by one spelling of a filename is blind to every other spelling, so
+# nothing here matches `*_full.v` or any other path shape.  What is counted is
+# a fact anyone can re-derive from the file: of the signals this testbench
+# binds to the DUT's ports and declares as drivable (`reg`), how many does it
+# ever assign outside their declaration, excluding the clock and the reset?
+# Zero means the design's inputs were never moved.  The header self-description
+# is reported as corroboration and decides nothing, precisely because a comment
+# can be deleted while the testbench stays inert.
+#: Clock/reset name grammar — these two are infrastructure, not stimulus.
+_COV_CLK_RST_RE = re.compile(
+    r"(?i)(?:^|_)(?:clk|clock|rst|reset|resetn|rstn|nrst|por|sclk|hclk|aclk)"
+    r"(?:_|\d|n)*$")
+#: `<name> = ...` (blocking, never `==`/`<=`/`>=`/`!=`) or `<name> <= ...`.
+_COV_DRIVE_RE_TMPL = r"\b{name}\s*(?:<=(?!=)|(?<![<>=!])=(?!=))"
+#: A module instantiation's named port connections: `.port(signal)`.
+_COV_PORT_BIND_RE = re.compile(r"\.\s*(\w+)\s*\(\s*([\w\[\]:\s]*?)\s*\)")
+#: `reg [31:0] name = 0;` / `reg name;` — the declaration, which is not a drive.
+_COV_REG_DECL_RE = re.compile(
+    r"(?m)^\s*reg\b[^;\n]*?\b(\w+)\s*(?:=[^;\n]*)?\s*[;,]")
+
+
+def _cov_strip_comments(text: str) -> str:
+    text = re.sub(r"/\*.*?\*/", " ", text, flags=re.S)
+    return re.sub(r"//[^\n]*", " ", text)
+
+
+def functional_stimulus_audit(tb_path: Path) -> Dict[str, Any]:
+    """Does this testbench ever move a DUT input other than clock and reset?
+
+    Returns a record with `decidable`, `driven` (the functional inputs it does
+    drive), `inert` (bound + drivable + never assigned) and
+    `self_declared_connectivity_only`.  When the testbench cannot be read or
+    carries no recognisable instantiation the audit is NOT decidable and the
+    caller must fall through to its normal behaviour — an audit that cannot see
+    must never be the reason a run is judged.
+    """
+    out: Dict[str, Any] = {
+        "testbench": str(tb_path), "decidable": False, "reason": "",
+        "driven": [], "inert": [], "clock_reset": [],
+        "self_declared_connectivity_only": False,
+    }
+    try:
+        raw = tb_path.read_text(errors="replace")
+    except OSError as exc:
+        out["reason"] = f"testbench unreadable: {exc}"
+        return out
+    out["self_declared_connectivity_only"] = bool(
+        re.search(r"(?i)connectivity[\s-]*only", raw))
+    body = _cov_strip_comments(raw)
+    bound = {sig.strip() for _port, sig in _COV_PORT_BIND_RE.findall(body)
+             if sig.strip() and sig.strip().isidentifier()}
+    if not bound:
+        out["reason"] = ("no named port connections found, so which signals "
+                         "reach the design cannot be determined")
+        return out
+    declared_reg = set(_COV_REG_DECL_RE.findall(body))
+    drivable = sorted(bound & declared_reg)
+    if not drivable:
+        out["reason"] = ("no bound signal is declared `reg`, so the drivable "
+                         "set cannot be determined")
+        return out
+    # Remove the declarations themselves: initialising at declaration is not
+    # stimulus, it is the starting value.
+    stripped = _COV_REG_DECL_RE.sub(" ", body)
+    for name in drivable:
+        drives = re.search(_COV_DRIVE_RE_TMPL.format(name=re.escape(name)),
+                           stripped)
+        if _COV_CLK_RST_RE.search(name):
+            out["clock_reset"].append(name)
+        elif drives:
+            out["driven"].append(name)
+        else:
+            out["inert"].append(name)
+    out["decidable"] = True
+    return out
+
+
+def _cov_unused_stronger_stimulus(project: Path) -> Optional[str]:
+    """Name a functional testbench this run HAS and this build did not use.
+
+    Reported so the verdict points at the run's own evidence instead of leaving
+    the reader to find it.  Returns None when there is nothing to name — the
+    verdict then simply says no functional stimulus was present.
+    """
+    try:
+        for res in sorted(
+                project.glob("phase2/stage1/sim_professional/*/results.xml")):
+            try:
+                import _sim_results_bridge as _srb            # noqa: PLC0415
+                summ = _srb.parse_junit(res)
+            except Exception:                                  # noqa: BLE001
+                summ = None
+            if not summ or summ.get("tests", 0) <= 0:
+                continue
+            return (f"{res.parent.relative_to(project).as_posix()} "
+                    f"(tests={summ['tests']} failures={summ['failures']} "
+                    f"errors={summ['errors']})")
+    except (OSError, ValueError):
+        return None
+    return None
+
+
+def _cov_project_root(data: Dict[str, Any]) -> Optional[Path]:
+    """The project this measurement belongs to, from its own recorded paths."""
+    for key in ("rtl_sources", "scope_files"):
+        for entry in (data.get(key) or []):
+            parts = Path(str(entry)).parts
+            if "phase2" in parts:
+                return Path(*parts[:parts.index("phase2")])
+    return None
+
+
 def _report_no_measurement(args: argparse.Namespace, kind: str,
                            detail: str) -> int:
     """No coverage measurement exists at the declared path.
@@ -779,6 +916,46 @@ def cmd_check(args: argparse.Namespace) -> int:
         return 1
     if kind in _NO_MEASUREMENT_KINDS:
         return _report_no_measurement(args, kind, detail)
+    # ── WHAT WAS THE PERCENTAGE MEASURED ON? ─────────────────────────────
+    # A number produced by a testbench that never moved a design input is not
+    # a coverage measurement of the design.  Reporting it against a functional
+    # threshold reads as an RTL quality defect and sends the reader to the
+    # wrong file.  This still BLOCKS — unmeasured is not verified — it just
+    # stops blocking for the wrong reason.  Undecidable audits fall through.
+    _tb = data.get("testbench")
+    if _tb:
+        _audit = functional_stimulus_audit(Path(str(_tb)))
+        if _audit["decidable"] and not _audit["driven"]:
+            _proj = _cov_project_root(data)
+            _unused = _cov_unused_stronger_stimulus(_proj) if _proj else None
+            print("[check] NO FUNCTIONAL STIMULUS IN THE COVERAGE BUILD — "
+                  "this run measured no coverage of the design.",
+                  file=sys.stderr)
+            print(f"[check] the instrumented testbench was {_tb}, and of the "
+                  f"signal(s) it binds to the design and declares drivable it "
+                  f"assigns only {_audit['clock_reset'] or ['(none)']} — the "
+                  f"clock and reset.  It never drives "
+                  f"{_audit['inert'] or ['(none)']}, so the design's inputs "
+                  f"were never moved.", file=sys.stderr)
+            if _audit["self_declared_connectivity_only"]:
+                print("[check] the testbench says so itself: its header "
+                      "declares it connectivity-only.", file=sys.stderr)
+            if _unused:
+                print(f"[check] this run HAS a functional testbench that was "
+                      f"not instrumented: {_unused}. Point the coverage build "
+                      f"at a stimulus that exercises the design.",
+                      file=sys.stderr)
+            else:
+                print("[check] no functional testbench was found in this run "
+                      "to instrument instead.", file=sys.stderr)
+            print(f"[check] the recorded percentages "
+                  f"(line {data['totals']['line']['pct']}%, "
+                  f"toggle {data['totals']['toggle']['pct']}%, "
+                  f"branch {data['totals']['branch']['pct']}%) describe that "
+                  f"testbench, NOT the RTL, and are NOT graded here.",
+                  file=sys.stderr)
+            return 1
+
     totals = data["totals"]
     line_pct = totals["line"]["pct"]
     toggle_pct = totals["toggle"]["pct"]
