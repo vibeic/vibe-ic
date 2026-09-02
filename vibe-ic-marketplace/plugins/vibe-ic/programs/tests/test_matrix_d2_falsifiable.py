@@ -196,7 +196,7 @@ RUN
 ``PYTEST_DISABLE_PLUGIN_AUTOLOAD=1`` is mandatory in this tree (a stray
 ``pytest_ethereum`` plugin otherwise breaks collection).
 
-LIVE, not remembered: 183<!--figure:blocking_clauses--> blocking clauses over
+LIVE, not remembered: 184<!--figure:blocking_clauses--> blocking clauses over
 67<!--figure:gated_steps--> gated steps. This is the denominator a reader
 wants, and it moves with the yaml: the digits are written by
 ``tools/gen_flow_matrix_census.py`` and the ``<!--figure:...-->`` anchors name
@@ -565,6 +565,41 @@ def _f_analog_p3_macro_rtl(p: Path) -> None:
        "module bandgap (out);\n  output out;\nendmodule\n"
        "module chip_top (vref);\n  output vref;\n"
        "  bandgap u_bg (.out(vref));\nendmodule\n")
+
+
+def _f_analog_p3_topology_behaviour(p: Path) -> None:
+    """ANALOG_P3 plus the one thing `analog_topology_behaviour_check` refuses:
+    a block whose own topology entry records a behavioural claim as NOT shown.
+
+    ANALOG_P3 cannot redden it, and that is the point of a separate fixture
+    rather than a widened one. That tree stages a `topology.md` and no
+    `topology.json` at all, so the gate reads no IR, reports
+    `SKIP - no topology.json for this block` for both blocks and PASSes. Even
+    with a `topology.json` present it PASSes: a topology carrying no
+    `behaviour_record` is SKIPPED BY NAME and is the state every shipped A2
+    library entry but one is in. Neither absence nor presence reddens it — the
+    gate FAILs on a CLAIM, recorded by the entry's own author as undemonstrated,
+    which is what makes it a rule about evidence and not a file-existence test.
+
+    So the fixture states the claim and then withholds it, in the entry's own
+    words, which is the shape the gate prints VERBATIM. `bandgap` is the block
+    ANALOG_P3 already stages artefacts for; `ldo` is left with no topology at
+    all so the SKIP arm is exercised in the same run and a fixture that
+    reddened everything could not be mistaken for one that discriminates."""
+    _analog_partial(p, "phase3/analog")
+    _w(p, "phase3/analog/bandgap/topology.json",
+       {"topology": "brokaw_bandgap",
+        "ports": ["vdd", "vss", "out"],
+        "behaviour_record": {
+            "verified": False,
+            "claim": "the reference holds 1.2 V across the declared "
+                     "temperature range",
+            "how": "a swept DC operating point at three temperatures",
+            "arms": ["-40 C", "27 C", "125 C"],
+            "diagnosis": "the sweep was never run; the entry was rendered and "
+                         "simulated at one temperature only",
+            "next": "run the three-temperature sweep and record its result "
+                    "here"}})
 
 
 def _f_a0_skipped(p: Path) -> None:
@@ -2112,6 +2147,7 @@ FIXTURES: Dict[str, Callable[[Path], None]] = {
     "RTL_BAD": _f_rtl_bad,
     "ANALOG_P3": _f_analog_p3,
     "ANALOG_P3_MACRO_RTL": _f_analog_p3_macro_rtl,
+    "ANALOG_P3_TOPOLOGY_BEHAVIOUR": _f_analog_p3_topology_behaviour,
     "A0_SKIPPED": _f_a0_skipped,
     "LDOC_TODO": _f_ldoc_todo,
     "SIGNOFF_UNVERIFIABLE": _f_signoff_unverifiable,
@@ -2474,6 +2510,9 @@ CLAUSE_FIXTURE: Dict[Tuple[str, str], str] = {
     ("A8", "analog_macro_rtl_interface_check . --json "
            "reports/phase2/gates/a8_macro_rtl_interface.json"):
         "ANALOG_P3_MACRO_RTL",
+    ("A8", "analog_topology_behaviour_check . --json "
+           "reports/phase2/gates/a8_topology_behaviour.json"):
+        "ANALOG_P3_TOPOLOGY_BEHAVIOUR",
     ("A9", "mixed_signal_cosim_check . --json reports/phase2/gates/cosim.json"):
         "ANALOG_P3",
     ("A9", "analog_a9_hw_verify_check . --json "

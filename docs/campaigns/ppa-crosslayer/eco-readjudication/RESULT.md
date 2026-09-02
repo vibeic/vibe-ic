@@ -215,8 +215,15 @@ gone.) **No published record is edited.** The published `candidates.json` carrie
 no ECO metric because no producer existed; the ECO records are emitted from each
 arm's own published `spare_cells.json` and appended to a **copy**.
 
+(The command below is written from the REPOSITORY ROOT. It used to read
+`ppa-crosslayer/eco-readjudication/readjudicate.py`, which was true while this
+campaign tree sat at the repository root; vibe-ic#2019 moved the four `ppa-*`
+trees under `docs/campaigns/`, and the path is repointed here rather than left
+citing a location nothing resolves. The script, its inputs and its output are
+unchanged, and no number below was re-run or re-typed.)
+
 ```
-$ python3 ppa-crosslayer/eco-readjudication/readjudicate.py
+$ python3 docs/campaigns/ppa-crosslayer/eco-readjudication/readjudicate.py
 trial  spares  eco(declared)  verdict       eco(no decl,    eco(no decl,
                                             no route)       CHIP route)
 b000       10  SATISFIED      UNDETERMINED  NOT_APPLICABLE  UNDETERMINED

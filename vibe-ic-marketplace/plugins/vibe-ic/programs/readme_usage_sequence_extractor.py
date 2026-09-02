@@ -35,7 +35,16 @@ false positives via:
 from __future__ import annotations
 
 import re
+import sys
+from pathlib import Path
 from typing import List, Optional
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+# THE ONE NEGATION VOCABULARY (vibe-ic#712). See `_denied_latency` below for
+# which of this module's typed keys are governed by it and, just as
+# deliberately, which are not.
+from _prose_polarity import (  # type: ignore  # noqa: E402
+    is_denied as _is_denied, sentence_scope as _sentence_scope)
 
 # Markdown numbered-list line.
 _NUMBERED_LINE_RE = re.compile(
@@ -96,6 +105,41 @@ _REPEAT_RE = re.compile(
     re.I)
 
 
+#: WHY ONLY THE LATENCY KEYS (vibe-ic#712, and this function is the answer to
+#: `prose_polarity_consulted_check`). This module derives seven kinds of typed
+#: detail from a README step, and they are not the same kind of claim:
+#:
+#:   * `value`, `expected_response`, `wait_for`, `expected_signal`, `check`,
+#:     `condition`, `variant` are SPANS COPIED VERBATIM out of the step. A
+#:     denial inside one of them travels with the text — "Verify ready is not
+#:     asserted" becomes `check: "ready is not asserted"`, which is the step's
+#:     own sentence and still says what it said. Consulting polarity there
+#:     would DELETE a legitimately negative instruction, which is a worse
+#:     reader than the one that copies it.
+#:
+#:   * `latency_cycles` and `latency_<unit>` are INTERPRETED: a number is
+#:     lifted out of the sentence, its words are discarded, and what is
+#:     published is a typed figure a consumer reads as a declaration. That is
+#:     exactly #711's shape — a document saying the old value "has NO meaning
+#:     here and is REMOVED" re-declared that exact number as a mandate — and
+#:     it is reachable here because these two are the only UNANCHORED searches
+#:     in this module: `_CYCLES_RE`/`_TIME_RE` run over the step text PLUS its
+#:     trailing comment, which is where a human writes "not ~10 cycles, it is
+#:     level-sensitive". Every other shape is anchored at `^<verb>`, so a step
+#:     that opens with a denial ("Do not write ctrl = 1") matches nothing and
+#:     publishes nothing.
+#:
+#: The window is `sentence_scope`, both directions, so a denial in the
+#: NEIGHBOURING sentence of a two-sentence comment does not retract this one.
+#:
+#: THE CONSULT IS INLINE IN `type_step_action`, not in a module-level helper it
+#: calls. `prose_polarity_consulted_check._consults_polarity` walks the
+#: extractor's own AST for a name from the vocabulary, so a helper one call away
+#: leaves the extractor reading as polarity-blind — correctly: the register is a
+#: list of FUNCTIONS that read prose, and "some other function checks" is the
+#: shape the gate exists to refuse.
+
+
 def type_step_action(action: str) -> dict:
     """Derive the typed, checkable detail a README step carries.
 
@@ -121,11 +165,18 @@ def type_step_action(action: str) -> dict:
         out["optional"] = True
         text = text[_OPTIONAL_RE.match(text).end():].strip()
     probe = f"{text} {note}".strip()
+    def _denied(match) -> "Optional[str]":
+        """The denial word governing this lifted number, or None. See the note
+        above `type_step_action` for why the latency keys are consulted and the
+        copied-span keys are deliberately not."""
+        lo, hi = _sentence_scope(probe, match.start(), match.end())
+        return _is_denied(probe[lo:hi])
+
     mc = _CYCLES_RE.search(probe)
-    if mc:
+    if mc and not _denied(mc):
         out["latency_cycles"] = int(mc.group(1))
     mt = _TIME_RE.search(probe)
-    if mt:
+    if mt and not _denied(mt):
         unit = mt.group(2).lower().replace("µs", "us")
         try:
             out[f"latency_{unit}"] = float(mt.group(1))

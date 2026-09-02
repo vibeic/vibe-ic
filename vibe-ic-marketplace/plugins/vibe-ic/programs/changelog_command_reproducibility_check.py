@@ -108,7 +108,8 @@ def _audit_files(plugin_root: Path) -> List[Path]:
     return out
 
 
-def _check_command(cmd: str, plugin_root: Path
+def _check_command(cmd: str, plugin_root: Path,
+                   doc_dir: Optional[Path] = None
                    ) -> Optional[Tuple[str, str]]:
     """Return (rule, detail) if `cmd` is broken, else None.
 
@@ -141,9 +142,35 @@ def _check_command(cmd: str, plugin_root: Path
 
     #: Directories a documented command is plausibly run FROM. Order is
     #: irrelevant: this is existence, not precedence.
-    _CWDS = (plugin_root, repo_root,
-             plugin_root / "programs", plugin_root / "benchmark",
-             repo_root / "tools", repo_root / "tools" / "ci")
+    #:
+    #: THE DOCUMENT'S OWN DIRECTORY IS ONE OF THEM (vibe-ic#2019). It is the
+    #: same repair, for the same reason, as the three roots the paragraph above
+    #: records — and the case that forced it was MEASURED, not imagined. The
+    #: four PPA campaign trees moved to `docs/campaigns/` in v1.15.79, which
+    #: put every campaign RESULT.md into `_audit_files`'s `docs/**/*.md` sweep
+    #: for the first time, and one of them quotes
+    #:
+    #:     $ python3 tools/drv_records.py --selftest
+    #:
+    #: which is an honest transcript of a command run from inside that campaign
+    #: directory, where `tools/drv_records.py` is exactly where it says. Under
+    #: the six fixed roots it read MISSING_SCRIPT — a demand that the author
+    #: rewrite a line he did not type, which is the behaviour this resolver was
+    #: already corrected once for.
+    #:
+    #: IT DOES NOT WIDEN THE GATE INTO A PASS. The file must still EXIST; a
+    #: target present at no root at all is still MISSING_SCRIPT, and the
+    #: SECOND finding the same move produced —
+    #: `python3 ppa-crosslayer/eco-readjudication/readjudicate.py`, a
+    #: repo-root-relative path that was true before the move and is true from
+    #: nowhere after it — is NOT resolved by this entry and still fails. That
+    #: pair is the negative control: one citation the resolver was wrong about,
+    #: one the document was wrong about, and this change separates them.
+    _CWDS = tuple(d for d in (
+        plugin_root, repo_root,
+        plugin_root / "programs", plugin_root / "benchmark",
+        repo_root / "tools", repo_root / "tools" / "ci",
+        doc_dir) if d is not None)
 
     def _exists_at_either(target: str) -> bool:
         if target.startswith("./"):
@@ -218,7 +245,7 @@ def audit(plugin_root: Path) -> Tuple[str, List[CommandFinding]]:
             if not m:
                 continue
             cmd = m.group("cmd")
-            check = _check_command(cmd, plugin_root)
+            check = _check_command(cmd, plugin_root, f.parent)
             if check is None:
                 continue
             rule, detail = check

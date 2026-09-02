@@ -3867,6 +3867,46 @@ steps:
         # required_output) plus phase3/analog/<block>/topology.json and the
         # RTL/netlist under phase2/, and writes only its own report.
         - program_exit_zero: "analog_macro_rtl_interface_check . --json reports/phase2/gates/a8_macro_rtl_interface.json"
+        # `analog_topology_behaviour_check` — DOES THE CIRCUIT DO WHAT ITS OWN
+        # TOPOLOGY SAYS IT IS FOR? Every clause above answers a different
+        # question and all of them pass on a block that converts nothing:
+        # `analog_hardmacro_check` certifies the LEF/LIB/V triple,
+        # `analog_lef_gds_outline_check` the numeric outline,
+        # `analog_macro_rtl_interface_check` the digital pin agreement. None
+        # asks whether the block works. MEASURED (u_hawaii_adc, ihp-sg13g2,
+        # 2026-09-02) on the `delta_sigma` library entry: a complete CIFB
+        # modulator that renders, passes every static netlist check, converges
+        # in ngspice and drives `bit_out` rail to rail at a bitstream density
+        # of 0.51 — which moved by 0.0012 across a 0.40/0.60/0.80 V input
+        # sweep whose ideal densities are 0.30/0.50/0.70. It does not convert,
+        # and A5 through A9 would each have signed it off correctly.
+        #
+        # WIRED HERE BECAUSE IT WAS WIRED NOWHERE. It shipped (21247ff50) run
+        # by `analog_one_shot_runner` INLINE at A8 and by nothing else, so
+        # `flow_gate_enforcement_audit` reported it
+        # `orphan::analog_topology_behaviour_check` — "declares an intent it is
+        # not wired for" — against its own `ENFORCEMENT: blocking` docstring.
+        # That audit reads the flow definition, `tools/ci/*.sh`,
+        # `gatekeeper_review.py`, the transitive closure the flow SEEDS, and
+        # `skills/**/*.md`; a one-shot runner is in none of them. This is the
+        # SAME repair `analog_macro_rtl_interface_check` above already got for
+        # the same reason (vibe-ic#2010 items 1-2): declared as a clause of the
+        # step that produces what it reads, AND run inline by the runner, so
+        # its verdict can stop the step as well as fail the audit.
+        #
+        # AT A8 AND NOT AT A3, for the reason `analog_one_shot_runner` states
+        # at its inline call site: asked at A3 it refuses to EMIT the netlist
+        # and the flow loses the layout, the extraction and the macro along
+        # with the green. Refusing to SIGN OFF is not refusing to BUILD.
+        #
+        # NOT NEWLY RED ANYWHERE. A block whose `topology.json` states no
+        # `behaviour_record` is SKIPPED by name — every shipped library entry
+        # but one is in that state — and a project with no analog block list
+        # exits 2 `VACUOUS_PASS: ... (reason: no_analog_block_declared)`, which
+        # the auditor promotes to VACUOUS_PASS exactly as it does for the
+        # clause above. It reads `phase3/analog/<block>/topology.json` and
+        # writes only its own report.
+        - program_exit_zero: "analog_topology_behaviour_check . --json reports/phase2/gates/a8_topology_behaviour.json"
     blocks_on: [A7]
 
   - id: A9
