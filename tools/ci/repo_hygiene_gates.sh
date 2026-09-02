@@ -1634,6 +1634,43 @@ run "published-evidence index honest"   "$ROOT" python3 "$PG/benchmark_evidence_
 # never missing, only unwired. One `git ls-files` + one walk; measured
 # discriminating: injecting a throwaway program makes it rc 1, removing it rc 0.
 run "programs index fresh"              "$ROOT" python3 "$ROOT/tools/gen_programs_index.py" --check
+# THE THIRD DERIVED INVENTORY, and until now it had NO landing check at all —
+# the same sentence the `skill inventory fresh` row below is here for.
+# `PROGRAM_INVENTORY.json` is the artefact its own docstring calls "the single
+# source of truth for every stated count of programs/", it is committed, it is
+# generated, and nothing in this file re-derived it.
+#
+# THE MEASURED DRIFT IT WOULD HAVE NAMED. 5555901e0 added
+# `programs/rtl_final_bundle_integrity.py` and regenerated THIS artefact while
+# leaving `INDEX.md` behind. The row above fired — correctly — and said only
+# "INDEX.md is stale"; this program says which two artefacts disagree and by
+# how much ("INDEX.md states 1254 catalogued programs, this inventory measures
+# 1255 ... regenerate BOTH"). Two derived files over one population, two
+# separate generators, and a landing that runs one of them is how the pair
+# comes apart.
+#
+# `--check-artifact` AND NOT `--check`, deliberately, and this is a narrowing
+# of SUBJECT rather than of strictness. Full `--check` additionally binds ~24
+# prose claim sites in two READMEs by exact wording plus six literal
+# "not-a-population" sentences; a fixture proving THAT predicate would have to
+# carry a copy of `_CLAIMS`, and would then redden whenever an unrelated
+# rewording moved a claim — a fixture that must be edited to keep an unrelated
+# change green is one people delete. The artefact half is the part that is a
+# committed derived FILE, it is the part nothing else in this file checks, and
+# its INDEX.md cross-check half is already covered one line above.
+#
+# THE SUBJECT'S OWN COPY, like the row above, and not "$PG": this program
+# resolves `PROGRAMS = Path(__file__).resolve().parent`, so a `$PG` spelling
+# would measure the RUNTIME tree while claiming to judge `$ROOT` — the
+# answering-about-the-wrong-tree shape. Spelled through `$ROOT` it measures the
+# subject, and `tools/ci/gate_fixtures/program_inventory_fresh.py` drives both
+# directions by supplying the shipped program in the subject, copied at run
+# time and never stubbed.
+#
+# MEASURED before wiring, on a synthetic three-program tree: artefact
+# regenerated -> rc 0; one more program on disk with the artefact not re-run ->
+# rc 1, "programs_top_level is stale — committed 4, tree 5".
+run "program inventory fresh"           "$ROOT" python3 "$ROOT/vibe-ic-marketplace/plugins/vibe-ic/programs/gen_program_inventory.py" --check-artifact
 # THE OTHER DERIVED INVENTORY, and it had no landing check at all.
 # `SKILL_INVENTORY.json` is the AUTHORITATIVE skill count — its own `_comment`
 # says the website must read `total` from it — and it is generated from the
