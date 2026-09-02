@@ -254,12 +254,35 @@ cat > "$T/killed.sh" <<'EOF'
 set -euo pipefail
 . "${HERE:?}/_gate_dispatch.sh"
 gate_dispatch_init "$@"
+# The dispatcher exports its own pid so the victim gate finds the WORKER by
+# ROLE (the ancestor whose parent is the dispatcher) not by a fixed tree
+# DEPTH. bash 5.2 execs a ( cd ... ) subshell's last command in place, so the
+# worker is the gate body's DIRECT parent -- one level shallower than bash
+# 5.1, where the old "parent of $PPID" walk assumed an intervening subshell.
+# In the pinned image (bash 5.2) that fixed walk killed the DISPATCHER (two
+# levels up) and took every successor gate with it.
+export GD_DISPATCHER_PID=$$
 run "healthy-before" "$PWD" bash -c 'echo ok'
 run "victim" "$PWD" bash -c '
   echo "victim starting"
-  # $PPID is the ( cd … ) subshell; its parent is the WORKER.
-  kill -9 "$(awk "{print \$4}" /proc/$PPID/stat)"
-  sleep 30'
+  # Kill THE WORKER -- the shell that would write this gate result file -- so
+  # its ABSENCE is what the dispatcher must classify. Walk up to the ancestor
+  # whose own parent is the dispatcher; that is the worker on every bash,
+  # whether the ( cd ... ) subshell was forked (5.1) or exec-elided (5.2).
+  pid=$$; worker=$$
+  while :; do
+    ppid=$(awk "{print \$4}" "/proc/$pid/stat" 2>/dev/null) || break
+    [ "$ppid" = "${GD_DISPATCHER_PID}" ] && { worker=$pid; break; }
+    [ "$ppid" -gt 1 ] 2>/dev/null || break
+    pid=$ppid
+  done
+  kill -9 "$worker"
+  # Hold this gate body open ONLY until the worker is actually gone, so the
+  # worker cannot race us to write a PASS result file, then exit. A fixed
+  # `sleep 30` here left the body orphaned for 30 s once its worker died, and
+  # the landing harness census (pytest_per_file_junit.py) reads any live
+  # descendant at session end as NORECORD -- an UNKNOWN file, not a clean one.
+  while kill -0 "$worker" 2>/dev/null; do sleep 0.05; done'
 run "healthy-after" "$PWD" bash -c 'sleep 1; echo ok'
 gate_dispatch_finish
 EOF

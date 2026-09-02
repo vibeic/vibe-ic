@@ -75,9 +75,28 @@ def run(project: Path, *extra):
     out = project / "gen.json"
     cp = subprocess.run(
         [sys.executable, str(PROG), str(project), "--json", str(out), *extra],
-        capture_output=True, text=True)
+        capture_output=True, text=True, cwd=str(project))
     rec = json.loads(out.read_text()) if out.exists() else None
     return cp, rec
+
+
+@pytest.fixture(autouse=True)
+def _cwd_under_tmp(tmp_path, monkeypatch):
+    """Pin every test's process cwd to a per-test tmp dir.
+
+    Several tests here invoke `magic` (present in the pinned image). Magic's
+    `lef write`/probe drops `<top>.lef` in the PROCESS cwd, and with pytest's
+    cwd left at the plugin root that intermittently wrote `macro_a.lef` INTO
+    the tree — a tracked-tree write `suite_write_guard` (and `git add -A`)
+    would ship, MEASURED as
+    `test_an_existing_kit_file_is_never_overwritten` on the shared session.
+    Every path these tests pass is absolute (PROG, tmp_path projects), so the
+    cwd is otherwise immaterial to them; anchoring it under tmp_path sends any
+    relative tool artefact to the tree tmp_path already cleans up.
+    """
+    here = tmp_path / "_cwd"
+    here.mkdir(exist_ok=True)
+    monkeypatch.chdir(here)
 
 
 # ───────────────────── the numbered refusals ───────────────────────────────

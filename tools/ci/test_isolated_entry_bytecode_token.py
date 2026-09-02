@@ -141,9 +141,20 @@ def test_an_isolated_child_with_B_writes_nothing(tmp_path):
 #: reported `python3 -I -B <path>` as an offender the first time this was
 #: written.
 _SH_CALL = re.compile(r"python3 -I(?![A-Za-z])")
-#: The argv-list form, `[..., "-I", <next>]`. The comma and the spacing live
-#: INSIDE the lookahead for the same backtracking reason.
-_PY_CALL = re.compile(r"""["']-I["'](?!\s*,\s*["']-B["'])""")
+#: The argv-list form, `[<python interpreter>, "-I", <next>]`. `-I` is python's
+#: ISOLATED-MODE flag only when it is the interpreter's OWN first argument, so
+#: the match REQUIRES a python-interpreter token immediately before it —
+#: `sys.executable`, a bare `python`/`python3` identifier, or a quoted
+#: `python`/`python3` (path-qualified or not). Without that anchor the bare
+#: `"-I"` also matched a NON-python tool's include-directory flag — measured on
+#: `rtl_final_bundle_integrity.py:160`, which builds an `iverilog` argv and
+#: appends `["-I", str(include_dir)]` (iverilog's `-I` is an include DIR, has
+#: nothing to do with bytecode, and legitimately carries no `-B`). The comma
+#: and the spacing live INSIDE the lookahead for the same backtracking reason
+#: as the shell form above.
+_PY_INTERP = r"""(?:sys\.executable|\bpython3?\b|["'][^"']*python3?["'])"""
+_PY_CALL = re.compile(
+    _PY_INTERP + r"""\s*,\s*["']-I["'](?!\s*,\s*["']-B["'])""")
 
 
 def _isolated_call_lacks_B(line: str, start: int) -> bool:
@@ -200,6 +211,53 @@ def test_no_shell_caller_spawns_an_isolated_child_without_B():
         "these children write bytecode into the tree the landing gates attest "
         "no matter what the environment says. Pass `-B` on the command line:\n"
         + "\n".join(offenders))
+
+
+# ── the argv matcher recognises a PYTHON isolated spawn, and only that ───────
+#
+# The scan below reports every match of `_PY_CALL` as an offender, so the
+# matcher's precision IS the test's precision. These four rows pin both
+# directions of it: the bare `"-I"` matcher this replaced flagged iverilog's
+# include-directory flag as a bytecode hazard (rtl_final_bundle_integrity.py:160),
+# a false positive that turned the whole gate red on a legitimate program. The
+# NEGATIVE row is what goes red against that pre-fix matcher and green after; the
+# POSITIVE rows are the control that the narrowing did not blind the gate.
+
+def test_the_argv_matcher_flags_a_python_isolated_spawn_without_B():
+    """POSITIVE control — a real `[python, "-I", ...]` with no `-B` must match,
+    whether the interpreter is `sys.executable`, a bare `python`/`python3`
+    identifier, or a quoted (path-qualified) literal. The matcher anchors on an
+    interpreter-NAMING token, exactly as the shell form `_SH_CALL` anchors on the
+    literal `python3`; a spawn through a generically-named variable is outside
+    both matchers' reach and is not asserted here. Narrowing the matcher to a
+    python interpreter must not blind it to the shapes it does name."""
+    for line in (
+            'subprocess.run([sys.executable, "-I", "-c", probe])',
+            'subprocess.run([python, "-I", str(entry)])',
+            'subprocess.run(["python3", "-I", entry])',
+            'subprocess.run(["/usr/bin/python3", "-I", entry])'):
+        assert _PY_CALL.search(line), line
+
+
+def test_the_argv_matcher_still_excludes_a_call_that_carries_B():
+    """The lookahead half: `[python, "-I", "-B", ...]` is the fixed shape and
+    must stay unflagged. Both real python spawns in the tree are this shape."""
+    for line in (
+            'probe = _run([python, "-I", "-B", "-c", body])',
+            'subprocess.run([sys.executable, "-I", "-B", str(entry)])'):
+        assert not _PY_CALL.search(line), line
+
+
+def test_the_argv_matcher_does_not_flag_a_non_python_include_flag():
+    """NEGATIVE control, and the false positive this fix removes: a NON-python
+    tool's `-I` include-directory flag has no interpreter before it and is not a
+    bytecode hazard. This is the exact line the pre-fix bare-`"-I"` matcher
+    turned red on — `iverilog` in rtl_final_bundle_integrity.py appends it — and
+    it must NOT match. RED against the pre-fix matcher, GREEN after."""
+    for line in (
+            'command.extend(["-I", str(include_dir)])',
+            'iverilog_cmd = [compiler, "-g2012", "-tnull", "-I", inc]'):
+        assert not _PY_CALL.search(line), line
 
 
 def test_no_python_caller_spawns_an_isolated_child_without_B():
