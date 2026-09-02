@@ -226,11 +226,18 @@ def main() -> int:
     # In-tree self-references: absolute paths that resolve INSIDE the project
     # being audited (counted only, never a finding — see _inside_project).
     in_tree_self = 0
+    # THE SCAN SIZE, kept because the exit code alone cannot carry it
+    # (#511/#564). `no /tmp ... paths referenced` is a statement about the
+    # FINDING and is exactly as true of a project with nothing in it as of a
+    # clean one; over an empty tree this gate answered rc 0 and said nothing
+    # about having opened zero files.
+    scanned = 0
     seen: Set[str] = set()
     for pat in _SCAN_GLOBS:
         for f in project.glob(pat):
             if not f.is_file():
                 continue
+            scanned += 1
             try:
                 txt = f.read_text(encoding="utf-8", errors="ignore")
             except Exception:
@@ -317,11 +324,17 @@ def main() -> int:
             print(f"  ... +{len(ephemeral)-5} more")
 
     if not nonlog:
-        print("[PASS] project_outputs_in_tree_check: "
-              "no /tmp / /var/tmp / /dev/shm / /run paths referenced "
-              "in RESULT.md / waivers.json / reports/ / generated_docs/ "
-              "(log-only ephemeral tool paths and supervised watchdog "
-              "pidfiles excluded)")
+        # The scan size leads, and the sentence that follows is phrased so it
+        # reads as a statement about the POPULATION rather than about the
+        # finding: `no such reference found` is false of a scan that read a
+        # thousand files and hit one, and empty of meaning over a scan that
+        # read none — which is why the count precedes it.
+        print(f"[PASS] project_outputs_in_tree_check: "
+              f"{scanned} file(s) scanned, {len(seen)} distinct absolute path "
+              f"reference(s) examined — no such reference found: no /tmp / "
+              f"/var/tmp / /dev/shm / /run paths referenced in RESULT.md / "
+              f"waivers.json / reports/ / generated_docs/ (log-only ephemeral "
+              f"tool paths and supervised watchdog pidfiles excluded)")
         return 0
 
     # Split: live (file exists at /tmp) vs. dangling (referenced but gone)

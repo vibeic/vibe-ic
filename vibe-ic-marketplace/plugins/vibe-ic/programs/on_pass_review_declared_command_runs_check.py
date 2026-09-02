@@ -694,6 +694,17 @@ def main(argv=None) -> int:
                   f"{row.get('slot')}  "
                   f"BAD {arms.get('P6', {}).get('tree')} rc=1  "
                   f"GOOD {arms.get('P7', {}).get('tree')} rc=0")
+        # THE PROJECT POSITIONAL IS NEVER OPENED, and until this line said so
+        # this gate answered rc 0 for a project path that does not exist,
+        # without disclosing it (#511/#564) — a caller could not tell a
+        # typo'd path from a clean chip, and the clean answer is the one that
+        # gets acted on. This is not a blindness to fix: the population is the
+        # flow document and the published known-BAD/known-GOOD trees, and it
+        # is stated above. What was missing was saying which question the
+        # positional does NOT answer.
+        print(f"       project positional {str(a.project_dir)!r}: not "
+              f"applicable — no project directory is opened by this gate; its "
+              f"population is {a.flow} and the published trees named above.")
         print(f"[PASS] on_pass_review_declared_command_runs_check: "
               f"{report['enabled']} declared on-pass command(s) sit on a step "
               f"the engine REACHES (no unsatisfiable `condition:` on the host "

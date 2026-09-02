@@ -34,11 +34,33 @@ THE PREDICATE IS THE FLOW'S OWN, RUN — NOT REIMPLEMENTED
 ========================================================
 This module does not glob for `SELF_TAPEOUT.txt`. It loads the flow yaml,
 finds steps `37.5ic` and `37.5ip`, and drives
-`flow_compliance_check._check_condition` over the project tree with THEIR
-conditions. So when a router artefact is renamed, or a fourth route is added,
-this module follows the flow instead of describing an older one. The same rule
-`test_path_step_matrix_ic_and_ip.py` states for itself: nothing here reads the
-yaml and asserts what it thinks it says.
+`flow_compliance_check._check_condition` over the project tree with conditions
+DERIVED FROM THEIRS. So when a router artefact is renamed, or a fourth route is
+added, this module follows the flow instead of describing an older one. The
+same rule `test_path_step_matrix_ic_and_ip.py` states for itself: nothing here
+reads the yaml and asserts what it thinks it says.
+
+37.5ip IS NO LONGER A ROUTE SELECTOR, AND THAT IS WHY THE IP CONDITION IS
+DERIVED RATHER THAN READ. OWNER RULING 2026-09-02, encoded by df8163448 and
+pinned by `test_delivery_route_step_reachability.py`: "an IC runs BOTH 37.5ic
+and 37.5ip; only a pure-IP route skips 37.5ic", because a die also ships the
+IP deliverable set. 37.5ip's condition was widened from the single router
+`NO_TEMPLATE.txt` to `any_of` over ALL THREE, so "37.5ip's condition is met"
+became true of every routed tree. This module read that as evidence of a
+hardmacro delivery and answered BOTH on every chip design — MEASURED at
+20031834c1: `resolve(chip_tree)["path"] == "BOTH"`, which is
+`PATH_UNDETERMINED` for the ECO axis, on every tape-out-bound run.
+
+The asymmetry the ruling kept is the whole answer, and it is stated by the
+flow itself: 37.5ic still names the TWO chip routers and still EXCLUDES
+`NO_TEMPLATE.txt`. So the routers that reach the IP terminal and NOT the chip
+terminal are exactly the IP route, and that set is a subtraction over the two
+conditions this module already reads — not a fourth place where a router
+filename is spelled. Add a router to both terminals and it reads as a chip
+route; add it to 37.5ip alone and it reads as an IP route; make the two
+terminals accept the same set and no route can be established at all, which is
+UNREADABLE and says so. Nothing here is retyped, and nothing here degrades
+into a silent CHIP or a silent IP.
 
 FIVE ANSWERS, AND FOUR OF THEM ARE NOT "CHIP"
 =============================================
@@ -129,6 +151,65 @@ def _terminal_conditions() -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
     return found, None
 
 
+#: The only two keys a terminal's condition may carry for the subtraction below
+#: to be meaningful. A third key would mean the terminals select on something
+#: other than the presence of a router file, and a set difference over
+#: `files_exist` would then be answering a question the flow is no longer
+#: asking. Refused loudly rather than ignored.
+_ROUTE_CONDITION_KEYS = {"any_of", "files_exist"}
+
+
+def _route_conditions() -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
+    """({PATH_CHIP: condition, PATH_IP: condition}, reason-it-could-not-be-read)
+
+    CHIP is step 37.5ic's condition VERBATIM: that terminal is still the chip
+    route's own, and it still excludes the IP router.
+
+    IP is DERIVED — the routers that reach 37.5ip and NOT 37.5ic — because
+    since the 2026-09-02 owner ruling 37.5ip runs on every route and so is no
+    longer a route selector. See this module's header.
+
+    Every way the derivation could stop meaning what it says is a REASON, not
+    a fallback: a condition carrying a key other than `any_of`/`files_exist`,
+    a terminal that is not `any_of`, a chip terminal that names no router, or
+    an empty difference (the two terminals accept the same set, so the flow no
+    longer distinguishes the routes). Each returns UNREADABLE and names
+    itself; none of them silently picks a route.
+    """
+    conditions, why = _terminal_conditions()
+    if conditions is None:
+        return None, why
+    for sid in (STEP_CHIP, STEP_IP):
+        cond = conditions[sid]
+        if not isinstance(cond, Mapping):
+            return None, (f"step {sid}'s condition is {type(cond).__name__}, "
+                          "not a mapping, so the route it selects could not "
+                          "be read")
+        extra = sorted(set(cond) - _ROUTE_CONDITION_KEYS)
+        if extra:
+            return None, (f"step {sid}'s condition carries {extra}, so it no "
+                          "longer selects purely on which router artefact is "
+                          "present and a route cannot be read from it")
+        if not cond.get("any_of"):
+            return None, (f"step {sid}'s condition is not `any_of`, so its "
+                          "`files_exist` list is a conjunction rather than "
+                          "the set of routers that reach it")
+    chip_files = [str(f) for f in (conditions[STEP_CHIP].get("files_exist")
+                                   or [])]
+    ip_files = [str(f) for f in (conditions[STEP_IP].get("files_exist") or [])]
+    if not chip_files:
+        return None, (f"step {STEP_CHIP} names no router artefact, so no tree "
+                      "can be shown to be on the chip path")
+    ip_only = [f for f in ip_files if f not in chip_files]
+    if not ip_only:
+        return None, (f"every router that reaches {STEP_IP} also reaches "
+                      f"{STEP_CHIP}, so the two terminals no longer "
+                      "distinguish a hardmacro delivery from a die and no "
+                      "route can be established from them")
+    return ({PATH_CHIP: dict(conditions[STEP_CHIP]),
+             PATH_IP: {"any_of": True, "files_exist": ip_only}}, None)
+
+
 def resolve(project: Optional[Any]) -> Dict[str, Any]:
     """Which delivery path a project tree is on, and the evidence for it.
 
@@ -149,7 +230,7 @@ def resolve(project: Optional[Any]) -> Dict[str, Any]:
                           "read from it",
                 "evidence": {"project": str(root)}}
 
-    conditions, why = _terminal_conditions()
+    conditions, why = _route_conditions()
     if conditions is None:
         return {"path": PATH_UNREADABLE, "reason": why,
                 "evidence": {"project": str(root), "flow": str(_flow_path())}}
@@ -167,8 +248,8 @@ def resolve(project: Optional[Any]) -> Dict[str, Any]:
                 "evidence": {"project": str(root)}}
 
     try:
-        on_chip = bool(FCC._check_condition(root, conditions[STEP_CHIP]))
-        on_ip = bool(FCC._check_condition(root, conditions[STEP_IP]))
+        on_chip = bool(FCC._check_condition(root, conditions[PATH_CHIP]))
+        on_ip = bool(FCC._check_condition(root, conditions[PATH_IP]))
     except Exception as exc:                                # pragma: no cover
         return {"path": PATH_UNREADABLE,
                 "reason": (f"the flow's condition predicate raised {exc!r} on "
@@ -179,18 +260,22 @@ def resolve(project: Optional[Any]) -> Dict[str, Any]:
         "project": str(root),
         "flow": str(_flow_path()),
         "predicate": "flow_compliance_check._check_condition",
-        "conditions": {STEP_CHIP: conditions[STEP_CHIP],
-                       STEP_IP: conditions[STEP_IP]},
-        "met": {STEP_CHIP: on_chip, STEP_IP: on_ip},
+        #: Keyed by ROUTE, not by step id: `PATH_IP`'s condition is derived
+        #: from the two terminals (see `_route_conditions`) and is not any one
+        #: step's own, so labelling it `STEP_IP` would misname it.
+        "conditions": {PATH_CHIP: conditions[PATH_CHIP],
+                       PATH_IP: conditions[PATH_IP]},
+        "met": {PATH_CHIP: on_chip, PATH_IP: on_ip},
     }
     if on_chip and on_ip:
         return {"path": PATH_BOTH,
-                "reason": (f"both {STEP_CHIP} and {STEP_IP} conditions are met "
-                           "on this tree. The two router artefacts are "
-                           "mutually exclusive by construction and no silicon "
-                           "corresponds to a tree holding both; "
-                           "`tapeout_declaration_check` is the refusal. This "
-                           "module will not pick one of them"),
+                "reason": ("this tree carries a chip router AND a router that "
+                           f"reaches {STEP_IP} and not {STEP_CHIP}. The three "
+                           "router artefacts are mutually exclusive by "
+                           "construction and no silicon corresponds to a tree "
+                           "holding two of them; `tapeout_declaration_check` "
+                           "is the refusal. This module will not pick one of "
+                           "them"),
                 "evidence": evidence}
     if on_chip:
         return {"path": PATH_CHIP,
@@ -199,9 +284,10 @@ def resolve(project: Optional[Any]) -> Dict[str, Any]:
                 "evidence": evidence}
     if on_ip:
         return {"path": PATH_IP,
-                "reason": (f"{STEP_IP}'s condition is met, so this design "
-                           "terminates at the hardmacro/IP delivery and is not "
-                           "tape-out-bound"),
+                "reason": (f"this tree carries only a router that reaches "
+                           f"{STEP_IP} and not {STEP_CHIP}, so this design "
+                           "terminates at the hardmacro/IP delivery and is "
+                           "not tape-out-bound"),
                 "evidence": evidence}
     return {"path": PATH_NOT_DETERMINED,
             "reason": ("neither terminal's condition is met: this tree carries "

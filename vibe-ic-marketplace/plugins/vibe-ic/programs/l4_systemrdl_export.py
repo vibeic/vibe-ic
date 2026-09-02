@@ -1446,6 +1446,38 @@ def _l4_documents(root: Path, *,
         root, hits, published=published), len(hits), True
 
 
+#: THIS PLUGIN'S OWN TEST DATA IS NOT A PUBLISHED CORPUS DOCUMENT, and the
+#: exclusion is anchored to the ABSOLUTE directory rather than to the name
+#: `tests`, so a real corpus that happens to carry a `tests/` directory keeps
+#: every document it publishes.
+#:
+#: WHAT IT COST TO LEARN THIS, TWICE. `registry_is_the_iteration_domain`
+#: records the first instance: while its census counted fixtures, three JSON
+#: basenames existed ONLY under `programs/tests/fixtures/**`, and their
+#: presence alone moved a shipped gate's pinned reach from 1 to 3 — a landed
+#: test FIXTURE had moved a boundary in a gate nobody had touched since v1.0.0.
+#:
+#: The second instance is this one, MEASURED at 20031834c1 with no corpus
+#: pointer bound: `audit-corpus --root <repo>` reported `7 on disk, 7
+#: published` and `[PASS] every register/field key in the published corpus has
+#: a recorded disposition`. All seven were the hand-written L4 documents
+#: `4ce74e03b` (v1.13.37, PR #1845) added under
+#: `programs/tests/fixtures/stage_phase1_on_pass_review/**`, seven months after
+#: the corpus itself left this repository in v1.10.56. Two consequences, and
+#: the second is the worse one:
+#:
+#:   * NO_CORPUS could never fire. With `--corpus-may-be-absent` and no
+#:     pointer, the program is supposed to STATE that it scanned nothing;
+#:     instead it certified seven fixtures. Without the flag it is supposed to
+#:     exit 2 UNDETERMINED; it exited 0.
+#:   * A CORPUS OF ENTIRELY UNREADABLE DOCUMENTS WAS CERTIFIED. Point the
+#:     pointer at a tree whose only L4 document is unparseable and the seven
+#:     fixtures supply the keys, every one of them has a disposition, and the
+#:     program prints PASS — the exact `0 of 201 documents -> PASS` shape its
+#:     own docstring records it having been wrong about once.
+_TEST_DATA_DIR = Path(__file__).resolve().parent / "tests"
+
+
 def _iter_l4(root: Path) -> Iterable[Path]:
     """Walk the L4 documents on disk under `root`.
 
@@ -1455,16 +1487,23 @@ def _iter_l4(root: Path) -> Iterable[Path]:
     name matches every entry, the walk returns nothing, and an empty result
     reports as a clean one. Measured here — the first version found 0 of 201
     documents when run from inside a git worktree.
+
+    `_TEST_DATA_DIR` is the one exclusion that IS absolute, and it is absolute
+    for the same reason: it names this plugin's own `programs/tests/`, so it
+    can never match a directory inside a corpus checkout. See its comment.
     """
     skip = {".git", "node_modules", ".claude", "worktrees", "__pycache__"}
     root = root.resolve()
     hits = []
     for p in root.rglob(_L4_GLOB):
         try:
-            rel = p.resolve().relative_to(root)
+            resolved = p.resolve()
+            rel = resolved.relative_to(root)
         except ValueError:
             continue
         if any(part in skip for part in rel.parts):
+            continue
+        if resolved.is_relative_to(_TEST_DATA_DIR):
             continue
         hits.append(p)
     # The corpus is what the tree PUBLISHES, not what this machine has run.

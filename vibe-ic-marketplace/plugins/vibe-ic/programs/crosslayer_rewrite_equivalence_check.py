@@ -199,7 +199,17 @@ def main(argv: Optional[List[str]] = None) -> int:
         atomic_write_text(out,
                           json.dumps(payload, indent=2) + "\n",
                           encoding="utf-8")
-        print(f"[{PROGRAM}] PASS (no-op) — no cross-layer search was run.")
+        # THE LINE STATES THE POPULATION, not just the verdict (#511/#564).
+        # `PASS (no-op) — no cross-layer search was run.` said what this gate
+        # CONCLUDED and never what it LOOKED AT, so its output over a project
+        # with nothing in it was indistinguishable from its output over a real
+        # design whose search was audited clean. The two declarations it opens
+        # are named, with the count that is the denominator.
+        print(f"[{PROGRAM}] PASS (no-op) — 0 of 2 rewrite declarations "
+              f"present: no baseline snapshot found at {marker} and no "
+              f"rewrite-fidelity report found at {rp}, so this design's RTL "
+              f"was not produced by a cross-layer search and there is no "
+              f"rewrite to check.")
         return 0
 
     # Re-resolve the search space's citations. Delegated to the program that
