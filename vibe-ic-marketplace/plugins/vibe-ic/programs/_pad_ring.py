@@ -563,6 +563,136 @@ def parse_lef_macro_classes(text: str) -> Dict[str, str]:
     return out
 
 
+#: `set ::env(PAD_PLACE_IO_TERMINALS) "<master>/<terminal> ..."` — the PDK's
+#: own statement of WHICH masters bring a signal out and through WHICH pin.
+#: Lives here, not in one producer, because BOTH producers need it: the chip
+#: top wires the port to that pin, and the ring places the die's BTerm ON it.
+#: The pad's signal pin is NOT always called `PAD` — one open 5 V library
+#: presents `ASIG5V` on its analog pad — so it is read, never assumed.
+_TERMINALS_RE = re.compile(
+    r"set\s+::env\(PAD_PLACE_IO_TERMINALS\)\s+\"(?P<body>.*?)\"", re.S)
+_TERMINAL_ENTRY_RE = re.compile(r"(?P<master>[A-Za-z0-9_$:(){}]+)/(?P<pin>\w+)")
+
+
+def io_terminals(configs: Sequence[Path],
+                 prefix: Optional[str] = None) -> Dict[str, str]:
+    """`{master: terminal pin}` from the PDK's own PAD_PLACE_IO_TERMINALS.
+
+    `$::env(PAD_CELL_LIBRARY)` is the only substitution these entries use and
+    it is resolved from `prefix`, which itself came from a master the PDK
+    named; an entry carrying any other substitution is skipped rather than
+    half-expanded.
+    """
+    out: Dict[str, str] = {}
+    for cfg in configs:
+        try:
+            text = cfg.read_text(errors="replace")
+        except OSError:
+            continue
+        m = _TERMINALS_RE.search(text)
+        if m is None:
+            continue
+        for e in _TERMINAL_ENTRY_RE.finditer(m.group("body")):
+            master = e.group("master")
+            if "$" in master or "{" in master:
+                if prefix is None:
+                    continue
+                tail = master.rsplit("__", 1)
+                if len(tail) != 2 or "$" in tail[1]:
+                    continue
+                master = prefix + tail[1]
+            out[master] = e.group("pin")
+    return out
+
+
+_PIN_RE = re.compile(r"^\s*PIN\s+(\S+)", re.M)
+_LAYER_RE = re.compile(r"^\s*LAYER\s+(\S+)\s*;", re.M)
+_RECT_RE = re.compile(
+    r"^\s*RECT\s+(-?[0-9.]+)\s+(-?[0-9.]+)\s+(-?[0-9.]+)\s+(-?[0-9.]+)\s*;",
+    re.M)
+
+
+def parse_lef_pin_ports(text: str
+                        ) -> Dict[str, Dict[str, List[Tuple[str, Tuple[
+                            float, float, float, float]]]]]:
+    """`{macro: {pin: [(layer, (x1, y1, x2, y2) in um), ...]}}`.
+
+    The geometry a pad presents to the outside world. Every RECT is kept with
+    the LAYER most recently named inside its PORT, which is how LEF scopes
+    them; a PORT that names no layer contributes nothing rather than
+    inheriting the previous pin's.
+    """
+    out: Dict[str, Dict[str, List[Tuple[str, Tuple[
+        float, float, float, float]]]]] = {}
+    macros = list(_MACRO_RE.finditer(text))
+    for i, m in enumerate(macros):
+        name = m.group(1)
+        end = macros[i + 1].start() if i + 1 < len(macros) else len(text)
+        stop = re.compile(rf"^\s*END\s+{re.escape(name)}\b",
+                          re.M).search(text, m.end(), end)
+        if stop:
+            end = stop.start()
+        body = text[m.end():end]
+        pins: Dict[str, List[Tuple[str, Tuple[float, float, float,
+                                              float]]]] = {}
+        hits = list(_PIN_RE.finditer(body))
+        for j, ph in enumerate(hits):
+            pin = ph.group(1)
+            pend = hits[j + 1].start() if j + 1 < len(hits) else len(body)
+            pstop = re.compile(rf"^\s*END\s+{re.escape(pin)}\b",
+                               re.M).search(body, ph.end(), pend)
+            if pstop:
+                pend = pstop.start()
+            pbody = body[ph.end():pend]
+            rects: List[Tuple[str, Tuple[float, float, float, float]]] = []
+            layer: Optional[str] = None
+            for tok in re.finditer(
+                    r"^\s*(?:LAYER\s+(?P<layer>\S+)\s*;|RECT\s+"
+                    r"(?P<x1>-?[0-9.]+)\s+(?P<y1>-?[0-9.]+)\s+"
+                    r"(?P<x2>-?[0-9.]+)\s+(?P<y2>-?[0-9.]+)\s*;)",
+                    pbody, re.M):
+                if tok.group("layer"):
+                    layer = tok.group("layer")
+                elif layer is not None:
+                    rects.append((layer, (
+                        float(tok.group("x1")), float(tok.group("y1")),
+                        float(tok.group("x2")), float(tok.group("y2")))))
+            if rects:
+                pins[pin] = rects
+        if pins:
+            out[name] = pins
+    return out
+
+
+#: Every DEF orientation, as the point map it IS. A cell of size (W, H) placed
+#: at the origin occupies (0,0)-(W,H) in N; each entry maps a point of the
+#: master frame into the placed frame. Written out rather than derived so an
+#: orientation this flow has never placed is a KeyError and not a guess.
+_ORIENT_RECT = {
+    "N":  lambda x1, y1, x2, y2, w, h: (x1, y1, x2, y2),
+    "S":  lambda x1, y1, x2, y2, w, h: (w - x2, h - y2, w - x1, h - y1),
+    "W":  lambda x1, y1, x2, y2, w, h: (h - y2, x1, h - y1, x2),
+    "E":  lambda x1, y1, x2, y2, w, h: (y1, w - x2, y2, w - x1),
+    "FN": lambda x1, y1, x2, y2, w, h: (w - x2, y1, w - x1, y2),
+    "FS": lambda x1, y1, x2, y2, w, h: (x1, h - y2, x2, h - y1),
+    "FW": lambda x1, y1, x2, y2, w, h: (y1, x1, y2, x2),
+    "FE": lambda x1, y1, x2, y2, w, h: (h - y2, w - x2, h - y1, w - x1),
+}
+
+
+def orient_rect(rect: Tuple[float, float, float, float], orient: str,
+                size: Tuple[float, float]
+                ) -> Tuple[float, float, float, float]:
+    """`rect` (master frame) as it lies once the cell is placed at `orient`.
+
+    Raises KeyError for an orientation not in `_ORIENT_RECT`: a pad whose
+    orientation this cannot map must stop the ring, not be placed by an
+    approximation of where its terminal probably is.
+    """
+    w, h = size
+    return _ORIENT_RECT[orient](rect[0], rect[1], rect[2], rect[3], w, h)
+
+
 def parse_lef_sites(text: str) -> Dict[str, Dict[str, object]]:
     """`{site: {"class": str, "size": (w_um, h_um)}}` for standalone SITEs.
 

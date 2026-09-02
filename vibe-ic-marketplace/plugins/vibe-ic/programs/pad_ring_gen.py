@@ -815,9 +815,141 @@ def _place_fillers(die: PR.Def, pads: List[Dict[str, Any]],
     return fillers, residual, findings
 
 
+def pad_terminal_bterms(pads: List[Dict[str, Any]],
+                        pin_ports: Dict[str, Dict[str, List[Any]]],
+                        terminals: Dict[str, str],
+                        masters_um: Dict[str, Tuple[float, float]],
+                        units: int
+                        ) -> Tuple[List[Dict[str, Any]], List[Dict[str, str]]]:
+    """Where each padded signal's BTerm BELONGS: on its pad's own terminal.
+
+    THE DECISION THIS IMPLEMENTS. A chip-top IO port IS the pad terminal. The
+    flow used to keep the floorplan's die-edge BTerm for a port that a pad now
+    drives, and then asked the detailed router to reach it — MEASURED on one
+    chip-path run: 38 x `[ERROR DRT-0073] No access point for <pad>/<pin>`,
+    detailed routing never completed, `routed.def` carried 567 signal nets and
+    no interconnect, and the streamout was 106 bytes. There is no such wire on
+    a padframed die: the port net terminates ON the bond pad, under the pad's
+    own obstruction, which is exactly why no access point exists. So the BTerm
+    is placed COINCIDENT with the pad's terminal rectangle and the router is
+    left with the core side of the net, which is the part that is really
+    routed.
+
+    THE PIN IS NOT ALWAYS CALLED `PAD`. `terminals` is the PDK's own
+    `PAD_PLACE_IO_TERMINALS` map; one open 5 V library presents `ASIG5V` on
+    its analog pad. A master absent from it, or a pin absent from the LEF, or
+    an orientation `orient_rect` cannot map, moves NOTHING and is reported —
+    a BTerm placed where the terminal probably is would be a wire that does
+    not exist.
+
+    The largest rectangle of the pin is chosen when a pin has several: it is
+    the one an access point is most likely to land in, and choosing by file
+    order would choose it silently.
+    """
+    moves: List[Dict[str, Any]] = []
+    notes: List[Dict[str, str]] = []
+    for pad in pads:
+        master = str(pad["master"])
+        signal = str(pad.get("signal") or "")
+        if not signal:
+            continue
+        pin = terminals.get(master)
+        if not pin:
+            notes.append(_finding(
+                "WARNING", "PAD_TERMINAL_PIN_UNDECLARED",
+                f"the PDK's PAD_PLACE_IO_TERMINALS does not name a terminal "
+                f"for {master}, so {signal!r} keeps the floorplan's own BTerm"))
+            continue
+        rects = (pin_ports.get(master) or {}).get(pin) or []
+        if not rects:
+            notes.append(_finding(
+                "WARNING", "PAD_TERMINAL_GEOMETRY_ABSENT",
+                f"{master} declares terminal {pin} and its LEF carries no "
+                f"PORT rectangle for it, so {signal!r} keeps its BTerm"))
+            continue
+        size = masters_um.get(master)
+        if size is None:
+            notes.append(_finding(
+                "WARNING", "PAD_TERMINAL_MASTER_SIZE_ABSENT",
+                f"{master} has no LEF SIZE, so its terminal cannot be placed"))
+            continue
+        layer, rect = max(
+            rects, key=lambda lr: ((lr[1][2] - lr[1][0]) * (lr[1][3] - lr[1][1]),
+                                   lr[0]))
+        try:
+            x1, y1, x2, y2 = PR.orient_rect(rect, str(pad["orient"]), size)
+        except KeyError:
+            notes.append(_finding(
+                "WARNING", "PAD_ORIENTATION_UNMAPPED",
+                f"{pad['instance']} is placed {pad['orient']!r}, which this "
+                f"step cannot map a terminal rectangle through; {signal!r} "
+                f"keeps its BTerm"))
+            continue
+        ox, oy = int(pad["x"]), int(pad["y"])
+        moves.append({
+            "signal": signal, "instance": pad["instance"], "master": master,
+            "terminal": pin, "layer": layer,
+            "origin": [ox, oy],
+            # ABSOLUTE, in DEF units. `orient_rect` returns the rectangle in
+            # the PLACED cell's own frame, whose lower-left corner is exactly
+            # the DEF placement point, so the origin is added here and the
+            # entry writes the offsets back out relative to it.
+            "rect_dbu": [ox + int(round(x1 * units)), oy + int(round(y1 * units)),
+                         ox + int(round(x2 * units)), oy + int(round(y2 * units))],
+        })
+    return moves, notes
+
+
+def _pin_entry(header: str, move: Dict[str, Any]) -> str:
+    """One DEF PIN entry whose PORT is the pad terminal, FIXED at the pad."""
+    ox, oy = move["origin"]
+    x1, y1, x2, y2 = move["rect_dbu"]
+    return (f"{header}\n"
+            f"      + PORT\n"
+            f"        + LAYER {move['layer']} "
+            f"( {x1 - ox} {y1 - oy} ) ( {x2 - ox} {y2 - oy} )\n"
+            f"        + FIXED ( {ox} {oy} ) N ;")
+
+
+def _rewrite_pins(source_text: str,
+                  moves: List[Dict[str, Any]]) -> Tuple[str, List[str]]:
+    """Re-place the BTerm of every signal a pad drives; leave the rest alone.
+
+    A port NO pad drives keeps the floorplan's die-edge pin byte-for-byte —
+    the core-only path has no pad ring and must be untouched by this.
+    """
+    if not moves:
+        return source_text, []
+    section = re.search(
+        r"(?ms)^(?P<indent>\s*)PINS\s+\d+\s*;(?P<body>.*?)"
+        r"^(?P<endindent>\s*)END\s+PINS\b", source_text)
+    if section is None:
+        raise PR.DefError("floorplan DEF has no PINS section")
+    by_signal = {m["signal"]: m for m in moves}
+    entries: List[str] = []
+    rewritten: List[str] = []
+    for raw in section.group("body").split(";"):
+        body = raw.strip()
+        if not body:
+            continue
+        m = re.match(r"^-\s+(\S+)", body)
+        move = by_signal.get(m.group(1)) if m else None
+        if move is None:
+            entries.append("    " + body + " ;")
+            continue
+        header = body.split("+ PORT", 1)[0].rstrip()
+        entries.append(_pin_entry("    " + header, move))
+        rewritten.append(m.group(1))
+    replacement = (f"PINS {len(entries)} ;\n" + "\n".join(entries)
+                   + "\nEND PINS")
+    return (source_text[:section.start()] + replacement
+            + source_text[section.end():]), rewritten
+
+
 def _emit_def(die: PR.Def, pads: List[Dict[str, Any]],
               corners: List[Dict[str, Any]], fillers: List[Dict[str, Any]],
-              source_text: str) -> str:
+              source_text: str,
+              bterm_moves: Optional[List[Dict[str, Any]]] = None) -> str:
     """Return the complete floorplan DEF with ring placements applied.
 
     `padring.def` is a routing hand-off, not a placement-only sidecar.  The
@@ -859,7 +991,10 @@ def _emit_def(die: PR.Def, pads: List[Dict[str, Any]],
     replacement = (f"COMPONENTS {len(entries)} ;\n"
                    + "\n".join(entries)
                    + "\nEND COMPONENTS")
-    return source_text[:section.start()] + replacement + source_text[section.end():]
+    out = (source_text[:section.start()] + replacement
+           + source_text[section.end():])
+    out, _moved = _rewrite_pins(out, bterm_moves or [])
+    return out
 
 
 # ── main ────────────────────────────────────────────────────────────────────
@@ -1264,12 +1399,37 @@ def main(argv: Optional[List[str]] = None) -> int:
             print(f"  {finding['rule']}: {finding['message']}")
         return 1
 
+    # THE CHIP-TOP IO PORT IS THE PAD TERMINAL — see `pad_terminal_bterms`.
+    # Computed from the placed ring and the library's own terminal map, so it
+    # is decided here and only here; the deck reads the DEF and no new
+    # argument crosses into it.
+    pin_ports: Dict[str, Dict[str, List[Any]]] = {}
+    for lef in lefs:
+        try:
+            pin_ports.update(PR.parse_lef_pin_ports(
+                Path(lef).read_text(errors="replace")))
+        except OSError:
+            continue
+    corner_master = decls.values.get("PAD_CORNER")
+    prefix = (corner_master.split("__", 1)[0] + "__"
+              if isinstance(corner_master, str) and "__" in corner_master
+              else None)
+    bterm_moves, bterm_notes = pad_terminal_bterms(
+        pads, pin_ports,
+        PR.io_terminals(PR.discover_io_library_configs(
+            args.pdk_root, args.pdk), prefix),
+        lib.masters, die.units)
+    findings.extend(bterm_notes)
+    bterms["placed_on_pad_terminal"] = [m["signal"] for m in bterm_moves]
+    bterms["kept_at_the_die_edge"] = sorted(
+        set(die.pins) - {m["signal"] for m in bterm_moves})
+
     dest = project / PR.PADRING_DEF_REL
     dest.parent.mkdir(parents=True, exist_ok=True)
     try:
         routed_input = _emit_def(
             die, pads, corners, fillers,
-            fp_path.read_text(errors="replace"))
+            fp_path.read_text(errors="replace"), bterm_moves)
     except (PR.DefError, OSError) as exc:
         return _fail(
             "PADRING_ROUTING_HANDOFF_UNWRITABLE",

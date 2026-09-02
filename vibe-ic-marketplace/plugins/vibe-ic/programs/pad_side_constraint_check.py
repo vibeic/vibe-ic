@@ -60,8 +60,17 @@ def _parse_def_pins(def_text: str) -> Tuple[Dict[str, Tuple[int, int]], Tuple[in
         if m_pin:
             current_pin = m_pin.group(1)
             continue
-        # "+ PLACED ( X Y ) ..."
-        m_placed = re.search(r"\+\s+PLACED\s+\(\s*(-?\d+)\s+(-?\d+)\s*\)", s)
+        # "+ PLACED ( X Y ) ...", and its two synonyms. DEF gives a PIN
+        # three placement statuses -- PLACED, FIXED and COVER -- and all
+        # three carry a coordinate. Reading only PLACED made a FIXED pin
+        # INVISIBLE, and an invisible pin is not a violation: MEASURED on one
+        # chip-path run whose pads were placed FIXED, this check reported
+        # `VACUOUS_PASS: no DEF pins matched its patterns` over 36 pins it
+        # could not see, where the same design with PLACED pins had reported
+        # 36 constrained and on the correct side. A gate that stops seeing
+        # its subject must not keep saying PASS.
+        m_placed = re.search(
+            r"\+\s+(?:PLACED|FIXED|COVER)\s+\(\s*(-?\d+)\s+(-?\d+)\s*\)", s)
         if m_placed and current_pin is not None:
             pins[current_pin] = (int(m_placed.group(1)), int(m_placed.group(2)))
     return pins, (x0, y0, x1, y1)

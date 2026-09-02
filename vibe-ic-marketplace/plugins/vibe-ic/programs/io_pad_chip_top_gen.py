@@ -214,52 +214,14 @@ def _bit_names(port: Dict[str, object]) -> List[str]:
     return [f"{name}[{b}]" for b in range(msb, lsb + step, step)]
 
 
-#: `set ::env(PAD_PLACE_IO_TERMINALS) "<master>/<terminal> ..."` — the PDK's
-#: own statement of WHICH masters bring a signal out and through WHICH pin.
-_TERMINALS_RE = re.compile(
-    r"set\s+::env\(PAD_PLACE_IO_TERMINALS\)\s+\"(?P<body>.*?)\"",
-    re.S)
-_TERMINAL_ENTRY_RE = re.compile(r"(?P<master>[A-Za-z0-9_$:(){}]+)/(?P<pin>\w+)")
-
-
-def io_terminals(configs: Sequence[Path], prefix: Optional[str]
-                 ) -> Dict[str, str]:
-    """`{master: terminal pin}` from the PDK's own PAD_PLACE_IO_TERMINALS.
-
-    TWO THINGS COME FROM THIS AND BOTH WERE PREVIOUSLY GUESSED. The pad's
-    signal pin was hard-coded `.PAD` here, which is true of gf180mcu's digital
-    pads and false of its analog one (`asig_5p0/ASIG5V`); and master selection
-    had no way to tell a digital signal pad from an analog one, so on
-    gf180mcuD it picked `asig_5p0` for the design's single output -- an ANALOG
-    pad on a digital port, measured, and silently, because both are
-    `CLASS PAD INOUT` at the same width.
-
-    The library states both facts in one variable, so both are read from it.
-    `$::env(PAD_CELL_LIBRARY)` is the only substitution these entries use and
-    it is resolved from `prefix`, which itself came from a master the PDK
-    named; an entry carrying any other substitution is skipped rather than
-    half-expanded.
-    """
-    out: Dict[str, str] = {}
-    for cfg in configs:
-        try:
-            text = cfg.read_text(errors="replace")
-        except OSError:
-            continue
-        m = _TERMINALS_RE.search(text)
-        if m is None:
-            continue
-        for e in _TERMINAL_ENTRY_RE.finditer(m.group("body")):
-            master = e.group("master")
-            if "$" in master or "{" in master:
-                if prefix is None:
-                    continue
-                tail = master.rsplit("__", 1)
-                if len(tail) != 2 or "$" in tail[1]:
-                    continue
-                master = prefix + tail[1]
-            out[master] = e.group("pin")
-    return out
+#: The PDK's own `PAD_PLACE_IO_TERMINALS` reader now lives in `_pad_ring`,
+#: because BOTH producers need the same answer from it: this one wires the
+#: port to the pad's terminal, and `pad_ring_gen` places the die's BTerm ON
+#: that terminal. Two readers of one PDK variable is one reader too many —
+#: they would drift, and the pin they disagreed about would be the pin the
+#: router could not reach. Re-exported under its old name so every existing
+#: caller and test is unchanged.
+io_terminals = PR.io_terminals
 
 
 def library_prefix(decls: "PR.PdkDeclarations") -> Optional[str]:

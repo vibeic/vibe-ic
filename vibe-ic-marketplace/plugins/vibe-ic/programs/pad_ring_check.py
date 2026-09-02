@@ -143,7 +143,8 @@ def _audit_skip(project: Path, rep: Dict[str, Any]) -> List[Dict[str, str]]:
 
 # ── the PASS branch ─────────────────────────────────────────────────────────
 def _audit_ring(project: Path, rep: Dict[str, Any],
-                lib: PR.IoLibrary) -> List[Dict[str, str]]:
+                lib: PR.IoLibrary,
+                library_declined: str = "") -> List[Dict[str, str]]:
     out: List[Dict[str, str]] = []
 
     def_rel = str(rep.get("padring_def") or PR.PADRING_DEF_REL)
@@ -186,7 +187,9 @@ def _audit_ring(project: Path, rep: Dict[str, Any],
             "no PDK IO cell library resolved, so no declared master could be "
             "shown to be a PDK cell rather than a drawn shape. That is the "
             "central claim of this step and it is unverified — set PDK_ROOT / "
-            "PDK or pass --io-lef. An unverifiable claim is not a pass"))
+            "PDK or pass --io-lef. An unverifiable claim is not a pass"
+            + (f". The run's own record was consulted and declined: "
+               f"{library_declined}" if library_declined else "")))
 
     # ── upstream's two site lookups, re-run against the library ────────────
     for var in ("PAD_SITE_NAME", "PAD_CORNER_SITE_NAME"):
@@ -506,6 +509,95 @@ def _audit_ring(project: Path, rep: Dict[str, Any],
 
 
 # ── main ────────────────────────────────────────────────────────────────────
+#: What `io_pad_chip_top_gen` writes. The same record `pad_assignment_gen`
+#: reads, for the same reason: it is this RUN's own account of which files it
+#: physically opened.
+DERIVED_CHIP_TOP_REL = "reports/phase3/io_pad_chip_top.json"
+
+
+def declared_masters(producer: Dict[str, Any]) -> List[str]:
+    """Every IO master the producer's report CLAIMS, pads + corners + fillers.
+
+    The names are read out of the placed-instance records, not out of the
+    config, because the config declares a filler FAMILY and the ring places
+    from it; a library that carries the family name and not the instance's
+    master would corroborate nothing.
+    """
+    names: List[str] = []
+    for key in ("pads", "corners", "fillers"):
+        for rec in producer.get(key) or []:
+            if isinstance(rec, dict) and rec.get("master"):
+                names.append(str(rec["master"]))
+    return sorted(set(names))
+
+
+def io_lefs_this_run_recorded(project: Path, producer: Dict[str, Any]
+                              ) -> Tuple[List[Path], List[Path], str]:
+    """The IO views THIS RUN opened, from its own producer record.
+
+    WHY THIS EXISTS, MEASURED. The flow declares step 15.5ic's gate as
+    `pad_ring_check . --json reports/phase3/padring.json` with no PDK
+    argument; `phase3_one_shot_runner` dispatches the same program with
+    `--pdk-root/--pdk`. On one tree (spm, an open 5 V PDK, plugin 1.15.99) the
+    flow's shape returned FAIL/`PADRING_MASTERS_UNCORROBORATED` and the
+    runner's returned PASS — the same ring, the same disk, two verdicts. The
+    root is a per-host, per-container path and the clause is a static string,
+    so it cannot be written into the yaml.
+
+    WHAT IS AND IS NOT ADOPTED. `io_pad_chip_top_gen` records the ABSOLUTE
+    paths of the IO LEFs it read. Those files are re-opened and parsed HERE —
+    the corroboration is still LEF CONTENT, never the producer's word for it.
+    And the list is adopted ONLY IF the files it names carry EVERY master the
+    ring claims. A record whose LEFs do not is not a library this gate
+    resolved: reporting `PAD_MASTER_NOT_IN_PDK_IO_LIBRARY` off it would be a
+    claim about the PDK that nothing here measured, so the fallback is
+    declined and `PADRING_MASTERS_UNCORROBORATED` stands, exactly as it does
+    with no record at all.
+
+    Returns (lefs, site_declaration_views, why) — `why` is "" when adopted.
+    """
+    rec_path = project / DERIVED_CHIP_TOP_REL
+    if not rec_path.is_file():
+        return [], [], f"{DERIVED_CHIP_TOP_REL} is absent"
+    try:
+        doc = json.loads(rec_path.read_text(errors="replace"))
+    except (OSError, ValueError) as exc:
+        return [], [], f"{DERIVED_CHIP_TOP_REL} is not readable JSON: {exc}"
+    if doc.get("verdict") != "WROTE":
+        return [], [], (f"{DERIVED_CHIP_TOP_REL} verdict is "
+                        f"{doc.get('verdict')!r}, so it opened no library")
+    lefs = [Path(x) for x in (doc.get("io_library_lefs") or [])
+            if isinstance(x, str)]
+    lefs = [p for p in lefs if p.is_file()]
+    if not lefs:
+        return [], [], (f"{DERIVED_CHIP_TOP_REL} names no IO LEF that exists "
+                        f"on this host")
+    claimed = declared_masters(producer)
+    carried = PR.IoLibrary(lefs).masters
+    absent = [m for m in claimed if m not in carried]
+    if absent:
+        return [], [], (
+            f"the {len(lefs)} IO LEF(s) {DERIVED_CHIP_TOP_REL} names do not "
+            f"carry {len(absent)} of the {len(claimed)} master(s) the ring "
+            f"claims ({', '.join(absent[:4])}"
+            f"{'…' if len(absent) > 4 else ''}), so they corroborate nothing")
+    # The tech view lives beside the reference view: <tree>/libs.ref/<lib>/lef
+    # -> <tree>. Derived from the path this run actually read, so no root is
+    # assumed and no tree is named here.
+    decls: List[Path] = []
+    for lef in lefs:
+        for parent in lef.parents:
+            if parent.name == PR._LIBS_REF:
+                tree = parent.parent
+                decls.extend(PR.discover_io_site_declarations(
+                    str(tree.parent), tree.name))
+                break
+    seen: Dict[str, Path] = {}
+    for d in decls:
+        seen.setdefault(str(d), d)
+    return lefs, list(seen.values()), ""
+
+
 def main(argv: Optional[List[str]] = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("project_dir")
@@ -579,6 +671,8 @@ def main(argv: Optional[List[str]] = None) -> int:
                     else:
                         reason = findings[0]["message"]
                 else:
+                    library_source = ""
+                    library_declined = ""
                     lefs = ([Path(p) for p in args.io_lef] if args.io_lef
                             else PR.discover_io_lefs(args.pdk_root, args.pdk))
                     # Both PDK views, the same two the producer reads. An
@@ -587,9 +681,23 @@ def main(argv: Optional[List[str]] = None) -> int:
                     # declared the site for.
                     decls = PR.discover_io_site_declarations(
                         args.pdk_root, args.pdk)
+                    if not lefs:
+                        # NOTHING was passed and nothing resolved from the
+                        # environment. Before reporting that no library could
+                        # be corroborated, ask the run what IT opened.
+                        lefs, run_decls, why = io_lefs_this_run_recorded(
+                            project, producer)
+                        if lefs:
+                            decls = decls or run_decls
+                            library_source = (
+                                f"{len(lefs)} IO LEF(s) recorded by this run "
+                                f"in {DERIVED_CHIP_TOP_REL}")
+                        else:
+                            library_declined = why
                     findings.extend(
                         _audit_ring(project, producer,
-                                    PR.IoLibrary(lefs, decls)))
+                                    PR.IoLibrary(lefs, decls),
+                                    library_declined))
                     if not findings:
                         verdict, rc = "PASS", 0
                         reason = (
@@ -598,7 +706,9 @@ def main(argv: Optional[List[str]] = None) -> int:
                             f"{PR.FLOORPLAN_DEF_REL} and from the PDK IO cell "
                             f"library; every declared filler instance exists "
                             f"in the DEF and every adjacent ring cell "
-                            f"physically touches with zero residual gap")
+                            f"physically touches with zero residual gap"
+                            + (f"; IO library: {library_source}"
+                               if library_source else ""))
                     else:
                         reason = findings[0]["message"]
 
