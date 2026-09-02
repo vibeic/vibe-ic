@@ -117,3 +117,35 @@ def find_professional_tb_pass(project: Path) -> Optional[Dict[str, Any]]:
                 rel = cand.as_posix()
             return {"rel_path": rel, **summ}
     return None
+
+
+def substantiated_functional_evidence(project: Path,
+                                      rel_path: str) -> Optional[Dict[str, Any]]:
+    """Validate a record's own ``<functional_evidence>`` pointer.
+
+    A record that CLAIMS ``functional_verified=true`` is a forgery unless it can
+    SHOW the transcript. This resolves the pointer against the project and
+    applies the same predicate `find_professional_tb_pass` applies — a real
+    JUnit document with ``tests > 0``, ``failures == 0``, ``errors == 0`` and
+    ``passed > 0``. Anything else (absent, unparsable, non-JUnit, vacuous,
+    failing, or escaping the project) returns None, so a caller that refuses on
+    None keeps refusing every forgery it refused before.
+
+    chip-AGNOSTIC: a project-relative path and the JUnit structure, nothing else.
+    """
+    rel = (rel_path or "").strip()
+    if not rel:
+        return None
+    try:
+        cand = (project / rel).resolve()
+        # A pointer that leaves the project is not this run's evidence.
+        cand.relative_to(project.resolve())
+    except (OSError, ValueError):
+        return None
+    summ = parse_junit(cand)
+    if not summ:
+        return None
+    if (summ["tests"] > 0 and summ["failures"] == 0
+            and summ["errors"] == 0 and summ["passed"] > 0):
+        return {"rel_path": rel, **summ}
+    return None

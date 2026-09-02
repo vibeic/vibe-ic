@@ -9388,6 +9388,69 @@ def _emit_connectivity_sim_bridge(project: Path, transcript: Path,
         log_rel = str(transcript.relative_to(project))
     except ValueError:
         log_rel = str(transcript)
+    # ── THE DEFERRAL THIS RECORD DECLARES MAY ALREADY HAVE BEEN TAKEN UP ──
+    # The waiver text below says functional verification is "DEFERRED to a
+    # per-IC oracle TB". In the same Phase-2 pass, `professional_tb_gen` runs
+    # BEFORE this step and, when its Tier-3 hook is filled, closes exactly that
+    # deferral with a real cocotb run against the real rtl/. Nothing reconciled
+    # the two: this bridge overwrote the canonical record with
+    # `functional_verified=false` while the run's own JUnit transcript said
+    # otherwise, so every consumer that reads `phase2/stage1/sim/results.xml`
+    # — the one path the flow treats as canonical — read the opposite of what
+    # the run had measured.
+    #
+    # MEASURED, sha256 x sky130A, plugin 1.15.87:
+    #   phase2/stage1/sim/results.xml               functional_verified=false
+    #   phase2/stage1/sim_professional/*/results.xml tests=1 failures=0 errors=0
+    # One run, two records, and the deferral had been honoured.
+    #
+    # The record now CARRIES its evidence rather than asserting a bare flag:
+    # `functional_verified=true` is written ONLY alongside a
+    # `<functional_evidence>` pointer that dereferences to that transcript, so
+    # a reader can check the claim instead of trusting it. Absent a real pass,
+    # `find_professional_tb_pass` returns None and this emits EXACTLY the record
+    # it emitted before, byte for byte.
+    #
+    # `capability_gap` is KEPT in both branches on purpose. It names a
+    # DIFFERENT gap — no per-L10-case command/opcode oracle — which a
+    # whole-design functional TB does not close, and `l10_tb_conformance_check`
+    # keys its strictness on that marker. Dropping it here would silently
+    # re-strict an unrelated gate on the strength of evidence that says nothing
+    # about it. chip-AGNOSTIC: JUnit structure and the standard path only.
+    _prof = None
+    try:
+        import _sim_results_bridge as _srb_local
+        _prof = _srb_local.find_professional_tb_pass(project)
+    except Exception:                                        # noqa: BLE001
+        _prof = None
+
+    if _prof:
+        _aa.write_text(sim_dir / "pass.flag", "FUNCTIONAL_PASS\n")
+        _bridge_xml = (
+            "<results><verdict>FUNCTIONAL_PASS</verdict>"
+            "<functional_verified>true</functional_verified>"
+            "<verification_track>generic_full_stack</verification_track>"
+            "<capability_gap>cap:cpu_functional_oracle</capability_gap>"
+            f"<functional_evidence>{_prof['rel_path']}</functional_evidence>"
+            f"<vectors_total>{_prof['tests']}</vectors_total>"
+            f"<vectors_passed>{_prof['passed']}</vectors_passed>"
+            f"<evidence>{log_rel}</evidence>"
+            "<source>step_reference_tb: connectivity binding from the "
+            "full-stack TB, functional verification from the professional "
+            "cocotb TB this same run already ran</source>"
+            f"<waiver_reason>{track_reason}; the AID reference TB cannot bind "
+            "this interface family, and the functional verification it defers "
+            "to WAS PERFORMED in this run: "
+            f"{_prof['rel_path']} — tests={_prof['tests']} "
+            f"passed={_prof['passed']} failures={_prof['failures']} "
+            f"errors={_prof['errors']}. The cap:cpu_functional_oracle marker "
+            "is retained because it names the per-L10-case oracle gap, which a "
+            "whole-design functional TB does not close."
+            "</waiver_reason>"
+            "</results>\n")
+        _aa.write_text(sim_dir / "results.xml", _bridge_xml)
+        return True
+
     _aa.write_text(sim_dir / "pass.flag", "CONNECTIVITY_PASS\n")
     _bridge_xml = (
         "<results><verdict>CONNECTIVITY_PASS</verdict>"

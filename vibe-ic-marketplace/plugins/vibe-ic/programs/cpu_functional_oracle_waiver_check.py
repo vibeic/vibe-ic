@@ -278,9 +278,39 @@ def _evaluate(project: Path) -> "tuple[int, str]":
                    f"{cap!r}, not {CAP_CPU_FUNCTIONAL_ORACLE!r} — "
                    f"unrecognised capability record.")
     if func_verified == "true":
-        return 1, ("FAIL: connectivity-PASS record also asserts "
-                   "functional_verified=true — a connectivity record MUST "
-                   "NOT claim functional verification (forged waiver).")
+        # A record may CLAIM functional verification only if it can SHOW it.
+        # Before this, the claim alone was a forgery by construction, which was
+        # right while no record could carry evidence — and wrong once one
+        # could. `step_reference_tb`'s bridge now writes
+        # `functional_verified=true` ONLY beside a `<functional_evidence>`
+        # pointer to the professional cocotb transcript that closed the very
+        # deferral this record's waiver_reason names, and that transcript is
+        # judged by the SAME predicate the PASS branch below already applies:
+        # a real JUnit document, tests > 0, failures == errors == 0.
+        #
+        # An unsubstantiated claim is still a forgery and still FAILs, with the
+        # reason naming which half was missing — so a hand-edited flag, a
+        # dangling pointer, a non-JUnit file, a vacuous zero-test result and a
+        # failing one are each refused, exactly as before.
+        claimed = _read_xml_field(xml, "functional_evidence")
+        shown = _srb.substantiated_functional_evidence(project, claimed)
+        if not shown:
+            return 1, (
+                "FAIL: connectivity-PASS record asserts "
+                "functional_verified=true "
+                + (f"and points at {claimed!r}, which does not resolve to a "
+                   f"real passing JUnit transcript under this project"
+                   if claimed else
+                   "and carries no <functional_evidence> pointer")
+                + " — a claim that cannot be shown is a forged waiver.")
+        return 0, (
+            "PASS: the record's functional_verified=true is SUBSTANTIATED by "
+            f"{shown['rel_path']}: tests={shown['tests']} "
+            f"passed={shown['passed']} failures={shown['failures']} "
+            f"errors={shown['errors']}. The connectivity binding and the "
+            "functional oracle are both recorded, and the "
+            f"{CAP_CPU_FUNCTIONAL_ORACLE} marker is retained for the "
+            "per-case oracle gap it actually names.")
     evidence = _read_xml_field(xml, "evidence")
     if not evidence:
         return 1, ("FAIL: connectivity-PASS record carries no <evidence> "
