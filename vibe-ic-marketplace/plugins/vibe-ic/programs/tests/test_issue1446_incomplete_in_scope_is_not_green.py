@@ -102,6 +102,56 @@ def _close_ancestry(project: Path) -> Path:
         "program": "phase1_expert_parse_track.py", "verdict": "PASS",
         "findings": [], "ai_subtrack": {"status": "SKIPPED-CONDITION"},
         "generated_by": "test fixture"}))
+    # AND THE ANSWER THE SECOND PASS CONSUMES. Staging the REPORT alone does
+    # not close this chain, and MEASURED on live main 7903c1972305 (2026-09-03,
+    # pinned image sha256:66c33ff2..., host load 5.5) that is why both arms of
+    # this file were red:
+    #
+    #   flow_compliance_check --phase 2 --strict-structural  ->  [FAIL] Step D1
+    #   of D1's five blocking clauses:
+    #     phase1_all_l_docs_present_check      rc 0
+    #     analog_a0_skip_forbidden_check       rc 0
+    #     l_doc_todo_stub_count_check          rc 0
+    #     phase1_coverage_report_present_check rc 2
+    #     phase1_expert_parse_track .          rc 1   <-- this
+    #
+    # `phase1_expert_parse_track` is a TWO-PASS protocol: a program cannot
+    # spawn a subagent, so pass 1 writes the hand-off pack, reports
+    # HANDOFF_EMITTED, and exits 1 by design — AND OVERWRITES the report this
+    # fixture staged. Every headless invocation is pass 1, so D1 could not
+    # pass on any tree, fixture or real. `1aa24ef268` (#2014) fixed exactly
+    # this shape in `phase1_one_shot_runner`'s disposition layer and did not
+    # reach this gate clause, which calls the program directly.
+    #
+    # A "closed ancestry" means a Phase 1 that really RAN, and a Phase 1 that
+    # really ran has been through both passes. So the fixture stages the
+    # SECOND pass's input: the agent answer the consumer reads back. Measured
+    # end state — CONSUMED, 1 expectation, agreed 1, verdict PASS, rc 0.
+    #
+    # NOT DONE HERE, deliberately: downgrading D1's
+    # `program_exit_zero: phase1_expert_parse_track .` to advisory. That is a
+    # relabel, and it would change the verdict of every REAL run, not just
+    # this fixture's. Nor is `CONSUMED_EMPTY` used — measured, it is also rc 1,
+    # and #312 separated it from CONSUMED on purpose: an empty reading and a
+    # full one produce the same zero findings and only one is coverage.
+    pack = ra / "expert_parse_track_pack"
+    pack.mkdir(parents=True, exist_ok=True)
+    (pack / "l_doc_expectations.json").write_text(json.dumps({
+        "expectations": [{
+            "id": "ancestry-fixture-l1-schema",
+            "layer": "L1",
+            "field_path": "schema",
+            "requirement": "L1 names its own schema",
+            # `expected_tokens` is what makes an expectation DECIDABLE:
+            # `converge_ai_expectation` refuses a prose-only one rather than
+            # counting it as agreed. The token is satisfied by the L-doc stubs
+            # staged above, so this answer is met by THIS fixture's tree and
+            # not by assertion.
+            "expected_tokens": ["L1_"],
+            "evidence": ["staged by _close_ancestry: this fixture models a "
+                         "Phase 1 that completed BOTH passes of the expert "
+                         "track, not one that emitted a hand-off and stopped"],
+            "expert_source": "test fixture"}]}))
     # The 19th (#1348). `phase1_doc_one_shot_runner._seed_canonical_from_
     # backfilled_subset` returns WITHOUT writing when nothing was backfilled,
     # and on a tree with no `input/docs` nothing can be — so a hand-staged

@@ -39,6 +39,8 @@ or part identifier anywhere.
 """
 from __future__ import annotations
 
+import ast
+import inspect
 import json
 import sys
 from pathlib import Path
@@ -341,17 +343,123 @@ def test_reused_rows_name_the_producing_build(tmp_path, monkeypatch):
         assert version in plan[name]["detail"]
 
 
+#: The producer KINDS this runner has. Not a count of call sites — see
+#: `_producer_kinds`.
+_PRODUCER_KINDS = {"synth", "pnr", "gds"}
+
+
+def _producer_kinds(src: str, fn: str):
+    """(kinds, unreadable) — the `kind` literal each `fn(...)` call site names.
+
+    WHY A SET OF KINDS AND NOT A COUNT OF CALL SITES. This guard existed as
+    `src.count("_write_producer_identity(") == 3`, and MEASURED on live main
+    7903c1972305 (2026-09-03, host load 6.3, pinned image
+    sha256:66c33ff2...) that read 4:
+
+        E   AssertionError: each producing call site must stamp on success;
+            found 4
+
+    The fourth site is `phase3_one_shot_runner.py:47353`,
+    `_write_producer_identity(_pl.pnr_dir(project), "pnr")`, added by
+    `551560ba18` (PDN/EM first-pass resize, v1.14.30): when EM sizing forces a
+    resize the PnR step is RE-DISPATCHED, so the SAME producer kind is stamped
+    a second time. There is no fourth producing KIND — the runner still
+    produces synth, pnr and gds — so the defect this tripwire exists to catch
+    (#755: "a fourth producing step added without the key") did not happen.
+    The guard was counting TEXT OCCURRENCES, which cannot tell a legitimate
+    re-stamp from a new unguarded producer.
+
+    Raising 3 to 4 would freeze an instant into a contract: the next
+    re-dispatch expires it again, and it would STILL pass a genuinely new
+    `_write_producer_identity(..., "drc")` site, because that is also 4.
+    Deleting it would leave the #755 shape unguarded. So the population is
+    defined by BEHAVIOUR — which producer kinds does `main()` stamp and
+    consult — which is blind to re-stamping and loud about a new kind.
+
+    A call site whose kind is not a readable string literal is returned in
+    `unreadable` and is a FAILURE, not a silent skip: a guard that cannot read
+    a site cannot vouch for it, and a computed kind is exactly how a new
+    producer would arrive unseen.
+    """
+    kinds, unreadable = [], []
+    for node in ast.walk(ast.parse(src)):
+        if not isinstance(node, ast.Call):
+            continue
+        name = (node.func.id if isinstance(node.func, ast.Name)
+                else getattr(node.func, "attr", None))
+        if name != fn:
+            continue
+        kind = node.args[1] if len(node.args) > 1 else None
+        for kw in node.keywords:
+            if kw.arg == "kind":
+                kind = kw.value
+        if isinstance(kind, ast.Constant) and isinstance(kind.value, str):
+            kinds.append(kind.value)
+        else:
+            unreadable.append(ast.unparse(node))
+    return kinds, unreadable
+
+
 def test_all_three_call_sites_are_wired():
-    """Tripwire for a fourth producing step being added without the key —
-    the #755 shape ('fixed one site' vs 'fixed the class'). Counted today:
-    exactly 3 cache-reuse rows exist in this runner, and repo-wide grep for
-    'skipped re-run' finds no other producer of such a row."""
-    import inspect
+    """Tripwire for a fourth producing KIND being added without the key —
+    the #755 shape ('fixed one site' vs 'fixed the class').
+
+    Every kind the runner STAMPS must also be a kind it CONSULTS on reuse, and
+    the two sets must be exactly the kinds this runner produces. A kind
+    stamped but never consulted is an artefact nothing revalidates; a kind
+    consulted but never stamped can never be reused at all.
+    """
     src = inspect.getsource(R.main)
-    assert src.count("_producer_cache_valid_for(") == 3, (
-        "the phase-3 plan builder has exactly three cache-reuse decisions "
-        "(synth / pnr / gds) and each must consult the producer key; found "
-        f"{src.count('_producer_cache_valid_for(')}")
-    assert src.count("_write_producer_identity(") == 3, (
-        "each producing call site must stamp on success; found "
-        f"{src.count('_write_producer_identity(')}")
+    stamped, stamp_bad = _producer_kinds(src, "_write_producer_identity")
+    consulted, consult_bad = _producer_kinds(src, "_producer_cache_valid_for")
+
+    assert not stamp_bad and not consult_bad, (
+        "a producer call site names a kind this guard cannot read, so it "
+        f"cannot vouch for it: {stamp_bad + consult_bad}")
+    assert set(stamped) == _PRODUCER_KINDS, (
+        f"the runner stamps producer kinds {sorted(set(stamped))}; the "
+        f"guarded set is {sorted(_PRODUCER_KINDS)}. A new producing kind must "
+        f"arrive WITH its cache key, not after it")
+    assert set(consulted) == _PRODUCER_KINDS, (
+        f"the runner consults producer kinds {sorted(set(consulted))}; the "
+        f"guarded set is {sorted(_PRODUCER_KINDS)}. A reuse decision made "
+        f"without the producer key is the #755 shape")
+
+
+def test_the_kind_guard_still_refuses_a_new_unguarded_producer():
+    """CONTROL, the direction that must stay RED.
+
+    The counting form could not tell these two apart. This one must: a new
+    KIND is a defect, a second stamp of an existing kind is the PDN/EM
+    re-dispatch and is not.
+    """
+    src = inspect.getsource(R.main)
+
+    # (a) a genuinely new producing kind, stamped and never consulted
+    grown = src + (
+        "\n\ndef _synthetic_new_producer(project):\n"
+        "    _write_producer_identity(_pl.drc_dir(project), 'drc')\n")
+    kinds, bad = _producer_kinds(grown, "_write_producer_identity")
+    assert not bad
+    assert set(kinds) != _PRODUCER_KINDS, (
+        "a fourth producing KIND did not move the guarded set — the tripwire "
+        "would not have caught the #755 shape it exists for")
+
+    # (b) the measured legitimate case: the SAME kind stamped twice
+    restamped = src + (
+        "\n\ndef _synthetic_redispatch(project):\n"
+        "    _write_producer_identity(_pl.gds_dir(project), 'gds')\n")
+    kinds, bad = _producer_kinds(restamped, "_write_producer_identity")
+    assert not bad
+    assert set(kinds) == _PRODUCER_KINDS, (
+        "a re-dispatch that stamps an existing kind a second time moved the "
+        "guarded set; that is the false red this guard was rebuilt to stop")
+
+    # (c) a kind the guard cannot read is a refusal, never a silent pass
+    computed = src + (
+        "\n\ndef _synthetic_computed_kind(project, kind):\n"
+        "    _write_producer_identity(_pl.pnr_dir(project), kind)\n")
+    _kinds, bad = _producer_kinds(computed, "_write_producer_identity")
+    assert bad, (
+        "a call site whose kind is a variable was read as if it named none; "
+        "that is how a new producer arrives unseen")

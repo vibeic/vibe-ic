@@ -45,6 +45,7 @@ FLOW = PROGRAMS.parent / "flow" / "phase1_phase2_phase3.yaml"
 
 sys.path.insert(0, str(PROGRAMS))
 
+import _flow_reason_taxonomy as _reason_taxonomy  # noqa: E402
 import _report_check_argv as argv_helper  # noqa: E402
 import drc_report_check as wrapper  # noqa: E402
 import eda_report_audit as era  # noqa: E402
@@ -594,13 +595,55 @@ def test_the_vacuous_pass_credit_this_refusal_avoids_is_real(tmp_path,
     (proj / "reports").mkdir(parents=True)
     probe_dir = tmp_path / "probe_programs"
     probe_dir.mkdir()
-    (probe_dir / "rc2_probe.py").write_text("import sys\nsys.exit(2)\n")
     monkeypatch.setattr(fcc, "PROGRAMS_DIR", probe_dir)
-    passed, snippet = fcc._check_program_exit_zero(proj, "rc2_probe .")
+
+    # ARM 1 — the credit itself, which is what the refusal rc rationale rests
+    # on and which has NOT changed: rc 2 is credited, unconditionally.
+    (probe_dir / "rc2_bare.py").write_text("import sys\nsys.exit(2)\n")
+    passed, snippet = fcc._check_program_exit_zero(proj, "rc2_bare .")
     assert passed is True, (
         "rc 2 is no longer credited as a vacuous PASS — the refusal rc "
         "rationale in drc_report_check.py's docstring must be re-derived")
-    assert "VACUOUS" in snippet.upper()
+
+    # ...and #1978 split the TIER off the credit. MEASURED on live main
+    # 7903c1972305 (2026-09-03, pinned image sha256:66c33ff2..., host load
+    # 5.2): this arm asserted `"VACUOUS" in snippet.upper()` for a probe that
+    # is a bare `sys.exit(2)`, and read
+    #
+    #     INCOMPLETE: rc2_bare . — reason_class=EXECUTION_ERROR;
+    #     no classified reason was emitted
+    #
+    # That is CORRECT and is the whole point of #1978's non-verdict taxonomy:
+    # only `SKIP_ELIGIBLE` reason classes may stay under the benign
+    # VACUOUS_PASS heading, and an rc 2 that states no reason at all is an
+    # EXECUTION_ERROR. Relabelling EXECUTION_ERROR as skip-eligible to satisfy
+    # the old string would merge the two populations #492/#1978 separated —
+    # a silent rc 2 reading clean is exactly why 39 registered gates once did.
+    # So the probe now STATES a classifiable reason, and both tiers are pinned.
+    assert "INCOMPLETE" in snippet.upper(), snippet
+    assert _reason_taxonomy.EXECUTION_ERROR in snippet, snippet
+
+    # ARM 2 — the vacuous tier this test is actually about: a probe whose rc 2
+    # comes with a skip-eligible reason.
+    (probe_dir / "rc2_declared.py").write_text(
+        "import sys\n"
+        "print('CAPABILITY_ABSENT: the simulator this gate needs is "
+        "unavailable in this environment, so the question could not be put')\n"
+        "sys.exit(2)\n")
+    passed, snippet = fcc._check_program_exit_zero(proj, "rc2_declared .")
+    assert passed is True, snippet
+    assert "VACUOUS" in snippet.upper(), (
+        "an rc 2 that DOES state a skip-eligible reason no longer reaches the "
+        f"vacuous tier: {snippet}")
+
+    # ARM 3, the control: the two tiers must stay distinguishable. If a bare
+    # rc 2 and a declared one produced the same label, this test would be
+    # measuring nothing.
+    _p, bare = fcc._check_program_exit_zero(proj, "rc2_bare .")
+    _p, declared = fcc._check_program_exit_zero(proj, "rc2_declared .")
+    assert bare != declared, (
+        "a stated reason and no reason at all now read identically; the "
+        "#1978 split has collapsed")
 
     # ...and this wrapper's own refusal does not spend that code.
     assert _run([str(_project(tmp_path / "q")), "--mode=power"]).returncode == 1

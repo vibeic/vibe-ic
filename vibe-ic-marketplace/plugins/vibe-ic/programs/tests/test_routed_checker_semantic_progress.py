@@ -10,6 +10,9 @@ from types import SimpleNamespace
 
 import pytest
 
+import functools  # noqa: E402  (below the sys.path bootstrap, like the rest)
+
+import _session_floor as _floor  # noqa: E402
 import _routed_checker_progress as R
 import _semantic_child_progress as S
 import drc_vacuous_pass_check as DRC
@@ -17,6 +20,77 @@ import macro_obs_geometry_intersect_check as MACRO
 import repo_hygiene_parallel as P
 import step_internal_fail_bubble_up_check as BUBBLE
 import tool_diagnostic_id_gate as TOOL
+
+
+# ── the stall window is MEASURED on this host, not written down ────────────
+#
+# MEASURED on live main 7903c1972305 (2026-09-03, pinned image
+# sha256:66c33ff2..., host load 34):
+#
+#     python3 -c "pass"                                     0.031 - 0.042 s
+#     python3 -c "from _semantic_child_progress import ..."  0.100 - 0.105 s
+#
+# The forward-progress lease starts at SPAWN, so the first checkpoint cannot
+# arrive before the interpreter has started AND that import has finished. The
+# arm below hard-coded `stall_grace_s=0.09` — already SHORTER than the
+# measured start on this host — and its child then slept a further 0.04 s
+# before checkpointing. It was measuring the machine, and it failed on this
+# one at load 23.8.
+#
+# `_session_floor` already landed this repair for four other files
+# (`fc32402c88` / `0005a20b59`), and its docstring records the same shape:
+# windows of 0.25-0.50 s "killed before pytest existed", flipping colour with
+# host load. THIS FILE WAS NOT CONVERTED.
+#
+# ITS NUMBER IS NOT REUSED, AND THAT IS MEASURED TOO. `_session_floor`
+# calibrates a PYTEST SESSION; the children here are bare interpreters. On the
+# same host, same moment: `trivial_session_s()` = 1.515 s, so
+# `stall_window(0.09)` = 3.031 s — a 30x over-estimate for this shape, and
+# WORSE THAN WRONG: the kill-direction arm in this same file drives children
+# that live 3 s, so a 3.03 s window would stop that arm from ever killing
+# anything and the guard would silently stop saying no. The calibration below
+# measures THIS file's child shape, and `FLOOR_MULTIPLE` is taken from
+# `_session_floor` rather than re-typed.
+_CHILD_PROBE = "from _semantic_child_progress import child_progress"
+
+
+@functools.lru_cache(maxsize=None)
+def _child_start_s() -> float:
+    """Spawn-to-exit of a child of THIS file's shape, in seconds.
+
+    The larger of two consecutive measurements, mirroring
+    `_session_floor.trivial_session_s`: one lucky start must not set the floor
+    for the whole file.
+    """
+    def once() -> float:
+        started = time.monotonic()
+        subprocess.run([sys.executable, "-c", _CHILD_PROBE],
+                       cwd=str(Path(__file__).resolve().parent.parent),
+                       env=_env(), capture_output=True)
+        return time.monotonic() - started
+    return max(once() for _ in range(2))
+
+
+def _stall_window(nominal: float) -> float:
+    """`nominal`, lifted to what THIS host's child start-up actually needs."""
+    return max(float(nominal), _floor.FLOOR_MULTIPLE * _child_start_s())
+
+
+def test_the_derived_stall_window_still_separates_the_two_directions():
+    """PREMISE for every arm below, and the reason the lift is bounded.
+
+    A window derived upward is only useful while it stays far below the life
+    of the children the KILL arms drive (3 s of silence / chatter / a busy
+    loop). If a host is so slow that the two collide, this says so instead of
+    letting the kill arms pass for the wrong reason.
+    """
+    window = _stall_window(0.1)
+    assert window >= 0.1
+    assert window < 1.0, (
+        f"the measured child start-up on this host lifts the stall window to "
+        f"{window:.3f}s; the kill-direction arms drive children that live 3s, "
+        f"and a window this close to that stops those arms discriminating. "
+        f"child start = {_child_start_s():.3f}s")
 
 
 PROGRAMS = Path(__file__).resolve().parents[1]
@@ -407,24 +481,29 @@ def test_slow_exact_checker_manifest_relays_past_one_stall_window(
     monkeypatch.setattr(P, "DEFAULT_POLL_S", 0.01)
     units = MACRO.semantic_progress_units(routed_cell)
     observed = []
+    # THE RATIO IS WHAT THIS ARM ASSERTS, so the cadence scales WITH the
+    # window and keeps it: the child checkpointed every 0.04 s against a
+    # 0.09 s window, i.e. it renewed the lease at 4/9 of it, twice over.
+    window = _stall_window(0.09)
+    step = window * (0.04 / 0.09)
     source = f"""
 import time
 from _semantic_child_progress import child_progress
 units = {units!r}
 with child_progress({MACRO.PROGRESS_SCOPE!r}) as progress:
     for unit in units:
-        time.sleep(0.04)
+        time.sleep({step!r})
         progress.checkpoint(unit)
 """
     started = time.monotonic()
     rc, body, problem = P._run(
         [sys.executable, "-c", source], tmp_path, _env(),
-        stall_grace_s=0.09,
+        stall_grace_s=window,
         semantic_progress_scope=MACRO.PROGRESS_SCOPE,
         semantic_progress_units=units,
         domain_progress_callback=lambda *event: observed.append(event))
     elapsed = time.monotonic() - started
-    assert elapsed > 0.09
+    assert elapsed > window
     assert (rc, problem) == (0, None), (rc, body, problem)
     assert observed == [
         (MACRO.PROGRESS_SCOPE, completed, len(units))
@@ -442,7 +521,11 @@ def test_silent_chatty_and_busy_activity_cannot_renew_checker_manifest(
     units = MACRO.semantic_progress_units(routed_cell)
     rc, output, problem = P._run(
         [sys.executable, "-c", body], tmp_path, _env(),
-        stall_grace_s=0.1,
+        # THE SAME DERIVED WINDOW as the relay arm. If the kill direction kept
+        # a hard-coded window while the relay direction was lifted, the pair
+        # would stop being comparable and only the half that must SURVIVE
+        # would have been made robust — which is how a guard stops saying no.
+        stall_grace_s=_stall_window(0.1),
         semantic_progress_scope=MACRO.PROGRESS_SCOPE,
         semantic_progress_units=units)
     assert rc == 2, (rc, output, problem)

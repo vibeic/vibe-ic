@@ -66,7 +66,7 @@ def _p0(fails=(), skips=(), status="FAIL"):
                for g, m in fails]
     records += [fcc._p0_gate_record(g, "SKIP", "",
                                     {"exit_code": 2,
-                                     "skip_kind": "input-missing"})
+                                     "skip_kind": _SKIP_KIND_THAT_STAYS_SKIP})
                 for g, _m in skips]
     reasons = fcc._compose_p0_reasons(
         [f"FAIL: {fcc._p0_fail_line_body(r)}"
@@ -75,6 +75,74 @@ def _p0(fails=(), skips=(), status="FAIL"):
     return fcc.StepResult(id="P0", name="Structural-RTL gates (P0 umbrella)",
                           stage="stage1", status=status, reasons=reasons,
                           gate_records=records)
+
+
+def _a_skip_kind_that_really_stays_a_skip() -> str:
+    """A `skip_kind` the SHIPPED taxonomy actually keeps in the skip tier.
+
+    The fixture used to hard-code `"input-missing"`. MEASURED on live main
+    7903c1972305 (2026-09-03, pinned image sha256:66c33ff2..., host load 23.9):
+    `_p0_gate_record(..., "SKIP", message="", {"skip_kind": "input-missing"})`
+    now comes back verdict INCOMPLETE / reason_class EXECUTION_ERROR, because
+    `_flow_reason_taxonomy.infer_nonverdict_reason` has no branch for that
+    token and is deliberately fail-closed. So the fixture's 80 "SKIP lines"
+    were never SKIP records, `_compose_p0_reasons` got an empty skip list, and
+    the arm's own premise — `len(r.reasons) == 81` — read 1.
+
+    THE PREMISE WAS WRONG, NOT THE CLASSIFIER. This arm's subject is
+    informational-only suppression AMID MANY SKIP LINES; which skip the other
+    80 gates took is not its subject. So the kind is CHOSEN BY MEASUREMENT
+    here rather than re-typed: whatever the shipped record builder still keeps
+    in the skip tier. A fixture that encodes a token the flow has stopped
+    honouring is how this arm went red without anything being wrong with it.
+
+    That `input-missing` — the flow's own documented rc-2 convention, assigned
+    in seven shipped gates — no longer reaches the skip tier is a separate,
+    real observation. It is DISCLOSED by
+    `test_the_input_missing_convention_no_longer_reaches_the_skip_tier`, not
+    quietly fixed here: which reason class that convention deserves changes
+    the verdict of every structural gate that takes it, and that is a doctrine
+    decision, not a fixture repair.
+    """
+    for kind in ("class-not-applicable", "capability-absent",
+                 "verified-capability-absent", "external",
+                 "analog-track-deferred"):
+        rec = fcc._p0_gate_record(
+            "probe", "SKIP", "", {"exit_code": 2, "skip_kind": kind})
+        if rec["verdict"] == "SKIP":
+            return kind
+    raise AssertionError(
+        "no skip_kind the shipped record builder knows still produces a SKIP "
+        "record; every P0 sub-gate skip has left the skip tier")
+
+
+_SKIP_KIND_THAT_STAYS_SKIP = _a_skip_kind_that_really_stays_a_skip()
+
+
+def test_the_input_missing_convention_no_longer_reaches_the_skip_tier():
+    """DISCLOSURE, not a fix — and it fails loudly the day this changes.
+
+    `input-missing` is the flow's own documented rc-2 skip convention
+    (`_gate_usage_exit`: "input-missing skip"; assigned in seven shipped
+    gates). MEASURED on live main 7903c1972305: a P0 sub-gate record carrying
+    it is classified INCOMPLETE / EXECUTION_ERROR and therefore leaves the
+    executed-PASS population.
+
+    This test states that measurement rather than asserting what the answer
+    OUGHT to be. Making `input-missing` skip-eligible would move a large
+    population back under the benign heading that #492/#1978 split apart;
+    leaving it as an execution error means every structural gate that skips
+    for an absent input is disclosed as incomplete. Both are defensible and
+    neither is a fixture's decision to make. If the classification changes,
+    this test fails and the person changing it must say which they chose.
+    """
+    rec = fcc._p0_gate_record(
+        "probe", "SKIP", "", {"exit_code": 2, "skip_kind": "input-missing"})
+    assert (rec["verdict"], rec.get("reason_class")) == (
+        "INCOMPLETE", "EXECUTION_ERROR"), (
+        f"the `input-missing` convention now classifies as {rec!r}. That is a "
+        f"doctrine change — say which population it was moved into and why")
+    assert _SKIP_KIND_THAT_STAYS_SKIP != "input-missing"
 
 
 # ── the gates that can only ever run inside the P0 umbrella ──────────────────

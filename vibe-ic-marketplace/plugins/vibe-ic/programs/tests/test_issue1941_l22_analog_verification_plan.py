@@ -24,15 +24,18 @@ from __future__ import annotations
 
 import ast
 import json
+import re
 import subprocess
 import sys
 from pathlib import Path
 
 
 PROGRAMS = Path(__file__).resolve().parents[1]
+PLUGIN = PROGRAMS.parent
 if str(PROGRAMS) not in sys.path:
     sys.path.insert(0, str(PROGRAMS))
 
+import flow_compliance_check as FCC  # noqa: E402
 import ic_expert_backup_pack as PACK  # noqa: E402
 import phase1_doc_one_shot_runner as RUNNER  # noqa: E402
 from _hostpaths import require_repo  # noqa: E402
@@ -203,10 +206,120 @@ def test_analog_class_projects_l5_rows_and_intent_into_l22(tmp_path):
     }
 
 
-def test_emitter_declares_advisory_enforcement():
-    source = PROGRAMS / "l22_analog_verification_plan_emit.py"
+EMITTER = "l22_analog_verification_plan_emit"
+
+
+def test_emitter_declares_itself_a_producer_and_is_not_wired_as_a_gate():
+    """RENAMED AND REPOINTED, and the old name was the problem.
+
+    It asserted the literal `ENFORCEMENT: ADVISORY PRODUCER` in the emitter's
+    first 2000 bytes. MEASURED RED on live main 7903c1972305 (2026-09-03,
+    pinned image sha256:66c33ff2..., host load 5.1) because `867f807a77`
+    (#1980) rewrote that heading to `ROLE: PRODUCER, not a gate` at the same
+    time as it removed the emitter's duplicate
+    `advisory_program_exit_zero --dry-run` wiring: a producer is not a
+    predicate and must not inflate gate coverage.
+
+    PUTTING THE LITERAL BACK IS NOT A COMMENT EDIT. `flow_compliance_check.
+    _gate_is_two_source_advisory` matches `/(?m)^ *ENFORCEMENT: *advis/`
+    against a gate MODULE'S OWN DOCSTRING and uses it as one of the two keys
+    that let a refusal keep its tier ("ADVISORY_REFUSAL (wired advisory; the
+    refusal is reported and does NOT deny this step its tier)"). MEASURED: the
+    regex is case-sensitive and the 50 modules that really declare it spell it
+    `ENFORCEMENT: advisory`, so the old uppercase `ENFORCEMENT: ADVISORY
+    PRODUCER` did not itself arm the hatch — it sat one lowercase word away
+    from arming it, on a module #1980 had just finished removing from every
+    gate slot. Restoring a decommissioned declaration to satisfy a pin is how
+    that word gets edited later by someone reading the module as advisory.
+
+    So the pin now asserts what the emitter IS: a producer, declaring that
+    role in its own docstring, NOT declaring itself advisory, not armed for
+    the two-source hatch, and declared in the flow only in producer slots —
+    never in a gate slot. Every one of those is read structurally, none is a
+    substring of a byte window.
+    """
+    source = PROGRAMS / f"{EMITTER}.py"
     assert source.is_file()
-    assert "ENFORCEMENT: ADVISORY PRODUCER" in source.read_text()[:2000]
+    doc = ast.get_docstring(ast.parse(source.read_text())) or ""
+
+    assert "ROLE: PRODUCER" in doc, (
+        "the emitter no longer declares its role in its own docstring; the "
+        "flow reads that docstring, so an undeclared role is not cosmetic")
+    assert not re.search(r"(?m)^ *ENFORCEMENT: *advis", doc), (
+        "the emitter declares itself ADVISORY. That is one of the two keys "
+        "`flow_compliance_check._gate_is_two_source_advisory` needs to let a "
+        "refusal keep its tier, and #1980 disarmed it on purpose")
+    assert FCC._gate_is_two_source_advisory(EMITTER) is False, (
+        "the two-source advisory escape hatch is armed for a PRODUCER")
+
+    gate_slots, producer_slots = _flow_slots_naming(EMITTER)
+    assert not gate_slots, (
+        f"#1980 removed this producer from the gate slots and it is back in "
+        f"{gate_slots}; a producer in a gate slot inflates gate coverage")
+    assert producer_slots, (
+        f"{EMITTER} is declared in no producer slot at all, so the flow no "
+        f"longer runs it and the L22 projection is silently gone")
+
+
+def _flow_slots_naming(program: str):
+    """(gate_slots, producer_slots) for `program` in the canonical flow.
+
+    Structural, not a grep: a gate slot is a `*_program_exit_zero` command, a
+    producer slot is a step's `programs:` entry or a `program_outputs` entry.
+    """
+    import yaml  # noqa: PLC0415
+    doc = yaml.safe_load(
+        (PLUGIN / "flow" / "phase1_phase2_phase3.yaml").read_text())
+    gate_slots, producer_slots = [], []
+
+    def walk(node, trail=""):
+        if isinstance(node, dict):
+            for k, v in node.items():
+                key = str(k)
+                if key in ("program_exit_zero", "advisory_program_exit_zero",
+                           "optional_program_exit_zero"):
+                    cmd = v if isinstance(v, str) else (v or {}).get("command", "")
+                    if program in str(cmd):
+                        gate_slots.append(f"{trail}/{key}")
+                elif key == "programs" and isinstance(v, list):
+                    if program in v:
+                        producer_slots.append(f"{trail}/programs")
+                elif key == "program_outputs" and isinstance(v, list):
+                    for e in v:
+                        if isinstance(e, dict) and e.get("program") == program:
+                            producer_slots.append(f"{trail}/program_outputs")
+                walk(v, f"{trail}/{key}")
+        elif isinstance(node, list):
+            for i, v in enumerate(node):
+                walk(v, f"{trail}[{i}]")
+
+    walk(doc)
+    return gate_slots, producer_slots
+
+
+def test_the_producer_pin_still_refuses_a_producer_wired_as_a_gate():
+    """CONTROL. The repointed pin must still be able to say no — to the
+    module half of the hatch, and to a gate-slot wiring."""
+    # The spelling that really arms it, taken from a module that really
+    # declares it rather than re-typed from the regex.
+    armed = '"""x\n\nENFORCEMENT: advisory — this gate cannot stop a run.\n"""\n'
+    doc = ast.get_docstring(ast.parse(armed)) or ""
+    assert re.search(r"(?m)^ *ENFORCEMENT: *advis", doc), (
+        "the docstring half of the two-source hatch is no longer detectable, "
+        "so asserting its absence proves nothing")
+    declared = [q for q in sorted(PROGRAMS.glob("*.py"))
+                if re.search(r"(?m)^ *ENFORCEMENT: *advis",
+                             ast.get_docstring(
+                                 ast.parse(q.read_text(errors="replace")))
+                             or "")]
+    assert declared, (
+        "no shipped module declares itself advisory, so this pin's absence "
+        "assertion is measuring an empty convention")
+
+    gate_slots, _ = _flow_slots_naming("flow_compliance_check")
+    assert gate_slots, (
+        "no program in the whole flow was found in a gate slot, so the "
+        "gate-slot half of this pin cannot distinguish anything")
 
 
 def test_unusable_inputs_degrade_loudly(tmp_path, capsys):

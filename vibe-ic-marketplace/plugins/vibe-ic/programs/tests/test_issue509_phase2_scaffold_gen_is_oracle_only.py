@@ -31,6 +31,7 @@ hardcoded file list that goes stale when a program is added or renamed.
 from __future__ import annotations
 
 import ast
+import json
 from pathlib import Path
 from typing import Dict, Iterator, List, Set, Tuple
 
@@ -75,33 +76,57 @@ def _mentions_oracle(text: str) -> List[str]:
     return [t for t in ORACLE_TOKENS if t in text]
 
 
+#: The flow-spec keys whose scalars the flow LOADER ACTUALLY EXECUTES.
+#: Read off `flow/phase1_phase2_phase3.yaml`'s own shape, not invented here:
+#: a gate clause is either a bare command string or a mapping whose `command`
+#: is run and whose `condition_files_exist` paths are evaluated; a step's
+#: `programs:` is a list of program names; a `program_outputs` entry names the
+#: `program` that writes a `path`.
+_FLOW_CLAUSE_KEYS = ("program_exit_zero", "advisory_program_exit_zero",
+                     "optional_program_exit_zero")
+_FLOW_CLAUSE_EXECUTED = ("command", "condition_files_exist")
+_FLOW_OUTPUT_EXECUTED = ("program", "path")
+
+
 def _flow_values(path: Path) -> List[str]:
-    """Every SCALAR the flow declares, comments excluded.
+    """Every scalar the flow WIRES — prose about the flow excluded.
 
     vibe-ic#1012 IN THIS FILE. `test_no_flow_step_names_the_scaffold_oracle`
     read the yaml as raw TEXT and asked whether the token appeared anywhere in
     it, so a program named in a `#` COMMENT counted as a flow step naming it.
-    Measured on `a38902d16`: the sole occurrence of `emit_fsm_v` in
-    `phase1_phase2_phase3.yaml` is line 317, inside a comment explaining why a
-    gate is NOT blocking —
+    #1012 moved the population from raw text to `yaml.safe_load` scalars, which
+    drops comments by construction.
 
-        # WHY NOT BLOCKING. Every one of the 41 is a TRUE finding — L6 declares
-        # states and zero transitions, and `emit_fsm_v()`'s body really is
-        # `// TODO — transition logic per L6.fsm_transitions`.
+    THAT WAS HALF THE POPULATION. MEASURED on live main 7903c1972305
+    (2026-09-03, host load 6.5, pinned image sha256:66c33ff2...): the sole
+    remaining hit in the whole `flow/` tree is
 
-    — and the flow wires it nowhere. The test was red on main for a mention in
-    prose about the oracle's own body, which is the one place the oracle is
-    SUPPOSED to be discussed.
+        steps[0].gate.all_of[22].advisory_program_exit_zero.advisory_reason
 
-    The same file already knows the rule: `_subprocess_invocations_of_oracle`
-    is AST-based precisely "so a mention in a comment, a docstring or a string
-    constant is not counted". This gives the yaml reader the same standard.
-    `yaml.safe_load` drops comments by construction, so walking the parsed
-    document cannot see one — the fix is structural, not a smarter regex.
+    — a PROSE key. It quotes, verbatim, `cross_layer_reference_check`'s own
+    notch output from a real spm run on 2026-08-31 ("... phase2_scaffold_gen
+    .derive_signals — the derivation that would consume it — yields width").
+    The clause's `command` is `cross_layer_reference_check .`; the flow wires
+    the oracle NOWHERE. #1012 excluded comments and did not exclude prose
+    KEYS, and a YAML string value is a scalar just as much as a wired one.
 
-    A file that is not yaml, or does not parse, falls back to the raw text: a
-    reader that silently skipped what it could not parse would turn a real
-    wiring into a pass, which is the opposite failure and the worse one.
+    Two ways to get this wrong, both rejected. Editing that `advisory_reason`
+    to drop the program name would ERASE A MEASURED READING to make a guard
+    green — and the ratchet doctrine keeps that notch precisely so the next
+    reader knows it was measured. Hand-listing "skip these prose keys" would
+    be an allow-list, blind to the next prose key anyone adds and silently
+    expiring.
+
+    So the population is defined by BEHAVIOUR: the scalars the loader runs or
+    evaluates — a clause's command and its `condition_files_exist` paths, a
+    step's `programs:`, a `program_outputs` entry's `program` and `path`. A
+    file this reader recognises no executed scalar in falls back to its RAW
+    TEXT, and so does a file that is not yaml or does not parse: a reader that
+    silently skipped what it could not understand would turn a real wiring
+    into a pass, which is the opposite failure and the worse one.
+
+    `test_the_flow_reader_still_sees_every_wiring_shape` pins that the
+    narrowing did not blind the guard.
     """
     try:
         import yaml  # noqa: PLC0415
@@ -112,18 +137,45 @@ def _flow_values(path: Path) -> List[str]:
         return []
     out: List[str] = []
 
+    def emit(node: object) -> None:
+        """Every scalar under an EXECUTED node, whatever its nesting."""
+        if isinstance(node, dict):
+            for v in node.values():
+                emit(v)
+        elif isinstance(node, (list, tuple)):
+            for v in node:
+                emit(v)
+        elif node is not None:
+            out.append(str(node))
+
     def walk(node: object) -> None:
         if isinstance(node, dict):
             for k, v in node.items():
-                out.append(str(k))
+                key = str(k)
+                if key in _FLOW_CLAUSE_KEYS:
+                    if isinstance(v, dict):
+                        for ek in _FLOW_CLAUSE_EXECUTED:
+                            emit(v.get(ek))
+                    else:
+                        emit(v)
+                elif key == "programs":
+                    emit(v)
+                elif key == "program_outputs":
+                    for entry in (v if isinstance(v, list) else []):
+                        if isinstance(entry, dict):
+                            for ek in _FLOW_OUTPUT_EXECUTED:
+                                emit(entry.get(ek))
+                        else:
+                            emit(entry)
                 walk(v)
         elif isinstance(node, (list, tuple)):
             for v in node:
                 walk(v)
-        elif node is not None:
-            out.append(str(node))
 
     walk(doc)
+    if not out:
+        # Nothing this reader recognises as wiring. Do not call that clean.
+        return [path.read_text(encoding="utf-8", errors="replace")]
     return out
 
 
@@ -274,6 +326,113 @@ def test_no_flow_step_names_the_scaffold_oracle():
         f"{ORACLE_STEM} is ORACLE-ONLY (#509) and a flow specification now "
         f"names it: {offenders}. See the module docstring before landing it."
     )
+
+
+def test_the_flow_reader_still_sees_every_wiring_shape(tmp_path):
+    """CONTROL for the narrowing above — the direction that must stay RED.
+
+    Moving the flow population from "every parsed scalar" to "every EXECUTED
+    scalar" narrows the guard, so the narrowing has to be shown not to have
+    blinded it. Every shape the live spec actually uses to wire a program is
+    planted here with the oracle's name in it, and each must still be seen;
+    a prose key carrying the same name must not be.
+
+    The wiring shapes are not re-typed from memory — they are the keys this
+    module declares it reads, so a shape added to `_FLOW_CLAUSE_KEYS` or
+    `_FLOW_OUTPUT_EXECUTED` and not covered here fails the last assertion.
+    """
+    seen_clause_keys, seen_output_keys = set(), set()
+    wiring = {
+        "clause-as-string": {
+            "steps": [{"gate": {"all_of": [
+                {"program_exit_zero": f"{ORACLE_STEM} ."}]}}]},
+        "clause-as-mapping-command": {
+            "steps": [{"gate": {"all_of": [
+                {"advisory_program_exit_zero": {
+                    "command": f"{ORACLE_STEM} .",
+                    "advisory_reason": "why"}}]}}]},
+        "clause-optional-command": {
+            "steps": [{"gate": {"all_of": [
+                {"optional_program_exit_zero": {
+                    "command": f"{ORACLE_STEM} ."}}]}}]},
+        "clause-condition-files": {
+            "steps": [{"gate": {"all_of": [
+                {"program_exit_zero": {
+                    "command": "something_else .",
+                    "condition_files_exist": [f"programs/{ORACLE_FILE}"]}}]}}]},
+        "step-programs-list": {
+            "steps": [{"programs": ["a_check", ORACLE_STEM]}]},
+        "program-outputs-program": {
+            "steps": [{"program_outputs": [
+                {"program": ORACLE_STEM, "path": "reports/x.json"}]}]},
+        "program-outputs-path": {
+            "steps": [{"program_outputs": [
+                {"program": "a_check", "path": f"reports/{ORACLE_STEM}.json"}]}]},
+        "oracle-token-not-the-module-name": {
+            "steps": [{"programs": ["emit_fsm_v"]}]},
+    }
+    # EVERY planted doc also carries one UNRELATED executed scalar. Without it
+    # a reader that stopped honouring the shape under test would emit nothing,
+    # fall back to raw text, and find the token anyway — MEASURED: disabling
+    # `programs:` in the reader left this control GREEN until this line existed.
+    ballast = {"gate": {"all_of": [{"program_exit_zero": "unrelated_check ."}]}}
+    for label, doc in wiring.items():
+        doc = dict(doc)
+        doc["steps"] = list(doc["steps"]) + [ballast]
+        spec = tmp_path / f"{label}.yaml"
+        spec.write_text(json.dumps(doc))
+        values = _flow_values(spec)
+        assert "unrelated_check ." in values, (
+            f"{label}: the ballast scalar did not reach the reader, so this "
+            f"case is being rescued by the raw-text fallback and proves "
+            f"nothing about the shape it plants")
+        assert _mentions_oracle(" ".join(values)), (
+            f"the flow reader no longer sees the {label!r} wiring shape; the "
+            f"narrowing blinded the guard it was meant to sharpen")
+        for k in _FLOW_CLAUSE_KEYS:
+            if k in json.dumps(doc):
+                seen_clause_keys.add(k)
+        for k in _FLOW_OUTPUT_EXECUTED:
+            if label.startswith("program-outputs"):
+                seen_output_keys.add(k)
+
+    # ...and the measured false positive this narrowing removes.
+    prose = tmp_path / "prose.yaml"
+    prose.write_text(json.dumps({"steps": [{"gate": {"all_of": [
+        {"advisory_program_exit_zero": {
+            "command": "cross_layer_reference_check .",
+            "advisory_reason": (
+                "Notch measured rc 1 on a real spm run (2026-08-31). It "
+                f"reported: {ORACLE_STEM}.derive_signals — the derivation "
+                "that would consume it — yields width"),
+            "absent_condition_reason": f"{ORACLE_STEM} is not wired here"}}]}}]}))
+    assert not _mentions_oracle(" ".join(_flow_values(prose))), (
+        "prose ABOUT the oracle was read as the flow WIRING it — the #1012 "
+        "shape, one layer in")
+
+    # A shape this module says it reads but nothing above exercises would make
+    # the control weaker than the reader.
+    assert seen_clause_keys == set(_FLOW_CLAUSE_KEYS), (
+        f"clause keys the reader honours but this control never plants: "
+        f"{sorted(set(_FLOW_CLAUSE_KEYS) - seen_clause_keys)}")
+    assert seen_output_keys == set(_FLOW_OUTPUT_EXECUTED), (
+        f"program_outputs keys the reader honours but this control never "
+        f"plants: {sorted(set(_FLOW_OUTPUT_EXECUTED) - seen_output_keys)}")
+
+
+def test_a_flow_file_the_reader_cannot_read_is_scanned_whole(tmp_path):
+    """The safe direction, kept. An unparseable spec, and a parseable one with
+    no wiring the reader recognises, both fall back to RAW TEXT — silently
+    skipping what it cannot understand would turn a real wiring into a pass."""
+    broken = tmp_path / "broken.yaml"
+    broken.write_text(f"steps: [ {{ unbalanced: '{ORACLE_STEM}'\n")
+    assert _mentions_oracle(" ".join(_flow_values(broken)))
+
+    unknown = tmp_path / "unknown.json"
+    unknown.write_text(json.dumps({"some_future_key": ORACLE_STEM}))
+    assert _mentions_oracle(" ".join(_flow_values(unknown))), (
+        "a flow file whose shape this reader does not know was reported "
+        "clean; 'I could not read it' is not 'there is nothing there'")
 
 
 # ---------------------------------------------------------------------------

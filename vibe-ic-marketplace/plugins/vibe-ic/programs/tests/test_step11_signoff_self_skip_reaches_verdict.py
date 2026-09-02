@@ -142,7 +142,44 @@ def test_deferral_is_recorded_in_the_audit_json(tmp_path):
                for d in audit["open_source_constraints_deferrals"])
 
 
-@pytest.mark.parametrize("sid", [5, 11, 12, 13])
+#: The table's DIGITAL step ids — the population this arm is keyed on, DERIVED
+#: from the table instead of re-typed beside it.
+#:
+#: It was `[5, 11, 12, 13]`, hand-written. MEASURED on live main 7903c1972305
+#: (2026-09-03, pinned image sha256:66c33ff2..., host load 24.0):
+#:
+#:     FAILED test_every_oss_blocked_signoff_step_is_covered[5]
+#:
+#: `2a9d21368d` (#1974, "close formal property authoring gap") DELIBERATELY
+#: removed key 5 — "Formal verification harness (SymbiYosys IS in container)"
+#: — from `_OPEN_SOURCE_CONTAINER_BLOCKED_STEPS`, because SymbiYosys is in the
+#: image and the entry was a false open-source reprieve. Only the `[5]` cell
+#: was red; 11, 12 and 13 still pass. Putting 5 back would REOPEN the reprieve
+#: #1974 closed, and this arm's own docstring already said the bucket is keyed
+#: on the EXISTING table — so it now reads the table.
+#:
+#: The analog/mixed entries are string ids on a different track and the DFT
+#: -shaped fixture below cannot express them; the digital ids are exactly the
+#: ones it can, and `test_the_derived_oss_population_is_not_vacuous` refuses a
+#: derivation that has silently emptied or started dropping numeric keys.
+_OSS_BLOCKED_DIGITAL_STEPS = sorted(k for k in _TABLE if isinstance(k, int))
+
+
+def test_the_derived_oss_population_is_not_vacuous():
+    """A parametrize derived from a table is a green with no cases in it the
+    day the derivation breaks. Both halves are checked: the population is
+    non-empty, and it drops no numeric key the table carries."""
+    assert _OSS_BLOCKED_DIGITAL_STEPS, (
+        "the OSS-blocked digital population is EMPTY, so "
+        "test_every_oss_blocked_signoff_step_is_covered runs zero cases and "
+        "passes vacuously")
+    numeric = {k for k in _TABLE if not isinstance(k, str)}
+    assert set(_OSS_BLOCKED_DIGITAL_STEPS) == numeric, (
+        f"the derivation dropped numeric table keys: "
+        f"{sorted(numeric - set(_OSS_BLOCKED_DIGITAL_STEPS), key=str)}")
+
+
+@pytest.mark.parametrize("sid", _OSS_BLOCKED_DIGITAL_STEPS)
 def test_every_oss_blocked_signoff_step_is_covered(tmp_path, sid):
     """The bucket is keyed on the EXISTING table, so it must behave the same
     for the table's other sign-off entries — no per-step special-casing."""
