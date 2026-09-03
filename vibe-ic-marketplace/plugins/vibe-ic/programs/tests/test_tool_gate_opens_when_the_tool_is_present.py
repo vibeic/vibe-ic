@@ -380,6 +380,12 @@ WHICH_GATES = (
     ("test_round17_latency_inclusive_origin", "_HAVE_IVERILOG"),
     ("test_rtl_transitive_cone", "_HAS_IVERILOG"),
     ("test_rtl_transitive_cone", "_HAS_VVP"),
+    # Landed 2026-09-03 in `0b8cca073` with a `_HAS_IVERILOG` gate and no
+    # row here — the population scan named it the same day, which is what
+    # the scan is for. `shutil.which("iverilog") is not None` is the whole
+    # discriminator (single-stage, no shell-out behind it), so the row
+    # belongs here and not in a carve-out.
+    ("test_scored_record_names_the_samples_it_stands_on", "_HAS_IVERILOG"),
     ("test_serial_parallel_mul_synth", "_HAVE_IVERILOG"),
     ("test_shapec_emit_blocking_rules", "_HAS_IVERILOG"),
     ("test_table_lut_synth", "_HAVE_SIM"),

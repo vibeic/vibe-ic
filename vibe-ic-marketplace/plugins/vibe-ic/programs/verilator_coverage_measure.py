@@ -773,9 +773,62 @@ _COV_CLK_RST_RE = re.compile(
 _COV_DRIVE_RE_TMPL = r"\b{name}\s*(?:<=(?!=)|(?<![<>=!])=(?!=))"
 #: A module instantiation's named port connections: `.port(signal)`.
 _COV_PORT_BIND_RE = re.compile(r"\.\s*(\w+)\s*\(\s*([\w\[\]:\s]*?)\s*\)")
-#: `reg [31:0] name = 0;` / `reg name;` — the declaration, which is not a drive.
+#: A whole `reg ...;` declaration STATEMENT — the declaration, which is not a
+#: drive.  NOT line-anchored and NOT one-name-per-match, because it was both
+#: and each cost the audit a signal:
+#:
+#:     reg clk = 1'b0; reg rst; reg a; wire q;
+#:
+#: is THREE declarations on one line, and `(?m)^\s*reg` sees only the first —
+#: so `a`, the design's only functional input, was never in the drivable set at
+#: all.  A comma list (`reg a, b;`) lost everything after the first name for
+#: the same reason.  The names are pulled out of the matched statement by
+#: `_cov_declared_regs`, so one expression serves both readers: the name scan
+#: and the `sub()` that strips declarations before looking for drives.
 _COV_REG_DECL_RE = re.compile(
-    r"(?m)^\s*reg\b[^;\n]*?\b(\w+)\s*(?:=[^;\n]*)?\s*[;,]")
+    r"\breg\b(?:\s+(?:signed|unsigned))?(?:\s*\[[^\]\n]*\])?[^;\n]*;")
+#: Strips the keyword, an optional sign qualifier and an optional packed range
+#: off a matched declaration, leaving the comma list of declared names.
+_COV_REG_DECL_HEAD_RE = re.compile(
+    r"^\s*reg\b(?:\s+(?:signed|unsigned))?(?:\s*\[[^\]\n]*\])?")
+
+
+def _cov_split_top_level(text: str) -> List[str]:
+    """`text` split on commas that are not inside `{}`, `()` or `[]`.
+
+    A declaration's initialiser may itself contain commas
+    (`reg [3:0] x = {1'b0, 3'b000};`), and splitting through one would
+    manufacture a name out of the middle of an expression.
+    """
+    items: List[str] = []
+    depth = 0
+    cur: List[str] = []
+    for ch in text:
+        if ch in "{([":
+            depth += 1
+        elif ch in "})]":
+            depth -= 1
+        if ch == "," and depth <= 0:
+            items.append("".join(cur))
+            cur = []
+        else:
+            cur.append(ch)
+    items.append("".join(cur))
+    return items
+
+
+def _cov_declared_regs(body: str) -> set:
+    """Every name declared `reg` in `body`, however the declarations are laid
+    out — several statements on one line, and comma lists within a statement.
+    """
+    names = set()
+    for stmt in _COV_REG_DECL_RE.findall(body):
+        tail = _COV_REG_DECL_HEAD_RE.sub("", stmt).rstrip(";")
+        for item in _cov_split_top_level(tail):
+            m = re.match(r"\s*(\w+)", item)
+            if m:
+                names.add(m.group(1))
+    return names
 
 
 def _cov_strip_comments(text: str) -> str:
@@ -812,7 +865,7 @@ def functional_stimulus_audit(tb_path: Path) -> Dict[str, Any]:
         out["reason"] = ("no named port connections found, so which signals "
                          "reach the design cannot be determined")
         return out
-    declared_reg = set(_COV_REG_DECL_RE.findall(body))
+    declared_reg = _cov_declared_regs(body)
     drivable = sorted(bound & declared_reg)
     if not drivable:
         out["reason"] = ("no bound signal is declared `reg`, so the drivable "
@@ -830,6 +883,22 @@ def functional_stimulus_audit(tb_path: Path) -> Dict[str, Any]:
             out["driven"].append(name)
         else:
             out["inert"].append(name)
+    if not out["driven"] and not out["inert"]:
+        # EMPTY POPULATION.  Every drivable bound signal is a clock or a
+        # reset, so this testbench declares no functional design input at
+        # all.  "Does it move a functional input?" then has nothing to be
+        # asked about, and `driven == []` is NOT OBSERVED rather than NO.
+        # Answering it anyway is the zero-denominator verdict this repo
+        # refuses everywhere else, and it is not hypothetical: it is the
+        # second half of the defect above — the mis-read emptied the set,
+        # and this branch then read the empty set as proof of inertness and
+        # printed "It never drives ['(none)']".
+        out["reason"] = (
+            "every bound drivable signal is a clock or reset "
+            f"({out['clock_reset'] or ['(none)']}); the testbench declares "
+            "no functional design input, so whether one is moved is not "
+            "decidable from this source")
+        return out
     out["decidable"] = True
     return out
 
