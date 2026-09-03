@@ -647,6 +647,39 @@ _A1_A3_PRODUCERS: Dict[str, Dict[str, Any]] = {
     },
 }
 
+#: The producer-provenance STAMPS `step_for_block` may return in place of a
+#: bare `PASS`, mapped to the tier each one is a stamped form of. v1.16.84
+#: (`ce088900a`) made the A1-A3 rc 0 path say WHICH producer wrote the
+#: artefact the gate then certified, because without it a stale artefact and a
+#: freshly emitted one are indistinguishable in the verdict. That put TWO
+#: facts in one field — the disclosure TIER the step landed in, and whether a
+#: producer ran this run — and a consumer that reads the field for the first
+#: fact then disagrees with one that reads it for the second.
+#:
+#: This is the join between them, and it is an ENUMERATION, never a prefix
+#: rule: only the stamps the runner itself declares above collapse, and each
+#: collapses to exactly one tier. `PASS_STRUCTURE_ONLY` is NOT in it and never
+#: can be — it is a different TIER (disclosed, library-default content), not a
+#: stamped `PASS` — so it survives `verdict_tier` unchanged, which is what
+#: keeps the disclosure ordering readable.
+_STAMPED_VERDICT_TIER: Dict[str, str] = {
+    _p["status"]: "PASS" for _p in _A1_A3_PRODUCERS.values()
+}
+
+
+def verdict_tier(status: str) -> str:
+    """The TIER a step's status lands in, with the producer-provenance stamp
+    removed if it carries one.
+
+    `PASS_WITH_REAL_NETLIST` is a `PASS` that also names its producer;
+    `PASS_STRUCTURE_ONLY` is not a `PASS` at all. Any status this module does
+    not declare as a stamp is returned UNCHANGED — an unknown `PASS_WITH_*`
+    is not silently rounded up to a pass, and neither is a `FAIL`. Chip-
+    AGNOSTIC.
+    """
+    return _STAMPED_VERDICT_TIER.get(status, status)
+
+
 # What each A-step's artefacts are called, so `StepResult.output_files` can
 # stop being `[]` on every path including PASS. The runner's own record never
 # named what a step produced, which is how a step could be reported done while

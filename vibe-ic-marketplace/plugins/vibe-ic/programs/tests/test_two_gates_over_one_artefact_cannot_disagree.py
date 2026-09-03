@@ -1400,11 +1400,117 @@ def test_the_a3_gate_and_the_run_record_agree_on_every_tree(tmp_path):
             f"phase3/analog/blk_alpha/netlist_provenance.json")
 
 
+def _assert_design_bound_record_agrees(res, step_name):
+    """THE AGREEMENT, as one executable predicate: a step certified in the
+    design-bound tier must SAY the design-bound tier, in the one spelling its
+    consumers know.
+
+    It is a function and not four inline asserts so the reverse control below
+    can feed it a manufactured disagreement and watch it refuse. A guard whose
+    refusal is only argued in prose is not a measured guard.
+    """
+    import analog_one_shot_runner as R
+    prod = R._A1_A3_PRODUCERS[step_name]
+    assert R.verdict_tier(res.status) == "PASS", (res.status, res.detail)
+    assert res.status in ("PASS", prod["status"]), (
+        f"the design-bound tier is spelled `PASS`, optionally stamped with "
+        f"the one token this step's producer declares ({prod['status']!r}); "
+        f"{res.status!r} is a third spelling of the same tier and no consumer "
+        f"can be expected to know it")
+    if res.status != "PASS":
+        # A stamp is a CLAIM that a producer ran. It stands only with the
+        # producer named beside it, or the stamp is itself the disagreement.
+        assert res.extras.get("producer") == prod["program"], res.extras
+        assert res.extras.get("low_confidence") is False, res.extras
+
+
+def test_reading_the_tier_through_the_join_still_refuses_a_real_disagreement():
+    """REVERSE CONTROL for the line above. Reading the tier through
+    `verdict_tier` instead of `== "PASS"` is a loosening ONLY if it lets a real
+    disagreement through, so here are the real ones, manufactured: a FAIL where
+    a PASS is claimed, a SECOND `PASS_WITH_*` spelling of the same tier, and a
+    stamp with no producer behind it. All three must still be refused."""
+    import analog_one_shot_runner as R
+
+    def _res(status, extras=None):
+        return R.StepResult("A3_netlist_gen", "blk_alpha", status, 0.0,
+                            "manufactured", extras=dict(extras or {}))
+
+    good = _res(R._A1_A3_PRODUCERS["A3_netlist_gen"]["status"],
+                {"producer": "analog_a3_netlist_emit.py",
+                 "low_confidence": False})
+    _assert_design_bound_record_agrees(good, "A3_netlist_gen")   # the control
+    _assert_design_bound_record_agrees(_res("PASS"), "A3_netlist_gen")
+
+    for bad, why in (
+            (_res("FAIL"), "one side PASS, the other FAIL"),
+            (_res("PASS_STRUCTURE_ONLY"), "the disclosed tier is not a pass"),
+            (_res("VACUOUS_PASS"), "nothing was examined"),
+            (_res("PASS_WITH_REAL_NETLIST_V2"),
+             "a second spelling of one tier"),
+            (_res("PASS_WITH_REAL_EXTRACT"), "another step's stamp"),
+            (_res(R._A1_A3_PRODUCERS["A3_netlist_gen"]["status"]),
+             "a stamp claiming a producer ran, with no producer named"),
+    ):
+        try:
+            _assert_design_bound_record_agrees(bad, "A3_netlist_gen")
+        except AssertionError:
+            continue
+        raise AssertionError(
+            f"the agreement accepted {bad.status!r} as the design-bound tier "
+            f"— {why}. Reading the tier through the join is only safe while "
+            f"this stays refused")
+
+
+def test_the_verdict_tier_join_collapses_only_the_stamps_the_runner_declares():
+    """The join is what makes the loosening safe, so its own bound is pinned:
+    it is a LOOKUP over the stamps `_A1_A3_PRODUCERS` declares, not a prefix
+    rule. A prefix rule would answer `PASS` for `PASS_STRUCTURE_ONLY` and for
+    any `PASS_WITH_*` a later round invents, which is precisely the ordering
+    this file exists to hold."""
+    import analog_one_shot_runner as R
+
+    declared = {p["status"] for p in R._A1_A3_PRODUCERS.values()}
+    assert declared, "the runner declares no producer stamps at all"
+    assert set(R._STAMPED_VERDICT_TIER) == declared, (
+        f"the join and the producer table have drifted apart: a stamp the "
+        f"runner can emit that the join does not know reads as its own tier "
+        f"and reddens every consumer of it. "
+        f"join={set(R._STAMPED_VERDICT_TIER)} declared={declared}")
+    for stamp in declared:
+        assert R.verdict_tier(stamp) == "PASS", stamp
+
+    for untouched in ("PASS", "PASS_STRUCTURE_ONLY", "PASS_WITH_WAIVERS",
+                      "PASS_WITH_STUB", "PASS_WITH_REAL_SILICON",
+                      "VACUOUS_PASS", "WAIVED", "SKIP", "BLOCKED", "FAIL"):
+        assert R.verdict_tier(untouched) == untouched, (
+            f"{untouched!r} is not a producer stamp this runner declares and "
+            f"the join must return it unchanged")
+
+
 def test_the_a3_run_record_names_the_content_it_certified(tmp_path):
     """The other half of the same agreement: what the run record SAYS, not only
     which tier it lands in. A step certified in the disclosed tier must carry
     the disclosed token; a design-bound one must carry the design-bound token
-    and say `structure_only: False`."""
+    and say `structure_only: False`.
+
+    The agreement is over the TIER, and since v1.16.84 the tier is not the
+    whole of the status field: a design-bound step whose producer actually ran
+    this run comes back stamped (`PASS_WITH_REAL_NETLIST`) so a stale artefact
+    and a freshly emitted one are not indistinguishable in the verdict. That
+    stamp is a SECOND fact in the SAME field, and reading the field as if it
+    only ever carried the first is what made this test and
+    `test_analog_one_shot_runner_a1a3_producers` demand different answers for
+    one string.
+
+    So the tier is read through `analog_one_shot_runner.verdict_tier`, the
+    runner's own enumerated join over the stamps it declares — NOT a
+    `startswith("PASS")` rule, which would collapse `PASS_STRUCTURE_ONLY` into
+    `PASS` and delete the disclosure ordering this file exists to hold. The raw
+    token is still pinned below: it is the bare tier or exactly the stamp THIS
+    step's producer declares, and a stamp only stands with the producer named
+    in the record. Two different `PASS_WITH_*` over one artefact, or a stamp
+    with nothing behind it, is still a disagreement and still fails here."""
     import analog_one_shot_runner as R
 
     so = R.step_for_block(
@@ -1412,6 +1518,10 @@ def test_the_a3_run_record_names_the_content_it_certified(tmp_path):
                  netlist_bytes=A3_SUBSTANTIVE),
         {"name": "blk_alpha", "type": "ldo"}, "A3_netlist_gen")
     assert so.status == "PASS_STRUCTURE_ONLY", (so.status, so.detail)
+    # The join must not round the disclosed tier up to a pass. Asserted HERE,
+    # not only in the helper's own tests, because this is the ordering whose
+    # loss would be invisible: every assertion below would still be green.
+    assert R.verdict_tier(so.status) == "PASS_STRUCTURE_ONLY", so.status
     assert so.extras.get("design_content") == STRUCTURE_ONLY, so.extras
     assert so.extras.get("structure_only") is True, so.extras
 
@@ -1419,7 +1529,7 @@ def test_the_a3_run_record_names_the_content_it_certified(tmp_path):
         _project(tmp_path / "b", SIZED, blocks=("blk_alpha",),
                  netlist_bytes=A3_SUBSTANTIVE),
         {"name": "blk_alpha", "type": "ldo"}, "A3_netlist_gen")
-    assert bound.status == "PASS", (bound.status, bound.detail)
+    _assert_design_bound_record_agrees(bound, "A3_netlist_gen")
     assert bound.extras.get("design_content") == SIZED, bound.extras
     assert bound.extras.get("structure_only") is False, bound.extras
 
