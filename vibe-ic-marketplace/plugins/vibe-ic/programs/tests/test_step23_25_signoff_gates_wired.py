@@ -130,6 +130,17 @@ def _project(tmp: Path) -> Path:
     rpt = tmp / "reports" / "phase3"
     rpt.mkdir(parents=True)
     (rpt / "em.rpt").write_text(_EM_RPT)
+    # A DECLARED DELIVERY ROUTE. The sixth declared sign-off gate
+    # (`tapeout_precheck`, wired 2026-09-04) reads it to decide whether a
+    # tape-out precheck applies at all, and a project with NO route is left
+    # NOT_DETERMINED on purpose — 0.5ic failing is when a chip most needs that
+    # step. The IP terminal keeps this a STA/EM fixture: no die, so no die to
+    # check.
+    st = tmp / "input" / "submission_template"
+    st.mkdir(parents=True, exist_ok=True)
+    (st / "NO_TEMPLATE.txt").write_text(
+        "# submission_template_ingest: no template record\n"
+        "STATUS: ABSENT — this fixture delivers an IP, not a die.\n")
     return tmp
 
 
@@ -221,7 +232,15 @@ def test_step25_audit_json_does_not_clobber_the_em_measurement():
 # ===========================================================================
 # (1) The gates are WIRED — a runner invokes them, so they can block
 # ===========================================================================
-def test_runner_exposes_all_four_declared_signoff_gates():
+def test_runner_exposes_every_declared_signoff_gate():
+    """MEMBERS, not a count — and the name carries no size for the same reason.
+
+    A set equality is the right shape here: swapping one gate for another
+    leaves any count unchanged, and this must notice. The name used to say
+    "all_four"; a set whose size is written into its own test name goes stale
+    the moment a member is added, which is what happened when `tapeout_precheck`
+    was wired in on 2026-09-04.
+    """
     import phase3_one_shot_runner as R
     wired = {g[1] for g in R._DECLARED_SIGNOFF_GATES}
     assert wired == {
@@ -229,6 +248,10 @@ def test_runner_exposes_all_four_declared_signoff_gates():
         "post_route_signoff_corner_check.py",
         "sta_corner_record_completeness_check.py",
         "em_report_check.py",
+        # Step 37.5ic. Both tape-out ladders existed and neither ran until this
+        # entry: no runner invoked the gate, so a phase-3 verdict was reached
+        # with no authority having read the GDS.
+        "tapeout_precheck.py",
     }, wired
 
 
@@ -274,8 +297,13 @@ def test_enforcement_audit_sees_the_gates_as_enforced():
 def test_signoff_gates_pass_a_clean_project(tmp_path):
     import phase3_one_shot_runner as R
     results = R.step_declared_signoff_gates(_project(tmp_path))
-    assert len(results) == 4
-    assert [r.status for r in results] == ["PASS"] * 4, [
+    # DERIVED FROM THE TABLE, not written down. A literal here goes stale the
+    # moment a gate is added — which is exactly what happened when step 37.5ic
+    # was wired in — and a stale count fails a test for the one reason that is
+    # never a defect: the sign-off population grew.
+    import phase3_one_shot_runner as _R
+    assert len(results) == len(_R._DECLARED_SIGNOFF_GATES)
+    assert [r.status for r in results] == ["PASS"] * len(results), [
         (r.name, r.status, r.detail) for r in results]
 
 

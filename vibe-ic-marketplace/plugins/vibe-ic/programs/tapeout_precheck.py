@@ -1,14 +1,23 @@
 #!/usr/bin/env python3
 """tapeout_precheck.py — step 37.5ic's ONE gate over TWO independent arms.
 
-ENFORCEMENT: advisory here — this gate is not in
-``phase3_one_shot_runner._DECLARED_SIGNOFF_GATES``; no one-shot runner invokes
-it inline at all. It runs when ``flow_compliance_check`` evaluates step 37.5ic's
-``program_exit_zero`` clause, so its rc IS that step's verdict — "advisory"
-names the RUNNER channel it is absent from, not a verdict this gate cannot
-reach. The same words both of its arms carry, for the same reason and about the
-same channel: wiring a new gate into the runner changes what a real run blocks
-on, which is the flow owner's call and is recorded here rather than taken.
+ENFORCEMENT: BLOCKING. This gate is in
+``phase3_one_shot_runner._DECLARED_SIGNOFF_GATES`` as of 2026-09-04, so every
+phase-3 run invokes it and its rc is part of the sign-off roll-up. It is ALSO
+step 37.5ic's ``program_exit_zero`` clause under ``flow_compliance_check``, and
+the two channels agree by construction because both read this one rc.
+
+Until 2026-09-04 it was in NEITHER runner, and this paragraph said so while
+noting that wiring it in "changes what a real run blocks on, which is the flow
+owner's call and is recorded here rather than taken". The flow owner took it.
+What it had been costing, measured on the published corpus: both ladders
+existed, neither ran, and all seven published layouts carry GUARD_RING_MK = 0
+and match no slot — with no run ever saying so.
+
+BECAUSE IT NOW RUNS ON EVERY PHASE-3 PROJECT, it must first decide whether the
+STEP applies at all: an IP/hardmacro delivery has no die, and a permanent red
+on every such design would make this a detector that fires on everything. See
+`delivery_route` — and note that an UNDECLARED route is NOT the IP path.
 Declared because vibe-ic#886 counts an undeclared AUDIT_ONLY gate as an
 enforcement decision nobody made. Kept in the first 4 kB: `declared_intent`
 reads only `text[:4000]`.
@@ -147,6 +156,8 @@ _HERE = Path(__file__).resolve().parent
 if str(_HERE) not in sys.path:
     sys.path.insert(0, str(_HERE))
 
+import _submission_template as _st                            # noqa: E402
+import _tapeout_declaration as _decl                          # noqa: E402
 import general_precheck as _ours                             # noqa: E402
 import plugin_manifest_discovery as _pmd                     # noqa: E402
 import tapeout_readiness_check as _theirs                    # noqa: E402
@@ -162,6 +173,11 @@ NOT_DETERMINED = "NOT_DETERMINED"
 RAN = "RAN"
 NOT_APPLICABLE = "NOT_APPLICABLE"
 ERROR = "ERROR"
+
+#: The delivery route step 0.5ic established for this design.
+ROUTE_CHIP = "CHIP"
+ROUTE_IP = "IP"
+ROUTE_UNDECLARED = "UNDECLARED"
 
 #: The two authorities, named ONCE. `OURS` is this plugin; the operator's name
 #: is composed from the registry entry at run time so a second shuttle names
@@ -231,6 +247,14 @@ class MergedReport:
     reason: str
     pdk: Optional[str]
     pdk_source: Optional[str]
+    #: Which delivery route step 0.5ic established, and whether this STEP
+    #: applies to it at all. Separate from `verdict` on purpose: "this design
+    #: has no die" and "this die was checked and is clean" are different
+    #: claims, and a consumer that could not tell them apart would read the
+    #: whole IP population as tape-out-ready.
+    route: str = ROUTE_UNDECLARED
+    route_evidence: str = ""
+    step_applies: bool = True
     arms_expected: int = 0
     arms_ran: int = 0
     arms: List[Arm] = field(default_factory=list)
@@ -374,6 +398,114 @@ def resolve_pdk(project: Path,
                 f"(pdk_target_alternates={alternates!r}); "
                 f"pdk_target={declared!r} from {source}")
     return declared, source
+
+
+#: The three router artefacts step 0.5ic writes, exactly one per design. The
+#: flow's own `condition` for 37.5ic is `any_of` over the two CHIP ones; this
+#: mirrors it rather than restating it, because a step-level applicability
+#: spelled in two places is two spellings that drift.
+
+
+def delivery_route(project: Path) -> Tuple[str, str]:
+    """(route, the evidence that decided it) — never a guess.
+
+    WHY A GATE NEEDS THIS AT ALL. Wired into `_DECLARED_SIGNOFF_GATES`, this
+    program runs on EVERY phase-3 project, including ones that will never have
+    a die: an IP/hardmacro delivery has no pad ring, no seal ring and no
+    tape-out precheck, and reporting it NOT_DETERMINED would put a permanent
+    red on every such design for a question that was never asked of it. That is
+    the shape of a detector that fires on everything.
+
+    AND "NOBODY DECLARED A ROUTE" IS NOT THE IP PATH. It is its own answer.
+    Treating an absent router as "this must be an IP" would let a CHIP design
+    whose step 0.5ic failed skip the tape-out precheck silently — the failure
+    would remove the check that would have reported it. So an undeclared route
+    is NOT_DETERMINED and stays a non-pass.
+    """
+    if any(p.is_file() for p in project.glob(TEMPLATE_SLOTS_GLOB)):
+        return ROUTE_CHIP, TEMPLATE_SLOTS_GLOB
+    if (project / _decl.SELF_TAPEOUT_REL).is_file():
+        return ROUTE_CHIP, _decl.SELF_TAPEOUT_REL
+    if (project / _st.NO_TEMPLATE_REL).is_file():
+        return ROUTE_IP, _st.NO_TEMPLATE_REL
+    return ROUTE_UNDECLARED, ""
+
+
+def resolve_slot(project: Path,
+                 explicit: str = "") -> Tuple[Optional[str], Optional[str]]:
+    """(slot, where it was read from) — or (None, None) when nobody said.
+
+    WHY THIS EXISTS: `--slot` used to DEFAULT to ``"1x1"``, and that default was
+    passed verbatim to the operator's own tool. So a design whose fetched
+    template ships `0p5x0p5.yaml` was asked about a slot it never purchased, by
+    the one arm whose entire value is that WE DID NOT WRITE IT — and the answer
+    came back conclusive. A default is an answer to a question nobody asked, and
+    it is worst exactly here: our arm can be made to agree by editing it, the
+    operator's cannot, so a wrong input to theirs is the one that survives.
+
+    THE SLOT IS THE OPERATOR'S CONSTANT, NOT OURS. It is handed over per slot in
+    the fetched template, so the fetched template is the only place it can be
+    read from. Resolution order:
+
+        --slot                         the caller said so, explicitly
+        exactly one slots/*.yaml       the template shipped one and only one
+        the declaration names one      it must be one the template actually
+                                       ships; a declaration naming a slot the
+                                       operator does not offer is NOT a match
+
+    Anything else — no template, several slots and no declaration, or a
+    declaration naming a slot that is not on offer — returns ``None``, and the
+    operator's arm is then NOT_DETERMINED with that reason in writing. It is
+    NEVER "pick the first one": several slots means the question is open, and
+    picking one closes it with an answer the design never gave.
+    """
+    if explicit.strip():
+        return explicit.strip(), "--slot"
+    names: Dict[str, str] = {}
+    for p in sorted(project.glob(TEMPLATE_SLOTS_GLOB)):
+        if not p.is_file():
+            continue
+        name = p.stem
+        try:
+            doc = json.loads(p.read_text(errors="replace"))
+            if isinstance(doc, dict) and isinstance(doc.get("slot"), str):
+                name = doc["slot"]
+        except (OSError, ValueError):
+            pass          # the stem is the ingest's own file name for the slot
+        names[name] = str(p.relative_to(project))
+    if not names:
+        return None, None
+    if len(names) == 1:
+        only = next(iter(names))
+        return only, names[only]
+    declared = _declared_slot(project)
+    if declared and declared in names:
+        return declared, f"the declaration, matched against {names[declared]}"
+    return None, None
+
+
+def _declared_slot(project: Path) -> Optional[str]:
+    """The slot the design's tape-out declaration names, or None.
+
+    Read leniently and reported as a candidate only: `resolve_slot` still
+    requires the fetched template to actually offer it, so a declaration that
+    names a slot nobody sells cannot select one.
+    """
+    try:
+        doc = json.loads(
+            (project / _decl.DECLARATION_REL).read_text(errors="replace"))
+    except (OSError, ValueError):
+        return None
+    ans = doc.get("answers") if isinstance(doc.get("answers"), dict) else doc
+    for key in ("slot", "purchased_slot", "operator_slot"):
+        v = ans.get(key) if isinstance(ans, dict) else None
+        if isinstance(v, str) and v.strip() and v.strip() != NOT_DETERMINED:
+            return v.strip()
+        if isinstance(v, dict) and isinstance(v.get("value"), str):
+            got = v["value"].strip()
+            if got and got != NOT_DETERMINED:
+                return got
+    return None
 
 
 def template_was_fetched(project: Path) -> bool:
@@ -532,7 +664,7 @@ def evaluate(project: Path,
              pdk: str = "",
              layout: Optional[Path] = None,
              declaration_path: Optional[Path] = None,
-             slot: str = "1x1",
+             slot: str = "",
              cob: bool = False,
              top: str = "",
              die_id: str = "",
@@ -546,8 +678,32 @@ def evaluate(project: Path,
     pdir = programs_dir or _HERE
     resolved_pdk, pdk_source = resolve_pdk(project, pdk)
 
+    route, route_evidence = delivery_route(project)
     rep = MergedReport(project=str(project), verdict=NOT_DETERMINED, reason="",
-                       pdk=resolved_pdk, pdk_source=pdk_source)
+                       pdk=resolved_pdk, pdk_source=pdk_source,
+                       route=route, route_evidence=route_evidence)
+
+    # STEP-LEVEL APPLICABILITY, DECIDED FIRST AND ON THE PROJECT'S OWN EVIDENCE.
+    # This is the rc-0 NOT_APPLICABLE channel `_DECLARED_SIGNOFF_GATES` names —
+    # not `_vacuous_exit.RC_VACUOUS`, which is rc 2 and which that table reads
+    # as an ERROR outright.
+    #
+    # ONLY THE IP ROUTE GETS IT. An IP/hardmacro delivery has no die, so there
+    # is no layout to submit and nothing for either ladder to judge; a red here
+    # would be about a question never asked of it. An UNDECLARED route is
+    # deliberately NOT included: 0.5ic failing is the one circumstance in which
+    # a CHIP most needs this step, and reading its silence as "must be an IP"
+    # would let the failure delete the check that would have reported it.
+    if route == ROUTE_IP:
+        rep.step_applies = False
+        rep.verdict = PASS
+        rep.reason = (
+            f"step 37.5ic does not apply to this design: step 0.5ic routed it "
+            f"to the IP/hardmacro terminal ({route_evidence}), which delivers "
+            f"LEF/Liberty/GDS/Verilog and no die. There is no submission, so "
+            f"there is no tape-out precheck to pass — `step_applies` is false "
+            f"and this is NOT a statement that a layout was examined.")
+        return rep
     # A RETIRED counterparty still has an in-tree submission-prep chain, and
     # "that chain is still here" is the entire reason the retired path is kept
     # rather than deleted. `resolve_submission_prep` IMPORTS it, so this arm
@@ -592,6 +748,22 @@ def evaluate(project: Path,
 
     # ---------------- ARM 2 — THEIRS, when there is a THEM ------------------
     state, why, shuttle = operator_arm_applicability(project, resolved_pdk)
+    # WHICH SLOT — and NOT_DETERMINED rather than a guess. This runs only after
+    # applicability, so it can never turn the legitimate absence
+    # (NOT_APPLICABLE: no live shuttle for this PDK) into a defect. It fires in
+    # exactly one place: the template WAS fetched, the operator IS there, and
+    # the design still has not said which of the slots it bought.
+    resolved_slot, slot_source = resolve_slot(project, slot)
+    if state == RAN and not resolved_slot:
+        state = NOT_DETERMINED
+        why = (f"{why} — but which slot this design purchased was never "
+               f"declared, and the operator's tool takes the slot as an "
+               f"input it cannot check. A default here would be answered "
+               f"CONCLUSIVELY by the one arm we cannot edit, so it is not "
+               f"offered: state it with --slot, ship exactly one "
+               f"{TEMPLATE_SLOTS_GLOB}, or name it in "
+               f"{_decl.DECLARATION_REL}.")
+    slot = resolved_slot or ""
     their_out = project / THEIR_ARM_ARTEFACT
     their_authority = (_authority_of(shuttle) if shuttle is not None
                        else f"{OURS}/{ATTRIBUTION}")
@@ -778,9 +950,14 @@ def main(argv: Optional[List[str]] = None) -> int:
                         "the project.")
     p.add_argument("--declaration", type=Path, default=None,
                    help="The tape-out declaration our arm compares against.")
-    p.add_argument("--slot", default="1x1",
+    p.add_argument("--slot", default="",
                    help="Purchased slot size, passed to the operator's tool "
-                        "verbatim (default: %(default)s).")
+                        "verbatim. Default: read from the fetched template "
+                        "(exactly one slots/*.yaml, or the declaration naming "
+                        "one the template offers). There is NO fallback slot: "
+                        "unresolved leaves the operator's arm NOT_DETERMINED "
+                        "with that reason, because a guessed slot is answered "
+                        "conclusively by the one arm we cannot edit.")
     p.add_argument("--cob", action="store_true",
                    help="Chip-on-board packaging: adds the operator's pad-mask "
                         "step to its ladder, exactly as its tool does.")

@@ -35993,6 +35993,39 @@ _DECLARED_SIGNOFF_GATES = (
      "reports/phase3/sta/sta_corner_record_completeness.json", ()),
     ("em_signoff", "em_report_check.py",
      "reports/phase3/em_signoff.json", ("--mode", "em")),
+    # STEP 37.5ic, WIRED IN 2026-09-04 ON THE FLOW OWNER'S INSTRUCTION.
+    #
+    # `tapeout_precheck` carried, in its own docstring, the note that wiring it
+    # here "changes what a real run blocks on, which is the flow owner's call
+    # and is recorded here rather than taken". The owner took it: fill the
+    # flow's gaps, so that a run does not silently omit the one question that
+    # decides whether the die can be submitted at all.
+    #
+    # WHAT IT WAS COSTING. Both ladders existed and neither ran: no one-shot
+    # runner invoked this gate at all, so every phase-3 run reached its verdict
+    # without either authority having looked at the GDS. A published PASS
+    # therefore said nothing about tape-out readiness — measured on the corpus,
+    # all seven published layouts carry GUARD_RING_MK = 0 and not one matches
+    # any slot, and no run ever said so.
+    #
+    # IT TAKES NO ARGV, AND THAT IS THE POINT. `--pdk` already resolved itself
+    # from the design's own declaration (`resolve_pdk`); `--slot` now does the
+    # same (`resolve_slot`) instead of defaulting to "1x1" and handing a slot
+    # the design never bought to the one arm we cannot edit. This table cannot
+    # pass per-run values — `step_declared_signoff_gates` takes only `project`
+    # — so a gate that needed them would have had to be given a default, which
+    # is the defect, not the fix.
+    #
+    # IT BREAKS THE "READS REPORTS ONLY" PROPERTY ABOVE, DELIBERATELY AND
+    # NAMED. Five of these six read reports and cannot hit an ENV_UNAVAILABLE.
+    # This one dispatches the OPERATOR's own container when — and only when —
+    # the registry names a live shuttle for this PDK AND its template was
+    # fetched. On a host without that engine such a design gets a non-PASS, and
+    # that is the honest answer: we could not obtain the second authority's
+    # verdict on a die that has one. Every other design is untouched, because
+    # the arm reports NOT_APPLICABLE before any dispatch is attempted.
+    ("tapeout_precheck", "tapeout_precheck.py",
+     "reports/phase3/tapeout_precheck.json", ()),
 )
 
 
@@ -36057,9 +36090,12 @@ def _gate_detail(out_json: Path, stdout: str, stderr: str) -> str:
 #     the PROJECT's evidence. That is what makes wiring this table
 #     UNCONDITIONALLY strictly stronger than the yaml condition, and it is the
 #     channel an analog-only project, a PDK with no EM rules or a flow variant
-#     already travels (measured: all five programs read reports only — not one
-#     contains a `subprocess`, `docker` or `shutil.which` call — so no
-#     ENV_UNAVAILABLE case arises for them at all).
+#     already travels (measured: five of the six programs read reports only —
+#     not one of those five contains a `subprocess`, `docker` or
+#     `shutil.which` call — so no ENV_UNAVAILABLE case arises for them. The
+#     sixth, `tapeout_precheck`, is the exception and says so at its own entry
+#     below: it may dispatch the OPERATOR's container, and only for a design
+#     whose PDK has a live shuttle whose template was fetched).
 # Both are reached only by ASKING the gate. A missing file answers nothing. So
 # absence is an incomplete deployment, and it is an error outright.
 #

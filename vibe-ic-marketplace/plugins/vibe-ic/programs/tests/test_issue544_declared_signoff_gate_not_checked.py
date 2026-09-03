@@ -183,6 +183,20 @@ def _project(tmp: Path, *, violated_corner: bool = False,
     rpt = tmp / "reports" / "phase3"
     rpt.mkdir(parents=True)
     (rpt / "em.rpt").write_text(_EM_RPT)
+    # A DECLARED DELIVERY ROUTE, because step 0.5ic establishing one is part of
+    # what "a complete deployment" MEANS — the sixth declared sign-off gate
+    # (`tapeout_precheck`, wired 2026-09-04) reads it to decide whether a
+    # tape-out precheck applies to this design at all. The IP terminal is used
+    # here deliberately: it is the route that needs no die, no seal ring and no
+    # slot, so this fixture stays a STA/EM fixture instead of quietly becoming
+    # a tape-out one. A project with NO route is left NOT_DETERMINED by that
+    # gate on purpose, and that is the correct answer — not a defect to paper
+    # over here.
+    st = tmp / "input" / "submission_template"
+    st.mkdir(parents=True, exist_ok=True)
+    (st / "NO_TEMPLATE.txt").write_text(
+        "# submission_template_ingest: no template record\n"
+        "STATUS: ABSENT — this fixture delivers an IP, not a die.\n")
     return tmp
 
 
@@ -409,17 +423,22 @@ def test_a_complete_deployment_with_every_gate_passing_still_releases(
         tmp_path, runner):
     """The control that keeps this fix usable. Nothing patched, every declared
     gate present, a project each of them passes: still PASS."""
+    # +1 for `_DRV_PROMOTION_GATE`, which `main()` appends first. Derived so
+    # that adding a sign-off gate does not silently fail this test.
+    import phase3_one_shot_runner as _R
+    _expected = len(_R._DECLARED_SIGNOFF_GATES) + 1
     proj = _project(tmp_path)
     results = _all_signoff_steps(runner, proj)
-    assert [r.status for r in results] == ["PASS"] * 5, [
+    assert [r.status for r in results] == ["PASS"] * _expected, [
         (r.name, r.status, r.detail[:120]) for r in results]
     assert runner._aggregate_verdict(results) == "PASS", results
 
     rollup = runner.declared_signoff_rollup(results)
-    assert rollup["declared"] == 5, rollup
+    assert rollup["declared"] == _expected, rollup
     assert rollup["not_checked"] == [], rollup
     assert rollup["failed"] == [], rollup
-    assert rollup["line"] == "5 of 5 declared sign-off gate(s) PASSED", rollup
+    assert rollup["line"] == (
+        f"{_expected} of {_expected} declared sign-off gate(s) PASSED"), rollup
 
 
 def test_a_clean_project_still_writes_every_declared_verdict_json(tmp_path,
@@ -462,10 +481,12 @@ def test_the_rollup_names_what_was_not_checked(tmp_path, runner, monkeypatch):
     rollup = runner.declared_signoff_rollup(
         runner.step_declared_signoff_gates(proj))
     assert rollup["not_checked"] == ["sta_corner"], rollup
-    assert rollup["declared"] == 4, rollup
+    import phase3_one_shot_runner as _R
+    assert rollup["declared"] == len(_R._DECLARED_SIGNOFF_GATES), rollup
+    _n = len(_R._DECLARED_SIGNOFF_GATES)
     assert rollup["line"] == (
-        "3 of 4 declared sign-off gate(s) PASSED; "
-        "1 NOT CHECKED (not a pass): sta_corner"), rollup["line"]
+        f"{_n - 1} of {_n} declared sign-off gate(s) PASSED; "
+        f"1 NOT CHECKED (not a pass): sta_corner"), rollup["line"]
 
 
 def test_the_rollup_names_a_failing_gate_apart_from_an_unchecked_one(
@@ -596,19 +617,69 @@ def test_absence_is_not_offered_as_an_inapplicability_opt_out():
         assert not any(isinstance(v, bool) for v in entry), entry
 
 
-def test_the_five_declared_signoff_gates_need_no_external_tool():
+#: Declared sign-off gates that MAY dispatch an external engine, each with the
+#: reason it is allowed to. Everything not named here must read reports only.
+#:
+#: THIS SET IS THE REVISITING, NOT A HOLE IN THE RULE. The test below used to
+#: assert the property over ALL declared gates, and its docstring said that if
+#: one ever started shelling out "that conclusion has to be revisited and this
+#: test is where the revisiting is triggered". On 2026-09-04 one did, and this
+#: is the revisiting: the property still holds for every report-reading gate,
+#: and the one exception is enumerated WITH its justification rather than
+#: silently absorbed by relaxing the assertion.
+_MAY_DISPATCH_AN_ENGINE = {
+    "tapeout_precheck.py":
+        "it runs the SHUTTLE OPERATOR's own precheck container — the arm whose "
+        "entire value is that we did not write it and cannot edit it to agree. "
+        "That arm is attempted only when the registry names a live shuttle for "
+        "this PDK AND its template was fetched; every other design gets "
+        "NOT_APPLICABLE before any dispatch. On a host without the engine, a "
+        "design that HAS a second authority gets a non-PASS, which is the "
+        "honest answer rather than an ENV_UNAVAILABLE waiver.",
+}
+
+
+def test_the_report_reading_signoff_gates_need_no_external_tool():
     """The evidence behind "no ENV_UNAVAILABLE case arises for these gates",
     which is why absence gets no reviewed-waiver path here. If one of them ever
     starts shelling out, that conclusion has to be revisited and this test is
     where the revisiting is triggered."""
     import phase3_one_shot_runner as R  # noqa: WPS433
     for entry in R._DECLARED_SIGNOFF_GATES + (R._DRV_PROMOTION_GATE,):
+        if entry[1] in _MAY_DISPATCH_AN_ENGINE:
+            continue
         src = (_PROGRAMS / entry[1]).read_text(errors="replace")
         for token in ("subprocess", "docker", "shutil.which"):
             assert token not in src, (
                 f"{entry[1]} now depends on an external tool ({token}); the "
                 f"reasoning that no ENV_UNAVAILABLE waiver path is needed for "
-                f"these gates no longer holds")
+                f"these gates no longer holds. If that dependency is intended, "
+                f"add it to _MAY_DISPATCH_AN_ENGINE **with the reason**, which "
+                f"is the revisiting this test exists to force.")
+
+
+def test_every_declared_exception_is_still_a_declared_gate():
+    """An exemption that outlives the gate it exempts is a hole nobody can see.
+
+    Without this, removing `tapeout_precheck` from the table would leave a
+    standing permission behind, and the next program to take that filename
+    would inherit an exemption granted for something else entirely.
+    """
+    import phase3_one_shot_runner as R  # noqa: WPS433
+    declared = {e[1] for e in
+                R._DECLARED_SIGNOFF_GATES + (R._DRV_PROMOTION_GATE,)}
+    stale = sorted(set(_MAY_DISPATCH_AN_ENGINE) - declared)
+    assert not stale, (
+        f"_MAY_DISPATCH_AN_ENGINE exempts programs that are no longer declared "
+        f"sign-off gates: {stale}")
+
+
+def test_every_exception_states_a_reason():
+    """A named exception with an empty reason is an unnamed exception."""
+    for program, reason in _MAY_DISPATCH_AN_ENGINE.items():
+        assert len(reason.strip()) >= 80, (
+            f"{program} is exempted from the report-reading rule with no "
+            f"usable reason ({len(reason.strip())} chars)")
 
 
 def test_the_blast_radius_is_recorded_where_the_change_is():
