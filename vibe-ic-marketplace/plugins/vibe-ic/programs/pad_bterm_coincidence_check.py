@@ -187,10 +187,18 @@ def run(def_text: str, tech_text: str, io_lefs: List[Path]
                 out.append(None)
         return out
 
+    # TWO folds, and there used to be a third. `parse_lef_pin_roles` was
+    # merged into a local `roles` that this function never read -- dead from
+    # the commit that introduced it, where it was a `dict.update`, and carried
+    # through the rewrite to `merge_source_records` unchanged.
+    # `policy_direction_pin_check` is what surfaced it: the site argued a
+    # direction, and no test at the call site could ever have died when the
+    # literal was flipped, because a value nothing reads has no observable
+    # direction to pin. The terminal this program measures is the one the
+    # DEF's own NETS section names, not one chosen from a pin's DIRECTION, so
+    # the fold is removed rather than wired into a decision nobody asked for.
     pin_ports, _pp_conf = _srm.merge_source_records(
         _parsed(PR.parse_lef_pin_ports), on_conflict="richer")
-    roles, _rl_conf = _srm.merge_source_records(
-        _parsed(PR.parse_lef_pin_roles), on_conflict="richer")
     sizes, _sz_conf = _srm.merge_source_records(
         _parsed(PR.parse_lef_macros), on_conflict="richer")
 

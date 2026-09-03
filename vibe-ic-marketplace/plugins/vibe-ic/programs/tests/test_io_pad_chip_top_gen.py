@@ -368,3 +368,146 @@ def test_a_corner_name_the_library_does_not_carry_is_not_published(tmp_path):
     cfg.write_text(cfg.read_text().replace("__cor", "__nosuchcorner"))
     assert _run(GEN, proj, root).returncode == 0
     assert _record(proj)["derived_answers"]["pad_corner_master"] is None
+
+
+# --------------------------------------------------------------------------- #
+# the conflict direction, at this producer's own call sites
+#
+# The producer folds every discovered IO LEF through `merge_source_records`
+# twice -- once for the macro CLASSES, once for the macro SIZES -- and writes
+# `on_conflict="richer"` at both. `policy_direction_pin_check` reported both
+# sites UNPINNED on b309595f06 with ZERO candidate tests: no test file named
+# this program together with the parameter or the callee, so nothing here could
+# ever have died when the literal was flipped to `"sparser"`.
+#
+# ONE LEF IS NOT ENOUGH TO REACH THE PARAMETER, which is why the gap survived a
+# file this size. Every fixture above ships a single library; a single source
+# produces one `distinct` record per macro and `merge_source_records` returns
+# it before `on_conflict` is read. Two libraries that both SPEAK about the same
+# macro and disagree is the only input that reaches the branch, so that is what
+# these build -- through the producer's CLI, in both discovery orders.
+# --------------------------------------------------------------------------- #
+
+#: Everything both libraries agree about in the two tests below.
+AGREED_MACROS = (
+    _macro("testlib_io__in", "PAD INPUT", PAD_W, 100.0, [("PAD", "SIGNAL")])
+    + _macro("testlib_io__fill", "PAD SPACER", 1.0, 100.0)
+    + _macro("testlib_io__cor", "ENDCAP BOTTOMLEFT", CORNER_W, CORNER_W)
+)
+
+
+def _pdk_two(root: Path, first: str, second: str, terminals: str) -> Path:
+    """A PDK whose IO library ships TWO LEFs. `discover_io_lefs` returns them
+    sorted by file name, so the caller decides the discovery order by choosing
+    which text is written to which name."""
+    lef = root / "testpdk" / "libs.ref" / "testlib_io" / "lef"
+    lef.mkdir(parents=True)
+    (lef / "a_first.lef").write_text(first)
+    (lef / "z_second.lef").write_text(second)
+    tech = root / "testpdk" / "libs.tech" / "someflow" / "testlib_io"
+    tech.mkdir(parents=True)
+    (tech / "config.tcl").write_text("\n".join([
+        'set ::env(PAD_SITE_NAME) "IO_Site"',
+        'set ::env(PAD_CORNER_SITE_NAME) "COR_Site"',
+        f'set ::env(PAD_EDGE_SPACING) "{EDGE:g}"',
+        'set ::env(PAD_CORNER) "$::env(PAD_CELL_LIBRARY)__cor"',
+        'set ::env(PAD_FILLERS) "$::env(PAD_CELL_LIBRARY)__fill"',
+        f'set ::env(PAD_PLACE_IO_TERMINALS) "{terminals}"']) + "\n")
+    return root
+
+
+def _both_orders(tmp_path: Path, rich: str, poor: str, terminals: str):
+    """The producer run twice over the same two libraries, swapped."""
+    out = []
+    for i, (first, second) in enumerate(((rich, poor), (poor, rich))):
+        proj = _project(tmp_path / f"run{i}")
+        res = _run(GEN, proj, _pdk_two(tmp_path / f"pdk{i}", first, second,
+                                       terminals))
+        rec_path = proj / "reports" / "phase3" / "io_pad_chip_top.json"
+        rec = json.loads(rec_path.read_text()) if rec_path.is_file() else {}
+        out.append((res, rec))
+    return out
+
+
+def _masters(rec: dict):
+    return sorted({r["master"] for r in (rec.get("pad_instances") or {}).values()})
+
+
+def test_the_richer_class_record_is_what_makes_a_master_selectable(tmp_path):
+    """SITE 1 -- the `parse_lef_macro_classes` fold.
+
+    A macro record here is the CLASS STRING, so the fuller description is
+    literally the longer one: one library calls `testlib_io__bi`
+    `PAD INOUT`, the other only manages `PAD`. `CLASS_PREFERENCE` needs
+    `PAD INOUT` for an output port, and `PAD` is not it. Keeping the fuller
+    record instantiates the design; keeping the sparser one refuses it,
+    NO_PAD_MASTER_FOR_DIRECTION, over a library that does carry the master.
+    """
+    rich = AGREED_MACROS + _macro("testlib_io__bi", "PAD INOUT", PAD_W, 100.0,
+                                  [("PAD", "SIGNAL")])
+    poor = AGREED_MACROS + _macro("testlib_io__bi", "PAD", PAD_W, 100.0,
+                                  [("PAD", "SIGNAL")])
+    terminals = "testlib_io__in/PAD testlib_io__bi/PAD"
+
+    (res_a, rec_a), (res_b, rec_b) = _both_orders(
+        tmp_path, rich, poor, terminals)
+
+    assert res_a.returncode == 0, res_a.stdout + res_a.stderr
+    assert res_b.returncode == 0, res_b.stdout + res_b.stderr
+    assert _masters(rec_a) == _masters(rec_b) == ["testlib_io__bi",
+                                                  "testlib_io__in"], (
+        "the fuller CLASS record did not win the disagreement, in one order "
+        "or in both")
+
+    # The control: the sparser library ALONE really does refuse, so the
+    # assertion above is about which record won and not about the fixture.
+    proj = _project(tmp_path / "poor_alone")
+    only = _run(GEN, proj, _pdk(tmp_path / "pdk_poor", macros=poor,
+                               terminals=terminals))
+    assert only.returncode == 1, only.stdout
+    assert "NO_PAD_MASTER_FOR_DIRECTION" in only.stdout + only.stderr
+
+
+def test_the_richer_size_record_decides_which_master_is_narrowest(tmp_path):
+    """SITE 2 -- the `parse_lef_macros` fold, which is a SIZE and nothing else.
+
+    A macro record here is a `(width, height)` pair of fixed arity, so "more
+    content" is not what separates the two policies -- both are total orders
+    over the same two numbers and `"richer"` takes the larger. It is still a
+    direction and it is still observable: `_select_master` breaks a tie between
+    two masters of the same class BY WIDTH, so which SIZE record won decides
+    which master the design's output port is brought out on.
+
+    Both libraries agree about every CLASS here. Only `testlib_io__bi`'s SIZE
+    disagrees, so this site is measured on its own.
+    """
+    other = _macro("testlib_io__cb", "PAD INOUT", 50.0, 100.0,
+                   [("PAD", "SIGNAL")])
+    rich = AGREED_MACROS + other + _macro("testlib_io__bi", "PAD INOUT", 80.0,
+                                          100.0, [("PAD", "SIGNAL")])
+    poor = AGREED_MACROS + other + _macro("testlib_io__bi", "PAD INOUT", 20.0,
+                                          100.0, [("PAD", "SIGNAL")])
+    terminals = ("testlib_io__in/PAD testlib_io__bi/PAD "
+                 "testlib_io__cb/PAD")
+
+    (res_a, rec_a), (res_b, rec_b) = _both_orders(
+        tmp_path, rich, poor, terminals)
+
+    assert res_a.returncode == 0, res_a.stdout + res_a.stderr
+    assert res_b.returncode == 0, res_b.stdout + res_b.stderr
+    # 80 um wide beats 50, so the narrowest INOUT master is `__cb`.
+    assert _masters(rec_a) == _masters(rec_b) == ["testlib_io__cb",
+                                                  "testlib_io__in"], (
+        "the larger (richer) SIZE record did not win the disagreement, in one "
+        "order or in both")
+
+    # The control: with the sparser record `__bi` is 20 um wide and wins the
+    # same tie, so the assertion above is about which record won.
+    proj = _project(tmp_path / "poor_alone")
+    only = _run(GEN, proj, _pdk(tmp_path / "pdk_poor", macros=poor,
+                                terminals=terminals))
+    assert only.returncode == 0, only.stdout + only.stderr
+    assert _masters(json.loads(
+        (proj / "reports" / "phase3" / "io_pad_chip_top.json").read_text())
+    ) == ["testlib_io__bi", "testlib_io__in"], (
+        "precondition: the two SIZE records really do read differently")

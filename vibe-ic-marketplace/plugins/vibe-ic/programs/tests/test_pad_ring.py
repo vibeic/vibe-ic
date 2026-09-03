@@ -2780,3 +2780,104 @@ def test_the_declarations_block_is_on_every_verdict(tmp_path):
         assert list(block["declarable"]) == list(PR.PDK_DECLARED_VARS)
         assert bool(block["adopted"]) is expect
         assert bool(block["files_read"]) is expect
+
+
+# --------------------------------------------------------------------------- #
+# the conflict direction, at this producer's own call site
+#
+# After the ring is placed, the producer folds the discovered IO LEFs through
+# `merge_source_records(on_conflict="richer")` to build the terminal map
+# `pad_terminal_bterms` places every chip-top BTerm on.
+# `policy_direction_pin_check` reported that site UNPINNED on b309595f06: its
+# one candidate test flipped the literal to `"sparser"` and stayed green.
+#
+# The fixtures above cannot reach the parameter for two independent reasons,
+# and both had to be fixed here. They ship ONE library — one source produces
+# one `distinct` record per macro and `merge_source_records` returns it before
+# `on_conflict` is read — and their masters carry no PIN and their PDK no
+# `PAD_PLACE_IO_TERMINALS`, so `pad_terminal_bterms` moves nothing at all and
+# the merged map is never read. `test_a_bterm_on_its_pad_is_measured_not_
+# declared` covers the same function directly, which is the shape that gets
+# greener the more thorough it is and never dies under the flip.
+# --------------------------------------------------------------------------- #
+
+#: The masters the fixture below agrees about, in `_io_lef`'s own shape.
+_RING_LEF_HEAD = _io_lef().split("MACRO pad_bidir")[0]
+_RING_LEF_TAIL = "MACRO pad_corner" + _io_lef().split("MACRO pad_corner", 1)[1]
+
+
+def _io_lef_with_terminal(pins) -> str:
+    """`_io_lef`, with `pad_bidir` given the PORT rectangles a bond pad
+    presents. `pins` is `[(pin, [(layer, (x1, y1, x2, y2)), ...]), ...]`."""
+    body = ["MACRO pad_bidir", "  CLASS PAD ;", "  SIZE 75.00 BY 350 ;"]
+    for pin, rects in pins:
+        body += [f"  PIN {pin}", "    DIRECTION INOUT ;", "    USE SIGNAL ;",
+                 "    PORT"]
+        for layer, r in rects:
+            body += [f"      LAYER {layer} ;",
+                     "      RECT %.3f %.3f %.3f %.3f ;" % r]
+        body += ["    END", f"  END {pin}"]
+    body += ["END pad_bidir", ""]
+    return _RING_LEF_HEAD + "\n".join(body) + _RING_LEF_TAIL
+
+
+def _ring_over_two_lefs(tmp_path: Path, first: str, second: str) -> Path:
+    """A project whose IO library ships two LEFs, handed to the producer in
+    the given order, over a PDK that names the pad's signal terminal."""
+    root = _project(tmp_path)
+    lib = root / "pdk/proc/libs.ref/proc_io/lef"
+    (lib / "io.lef").unlink()
+    (lib / "a_first.lef").write_text(first)
+    (lib / "z_second.lef").write_text(second)
+    tech = root / "pdk/proc/libs.tech/someflow/proc_io"
+    tech.mkdir(parents=True, exist_ok=True)
+    (tech / "config.tcl").write_text(
+        'set ::env(PAD_PLACE_IO_TERMINALS) "pad_bidir/PAD"\n')
+    assert _gen(root, "--io-lef", str(lib / "a_first.lef"),
+                "--io-lef", str(lib / "z_second.lef")) == 0, \
+        _report(root).get("reason")
+    return root
+
+
+def _bterm_port_rect(root: Path, signal: str) -> str:
+    """The PORT rectangle the emitted padring DEF gives one chip-top BTerm."""
+    entry = re.search(rf"-\s+{re.escape(signal)}\s.*?;",
+                      _ring_def(root).read_text(), re.S)
+    assert entry, f"{signal} has no PIN entry in the padring DEF"
+    port = re.search(r"\+\s*PORT\s*\+\s*LAYER\s+\S+\s*"
+                     r"\(\s*-?\d+\s+-?\d+\s*\)\s*\(\s*-?\d+\s+-?\d+\s*\)",
+                     entry.group(0))
+    assert port, f"{signal} was not placed on a pad terminal: {entry.group(0)}"
+    return " ".join(port.group(0).split())
+
+
+def test_the_richer_pin_port_map_decides_where_every_bterm_lands(tmp_path):
+    """Two libraries describe `pad_bidir` and both SPEAK: one gives it two
+    pins and puts `PAD` at (10,10)-(20,20), the other gives it one pin and puts
+    `PAD` at (50,300)-(60,310). Keeping the fuller map places all 16 BTerms on
+    the first rectangle; keeping the sparser one places them 290 um away, on a
+    rectangle the fuller library says is a different pin. Both orders must give
+    the same answer and it must be the fuller library's.
+    """
+    rich = _io_lef_with_terminal(
+        [("PAD", [("met5", (10.0, 10.0, 20.0, 20.0))]),
+         ("VSS", [("met5", (60.0, 300.0, 70.0, 310.0))])])
+    poor = _io_lef_with_terminal(
+        [("PAD", [("met5", (50.0, 300.0, 60.0, 310.0))])])
+
+    fwd = _ring_over_two_lefs(tmp_path / "fwd", rich, poor)
+    rev = _ring_over_two_lefs(tmp_path / "rev", poor, rich)
+
+    assert _bterm_port_rect(fwd, "ssig0") == _bterm_port_rect(rev, "ssig0"), \
+        "the BTerm's position depends on the order the LEFs were discovered"
+    assert _bterm_port_rect(fwd, "ssig0") == (
+        "+ PORT + LAYER met5 ( 10000 10000 ) ( 20000 20000 )"), \
+        "the richer (2-pin) library did not win the disagreement"
+    assert _report(fwd)["bterms"]["covered"] == 16
+
+    # The control: the sparser library ALONE really does place them elsewhere,
+    # so the assertion above is about WHICH source won, not about the fixture.
+    alone = _ring_over_two_lefs(tmp_path / "alone", poor, poor)
+    assert _bterm_port_rect(alone, "ssig0") == (
+        "+ PORT + LAYER met5 ( 50000 300000 ) ( 60000 310000 )")
+    assert _bterm_port_rect(fwd, "ssig0") != _bterm_port_rect(alone, "ssig0")

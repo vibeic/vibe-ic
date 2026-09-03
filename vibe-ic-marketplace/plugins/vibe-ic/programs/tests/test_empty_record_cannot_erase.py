@@ -579,6 +579,26 @@ def test_macro_supply_stub_planner_richer_keeps_the_wider_blockage():
         "precondition: the two views really do read differently downstream"
 
 
+# THE OTHER FIVE CALL-SITE PINS ARE NOT HERE, and this is where a reader
+# looking for them should be told why. `pad_bterm_coincidence_check`,
+# `io_pad_chip_top_gen` and `pad_ring_gen` reach `merge_source_records` only
+# after a padframed DEF, an IO cell library in a PDK distribution layout and a
+# placed ring exist, and each of those fixtures already lives in that
+# program's own test module. The pins were written there, beside the fixture,
+# rather than a fourth copy of it being built here:
+#
+#   pad_bterm_coincidence_check.py:190,192 -> test_a_bterm_on_its_pad_is_
+#                                             measured_not_declared.py
+#   io_pad_chip_top_gen.py:674,677         -> test_io_pad_chip_top_gen.py
+#   pad_ring_gen.py:1418                   -> test_pad_ring.py
+#
+# A SIXTH site is not pinned anywhere, because it was removed instead:
+# `pad_bterm_coincidence_check` merged `parse_lef_pin_roles` into a local
+# nothing in that function ever read. A value no consumer reads has no
+# observable direction, so no call-site test could have died under the flip;
+# the fold is gone.
+
+
 # ═══════════════════════════════════════════════ 3. THE REVERSE CASE ══════
 # What does the OVER-correction look like? Three ways this fix could be wrong
 # in the other direction. Each of these must STILL pass.
