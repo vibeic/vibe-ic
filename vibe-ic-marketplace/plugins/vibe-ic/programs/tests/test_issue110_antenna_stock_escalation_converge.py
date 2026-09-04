@@ -164,6 +164,6 @@ def test_block_degrades_without_reroute_and_never_full_global_routes():
                      if not ln.lstrip().startswith("#"))
     # external fallback present (works on a binary without -reroute)
     assert "repair_antennas sky130_fd_sc_hd__diode_2 -iterations 1 " \
-           "-ratio_margin $_ant_margin -jumper_only}" in cmds
+           "-ratio_margin $_ant_margin}" in cmds
     assert "detailed_route -verbose 0" in cmds
     assert "global_route" not in cmds
