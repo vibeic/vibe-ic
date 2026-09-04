@@ -170,7 +170,7 @@ def test_signoff_repair_step_consumes_the_shared_exact_pvt_selector():
     source = inspect.getsource(R.step_signoff_spef_repair)
     assert "_sta_extra_liberties(project, pdk, ss_lib)" in source
     assert "extra_liberties_c=extra_liberties_c" in source
-    assert "fanout_root_buffer_cell=pdk.clk_buf or pdk.clk_buf_root" in source
+    assert "fanout_root_buffer_cell=pdk.clk_buf_root or pdk.clk_buf" in source
 
 
 def test_base_pnr_signoff_domain_owns_residual_fanout_repair_before_reroute():
