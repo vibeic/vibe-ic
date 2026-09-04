@@ -227,6 +227,24 @@ def test_negative_offset_inside_code_fence_is_not_a_register():
     assert rm.extract(prompt) == []
 
 
+def test_negative_sized_literal_with_parenthesized_value_is_not_a_register():
+    """A Verilog base/digit fragment is a value, not an inline regmap name."""
+    programs = Path(os.environ.get(
+        "PROGRAMS_UNDER_TEST",
+        Path(__file__).resolve().parents[1]))
+    path = programs / "spec_regmap_extract.py"
+    spec = importlib.util.spec_from_file_location("regmap_literal_subject", path)
+    assert spec is not None and spec.loader is not None
+    subject = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(subject)
+
+    prompt = (
+        "Use polynomial POLY = 8'b10101010 (0xAA).\n"
+        "No memory-mapped register interface is present.\n")
+    items = subject.extract(prompt)
+    assert items == [], items
+
+
 def test_negative_empty_and_garbage_inputs():
     assert rm.extract("") == []
     assert rm.extract(None) == []  # type: ignore[arg-type]
