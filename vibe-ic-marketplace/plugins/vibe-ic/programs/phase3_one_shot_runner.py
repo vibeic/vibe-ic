@@ -24447,6 +24447,15 @@ def step_io_pad_chip_top_gen(project: Path, container: Optional[str] = None,
                           str(exc))
     extra = (["--pdk-root", str(pdk_root), "--pdk", str(pdk_tree)]
              if pdk_root and pdk_tree else [])
+    # The pad producer may exercise physical-design freedom only with the
+    # SAME rail identity the PDN uses.  A unique pair is authority; zero or
+    # multiple candidates is not guessed and leaves the producer's explicit
+    # ``not_written.power_pads`` record in force.
+    if pdk:
+        _pad_power, _pad_ground = _design_supply_nets(pdk)
+        if len(_pad_power) == 1 and len(_pad_ground) == 1:
+            extra.extend(["--power-net", sorted(_pad_power)[0],
+                          "--ground-net", sorted(_pad_ground)[0]])
     prog = PROGRAMS_DIR / "io_pad_chip_top_gen.py"
     if not prog.is_file():  # pragma: no cover - shipped tree always has it
         return StepResult("io_pad_chip_top_gen", "ENV_UNAVAILABLE",
@@ -25862,6 +25871,19 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
     if corner_liberty_block:
         print('[phase3] approach(a) multi-corner PnR — repair targets '
               'ss setup / ff hold BEFORE detailed_route', file=sys.stderr)
+    # IO timing/DRV constraints belong in the SAME PnR session that runs
+    # repair_design.  Loading the pad LEFs without their PVT-matched Liberty
+    # made every core net behind a pad look artificially light during repair;
+    # sign-off then reopened the routed chip with the IO Liberty and exposed
+    # the real max-slew/fanout/cap violations too late to fix.  Match each
+    # process scene by exact suffix, exactly as post-route STA does.
+    _io_pnr_libs_tcl = _pnr_io_liberties_tcl(
+        project, pdk, container, corner_liberty_block)
+    if _io_pnr_libs_tcl:
+        macro_libs_tcl = "\n".join(
+            x for x in (macro_libs_tcl, _io_pnr_libs_tcl) if x)
+        print("[phase3] IO Liberty views loaded into PnR repair scenes",
+              file=sys.stderr)
     _generic_pnr_tcl = _build_pnr_tcl_text(
         tech_lef_c=tech_lef_c, cell_lef_c=cell_lef_c,
         macro_lefs_tcl=macro_lefs_tcl, liberty_c=liberty_c,
@@ -34609,9 +34631,14 @@ def _try_power_aware_lvs(project: Path, top: str, pdk: PdkConfig,
             # entry — i.e. a project-staged (commercial) PDK, whose power
             # model is then derived from its own std-cell LEF instead of the
             # emitter skipping and leaving the netlist power-blind.
-            st = _lvs_pa.emit_to_file(netlist, pdk.name, pa_nl, top=top,
-                                      tie_wells_to_rails=tie_wells,
-                                      cell_lef=getattr(pdk, "cell_lef", None))
+            emit_kwargs: Dict[str, Any] = {}
+            additional_lefs = sorted(ext_dir.glob("*.extract.lef"))
+            if additional_lefs:
+                emit_kwargs["additional_lefs"] = additional_lefs
+            st = _lvs_pa.emit_to_file(
+                netlist, pdk.name, pa_nl, top=top,
+                tie_wells_to_rails=tie_wells,
+                cell_lef=getattr(pdk, "cell_lef", None), **emit_kwargs)
         except Exception as exc:  # nosec — a bad netlist must never break the plain path
             attempt_log.append({"model": model, "rejected_at": "emit",
                                 "reason": f"{type(exc).__name__}: {exc}"})
@@ -41062,6 +41089,88 @@ def _discover_aocv_table(project: Path, pdk: PdkConfig,
     return None
 
 
+def _sta_link_top(project: Path, logical_top: str, netlist: Path,
+                  routed: bool) -> str:
+    """Return the module a selected STA netlist must link.
+
+    Logical names remain the authority for artefact filenames.  Once STA has
+    selected a routed netlist, however, its module identity belongs to the
+    same final DEF every other fresh-session consumer reopens.  Pre-layout STA
+    deliberately keeps the logical RTL top even if an older DEF is present in
+    a reused project directory.
+    """
+    if not routed:
+        return logical_top
+    def_file = _pl.pnr_dir(project) / f"{logical_top}.def"
+    return _def_reopen_resolution(def_file).design or logical_top
+
+
+def _sta_extra_liberties(project: Path, pdk: PdkConfig,
+                         reference_liberty: object) -> List[str]:
+    """Return local macro libs plus the IO lib at the same exact PVT.
+
+    The pad-ring producer already records every library view it discovered in
+    ``io_pad_chip_top.json``.  STA must not load all of those mutually
+    incompatible corners, or guess a nearest voltage.  A library is added
+    only when its basename carries the same ``__<process>_<temp>_<voltage>``
+    suffix as the standard-cell liberty selected for this stanza.
+    """
+    out = [str(path) for path in (pdk.macro_libs or [])]
+    stem = Path(str(reference_liberty)).stem
+    _sep, marker, suffix = stem.rpartition("__")
+    if not marker or not suffix:
+        return out
+    record = project / "reports" / "phase3" / "io_pad_chip_top.json"
+    try:
+        raw = json.loads(record.read_text()).get("io_library_liberty", [])
+    except (OSError, ValueError, AttributeError):
+        return out
+    if not isinstance(raw, list):
+        return out
+    for candidate in sorted(str(value) for value in raw
+                            if isinstance(value, str)):
+        if Path(candidate).stem.endswith("__" + suffix) and candidate not in out:
+            out.append(candidate)
+    return out
+
+
+def _pnr_io_liberties_tcl(project: Path, pdk: PdkConfig, container: str,
+                          corner_liberty_block: Optional[str]) -> str:
+    """Load only exact-PVT IO views into PnR's active timing scene(s).
+
+    ``_sta_extra_liberties`` is the shared selector.  Local macro libraries
+    are excluded here because the caller already emits them; this helper owns
+    only the IO-pad delta.  Under multi-corner analysis every view is qualified
+    with the corresponding scene.  A single-corner PDK gets a bare read of the
+    exact suffix matching its selected reference liberty.
+    """
+    local_macro = {str(path) for path in (pdk.macro_libs or [])}
+    lines: List[str] = []
+    if corner_liberty_block:
+        try:
+            by_label = _resolve_signoff_corner_libs(project, pdk, container)
+        except Exception:
+            return ""
+        scene = {"SS": "ss", "TT": "tt", "FF": "ff"}
+        for label in ("SS", "TT", "FF"):
+            reference = by_label.get(label)
+            if not reference:
+                continue
+            for liberty in _sta_extra_liberties(project, pdk, reference):
+                if liberty not in local_macro:
+                    lines.append(
+                        f"read_liberty -corner {scene[label]} {liberty}")
+    else:
+        reference = getattr(pdk, "liberty", None)
+        if reference:
+            for liberty in _sta_extra_liberties(project, pdk, reference):
+                if liberty not in local_macro:
+                    lines.append(f"read_liberty {liberty}")
+    # Preserve first occurrence while making accidental duplicate discovery a
+    # no-op; ordering remains SS/TT/FF and sorted-within-view.
+    return "\n".join(dict.fromkeys(lines))
+
+
 def _emit_spef_sta(project: Path, top: str, pdk: PdkConfig, container: str,
                    spef_path: Path, rpt_out: Path,
                    notes: List[str]) -> bool:
@@ -41081,7 +41190,8 @@ def _emit_spef_sta(project: Path, top: str, pdk: PdkConfig, container: str,
     prerequisite or tool failure returns False and the caller falls back
     to the estimate-based report (the pre-#527 behavior)."""
     pnr_out = _pl.pnr_dir(project)
-    netlist = pnr_out / f"{top}_pnr.v"
+    routed_netlist = pnr_out / f"{top}_pnr.v"
+    netlist = routed_netlist
     if not netlist.is_file():
         netlist = _pl.synth_dir(project) / f"{top}_synth.v"
     sdc = pnr_out / "constraint.sdc"
@@ -41135,8 +41245,10 @@ def _emit_spef_sta(project: Path, top: str, pdk: PdkConfig, container: str,
             "sign-off (stamped STA_SIGNOFF_CORNER=NOMINAL in the report)")
     macro_libs_tcl = "\n".join(
         f"read_liberty {_to_container_path(str(f), container)}"
-        for f in (pdk.macro_libs or []))
+        for f in _sta_extra_liberties(project, pdk, lib_c))
     netlist_c = _to_container_path(str(netlist), container)
+    sta_top = _sta_link_top(project, top, netlist,
+                            netlist == routed_netlist)
     sdc_c = _to_container_path(str(sdc), container)
     spef_c = _to_container_path(str(spef_path), container)
     rpt_out.parent.mkdir(parents=True, exist_ok=True)
@@ -41190,7 +41302,7 @@ def _emit_spef_sta(project: Path, top: str, pdk: PdkConfig, container: str,
         f"read_liberty {lib_c}\n"
         f"{macro_libs_tcl}\n"
         f"read_verilog {netlist_c}\n"
-        f"link_design {top}\n"
+        f"link_design {sta_top}\n"
         f"read_sdc {sdc_c}\n"
         f"read_spef {spef_c}\n"
         f"{_propagated_clock_tcl()}"
@@ -41883,6 +41995,8 @@ def _emit_multi_corner_sta(project: Path, top: str, pdk: PdkConfig,
         return False
     notes.append(f"multi-corner STA inputs resolve to basis={basis}: "
                  f"{basis_note}")
+    sta_top = _sta_link_top(project, top, netlist,
+                            basis.startswith("POST_ROUTE"))
     # Collapse the resolved basis to the SAME PnR-side vocabulary the reports'
     # own stamps are read into, so the reuse comparison below is canonical-vs-
     # canonical. The emitter ships two `POST_ROUTE_*` suffixes (SPEF / NO_SPEF);
@@ -42013,7 +42127,7 @@ def _emit_multi_corner_sta(project: Path, top: str, pdk: PdkConfig,
         rpt_c = _to_container_path(str(rpt), container)
         macro_libs_tcl = "\n".join(
             f"read_liberty {_to_container_path(str(f), container)}"
-            for f in pdk.macro_libs
+            for f in _sta_extra_liberties(project, pdk, lib)
         )
         # Annotate the extracted parasitics when we have them — a corner
         # report with no SPEF under-counts interconnect delay at EVERY corner.
@@ -42030,7 +42144,7 @@ def _emit_multi_corner_sta(project: Path, top: str, pdk: PdkConfig,
             f"read_liberty {lib_c}\n"
             f"{macro_libs_tcl}\n"
             f"read_verilog {netlist_c}\n"
-            f"link_design {top}\n"
+            f"link_design {sta_top}\n"
             f"read_sdc {sdc_c}\n"
             f"{read_spef_tcl}"
             # Only when a SPEF was actually annotated (post-route);
@@ -42556,6 +42670,8 @@ def _emit_corner_spef_sta(project: Path, top: str, pdk: PdkConfig,
     _prelayout_netlist = (netlist == _pl.synth_dir(project) / f"{top}_synth.v")
     _basis_stamp = ("PRE_LAYOUT_ESTIMATE" if _prelayout_netlist
                     else "POST_ROUTE_SPEF")
+    sta_top = _sta_link_top(project, top, netlist,
+                            not _prelayout_netlist)
     # Which liberty each RC corner is analysed with. One library across the RC
     # corners is the DESIGNED behaviour (parasitics vary, process does not) —
     # this records it instead of leaving it to be inferred from a corner name.
@@ -42570,7 +42686,7 @@ def _emit_corner_spef_sta(project: Path, top: str, pdk: PdkConfig,
                         if lbl not in (corner_libs or {})]
     macro_libs_tcl = "\n".join(
         f"read_liberty {_to_container_path(str(f), container)}"
-        for f in (pdk.macro_libs or []))
+        for f in _sta_extra_liberties(project, pdk, pdk.liberty))
     netlist_c = _to_container_path(str(netlist), container)
     sdc_c = _to_container_path(str(sdc), container)
     rpt_out.parent.mkdir(parents=True, exist_ok=True)
@@ -42582,7 +42698,7 @@ def _emit_corner_spef_sta(project: Path, top: str, pdk: PdkConfig,
             f"read_liberty {lib_c}\n"
             f"{macro_libs_tcl}\n"
             f"read_verilog {netlist_c}\n"
-            f"link_design {top}\n"
+            f"link_design {sta_top}\n"
             f"read_sdc {sdc_c}\n"
             f"read_spef {spef_c}\n"
             f"{_propagated_clock_tcl()}"
@@ -42818,10 +42934,8 @@ def _emit_mcorner_ocv_sta(project: Path, top: str, pdk: PdkConfig,
 
     setup_rc_corner, setup_spef = _spef_for(("max", "nom"))
     hold_rc_corner, hold_spef = _spef_for(("min", "nom"))
-    macro_libs_tcl = "\n".join(
-        f"read_liberty {_to_container_path(str(f), container)}"
-        for f in (pdk.macro_libs or []))
     netlist_c = _to_container_path(str(netlist), container)
+    sta_top = _sta_link_top(project, top, netlist, _routed_netlist)
     sdc_c = _to_container_path(str(sdc), container)
     rpt_out.parent.mkdir(parents=True, exist_ok=True)
     rpt_c = _to_container_path(str(rpt_out), container)
@@ -42833,6 +42947,9 @@ def _emit_mcorner_ocv_sta(project: Path, top: str, pdk: PdkConfig,
     def _pass(label: str, kind: str, flag: str, spef_host: Optional[Path],
               rc_corner: Optional[str], open_mode: str) -> str:
         lib_c = corner_libs[label]
+        macro_libs_tcl = "\n".join(
+            f"read_liberty {_to_container_path(str(f), container)}"
+            for f in _sta_extra_liberties(project, pdk, lib_c))
         spef_tcl = ""
         spef_disc = "no-SPEF (netlist-only)"
         if spef_host and Path(spef_host).is_file():
@@ -42868,7 +42985,7 @@ def _emit_mcorner_ocv_sta(project: Path, top: str, pdk: PdkConfig,
             f"read_liberty {lib_c}\n"
             f"{macro_libs_tcl}\n"
             f"read_verilog {netlist_c}\n"
-            f"link_design {top}\n"
+            f"link_design {sta_top}\n"
             f"read_sdc {sdc_c}\n"
             f"{spef_tcl}"
             + (_propagated_clock_tcl() if spef_tcl else "") +
@@ -43855,8 +43972,10 @@ def _emit_power_report(project: Path, top: str, pdk: PdkConfig,
     spef_disc = spef_path.name if spef_path else "none (netlist-only)"
     macro_libs_tcl = "\n".join(
         f"read_liberty {_to_container_path(str(f), container)}"
-        for f in pdk.macro_libs
+        for f in _sta_extra_liberties(project, pdk, pdk.liberty)
     )
+    link_top = _sta_link_top(project, top, netlist,
+                             netlist == routed_netlist)
     # v2.3 — VECTOR-BASED dynamic power (opt-in by artifact): when a
     # simulation VCD exists, feed it to OpenSTA `read_power_activities`
     # so switching power comes from REAL activity instead of the
@@ -43881,7 +44000,7 @@ def _emit_power_report(project: Path, top: str, pdk: PdkConfig,
 read_liberty {lib_c}
 {macro_libs_tcl}
 read_verilog {netlist_c}
-link_design {top}
+link_design {link_top}
 read_sdc {sdc_c}
 {spef_tcl}{vcd_tcl}# report_power emits leakage + dynamic + internal categories explicitly,
 # which is what eda_report_audit:power's substance check looks for.

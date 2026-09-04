@@ -404,22 +404,30 @@ def _patch_module(head: str, name: str, portlist: Optional[str], body: str,
     out_parts.append(body[last:])
     new_body = "".join(out_parts)
 
-    # Idempotency: only thread the rail declarations through the header when they
-    # are not already present (a prior pass, or a hand-written power-aware
-    # netlist). Keyed on the first rail as a `wire`/`inout` declaration.
-    r0 = re.escape(decl_rails[0])
-    already_declared = bool(
-        re.search(r"\bwire\b[^;]*\b" + r0 + r"\b", body)
-        or re.search(r"\binout\s+" + r0 + r"\b", head + body))
-    new_head = head if already_declared else \
-        _inject_module_rails(head, portlist, decl_rails, as_ports)
+    # Idempotency is per rail, not keyed on the first one.  Multiple physical
+    # libraries can share VDD/VSS while an IO library additionally declares
+    # DVDD/DVSS; injecting the whole second list would redeclare VDD/VSS and
+    # make the generated Verilog invalid.  Conversely, seeing VDD alone must
+    # not make an absent VSS disappear from the model.
+    scope = head + body
+    missing_rails = []
+    for rail in decl_rails:
+        rr = re.escape(rail)
+        declared = bool(
+            re.search(r"\bwire\b[^;]*\b" + rr + r"\b", scope)
+            or re.search(r"\binout\s+" + rr + r"\b", scope))
+        if not declared:
+            missing_rails.append(rail)
+    new_head = (head if not missing_rails else
+                _inject_module_rails(head, portlist, missing_rails, as_ports))
     return new_head + new_body, True
 
 
 def emit_power_aware_netlist(text: str, pdk: str, top: Optional[str] = None,
                              rails_as_ports: bool = False,
                              tie_wells_to_rails: bool = False,
-                             cell_lef: Optional["Path | str"] = None
+                             cell_lef: Optional["Path | str"] = None,
+                             additional_lefs: Optional[List[object]] = None,
                              ) -> Tuple[str, Dict[str, object]]:
     """Transform a gate netlist into a POWER-AWARE netlist.
 
@@ -452,46 +460,66 @@ def emit_power_aware_netlist(text: str, pdk: str, top: Optional[str] = None,
         # A project-staged PDK has no canonical table key; record the model
         # that was actually used so the artifact never reads as "no PDK".
         stats.pdk = model.key
-    stats.rails = list(model.pg_pins)
+    models: List[Tuple[PdkPowerModel, bool]] = [(model, tie_wells_to_rails)]
+    for index, lef in enumerate(additional_lefs or []):
+        extra = model_from_cell_lef(lef, key=f"additional-lef:{index}")
+        if extra is not None:
+            models.append((extra, False))
 
-    pieces: List[str] = []
-    last = 0
-    for m in _MODULE_RE.finditer(text):
-        stats.modules_seen += 1
-        pieces.append(text[last:m.start()])
-        name = (m.group("name") or "").lstrip("\\")
-        head = m.group("head")
-        portlist = m.group("portlist")
-        body = m.group("body")
-        end = m.group("end")
-        do_this = (top is None) or (name == top.lstrip("\\"))
-        if do_this:
-            patched, changed = _patch_module(head, name, portlist, body,
-                                             model, stats, rails_as_ports,
-                                             tie_wells_to_rails)
-            if changed:
-                stats.modules_patched += 1
-            pieces.append(patched + end)
-        else:
-            pieces.append(head + body + end)
-        last = m.end()
-    pieces.append(text[last:])
+    stats.rails = []
+    for current, _tie in models:
+        for rail in current.pg_pins:
+            if rail not in stats.rails:
+                stats.rails.append(rail)
+
+    def _apply(source: str, current: PdkPowerModel,
+               current_tie: bool) -> str:
+        pieces: List[str] = []
+        last = 0
+        for m in _MODULE_RE.finditer(source):
+            stats.modules_seen += 1
+            pieces.append(source[last:m.start()])
+            name = (m.group("name") or "").lstrip("\\")
+            head = m.group("head")
+            portlist = m.group("portlist")
+            body = m.group("body")
+            end = m.group("end")
+            do_this = (top is None) or (name == top.lstrip("\\"))
+            if do_this:
+                patched, changed = _patch_module(
+                    head, name, portlist, body, current, stats,
+                    rails_as_ports, current_tie)
+                if changed:
+                    stats.modules_patched += 1
+                pieces.append(patched + end)
+            else:
+                pieces.append(head + body + end)
+            last = m.end()
+        pieces.append(source[last:])
+        return "".join(pieces)
+
+    new_text = text
+    for current, current_tie in models:
+        new_text = _apply(new_text, current, current_tie)
 
     if stats.modules_seen == 0:
         stats.skipped_reason = "no module found in netlist"
-    return "".join(pieces), stats.as_dict()
+    return new_text, stats.as_dict()
 
 
 def emit_to_file(netlist: Path, pdk: str, out: Path,
                  top: Optional[str] = None,
                  rails_as_ports: bool = False,
                  tie_wells_to_rails: bool = False,
-                 cell_lef: Optional["Path | str"] = None) -> Dict[str, object]:
+                 cell_lef: Optional["Path | str"] = None,
+                 additional_lefs: Optional[List[object]] = None,
+                 ) -> Dict[str, object]:
     """Read `netlist`, emit the power-aware version to `out`, return stats."""
     text = netlist.read_text(errors="replace")
     new_text, stats = emit_power_aware_netlist(
         text, pdk, top=top, rails_as_ports=rails_as_ports,
-        tie_wells_to_rails=tie_wells_to_rails, cell_lef=cell_lef)
+        tie_wells_to_rails=tie_wells_to_rails, cell_lef=cell_lef,
+        additional_lefs=additional_lefs)
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(new_text)
     stats["output"] = str(out)
