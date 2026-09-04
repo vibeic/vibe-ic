@@ -58,6 +58,24 @@ def test_analog_noleak():
     assert ANALOG.extract("The ADC result is stored.") == []  # no resolution/channel/rate
 
 
+def test_digital_instruction_pipeline_is_not_an_adc():
+    prompt = (
+        "The 32-bit fetched instruction data enters the processor pipeline "
+        "from instruction memory."
+    )
+    assert not any(d["kind"] == "analog_converter"
+                   for d in ANALOG.extract(prompt))
+
+
+def test_pipelined_adc_remains_an_explicit_converter_architecture():
+    items = ANALOG.extract("A 12-bit pipelined ADC converts the analog input.")
+    converters = [d for d in items if d["kind"] == "analog_converter"]
+    assert len(converters) == 1
+    assert converters[0]["converter"] == "ADC"
+    assert converters[0]["resolution"] == 12
+    assert converters[0]["coverage_tokens"] == ["adc", "12"]
+
+
 # ── L7 test/debug ──
 def test_testdebug_positive():
     it = TESTDBG.extract("The chip has a JTAG TAP (TMS,TCK,TDI,TDO), a scan chain "
