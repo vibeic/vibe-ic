@@ -65,7 +65,7 @@ def _fixture(root: Path) -> tuple[Path, Path, str]:
     }
     manifest.write_text(json.dumps(candidate, indent=2) + "\n")
     task = {
-        "schema": "vibeic.benchmark.ai_review_task.v2",
+        "schema": dispatch._REVIEW_TASK_SCHEMA,
         "id": "Prob900_neutral",
         "project": str(project.resolve()),
         "candidate_origin": "PROGRAM",
@@ -97,6 +97,9 @@ def _fixture(root: Path) -> tuple[Path, Path, str]:
                 "phase3_verifying.ran.step4_functional_evidence",
             "functional_confirmation_required": False,
         },
+        "program_review_obligations": (
+            dispatch._program_review_obligation_contract(
+                prompt_text, candidate)),
         "review_path": str(review.resolve()),
         "challenge_path": str(challenge.resolve()),
         "response_path": str(response.resolve()),

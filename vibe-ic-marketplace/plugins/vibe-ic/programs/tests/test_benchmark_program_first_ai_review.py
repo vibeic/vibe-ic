@@ -186,6 +186,92 @@ endmodule
     }
 
 
+def _truth_table_task(tmp_path: Path) -> tuple[Path, dict]:
+    """A two-row contract whose AI confirmation exercises only one row."""
+    run = tmp_path / "run"
+    (run / "responses").mkdir(parents=True)
+    project = _project(tmp_path)
+    (project / "input" / "phase1_prompt.md").write_text(
+        """Design module dut with this exact interface:
+module dut(input wire [7:0] code, output reg [7:0] value);
+
+| input | output |
+|---|---|
+| 8'hA5 | 8'h11 |
+| 8'h3C | 8'hE7 |
+""")
+    (project / "phase2" / "stage1" / "rtl" / "dut.v").write_text(
+        """module dut(input wire [7:0] code, output reg [7:0] value);
+always @* begin
+  case (code)
+    8'hA5: value = 8'h11;
+    8'h3C: value = 8'hE7;
+    default: value = 8'h00;
+  endcase
+end
+endmodule
+""")
+    got = bio.collect("rtllm", "p1", project)
+    task = bd._make_ai_review_task(
+        "p1", project, got, ROUTING, 0, run, "PROGRAM")
+    return run, task
+
+
+def _write_one_row_challenge(task: dict) -> dict:
+    source = r"""
+module vibeic_ai_challenge_tb;
+  reg [7:0] code;
+  wire [7:0] value;
+  dut candidate(.code(code), .value(value));
+  initial begin
+    code = 8'hA5; #1;
+    if (value !== 8'h11) begin
+      $display("VIBEIC_AI_CHALLENGE=FAIL"); $fatal(1);
+    end
+    $display("VIBEIC_AI_CHALLENGE=PASS");
+    $finish;
+  end
+endmodule
+"""
+    path = Path(task["challenge_path"])
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(source)
+    return {
+        "schema": bd._CHALLENGE_SCHEMA,
+        "path": str(path.resolve()),
+        "sha256": bd._sha256_text(source),
+        "top_module": "vibeic_ai_challenge_tb",
+        "prompt_evidence": [{
+            "excerpt": "| 8'hA5 | 8'h11 |",
+            "supports": "The test exercises the first explicit truth-table row.",
+        }],
+        "expected_behavior": "Input 8'hA5 must produce output 8'h11.",
+        "rationale": (
+            "The prompt's first truth-table row supplies both the stimulus and "
+            "the expected value, so this test checks that row without an oracle."),
+    }
+
+
+@_NEEDS_SIMULATOR
+def test_semantic_pass_cannot_leave_a_structural_prompt_obligation_uncovered(
+        tmp_path):
+    """One passing example is not whole-spec functional confirmation."""
+    _, task = _truth_table_task(tmp_path)
+    review = _valid_review(task)
+    review["verification_test"] = _write_one_row_challenge(task)
+    review["semantic_review"]["prompt_evidence"] = [{
+        "excerpt": "| 8'hA5 | 8'h11 |",
+        "supports": "The review confirms the first explicit table row.",
+    }]
+    _write_review(task, review)
+
+    verdict = bd._validate_ai_review(task)
+    assert verdict["status"] == "REJECTED", verdict
+    assert verdict["program_review_coverage"]["blocking_gaps"] == 2
+    assert any("structural prompt obligation" in reason
+               for reason in verdict["reasons"]), verdict
+
+
 def _write_defective_inversion_challenge(task: dict) -> dict:
     """A frozen older proof whose assertion contradicts the prompt."""
     source = r"""

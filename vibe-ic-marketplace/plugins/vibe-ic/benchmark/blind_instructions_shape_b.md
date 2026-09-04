@@ -52,6 +52,9 @@ reaching for it to settle an ambiguity is the leak this rule exists to stop.
   scores.
 - Author backup RTL only into the runner-owned `write_rtl_to` path.
 - Review the immutable candidate named by `rtl_paths` and `rtl_sha256`.
+- When functional confirmation is required, cover every block-eligible item in
+  the task's Program-generated `program_review_obligations` across the current
+  and active inherited executable challenges; one passing vector is incomplete.
 - A semantic FAIL requires prompt evidence plus the task's self-contained
   executable challenge. The frozen candidate must fail it before repair.
 - A repair must pass the same challenge, re-enter Program gates, and receive a
