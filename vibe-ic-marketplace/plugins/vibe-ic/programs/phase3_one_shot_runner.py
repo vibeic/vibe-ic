@@ -29679,12 +29679,20 @@ def _ship_max_fanout_root_repair_tcl(
         "      incr _ship_fanout_root_failed\n"
         "      continue\n"
         "    }\n"
-        "    set _ship_fo_net [lindex $_ship_fo_nets 0]\n"
+        # `get_nets` returns an OpenSTA network object, which is the authority
+        # `insert_buffer -net` expects but does not expose OpenDB geometry.
+        # Resolve its measured name back through the current block for the
+        # physical load boxes; never call dbNet methods on the STA handle.
+        "    set _ship_fo_sta_net [lindex $_ship_fo_nets 0]\n"
         "    set _ship_fo_loc_args {}\n"
         "    if {[catch {\n"
-        "      set _ship_fo_dbu [[ord::get_db_block] getDefUnits]\n"
+        "      set _ship_fo_block [ord::get_db_block]\n"
+        "      set _ship_fo_dbu [$_ship_fo_block getDefUnits]\n"
+        "      set _ship_fo_net_name [get_name $_ship_fo_sta_net]\n"
+        "      set _ship_fo_db_net [$_ship_fo_block findNet $_ship_fo_net_name]\n"
+        "      if {$_ship_fo_db_net eq \"NULL\"} { error \"OpenDB net not found\" }\n"
         "      set _ship_fo_sx 0.0; set _ship_fo_sy 0.0; set _ship_fo_nload 0\n"
-        "      foreach _ship_fo_it [$_ship_fo_net getITerms] {\n"
+        "      foreach _ship_fo_it [$_ship_fo_db_net getITerms] {\n"
         "        if {[[$_ship_fo_it getMTerm] getIoType] ne \"INPUT\"} { "
         "continue }\n"
         "        set _ship_fo_bb [$_ship_fo_it getBBox]\n"
@@ -29710,7 +29718,7 @@ def _ship_max_fanout_root_repair_tcl(
         "pin=$_ship_fo_pin error=$_ship_fo_loc_err\"\n"
         "    }\n"
         "    set _ship_fo_idx $_ship_fanout_root_serial\n"
-        "    if {[catch {insert_buffer -net $_ship_fo_net "
+        "    if {[catch {insert_buffer -net $_ship_fo_sta_net "
         f"-buffer_cell {buffer_cell} "
         "-buffer_name vibeic_drv_root_$_ship_fo_idx "
         "-net_name vibeic_drv_root_net_$_ship_fo_idx "
