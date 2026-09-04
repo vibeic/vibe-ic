@@ -29607,16 +29607,21 @@ def _ship_max_fanout_root_repair_tcl(
     a final ordinary ``repair_design`` pass remains responsible for everything
     below it.
 
-    The insertion point is the physical centroid of the net's input loads,
-    derived from their placed pin boxes.  This matters on a pad-ring design:
+    The insertion point is halfway between the physical driver pin and the
+    centroid of the net's input loads, derived from their placed pin boxes.
+    This matters on a pad-ring design:
     OpenROAD's unconstrained insertion point is near the pad driver, which can
     be inside the pad keep-out beyond the last tap column.  Measured on spm x
     gf180mcuD run8, eight such roots landed at the top/right untapped fringe
     and one at the left fringe, producing 7 DF.13_MV + 12 DF.14_MV findings
-    and one isolated root-well LVS fragment.  A load-centroid seed keeps the
-    root with the placed logic it drives; detailed_placement remains the sole
-    legalizer.  If physical boxes are unavailable the location calculation is
-    reported and the existing unconstrained actuator is retained.
+    and one isolated root-well LVS fragment.  The load centroid alone moved
+    every root fully to the logic cluster, which fixed those wells but made the
+    long pad-to-root segment require a diode; that second timing load reopened
+    max-fanout=1 on the pad.  The driver/load midpoint bounds both segments and
+    stays away from the untapped pad fringe; detailed_placement remains the
+    sole legalizer.  If the driver box is unavailable the load centroid is the
+    conservative fallback.  If physical boxes are unavailable the location
+    calculation is reported and the existing unconstrained actuator is retained.
 
     The cell is supplied by the active PDK's registry/Liberty-derived CTS
     selection.  No design, pad, library-family, or PDK name is embedded here.
@@ -29692,10 +29697,20 @@ def _ship_max_fanout_root_repair_tcl(
         "      set _ship_fo_db_net [$_ship_fo_block findNet $_ship_fo_net_name]\n"
         "      if {$_ship_fo_db_net eq \"NULL\"} { error \"OpenDB net not found\" }\n"
         "      set _ship_fo_sx 0.0; set _ship_fo_sy 0.0; set _ship_fo_nload 0\n"
+        "      set _ship_fo_driver_found 0\n"
+        "      set _ship_fo_dx 0.0; set _ship_fo_dy 0.0\n"
         "      foreach _ship_fo_it [$_ship_fo_db_net getITerms] {\n"
-        "        if {[[$_ship_fo_it getMTerm] getIoType] ne \"INPUT\"} { "
-        "continue }\n"
+        "        set _ship_fo_io [[$_ship_fo_it getMTerm] getIoType]\n"
         "        set _ship_fo_bb [$_ship_fo_it getBBox]\n"
+        "        if {$_ship_fo_io eq \"OUTPUT\"} {\n"
+        "          set _ship_fo_dx [expr {double([$_ship_fo_bb xMin] + "
+        "[$_ship_fo_bb xMax]) / 2.0}]\n"
+        "          set _ship_fo_dy [expr {double([$_ship_fo_bb yMin] + "
+        "[$_ship_fo_bb yMax]) / 2.0}]\n"
+        "          set _ship_fo_driver_found 1\n"
+        "          continue\n"
+        "        }\n"
+        "        if {$_ship_fo_io ne \"INPUT\"} { continue }\n"
         "        set _ship_fo_sx [expr {$_ship_fo_sx + "
         "double([$_ship_fo_bb xMin] + [$_ship_fo_bb xMax]) / 2.0}]\n"
         "        set _ship_fo_sy [expr {$_ship_fo_sy + "
@@ -29703,14 +29718,26 @@ def _ship_max_fanout_root_repair_tcl(
         "        incr _ship_fo_nload\n"
         "      }\n"
         "      if {$_ship_fo_nload > 0 && $_ship_fo_dbu > 0} {\n"
-        "        set _ship_fo_x [expr {$_ship_fo_sx / $_ship_fo_nload / "
-        "double($_ship_fo_dbu)}]\n"
-        "        set _ship_fo_y [expr {$_ship_fo_sy / $_ship_fo_nload / "
-        "double($_ship_fo_dbu)}]\n"
+        "        set _ship_fo_lx [expr {$_ship_fo_sx / $_ship_fo_nload}]\n"
+        "        set _ship_fo_ly [expr {$_ship_fo_sy / $_ship_fo_nload}]\n"
+        "        if {$_ship_fo_driver_found} {\n"
+        "          set _ship_fo_px [expr {($_ship_fo_dx + $_ship_fo_lx) / 2.0}]\n"
+        "          set _ship_fo_py [expr {($_ship_fo_dy + $_ship_fo_ly) / 2.0}]\n"
+        "        } else {\n"
+        "          set _ship_fo_px $_ship_fo_lx; set _ship_fo_py $_ship_fo_ly\n"
+        "        }\n"
+        "        set _ship_fo_x [expr {$_ship_fo_px / double($_ship_fo_dbu)}]\n"
+        "        set _ship_fo_y [expr {$_ship_fo_py / double($_ship_fo_dbu)}]\n"
         "        set _ship_fo_loc_args [list -location "
         "[list $_ship_fo_x $_ship_fo_y]]\n"
-        "        puts \"SHIP_FANOUT_ROOT_LOAD_CENTROID: pin=$_ship_fo_pin "
+        "        if {$_ship_fo_driver_found} {\n"
+        "          puts \"SHIP_FANOUT_ROOT_DRIVER_LOAD_MIDPOINT: "
+        "pin=$_ship_fo_pin loads=$_ship_fo_nload "
+        "location=${_ship_fo_x},${_ship_fo_y}\"\n"
+        "        } else {\n"
+        "          puts \"SHIP_FANOUT_ROOT_LOAD_CENTROID: pin=$_ship_fo_pin "
         "loads=$_ship_fo_nload location=${_ship_fo_x},${_ship_fo_y}\"\n"
+        "        }\n"
         "      }\n"
         "    } _ship_fo_loc_err]} {\n"
         "      set _ship_fo_loc_args {}\n"
