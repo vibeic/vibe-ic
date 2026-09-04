@@ -2,6 +2,7 @@
 """Fresh-session DEF consumers use the cell named by the DEF itself."""
 from __future__ import annotations
 
+import json
 import sys
 from pathlib import Path
 
@@ -32,6 +33,7 @@ def _write_def(path: Path, design: str) -> Path:
         "VERSION 5.8 ;\n"
         f"DESIGN {design} ;\n"
         "UNITS DISTANCE MICRONS 1000 ;\n"
+        "DIEAREA ( 0 0 ) ( 100000 100000 ) ;\n"
         "COMPONENTS 1 ;\n"
         "- u_cell LIB_CELL + FIXED ( 0 0 ) N ;\n"
         "END COMPONENTS\n"
@@ -149,3 +151,65 @@ def test_headerless_def_falls_back_to_the_logical_top(tmp_path, monkeypatch):
         tmp_path, "logical_core", _Pdk(), "container",
         pnr / "logical_core.gds")
     assert "TOP=logical_core " in seen["cmd"], seen["cmd"]
+
+
+def test_drc_deck_receives_the_def_physical_top(tmp_path, monkeypatch):
+    project, pnr = _project(tmp_path, "package_top")
+    (pnr / "logical_core.gds").write_bytes(b"layout")
+    pdk = _Pdk()
+    pdk.drc_deck = "/pdk/rules.drc"
+    seen = {}
+
+    def _deck(gds, report, top, *args):
+        seen["top"] = top
+        report.parent.mkdir(parents=True, exist_ok=True)
+        report.write_text("<report-database><items/></report-database>\n")
+        return 0, "", ""
+
+    monkeypatch.setattr(p3, "_vacuous_on_unrouted", lambda *a, **k: None)
+    monkeypatch.setattr(p3, "_tool_in_path", lambda *_: True)
+    monkeypatch.setattr(p3, "_klayout_deck_exec", _deck)
+    result = p3.step_drc(project, "logical_core", pdk, "container")
+    assert result.status == "PASS", result.detail
+    assert seen["top"] == "package_top", seen
+    assert result.extras["physical_top"] == "package_top"
+
+
+def test_pad_ring_hierarchy_audit_starts_at_the_def_physical_top(
+        tmp_path, monkeypatch):
+    project, pnr = _project(tmp_path, "package_top")
+    for name in ("padring.def", "routed.def"):
+        _write_def(pnr / name, "package_top")
+    reports = project / "reports" / "phase3"
+    reports.mkdir(parents=True, exist_ok=True)
+    (reports / "padring.json").write_text(json.dumps({
+        "producer": {
+            "pads": [{"instance": "u_cell", "master": "LIB_CELL"}],
+            "corners": [],
+            "fillers": [],
+        }
+    }))
+    (pnr / "pnr.tcl").write_text(
+        "puts {PADRING_ROUTING_CONSUMED: fixture}\n"
+        "global_placement\n"
+        "detailed_route\n")
+    (pnr / "openroad.log").write_text("PADRING_ROUTING_CONSUMED: fixture\n")
+    gds = pnr / "logical_core.gds"
+    gds.write_bytes(b"layout")
+    seen = {}
+
+    def _references(path, top):
+        seen["top"] = top
+        return {"LIB_CELL": 1}
+
+    monkeypatch.setattr(p3, "_gds_reference_counts", _references)
+    gds_result = p3.StepResult(
+        "gds", "PASS", 0.0, "fixture", [str(gds)],
+        extras={"streamout_engine": "fixture"})
+    result = p3.step_pad_ring_final_evidence(
+        project, "logical_core", gds_result)
+    assert result.status == "PASS", result.detail
+    assert seen["top"] == "package_top", seen
+    payload = json.loads((reports / "pad_ring_route_evidence.json").read_text())
+    assert payload["logical_top"] == "logical_core"
+    assert payload["physical_top"] == "package_top"

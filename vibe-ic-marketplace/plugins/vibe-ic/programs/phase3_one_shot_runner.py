@@ -30993,8 +30993,10 @@ def step_pad_ring_final_evidence(project: Path, top: str,
         findings.append("PADRING_EXPECTED_POPULATION_EMPTY")
 
     pnr_dir = _pl.pnr_dir(project)
+    final_def = pnr_dir / f"{top}.def"
+    physical_top = _def_reopen_resolution(final_def).design or top
     def_paths = [pnr_dir / "padring.def", pnr_dir / "routed.def",
-                 pnr_dir / f"{top}.def"]
+                 final_def]
     def_evidence: Dict[str, object] = {}
     for path in def_paths:
         if not path.is_file():
@@ -31054,7 +31056,7 @@ def step_pad_ring_final_evidence(project: Path, top: str,
     gds_refs: Optional[Dict[str, int]] = None
     if gds.is_file() and records:
         try:
-            gds_refs = _gds_reference_counts(gds, top)
+            gds_refs = _gds_reference_counts(gds, physical_top)
             expected_by_master: Dict[str, int] = {}
             for rec in records:
                 master = str(rec.get("master") or "")
@@ -31086,6 +31088,8 @@ def step_pad_ring_final_evidence(project: Path, top: str,
         "expected_ring_cell_count": len(records),
         "def_evidence": def_evidence,
         "gds_evidence": gds_evidence,
+        "logical_top": top,
+        "physical_top": physical_top,
         "gds_source_def": f"phase3/stage3/pnr/{top}.def",
         "gds_source_def_sha256": (
             _sha256_file(pnr_dir / f"{top}.def")
@@ -31101,7 +31105,8 @@ def step_pad_ring_final_evidence(project: Path, top: str,
         ("; ".join(findings) if findings else
          f"{len(records)} pad/corner/filler instances persist through padring.def, "
          f"routed.def and {top}.def; live routing consumer observed; GDS "
-         "hierarchy retains every expected pad/corner reference; exact final "
+         f"hierarchy rooted at {physical_top} retains every expected pad/corner "
+         "reference; exact final "
          "DEF and GDS hashes recorded"), [str(out_path)])
 
 
@@ -32394,7 +32399,9 @@ def _drc_wall_budget_s() -> float:
 
 
 def _try_svrf_native_drc(project: Path, top: str, pdk: PdkConfig,
-                         container: str) -> Optional[StepResult]:
+                         container: str,
+                         physical_top: Optional[str] = None
+                         ) -> Optional[StepResult]:
     """Run the commercial Calibre/SVRF `.rule` DRC deck NATIVELY via the vibeic
     KLayout fork's `svrfdrc` buddy (native C++, no Python) — the license-free
     sign-off path when the `calibre` binary is absent. Returns a StepResult (PASS
@@ -32411,6 +32418,7 @@ def _try_svrf_native_drc(project: Path, top: str, pdk: PdkConfig,
     gds = _pl.pnr_dir(project) / f"{top}.gds"
     if not gds.is_file():
         return None
+    cell_top = physical_top or top
     rpt = project / "phase3" / "reports" / "drc_svrf_calibre.rpt"
     rpt.parent.mkdir(parents=True, exist_ok=True)
     deck_c = _to_container_path(str(pdk.calibre_drc), container)
@@ -32418,7 +32426,7 @@ def _try_svrf_native_drc(project: Path, top: str, pdk: PdkConfig,
     rpt_c = _to_container_path(str(rpt), container)
     # svrfdrc <deck> <layout> <report> [--cell=TOP] — byte-identical report to the
     # retired run_svrf_drc.py, so _parse_svrf_tally / _classify_svrf_fails are unchanged.
-    cmd = f"{bin_c} {deck_c} {gds_c} {rpt_c} --cell={top}"
+    cmd = f"{bin_c} {deck_c} {gds_c} {rpt_c} --cell={cell_top}"
     # v1.4.57 — parallelise the measurement-rule CHECK phase when the image's
     # svrfdrc supports it (>= 0.2.19). The report is BYTE-IDENTICAL for every
     # thread count (proven byte-for-byte, threads=1 vs 8), so this changes only
@@ -32599,6 +32607,8 @@ def step_drc(project: Path, top: str, pdk: PdkConfig,
     _vac = _vacuous_on_unrouted(project, "drc", t0)
     if _vac is not None:
         return _vac
+    physical_top = _def_reopen_resolution(
+        _pl.pnr_dir(project) / f"{top}.def").design or top
     if not pdk.drc_deck:
         # No KLayout deck. If a Calibre deck is present, distinguish
         # ENV_UNAVAILABLE (calibre binary absent in this env — env
@@ -32612,7 +32622,9 @@ def step_drc(project: Path, top: str, pdk: PdkConfig,
                 # can produce a real, license-free sign-off DRC verdict on the
                 # foundry's own deck. Only when that engine is ALSO unavailable
                 # do we fall back to the honest ENV_UNAVAILABLE.
-                svrf = _try_svrf_native_drc(project, top, pdk, container)
+                svrf = _try_svrf_native_drc(
+                    project, top, pdk, container,
+                    physical_top=physical_top)
                 if svrf is not None:
                     return svrf
                 # `_try_svrf_native_drc` declines for TWO unrelated reasons: the
@@ -32691,7 +32703,8 @@ def step_drc(project: Path, top: str, pdk: PdkConfig,
     # v1.3.47 — progress-stall watchdog (not a fixed 3600s kill). A large-GDS
     # DRC that is still burning CPU / emitting progress is never killed; only a
     # genuinely hung run dies. marker = the input GDS path (in klayout's argv).
-    rc, out, err = _klayout_deck_exec(gds, rpt, top, pdk, container)
+    rc, out, err = _klayout_deck_exec(
+        gds, rpt, physical_top, pdk, container)
     # v1.3.47 — a stall/ceiling kill must NOT be scored from a partial or stale
     # report (a half-written RDB could parse as 0 violations = false DRC-clean).
     if rc in (_RC_STALLED, 124):
@@ -32724,6 +32737,8 @@ def step_drc(project: Path, top: str, pdk: PdkConfig,
     drc_engine_extras: Dict[str, Any] = {
         "klayout_deck_violations": klayout_deck_count,
         "streamout_engine": "klayout",
+        "logical_top": top,
+        "physical_top": physical_top,
     }
     # Fix #3(c) — surface the OpenROAD detailed-route DRC count (the
     # router's own self-check on MERGED routed geometry) vs the
@@ -32774,7 +32789,7 @@ def step_drc(project: Path, top: str, pdk: PdkConfig,
         if m_ok and merged_gds.is_file():
             m_rpt = project / "phase3" / "reports" / "drc_restream.rpt"
             m_count, m_per_rule = _klayout_deck_violations_on(
-                merged_gds, m_rpt, top, pdk, container)
+                merged_gds, m_rpt, physical_top, pdk, container)
             drc_engine_extras["restream_deck_violations"] = m_count
             drc_engine_extras["restream_violations_per_rule"] = \
                 dict(m_per_rule)
