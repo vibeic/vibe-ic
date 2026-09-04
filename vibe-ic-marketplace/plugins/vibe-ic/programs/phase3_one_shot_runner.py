@@ -29607,6 +29607,17 @@ def _ship_max_fanout_root_repair_tcl(
     a final ordinary ``repair_design`` pass remains responsible for everything
     below it.
 
+    The insertion point is the physical centroid of the net's input loads,
+    derived from their placed pin boxes.  This matters on a pad-ring design:
+    OpenROAD's unconstrained insertion point is near the pad driver, which can
+    be inside the pad keep-out beyond the last tap column.  Measured on spm x
+    gf180mcuD run8, eight such roots landed at the top/right untapped fringe
+    and one at the left fringe, producing 7 DF.13_MV + 12 DF.14_MV findings
+    and one isolated root-well LVS fragment.  A load-centroid seed keeps the
+    root with the placed logic it drives; detailed_placement remains the sole
+    legalizer.  If physical boxes are unavailable the location calculation is
+    reported and the existing unconstrained actuator is retained.
+
     The cell is supplied by the active PDK's registry/Liberty-derived CTS
     selection.  No design, pad, library-family, or PDK name is embedded here.
     Empty/unknown selection is an explicit skip, never a fabricated master.
@@ -29668,11 +29679,42 @@ def _ship_max_fanout_root_repair_tcl(
         "      incr _ship_fanout_root_failed\n"
         "      continue\n"
         "    }\n"
+        "    set _ship_fo_net [lindex $_ship_fo_nets 0]\n"
+        "    set _ship_fo_loc_args {}\n"
+        "    if {[catch {\n"
+        "      set _ship_fo_dbu [[ord::get_db_block] getDefUnits]\n"
+        "      set _ship_fo_sx 0.0; set _ship_fo_sy 0.0; set _ship_fo_nload 0\n"
+        "      foreach _ship_fo_it [$_ship_fo_net getITerms] {\n"
+        "        if {[[$_ship_fo_it getMTerm] getIoType] ne \"INPUT\"} { "
+        "continue }\n"
+        "        set _ship_fo_bb [$_ship_fo_it getBBox]\n"
+        "        set _ship_fo_sx [expr {$_ship_fo_sx + "
+        "double([$_ship_fo_bb xMin] + [$_ship_fo_bb xMax]) / 2.0}]\n"
+        "        set _ship_fo_sy [expr {$_ship_fo_sy + "
+        "double([$_ship_fo_bb yMin] + [$_ship_fo_bb yMax]) / 2.0}]\n"
+        "        incr _ship_fo_nload\n"
+        "      }\n"
+        "      if {$_ship_fo_nload > 0 && $_ship_fo_dbu > 0} {\n"
+        "        set _ship_fo_x [expr {$_ship_fo_sx / $_ship_fo_nload / "
+        "double($_ship_fo_dbu)}]\n"
+        "        set _ship_fo_y [expr {$_ship_fo_sy / $_ship_fo_nload / "
+        "double($_ship_fo_dbu)}]\n"
+        "        set _ship_fo_loc_args [list -location "
+        "[list $_ship_fo_x $_ship_fo_y]]\n"
+        "        puts \"SHIP_FANOUT_ROOT_LOAD_CENTROID: pin=$_ship_fo_pin "
+        "loads=$_ship_fo_nload location=${_ship_fo_x},${_ship_fo_y}\"\n"
+        "      }\n"
+        "    } _ship_fo_loc_err]} {\n"
+        "      set _ship_fo_loc_args {}\n"
+        "      puts \"SHIP_FANOUT_ROOT_LOCATION_NONFATAL: "
+        "pin=$_ship_fo_pin error=$_ship_fo_loc_err\"\n"
+        "    }\n"
         "    set _ship_fo_idx $_ship_fanout_root_serial\n"
-        "    if {[catch {insert_buffer -net [lindex $_ship_fo_nets 0] "
+        "    if {[catch {insert_buffer -net $_ship_fo_net "
         f"-buffer_cell {buffer_cell} "
         "-buffer_name vibeic_drv_root_$_ship_fo_idx "
-        "-net_name vibeic_drv_root_net_$_ship_fo_idx} _ship_fo_insert_err]} {\n"
+        "-net_name vibeic_drv_root_net_$_ship_fo_idx "
+        "{*}$_ship_fo_loc_args} _ship_fo_insert_err]} {\n"
         "      puts \"SHIP_FANOUT_ROOT_INSERT_FAILED: pin=$_ship_fo_pin "
         "error=$_ship_fo_insert_err\"\n"
         "      incr _ship_fanout_root_failed\n"
@@ -34748,9 +34790,10 @@ def _try_power_aware_lvs(project: Path, top: str, pdk: PdkConfig,
                          t0: float) -> Optional[StepResult]:
     """GAP-E2E-9 ROOT FIX — try netgen with a POWER-AWARE gate netlist.
 
-    Emits a power-aware version of `netlist` (PDK rails as top ports + per-cell
-    PG connectivity, via `lvs_power_aware_netlist_emit` — chip/PDK-AGNOSTIC) and
-    runs netgen against the same extracted layout. Returns a PASS StepResult ONLY
+    Emits a power-aware version of `netlist` (PDK rails represented exactly as
+    the extracted top exposes them + per-cell PG connectivity, via
+    `lvs_power_aware_netlist_emit` — chip/PDK-AGNOSTIC) and runs netgen against
+    the same extracted layout. Returns a PASS StepResult ONLY
     when netgen reaches a genuine `Circuits match uniquely` — meaning the power
     network is actually LVS-VERIFIED (not dropped as the plain netlist forces).
 
@@ -34788,6 +34831,18 @@ def _try_power_aware_lvs(project: Path, top: str, pdk: PdkConfig,
     # per-model outcome; it does NOT change WHICH model is selected, and no
     # verdict is upgraded. chip-AGNOSTIC: model name + classifier verdict only.
     attempt_log: List[Dict[str, Any]] = []
+    try:
+        extracted_text = spice_out.read_text(errors="replace")
+        has_exact_layout_top = bool(re.search(
+            rf'^\s*\.subckt\s+{re.escape(lay_top)}\b', extracted_text,
+            re.IGNORECASE | re.MULTILINE))
+        layout_power_ports = (
+            _v0_3_14_extracted_top_port_set(extracted_text, top=lay_top)
+            if has_exact_layout_top else set())
+    except OSError:
+        # Missing/unreadable extracted authority must fail closed: emitting
+        # schematic-only rail ports would fabricate a top-level interface.
+        layout_power_ports = set()
 
     def _attempt(tie_wells: bool) -> Optional[Tuple[Path, Dict[str, Any], str]]:
         """Emit a power-aware netlist (well-tied or 4-rail), run netgen against
@@ -34800,6 +34855,28 @@ def _try_power_aware_lvs(project: Path, top: str, pdk: PdkConfig,
         model = "well_tied" if tie_wells else "four_rail"
         suffix = "pwraware_welltied" if tie_wells else "pwraware"
         pa_nl = ext_dir / f"{top}_{suffix}.v"
+        # The emitter's default internal/global rails are correct for a core
+        # extraction.  A pad-ring extraction may instead retain the real rails
+        # in its top .subckt header.  Opt in only when that measured header
+        # contains the complete effective rail set for this exact PDK/model;
+        # one missing rail is an interface mismatch and therefore fails closed.
+        effective_rails: List[str] = []
+        try:
+            power_model = _lvs_pa.power_model_for(
+                pdk.name, cell_lef=getattr(pdk, "cell_lef", None))
+            if power_model is not None:
+                _connections, effective_rails = _lvs_pa._rail_connection_map(
+                    power_model, tie_wells)
+        except Exception:  # nosec — an unavailable model keeps rails internal
+            effective_rails = []
+        rails_as_ports = bool(effective_rails) and set(effective_rails).issubset(
+            layout_power_ports)
+        decision = {
+            "model": model,
+            "layout_power_ports": sorted(layout_power_ports),
+            "effective_rails": list(effective_rails),
+            "rails_as_ports": rails_as_ports,
+        }
         try:
             # cell_lef: consulted ONLY when pdk.name resolves to no table
             # entry — i.e. a project-staged (commercial) PDK, whose power
@@ -34811,14 +34888,18 @@ def _try_power_aware_lvs(project: Path, top: str, pdk: PdkConfig,
                 emit_kwargs["additional_lefs"] = additional_lefs
             st = _lvs_pa.emit_to_file(
                 netlist, pdk.name, pa_nl, top=top,
+                rails_as_ports=rails_as_ports,
                 tie_wells_to_rails=tie_wells,
                 cell_lef=getattr(pdk, "cell_lef", None), **emit_kwargs)
+            st["layout_power_ports"] = sorted(layout_power_ports)
+            st["effective_rails"] = list(effective_rails)
+            st["rails_as_ports"] = rails_as_ports
         except Exception as exc:  # nosec — a bad netlist must never break the plain path
-            attempt_log.append({"model": model, "rejected_at": "emit",
+            attempt_log.append({**decision, "rejected_at": "emit",
                                 "reason": f"{type(exc).__name__}: {exc}"})
             return None
         if st.get("modules_patched", 0) <= 0 or not pa_nl.is_file():
-            attempt_log.append({"model": model, "rejected_at": "emit",
+            attempt_log.append({**decision, "rejected_at": "emit",
                                 "reason": "no module patched / netlist not written",
                                 "modules_patched": st.get("modules_patched", 0)})
             return None
@@ -34834,7 +34915,7 @@ def _try_power_aware_lvs(project: Path, top: str, pdk: PdkConfig,
             # marker = the layout netlist path (in netgen's argv).
             _rc, out, err = _docker_exec(container, cmd, marker=nl_c, outputs=[pa_rpt])
         except Exception as exc:  # nosec — netgen crash on the pre-attempt is non-fatal
-            attempt_log.append({"model": model, "rejected_at": "netgen",
+            attempt_log.append({**decision, "rejected_at": "netgen",
                                 "reason": f"{type(exc).__name__}: {exc}"})
             return None
         # ORGANIC v1462 — bounded flush retry so a lagging power-aware report
@@ -34847,7 +34928,7 @@ def _try_power_aware_lvs(project: Path, top: str, pdk: PdkConfig,
         if cls != "MATCH":
             _terminal = _lvt.has_terminal_verdict(txt)
             attempt_log.append({
-                "model": model, "rejected_at": "classify", "verdict": cls,
+                **decision, "rejected_at": "classify", "verdict": cls,
                 "netgen_rc": _rc,
                 "report_had_terminal_verdict": _terminal,
                 "report_bytes": len(txt),
@@ -34860,7 +34941,7 @@ def _try_power_aware_lvs(project: Path, top: str, pdk: PdkConfig,
                            "a mismatch" if not _terminal
                            else "netgen reported a conclusive non-match")})
             return None
-        attempt_log.append({"model": model, "accepted": True,
+        attempt_log.append({**decision, "accepted": True,
                             "netlist": str(pa_nl.relative_to(project))})
         return pa_nl, st, txt
 

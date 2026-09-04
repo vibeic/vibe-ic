@@ -203,6 +203,8 @@ def test_signoff_repair_targets_only_tool_reported_fanout_violators():
     assert "report_check_types -max_fanout -violators" in tcl
     assert "insert_buffer -net" in tcl
     assert "-buffer_cell pdk_derived_clkbuf" in tcl
+    assert "SHIP_FANOUT_ROOT_LOAD_CENTROID" in tcl
+    assert "{*}$_ship_fo_loc_args" in tcl
     assert "set_max_fanout" not in tcl  # the actuator must not change the gate
 
 
@@ -231,8 +233,30 @@ def test_fanout_root_helper_executes_only_red_rows_and_noops_without_authority(
         "proc report_check_types {args} { set idx [lsearch -exact $args >]; "
         "set fp [open [lindex $args [expr {$idx + 1}]] w]; "
         "puts -nonewline $fp $::fixture; close $fp; return {}}\n"
+        "namespace eval ord {}\n"
+        "proc ord::get_db_block {} { return db_block }\n"
+        "proc db_block {method args} { if {$method eq \"getDefUnits\"} "
+        "{ return 1000 }; error \"bad block method $method\" }\n"
         "proc get_pins {args} { return [lindex $args end] }\n"
-        "proc get_nets {args} { return net_[lindex $args end] }\n"
+        "proc get_nets {args} { return net_fixture }\n"
+        "proc net_fixture {method args} { if {$method eq \"getITerms\"} "
+        "{ return {driver load_a load_b} }; error \"bad net method $method\" }\n"
+        "proc driver {method args} { if {$method eq \"getMTerm\"} "
+        "{ return driver_mterm }; error \"bad driver method $method\" }\n"
+        "proc driver_mterm {method args} { if {$method eq \"getIoType\"} "
+        "{ return OUTPUT }; error \"bad driver mterm method $method\" }\n"
+        "proc load_a {method args} { if {$method eq \"getMTerm\"} "
+        "{ return load_mterm }; if {$method eq \"getBBox\"} { return box_a }; "
+        "error \"bad load_a method $method\" }\n"
+        "proc load_b {method args} { if {$method eq \"getMTerm\"} "
+        "{ return load_mterm }; if {$method eq \"getBBox\"} { return box_b }; "
+        "error \"bad load_b method $method\" }\n"
+        "proc load_mterm {method args} { if {$method eq \"getIoType\"} "
+        "{ return INPUT }; error \"bad load mterm method $method\" }\n"
+        "proc box_a {method args} { set v [dict create xMin 1000 xMax 3000 "
+        "yMin 2000 yMax 4000]; return [dict get $v $method] }\n"
+        "proc box_b {method args} { set v [dict create xMin 3000 xMax 5000 "
+        "yMin 4000 yMax 6000]; return [dict get $v $method] }\n"
         "proc insert_buffer {args} { lappend ::calls $args; return buf }\n"
         "proc repair_design {args} { return {}}\n"
         "proc repair_timing {args} { return {}}\n"
@@ -240,6 +264,7 @@ def test_fanout_root_helper_executes_only_red_rows_and_noops_without_authority(
         "set _ship_rt_failed 0\n"
         + helper
         + "puts ROOT_CALLS=[llength $::calls]\n"
+        + "puts ROOT_ARGS=$::calls\n"
         + "puts ROOT_INSERTED=$_ship_fanout_root_inserted\n"
         + no_authority
         + "puts NOAUTH_INSERTED=$_ship_fanout_root_inserted\n")
@@ -249,3 +274,6 @@ def test_fanout_root_helper_executes_only_red_rows_and_noops_without_authority(
     assert "ROOT_CALLS=2" in result.stdout
     assert "ROOT_INSERTED=2" in result.stdout
     assert "NOAUTH_INSERTED=0" in result.stdout
+    assert result.stdout.count(
+        "SHIP_FANOUT_ROOT_LOAD_CENTROID: pin=") == 2
+    assert result.stdout.count("-location {3.0 4.0}") == 2
