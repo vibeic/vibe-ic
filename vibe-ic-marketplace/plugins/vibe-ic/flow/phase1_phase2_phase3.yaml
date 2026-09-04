@@ -1295,7 +1295,28 @@ steps:
           unprobed because it is fetched, not produced, and the flow must be able
           to say it was never fetched.
     programs:
+      # WIRED 2026-09-04. This step declared its input `from: external,
+      # check: none` -- "fetched, not produced, and the flow must be able to
+      # say it was never fetched" -- and NOTHING FETCHED IT. Measured across
+      # every published corpus tree: `input/submission_template_source` existed
+      # for zero designs, `slots/*.yaml` for zero designs, and every
+      # `tapeout_declaration.json` field read NOT_DETERMINED. That starved BOTH
+      # arms of step 37.5ic -- ours as much as the operator's -- and its
+      # symptoms were read for weeks as separate defects: a chip_top that would
+      # not resolve, a 106-byte pad-ring GDS, a die matching no slot.
+      #
+      # The order IS the chain, and every link refuses rather than invents:
+      #   fetch    the operator's published template, out of its own
+      #            digest-pinned image, normalised. NOT_APPLICABLE when the PDK
+      #            has no live shuttle; a REFUSAL when it has one whose
+      #            publication shape we cannot read.
+      #   ingest   that normalised template -> slots/*.yaml. Unchanged.
+      #   answers  the OPERATOR's terms -> the answers file below. Never the
+      #            design's own questions: those stay NOT_DETERMINED until the
+      #            design states them.
+      - submission_template_fetch
       - submission_template_ingest
+      - submission_template_answers
       # THE OTHER HALF OF THE SAME STEP. `submission_template_ingest` records
       # what the OPERATOR published; this records what the DESIGN declares
       # about itself — the 18 physical questions of `_tapeout_declaration`

@@ -40,6 +40,7 @@ PROGRAMS = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROGRAMS))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+import _submission_template as ST         # noqa: E402
 import _tapeout_declaration as TD          # noqa: E402
 import general_precheck as GP              # noqa: E402
 import tapeout_precheck as TP              # noqa: E402
@@ -109,6 +110,30 @@ def _project(tmp_path: Path, gds_maker, answers: dict, *,
         slot = proj / "input" / "submission_template" / "slots" / "1x1.yaml"
         slot.parent.mkdir(parents=True, exist_ok=True)
         slot.write_text("DIE_AREA: [0, 0, 100.0, 80.0]\n")
+        # AND THE DESIGN DECLARES WHICH SLOT IT BOUGHT. Staging a template is
+        # the OPERATOR's half; it does not choose for the design. Before
+        # 2026-09-04 a sole slot file was read as the design's choice, so these
+        # fixtures never had to say — and a design that never chose would have
+        # been silently moved the moment the operator listed a second slot.
+        # `submission_template_ingest` states the rule for the whole step: the
+        # slot is "the slot this design DECLARES it targets. Never guessed and
+        # never defaulted."
+        # AND THE DESIGN DECLARES WHICH SLOT IT BOUGHT, in the flow's own
+        # home for that fact: `operator_template.slot` in the step-0.5ic
+        # answers, which is where `_run_step_0_5ic` reads it. Before
+        # 2026-09-04 a sole slot file was read as the design's choice, so these
+        # fixtures never had to say -- and a design that never chose would have
+        # been silently moved the moment the operator listed a second slot.
+        ans_p = proj / ST.DESIGN_ANSWERS_REL
+        ans_p.parent.mkdir(parents=True, exist_ok=True)
+        prior = {}
+        if ans_p.is_file():
+            try:
+                prior = json.loads(ans_p.read_text())
+            except ValueError:
+                prior = {}
+        prior.setdefault("operator_template", {})["slot"] = "1x1"
+        ans_p.write_text(json.dumps(prior, indent=2))
     else:
         marker = proj / TD.SELF_TAPEOUT_REL
         marker.parent.mkdir(parents=True, exist_ok=True)

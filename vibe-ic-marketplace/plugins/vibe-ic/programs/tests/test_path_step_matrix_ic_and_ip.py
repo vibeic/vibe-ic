@@ -1106,7 +1106,9 @@ WIRED_PRODUCERS = {
     # step that decides the route can produce its own declared outputs. The
     # xfail that recorded their absence is deleted in the same change and the
     # test it guarded now has to pass for real.
+    ("0.5ic", "submission_template_fetch"),
     ("0.5ic", "submission_template_ingest"),
+    ("0.5ic", "submission_template_answers"),
     ("0.5ic", "tapeout_declaration_gen"),
     # 2026-09-02 — THE PRODUCER OF THE PAD INSTANCES.
     # `phase3_one_shot_runner.step_io_pad_chip_top_gen` dispatches it before

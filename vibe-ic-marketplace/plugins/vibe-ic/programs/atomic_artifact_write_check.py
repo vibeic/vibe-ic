@@ -80,6 +80,19 @@ HELPER_MODULE = "_atomic_artefact"
 #: CLI destinations whose value is an artefact a later reader resolves.
 _DEST_FLAGS = ("--json", "--out", "--output", "--report")
 
+#: The flow's own declaration of what each step produces. MEASURED 2026-09-04:
+#: 185 `required_outputs` are declared by 116 programs, and 14 of those declare
+#: NO CLI report flag at all — so `_dest_arg_names` returned nothing for them
+#: and `scan_program` skipped the whole file. Those 14 produce artefacts a
+#: `check_step` reads as "the step produced this", which is EXACTLY the
+#: population this gate exists for, and it could not see one of them.
+#:
+#: CLI-DERIVED WAS ALWAYS A PROXY. The flow yaml is the authority on what a
+#: step produces; a `--json` flag is only the commonest way of saying it. So
+#: the declaration is read from the authority, and the flag stays as the second
+#: channel for programs whose destination is not spelled in the flow.
+FLOW_REL = Path("flow/phase1_phase2_phase3.yaml")
+
 #: Write forms that create the final name before filling it.
 _DIRECT_WRITE_METHODS = {"write_text", "write_bytes"}
 
@@ -128,14 +141,81 @@ def _mentions(node: ast.AST, names: Set[str]) -> bool:
     return False
 
 
-def scan_program(path: Path) -> List[Dict[str, Any]]:
-    """Non-atomic writes to this program's own report destination."""
+def declared_outputs_by_program(plugin_dir: Path) -> Dict[str, Set[str]]:
+    """program stem -> the output paths the FLOW says its steps produce.
+
+    Read from the flow rather than inferred, because the flow is the authority
+    on what a step produces and a CLI flag is only the commonest way of saying
+    it. A tree with no readable flow yields {} and the gate falls back to the
+    CLI channel alone — a population that could not be read must not silently
+    become a population of zero.
+    """
+    try:
+        import yaml
+    except ImportError:
+        return {}
+    try:
+        doc = yaml.safe_load((plugin_dir / FLOW_REL).read_text())
+    except (OSError, ValueError, Exception):             # noqa: BLE001
+        return {}
+    out: Dict[str, Set[str]] = {}
+
+    def walk(node: Any) -> None:
+        if isinstance(node, dict):
+            if "required_outputs" in node:
+                progs = [str(x) for x in (node.get("programs") or [])]
+                paths = set()
+                for e in (node["required_outputs"] or []):
+                    val = e.get("path") if isinstance(e, dict) else e
+                    if isinstance(val, str) and val.strip():
+                        paths.add(val.strip())
+                for pr in progs:
+                    out.setdefault(pr, set()).update(paths)
+            for v in node.values():
+                walk(v)
+        elif isinstance(node, list):
+            for v in node:
+                walk(v)
+    walk(doc)
+    return out
+
+
+def _literal_dest_names(tree: ast.AST, declared: Set[str]) -> Set[str]:
+    """Variables assigned a path literal the FLOW declares as an output.
+
+    Matched on the declared path or its basename, because a program routinely
+    builds `project / "reports/phase1/x.json"` from a constant. A literal that
+    matches nothing the flow declares is left alone: this widens the population
+    to the flow's own statement, never to every string in the file.
+    """
+    if not declared:
+        return set()
+    bases = {d.rsplit("/", 1)[-1] for d in declared} | set(declared)
+    names: Set[str] = set()
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Assign):
+            continue
+        for sub in ast.walk(node.value):
+            if isinstance(sub, ast.Constant) and isinstance(sub.value, str) \
+                    and (sub.value in bases
+                         or sub.value.rsplit("/", 1)[-1] in bases):
+                for t in node.targets:
+                    if isinstance(t, ast.Name):
+                        names.add(t.id)
+                break
+    return names
+
+
+def scan_program(path: Path,
+                 declared: Set[str] | None = None) -> List[Dict[str, Any]]:
+    """Non-atomic writes to this program's own declared report destination."""
     try:
         src = path.read_text(errors="replace")
         tree = ast.parse(src)
     except (OSError, SyntaxError):
         return []
     dests = _dest_arg_names(tree)
+    dests |= _literal_dest_names(tree, declared or set())
     if not dests:
         return []
     # A local variable assigned FROM a destination inherits it: `out =
@@ -168,9 +248,10 @@ def scan_program(path: Path) -> List[Dict[str, Any]]:
 def audit(programs_dir: Path) -> Dict[str, Any]:
     offenders: Dict[str, List[Dict[str, Any]]] = {}
     parsed = 0
+    by_program = declared_outputs_by_program(programs_dir.parent)
     for p in sorted(programs_dir.glob("*.py")):
         parsed += 1
-        hits = scan_program(p)
+        hits = scan_program(p, by_program.get(p.stem))
         if hits:
             offenders[p.name] = hits
     return {"programs_parsed": parsed,

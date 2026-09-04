@@ -817,7 +817,24 @@ def _expert_track_summary(project: Path) -> str:
 # route this runner picked on a design's behalf would be a default wearing a
 # declaration's clothes.
 
+def _import_answers_rel() -> str:
+    """The answers path, read from the program that writes it."""
+    try:
+        import submission_template_answers as _sta
+        return _sta.ANSWERS_REL
+    except Exception:                                       # noqa: BLE001
+        # A deployment missing the program is a defect the loop below reports
+        # by name; this only has to not crash before it gets there.
+        return "input/submission_template/operator_answers.json"
+
+
+_STEP_0_5IC_FETCH = "submission_template_fetch.py"
 _STEP_0_5IC_INGEST = "submission_template_ingest.py"
+_STEP_0_5IC_ANSWERS = "submission_template_answers.py"
+#: Where `submission_template_answers` writes the ONE answers file
+#: `tapeout_declaration_gen` reads. Imported from that module rather than
+#: spelled again here: a path written in two places is two places to forget.
+_MERGED_ANSWERS_REL = _import_answers_rel()
 _STEP_0_5IC_DECLARE = "tapeout_declaration_gen.py"
 
 
@@ -923,10 +940,45 @@ def _run_step_0_5ic(project: Path) -> int:
         ingest += ["--no-template-reason", reason.strip()]
     declare = [sys.executable, str(PROGRAMS_DIR / _STEP_0_5IC_DECLARE),
                str(project)]
-    if answers_path is not None:
-        declare += ["--answers", str(answers_path)]
+    # Filled in after `answers` runs: it is the MERGED file when one was
+    # written, and the design's own only when no operator stated anything.
+    # Resolved late on purpose — deciding it here would freeze the precedence
+    # before the operator has spoken.
 
-    for argv in (ingest, declare):
+    # THE OPERATOR'S TEMPLATE, FETCHED. Before this, `root` was searched and
+    # found absent for every design in the corpus, because the step declared its
+    # template `from: external` and nothing external ever went and got it. The
+    # fetch is NOT_APPLICABLE for a PDK with no live shuttle and refuses only
+    # when there IS an operator whose terms it could not obtain.
+    fetch = [sys.executable, str(PROGRAMS_DIR / _STEP_0_5IC_FETCH),
+             str(project)]
+
+    # THE OPERATOR'S TERMS, TRANSCRIBED. `tapeout_declaration_gen` refuses to
+    # infer — rightly — so without this nothing could ever answer a field, and
+    # all 18 stayed NOT_DETERMINED. It merges the design's own answers
+    # UNDERNEATH the operator's and emits ONE file, because the generator takes
+    # one: leaving the precedence to whichever file was passed is how a design's
+    # self-declared die size would silently outrank the slot it was sold.
+    answers = [sys.executable, str(PROGRAMS_DIR / _STEP_0_5IC_ANSWERS),
+               str(project)]
+    if isinstance(slot, str) and slot.strip():
+        answers += ["--slot", slot.strip()]
+    if answers_path is not None:
+        answers += ["--design-answers", str(answers_path)]
+    merged_answers = project / _MERGED_ANSWERS_REL
+    try:
+        merged_answers.unlink()
+    except FileNotFoundError:
+        pass
+    except OSError:
+        pass
+
+    for argv in (fetch, ingest, answers, declare):
+        if argv is declare:
+            src = (merged_answers if merged_answers.is_file()
+                   else answers_path)
+            if src is not None:
+                argv = argv + ["--answers", str(src)]
         name = Path(argv[1]).name
         # Same replacement as `_run_expert_track`, same reason. See there.
         res = _wd.run_host_supervised(argv, stall_grace_s=_TRACK_STALL_GRACE_S)

@@ -54,6 +54,7 @@ import argparse, json, re, shutil, sys, time
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 import _path_layout as _pl
+from _atomic_artefact import write_text as _atomic_write_text
 
 # Generic, chip-AGNOSTIC signal-role vocabulary. These match on STRUCTURE of the
 # identifier (a `clk`/`clock` token, a `rst`/`reset` token, an active-low `_n`
@@ -1045,7 +1046,11 @@ def run_unit_tbs(project: Path, container: "str | None" = None,
         report["reason"] = "no testbench produced a result — nothing written"
         return -1
     results = out_root / "results.xml"
-    results.write_text(_junit(cases))
+    # ATOMIC. `results.xml` is the FUNCTIONAL-TEST DENOMINATOR: the step-4
+    # bridge reads it to substantiate `functional_verified`, and a writer that
+    # dies mid-XML leaves a truncated file under the final name that the bridge
+    # opens and counts. The final name must mean "this run finished".
+    _atomic_write_text(results, _junit(cases))
     report["results_xml"] = str(results)
     return executed
 

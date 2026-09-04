@@ -475,9 +475,13 @@ def resolve_slot(project: Path,
         names[name] = str(p.relative_to(project))
     if not names:
         return None, None
-    if len(names) == 1:
-        only = next(iter(names))
-        return only, names[only]
+    # ONE ON OFFER IS STILL NOT A DECLARATION. `submission_template_ingest`
+    # states the rule for the whole step -- the slot is "the slot this design
+    # DECLARES it targets. Never guessed and never defaulted." What the
+    # operator happens to sell today is not what this design bought: an
+    # operator that adds a second slot tomorrow would silently move a design
+    # that never chose. So a sole slot is read only when the design points at
+    # it, exactly like any other.
     declared = _declared_slot(project)
     if declared and declared in names:
         return declared, f"the declaration, matched against {names[declared]}"
@@ -485,26 +489,32 @@ def resolve_slot(project: Path,
 
 
 def _declared_slot(project: Path) -> Optional[str]:
-    """The slot the design's tape-out declaration names, or None.
+    """The slot the DESIGN declared, from the flow's own home for that fact.
 
-    Read leniently and reported as a candidate only: `resolve_slot` still
-    requires the fetched template to actually offer it, so a declaration that
-    names a slot nobody sells cannot select one.
+    `input/step_0_5ic_answers.json` -> `operator_template.slot`, which is
+    exactly where `phase1_one_shot_runner._run_step_0_5ic` reads it before
+    passing `--slot` to the ingest. ONE home, read the same way by everybody.
+
+    The first version of this function sniffed the TAPE-OUT DECLARATION for any
+    of `slot` / `purchased_slot` / `operator_slot`. That was wrong twice over:
+    the declaration has no such question among its 18, so the key could only
+    ever be an unknown one; and matching a set of plausible NAMES is the
+    token-match mistake this repo has paid for before — a name is not a
+    declaration, and the declaration already exists somewhere else.
     """
     try:
         doc = json.loads(
-            (project / _decl.DECLARATION_REL).read_text(errors="replace"))
+            (project / _st.DESIGN_ANSWERS_REL).read_text(errors="replace"))
     except (OSError, ValueError):
         return None
-    ans = doc.get("answers") if isinstance(doc.get("answers"), dict) else doc
-    for key in ("slot", "purchased_slot", "operator_slot"):
-        v = ans.get(key) if isinstance(ans, dict) else None
-        if isinstance(v, str) and v.strip() and v.strip() != NOT_DETERMINED:
-            return v.strip()
-        if isinstance(v, dict) and isinstance(v.get("value"), str):
-            got = v["value"].strip()
-            if got and got != NOT_DETERMINED:
-                return got
+    if not isinstance(doc, dict):
+        return None
+    operator = doc.get("operator_template")
+    if not isinstance(operator, dict):
+        return None
+    got = operator.get("slot")
+    if isinstance(got, str) and got.strip() and got.strip() != NOT_DETERMINED:
+        return got.strip()
     return None
 
 

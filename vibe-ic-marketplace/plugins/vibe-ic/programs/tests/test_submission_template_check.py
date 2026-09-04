@@ -799,8 +799,15 @@ def test_the_flow_declares_this_gate_exactly_as_it_is_invoked():
     flow = yaml.safe_load(
         (PROGRAMS.parent / "flow" / "phase1_phase2_phase3.yaml").read_text())
     step = next(s for s in flow["steps"] if str(s.get("id")) == "0.5ic")
-    assert step["programs"] == ["submission_template_ingest",
-                                "tapeout_declaration_gen"]
+    assert step["programs"] == [
+        # WIRED 2026-09-04: the step declared its template `from: external` and
+        # nothing fetched it, so `slots/*.yaml` never existed and all 18
+        # declaration fields stayed NOT_DETERMINED for every design.
+        "submission_template_fetch",
+        "submission_template_ingest",
+        "submission_template_answers",
+        "tapeout_declaration_gen",
+    ]
 
     # `all_of`, and the CONTAINER is pinned as hard as the clauses inside it.
     # MEASURED: `flow_compliance_check._evaluate_gate` handed a bare LIST of the

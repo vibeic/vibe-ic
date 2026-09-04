@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 1268
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1268)
+- **Total programs (excluding helpers / shims):** 1270
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1270)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 1259 |
+| `any` | 1261 |
 
 ## Alphabetical listing
 
@@ -1166,7 +1166,9 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `step_required_inputs_check` | any | — | refuse to run a step that has nothing to read. |
 | `step_write_ledger` | any | — | record what a run ACTUALLY WROTE, then residual it against what the flow DECLARED. |
 | `structured_table_extractor` | any | — | ONE general extractor for the whole TABLE tier. |
+| `submission_template_answers` | any | — | the operator's constants, as an answers file. |
 | `submission_template_check` | any | — | Gate the shuttle-template ingest — step 0.5ic's verdict. |
+| `submission_template_fetch` | any | — | step 0.5ic's missing half: GO AND GET IT. |
 | `submission_template_ingest` | any | — | Ingest the shuttle operator's published project template — step 0.5ic. |
 | `suite_write_guard` | any | — | a test run must not write into the tree it tests. |
 | `sustained_vs_edge_check` | any | — | Flag RTL using edge-detect when spec calls for sustained. |
@@ -1340,7 +1342,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (1259 programs)
+### `any` (1261 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `absence_verdict_names_its_search_space_check` — "not found" must say WHERE it looked.
@@ -2475,7 +2477,9 @@ _(no programs in this group)_
 - `step_required_inputs_check` — refuse to run a step that has nothing to read.
 - `step_write_ledger` — record what a run ACTUALLY WROTE, then residual it against what the flow DECLARED.
 - `structured_table_extractor` — ONE general extractor for the whole TABLE tier.
+- `submission_template_answers` — the operator's constants, as an answers file.
 - `submission_template_check` — Gate the shuttle-template ingest — step 0.5ic's verdict.
+- `submission_template_fetch` — step 0.5ic's missing half: GO AND GET IT.
 - `submission_template_ingest` — Ingest the shuttle operator's published project template — step 0.5ic.
 - `suite_write_guard` — a test run must not write into the tree it tests.
 - `sustained_vs_edge_check` — Flag RTL using edge-detect when spec calls for sustained.

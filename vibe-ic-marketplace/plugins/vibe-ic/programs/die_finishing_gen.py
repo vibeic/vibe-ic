@@ -118,6 +118,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from _atomic_artefact import write_json as atomic_write_json  # vibe-ic#1082
 from _atomic_artefact import write_text as atomic_write_text
+from _atomic_artefact import write_text as _atomic_write_text
 
 try:
     from . import _klayout_launch as _kl                     # type: ignore
@@ -810,7 +811,11 @@ def run(project: Path, gds: Optional[str], script: Optional[str],
         if state == "DISCLOSED_SKIP" and seal.get("marker"):
             try:
                 skip_marker.parent.mkdir(parents=True, exist_ok=True)
-                skip_marker.write_text(
+                # ATOMIC. This marker is a ROUTER: its existence tells every
+                # downstream reader that die finishing did not run. A truncated
+                # one still exists and still routes.
+                _atomic_write_text(
+                    skip_marker,
                     "Die finishing did not run on this project.\n\n"
                     f"seal ring: {seal.get('reason')}\n"
                     f"die id:    {res['die_id'].get('reason')}\n")

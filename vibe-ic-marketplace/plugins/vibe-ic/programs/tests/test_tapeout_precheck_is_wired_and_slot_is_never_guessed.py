@@ -104,10 +104,19 @@ def _slot(project: Path, name: str, content=None) -> None:
         json.dumps(content if content is not None else {"slot": name}))
 
 
-def _declare(project: Path, **answers) -> None:
-    p = project / _decl.DECLARATION_REL
+def _declare(project: Path, **operator_template) -> None:
+    """The DESIGN's slot, in the flow's own home for it.
+
+    `input/step_0_5ic_answers.json` -> `operator_template.slot` is where
+    `phase1_one_shot_runner._run_step_0_5ic` reads it before passing `--slot`
+    to the ingest, so it is where every reader must look. The tape-out
+    DECLARATION is not that home — `slot` is not one of its 18 questions, and
+    writing it there makes the declaration carry an unknown key.
+    """
+    import _submission_template as _st
+    p = project / _st.DESIGN_ANSWERS_REL
     p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text(json.dumps({"answers": answers}))
+    p.write_text(json.dumps({"operator_template": operator_template}))
 
 
 def test_no_template_resolves_no_slot(tmp_path):
@@ -115,8 +124,22 @@ def test_no_template_resolves_no_slot(tmp_path):
     assert tp.resolve_slot(tmp_path) == (None, None)
 
 
-def test_exactly_one_slot_on_offer_is_the_slot(tmp_path):
+def test_one_slot_on_offer_is_still_not_a_declaration(tmp_path):
+    """What the operator SELLS is not what this design BOUGHT.
+
+    `submission_template_ingest` states the rule for the whole step: the slot
+    is "the slot this design DECLARES it targets. Never guessed and never
+    defaulted." A sole slot read as the design's choice would silently move any
+    design that never chose, the moment the operator adds a second one.
+    """
     _slot(tmp_path, "0p5x0p5")
+    assert tp.resolve_slot(tmp_path) == (None, None)
+
+
+def test_a_declaration_naming_the_only_slot_resolves_it(tmp_path):
+    """The positive control, so "never guessed" cannot become "never works"."""
+    _slot(tmp_path, "0p5x0p5")
+    _declare(tmp_path, slot="0p5x0p5")
     got, source = tp.resolve_slot(tmp_path)
     assert got == "0p5x0p5"
     assert source and "0p5x0p5" in source, (
