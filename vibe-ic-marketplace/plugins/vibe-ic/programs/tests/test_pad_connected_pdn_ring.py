@@ -99,6 +99,7 @@ def test_ring_emission_measures_geometry_and_extends_only_primary_grid(tmp_path)
     assert "getCoreArea" in tcl
     assert "getDbUnitsPerMicron" in tcl
     assert "string match \"PAD*\"" in tcl
+    assert "string match \"PAD_POWER*\"" in tcl
     assert "PDN_PAD_RING_REFUSED" in tcl
     assert "PDN_PAD_RING_INERT" in tcl
     assert "PDN_PAD_RING_PLAN" in tcl

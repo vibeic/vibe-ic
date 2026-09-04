@@ -6566,6 +6566,7 @@ def _pad_connected_ring_tcl(pdk: "PdkConfig") -> Dict[str, str]:
   set _vibeic_pr_cx1 [$_vibeic_pr_core xMax]
   set _vibeic_pr_cy1 [$_vibeic_pr_core yMax]
   set _vibeic_pr_pad_count 0
+  set _vibeic_pr_power_pad_count 0
   set _vibeic_pr_side_count 0
   set _vibeic_pr_gap_dbu -1
   foreach _vibeic_pr_inst [$_vibeic_pr_block getInsts] {{
@@ -6573,6 +6574,12 @@ def _pad_connected_ring_tcl(pdk: "PdkConfig") -> Dict[str, str]:
     if {{![string match "PAD*" [$_vibeic_pr_master getType]]}} {{ continue }}
     if {{[$_vibeic_pr_inst getPlacementStatus] eq "NONE"}} {{ continue }}
     incr _vibeic_pr_pad_count
+    # Only dedicated supply pads anchor a core ring. Signal and spacer pad
+    # bboxes often extend farther inward while carrying no ring-facing supply
+    # port on the declared layer; using them as the ring boundary produced a
+    # false geometric refusal on a ring that check_power_grid proved connected.
+    if {{![string match "PAD_POWER*" [$_vibeic_pr_master getType]]}} {{ continue }}
+    incr _vibeic_pr_power_pad_count
     set _vibeic_pr_box [$_vibeic_pr_inst getBBox]
     set _vibeic_pr_x0 [$_vibeic_pr_box xMin]
     set _vibeic_pr_y0 [$_vibeic_pr_box yMin]
@@ -6598,9 +6605,9 @@ def _pad_connected_ring_tcl(pdk: "PdkConfig") -> Dict[str, str]:
   if {{$_vibeic_pr_pad_count == 0}} {{
     define_pdn_grid -name grid -voltage_domains CORE
     puts "PDN_PAD_RING_INERT: no placed PAD-class masters; ordinary core grid retained"
-  }} elseif {{$_vibeic_pr_side_count == 0 || $_vibeic_pr_gap_dbu < 0}} {{
-    puts "PDN_PAD_RING_REFUSED: placed_pads=$_vibeic_pr_pad_count but no side-pad/core gap was measurable"
-    error "PDN_PAD_RING_REFUSED: no measurable side-pad/core gap"
+  }} elseif {{$_vibeic_pr_power_pad_count == 0 || $_vibeic_pr_side_count == 0 || $_vibeic_pr_gap_dbu < 0}} {{
+    puts "PDN_PAD_RING_REFUSED: placed_pads=$_vibeic_pr_pad_count power_pads=$_vibeic_pr_power_pad_count but no side supply-pad/core gap was measurable"
+    error "PDN_PAD_RING_REFUSED: no measurable side supply-pad/core gap"
   }} else {{
     set _vibeic_pr_tech [[ord::get_db] getTech]
     set _vibeic_pr_dbu [$_vibeic_pr_tech getDbUnitsPerMicron]
@@ -6615,7 +6622,7 @@ def _pad_connected_ring_tcl(pdk: "PdkConfig") -> Dict[str, str]:
     add_pdn_ring -grid grid -layers {{{layer_s}}} -widths {{{width_s}}} -spacings {{{spacing_s}}} -core_offsets [list $_vibeic_pr_fit $_vibeic_pr_fit $_vibeic_pr_fit $_vibeic_pr_fit]
     set _vibeic_ring_extend {{-extend_to_core_ring}}
     set _vibeic_pad_ring_active 1
-    puts "PDN_PAD_RING_PLAN: placed_pads=$_vibeic_pr_pad_count side_pads=$_vibeic_pr_side_count gap=${{_vibeic_pr_gap_um}}um configured_offset={offset}um fitted_offset=${{_vibeic_pr_fit}}um footprint={footprint}um clearance={clearance}um layers={layer_s} pad_layers={pad_layer_s}"
+    puts "PDN_PAD_RING_PLAN: placed_pads=$_vibeic_pr_pad_count power_pads=$_vibeic_pr_power_pad_count side_power_pads=$_vibeic_pr_side_count gap=${{_vibeic_pr_gap_um}}um configured_offset={offset}um fitted_offset=${{_vibeic_pr_fit}}um footprint={footprint}um clearance={clearance}um layers={layer_s} pad_layers={pad_layer_s}"
   }}
 """
     extra = ""
