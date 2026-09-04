@@ -22883,7 +22883,8 @@ def _v1_8_100_signoff_drv_repair_tcl(
         + _ship_max_fanout_root_repair_tcl(
             fanout_root_buffer_cell,
             f"{out_dir_c}/sdr_fanout_root_candidates.rpt",
-            repair_after_insert=False)
+            repair_after_insert=False,
+            balance_driver=True)
         # v1.8.100 r2 — MEASURED: without this, closing DRV on the max-RC
         # deck traded the SLOW-corner setup from +1.02 ns to -4.68 ns
         # (iter1). Every repeater the line above inserts adds a stage
@@ -29593,7 +29594,8 @@ def _ship_postroute_convergence_tcl(max_captable_c: str, pnr_dir_c: str,
 
 def _ship_max_fanout_root_repair_tcl(
         buffer_cell: Optional[str], report_path: str = "/tmp/vibeic_fanout_root.rpt",
-        repair_after_insert: bool = True
+        repair_after_insert: bool = True,
+        balance_driver: bool = False
         ) -> str:
     """Insert one PDK-derived root buffer after each residual fanout violator.
 
@@ -29607,21 +29609,25 @@ def _ship_max_fanout_root_repair_tcl(
     a final ordinary ``repair_design`` pass remains responsible for everything
     below it.
 
-    The insertion point is halfway between the physical driver pin and the
-    centroid of the net's input loads, derived from their placed pin boxes.
-    This matters on a pad-ring design:
+    The conservative insertion point is the centroid of the net's input loads,
+    derived from their placed pin boxes.  The caller may request a point halfway
+    between that centroid and the physical driver pin with ``balance_driver``.
+    These distinct policies matter on a pad-ring design:
     OpenROAD's unconstrained insertion point is near the pad driver, which can
     be inside the pad keep-out beyond the last tap column.  Measured on spm x
     gf180mcuD run8, eight such roots landed at the top/right untapped fringe
     and one at the left fringe, producing 7 DF.13_MV + 12 DF.14_MV findings
     and one isolated root-well LVS fragment.  The load centroid alone moved
-    every root fully to the logic cluster, which fixed those wells but made the
-    long pad-to-root segment require a diode; that second timing load reopened
-    max-fanout=1 on the pad.  The driver/load midpoint bounds both segments and
-    stays away from the untapped pad fringe; detailed_placement remains the
-    sole legalizer.  If the driver box is unavailable the load centroid is the
-    conservative fallback.  If physical boxes are unavailable the location
-    calculation is reported and the existing unconstrained actuator is retained.
+    every root fully to the logic cluster and fixed those wells.  In the base
+    signoff-domain repair, however, its long pad-to-root segment required a
+    later diode; that second timing load reopened max-fanout=1 on the pad.  That
+    base caller therefore requests the driver/load midpoint to bound both wire
+    segments.  A promoted late real-SPEF candidate keeps the conservative load
+    centroid: run12 measured three such midpoint roots at the top/right untapped
+    fringe and 18 new DF well/tap findings.  ``detailed_placement`` remains the
+    sole legalizer.  If a requested driver box is unavailable, load centroid is
+    the fail-safe.  If physical boxes are unavailable the location calculation
+    is reported and the existing unconstrained actuator is retained.
 
     The cell is supplied by the active PDK's registry/Liberty-derived CTS
     selection.  No design, pad, library-family, or PDK name is embedded here.
@@ -29720,7 +29726,8 @@ def _ship_max_fanout_root_repair_tcl(
         "      if {$_ship_fo_nload > 0 && $_ship_fo_dbu > 0} {\n"
         "        set _ship_fo_lx [expr {$_ship_fo_sx / $_ship_fo_nload}]\n"
         "        set _ship_fo_ly [expr {$_ship_fo_sy / $_ship_fo_nload}]\n"
-        "        if {$_ship_fo_driver_found} {\n"
+        f"        if {{{1 if balance_driver else 0} && "
+        "$_ship_fo_driver_found} {\n"
         "          set _ship_fo_px [expr {($_ship_fo_dx + $_ship_fo_lx) / 2.0}]\n"
         "          set _ship_fo_py [expr {($_ship_fo_dy + $_ship_fo_ly) / 2.0}]\n"
         "        } else {\n"
@@ -29730,7 +29737,8 @@ def _ship_max_fanout_root_repair_tcl(
         "        set _ship_fo_y [expr {$_ship_fo_py / double($_ship_fo_dbu)}]\n"
         "        set _ship_fo_loc_args [list -location "
         "[list $_ship_fo_x $_ship_fo_y]]\n"
-        "        if {$_ship_fo_driver_found} {\n"
+        f"        if {{{1 if balance_driver else 0} && "
+        "$_ship_fo_driver_found} {\n"
         "          puts \"SHIP_FANOUT_ROOT_DRIVER_LOAD_MIDPOINT: "
         "pin=$_ship_fo_pin loads=$_ship_fo_nload "
         "location=${_ship_fo_x},${_ship_fo_y}\"\n"
