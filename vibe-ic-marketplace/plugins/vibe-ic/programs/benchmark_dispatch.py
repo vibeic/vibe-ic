@@ -435,9 +435,9 @@ def capture_goldens(run_p: Path, bench: str, ai_model: str,
 
 # A candidate is not accepted merely because Program emitted it. A blind AI
 # must review the frozen Program result; rejection requires executable proof.
-_REVIEW_TASK_SCHEMA = "vibeic.benchmark.ai_review_task.v2"
+_REVIEW_TASK_SCHEMA = "vibeic.benchmark.ai_review_task.v3"
 _AI_REVIEW_SCHEMA = "vibeic.benchmark.ai_review.v2"
-_ACCEPTANCE_SCHEMA = "vibeic.benchmark.program_first_ai_review.v2"
+_ACCEPTANCE_SCHEMA = "vibeic.benchmark.program_first_ai_review.v3"
 _CANDIDATE_SCHEMA = "vibeic.benchmark.candidate_snapshot.v1"
 _CHALLENGE_SCHEMA = "vibeic.benchmark.ai_verification_challenge.v1"
 _CHALLENGE_SUPERSESSION_SCHEMA = \
@@ -474,6 +474,102 @@ def _safe_problem_id(problem_id: str) -> str:
 
 def _sha256_text(text: str) -> str:
     return hashlib.sha256(str(text).encode("utf-8")).hexdigest()
+
+
+def _review_obligation_id(item: dict) -> str:
+    """Stable identity for one Program-extracted review obligation."""
+    material = json.dumps({
+        "kind": str(item.get("kind") or ""),
+        "requirement": str(item.get("requirement") or ""),
+        "evidence": str(item.get("evidence") or ""),
+    }, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return _sha256_text(material)[:16]
+
+
+def _program_review_obligation_contract(prompt_text: str,
+                                        candidate: dict) -> dict:
+    """Extract the structural minimum an AI PASS test must cover.
+
+    ``spec_coverage_check`` is the existing benchmark-agnostic Program reader.
+    This adapter does not invent a second extractor: it turns that reader's
+    exact block-eligible items into a hash-bound handoff for AI Backup.
+    """
+    import spec_coverage_check as coverage                 # noqa: PLC0415
+
+    rtl_text = _candidate_text(
+        [Path(str(p)) for p in candidate.get("rtl_paths") or []])
+    report = coverage.run(
+        {"user_prompt": prompt_text}, rtl_text, None, None, True)
+    obligations = []
+    for item in report.get("items") or []:
+        if not item.get("block_eligible", True):
+            continue
+        row = {
+            "kind": item.get("kind"),
+            "requirement": item.get("requirement"),
+            "evidence": item.get("evidence"),
+            "coverage_tokens": item.get("coverage_tokens") or [],
+        }
+        row["id"] = _review_obligation_id(row)
+        obligations.append(row)
+    core = {
+        "schema": "vibeic.benchmark.program_review_obligations.v1",
+        "actor": "programs/spec_coverage_check.py",
+        "policy": "BLOCKING_STRUCTURAL_MINIMUM",
+        "obligation_count": len(obligations),
+        "obligations": obligations,
+    }
+    return {
+        **core,
+        "sha256": _sha256_text(json.dumps(
+            core, ensure_ascii=False, sort_keys=True,
+            separators=(",", ":"))),
+    }
+
+
+def _program_review_coverage_result(prompt_text: str, candidate: dict,
+                                    challenges: list[dict]) -> dict:
+    """Measure active AI tests against Program's structural obligations."""
+    import spec_coverage_check as coverage                 # noqa: PLC0415
+
+    rtl_text = _candidate_text(
+        [Path(str(p)) for p in candidate.get("rtl_paths") or []])
+    test_parts = []
+    for challenge in challenges:
+        path = Path(str(challenge.get("path") or ""))
+        text = path.read_text(errors="replace")
+        if _sha256_text(text) != challenge.get("sha256"):
+            raise ValueError(
+                f"active verification challenge hash changed at {path}")
+        test_parts.append(text)
+    report = coverage.run(
+        {"user_prompt": prompt_text}, rtl_text,
+        "\n\n".join(test_parts), None, True)
+    gaps = []
+    for item in report.get("items") or []:
+        if item.get("covered") is not False \
+                or not item.get("block_eligible", True):
+            continue
+        row = {
+            "kind": item.get("kind"),
+            "requirement": item.get("requirement"),
+            "evidence": item.get("evidence"),
+            "coverage_tokens": item.get("coverage_tokens") or [],
+            "coverage_note": item.get("coverage_note"),
+        }
+        row["id"] = _review_obligation_id(row)
+        gaps.append(row)
+    return {
+        "schema": "vibeic.benchmark.program_review_coverage.v1",
+        "actor": "programs/spec_coverage_check.py",
+        "status": "PASS" if not gaps else "FAIL",
+        "active_challenge_sha256": [c.get("sha256") for c in challenges],
+        "checklist_items": report.get("checklist_items"),
+        "covered": report.get("covered"),
+        "coverage_gaps": report.get("coverage_gaps"),
+        "blocking_gaps": report.get("blocking_gaps"),
+        "blocking_gap_items": gaps,
+    }
 
 
 def _rtl_files(project: Path) -> list[Path]:
@@ -620,6 +716,8 @@ def _make_ai_review_task(problem_id: str, project: Path, got: dict,
                      review_key)
     challenge_file = str((challenge_dir / "challenge_tb.sv").resolve())
     prompt_sha = _sha256_text(prompt.read_text(errors="replace"))
+    program_review_obligations = _program_review_obligation_contract(
+        prompt.read_text(errors="replace"), candidate)
     evidence_item_shape = {
         "excerpt": ("<exact prompt excerpt; at least 8 characters and a "
                     "whitespace-normalized substring of prompt_path>"),
@@ -670,6 +768,7 @@ def _make_ai_review_task(problem_id: str, project: Path, got: dict,
             "functional_evidence_source": functional_source,
             "functional_confirmation_required": confirmation_required,
         },
+        "program_review_obligations": program_review_obligations,
         "review_path": str((run_p / "ai_reviews" / safe /
                             f"{review_key}.json").resolve()),
         "challenge_path": challenge_file,
@@ -767,12 +866,18 @@ def _make_ai_review_task(problem_id: str, project: Path, got: dict,
             "semantic_pass_action": (
                 "When PROGRAM has no PASS functional evidence, a semantic PASS "
                 "must include a self-contained prompt-derived executable test "
-                "at challenge_path. The frozen candidate must PASS that test; "
-                "an unrunnable test is NOT_MEASURED and a failing test cannot "
+                "at challenge_path. The frozen candidate must PASS that test, "
+                "and the current plus inherited active tests must cover every "
+                "block-eligible item in program_review_obligations; one passing "
+                "example is not whole-spec confirmation. An unrunnable test is "
+                "NOT_MEASURED and a failing or coverage-incomplete test cannot "
                 "authorize acceptance."),
             "semantic_pass_verification_test": {
                 "required": confirmation_required,
                 "required_result_on_reviewed_candidate": "PASS",
+                "required_program_coverage": "ALL_BLOCKING_OBLIGATIONS",
+                "program_review_obligations_sha256": (
+                    program_review_obligations["sha256"]),
                 "reason": ("PROGRAM step4_functional_evidence is "
                            f"{functional_evidence!r}"),
                 "blind_source": "prompt_path only",
@@ -1273,6 +1378,19 @@ def _validate_ai_review(task: dict) -> dict:
     reasons.extend(_validate_candidate_snapshot(
         task.get("candidate_snapshot") or {}, str(task.get("id"))))
     reasons.extend(_validate_embedded_repair_provenance(task))
+    try:
+        expected_obligations = _program_review_obligation_contract(
+            prompt_text, task.get("candidate_snapshot") or {})
+    except (ImportError, OSError, ValueError) as exc:
+        expected_obligations = None
+        reasons.append(
+            "Program review obligations could not be derived: "
+            f"{type(exc).__name__}: {exc}")
+    if expected_obligations is not None \
+            and task.get("program_review_obligations") != expected_obligations:
+        reasons.append(
+            "program_review_obligations are missing, stale, or differ from "
+            "the current prompt and frozen candidate")
 
     routing = review.get("routing") or {}
     expected_nature = (task.get("program_routing") or {}).get("nature")
@@ -1465,6 +1583,32 @@ def _validate_ai_review(task: dict) -> dict:
         elif result.get("status") != "PASS":
             reasons.append("repair does not pass every immutable verification "
                            "test that proved its parent candidate wrong")
+    program_review_coverage = None
+    if (semantic_verdict == "PASS" and confirmation_required
+            and (challenge_result or {}).get("status") == "PASS"):
+        active_challenges = [challenge] if challenge is not None else []
+        for inherited, result in zip(
+                task.get("verification_challenges") or [],
+                inherited_challenge_results):
+            if result.get("status") == "PASS":
+                active_challenges.append(inherited)
+        try:
+            program_review_coverage = _program_review_coverage_result(
+                prompt_text, task.get("candidate_snapshot") or {},
+                active_challenges)
+        except (ImportError, OSError, ValueError) as exc:
+            unmeasurable.append(
+                "Program could not measure AI verification-test coverage: "
+                f"{type(exc).__name__}: {exc}")
+        else:
+            if program_review_coverage.get("status") != "PASS":
+                gap_ids = [str(item.get("id")) for item in
+                           program_review_coverage.get(
+                               "blocking_gap_items") or []]
+                reasons.append(
+                    "AI semantic PASS leaves structural prompt obligation(s) "
+                    "uncovered by its active executable tests: "
+                    + ", ".join(gap_ids))
     if reasons:
         # A finding against the review outranks an unrunnable proof: a
         # malformed review is wrong on every host, simulator or not.
@@ -1499,6 +1643,7 @@ def _validate_ai_review(task: dict) -> dict:
             "challenge_result": challenge_result,
             "inherited_challenge_results": inherited_challenge_results,
             "challenge_supersessions": challenge_supersessions,
+            "program_review_coverage": program_review_coverage,
             "unmeasurable": unmeasurable,
             "override": ({**override, "verified_prompt_evidence": verified_evidence}
                          if routing_verdict == "OVERRIDE_PROGRAM" else None)}
@@ -1541,6 +1686,8 @@ def _attach_ai_review_attribution(result: dict, verdict: dict,
                 verdict.get("challenge_result") or {}).get("status"),
             "functional_confirmation_challenge_sha256": (
                 verdict.get("verified_challenge") or {}).get("sha256"),
+            "program_review_coverage": verdict.get(
+                "program_review_coverage"),
         },
     })
     program_candidate = task.get("program_candidate_snapshot") or {}

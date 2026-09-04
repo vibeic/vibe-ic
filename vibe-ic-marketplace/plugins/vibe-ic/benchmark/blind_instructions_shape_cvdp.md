@@ -76,7 +76,11 @@ unmodified behavior unless the prompt explicitly changes them.
 ## Program First, AI semantic authority
 
 Review every Program candidate independently. A semantic PASS must explain why
-the exact hash satisfies the prompt. A semantic FAIL must:
+the exact hash satisfies the prompt. When the task says functional confirmation
+is required, its executable challenge plus every still-active inherited
+challenge must cover every block-eligible item in
+`program_review_obligations`; a passing example is not whole-spec coverage.
+`spec_coverage_check.py` measures this before acceptance. A semantic FAIL must:
 
 1. cite prompt evidence;
 2. describe the Program limitation;

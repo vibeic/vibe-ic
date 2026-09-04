@@ -1,4 +1,4 @@
-# vibe-ic — AI-Native IC Design plugin (**v1.17.13**)
+# vibe-ic — AI-Native IC Design plugin (**v1.17.14**)
 
 **A deterministic program layer with AI-backup skills, driving spec → RTL → GDS.**
 
@@ -42,6 +42,11 @@ own gates (chip-top emit, `rtl_hygiene_lint --fix`, `eda_lint`, `eda_synth`, `rt
 `spec_conformance_check`, `full_stack_tb_gen`) then fire around it. `pure_analog` has
 `fallback_skill: null` — it routes to the analog track instead. A sibling path waives to
 `catalog-glue-author` when reused open-source IP matches.
+
+For benchmark acceptance, Program also extracts a hash-bound structural review
+contract with `spec_coverage_check.py`. When Program has no PASS functional
+evidence, AI Backup's active executable challenges must cover every blocking
+obligation before a semantic PASS is accepted.
 
 **This is the intended path, not a bypass.** Authoring RTL with MCP tools *outside* the
 runner skips every gate.

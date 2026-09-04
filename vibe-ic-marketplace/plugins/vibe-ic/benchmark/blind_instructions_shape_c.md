@@ -50,6 +50,9 @@ reaching for it to settle an ambiguity is the leak this rule exists to stop.
 - Never invoke a host scorer during authoring, review, or repair.
 - Backup RTL goes only to the runner-owned path named by the worklist.
 - Review every immutable candidate hash independently.
+- When functional confirmation is required, cover every block-eligible item in
+  the task's Program-generated `program_review_obligations` across the current
+  and active inherited executable challenges; one passing vector is incomplete.
 - AI may override Program semantics only with prompt-grounded reasoning. A FAIL
   also needs a self-contained executable challenge that the frozen candidate
   demonstrably fails.

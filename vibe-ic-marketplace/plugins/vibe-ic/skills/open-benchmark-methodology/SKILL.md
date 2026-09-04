@@ -76,6 +76,10 @@ This is a sequence, not two independent racing solvers:
    the missing candidate into the runner-owned RTL directory; `--resume`
    re-enters the same product gates.
 4. If AI agrees with Program, record acceptance for that exact hash.
+   When Program lacks PASS functional evidence, the AI's current challenge plus
+   every active inherited challenge must cover every block-eligible structural
+   item emitted in `program_review_obligations`; `spec_coverage_check.py`
+   measures this, and an uncovered item blocks acceptance.
 5. If AI disagrees, it must identify the prompt requirement and provide a
    prompt-derived executable test that fails on the frozen Program candidate.
    Prose disagreement alone cannot replace the candidate.
