@@ -440,6 +440,8 @@ _AI_REVIEW_SCHEMA = "vibeic.benchmark.ai_review.v2"
 _ACCEPTANCE_SCHEMA = "vibeic.benchmark.program_first_ai_review.v2"
 _CANDIDATE_SCHEMA = "vibeic.benchmark.candidate_snapshot.v1"
 _CHALLENGE_SCHEMA = "vibeic.benchmark.ai_verification_challenge.v1"
+_CHALLENGE_SUPERSESSION_SCHEMA = \
+    "vibeic.benchmark.challenge_supersession.v1"
 _AI_REPAIR_RECORD_SCHEMA = "vibeic.benchmark.ai_repair_record.v1"
 _REVIEW_WORKLIST = "needs_ai_review.jsonl"
 _BACKUP_WORKLIST = "needs_ai_backup.jsonl"
@@ -730,8 +732,25 @@ def _make_ai_review_task(problem_id: str, project: Path, got: dict,
                                           "24 characters>"),
                     "prompt_evidence": [dict(evidence_item_shape)],
                 },
+                "challenge_supersessions": [{
+                    "_optional_when": (
+                        "a fresh semantic PASS proves that an inherited "
+                        "challenge contradicts the prompt; verification_test "
+                        "must be a replacement test that PASSES this candidate"),
+                    "schema": _CHALLENGE_SUPERSESSION_SCHEMA,
+                    "challenge_sha256": "<exact inherited challenge sha256>",
+                    "rationale": (
+                        "<why the old assertion is defective; at least 80 "
+                        "characters>"),
+                    "prompt_evidence": [dict(evidence_item_shape)],
+                }],
             },
-            "blind_inputs_only": ["prompt_path", "rtl_paths"],
+            "blind_inputs_only": [
+                "prompt_path",
+                "rtl_paths",
+                ("verification_challenges only when correcting a defective "
+                 "inherited test; never scorer/golden/oracle bytes"),
+            ],
             "routing_verdicts": ["AGREE", "OVERRIDE_PROGRAM"],
             "override_rule": (
                 "OVERRIDE_PROGRAM is allowed when the AI supplies prompt-bound "
@@ -1044,6 +1063,70 @@ def _challenge_from_review(task: dict, review: dict,
     return challenge, []
 
 
+def _challenge_supersessions_from_review(
+        task: dict, review: dict, prompt_text: str,
+        replacement: dict | None) -> tuple[list[dict], list[str]]:
+    """Validate explicit corrections to defective inherited challenges.
+
+    BLOCKING: an inherited proof remains immutable and active unless a fresh
+    blind AI semantic PASS names its exact hash, cites the prompt, and supplies
+    a different executable replacement test that passes the current candidate.
+    The old proof stays in the audit result as SUPERSEDED; malformed, missing,
+    passing, or unrunnable targets never disappear silently.
+    """
+    raw = review.get("challenge_supersessions")
+    if raw is None:
+        return [], []
+    if not isinstance(raw, list):
+        return [], ["challenge_supersessions must be a list"]
+    inherited = {
+        str(item.get("sha256") or ""): item
+        for item in task.get("verification_challenges") or []
+        if isinstance(item, dict)
+    }
+    reasons: list[str] = []
+    records: list[dict] = []
+    seen: set[str] = set()
+    replacement_hash = str((replacement or {}).get("sha256") or "")
+    for index, item in enumerate(raw):
+        prefix = f"challenge_supersessions[{index}]"
+        if not isinstance(item, dict):
+            reasons.append(f"{prefix} must be an object")
+            continue
+        if item.get("schema") != _CHALLENGE_SUPERSESSION_SCHEMA:
+            reasons.append(
+                f"{prefix}.schema must be {_CHALLENGE_SUPERSESSION_SCHEMA!r}")
+        target = str(item.get("challenge_sha256") or "")
+        if target not in inherited:
+            reasons.append(f"{prefix} must name an inherited challenge sha256")
+        if target in seen:
+            reasons.append(f"{prefix} repeats a challenge sha256")
+        seen.add(target)
+        rationale = str(item.get("rationale") or "").strip()
+        if len(rationale) < 80:
+            reasons.append(f"{prefix}.rationale must be at least 80 characters")
+        evidence = _verified_prompt_evidence(
+            item.get("prompt_evidence") or [], prompt_text)
+        if not evidence:
+            reasons.append(f"{prefix} needs prompt-bound evidence")
+        if not replacement_hash:
+            reasons.append(f"{prefix} needs an executable replacement test")
+        elif replacement_hash == target:
+            reasons.append(f"{prefix} replacement test must differ from target")
+        if (target in inherited and target not in {
+                r.get("challenge_sha256") for r in records}
+                and len(rationale) >= 80 and evidence and replacement_hash
+                and replacement_hash != target):
+            records.append({
+                "schema": _CHALLENGE_SUPERSESSION_SCHEMA,
+                "challenge_sha256": target,
+                "replacement_challenge_sha256": replacement_hash,
+                "rationale": rationale,
+                "prompt_evidence": evidence,
+            })
+    return records, reasons
+
+
 def _joint_compile_attribution(errors: str, rtl_paths: list[str],
                                test_path: str) -> tuple[bool, bool]:
     """Which side of a joint compile do the error lines cite?
@@ -1264,6 +1347,9 @@ def _validate_ai_review(task: dict) -> dict:
     #: are findings against the review or the candidate. The two must never be
     #: mixed: one says "this is wrong", the other says "we did not look".
     unmeasurable: list[str] = []
+    raw_supersessions = review.get("challenge_supersessions")
+    supersession_requested = (
+        isinstance(raw_supersessions, list) and bool(raw_supersessions))
     if semantic_verdict == "FAIL":
         challenge, challenge_reasons = _challenge_from_review(
             task, review, prompt_text)
@@ -1288,10 +1374,14 @@ def _validate_ai_review(task: dict) -> dict:
             elif challenge_result.get("status") != "FAIL":
                 reasons.append("AI finding is not proven: the reviewed candidate "
                                "must fail the prompt-derived verification test")
-    elif semantic_verdict == "PASS" and confirmation_required:
+    elif (semantic_verdict == "PASS"
+          and (confirmation_required or supersession_requested)):
         challenge, challenge_reasons = _challenge_from_review(
             task, review, prompt_text,
-            required_for="semantic PASS without Program functional evidence")
+            required_for=(
+                "challenge supersession replacement"
+                if supersession_requested
+                else "semantic PASS without Program functional evidence"))
         reasons.extend(challenge_reasons)
         if challenge is not None:
             challenge_result = _run_verification_challenge(
@@ -1304,9 +1394,23 @@ def _validate_ai_review(task: dict) -> dict:
                                 challenge_result.get("reasons") or []))
             elif challenge_result.get("status") != "PASS":
                 reasons.append(
-                    "AI semantic PASS is not confirmed: when PROGRAM functional "
-                    "evidence is not PASS, the frozen candidate must pass the "
-                    "prompt-derived verification test")
+                    "AI semantic PASS is not confirmed: the frozen candidate "
+                    "must pass its required prompt-derived verification test")
+    challenge_supersessions, supersession_reasons = \
+        _challenge_supersessions_from_review(
+            task, review, prompt_text, challenge)
+    reasons.extend(supersession_reasons)
+    if challenge_supersessions and semantic_verdict != "PASS":
+        reasons.append(
+            "challenge supersession requires a fresh AI semantic PASS")
+    supersession_authorized = (
+        semantic_verdict == "PASS"
+        and (challenge_result or {}).get("status") == "PASS"
+        and not supersession_reasons)
+    supersession_by_hash = ({
+        item["challenge_sha256"]: item
+        for item in challenge_supersessions
+    } if supersession_authorized else {})
     inherited_challenge_results = []
     for inherited in task.get("verification_challenges") or []:
         inherited_reasons = []
@@ -1323,6 +1427,28 @@ def _validate_ai_review(task: dict) -> dict:
             continue
         result = _run_verification_challenge(
             task.get("candidate_snapshot") or {}, inherited)
+        supersession = supersession_by_hash.get(
+            str(inherited.get("sha256") or ""))
+        if supersession is not None:
+            if result.get("status") == _CHALLENGE_UNAVAILABLE:
+                unmeasurable.append(
+                    "a challenge named for supersession could not be RUN on "
+                    "this host, so its alleged defect was not measured: "
+                    + "; ".join(str(r) for r in
+                                result.get("reasons") or []))
+            elif result.get("status") == "FAIL":
+                result = {
+                    **result,
+                    "status": "SUPERSEDED",
+                    "original_status": "FAIL",
+                    "supersession": supersession,
+                }
+            else:
+                reasons.append(
+                    "a challenge named for supersession must validly FAIL the "
+                    "current candidate before it can be corrected")
+            inherited_challenge_results.append(result)
+            continue
         inherited_challenge_results.append(result)
         if result.get("status") == _CHALLENGE_UNAVAILABLE:
             unmeasurable.append(
@@ -1372,6 +1498,7 @@ def _validate_ai_review(task: dict) -> dict:
             "verified_challenge": challenge,
             "challenge_result": challenge_result,
             "inherited_challenge_results": inherited_challenge_results,
+            "challenge_supersessions": challenge_supersessions,
             "unmeasurable": unmeasurable,
             "override": ({**override, "verified_prompt_evidence": verified_evidence}
                          if routing_verdict == "OVERRIDE_PROGRAM" else None)}

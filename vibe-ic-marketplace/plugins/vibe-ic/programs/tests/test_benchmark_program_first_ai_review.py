@@ -186,6 +186,118 @@ endmodule
     }
 
 
+def _write_defective_inversion_challenge(task: dict) -> dict:
+    """A frozen older proof whose assertion contradicts the prompt."""
+    source = r"""
+module vibeic_ai_challenge_tb;
+  reg a;
+  wire y;
+  dut candidate(.a(a), .y(y));
+  initial begin
+    a = 1'b0; #1;
+    if (y !== 1'b1) begin $display("VIBEIC_AI_CHALLENGE=FAIL"); $fatal(1); end
+    a = 1'b1; #1;
+    if (y !== 1'b0) begin $display("VIBEIC_AI_CHALLENGE=FAIL"); $fatal(1); end
+    $display("VIBEIC_AI_CHALLENGE=PASS");
+    $finish;
+  end
+endmodule
+"""
+    path = (Path(task["challenge_path"]).parent /
+            "inherited-defective-challenge.sv")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(source)
+    return {
+        "schema": bd._CHALLENGE_SCHEMA,
+        "id": task["id"],
+        "path": str(path.resolve()),
+        "sha256": bd._sha256_text(source),
+        "top_module": "vibeic_ai_challenge_tb",
+        "prompt_sha256": task["prompt_sha256"],
+        "reviewed_rtl_sha256": "frozen-older-candidate",
+        "prompt_evidence": [{
+            "excerpt": "assign y = a",
+            "supports": "The old review incorrectly interpreted direct assignment.",
+        }],
+        "expected_behavior": "The defective test incorrectly expects inversion.",
+        "rationale": (
+            "This fixture represents a previously frozen challenge whose own "
+            "assertions accidentally contradict the exact prompt behavior."),
+    }
+
+
+@_NEEDS_SIMULATOR
+def test_fresh_ai_can_supersede_a_failing_defective_inherited_challenge(
+        tmp_path):
+    """A correction is explicit, prompt-bound, executable, and auditable."""
+    _, task, _ = _task(tmp_path)
+    inherited = _write_defective_inversion_challenge(task)
+    task["verification_challenges"] = [inherited]
+
+    review = _valid_review(task)
+    review["verification_test"] = _write_direct_assignment_challenge(task)
+    review["challenge_supersessions"] = [{
+        "schema": "vibeic.benchmark.challenge_supersession.v1",
+        "challenge_sha256": inherited["sha256"],
+        "rationale": (
+            "The inherited test expects inversion even though the prompt states "
+            "a direct assignment. The attached replacement exhaustively checks "
+            "both values and therefore corrects that earlier test defect."),
+        "prompt_evidence": [{
+            "excerpt": "assign y = a",
+            "supports": "Direct assignment requires equality, not inversion.",
+        }],
+    }]
+    _write_review(task, review)
+
+    verdict = bd._validate_ai_review(task)
+    assert verdict["status"] == "ACCEPTED", verdict
+    assert verdict["inherited_challenge_results"][0]["status"] == "SUPERSEDED"
+    assert verdict["inherited_challenge_results"][0]["original_status"] == "FAIL"
+    assert verdict["challenge_supersessions"][0]["challenge_sha256"] == \
+        inherited["sha256"]
+
+
+@pytest.mark.parametrize(
+    "mutate, expected",
+    [
+        (lambda item: item.update(challenge_sha256="0" * 64),
+         "must name an inherited challenge"),
+        (lambda item: item.update(prompt_evidence=[]),
+         "needs prompt-bound evidence"),
+        (lambda item: item.update(rationale="too short"),
+         "rationale must be at least 80"),
+    ],
+)
+@_NEEDS_SIMULATOR
+def test_challenge_supersession_fails_closed_without_bound_evidence(
+        tmp_path, mutate, expected):
+    _, task, _ = _task(tmp_path)
+    inherited = _write_defective_inversion_challenge(task)
+    task["verification_challenges"] = [inherited]
+    review = _valid_review(task)
+    review["verification_test"] = _write_direct_assignment_challenge(task)
+    item = {
+        "schema": "vibeic.benchmark.challenge_supersession.v1",
+        "challenge_sha256": inherited["sha256"],
+        "rationale": (
+            "The inherited assertion requires inversion while the prompt "
+            "requires equality; the replacement test exhaustively checks the "
+            "prompt behavior and corrects that earlier test defect."),
+        "prompt_evidence": [{
+            "excerpt": "assign y = a",
+            "supports": "The exact prompt requires direct equality.",
+        }],
+    }
+    mutate(item)
+    review["challenge_supersessions"] = [item]
+    _write_review(task, review)
+
+    verdict = bd._validate_ai_review(task)
+    assert verdict["status"] == "REJECTED"
+    assert any(expected in reason for reason in verdict["reasons"]), verdict
+
+
 def _proven_fail_review(task: dict) -> dict:
     review = _valid_review(task)
     review["semantic_review"] = {
