@@ -76,6 +76,7 @@ import extraction_input_capability_check as _eicap  # extraction-input precondit
 import lvs_netgen_setup_emit as _lvs_setup  # GAP-E2E-9 — power-net globalisation
 import lvs_power_aware_netlist_emit as _lvs_pa  # GAP-E2E-9 ROOT — power-aware netlist
 import lvs_power_aware_extract_tcl as _lvs_paext  # LVS ROOT (extract side) — power-aware DEF extraction
+import def_gds_port_power_restore as _defgds  # shared DEF design-name authority
 import magic_illegal_overlap_check as _mio  # W2.3 — magic's extraction feedback channel, gated at 0
 import sdc_constraints as _sdc  # #554 — shared staged-SDC ground-truth helpers
 import postroute_timing_repair_decision as _repair_dec  # shared Step 32 gate
@@ -27767,7 +27768,8 @@ def _lef_normalize_macro_origin(lef_text: str
 
 
 def _magic_def_to_gds(project: Path, top: str, pdk: PdkConfig,
-                      container: str, gds_out: Path
+                      container: str, gds_out: Path,
+                      physical_top: Optional[str] = None
                       ) -> Tuple[bool, str]:
     """Fix #3(a) — stream DEF→GDS via Magic (merges abutting same-layer
     geometry). Returns (ok, transcript). `ok` is True only when Magic
@@ -27781,6 +27783,12 @@ def _magic_def_to_gds(project: Path, top: str, pdk: PdkConfig,
     def_file = pnr_dir / f"{top}.def"
     if not def_file.is_file():
         return False, f"DEF missing: {def_file}"
+    # The file stem is the flow's logical artefact name.  The DEF DESIGN
+    # statement is the cell Magic must write.  Keep those two authorities
+    # separate: packaging may legitimately wrap a logical core in a physical
+    # top without renaming the routed artefact.
+    if physical_top is None:
+        physical_top = _def_reopen_resolution(def_file).design or top
     tcl = pnr_dir / "magic_stream_out.tcl"
     tcl.write_text(_MAGIC_STREAMOUT_TCL)
     tcl_c = _to_container_path(str(tcl), container)
@@ -27807,12 +27815,16 @@ def _magic_def_to_gds(project: Path, top: str, pdk: PdkConfig,
         _name = _root.rstrip("/").split("/")[-1]
         magicrc = f"{_root}/libs.tech/magic/{_name}.magicrc"
     cmd = (
-        f"export TOP={top} DEF={def_c} GDS_OUT={gds_out_c} "
+        f"export TOP={physical_top} DEF={def_c} GDS_OUT={gds_out_c} "
         f"LEFS=\"{lefs}\" CELL_GDS=\"{cell_gds_c}\" MACRO_GDS=\"{macro_gds_c}\" && "
         f"magic -dnull -noconsole -rcfile {magicrc} {tcl_c}"
     )
     rc, out, err = _docker_exec(container, cmd, marker=tcl_c, outputs=[gds_out])
     transcript = out + "\n" + err
+    try:
+        (pnr_dir / f"{gds_out.stem}.magic_stream_out.log").write_text(transcript)
+    except OSError:
+        pass
     if rc != 0 or not gds_out.is_file() or gds_out.stat().st_size == 0:
         return False, transcript
     # Fix #2 cross-check: a Magic stream that dropped geometry is not
@@ -31121,6 +31133,7 @@ def step_gds(project: Path, top: str, pdk: PdkConfig,
     if not def_file.is_file():
         return StepResult("gds", "SKIP", time.time() - t0,
                           f"DEF missing: {def_file}")
+    physical_top = _def_reopen_resolution(def_file).design or top
 
     # Fix #3(a) — prefer Magic-based streamout when Magic is available
     # (it merges abutting same-layer geometry → far fewer false DRC
@@ -31146,7 +31159,8 @@ def step_gds(project: Path, top: str, pdk: PdkConfig,
             "port-label restore)")
     else:
         magic_ok, magic_transcript = _magic_def_to_gds(
-            project, top, pdk, container, gds_out)
+            project, top, pdk, container, gds_out,
+            physical_top=physical_top)
     # sha256×sky130A / #SS-SETUP — FORCE klayout streamout (A/B probe). Magic's
     # native geometry merge fuses the met2 landings of a STACKED via1+via2 into a
     # shape the KLayout deck reads as enclosure-deficient (m2.4/m2.5) even though
@@ -31159,30 +31173,31 @@ def step_gds(project: Path, top: str, pdk: PdkConfig,
             "avoid the stacked-via met2-enclosure merge artefact")
     if magic_ok and gds_out.is_file():
         # ORGANIC #600 — manufacturing-grid snap before signoff DRC.
-        snap_ok, snap_note = _gds_grid_snap(project, top, pdk, container,
+        snap_ok, snap_note = _gds_grid_snap(project, physical_top, pdk, container,
                                             gds_out)
         # Step 26.5ic — die finishing (the PDK's OWN seal ring), BEFORE the
         # fill and before the sign-off DRC/LVS read this GDS, so the ring is
         # verified with the rest of the die instead of appearing after its
         # evidence.
-        seal_ok, seal_note = _die_finishing(project, top, pdk, gds_out,
+        seal_ok, seal_note = _die_finishing(project, physical_top, pdk, gds_out,
                                             container)
         # Per-layer density fill BEFORE the density checks / sign-off DRC read
         # this GDS. Config-gated + NONFATAL; the note always discloses.
-        dfill_ok, dfill_note = _density_metal_fill(project, top, pdk, gds_out, container)
+        dfill_ok, dfill_note = _density_metal_fill(
+            project, physical_top, pdk, gds_out, container)
         # DIE-WIDE fill by the PDK's own generator, LAST of the fill passes
         # and still before the density checks / sign-off DRC read this GDS.
         # The pass above measures and fills the streamed geometry's BOUNDING
         # BOX; a foundry minimum-density rule is written over the entire DIE,
         # and on a slot submission those are different rectangles. NONFATAL.
-        ddfill_ok, ddfill_note = _die_density_fill(project, top, pdk, gds_out,
-                                                   container)
+        ddfill_ok, ddfill_note = _die_density_fill(
+            project, physical_top, pdk, gds_out, container)
         # vibe-ic#613 — the port-label restore is a POST-streamout pass over the
         # finished GDS, so it belongs on BOTH engines. Gating it on the KLayout
         # path alone would have made "which streamout ran" decide whether a
         # sign-off GDS can be pin-matched. Last, so labels land on final geometry.
         label_ok, label_note = _restore_port_labels_if_missing(
-            project, top, pdk, container, gds_out, def_file)
+            project, physical_top, pdk, container, gds_out, def_file)
         # #306 — BOTH stream-out engines get the substance gate. A stub GDS
         # out of Magic is the same defect as a stub GDS out of KLayout, and
         # gating only the fall-back path would leave the primary one open.
@@ -31206,6 +31221,7 @@ def step_gds(project: Path, top: str, pdk: PdkConfig,
             f"{'; ' + label_note if label_ok else ''})",
             [str(gds_out)],
             extras={"streamout_engine": "magic",
+                    "logical_top": top, "physical_top": physical_top,
                     "die_finishing": seal_ok, "die_finishing_note": seal_note,
                     "grid_snap": snap_ok, "grid_snap_note": snap_note,
                     "density_fill": dfill_ok,
@@ -31287,7 +31303,7 @@ def step_gds(project: Path, top: str, pdk: PdkConfig,
     marker_arg = pdk.stdcell_marker_layer or ""
     cmd = (
         f"export QT_QPA_PLATFORM=offscreen && "
-        f"export TOP={top} DEF={def_c} GDS_OUT={gds_out_c} "
+        f"export TOP={physical_top} DEF={def_c} GDS_OUT={gds_out_c} "
         f"LEFS=\"{lefs}\" MACRO_GDS=\"{macro_gds_arg}\" "
         f"CELL_GDS=\"{cell_gds_c}\" LEFDEF_MAP=\"{lefdef_map_c}\" "
         f"STDCELL_MARKER_LAYER=\"{marker_arg}\" && "
@@ -31307,20 +31323,21 @@ def step_gds(project: Path, top: str, pdk: PdkConfig,
         return StepResult("gds", "FAIL", time.time() - t0,
                           f"rc={rc} log_tail={(out+err)[-1500:]}")
     # ORGANIC #600 — manufacturing-grid snap before signoff DRC.
-    snap_ok, snap_note = _gds_grid_snap(project, top, pdk, container, gds_out)
+    snap_ok, snap_note = _gds_grid_snap(
+        project, physical_top, pdk, container, gds_out)
     # ORGANIC #601 — KLayout streamout does NOT merge abutting same-layer
     # geometry (Magic does); a MUST flatten + per-layer merge before signoff
     # DRC removes boundary edge-pair false m1.2. Magic-merge cannot be
     # assumed (it core-dumps on the very DEFs that force this fallback), so
     # the merge is KLayout-native. Never ship an un-merged KLayout GDS.
-    merge_ok, merge_note = _klayout_merge_layers(project, top, pdk, container,
-                                                 gds_out)
+    merge_ok, merge_note = _klayout_merge_layers(
+        project, physical_top, pdk, container, gds_out)
     # Same-net routing-metal near-miss heal AFTER merge — bridges the OSS
     # router's same-net metal shapes left in the (0, min-space) no-man's land
     # (config-gated; each max_bridge_um < the layer min-space so it can only
     # merge same-net shapes, never short or mask a different-net violation).
-    heal_ok, heal_note = ((_klayout_same_net_heal(project, top, pdk, container,
-                                                  gds_out))
+    heal_ok, heal_note = ((_klayout_same_net_heal(
+                              project, physical_top, pdk, container, gds_out))
                           if pdk.same_net_heal else
                           (False, "no same_net_heal config"))
     # Step 26.5ic — die finishing (the PDK's OWN seal ring), after the merge
@@ -31329,32 +31346,34 @@ def step_gds(project: Path, top: str, pdk: PdkConfig,
     # GDS. That is LibreLane's chip-flow order, SealRing -> Filler -> Density;
     # adding the ring later would put metal on the die after Step 31 signed it
     # off — the artefact changing after the evidence.
-    seal_ok, seal_note = _die_finishing(project, top, pdk, gds_out, container)
+    seal_ok, seal_note = _die_finishing(
+        project, physical_top, pdk, gds_out, container)
     # v1.3.83 — config-driven dummy-METAL fill AFTER merge, BEFORE the
     # sign-off DRC consumes this GDS (the deck's own density + spacing +
     # wide-metal rules then verify the fill honestly — no rule is waived).
-    fill_ok, fill_note = ((_klayout_dummy_fill(project, top, pdk, container,
-                                               gds_out))
+    fill_ok, fill_note = ((_klayout_dummy_fill(
+                              project, physical_top, pdk, container, gds_out))
                           if pdk.dummy_fill else
                           (False, "no dummy_fill config"))
     # Per-layer DENSITY-TARGETED fill: measures each layer's worst density
     # window and tops it up to the foundry target, after the fixed dummy-fill
     # PATTERN above and before the density checks / sign-off DRC consume this
     # GDS. Config-gated + NONFATAL; the note always discloses the outcome.
-    dfill_ok, dfill_note = _density_metal_fill(project, top, pdk, gds_out, container)
+    dfill_ok, dfill_note = _density_metal_fill(
+        project, physical_top, pdk, gds_out, container)
     # DIE-WIDE fill by the PDK's own generator, LAST of the fill passes and
     # still before the density checks / sign-off DRC read this GDS. The pass
     # above measures and fills the streamed geometry's BOUNDING BOX; a foundry
     # minimum-density rule is written over the entire DIE, and on a slot
     # submission those are different rectangles. NONFATAL, always disclosed.
-    ddfill_ok, ddfill_note = _die_density_fill(project, top, pdk, gds_out,
-                                               container)
+    ddfill_ok, ddfill_note = _die_density_fill(
+        project, physical_top, pdk, gds_out, container)
     # v1.3.91 — restore top PORT text labels + VDD/VSS rail markers LAST (after
     # merge/heal/fill so the labels/markers land on the final geometry): makes
     # the KLayout-streamed GDS LVS-able by the geometric extractor. Config-gated
     # (no-op for OSS PDKs).
     label_ok, label_note = _restore_port_labels_if_missing(
-        project, top, pdk, container, gds_out, def_file)
+        project, physical_top, pdk, container, gds_out, def_file)
     # A map can also be present but WRONG or partial, which the pre-flight
     # gate above cannot see. Verify the finished artifact instead: every layer
     # carrying shapes must be accounted for by the map, the library GDS or the
@@ -31424,6 +31443,8 @@ def step_gds(project: Path, top: str, pdk: PdkConfig,
                       f"{'; ' + label_note if label_ok else ''})",
                       [str(gds_out)],
                       extras={"streamout_engine": "klayout",
+                              "logical_top": top,
+                              "physical_top": physical_top,
                               "die_finishing": seal_ok,
                               "die_finishing_note": seal_note,
                               "density_fill": dfill_ok,
@@ -35107,8 +35128,22 @@ def _run_extraction_lvs(project: Path, top: str, pdk: PdkConfig,
     cell-level compare; the ignore is handled by the local setup."""
     ext_dir = _pl.extracted_dir(project)
     ext_dir.mkdir(parents=True, exist_ok=True)
-    spice_out = ext_dir / f"{top}_extracted.sp"
-    tcl = ext_dir / f"ext2spice_{top}.tcl"
+    logical_top = top
+    physical_top = _def_reopen_resolution(def_file).design or logical_top
+    spice_out = ext_dir / f"{logical_top}_extracted.sp"
+    tcl = ext_dir / f"ext2spice_{logical_top}.tcl"
+    top = physical_top
+    if physical_top != logical_top:
+        try:
+            (ext_dir / "extraction_top_resolution.json").write_text(
+                json.dumps({
+                    "logical_top": logical_top,
+                    "physical_top": physical_top,
+                    "authority": str(def_file),
+                    "rule": "DEF DESIGN statement selects the reopened cell",
+                }, indent=2) + "\n")
+        except OSError:
+            pass
     # W2.3 — magic's ERROR channel. The extractor files every rectangle it
     # refused to connect ("Illegal overlap between <a> and <b> (types do not
     # connect)") as a FEEDBACK AREA and then says only `N problems occurred.
@@ -35154,7 +35189,7 @@ def _run_extraction_lvs(project: Path, top: str, pdk: PdkConfig,
         _stripped, _dropped_blk = _strip_nonlayer_blockages(
             def_file.read_text(errors="replace"))
         if _dropped_blk:
-            extract_def = ext_dir / f"{top}_extract.def"
+            extract_def = ext_dir / f"{logical_top}_extract.def"
             extract_def.write_text(_stripped)
             (ext_dir / "extract_def_provenance.json").write_text(json.dumps({
                 "signed_off_def": str(def_file),
@@ -46482,27 +46517,46 @@ _DEF_COMPONENT_RE = re.compile(
     r"^\s*-\s+(\S+)\s+(\S+)", re.MULTILINE)
 
 
+@dataclass(frozen=True)
+class _DefReopenResolution:
+    """The DEF-owned facts every fresh-session consumer must agree on."""
+
+    design: Optional[str]
+    components: Tuple[Tuple[str, str], ...]
+
+
+def _def_reopen_resolution(def_file: Path) -> _DefReopenResolution:
+    """Resolve one DEF's physical top and instantiated masters once.
+
+    The design-name parser is the existing shared DEF/GDS authority used by
+    port restoration.  Component masters remain the authority used by
+    ``_def_reopen_extra_lefs_c``.  Streamout, LVS, and fresh OpenROAD sessions
+    therefore cannot grow independent interpretations of the same DEF.
+    """
+    try:
+        text = def_file.read_text(errors="ignore")
+    except OSError:
+        return _DefReopenResolution(None, ())
+    design = _defgds.def_design_name(text)
+    section = re.search(r"^COMPONENTS\b.*?^END COMPONENTS",
+                        text, re.MULTILINE | re.DOTALL)
+    if not section:
+        return _DefReopenResolution(design, ())
+    components: List[Tuple[str, str]] = []
+    for match in _DEF_COMPONENT_RE.finditer(section.group(0)):
+        inst, master = match.group(1), match.group(2)
+        if master in (";", "+"):
+            continue
+        components.append((inst, master))
+    return _DefReopenResolution(design, tuple(components))
+
+
 def _parse_def_components(def_file: Path) -> List[Tuple[str, str]]:
     """Parse the DEF COMPONENTS block into [(instance, master), ...].
 
     chip-AGNOSTIC structural parse: no literal names. Returns [] if the DEF
     has no COMPONENTS block. Each component line is `- <inst> <master> + ...`."""
-    out: List[Tuple[str, str]] = []
-    try:
-        text = def_file.read_text(errors="ignore")
-    except OSError:
-        return out
-    m = re.search(r"^COMPONENTS\b.*?^END COMPONENTS",
-                  text, re.MULTILINE | re.DOTALL)
-    if not m:
-        return out
-    for cm in _DEF_COMPONENT_RE.finditer(m.group(0)):
-        inst, master = cm.group(1), cm.group(2)
-        # Skip the COMPONENTS header artefact and section keywords.
-        if master in (";", "+"):
-            continue
-        out.append((inst, master))
-    return out
+    return list(_def_reopen_resolution(def_file).components)
 
 
 _LEF_MACRO_NAME_RE = re.compile(r"^\s*MACRO\s+(\S+)", re.MULTILINE)
@@ -46552,7 +46606,7 @@ def _def_reopen_extra_lefs_c(def_path: Path, pdk: "PdkConfig",
     literal anywhere -- the DEF names the masters and the LEFs name themselves.
     """
     try:
-        masters = {m for _, m in _parse_def_components(def_path)}
+        masters = {m for _, m in _def_reopen_resolution(def_path).components}
     except Exception:
         return []
     if not masters:
