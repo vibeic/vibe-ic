@@ -23270,7 +23270,8 @@ def _build_pnr_tcl_text(*, tech_lef_c: str, cell_lef_c: str,
                         cts_cluster_diameter: Optional[float] = None,
                         cts_distance_between_buffers: Optional[float] = None,
                         sizing_limits_block: str = "",
-                        sizing_drv_report_block: str = "") -> str:
+                        sizing_drv_report_block: str = "",
+                        fanout_root_repair_block: str = "") -> str:
     """ORGANIC #581 — the COMPLETE pnr.tcl template as a PURE builder
     (v0.1.49 doctrine: extract Tcl-block builders into pure helpers so
     regression tests pin them). The #557 SPEF-repair block shipped with
@@ -23610,6 +23611,9 @@ if {{[catch {{repair_timing -setup{_repair_tns}}} _rts2_err]}} {{
 if {{[catch {{repair_timing -hold}} _rth2_err]}} {{
   puts "REPAIR_TIMING_HOLD_GR_NONFATAL: $_rth2_err"
 }}
+{fanout_root_repair_block}# Residual per-pin max-fanout roots are inserted here,
+# after CTS and the global-route estimate but before final legalization/route.
+# The block is empty when the active PDK has no authoritative buffer master.
 if {{[catch {{detailed_placement}} _gr_dp_err]}} {{
   if {{[catch {{detailed_placement -use_diamond_legalizer}} _gr_dp_errd]}} {{
     puts "GR_REPAIR_LEGALIZE_NONFATAL: $_gr_dp_err | diamond: $_gr_dp_errd"
@@ -25884,6 +25888,15 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
             x for x in (macro_libs_tcl, _io_pnr_libs_tcl) if x)
         print("[phase3] IO Liberty views loaded into PnR repair scenes",
               file=sys.stderr)
+    # Some IO output pins carry a stricter per-pin fanout limit than the
+    # standard-cell default. Ordinary repair_design can legally build two
+    # first-level branches and still leave that original pin red. Apply the
+    # bounded, tool-reported residual actuator in the BASE PnR path after
+    # CTS/global routing, so the shipped route owns the repair without relying
+    # on the post-route setup-repair promotion gate.
+    _pnr_fanout_root_repair = _ship_max_fanout_root_repair_tcl(
+        clk_buf or clk_buf_root,
+        f"{out_dir_c}/pnr_fanout_root_candidates.rpt")
     _generic_pnr_tcl = _build_pnr_tcl_text(
         tech_lef_c=tech_lef_c, cell_lef_c=cell_lef_c,
         macro_lefs_tcl=macro_lefs_tcl, liberty_c=liberty_c,
@@ -25928,7 +25941,8 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
         cts_distance_between_buffers=_rf_map.get(
             "cts_distance_between_buffers"),
         sizing_limits_block=sizing_limits_block,
-        sizing_drv_report_block=sizing_drv_report_block)
+        sizing_drv_report_block=sizing_drv_report_block,
+        fanout_root_repair_block=_pnr_fanout_root_repair)
 
     _chip_padring = _chip_path_requests_pad_ring(project)
 
@@ -29560,13 +29574,100 @@ def _ship_postroute_convergence_tcl(max_captable_c: str, pnr_dir_c: str,
             .replace("__PNR__", pnr_dir_c))
 
 
+def _ship_max_fanout_root_repair_tcl(
+        buffer_cell: Optional[str], report_path: str = "/tmp/vibeic_fanout_root.rpt"
+        ) -> str:
+    """Insert one PDK-derived root buffer after each residual fanout violator.
+
+    ``repair_design`` builds a gain tree below a high-fanout driver, but a
+    library pin whose own ``max_fanout`` is one can still be left driving two
+    first-level branches.  That is not a missing constraint: OpenSTA continues
+    to report the original driver as violated.  Parse only OpenSTA's current
+    ``report_check_types -max_fanout -violators`` table and use OpenROAD's
+    public ``insert_buffer -net`` command to put one root between that driver
+    and the already-built tree.  The original driver then has exactly one load;
+    a final ordinary ``repair_design`` pass remains responsible for everything
+    below it.
+
+    The cell is supplied by the active PDK's registry/Liberty-derived CTS
+    selection.  No design, pad, library-family, or PDK name is embedded here.
+    Empty/unknown selection is an explicit skip, never a fabricated master.
+    """
+    if not buffer_cell:
+        return (
+            "puts \"SHIP_FANOUT_ROOT_SKIPPED: no PDK-derived buffer cell\"\n"
+            "set _ship_fanout_root_inserted 0\n"
+            "set _ship_fanout_root_failed 0\n")
+    # The Tcl report parser deliberately keys on the tool's literal VIOLATED
+    # marker, not on a reimplemented limit/fanout calculation.  This makes the
+    # actuator monotonic with the sign-off check and bounds it to real red pins.
+    return (
+        "set _ship_fanout_root_inserted 0\n"
+        "set _ship_fanout_root_failed 0\n"
+        f"set _ship_fo_report_path {report_path}\n"
+        "if {[catch {report_check_types -max_fanout -violators "
+        "-max_count 1000000 > $_ship_fo_report_path} "
+        "_ship_fo_report_err]} {\n"
+        "  puts \"SHIP_FANOUT_ROOT_REPORT_FAILED: $_ship_fo_report_err\"\n"
+        "} else {\n"
+        "  if {[catch {set _ship_fo_fd [open $_ship_fo_report_path r]; "
+        "set _ship_fo_report [read $_ship_fo_fd]; close $_ship_fo_fd} "
+        "_ship_fo_read_err]} {\n"
+        "    puts \"SHIP_FANOUT_ROOT_REPORT_READ_FAILED: $_ship_fo_read_err\"\n"
+        "    set _ship_fo_report \"\"\n"
+        "  }\n"
+        "  foreach _ship_fo_line [split $_ship_fo_report \"\\n\"] {\n"
+        "    if {![regexp {^(\\S+).*\\(VIOLATED\\)\\s*$} "
+        "[string trim $_ship_fo_line] _ship_fo_all _ship_fo_pin]} { continue }\n"
+        "    set _ship_fo_pins [get_pins -quiet $_ship_fo_pin]\n"
+        "    if {[llength $_ship_fo_pins] != 1} {\n"
+        "      puts \"SHIP_FANOUT_ROOT_PIN_UNRESOLVED: $_ship_fo_pin\"\n"
+        "      incr _ship_fanout_root_failed\n"
+        "      continue\n"
+        "    }\n"
+        "    set _ship_fo_nets [get_nets -quiet -of_objects $_ship_fo_pins]\n"
+        "    if {[llength $_ship_fo_nets] != 1} {\n"
+        "      puts \"SHIP_FANOUT_ROOT_NET_UNRESOLVED: $_ship_fo_pin "
+        "nets=[llength $_ship_fo_nets]\"\n"
+        "      incr _ship_fanout_root_failed\n"
+        "      continue\n"
+        "    }\n"
+        "    set _ship_fo_idx $_ship_fanout_root_inserted\n"
+        "    if {[catch {insert_buffer -net [lindex $_ship_fo_nets 0] "
+        f"-buffer_cell {buffer_cell} "
+        "-buffer_name vibeic_drv_root_$_ship_fo_idx "
+        "-net_name vibeic_drv_root_net_$_ship_fo_idx} _ship_fo_insert_err]} {\n"
+        "      puts \"SHIP_FANOUT_ROOT_INSERT_FAILED: pin=$_ship_fo_pin "
+        "error=$_ship_fo_insert_err\"\n"
+        "      incr _ship_fanout_root_failed\n"
+        "    } else {\n"
+        "      puts \"SHIP_FANOUT_ROOT_INSERTED: pin=$_ship_fo_pin\"\n"
+        "      incr _ship_fanout_root_inserted\n"
+        "    }\n"
+        "  }\n"
+        "}\n"
+        "puts \"SHIP_FANOUT_ROOT_SUMMARY: inserted=$_ship_fanout_root_inserted "
+        "failed=$_ship_fanout_root_failed\"\n"
+        "if {$_ship_fanout_root_inserted > 0} {\n"
+        "  if {[catch {repair_design} _ship_fo_rd]} { "
+        "puts \"SHIP_FANOUT_ROOT_RD_NONFATAL: $_ship_fo_rd\" }\n"
+        "  if {[catch {repair_timing -setup} _ship_fo_rt]} { "
+        "puts \"SHIP_FANOUT_ROOT_RT_NONFATAL: $_ship_fo_rt\"; "
+        "incr _ship_rt_failed }\n"
+        "  if {[catch {detailed_placement} _ship_fo_dp]} { "
+        "puts \"SHIP_FANOUT_ROOT_DP_NONFATAL: $_ship_fo_dp\" }\n"
+        "}\n")
+
+
 
 def _ship_signoff_spef_repair_tcl(top: str, tech_lef_c: str, cell_lef_c: str,
                                   ss_liberty_c: str, pnr_dir_c: str,
                                   max_captable_c: str, metal_prefix: str,
                                   thread_count: int,
                                   filler_masters: Optional[List[str]] = None,
-                                  extra_lefs_c: Optional[Sequence[str]] = None
+                                  extra_lefs_c: Optional[Sequence[str]] = None,
+                                  extra_liberties_c: Optional[Sequence[str]] = None,
+                                  fanout_root_buffer_cell: Optional[str] = None
                                   ) -> str:
     """Fresh-session post-route SETUP repair against the REAL max-RC SPEF at the
     SLOW (SS) sign-off corner, writing routed_repaired.def / <top>_pnr_repaired.v.
@@ -29599,6 +29700,7 @@ def _ship_signoff_spef_repair_tcl(top: str, tech_lef_c: str, cell_lef_c: str,
         f"read_lef {cell_lef_c}\n"
         + _extra_lef_read_block(extra_lefs_c) +
         f"read_liberty {ss_liberty_c}\n"
+        + _extra_liberty_read_block(extra_liberties_c, ss_liberty_c) +
         f"read_def {pnr_dir_c}/routed.def\n"
         f"read_sdc {pnr_dir_c}/constraint.sdc\n"
         # #543 -- THIS STEP RESIZES, so it needs the same cell-pool exclusion the
@@ -29707,7 +29809,10 @@ def _ship_signoff_spef_repair_tcl(top: str, tech_lef_c: str, cell_lef_c: str,
         "  if {[catch {detailed_placement} _drv_dp]} { "
         "puts \"SHIP_DP_NONFATAL: $_drv_dp\"; break }\n"
         "}\n"
-        "if {[catch {check_placement} e]} { puts \"SHIP_CP_WARN: $e\" }\n"
+        + _ship_max_fanout_root_repair_tcl(
+            fanout_root_buffer_cell,
+            f"{pnr_dir_c}/signoff_repair_fanout_candidates.rpt")
+        + "if {[catch {check_placement} e]} { puts \"SHIP_CP_WARN: $e\" }\n"
         "if {$_ship_rt_failed > 0} { "
         "puts \"SHIP_SETUP_REPAIR_REFUSED: $_ship_rt_failed\" }\n"
         "catch {puts \"SHIP_WNS_AFTER_REPAIR: [sta::worst_slack -max]\"}\n"
@@ -30241,6 +30346,19 @@ def step_signoff_spef_repair(project: Path, top: str, pdk: "PdkConfig",
             "value could not be resolved, so the repair was never attempted "
             "and no route was promoted")
         return None
+    # This fresh repair session reopens the physical chip top and then invokes
+    # repair_design/repair_timing.  It therefore needs the same exact-PVT IO
+    # timing arcs as the sign-off STA that judges its result.  Loading the IO
+    # LEF alone defines pad geometry but leaves pad/core paths unlinked in the
+    # timing graph: measured on spm x gf180mcuD run5, worst_slack became 1e39,
+    # zero instances changed, and twelve real max-fanout violations survived
+    # into SS/max-RC sign-off.  Reuse the shared exact-suffix selector; local
+    # macro Liberty views remain included because this is a fresh session.
+    extra_liberties_c: List[str] = []
+    for liberty in _sta_extra_liberties(project, pdk, ss_lib):
+        liberty_c = _to_container_path(str(liberty), container)
+        if liberty_c != ss_lib and liberty_c not in extra_liberties_c:
+            extra_liberties_c.append(liberty_c)
     tcl = _ship_signoff_spef_repair_tcl(
         top,
         _to_container_path(str(pdk.tech_lef), container),
@@ -30248,7 +30366,9 @@ def step_signoff_spef_repair(project: Path, top: str, pdk: "PdkConfig",
         ss_lib, _to_container_path(str(pnr_out), container),
         cap, pdk.metal_prefix, _openroad_thread_count(),
         filler_masters=_filler_masters_for_pdk(pdk),
-        extra_lefs_c=_def_reopen_extra_lefs_c(routed, pdk, container))
+        extra_lefs_c=_def_reopen_extra_lefs_c(routed, pdk, container),
+        extra_liberties_c=extra_liberties_c,
+        fanout_root_buffer_cell=pdk.clk_buf or pdk.clk_buf_root)
     tcl_path = pnr_out / "signoff_spef_repair.tcl"
     tcl_path.write_text(tcl)
     tcl_c = _to_container_path(str(tcl_path), container)
@@ -46884,6 +47004,31 @@ def _extra_lef_read_block(extra_lefs_c: Optional[Sequence[str]]) -> str:
             "# does not define. Without them `read_def` below aborts ODB-0421\n"
             "# and the whole step is lost before it runs.\n"
             + "".join(f"read_lef {p}\n" for p in extra_lefs_c))
+
+
+def _extra_liberty_read_block(
+        extra_liberties_c: Optional[Sequence[str]],
+        primary_liberty_c: str = "") -> str:
+    """Emit distinct auxiliary Liberty views before a fresh DEF is linked.
+
+    The primary process library is already read by the caller.  Keeping this
+    helper value-based and empty-on-empty preserves byte identity for designs
+    without macros or a timed IO ring while preventing an accidentally repeated
+    primary view from redefining the same cells.
+    """
+    if not extra_liberties_c:
+        return ""
+    seen = {primary_liberty_c} if primary_liberty_c else set()
+    paths: List[str] = []
+    for value in extra_liberties_c:
+        path = str(value)
+        if path and path not in seen:
+            seen.add(path)
+            paths.append(path)
+    if not paths:
+        return ""
+    return ("# Physical-top macro/IO timing views at the active process PVT.\n"
+            + "".join(f"read_liberty {path}\n" for path in paths))
 
 
 def _classify_io_cell(master: str) -> str:
