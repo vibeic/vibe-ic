@@ -20653,47 +20653,24 @@ _PDK_ROW_CLOCK_VOCAB_RE = re.compile(
     r"operating[\s\-]?freq(?:uency)?)\b")
 
 
-def _v1_9_65_pdk_scoped_clock_mhz(project: Path, pdk: Optional[str]):
-    """The clock frequency a design document assigns TO THIS PDK, or None.
+def _rclk_pdk_scoped_clock_rows(project: Path):
+    """Every clock-target row in the design docs that NAMES a process.
 
-    WHY THIS EXISTS
-    ---------------
-    A design that targets more than one process states its timing target once
-    per process, as a table keyed by the process name:
+    Returns a list of ``(pdk_token, freq_mhz, source_rel, line_no, line_text)``
+    in document order, one entry per (row, process-name) pair. A row that names
+    two processes yields two entries; a row that names none yields nothing.
 
-        | Target clock period — <PDK-A> | 10 ns (100 MHz) |
-        | Target clock period — <PDK-B> | 20 ns  (50 MHz) |
+    This is the population `_v1_9_65_pdk_scoped_clock_mhz` picks THIS run's
+    process out of. It is separated so the caller can tell the two silences
+    apart: "this document does not speak in per-process clock rows at all"
+    (nothing to arbitrate — prose stands) versus "this document DOES, and none
+    of its rows is about the process being built" (the design has not stated a
+    target for this process, and the other processes' targets are not
+    substitutes for it).
 
-    Phase 1's prose-fmax walker takes the FIRST such row it meets and demotes
-    every other to `alternate_frequency_mentions[]`. That is a coin-flip the
-    document already answered: which row applies is decided by which process
-    the run is building. `l8_sta_clock_period_design_owned_check`'s own
-    write-up records the ambiguity — "declare `clk` twice with conflicting
-    frequencies ... and sdc_gen silently takes whichever the precedence walk
-    reaches first — reported as an advisory". On the FIRST process listed the
-    coin lands right and the advisory is harmless; on the SECOND it lands
-    wrong, and the whole backend then closes timing against a period this
-    design never asked for on this process.
-
-    WHAT IS READ
-    ------------
-    Only a line that BOTH names this run's process AND carries a time or
-    frequency literal. The process name must not sit inside a file path (a
-    citation of a tool config file is not a timing statement) and must not be
-    negated. When no line satisfies all of that, this returns None and
-    nothing changes.
-
-    Returns (freq_mhz, source_rel, line_no, line_text) or None.
-
-    chip-AGNOSTIC: a PDK-name namespace the file already owns, plus time /
-    frequency units. No chip literal, no per-design rule.
+    chip-AGNOSTIC: PDK-name namespace + time/frequency units only.
     """
-    if not pdk:
-        return None
-    want = pdk.strip().lower()
-    if not want:
-        return None
-    best = None
+    rows = []
     for base in (project / "input" / "docs", project / "phase1" / "input_doc"):
         if not base.is_dir():
             continue
@@ -20712,7 +20689,7 @@ def _v1_9_65_pdk_scoped_clock_mhz(project: Path, pdk: Optional[str]):
             for n, row in enumerate(text.split("\n"), start=1):
                 if not _PDK_ROW_CLOCK_VOCAB_RE.search(row):
                     continue
-                named = False
+                toks = []
                 for m in _OPEN_PDK_TOKEN_RE.finditer(row):
                     if _match_is_inside_path_token(row, m.start(), m.end()):
                         continue
@@ -20721,18 +20698,9 @@ def _v1_9_65_pdk_scoped_clock_mhz(project: Path, pdk: Optional[str]):
                         continue
                     tok = re.sub(r"^ihp[- ]?", "",
                                  m.group(1).lower()).replace(" ", "")
-                    # The row names this run's process when it names the
-                    # process exactly, or names the FAMILY this revision
-                    # belongs to (`<family>` covers `<family>D`). Same
-                    # one-directional rule the declared-vs-resolved guard
-                    # uses: a row naming a DIFFERENT revision does not match.
-                    if want == tok or (
-                            len(want) == len(tok) + 1
-                            and want.startswith(tok)
-                            and want[len(tok):].isalpha()):
-                        named = True
-                        break
-                if not named:
+                    if tok and tok not in toks:
+                        toks.append(tok)
+                if not toks:
                     continue
                 mhz = None
                 for fm in _PDK_ROW_FREQ_RE.finditer(row):
@@ -20755,9 +20723,187 @@ def _v1_9_65_pdk_scoped_clock_mhz(project: Path, pdk: Optional[str]):
                         break
                 if mhz is None:
                     continue
-                if best is None:
-                    best = (mhz, rel, n, row.strip()[:200])
-    return best
+                for tok in toks:
+                    rows.append((tok, mhz, rel, n, row.strip()[:200]))
+    return rows
+
+
+def _rclk_pdk_row_names_run_pdk(want: str, tok: str) -> bool:
+    """Does a row's process token name the process this run is building?
+
+    Exact, or the FAMILY this revision belongs to (`<family>` covers
+    `<family>D`). One-directional, the same rule the declared-vs-resolved
+    guard uses: a row naming a DIFFERENT revision does not match.
+    """
+    return bool(want) and (
+        want == tok or (
+            len(want) == len(tok) + 1
+            and want.startswith(tok)
+            and want[len(tok):].isalpha()))
+
+
+def _v1_9_65_pdk_scoped_clock_mhz(project: Path, pdk: Optional[str]):
+    """The clock frequency a design document assigns TO THIS PDK, or None.
+
+    WHY THIS EXISTS
+    ---------------
+    A design that targets more than one process states its timing target once
+    per process, as a table keyed by the process name:
+
+        | Target clock period — <PDK-A> | 10 ns (100 MHz) |
+        | Target clock period — <PDK-B> | 20 ns  (50 MHz) |
+
+    Phase 1's prose-fmax walker takes the FIRST such row it meets and demotes
+    every other to `alternate_frequency_mentions[]`. That is a coin-flip the
+    document already answered: which row applies is decided by which process
+    the run is building.
+
+    WHAT IS READ
+    ------------
+    Only a line that BOTH names this run's process AND carries a time or
+    frequency literal. The process name must not sit inside a file path (a
+    citation of a tool config file is not a timing statement) and must not be
+    negated. When no line satisfies all of that, this returns None; the caller
+    then decides between "no per-process rows at all" (leave the prose alone)
+    and "per-process rows exist but none is ours" (NOT_DETERMINED).
+
+    Returns (freq_mhz, source_rel, line_no, line_text) or None.
+
+    chip-AGNOSTIC: a PDK-name namespace the file already owns, plus time /
+    frequency units. No chip literal, no per-design rule.
+    """
+    if not pdk:
+        return None
+    want = pdk.strip().lower()
+    if not want:
+        return None
+    for tok, mhz, rel, n, row in _rclk_pdk_scoped_clock_rows(project):
+        if _rclk_pdk_row_names_run_pdk(want, tok):
+            return (mhz, rel, n, row)
+    return None
+
+
+def _rclk_refuse_foreign_pdk_clock(project: Path) -> bool:
+    """Refuse another process's clock target instead of adopting it.
+
+    Precondition: this run named a process and no per-process clock row names
+    it. When the document carries per-process clock rows for OTHER processes,
+    the L8 primary clock currently holds one of them (the prose walker takes
+    the first row it meets). That value is a foreign target. Replace it with
+    an explicit NOT_DETERMINED carrying a named reason: which process was
+    looked for, and which rows were found instead.
+
+    NO-OP when the document declares no per-process clock rows at all — a
+    single-process design that states its frequency in free prose is not
+    ambiguous and this function has no opinion on it.
+
+    Returns True when a file was rewritten.
+    """
+    if not _CLI_PDK:
+        return False
+    want = _CLI_PDK.strip().lower()
+    rows = _rclk_pdk_scoped_clock_rows(project)
+    if not rows:
+        return False
+    if any(_rclk_pdk_row_names_run_pdk(want, tok) for tok, *_ in rows):
+        return False        # unreachable via the caller; kept honest anyway
+    found = [f"{tok}={mhz:g} MHz at {rel}:{n}"
+             for tok, mhz, rel, n, _ in rows]
+    reason = (f"the design document declares a clock target per process, but "
+              f"none of its rows names '{_CLI_PDK}'; it declares "
+              + "; ".join(found) +
+              f". A target declared for another process is not this "
+              f"process's target.")
+    gd = _pl.generated_docs_dir(project)
+    if not gd.is_dir():
+        return False
+    any_updated = False
+    for layer in ("L8_RTL_CONSTANTS", "L8_TIMING_WAVEFORM"):
+        path = gd / f"{layer}.json"
+        if not path.is_file():
+            continue
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        if not isinstance(data, dict):
+            continue
+        changed = False
+        cleared_names: Set[str] = set()
+        domains = data.get("clock_domains")
+        if isinstance(domains, list):
+            for d in domains:
+                if not isinstance(d, dict) or d.get("role") != "primary":
+                    continue
+                prev = d.get("freq_mhz")
+                if prev is None and d.get("period_ns") is None:
+                    continue
+                if prev is not None:
+                    _cc.record_alternate_mention(d, {
+                        "freq_mhz": float(prev),
+                        "freq_hz": int(float(prev) * 1e6),
+                        "role": "withdrawn_not_declared_for_this_pdk",
+                        "source": (d.get("evidence") or {}).get("file"),
+                        "extraction_strategy": d.get("extraction_strategy"),
+                    })
+                d["freq_mhz"] = None
+                d["freq_low_mhz"] = None
+                d["freq_high_mhz"] = None
+                d["freq_hz"] = None
+                d["period_ns"] = None
+                d["extraction_strategy"] = "clock_target_not_determined"
+                d["pdk_scoped_target"] = _CLI_PDK
+                d["clock_target_resolution"] = {
+                    "status": "NOT_DETERMINED",
+                    "pdk": _CLI_PDK,
+                    "reason": reason,
+                    "rows_found": found,
+                }
+                changed = True
+                _nm = (d.get("name") or "").strip()
+                if _nm:
+                    cleared_names.add(_nm.lower())
+        if not changed:
+            continue
+        clocks = data.get("clocks")
+        if isinstance(clocks, list):
+            for c in clocks:
+                if not isinstance(c, dict):
+                    continue
+                _cn = (c.get("name") or "").strip().lower()
+                if not _cn or _cn not in cleared_names:
+                    continue
+                _prev = c.get("freq_mhz")
+                if _prev is not None:
+                    _cc.record_alternate_mention(c, {
+                        "freq_mhz": float(_prev),
+                        "freq_hz": int(float(_prev) * 1e6),
+                        "role": "withdrawn_not_declared_for_this_pdk",
+                        "source": (c.get("evidence") or {}).get("file"),
+                        "extraction_strategy": c.get("extraction_strategy"),
+                    })
+                c["freq_mhz"] = None
+                c["freq_hz"] = None
+                c["period_ns"] = None
+                c["extraction_strategy"] = "clock_target_not_determined"
+                c["pdk_scoped_target"] = _CLI_PDK
+        if "clock_mhz" in data:
+            data["clock_mhz"] = None
+        data["clock_target_resolution"] = {
+            "status": "NOT_DETERMINED",
+            "pdk": _CLI_PDK,
+            "reason": reason,
+            "rows_found": found,
+        }
+        try:
+            _stamp.dump(path, data)
+            any_updated = True
+        except Exception:
+            continue
+    if any_updated:
+        print(f"[phase1] PDK-SCOPED CLOCK: NOT_DETERMINED for '{_CLI_PDK}' — "
+              + reason)
+    return any_updated
 
 
 def _v1_9_65_post_emit_l8_pdk_scoped_clock(project: Path) -> bool:
@@ -20775,7 +20921,15 @@ def _v1_9_65_post_emit_l8_pdk_scoped_clock(project: Path) -> bool:
     """
     hit = _v1_9_65_pdk_scoped_clock_mhz(project, _CLI_PDK)
     if hit is None:
-        return False
+        # rclk — the row for THIS process is absent. Two silences, and only
+        # one of them is harmless. If the document never speaks in per-process
+        # clock rows, there is nothing to arbitrate and the prose target
+        # stands. But if it DOES declare per-process targets and none of them
+        # is this process's, then the design has not stated a target here —
+        # and another process's target is not a substitute for it. Keeping it
+        # is how a backend closes timing against a period this design never
+        # asked for on this process. Refuse, by name.
+        return _rclk_refuse_foreign_pdk_clock(project)
     mhz, rel, line_no, row_text = hit
     gd = _pl.generated_docs_dir(project)
     if not gd.is_dir():
