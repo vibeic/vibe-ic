@@ -118,6 +118,38 @@ _SEARCH_ATTRS = {"search", "findall", "finditer", "match", "fullmatch"}
 #: The count is printed on every run, clean or not.
 _EXEMPT_REASON_MIN = 80
 _NOT_PROSE: Dict[str, str] = {
+    "phase3_one_shot_runner::_pdk_declared_routing_layers":
+        "Tcl `set ::env(NAME) \"value\"` productions, read out of the PDK's "
+        "OWN shipped librelane/OpenLane flow config to learn the routing "
+        "layer floors that PDK declares for itself. This is machine-written "
+        "Tcl assignment syntax in which there is no form that DENIES a value: "
+        "Tcl gives no way to write `set ::env(RT_MIN_LAYER) is NOT Metal2`. A "
+        "key is assigned or it is unassigned, and unassigned is already how "
+        "this function reports it -- the key simply does not enter `env`, the "
+        "field does not enter the returned map, and the empty map is the LOUD "
+        "outcome that makes the caller keep the floor it derived. The one "
+        "sub-token this parser does drop, a trailing `;# comment` after a bare "
+        "value, is dropped because it is Tcl COMMENT syntax, not because it "
+        "might carry a negation -- and a comment cannot un-assign the "
+        "variable the same line just set. The direct precedent is "
+        "`pdk_via_patch_legalize::_routing_rules` immediately below: the same "
+        "claim, about the same PDK, in the tech LEF's grammar instead of the "
+        "flow config's.",
+    "testbench_gen::package_first_order":
+        "SystemVerilog `package <name>;` declarations and `<name>::` scope "
+        "references, read to compile a package before the package that "
+        "imports it -- `verilator --binary` is single-pass. This is HDL "
+        "declaration grammar in which there is no form that DENIES a "
+        "declaration: SystemVerilog gives no way to write `not package "
+        "pkg_x;`. A package is declared or it is absent, and absent is already "
+        "how the function reports it -- the name never enters `defines` and "
+        "the file is ordered with the non-package files. The ONE construct "
+        "that reads as a denial here is a COMMENT, and that is a lexical "
+        "exclusion rather than a polarity word: it was a real defect, it is "
+        "MEASURED and FIXED in the function itself by `_hdl_code_only`, and "
+        "`test_a_commented_out_package_is_not_a_package.py` holds it there. "
+        "Consulting `_prose_polarity` on `package pkg_x;` would add a branch "
+        "that can never fire, which is a green light rather than a check.",
     "pdk_via_patch_legalize::_routing_rules":
         "Technology-LEF `LAYER <name> ... TYPE ROUTING ; MINWIDTH <n> ; WIDTH "
         "<n> ; AREA <n> ; END <name>` productions, read out of the PDK's own "

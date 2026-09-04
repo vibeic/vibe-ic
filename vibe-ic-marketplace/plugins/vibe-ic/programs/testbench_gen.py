@@ -813,15 +813,74 @@ def is_unit_tb(path: Path) -> bool:
                      text) is not None
 
 
+def _hdl_code_only(src: str) -> str:
+    """`src` with `//` and `/* */` comments blanked, STRING LITERALS INTACT.
+
+    MEASURED, vibe-ic#712 item: a single comment inverted the compile order.
+    `x.sv` really declares `pkg_x`; `y.sv` really declares `pkg_y` and really
+    reads `pkg_x::w`. Adding to x.sv the line
+
+        // historical note: this used to read pkg_y::WIDTH
+
+    made the scanner believe x.sv depends on y.sv, closed a cycle, and dropped
+    both files into the `cycle: keep them` fallback in GIVEN order — emitting
+    `y.sv, x.sv`, which `verilator --binary` cannot compile in one pass. The
+    comment declared nothing and denied nothing, and it decided the order.
+
+    STRINGS ARE PRESERVED DELIBERATELY. The three strippers already in this
+    tree (`arith_ss_corner_risk_check`, `cdc_async_input_check`,
+    `clock_domain_reg_crossing_check`) all treat `//` inside a string literal
+    as the start of a comment, so a line like
+
+        $display("a//b", pkg_x::VAL);
+
+    would be blanked from the `//` onward and a REAL dependency would be lost.
+    Trading a wrong order for a missing edge is not a fix, so this one tracks
+    the string state. It is local rather than shared for the same reason: the
+    shared copies carry the gap this exists to avoid.
+    """
+    out: List[str] = []
+    i, n = 0, len(src)
+    while i < n:
+        c = src[i]
+        if c == '"':                       # string literal — copied verbatim
+            j = i + 1
+            while j < n and src[j] != '"':
+                if src[j] == "\\" and j + 1 < n:
+                    j += 1                 # \" does not end the literal
+                elif src[j] == "\n":
+                    break                  # unterminated: SV strings are 1-line
+                j += 1
+            out.append(src[i:min(j + 1, n)])
+            i = min(j + 1, n)
+        elif src.startswith("/*", i):
+            end = src.find("*/", i + 2)
+            end = n if end == -1 else end + 2
+            out.append("".join("\n" if ch == "\n" else " " for ch in src[i:end]))
+            i = end
+        elif src.startswith("//", i):
+            end = src.find("\n", i)
+            end = n if end == -1 else end
+            out.append(" " * (end - i))
+            i = end
+        else:
+            out.append(c)
+            i += 1
+    return "".join(out)
+
+
 def package_first_order(files: List[Path]) -> List[Path]:
     """Order sources so a package is compiled before the package that imports
     it — `verilator --binary` is single-pass. Pure `package X;` / `X::` grammar,
-    chip-AGNOSTIC; non-package files keep their given order, after the rest."""
+    chip-AGNOSTIC; non-package files keep their given order, after the rest.
+
+    Comments are blanked first (`_hdl_code_only`): a commented-out declaration
+    is not a declaration and a commented-out `X::` is not a dependency."""
     defines: Dict[str, Path] = {}
     text_of: Dict[Path, str] = {}
     for f in files:
         try:
-            text_of[f] = f.read_text(errors="replace")
+            text_of[f] = _hdl_code_only(f.read_text(errors="replace"))
         except OSError:
             text_of[f] = ""
         for m in re.finditer(r"(?m)^\s*package\s+([A-Za-z_]\w*)\s*;",
