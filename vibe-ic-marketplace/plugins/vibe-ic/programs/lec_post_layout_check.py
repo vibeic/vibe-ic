@@ -241,6 +241,7 @@ def build_yosys_equiv_script(gold_v: str, gate_v: str, lib: str, top: str,
                              blackbox_v: Optional[List[str]] = None,
                              seq_depths: Optional[List[int]] = None,
                              strip_gate_ports: Optional[List[str]] = None,
+                             strip_gold_ports: Optional[List[str]] = None,
                              functional_lib: bool = False,
                              blacklist: Optional[str] = None) -> str:
     """Emit the Yosys .ys that structurally proves gold_v == gate_v.
@@ -265,6 +266,11 @@ def build_yosys_equiv_script(gold_v: str, gate_v: str, lib: str, top: str,
                  the proof depth-adaptive so a retiming/pipeline-equivalent pair
                  proves at the depth matching its latency instead of falsely
                  failing at the shallow default. Sound: deeper only proves more.
+    strip_gold_ports / strip_gate_ports : supply-only unmatched top ports selected
+                 by the caller from the exact two interfaces.  Removing a rail
+                 absent from the other side is necessary because functional
+                 Liberty logic models omit PG pins; functional ports are never
+                 eligible and still make the proof fail closed.
     functional_lib : when True, read the Liberty FUNCTIONALLY (`read_liberty`
                  WITHOUT `-lib`) so equiv proves each cell's FUNCTION instead of
                  assuming matched cells equal — the SOUND path (rejects NAND≢NOR,
@@ -278,14 +284,17 @@ def build_yosys_equiv_script(gold_v: str, gate_v: str, lib: str, top: str,
     engine shape as `eda_lvs mode=yosys_equiv`."""
     bb = "\n".join(_read_blackbox_cmd(q) for q in (blackbox_v or []))
     bb_block = (bb + "\n") if bb else ""
-    # v1.3.93 — the routed gate netlist carries top-level SUPPLY ports (VDD/VSS…
-    # added by PDN insertion) that the pre-PnR synth GOLD reference does not, so
-    # `equiv_make` aborts "Can't match gate port VDD_gate". Delete ONLY those
-    # supply ports from the gate design (they carry no logic; the Liberty cells
-    # are functional models without power pins). NEVER strip a non-supply port —
-    # a functional gate/gold port mismatch is a real defect that must surface.
-    strip = "".join(f"delete {top}/w:{p}\n" for p in (strip_gate_ports or []))
-    strip_block = (strip + "opt_clean\n") if strip else ""
+    # The physical wrapper and routed Verilog can put supply-only ports on
+    # opposite sides (for example the wrapper GOLD declares VDD/VSS while
+    # OpenROAD omits them from GATE). Delete ONLY caller-classified unmatched
+    # supply ports. They carry no logic in the functional Liberty models.
+    # A functional port difference is never stripped and remains a real error.
+    gold_strip = "".join(
+        f"delete {top}/w:{p}\n" for p in (strip_gold_ports or []))
+    gate_strip = "".join(
+        f"delete {top}/w:{p}\n" for p in (strip_gate_ports or []))
+    gold_strip_block = (gold_strip + "opt_clean\n") if gold_strip else ""
+    gate_strip_block = (gate_strip + "opt_clean\n") if gate_strip else ""
     depths = list(seq_depths) if seq_depths else list(DEFAULT_SEQ_DEPTHS)
     # Ascending, de-duplicated, positive; each pass only works the still-unproven
     # cells, so the shallow-first order keeps the common case cheap.
@@ -325,8 +334,10 @@ def build_yosys_equiv_script(gold_v: str, gate_v: str, lib: str, top: str,
                     f"opt_clean -purge\n"
                     f"splitnets -ports\n"
                     f"design -stash {stash}\n")
-        gold_block = _func_side(f"read_verilog -sv {gold_v}", "gold")
-        gate_block = _func_side(f"read_verilog -sv {gate_v}", "gate", strip_block)
+        gold_block = _func_side(
+            f"read_verilog -sv {gold_v}", "gold", gold_strip_block)
+        gate_block = _func_side(
+            f"read_verilog -sv {gate_v}", "gate", gate_strip_block)
         return (
             "# Vibe-IC post-layout LEC — FUNCTIONAL (sound) Liberty cell models.\n"
             f"{gold_block}\n{gate_block}\n"
@@ -348,13 +359,13 @@ def build_yosys_equiv_script(gold_v: str, gate_v: str, lib: str, top: str,
 read_liberty -lib {lib}
 {bb_block}read_verilog -sv {gold_v}
 prep -top {top}
-splitnets -ports
+{gold_strip_block}splitnets -ports
 design -stash gold
 
 read_liberty -lib {lib}
 {bb_block}read_verilog -sv {gate_v}
 prep -top {top}
-{strip_block}splitnets -ports
+{gate_strip_block}splitnets -ports
 design -stash gate
 
 design -copy-from gold -as gold {top}

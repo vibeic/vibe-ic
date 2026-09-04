@@ -43569,8 +43569,23 @@ def _module_port_names(v_text: str, top: str) -> List[str]:
                   v_text, re.S)
     if not m:
         return []
-    return [p.strip().split("[")[0].strip().lstrip("\\")
-            for p in m.group(1).split(",") if p.strip()]
+    names: List[str] = []
+    for raw in m.group(1).split(","):
+        # Accept both non-ANSI ``module t(a, b)`` and ANSI
+        # ``module t(input [31:0] a, inout VDD)`` headers.  The previous
+        # split-at-"[" rule returned the keyword ``input`` for vectors and the
+        # whole string ``inout VDD`` for rails, silently defeating the exact
+        # interface comparison on generated physical wrappers.
+        decl = re.sub(r"/\*.*?\*/", " ", raw, flags=re.S)
+        decl = re.sub(r"//[^\n]*", " ", decl)
+        decl = re.sub(r"\[[^\]]*\]", " ", decl)
+        decl = decl.split("=", 1)[0].strip()
+        if not decl:
+            continue
+        name = decl.split()[-1].lstrip("\\")
+        if name:
+            names.append(name)
+    return names
 
 
 def _is_supply_name(name: str) -> bool:
@@ -43589,6 +43604,99 @@ def _gate_only_supply_ports(gate_v: Path, gold_v: Path, top: str) -> List[str]:
     except OSError:
         return []
     return sorted(p for p in (gate_ports - gold_ports) if _is_supply_name(p))
+
+
+def _gold_only_supply_ports(gate_v: Path, gold_v: Path, top: str) -> List[str]:
+    """SUPPLY-named top ports present on GOLD but absent from routed GATE.
+
+    Physical-wrapper generation can declare explicit rails even when OpenROAD
+    writes a signal-only routed module header.  As on the gate-only arm, a
+    non-supply interface difference is deliberately excluded and must surface
+    as a real equivalence error.
+    """
+    try:
+        gate_ports = set(_module_port_names(gate_v.read_text(errors="ignore"), top))
+        gold_ports = set(_module_port_names(gold_v.read_text(errors="ignore"), top))
+    except OSError:
+        return []
+    return sorted(p for p in (gold_ports - gate_ports) if _is_supply_name(p))
+
+
+def _lec_physical_top_gold(project: Path, logical_top: str,
+                           physical_top: str, core_gold: Path,
+                           out_dir: Path) -> Tuple[Path, Dict[str, Any]]:
+    """Return the exact hierarchy PnR consumed as the post-layout LEC gold.
+
+    A pad-ring flow routes a generated physical wrapper (for example
+    ``chip_top``) around the logical core.  The routed netlist keeps the
+    historical ``<logical>_pnr.v`` filename but its module is the physical
+    top.  Comparing that file as ``logical_top`` is not a hard proof: Yosys
+    stops at hierarchy with "Module '<logical>' not found".  Rebuild the gold
+    hierarchy from the exact PnR-input core plus the exact wrapper recorded by
+    ``io_pad_chip_top_gen``.  No interface is inferred and a missing or
+    contradictory record raises, so an unavailable proof remains a FAIL.
+    """
+    provenance: Dict[str, Any] = {
+        "logical_top": logical_top,
+        "physical_top": physical_top,
+        "core_gold": str(core_gold),
+        "core_gold_sha256": _sha256_file(core_gold),
+        "wrapper": None,
+        "wrapper_sha256": None,
+        "combined_gold": None,
+        "combined_gold_sha256": None,
+    }
+    if physical_top == logical_top:
+        return core_gold, provenance
+
+    rec_path = project / "reports" / "phase3" / "io_pad_chip_top.json"
+    try:
+        rec = json.loads(rec_path.read_text(errors="replace"))
+    except (OSError, ValueError) as exc:
+        raise RuntimeError(
+            f"physical LEC top is {physical_top!r}, but its wrapper record "
+            f"is unreadable: {rec_path}: {exc}") from exc
+    if (rec.get("verdict") != "WROTE"
+            or rec.get("chip_top_module") != physical_top
+            or rec.get("core_module") != logical_top):
+        raise RuntimeError(
+            "physical LEC wrapper identity does not match the routed DEF: "
+            f"record verdict={rec.get('verdict')!r}, "
+            f"chip_top_module={rec.get('chip_top_module')!r}, "
+            f"core_module={rec.get('core_module')!r}; expected "
+            f"{physical_top!r}/{logical_top!r}")
+    rel = rec.get("chip_top_verilog")
+    if not isinstance(rel, str) or not rel:
+        raise RuntimeError("physical LEC wrapper record names no Verilog view")
+    wrapper = (project / rel).resolve()
+    try:
+        wrapper.relative_to(project.resolve())
+    except ValueError as exc:
+        raise RuntimeError(
+            f"physical LEC wrapper escapes the project: {wrapper}") from exc
+    if not wrapper.is_file():
+        raise RuntimeError(f"physical LEC wrapper is absent: {wrapper}")
+    wrapper_text = wrapper.read_text(errors="replace")
+    core_text = core_gold.read_text(errors="replace")
+    if not _module_port_names(wrapper_text, physical_top):
+        raise RuntimeError(
+            f"recorded physical wrapper defines no module {physical_top!r}")
+    if not _module_port_names(core_text, logical_top):
+        raise RuntimeError(
+            f"PnR-input gold defines no module {logical_top!r}")
+
+    out_dir.mkdir(parents=True, exist_ok=True)
+    combined = out_dir / f"lec_post_{physical_top}_gold.v"
+    combined.write_text(core_text + "\n" + wrapper_text)
+    provenance.update({
+        "wrapper": str(wrapper),
+        "wrapper_sha256": _sha256_file(wrapper),
+        "combined_gold": str(combined),
+        "combined_gold_sha256": _sha256_file(combined),
+        "wrapper_record": str(rec_path),
+        "wrapper_record_sha256": _sha256_file(rec_path),
+    })
+    return combined, provenance
 
 
 def lec_post_layout_scope(gate_kind: str, gold_kind: str, top: str) -> str:
@@ -43639,6 +43747,10 @@ def _emit_lec_post_layout(project: Path, top: str, pdk: PdkConfig,
                      "unavailable — skipping.")
         return "SKIP"
     pnr_out = _pl.pnr_dir(project)
+    logical_top = top
+    primary_def = pnr_out / f"{logical_top}.def"
+    physical_top = (_def_reopen_resolution(primary_def).design
+                    if primary_def.is_file() else None) or logical_top
     postroute_timing_repair_out = _pl.postroute_timing_repair_dir(project)
     synth_out = _pl.synth_dir(project)
     # GATE (under test): the FINAL netlist — prefer post-repair, else routed PnR.
@@ -43657,9 +43769,9 @@ def _emit_lec_post_layout(project: Path, top: str, pdk: PdkConfig,
     # prevent, so it is derived from the arm rather than asserted.
     gate = None
     gate_kind = None
-    for cand, kind in ((postroute_timing_repair_out / f"{top}_timing_repaired.v",
+    for cand, kind in ((postroute_timing_repair_out / f"{logical_top}_timing_repaired.v",
                         "postroute_timing_repaired"),
-                       (pnr_out / f"{top}_pnr.v", "pnr_routed")):
+                       (pnr_out / f"{logical_top}_pnr.v", "pnr_routed")):
         if cand.is_file():
             gate = cand
             gate_kind = kind
@@ -43668,7 +43780,9 @@ def _emit_lec_post_layout(project: Path, top: str, pdk: PdkConfig,
         # honest SKIP: no routed/post-route repair netlist -> design not placed-and-routed.
         out_json.parent.mkdir(parents=True, exist_ok=True)
         out_json.write_text(json.dumps({
-            "tool": "yosys-equiv", "top": top, "verdict": "SKIP",
+            "tool": "yosys-equiv", "top": physical_top,
+            "logical_top": logical_top, "physical_top": physical_top,
+            "verdict": "SKIP",
             "skipped": True,
             "skip_reason": "no routed/post-route repair netlist (design not placed-and-routed)",
         }, indent=2) + "\n")
@@ -43686,26 +43800,38 @@ def _emit_lec_post_layout(project: Path, top: str, pdk: PdkConfig,
     # RTL == (step 13) == PnR input == (this gate) == routed with no gap. On a
     # design with no scan chain `pnr_input_netlist` returns `<top>_synth.v` and
     # the selection is unchanged.
-    gold, _gold_note, _gold_is_scan = pnr_input_netlist(project, top)
+    gold, _gold_note, _gold_is_scan = pnr_input_netlist(project, logical_top)
     gold_kind = "post_dft" if _gold_is_scan else "synth"
     if not gold.is_file():
-        gold = synth_out / f"{top}_synth.v"
+        gold = synth_out / f"{logical_top}_synth.v"
         gold_kind = "synth"
     if not gold.is_file():
-        rtl_candidates = [_pl.rtl_dir(project) / f"{top}.v",
-                          _pl.rtl_dir(project) / f"{top}.sv"]
+        rtl_candidates = [_pl.rtl_dir(project) / f"{logical_top}.v",
+                          _pl.rtl_dir(project) / f"{logical_top}.sv"]
         gold = next((c for c in rtl_candidates if c.is_file()), None)
         gold_kind = "rtl"
     if gold is None:
         out_json.parent.mkdir(parents=True, exist_ok=True)
         out_json.write_text(json.dumps({
-            "tool": "yosys-equiv", "top": top, "verdict": "SKIP",
+            "tool": "yosys-equiv", "top": physical_top,
+            "logical_top": logical_top, "physical_top": physical_top,
+            "verdict": "SKIP",
             "skipped": True,
             "skip_reason": "no golden reference (synth netlist / RTL) found",
         }, indent=2) + "\n")
         notes.append("post-layout LEC: SKIP — no golden reference netlist/RTL.")
         return "SKIP"
     notes.append(f"post-layout LEC: gold = {_gold_note}")
+    core_gold = gold
+    gold, physical_gold = _lec_physical_top_gold(
+        project, logical_top, physical_top, core_gold, out_json.parent)
+    if physical_top != logical_top:
+        notes.append(
+            "post-layout LEC: physical top resolved from routed DEF as "
+            f"{physical_top}; gold hierarchy is exact PnR-input "
+            f"{core_gold.name} + recorded wrapper "
+            f"{Path(str(physical_gold['wrapper'])).name}.")
+    top = physical_top
     lib_c = _to_container_path(str(pdk.liberty), container)
     gold_c = _to_container_path(str(gold), container)
     gate_c = _to_container_path(str(gate), container)
@@ -43721,16 +43847,29 @@ def _emit_lec_post_layout(project: Path, top: str, pdk: PdkConfig,
     stub_c = _synthesize_physical_cell_stubs(pdk, top, gate, container,
                                              out_json.parent)
     if stub_c and stub_c not in blackbox:
-        blackbox = blackbox + [stub_c]
+        # `-nooverwrite` means the first blackbox interface wins.  The
+        # netlist-derived stub carries the exact ports used by this routed
+        # artefact; a distribution-wide generic IO stub can be narrower (the
+        # measured gf180 supply pads omit one rail there) and otherwise abort
+        # hierarchy before any equivalence point exists.  The stub generator
+        # already excludes every Liberty-modelled functional cell, so putting
+        # it first cannot replace cell semantics.
+        blackbox = [stub_c] + blackbox
         notes.append("post-layout LEC: synthesized blackbox stubs for "
                      "physical-only LEF cells (no Liberty model).")
-    # v1.3.93 — strip PDN-added supply ports (VDD/VSS…) present on the routed
-    # gate netlist but absent from the synth gold, else equiv_make can't match
-    # the port lists. Supply-named only; a functional mismatch still surfaces.
-    strip_ports = _gate_only_supply_ports(gate, gold, top)
-    if strip_ports:
+    # Normalize only unmatched supply rails on either exact physical-top
+    # interface.  The wrapper GOLD can declare VDD/VSS while OpenROAD emits a
+    # signal-only GATE header, or PDN insertion can create the inverse.  The
+    # Liberty models omit PG pins, so those unmatched rails carry no logic;
+    # every non-supply mismatch remains in the proof and fails closed.
+    strip_gate_ports = _gate_only_supply_ports(gate, gold, top)
+    strip_gold_ports = _gold_only_supply_ports(gate, gold, top)
+    if strip_gate_ports:
         notes.append("post-layout LEC: stripping gate-only supply ports "
-                     f"{','.join(strip_ports)} before equiv_make.")
+                     f"{','.join(strip_gate_ports)} before equiv_make.")
+    if strip_gold_ports:
+        notes.append("post-layout LEC: stripping gold-only supply ports "
+                     f"{','.join(strip_gold_ports)} before equiv_make.")
     out_json.parent.mkdir(parents=True, exist_ok=True)
     ys_path = out_json.parent / f"lec_post_{top}.ys"
     ys_c = _to_container_path(str(ys_path), container)
@@ -43746,7 +43885,8 @@ def _emit_lec_post_layout(project: Path, top: str, pdk: PdkConfig,
         _kw = {"blacklist": blacklist_c} if blacklist_c else {}
         ys = mod.build_yosys_equiv_script(gold_c, gate_c, lib_c, top,
                                           blackbox_v=blackbox,
-                                          strip_gate_ports=strip_ports,
+                                          strip_gate_ports=strip_gate_ports,
+                                          strip_gold_ports=strip_gold_ports,
                                           functional_lib=functional_lib,
                                           **_kw)
         ys_path.write_text(ys)
@@ -43892,10 +44032,18 @@ def _emit_lec_post_layout(project: Path, top: str, pdk: PdkConfig,
     doc = {
         "tool": "yosys-equiv",
         "top": top,
+        "logical_top": logical_top,
+        "physical_top": physical_top,
         "gold": str(gold), "gold_kind": gold_kind,
+        "gold_core": str(core_gold),
+        "physical_gold_provenance": physical_gold,
         "gold_provenance": _gold_note,
         "gate": str(gate),
         "blackbox_verilog": blackbox,
+        "stripped_unmatched_supply_ports": {
+            "gold": strip_gold_ports,
+            "gate": strip_gate_ports,
+        },
         "proven_points": parsed.get("proven"),
         "unproven_points": parsed.get("unproven"),
         "total_points": parsed.get("total"),
@@ -43915,7 +44063,7 @@ def _emit_lec_post_layout(project: Path, top: str, pdk: PdkConfig,
         # WHICH netlist this record is about, as a field a machine can read
         # instead of a path a reader has to recognise.
         "gate_kind": gate_kind,
-        "scope": lec_post_layout_scope(gate_kind, gold_kind, top),
+        "scope": lec_post_layout_scope(gate_kind, gold_kind, logical_top),
         # None when the first pass did not leave UNPROVEN points; otherwise
         # the classification and, when it ran, the re-proof record.
         "pin_permutation_reproof": pin_perm,
