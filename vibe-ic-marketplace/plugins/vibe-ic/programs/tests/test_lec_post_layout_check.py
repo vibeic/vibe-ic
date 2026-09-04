@@ -94,6 +94,65 @@ def test_functional_recipe_strips_gate_supply_ports():
     assert ys.index("delete top/w:VDD") < ys.index("equiv_make gold gate equiv")
 
 
+@pytest.mark.parametrize("functional", [True, False])
+def test_recipe_reads_exact_extra_liberty_and_constrains_each_arm(functional):
+    ys = L.build_yosys_equiv_script(
+        "gold.v", "gate.v", "std.lib", "top",
+        extra_libs=["io.lib"], functional_lib=functional,
+        constant_gold_wires={"VDD": 1, "VSS": 0},
+        constant_gate_wires={"VDD": 1, "VSS": 0})
+    option = "" if functional else "-lib "
+    assert ys.count(f"read_liberty {option}std.lib") == 2
+    assert ys.count(f"read_liberty {option}io.lib") == 2
+    gold_half, gate_half = ys.split("design -stash gold", 1)
+    for half in (gold_half, gate_half):
+        assert "connect -set VDD 1'b1" in half
+        assert "connect -set VSS 1'b0" in half
+        assert half.index("connect -set VDD") < half.index("opt")
+
+
+def test_recipe_refuses_non_boolean_supply_constant():
+    with pytest.raises(ValueError, match="non-Boolean"):
+        L.build_yosys_equiv_script(
+            "gold.v", "gate.v", "std.lib", "top",
+            constant_gate_wires={"VDD": 2})
+
+
+def test_restore_named_instance_connections_adds_only_requested_pins_and_wires():
+    src = """module chip_top(input a, output y);
+  PAD u_pad (
+    .PAD(a),
+    .Y(y)
+  );
+endmodule
+"""
+    out, stats = L.restore_named_instance_connections(
+        src, "chip_top", [("u_pad", "OE", "VDD"),
+                           ("u_pad", "PU", "VSS")],
+        internal_wires=["VDD", "VSS"])
+    assert "wire VDD;" in out and "wire VSS;" in out
+    assert ".OE(VDD)" in out and ".PU(VSS)" in out
+    assert ".PAD(a)" in out and ".Y(y)" in out
+    assert stats["requested"] == 2 and stats["restored"] == 2
+    again, stats2 = L.restore_named_instance_connections(
+        out, "chip_top", [("u_pad", "OE", "VDD"),
+                           ("u_pad", "PU", "VSS")],
+        internal_wires=["VDD", "VSS"])
+    assert again == out
+    assert stats2["already_present"] == 2 and stats2["restored"] == 0
+
+
+def test_restore_named_instance_connections_refuses_conflict_and_missing_instance():
+    src = ("module chip_top(input a, output y); "
+           "PAD u_pad(.PAD(a), .Y(y), .OE(VSS)); endmodule\n")
+    with pytest.raises(ValueError, match="does not equal DEF-proven"):
+        L.restore_named_instance_connections(
+            src, "chip_top", [("u_pad", "OE", "VDD")])
+    with pytest.raises(ValueError, match="found 0"):
+        L.restore_named_instance_connections(
+            src, "chip_top", [("u_absent", "OE", "VDD")])
+
+
 def test_blackbox_recipe_is_the_default_and_unchanged():
     # functional_lib defaults False → the always-available (-lib) recipe, byte-
     # for-byte the pre-functional script (guards the proven path from drift).

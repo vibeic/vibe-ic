@@ -93,6 +93,69 @@ def test_gold_only_supply_ports_are_symmetric_and_functional_ports_stay(tmp_path
         "clk", "VDD", "VSS", "debug", "y"]
 
 
+def _aux_normalization_fixture(tmp_path: Path):
+    gate = tmp_path / "phase3/stage3/pnr/core_pnr.v"
+    gate.parent.mkdir(parents=True, exist_ok=True)
+    gate.write_text(
+        "module chip_top(input a, output y); "
+        "PAD u_pad(.PAD(a), .Y(y)); endmodule\n")
+    final_def = gate.parent / "core.def"
+    final_def.write_text("""VERSION 5.8 ;
+DESIGN chip_top ;
+SPECIALNETS 2 ;
+- VDD ( u_pad OE ) + USE POWER ;
+- VSS ( u_pad PU ) + USE GROUND ;
+END SPECIALNETS
+END DESIGN
+""")
+    report = tmp_path / "reports/phase3/io_pad_chip_top.json"
+    report.parent.mkdir(parents=True, exist_ok=True)
+    report.write_text(json.dumps({
+        "verdict": "WROTE", "chip_top_module": "chip_top",
+        "power_pad_plan": {
+            "domain_topology": "single_domain",
+            "power_net": "VDD", "ground_net": "VSS"},
+        "aux_pin_rail_connections": [
+            {"instance": "u_pad", "pin": "OE", "rail": "VDD", "level": 1},
+            {"instance": "u_pad", "pin": "PU", "rail": "VSS", "level": 0},
+        ],
+    }))
+    return gate, final_def, report
+
+
+def test_aux_control_restoration_requires_record_and_exact_def_specialnet(tmp_path):
+    gate, final_def, _report = _aux_normalization_fixture(tmp_path)
+    out, provenance, constants = R._lec_restore_aux_connections(
+        tmp_path, "chip_top", gate, final_def,
+        tmp_path / "reports/phase3", L)
+    assert ".OE(VDD)" in out.read_text() and ".PU(VSS)" in out.read_text()
+    assert provenance["connections"] == 2
+    assert provenance["method"] == (
+        "producer-declared and final-DEF-SPECIALNET-proven")
+    assert constants == {"VDD": 1, "VSS": 0}
+    assert R._def_specialnet_iterm_map(final_def.read_text()) == {
+        ("u_pad", "OE"): "VDD", ("u_pad", "PU"): "VSS"}
+
+
+def test_aux_control_restoration_refuses_old_record_and_wrong_def_rail(tmp_path):
+    gate, final_def, report = _aux_normalization_fixture(tmp_path)
+    doc = json.loads(report.read_text())
+    doc.pop("aux_pin_rail_connections")
+    report.write_text(json.dumps(doc))
+    with pytest.raises(RuntimeError, match="old tie decisions"):
+        R._lec_restore_aux_connections(
+            tmp_path, "chip_top", gate, final_def,
+            tmp_path / "reports/phase3", L)
+
+    _gate, final_def, report = _aux_normalization_fixture(tmp_path)
+    final_def.write_text(final_def.read_text().replace(
+        "- VDD ( u_pad OE )", "- VSS2 ( u_pad OE )"))
+    with pytest.raises(RuntimeError, match="does not prove u_pad/OE"):
+        R._lec_restore_aux_connections(
+            tmp_path, "chip_top", gate, final_def,
+            tmp_path / "reports/phase3", L)
+
+
 @pytest.mark.parametrize("functional", [True, False])
 def test_gold_supply_strip_is_confined_to_gold_half(functional):
     ys = L.build_yosys_equiv_script(

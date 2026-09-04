@@ -43699,6 +43699,140 @@ def _lec_physical_top_gold(project: Path, logical_top: str,
     return combined, provenance
 
 
+def _def_specialnet_iterm_map(def_text: str) -> Dict[Tuple[str, str], str]:
+    """Return exact ``(instance, pin) -> special-net`` connectivity.
+
+    Only terminal tuples in the final DEF ``SPECIALNETS`` section are
+    authoritative here.  Route coordinate tuples are numeric and discarded;
+    top-level ``PIN`` and wildcard ``*`` tuples are not instance terminals.
+    A terminal named on two rails is contradictory and refuses instead of
+    allowing the later LEC normalization to choose one.
+    """
+    start = re.search(r"^\s*SPECIALNETS\b[^;]*;", def_text, re.MULTILINE)
+    if not start:
+        raise RuntimeError("final DEF has no SPECIALNETS section")
+    end = re.search(r"^\s*END\s+SPECIALNETS\b", def_text[start.end():],
+                    re.MULTILINE)
+    if not end:
+        raise RuntimeError("final DEF SPECIALNETS section is unterminated")
+    section = def_text[start.end():start.end() + end.start()]
+    entries = list(re.finditer(
+        r"^\s*-\s+(?P<net>\S+)\s+(?P<body>.*?);",
+        section, re.MULTILINE | re.DOTALL))
+    if not entries:
+        raise RuntimeError("final DEF SPECIALNETS section has no net entries")
+    out: Dict[Tuple[str, str], str] = {}
+    for entry in entries:
+        net = entry.group("net")
+        for inst, pin in re.findall(r"\(\s+(\S+)\s+(\S+)\s*\)",
+                                    entry.group("body")):
+            if inst.upper() == "PIN" or inst == "*":
+                continue
+            # Routed coordinates and mask tuples are numbers, not iterms.
+            if re.fullmatch(r"[-+]?\d+(?:\.\d+)?", inst):
+                continue
+            key = (inst, pin)
+            if key in out and out[key] != net:
+                raise RuntimeError(
+                    f"final DEF assigns {inst}/{pin} to both "
+                    f"{out[key]!r} and {net!r}")
+            out[key] = net
+    return out
+
+
+def _lec_restore_aux_connections(project: Path, physical_top: str,
+                                 gate: Path, final_def: Path, out_dir: Path,
+                                 mod: Any,
+                                 ) -> Tuple[Path, Dict[str, Any], Dict[str, int]]:
+    """Restore only producer-declared, final-DEF-proven IO control rails.
+
+    OpenROAD's signal-only ``write_verilog`` omits POWER/GROUND nets, including
+    IO control pins deliberately tied to those rails.  That is a serialization
+    loss, not a floating design.  The generated wrapper record states every
+    auxiliary control's required Boolean level and rail; the final DEF must
+    independently show the exact same instance/pin on that exact SPECIALNET.
+    Only then is a proof-only gate netlist written with those named connections.
+
+    Old records that merely chose tie values but never connected the pins are
+    refused.  Missing, ambiguous or contradictory DEF evidence is also refused.
+    No design, DEF, GDS or producer netlist is modified.
+    """
+    rec_path = project / "reports" / "phase3" / "io_pad_chip_top.json"
+    try:
+        rec = json.loads(rec_path.read_text(errors="replace"))
+    except (OSError, ValueError) as exc:
+        raise RuntimeError(
+            f"cannot restore physical-wrapper rail controls without its "
+            f"producer record: {rec_path}: {exc}") from exc
+    if rec.get("verdict") != "WROTE" or rec.get("chip_top_module") != physical_top:
+        raise RuntimeError(
+            "IO-control restoration record does not match physical top "
+            f"{physical_top!r}")
+    plan = rec.get("power_pad_plan")
+    if not isinstance(plan, dict) or plan.get("domain_topology") != "single_domain":
+        raise RuntimeError(
+            "IO-control restoration requires a producer-owned single-domain "
+            "power_pad_plan")
+    power = plan.get("power_net")
+    ground = plan.get("ground_net")
+    if not isinstance(power, str) or not power or not isinstance(ground, str) \
+            or not ground or power == ground:
+        raise RuntimeError("power_pad_plan has no distinct power/ground rails")
+    raw = rec.get("aux_pin_rail_connections")
+    if not isinstance(raw, list) or not raw:
+        raise RuntimeError(
+            "physical-wrapper record has no aux_pin_rail_connections; old "
+            "tie decisions without connected pins cannot be normalized")
+    try:
+        def_text = final_def.read_text(errors="replace")
+        gate_text = gate.read_text(errors="replace")
+    except OSError as exc:
+        raise RuntimeError(f"LEC normalization input unreadable: {exc}") from exc
+    observed = _def_specialnet_iterm_map(def_text)
+    connections: List[Tuple[str, str, str]] = []
+    for index, item in enumerate(raw):
+        if not isinstance(item, dict):
+            raise RuntimeError(
+                f"aux_pin_rail_connections[{index}] is not an object")
+        inst, pin, rail, level = (item.get("instance"), item.get("pin"),
+                                  item.get("rail"), item.get("level"))
+        if not all(isinstance(value, str) and value
+                   for value in (inst, pin, rail)) or level not in (0, 1):
+            raise RuntimeError(
+                f"aux_pin_rail_connections[{index}] is incomplete/non-Boolean")
+        expected = power if int(level) == 1 else ground
+        if rail != expected:
+            raise RuntimeError(
+                f"producer record contradicts its rail plan for {inst}/{pin}: "
+                f"level {level} requires {expected!r}, records {rail!r}")
+        actual = observed.get((inst, pin))
+        if actual != rail:
+            raise RuntimeError(
+                f"final DEF does not prove {inst}/{pin} on {rail!r}; "
+                f"observed {actual!r}")
+        connections.append((inst, pin, rail))
+    normalized, stats = mod.restore_named_instance_connections(
+        gate_text, physical_top, connections, internal_wires=[power, ground])
+    out_dir.mkdir(parents=True, exist_ok=True)
+    out = out_dir / f"lec_post_{physical_top}_gate_power_complete.v"
+    out.write_text(normalized)
+    provenance: Dict[str, Any] = {
+        "method": "producer-declared and final-DEF-SPECIALNET-proven",
+        "source_gate": str(gate),
+        "source_gate_sha256": _sha256_file(gate),
+        "final_def": str(final_def),
+        "final_def_sha256": _sha256_file(final_def),
+        "wrapper_record": str(rec_path),
+        "wrapper_record_sha256": _sha256_file(rec_path),
+        "normalized_gate": str(out),
+        "normalized_gate_sha256": _sha256_file(out),
+        "connections": len(connections),
+        "stats": stats,
+        "rails": {"power": power, "ground": ground},
+    }
+    return out, provenance, {power: 1, ground: 0}
+
+
 def lec_post_layout_scope(gate_kind: str, gold_kind: str, top: str) -> str:
     """The scope sentence for a post-layout LEC record, DERIVED from the arm.
 
@@ -43832,7 +43966,30 @@ def _emit_lec_post_layout(project: Path, top: str, pdk: PdkConfig,
             f"{core_gold.name} + recorded wrapper "
             f"{Path(str(physical_gold['wrapper'])).name}.")
     top = physical_top
+    gate_original = gate
+    gate_power_normalization: Optional[Dict[str, Any]] = None
+    supply_constant_assumptions: Dict[str, int] = {}
+    if physical_top != logical_top:
+        # The physical wrapper's IO controls are deliberately tied to rails.
+        # OpenROAD's default writer elides those POWER/GROUND connections from
+        # Verilog, so recover them only from the producer record AND the exact
+        # final DEF.  Any old/floating or contradictory design refuses here.
+        gate, gate_power_normalization, supply_constant_assumptions = (
+            _lec_restore_aux_connections(
+                project, physical_top, gate, primary_def, out_json.parent, mod))
+        notes.append(
+            "post-layout LEC: restored "
+            f"{gate_power_normalization['connections']} IO control-to-rail "
+            "connections from matching producer + final DEF evidence.")
     lib_c = _to_container_path(str(pdk.liberty), container)
+    extra_liberties_host = [
+        str(value) for value in _sta_extra_liberties(project, pdk, pdk.liberty)
+        if str(value) != str(pdk.liberty)]
+    extra_liberties_c: List[str] = []
+    for value in extra_liberties_host:
+        translated = _to_container_path(value, container)
+        if translated != lib_c and translated not in extra_liberties_c:
+            extra_liberties_c.append(translated)
     gold_c = _to_container_path(str(gold), container)
     gate_c = _to_container_path(str(gate), container)
     # v?.?.? — scope the PDK blackbox set to the cells these two netlists
@@ -43887,6 +44044,11 @@ def _emit_lec_post_layout(project: Path, top: str, pdk: PdkConfig,
                                           blackbox_v=blackbox,
                                           strip_gate_ports=strip_gate_ports,
                                           strip_gold_ports=strip_gold_ports,
+                                          extra_libs=extra_liberties_c,
+                                          constant_gate_wires=(
+                                              supply_constant_assumptions),
+                                          constant_gold_wires=(
+                                              supply_constant_assumptions),
                                           functional_lib=functional_lib,
                                           **_kw)
         ys_path.write_text(ys)
@@ -43910,7 +44072,9 @@ def _emit_lec_post_layout(project: Path, top: str, pdk: PdkConfig,
     # equivalence OUTCOME can never select the unsound -lib recipe — a §4.05
     # tightening, since that recipe can false-PASS NAND≡NOR.
     _probe_ys = out_json.parent / f"lec_post_{top}_libprobe.ys"
-    _probe_ys.write_text(mod.build_functional_probe_script(lib_c))
+    _probe_ys.write_text("".join(
+        mod.build_functional_probe_script(value)
+        for value in [lib_c] + extra_liberties_c))
     _probe_rc, _po, _pe = _docker_exec(
         container,
         (f"export PATH={TOOLS_IN_CONTAINER}/yosys/bin:"
@@ -43927,9 +44091,12 @@ def _emit_lec_post_layout(project: Path, top: str, pdk: PdkConfig,
     # detail field — so LEC never ran and the violation was never surfaced.
     _liberty_host_str = str(pdk.liberty) if getattr(pdk, "liberty", None) else ""
     try:
-        _lib_host = Path(_liberty_host_str) if _liberty_host_str else None
-        _lib_exists = bool(_lib_host and _lib_host.is_file())
-        _lib_nonempty = bool(_lib_exists and _lib_host.stat().st_size > 0)
+        _lib_hosts = ([Path(_liberty_host_str)] if _liberty_host_str else [])
+        _lib_hosts.extend(Path(value) for value in extra_liberties_host)
+        _lib_exists = bool(_lib_hosts) and all(path.is_file()
+                                               for path in _lib_hosts)
+        _lib_nonempty = bool(_lib_exists) and all(
+            path.stat().st_size > 0 for path in _lib_hosts)
     except OSError:
         _lib_exists = _lib_nonempty = False
     _func_ok, _func_reason = mod.functional_read_liberty_supported(
@@ -44039,6 +44206,10 @@ def _emit_lec_post_layout(project: Path, top: str, pdk: PdkConfig,
         "physical_gold_provenance": physical_gold,
         "gold_provenance": _gold_note,
         "gate": str(gate),
+        "gate_original": str(gate_original),
+        "gate_power_normalization": gate_power_normalization,
+        "extra_liberties": extra_liberties_host,
+        "supply_constant_assumptions": supply_constant_assumptions,
         "blackbox_verilog": blackbox,
         "stripped_unmatched_supply_ports": {
             "gold": strip_gold_ports,
