@@ -179,7 +179,6 @@ def test_base_pnr_signoff_domain_owns_residual_fanout_repair_before_reroute():
     sdr_source = inspect.getsource(R._v1_8_100_signoff_drv_repair_tcl)
     assert "sdr_fanout_root_candidates.rpt" in sdr_source
     assert "repair_after_insert=False" in sdr_source
-    assert "balance_driver=True" in sdr_source
     tcl = R._v1_8_100_signoff_drv_repair_tcl("/pnr", "pdk_buf")
     root = tcl.index("sdr_fanout_root_candidates.rpt")
     assert root < tcl.index(
@@ -201,15 +200,10 @@ def test_signoff_repair_extra_liberty_empty_and_duplicate_are_noops():
 
 def test_signoff_repair_targets_only_tool_reported_fanout_violators():
     tcl = R._ship_max_fanout_root_repair_tcl("pdk_derived_clkbuf")
-    balanced = R._ship_max_fanout_root_repair_tcl(
-        "pdk_derived_clkbuf", balance_driver=True)
     assert "report_check_types -max_fanout -violators" in tcl
     assert "insert_buffer -net" in tcl
     assert "-buffer_cell pdk_derived_clkbuf" in tcl
     assert "SHIP_FANOUT_ROOT_LOAD_CENTROID" in tcl
-    assert "if {0 && $_ship_fo_driver_found}" in tcl
-    assert "SHIP_FANOUT_ROOT_DRIVER_LOAD_MIDPOINT" in balanced
-    assert "if {1 && $_ship_fo_driver_found}" in balanced
     assert "{*}$_ship_fo_loc_args" in tcl
     assert "set_max_fanout" not in tcl  # the actuator must not change the gate
 
@@ -222,6 +216,13 @@ def test_signoff_domain_fanout_root_uses_enclosing_repair_and_unique_names():
     assert "_ship_fanout_root_serial" in tcl[root:reroute]
     assert "SHIP_FANOUT_ROOT_RD_NONFATAL" not in tcl[root:reroute]
     assert "insert_buffer -net" in tcl[root:reroute]
+
+
+def test_fanout_roots_prefer_the_pdk_declared_root_master():
+    pnr_source = inspect.getsource(R.step_pnr)
+    signoff_source = inspect.getsource(R.step_signoff_spef_repair)
+    assert "_fanout_root_buffer_cell = clk_buf_root or clk_buf" in pnr_source
+    assert "fanout_root_buffer_cell=pdk.clk_buf_root or pdk.clk_buf" in signoff_source
 
 
 @pytest.mark.skipif(shutil.which("tclsh") is None, reason="tclsh unavailable")

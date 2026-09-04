@@ -22883,8 +22883,7 @@ def _v1_8_100_signoff_drv_repair_tcl(
         + _ship_max_fanout_root_repair_tcl(
             fanout_root_buffer_cell,
             f"{out_dir_c}/sdr_fanout_root_candidates.rpt",
-            repair_after_insert=False,
-            balance_driver=True)
+            repair_after_insert=False)
         # v1.8.100 r2 — MEASURED: without this, closing DRV on the max-RC
         # deck traded the SLOW-corner setup from +1.02 ns to -4.68 ns
         # (iter1). Every repeater the line above inserts adds a stage
@@ -25695,7 +25694,10 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
     # ORGANIC #557 — post-route SPEF EXTRACTION (measure-only; pure helper so it
     # is unit-tested + the emitter/checker drift gate applies). Runs BEFORE
     # write_def so it MUST NOT modify the design.
-    _fanout_root_buffer_cell = clk_buf or clk_buf_root
+    # This helper inserts the first stage directly below a constrained source;
+    # use the PDK's declared ROOT master when one exists.  Falling back to the
+    # ordinary CTS buffer preserves PDKs that expose only a single legal cell.
+    _fanout_root_buffer_cell = clk_buf_root or clk_buf
     spef_repair_block = _post_route_spef_repair_tcl(
         out_dir_c, tech_lef_c, cell_lef_c,
         fork_repair_capable=_fork_repair_capable,
@@ -29594,8 +29596,7 @@ def _ship_postroute_convergence_tcl(max_captable_c: str, pnr_dir_c: str,
 
 def _ship_max_fanout_root_repair_tcl(
         buffer_cell: Optional[str], report_path: str = "/tmp/vibeic_fanout_root.rpt",
-        repair_after_insert: bool = True,
-        balance_driver: bool = False
+        repair_after_insert: bool = True
         ) -> str:
     """Insert one PDK-derived root buffer after each residual fanout violator.
 
@@ -29609,25 +29610,19 @@ def _ship_max_fanout_root_repair_tcl(
     a final ordinary ``repair_design`` pass remains responsible for everything
     below it.
 
-    The conservative insertion point is the centroid of the net's input loads,
-    derived from their placed pin boxes.  The caller may request a point halfway
-    between that centroid and the physical driver pin with ``balance_driver``.
-    These distinct policies matter on a pad-ring design:
+    The insertion point is the physical centroid of the net's input loads,
+    derived from their placed pin boxes.  This matters on a pad-ring design:
     OpenROAD's unconstrained insertion point is near the pad driver, which can
     be inside the pad keep-out beyond the last tap column.  Measured on spm x
     gf180mcuD run8, eight such roots landed at the top/right untapped fringe
     and one at the left fringe, producing 7 DF.13_MV + 12 DF.14_MV findings
-    and one isolated root-well LVS fragment.  The load centroid alone moved
-    every root fully to the logic cluster and fixed those wells.  In the base
-    signoff-domain repair, however, its long pad-to-root segment required a
-    later diode; that second timing load reopened max-fanout=1 on the pad.  That
-    base caller therefore requests the driver/load midpoint to bound both wire
-    segments.  A promoted late real-SPEF candidate keeps the conservative load
-    centroid: run12 measured three such midpoint roots at the top/right untapped
-    fringe and 18 new DF well/tap findings.  ``detailed_placement`` remains the
-    sole legalizer.  If a requested driver box is unavailable, load centroid is
-    the fail-safe.  If physical boxes are unavailable the location calculation
-    is reported and the existing unconstrained actuator is retained.
+    and one isolated root-well LVS fragment.  A load-centroid seed keeps the
+    root with the placed logic it drives; detailed_placement remains the sole
+    legalizer.  The master is the active PDK's declared root buffer when
+    available, not its ordinary CTS branch buffer: the larger declared root
+    is the library-owned actuator for the long source segment.  If physical
+    boxes are unavailable the location calculation is reported and the
+    existing unconstrained actuator is retained.
 
     The cell is supplied by the active PDK's registry/Liberty-derived CTS
     selection.  No design, pad, library-family, or PDK name is embedded here.
@@ -29703,20 +29698,10 @@ def _ship_max_fanout_root_repair_tcl(
         "      set _ship_fo_db_net [$_ship_fo_block findNet $_ship_fo_net_name]\n"
         "      if {$_ship_fo_db_net eq \"NULL\"} { error \"OpenDB net not found\" }\n"
         "      set _ship_fo_sx 0.0; set _ship_fo_sy 0.0; set _ship_fo_nload 0\n"
-        "      set _ship_fo_driver_found 0\n"
-        "      set _ship_fo_dx 0.0; set _ship_fo_dy 0.0\n"
         "      foreach _ship_fo_it [$_ship_fo_db_net getITerms] {\n"
-        "        set _ship_fo_io [[$_ship_fo_it getMTerm] getIoType]\n"
+        "        if {[[$_ship_fo_it getMTerm] getIoType] ne \"INPUT\"} { "
+        "continue }\n"
         "        set _ship_fo_bb [$_ship_fo_it getBBox]\n"
-        "        if {$_ship_fo_io eq \"OUTPUT\"} {\n"
-        "          set _ship_fo_dx [expr {double([$_ship_fo_bb xMin] + "
-        "[$_ship_fo_bb xMax]) / 2.0}]\n"
-        "          set _ship_fo_dy [expr {double([$_ship_fo_bb yMin] + "
-        "[$_ship_fo_bb yMax]) / 2.0}]\n"
-        "          set _ship_fo_driver_found 1\n"
-        "          continue\n"
-        "        }\n"
-        "        if {$_ship_fo_io ne \"INPUT\"} { continue }\n"
         "        set _ship_fo_sx [expr {$_ship_fo_sx + "
         "double([$_ship_fo_bb xMin] + [$_ship_fo_bb xMax]) / 2.0}]\n"
         "        set _ship_fo_sy [expr {$_ship_fo_sy + "
@@ -29724,28 +29709,14 @@ def _ship_max_fanout_root_repair_tcl(
         "        incr _ship_fo_nload\n"
         "      }\n"
         "      if {$_ship_fo_nload > 0 && $_ship_fo_dbu > 0} {\n"
-        "        set _ship_fo_lx [expr {$_ship_fo_sx / $_ship_fo_nload}]\n"
-        "        set _ship_fo_ly [expr {$_ship_fo_sy / $_ship_fo_nload}]\n"
-        f"        if {{{1 if balance_driver else 0} && "
-        "$_ship_fo_driver_found} {\n"
-        "          set _ship_fo_px [expr {($_ship_fo_dx + $_ship_fo_lx) / 2.0}]\n"
-        "          set _ship_fo_py [expr {($_ship_fo_dy + $_ship_fo_ly) / 2.0}]\n"
-        "        } else {\n"
-        "          set _ship_fo_px $_ship_fo_lx; set _ship_fo_py $_ship_fo_ly\n"
-        "        }\n"
-        "        set _ship_fo_x [expr {$_ship_fo_px / double($_ship_fo_dbu)}]\n"
-        "        set _ship_fo_y [expr {$_ship_fo_py / double($_ship_fo_dbu)}]\n"
+        "        set _ship_fo_x [expr {$_ship_fo_sx / $_ship_fo_nload / "
+        "double($_ship_fo_dbu)}]\n"
+        "        set _ship_fo_y [expr {$_ship_fo_sy / $_ship_fo_nload / "
+        "double($_ship_fo_dbu)}]\n"
         "        set _ship_fo_loc_args [list -location "
         "[list $_ship_fo_x $_ship_fo_y]]\n"
-        f"        if {{{1 if balance_driver else 0} && "
-        "$_ship_fo_driver_found} {\n"
-        "          puts \"SHIP_FANOUT_ROOT_DRIVER_LOAD_MIDPOINT: "
-        "pin=$_ship_fo_pin loads=$_ship_fo_nload "
-        "location=${_ship_fo_x},${_ship_fo_y}\"\n"
-        "        } else {\n"
-        "          puts \"SHIP_FANOUT_ROOT_LOAD_CENTROID: pin=$_ship_fo_pin "
+        "        puts \"SHIP_FANOUT_ROOT_LOAD_CENTROID: pin=$_ship_fo_pin "
         "loads=$_ship_fo_nload location=${_ship_fo_x},${_ship_fo_y}\"\n"
-        "        }\n"
         "      }\n"
         "    } _ship_fo_loc_err]} {\n"
         "      set _ship_fo_loc_args {}\n"
@@ -30502,7 +30473,7 @@ def step_signoff_spef_repair(project: Path, top: str, pdk: "PdkConfig",
         filler_masters=_filler_masters_for_pdk(pdk),
         extra_lefs_c=_def_reopen_extra_lefs_c(routed, pdk, container),
         extra_liberties_c=extra_liberties_c,
-        fanout_root_buffer_cell=pdk.clk_buf or pdk.clk_buf_root,
+        fanout_root_buffer_cell=pdk.clk_buf_root or pdk.clk_buf,
         slot_pinned_core=_repair_slot is not None,
         design_declared_die=_repair_declared_die,
         sparse_active_row_fill=bool(
