@@ -7200,13 +7200,14 @@ def _load_sparse_die_skip(project: Path) -> Optional[Dict[str, Any]]:
 
 def _build_sparse_die_aware_filler_tcl(filler_masters: List[str],
                                        slot_pinned_core: bool = False,
-                                       design_declared_die: bool = False
+                                       design_declared_die: bool = False,
+                                       sparse_active_row_fill: bool = False
                                        ) -> str:
-    """Return a Tcl block that runs `filler_placement {<masters>}` ONLY
-    when post-place CORE utilization ≥ the sparse-die threshold; otherwise
-    SKIP the full-die decap/fill tiling (emitting a SPARSE_DIE_FILL_SKIPPED
-    note with the measured utilization). Pure, chip-AGNOSTIC — the masters
-    are the only chip-specific input and they come from the PDK config.
+    """Return a Tcl block that runs `filler_placement {<masters>}` when
+    post-place CORE utilization ≥ the sparse-die threshold.  Below it, either
+    skip full-die tiling or, for an explicitly identified fixed pad wrapper,
+    retain device-free spacers only on structurally occupied rows.  Pure,
+    chip-AGNOSTIC — the masters and floorplan facts come from PDK/design data.
 
     Utilization is measured from odb (sum of CORE-class instance master
     areas / die-block core area) so it does not depend on parsing
@@ -7222,6 +7223,9 @@ def _build_sparse_die_aware_filler_tcl(filler_masters: List[str],
     spacers = _spacer_masters_of(filler_masters)
     spacers_tcl = " ".join(spacers)
     thr = _sparse_die_fill_threshold_pct()
+    use_active_row_fill = bool(
+        sparse_active_row_fill and spacers
+        and not slot_pinned_core and not design_declared_die)
     # === fix 2's precondition — A SLOT-PINNED CORE IS NOT AN EMPTY WRAPPER ===
     # #684 guards against tiling silicon that is not the design's placeable
     # area: a small design hardened into a much larger MANDATED die, where the
@@ -7297,17 +7301,89 @@ def _build_sparse_die_aware_filler_tcl(filler_masters: List[str],
             "(design-owned placeable area; the decap family is withheld "
             "because the tap prune fired on this die)\"\n"
             "  }\n")
-    else:
+    elif not use_active_row_fill:
         below_arm = (
             "  puts \"SPARSE_DIE_FILL_SKIPPED: core_util=$_sd_fill_util% < "
             f"{thr}% — full-die decap/fill tiling bounded to avoid filling an "
             "empty fixed wrapper (would explode GDS/extraction). Density-fill "
             "for the occupied region is covered by the downstream metal-fill "
             "gate; empty silicon carries no signals needing decoupling.\"\n")
+    else:
+        # A pad ring can structurally mandate a large fixed die while leaving
+        # only a few occupied standard-cell rows in its center.  Skipping all
+        # device-layer fill there leaves the boundaries between logic, tie and
+        # antenna cells exposed; filling every row recreates #684's full-die
+        # explosion.  Derive the occupied rows from the library semantics
+        # instead: a CORE master with at least one non-PG INPUT/OUTPUT/INOUT
+        # MTerm is a functional anchor.  Tap, spacer, filler and decap masters
+        # are therefore excluded without naming any PDK cell.
+        #
+        # `filler_placement` has no row selector, so insert DEVICE-FREE
+        # spacers, then destroy only the newly-created, uniquely-prefixed
+        # instances outside the anchor rows.  The preexisting-name set makes
+        # preservation structural even if a design happened to use our
+        # prefix already.  An empty anchor set is an honest no-op, never a
+        # fallback to full-die fill.
+        below_arm = (
+            "  puts \"SPARSE_DIE_ACTIVE_ROW_FILL: core_util="
+            "$_sd_fill_util% < " + str(thr) + "% — device-free spacers are "
+            "bounded to rows carrying functional CORE anchors.\"\n"
+            "  set _arf_blk [ord::get_db_block]\n"
+            "  array unset _arf_active_y\n"
+            "  array unset _arf_preexisting\n"
+            "  set _arf_original 0\n"
+            "  set _arf_anchors 0\n"
+            "  foreach _arf_inst [$_arf_blk getInsts] {\n"
+            "    incr _arf_original\n"
+            "    set _arf_preexisting([$_arf_inst getName]) 1\n"
+            "    set _arf_master [$_arf_inst getMaster]\n"
+            "    if {![string match \"CORE*\" [$_arf_master getType]]} { continue }\n"
+            "    set _arf_anchor 0\n"
+            "    foreach _arf_mt [$_arf_master getMTerms] {\n"
+            "      set _arf_sig [$_arf_mt getSigType]\n"
+            "      if {$_arf_sig eq \"POWER\" || $_arf_sig eq \"GROUND\"} { continue }\n"
+            "      set _arf_io [$_arf_mt getIoType]\n"
+            "      if {$_arf_io eq \"INPUT\" || $_arf_io eq \"OUTPUT\" || "
+            "$_arf_io eq \"INOUT\"} { set _arf_anchor 1; break }\n"
+            "    }\n"
+            "    if {!$_arf_anchor} { continue }\n"
+            "    set _arf_bb [$_arf_inst getBBox]\n"
+            "    set _arf_active_y([$_arf_bb yMin]) 1\n"
+            "    incr _arf_anchors\n"
+            "  }\n"
+            "  set _arf_rows [array size _arf_active_y]\n"
+            "  set _arf_inserted 0\n"
+            "  set _arf_pruned 0\n"
+            "  if {$_arf_rows == 0} {\n"
+            "    puts \"SPARSE_DIE_ACTIVE_ROW_FILL_EMPTY: no functional CORE anchor row; no filler inserted\"\n"
+            "  } else {\n"
+            f"    filler_placement -prefix VIBEIC_ACTIVE_ROW_FILL_ {{{spacers_tcl}}}\n"
+            "    set _arf_kill {}\n"
+            "    foreach _arf_inst [$_arf_blk getInsts] {\n"
+            "      set _arf_name [$_arf_inst getName]\n"
+            "      if {![string match \"VIBEIC_ACTIVE_ROW_FILL_*\" $_arf_name]} { continue }\n"
+            "      if {[info exists _arf_preexisting($_arf_name)]} { continue }\n"
+            "      incr _arf_inserted\n"
+            "      set _arf_bb [$_arf_inst getBBox]\n"
+            "      if {![info exists _arf_active_y([$_arf_bb yMin])]} {\n"
+            "        lappend _arf_kill $_arf_inst\n"
+            "      }\n"
+            "    }\n"
+            "    foreach _arf_inst $_arf_kill {\n"
+            "      odb::dbInst_destroy $_arf_inst\n"
+            "      incr _arf_pruned\n"
+            "    }\n"
+            "  }\n"
+            "  set _arf_kept [expr {$_arf_inserted - $_arf_pruned}]\n"
+            "  set _arf_after [llength [$_arf_blk getInsts]]\n"
+            "  puts \"SPARSE_DIE_ACTIVE_ROW_FILL_DONE: selector=functional_core_mterm "
+            "active_rows=$_arf_rows anchors=$_arf_anchors original=$_arf_original "
+            "inserted=$_arf_inserted kept=$_arf_kept pruned=$_arf_pruned "
+            "after=$_arf_after\"\n")
     # NOTE: doubled braces because this string is interpolated by the
     # f-string template in _build_pnr_tcl_text (and emitted verbatim by the
     # metal-fill helper, which also uses an f-string).
-    return (
+    measure = (
         "# === #684 sparse-die fill guard — bound full-die fill on a "
         "sparse fixed wrapper ===\n"
         "set _sd_fill_util NA\n"
@@ -7329,17 +7405,33 @@ def _build_sparse_die_aware_filler_tcl(filler_masters: List[str],
         "$_coreA}] }\n"
         "} _sd_err]} {\n"
         "  puts \"SPARSE_DIE_FILL_MEASURE_NONFATAL: $_sd_err\"\n"
-        "}\n"
-        f"if {{$_sd_fill_util ne \"NA\" && $_sd_fill_util < {thr}}} {{\n"
-        + below_arm +
-        "} else {\n"
+        "}\n")
+    full_arm = (
         f"  if {{[catch {{filler_placement {{{masters_tcl}}}}} _fp_err]}} {{\n"
         "    puts \"FILLER_NONFATAL: $_fp_err\"\n"
         "  } else {\n"
         f"    puts \"FILLER_INSERTED: {len(filler_masters)} masters "
         "(core_util=$_sd_fill_util%)\"\n"
-        "  }\n"
-        "}\n")
+        "  }\n")
+    if use_active_row_fill:
+        # Put the normal-util arm first so the generated Tcl's active-row
+        # section is independently inspectable: everything after its marker
+        # is the low-util, device-free implementation and cannot contain a
+        # decap master accidentally inherited from the normal arm.
+        return (
+            measure
+            + f"if {{$_sd_fill_util eq \"NA\" || $_sd_fill_util >= {thr}}} {{\n"
+            + full_arm
+            + "} else {\n"
+            + below_arm
+            + "}\n")
+    return (
+        measure
+        + f"if {{$_sd_fill_util ne \"NA\" && $_sd_fill_util < {thr}}} {{\n"
+        + below_arm
+        + "} else {\n"
+        + full_arm
+        + "}\n")
 
 
 # ── PG global-connect RE-APPLY + audit (post-instance-creation) ──────────────
@@ -25496,7 +25588,9 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
     # fill (util ≥ threshold). chip-AGNOSTIC.
     filler_block = _build_sparse_die_aware_filler_tcl(
         _filler_masters, slot_pinned_core=fp_rect is not None,
-        design_declared_die=bool(_l9_die_note))
+        design_declared_die=bool(_l9_die_note),
+        sparse_active_row_fill=bool(
+            _ring_inset is not None and fp_rect is None and not _l9_die_note))
 
     # PG global-connect RE-APPLY + audit. `global_connect` inside the PDN block
     # runs BEFORE placement, so it can only connect the instances that exist
