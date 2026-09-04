@@ -177,6 +177,22 @@ def test_floorplan_and_building_floors_do_not_fire_rounding():
     assert M.extract(prompt) == []
 
 
+def test_floor_number_is_not_a_rounding_mode():
+    prompt = (
+        "Convert a binary floor number input into a multi-digit BCD "
+        "representation and display the current floor number."
+    )
+    assert M.extract(prompt) == []
+
+
+def test_lint_truncation_is_not_a_rounding_mode():
+    prompt = (
+        "Perform a LINT code review addressing truncation of bits when "
+        "assigning values and width mismatch in assignments."
+    )
+    assert M.extract(prompt) == []
+
+
 def test_floor_rounding_requires_explicit_numeric_context():
     prompts = (
         "Use floor rounding for negative quotients.",
@@ -188,6 +204,18 @@ def test_floor_rounding_requires_explicit_numeric_context():
         modes = {it.get("mode") for it in M.extract(prompt)
                  if it["kind"] == "rounding_mode"}
         assert modes == {"round_floor"}, prompt
+
+
+def test_arithmetic_truncation_requires_explicit_numeric_context():
+    prompts = (
+        "RTZ: Truncate the fractional part without rounding up.",
+        "Rounding truncates.",
+        "Truncation toward zero is required for the quotient.",
+    )
+    for prompt in prompts:
+        modes = {it.get("mode") for it in M.extract(prompt)
+                 if it["kind"] == "rounding_mode"}
+        assert "round_toward_zero" in modes, prompt
 
 
 def test_unstated_division_returns_empty():

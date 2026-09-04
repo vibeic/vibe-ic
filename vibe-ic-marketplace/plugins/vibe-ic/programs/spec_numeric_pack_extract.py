@@ -102,10 +102,15 @@ _MODE_PATTERNS: List[Tuple[str, "re.Pattern[str]"]] = [
         r"\b(round[ \-]?half[ \-]?up|round(?:ed|ing|s)?[ \-]?(?:to[ \-]?)?"
         r"nearest[ \-,]*(?:max\w*[ \-]?magnitude|ties?[ \-]?away|away)|"
         r"nearest[ \-,]*max\w*[ \-]?magnitude|\bRMM\b)", re.I)),
-    # round toward zero / truncate / round-down-magnitude / chop
+    # round toward zero / arithmetic truncation / chop.  Bare ``truncation``
+    # is also a lint diagnosis for accidental width loss, not a named rounding
+    # policy.  Require rounding/fractional/toward-zero context for that word.
     ("round_toward_zero", re.compile(
         r"\b(round(?:ed|ing|s)?[ \-]?(?:toward|towards|to)[ \-]?zero|"
-        r"\bRTZ\b|truncat\w*|\bchop\b)", re.I)),
+        r"\bRTZ\b|(?<=rounding\s)truncat\w*|"
+        r"truncat\w*\s+(?:the\s+)?(?:fractional(?:\s+part)?|fraction|"
+        r"decimal\s+part)|truncat\w*(?:\s+rounding)?\s+"
+        r"(?:toward|towards|to)\s+zero|\bchop\b)", re.I)),
     # ceiling / round toward +inf / round up
     ("round_ceiling", re.compile(
         r"\b(ceil\w*|round(?:ed|ing|s)?[ \-]?(?:toward|towards|to)?[ \-]?"
@@ -118,8 +123,8 @@ _MODE_PATTERNS: List[Tuple[str, "re.Pattern[str]"]] = [
     ("round_floor", re.compile(
         r"\b(floor[ \-]?(?:round\w*|mode|behavior|function|operation)|"
         r"(?:rounding[ \-]?mode(?:\s+is|:)?|use)\s+floor\b|floor\s*\(|"
-        r"floor(?:ed|ing)?\s+(?:the\s+)?(?:value|result|quotient|output|"
-        r"number|operand)\b|"
+        r"(?:floor(?:ed|ing)\s+(?:the\s+)?|floor\s+the\s+)"
+        r"(?:value|result|quotient|output|number|operand)\b|"
         r"round(?:ed|ing|s)?[ \-]?(?:toward|towards|to)?[ \-]?"
         r"(?:negative[ \-]?infinity|-\s*inf\w*|down\b)|\bRDN\b)", re.I)),
     # round away from zero (sign-independent magnitude bump)
