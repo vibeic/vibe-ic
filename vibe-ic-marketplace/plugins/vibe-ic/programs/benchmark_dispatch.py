@@ -947,6 +947,55 @@ def _current_task_material(task: dict) -> tuple[str | None, str | None,
     return prompt_hash, rtl_hash, stated, current_paths
 
 
+def _refresh_program_review_obligations(task: dict) -> bool:
+    """Refresh only the deterministic contract of an unchanged review task.
+
+    ``program_review_obligations`` is derived by Program from the prompt and
+    frozen candidate. A Program upgrade may correct that derivation while a
+    long benchmark run is awaiting AI review. The validator intentionally
+    compares against the current derivation, so leaving the old value in the
+    task creates an impossible state: the task is rejected, but ``--resume``
+    previously had no way to replace the stale Program-owned field.
+
+    Refresh is allowed only when every authority-bearing input is still bound
+    to its original hash and the candidate snapshot is intact. The prior
+    contract is retained in the task for audit. AI verdicts, prompt evidence,
+    tests, and RTL are never changed here; newly added obligations therefore
+    still require coverage and cannot be silently accepted.
+    """
+    if task.get("schema") != _REVIEW_TASK_SCHEMA:
+        return False
+    prompt_hash, rtl_hash, stated, current = _current_task_material(task)
+    if (stated != current
+            or prompt_hash != task.get("prompt_sha256")
+            or rtl_hash != task.get("rtl_sha256")
+            or _validate_candidate_snapshot(
+                task.get("candidate_snapshot") or {},
+                str(task.get("id")))):
+        return False
+    prompt_path = Path(str(task.get("prompt_path") or ""))
+    try:
+        prompt_text = prompt_path.read_text(errors="replace")
+        expected = _program_review_obligation_contract(
+            prompt_text, task.get("candidate_snapshot") or {})
+    except (ImportError, OSError, ValueError):
+        return False
+    prior = task.get("program_review_obligations")
+    if prior == expected:
+        return False
+    refreshes = task.setdefault("program_review_obligation_refreshes", [])
+    if not isinstance(refreshes, list):
+        return False
+    refreshes.append({
+        "schema": "vibeic.benchmark.program_review_obligations_refresh.v1",
+        "basis": "UNCHANGED_HASH_BOUND_PROMPT_AND_CANDIDATE",
+        "prior_contract": prior,
+        "replacement_sha256": expected.get("sha256"),
+    })
+    task["program_review_obligations"] = expected
+    return True
+
+
 def _repair_record_path(run_p: Path, task: dict) -> Path:
     """Stable handoff path for the AI that authors a proven repair."""
     safe = _safe_problem_id(str(task.get("id")))
@@ -3336,6 +3385,15 @@ def _cmd_resume_locked(bench: str, dataset: str, run: str,
         print("ERROR: duplicate problem id in solve report or review worklist",
               file=sys.stderr)
         return 2
+
+    refreshed_obligation_ids = [
+        pid for pid, task in task_by_id.items()
+        if _refresh_program_review_obligations(task)
+    ]
+    if refreshed_obligation_ids:
+        print("  refreshed deterministic review obligations for "
+              f"{len(refreshed_obligation_ids)} unchanged candidate(s): "
+              + ", ".join(refreshed_obligation_ids))
 
     # Old mid-flow runs could route debug/optimization correctly yet skip the
     # canonical Phase-1 provenance pass altogether. Repair that missing

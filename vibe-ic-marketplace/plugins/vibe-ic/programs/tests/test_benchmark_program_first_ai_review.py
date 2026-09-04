@@ -487,6 +487,55 @@ def test_valid_blind_ai_review_is_hash_bound_and_accepted(tmp_path):
         bd._require_program_first_ai_acceptance(run)
 
 
+def test_resume_refreshes_only_program_owned_obligations_for_unchanged_task(
+        tmp_path):
+    run, task, _ = _task(tmp_path)
+    current = copy.deepcopy(task["program_review_obligations"])
+    stale = copy.deepcopy(current)
+    stale["obligation_count"] += 1
+    stale["obligations"].append({
+        "id": "obsolete-program-false-positive",
+        "kind": "analog_converter",
+        "requirement": "obsolete Program-derived obligation",
+        "evidence": "ADC token was formerly over-classified",
+        "coverage_tokens": ["adc"],
+    })
+    stale["sha256"] = "0" * 64
+    task["program_review_obligations"] = stale
+    _solve_report(run, task)
+    _write_review(task, _valid_review(task))
+
+    assert bd._validate_ai_review(task)["status"] == "REJECTED"
+    assert bd.cmd_resume("rtllm", "/unused", str(run)) == 0
+
+    refreshed = bd._read_jsonl(run / bd._REVIEW_WORKLIST)[0]
+    assert refreshed["program_review_obligations"] == current
+    audit = refreshed["program_review_obligation_refreshes"]
+    assert audit == [{
+        "schema": "vibeic.benchmark.program_review_obligations_refresh.v1",
+        "basis": "UNCHANGED_HASH_BOUND_PROMPT_AND_CANDIDATE",
+        "prior_contract": stale,
+        "replacement_sha256": current["sha256"],
+    }]
+    assert json.loads((run / bd._ACCEPTANCE_REPORT).read_text())[
+        "status"] == "COMPLETE"
+
+
+def test_program_obligation_refresh_refuses_changed_prompt_or_candidate(
+        tmp_path):
+    _, prompt_task, _ = _task(tmp_path / "prompt-case")
+    prompt_task["program_review_obligations"] = {"stale": True}
+    Path(prompt_task["prompt_path"]).write_text("changed prompt\n")
+    assert bd._refresh_program_review_obligations(prompt_task) is False
+    assert prompt_task["program_review_obligations"] == {"stale": True}
+
+    _, rtl_task, _ = _task(tmp_path / "rtl-case")
+    rtl_task["program_review_obligations"] = {"stale": True}
+    Path(rtl_task["rtl_paths"][0]).write_text("module changed(); endmodule\n")
+    assert bd._refresh_program_review_obligations(rtl_task) is False
+    assert rtl_task["program_review_obligations"] == {"stale": True}
+
+
 def test_static_ai_pass_is_blocked_without_program_functional_evidence(tmp_path):
     _, task, _ = _task(tmp_path)
     review = _valid_review(task)
