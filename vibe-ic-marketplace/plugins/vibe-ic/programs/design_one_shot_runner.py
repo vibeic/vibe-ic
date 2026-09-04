@@ -5235,6 +5235,26 @@ def step_reset_clock_variant_aliases(project: Path, top: str) -> StepResult:
     _names = [p[2] for p in ports]
     full_plan = _rcv.plan_aliases(_names)
     plan = _rcv.plan_aliases(_names, contract_ports=_contract_ports)
+    # ORGANIC capture — an authoritative COMPLETE interface is binding even
+    # when the caller supplies the real top name directly.  The older L3/L9
+    # guard below covers only ``resolved_via_chip_top``; the explicit-top path
+    # could therefore still lose a documented spelling (for example ``nrst``
+    # -> ``rst_n``).  Require exact set equality between the parsed RTL face and
+    # the authoritative enumeration before suppressing, so an incomplete/stale
+    # contract cannot disable a legitimate alias.  This is pure interface-
+    # contract logic; it knows no benchmark or design identity.  The resolved
+    # path is left to its existing guard below to preserve its evidence detail.
+    try:
+        _auth_ports = _rcv.authoritative_contract_ports(project)
+    except Exception:  # pragma: no cover — defensive
+        _auth_ports = None
+    _rtl_port_face = {str(n).lower() for n in _names}
+    if (not resolved_via_chip_top and full_plan and _auth_ports is not None
+            and _rtl_port_face == {str(n).lower() for n in _auth_ports}):
+        return StepResult(
+            "reset_clock_variant_aliases", "SKIP", time.time() - t0,
+            "authoritative L3/L9 top-port enumeration exactly matches the "
+            "RTL interface; preserving its documented reset/clock spellings")
     # ORGANIC #792 — the RESET renames the #689 contract-suppression dropped (in
     # full_plan, contract-declared, NOT in the suppressed plan) are NOT abandoned.
     # The #689 suppression exists because a hidden TB may bind the design's own
@@ -5265,10 +5285,6 @@ def step_reset_clock_variant_aliases(project: Path, top: str) -> StepResult:
     # free-text prompts (RTLLM/VerilogEval ship no structured L3/L9 →
     # authoritative_contract_ports returns None) → #792 additive kept there.
     if additive_reset_map:
-        try:
-            _auth_ports = _rcv.authoritative_contract_ports(project)
-        except Exception:  # pragma: no cover — defensive
-            _auth_ports = None
         if _auth_ports is not None:
             for _p in list(additive_reset_map):
                 _canon = str(additive_reset_map[_p]).lower()
