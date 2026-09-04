@@ -447,6 +447,42 @@ def test_noleak_l9_guard_518_still_works(tmp_path):
     assert f.read_text() == before
 
 
+def test_explicit_top_still_obeys_authoritative_l9_port_contract(tmp_path):
+    """An explicit runner top must not bypass the exact L9 interface.
+
+    The alias step historically consulted L9 only when it first resolved the
+    author module from the synthetic ``chip_top`` name.  Passing the real top
+    name directly therefore renamed a documented non-canonical reset away,
+    even though L9 already supplied a complete top-port enumeration.
+    """
+    rtl = (
+        "module generic_cdc(\n"
+        "  input src_clk, input dst_clk, input nrst, input req,\n"
+        "  output reg ack\n"
+        ");\n"
+        "always @(posedge dst_clk or negedge nrst)\n"
+        "  if (!nrst) ack <= 1'b0; else ack <= req;\n"
+        "endmodule\n")
+    f = _stage_rtl(tmp_path, rtl, "generic_cdc.sv")
+    gd = tmp_path / "phase1" / "generated_docs"
+    gd.mkdir(parents=True)
+    (gd / "L9_INTEGRATION_SPEC.json").write_text(json.dumps({
+        "top_module": "generic_cdc",
+        "top_ports": [
+            {"name": "src_clk"}, {"name": "dst_clk"},
+            {"name": "nrst"}, {"name": "req"}, {"name": "ack"},
+        ],
+    }))
+    before = f.read_text()
+
+    res = R.step_reset_clock_variant_aliases(tmp_path, "generic_cdc")
+
+    assert res.status == "SKIP", (res.status, res.detail)
+    assert "authoritative" in res.detail.lower()
+    assert f.read_text() == before
+    assert "__rcvar_inner" not in f.read_text()
+
+
 def test_explicit_prompt_interface_does_not_gain_reset_synonym(tmp_path):
     """AI-confirmed public contracts stay exact after Program generation."""
     rtl = (
