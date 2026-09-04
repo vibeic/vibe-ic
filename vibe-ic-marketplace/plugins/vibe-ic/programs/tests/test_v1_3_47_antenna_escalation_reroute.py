@@ -71,6 +71,17 @@ def test_block_uses_tool_native_reroute():
     assert "repair_antennas sky130_fd_sc_hd__diode_2 -iterations 1" in cmds
 
 
+def test_block_prefers_route_jumpers_over_new_timing_loads():
+    """A repair must not add a diode load to an IO pin whose Liberty limit is
+    one; layer jumpers repair antenna ratio without reopening max-fanout."""
+    cmds = _cmd_lines(R._antenna_repair_tcl(_pdk()))
+    repair_lines = [line for line in cmds.splitlines()
+                    if "repair_antennas " in line]
+    assert len(repair_lines) == 2
+    assert all("-jumper_only" in line for line in repair_lines)
+    assert all("-diode_only" not in line for line in repair_lines)
+
+
 def test_block_escalates_ratio_margin():
     """The margin must start at 0 and ESCALATE (over-fix head-room against the
     reroute re-introducing a residual)."""
