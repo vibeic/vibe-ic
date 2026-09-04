@@ -82,7 +82,9 @@ _CONVERTER_TOKEN_RE = re.compile(
     # datasheet that names the topology (without the literal "ADC") still states a
     # converter. chip-AGNOSTIC (generic data-converter vocabulary).
     r"delta[ \-–]?sigma|sigma[ \-–]?delta|SAR|successive[ \-]?approximation|"
-    r"pipelined?(?:\s+(?:ADC|converter))?|dual[ \-]?slope|incremental(?:\s+"
+    # ``pipeline`` alone is ordinary digital-datapath vocabulary.  It names a
+    # converter architecture only when it explicitly modifies ADC/converter.
+    r"pipelined?(?:\s+(?:ADC|converter))|dual[ \-]?slope|incremental(?:\s+"
     r"(?:delta[ \-–]?sigma|converter|ADC))?|delta[ \-–]?sigma\s+modulator)\b",
     re.IGNORECASE)
 
