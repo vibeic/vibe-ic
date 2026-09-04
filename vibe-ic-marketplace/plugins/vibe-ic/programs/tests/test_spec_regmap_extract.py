@@ -14,6 +14,12 @@ sys.path).
 """
 from __future__ import annotations
 
+import importlib.util
+import os
+from pathlib import Path
+import subprocess
+import sys
+
 import spec_regmap_extract as rm
 
 
@@ -86,6 +92,7 @@ def test_positive_inline_offset_lines():
     # evidence is the exact source line
     start = next(i for i in items if i["name"] == "ADDR_START")
     assert "`ADDR_START` (0x00)" in start["evidence"]
+    assert start["coverage_tokens"] == ["ADDR_START", "0x00"]
 
 
 def test_positive_bitfield_column_carves_fields():
@@ -103,6 +110,78 @@ def test_positive_bitfield_column_carves_fields():
     assert regs[0]["offset"] == "0x20"
     assert len(fields) == 2, [f["field_bits"] for f in fields]
     assert {f["field_bits"] for f in fields} == {"[0]", "[31:1]"}
+    assert all(f["name"] in f["coverage_tokens"] for f in fields)
+    assert all(f["offset"] in f["coverage_tokens"] for f in fields)
+    assert all(f["field_bits"] in f["coverage_tokens"] for f in fields)
+
+
+def test_register_coverage_tokens_make_structural_items_coverable():
+    """A structural register item must expose a token a TB can actually name.
+
+    PROGRAMS_UNDER_TEST lets the same behavioural test execute against the
+    parent revision for the required pre-fix negative control.
+    """
+    programs = Path(os.environ.get(
+        "PROGRAMS_UNDER_TEST",
+        Path(__file__).resolve().parents[1]))
+    path = programs / "spec_regmap_extract.py"
+    spec = importlib.util.spec_from_file_location("regmap_subject", path)
+    assert spec is not None and spec.loader is not None
+    subject = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(subject)
+
+    items = subject.extract(
+        "Registers:\n"
+        "- `ALPHA_CTRL` (0x20): write control.\n"
+        "- `BETA_STATUS` (0x24): read status.\n")
+    by_name = {item["name"]: item for item in items}
+    alpha_tokens = by_name["ALPHA_CTRL"].get("coverage_tokens", [])
+    beta_tokens = by_name["BETA_STATUS"].get("coverage_tokens", [])
+    assert alpha_tokens == ["ALPHA_CTRL", "0x20"], alpha_tokens
+    assert beta_tokens == ["BETA_STATUS", "0x24"], beta_tokens
+
+
+def test_named_register_stimulus_closes_strict_coverage(tmp_path):
+    """The downstream blocking gate consumes the extractor's tokens."""
+    programs = Path(os.environ.get(
+        "PROGRAMS_UNDER_TEST",
+        Path(__file__).resolve().parents[1]))
+    prompt = tmp_path / "prompt.md"
+    prompt.write_text(
+        "Register map:\n"
+        "- `ALPHA_CTRL` (0x20): command register.\n"
+        "- `BETA_STATUS` (0x24): status register.\n")
+    tb = tmp_path / "tb.sv"
+    tb.write_text(
+        "module tb;\n"
+        "  localparam [7:0] ALPHA_CTRL = 8'h20;\n"
+        "  localparam [7:0] BETA_STATUS = 8'h24;\n"
+        "  initial $display(\"exercise %h %h\", ALPHA_CTRL, BETA_STATUS);\n"
+        "endmodule\n")
+    result = subprocess.run(
+        [sys.executable, str(programs / "spec_coverage_check.py"),
+         "--prompt", str(prompt), "--tb", str(tb), "--strict"],
+        capture_output=True, text=True, check=False)
+    assert result.returncode == 0, (result.returncode, result.stdout, result.stderr)
+    assert "spec-coverage ok" in result.stdout
+
+
+def test_unexercised_registers_remain_blocking(tmp_path):
+    """Adding usable tokens must not make register coverage vacuous."""
+    programs = Path(os.environ.get(
+        "PROGRAMS_UNDER_TEST",
+        Path(__file__).resolve().parents[1]))
+    prompt = tmp_path / "prompt.md"
+    prompt.write_text("- `ALPHA_CTRL` (0x20): command register.\n")
+    tb = tmp_path / "tb.sv"
+    tb.write_text("module tb; initial $display(\"no register access\"); endmodule\n")
+    result = subprocess.run(
+        [sys.executable, str(programs / "spec_coverage_check.py"),
+         "--prompt", str(prompt), "--tb", str(tb), "--strict"],
+        capture_output=True, text=True, check=False)
+    assert result.returncode == 1, (result.returncode, result.stdout, result.stderr)
+    assert "register `ALPHA_CTRL`" in result.stdout
+    assert "UNCOVERED" in result.stdout
 
 
 # ---------------------------------------------------------------------------
