@@ -404,12 +404,33 @@ def _corpus_partition(disarm=True):
 
 @pytest.mark.skipif(_pc is None, reason="corpus helper unavailable")
 def test_the_intent_side_partition_over_the_published_corpus_does_not_move():
-    """Named root by root, so a rule that widened shows up as an extra name
-    rather than as a count nobody reads."""
+    """Pin the seven subjects and their contradiction across a root move.
+
+    Benchmark-data moved `evaluation/phase1_parity/<name>` to
+    `protocol_parity/<name>`.  The semantic cell identity is the unique leaf,
+    not its storage root; every rejection is also checked against the L1 bytes
+    so this does not turn the leaf set into an exception allowlist.
+    """
     part = _corpus_partition()
-    assert part.get("REJECT", set()) == _CORPUS_REJECTS, (
-        f"the rejection set moved: "
-        f"{sorted(part.get('REJECT', set()) ^ _CORPUS_REJECTS)}")
+    rejected = part.get("REJECT", set())
+    expected_leaves = {Path(rel).name for rel in _CORPUS_REJECTS}
+    rejected_by_leaf = {Path(rel).name: rel for rel in rejected}
+    assert len(rejected_by_leaf) == len(rejected), (
+        f"two rejected roots share one semantic leaf: {sorted(rejected)}")
+    assert set(rejected_by_leaf) == expected_leaves, (
+        f"the rejected subject set moved: "
+        f"{sorted(set(rejected_by_leaf) ^ expected_leaves)}")
+    root = _pc.corpus_tree()
+    assert root is not None
+    for rel in rejected:
+        intent = S.read_package_intent(
+            root / rel / "phase1/generated_docs/L1_DATASHEET.json")
+        assert intent["readable"]
+        assert intent["declares_no_package"] is False
+        assert isinstance(intent["provides"], int)
+        assert isinstance(intent["needs"], int)
+        assert intent["provides"] < intent["needs"], (rel, intent)
+        assert S.intent_self_contradicts(intent)["verdict"] == "REJECT"
     assert not part.get("ACCEPT"), (
         "no published root declares a package big enough for its own pin list; "
         "if one now does, this reader's accept direction has a real subject "

@@ -347,6 +347,20 @@ def _published_cells():
                   if c.is_dir() and G._cell_ordinal(c.name) is not None)
 
 
+def _assert_prefix_coverage_claim_is_current(root, doc):
+    """Require the prose claim to contain the program-derived prefix set."""
+    normalised_doc = " ".join(doc.split())
+    prefixes = G.bracketed_diagnostic_prefixes(root)
+    assert prefixes, "no bracketed ids found at all — the probe is broken"
+    claim = " ".join(prefixes)
+    assert claim in normalised_doc, (
+        f"the prefix coverage sentence drifted. Tree says {list(prefixes)}; "
+        f"put exactly '{claim}' in the docstring. A new prefix means a tool "
+        f"started emitting diagnostics and the coverage claim a reader relies "
+        f"on is now understated.")
+    return prefixes
+
+
 @needs_corpus
 @pytest.mark.skipif(not BD_IC.is_dir(), reason="no benchmark-data/ic in tree")
 def test_the_prefix_coverage_claim_is_re_derived():
@@ -370,20 +384,20 @@ def test_the_prefix_coverage_claim_is_re_derived():
     # spans two lines. Comparing against the raw text would fail on a reflow,
     # which is a formatting event and not a coverage event.
     doc = " ".join(G.__doc__.split())
-    prefixes = {m.group("id").split("-")[0]
-                for p in BD_IC.rglob("*")
-                if p.is_file() and p.suffix in G._SCANNED_SUFFIXES
-                for m in G._RE_BRACKETED.finditer(p.read_text(errors="replace"))}
-    assert prefixes, "no bracketed ids found at all — the probe is broken"
-    assert " ".join(sorted(prefixes)) in doc, (
-        f"the prefix coverage sentence drifted. Tree says {sorted(prefixes)}; "
-        f"put exactly '{' '.join(sorted(prefixes))}' in the docstring. A new "
-        f"prefix means a tool started emitting diagnostics and the coverage "
-        f"claim a reader relies on is now understated.")
+    _assert_prefix_coverage_claim_is_current(BD_IC, doc)
     assert "94754771" in doc or "4b22e36ea" in doc, (
         "the docstring states raw file counts; they must stay attributed to the "
         "commit they were measured at, or they read as standing facts about a "
         "tree that has since moved")
+
+
+def test_prefix_coverage_probe_exposes_an_undocumented_new_tool(tmp_path):
+    """CONTROL: an open regex must not make documentation drift invisible."""
+    (tmp_path / "new_tool.log").write_text(
+        "[WARNING ZZZ-0001] first diagnostic from a new tool\n",
+        encoding="utf-8")
+    with pytest.raises(AssertionError, match="ZZZ"):
+        _assert_prefix_coverage_claim_is_current(tmp_path, G.__doc__)
 
 
 @needs_corpus

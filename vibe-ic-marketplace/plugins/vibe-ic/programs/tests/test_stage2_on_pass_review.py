@@ -561,7 +561,12 @@ def test_the_partition_over_the_published_corpus_does_not_move():
     scratch = Path(tempfile.mkdtemp(prefix="on_pass_stage2_corpus_"))
     rejects, accepts = set(), set()
     for i, cell in enumerate(cells):
-        rc = run(cell, "--stage-verdict", "PASS", emit=scratch / f"cell{i}").returncode
+        # The published corpus is the read-only source of truth.  The review's
+        # proof must live inside the run it reviews, so materialise that exact
+        # run under scratch instead of pointing --emit-test beside the corpus.
+        run_dir = scratch / f"cell{i}"
+        shutil.copytree(cell, run_dir)
+        rc = run(run_dir, "--stage-verdict", "PASS").returncode
         rel = str(cell.relative_to(root))
         if rc == 1:
             rejects.add(rel)

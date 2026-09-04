@@ -84,7 +84,8 @@ def test_repro_verification_intent_hard_fails_without_skip_analog(tmp_path):
     ])
     assert rc == 1
     data = json.loads(out.read_text())
-    assert data["fail"] == 4 and data["ok"] == 0 and data["waived"] == 0
+    assert data["not_executed"] == 4
+    assert data["fail"] == 0 and data["ok"] == 0 and data["waived"] == 0
 
 
 # ---------------------------------------------------------------------------
@@ -131,11 +132,13 @@ def test_noleak_digital_cmd_response_still_fails_under_skip_analog(tmp_path):
     ])
     assert rc == 1, "digital cmd_response with no evidence must STILL FAIL"
     data = json.loads(out.read_text())
-    # the verification_intent case is waived, the digital one FAILs
+    # the verification_intent case is waived; the digital one remains an
+    # explicit Step-4 blocker without pretending an unrun test actually failed.
     by_id = {r["id"]: r for r in data["results"]}
-    assert by_id["GET_ID_DIGITAL"]["status"] == "fail"
+    assert by_id["GET_ID_DIGITAL"]["status"] == "NOT_EXECUTED"
     assert by_id["LDO_LINE_LOAD_SNDR"]["status"] == "waived"
-    assert data["fail"] == 1 and data["waived"] == 1
+    assert data["not_executed"] == 1
+    assert data["fail"] == 0 and data["waived"] == 1
 
 
 def test_noleak_unanchored_verification_intent_still_fails(tmp_path):
@@ -152,7 +155,8 @@ def test_noleak_unanchored_verification_intent_still_fails(tmp_path):
     ])
     assert rc == 1, "unanchored verification_intent waiver must NOT be honoured"
     data = json.loads(out.read_text())
-    assert data["fail"] == 4 and data["waived"] == 0
+    assert data["not_executed"] == 4
+    assert data["fail"] == 0 and data["waived"] == 0
 
 
 def test_noleak_digital_case_never_waived_even_with_anchor(tmp_path):
@@ -169,7 +173,8 @@ def test_noleak_digital_case_never_waived_even_with_anchor(tmp_path):
     ])
     assert rc == 1
     data = json.loads(out.read_text())
-    assert data["waived"] == 0 and data["fail"] == 1
+    assert data["waived"] == 0 and data["fail"] == 0
+    assert data["not_executed"] == 1
 
 
 # ---------------------------------------------------------------------------

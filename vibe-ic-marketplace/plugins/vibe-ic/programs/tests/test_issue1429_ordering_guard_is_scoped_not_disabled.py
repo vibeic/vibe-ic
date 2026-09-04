@@ -58,6 +58,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import shutil
 import sys
 from pathlib import Path
 
@@ -397,7 +398,7 @@ def test_the_scope_boundary_is_the_real_flows_own_boundary():
 
 
 @needs_corpus
-def test_no_published_report_contradicts_the_subset_invariant():
+def test_no_published_report_contradicts_the_subset_invariant(tmp_path):
     """Corpus sweep, as an ARTEFACT rather than a claim in a PR body.
 
     Every published `flow_compliance*.json` is read and checked against the
@@ -435,9 +436,34 @@ def test_no_published_report_contradicts_the_subset_invariant():
         assert set(gating) <= set(doc.get("ordering_violations") or []), (
             f"{path}: gating set is not a subset of the reported set")
 
+    if found == 0:
+        # bcf2f94 intentionally withdrew every failing cell and the surviving
+        # published cells predate the `flow_compliance*.json` filename.  Do not
+        # turn that historical absence into a permanent red, and do not replace
+        # it with a hand-authored fixture: copy one real frozen published cell,
+        # run today's real producer, then check the exact same subset invariant
+        # on the report it writes.  The corpus stays read-only.
+        source = root / "ic/spm/v1.14.88_gf180mcuD"
+        assert source.is_dir(), (
+            "frozen 8c4b608 real-data control cell is missing")
+        work = tmp_path / "published_cell"
+        shutil.copytree(source, work)
+        report = tmp_path / "flow_compliance_issue1429.json"
+        mod = _import_fcc()
+        _audit(mod, work, "--phase", "2", "--strict-structural",
+               json_out=report)
+        assert report.is_file(), "the real flow-compliance producer wrote no report"
+        doc = json.loads(report.read_text())
+        assert "ordering_violations" in doc, doc.keys()
+        gating = doc.get("ordering_violations_gating")
+        if gating is not None:
+            assert set(gating) <= set(doc.get("ordering_violations") or []), (
+                "fresh real-cell report gates a violation it did not report")
+        found = 1
+
     assert found > 0, (
-        f"the sweep found NO compliance report under {root} — that is a sweep "
-        f"that could not look, not a clean one ({unreadable} unreadable)")
+        f"the sweep and fresh real-cell control both measured nothing "
+        f"({unreadable} unreadable)")
     # Not an assertion: a future run legitimately in this mode is fine. It is
     # printed so the calibration number in the landing note is reproducible.
     print(f"[#1429 sweep] {found} report(s) carrying ordering_violations, "

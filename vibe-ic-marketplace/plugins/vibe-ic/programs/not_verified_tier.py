@@ -200,6 +200,32 @@ def not_verified_reason(reason: str, remedy: str = "") -> str:
     return f"{text} — remedy: {remedy}" if remedy else text
 
 
+def _reap_group(pid) -> None:
+    """SIGKILL the process group *pid* leads, when it leads one.
+
+    THE `pgid == pid` GUARD IS THE WHOLE SAFETY ARGUMENT. `os.getpgid(pid)` of
+    a child that is NOT its own session leader returns THIS process's group,
+    and signalling that group kills the caller. It is asked, not assumed: the
+    signal goes out only when the child leads its own group, which is exactly
+    what `start_new_session=True` made it and what a stubbed or foreign object
+    will not be.
+
+    Everything the OS refuses -- an already-reaped pid, a platform without
+    `killpg` -- is silently nothing. This is best-effort cleanup AFTER a bound
+    that has already fired and decided the answer; it must never turn an
+    UNANSWERED probe into an exception.
+    """
+    import os
+    import signal
+    if not isinstance(pid, int) or pid <= 0:
+        return
+    try:
+        if os.getpgid(pid) == pid:
+            os.killpg(pid, signal.SIGKILL)
+    except (OSError, AttributeError, ValueError):  # nosec
+        pass
+
+
 def probe(argv: Sequence[str], timeout: int = PROBE_TIMEOUT_S,
           use_cache: bool = True) -> Tuple[str, str]:
     """Ask the host a yes/no question and allow it to answer "I did not answer".
@@ -234,15 +260,50 @@ def probe(argv: Sequence[str], timeout: int = PROBE_TIMEOUT_S,
         out = (PROBE_ABSENT, f"`{argv[0]}` is not on PATH")
     else:
         try:
-            r = subprocess.run(list(argv), capture_output=True, timeout=timeout)
+            # POPEN + `start_new_session=True`, AND THE GROUP REAP BELOW.
+            #
+            # `subprocess.run(argv, timeout=N)` kills the DIRECT child when the
+            # bound fires and nothing below it. A probed command that is itself
+            # a wrapper therefore leaves its work running: `sh -c 'sleep 30'`
+            # loses the `sh` and keeps the `sleep`, reparented to init.
+            #
+            # MEASURED at b309595f06, in the pinned image, this file's own
+            # end-to-end arms driving a `docker` shim of exactly that shape --
+            # after `1 failed, 16 passed in 20.81s`, `ps -eo pid,ppid,args`:
+            #
+            #     PID  PPID  ELAPSED  COMMAND
+            #      32     1       19  sleep 30
+            #      37     1       18  sleep 30
+            #
+            # Two orphans outliving the session that made them. Under the
+            # per-file landing driver, which owns the complete descendant tree,
+            # that is "pytest exited with unfinished live descendants" and the
+            # WHOLE file's result is UNKNOWN however its assertions went.
+            #
+            # `run` cannot be repaired in place: `TimeoutExpired` carries
+            # `cmd`/`timeout`/`output`/`stderr` and NO pid, so the form that
+            # raises it cannot name the group it has to reap. Popen is used for
+            # that one reason; the bound, the capture and the three-way routing
+            # below are what they were.
+            with subprocess.Popen(list(argv), stdout=subprocess.PIPE,
+                                  stderr=subprocess.PIPE,
+                                  start_new_session=True) as child:
+                try:
+                    child.communicate(timeout=timeout)
+                except subprocess.TimeoutExpired:
+                    _reap_group(child.pid)
+                    child.kill()
+                    child.communicate()
+                    raise
+                returncode = child.returncode
         except subprocess.TimeoutExpired:
             out = (PROBE_UNANSWERED,
                    f"`{printed}` did not answer within {timeout}s")
         except OSError as exc:                             # pragma: no cover
             out = (PROBE_UNANSWERED, f"`{printed}` could not be run: {exc}")
         else:
-            out = ((PROBE_PRESENT, "") if r.returncode == 0
-                   else (PROBE_ABSENT, f"`{printed}` exited {r.returncode}"))
+            out = ((PROBE_PRESENT, "") if returncode == 0
+                   else (PROBE_ABSENT, f"`{printed}` exited {returncode}"))
 
     if use_cache:
         _PROBE_CACHE[key] = out

@@ -50,6 +50,7 @@ tree under `tmp_path` and passes `--baseline` explicitly.
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -64,8 +65,17 @@ PROGRAMS = PLUGIN_ROOT / "programs"
 GATE = PROGRAMS / "step_internal_fail_bubble_up_check.py"
 
 def _run(*args: str) -> subprocess.CompletedProcess:
-    return _pr.run([sys.executable, str(GATE), *args],
-                          capture_output=True, text=True)
+    # The landing harness binds its byte-attested production corpus through
+    # this variable.  These cases deliberately build a private mutation
+    # corpus and pass it by an explicit --corpus argument, so inheriting the
+    # production binding would replace the fixture with the landing corpus and
+    # make every arm measure the wrong subject.  Clear only the binding in this
+    # named child; VIBE_IC_BENCHMARK_DATA stays present, which also proves an
+    # existing explicit corpus keeps its normal precedence outside landing.
+    env = dict(os.environ)
+    env.pop("GATEKEEPER_BENCHMARK_DATA_SHA", None)
+    return _pr.run([sys.executable, str(GATE), *args], env=env,
+                   capture_output=True, text=True)
 
 
 def _mk_run(corpus: Path, rel: str, n_findings: int) -> Path:

@@ -29,6 +29,7 @@ if str(_PROGRAMS) not in sys.path:
     sys.path.insert(0, str(_PROGRAMS))
 
 import l10_tb_conformance_check as gate   # noqa: E402
+import _l10_execution as execution        # noqa: E402
 import vacuous_testbench_check as vtb      # noqa: E402
 
 
@@ -72,15 +73,21 @@ endmodule
 CASES = [{"id": "corner_operand", "category": "state_transition"}]
 
 
-def _run(tmp_path: Path, tb_files: dict) -> tuple[int, dict]:
+def _run(tmp_path: Path, tb_files: dict, executed=None) -> tuple[int, dict]:
     tb = tmp_path / "sim" / "tb"
     tb.mkdir(parents=True)
     for name, body in tb_files.items():
         (tb / name).write_text(body)
     l10 = tmp_path / "L10_TEST_CASES.json"
     l10.write_text(json.dumps(CASES))
+    if executed:
+        execution.write_record(
+            tmp_path, l10,
+            [{"id": case_id, "verdict": verdict, "sim_executed": True}
+             for case_id, verdict in executed.items()], producer="test")
     out = tmp_path / "reports" / "l10_tb_conformance.json"
-    rc = gate.main(["--l10", str(l10), "--tb-dir", str(tb), "--out", str(out)])
+    rc = gate.main(["--l10", str(l10), "--tb-dir", str(tb),
+                    "--project", str(tmp_path), "--out", str(out)])
     return rc, json.loads(out.read_text())
 
 
@@ -92,7 +99,7 @@ def test_vacuous_tb_tree_fails(tmp_path):
     assert rc == 1, "a testbench that never instantiates the DUT must FAIL L10"
     assert rep["vacuous_sim_tree"] is True
     assert rep["sim_tree_drives_dut"] is False
-    assert rep["fail"] == 1 and rep["ok"] == 0
+    assert rep["not_executed"] == 1 and rep["ok"] == 0
     # evidence emission (#206 point 3): the offending file is named.
     assert any("corner_operand.v" in f for f in rep["vacuous_testbench_files"])
 
@@ -112,7 +119,7 @@ def test_five_vacuous_tbs_do_not_earn_full_credit(tmp_path):
     rc = gate.main(["--l10", str(l10), "--tb-dir", str(tb), "--out", str(out)])
     rep = json.loads(out.read_text())
     assert rc == 1, "five vacuous TBs must not earn 5/5 coverage"
-    assert rep["ok"] == 0 and rep["fail"] == 5
+    assert rep["ok"] == 0 and rep["not_executed"] == 5
 
 
 # ---------------------------------------------------------------------------
@@ -120,7 +127,8 @@ def test_five_vacuous_tbs_do_not_earn_full_credit(tmp_path):
 # beside a real driver must still credit its case.
 # ---------------------------------------------------------------------------
 def test_driving_tb_still_passes(tmp_path):
-    rc, rep = _run(tmp_path, {"corner_operand.v": DRIVING_TB})
+    rc, rep = _run(tmp_path, {"corner_operand.v": DRIVING_TB},
+                   executed={"corner_operand": "PASS"})
     assert rc == 0, "a testbench that really drives the DUT must PASS"
     assert rep["vacuous_sim_tree"] is False
     assert rep["sim_tree_drives_dut"] is True
@@ -131,7 +139,8 @@ def test_trace_companion_beside_driver_still_credits(tmp_path):
     """A driving TB + a portless trace companion: the tree drives, so its full
     evidence corpus stands and the trace marker still credits the case."""
     rc, rep = _run(tmp_path, {"corner_operand.v": DRIVING_TB,
-                              "l10_coverage_trace.v": TRACE_COMPANION})
+                              "l10_coverage_trace.v": TRACE_COMPANION},
+                   executed={"corner_operand": "PASS"})
     assert rc == 0
     assert rep["vacuous_sim_tree"] is False
     assert rep["ok"] == 1
@@ -147,7 +156,8 @@ def test_shared_substance_helper_agrees(tmp_path):
     assert vtb.source_drives_dut(TRACE_COMPANION) is False
     # l10's verdict is driven by that same helper.
     rc_vac, _ = _run(tmp_path / "a", {"t.v": VACUOUS_TB})
-    rc_drv, _ = _run(tmp_path / "b", {"t.v": DRIVING_TB})
+    rc_drv, _ = _run(tmp_path / "b", {"t.v": DRIVING_TB},
+                     executed={"corner_operand": "PASS"})
     assert (rc_vac, rc_drv) == (1, 0)
 
 

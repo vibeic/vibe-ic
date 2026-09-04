@@ -79,7 +79,7 @@ def _corpus() -> Path:
     the measurement below reported a defect where the honest reading is "the
     entries I was going to classify are not here".
     """
-    return corpus_root() / "evaluation" / "phase1_parity"
+    return corpus_root() / "protocol_parity"
 
 SELF_REF = "reports/orchestrator/phase3_one_shot.json#steps[name=lvs]"
 

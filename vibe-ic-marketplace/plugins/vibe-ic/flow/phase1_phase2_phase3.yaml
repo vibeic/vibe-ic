@@ -693,6 +693,10 @@ steps:
       # (93 program files write `L13_LAB_CALIBRATION.json`; zero write
       # `L13_OTP.json`), so it was a declaration that could never be satisfied.
       - "phase1/generated_docs/L13_*.json"
+      # L19 is emitted by this same Phase-1 runner's L19-L23 skeleton pass,
+      # then refined by its SDC/floorplan hooks.  D1's own gates consume it;
+      # the run write ledger exposed that the producer contract omitted it.
+      - "phase1/generated_docs/L19_CONSTRAINTS_PDK.json"
       # vibe-ic#1043-adjacent (d7 W2): PRODUCED BY THE FLOW, READ BY A GATE,
       # DECLARED BY NOBODY. `l21_macro_supply_rail_declared_check` is one of
       # D1's own advisory clauses and M2's gate reads it too, yet no step's
@@ -1997,7 +2001,11 @@ steps:
       # v0.53/v0.54 byte-level coverage gates (replace agent self-reports
       # of "≥ 95 % covered" with machine-measured numbers).
       - l10_tb_conformance_check     # every L10 test case must be
-                                      # exercised by a tb (not just sim-driven)
+                                      # exercised by a real per-case oracle.
+      # The executor writes reports/phase2/sim/l10_execution.json only after
+      # running the unit TB population.  This gate consumes that record and
+      # never infers a verdict from testbench text.  PASS, FAIL and
+      # NOT_EXECUTED stay distinct; FAIL and NOT_EXECUTED both block Step 4.
       - l12_tb_coverage_check         # every L12 behavioural sequence must
                                       # have a matching sim/tb/tb_*.v
       - verilator_coverage_measure    # real verilator --coverage replaces
@@ -2148,9 +2156,12 @@ steps:
         # split above, that path also carried the line/toggle measurement; the
         # measurement has moved to coverage_verilator.json and this clause
         # keeps the functional payload it always read.)
-        - advisory_program_exit_zero:
-              command: "functional_state_transition_coverage_check phase2/stage1/sim/tb --coverage reports/phase2/coverage/coverage_actual.json"
-              advisory_reason: "DEMOTED from optional_program_exit_zero in 0291e92f1 (2026-08-25): the optional slot REFUSES when its inputs are present, and an unmet condition there still denied the step its PASS tier (test_matrix_d8). Enforcement was traded for the tier, not for a reason about this gate."
+        # The checker now has an executable applicability contract. A typed
+        # L3 declaration of no opcodes returns DESIGN_DECLARED_NA and does not
+        # deduct this step; any declared opcode without transition evidence is
+        # a real refusal. Keep this blocking so a populated protocol cannot be
+        # hidden by the historical advisory ratchet.
+        - program_exit_zero: "functional_state_transition_coverage_check phase2/stage1/sim/tb --coverage reports/phase2/coverage/coverage_actual.json --json reports/phase2/gates/functional_state_transition_coverage.json"
         # NEW TB PATH gate — the professional cocotb TB (professional_tb_gen)
         # must never silently pass a real functional mismatch. UNCONDITIONAL
         # (vibe-ic#236, resolving the #220 known-open ownership question): the
@@ -2182,9 +2193,10 @@ steps:
         # what makes it safe here; it is advisory because a skip on every
         # project this tree has is also proof it has never been exercised
         # against a design that does declare one.
-        - advisory_program_exit_zero:
-              command: "behavioral_evidence_per_spec_item_check ."
-              advisory_reason: "NOT-YET-CLEAN: this gate CAN refuse and is wired advisory as a ratchet position, not as a verdict. Notch measured rc 1 on a real spm run (2026-08-31): it REFUSES TODAY on real input; the advisory slot is currently swallowing a live finding. Promote to blocking once this run is clean. It reported: FAIL: behavioral_evidence_per_spec_item_check"
+        # Same contract as the state-transition gate: an L9 with no declared
+        # per-item behavioural population returns typed DESIGN_DECLARED_NA;
+        # once L9 declares an item, missing evidence is a blocking failure.
+        - program_exit_zero: "behavioral_evidence_per_spec_item_check . --json reports/phase2/gates/behavioral_evidence_per_spec_item.json"
         - advisory_program_exit_zero:
               command: "dispatcher_awake_gate_check ."
               advisory_reason: "NOT-YET-CLEAN: this gate CAN refuse and is wired advisory as a ratchet position, not as a verdict. Notch measured rc 0 on a real spm run (2026-08-31): it is already clean on real input, so blocking would cost nothing today; the only thing holding it advisory is that no other run has been measured."
@@ -4743,6 +4755,10 @@ steps:
     mcp_tools: [eda_pnr]
     required_outputs:
       - "phase3/stage3/pnr/routed.def"
+      # OpenROAD's own provenance records this as the route invocation's
+      # output, and Step 21 gates read it.  It is route evidence, not an
+      # external input and not a Step-37.4 aggregation artefact.
+      - "phase3/stage3/pnr/openroad.log"
       # The router-DRC report the phase-3 runner actually emits is
       # `routed.drc.rpt` (phase3_one_shot_runner.py, Step-21 emitter). Nothing
       # in the plugin has ever written `phase3/stage3/pnr/drc.rpt` — that
@@ -5121,6 +5137,10 @@ steps:
     mcp_tools: [eda_sta]
     required_outputs:
       - "phase3/stage3/sta/post_route_timing.rpt"
+      # Emitted by Step 23's SPEF-backed STA pass and mirrored here.  Step
+      # 37.4 consumes it when aggregating metrics, but consumption does not
+      # transfer producer ownership to that later step.
+      - "reports/phase3/sta_spef_based.rpt"
       - "reports/phase3/sta/post_route_summary.json"
       # The timing RECORD-completeness verdict. Like post_route_summary.json
       # above it is BOTH this step's own unconditional gate `--json` target AND
@@ -8107,10 +8127,24 @@ steps:
       #   settled would break the declared generator 100% of the time.
       - signaltap_recompile_sequence_check
       - signaltap_stp_completeness_check
+    # WHAT IS NOT DECLARED HERE, AND WHY — reports/phase3/gates/stage4_compliance.json.
+    # It was declared from v1.13.96 until this change, and it made this step a
+    # PERMANENT MISSING: the only thing in the whole plugin that writes that path
+    # is the FIRST CLAUSE OF THIS STEP'S OWN GATE, so no run can produce it and
+    # only the auditor can. `flow_compliance_check` refuses exactly that —
+    # "AUDIT-CREATED OUTPUT REFUSED: present, but written by this step's own gate
+    # rather than by the run" — and it refuses it on every pass, by design. The
+    # dimension-7 registry had already measured this shape on FS1 and spent a
+    # waiver on it in those words ("a declaration cannot be satisfied by a run —
+    # only by the auditor"); this step took the other branch and became the red
+    # that waiver predicted. The artefact is not undeclared-and-unwatched: it is
+    # written by clause 1 and READ by clause 2 of this same gate, inside one
+    # `check_step` call, so its absence refuses on the spot — which is the
+    # EVIDENCE class dimension 7 already defines for a report a gate writes and
+    # checks in one invocation. See `matrix_d7_artifact_graph._consumers_of_output`.
     required_outputs:
       - "phase2/stage1/fpga/final/*.sof"
       - "reports/phase2/fpga/on_board_pass.json"
-      - "reports/phase3/gates/stage4_compliance.json"
     # Hardened 2026-04-22: single-JSON self-attestation ("echo
     # all_scenarios_passed: true > on_board_pass.json") is rejected.
     # Requires: pass.json with hashed bitstream + scenarios list;
@@ -8154,9 +8188,15 @@ steps:
         - advisory_program_exit_zero:
               command: "stage4_compliance . --exclude-step 39 --json reports/phase3/gates/stage4_compliance.json"
               advisory_reason: "NOT-YET-CLEAN: this gate CAN refuse and is wired advisory as a ratchet position, not as a verdict. Notch measured rc 1 on a real spm run (2026-08-31): it REFUSES TODAY on real input; the advisory slot is currently swallowing a live finding. Promote to blocking once this run is clean. It reported: STRUCTURAL MEASUREMENT: registered=null invoked=null no_verdict=null — the structural-RTL umbrella was NOT ASKED to run in this invocation, so this re"
+              condition_files_exist:
+                - "phase3/stage4/gds/*.gds"
+              absent_condition_reason: "Scoped to a run that produced a die. This clause and the one below review STAGE 4 — the die steps 33-38 — and this step's own comment above states the assumption they rest on: 'by the time it runs, steps 33-38 are done and the die exists'. The assumption was asserted and never checked, so on a run that exercised only the FPGA path (step 39's own required_inputs are RTL plus a board on the bench, and its blocks_on names 6 and 13 — no die step) stage4_compliance refuses with ZERO_DENOMINATOR and stage_on_pass_review refuses rc=2 'stage stage4 did not pass'. Both refusals are honest and both are DISCLOSED_INCOMPLETE, which made the board sign-off INCOMPLETE for the absence of a die it never claimed to have. phase3/stage4/gds/*.gds is step 37's declared output and the die itself: present, both clauses run exactly as before and can still refuse; absent, step 37 is already MISSING and stage 4 has already failed loudly, so nothing that was measured stops being measured. The step's own on-board attestation clauses still decide whether the board passed."
         - advisory_program_exit_zero:
               command: "stage_on_pass_review . --stage stage4 --json reports/phase3/gates/stage4_on_pass_review.json --compliance reports/phase3/gates/stage4_compliance.json"
               advisory_reason: "DEMOTED, not designed advisory: wired blocking until da6fcd7fe (2026-08-30), moved here in the change that made the declared command actually execute; that push used --no-verify because the full tier did not stamp. Restore blocking once the six on-pass stage commands run green. Re-pointed at the per-stage compliance report in v1.13.78; notch re-measured rc 2 on that invocation, unchanged in class."
+              condition_files_exist:
+                - "phase3/stage4/gds/*.gds"
+              absent_condition_reason: "Scoped to a run that produced a die. This clause and the one above review STAGE 4 — the die steps 33-38 — and this step's own comment above states the assumption they rest on: 'by the time it runs, steps 33-38 are done and the die exists'. The assumption was asserted and never checked, so on a run that exercised only the FPGA path (step 39's own required_inputs are RTL plus a board on the bench, and its blocks_on names 6 and 13 — no die step) stage4_compliance refuses with ZERO_DENOMINATOR and stage_on_pass_review refuses rc=2 'stage stage4 did not pass'. Both refusals are honest and both are DISCLOSED_INCOMPLETE, which made the board sign-off INCOMPLETE for the absence of a die it never claimed to have. phase3/stage4/gds/*.gds is step 37's declared output and the die itself: present, both clauses run exactly as before and can still refuse; absent, step 37 is already MISSING and stage 4 has already failed loudly, so nothing that was measured stops being measured. The step's own on-board attestation clauses still decide whether the board passed."
         - json_field_true: {file: "reports/phase2/fpga/on_board_pass.json", field: "all_scenarios_passed", expect: true}
         - program_exit_zero: "fpga_on_board_attestation_check . --json reports/phase2/fpga/on_board_attestation.json --min-scenarios 1"
         # WHO IS BLOCKED, THE BOARD OR THE RTL — asked at the step that owns the
@@ -8222,7 +8262,19 @@ steps:
     # test_signoff_medlow_backlog_gaps.py rather than left to be discovered.
     # A step-6 FAIL still does NOT defer 39: real counter-evidence never
     # converts (#502), it only annotates (#503).
-    blocks_on: [6, 13]
+    #
+    # 37 IS DECLARED BECAUSE IT IS READ. The two stage-4 review clauses above
+    # are scoped on `phase3/stage4/gds/*.gds`, which is step 37's declared
+    # output, and dimension 5 measures exactly that read: "step 39 reads
+    # 'phase3/stage4/gds/*.gds', declared as a required_output of step 37, but
+    # 37 is not in 39's blocks_on closure". The dependency was already real —
+    # the comment beside those clauses rests on it ("by the time it runs, steps
+    # 33-38 are done and the die exists") — and only the declaration was
+    # missing. Same disclosed second effect as step 6 above, and no more: a
+    # waiver on 37 now also removes 39 from the required denominator, while a
+    # step-37 FAIL or MISSING still does not defer 39, so a run that never
+    # reached the die is judged on its board exactly as before.
+    blocks_on: [6, 13, 37]
 
 # ─────────────────────────────────────────────────────────────────
 # Wave 88 closed 4 assessment-report gaps (Mixed-Signal Integration

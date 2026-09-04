@@ -88,6 +88,45 @@ artefact in this campaign.
 """
 from __future__ import annotations
 
+#: MEASURED at b309595f06, in the digest-pinned image
+#: (ghcr.io/vibeic/vibeic-eda@sha256:66c33ff2...d0d01ff), one file per process,
+#: single bind mount, `PYTHONDONTWRITEBYTECODE=1`, this file alone:
+#:
+#:     4 failed, 29 passed, 2 warnings in 956.01s (0:15:56)
+#:     --- programs/tests/test_flow_matrix_coverage.py  rc=1 cases=33 red=4
+#:
+#: It COMPLETED. It was never hung. Run under the per-file driver's base
+#: silence grace of 300 s it is reported instead as
+#: "STALLED after 300 s with no validated pytest lifecycle progress" and given
+#: NO verdict -- which is how the four red tests above spent the 2026-09-03
+#: census invisible underneath an UNKNOWN.
+#:
+#: AND ON A GIT-RESET CLEAN CHECKOUT, post-fix, at --stall-after 300:
+#:
+#:     32 passed, 1 skipped, 2 warnings in 408.38s (0:06:48)
+#:     --- programs/tests/test_flow_matrix_coverage.py  rc=0 cases=33 red=0
+#:
+#: TWO RUNS, TWO VERDICTS, AND THE DIFFERENCE IS THE TREE, NOT THE FIX. The
+#: 956 s / 4-red run above was taken on a checkout with uncommitted edits in
+#: it; this file's census reads the tree it runs in, so four of its cells went
+#: red on the modification rather than on anything it is testing. That is worth
+#: knowing on its own -- this file's verdict is a function of the working tree
+#: -- and it is recorded here rather than tidied away, because the number below
+#: has to cover the SLOWER of the two.
+#:
+#: 956 s IS AN UPPER BOUND ON ANY SINGLE SILENT GAP IN IT, because the whole
+#: file ran in that. 1800 is that bound with room for a loaded host: the run
+#: above was measured at load average 17-22 on a shared machine, so the number
+#: must not be the one that only holds when the host is quiet. A wedge is still
+#: killed and still NORECORD -- 1800 s later, not never.
+#:
+#: THIS FILE ALREADY RELAYS SEMANTIC PROGRESS for its nested live-collection
+#: phase (`_domain_progress` / `_NESTED_PROGRESS_RELAY_TOTAL`), which is the
+#: better repair and the one that needs no number at all. Extending that relay
+#: to the outcome-report waves would let this declaration shrink; until it does,
+#: the declaration is what stops the file from being unmeasurable.
+VIBEIC_SILENCE_BUDGET_S = 1800
+
 import ast
 import json
 import os

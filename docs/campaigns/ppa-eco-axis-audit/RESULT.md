@@ -16,19 +16,22 @@ published as its winner.
 `ORGANIC-20260822-ppa-promotion-feasibility-declares-nine-axes`, P3) — this
 document is the evidence behind them.
 
-**Code changes** are on `jeco2/eco-axis-bite-audit`, frozen at `22b18cb10`.
+**Code changes** were on `jeco2/eco-axis-bite-audit`, frozen at the historical
+source commit `22b18cb10`.
 
 > THAT BRANCH NAME NO LONGER RESOLVES. It was DELETED on the remote after the
 > freeze -- `git ls-remote --heads origin` does not list it -- which is why
-> this line cites the sha as well. 22b18cb10 still resolves and is contained
-> by `origin/next/jharv3` and `origin/next/jred-misc`, so the code changes
-> are still reachable; only the name is gone. Section 13 says the same thing
-> where the freeze is described.
+> this line cites the sha as well. After the later squash landing and source-ref
+> cleanup, a clean main-only clone no longer resolves that object directly.
+> Its exact object and source history are preserved in
+> `docs/campaigns/ppa-eco-axis-audit/HISTORICAL_COMMITS.bundle`; Section 13
+> records the original branch state.
 
 **What this is, stated accurately because my first attempt was not.** It began
 as a verbatim copy of the handover as it stood when `jeco2/eco-axis-bite-audit`
-was frozen at `22b18cb10` (that branch name is now gone from the remote; the
-sha is not) -- and I described it as a snapshot. It has since been
+was frozen at `22b18cb10` (that branch name and eventually its directly
+reachable object left a clean main-only clone; the exact object is retained in
+the historical bundle above) -- and I described it as a snapshot. It has since been
 edited three times — a branch it named was renamed, a citation went stale, and a
 verification was added — so "verbatim snapshot" stopped being true almost
 immediately, which is the same decay this document spends pages on.
@@ -1684,20 +1687,21 @@ this file's test count: a stray surviving change would have moved that number.
 13. FREEZE, FOLLOW-ON BRANCH, AND ONE INCIDENT
 -----------------------------------------------
 FROZEN. `jeco2/eco-axis-bite-audit` is frozen at 22b18cb10 by the batch-freeze
-  THE BRANCH NAME IS GONE; THE FROZEN SHA IS NOT. `git ls-remote --heads
+  THE BRANCH NAME IS GONE; THE FROZEN OBJECT IS ARCHIVED. `git ls-remote --heads
   origin` no longer lists `jeco2/eco-axis-bite-audit` -- it was deleted after
-  the freeze -- and that is exactly why this section cites the sha. 22b18cb10
-  still resolves and is contained by `origin/next/jharv3` and
-  `origin/next/jred-misc`, so everything below stays enumerable without it.
+  the freeze -- and that is exactly why this section cites the source sha.
+  A clean main-only clone no longer resolves it directly; `22b18cb10` and the
+  exact source history are recoverable from `HISTORICAL_COMMITS.bundle`.
 instruction. That sha is what ships. 0 pushes since; clean tree; nothing held
 back. I made no claim that anything of mine MUST be in the batch, because
 nothing is outside it.
 
 FOLLOW-ON. `next/eco-axis-audit-followups` (cited by NAME, not by sha: it is a
   THAT NAME NO LONGER RESOLVES: the branch has been DELETED on the remote
-  since this was written. Its merge commit 4c544a661 still resolves here and
-  is NOT an ancestor of main, so the follow-ons are reachable and unlanded --
-  cited by name precisely because it was moving, and now it has moved away.
+  since this was written. Its historical merge commit `4c544a661` no longer
+  resolves in a clean main-only clone and is preserved in
+  `HISTORICAL_COMMITS.bundle`; this paragraph records the state at the time and
+  does not use current ancestry to infer whether squash landing included it.
 MOVING branch and a sha pinned to it decays on the next commit -- unlike the
 frozen branch above, whose sha is the point). Pushed, rides the NEXT
 batch. Comment-only. It is the result of checking my own work against the ruling
@@ -1714,12 +1718,12 @@ live registered worktree belonging to a CONCURRENT SESSION, on branch
 `next/ppa-exemption-states-its-real-coverage` @ 4fc81d2a2.
 
   THAT BRANCH NAME NO LONGER RESOLVES. `git ls-remote --heads origin` does
-  not list it; it was DELETED after this incident. The commit is not lost --
-  4fc81d2a2 still resolves and is contained by `origin/next/jharv3` and
-  `origin/next/jred-misc` -- and it was merged at f872a0482, which is NOT an
-  ancestor of main, so this work is reachable but has not landed.
+  not list it; it was DELETED after this incident. The exact incident commit
+  `4fc81d2a2` and its historical merge `f872a0482` are preserved in
+  `HISTORICAL_COMMITS.bundle`; a clean main-only clone does not resolve them
+  directly, and squash ancestry is not used here to infer landing.
 
-  their branch ref and objects   INTACT
+  their branch ref and objects   INTACT AT THE TIME; now bundle-archived
   their branch on the remote     NOT PUSHED -- local was the only copy
   their working directory        DESTROYED by me, then restored at 4fc81d2a2
   uncommitted work in it         UNRECOVERABLE if any existed; I cannot tell

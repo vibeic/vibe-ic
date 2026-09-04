@@ -72,20 +72,55 @@ import _watchdog  # noqa: E402
 # ---------------------------------------------------------------------------
 # 1. the three states, and which input earns which
 # ---------------------------------------------------------------------------
-def _probe_with(monkeypatch, outcome):
-    """Drive `probe` with a stubbed `subprocess.run`, caching disabled."""
-    def fake_run(argv, **kw):
-        return outcome(argv, **kw)
+class _FakeChild:
+    """The narrowest object `probe` uses: a context manager whose
+    `communicate(timeout=)` either answers or raises, plus the `pid`/`kill`
+    the reap path touches.
 
-    monkeypatch.setattr(subprocess, "run", fake_run)
+    `pid = 0` IS DELIBERATE. `_reap_group` refuses a non-positive pid before it
+    asks the OS anything, so a stubbed timeout exercises the real reap call
+    without any signal reaching any process on the host.
+    """
+
+    pid = 0
+
+    def __init__(self, argv, kw, outcome):
+        self._argv, self._kw, self._outcome = argv, kw, outcome
+        self.returncode = None
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+    def communicate(self, timeout=None):
+        if timeout is not None:
+            self.returncode = self._outcome(self._argv, timeout=timeout,
+                                            **self._kw)
+        return (b"", b"")
+
+    def kill(self):
+        pass
+
+
+def _probe_with(monkeypatch, outcome):
+    """Drive `probe` with a stubbed child process, caching disabled.
+
+    THE INJECTION POINT MOVED FROM `subprocess.run` TO `subprocess.Popen`, and
+    only the injection point moved: every assertion below is unchanged, because
+    what they pin is the ROUTING of an outcome to a state, not which stdlib
+    call produced the outcome. `probe` had to stop using `subprocess.run`
+    because `TimeoutExpired` carries no pid and so the `run` form cannot reap
+    the group a timed-out probe leaves behind — see `not_verified_tier.probe`.
+    """
+    def fake_popen(argv, **kw):
+        return _FakeChild(argv, {}, outcome)
+
+    monkeypatch.setattr(subprocess, "Popen", fake_popen)
     monkeypatch.setattr("shutil.which", lambda exe: "/usr/bin/" + exe)
     return NV.probe(["docker", "image", "inspect", "some/image:1"],
                     timeout=7, use_cache=False)
-
-
-class _R:
-    def __init__(self, rc):
-        self.returncode = rc
 
 
 def test_a_probe_that_timed_out_is_UNANSWERED_not_ABSENT(monkeypatch):
@@ -104,12 +139,12 @@ def test_a_probe_that_timed_out_is_UNANSWERED_not_ABSENT(monkeypatch):
 def test_a_probe_that_answered_nonzero_IS_ABSENT(monkeypatch):
     """The paired half. If a real absence also became UNANSWERED the fix would
     have bought its honesty by refusing to answer anything, which is worse."""
-    state, _detail = _probe_with(monkeypatch, lambda argv, **kw: _R(1))
+    state, _detail = _probe_with(monkeypatch, lambda argv, **kw: 1)
     assert state == NV.PROBE_ABSENT
 
 
 def test_a_probe_that_answered_zero_is_PRESENT(monkeypatch):
-    state, detail = _probe_with(monkeypatch, lambda argv, **kw: _R(0))
+    state, detail = _probe_with(monkeypatch, lambda argv, **kw: 0)
     assert (state, detail) == (NV.PROBE_PRESENT, "")
 
 
@@ -147,9 +182,11 @@ def test_one_session_gets_one_answer_per_probe(monkeypatch):
 
     def counting(argv, **kw):
         calls.append(tuple(argv))
-        return _R(0)
+        return 0
 
-    monkeypatch.setattr(subprocess, "run", counting)
+    monkeypatch.setattr(
+        subprocess, "Popen",
+        lambda argv, **kw: _FakeChild(argv, {}, counting))
     monkeypatch.setattr("shutil.which", lambda exe: "/usr/bin/" + exe)
     argv = ["docker", "exec", "cache-probe-fixture", "true"]
     first = NV.probe(argv)
@@ -301,9 +338,11 @@ def _swallowing_probe_sites(directory: Path):
     subprocess and catches the bound with a blanket handler.
 
     Deliberately narrow, and the narrowness is stated rather than assumed: it
-    fires only when all three are present in ONE function — a `subprocess.run`
-    (or `.run`) call, a `timeout=` on it, a literal naming `docker`, and an
-    `except Exception:`/bare `except:` that does not re-raise. A blanket
+    fires only when all three are present in ONE TRY statement — a
+    `subprocess.run` (or `.run`) call, a `timeout=` on it, a literal naming
+    `docker`, and that try's own `except Exception:`/bare `except:` that does
+    not re-raise. Merely putting an unrelated broad handler later in the same
+    function must not splice two exception domains together. A blanket
     handler around something that is not a bounded docker probe is out of
     scope here; this is #1283's shape, not a general lint.
     """
@@ -313,28 +352,34 @@ def _swallowing_probe_sites(directory: Path):
             tree = ast.parse(path.read_text(errors="replace"))
         except SyntaxError:                                # pragma: no cover
             continue
-        for fn in ast.walk(tree):
-            if not isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)):
+        for try_node in ast.walk(tree):
+            if not isinstance(try_node, (ast.Try, ast.TryStar)):
                 continue
+
+            # Only calls inside THIS try's protected body can be caught by its
+            # handlers.  Walking the whole function used to pair a bounded
+            # docker probe in one try with a broad handler around a different
+            # operation in a later try (vibe-ic#1962), inventing a swallowing
+            # site that did not exist.
             bounded_docker = False
-            for call in ast.walk(fn):
-                if not isinstance(call, ast.Call):
-                    continue
-                name = (call.func.attr if isinstance(call.func, ast.Attribute)
-                        else getattr(call.func, "id", ""))
-                if name != "run":
-                    continue
-                if not any(k.arg == "timeout" for k in call.keywords):
-                    continue
-                if any(isinstance(c, ast.Constant)
-                       and isinstance(c.value, str) and "docker" in c.value
-                       for c in ast.walk(call)):
-                    bounded_docker = True
+            for statement in try_node.body:
+                for call in ast.walk(statement):
+                    if not isinstance(call, ast.Call):
+                        continue
+                    name = (call.func.attr
+                            if isinstance(call.func, ast.Attribute)
+                            else getattr(call.func, "id", ""))
+                    if name != "run":
+                        continue
+                    if not any(k.arg == "timeout" for k in call.keywords):
+                        continue
+                    if any(isinstance(c, ast.Constant)
+                           and isinstance(c.value, str) and "docker" in c.value
+                           for c in ast.walk(call)):
+                        bounded_docker = True
             if not bounded_docker:
                 continue
-            for h in ast.walk(fn):
-                if not isinstance(h, ast.ExceptHandler):
-                    continue
+            for h in try_node.handlers:
                 caught = (getattr(h.type, "id", "") if h.type is not None
                           else "<bare>")
                 if caught not in ("Exception", "BaseException", "<bare>"):
@@ -431,6 +476,36 @@ def test_the_rot_guard_can_actually_fire(tmp_path):
     hits = _swallowing_probe_sites(tmp_path)
     assert [f for f, _ln in hits] == ["test_planted_probe.py"], (
         f"the rot guard did not see the planted pre-#1283 shape: {hits}")
+
+
+def test_a_bounded_probe_and_an_unrelated_broad_handler_do_not_form_one_site(
+        tmp_path):
+    """Exception scope, not function scope, decides what a handler catches.
+
+    Current main's `test_issue1962_measured_pdk_analog_constants.py` has this
+    exact shape: the bounded docker call catches only explicit subprocess
+    failures, while a later broad handler protects per-container discovery.
+    Combining them would fail the corpus ratchet on code that cannot swallow
+    the probe's timeout.
+    """
+    (tmp_path / "test_separate_tries.py").write_text(textwrap.dedent(
+        """\
+        import subprocess
+
+        def _discover():
+            try:
+                names = subprocess.run(
+                    ["docker", "ps"], timeout=30).stdout.split()
+            except (OSError, subprocess.SubprocessError):
+                return []
+            for name in names:
+                try:
+                    inspect_container(name)
+                except Exception:
+                    continue
+            return names
+        """))
+    assert _swallowing_probe_sites(tmp_path) == []
 
 
 def test_the_converted_sites_are_not_seen_by_the_guard():

@@ -110,6 +110,59 @@ def test_build_failure_is_an_error_not_a_failure_and_the_bridge_refuses(
     assert SRB.find_professional_tb_pass(tmp_path) is None
 
 
+def test_commented_missing_module_diagnostic_does_not_trigger_a_retry(tmp_path):
+    """A source line echoed from an HDL comment is not a tool diagnosis."""
+    _tb(tmp_path, "vec_one")
+    vendor = tmp_path / "input/vendor_rtl"
+    vendor.mkdir(parents=True)
+    (vendor / "ghost.sv").write_text("module ghost; endmodule\n")
+    builds = 0
+
+    def dispatch(argv, _wd, _container, _tool, _timeout):
+        nonlocal builds
+        if "--version" in argv:
+            return 0, "Verilator 5.051"
+        if "--binary" in argv:
+            builds += 1
+            return 1, "dut.sv:9: // Cannot find module: ghost\nreal syntax error"
+        raise AssertionError(f"a failed build must not run: {argv}")
+
+    report = {}
+    assert T.run_unit_tbs(tmp_path, None, report, dispatch=dispatch) == 0
+    assert builds == 1, (
+        "a module name found only inside an echoed HDL comment caused a "
+        "second build with an unrelated source"
+    )
+    assert report["errored"] == 1
+
+
+def test_real_missing_module_diagnostic_still_resolves_and_retries(tmp_path):
+    """The comment filter must not erase a genuine simulator diagnosis."""
+    _tb(tmp_path, "vec_one")
+    vendor = tmp_path / "input/vendor_rtl"
+    vendor.mkdir(parents=True)
+    source = vendor / "needed.sv"
+    source.write_text("module needed; endmodule\n")
+    builds = 0
+
+    def dispatch(argv, _wd, _container, _tool, _timeout):
+        nonlocal builds
+        if "--version" in argv:
+            return 0, "Verilator 5.051"
+        if "--binary" in argv:
+            builds += 1
+            if builds == 1:
+                return 1, "Cannot find file containing module: 'needed'"
+            assert str(source) in argv
+            return 0, "build ok"
+        return 0, "[TB vec_one] PASS: matched"
+
+    report = {}
+    assert T.run_unit_tbs(tmp_path, None, report, dispatch=dispatch) == 1
+    assert builds == 2
+    assert report["passed"] == 1
+
+
 def test_a_failing_simulation_is_a_failure_and_the_bridge_refuses(
         tmp_path):
     _tb(tmp_path, "vec_one")

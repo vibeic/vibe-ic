@@ -417,25 +417,27 @@ def test_MUTATION_deleting_the_disclosure_makes_the_gate_LOUDER(tmp_path):
     a dangling pointer again — which is #414's defect, not its fix."""
     cell = _real_cell(tmp_path)
     rows = _rows(cell)
-    stripped = 0
+    stripped_paths = 0
     for r in rows:
-        if r.pop("outputs_pruned_at_publish", None) is not None:
-            stripped += 1
+        pruned = r.pop("outputs_pruned_at_publish", None)
+        if isinstance(pruned, list):
+            stripped_paths += len({p for p in pruned
+                                   if isinstance(p, str) and p})
         r.pop("outputs_pruned_reason", None)
     _write_rows(cell, rows)
     verdict, findings, counts = G.audit_counted(cell)
     assert verdict == "FAIL"
-    # `== 7` was the published cell's row count. THE COUNT IS DERIVED FROM THE
-    # MUTATION: every row whose marker this test just deleted must come back as
-    # a dangling pointer — one error per row stripped, no more and no fewer.
-    # That is the experiment's own arithmetic, so republishing the cell with a
-    # different number of pruned rows changes both sides together.
-    assert stripped > 0, (
+    # `outputs_pruned_at_publish` is a LIST OF PATHS. One row may disclose
+    # several absent outputs, and the checker correctly emits one finding per
+    # path. Count the subjects the mutation uncovered rather than the number
+    # of ledger rows that happened to group them.
+    assert stripped_paths > 0, (
         "the real cell carries no `outputs_pruned_at_publish` marker, so this "
         "experiment deleted nothing and proves nothing")
     assert _rules(findings, "ERROR").count(
-        "PROVENANCE_OUTPUT_FILE_MISSING") == stripped, (
-        f"deleting {stripped} marker(s) must produce {stripped} dangling-"
+        "PROVENANCE_OUTPUT_FILE_MISSING") == stripped_paths, (
+        f"deleting disclosures for {stripped_paths} path(s) must produce "
+        f"{stripped_paths} dangling-"
         f"pointer error(s)")
     assert counts["not_verifiable_here"] == 0
 

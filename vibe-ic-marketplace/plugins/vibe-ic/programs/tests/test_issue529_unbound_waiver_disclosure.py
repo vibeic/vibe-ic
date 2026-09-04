@@ -69,7 +69,7 @@ sys.path.insert(0, str(PROGRAMS))
 
 import _waiver_entries as _we  # noqa: E402
 import waiver_staleness as _ws  # noqa: E402
-from _published_corpus import corpus_root, needs_corpus  # noqa: E402
+from _published_corpus import corpus_tree, skip_reason  # noqa: E402
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import _progress_run as _pr  # noqa: E402
@@ -90,22 +90,27 @@ def _corpus_dirs():
     and both halves of that stopped being right when the results moved to
     `vibeic/benchmark-data`:
 
-    * the LOCATION moved, and only `corpus_root()` knows where it is now — it
-      is what honours the `VIBE_IC_BENCHMARK_DATA` pointer;
+    * the LOCATION moved, and only `corpus_tree()` knows where it is now — it
+      is what honours the `VIBE_IC_BENCHMARK_DATA` pointer without requiring
+      a canonical-cell population;
     * the GUARD `CORPUS_DIRS[0].is_dir()` was a directory-existence test used to
       mean "the corpus is here", and it is no longer either. The path it named
       does not exist in this checkout at all, so the skip it was attached to
       never fired for the tests that FAILED; and `benchmark-data/` itself does
       still exist here — it holds the design INPUTS — so its presence would
-      have proved nothing anyway. `@needs_corpus` asks whether a published CELL
-      is readable, which is the question these three tests need answered.
+      have proved nothing anyway. The waiver population is under
+      `protocol_parity/`, not under a canonical cell, so a cell-existence marker
+      is not an applicability test for these three checks.
 
     Resolved per call rather than at import so that the pointer is read when the
     test runs, not when the module is loaded.
     """
-    root = corpus_root()
-    assert root is not None, "@needs_corpus should have skipped before this point"
-    return (root / "evaluation/phase1_parity", root / "ic")
+    root = _corpus_root_dir()
+    # Keep the historical prefix readable while following the corpus' current
+    # canonical relocation.  This widens observation; it does not add an
+    # accepted waiver tier or relax any entry assertion below.
+    return (root / "protocol_parity", root / "evaluation/phase1_parity",
+            root / "ic")
 
 SELF_REF = "reports/orchestrator/phase3_one_shot.json#steps[name=lvs]"
 
@@ -230,8 +235,9 @@ def _tracked_waivers_json():
 
 
 def _corpus_root_dir():
-    root = corpus_root()
-    assert root is not None, "@needs_corpus should have skipped before this point"
+    root = corpus_tree()
+    if root is None:
+        pytest.skip(skip_reason())
     return root
 
 
@@ -248,7 +254,6 @@ def _corpus_waiver_entries():
     return rows
 
 
-@needs_corpus
 def test_corpus_waivers_dialect_carries_no_env_unavailable_entry():
     """The measurement the whole issue turns on: every `waivers`-dialect entry
     in the corpus takes the tier `continue`, so #216's mechanism protected none
@@ -273,7 +278,6 @@ def test_corpus_waivers_dialect_carries_no_env_unavailable_entry():
     assert tiers.get("WAIVED"), tiers
 
 
-@needs_corpus
 def test_every_corpus_entry_is_well_formed_so_none_is_a_rejection():
     """The dropped entries are not junk. Each carries the attestation quartet
     that makes an ENV_UNAVAILABLE waiver honourable, which is exactly why
@@ -631,15 +635,15 @@ def test_pass_structural_is_written_by_no_producer():
     assert "PASS_STRUCTURAL" not in emitted_tiers
 
 
-@needs_corpus
 def test_pass_structural_is_read_by_no_consumer_yet_sits_in_the_corpus():
     """Half two: the tier NO PRODUCER EMITS is nevertheless in the published
     tree — i.e. it got there by hand.
 
-    Guarded, because the subject is a PUBLISHED CELL. The producer claim it
-    rests on is re-established here rather than assumed, so this half is a
-    complete statement on its own and does not become true-by-omission when the
-    other test is the one that breaks.
+    Guarded inside `_corpus_root_dir`, because the subject is a published
+    protocol-parity waiver population, not a canonical cell. The producer
+    claim it rests on is re-established here rather than assumed, so this half
+    is a complete statement on its own and does not become true-by-omission
+    when the other test is the one that breaks.
     """
     assert "PASS_STRUCTURAL" not in _tiers_the_producer_emits()
 

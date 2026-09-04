@@ -40,16 +40,23 @@ at the bottom of this file reconstructs.
 Every gate CLI was run against a scratch MIRROR of those directories, never
 against the tracked tree, which stays byte-clean.
 
-THAT ONE-LINER NOW SPANS TWO TREES. The published cells moved to
-https://github.com/vibeic/benchmark-data; the design INPUTS stayed in vibe-ic.
-Neither half alone reconstructs the 108 — the corpus carries 105 and this
-checkout carries the 3 under `ic/*/input/**/rtl` — and the two sets are
-disjoint, so the denominator is the union and the reconstruction below takes it.
-Run `git ls-files` in this checkout alone and you get 3, which is not a smaller
-corpus but a half-read one; with no corpus to read at all the reconstruction
-SKIPS naming it (`_published_corpus`) instead of reporting a corpus that shrank.
+THE 108 IS AN ACCEPTANCE POPULATION, NOT A LIVE-CORPUS SIZE. The published
+repository may withdraw obsolete or untrustworthy runs. That must not rewrite
+the historical population which licensed these two conversions, and the
+current 21-directory tree cannot be substituted for it merely because it is
+what remains readable today.
+
+The exact 108 directory identities reconstructed from monorepo commit
+`ed486851c3eb067a257ceb950ff79a354c7c763f` are retained in
+`fixtures/issue492_rtl_acceptance_population.json`, with their source tree and
+SHA-256 authenticated below. The fixture contains directory identities only:
+no RTL bytes, benchmark oracle, golden answer, or gate verdict. Current
+benchmark-data is still opened as a readability control, but it cannot lower or
+otherwise redefine the acceptance denominator.
 """
+import hashlib
 import importlib.util
+import json
 import sys
 from pathlib import Path
 
@@ -68,6 +75,45 @@ import _progress_run as _pr  # noqa: E402
 
 #: The half of the published tree that stayed in vibe-ic: the design inputs.
 _INPUT_HALF = PROGRAMS.parents[3] / "benchmark-data"
+
+_RTL_ACCEPTANCE_FIXTURE = (
+    Path(__file__).parent / "fixtures" /
+    "issue492_rtl_acceptance_population.json")
+_RTL_ACCEPTANCE_SOURCE = {
+    "vibe_ic_commit": "ed486851c3eb067a257ceb950ff79a354c7c763f",
+    "vibe_ic_tree": "e53b300fd8210d63c9e393a4da37ea9d6318469a",
+}
+_RTL_ACCEPTANCE_COUNT = 108
+_RTL_ACCEPTANCE_SHA256 = (
+    "9cf3c836d7e838971e8524fc565fc207c354f8f0a09e642b807d561f3f16dab2")
+
+
+def _rtl_acceptance_population(path: Path = _RTL_ACCEPTANCE_FIXTURE) -> tuple:
+    """Load the exact path-only population that licensed the conversions."""
+    data = json.loads(path.read_text(encoding="utf-8"))
+    assert data.get("schema_version") == 1, "unexpected issue492 fixture schema"
+    assert data.get("source") == _RTL_ACCEPTANCE_SOURCE, (
+        "issue492 acceptance fixture source changed")
+    paths = data.get("rtl_directories")
+    assert isinstance(paths, list), "issue492 fixture population is not a list"
+    assert all(isinstance(item, str) for item in paths), (
+        "issue492 fixture must contain directory identities only")
+    assert paths == sorted(set(paths)), (
+        "issue492 fixture population must be sorted and unique")
+    assert len(paths) == data.get("rtl_directories_count") == (
+        _RTL_ACCEPTANCE_COUNT), (
+        f"issue492 fixture population is {len(paths)}, expected "
+        f"{_RTL_ACCEPTANCE_COUNT}")
+    assert all(not Path(item).is_absolute()
+               and ".." not in Path(item).parts
+               and Path(item).name == "rtl" for item in paths), (
+        "issue492 fixture contains something other than a relative rtl/ "
+        "directory identity")
+    digest = hashlib.sha256(("\n".join(paths) + "\n").encode()).hexdigest()
+    assert data.get("rtl_directories_sha256") == digest == (
+        _RTL_ACCEPTANCE_SHA256), (
+        f"issue492 fixture population digest mismatch: {digest}")
+    return tuple(paths)
 
 
 def _tracked_rtl_dirs(root: Path) -> set:
@@ -300,25 +346,55 @@ def test_umbrella_records_the_vacuous_project_as_a_skip_not_a_pass(tmp_path):
 
 @needs_corpus
 def test_the_published_denominator_is_the_one_a_reader_reconstructs():
-    """The corpus size is the LICENCE for both conversions ("0 FAIL and a
-    non-zero denominator on ALL of them"), so it has to be the number an
-    independent reviewer gets from the tracked tree — not a near-miss. A
-    denominator stated one larger than it is would mean the sweep either
-    skipped a directory or double-counted one, and "I measured all of them" is
-    exactly the claim a wrong denominator quietly breaks.
+    """The acceptance denominator is independently reconstructible.
 
-    Reconstructed from BOTH halves of the published tree (see the module
-    docstring): the cells in `vibeic/benchmark-data` and the design inputs still
-    here. Both are keyed benchmark-data-relative, so a tree that carries both
-    halves reconstructs to the same set rather than to twice it.
+    Its source is the exact historical tree on which all 108 directories were
+    measured, not whichever subset a publication-retention policy leaves live
+    today. The live read remains load-bearing: absent benchmark-data is still
+    CANNOT-LOOK, and an empty current walk cannot turn this test green from the
+    fixture alone.
     """
-    rtl_dirs = _tracked_rtl_dirs(corpus_root()) | _tracked_rtl_dirs(_INPUT_HALF)
-    assert len(rtl_dirs) == _CORPUS_DENOMINATOR, (
-        f"corpus moved: {len(rtl_dirs)} rtl/ dirs now, table says "
-        f"{_CORPUS_DENOMINATOR} — re-run the measurement before trusting it")
+    acceptance = _rtl_acceptance_population()
+    live = _tracked_rtl_dirs(corpus_root()) | _tracked_rtl_dirs(_INPUT_HALF)
+    assert live, "current benchmark-data has no readable tracked RTL directory"
+    assert len(acceptance) == _CORPUS_DENOMINATOR, (
+        f"authenticated acceptance population has {len(acceptance)} rtl/ "
+        f"directories, table says {_CORPUS_DENOMINATOR}")
     for gate, (_fails, denom) in _RTL_DIR_GROUP_MEASUREMENT.items():
         assert denom is None or denom <= _CORPUS_DENOMINATOR, (
             f"{gate} claims a denominator above the corpus size")
+
+
+def test_issue492_acceptance_fixture_rejects_member_substitution(tmp_path):
+    """Same cardinality is not the same acceptance population."""
+    data = json.loads(_RTL_ACCEPTANCE_FIXTURE.read_text(encoding="utf-8"))
+    data["rtl_directories"][0] = "substituted/rtl"
+    data["rtl_directories"].sort()
+    changed = tmp_path / "changed.json"
+    changed.write_text(json.dumps(data), encoding="utf-8")
+    with pytest.raises(AssertionError, match="digest mismatch"):
+        _rtl_acceptance_population(changed)
+
+
+def test_issue492_acceptance_fixture_rejects_source_substitution(tmp_path):
+    """A valid-looking list from another commit cannot inherit the licence."""
+    data = json.loads(_RTL_ACCEPTANCE_FIXTURE.read_text(encoding="utf-8"))
+    data["source"]["vibe_ic_commit"] = "0" * 40
+    changed = tmp_path / "changed-source.json"
+    changed.write_text(json.dumps(data), encoding="utf-8")
+    with pytest.raises(AssertionError, match="fixture source changed"):
+        _rtl_acceptance_population(changed)
+
+
+def test_issue492_acceptance_fixture_contains_identities_not_rtl_or_verdicts():
+    """The retained input is a population index, never benchmark evidence."""
+    data = json.loads(_RTL_ACCEPTANCE_FIXTURE.read_text(encoding="utf-8"))
+    assert set(data) == {
+        "rtl_directories", "rtl_directories_count",
+        "rtl_directories_sha256", "schema_version", "source",
+    }
+    assert all(isinstance(item, str) and Path(item).name == "rtl"
+               for item in data["rtl_directories"])
 
 
 def test_only_gates_that_cleared_both_bars_were_converted():

@@ -182,7 +182,8 @@ def test_noleak_a_digital_case_beside_an_am_case_still_fails(tmp_path):
     res = _run(root, "--out", str(out))
     assert res.returncode == 1, (res.returncode, res.out)
     rec = json.loads(out.read_text())
-    assert rec["waived"] == 1 and rec["fail"] == 1, rec
+    assert rec["waived"] == 1 and rec["not_executed"] == 1, rec
+    assert rec["fail"] == 0, rec
 
 
 def test_noleak_a_mislabelled_digital_case_is_not_credited(tmp_path):

@@ -823,57 +823,37 @@ def test_GUARD_the_shipped_step_is_not_vacuous_when_its_sim_actually_ran(
         "vacuously satisfied' over a tree whose sim ran, whose testbenches "
         "drive the unit and whose coverage was measured\n"
         + "\n".join(str(r) for r in step.get("reasons", [])))
-    # #1978 classifies the untyped professional-TB non-verdict as an execution
-    # error. #1980 independently preserves the two live advisory refusals.
-    # NEITHER FACT IS FLATTENED — that is the property, and it is asserted
-    # below on the records and the reasons rather than on one word.
-    #
-    # THE WORD ITSELF MOVED, AND NOT BY ACCIDENT. This file last asserted
-    # `status == "FAIL"` at 867f807a7 (#1980), and 182879111 ("an ADVISORY row
-    # no longer fails its step") landed AFTER it: a refusal from a gate that is
-    # advisory on BOTH sources — its own module docstring says
-    # `ENFORCEMENT: advisory` AND the canonical flow wires it
-    # `advisory_program_exit_zero` and never blocking — is reported and does
-    # NOT deny the step its tier. MEASURED at bcedcdf25d9c: both refusing gates
-    # here satisfy both sources, so the stand-down is the shipped rule applying
-    # correctly, and the step word falls to the next thing with an opinion —
-    # the applicable input that was NOT examined.
-    #
-    # So the assertion is the PAIR it was always about: not a pass tier, and
-    # every refusal still reaching the reader. A single word would have to be
-    # rewritten again the next time the precedence is refined; these do not.
+    # This deliberately incomplete fixture has no L9. The behavioural gate is
+    # now blocking once its question is applicable or undeclared; only an
+    # executed, cross-checked design-owned zero-population contract may stand
+    # it down. Therefore this fixture must fail rather than borrow an advisory
+    # tier. The remaining rtl-unit advisory refusal is still preserved below.
     assert step["status"] not in ("PASS", "VACUOUS_PASS", "SKIPPED",
                                  "SKIPPED-CONDITION", "WAIVED"), (
         "a step carrying two live advisory refusals and an unexamined "
         "applicable input reached a pass/skip tier\n" + str(step))
-    assert step["status"] == "INCOMPLETE", step
+    assert step["status"] == "FAIL", step
     assert any(record.get("enforcement") == "BLOCKING"
-               for record in step.get("advisory_gate_records", [])), step
-    assert any(record.get("reason_class") == "EXECUTION_ERROR"
                for record in step.get("advisory_gate_records", [])), step
     assert step.get("partial_vacuity_disclosed") is False, step
     # The refusals are not merely IN the records — they reach the step line a
     # human reads. A stand-down that also went quiet would be the flattening
     # this file exists to refuse.
     blob = "\n".join(str(r) for r in step.get("reasons", []))
-    for gate in ("behavioral_evidence_per_spec_item_check",
-                 "rtl_unit_test_coverage_check"):
-        assert gate in blob and "verdict=FAIL" in blob, (
-            f"{gate}'s refusal was stood down AND silenced\n" + blob)
+    assert "behavioral_evidence_per_spec_item_check" in blob, blob
+    assert "rtl_unit_test_coverage_check" in blob and "verdict=FAIL" in blob, (
+        "the remaining advisory refusal was silenced\n" + blob)
 
 
-def test_the_shipped_step_preserves_each_live_advisory_refusal(tmp_path):
-    """The first refusal must not hide later advisory-slot executions."""
+def test_the_shipped_step_preserves_the_remaining_live_advisory_refusal(tmp_path):
+    """An earlier blocking failure must not hide later advisory execution."""
     _rc, _out, step = _shipped_step4(tmp_path, ran=True)
-    # The step word is INCOMPLETE, not FAIL, since 182879111 stood two-source
-    # advisory refusals down — see the long note in the GUARD above. What this
-    # test is about is unchanged: BOTH refusals survive, with their verdicts
-    # and exit codes, however the tier is spelled.
+    # The behavioural-evidence check is no longer advisory; the one remaining
+    # advisory refusal after that blocking failure must still be recorded.
     assert step["status"] not in ("PASS", "VACUOUS_PASS", "WAIVED"), step
     blocking = [record for record in step.get("advisory_gate_records", [])
                 if record.get("enforcement") == "BLOCKING"]
     assert {record["gate"] for record in blocking} == {
-        "behavioral_evidence_per_spec_item_check",
         "rtl_unit_test_coverage_check",
     }, blocking
     assert {record["exit_code"] for record in blocking} == {1}

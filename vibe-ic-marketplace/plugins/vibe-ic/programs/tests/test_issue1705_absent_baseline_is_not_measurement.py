@@ -29,6 +29,7 @@ An over-correction that simply refuses everything fails that second half.
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -86,8 +87,17 @@ def _wiring_tree(root: Path) -> None:
 
 
 def _run(*argv: str) -> subprocess.CompletedProcess[str]:
+    # These are synthetic CLI fixtures.  A landing/corpus runner legitimately
+    # exports the live-corpus pointer for the surrounding suite, but letting
+    # that pointer override this test's explicit ``--root``/``--subdir`` makes
+    # the child inspect the real corpus instead of the repository built above.
+    # Keep the parent binding intact and remove it only from this child.
+    env = os.environ.copy()
+    env.pop("VIBE_IC_BENCHMARK_DATA", None)
+    env.pop("GATEKEEPER_BENCHMARK_DATA_SHA", None)
     return subprocess.run(
-        [sys.executable, *argv], capture_output=True, text=True, check=False)
+        [sys.executable, *argv], capture_output=True, text=True, check=False,
+        env=env)
 
 
 @pytest.mark.parametrize(

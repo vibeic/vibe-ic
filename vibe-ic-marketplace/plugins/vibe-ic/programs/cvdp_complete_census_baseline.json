@@ -9,8 +9,8 @@
   "mtime_observed": "2026-08-13T08:18:44+08:00"
  },
  "measurement": {
-  "_comment": "Two-arm control over the SAME bytes above: the corpus is a constant across both arms and only the code differs, so the 226->233 move is the reader chain's, not the corpus's. 11bb1cde7 measured both arms in its own commit message (226/3/73 vs 233/3/66) and moved the number there but not in the test, which is how main was left red. Of the 7 arrivals, 5 are earned and 2 are false COMPLETEs listed under `degenerate_complete`; the arrival set is a STRICT SUPERSET (0 departures).",
-  "measured_on": "2026-08-31",
+  "_comment": "The historical arms preserve the 226->233 provenance. The 2026-09-04 repair re-ran the official cvdp_complete_extract producer over the SAME pinned bytes: current main produced 238 COMPLETE with one departure and six arrivals against this record, while its partial Markdown reader also produced five degenerate COMPLETE verdicts. The repaired reader restores the departure, retains all six prompt-earned arrivals, and reads the full prompt interface for the three repair-scope false shapes (axi_register, axil_precision_counter, and the pre-existing gcd quarantine row). Candidate result: 239 COMPLETE, a strict superset of the prior 233 members, and two unrelated legacy degenerate rows.",
+  "measured_on": "2026-09-04",
   "arms": [
    {
     "commit": "fe27b28b7",
@@ -25,9 +25,23 @@
     "note": "origin/main HEAD; reader chain of 11bb1cde7",
     "complete": 233,
     "degenerate": 3
+   },
+   {
+    "commit": "a7683aee0ed0e4530fae75175f7831d095550575",
+    "dated": "2026-09-04",
+    "note": "frozen current main; one recorded member departed and six arrived",
+    "complete": 238,
+    "degenerate": 5
+   },
+   {
+    "commit": "candidate",
+    "dated": "2026-09-04",
+    "note": "official producer after the complete Markdown reader repair",
+    "complete": 239,
+    "degenerate": 2
    }
   ],
-  "ratchet": "EXACT SET, both directions. This population is NOT monotone-up and must not be made so: 228->226 was an honest DROP that removed two false COMPLETEs, and repairing the two entries under `degenerate_complete` would honestly drop this to 231. A `>=` would have let both bugs ride. Every move, up or down, is argued here before it lands."
+  "ratchet": "EXACT SET, both directions. This population is NOT monotone-up and must not be made so: a reader may add a newly earned member, remove a false COMPLETE, or repair an existing member's interface without changing membership. A `>=` would hide the last two cases. Every move, up or down, is argued here before it lands."
  },
  "complete_ids": [
   "cvdp_copilot_32_bit_Brent_Kung_PP_adder_0001",
@@ -57,12 +71,14 @@
   "cvdp_copilot_apb_dsp_unit_0001",
   "cvdp_copilot_apb_gpio_0005",
   "cvdp_copilot_arithmetic_progression_generator_0015",
+  "cvdp_copilot_async_filo_0001",
   "cvdp_copilot_async_filo_0025",
   "cvdp_copilot_axi_register_0001",
   "cvdp_copilot_axi_stream_downscale_0001",
   "cvdp_copilot_axi_stream_upscale_0001",
   "cvdp_copilot_axi_tap_0001",
   "cvdp_copilot_axi_tap_0009",
+  "cvdp_copilot_axil_precision_counter_0001",
   "cvdp_copilot_axis_border_gen_0001",
   "cvdp_copilot_axis_border_gen_0014",
   "cvdp_copilot_axis_mux_0001",
@@ -93,6 +109,7 @@
   "cvdp_copilot_caesar_cipher_0001",
   "cvdp_copilot_caesar_cipher_0038",
   "cvdp_copilot_car_parking_management_0015",
+  "cvdp_copilot_car_parking_management_0018",
   "cvdp_copilot_car_parking_management_0031",
   "cvdp_copilot_cascaded_adder_0025",
   "cvdp_copilot_cdc_pulse_synchronizer_0004",
@@ -124,6 +141,7 @@
   "cvdp_copilot_elastic_buffer_0005",
   "cvdp_copilot_elevator_control_0006",
   "cvdp_copilot_elevator_control_0009",
+  "cvdp_copilot_elevator_control_0026",
   "cvdp_copilot_elevator_control_0033",
   "cvdp_copilot_elevator_control_0036",
   "cvdp_copilot_ethernet_packet_parser_0001",
@@ -232,6 +250,7 @@
   "cvdp_copilot_signal_correlator_0015",
   "cvdp_copilot_signed_adder_0001",
   "cvdp_copilot_single_number_0001",
+  "cvdp_copilot_simple_spi_0001",
   "cvdp_copilot_skid_buffer_0001",
   "cvdp_copilot_sobel_filter_0011",
   "cvdp_copilot_sorter_0001",
@@ -259,6 +278,7 @@
   "cvdp_copilot_vga_controller_0006",
   "cvdp_copilot_vga_controller_0026",
   "cvdp_copilot_virtual2physical_tlb_0001",
+  "cvdp_copilot_wb2ahb_0001",
   "cvdp_copilot_word_change_detector_0001",
   "cvdp_copilot_word_reducer_0001",
   "cvdp_copilot_write_buffer_merge_0001",
@@ -267,7 +287,6 @@
  "degenerate_complete": {
   "_comment": "QUARANTINE — COMPLETE verdicts whose recovered interface has no input or no output. A module with nothing coming in, or nothing going out, cannot be written from that interface, so COMPLETE is false there whatever the count says. MAY ONLY SHRINK; the target is 0. An entry is a FINDING AWAITING ITS AUTHOR, not a dispensation: it is paid by repairing the reader chain so the record stops being degenerate, and the row is then deleted. Deleting a row on its own does not pay it — the test recomputes the set every run and an entry that comes back is a stale record, reported as its own failure. A NEW entry is a new false COMPLETE and blocks. This floor exists because a bare count cannot tell recovery-improvement from recovery-regression: 226->233 was both at once.",
   "ids": {
-   "cvdp_copilot_gcd_0001": "0 inputs. Recovered interface is {controlpath_state}, which reads as FSM prose, not a port of the module input.prompt names (`gcd_top`, with clk/rst/go/A/B/OUT/done). Arrived with 11bb1cde7.",
    "cvdp_copilot_sequencial_binary_to_one_hot_decoder_0001": "0 outputs. Recovered interface is {i_clk, i_rstb}. input.prompt declares both data ports under '## Inputs and Outputs' WITH widths — `i_binary_in` (BINARY_WIDTH bits, Default 5) and `o_one_hot_out` (OUTPUT_WIDTH bits, Default 32) — over parameters the reader already recognises. Prompt-stated and missed: honest verdict is INCOMPLETE_EXTRACTION_GAP. Arrived with 11bb1cde7.",
    "cvdp_copilot_sigma_delta_audio_0007": "0 outputs. Recovered interface is 4 inputs, no output. PRE-EXISTING — degenerate on the fe27b28b7 arm too, so it is not a regression of 11bb1cde7 and is the reason this floor starts at 3 rather than 2."
   }

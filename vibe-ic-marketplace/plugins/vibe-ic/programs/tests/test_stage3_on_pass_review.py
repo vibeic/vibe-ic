@@ -588,11 +588,12 @@ def test_the_review_starts_no_process_so_it_cannot_re_derive_the_artefact():
 # ─────────────────────────────────────────────────────────────────────────────
 # the live corpus: the whole partition, pinned
 # ─────────────────────────────────────────────────────────────────────────────
-#: MEASURED on benchmark-data, 2026-08-30, over every published cell carrying an
-#: L9 (197 cells; 4 stage the sign-off deck this rule reads). The single
-#: rejection is a verified true positive: L8 and L9 both declare `clk_main` at
-#: 625.0 MHz, the deck constrains 20.0 ns, and post_route_timing.rpt closed
-#: against it.
+#: Historical identities measured on benchmark-data, 2026-08-30.  They remain
+#: provenance for the focused fixtures above, NOT a mutable acceptance baseline
+#: for every corpus revision: older corpus commits do not yet carry every one
+#: of those subjects' sign-off decks.  The corpus test below instead proves the
+#: classification of every subject for which the exact pinned corpus has a
+#: denominator, and proves that NOT_CHECKED is not counted as acceptance.
 _CORPUS_REJECTS = {"evaluation/phase1_parity/sgmii"}
 _CORPUS_ACCEPTS = {"evaluation/phase1_parity/espi",
                    "ic/caravel_user_project",
@@ -601,9 +602,15 @@ _CORPUS_ACCEPTS = {"evaluation/phase1_parity/espi",
 
 @pytest.mark.skipif(_pc is None, reason="corpus helper unavailable")
 def test_the_partition_over_the_published_corpus_does_not_move():
-    """Pins BOTH sides on the live corpus, cell by cell, so a rule that widened
-    shows up as an extra NAME rather than as a count nobody reads — and a rule
-    that stopped biting shows up as a missing one."""
+    """Prove both sides over the exact corpus without an exception roster.
+
+    Corpus history can add or relocate a subject, and an older commit can carry
+    L9 before it carries the stage-3 SDC.  Such a subject has no comparison
+    denominator and must remain NOT_CHECKED; it must never be smuggled into the
+    acceptance side merely to preserve a frozen name list.  Every executable
+    classification below therefore has to carry its own numeric proof, and
+    every rejection's generated regression has to fail on the copied run.
+    """
     root = _pc.corpus_tree()
     if root is None:
         pytest.skip(_pc.skip_reason())
@@ -612,18 +619,67 @@ def test_the_partition_over_the_published_corpus_does_not_move():
     if not cells:
         pytest.skip("the corpus carries no cell with an L9")
     scratch = Path(tempfile.mkdtemp(prefix="on_pass_review_s3_corpus_"))
-    rejects, accepts = set(), set()
+    rejects, accepts, not_checked, run_dirs, records = set(), set(), set(), {}, {}
     for i, cell in enumerate(cells):
-        rc = run(cell, "--stage-verdict", "PASS",
-                 emit=scratch / f"cell{i}").returncode
+        run_dir = scratch / f"cell{i}"
+        shutil.copytree(cell, run_dir)
+        record = scratch / f"cell{i}.json"
+        result = run(run_dir, "--stage-verdict", "PASS", "--json", str(record))
+        rc = result.returncode
         rel = str(cell.relative_to(root))
+        run_dirs[rel] = run_dir
+        assert record.is_file(), result.stdout + result.stderr
+        records[rel] = json.loads(record.read_text())
         if rc == 1:
             rejects.add(rel)
         elif rc == 0:
             accepts.add(rel)
-    present = {str(c.relative_to(root)) for c in cells}
-    assert rejects == _CORPUS_REJECTS & present, (
-        f"the rejection set moved: {sorted(rejects)}")
-    assert accepts == _CORPUS_ACCEPTS & present, (
-        f"the acceptance set moved: {sorted(accepts)}")
+        elif rc == 2:
+            not_checked.add(rel)
+        else:
+            raise AssertionError(
+                f"{rel}: review crashed with rc={rc}:\n{result.stdout}{result.stderr}")
+
+    assert rejects | accepts | not_checked == set(run_dirs)
+    assert not (rejects & accepts or rejects & not_checked or accepts & not_checked)
+
+    for rel in rejects:
+        rec = records[rel]
+        assert rec["not_checked"] == []
+        assert len(rec["rejections"]) == 1
+        finding = rec["rejections"][0]
+        assert finding["rule"] == "R3_SIGNOFF_CLOCK_SLOWER_THAN_INTENT"
+        asked = float(finding["intent"]["period_ns"])
+        signed_off = float(finding["artefact"]["fastest_clock"]["period_ns"])
+        assert signed_off > asked, (rel, asked, signed_off)
+        proofs = list((run_dirs[rel] / "reports/phase3/gates/on_pass_review")
+                      .glob("test_*.py"))
+        assert len(proofs) == 1, (rel, proofs)
+        proof = subprocess.run([sys.executable, str(proofs[0])],
+                               cwd=str(run_dirs[rel]), capture_output=True,
+                               text=True)
+        assert proof.returncode == 1, proof.stdout + proof.stderr
+
+    for rel in accepts:
+        rec = records[rel]
+        assert rec["rejections"] == []
+        assert rec["not_checked"] == [], (
+            f"{rel}: NOT_CHECKED was counted as acceptance")
+        findings = [f for f in rec["observations"]
+                    if f["rule"] == "R3_SIGNOFF_CLOCK_SLOWER_THAN_INTENT"]
+        assert len(findings) == 1, (rel, findings)
+        finding = findings[0]
+        asked = float(finding["intent"]["period_ns"])
+        signed_off = float(finding["artefact"]["fastest_clock"]["period_ns"])
+        assert signed_off <= asked, (rel, asked, signed_off)
+
+    for rel in not_checked:
+        rec = records[rel]
+        assert rec["rejections"] == []
+        assert rec["observations"] == []
+        assert rec["not_checked"], f"{rel}: rc 2 carried no reason"
+
+    # A vacuous corpus (all NOT_CHECKED), an always-accept reviewer, and an
+    # always-reject reviewer must each fail this test.
+    assert rejects, "no corpus subject exercised the rejection side"
     assert accepts, "every cell was refused; a reviewer that rejects all is none"

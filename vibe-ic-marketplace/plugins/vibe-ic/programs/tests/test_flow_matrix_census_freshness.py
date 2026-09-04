@@ -41,6 +41,28 @@ Run::
 """
 from __future__ import annotations
 
+#: MEASURED at b309595f06, in the digest-pinned image, one file per process:
+#:
+#:     4 failed, 2 passed, 4 warnings in 359.73s (0:05:59)
+#:     --- programs/tests/test_flow_matrix_census_freshness.py rc=1 cases=6 red=4
+#:
+#: Six tests, and one of them regenerates the live census by running a nested
+#: pytest session ("62 passed, 71 skipped in 42.28s" appears inside this file's
+#: own output). It COMPLETED; it was not hung. Under the per-file driver's base
+#: silence grace of 300 s the same run is reported "STALLED after 300 s" and the
+#: file gets no verdict at all -- hiding the four reds above.
+#:
+#: MEASURED BOTH SIDES at --stall-after 300, one file per process:
+#:
+#:   pre-fix:   wall 303 s -> rc=199 NORECORD "STALLED after 300 s ... UNKNOWN"
+#:   post-fix:  4 failed, 2 passed, 4 warnings in 388.15s -> rc=1 cases=6 red=4
+#:
+#: 900 = the 359.73 s / 388.15 s the whole file takes, with room for a loaded
+#: host (both runs were measured at load average 15-22 on a shared machine). It
+#: is an upper bound on any single silent gap inside it, because the whole file
+#: fits in it.
+VIBEIC_SILENCE_BUDGET_S = 900
+
 import os
 import re
 import sys

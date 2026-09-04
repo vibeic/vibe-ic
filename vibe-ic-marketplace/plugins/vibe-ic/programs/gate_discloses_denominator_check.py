@@ -368,6 +368,9 @@ _UNDRIVEABLE: Dict[str, Dict[str, str]] = {}
 # (59 declarations, 68 invocations). Everything downstream reconciles them
 # instead of asserting they are equal.
 _RUN_HEAD_RE = re.compile(r'^(\s*)run(?:_\w+)?\s+(.*)$')
+_SHELL_FUNCTION_HEAD_RE = re.compile(
+    r'^\s*([A-Za-z_][A-Za-z0-9_]*)\s*\(\)\s*\{\s*(?:#.*)?$')
+_SHELL_FUNCTION_END_RE = re.compile(r'^\s*}\s*(?:#.*)?$')
 
 # Shared with ``gate_host_independence_check``.  The declaration belongs to
 # the run line, so every meta-runner must preserve it; otherwise an excluded
@@ -505,6 +508,36 @@ def parse_declarations(script: Path) -> List[GateDecl]:
         out.append(GateDecl(label, cwd_token, cmd, lineno,
                             _runtime_expansion(label, cmd), reason))
     return out
+
+
+def declarations_in_function(script: Path, name: str) -> List[GateDecl]:
+    """Return declarations lexically owned by one top-level shell function.
+
+    Runtime-expanded variables say only that *some* shell scope binds a gate;
+    they do not identify which ``gate_dispatch_over`` population owns it.
+    Hygiene functions use the canonical top-level ``name() {`` / ``}`` shape,
+    so keep that ownership in the parser rather than guessing from labels in
+    each consumer.
+    """
+    try:
+        physical = script.read_text(errors="replace").splitlines()
+    except OSError:
+        return []
+    spans: List[Tuple[int, int]] = []
+    active_start: Optional[int] = None
+    for lineno, line in enumerate(physical, start=1):
+        if active_start is None:
+            match = _SHELL_FUNCTION_HEAD_RE.match(line)
+            if match and match.group(1) == name:
+                active_start = lineno
+            continue
+        if _SHELL_FUNCTION_END_RE.match(line):
+            spans.append((active_start, lineno))
+            active_start = None
+    if active_start is not None:
+        return []
+    return [decl for decl in parse_declarations(script)
+            if any(start < decl.lineno < end for start, end in spans)]
 
 
 def parse_gates(script: Path) -> List[Tuple[str, str, str]]:
@@ -957,6 +990,21 @@ def _drive_on_empty_project(prog: Path, timeout: int) -> Dict:
 #: mkdir -p's its own outputs.
 _ABSENT = "/nonexistent/vibeic-absent-project-fixture/no-such-project"
 
+
+def _absent_probe_env() -> Dict[str, str]:
+    """Environment for a probe whose subject must remain literally absent.
+
+    The normal benchmark-corpus pointer deliberately replaces a missing named
+    corpus.  That is correct for production gates and exactly wrong for this
+    fixture: inheriting it changes ``_ABSENT`` into a scan of a real corpus and
+    then attributes the resulting PASS to the nonexistent path.  Clear both
+    halves of the bound-corpus protocol only for this adversarial child.
+    """
+    env = dict(os.environ)
+    env.pop("VIBE_IC_BENCHMARK_DATA", None)
+    env.pop("GATEKEEPER_BENCHMARK_DATA_SHA", None)
+    return env
+
 #: Two phrasings the shared `_REASON_RE` does not reach, both measured in this
 #: population: "gate not YET applicable", and "no <noun> directory" with no
 #: trailing found/present verb. Widened HERE rather than in `_REASON_RE`,
@@ -1049,8 +1097,9 @@ def _drive_on_absent_project(prog: Path, timeout: int = 120) -> Dict:
     """
     # `timeout` is the STALL GRACE — see `_drive_on_empty_project`.
     try:
-        r = _wd.run_host_supervised([sys.executable, str(prog), _ABSENT],
-                                    stall_grace_s=float(timeout))
+        r = _wd.run_host_supervised(
+            [sys.executable, str(prog), _ABSENT],
+            stall_grace_s=float(timeout), env=_absent_probe_env())
     except (OSError, subprocess.SubprocessError) as exc:
         return {"gate": prog.stem, "rc": None,
                 "unrunnable": f"could not be driven: {exc}"}

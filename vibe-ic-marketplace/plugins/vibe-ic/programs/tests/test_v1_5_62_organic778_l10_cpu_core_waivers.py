@@ -55,11 +55,20 @@ assert SCRIPT.exists(), f"Script not found: {SCRIPT}"
 
 sys.path.insert(0, str(SCRIPT.parent))
 import l10_tb_conformance_check as gate  # noqa: E402
+import _l10_execution as execution  # noqa: E402
 
 
 def _make_project(tmp_path, l10_cases, *, declaration=None,
                   cpu_oracle_anchor=True,
-                  tb_text="module tb_dummy;\nendmodule\n"):
+                  tb_text="module tb_dummy;\nendmodule\n",
+                  executed=None):
+    """`executed` maps case id -> verdict and becomes the EXECUTION RECORD.
+
+    The verdict source moved off testbench source text, so a fixture that
+    wants a case CREDITED must state that something RAN it. Leaving it None
+    models the shape these fixtures already had: a dummy testbench on disk
+    and nothing reporting that any case was executed.
+    """
     gd = tmp_path / "phase1" / "generated_docs"
     gd.mkdir(parents=True)
     l10 = gd / "L10_TEST_CASES.json"
@@ -84,6 +93,12 @@ def _make_project(tmp_path, l10_cases, *, declaration=None,
         po = tmp_path / "plugin_output"
         po.mkdir(parents=True, exist_ok=True)
         (po / "declaration.json").write_text(json.dumps(declaration))
+
+    if executed:
+        execution.write_record(
+            tmp_path, l10,
+            [{"id": case_id, "verdict": verdict, "sim_executed": True}
+             for case_id, verdict in executed.items()], producer="test")
 
     return l10, tb, summary
 
@@ -139,7 +154,7 @@ def test_conditional_optional_cases_waived_without_declaration(tmp_path):
                     "--project", str(tmp_path)])
     assert rc == 3
     data = json.loads(out.read_text())
-    assert data["waived"] == 3 and data["fail"] == 0
+    assert data["waived"] == 3 and data["not_executed"] == 0
     for r in data["results"]:
         assert r["status"] == "waived"
         assert r["capability_gap"] == gate.CAP_CONDITIONAL_FEATURE_UNDECLARED
@@ -163,7 +178,7 @@ def test_conditional_optional_case_NOT_waived_when_declared(tmp_path):
                     "--project", str(tmp_path)])
     assert rc == 1, "a CONFIRMED-selected feature must still require TB evidence"
     data = json.loads(out.read_text())
-    assert data["fail"] == 1 and data["waived"] == 0
+    assert data["not_executed"] == 1 and data["waived"] == 0
 
 
 # ---------------------------------------------------------------------------
@@ -183,15 +198,21 @@ def test_functional_vector_cases_waived_under_cpu_oracle_anchor(tmp_path):
                     "--project", str(tmp_path)])
     assert rc == 3
     data = json.loads(out.read_text())
-    assert data["waived"] == 2 and data["fail"] == 0
+    assert data["waived"] == 2 and data["not_executed"] == 0
     for r in data["results"]:
         assert r["capability_gap"] == gate.CAP_CPU_FUNCTIONAL_ORACLE
 
 
 def test_functional_vector_case_with_real_evidence_not_waived(tmp_path):
-    """A case whose id genuinely appears in the TB blob (a REAL oracle was
-    authored — e.g. cpu_boot_latency_oracle_tb_gen's output) is credited as
-    a real pass, never routed through the waiver at all."""
+    """A case that was genuinely EXECUTED is credited as a real pass, never
+    routed through the waiver at all.
+
+    The fixture keeps its REAL oracle testbench (a live DUT instantiation,
+    not a vacuous placeholder) because the #206 substance verdict still reads
+    it. What no longer credits the case is the case id APPEARING in that
+    text: the pass comes from the execution record. The guard — real evidence
+    beats the capability-gap waiver — is unchanged.
+    """
     cases = [
         {"name": "reset_n_cycle_instruction", "kind": "functional_vector",
          "stimulus": "Reset 解除後 N cycle 內取得第一條 instruction",
@@ -204,14 +225,15 @@ def test_functional_vector_case_with_real_evidence_not_waived(tmp_path):
                 "  subservient u_dut (.i_clk(w));\n"
                 "// real oracle content (a live DUT instantiation, not a\n"
                 "// vacuous placeholder), no ORACLE_NONE marker\n"
-                "endmodule\n")
+                "endmodule\n",
+        executed={"reset_n_cycle_instruction": "PASS"})
     out = tmp_path / "out.json"
     rc = gate.main(["--l10", str(l10), "--tb-dir", str(tb),
                     "--summary", str(summary), "--out", str(out),
                     "--project", str(tmp_path)])
     assert rc == 0
     data = json.loads(out.read_text())
-    assert data["ok"] == 1 and data["waived"] == 0 and data["fail"] == 0
+    assert data["ok"] == 1 and data["waived"] == 0 and data["not_executed"] == 0
 
 
 # ---------------------------------------------------------------------------
@@ -231,9 +253,9 @@ def test_noleak_digital_cmd_response_still_fails_under_both_anchors(tmp_path):
     assert rc == 1, "digital cmd_response with no evidence must STILL FAIL"
     data = json.loads(out.read_text())
     by_id = {r["id"]: r for r in data["results"]}
-    assert by_id["GET_ID_DIGITAL"]["status"] == "fail"
+    assert by_id["GET_ID_DIGITAL"]["status"] == "NOT_EXECUTED"
     assert by_id["plugin_m_mul_div"]["status"] == "waived"
-    assert data["fail"] == 1 and data["waived"] == 1
+    assert data["not_executed"] == 1 and data["waived"] == 1
 
 
 def test_noleak_functional_vector_unanchored_still_fails(tmp_path):
@@ -251,4 +273,4 @@ def test_noleak_functional_vector_unanchored_still_fails(tmp_path):
                     "--project", str(tmp_path)])
     assert rc == 1
     data = json.loads(out.read_text())
-    assert data["fail"] == 1 and data["waived"] == 0
+    assert data["not_executed"] == 1 and data["waived"] == 0

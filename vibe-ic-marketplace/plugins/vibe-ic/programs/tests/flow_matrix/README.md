@@ -1,9 +1,9 @@
 # `flow_matrix` — shared substrate for the flow-step × dimension coverage matrix
 
-The Vibe-IC flow has **68<!--figure:flow_steps--> steps**. The 2026-07 audit
+The Vibe-IC flow has **69<!--figure:flow_steps--> steps**. The 2026-07 audit
 asked **9<!--figure:matrix_dimensions--> questions** of each one.
-68<!--figure:flow_steps--> × 9<!--figure:matrix_dimensions--> =
-**612<!--figure:ledger_cells--> cells**. This package is the substrate that
+69<!--figure:flow_steps--> × 9<!--figure:matrix_dimensions--> =
+**621<!--figure:ledger_cells--> cells**. This package is the substrate that
 all eight dimension test-modules import so they agree on what a step is, what
 a gate says, and which cells exist.
 
@@ -53,7 +53,7 @@ Four specific forms of it, all of which an adversarial verifier will catch:
 
 ## The three-state rule
 
-Every one of the 612<!--figure:ledger_cells--> cells must end in **exactly
+Every one of the 621<!--figure:ledger_cells--> cells must end in **exactly
 one** of these, all machine-checkable:
 
 ### `ENFORCED`
@@ -144,8 +144,8 @@ Things that will bite you if you skip the docstring:
 * **`required_outputs` is ALL-of across entries**, but `" OR "` *inside* one
   entry is any-of. It used to be any-of across entries and that was a real
   false-pass bug — see `programs/flow_compliance_check.py` ~line 6150.
-* **`blocks_on` is present on 68<!--figure:blocks_on_declared--> steps but non-empty on only 66<!--figure:blocks_on_nonempty-->.** D1 and A1
-  declare it *empty* because they are the flow's genuine roots. "68<!--figure:blocks_on_declared--> steps have
+* **`blocks_on` is present on 69<!--figure:blocks_on_declared--> steps but non-empty on only 67<!--figure:blocks_on_nonempty-->.** D1 and A1
+  declare it *empty* because they are the flow's genuine roots. "69<!--figure:blocks_on_declared--> steps have
   blocks_on" is a presence count, not a dependency count.
 * **`total_steps: 44`** in the yaml counts the numeric steps only. It is not
   `len(steps)`.
@@ -153,10 +153,10 @@ Things that will bite you if you skip the docstring:
   `advisory_program_exit_zero` does **not**, `optional_program_exit_zero`
   blocks only when its `condition_files_exist` are present. Treating an
   advisory clause as enforcement is measuring something adjacent.
-* **No `program_exit_zero` form exists in `required_outputs`** — all 183<!--figure:required_output_entries-->
+* **No `program_exit_zero` form exists in `required_outputs`** — all 184<!--figure:required_output_entries-->
   entries are plain path strings. That form lives only in `gate`.
 
-### `cells.py` — the 612<!--figure:ledger_cells-->-cell ledger
+### `cells.py` — the 621<!--figure:ledger_cells-->-cell ledger
 `ALL_CELLS` is the cross product of `flowref.step_ids()` × `DIMENSIONS`, built
 **live from the yaml, never from the audit JSON**. Add or delete a step and the
 ledger changes with the repo; `test_flow_matrix_ledger.py` notices.
@@ -244,7 +244,7 @@ from flow_matrix import cells as C, flowref as F, waivers as W
 
 The ledger's unit is a step, but dimensions 2 (falsifiability), 4
 (criteria-match) and 6 (skip discipline) each ask their question of a gate
-CLAUSE — 184<!--figure:blocking_clauses--> blocking clauses over 67<!--figure:gated_steps--> gated steps. A cell-level
+CLAUSE — 187<!--figure:blocking_clauses--> blocking clauses over 68<!--figure:gated_steps--> gated steps. A cell-level
 `xfail(strict=True)` cannot express "5 of this step's 6 clauses are proven and
 the 6th is not", so those modules carry an in-module per-clause register with
 the same both-directions anti-rot semantics (a stale entry reddens; an entry
@@ -287,7 +287,7 @@ thread-parallel test execution.
 Reported by `programs/tests/test_flow_matrix_coverage.py`, which collects the
 eight modules through pytest's own machinery, asks each module the state of the
 cells it owns, and then RUNS those modules and joins the answer against what
-each cell's predicate actually did. **612<!--figure:ledger_cells--> / 612<!--figure:ledger_cells--> cells present,
+each cell's predicate actually did. **621<!--figure:ledger_cells--> / 621<!--figure:ledger_cells--> cells present,
 exactly once.**
 
 **The census has TWO axes, and the first is not quotable on its own.** A cell's
@@ -331,36 +331,36 @@ the moment eight rows were added up. See `substitution.py`.
 
 <!-- BEGIN GENERATED CENSUS — tools/gen_flow_matrix_census.py — DO NOT EDIT BY HAND -->
 
-**612 cells: 533 ENFORCED, 0 ENFORCED-CONTRADICTED, 7 WAIVED, 19 NA, 26 NOT_MEASURED, 25 ENFORCED-SKIPPED, 2 WAIVED-SKIPPED.**
+**621 cells: 541 ENFORCED, 0 ENFORCED-CONTRADICTED, 7 WAIVED, 17 NA, 10 NOT_MEASURED, 44 ENFORCED-SKIPPED, 2 WAIVED-SKIPPED.**
 
-The 0 CONTRADICTED cells are configured as enforcing while their own predicate is currently RED. They are NOT folded into the 533: a cell whose predicate fails is not evidence of enforcement. See vibe-ic#888.
+The 0 CONTRADICTED cells are configured as enforcing while their own predicate is currently RED. They are NOT folded into the 541: a cell whose predicate fails is not evidence of enforcement. See vibe-ic#888.
 
 Corpus at generation: NOT_OFFERED — no published cell was read. Every figure below is a function of this commit alone.
 
-**What these 612 cells measure — and what they do not.** Every cell asks whether a step is declared, wired, and reached by a gate. NO cell reads the CONTENT of the artefact a step produces. A shipped sign-off artefact can violate the very criterion its step is named after and no cell here changes colour. Read this table as COVERAGE SHAPE, never as evidence that a design is correct.
+**What these 621 cells measure — and what they do not.** Every cell asks whether a step is declared, wired, and reached by a gate. NO cell reads the CONTENT of the artefact a step produces. A shipped sign-off artefact can violate the very criterion its step is named after and no cell here changes colour. Read this table as COVERAGE SHAPE, never as evidence that a design is correct.
 
 `ENFORCED` is published SPLIT, because it is not one thing. It means a live predicate ran and passed; it does not say WHAT it ran against, and that turns out to be three different answers:
 
-* **9** — measured against the step's OWN mechanism. This is the only figure that means what "enforcing" sounds like, and it is a floor: the two rows below are not evidence against it, they are the part nobody has evidence for.
-* **125** — measured against a SUBSTITUTED stand-in. The predicate runs and passes; what it exercises is not the mechanism the cell is named after. Each one carries a disclosure from the module that owns it.
-* **399** — in dimensions that have not answered the question at all. NOT counted as clean: UNDECLARED is a state, not a synonym for "own mechanism". See `substitution.py`, "WHY UNDECLARED IS A STATE AND NOT A DEFAULT".
+* **10** — measured against the step's OWN mechanism. This is the only figure that means what "enforcing" sounds like, and it is a floor: the two rows below are not evidence against it, they are the part nobody has evidence for.
+* **126** — measured against a SUBSTITUTED stand-in. The predicate runs and passes; what it exercises is not the mechanism the cell is named after. Each one carries a disclosure from the module that owns it.
+* **405** — in dimensions that have not answered the question at all. NOT counted as clean: UNDECLARED is a state, not a synonym for "own mechanism". See `substitution.py`, "WHY UNDECLARED IS A STATE AND NOT A DEFAULT".
 
-The 7 WAIVED and 19 NA cells are not enforcing anything and enter none of those columns. There is deliberately no single "enforcing" total to quote.
+The 7 WAIVED and 17 NA cells are not enforcing anything and enter none of those columns. There is deliberately no single "enforcing" total to quote.
 
 | dim | question | ENFORCED: own | ENFORCED: substituted | ENFORCED: undeclared | CONTRADICTED | NOT MEASURED | WAIVED | NA |
 |-----|----------|--------------:|----------------------:|---------------------:|-------------:|-------------:|-------:|---:|
-| 1 | `wiring` — Is the gate actually wired — does something real parse and execute it? | 0 | 0 | 68 | 0 | 0 | 0 | 0 |
-| 2 | `falsifiable` — Can the gate fail? Is there a reachable non-zero-exit branch? | 0 | 0 | 65 | 0 | 0 | 2 | 1 |
-| 3 | `outputs_produced` — Are the declared required_outputs genuinely produced? | 0 | 0 | 0 | 0 | 53 | 0 | 15 |
-| 4 | `criteria_match` — Does the gate measure what its name and docstring claim it measures? | 0 | 0 | 68 | 0 | 0 | 0 | 0 |
-| 5 | `deps_correct` — Is blocks_on the true upstream set — no missing and no phantom edge? | 0 | 0 | 67 | 0 | 0 | 1 | 0 |
-| 6 | `skip_discipline` — Is every skip / vacuous-pass disclosed rather than counted as a pass? | 0 | 0 | 68 | 0 | 0 | 0 | 0 |
-| 7 | `outputs_list_complete` — Is required_outputs complete — does the step emit artefacts it never declares? | 0 | 0 | 63 | 0 | 0 | 4 | 1 |
-| 8 | `missing_caught` — When a declared output IS missing, which mechanism catches it? | 8 | 58 | 0 | 0 | 0 | 0 | 2 |
-| 9 | `verdict_consumed` — When this step FAILs, does the verdict reach the exit code — or is it reported and discarded? | 1 | 67 | 0 | 0 | 0 | 0 | 0 |
-| **total** | | **9** | **125** | **399** | **0** | **53** | **7** | **19** |
+| 1 | `wiring` — Is the gate actually wired — does something real parse and execute it? | 0 | 0 | 69 | 0 | 0 | 0 | 0 |
+| 2 | `falsifiable` — Can the gate fail? Is there a reachable non-zero-exit branch? | 0 | 0 | 66 | 0 | 0 | 2 | 1 |
+| 3 | `outputs_produced` — Are the declared required_outputs genuinely produced? | 0 | 0 | 0 | 0 | 56 | 0 | 13 |
+| 4 | `criteria_match` — Does the gate measure what its name and docstring claim it measures? | 0 | 0 | 69 | 0 | 0 | 0 | 0 |
+| 5 | `deps_correct` — Is blocks_on the true upstream set — no missing and no phantom edge? | 0 | 0 | 68 | 0 | 0 | 1 | 0 |
+| 6 | `skip_discipline` — Is every skip / vacuous-pass disclosed rather than counted as a pass? | 0 | 0 | 69 | 0 | 0 | 0 | 0 |
+| 7 | `outputs_list_complete` — Is required_outputs complete — does the step emit artefacts it never declares? | 0 | 0 | 64 | 0 | 0 | 4 | 1 |
+| 8 | `missing_caught` — When a declared output IS missing, which mechanism catches it? | 9 | 58 | 0 | 0 | 0 | 0 | 2 |
+| 9 | `verdict_consumed` — When this step FAILs, does the verdict reach the exit code — or is it reported and discarded? | 1 | 68 | 0 | 0 | 0 | 0 | 0 |
+| **total** | | **10** | **126** | **405** | **0** | **56** | **7** | **17** |
 
-**NOT MEASURED is not a pass and not a defect.** Those 53 cells have a predicate that declined to run, naming a resource it could not reach — most often a published corpus this checkout does not carry. They are counted here so a dimension whose cells could not be driven cannot read as a dimension with nothing to report; read them as UNKNOWN, never as coverage.
+**NOT MEASURED is not a pass and not a defect.** Those 56 cells have a predicate that declined to run, naming a resource it could not reach — most often a published corpus this checkout does not carry. They are counted here so a dimension whose cells could not be driven cannot read as a dimension with nothing to report; read them as UNKNOWN, never as coverage.
 
 Regenerate (never edit this block by hand, and never quote it without re-running):
 

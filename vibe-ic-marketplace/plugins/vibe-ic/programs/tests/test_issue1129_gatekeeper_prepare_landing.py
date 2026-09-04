@@ -15,6 +15,48 @@ have their own suites.
 """
 from __future__ import annotations
 
+#: MEASURED, and the measurement is a CONSTANT IN THE SUBJECT, not a stopwatch.
+#:
+#: `test_the_real_program_runs_against_this_repo_and_honours_its_boundary`
+#: below is `@pytest.mark.timeout(0)` on purpose and drives the REAL census
+#: writers over the REAL tree. What bounds it is the subject's own
+#: `gatekeeper_prepare_landing.CENSUS_TIMEOUT_S = 600`, and the comment above
+#: that test already records why lowering it would be the wrong repair. For
+#: those 600 seconds the session emits no pytest lifecycle event, because it is
+#: inside ONE test.
+#:
+#: The per-file landing driver's base silence grace is 300 s -- HALF of a bound
+#: this file's subject declares legal. That is not a hang and it is not a slow
+#: host: the two numbers contradict each other by declaration, and the census
+#: of 2026-09-03 read the contradiction as
+#: "STALLED after 300 s with no validated pytest lifecycle progress" and gave
+#: the file no verdict at all.
+#:
+#: 900 = the declared 600 s the writer may take, plus the margin in which its
+#: OWN timeout fires, restores what it wrote and returns its named reason --
+#: the path the test then asserts on. Below that the supervisor would kill the
+#: run in the window where the subject is reporting its own refusal.
+#:
+#: MEASURED END TO END, BOTH SIDES, ON A GENUINELY CLEAN CHECKOUT -- which is
+#: what a census runs against, and the reason this file's stall was invisible
+#: on a re-run:
+#:
+#:   pre-fix,  --stall-after 300:  rc=199  cases=0  red=0  NORECORD
+#:                                 "STALLED after 300 s ... UNKNOWN, not clean"
+#:   post-fix, --stall-after 300:  2 failed, 10 passed, 1 warning in 406.69s
+#:                                 rc=1  cases=12  red=2
+#:
+#: 406.69 s against a 300 s grace. The file was never hung; the grace was
+#: shorter than the work, and the two RED tests underneath spent the census
+#: unreadable.
+#:
+#: ON A TREE THAT IS ALREADY DIRTY the heavy test SKIPS and this file finishes
+#: in ~2 s (`11 passed, 1 skipped ... in 1.96s`) -- which is why a repeat run
+#: cannot reproduce the stall, and why the number above had to be taken on a
+#: fresh checkout. The declaration costs that run nothing: it widens a grace,
+#: it never waits.
+VIBEIC_SILENCE_BUDGET_S = 900
+
 import importlib.util
 import subprocess
 import sys

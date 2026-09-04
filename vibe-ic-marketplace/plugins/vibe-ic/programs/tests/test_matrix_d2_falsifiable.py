@@ -196,7 +196,7 @@ RUN
 ``PYTEST_DISABLE_PLUGIN_AUTOLOAD=1`` is mandatory in this tree (a stray
 ``pytest_ethereum`` plugin otherwise breaks collection).
 
-LIVE, not remembered: 185<!--figure:blocking_clauses--> blocking clauses over
+LIVE, not remembered: 187<!--figure:blocking_clauses--> blocking clauses over
 68<!--figure:gated_steps--> gated steps. This is the denominator a reader
 wants, and it moves with the yaml: the digits are written by
 ``tools/gen_flow_matrix_census.py`` and the ``<!--figure:...-->`` anchors name
@@ -2165,6 +2165,25 @@ endmodule
 """)
 
 
+def _f_declared_opcode_without_transition_evidence(p: Path) -> None:
+    """A declared protocol population whose execution evidence is empty.
+
+    Step 4's functional-state checker is legitimately undecided on EMPTY:
+    without L3 it cannot know whether command opcodes exist. This fixture
+    supplies the smallest design-owned discriminator instead. The only wrong
+    value is the zero-entry coverage artifact against one declared opcode, so
+    rc 1 is earned on content rather than a missing path or malformed file.
+    """
+    _w(p, "phase1/generated_docs/L3_CMD_PROTOCOL.json", {
+        "command_protocol_applicable": True,
+        "no_opcodes_in_input": False,
+        "opcodes": [{"opcode": "0x31", "name": "START"}],
+    })
+    _w(p, "reports/phase2/coverage/coverage_actual.json", [])
+    _w(p, "phase2/stage1/sim/tb/tb_arithmetic_core.v",
+       "module tb_arithmetic_core; initial #1 $finish; endmodule\n")
+
+
 FIXTURES: Dict[str, Callable[[Path], None]] = {
     "EMPTY": _f_empty,
     "RTL_BAD": _f_rtl_bad,
@@ -2211,6 +2230,8 @@ FIXTURES: Dict[str, Callable[[Path], None]] = {
     "CROSSLAYER_REFUTED": _f_crosslayer_refuted,
     "PAD_DECL_PARTIAL": _f_pad_decl_partial,
     "SLOT_PAD_OVER_BUDGET": _f_slot_pad_over_budget,
+    "DECLARED_OPCODE_UNMEASURED":
+        _f_declared_opcode_without_transition_evidence,
 }
 
 #: Which fixture reddens which clause. Keyed by ``(normalized step id, exact
@@ -2236,6 +2257,15 @@ CLAUSE_FIXTURE: Dict[Tuple[str, str], str] = {
     # operator's own pad list, not on a malformed file — and it survives the
     # fold path, so it is not a red a bond-out decision could remove.
     ("2", "slot_pad_budget_check . --json reports/phase2/gates/slot_pad_budget.json"): "SLOT_PAD_OVER_BUDGET",
+    # Step 4 promoted this clause from advisory to required only after its N/A
+    # contract became executable. EMPTY still correctly means "L3 absent, no
+    # verdict"; a falsifiable blocking arm must instead declare a non-zero
+    # opcode population and withhold its transition evidence.
+    ("4", "functional_state_transition_coverage_check "
+          "phase2/stage1/sim/tb --coverage "
+          "reports/phase2/coverage/coverage_actual.json --json "
+          "reports/phase2/gates/functional_state_transition_coverage.json"):
+        "DECLARED_OPCODE_UNMEASURED",
     # vibe-ic#700 wired this into D1. EMPTY cannot redden it: absence of the
     # forbidden artefact IS the pass, so the clause needs the artefact present
     # AND carrying the forbidden verdict.
@@ -3013,13 +3043,23 @@ def _evaluate_clause(clause, project: Path) -> Tuple[str, str]:
     return PASS, f"unhandled clause kind {clause.kind}"
 
 
+_SYNTHETIC_CORPUS_ENV = (
+    "VIBE_IC_BENCHMARK_DATA",
+    "GATEKEEPER_BENCHMARK_DATA_SHA",
+    "GATEKEEPER_BENCHMARK_DATA_TREE",
+)
+
+
 @pytest.fixture(scope="module")
 def _gate_timeout():
     """Pin the environment this module measures in, and restore it.
 
-    Two variables, both pinned for the same reason: a tier that is decided by
-    the host rather than by the gate is not a measurement of the gate. See
-    :data:`GATE_TIMEOUT_S` and :data:`VERILATOR_BIN_ENV`.
+    Two variables are pinned and three landing-corpus variables are cleared
+    for the same reason: a tier decided by the host rather than by the fixture
+    is not a measurement of the gate.  Step 36 deliberately builds a
+    contradictory PPA record below ``tmp_path`` and invokes ``--corpus .``.
+    An ambient landing pointer must not redirect that synthetic command to the
+    real benchmark corpus and make its planted contradiction unreachable.
 
     MODULE scope, not session: these are process-wide environment variables
     and six other test modules exercise ``verilator_coverage_measure``'s
@@ -3032,8 +3072,10 @@ def _gate_timeout():
         "VIBE_IC_GATE_TIMEOUT_S": GATE_TIMEOUT_S,
         VERILATOR_BIN_ENV: sys.executable,
     }
-    prev = {k: os.environ.get(k) for k in pinned}
+    prev = {k: os.environ.get(k) for k in (*pinned, *_SYNTHETIC_CORPUS_ENV)}
     os.environ.update(pinned)
+    for key in _SYNTHETIC_CORPUS_ENV:
+        os.environ.pop(key, None)
     yield
     for k, old in prev.items():
         if old is None:
@@ -3068,6 +3110,8 @@ def _params():
 def test_d2_gate_has_a_reachable_fail(cell, tmp_path, _gate_timeout):
     sid = cell.step_id
     key = F.normalize_id(sid)
+    assert not [name for name in _SYNTHETIC_CORPUS_ENV if name in os.environ], (
+        "a synthetic D2 fixture is being redirected to the landing corpus")
     clauses = F.gate_clauses(sid)
 
     # ── NA: no gate at all. The precondition is DECLARED (NA_STEPS) and

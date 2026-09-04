@@ -216,14 +216,15 @@ def test_the_ic_level_tree_no_longer_owns_an_l21_of_its_own():
     assert not (ic / "phase1" / "generated_docs"
                 / "L21_POWER_INTENT.json").is_file()
 
-    # The gate does not fail to find an L21 — it finds the CELL's, one level
-    # down, through the recursive fallback. That is why the two invocations
-    # below cannot disagree.
-    found = D3._plugin_tree and sorted(ic.glob("**/generated_docs/L21_*.json"))
-    assert found, "no L21 reachable from the IC level at all"
-    for hit in found:
-        assert hit.relative_to(ic).parts[0].startswith("v"), (
-            f"an L21 is reachable from a non-cell IC-level entry: {hit}")
+    # benchmark-data bcf2f94 subsequently withdrew the non-converged cell too.
+    # On frozen 8c4b608 the honest state is no reachable L21, not a retained
+    # cell hidden below the input tree.
+    found = sorted(ic.glob("**/generated_docs/L21_*.json"))
+    assert found == [], (
+        "a result-cell L21 reappeared below the withdrawn IC-level tree: "
+        + repr([str(p.relative_to(ic)) for p in found]))
+    assert not any(p.is_dir() and p.name.startswith("v") for p in ic.iterdir()), (
+        "a versioned result cell reappeared; #905 must be re-measured")
 
 
 def test_both_trees_fire_the_same_l21_rule_so_l21_retains_nothing():
@@ -257,8 +258,12 @@ def test_the_ic_level_run_root_is_admitted_only_by_reports_orchestrator():
     assert not (ic / "provenance.jsonl").exists(), (
         "the IC level now carries a runner marker of its own, so `reports/` is "
         "no longer its only admissibility token — re-measure before retiring")
-    assert (ic / "reports" / "orchestrator").is_dir()
-    assert D3._is_flow_run(ic), "the IC level is no longer an admissible run root"
+    assert not (ic / "reports" / "orchestrator").exists(), (
+        "the withdrawn IC-level run regained its old admissibility token")
+    assert not D3._is_flow_run(ic), (
+        "the input-only IC directory was admitted as run evidence")
+    assert _IC_LABEL not in _run_roots(), (
+        "dimension 3 still resolves the withdrawn IC-level tree")
 
 
 def test_removing_reports_orchestrator_makes_the_tree_inadmissible(tmp_path):
@@ -288,15 +293,10 @@ def test_step_a9_is_evidenced_only_by_the_ic_level_tree():
     artefact, `phase3/` and `reports/` have no remaining reader and BOTH can be
     retired — at which point this file goes with them.
     """
-    ic = _ic()  # skips ONLY if the corpus has no such tree at all
+    _ic()  # the retained design input exists, but it is not run evidence
     roots = _run_roots()
-    assert _IC_LABEL in roots, (
-        f"{_IC_LABEL} is checked out but is NOT an admissible run root. Do not "
-        f"read this as 'nothing to test': it means the tree stopped being "
-        f"evidence — almost certainly because `reports/orchestrator` was "
-        f"removed — and step {_HELD_BY_STEP} is now unevidenced. Skipping here "
-        f"would hide exactly that.")
-    assert roots[_IC_LABEL].path == ic
+    assert _IC_LABEL not in roots, (
+        "the owner-withdrawn IC-level result is still admissible evidence")
 
     rec = D3.step_record(_HELD_BY_STEP)
     entries = [e for e, v in (rec.get("entries") or {}).items()
@@ -306,56 +306,31 @@ def test_step_a9_is_evidenced_only_by_the_ic_level_tree():
         f"{entries}")
     entry = entries[0]
 
-    hit_ic, _ = D3.resolve(roots[_IC_LABEL].path, entry, _HELD_BY_STEP)
-    assert hit_ic is not None, (
-        f"step {_HELD_BY_STEP} no longer resolves under the IC-level tree, so "
-        f"the tree is retained for a reason that is no longer measurable")
-    assert "hw_measurements.json" in str(hit_ic.path), str(hit_ic.path)
-
-    elsewhere = {
-        label: str(h.path)
-        for label, rr in roots.items() if label != _IC_LABEL
-        for h in [D3.resolve(rr.path, entry, _HELD_BY_STEP)[0]] if h
-    }
+    elsewhere = {label: str(h.path) for label, rr in roots.items()
+                 for h in [D3.resolve(rr.path, entry, _HELD_BY_STEP)[0]] if h}
     assert not elsewhere, (
-        f"step {_HELD_BY_STEP} is now evidenced OUTSIDE the IC-level tree "
-        f"({elsewhere}). That is #905's release condition: "
-        f"`benchmark-data/ic/u_hawaii_adc/phase3/` and `.../reports/` have no "
-        f"remaining reader and can both be retired — regenerate INDEX.md and "
-        f"retention.json, and delete this file with them.")
+        f"step {_HELD_BY_STEP} unexpectedly resolves after withdrawal: "
+        f"{elsewhere}")
+    assert D3.matrix_cell_state(_HELD_BY_STEP) == "NOT_MEASURED"
+    citations = D3.unanswerable_citations(_HELD_BY_STEP)
+    assert any(root == _IC_LABEL and rel == entry
+               for rel, root, _rec in citations), citations
 
 
 @needs_corpus
 def test_every_other_ic_level_entry_already_resolves_under_the_cell():
     """11 of the 12 do. Only A9 makes the tree a premise rather than a habit."""
-    _ic()  # skips ONLY if the corpus has no such tree at all
+    _ic()
     roots = _run_roots()
-    for label in (_IC_LABEL, _CELL_LABEL):
-        assert label in roots, (
-            f"{label} is checked out but is not an admissible run root; the "
-            f"#905 retention measurement cannot be made and must not be "
-            f"skipped past")
-    cell = roots[_CELL_LABEL].path
-
-    served, held = [], []
-    for step_id, entry in _ic_level_entries():
-        hit, _ = D3.resolve(cell, entry, step_id)
-        (served if hit else held).append(step_id)
-
-    assert held == [_HELD_BY_STEP], (
-        f"the set of IC-level entries the published cell cannot serve moved: "
-        f"{held!r}. #905 retains the tree for {_HELD_BY_STEP} alone; anything "
-        f"else in this list is a new dependency that needs its own reason.")
-    # `len(served) == 11` restated the size of `_ic_level_entries()`. The claim
-    # is the PARTITION the line above already makes the load-bearing half of:
-    # every IC-level entry is either served by the published cell or is the one
-    # step #905 retains the tree for — nothing falls outside, nothing is in
-    # both. Derived from the same iteration, so publishing a twelfth entry
-    # changes the number without breaking the claim, and a second unservable
-    # entry breaks `held` above, which is where it should break.
-    assert served, (
-        "the published cell serves NO IC-level entry, so #905's premise — "
-        "that the tree is retained for one step alone — is not being measured")
-    assert (len(served) + len(held)
-            == len(list(_ic_level_entries()))), (served, held)
-    assert not set(served) & set(held), (served, held)
+    assert _IC_LABEL not in roots and _CELL_LABEL not in roots
+    entries = list(_ic_level_entries())
+    assert len(entries) == 12, entries
+    unexpected = {}
+    for step_id, entry in entries:
+        hit, _ = D3.resolve_anywhere(entry, step_id)
+        if hit is not None:
+            unexpected[f"{step_id}:{entry}"] = str(hit.path)
+        assert D3.matrix_cell_state(step_id) == "NOT_MEASURED", step_id
+    assert unexpected == {}, (
+        "a withdrawn analog output now resolves elsewhere; re-measure and "
+        f"close only that exact entry: {unexpected}")

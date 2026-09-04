@@ -71,6 +71,18 @@ _GOOD_INRUNNER = {
     "correction": "…`version` on THIS row captured the banner…",
 }
 
+_FROZEN_LEDGER_PATHS = {
+    "benchmark-data/ic/spm/v1.10.18_sky130A/provenance.jsonl",
+    "benchmark-data/ic/spm/v1.14.88_gf180mcuD/provenance.jsonl",
+    "benchmark-data/ic/spm/v1.5.65_sky130A/provenance.jsonl",
+    "benchmark-data/protocol_parity/espi/provenance.jsonl",
+    "benchmark-data/protocol_parity/interlaken/provenance.jsonl",
+    "benchmark-data/protocol_parity/lpc/provenance.jsonl",
+    "benchmark-data/protocol_parity/mdio/provenance.jsonl",
+    "benchmark-data/protocol_parity/sgmii/provenance.jsonl",
+    "benchmark-data/protocol_parity/usb_pd/provenance.jsonl",
+}
+
 
 def test_the_fixed_shape_passes(tmp_path):
     rep = C.audit(_repo(tmp_path, [_GOOD_BACKFILL, _GOOD_INRUNNER]))
@@ -144,7 +156,7 @@ def test_git_refusing_to_list_is_an_ERROR_not_a_PASS(tmp_path, capsys):
 
 @needs_corpus
 def test_the_published_corpus_is_clean_today(tmp_path):
-    """The published corpus: 22 tracked ledgers, 36 corrected rows, zero
+    """The frozen 8c4b608 corpus: 9 tracked ledgers, 7 corrected rows, zero
     notes claiming a repair their row did not receive.
 
     THE CLEANLINESS HALF HAS ALWAYS HELD. `verdict == "PASS"` with zero
@@ -191,16 +203,27 @@ def test_the_published_corpus_is_clean_today(tmp_path):
     split enumerated nothing and failed on `noted_rows == 0`, which reads as
     "the corpus lost 36 corrected rows" — a defect claim about data that was
     simply not here to read. The floors below are unchanged, so an empty or
-    partial corpus still FAILS rather than passing vacuously; measured against
-    the published corpus today: 22 ledgers, 36 noted rows, zero findings.
+    partial corpus still FAILS rather than passing vacuously.
+
+    The later owner-directed bcf2f94 withdrawal removed failing result cells
+    rather than repairing them.  Frozen benchmark-data 8c4b608 measures the
+    exact pair 9 ledgers / 7 corrected rows / zero findings.  Exact equality
+    replaces the inapplicable old population floor: no deletion, addition or
+    substitution can be absorbed by the same number, and the historical 22/36
+    measurement above remains provenance rather than a demand to republish
+    failed cells.
     """
-    rep = C.audit(corpus_repo(tmp_path))
+    view = corpus_repo(tmp_path)
+    rep = C.audit(view)
     assert rep["verdict"] == "PASS", rep["findings"][:10]
-    assert rep["noted_rows"] >= 36, rep["noted_rows"]
-    # The ledger count is pinned too: 36 corrected rows spread over FEWER
-    # ledgers would satisfy the row floor while the corpus had quietly lost
-    # published runs, and that is the shrink this test is here to notice.
-    assert rep["ledgers"] >= 22, rep["ledgers"]
+    tracked = subprocess.run(
+        ["git", "-C", str(view), "ls-files", "benchmark-data"],
+        check=True, capture_output=True, text=True).stdout.splitlines()
+    ledgers = {p for p in tracked if p.endswith("provenance.jsonl")}
+    assert ledgers == _FROZEN_LEDGER_PATHS, (
+        sorted(ledgers - _FROZEN_LEDGER_PATHS),
+        sorted(_FROZEN_LEDGER_PATHS - ledgers))
+    assert (rep["ledgers"], rep["noted_rows"]) == (9, 7), rep
 
 
 def test_PAIRED_the_row_counter_tracks_the_population_not_a_constant(tmp_path):

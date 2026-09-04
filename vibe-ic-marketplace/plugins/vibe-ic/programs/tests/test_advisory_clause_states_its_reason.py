@@ -192,7 +192,7 @@ def test_the_census_the_gate_publishes_is_the_one_it_measures():
 
 
 def test_every_advisory_clause_is_dispatchable():
-    """All 76 are under `steps:`, the one section the flow engine reads.
+    """All current clauses are under `steps:`, the section the engine reads.
 
     A clause the engine cannot reach is a different defect (v1.13.32) and would
     make "it is advisory" the wrong description of it.

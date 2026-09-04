@@ -209,7 +209,8 @@ import shutil
 import subprocess
 import sys
 import tempfile
-from concurrent.futures import ThreadPoolExecutor
+import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from functools import lru_cache
 from pathlib import Path
@@ -1017,10 +1018,38 @@ def _disclosure_prefixes() -> Tuple[str, ...]:
 #:                           the opposite of the vacuity L1b looks for. A gate
 #:                           claiming substance on a tree containing NOTHING is
 #:                           precisely what this leg exists to charge.
+#:   _EXECUTED_DECLARED_NA_HINT_PREFIX  says a gate executed and examined a
+#:                           typed design declaration whose population is zero.
+#:                           The consumer keeps the step in plain PASS because
+#:                           the declaration is real evidence, so this is not a
+#:                           skip/vacuity disclosure L1b may accept. Keeping it
+#:                           excluded is conservative: a producer that emits it
+#:                           on an actually empty project is still charged.
 _EXCLUDED_TIER_HINTS: Tuple[str, ...] = (
     "_RAN_HINT_PREFIX", "_ADVISORY_HINT_PREFIX",
     "_ADVISORY_RECORD_HINT_PREFIX", "_STRUCTURE_ONLY_HINT_PREFIX",
-    "_NOT_APPLICABLE_HINT_PREFIX", "_SUBSTANTIVE_HINT_PREFIX")
+    "_NOT_APPLICABLE_HINT_PREFIX", "_SUBSTANTIVE_HINT_PREFIX",
+    "_EXECUTED_DECLARED_NA_HINT_PREFIX")
+
+
+def test_d6_executed_declared_na_cannot_excuse_a_pass_on_nothing():
+    """Executed N/A is evidence, not a skip token usable on an empty tree."""
+    _ensure_programs_on_path()
+    import flow_compliance_check as _fcc  # type: ignore
+
+    assert _fcc._EXECUTED_DECLARED_NA_HINT_PREFIX not in _disclosure_prefixes()
+    probe = Probe(step_id="control")
+    probe.gate_only_empty = GateOnlyEval(
+        passed=True,
+        reasons=(f"{_fcc._EXECUTED_DECLARED_NA_HINT_PREFIX}control.py",),
+        disclosed=False,
+        all_kinds=(F.K_PROGRAM,),
+        blocking_kinds=(F.K_PROGRAM,),
+        all_blocking_conditions_unmet=False,
+    )
+    problems = _leg1b_gate_alone_does_not_pass_on_nothing(probe)
+    assert len(problems) == 1
+    assert "PASSES ON NOTHING, UNDISCLOSED" in problems[0]
 
 
 def test_d6_every_tier_moving_hint_is_either_accepted_or_excluded_by_name():
@@ -1265,10 +1294,77 @@ def _build_probes(ids: Tuple[Any, ...]) -> None:
     progress = getattr(progress_plugin, "domain_progress", None)
     scope = f"matrix-d6-probes:{len(_PROBE_CACHE)}:{len(todo)}"
     with ThreadPoolExecutor(max_workers=min(8, len(todo))) as pool:
-        for completed, probe in enumerate(pool.map(_probe_step, todo), start=1):
+        futures = [pool.submit(_probe_step, step_id) for step_id in todo]
+        # Report actual completions, not input-order retirements.  `map()`
+        # blocks on the first submitted probe even when seven later probes have
+        # already finished, turning real completed work into supervisor silence.
+        for completed, future in enumerate(as_completed(futures), start=1):
+            probe = future.result()
             _PROBE_CACHE.setdefault(F.normalize_id(probe.step_id), probe)
             if progress is not None:
                 progress(scope, completed, len(todo))
+
+
+def test_d6_completed_probe_progress_is_not_blocked_by_input_order(monkeypatch):
+    """A slow first submission cannot hide a later completed probe.
+
+    The landing supervisor accepts finite completed-work checkpoints.  An
+    ordered ``Executor.map`` withheld the first checkpoint until the first
+    input finished, even when another worker had already produced a complete
+    probe.  That is head-of-line blocking, not an honest absence of progress.
+    """
+    slow_release = threading.Event()
+    fast_finished = threading.Event()
+    first_checkpoint = threading.Event()
+    errors: List[BaseException] = []
+
+    class _FinishedProbe:
+        def __init__(self, step_id):
+            self.step_id = step_id
+
+    def fake_probe(step_id):
+        if step_id == "slow":
+            if not slow_release.wait(10):
+                raise AssertionError("the test did not release the slow probe")
+        else:
+            fast_finished.set()
+        return _FinishedProbe(step_id)
+
+    def record_progress(_scope, completed, total):
+        assert total == 2
+        if completed == 1:
+            first_checkpoint.set()
+
+    module = sys.modules[__name__]
+    class _ProgressProxy:
+        domain_progress = staticmethod(record_progress)
+
+    monkeypatch.setattr(module, "_PROBE_CACHE", {})
+    monkeypatch.setattr(module, "_probe_step", fake_probe)
+    # Ordinary direct pytest does not load the private progress plugin.  Put a
+    # proxy at the exact lookup seam rather than making the unit test depend on
+    # the outer driver that is itself under test elsewhere.
+    monkeypatch.setitem(sys.modules, "_pytest_progress_plugin", _ProgressProxy)
+
+    def build():
+        try:
+            _build_probes(("slow", "fast"))
+        except BaseException as exc:  # preserve the worker failure for pytest
+            errors.append(exc)
+
+    worker = threading.Thread(target=build)
+    worker.start()
+    try:
+        assert fast_finished.wait(5), "the independent fast probe did not finish"
+        checkpoint_observed = first_checkpoint.wait(5)
+        assert checkpoint_observed is True, (
+            "a completed probe was hidden behind the first input; observed "
+            f"checkpoint={checkpoint_observed!r}, expected=True")
+    finally:
+        slow_release.set()
+        worker.join(timeout=10)
+    assert not worker.is_alive(), "probe builder did not terminate"
+    assert not errors, errors
 
 
 def _budget_from(items) -> Optional[Tuple[str, ...]]:

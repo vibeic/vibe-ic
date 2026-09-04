@@ -16,11 +16,12 @@ Static check (IC-agnostic):
 
   A file is considered a "dispatcher" iff any of:
 
-    * contains ``case (cmd_op)``, ``case (opcode)`` or ``case (cmd_code)``
-      — an unambiguous opcode-case,
-    * contains ``case (cmd)`` or ``case (op)`` — names reused widely enough
-      that they are only taken as an opcode-case when the SAME file also
-      carries a byte-wide opcode literal (``8'hXX``),
+    * contains ``case (cmd_op)`` or ``case (cmd_code)`` — an unambiguous
+      command-opcode case,
+    * contains ``case (opcode)``, ``case (cmd)`` or ``case (op)`` — names
+      reused by instruction decoders and ordinary RTL, taken as a packet
+      opcode only when the SAME file also carries byte-wide evidence (an
+      ``8'hXX`` literal or an explicit 8-bit declaration of the selector),
     * contains 3+ lines matching ``if\\s*\\(\\s*\\w*cmd\\w*\\s*==\\s*8'h``
       (cascade of per-opcode if-equals comparisons).
 
@@ -57,11 +58,10 @@ class Finding:
 
 # Case-statement dispatchers: "case (<id>)" where id is a typical opcode name.
 #
-# TWO tiers, because the names are not equally informative. `opcode`, `cmd_op`
-# and `cmd_code` name a received command and nothing else. `cmd` and `op` are
-# among the most reused two-and-three-letter identifiers in Verilog and name an
-# enum field at least as often as a byte-stream opcode, so on their own they
-# are not evidence that this module dispatches on a received command.
+# TWO tiers, because the names are not equally informative. `cmd_op` and
+# `cmd_code` explicitly name a received command. `opcode`, `cmd` and `op` are
+# also used by processor instruction decoders and ordinary enum logic, so on
+# their own they are not evidence that this module dispatches on a packet.
 #
 # MEASURED false positive (opentitan_aes, 2026-09-02): `aes_ctrl_reg_shadowed`
 # holds a shadowed CONTROL REGISTER and decodes its `aes_op_e` field with
@@ -74,10 +74,8 @@ class Finding:
 # decode, and did so TWICE — once directly and once through `rtl_precheck_gate`.
 #
 # So an AMBIGUOUS selector must be CORROBORATED by the thing this gate is
-# actually about: byte-wide opcode literals in the same file, which is what a
-# received-command dispatch looks like and what an enum decode does not. The
-# UNAMBIGUOUS names keep their previous standalone force, so every dispatcher
-# this gate caught before is still caught.
+# actually about: byte-wide packet evidence in the same file. The UNAMBIGUOUS
+# command-specific names keep their standalone force.
 # v1.15.67 — the rule moved to `_opcode_dispatch_predicate`, written ONCE.
 # `dispatcher_awake_gate_check` carried the SAME predicate UNCORRECTED and
 # reached the same wrong conclusion on the same file one round later. These
@@ -150,8 +148,8 @@ def audit(rtl_dir: Path) -> Tuple[List[Finding], Dict]:
                 severity="ERROR",
                 category="NO_LENGTH_CHECK",
                 message=(
-                    "Module dispatches on a command (case(cmd_op) / "
-                    "case(opcode) / cmd==8'hXX cascade) but has no "
+                    "Module dispatches on a byte command (case(cmd_op) / "
+                    "corroborated case(opcode) / cmd==8'hXX cascade) but has no "
                     "'<...>_(len|cnt|count|size) == <literal>' "
                     "comparison anywhere — received-length validity is "
                     "not asserted."

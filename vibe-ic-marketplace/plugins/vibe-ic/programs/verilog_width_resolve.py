@@ -308,11 +308,6 @@ def param_defaults(prompt: str, tb: str = "") -> Dict[str, int]:
     # Anchored to the literal assignment, so the name is never guessed.
     for m in _INLINE_CODE_DEFAULT_RE.finditer(prompt):
         _add(m.group(1), m.group(2))
-    # a standalone bullet/line `- **WIDTH = 32**` — an ALL-CAPS param NAME set to an
-    # integer literal, alone on the line. The whole-line anchor + ALL-CAPS name keep
-    # it from harvesting mid-prose `x = 5`.
-    for m in _BULLET_PARAM_DEFAULT_RE.finditer(prompt):
-        _add(m.group(1), m.group(2))
     # prose / paren defaults — bound LINE-BY-LINE to the line's leading ALL-CAPS
     # parameter token, so the name can never be a stray nearby lowercase word.
     # A line states a default ONLY when it both names a parameter at its head AND
@@ -353,6 +348,14 @@ def param_defaults(prompt: str, tb: str = "") -> Dict[str, int]:
                 def_indent = len(line) - len(line.lstrip())
                 if def_indent > param_indent:
                     _add(last_param_name, pm.group(1))
+    # A standalone bullet/line `- **WIDTH = 32**` is a weaker declaration than an
+    # explicit phrase saying "default value = N": the same document can later use
+    # `- WIDTH = 3` in a worked example without changing its declared default.
+    # Read standalone assignments only after explicit defaults so `_add` preserves
+    # the stronger fact. The whole-line anchor + ALL-CAPS name still keeps this
+    # fallback from harvesting a mid-prose `x = 5`.
+    for m in _BULLET_PARAM_DEFAULT_RE.finditer(prompt):
+        _add(m.group(1), m.group(2))
     # lowercase parameter default phrases such as
     #   "The default value of the `data_width` is 16".
     # Only bound when the literal backtick parameter name appears within 60 chars

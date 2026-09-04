@@ -195,9 +195,19 @@ class Port:
 # the real parameterized port (ORGANIC-20260618 — exposed once the balanced
 # `_module_port_region` reaches these ANSI headers). The bracket now matches
 # `[ ... ]` (no inner `]`); the numeric WIDTH is extracted only when the range is a
-# pure `<int>:<int>` literal, else width defaults to 1 (unknown). chip-AGNOSTIC.
+# pure `<int>:<int>` literal, else width defaults to 1 (unknown).
+#
+# A SystemVerilog port may also put a user/package type between the direction and
+# the port name (`output pkg::word_t result_o`).  Without consuming that type,
+# the name group returns `pkg` and loses `result_o`.  Accept one ordinary or
+# package-scoped type token before the optional packed dimension.  The trailing
+# whitespace is intentional: in an untyped declaration (`input a, b`) the first
+# identifier is followed by a comma, so it cannot be consumed as a type.
+# chip-AGNOSTIC: SystemVerilog declaration grammar only.
 _PORT_DECL = re.compile(
-    r'\b(input|output|inout)\b\s*(?:reg|wire|logic|signed|unsigned|\s)*'
+    r'\b(input|output|inout)\b\s*'
+    r'(?:(?:reg|wire|logic|signed|unsigned|var|bit|byte|shortint|int|longint|integer|time)\b\s*)*'
+    r'(?:(?:[A-Za-z_]\w*::)*[A-Za-z_]\w*\s+)?'
     r'(?:(\[[^\]]*\])\s*)?'
     r'([A-Za-z_]\w*(?:\s*,\s*(?!(?:input|output|inout)\b)[A-Za-z_]\w*)*)')
 _LITERAL_RANGE = re.compile(r'\[\s*(\d+)\s*:\s*(\d+)\s*\]')

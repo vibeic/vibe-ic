@@ -189,7 +189,8 @@ def _drive(tmp_path, monkeypatch, *, first_rc, stage,
            tool_printed_trace=True, top="widget",
            route_checkpoint="routed", resume_def_routed=True,
            preroute_routed=False, first_signoff=(),
-           resume_def_classifiable=True, probe=True):
+           resume_def_classifiable=True, resume_stage=None,
+           resume_signoff=(), probe=True):
     """Run step_pnr against a fake OpenROAD.
 
     The FIRST `openroad` invocation writes the route checkpoint and the log,
@@ -295,6 +296,20 @@ def _drive(tmp_path, monkeypatch, *, first_rc, stage,
                          else _def_text_no_nets_section())
                 (out_dir / "routed.def").write_text(_body)
                 (out_dir / f"{top}.def").write_text(_body)
+            for name in resume_signoff:
+                if name.endswith(".def"):
+                    (out_dir / name).write_text(_def_text(routed=True))
+                elif name.endswith(".v"):
+                    (out_dir / name).write_text(
+                        f"module {top}(); endmodule\n")
+                else:
+                    (out_dir / name).write_text("worst slack 0.42\n")
+            if resume_stage:
+                log = _crash_log(
+                    resume_stage,
+                    signal_death=resume_rc == 139,
+                    tool_printed_trace=tool_printed_trace,
+                ) + _PG_OK
             lp = kw.get("log_path")
             if lp:
                 Path(lp).write_text(log)
@@ -485,6 +500,41 @@ def test_a_crash_the_runner_resumed_past_is_still_recorded(
     assert att.is_file(), "no durable record of the crash was written"
     txt = att.read_text()
     assert "11" in txt and "postroute_drv_repair" in txt
+
+
+def test_a_resume_crash_after_its_signoff_writes_preserves_the_routed_set(
+        tmp_path, monkeypatch):
+    """BIDIRECTIONAL CONTROL for the measured two-crash shape.
+
+    The first session dies in an omittable post-route repair and therefore
+    resumes from the routed checkpoint.  The resumed session writes the full
+    sign-off set, then dies in the final estimate-only stage.  Those completed
+    writes are this session's routed design; quarantining them would repeat the
+    exact stale-DEF inversion already fixed for a first-session tail crash.
+    """
+    res, calls, project = _drive(
+        tmp_path,
+        monkeypatch,
+        first_rc=139,
+        stage="postroute_drv_repair",
+        resume_rc=139,
+        resume_stage="postroute_setup_repair_estimate",
+        resume_signoff=("widget_pnr.v", "sta.rpt"),
+    )
+    assert len(calls) == 2
+    assert res.status == "PASS", (res.status, res.detail)
+    out = mod._pl.pnr_dir(project)
+    for name in _SIGNOFF_SET:
+        assert (out / name).is_file(), name
+        assert not (out / f"{name}.timeout.partial").exists(), name
+    att = json.loads(
+        (mod._pl.reports_dir(project) / "phase3" /
+         "pnr_fatal_signal.json").read_text())
+    secondary = att["resume"]["secondary_fatal_signal"]
+    assert secondary["signal"] == 11
+    assert secondary["stage"] == "postroute_setup_repair_estimate"
+    assert secondary["crashed_after_signoff_writes"] is True
+    assert att["resume"]["raw_rc"] == 139
 
 
 def test_a_stale_def_does_not_launder_a_crash(tmp_path, monkeypatch):

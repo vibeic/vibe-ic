@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -9,7 +10,7 @@ _HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(_HERE.parent / "programs"))
 
 import step_internal_fail_bubble_up_check as g  # noqa: E402
-from _published_corpus import corpus_root, needs_corpus  # noqa: E402
+from _published_corpus import needs_corpus  # noqa: E402
 
 
 def _proj(tmp_path: Path) -> Path:
@@ -284,10 +285,13 @@ def _fail_report(root, ic: str, run: str, name: str):
 
 def _sweep(corpus, baseline, *extra):
     prog = Path(__file__).resolve().parents[1] / "step_internal_fail_bubble_up_check.py"
+    env = dict(os.environ)
+    env.pop(g._cloc.CORPUS_ENV, None)
+    env.pop(g._cloc.BOUND_SHA_ENV, None)
     return _pr.run(
         [sys.executable, str(prog), "--corpus", str(corpus),
          "--baseline", str(baseline), *extra],
-        capture_output=True, text=True)
+        capture_output=True, text=True, env=env)
 
 
 def test_a_baseline_that_still_claims_a_PAID_debt_fails(tmp_path):
@@ -370,9 +374,10 @@ def _shipped_population():
         (prog.parent / "step_internal_fail_bubble_up_baseline.json")
         .read_text(encoding="utf-8"))
     pop = bl["corpus_population"]
-    root = corpus_root()
-    corpus = (root / Path(pop).relative_to("benchmark-data") if root is not None
-              else repo / pop)
+    # Production owns the mapping from a repository-relative population to an
+    # externally bound corpus.  Do not infer it from the historical checkout
+    # directory name here; that repeats the resolver and drifts independently.
+    corpus, _origin = g.resolve_corpus_population(repo / pop)
     return prog, repo, pop, corpus
 
 
@@ -413,7 +418,9 @@ def test_a_sweep_of_a_DIFFERENT_root_is_refused_not_answered():
     assert other != corpus and other.is_dir(), other
     r = _pr.run(
         [sys.executable, str(prog), "--corpus", str(other)],
-        capture_output=True, text=True, cwd=str(repo))
+        capture_output=True, text=True, cwd=str(repo),
+        env={k: v for k, v in os.environ.items()
+             if k not in (g._cloc.CORPUS_ENV, g._cloc.BOUND_SHA_ENV)})
     assert r.returncode == 2, (
         f"a sweep over '{other}' answered rc={r.returncode} against a baseline "
         f"recorded over '{pop}'\n{r.stdout}{r.stderr}")

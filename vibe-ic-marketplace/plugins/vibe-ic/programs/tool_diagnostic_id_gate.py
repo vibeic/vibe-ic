@@ -49,7 +49,7 @@ we happen to ship:
 
   A. ``[WARNING RSZ-0104]`` — the OpenROAD suite. The prefixes occurring in our
      own logs are ANT CTS DPL DRT EST GPL GRT IFP ODB ORD PDN PPL PSM RCX RSZ
-     STA. This is the family ORFS handles. The regex does NOT pin this list
+     TAP. This is the family ORFS handles. The regex does NOT pin this list
      (``[A-Z][A-Z0-9]*``) precisely so a seventeenth tool is CAPTURED rather
      than dropped — but the list is re-derived by
      ``test_the_prefix_coverage_claim_is_re_derived``, so a new tool appearing is
@@ -370,6 +370,25 @@ def scan_log(text: str) -> Dict[str, Any]:
 #: `[WARNING ODB-0220]` verbatim), which is real tool output and not a report
 #: about tool output.
 _SCANNED_SUFFIXES = (".log", ".rpt", ".json")
+
+
+def bracketed_diagnostic_prefixes(root: Path) -> Tuple[str, ...]:
+    """Derive the bracketed diagnostic prefix set from ``root``.
+
+    This is the program-owned definition behind the coverage sentence above:
+    the same suffix allow-list and bracketed-ID parser used by the gate, with
+    no closed list of tool names.  A newly observed prefix is therefore
+    returned to the documentation check rather than silently ignored.
+    """
+    prefixes = set()
+    for path in Path(root).rglob("*"):
+        if not path.is_file() or path.suffix not in _SCANNED_SUFFIXES:
+            continue
+        text = path.read_text(errors="replace")
+        prefixes.update(
+            match.group("id").split("-", 1)[0]
+            for match in _RE_BRACKETED.finditer(text))
+    return tuple(sorted(prefixes))
 
 
 def _input_plan(

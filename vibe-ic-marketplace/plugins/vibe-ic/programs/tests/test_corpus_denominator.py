@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
 """A statistic over the corpus must carry its own denominator. vibe-ic#1200.
 
-73 of 75 published run trees record no per-step verdict, so `0 of 2 countable`
-is the honest answer and `0` is the lie. These tests hold the mechanism that
-makes the second spelling unavailable, and the ratchet that stops the corpus
-becoming less answerable than it already is.
+The historical corpus had 73 of 75 published run trees without a per-step
+verdict.  The frozen benchmark-data 8c4b608 population is exactly 2 of 12
+countable, with ten uncountable.  `0 of 2 countable` is the honest answer and
+`0` is the lie. These tests hold the mechanism that makes the second spelling
+unavailable, and the ratchet that stops this exact population becoming less
+answerable than it already is.
 """
 from __future__ import annotations
 
@@ -153,6 +155,17 @@ def test_PAIRED_the_ratchet_ACCEPTS_unchanged_and_asks_to_hold_a_gain():
         "a gain that nobody is asked to hold is a gain that will be given back")
 
 
+def test_default_ratchet_is_bound_to_the_frozen_ten_uncountable():
+    same = CD.Denominator(2, 12, uncountable=tuple(f"u{i}" for i in range(10)))
+    ok, why = CD.ratchet_verdict(same)
+    assert ok is True and "unchanged" in why, why
+
+    regressed = CD.Denominator(
+        2, 13, uncountable=tuple(f"u{i}" for i in range(11)))
+    ok, why = CD.ratchet_verdict(regressed)
+    assert ok is False and "up from 10" in why, why
+
+
 # ===========================================================================
 # THE REAL CORPUS
 # ===========================================================================
@@ -169,11 +182,20 @@ def test_the_measured_state_is_what_the_docstring_claims():
     If this fails the corpus moved, and the module's opening measurement — the
     thing a reader trusts — must move with it.
     """
-    d = CD.step_verdict_denominator(_ic())
-    assert d.n_total >= 70, f"the corpus shrank unexpectedly: {d.fraction()}"
-    assert d.n_countable <= 5, (
-        f"{d.n_countable} trees are now countable; the docstring says 2 and a "
-        f"reader will believe it. Update it and lower UNCOUNTABLE_CEILING.")
+    root = _ic()
+    d = CD.step_verdict_denominator(root)
+    assert d.fraction() == (2, 12), (
+        f"the frozen 8c4b608 denominator moved: {d.fraction()}")
+    uncountable = set(d.uncountable)
+    countable = {
+        str(p.relative_to(root)) for p in CD.run_trees(root)
+        if str(p.relative_to(root)) not in uncountable
+    }
+    assert countable == {
+        "spm/v1.10.18_sky130A",
+        "spm/v1.14.88_gf180mcuD",
+    }, countable
+    assert len(uncountable) == CD.UNCOUNTABLE_CEILING == 10
     assert d.is_vacuous is False, "not a single tree can answer"
     # ...and the disclosure a caller would print names both numbers.
     s = d.render()

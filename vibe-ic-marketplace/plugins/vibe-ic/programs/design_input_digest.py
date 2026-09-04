@@ -137,6 +137,10 @@ RULER_FLAGS: Tuple[str, ...] = (
     "phase",
     "strict_structural",
     "strict_step_artifacts",
+    # Changes whether a satisfied project_glob without a usable write ledger
+    # is accepted or blocks DONE.  That changes the verdicting rule, so two
+    # invocations with different values must not share a measurement id.
+    "strict_step_binding",
     "strict_timing",
     "strict_no_os_constraints",
     "allow_thin_input",

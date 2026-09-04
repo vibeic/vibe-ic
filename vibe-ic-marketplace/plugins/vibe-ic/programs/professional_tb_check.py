@@ -127,7 +127,147 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import _flow_reason_taxonomy as _reason_taxonomy
+import _l10_execution as _l10x
 import _path_layout as _pl
+import _sim_results_bridge as _sim_results
+
+
+_L10_CASE_LIST_KEYS = ("test_cases", "cases", "vectors", "cmd_response",
+                       "tests")
+_L10_UNIT_JUNIT_REL = Path(
+    "phase2/stage1/sim_professional/l10_unit_tb/results.xml")
+
+
+def l10_unit_tb_track(project: Path) -> Optional[Dict[str, Any]]:
+    """Return the independently executed L10 unit-TB track, when present.
+
+    ``testbench_gen.run_unit_tbs`` is a second shipped professional test path:
+    it compiles and runs each self-checking L10 testbench, writes a non-zero
+    JUnit under ``sim_professional/l10_unit_tb/``, and publishes a hash-bound
+    per-case execution record.  This gate used to ignore that whole track and
+    report the professional producer as unrun even while Step 4 consumed the
+    same real JUnit through its simulation denominator.
+
+    The JUnit alone is not enough.  A PASS requires an exact, non-vacuous
+    denominator and one ``sim_executed=true`` PASS row for every case in the
+    current hash-bound L10 declaration.  No testbench source text or summary
+    prose is read here.
+    """
+    junit = project / _L10_UNIT_JUNIT_REL
+    if not junit.is_file():
+        return None
+
+    summary = _sim_results.parse_junit(junit)
+    if not summary or int(summary.get("tests", 0) or 0) < 1:
+        return {
+            "gate": "professional_tb",
+            "verdict": "NOT_CHECKED",
+            "reason_class": _reason_taxonomy.EXECUTION_ERROR,
+            "professional_track": "l10_unit_tb_execution",
+            "reason": "L10 unit-TB JUnit is unreadable or has a zero-test denominator",
+        }
+    if (int(summary.get("failures", 0) or 0) > 0
+            or int(summary.get("errors", 0) or 0) > 0):
+        return {
+            "gate": "professional_tb", "verdict": "FAIL",
+            "professional_track": "l10_unit_tb_execution",
+            "reason": "L10 unit-TB JUnit records a real simulation failure",
+            "junit": {k: int(summary.get(k, 0) or 0)
+                      for k in ("tests", "passed", "failures", "errors")},
+        }
+
+    l10 = _pl.generated_docs_dir(project) / "L10_TEST_CASES.json"
+    try:
+        payload = json.loads(l10.read_text(errors="replace"))
+    except (OSError, ValueError) as exc:
+        return {
+            "gate": "professional_tb", "verdict": "NOT_CHECKED",
+            "reason_class": _reason_taxonomy.BLOCKED_BY_UPSTREAM,
+            "professional_track": "l10_unit_tb_execution",
+            "reason": f"L10 declaration is unavailable: {type(exc).__name__}",
+        }
+    cases = payload if isinstance(payload, list) else next(
+        (payload[key] for key in _L10_CASE_LIST_KEYS
+         if isinstance(payload, dict) and isinstance(payload.get(key), list)),
+        None)
+    if not isinstance(cases, list):
+        return {
+            "gate": "professional_tb", "verdict": "NOT_CHECKED",
+            "reason_class": _reason_taxonomy.EXECUTION_ERROR,
+            "professional_track": "l10_unit_tb_execution",
+            "reason": "L10 declaration has no recognised case list",
+        }
+    ids = [str(case.get("id", case.get("name", ""))).strip()
+           for case in cases if isinstance(case, dict)]
+    if (not ids or len(ids) != len(cases) or len(set(ids)) != len(ids)
+            or int(summary.get("tests", 0) or 0) != len(ids)):
+        return {
+            "gate": "professional_tb", "verdict": "NOT_CHECKED",
+            "reason_class": _reason_taxonomy.EXECUTION_ERROR,
+            "professional_track": "l10_unit_tb_execution",
+            "reason": ("L10/JUnit denominator mismatch or unusable/duplicate "
+                       "L10 case id"),
+            "l10_cases": len(ids),
+            "junit_tests": int(summary.get("tests", 0) or 0),
+        }
+
+    record = _l10x.load_record(project, l10)
+    rows = record.get("rows") or {}
+    if (not record.get("available") or record.get("malformed")
+            or set(rows) != set(ids)):
+        return {
+            "gate": "professional_tb", "verdict": "NOT_CHECKED",
+            "reason_class": _reason_taxonomy.BLOCKED_BY_UPSTREAM,
+            "professional_track": "l10_unit_tb_execution",
+            "reason": ("independent L10 execution record is absent, stale, "
+                       "malformed, or has a different case population"),
+            "execution_record_reason": record.get("reason"),
+        }
+
+    # Bind the record to the logical canonical JUnit path.  The producer's
+    # older record uses an absolute path, which legitimately changes when a
+    # project is copied into flow_compliance_check's read-only tree, so compare
+    # the project-relative suffix and then parse the current copy above.
+    try:
+        record_doc = json.loads(Path(str(record["path"])).read_text())
+    except (OSError, ValueError, KeyError, TypeError):
+        record_doc = {}
+    source_junit = str(record_doc.get("source_junit") or "").replace("\\", "/")
+    canonical_suffix = "/" + _L10_UNIT_JUNIT_REL.as_posix()
+    if not (source_junit == _L10_UNIT_JUNIT_REL.as_posix()
+            or source_junit.endswith(canonical_suffix)):
+        return {
+            "gate": "professional_tb", "verdict": "NOT_CHECKED",
+            "reason_class": _reason_taxonomy.EXECUTION_ERROR,
+            "professional_track": "l10_unit_tb_execution",
+            "reason": "L10 execution record is not bound to the canonical JUnit",
+        }
+
+    states = [_l10x.case_state(case_id, record)[0] for case_id in ids]
+    if _l10x.FAIL in states:
+        return {
+            "gate": "professional_tb", "verdict": "FAIL",
+            "professional_track": "l10_unit_tb_execution",
+            "reason": "independent L10 execution record contains a failed case",
+        }
+    if any(state != _l10x.PASS for state in states):
+        return {
+            "gate": "professional_tb", "verdict": "NOT_CHECKED",
+            "reason_class": _reason_taxonomy.BLOCKED_BY_UPSTREAM,
+            "professional_track": "l10_unit_tb_execution",
+            "reason": "one or more declared L10 cases were not executed",
+        }
+
+    return {
+        "gate": "professional_tb", "verdict": "PASS",
+        "professional_track": "l10_unit_tb_execution",
+        "evidence": _L10_UNIT_JUNIT_REL.as_posix(),
+        "execution_record": Path(str(record["path"])).relative_to(project).as_posix(),
+        "producer": record.get("producer"),
+        "l10_cases": len(ids),
+        "junit": {k: int(summary.get(k, 0) or 0)
+                  for k in ("tests", "passed", "failures", "errors")},
+    }
 
 
 def _bundle_root(project: Path) -> Path:
@@ -257,6 +397,9 @@ def _functional_coverage(bundle_dir: Optional[Path]) -> Optional[Dict[str, Any]]
 def check(project: Path) -> Dict[str, Any]:
     report = project / "reports" / "phase2" / "gates" / "professional_tb.json"
     if not report.is_file():
+        unit_track = l10_unit_tb_track(project)
+        if unit_track is not None:
+            return unit_track
         # TYPED (#1978): the producing step left nothing, so the artefact this
         # gate reads was never produced. Untyped, the flow falls closed to
         # EXECUTION_ERROR — "the gate blew up" — for a gate that read the tree
@@ -282,6 +425,16 @@ def check(project: Path) -> Dict[str, Any]:
                 "reason": "cocotb functional mismatch — real RTL bug",
                 "dut_kind": rec.get("dut_kind"),
                 "cocotb_xml_failures": rec.get("cocotb_xml_failures")}
+
+    # A deterministic professional generator may be unable to derive a
+    # design-class reference model.  A real, independently executed L10 unit
+    # track is the shipped alternative; it may supersede only that unrun /
+    # incomplete producer state, never a functional mismatch above or a
+    # declared-bundle defect below.
+    if str(rec.get("status") or "").upper() in {"SKIP", "INCOMPLETE"}:
+        unit_track = l10_unit_tb_track(project)
+        if unit_track is not None:
+            return unit_track
 
     bundle = _bundle_report(project, rec)
     res: Dict[str, Any] = {

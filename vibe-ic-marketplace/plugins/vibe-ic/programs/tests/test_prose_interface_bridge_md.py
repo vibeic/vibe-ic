@@ -83,6 +83,37 @@ def test_markdown_heading_section_scopes_direction():
     assert outs == [("q", 4)]
 
 
+def test_scalar_and_prompt_resolved_parameter_ranges_are_complete_ports():
+    """The section itself declares bare names scalar; parameter ranges resolve
+    only from defaults stated in the same prompt. Category bullets are prose."""
+    t = ("### Parameters\n"
+         "- `ADDR_WIDTH`: The default value is 12.\n"
+         "- `DATA_WIDTH`: The default value is 32.\n"
+         "### Inputs\n"
+         "- **Bus Signals:**\n"
+         "  - **`clk_i`**: Clock.\n"
+         "  - **`[ADDR_WIDTH-1:0] addr_i`**: Address.\n"
+         "  - **`[(DATA_WIDTH/8)-1:0] strb_i`**: Byte strobes.\n"
+         "### Outputs\n"
+         "- **Responses:**\n"
+         "  - `ready_o`: Ready.\n"
+         "  - `data_o[31:0]`: Data.\n")
+    ins, outs = C.parse_md_table_ports(t)
+    assert ins == [("clk_i", 1), ("addr_i", 12), ("strb_i", 4)]
+    assert outs == [("ready_o", 1), ("data_o", 32)]
+
+
+def test_unresolved_parameter_range_drops_only_that_port():
+    t = ("### Inputs\n"
+         "- `[UNKNOWN_WIDTH-1:0] unresolved_i`: no default is stated.\n"
+         "- `scalar_i`: an explicitly scalar declaration.\n"
+         "### Outputs\n"
+         "- `scalar_o`: an explicitly scalar declaration.\n")
+    ins, outs = C.parse_md_table_ports(t)
+    assert ins == [("scalar_i", 1)]
+    assert outs == [("scalar_o", 1)]
+
+
 # --------------------------------------------------------------------------- #
 # 2. §4.05 no-misfire / no-leak envelope
 # --------------------------------------------------------------------------- #

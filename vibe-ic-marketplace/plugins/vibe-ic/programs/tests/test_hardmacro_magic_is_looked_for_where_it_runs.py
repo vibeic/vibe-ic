@@ -34,6 +34,7 @@ from __future__ import annotations
 
 import json
 import os
+import shlex
 import shutil
 import subprocess
 import sys
@@ -348,9 +349,11 @@ _DOCKER_SHIM = """#!/bin/bash
 # A stand-in docker CLI. `exec` and `cp` act on THIS filesystem, so the whole
 # container leg — probe, technology listing, staging, launch, fetch — runs on
 # a machine with no docker daemon. $REAL_PATH plays "the PATH inside the
-# container", and is the only place the tool can be found.
+# container", and is the only place the tool can be found. $REAL_HOME is the
+# container's home, not the caller's: `bash -lc` must read the far side's login
+# environment rather than inheriting whichever profile launched this test.
 case "$1" in
-  exec) shift; shift; exec env PATH="$REAL_PATH" "$@" ;;
+  exec) shift; shift; exec env HOME="$REAL_HOME" PATH="$REAL_PATH" "$@" ;;
   cp)   shift; s="${1#*:}"; d="${2#*:}"; exec cp "$s" "$d" ;;
   *)    echo "stand-in docker: unsupported: $*" >&2; exit 127 ;;
 esac
@@ -438,11 +441,17 @@ def _stand_in_environment(tmp_path):
     there.mkdir()
     (there / "magic").write_text(_MAGIC_STUB)
     (there / "magic").chmod(0o755)
+    far_home = tmp_path / "far_home"
+    far_home.mkdir()
+    (far_home / ".bash_profile").write_text(
+        '# The stand-in container owns its login environment.\n'
+        'export PATH="$REAL_PATH"\n')
     pdk = tmp_path / "pdks" / "somepdk"
     (pdk / "libs.tech" / "magic").mkdir(parents=True)
     (pdk / "libs.tech" / "magic" / "somepdk.magicrc").write_text("# tech\n")
 
     env = dict(os.environ)
+    env["REAL_HOME"] = str(far_home)
     env["REAL_PATH"] = f"{there}:/usr/bin:/bin"
     env["PATH"] = f"{shim}:/usr/bin:/bin"
     # named through the environment, so the argv is one the UNFIXED program
@@ -497,6 +506,49 @@ def test_the_same_crossing_with_nothing_on_the_far_side_still_says_no(tmp_path):
         [sys.executable, str(PROG), str(project), "--json", str(out),
          "--pdk-root", str(pdk)],
         capture_output=True, text=True, env=env)
+    assert cp.returncode == 2, cp.stdout + cp.stderr
+    rec = json.loads(out.read_text())
+    assert rec["status"] == "SKIPPED_NO_CAPABILITY"
+    assert "eda_ctr" in rec["reason"], rec["reason"]
+    assert not (project / "phase3/stage4/hardmacro/macro_a.lef").exists()
+
+
+def test_a_missing_far_side_does_not_inherit_the_callers_login_magic(tmp_path):
+    """A caller profile is not part of the stand-in container's filesystem.
+
+    `_container_exec` launches `timeout ... bash -lc ...`. A double that only
+    sets PATH before that login shell can still source the caller's profile and
+    replace the declared far-side PATH. Planting a poison Magic in that profile
+    makes the leak observable: with no Magic on the far side, the binary must
+    never be executed and the result must remain the named capability gap.
+    """
+    env, pdk = _stand_in_environment(tmp_path)
+    (tmp_path / "there" / "magic").unlink()
+
+    poison_called = tmp_path / "caller_magic_was_executed"
+    caller_bin = tmp_path / "caller_bin"
+    caller_bin.mkdir()
+    (caller_bin / "magic").write_text(
+        "#!/bin/bash\n"
+        f"touch {shlex.quote(str(poison_called))}\n"
+        'if [ "$1" = "--version" ]; then echo "caller-magic"; fi\n'
+        "exit 0\n")
+    (caller_bin / "magic").chmod(0o755)
+    caller_home = tmp_path / "caller_home"
+    caller_home.mkdir()
+    (caller_home / ".bash_profile").write_text(
+        f"export PATH={shlex.quote(str(caller_bin))}:/usr/bin:/bin\n")
+    env["HOME"] = str(caller_home)
+
+    project = make_project(tmp_path)
+    out = tmp_path / "gen.json"
+    cp = subprocess.run(
+        [sys.executable, str(PROG), str(project), "--json", str(out),
+         "--pdk-root", str(pdk)],
+        capture_output=True, text=True, env=env)
+
+    assert not poison_called.exists(), (
+        "the stand-in container inherited and executed the caller's Magic")
     assert cp.returncode == 2, cp.stdout + cp.stderr
     rec = json.loads(out.read_text())
     assert rec["status"] == "SKIPPED_NO_CAPABILITY"

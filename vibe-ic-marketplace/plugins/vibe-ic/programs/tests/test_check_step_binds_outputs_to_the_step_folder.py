@@ -224,6 +224,58 @@ def test_a_run_with_no_steps_tree_keeps_the_pre_change_verdict(project):
     assert "out/empty.json" in r.evidence
 
 
+def test_no_binding_blocks_only_in_explicit_strict_mode(project):
+    """The producer-migration flag tightens `no_binding`, not the default."""
+    (project / "out" / "empty.json").write_text("")
+    assert not (project / "steps").exists()
+    # The explicit migration mode grades the producer gap rather than silently
+    # changing the default for every pre-ledger published run.
+    strict = check_step(
+        project,
+        _step(99, ["out/good.json", "out/empty.json"], _VACUOUS_GATE),
+        {}, strict_step_binding=True)
+    assert strict.status == "FAIL", (strict.status, strict.reasons)
+    assert any("UNATTRIBUTED OUTPUT" in reason
+               and "no_binding" in reason for reason in strict.reasons)
+
+
+def test_a_run_ledger_that_omits_this_step_can_never_certify_it(project):
+    """`no_step_record` blocks even when strict migration mode is disabled.
+
+    The run has a valid ledger row for another step and a live file matching
+    this step's declaration.  Therefore the run had the means to attribute
+    the file and positively did not attribute it to this step.  A
+    project-wide match must not turn that evidence into a done claim.
+    """
+    _write_step_record(
+        project, 42, "phase2/stage2/42_other",
+        produced=[("out/good.json", "out/good.json")],
+        not_produced=[])
+
+    step = _step(99, ["out/good.json"], _VACUOUS_GATE)
+
+    # This assertion executes before either new keyword spelling, so the
+    # pre-fix control fails on the old program's wrong DONE value rather than
+    # on the mere absence of a newly-added API parameter.
+    result = check_step(project, step, {})
+    assert result.status == "FAIL", (result.status, result.reasons)
+    assert any("UNATTRIBUTED OUTPUT" in reason
+               and "no_step_record" in reason
+               for reason in result.reasons), result.reasons
+    assert result.output_binding["codes"] == ["no_step_record"]
+
+    # Neither explicit spelling may provide an escape hatch for the stronger
+    # `no_step_record` fact.
+    for strict in (False, True):
+        result = check_step(project, step, {}, strict_step_binding=strict)
+        assert result.status == "FAIL", (
+            strict, result.status, result.reasons)
+        assert any("UNATTRIBUTED OUTPUT" in reason
+                   and "no_step_record" in reason
+                   for reason in result.reasons), result.reasons
+        assert result.output_binding["codes"] == ["no_step_record"]
+
+
 def test_a_step_folder_claiming_an_absent_artefact_cannot_make_it_green(project):
     """ANTI-WEAKENING, taken from a real converged run.
 

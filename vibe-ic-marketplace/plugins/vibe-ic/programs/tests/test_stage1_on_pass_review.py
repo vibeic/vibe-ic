@@ -49,6 +49,7 @@ import ast
 import json
 import os
 import re
+import shutil
 import tempfile
 import subprocess
 import sys
@@ -455,9 +456,10 @@ def test_the_partition_over_the_published_corpus_does_not_move():
         pytest.skip("the corpus carries no cell with an L9")
     scratch = Path(tempfile.mkdtemp(prefix="on_pass_review_corpus_"))
     rejects, accepts = set(), set()
-    for cell in cells:
-        rc = run(cell, "--stage-verdict", "PASS",
-                 emit=scratch / f"cell{len(rejects) + len(accepts)}").returncode
+    for i, cell in enumerate(cells):
+        run_dir = scratch / f"cell{i}"
+        shutil.copytree(cell, run_dir)
+        rc = run(run_dir, "--stage-verdict", "PASS").returncode
         rel = str(cell.relative_to(root))
         if rc == 1:
             rejects.add(rel)

@@ -3014,16 +3014,39 @@ def _resolve_staged_silicon_sdc(project: Path) -> Optional[Path]:
     :func:`_resolve_clock_spec` independently read the same staged file for the
     NUMBER, which is precisely what hid the defect from review.
 
-    The two legacy directories are RETAINED as lower-priority fallbacks, so a
-    project that resolved an SDC before resolves the same one; only a project
-    that stages its SDC in the canonical input location changes, and it changes
-    from the runner's own fabrication to its own file.
+    The two legacy directories are RETAINED as lower-priority fallbacks for
+    hand-authored SDCs.  A file in either legacy directory that identifies
+    itself as output of ``sdc_gen`` or this runner's auto-SDC builder is NOT a
+    design-staged constraint.  Treating that file as input makes a prior run's
+    default clock outrank the current design documents, and can constrain a
+    port that the current top does not have.
 
-    chip-AGNOSTIC: path contract only; no chip, PDK or vendor literal."""
-    return next(iter(_sdc.collect_sdc_files(
-        project,
-        extra_dirs=[project / "constraints", _pl.constraints_dir(project)],
-    )), None)
+    chip-AGNOSTIC: path contract and producer attribution only; no chip, PDK or
+    vendor literal."""
+    # Canonical input is authoritative even if some external producer happened
+    # to use a familiar banner; its placement under input/ is the design's act.
+    canonical = _sdc.collect_sdc_files(project)
+    if canonical:
+        return canonical[0]
+
+    # Compatibility: retain the two old locations, but do not feed the flow's
+    # own output back as if it were design input.  Both banners are emitted by
+    # deterministic programs in this plugin.  Unknown files fail open to the
+    # historical hand-authored fallback rather than being guessed generated.
+    for candidate in _sdc.collect_sdc_files(
+            project,
+            extra_dirs=[project / "constraints", _pl.constraints_dir(project)]):
+        try:
+            head = candidate.read_text(errors="replace")[:4096]
+        except OSError:
+            continue
+        flow_owned = (
+            _sdc.generated_top_entity(head) is not None
+            or head.startswith("# Auto-generated minimal SDC for silicon top ")
+        )
+        if not flow_owned:
+            return candidate
+    return None
 
 
 # A flow-templated SDC parameterises the whole deck on ``::env(...)``
@@ -24097,10 +24120,54 @@ def _pnr_resume_after_fatal_signal(*, project: Path, top: str, container: str,
         pass
     r_sig = _fatal_signal_from_rc(r_rc)
     if r_sig is not None:
+        # The resumed tail can itself die in the final estimate-only stage,
+        # after it has written every sign-off artefact.  The first-session
+        # path already distinguishes that survivable shape; the resume used
+        # to collapse it back to FAILED and quarantine the completed writes.
+        # Judge the *resume script that actually ran* and the resume
+        # transcript by the same three facts: stage position, best-effort
+        # declaration, and complete on-disk sign-off set.  This does not turn
+        # a crash into silence: the raw rc and full secondary diagnosis stay
+        # in the resume record and therefore in pnr_fatal_signal.json.
+        try:
+            _resume_log_text = (out_dir / _PNR_RESUME_LOG).read_text(
+                errors="replace")
+        except OSError:
+            _resume_log_text = (r_out or "") + "\n" + (r_err or "")
+        _resume_sig_diag = _pnr_fatal_signal_diagnosis(
+            r_rc, _resume_log_text, out_dir, resume_text)
+        _resume_missing = [
+            p.name for p in _pnr_signoff_artifacts(out_dir, top)
+            if not p.is_file()
+        ]
+        _resume_final_def = out_dir / f"{top}.def"
+        _resume_routed, _resume_nets = _def_signal_routing_stats(
+            _resume_final_def, unknown_is_routed=False)
+        if (_resume_sig_diag is not None
+                and _resume_sig_diag.get("crashed_after_signoff_writes")
+                and _resume_sig_diag.get("stage_is_nonfatal_by_template")
+                and not _resume_missing
+                and _resume_routed):
+            rec["raw_rc"] = r_rc
+            rec["rc"] = 0
+            rec["status"] = "RESUMED"
+            rec["secondary_fatal_signal"] = _resume_sig_diag
+            rec["reason"] = (
+                f"the resumed session was killed by {_signal_name(r_sig)} "
+                f"(raw rc={r_rc}) in {_resume_sig_diag.get('stage')} after "
+                "every sign-off write; that stage is declared best-effort, "
+                "the complete routed artifact set is preserved, and the "
+                "secondary crash remains recorded")
+            return rec
         rec["status"] = "FAILED"
+        rec["secondary_fatal_signal"] = _resume_sig_diag
         rec["reason"] = (
             f"the resumed session was ALSO killed by {_signal_name(r_sig)} "
-            f"(rc={r_rc}); not retried")
+            f"(rc={r_rc}); not retried"
+            + (f"; missing sign-off artifacts: {', '.join(_resume_missing)}"
+               if _resume_missing else "")
+            + (f"; final DEF has no proven routed signal geometry "
+               f"({_resume_nets} nets)" if not _resume_routed else ""))
         return rec
     if r_rc != 0:
         rec["status"] = "FAILED"
@@ -27781,6 +27848,10 @@ def _magic_def_to_gds(project: Path, top: str, pdk: PdkConfig,
     def_file = pnr_dir / f"{top}.def"
     if not def_file.is_file():
         return False, f"DEF missing: {def_file}"
+    # The cell name comes from the DEF, not from the file-naming `top`.
+    # `load <a cell this database does not have>` CREATES an empty cell of
+    # that name and streams it. See `_def_design_name`.
+    top, _top_note = _streamout_top(def_file, top)
     tcl = pnr_dir / "magic_stream_out.tcl"
     tcl.write_text(_MAGIC_STREAMOUT_TCL)
     tcl_c = _to_container_path(str(tcl), container)
@@ -27813,6 +27884,20 @@ def _magic_def_to_gds(project: Path, top: str, pdk: PdkConfig,
     )
     rc, out, err = _docker_exec(container, cmd, marker=tcl_c, outputs=[gds_out])
     transcript = out + "\n" + err
+    # PERSIST IT. The KLayout engine beside this one already writes
+    # `stream_out.log` and states why: those lines are the only evidence of
+    # WHAT went into the sign-off GDS. Magic's transcript was RETURNED to two
+    # call sites that each assign it to a local they never read, so a
+    # 106-byte GDS reached sign-off DRC, LVS and the hand-off pack with
+    # nothing at all to say why -- while the three lines naming the cause
+    # (`Cell spm couldn't be read`) were discarded at the point of capture.
+    # Keyed on the OUTPUT, not on the step: this same function also streams
+    # the DRC re-stream's `<top>.magic_merged.gds`, and one fixed name would
+    # let the second run erase the first run's evidence.
+    try:
+        (pnr_dir / f"{gds_out.stem}.magic_stream_out.log").write_text(transcript)
+    except OSError:
+        pass
     if rc != 0 or not gds_out.is_file() or gds_out.stat().st_size == 0:
         return False, transcript
     # Fix #2 cross-check: a Magic stream that dropped geometry is not
@@ -31122,6 +31207,16 @@ def step_gds(project: Path, top: str, pdk: PdkConfig,
         return StepResult("gds", "SKIP", time.time() - t0,
                           f"DEF missing: {def_file}")
 
+    # ONE resolution for the whole step. `top` names the FILES this step reads
+    # and writes; the DEF names the CELL every tool below is asked to open,
+    # and on the chip path those stopped being the same word at step 15.5ic.
+    # Every pass after the stream-out addresses the streamed layout BY CELL
+    # NAME too -- the grid snap, the seal ring, both fills, the port-label
+    # restore -- so they take the same answer, not the file-naming one.
+    # `DESIGN == top` off the chip path: identical behaviour, empty note.
+    # See `_def_design_name` for the measurement.
+    top, _top_note = _streamout_top(def_file, top)
+
     # Fix #3(a) — prefer Magic-based streamout when Magic is available
     # (it merges abutting same-layer geometry → far fewer false DRC
     # boundary edge-pairs). Fall back to KLayout when Magic is absent or
@@ -31198,6 +31293,7 @@ def step_gds(project: Path, top: str, pdk: PdkConfig,
         return StepResult(
             "gds", "PASS", time.time() - t0,
             f"gds={gds_out.name} size={gds_out.stat().st_size} "
+            f"{'[' + _top_note + '] ' if _top_note else ''}"
             f"(streamout=magic, abutting geometry merged"
             f"{'; ' + snap_note if snap_ok else ''}"
             f"{'; ' + seal_note if seal_ok else ''}"
@@ -31413,6 +31509,7 @@ def step_gds(project: Path, top: str, pdk: PdkConfig,
             extras={"streamout_engine": "klayout"})
     return StepResult("gds", "PASS", time.time() - t0,
                       f"gds={gds_out.name} size={gds_out.stat().st_size} "
+                      f"{'[' + _top_note + '] ' if _top_note else ''}"
                       f"(streamout=klayout"
                       f"{'; ' + snap_note if snap_ok else ''}"
                       f"{'; ' + merge_note if merge_ok else ''}"
@@ -35109,6 +35206,34 @@ def _run_extraction_lvs(project: Path, top: str, pdk: PdkConfig,
     ext_dir.mkdir(parents=True, exist_ok=True)
     spice_out = ext_dir / f"{top}_extracted.sp"
     tcl = ext_dir / f"ext2spice_{top}.tcl"
+    # THE SAME SEAM AS THE STREAM-OUT, AND THE SAME MEASUREMENT. Everything
+    # above this line names a FILE and keeps the runner's file-naming `top`;
+    # everything below hands a CELL NAME to a tool -- the extraction recipe's
+    # `load $env(TOP)`, the extracted subckt this run then parses, and BOTH
+    # sides of the netgen compare. On the chip path those are not the same
+    # word: step 15.5ic substituted a pad-carrying chip top, so the DEF says
+    # `DESIGN chip_top ;` while the file is still `<core>.def`.
+    #
+    # MEASURED, spm x gf180mcuD, plugin 1.17.4, the run as shipped
+    # (phase3/stage3/extracted/ext2spice.log):
+    #
+    #     Cell spm couldn't be read
+    #     No such file or directory
+    #     PORTS_PROMOTED -1..-1
+    #     Warning:  There is nothing here to extract.
+    #     MAGIC_EXT2SPICE_DONE .../spm_extracted.sp
+    #
+    # -- and the step reported LVS_EXTRACTION_NO_NETLIST, "magic completed the
+    # recipe but wrote no file". It had: `load spm` created an EMPTY cell of
+    # that name and the extractor extracted it.
+    #
+    # ONE rebind covers every cell use below, so the extracted layout and the
+    # schematic netgen is pointed at cannot end up naming different cells --
+    # half-fixing this family would turn a loud refusal into a compare over
+    # the wrong pair. `DESIGN == top` off the chip path: no change at all.
+    top, _lvs_top_note = _streamout_top(def_file, top)
+    if _lvs_top_note:
+        print(f"[phase3] lvs: {_lvs_top_note}", file=sys.stderr)
     # W2.3 — magic's ERROR channel. The extractor files every rectangle it
     # refused to connect ("Illegal overlap between <a> and <b> (types do not
     # connect)") as a FEEDBACK AREA and then says only `N problems occurred.
@@ -46589,6 +46714,82 @@ def _def_reopen_extra_lefs_c(def_path: Path, pdk: "PdkConfig",
         seen.add(path_c)
         out.append(path_c)
     return out
+
+
+_DEF_DESIGN_RE = re.compile(r"(?m)^\s*DESIGN\s+(\S+)\s*;")
+
+
+def _def_design_name(def_path: Path) -> Optional[str]:
+    """The CELL NAME the DEF declares for itself, or None if it does not.
+
+    WHY A CELL NAME IS NOT A FILE NAME. Every physical step in this runner is
+    handed one `top` string and uses it for BOTH -- to build
+    `<top>.def` / `<top>.gds` / `<top>_pnr.v`, and as the cell name it hands a
+    tool. On the chip path those two stop being the same word. Step 15.5ic's
+    `io_pad_chip_top_gen` writes a pad-carrying chip top and
+    `_inject_padring_chip_top` retargets `link_design` to it, so the DEF that
+    leaves PnR carries `DESIGN chip_top ;` while the FILE is still
+    `<core>.def` -- deliberately, because every downstream lookup is keyed on
+    the file name. The runner's `top` is resolved once from `rtl/` before the
+    flow starts and is never told about the substitution.
+
+    MEASURED, spm x gf180mcuD, a 36-pad chip top, plugin 1.17.4, the run as
+    shipped -- `spm.def` says `DESIGN chip_top ;`, and the Magic streamout was
+    invoked with `TOP=spm`. Magic's own transcript, which the caller assigned
+    to a local and never read:
+
+        Cell spm couldn't be read
+        No such file or directory
+        Cannot rename; cell "spm" already exists!
+
+    `load spm` on a database that has no `spm` CREATES an empty cell of that
+    name, `select top cell` selects that empty cell, and `gds write` writes
+    it: `spm.gds`, 106 bytes, one empty structure. `step_drc` then reported
+    `violations=0` on it and `pad_ring_route_evidence` reported
+    PADRING_GDS_REFERENCES_LOST for 35 references of `gf180mcu_fd_io__in_c`.
+
+    A/B ON THE SHIPPED DEF, same deck, same libraries, ONLY the cell name
+    changed: `TOP=spm` -> 106 bytes; `TOP=chip_top` -> 16,941,056 bytes.
+
+    NOT A LIBRARY SHORTAGE, and the same probe says so: adding the PDK IO
+    library's LEF and GDS views to the Magic invocation with `TOP=spm` still
+    writes 106 bytes, because Magic had already resolved those masters itself
+    (`Cell gf180mcu_fd_io__in_c read from path
+    /foss/pdks/gf180mcuD/libs.ref/gf180mcu_fd_io/mag`).
+
+    THE DEF IS THE AUTHORITY, and it is the only one that cannot be stale: it
+    is the file being streamed, and it names the design it describes. A design
+    off the chip path has `DESIGN == top` and every caller below reproduces
+    its current behaviour exactly. Chip/PDK-AGNOSTIC: no design, vendor or PDK
+    literal -- the DEF names itself.
+
+    Bounded read: `DESIGN` is in the DEF header, so only the head of the file
+    is scanned. Unreadable, absent, or headerless: None, never an exception.
+    """
+    try:
+        with open(def_path, "r", errors="replace") as fh:
+            head = fh.read(65536)
+    except OSError:
+        return None
+    m = _DEF_DESIGN_RE.search(head)
+    return m.group(1) if m else None
+
+
+def _streamout_top(def_file: Path, top: str) -> Tuple[str, str]:
+    """`(cell_name, disclosure)` for a tool about to open `def_file`.
+
+    The disclosure is EMPTY when the DEF agrees with `top` -- the ordinary
+    case, and the byte-for-byte no-op. When they differ the substitution is
+    NAMED in the step's own detail, because a run that silently streams a
+    different cell than the one its record says is exactly the shape that hid
+    this for a release."""
+    design = _def_design_name(def_file)
+    if not design or design == top:
+        return top, ""
+    return design, (f"top cell taken from the DEF's own `DESIGN {design}` "
+                    f"(the runner's file-naming top is {top!r}; step 15.5ic "
+                    f"substituted a pad-carrying chip top and the FILE names "
+                    f"deliberately did not follow)")
 
 
 def _extra_lef_read_block(extra_lefs_c: Optional[Sequence[str]]) -> str:

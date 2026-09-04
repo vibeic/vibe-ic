@@ -30,12 +30,11 @@ THE RULE — structural, and never a vocabulary about any design
 ==============================================================
 A file dispatches on a command opcode iff any of:
 
-  1. `case (cmd_op | opcode | cmd_code)` — an UNAMBIGUOUS selector name, which
-     keeps its standalone force so every dispatcher caught before is still
-     caught;
-  2. `case (cmd | op)` — names reused widely enough in ordinary RTL that they
-     are credited only when the SAME file also carries a byte-wide opcode
-     literal (`8'hXX`);
+  1. `case (cmd_op | cmd_code)` — an UNAMBIGUOUS command selector name;
+  2. `case (opcode | cmd | op)` — names reused by instruction decoders and
+     ordinary RTL, credited only when the SAME file also carries byte-wide
+     packet evidence: either an `8'hXX` opcode literal or an explicitly
+     byte-wide declaration of that selector;
   3. three or more `if (<...>cmd<...> == 8'hXX)` comparisons — the per-opcode
      if-cascade, which already required the byte literal.
 
@@ -45,22 +44,41 @@ from __future__ import annotations
 
 import re
 
-# UNAMBIGUOUS selector names — standalone force.
+# UNAMBIGUOUS selector names — standalone force.  A bare `opcode` is not in
+# this tier: processor cores conventionally name their 7-bit instruction field
+# `opcode`, and an ISA decoder is not a received-packet dispatcher.
 CASE_DISPATCH_UNAMBIGUOUS_RE = re.compile(
     r"\bcase\s*\(\s*(?:\w+\s*\.\s*)?"
-    r"(cmd_op|opcode|cmd_code)\b",
+    r"(cmd_op|cmd_code)\b",
     re.IGNORECASE,
 )
 
 # AMBIGUOUS selector names — require corroboration.
 CASE_DISPATCH_AMBIGUOUS_RE = re.compile(
     r"\bcase\s*\(\s*(?:\w+\s*\.\s*)?"
-    r"(cmd|op)\b",
+    r"(opcode|cmd|op)\b",
     re.IGNORECASE,
 )
 
 #: A byte-wide literal — the corroboration an ambiguous selector needs.
 BYTE_OPCODE_LITERAL_RE = re.compile(r"\b8'h[0-9a-fA-F]{1,2}\b")
+
+
+def _selector_is_declared_byte_wide(text: str, selector: str) -> bool:
+    """Whether ``selector`` has an explicit packed width of exactly 8 bits.
+
+    This deliberately accepts either descending or ascending declarations and
+    asks only for the declaration in the same source text.  A width inferred
+    from a name is not evidence; a 7-bit instruction opcode therefore stays
+    outside the packet-check denominator.
+    """
+    escaped = re.escape(selector)
+    return bool(re.search(
+        rf"\[[ \t]*(?:7[ \t]*:[ \t]*0|0[ \t]*:[ \t]*7)[ \t]*\]"
+        rf"[^;\n]*\b{escaped}\b",
+        text,
+        re.IGNORECASE,
+    ))
 
 # Cascade of opcode equality: if (cmd == 8'hXX) or if (cmd_x == 8'hYY).
 IF_OPCODE_EQ_RE = re.compile(
@@ -74,9 +92,12 @@ def is_opcode_dispatcher(text: str) -> bool:
         return False
     if CASE_DISPATCH_UNAMBIGUOUS_RE.search(text):
         return True
-    if (CASE_DISPATCH_AMBIGUOUS_RE.search(text)
-            and BYTE_OPCODE_LITERAL_RE.search(text)):
-        return True
+    ambiguous = CASE_DISPATCH_AMBIGUOUS_RE.search(text)
+    if ambiguous:
+        selector = ambiguous.group(1)
+        if (BYTE_OPCODE_LITERAL_RE.search(text)
+                or _selector_is_declared_byte_wide(text, selector)):
+            return True
     if len(IF_OPCODE_EQ_RE.findall(text)) >= 3:
         return True
     return False

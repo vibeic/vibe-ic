@@ -230,6 +230,18 @@ def test_declared_dependency_relation_is_small():
         ("2", "1"),     # lint gate argv reads phase2/stage1/rtl/*.sv|*.v
         ("14", "9"),    # handoff must deliver the netlist 9 writes
         ("34", "18"),   # spare-cell gate reads phase3/stage3/pnr/spare_cells
+        # 2026-09-03, LOOKED AT as this docstring requires. Step 39's two
+        # stage-4 review clauses are now scoped on `phase3/stage4/gds/*.gds`,
+        # which is step 37's declared output, so 39 really does read 37 — the
+        # read was always there in prose ("by the time it runs, steps 33-38 are
+        # done and the die exists") and the condition made it checkable.
+        # WHAT IT LICENSES, measured: exactly ONE new pair. A waiver on 37 now
+        # also defers 39; every other new ORDERING ancestor 39 picked up (30 of
+        # them) licenses nothing, because deferral needs a declared read and not
+        # an ordering edge — which is the distinction this whole pin exists to
+        # keep visible. Nothing is deferred behind 39 in turn: no step in the
+        # flow has 39 in its ancestry.
+        ("39", "37"),   # stage-4 review clauses are scoped on 37's *.gds
     }, sorted(pairs)
 
 
@@ -290,4 +302,21 @@ def test_ordering_ancestry_is_two_orders_of_magnitude_wider():
     # 37.4 reads this run's own checker reports, which no step declares as an
     # output, so it licensed no new declared read -- and 6 against 1537 is
     # still two orders of magnitude.
-    assert total == 1537, total
+    #
+    # 1537 -> 1567 (2026-09-03): ONE `blocks_on` edge, not a step. Step 39
+    # gained `37` — its two stage-4 review clauses are scoped on
+    # `phase3/stage4/gds/*.gds`, step 37's declared output, and dimension 5
+    # measures that read ("step 39 reads 'phase3/stage4/gds/*.gds', declared as
+    # a required_output of step 37, but 37 is not in 39's blocks_on closure").
+    # RE-DERIVED from the graph on the base this commit sits on, 1f37c98379
+    # [v1.17.3], not typed: the whole flow's edge count moves 108 -> 109, step
+    # 39's own ancestry moves 15 -> 45 (the 30 new names are 14-37 and A1-A8,
+    # i.e. 37 and 37's own closure), EXACTLY ONE step's ancestry size moves, and
+    # step 39 is an ancestor of NOTHING — so the +1 cannot cascade and the total
+    # moves by exactly 30.
+    #
+    # The CLAIM still holds, and this time the declared list DID move: 7 pairs
+    # against 1567 ordering-licensed ones is still two orders of magnitude, and
+    # the one new declared pair is listed and justified in
+    # `test_declared_dependency_relation_is_small` above.
+    assert total == 1567, total

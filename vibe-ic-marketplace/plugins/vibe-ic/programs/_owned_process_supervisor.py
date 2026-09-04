@@ -228,8 +228,10 @@ def _descendants(snapshot: Dict[int, Tuple[int, int]], root: int) -> Set[int]:
     found: Set[int] = set()
     frontier = {root}
     while frontier:
+        # A namespace/synthetic snapshot may spell PID 1 as its own parent.
+        # The ancestry walk must never classify its root as a descendant.
         children = {pid for pid, (ppid, _start) in snapshot.items()
-                    if ppid in frontier and pid not in found}
+                    if ppid in frontier and pid != root and pid not in found}
         found.update(children)
         frontier = children
     return found
@@ -241,6 +243,7 @@ def _job_processes_checked(
     snapshot, complete = _proc_snapshot_checked()
     root_pid, root_starttime = root
     pids: Set[int] = set()
+    replacement_tree: Set[int] = set()
     if root_pid in snapshot:
         if snapshot[root_pid][1] == root_starttime:
             pids.update(_descendants(snapshot, root_pid))
@@ -248,13 +251,18 @@ def _job_processes_checked(
         else:
             # Never walk a same-number replacement as if it were the launched
             # root.  The mismatch makes the result fail closed even if the
-            # helper later proves that all truly-owned children are gone.
+            # helper later proves that all truly-owned children are gone.  It
+            # also cannot become "newly adopted" below a PID-1 helper: exclude
+            # the replacement's whole subtree from that second census path.
             complete = False
+            replacement_tree = _descendants(snapshot, root_pid) | {root_pid}
     # Once a wrapper exits, a setsid/double-fork descendant is no longer below
     # root_pid.  As this helper launches exactly one job, every identity newly
     # below the helper is attributable to that job; pre-launch identities are
     # the only exclusions.
     for pid in _descendants(snapshot, os.getpid()):
+        if pid in replacement_tree:
+            continue
         identity = (pid, snapshot[pid][1])
         if identity not in baseline:
             pids.add(pid)

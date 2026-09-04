@@ -69,6 +69,7 @@ import gzip
 import hashlib
 import json
 import os
+import shutil
 import struct
 import subprocess
 import sys
@@ -571,7 +572,11 @@ def test_the_partition_over_the_published_corpus_does_not_move():
     scratch = Path(tempfile.mkdtemp(prefix="on_pass_stage4_"))
     rejects, accepts, other = set(), set(), {}
     for i, cell in enumerate(runs):
-        rc = run(cell, "--stage-verdict", "PASS", emit=scratch / f"c{i}").returncode
+        # Keep benchmark-data read-only while giving each reviewed run an
+        # in-run destination for the executable rejection proof.
+        run_dir = scratch / f"c{i}"
+        shutil.copytree(cell, run_dir)
+        rc = run(run_dir, "--stage-verdict", "PASS").returncode
         rel = str(cell.relative_to(root))
         if rc == 1:
             rejects.add(rel)
@@ -610,9 +615,14 @@ def test_dropping_the_wrapper_allowance_would_reject_half_the_corpus():
     narrow.write_text(yaml.safe_dump(doc, allow_unicode=True), encoding="utf-8")
 
     def rejects(flow):
-        return {str(c.relative_to(root)) for i, c in enumerate(runs)
-                if run(c, "--stage-verdict", "PASS", flow=flow,
-                       emit=scratch / f"{flow.name}_{i}").returncode == 1}
+        rejected = set()
+        for i, cell in enumerate(runs):
+            run_dir = scratch / f"{flow.name}_{i}"
+            shutil.copytree(cell, run_dir)
+            if run(run_dir, "--stage-verdict", "PASS",
+                   flow=flow).returncode == 1:
+                rejected.add(str(cell.relative_to(root)))
+        return rejected
 
     with_wrapper = rejects(FLOW)
     without = rejects(narrow)

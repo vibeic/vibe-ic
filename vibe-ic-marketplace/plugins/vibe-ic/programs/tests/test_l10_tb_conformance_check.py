@@ -14,6 +14,17 @@ assert SCRIPT.exists(), f"Script not found: {SCRIPT}"
 
 sys.path.insert(0, str(SCRIPT.parent))
 import l10_tb_conformance_check as gate  # noqa: E402
+import _l10_execution as execution  # noqa: E402
+
+
+def _record(**verdicts):
+    return {
+        "available": True,
+        "rows": {
+            case_id: {"verdict": verdict, "sim_executed": True}
+            for case_id, verdict in verdicts.items()
+        },
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -117,28 +128,31 @@ def test_summary_has_pass_no_match():
 # ---------------------------------------------------------------------------
 # evaluate()
 # ---------------------------------------------------------------------------
-def test_evaluate_cmd_response_covered_by_opcode_and_summary():
+def test_evaluate_cmd_response_covered_by_execution_record():
     cases = [{"id": "GET_ID", "category": "cmd_response", "opcode": "70"}]
     tb_blob = "cmd_opcode <= 8'h70;"
     summary = "GET_ID PASS"
-    results, ok, fail = gate.evaluate(cases, tb_blob, summary)
+    results, ok, fail = gate.evaluate(
+        cases, tb_blob, summary, execution_record=_record(GET_ID="PASS"))
     assert ok == 1 and fail == 0
-    assert "opcode in tb" in results[0]["evidence"]
+    assert "EXECUTED+PASSED" in results[0]["evidence"][0]
 
 
-def test_evaluate_error_path_covered_by_id_reference():
+def test_evaluate_error_path_comment_is_not_execution_evidence():
     cases = [{"id": "TC_ERR_01", "category": "error_path"}]
     tb_blob = "// testing TC_ERR_01 corner"
     results, ok, fail = gate.evaluate(cases, tb_blob, "")
-    assert ok == 1 and fail == 0
-    assert "id substring in tb/summary" in results[0]["evidence"]
+    assert ok == 0 and fail == 0
+    assert gate.count_not_executed(results) == 1
+    assert results[0]["status"] == execution.NOT_EXECUTED
 
 
-def test_evaluate_uncovered_case():
+def test_evaluate_uncovered_case_is_not_executed():
     cases = [{"id": "GHOST", "category": "cmd_response", "opcode": "FF"}]
     results, ok, fail = gate.evaluate(cases, "// nothing", "")
-    assert fail == 1 and ok == 0
-    assert results[0]["evidence"] == []
+    assert fail == 0 and ok == 0
+    assert gate.count_not_executed(results) == 1
+    assert "NOT_EXECUTED" in results[0]["evidence"][0]
     assert results[0]["pass"] is False
 
 
@@ -205,13 +219,13 @@ def test_evaluate_checklist_explicit_fail_is_gap_not_blanket_pass():
 
 
 def test_evaluate_functional_vector_still_requires_tb_evidence():
-    """NEG-1 — a kind=functional_vector case with NO TB evidence STILL FAILs;
-    the checklist relaxation must never leak to genuine functional vectors."""
+    """A functional vector with no execution is never credited."""
     cases = [{"id": "VEC_GHOST", "kind": "functional_vector", "opcode": "FF"}]
     results, ok, fail = gate.evaluate(cases, "// unrelated content", "")
-    assert fail == 1 and ok == 0
+    assert fail == 0 and ok == 0
+    assert gate.count_not_executed(results) == 1
     assert gate.count_checklist_gaps(results) == 0
-    assert results[0]["status"] == "fail"
+    assert results[0]["status"] == execution.NOT_EXECUTED
 
 
 def test_evaluate_mixed_l10_functional_strict_checklist_scoped():
@@ -223,7 +237,8 @@ def test_evaluate_mixed_l10_functional_strict_checklist_scoped():
         {"name": "sim_smoke", "kind": "verification_checklist", "status": None},
     ]
     tb_blob = "// task drives VEC_OK trace"
-    results, ok, fail = gate.evaluate(cases, tb_blob, "")
+    results, ok, fail = gate.evaluate(
+        cases, tb_blob, "", execution_record=_record(VEC_OK="PASS"))
     assert fail == 0
     assert ok == 2  # functional_vector traced + 1 checklist Done
     assert gate.count_checklist_gaps(results) == 1
@@ -237,8 +252,9 @@ def test_evaluate_mixed_functional_miss_still_hard_fails():
         {"name": "spec_complete", "kind": "verification_checklist", "status": "Done"},
     ]
     results, ok, fail = gate.evaluate(cases, "// unrelated xyz", "")
-    assert fail == 1          # the functional miss dominates
+    assert fail == 0
     assert ok == 1            # the checklist Done credited
+    assert gate.count_not_executed(results) == 1
     assert gate.count_checklist_gaps(results) == 0
 
 
@@ -294,9 +310,10 @@ def test_cli_checklist_plus_functional_miss_still_hard_fails(tmp_path):
 # ---------------------------------------------------------------------------
 # main() CLI
 # ---------------------------------------------------------------------------
-def _make_tree(tmp_path, l10_cases, tb_files, summary_text=""):
+def _make_tree(tmp_path, l10_cases, tb_files, summary_text="", executed=None):
     (tmp_path / "phase1" / "generated_docs").mkdir(parents=True)
-    (tmp_path / "phase1" / "generated_docs" / "L10.json").write_text(
+    l10 = tmp_path / "phase1" / "generated_docs" / "L10.json"
+    l10.write_text(
         json.dumps({"test_cases": l10_cases}))
     tb_dir = tmp_path / "phase2" / "stage1" / "sim" / "tb"
     tb_dir.mkdir(parents=True)
@@ -305,6 +322,12 @@ def _make_tree(tmp_path, l10_cases, tb_files, summary_text=""):
     summary_path = tmp_path / "phase2" / "stage1" / "sim" / "work" / "summary.txt"
     summary_path.parent.mkdir(parents=True, exist_ok=True)
     summary_path.write_text(summary_text)
+    if executed:
+        execution.write_record(
+            tmp_path, l10,
+            [{"id": case_id, "verdict": verdict, "sim_executed": True}
+             for case_id, verdict in executed.items()],
+            producer="test")
     return tb_dir, summary_path
 
 
@@ -313,7 +336,7 @@ def test_cli_pass_when_every_case_covered(tmp_path):
         tmp_path,
         [{"id": "GET_ID", "category": "cmd_response", "opcode": "70"}],
         {"tb_cmd.v": "cmd <= 8'h70;"},
-        "GET_ID PASS\n")
+        "GET_ID PASS\n", executed={"GET_ID": "PASS"})
     out = tmp_path / "out.json"
     rc = gate.main([
         "--l10", str(tmp_path / "phase1" / "generated_docs" / "L10.json"),

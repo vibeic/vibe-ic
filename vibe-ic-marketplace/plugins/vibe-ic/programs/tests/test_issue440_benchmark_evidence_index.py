@@ -332,14 +332,34 @@ def test_real_tree_index_is_in_sync(tmp_path: Path):
 
 @needs_corpus
 def test_real_tree_still_holds_all_three_states(tmp_path: Path):
-    """If this ever collapses to one state, either the flow converged
-    everywhere or the measurement broke. Both are worth a red test."""
+    """The frozen 8c4b608 publication population is represented exactly.
+
+    The old assertion required a non-empty RETAINED FAILURE bucket.  That
+    became a demand to republish a failing cell after benchmark-data bcf2f94
+    deliberately withdrew all four non-converged result cells.  Classification
+    still has three-state mutation coverage above.  The real published-cell
+    population is now exactly the three named converged SPM specimens; design
+    input directories are not published cells and must not be invented as
+    UNAUDITED records merely to keep that bucket non-empty.
+    """
     text, findings = bei.build(_corpus_repo_root(tmp_path))
     assert findings == []
+    counts = {}
     for section in (bei.CONVERGED, bei.RETAINED_FAILURE, bei.UNAUDITED):
         line = [l for l in text.splitlines()
                 if l.startswith(f"| {section} |")][0]
-        assert not line.endswith("| 0 |"), f"{section} is empty"
+        counts[section] = int(line.rsplit("|", 2)[1].strip())
+    assert counts == {
+        bei.CONVERGED: 3,
+        bei.RETAINED_FAILURE: 0,
+        bei.UNAUDITED: 0,
+    }, counts
+    tracked = bei._published_tree.published_paths(_real_ic())
+    assert bei.discover_cells(_real_ic(), tracked) == [
+        "spm/v1.10.18_sky130A",
+        "spm/v1.14.88_gf180mcuD",
+        "spm/v1.5.65_sky130A",
+    ]
 
 
 @needs_corpus

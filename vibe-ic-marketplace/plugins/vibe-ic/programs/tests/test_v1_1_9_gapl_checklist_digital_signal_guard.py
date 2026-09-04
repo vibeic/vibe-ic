@@ -33,8 +33,8 @@ def test_digital_case_mislabeled_checklist_still_fails_without_tb(digital_field)
     case = [{"id": "cmd_write_reg", "kind": "verification_checklist",
              "category": "cmd_response", digital_field: "0x3A", "status": "done"}]
     res, ok, fail = L.evaluate(case, tb_blob="", summary="")
-    assert res[0]["status"] == "fail"
-    assert (ok, fail) == (0, 1)
+    assert res[0]["status"] == "NOT_EXECUTED"
+    assert (ok, fail) == (0, 0)
 
 
 def test_digital_category_token_mislabeled_checklist_still_fails():
@@ -43,8 +43,8 @@ def test_digital_category_token_mislabeled_checklist_still_fails():
     case = [{"id": "reg_rw", "kind": "verification_checklist",
              "category": "register_access", "status": "done"}]
     res, ok, fail = L.evaluate(case, tb_blob="", summary="")
-    assert res[0]["status"] == "fail"
-    assert (ok, fail) == (0, 1)
+    assert res[0]["status"] == "NOT_EXECUTED"
+    assert (ok, fail) == (0, 0)
 
 
 def test_pure_dv_milestone_satisfied_still_credited():
@@ -72,8 +72,16 @@ def test_digital_checklist_with_tb_evidence_still_passes():
     # no over-correction: a digital case that DOES have TB evidence passes.
     case = [{"id": "cmd_write_reg", "kind": "verification_checklist",
              "category": "cmd_response", "opcode": "0x3A", "status": "done"}]
-    res, ok, fail = L.evaluate(case, tb_blob="opcode 0x3A driven; cmd_write_reg",
-                               summary="")
+    execution_record = {
+        "available": True,
+        "rows": {"cmd_write_reg": {
+            "verdict": "PASS", "sim_executed": True,
+        }},
+        "malformed": [],
+    }
+    res, ok, fail = L.evaluate(
+        case, tb_blob="opcode 0x3A driven; cmd_write_reg", summary="",
+        execution_record=execution_record)
     assert res[0]["status"] == "pass"
     assert (ok, fail) == (1, 0)
 

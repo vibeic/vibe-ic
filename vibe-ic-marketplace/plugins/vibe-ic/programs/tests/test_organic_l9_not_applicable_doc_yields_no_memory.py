@@ -170,7 +170,7 @@ def test_no_not_applicable_doc_in_the_repo_carries_a_populated_memory():
                                                        for r in roots}:
         roots.append(corpus)
     scanned = 0
-    na_docs = 0
+    na_docs = set()
     dropped = []
     for root in roots:
         for doc in sorted(root.rglob("*.md")):
@@ -183,7 +183,7 @@ def test_no_not_applicable_doc_in_the_repo_carries_a_populated_memory():
             scanned += 1
             if not P._doc_declares_not_applicable(text):
                 continue
-            na_docs += 1
+            na_docs.add(doc.relative_to(root).as_posix())
             # Re-run the walker with the rule neutralised, to see exactly what
             # it is discarding on this document.
             real = P._doc_declares_not_applicable
@@ -199,12 +199,42 @@ def test_no_not_applicable_doc_in_the_repo_carries_a_populated_memory():
         f"design INPUT documents do not leave this repository — 99 of them "
         f"here when this was measured — so a number below the floor means the "
         f"inputs went missing, not that the result cells moved")
-    assert na_docs >= 9, (
-        f"premise broken: {na_docs} document(s) declare status: "
-        f"not-applicable, against the 9 measured across the split (spm, "
-        f"subservient and sha256 L4/L5/L6). Fewer means the documents that "
-        f"exercise this rule are disappearing and the invariant below is "
-        f"being asserted over a shrinking population")
+    expected_na = {
+        "ic/sha256/input/docs/L6_calibration.md",
+        "ic/spm/input/docs/L4_command_protocol.md",
+        "ic/spm/input/docs/L5_register_map.md",
+        "ic/spm/input/docs/L6_calibration.md",
+        "ic/subservient/input/docs/L4_command_protocol.md",
+        "ic/subservient/input/docs/L5_register_map.md",
+        "ic/subservient/input/docs/L6_calibration.md",
+    }
+    assert na_docs == expected_na, (
+        "the frozen 8c4b608 not-applicable input population moved",
+        sorted(na_docs - expected_na), sorted(expected_na - na_docs))
+
+    # The two former members did not vanish: the SHA spec-review pass made L4
+    # and L5 active, with a real memory-mapped command/register contract.  A
+    # raw floor of nine treated that stronger specification as lost coverage.
+    sha = next((r / "ic/sha256/input/docs" for r in roots
+                if (r / "ic/sha256/input/docs").is_dir()), None)
+    assert sha is not None, "the SHA input documents disappeared"
+    active_markers = {
+        "L4_command_protocol.md": (
+            "# L4 — Command / Protocol Layer",
+            "memory-mapped register file",
+            "ADDR_CTRL",
+        ),
+        "L5_register_map.md": (
+            "# L5 — Register Map",
+            "`0x08` | `CTRL`",
+            "`0x20-0x27` | `DIGEST0`",
+        ),
+    }
+    for name, markers in active_markers.items():
+        text = (sha / name).read_text(encoding="utf-8")
+        assert not P._doc_declares_not_applicable(text), name
+        assert "status: draft" in text, name
+        assert all(marker in text for marker in markers), name
     populated = [(f, r) for f, r in dropped
                  if r.get("name") or r.get("depth") is not None
                  or r.get("width") is not None or r.get("port_count")]

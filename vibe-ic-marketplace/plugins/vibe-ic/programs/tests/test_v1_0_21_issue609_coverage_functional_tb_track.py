@@ -38,6 +38,7 @@ from pathlib import Path
 PLUGIN = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(PLUGIN / "programs"))
 import design_one_shot_runner as P  # noqa: E402
+import _l10_execution as L10X  # noqa: E402
 
 PASS_XML = ('<testsuite name="func" tests="1" failures="0" errors="0">'
             '<testcase name="blinky_gpio_toggle"/></testsuite>\n')
@@ -62,6 +63,23 @@ def _mk(tmp_path, results_xml=None, l10=None, cov=None):
     return tmp_path
 
 
+def _professional(tmp_path, xml, *, verdict="PASS"):
+    d = tmp_path / "phase2/stage1/sim_professional/l10_unit_tb"
+    d.mkdir(parents=True, exist_ok=True)
+    junit = d / "results.xml"
+    junit.write_text(xml)
+    gd = tmp_path / "phase1/generated_docs"
+    gd.mkdir(parents=True, exist_ok=True)
+    l10 = gd / "L10_TEST_CASES.json"
+    l10.write_text(json.dumps({"test_cases": [
+        {"id": "blinky_gpio_toggle"}]}))
+    L10X.write_record(
+        tmp_path, l10, [{
+            "id": "blinky_gpio_toggle", "verdict": verdict,
+            "sim_executed": True,
+        }], producer="testbench_gen.run_unit_tbs", source_junit=junit)
+
+
 def _cov(tmp_path):
     return json.loads(
         (tmp_path / "reports/phase2/coverage/coverage_actual.json").read_text())
@@ -75,6 +93,30 @@ def test_payload_recognised_with_real_evidence(tmp_path):
     assert payload["verification_track"] == "authored_functional_tb"
     assert payload["scenarios_covered"] == ["blinky_gpio_toggle"]  # TB's own name
     assert payload["l10_conformance"] == {"ok": 10, "total": 10}
+
+
+def test_professional_unit_tb_payload_is_the_same_functional_track(tmp_path):
+    _mk(tmp_path, None, L10_OK)
+    _professional(tmp_path, PASS_XML)
+    payload = P._v1_6_609_functional_tb_pass_payload(tmp_path)
+    assert payload is not None
+    assert payload["verdict"] == "PASS"
+    assert payload["verification_track"] == "authored_functional_tb"
+    assert payload["evidence"] == (
+        "phase2/stage1/sim_professional/l10_unit_tb/results.xml")
+    assert payload["scenarios_covered"] == ["blinky_gpio_toggle"]
+    assert payload["l10_conformance"] == {"ok": 1, "total": 1}
+
+
+def test_failing_professional_unit_tb_not_upgraded(tmp_path):
+    _mk(tmp_path, None, L10_OK, STALE)
+    _professional(
+        tmp_path,
+        '<testsuite tests="1" failures="1" errors="0">'
+        '<testcase name="blinky_gpio_toggle"><failure/></testcase>'
+        '</testsuite>', verdict="FAIL")
+    assert P._v1_6_609_upgrade_coverage_from_functional_tb(tmp_path) is False
+    assert _cov(tmp_path)["verdict"] == "SKIPPED-CONDITION"
 
 
 def test_upgrade_stale_skipped_condition_to_pass(tmp_path):

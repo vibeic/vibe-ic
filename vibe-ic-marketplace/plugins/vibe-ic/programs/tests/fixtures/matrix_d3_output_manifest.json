@@ -184,6 +184,14 @@
           "path": "phase1/generated_docs/L13_LAB_CALIBRATION.json",
           "size_bytes": 3556
         },
+        "phase1/generated_docs/L19_CONSTRAINTS_PDK.json": {
+          "status": "PRODUCED_BY_RUN",
+          "run": "benchmark-data/ic/spm/v1.10.18_sky130A",
+          "alternative": "phase1/generated_docs/L19_CONSTRAINTS_PDK.json",
+          "path": "phase1/generated_docs/L19_CONSTRAINTS_PDK.json",
+          "size_bytes": 1304,
+          "note": "added after D1 declared the L19 producer contract; measured against the frozen benchmark-data 8c4b608 corpus, where the published v1.10.18_sky130A run carries this tracked non-empty artefact. The other two admissible in-repo SPM run roots also carry non-empty L19 outputs, so this records existing production rather than waiving the new declaration."
+        },
         "phase1/generated_docs/L8_RTL_CONSTANTS.json": {
           "status": "PRODUCED_BY_RUN",
           "run": "benchmark-data/ic/spm/v1.10.18_sky130A",
@@ -846,6 +854,15 @@
           "path": "phase3/stage3/pnr/routed.def",
           "size_bytes": 301739
         },
+        "phase3/stage3/pnr/openroad.log": {
+          "status": "PRODUCED_BY_RUN",
+          "run": "benchmark-data/ic/spm/v1.14.88_gf180mcuD",
+          "alternative": "phase3/stage3/pnr/openroad.log",
+          "path": "phase3/stage3/pnr/openroad.log",
+          "size_bytes": 57311,
+          "sha256": "1b877c34e07a8313eae0a128831c7af960571e2a11d5f6390847e022172d70a8",
+          "note": "2026-09-05 - measured from exact benchmark-data commit 8c4b608a4542759c2d4ef97dfb56571f43cc512f after Step 21 declared the OpenROAD invocation log. The published v1.14.88_gf180mcuD cell carries this exact tracked, non-empty blob and its write ledger records openroad as the provenance-output producer. This records existing production; it does not add or synthesize corpus bytes."
+        },
         "phase3/stage3/pnr/routed.drc.rpt": {
           "status": "PRODUCED_BY_RUN",
           "run": "benchmark-data/ic/spm/v1.14.88_gf180mcuD",
@@ -893,6 +910,15 @@
           "path": "phase3/stage3/sta/post_route_timing.rpt",
           "size_bytes": 2595,
           "note": "2026-09-02 — re-measured against benchmark-data/ic/spm/v1.14.88_gf180mcuD: phase3/stage3/sta/post_route_timing.rpt tracked at HEAD, non-empty, and attributed to this step by the cell's write ledger. Previously PRODUCED_BY_RUN citing 'benchmark-data/ic/sha256/clean_run_v1427_20260715', a root of kind 'home' this dimension searches on no host."
+        },
+        "reports/phase3/sta_spef_based.rpt": {
+          "status": "PRODUCED_BY_RUN",
+          "run": "benchmark-data/ic/spm/v1.14.88_gf180mcuD",
+          "alternative": "reports/phase3/sta_spef_based.rpt",
+          "path": "reports/phase3/sta_spef_based.rpt",
+          "size_bytes": 2354,
+          "sha256": "c66934bc4df11ce6567356e0886a5c2e881344e85fae6bcfcc9731e711c57b78",
+          "note": "2026-09-05 - measured from exact benchmark-data commit 8c4b608a4542759c2d4ef97dfb56571f43cc512f after Step 23 declared the SPEF-backed STA mirror. The published v1.14.88_gf180mcuD cell carries this exact tracked, non-empty blob; two other admissible SPM cells carry the same declared path. This records existing production; it does not add or synthesize corpus bytes."
         },
         "reports/phase3/sta/post_route_summary.json": {
           "status": "PRODUCED_BY_RUN",
@@ -1018,7 +1044,19 @@
       "verdict": "ENFORCED",
       "entries": {
         "phase3/stage3/pnr/die_finished.def OR phase3/stage3/pnr/die_finishing.SKIPPED.txt": {
-          "status": "UNPROVEN"
+          "status": "PRODUCED_LIVE",
+          "producer": "die_finishing_gen",
+          "argv": [
+            ".",
+            "--pdk-root",
+            "/foss/pdks",
+            "--pdk",
+            "sky130A"
+          ],
+          "writes": "phase3/stage3/pnr/die_finishing.SKIPPED.txt",
+          "base_run": "benchmark-data/ic/spm/v1.10.18_sky130A",
+          "size_bytes": 711,
+          "note": "2026-09-05 - measured in the pinned vibeic-eda sha256:66c33ff2e05781758f596d82bff61ad8a404ef0a7eae3d21ab8a9d55df0d01ff image. From a tracked-only copy of exact benchmark-data 8c4b608a's v1.10.18_sky130A cell, the declared die_finishing_gen producer writes a 711-byte disclosed-skip alternative because that PDK carries no seal-ring generator. The same probe on v1.14.88_gf180mcuD remains a real FAIL because its shipped generator cannot load its seal-ring library; this live proof does not relabel that failure."
         },
         "reports/phase3/die_finishing.json": {
           "status": "PRODUCED_BY_RUN",
@@ -1510,20 +1548,12 @@
           "alternative": "reports/phase2/fpga/on_board_pass.json",
           "path": "reports/phase2/fpga/on_board_pass.json",
           "size_bytes": 724
-        },
-        "reports/phase3/gates/stage4_compliance.json": {
-          "status": "PRODUCED_BY_RUN",
-          "run": "benchmark-data/ic/spm/v1.14.88_gf180mcuD",
-          "alternative": "reports/phase3/gates/stage4_compliance.json",
-          "path": "reports/phase3/gates/stage4_compliance.json",
-          "size_bytes": 22175,
-          "note": "2026-09-02 — re-measured against benchmark-data/ic/spm/v1.14.88_gf180mcuD: reports/phase3/gates/stage4_compliance.json tracked at HEAD, non-empty, and attributed to this step by the cell's write ledger. Previously UNPROVEN. Prior note: 2026-08-31 - UNPROVEN. Declared by `29e9c72796` [v1.13.96], which moved the flow yaml without moving this manifest; `d3_manifest_declaration_parity_check` has been reporting it as uncovered ever since (measured red on 781d24727 [v1.14.22] before this change, 7 uncovered paths). The stage-tier `*_com"
         }
       },
       "unproven": [
         "phase2/stage1/fpga/final/*.sof"
       ],
-      "unproven_note_2026_09_02": "reports/phase3/gates/stage4_compliance.json left this list: it is PRODUCED_BY_RUN in benchmark-data/ic/spm/v1.14.88_gf180mcuD (22175 B) and the waiver test's own resolver now finds it; the waiver covers phase2/stage1/fpga/final/*.sof only, as its reason always said."
+      "unproven_note_2026_09_02": "reports/phase3/gates/stage4_compliance.json left this list on 2026-09-02 (PRODUCED_BY_RUN in benchmark-data/ic/spm/v1.14.88_gf180mcuD, 22175 B) and left this manifest entirely when step 39 stopped declaring it: the path is written by the FIRST CLAUSE OF STEP 39'S OWN GATE and by nothing else in the plugin, so flow_compliance_check refuses it as run evidence on every pass (AUDIT-CREATED OUTPUT REFUSED) and the declaration made the step a permanent MISSING. The waiver covers phase2/stage1/fpga/final/*.sof only, as its reason always said."
     },
     "A6": {
       "verdict": "ENFORCED",
@@ -1741,13 +1771,29 @@
     },
     "37.4": {
       "verdict": "ENFORCED",
-      "_note": "2026-09-02: step ADDED. It declares required_outputs, carries no step-level condition (so NA_DORMANT_CONDITION is not derivable for it) and holds no waiver, which is what ENFORCED means here. Both entries are UNPROVEN: the producer (signoff_metrics_aggregate) is new, so no admissible run root has produced these paths yet. The UNPROVEN branch re-searches every root live, so the first published run that carries them resolves it.",
+      "_note": "2026-09-02: step ADDED. It declares required_outputs, carries no step-level condition (so NA_DORMANT_CONDITION is not derivable for it) and holds no waiver, which is what ENFORCED means here. 2026-09-05: both outputs are now bound to live-production proofs from the step's declared signoff_metrics_aggregate producer over a tracked-only copy of exact benchmark-data 8c4b608a's v1.14.88_gf180mcuD cell. No corpus bytes were added.",
       "entries": {
         "phase3/final/metrics.json": {
-          "status": "UNPROVEN"
+          "status": "PRODUCED_LIVE",
+          "producer": "signoff_metrics_aggregate",
+          "argv": [
+            "."
+          ],
+          "writes": "phase3/final/metrics.json",
+          "base_run": "benchmark-data/ic/spm/v1.14.88_gf180mcuD",
+          "size_bytes": 5323,
+          "note": "2026-09-05 - measured in the pinned vibeic-eda sha256:66c33ff2e05781758f596d82bff61ad8a404ef0a7eae3d21ab8a9d55df0d01ff image. The declared producer writes this non-empty record from the exact tracked-only v1.14.88_gf180mcuD published cell and reports every absent metric as NOT_MEASURED rather than inventing a value."
         },
         "reports/phase3/signoff_metrics_aggregate.json": {
-          "status": "UNPROVEN"
+          "status": "PRODUCED_LIVE",
+          "producer": "signoff_metrics_aggregate",
+          "argv": [
+            "."
+          ],
+          "writes": "reports/phase3/signoff_metrics_aggregate.json",
+          "base_run": "benchmark-data/ic/spm/v1.14.88_gf180mcuD",
+          "size_bytes": 6087,
+          "note": "2026-09-05 - measured in the pinned vibeic-eda sha256:66c33ff2e05781758f596d82bff61ad8a404ef0a7eae3d21ab8a9d55df0d01ff image. The declared producer writes this non-empty provenance report from the exact tracked-only v1.14.88_gf180mcuD published cell; its paired metrics output is independently re-derived by the sibling record."
         }
       }
     }

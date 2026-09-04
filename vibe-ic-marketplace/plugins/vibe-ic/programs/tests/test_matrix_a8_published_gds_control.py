@@ -83,7 +83,7 @@ from flow_matrix import waivers as W
 
 import _plugin_tree
 
-from _published_corpus import needs_corpus
+from _published_corpus import corpus_root, needs_corpus
 
 import test_matrix_d3_outputs_produced as D3
 
@@ -155,7 +155,7 @@ def test_control_a8_still_declares_the_gds_and_keeps_no_waiver_for_it():
 
 @needs_corpus
 def test_control_a8_gds_is_produced_and_evidenced_from_the_commit():
-    """A8's ``.gds`` is produced, the commit proves it, and no waiver survives.
+    """A8's withdrawn ``.gds`` must not continue to read as live evidence.
 
     Four claims, in the order a reviewer would want them:
 
@@ -172,7 +172,8 @@ def test_control_a8_gds_is_produced_and_evidenced_from_the_commit():
     ``UNPROVEN`` and no admissible run root carries it, and
     ``flow_matrix.waivers`` still holds the A8/d3 entry.
     """
-    repo = _repo()
+    repo = corpus_root()
+    assert repo is not None
 
     # (1)
     assert A8_GDS in F.required_outputs("A8"), (
@@ -181,56 +182,21 @@ def test_control_a8_gds_is_produced_and_evidenced_from_the_commit():
 
     # (2)
     hits = _tracked_matching(repo, A8_GDS)
-    assert hits, (
-        f"no path tracked at HEAD matches {A8_GDS!r}. This control asserts the "
-        f"CLOSED state of A8/d3, which rests on commit b1665ec8 having "
-        f"published the layouts. If they were removed, the honest move is to "
-        f"restore the publication or re-open the waiver with a premise that is "
-        f"true — not to delete this test.")
+    assert hits == [], (
+        "an A8 hardmacro GDS re-entered the frozen published corpus; validate "
+        f"its convergence and re-close this control explicitly: {hits}")
 
-    # (3)
-    problems = []
-    for rel in hits:
-        p = repo / rel
-        raw = p.read_bytes()
-        block = p.parent.name
-        defined, _referenced, valid_header = D3.parse_structures(raw)
-        if p.is_symlink():
-            problems.append(f"{rel} is a symlink -> {os.readlink(p)}")
-            continue
-        if not valid_header:
-            problems.append(f"{rel} ({len(raw)} B) has no GDSII HEADER record")
-            continue
-        if D3._gds_geometry_count(raw) <= 0:
-            problems.append(
-                f"{rel} ({len(raw)} B) carries no BOUNDARY/PATH/SREF/AREF/BOX "
-                f"record — padding or an empty library, not a layout")
-        if block not in defined:
-            problems.append(
-                f"{rel} defines {defined[:6]} and none of them is {block!r}, "
-                f"the block directory it sits in")
-    assert not problems, (
-        "a tracked artefact matching A8's declared .gds is not a hardmacro "
-        "layout:\n  " + "\n  ".join(problems))
-
-    # (4)
+    # bcf2f94 withdrew the non-converged analog cell.  The manifest retains
+    # the historical producer citation, but marks its root `home`, which makes
+    # the matrix state NOT_MEASURED rather than a fixture-backed green.
     rec = D3.step_record("A8")["entries"][A8_GDS]
-    verdict = D3.check_entry("A8", A8_GDS, rec)
-    assert verdict.produced, (
-        f"A8's {A8_GDS!r} is carried by this commit at {hits} and every match "
-        f"is a real hardmacro layout, yet dimension 3 reports it unproduced: "
-        f"{verdict.detail}")
-    assert verdict.mode == D3.LIVE, (
-        f"A8's {A8_GDS!r} was decided from the committed manifest "
-        f"({verdict.mode}) rather than by looking at the artefact: "
-        f"{verdict.detail}. The artefact is in the commit; there is nothing to "
-        f"stand in for.")
-    root = D3.run_roots().get(rec.get("run"))
-    assert root is not None, (
-        f"the manifest cites run root {rec.get('run')!r} for A8's .gds and it "
-        f"does not resolve; the cell would be green on a fixture record")
-    assert repo.resolve() in root.path.resolve().parents, (
-        f"A8's evidence root {root.path} is not inside this repository (#527)")
+    meta = D3.manifest()["run_roots"][rec["run"]]
+    assert meta["kind"] == "home", meta
+    assert D3.run_roots().get(rec["run"]) is None
+    assert D3.matrix_cell_state("A8") == "NOT_MEASURED"
+    citations = D3.unanswerable_citations("A8")
+    assert any(rel == A8_GDS and root == rec["run"]
+               for rel, root, _row in citations), citations
 
     assert W.waiver_for("A8", 3) is None, (
         "A8/d3 resolves live from a committed artefact, so an accepted-gap "
@@ -255,36 +221,27 @@ def test_control_a8_gds_is_produced_and_evidenced_from_the_commit():
 
 @needs_corpus
 def test_control_the_published_root_is_named_in_the_manifest_and_is_in_repo():
-    """The new evidence root is registered, in-repo, and reachable by everyone.
+    """The withdrawn evidence root is registered but cannot certify A8.
 
     FORWARD case (red before the fix: the manifest does not name this root).
     #527's rule is that a verdict may not depend on the machine, and a
     published cell is admitted here only because the repository carries it —
     so that is asserted rather than assumed.
     """
-    repo = _repo()
+    repo = corpus_root()
+    assert repo is not None
     label = "benchmark-data/ic/u_hawaii_adc/v1.9.86_sky130A"
     meta = D3.manifest()["run_roots"].get(label)
     assert meta is not None, (
         f"{label} is not registered in the dimension-3 manifest, so A8's "
         f"evidence would resolve by accident of directory layout")
-    assert meta["kind"] == D3._PUBLISHED_KIND, meta
+    assert meta["kind"] == "home", meta
     root = D3.run_roots().get(label)
-    assert root is not None, f"{label} is registered but does not resolve"
-    assert root.path == repo / meta["rel"]
-    assert (repo / meta["rel"] / "phase3" / "analog" / "hardmacro" / "ldo"
-            / "ldo.gds").is_file()
-
-    # The published root resolves A8's entry to the committed layout, and the
-    # hit clears every admissibility rule in its own right.
-    hit, rejected = D3.resolve(root.path, A8_GDS)
-    assert hit is not None, (
-        f"the published cell resolves as a run root but yields nothing for "
-        f"{A8_GDS!r}; rejected: {rejected}")
-    assert hit.size_bytes > 0 and not (root.path / hit.path).is_symlink()
-    assert D3.is_tracked(root.path, hit.path), (
-        f"{hit.path} is not tracked at HEAD, so it is a local build product "
-        f"and must never have been accepted (#527)")
+    assert root is None, f"withdrawn root still resolves: {root}"
+    corpus_rel = meta["rel"].removeprefix("benchmark-data/")
+    assert not (repo / corpus_rel).exists(), (
+        "the owner-withdrawn analog result cell reappeared")
+    assert D3.matrix_cell_state("A8") == "NOT_MEASURED"
 
 
 def test_control_a_published_cell_must_show_a_converged_verdict():
@@ -443,4 +400,3 @@ def test_reverse_admissibility_still_refuses_what_it_refused():
             f"the same bytes, once committed, must be accepted — otherwise the "
             f"rule refuses the path or the glob, not the un-committedness: "
             f"{h} / {rej}")
-

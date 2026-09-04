@@ -67,7 +67,10 @@ of them fires.
       * **no** ``required_outputs`` entry anywhere in the flow names.
 
     Produced, depended on, declared by nobody: exactly the artefact whose
-    absence is invisible.
+    absence is invisible.  The same conditional-output rule as W1/W4 applies:
+    a path whose owning gate unanimously emits it only from a conditioned
+    ``optional_program_exit_zero`` clause is reported as CONDITIONAL, because
+    unconditional ``required_outputs`` cannot truthfully describe it.
 
     PRODUCED, MEASURED TWO WAYS — AND WHY THE SECOND ONE HAD TO EXIST.
     Until 2026-08-06 "produced" meant only the first clause, and a path no
@@ -303,6 +306,12 @@ W4 = "W4:no_required_outputs_but_gate_writes"
 
 #: The REPORTED (never enforced) class for a flow-declared-optional producer.
 C1 = "C1:conditional_producer_output"
+#: A produced artefact read only by conditioned optional gate clauses.  Its
+#: absence outside those clauses is not invisible: when the condition holds,
+#: the clause runs and refuses the missing artefact; when it does not, an
+#: unconditional ``required_outputs`` entry would make a legitimate absence
+#: fail in dimension 3.
+C2 = "C2:conditional_gate_input"
 
 #: What this module provably CANNOT see. Quoted verbatim into `known_gap`.
 RESOLUTION_LIMITS: Tuple[str, ...] = (
@@ -1389,6 +1398,70 @@ def gate_input_paths(step_id) -> FrozenSet[str]:
     return frozenset(acc)
 
 
+def _clause_supplied_flags(clause: F.GateClause) -> FrozenSet[str]:
+    """Flags supplied by one exec clause, without cross-clause collapsing."""
+    if clause.command is None:
+        return frozenset()
+    return frozenset(
+        tok.split("=", 1)[0]
+        for tok in clause.command.split()[1:]
+        if tok.startswith("-")
+    )
+
+
+@lru_cache(maxsize=None)
+def _clause_read_paths(clause: F.GateClause) -> FrozenSet[str]:
+    """Artefact paths one concrete gate clause can read.
+
+    This is the clause-granular form of :func:`_gate_consumers`.  Granularity
+    matters here because optionality is declared on the clause, not the step.
+    A source default foreclosed by this invocation's own flag is not a read;
+    every explicit command/file/json input remains one.
+    """
+    acc: Set[str] = set()
+    if clause.command is not None:
+        _outs, ins = split_command(clause.command)
+        acc.update(ins)
+    acc.update(f.lstrip("./") for f in clause.files)
+    acc.update(f.lstrip("./") for f in clause.condition_files)
+    if clause.json_file:
+        acc.add(clause.json_file.lstrip("./"))
+    if clause.program:
+        defaults = option_default_literals(clause.program)
+        supplied = _clause_supplied_flags(clause)
+        for lit in program_literals(clause.program):
+            foreclosed = defaults.get(lit)
+            if foreclosed and (foreclosed & supplied):
+                continue
+            acc.add(lit)
+    return frozenset(acc)
+
+
+@lru_cache(maxsize=None)
+def conditional_gate_input_paths(step_id) -> FrozenSet[str]:
+    """Paths this step reads *only* from genuinely conditioned clauses.
+
+    One unconditional reader is enough to keep the path enforced.  This is
+    the consumer-side counterpart of :func:`conditional_output_targets` and
+    is deliberately unanimous for the same anti-laundering reason.
+    """
+    modes: Dict[str, List[bool]] = {}
+    for clause in F.gate_clauses(step_id):
+        conditioned = (
+            clause.kind == F.K_OPTIONAL and bool(clause.condition_files)
+        )
+        for path in _clause_read_paths(clause):
+            modes.setdefault(path, []).append(conditioned)
+
+    # Step-level applicability files are read outside any optional clause.
+    cond = F.step_condition(step_id)
+    if cond:
+        for path in cond.get("files_exist") or []:
+            modes.setdefault(str(path).lstrip("./"), []).append(False)
+
+    return frozenset(path for path, seen in modes.items() if seen and all(seen))
+
+
 @lru_cache(maxsize=1)
 def flow_consumers() -> Dict[str, FrozenSet[str]]:
     """``{path: {step ids whose gate consumes it}}`` across the whole flow."""
@@ -1455,19 +1528,50 @@ def declaring_entry(path: str) -> Optional[str]:
 # ──────────────────────────────────────────────────────────────────────
 # The rules
 # ──────────────────────────────────────────────────────────────────────
-def _consumers_of_output(path: str, writer: str) -> Tuple[str, ...]:
-    """Everything that reads *path* other than the program that wrote it.
+def _consumers_of_output(path: str, writer: str,
+                         owner: Optional[str] = None) -> Tuple[str, ...]:
+    """Everything that reads *path* other than the gate invocation that wrote it.
 
     The exclusion of *writer* is the audit's own "self-verifying" standard:
     a report a gate program writes AND checks inside one invocation cannot go
     missing unnoticed, so it is EVIDENCE, not LOAD_BEARING.
+
+    *owner* — the step whose gate designates *path* as an output — extends that
+    same standard to the granularity the standard is stated at. ONE INVOCATION,
+    not one program: ``flow_compliance_check.check_step`` runs a step's
+    ``all_of`` clauses in declared order inside a single call, so a report that
+    clause 1 writes and clause 2 of the SAME gate reads cannot go missing
+    unnoticed either — the reading clause refuses on the spot, in that same
+    call. Counting the writer's own gate as an outside consumer was the one
+    thing separating those two cases, and it put six paths in this flow
+    (steps 2, 7, 14, 15, 37, 39) on the LOAD_BEARING side of a rule whose
+    conclusion — "declare it in ``required_outputs``" — that class of path
+    cannot satisfy. ``required_outputs`` asserts the RUN produced the artefact,
+    and ``flow_compliance_check`` refuses a declared output this step's own gate
+    authored during the audit (``AUDIT-CREATED OUTPUT REFUSED``), so the
+    declaration makes the step a PERMANENT MISSING. The registry had already
+    measured that on FS1 and spent a dimension-7 waiver on it — "a declaration
+    cannot be satisfied by a run — only by the auditor"; step 39 took the other
+    branch, declared it at v1.13.96, and became the permanent red that waiver
+    predicted.
+
+    NARROW ON PURPOSE. Only the writer's OWN gate is dropped. Every
+    ``program:`` consumer and every OTHER step's gate is untouched: those
+    readers are outside the invocation that wrote the file, and its absence
+    there really can pass unnoticed. Of the 28 gate-output targets in this flow
+    that have any consumer, 22 have a ``program:`` consumer and not one of the
+    22 loses a consumer here.
     """
     acc: Set[str] = set()
+    self_gate = f"gate:step{F.normalize_id(owner)}" if owner is not None else None
     for prog in literal_index().get(path, frozenset()):
         if prog != writer:
             acc.add(f"program:{prog}")
     for sid in flow_consumers().get(path, frozenset()):
-        acc.add(f"gate:step{sid}")
+        tag = f"gate:step{sid}"
+        if tag == self_gate:
+            continue
+        acc.add(tag)
     return tuple(sorted(acc))
 
 
@@ -1626,7 +1730,7 @@ def findings_for(step_id) -> Tuple[Finding, ...]:
                     path=path,
                     klass=LOAD_BEARING,
                     producer=writer,
-                    consumers=_consumers_of_output(path, writer),
+                    consumers=_consumers_of_output(path, writer, key),
                     detail=(
                         "the step declares no required_outputs key at all, so "
                         "no list can capture this gate-designated output"
@@ -1638,7 +1742,7 @@ def findings_for(step_id) -> Tuple[Finding, ...]:
     for path, writer in targets:
         if path in seen_w4 or path in conditional or declaring_entry(path):
             continue
-        consumers = _consumers_of_output(path, writer)
+        consumers = _consumers_of_output(path, writer, key)
         if not consumers:
             continue  # self-verifying -> EVIDENCE, reported not enforced
         out.append(
@@ -1659,6 +1763,17 @@ def findings_for(step_id) -> Tuple[Finding, ...]:
     # ---- W2: produced + consumed + declared by nobody ------------------
     for path, owner, producers, cons in _w2_population():
         if owner != key:
+            continue
+        # W2's run-record producer oracle can see writes that the AST cannot.
+        # That must not erase the flow's explicit optionality: Step 34's
+        # cmp_fill_emit report is the concrete case.  The optional gate emits
+        # it only when a PDK fill deck exists, so forcing it into the
+        # unconditional required_outputs list would merely move the red to D3.
+        if path in conditional or (
+            cons and all(
+                path in conditional_gate_input_paths(sid) for sid in cons
+            )
+        ):
             continue
         if any(f.path == path for f in out):
             continue
@@ -1705,7 +1820,7 @@ def findings_for(step_id) -> Tuple[Finding, ...]:
 
 @lru_cache(maxsize=None)
 def conditional_findings(step_id) -> Tuple[Finding, ...]:
-    """Undeclared gate outputs W1 SKIPS because the flow marks them optional.
+    """Undeclared artefacts skipped because the flow marks their use optional.
 
     Reported, never enforced — and reported precisely so that "not enforced"
     is not the same as "not written down". This is the population W1 would
@@ -1727,7 +1842,7 @@ def conditional_findings(step_id) -> Tuple[Finding, ...]:
     for path, writer, cond in conditional_output_targets(step_id):
         if declaring_entry(path):
             continue
-        consumers = _consumers_of_output(path, writer)
+        consumers = _consumers_of_output(path, writer, key)
         if not consumers:
             continue  # already EVIDENCE — self-verifying, not repeated here
         out.append(
@@ -1747,6 +1862,35 @@ def conditional_findings(step_id) -> Tuple[Finding, ...]:
                 ),
             )
         )
+
+    # W2's consumer-side case.  A report can be produced on runs where an
+    # optional feature is enabled and consumed only by the gate clause guarded
+    # by that same feature.  The clause itself catches absence when enabled;
+    # declaring the report unconditionally would instead fail every run where
+    # the feature is absent.  Require unanimity across every gate consumer.
+    for path, owner, producers, cons in _w2_population():
+        if owner != key or not cons:
+            continue
+        if not all(path in conditional_gate_input_paths(sid) for sid in cons):
+            continue
+        if declaring_entry(path) or any(f.path == path for f in out):
+            continue
+        out.append(
+            Finding(
+                step_id=key,
+                rule=C2,
+                path=path,
+                klass=CONDITIONAL,
+                producer=",".join(sorted(producers)[:3]),
+                consumers=tuple(f"gate:step{c}" for c in sorted(cons)),
+                detail=(
+                    "every gate consumer reaches this artefact only through "
+                    "an optional_program_exit_zero clause with non-empty "
+                    "condition_files_exist; that clause catches absence when "
+                    "enabled and required_outputs cannot express the condition"
+                ),
+            )
+        )
     return tuple(out)
 
 
@@ -1763,7 +1907,7 @@ def evidence_findings(step_id) -> Tuple[Finding, ...]:
     for path, writer in gate_output_targets(step_id):
         if declaring_entry(path):
             continue
-        if _consumers_of_output(path, writer):
+        if _consumers_of_output(path, writer, key):
             continue
         out.append(
             Finding(
@@ -1825,6 +1969,8 @@ def clear_flow_caches() -> None:
         gate_output_targets,
         conditional_output_targets,
         _conditional_paths,
+        _clause_read_paths,
+        conditional_gate_input_paths,
         gate_input_paths,
         flow_consumers,
         declared_entries,
@@ -1855,12 +2001,14 @@ __all__ = [
     "W3",
     "W4",
     "C1",
+    "C2",
     "Finding",
     "is_artifact_path",
     "split_command",
     "clause_output_targets",
     "gate_output_targets",
     "conditional_output_targets",
+    "conditional_gate_input_paths",
     "gate_input_paths",
     "flow_consumers",
     "declared_entries",

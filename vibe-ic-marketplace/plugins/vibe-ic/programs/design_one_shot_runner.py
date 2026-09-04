@@ -9061,12 +9061,15 @@ def step_l10_unit_tb_run(project: Path, container: "str | None") -> StepResult:
     detail = (f"{rep['tb_total']} unit TB(s): {rep['passed']} passed, "
               f"{rep['failed']} failed, {rep['errored']} errored "
               f"(elaboration); JUnit {rep.get('results_xml')} is the Step-4 "
-              f"functional denominator"
+              f"functional denominator; per-case execution record "
+              f"{rep.get('execution_record') or 'NOT_WRITTEN'}"
               + (f"; {len(extra)} source(s) resolved from the design INPUT: "
                  + ", ".join(Path(x).name for x in extra) if extra else ""))
     status = "PASS" if (rep["failed"] == 0 and rep["errored"] == 0) else "FAIL"
     return StepResult("l10_unit_tb_run", status, time.time() - t0, detail,
-                      output_files=[rep.get("results_xml") or ""],
+                      output_files=[x for x in (
+                          rep.get("results_xml"), rep.get("execution_record"))
+                                    if x],
                       extras={"passed": rep["passed"], "failed": rep["failed"],
                               "errored": rep["errored"],
                               "executed": rep["executed"],
@@ -15272,44 +15275,66 @@ def _v1_6_609_functional_tb_pass_payload(project: Path):
     SKIPPED-CONDITION.
 
     Recognised as a real PASS ONLY when (honest, non-vacuous):
-      * phase2/stage1/sim/results.xml is a JUnit ``<testsuite>`` with
+      * phase2/stage1/sim/results.xml OR the standard L10-unit result under
+        phase2/stage1/sim_professional/ is a JUnit ``<testsuite>`` with
         tests>=1 AND failures==0 AND errors==0, AND
-      * l10_tb_conformance reports ok==total>0.
+      * the conventional result has l10_tb_conformance ok==total>0; the L10
+        unit result instead requires its independent, hash-bound per-case
+        execution record with every current case actually executed and PASS.
     Scenarios are the TB's OWN testcase names (never a canned cross-design list
     — #436 preserved). chip-AGNOSTIC."""
+    import _sim_results_bridge as _srb_local
+
+    # Use the same JUnit parser and professional-result resolver as the
+    # Step-4 functional denominator.  The L10 unit-TB executor intentionally
+    # writes into that standard professional slot; ignoring it here left the
+    # simulation PASS visible to Step 4 while its required functional-verdict
+    # manifest stayed absent.
     res = _pl.sim_dir(project) / "results.xml"
+    summ = _srb_local.parse_junit(res)
+    if not (summ and summ["tests"] >= 1
+            and summ["failures"] == 0 and summ["errors"] == 0):
+        summ = _srb_local.find_professional_tb_pass(project)
+        if not summ:
+            return None
+        res = project / summ["rel_path"]
+    tests = int(summ["tests"])
+    failures = int(summ["failures"])
+    errors = int(summ["errors"])
     try:
         txt = res.read_text(errors="replace")
     except OSError:
         return None
-    # Must be the AI-TB's JUnit shape (a `<testsuite tests=...>`), NOT the
-    # producer's own `<results><verdict>` shape.
-    mt = re.search(r"<testsuite[^>]*\btests=[\"'](\d+)[\"']", txt)
-    if not mt:
-        return None
-    tests = int(mt.group(1))
-    mf = re.search(r"<testsuite[^>]*\bfailures=[\"'](\d+)[\"']", txt)
-    me = re.search(r"<testsuite[^>]*\berrors=[\"'](\d+)[\"']", txt)
-    failures = int(mf.group(1)) if mf else 0
-    errors = int(me.group(1)) if me else 0
-    if tests < 1 or failures != 0 or errors != 0:
-        return None
-    l10 = _v1_6_609_l10_conformance_ok(project)
-    if l10 is None:
-        return None
-    ok, total = l10
-    if not (total > 0 and ok == total):
-        return None
+    rel_evidence = res.relative_to(project).as_posix()
+    if rel_evidence.startswith("phase2/stage1/sim_professional/"):
+        # The professional L10 executor publishes an independent, hash-bound
+        # per-case record beside its JUnit.  Require that execution evidence;
+        # a green l10_tb_conformance report copied into place is not allowed to
+        # manufacture this functional manifest.
+        import professional_tb_check as _professional_check
+        unit_track = _professional_check.l10_unit_tb_track(project)
+        if (not unit_track or unit_track.get("verdict") != "PASS"
+                or unit_track.get("evidence") != rel_evidence):
+            return None
+        ok = total = int(unit_track.get("l10_cases", 0) or 0)
+    else:
+        l10 = _v1_6_609_l10_conformance_ok(project)
+        if l10 is None:
+            return None
+        ok, total = l10
+        if not (total > 0 and ok == total):
+            return None
     cases = re.findall(r"<testcase[^>]*\bname=[\"']([A-Za-z0-9_./-]+)[\"']", txt)
     return {
         "verdict": "PASS",
         "verification_track": "authored_functional_tb",
-        "evidence": str(res.relative_to(project)),
+        "evidence": rel_evidence,
         "scenarios_covered": sorted(set(cases))[:24],
         "l10_conformance": {"ok": ok, "total": total},
         "note": ("authored self-checking functional TB PASS "
-                 "(phase2/stage1/sim/results.xml failures=0/errors=0, "
-                 "l10_tb_conformance ok==total>0); scenarios are the TB's own "
+                 f"({rel_evidence} "
+                 f"tests={tests}/failures={failures}/errors={errors}, "
+                 "L10 execution evidence ok==total>0); scenarios are the TB's own "
                  "testcase names (#609; #436: never another design's canned "
                  "list)"),
     }

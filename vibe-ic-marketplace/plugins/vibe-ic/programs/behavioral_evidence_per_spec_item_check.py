@@ -4,14 +4,14 @@ behavioral_evidence_per_spec_item_check.py — v0.100 J1
 
 ENFORCEMENT: advisory
 
-The line above is a DECLARATION, in the anchored form `flow_gate_enforcement_
-audit.declared_intent` reads. This program is wired into the flow as an
-`advisory_program_exit_zero` clause: it RUNS on every project that reaches its
-step, its findings are printed, and its exit code cannot deny the step its PASS
-tier. That is deliberate — it was wired to make a real check reachable, not to
-block a landing on debt it did not create — and the declaration says so where
-the audit looks. Without it, "wired where it cannot block" and "nobody decided"
-are the same record, and the reliable way to stay clean is to say nothing.
+The line above is a declaration in the anchored form consumed by
+`flow_gate_enforcement_audit.declared_intent`: this checker is not consumed
+inline by the artifact-producing runner that audit measures. Its verdict is
+nevertheless required by strict Step 4 through a `program_exit_zero` clause.
+When L9 declares a behavioural item, missing evidence is a real finding and can
+refuse Step 4. When L9 has no per-item behavioural population, the program
+returns typed DESIGN_DECLARED_NA instead; the flow records that executed
+applicability decision without treating it as an empty-scan failure.
 Verify that every behavioural requirement in L9 (Integration Spec) has
 at least one piece of verifiable evidence in the project directory.
 
@@ -205,6 +205,15 @@ def main(argv=None) -> int:
               f"L9 ({l9_path}) — integration-only / non-protocol design; "
               "nothing to attest per item")
         if args.json:
+            try:
+                declaration_path = str(l9_path.resolve().relative_to(project))
+            except ValueError:
+                # An override outside the project can be checked directly, but
+                # it cannot prove a project-declared zero population to the
+                # flow consumer. Preserve the typed verdict without attaching
+                # an applicability proof the consumer cannot independently
+                # reload from the project tree.
+                declaration_path = None
             report = {
                 "program": "behavioral_evidence_per_spec_item_check",
                 "l9_path": str(l9_path),
@@ -216,6 +225,14 @@ def main(argv=None) -> int:
                 "verdict": "SKIPPED-CONDITION",
                 "reason_class": "DESIGN_DECLARED_NA",
             }
+            if declaration_path is not None:
+                report["applicability_evidence"] = {
+                    "kind": "design-declared-zero-population",
+                    "declaration_path": declaration_path,
+                    "population_paths": list(_REQUIREMENT_LIST_KEYS),
+                    "declared_population": 0,
+                    "assertions": [],
+                }
             Path(args.json).parent.mkdir(parents=True, exist_ok=True)
             atomic_write_text(Path(args.json), json.dumps(report, indent=2))
         return 2

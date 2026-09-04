@@ -48,6 +48,18 @@ import provenance_declared_output_check as C  # noqa: E402
 
 _H = "sha256:" + "0" * 64
 
+_FROZEN_CELLS = {
+    "ic/spm/v1.10.18_sky130A",
+    "ic/spm/v1.14.88_gf180mcuD",
+    "ic/spm/v1.5.65_sky130A",
+    "protocol_parity/espi",
+    "protocol_parity/interlaken",
+    "protocol_parity/lpc",
+    "protocol_parity/mdio",
+    "protocol_parity/sgmii",
+    "protocol_parity/usb_pd",
+}
+
 
 def _sha(b: bytes) -> str:
     import hashlib
@@ -94,6 +106,38 @@ def test_a_changed_file_at_the_declared_path_is_a_mismatch(tmp_path):
                  [{"outputs": {"a.v": _sha(b"original\n")}}])
     rep = C.audit(repo)
     assert any("HASH_MISMATCH" in f for f in rep["findings"]), rep["findings"]
+
+
+def test_an_earlier_same_path_write_is_superseded_by_the_shipped_final_write(
+        tmp_path):
+    """An append-only ledger records both writes; a checkout holds the last.
+
+    This is the real setup-STA then hold-STA shape.  No hash or row is erased:
+    the earlier declaration is accounted for separately, and only because the
+    indexed blob exactly matches the later declaration.
+    """
+    old, final = b"setup report\n", b"hold report\n"
+    repo = _cell(tmp_path, {"sta.rpt": final}, [
+        {"outputs": {"sta.rpt": _sha(old)}},
+        {"outputs": {"sta.rpt": _sha(final)}},
+    ])
+    rep = C.audit(repo)
+    assert rep["verdict"] == "PASS", rep["findings"]
+    assert rep["cells"][0]["declared"] == 2
+    assert rep["cells"][0]["present"] == 1
+    assert rep["cells"][0]["superseded"] == ["sta.rpt"]
+
+
+def test_a_later_same_path_row_cannot_hide_an_unmatched_shipped_blob(tmp_path):
+    """A later declaration is proof only when its digest is what ships."""
+    repo = _cell(tmp_path, {"sta.rpt": b"third unknown report\n"}, [
+        {"outputs": {"sta.rpt": _sha(b"setup report\n")}},
+        {"outputs": {"sta.rpt": _sha(b"hold report\n")}},
+    ])
+    rep = C.audit(repo)
+    assert rep["verdict"] == "FAIL"
+    assert len(rep["cells"][0]["hash_mismatch"]) == 2
+    assert rep["cells"][0]["superseded"] == []
 
 
 # ── the three bugs the first version had ────────────────────────────────────
@@ -182,15 +226,29 @@ def test_git_refusing_to_list_is_an_ERROR_not_a_PASS(tmp_path, capsys):
 # ("the corpus lost 156 declarations") and the second passed VACUOUSLY, because
 # `0 + 0 == 0` satisfies it over an empty population — a green report from a
 # check that read nothing, which is the exact shape this whole file is against.
-# Both floors are unchanged, so a partial corpus still fails; measured against
-# the published corpus today: 22 cells, 217 declared, 86 present + 131 pruned.
+# Frozen benchmark-data 8c4b608 carries 9 ledgers and 93 declarations:
+# 53 present + 38 pruned + 2 superseded.  The former 156 floor described
+# withdrawn failing result cells and could only be satisfied by republishing
+# them.  The current population is pinned as the exact five-part tuple; unlike
+# a lowered floor it cannot absorb a deletion, addition or substitution by
+# count, and the accounting equality below still forbids deleting a declaration
+# to buy a pass.
 
 @needs_corpus
 def test_the_published_corpus_is_followable_today(tmp_path):
     rep = C.audit(corpus_repo(tmp_path))
     assert rep["verdict"] == "PASS", rep["findings"][:8]
     decl = sum(c["declared"] for c in rep["cells"])
-    assert decl >= 156, decl
+    pres = sum(c["present"] for c in rep["cells"])
+    pruned = sum(len(c["pruned"]) for c in rep["cells"])
+    superseded = sum(len(c["superseded"]) for c in rep["cells"])
+    cells = {c["cell"].split("/benchmark-data/", 1)[-1]
+             for c in rep["cells"]}
+    assert cells == _FROZEN_CELLS, (
+        sorted(cells - _FROZEN_CELLS), sorted(_FROZEN_CELLS - cells))
+    assert (len(rep["cells"]), decl, pres, pruned, superseded) == (
+        9, 93, 53, 38, 2), (
+            len(rep["cells"]), decl, pres, pruned, superseded)
 
 
 @needs_corpus
@@ -202,4 +260,6 @@ def test_no_declaration_was_lost_in_the_repair(tmp_path):
     decl = sum(c["declared"] for c in rep["cells"])
     pres = sum(c["present"] for c in rep["cells"])
     pruned = sum(len(c["pruned"]) for c in rep["cells"])
-    assert pres + pruned == decl, (pres, pruned, decl)
+    superseded = sum(len(c["superseded"]) for c in rep["cells"])
+    assert pres + pruned + superseded == decl, (
+        pres, pruned, superseded, decl)

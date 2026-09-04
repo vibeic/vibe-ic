@@ -41,11 +41,13 @@ the corpus to be non-empty would go NOT CHECKED in exactly the state it exists
 to watch.
 """
 import json
+import os
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import _progress_run as _pr  # noqa: E402
+import _corpus_location as CL  # noqa: E402
 
 PLUGIN = Path(__file__).resolve().parent.parent.parent
 GATE = PLUGIN / "programs" / "step_internal_fail_bubble_up_check.py"
@@ -60,9 +62,19 @@ _BLOCKS_ON_RC2 = {"run", "run_writing_the_corpus"}
 _TOLERATES_RC2 = {"run_tolerating_uncheckable"}
 
 
+def _isolated_child_env(*, extra=None):
+    """Environment for fixture-owned corpus paths in child gate runs."""
+    env = dict(os.environ)
+    env.pop(CL.CORPUS_ENV, None)
+    env.pop(CL.BOUND_SHA_ENV, None)
+    env.update(extra or {})
+    return env
+
+
 def _gate(*args):
     return _pr.run([sys.executable, str(GATE), *args],
-                          capture_output=True, text=True)
+                   capture_output=True, text=True,
+                   env=_isolated_child_env())
 
 
 def _corpus(root, ic="an_ic", run="clean_run_v0000_20200101", reports=None):
@@ -280,12 +292,9 @@ def _gate_env(*args, env=None):
     export it turns the NO_CORPUS assertions below into UNDETERMINED ones and
     the file would pass or fail for a reason that is not about this repo.
     """
-    import os
-    e = dict(os.environ)
-    e.pop("VIBE_IC_BENCHMARK_DATA", None)
-    e.update(env or {})
     return _pr.run([sys.executable, str(GATE), *args],
-                   capture_output=True, text=True, env=e)
+                   capture_output=True, text=True,
+                   env=_isolated_child_env(extra=env))
 
 
 def _said(res):

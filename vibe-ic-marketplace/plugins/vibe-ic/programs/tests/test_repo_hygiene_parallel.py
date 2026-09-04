@@ -720,7 +720,9 @@ def test_reused_root_pid_is_not_walked_as_the_launched_tree(monkeypatch):
         888: (777, 60000),     # belongs to the replacement, not our job
     }, True))
     owned, census_ok = P._owned._job_processes_checked((777, 12345), set())
-    assert owned == set(), owned
+    # Cardinality zero is exactly equivalent to set equality here, while also
+    # leaving a machine-readable observed value in the pre-fix JUnit control.
+    assert len(owned) == 0, sorted(owned)
     assert census_ok is False, (
         "a reused root PID was treated as the original ancestry root")
 

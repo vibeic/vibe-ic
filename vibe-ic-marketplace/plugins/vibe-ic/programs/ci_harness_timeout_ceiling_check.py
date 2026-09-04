@@ -734,8 +734,36 @@ _LANDING_SCRIPT_SHA256 = (
 # timeouts, the stall grace or the JUnit contract this file checks moved with
 # it (falsified in both directions before this re-pin; see
 # `programs/tests/test_recovery_arm_is_not_a_fail_fast_run.py`).
+# RE-PINNED for the four NORECORD causes of 2026-09-03 (the eight files a
+# 3191-file census could give no verdict at all). WHAT MOVED IN THE DRIVER:
+#
+#   1. rc 5 (`EXIT_NO_TESTS_COLLECTED`) is admitted as a COMPLETE record
+#      instead of being nulled with the abnormal exits, and reported under the
+#      driver's own existing `EMPTY` state. `killed` still gates it, so the
+#      admitted session still had a natural exit, no leaked descendant, a
+#      proved-empty cleanup census and a complete progress protocol.
+#   2. A per-file SILENCE BUDGET a file may DECLARE for itself
+#      (`VIBEIC_SILENCE_BUDGET_S`, read from the file's AST, never imported,
+#      ceiling 3600 s, REFUSED rather than clamped past it, disclosed on stdout
+#      as `SILENCE_BUDGET`). The aggregate lane takes the widest declaration in
+#      its selection, for the same reason.
+#
+# THE STALL GRACE ITSELF DID NOT MOVE, AND THAT IS THE CLAIM THIS RE-PIN HAS TO
+# BE HONEST ABOUT, because unlike every re-pin above it this one touches the
+# number. `--stall-after` is unchanged, `DEFAULT_STALL_AFTER` is still 300, and
+# a file that declares nothing is supervised at exactly the caller's number to
+# the second. What a declaration can do is WIDEN one file's own grace; it can
+# never narrow it, never remove it, and never exceed 3600 s. Falsified in both
+# directions before this re-pin, in
+# `programs/tests/test_the_eight_unknowns_have_verdicts.py`: a session that
+# makes no lifecycle progress is STILL killed and STILL NORECORD, and a file
+# that DECLARES 30 s and then wedges forever is still killed at 30 s with the
+# refusal quoting its own declared number.
+#
+# Timeouts, the JUnit contract, and the `-p no:cacheprovider` / no-`--timeout`
+# argv shape this file checks are all untouched.
 _SEMANTIC_DRIVER_SHA256 = (
-    "745d85ded613fc6e1a2f07197d8c6c50b1b15711fb0e508c37a1fbfeb55742a8"
+    "a50922ce5e5c78985050eeeef5ca06ad3e24d918729cbba7bff574de12d285a3"
 )
 #: `pip install pytest-timeout` names the plugin, not a bound; it carries no
 #: `--timeout=N` and so cannot match, but the negative is stated because a

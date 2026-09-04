@@ -335,6 +335,58 @@ def benchmark_data_root() -> Path:
     return Path(override) if override else REPO_ROOT / BENCHMARK_DATA_REL
 
 
+def _published_run_git_subjects(
+        run_dirs: Sequence[str]) -> Tuple[Path, Tuple[str, ...]]:
+    """Return the corpus-owning Git root and repo-relative run paths.
+
+    The published corpus may be an external checkout named by
+    :data:`BENCHMARK_DATA_ENV`; it is not necessarily a directory below
+    :data:`REPO_ROOT`.  A missing/non-Git corpus is an instrument error, not
+    evidence about either publication or mutation.
+    """
+    corpus = benchmark_data_root().resolve()
+    owner = subprocess.run(
+        ["git", "rev-parse", "--show-toplevel"], cwd=str(corpus),
+        capture_output=True, text=True)
+    if owner.returncode != 0 or not owner.stdout.strip():
+        raise RuntimeError(
+            f"benchmark corpus is not in a Git worktree: {corpus}: "
+            f"{owner.stderr.strip()}")
+    git_root = Path(owner.stdout.strip()).resolve()
+    rels = []
+    for run_dir in run_dirs:
+        run = (corpus / run_dir).resolve()
+        try:
+            run.relative_to(corpus)
+        except ValueError as exc:
+            raise ValueError(
+                f"published run escapes benchmark corpus: {run_dir!r}") from exc
+        try:
+            rels.append(run.relative_to(git_root).as_posix())
+        except ValueError as exc:
+            raise RuntimeError(
+                f"published run is outside corpus Git worktree: {run}") from exc
+    return git_root, tuple(rels)
+
+
+def published_run_is_git_tracked(run_dir: str) -> bool:
+    """Whether ``run_dir`` is tracked by the repository owning the corpus."""
+    git_root, (rel,) = _published_run_git_subjects((run_dir,))
+
+    tracked = subprocess.run(
+        ["git", "ls-files", "--error-unmatch", "--", rel],
+        cwd=str(git_root), capture_output=True, text=True)
+    return tracked.returncode == 0 and bool(tracked.stdout.strip())
+
+
+def published_runs_git_status(run_dirs: Sequence[str]) -> subprocess.CompletedProcess:
+    """Git porcelain status for corpus runs, against the corpus-owning repo."""
+    git_root, rels = _published_run_git_subjects(run_dirs)
+    return subprocess.run(
+        ["git", "--no-optional-locks", "status", "--porcelain", "--", *rels],
+        cwd=str(git_root), capture_output=True, text=True)
+
+
 def load_flow(path: Optional[Path] = None) -> Dict[str, Any]:
     """The flow document, freshly parsed. Never cached — replays swap the file."""
     if yaml is None:  # pragma: no cover - defensive
@@ -3084,7 +3136,14 @@ def replay(mut: Mutation, sid: Optional[str] = None,
         return replay_artefact(mut, timeout=timeout)
     sid = str(sid or mut.witness)
     started = time.time()
-    scratch = Path(tempfile.mkdtemp(prefix=f"matmut_{mut.name}_"))
+    # ``PLUGIN_TREE`` uses hardlinks for a cheap isolated mirror.  The default
+    # /tmp may be a container overlay while PLUGIN_ROOT is a bind mount, where
+    # ``cp -al`` fails every replay with EXDEV before either arm runs.  Put the
+    # scratch beside (not inside) the git checkout: same filesystem for the
+    # links, outside the worktree so the suite cannot observe its own mirror.
+    scratch_parent = REPO_ROOT.parent
+    scratch = Path(tempfile.mkdtemp(
+        prefix=f"matmut_{mut.name}_", dir=str(scratch_parent)))
     try:
         if mut.channel == FLOW_YAML:
             base = load_flow()

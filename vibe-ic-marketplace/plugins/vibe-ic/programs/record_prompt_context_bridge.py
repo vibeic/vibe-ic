@@ -170,6 +170,16 @@ _NAME_STOP = frozenset({
     "module", "instantiates", "contains", "has", "and", "or",
 })
 
+_INTERFACE_TITLE_RE = re.compile(
+    r"^\s*#{1,6}\s+Interface\s*:\s*[`\"]([A-Za-z_]\w*)[`\"]\s*$",
+    re.I | re.M)
+
+
+def interface_title_name(prompt: str) -> Optional[str]:
+    """Module identifier from a labelled Markdown ``Interface: `name``` title."""
+    m = _INTERFACE_TITLE_RE.search(prompt or "")
+    return m.group(1) if m and m.group(1).lower() not in _NAME_STOP else None
+
 
 def toplevel_name(record: dict) -> Optional[str]:
     """The target module name — derived from `input.prompt` + `input.context` ONLY.
@@ -209,15 +219,21 @@ def toplevel_name(record: dict) -> Optional[str]:
     #     a "design a module named `X` that leverages the provided `Y`/`Z`
     #     sub-modules" prompt ships Y/Z in input.context as DEPENDENCIES, not as the
     #     target, so the context leaf (Y) must not shadow the stated deliverable X.
-    strong_named: Optional[str] = None
+    strong_named: Optional[str] = interface_title_name(prompt)
     for pat in (
         r"\bmodule\s+(?:must\s+be\s+)?(?:named|called)\s+[`*\"]([A-Za-z_]\w*)[`*\"]",
+        # An explicit imperative can state the identifier bare: "Design a
+        # Verilog module named packet_engine that ...". The `named` keyword and
+        # stop-word guard make this designation-strength, not narrative prose.
+        r"\bmodule\s+(?:must\s+be\s+)?(?:named|called)\s+([A-Za-z_]\w*)\b",
         # "module name `X`" / "Module Name: `X`" / "**Module Name:** `X`" — a labelled
         # designation (the name is backtick/quote-delimited right after "module name").
         r"\bmodule\s+name\b[\s:*]*[`\"]([A-Za-z_]\w*)[`\"]",
         r"\b(?:named|called)\s+[`*\"]([A-Za-z_]\w*)[`*\"]",
         r"\bmodule\s+([A-Za-z_]\w*)\s*(?:#\s*\(|\()",
     ):
+        if strong_named:
+            break
         m = re.search(pat, prompt, re.I)  # prose often capitalises "Module"
         if m and m.group(1).lower() not in _NAME_STOP:
             strong_named = m.group(1)

@@ -6,14 +6,14 @@ correctness.
 
 ENFORCEMENT: advisory
 
-The line above is a DECLARATION, in the anchored form `flow_gate_enforcement_
-audit.declared_intent` reads. This program is wired into the flow as an
-`advisory_program_exit_zero` clause: it RUNS on every project that reaches its
-step, its findings are printed, and its exit code cannot deny the step its PASS
-tier. That is deliberate — it was wired to make a real check reachable, not to
-block a landing on debt it did not create — and the declaration says so where
-the audit looks. Without it, "wired where it cannot block" and "nobody decided"
-are the same record, and the reliable way to stay clean is to say nothing.
+The line above is a declaration in the anchored form consumed by
+`flow_gate_enforcement_audit.declared_intent`: this checker is not consumed
+inline by the artifact-producing runner that audit measures. Its verdict is
+nevertheless required by strict Step 4 through a `program_exit_zero` clause.
+When L3 declares command opcodes, missing transition evidence is a real finding
+and can refuse Step 4. When L3 explicitly declares no opcodes, the program
+returns typed DESIGN_DECLARED_NA and the flow records that executed
+applicability decision without treating it as an empty-scan failure.
 THE PROBLEM
 -----------
 The vendor dispatcher TB drove every cmd opcode through and confirmed
@@ -172,34 +172,63 @@ def audit(tb_target: Path, coverage: List[Dict[str, Any]]) -> List[Finding]:
     return findings
 
 
+def _find_l3(tb_path: Path) -> Optional[Path]:
+    """Find the canonical L3 by walking from the TB target to project root."""
+    try:
+        start = tb_path.resolve()
+    except OSError:
+        return None
+    for root in [start] + list(start.parents):
+        l3 = root / "phase1" / "generated_docs" / "L3_CMD_PROTOCOL.json"
+        if l3.is_file():
+            return l3
+    return None
+
+
 def _l3_declares_no_opcodes(tb_path: Path) -> str:
-    """Return the L3 declaration that rules opcodes out, or "" when L3 does not.
+    """Return the L3 declaration that rules opcodes out, or "" when it does not.
 
     Walks up from the TB path to the project root that holds
     `phase1/generated_docs/L3_CMD_PROTOCOL.json` (the canonical Phase-1 L3)
     and reads its own typed flags. Only an explicit declaration counts: an
     absent L3 returns "" and the caller keeps its error path.
     """
+    l3 = _find_l3(tb_path)
+    if l3 is None:
+        return ""
     try:
-        start = tb_path.resolve()
-    except OSError:
+        doc = json.loads(l3.read_text(errors="replace"))
+    except (OSError, ValueError):
         return ""
-    for root in [start] + list(start.parents):
-        l3 = root / "phase1" / "generated_docs" / "L3_CMD_PROTOCOL.json"
-        if not l3.is_file():
-            continue
-        try:
-            doc = json.loads(l3.read_text(errors="replace"))
-        except (OSError, ValueError):
-            return ""
-        if not isinstance(doc, dict):
-            return ""
-        if doc.get("no_opcodes_in_input") is True and not doc.get("opcodes"):
-            return "L3_CMD_PROTOCOL.no_opcodes_in_input=true, opcodes=[]"
-        if doc.get("command_protocol_applicable") is False:
-            return "L3_CMD_PROTOCOL.command_protocol_applicable=false"
+    if not isinstance(doc, dict):
         return ""
+    if doc.get("no_opcodes_in_input") is True and not doc.get("opcodes"):
+        return "L3_CMD_PROTOCOL.no_opcodes_in_input=true, opcodes=[]"
+    if doc.get("command_protocol_applicable") is False:
+        return "L3_CMD_PROTOCOL.command_protocol_applicable=false"
     return ""
+
+
+def _l3_declared_opcode_count(tb_path: Path) -> int:
+    """Return the explicit non-empty L3 opcode population, or zero.
+
+    This is intentionally not an inference from protocol prose. Only the
+    canonical L3 ``opcodes`` field can turn an absent coverage population into
+    a design finding rather than an invocation error.
+    """
+    l3 = _find_l3(tb_path)
+    if l3 is None:
+        return 0
+    try:
+        doc = json.loads(l3.read_text(errors="replace"))
+    except (OSError, ValueError):
+        return 0
+    if not isinstance(doc, dict):
+        return 0
+    opcodes = doc.get("opcodes")
+    if isinstance(opcodes, (list, dict)):
+        return len(opcodes)
+    return 0
 
 
 def main(argv: Optional[List[str]] = None) -> int:
@@ -242,18 +271,47 @@ def main(argv: Optional[List[str]] = None) -> int:
                    "(0 coverage entries, nothing to assert)")
             print(msg)
             if args.json:
-                report = {"target": str(args.tb), "coverage_entries": 0,
+                l3_path = _find_l3(Path(args.tb))
+                if l3_path is None:  # guarded by `_l3_na`, defensive only
+                    return 2
+                project_root = l3_path.parents[2]
+                report = {
+                          "program": "functional_state_transition_coverage_check",
+                          "target": str(args.tb), "coverage_entries": 0,
                           "errors": 0, "findings": [],
                           "verdict": "VACUOUS_PASS",
                           "reason_class": "DESIGN_DECLARED_NA",
                           "skip_kind": "class-not-applicable",
-                          "reason": msg}
+                          "reason": msg,
+                          "applicability_evidence": {
+                              "kind": "design-declared-zero-population",
+                              "declaration_path": str(
+                                  l3_path.relative_to(project_root)),
+                              "population_paths": ["opcodes"],
+                              "declared_population": 0,
+                              "assertions": [
+                                  {"path": "no_opcodes_in_input",
+                                   "equals": True},
+                                  {"path": "opcodes", "equals": []},
+                              ],
+                          }}
                 if args.json == '-':
                     print(json.dumps(report, indent=2))
                 else:
                     Path(args.json).parent.mkdir(parents=True, exist_ok=True)
                     Path(args.json).write_text(json.dumps(report, indent=2))
             return 2
+        _opcode_count = _l3_declared_opcode_count(Path(args.tb))
+        if _opcode_count:
+            print(
+                "FAIL: L3 declares "
+                f"{_opcode_count} command opcode(s), but the supplied "
+                "functional coverage artifact contains 0 transition "
+                "entries; declared protocol behavior has no execution "
+                "evidence",
+                file=sys.stderr,
+            )
+            return 1
         print("error: no coverage entries (--coverage or --cov)", file=sys.stderr)
         return 2
 

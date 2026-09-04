@@ -81,6 +81,7 @@ chip-AGNOSTIC + tool-AGNOSTIC + pure: generic file/CPU counters only.
 from __future__ import annotations
 
 import os
+import signal
 import subprocess
 import tempfile
 import time
@@ -204,6 +205,41 @@ def _default_wait(proc, timeout: float) -> Optional[int]:
 
 
 def _default_kill(proc, reason: str) -> None:
+    """Kill the JOB TREE, not just the head of it.
+
+    WHAT THIS REPLACES, AND WHERE IT WAS ALREADY WRITTEN DOWN. `supervise`'s
+    own contract says "`kill_fn(proc, reason)` terminates the job tree", and
+    `full_suite_run_check.runner_tiers` records the measured gap verbatim:
+    "neither this call nor the timeout-bounded `subprocess` launch it replaces
+    kills a process GROUP (`_watchdog._default_kill` is `proc.kill()`), so a
+    script that backgrounds work still orphans it."
+
+    WHAT THE ORPHAN COSTS. `bash script.sh` -> `sleep 600`: killing bash leaves
+    `sleep` reparented to init and STILL RUNNING. Under the per-file landing
+    driver that leftover is a live descendant of the pytest session, the
+    supervisor's census refuses to call the session clean, and the file's whole
+    result becomes "pytest exited with unfinished live descendants" -- UNKNOWN.
+    MEASURED at b309595f06 on `programs/tests/test_full_suite_run_check.py`
+    (`sleep 600` behind a 3 s deadline) and, by the same shape one layer down,
+    on `test_issue1283_probe_timeout_is_not_absence.py`.
+
+    WHY THE `pgid == pid` GUARD IS NOT OPTIONAL. `os.getpgid(pid)` of a child
+    that was NOT put in its own session returns THIS process's group, and
+    killing that group kills the supervisor -- so the group is signalled only
+    when the child is its own group LEADER, which is true exactly when the
+    default factory's `start_new_session=True` created it. An injected
+    `popen_factory` (every fake proc in the tests, and every caller supplying
+    its own transport) does not satisfy it and keeps the previous behaviour
+    unchanged. `proc.kill()` still runs either way, so nothing that worked
+    before now depends on the group path succeeding.
+    """
+    pid = getattr(proc, "pid", None)
+    if isinstance(pid, int) and pid > 0:
+        try:
+            if os.getpgid(pid) == pid:
+                os.killpg(pid, signal.SIGKILL)
+        except (OSError, AttributeError, ValueError):  # nosec
+            pass
     try:
         proc.kill()
     except Exception:  # nosec
@@ -319,8 +355,14 @@ def run_supervised(cmd, *, log_path=None, output_progress: bool = True,
     that are not the ones the child wrote. The WATCHDOG_* annotations are
     encoded to match, so a stall is still readable on either side.
     Returns a SupervisedResult."""
+    # `start_new_session=True` MAKES THE CHILD ITS OWN PROCESS-GROUP LEADER,
+    # which is the precondition `_default_kill` checks before it signals a
+    # group. Without it the supervisor can only reach the head of the tree and
+    # a backgrounded grandchild survives the deadline (see `_default_kill`).
+    # It is set on the DEFAULT factory only: a caller that injects its own
+    # transport keeps whatever launch shape it already had.
     popen_factory = popen_factory or (
-        lambda c, **kw: subprocess.Popen(c, **kw))
+        lambda c, **kw: subprocess.Popen(c, start_new_session=True, **kw))
     kill = kill or _default_kill
 
     # §4.05 AS A MECHANISM (vibe-ic#1079). This is the one place a supervised

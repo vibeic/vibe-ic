@@ -73,7 +73,7 @@ import phase1_parity_source_tier_check as M  # noqa: E402
 from _published_corpus import corpus_root, needs_corpus  # noqa: E402
 
 #: The half that stayed here: the cited input documents.
-_INPUT_HALF = _PROGRAMS.parents[3] / "benchmark-data" / "evaluation" / "phase1_parity"
+_INPUT_HALF = _PROGRAMS.parents[3] / "benchmark-data" / "protocol_parity"
 
 
 def _mirror(src: Path, dst: Path) -> None:
@@ -104,8 +104,8 @@ def parity_root(tmp_path: Path) -> Path:
     Only requested by tests marked `@needs_corpus`, so `corpus_root()` is not
     None here and this fixture never has to invent a skip of its own.
     """
-    root = tmp_path / "phase1_parity"
-    _mirror(corpus_root() / "evaluation" / "phase1_parity", root)
+    root = tmp_path / "protocol_parity"
+    _mirror(corpus_root() / "protocol_parity", root)
     if _INPUT_HALF.is_dir():
         _mirror(_INPUT_HALF, root)
     return root

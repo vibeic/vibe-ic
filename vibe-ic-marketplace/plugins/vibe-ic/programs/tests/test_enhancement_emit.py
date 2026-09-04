@@ -13,6 +13,7 @@ Eight cases cover the four-bucket routing + per-step target resolution:
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import sys
 from pathlib import Path
@@ -23,6 +24,8 @@ from _published_corpus import corpus_root, needs_corpus
 
 SCRIPT = Path(__file__).parent.parent / "enhancement_emit.py"
 ROUTING = Path(__file__).parent.parent.parent / "benchmark" / "CAPTURE_ROUTING.json"
+_CVDP_NEGATIVE_CONTROL_FIXTURE = (
+    Path(__file__).parent / "fixtures" / "cvdp_negative_control_population.json")
 assert SCRIPT.exists(), f"missing program: {SCRIPT}"
 assert ROUTING.exists(), f"missing routing table: {ROUTING}"
 
@@ -1172,14 +1175,21 @@ _CVDP_LEAF_CONCAT_FLOOR = 17
 
 
 def _repo_root():
-    """Walk up to the checkout that carries `benchmark-data/`. Resolving by a
-    fixed number of `.parent`s silently skipped this whole corpus test when it
-    was off by one — and a skipped floor test looks exactly like a passing
-    one."""
-    for d in [Path(__file__).resolve()] + list(Path(__file__).resolve().parents):
-        if (d / "benchmark-data" / "evaluation").is_dir():
-            return d
-    return None
+    """The Git checkout that carries the plugin source being tested.
+
+    Published benchmark data is now a separate checkout, so the presence of
+    ``benchmark-data/evaluation`` can no longer identify the Vibe source tree.
+    Ask Git instead; this keeps the source half of the measured union visible
+    when the corpus is supplied through ``VIBE_IC_BENCHMARK_DATA``.
+    """
+    import subprocess as _sp
+    probe = _sp.run(
+        ["git", "-C", str(Path(__file__).resolve().parent),
+         "rev-parse", "--show-toplevel"],
+        capture_output=True, text=True, timeout=30)
+    if probe.returncode != 0 or not probe.stdout.strip():
+        return None
+    return Path(probe.stdout.strip()).resolve()
 
 
 # ── WHERE THE BENCHMARK CORPORA LIVE NOW ────────────────────────────────────
@@ -1197,9 +1207,12 @@ def _repo_root():
 #     tracked-PATH cvdp cell ids   vibe-ic  96   benchmark-data  63   union 126
 #     cvdp design leaf-names       vibe-ic 226   benchmark-data 182   union 229
 #
-# 126 and 229 are exactly `_CVDP_CELL_ID_PATH_CORPUS_FLOOR` and the 229 the
-# docstrings above quote, so the union restores the corpus the floors were
-# measured on rather than re-cutting it to fit.
+# The published repository may intentionally withdraw obsolete or untrustworthy
+# run directories.  Such a withdrawal must not silently shrink these security
+# negative controls.  The exact 126 path ids and 229 leaf names measured at the
+# two commits named below are therefore retained as immutable TEST INPUT in
+# ``fixtures/cvdp_negative_control_population.json``.  It is not benchmark
+# evidence and cannot make a benchmark run PASS.
 def _corpus_tree():
     """The published benchmark-data tree, or None when there is none here."""
     return corpus_root()
@@ -1223,15 +1236,68 @@ def _harvest_trees():
     return trees
 
 
+def _verilogeval_problem_lists():
+    """The canonical versioned problem list, proving siblings agree.
+
+    ``problems.list`` belongs to a benchmark RUN now, not to the family
+    directory.  Selecting one version by name would replace one stale path
+    with another; require every published copy to agree byte-for-byte and then
+    return that common body.
+    """
+    corpus = _corpus_tree()
+    sources = sorted(
+        (corpus / "evaluation/verilogeval_v2").glob("v*/problems.list"))
+    assert sources, (
+        f"the published benchmark corpus is present at {corpus} but the "
+        "versioned VerilogEval-v2 problem lists are missing")
+    bodies = {source.read_bytes() for source in sources}
+    assert len(bodies) == 1, (
+        "published VerilogEval-v2 runs disagree on their problem population: "
+        f"{[str(p.relative_to(corpus)) for p in sources]}")
+    return next(iter(bodies)).decode(errors="replace")
+
+
 def _verilogeval_leaf_names():
     import re as _re2
-    corpus = _corpus_tree()
-    src = corpus / "evaluation/verilogeval_v2/problems.list"
-    assert src.is_file(), (
-        f"the published benchmark corpus is present at {corpus} but the "
-        f"corpus this floor is measured against is missing: {src}")
-    probs = [l.strip() for l in src.read_text().splitlines() if l.strip()]
+    probs = [line.strip() for line in _verilogeval_problem_lists().splitlines()
+             if line.strip()]
     return probs, [_re2.sub(r"^Prob\d+_", "", p) for p in probs]
+
+
+def _cvdp_negative_control_population():
+    """Load and authenticate the historical CVDP negative-control inputs.
+
+    The cardinalities, source commits and hashes are fixed deliberately: a
+    corpus cleanup may remove published run artefacts, but it may not erase the
+    adversarial names that prove this guard still catches the original class.
+    """
+    expected_sources = {
+        "benchmark_data_commit": "ac2ae519f484bd9835bb2df5f563da0b2cec0925",
+        "vibe_ic_commit": "c8c2ab0f75",
+    }
+    expected = {
+        "design_leaf_names": (
+            229,
+            "bffe64d4ab162e491a36c86160760d5ecbd10ad6166c63172020dbe7e725ae9a"),
+        "tracked_path_cell_ids": (
+            126,
+            "ed8f0e49eb695bc31f457d1359e0fd9090a0b795ba9802b5a35bf7a96b8bc649"),
+    }
+    data = json.loads(_CVDP_NEGATIVE_CONTROL_FIXTURE.read_text())
+    assert data.get("schema_version") == 1, "unexpected CVDP fixture schema"
+    assert data.get("sources") == expected_sources, (
+        "CVDP negative-control fixture source commits changed")
+    for field, (count, digest) in expected.items():
+        values = data.get(field)
+        assert isinstance(values, list), f"CVDP fixture {field} is not a list"
+        assert values == sorted(set(values)), (
+            f"CVDP fixture {field} must be sorted and unique")
+        assert len(values) == count, (
+            f"CVDP fixture {field} has {len(values)} entries, expected {count}")
+        actual = hashlib.sha256(("\n".join(values) + "\n").encode()).hexdigest()
+        assert data.get(f"{field}_sha256") == digest == actual, (
+            f"CVDP fixture {field} digest mismatch: {actual}")
+    return data
 
 
 def _cvdp_design_leaf_names():
@@ -1247,7 +1313,7 @@ def _cvdp_design_leaf_names():
     # narrower than the reported measurement would pin a floor against a
     # different corpus than the one the change was measured on (182 vs 229).
     cell = _re4.compile(r"cvdp_(?:copilot|agentic)_([A-Za-z0-9_]*?)_\d{4}")
-    leaves = set()
+    leaves = set(_cvdp_negative_control_population()["design_leaf_names"])
     for root in trees:
         try:
             # 30s, not 120: `ci_harness_timeout_ceiling_check` caps an inner
@@ -1437,7 +1503,8 @@ def _cvdp_cell_ids_in_tracked_paths():
     if not trees:
         pytest.skip("benchmark-data/ not in this checkout (plugin-only install)")
     rx = _re5.compile(r"cvdp_(?:copilot|agentic)_[A-Za-z0-9_]*?_\d{4}")
-    ids: set[str] = set()
+    ids: set[str] = set(
+        _cvdp_negative_control_population()["tracked_path_cell_ids"])
     for root in trees:
         try:
             tracked = _sp2.run(["git", "-C", str(root), "ls-files"],
@@ -1598,13 +1665,9 @@ def test_industry_allowlist_never_contains_a_benchmark_leaf_name():
     # not a cosmetic loss. A dataset is now either present or a loud failure —
     # and "the whole corpus is elsewhere" is the SKIP on this test, which is a
     # different statement from "the corpus is here and a dataset is missing".
-    ve_src = corpus / "evaluation/verilogeval_v2/problems.list"
-    assert ve_src.is_file(), (
-        f"the published benchmark corpus is present at {corpus} but the "
-        f"VerilogEval corpus this negative control depends on is missing: "
-        f"{ve_src}")
+    ve_body = _verilogeval_problem_lists()
     ve_leaves = {_re3.sub(r"^Prob\d+_", "", l.strip()).lower()
-                 for l in ve_src.read_text().splitlines() if l.strip()}
+                 for l in ve_body.splitlines() if l.strip()}
 
     # RTLLM by GLOB, not by one version-named run root: the tree carries seven
     # `pass_at_1.json` siblings under evaluation/rtllm/ and pinning a single

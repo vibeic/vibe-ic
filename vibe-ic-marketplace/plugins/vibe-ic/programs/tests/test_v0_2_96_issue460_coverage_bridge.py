@@ -189,6 +189,17 @@ def _build_oracle_replica(project: Path, vp: int, vt: int,
     emitters (no hand-written coverage_actual.json), then satisfy the rest
     of Step 4's required_outputs (*.log)."""
     _with_rtl(project)
+    docs = PL.generated_docs_dir(project)
+    docs.mkdir(parents=True, exist_ok=True)
+    (docs / "L9_INTEGRATION_SPEC.json").write_text(json.dumps({
+        "doc_class": "integration_spec",
+        "module_name": "datacore",
+        "ports": [
+            {"name": "clk", "direction": "input", "width": 1},
+            {"name": "d", "direction": "input", "width": 1},
+            {"name": "q", "direction": "output", "width": 1},
+        ],
+    }) + "\n")
     body = ("".join(f"ORACLE_VECTOR vec{i} PASS\n" for i in range(vp))
             + f"ORACLE_TB_DONE pass={vp}/{vt}\n")
     log = _oracle_log(project, body)

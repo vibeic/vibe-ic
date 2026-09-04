@@ -216,6 +216,71 @@ def _bit_names(port: Dict[str, object]) -> List[str]:
     return [f"{name}[{b}]" for b in range(msb, lsb + step, step)]
 
 
+# Words which describe the physical carrier rather than a signal family.
+# They are ignored symmetrically on both the document and port-name sides;
+# no design-specific signal, chip or PDK name belongs here.
+_GROUP_CARRIER_WORDS = frozenset({
+    "bus", "buses", "pin", "pins", "port", "ports", "signal", "signals",
+    "control", "controls", "input", "output", "inout", "io", "i", "o",
+    "s",
+})
+_GROUP_ATOM_ALIASES = {
+    "address": "addr", "clock": "clk", "reset": "rst",
+}
+
+
+def _group_atoms(text: str, *, port_name: bool = False) -> set[str]:
+    """Return conservative identifier atoms for a group statement.
+
+    A port matches a prose group only when *all* of the port's semantic atoms
+    occur in the statement.  This deliberately does not use fuzzy matching:
+    a group which cannot be resolved from the design's own identifiers is a
+    refusal, not permission to invent a side.
+    """
+    atoms = [a.lower() for a in re.findall(r"[A-Za-z][A-Za-z0-9]*", text)]
+    if port_name and atoms and atoms[0] in {"i", "o", "io"}:
+        atoms = atoms[1:]
+    return {
+        _GROUP_ATOM_ALIASES.get(a, a) for a in atoms
+        if a not in _GROUP_CARRIER_WORDS
+    }
+
+
+def _resolve_declared_pad_groups(
+        placement: "LPP.PadPlacement",
+        ports: Sequence[Dict[str, object]],
+        ) -> Tuple[Dict[str, List[str]], List[Dict[str, object]]]:
+    """Resolve design-owned group rows against the design-owned port list.
+
+    Exact backticked signal rows remain the primary representation.  This
+    handles the other legitimate L-doc shape: a side assigned to a named port
+    family such as ``memory data bus``.  The resolver is strict, deterministic
+    and auditable: every semantic atom of a selected port name must be present
+    in the group statement, and a zero-match group is returned unresolved.
+    """
+    by_side: Dict[str, List[str]] = {}
+    records: List[Dict[str, object]] = []
+    for side, statement in placement.side_groups.items():
+        statement_atoms = _group_atoms(statement)
+        matched: List[Dict[str, object]] = []
+        for port in ports:
+            name = str(port.get("name") or "")
+            port_atoms = _group_atoms(name, port_name=True)
+            if port_atoms and port_atoms <= statement_atoms:
+                matched.append(port)
+        nets = [net for port in matched for net in _bit_names(port)]
+        records.append({
+            "side": side,
+            "statement": statement,
+            "statement_atoms": sorted(statement_atoms),
+            "matched_ports": [str(p.get("name") or "") for p in matched],
+            "resolved_nets": list(nets),
+        })
+        if nets:
+            by_side[side] = nets
+    return by_side, records
+
+
 #: The PDK's own `PAD_PLACE_IO_TERMINALS` reader now lives in `_pad_ring`,
 #: because BOTH producers need the same answer from it: this one wires the
 #: port to the pad's terminal, and `pad_ring_gen` places the die's BTerm ON
@@ -624,6 +689,9 @@ def run(project: Path, pdk_root: Optional[str], pdk: Optional[str]
                       "the IO cell type to the PDK, so this producer will not "
                       "choose one on its behalf")
 
+    ports = _read_top_ports(project)
+    rec["top_port_count"] = len(ports)
+
     side_ports, unresolved = LPP.expand_side_ports(placement, params)
     if unresolved:
         raise Refusal("PARTITION_UNRESOLVED",
@@ -631,8 +699,20 @@ def run(project: Path, pdk_root: Optional[str], pdk: Optional[str]
                       f"range does not resolve from a declared parameter: "
                       f"{sorted(unresolved)}")
 
-    ports = _read_top_ports(project)
-    rec["top_port_count"] = len(ports)
+    grouped, group_records = _resolve_declared_pad_groups(placement, ports)
+    if group_records:
+        rec["pad_group_resolution"] = group_records
+    unresolved_groups = [r for r in group_records if not r["resolved_nets"]]
+    if unresolved_groups:
+        raise Refusal(
+            "PAD_GROUP_UNRESOLVED",
+            "the pad placement names group(s) which match no complete "
+            "identifier in the design's own top-level port list: "
+            + "; ".join(
+                f"{r['side']}={r['statement']!r}" for r in unresolved_groups))
+    for side, group_nets in grouped.items():
+        side_ports.setdefault(side, []).extend(group_nets)
+
     nets: List[str] = []
     direction_of: Dict[str, str] = {}
     for p in ports:

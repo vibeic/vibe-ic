@@ -4,12 +4,12 @@
   "_absent_comment": "Findings whose run tree is NOT UNDER THE SWEPT CORPUS at all, so this gate never opened it (vibe-ic#1704). Separate from withdrawn_unexamined, which names run trees the sweep DID open and found publishing no reports/ file it reads. Whether these were removed from publication or were never published into this corpus is not something a sweep of one corpus can tell; `shrink_reason` is where that is stated by whoever looked. NOT part of findings_total and not a ceiling on anything.",
   "findings_total": 0,
   "corpus_population": "benchmark-data/ic",
-  "runs_swept": 2,
-  "runs_with_reports": 2,
+  "runs_swept": 3,
+  "runs_with_reports": 3,
   "previous_findings_total": 1,
   "previous_runs_swept": 4,
   "previous_runs_with_reports": 4,
-  "shrink_reason": "vibe-ic#2000: benchmark-data remote main is 9e4ad95cf74f and commit bcf2f94c withdrew u_hawaii_adc/v1.9.86_sky130A because it carried contradictory PASS and FAIL completion audits; its one unacknowledged internal FAIL was not repaired or re-read and remains recorded as absent_from_corpus.",
+  "shrink_reason": "vibe-ic#2000: benchmark-data commit bcf2f94c withdrew u_hawaii_adc/v1.9.86_sky130A because it carried contradictory PASS and FAIL completion audits; its one unacknowledged internal FAIL was not repaired or re-read and remains recorded as absent_from_corpus. Commit 5a92b920 later added the independently clean spm/v1.14.88_gf180mcuD run, so the net population transition is 4 - 3 + 2 = 3.",
   "per_run": {},
   "withdrawn_unexamined": {
     "caravel_user_project": 1,
@@ -36,8 +36,8 @@
       "findings_total": 1
     },
     "to": {
-      "runs_swept": 2,
-      "runs_with_reports": 2,
+      "runs_swept": 3,
+      "runs_with_reports": 3,
       "findings_total": 0
     },
     "runs_that_left": {
@@ -57,9 +57,13 @@
     "runs_that_arrived": {
       "spm/v1.5.65_sky130A": {
         "findings": 0
+      },
+      "spm/v1.14.88_gf180mcuD": {
+        "findings": 0
       }
     },
     "findings_that_arrived": 0
   },
-  "_population_shrink_provenance": "MEASURED by this gate's own `check_corpus`. FROM: the previously recorded published population, 4 run trees and 1 finding. TO: vibeic/benchmark-data remote main 9e4ad95cf74fd3c4843701a981c3cdfdbe3c967c, 2 run trees and 0 findings. Publication commit bcf2f94c removed three named cells without re-reading or repairing their reports; u_hawaii_adc/v1.9.86_sky130A carried the one finding and remains on `absent_from_corpus`. Publication commit a467106a added spm/v1.5.65_sky130A carrying no finding. Thus 4 - 3 + 1 = 2 run trees and 1 - 1 + 0 = 0 findings; no fall is represented as engineering repair."
+  "_population_shrink_provenance": "MEASURED by this gate's own `check_corpus`. FROM: the previously recorded published population, 4 run trees and 1 finding. TO: vibeic/benchmark-data commit 8c4b608a4542759c2d4ef97dfb56571f43cc512f, tree 656999789f48bd87407f7f7a55e9c5c69dbaec5f, 3 run trees and 0 findings. Publication commit bcf2f94c removed three named cells without re-reading or repairing their reports; u_hawaii_adc/v1.9.86_sky130A carried the one finding and remains on `absent_from_corpus`. Publication commit a467106a added spm/v1.5.65_sky130A carrying no finding. Publication commit 5a92b920 added spm/v1.14.88_gf180mcuD carrying no finding. Thus 4 - 3 + 2 = 3 run trees and 1 - 1 + 0 + 0 = 0 findings; no fall is represented as engineering repair.",
+  "_population_growth_provenance": "The denominator growth from benchmark-data commit 9e4ad95cf74fd3c4843701a981c3cdfdbe3c967c to 8c4b608a4542759c2d4ef97dfb56571f43cc512f was re-measured read-only by step_internal_fail_bubble_up_check.py. Result SHA-256 a726e6e7c79a14bf09aeb6aeef8f054b1efab1def248babd6cfa4297d7f6dea0 names exactly three examined runs and zero findings; git history names spm/v1.14.88_gf180mcuD as the newly published run. No --write-baseline command was used."
 }

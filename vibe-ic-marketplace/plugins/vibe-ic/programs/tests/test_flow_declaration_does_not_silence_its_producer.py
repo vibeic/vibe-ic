@@ -77,7 +77,7 @@ import shutil
 import sys
 from pathlib import Path
 from typing import Dict, List, Tuple
-from _published_corpus import needs_corpus   # vibe-ic: the corpus moved repositories
+from _published_corpus import corpus_root, needs_corpus  # vibe-ic: moved repo
 
 import pytest
 
@@ -372,4 +372,5 @@ def test_declaring_them_would_suppress_the_producer(step_id, tmp_path, record_pr
     # previously a claim in the docstring rather than a measurement.
     record_property("corpus_after",
                     _iso.assert_corpus_pristine(
+                        repo=corpus_root(), subpath=".",
                         what=f"L3 for step {step_id}").describe())

@@ -63,14 +63,43 @@ module rx;
 endmodule
 """
 
-# An unambiguous selector keeps its standalone force, byte literal or not.
+# A command-specific selector keeps its standalone force, byte literal or not.
 REAL_DISPATCH_UNAMBIGUOUS = """
 module rx;
   always_comb begin
-    case (opcode)
+    case (cmd_op)
       CMD_PING: r = 1;
       CMD_READ: r = 2;
       default:  r = 0;
+    endcase
+  end
+endmodule
+"""
+
+# A processor instruction opcode is not a received packet.  The 7-bit width
+# supplies the decisive structural evidence without naming an ISA or design.
+INSTRUCTION_OPCODE_DECODE = """
+module core(input [31:0] instruction, output reg action);
+  wire [6:0] opcode = instruction[6:0];
+  always @* begin
+    case (opcode)
+      OP_LOAD:  action = 1'b1;
+      OP_STORE: action = 1'b0;
+      default:  action = 1'b0;
+    endcase
+  end
+endmodule
+"""
+
+# Symbolic packet opcode arms remain detectable when the selector's declaration
+# proves it is byte-wide; a literal in every case arm is not required.
+BYTE_WIDE_SYMBOLIC_DISPATCH = """
+module rx(input [7:0] opcode, output reg action);
+  always @* begin
+    case (opcode)
+      CMD_PING: action = 1'b1;
+      CMD_READ: action = 1'b0;
+      default:  action = 1'b0;
     endcase
   end
 endmodule
@@ -104,6 +133,16 @@ def test_an_unambiguous_selector_keeps_its_standalone_force():
     assert P.is_opcode_dispatcher(REAL_DISPATCH_UNAMBIGUOUS) is True
 
 
+def test_a_seven_bit_instruction_opcode_is_not_a_packet_dispatcher():
+    """BIDIRECTIONAL CONTROL: FAILS on the pre-fix predicate."""
+    assert P.is_opcode_dispatcher(INSTRUCTION_OPCODE_DECODE) is False
+
+
+def test_an_explicit_byte_wide_opcode_with_symbolic_arms_is_a_dispatcher():
+    """Narrowing must not hide a byte packet whose arms use symbols."""
+    assert P.is_opcode_dispatcher(BYTE_WIDE_SYMBOLIC_DISPATCH) is True
+
+
 def test_the_if_cascade_is_still_a_dispatcher():
     assert P.is_opcode_dispatcher(IF_CASCADE) is True
 
@@ -117,7 +156,8 @@ def test_both_gates_ask_the_same_question_of_the_same_text():
     """The point of the module. Two gates over one artefact cannot disagree,
     because there is one rule and they both call it."""
     for text in (ENUM_DECODE, REAL_DISPATCH_AMBIGUOUS,
-                 REAL_DISPATCH_UNAMBIGUOUS, IF_CASCADE):
+                 REAL_DISPATCH_UNAMBIGUOUS, INSTRUCTION_OPCODE_DECODE,
+                 BYTE_WIDE_SYMBOLIC_DISPATCH, IF_CASCADE):
         assert L._is_dispatcher(text) is P.is_opcode_dispatcher(text)
         assert D._is_opcode_dispatcher(text) is P.is_opcode_dispatcher(text)
 

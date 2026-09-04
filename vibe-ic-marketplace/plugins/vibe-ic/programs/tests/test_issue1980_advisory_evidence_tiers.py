@@ -207,8 +207,6 @@ _MEASURED_FINDINGS = {
     "integration_spec_audit": "integration_spec_audit",
     "stage_phase1_compliance": "--stage-id stage_phase1",
     "spec_conformance_check": "spec_conformance_check",
-    "behavioral_evidence_per_spec_item_check":
-        "behavioral_evidence_per_spec_item_check",
     "dispatcher_awake_gate_check": "dispatcher_awake_gate_check",
     "rtl_unit_test_coverage_check": "rtl_unit_test_coverage_check",
     "stage1_compliance": "stage1_compliance . --json",
@@ -228,7 +226,7 @@ def _advisory_specs(node):
             yield from _advisory_specs(value)
 
 
-def test_all_13_measured_findings_reach_typed_final_audit_dispositions(
+def test_all_remaining_measured_advisories_reach_typed_final_audit_dispositions(
         tmp_path, monkeypatch):
     flow_path = _PROGRAMS.parent / "flow" / "phase1_phase2_phase3.yaml"
     flow = yaml.safe_load(flow_path.read_text())
@@ -260,7 +258,7 @@ def test_all_13_measured_findings_reach_typed_final_audit_dispositions(
     records = final_audit_step["advisory_gate_records"]
 
     assert result.status == "FAIL", result.reasons
-    assert len(records) == 13
+    assert len(records) == len(_MEASURED_FINDINGS)
     assert all(any(needle in record["command"] for record in records)
                for needle in _MEASURED_FINDINGS.values())
     assert {record["exit_code"] for record in records} == {1}

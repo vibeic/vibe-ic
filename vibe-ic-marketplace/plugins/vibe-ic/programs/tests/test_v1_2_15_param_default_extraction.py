@@ -50,6 +50,13 @@ def test_bullet_plain_numbered():
     assert W.param_defaults("1. CNT_W = 12", "")["CNT_W"] == 12
 
 
+def test_explicit_default_outranks_later_worked_example_assignment():
+    text = ("- `WIDTH` (default value = 6): operand width.\n"
+            "## Worked Example\n"
+            "- WIDTH = 3\n")
+    assert W.param_defaults(text, "")["WIDTH"] == 6
+
+
 def test_no_leak_mid_prose_lowercase():
     assert W.param_defaults("The value x = 5 is used internally.", "") == {}
 

@@ -245,15 +245,17 @@ def test_on_the_real_repo_no_published_path_is_a_hollow_link():
     every mode-120000 entry with its own `readlink`, and requires that none of
     the ones landing outside the index survives into `published_paths`.
 
-    It discloses its denominators and refuses to pass on an empty scan: a
-    corpus with no hollow link would prove nothing, so it says so instead.
+    It refuses an empty tracked tree.  A non-empty tree with zero symlinks is
+    now a real clean population, not a vacuous one: the publisher normalized
+    the former links into tracked files/directories.  The hollow-link branch
+    remains exercised in both directions by the fixtures above.
 
     THE TREE IT WALKS IS THE PUBLISHED ONE. Every one of the 126 tracked
     symlinks this guard was written against lived under `benchmark-data/`, and
-    all of them moved to vibeic/benchmark-data — so pointed at the plugin repo
-    it now finds zero links and fails on "nothing was examined", which reports a
-    defect where the fact is that the subject moved. It reads the corpus's own
-    git index instead, and skips (naming the corpus) when there is none here."""
+    all of them moved to vibeic/benchmark-data.  The current corpus normalized
+    those links away, so zero links is legitimate only after the corpus's own
+    index proves a non-empty tracked population.  The test skips (naming the
+    corpus) when that published tree is unavailable."""
     import os
     root = corpus_root()
     r = subprocess.run(["git", "-C", str(root), "ls-files", "-s", "-z"],
@@ -286,10 +288,7 @@ def test_on_the_real_repo_no_published_path_is_a_hollow_link():
         if resolved not in tracked and resolved not in dirs:
             hollow.append(p)
 
-    assert links, f"no tracked symlink under {root} — nothing was examined"
-    assert hollow, (f"{len(links)} tracked symlink(s) and none hollow: this "
-                    f"guard examined nothing discriminating and must not pass "
-                    f"quietly")
+    assert tracked, f"the published tree at {root} has no tracked population"
     pub = P.published_paths(root)
     assert pub is not None
     leaked = sorted(p for p in hollow if p in pub)

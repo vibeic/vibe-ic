@@ -1065,13 +1065,56 @@ _CORPUS_ACCEPTS = {"protocol_parity/espi", "protocol_parity/smbus_pmbus",
                    "protocol_parity/usb_pd"}
 
 
+def _assert_live_cited_input_rejection(run_dir, record):
+    """Cross-check a newly observed rejection against the copied run itself.
+
+    This deliberately does not admit an identity to `_CORPUS_REJECTS`.  New
+    corpus members may be rejected only when their cited path is absent, the
+    same input is really staged elsewhere, and the emitted executable proof
+    fails on that run.
+    """
+    findings = [f for f in record.get("rejections", [])
+                if f.get("rule") == "R1_CITED_INPUT_ABSENT"]
+    assert len(findings) == 1, record.get("rejections")
+    finding = findings[0]
+    moved = finding.get("same_basename_staged_elsewhere") or {}
+    assert moved
+    assert set(moved) == set(finding.get("cited_but_absent") or {})
+    for absent, staged in moved.items():
+        assert not (run_dir / absent).exists(), absent
+        assert (run_dir / staged).is_file(), staged
+        assert Path(absent).stem == Path(staged).stem, (absent, staged)
+    proof = run_dir / finding["test"]
+    assert proof.is_file(), proof
+    check = subprocess.run([sys.executable, str(proof)], cwd=str(run_dir),
+                           capture_output=True, text=True)
+    assert check.returncode == 1, check.stdout + check.stderr
+    return moved
+
+
+def _repoint_citations_to_staged_inputs(run_dir, moved):
+    """Repair only a scratch run's false source paths for the adversarial arm."""
+    changed = 0
+    for doc in sorted((run_dir / "phase1" / "generated_docs").glob("L*.json")):
+        before = doc.read_text(encoding="utf-8")
+        after = before
+        for absent, staged in moved.items():
+            after = after.replace(absent, staged)
+        if after != before:
+            doc.write_text(after, encoding="utf-8")
+            changed += 1
+    assert changed, "the scratch repair changed no generated citation"
+
+
 @pytest.mark.skipif(_pc is None, reason="corpus helper unavailable")
 def test_the_partition_over_the_published_corpus_does_not_move():
-    """Pins BOTH sides on the live corpus. Each side is named cell by cell, so a
-    rule that widened shows up as an extra NAME rather than as a count nobody
-    reads, and a rule that stopped biting shows up as a missing one. The accept
-    side is required non-empty for the same reason the reject side is: a
-    reviewer that rejects all of them is not a reviewer."""
+    """Pins the frozen partition without turning new true positives into drift.
+
+    Every frozen reject must remain rejected.  Any later reject must prove its
+    predicate from the published bytes and execute its emitted regression; it
+    is not admitted by adding its identity to an exception list.  The named
+    accept floor still catches a rule that turns on its own controls.
+    """
     root = _pc.corpus_tree()
     if root is None:
         pytest.skip(_pc.skip_reason())
@@ -1081,21 +1124,31 @@ def test_the_partition_over_the_published_corpus_does_not_move():
     if not cells:
         pytest.skip("the corpus carries no cell with an L1")
     scratch = Path(tempfile.mkdtemp(prefix="on_pass_phase1_corpus_"))
-    rejects, accepts = set(), set()
+    rejects, accepts, records, run_dirs = set(), set(), {}, {}
     for i, cell in enumerate(cells):
-        rc = run(cell, "--stage-verdict", "PASS",
-                 emit=scratch / f"cell{i}").returncode
+        # The corpus remains a read-only reference.  A rejection proof belongs
+        # to its run, so review a byte-for-byte writable materialisation and
+        # let the shipped in-run destination be used.
+        run_dir = scratch / f"cell{i}"
+        shutil.copytree(cell, run_dir)
+        report = scratch / f"cell{i}.json"
+        rc = run(run_dir, "--stage-verdict", "PASS",
+                 "--json", str(report)).returncode
         rel = str(cell.relative_to(root))
+        records[rel] = json.loads(report.read_text(encoding="utf-8"))
+        run_dirs[rel] = run_dir
         if rc == 1:
             rejects.add(rel)
         elif rc == 0:
             accepts.add(rel)
     present = {str(c.relative_to(root)) for c in cells}
-    # EXACT on the reject side: a rule that widened shows up as an extra NAME
-    # rather than as a count nobody reads, and a rule that stopped biting shows
-    # up as a missing one.
-    assert rejects == _CORPUS_REJECTS & present, (
-        f"the rejection set moved: {sorted(rejects)}")
+    # The frozen identities are a floor, never an allowlist.  New identities
+    # must pass the data-driven proof above rather than being copied into it.
+    expected = _CORPUS_REJECTS & present
+    assert expected <= rejects, (
+        f"a pinned rejection stopped being rejected: {sorted(expected - rejects)}")
+    for rel in sorted(rejects - expected):
+        _assert_live_cited_input_rejection(run_dirs[rel], records[rel])
     # A LOWER BOUND on the accept side, deliberately. Every named cell must
     # still be accepted — that is what catches a rule turning on its own
     # controls — but a cell PUBLISHED SINCE that grounds its constants is the
@@ -1104,6 +1157,51 @@ def test_the_partition_over_the_published_corpus_does_not_move():
     missing = (_CORPUS_ACCEPTS & present) - accepts
     assert not missing, f"a named acceptance stopped being accepted: {sorted(missing)}"
     assert accepts, "every cell was refused; a reviewer that rejects all is none"
+
+
+@pytest.mark.skipif(_pc is None, reason="corpus helper unavailable")
+def test_new_cited_input_rejections_are_facts_not_an_identity_allowlist(tmp_path):
+    """Adversarial control for corpus growth after the frozen @88621a5 set.
+
+    A third clone with the same broken citations must still be REJECTED.  The
+    two newly published identities must both leave the rejection set when the
+    cited paths are repaired in scratch.  Thus no new identity is being added
+    to the expected partition to turn the test green.
+    """
+    root = _pc.corpus_tree()
+    if root is None:
+        pytest.skip(_pc.skip_reason())
+    newcomers = [root / "ic/spm/v1.5.65_sky130A",
+                 root / "ic/spm/v1.14.88_gf180mcuD"]
+    assert all(cell.is_dir() for cell in newcomers), newcomers
+    for i, cell in enumerate(newcomers):
+        broken = tmp_path / f"broken{i}"
+        shutil.copytree(cell, broken)
+        report = tmp_path / f"broken{i}.json"
+        result = run(broken, "--stage-verdict", "PASS",
+                     "--json", str(report))
+        assert result.returncode == 1, result.stdout + result.stderr
+        moved = _assert_live_cited_input_rejection(
+            broken, json.loads(report.read_text(encoding="utf-8")))
+
+        repaired = tmp_path / f"repaired{i}"
+        shutil.copytree(cell, repaired)
+        _repoint_citations_to_staged_inputs(repaired, moved)
+        repaired_report = tmp_path / f"repaired{i}.json"
+        result = run(repaired, "--stage-verdict", "PASS",
+                     "--json", str(repaired_report))
+        repaired_record = json.loads(repaired_report.read_text(encoding="utf-8"))
+        assert result.returncode != 1, result.stdout + result.stderr
+        assert not repaired_record.get("rejections"), repaired_record
+
+    third = tmp_path / "third_same_shape_broken_cell"
+    shutil.copytree(newcomers[0], third)
+    third_report = tmp_path / "third.json"
+    result = run(third, "--stage-verdict", "PASS",
+                 "--json", str(third_report))
+    assert result.returncode == 1, result.stdout + result.stderr
+    _assert_live_cited_input_rejection(
+        third, json.loads(third_report.read_text(encoding="utf-8")))
 
 
 @pytest.mark.skipif(_pc is None, reason="corpus helper unavailable")
@@ -1171,7 +1269,9 @@ def test_the_corpus_sweep_never_writes_into_the_corpus():
     if not cell.is_dir():
         pytest.skip("the corpus does not carry the rejected cell")
     scratch = Path(tempfile.mkdtemp(prefix="on_pass_phase1_emit_"))
-    r = run(cell, "--stage-verdict", "PASS", emit=scratch)
+    run_dir = scratch / "cell"
+    shutil.copytree(cell, run_dir)
+    r = run(run_dir, "--stage-verdict", "PASS")
     assert r.returncode == 1, r.stdout
-    assert any(scratch.rglob("test_*.py")), "the emit was not redirected"
+    assert any(run_dir.rglob("test_*.py")), "the in-run proof was not emitted"
     assert not (cell / "reports" / "phase1" / "gates" / "on_pass_review").exists()

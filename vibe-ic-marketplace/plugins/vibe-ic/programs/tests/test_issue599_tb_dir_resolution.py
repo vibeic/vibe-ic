@@ -47,6 +47,19 @@ def _load(name):
 
 PL = _load("_path_layout")
 
+# Exact surviving members on frozen benchmark-data 8c4b608.  The old `>= 14`
+# floor described result trees intentionally withdrawn by bcf2f94; it neither
+# named what was lost nor protected the five projects still exercising the new
+# resolver path.  This is shrink-only: additions are allowed, loss or
+# substitution of any frozen member is loud.
+_FROZEN_NEWLY_RESOLVED = {
+    "protocol_parity/espi",
+    "protocol_parity/lpc",
+    "protocol_parity/mdio",
+    "protocol_parity/ufs",
+    "protocol_parity/usb_pd",
+}
+
 
 def _tb(project, rel, name="tb_x.v"):
     d = project / rel
@@ -151,9 +164,14 @@ def test_the_corpus_flip_is_the_measured_one():
     # next assertion pins is untouched. 23 was the count when this landed; the
     # corpus has been re-published several times since and main already measured
     # 15, so this bound had no headroom left before #905 either.
-    assert len(newly) >= 14, (
-        f"only {len(newly)} project(s) newly resolve; 14 were measured after "
-        f"the #905 retirement (23 when this landed, 15 on main)")
+    rel_newly = {p.relative_to(root).as_posix() for p in newly}
+    missing = sorted(_FROZEN_NEWLY_RESOLVED - rel_newly)
+    assert not missing, (
+        "the frozen 8c4b608 resolver population lost named member(s): "
+        + repr(missing))
+    assert len(newly) >= len(_FROZEN_NEWLY_RESOLVED), (
+        f"only {len(newly)} project(s) newly resolve against the named "
+        f"{len(_FROZEN_NEWLY_RESOLVED)}-member frozen population")
     assert legacy <= resolved, (
         "a project the old default resolved no longer resolves — the change "
         "was supposed to be additive")

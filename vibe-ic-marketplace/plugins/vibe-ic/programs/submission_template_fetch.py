@@ -81,6 +81,7 @@ if str(_HERE) not in sys.path:
     sys.path.insert(0, str(_HERE))
 
 import _submission_template as _st                            # noqa: E402
+import _docker_memory as _dmem                                # noqa: E402
 import tapeout_readiness_check as _theirs                     # noqa: E402
 from _atomic_artefact import write_text as atomic_write_text  # noqa: E402
 
@@ -161,7 +162,8 @@ def _in_image(digest: str, script: str, mount: Path, interpreter: str,
     there rather than assumed here; an operator that ships a different one only
     changes its own registry row.
     """
-    return _run(["docker", "run", "--rm", "-v", f"{mount}:{mount}",
+    return _run(["docker", "run", "--rm", *_dmem.docker_memory_flags(),
+                 "-v", f"{mount}:{mount}",
                  digest, interpreter, "-c", script], timeout=timeout)
 
 

@@ -763,9 +763,10 @@ def test_r2s_own_partition_over_the_published_corpus_does_not_move():
     scratch = Path(tempfile.mkdtemp(prefix="on_pass_r2_corpus_"))
     rejects, verdicts, grounded = set(), collections.Counter(), collections.Counter()
     for n, cell in enumerate(cells):
+        run_dir = scratch / f"cell{n}"
+        shutil.copytree(cell, run_dir)
         j = scratch / f"{n}.json"
-        run(cell, "--stage-verdict", "PASS", "--json", str(j),
-            emit=scratch / f"e{n}")
+        run(run_dir, "--stage-verdict", "PASS", "--json", str(j))
         try:
             rec = json.loads(j.read_text())
         except (OSError, ValueError):

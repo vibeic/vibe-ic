@@ -258,7 +258,13 @@ def test_project_mode_stays_blocking(tmp_path):
     assert B.main([str(tmp_path), "--strict"]) == 1
 
 
-def test_corpus_ratchet_refuses_without_a_baseline_and_fires_on_growth(tmp_path):
+def test_corpus_ratchet_refuses_without_a_baseline_and_fires_on_growth(
+        tmp_path, monkeypatch):
+    # This unit case mutates an explicit private corpus in-process.  The
+    # landing harness's byte-attested production binding must not replace that
+    # named subject; production binding itself remains exercised by the
+    # dedicated hygiene-corpus-binding controls.
+    monkeypatch.delenv("GATEKEEPER_BENCHMARK_DATA_SHA", raising=False)
     corpus = tmp_path / "ic"
     run = corpus / "chip" / "clean_run_x"
     _fail_report(run, "reports/phase3/a.json")
@@ -272,7 +278,8 @@ def test_corpus_ratchet_refuses_without_a_baseline_and_fires_on_growth(tmp_path)
     assert B.main(["--corpus", str(corpus), "--baseline", str(bl)]) == 1
 
 
-def test_corpus_with_nothing_to_sweep_refuses(tmp_path, capsys):
+def test_corpus_with_nothing_to_sweep_refuses(tmp_path, capsys, monkeypatch):
+    monkeypatch.delenv("GATEKEEPER_BENCHMARK_DATA_SHA", raising=False)
     corpus = tmp_path / "ic"
     (corpus / "chip" / "clean_run_x").mkdir(parents=True)
     assert B.main(["--corpus", str(corpus)]) == 2

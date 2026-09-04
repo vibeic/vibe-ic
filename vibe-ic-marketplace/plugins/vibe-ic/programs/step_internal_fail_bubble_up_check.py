@@ -549,6 +549,19 @@ BASELINE_NAME = "step_internal_fail_bubble_up_baseline.json"
 _HERE = Path(__file__).resolve().parent
 
 
+def resolve_corpus_population(named: Path, *, announce: bool = False
+                              ) -> Tuple[Path, str]:
+    """Resolve the cell population using this gate's actual corpus contract.
+
+    ``VIBE_IC_BENCHMARK_DATA`` names the root of the external corpus, while
+    this gate sweeps its ``ic`` population.  Keep that translation beside the
+    production consumer so tests and CLI callers cannot each reconstruct it
+    from a checkout directory name.
+    """
+    return _cloc.resolve(Path(named), subdir="ic", gate=GATE,
+                         announce=announce)
+
+
 def _published_run_trees(corpus: Path) -> List[Path]:
     """The PUBLISHED run trees, not whatever this machine happens to hold.
 
@@ -1273,8 +1286,7 @@ def _main_parsed(args) -> int:
     if args.corpus:
         named = Path(args.corpus)
         bl = Path(args.baseline) if args.baseline else _HERE / BASELINE_NAME
-        corpus, origin = _cloc.resolve(named, subdir="ic", gate=GATE,
-                                       announce=True)
+        corpus, origin = resolve_corpus_population(named, announce=True)
         if not corpus.is_dir():
             # WAS: `error: not a directory` at rc 2 — one word for three
             # different facts (the corpus moved, the pointer is wrong, nobody

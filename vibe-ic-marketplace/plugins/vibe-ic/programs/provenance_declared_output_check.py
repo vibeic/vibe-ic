@@ -174,10 +174,22 @@ def audit_cell(cell: Path, repo: Path, reconcile: bool = False) -> dict:
     by_digest = {}
     for p, dg in by_path.items():
         by_digest.setdefault(dg, []).append(p)
+    # An append-only invocation ledger may name the same output path more than
+    # once.  That is normal for flows such as setup STA followed by hold STA:
+    # both invocations are evidence, but the worktree can contain only the
+    # bytes written by the final invocation.  Remember the final declaration
+    # for each path so an earlier digest is classified as SUPERSEDED only when
+    # the indexed blob proves that the later declaration is the one shipped.
+    # Merely seeing a later row is insufficient; a blob matching neither row
+    # remains a HASH_MISMATCH.
+    final_declaration = {}
+    for row_index, row in enumerate(rows):
+        for rel, digest in (row.get("outputs") or {}).items():
+            final_declaration[rel] = (row_index, digest)
     declared = present = 0
-    mismatch, dangling, relocated, pruned = [], [], [], []
+    mismatch, dangling, relocated, pruned, superseded = [], [], [], [], []
 
-    for row in rows:
+    for row_index, row in enumerate(rows):
         # `outputs` IS THE RUN'S OWN RECORD AND IS NEVER MUTATED. An earlier
         # version of this repair rewrote a relocated key to its new path, and
         # the declared-output count across the corpus fell 156 -> 153: three
@@ -194,9 +206,15 @@ def audit_cell(cell: Path, repo: Path, reconcile: bool = False) -> dict:
         for rel, digest in outs.items():
             declared += 1
             if rel in by_path:
-                present += 1
-                if by_path[rel] != digest:
-                    mismatch.append(rel)
+                if by_path[rel] == digest:
+                    present += 1
+                else:
+                    final_index, final_digest = final_declaration[rel]
+                    if (final_index > row_index
+                            and by_path[rel] == final_digest):
+                        superseded.append(rel)
+                    else:
+                        mismatch.append(rel)
                 continue
             tgt = reloc.get(rel)
             if tgt is not None:
@@ -234,7 +252,8 @@ def audit_cell(cell: Path, repo: Path, reconcile: bool = False) -> dict:
                                  for r in rows) + "\n")
     return {"cell": str(cell), "declared": declared, "present": present,
             "hash_mismatch": mismatch, "dangling": dangling,
-            "relocated": relocated, "pruned": pruned}
+            "relocated": relocated, "pruned": pruned,
+            "superseded": superseded}
 
 
 def audit(repo: Path, reconcile: bool = False) -> dict:
@@ -296,10 +315,12 @@ def main(argv=None) -> int:
         print("   Run with --reconcile to repoint the ones that shipped under "
               "another name and mark the rest pruned.")
         return 1
+    ns = sum(len(c["superseded"]) for c in rep["cells"])
     print(f"[PASS] provenance_declared_output_check: {len(rep['cells'])} "
           f"tracked ledger(s), {decl} declared output(s) — each is present at "
-          f"its declared path and hashes as declared, or is explicitly marked "
-          f"pruned.")
+          f"its declared path and hashes as declared, explicitly marked "
+          f"pruned, or superseded by a later same-path declaration whose "
+          f"digest is the shipped blob ({ns} superseded).")
     return 0
 
 

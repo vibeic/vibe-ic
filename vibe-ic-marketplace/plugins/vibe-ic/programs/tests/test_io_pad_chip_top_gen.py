@@ -82,6 +82,40 @@ SPEC = {
     ],
 }
 
+GROUP_DOC = """---
+layer: L3
+---
+
+# L3 — External Interface
+
+The I/O cell library is delegated to the PDK i/o pad defaults.
+
+## Physical Pad Placement
+
+| Pad side | signals |
+|---|---|
+| **North (N)** | payload data bus |
+| **South (S)** | address + control valid / ready |
+| **East (E)** | `clk` / `rst` |
+| **West (W)** | status pin(s) |
+"""
+
+GROUP_SPEC = {
+    "top_module": "core",
+    "top_ports": [
+        {"name": "clk", "direction": "input", "width": 1},
+        {"name": "rst", "direction": "input", "width": 1},
+        {"name": "i_payload_data", "direction": "input", "width": 2,
+         "msb": 1, "lsb": 0},
+        {"name": "o_payload_data", "direction": "output", "width": 2,
+         "msb": 1, "lsb": 0},
+        {"name": "o_address", "direction": "output", "width": 1},
+        {"name": "o_control_valid", "direction": "output", "width": 1},
+        {"name": "i_control_ready", "direction": "input", "width": 1},
+        {"name": "o_status", "direction": "output", "width": 1},
+    ],
+}
+
 
 def _macro(name: str, cls: str, w: float = 10.0, h: float = 100.0,
            pins=()) -> str:
@@ -185,6 +219,38 @@ def test_one_pad_instance_per_declared_pin(tmp_path):
     v = (proj / rec["chip_top_verilog"]).read_text()
     for master in masters:
         assert master in v
+
+
+def test_named_port_groups_resolve_without_a_design_specific_name_table(
+        tmp_path):
+    """A group row is a real declaration when port identifiers resolve it.
+
+    This is not fuzzy prose matching: every semantic atom of each selected
+    port occurs in the row, bus bits are still taken from L9, and the record
+    exposes the exact statement-to-port mapping for review.
+    """
+    proj = _project(tmp_path, doc=GROUP_DOC, spec=GROUP_SPEC)
+    res = _run(GEN, proj, _pdk(tmp_path / "pdk"))
+    assert res.returncode == 0, res.stdout + res.stderr
+    rec = _record(proj)
+    mapped = {r["side"]: r["matched_ports"]
+              for r in rec["pad_group_resolution"]}
+    assert mapped == {
+        "N": ["i_payload_data", "o_payload_data"],
+        "S": ["o_address", "o_control_valid", "i_control_ready"],
+        "W": ["o_status"],
+    }
+    assert sum(len(v) for v in rec["derived_answers"]
+               ["pad_order_by_side"].values()) == 10
+
+
+def test_an_unresolved_group_is_refused_not_applied_to_every_port(tmp_path):
+    doc = GROUP_DOC.replace("status pin(s)", "observability pins")
+    proj = _project(tmp_path, doc=doc, spec=GROUP_SPEC)
+    res = _run(GEN, proj, _pdk(tmp_path / "pdk"))
+    assert res.returncode == 1, res.stdout + res.stderr
+    assert "PAD_GROUP_UNRESOLVED" in res.stdout + res.stderr
+    assert not (proj / "phase3/stage3/pnr/chip_top_io.v").exists()
 
 
 def test_the_terminal_name_comes_from_the_library_not_from_a_constant(tmp_path):

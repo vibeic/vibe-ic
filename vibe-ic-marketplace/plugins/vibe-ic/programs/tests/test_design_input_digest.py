@@ -394,6 +394,15 @@ def test_the_measurement_id_moves_with_a_ruler_flag(tmp_path):
     assert a["id"] != b["id"]
 
 
+def test_strict_step_binding_is_part_of_the_ruler():
+    default = did.build_measurement(
+        "1.17.18", None, {"strict_step_binding": False})
+    strict = did.build_measurement(
+        "1.17.18", None, {"strict_step_binding": True})
+    assert default["id"] != strict["id"]
+    assert strict["ruler_flags"]["strict_step_binding"] is True
+
+
 def test_the_measurement_id_ignores_where_the_work_happened():
     a = did.build_measurement("1.9.79", None,
                               {"project_dir": "/a", "json": "/x.json",

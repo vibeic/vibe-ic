@@ -54,6 +54,7 @@ import argparse, json, re, shutil, sys, time
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 import _path_layout as _pl
+import _l10_execution as _l10x
 from _atomic_artefact import write_text as _atomic_write_text
 
 # Generic, chip-AGNOSTIC signal-role vocabulary. These match on STRUCTURE of the
@@ -1013,6 +1014,9 @@ def run_unit_tbs(project: Path, container: "str | None" = None,
     """
     if report is None:
         report = {}
+    # Clear every prior execution record BEFORE any refusal path.  Otherwise
+    # a rerun with no simulator (or no TB) can leave yesterday's PASS in place.
+    _l10x.clear_record(project)
     disp = dispatch or default_dispatch
     tb_dir = _pl.sim_dir(project) / "tb"
     tbs = [p for p in sorted(tb_dir.glob("*.v")) + sorted(tb_dir.glob("*.sv"))
@@ -1050,6 +1054,11 @@ def run_unit_tbs(project: Path, container: "str | None" = None,
         state = "errored"
         message = ""
         log = ""
+        try:
+            has_case_oracle = ORACLE_NONE_MARKER not in tb.read_text(
+                errors="replace")
+        except OSError:
+            has_case_oracle = False
         for _attempt in range(4):
             argv = ([SIMULATOR, "--binary", "--timing", "-j", "4",
                      "--top-module", tb.stem, "-Wno-fatal",
@@ -1062,7 +1071,14 @@ def run_unit_tbs(project: Path, container: "str | None" = None,
             (wd / "build.log").write_text(" ".join(argv) + "\n\n" + blog)
             if brc == 0:
                 break
-            missing = [m for m in _MISSING_MODULE_RE.findall(blog)]
+            # Simulator diagnostics can echo the source line that triggered
+            # an error.  A comment such as ``// cannot find module old_ip``
+            # is not an elaboration finding, even when it appears in the log.
+            # Blank HDL comments/strings before extracting module names; the
+            # returned spans stay aligned and real diagnostic prose remains.
+            import _hdl_code_text as _hdl_text
+            missing = [m for m in _MISSING_MODULE_RE.findall(
+                _hdl_text.strip_hdl_comments_and_strings(blog))]
             found = False
             for mod in missing:
                 src = _resolve_from_design_input(project, mod)
@@ -1092,7 +1108,9 @@ def run_unit_tbs(project: Path, container: "str | None" = None,
                 log = rlog[-2000:]
         cases.append({"name": tb.stem, "state": state, "message": message,
                       "log_tail": log, "time": time.time() - t0,
-                      "work_dir": str(wd)})
+                      "work_dir": str(wd),
+                      "tb_file": str(tb),
+                      "has_case_oracle": has_case_oracle})
     executed = sum(1 for c in cases if c["state"] in ("passed", "failed"))
     report["cases"] = cases
     report["passed"] = sum(1 for c in cases if c["state"] == "passed")
@@ -1111,6 +1129,42 @@ def run_unit_tbs(project: Path, container: "str | None" = None,
     # opens and counts. The final name must mean "this run finished".
     _atomic_write_text(results, _junit(cases))
     report["results_xml"] = str(results)
+    l10_path = _pl.generated_docs_dir(project) / "L10_TEST_CASES.json"
+    if not l10_path.is_file():
+        # The simulator result remains a valid JUnit statement about what it
+        # ran, but it cannot be bound to a declaration and therefore cannot
+        # become per-case L10 evidence.
+        report["execution_record_reason"] = (
+            f"no L10 declaration at {l10_path}; no execution record written")
+        return executed
+    rows = []
+    for case in cases:
+        case_executed = (case["has_case_oracle"]
+                         and case["state"] in ("passed", "failed"))
+        if case_executed:
+            verdict = (_l10x.PASS if case["state"] == "passed"
+                       else _l10x.FAIL)
+            detail = "self-checking case oracle executed by verilator"
+        elif not case["has_case_oracle"]:
+            verdict = _l10x.NOT_EXECUTED
+            detail = ("simulator ran the substance-floor scaffold, but the "
+                      "declared L10 case oracle was not executed")
+        else:
+            verdict = _l10x.NOT_EXECUTED
+            detail = ("testbench did not execute because elaboration/build "
+                      "did not complete")
+        rows.append({
+            "id": case["name"],
+            "verdict": verdict,
+            _l10x.SIM_EXECUTED_KEY: case_executed,
+            "tb_file": case["tb_file"],
+            "detail": detail,
+        })
+    execution_record = _l10x.write_record(
+        project, l10_path, rows,
+        producer="testbench_gen.run_unit_tbs",
+        tb_dir=tb_dir, source_junit=results)
+    report["execution_record"] = str(execution_record)
     return executed
 
 

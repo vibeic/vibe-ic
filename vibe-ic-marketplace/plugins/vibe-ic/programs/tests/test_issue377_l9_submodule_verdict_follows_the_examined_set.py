@@ -30,6 +30,25 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from _published_corpus import corpus_root, needs_corpus  # noqa: E402
 
 
+# One exact historical real-data arm retained after the failing result cells
+# were withdrawn.  Source: benchmark-data 6ca1e29, blob
+# 908747fff2a913ea4d85ee42083e7728d06feb69 at
+# ic/ibex/phase1/generated_docs/L9_INTEGRATION_SPEC.json.  Only the L9 input
+# identities and their low-confidence classification are retained; no RTL,
+# oracle, harness or golden output is copied.
+_FROZEN_ALL_SKIPPED_SUBMODULES = [
+    {"name": name, "low_confidence": True}
+    for name in (
+        "ibex_top", "ibex_id_stage", "ibex_controller", "ibex_decoder",
+        "ibex_register_file_ff", "ibex_register_file_fpga",
+        "ibex_register_file_latch", "ibex_ex_block", "ibex_alu",
+        "ibex_multdiv_slow", "ibex_multdiv_fast", "ibex_cs_registers",
+        "ibex_load_store_unit", "ibex_prefetch_buffer", "ibex_fetch_fifo",
+        "prim_secded_inv_39_32_enc",
+    )
+]
+
+
 # --------------------------------------------------------------------------
 # fixtures — a minimal project the gate accepts: generated_docs/L9 + rtl/
 # --------------------------------------------------------------------------
@@ -210,7 +229,7 @@ def _published_l9_docs(root: Path) -> list:
 
 
 @needs_corpus
-def test_no_tracked_document_can_reach_PASS_having_examined_nothing():
+def test_no_tracked_document_can_reach_PASS_having_examined_nothing(tmp_path):
     """Reads published L9 documents with a PURE function. Writes nothing.
 
     The subject is a PUBLISHED CELL. Those moved to `vibeic/benchmark-data`, so
@@ -275,6 +294,22 @@ def test_no_tracked_document_can_reach_PASS_having_examined_nothing():
     # in every other number here". Zero is the condition; six was the day's
     # weather. Asserted as the condition, so publishing or withdrawing a cell
     # no longer breaks it and reaching zero still does.
+    if new_arm == 0:
+        # The current corpus intentionally publishes no failing result cell,
+        # so drive the exact historical L9 premise through today's real gate.
+        # This keeps the regression arm executable without republishing a
+        # failed benchmark result or weakening the current corpus policy.
+        proj = _project(tmp_path, _FROZEN_ALL_SKIPPED_SUBMODULES)
+        verdict, findings, live, reason = C.audit_report(proj)
+        assert verdict == "VACUOUS_PASS" and findings == [], (
+            verdict, findings, live, reason)
+        assert live == {
+            "declared": 16,
+            "examined": 0,
+            "skipped": {"naming_delegated_low_confidence": 16},
+        }, live
+        assert "NOT a clean bill of health" in reason, reason
+        new_arm += 1
     assert new_arm > 0, (
         "no tracked project reaches the examined-set-empty arm any more, so "
         "the arm this landing added is exercised by nothing and a regression "

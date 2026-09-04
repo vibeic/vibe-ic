@@ -46,6 +46,7 @@ import testbench_gen as TBG               # noqa: E402
 import l10_tb_conformance_check as GATE   # noqa: E402
 import design_one_shot_runner as R        # noqa: E402
 import _path_layout as _pl                # noqa: E402
+import _l10_execution as L10X             # noqa: E402
 
 
 # --------------------------------------------------------------------------
@@ -98,8 +99,14 @@ def _project(tmp_path, cases, rtl=_DUT_RTL, name="proj", key="test_cases") -> Pa
     return proj
 
 
-def _run_gate(monkeypatch, proj: Path, extra=()):
+def _run_gate(monkeypatch, proj: Path, extra=(), executed=None):
     """Run the CONSUMER exactly as the flow runs it, returning (rc, artefact)."""
+    if executed:
+        l10 = proj / "phase1/generated_docs/L10_TEST_CASES.json"
+        L10X.write_record(
+            proj, l10,
+            [{"id": case_id, "verdict": verdict, "sim_executed": True}
+             for case_id, verdict in executed.items()], producer="test")
     monkeypatch.chdir(proj)
     out = "reports/phase2/gates/l10_tb_conformance.json"
     rc = GATE.main([
@@ -145,7 +152,8 @@ def test_761_gate_names_both_scopes_and_still_fails_all_95(
     # THE VERDICT IS UNCHANGED — this is the load-bearing assertion. A design
     # that ships no testbench for 95 declared cases is still marked down.
     assert rc == 1
-    assert (art["total"], art["ok"], art["fail"], art["waived"]) == (95, 0, 95, 0)
+    assert (art["total"], art["ok"], art["not_executed"], art["waived"]) \
+        == (95, 0, 95, 0)
 
     # what changed: the disagreement is now a first-class number in the artefact
     assert art["producer_scope_gap"] == 95
@@ -164,7 +172,7 @@ def test_761_gate_names_both_scopes_and_still_fails_all_95(
     assert "grades ALL 95" in err, err
 
     # every out-of-scope failure carries the reason on the case itself
-    miss = [r for r in art["results"] if r["status"] == "fail"]
+    miss = [r for r in art["results"] if r["status"] == L10X.NOT_EXECUTED]
     assert len(miss) == 95
     assert all(r["producer_scaffold_scope"] == "out" for r in miss)
     assert all(any("NO PRODUCER" in e for e in r["evidence"]) for r in miss)
@@ -226,7 +234,8 @@ def test_761_real_oracle_not_gated_on_kind_token(tmp_path, monkeypatch):
     assert f"{_DUT_MODULE} u_dut (" in tb
     assert "$fatal(1);" in tb
 
-    rc, art = _run_gate(monkeypatch, proj)
+    rc, art = _run_gate(
+        monkeypatch, proj, executed={"boot_first_fetch": "PASS"})
     assert rc == 0
     assert (art["total"], art["ok"], art["fail"]) == (1, 1, 0)
     assert art["producer_scope_gap"] == 0
@@ -254,7 +263,7 @@ def test_761_scaffold_stays_kind_scoped_and_case_still_fails(
 
     rc, art = _run_gate(monkeypatch, proj)
     assert rc == 1
-    assert (art["ok"], art["fail"]) == (0, 1)
+    assert (art["ok"], art["not_executed"]) == (0, 1)
     assert art["producer_scope_gap"] == 1
 
 
@@ -270,7 +279,8 @@ def test_761_scope_annotation_never_waives(tmp_path):
     results, ok, fail = GATE.evaluate(
         cases, tb_blob="", summary="",
         producer_scaffold_kinds=TBG.SCAFFOLD_KINDS)
-    assert (ok, fail) == (0, 95)
+    assert (ok, fail) == (0, 0)
+    assert GATE.count_not_executed(results) == 95
     assert GATE.count_waived(results) == 0
     assert GATE.count_checklist_gaps(results) == 0
     assert GATE.count_producer_scope_gap(results) == 95
@@ -340,10 +350,10 @@ def test_761_why_the_scaffold_stayed_kind_scoped(tmp_path, monkeypatch):
 
     rc_a, art_a = verdicts["placeholder_only"]
     rc_b, art_b = verdicts["plus_live_scaffold"]
-    assert (rc_a, art_a["ok"], art_a["fail"]) == (1, 0, 1)
+    assert (rc_a, art_a["ok"], art_a["not_executed"]) == (1, 0, 1)
     assert art_a["vacuous_sim_tree"] is True
-    # one live driver, zero new verification — and the case is now "covered"
-    assert (rc_b, art_b["ok"], art_b["fail"]) == (0, 1, 0)
+    # one live driver, zero new verification — and the case stays uncredited
+    assert (rc_b, art_b["ok"], art_b["not_executed"]) == (1, 0, 1)
     assert art_b["vacuous_sim_tree"] is False
 
 

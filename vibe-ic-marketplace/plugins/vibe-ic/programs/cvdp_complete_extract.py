@@ -73,13 +73,20 @@ generic vocabulary), never on a design name, problem id, or SKU literal.
 
 CLI
     python3 cvdp_complete_extract.py --jsonl FILE [--id ID] [--dist] [--gaps]
+    python3 cvdp_complete_extract.py --jsonl FILE \
+        --adjudicate-base-programs DIR --adjudicate-id ID [...] \
+        --adjudicate-output REPORT.md
 """
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
+import os
 import re
+import subprocess
 import sys
+import tempfile
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
@@ -89,6 +96,7 @@ if str(_HERE) not in sys.path:
 
 # Reused (NOT modified) — interface + module-name + cue helpers.
 import record_prompt_context_bridge as _bridge  # noqa: E402
+import prose_interface_bridge_md as _md  # noqa: E402  complete Markdown interface audit
 import prose_interface_table_read as _tbl  # noqa: E402  markdown signal/direction table
 # Symbolic / parameter-expression width reader (param-expr / range-before-name /
 # param-override). A width stated as a parameter expression with a derivable
@@ -865,6 +873,39 @@ def extract(record: dict) -> dict:
         param_defaults=param_defaults, table=table, tb=tb, params=params,
         ctx_widths=ctx_widths, record_id=record.get("id"))
 
+    # A COMPLETE verdict is audited against the stronger section reader before it
+    # is allowed to stand: a legacy bridge can recognise only a few literal-width
+    # bullets, prepend those, and thereby replace the rest of a prompt-declared
+    # interface. Re-assess the union so COMPLETE means every readable declaration
+    # was considered. An otherwise-empty record is promoted only when the same
+    # prompt labels the interface with its module name; that is the recovery path
+    # for a declaration-strength `### Interface: `name`` document, not a general
+    # census-expansion switch.
+    try:
+        md_ins, md_outs = _md.parse_md_table_ports(prompt)
+    except Exception:
+        md_ins, md_outs = [], []
+    titled_interface = bool(
+        top and _bridge.interface_title_name(prompt) == top and not (c_ins or c_outs))
+    if md_ins and md_outs and (
+            spec.get("completeness") == "COMPLETE" or titled_interface):
+        audit_ins = list(dict.fromkeys(c_ins + [n for n, _w in md_ins]))
+        audit_outs = list(dict.fromkeys(c_outs + [n for n, _w in md_outs]))
+        md_widths = dict(md_ins + md_outs)
+        audit_ctx_widths = dict(ctx_widths)
+        for md_name, md_width in md_widths.items():
+            audit_ctx_widths.setdefault(md_name, md_width)
+        spec = _eng.assess_spec(
+            prompt, audit_ins, audit_outs, module_name=top,
+            skeleton_iface=skiface, param_defaults=param_defaults, table=table,
+            tb=tb, params=params, ctx_widths=audit_ctx_widths,
+            record_id=record.get("id"))
+        for port in spec.get("interface", []):
+            if (port.get("source") == "context_header"
+                    and port.get("name") not in ctx_widths
+                    and port.get("name") in md_widths):
+                port["source"] = "prompt_interface_declaration"
+
     # ORGANIC-20260703 — CVDP-adapter conformance-spec hardening. The general
     # placement engine resolves a port width from PROSE first and only falls back
     # to ctx_widths, so a mis-read prose width (e.g. a `2-bit sync header` sentence
@@ -895,6 +936,133 @@ def extract(record: dict) -> dict:
 # --------------------------------------------------------------------------- #
 # CLI — measure the completeness distribution over a jsonl
 # --------------------------------------------------------------------------- #
+def _visible_record(record: dict) -> dict:
+    """Copy only the CVDP fields permitted by section 4.05."""
+    input_obj = record.get("input") if isinstance(record.get("input"), dict) else {}
+    return {
+        "id": record.get("id"),
+        "input": {
+            "prompt": input_obj.get("prompt", ""),
+            "context": input_obj.get("context", ""),
+        },
+    }
+
+
+def _port_names(spec: dict, direction: str) -> List[str]:
+    return [str(port.get("name")) for port in spec.get("interface", [])
+            if port.get("dir") == direction and port.get("name")]
+
+
+def _spec_summary(spec: dict) -> str:
+    module = spec.get("module_name") or "none"
+    inputs = _port_names(spec, "input")
+    outputs = _port_names(spec, "output")
+    return (f"{spec.get('completeness')}; module={module}; "
+            f"in={len(inputs)}, out={len(outputs)}")
+
+
+def _declared_fact(spec: dict) -> str:
+    module = spec.get("module_name") or "none"
+    inputs = ", ".join(_port_names(spec, "input")) or "none"
+    outputs = ", ".join(_port_names(spec, "output")) or "none"
+    return f"module={module}; inputs={inputs}; outputs={outputs}"
+
+
+def _expected_from_visible_spec(spec: dict) -> str:
+    inputs = _port_names(spec, "input")
+    outputs = _port_names(spec, "output")
+    widths_resolved = all(
+        isinstance(port.get("width"), int) and port["width"] > 0
+        for port in spec.get("interface", []))
+    if inputs and outputs and widths_resolved:
+        return "COMPLETE (bidirectional declarations resolved)"
+    return spec.get("completeness", "UNKNOWN")
+
+
+def _adjudication_reason(base: dict, candidate: dict) -> str:
+    base_in = _port_names(base, "input")
+    base_out = _port_names(base, "output")
+    cand_in = _port_names(candidate, "input")
+    cand_out = _port_names(candidate, "output")
+    if base.get("completeness") != "COMPLETE" and candidate.get("completeness") == "COMPLETE":
+        return "Restore the prompt-declared interface; the old reader missed it."
+    if base.get("completeness") == "COMPLETE" and (not base_in or not base_out):
+        return "Repair a degenerate COMPLETE extraction with both interface directions."
+    if (base.get("module_name"), base_in, base_out) == (candidate.get("module_name"), cand_in, cand_out):
+        return "COMPLETE already earned; extraction is unchanged."
+    return "Keep COMPLETE after recovering the rest of the prompt-declared interface."
+
+
+def _markdown_cell(value: object) -> str:
+    return str(value).replace("|", "\\|").replace("\n", " ")
+
+
+def _write_adjudication(recs: List[dict], jsonl_path: Path, ids: List[str],
+                        base_programs: Path, output: Path) -> int:
+    """Compare frozen and current producers using a prompt/context-only corpus."""
+    by_id = {str(record.get("id")): record for record in recs}
+    missing = [record_id for record_id in ids if record_id not in by_id]
+    if missing:
+        print(f"adjudication ids not found: {', '.join(missing)}", file=sys.stderr)
+        return 2
+
+    base_script = base_programs / "cvdp_complete_extract.py"
+    if not base_script.is_file():
+        print(f"base producer not found: {base_script}", file=sys.stderr)
+        return 2
+
+    visible = [_visible_record(by_id[record_id]) for record_id in ids]
+    corpus_bytes = jsonl_path.read_bytes()
+    env = dict(os.environ, PYTHONDONTWRITEBYTECODE="1")
+    rows = []
+    with tempfile.TemporaryDirectory(prefix="cvdp-visible-") as tmpdir:
+        visible_path = Path(tmpdir) / "records.jsonl"
+        visible_path.write_text(
+            "".join(json.dumps(record, ensure_ascii=False) + "\n" for record in visible),
+            encoding="utf-8")
+        for record in visible:
+            record_id = str(record["id"])
+            proc = subprocess.run(
+                [sys.executable, str(base_script), "--jsonl", str(visible_path),
+                 "--id", record_id],
+                check=False, capture_output=True, text=True, env=env)
+            if proc.returncode:
+                print(f"base producer failed for {record_id}: {proc.stderr.strip()}",
+                      file=sys.stderr)
+                return proc.returncode
+            base_spec = json.loads(proc.stdout)
+            candidate_spec = extract(record)
+            rows.append((
+                record_id,
+                _declared_fact(candidate_spec),
+                _expected_from_visible_spec(candidate_spec),
+                _spec_summary(base_spec),
+                _spec_summary(candidate_spec),
+                _adjudication_reason(base_spec, candidate_spec),
+            ))
+
+    lines = [
+        "# CVDP prompt/context-only adjudication",
+        "",
+        (f"Corpus: `{jsonl_path}`; SHA-256 "
+         f"`{hashlib.sha256(corpus_bytes).hexdigest()}`; bytes `{len(corpus_bytes)}`; "
+         f"selected records `{len(ids)}`."),
+        "",
+        "Both producers received a temporary corpus containing only `id`, "
+        "`input.prompt`, and `input.context`; hidden fields and golden outputs were absent.",
+        "",
+        "| ID | Prompt/context interface fact | Expected | Frozen main | Candidate | Adjudication |",
+        "|---|---|---|---|---|---|",
+    ]
+    lines.extend("| " + " | ".join(_markdown_cell(cell) for cell in row) + " |"
+                 for row in rows)
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    print(f"ADJUDICATION_ROWS={len(rows)}")
+    print(f"ADJUDICATION_OUTPUT={output}")
+    return 0
+
+
 def main(argv: Optional[List[str]] = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("--jsonl", required=True, help="CVDP code-generation jsonl")
@@ -903,9 +1071,24 @@ def main(argv: Optional[List[str]] = None) -> int:
                     help="print the COMPLETE / EXTRACTION_GAP / SPEC_ABSENT distribution")
     ap.add_argument("--gaps", action="store_true",
                     help="print the recurring EXTRACTION_GAP fact-types + sample ids")
+    ap.add_argument("--adjudicate-base-programs", type=Path,
+                    help="frozen producer programs directory for a two-arm comparison")
+    ap.add_argument("--adjudicate-id", action="append", default=[],
+                    help="record id to include in the prompt/context-only table; repeatable")
+    ap.add_argument("--adjudicate-output", type=Path,
+                    help="write the adjudication Markdown table here")
     a = ap.parse_args(argv)
 
-    recs = [json.loads(l) for l in open(a.jsonl)]
+    jsonl_path = Path(a.jsonl)
+    recs = [json.loads(line) for line in jsonl_path.open(encoding="utf-8")]
+    adjudication_args = (a.adjudicate_base_programs, a.adjudicate_id,
+                         a.adjudicate_output)
+    if any(adjudication_args):
+        if not all(adjudication_args):
+            ap.error("adjudication requires base programs, at least one id, and output")
+        return _write_adjudication(
+            recs, jsonl_path, a.adjudicate_id,
+            a.adjudicate_base_programs, a.adjudicate_output)
     if a.id:
         for r in recs:
             if r.get("id") == a.id:

@@ -45,6 +45,50 @@ if str(PROG) not in sys.path:
     sys.path.insert(0, str(PROG))
 
 import cvdp_complete_extract as CE  # noqa: E402
+import record_prompt_context_bridge as BRIDGE  # noqa: E402
+
+
+def test_adjudication_input_strips_every_non_visible_field():
+    record = {
+        "id": "visible-only",
+        "input": {"prompt": "Design it.", "context": {"rtl/top.sv": "module top;"},
+                  "private": "drop"},
+        "output": {"response": "golden"},
+        "harness": {"files": {"test.py": "dut.secret"}},
+    }
+    assert CE._visible_record(record) == {
+        "id": "visible-only",
+        "input": {"prompt": "Design it.",
+                  "context": {"rtl/top.sv": "module top;"}},
+    }
+
+
+def test_markdown_interface_title_is_a_strong_module_designation():
+    record = {"input": {"prompt": "### Interface: `packet_engine`\n"}}
+    assert BRIDGE.toplevel_name(record) == "packet_engine"
+
+
+def test_narrative_interface_text_is_not_a_module_designation():
+    record = {
+        "input": {
+            "prompt": "The interface to module packet_engine is listed below.\n"
+        }
+    }
+    assert BRIDGE.toplevel_name(record) is None
+
+
+def test_bare_identifier_after_module_named_is_a_strong_designation():
+    record = {
+        "input": {
+            "prompt": "Design a Verilog module named packet_engine that counts.\n"
+        }
+    }
+    assert BRIDGE.toplevel_name(record) == "packet_engine"
+
+
+def test_bare_stop_word_after_module_named_is_rejected():
+    record = {"input": {"prompt": "The module named the counter is described.\n"}}
+    assert BRIDGE.toplevel_name(record) is None
 
 
 # --------------------------------------------------------------------------- #

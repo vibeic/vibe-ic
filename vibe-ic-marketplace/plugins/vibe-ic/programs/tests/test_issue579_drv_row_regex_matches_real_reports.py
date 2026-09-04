@@ -136,19 +136,32 @@ def _corpus():
 
 @needs_corpus
 def test_the_pattern_matches_real_reports_at_all():
-    """Guards the regression that opened this issue: a pattern that matches
-    nothing passes every unit test written against synthetic strings if those
-    strings were written to match it."""
-    total = 0
-    for p in _corpus().rglob("sta*.rpt"):
+    """Open real reports and compare with an independently written parser.
+
+    The current published tree contains STA reports but no violating DRV row;
+    requiring ``total > 0`` therefore turned a clean measured population into
+    a regex failure.  Positive matching remains proven by ``_REAL_ROWS``
+    above.  Here the non-vacuity is the number of reports opened, and a future
+    real violation must be counted identically by both parsers.
+    """
+    independent = re.compile(
+        r"^\s*\S+\s+-?[\d.]+\s+-?[\d.]+\s+-[\d.]+\s*(?:\([A-Z]+\))?\s*$",
+        re.M)
+    reports = sorted(_corpus().rglob("sta*.rpt"))
+    assert reports, "no STA report under the published corpus"
+    shipped_total = independent_total = opened = 0
+    for p in reports:
         try:
-            total += len(M._DRV_ROW_RE.findall(
-                p.read_text(encoding="utf-8", errors="replace")))
+            text = p.read_text(encoding="utf-8", errors="replace")
         except OSError:
             continue
-    assert total > 0, (
-        "the DRV row pattern matches nothing across the entire corpus — which "
-        "is the state this issue was opened for")
+        opened += 1
+        shipped_total += len(M._DRV_ROW_RE.findall(text))
+        independent_total += len(independent.findall(text))
+    assert opened > 0, "STA reports were named but none could be opened"
+    assert shipped_total == independent_total, (
+        f"shipped DRV parser counted {shipped_total}, independently written "
+        f"parser counted {independent_total} across {opened} opened report(s)")
 
 
 @needs_corpus

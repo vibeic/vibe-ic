@@ -368,11 +368,17 @@ def runner_tiers(script: Path) -> Optional[List[str]]:
     # number the timeout was, so nothing about the deadline changes; the stall
     # grace is set to it as well, because the 30-minute default would let a
     # silent listing sit for the whole grace before the ceiling could fire.
-    # MEASURED, not assumed: neither this call nor the timeout-bounded
-    # `subprocess` launch it replaces kills a process GROUP
-    # (`_watchdog._default_kill` is `proc.kill()`), so a script that backgrounds
-    # work still orphans it. The gain here is the discipline and the structured outcome,
-    # and claiming more than that would be claiming something unmeasured.
+    # THE ORPHAN GAP RECORDED HERE IS CLOSED. This comment used to read
+    # "neither this call nor the timeout-bounded `subprocess` launch it
+    # replaces kills a process GROUP (`_watchdog._default_kill` is
+    # `proc.kill()`), so a script that backgrounds work still orphans it."
+    # That was true and it was measurable from outside: this file's own
+    # `test_a_hanging_candidate_is_killed_at_the_deadline` plants `sleep 600`
+    # behind a 3 s deadline, the deadline killed `bash` and left `sleep`
+    # running, and the per-file landing driver then reported the WHOLE file as
+    # "pytest exited with unfinished live descendants" -- no verdict at all.
+    # `_watchdog` now launches with `start_new_session=True` and signals the
+    # child's process GROUP, so the deadline reaches what the script launched.
     proc = _watchdog().run_supervised(
         ["bash", str(script), _LIST_TIERS_FLAG],
         cwd=str(plugin), merge_stderr=False, output_progress=True,

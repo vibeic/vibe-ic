@@ -641,14 +641,69 @@ def discover_measure_inputs(project: Path) -> Tuple[List[str], Optional[str]]:
             rtl = [str(f) for f in
                    sorted(rtl_dir.glob("*.sv")) + sorted(rtl_dir.glob("*.v"))
                    if not (f.name.startswith("tb_") or f.stem.endswith("_tb"))]
-    tb: Optional[str] = None
+    candidates: List[str] = []
     for rel, pat in _TB_DISCOVERY_ORDER:
-        hits = sorted((project / rel).glob(pat)) if (project / rel).is_dir() \
-            else []
-        if hits:
-            tb = str(hits[0])
+        if (project / rel).is_dir():
+            candidates.extend(
+                str(path) for path in sorted((project / rel).glob(pat)))
+
+    # Keep the declared path order as the fallback, but do not prefer an inert
+    # connectivity harness over a later testbench that demonstrably drives a
+    # functional input.  The audit is the single producer of that vocabulary;
+    # discovery does not maintain a second definition of "stimulus".
+    tb: Optional[str] = candidates[0] if candidates else None
+    for candidate in candidates:
+        audit = functional_stimulus_audit(Path(candidate))
+        if audit["decidable"] and audit["driven"]:
+            tb = candidate
             break
+    if tb:
+        rtl.extend(_cov_sources_for_tb(project, Path(tb), rtl))
     return rtl, tb
+
+
+def _cov_sources_for_tb(project: Path, tb: Path,
+                        rtl: List[str]) -> List[str]:
+    """Resolve testbench-only helper modules from the design input.
+
+    This delegates source lookup to ``testbench_gen``'s existing scoped
+    resolver.  It does not invent another search root, and it does not infer
+    that a shared instance signal is stimulus; only
+    :func:`functional_stimulus_audit` produces that verdict.
+    """
+    try:
+        import testbench_gen as _tbg  # noqa: PLC0415
+    except Exception:  # noqa: BLE001 — discovery must retain its old fallback
+        return []
+
+    defined = set()
+    for source in rtl:
+        try:
+            source_body = _cov_strip_comments(
+                Path(source).read_text(errors="replace"))
+        except OSError:
+            continue
+        defined.update(re.findall(r"\bmodule\s+(\w+)\b", source_body))
+
+    try:
+        body = _cov_strip_comments(tb.read_text(errors="replace"))
+    except OSError:
+        return []
+    extra: List[str] = []
+    for match in re.finditer(r"(?m)^\s*(\w+)\s+\w+\s*\(", body):
+        module = match.group(1)
+        if module in defined or module in {
+                "module", "if", "for", "while", "case", "initial",
+                "always", "assign", "task", "function", "begin", "end"}:
+            continue
+        source = _tbg._resolve_from_design_input(project, module)
+        if source is None or str(source) in rtl or str(source) in extra:
+            continue
+        extra.append(str(source))
+        defined.update(re.findall(
+            r"\bmodule\s+(\w+)\b",
+            _cov_strip_comments(source.read_text(errors="replace"))))
+    return extra
 
 
 def cmd_measure_tb(args: argparse.Namespace) -> int:
@@ -769,8 +824,31 @@ VERILATOR_BIN_DEFAULT = os.environ.get(VERILATOR_BIN_ENV, "verilator")
 _COV_CLK_RST_RE = re.compile(
     r"(?i)(?:^|_)(?:clk|clock|rst|reset|resetn|rstn|nrst|por|sclk|hclk|aclk)"
     r"(?:_|\d|n)*$")
+#: Port-direction suffixes are spelling, not signal purpose.  Removing one
+#: before applying the existing grammar makes ``clk_i`` and ``rst_ni`` retain
+#: the same meaning as ``clk`` and ``rst_n``.  Deliberately do not treat every
+#: ``clk_*``/``reset_*`` prefix as infrastructure: names such as
+#: ``clk_enable_i`` and ``reset_value_i`` can be functional inputs.
+_COV_DIR_SUFFIX_RE = re.compile(r"(?i)_(?:ni|no|io|i|o|n|p)$")
+
+
+def _cov_is_clock_or_reset(name: str) -> bool:
+    """Apply the canonical clock/reset grammar after one direction suffix."""
+    if _COV_CLK_RST_RE.search(name):
+        return True
+    without_direction = _COV_DIR_SUFFIX_RE.sub("", name)
+    return (without_direction != name
+            and bool(_COV_CLK_RST_RE.search(without_direction)))
+
+
 #: `<name> = ...` (blocking, never `==`/`<=`/`>=`/`!=`) or `<name> <= ...`.
 _COV_DRIVE_RE_TMPL = r"\b{name}\s*(?:<=(?!=)|(?<![<>=!])=(?!=))"
+#: A field or selected element assigned after declaration is a real drive of
+#: its aggregate.  Requiring at least one selector avoids treating a typed
+#: declaration initializer as runtime stimulus.
+_COV_FIELD_DRIVE_RE_TMPL = (
+    r"\b{name}(?:\.\w+|\[[^\]]*\])+\s*"
+    r"(?:<=(?!=)|(?<![<>=!])=(?!=))")
 #: A module instantiation's named port connections: `.port(signal)`.
 _COV_PORT_BIND_RE = re.compile(r"\.\s*(\w+)\s*\(\s*([\w\[\]:\s]*?)\s*\)")
 #: A whole `reg ...;` declaration STATEMENT — the declaration, which is not a
@@ -866,18 +944,31 @@ def functional_stimulus_audit(tb_path: Path) -> Dict[str, Any]:
                          "reach the design cannot be determined")
         return out
     declared_reg = _cov_declared_regs(body)
-    drivable = sorted(bound & declared_reg)
+    # A packed/struct variable may be declared with a package type rather than
+    # ``reg`` and driven field by field.  Count that observed assignment using
+    # the same bound-signal population; do not guess that a signal shared by
+    # two instances is driven, because a DUT output feeding a monitor has that
+    # shape too.
+    stripped = _COV_REG_DECL_RE.sub(" ", body)
+    field_driven = {
+        name for name in bound
+        if re.search(_COV_FIELD_DRIVE_RE_TMPL.format(name=re.escape(name)),
+                     stripped)
+    }
+    drivable = sorted((bound & declared_reg) | field_driven)
     if not drivable:
-        out["reason"] = ("no bound signal is declared `reg`, so the drivable "
-                         "set cannot be determined")
+        out["reason"] = ("no bound signal is declared `reg` or has an "
+                         "observed field assignment, so the drivable set "
+                         "cannot be determined")
         return out
     # Remove the declarations themselves: initialising at declaration is not
     # stimulus, it is the starting value.
-    stripped = _COV_REG_DECL_RE.sub(" ", body)
     for name in drivable:
-        drives = re.search(_COV_DRIVE_RE_TMPL.format(name=re.escape(name)),
-                           stripped)
-        if _COV_CLK_RST_RE.search(name):
+        drives = (re.search(_COV_DRIVE_RE_TMPL.format(name=re.escape(name)),
+                            stripped)
+                  or re.search(_COV_FIELD_DRIVE_RE_TMPL.format(
+                      name=re.escape(name)), stripped))
+        if _cov_is_clock_or_reset(name):
             out["clock_reset"].append(name)
         elif drives:
             out["driven"].append(name)

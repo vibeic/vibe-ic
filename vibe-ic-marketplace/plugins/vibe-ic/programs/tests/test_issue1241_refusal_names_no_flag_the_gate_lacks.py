@@ -20,6 +20,7 @@ below — the callers that offer the flag must still be told about it, and the
 callers that do not must not be.
 """
 import importlib.util
+import os
 import sys
 from pathlib import Path
 
@@ -33,6 +34,19 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import _progress_run as _pr  # noqa: E402
 
 FLAG = "--corpus-may-be-absent"
+
+
+def _explicit_named_corpus_env():
+    """Child env for a test whose explicit ``--corpus`` is the subject.
+
+    Landing binds a real corpus in the parent session.  These children
+    deliberately name an absent path, so inheriting either half of that
+    binding would replace their input instead of testing it.
+    """
+    env = dict(os.environ)
+    env.pop(CL.CORPUS_ENV, None)
+    env.pop(CL.BOUND_SHA_ENV, None)
+    return env
 
 
 
@@ -135,7 +149,7 @@ def test_no_program_tells_the_reader_to_pass_a_flag_it_does_not_have():
             continue            # no corpus mode: it cannot print this refusal
         out = _pr.run(
             [sys.executable, str(path), "--corpus", "/nonexistent-xyz"],
-            capture_output=True, text=True)
+            capture_output=True, text=True, env=_explicit_named_corpus_env())
         checked += 1
         if FLAG in (out.stderr + out.stdout) and FLAG not in helptext:
             wrong.append(f"{prog} tells the reader to pass {FLAG} and its "
@@ -154,6 +168,7 @@ def test_the_gate_that_does_offer_the_flag_still_names_it():
     """
     out = _pr.run(
         [sys.executable, str(PROGRAMS / "ppa_head_to_head_check.py"),
-         "--corpus", "/nonexistent-xyz"], capture_output=True, text=True)
+         "--corpus", "/nonexistent-xyz"], capture_output=True, text=True,
+        env=_explicit_named_corpus_env())
     assert out.returncode == 2
     assert FLAG in out.stderr

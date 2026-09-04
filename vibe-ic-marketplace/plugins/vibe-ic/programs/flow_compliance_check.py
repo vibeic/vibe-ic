@@ -1660,6 +1660,12 @@ class StepResult:
     # a bare PASS. False on a step whose EVERY dispatched clause was vacuous -
     # that one is VACUOUS_PASS, which already says so.
     partial_vacuity_disclosed: bool = False
+    # A gate that actually ran, read a typed design declaration, and proved
+    # that its whole question is outside this design's declared contract. It
+    # is not a vacuous scan: the declaration is the examined subject. Keep
+    # these rows visible without charging them to the Step-level "examined
+    # nothing" numerator.
+    executed_declared_not_applicable: List[str] = field(default_factory=list)
     # vibe-ic#901 - True when THIS step reached VACUOUS_PASS through the
     # structured-JSON channel added here rather than through the pre-existing
     # rc=2 / stdout channel. Read by the ordering-violation pass so the new
@@ -1989,6 +1995,31 @@ def _glob_first(project: Path, pattern: str) -> List[str]:
 # never manufacture a green — which is what the `_car15_evidence` measurement
 # above says it would have done if it could.
 _STEP_BINDING_SCHEMA = 1
+
+# A project-wide match is not equally ambiguous in both degraded modes.
+# `no_step_record` means this run DID emit an attribution ledger, but the
+# ledger has no row tying the matching artefact to this step.  That is direct
+# evidence against a done claim and is therefore BLOCKING unconditionally.
+# `no_binding` means the run emitted no usable ledger at all.  Existing
+# published/phase-driven runs keep their historical verdict by default; the
+# producer-migration check is available through `--strict-step-binding`.
+# Literal OR-alternative credit and resolver disagreements are deliberately
+# not included: neither establishes that another step wrote the artefact.
+_BINDING_CODES_ALWAYS_BLOCKING = ("no_step_record",)
+
+
+def _binding_code_blocks(code: Any, strict_step_binding: bool) -> bool:
+    """Return whether one satisfied-but-unattributed output blocks DONE.
+
+    BLOCKING, not advisory: a matching file cannot certify a step when this
+    run's own ledger had the means to attribute it and did not.  Every
+    degraded case remains disclosed through ``output_binding`` even when the
+    backward-compatible ``no_binding`` arm is not made strict.
+    """
+    token = str(code or "")
+    if token in _BINDING_CODES_ALWAYS_BLOCKING:
+        return True
+    return strict_step_binding and token == "no_binding"
 
 
 def _binding_stat_key(project: Path) -> Tuple[Any, ...]:
@@ -3231,11 +3262,20 @@ def _check_program_exit_zero(project: Path, cmd_str: str) -> tuple[bool, str]:
         if substantive_alternate:
             pass
         elif reason_class in _reason_taxonomy.SKIP_ELIGIBLE:
-            verdict = "VACUOUS_PASS"
-            # Downstream aggregation treats everything after the prefix as
-            # the command identity.  The diagnostic suffix was needed here
-            # for classification, not in that established marker payload.
-            out = f"{_VACUOUS_HINT_PREFIX}{cmd_str}"
+            if (reason_class == _reason_taxonomy.DESIGN_DECLARED_NA
+                    and _report_proves_executed_design_na(
+                        project, report, cmd_str)):
+                # The program read the design-owned declaration that proves
+                # the audited class does not exist. That is an executed N/A
+                # contract, not an empty scan.
+                verdict = "NOT_APPLICABLE"
+                out = f"{_EXECUTED_DECLARED_NA_HINT_PREFIX}{cmd_str}"
+            else:
+                verdict = "VACUOUS_PASS"
+                # Downstream aggregation treats everything after the prefix
+                # as the command identity. The diagnostic suffix was needed
+                # here for classification, not in that marker payload.
+                out = f"{_VACUOUS_HINT_PREFIX}{cmd_str}"
         else:
             verdict = ("BLOCKED" if reason_class
                        == _reason_taxonomy.BLOCKED_BY_UPSTREAM
@@ -3272,7 +3312,13 @@ def _check_program_exit_zero(project: Path, cmd_str: str) -> tuple[bool, str]:
             # SAME helper `_evaluate_gate` uses, so the ledger row and the step
             # tier cannot disagree about one gate's own report.
             if reason_class in _reason_taxonomy.SKIP_ELIGIBLE:
-                verdict = "VACUOUS_PASS"
+                if (reason_class == _reason_taxonomy.DESIGN_DECLARED_NA
+                        and _report_proves_executed_design_na(
+                            project, report, cmd_str)):
+                    verdict = "NOT_APPLICABLE"
+                    out = f"{_EXECUTED_DECLARED_NA_HINT_PREFIX}{cmd_str}"
+                else:
+                    verdict = "VACUOUS_PASS"
             else:
                 verdict = ("BLOCKED" if reason_class
                            == _reason_taxonomy.BLOCKED_BY_UPSTREAM
@@ -3474,6 +3520,12 @@ def __check_program_exit_zero(project: Path, cmd_str: str) -> _ProgramCheckOutco
 # per-step listing so reviewers can see which steps actually executed
 # vs. were vacuously satisfied.
 _VACUOUS_HINT_PREFIX = "__VACUOUS_HINT__: "
+
+# A program reached and read a design-owned applicability declaration (for
+# example L3 explicitly declares no command opcodes). This is deliberately
+# separate from `_VACUOUS_HINT_PREFIX`: the former examined a typed subject and
+# decided N/A, while the latter examined no subject.
+_EXECUTED_DECLARED_NA_HINT_PREFIX = "__EXECUTED_DECLARED_NA_HINT__: "
 
 # ── STRUCTURE-ONLY verdict tier ───────────────────────────────────────────
 # The tally line had no way to say the third thing a step can be. It said a
@@ -4099,6 +4151,83 @@ def _command_json_report(project: Path, cmd: str) -> Optional[Dict[str, Any]]:
     except Exception:
         return None
     return data if isinstance(data, dict) else None
+
+
+def _report_proves_executed_design_na(
+        project: Path, report: Any, command: str) -> bool:
+    """Validate an executed, design-owned zero-population contract.
+
+    A reason token alone is not evidence: any gate could label an empty scan
+    ``DESIGN_DECLARED_NA``. The report must bind itself to the program that the
+    clause actually executed, identify a project-relative JSON declaration,
+    name the population fields it examined, state a zero count, and agree with
+    the bytes currently in that declaration. Optional typed assertions are
+    checked against the same source. This is deliberately chip-agnostic.
+    """
+    if (_reason_taxonomy.report_reason_class(report)
+            != _reason_taxonomy.DESIGN_DECLARED_NA):
+        return False
+    if not isinstance(report, dict):
+        return False
+    if report.get("program") != _gate_name(command):
+        return False
+    evidence = report.get("applicability_evidence")
+    if not isinstance(evidence, dict):
+        return False
+    if evidence.get("kind") != "design-declared-zero-population":
+        return False
+    rel = evidence.get("declaration_path")
+    paths = evidence.get("population_paths")
+    if (not isinstance(rel, str) or not rel.strip() or Path(rel).is_absolute()
+            or not isinstance(paths, list) or not paths
+            or not all(isinstance(p, str) and p.strip() for p in paths)
+            or evidence.get("declared_population") != 0):
+        return False
+    try:
+        root = project.resolve()
+        source = (project / rel).resolve()
+        if not source.is_relative_to(root) or not source.is_file():
+            return False
+        doc = json.loads(source.read_text(errors="replace"))
+    except (OSError, ValueError, TypeError):
+        return False
+    if not isinstance(doc, dict):
+        return False
+
+    missing = object()
+
+    def _value_at(path: str) -> Any:
+        value: Any = doc
+        for part in path.split("."):
+            if not isinstance(value, dict) or part not in value:
+                return missing
+            value = value[part]
+        return value
+
+    actual_population = 0
+    for path in paths:
+        value = _value_at(path)
+        if value is missing or value is None:
+            continue
+        if isinstance(value, (list, dict)):
+            actual_population += len(value)
+        else:
+            # A scalar at a declared population path is one item, not zero.
+            actual_population += 1
+    if actual_population != 0:
+        return False
+
+    assertions = evidence.get("assertions", [])
+    if not isinstance(assertions, list):
+        return False
+    for assertion in assertions:
+        if (not isinstance(assertion, dict)
+                or not isinstance(assertion.get("path"), str)
+                or "equals" not in assertion
+                or _value_at(assertion["path"]) is missing
+                or _value_at(assertion["path"]) != assertion["equals"]):
+            return False
+    return True
 
 
 def _report_verdict(report: Any) -> Optional[str]:
@@ -9253,7 +9382,9 @@ def _evaluate_gate(project: Path, gate: Dict[str, Any],
         # anything is decided about it, so the denominator cannot depend on the
         # outcome.
         reasons.append(f"{_RAN_HINT_PREFIX}{_cmd}")
-        if passed and _json_report_signals_vacuous(project, _cmd):
+        if (passed
+                and not out.startswith(_EXECUTED_DECLARED_NA_HINT_PREFIX)
+                and _json_report_signals_vacuous(project, _cmd)):
             # vibe-ic#901 - the gate exited 0 and declared, in the `--json`
             # report THIS clause named, that it examined nothing. That is a
             # disclosure and it was reaching no consumer. Read from the FILE,
@@ -9272,6 +9403,8 @@ def _evaluate_gate(project: Path, gate: Dict[str, Any],
         if not passed:
             reasons.append(f"program failed: {_cmd}")
             reasons.append(f"output: {out[:200]}")
+        elif out.startswith(_EXECUTED_DECLARED_NA_HINT_PREFIX):
+            reasons.append(out)
         elif out.startswith(_VACUOUS_HINT_PREFIX):
             # Wave 93 — bubble the rc=2 vacuous signal up so check_step
             # promotes the step's status to VACUOUS_PASS instead of PASS.
@@ -9374,7 +9507,9 @@ def _evaluate_gate(project: Path, gate: Dict[str, Any],
         # without reaching here and is deliberately NOT counted: it examined
         # nothing AND declared nothing, which is a different hole.
         reasons.append(f"{_RAN_HINT_PREFIX}{cmd}")
-        if passed and _json_report_signals_vacuous(project, cmd):
+        if (passed
+                and not out.startswith(_EXECUTED_DECLARED_NA_HINT_PREFIX)
+                and _json_report_signals_vacuous(project, cmd)):
             # vibe-ic#901 - the same structured disclosure, read in the OPTIONAL
             # slot too. A disclosure only counts if the consumer reads it in
             # BOTH slots; the same programs are wired through each.
@@ -9385,6 +9520,8 @@ def _evaluate_gate(project: Path, gate: Dict[str, Any],
         if not passed:
             reasons.append(f"optional program failed: {cmd}")
             reasons.append(f"output: {out[:200]}")
+        elif out.startswith(_EXECUTED_DECLARED_NA_HINT_PREFIX):
+            reasons.append(out)
         elif out.startswith(_WAIVER_HINT_PREFIX):
             # ORGANIC #654 — an OPTIONAL gate program may also signal
             # PASS_WITH_WAIVERS (rc=3 + sentinel). _check_program_exit_zero
@@ -9543,7 +9680,13 @@ def _evaluate_gate(project: Path, gate: Dict[str, Any],
             _structured_norm = str(
                 record.get("structured_verdict") or "").upper().replace(
                     "_", "-")
-            if _structured_norm in _SELF_SKIP_VERDICTS:
+            if (record.get("reason_class")
+                    == _reason_taxonomy.DESIGN_DECLARED_NA
+                    and _report_proves_executed_design_na(
+                        project, _command_json_report(project, cmd), cmd)):
+                reasons.append(
+                    f"{_EXECUTED_DECLARED_NA_HINT_PREFIX}{cmd}")
+            elif _structured_norm in _SELF_SKIP_VERDICTS:
                 reasons.append(f"{_SKIP_HINT_PREFIX}{cmd} "
                                f"[verdict={record['verdict']}, "
                                f"reason_class={record['reason_class']}]")
@@ -9557,6 +9700,8 @@ def _evaluate_gate(project: Path, gate: Dict[str, Any],
                            f"reason_class={record['reason_class']}]")
         elif enforcement == "APPROVED_WAIVER":
             reasons.append(f"{_WAIVER_HINT_PREFIX}{cmd}")
+        elif out.startswith(_EXECUTED_DECLARED_NA_HINT_PREFIX):
+            reasons.append(out)
         elif out.startswith(_VACUOUS_HINT_PREFIX):
             reasons.append(out)
         elif enforcement == "NON_BLOCKING_ADVISORY":
@@ -9613,6 +9758,7 @@ def _evaluate_gate(project: Path, gate: Dict[str, Any],
                                 _SKIP_HINT_PREFIX,
                                 _WAIVER_HINT_PREFIX,
                                 _INCOMPLETE_HINT_PREFIX,
+                                _EXECUTED_DECLARED_NA_HINT_PREFIX,
                             )))
                 return False, reasons
             for hint in r:
@@ -9626,6 +9772,8 @@ def _evaluate_gate(project: Path, gate: Dict[str, Any],
                 elif hint.startswith(_JSON_VACUOUS_HINT_PREFIX):
                     reasons.append(hint)
                 elif hint.startswith(_VACUOUS_HINT_PREFIX):
+                    reasons.append(hint)
+                elif hint.startswith(_EXECUTED_DECLARED_NA_HINT_PREFIX):
                     reasons.append(hint)
                 elif hint.startswith(_WAIVER_HINT_PREFIX):
                     # #651 — a PASS_WITH_WAIVERS sub-gate makes the whole
@@ -9712,7 +9860,10 @@ def _evaluate_gate(project: Path, gate: Dict[str, Any],
                 # one branch over.
                 reasons.extend(
                     h for h in r
-                    if h.startswith(_NOT_APPLICABLE_HINT_PREFIX))
+                    if h.startswith((
+                        _NOT_APPLICABLE_HINT_PREFIX,
+                        _EXECUTED_DECLARED_NA_HINT_PREFIX,
+                    )))
                 return True, reasons
         reasons.append(f"no sub-gate passed in any_of")
         return False, reasons
@@ -11734,7 +11885,8 @@ def _emit_step_metrics(project: Path, step: Dict[str, Any],
 
 def check_step(project: Path, step: Dict[str, Any], waivers: Dict,
                skip_analog: bool = False, skip_hardware: bool = False,
-               strict_audit_evidence: bool = True) -> StepResult:
+               strict_audit_evidence: bool = True,
+               strict_step_binding: bool = False) -> StepResult:
     # Kept as an API-compatibility argument for callers that adopted the
     # 2026-07-28 opt-in.  There is deliberately no lenient branch any more:
     # an audit-created artefact is never run evidence, even when a legacy
@@ -12266,6 +12418,9 @@ def check_step(project: Path, step: Dict[str, Any], waivers: Dict,
         # the legacy bucket already decides.
         json_vacuous_hints = [r for r in reasons
                               if r.startswith(_JSON_VACUOUS_HINT_PREFIX)]
+        executed_declared_na_hints = [
+            r for r in reasons
+            if r.startswith(_EXECUTED_DECLARED_NA_HINT_PREFIX)]
         # Every clause that disclosed emptiness, by whichever channel, without
         # double-counting a clause that used both.
         all_vacuous_cmds = {r[len(_VACUOUS_HINT_PREFIX):] for r in vacuous_hints}
@@ -12282,7 +12437,9 @@ def check_step(project: Path, step: Dict[str, Any], waivers: Dict,
                             and not r.startswith(_ADVISORY_RECORD_HINT_PREFIX)
                             and not r.startswith(_SUBSTANTIVE_HINT_PREFIX)
                             and not r.startswith(_INCOMPLETE_HINT_PREFIX)
-                            and not r.startswith(_NOT_APPLICABLE_HINT_PREFIX)]
+                            and not r.startswith(_NOT_APPLICABLE_HINT_PREFIX)
+                            and not r.startswith(
+                                _EXECUTED_DECLARED_NA_HINT_PREFIX)]
         if passed and incomplete_hints and not non_hint_reasons:
             # An applicable question that was not examined outranks every
             # benign non-pass tier beside it.  In particular, a declared N/A
@@ -12495,6 +12652,16 @@ def check_step(project: Path, step: Dict[str, Any], waivers: Dict,
                     f"{max(len(ran_hints), len(all_vacuous_cmds))} gate "
                     f"clause(s) examined nothing): "
                     f"{h[len(_JSON_VACUOUS_HINT_PREFIX):]}")
+        if executed_declared_na_hints:
+            result.executed_declared_not_applicable = [
+                h[len(_EXECUTED_DECLARED_NA_HINT_PREFIX):]
+                for h in executed_declared_na_hints]
+            for h in executed_declared_na_hints:
+                result.reasons.append(
+                    "DESIGN-DECLARED-N/A (gate executed; typed design "
+                    "declaration was examined, so this is not empty-scan "
+                    "vacuity): "
+                    f"{h[len(_EXECUTED_DECLARED_NA_HINT_PREFIX):]}")
         # WHATEVER TIER WAS CHOSEN, A WAIVER THAT LOST THE TIER RACE IS STILL
         # SAID. `waiver_hints` is held out of `non_hint_reasons` above so a
         # PASS_WITH_WAIVERS gate cannot become a reason a step FAILED — and it
@@ -12805,6 +12972,36 @@ def check_step(project: Path, step: Dict[str, Any], waivers: Dict,
             f"not just one)"
             + (f" — {len(_by_record)} of them on this step's OWN write record: "
                f"{_by_record}" if _by_record else ""))
+
+    # A DONE claim may not rest on a project-wide file when this run's own
+    # ledger proves that THIS step did not record it.  Use the untruncated
+    # per-spec population: ``output_binding['specs']`` is intentionally capped
+    # for report size, and verdict logic must never inherit that display cap.
+    #
+    # The two degraded states stay separate.  `no_step_record` always blocks;
+    # `no_binding` preserves the established default for legacy runs and only
+    # blocks under the explicit producer-migration flag.  The status is FAIL,
+    # not MISSING: the file exists, but its ownership evidence does not.
+    if _T.is_done_claim(result.status) and result.output_binding:
+        _unbound = [
+            spec for spec in _bind_specs
+            if spec.get("satisfied")
+            and spec.get("mode") == "project_glob"
+            and _binding_code_blocks(spec.get("code"), strict_step_binding)
+        ]
+        if _unbound:
+            _codes = sorted({str(spec.get("code")) for spec in _unbound})
+            result.status = "FAIL"
+            result.reasons.append(
+                f"UNATTRIBUTED OUTPUT: {len(_unbound)} of "
+                f"{result.output_binding['n_specs']} declared output(s) were "
+                f"discharged by a project-wide glob with nothing tying the "
+                f"file to THIS step (codes={_codes}). A file that exists "
+                f"somewhere under the project is not proof this step produced "
+                f"it. REMEDY: the run must emit its per-step write record "
+                f"(steps/<...>/written.json, or reports/write_ledger.json via "
+                f"step_write_ledger.emit); relaxing this check is not the "
+                f"remedy.")
 
     # natural verdict is FAIL or MISSING AND an ENV_UNAVAILABLE-tier
     # waiver matches this step, convert to WAIVED-DEFERRED. The
@@ -13661,6 +13858,14 @@ def main(argv: Optional[List[str]] = None) -> int:
               "flag cannot weaken or strengthen it."),
     )
     p.add_argument(
+        "--strict-step-binding", action="store_true",
+        help=("Also block a done claim when the run emitted no usable "
+              "per-step write record at all (`no_binding`). "
+              "`no_step_record` is always blocking: when a run has an "
+              "attribution ledger and this step is absent, a project-wide "
+              "match cannot certify this step."),
+    )
+    p.add_argument(
         "--phase", choices=["2", "3", "all"],
         default="all",
         help=("v0.119.29: limit step set to a single phase. `--phase 2` "
@@ -14239,6 +14444,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     skip_analog = getattr(args, 'skip_analog', False)
     skip_hardware = getattr(args, 'skip_hardware', False)
     strict_audit_evidence = getattr(args, 'strict_audit_evidence', False)
+    strict_step_binding = getattr(args, 'strict_step_binding', False)
     # Wave 91 / v1.6.15 — when the in-process pre-PnR Yosys gate emitted
     # a synthetic StepResult for id=14, suppress the YAML-driven Step 14
     # entry so the report doesn't list the same gate twice. The YAML
@@ -14263,7 +14469,8 @@ def main(argv: Optional[List[str]] = None) -> int:
             _r = check_step(
                 project, step, waivers,
                 skip_analog=skip_analog, skip_hardware=skip_hardware,
-                strict_audit_evidence=strict_audit_evidence)
+                strict_audit_evidence=strict_audit_evidence,
+                strict_step_binding=strict_step_binding)
             _emit_step_metrics(project, step, _r)
             results.append(_r)
     else:
@@ -14275,7 +14482,8 @@ def main(argv: Optional[List[str]] = None) -> int:
                 _ex.submit(check_step, project, step, waivers,
                            skip_analog=skip_analog,
                            skip_hardware=skip_hardware,
-                           strict_audit_evidence=strict_audit_evidence)
+                           strict_audit_evidence=strict_audit_evidence,
+                           strict_step_binding=strict_step_binding)
                 for step in _eval_steps
             ]
             # THE SAME EMIT ON BOTH BRANCHES. A metrics row that appears only

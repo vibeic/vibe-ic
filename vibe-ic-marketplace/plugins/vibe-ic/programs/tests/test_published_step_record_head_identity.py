@@ -51,6 +51,14 @@ def record_repo(tmp_path, monkeypatch):
         D3, "run_roots",
         lambda: {source_label: D3.RunRoot(source_label, "published", root)})
     monkeypatch.setattr(D3, "_is_published_cell", lambda _path: True)
+    # This fixture grades one thing: whether mutable worktree bytes can answer
+    # for the committed STEP_RECORD blob.  Step 30 also has two unrelated
+    # manifest citations whose registered run root is deliberately
+    # unreachable and therefore makes the real cell NOT_MEASURED.  Holding
+    # that independent axis fixed keeps the positive control positive while
+    # every byte-binding negative control below still exercises the shipped
+    # record reader.
+    monkeypatch.setattr(D3, "unanswerable_citations", lambda _step: ())
     yield root, target, rel, doc
     D3.tracked_under.cache_clear()
     D3._head_record_blob.cache_clear()
@@ -78,8 +86,16 @@ def _assert_not_enforced() -> None:
     assert observed_hits == [False, False], (
         "mutable record bytes changed the two concrete required-output "
         f"answers: observed_hits={observed_hits}")
-    assert D3.matrix_not_measured_reason(STEP) is not None
-    assert D3.matrix_cell_state(STEP) == "NOT_MEASURED"
+    missing, details = D3.audit_step(STEP)
+    assert missing, (
+        "mutable or absent record bytes still produced a green D3 predicate: "
+        + repr(details))
+    # `ENFORCED` is the matrix execution state, not a PASS verdict.  This
+    # fixture intentionally holds the unrelated unanswerable-citation axis
+    # empty; the assertion above proves the active predicate rejects the bad
+    # record instead of relabelling that rejection NOT_MEASURED.
+    assert D3.matrix_not_measured_reason(STEP) is None
+    assert D3.matrix_cell_state(STEP) == "ENFORCED"
 
 
 def test_exact_committed_record_bytes_are_the_positive_control(record_repo):

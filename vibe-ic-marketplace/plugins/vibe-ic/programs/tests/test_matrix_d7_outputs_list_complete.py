@@ -465,19 +465,104 @@ def test_argv_forwarding_wrapper_flags_resolve_through_the_delegate():
     )
 
 
+def test_a_same_gate_reader_is_the_only_thing_the_owner_argument_excuses(
+        monkeypatch):
+    """``_consumers_of_output``'s ``owner`` drops the writer's OWN gate — nothing else.
+
+    The narrowing it implements is the reason step 39 can stop declaring a
+    report only its own gate writes. That is a rule change, so it is measured
+    in BOTH directions over the LIVE yaml, never over a synthetic graph:
+
+      * FORWARD — a reader that is the second clause of the writer's own gate
+        is dropped. The invocation that wrote the file is the invocation that
+        reads it, so its absence cannot go unnoticed, which is the exemption
+        the module's docstring already states for a same-PROGRAM reader.
+      * REVERSE — every other reader survives, whoever asks. A ``program:``
+        consumer, and the gate of any OTHER step, are outside the invocation
+        that wrote the file; those are the readers whose silence the rule
+        exists to prevent, and dropping one would be disabling the rule rather
+        than narrowing it.
+
+    Both populations are asserted NON-EMPTY. A `dropped <= {self}` invariant is
+    trivially true over an empty scan, and an index that collapsed to nothing
+    would satisfy it while measuring no artefact at all.
+    """
+    excused, kept = [], []
+    for sid in F.step_ids():
+        key = F.normalize_id(sid)
+        self_gate = f"gate:step{key}"
+        for path, writer in G.gate_output_targets(sid):
+            before = set(G._consumers_of_output(path, writer))
+            after = set(G._consumers_of_output(path, writer, key))
+            assert before - after <= {self_gate}, (
+                f"step {key}: the owner argument dropped a reader that is NOT "
+                f"this step's own gate — {sorted(before - after)} on {path}")
+            assert after == before - {self_gate}, (
+                f"step {key}: {path} — owner-aware readers {sorted(after)} are "
+                f"not the owner-blind readers minus {self_gate}")
+            if before - after:
+                excused.append((key, path))
+            outside = sorted(after)
+            if outside:
+                kept.append((key, path, outside))
+                # A step OTHER than the writer's still sees its own gate read.
+                other = "37" if key != "37" else "39"
+                assert set(G._consumers_of_output(path, writer, other)) >= (
+                    after - {f"gate:step{other}"}), (key, path)
+    assert excused, (
+        "no gate output has a same-gate reader, so the narrowing this test "
+        "grades excuses nothing — the extraction has collapsed")
+    assert kept, (
+        "no gate output has a reader outside its own gate, so the REVERSE "
+        "half of this test grades an empty set")
+
+    # THE OTHER-GATE READER HAS NO LIVE WITNESS, so the live half above cannot
+    # see it. MEASURED on this yaml: of the 28 gate-output targets that have a
+    # consumer, every `gate:` consumer is the writer's own step and the other
+    # 22 readers are `program:`. A widened exclusion — drop EVERY gate consumer,
+    # not just the owner's — therefore satisfies every assertion above while
+    # disabling the rule for a whole class of reader. The class is exercised
+    # here against a synthesized consumer index, because a guard whose only
+    # witness is the case that already works is not a guard.
+    sid, path = excused[0]
+    writer = dict(G.gate_output_targets(sid))[path]
+    other = "37" if sid != "37" else "39"
+    monkeypatch.setattr(
+        G, "flow_consumers", lambda: {path: frozenset({sid, other})})
+    assert f"gate:step{other}" in G._consumers_of_output(path, writer, sid), (
+        f"a DIFFERENT step's gate reading {path} was dropped along with the "
+        f"writer's own — the exclusion is disabling the rule, not narrowing it")
+    assert f"gate:step{sid}" not in G._consumers_of_output(path, writer, sid)
+    assert f"gate:step{sid}" in G._consumers_of_output(path, writer, other), (
+        f"step {other} asking about {path} must still see step {sid}'s gate "
+        f"read it — the exclusion is keyed on the asker, not on the path")
+
+
 def test_evidence_class_artefacts_are_genuinely_self_verifying():
     """The REPORTED (not enforced) class really is self-verifying.
 
     An undeclared gate output is exempted from enforcement only when its ONLY
-    reader is the program that wrote it — the audit's own standard ("the gate
-    program both produces and checks them in the same invocation"). If an
-    exempted artefact turns out to have an outside reader, the exemption is
-    laundering a real finding and this goes red.
+    reader is inside the gate invocation that wrote it — the audit's own
+    standard ("the gate program both produces and checks them in the same
+    invocation"). If an exempted artefact turns out to have an outside reader,
+    the exemption is laundering a real finding and this goes red.
+
+    ASKED AT THE SAME GRANULARITY THE RULE USES. ``_consumers_of_output`` is
+    called with the OWNING STEP, exactly as ``evidence_findings`` calls it, so
+    this guard tests the exemption the module actually grants. Called without
+    it, the guard would be re-deriving a DIFFERENT exemption from the one under
+    test and would report every same-gate reader as a leak — which is the shape
+    that fires on step 7 and step 39, two paths whose only reader is the second
+    clause of their own gate. Everything the guard exists to catch is
+    unaffected: a ``program:`` reader and any OTHER step's gate still count, and
+    ``test_a_same_gate_reader_is_the_only_thing_the_owner_argument_excuses``
+    below proves this call still goes red when one appears.
     """
     leaked = []
     for sid in F.step_ids():
         for finding in G.evidence_findings(sid):
-            readers = G._consumers_of_output(finding.path, finding.producer)
+            readers = G._consumers_of_output(
+                finding.path, finding.producer, F.normalize_id(sid))
             if readers:
                 leaked.append((F.normalize_id(sid), finding.path, readers))
     assert not leaked, (
@@ -492,7 +577,7 @@ def test_evidence_class_artefacts_are_genuinely_self_verifying():
 
 
 def test_conditional_class_is_earned_from_the_flows_own_gate():
-    """The W1/W4 optionality exemption is derived from the yaml, per path.
+    """The W1/W2/W4 optionality exemption is derived from the yaml, per path.
 
     The exemption is the one thing in this dimension that turns a red cell
     green without anybody declaring anything, so it is the one thing most able
@@ -530,6 +615,16 @@ def test_conditional_class_is_earned_from_the_flows_own_gate():
     )
 
     for sid, finding in population:
+        if finding.rule == G.C2:
+            assert finding.path in G.conditional_gate_input_paths(sid), (
+                f"step {sid}: {finding.path} is exempted as a conditional "
+                "gate input, but at least one reading clause is unconditional"
+            )
+            assert finding.consumers, (
+                f"step {sid}: {finding.path} has no gate consumer"
+            )
+            continue
+
         clauses = [
             c for c in F.gate_clauses(sid)
             if any(p == finding.path for p, _prog in G.clause_output_targets(c))
@@ -570,6 +665,40 @@ def test_conditional_class_is_earned_from_the_flows_own_gate():
         assert not (cond & ev), (
             f"step {F.normalize_id(sid)}: {sorted(cond & ev)} is reported as "
             f"BOTH conditional and evidence"
+        )
+        enforced = {f.path for f in G.findings_for(sid)}
+        assert not (cond & enforced), (
+            f"step {F.normalize_id(sid)}: {sorted(cond & enforced)} is both "
+            "reported as conditionally produced and enforced as an "
+            "unconditional required-output omission"
+        )
+
+
+def test_step34_report_is_conditional_only_while_its_gate_really_is(tmp_path):
+    """Consumer-side optionality is derived from the clause, both directions."""
+    assert _STEP34_DEFAULT in G.conditional_gate_input_paths("34")
+
+    def edit(doc):
+        hit = 0
+        for step in doc["steps"]:
+            if F.normalize_id(step.get("id")) != "34":
+                continue
+            for clause in step.get("gate", {}).get("all_of", []):
+                spec = clause.get(F.K_OPTIONAL)
+                if not isinstance(spec, dict):
+                    continue
+                if str(spec.get("command", "")).startswith(
+                        "metal_fill_emit . --verify-only"):
+                    clause[F.K_PROGRAM] = spec["command"]
+                    del clause[F.K_OPTIONAL]
+                    hit += 1
+        assert hit == 1, f"Step 34 metal-fill clause not found exactly once: {hit}"
+
+    path = _mutated_flow(tmp_path, "step34_unconditional_fill_gate.yaml", edit)
+    with _SwappedFlow(path):
+        assert _STEP34_DEFAULT not in G.conditional_gate_input_paths("34"), (
+            "the report stayed exempt after its only reading clause became "
+            "unconditional"
         )
 
 
@@ -1927,9 +2056,15 @@ def test_d7_a_record_whose_emitter_withheld_the_residual_is_refused(monkeypatch)
     with _probe_run_root("d7_record_withheld_") as (probe, commit):
         # No t0 marker and no orchestrator summary -> the window is UNKNOWN and
         # the emitter withholds the D7 residual. Its own doing, not this test's.
-        (probe / "phase3" / "stage3" / "pnr").mkdir(parents=True)
-        (probe / "phase3" / "stage3" / "pnr" / "openroad.log").write_text("x\n")
-        commit("phase3/stage3/pnr/openroad.log")
+        # This is deliberately a test-owned residual path. The old fixture used
+        # openroad.log, which became a real Step-21 required output in ab78a6ea9;
+        # after that declaration the emitter correctly produced a zero residual,
+        # so the reverse arm stopped exercising record binding at all.
+        residual = "reports/d7_withheld_residual_probe.json"
+        target = probe / residual
+        target.parent.mkdir(parents=True)
+        target.write_text("{}\n")
+        commit(residual)
         assert SWL.emit(probe).get("ok")
         commit(R.RECORD_REL)
         doc = json.loads((probe / R.RECORD_REL).read_text())
@@ -1946,8 +2081,8 @@ def test_d7_a_record_whose_emitter_withheld_the_residual_is_refused(monkeypatch)
 
         # REVERSE: give the same tree a t0 marker, re-emit, and it binds.
         _start_run(probe)
-        (probe / "phase3" / "stage3" / "pnr" / "openroad.log").write_text("yy\n")
-        commit("phase3/stage3/pnr/openroad.log")
+        target.write_text("{\"second_write\": true}\n")
+        commit(residual)
         assert SWL.emit(probe).get("ok")
         commit(R.RECORD_REL)
         _bind(monkeypatch, probe)

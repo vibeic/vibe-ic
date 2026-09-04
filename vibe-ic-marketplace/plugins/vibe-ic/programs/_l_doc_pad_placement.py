@@ -175,6 +175,12 @@ class PadPlacement:
     source: str                                   # project-relative path
     heading: str                                  # the section's own title
     side_signals: Dict[str, List[str]] = field(default_factory=dict)
+    # A row may state a design-owned GROUP ("data bus", "GPIO pins")
+    # instead of spelling every member.  Keep that statement separate from
+    # exact signal tokens: only a consumer which also owns the declared port
+    # population can resolve it, and an unresolved group must never silently
+    # become an empty side.
+    side_groups: Dict[str, str] = field(default_factory=dict)
     min_pad_distance_um: Optional[float] = None   # RECORDED, NEVER CONSUMED
     delegates_io_library_to_pdk: bool = False
 
@@ -183,6 +189,7 @@ class PadPlacement:
             "source": self.source,
             "heading": self.heading,
             "side_signals": {s: list(v) for s, v in self.side_signals.items()},
+            "side_groups": dict(self.side_groups),
             "min_pad_distance_um": self.min_pad_distance_um,
             "min_pad_distance_is_not_edge_spacing": True,
             "delegates_io_library_to_pdk": self.delegates_io_library_to_pdk,
@@ -247,6 +254,8 @@ def parse_pad_placement(text: str, source: str) -> Optional[PadPlacement]:
                 and _PLACEMENT_TOKEN_RE.search(title)):
             continue
         side_signals: Dict[str, List[str]] = {}
+        side_groups: Dict[str, str] = {}
+        seen_sides = set()
         for line in body.splitlines():
             cells = _cells(line)
             if not cells or len(cells) < 2:
@@ -263,16 +272,21 @@ def parse_pad_placement(text: str, source: str) -> Optional[PadPlacement]:
                 continue
             signals = [t.strip() for t in _TICKED_RE.findall(cells[1])]
             signals = [s for s in signals if s]
-            if not signals:
+            group = cells[1].strip() if not signals else ""
+            if not signals and not group:
                 continue
-            if side in side_signals and side_signals[side] != signals:
+            if side in seen_sides:
                 raise PadPlacementError(
                     "L_DOC_PAD_SIDE_DECLARED_TWICE",
                     f"{source}: section {title!r} assigns side {side} twice, "
-                    f"to {side_signals[side]} and to {signals}. Nothing here "
+                    "to two different rows. Nothing here "
                     f"can say which row the design meant.")
-            side_signals[side] = signals
-        if not side_signals:
+            seen_sides.add(side)
+            if signals:
+                side_signals[side] = signals
+            else:
+                side_groups[side] = group
+        if not side_signals and not side_groups:
             continue
         md = _MIN_DISTANCE_RE.search(body)
         # The one PROSE value in this section, so it gets the house prose
@@ -299,6 +313,7 @@ def parse_pad_placement(text: str, source: str) -> Optional[PadPlacement]:
                 md = None
         return PadPlacement(
             source=source, heading=title, side_signals=side_signals,
+            side_groups=side_groups,
             min_pad_distance_um=float(md.group("v")) if md else None,
             delegates_io_library_to_pdk=delegates)
     return None

@@ -161,6 +161,7 @@ EXIT CODES
 from __future__ import annotations
 
 import argparse
+import ast
 import ctypes
 import errno
 import importlib.util
@@ -193,6 +194,10 @@ from _pytest_progress_plugin import COLLECT_SCAN_STRIDE
 RC_OK = 0
 RC_RED = 1
 RC_NORECORD = 2
+
+#: pytest's `ExitCode.NO_TESTS_COLLECTED`. Spelled once, read in the two places
+#: that must agree: the record-admission clause and `_zero_collect`.
+_EXIT_NO_TESTS_COLLECTED = 5
 RC_CANNOT_ASK = 3
 
 #: No-pytest-progress grace, not a duration estimate. The inner pytest guard is
@@ -200,6 +205,27 @@ RC_CANNOT_ASK = 3
 #: healthy session that keeps completing pytest stages can run indefinitely.
 DEFAULT_STALL_AFTER = 300
 DEFAULT_AGGREGATE_STALL_AFTER = 300
+
+#: A FILE MAY DECLARE THAT ITS OWN WORK IS LEGITIMATELY SILENT FOR LONGER, and
+#: this is the name it declares it under. READ AS A LITERAL FROM THE FILE'S AST
+#: -- never imported, never executed -- so declaring one costs no trust.
+#:
+#: WHY THIS EXISTS RATHER THAN A BIGGER `--stall-after`. `--stall-after` bounds
+#: SILENCE for the whole selection, and raising it for everyone to accommodate
+#: three files is the "make the complaint stop" repair this repo removes from
+#: gates one at a time: it would blind the supervisor to a genuine hang in the
+#: other 3188. A declaration is per file, is in the file, is reviewable in the
+#: diff that adds it, and every file that declares NOTHING keeps the base grace
+#: to the second.
+#:
+#: WHAT IT IS NOT. It is not a runtime bound and it does not exempt anything: a
+#: file that declares 900 s and then wedges is still killed and still NORECORD,
+#: 900 s later. `_SILENCE_BUDGET_CEILING_S` is the point past which a
+#: declaration stops being a declaration and becomes "do not supervise me"; a
+#: file over it is REFUSED by name rather than clamped, because a silently
+#: clamped declaration is a number nobody reads again.
+_SILENCE_BUDGET_NAME = "VIBEIC_SILENCE_BUDGET_S"
+_SILENCE_BUDGET_CEILING_S = 3600
 DEFAULT_FALLBACK_JOBS = 8
 DEFAULT_FALLBACK_RESCUE_JOBS = 32
 DEFAULT_POLL_S = 2
@@ -1997,6 +2023,97 @@ def _per_file_truncation(pytest_argv: Sequence[str], rc: Optional[int],
     return truncation, _red_node_ids(suites)
 
 
+def _declared_silence_budget(path: Path) -> Tuple[Optional[float], str]:
+    """``(seconds, problem)`` for a file's own declared silence budget.
+
+    ``(None, "")``  -- the file declares nothing; the base grace applies exactly.
+    ``(n, "")``     -- it declares ``n`` and ``n`` is within the ceiling.
+    ``(None, why)`` -- it declares something that cannot be honoured. The caller
+                       REFUSES the file with *why*; it does not fall back to the
+                       base grace, because a declaration that was written and
+                       then ignored is worse than none.
+
+    THE FILE IS PARSED, NOT IMPORTED. ``ast.parse`` over the source text reaches
+    a module-level ``VIBEIC_SILENCE_BUDGET_S = <number literal>`` and nothing
+    else: no import, no execution, no side effect, and no way for a subject to
+    compute its own supervision at read time.
+    """
+    try:
+        tree = ast.parse(path.read_text(encoding="utf-8", errors="replace"))
+    except (OSError, SyntaxError):
+        # NOT a refusal: an unreadable/unparseable file is pytest's problem to
+        # report, and it will. This reader only declines to find a declaration.
+        return None, ""
+    found: Optional[float] = None
+    for node in tree.body:
+        if not isinstance(node, ast.Assign):
+            continue
+        if not any(isinstance(t, ast.Name) and t.id == _SILENCE_BUDGET_NAME
+                   for t in node.targets):
+            continue
+        value = node.value
+        # `-5` is a UnaryOp over a Constant, not a Constant. Unwrapping it is
+        # not permissiveness: without this the refusal below would tell a reader
+        # their MINUS SIGN meant "this has to be run", which is the wrong
+        # sentence to send someone hunting. Unwrapped, it falls through to the
+        # positive-grace clause and is refused for the reason it is really
+        # wrong.
+        negated = (isinstance(value, ast.UnaryOp)
+                   and isinstance(value.op, ast.USub)
+                   and isinstance(value.operand, ast.Constant))
+        literal = value.operand if negated else value
+        if (not isinstance(literal, ast.Constant)
+                or isinstance(literal.value, bool)
+                or not isinstance(literal.value, (int, float))):
+            return None, (f"{_SILENCE_BUDGET_NAME} is not a plain number "
+                          f"literal, so it cannot be read without running the "
+                          f"file")
+        if found is not None:
+            return None, f"{_SILENCE_BUDGET_NAME} is declared more than once"
+        found = -float(literal.value) if negated else float(literal.value)
+    if found is None:
+        return None, ""
+    if found <= 0:
+        return None, f"{_SILENCE_BUDGET_NAME}={found:g} is not a positive grace"
+    if found > _SILENCE_BUDGET_CEILING_S:
+        return None, (f"{_SILENCE_BUDGET_NAME}={found:g}s exceeds the "
+                      f"{_SILENCE_BUDGET_CEILING_S}s ceiling — past this a "
+                      f"declaration is not 'this work is slow', it is 'do not "
+                      f"supervise me'")
+    return found, ""
+
+
+def _zero_collect(rc: Optional[int], cases: int, red: int) -> bool:
+    """This session COMPLETED and determinately contained no tests.
+
+    All three clauses, and none of them is decoration:
+
+      * ``rc == 5`` is pytest's ``EXIT_NO_TESTS_COLLECTED``, which pytest
+        reports only after a normal session end. A COLLECTION ERROR is not
+        this: pytest counts errors and exits 1, or 2/3/4 for an internal or
+        usage failure, all of which stay outside the record-admission rule.
+      * ``cases == 0`` re-reads the JUnit the session itself wrote rather than
+        trusting the exit code alone -- a `<testsuite>` with cases in it and
+        rc 5 is a contradiction, and a contradiction is not a verdict.
+      * ``red == 0`` for the same reason, in the direction that matters most.
+
+    A caller reaching this has ALREADY passed the record-admission clause, so
+    ``killed`` is false: natural exit, no leaked descendant, a proved-empty
+    cleanup census, and a complete progress protocol.
+
+    THIS IS NOT AN EXEMPTION AND IT DOES NOT DECIDE WHETHER ZERO IS OK. It says
+    only that the number is KNOWN to be zero. Whether a given file is entitled
+    to collect nothing is decided by
+    ``tests/test_bidirectional_controls_are_executed.py::
+    test_no_test_file_collects_zero_tests``, which censuses every tier
+    ``run_tests.sh`` runs, asserts its own denominators first, and fails BY NAME
+    on any module that collects zero tests without being declared in `DRIVEN`.
+    That test runs in the same suite this driver is measuring, so a file that
+    goes quiet is caught by it -- loudly -- rather than absorbed here.
+    """
+    return rc == _EXIT_NO_TESTS_COLLECTED and cases == 0 and red == 0
+
+
 def _sink_protocol_error(sink: Dict[str, object]) -> str:
     """The lifecycle join's OWN complaint, or "" when it did not make one."""
     if sink.get("protocol_complete") is not False:
@@ -2547,7 +2664,11 @@ def _fallback_worker_main(spec_path: Path) -> int:
             print(f"FILE_TRUNCATED  {test_file}  {truncation}", flush=True)
             for node_id in truncated_red:
                 print(f"TRUNCATED_RED  {node_id}", flush=True)
-        if killed or rc not in (0, 1):
+        # SAME ADMISSION RULE AS THE IN-PROCESS LANE, and it has to be: the
+        # rescue worker's verdict is merged with the parent's, so a rule that
+        # differed here would make a file's answer depend on which lane
+        # happened to run it. See that clause for the measurement.
+        if killed or rc not in (0, 1, _EXIT_NO_TESTS_COLLECTED):
             suites = None
         if suites is not None:
             for suite in suites:
@@ -2589,6 +2710,8 @@ def _fallback_worker_main(spec_path: Path) -> int:
         return RC_NORECORD
     if not has_record:
         return RC_NORECORD
+    if _zero_collect(rc, cases, red):
+        return RC_OK
     return RC_RED if red or rc != 0 else RC_OK
 
 
@@ -3005,12 +3128,22 @@ def _run_fallback_batch(
             meta_path = tmp / f"{stem}.json"
             log_path = tmp / f"{stem}.log"
             spec_path = tmp / f"{stem}.spec.json"
+            # THE SAME PER-FILE DECLARATION THE IN-PROCESS LANE READS. A file's
+            # grace must not depend on which lane happened to run it; a
+            # declaration that is unreadable or over the ceiling is left to the
+            # in-process lane's refusal rather than re-decided here, so this
+            # arm only ever WIDENS.
+            _declared, _problem = _declared_silence_budget(
+                (Path(cwd) if cwd else Path.cwd()) / test_file)
+            _file_stall = (max(stall_after, _declared)
+                           if (_declared is not None and not _problem)
+                           else stall_after)
             _write_json_atomic(spec_path, {
                 "schema": 1,
                 "test_file": test_file,
                 "junit": str(junit_path),
                 "meta": str(meta_path),
-                "stall_after": stall_after,
+                "stall_after": _file_stall,
                 "cwd": cwd,
                 "progress_relay": (str(progress_relay_path)
                                    if progress_relay_path is not None else None),
@@ -3228,7 +3361,12 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     ap.add_argument("--stall-after", type=float, default=DEFAULT_STALL_AFTER,
                     help=f"seconds with no validated pytest lifecycle event "
                          f"before a per-file session is classified hung (default "
-                         f"{DEFAULT_STALL_AFTER}); this is not a runtime bound")
+                         f"{DEFAULT_STALL_AFTER}); this is not a runtime bound. "
+                         f"A file may WIDEN its own grace by declaring "
+                         f"{_SILENCE_BUDGET_NAME} = <seconds> at module scope "
+                         f"(read from its AST, never imported, ceiling "
+                         f"{_SILENCE_BUDGET_CEILING_S}s); a file that declares "
+                         f"nothing gets exactly this number")
     ap.add_argument("--stop-after-failures", type=int, default=0,
                     help="stop launching files once this many red test cases "
                          "have been seen in ordinary non-aggregate per-file "
@@ -3338,6 +3476,25 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     if hermetic_progress is not None and not hermetic_progress.start():
         print(f"AGGREGATE_NORECORD  {hermetic_progress.problem}")
         return RC_NORECORD
+    # THE AGGREGATE LANE INHERITS THE WIDEST DECLARATION IN ITS SELECTION.
+    # The aggregate is ONE pytest session over every selected file, so a single
+    # test that is legitimately silent for 900 s silences the whole session for
+    # 900 s -- and the aggregate is the lane the landing gate actually uses.
+    # Fixing only the per-file lane would have left the same UNKNOWN where it
+    # costs most. A declaration that cannot be honoured is NOT re-decided here:
+    # it is left to the per-file lane's named refusal, so there is one place
+    # that says no.
+    _selection_base = Path(a.cwd) if a.cwd else Path.cwd()
+    aggregate_stall_after = a.aggregate_stall_after
+    for _f in selection:
+        _d, _p = _declared_silence_budget(_selection_base / _f)
+        if _d is not None and not _p and _d > aggregate_stall_after:
+            aggregate_stall_after = _d
+    if aggregate_stall_after != a.aggregate_stall_after:
+        print(f"SILENCE_BUDGET  [aggregate]  {aggregate_stall_after:g}s — the "
+              f"widest budget declared by any selected file (base "
+              f"{a.aggregate_stall_after:g}s)", flush=True)
+
     try:
         # Aggregate FIRST. It is the authoritative whole-selection question,
         # and a complete answer avoids N redundant pytest starts. If its record
@@ -3350,7 +3507,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             aggregate_sink: Dict[str, object] = {}
             aggregate_rc, out, aggregate_killed = run_aggregate(
                 pytest_argv, selection, aggregate_path,
-                a.aggregate_stall_after, a.cwd,
+                aggregate_stall_after, a.cwd,
                 progress_relay_path=(Path(a.progress_relay)
                                      if a.progress_relay else None),
                 progress_observer=(hermetic_progress.observe
@@ -3418,7 +3575,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                                " (every selected file was launched)"))
                 why = (aggregate_coverage_problem or _norecord_reason(
                     aggregate_rc, out, aggregate_killed,
-                    a.aggregate_stall_after,
+                    aggregate_stall_after,
                     stalled=aggregate_sink.get("stalled") is True,
                     protocol_error=_sink_protocol_error(aggregate_sink)))
                 print(f"AGGREGATE_NORECORD  {why} — cross-file/order semantics "
@@ -3550,8 +3707,30 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 per = tmp / f"{i:05d}.xml"
                 print(f"=== [{i}/{len(selection)}] {test_file}", flush=True)
                 file_sink: Dict[str, object] = {}
+                # THE FILE'S OWN DECLARATION, READ BEFORE IT IS LAUNCHED.
+                # `max(...)` and never a replacement: a declaration may only
+                # widen the grace this invocation was asked for, so a caller
+                # that already passed a larger `--stall-after` keeps it.
+                base = Path(a.cwd) if a.cwd else Path.cwd()
+                declared, budget_problem = _declared_silence_budget(
+                    base / test_file)
+                if budget_problem:
+                    print(f"NORECORD  {test_file}  {budget_problem}",
+                          flush=True)
+                    results.append(FileResult(
+                        test_file, None, True, None, 0, 0,
+                        norecord_reason=budget_problem))
+                    print(f"--- {test_file}  rc=None  cases=0  red=0  "
+                          f"NORECORD", flush=True)
+                    continue
+                file_stall = a.stall_after
+                if declared is not None and declared > file_stall:
+                    file_stall = declared
+                    print(f"SILENCE_BUDGET  {test_file}  {declared:g}s "
+                          f"declared in the file (base {a.stall_after:g}s)",
+                          flush=True)
                 rc, out, killed = run_one(pytest_argv, test_file, per,
-                                          a.stall_after, a.cwd,
+                                          file_stall, a.cwd,
                                           progress_relay_path=(
                                               Path(a.progress_relay)
                                               if a.progress_relay else None),
@@ -3574,8 +3753,39 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                         print(f"TRUNCATED_RED  {node_id}", flush=True)
                 # A process killed/interrupted after starting to write XML can
                 # leave a parseable PREFIX. Parseability is not completeness;
-                # only normal pytest outcomes 0/1 may contribute a record.
-                if killed or rc not in (0, 1):
+                # only normal pytest outcomes may contribute a record.
+                #
+                # `EXIT_NOTESTSCOLLECTED` (5) IS A NORMAL OUTCOME AND IS ADMITTED
+                # HERE. It used to be nulled with the abnormal ones, and that is
+                # the whole of why two files in this tree could never be given a
+                # verdict. MEASURED at b309595f06, in the pinned image, one file
+                # per process, `--stall-after 300`:
+                #
+                #   --- programs/tests/test_atpg_exit_code_not_signal.py
+                #       rc=5 cases=0 red=0 NORECORD
+                #   NORECORD ... the session exited rc=5 without writing a
+                #       complete junit — this file's result is UNKNOWN, not clean
+                #
+                # and `pytest --collect-only -q` on the same file, same image:
+                # "no tests collected in 0.80s" -- no collection error, no
+                # traceback, a clean 0.8 s session. `killed` is FALSE on that
+                # run, and `killed` is this driver's own `incomplete`: natural
+                # watchdog exit, no leaked descendant, a proved-empty cleanup
+                # census AND a COMPLETE progress protocol (`session_finish`
+                # reached with `declared_items == 0`). There is nothing left to
+                # be uncertain about: the session ran end to end and determinately
+                # contained zero tests. Calling that UNKNOWN put an unreadable
+                # hole under every summary line that counted it.
+                #
+                # It is admitted as a RECORD, not as a pass -- `_zero_collect`
+                # below keeps it out of `recorded`'s green arithmetic and prints
+                # it under its own name. WHETHER a zero-collect file is legitimate
+                # is not this driver's question and is not answered by silence:
+                # `tests/test_bidirectional_controls_are_executed.py::
+                # test_no_test_file_collects_zero_tests` censuses every tier the
+                # suite runs and FAILS, by name, on any module that collects zero
+                # tests and is not declared in its `DRIVEN` set.
+                if killed or rc not in (0, 1, _EXIT_NO_TESTS_COLLECTED):
                     suites = None
                 cases = 0
                 red = 0
@@ -3590,14 +3800,20 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                                    "failure bound — " + truncation)
                 else:
                     file_reason = _norecord_reason(
-                        rc, out, killed, a.stall_after,
+                        rc, out, killed, file_stall,
                         stalled=file_sink.get("stalled") is True,
                         protocol_error=_sink_protocol_error(file_sink))
                 results.append(FileResult(
                     test_file, rc, killed, suites, cases, red,
                     norecord_reason=file_reason))
+                # "EMPTY" IS THIS PROGRAM'S OWN EXISTING THIRD STATE (see the
+                # `EMPTY` roll-up below), not a new word: a session that ran,
+                # answered, and answered "nothing was collected here". Naming it
+                # in the per-file line too means the state a reader greps for is
+                # the state the summary reports.
                 state = ("NORECORD" if suites is None
-                         else ("red" if red or rc != 0 else "ok"))
+                         else ("EMPTY" if _zero_collect(rc, cases, red)
+                               else ("red" if red or rc != 0 else "ok")))
                 print(f"--- {test_file}  rc={rc}  cases={cases}  red={red}  "
                       f"{state}", flush=True)
         total = merge(results, Path(a.junit), aggregate_suites, aggregate_rc)
@@ -3686,6 +3902,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     print(f"  recorded   {len(recorded)}")
     print(f"  NORECORD   {len(norecord)}")
     print(f"  NOTRUN     {len(notrun)}")
+    print(f"  EMPTY      {len([r for r in recorded if r.cases == 0])}")
     print(f"  red cases  {red_total}")
     if a.aggregate_check:
         print(f"  aggregate  {'INCOMPLETE' if aggregate_incomplete else 'complete'}"
@@ -3701,7 +3918,19 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     # the XML is green would erase the guard's verdict.  rc=5 is likewise not a
     # successful per-file measurement: the selected file collected nothing.
     # Only rc=0 is a complete green session.
-    if (red_total or any(r.rc != 0 for r in recorded)
+    # `_zero_collect` IS EXCLUDED FROM THE PROCESS-STATUS CLAUSE, and the
+    # exclusion is exactly as wide as the fact it rests on. rc 5 is not a
+    # session that failed; it is a session that completed with nothing in it,
+    # and the `EMPTY` roll-up above already says the rc is deliberately not
+    # changed for that state. Turning it red instead would trade eight UNKNOWNs
+    # for two files reported as broken while being exactly what they are meant
+    # to be — a different untruth, not a fix. What must not happen is silence,
+    # and it does not: the file is printed `EMPTY` with its rc, counted in the
+    # summary, and `test_no_test_file_collects_zero_tests` fails by name on any
+    # module that goes quiet without being declared.
+    if (red_total
+            or any(r.rc != 0 for r in recorded
+                   if not _zero_collect(r.rc, r.cases, r.red))
             or (a.aggregate_check and (aggregate_red or aggregate_rc != 0))):
         return RC_RED
     if notrun:

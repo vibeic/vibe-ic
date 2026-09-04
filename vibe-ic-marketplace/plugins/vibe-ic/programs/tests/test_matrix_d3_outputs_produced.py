@@ -807,7 +807,19 @@ EXTERNALLY_ATTESTED_STEPS: Tuple[str, ...] = (
 # `magic_illegal_overlap.json` on the same step; the number rose because the
 # POPULATION rose, which is exactly what this equality exists to make a human
 # say out loud.
-_LIVE_ENTRY_COUNT = 135
+# 2026-09-05: 135 -> 136. D1 now declares the L19 PDK/floorplan contract that
+# its Phase-1 runner already emits and its own gates consume.  The frozen
+# benchmark-data 8c4b608 corpus carries it tracked and non-empty in all three
+# admissible in-repo SPM roots (the manifest records the 1304 B
+# v1.10.18_sky130A specimen), so this is one additional LIVE
+# PRODUCED_BY_RUN entry and no fixture attestation or waiver.
+# 2026-09-05: 136 -> 138. The Step-21 OpenROAD log and Step-23 SPEF-backed
+# STA mirror were declared by ab78a6ea9 without their existing corpus evidence
+# being registered here. Exact benchmark-data 8c4b608a already carries both as
+# tracked, non-empty files (57311 B and 2354 B), so each is one additional LIVE
+# PRODUCED_BY_RUN entry. Step 26.5ic and 37.4 change UNPROVEN -> PRODUCED_LIVE,
+# which strengthens their answers without moving this live-mode population.
+_LIVE_ENTRY_COUNT = 138
 
 #: Run roots the compliance-audit self-certification probe drives, and the
 #: declared ``required_outputs`` each audit CREATES in the tree it audits.
@@ -867,7 +879,14 @@ SELF_CERTIFYING_AUDIT_PROBE: Dict[str, Tuple[str, ...]] = {
     # run published AFTER the wiring, where the artefacts pre-exist the
     # audit, makes every one of these disappear.
     #
-    # RE-MEASURED 2026-09-02 on this change, by the owning test's own probe
+    # RE-MEASURED 2026-09-05 at a56b64fc, by the owning test's own probe.
+    # Step 39's stage4_compliance report LEFT the set: the audit no longer
+    # creates it on this root.  Nothing joined, so this is a strict shrink of
+    # the self-certification debt, not a reclassification or relaxed match.
+    # The remaining rows were re-observed by the same copytree + real
+    # flow_compliance_check + before/after file-list diff.
+    #
+    # The earlier 2026-09-02 measurement follows for provenance:
     # (copytree + real flow_compliance_check + before/after file-list diff).
     # ONE JOINED and TWO LEFT on the same root, none of them this change's
     # doing and each with its cause named rather than absorbed:
@@ -892,7 +911,6 @@ SELF_CERTIFYING_AUDIT_PROBE: Dict[str, Tuple[str, ...]] = {
         "25::reports/phase3/em_current_authority.json",
         "2::reports/phase1/gates/stage_phase1_compliance.json",
         "37::reports/phase3/gates/stage3_compliance.json",
-        "39::reports/phase3/gates/stage4_compliance.json",
     ),
     # THE CONTROL the rows above always promised: "a run published AFTER the
     # wiring, where the artefacts pre-exist the audit, makes every one of
@@ -4473,7 +4491,8 @@ def test_d3_the_compliance_audit_does_not_create_declared_outputs():
     assert fcc_path.is_file(), fcc_path
 
     measured: Dict[str, Tuple[str, ...]] = {}
-    for label in SELF_CERTIFYING_AUDIT_PROBE:
+    total = len(SELF_CERTIFYING_AUDIT_PROBE)
+    for completed, label in enumerate(SELF_CERTIFYING_AUDIT_PROBE, start=1):
         rr = run_roots().get(label)
         assert rr is not None, (
             f"the self-certification probe drives {label!r}, which lives in "
@@ -4495,6 +4514,15 @@ def test_d3_the_compliance_audit_does_not_create_declared_outputs():
                             if Path(rel) in created:
                                 hits.add(f"{F.normalize_id(sid)}::{rel}")
             measured[label] = tuple(sorted(hits))
+        # One probe can legitimately spend tens of seconds running the full
+        # compliance audit.  Publish finite, monotonic progress between the
+        # two named roots so the parent can distinguish this 82.6 s measured
+        # test from a hung child without widening a wall-clock timeout.
+        try:
+            from _pytest_progress_plugin import domain_progress
+            domain_progress("d3-self-certification-roots", completed, total)
+        except ImportError:
+            pass
 
     pinned = {k: tuple(sorted(v)) for k, v in SELF_CERTIFYING_AUDIT_PROBE.items()}
     assert measured == pinned, (
@@ -5569,6 +5597,12 @@ DECLARED_OUTSIDE_THE_PUBLISH_CONTRACT: Tuple[Tuple[str, str], ...] = (
     ("19", "phase3/stage3/pnr/post_cts.def"),
     ("20", "phase3/stage3/pnr/post_hold.def"),
     ("21", "phase3/stage3/pnr/routed.def"),
+    # 2026-09-05 — JOINED when ab78a6ea9 declared OpenROAD's own route log.
+    # The exact 8c4b608a corpus already carries and evidences the bytes, so D3
+    # is green; this independent pin records that the normal publisher still
+    # does not stage phase3/stage3/pnr/ and would withdraw that evidence on a
+    # re-publish unless its contract is deliberately widened.
+    ("21", "phase3/stage3/pnr/openroad.log"),
     ("21", "phase3/stage3/pnr/routed.drc.rpt"),
     ("22", "phase3/stage3/extracted/parasitic.spef OR "
            "phase3/stage3/extracted/*.spef"),

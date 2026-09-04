@@ -73,6 +73,7 @@ asserted.
 """
 from __future__ import annotations
 
+import ast
 import importlib.util
 import json
 import sys
@@ -237,9 +238,23 @@ def test_the_marker_is_held_out_of_the_failure_reasons_and_re_emitted():
     exists to remove.
     """
     src = (PROGRAMS / "flow_compliance_check.py").read_text(encoding="utf-8")
-    held_out = ("and not r.startswith(_NOT_APPLICABLE_HINT_PREFIX)]")
-    assert held_out in src, (
-        "the marker must be excluded from `non_hint_reasons`")
+    tree = ast.parse(src)
+    held_out = False
+    for node in ast.walk(tree):
+        if not isinstance(node, (ast.Assign, ast.AnnAssign)):
+            continue
+        targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+        if not any(isinstance(t, ast.Name) and t.id == "non_hint_reasons"
+                   for t in targets):
+            continue
+        value = node.value
+        if "not r.startswith(_NOT_APPLICABLE_HINT_PREFIX)" in ast.unparse(value):
+            held_out = True
+            break
+    assert held_out, (
+        "the marker must be excluded from `non_hint_reasons`; checked from "
+        "the parsed expression so harmless line wrapping cannot change the "
+        "verdict")
     assert "NOT-APPLICABLE (declared," in src, (
         "the marker must be re-emitted onto the step line after the tier "
         "resolves; a held-out hint that is never re-emitted is a silent skip "

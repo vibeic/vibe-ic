@@ -1669,8 +1669,12 @@ REAL_GATE_PASS_TIER_STEPS: Tuple[str, ...] = (
 #:                   is what the reader now sees, and it is the true one: the
 #:                   artefact was PRESENT the whole time, so "an output is
 #:                   missing" was the wrong sentence about this tree.
-#:   4   INCOMPLETE  `vacuous_testbench_check` / `professional_tb_check` /
-#:                   `functional_state_transition_coverage_check` (#1978)
+#:   4   FAIL        The two per-population evidence checks are now required
+#:                   Step-4 clauses. This synthetic seeded tree carries no
+#:                   design-owned declaration/evidence that can earn either
+#:                   an executed DESIGN_DECLARED_NA or an applicable PASS, so
+#:                   final compliance refuses it rather than preserving the
+#:                   former advisory INCOMPLETE tier.
 #:   12  INCOMPLETE  `dft_post_optimization_scan_survival_check`: Step 11's own
 #:                   output is absent, so nothing was measured (#1978)
 #:   14  INCOMPLETE  `stage_on_pass_review` + `yosys_tiecell_recipe_order_check`
@@ -1695,7 +1699,7 @@ REAL_GATE_PASS_TIER_STEPS: Tuple[str, ...] = (
 REAL_GATE_LEFT_THE_PASS_TIER: Dict[str, str] = {
     "D1": "INCOMPLETE",
     "2": "INCOMPLETE",
-    "4": "INCOMPLETE",
+    "4": "FAIL",
     "12": "INCOMPLETE",
     "14": "INCOMPLETE",
     "A4": "INCOMPLETE",

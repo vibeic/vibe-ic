@@ -10,8 +10,13 @@ On `a38902d1` (v1.10.35):
       with a readable steps/STEP_INDEX.json     :  2
       without one                               : 73   (97%)
 
-The two are `spm/v1.10.18_sky130A` and `spm/v1.9.96_gf180mcuD`, and where the
-record exists it is complete — all 63 step ids.
+The historical two were `spm/v1.10.18_sky130A` and
+`spm/v1.9.96_gf180mcuD`.  On the frozen published corpus
+`8c4b608a4542759c2d4ef97dfb56571f43cc512f` the exact denominator is 2 of 12:
+`spm/v1.10.18_sky130A` and `spm/v1.14.88_gf180mcuD` are countable and ten
+trees are not.  The old 73-of-75 observation remains historical evidence; it
+must not remain the ratchet after the publication population was deliberately
+withdrawn and rebuilt.
 
 So a question of the form *"how many published runs recorded X for step N"* is
 unanswerable today for every X and every N. The answer that comes back is not an
@@ -59,12 +64,15 @@ from typing import Callable, Dict, List, Optional, Tuple
 #: The per-step verdict record a run tree must carry to be countable.
 STEP_INDEX_REL = "steps/STEP_INDEX.json"
 
-#: Uncountable run trees measured on a38902d1. The ratchet's ceiling.
+#: Uncountable run trees measured on frozen benchmark-data 8c4b608. The
+#: ratchet's ceiling.  The prior 73 was the a38902d1 historical population;
+#: retaining it after the owner-directed withdrawal allowed 63 new
+#: uncountable runs before this guard could fire.
 #:
 #: A NUMBER and not a list of paths, deliberately. A name-list would make every
 #: withdrawal or republish a test edit, and the property being guarded is "the
 #: corpus did not become less answerable", which is a count.
-UNCOUNTABLE_CEILING = 73
+UNCOUNTABLE_CEILING = 10
 
 
 @dataclass(frozen=True)

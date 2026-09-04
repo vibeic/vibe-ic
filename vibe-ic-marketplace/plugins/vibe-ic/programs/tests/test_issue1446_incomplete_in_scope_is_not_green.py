@@ -72,10 +72,10 @@ def _bare_project(tmp_path: Path) -> Path:
 def _close_ancestry(project: Path) -> Path:
     """Stage every artefact step D1 declares, so the chain under P0 is closed.
 
-    D1 holds ALL of its `required_outputs` ("satisfied: N/19 — the gate passed,
+    D1 holds ALL of its `required_outputs` ("satisfied: N/20 — the gate passed,
     but every declared output must be produced"), so this has to stage the
     L-docs, the coverage report, the expert-track report AND the extraction
-    pattern catalogue. If D1 gains a 20th,
+    pattern catalogue. If D1 gains a 21st,
     `test_the_ancestry_control_really_closes_the_chain` below goes red and names
     it, rather than this helper quietly ceasing to close anything.
 
@@ -88,6 +88,11 @@ def _close_ancestry(project: Path) -> Path:
     for name in _L_DOCS:
         (gd / f"{name}.json").write_text(
             json.dumps({"schema": name, "generated_by": "test fixture"}))
+    # The 20th D1 output, added after this closed-ancestry control was written.
+    # Presence is the contract under test here; physical floorplan semantics
+    # remain owned by l9_floorplan_contract_check's own fixtures.
+    (gd / "L19_CONSTRAINTS_PDK.json").write_text(json.dumps({
+        "schema": "L19_CONSTRAINTS_PDK", "generated_by": "test fixture"}))
     (gd / "L21_POWER_INTENT.json").write_text(json.dumps(
         {"schema": "L21_POWER_INTENT", "generated_by": "test fixture",
          "supply_pins": [], "external_supplies": [], "pads": []}))

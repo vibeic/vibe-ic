@@ -215,8 +215,8 @@ def test_bare_cmd_with_byte_literals_and_a_len_check_passes(tmp_path):
     assert not any(f.severity == "ERROR" for f in findings)
 
 
-def test_unambiguous_selector_needs_no_corroboration(tmp_path):
-    """`case (opcode)` with symbolic arms is STILL a dispatcher.
+def test_command_specific_selector_needs_no_corroboration(tmp_path):
+    """`case (cmd_op)` with symbolic arms is STILL a dispatcher.
 
     The narrowing applies only to the two reused short names; an unambiguous
     opcode selector keeps the standalone force it always had.
@@ -226,7 +226,7 @@ def test_unambiguous_selector_needs_no_corroboration(tmp_path):
     (rtl / "d.v").write_text(
         "module d (input wire clk);\n"
         "  always @(posedge clk) begin\n"
-        "    case (opcode)\n"
+        "    case (cmd_op)\n"
         "      OP_READ: rsp <= 1'b1;\n"
         "      default: rsp <= 1'b0;\n"
         "    endcase\n"
@@ -236,3 +236,24 @@ def test_unambiguous_selector_needs_no_corroboration(tmp_path):
     findings, summary = chk.audit(rtl)
     assert summary["checked"] == 1
     assert any(f.category == "NO_LENGTH_CHECK" for f in findings)
+
+
+def test_seven_bit_instruction_opcode_is_outside_packet_population(tmp_path):
+    """A processor instruction decoder is not a received-command packet."""
+    rtl = tmp_path / "rtl"
+    rtl.mkdir(parents=True)
+    (rtl / "core.v").write_text(
+        "module core(input [31:0] instruction, output reg action);\n"
+        "  wire [6:0] opcode = instruction[6:0];\n"
+        "  always @* begin\n"
+        "    case (opcode)\n"
+        "      OP_LOAD: action = 1'b1;\n"
+        "      OP_STORE: action = 1'b0;\n"
+        "      default: action = 1'b0;\n"
+        "    endcase\n"
+        "  end\n"
+        "endmodule\n"
+    )
+    findings, summary = chk.audit(rtl)
+    assert summary["checked"] == 0, summary
+    assert not any(f.severity == "ERROR" for f in findings)

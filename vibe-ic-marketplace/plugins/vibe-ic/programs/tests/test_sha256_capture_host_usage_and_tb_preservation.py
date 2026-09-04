@@ -357,8 +357,9 @@ def test_state_transition_gate_still_errors_when_l3_declares_opcodes(tmp_path, c
     cov.write_text(json.dumps({"not": "a list"}))
     rc = FSTC.main([str(tb), "--coverage", str(cov)])
     captured = capsys.readouterr()
-    assert rc == 2
-    assert "no coverage entries" in captured.err
+    assert rc == 1
+    assert "L3 declares 1 command opcode(s)" in captured.err
+    assert "no execution evidence" in captured.err
     assert "VACUOUS_PASS" not in captured.out
 
 

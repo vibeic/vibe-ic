@@ -65,6 +65,7 @@ assert SCRIPT.exists(), f"Script not found: {SCRIPT}"
 
 sys.path.insert(0, str(SCRIPT.parent))
 import l10_tb_conformance_check as gate  # noqa: E402
+import _l10_execution as execution  # noqa: E402
 
 # The two expectation literals Phase 1's gen_l10_test_cases actually emits for
 # an opcode-derived case (phase1_doc_one_shot_runner.py:49175 / :49190).
@@ -100,7 +101,15 @@ UNBOUND_L3 = [_unbound_op("0x03"), _unbound_op("0x23")]
 def _make_project(tmp_path, l10_cases, *, ic_class="processor_cpu",
                   cpu_oracle_anchor=True,
                   l3_opcodes=UNBOUND_L3,
-                  tb_text="module tb_dummy;\nendmodule\n"):
+                  tb_text="module tb_dummy;\nendmodule\n",
+                  executed=None):
+    """`executed` maps case id -> verdict and becomes the EXECUTION RECORD.
+
+    The verdict source moved off testbench source text, so a fixture that
+    wants a case CREDITED must state that something RAN it. Leaving it None
+    models the shape these fixtures already had: a dummy testbench on disk
+    and nothing reporting that any case was executed.
+    """
     gd = tmp_path / "phase1" / "generated_docs"
     gd.mkdir(parents=True, exist_ok=True)
     l10 = gd / "L10_TEST_CASES.json"
@@ -128,6 +137,12 @@ def _make_project(tmp_path, l10_cases, *, ic_class="processor_cpu",
         rep = tmp_path / "reports"
         rep.mkdir(parents=True, exist_ok=True)
         (rep / "ic_class.json").write_text(json.dumps({"ic_class": ic_class}))
+
+    if executed:
+        execution.write_record(
+            tmp_path, l10,
+            [{"id": case_id, "verdict": verdict, "sim_executed": True}
+             for case_id, verdict in executed.items()], producer="test")
 
     return l10, tb, summary
 
@@ -338,7 +353,7 @@ def test_the_real_emitters_split_two_byte_identical_expectations(tmp_path):
     st = {r["id"]: r["status"] for r in data["results"]}
     res = {r["id"]: r["oracle_resolution"] for r in data["results"]}
     assert st["send_load_happy"] == "waived", (st, res)
-    assert st["send_store_happy"] == "fail", (st, res)
+    assert st["send_store_happy"] == "NOT_EXECUTED", (st, res)
     assert res["send_load_happy"] == "unbound:response_payload_template"
     assert res["send_store_happy"] == "bound:response_payload_template=24", (
         "the waiver must be refused ON THE DATA — naming BOTH the field that "
@@ -346,8 +361,8 @@ def test_the_real_emitters_split_two_byte_identical_expectations(tmp_path):
         "so post-#812 the merge is a no-op and `24` is still the synthesised "
         "opcode+1 echo; the artefact must not imply the spec gave it")
     # …and the two declared-silence cases keep FAILing, from both opcodes.
-    assert st["send_load_no_wake"] == st["send_store_no_wake"] == "fail"
-    assert (data["fail"], data["waived"], rc) == (3, 1, 1), data
+    assert st["send_load_no_wake"] == st["send_store_no_wake"] == "NOT_EXECUTED"
+    assert (data["not_executed"], data["waived"], rc) == (3, 1, 1), data
     assert data["cpu_oracle_binding_census"] == {
         "bound": 1, "unbound": 1, "absence": 2,
         "document_derived_records": "0/2"}, data
@@ -455,11 +470,11 @@ def test_a_documented_response_refuses_the_waiver_on_the_real_emitters(tmp_path)
     rc, data = _run(tmp_path, l10, sim / "tb", sim / "work" / "summary.txt")
     st = {r["id"]: r["status"] for r in data["results"]}
     res = {r["id"]: r["oracle_resolution"] for r in data["results"]}
-    assert st["send_load_happy"] == "fail", (st, res)
+    assert st["send_load_happy"] == "NOT_EXECUTED", (st, res)
     assert res["send_load_happy"] == (
         "bound_by_document:response_payload_template_extracted="
         "41,AA,BB,CC,DD,89"), res
-    assert (data["fail"], data["waived"], rc) == (2, 0, 1), data
+    assert (data["not_executed"], data["waived"], rc) == (2, 0, 1), data
     assert data["cpu_oracle_binding_census"] == {
         "bound_by_document": 1, "absence": 1,
         "document_derived_records": "1/1"}, data
@@ -528,7 +543,7 @@ def test_the_single_group_row_no_longer_reaches_PASS_WITH_WAIVERS(tmp_path):
     assert [c["kind"] for c in cases] == ["happy_path"], (
         f"fixture invalid: {[c['kind'] for c in cases]}")
     rc, data = _run(tmp_path, l10, sim / "tb", sim / "work" / "summary.txt")
-    assert (data["fail"], data["waived"], rc) == (1, 0, 1), data
+    assert (data["not_executed"], data["waived"], rc) == (1, 0, 1), data
     assert data["results"][0]["oracle_resolution"].startswith(
         "byte_record_unattributed:"), data
 
@@ -830,7 +845,7 @@ def test_the_waiver_still_fires_when_the_document_gives_NOTHING(tmp_path):
     res = {r["id"]: r["oracle_resolution"] for r in data["results"]}
     assert st["send_load_happy"] == "waived", (st, res)
     assert res["send_load_happy"] == "unbound:response_payload_template"
-    assert (data["fail"], data["waived"], rc) == (1, 1, 1), data
+    assert (data["not_executed"], data["waived"], rc) == (1, 1, 1), data
     assert data["cpu_oracle_binding_census"] == {
         "unbound": 1, "absence": 1, "document_derived_records": "0/1"}, data
 
@@ -859,8 +874,8 @@ def test_the_same_case_flips_when_only_the_l3_changes(tmp_path):
     b = tmp_path / "bound"
     l10, tb, summary = _make_project(b, cases, l3_opcodes=[_bound_op("0x03")])
     rc_b, data_b = _run(b, l10, tb, summary)
-    assert (data_a["waived"], data_a["fail"], rc_a) == (1, 0, 3), data_a
-    assert (data_b["waived"], data_b["fail"], rc_b) == (0, 1, 1), data_b
+    assert (data_a["waived"], data_a["not_executed"], rc_a) == (1, 0, 3), data_a
+    assert (data_b["waived"], data_b["not_executed"], rc_b) == (0, 1, 1), data_b
 
 
 # ---------------------------------------------------------------------------
@@ -1087,7 +1102,7 @@ def test_distributive_prose_still_fails_end_to_end(tmp_path):
     assert by_id["positive_control"]["status"] == "waived", (
         "fixture invalid: the waiver is unreachable here, so the FAILs below "
         "prove nothing")
-    assert data["fail"] == len(DISTRIBUTIVE_PROSE), data
+    assert data["not_executed"] == len(DISTRIBUTIVE_PROSE), data
     assert data["waived"] == 1 and rc == 1
 
 
@@ -1218,7 +1233,7 @@ def test_an_absence_expectation_that_also_names_the_reference_is_not_waived(
                                      l3_opcodes=[_unbound_op("0x03")])
     rc, data = _run(tmp_path, l10, tb, summary)
     st = {r["id"]: r["status"] for r in data["results"]}
-    assert st["silent_but_named"] == "fail", data
+    assert st["silent_but_named"] == "NOT_EXECUTED", data
     assert st["positive_control"] == "waived", data
 
 
@@ -1307,7 +1322,7 @@ def test_a_pinned_golden_survives_end_to_end(tmp_path):
                                      l3_opcodes=[_unbound_op("0x03")])
     rc, data = _run(tmp_path, l10, tb, summary)
     st = {r["id"]: r["status"] for r in data["results"]}
-    assert st["pinned_case"] == "fail" and st["positive_control"] == "waived"
+    assert st["pinned_case"] == "NOT_EXECUTED" and st["positive_control"] == "waived"
 
 
 # ---------------------------------------------------------------------------
@@ -1367,23 +1382,28 @@ def test_the_digital_signal_reader_sees_the_emitters_field_too(tmp_path):
                     extra=["--skip-analog"])
     st = {r["id"]: r["status"] for r in data["results"]}
     assert st["genuine_am"] == "waived", data
-    assert st["mislabelled_digital"] == "fail", data
+    assert st["mislabelled_digital"] == "NOT_EXECUTED", data
 
 
 def test_a_driven_opcode_case_passes_instead_of_being_waived(tmp_path):
-    """END-TO-END. A processor_cpu happy-path case whose byte the testbench
-    actually drives must PASS — evidence supersedes the capability gap. Before
-    this fix the same run WAIVED it, because the evidence reader could not see
-    the field the emitter writes."""
+    """END-TO-END. A processor_cpu happy-path case that was actually EXECUTED
+    must PASS — execution evidence supersedes the capability gap.
+
+    The evidence is now the execution record rather than the opcode literal
+    appearing in testbench source: a driven byte in the TB text says the
+    generator emitted a number, not that the vector ran. The guard this test
+    exists for — evidence beats the waiver — is unchanged.
+    """
     tb_text = ("module tb;\n  dut u(.clk(clk));\n"
                "  initial drive_byte(8'h03);\nendmodule\n")
     cases = [{"name": "send_load_happy", "kind": "happy_path",
               "opcode_hex": "0x03", "expected": EXP_DEFERRED}]
-    l10, tb, summary = _make_project(tmp_path, cases, tb_text=tb_text)
+    l10, tb, summary = _make_project(tmp_path, cases, tb_text=tb_text,
+                                     executed={"send_load_happy": "PASS"})
     rc, data = _run(tmp_path, l10, tb, summary)
     assert data["results"][0]["status"] == "pass", data
-    assert any("opcode in tb" in e for e in data["results"][0]["evidence"])
-    assert (data["ok"], data["waived"], data["fail"], rc) == (1, 0, 0, 0)
+    assert any("EXECUTED+PASSED" in e for e in data["results"][0]["evidence"])
+    assert (data["ok"], data["waived"], data["not_executed"], rc) == (1, 0, 0, 0)
 
 
 # ---------------------------------------------------------------------------
@@ -1446,7 +1466,7 @@ def test_predicate_excludes_every_explicit_digital_class_token(tmp_path):
     rc, data = _run(tmp_path, l10, tb, summary)
     by_id = {r["id"]: r for r in data["results"]}
     assert by_id["no_explicit_category"]["status"] == "waived"
-    assert data["fail"] == len(gate._DIGITAL_CLASS_TOKENS), (
+    assert data["not_executed"] == len(gate._DIGITAL_CLASS_TOKENS), (
         f"every explicitly-categorised digital case must still FAIL: {data}")
     assert rc == 1
 
@@ -1466,7 +1486,7 @@ def test_predicate_null_category_falls_through_to_type(tmp_path):
     l10, tb, summary = _make_project(
         tmp_path, [dict(c, name="nullcat_cmd_response")])
     rc, data = _run(tmp_path, l10, tb, summary)
-    assert rc == 1 and data["fail"] == 1 and data["waived"] == 0
+    assert rc == 1 and data["not_executed"] == 1 and data["waived"] == 0
 
 
 def test_explicit_class_token_never_reads_the_kind_fallback():
@@ -1516,7 +1536,7 @@ def test_a_real_no_bounds_cpu_still_has_failable_cases(tmp_path):
     assert not any(c["kind"] in ("addr_max", "len_max") for c in cases)
 
     rc, data = _run(tmp_path, l10, sim / "tb", sim / "work" / "summary.txt")
-    assert data["fail"] == 3, (
+    assert data["not_executed"] == 3, (
         f"the gate must retain failable cases on a real no-bounds CPU: {data}")
     assert data["waived"] == 1 and rc == 1, data
 
@@ -1543,7 +1563,7 @@ def test_zero_failable_is_a_property_of_the_l3_and_it_is_stated(tmp_path):
     assert l3["opcodes"][0]["pre_wake_allowed"] is True
 
     rc, data = _run(tmp_path, l10, sim / "tb", sim / "work" / "summary.txt")
-    assert (data["fail"], data["waived"], rc) == (0, 1, 3), data
+    assert (data["not_executed"], data["waived"], rc) == (0, 1, 3), data
     assert data["cpu_oracle_binding_census"] == {
         "unbound": 1, "document_derived_records": "0/1"}, (
         "the all-waived condition must be legible in the artefact, not "
@@ -1556,7 +1576,7 @@ def test_zero_failable_is_a_property_of_the_l3_and_it_is_stated(tmp_path):
         other, ["4\t1\t00\t74\tGET_ID"])
     rc_b, data_b = _run(other, l10b, simb / "tb",
                         simb / "work" / "summary.txt")
-    assert (data_b["fail"], data_b["waived"], rc_b) == (1, 0, 1), data_b
+    assert (data_b["not_executed"], data_b["waived"], rc_b) == (1, 0, 1), data_b
     assert data_b["cpu_oracle_binding_census"] == {
         "bound": 1, "document_derived_records": "0/1"}, data_b
 
@@ -1596,14 +1616,16 @@ def test_a_real_bounded_l3_splits_by_binding_not_by_kind(tmp_path):
     for name, c in by_name.items():
         names_ref = "response_payload_template" in (c.get("expected") or "")
         binds = c["opcode_hex"] == "0x23"          # tx_len=1 -> concrete
-        want = "waived" if (names_ref and not binds) else "fail"
+        # Not waived -> the case simply was never executed (nothing ran it),
+        # which is the un-credited state that used to be spelled "fail".
+        want = "waived" if (names_ref and not binds) else "NOT_EXECUTED"
         assert st[name] == want, (name, c.get("expected"), st[name], want)
-    assert (data["waived"], data["fail"]) == (3, 9), data
+    assert (data["waived"], data["not_executed"]) == (3, 9), data
     assert rc == 1
     # the same `expected` on two different kinds -> the same verdict
     assert (by_name["send_load_no_wake"]["expected"]
             == by_name["send_load_addr_above_max"]["expected"])
-    assert st["send_load_no_wake"] == st["send_load_addr_above_max"] == "fail"
+    assert st["send_load_no_wake"] == st["send_load_addr_above_max"] == "NOT_EXECUTED"
 
 
 # ---------------------------------------------------------------------------
@@ -1624,21 +1646,21 @@ def test_reverse_non_processor_cpu_opcode_happy_still_fails(tmp_path):
     l10, tb, summary = _make_project(tmp_path, _deferred_cases(),
                                      ic_class="digital_cmd_driven")
     rc, data = _run(tmp_path, l10, tb, summary)
-    assert rc == 1 and data["fail"] == 2 and data["waived"] == 0
+    assert rc == 1 and data["not_executed"] == 2 and data["waived"] == 0
 
 
 def test_reverse_processor_cpu_unanchored_still_fails(tmp_path):
     l10, tb, summary = _make_project(tmp_path, _deferred_cases(),
                                      cpu_oracle_anchor=False)
     rc, data = _run(tmp_path, l10, tb, summary)
-    assert rc == 1 and data["fail"] == 2 and data["waived"] == 0
+    assert rc == 1 and data["not_executed"] == 2 and data["waived"] == 0
 
 
 def test_reverse_missing_ic_class_fails_closed(tmp_path):
     l10, tb, summary = _make_project(tmp_path, _deferred_cases(),
                                      ic_class=None)
     rc, data = _run(tmp_path, l10, tb, summary)
-    assert rc == 1 and data["fail"] == 2 and data["waived"] == 0
+    assert rc == 1 and data["not_executed"] == 2 and data["waived"] == 0
 
 
 def test_reverse_missing_l3_fails_closed(tmp_path):
@@ -1647,7 +1669,7 @@ def test_reverse_missing_l3_fails_closed(tmp_path):
     l10, tb, summary = _make_project(tmp_path, _deferred_cases(),
                                      l3_opcodes=None)
     rc, data = _run(tmp_path, l10, tb, summary)
-    assert rc == 1 and data["fail"] == 2 and data["waived"] == 0
+    assert rc == 1 and data["not_executed"] == 2 and data["waived"] == 0
     assert data["cpu_oracle_binding_census"] == {
         "no_l3": 2, "document_derived_records": "0/0"}, data
 
@@ -1660,7 +1682,7 @@ def test_reverse_an_l3_that_binds_the_answer_still_fails(tmp_path):
         tmp_path, _deferred_cases(),
         l3_opcodes=[_bound_op("0x03"), _bound_op("0x23", "0x24")])
     rc, data = _run(tmp_path, l10, tb, summary)
-    assert rc == 1 and data["fail"] == 2 and data["waived"] == 0, data
+    assert rc == 1 and data["not_executed"] == 2 and data["waived"] == 0, data
     assert data["cpu_oracle_binding_census"] == {
         "bound": 2, "document_derived_records": "0/2"}, data
 
@@ -1672,7 +1694,7 @@ def test_reverse_an_opcode_absent_from_l3_still_fails(tmp_path):
     l10, tb, summary = _make_project(tmp_path, _deferred_cases(),
                                      l3_opcodes=[_unbound_op("0xEE")])
     rc, data = _run(tmp_path, l10, tb, summary)
-    assert rc == 1 and data["fail"] == 2 and data["waived"] == 0
+    assert rc == 1 and data["not_executed"] == 2 and data["waived"] == 0
     assert data["cpu_oracle_binding_census"] == {
         "opcode_unresolved": 2, "document_derived_records": "0/1"}, data
 
@@ -1716,18 +1738,22 @@ def test_resolve_ic_class_survives_a_recursive_json(tmp_path):
 
 def test_evaluate_without_a_project_root_cannot_waive():
     """END-TO-END on the un-rooted path: with NO project root there is no class
-    file, no L3, and therefore no waiver — the cases FAIL."""
+    file, no L3, and therefore no waiver — the cases are not credited."""
     results, ok, fail = gate.evaluate(
         _deferred_cases(), "", "",
         cpu_oracle_anchor_desc="anchor: <declared>", project_root=None)
-    assert (ok, fail) == (0, 2), results
+    # No waiver may fire, and nothing may be credited. The un-waived cases
+    # are NOT_EXECUTED (nothing ran them) rather than FAIL — the guard this
+    # test exists for is that the waiver did not fire.
+    assert (ok, fail) == (0, 0), results
+    assert gate.count_not_executed(results) == 2, results
     assert not any(r["status"] == "waived" for r in results), results
 
 
 def test_forward_unbound_oracle_cases_waived_under_anchor(tmp_path):
     l10, tb, summary = _make_project(tmp_path, _deferred_cases())
     rc, data = _run(tmp_path, l10, tb, summary)
-    assert rc == 3 and data["fail"] == 0 and data["waived"] == 2
+    assert rc == 3 and data["not_executed"] == 0 and data["waived"] == 2
     for r in data["results"]:
         assert r["capability_gap"] == "cap:cpu_functional_oracle"
         # the evidence must NAME the reference the L3 leaves unbound, so the
@@ -1737,16 +1763,24 @@ def test_forward_unbound_oracle_cases_waived_under_anchor(tmp_path):
 
 
 def test_opcode_case_with_real_evidence_not_waived(tmp_path):
-    """A processor_cpu opcode case whose id IS traced by a live testbench is a
-    genuine PASS — evidence supersedes the deferral, it is NOT waived."""
+    """A processor_cpu opcode case that was actually EXECUTED is a genuine
+    PASS — execution evidence supersedes the deferral, it is NOT waived.
+
+    Note what the old fixture used for "real evidence": a TB COMMENT reading
+    `// [TB send_load_happy] PASS`. That is the testbench asserting its own
+    coverage, and it is exactly what this change stops crediting. The comment
+    is kept in the fixture, and it is now the execution record — not the
+    comment — that earns the PASS.
+    """
     tb_text = ("module tb;\n  dut u(.clk(clk));\n"
                "  // [TB send_load_happy] PASS\n"
                "  initial $display(\"send_load_happy\");\nendmodule\n")
     l10, tb, summary = _make_project(tmp_path, _deferred_cases()[:1],
-                                     tb_text=tb_text)
+                                     tb_text=tb_text,
+                                     executed={"send_load_happy": "PASS"})
     rc, data = _run(tmp_path, l10, tb, summary)
     assert data["results"][0]["status"] == "pass"
-    assert (data["ok"], data["waived"], data["fail"], rc) == (1, 0, 0, 0)
+    assert (data["ok"], data["waived"], data["not_executed"], rc) == (1, 0, 0, 0)
 
 
 # ---------------------------------------------------------------------------
@@ -1777,8 +1811,8 @@ def test_a_passing_case_never_claims_a_producer_gap(tmp_path):
     it" is false. It must never carry the line, nor be counted, even though it
     is just as far outside the producer's scaffold scope as its waived sibling
     — which is exactly what makes this the discriminating case."""
-    l10, tb, summary = _make_project(tmp_path, _deferred_cases())
-    summary.write_text("PASS send_load_happy\n")
+    l10, tb, summary = _make_project(
+        tmp_path, _deferred_cases(), executed={"send_load_happy": "PASS"})
     rc, data = _run(tmp_path, l10, tb, summary)
     passing = [r for r in data["results"] if r["status"] == "pass"]
     assert passing, "fixture invalid: no case reached `pass`"
@@ -1853,11 +1887,19 @@ def test_scope_disagreement_line_is_not_mis_attributed(tmp_path, capsys):
          "opcode_hex": "0x03", "expected": EXP_ABSENCE} for i in range(3)]
     l10, tb, summary = _make_project(tmp_path, cases)
     rc, data = _run(tmp_path, l10, tb, summary)
-    assert (data["fail"], data["waived"]) == (3, 2), data
+    assert (data["not_executed"], data["waived"]) == (3, 2), data
     assert data["producer_scope_gap"] == 5, data
     err = capsys.readouterr().err
     assert "SCOPE DISAGREEMENT" in err
     assert "of the 3 failure(s) are cases" not in err, (
         "the gap count was narrated against fail_count again")
-    assert "5 case(s) — 3 FAILing and 2 WAIVED-DEFERRED" in err, err
-    assert "This run has 3 failure(s) in total." in err, err
+    # THREE populations, each named as itself. Booking the never-executed
+    # cases under the ORACLE waiver would attribute a capability gap to cases
+    # whose actual problem is that nothing ran them — the same class of
+    # mis-attribution this test is named for.
+    assert ("5 case(s) — 3 NOT_EXECUTED and 2 WAIVED-DEFERRED for want "
+            "of an oracle") in err, err
+    # The run total names BOTH populations: reporting "0 failure(s)" while
+    # three cases block the step would be true and useless.
+    assert ("This run has 0 executed failure(s) and 3 never-executed "
+            "case(s) in total.") in err, err

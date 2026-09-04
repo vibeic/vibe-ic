@@ -30,6 +30,7 @@ blocks every landing gets switched off rather than answered.
 from __future__ import annotations
 
 import importlib.util
+import os
 import pathlib
 import sys
 
@@ -87,6 +88,35 @@ def test_a_non_zero_count_over_an_absent_project_is_still_dishonest():
     """
     assert G._honest_about_an_absent_project(
         "checked 1 project(s) -- ALL_PASS") is False
+
+
+def test_absent_project_probe_cannot_be_redirected_to_a_real_corpus(
+        tmp_path, monkeypatch):
+    """The adversarial path must stay absent even in corpus-bound CI.
+
+    A production gate is supposed to follow ``VIBE_IC_BENCHMARK_DATA`` when
+    its named corpus is missing.  This probe asks the opposite question, so
+    inheriting that pointer replaces the fixture with a real tree and produces
+    a false finding against the gate rather than the harness.
+    """
+    corpus = tmp_path / "real-corpus"
+    corpus.mkdir()
+    probe = tmp_path / "probe_check.py"
+    probe.write_text(
+        "import os, sys\n"
+        "if os.environ.get('VIBE_IC_BENCHMARK_DATA'):\n"
+        "    print('WRONG: redirected to real corpus')\n"
+        "    raise SystemExit(0)\n"
+        "print('NOT_CHECKED: named project is absent')\n"
+        "raise SystemExit(2)\n")
+    monkeypatch.setenv("VIBE_IC_BENCHMARK_DATA", str(corpus))
+    monkeypatch.setenv("GATEKEEPER_BENCHMARK_DATA_SHA", "0" * 40)
+
+    result = G._drive_on_absent_project(probe, timeout=10)
+
+    assert result["rc"] == 2, result
+    assert os.environ["VIBE_IC_BENCHMARK_DATA"] == str(corpus), (
+        "the parent binding must be preserved; only the child is isolated")
 
 
 def test_census_is_reported_and_does_not_move_the_verdict():

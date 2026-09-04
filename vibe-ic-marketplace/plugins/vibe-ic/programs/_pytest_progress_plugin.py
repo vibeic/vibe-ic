@@ -14,6 +14,7 @@ keeps validating one process's stream.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import threading
@@ -27,6 +28,47 @@ _SCHEMA = 1
 _seq = 0
 _current_nodeid = None
 _emit_lock = threading.Lock()
+
+#: Longest node id this channel will carry verbatim.
+#:
+#: WHY A BOUND EXISTS HERE AT ALL.  The parent refuses any stream line longer
+#: than its own ``_MAX_PROGRESS_LINE`` (64 KiB) -- correctly, because an
+#: unbounded line is an unbounded read.  A node id is the ONLY field on this
+#: channel whose length the SUBJECT chooses, and pytest derives a parametrised
+#: id from the parameter VALUE: `@pytest.mark.parametrize("name,blob", ...)`
+#: over 150 KB `bytes` blobs makes pytest ascii-escape each blob into the id.
+#:
+#: MEASURED on this tree at b309595f06, `pytest --collect-only -q
+#: programs/tests/test_gds_substance_check.py`, longest ids:
+#:
+#:     614505  607419  438868   (characters, four of them over 64 KiB)
+#:
+#: Every event naming one of those items was therefore over the parent's line
+#: limit, the probe refused the stream with "empty/oversized event", and the
+#: file's whole result became UNKNOWN -- a supervisor blinded by what its
+#: subject chose to NAME, not by anything the subject did.
+#:
+#: WHY TRUNCATION IS SAFE, AND WHY THE DIGEST IS NOT DECORATION.  The parent
+#: uses the node id as an OPAQUE IDENTITY KEY inside one stream: `test_finish`
+#: must name an id `item_collected` already announced, and a repeat is a
+#: refusal.  Nothing joins it to JUnit.  So any INJECTIVE rewrite is
+#: transparent -- and a bare prefix is not injective: two 600 KB ids sharing a
+#: prefix would collide into "duplicate item_collected", which is the same
+#: UNKNOWN by another route.  The sha256 of the full id restores injectivity,
+#: and the readable head keeps the record attributable.
+#:
+#: The parent's 64 KiB line limit is UNCHANGED: this bounds what an honest
+#: emitter writes, it does not widen what the reader will accept.
+_MAX_NODEID_CHARS = 4096
+
+
+def _bounded_nodeid(nodeid: str) -> str:
+    """`nodeid` itself when it is short; an injective stand-in when it is not."""
+    if len(nodeid) <= _MAX_NODEID_CHARS:
+        return nodeid
+    digest = hashlib.sha256(nodeid.encode("utf-8", "surrogatepass")).hexdigest()
+    return (f"{nodeid[:_MAX_NODEID_CHARS]}"
+            f"[truncated {len(nodeid)} chars sha256:{digest}]")
 
 #: This process's own stream file, chosen once in ``pytest_configure``.
 #:
@@ -224,11 +266,12 @@ def pytest_collectreport(report) -> None:
     nodeid = str(report.nodeid)
     if not nodeid:
         return
-    _emit("collect_report", nodeid=nodeid, outcome=str(report.outcome))
+    _emit("collect_report", nodeid=_bounded_nodeid(nodeid),
+          outcome=str(report.outcome))
 
 
 def pytest_itemcollected(item) -> None:
-    _emit("item_collected", nodeid=str(item.nodeid))
+    _emit("item_collected", nodeid=_bounded_nodeid(str(item.nodeid)))
 
 
 def pytest_collection_finish(session) -> None:
@@ -246,7 +289,7 @@ def _is_collect_only(session) -> bool:
 
 def pytest_runtest_logstart(nodeid, location) -> None:
     global _current_nodeid
-    _current_nodeid = str(nodeid)
+    _current_nodeid = _bounded_nodeid(str(nodeid))
 
 
 def domain_progress(scope: str, completed: int, total: int) -> None:
@@ -264,7 +307,7 @@ def domain_progress(scope: str, completed: int, total: int) -> None:
 
 def pytest_runtest_logfinish(nodeid, location) -> None:
     global _current_nodeid
-    _emit("test_finish", nodeid=str(nodeid))
+    _emit("test_finish", nodeid=_bounded_nodeid(str(nodeid)))
     _current_nodeid = None
 
 

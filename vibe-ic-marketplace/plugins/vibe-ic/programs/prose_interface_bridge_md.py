@@ -42,12 +42,11 @@ This is a GENERAL FORMAT READER, not keyed to any CVDP design name:
   * Direction comes from a SECTION HEADER ("### Inputs" / "#### Outputs:" /
     "Inputs:" / "Input ports:"), never from a module name. Per-line bullets
     inside a section inherit that section's direction.
-  * Width is read from an explicit `[hi:lo]` range, else a "(N-bit)" / "(N bits)"
-    paren token, else an inline "N-bit" token, else a spelled "one/single bit",
-    else dropped — and ANY width that cannot reduce to a single positive integer
-    (a parameter expression such as `N*IN_WIDTH`, two contradictory width tokens)
-    DROPS that port. A dropped port makes the downstream solver SKIP, which is the
-    §4.05-conservative behavior we want (never fabricate a width or a parameter).
+  * The COMPLETE-audit reader resolves literal ranges, numeric/spelled widths,
+    prompt-declared parameter expressions, and scalar declarations. Unresolved or
+    contradictory expressions are dropped. The historical solver bridge retains
+    its narrower literal-width policy, so this audit does not silently broaden a
+    downstream RTL generator.
   * It NEVER reads a golden/reference solution: input is the prompt text only.
 
 HONEST SCOPE (measured, not claimed): bridging the CVDP port form makes the
@@ -65,7 +64,16 @@ Pure-function module. chip-AGNOSTIC, deterministic, prompt-blind.
 from __future__ import annotations
 
 import re
+import sys
+from functools import lru_cache
+from pathlib import Path
 from typing import List, Optional, Tuple
+
+_HERE = Path(__file__).resolve().parent
+if str(_HERE) not in sys.path:
+    sys.path.insert(0, str(_HERE))
+
+import verilog_width_resolve as _width  # noqa: E402
 
 # A section header that scopes the direction of the bullets beneath it.
 # Markdown headings (### Inputs), bold (**Inputs**:), a bullet header (- Inputs:),
@@ -81,14 +89,22 @@ _DIR_KW_RE = re.compile(r"\b(input|output|inout)\b", re.I)
 _OTHER_HEADING_RE = re.compile(r"^\s*#{1,6}\s+\S")
 # A bullet line (markdown - or *).
 _BULLET_RE = re.compile(r"^\s*[-*]\s+(.*\S)\s*$")
-# Explicit bus range [hi:lo].
+# Explicit literal bus range [hi:lo], plus the general bracket-range shape used
+# to distinguish a scalar declaration from a parameter-sized declaration.
 _RANGE_RE = re.compile(r"\[\s*(\d+)\s*:\s*(\d+)\s*\]")
+_ANY_RANGE_RE = re.compile(r"\[[^\]\n]*:[^\]\n]*\]")
 # Width paren token "(8-bit)" / "(8 bits)" / "(1-bit)".
 _PAREN_W_RE = re.compile(r"\(\s*(\d+)\s*-?\s*bits?\b", re.I)
 # Inline "N-bit" width token.
 _NBIT_RE = re.compile(r"\b(\d+)\s*-?\s*bits?\b", re.I)
 # Spelled single-bit.
 _ONEBIT_RE = re.compile(r"\b(one|single)\s*-?\s*bit\b", re.I)
+# A parenthesized parameter width: (`DATA_WIDTH` bits), (`N*IN_WIDTH`), or
+# (DATA_WIDTH). Upper-case parameter grammar is deliberate: ordinary prose
+# parentheticals such as "(active low)" are not width declarations.
+_PARAM_WIDTH_RE = re.compile(
+    r"\(\s*`?([A-Z][A-Z0-9_]*(?:\s*[*+/\-]\s*[A-Z0-9_]+)*)`?"
+    r"\s*(?:bits?)?\s*\)")
 # A Verilog sized number literal: 14'b001.. / 8'hAB / 2'd3 (a VALUE, never a port name).
 _VERILOG_LITERAL_RE = re.compile(r"\d+\s*'\s*[bBoOdDhH]", re.I)
 # A header-label word we must never treat as a port name (markdown table headers).
@@ -128,8 +144,12 @@ def _port_name(bullet: str) -> Optional[str]:
         if _VERILOG_LITERAL_RE.search(span) or "=" in span or "0x" in span.lower():
             return None                   # value literal/assignment, not an identifier
         inner = _strip_lead_dir(span)
-        # inner may now be "[31:0] num_in" / "num_in" / "num_in (4-bit, [3:0])"
-        nm = re.match(r"\s*(?:\[\s*\d+\s*:\s*\d+\s*\]\s*)?([A-Za-z_]\w*)", inner)
+        # inner may now be "[31:0] num_in" / "[WIDTH-1:0] num_in" /
+        # "num_in[31:0]" / "num_in".  A range-prefix declaration's NAME is
+        # after the whole bracket span; taking the first identifier would return
+        # WIDTH/DATA_WIDTH, turning a parameter into a phantom port.
+        nm = re.match(
+            r"\s*(?:\[[^\]\n]*:[^\]\n]*\]\s*)?([A-Za-z_]\w*)", inner)
         if nm:
             return nm.group(1)
         return None
@@ -150,14 +170,61 @@ def _line_direction(bullet: str) -> Optional[str]:
     return dm.group(1).lower() if dm else None
 
 
-def _port_width(bullet: str):
+def _port_width(bullet: str, prompt: str, name: str, params):
     """Single positive-integer width for a CVDP port bullet, or _AMBIGUOUS, or None.
 
-    Priority: explicit [hi:lo] range -> "(N-bit)" paren -> spelled one/single-bit
-    -> inline "N-bit". If a range and a token DISAGREE, or two tokens disagree, ->
-    _AMBIGUOUS. If NO width signal at all -> None (drop: a CVDP port with no width
-    is usually a parameter-expression width like `N*IN_WIDTH`, which we refuse to
-    fabricate)."""
+    Literal and prompt-resolvable symbolic declarations are accepted. Conflicting
+    tokens return _AMBIGUOUS; unresolved symbolic declarations return None. A
+    delimited port declaration with no packed range is a scalar declaration."""
+    widths = set()
+    rm = _RANGE_RE.search(bullet)
+    if rm:
+        widths.add(abs(int(rm.group(1)) - int(rm.group(2))) + 1)
+    elif _ANY_RANGE_RE.search(bullet):
+        # A parameter expression is usable only when every identifier resolves
+        # from a default stated in this same prompt. `symbolic_width` handles
+        # both `[P-1:0] name` and `name[P-1:0]`, including arithmetic such as
+        # `[(DATA_WIDTH/8)-1:0]`; an unresolved expression drops the port.
+        resolved = _width.symbolic_width(prompt, name, params)
+        if resolved is None:
+            return None
+        _symbolic, value, _source = resolved
+        widths.add(value)
+    pm = _PAREN_W_RE.search(bullet)
+    if pm:
+        widths.add(int(pm.group(1)))
+    if not widths:
+        # only consult spelled / inline tokens when no explicit range/paren width
+        if _ONEBIT_RE.search(bullet):
+            widths.add(1)
+        for m in _NBIT_RE.finditer(bullet):
+            widths.add(int(m.group(1)))
+    if not widths:
+        pm = _PARAM_WIDTH_RE.search(bullet)
+        if pm:
+            value = _width.eval_width_expr(pm.group(1), params)
+            if value is None or value < 1:
+                return None
+            widths.add(value)
+    if not widths:
+        # A delimited name under an explicit Inputs/Outputs section with no
+        # packed range is a scalar port declaration. The width is therefore
+        # stated by the absence of a range (one bit), not guessed from a signal
+        # naming convention. `_port_name` has already rejected undelimited
+        # prose/category bullets and value literals before this point.
+        return 1
+    if len(widths) > 1:
+        return _AMBIGUOUS
+    w = next(iter(widths))
+    return w if w >= 1 else _AMBIGUOUS
+
+
+def _legacy_port_width(bullet: str):
+    """The deliberately narrow width policy used by the historical bridge.
+
+    Keep the bridge byte-for-byte conservative for existing solver callers; the
+    COMPLETE reader below is an audit surface and does not silently broaden every
+    solver that imports the bridge chain."""
     widths = set()
     rm = _RANGE_RE.search(bullet)
     if rm:
@@ -166,7 +233,6 @@ def _port_width(bullet: str):
     if pm:
         widths.add(int(pm.group(1)))
     if not widths:
-        # only consult spelled / inline tokens when no explicit range/paren width
         if _ONEBIT_RE.search(bullet):
             widths.add(1)
         for m in _NBIT_RE.finditer(bullet):
@@ -179,11 +245,8 @@ def _port_width(bullet: str):
     return w if w >= 1 else _AMBIGUOUS
 
 
-def parse_md_table_ports(text: str) -> Tuple[List[Tuple[str, int]], List[Tuple[str, int]]]:
-    """(ins, outs) as [(name, width)] read from the CVDP section-scoped markdown
-    interface. A bullet whose width cannot be reduced to a single positive integer
-    is DROPPED (downstream solver SKIPs rather than guessing). Returns ([],[]) when
-    no Inputs/Outputs section with parseable bullets is present."""
+def _legacy_md_table_ports(text: str):
+    """Historical bridge parse: literal widths only, preserved for callers."""
     ins: List[Tuple[str, int]] = []
     outs: List[Tuple[str, int]] = []
     seen = set()
@@ -194,7 +257,61 @@ def parse_md_table_ports(text: str) -> Tuple[List[Tuple[str, int]], List[Tuple[s
             cur = "input" if sm.group(1).lower().startswith("input") else "output"
             continue
         if cur and _OTHER_HEADING_RE.match(raw):
-            # a non-Inputs/Outputs markdown heading closes the current section scope
+            cur = None
+            continue
+        bm = _BULLET_RE.match(raw)
+        if not bm:
+            continue
+        bullet = bm.group(1)
+        direction = _line_direction(bullet) or cur
+        if not direction:
+            continue
+        name = _port_name(bullet)
+        if not name or name.lower() in _HEADER_WORDS or name in seen:
+            continue
+        w = _legacy_port_width(bullet)
+        if w is None or w is _AMBIGUOUS:
+            continue
+        (ins if direction == "input" else outs).append((name, w))
+        seen.add(name)
+    return ins, outs
+
+
+@lru_cache(maxsize=64)
+def parse_md_table_ports(text: str) -> Tuple[List[Tuple[str, int]], List[Tuple[str, int]]]:
+    """A COMPLETE section-scoped Markdown interface read.
+
+    Scalar declarations are one bit; parameter ranges resolve only from defaults
+    in ``text``. Within one section, only the shallowest parseable bullet depth is
+    an interface declaration. This retains grouped lists (all ports at one nested
+    depth) while rejecting deeper enum/example bullets under a real port."""
+    ins: List[Tuple[str, int]] = []
+    outs: List[Tuple[str, int]] = []
+    seen = set()
+    params = _width.param_defaults(text)
+    cur: Optional[str] = None
+    section: List[Tuple[int, str, str, int]] = []
+
+    def _flush():
+        nonlocal section
+        if not section:
+            return
+        min_indent = min(row[0] for row in section)
+        for indent, direction, name, width in section:
+            if indent != min_indent or name in seen:
+                continue
+            (ins if direction == "input" else outs).append((name, width))
+            seen.add(name)
+        section = []
+
+    for raw in text.splitlines():
+        sm = _SEC_RE.match(raw)
+        if sm:
+            _flush()
+            cur = "input" if sm.group(1).lower().startswith("input") else "output"
+            continue
+        if cur and _OTHER_HEADING_RE.match(raw):
+            _flush()
             cur = None
             continue
         bm = _BULLET_RE.match(raw)
@@ -210,11 +327,16 @@ def parse_md_table_ports(text: str) -> Tuple[List[Tuple[str, int]], List[Tuple[s
         name = _port_name(bullet)
         if not name or name.lower() in _HEADER_WORDS or name in seen:
             continue
-        w = _port_width(bullet)
+        w = _port_width(bullet, text, name, params)
         if w is None or w is _AMBIGUOUS:
             continue                      # §4.05: never fabricate a width
-        (ins if direction == "input" else outs).append((name, w))
-        seen.add(name)
+        indent = len(raw) - len(raw.lstrip())
+        if cur:
+            section.append((indent, direction, name, w))
+        elif name not in seen:
+            (ins if direction == "input" else outs).append((name, w))
+            seen.add(name)
+    _flush()
     return ins, outs
 
 
@@ -235,7 +357,7 @@ def bridge_prompt(text: str) -> str:
     If no CVDP interface section with parseable bullets is found, returns `text`
     unchanged (a no-op bridge — the consumer chain then behaves exactly as before,
     e.g. falls back to a Verilog header it may already contain)."""
-    ins, outs = parse_md_table_ports(text)
+    ins, outs = _legacy_md_table_ports(text)
     if not ins and not outs:
         return text
     return _emit_bullets(ins, outs) + "\n\n" + text

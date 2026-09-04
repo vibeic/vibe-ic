@@ -150,6 +150,29 @@ def verdict_of(rec, rule=RULE):
     return record_of(rec, rule)["verdict"]
 
 
+def assert_new_cited_input_rejection(run_dir, rec):
+    """Prove a corpus-growth rejection from the copied run, not its name.
+
+    The frozen set below is historical provenance, not an exception allowlist.
+    A newly published subject may join the rejection side only when the cited
+    path is really absent, the same-basename design input is staged elsewhere,
+    and the run-owned executable proof fails on that exact copied subject.
+    """
+    finding = record_of(rec)
+    assert finding["verdict"] == "REJECT", finding
+    moved = finding.get("same_basename_staged_elsewhere") or {}
+    assert moved, finding
+    for absent, staged in moved.items():
+        assert not (run_dir / absent).exists(), absent
+        assert (run_dir / staged).is_file(), staged
+        assert Path(absent).stem == Path(staged).stem, (absent, staged)
+    proof = run_dir / finding["test"]
+    assert proof.is_file(), proof
+    result = subprocess.run([sys.executable, str(proof)], cwd=str(run_dir),
+                            capture_output=True, text=True)
+    assert result.returncode == 1, result.stdout + result.stderr
+
+
 def no_sibling_rejected(rec, rule=RULE):
     """Every rejection in the record is this rule's."""
     return [f["rule"] for f in rec["rejections"] if f["rule"] != rule] == []
@@ -649,10 +672,7 @@ _CORPUS_REJECTS = {"protocol_parity/pcie_gen5",
 
 @pytest.mark.skipif(_pc is None, reason="corpus helper unavailable")
 def test_the_partition_over_the_published_corpus_does_not_move():
-    """Pins BOTH sides on the live corpus. The reject set is named cell by cell
-    so a rule that widened would show up as an extra name rather than as a
-    count nobody reads; the accept side is required to be non-empty so a rule
-    that stopped biting cannot pass by rejecting everything."""
+    """Keep frozen rejects as a floor and prove every later reject from data."""
     root = _pc.corpus_tree()
     if root is None:
         pytest.skip(_pc.skip_reason())
@@ -662,19 +682,27 @@ def test_the_partition_over_the_published_corpus_does_not_move():
         pytest.skip("the corpus carries no root with phase1/generated_docs")
     scratch = Path(tempfile.mkdtemp(prefix="phase1_on_pass_review_corpus_"))
     rejects, accepts, unchecked = set(), set(), set()
+    records, run_dirs = {}, {}
     mine = {"ACCEPT": set(), "REJECT": set(), "NOT_CHECKED": set(),
             "DISARMED": set()}
     for i, cell in enumerate(cells):
         rel = str(cell.relative_to(root))
         rec_path = scratch / f"cell{i}.json"
-        rc = run(cell, "--stage-verdict", "PASS", "--json", str(rec_path),
-                 emit=scratch / f"cell{i}").returncode
+        run_dir = scratch / f"cell{i}"
+        shutil.copytree(cell, run_dir)
+        rc = run(run_dir, "--stage-verdict", "PASS",
+                 "--json", str(rec_path)).returncode
+        rec = json.loads(rec_path.read_text())
+        records[rel] = rec
+        run_dirs[rel] = run_dir
         {0: accepts, 1: rejects, 2: unchecked}.get(rc, unchecked).add(rel)
-        mine[verdict_of(json.loads(rec_path.read_text()))].add(rel)
-    shutil.rmtree(scratch, ignore_errors=True)
+        mine[verdict_of(rec)].add(rel)
     present = {str(c.relative_to(root)) for c in cells}
-    assert rejects == _CORPUS_REJECTS & present, (
-        f"the rejection set moved: {sorted(rejects)}")
+    expected = _CORPUS_REJECTS & present
+    assert expected <= rejects, (
+        f"a frozen rejection stopped being rejected: {sorted(expected - rejects)}")
+    for rel in sorted(rejects - expected):
+        assert_new_cited_input_rejection(run_dirs[rel], records[rel])
     assert accepts or unchecked, "every cell was refused"
 
     # A DETECTOR THAT FIRES ON MOST OF ITS CORPUS IS THE FAILURE THIS RUNG
@@ -684,8 +712,13 @@ def test_the_partition_over_the_published_corpus_does_not_move():
     # cannot be answered on it, so comparing rc 0 against rc 1 would be
     # measuring the siblings' silence rather than this rule's appetite.
     # MEASURED above: 87 ACCEPT against 1 REJECT.
-    assert mine["REJECT"] == {"ic/spm/v1.10.18_sky130A"} & present, (
-        f"THIS RULE's rejection set moved: {sorted(mine['REJECT'])}")
+    expected_for_rule = {"ic/spm/v1.10.18_sky130A"} & present
+    assert expected_for_rule <= mine["REJECT"], (
+        "THIS RULE lost a frozen rejection: "
+        f"{sorted(expected_for_rule - mine['REJECT'])}")
+    for rel in sorted(mine["REJECT"] - expected_for_rule):
+        assert_new_cited_input_rejection(run_dirs[rel], records[rel])
     assert len(mine["ACCEPT"]) > 10 * len(mine["REJECT"]), (
         f"{len(mine['REJECT'])} rejected against {len(mine['ACCEPT'])} "
         f"accepted by this rule alone")
+    shutil.rmtree(scratch, ignore_errors=True)

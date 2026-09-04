@@ -2,22 +2,9 @@
 """l10_tb_conformance_check.py — v0.53 plugin gate
 
 Verifies that EVERY deterministic test vector enumerated in
-`generated_docs/L10_TEST_CASES.json` has actually been exercised by the
-testbench suite under `sim/tb/`.
-
-Coverage rules per test case:
-  - For a `cmd_response` case with opcode 0xXX: require evidence that the
-    host packet byte sequence was driven into DUT, AND that the expected
-    response was checked. Accepted evidence:
-      (a) the opcode literal (`8'hXX`, `8'h<XX>`, or the hex byte in a
-          `tb_vec` array) appears in at least one `sim/tb/tb_*.v`, AND
-      (b) `sim/work/summary.txt` or `reports/sim/summary.txt` records
-          a passing case whose id matches the L10 `id` field (case-
-          insensitive substring).
-  - For `error_path` / `state_transition` / `timing_sequence` /
-    `analog_interaction` cases, require the case `id` to appear in at
-    least one tb file (comment or task name) — documented trace-to-
-    requirement.
+`generated_docs/L10_TEST_CASES.json` has a per-case verdict in the independent
+execution record written by the simulator runner.  Testbench source text and
+project-level PASS prose never decide a case verdict.
 
 This gate complements `cmd_response_conformance_check.py` which only
 verifies CRC-residue correctness of the host vectors; it does NOT verify
@@ -99,6 +86,7 @@ try:
     import testbench_gen as _tbg
 except Exception:  # pragma: no cover — never let a helper import break the gate
     _tbg = None
+import _l10_execution as _l10x
 
 
 # ----- helpers ------------------------------------------------------
@@ -1524,6 +1512,8 @@ def result_has_no_testbench(result: Dict[str, Any]) -> bool:
     status = result.get("status")
     if status == "fail":
         return True
+    if status == _l10x.NOT_EXECUTED:
+        return True
     return (status == "waived"
             and result.get("capability_gap") == CAP_CPU_FUNCTIONAL_ORACLE)
 
@@ -1609,11 +1599,12 @@ def evaluate(
     cpu_oracle_anchor_desc: Optional[str] = None,
     project_root: Optional[str] = None,
     producer_scaffold_kinds: Optional[frozenset] = None,
+    execution_record: Optional[Dict[str, Any]] = None,
 ) -> Tuple[List[Dict[str, Any]], int, int]:
     """Return (results, ok_count, fail_count).
 
-    The per-case ``status`` field ("pass" / "fail" / "waived" /
-    "checklist_gap") and the project-level ``waive_count`` / checklist-gap
+    The per-case ``status`` field ("pass" / "fail" / ``NOT_EXECUTED`` /
+    "waived" / "checklist_gap") and the project-level ``waive_count`` / checklist-gap
     count are derivable from the returned ``results`` list (see
     ``count_waived`` / ``count_checklist_gaps``); the 3-tuple return shape is
     preserved for backward compatibility with existing callers.
@@ -1646,6 +1637,10 @@ def evaluate(
     ``status`` for every case. That is deliberate: the fix for two readers
     disagreeing about one layer's scope is to make the disagreement legible,
     not to let the consumer stop grading."""
+    if execution_record is None:
+        execution_record = {"available": False,
+                            "reason": "no_execution_record",
+                            "rows": {}, "malformed": []}
     results: List[Dict[str, Any]] = []
     ok_count = 0
     fail_count = 0
@@ -1742,17 +1737,20 @@ def evaluate(
                 checklist_gap_count += 1
             continue
 
-        evidence: List[str] = []
-        if is_cmd_rsp:
-            if case_has_opcode_evidence(c, tb_blob):
-                evidence.append("opcode in tb")
-            if summary_has_pass(case_id, summary):
-                evidence.append("summary pass record")
-        # For any category, ID substring counts as evidence of trace-to-req
-        if case_id_appears(case_id, tb_blob, summary):
-            evidence.append("id substring in tb/summary")
-        ok = bool(evidence)
-        status = "pass" if ok else "fail"
+        # The verdict source is the executor's per-case record.  `tb_blob`
+        # remains available only to the separate vacuity/substance check; a
+        # case id or opcode in source text is never evidence that the case ran.
+        exec_state, exec_reason = _l10x.case_state(case_id, execution_record)
+        executed_fail = exec_state == _l10x.FAIL
+        ok = exec_state == _l10x.PASS
+        if ok:
+            evidence = [f"EXECUTED+PASSED — {exec_reason}"]
+        elif executed_fail:
+            evidence = [f"EXECUTED+FAILED — {exec_reason}"]
+        else:
+            evidence = [f"NOT_EXECUTED — {exec_reason}"]
+        status = ("pass" if ok else
+                  ("fail" if executed_fail else _l10x.NOT_EXECUTED))
         waived = False
         # ORGANIC #773 — class/kind-aware A/M-track waiver. ONLY a
         # verification_intent case with no digital evidence, under an
@@ -1767,7 +1765,8 @@ def evaluate(
         # cmd_response with no TB evidence STILL FAILs even if it also carries a
         # spurious verification_intent kind.
         cap_gap: Optional[str] = None
-        if (not ok and waiver_active and is_verification_intent(c)
+        if (not ok and not executed_fail
+                and waiver_active and is_verification_intent(c)
                 and not _has_digital_signal(c, is_cmd_rsp)):
             waived = True
             status = "waived"
@@ -1787,7 +1786,7 @@ def evaluate(
         # build. Checked BEFORE the broader cpu-functional-oracle waiver so
         # the more PRECISE reason (missing declaration, not missing oracle)
         # is reported when both could apply.
-        elif not ok and not waived:
+        elif not ok and not executed_fail and not waived:
             _cond_token = is_conditional_optional_case(c)
             if _cond_token and not conditional_feature_declared(
                     project_root, _cond_token):
@@ -1921,6 +1920,7 @@ def evaluate(
                 "evidence": evidence,
                 "pass": ok,
                 "status": status,
+                _l10x.SIM_EXECUTED_KEY: ok or executed_fail,
                 "waived": waived,
                 "review_required": waived,
                 "capability_gap": cap_gap,
@@ -1934,9 +1934,19 @@ def evaluate(
             # PASS_WITH_WAIVERS path, NOT folded into fail_count (which is
             # reserved for genuine, un-waivable digital misses — §4.05).
             pass
+        elif status == _l10x.NOT_EXECUTED:
+            # Nothing ran the case: neither a design PASS nor a design FAIL.
+            # The CLI still blocks Step 4 on this separate population.
+            pass
         else:
             fail_count += 1
     return results, ok_count, fail_count
+
+
+def count_not_executed(results: List[Dict[str, Any]]) -> int:
+    """Cases for which the execution producer observed no case verdict."""
+    return sum(1 for result in results
+               if result.get("status") == _l10x.NOT_EXECUTED)
 
 
 def count_waived(results: List[Dict[str, Any]]) -> int:
@@ -2100,13 +2110,16 @@ def main(argv: Optional[List[str]] = None) -> int:
     # verdict below is computed exactly as before.
     prod_scope = producer_scope_report(cases)
 
+    exec_record = _l10x.load_record(Path(project_root or "."), Path(args.l10))
     results, ok_count, fail_count = evaluate(
         cases, tb_blob, summary,
         skip_analog=args.skip_analog, analog_anchor=analog_anchor,
         analog_anchor_kind=analog_anchor_kind,
         cpu_oracle_anchor_desc=cpu_anchor, project_root=project_root,
         producer_scaffold_kinds=scaffold_kinds_of(prod_scope),
+        execution_record=exec_record,
     )
+    not_executed_count = count_not_executed(results)
     scope_gap = count_producer_scope_gap(results)
     waive_count = count_waived(results)
     checklist_gap_count = count_checklist_gaps(results)
@@ -2119,6 +2132,21 @@ def main(argv: Optional[List[str]] = None) -> int:
         "total": len(cases),
         "ok": ok_count,
         "fail": fail_count,
+        "not_executed": not_executed_count,
+        "sim_executed": bool(ok_count or fail_count),
+        "execution_record": {
+            "available": exec_record.get("available"),
+            "reason": exec_record.get("reason"),
+            "path": exec_record.get("path"),
+            "producer": exec_record.get("producer"),
+            "schema_ok": exec_record.get("schema_ok"),
+            "l10_binding_ok": exec_record.get("l10_binding_ok"),
+            "rows_declared": len(exec_record.get("rows") or {}),
+            "malformed_rows": exec_record.get("malformed") or [],
+            "unclaimed_rows": _l10x.unclaimed_rows(
+                [str(case.get("id", case.get("name", "")))
+                 for case in cases], exec_record),
+        },
         "waived": waive_count,
         "checklist_gaps": checklist_gap_count,
         "capability_gap": waiver_caps[0] if len(waiver_caps) == 1 else (waiver_caps or None),
@@ -2155,7 +2183,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     Path(args.out).parent.mkdir(parents=True, exist_ok=True)
     Path(args.out).write_text(json.dumps(out, indent=2, ensure_ascii=False))
 
-    if fail_count:
+    if fail_count or not_executed_count:
         # A genuine FAIL dominates — even if some cases were waived, an
         # un-waivable digital miss is still a hard FAIL (§4.05 NO-LEAK).
         #
@@ -2174,14 +2202,21 @@ def main(argv: Optional[List[str]] = None) -> int:
             # out-of-scope waivers this sentence read "12 of the 8 failure(s)".
             # Name the split instead, so the number is always attributed to the
             # population it was actually counted over.
-            gap_fail = sum(
-                1 for r in results
-                if r.get("status") == "fail"
-                and r.get("producer_scaffold_scope") == "out")
-            gap_waived = scope_gap - gap_fail
-            _split = (f"{gap_fail} FAILing"
-                      + (f" and {gap_waived} WAIVED-DEFERRED for want of an "
-                         f"oracle" if gap_waived else ""))
+            def _gap(status: str) -> int:
+                return sum(1 for result in results
+                           if result.get("status") == status
+                           and result.get("producer_scaffold_scope") == "out")
+            gap_fail = _gap("fail")
+            gap_not_executed = _gap(_l10x.NOT_EXECUTED)
+            gap_waived = scope_gap - gap_fail - gap_not_executed
+            bits = []
+            if gap_fail:
+                bits.append(f"{gap_fail} FAILing")
+            if gap_not_executed:
+                bits.append(f"{gap_not_executed} NOT_EXECUTED")
+            if gap_waived:
+                bits.append(f"{gap_waived} WAIVED-DEFERRED for want of an oracle")
+            _split = " and ".join(bits) if bits else f"{scope_gap} unclassified"
             print(
                 f"[l10-tb-conformance] SCOPE DISAGREEMENT — the L10 layer "
                 f"carries {len(cases)} case(s) of kind(s) "
@@ -2191,7 +2226,8 @@ def main(argv: Optional[List[str]] = None) -> int:
                 f"{scope_gap} case(s) — {_split} — are cases NO producer in "
                 f"the flow was scoped to write a testbench for; no testbench "
                 f"exists for them, and none was fabricated. (This run has "
-                f"{fail_count} failure(s) in total.) Fix the scope, not the "
+                f"{fail_count} executed failure(s) and {not_executed_count} "
+                f"never-executed case(s) in total.) Fix the scope, not the "
                 f"gate: a design that ships no testbench for a declared case "
                 f"is still marked down.",
                 file=sys.stderr,
@@ -2204,14 +2240,17 @@ def main(argv: Optional[List[str]] = None) -> int:
                 f"Files: {', '.join(vacuous_files)}",
                 file=sys.stderr,
             )
-        print(
-            f"[l10-tb-conformance] {fail_count}/{len(cases)} cases lack evidence "
-            f"(see {args.out}):",
-            file=sys.stderr,
-        )
-        for r in results:
-            if r.get("status") == "fail":
-                print(f"  - {r['id']} ({r['category']})", file=sys.stderr)
+        if fail_count:
+            print(
+                f"[l10-tb-conformance] {fail_count}/{len(cases)} case(s) "
+                f"EXECUTED AND FAILED (see {args.out})",
+                file=sys.stderr)
+        if not_executed_count:
+            print(
+                f"[l10-tb-conformance] {not_executed_count}/{len(cases)} "
+                f"case(s) NOT_EXECUTED; this is not a design failure and not "
+                f"a pass, but it blocks Step 4 (see {args.out})",
+                file=sys.stderr)
         if args.warn_only:
             return 0
         return 1

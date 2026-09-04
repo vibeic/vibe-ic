@@ -44,25 +44,27 @@ does not update when the wiring changes: a reader who rewires that clause
 tomorrow will not find it, and a reader who wonders about it today has to know
 to run `git log -S` over a 7000-line YAML file.
 
-MEASURED over all 79, and this is the census this gate was written from.
-79 clauses in 73 distinct programs — `stage_on_pass_review` is wired six times,
+MEASURED over all 77, and this is the current census this gate checks.
+77 clauses in 71 distinct programs — `stage_on_pass_review` is wired six times,
 once per stage, since v1.13.63 moved the on-pass stages into `steps:`, and
 `flow_compliance_check` twice, since v1.13.78 gave the review a verdict source
 with an executed producer. One is `l22_analog_verification_plan_emit`,
 wired at Step D1 to pay off the `flow_gate_enforcement_audit` ORPHAN finding
 against it — it declared ADVISORY and no clause anywhere ran it:
 
-    declare `ENFORCEMENT: advisory` (says WHAT)              59
+    declare `ENFORCEMENT: advisory` (says WHAT)              57
     declare no enforcement intent at all                     20
-    state a REASON where the clause or the gate can show it  79
+    state a REASON where the clause or the gate can show it  77
     state a reason in the COMMIT that wired the clause       28   (heuristic;
                                                                   see below)
 
 A declaration of WHAT is fully satisfied by a gate somebody downgraded an hour
 ago; only WHY distinguishes them, and until 2026-08-31 WHY was written 28 times
 into a medium no reader of the clause will reach. THE REGISTER IS NOW EMPTY: all
-79 clauses carry `advisory_reason:` and the recorded set tightened 77 -> 0. The
-row above reads 79 for that reason and not because the rule was loosened.
+77 clauses carry `advisory_reason:` and the recorded set tightened 77 -> 0. The
+row above reads 77 for that reason and not because the rule was loosened. Two
+former Step-4 advisory clauses are now required `program_exit_zero` clauses;
+they left this census rather than being relabelled within it.
 
 WHAT THOSE 82 REASONS SAY, and why they are not invented prose. Each is a
 MEASUREMENT, from a four-way classification of the whole population:
@@ -194,7 +196,7 @@ repo uses:
     a SHRINK-ONLY register. The 77 are RECORDED. The gate exits 0 while
     printing the whole gap, and exits 1 on the 78th.
 
-THE REGISTER IS NOW EMPTY (2026-08-31). All 79 clauses state a reason, the
+THE REGISTER IS NOW EMPTY (2026-08-31). All 77 current clauses state a reason, the
 recorded set tightened 77 -> 0, and `previous_size` is 77. So the paragraph
 above describes how this gate SHIPPED, not how it stands: there is no longer a
 standing dispensation, and the next silent advisory clause is rc 1 with nothing

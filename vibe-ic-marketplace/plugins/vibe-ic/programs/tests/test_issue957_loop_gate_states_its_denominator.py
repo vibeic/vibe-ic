@@ -145,8 +145,9 @@ def _published_corpus() -> list:
 
 
 def _templated_decls():
-    """The `run` lines a LOOP drives: the parser says so, this file does not."""
-    return [d for d in GD.parse_declarations(_SCRIPT) if d.runtime_expansion]
+    """The ``run`` lines this corpus loop drives, by lexical ownership."""
+    return [d for d in GD.declarations_in_function(
+        _SCRIPT, "_per_published_cell_gates") if d.runtime_expansion]
 
 
 def _literal_decls():
@@ -156,6 +157,22 @@ def _literal_decls():
 def _literal_prefix(label: str) -> str:
     """A templated label up to its first expansion — `macro OBS … (`."""
     return label.split("$")[0]
+
+
+def test_runtime_expansion_is_not_itself_corpus_loop_ownership():
+    """A variable can be runtime-bound by a different function or loop.
+
+    The old selector counted every such declaration as a routed-DEF gate and
+    expected 14 rows from the eight rows the declared dispatcher produced.
+    Require the parser-owned function scope to be both non-empty and narrower
+    than that generic runtime class.
+    """
+    all_runtime = [d for d in GD.parse_declarations(_SCRIPT)
+                   if d.runtime_expansion]
+    owned = _templated_decls()
+    assert owned
+    assert len(owned) < len(all_runtime), (owned, all_runtime)
+    assert set(owned) < set(all_runtime)
 
 
 def _list_run(script: Path, cwd: Path):

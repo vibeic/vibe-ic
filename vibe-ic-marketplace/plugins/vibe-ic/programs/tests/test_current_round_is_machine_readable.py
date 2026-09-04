@@ -50,6 +50,34 @@ from _published_corpus import corpus_root, needs_corpus  # noqa: E402
 
 AMBIG = "DELIVERABLE_CURRENT_ROUND_AMBIGUOUS"
 
+# Shrink-only population recorded from benchmark-data 8c4b608.  The previous
+# numeric floor of 20 had no member identity and went red at 19 after the
+# owner-directed result withdrawal; it could not say what disappeared and a
+# replacement file could buy it back.  These exact published paths are the
+# frozen population this repair must keep checking.  New RESULT.md files may
+# join; none of these may leave silently.
+_FROZEN_RESULT_PATHS = {
+    "evaluation/cvdp/v1.2.63_claude_opus4.8/RESULT.md",
+    "evaluation/rtllm/v1.10.45_gpt_5.6_sol/RESULT.md",
+    "evaluation/rtllm/v1.10.64_gpt_5.6_sol/RESULT.md",
+    "evaluation/rtllm/v1.14.5_gpt_5.6_sol/RESULT.md",
+    "evaluation/rtllm/v1.15.20_claude_fable5/RESULT.md",
+    "evaluation/rtllm/v1.3.88_claude_fable5/RESULT.md",
+    "evaluation/verilogeval_human/v1.10.45_gpt_5.6_sol/RESULT.md",
+    "evaluation/verilogeval_human/v1.10.64_gpt_5.6_sol/RESULT.md",
+    "evaluation/verilogeval_human/v1.13.78_gpt_5.6_sol/RESULT.md",
+    "evaluation/verilogeval_human/v1.3.88_claude_fable5/RESULT.md",
+    "evaluation/verilogeval_human/v1.4.81_claude_fable5/RESULT.md",
+    "evaluation/verilogeval_v2/v1.10.45_gpt_5.6_sol/RESULT.md",
+    "evaluation/verilogeval_v2/v1.10.66_gpt_5.6_sol/RESULT.md",
+    "evaluation/verilogeval_v2/v1.13.78_gpt_5.6_sol/RESULT.md",
+    "evaluation/verilogeval_v2/v1.3.88_claude_fable5/RESULT.md",
+    "evaluation/verilogeval_v2/v1.4.81_claude_fable5/RESULT.md",
+    "ic/spm/v1.10.18_sky130A/RESULT.md",
+    "ic/spm/v1.14.88_gf180mcuD/RESULT.md",
+    "ic/spm/v1.5.65_sky130A/RESULT.md",
+}
+
 # Enough prose to clear the deliverable's real-content floors in every fixture,
 # so that no assertion below is accidentally about byte count.
 _FILLER = (
@@ -561,6 +589,11 @@ def test_no_published_result_md_is_flagged(tmp_path):
     root = corpus_root()
     files = sorted(root.rglob("RESULT.md"))
     files = [f for f in files if ".git" not in f.parts]
+    rels = {f.relative_to(root).as_posix() for f in files}
+    missing = sorted(_FROZEN_RESULT_PATHS - rels)
+    assert not missing, (
+        "the frozen 8c4b608 RESULT.md population shrank by named member: "
+        + repr(missing))
     run = tmp_path / "sweep"
     (run / "reports").mkdir(parents=True)
     (run / "reports" / "final_summary.md").write_text("verdict: FAIL\n")
@@ -572,4 +605,6 @@ def test_no_published_result_md_is_flagged(tmp_path):
                             rep.evidence["round_tally_distinct"]))
     assert not flagged, ("published RESULT.md flagged as ambiguous-current-"
                         "round: " + repr(flagged))
-    assert len(files) >= 20, f"sweep saw only {len(files)} files — too thin"
+    assert len(files) >= len(_FROZEN_RESULT_PATHS), (
+        f"sweep saw only {len(files)} files against the named "
+        f"{len(_FROZEN_RESULT_PATHS)}-file frozen population")

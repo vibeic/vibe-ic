@@ -536,9 +536,7 @@ def test_the_replay_never_mutates_the_published_run():
     runs = sorted({m.run_dir for m in L.ARTEFACT_MUTATIONS})
     assert runs, "no runs named; this control is measuring nothing"
     replay_results()          # force the replays before looking
-    paths = [str((L.benchmark_data_root() / r)) for r in runs]
-    proc = _pr.run(["git", "status", "--porcelain", "--", *paths],
-                          cwd=str(L.REPO_ROOT), capture_output=True, text=True)
+    proc = L.published_runs_git_status(runs)
     assert proc.returncode == 0, proc.stderr[-800:]
     assert not proc.stdout.strip(), (
         f"replaying the artefact ledger modified the PUBLISHED corpus:\n"
@@ -738,13 +736,32 @@ def test_the_canary_run_is_never_written_by_this_repository():
     the corpus rather than something this branch created.
 
     A mutation ledger whose evidence is a fixture it wrote itself measures its
-    own fixture. Checked by asking git whether the run is tracked.
+    own fixture. Checked by asking the Git repository that owns the configured
+    corpus whether the run is tracked.  That repository is not necessarily the
+    vibe-ic repository: published cells normally arrive through an external
+    ``VIBE_IC_BENCHMARK_DATA`` checkout.
     """
     for run in sorted({m.run_dir for m in L.ARTEFACT_MUTATIONS}):
-        rel = (L.benchmark_data_root() / run).relative_to(L.REPO_ROOT)
-        proc = _pr.run(["git", "ls-files", "--error-unmatch", str(rel)],
-                              cwd=str(L.REPO_ROOT), capture_output=True,
-                              text=True)
-        assert proc.returncode == 0 and proc.stdout.strip(), (
+        assert L.published_run_is_git_tracked(run), (
             f"{run} is not tracked in git, so it is not a PUBLISHED run and "
             f"this channel would be measuring a local fixture")
+
+
+def test_external_corpus_tracking_refuses_an_untracked_fixture(
+        tmp_path, monkeypatch):
+    """CONTROL: relocating the corpus must not turn an untracked run green."""
+    corpus = tmp_path / "benchmark-data"
+    tracked = corpus / "ic" / "tracked" / "v1_sky130A"
+    untracked = corpus / "ic" / "fixture" / "v1_sky130A"
+    tracked.mkdir(parents=True)
+    untracked.mkdir(parents=True)
+    (tracked / "result.json").write_text("{}\n", encoding="utf-8")
+    (untracked / "result.json").write_text("{}\n", encoding="utf-8")
+    assert _pr.run(["git", "init", "-q"], cwd=str(corpus)).returncode == 0
+    assert _pr.run(
+        ["git", "add", "ic/tracked/v1_sky130A/result.json"],
+        cwd=str(corpus)).returncode == 0
+    monkeypatch.setenv(L.BENCHMARK_DATA_ENV, str(corpus))
+
+    assert L.published_run_is_git_tracked("ic/tracked/v1_sky130A")
+    assert not L.published_run_is_git_tracked("ic/fixture/v1_sky130A")

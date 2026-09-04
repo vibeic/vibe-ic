@@ -39,6 +39,8 @@ import pytest
 
 _PROGRAMS = pathlib.Path(__file__).resolve().parents[1]
 _ROOT_WITNESS = "vibe-ic-marketplace"
+_ARCHIVE_REL = pathlib.Path(
+    "docs/campaigns/ppa-eco-axis-audit/HISTORICAL_COMMITS.bundle")
 sys.path.insert(0, str(_PROGRAMS))
 from not_verified_tier import skip_not_verified  # noqa: E402
 
@@ -103,18 +105,51 @@ def _require_git(root):
             "run this test from a complete git checkout that includes .git")
 
 
-def test_every_sha_the_report_cites_resolves_to_a_commit():
-    """A 9-hex token in the prose that names no object is a dead citation."""
+def _archive_heads(root):
+    archive = root / _ARCHIVE_REL
+    proc = _git(root, "bundle", "list-heads", str(archive))
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    heads = tuple(
+        line.split(None, 1)[0]
+        for line in proc.stdout.splitlines()
+        if line.strip()
+    )
+    assert heads, f"{archive} carries no recoverable commit heads"
+    return heads
+
+
+def _sha_is_recoverable(root, sha, archive_heads):
+    if _git(root, "cat-file", "-e", f"{sha}^{{commit}}").returncode == 0:
+        return True
+    return any(full.startswith(sha) for full in archive_heads)
+
+
+def test_every_sha_the_report_cites_is_live_or_archived():
+    """A historical source SHA must resolve now or be recoverable exactly."""
     root = _repo_root()
     _require_git(root)
     text = _report().read_text(encoding="utf-8")
     shas = sorted(set(re.findall(r"\b[0-9a-f]{9}\b", text)))
     assert shas, "no shas cited at all; this row would pass vacuously"
-    dead = [s for s in shas
-            if _git(root, "cat-file", "-e", f"{s}^{{commit}}").returncode]
+    archived = _archive_heads(root)
+    dead = [s for s in shas if not _sha_is_recoverable(root, s, archived)]
     assert not dead, (
-        f"{len(dead)} of {len(shas)} cited sha(s) resolve to no commit in this "
-        f"repository: {dead}")
+        f"{len(dead)} of {len(shas)} cited sha(s) neither resolve in this "
+        f"repository nor name an exact head in {_ARCHIVE_REL}: {dead}")
+
+
+def test_the_historical_bundle_is_intact_and_usable_from_this_commit():
+    """The archive is not just a list: Git verifies its objects and bases."""
+    root = _repo_root()
+    _require_git(root)
+    archive = root / _ARCHIVE_REL
+    tracked = _git(root, "ls-files", "--error-unmatch", str(_ARCHIVE_REL))
+    assert tracked.returncode == 0, f"archive is not tracked: {tracked.stderr}"
+    verified = _git(root, "bundle", "verify", str(archive))
+    assert verified.returncode == 0, verified.stdout + verified.stderr
+    assert not _sha_is_recoverable(root, "deadbeef0", _archive_heads(root)), (
+        "an arbitrary missing SHA was accepted as archived"
+    )
 
 
 def test_every_repo_path_the_report_cites_exists():
