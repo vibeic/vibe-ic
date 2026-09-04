@@ -110,9 +110,17 @@ _MODE_PATTERNS: List[Tuple[str, "re.Pattern[str]"]] = [
     ("round_ceiling", re.compile(
         r"\b(ceil\w*|round(?:ed|ing|s)?[ \-]?(?:toward|towards|to)?[ \-]?"
         r"(?:positive[ \-]?infinity|\+?\s*inf\w*|up\b)|\bRUP\b)", re.I)),
-    # floor / round toward -inf / round down
+    # floor / round toward -inf / round down.  A bare ``floor\w*`` is not a
+    # rounding mode: phase-1 documents routinely contain ``floorplan_hints``
+    # and building-control prompts contain ordinary floors.  Require either
+    # explicit rounding context or a floor operation applied to a numeric
+    # result.
     ("round_floor", re.compile(
-        r"\b(floor\w*|round(?:ed|ing|s)?[ \-]?(?:toward|towards|to)?[ \-]?"
+        r"\b(floor[ \-]?(?:round\w*|mode|behavior|function|operation)|"
+        r"(?:rounding[ \-]?mode(?:\s+is|:)?|use)\s+floor\b|floor\s*\(|"
+        r"floor(?:ed|ing)?\s+(?:the\s+)?(?:value|result|quotient|output|"
+        r"number|operand)\b|"
+        r"round(?:ed|ing|s)?[ \-]?(?:toward|towards|to)?[ \-]?"
         r"(?:negative[ \-]?infinity|-\s*inf\w*|down\b)|\bRDN\b)", re.I)),
     # round away from zero (sign-independent magnitude bump)
     ("round_away_from_zero", re.compile(

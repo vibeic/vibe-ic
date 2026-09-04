@@ -267,6 +267,7 @@ def _extract_field_items(bits_cell: str, reg_name: str, reg_offset: str,
             "width": width,
             "access": "",
             "reset": "",
+            "coverage_tokens": [reg_name, reg_offset, span],
             "covered": None,
             "coverage_note": "",
             "stations": ["user_prompt"],
@@ -323,6 +324,7 @@ def _extract_table(text: str) -> List[dict]:
                     "width": width,
                     "access": access,
                     "reset": reset,
+                    "coverage_tokens": [name, offset],
                     "covered": None,
                     "coverage_note": "",
                     "stations": ["user_prompt"],
@@ -369,6 +371,12 @@ def _looks_like_register_name(tok: str) -> bool:
         return False
     if tok.isdigit():
         return False
+    # A parenthesized value can follow a Verilog sized literal, for example
+    # `POLY = 8'b10101010 (0xAA)`.  The B1 regex starts at the apostrophe's
+    # trailing `b10101010` word unless this fragment is rejected here; that
+    # fragment is a value spelling, not a register identifier.
+    if re.fullmatch(r"[bBoOdDhH][0-9A-Fa-f_xXzZ]+", tok):
+        return False
     return True
 
 
@@ -396,6 +404,7 @@ def _extract_inline(text: str) -> List[dict]:
             "width": "",
             "access": "",
             "reset": reset,
+            "coverage_tokens": [name, offset],
             "covered": None,
             "coverage_note": "",
             "stations": ["user_prompt"],

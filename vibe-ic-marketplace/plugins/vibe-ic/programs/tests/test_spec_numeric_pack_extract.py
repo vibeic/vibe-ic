@@ -166,6 +166,30 @@ def test_around_does_not_fire_rounding():
     assert M.extract(prompt) == []
 
 
+def test_floorplan_and_building_floors_do_not_fire_rounding():
+    """Physical/layout and building-floor prose is not numeric rounding."""
+    prompt = (
+        '"floorplan_hints": []\n'
+        "Route around the floorplan macro and preserve the floorplanning "
+        "constraints. The elevator starts at the ground floor and reports "
+        "the current floor."
+    )
+    assert M.extract(prompt) == []
+
+
+def test_floor_rounding_requires_explicit_numeric_context():
+    prompts = (
+        "Use floor rounding for negative quotients.",
+        "Rounding mode: floor.",
+        "Floor the result before assignment.",
+        "Apply the floor function to the output.",
+    )
+    for prompt in prompts:
+        modes = {it.get("mode") for it in M.extract(prompt)
+                 if it["kind"] == "rounding_mode"}
+        assert modes == {"round_floor"}, prompt
+
+
 def test_unstated_division_returns_empty():
     # A non-restoring INTEGER division (cvdp_copilot_gaussian_rounding_div_0003
     # shape) states NO named rounding mode and NO width ratio -> []. This is the
