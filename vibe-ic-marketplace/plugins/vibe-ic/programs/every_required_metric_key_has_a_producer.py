@@ -86,6 +86,7 @@ import os
 import sys
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Set, Tuple
+import _metric_vocabulary as _mv  # vibe-ic: one fact, one canonical name
 
 NAME = "every_required_metric_key_has_a_producer"
 PROGRAMS_REL = Path("vibe-ic-marketplace/plugins/vibe-ic/programs")
@@ -158,11 +159,51 @@ def producers(tree_root: Path, keys: Set[str]) -> Dict[str, Set[str]]:
         recs = obj.get("records")
         return recs is None or (isinstance(recs, int) and recs > 0)
 
+    def _flat_evidence(obj: dict, where: str) -> None:
+        """A canonical key measured under the OTHER spelling still counts.
+
+        THE FALSE ABSENCE THIS REMOVES. This tree carries two vocabularies for
+        the same facts: the axes ask for `timing.setup.worst_slack_ns` and the
+        producers emit `timing__setup__ws`, OpenROAD's own convention, as a
+        FLAT key rather than as a `{"metric": ...}` record. This gate looked
+        only for the record shape under the dotted name, found 2 of 20, and
+        reported axes as "NOT PROVEN BY ANY RUN IN THIS CORPUS". The runs
+        measured them.
+
+        ONLY `SAME_FACT` SPELLINGS COUNT, from `_metric_vocabulary`, and the
+        table states WHY for each. A transliteration would credit
+        `timing.setup.wns_ns` from `ws` — worst slack against worst NEGATIVE
+        slack — and report a violation number on every design that has none.
+        `route__drc_errors` is likewise NARROWER and never credits the sign-off
+        DRC: it is the router's own in-loop subset, on the DEF rather than the
+        streamed layout, and crediting it is how a clean router log reads as a
+        clean die.
+
+        A null or NOT_MEASURED value is not evidence. A `0` IS: it is the
+        number a clean run reports, and dropping it would make this gate blind
+        to exactly the designs that pass.
+        """
+        for canon in keys:
+            if canon in found:
+                continue
+            for spelling in _mv.resolving_spellings(canon):
+                if spelling not in obj:
+                    continue
+                val = obj[spelling]
+                if val is None:
+                    continue
+                if isinstance(val, str) and val.strip().upper() in (
+                        "NOT_MEASURED", "NO_RECORD", ""):
+                    continue
+                found[canon].add(f"{where} (as {spelling})")
+                break
+
     def walk_json(obj, where: str) -> None:
         if isinstance(obj, dict):
             name = obj.get("metric")
             if isinstance(name, str) and name in keys and _is_evidence(obj):
                 found[name].add(where)
+            _flat_evidence(obj, where)
             for v in obj.values():
                 walk_json(v, where)
         elif isinstance(obj, list):

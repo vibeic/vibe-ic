@@ -11645,6 +11645,93 @@ def _collect_program_output_records(project: Path,
     return records
 
 
+def _emit_step_metrics(project: Path, step: Dict[str, Any],
+                       result: "StepResult") -> None:
+    """One flat metrics row per step, from the numbers the gate already wrote.
+
+    THE ORFS SHAPE, WHICH IS THE WRAPPER'S AND NOT EACH TOOL'S. `step_metrics`
+    was adopted from OpenROAD-flow-scripts, and its own docstring quotes how
+    ORFS gets a run-to-run diff: "every ORFS stage runs through the same
+    21-line wrapper with `-metrics "$LOG_DIR/$1.json"`". The stage scripts do
+    not each learn to emit; the WRAPPER does it for all of them.
+
+    Measured 2026-09-04: 4 of the 50 flow steps that declare programs emitted
+    through `step_metrics`, so the question ORFS answers with one `diff` — is
+    this run better or worse than the last — was answered here by reading prose
+    across a dozen differently shaped JSONs. Converting 46 programs by hand
+    would have been the un-ORFS way AND a diff nobody reviews; this is the one
+    place every step already passes through.
+
+    WHAT IS EMITTED IS WHAT WAS ALREADY MEASURED. The step's verdict, and the
+    SCALAR top-level fields of the report its own `required_outputs` declares.
+    Nothing is computed here: a value this function derived would be a number
+    about the run that no gate stands behind.
+
+    NON-SCALARS ARE SKIPPED, NOT FLATTENED. A list of offenders is not a
+    measurement; `len()` of it might be, but choosing that is the gate's call
+    and not this wrapper's. The flat schema refuses them anyway, which is how
+    `placement_legality_check`'s own conversion was caught.
+
+    BEST-EFFORT BY CONSTRUCTION: a metrics sink that failed must never change a
+    verdict. `emit_best_effort` is the entry point for exactly that reason.
+    """
+    try:
+        import step_metrics as _sm                            # noqa: PLC0415
+    except Exception:                                          # noqa: BLE001
+        return
+    # `step_status`, NOT `verdict`. MEASURED: `placement_legality_check`
+    # already emits `verdict` for step 17 — its GATE's verdict — and this
+    # wrapper's value is `StepResult.status`, the step's state AFTER evidence,
+    # waivers and cascade attribution. Those are different facts. Under one
+    # name they become `17__flow__verdict` twice and `emit`'s `prior.update`
+    # lets the last writer win, so the gate's own measurement would be
+    # silently replaced by a different quantity. Two instruments, two names.
+    metrics: Dict[str, Any] = {"step_status": getattr(result, "status", "")}
+
+    # AND NOTHING ALREADY EMITTED IS OVERWRITTEN. A program that emitted for
+    # this step measured something it stands behind; this wrapper forwards a
+    # gate's report and stands behind nothing. Where both would write a key,
+    # the one with an author keeps it, and the collision is left visible rather
+    # than resolved by whoever ran last.
+    already: set = set()
+    try:
+        import step_metrics as _sm_probe                      # noqa: PLC0415
+        _existing = (Path(project) / _sm_probe.METRICS_REL /
+                     f"{_sm_probe.normalize_step(step.get('id'))}.json")
+        if _existing.is_file():
+            _doc = json.loads(_existing.read_text(errors="replace"))
+            if isinstance(_doc, dict):
+                already = set(_doc)
+    except Exception:                                          # noqa: BLE001
+        already = set()
+
+    for entry in (step.get("required_outputs") or []):
+        rel = entry.get("path") if isinstance(entry, dict) else entry
+        if not isinstance(rel, str) or not rel.endswith(".json"):
+            continue
+        path = project / rel
+        if not path.is_file():
+            continue
+        try:
+            doc = json.loads(path.read_text(errors="replace"))
+        except (OSError, ValueError):
+            continue
+        if not isinstance(doc, dict):
+            continue
+        for k, v in doc.items():
+            if not isinstance(k, str) or k in metrics:
+                continue
+            if isinstance(v, bool) or isinstance(v, (int, float)):
+                metrics[k] = v
+    if already:
+        _sm_ = _sm
+        _prefix = f"{_sm_.normalize_step(step.get('id'))}__"
+        metrics = {k: v for k, v in metrics.items()
+                   if not any(e.startswith(_prefix) and e.endswith(f"__{k}")
+                              for e in already)}
+    _sm.emit_best_effort(project, step.get("id"), metrics)
+
+
 def check_step(project: Path, step: Dict[str, Any], waivers: Dict,
                skip_analog: bool = False, skip_hardware: bool = False,
                strict_audit_evidence: bool = True) -> StepResult:
@@ -14173,10 +14260,12 @@ def main(argv: Optional[List[str]] = None) -> int:
     _workers = _compliance_workers(len(_eval_steps))
     if _workers <= 1:
         for step in _eval_steps:
-            results.append(check_step(
+            _r = check_step(
                 project, step, waivers,
                 skip_analog=skip_analog, skip_hardware=skip_hardware,
-                strict_audit_evidence=strict_audit_evidence))
+                strict_audit_evidence=strict_audit_evidence)
+            _emit_step_metrics(project, step, _r)
+            results.append(_r)
     else:
         # Independent read-only gates → evaluate concurrently; collect the
         # futures in SUBMISSION order so `results` stays byte-for-byte the
@@ -14189,8 +14278,14 @@ def main(argv: Optional[List[str]] = None) -> int:
                            strict_audit_evidence=strict_audit_evidence)
                 for step in _eval_steps
             ]
-            for _fut in _futs:
-                results.append(_fut.result())
+            # THE SAME EMIT ON BOTH BRANCHES. A metrics row that appears only
+            # when the tree happens to run single-threaded is a row nobody can
+            # rely on for a run-to-run diff, and the branch taken is decided by
+            # `_compliance_workers` from the machine, not from the design.
+            for _step, _fut in zip(_eval_steps, _futs):
+                _r = _fut.result()
+                _emit_step_metrics(project, _step, _r)
+                results.append(_r)
 
     # v0.3.5 — ORGANIC #502/#503: cascade attribution AFTER all step
     # verdicts are final (waiver conversions included): waiver chains

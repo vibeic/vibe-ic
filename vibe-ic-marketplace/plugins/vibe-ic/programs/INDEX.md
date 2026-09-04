@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 1270
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1270)
+- **Total programs (excluding helpers / shims):** 1271
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1271)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 1261 |
+| `any` | 1262 |
 
 ## Alphabetical listing
 
@@ -1160,6 +1160,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `step_input_scope` | any | — | §4.05 as a MECHANISM: a step cannot read the oracle. vibe-ic#1079. |
 | `step_internal_fail_bubble_up_check` | any | — | anti-fabrication gate (v1.6.44). |
 | `step_metrics` | any | — | One per-step metrics schema, emitted by whoever computed the number. #1080. |
+| `step_metrics_adoption_check` | any | — | the one metrics schema, and who still is not using it. |
 | `step_output_collector` | any | — | materialize a per-STEP output subfolder view. |
 | `step_preflight` | any | — | the ORCHESTRATOR side of `required_inputs`. |
 | `step_repro_bundle` | any | — | everything one step reads, in one file, plus what it ran on. |
@@ -1342,7 +1343,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (1261 programs)
+### `any` (1262 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `absence_verdict_names_its_search_space_check` — "not found" must say WHERE it looked.
@@ -2471,6 +2472,7 @@ _(no programs in this group)_
 - `step_input_scope` — §4.05 as a MECHANISM: a step cannot read the oracle. vibe-ic#1079.
 - `step_internal_fail_bubble_up_check` — anti-fabrication gate (v1.6.44).
 - `step_metrics` — One per-step metrics schema, emitted by whoever computed the number. #1080.
+- `step_metrics_adoption_check` — the one metrics schema, and who still is not using it.
 - `step_output_collector` — materialize a per-STEP output subfolder view.
 - `step_preflight` — the ORCHESTRATOR side of `required_inputs`.
 - `step_repro_bundle` — everything one step reads, in one file, plus what it ran on.

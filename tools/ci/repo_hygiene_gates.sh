@@ -3035,6 +3035,14 @@ run "an argued direction is pinned" "$PLUGIN" python3 programs/policy_direction_
 #   baseline 565); rc=0 "[PASS] no new non-atomic declared-report write."
 # The 565 are a recorded residual, not a waiver — the gate fails on a NEW one.
 run "declared reports are written atomically" "$PLUGIN" python3 programs/atomic_artifact_write_check.py programs
+# ONE METRICS SCHEMA, AND WHO USES IT. `step_metrics.py` was adopted from
+# OpenROAD-flow-scripts and its own docstring records why: every checker chose
+# its own shape, no per-step QoR aggregator, nothing computing a run-to-run
+# delta. MEASURED 2026-09-04: 4 of the 50 flow steps that declare programs emit
+# through it. The 46 are the residual and are named every run; what blocks is a
+# step that STOPS emitting, or a new step that declares programs and emits
+# nothing.
+run "one per-step metrics schema, and who still is not using it" "$PLUGIN" python3 programs/step_metrics_adoption_check.py .
 
 # The other half of #447: compare the checkout records every gate above has
 # ALREADY produced with one fresh-worktree run.  This is deliberately LAST.
