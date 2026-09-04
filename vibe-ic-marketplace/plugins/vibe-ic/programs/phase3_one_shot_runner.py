@@ -6502,6 +6502,135 @@ def _io_pg_global_connect_tcl(pdk: "PdkConfig", container: Optional[str],
     return out
 
 
+def _pad_connected_ring_tcl(pdk: "PdkConfig") -> Dict[str, str]:
+    """Build a config-driven, runtime-fitted pad-connected core ring.
+
+    A configured ring is fitted to the *placed* side-pad/core gap in ODB.  The
+    configured offset is an upper bound, never a promise that ignores the
+    actual floorplan.  The remaining room must cover both rails plus the PDK's
+    declared clearance.  Corner cells do not overlap a core side and therefore
+    do not participate in the gap measurement.
+
+    No pads is an inert case: the ordinary core grid is emitted byte-for-byte
+    and no ring/connect/extension is added.  Pads with no measurable side gap,
+    or insufficient room, fail closed inside the surrounding pdngen catch via
+    both a named refusal marker and ``error``.  Pure config + ODB geometry;
+    there is no design, PDK, cell, instance, or net literal here.
+    """
+    cfg = getattr(pdk, "pdn_ring", None) or {}
+    if not cfg:
+        return {
+            "grid": "  define_pdn_grid -name grid -voltage_domains CORE\n",
+            "extend": "",
+            "connects": "",
+            "note": "",
+        }
+
+    layers = cfg.get("layers") or []
+    widths = cfg.get("widths") or []
+    spacings = cfg.get("spacings") or []
+    pad_layers = cfg.get("connect_to_pad_layers") or []
+    connects = cfg.get("connects") or []
+    try:
+        offset = float(cfg.get("core_offset_um"))
+        clearance = float(cfg.get("min_clearance_um"))
+        widths_f = [float(v) for v in widths]
+        spacings_f = [float(v) for v in spacings]
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"invalid pdn_ring numeric config: {exc}") from exc
+    names = list(layers) + list(pad_layers) + [n for pair in connects
+                                               for n in (pair or [])]
+    if (len(layers) != 2 or len(widths_f) != 2 or len(spacings_f) != 2
+            or not pad_layers or offset <= 0 or clearance < 0
+            or any(v <= 0 for v in widths_f + spacings_f)
+            or any(not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_.]*", str(n))
+                   for n in names)
+            or any(not isinstance(pair, (list, tuple)) or len(pair) != 2
+                   for pair in connects)):
+        raise ValueError("invalid pdn_ring shape or layer identifier")
+
+    layer_s = " ".join(str(v) for v in layers)
+    width_s = " ".join(str(v) for v in widths_f)
+    spacing_s = " ".join(str(v) for v in spacings_f)
+    pad_layer_s = " ".join(str(v) for v in pad_layers)
+    # Each side contains two rails on its one routing layer.  Use the larger
+    # orientation footprint so one conservative offset is valid on all sides.
+    footprint = max(2.0 * widths_f[i] + spacings_f[i] for i in range(2))
+    setup = f"""  # Pad-connected ring: fit the PDK recipe to placed ODB geometry.
+  set _vibeic_ring_extend {{}}
+  set _vibeic_pad_ring_active 0
+  set _vibeic_pr_block [ord::get_db_block]
+  set _vibeic_pr_core [$_vibeic_pr_block getCoreArea]
+  set _vibeic_pr_cx0 [$_vibeic_pr_core xMin]
+  set _vibeic_pr_cy0 [$_vibeic_pr_core yMin]
+  set _vibeic_pr_cx1 [$_vibeic_pr_core xMax]
+  set _vibeic_pr_cy1 [$_vibeic_pr_core yMax]
+  set _vibeic_pr_pad_count 0
+  set _vibeic_pr_side_count 0
+  set _vibeic_pr_gap_dbu -1
+  foreach _vibeic_pr_inst [$_vibeic_pr_block getInsts] {{
+    set _vibeic_pr_master [$_vibeic_pr_inst getMaster]
+    if {{![string match "PAD*" [$_vibeic_pr_master getType]]}} {{ continue }}
+    if {{[$_vibeic_pr_inst getPlacementStatus] eq "NONE"}} {{ continue }}
+    incr _vibeic_pr_pad_count
+    set _vibeic_pr_box [$_vibeic_pr_inst getBBox]
+    set _vibeic_pr_x0 [$_vibeic_pr_box xMin]
+    set _vibeic_pr_y0 [$_vibeic_pr_box yMin]
+    set _vibeic_pr_x1 [$_vibeic_pr_box xMax]
+    set _vibeic_pr_y1 [$_vibeic_pr_box yMax]
+    set _vibeic_pr_gap -1
+    if {{$_vibeic_pr_y1 <= $_vibeic_pr_cy0 && $_vibeic_pr_x1 > $_vibeic_pr_cx0 && $_vibeic_pr_x0 < $_vibeic_pr_cx1}} {{
+      set _vibeic_pr_gap [expr {{$_vibeic_pr_cy0 - $_vibeic_pr_y1}}]
+    }} elseif {{$_vibeic_pr_y0 >= $_vibeic_pr_cy1 && $_vibeic_pr_x1 > $_vibeic_pr_cx0 && $_vibeic_pr_x0 < $_vibeic_pr_cx1}} {{
+      set _vibeic_pr_gap [expr {{$_vibeic_pr_y0 - $_vibeic_pr_cy1}}]
+    }} elseif {{$_vibeic_pr_x1 <= $_vibeic_pr_cx0 && $_vibeic_pr_y1 > $_vibeic_pr_cy0 && $_vibeic_pr_y0 < $_vibeic_pr_cy1}} {{
+      set _vibeic_pr_gap [expr {{$_vibeic_pr_cx0 - $_vibeic_pr_x1}}]
+    }} elseif {{$_vibeic_pr_x0 >= $_vibeic_pr_cx1 && $_vibeic_pr_y1 > $_vibeic_pr_cy0 && $_vibeic_pr_y0 < $_vibeic_pr_cy1}} {{
+      set _vibeic_pr_gap [expr {{$_vibeic_pr_x0 - $_vibeic_pr_cx1}}]
+    }}
+    if {{$_vibeic_pr_gap >= 0}} {{
+      incr _vibeic_pr_side_count
+      if {{$_vibeic_pr_gap_dbu < 0 || $_vibeic_pr_gap < $_vibeic_pr_gap_dbu}} {{
+        set _vibeic_pr_gap_dbu $_vibeic_pr_gap
+      }}
+    }}
+  }}
+  if {{$_vibeic_pr_pad_count == 0}} {{
+    define_pdn_grid -name grid -voltage_domains CORE
+    puts "PDN_PAD_RING_INERT: no placed PAD-class masters; ordinary core grid retained"
+  }} elseif {{$_vibeic_pr_side_count == 0 || $_vibeic_pr_gap_dbu < 0}} {{
+    puts "PDN_PAD_RING_REFUSED: placed_pads=$_vibeic_pr_pad_count but no side-pad/core gap was measurable"
+    error "PDN_PAD_RING_REFUSED: no measurable side-pad/core gap"
+  }} else {{
+    set _vibeic_pr_tech [[ord::get_db] getTech]
+    set _vibeic_pr_dbu [$_vibeic_pr_tech getDbUnitsPerMicron]
+    set _vibeic_pr_gap_um [expr {{double($_vibeic_pr_gap_dbu) / $_vibeic_pr_dbu}}]
+    set _vibeic_pr_fit [expr {{floor(($_vibeic_pr_gap_um - {footprint} - {clearance}) * $_vibeic_pr_dbu) / $_vibeic_pr_dbu}}]
+    if {{$_vibeic_pr_fit > {offset}}} {{ set _vibeic_pr_fit {offset} }}
+    if {{$_vibeic_pr_fit <= 0}} {{
+      puts "PDN_PAD_RING_REFUSED: gap=${{_vibeic_pr_gap_um}}um footprint={footprint}um clearance={clearance}um leaves offset=${{_vibeic_pr_fit}}um"
+      error "PDN_PAD_RING_REFUSED: ring does not fit between placed pads and core"
+    }}
+    define_pdn_grid -name grid -voltage_domains CORE -connect_to_pads -connect_to_pad_layers {{{pad_layer_s}}}
+    add_pdn_ring -grid grid -layers {{{layer_s}}} -widths {{{width_s}}} -spacings {{{spacing_s}}} -core_offsets [list $_vibeic_pr_fit $_vibeic_pr_fit $_vibeic_pr_fit $_vibeic_pr_fit]
+    set _vibeic_ring_extend {{-extend_to_core_ring}}
+    set _vibeic_pad_ring_active 1
+    puts "PDN_PAD_RING_PLAN: placed_pads=$_vibeic_pr_pad_count side_pads=$_vibeic_pr_side_count gap=${{_vibeic_pr_gap_um}}um configured_offset={offset}um fitted_offset=${{_vibeic_pr_fit}}um footprint={footprint}um clearance={clearance}um layers={layer_s} pad_layers={pad_layer_s}"
+  }}
+"""
+    extra = ""
+    for lower, upper in connects:
+        extra += ("  if {$_vibeic_pad_ring_active} { "
+                  f"add_pdn_connect -grid grid -layers {{{lower} {upper}}} "
+                  "}\n")
+    return {
+        "grid": setup,
+        "extend": " {*}${_vibeic_ring_extend}",
+        "connects": extra,
+        "note": f" + pad_ring({layer_s};pads={pad_layer_s};runtime-fit)",
+    }
+
+
 def _build_pdn_tcl(pdk: "PdkConfig", container: Optional[str] = None,
                    em_floor: Optional[Dict[str, Any]] = None) -> str:
     """v0.1.47 — emit OpenROAD PDN (`add_global_connection`/`define_pdn_grid`/
@@ -6599,6 +6728,7 @@ def _build_pdn_tcl(pdk: "PdkConfig", container: Optional[str] = None,
         # met1-follow-pins-only PDN below is emitted UNCHANGED.
         strap_tcl = ""
         strap_note = ""
+        ring = _pad_connected_ring_tcl(pdk)
         straps = (pdk.pdn_straps or {})
         # The registry config WINS when present (a PDK that ships tuned
         # IR-drop geometry keeps it, byte-identical). When it is ABSENT the
@@ -6670,12 +6800,13 @@ def _build_pdn_tcl(pdk: "PdkConfig", container: Optional[str] = None,
                     continue
                 _sl.append(
                     f"  add_pdn_stripe -grid grid -layer {lyr} -width {sw} "
-                    f"-pitch {sp} -offset {off}\n")
+                    f"-pitch {sp} -offset {off}{ring['extend']}\n")
             for pair in _connects:
                 if isinstance(pair, (list, tuple)) and len(pair) == 2:
                     _sl.append(
                         f"  add_pdn_connect -grid grid -layers "
                         f"{{{pair[0]} {pair[1]}}}\n")
+            _sl.append(ring["connects"])
             if _sl:
                 strap_tcl = "".join(_sl)
                 strap_note = (" + straps(" + _auto_note
@@ -6856,8 +6987,8 @@ def _build_pdn_tcl(pdk: "PdkConfig", container: Optional[str] = None,
             + _sec["enumerate"]
             + f"  set_voltage_domain -name CORE -power {pwr} -ground {gnd}"
             + _sec["domain_opt"] + "\n"
-            "  define_pdn_grid -name grid -voltage_domains CORE\n"
-            f"  add_pdn_stripe -grid grid -layer {fpl} -width {w} -followpins\n"
+            + ring["grid"]
+            + f"  add_pdn_stripe -grid grid -layer {fpl} -width {w} -followpins{ring['extend']}\n"
             + strap_tcl
             + _sec["stripes"]
             + _mg_tcl
@@ -8284,6 +8415,10 @@ class PdkConfig:
     # ABSENT -> the met1-follow-pins-only PDN is emitted unchanged (a PDK with a
     # naturally-connected followpin grid, or one not yet characterised).
     pdn_straps: Optional[Dict[str, Any]] = None
+    # Optional pad-connected core ring. Geometry is PDK-owned while the final
+    # offset is fitted at runtime to the placed PAD-class side-cell/core gap.
+    # Absence is byte-identical to the ordinary core-grid path.
+    pdn_ring: Optional[Dict[str, Any]] = None
     # v1.3.93 — static-IR sign-off budget as a PERCENT of VDD. None -> the
     # plugin's documented default (10%, matching ir_drop_budget_check); set a
     # smaller value for a stricter house rule. PSM's padless-core single-bump
@@ -10187,6 +10322,7 @@ def _pdk_config_from_registry(project: Path, reg: Dict[str, Any]
         # Optional upper-metal PDN strap plan. Absent => the adaptive PDN
         # emits follow-pin rails only (still a real, connected PDN).
         pdn_straps=reg.get("pdn_straps"),
+        pdn_ring=reg.get("pdn_ring"),
         # FEOL layer numbers for the tapless-cell latch-up VERIFICATION.
         # Absent => the PERC geometry layer stays INDETERMINATE (it never
         # fabricates a pass), which is the honest default.
@@ -10719,6 +10855,7 @@ def _detect_pdk(project: Path, override: Optional[str] = None
                     "decap_route_short_guard"),
                 tap_geom_layers=_signoff_cfg.get("tap_geom_layers"),
                 pdn_straps=_signoff_cfg.get("pdn_straps"),
+                pdn_ring=_signoff_cfg.get("pdn_ring"),
                 ir_budget_pct=_signoff_cfg.get("ir_budget_pct"),
                 cell_aware_feol=_signoff_cfg.get("cell_aware_feol"),
             )
