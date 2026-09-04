@@ -2070,6 +2070,128 @@ def _c4_l8_declared_period_ns(project: Path,
     return periods[0]
 
 
+#: #1414 — A CLOCK DOMAIN NAME IS NOT A PORT NAME.
+#:
+#: `_resolve_clock_spec` resolves the clock PORT from, among other sources,
+#: `L8.clock_domains[].name`. That field is the DOMAIN's name, extracted from
+#: document prose; the port is whatever the RTL declares. Nothing compared the
+#: two, and OpenSTA does not fail on the difference — it warns and carries on
+#: with no clock at all:
+#:
+#:     Warning 366: constraint.sdc line 2, port 'clk' not found.
+#:     ...
+#:     No paths found.
+#:     tns max 0.00
+#:     wns max 0.00
+#:
+#: MEASURED, subservient x gf180mcuD, 2026-09-04, plugin v1.17.5: L8 declares
+#: `clock_domains[0].name = "clk"` (evidence: the phrase "100 MHz" in
+#: `L1_product_metadata.md`), the emitted deck is
+#: `create_clock -name clk -period 10.0 [get_ports clk]`, and the netlist
+#: declares `input i_clk;`. Every per-corner report in the run reads
+#: `No paths found / tns max 0.00 / wns max 0.00`, and the sign-off gate could
+#: only say `STA_VALUE_UNDETERMINED` — a true statement that names the symptom
+#: and not the cause. A zeroed WNS from a deck that constrained nothing is the
+#: most dangerous shape a timing number can have.
+#:
+#: THE RULE. The port a `create_clock` names must exist in the design the SDC
+#: is applied to. The design's own netlist is the authority, and it is on disk.
+#: When the resolved name is not one of the top module's ports and EXACTLY ONE
+#: port differs from it only by the conventional direction affixes an RTL
+#: author adds (`i_`, `_i`, `in_`, `_in`, and their `o_`/`_o` mirrors), that
+#: port is the one meant; anything else is left alone and DISCLOSED, so the
+#: deck still says out loud that it names a port the design does not have.
+#:
+#: chip-AGNOSTIC: Verilog module-header grammar (borrowed from `lec_run`) and
+#: affix conventions; no design, PDK or port literal is assumed to be correct
+#: — the netlist is read every time.
+_PORT_AFFIXES: Tuple[str, ...] = ("i_", "_i", "in_", "_in",
+                                  "o_", "_o", "out_", "_out")
+
+
+def _strip_port_affixes(name: str) -> str:
+    """`i_clk` -> `clk`. One affix, applied once; case-insensitive."""
+    low = (name or "").lower()
+    for a in _PORT_AFFIXES:
+        if a.endswith("_") and low.startswith(a) and len(low) > len(a):
+            return low[len(a):]
+        if a.startswith("_") and low.endswith(a) and len(low) > len(a):
+            return low[:-len(a)]
+    return low
+
+
+def _design_top_input_ports(project: Path, top: str) -> List[str]:
+    """Top-level INPUT port names of `top`, from the netlists this project
+    actually carries, or [] when none can be read.
+
+    [] is the loud outcome: a caller that cannot see the design's ports must
+    not overrule a resolved name on the strength of not finding it."""
+    try:
+        from lec_run import netlist_top_ports as _ntp          # noqa: PLC0415
+    except Exception:                                          # nosec
+        return []
+    cands: List[Path] = []
+    try:
+        cands.extend(sorted(_pl.dft_dir(project).glob("*.v")))
+    except Exception:                                          # nosec
+        pass
+    try:
+        cands.extend(sorted(_pl.synth_dir(project).glob("*.v")))
+    except Exception:                                          # nosec
+        pass
+    for f in cands:
+        try:
+            text = f.read_text(errors="ignore")
+        except OSError:
+            continue
+        ports = _ntp(text, top)
+        ins = [n for d, _r, n in ports if d.lower() == "input"]
+        if ins:
+            return ins
+    return []
+
+
+def _clock_port_against_the_design(project: Path, top: str,
+                                   resolved: str
+                                   ) -> Tuple[str, str]:
+    """`(port_name, disclosure)` — the clock port the SDC should name.
+
+    Three outcomes, none silent:
+      * the resolved name IS a port          -> unchanged, no disclosure
+      * exactly one port matches it modulo a direction affix -> that port,
+        with a disclosure naming both
+      * anything else (no netlist readable, no match, several matches)
+        -> the resolved name UNCHANGED, with a disclosure that says the deck
+           names a port the design does not have and lists the ports it does
+    """
+    ports = _design_top_input_ports(project, top)
+    if not ports:
+        return resolved, ""
+    if resolved in ports:
+        return resolved, ""
+    key = _strip_port_affixes(resolved)
+    hits = [p for p in ports if _strip_port_affixes(p) == key]
+    if len(hits) == 1:
+        return hits[0], (
+            f"# VIBEIC_SDC_CLOCK_PORT_REMAPPED: the resolved clock name "
+            f"'{resolved}' is not a port of top module '{top}'; the design "
+            f"declares '{hits[0]}', which differs only by a direction affix. "
+            f"Constraining '{hits[0]}'. A create_clock on a port the design "
+            f"does not have yields 'No paths found' and a WNS of 0.00 that "
+            f"looks like a pass (vibe-ic#1414).\n")
+    return resolved, (
+        f"# VIBEIC_SDC_CLOCK_PORT_NOT_IN_DESIGN: '{resolved}' is not a "
+        f"top-level input port of '{top}' and no single port matches it "
+        f"modulo a direction affix"
+        + (f" ({len(hits)} candidates: {', '.join(sorted(hits))})"
+           if hits else "")
+        + f". The design's top-level input ports are: "
+          f"{', '.join(sorted(ports)[:40])}. OpenSTA will warn "
+          f"'port not found' and time NOTHING — every slack in this run is "
+          f"then 0.00 because no clock exists, not because timing is met "
+          f"(vibe-ic#1414).\n")
+
+
 def _resolve_clock_spec(project: Path, top: str = "",
                         pdk_name: str = "",
                         liberty_path: str = "") -> tuple:
@@ -3197,6 +3319,13 @@ def _build_auto_silicon_sdc(project: Path, top: str = "",
     """
     clk_period_ns, clk_port_name = _resolve_clock_spec(
         project, top=top, pdk_name=pdk_name, liberty_path=liberty_path)
+    # #1414 — the resolved name must be a port of the design this deck is
+    # applied to. `_resolve_clock_spec` reads, among other sources, L8's clock
+    # DOMAIN name, which is prose-derived and need not be the RTL port; when it
+    # is not, OpenSTA warns once and times nothing, and the run reports
+    # wns 0.00 from a deck that constrained no clock at all.
+    clk_port_name, _clk_port_note = _clock_port_against_the_design(
+        project, top, str(clk_port_name))
     # benchmark-spm-asap7 — SDC numeric values are interpreted by OpenSTA in
     # the LIBRARY's own ``time_unit``. The resolved clock period / I/O delays
     # are in ns; when the PDK liberty declares ``time_unit : "1ps"`` (e.g.
@@ -3249,6 +3378,7 @@ def _build_auto_silicon_sdc(project: Path, top: str = "",
         f"clk_port={clk_port_name})\n"
         + _staged_note
         + _declared_note
+        + _clk_port_note
         + _io_note
         + _tu_note +
         f"create_clock -name clk -period {_period_str} "
@@ -19217,6 +19347,13 @@ def _router_drc_report_block(pnr_out: Path, log_text: str) -> str:
 _ROUTER_DRC_TYPE_RE = re.compile(r"(?m)^\s*violation type:\s*(.+?)\s*$")
 _ROUTER_DRC_LAYER_RE = re.compile(r"on Layer\s+(\S+)")
 _ROUTER_DRC_NET_RE = re.compile(r"\bnet:(\S+)")
+#: `bbox = (397.7500, 177.3900) - (397.7900, 177.4450) on Layer Metal1` — the
+#: marker's own extent, in microns. It is the ONLY per-violation geometry the
+#: router publishes, and it is what tells a marker that describes a drawn
+#: object from one that cannot (see `_marker_cannot_be_a_drawn_object`).
+_ROUTER_DRC_BBOX_RE = re.compile(
+    r"bbox\s*=\s*\(\s*(-?[\d.]+)\s*,\s*(-?[\d.]+)\s*\)\s*-\s*"
+    r"\(\s*(-?[\d.]+)\s*,\s*(-?[\d.]+)\s*\)")
 
 
 def _router_drc_report_records(pnr_out: Path) -> List[Dict[str, Any]]:
@@ -19248,9 +19385,142 @@ def _router_drc_report_records(pnr_out: Path) -> List[Dict[str, Any]]:
         body = text[h.end(): heads[i + 1].start() if i + 1 < len(heads)
                     else len(text)]
         lay = _ROUTER_DRC_LAYER_RE.search(body)
-        out.append({"type": h.group(1).strip(),
-                    "layer": lay.group(1) if lay else "",
-                    "nets": _ROUTER_DRC_NET_RE.findall(body)})
+        bb = _ROUTER_DRC_BBOX_RE.search(body)
+        rec: Dict[str, Any] = {"type": h.group(1).strip(),
+                               "layer": lay.group(1) if lay else "",
+                               "nets": _ROUTER_DRC_NET_RE.findall(body)}
+        if bb:
+            x1, y1, x2, y2 = (float(bb.group(i)) for i in (1, 2, 3, 4))
+            rec["bbox_um"] = [x1, y1, x2, y2]
+            rec["marker_w_um"] = round(abs(x2 - x1), 6)
+            rec["marker_h_um"] = round(abs(y2 - y1), 6)
+        out.append(rec)
+    return out
+
+
+#: #1412 — ROUTE_RESIDUAL_MARKER_NOT_A_DRAWN_OBJECT.
+#:
+#: The router's in-loop checker publishes a marker for every violation it
+#: believes it found, and the flow blocks the run on the COUNT. A count is only
+#: a design finding if each marker describes geometry that is actually drawn.
+#: MEASURED twice on this repo's own trees:
+#:
+#:   * spm x gf180mcuD, 2026-08-30, eleven instances across dies 285/329/412 —
+#:     `NS Metal` on Metal1 with a marker of 0.0400 x 0.0550 um, 5.75x below
+#:     that layer's own `MINWIDTH 0.230`, while the connected Metal1 polygon
+#:     present at that point is 1.4533 um^2 = 10.1x the `AREA 0.1444` rule.
+#:   * subservient x gf180mcuD, 2026-09-02 (this runner's own source records it
+#:     at the ROUTE_NOT_CONVERGED site) — `NS Metal` on Metal2, net
+#:     `__uuf__._1246_`, bbox (353.7795,159.7395)-(353.7805,159.7405): a marker
+#:     0.001 x 0.001 um against Metal2's `MINWIDTH 0.280`, i.e. 280x below it.
+#:
+#: A marker smaller than the layer's own minimum width in BOTH dimensions
+#: cannot be the extent of any legal drawn object on that layer: no wire, no
+#: via pad and no pin rectangle may be that small, and a shape that WAS that
+#: small would be a width violation, which is a different rule with a different
+#: name. So such a marker is the checker's evaluation of a FRAGMENT — in
+#: OpenROAD's min-area path, one `gcPin` of a pad evaluated in isolation before
+#: it is merged with the fixed pin metal it lands on.
+#:
+#: WHAT THIS DOES AND DOES NOT LICENCE. It does NOT assert the layout is clean:
+#: it asserts that the ROUTER'S marker has not proven otherwise, and it hands
+#: the question to the arbiter this flow already declares for drawn geometry —
+#: the sign-off DRC deck, which runs on the streamed GDS and evaluates MERGED
+#: polygons. That deck still runs, still FAILs the run if it disagrees, and is
+#: the reason this may never manufacture a green: the residual is WAIVED (a
+#: qualified verdict carrying evidence, ticket and `review_required`), never
+#: passed, and every downstream sign-off step keeps its own verdict.
+#:
+#: chip-AGNOSTIC: the tool's own report grammar and the tech LEF's own
+#: `MINWIDTH`; no PDK, layer, design or net literal anywhere.
+_ROUTE_RESIDUAL_ARTEFACT_TICKET = "vibe-ic#1412"
+
+
+def _tech_lef_min_widths(pdk: "PdkConfig",
+                         out_dir: Path) -> Dict[str, float]:
+    """Per-routing-layer `MINWIDTH` (um) of the tech LEF THIS RUN routed
+    against, or {} when no tech LEF text is readable from the host.
+
+    `pdk.tech_lef` is a CONTAINER path that is only sometimes also a host path,
+    so the staged copy the pnr step writes beside its own outputs is tried too.
+    Returning {} is the loud outcome: every caller treats an empty map as
+    "undecidable" and keeps its existing behaviour.
+
+    chip-AGNOSTIC: delegates the parse to `_pdk_via_analyzer`."""
+    try:
+        from _pdk_via_analyzer import (  # noqa: PLC0415
+            routing_layer_min_widths as _rlmw)
+    except ImportError:
+        return {}
+    cands: List[str] = [c for c in (getattr(pdk, "tech_lef", None),
+                                    getattr(pdk, "tech_lef_source", None))
+                        if c]
+    try:
+        cands.extend(sorted(str(q) for q in out_dir.glob("*.tlef")))
+    except OSError:
+        pass
+    for cand in cands:
+        try:
+            text = Path(cand).read_text(errors="ignore")
+        except OSError:
+            continue
+        mw = _rlmw(text)
+        if mw:
+            return {str(k): float(v) for k, v in mw.items()
+                    if isinstance(v, (int, float)) and v > 0}
+    return {}
+
+
+def _marker_cannot_be_a_drawn_object(
+        rec: Dict[str, Any],
+        min_widths: Dict[str, float]) -> Optional[bool]:
+    """Is this router marker too small to be the extent of ANY legal object on
+    its own layer? True / False, or None when the question cannot be asked
+    (no bbox in the record, no layer, or no `MINWIDTH` for that layer).
+
+    None is NOT False: a caller that cannot ask this question must keep the
+    verdict it would have issued without it.
+
+    chip-AGNOSTIC: one comparison between the tool's own number and the tech
+    LEF's own number."""
+    lay = str(rec.get("layer") or "")
+    mw = min_widths.get(lay)
+    if not lay or not mw:
+        return None
+    w, h = rec.get("marker_w_um"), rec.get("marker_h_um")
+    if not isinstance(w, (int, float)) or not isinstance(h, (int, float)):
+        return None
+    return bool(w < mw and h < mw)
+
+
+def _route_residual_tool_artefact(
+        records: Sequence[Dict[str, Any]],
+        min_widths: Dict[str, float]) -> Optional[List[Dict[str, Any]]]:
+    """The residual, as EVIDENCE, when every published violation is a marker
+    that cannot describe a drawn object — else None.
+
+    Both conditions must hold for EVERY record, and one unknown record is
+    enough to return None:
+
+      1. the rule is a SINGLE-SHAPE rule (`_DRT_SELF_SHAPE_RULES`) — a
+         distance between two independently routed shapes is a real finding
+         whatever its marker looks like;
+      2. the marker is below the layer's own `MINWIDTH` in BOTH dimensions
+         (`_marker_cannot_be_a_drawn_object`).
+
+    chip-AGNOSTIC."""
+    if not records or not min_widths:
+        return None
+    out: List[Dict[str, Any]] = []
+    for rec in records:
+        if _normalise_drt_rule(str(rec.get("type") or "")) \
+                not in _DRT_SELF_SHAPE_RULES:
+            return None
+        if _marker_cannot_be_a_drawn_object(rec, min_widths) is not True:
+            return None
+        ev = dict(rec)
+        ev["layer_min_width_um"] = min_widths[str(rec.get("layer"))]
+        out.append(ev)
     return out
 
 
@@ -21778,6 +22048,107 @@ def _via_patch_min_width_advisory(tlef_text: str, tech_lef_path: str,
     return note, payload
 
 
+#: #1413 — the PDK's OWN declared routing-layer envelope.
+#:
+#: An open_pdks-style PDK ships the flow configuration its authors wrote for
+#: it, and that configuration states where signals may route. gf180mcuD's,
+#: verbatim from `libs.tech/librelane/config.tcl`:
+#:
+#:     set ::env(RT_MIN_LAYER) "Metal2" ;# stdcells heavily use Metal1 -
+#:                                       # setting it to Metal1 will cause
+#:                                       # congestions
+#:     set ::env(RT_MAX_LAYER) "Metal5"
+#:     set ::env(DRT_MIN_LAYER) "Metal1"
+#:
+#: Two separate floors: GLOBAL routing starts at Metal2, DETAILED routing may
+#: still descend to Metal1 for pin access. `set_routing_layers` is the global
+#: one, so honouring the declaration does NOT strand a pin.
+#:
+#: `_v1_8_100_routing_layer_range` derives its own floor from the cell LEF's
+#: pin-layer shares, and its final step (`floor_i = max(0, floor_i - 1)`, kept
+#: because excluding EVERY pin-access layer stranded single-GCell nets on
+#: sky130) returns the BOTTOM routing layer for any library with exactly one
+#: pin-dominated layer. gf180mcu_fd_sc_mcu7t5v0 is such a library, so the
+#: emitted constraint was `-signal Metal1-Metal5` — the arrangement the PDK's
+#: own comment says not to use.
+#:
+#: MEASURED, subservient x gf180mcuD, 2026-09-04, plugin v1.17.5 / image
+#: 0.3.41 (this lane's baseline run, `ROUTE_NOT_CONVERGED` at die 1512x1512um
+#: after a 4-rung auto-loosen ladder, residual series [3, 2, 1, 1]): every
+#: rung's residual is the SAME shape — one `Metal Spacing` on Metal1 between a
+#: signal net and `net:VDD`, marker always exactly 0.150 x 0.000 um against
+#: Metal1's own `SPACING 0.230`. Four different nets across four rungs
+#: (`_01432_`, `_03283_`, `_02297_`, `_03237_`); in the shipped DEF the signal
+#: side is the router's own Metal1 patch
+#: `NEW Metal1 ( 0 0 ) RECT ( 735000 1647840 736350 1648900 )` and the VDD
+#: side is a standard cell's own fixed Metal1 rail. Growing the die 1047 ->
+#: 1512 um moved the net and not the shape: signal metal on the rail layer is
+#: what produces it, and that is what the PDK's declaration forbids.
+#:
+#: PRECEDENCE, unchanged where it already existed: the DESIGN's declaration
+#: wins (it is design input), then the PDK's, then the derivation. A PDK that
+#: declares nothing is exactly where it was.
+#:
+#: chip-AGNOSTIC: open_pdks/LibreLane config-file layout and OpenLane key
+#: grammar; the layer names are whatever the PDK wrote.
+_PDK_FLOW_CONFIG_RELPATHS: Tuple[str, ...] = (
+    "libs.tech/librelane/config.tcl",
+    "libs.tech/openlane/config.tcl",
+)
+_PDK_ENV_SET_RE = re.compile(
+    r"^\s*set\s+::env\(\s*([A-Za-z_][A-Za-z0-9_]*)\s*\)\s+"
+    r"(?:\"([^\"]*)\"|\{([^}]*)\}|(\S+))",
+    re.M)
+
+
+def _pdk_declared_routing_layers(pdk, container: str) -> Dict[str, str]:
+    """`{"route_min_layer": ..., "route_max_layer": ...,
+    "route_clock_min_layer": ..., "source": <path>}` from the PDK's OWN
+    shipped flow config, or {} when it ships none / declares none.
+
+    {} is the loud outcome: the caller keeps the floor it derived.
+
+    chip-AGNOSTIC: no PDK, design or layer literal — only the config-file
+    layout and the OpenLane key names `floorplan_contract` already owns."""
+    try:
+        root = _pdk_dir_of(pdk)
+    except Exception:                                         # nosec
+        return {}
+    if not root:
+        return {}
+    try:
+        import floorplan_contract as _fpc                     # noqa: PLC0415
+        keysets = (("route_min_layer", _fpc._DRV_ROUTE_MIN_LAYER_KEYS),
+                   ("route_max_layer", _fpc._DRV_ROUTE_MAX_LAYER_KEYS),
+                   ("route_clock_min_layer",
+                    _fpc._DRV_ROUTE_CLK_MIN_LAYER_KEYS))
+    except Exception:                                         # nosec
+        return {}
+    for rel in _PDK_FLOW_CONFIG_RELPATHS:
+        text = _v1_6_604_read_text_or_container_cat(
+            str(Path(root) / rel), container)
+        if not text:
+            continue
+        env: Dict[str, str] = {}
+        for m in _PDK_ENV_SET_RE.finditer(text):
+            val = next((g for g in m.groups()[1:] if g is not None), "")
+            v = val.strip().strip('"').strip()
+            # `;# comment` may follow a bare value
+            v = v.split(";")[0].strip()
+            if v:
+                env[m.group(1).upper()] = v
+        out: Dict[str, str] = {}
+        for field_name, keys in keysets:
+            for k in keys:
+                if env.get(k):
+                    out[field_name] = env[k]
+                    break
+        if out:
+            out["source"] = str(Path(root) / rel)
+            return out
+    return {}
+
+
 def _v1_8_100_routing_layer_range(pdk, project, container
                                   ) -> Optional[Tuple[str, str, str, str]]:
     """(signal_floor, clock_floor, ceiling, why) or None when underivable.
@@ -21863,6 +22234,32 @@ def _v1_8_100_routing_layer_range(pdk, project, container
     except Exception:                                         # nosec
         pass
 
+    # #1413 — THE PDK'S OWN DECLARATION, when the design made none. It ranks
+    # BELOW the design (design input always wins) and ABOVE this function's
+    # derivation, which is a heuristic over cell-LEF pin shares and cannot know
+    # what the library's authors know. See `_pdk_declared_routing_layers` for
+    # the measurement that made this necessary. A PDK that declares nothing
+    # reaches none of this.
+    _pdkdec: Dict[str, str] = {}
+    try:
+        _pdkdec = _pdk_declared_routing_layers(pdk, container)
+    except Exception:                                         # nosec
+        _pdkdec = {}
+    if _pdkdec and "design-declared" not in why_floor:
+        _pmin = (_pdkdec.get("route_min_layer") or "").lower()
+        if _pmin and _pmin in lower and lower.index(_pmin) != floor_i:
+            floor_i = lower.index(_pmin)
+            why_floor = (f"signal floor = PDK-declared {order[floor_i]} "
+                         f"({_pdkdec.get('source')}) — the PDK's own flow "
+                         f"config outranks this function's cell-LEF "
+                         f"derivation")
+    if _pdkdec and "design-declared" not in why_ceil:
+        _pmax = (_pdkdec.get("route_max_layer") or "").lower()
+        if _pmax and _pmax in lower:
+            ceil_i = lower.index(_pmax)
+            why_ceil = (f"ceiling = PDK-declared {order[ceil_i]} "
+                        f"({_pdkdec.get('source')})")
+
     if floor_i >= ceil_i:                       # nothing left to route on
         return None
     clk_i = min(floor_i + 1, ceil_i)            # keep the clock off the layer
@@ -21874,6 +22271,10 @@ def _v1_8_100_routing_layer_range(pdk, project, container
         _dc = _d2.get("route_clock_min_layer")
         if _dc and _dc.lower() in lower and lower.index(_dc.lower()) <= ceil_i:
             clk_i = lower.index(_dc.lower())
+        elif _pdkdec.get("route_clock_min_layer"):
+            _pc = _pdkdec["route_clock_min_layer"].lower()
+            if _pc in lower and floor_i <= lower.index(_pc) <= ceil_i:
+                clk_i = lower.index(_pc)
     except Exception:                                         # nosec
         pass
     return (order[floor_i], order[clk_i], order[ceil_i],
@@ -26041,6 +26442,10 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
     # letting it WIN would keep the blindness this exists to remove. When the
     # two differ this step FAILS and the message names BOTH numbers, because
     # a silent preference for either is the defect and not the fix.
+    # #1412 — set when the residual is a marker that cannot describe a
+    # drawn object; carried to this step's final verdict so the run is
+    # QUALIFIED (WAIVED), never green, and never blocked before streamout.
+    _route_residual_waiver: Optional[Dict[str, Any]] = None
     _drt_rec, _drt_metrics = _drt_reading(out_dir, out + err)
     _drt_extras: Dict[str, Any] = {"drt_reconciliation": _drt_rec.as_dict()}
     # A metric that was never emitted must not read as clean. Say what it is.
@@ -26229,48 +26634,89 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
         _measured_note = ("" if not _measured else
                           " ALREADY MEASURED ON THIS RUN: " +
                           "; ".join(_measured) + ".")
-        return StepResult(
-            "pnr", "FAIL", time.time() - t0,
-            (f"ROUTE_NOT_CONVERGED: detailed route completed with "
-             f"{_drt_viol} violations remaining (final "
-             f"DRT-0199){_types_note}. Die {die_w}x{die_h}µm / requested "
-             f"util {util:g}{_util_note}.{_measured_note}{_remedy_note} "
-             f"Emitted DEF/GDS are kept for debugging but are NOT sign-off "
-             f"artifacts.{_ladder_note}"),
-            [str(out_dir / "openroad.log"), str(def_file)],
-            extras={"finding": "ROUTE_NOT_CONVERGED",
-                    "drt_violations": _drt_viol,
-                    "drt_violation_types": [
-                        {"type": t, "layer": lay, "count": c}
-                        for t, lay, c in _viol_types],
-                    # None when the log's own table describes the shipped
-                    # route; otherwise the in-loop total that does NOT, so a
-                    # machine reader can tell "no table printed" from "the
-                    # table printed belongs to a superseded route".
-                    "drt_types_superseded_in_loop_total":
-                        (None if _types_sup is None else _types_sup[1]),
-                    # WHICH artefact the breakdown above came from. A caller
-                    # cannot otherwise tell the router's own DRC report from
-                    # the log's in-loop table, and they are different routes'
-                    # evidence when DRT-0701 fires.
-                    "drt_violation_types_source": _types_src,
-                    "drt_violation_report": _rpt_recs[:20],
-                    "drt_trajectory_flat_tail": _flat,
-                    "drt_trajectory_len": len(_traj),
-                    "remedies_open": _open_remedies,
-                    "die_um": f"{die_w}x{die_h}",
-                    "util": util,
-                    "loosen_terminator": _loosen_terminator,
-                    "loosen_terminator_kind": _term_kind,
-                    "loosen_rungs_taken": _loosen_idx,
-                    "loosen_was_cut_short": _term_kind == "bound",
-                    "loosen_still_improving": bool(
-                        _last_decline.get("still_improving")),
-                    "loosen_residual_series": _l_series,
-                    "loosen_target_util": _eff_util,
-                    "non_signoff_outputs": _non_signoff(str(def_file)),
-                    "resize_history": resize_history,
-                    "loosen_declines": loosen_declines})
+        # #1412 — IS THIS RESIDUAL A DESIGN FINDING AT ALL? The count above
+        # blocks the run, and a count is only a finding when each marker it
+        # counts describes geometry that is drawn. When the router's own
+        # report reconciles and EVERY record is a single-shape rule whose
+        # marker is below its layer's own MINWIDTH in both dimensions, the
+        # marker is a fragment the checker evaluated in isolation, not an
+        # object (see `_route_residual_tool_artefact` for the two measured
+        # instances). Do not pass it and do not block on it: WAIVE it with the
+        # geometry as evidence and let the sign-off DRC deck — which runs on
+        # the streamed GDS, evaluates MERGED polygons and keeps its own
+        # verdict — be the arbiter. Blocking here instead denies that deck any
+        # input at all, which is how this residual reached FOUR sessions as
+        # `drc = SKIP: GDS missing` — NOT MEASURED, presented as unreached.
+        _min_widths = _tech_lef_min_widths(pdk, out_dir)
+        _residual_artefact = (_route_residual_tool_artefact(_rpt_recs,
+                                                            _min_widths)
+                              if _rpt_types else None)
+        if _residual_artefact is not None:
+            _route_residual_waiver = {
+                "finding": "ROUTE_RESIDUAL_MARKER_NOT_A_DRAWN_OBJECT",
+                "ticket": _ROUTE_RESIDUAL_ARTEFACT_TICKET,
+                "review_required": True,
+                "drt_violations": _drt_viol,
+                "drt_violation_types": [
+                    {"type": t, "layer": lay, "count": c}
+                    for t, lay, c in _rpt_types],
+                "markers": _residual_artefact,
+                "arbiter": "signoff DRC deck on the streamed GDS",
+                "die_um": f"{die_w}x{die_h}",
+                "util": util,
+            }
+            print("[pnr] ROUTE_RESIDUAL_MARKER_NOT_A_DRAWN_OBJECT: "
+                  + "; ".join(
+                      f"{m['type']} on {m['layer']} marker "
+                      f"{m['marker_w_um']}x{m['marker_h_um']}um < MINWIDTH "
+                      f"{m['layer_min_width_um']}um"
+                      for m in _residual_artefact)
+                  + " — routing continues to streamout; the sign-off DRC deck "
+                    "is the arbiter and keeps its own verdict.",
+                  file=sys.stderr)
+        else:
+            return StepResult(
+                "pnr", "FAIL", time.time() - t0,
+                (f"ROUTE_NOT_CONVERGED: detailed route completed with "
+                 f"{_drt_viol} violations remaining (final "
+                 f"DRT-0199){_types_note}. Die {die_w}x{die_h}µm / requested "
+                 f"util {util:g}{_util_note}.{_measured_note}{_remedy_note} "
+                 f"Emitted DEF/GDS are kept for debugging but are NOT sign-off "
+                 f"artifacts.{_ladder_note}"),
+                [str(out_dir / "openroad.log"), str(def_file)],
+                extras={"finding": "ROUTE_NOT_CONVERGED",
+                        "drt_violations": _drt_viol,
+                        "drt_violation_types": [
+                            {"type": t, "layer": lay, "count": c}
+                            for t, lay, c in _viol_types],
+                        # None when the log's own table describes the shipped
+                        # route; otherwise the in-loop total that does NOT, so a
+                        # machine reader can tell "no table printed" from "the
+                        # table printed belongs to a superseded route".
+                        "drt_types_superseded_in_loop_total":
+                            (None if _types_sup is None else _types_sup[1]),
+                        # WHICH artefact the breakdown above came from. A caller
+                        # cannot otherwise tell the router's own DRC report from
+                        # the log's in-loop table, and they are different routes'
+                        # evidence when DRT-0701 fires.
+                        "drt_violation_types_source": _types_src,
+                        "drt_violation_report": _rpt_recs[:20],
+                        "drt_trajectory_flat_tail": _flat,
+                        "drt_trajectory_len": len(_traj),
+                        "remedies_open": _open_remedies,
+                        "die_um": f"{die_w}x{die_h}",
+                        "util": util,
+                        "loosen_terminator": _loosen_terminator,
+                        "loosen_terminator_kind": _term_kind,
+                        "loosen_rungs_taken": _loosen_idx,
+                        "loosen_was_cut_short": _term_kind == "bound",
+                        "loosen_still_improving": bool(
+                            _last_decline.get("still_improving")),
+                        "loosen_residual_series": _l_series,
+                        "loosen_target_util": _eff_util,
+                        "non_signoff_outputs": _non_signoff(str(def_file)),
+                        "resize_history": resize_history,
+                        "loosen_declines": loosen_declines})
     # ── PG NET-OWNERSHIP gate — a supply network that half the design is not
     # part of must never leave PnR silently. `global_connect` is a one-shot over
     # the instances alive when it runs; the PDN step runs it before placement, so
@@ -26607,15 +27053,43 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
                      f"— they were written before it began and are unchanged "
                      f"by its death")
         _nl_extras["pnr_fatal_signal"] = _sig_diag
+    # #1412 — a residual the router published, whose every marker is too small
+    # to be a drawn object, leaves this step QUALIFIED and never green. The
+    # writes below it all ran (that is the whole point of not returning at the
+    # residual gate), so `pnr_signoff_writes_complete` is recorded for the
+    # downstream upstream-incomplete gate, which exists for a pnr that DIED
+    # mid-tcl and must not fire for one that finished.
+    _status = "PASS"
+    if _route_residual_waiver is not None:
+        _status = "WAIVED"
+        detail += (
+            " | ROUTE_RESIDUAL_MARKER_NOT_A_DRAWN_OBJECT: the router published "
+            f"{_route_residual_waiver['drt_violations']} residual violation(s) "
+            "and every marker is below its own layer's LEF MINWIDTH in both "
+            "dimensions (" + "; ".join(
+                f"{m['type']} on {m['layer']} "
+                f"{m['marker_w_um']}x{m['marker_h_um']}um vs MINWIDTH "
+                f"{m['layer_min_width_um']}um, net(s) "
+                f"{','.join(m.get('nets') or ['-'])}"
+                for m in _route_residual_waiver["markers"])
+            + "), so it cannot be the extent of any legal object on that layer "
+              "and the checker evaluated a fragment. WAIVED, not passed: the "
+              "sign-off DRC deck runs on the streamed GDS, evaluates merged "
+              "polygons and keeps its own verdict. ticket "
+            + _route_residual_waiver["ticket"] + ", review_required")
+        _nl_extras = dict(_nl_extras)
+        _nl_extras["route_residual_waiver"] = _route_residual_waiver
+        _nl_extras["finding"] = _route_residual_waiver["finding"]
+        _nl_extras["pnr_signoff_writes_complete"] = True
     if resize_history:
-        return StepResult("pnr", "PASS", time.time() - t0,
+        return StepResult("pnr", _status, time.time() - t0,
                           detail,
                           pnr_outputs,
                           extras={"resize_history": resize_history,
                                  "loosen_declines": loosen_declines,
                                   "pdn_status": _pdn_mk,
                                   **_nl_extras, **spare_extras})
-    return StepResult("pnr", "PASS", time.time() - t0,
+    return StepResult("pnr", _status, time.time() - t0,
                       detail,
                       pnr_outputs,
                       extras={"pdn_status": _pdn_mk,
@@ -32780,7 +33254,17 @@ def step_lvs(project: Path, top: str, pdk: PdkConfig,
     # compare ran; this is a design/extraction defect" wording sends
     # triage toward extraction fidelity when the only defect is the
     # upstream pnr death. SKIP with the pnr failure named instead.
-    if upstream_pnr is not None and upstream_pnr.status != "PASS":
+    # #1412 — the condition this gate is FOR is a pnr that DIED before its
+    # final DEF/pin-label writes. A pnr that ran every write and ended
+    # QUALIFIED (a WAIVED residual marker) is not that condition: its DEF and
+    # labels are complete, so an LVS against them is a real compare. The step
+    # itself records whether its sign-off writes completed; nothing else may
+    # infer it from the status word.
+    _pnr_writes_done = bool(
+        (getattr(upstream_pnr, "extras", None) or {}).get(
+            "pnr_signoff_writes_complete"))
+    if (upstream_pnr is not None and upstream_pnr.status != "PASS"
+            and not _pnr_writes_done):
         return StepResult(
             "lvs", "SKIP", time.time() - t0,
             (f"LVS skipped: upstream pnr step is "

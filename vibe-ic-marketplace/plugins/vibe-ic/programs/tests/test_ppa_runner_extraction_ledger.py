@@ -169,6 +169,23 @@ _LEDGER = frozenset({
     "_build_macro_pdn_refusal_tcl", "_build_pdn_tcl",
     "_build_sparse_die_aware_filler_tcl",
     "_c4_l8_clock_port_on_top_surface", "_clock_plan_stale_inputs",
+    # RECORDED with the commit that adds it. `_clock_port_against_the_design`
+    # is SDC CONSTRUCTION, not timing extraction: it runs before OpenSTA is
+    # invoked and decides which port the `create_clock` line will name. It has
+    # nothing to read from an STA artefact, which is the only input
+    # `_ppa/timing.py` accepts -- that module is a per-view EXTRACTOR whose own
+    # docstring refuses to return a verdict, and a name resolver that produced
+    # no row would sit in it as a stranger.
+    #
+    # Precedent, not a one-off: the clock-PORT resolution chain is already
+    # ledgered here in full -- `_v1_6_595_extract_clock_port_from_l8` / `_l9` /
+    # `_rtl`, `_v1_6_595_resolve_clock_port_name`,
+    # `_v1_6_623_extract_clock_port_from_netlist`, and the caller
+    # `_resolve_clock_spec` itself. This function is the LAST rung of that same
+    # chain: it asks the design whether the resolved name is actually a port.
+    # Splitting one chain across two modules is the reviewing cost this ledger
+    # exists to prevent, not an instance of it.
+    "_clock_port_against_the_design",
     "_clock_port_sink_count", "_compute_downsized_die",
     "_compute_loosened_die", "_compute_resized_die",
     "_compute_spare_density", "_def_pdn_evidence",
