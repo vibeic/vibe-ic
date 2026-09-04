@@ -29696,7 +29696,10 @@ def _ship_signoff_spef_repair_tcl(top: str, tech_lef_c: str, cell_lef_c: str,
                                   filler_masters: Optional[List[str]] = None,
                                   extra_lefs_c: Optional[Sequence[str]] = None,
                                   extra_liberties_c: Optional[Sequence[str]] = None,
-                                  fanout_root_buffer_cell: Optional[str] = None
+                                  fanout_root_buffer_cell: Optional[str] = None,
+                                  slot_pinned_core: bool = False,
+                                  design_declared_die: bool = False,
+                                  sparse_active_row_fill: bool = False
                                   ) -> str:
     """Fresh-session post-route SETUP repair against the REAL max-RC SPEF at the
     SLOW (SS) sign-off corner, writing routed_repaired.def / <top>_pnr_repaired.v.
@@ -29720,9 +29723,19 @@ def _ship_signoff_spef_repair_tcl(top: str, tech_lef_c: str, cell_lef_c: str,
     # DPL-0038 re-fill: after the repair reroute, restore the decap/fill tiling that
     # `remove_fillers` cleared so the shipped repaired route stays fill-complete
     # (density-rule + tap/well continuity preserved, identical to the base route).
-    # Uses the SAME sparse-die-aware fill the base PnR uses; empty when the PDK
-    # exposes no fill masters (then the base route already had none).
-    refill_block = _build_sparse_die_aware_filler_tcl(filler_masters or [])
+    # Uses the SAME sparse-die-aware mode the base PnR uses; carrying only the
+    # master list is insufficient because a fixed pad wrapper selects the
+    # bounded active-row arm.  Measured on spm x gf180mcuD run7: the base route
+    # kept 7,249 device-free spacers on 51 occupied rows, this fresh session
+    # removed them, then the context-free refill selected SKIP and promoted a
+    # zero-standard-filler route.  Correct-top DRC became 1,272 (835 new FEOL/
+    # well findings plus the existing IO/deck population) and power-aware LVS
+    # fragmented from a unique match to 1,831/1,700 nets.  Preserve the three
+    # floorplan facts here so repair cannot silently change the fill policy.
+    refill_block = _build_sparse_die_aware_filler_tcl(
+        filler_masters or [], slot_pinned_core=slot_pinned_core,
+        design_declared_die=design_declared_die,
+        sparse_active_row_fill=sparse_active_row_fill)
     return (
         f"set_thread_count {thread_count}\n"
         f"read_lef {tech_lef_c}\n"
@@ -30388,6 +30401,13 @@ def step_signoff_spef_repair(project: Path, top: str, pdk: "PdkConfig",
         liberty_c = _to_container_path(str(liberty), container)
         if liberty_c != ss_lib and liberty_c not in extra_liberties_c:
             extra_liberties_c.append(liberty_c)
+    # Re-opened sign-off repair must preserve the exact sparse-fill arm chosen
+    # by base PnR.  These are the same project-derived facts used there; no
+    # geometry, PDK or chip identity is guessed in the repair session.
+    _repair_slot = _slot_geometry(project)
+    _repair_declared_die = bool(
+        _l9_declared_die_area(project) or _l19_declared_die_area(project))
+    _repair_ring_inset, _ = _padring_core_inset_um(project)
     tcl = _ship_signoff_spef_repair_tcl(
         top,
         _to_container_path(str(pdk.tech_lef), container),
@@ -30397,7 +30417,12 @@ def step_signoff_spef_repair(project: Path, top: str, pdk: "PdkConfig",
         filler_masters=_filler_masters_for_pdk(pdk),
         extra_lefs_c=_def_reopen_extra_lefs_c(routed, pdk, container),
         extra_liberties_c=extra_liberties_c,
-        fanout_root_buffer_cell=pdk.clk_buf or pdk.clk_buf_root)
+        fanout_root_buffer_cell=pdk.clk_buf or pdk.clk_buf_root,
+        slot_pinned_core=_repair_slot is not None,
+        design_declared_die=_repair_declared_die,
+        sparse_active_row_fill=bool(
+            _repair_ring_inset is not None and _repair_slot is None
+            and not _repair_declared_die))
     tcl_path = pnr_out / "signoff_spef_repair.tcl"
     tcl_path.write_text(tcl)
     tcl_c = _to_container_path(str(tcl_path), container)
