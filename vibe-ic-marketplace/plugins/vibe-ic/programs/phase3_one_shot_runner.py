@@ -22376,7 +22376,9 @@ def _v1_8_100_routing_layer_range(pdk, project, container
 
 def _post_route_spef_repair_tcl(out_dir_c: str, tech_lef_c: str,
                                 cell_lef_c: str = "",
-                                fork_repair_capable: bool = False) -> str:
+                                fork_repair_capable: bool = False,
+                                fanout_root_buffer_cell: Optional[str] = None
+                                ) -> str:
     """ORGANIC #557 / #581 — emit the OpenROAD Tcl for the
     post-detailed-route SPEF extraction (MEASURE-ONLY).
 
@@ -22524,7 +22526,8 @@ def _post_route_spef_repair_tcl(out_dir_c: str, tech_lef_c: str,
         # setup violation), which is why a runner-level backstop exists at all.
         + ((_pnr_stage_begin("postroute_drv_repair") + "\n"
             + f"  puts \"{_PNR_STAGE_MARKER} postroute_drv_repair\"\n"
-            + _v1_8_100_signoff_drv_repair_tcl(out_dir_c)
+            + _v1_8_100_signoff_drv_repair_tcl(
+                out_dir_c, fanout_root_buffer_cell)
             + _pnr_stage_end("postroute_drv_repair") + "\n")
            if fork_repair_capable else
            "  puts \"SDR_SKIP_STOCK_OPENROAD: post-route SPEF DRV repair needs "
@@ -22687,7 +22690,8 @@ def _est0104_recovery_tcl(spef_c: str, err_var: str, retry_cmd: str,
     )
 
 
-def _v1_8_100_signoff_drv_repair_tcl(out_dir_c: str) -> str:
+def _v1_8_100_signoff_drv_repair_tcl(
+        out_dir_c: str, fanout_root_buffer_cell: Optional[str] = None) -> str:
     """Bounded repair-until-clean loop on the sign-off-deck SPEF.
 
     Every step NONFATAL-guarded; any failure leaves the routing as it was and
@@ -22870,13 +22874,23 @@ def _v1_8_100_signoff_drv_repair_tcl(out_dir_c: str) -> str:
         + "        }\n"
         + "      }\n"
         "    }\n"
+        # A library pin can carry max_fanout=1 while ordinary repair_design
+        # builds two first-level branches below it.  This report is taken only
+        # after the sign-off SPEF has made that residual visible.  Insert one
+        # PDK-derived root on each tool-reported red net; the enclosing SDR pass
+        # already performs setup repair, legalization, routing clear and a full
+        # reroute, so the helper must not duplicate those operations here.
+        + _ship_max_fanout_root_repair_tcl(
+            fanout_root_buffer_cell,
+            f"{out_dir_c}/sdr_fanout_root_candidates.rpt",
+            repair_after_insert=False)
         # v1.8.100 r2 — MEASURED: without this, closing DRV on the max-RC
         # deck traded the SLOW-corner setup from +1.02 ns to -4.68 ns
         # (iter1). Every repeater the line above inserts adds a stage
         # delay, and nothing re-timed the paths they sit on. This is the
         # same `repair_timing -setup` the flow already runs post-global-
         # route; it belongs after any buffer insertion, not only that one.
-        "    if {[catch {repair_timing -setup} _sdr_rt]} "
+        + "    if {[catch {repair_timing -setup} _sdr_rt]} "
         "{ puts \"SDR_REPAIR_TIMING_NONFATAL: $_sdr_rt\" }\n"
         # LEGALIZE AND VERIFY. A bare catch-guarded detailed_placement
         # says nothing about whether the placement is legal AFTERWARDS:
@@ -25680,9 +25694,11 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
     # ORGANIC #557 — post-route SPEF EXTRACTION (measure-only; pure helper so it
     # is unit-tested + the emitter/checker drift gate applies). Runs BEFORE
     # write_def so it MUST NOT modify the design.
+    _fanout_root_buffer_cell = clk_buf or clk_buf_root
     spef_repair_block = _post_route_spef_repair_tcl(
         out_dir_c, tech_lef_c, cell_lef_c,
-        fork_repair_capable=_fork_repair_capable)
+        fork_repair_capable=_fork_repair_capable,
+        fanout_root_buffer_cell=_fanout_root_buffer_cell)
 
     # === R8 (v1.9.3) — DRV RE-CONVERGENCE AFTER ANTENNA REPAIR ===
     # MEASURED (R7 iter3): the sign-off DRV loop reported `SDR_CONVERGED: pass 6`
@@ -25711,7 +25727,8 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
                              + f'puts "{_PNR_STAGE_MARKER} '
                                'postroute_drv_reconverge"\n'
                              + 'puts "SDR2_BEGIN"\n'
-                             + _v1_8_100_signoff_drv_repair_tcl(out_dir_c)
+                             + _v1_8_100_signoff_drv_repair_tcl(
+                                 out_dir_c, _fanout_root_buffer_cell)
                              + 'puts "SDR2_END"\n'
                              + _pnr_stage_end("postroute_drv_reconverge")
                              + "\n")
@@ -25895,7 +25912,7 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
     # CTS/global routing, so the shipped route owns the repair without relying
     # on the post-route setup-repair promotion gate.
     _pnr_fanout_root_repair = _ship_max_fanout_root_repair_tcl(
-        clk_buf or clk_buf_root,
+        _fanout_root_buffer_cell,
         f"{out_dir_c}/pnr_fanout_root_candidates.rpt")
     _generic_pnr_tcl = _build_pnr_tcl_text(
         tech_lef_c=tech_lef_c, cell_lef_c=cell_lef_c,
@@ -29575,7 +29592,8 @@ def _ship_postroute_convergence_tcl(max_captable_c: str, pnr_dir_c: str,
 
 
 def _ship_max_fanout_root_repair_tcl(
-        buffer_cell: Optional[str], report_path: str = "/tmp/vibeic_fanout_root.rpt"
+        buffer_cell: Optional[str], report_path: str = "/tmp/vibeic_fanout_root.rpt",
+        repair_after_insert: bool = True
         ) -> str:
     """Insert one PDK-derived root buffer after each residual fanout violator.
 
@@ -29601,9 +29619,27 @@ def _ship_max_fanout_root_repair_tcl(
     # The Tcl report parser deliberately keys on the tool's literal VIOLATED
     # marker, not on a reimplemented limit/fanout calculation.  This makes the
     # actuator monotonic with the sign-off check and bounds it to real red pins.
+    post_repair = ""
+    if repair_after_insert:
+        post_repair = (
+            "if {$_ship_fanout_root_inserted > 0} {\n"
+            "  if {[catch {repair_design} _ship_fo_rd]} { "
+            "puts \"SHIP_FANOUT_ROOT_RD_NONFATAL: $_ship_fo_rd\" }\n"
+            "  if {[catch {repair_timing -setup} _ship_fo_rt]} { "
+            "puts \"SHIP_FANOUT_ROOT_RT_NONFATAL: $_ship_fo_rt\"; "
+            "incr _ship_rt_failed }\n"
+            "  if {[catch {detailed_placement} _ship_fo_dp]} { "
+            "puts \"SHIP_FANOUT_ROOT_DP_NONFATAL: $_ship_fo_dp\" }\n"
+            "}\n")
     return (
         "set _ship_fanout_root_inserted 0\n"
         "set _ship_fanout_root_failed 0\n"
+        # Multiple bounded invocations can occur in one PnR session (initial
+        # post-route repair and post-antenna reconvergence).  Keep instance/net
+        # names unique across those invocations without embedding any design
+        # identity or relying on a tool-specific collision fallback.
+        "if {![info exists _ship_fanout_root_serial]} { "
+        "set _ship_fanout_root_serial 0 }\n"
         f"set _ship_fo_report_path {report_path}\n"
         "if {[catch {report_check_types -max_fanout -violators "
         "-max_count 1000000 > $_ship_fo_report_path} "
@@ -29632,7 +29668,7 @@ def _ship_max_fanout_root_repair_tcl(
         "      incr _ship_fanout_root_failed\n"
         "      continue\n"
         "    }\n"
-        "    set _ship_fo_idx $_ship_fanout_root_inserted\n"
+        "    set _ship_fo_idx $_ship_fanout_root_serial\n"
         "    if {[catch {insert_buffer -net [lindex $_ship_fo_nets 0] "
         f"-buffer_cell {buffer_cell} "
         "-buffer_name vibeic_drv_root_$_ship_fo_idx "
@@ -29643,20 +29679,13 @@ def _ship_max_fanout_root_repair_tcl(
         "    } else {\n"
         "      puts \"SHIP_FANOUT_ROOT_INSERTED: pin=$_ship_fo_pin\"\n"
         "      incr _ship_fanout_root_inserted\n"
+        "      incr _ship_fanout_root_serial\n"
         "    }\n"
         "  }\n"
         "}\n"
         "puts \"SHIP_FANOUT_ROOT_SUMMARY: inserted=$_ship_fanout_root_inserted "
         "failed=$_ship_fanout_root_failed\"\n"
-        "if {$_ship_fanout_root_inserted > 0} {\n"
-        "  if {[catch {repair_design} _ship_fo_rd]} { "
-        "puts \"SHIP_FANOUT_ROOT_RD_NONFATAL: $_ship_fo_rd\" }\n"
-        "  if {[catch {repair_timing -setup} _ship_fo_rt]} { "
-        "puts \"SHIP_FANOUT_ROOT_RT_NONFATAL: $_ship_fo_rt\"; "
-        "incr _ship_rt_failed }\n"
-        "  if {[catch {detailed_placement} _ship_fo_dp]} { "
-        "puts \"SHIP_FANOUT_ROOT_DP_NONFATAL: $_ship_fo_dp\" }\n"
-        "}\n")
+        + post_repair)
 
 
 

@@ -173,13 +173,16 @@ def test_signoff_repair_step_consumes_the_shared_exact_pvt_selector():
     assert "fanout_root_buffer_cell=pdk.clk_buf or pdk.clk_buf_root" in source
 
 
-def test_base_pnr_path_owns_residual_fanout_repair_before_final_route():
+def test_base_pnr_signoff_domain_owns_residual_fanout_repair_before_reroute():
     step_source = inspect.getsource(R.step_pnr)
-    assert "_pnr_fanout_root_repair = _ship_max_fanout_root_repair_tcl" in step_source
-    assert "fanout_root_repair_block=_pnr_fanout_root_repair" in step_source
-    builder_source = inspect.getsource(R._build_pnr_tcl_text)
-    assert builder_source.index("{fanout_root_repair_block}") < builder_source.index(
-        'puts "{_PNR_STAGE_MARKER} detailed_route"')
+    assert "fanout_root_buffer_cell=_fanout_root_buffer_cell" in step_source
+    sdr_source = inspect.getsource(R._v1_8_100_signoff_drv_repair_tcl)
+    assert "sdr_fanout_root_candidates.rpt" in sdr_source
+    assert "repair_after_insert=False" in sdr_source
+    tcl = R._v1_8_100_signoff_drv_repair_tcl("/pnr", "pdk_buf")
+    root = tcl.index("sdr_fanout_root_candidates.rpt")
+    assert root < tcl.index(
+        "if {[catch {repair_timing -setup} _sdr_rt]}", root)
 
 
 def test_signoff_repair_extra_liberty_empty_and_duplicate_are_noops():
@@ -201,6 +204,16 @@ def test_signoff_repair_targets_only_tool_reported_fanout_violators():
     assert "insert_buffer -net" in tcl
     assert "-buffer_cell pdk_derived_clkbuf" in tcl
     assert "set_max_fanout" not in tcl  # the actuator must not change the gate
+
+
+def test_signoff_domain_fanout_root_uses_enclosing_repair_and_unique_names():
+    tcl = R._v1_8_100_signoff_drv_repair_tcl("/pnr", "pdk_buf")
+    root = tcl.index("sdr_fanout_root_candidates.rpt")
+    reroute = tcl.index('if {[catch {global_route} _sdr_gr]}', root)
+    assert "repair_after_insert" not in tcl
+    assert "_ship_fanout_root_serial" in tcl[root:reroute]
+    assert "SHIP_FANOUT_ROOT_RD_NONFATAL" not in tcl[root:reroute]
+    assert "insert_buffer -net" in tcl[root:reroute]
 
 
 @pytest.mark.skipif(shutil.which("tclsh") is None, reason="tclsh unavailable")
