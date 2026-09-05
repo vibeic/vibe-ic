@@ -272,6 +272,33 @@ LANE_DIR="$(mktemp -d -t gk_lanes.XXXXXX)"
 FP=""
 WG_BASE=""
 LANE_LIVE_PIDS=""
+# HOISTED — `gk_cleanup` below CALLS this, and bash only defines a function when
+# its definition statement is EXECUTED. Defined at its old site (next to
+# `gk_subject_prepare`, ~1800 lines down) it did not yet exist on any exit that
+# happens between `trap gk_cleanup EXIT` and there — `--cheap-only` is the
+# obvious one, and it is not the only one — so the EXIT trap answered
+# `gk_subject_release: command not found` twice and the trap's cleanup was
+# only as complete as the line the script happened to die on. Safe to hoist:
+# it reads `$ROOT` and `${!var}` at CALL time, never at definition time. NOT a
+# guard at the call site — `declare -F ... &&` would make the leak silent
+# instead of noisy, which is worse. `tools/test_gatekeeper_land_lanes.py`
+# asserts the general invariant, not this one instance.
+gk_subject_release() {               # gk_subject_release <var>
+  local var="$1" wt
+  wt="${!var:-}"
+  [ -n "$wt" ] || return 0
+  git -C "$ROOT" worktree remove --force "$wt" >/dev/null 2>&1 || true
+  # `worktree remove` can refuse a directory a gate is still holding open; the
+  # directory is then swept by name, and ONLY under a lane dir this script
+  # minted — the same `case` guard `gk_cleanup` applies before its own `rm -rf`.
+  case "$wt" in
+    */gk_lanes.??????/subject-*) rm -rf "$wt" ;;
+  esac
+  git -C "$ROOT" worktree prune >/dev/null 2>&1 || true
+  printf -v "$var" '%s' ''
+  return 0
+}
+
 # THIS SCRIPT HAD NO EXIT TRAP FOR PROCESSES BECAUSE IT HAD NO BACKGROUND WORK.
 # With lanes it must own them: a gate killed mid-tier would otherwise leave
 # pytest and hygiene children writing into the tree AFTER
@@ -2107,21 +2134,8 @@ gk_subject_prepare() {               # gk_subject_prepare <var> <name> <reader>
   echo "          there (#2008)"
   return 0
 }
-gk_subject_release() {               # gk_subject_release <var>
-  local var="$1" wt
-  wt="${!var:-}"
-  [ -n "$wt" ] || return 0
-  git -C "$ROOT" worktree remove --force "$wt" >/dev/null 2>&1 || true
-  # `worktree remove` can refuse a directory a gate is still holding open; the
-  # directory is then swept by name, and ONLY under a lane dir this script
-  # minted — the same `case` guard `gk_cleanup` applies before its own `rm -rf`.
-  case "$wt" in
-    */gk_lanes.??????/subject-*) rm -rf "$wt" ;;
-  esac
-  git -C "$ROOT" worktree prune >/dev/null 2>&1 || true
-  printf -v "$var" '%s' ''
-  return 0
-}
+# `gk_subject_release()` was MOVED UP to just above `gk_cleanup`/`trap ... EXIT`:
+# `gk_cleanup` calls it, and defined here it did not exist yet on an early exit.
 gk_hygiene_subject_prepare() {
   gk_subject_prepare GK_HYG_SUBJECT hygiene "the hygiene lane"
 }

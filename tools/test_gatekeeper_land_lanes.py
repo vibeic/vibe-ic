@@ -828,6 +828,82 @@ def test_the_window_is_exactly_the_six_contiguous_units(land_text):
         == _AFTER_WINDOW
 
 
+def _shell_code_only(body: str) -> str:
+    """`body` with its comments removed, so a NAME in prose is not a call.
+
+    Full-comment lines go entirely. A trailing `#` is only treated as a comment
+    when it follows whitespace AND the text before it closes every quote it
+    opened, so a `#` inside a string survives. The residue of a wrong guess is
+    an EXTRA name demanded earlier in the file, which is the safe direction.
+    """
+    out = []
+    for line in body.splitlines():
+        if line.lstrip().startswith("#"):
+            continue
+        cut = re.search(r"\s#", line)
+        while cut:
+            head = line[:cut.start()]
+            if head.count('"') % 2 == 0 and head.count("'") % 2 == 0:
+                line = head
+                break
+            cut = re.search(r"\s#", line[cut.start() + 1:])
+        out.append(line)
+    return "\n".join(out)
+
+
+def test_every_function_the_exit_trap_calls_is_defined_before_the_trap(
+        land_text):
+    """`trap gk_cleanup EXIT` arms a handler; it does not define its callees.
+
+    Bash defines a function when its definition statement is EXECUTED, so a
+    handler armed at line N that calls a function defined at line N+1800 is a
+    handler that answers `command not found` on EVERY exit in between —
+    `--cheap-only` and the two full-tier preflight refusals are all in that
+    window. That is not cosmetic: `gk_subject_release` is what removes the two
+    linked-worktree REGISTRATIONS this script mints under the checkout's
+    `.git/worktrees/`, which `git status` never reports, and a registration
+    left behind is the stale-worktree hazard the subjects exist to avoid.
+
+    The assertion is the GENERAL invariant, not the one instance: whatever
+    `gk_cleanup` calls, wherever the trap is armed. The remedy is always to
+    MOVE the definition up — never to guard the call site, which would make
+    the leak silent instead of noisy.
+    """
+    trap = re.search(r"^trap gk_cleanup EXIT$", land_text, re.MULTILINE)
+    assert trap, "the EXIT trap is gone from tools/gatekeeper-land.sh"
+
+    # Every function this script defines, and where. Taken from the file, so a
+    # helper added later is covered without editing this test.
+    defined = {m.group(1): m.start() for m in re.finditer(
+        r"^([A-Za-z_][A-Za-z0-9_]*)\(\) \{", land_text, re.MULTILINE)}
+    assert "gk_cleanup" in defined and "gk_subject_release" in defined, \
+        sorted(defined)
+
+    body = _shell_code_only(_extract("gk_cleanup", land_text))
+    called = sorted(
+        name for name in defined
+        if name != "gk_cleanup"
+        and re.search(rf"(?<![\w-]){re.escape(name)}(?![\w-])", body))
+    # The handler is not supposed to be inert; if it calls nothing at all this
+    # test has stopped watching anything.
+    assert called, "gk_cleanup calls no function this script defines"
+
+    def _line(offset: int) -> int:
+        return land_text.count("\n", 0, offset) + 1
+
+    late = [(name, _line(defined[name])) for name in called
+            if defined[name] > trap.start()]
+    assert not late, (
+        "these functions are called by gk_cleanup but defined AFTER "
+        f"`trap gk_cleanup EXIT` (line {_line(trap.start())}), so the EXIT "
+        "trap answers `command not found` on every exit before them — move "
+        "the definition above the trap, do not guard the call site: "
+        + ", ".join(f"{n}() at line {ln}" for n, ln in late))
+
+    # gk_cleanup itself, for the same reason.
+    assert defined["gk_cleanup"] < trap.start(), \
+        "gk_cleanup() is defined after the trap that arms it"
+
 def test_no_marker_probe_asks_its_question_through_a_pipe(land_text):
     """`printf … | grep -q …` under `pipefail` reports a MATCH as a non-match.
 

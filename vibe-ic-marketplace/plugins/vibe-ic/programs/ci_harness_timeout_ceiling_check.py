@@ -319,8 +319,11 @@ _LANDING_LANE_SHA256 = {
 #: whether the three populations run: their bodies, the lane bodies that call
 #: them, the launcher, the window, and everything before them.
 _LANDING_WINDOW_ANCHOR = "lane_emit_window"
+# RE-PINNED with the whole-file digest below, same edit, same reason: the
+# hoisted definition sits above the `lane_emit_window` anchor. See the
+# "EXIT TRAP THAT CALLED A FUNCTION NOT YET DEFINED" block below.
 _LANDING_EXECUTION_PREFIX_SHA256 = (
-    "c1168317d601cff8d094df7c58ae18540279d1fb68e60c1a72e53d65b2263602"
+    "425a1a0cb3280b869ba4ee1feb6f7e9d47b5fc8980f1d2ecd4e716fab2e0a8f7"
 )
 # RE-PINNED when the landing gained its runtime PREFLIGHT. Both digests below
 # moved for one reason and it is stated here rather than left to `git log`: the
@@ -684,8 +687,42 @@ _LANDING_EXECUTION_PREFIX_SHA256 = (
 # names move. Falsified both directions in `test_pytest_per_file_junit.py`:
 # fix in -> named + refused; source reverted -> the two positive controls red;
 # a genuine stall and a zero-collecting file keep the truncation label off.
+# RE-PINNED for the EXIT TRAP THAT CALLED A FUNCTION NOT YET DEFINED. TWO of
+# the six digests moved and BOTH are re-pinned here. THE SIX WERE ENUMERATED
+# FROM THIS FILE'S OWN CODE, not from the two the gate happened to print, and
+# each was derived at the base and at the candidate: the whole file and the
+# entry-to-anchor execution prefix MOVED; `run_pytest`, `run_repo_tools_pytest`,
+# `run_unselectable_pytest` and `_SEMANTIC_DRIVER_SHA256` did NOT and are not
+# touched. Both new values were read back out of this check's own error text
+# over the edited tree, never hand-transcribed.
+#
+# WHAT MOVED, and why it is exactly two. `tools/gatekeeper-land.sh` armed
+# `trap gk_cleanup EXIT` at line 313 while `gk_subject_release()` — which
+# `gk_cleanup` calls twice — was not defined until line 2110, so bash answered
+# `gk_subject_release: command not found` on every exit in that 1797-line
+# window (`--cheap-only` at 680, the two full-tier preflight refusals at 721 and
+# 756, the `--prepare` refusal at 482). That function is what removes the two
+# linked-worktree REGISTRATIONS the script mints under `.git/worktrees/`, which
+# `git status` never reports. The definition was MOVED, byte-identical, to above
+# the trap. Because the move is entirely ABOVE the `lane_emit_window` anchor,
+# the execution prefix moved with the whole file — the expected signature of an
+# edit to the control flow that decides whether the three populations run. The
+# three lane bodies are digested over their own lines only and were not
+# touched, which is this file's own witness that no population's execution
+# changed.
+#
+# NOTHING ABOUT SUPERVISION MOVED: same three populations, same driver, same
+# anchor, same ceiling contract, same write guard, same junit, same verdict on
+# every path. `gk_subject_release`'s body is byte-identical (diffed), and it
+# reads `$ROOT` and `${!var}` at CALL time, so hoisting the definition cannot
+# change what it does. NOT fixed with a `declare -F` guard at the call site:
+# that would make the leak silent instead of noisy. The general invariant —
+# every function `gk_cleanup` calls is defined before the trap — is asserted in
+# `tools/test_gatekeeper_land_lanes.py`, falsified both directions (red on the
+# unfixed script naming line 2110, red again on a synthetic late-defined probe,
+# green after).
 _LANDING_SCRIPT_SHA256 = (
-    "44fcaab80ee1b263481f3b9271b3ff7585bacd558860b6f3237217e9ea7aeb2b"
+    "717ab8d7e9df13794a2add6b9fd322306d450b8ebfe7140b31051e03c64004fe"
 )
 # The helper AST is not enough: a counterfeit CLI can define the expected
 # helper and never call it.  Bind the policy to the complete reviewed driver
