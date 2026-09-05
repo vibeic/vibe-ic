@@ -595,3 +595,43 @@ def test_the_fit_rule_accepts_the_largest_value_a_bus_can_hold():
     for w in (4, 8, 12):
         assert (2 ** w - 1).bit_length() == w      # fits
         assert (2 ** w).bit_length() == w + 1      # does not
+
+
+# --------------------------------------------------------------------------
+# BRANCHES FOUND BY TRACING, NOT BY THINKING
+#
+# Line-tracing the suite showed four paths through this module's new code that
+# NO test exercised. All four behave correctly today -- which is exactly why they
+# needed tests: a regression in any of them would have been silent, and I would
+# not have found them by re-reading the code, because I wrote it and I "knew"
+# what it did.
+# --------------------------------------------------------------------------
+@pytest.mark.parametrize("lit,want", [
+    ("8'd12", 12),      # sized decimal
+    ("32'h20", 32),     # sized hex -- 0x20 is 32, the common bus width
+    ("'d7", 7),         # unsized
+    ("4'b1010", 10),    # binary
+])
+def test_a_verilog_sized_literal_is_a_valid_width_expression(lit, want):
+    """`parameter int W = 8'd12;` is ordinary SystemVerilog. The evaluator has
+    always handled it; nothing checked that it still does."""
+    assert D._int_expr(lit, {}) == want
+
+
+def test_a_module_with_no_parameter_header_yields_no_defaults():
+    assert D.dut_parameter_defaults("module plain (input clk); endmodule", "plain") == {}
+
+
+def test_an_empty_type_or_field_refuses_by_name():
+    w, why = D.struct_field_width([], "", "", {})
+    assert w is None and "no struct type or field name" in why
+
+
+def test_a_single_bit_field_has_width_one():
+    """`logic d_valid;` with no range is one bit. The emitter would otherwise
+    have nothing to bind a single-bit bus role to."""
+    pkg = ("package p; typedef struct packed { logic d_valid; "
+           "logic [31:0] d_data; } d2h_t; endpackage")
+    w, why = D.struct_field_width([("p.sv", pkg)], "p::d2h_t", "d_valid", {})
+    assert w == 1, why
+    assert "single bit" in why
