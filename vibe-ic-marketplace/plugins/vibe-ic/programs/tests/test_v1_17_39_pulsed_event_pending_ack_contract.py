@@ -443,3 +443,68 @@ def test_the_deadline_bound_is_exact_at_its_edge(tmp_path):
               "starvation_out": "s"}}))
     assert over.returncode == 1
     assert "is not a wait bound" in over.stderr
+
+
+# --------------------------------------------------------------------------
+# THE DEFECT ITSELF, PROVEN BY SIMULATION
+#
+# The simulation above proves the emitted RTL is CORRECT: the pulse survives, the
+# starvation reports, the ack clears. Nothing showed the other half -- that
+# without pending storage a one-cycle request really is lost. "The interrupt
+# disappears before acknowledgment" was the issue's claim and my premise, and a
+# premise worth building on is worth running.
+#
+# Two versions of the same FSM, elaborated side by side: one acting on `req`
+# directly (the shape a generator emits when it ignores a declared "pulsed, hold
+# until ack" contract), one with the pending bit this contract generates.
+#
+# GREEN AGAINST BASE ON PURPOSE, like the truncation demonstration in the width
+# tests: it demonstrates hardware behaviour, not this change. It is evidence for
+# WHY the contract exists, not that the generator implements it.
+# --------------------------------------------------------------------------
+_LOST_V = r'''
+`timescale 1ns/1ps
+module no_pending (input clk, input rst_n, input req, input ack, output served);
+  assign served = req & ~ack;
+endmodule
+module with_pending (input clk, input rst_n, input req, input ack, output served);
+  reg pending;
+  always @(posedge clk)
+    if (!rst_n) pending <= 1'b0;
+    else        pending <= req || (pending && !ack);
+  assign served = pending;
+endmodule
+module tb;
+  reg clk=0, rst_n=0, req=0, ack=0;
+  wire s_no, s_yes;
+  no_pending   a(.clk(clk),.rst_n(rst_n),.req(req),.ack(ack),.served(s_no));
+  with_pending b(.clk(clk),.rst_n(rst_n),.req(req),.ack(ack),.served(s_yes));
+  always #5 clk=~clk;
+  integer i;
+  initial begin
+    @(negedge clk); rst_n=1;
+    @(negedge clk); req=1;
+    @(negedge clk); req=0;
+    for (i=0;i<6;i=i+1) @(negedge clk);
+    if (s_no === 1'b0 && s_yes === 1'b1) $display("PULSE_LOST_WITHOUT_PENDING");
+    else $display("INCONCLUSIVE s_no=%b s_yes=%b", s_no, s_yes);
+    $finish;
+  end
+endmodule
+'''
+
+
+@pytest.mark.skipif(not shutil.which("iverilog"), reason=(
+    "NOT MEASURED HERE: no iverilog on PATH, so the executable proof that a "
+    "one-cycle request really is LOST without pending storage did not run — the "
+    "premise this whole contract rests on stays a citation. Measured in the "
+    "pinned image."))
+def test_a_one_cycle_request_really_is_lost_without_pending_storage(tmp_path):
+    src = tmp_path / "lost.v"
+    src.write_text(_LOST_V)
+    sim = tmp_path / "sim"
+    c = subprocess.run(["iverilog", "-g2012", "-o", str(sim), str(src)],
+                       capture_output=True, text=True)
+    assert c.returncode == 0, c.stderr
+    r = subprocess.run([str(sim)], capture_output=True, text=True)
+    assert "PULSE_LOST_WITHOUT_PENDING" in r.stdout, r.stdout
