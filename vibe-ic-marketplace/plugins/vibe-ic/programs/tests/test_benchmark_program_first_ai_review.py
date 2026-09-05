@@ -859,6 +859,166 @@ def test_ai_resigns_exact_candidate_after_program_gate_normalization(tmp_path):
     assert rebound["pre_gate_ai_rtl_sha256"] != final_hash
 
 
+def _normalized_repair_with_existing_review(tmp_path, semantic_verdict="PASS"):
+    """Synthetic gate-normalized repair, re-signed after its review exists."""
+    run = tmp_path / "run"
+    (run / "responses").mkdir(parents=True)
+    project = _project(tmp_path)
+    working_rtl = project / "phase2" / "stage1" / "rtl" / "dut.v"
+    working_rtl.write_text(
+        "module dut(input wire a, output wire y); assign y = ~a; endmodule\n")
+    parent = bd._make_ai_review_task(
+        "p1", project, bio.collect("rtllm", "p1", project), ROUTING, 0,
+        run, "PROGRAM")
+    parent_review = _proven_fail_review(parent)
+    # The inherited proof exposes inversion at zero. A subsequent full review
+    # can discover a different defect at one without rewriting that history.
+    challenge_path = Path(parent_review["verification_test"]["path"])
+    source = challenge_path.read_text().replace(
+        "    a = 1'b1; #1;\n"
+        '    if (y !== 1\'b1) begin $display("VIBEIC_AI_CHALLENGE=FAIL"); '
+        "$fatal(1); end\n", "")
+    challenge_path.write_text(source)
+    parent_review["verification_test"].update({
+        "sha256": bd._sha256_text(source),
+        "expected_behavior": "Output y must be zero when input a is zero.",
+        "rationale": (
+            "The prompt requires direct assignment, so driving zero must "
+            "produce zero. This single prompt-derived vector exposes the "
+            "inversion defect without claiming exhaustive input coverage."),
+    })
+    _write_review(parent, parent_review)
+    verdict = bd._validate_ai_review(parent)
+    assert verdict["status"] == "REPAIR_REQUIRED", verdict
+    challenge = verdict["verified_challenge"]
+
+    working_rtl.write_text(
+        "module dut(input wire a, output wire y); assign y = a; endmodule\n")
+    record = _write_ai_repair_record(run, parent, challenge)
+    record_path = bd._repair_record_path(run, parent)
+    provenance, reasons = bd._validate_repair_record(
+        record_path, parent, record["repaired_rtl_sha256"], challenge)
+    assert reasons == []
+    final_expression = "a & 1'b1" if semantic_verdict == "PASS" else "1'b0"
+    working_rtl.write_text(
+        "module dut(input wire a, output wire y); "
+        f"assign y = {final_expression}; endmodule\n")
+    task = bd._make_ai_review_task(
+        "p1", project, bio.collect("rtllm", "p1", project, supplied_rtl=True),
+        ROUTING, 0, run, "AI_REPAIR", verification_challenges=[challenge],
+        program_candidate=parent["candidate_snapshot"],
+        repair_parent_candidate=parent["candidate_snapshot"],
+        repair_provenance=provenance)
+    _write_review(task, (_valid_review(task) if semantic_verdict == "PASS"
+                         else _proven_fail_review(task)))
+    record["pre_gate_ai_rtl_sha256"] = record["repaired_rtl_sha256"]
+    record["repaired_rtl_sha256"] = task["rtl_sha256"]
+    record_path.write_text(json.dumps(record))
+    _solve_report(run, task)
+    solve_path = run / "solve_report.json"
+    solve = json.loads(solve_path.read_text())
+    solve["results"][0]["candidate_origin"] = "AI_REPAIR"
+    solve_path.write_text(json.dumps(solve))
+    return run, task, record_path
+
+
+@_NEEDS_SIMULATOR
+@pytest.mark.parametrize("semantic_verdict,expected_status,expected_rc", [
+    ("PASS", "ACCEPTED", 0),
+    ("FAIL", "REPAIR_REQUIRED", 2),
+])
+def test_resume_rebinds_final_provenance_with_existing_review(
+        tmp_path, semantic_verdict, expected_status, expected_rc):
+    run, task, record_path = _normalized_repair_with_existing_review(
+        tmp_path, semantic_verdict)
+    preserved = {str(path): path.read_bytes() for path in [
+        Path(task["review_path"]), record_path,
+        *[Path(p) for p in task["rtl_paths"] + task["working_rtl_paths"]],
+        *[Path(c["path"]) for c in task["verification_challenges"]],
+    ]}
+    assert bd._validate_ai_review(task)["status"] == "REJECTED"
+
+    rc = bd.cmd_resume("rtllm", "/unused", str(run))
+    refreshed = bd._read_jsonl(run / bd._REVIEW_WORKLIST)[0]
+    verdict = bd._validate_ai_review(refreshed)
+    assert verdict["status"] == expected_status, verdict
+    assert rc == expected_rc
+    assert bd._validate_embedded_repair_provenance(refreshed) == []
+    assert refreshed["repair_provenance"]["repaired_rtl_sha256"] == \
+        task["rtl_sha256"]
+    assert refreshed["repair_provenance"]["pre_gate_ai_rtl_sha256"] == \
+        task["repair_provenance"]["repaired_rtl_sha256"]
+    assert {k: v for k, v in refreshed.items() if k != "repair_provenance"} == \
+        {k: v for k, v in task.items() if k != "repair_provenance"}
+    assert all(Path(path).read_bytes() == raw for path, raw in preserved.items())
+    assert [r["status"] for r in verdict["inherited_challenge_results"]] == ["PASS"]
+    acceptance = json.loads((run / bd._ACCEPTANCE_REPORT).read_text())
+    assert acceptance["accepted_ids"] == (["p1"] if expected_rc == 0 else [])
+    if semantic_verdict == "FAIL":
+        assert verdict["challenge_result"]["status"] == "FAIL"
+        repairs = bd._read_jsonl(run / bd._REPAIR_WORKLIST)
+        assert [r["status"] for r in repairs] == ["AI_SEMANTIC_REPAIR_REQUIRED"]
+        assert not Path(task["response_path"]).exists()
+
+
+@_NEEDS_SIMULATOR
+@pytest.mark.parametrize("field", [
+    "schema", "id", "prompt_sha256", "parent_rtl_sha256",
+    "repaired_rtl_sha256", "challenge_sha256", "author", "oracle_accessed",
+    "rationale", "unreadable", "absent",
+])
+def test_resume_existing_review_cannot_rebind_invalid_repair_record(tmp_path, field):
+    run, task, record_path = _normalized_repair_with_existing_review(tmp_path)
+    record = json.loads(record_path.read_text())
+    if field == "absent":
+        record_path.unlink()
+    elif field == "unreadable":
+        record_path.write_text("{")
+    else:
+        record[field] = ({"kind": "AI", "model": "unknown"}
+                         if field == "author" else "invalid")
+        record_path.write_text(json.dumps(record))
+    review_bytes = Path(task["review_path"]).read_bytes()
+
+    assert bd.cmd_resume("rtllm", "/unused", str(run)) == 2
+    refreshed = bd._read_jsonl(run / bd._REVIEW_WORKLIST)[0]
+    assert refreshed["repair_provenance"] == task["repair_provenance"]
+    assert bd._validate_ai_review(refreshed)["status"] == "REJECTED"
+    assert Path(task["review_path"]).read_bytes() == review_bytes
+    assert not Path(task["response_path"]).exists()
+    assert json.loads((run / bd._ACCEPTANCE_REPORT).read_text())["accepted_ids"] == []
+
+
+@_NEEDS_SIMULATOR
+@pytest.mark.parametrize("changed", [
+    "review_prompt", "review_rtl", "prompt", "frozen_rtl", "working_rtl",
+    "inherited_challenge",
+])
+def test_resume_provenance_refresh_cannot_authorize_changed_review_material(
+        tmp_path, changed):
+    run, task, _ = _normalized_repair_with_existing_review(tmp_path)
+    if changed.startswith("review_"):
+        review = json.loads(Path(task["review_path"]).read_text())
+        review[changed.removeprefix("review_") + "_sha256"] = "0" * 64
+        _write_review(task, review)
+    else:
+        path = {
+            "prompt": task["prompt_path"],
+            "frozen_rtl": task["rtl_paths"][0],
+            "working_rtl": task["working_rtl_paths"][0],
+            "inherited_challenge": task["verification_challenges"][0]["path"],
+        }[changed]
+        Path(path).write_text(Path(path).read_text() + "\n// changed\n")
+    review_bytes = Path(task["review_path"]).read_bytes()
+
+    assert bd.cmd_resume("rtllm", "/unused", str(run)) == 2
+    refreshed = bd._read_jsonl(run / bd._REVIEW_WORKLIST)[0]
+    assert refreshed["verification_challenges"] == task["verification_challenges"]
+    assert Path(task["review_path"]).read_bytes() == review_bytes
+    assert not Path(task["response_path"]).exists()
+    assert json.loads((run / bd._ACCEPTANCE_REPORT).read_text())["accepted_ids"] == []
+
+
 @_NEEDS_SIMULATOR
 def test_proven_ai_edit_cannot_reenter_without_repair_author_record(
         tmp_path, monkeypatch):

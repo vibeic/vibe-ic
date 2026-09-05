@@ -1048,9 +1048,11 @@ def _refresh_final_repair_provenance(task: dict) -> tuple[dict | None,
 
     A supplied AI repair re-enters at validation, but deterministic gate logic
     can still normalize that RTL before freezing the candidate.  The original
-    pre-gate signature must not silently authorize different bytes.  Before a
-    fresh review exists, let the AI explicitly re-sign the final hash at the
-    same evidence path; otherwise fail closed and request final provenance.
+    pre-gate signature must not silently authorize different bytes. Let the AI
+    explicitly re-sign the final hash at the same evidence path, even when a
+    review already exists. This only refreshes provenance; the unchanged review
+    must still pass its normal hash, snapshot, and challenge validation.
+    Missing or invalid final provenance remains BLOCKING.
     """
     if task.get("candidate_origin") != "AI_REPAIR":
         return None, ["candidate is not an AI_REPAIR"]
@@ -3772,7 +3774,8 @@ def _cmd_resume_locked(bench: str, dataset: str, run: str,
         pre_logs: list[str] = []
         review_path = Path(str(task.get("review_path") or ""))
         if (task.get("candidate_origin") == "AI_REPAIR"
-                and not review_path.is_file()):
+                and (not review_path.is_file()
+                     or _validate_embedded_repair_provenance(task))):
             final_provenance, final_provenance_reasons = \
                 _refresh_final_repair_provenance(task)
             if final_provenance_reasons:
