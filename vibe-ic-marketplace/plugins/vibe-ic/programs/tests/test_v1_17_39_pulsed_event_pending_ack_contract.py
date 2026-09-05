@@ -566,3 +566,59 @@ def test_starvation_asserts_at_exactly_the_declared_deadline(tmp_path):
     assert seen["5"] == "1", f"did not assert at the deadline: {r.stdout}"
     for k in (6, 7):
         assert seen[str(k)] == "1", f"did not saturate at cycle {k}: {r.stdout}"
+
+
+# --------------------------------------------------------------------------
+# FIVE MORE BRANCHES FOUND BY TRACING
+#
+# In-process line-tracing of this generator (the suite drives it by subprocess,
+# so the earlier trace could not see it) showed five paths no test exercised.
+# Four are refusals for malformed input; the fifth is a whole EMISSION MODE.
+# --------------------------------------------------------------------------
+_NORESET = {
+    "module": "m", "kind": "moore_seq", "clk": "clk", "input": "in", "output": "out",
+    "encoding": {"A": 0, "B": 1},
+    "transitions": {"A": {"0": "A", "1": "B"}, "B": {"0": "A", "1": "B"}},
+    "outputs": {"A": 0, "B": 1},
+}
+
+
+@pytest.mark.parametrize("events,needle", [
+    ({"9bad": {"kind": "level"}},                       "invalid event signal"),
+    ({"e": "not a dict"},                               "must be a mapping"),
+    ({"e": {"kind": "pulse", "ack": "9bad"}},           "invalid 'ack' signal"),
+    ({"e": {"kind": "pulse", "ack": "a", "deadline": 4,
+            "starvation_out": "9bad"}},                 "invalid 'starvation_out'"),
+])
+def test_malformed_event_declarations_are_refused(tmp_path, events, needle):
+    r, _ = _run(tmp_path, dict(BASE, events=events))
+    assert r.returncode == 1, r.stdout
+    assert needle in r.stderr
+
+
+def test_a_clocked_fsm_with_NO_reset_still_gets_the_contract(tmp_path):
+    """A whole emission mode nothing exercised: `reset` is optional on a
+    sequential FSM, and the pending/starvation logic has a separate branch for
+    that -- no `if (!rst)` guard, just the update. If it were wrong, every
+    reset-less design would get broken RTL and no test would have said so."""
+    r, rtl = _run(tmp_path, dict(_NORESET, events={
+        "e": {"kind": "pulse", "ack": "a", "deadline": 4, "starvation_out": "s"}}))
+    assert r.returncode == 0, r.stderr
+    assert "reg pending_e;" in rtl
+    assert "pending_e <= e || (pending_e && !a);" in rtl
+    assert "if (!pending_e || a) wait_e <= 3'd0;" in rtl
+    assert "assign s = pending_e && (wait_e == 3'd4);" in rtl
+    # the distinguishing property: no reset guard anywhere in the event logic
+    assert "if (!rst" not in rtl and "if (rst" not in rtl
+
+
+@pytest.mark.skipif(not shutil.which("iverilog"), reason=(
+    "NOT MEASURED HERE: no iverilog on PATH, so the reset-less emission was not "
+    "elaborated — only string-checked. Measured in the pinned image."))
+def test_the_reset_less_emission_elaborates(tmp_path):
+    _, rtl = _run(tmp_path, dict(_NORESET, events={
+        "e": {"kind": "pulse", "ack": "a", "deadline": 4, "starvation_out": "s"}}))
+    (tmp_path / "d.sv").write_text(rtl)
+    c = subprocess.run(["iverilog", "-g2012", "-o", str(tmp_path / "s"),
+                        str(tmp_path / "d.sv")], capture_output=True, text=True)
+    assert c.returncode == 0, c.stderr
