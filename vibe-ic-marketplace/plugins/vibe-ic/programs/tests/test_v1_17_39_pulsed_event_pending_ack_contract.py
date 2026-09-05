@@ -12,6 +12,7 @@ inferred; an unstated field is REFUSED BY NAME so the interpretation is routed t
 AI rather than guessed.
 """
 import json
+import re
 import shutil
 import subprocess
 import sys
@@ -188,3 +189,52 @@ def test_emitted_rtl_holds_the_pulse_and_reports_starvation(tmp_path):
     assert c.returncode == 0, c.stderr
     r = subprocess.run([str(sim)], capture_output=True, text=True)
     assert "ALL_PASS" in r.stdout, r.stdout
+
+
+# --------------------------------------------------------------------------
+# 6. the ORDINARY Phase-2 runner path, pinned
+#
+# `deterministic_rtl_dispatcher` is only half the front door. The other half is
+# `design_one_shot_runner`, which looks for a project-shipped structured spec at
+# a fixed list of conventional locations and routes it through that dispatcher
+# with NO LLM. This pins both halves together: a spec dropped where the runner
+# actually looks, carrying nothing but the design's own declaration, produces
+# the pending/starvation structure. No harness, no benchmark name, no design id.
+#
+# SCOPE, stated honestly: this is reached when a project SHIPS a structured spec.
+# Nothing in the plugin extracts an `events` contract out of PROSE today — and
+# nothing extracts the pre-existing `state_outputs` field out of prose either, so
+# that limitation is the shape of the existing spec-delivery architecture rather
+# than anything this contract introduced. See LAND.md, finding CZ2035-N6.
+# --------------------------------------------------------------------------
+RUNNER = Path(__file__).parent.parent / "design_one_shot_runner.py"
+
+
+def _runner_spec_locations():
+    """The conventional spec paths, read out of the runner's own source."""
+    src = RUNNER.read_text()
+    m = re.search(r"for cand in \((.*?)\):", src, re.S)
+    assert m, "the runner's spec-location list moved; this test must follow it"
+    return re.findall(r'"([^"]+rtl_spec\.[a-z]+)"', m.group(1))
+
+
+def test_the_runner_looks_where_a_shipped_spec_would_be():
+    locs = _runner_spec_locations()
+    assert "phase2/stage1/rtl_spec.json" in locs, locs
+    assert len(locs) >= 4, locs
+
+
+def test_a_shipped_spec_at_the_runners_own_location_gets_the_contract(tmp_path):
+    """End to end over the two halves of the ordinary path, with no harness."""
+    loc = _runner_spec_locations()[0]
+    p = tmp_path / loc
+    p.parent.mkdir(parents=True)
+    p.write_text(json.dumps(PULSED))
+    out = tmp_path / "out.sv"
+    r = subprocess.run([sys.executable, str(DISPATCH), str(p), "-o", str(out)],
+                       capture_output=True, text=True)
+    assert r.returncode == 0, r.stderr
+    rtl = out.read_text()
+    assert "reg pending_irq_a;" in rtl
+    assert "assign starved_a = pending_irq_a && (wait_irq_a == 5'd16);" in rtl
+    assert "pending_irq_b" not in rtl      # the level control still holds here
