@@ -362,14 +362,31 @@ def test_the_runner_asks_for_the_attribution_at_a6_and_only_there(
     """The attribution is ADVISORY. It is dispatched at A6, it is not
     dispatched anywhere else, and the StepResult's verdict comes from the A6
     gate exactly as it did before — the adjudicator keeps its own decision."""
+    import inspect as _inspect
     import subprocess as _sp
     import analog_one_shot_runner as AOSR
+    import _progress_run as _real_pr
 
     seen = []
 
+    # FAITHFUL DOUBLE — it must refuse exactly what the real collaborator
+    # refuses. The previous stand-in was `def run(argv, **kw)`, which is MORE
+    # PERMISSIVE than `_progress_run.run`: it silently swallowed a `timeout=`
+    # that the real function has no parameter for. So this test stayed green
+    # while the A6 dispatch raised `TypeError: run() got an unexpected keyword
+    # argument 'timeout'` in production and killed the analog runner. A double
+    # that accepts what the real thing refuses cannot fail.
+    #
+    # Binding the REAL signature — rather than rejecting one named keyword —
+    # is deliberate: it is not a special case for `timeout`, so the NEXT
+    # argument that drifts away from `_progress_run.run` is caught the same way.
+    _REAL_RUN_SIG = _inspect.signature(_real_pr.run)
+
     class _Pr:
         @staticmethod
-        def run(argv, **kw):
+        def run(*args, **kw):
+            _REAL_RUN_SIG.bind(*args, **kw)   # raises TypeError exactly as production does
+            argv = args[0]
             seen.append(Path(argv[1]).name)
             return _sp.CompletedProcess(argv, 0, "PASS: gate\n", "")
 
