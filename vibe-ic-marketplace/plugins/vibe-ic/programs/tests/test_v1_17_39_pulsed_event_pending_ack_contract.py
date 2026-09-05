@@ -10,6 +10,15 @@ The contract is read from the INPUT ONLY (§4.05): `kind`, `ack`, `deadline` and
 `starvation_out` are all declared by the design. Nothing about pulse-vs-level is
 inferred; an unstated field is REFUSED BY NAME so the interpretation is routed to
 AI rather than guessed.
+
+PROVENANCE OF THE "Measured:" NOTES IN THIS FILE. Several comments below record a defect and the
+measurement that found it -- a hang, an X on a starvation line, a truncated address literal, a
+parameter harvested out of the wrong module. NONE of those ever shipped. Every function they
+describe is NEW in this change, so each was a defect in an earlier draft OF THIS SAME CHANGE,
+found and fixed before landing. They are kept because they say why a guard exists and what it
+costs to remove it -- not because the released code ever behaved that way. A reader trying to
+reproduce one against a released version will not be able to, and should not conclude the note
+is wrong.
 """
 import json
 import re

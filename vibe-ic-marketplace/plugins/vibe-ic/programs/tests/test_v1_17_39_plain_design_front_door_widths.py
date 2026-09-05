@@ -11,6 +11,15 @@ The design declares a 12-bit address bus. Before this change the emitted driver
 addressed it as 32 bits, which is not a neutral default: the transaction is
 accepted and the upper bits are dropped. The design says 12, so the driver must
 say 12 — reached automatically, with nobody remembering to apply a lesson.
+
+PROVENANCE OF THE "Measured:" NOTES IN THIS FILE. Several comments below record a defect and the
+measurement that found it -- a hang, an X on a starvation line, a truncated address literal, a
+parameter harvested out of the wrong module. NONE of those ever shipped. Every function they
+describe is NEW in this change, so each was a defect in an earlier draft OF THIS SAME CHANGE,
+found and fixed before landing. They are kept because they say why a guard exists and what it
+costs to remove it -- not because the released code ever behaved that way. A reader trying to
+reproduce one against a released version will not be able to, and should not conclude the note
+is wrong.
 """
 import json
 import sys
