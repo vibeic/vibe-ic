@@ -55,6 +55,10 @@ Every emitted item is anchored to an EXPLICIT statement in the prompt:
 chip-AGNOSTIC: pure numeric/idiom grammar; NO chip / vendor / SKU literal
 (enforced by `programs/source_chip_agnostic_check.py .`).
 
+Enforcement: this extractor supplies blocking structural obligations to the
+strict coverage / AI-review consumers. An elaboration-only width helper is
+not a runtime rounding mode; real arithmetic modes remain blocking there.
+
 API
     extract(prompt_text: str) -> list[dict]
         each dict: {kind, requirement, evidence, ...structured fields}
@@ -172,7 +176,7 @@ def _detect_rounding_modes(text: str) -> List[Tuple[str, str]]:
     emitted ONLY on a named idiom hit — silence yields []."""
     found: Dict[str, str] = {}
     for tag, rx in _MODE_PATTERNS:
-        m = _first_not_retired(rx, text)
+        m = _first_not_retired(rx, text, skip_width_helper=tag == "round_ceiling")
         if m and tag not in found:
             found[tag] = m.group(0).strip()
     return list(found.items())
@@ -207,7 +211,50 @@ def _first_live(rx, text: str):
     return None
 
 
-def _first_not_retired(rx, text: str):
+def _is_log2_width_helper(text: str, match) -> bool:
+    """Recognize only a described integer helper used solely for dimensions.
+
+    A bare 'ceiling of log2' can describe real arithmetic, so that phrase alone
+    is insufficient. Require the immediately following function declaration,
+    at least one packed-dimension use, and no runtime call. A later, genuine
+    ceiling requirement must still be searched after this occurrence.
+    """
+    start = text.rfind("\n", 0, match.start()) + 1
+    end = text.find("\n", match.end())
+    if end < 0:
+        return False
+    if not re.fullmatch(
+            r"\s*(?://\s*)?Function\s+to\s+(?:calculate|compute)\s+the\s+"
+            r"ceiling\s+of\s+log2\s*", text[start:end], re.I):
+        return False
+    declaration = re.match(
+        r"\s*function\s+(?:automatic\s+)?(?:integer|int)\s+"
+        r"(?P<name>[A-Za-z_]\w*)\s*[;(]", text[end:], re.I)
+    if not declaration:
+        return False
+    name = re.escape(declaration.group("name"))
+    dimensions = [m.span() for m in re.finditer(r"\[[^\[\]\n]*\]", text)]
+    calls = list(re.finditer(rf"\b{name}\s*\(", text))
+    in_dimension = lambda pos: any(lo <= pos < hi for lo, hi in dimensions)
+    if not any(in_dimension(call.start()) for call in calls):
+        return False
+    for call in calls:
+        if in_dimension(call.start()) or end <= call.start() < end + declaration.end():
+            continue
+        # A prose reference saying how a width is computed is also a
+        # dimension use; an assignment remains a runtime call, even if its
+        # destination happens to be named 'width'.
+        lo = text.rfind("\n", 0, call.start()) + 1
+        hi = text.find("\n", call.end())
+        line = text[lo:hi if hi >= 0 else len(text)]
+        if (re.search(r"\b(?:width|bits|dimension)\b", line, re.I)
+                and not re.search(r"\bassign\b|<=|(?<![<>=!])=(?!=)", line)):
+            continue
+        return False
+    return True
+
+
+def _first_not_retired(rx, text: str, *, skip_width_helper: bool = False):
     """Like `_first_live`, but RETIREMENT only -- not every negation.
 
     A rounding-mode NAME describes itself, and its description legitimately
@@ -227,6 +274,8 @@ def _first_not_retired(rx, text: str):
     than trading a visible regression for an invisible improvement.
     """
     for m in rx.finditer(text):
+        if skip_width_helper and _is_log2_width_helper(text, m):
+            continue
         lo, hi = sentence_scope(text, m.start(), m.end(),
                                 extra_breaks=_LINE_END_BREAKS)
         if DENIAL_RETIRED_RE.search(text[lo:hi]):

@@ -14,6 +14,83 @@ Coverage:
 from __future__ import annotations
 
 import spec_numeric_pack_extract as M
+import pytest
+
+
+def _width_helper_prompt(name="bits_for"):
+    return (
+        f"input wire [{name}(LIMIT)-1:0] index;\n"
+        "// Function to calculate the ceiling of log2\n"
+        f"function integer {name};\n"
+        "input integer value;\nendfunction\n"
+    )
+
+
+@pytest.mark.parametrize("name", ["bits_for", "address_size", "dimension_bits"])
+def test_log2_width_helper_is_not_runtime_rounding(name):
+    modes = M._detect_rounding_modes(_width_helper_prompt(name))
+    assert modes == []
+
+
+def test_real_completion_document_width_helper():
+    from _hostpaths import require_repo
+    path = require_repo("vibe-ic-marketplace", "plugins", "vibe-ic", "tests",
+                        "fixtures", "real_benchmark", "log2_width_helper.md")
+    text = path.read_text()
+    assert "Function to calculate the ceiling of log2" in text
+    assert M._detect_rounding_modes(text) == []
+
+
+def test_log2_width_helper_does_not_hide_later_real_ceiling():
+    modes = M._detect_rounding_modes(
+        _width_helper_prompt() + "Round towards positive infinity.")
+    assert modes == [("round_ceiling", "Round towards positive infinity")]
+
+
+def test_actual_logarithm_datapath_retains_ceiling_mode():
+    prompt = _width_helper_prompt() + "assign result = bits_for(sample);\n"
+    assert M._detect_rounding_modes(prompt) == [("round_ceiling", "ceiling")]
+
+
+def test_logarithm_prose_without_elaboration_usage_retains_mode():
+    assert M._detect_rounding_modes(
+        "Compute the ceiling of log2 for the output result.") == [
+            ("round_ceiling", "ceiling")]
+
+
+def test_width_helper_cannot_hide_same_line_real_rounding():
+    text = _width_helper_prompt().replace(
+        "ceiling of log2", "ceiling of log2; rounding mode is ceiling")
+    assert M._detect_rounding_modes(text) == [("round_ceiling", "ceiling")]
+
+
+def test_real_uncovered_rounding_still_blocks_strict_cli(tmp_path):
+    import subprocess
+    import sys
+    from pathlib import Path
+    script = Path(M.__file__).with_name("spec_coverage_check.py")
+    spec = tmp_path / "spec.md"
+    tb = tmp_path / "tb.sv"
+    spec.write_text("RUP: Round towards positive infinity (ceiling behavior).\n")
+    tb.write_text('module tb; initial begin $display("PASS"); $finish; end endmodule\n')
+    result = subprocess.run([sys.executable, str(script), "--spec", str(spec),
+                             "--tb", str(tb), "--strict"], capture_output=True, text=True)
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert "round_ceiling" in result.stdout + result.stderr
+
+
+def test_width_helper_no_longer_blocks_strict_cli(tmp_path):
+    import subprocess
+    import sys
+    from pathlib import Path
+    script = Path(M.__file__).with_name("spec_coverage_check.py")
+    spec = tmp_path / "spec.md"
+    tb = tmp_path / "tb.sv"
+    spec.write_text(_width_helper_prompt())
+    tb.write_text('module tb; reg [3:0] index; initial begin index=0; if(index!==0) $fatal; $finish; end endmodule\n')
+    result = subprocess.run([sys.executable, str(script), "--spec", str(spec),
+                             "--tb", str(tb), "--strict"], capture_output=True, text=True)
+    assert result.returncode == 0, result.stdout + result.stderr
 
 
 # ---------------------------------------------------------------------------
