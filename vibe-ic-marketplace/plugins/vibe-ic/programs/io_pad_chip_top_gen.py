@@ -82,11 +82,13 @@ WHAT IT WILL NOT DO
   padless -- both are refusals, because a chip-top that drops a port is a
   different design.
 * It will not choose an IO library for a design that did not delegate one.
-* It will not write power pads. A ring's rails are formed by cells touching
-  and this producer does not know how many supply pads a design wants; that
-  is section 2B's own unanswered territory and inventing it here would put a
-  power plan in a netlist nobody asked for. The record says so explicitly
-  rather than leaving the absence to be noticed.
+* It will not guess named power-pad masters or silently assume separate IO and
+  core voltage domains.  When the caller supplies the PDN's already-derived
+  power and ground rail names, it may derive the minimum electrically complete
+  SAME-DOMAIN pair from ``CLASS PAD POWER`` and the LEF pins' ``USE`` roles.
+  Every connection, source LEF and selection refusal is then recorded.  If the
+  library cannot prove such a pair, it refuses instead of emitting a cosmetic
+  ring whose supply is open.
 
 OUTPUTS
 =======
@@ -111,6 +113,7 @@ from __future__ import annotations
 
 import argparse
 import collections
+import hashlib
 import json
 import os
 import re
@@ -562,10 +565,126 @@ def _core_net(port: str) -> str:
     return f"{port}__core"
 
 
+def _sha256(path: Path) -> Optional[str]:
+    """Hash one readable authority file; unreadable remains explicit None."""
+    try:
+        h = hashlib.sha256()
+        with path.open("rb") as stream:
+            for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+                h.update(chunk)
+        return h.hexdigest()
+    except OSError:
+        return None
+
+
+def _derive_supply_pad_pair(
+        classes: Dict[str, str],
+        sizes: Dict[str, Tuple[float, float]],
+        pin_roles: Dict[str, Dict[str, Tuple[str, str]]],
+        prefix: Optional[str], power_net: str, ground_net: str,
+        macro_sources: Dict[str, List[Path]],
+        ) -> Tuple[List[Dict[str, object]], Dict[str, object]]:
+    """Derive one external POWER pad and one external GROUND pad.
+
+    This is deliberately electrical, not name-based.  For a same-domain ring,
+    the external POWER pad is the ``CLASS PAD POWER`` macro which exposes a
+    POWER-use pin other than the core rail while omitting the core POWER pin;
+    the ground pad is the symmetric case.  That missing core-side pin is what
+    distinguishes the two ESD supply cells in libraries where both macros also
+    carry the opposite rail.  All USE POWER pins bind to ``power_net`` and all
+    USE GROUND pins bind to ``ground_net``.
+
+    One cell per polarity is the minimum complete pair.  Current capacity is a
+    separate sign-off measurement: no LEF syntax carries an ampere rating, so
+    this helper records that it is not determined rather than fabricating one.
+    """
+    rails = {power_net, ground_net}
+    uses = (("power", "POWER", power_net),
+            ("ground", "GROUND", ground_net))
+    pair: List[Dict[str, object]] = []
+    declined: Dict[str, List[str]] = {"power": [], "ground": []}
+    for kind, use, core_rail in uses:
+        eligible: List[Tuple[float, str, str, Dict[str, str]]] = []
+        for master, cls in sorted(classes.items()):
+            if cls.upper() != "PAD POWER":
+                continue
+            if prefix and not master.startswith(prefix):
+                declined[kind].append(
+                    f"{master}: outside selected IO-library prefix {prefix}")
+                continue
+            roles = pin_roles.get(master, {})
+            by_use = {pin: role_use for pin, (_direction, role_use)
+                      in roles.items() if role_use in ("POWER", "GROUND")}
+            same_use = sorted(pin for pin, role_use in by_use.items()
+                              if role_use == use)
+            external = [pin for pin in same_use if pin not in rails]
+            opposite = "GROUND" if use == "POWER" else "POWER"
+            if core_rail in by_use:
+                declined[kind].append(
+                    f"{master}: carries core {kind} rail {core_rail}; not the "
+                    f"external {kind} bridge cell")
+                continue
+            if len(external) != 1:
+                declined[kind].append(
+                    f"{master}: expected one non-core {use} terminal, found "
+                    f"{external}")
+                continue
+            if not any(role_use == opposite for role_use in by_use.values()):
+                declined[kind].append(
+                    f"{master}: no {opposite}-use pin for the ESD return")
+                continue
+            connections = {
+                pin: power_net if role_use == "POWER" else ground_net
+                for pin, role_use in sorted(by_use.items())
+            }
+            eligible.append((float(sizes.get(master, (float("inf"), 0.0))[0]),
+                             master, external[0], connections))
+        if not eligible:
+            raise Refusal(
+                "SUPPLY_PAD_PAIR_UNRESOLVED",
+                f"the selected IO library proves no external {kind} bridge "
+                f"cell for same-domain rails {power_net}/{ground_net}; "
+                + "; ".join(declined[kind][:8]))
+        _width, master, terminal, connections = sorted(eligible)[0]
+        source_records = []
+        for source in sorted(set(macro_sources.get(master, []))):
+            source_records.append({"path": str(source),
+                                   "sha256": _sha256(source)})
+        pair.append({
+            "kind": kind,
+            "port": power_net if kind == "power" else ground_net,
+            "master": master,
+            "terminal": terminal,
+            "supply_connections": connections,
+            "chosen_for_class": "PAD POWER",
+            "direction": "inout",
+            "class_fallback": False,
+            "selection_declines": declined[kind],
+            "source_lefs": source_records,
+            "is_supply_pad": True,
+        })
+    return pair, {
+        "domain_topology": "single_domain",
+        "power_net": power_net,
+        "ground_net": ground_net,
+        "minimum_pair_count": 1,
+        "capacity_from_lef": "NOT_DETERMINED",
+        "capacity_reason": (
+            "LEF proves pin roles and geometry but carries no current rating; "
+            "the final project must bind the installed-library revision to a "
+            "public PDK current rating and measured worst-case current"),
+        "selection_rule": (
+            "one PAD POWER macro per polarity, scoped to the PDK-selected IO "
+            "library; the external terminal is the sole same-USE pin outside "
+            "the core rails on the macro which omits that core-side rail"),
+    }
+
+
 def _emit_verilog(top: str, core: str,
                   ordered: Dict[str, List[str]],
                   chosen: Dict[str, Dict[str, object]],
-                  ports: Sequence[Dict[str, object]]) -> str:
+                  ports: Sequence[Dict[str, object]],
+                  supply_ports: Sequence[str] = ()) -> str:
     """The chip-top: core instance plus one pad instance per top-level port.
 
     The pad instances are emitted with POSITIONAL-FREE named connections to a
@@ -595,6 +714,8 @@ def _emit_verilog(top: str, core: str,
         if width > 1:
             rng = " [%s:%s]" % (p.get("msb", width - 1), p.get("lsb", 0))
         decl.append("    %s%s %s" % (direction, rng, name))
+    for name in supply_ports:
+        decl.append("    inout %s" % name)
     lines.append("module %s (" % top)
     lines.append(",\n".join(decl))
     lines.append(");")
@@ -627,7 +748,11 @@ def _emit_verilog(top: str, core: str,
         for inst in ordered.get(side, []):
             rec = chosen[inst]
             lines.append("    // %s edge -- %s" % (side, rec["port"]))
-            conn = [".%s(%s)" % (rec["terminal"], rec["port"])]
+            if rec.get("supply_connections"):
+                conn = [".%s(%s)" % (pin, net) for pin, net in
+                        sorted(dict(rec["supply_connections"]).items())]
+            else:
+                conn = [".%s(%s)" % (rec["terminal"], rec["port"])]
             if rec.get("core_pin"):
                 conn.append(".%s(%s)" % (rec["core_pin"],
                                          _core_bit(str(rec["port"]))))
@@ -664,7 +789,8 @@ def _emit_verilog(top: str, core: str,
     return "\n".join(lines)
 
 
-def run(project: Path, pdk_root: Optional[str], pdk: Optional[str]
+def run(project: Path, pdk_root: Optional[str], pdk: Optional[str],
+        power_net: Optional[str] = None, ground_net: Optional[str] = None,
         ) -> Tuple[int, Dict[str, object]]:
     rec: Dict[str, object] = {"program": PROGRAM, "verdict": "REFUSE",
                               "findings": [], "project": str(project)}
@@ -751,6 +877,20 @@ def run(project: Path, pdk_root: Optional[str], pdk: Optional[str]
     # and reduces second, so a source that says nothing cannot erase one
     # that spoke, and the answer does not depend on the walk.
     per_lef = [lef.read_text(errors="replace") for lef in lefs]
+    macro_sources: Dict[str, List[Path]] = {}
+    pin_roles: Dict[str, Dict[str, Tuple[str, str]]] = {}
+    pin_role_conflicts: Dict[str, List[str]] = {}
+    for lef, text in zip(lefs, per_lef):
+        mentioned = (set(PR.parse_lef_macro_classes(text))
+                     | set(PR.parse_lef_macros(text)))
+        for master in mentioned:
+            macro_sources.setdefault(master, []).append(lef)
+        for master, roles in PR.parse_lef_pin_roles(text).items():
+            if master in pin_roles and pin_roles[master] != roles:
+                pin_role_conflicts.setdefault(master, []).extend(
+                    str(x) for x in (macro_sources.get(master) or [lef]))
+                continue
+            pin_roles[master] = roles
     classes, class_conflicts = _srm.merge_source_records(
         (PR.parse_lef_macro_classes(text) for text in per_lef),
         on_conflict="richer")
@@ -764,6 +904,10 @@ def run(project: Path, pdk_root: Optional[str], pdk: Optional[str]
             "note": ("two IO LEFs describe the same macro differently; the "
                      "fuller description is kept and the disagreement is "
                      "reported rather than decided by discovery order")}
+    if pin_role_conflicts:
+        rec["io_library_pin_role_conflicts"] = {
+            master: sorted(set(paths))
+            for master, paths in sorted(pin_role_conflicts.items())}
     rec["io_library_lefs"] = [str(p) for p in lefs]
     rec["io_master_count"] = len(classes)
 
@@ -807,6 +951,64 @@ def run(project: Path, pdk_root: Optional[str], pdk: Optional[str]
                             "selection_declines": declines}
             ordered[side].append(inst)
 
+    # Supply cells are PHYSICAL-DESIGN freedom, not logical input ports.  The
+    # runner opts in only after it has derived exactly one power and one ground
+    # rail from the same PDK used by PDN generation.  Both must be present: a
+    # one-polarity supply plan is an electrical open and is refused.
+    supply_ports: List[str] = []
+    if bool(power_net) != bool(ground_net):
+        raise Refusal("SUPPLY_RAIL_PAIR_INCOMPLETE",
+                      "power_net and ground_net must be supplied together")
+    if power_net and ground_net:
+        if power_net == ground_net:
+            raise Refusal("SUPPLY_RAILS_COLLIDE",
+                          "the derived power and ground rail have one name")
+        conflicted = sorted(set(pin_role_conflicts) & {
+            m for m, cls in classes.items() if cls.upper() == "PAD POWER"})
+        if conflicted:
+            raise Refusal(
+                "SUPPLY_PAD_PIN_ROLE_CONFLICT",
+                "the supply candidates disagree across LEFs: "
+                + ", ".join(conflicted))
+        pair, plan = _derive_supply_pad_pair(
+            classes, sizes, pin_roles, prefix, power_net, ground_net,
+            macro_sources)
+        # Put the adjacent pair on the currently shortest edge.  This is a
+        # stable geometric minimisation; it neither rewrites the design's
+        # signal partition nor lengthens the longest side unless every side
+        # was already equally full.
+        side_widths = {
+            side: sum(sizes.get(str(chosen[i]["master"]), (0.0, 0.0))[0]
+                      for i in ordered[side])
+            for side in SIDES}
+        supply_side = min(SIDES, key=lambda side: (side_widths[side],
+                                                   SIDES.index(side)))
+        supply_instances: List[str] = []
+        for entry in pair:
+            inst = f"u_pad_supply_{entry['kind']}"
+            if inst in chosen:
+                raise Refusal("INSTANCE_NAME_COLLISION",
+                              f"supply pad maps to existing {inst!r}")
+            chosen[inst] = dict(entry)
+            supply_instances.append(inst)
+        ordered[supply_side] = supply_instances + ordered[supply_side]
+        supply_ports = [power_net, ground_net]
+        source_file = (Path(pdk_root) / str(pdk) / "SOURCES"
+                       if pdk_root and pdk else None)
+        plan.update({
+            "placement_side": supply_side,
+            "placement_basis": (
+                "adjacent minimum pair prepended to the edge with the least "
+                "existing signal-pad width; ties use S/E/N/W order"),
+            "signal_width_before_um": side_widths,
+            "instances": supply_instances,
+            "pdk_sources": ({"path": str(source_file),
+                             "sha256": _sha256(source_file),
+                             "text": source_file.read_text(errors="replace").strip()}
+                            if source_file and source_file.is_file() else None),
+        })
+        rec["power_pad_plan"] = plan
+
     # ── THE PAD CELL'S TWO FACES ──────────────────────────────────────────
     # The core connects to the pad's CORE-SIDE pin and the port net terminates
     # on the bond terminal alone. Both faces, and every auxiliary tie, are
@@ -822,6 +1024,8 @@ def run(project: Path, pdk_root: Optional[str], pdk: Optional[str]
     aux_defaulted: List[Dict[str, object]] = []
     aux_declared: List[Dict[str, object]] = []
     for inst, rc in chosen.items():
+        if rc.get("is_supply_pad"):
+            continue
         master = str(rc["master"])
         if not lib_paths:
             faces_refused[inst] = (
@@ -868,7 +1072,8 @@ def run(project: Path, pdk_root: Optional[str], pdk: Optional[str]
 
     out_v = project / "phase3" / "stage3" / "pnr" / "chip_top_io.v"
     out_v.parent.mkdir(parents=True, exist_ok=True)
-    out_v.write_text(_emit_verilog(top, core, ordered, chosen, ports))
+    out_v.write_text(_emit_verilog(top, core, ordered, chosen, ports,
+                                   supply_ports))
 
     rec["verdict"] = "WROTE"
     rec["chip_top_module"] = top
@@ -1019,13 +1224,11 @@ def run(project: Path, pdk_root: Optional[str], pdk: Optional[str]
                   "declared fillers"),
     }
 
-    rec["not_written"] = {
-        "power_pads": ("no supply pad is instantiated: the number and "
-                       "placement of supply pads is not stated by the design "
-                       "and not derivable from the library, and a power plan "
-                       "invented here would be indistinguishable in the "
-                       "netlist from a declared one"),
-    }
+    rec["not_written"] = {}
+    if not supply_ports:
+        rec["not_written"]["power_pads"] = (
+            "the caller supplied no PDK-derived power/ground rail pair; no "
+            "supply pad is written and this absence is not a PASS")
     rec["fallback_masters"] = sorted(
         i for i, r in chosen.items() if r["class_fallback"])
     return 0, rec
@@ -1036,6 +1239,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     ap.add_argument("project", nargs="?", default=".")
     ap.add_argument("--pdk-root", default=None)
     ap.add_argument("--pdk", default=None)
+    ap.add_argument("--power-net", default=None)
+    ap.add_argument("--ground-net", default=None)
     ap.add_argument("--json", dest="out_json", default=None)
     args = ap.parse_args(list(argv) if argv is not None else None)
 
@@ -1044,7 +1249,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     pdk = args.pdk or os.environ.get("PDK")
 
     try:
-        rc, rec = run(project, pdk_root, pdk)
+        rc, rec = run(project, pdk_root, pdk, args.power_net, args.ground_net)
     except Unavailable as exc:
         rc, rec = 2, {"program": PROGRAM, "verdict": "NOT_AVAILABLE",
                       "rule": exc.rule, "findings": [exc.message]}

@@ -89,6 +89,7 @@ class PdkPowerModel:
     key: str
     pg_pins: Tuple[str, ...]          # cell power pins, e.g. (VPWR,VGND,VPB,VNB)
     cell_prefix_re: str               # regex a library-cell name must match
+    pin_uses: Tuple[str, ...] = ()    # POWER/GROUND role aligned with pg_pins
 
 
 _PDK_POWER_MODELS: Dict[str, PdkPowerModel] = {
@@ -97,17 +98,20 @@ _PDK_POWER_MODELS: Dict[str, PdkPowerModel] = {
         key="sky130A",
         pg_pins=("VPWR", "VGND", "VPB", "VNB"),
         cell_prefix_re=r"sky130_(?:fd|ef)_sc_[a-z0-9]+__",
+        pin_uses=("POWER", "GROUND", "POWER", "GROUND"),
     ),
     # GlobalFoundries gf180mcu (7t5v0 / 9t5v0 std-cell families).
     "gf180mcuC": PdkPowerModel(
         key="gf180mcuC",
         pg_pins=("VDD", "VSS", "VNW", "VPW"),
         cell_prefix_re=r"gf180mcu_fd_sc_[a-z0-9]+__",
+        pin_uses=("POWER", "GROUND", "POWER", "GROUND"),
     ),
     "gf180mcuD": PdkPowerModel(
         key="gf180mcuD",
         pg_pins=("VDD", "VSS", "VNW", "VPW"),
         cell_prefix_re=r"gf180mcu_fd_sc_[a-z0-9]+__",
+        pin_uses=("POWER", "GROUND", "POWER", "GROUND"),
     ),
     # IHP SG13G2 (open-source 130nm BiCMOS). TWO PG pins only — verified
     # from the shipped cell LEF, e.g. MACRO sg13g2_nor2_1 declares
@@ -119,6 +123,7 @@ _PDK_POWER_MODELS: Dict[str, PdkPowerModel] = {
         key="ihp-sg13g2",
         pg_pins=("VDD", "VSS"),
         cell_prefix_re=r"sg13g2_",
+        pin_uses=("POWER", "GROUND"),
     ),
 }
 
@@ -177,6 +182,7 @@ def model_from_cell_lef(cell_lef: "Path | str",
 
     macros: List[str] = []
     pg: List[str] = []          # insertion-ordered, de-duplicated
+    pin_uses: List[str] = []    # aligned LEF USE POWER/GROUND role
     cur_pin: Optional[str] = None
     for raw in text.splitlines():
         s = raw.strip()
@@ -189,9 +195,12 @@ def model_from_cell_lef(cell_lef: "Path | str",
         if m:
             cur_pin = m.group(1)
             continue
-        if cur_pin and re.match(r"^USE\s+(POWER|GROUND)\b", s, re.IGNORECASE):
+        use = (re.match(r"^USE\s+(POWER|GROUND)\b", s, re.IGNORECASE)
+               if cur_pin else None)
+        if cur_pin and use:
             if cur_pin not in pg:
                 pg.append(cur_pin)
+                pin_uses.append(use.group(1).upper())
             cur_pin = None
     if not macros or not pg:
         return None
@@ -201,7 +210,8 @@ def model_from_cell_lef(cell_lef: "Path | str",
                    for c in sorted(set(macros), key=lambda c: (-len(c), c)))
     return PdkPowerModel(key=key or f"lef:{p.name}",
                          pg_pins=tuple(pg),
-                         cell_prefix_re=r"(?:" + alt + r")")
+                         cell_prefix_re=r"(?:" + alt + r")",
+                         pin_uses=tuple(pin_uses))
 
 
 def power_model_for(pdk: str,
@@ -296,35 +306,51 @@ def _find_instance_conn_spans(body: str, cell_re: re.Pattern
     return out
 
 
-def _rail_connection_map(rails: List[str], tie_wells_to_rails: bool
+def _rail_connection_map(model: PdkPowerModel, tie_wells_to_rails: bool,
+                         tie_targets: Optional[Tuple[str, str]] = None
                          ) -> Tuple[List[Tuple[str, str]], List[str]]:
     """Return (conn_pairs, decl_rails) for the four PG pins.
 
-    `rails` = model.pg_pins = (power, ground, well-of-power, well-of-ground),
+    `model.pg_pins` = (power, ground, well-of-power, well-of-ground),
     e.g. sky130 (VPWR, VGND, VPB, VNB) / gf180 (VDD, VSS, VNW, VPW).
 
     DEFAULT (`tie_wells_to_rails=False`) — name-for-name: each pin connects to a
     same-named wire and all four are declared. This is the part-1 model that
     matches a layout carrying four DISTINCT globalised rails.
 
-    `tie_wells_to_rails=True` — the PHYSICAL sky130/gf180 well-tie: the n-well
-    body pin (VPB/VNW) ties to the POWER rail and the p-substrate body pin
-    (VNB/VPW) ties to the GROUND rail, so only the two real rails are declared.
+    `tie_wells_to_rails=True` — every LEF-declared POWER pin ties to the selected
+    power rail and every GROUND pin to ground. For std cells this is the physical
+    well-tie; for an IO macro it is the explicit single-domain mapping used by
+    PnR's LEF-USE global-connect. Optional `tie_targets` supplies the owning
+    design's rail names when the macro's pin names differ.
     This mirrors a routed DEF whose power SPECIALNET carries the VPB pins and
     whose ground SPECIALNET carries the VNB pins (the wells are tied to the rails
     at the PDN), i.e. the layout a physically-correct Magic extraction produces —
     verified live: without it netgen reports 2 extra schematic-only well nets."""
-    power, ground = rails[0], rails[1]
+    rails = list(model.pg_pins)
     # A TAPLESS PDK exposes only the two real rails and no body pins at all
     # (IHP SG13G2: PIN VDD / PIN VSS and nothing else). There is no well pin
     # to tie, so both models collapse to the same name-for-name mapping.
     # Without this the four-pin unpacking below raised IndexError on any
     # 2-pin model and the power-aware LVS upgrade could never be offered.
-    if len(rails) < 4:
-        return [(p, p) for p in rails], list(rails)
-    wpow, wgnd = rails[2], rails[3]
     if tie_wells_to_rails:
-        conn = [(power, power), (ground, ground), (wpow, power), (wgnd, ground)]
+        uses = list(model.pin_uses)
+        if len(uses) == len(rails) and "POWER" in uses and "GROUND" in uses:
+            if tie_targets:
+                power, ground = tie_targets
+            else:
+                power = rails[uses.index("POWER")]
+                ground = rails[uses.index("GROUND")]
+            conn = [(pin, power if use == "POWER" else ground)
+                    for pin, use in zip(rails, uses)]
+            return conn, list(dict.fromkeys((power, ground)))
+        # Compatibility fallback for a caller-created model without USE roles.
+        power, ground = rails[0], rails[1]
+        if len(rails) < 4:
+            return [(p, p) for p in rails], list(rails)
+        wpow, wgnd = rails[2], rails[3]
+        conn = [(power, power), (ground, ground),
+                (wpow, power), (wgnd, ground)]
         return conn, [power, ground]
     return [(p, p) for p in rails], list(rails)
 
@@ -367,7 +393,8 @@ def _inject_module_rails(head: str, portlist: Optional[str],
 
 def _patch_module(head: str, name: str, portlist: Optional[str], body: str,
                   model: PdkPowerModel, stats: EmitStats,
-                  as_ports: bool, tie_wells_to_rails: bool = False
+                  as_ports: bool, tie_wells_to_rails: bool = False,
+                  tie_targets: Optional[Tuple[str, str]] = None
                   ) -> Tuple[str, bool]:
     """Patch one module: thread rails through the header and inject PG pins on
     each std-cell instance. Returns (new_head + new_body, changed)."""
@@ -376,8 +403,8 @@ def _patch_module(head: str, name: str, portlist: Optional[str], body: str,
     if not spans:
         return head + body, False           # module has no std-cells → leave it
 
-    pins = list(model.pg_pins)
-    conn_pairs, decl_rails = _rail_connection_map(pins, tie_wells_to_rails)
+    conn_pairs, decl_rails = _rail_connection_map(
+        model, tie_wells_to_rails, tie_targets)
     pg_full = ", ".join(f".{pin}({tgt})" for pin, tgt in conn_pairs)
 
     # Collect every insertion as (position, text), then assemble the new body in
@@ -404,22 +431,78 @@ def _patch_module(head: str, name: str, portlist: Optional[str], body: str,
     out_parts.append(body[last:])
     new_body = "".join(out_parts)
 
-    # Idempotency: only thread the rail declarations through the header when they
-    # are not already present (a prior pass, or a hand-written power-aware
-    # netlist). Keyed on the first rail as a `wire`/`inout` declaration.
-    r0 = re.escape(decl_rails[0])
-    already_declared = bool(
-        re.search(r"\bwire\b[^;]*\b" + r0 + r"\b", body)
-        or re.search(r"\binout\s+" + r0 + r"\b", head + body))
-    new_head = head if already_declared else \
-        _inject_module_rails(head, portlist, decl_rails, as_ports)
+    # Idempotency is per rail, not keyed on the first one.  Multiple physical
+    # libraries can share VDD/VSS while an IO library additionally declares
+    # DVDD/DVSS; injecting the whole second list would redeclare VDD/VSS and
+    # make the generated Verilog invalid.  Conversely, seeing VDD alone must
+    # not make an absent VSS disappear from the model.
+    scope = head + body
+    missing_rails = []
+    for rail in decl_rails:
+        rr = re.escape(rail)
+        declared = bool(
+            re.search(r"\bwire\b[^;]*\b" + rr + r"\b", scope)
+            or re.search(r"\binout\s+" + rr + r"\b", scope))
+        if not declared:
+            missing_rails.append(rail)
+    new_head = (head if not missing_rails else
+                _inject_module_rails(head, portlist, missing_rails, as_ports))
     return new_head + new_body, True
+
+
+def _lef_macro_pin_lists(lef: object) -> Dict[str, List[str]]:
+    """Return ordered pin lists for every macro in one producer-owned LEF."""
+    try:
+        text = Path(lef).read_text(errors="ignore")
+    except OSError:
+        return {}
+    out: Dict[str, List[str]] = {}
+    macro: Optional[str] = None
+    for raw in text.splitlines():
+        s = raw.strip()
+        mm = re.match(r"^MACRO\s+([A-Za-z_][\w$]*)", s)
+        if mm:
+            macro = mm.group(1)
+            out.setdefault(macro, [])
+            continue
+        pm = re.match(r"^PIN\s+([A-Za-z_][\w$]*)", s)
+        if macro and pm and pm.group(1) not in out[macro]:
+            out[macro].append(pm.group(1))
+    return out
+
+
+def _additional_macro_blackbox_stubs(
+        source: str, additional_lefs: Optional[List[object]]) -> str:
+    """Define referenced macro ports so Netgen does not invent pinless cells.
+
+    Magic's abstract-view extraction emits hierarchical black boxes with the
+    extraction-derived LEF pin order. Structural Verilog without matching
+    module declarations makes Netgen create a pinless placeholder and discard
+    every named connection. These stubs reproduce that same abstract boundary
+    from the same LEF; they do not model or waive cell internals.
+    """
+    defined = {m.group("name").lstrip("\\") for m in _MODULE_RE.finditer(source)}
+    blocks: List[str] = []
+    for lef in additional_lefs or []:
+        for macro, pins in _lef_macro_pin_lists(lef).items():
+            if macro in defined or not pins:
+                continue
+            if not re.search(r"(?<![A-Za-z0-9_$])" + re.escape(macro)
+                             + r"\s+\\?[^\s(]+\s*\(", source):
+                continue
+            blocks.append(
+                "(* blackbox *) module " + macro + " ("
+                + ", ".join(pins) + ");\n  inout "
+                + ", ".join(pins) + ";\nendmodule\n")
+            defined.add(macro)
+    return "\n".join(blocks)
 
 
 def emit_power_aware_netlist(text: str, pdk: str, top: Optional[str] = None,
                              rails_as_ports: bool = False,
                              tie_wells_to_rails: bool = False,
-                             cell_lef: Optional["Path | str"] = None
+                             cell_lef: Optional["Path | str"] = None,
+                             additional_lefs: Optional[List[object]] = None,
                              ) -> Tuple[str, Dict[str, object]]:
     """Transform a gate netlist into a POWER-AWARE netlist.
 
@@ -452,46 +535,79 @@ def emit_power_aware_netlist(text: str, pdk: str, top: Optional[str] = None,
         # A project-staged PDK has no canonical table key; record the model
         # that was actually used so the artifact never reads as "no PDK".
         stats.pdk = model.key
-    stats.rails = list(model.pg_pins)
+    models: List[Tuple[PdkPowerModel, bool,
+                       Optional[Tuple[str, str]]]] = [
+        (model, tie_wells_to_rails, None)]
+    primary_tie_targets: Optional[Tuple[str, str]] = None
+    if (tie_wells_to_rails and len(model.pin_uses) == len(model.pg_pins)
+            and "POWER" in model.pin_uses and "GROUND" in model.pin_uses):
+        primary_tie_targets = (
+            model.pg_pins[model.pin_uses.index("POWER")],
+            model.pg_pins[model.pin_uses.index("GROUND")])
+    for index, lef in enumerate(additional_lefs or []):
+        extra = model_from_cell_lef(lef, key=f"additional-lef:{index}")
+        if extra is not None:
+            models.append((extra, tie_wells_to_rails, primary_tie_targets))
 
-    pieces: List[str] = []
-    last = 0
-    for m in _MODULE_RE.finditer(text):
-        stats.modules_seen += 1
-        pieces.append(text[last:m.start()])
-        name = (m.group("name") or "").lstrip("\\")
-        head = m.group("head")
-        portlist = m.group("portlist")
-        body = m.group("body")
-        end = m.group("end")
-        do_this = (top is None) or (name == top.lstrip("\\"))
-        if do_this:
-            patched, changed = _patch_module(head, name, portlist, body,
-                                             model, stats, rails_as_ports,
-                                             tie_wells_to_rails)
-            if changed:
-                stats.modules_patched += 1
-            pieces.append(patched + end)
-        else:
-            pieces.append(head + body + end)
-        last = m.end()
-    pieces.append(text[last:])
+    stats.rails = []
+    for current, _tie, _targets in models:
+        for rail in current.pg_pins:
+            if rail not in stats.rails:
+                stats.rails.append(rail)
+
+    def _apply(source: str, current: PdkPowerModel,
+               current_tie: bool,
+               current_targets: Optional[Tuple[str, str]]) -> str:
+        pieces: List[str] = []
+        last = 0
+        for m in _MODULE_RE.finditer(source):
+            stats.modules_seen += 1
+            pieces.append(source[last:m.start()])
+            name = (m.group("name") or "").lstrip("\\")
+            head = m.group("head")
+            portlist = m.group("portlist")
+            body = m.group("body")
+            end = m.group("end")
+            do_this = (top is None) or (name == top.lstrip("\\"))
+            if do_this:
+                patched, changed = _patch_module(
+                    head, name, portlist, body, current, stats,
+                    rails_as_ports, current_tie, current_targets)
+                if changed:
+                    stats.modules_patched += 1
+                pieces.append(patched + end)
+            else:
+                pieces.append(head + body + end)
+            last = m.end()
+        pieces.append(source[last:])
+        return "".join(pieces)
+
+    new_text = text
+    for current, current_tie, current_targets in models:
+        new_text = _apply(new_text, current, current_tie, current_targets)
+
+    stubs = _additional_macro_blackbox_stubs(new_text, additional_lefs)
+    if stubs:
+        new_text = new_text.rstrip() + "\n\n" + stubs
 
     if stats.modules_seen == 0:
         stats.skipped_reason = "no module found in netlist"
-    return "".join(pieces), stats.as_dict()
+    return new_text, stats.as_dict()
 
 
 def emit_to_file(netlist: Path, pdk: str, out: Path,
                  top: Optional[str] = None,
                  rails_as_ports: bool = False,
                  tie_wells_to_rails: bool = False,
-                 cell_lef: Optional["Path | str"] = None) -> Dict[str, object]:
+                 cell_lef: Optional["Path | str"] = None,
+                 additional_lefs: Optional[List[object]] = None,
+                 ) -> Dict[str, object]:
     """Read `netlist`, emit the power-aware version to `out`, return stats."""
     text = netlist.read_text(errors="replace")
     new_text, stats = emit_power_aware_netlist(
         text, pdk, top=top, rails_as_ports=rails_as_ports,
-        tie_wells_to_rails=tie_wells_to_rails, cell_lef=cell_lef)
+        tie_wells_to_rails=tie_wells_to_rails, cell_lef=cell_lef,
+        additional_lefs=additional_lefs)
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(new_text)
     stats["output"] = str(out)

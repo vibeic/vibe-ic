@@ -59,7 +59,8 @@ def _project(tmp_path: Path) -> Path:
     return p
 
 
-def _wire(monkeypatch, tmp_path, *, report_by_model, rc=0, patched=1):
+def _wire(monkeypatch, tmp_path, *, report_by_model, rc=0, patched=1,
+          layout_ports=()):
     """Drive `_try_power_aware_lvs` with no docker and no netgen.
 
     `report_by_model` maps "well_tied"/"four_rail" -> the report text netgen
@@ -67,6 +68,10 @@ def _wire(monkeypatch, tmp_path, *, report_by_model, rc=0, patched=1):
     """
     project = _project(tmp_path)
     seen: list = []
+    spice = (project / "phase3" / "stage3" / "extracted"
+             / "chip_top.spice")
+    spice.write_text(".subckt chip_top " + " ".join(layout_ports)
+                     + "\n.ends chip_top\n")
 
     # `cell_lef` is accepted because the real `emit_to_file` gained it
     # (vibe-ic#719: a project-staged PDK has no table entry, so its power model
@@ -75,10 +80,13 @@ def _wire(monkeypatch, tmp_path, *, report_by_model, rc=0, patched=1):
     # discarded, and the whole power-aware path silently returns None — which
     # is what these tests measured before the signature was matched.
     def _emit_to_file(netlist, pdk_name, out_path, top=None,
-                      tie_wells_to_rails=False, cell_lef=None):
-        Path(out_path).write_text("// power-aware netlist\n")
+                      rails_as_ports=False, tie_wells_to_rails=False,
+                      cell_lef=None):
+        Path(out_path).write_text(
+            f"// power-aware netlist rails_as_ports={rails_as_ports}\n")
         return {"modules_patched": patched, "instances_patched": 1191,
-                "rails": ["VPWR", "VGND"]}
+                "rails": ["VPWR", "VGND"],
+                "rails_as_ports": rails_as_ports}
 
     def _exec(container, cmd, marker=None, **_kw):
         model = "well_tied" if "pwraware_welltied" in cmd else "four_rail"
@@ -105,11 +113,11 @@ def _pdk() -> "P.PdkConfig":
                        cell_gds="", site="", drc_deck=None)
 
 
-def _run(project):
+def _run(project, *, layout_top="chip_top"):
     return P._try_power_aware_lvs(
         project, "chip_top", _pdk(), "vibeic-eda",
         project / "phase3" / "stage3" / "extracted" / "chip_top.spice",
-        "/w/chip_top.spice", "chip_top",
+        "/w/chip_top.spice", layout_top,
         project / "phase3" / "stage3" / "extracted" / "chip_top_pnr.v",
         "/w/setup.tcl", project / "reports" / "phase3" / "lvs.rpt", None, 0.0)
 
@@ -186,8 +194,13 @@ def test_the_accepted_model_is_recorded_and_surfaced_in_the_verdict(
     assert res is not None and res.status == "PASS"
     rec = _attempts(project)
     assert rec["accepted"] is True
-    assert rec["attempts"][-1] == {"model": "well_tied", "accepted": True,
-                                   "netlist": rec["attempts"][-1]["netlist"]}
+    accepted = rec["attempts"][-1]
+    assert accepted["model"] == "well_tied"
+    assert accepted["accepted"] is True
+    assert accepted["rails_as_ports"] is False
+    assert accepted["effective_rails"] == ["VPWR", "VGND"]
+    assert accepted["layout_power_ports"] == []
+    assert accepted["netlist"]
     verdict = json.loads(
         (project / "reports" / "phase3" / "lvs_verdict.json").read_text())
     assert verdict["power_aware_attempts"] == rec["attempts"]
@@ -222,3 +235,40 @@ def test_no_verdict_is_upgraded_by_the_record(tmp_path, monkeypatch):
                        report_by_model={"well_tied": "", "four_rail": ""})
     assert _run(project) is None
     assert (project / _ATTEMPTS_REL).is_file()
+
+
+# --------------------------------------------------------------------------
+# PAD-RING TOP-PORT AUTHORITY — measured extraction decides the interface
+# --------------------------------------------------------------------------
+
+@pytest.mark.parametrize("layout_ports,expected", [
+    ((), False),
+    (("VPWR",), False),       # incomplete rail set fails closed
+    (("VPWR", "VGND"), True),
+])
+def test_extracted_top_requires_the_complete_effective_rail_set(
+        tmp_path, monkeypatch, layout_ports, expected):
+    project, _ = _wire(
+        monkeypatch, tmp_path, layout_ports=layout_ports,
+        report_by_model={"well_tied": _MATCH_RPT,
+                         "four_rail": _MATCH_RPT})
+    assert _run(project) is not None
+    attempt = _attempts(project)["attempts"][0]
+    assert attempt["effective_rails"] == ["VPWR", "VGND"]
+    assert attempt["layout_power_ports"] == sorted(layout_ports)
+    assert attempt["rails_as_ports"] is expected
+    emitted = (project / "phase3" / "stage3" / "extracted"
+               / "chip_top_pwraware_welltied.v").read_text()
+    assert f"rails_as_ports={expected}" in emitted
+
+
+def test_extracted_top_does_not_borrow_rails_from_a_different_subckt(
+        tmp_path, monkeypatch):
+    project, _ = _wire(
+        monkeypatch, tmp_path, layout_ports=("VPWR", "VGND"),
+        report_by_model={"well_tied": _MATCH_RPT,
+                         "four_rail": _MATCH_RPT})
+    assert _run(project, layout_top="other_top") is not None
+    attempt = _attempts(project)["attempts"][0]
+    assert attempt["layout_power_ports"] == []
+    assert attempt["rails_as_ports"] is False

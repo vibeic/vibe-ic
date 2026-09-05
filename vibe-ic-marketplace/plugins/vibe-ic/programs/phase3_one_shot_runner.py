@@ -7222,13 +7222,14 @@ def _load_sparse_die_skip(project: Path) -> Optional[Dict[str, Any]]:
 
 def _build_sparse_die_aware_filler_tcl(filler_masters: List[str],
                                        slot_pinned_core: bool = False,
-                                       design_declared_die: bool = False
+                                       design_declared_die: bool = False,
+                                       sparse_active_row_fill: bool = False
                                        ) -> str:
-    """Return a Tcl block that runs `filler_placement {<masters>}` ONLY
-    when post-place CORE utilization ≥ the sparse-die threshold; otherwise
-    SKIP the full-die decap/fill tiling (emitting a SPARSE_DIE_FILL_SKIPPED
-    note with the measured utilization). Pure, chip-AGNOSTIC — the masters
-    are the only chip-specific input and they come from the PDK config.
+    """Return a Tcl block that runs `filler_placement {<masters>}` when
+    post-place CORE utilization ≥ the sparse-die threshold.  Below it, either
+    skip full-die tiling or, for an explicitly identified fixed pad wrapper,
+    retain device-free spacers only on structurally occupied rows.  Pure,
+    chip-AGNOSTIC — the masters and floorplan facts come from PDK/design data.
 
     Utilization is measured from odb (sum of CORE-class instance master
     areas / die-block core area) so it does not depend on parsing
@@ -7244,6 +7245,9 @@ def _build_sparse_die_aware_filler_tcl(filler_masters: List[str],
     spacers = _spacer_masters_of(filler_masters)
     spacers_tcl = " ".join(spacers)
     thr = _sparse_die_fill_threshold_pct()
+    use_active_row_fill = bool(
+        sparse_active_row_fill and spacers
+        and not slot_pinned_core and not design_declared_die)
     # === fix 2's precondition — A SLOT-PINNED CORE IS NOT AN EMPTY WRAPPER ===
     # #684 guards against tiling silicon that is not the design's placeable
     # area: a small design hardened into a much larger MANDATED die, where the
@@ -7319,17 +7323,89 @@ def _build_sparse_die_aware_filler_tcl(filler_masters: List[str],
             "(design-owned placeable area; the decap family is withheld "
             "because the tap prune fired on this die)\"\n"
             "  }\n")
-    else:
+    elif not use_active_row_fill:
         below_arm = (
             "  puts \"SPARSE_DIE_FILL_SKIPPED: core_util=$_sd_fill_util% < "
             f"{thr}% — full-die decap/fill tiling bounded to avoid filling an "
             "empty fixed wrapper (would explode GDS/extraction). Density-fill "
             "for the occupied region is covered by the downstream metal-fill "
             "gate; empty silicon carries no signals needing decoupling.\"\n")
+    else:
+        # A pad ring can structurally mandate a large fixed die while leaving
+        # only a few occupied standard-cell rows in its center.  Skipping all
+        # device-layer fill there leaves the boundaries between logic, tie and
+        # antenna cells exposed; filling every row recreates #684's full-die
+        # explosion.  Derive the occupied rows from the library semantics
+        # instead: a CORE master with at least one non-PG INPUT/OUTPUT/INOUT
+        # MTerm is a functional anchor.  Tap, spacer, filler and decap masters
+        # are therefore excluded without naming any PDK cell.
+        #
+        # `filler_placement` has no row selector, so insert DEVICE-FREE
+        # spacers, then destroy only the newly-created, uniquely-prefixed
+        # instances outside the anchor rows.  The preexisting-name set makes
+        # preservation structural even if a design happened to use our
+        # prefix already.  An empty anchor set is an honest no-op, never a
+        # fallback to full-die fill.
+        below_arm = (
+            "  puts \"SPARSE_DIE_ACTIVE_ROW_FILL: core_util="
+            "$_sd_fill_util% < " + str(thr) + "% — device-free spacers are "
+            "bounded to rows carrying functional CORE anchors.\"\n"
+            "  set _arf_blk [ord::get_db_block]\n"
+            "  array unset _arf_active_y\n"
+            "  array unset _arf_preexisting\n"
+            "  set _arf_original 0\n"
+            "  set _arf_anchors 0\n"
+            "  foreach _arf_inst [$_arf_blk getInsts] {\n"
+            "    incr _arf_original\n"
+            "    set _arf_preexisting([$_arf_inst getName]) 1\n"
+            "    set _arf_master [$_arf_inst getMaster]\n"
+            "    if {![string match \"CORE*\" [$_arf_master getType]]} { continue }\n"
+            "    set _arf_anchor 0\n"
+            "    foreach _arf_mt [$_arf_master getMTerms] {\n"
+            "      set _arf_sig [$_arf_mt getSigType]\n"
+            "      if {$_arf_sig eq \"POWER\" || $_arf_sig eq \"GROUND\"} { continue }\n"
+            "      set _arf_io [$_arf_mt getIoType]\n"
+            "      if {$_arf_io eq \"INPUT\" || $_arf_io eq \"OUTPUT\" || "
+            "$_arf_io eq \"INOUT\"} { set _arf_anchor 1; break }\n"
+            "    }\n"
+            "    if {!$_arf_anchor} { continue }\n"
+            "    set _arf_bb [$_arf_inst getBBox]\n"
+            "    set _arf_active_y([$_arf_bb yMin]) 1\n"
+            "    incr _arf_anchors\n"
+            "  }\n"
+            "  set _arf_rows [array size _arf_active_y]\n"
+            "  set _arf_inserted 0\n"
+            "  set _arf_pruned 0\n"
+            "  if {$_arf_rows == 0} {\n"
+            "    puts \"SPARSE_DIE_ACTIVE_ROW_FILL_EMPTY: no functional CORE anchor row; no filler inserted\"\n"
+            "  } else {\n"
+            f"    filler_placement -prefix VIBEIC_ACTIVE_ROW_FILL_ {{{spacers_tcl}}}\n"
+            "    set _arf_kill {}\n"
+            "    foreach _arf_inst [$_arf_blk getInsts] {\n"
+            "      set _arf_name [$_arf_inst getName]\n"
+            "      if {![string match \"VIBEIC_ACTIVE_ROW_FILL_*\" $_arf_name]} { continue }\n"
+            "      if {[info exists _arf_preexisting($_arf_name)]} { continue }\n"
+            "      incr _arf_inserted\n"
+            "      set _arf_bb [$_arf_inst getBBox]\n"
+            "      if {![info exists _arf_active_y([$_arf_bb yMin])]} {\n"
+            "        lappend _arf_kill $_arf_inst\n"
+            "      }\n"
+            "    }\n"
+            "    foreach _arf_inst $_arf_kill {\n"
+            "      odb::dbInst_destroy $_arf_inst\n"
+            "      incr _arf_pruned\n"
+            "    }\n"
+            "  }\n"
+            "  set _arf_kept [expr {$_arf_inserted - $_arf_pruned}]\n"
+            "  set _arf_after [llength [$_arf_blk getInsts]]\n"
+            "  puts \"SPARSE_DIE_ACTIVE_ROW_FILL_DONE: selector=functional_core_mterm "
+            "active_rows=$_arf_rows anchors=$_arf_anchors original=$_arf_original "
+            "inserted=$_arf_inserted kept=$_arf_kept pruned=$_arf_pruned "
+            "after=$_arf_after\"\n")
     # NOTE: doubled braces because this string is interpolated by the
     # f-string template in _build_pnr_tcl_text (and emitted verbatim by the
     # metal-fill helper, which also uses an f-string).
-    return (
+    measure = (
         "# === #684 sparse-die fill guard — bound full-die fill on a "
         "sparse fixed wrapper ===\n"
         "set _sd_fill_util NA\n"
@@ -7351,17 +7427,33 @@ def _build_sparse_die_aware_filler_tcl(filler_masters: List[str],
         "$_coreA}] }\n"
         "} _sd_err]} {\n"
         "  puts \"SPARSE_DIE_FILL_MEASURE_NONFATAL: $_sd_err\"\n"
-        "}\n"
-        f"if {{$_sd_fill_util ne \"NA\" && $_sd_fill_util < {thr}}} {{\n"
-        + below_arm +
-        "} else {\n"
+        "}\n")
+    full_arm = (
         f"  if {{[catch {{filler_placement {{{masters_tcl}}}}} _fp_err]}} {{\n"
         "    puts \"FILLER_NONFATAL: $_fp_err\"\n"
         "  } else {\n"
         f"    puts \"FILLER_INSERTED: {len(filler_masters)} masters "
         "(core_util=$_sd_fill_util%)\"\n"
-        "  }\n"
-        "}\n")
+        "  }\n")
+    if use_active_row_fill:
+        # Put the normal-util arm first so the generated Tcl's active-row
+        # section is independently inspectable: everything after its marker
+        # is the low-util, device-free implementation and cannot contain a
+        # decap master accidentally inherited from the normal arm.
+        return (
+            measure
+            + f"if {{$_sd_fill_util eq \"NA\" || $_sd_fill_util >= {thr}}} {{\n"
+            + full_arm
+            + "} else {\n"
+            + below_arm
+            + "}\n")
+    return (
+        measure
+        + f"if {{$_sd_fill_util ne \"NA\" && $_sd_fill_util < {thr}}} {{\n"
+        + below_arm
+        + "} else {\n"
+        + full_arm
+        + "}\n")
 
 
 # ── PG global-connect RE-APPLY + audit (post-instance-creation) ──────────────
@@ -22306,7 +22398,9 @@ def _v1_8_100_routing_layer_range(pdk, project, container
 
 def _post_route_spef_repair_tcl(out_dir_c: str, tech_lef_c: str,
                                 cell_lef_c: str = "",
-                                fork_repair_capable: bool = False) -> str:
+                                fork_repair_capable: bool = False,
+                                fanout_root_buffer_cell: Optional[str] = None
+                                ) -> str:
     """ORGANIC #557 / #581 — emit the OpenROAD Tcl for the
     post-detailed-route SPEF extraction (MEASURE-ONLY).
 
@@ -22454,7 +22548,8 @@ def _post_route_spef_repair_tcl(out_dir_c: str, tech_lef_c: str,
         # setup violation), which is why a runner-level backstop exists at all.
         + ((_pnr_stage_begin("postroute_drv_repair") + "\n"
             + f"  puts \"{_PNR_STAGE_MARKER} postroute_drv_repair\"\n"
-            + _v1_8_100_signoff_drv_repair_tcl(out_dir_c)
+            + _v1_8_100_signoff_drv_repair_tcl(
+                out_dir_c, fanout_root_buffer_cell)
             + _pnr_stage_end("postroute_drv_repair") + "\n")
            if fork_repair_capable else
            "  puts \"SDR_SKIP_STOCK_OPENROAD: post-route SPEF DRV repair needs "
@@ -22617,7 +22712,8 @@ def _est0104_recovery_tcl(spef_c: str, err_var: str, retry_cmd: str,
     )
 
 
-def _v1_8_100_signoff_drv_repair_tcl(out_dir_c: str) -> str:
+def _v1_8_100_signoff_drv_repair_tcl(
+        out_dir_c: str, fanout_root_buffer_cell: Optional[str] = None) -> str:
     """Bounded repair-until-clean loop on the sign-off-deck SPEF.
 
     Every step NONFATAL-guarded; any failure leaves the routing as it was and
@@ -22800,13 +22896,23 @@ def _v1_8_100_signoff_drv_repair_tcl(out_dir_c: str) -> str:
         + "        }\n"
         + "      }\n"
         "    }\n"
+        # A library pin can carry max_fanout=1 while ordinary repair_design
+        # builds two first-level branches below it.  This report is taken only
+        # after the sign-off SPEF has made that residual visible.  Insert one
+        # PDK-derived root on each tool-reported red net; the enclosing SDR pass
+        # already performs setup repair, legalization, routing clear and a full
+        # reroute, so the helper must not duplicate those operations here.
+        + _ship_max_fanout_root_repair_tcl(
+            fanout_root_buffer_cell,
+            f"{out_dir_c}/sdr_fanout_root_candidates.rpt",
+            repair_after_insert=False)
         # v1.8.100 r2 — MEASURED: without this, closing DRV on the max-RC
         # deck traded the SLOW-corner setup from +1.02 ns to -4.68 ns
         # (iter1). Every repeater the line above inserts adds a stage
         # delay, and nothing re-timed the paths they sit on. This is the
         # same `repair_timing -setup` the flow already runs post-global-
         # route; it belongs after any buffer insertion, not only that one.
-        "    if {[catch {repair_timing -setup} _sdr_rt]} "
+        + "    if {[catch {repair_timing -setup} _sdr_rt]} "
         "{ puts \"SDR_REPAIR_TIMING_NONFATAL: $_sdr_rt\" }\n"
         # LEGALIZE AND VERIFY. A bare catch-guarded detailed_placement
         # says nothing about whether the placement is legal AFTERWARDS:
@@ -23200,7 +23306,8 @@ def _build_pnr_tcl_text(*, tech_lef_c: str, cell_lef_c: str,
                         cts_cluster_diameter: Optional[float] = None,
                         cts_distance_between_buffers: Optional[float] = None,
                         sizing_limits_block: str = "",
-                        sizing_drv_report_block: str = "") -> str:
+                        sizing_drv_report_block: str = "",
+                        fanout_root_repair_block: str = "") -> str:
     """ORGANIC #581 — the COMPLETE pnr.tcl template as a PURE builder
     (v0.1.49 doctrine: extract Tcl-block builders into pure helpers so
     regression tests pin them). The #557 SPEF-repair block shipped with
@@ -23540,6 +23647,9 @@ if {{[catch {{repair_timing -setup{_repair_tns}}} _rts2_err]}} {{
 if {{[catch {{repair_timing -hold}} _rth2_err]}} {{
   puts "REPAIR_TIMING_HOLD_GR_NONFATAL: $_rth2_err"
 }}
+{fanout_root_repair_block}# Residual per-pin max-fanout roots are inserted here,
+# after CTS and the global-route estimate but before final legalization/route.
+# The block is empty when the active PDK has no authoritative buffer master.
 if {{[catch {{detailed_placement}} _gr_dp_err]}} {{
   if {{[catch {{detailed_placement -use_diamond_legalizer}} _gr_dp_errd]}} {{
     puts "GR_REPAIR_LEGALIZE_NONFATAL: $_gr_dp_err | diamond: $_gr_dp_errd"
@@ -24421,6 +24531,15 @@ def step_io_pad_chip_top_gen(project: Path, container: Optional[str] = None,
                           str(exc))
     extra = (["--pdk-root", str(pdk_root), "--pdk", str(pdk_tree)]
              if pdk_root and pdk_tree else [])
+    # The pad producer may exercise physical-design freedom only with the
+    # SAME rail identity the PDN uses.  A unique pair is authority; zero or
+    # multiple candidates is not guessed and leaves the producer's explicit
+    # ``not_written.power_pads`` record in force.
+    if pdk:
+        _pad_power, _pad_ground = _design_supply_nets(pdk)
+        if len(_pad_power) == 1 and len(_pad_ground) == 1:
+            extra.extend(["--power-net", sorted(_pad_power)[0],
+                          "--ground-net", sorted(_pad_ground)[0]])
     prog = PROGRAMS_DIR / "io_pad_chip_top_gen.py"
     if not prog.is_file():  # pragma: no cover - shipped tree always has it
         return StepResult("io_pad_chip_top_gen", "ENV_UNAVAILABLE",
@@ -25562,7 +25681,9 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
     # fill (util ≥ threshold). chip-AGNOSTIC.
     filler_block = _build_sparse_die_aware_filler_tcl(
         _filler_masters, slot_pinned_core=fp_rect is not None,
-        design_declared_die=bool(_l9_die_note))
+        design_declared_die=bool(_l9_die_note),
+        sparse_active_row_fill=bool(
+            _ring_inset is not None and fp_rect is None and not _l9_die_note))
 
     # PG global-connect RE-APPLY + audit. `global_connect` inside the PDN block
     # runs BEFORE placement, so it can only connect the instances that exist
@@ -25639,9 +25760,14 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
     # ORGANIC #557 — post-route SPEF EXTRACTION (measure-only; pure helper so it
     # is unit-tested + the emitter/checker drift gate applies). Runs BEFORE
     # write_def so it MUST NOT modify the design.
+    # This helper inserts the first stage directly below a constrained source;
+    # use the PDK's declared ROOT master when one exists.  Falling back to the
+    # ordinary CTS buffer preserves PDKs that expose only a single legal cell.
+    _fanout_root_buffer_cell = clk_buf_root or clk_buf
     spef_repair_block = _post_route_spef_repair_tcl(
         out_dir_c, tech_lef_c, cell_lef_c,
-        fork_repair_capable=_fork_repair_capable)
+        fork_repair_capable=_fork_repair_capable,
+        fanout_root_buffer_cell=_fanout_root_buffer_cell)
 
     # === R8 (v1.9.3) — DRV RE-CONVERGENCE AFTER ANTENNA REPAIR ===
     # MEASURED (R7 iter3): the sign-off DRV loop reported `SDR_CONVERGED: pass 6`
@@ -25670,7 +25796,8 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
                              + f'puts "{_PNR_STAGE_MARKER} '
                                'postroute_drv_reconverge"\n'
                              + 'puts "SDR2_BEGIN"\n'
-                             + _v1_8_100_signoff_drv_repair_tcl(out_dir_c)
+                             + _v1_8_100_signoff_drv_repair_tcl(
+                                 out_dir_c, _fanout_root_buffer_cell)
                              + 'puts "SDR2_END"\n'
                              + _pnr_stage_end("postroute_drv_reconverge")
                              + "\n")
@@ -25834,6 +25961,28 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
     if corner_liberty_block:
         print('[phase3] approach(a) multi-corner PnR — repair targets '
               'ss setup / ff hold BEFORE detailed_route', file=sys.stderr)
+    # IO timing/DRV constraints belong in the SAME PnR session that runs
+    # repair_design.  Loading the pad LEFs without their PVT-matched Liberty
+    # made every core net behind a pad look artificially light during repair;
+    # sign-off then reopened the routed chip with the IO Liberty and exposed
+    # the real max-slew/fanout/cap violations too late to fix.  Match each
+    # process scene by exact suffix, exactly as post-route STA does.
+    _io_pnr_libs_tcl = _pnr_io_liberties_tcl(
+        project, pdk, container, corner_liberty_block)
+    if _io_pnr_libs_tcl:
+        macro_libs_tcl = "\n".join(
+            x for x in (macro_libs_tcl, _io_pnr_libs_tcl) if x)
+        print("[phase3] IO Liberty views loaded into PnR repair scenes",
+              file=sys.stderr)
+    # Some IO output pins carry a stricter per-pin fanout limit than the
+    # standard-cell default. Ordinary repair_design can legally build two
+    # first-level branches and still leave that original pin red. Apply the
+    # bounded, tool-reported residual actuator in the BASE PnR path after
+    # CTS/global routing, so the shipped route owns the repair without relying
+    # on the post-route setup-repair promotion gate.
+    _pnr_fanout_root_repair = _ship_max_fanout_root_repair_tcl(
+        _fanout_root_buffer_cell,
+        f"{out_dir_c}/pnr_fanout_root_candidates.rpt")
     _generic_pnr_tcl = _build_pnr_tcl_text(
         tech_lef_c=tech_lef_c, cell_lef_c=cell_lef_c,
         macro_lefs_tcl=macro_lefs_tcl, liberty_c=liberty_c,
@@ -25878,7 +26027,8 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
         cts_distance_between_buffers=_rf_map.get(
             "cts_distance_between_buffers"),
         sizing_limits_block=sizing_limits_block,
-        sizing_drv_report_block=sizing_drv_report_block)
+        sizing_drv_report_block=sizing_drv_report_block,
+        fanout_root_repair_block=_pnr_fanout_root_repair)
 
     _chip_padring = _chip_path_requests_pad_ring(project)
 
@@ -29517,13 +29667,168 @@ def _ship_postroute_convergence_tcl(max_captable_c: str, pnr_dir_c: str,
             .replace("__PNR__", pnr_dir_c))
 
 
+def _ship_max_fanout_root_repair_tcl(
+        buffer_cell: Optional[str], report_path: str = "/tmp/vibeic_fanout_root.rpt",
+        repair_after_insert: bool = True
+        ) -> str:
+    """Insert one PDK-derived root buffer after each residual fanout violator.
+
+    ``repair_design`` builds a gain tree below a high-fanout driver, but a
+    library pin whose own ``max_fanout`` is one can still be left driving two
+    first-level branches.  That is not a missing constraint: OpenSTA continues
+    to report the original driver as violated.  Parse only OpenSTA's current
+    ``report_check_types -max_fanout -violators`` table and use OpenROAD's
+    public ``insert_buffer -net`` command to put one root between that driver
+    and the already-built tree.  The original driver then has exactly one load;
+    a final ordinary ``repair_design`` pass remains responsible for everything
+    below it.
+
+    The insertion point is the physical centroid of the net's input loads,
+    derived from their placed pin boxes.  This matters on a pad-ring design:
+    OpenROAD's unconstrained insertion point is near the pad driver, which can
+    be inside the pad keep-out beyond the last tap column.  Measured on spm x
+    gf180mcuD run8, eight such roots landed at the top/right untapped fringe
+    and one at the left fringe, producing 7 DF.13_MV + 12 DF.14_MV findings
+    and one isolated root-well LVS fragment.  A load-centroid seed keeps the
+    root with the placed logic it drives; detailed_placement remains the sole
+    legalizer.  The master is the active PDK's declared root buffer when
+    available, not its ordinary CTS branch buffer: the larger declared root
+    is the library-owned actuator for the long source segment.  If physical
+    boxes are unavailable the location calculation is reported and the
+    existing unconstrained actuator is retained.
+
+    The cell is supplied by the active PDK's registry/Liberty-derived CTS
+    selection.  No design, pad, library-family, or PDK name is embedded here.
+    Empty/unknown selection is an explicit skip, never a fabricated master.
+    """
+    if not buffer_cell:
+        return (
+            "puts \"SHIP_FANOUT_ROOT_SKIPPED: no PDK-derived buffer cell\"\n"
+            "set _ship_fanout_root_inserted 0\n"
+            "set _ship_fanout_root_failed 0\n")
+    # The Tcl report parser deliberately keys on the tool's literal VIOLATED
+    # marker, not on a reimplemented limit/fanout calculation.  This makes the
+    # actuator monotonic with the sign-off check and bounds it to real red pins.
+    post_repair = ""
+    if repair_after_insert:
+        post_repair = (
+            "if {$_ship_fanout_root_inserted > 0} {\n"
+            "  if {[catch {repair_design} _ship_fo_rd]} { "
+            "puts \"SHIP_FANOUT_ROOT_RD_NONFATAL: $_ship_fo_rd\" }\n"
+            "  if {[catch {repair_timing -setup} _ship_fo_rt]} { "
+            "puts \"SHIP_FANOUT_ROOT_RT_NONFATAL: $_ship_fo_rt\"; "
+            "incr _ship_rt_failed }\n"
+            "  if {[catch {detailed_placement} _ship_fo_dp]} { "
+            "puts \"SHIP_FANOUT_ROOT_DP_NONFATAL: $_ship_fo_dp\" }\n"
+            "}\n")
+    return (
+        "set _ship_fanout_root_inserted 0\n"
+        "set _ship_fanout_root_failed 0\n"
+        # Multiple bounded invocations can occur in one PnR session (initial
+        # post-route repair and post-antenna reconvergence).  Keep instance/net
+        # names unique across those invocations without embedding any design
+        # identity or relying on a tool-specific collision fallback.
+        "if {![info exists _ship_fanout_root_serial]} { "
+        "set _ship_fanout_root_serial 0 }\n"
+        f"set _ship_fo_report_path {report_path}\n"
+        "if {[catch {report_check_types -max_fanout -violators "
+        "-max_count 1000000 > $_ship_fo_report_path} "
+        "_ship_fo_report_err]} {\n"
+        "  puts \"SHIP_FANOUT_ROOT_REPORT_FAILED: $_ship_fo_report_err\"\n"
+        "} else {\n"
+        "  if {[catch {set _ship_fo_fd [open $_ship_fo_report_path r]; "
+        "set _ship_fo_report [read $_ship_fo_fd]; close $_ship_fo_fd} "
+        "_ship_fo_read_err]} {\n"
+        "    puts \"SHIP_FANOUT_ROOT_REPORT_READ_FAILED: $_ship_fo_read_err\"\n"
+        "    set _ship_fo_report \"\"\n"
+        "  }\n"
+        "  foreach _ship_fo_line [split $_ship_fo_report \"\\n\"] {\n"
+        "    if {![regexp {^(\\S+).*\\(VIOLATED\\)\\s*$} "
+        "[string trim $_ship_fo_line] _ship_fo_all _ship_fo_pin]} { continue }\n"
+        "    set _ship_fo_pins [get_pins -quiet $_ship_fo_pin]\n"
+        "    if {[llength $_ship_fo_pins] != 1} {\n"
+        "      puts \"SHIP_FANOUT_ROOT_PIN_UNRESOLVED: $_ship_fo_pin\"\n"
+        "      incr _ship_fanout_root_failed\n"
+        "      continue\n"
+        "    }\n"
+        "    set _ship_fo_nets [get_nets -quiet -of_objects $_ship_fo_pins]\n"
+        "    if {[llength $_ship_fo_nets] != 1} {\n"
+        "      puts \"SHIP_FANOUT_ROOT_NET_UNRESOLVED: $_ship_fo_pin "
+        "nets=[llength $_ship_fo_nets]\"\n"
+        "      incr _ship_fanout_root_failed\n"
+        "      continue\n"
+        "    }\n"
+        # `get_nets` returns an OpenSTA network object, which is the authority
+        # `insert_buffer -net` expects but does not expose OpenDB geometry.
+        # Resolve its measured name back through the current block for the
+        # physical load boxes; never call dbNet methods on the STA handle.
+        "    set _ship_fo_sta_net [lindex $_ship_fo_nets 0]\n"
+        "    set _ship_fo_loc_args {}\n"
+        "    if {[catch {\n"
+        "      set _ship_fo_block [ord::get_db_block]\n"
+        "      set _ship_fo_dbu [$_ship_fo_block getDefUnits]\n"
+        "      set _ship_fo_net_name [get_name $_ship_fo_sta_net]\n"
+        "      set _ship_fo_db_net [$_ship_fo_block findNet $_ship_fo_net_name]\n"
+        "      if {$_ship_fo_db_net eq \"NULL\"} { error \"OpenDB net not found\" }\n"
+        "      set _ship_fo_sx 0.0; set _ship_fo_sy 0.0; set _ship_fo_nload 0\n"
+        "      foreach _ship_fo_it [$_ship_fo_db_net getITerms] {\n"
+        "        if {[[$_ship_fo_it getMTerm] getIoType] ne \"INPUT\"} { "
+        "continue }\n"
+        "        set _ship_fo_bb [$_ship_fo_it getBBox]\n"
+        "        set _ship_fo_sx [expr {$_ship_fo_sx + "
+        "double([$_ship_fo_bb xMin] + [$_ship_fo_bb xMax]) / 2.0}]\n"
+        "        set _ship_fo_sy [expr {$_ship_fo_sy + "
+        "double([$_ship_fo_bb yMin] + [$_ship_fo_bb yMax]) / 2.0}]\n"
+        "        incr _ship_fo_nload\n"
+        "      }\n"
+        "      if {$_ship_fo_nload > 0 && $_ship_fo_dbu > 0} {\n"
+        "        set _ship_fo_x [expr {$_ship_fo_sx / $_ship_fo_nload / "
+        "double($_ship_fo_dbu)}]\n"
+        "        set _ship_fo_y [expr {$_ship_fo_sy / $_ship_fo_nload / "
+        "double($_ship_fo_dbu)}]\n"
+        "        set _ship_fo_loc_args [list -location "
+        "[list $_ship_fo_x $_ship_fo_y]]\n"
+        "        puts \"SHIP_FANOUT_ROOT_LOAD_CENTROID: pin=$_ship_fo_pin "
+        "loads=$_ship_fo_nload location=${_ship_fo_x},${_ship_fo_y}\"\n"
+        "      }\n"
+        "    } _ship_fo_loc_err]} {\n"
+        "      set _ship_fo_loc_args {}\n"
+        "      puts \"SHIP_FANOUT_ROOT_LOCATION_NONFATAL: "
+        "pin=$_ship_fo_pin error=$_ship_fo_loc_err\"\n"
+        "    }\n"
+        "    set _ship_fo_idx $_ship_fanout_root_serial\n"
+        "    if {[catch {insert_buffer -net $_ship_fo_sta_net "
+        f"-buffer_cell {buffer_cell} "
+        "-buffer_name vibeic_drv_root_$_ship_fo_idx "
+        "-net_name vibeic_drv_root_net_$_ship_fo_idx "
+        "{*}$_ship_fo_loc_args} _ship_fo_insert_err]} {\n"
+        "      puts \"SHIP_FANOUT_ROOT_INSERT_FAILED: pin=$_ship_fo_pin "
+        "error=$_ship_fo_insert_err\"\n"
+        "      incr _ship_fanout_root_failed\n"
+        "    } else {\n"
+        "      puts \"SHIP_FANOUT_ROOT_INSERTED: pin=$_ship_fo_pin\"\n"
+        "      incr _ship_fanout_root_inserted\n"
+        "      incr _ship_fanout_root_serial\n"
+        "    }\n"
+        "  }\n"
+        "}\n"
+        "puts \"SHIP_FANOUT_ROOT_SUMMARY: inserted=$_ship_fanout_root_inserted "
+        "failed=$_ship_fanout_root_failed\"\n"
+        + post_repair)
+
+
 
 def _ship_signoff_spef_repair_tcl(top: str, tech_lef_c: str, cell_lef_c: str,
                                   ss_liberty_c: str, pnr_dir_c: str,
                                   max_captable_c: str, metal_prefix: str,
                                   thread_count: int,
                                   filler_masters: Optional[List[str]] = None,
-                                  extra_lefs_c: Optional[Sequence[str]] = None
+                                  extra_lefs_c: Optional[Sequence[str]] = None,
+                                  extra_liberties_c: Optional[Sequence[str]] = None,
+                                  fanout_root_buffer_cell: Optional[str] = None,
+                                  slot_pinned_core: bool = False,
+                                  design_declared_die: bool = False,
+                                  sparse_active_row_fill: bool = False
                                   ) -> str:
     """Fresh-session post-route SETUP repair against the REAL max-RC SPEF at the
     SLOW (SS) sign-off corner, writing routed_repaired.def / <top>_pnr_repaired.v.
@@ -29547,15 +29852,26 @@ def _ship_signoff_spef_repair_tcl(top: str, tech_lef_c: str, cell_lef_c: str,
     # DPL-0038 re-fill: after the repair reroute, restore the decap/fill tiling that
     # `remove_fillers` cleared so the shipped repaired route stays fill-complete
     # (density-rule + tap/well continuity preserved, identical to the base route).
-    # Uses the SAME sparse-die-aware fill the base PnR uses; empty when the PDK
-    # exposes no fill masters (then the base route already had none).
-    refill_block = _build_sparse_die_aware_filler_tcl(filler_masters or [])
+    # Uses the SAME sparse-die-aware mode the base PnR uses; carrying only the
+    # master list is insufficient because a fixed pad wrapper selects the
+    # bounded active-row arm.  Measured on spm x gf180mcuD run7: the base route
+    # kept 7,249 device-free spacers on 51 occupied rows, this fresh session
+    # removed them, then the context-free refill selected SKIP and promoted a
+    # zero-standard-filler route.  Correct-top DRC became 1,272 (835 new FEOL/
+    # well findings plus the existing IO/deck population) and power-aware LVS
+    # fragmented from a unique match to 1,831/1,700 nets.  Preserve the three
+    # floorplan facts here so repair cannot silently change the fill policy.
+    refill_block = _build_sparse_die_aware_filler_tcl(
+        filler_masters or [], slot_pinned_core=slot_pinned_core,
+        design_declared_die=design_declared_die,
+        sparse_active_row_fill=sparse_active_row_fill)
     return (
         f"set_thread_count {thread_count}\n"
         f"read_lef {tech_lef_c}\n"
         f"read_lef {cell_lef_c}\n"
         + _extra_lef_read_block(extra_lefs_c) +
         f"read_liberty {ss_liberty_c}\n"
+        + _extra_liberty_read_block(extra_liberties_c, ss_liberty_c) +
         f"read_def {pnr_dir_c}/routed.def\n"
         f"read_sdc {pnr_dir_c}/constraint.sdc\n"
         # #543 -- THIS STEP RESIZES, so it needs the same cell-pool exclusion the
@@ -29664,7 +29980,10 @@ def _ship_signoff_spef_repair_tcl(top: str, tech_lef_c: str, cell_lef_c: str,
         "  if {[catch {detailed_placement} _drv_dp]} { "
         "puts \"SHIP_DP_NONFATAL: $_drv_dp\"; break }\n"
         "}\n"
-        "if {[catch {check_placement} e]} { puts \"SHIP_CP_WARN: $e\" }\n"
+        + _ship_max_fanout_root_repair_tcl(
+            fanout_root_buffer_cell,
+            f"{pnr_dir_c}/signoff_repair_fanout_candidates.rpt")
+        + "if {[catch {check_placement} e]} { puts \"SHIP_CP_WARN: $e\" }\n"
         "if {$_ship_rt_failed > 0} { "
         "puts \"SHIP_SETUP_REPAIR_REFUSED: $_ship_rt_failed\" }\n"
         "catch {puts \"SHIP_WNS_AFTER_REPAIR: [sta::worst_slack -max]\"}\n"
@@ -30198,6 +30517,26 @@ def step_signoff_spef_repair(project: Path, top: str, pdk: "PdkConfig",
             "value could not be resolved, so the repair was never attempted "
             "and no route was promoted")
         return None
+    # This fresh repair session reopens the physical chip top and then invokes
+    # repair_design/repair_timing.  It therefore needs the same exact-PVT IO
+    # timing arcs as the sign-off STA that judges its result.  Loading the IO
+    # LEF alone defines pad geometry but leaves pad/core paths unlinked in the
+    # timing graph: measured on spm x gf180mcuD run5, worst_slack became 1e39,
+    # zero instances changed, and twelve real max-fanout violations survived
+    # into SS/max-RC sign-off.  Reuse the shared exact-suffix selector; local
+    # macro Liberty views remain included because this is a fresh session.
+    extra_liberties_c: List[str] = []
+    for liberty in _sta_extra_liberties(project, pdk, ss_lib):
+        liberty_c = _to_container_path(str(liberty), container)
+        if liberty_c != ss_lib and liberty_c not in extra_liberties_c:
+            extra_liberties_c.append(liberty_c)
+    # Re-opened sign-off repair must preserve the exact sparse-fill arm chosen
+    # by base PnR.  These are the same project-derived facts used there; no
+    # geometry, PDK or chip identity is guessed in the repair session.
+    _repair_slot = _slot_geometry(project)
+    _repair_declared_die = bool(
+        _l9_declared_die_area(project) or _l19_declared_die_area(project))
+    _repair_ring_inset, _ = _padring_core_inset_um(project)
     tcl = _ship_signoff_spef_repair_tcl(
         top,
         _to_container_path(str(pdk.tech_lef), container),
@@ -30205,7 +30544,14 @@ def step_signoff_spef_repair(project: Path, top: str, pdk: "PdkConfig",
         ss_lib, _to_container_path(str(pnr_out), container),
         cap, pdk.metal_prefix, _openroad_thread_count(),
         filler_masters=_filler_masters_for_pdk(pdk),
-        extra_lefs_c=_def_reopen_extra_lefs_c(routed, pdk, container))
+        extra_lefs_c=_def_reopen_extra_lefs_c(routed, pdk, container),
+        extra_liberties_c=extra_liberties_c,
+        fanout_root_buffer_cell=pdk.clk_buf_root or pdk.clk_buf,
+        slot_pinned_core=_repair_slot is not None,
+        design_declared_die=_repair_declared_die,
+        sparse_active_row_fill=bool(
+            _repair_ring_inset is not None and _repair_slot is None
+            and not _repair_declared_die))
     tcl_path = pnr_out / "signoff_spef_repair.tcl"
     tcl_path.write_text(tcl)
     tcl_c = _to_container_path(str(tcl_path), container)
@@ -31066,8 +31412,10 @@ def step_pad_ring_final_evidence(project: Path, top: str,
         findings.append("PADRING_EXPECTED_POPULATION_EMPTY")
 
     pnr_dir = _pl.pnr_dir(project)
+    final_def = pnr_dir / f"{top}.def"
+    physical_top = _streamout_top(final_def, top)[0]
     def_paths = [pnr_dir / "padring.def", pnr_dir / "routed.def",
-                 pnr_dir / f"{top}.def"]
+                 final_def]
     def_evidence: Dict[str, object] = {}
     for path in def_paths:
         if not path.is_file():
@@ -31127,7 +31475,7 @@ def step_pad_ring_final_evidence(project: Path, top: str,
     gds_refs: Optional[Dict[str, int]] = None
     if gds.is_file() and records:
         try:
-            gds_refs = _gds_reference_counts(gds, top)
+            gds_refs = _gds_reference_counts(gds, physical_top)
             expected_by_master: Dict[str, int] = {}
             for rec in records:
                 master = str(rec.get("master") or "")
@@ -31159,6 +31507,8 @@ def step_pad_ring_final_evidence(project: Path, top: str,
         "expected_ring_cell_count": len(records),
         "def_evidence": def_evidence,
         "gds_evidence": gds_evidence,
+        "logical_top": top,
+        "physical_top": physical_top,
         "gds_source_def": f"phase3/stage3/pnr/{top}.def",
         "gds_source_def_sha256": (
             _sha256_file(pnr_dir / f"{top}.def")
@@ -31174,7 +31524,8 @@ def step_pad_ring_final_evidence(project: Path, top: str,
         ("; ".join(findings) if findings else
          f"{len(records)} pad/corner/filler instances persist through padring.def, "
          f"routed.def and {top}.def; live routing consumer observed; GDS "
-         "hierarchy retains every expected pad/corner reference; exact final "
+         f"hierarchy rooted at {physical_top} retains every expected pad/corner "
+         "reference; exact final "
          "DEF and GDS hashes recorded"), [str(out_path)])
 
 
@@ -32470,7 +32821,9 @@ def _drc_wall_budget_s() -> float:
 
 
 def _try_svrf_native_drc(project: Path, top: str, pdk: PdkConfig,
-                         container: str) -> Optional[StepResult]:
+                         container: str,
+                         physical_top: Optional[str] = None
+                         ) -> Optional[StepResult]:
     """Run the commercial Calibre/SVRF `.rule` DRC deck NATIVELY via the vibeic
     KLayout fork's `svrfdrc` buddy (native C++, no Python) — the license-free
     sign-off path when the `calibre` binary is absent. Returns a StepResult (PASS
@@ -32487,6 +32840,7 @@ def _try_svrf_native_drc(project: Path, top: str, pdk: PdkConfig,
     gds = _pl.pnr_dir(project) / f"{top}.gds"
     if not gds.is_file():
         return None
+    cell_top = physical_top or top
     rpt = project / "phase3" / "reports" / "drc_svrf_calibre.rpt"
     rpt.parent.mkdir(parents=True, exist_ok=True)
     deck_c = _to_container_path(str(pdk.calibre_drc), container)
@@ -32494,7 +32848,7 @@ def _try_svrf_native_drc(project: Path, top: str, pdk: PdkConfig,
     rpt_c = _to_container_path(str(rpt), container)
     # svrfdrc <deck> <layout> <report> [--cell=TOP] — byte-identical report to the
     # retired run_svrf_drc.py, so _parse_svrf_tally / _classify_svrf_fails are unchanged.
-    cmd = f"{bin_c} {deck_c} {gds_c} {rpt_c} --cell={top}"
+    cmd = f"{bin_c} {deck_c} {gds_c} {rpt_c} --cell={cell_top}"
     # v1.4.57 — parallelise the measurement-rule CHECK phase when the image's
     # svrfdrc supports it (>= 0.2.19). The report is BYTE-IDENTICAL for every
     # thread count (proven byte-for-byte, threads=1 vs 8), so this changes only
@@ -32675,6 +33029,8 @@ def step_drc(project: Path, top: str, pdk: PdkConfig,
     _vac = _vacuous_on_unrouted(project, "drc", t0)
     if _vac is not None:
         return _vac
+    physical_top = _streamout_top(
+        _pl.pnr_dir(project) / f"{top}.def", top)[0]
     if not pdk.drc_deck:
         # No KLayout deck. If a Calibre deck is present, distinguish
         # ENV_UNAVAILABLE (calibre binary absent in this env — env
@@ -32688,7 +33044,9 @@ def step_drc(project: Path, top: str, pdk: PdkConfig,
                 # can produce a real, license-free sign-off DRC verdict on the
                 # foundry's own deck. Only when that engine is ALSO unavailable
                 # do we fall back to the honest ENV_UNAVAILABLE.
-                svrf = _try_svrf_native_drc(project, top, pdk, container)
+                svrf = _try_svrf_native_drc(
+                    project, top, pdk, container,
+                    physical_top=physical_top)
                 if svrf is not None:
                     return svrf
                 # `_try_svrf_native_drc` declines for TWO unrelated reasons: the
@@ -32767,7 +33125,8 @@ def step_drc(project: Path, top: str, pdk: PdkConfig,
     # v1.3.47 — progress-stall watchdog (not a fixed 3600s kill). A large-GDS
     # DRC that is still burning CPU / emitting progress is never killed; only a
     # genuinely hung run dies. marker = the input GDS path (in klayout's argv).
-    rc, out, err = _klayout_deck_exec(gds, rpt, top, pdk, container)
+    rc, out, err = _klayout_deck_exec(
+        gds, rpt, physical_top, pdk, container)
     # v1.3.47 — a stall/ceiling kill must NOT be scored from a partial or stale
     # report (a half-written RDB could parse as 0 violations = false DRC-clean).
     if rc in (_RC_STALLED, 124):
@@ -32800,6 +33159,8 @@ def step_drc(project: Path, top: str, pdk: PdkConfig,
     drc_engine_extras: Dict[str, Any] = {
         "klayout_deck_violations": klayout_deck_count,
         "streamout_engine": "klayout",
+        "logical_top": top,
+        "physical_top": physical_top,
     }
     # Fix #3(c) — surface the OpenROAD detailed-route DRC count (the
     # router's own self-check on MERGED routed geometry) vs the
@@ -32850,7 +33211,7 @@ def step_drc(project: Path, top: str, pdk: PdkConfig,
         if m_ok and merged_gds.is_file():
             m_rpt = project / "phase3" / "reports" / "drc_restream.rpt"
             m_count, m_per_rule = _klayout_deck_violations_on(
-                merged_gds, m_rpt, top, pdk, container)
+                merged_gds, m_rpt, physical_top, pdk, container)
             drc_engine_extras["restream_deck_violations"] = m_count
             drc_engine_extras["restream_violations_per_rule"] = \
                 dict(m_per_rule)
@@ -34176,7 +34537,8 @@ def _v0_3_14_detect_spare_only_classes(netlist_text: str) -> List[str]:
                   if insts and all(spare_re.search(i) for i in insts))
 
 
-def _v0_3_14_extracted_top_port_set(sp_text: str, top: str = "") -> set:
+def _v0_3_14_extracted_top_port_set(
+        sp_text: str, top: str = "", *, fallback_to_first: bool = True) -> set:
     """#685 — parse the port set of the TOP `.subckt` header from an
     ext2spice-extracted netlist (the ports ext2spice KEPT). Handles SPICE
     '+' line-continuation. Returns {} if no top header is found. Used to
@@ -34190,7 +34552,7 @@ def _v0_3_14_extracted_top_port_set(sp_text: str, top: str = "") -> set:
             if pat.match(ln):
                 hdr_start = i
                 break
-    if hdr_start is None:
+    if hdr_start is None and fallback_to_first:
         for i, ln in enumerate(lines):
             if re.match(r'^\s*\.subckt\s+\S+', ln, re.IGNORECASE):
                 hdr_start = i
@@ -34519,9 +34881,10 @@ def _try_power_aware_lvs(project: Path, top: str, pdk: PdkConfig,
                          t0: float) -> Optional[StepResult]:
     """GAP-E2E-9 ROOT FIX — try netgen with a POWER-AWARE gate netlist.
 
-    Emits a power-aware version of `netlist` (PDK rails as top ports + per-cell
-    PG connectivity, via `lvs_power_aware_netlist_emit` — chip/PDK-AGNOSTIC) and
-    runs netgen against the same extracted layout. Returns a PASS StepResult ONLY
+    Emits a power-aware version of `netlist` (PDK rails represented exactly as
+    the extracted top exposes them + per-cell PG connectivity, via
+    `lvs_power_aware_netlist_emit` — chip/PDK-AGNOSTIC) and runs netgen against
+    the same extracted layout. Returns a PASS StepResult ONLY
     when netgen reaches a genuine `Circuits match uniquely` — meaning the power
     network is actually LVS-VERIFIED (not dropped as the plain netlist forces).
 
@@ -34559,6 +34922,14 @@ def _try_power_aware_lvs(project: Path, top: str, pdk: PdkConfig,
     # per-model outcome; it does NOT change WHICH model is selected, and no
     # verdict is upgraded. chip-AGNOSTIC: model name + classifier verdict only.
     attempt_log: List[Dict[str, Any]] = []
+    try:
+        extracted_text = spice_out.read_text(errors="replace")
+        layout_power_ports = _v0_3_14_extracted_top_port_set(
+            extracted_text, top=lay_top, fallback_to_first=False)
+    except OSError:
+        # Missing/unreadable extracted authority must fail closed: emitting
+        # schematic-only rail ports would fabricate a top-level interface.
+        layout_power_ports = set()
 
     def _attempt(tie_wells: bool) -> Optional[Tuple[Path, Dict[str, Any], str]]:
         """Emit a power-aware netlist (well-tied or 4-rail), run netgen against
@@ -34571,20 +34942,51 @@ def _try_power_aware_lvs(project: Path, top: str, pdk: PdkConfig,
         model = "well_tied" if tie_wells else "four_rail"
         suffix = "pwraware_welltied" if tie_wells else "pwraware"
         pa_nl = ext_dir / f"{top}_{suffix}.v"
+        # The emitter's default internal/global rails are correct for a core
+        # extraction.  A pad-ring extraction may instead retain the real rails
+        # in its top .subckt header.  Opt in only when that measured header
+        # contains the complete effective rail set for this exact PDK/model;
+        # one missing rail is an interface mismatch and therefore fails closed.
+        effective_rails: List[str] = []
+        try:
+            power_model = _lvs_pa.power_model_for(
+                pdk.name, cell_lef=getattr(pdk, "cell_lef", None))
+            if power_model is not None:
+                _connections, effective_rails = _lvs_pa._rail_connection_map(
+                    power_model, tie_wells)
+        except Exception:  # nosec — an unavailable model keeps rails internal
+            effective_rails = []
+        rails_as_ports = bool(effective_rails) and set(effective_rails).issubset(
+            layout_power_ports)
+        decision = {
+            "model": model,
+            "layout_power_ports": sorted(layout_power_ports),
+            "effective_rails": list(effective_rails),
+            "rails_as_ports": rails_as_ports,
+        }
         try:
             # cell_lef: consulted ONLY when pdk.name resolves to no table
             # entry — i.e. a project-staged (commercial) PDK, whose power
             # model is then derived from its own std-cell LEF instead of the
             # emitter skipping and leaving the netlist power-blind.
-            st = _lvs_pa.emit_to_file(netlist, pdk.name, pa_nl, top=top,
-                                      tie_wells_to_rails=tie_wells,
-                                      cell_lef=getattr(pdk, "cell_lef", None))
+            emit_kwargs: Dict[str, Any] = {}
+            additional_lefs = sorted(ext_dir.glob("*.extract.lef"))
+            if additional_lefs:
+                emit_kwargs["additional_lefs"] = additional_lefs
+            st = _lvs_pa.emit_to_file(
+                netlist, pdk.name, pa_nl, top=top,
+                rails_as_ports=rails_as_ports,
+                tie_wells_to_rails=tie_wells,
+                cell_lef=getattr(pdk, "cell_lef", None), **emit_kwargs)
+            st["layout_power_ports"] = sorted(layout_power_ports)
+            st["effective_rails"] = list(effective_rails)
+            st["rails_as_ports"] = rails_as_ports
         except Exception as exc:  # nosec — a bad netlist must never break the plain path
-            attempt_log.append({"model": model, "rejected_at": "emit",
+            attempt_log.append({**decision, "rejected_at": "emit",
                                 "reason": f"{type(exc).__name__}: {exc}"})
             return None
         if st.get("modules_patched", 0) <= 0 or not pa_nl.is_file():
-            attempt_log.append({"model": model, "rejected_at": "emit",
+            attempt_log.append({**decision, "rejected_at": "emit",
                                 "reason": "no module patched / netlist not written",
                                 "modules_patched": st.get("modules_patched", 0)})
             return None
@@ -34600,7 +35002,7 @@ def _try_power_aware_lvs(project: Path, top: str, pdk: PdkConfig,
             # marker = the layout netlist path (in netgen's argv).
             _rc, out, err = _docker_exec(container, cmd, marker=nl_c, outputs=[pa_rpt])
         except Exception as exc:  # nosec — netgen crash on the pre-attempt is non-fatal
-            attempt_log.append({"model": model, "rejected_at": "netgen",
+            attempt_log.append({**decision, "rejected_at": "netgen",
                                 "reason": f"{type(exc).__name__}: {exc}"})
             return None
         # ORGANIC v1462 — bounded flush retry so a lagging power-aware report
@@ -34613,7 +35015,7 @@ def _try_power_aware_lvs(project: Path, top: str, pdk: PdkConfig,
         if cls != "MATCH":
             _terminal = _lvt.has_terminal_verdict(txt)
             attempt_log.append({
-                "model": model, "rejected_at": "classify", "verdict": cls,
+                **decision, "rejected_at": "classify", "verdict": cls,
                 "netgen_rc": _rc,
                 "report_had_terminal_verdict": _terminal,
                 "report_bytes": len(txt),
@@ -34626,7 +35028,7 @@ def _try_power_aware_lvs(project: Path, top: str, pdk: PdkConfig,
                            "a mismatch" if not _terminal
                            else "netgen reported a conclusive non-match")})
             return None
-        attempt_log.append({"model": model, "accepted": True,
+        attempt_log.append({**decision, "accepted": True,
                             "netlist": str(pa_nl.relative_to(project))})
         return pa_nl, st, txt
 
@@ -35204,6 +35606,7 @@ def _run_extraction_lvs(project: Path, top: str, pdk: PdkConfig,
     cell-level compare; the ignore is handled by the local setup."""
     ext_dir = _pl.extracted_dir(project)
     ext_dir.mkdir(parents=True, exist_ok=True)
+    logical_top = top
     spice_out = ext_dir / f"{top}_extracted.sp"
     tcl = ext_dir / f"ext2spice_{top}.tcl"
     # THE SAME SEAM AS THE STREAM-OUT, AND THE SAME MEASUREMENT. Everything
@@ -35234,6 +35637,16 @@ def _run_extraction_lvs(project: Path, top: str, pdk: PdkConfig,
     top, _lvs_top_note = _streamout_top(def_file, top)
     if _lvs_top_note:
         print(f"[phase3] lvs: {_lvs_top_note}", file=sys.stderr)
+        try:
+            (ext_dir / "extraction_top_resolution.json").write_text(
+                json.dumps({
+                    "logical_top": logical_top,
+                    "physical_top": top,
+                    "authority": str(def_file),
+                    "rule": "DEF DESIGN statement selects the reopened cell",
+                }, indent=2) + "\n")
+        except OSError:
+            pass
     # W2.3 — magic's ERROR channel. The extractor files every rectangle it
     # refused to connect ("Illegal overlap between <a> and <b> (types do not
     # connect)") as a FEEDBACK AREA and then says only `N problems occurred.
@@ -41043,6 +41456,88 @@ def _discover_aocv_table(project: Path, pdk: PdkConfig,
     return None
 
 
+def _sta_link_top(project: Path, logical_top: str, netlist: Path,
+                  routed: bool) -> str:
+    """Return the module a selected STA netlist must link.
+
+    Logical names remain the authority for artefact filenames.  Once STA has
+    selected a routed netlist, however, its module identity belongs to the
+    same final DEF every other fresh-session consumer reopens.  Pre-layout STA
+    deliberately keeps the logical RTL top even if an older DEF is present in
+    a reused project directory.
+    """
+    if not routed:
+        return logical_top
+    def_file = _pl.pnr_dir(project) / f"{logical_top}.def"
+    return _streamout_top(def_file, logical_top)[0]
+
+
+def _sta_extra_liberties(project: Path, pdk: PdkConfig,
+                         reference_liberty: object) -> List[str]:
+    """Return local macro libs plus the IO lib at the same exact PVT.
+
+    The pad-ring producer already records every library view it discovered in
+    ``io_pad_chip_top.json``.  STA must not load all of those mutually
+    incompatible corners, or guess a nearest voltage.  A library is added
+    only when its basename carries the same ``__<process>_<temp>_<voltage>``
+    suffix as the standard-cell liberty selected for this stanza.
+    """
+    out = [str(path) for path in (pdk.macro_libs or [])]
+    stem = Path(str(reference_liberty)).stem
+    _sep, marker, suffix = stem.rpartition("__")
+    if not marker or not suffix:
+        return out
+    record = project / "reports" / "phase3" / "io_pad_chip_top.json"
+    try:
+        raw = json.loads(record.read_text()).get("io_library_liberty", [])
+    except (OSError, ValueError, AttributeError):
+        return out
+    if not isinstance(raw, list):
+        return out
+    for candidate in sorted(str(value) for value in raw
+                            if isinstance(value, str)):
+        if Path(candidate).stem.endswith("__" + suffix) and candidate not in out:
+            out.append(candidate)
+    return out
+
+
+def _pnr_io_liberties_tcl(project: Path, pdk: PdkConfig, container: str,
+                          corner_liberty_block: Optional[str]) -> str:
+    """Load only exact-PVT IO views into PnR's active timing scene(s).
+
+    ``_sta_extra_liberties`` is the shared selector.  Local macro libraries
+    are excluded here because the caller already emits them; this helper owns
+    only the IO-pad delta.  Under multi-corner analysis every view is qualified
+    with the corresponding scene.  A single-corner PDK gets a bare read of the
+    exact suffix matching its selected reference liberty.
+    """
+    local_macro = {str(path) for path in (pdk.macro_libs or [])}
+    lines: List[str] = []
+    if corner_liberty_block:
+        try:
+            by_label = _resolve_signoff_corner_libs(project, pdk, container)
+        except Exception:
+            return ""
+        scene = {"SS": "ss", "TT": "tt", "FF": "ff"}
+        for label in ("SS", "TT", "FF"):
+            reference = by_label.get(label)
+            if not reference:
+                continue
+            for liberty in _sta_extra_liberties(project, pdk, reference):
+                if liberty not in local_macro:
+                    lines.append(
+                        f"read_liberty -corner {scene[label]} {liberty}")
+    else:
+        reference = getattr(pdk, "liberty", None)
+        if reference:
+            for liberty in _sta_extra_liberties(project, pdk, reference):
+                if liberty not in local_macro:
+                    lines.append(f"read_liberty {liberty}")
+    # Preserve first occurrence while making accidental duplicate discovery a
+    # no-op; ordering remains SS/TT/FF and sorted-within-view.
+    return "\n".join(dict.fromkeys(lines))
+
+
 def _emit_spef_sta(project: Path, top: str, pdk: PdkConfig, container: str,
                    spef_path: Path, rpt_out: Path,
                    notes: List[str]) -> bool:
@@ -41062,7 +41557,8 @@ def _emit_spef_sta(project: Path, top: str, pdk: PdkConfig, container: str,
     prerequisite or tool failure returns False and the caller falls back
     to the estimate-based report (the pre-#527 behavior)."""
     pnr_out = _pl.pnr_dir(project)
-    netlist = pnr_out / f"{top}_pnr.v"
+    routed_netlist = pnr_out / f"{top}_pnr.v"
+    netlist = routed_netlist
     if not netlist.is_file():
         netlist = _pl.synth_dir(project) / f"{top}_synth.v"
     sdc = pnr_out / "constraint.sdc"
@@ -41116,8 +41612,10 @@ def _emit_spef_sta(project: Path, top: str, pdk: PdkConfig, container: str,
             "sign-off (stamped STA_SIGNOFF_CORNER=NOMINAL in the report)")
     macro_libs_tcl = "\n".join(
         f"read_liberty {_to_container_path(str(f), container)}"
-        for f in (pdk.macro_libs or []))
+        for f in _sta_extra_liberties(project, pdk, lib_c))
     netlist_c = _to_container_path(str(netlist), container)
+    sta_top = _sta_link_top(project, top, netlist,
+                            netlist == routed_netlist)
     sdc_c = _to_container_path(str(sdc), container)
     spef_c = _to_container_path(str(spef_path), container)
     rpt_out.parent.mkdir(parents=True, exist_ok=True)
@@ -41171,7 +41669,7 @@ def _emit_spef_sta(project: Path, top: str, pdk: PdkConfig, container: str,
         f"read_liberty {lib_c}\n"
         f"{macro_libs_tcl}\n"
         f"read_verilog {netlist_c}\n"
-        f"link_design {top}\n"
+        f"link_design {sta_top}\n"
         f"read_sdc {sdc_c}\n"
         f"read_spef {spef_c}\n"
         f"{_propagated_clock_tcl()}"
@@ -41864,6 +42362,8 @@ def _emit_multi_corner_sta(project: Path, top: str, pdk: PdkConfig,
         return False
     notes.append(f"multi-corner STA inputs resolve to basis={basis}: "
                  f"{basis_note}")
+    sta_top = _sta_link_top(project, top, netlist,
+                            basis.startswith("POST_ROUTE"))
     # Collapse the resolved basis to the SAME PnR-side vocabulary the reports'
     # own stamps are read into, so the reuse comparison below is canonical-vs-
     # canonical. The emitter ships two `POST_ROUTE_*` suffixes (SPEF / NO_SPEF);
@@ -41994,7 +42494,7 @@ def _emit_multi_corner_sta(project: Path, top: str, pdk: PdkConfig,
         rpt_c = _to_container_path(str(rpt), container)
         macro_libs_tcl = "\n".join(
             f"read_liberty {_to_container_path(str(f), container)}"
-            for f in pdk.macro_libs
+            for f in _sta_extra_liberties(project, pdk, lib)
         )
         # Annotate the extracted parasitics when we have them — a corner
         # report with no SPEF under-counts interconnect delay at EVERY corner.
@@ -42011,7 +42511,7 @@ def _emit_multi_corner_sta(project: Path, top: str, pdk: PdkConfig,
             f"read_liberty {lib_c}\n"
             f"{macro_libs_tcl}\n"
             f"read_verilog {netlist_c}\n"
-            f"link_design {top}\n"
+            f"link_design {sta_top}\n"
             f"read_sdc {sdc_c}\n"
             f"{read_spef_tcl}"
             # Only when a SPEF was actually annotated (post-route);
@@ -42537,6 +43037,8 @@ def _emit_corner_spef_sta(project: Path, top: str, pdk: PdkConfig,
     _prelayout_netlist = (netlist == _pl.synth_dir(project) / f"{top}_synth.v")
     _basis_stamp = ("PRE_LAYOUT_ESTIMATE" if _prelayout_netlist
                     else "POST_ROUTE_SPEF")
+    sta_top = _sta_link_top(project, top, netlist,
+                            not _prelayout_netlist)
     # Which liberty each RC corner is analysed with. One library across the RC
     # corners is the DESIGNED behaviour (parasitics vary, process does not) —
     # this records it instead of leaving it to be inferred from a corner name.
@@ -42551,7 +43053,7 @@ def _emit_corner_spef_sta(project: Path, top: str, pdk: PdkConfig,
                         if lbl not in (corner_libs or {})]
     macro_libs_tcl = "\n".join(
         f"read_liberty {_to_container_path(str(f), container)}"
-        for f in (pdk.macro_libs or []))
+        for f in _sta_extra_liberties(project, pdk, pdk.liberty))
     netlist_c = _to_container_path(str(netlist), container)
     sdc_c = _to_container_path(str(sdc), container)
     rpt_out.parent.mkdir(parents=True, exist_ok=True)
@@ -42563,7 +43065,7 @@ def _emit_corner_spef_sta(project: Path, top: str, pdk: PdkConfig,
             f"read_liberty {lib_c}\n"
             f"{macro_libs_tcl}\n"
             f"read_verilog {netlist_c}\n"
-            f"link_design {top}\n"
+            f"link_design {sta_top}\n"
             f"read_sdc {sdc_c}\n"
             f"read_spef {spef_c}\n"
             f"{_propagated_clock_tcl()}"
@@ -42799,10 +43301,8 @@ def _emit_mcorner_ocv_sta(project: Path, top: str, pdk: PdkConfig,
 
     setup_rc_corner, setup_spef = _spef_for(("max", "nom"))
     hold_rc_corner, hold_spef = _spef_for(("min", "nom"))
-    macro_libs_tcl = "\n".join(
-        f"read_liberty {_to_container_path(str(f), container)}"
-        for f in (pdk.macro_libs or []))
     netlist_c = _to_container_path(str(netlist), container)
+    sta_top = _sta_link_top(project, top, netlist, _routed_netlist)
     sdc_c = _to_container_path(str(sdc), container)
     rpt_out.parent.mkdir(parents=True, exist_ok=True)
     rpt_c = _to_container_path(str(rpt_out), container)
@@ -42814,6 +43314,9 @@ def _emit_mcorner_ocv_sta(project: Path, top: str, pdk: PdkConfig,
     def _pass(label: str, kind: str, flag: str, spef_host: Optional[Path],
               rc_corner: Optional[str], open_mode: str) -> str:
         lib_c = corner_libs[label]
+        macro_libs_tcl = "\n".join(
+            f"read_liberty {_to_container_path(str(f), container)}"
+            for f in _sta_extra_liberties(project, pdk, lib_c))
         spef_tcl = ""
         spef_disc = "no-SPEF (netlist-only)"
         if spef_host and Path(spef_host).is_file():
@@ -42849,7 +43352,7 @@ def _emit_mcorner_ocv_sta(project: Path, top: str, pdk: PdkConfig,
             f"read_liberty {lib_c}\n"
             f"{macro_libs_tcl}\n"
             f"read_verilog {netlist_c}\n"
-            f"link_design {top}\n"
+            f"link_design {sta_top}\n"
             f"read_sdc {sdc_c}\n"
             f"{spef_tcl}"
             + (_propagated_clock_tcl() if spef_tcl else "") +
@@ -43915,8 +44418,10 @@ def _emit_power_report(project: Path, top: str, pdk: PdkConfig,
     spef_disc = spef_path.name if spef_path else "none (netlist-only)"
     macro_libs_tcl = "\n".join(
         f"read_liberty {_to_container_path(str(f), container)}"
-        for f in pdk.macro_libs
+        for f in _sta_extra_liberties(project, pdk, pdk.liberty)
     )
+    link_top = _sta_link_top(project, top, netlist,
+                             netlist == routed_netlist)
     # v2.3 — VECTOR-BASED dynamic power (opt-in by artifact): when a
     # simulation VCD exists, feed it to OpenSTA `read_power_activities`
     # so switching power comes from REAL activity instead of the
@@ -43941,7 +44446,7 @@ def _emit_power_report(project: Path, top: str, pdk: PdkConfig,
 read_liberty {lib_c}
 {macro_libs_tcl}
 read_verilog {netlist_c}
-link_design {top}
+link_design {link_top}
 read_sdc {sdc_c}
 {spef_tcl}{vcd_tcl}# report_power emits leakage + dynamic + internal categories explicitly,
 # which is what eda_report_audit:power's substance check looks for.
@@ -46882,6 +47387,31 @@ def _extra_lef_read_block(extra_lefs_c: Optional[Sequence[str]]) -> str:
             "# does not define. Without them `read_def` below aborts ODB-0421\n"
             "# and the whole step is lost before it runs.\n"
             + "".join(f"read_lef {p}\n" for p in extra_lefs_c))
+
+
+def _extra_liberty_read_block(
+        extra_liberties_c: Optional[Sequence[str]],
+        primary_liberty_c: str = "") -> str:
+    """Emit distinct auxiliary Liberty views before a fresh DEF is linked.
+
+    The primary process library is already read by the caller.  Keeping this
+    helper value-based and empty-on-empty preserves byte identity for designs
+    without macros or a timed IO ring while preventing an accidentally repeated
+    primary view from redefining the same cells.
+    """
+    if not extra_liberties_c:
+        return ""
+    seen = {primary_liberty_c} if primary_liberty_c else set()
+    paths: List[str] = []
+    for value in extra_liberties_c:
+        path = str(value)
+        if path and path not in seen:
+            seen.add(path)
+            paths.append(path)
+    if not paths:
+        return ""
+    return ("# Physical-top macro/IO timing views at the active process PVT.\n"
+            + "".join(f"read_liberty {path}\n" for path in paths))
 
 
 def _classify_io_cell(master: str) -> str:

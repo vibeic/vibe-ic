@@ -272,7 +272,62 @@ _LEDGER = frozenset({
     "_si_timing_aware_module", "_sizing_limits_drv_report_tcl",
     "_spare_actual_density", "_spare_count_from_density",
     "_sparse_die_fill_threshold_pct", "_spef_has_coupling",
-    "_sta_blackboxed_masters", "_staged_sdc_not_consumed_note",
+    "_sta_blackboxed_masters",
+    # RECORDED with the commit that adds it (the SPM physical-signoff port).
+    # `_sta_extra_liberties` returns a LIBRARY LIST -- the local macro libs plus
+    # the one IO library view whose basename carries the same
+    # `__<process>_<temp>_<voltage>` suffix as the standard-cell liberty this
+    # stanza has ALREADY selected. It returns no slack, no WNS/TNS, no row and
+    # no verdict. Its whole purpose is to REFUSE: to decline to guess a nearest
+    # voltage, and to decline to load the mutually incompatible corners the
+    # pad-ring producer recorded in `io_pad_chip_top.json`.
+    #
+    # WHY IT CANNOT LIVE IN `_ppa/timing.py`, from that module's own rules
+    # rather than from convenience. That module is a per-view EXTRACTOR: it
+    # takes STA reports in and emits `Row`s, and its docstring refuses to
+    # return a verdict. Measured over the file as it stands, these all return
+    # ZERO hits: `read_liberty`, `link_design`, `.lef`, `.def`, `macro_libs`,
+    # `io_pad_chip_top`, `PdkConfig`, `subprocess`. It imports only the standard
+    # library plus `_ppa.canonical_json` and `_ppa.backends.opensta`. It holds
+    # no PDK handle and no library-path reader, so it cannot select a library at
+    # all.
+    #
+    # That is the decisive half: every one of its 11 `liberty` mentions is a
+    # name the STA report ALREADY STATED (`sec.liberty`,
+    # `report.basis_liberty`), parsed only to fill the PVT `scope`. This
+    # function CHOOSES the liberty a deck will read; `_ppa/timing.py` only reads
+    # back the name of one already chosen. Moving the chooser into the reader
+    # would make the reader depend on its own output.
+    #
+    # Precedent, not a one-off: the pre-invocation deck/SDC construction chain
+    # is ledgered here already -- `_clock_port_against_the_design` (recorded as
+    # "SDC CONSTRUCTION, not timing extraction: it runs before OpenSTA is
+    # invoked"), `_staged_timing_exceptions`, `_scale_sdc_to_liberty_units`,
+    # `_stamp_sdc_provenance`, `_resolve_staged_silicon_sdc`. This is the
+    # LIBRARY rung of that same chain.
+    "_sta_extra_liberties",
+    # RECORDED with the same commit. `_sta_link_top` returns a MODULE NAME --
+    # the cell a selected STA netlist must `link_design`. It delegates the
+    # resolution itself to `_streamout_top(def_file, logical_top)`, the runner's
+    # single authority for "which cell does this DEF call itself", and it
+    # deliberately returns the logical RTL top UNCHANGED when the netlist is
+    # pre-layout, so a stale DEF left in a reused project directory cannot
+    # retarget a pre-layout run. It returns no timing number, no row and no
+    # verdict, and it reads no STA artefact at all -- it runs before one exists.
+    #
+    # WHY NOT `_ppa/timing.py`: the same measured reason as the entry above --
+    # that module has no DEF reader (`.def`: zero hits) and no `link_design`
+    # (zero hits). A name resolver that produced no row would sit in it as a
+    # stranger, which is the phrase `_clock_port_against_the_design` uses for
+    # its own case, and this is the same case one rung further along.
+    #
+    # It is the STA rung of the physical-top chain. That chain's other
+    # consumers -- magic, klayout, LVS, the DRC deck and the pad-ring hierarchy
+    # audit -- all call `_streamout_top` directly and are simply not PPA-named,
+    # so only this rung reaches the gate. Splitting one chain across two modules
+    # is the reviewing cost this ledger exists to prevent, not an instance of it.
+    "_sta_link_top",
+    "_staged_sdc_not_consumed_note",
     "_staged_sdc_survey", "_staged_timing_exceptions",
     "_stamp_sdc_provenance", "_try_power_aware_lvs",
     "_v0_3_9_parse_row_utilization",
