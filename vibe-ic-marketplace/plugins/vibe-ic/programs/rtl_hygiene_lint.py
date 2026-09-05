@@ -4796,6 +4796,210 @@ def rule_mixed_blocking_same_reg(src: str, path: str) -> List[Finding]:
 
 
 # ---------------------------------------------------------------------------
+# Rule 35: non-blocking assignment inside an explicit always_comb process
+# ---------------------------------------------------------------------------
+# `always_comb` promises an immediately-settled combinational process.  An NBA
+# publishes its LHS in the non-blocking update region instead, so another
+# combinational consumer can observe the previous value for a delta cycle; the
+# LHS is also excluded from the process's inferred sensitivity set.  Verilator
+# calls this COMBDLY and rewrites the operator, while event-driven simulators
+# retain scheduling semantics.  That tool-dependent behavior is a correctness
+# defect, not a style preference, so this is a block-eligible ERROR.
+#
+# Deliberately narrow: legacy `always @(*)` and `always_latch` are not included.
+# Their intent can be ambiguous and widening this rule would need separate
+# evidence.  Relational `<=` tokens in if/for conditions or on the RHS of a
+# blocking assignment are excluded structurally.
+def _balanced_group_end(scan: str, start: int,
+                        opener: str = '(', closer: str = ')') -> int:
+    """Offset just after a balanced delimited group, or len(scan) if open."""
+    if start >= len(scan) or scan[start] != opener:
+        return start
+    depth = 0
+    for pos in range(start, len(scan)):
+        if scan[pos] == opener:
+            depth += 1
+        elif scan[pos] == closer:
+            depth -= 1
+            if depth == 0:
+                return pos + 1
+    return len(scan)
+
+
+def _skip_space(scan: str, start: int) -> int:
+    while start < len(scan) and scan[start].isspace():
+        start += 1
+    return start
+
+
+def _procedural_statement_end(scan: str, start: int) -> int:
+    """Return the end of one complete SystemVerilog procedural statement.
+
+    This handles the compound begin-less bodies legal after ``always_comb``:
+    if/else, loops and case statements. It is a boundary finder, not a full
+    parser; strings are already blanked and comments stripped by the caller.
+    """
+    start = _skip_space(scan, start)
+    if start >= len(scan):
+        return len(scan)
+
+    # Qualifiers bind to the following if/case statement.
+    qm = re.match(r'(?<!\\)\b(?:unique0?|priority)\b', scan[start:])
+    if qm:
+        return _procedural_statement_end(scan, start + qm.end())
+
+    if re.match(r'(?<!\\)\bbegin\b', scan[start:]):
+        depth = 0
+        for km in re.finditer(r'(?<!\\)\b(begin|end)\b', scan[start:]):
+            depth += 1 if km.group(1) == 'begin' else -1
+            if depth == 0:
+                return start + km.end()
+        return len(scan)
+
+    im = re.match(r'(?<!\\)\bif\b', scan[start:])
+    if im:
+        cursor = _skip_space(scan, start + im.end())
+        cursor = _balanced_group_end(scan, cursor)
+        consequent_end = _procedural_statement_end(scan, cursor)
+        cursor = _skip_space(scan, consequent_end)
+        em = re.match(r'(?<!\\)\belse\b', scan[cursor:])
+        if em:
+            return _procedural_statement_end(scan, cursor + em.end())
+        return consequent_end
+
+    lm = re.match(r'(?<!\\)\b(?:for|foreach|while|repeat)\b', scan[start:])
+    if lm:
+        cursor = _skip_space(scan, start + lm.end())
+        cursor = _balanced_group_end(scan, cursor)
+        return _procedural_statement_end(scan, cursor)
+
+    fm = re.match(r'(?<!\\)\bforever\b', scan[start:])
+    if fm:
+        return _procedural_statement_end(scan, start + fm.end())
+
+    cm = re.match(r'(?<!\\)\bcase(?:x|z)?\b', scan[start:])
+    if cm:
+        depth = 0
+        for km in re.finditer(
+                r'(?<!\\)\b(case|casex|casez|endcase)\b', scan[start:]):
+            depth += -1 if km.group(1) == 'endcase' else 1
+            if depth == 0:
+                return start + km.end()
+        return len(scan)
+
+    # Simple assignment/call. Only a semicolon outside (), [] and {} closes it.
+    paren = bracket = brace = 0
+    for pos in range(start, len(scan)):
+        char = scan[pos]
+        if char == '(':
+            paren += 1
+        elif char == ')':
+            paren = max(paren - 1, 0)
+        elif char == '[':
+            bracket += 1
+        elif char == ']':
+            bracket = max(bracket - 1, 0)
+        elif char == '{':
+            brace += 1
+        elif char == '}':
+            brace = max(brace - 1, 0)
+        elif char == ';' and paren == bracket == brace == 0:
+            return pos + 1
+    return len(scan)
+
+
+def _always_comb_bodies(src: str):
+    """Yield (body text, absolute body offset) for explicit always_comb blocks.
+
+    The existing begin/end walker is reused over a string-blanked copy.  String
+    literals therefore cannot forge a begin/end token, while its preserved
+    length keeps every returned offset anchored to the original source.
+    """
+    scan = _blank_string_literals(src)
+    for hm in re.finditer(r'(?<!\\)\balways_comb\b', scan):
+        body_start = _skip_space(scan, hm.end())
+        body_end = _procedural_statement_end(scan, body_start)
+        yield src[body_start:body_end], body_start
+
+
+def _top_level_statement_start(scan: str, stop: int) -> int:
+    """Start offset of the semicolon-delimited statement containing `stop`.
+
+    Semicolons inside for-loop parentheses are not statement boundaries.
+    Strings have already been blanked by the caller.
+    """
+    paren = bracket = brace = 0
+    start = 0
+    for idx, char in enumerate(scan[:stop]):
+        if char == '(':
+            paren += 1
+        elif char == ')':
+            paren = max(paren - 1, 0)
+        elif char == '[':
+            bracket += 1
+        elif char == ']':
+            bracket = max(bracket - 1, 0)
+        elif char == '{':
+            brace += 1
+        elif char == '}':
+            brace = max(brace - 1, 0)
+        elif char == ';' and paren == bracket == brace == 0:
+            start = idx + 1
+    return start
+
+
+def _has_prior_top_level_assignment(scan: str, start: int, stop: int) -> bool:
+    """Whether [start, stop) already contains a procedural assignment.
+
+    This rejects the comparator in `y = a <= b`: the blocking assignment is
+    the statement's operator and the later `<=` is part of its RHS.
+    """
+    prefix = scan[start:stop]
+    for am in re.finditer(r'(?<![<>!=])(?:<=(?!=)|=(?!=))', prefix):
+        pos = am.start()
+        if (prefix.count('(', 0, pos) - prefix.count(')', 0, pos) == 0
+                and prefix.count('[', 0, pos) - prefix.count(']', 0, pos) == 0
+                and prefix.count('{', 0, pos) - prefix.count('}', 0, pos) == 0):
+            return True
+    return False
+
+
+def rule_nonblocking_in_always_comb(src: str, path: str) -> List[Finding]:
+    findings: List[Finding] = []
+    for body, body_start in _always_comb_bodies(src):
+        scan = _blank_string_literals(body)
+        for mm in re.finditer(r'(?<![<>!=])<=(?!=)', scan):
+            pos = mm.start()
+            # Comparisons in control expressions are nested in parentheses.
+            if scan.count('(', 0, pos) - scan.count(')', 0, pos) != 0:
+                continue
+            stmt_start = _top_level_statement_start(scan, pos)
+            if _has_prior_top_level_assignment(scan, stmt_start, pos):
+                continue
+            # The last identifier before the first statement-level operator is
+            # a useful anchor for scalar, selected, hierarchical and concat
+            # LHS forms. The finding is about the operator even if an unusual
+            # legal LHS cannot be reduced to one identifier.
+            lhs_prefix = scan[stmt_start:pos]
+            scalar_lhs = re.search(
+                r'\b([A-Za-z_]\w*)(?:\s*\[[^\]]+\])*\s*$', lhs_prefix)
+            if scalar_lhs:
+                symbol = scalar_lhs.group(1)
+            else:
+                lhs_names = re.findall(r'\b[A-Za-z_]\w*\b', lhs_prefix)
+                symbol = next((name for name in reversed(lhs_names)
+                               if name not in VERILOG_KEYWORDS), '<assignment>')
+            findings.append(Finding(
+                path, src.count('\n', 0, body_start + pos) + 1,
+                'ERROR', 'nonblocking-in-always-comb', symbol,
+                f"`{symbol}` is assigned with `<=` inside `always_comb`; the "
+                "NBA update region can expose a previous-delta value and tools "
+                "disagree on whether to rewrite it. Use blocking `=` for "
+                "combinational assignments."))
+    return findings
+
+
+# ---------------------------------------------------------------------------
 # Rule 22: Narrow bitwise-NOT / binary-XNOR (/ shift) inverted in a WIDER lvalue
 # context (rule name `narrow-bitwise-not-wider-context`, advisory WARN, NO --fix)
 # ---------------------------------------------------------------------------
@@ -6302,6 +6506,7 @@ def lint_file(path: Path) -> List[Finding]:
     results += rule_bitwise_not_width(src, str(path))
     results += rule_enum_ternary_width(src, str(path))
     results += rule_mixed_blocking_same_reg(src, str(path))
+    results += rule_nonblocking_in_always_comb(src, str(path))
     results += rule_narrow_bitwise_not_wider_context(src, str(path))
     results += rule_use_before_declaration(src, str(path))
     # Rules 26-31 (ORGANIC-20260704) — advisory-only arithmetic-datapath

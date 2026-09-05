@@ -30,6 +30,7 @@ Chip-AGNOSTIC and dataset-AGNOSTIC: no SKU, vendor, or dataset literal.
 from __future__ import annotations
 
 import argparse
+from bisect import bisect_right
 import json
 import re
 import sys
@@ -472,7 +473,9 @@ _PROSE_HINTS = (
         r"(area|footprint|design|netlist|module|implementation|circuit|logic)\s+smaller"
         r"|lint\s+clean)\b", re.I)),
     ("completion", re.compile(
-        r"\b((?:complete|finish)\s+(?:the|this)\s+(?:following\s+|missing\s+)?"
+        r"\b((?:complete|finish)\s+(?:the|this)\s+"
+        r"(?:(?:following|given|provided|partial|incomplete|missing|"
+        r"systemverilog|verilog|sv)\s+)*"
         r"(?:code|rtl|module|implementation|function|task|stub|todo|logic)"
         r"|fill\s+in(?:\s+the)?\s+(?:missing\s+)?"
         r"(?:code|rtl|module|implementation|function|task|stub|todo|logic)"
@@ -527,6 +530,27 @@ _PROSE_HINTS = (
 # without a `;` is not a module header.
 _MODULE_HEAD = re.compile(r"^[ \t]*module\b[^;]{0,4000};", re.M)
 _ENDMODULE = re.compile(r"^[ \t]*endmodule\b", re.M)
+_PARTIAL_BODY_SYNTAX = re.compile(
+    r"(?:"
+    r"\b(?:wire|reg|logic|bit|integer|time|genvar)\b"
+    r"(?:\s+(?:signed|unsigned)\b)?(?:\s*\[[^\]\n;]+\])*\s+"
+    r"(?:\\\S+|[A-Za-z_]\w*)(?:\s*\[[^\]\n;]+\])*"
+    # An initializer may itself contain commas (concatenation, function call,
+    # streaming expression).  The semicolon, not a comma, terminates the
+    # declaration.  Requiring that semicolon is what keeps prose such as
+    # ``logic should, where possible, be combinational.`` out.
+    r"(?:\s*=\s*[^;\n]+)?"
+    r"(?:\s*,\s*(?:\\\S+|[A-Za-z_]\w*)"
+    r"(?:\s*\[[^\]\n;]+\])*(?:\s*=\s*[^;\n]+)?)*\s*;"
+    r"|\b(?:localparam|parameter)\b[^;\n]{1,500};"
+    r"|\bassign\s+(?:\{[^;{}\n]+\}|(?:\\\S+|[A-Za-z_]\w*)"
+    r"(?:\s*\[[^\]\n;]+\])?)\s*=(?!=)"
+    r"|\balways(?:_ff|_comb|_latch)?\b\s*"
+    r"(?:@\s*(?:\*|\([^)]{0,1000}\))\s*)?"
+    r"(?:begin\b|if\s*\(|for\s*\(|while\s*\(|case(?:x|z)?\s*\(|"
+    r"(?:\\\S+|[A-Za-z_]\w*)(?:\s*\[[^\]\n;]+\])?\s*(?:<=|=(?!=)))"
+    r"|\b(?:function|task)\b[^;\n]{1,500};"
+    r")", re.M)
 
 
 def prompt_embeds_rtl(prompt: str) -> bool:
@@ -559,6 +583,38 @@ def prompt_embeds_rtl(prompt: str) -> bool:
     clean = _dms.strip_comments(prompt or "")
     head = _MODULE_HEAD.search(clean)
     return head is not None and _ENDMODULE.search(clean, head.end()) is not None
+
+
+def prompt_embeds_partial_rtl(prompt: str) -> bool:
+    """True for a module header followed by actual HDL body structure.
+
+    This is intentionally weaker than ``prompt_embeds_rtl`` only in the one
+    dimension a code-completion artefact needs: it may not have an ``endmodule``
+    yet.  A bare interface stub does not qualify.  The caller uses this signal
+    only after an explicit completion verb, so a quoted partial module never
+    invents a transform nature on its own.
+
+    When the module is in a Markdown code fence, body recognition is bounded at
+    that fence.  Otherwise it is bounded at the next module header.  Comments
+    are stripped before either test and all searches remain linear.
+    """
+    text = prompt or ""
+    clean = _dms.strip_comments(text)
+    heads = list(_MODULE_HEAD.finditer(clean))
+    if not heads:
+        return False
+
+    # Pre-index fences once. Re-counting the prefix for every module header is
+    # quadratic on a hostile prompt with thousands of headers.
+    fences = [m.start() for m in re.finditer(r"```", clean)]
+    for index, head in enumerate(heads):
+        body_end = heads[index + 1].start() if index + 1 < len(heads) else len(clean)
+        preceding_fences = bisect_right(fences, head.start())
+        if preceding_fences % 2 and preceding_fences < len(fences):
+            body_end = min(body_end, fences[preceding_fences])
+        if _PARTIAL_BODY_SYNTAX.search(clean, head.end(), body_end) is not None:
+            return True
+    return False
 
 
 def classify_task_nature(prompt: str,
@@ -614,6 +670,8 @@ def classify_task_nature(prompt: str,
     text = prompt or ""
     hinted = next((n for n, rx in _PROSE_HINTS if rx.search(text)), None)
     embedded = prompt_embeds_rtl(text)
+    if hinted == "completion" and not embedded:
+        embedded = prompt_embeds_partial_rtl(text)
 
     if has_context:
         n = hinted or _UNPINNED_TRANSFORM_NATURE
