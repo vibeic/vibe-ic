@@ -5249,6 +5249,26 @@ def step_reset_clock_variant_aliases(project: Path, top: str) -> StepResult:
     except Exception:  # pragma: no cover — defensive
         _auth_ports = None
     _rtl_port_face = {str(n).lower() for n in _names}
+    # An authoritative reset declaration is a PER-PORT contract, not a bet that
+    # the whole generated interface will remain byte-for-byte identical to the
+    # earlier L3/L9 enumeration.  A generator may legitimately add an output
+    # while retaining the declared reset.  The old all-ports equality guard
+    # then stopped recognising that reset as authoritative and replaced it with
+    # a canonical synonym, making the transform itself break the documented TB
+    # binding.  Preserve each recognised reset spelling independently whenever
+    # it is present in both the authoritative contract and current RTL.  A true
+    # variant request remains untouched: if the contract names ``rst`` while
+    # RTL exposes ``reset``, ``reset`` is not pinned and the alias still fires.
+    _authoritative_reset_pins: List[str] = []
+    if not resolved_via_chip_top and _auth_ports is not None:
+        _auth_port_face = {str(n).lower() for n in _auth_ports}
+        _authoritative_reset_pins = sorted(
+            p for p in plan
+            if p.lower() in _auth_port_face
+            and p.lower() in _rtl_port_face
+            and _rcv.classify_reset(p) is not None)
+        for _p in _authoritative_reset_pins:
+            del plan[_p]
     if (not resolved_via_chip_top and full_plan and _auth_ports is not None
             and _rtl_port_face == {str(n).lower() for n in _auth_ports}):
         return StepResult(
@@ -5291,7 +5311,12 @@ def step_reset_clock_variant_aliases(project: Path, top: str) -> StepResult:
                 if _p.lower() in _auth_ports and _canon not in _auth_ports:
                     del additive_reset_map[_p]
     if not plan and not additive_reset_map:
-        _why = ("the design's own contract already declares the standard "
+        _why = (
+                f"authoritative top-port contract declares reset spelling(s) "
+                f"{_authoritative_reset_pins}; preserving them per port even "
+                f"though the generated RTL interface may have evolved"
+                if _authoritative_reset_pins else
+                "the design's own contract already declares the standard "
                 "spelling(s) — refusing to rename the TB-facing contract (#689)"
                 if _contract_ports and full_plan
                 else "top reset/clock ports already canonical")
