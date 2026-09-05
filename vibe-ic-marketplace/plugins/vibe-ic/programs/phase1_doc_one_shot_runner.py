@@ -58713,6 +58713,34 @@ def _post_emit_l19_constraint_tokens(project: Path) -> int:
     return n
 
 
+def _post_emit_l9_l19_contract_carrythrough(project: Path) -> int:
+    """Lift cross-layer requirements into the L9/L19 consumer fields.
+
+    This producer is ADVISORY to runner execution but load-bearing for Phase-1
+    completeness: an extraction failure is named and the completeness gate
+    remains non-green. It reads only design inputs and preserves missing input
+    as missing; it never manufactures a design verdict.
+    """
+    from l9_l19_contract_carrythrough import run as _carry
+
+    rep = _carry(project)
+    if not isinstance(rep, dict):
+        raise RuntimeError("l9_l19_contract_carrythrough returned no report")
+    status = rep.get("status")
+    if status == "SKIPPED":
+        print(f"      L9/L19 contract carry-through: SKIPPED — "
+              f"{rep.get('reason')}")
+        return 0
+    if status != "OK":
+        raise RuntimeError(
+            f"l9_l19_contract_carrythrough {status}: {rep.get('reason')}")
+    n = int(rep.get("emitted_count", 0) or 0)
+    if n:
+        print(f"      L9/L19 contracts: lifted {n} design-owned consumer "
+              "field(s)")
+    return n
+
+
 def _post_emit_l8_clock_reset_waveform(project: Path) -> int:
     """Project final typed L8/L9 clock-reset facts into L8's consumer field.
 
@@ -63930,6 +63958,15 @@ def main() -> int:
     except Exception as _l19_prose_err:
         print(f"      L19 prose constraints emit FAILED (fail-open): "
               f"{_l19_prose_err}", file=sys.stderr)
+
+    # A sibling layer carrying a requirement is not enough when Phase 2/3 read
+    # L9/L19. Preserve design-owned integration, sign-off, and typed tape-out
+    # declarations in their consumer fields. Missing evidence stays absent.
+    try:
+        _post_emit_l9_l19_contract_carrythrough(project)
+    except Exception as _carry_err:
+        print(f"      L9/L19 contract carry-through FAILED (fail-open): "
+              f"{_carry_err}", file=sys.stderr)
 
     # v0.1.77 (R53/R54/R55): serial_peripheral_protocol class-gated synth.
     # Runs AFTER 14d L19-L23 skeleton so the L19-L23 + L4 + L11 + L13

@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 1271
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1271)
+- **Total programs (excluding helpers / shims):** 1272
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1272)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 1262 |
+| `any` | 1263 |
 
 ## Alphabetical listing
 
@@ -636,6 +636,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `l8_sta_clock_period_design_owned_check` | any | — | L8 SEMANTIC completeness gate. |
 | `l9_completeness_check` | any | — | Deterministic L9 Integration Spec completeness checker. |
 | `l9_floorplan_contract_check` | any | — | L9 SEMANTIC consumer-contract gate. |
+| `l9_l19_contract_carrythrough` | any | — | Carry design-owned cross-layer contracts into their L9/L19 consumers. |
 | `l9_response_delay_schema_check` | any | — | For any module in L9 Integration Spec whose role is "command dispatcher" |
 | `l9_rtl_pin_consistency_check` | any | Wave 79 | Wave 79 cross-layer integrity gate. |
 | `l9_submodule_conformance_check` | any | Wave 79 | cross-check the SUBMODULE half of the L9 Integration Spec against the actual RTL emitted under <project>/rtl/. |
@@ -1343,7 +1344,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (1262 programs)
+### `any` (1263 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `absence_verdict_names_its_search_space_check` — "not found" must say WHERE it looked.
@@ -1950,6 +1951,7 @@ _(no programs in this group)_
 - `l8_sta_clock_period_design_owned_check` — L8 SEMANTIC completeness gate.
 - `l9_completeness_check` — Deterministic L9 Integration Spec completeness checker.
 - `l9_floorplan_contract_check` — L9 SEMANTIC consumer-contract gate.
+- `l9_l19_contract_carrythrough` — Carry design-owned cross-layer contracts into their L9/L19 consumers.
 - `l9_response_delay_schema_check` — For any module in L9 Integration Spec whose role is "command dispatcher"
 - `l9_rtl_pin_consistency_check` — Wave 79 cross-layer integrity gate.  _[Wave 79]_
 - `l9_submodule_conformance_check` — cross-check the SUBMODULE half of the L9 Integration Spec against the actual RTL emitted under <project>/rtl/.  _[Wave 79]_
