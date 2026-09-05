@@ -160,3 +160,46 @@ def test_a_design_that_does_not_resolve_is_driven_exactly_as_before(tmp_path):
     assert "address width unresolved" in why and "ADDR_W" in why
     assert "task automatic bus_write(input [31:0] addr," in tb
     assert "// --- reset asserted WHILE the controls are active ---" not in tb
+
+
+# --------------------------------------------------------------------------
+# The CANONICAL-FLOW chain, pinned link by link.
+#
+# The test above proves the fix fires for an ordinary project. This proves the
+# flow actually WALKS here, so nobody has to remember to call it:
+#
+#   flow/phase1_phase2_phase3.yaml            step `testbench_gen`
+#     -> design_one_shot_runner               runs the producer (ORGANIC #797)
+#       -> testbench_gen._emit_case_known_answer_vector
+#         -> known_answer_vector_tb_gen.emit_case_register_bus
+#           -> register_bus_driver_gen.resolve_bus_widths + emit_sequence_tb
+#
+# These are WIRING PINS, not evidence the change did work: they are green
+# against the base tree too, because they assert structure I did not modify.
+# Their job is to fail LATER, if a link is removed out from under the
+# front-door claim. Labelled here so no reader counts them as a red-turned-green.
+# --------------------------------------------------------------------------
+PLUGIN = PROGRAMS.parent
+
+
+def test_the_flow_declares_the_testbench_gen_step():
+    flow = (PLUGIN / "flow" / "phase1_phase2_phase3.yaml").read_text()
+    assert "- testbench_gen" in flow, "the canonical flow no longer runs testbench_gen"
+
+
+def test_testbench_gen_routes_a_bus_transport_case_to_the_register_bus_emitter():
+    src = (PROGRAMS / "testbench_gen.py").read_text()
+    assert "emit_case_register_bus(" in src, \
+        "testbench_gen no longer reaches the register-bus emitter"
+
+
+def test_the_runner_runs_the_testbench_gen_producer():
+    src = (PROGRAMS / "design_one_shot_runner.py").read_text()
+    assert "import testbench_gen" in src, \
+        "the one-shot runner no longer runs the testbench_gen producer"
+
+
+def test_the_register_bus_emitter_binds_the_width_contract():
+    """The last link: the emitter resolves widths and hands them to the driver."""
+    src = (PROGRAMS / "known_answer_vector_tb_gen.py").read_text()
+    assert "resolve_bus_widths(" in src and "widths=_widths" in src
