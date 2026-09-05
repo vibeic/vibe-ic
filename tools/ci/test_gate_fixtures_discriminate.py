@@ -114,3 +114,27 @@ def test_a_fixture_may_not_redirect_the_gates_OWN_code():
         'python3 "$PG/x_check.py" --root "$ROOT" "$PLUGIN"', Path("/subject"))
     assert argv[1] == str(F.PROGRAMS / "x_check.py")
     assert argv[3] == "/subject" and argv[4] == "/subject"
+
+
+def test_ambient_corpus_path_and_SHA_cannot_override_or_half_bind_fixture(
+        tmp_path, monkeypatch):
+    """A landing's two-part corpus binding belongs to neither fixture arm.
+
+    The ambient path is readable, so leaving it in the child would override the
+    fixture's own subject. The SHA is present too, so clearing only the path
+    would leave the exact half-binding `_corpus_location` refuses. The real
+    protocol-matrix pair must still decide both directions on its own subject.
+    """
+    ambient = tmp_path / "real-ambient-corpus"
+    ambient.mkdir()
+    monkeypatch.setenv("VIBE_IC_BENCHMARK_DATA", str(ambient))
+    monkeypatch.setenv("GATEKEEPER_BENCHMARK_DATA_SHA", "a" * 40)
+
+    real = next(
+        f for f in _FIXTURES
+        if f.slug == "protocol_detector_no_misfire_matrix")
+    decl = _DECLS[real.gate]
+    ok_pass, ok_fail = F.run_pair(decl, real)
+
+    assert ok_pass.ok, ok_pass.detail
+    assert ok_fail.ok, ok_fail.detail

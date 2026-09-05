@@ -337,20 +337,20 @@ def invoke(decl, subject: Path, timeout: int = 180) -> Outcome:
     # token values must neither decide this test nor enter its child process.
     env["VIBEIC_NDA_TOKENS"] = _synthetic_nda_tokens()
     env.pop("GATEKEEPER_HYGIENE_JOBS", None)
-    # THE SUBJECT IS `subject`, AND THE AMBIENT CORPUS IS NOT IT. A landing
-    # exports `VIBE_IC_BENCHMARK_DATA` so the corpus gates sweep a real corpus
-    # instead of nothing, and a corpus gate reads that variable IN PREFERENCE
-    # to the `--subdir`/`--root` it was handed. In a fixture arm that is fatal
-    # in the permissive direction: the arm plants its defect in `subject`, the
-    # gate answers about the operator's corpus instead, returns rc 0, and
-    # `run_can_fail` correctly reports that the fixture does not discriminate —
-    # a red that is about the environment and not about the gate.
+    # THE SUBJECT IS `subject`, AND THE AMBIENT CORPUS BINDING IS NOT IT. A
+    # landing exports BOTH `VIBE_IC_BENCHMARK_DATA` and its attested
+    # `GATEKEEPER_BENCHMARK_DATA_SHA`. A corpus gate reads that pair in
+    # preference to the `--subdir`/`--root` it was handed. In a fixture arm
+    # retaining the pointer makes the gate answer about the operator's corpus;
+    # clearing only the pointer leaves a half-binding that `_corpus_location`
+    # correctly refuses as UNDETERMINED. Drop the pair together in the child.
     # MEASURED on d2b8a9d13d in the pinned image: with the variable set,
     # `test_fixture_pair_discriminates` is 1 failed / 81 passed
     # (tracked_symlink_target_present, "CAN-FAIL fixture was ACCEPTED (rc 0)",
     # its own output carrying "note: VIBE_IC_BENCHMARK_DATA overrides --subdir
     # benchmark-data -> ..."); with it unset, 82 passed.
     env.pop("VIBE_IC_BENCHMARK_DATA", None)
+    env.pop("GATEKEEPER_BENCHMARK_DATA_SHA", None)
     try:
         p = subprocess.run(argv, cwd=str(subject), env=env, timeout=timeout,
                            stdout=subprocess.PIPE, stderr=subprocess.STDOUT,

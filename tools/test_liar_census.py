@@ -2625,6 +2625,66 @@ def test_the_shipped_floor_is_readable_and_matches_the_shipped_flow(tmp_path):
     assert short["missing"] == [], short["missing"]
 
 
+def _full_clause_downgrade(tmp_path, blocking_cmd, advisory_cmd):
+    """Replace one complete live kind+command pair, leaving the real floor.
+
+    This is deliberately a text mutation rather than a reconstructed YAML
+    fragment: it proves the exact shipped declaration is present once and
+    changes both fields the historical identity records -- ``kind`` and
+    ``cmd``.  The floor path is the production ``CLAUSE_FLOOR``, not a planted
+    fixture, because the regression was a mismatch between that durable record
+    and the newly-promoted live clauses.
+    """
+    blocking_line = f'        - program_exit_zero: "{blocking_cmd}"'
+    advisory_line = f'        - advisory_program_exit_zero: "{advisory_cmd}"'
+    source = lc.FLOW_YAML.read_text(encoding="utf-8")
+    assert source.count(blocking_line) == 1, blocking_line
+    mutated = source.replace(blocking_line, advisory_line, 1)
+    flow = tmp_path / "downgraded.yaml"
+    flow.write_text(mutated, encoding="utf-8")
+    return lc.clause_floor_shortfall(flow, lc.CLAUSE_FLOOR)
+
+
+def test_behavioral_evidence_full_kind_and_command_downgrade_is_RED(tmp_path):
+    """The blocking per-item proof may never fall back to its old advisory."""
+    blocking = ("behavioral_evidence_per_spec_item_check . --json "
+                "reports/phase2/gates/behavioral_evidence_per_spec_item.json")
+    advisory = "behavioral_evidence_per_spec_item_check ."
+    short = _full_clause_downgrade(tmp_path, blocking, advisory)
+    assert short["missing"] == [{
+        "step": "4",
+        "kind": "program_exit_zero",
+        "cmd": blocking,
+    }], short
+    assert {
+        "step": "4",
+        "kind": "advisory_program_exit_zero",
+        "cmd": advisory,
+    } in short["surplus"], short
+
+
+def test_state_transition_full_kind_and_command_downgrade_is_RED(tmp_path):
+    """The blocking transition proof may never fall back to its old advisory."""
+    blocking = ("functional_state_transition_coverage_check "
+                "phase2/stage1/sim/tb --coverage "
+                "reports/phase2/coverage/coverage_actual.json --json "
+                "reports/phase2/gates/functional_state_transition_coverage.json")
+    advisory = ("functional_state_transition_coverage_check "
+                "phase2/stage1/sim/tb --coverage "
+                "reports/phase2/coverage/coverage_actual.json")
+    short = _full_clause_downgrade(tmp_path, blocking, advisory)
+    assert short["missing"] == [{
+        "step": "4",
+        "kind": "program_exit_zero",
+        "cmd": blocking,
+    }], short
+    assert {
+        "step": "4",
+        "kind": "advisory_program_exit_zero",
+        "cmd": advisory,
+    } in short["surplus"], short
+
+
 def test_the_identity_keeps_the_cmd_and_not_just_the_program(tmp_path):
     """An identity projected onto `(step, kind, program)` folds two clauses that
     differ only in their arguments into one, so removing either reports NO

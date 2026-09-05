@@ -1424,12 +1424,16 @@ def _validate_ai_review(task: dict) -> dict:
     prompt_path = Path(str(task.get("prompt_path") or ""))
     prompt_text = (prompt_path.read_text(errors="replace")
                    if prompt_path.is_file() else "")
+    candidate = task.get("candidate_snapshot")
+    if not isinstance(candidate, dict):
+        reasons.append("candidate snapshot record is malformed")
+        candidate = {}
     reasons.extend(_validate_candidate_snapshot(
-        task.get("candidate_snapshot") or {}, str(task.get("id"))))
+        candidate, str(task.get("id"))))
     reasons.extend(_validate_embedded_repair_provenance(task))
     try:
         expected_obligations = _program_review_obligation_contract(
-            prompt_text, task.get("candidate_snapshot") or {})
+            prompt_text, candidate)
     except (ImportError, OSError, ValueError) as exc:
         expected_obligations = None
         reasons.append(
@@ -1523,7 +1527,7 @@ def _validate_ai_review(task: dict) -> dict:
         reasons.extend(challenge_reasons)
         if challenge is not None:
             challenge_result = _run_verification_challenge(
-                task.get("candidate_snapshot") or {}, challenge)
+                candidate, challenge)
             if challenge_result.get("status") == _CHALLENGE_UNAVAILABLE:
                 unmeasurable.append(
                     "the prompt-derived verification test could not be RUN on "
@@ -1552,7 +1556,7 @@ def _validate_ai_review(task: dict) -> dict:
         reasons.extend(challenge_reasons)
         if challenge is not None:
             challenge_result = _run_verification_challenge(
-                task.get("candidate_snapshot") or {}, challenge)
+                candidate, challenge)
             if challenge_result.get("status") == _CHALLENGE_UNAVAILABLE:
                 unmeasurable.append(
                     "the prompt-derived PASS confirmation could not be RUN on "
@@ -1592,8 +1596,7 @@ def _validate_ai_review(task: dict) -> dict:
             inherited_challenge_results.append({
                 "status": "INVALID", "reasons": inherited_reasons})
             continue
-        result = _run_verification_challenge(
-            task.get("candidate_snapshot") or {}, inherited)
+        result = _run_verification_challenge(candidate, inherited)
         supersession = supersession_by_hash.get(
             str(inherited.get("sha256") or ""))
         if supersession is not None:
@@ -1643,8 +1646,7 @@ def _validate_ai_review(task: dict) -> dict:
                 active_challenges.append(inherited)
         try:
             program_review_coverage = _program_review_coverage_result(
-                prompt_text, task.get("candidate_snapshot") or {},
-                active_challenges)
+                prompt_text, candidate, active_challenges)
         except (ImportError, OSError, ValueError) as exc:
             unmeasurable.append(
                 "Program could not measure AI verification-test coverage: "

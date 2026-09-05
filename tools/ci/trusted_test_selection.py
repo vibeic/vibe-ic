@@ -215,7 +215,12 @@ HERMETIC_TEST_PROGRESS = {
         ),
     },
     HERMETIC_ARTEFACT_FILE: {
-        "items": 36,
+        # 36 -> 37, re-derived from the live collection at 51061c8e0 with
+        # plugin autoload and bytecode writes disabled.  The added item is
+        # `test_external_corpus_tracking_refuses_an_untracked_fixture`, item
+        # 37, so the one scheduled replay producer remains item 19 and its
+        # domain total remains 8.  Only the collection cardinality moves.
+        "items": 37,
         # EVERY PRODUCER ITEM MUST APPEAR IN EXACTLY ONE OF TWO LISTS, and
         # this is the second. It is NOT a claim that these items are short:
         # it is the MEASURED set of producer items carrying no schedule at
@@ -251,7 +256,11 @@ HERMETIC_TEST_PROGRESS = {
         # items 125 -> 126 and ordinal 91 -> 92: v1.11.80 added
         # `test_0_5ic_d3_live_replay_closes_the_exact_coverage_delta`, which
         # sorts before the parametrised `test_lock2_...` family.
-        "items": 126,
+        # 126 -> 127 and ordinal 92 -> 93, re-derived at 51061c8e0: the
+        # `step37.4` flow cell adds one parametrised
+        # `test_every_enforced_cell_carries_a_named_mutation` item before the
+        # witness family.  The replay population itself remains 25.
+        "items": 127,
         # EVERY PRODUCER ITEM MUST APPEAR IN EXACTLY ONE OF TWO LISTS, and
         # this is the second. It is NOT a claim that these items are short:
         # it is the MEASURED set of producer items carrying no schedule at
@@ -268,7 +277,7 @@ HERMETIC_TEST_PROGRESS = {
         ),
         "producer_profiles": (("replay_many",),),
         "domains": (
-            (92, HERMETIC_MUTATION_FILE
+            (93, HERMETIC_MUTATION_FILE
              + "::test_lock2_the_mutation_really_reddens_its_witness[D1-BLIND-GATE-PROGRAMS]",
              "matrix-mutation-replays", 25),
         ),

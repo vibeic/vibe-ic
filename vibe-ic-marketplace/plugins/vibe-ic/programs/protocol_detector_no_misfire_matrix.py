@@ -41,17 +41,13 @@ import json
 import sys
 from pathlib import Path
 
+import _corpus_location as _corpus
+
 PROGRAMS_DIR = Path(__file__).resolve().parent
-# repo root: .../vibe-ic-marketplace/plugins/vibe-ic/programs -> up 4
-# flow #486: on the flattened install cache there are no monorepo ancestors,
-# so guard against IndexError at import; DEFAULT_BP then points under the
-# plugin root (non-existent benchmark_phase1/), and callers fall back to the
-# synthetic fixture / skip when the real corpus is absent.
-try:
-    REPO_ROOT = PROGRAMS_DIR.parents[3]
-except IndexError:
-    REPO_ROOT = PROGRAMS_DIR.parent  # plugin root (cache tree)
-DEFAULT_BP = REPO_ROOT / "benchmark-data" / "evaluation" / "phase1_parity"
+DEFAULT_BP = _corpus.default_named(
+    PROGRAMS_DIR, "benchmark-data/evaluation/phase1_parity")
+_CORPUS_SUBDIR = "protocol_parity"
+_GATE = "protocol_detector_no_misfire_matrix"
 
 # THE ALLOWLIST IS LOAD-BEARING, SO ITS ABSENCE MUST NOT BE SILENT.
 # `protocol_detector_lib.DERIVED_SIBLING_CROSS_FIRES` is the ONE canonical
@@ -357,10 +353,14 @@ def main(argv=None) -> int:
                          "ordering the sweep pins")
     args = ap.parse_args(argv)
 
+    named = args.benchmark_dir
+    args.benchmark_dir, origin = _corpus.resolve(
+        named, subdir=_CORPUS_SUBDIR, gate=_GATE, announce=True)
     if not args.benchmark_dir.is_dir():
-        print(f"ERROR: benchmark dir not found: {args.benchmark_dir}",
-              file=sys.stderr)
-        return 2
+        return _corpus.refuse(
+            _GATE, named, args.benchmark_dir, origin,
+            may_be_absent=False, scanned="protocol benchmark(s)",
+            opt_in_flag=None)
     if _ALLOWLIST_IMPORT_ERROR:
         print(f"NOT CHECKED: the canonical derived-sibling allowlist "
               f"`protocol_detector_lib.DERIVED_SIBLING_CROSS_FIRES` could not "

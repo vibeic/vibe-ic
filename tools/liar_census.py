@@ -661,13 +661,89 @@ def _clause_counter(flow_yaml: Path):
         (c.step, c.kind, c.cmd) for c in discover_clauses(flow_yaml))
 
 
-def read_clause_floor(floor_path: Path = CLAUSE_FLOOR):
-    """The recorded clause multiset. ABSENT, UNREADABLE and EMPTY are REFUSED.
+def _is_monotonic_json_promotion(was, now) -> bool:
+    """True only for an advisory made blocking while declaring its JSON proof.
 
-    All three would make `clause_floor_shortfall` unable to report anything,
-    and a shrink detector that cannot fire reports success. Raised rather than
-    returned as an empty set for exactly that reason."""
+    Clause identity remains the exact ``(step, kind, cmd)`` triple everywhere
+    else.  This one transition is not a retirement: the same invocation stays
+    on the same step, becomes *more* authoritative, and appends exactly one
+    ``--json PATH`` output.  Requiring the complete old argv as a prefix keeps
+    a renamed program, changed input, moved step, optional downgrade, or
+    arbitrary re-spelling visible as a removal.
+    """
+    import shlex  # noqa: PLC0415
+
+    old_step, old_kind, old_cmd = was
+    new_step, new_kind, new_cmd = now
+    if (old_step != new_step
+            or old_kind != "advisory_program_exit_zero"
+            or new_kind != "program_exit_zero"):
+        return False
+    try:
+        old_argv = shlex.split(old_cmd)
+        new_argv = shlex.split(new_cmd)
+    except ValueError:
+        return False
+    if (not old_argv or any(
+            token == "--json" or token.startswith("--json=")
+            for token in old_argv)):
+        return False
+    if (len(new_argv) == len(old_argv) + 2
+            and new_argv[:len(old_argv)] == old_argv
+            and new_argv[-2] == "--json"
+            and new_argv[-1]
+            and not new_argv[-1].startswith("-")):
+        return True
+    return (len(new_argv) == len(old_argv) + 1
+            and new_argv[:len(old_argv)] == old_argv
+            and new_argv[-1].startswith("--json=")
+            and bool(new_argv[-1][len("--json="):]))
+
+
+def _reconcile_monotonic_promotions(removed, added, promotions):
+    """Cancel only strict promotions recorded by the production floor."""
+    old_left, new_left = removed.copy(), added.copy()
+    used = []
+    for was, now in promotions:
+        count = min(old_left[was], new_left[now])
+        if not count:
+            continue
+        old_left[was] -= count
+        new_left[now] -= count
+        used.extend((was, now) for _ in range(count))
+        if not old_left[was]:
+            del old_left[was]
+        if not new_left[now]:
+            del new_left[now]
+    return old_left, new_left, used
+
+
+def _listed_clauses(delta) -> List[Dict[str, str]]:
+    return [{"step": step, "kind": kind, "cmd": cmd}
+            for (step, kind, cmd), n in sorted(delta.items())
+            for _ in range(n)]
+
+
+def _listed_promotions(promoted) -> List[Dict[str, Dict[str, str]]]:
+    def one(clause):
+        step, kind, cmd = clause
+        return {"step": step, "kind": kind, "cmd": cmd}
+
+    return [{"from": one(was), "to": one(now)} for was, now in promoted]
+
+
+def _clause_floor_contract(floor_path: Path = CLAUSE_FLOOR):
+    """``(document, raw, effective, promotions)`` for the monotonic floor.
+
+    ``clauses`` is append-only history.  A ``monotonic_promotions`` entry
+    replaces one old floor obligation with its strictly stronger successor in
+    the *effective* floor.  Keeping both facts is load-bearing: the old row
+    proves what was promoted, while the successor remains the minimum forever,
+    so reverting the live flow to the old advisory/no-JSON spelling is a
+    downgrade and not a match.
+    """
     import collections  # noqa: PLC0415
+
     if not floor_path.is_file():
         raise FileNotFoundError(
             f"{floor_path} is missing. It is the record of the clauses this "
@@ -683,8 +759,49 @@ def read_clause_floor(floor_path: Path = CLAUSE_FLOOR):
     if not entries:
         raise ValueError(f"{floor_path} records no clause; the shrink detector "
                          f"could not fire and would report clean.")
-    return collections.Counter(
+    raw = collections.Counter(
         (e["step"], e["kind"], e["cmd"]) for e in entries)
+    effective = raw.copy()
+    promotions = []
+    promoted_from = collections.Counter()
+    for index, row in enumerate(doc.get("monotonic_promotions") or []):
+        try:
+            was_row, now_row = row["from"], row["to"]
+            was = (was_row["step"], was_row["kind"], was_row["cmd"])
+            now = (now_row["step"], now_row["kind"], now_row["cmd"])
+        except (KeyError, TypeError) as exc:
+            raise ValueError(
+                f"{floor_path} monotonic_promotions[{index}] is malformed; "
+                "a floor obligation that cannot be read is refused.") from exc
+        if not _is_monotonic_json_promotion(was, now):
+            raise ValueError(
+                f"{floor_path} monotonic_promotions[{index}] is not the "
+                "strict advisory-to-blocking plus --json transition: "
+                f"{was!r} -> {now!r}")
+        promoted_from[was] += 1
+        if promoted_from[was] > raw[was]:
+            raise ValueError(
+                f"{floor_path} promotes {was!r} more times than clauses "
+                "records it; an unanchored promotion cannot set a floor.")
+        effective[was] -= 1
+        if not effective[was]:
+            del effective[was]
+        effective[now] += 1
+        promotions.append((was, now))
+    return doc, raw, effective, promotions
+
+
+def read_clause_floor(floor_path: Path = CLAUSE_FLOOR):
+    """The effective minimum clause multiset.
+
+    ABSENT, UNREADABLE and EMPTY are REFUSED.  Recorded monotonic promotions
+    are applied before returning, so their blocking successor -- never their
+    historical advisory spelling -- is the ongoing minimum.
+
+    All three would make `clause_floor_shortfall` unable to report anything,
+    and a shrink detector that cannot fire reports success. Raised rather than
+    returned as an empty set for exactly that reason."""
+    return _clause_floor_contract(floor_path)[2]
 
 
 def clause_floor_shortfall(flow_yaml: Path = FLOW_YAML,
@@ -724,15 +841,11 @@ def clause_floor_shortfall(flow_yaml: Path = FLOW_YAML,
     that needs a human anyway.
     """
     live = _clause_counter(flow_yaml)
-    floor = read_clause_floor(floor_path)
-
-    def listed(delta) -> List[Dict[str, str]]:
-        return [{"step": step, "kind": kind, "cmd": cmd}
-                for (step, kind, cmd), n in sorted(delta.items())
-                for _ in range(n)]
-
+    _doc, _raw, floor, promoted = _clause_floor_contract(floor_path)
     return {"floor": sum(floor.values()), "declared": sum(live.values()),
-            "missing": listed(floor - live), "surplus": listed(live - floor)}
+            "missing": _listed_clauses(floor - live),
+            "surplus": _listed_clauses(live - floor),
+            "promoted": _listed_promotions(promoted)}
 
 
 def record_clause_floor(flow_yaml: Path = FLOW_YAML,
@@ -746,6 +859,8 @@ def record_clause_floor(flow_yaml: Path = FLOW_YAML,
     authorised by accident. That case is the one a human has to decide, and it
     is decided by hand, in the change that removes the clause.
     """
+    import collections  # noqa: PLC0415
+
     NL = chr(10)
     short = clause_floor_shortfall(flow_yaml, floor_path)
     if short["missing"]:
@@ -756,18 +871,21 @@ def record_clause_floor(flow_yaml: Path = FLOW_YAML,
             "hand, in the change that removes them from the flow:" + NL
             + NL.join(f"  {c['step']}  {c['kind']}  {c['cmd']}"
                       for c in short["missing"]))
-    live = _clause_counter(flow_yaml)
-    doc = json.loads(floor_path.read_text(encoding="utf-8")) \
-        if floor_path.is_file() else {}
+    doc, raw_floor, _effective_floor, _promotions = \
+        _clause_floor_contract(floor_path)
+    additions = collections.Counter(
+        (c["step"], c["kind"], c["cmd"]) for c in short["surplus"])
+    recorded = raw_floor + additions
     doc["clauses"] = [{"step": s, "kind": k, "cmd": c}
-                      for (s, k, c), n in sorted(live.items())
+                      for (s, k, c), n in sorted(recorded.items())
                       for _ in range(n)]
     floor_path.write_text(json.dumps(doc, indent=2, ensure_ascii=False) + "\n",
                           encoding="utf-8")
     return short
 
 
-def population_delta(before_yaml: Path, after_yaml: Path) -> Dict[str, Any]:
+def population_delta(before_yaml: Path, after_yaml: Path,
+                     floor_path: Path = CLAUSE_FLOOR) -> Dict[str, Any]:
     """WHICH clauses arrived and WHICH left, between two flow blobs.
 
     WHY THIS EXISTS
@@ -829,16 +947,15 @@ def population_delta(before_yaml: Path, after_yaml: Path) -> Dict[str, Any]:
         return collections.Counter(
             (c.step, c.kind, c.cmd) for c in discover_clauses(flow_yaml))
 
-    def listed(delta: "collections.Counter") -> List[Dict[str, str]]:
-        return [{"step": step, "kind": kind, "cmd": cmd}
-                for (step, kind, cmd), n in sorted(delta.items())
-                for _ in range(n)]
-
     before, after = counted(before_yaml), counted(after_yaml)
-    removed = listed(before - after)
+    promotions = _clause_floor_contract(floor_path)[3]
+    removed, added, promoted = _reconcile_monotonic_promotions(
+        before - after, after - before, promotions)
+    removed_list = _listed_clauses(removed)
     return {"before": sum(before.values()), "after": sum(after.values()),
-            "added": listed(after - before), "removed": removed,
-            "shrank": bool(removed)}
+            "added": _listed_clauses(added), "removed": removed_list,
+            "promoted": _listed_promotions(promoted),
+            "shrank": bool(removed_list)}
 
 
 def _dispatching_clause_counts(doc: Any) -> Dict[str, int]:

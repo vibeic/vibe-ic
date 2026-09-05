@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import pathlib
 import subprocess
 import sys
@@ -23,6 +24,97 @@ RESULT = require_repo(
 ).read_text()
 EXCLUDED = "324435d94a65f7ef1c8d2b8e4b66407cf778220d"
 RESULT_PATH = pathlib.PurePosixPath("docs/capture/2026-08-21-jcap-ppa/RESULT.md")
+EXCLUDED_RESULT_SHA256 = \
+    "e36e633bb62c23ae2a2f4eca980dd3e941d8391490d3159bece48070fb78fdec"
+
+
+def _excluded_source_result() -> str:
+    """Rebuild the exact excluded result without needing a dangling Git object.
+
+    ``EXCLUDED`` is an immutable lane commit that was squash-landed, so a fresh
+    clone cannot select it.  Keep the reverse control byte-exact and portable
+    by carrying its small reverse delta from the current result, then bind the
+    reconstructed bytes to the source blob's independently recorded digest.
+    """
+    replacements = [
+        (
+            """tree.** The first table also includes the smaller `jsonschema` item, which is not
+one of the eighteen; the second table adds nine classes drawn from the six lane
+records. Together those two tables are the current source of truth: **twenty-one claims
+examined — twenty hold and one, F-2, is disproven by execution** because its
+guard's predicate is satisfied by a production fallback and cannot fail. No
+duplicate record was produced for these claims; the disproven one is folded into
+the more general A-3 record.
+""",
+            """tree.** Add the smaller `jsonschema` item, which is not one of the eighteen, and
+four more classes drawn from the six lane records, and the count is
+**11 + 1 + 6 = 18** claims examined — of which **seventeen hold and one, F-2, is
+disproven by execution**: its guard's predicate is satisfied by a production
+fallback and cannot fail. Those sixteen produced no record; duplicating them would be
+worse than skipping them.
+""",
+        ),
+        (
+            """Twelve are ALREADY-PROGRAM:
+eleven of the eighteen end-to-end findings plus the smaller `jsonschema` claim.
+For each, the program or census test that enforces it now was checked by reading
+it, not by trusting the fix note.
+""",
+            """Eleven are ALREADY-PROGRAM. For each, the program or census test that enforces
+it now — checked by reading it, not by trusting the fix note.
+""",
+        ),
+        (
+            """<!-- already-program-history-start checkpoint=d6ea69acfdac0d1a9810a1d554ed608802011df5 claims=16 holding=15 -->
+
+> Historical checkpoint (exact):
+> `d6ea69acfdac0d1a9810a1d554ed608802011df5`. This section preserves that
+> checkpoint's 16-claim mutation campaign, where 15 claims held. Its counts are
+> historical measurements, not the current totals.
+
+""",
+            "",
+        ),
+        (
+            "\n<!-- already-program-history-end -->\n\n## The brief's own requirements",
+            "\n## The brief's own requirements",
+        ),
+        (
+            "zero D. 21 ALREADY-PROGRAM claims examined, 20 holding and 1 (F-2) disproven by",
+            "zero D. 18 ALREADY-PROGRAM claims examined, 17 holding and 1 (F-2) disproven by",
+        ),
+        (
+            "| ALREADY-PROGRAM | 21 claims, **20 hold** |",
+            "| ALREADY-PROGRAM | 18 claims, **17 hold** |",
+        ),
+        (
+            """<!-- already-program-history-start checkpoint=4f2d47cf848bd2e69e95f82adba5d6dba5c2fbc1 claims=19 holding=18 -->
+
+""",
+            "",
+        ),
+        (
+            """<!-- already-program-history-end -->
+
+<!-- already-program-history-start checkpoint=afbf611ceb1965d0ebcbeb298991f925c43a59d3 claims=20 holding=19 -->
+
+""",
+            "",
+        ),
+        (
+            "\n<!-- already-program-history-end -->\n\nThe three staleness guards",
+            "\nThe three staleness guards",
+        ),
+    ]
+    excluded = RESULT
+    for current, historical in replacements:
+        assert excluded.count(current) == 1, \
+            "excluded-source reverse delta no longer selects exactly once"
+        excluded = excluded.replace(current, historical, 1)
+    digest = hashlib.sha256(excluded.encode()).hexdigest()
+    assert digest == EXCLUDED_RESULT_SHA256, \
+        f"reconstructed excluded source {EXCLUDED} has digest {digest}"
+    return excluded
 
 
 def _validate(md: str) -> list[str]:
@@ -74,10 +166,7 @@ def test_each_count_surface_mutation_is_rejected(name, mutate, expected):
 
 
 def test_excluded_source_is_the_reverse_control():
-    old = subprocess.run(
-        ["git", "show", f"{EXCLUDED}:{RESULT_PATH.as_posix()}"],
-        cwd=ROOT, capture_output=True, text=True, check=True,
-    ).stdout
+    old = _excluded_source_result()
     errors = _validate(old)
     for surface in ("introduction", "summary", "ladder"):
         assert any(surface in error for error in errors), errors

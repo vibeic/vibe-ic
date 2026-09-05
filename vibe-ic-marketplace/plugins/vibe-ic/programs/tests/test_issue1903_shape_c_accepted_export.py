@@ -215,14 +215,26 @@ def test_malformed_program_verification_blocks_without_sample(
     assert not (run / "samples" / "Prob900_neutral_sample01.sv").exists()
 
 
-def test_malformed_candidate_snapshot_blocks_without_sample(tmp_path):
+def test_malformed_candidate_snapshot_blocks_without_sample(
+        tmp_path, monkeypatch):
     run, dataset, _ = _fixture(tmp_path)
     task = _task(run)
     task["candidate_snapshot"] = "not-an-object"
     (run / "needs_ai_review.jsonl").write_text(json.dumps(task) + "\n")
+    obligation_inputs = []
+
+    def record_obligation_input(_prompt, candidate):
+        obligation_inputs.append(candidate)
+        return task["program_review_obligations"]
+
+    monkeypatch.setattr(
+        dispatch, "_program_review_obligation_contract",
+        record_obligation_input,
+    )
     with pytest.raises(SystemExit, match="candidate snapshot record is malformed"):
         dispatch._export_accepted_shape_c_samples(
             "verilogeval-v2", run)
+    assert obligation_inputs == [{}]
     assert not (run / "samples" / "Prob900_neutral_sample01.sv").exists()
 
 

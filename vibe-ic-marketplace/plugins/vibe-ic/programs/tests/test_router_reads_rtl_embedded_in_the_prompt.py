@@ -66,6 +66,15 @@ _BODY = """  module widget (
   endmodule
 """
 
+_PARTIAL_BODY = """module widget (
+  input logic a,
+  output logic y
+);
+  logic internal;
+  assign internal = a;
+  // complete the output logic here
+"""
+
 # What every open RTL benchmark appends: the interface the answer must match.
 # It has no `endmodule` and is NOT an implementation.
 _STUB = """module TopModule (
@@ -100,6 +109,47 @@ def test_prompt_embeds_rtl_is_not_fooled_by_the_interface_stub():
     assert tnr.prompt_embeds_rtl(_STUB) is False
     assert tnr.prompt_embeds_rtl("") is False
     assert tnr.prompt_embeds_rtl("Describe a module that adds two numbers.") is False
+
+
+def test_prompt_embeds_partial_rtl_requires_body_structure():
+    assert tnr.prompt_embeds_partial_rtl(_PARTIAL_BODY) is True
+    assert tnr.prompt_embeds_partial_rtl(_STUB) is False
+    assert tnr.prompt_embeds_partial_rtl(
+        "/* " + _PARTIAL_BODY + " */\n" + _STUB) is False
+
+
+def test_partial_rtl_rejects_hdl_words_used_as_prose():
+    for sentence in (
+        "logic should be combinational and easy to review.",
+        "logic should, where possible, be combinational.",
+    ):
+        prompt = _STUB + "\n" + sentence + "\n"
+        assert tnr.prompt_embeds_partial_rtl(prompt) is False
+        verdict = tnr.classify_task_nature(
+            "Complete this code.\n" + prompt, False, None)
+        assert verdict["nature"] == "spec_generation", verdict
+
+
+def test_partial_rtl_accepts_a_one_line_body_after_the_header():
+    partial = "module m(input a, output y); assign y = a;"
+    assert tnr.prompt_embeds_partial_rtl(partial) is True
+
+
+def test_partial_rtl_accepts_commas_inside_declaration_initializers():
+    prefix = "Complete this code.\nmodule m(input a, input b, output y);\n"
+    for declaration in (
+        "logic [1:0] x = {a, b};",
+        "logic x = f(a, b);",
+    ):
+        prompt = prefix + declaration
+        assert tnr.prompt_embeds_partial_rtl(prompt) is True
+        verdict = tnr.classify_task_nature(prompt, False, None)
+        assert verdict["nature"] == "completion", verdict
+
+
+def test_partial_rtl_checks_later_module_headers_too():
+    partial = _STUB + "\nmodule helper(input a, output y); assign y = a;"
+    assert tnr.prompt_embeds_partial_rtl(partial) is True
 
 
 def _cost_ratio_within(fn, small, big, factor, floor, attempts=3):
@@ -252,6 +302,33 @@ def test_completion_without_an_artifact_falls_back_to_generation():
     assert v["nature"] == "spec_generation", v
     assert v["source"] == "completion_hint_without_artifact", v
     assert v["needs_ai_parse"] is True
+
+
+@pytest.mark.parametrize("completion_phrase", [
+    "Complete the given partial SystemVerilog code.",
+    "Finish this provided incomplete Verilog module.",
+    "Complete the following partial SV implementation.",
+])
+def test_completion_hint_accepts_bounded_code_modifiers(completion_phrase):
+    """A code-completion request may qualify the supplied artefact before
+    naming it.  Those modifiers must not erase the explicit completion verb."""
+    prompt = completion_phrase + "\n\n" + _BODY
+    v = tnr.classify_task_nature(prompt, False, None)
+    assert v["nature"] == "completion", v
+    assert v["route"] != "phase1_entry", v
+    assert v["source"] == "embedded_rtl_prose_hint", v
+
+
+def test_completion_of_structured_partial_module_uses_plugin_loop():
+    """A completion artefact is often incomplete by definition and therefore
+    has no endmodule yet. Internal declarations/assignments distinguish it from
+    the interface-only stub appended to from-scratch benchmark prompts."""
+    prompt = "Complete the given partial SystemVerilog code.\n\n" + _PARTIAL_BODY
+    v = tnr.classify_task_nature(prompt, False, None)
+    assert v["nature"] == "completion", v
+    assert v["route"] == "plugin_loop", v
+    assert v["source"] == "embedded_rtl_prose_hint", v
+    assert v["needs_ai_parse"] is False, v
 
 
 # ── 5. the flag must be capable of both values ───────────────────────────────

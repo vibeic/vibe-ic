@@ -3017,7 +3017,7 @@ uncheckable_until 2027-02-28 "needs the vibeic-eda CONTAINER IMAGE on the host: 
 run_tolerating_uncheckable "image-gated verifications are not silently skipped" "$PLUGIN" \
   python3 programs/image_gated_verification_check.py
 
-run "an argued direction is pinned" "$PLUGIN" python3 programs/policy_direction_pin_check.py programs --verify-pins --jobs 6
+run "an argued direction is pinned" "$PLUGIN" python3 programs/policy_direction_pin_check.py programs --verify-pins --jobs 6 --max-test-files 41
 
 # vibe-ic#1241 — WIRED HERE, not left to its own test. The audit
 # (`checker_execution_wiring_audit`) named this checker as one that nothing but
@@ -3042,7 +3042,7 @@ run "declared reports are written atomically" "$PLUGIN" python3 programs/atomic_
 # through it. The 46 are the residual and are named every run; what blocks is a
 # step that STOPS emitting, or a new step that declares programs and emits
 # nothing.
-run "one per-step metrics schema, and who still is not using it" "$PLUGIN" python3 programs/step_metrics_adoption_check.py .
+run "one per-step metrics schema, and who still is not using it" "$PLUGIN" python3 "$PG/step_metrics_adoption_check.py" "$PLUGIN"
 
 # The other half of #447: compare the checkout records every gate above has
 # ALREADY produced with one fresh-worktree run.  This is deliberately LAST.

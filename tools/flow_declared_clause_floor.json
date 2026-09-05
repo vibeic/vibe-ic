@@ -4,6 +4,35 @@
   "_what_does_not_fail": "SURPLUS -- a clause the flow declares that is not yet recorded. A GROW never reopens the test. That is deliberate and it is the whole reason this file replaced a literal: the number it replaced went stale SEVEN times, every one of them a grow, because the flow's own author had to remember a count living in a test file.",
   "_how_to_authorise_a_shrink": "Delete the entry BY HAND, in the same change that removes the clause from the flow, and say why in that commit. `liar_census.record_clause_floor` REFUSES to do it for you: it only ever adds, because dropping an entry is exactly how a shrink would be authorised by accident.",
   "_how_to_refresh_after_a_grow": "python3 -c \"import sys; sys.path.insert(0,'tools'); import liar_census as lc; lc.record_clause_floor()\"  -- additive only, safe to run without judgement, and it refuses if anything is MISSING.",
+  "_monotonic_promotion_rule": "A row below upgrades one recorded advisory clause to an exact blocking successor that only appends --json PATH. liar_census validates that shape, replaces the old obligation in the effective floor, and therefore treats any return to advisory/no-json as a downgrade. These rows can only make the floor stricter; they are not exemptions.",
+  "monotonic_promotions": [
+    {
+      "from": {
+        "step": "4",
+        "kind": "advisory_program_exit_zero",
+        "cmd": "behavioral_evidence_per_spec_item_check ."
+      },
+      "to": {
+        "step": "4",
+        "kind": "program_exit_zero",
+        "cmd": "behavioral_evidence_per_spec_item_check . --json reports/phase2/gates/behavioral_evidence_per_spec_item.json"
+      },
+      "reason": "The program gained a typed applicability contract and became blocking; missing per-item evidence must not be downgraded back to advisory."
+    },
+    {
+      "from": {
+        "step": "4",
+        "kind": "advisory_program_exit_zero",
+        "cmd": "functional_state_transition_coverage_check phase2/stage1/sim/tb --coverage reports/phase2/coverage/coverage_actual.json"
+      },
+      "to": {
+        "step": "4",
+        "kind": "program_exit_zero",
+        "cmd": "functional_state_transition_coverage_check phase2/stage1/sim/tb --coverage reports/phase2/coverage/coverage_actual.json --json reports/phase2/gates/functional_state_transition_coverage.json"
+      },
+      "reason": "The program gained a typed applicability contract and became blocking; declared transitions without evidence must not be downgraded back to advisory."
+    }
+  ],
   "clauses": [
     {
       "step": "0.5ic",
