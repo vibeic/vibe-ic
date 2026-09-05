@@ -238,3 +238,36 @@ def test_a_shipped_spec_at_the_runners_own_location_gets_the_contract(tmp_path):
     assert "reg pending_irq_a;" in rtl
     assert "assign starved_a = pending_irq_a && (wait_irq_a == 5'd16);" in rtl
     assert "pending_irq_b" not in rtl      # the level control still holds here
+
+
+# --------------------------------------------------------------------------
+# 7. the COMPATIBILITY change this contract makes, stated and bounded
+#
+# Adding `events` RESERVES that key name. A spec that previously carried an
+# `events` key meaning something else was silently ignored and generated RTL;
+# it now REFUSES. Measured against the base program: rc 0 -> rc 1.
+#
+# That direction is deliberate. Fail-closed on a key whose meaning is now
+# defined beats emitting RTL that quietly ignores something the design said,
+# and it matches the doctrine the neighbouring solvers already follow
+# (`full_moore_fsm_synth` returns None unless everything is unambiguous;
+# `register_bus_driver_gen` refuses with a reason rather than guessing).
+#
+# But the blast radius has to be EXACTLY one key, not a general tightening, so
+# both halves are pinned here. No spec shipped anywhere in this repo carries an
+# `events` key, so nothing in-tree is affected. See LAND.md, finding CZ2035-N8.
+# --------------------------------------------------------------------------
+def test_a_foreign_events_key_refuses_instead_of_being_silently_ignored(tmp_path):
+    r, _ = _run(tmp_path, dict(BASE, events=["some", "unrelated", "list"]))
+    assert r.returncode == 1
+    assert "events must be an event-to-contract mapping" in r.stderr
+
+
+def test_unrelated_unknown_keys_are_still_ignored(tmp_path):
+    """The bound on the change: validation did NOT become globally strict.
+    A spec carrying arbitrary extra keys still generates, byte-identically."""
+    plain = _run(tmp_path, BASE)[1]
+    extra = _run(tmp_path, dict(BASE, notes="free-form", author="someone",
+                                revision=7))
+    assert extra[0].returncode == 0, extra[0].stderr
+    assert extra[1] == plain, "an unrelated key changed the emitted RTL"
