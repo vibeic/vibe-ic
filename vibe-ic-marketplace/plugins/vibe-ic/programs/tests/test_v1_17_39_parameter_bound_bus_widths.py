@@ -12,7 +12,10 @@ of a bus-struct field. So it is READ (§4.05: design input only, never an oracle
 or a golden output). When it cannot be read, the resolution REFUSES and names the
 blocking symbol; the emission is then byte-identical to before rather than guessed.
 """
+import subprocess
 import sys
+
+import pytest
 from pathlib import Path
 
 PROGRAMS = Path(__file__).resolve().parents[1]
@@ -171,3 +174,78 @@ def test_unparsable_width_expression_refuses_rather_than_guessing():
         DUT, "dut_mod", BUS)
     assert w is None, f"guessed a width instead of refusing: {w}"
     assert "unresolved" in why and "a_address" in why
+
+
+# --------------------------------------------------------------------------
+# A width expression is DESIGN INPUT, so it must not be able to wedge the flow.
+#
+# Found by auditing my own code rather than by a failing test: `_int_expr`
+# whitelisted Pow and LShift, so `[9**9**9-1:0]` in a design's own package
+# parsed to a legal tree of allowed nodes and then computed FOREVER with no
+# diagnostic -- measured, the process had to be killed at 20s. Every operand is
+# now bounded and an exponent must RESOLVE small, so an unreasonable expression
+# is REFUSED like any other unresolvable width instead of hanging.
+# --------------------------------------------------------------------------
+@pytest.mark.parametrize("expr,want", [
+    ("8", 8), ("AW-1", 11), ("AW*2", 24), ("(AW+4)-1", 15),
+    ("2**16", 65536), ("1<<5", 32),
+    ("2**AW", 4096), ("1<<AW", 4096),      # parameter exponents are ordinary SV
+])
+def test_legitimate_width_expressions_still_resolve(expr, want):
+    assert D._int_expr(expr, {"AW": 12}) == want
+
+
+@pytest.mark.parametrize("expr", [
+    "9**9**9",          # the one that hung: a legal tree that never terminates
+    "1<<99999999",      # shift distance that allocates without bound
+    "2**BIG",           # exponent resolves, but to something absurd
+    "99999999999",      # a literal that is not a width
+])
+def test_unreasonable_width_expressions_refuse_instead_of_hanging(expr):
+    """Run in a SUBPROCESS with a timeout, deliberately.
+
+    An in-process `assert elapsed < 1` cannot fail when the call never returns --
+    it hangs the whole suite instead, and a hung CI is worse than a red one.
+    Measured: removing the bounds made this file hang rather than go red, which
+    is why the check is shaped this way. Out of process, a regression is a clean
+    FAILURE naming the expression."""
+    code = (f"import sys; sys.path.insert(0, {str(PROGRAMS)!r});"
+            f"import register_bus_driver_gen as R;"
+            f"print(R._int_expr({expr!r}, {{'AW': 12, 'BIG': 10**9}}))")
+    try:
+        r = subprocess.run([sys.executable, "-c", code], capture_output=True,
+                           text=True, timeout=15)
+    except subprocess.TimeoutExpired:
+        raise AssertionError(
+            f"_int_expr({expr!r}) did not return within 15s -- an unbounded "
+            f"width expression out of a design file can wedge the flow")
+    assert r.returncode == 0, r.stderr
+    assert r.stdout.strip() == "None", r.stdout
+
+
+def test_an_unreasonable_width_in_a_package_refuses_by_name():
+    """End to end: the hostile expression reaches resolve_bus_widths through the
+    design's own package and comes back as a NAMED refusal, not a hang.
+
+    Out of process for the same reason as the test above -- in-process this
+    HANGS the suite when the bounds regress instead of failing, which is exactly
+    what happened when the bounds were mutated away."""
+    code = (
+        "import sys; sys.path.insert(0, %r)\n"
+        "import register_bus_driver_gen as D\n"
+        "pkg = %r\n"
+        "w, why = D.resolve_bus_widths([('pkg.sv', pkg), ('dut.sv', %r),\n"
+        "                               ('top.sv', %r)], %r, 'dut_mod', %r)\n"
+        "print(w is None, 'unresolved' in why, 'd_data' in why)\n"
+    ) % (str(PROGRAMS),
+         PKG.replace("logic [DW-1:0] d_data;", "logic [9**9**9-1:0] d_data;"),
+         DUT, TOP_PLAIN, DUT, BUS)
+    try:
+        r = subprocess.run([sys.executable, "-c", code], capture_output=True,
+                           text=True, timeout=20)
+    except subprocess.TimeoutExpired:
+        raise AssertionError(
+            "resolve_bus_widths did not return within 20s on a package carrying "
+            "an unbounded width expression -- design input can wedge the flow")
+    assert r.returncode == 0, r.stderr
+    assert r.stdout.strip() == "True True True", r.stdout

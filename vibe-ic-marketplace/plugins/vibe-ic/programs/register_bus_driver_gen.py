@@ -528,6 +528,12 @@ def find_req_rsp_pairs(ports: Sequence[Tuple[str, str, str]],
 # instantiated. So it is READ, never assumed, and when it cannot be read the
 # caller is told WHICH symbol blocked it instead of receiving a guess.
 # --------------------------------------------------------------------------
+#: Bounds for evaluating a width expression read out of a design file.
+#: A real bus is not a million bits wide, and a legitimate `2**N` / `1<<N` has a
+#: small literal exponent. Anything outside these is refused, never computed.
+_WIDTH_EXPR_MAX = 1 << 20
+_WIDTH_EXPR_EXP_MAX = 64
+
 _PARAM_DECL_RE = re.compile(
     r"\bparameter\b(?:\s+(?:int|integer|logic|bit|byte|shortint|longint"
     r"|unsigned|signed))*\s*(?:\[[^\]]*\]\s*)?(\w+)\s*=\s*([^,)\n]+)")
@@ -562,13 +568,42 @@ def _int_expr(expr: str, params: Dict[str, int]) -> Optional[int]:
                                  _ast.UAdd, _ast.FloorDiv, _ast.LShift,
                                  _ast.RShift, _ast.Pow)):
             return None
+        # BOUNDED. A width expression comes out of the DESIGN'S OWN FILE, so it
+        # is input, and input must never be able to wedge the flow. `9**9**9`
+        # parses to a legal tree of allowed nodes and then computes forever with
+        # no diagnostic. Every operand is bounded here, and an exponent or shift
+        # distance must be a small literal, so an unreasonable expression is
+        # REFUSED (None, like every other unresolvable width) instead of hanging.
+        if isinstance(node, _ast.Constant):
+            if not isinstance(node.value, int) or isinstance(node.value, bool):
+                return None
+            if abs(node.value) > _WIDTH_EXPR_MAX:
+                return None
+        if isinstance(node, _ast.BinOp) and isinstance(node.op, (_ast.Pow,
+                                                                _ast.LShift)):
+            # `2**ADDR_W` and `1<<ADDR_W` are ordinary SystemVerilog, so the
+            # exponent may be a PARAMETER as well as a literal — it just has to
+            # RESOLVE to something small. Anything else refuses.
+            rhs = node.right
+            if isinstance(rhs, _ast.Constant):
+                rv = rhs.value
+            elif isinstance(rhs, _ast.Name):
+                rv = params.get(rhs.id)
+            else:
+                return None
+            if not isinstance(rv, int) or isinstance(rv, bool) \
+                    or not 0 <= rv <= _WIDTH_EXPR_EXP_MAX:
+                return None
     try:
         val = eval(compile(tree, "<width>", "eval"), {"__builtins__": {}},
                    dict(params))
     except Exception:
         return None
-    return int(val) if isinstance(val, int) and not isinstance(val, bool) \
-        else None
+    if not isinstance(val, int) or isinstance(val, bool):
+        return None
+    if abs(val) > _WIDTH_EXPR_MAX:
+        return None          # a bus wider than this is not a width, it is a typo
+    return int(val)
 
 
 def dut_parameter_defaults(rtl_text: str, dut_module: str) -> Dict[str, int]:
