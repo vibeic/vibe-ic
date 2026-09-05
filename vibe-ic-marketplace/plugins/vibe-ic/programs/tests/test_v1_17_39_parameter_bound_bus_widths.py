@@ -22,6 +22,7 @@ reproduce one against a released version will not be able to, and should not con
 is wrong.
 """
 import os
+import shutil
 import subprocess
 import sys
 
@@ -502,3 +503,61 @@ def test_a_conflict_refusal_names_its_values_in_a_STABLE_order():
         [("pkg.sv", PKG), ("dut.sv", dut), ("top.sv", top)], dut, "dut_mod", BUS)
     assert "DW = [8, 16, 32, 64]" in why, why
     assert "EW = [0, 1, 2, 3]" in why, why
+
+
+# --------------------------------------------------------------------------
+# THE TRUNCATION, PROVEN BY SIMULATION RATHER THAN BY ASSERTION
+#
+# Every other test here checks that the emitter REFUSES a literal too wide for
+# its bus. None showed what happens if it does not, and "Verilog truncates" is
+# the kind of claim that deserves a run rather than a citation. This elaborates a
+# 4-bit-addressed register file and writes `4'h74` at it -- the exact literal the
+# emitter used to produce for a register map at 0x74 on a narrow bus.
+#
+# The write lands in register 0x4. A DIFFERENT register is programmed, the
+# sequence completes, and iverilog says only "warning: Numeric constant truncated
+# to 4 bits" -- a warning in a build log, not a failure. That is why the emitter
+# refuses instead of narrowing the literal, and why the refusal names the
+# conflict rather than picking a width.
+# --------------------------------------------------------------------------
+_TRUNC_V = r'''
+`timescale 1ns/1ps
+module regfile4 (input clk, input we, input [3:0] addr, input [31:0] wdata,
+                 output reg [31:0] r0, output reg [31:0] r4);
+  always @(posedge clk) if (we) begin
+    if (addr == 4'h0) r0 <= wdata;
+    if (addr == 4'h4) r4 <= wdata;
+  end
+endmodule
+module tb;
+  reg clk=0, we=0; reg [3:0] addr; reg [31:0] wdata;
+  wire [31:0] r0, r4;
+  regfile4 dut(.clk(clk), .we(we), .addr(addr), .wdata(wdata), .r0(r0), .r4(r4));
+  always #5 clk=~clk;
+  initial begin
+    @(negedge clk); we=1; addr=4'h74; wdata=32'hDEADBEEF;
+    @(negedge clk); we=0; @(negedge clk);
+    if (r4 === 32'hDEADBEEF) $display("TRUNCATED_TO_R4");
+    else                     $display("NO_TRUNCATION");
+    $finish;
+  end
+endmodule
+'''
+
+
+@pytest.mark.skipif(not shutil.which("iverilog"), reason=(
+    "NOT MEASURED HERE: no iverilog on PATH, so the executable proof that a "
+    "too-wide address literal silently programs a DIFFERENT register did not "
+    "run; the refusal tests above are textual. Measured in the pinned image."))
+def test_a_too_wide_literal_really_does_program_the_wrong_register(tmp_path):
+    src = tmp_path / "trunc.v"
+    src.write_text(_TRUNC_V)
+    sim = tmp_path / "sim"
+    c = subprocess.run(["iverilog", "-g2012", "-o", str(sim), str(src)],
+                       capture_output=True, text=True)
+    assert c.returncode == 0, c.stderr
+    # the toolchain WARNS and carries on -- this is the whole point
+    assert "truncated" in (c.stderr + c.stdout).lower(), \
+        "expected iverilog to warn rather than fail; if it now errors, say so"
+    r = subprocess.run([str(sim)], capture_output=True, text=True)
+    assert "TRUNCATED_TO_R4" in r.stdout, r.stdout
