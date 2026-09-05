@@ -477,7 +477,22 @@ def test_an_ic_with_a_command_protocol_keeps_the_byte_stream_path(tmp_path):
 
 def test_step_is_unchanged_when_the_driver_declines(tmp_path, monkeypatch):
     """NO-LEAK: when no register-map evidence is available the step emits the
-    historical connectivity-only skeleton byte-for-byte."""
+    connectivity-only skeleton and nothing from the register-map path.
+
+    THE EXPECTED POPULATION CHANGED, AND THAT CHANGE IS THE POINT. This used
+    to assert `placeholder: 8` / `vectors_total: 8` for a fixture whose inputs
+    justify ZERO vectors: all eight were `vec_brk_*` entries the producer
+    appended in a `while len(...) < 8` loop whose own comment named the reason,
+    "so MIN_VECTORS_FAIL=8 passes". Asserting that count pinned the padding in
+    place. Nothing outside the producer ever read those entries — no program in
+    the tree references `vec_brk_` or `bring_up_pad`; only test fixtures
+    construct them — so removing them removes no information from any consumer.
+
+    What this test is FOR is unchanged and still asserted: the register-map
+    driver declining must leave the byte-stream path untouched. The population
+    assertions are kept, corrected to the honest number, and the shortfall the
+    padding used to hide is asserted too, so a future re-pad cannot pass here.
+    """
     proj = _make_project(tmp_path, l5=None, with_l9=True)
     monkeypatch.setattr(R, "_v186_regmap_transaction_vectors",
                         lambda project, top: None)
@@ -488,8 +503,15 @@ def test_step_is_unchanged_when_the_driver_declines(tmp_path, monkeypatch):
     # when non-zero cannot be used to show there were none.
     assert rj["functional_coverage"] == {"scored_with_golden": 0,
                                          "self_referential": 0,
-                                         "placeholder": 8}
-    assert rj["vectors_total"] == 8
+                                         "placeholder": 0}
+    assert rj["vectors_total"] == 0
+    assert not any(str(v.get("vector_id", "")).startswith("vec_brk_")
+                   for v in rj["per_vector"]), "the padding is back"
+    # The shortfall is STATED rather than covered, and the record may not head
+    # itself PASS over it.
+    assert rj["oracle_scored_vectors"] == 0
+    assert rj["functional_verified"] is False
+    assert rj["verdict"] != "PASS" and rj["pass"] is not True
     assert "register_map_coverage" not in rj
     assert res.status == "SKIP" and "CONNECTIVITY-ONLY" in res.detail
 

@@ -142,6 +142,7 @@ from typing import Any, Iterable, Optional
 #: disclaims. The gate's own tests caught that; the distinction is recorded as
 #: a FIELD rather than re-derived from the reason text.
 import _vacuous_exit as _vx
+import _flow_reason_taxonomy as _rt
 
 _HERE = Path(__file__).resolve().parent
 if str(_HERE) not in sys.path:
@@ -431,6 +432,11 @@ def inspect(project: Path,
 
     if not l9_source_files and l19 is None:
         summary["skip_kind"] = "input-missing"
+        # NOT skip-eligible, on purpose. Nothing was read here, and an absent
+        # layer is not a design saying the class does not apply — it is the
+        # upstream step not having emitted the layer this gate audits. Typing
+        # it stops the flow guessing from prose; it does not move its tier.
+        summary["reason_class"] = _rt.BLOCKED_BY_UPSTREAM
         summary["skipped_reason"] = (
             "no L9 / constraint / floorplan source file and no L19 die-area "
             "contract in the project")
@@ -444,7 +450,24 @@ def inspect(project: Path,
         {"kind": k, "fraction": v, "source": s} for k, v, s in util_decls]
 
     if not die_decls and not util_decls and l19 is None:
-        summary["skip_kind"] = "input-missing"
+        # The layer was READ. `input-missing` was the wrong word for this
+        # branch and the flow had no other: with no `--json` and no typed
+        # class, `_flow_reason_taxonomy.infer_nonverdict_reason` fell to its
+        # fail-closed default and booked 2,283 of 2,514 L-doc roots on the
+        # measured host as EXECUTION_ERROR — "the program errored" — for a
+        # gate that read the design and answered.
+        #
+        # `class-not-applicable` is the taxonomy's OWN token for this shape and
+        # maps to DESIGN_DECLARED_NA, the class the shipped taxonomy already
+        # gives to "no analog blocks" / "no inout" / "no otp" / "no fpga
+        # target": applicability decided by scanning the design's own inputs.
+        # It lands the clause in VACUOUS_PASS — the gate examined NOTHING,
+        # which is true and is what rc 2 was already asking for. It does NOT
+        # reach the NOT_APPLICABLE credit tier: that needs a design-owned typed
+        # zero-population declaration, which an absence across a scanned file
+        # set is not, and `_report_proves_executed_design_na` still refuses it.
+        summary["skip_kind"] = "class-not-applicable"
+        summary["reason_class"] = _rt.DESIGN_DECLARED_NA
         summary["skipped_reason"] = (
             # Say what this branch MEANS. Both layers were read; neither
             # states a floorplan. Phrasing it "no L19 die-area contract" reads
@@ -461,6 +484,8 @@ def inspect(project: Path,
     if waiver:
         summary["skip_kind"] = "waiver"
         summary["skipped_reason"] = f"waiver {WAIVER_ID}: {waiver[:80]}"
+        # No reason_class: a waiver is a judgement ABOUT findings the gate made
+        # over artefacts it read, not a reason the gate reached no verdict.
         return findings, summary
 
     # ── Rule: the mandated die must be unambiguous ──
@@ -638,19 +663,33 @@ def main(argv: Optional[list[str]] = None) -> int:
     if args.json:
         out = Path(args.json)
         out.parent.mkdir(parents=True, exist_ok=True)
-        out.write_text(json.dumps({
+        # NO top-level `verdict` key, deliberately.
+        # `step_internal_fail_bubble_up_check` scans `reports/**/*.json` for a
+        # string `verdict` and treats FAIL/MISSING as an unbubbled step
+        # failure, so a `verdict` here would manufacture that red the moment
+        # this gate is wired with `--json`. It publishes `passed`, and the
+        # reason class only when the gate reached no verdict at all.
+        doc = {
             "program": "l9_floorplan_contract_check",
             "blocks": not args.advise,
             "passed": passed,
             "summary": summary,
             "findings": [f.as_dict() for f in findings],
-        }, indent=2), encoding="utf-8")
+        }
+        if summary.get("reason_class"):
+            doc["reason_class"] = summary["reason_class"]
+        out.write_text(json.dumps(doc, indent=2), encoding="utf-8")
 
     print(f"=== l9_floorplan_contract_check ({project.name}) ===")
     if summary.get("skipped_reason"):
         print(f"skipped: {summary['skipped_reason']}")
-        if summary.get("skip_kind") != "input-missing":
+        if summary.get("skip_kind") == "waiver":
             return 0          # a waiver is not an empty examination
+        # Every other skip examined nothing and says so on both channels.
+        # Tested for the WAIVER rather than against one absent-input token:
+        # the previous spelling silently promoted any newly-named skip kind to
+        # a plain rc 0, which is the tier this whole convention exists to keep
+        # a non-examination out of.
         # disclose on BOTH channels the consumer reads: the
         # rc-independent `VACUOUS_PASS:` sentinel (stderr, so a
         # `--json -` document on stdout stays parseable) and the rc.

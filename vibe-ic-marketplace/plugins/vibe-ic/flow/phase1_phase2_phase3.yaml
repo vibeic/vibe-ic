@@ -987,8 +987,17 @@ steps:
               command: "constants_validation phase1/generated_docs"
               advisory_reason: "NOT-YET-CLEAN: this gate CAN refuse and is wired advisory as a ratchet position, not as a verdict. Notch measured rc 0 on a real spm run (2026-08-31): it is already clean on real input, so blocking would cost nothing today; the only thing holding it advisory is that no other run has been measured."
         # the floorplan phase 3 pins verbatim is unambiguous and agrees across layers
+        # WIRED WITH `--json` (this PR). Bare, the gate's rc 2 reached
+        # `flow_compliance_check` as prose only, and the fail-closed classifier
+        # booked it EXECUTION_ERROR -> INCOMPLETE on every project that
+        # mandates no floorplan (2,283 of 2,514 L-doc roots on the measured
+        # host), cascading D1 -> stage_phase1 -> Step 2 unconditionally. The
+        # gate now publishes its own `reason_class` and this is the channel
+        # that reads it. SAFE against the Step-36 cascade recorded above: that
+        # check keys on a top-level string `verdict`, and this gate's report
+        # publishes `passed`, never `verdict`.
         - advisory_program_exit_zero:
-              command: "l9_floorplan_contract_check ."
+              command: "l9_floorplan_contract_check . --json reports/phase1/gates/l9_floorplan_contract.json"
               advisory_reason: "NOT-YET-CLEAN: this gate CAN refuse and is wired advisory as a ratchet position, not as a verdict. Notch measured rc 2 on a real spm run (2026-08-31): NOT CHECKED on that run — no input reached it, so the notch is unmeasured and this clause is not yet evidence of anything."
         # every executable L10 case carries an oracle anchor
         - advisory_program_exit_zero:

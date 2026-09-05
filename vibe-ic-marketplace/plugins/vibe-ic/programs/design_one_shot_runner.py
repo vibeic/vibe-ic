@@ -6905,6 +6905,38 @@ def _full_stack_golden_vectors(project: Path,
     return per_vector, l3_evidence
 
 
+def _full_stack_top_level_verdict(*, connectivity_pass: bool,
+                                  functional_verified: bool,
+                                  functional_mismatch: bool
+                                  ) -> tuple[str, bool]:
+    """The top-level (verdict, pass) pair the full-stack record may publish.
+
+    A pure function of the evidence that sits in the same object, so the two
+    cannot drift apart. The vocabulary is the record's OWN per-vector verdict
+    vocabulary — PASS / FAIL / UNVERIFIED — which
+    ``bit_level_full_stack_tb_oracle_check`` already reads off the vectors; no
+    fourth word is introduced for the top level.
+
+        connectivity failed                      -> FAIL   (nothing ran)
+        a concrete golden was measured and missed -> FAIL   (a real disagreement)
+        every scored vector golden and matching  -> PASS
+        otherwise (nothing was compared)         -> UNVERIFIED
+
+    UNVERIFIED and FAIL are deliberately distinct: FAIL claims the design was
+    measured against a golden and disagreed, and a run with no golden to
+    disagree with has not earned that claim either. ``pass`` is True only for
+    PASS, so a legacy consumer reading the boolean sees the same conclusion as
+    one reading the word.
+    """
+    if not connectivity_pass:
+        return "FAIL", False
+    if functional_mismatch:
+        return "FAIL", False
+    if functional_verified:
+        return "PASS", True
+    return "UNVERIFIED", False
+
+
 def _finalize_full_stack_results(per_vector: List[Dict[str, Any]],
                                  *,
                                  tb_name: str,
@@ -6917,17 +6949,31 @@ def _finalize_full_stack_results(per_vector: List[Dict[str, Any]],
                                  ) -> Dict[str, Any]:
     """Assemble an HONEST full-stack results.json dict.
 
-    Two orthogonal verdicts are reported and NEVER conflated:
+    Three facts are reported, and the top-level one is DERIVED from the
+    other two rather than computed beside them:
 
-      * ``verdict`` / ``pass`` — the CONNECTIVITY verdict (did a TB run /
-        exercise the response path). The legacy connectivity gate reads
-        this. It says nothing about functional correctness.
+      * ``connectivity_verified`` — the CONNECTIVITY truth (did a TB run /
+        exercise the response path). It says nothing about functional
+        correctness and is published under its own name so a consumer that
+        wants only that question answered can ask for it by name.
       * ``functional_verified`` + ``functional_coverage`` — the
         FUNCTIONAL truth. ``functional_verified`` is True ONLY when every
         scored vector carries a concrete golden AND its actual matches.
         The bit-level oracle gate reads these and FAILs on any
         placeholder golden — so a placeholder/stub TB can NEVER report a
         green FUNCTIONAL pass.
+      * ``verdict`` / ``pass`` — a FUNCTION of the two above, over the
+        evidence in THIS SAME OBJECT. See ``_full_stack_top_level_verdict``.
+
+    WHY THE TOP-LEVEL PAIR IS DERIVED AND NOT PASSED IN. It used to be
+    ``"PASS" if connectivity_pass else "FAIL"`` — one input, written beside
+    functional fields it was independent of. The published record then read
+    ``verdict: "PASS", pass: true`` next to ``functional_verified: false,
+    vectors_passed: 0, vectors_failed: 8``: a document asserting a pass while
+    its own fields state that nothing was verified. 338 of 481 published
+    ``sim_full_stack/results.json`` on the measured fleet carried exactly that
+    shape. An unqualified ``verdict`` is read as THE verdict by every generic
+    reader, so it may not be narrower than the object it heads.
 
     ``vectors_passed`` reflects FUNCTIONAL scoring (only vectors whose
     actual matched a concrete golden), so the oracle gate's
@@ -6976,13 +7022,36 @@ def _finalize_full_stack_results(per_vector: List[Dict[str, Any]],
         and placeholder == 0
         and functional_pass == len(per_vector)
     )
-    # Connectivity verdict: PASS iff the caller ran/emitted a TB. This is
-    # the legacy connectivity gate's signal and is independent of the
-    # functional truth above.
-    conn_verdict = "PASS" if connectivity_pass else "FAIL"
+    # A vector that DID carry a concrete golden and did not match it is a
+    # MEASURED disagreement between the design and its spec. That is the one
+    # thing in this object that justifies the word FAIL; an absent golden
+    # never does, because nothing was compared.
+    functional_mismatch = False
+    for vec in per_vector:
+        eb = vec.get("expected_bytes")
+        if isinstance(eb, list):
+            has_golden = bool(eb) and not any(
+                isinstance(x, str) and _PLACEHOLDER_BYTE in x.upper()
+                for x in eb)
+        elif isinstance(eb, str):
+            has_golden = bool(eb.strip()) and _PLACEHOLDER_BYTE not in eb.upper()
+        else:
+            has_golden = False
+        if not has_golden:
+            continue
+        if (str(vec.get("verdict", "")).upper() == "FAIL"
+                or (vec.get("actual_bytes") is not None
+                    and vec.get("actual_bytes") != eb)):
+            functional_mismatch = True
+            break
+    top_verdict, top_pass = _full_stack_top_level_verdict(
+        connectivity_pass=connectivity_pass,
+        functional_verified=functional_verified,
+        functional_mismatch=functional_mismatch,
+    )
     results: Dict[str, Any] = {
-        "verdict": conn_verdict,
-        "pass": connectivity_pass,
+        "verdict": top_verdict,
+        "pass": top_pass,
         "connectivity_verified": connectivity_pass,
         "functional_verified": functional_verified,
         "functional_coverage": {
@@ -8763,17 +8832,21 @@ def step_full_stack_tb_gen(project: Path,
             l3_evidence = ("documented register map (L4_REGMAP.json + the "
                            "authored L4/L5 register table) — "
                            "regmap_transaction_tb_gen")
-        # Pad to >=8 vectors so MIN_VECTORS_FAIL=8 passes — padding
-        # vectors are honest UNVERIFIED bring-up steps, not fake PASSes.
-        while len(per_vector_skeleton) < 8:
-            per_vector_skeleton.append({
-                "vector_id": f"vec_brk_{len(per_vector_skeleton)}",
-                "expected_bytes": None,
-                "actual_bytes": None,
-                "verdict": "UNVERIFIED",
-                "evidence": "step_full_stack_tb_gen.bring_up_pad",
-                "source": "bring-up padding to reach MIN_VECTORS_FAIL=8",
-            })
+        # NO PADDING. This loop used to append UNVERIFIED bring-up entries
+        # until `len(per_vector_skeleton)` reached 8, with the reason written
+        # in its own comment: "so MIN_VECTORS_FAIL=8 passes". The entries were
+        # honestly marked, and that was never the problem — manufacturing
+        # members of the population a minimum-count guard counts is, because
+        # the guard then cannot refuse anything. It is the mirror image of
+        # narrowing a population to clear a threshold.
+        #
+        # The record now carries the vectors this design's own inputs justify
+        # and states the shortfall instead of covering it. The consuming gate
+        # (`bit_level_full_stack_tb_oracle_check`) counts golden-scored
+        # vectors, so padding would buy nothing even if it were re-added.
+        _oracle_scored = sum(
+            1 for _v in per_vector_skeleton
+            if isinstance(_v, dict) and _v.get("expected_bytes") is not None)
         results = _finalize_full_stack_results(
             per_vector_skeleton,
             tb_name=tb_path.name,
@@ -8782,6 +8855,10 @@ def step_full_stack_tb_gen(project: Path,
             evidence=l3_evidence,
             opcodes_tested=opcodes_hex[:5],
             extra={
+                # The shortfall the padding used to hide, said out loud. A
+                # reader can now tell a design whose inputs supplied eight
+                # goldens from one whose inputs supplied none.
+                "oracle_scored_vectors": _oracle_scored,
                 # v0.2.55 — non-protocol ICs (CPU SoCs / pure datapath /
                 # reused-IP glue) have NO command oracle. Mark it N/A so the
                 # bit-level oracle gate treats this connectivity-only
@@ -11961,16 +12038,14 @@ def step_reference_tb(project: Path, top_name: str = "chip_top",
                             "no concrete golden in L3 "
                             "response_payload_template"),
                     })
-        # Pad to MIN ≥8 with honest UNVERIFIED bring-up steps if needed.
-        while len(per_vector) < 8:
-            per_vector.append({
-                "vector_id": f"vec_brk_{len(per_vector)}",
-                "expected_bytes": None,
-                "actual_bytes": None,
-                "verdict": "UNVERIFIED",
-                "evidence": "phase23_one_shot_runner.bring_up_pad",
-                "source": "bring-up padding to reach MIN_VECTORS_FAIL=8",
-            })
+        # NO PADDING — same repair as in step_full_stack_tb_gen above. This
+        # loop appended bring-up entries until the array reached 8 so that
+        # MIN_VECTORS_FAIL would be satisfied by a count the producer itself
+        # supplied. The reference-TB record now reports the vectors L3 gave
+        # goldens for, and nothing else.
+        _oracle_scored = sum(
+            1 for _v in per_vector
+            if isinstance(_v, dict) and _v.get("expected_bytes") is not None)
 
         # Harvest opcodes_tested from per_vector opcode_hex tokens
         # (which already came from L3.opcodes[]). chip-AGNOSTIC.
@@ -11988,6 +12063,7 @@ def step_reference_tb(project: Path, top_name: str = "chip_top",
             evidence=l3_evidence,
             opcodes_tested=_opcodes_tested,
             extra={
+                "oracle_scored_vectors": _oracle_scored,
                 "tb_path": str(PROTOCOL_TB),
                 "transcript_path": str(transcript),
                 "protocol_reference_tb": "PROTOCOL_REFERENCE_TB_PASS",

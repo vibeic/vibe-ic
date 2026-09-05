@@ -501,6 +501,15 @@ def check(project: Path, results_path: Path) -> dict:
     info["vectors_passed"] = data.get("vectors_passed")
     info["vectors_failed"] = data.get("vectors_failed")
 
+    # The documented connectivity-only waiver is resolved ONCE, here, because
+    # three rules now consult it. Rules 2 and 9 already downgraded to a
+    # disclosed WARN under it; Rule 1 below joins them rather than inventing a
+    # second policy for the same waiver, which would make the repo's own
+    # disclosure channel unable to do its documented job under a new rule name.
+    conn_waived, conn_why = _waiver_connectivity(project)
+    # Declared with the waiver it is fed from, so the two cannot drift apart.
+    warnings: list[dict] = []
+
     # Rule 1: per_vector present + size
     if per_vector_shape is not None:
         # PRESENT, and not an array. Its own rule id because the remedy is
@@ -526,15 +535,57 @@ def check(project: Path, results_path: Path) -> dict:
                 "requires per-vector expected/actual byte comparison."
             ),
         })
-    elif len(per_vector) < MIN_VECTORS_FAIL:
-        findings.append({
-            "rule": "PER_VECTOR_TOO_FEW",
-            "severity": "FAIL",
-            "message": (
-                f"per_vector has {len(per_vector)} entries; minimum "
-                f"{MIN_VECTORS_FAIL} for a credible bit-level oracle."
-            ),
-        })
+    else:
+        # THE POPULATION THIS THRESHOLD WAS WRITTEN ABOUT. `MIN_VECTORS_FAIL`
+        # asks for eight vectors a bit-level oracle could have compared, and a
+        # vector with no concrete golden compares nothing. Counting ENTRIES
+        # instead made the guard unable to refuse the moment the producer could
+        # add members to the array: measured over 481 published results.json,
+        # 379 held exactly 8 entries of which exactly 0 carried a golden, and
+        # every one of them cleared this minimum.
+        #
+        # The threshold itself is UNCHANGED and no vector class is excluded
+        # from the record — only from the count, which it was never evidence
+        # for. `classify_expected_bytes` is the gate's own golden predicate,
+        # the same one Rule 9 scores with, so the two rules cannot disagree
+        # about what a scored vector is.
+        scored_population = sum(
+            1 for v in per_vector
+            if isinstance(v, dict)
+            and classify_expected_bytes(v.get("expected_bytes")))
+        info["scored_population"] = scored_population
+        if scored_population < MIN_VECTORS_FAIL:
+            _msg = (
+                f"per_vector has {len(per_vector)} entries but only "
+                f"{scored_population} carry a concrete golden "
+                f"expected_bytes; minimum {MIN_VECTORS_FAIL} SCORED "
+                f"vectors for a credible bit-level oracle. Entries "
+                f"without a golden are disclosed but compare nothing, so "
+                f"they cannot make the population credible."
+            )
+            if conn_waived:
+                # The SAME downgrade Rules 2 and 9 already apply to this same
+                # waiver. A run that invoked `functional_unverified_
+                # connectivity_only` has ALREADY declared, in writing, that it
+                # verifies no function here — this rule would be re-refusing
+                # the exact thing the waiver discloses, under a new name.
+                # NOTHING GREENS SILENTLY: the shortfall is still published, as
+                # a WARN that names both counts, and the run still cannot
+                # report a functional PASS.
+                warnings.append({
+                    "rule": "VECTORS_TOO_FEW_CONNECTIVITY_ONLY",
+                    "severity": "WARN",
+                    "message": (
+                        _msg + " DOWNGRADED to connectivity-only per waiver "
+                        f"`{WAIVER_KEY_CONNECTIVITY}`: {conn_why[:80]}"),
+                    "waived": True,
+                })
+            else:
+                findings.append({
+                    "rule": "PER_VECTOR_TOO_FEW",
+                    "severity": "FAIL",
+                    "message": _msg,
+                })
 
     # Rule 2: vectors_passed == vectors_total (when both present).
     # ORGANIC-20260606-structured-field-count-no-protocol-class (#428,
@@ -551,7 +602,6 @@ def check(project: Path, results_path: Path) -> dict:
             if isinstance(v, dict)
             and str(v.get("verdict", "")).upper() == "UNVERIFIED")
     info["vectors_unverified"] = unverified
-    conn_waived, conn_why = _waiver_connectivity(project)
     deferred_rule2_warning = None
     if isinstance(vt, int) and isinstance(vp, int):
         if vp != vt:
@@ -621,7 +671,6 @@ def check(project: Path, results_path: Path) -> dict:
                 ),
             })
 
-    warnings: list[dict] = []
     if deferred_rule2_warning is not None:
         warnings.append(deferred_rule2_warning)
 
@@ -709,13 +758,18 @@ def check(project: Path, results_path: Path) -> dict:
             })
 
     # Rule 6: WARN under-tested
-    if isinstance(per_vector, list) and \
-            MIN_VECTORS_FAIL <= len(per_vector) < MIN_VECTORS_WARN:
+    # The WARN band counts the SAME population as the FAIL threshold above.
+    # Reading one off entries and the other off scored vectors would let a run
+    # sit in neither band, or in both, for the same array.
+    _scored = info.get("scored_population")
+    if isinstance(per_vector, list) and isinstance(_scored, int) and \
+            MIN_VECTORS_FAIL <= _scored < MIN_VECTORS_WARN:
         warnings.append({
             "rule": "PER_VECTOR_UNDER_TESTED",
             "severity": "WARN",
             "message": (
-                f"per_vector has {len(per_vector)} entries; below the "
+                f"per_vector carries {_scored} golden-scored vector(s) "
+                f"(of {len(per_vector)} entries); below the "
                 f"recommended {MIN_VECTORS_WARN}. Most host testers "
                 f"exercise >= {MIN_VECTORS_WARN} distinct command "
                 f"sequences in their acceptance suite."

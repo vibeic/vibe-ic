@@ -98,7 +98,14 @@ def test_no_floorplan_mandate_skips(tmp_path):
     # either one alone can regress silently while the other keeps the test green.
     assert proc.returncode == 2, proc.stdout + proc.stderr
     assert "VACUOUS_PASS:" in (proc.stdout + proc.stderr), proc.stdout + proc.stderr
-    assert report["summary"]["skip_kind"] == "input-missing"
+    # The token CHANGED and the change is the point. This branch READ the
+    # design's L9 / L19 layer and found it mandates no floorplan; calling that
+    # `input-missing` collapsed it with the branch where no such layer exists
+    # at all, and left the flow classifying a gate that answered as one that
+    # errored. Both facts are still disclosed, now under their own names.
+    assert report["summary"]["skip_kind"] == "class-not-applicable"
+    assert report["summary"]["reason_class"] == "DESIGN_DECLARED_NA"
+    assert report["reason_class"] == "DESIGN_DECLARED_NA"
     assert report["summary"]["skipped_reason"]
 
 
