@@ -454,6 +454,381 @@ def test_fresh_ai_cannot_supersede_a_passing_inherited_challenge(tmp_path):
                for reason in verdict["reasons"]), verdict
 
 
+# --- issue #2033: an inherited test whose expectation the PUBLIC INPUT refutes -
+#
+# The reported class is real and both of its cases reproduce, but the deadlock
+# it claims does not exist: the guard "a still-PASSING inherited challenge cannot
+# be superseded" is evaluated against the candidate UNDER REVIEW, not against the
+# historical result on the old candidate. On the prompt-correct repair, a test
+# whose expectation the public input refutes FAILS -- and a failing inherited
+# challenge has always been supersedable with a prompt-bound passing replacement.
+# The three tests below pin that both ways, so a later change cannot quietly
+# close the path or open it to a test that is merely inconvenient.
+
+
+def _task_with(tmp_path: Path, prompt: str, rtl: str) -> tuple[Path, dict]:
+    """The canonical review task over a caller-supplied prompt and candidate."""
+    run = tmp_path / "run"
+    (run / "responses").mkdir(parents=True)
+    project = _project(tmp_path)
+    (project / "input" / "phase1_prompt.md").write_text(prompt)
+    (project / "phase2" / "stage1" / "rtl" / "dut.v").write_text(rtl)
+    got = bio.collect("rtllm", "p1", project)
+    return run, bd._make_ai_review_task(
+        "p1", project, got, ROUTING, 0, run, "PROGRAM")
+
+
+def _write_challenge(task: dict, name: str, source: str, evidence: list[dict],
+                     expected: str, rationale: str,
+                     inherited: bool = False) -> dict:
+    path = ((Path(task["challenge_path"]).parent / name) if inherited
+            else Path(task["challenge_path"]))
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(source)
+    record = {
+        "schema": bd._CHALLENGE_SCHEMA,
+        "path": str(path.resolve()),
+        "sha256": bd._sha256_text(source),
+        "top_module": "vibeic_ai_challenge_tb",
+        "prompt_evidence": evidence,
+        "expected_behavior": expected,
+        "rationale": rationale,
+    }
+    if inherited:
+        record.update({
+            "id": task["id"],
+            "prompt_sha256": task["prompt_sha256"],
+            "reviewed_rtl_sha256": "frozen-older-candidate",
+        })
+    return record
+
+
+def _supersession(target: dict, rationale: str, evidence: list[dict]) -> dict:
+    return {
+        "schema": "vibeic.benchmark.challenge_supersession.v1",
+        "challenge_sha256": target["sha256"],
+        "rationale": rationale,
+        "prompt_evidence": evidence,
+    }
+
+
+_DEFAULTS_PROMPT = """Design module dut with this exact interface:
+
+module dut #(parameter NUM_INTERRUPTS = 4, parameter ADDR_WIDTH = 8)
+           (input wire clk, input wire rst_n, output reg [NUM_INTERRUPTS-1:0] mask);
+
+After reset the mask register must hold all ones across its declared width.
+"""
+
+_DEFAULTS_EVIDENCE = [
+    {"excerpt": "parameter NUM_INTERRUPTS = 4, parameter ADDR_WIDTH = 8",
+     "supports": "The public stub declares the default widths the test must use."},
+    {"excerpt": "the mask register must hold all ones across its declared width",
+     "supports": "The reset value is all ones over the declared default width."},
+]
+
+
+def _defaults_rtl(num_interrupts: int, addr_width: int) -> str:
+    return f"""module dut #(parameter NUM_INTERRUPTS = {num_interrupts},
+             parameter ADDR_WIDTH = {addr_width})
+  (input wire clk, input wire rst_n, output reg [NUM_INTERRUPTS-1:0] mask);
+  always @(posedge clk or negedge rst_n) begin
+    if (!rst_n) mask <= {{NUM_INTERRUPTS{{1'b1}}}};
+    else mask <= mask;
+  end
+endmodule
+"""
+
+
+def _defaults_test(body: str) -> str:
+    return r"""
+module vibeic_ai_challenge_tb;
+  localparam N = %s;
+  reg clk = 1'b0; reg rst_n = 1'b0;
+  wire [N-1:0] mask;
+  dut candidate(.clk(clk), .rst_n(rst_n), .mask(mask));
+  always #1 clk = ~clk;
+  initial begin
+    #5 rst_n = 1'b1; #5;
+    if (%s) begin
+      $display("VIBEIC_AI_CHALLENGE=FAIL mask=%%h", mask); $fatal(1);
+    end
+    $display("VIBEIC_AI_CHALLENGE=PASS");
+    $finish;
+  end
+endmodule
+""" % body
+
+
+#: The inherited test the issue describes: local N = 8, no parameter override,
+#: and an eight-bit expectation the declared default of four refutes.
+_OLD_DEFAULTS_TEST = _defaults_test(("8", "mask !== 8'hff"))
+#: The prompt-correct replacement: the declared default width, all ones.
+_PUBLIC_DEFAULTS_TEST = _defaults_test(("4", "mask !== {N{1'b1}}"))
+#: An inherited test the public input SUPPORTS -- it still passes the repair.
+_SUPPORTED_DEFAULTS_TEST = _defaults_test(("4", "mask[0] !== 1'b1"))
+
+
+def _defaults_inherited(task: dict, source: str, name: str, expected: str,
+                        rationale: str) -> dict:
+    return _write_challenge(task, name, source, _DEFAULTS_EVIDENCE, expected,
+                            rationale, inherited=True)
+
+
+def _defaults_replacement(task: dict) -> dict:
+    return _write_challenge(
+        task, "replacement.sv", _PUBLIC_DEFAULTS_TEST, _DEFAULTS_EVIDENCE,
+        "The default reset mask must be all ones over the declared width.",
+        ("The public module stub declares NUM_INTERRUPTS = 4, so the default "
+         "reset mask is four ones; this test instantiates the DUT with no "
+         "parameter override and checks exactly that declared default."))
+
+
+@_NEEDS_SIMULATOR
+def test_a_parameter_default_contradiction_is_already_supersedable(tmp_path):
+    """Issue #2033 case 1, measured end to end on the prompt-correct repair."""
+    _, task = _task_with(tmp_path, _DEFAULTS_PROMPT, _defaults_rtl(4, 8))
+    inherited = _defaults_inherited(
+        task, _OLD_DEFAULTS_TEST, "inherited-old-default-test.sv",
+        "The old test requires the default reset mask to equal 8'hff.",
+        ("This inherited challenge declares a local N = 8, never passes it as a "
+         "DUT parameter override, and then requires the default reset mask to "
+         "equal eight ones."))
+    task["verification_challenges"] = [inherited]
+    review = _valid_review(task)
+    review["verification_test"] = _defaults_replacement(task)
+    review["challenge_supersessions"] = [_supersession(
+        inherited,
+        ("The inherited test hard-codes an eight-bit default reset mask while "
+         "the public stub declares NUM_INTERRUPTS = 4, so its own expectation "
+         "is refuted by the declared public contract it claims to check."),
+        _DEFAULTS_EVIDENCE)]
+    _write_review(task, review)
+
+    verdict = bd._validate_ai_review(task)
+    assert verdict["status"] == "ACCEPTED", verdict
+    result = verdict["inherited_challenge_results"][0]
+    assert result["status"] == "SUPERSEDED"
+    #: The historical bytes, the hash and the original runtime result all stay.
+    assert result["original_status"] == "FAIL"
+    assert verdict["challenge_supersessions"][0]["challenge_sha256"] == \
+        inherited["sha256"]
+    assert Path(inherited["path"]).read_text() == _OLD_DEFAULTS_TEST
+
+
+@_NEEDS_SIMULATOR
+def test_a_wrong_inherited_expectation_still_blocks_a_silent_repair(tmp_path):
+    """Nothing is retired implicitly: without the correction, the repair stops."""
+    _, task = _task_with(tmp_path, _DEFAULTS_PROMPT, _defaults_rtl(4, 8))
+    inherited = _defaults_inherited(
+        task, _OLD_DEFAULTS_TEST, "inherited-old-default-test.sv",
+        "The old test requires the default reset mask to equal 8'hff.",
+        ("This inherited challenge declares a local N = 8, never passes it as a "
+         "DUT parameter override, and then requires the default reset mask to "
+         "equal eight ones."))
+    task["verification_challenges"] = [inherited]
+    review = _valid_review(task)
+    review["verification_test"] = _defaults_replacement(task)
+    _write_review(task, review)
+
+    verdict = bd._validate_ai_review(task)
+    assert verdict["status"] == "REJECTED", verdict
+    assert verdict["inherited_challenge_results"][0]["status"] == "FAIL"
+    assert any("does not pass every immutable verification test" in reason
+               for reason in verdict["reasons"]), verdict
+
+
+@_NEEDS_SIMULATOR
+def test_a_still_passing_inherited_proof_neither_blocks_nor_can_be_retired(
+        tmp_path):
+    """The mutation: an inconvenient-but-supported proof is not retirable.
+
+    Both halves matter. A passing inherited proof never blocked acceptance in
+    the first place, so no repair needs it retired -- and naming it anyway is
+    refused. That is what keeps supersession from becoming a general escape
+    hatch for any test somebody would rather not satisfy.
+    """
+    for name, supersede, expected_status in (
+            ("not-named", False, "ACCEPTED"),
+            ("named", True, "REJECTED")):
+        _, task = _task_with(tmp_path / name, _DEFAULTS_PROMPT,
+                             _defaults_rtl(4, 8))
+        inherited = _defaults_inherited(
+            task, _SUPPORTED_DEFAULTS_TEST,
+            "inherited-supported-passing-test.sv",
+            "The default reset mask bit zero must be one.",
+            ("This inherited challenge checks a reset-mask bit the public input "
+             "directly requires to be one, so its expectation is supported, not "
+             "refuted, by the declared public contract."))
+        task["verification_challenges"] = [inherited]
+        review = _valid_review(task)
+        review["verification_test"] = _defaults_replacement(task)
+        if supersede:
+            review["challenge_supersessions"] = [_supersession(
+                inherited,
+                ("This attempted retirement is illegitimate: the inherited test "
+                 "still passes and its expectation is supported by the same "
+                 "public input the replacement cites, so nothing about it is "
+                 "contradicted."),
+                _DEFAULTS_EVIDENCE)]
+        _write_review(task, review)
+
+        verdict = bd._validate_ai_review(task)
+        assert verdict["status"] == expected_status, (name, verdict)
+        assert verdict["inherited_challenge_results"][0]["status"] == "PASS"
+        if supersede:
+            assert any("must validly FAIL or be structurally INVALID" in reason
+                       for reason in verdict["reasons"]), verdict
+
+
+_LATENCY_PROMPT = """Design module dut with this exact interface:
+
+module dut(input wire clk, input wire rst_n, input wire [1:0] cmd,
+           input wire cmd_valid, output reg [3:0] out, output reg out_valid);
+
+Raw command 0 selects output 1. The decoded output must become valid exactly
+three clock cycles after the command is accepted.
+"""
+
+_LATENCY_EVIDENCE = [
+    {"excerpt": "Raw command 0 selects output 1",
+     "supports": "The public description fixes the decode of raw command zero."},
+    {"excerpt": "valid exactly three clock cycles after the command is accepted",
+     "supports": "The public description fixes the decode latency at three cycles."},
+]
+
+
+def _latency_rtl(latency: int) -> str:
+    return f"""module dut(input wire clk, input wire rst_n, input wire [1:0] cmd,
+           input wire cmd_valid, output reg [3:0] out, output reg out_valid);
+  localparam LATENCY = {latency};
+  reg [7:0] count;
+  reg [1:0] held;
+  always @(posedge clk or negedge rst_n) begin
+    if (!rst_n) begin
+      count <= 8'd0; out <= 4'd0; out_valid <= 1'b0; held <= 2'd0;
+    end else if (cmd_valid) begin
+      held <= cmd; count <= 8'd1; out_valid <= 1'b0;
+    end else if (count != 8'd0 && count < LATENCY) begin
+      count <= count + 8'd1;
+    end else if (count == LATENCY) begin
+      count <= 8'd0; out_valid <= 1'b1;
+      out <= (held == 2'd0) ? 4'd1 : 4'd0;
+    end else begin
+      out_valid <= 1'b0;
+    end
+  end
+endmodule
+"""
+
+
+def _latency_test(cycles: int) -> str:
+    return r"""
+module vibeic_ai_challenge_tb;
+  reg clk = 1'b0; reg rst_n = 1'b0; reg [1:0] cmd = 2'd0; reg cmd_valid = 1'b0;
+  wire [3:0] out; wire out_valid;
+  integer i;
+  dut candidate(.clk(clk), .rst_n(rst_n), .cmd(cmd), .cmd_valid(cmd_valid),
+                .out(out), .out_valid(out_valid));
+  always #1 clk = ~clk;
+  initial begin
+    @(posedge clk); rst_n = 1'b1;
+    @(posedge clk); cmd = 2'd0; cmd_valid = 1'b1;
+    @(posedge clk); cmd_valid = 1'b0;
+    for (i = 0; i < %d - 1; i = i + 1) begin
+      @(posedge clk);
+      if (out_valid !== 1'b0) begin
+        $display("VIBEIC_AI_CHALLENGE=FAIL early valid at %%0d", i); $fatal(1);
+      end
+    end
+    @(posedge clk); #0;
+    if (out_valid !== 1'b1 || out !== 4'd1) begin
+      $display("VIBEIC_AI_CHALLENGE=FAIL out=%%0d valid=%%b", out, out_valid);
+      $fatal(1);
+    end
+    $display("VIBEIC_AI_CHALLENGE=PASS");
+    $finish;
+  end
+endmodule
+""" % cycles
+
+
+@_NEEDS_SIMULATOR
+def test_a_passing_inherited_proof_does_not_block_the_repair_handoff(tmp_path):
+    """The entry to the same loop, on the wrong candidate.
+
+    Here the contradicting inherited test still PASSES, because it was written
+    for this candidate. If that PASS were treated as agreement with the review,
+    a proven finding could not enter repair at all -- which is the shape issue
+    #2033 believed it was seeing. It is REPAIR_REQUIRED, not REJECTED.
+    """
+    _, task = _task_with(tmp_path, _LATENCY_PROMPT, _latency_rtl(6))
+    inherited = _write_challenge(
+        task, "inherited-six-cycle-test.sv", _latency_test(6),
+        _LATENCY_EVIDENCE, "The old test accepts a six-cycle decode latency.",
+        ("This inherited challenge waits six clock cycles for the decoded "
+         "output even though the public description states three."),
+        inherited=True)
+    task["verification_challenges"] = [inherited]
+    review = _valid_review(task)
+    review["verification_test"] = _write_challenge(
+        task, "replacement.sv", _latency_test(3), _LATENCY_EVIDENCE,
+        "Raw command 0 must produce output 1 exactly three cycles later.",
+        ("The public description states a three-cycle decode latency, so this "
+         "test drives raw command 0 and checks the output is invalid before, "
+         "and correct at, the third cycle."))
+    review["semantic_review"] = {
+        "verdict": "FAIL",
+        "findings": [{"issue": "out_valid rises six cycles after the command, "
+                               "not the three the description states"}],
+        "prompt_evidence": _LATENCY_EVIDENCE,
+        "rationale": ("The candidate takes six cycles to raise out_valid while "
+                      "the public description states exactly three; the attached "
+                      "test demonstrates the mismatch without any oracle."),
+    }
+    _write_review(task, review)
+
+    verdict = bd._validate_ai_review(task)
+    assert verdict["status"] == "REPAIR_REQUIRED", verdict
+    assert verdict["challenge_result"]["status"] == "FAIL"
+    assert verdict["inherited_challenge_results"][0]["status"] == "PASS"
+    assert not verdict["reasons"], verdict
+
+
+@_NEEDS_SIMULATOR
+def test_a_decode_latency_contradiction_is_already_supersedable(tmp_path):
+    """Issue #2033 case 2: six inherited cycles against three declared ones."""
+    _, task = _task_with(tmp_path, _LATENCY_PROMPT, _latency_rtl(3))
+    inherited = _write_challenge(
+        task, "inherited-six-cycle-test.sv", _latency_test(6),
+        _LATENCY_EVIDENCE, "The old test accepts a six-cycle decode latency.",
+        ("This inherited challenge waits six clock cycles for the decoded "
+         "output even though the public description states three, so its own "
+         "expectation contradicts the declared latency it claims to check."),
+        inherited=True)
+    task["verification_challenges"] = [inherited]
+    review = _valid_review(task)
+    review["verification_test"] = _write_challenge(
+        task, "replacement.sv", _latency_test(3), _LATENCY_EVIDENCE,
+        "Raw command 0 must produce output 1 exactly three cycles later.",
+        ("The public description maps raw command 0 to output 1 and states a "
+         "three-cycle decode latency, so this test drives that command and "
+         "checks the output is invalid before, and correct at, the third cycle."))
+    review["challenge_supersessions"] = [_supersession(
+        inherited,
+        ("The inherited test waits six cycles for the decoded output while the "
+         "public description states exactly three, so the inherited expectation "
+         "is refuted by the declared public contract it claims to check."),
+        _LATENCY_EVIDENCE)]
+    _write_review(task, review)
+
+    verdict = bd._validate_ai_review(task)
+    assert verdict["status"] == "ACCEPTED", verdict
+    result = verdict["inherited_challenge_results"][0]
+    assert result["status"] == "SUPERSEDED"
+    assert result["original_status"] == "FAIL"
+    assert Path(inherited["path"]).read_text() == _latency_test(6)
+
 @pytest.mark.parametrize(
     "mutate, expected",
     [
