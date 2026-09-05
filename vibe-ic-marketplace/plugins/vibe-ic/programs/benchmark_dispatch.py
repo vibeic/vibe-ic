@@ -1606,17 +1606,18 @@ def _validate_ai_review(task: dict) -> dict:
                     "this host, so its alleged defect was not measured: "
                     + "; ".join(str(r) for r in
                                 result.get("reasons") or []))
-            elif result.get("status") == "FAIL":
+            elif result.get("status") in {"FAIL", "INVALID"}:
                 result = {
                     **result,
                     "status": "SUPERSEDED",
-                    "original_status": "FAIL",
+                    "original_status": result.get("status"),
                     "supersession": supersession,
                 }
             else:
                 reasons.append(
-                    "a challenge named for supersession must validly FAIL the "
-                    "current candidate before it can be corrected")
+                    "a challenge named for supersession must validly FAIL or "
+                    "be structurally INVALID on the current candidate before "
+                    "it can be corrected")
             inherited_challenge_results.append(result)
             continue
         inherited_challenge_results.append(result)

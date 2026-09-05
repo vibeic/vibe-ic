@@ -381,6 +381,79 @@ def test_fresh_ai_can_supersede_a_failing_defective_inherited_challenge(
         inherited["sha256"]
 
 
+@_NEEDS_SIMULATOR
+def test_fresh_ai_can_supersede_a_structurally_invalid_inherited_challenge(
+        tmp_path):
+    """A broken old bench is retired only by a passing prompt-bound test."""
+    _, task, _ = _task(tmp_path)
+    inherited = _write_invalid_inherited_challenge(task)
+    task["verification_challenges"] = [inherited]
+    review = _valid_review(task)
+    review["verification_test"] = _write_direct_assignment_challenge(task)
+    review["challenge_supersessions"] = [{
+        "schema": "vibeic.benchmark.challenge_supersession.v1",
+        "challenge_sha256": inherited["sha256"],
+        "rationale": (
+            "The inherited wildcard test omits the prompt-required input and "
+            "cannot elaborate. The replacement compiles and exhaustively "
+            "checks both values of the exact prompt assignment."),
+        "prompt_evidence": [{
+            "excerpt": "assign y = a",
+            "supports": "The replacement directly checks the stated equality.",
+        }],
+    }]
+    _write_review(task, review)
+
+    verdict = bd._validate_ai_review(task)
+    assert verdict["status"] == "ACCEPTED", verdict
+    result = verdict["inherited_challenge_results"][0]
+    assert result["status"] == "SUPERSEDED"
+    assert result["original_status"] == "INVALID"
+    assert result["reasons"]
+
+
+@_NEEDS_SIMULATOR
+def test_fresh_ai_cannot_supersede_a_passing_inherited_challenge(tmp_path):
+    """A replacement cannot erase older evidence that still validly passes."""
+    _, task, _ = _task(tmp_path)
+    inherited = _write_direct_assignment_challenge(task)
+    inherited_path = (Path(task["challenge_path"]).parent /
+                      "inherited-passing-challenge.sv")
+    inherited_source = (Path(inherited["path"]).read_text()
+                        .replace("module vibeic_ai_challenge_tb;",
+                                 "// inherited passing proof\n"
+                                 "module vibeic_ai_challenge_tb;", 1))
+    inherited_path.write_text(inherited_source)
+    inherited.update({
+        "id": task["id"],
+        "path": str(inherited_path.resolve()),
+        "sha256": bd._sha256_text(inherited_source),
+        "prompt_sha256": task["prompt_sha256"],
+        "reviewed_rtl_sha256": "frozen-older-candidate",
+    })
+    task["verification_challenges"] = [inherited]
+    review = _valid_review(task)
+    review["verification_test"] = _write_direct_assignment_challenge(task)
+    review["challenge_supersessions"] = [{
+        "schema": "vibeic.benchmark.challenge_supersession.v1",
+        "challenge_sha256": inherited["sha256"],
+        "rationale": (
+            "This attempted correction is deliberately invalid because the "
+            "inherited challenge still compiles and passes the prompt behavior."),
+        "prompt_evidence": [{
+            "excerpt": "assign y = a",
+            "supports": "The inherited and replacement tests check equality.",
+        }],
+    }]
+    _write_review(task, review)
+
+    verdict = bd._validate_ai_review(task)
+    assert verdict["status"] == "REJECTED", verdict
+    assert verdict["inherited_challenge_results"][0]["status"] == "PASS"
+    assert any("must validly FAIL or be structurally INVALID" in reason
+               for reason in verdict["reasons"]), verdict
+
+
 @pytest.mark.parametrize(
     "mutate, expected",
     [
