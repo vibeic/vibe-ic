@@ -608,21 +608,30 @@ def _int_expr(expr: str, params: Dict[str, int]) -> Optional[int]:
 
 def dut_parameter_defaults(rtl_text: str, dut_module: str) -> Dict[str, int]:
     """`{PARAM: default}` for the DUT's own parameter header, input only."""
-    m = re.search(r"\bmodule\s+" + re.escape(dut_module) + r"\b\s*#\s*\(",
-                  rtl_text or "")
+    # Comments are blanked FIRST. A `)` inside a comment -- "no ')' ever" is
+    # enough -- closed the header early and truncated the parameter list, and a
+    # `(` inside one held it open. Offsets are preserved by the blanker.
+    code = _hdl_code_text.strip_hdl_comments_and_strings(rtl_text or "")
+    m = re.search(r"\bmodule\s+" + re.escape(dut_module) + r"\b\s*#\s*\(", code)
     if not m:
         return {}
     i = m.end() - 1
     depth, j = 0, i
-    while j < len(rtl_text):
-        if rtl_text[j] == "(":
+    while j < len(code):
+        if code[j] == "(":
             depth += 1
-        elif rtl_text[j] == ")":
+        elif code[j] == ")":
             depth -= 1
             if depth == 0:
                 break
         j += 1
-    header = rtl_text[i:j]
+    if depth != 0:
+        # The header is never closed, so the scan ran to EOF and the slice now
+        # spans other modules. Measured: an unterminated `#(` harvested `ZZ` out
+        # of the NEXT module's header and offered it as this DUT's parameter.
+        # An unparsable header yields NO parameters rather than someone else's.
+        return {}
+    header = code[i:j]
     out: Dict[str, int] = {}
     for name, expr in _PARAM_DECL_RE.findall(header):
         val = _int_expr(expr, out)
@@ -830,8 +839,14 @@ def emit_sequence_tb(case: dict, plan: dict, bus: dict, dut_module: str,
     # `resolve_bus_widths` read out of the design's own header/package. With no
     # contract resolved the emission is byte-identical to before: a width is
     # never invented here, it is only ever bound to one the design DECLARED.
-    _AW = int((widths or {}).get("addr") or 32)
-    _DW = int((widths or {}).get("data") or 32)
+    # `or 32` treated a width of 0 as ABSENT and silently substituted 32.
+    # A falsy int is not a missing one; ask whether the key is there.
+    _w = widths or {}
+    _AW = int(_w["addr"]) if _w.get("addr") is not None else 32
+    _DW = int(_w["data"]) if _w.get("data") is not None else 32
+    if _AW < 1 or _DW < 1:
+        raise ValueError(
+            f"a bus width must be at least 1 bit (addr={_AW}, data={_DW})")
     _AD, _DD = (_AW + 3) // 4, (_DW + 3) // 4
 
     def _fits(v: int, w: int, role: str) -> None:

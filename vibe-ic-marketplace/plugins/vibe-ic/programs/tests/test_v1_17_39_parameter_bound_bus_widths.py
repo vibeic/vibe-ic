@@ -328,3 +328,48 @@ def test_conflict_detection_reports_the_distinct_values():
     c = D.parameter_override_conflicts([("t.sv", CONFLICT_TOP)], "dut_mod")
     assert sorted(c["DW"]) == [16, 64]
     assert D.parameter_override_conflicts([("t.sv", AGREE_TOP)], "dut_mod") == {}
+
+
+# --------------------------------------------------------------------------
+# THE MODULE-HEADER SCAN: comments, and a header that is never closed
+#
+# Two bugs that masked each other, which is why the first probe looked clean.
+#   * Parens inside COMMENTS were counted. A `// width, no ')' here` closed the
+#     header early and silently truncated the parameter list.
+#   * A header never closed ran the scan to EOF, so the slice spanned other
+#     modules. Measured: an unterminated `#(` harvested `ZZ` out of the NEXT
+#     module and offered it as this DUT's parameter -- {'AW': 12, 'ZZ': 99}.
+# The first hid the second: the `)` in my first probe's comment stopped the
+# runaway scan, so the leak did not appear until the comment was removed.
+# --------------------------------------------------------------------------
+UNTERMINATED = ("module dut_mod #(parameter int AW = 12\n"
+                "module other #(parameter int ZZ = 99) (input c); endmodule\n")
+COMMENTED = ("module dut_mod #(parameter int AW = 12,  // width, no ')' here\n"
+             "                 parameter int DW = 32) (input clk);\nendmodule\n")
+
+
+def test_an_unterminated_header_yields_no_parameters():
+    got = D.dut_parameter_defaults(UNTERMINATED, "dut_mod")
+    assert "ZZ" not in got, f"harvested another module's parameter: {got}"
+    assert got == {}
+
+
+def test_a_paren_inside_a_comment_does_not_truncate_the_parameter_list():
+    got = D.dut_parameter_defaults(COMMENTED, "dut_mod")
+    assert got == {"AW": 12, "DW": 32}, got
+
+
+# --------------------------------------------------------------------------
+# A FALSY WIDTH IS NOT AN ABSENT ONE
+#
+# `int((widths or {}).get("addr") or 32)` turned a width of 0 into 32 silently.
+# --------------------------------------------------------------------------
+def test_a_zero_width_refuses_rather_than_defaulting_to_32():
+    with pytest.raises(ValueError) as e:
+        _tb(widths={"addr": 0, "data": 0})
+    assert "at least 1 bit" in str(e.value)
+
+
+def test_omitted_widths_still_default_to_32():
+    """CONTROL: absent really is absent, and still means the previous behaviour."""
+    assert "task automatic bus_write(input [31:0] addr," in _tb()
