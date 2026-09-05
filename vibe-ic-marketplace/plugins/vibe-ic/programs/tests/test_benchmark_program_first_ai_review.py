@@ -312,6 +312,43 @@ endmodule
     }
 
 
+def _write_invalid_inherited_challenge(task: dict) -> dict:
+    """An older test that cannot elaborate because its own binding is broken."""
+    source = r"""
+module vibeic_ai_challenge_tb;
+  wire y;
+  dut candidate(.*);
+  initial begin
+    #1;
+    if (y !== 1'b0) begin $display("VIBEIC_AI_CHALLENGE=FAIL"); $fatal(1); end
+    $display("VIBEIC_AI_CHALLENGE=PASS");
+    $finish;
+  end
+endmodule
+"""
+    path = (Path(task["challenge_path"]).parent /
+            "inherited-invalid-challenge.sv")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(source)
+    return {
+        "schema": bd._CHALLENGE_SCHEMA,
+        "id": task["id"],
+        "path": str(path.resolve()),
+        "sha256": bd._sha256_text(source),
+        "top_module": "vibeic_ai_challenge_tb",
+        "prompt_sha256": task["prompt_sha256"],
+        "reviewed_rtl_sha256": "frozen-older-candidate",
+        "prompt_evidence": [{
+            "excerpt": "assign y = a",
+            "supports": "The intended old test was meant to check equality.",
+        }],
+        "expected_behavior": "The older test intended to check direct assignment.",
+        "rationale": (
+            "This fixture represents an inherited challenge whose wildcard "
+            "binding omits the candidate input and therefore cannot elaborate."),
+    }
+
+
 @_NEEDS_SIMULATOR
 def test_fresh_ai_can_supersede_a_failing_defective_inherited_challenge(
         tmp_path):
@@ -867,6 +904,48 @@ def test_fresh_ai_fail_plus_inherited_fail_requests_another_repair(tmp_path):
     assert verdict["challenge_result"]["status"] == "FAIL"
     assert verdict["inherited_challenge_results"][0]["status"] == "FAIL"
     assert verdict["reasons"] == []
+
+
+@_NEEDS_SIMULATOR
+def test_fresh_proven_fail_can_repair_past_invalid_inherited_test(tmp_path):
+    """A broken old test cannot deadlock a separately proven RTL repair."""
+    run = tmp_path / "run"
+    (run / "responses").mkdir(parents=True)
+    project = _project(tmp_path)
+    (project / "phase2" / "stage1" / "rtl" / "dut.v").write_text(
+        "module dut(input wire a, output wire y); assign y = ~a; endmodule\n")
+    got = bio.collect("rtllm", "p1", project)
+    task = bd._make_ai_review_task(
+        "p1", project, got, ROUTING, 0, run, "PROGRAM")
+    task["verification_challenges"] = [
+        _write_invalid_inherited_challenge(task)]
+    _write_review(task, _proven_fail_review(task))
+
+    verdict = bd._validate_ai_review(task)
+    assert verdict["status"] == "REPAIR_REQUIRED", verdict
+    assert verdict["challenge_result"]["status"] == "FAIL"
+    inherited = verdict["inherited_challenge_results"][0]
+    assert inherited["status"] == "INVALID"
+    assert inherited["nonblocking_during_proven_repair"] is True
+    assert inherited["required_on_fresh_review"] is True
+    assert verdict["reasons"] == []
+
+
+@_NEEDS_SIMULATOR
+def test_invalid_inherited_test_still_blocks_semantic_pass(tmp_path):
+    """Repair progress is allowed; acceptance still fails closed."""
+    _, task, _ = _task(tmp_path)
+    task["verification_challenges"] = [
+        _write_invalid_inherited_challenge(task)]
+    _write_review(task, _valid_review(task))
+
+    verdict = bd._validate_ai_review(task)
+    assert verdict["status"] == "REJECTED", verdict
+    inherited = verdict["inherited_challenge_results"][0]
+    assert inherited["status"] == "INVALID"
+    assert "nonblocking_during_proven_repair" not in inherited
+    assert any("immutable verification" in reason
+               for reason in verdict["reasons"]), verdict
 
 
 @pytest.mark.parametrize(

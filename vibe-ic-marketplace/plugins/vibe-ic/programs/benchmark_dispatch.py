@@ -1632,6 +1632,18 @@ def _validate_ai_review(task: dict) -> dict:
             # additional repair evidence, not a malformed review.  A claimed
             # PASS over the same failure remains rejected below.
             pass
+        elif (result.get("status") == "INVALID"
+              and semantic_verdict == "FAIL"
+              and (challenge_result or {}).get("status") == "FAIL"):
+            # A broken older test must not deadlock an independently proven
+            # repair.  This does NOT waive, supersede, or accept the invalid
+            # challenge: it remains visible and is carried to the next fresh
+            # review, where semantic PASS is still blocked until the AI
+            # supplies a prompt-bound passing replacement.  The only action
+            # authorised here is another repair of a candidate that already
+            # failed a different, fresh, executable prompt-derived test.
+            result["nonblocking_during_proven_repair"] = True
+            result["required_on_fresh_review"] = True
         elif result.get("status") != "PASS":
             reasons.append("repair does not pass every immutable verification "
                            "test that proved its parent candidate wrong")
