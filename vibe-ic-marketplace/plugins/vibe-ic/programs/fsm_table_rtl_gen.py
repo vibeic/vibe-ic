@@ -60,6 +60,16 @@ Input spec (JSON or YAML), e.g.:
   ``deadline: N`` + ``starvation_out``  a bounded wait counter per pending event;
     the named output asserts once that event has waited N cycles without being
     acknowledged, so a starved contender REPORTS itself instead of waiting mutely.
+    The BOUNDARY is exact and is pinned by test, because "after N cycles" is
+    precisely the kind of phrase that becomes an off-by-one in somebody's
+    silicon. Counting the cycle in which the request is captured as 0:
+
+        cycles waited   0    1    2   ...  N-1    N   N+1
+        starvation_out  0    0    0   ...   0     1    1
+
+    so the output is LOW at N-1, rises at exactly N, and the counter SATURATES at
+    N rather than wrapping — an event that is never acknowledged keeps reporting
+    itself instead of silently rearming.
 
   ``kind`` is REQUIRED and is never inferred.  A pulse with no ``ack``, a
   ``deadline`` with no ``starvation_out`` (or the reverse), or an ``events`` map on

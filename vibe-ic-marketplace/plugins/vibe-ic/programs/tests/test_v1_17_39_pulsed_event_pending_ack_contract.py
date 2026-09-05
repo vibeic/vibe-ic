@@ -508,3 +508,61 @@ def test_a_one_cycle_request_really_is_lost_without_pending_storage(tmp_path):
     assert c.returncode == 0, c.stderr
     r = subprocess.run([str(sim)], capture_output=True, text=True)
     assert "PULSE_LOST_WITHOUT_PENDING" in r.stdout, r.stdout
+
+
+# --------------------------------------------------------------------------
+# THE DEADLINE BOUNDARY IS EXACT
+#
+# "report starvation after N cycles" is exactly the kind of phrase that becomes
+# an off-by-one in somebody's silicon, and nothing here pinned WHICH cycle. N20
+# made this point about a Python bound; the same argument applies to a bound that
+# becomes hardware, and this one had never been measured at its edge either.
+#
+# Counting the capture cycle as 0: LOW at N-1, HIGH at exactly N, and SATURATING
+# thereafter so an event that is never acked keeps reporting rather than rearming.
+# --------------------------------------------------------------------------
+_DEADLINE_TB = r'''
+`timescale 1ns/1ps
+module tb;
+  reg clk=0, rst_n=0, in=0, irq=0, ack=0; wire out, starved;
+  irq dut(.clk(clk),.rst_n(rst_n),.in(in),.out(out),.irq(irq),.ack(ack),.starved(starved));
+  always #5 clk=~clk;
+  integer k;
+  initial begin
+    @(negedge clk); rst_n=1;
+    @(negedge clk); irq=1;
+    @(negedge clk); irq=0;
+    for (k=0; k<=7; k=k+1) begin
+      $display("k=%0d starved=%b", k, starved);
+      @(negedge clk);
+    end
+    $finish;
+  end
+endmodule
+'''
+
+
+@pytest.mark.skipif(not shutil.which("iverilog"), reason=(
+    "NOT MEASURED HERE: no iverilog on PATH, so the exact cycle at which "
+    "starvation asserts was not measured — only that it eventually does. An "
+    "off-by-one here would ship. Measured in the pinned image."))
+def test_starvation_asserts_at_exactly_the_declared_deadline(tmp_path):
+    spec = dict(BASE, module="irq", events={
+        "irq": {"kind": "pulse", "ack": "ack", "deadline": 5,
+                "starvation_out": "starved"}})
+    _, rtl = _run(tmp_path, spec)
+    (tmp_path / "d.sv").write_text(rtl)
+    (tmp_path / "tb.v").write_text(_DEADLINE_TB)
+    sim = tmp_path / "sim"
+    c = subprocess.run(["iverilog", "-g2012", "-o", str(sim),
+                        str(tmp_path / "d.sv"), str(tmp_path / "tb.v")],
+                       capture_output=True, text=True)
+    assert c.returncode == 0, c.stderr
+    r = subprocess.run([str(sim)], capture_output=True, text=True)
+    seen = dict(re.findall(r"k=(\d+) starved=(\d)", r.stdout))
+    assert seen, r.stdout
+    for k in range(5):
+        assert seen[str(k)] == "0", f"starved early at cycle {k}: {r.stdout}"
+    assert seen["5"] == "1", f"did not assert at the deadline: {r.stdout}"
+    for k in (6, 7):
+        assert seen[str(k)] == "1", f"did not saturate at cycle {k}: {r.stdout}"
