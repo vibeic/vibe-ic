@@ -150,6 +150,9 @@ def _append_state_outputs(lines: List[str], spec: dict, state_expr: str,
 
 _EVENT_KINDS = ("pulse", "level")
 
+#: Largest wait bound that still sizes an implementable counter (32 bits).
+_EVENT_DEADLINE_MAX = (1 << 32) - 1
+
 
 def _events(spec: dict) -> Dict[str, dict]:
     """Normalized ``event -> contract`` map extracted from the INPUT ONLY.
@@ -192,6 +195,15 @@ def _events(spec: dict) -> Dict[str, dict]:
                 raise ValueError(
                     f"events[{name!r}] 'deadline' must be a positive integer "
                     f"cycle count")
+            # BOUNDED. The deadline is INPUT and sizes an emitted counter, so an
+            # absurd value silently produces a several-hundred-bit register that
+            # no synthesiser will take. Refuse it like any other unusable field
+            # rather than emitting nonsense.
+            if deadline > _EVENT_DEADLINE_MAX:
+                raise ValueError(
+                    f"events[{name!r}] 'deadline' of {deadline} exceeds "
+                    f"{_EVENT_DEADLINE_MAX}; that is not a wait bound, and the "
+                    f"counter it would size is not implementable")
             if not starve:
                 raise ValueError(
                     f"events[{name!r}] sets a deadline but names no "
@@ -207,6 +219,38 @@ def _events(spec: dict) -> Dict[str, dict]:
                     f"'deadline'; the bound is not inferable — route to AI")
         out[name] = {"kind": kind, "ack": ack,
                      "deadline": deadline, "starvation_out": starve}
+    # CROSS-EVENT CONFLICTS. Each starvation output is DRIVEN, so two events
+    # naming the same one produce two continuous assignments on one wire. That
+    # is legal Verilog — iverilog compiles it without a word — and it resolves to
+    # X the moment the two disagree, so a genuinely starved event reports an
+    # unusable value with no diagnostic anywhere. That is precisely the defect
+    # class this contract exists to remove, so it is refused here.
+    # An ACK may legitimately be shared: one acknowledgment clearing several
+    # pending events is a real design, and nothing is driven by it.
+    drivers: Dict[str, str] = {}
+    for name, c in out.items():
+        sig = c["starvation_out"]
+        if not sig:
+            continue
+        if sig in drivers:
+            raise ValueError(
+                f"events[{name!r}] and events[{drivers[sig]!r}] both drive "
+                f"starvation output '{sig}'; one wire cannot report two events")
+        drivers[sig] = name
+    for name, c in out.items():
+        sig = c["starvation_out"]
+        if not sig:
+            continue
+        if sig in out:
+            raise ValueError(
+                f"starvation output '{sig}' of events[{name!r}] is also an "
+                f"event request input; it cannot be both driven and driving")
+        for other, oc in out.items():
+            if oc["ack"] == sig:
+                raise ValueError(
+                    f"starvation output '{sig}' of events[{name!r}] is also the "
+                    f"acknowledgment of events[{other!r}]; it cannot be both an "
+                    f"output and an input")
     return out
 
 

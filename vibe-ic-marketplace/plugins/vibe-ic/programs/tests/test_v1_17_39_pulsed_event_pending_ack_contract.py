@@ -299,3 +299,78 @@ def test_the_runner_step_executes_and_emits_the_contract(tmp_path):
     assert "reg pending_irq_a;" in rtl
     assert "assign starved_a = pending_irq_a && (wait_irq_a == 5'd16);" in rtl
     assert "pending_irq_b" not in rtl      # the level control survives the real step
+
+
+# --------------------------------------------------------------------------
+# 9. CROSS-EVENT CONFLICTS and an unbounded deadline
+#
+# Both found by auditing my own emitter, not by a failing test.
+#
+# Two events naming the same `starvation_out` produced TWO continuous
+# assignments on one wire. That is legal Verilog -- iverilog compiles it without
+# a word -- and it resolves to X the moment the two disagree. Measured: with e1
+# starved and e2 idle the output read `x`, so a genuinely starved event reports
+# an unusable value and NOTHING anywhere says so. That is the exact defect class
+# this contract exists to remove, reintroduced by the fix for it.
+#
+# An unbounded `deadline` sized the wait counter, so an absurd value emitted a
+# several-hundred-bit register no synthesiser would take.
+#
+# A SHARED ACK is deliberately still allowed: one acknowledgment clearing
+# several pending events is a real design and nothing is driven by it.
+# --------------------------------------------------------------------------
+def test_two_events_cannot_drive_one_starvation_output(tmp_path):
+    r, _ = _run(tmp_path, dict(BASE, events={
+        "e1": {"kind": "pulse", "ack": "a1", "deadline": 4, "starvation_out": "same"},
+        "e2": {"kind": "pulse", "ack": "a2", "deadline": 4, "starvation_out": "same"}}))
+    assert r.returncode == 1
+    assert "both drive starvation output 'same'" in r.stderr
+
+
+def test_a_starvation_output_cannot_also_be_a_request_input(tmp_path):
+    r, _ = _run(tmp_path, dict(BASE, events={
+        "e1": {"kind": "pulse", "ack": "a1", "deadline": 4, "starvation_out": "e2"},
+        "e2": {"kind": "level"}}))
+    assert r.returncode == 1
+    assert "also an event request input" in r.stderr
+
+
+def test_a_starvation_output_cannot_also_be_an_acknowledgment(tmp_path):
+    r, _ = _run(tmp_path, dict(BASE, events={
+        "e1": {"kind": "pulse", "ack": "a1", "deadline": 4, "starvation_out": "a2"},
+        "e2": {"kind": "pulse", "ack": "a2"}}))
+    assert r.returncode == 1
+    assert "acknowledgment of" in r.stderr
+
+
+def test_an_unimplementable_deadline_is_refused(tmp_path):
+    r, _ = _run(tmp_path, dict(BASE, events={
+        "e": {"kind": "pulse", "ack": "a", "deadline": 10 ** 60,
+              "starvation_out": "s"}}))
+    assert r.returncode == 1
+    assert "is not a wait bound" in r.stderr
+
+
+def test_a_shared_acknowledgment_is_still_allowed(tmp_path):
+    """The CONTROL on the rule above: one ack clearing several pending events is
+    a legitimate architecture and must not be swept up by the conflict check."""
+    r, rtl = _run(tmp_path, dict(BASE, events={
+        "e1": {"kind": "pulse", "ack": "ack", "deadline": 4, "starvation_out": "s1"},
+        "e2": {"kind": "pulse", "ack": "ack", "deadline": 4, "starvation_out": "s2"}}))
+    assert r.returncode == 0, r.stderr
+    assert "assign s1 =" in rtl and "assign s2 =" in rtl
+    assert rtl.count("  input        ack,") == 1, "the shared ack is declared twice"
+
+
+@pytest.mark.skipif(not shutil.which("iverilog"), reason="iverilog not installed")
+def test_each_starvation_output_has_exactly_one_driver(tmp_path):
+    """Structural guarantee, checked on emitted RTL that actually elaborates."""
+    _, rtl = _run(tmp_path, dict(BASE, events={
+        "e1": {"kind": "pulse", "ack": "a1", "deadline": 4, "starvation_out": "s1"},
+        "e2": {"kind": "pulse", "ack": "a2", "deadline": 8, "starvation_out": "s2"}}))
+    for sig in ("s1", "s2"):
+        assert rtl.count(f"assign {sig} =") == 1, f"{sig} has multiple drivers"
+    (tmp_path / "d.sv").write_text(rtl)
+    c = subprocess.run(["iverilog", "-g2012", "-o", str(tmp_path / "s"),
+                        str(tmp_path / "d.sv")], capture_output=True, text=True)
+    assert c.returncode == 0, c.stderr
