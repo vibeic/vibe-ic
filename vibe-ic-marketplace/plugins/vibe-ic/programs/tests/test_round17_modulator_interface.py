@@ -269,6 +269,80 @@ def test_a_selector_no_stage_samples_is_not_emitted():
     assert [d for d in devices if d["name"].startswith("mn_dacb")]
 
 
+def _as_delay_free_branch(entry, which):
+    """The same entry with ONLY ONE of the two branches made delay-free /
+    inverting — `which` is "cst" (the FORWARD branch) or "cft" (the FEEDBACK
+    branch). `_as_delay_free` above moves both together, so it can only ever
+    produce topologies where the forward polarity `p` and the feedback
+    polarity `q` are EQUAL."""
+    m = json.loads(json.dumps(entry))
+    st = [g for g in a2._stage_groups(m) if g.get("first_in")][0]
+    for d in st["devices"]:
+        if d["name"] == "mn_%sv{i}" % which:
+            d["nets"][1] = "clk"
+        elif d["name"] == "mp_%sv{i}" % which:
+            d["nets"][1] = "nclkb"
+        elif d["name"] == "mn_%sc{i}" % which:
+            d["nets"][1] = "nclkb"
+        elif d["name"] == "mp_%sc{i}" % which:
+            d["nets"][1] = "clk"
+    return m
+
+
+def test_the_two_branch_polarities_move_the_answer_INDEPENDENTLY():
+    """THE SECOND CONTROL, and it pins the RULE rather than a pair of values.
+
+    The rule the emitter states is that stage `i`'s fed-back charge reaches
+    the quantiser through its own branch (`q`) and then through every LATER
+    stage's forward branch (`p`), so its sign there is `q * p**(count - i)`
+    and the selector must carry the opposite sign.  `q` and `p` are read off
+    two DIFFERENT branches of the same stage and there is no reason in the
+    circuit for them to agree.
+
+    Every control above moves them TOGETHER (`_as_delay_free` flips both), so
+    all of them are satisfied by any rule of the form `f(p)**(count - i)` with
+    `q` folded into `f` — including rules that drop `q` entirely, or that
+    apply it once per stage instead of once in total.  Splitting them is what
+    makes those rules fail:
+
+        q   p    order 1     order 2
+        +1  +1   ndac        ndac,  ndac        <- shipped
+        -1  -1   ndacb       ndac,  ndacb       <- `_as_delay_free`
+        +1  -1   ndac        ndacb, ndac        <- forward branch only
+        -1  +1   ndacb       ndacb, ndacb       <- feedback branch only
+
+    Four topologies, four DIFFERENT answers.  A derivation that collapses any
+    two of these rows has stopped being a derivation of the loop's sign."""
+    fwd = _as_delay_free_branch(ENTRY, "cst")     # q = +1, p = -1
+    fbk = _as_delay_free_branch(ENTRY, "cft")     # q = -1, p = +1
+    assert _dac_selectors(fwd, 1) == ["ndac"]
+    assert _dac_selectors(fwd, 2) == ["ndacb", "ndac"]
+    assert _dac_selectors(fbk, 1) == ["ndacb"]
+    assert _dac_selectors(fbk, 2) == ["ndacb", "ndacb"]
+    # and the four rows are genuinely distinct at order 2, which is the
+    # property "it can still be wrong" actually rests on.
+    both = _as_delay_free(ENTRY)
+    rows = [tuple(_dac_selectors(e, 2))
+            for e in (ENTRY, both, fwd, fbk)]
+    assert len(set(rows)) == 4, rows
+
+
+def test_which_reference_end_is_POSITIVE_stays_DECLARED_not_derived():
+    """The other half of the repair, and the half a reader is most likely to
+    lose.  The integrator's SIGN is topological and is derived; WHICH PORT of
+    the declared reference pair is the positive one is a fact about the
+    declaration and cannot be read off any switch.  So swapping only the
+    declared `feedback_selectors` mapping — no device touched — must swap
+    every stage's answer, and the polarities the emitter reads must NOT
+    move."""
+    m = json.loads(json.dumps(ENTRY))
+    st = [g for g in a2._stage_groups(m) if g.get("first_in")][0]
+    st[a2.FEEDBACK_SELECTORS_KEY] = {"neg": "b", "pos": ""}
+    assert _dac_selectors(ENTRY, 2) == ["ndac", "ndac"]
+    assert _dac_selectors(m, 2) == ["ndacb", "ndacb"]
+    assert _dac_selectors(m, 1) == ["ndacb"]
+
+
 def test_an_entry_that_declares_no_alternates_substitutes_nothing():
     """The control that keeps every other entry on its old path.
 
