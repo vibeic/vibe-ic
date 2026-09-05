@@ -21,6 +21,7 @@ costs to remove it -- not because the released code ever behaved that way. A rea
 reproduce one against a released version will not be able to, and should not conclude the note
 is wrong.
 """
+import os
 import subprocess
 import sys
 
@@ -454,3 +455,50 @@ def test_the_width_expression_bound_is_exact_at_its_edge():
     limit = D._WIDTH_EXPR_MAX
     assert D._int_expr(str(limit), {}) == limit, "the bound itself was refused"
     assert D._int_expr(str(limit + 1), {}) is None, "one past the bound was accepted"
+
+
+# --------------------------------------------------------------------------
+# DETERMINISM ACROSS PROCESSES
+#
+# The pulsed-event generator has had a determinism test since the first commit;
+# this emitter did not, and it grew set and dict machinery afterwards
+# (collect-every-declaration, conflict maps, an `overridden` list). A program
+# whose product is deterministic RTL must not vary with hash seed, and reasoning
+# that it does not is worth less than running it in processes that differ.
+# --------------------------------------------------------------------------
+_EMIT = (
+    "import sys; sys.path.insert(0, {P!r}); sys.path.insert(0, {T!r})\n"
+    "import importlib.util as u\n"
+    "sp = u.spec_from_file_location('t', {F!r})\n"
+    "m = u.module_from_spec(sp); sp.loader.exec_module(m)\n"
+    "sys.stdout.write(m._tb(widths={{'addr': 12, 'data': 64}}))\n"
+)
+
+
+def _emit_with_seed(seed):
+    code = _EMIT.format(P=str(PROGRAMS), T=str(PROGRAMS / "tests"),
+                        F=str(PROGRAMS / "tests"
+                              / "test_v1_16_41_tb_drives_the_whole_dut.py"))
+    env = dict(os.environ, PYTHONHASHSEED=str(seed))
+    r = subprocess.run([sys.executable, "-c", code], capture_output=True,
+                       text=True, env=env, cwd=str(PROGRAMS), timeout=120)
+    assert r.returncode == 0, r.stderr
+    return r.stdout
+
+
+def test_the_emitted_testbench_is_identical_across_hash_seeds():
+    outs = {_emit_with_seed(s) for s in (0, 1, 42, 7919)}
+    assert len(outs) == 1, "the emitted testbench varies with PYTHONHASHSEED"
+
+
+def test_a_conflict_refusal_names_its_values_in_a_STABLE_order():
+    """The refusal text is read by a human deciding what to fix, so its ORDER
+    must not depend on dict or set iteration. Two parameters, four sites each."""
+    dut = ("module dut_mod #(parameter int AW = 12, parameter int DW = 32, "
+           "parameter int EW = 8) (input clk); endmodule")
+    top = "\n".join(f"module m{i}; dut_mod #(.DW({v}), .EW({i})) u{i} (.clk(c)); endmodule"
+                    for i, v in enumerate([64, 16, 32, 8]))
+    _, why = D.resolve_bus_widths(
+        [("pkg.sv", PKG), ("dut.sv", dut), ("top.sv", top)], dut, "dut_mod", BUS)
+    assert "DW = [8, 16, 32, 64]" in why, why
+    assert "EW = [0, 1, 2, 3]" in why, why
