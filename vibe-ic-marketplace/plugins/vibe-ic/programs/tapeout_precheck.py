@@ -733,6 +733,20 @@ def evaluate(project: Path,
     our_out = project / OUR_ARM_ARTEFACT
     cmd = [sys.executable, str(pdir / "general_precheck.py"), str(project),
            "--json", str(our_out)]
+    # THE PDK REACHES OUR OWN ARM. `general_precheck --pdk` exists so its
+    # density rung can be judged against the PDK's OWN stated per-layer
+    # windows; without it that delegate has no windows, every metal layer is
+    # UNCHECKED and the rung cannot reach a verdict. That forwarding was
+    # closed one level down (general_precheck -> metal_layer_density_check,
+    # tests/test_gf180_general_precheck_forwards_the_pdk.py) and left open
+    # here, at the only caller that has a resolved PDK to give. The value
+    # forwarded is `resolved_pdk` — the same one this report publishes and the
+    # operator arm is selected by — so the two arms cannot be judged against
+    # different processes. HONEST ABSENCE: when the PDK could not be resolved
+    # the flag is omitted exactly as before, the delegate reports that it had
+    # no windows, and nothing is laundered into a clean density result.
+    if resolved_pdk:
+        cmd += ["--pdk", resolved_pdk]
     if layout is not None:
         cmd += ["--gds", str(layout)]
     if declaration_path is not None:
