@@ -237,12 +237,40 @@ def _read_blackbox_cmd(path: str) -> str:
     return f"read_verilog -lib -nooverwrite {path}"
 
 
+# Yosys has no "swap two wire names" primitive, so a permutation is emitted as
+# rename-through-a-temporary.  The temporary uses yosys' PRIVATE `$` namespace and
+# is renamed away again in the same block, so it can never survive to
+# `equiv_make` and can never become a match candidate itself.
+_RENAME_TMP = "$vibeic_lec_pincorr_tmp"
+
+
+def _rename_block(renames: Optional[List[Tuple[str, str]]], top: str) -> str:
+    """Yosys lines that apply `renames` (old -> new wire names) inside `top`.
+
+    A permutation is applied in two phases — every source first moved to a
+    distinct private temporary, then each temporary to its destination — so an
+    A->B / B->A swap cannot destroy one of the two wires halfway through.
+    Empty/None -> "" so the recipe stays byte-identical to the unpatched one."""
+    pairs = [(o, n) for o, n in (renames or []) if o and n and o != n]
+    if not pairs:
+        return ""
+    out = [f"cd {top}"]
+    for i, (old, _new) in enumerate(pairs):
+        out.append(f"rename {old} {_RENAME_TMP}{i}")
+    for i, (_old, new) in enumerate(pairs):
+        out.append(f"rename {_RENAME_TMP}{i} {new}")
+    out.append("cd ..")
+    return "\n".join(out) + "\n"
+
+
 def build_yosys_equiv_script(gold_v: str, gate_v: str, lib: str, top: str,
                              blackbox_v: Optional[List[str]] = None,
                              seq_depths: Optional[List[int]] = None,
                              strip_gate_ports: Optional[List[str]] = None,
                              functional_lib: bool = False,
-                             blacklist: Optional[str] = None) -> str:
+                             blacklist: Optional[str] = None,
+                             gate_renames: Optional[List[Tuple[str, str]]] = None
+                             ) -> str:
     """Emit the Yosys .ys that structurally proves gold_v == gate_v.
 
     blacklist : optional path (already in the tool's own filesystem view) of a
@@ -251,6 +279,21 @@ def build_yosys_equiv_script(gold_v: str, gate_v: str, lib: str, top: str,
                  and only for points that check proved to be a naming artefact;
                  never for a top-level port or a register pin. Absent -> the
                  recipe is byte-identical to the one without this argument.
+
+    gate_renames : optional [(old_wire, new_wire), ...] applied to the GATE side
+                 only, after `opt_clean -purge` and before `splitnets -ports`.
+                 This is the PIN-CORRESPONDENCE re-proof and it REPLACES the
+                 blacklist for the pin-permutation class: instead of DELETING a
+                 mis-paired point it renames the gate-side pin wire so
+                 `equiv_make`'s BY-NAME matching pairs it with its TRUE gold
+                 counterpart. Renaming a wire changes no logic and adds/removes
+                 no point, so the denominator is preserved exactly (measured
+                 subservient x gf180mcuD 2026-09-05: 1345 = 1328/17 unproven
+                 before, 1345 = 1345/0 after, the 1345 point NAMES set-identical).
+                 Emitted only by `build_pin_correspondence_renames`, i.e. only
+                 for a permutation whose cell function was PROVEN symmetric by
+                 exhaustive truth table. Absent -> the recipe is byte-identical
+                 to the one without this argument.
 
     gold_v : golden reference netlist/RTL (e.g. <top>_synth.v or the RTL).
     gate_v : the netlist under test (the FINAL routed / ECO / filled netlist).
@@ -314,7 +357,8 @@ def build_yosys_equiv_script(gold_v: str, gate_v: str, lib: str, top: str,
         # read AFTER read_liberty with -nooverwrite: fill/tap/decap/diode/
         # antenna carry no function and stay inert blackboxes, while every cell
         # the Liberty DID model keeps its function (see _read_blackbox_cmd).
-        def _func_side(read_v: str, stash: str, extra_strip: str = "") -> str:
+        def _func_side(read_v: str, stash: str, extra_strip: str = "",
+                       renames: str = "") -> str:
             return (f"read_liberty {lib}\n"
                     f"{bb_block}{read_v}\n"
                     f"prep -top {top}\n"
@@ -323,10 +367,12 @@ def build_yosys_equiv_script(gold_v: str, gate_v: str, lib: str, top: str,
                     f"async2sync\n"
                     f"opt -purge\n"
                     f"opt_clean -purge\n"
+                    f"{renames}"
                     f"splitnets -ports\n"
                     f"design -stash {stash}\n")
         gold_block = _func_side(f"read_verilog -sv {gold_v}", "gold")
-        gate_block = _func_side(f"read_verilog -sv {gate_v}", "gate", strip_block)
+        gate_block = _func_side(f"read_verilog -sv {gate_v}", "gate", strip_block,
+                                _rename_block(gate_renames, top))
         return (
             "# Vibe-IC post-layout LEC — FUNCTIONAL (sound) Liberty cell models.\n"
             f"{gold_block}\n{gate_block}\n"
@@ -354,7 +400,7 @@ design -stash gold
 read_liberty -lib {lib}
 {bb_block}read_verilog -sv {gate_v}
 prep -top {top}
-{strip_block}splitnets -ports
+{strip_block}{_rename_block(gate_renames, top)}splitnets -ports
 design -stash gate
 
 design -copy-from gold -as gold {top}
@@ -690,6 +736,153 @@ class _LibertyFn:
         return bool(env[t])                      # KeyError on a state variable
 
 
+def transparent_buffer_cells(lib: Dict[str, Dict[str, object]]
+                             ) -> Dict[str, Tuple[str, str]]:
+    """{cell: (in_pin, out_pin)} for every Liberty cell PROVEN to be a
+    non-inverting buffer.
+
+    A cell qualifies only when it has exactly one input pin and exactly one
+    output pin AND its Liberty `function` evaluates to the input for BOTH input
+    values — i.e. the transparency is proven from the PDK's own model, never
+    assumed from a cell NAME (no `buf`/`clkbuf` string matching, so this stays
+    PDK-agnostic).  An inverter fails the truth table and is never returned."""
+    out: Dict[str, Tuple[str, str]] = {}
+    for cell, d in (lib or {}).items():
+        ins = list(d.get("inputs") or [])
+        outs = dict(d.get("outputs") or {})
+        if len(ins) != 1 or len(outs) != 1:
+            continue
+        ip = ins[0]
+        op, fexpr = next(iter(outs.items()))
+        if not fexpr:
+            continue
+        try:
+            fn = _LibertyFn(fexpr)
+            if all(fn({ip: v}) == v for v in (False, True)):
+                out[cell] = (ip, op)
+        except (KeyError, ValueError):
+            continue
+    return out
+
+
+def resolve_through_buffers(instances: Dict[str, Tuple[str, Dict[str, str]]],
+                            buffers: Dict[str, Tuple[str, str]]
+                            ) -> Dict[str, str]:
+    """{net: the net upstream of every chain of PROVEN-transparent buffers that
+    drives it}.  A net not driven by such a buffer is absent from the map.
+
+    WHY THIS EXISTS (measured, subservient x gf180mcuD, 2026-09-05): the router
+    both PERMUTED two commutative inputs of `__uuf__._0842_` AND rebuffered one
+    of them, so the gate instance reads `net220` where the gold instance reads
+    `__uuf__._0417_` and `net220 = buf_3(.I(__uuf__._0417_))`.  Compared by NAME
+    the two pin sets are not a permutation, so the permutation is invisible and
+    the point is rejected as "a rewire, not a swap".  Resolving the gate net
+    through the buffer — whose transparency is proven, not assumed — makes the
+    permutation visible again.  A cycle (never expected in a driver chain) stops
+    the walk rather than hanging."""
+    src: Dict[str, str] = {}
+    for _inst, (cell, pins) in (instances or {}).items():
+        bp = (buffers or {}).get(cell)
+        if not bp:
+            continue
+        ip, op = bp
+        i_net, o_net = pins.get(ip, ""), pins.get(op, "")
+        if i_net and o_net and i_net != o_net:
+            src[o_net] = i_net
+    out: Dict[str, str] = {}
+    for net in src:
+        seen = {net}
+        cur = net
+        while cur in src and src[cur] not in seen:
+            cur = src[cur]
+            seen.add(cur)
+        out[net] = cur
+    return out
+
+
+def build_pin_correspondence_renames(
+        accepted: List[Dict[str, object]],
+        unproven_names: List[str]) -> Tuple[List[Tuple[str, str]],
+                                            List[Dict[str, object]]]:
+    """(gate-side [(old_wire, new_wire), ...], per-instance records).
+
+    THE POINT OF THIS FUNCTION.  `equiv_make` pairs cut points BY NAME.  The
+    flattened functional recipe leaves only `<instance>.<pin>` wire names to
+    match on — and those are exactly the names a post-route resizer is free to
+    PERMUTE (OpenROAD RSZ SwapPinsMove).  A permuted pin therefore makes
+    `equiv_make` pair two GENUINELY DIFFERENT signals under one name, which can
+    never be proven, and every point whose cone reads that name is unprovable
+    with it.  Renaming the gate-side pin wire to its TRUE gold counterpart pairs
+    the point correctly.  It changes NO logic, DELETES no point and moves no
+    denominator — unlike the blacklist path, which removes the point from the
+    match set.
+
+    SAFETY.  A rename is emitted only for a record `classify_pin_permutation_
+    points` ACCEPTED, i.e. only where the cell's Liberty function was proven
+    symmetric under that exact permutation by exhaustive truth table and the
+    instance's output nets are unchanged.  In addition every pin the permutation
+    MOVED must itself appear in `unproven_names`: those names came from a real
+    `equiv_status`, so the wire is known to exist on BOTH sides of the miter that
+    produced them, and a `rename` of an absent object is a hard yosys error.  An
+    instance whose gold pins do not carry distinct nets is skipped (the
+    correspondence would be ambiguous), as is a mapping that is not a bijection.
+    Points the classifier rejected keep their cut point and stay unproven, so a
+    partial application can never turn a real failure into a pass."""
+    unproven = set(unproven_names or [])
+    by_inst: Dict[str, Dict[str, object]] = {}
+    for rec in accepted or []:
+        inst = str(rec.get("instance") or "")
+        if inst:
+            by_inst.setdefault(inst, rec)
+    renames: List[Tuple[str, str]] = []
+    records: List[Dict[str, object]] = []
+    for inst in sorted(by_inst):
+        rec = by_inst[inst]
+        gin = dict(rec.get("gold_input_nets") or {})
+        tin = dict(rec.get("gate_input_nets_resolved")
+                   or rec.get("gate_input_nets") or {})
+        out: Dict[str, object] = {"instance": inst}
+        if not gin or set(gin) != set(tin):
+            out["skipped"] = "gold/gate input pin sets differ"
+            records.append(out)
+            continue
+        if len(set(gin.values())) != len(gin):
+            out["skipped"] = ("the gold instance's input pins do not carry "
+                              "distinct nets; the correspondence is ambiguous")
+            records.append(out)
+            continue
+        net2gold = {n: p for p, n in gin.items()}
+        sigma: Dict[str, str] = {}
+        bad = ""
+        for p, n in tin.items():
+            q = net2gold.get(n)
+            if q is None:
+                bad = (f"gate pin {p} carries net {n!r}, which no gold pin of "
+                       "the instance carries")
+                break
+            sigma[p] = q
+        if not bad and sorted(sigma.values()) != sorted(sigma):
+            bad = "the pin correspondence is not a bijection"
+        if bad:
+            out["skipped"] = bad
+            records.append(out)
+            continue
+        moved = [p for p, q in sigma.items() if p != q]
+        missing = [p for p in moved if f"{inst}.{p}" not in unproven]
+        if missing:
+            out["skipped"] = ("moved pin(s) " + ",".join(sorted(missing))
+                              + " are not in the UNPROVEN set, so the gate wire "
+                                "is not known to exist; not renamed")
+            records.append(out)
+            continue
+        pairs = [(f"{inst}.{p}", f"{inst}.{sigma[p]}") for p in sorted(moved)]
+        renames.extend(pairs)
+        out.update({"permutation": {p: sigma[p] for p in sorted(moved)},
+                    "renames": pairs})
+        records.append(out)
+    return renames, records
+
+
 def classify_pin_permutation_points(names: List[str], gold_text: str,
                                     gate_text: str, liberty_text: str
                                     ) -> Dict[str, List[Dict[str, object]]]:
@@ -701,6 +894,17 @@ def classify_pin_permutation_points(names: List[str], gold_text: str,
     gold_i = _parse_netlist_instances(gold_text)
     gate_i = _parse_netlist_instances(gate_text)
     lib = _parse_liberty_pins(liberty_text)
+    # A post-route repair may PERMUTE a cell's commutative inputs AND REBUFFER
+    # one of them in the same move, so the gate instance reads the buffer's
+    # output where the gold instance reads the buffer's input.  Compared by NAME
+    # those pin sets are not a permutation and the swap is invisible.  Resolve
+    # the gate nets through chains of cells the PDK's own Liberty function
+    # PROVES are non-inverting buffers (never a name match) before comparing.
+    # Measured: without this, __uuf__._0842_ (gate .A3 = net220 = buf(_0417_))
+    # is rejected as "a rewire, not a swap" and 7 of subservient's 17 unproven
+    # points stay unproven.  Which nets were resolved is RECORDED per point.
+    buffers = transparent_buffer_cells(lib)
+    resolve = resolve_through_buffers(gate_i, buffers)
     accepted: List[Dict[str, object]] = []
     rejected: List[Dict[str, object]] = []
 
@@ -734,8 +938,13 @@ def classify_pin_permutation_points(names: List[str], gold_text: str,
             _no(rec, f"input/output pin sets differ between {gcell} and {tcell}")
             continue
         gin = {p: gpins.get(p, "") for p in gl["inputs"]}
-        tin = {p: tpins.get(p, "") for p in tl["inputs"]}
-        rec.update({"gold_input_nets": gin, "gate_input_nets": tin})
+        tin_raw = {p: tpins.get(p, "") for p in tl["inputs"]}
+        tin = {p: resolve.get(n, n) for p, n in tin_raw.items()}
+        rec.update({"gold_input_nets": gin, "gate_input_nets": tin_raw,
+                    "gate_input_nets_resolved": tin,
+                    "buffer_resolved": {p: [tin_raw[p], tin[p]]
+                                        for p in tin_raw
+                                        if tin_raw[p] != tin[p]}})
         if sorted(gin.values()) != sorted(tin.values()) or "" in gin.values():
             _no(rec, "the gate instance's input nets are not a permutation of "
                      "the gold instance's input nets (a rewire, not a swap)")

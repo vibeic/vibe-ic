@@ -43333,12 +43333,19 @@ def _emit_lec_post_layout(project: Path, top: str, pdk: PdkConfig,
                                container)
     log_host = out_json.parent / "lec_post_layout.log"
 
-    def _run_lec(functional_lib: bool, blacklist_c: Optional[str] = None):
+    def _run_lec(functional_lib: bool, blacklist_c: Optional[str] = None,
+                 gate_renames: Optional[List[Tuple[str, str]]] = None):
         """Build the recipe (functional or -lib), run yosys, return log text.
         `blacklist_c` (container path) is set ONLY by the pin-permutation
         re-proof below, on points that classification proved to be naming
-        artefacts of the flattened recipe."""
+        artefacts of the flattened recipe.
+        `gate_renames` is the PIN-CORRESPONDENCE re-proof: gate-side wire
+        renames that pair a permuted pin's cut point with its TRUE gold
+        counterpart instead of DELETING the point. It preserves the denominator,
+        which the blacklist does not."""
         _kw = {"blacklist": blacklist_c} if blacklist_c else {}
+        if gate_renames:
+            _kw["gate_renames"] = gate_renames
         ys = mod.build_yosys_equiv_script(gold_c, gate_c, lib_c, top,
                                           blackbox_v=blackbox,
                                           strip_gate_ports=strip_ports,
@@ -43439,6 +43446,22 @@ def _emit_lec_post_layout(project: Path, top: str, pdk: PdkConfig,
                    and not _cls.get("error")
                    and len(_cls.get("accepted") or []) == len(_names)
                    and len(_names) == int(parsed.get("unproven") or -1))
+        # PIN-CORRESPONDENCE (preferred over the blacklist). Renaming the
+        # gate-side pin wire pairs the point with its true gold counterpart;
+        # the blacklist DELETES the point and moves the denominator. Measured
+        # subservient x gf180mcuD 2026-09-05: canonical 1345 = 1328 proven / 17
+        # unproven / 0 counterexample in 97.0 s; with the renames 1345 = 1345 /
+        # 0 in 2.7 s, and the 1345 point NAMES set-identical (0 added, 0
+        # removed). Of those 17 only 6 are permuted pins, so the all-or-nothing
+        # `_all_ok` blacklist gate never fires there; the rename applies to the
+        # ACCEPTED subset, which is safe because every point the classifier
+        # REJECTED keeps its cut point and stays unproven — a partial
+        # application can never turn a real failure into a pass.
+        try:
+            _ren, _ren_recs = mod.build_pin_correspondence_renames(
+                _cls.get("accepted") or [], _names)
+        except Exception as exc:  # noqa: BLE001 — best-effort, recorded
+            _ren, _ren_recs = [], [{"error": repr(exc)}]
         pin_perm = {
             "first_pass": {k: parsed.get(k) for k in
                            ("verdict", "proven", "unproven", "total")},
@@ -43447,8 +43470,63 @@ def _emit_lec_post_layout(project: Path, top: str, pdk: PdkConfig,
             "rejected": _cls.get("rejected") or [],
             "classifier_error": _cls.get("error"),
             "reproof_run": False,
+            "method": None,
+            "pin_correspondence": {"renames": _ren, "records": _ren_recs},
         }
-        if _all_ok:
+        if _ren:
+            _first_log = out_json.parent / "lec_post_layout.pass1.log"
+            try:
+                if log_host.is_file():
+                    _first_log.write_text(log_host.read_text(errors="replace"))
+            except OSError:
+                pass
+            rc, log_text = _run_lec(functional_lib=functional_lib,
+                                    gate_renames=_ren)
+            _p2 = mod.parse_equiv_log(log_text)
+            _t1 = pin_perm["first_pass"].get("total")
+            _t2 = _p2.get("total")
+            # A rename can neither add nor remove a matched name. If the
+            # denominator moved, the premise is wrong: KEEP THE FIRST PASS and
+            # record it, never report the second as an improvement.
+            if _t1 is not None and _t2 is not None and _t1 != _t2:
+                pin_perm.update({
+                    "method": "pin_correspondence_rename",
+                    "reproof_run": False,
+                    "denominator_moved": {"first_pass": _t1,
+                                          "second_pass": _t2},
+                    "note": ("the re-proof changed the number of compared "
+                             "points, which a rename cannot legitimately do; "
+                             "the FIRST-PASS verdict stands"),
+                })
+                notes.append(
+                    "post-layout LEC: pin-correspondence re-proof moved the "
+                    f"denominator {_t1} -> {_t2}; DISCARDED, first-pass "
+                    "verdict stands")
+            else:
+                parsed = _p2
+                pin_perm.update({
+                    "method": "pin_correspondence_rename",
+                    "reproof_run": True,
+                    "first_pass_log": str(_first_log),
+                    "second_pass": {k: parsed.get(k) for k in
+                                    ("verdict", "proven", "unproven", "total")},
+                    "note": ("the renamed wires are the INPUT pins of cells "
+                             "whose commutative inputs a post-route repair "
+                             "permuted; the pin's cut point is PAIRED with its "
+                             "true gold counterpart, not removed, so the "
+                             "denominator is unchanged and the verdict above is "
+                             "yosys's over the SAME point set"),
+                })
+                notes.append(
+                    f"post-layout LEC: {len(_ren)} gate pin wire(s) on "
+                    + ", ".join(sorted({r.get("instance") or "?"
+                                        for r in _ren_recs
+                                        if r.get("renames")}))
+                    + " renamed to their gold counterparts (proven cell "
+                      f"symmetry); re-proved over the same {_t2} point(s) -> "
+                      f"{parsed.get('verdict')} (proven={parsed.get('proven')}, "
+                      f"unproven={parsed.get('unproven')})")
+        elif _all_ok:
             _bl = out_json.parent / f"lec_post_{top}_pin_permutation_blacklist.txt"
             _bl.write_text("\n".join(_names) + "\n")
             _first_log = out_json.parent / "lec_post_layout.pass1.log"
@@ -43463,6 +43541,7 @@ def _emit_lec_post_layout(project: Path, top: str, pdk: PdkConfig,
             parsed = mod.parse_equiv_log(log_text)
             pin_perm.update({
                 "reproof_run": True,
+                "method": "blacklist",
                 "blacklist": str(_bl),
                 "first_pass_log": str(_first_log),
                 "second_pass": {k: parsed.get(k) for k in
