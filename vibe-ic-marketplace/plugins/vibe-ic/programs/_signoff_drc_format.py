@@ -170,6 +170,21 @@ RE_DRT_COMPLETING = re.compile(
 RE_DRT_0701 = re.compile(
     r"\[WARNING DRT-0701\][^\n]*?found\s+(\d+)\s+violation")
 
+# When post-route verification AGREES with the routing loop, current OpenROAD
+# emits the compact informational form instead of DRT-0701:
+#
+#   [INFO DRT-0702] Post-route verification: 0 violation(s).
+#
+# This is still the tool's final verification of the geometry that ships.  It
+# can differ from the last DRT-0199 when a later operation (for example a PG
+# re-route that produces no new iteration tally) changed or re-verified the
+# database.  Ignoring it makes the prose reader stale while the metrics JSON is
+# updated, and the fail-closed reconciliation then rejects a real agreement.
+# chip-AGNOSTIC: OpenROAD message grammar only.
+RE_DRT_0702 = re.compile(
+    r"\[INFO DRT-0702\]\s*Post-route verification:\s*"
+    r"(\d+)\s+violation")
+
 
 def router_loop_iter_counts(text: str) -> List[int]:
     """Every per-iteration router DRC count the ROUTING LOOP itself printed, in
@@ -238,9 +253,10 @@ def router_iter_counts(text: str) -> List[int]:
     # declaration had no conflict left to settle and no silence left to record
     # — the log's honest "I never printed this" was replaced by a number it
     # never printed. A log the loop said nothing in is still UNDETERMINED here;
-    # `router_post_route_verified_count` remains the way to ask 0701 directly.
+    # `router_post_route_final_count` remains the way to ask the final
+    # post-route verifier directly.
     if out:
-        verified = router_post_route_verified_count(text)
+        verified = router_post_route_final_count(text)
         if verified is not None and out[-1] != verified:
             out.append(verified)
     return out
@@ -253,6 +269,30 @@ def router_iter_counts(text: str) -> List[int]:
 #: PG-dirty net logged DRT-0178/0036/0179 and no DRT-0194 at all, so this rule
 #: does not fire on a call that did nothing.
 RE_DRT_0194 = re.compile(r"\[INFO DRT-0194\] Start detail routing")
+
+
+def router_post_route_final_count(text: str) -> Optional[int]:
+    """Final DRT-0701/0702 count for the route that ships, or ``None``.
+
+    DRT-0701 is the disagreement form and DRT-0702 is the agreement form.  The
+    later message in byte order wins, but only when no later detail-route start
+    superseded it.  ``0`` is returned only from an explicit tool line; silence
+    remains ``None``.  This function does not manufacture a routing trajectory:
+    ``router_iter_counts`` appends it only when a real loop count already
+    exists.
+    """
+    if not text:
+        return None
+    matches = [*RE_DRT_0701.finditer(text), *RE_DRT_0702.finditer(text)]
+    if not matches:
+        return None
+    last = max(matches, key=lambda match: match.start())
+    if RE_DRT_0194.search(text, last.end()) is not None:
+        return None
+    try:
+        return int(last.group(1))
+    except (TypeError, ValueError):
+        return None
 
 
 def _last_0701_not_superseded(text: str, rx: "re.Pattern[str]"):
