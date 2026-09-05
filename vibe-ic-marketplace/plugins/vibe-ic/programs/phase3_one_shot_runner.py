@@ -31545,6 +31545,47 @@ def _pad_ring_route_cache_valid(project: Path, top: str) -> bool:
         return False
 
 
+def _pnr_chain_continues(pnr_row: Optional["StepResult"]) -> bool:
+    """Did PnR leave the downstream physical chain its inputs?
+
+    #1412 CONTINUED. This predicate used to be the literal
+    ``pnr_row.status == "PASS"``, written in e80eb1cd6 (2026-07-26, #397) when
+    ``step_pnr`` returned only PASS or FAIL. On 2026-09-04, 8d15a9af2 gave it a
+    THIRD status: a route whose every residual DRT marker is below its own
+    layer's LEF MINWIDTH in both dimensions is ``WAIVED`` rather than failed,
+    because such a marker cannot be the extent of a legal object and the
+    checker evaluated a fragment. That commit did not touch this test, so a
+    WAIVED PnR failed the chain exactly like a FAIL and the whole
+    ``if _chain_ok:`` block -- including the stream-out -- was skipped.
+
+    The consequence is the one the #1412 code comment says the waive exists to
+    PREVENT (see the block above ``_route_residual_tool_artefact``): "let the
+    sign-off DRC deck -- which runs on the streamed GDS, evaluates MERGED
+    polygons and keeps its own verdict -- be the arbiter. Blocking here instead
+    denies that deck any input at all, which is how this residual reached FOUR
+    sessions as `drc = SKIP: GDS missing` -- NOT MEASURED, presented as
+    unreached." MEASURED on spm x gf180mcuD, plugin 1.17.38, image 0.3.6: pnr
+    WAIVED -> no ``gds`` row emitted AT ALL (not even a SKIP) -> drc SKIP
+    "GDS missing" -> tapeout_precheck NOT_DETERMINED at KLayout.ReadLayout ->
+    phase3 FAIL. One un-made call reported as five separate failures.
+
+    WAIVED alone is NOT enough to continue, and that is the whole care here: a
+    PnR that died mid-tcl must still stop the chain. The qualifying evidence is
+    ``pnr_signoff_writes_complete``, which ``step_pnr`` sets on exactly the same
+    branch that sets WAIVED, precisely because "the writes below it all ran
+    (that is the whole point of not returning at the residual gate)". So this
+    asks for the ARTEFACTS, not for a verdict tier -- a status a future commit
+    adds without those writes still fails this test.
+    """
+    if pnr_row is None:
+        return False
+    if pnr_row.status == "PASS":
+        return True
+    if pnr_row.status != "WAIVED":
+        return False
+    return bool((pnr_row.extras or {}).get("pnr_signoff_writes_complete"))
+
+
 def step_gds(project: Path, top: str, pdk: PdkConfig,
              container: str) -> StepResult:
     t0 = time.time()
@@ -49305,7 +49346,7 @@ def main() -> int:
                     f"enforced. Arithmetic in reports/phase3/pdn_em_sizing.json"))
 
         _pnr_row = next((s for s in reversed(plan) if s.name == "pnr"), None)
-        _pnr_step_passed = (_pnr_row is not None and _pnr_row.status == "PASS")
+        _pnr_step_passed = _pnr_chain_continues(_pnr_row)
         _pnr_reran = (_pnr_row is not None
                       and "skipped" not in _pnr_row.detail)
         _chain_ok = _pnr_step_passed
