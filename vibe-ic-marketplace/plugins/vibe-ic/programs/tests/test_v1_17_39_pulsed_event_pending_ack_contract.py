@@ -622,3 +622,15 @@ def test_the_reset_less_emission_elaborates(tmp_path):
     c = subprocess.run(["iverilog", "-g2012", "-o", str(tmp_path / "s"),
                         str(tmp_path / "d.sv")], capture_output=True, text=True)
     assert c.returncode == 0, c.stderr
+
+
+@pytest.mark.parametrize("bad", [0, -1, True, "4", 2.5])
+def test_a_deadline_that_is_not_a_positive_integer_is_refused(tmp_path, bad):
+    """Only a deadline that was TOO LARGE was tested. Zero, negative, a bool
+    (which `isinstance(True, int)` accepts), a string and a float all take a
+    different refusal branch that nothing exercised."""
+    r, _ = _run(tmp_path, dict(BASE, events={
+        "e": {"kind": "pulse", "ack": "a", "deadline": bad,
+              "starvation_out": "s"}}))
+    assert r.returncode == 1, r.stdout
+    assert "must be a positive integer" in r.stderr

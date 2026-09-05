@@ -635,3 +635,19 @@ def test_a_single_bit_field_has_width_one():
     w, why = D.struct_field_width([("p.sv", pkg)], "p::d2h_t", "d_valid", {})
     assert w == 1, why
     assert "single bit" in why
+
+
+def test_a_range_with_no_colon_refuses_by_name():
+    """`logic [7] d_data;` -- a bracket that is not a range. Untested until
+    tracing showed the branch."""
+    pkg = "package p; typedef struct packed { logic v; logic [7] d_data; } d2h_t; endpackage"
+    w, why = D.struct_field_width([("p.sv", pkg)], "p::d2h_t", "d_data", {})
+    assert w is None and "unparsable range" in why
+
+
+def test_an_unresolved_LOW_bound_refuses_by_name():
+    """`[7:LO]` where LO is not a known parameter. The HIGH bound has always been
+    checked; the low one had its own branch and no test."""
+    pkg = "package p; typedef struct packed { logic v; logic [7:LO] d_data; } d2h_t; endpackage"
+    w, why = D.struct_field_width([("p.sv", pkg)], "p::d2h_t", "d_data", {})
+    assert w is None and "low bound" in why and "LO" in why
