@@ -240,3 +240,25 @@ def test_a_register_map_that_does_not_fit_the_bus_fails_closed(tmp_path):
                                        CASE, "block_cipher_core", PORTS)
     assert tb is None, "emitted a truncated testbench instead of refusing"
     assert "contradict" in why and "4-bit address bus" in why
+
+
+def test_the_same_package_reaching_the_resolver_twice_is_not_a_conflict(tmp_path):
+    """FALSE-POSITIVE CONTROL on the duplicate-declaration rule, pinned against
+    the REAL wiring rather than a synthetic case.
+
+    `emit_case_register_bus` passes `_staged_bus_packages(root) + _srcs`, and
+    those two searches OVERLAP: `phase2/stage1/rtl/*pkg*.sv` is found by both.
+    Measured on this project, `fabric_pkg.sv` reaches the resolver twice. The
+    rule that refuses a type declared with two different widths must therefore
+    treat one file seen twice as one declaration -- otherwise every ordinary
+    project refuses. It resolves today only because both copies agree; this
+    pins that, so a future change to either search cannot quietly break it."""
+    project = _project(tmp_path)
+    pkgs = [Path(p).name for p, _ in K._staged_bus_packages(project)]
+    rtl = [Path(p).name for p, _ in K._staged_rtl_sources(project)]
+    assert "fabric_pkg.sv" in pkgs and "fabric_pkg.sv" in rtl, \
+        "the two searches no longer overlap; this control needs rechecking"
+
+    tb, why = K.emit_case_register_bus(project, CASE, "block_cipher_core", PORTS)
+    assert tb is not None, f"duplicate sources caused a false refusal: {why}"
+    assert "bus widths: addr=12 data=32" in why, why

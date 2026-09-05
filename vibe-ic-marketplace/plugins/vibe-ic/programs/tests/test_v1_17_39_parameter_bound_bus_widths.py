@@ -433,3 +433,15 @@ def test_the_same_width_declared_twice_still_resolves():
         [("1.sv", P_WIDE), ("2.sv", P_WIDE.replace("b_pkg", "c_pkg"))],
         "d2h_t", "d_data", {})
     assert w == 32, why
+
+
+def test_the_width_expression_bound_is_exact_at_its_edge():
+    """OFF-BY-ONE CONTROL, same reasoning as the deadline bound: the refusal
+    cases are astronomically large and the working cases tiny, so the bound
+    could move a long way before any test noticed."""
+    assert D._WIDTH_EXPR_MAX == 1 << 20, (
+        "the width-expression limit moved; same reasoning as the deadline "
+        "bound -- reading the constant makes the test move with it")
+    limit = D._WIDTH_EXPR_MAX
+    assert D._int_expr(str(limit), {}) == limit, "the bound itself was refused"
+    assert D._int_expr(str(limit + 1), {}) is None, "one past the bound was accepted"

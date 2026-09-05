@@ -399,3 +399,31 @@ def test_an_ordinary_event_name_is_unaffected(tmp_path):
                 "starvation_out": "starved"}}))
     assert r.returncode == 0, r.stderr
     assert rtl.count("  input        irq,") == 1
+
+
+def test_the_deadline_bound_is_exact_at_its_edge(tmp_path):
+    """OFF-BY-ONE CONTROL on the bound itself.
+
+    The refusal test uses 10**60 and the working tests use 16, so the BOUND was
+    never pinned: it could be moved to any value between and every test would
+    still pass, silently over-refusing real designs. A bound needs its edge
+    tested from both sides, not just a far-outside and a far-inside case."""
+    import fsm_table_rtl_gen as G
+    # The bound's VALUE is asserted, not just read. Measured: reading it from
+    # the module made this test move WITH the constant, so shifting the bound by
+    # one changed nothing and the test still passed -- it pinned the boundary
+    # SEMANTICS (it does catch `>` becoming `>=`) but not the boundary VALUE.
+    # A bound that nobody has written down can drift to any value silently.
+    assert G._EVENT_DEADLINE_MAX == (1 << 32) - 1, (
+        "the wait-bound limit moved; that is a deliberate decision and this "
+        "test is where it gets recorded")
+    limit = G._EVENT_DEADLINE_MAX
+    ok, _ = _run(tmp_path, dict(BASE, events={
+        "e": {"kind": "pulse", "ack": "a", "deadline": limit,
+              "starvation_out": "s"}}))
+    assert ok.returncode == 0, f"the bound itself was refused: {ok.stderr}"
+    over, _ = _run(tmp_path, dict(BASE, events={
+        "e": {"kind": "pulse", "ack": "a", "deadline": limit + 1,
+              "starvation_out": "s"}}))
+    assert over.returncode == 1
+    assert "is not a wait bound" in over.stderr
