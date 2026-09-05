@@ -1,0 +1,42 @@
+WHAT THIS COMMIT DOES NOT DO, measured by the lane that authored it.
+
+IT DOES NOT CLOSE D1. The commit message names D1 as the first substantive blocker
+on subservient and OpenTitan AES and then describes the carry-through, which invites
+the reading that D1 is now closed. It is not. The lane compared the flow-compliance
+output before and after on both ICs:
+
+  fc_subservient_before.log vs fc_subservient_after.log  differ in exactly ONE line,
+  the temporary project path. The AES pair likewise.
+
+So D1 stays INCOMPLETE on both ICs with an UNCHANGED sole cause. What the producer
+really does is lift design-owned fields that were being dropped between layers --
+14 on subservient, 4 on AES -- which is worth landing on its own merit and is why it
+landed. It is not the D1 repair, and the next lane must not treat D1 as done.
+
+DISCRIMINATION, restated because the usual instrument could not judge this change.
+The two-tree falsifier's RED arm is main sources plus only the new tests; this test
+imports a module that does not exist on main, so that arm returned
+ModuleNotFoundError -- an ERROR, not a failure, and no evidence. Measured by mutation
+instead, on a tree carrying the new module and the new test with only the 37 lines of
+producer wiring reverted to main:
+
+  candidate                            5 passed
+  wiring reverted, module + test kept  1 failed, 4 passed
+    FAILED ::test_runner_adapter_degrades_loudly_when_consumers_are_absent
+
+ONE test of the five discriminates the behavioural change. The other four exercise the
+new module itself and can discriminate nothing on a tree that does not have it.
+
+TWO CLAIMS IN THE HANDBACK THAT ARE NOT ESTABLISHED, recorded so they are not inherited:
+* "the 2 surviving test_flow_compliance_check_gate.py reds are pre-existing on pure
+  main" -- the lane's control clone was 4553e8b9e (v1.17.27), an ANCESTOR of the main
+  this landed on. Both test names exist on live main, but their redness AT THE TIP was
+  not measured. Ownership of those two reds is OPEN.
+* the per-layer split "L9 +12 key paths, L19 +34" -- only the aggregates 14 and 4
+  appear in the lane's own carry_*_after.log.
+
+PROVENANCE. Authored as fix/fzsub19-convergence f9f637ae9 on 8hd-3 and never pushed
+anywhere. Lane czsub20 found it, fetched it read-only, and declined to treat an
+unpushed unverified commit as done. Lane czd1 rebased it onto live main -- it did NOT
+apply as authored, because four versions had landed since and the regenerated inventory
+touches the version strings -- re-measured, and pushed it.
