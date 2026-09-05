@@ -1,0 +1,94 @@
+LANDING RECORD — PR #1790, head enhancement/rtllm-dual-track-review @ 106c6c4239
+Landed dd3883f853b49c7e41bb6a6eb142f2e9d26de979 at v1.12.14, fast-forward from
+3fed9ea221549193c597877d3645d3a4e8ea24d6. Confirmed by `git ls-remote`, not by
+the push rc.
+
+GATE SKIPPED
+The landing gate (tools/gatekeeper-land.sh) was WAIVED by the owner: it judges
+ABSOLUTELY and refuses on main's pre-existing reds, so it refuses every
+candidate today regardless of the candidate. Pushed with --no-verify, which is
+what the waiver authorises; the pre-push hook runs that same gate.
+
+WHAT WAS RUN INSTEAD
+All 180 test modules referencing any of the four edited programs
+(benchmark_dispatch, flow_phase_attribution, phase1_doc_one_shot_runner,
+counter_advanced_synth), whole — not the neighbourhood of the diff — plus the
+three test files the PR adds or changes.
+
+    python3 -m pytest <180 files> -q -rf
+    env: PYTHONDONTWRITEBYTECODE=1, TMPDIR=/var/tmp/l1790,
+         VIBEIC_TRUSTED_PYTEST_SITE=auto, PYTEST_DISABLE_PLUGIN_AUTOLOAD=1
+    independent clone at /home/reyerchu/_land1790 (NOT a git worktree),
+    under $HOME so the corpus gates resolve ~/benchmark-data; TMPDIR outside it.
+
+    RESULT: 2952 passed, 1 failed, 68 skipped, 1 xfailed in 436s
+
+Also run and PASSING on the landed tree: gen_program_inventory --check,
+gen_skill_inventory --check, marketplace_version_sync_check,
+plugin_version_prose_sync_check (6 prose claims across 3 documents at 1.12.14),
+landing_is_one_commit_check.
+
+PRE-EXISTING RED CARRIED ONTO MAIN UNCHANGED
+  test_matrix_63x8_ledger::test_output_entries_classify_into_the_four_kinds
+  A pinned yaml census asserting 165 against a live 166
+  (Counter{FILE:124, ANY_OF:24, GLOB:18}). It counts (step, entry) declarations
+  in flow/phase1_phase2_phase3.yaml, which this change does not touch. MEASURED
+  failing with an identical Counter on a clean checkout of the base, so it is
+  carried, not caused. Its own comments record the same pin drifting
+  161->164 across earlier lanes; it is a tripwire other landings re-derive.
+
+TWO REDS SEEN EARLIER THAT ARE NOT THIS BRANCH'S
+  test_issue712_prose_polarity::test_the_gate_is_GREEN_on_the_tree_that_ships
+  Failed on the first base (2ffa7a594) naming _l_doc_pad_placement, a file this
+  change does not touch; the test's own docstring records that it exits 1 on
+  the pristine base. FIXED by v1.12.12 (a4f6b4f33), which landed the pad-ring
+  prose-polarity consult. Green on the landed tree.
+
+  test_flow_compliance_check_gate::test_a_real_verdict_is_not_mistaken_for_a_crash
+  MINE, not the tree's. The test asserts its own premise that the shallow
+  fixture path is <= 75 chars against a 300-char evidence window; my first
+  TMPDIR (the 88-char session scratchpad) made mkdtemp return 106. Passes on
+  both trees with a short TMPDIR. Recorded because the failure text names the
+  host's temp root, not the detector — the tell for this whole class.
+
+No assertion was weakened, no case deleted, no skipif added, no tolerance
+widened, no exemption re-dated, and --write-baseline / --force were never used.
+
+NOT MEASURED, BY NAME
+  repo_hygiene_gates      the waived tier. gatekeeper_review reported ERROR with
+                          92 wiring errors; arm A shards 4 and 5 hit
+                          PROGRESS_PROTOCOL_INCOMPLETE and a stalled watchdog at
+                          rc=199, with 42 gates NOT CHECKED. A stalled shard is
+                          not a pass.
+  ci_ran_at_all_check     no CI run exists for this sha. Not the same as a
+                          passing run.
+  blindness_audit         no transcripts supplied.
+  control_substance_check no control junit supplied, against 3 changed test
+                          files.
+  loop_watchdog_compliance_check  FAILS identically on clean main on
+                          gate_host_independence_check.py:749, a file untouched
+                          here. Verified on a separate main checkout.
+  gate_red_since          reports its two acknowledgements (L-doc field
+                          producer, PPA measurement coverage) expired. That is
+                          the state v1.12.11 explicitly left; this change fixes
+                          no gate, so it retires no row and adds none.
+
+VERSION
+gatekeeper_assign_version.py --write, three times as main moved
+(1.12.11->12, ->13, ->14). It writes plugin.json, BOTH marketplace.json files
+including the repo-root one, and all three prose READMEs — six sites, one of
+which a grep for the old string does not surface. Inventory regenerated with
+gen_program_inventory.py, never hand-edited. Six stated counts moved by the
+PR's two NEW test files (test_files 2878->2880 in five places,
+programs_tree_all_py 4243->4245 in one), each edited at the line the checker
+named so no historical "landed in vX" sentence was falsified.
+
+REBASES
+Main moved three times during this landing (2ffa7a594 -> 243f7e731 ->
+a4f6b4f33 -> 3fed9ea22). The PR was re-rebased from its original head each
+time rather than merged, and its content was re-verified as 13 files /
+1454+/137- after every rebase. The 13 PR files in the landed commit are
+byte-identical to the tree the 2952-passing run measured; the only delta is the
+version strings and main's own doc-only change.
+docs/research/2026-08-21-main-92-red-triage-ratios.md was NOT touched by this
+landing; the change to it in the range came in from main's own v1.12.13.

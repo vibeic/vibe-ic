@@ -1,0 +1,47 @@
+LANDED v1.12.9 from fix/three-fail-open-defects-emit-chain-router-kill-gate
+parent 5a9bc15fd (v1.12.8) — ordinary fast-forward, 4 commits.
+
+SKIPPED, as already landed: the branch's 4th commit (add0fe156) wired
+`unanchored_process_kill_check` into tools/ci/repo_hygiene_gates.sh. Main
+already carries that wiring from 6efe67a27 / 638505d44. Merging it naively
+produced TWO `run` lines and the branch's own new test
+(test_the_gate_is_dispatched_from_the_hygiene_set) went red on `assert 2 == 1`.
+The commit is dropped WHOLE — shell hunk and the two new test functions — not
+adapted. The two lanes differ on scope: main wired `--root "$PG"` (plugin
+programs only, with a written rationale about keeping the CAN-FAIL direction
+reachable); this branch wanted `--root "$ROOT"` because a real pattern kill once
+lived under mcp-eda/test, outside programs/. Main's choice stands. REPORTED, not
+rewired: the mcp-eda/test surface is not examined by the wired gate.
+
+RAN, whole modules, no -k selection, host lane, PYTHONDONTWRITEBYTECODE=1,
+TMPDIR outside the checkout, VIBEIC_CORPUS_ROOT unset:
+  test_issue1437_absent_iverilog_reaches_a_declared_verdict.py
+  test_router_reads_rtl_embedded_in_the_prompt.py
+  test_unanchored_process_kill_check.py
+  test_human_tier_gate_parity.py
+  test_tier_pipeline_gate_parity.py
+  test_v1_11_84_solve_end_to_end.py
+  test_signoff_required_outputs_completeness.py
+  test_v1_11_81_nature_entry_steps_are_real_flow_steps.py
+  test_v1_11_83_task_decides_both_ends.py
+  test_checker_execution_wiring_audit.py
+  test_gate_is_wired.py
+  test_marketplace_version_sync_check.py
+  test_marketplace_version_matches_plugin_version.py
+  test_issue621_prose_version_drift.py
+  test_prose_version_follows_gatekeeper_bump.py
+  test_version_bump_monotonic_check.py
+  test_program_inventory_no_drift.py
+=> 253 passed, 13 skipped, rc 0 in 185s. No red, attributed or otherwise.
+
+INVENTORY: gen_program_inventory.py --check exits 0 (no programs/**.py added or
+removed by this landing). marketplace_version_sync_check and
+plugin_version_prose_sync_check both PASS at 1.12.9; 0 files still state 1.12.8.
+
+CRITERION TABLE: docs/research/2026-08-21-main-92-red-triage-ratios.md is NOT
+edited by this landing. None of the 36 BOTH rows is in this branch's blast
+radius, so no row was moved and no count was changed. BOTH stays 36.
+
+NOT RUN: the pinned-image lane. This landing touches no gate, no dispatcher and
+no protected path — the four files are two plugin programs and their two test
+modules — so the host lane is the whole affected population.

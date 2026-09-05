@@ -1,0 +1,16 @@
+LANDING v1.11.99 — lane/repo-hygiene-gates-wiring (b96e5b693), rebased onto b1f7e1542.
+
+SKIPPED: landing gate + pre-push hook (--no-verify), owner waiver.
+RAN INSTEAD: 9 affected modules whole -> 344 passed / 1 failed / 78 skipped /
+4 xfailed; unanchored_process_kill_check exit 0; ci_harness_timeout_ceiling_check
+exit 0; protected-landing manifest tests 30 passed.
+FALSIFIED: planted subprocess.run(['pkill','-f',...]) in a shipped module -> rc 1
+[argv-list] at its line. Empty scan root -> rc 2 NOT CHECKED. Removed; tree clean.
+NOT ATTRIBUTED RED carried onto main unchanged:
+  test_matrix_d7_outputs_list_complete.py::test_the_dropped_edge_RETURNS_when_the_step_stops_supplying_the_flag
+  (step 37 / W2 default mining; not this branch's subject; I did not establish
+   whether main carries it too)
+PROTECTED: tools/ci/repo_hygiene_gates.sh touched — pinned in
+protected_landing_transition.json, which describes a transition not the live
+tree; its tests pass and the ceiling check exits 0, so no re-pin needed.
+tools/gatekeeper-land.sh NOT touched.

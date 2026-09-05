@@ -1,0 +1,71 @@
+LANDED fix/timeout-as-verdict-census as v1.12.17. EVIDENCE ONLY.
+
+WHAT IT IS. Three added files under reports/timeout-as-verdict/: CENSUS.md,
+PROVENANCE.json, census.csv. 2379 insertions of report content, ZERO deletions.
+The only deletions in the patch are the seven version lines the bump replaces.
+No .py, no .sh, no manifest, no flow yaml, no gate, no registration. Nothing in
+the repo references the path (`git grep timeout-as-verdict` on main was empty
+before this), so no behaviour can change. It lands so the owner can decide the
+repair order against a measured population.
+
+SIZE IS NOT RISK HERE, AND THAT WAS CHECKED RATHER THAN ASSUMED:
+  * `git diff --raw` shows all three as status A, mode 100644. 0 deletions
+    anywhere in the patch body.
+  * nda_diff_scan_check.py --rev-range origin/main..HEAD -> rc 0, no foundry /
+    SKU / process / IP-vendor token in added content or added paths. The three
+    `sky130` strings in the csv are the repo's OWN existing identifiers
+    (_sky130_liberty, test_sky130_fault_cut_produces_real_scan_pairs,
+    _sky130_nom_tlef), quoted as census locations; all three already ship on
+    main. Non-ASCII is em-dash, arrow and ellipsis only — English throughout.
+  * the csv's own class counts reproduce the document's headline exactly:
+    A 1733 + NOT_MEASURED 346 + B 77 + C 32 = 2188 rows. The 346 are listed by
+    name as unclassified rather than defaulted to acceptable, which is the
+    point of the shape.
+  * every FILE:LINE citation in CENSUS.md re-resolved on the landing tree, and
+    a 12-row random sample of census.csv (seed 1444) resolved 12/12 to a real
+    timeout-shaped site. The anchors have not rotted since 2ffa7a594.
+    NOTE for the next reader: the `line` column anchors on the ast.Call START
+    line, so `timeout=` is often on a continuation line. A naive
+    "is `timeout` on that line" check reports 10 of 12 as misses and is wrong;
+    the convention is documented by the report's own worked example at
+    _analog_producer_fixture.py:76.
+
+RAN (whole modules, no -k, VIBEIC_CORPUS_ROOT unset, PYTHONDONTWRITEBYTECODE=1,
+TMPDIR outside any git work tree):
+  * the five version-consistency modules -> 78 passed, rc 0, re-run on the
+    FINAL rebased tree.
+  * gen_program_inventory.py --check rc 0; the generator produced no drift.
+    This change adds no program file.
+  * doc_table_row_placement_check --repo . -> PASS, 431 documents and 8627
+    table-shaped lines examined, which includes the new CENSUS.md.
+  * the hygiene tier WHOLE, unbound corpus, at the earlier parent: 139
+    declared, 139 RAN, 124 decided — 116 passed, 8 failed, 15 NOT CHECKED,
+    0 wiring errors, 635s. rc 1, not rc 2, so the run certifies itself.
+
+NOT A PASS, RECORDED AS SUCH. evidence_citation_resolves_check returned rc 0
+but scanned NOTHING: no corpus at benchmark-data/ and VIBE_IC_BENCHMARK_DATA
+unset, 0 published sign-off documents examined. That is an honest N/A about the
+published corpus, unrelated to this research report, and it is not counted as
+green here.
+
+PRE-EXISTING REDS, CARRIED ONTO MAIN UNCHANGED, NOT ATTRIBUTED. The tier's 8
+failures: watchdog compliance; checker execution wiring; gates are wired to
+something; declaration scans strip comments; liar census controls still fire;
+declaration searched only inside a truncated; a sweep can say it judged
+nothing; declared reports are written atomically. Every one names an existing
+.py program — attestation_preflight_check.py, generated_test_list_min_guard.py,
+landing_noop_verdict_check.py (all three landed by f2e7b4be1), task_nature_route.py,
+flow_output_substance.py, extraction_credited_by_prose_only_check.py. This
+change adds ZERO .py files and its paths appear nowhere in the 720KB of tier
+output, so none of the eight can be attributable to it. Independently confirmed
+while this branch waited: a1df3aa28 (v1.12.16) repaired the two programs behind
+"declared reports are written atomically" from another lane.
+
+THE CRITERION IS UNCHANGED BY THIS LANDING, DELIBERATELY. A census is not a
+repair; it moves no row out of BOTH and none was moved. The table read BOTH 16 /
+CLEARED 39 on main after this push, moved there by other lanes.
+
+REBASED THREE TIMES while verifying — main landed v1.12.14, v1.12.15 and
+v1.12.16 under this branch, so the claimed version was re-assigned each time and
+the pre-push parent check refused one attempt correctly. Every verification
+above was re-run on the final tree.
