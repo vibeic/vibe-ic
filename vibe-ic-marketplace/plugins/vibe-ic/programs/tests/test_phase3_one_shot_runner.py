@@ -207,6 +207,19 @@ def test_pad_ring_seam_is_fail_closed_when_missing_or_ambiguous():
         RUNNER._floorplan_seed_tcl(double)
 
 
+def test_chip_top_producer_precedes_sdc_and_die_resolution():
+    source = pathlib.Path(RUNNER.__file__).read_text()
+    step = source[source.index("def step_pnr("):]
+    step = step[:step.index("\ndef step_", 1)]
+    producer = step.index(
+        "_padring_producer = step_io_pad_chip_top_gen(project, container, pdk)")
+    sdc = step.index("# SDC: silicon top != FPGA wrapper")
+    die = step.index("die_um, _l9_die_note = _effective_die_um")
+    assert producer < sdc < die
+    assert step.count(
+        "_padring_producer = step_io_pad_chip_top_gen(project, container, pdk)") == 1
+
+
 def _real_pdk(monkeypatch=None, **over):
     """A REAL `PdkConfig`, built from the runner's own dataclass.
 

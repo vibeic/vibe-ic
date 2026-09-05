@@ -67,6 +67,7 @@ def test_functional_recipe_reads_liberty_without_lib():
     assert "flatten" in ys                     # GOTCHA 1: models survive copy
     assert "async2sync" in ys                  # GOTCHA 2: latch/ICG handling
     assert "opt -purge" in ys and "opt_clean -purge" in ys  # GOTCHA 3: dead nets
+    assert ys.count("tribuf -formal") == 2     # model top-level IO tristates
     # engine tail unchanged
     for cmd in ("equiv_make gold gate equiv", "equiv_simple", "equiv_induct",
                 "equiv_status"):
@@ -106,6 +107,8 @@ def test_recipe_reads_exact_extra_liberty_and_constrains_each_arm(functional):
     assert ys.count(f"read_liberty {option}io.lib") == 2
     gold_half, gate_half = ys.split("design -stash gold", 1)
     for half in (gold_half, gate_half):
+        assert "select -module top" in half
+        assert "select -clear" in half
         assert "connect -set VDD 1'b1" in half
         assert "connect -set VSS 1'b0" in half
         assert half.index("connect -set VDD") < half.index("opt")
@@ -140,6 +143,17 @@ endmodule
         internal_wires=["VDD", "VSS"])
     assert again == out
     assert stats2["already_present"] == 2 and stats2["restored"] == 0
+
+
+def test_restore_multiple_connections_into_empty_instance_uses_commas():
+    src = ("module chip_top(inout VDD, inout VSS); "
+           "PAD u_supply(); endmodule\n")
+    out, stats = L.restore_named_instance_connections(
+        src, "chip_top", [("u_supply", "DVDD", "VDD"),
+                           ("u_supply", "DVSS", "VSS"),
+                           ("u_supply", "VSS", "VSS")])
+    assert "u_supply(.DVDD(VDD), .DVSS(VSS), .VSS(VSS))" in out
+    assert stats["requested"] == 3 and stats["restored"] == 3
 
 
 def test_restore_named_instance_connections_refuses_conflict_and_missing_instance():

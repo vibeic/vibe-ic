@@ -25137,6 +25137,16 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
         return StepResult("pnr", "FAIL", time.time() - t0, _ms["message"],
                           extras=_ms_extras)
 
+    # The chip-top producer must precede BOTH SDC construction and die
+    # resolution.  Its domain plan is the sole authority for excluding supply
+    # ports from signal-only DRV limits, while its die_required_um is an input
+    # to the floorplan.  The producer is idempotent and writes only its own
+    # wrapper/record; a design with no declared pad placement SKIPs.
+    _padring_producer = step_io_pad_chip_top_gen(project, container, pdk)
+    if _padring_producer.status not in ("PASS", "SKIP"):
+        print(f"[phase3] io_pad_chip_top_gen: {_padring_producer.status} — "
+              f"{_padring_producer.detail}", file=sys.stderr)
+
     # SDC: silicon top != FPGA wrapper. Project's fpga/*.sdc references
     # FPGA-only ports (CLOCK_50/KEY/GPIO_0) and may use Quartus-private
     # commands (derive_pll_clocks). For silicon synth (top=chip_top), use
@@ -25290,15 +25300,9 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
     # Resolve it BEFORE computing `_auto_die_requested` so an L9-pinned die
     # behaves EXACTLY like an explicit `--die-um` (pinned — never auto-sized
     # over, in either direction).
-    # THE PAD-RING PRODUCER RUNS BEFORE THE DIE IS RESOLVED, because its
-    # `die_required_um` is one of the inputs to that resolution and a record
-    # that appears afterwards is a record nothing read. It is idempotent and
-    # writes only its own two artefacts; on a design with no declared pad
-    # placement it SKIPs and contributes nothing, exactly as before.
-    _padring_producer = step_io_pad_chip_top_gen(project, container, pdk)
-    if _padring_producer.status not in ("PASS", "SKIP"):
-        print(f"[phase3] io_pad_chip_top_gen: {_padring_producer.status} — "
-              f"{_padring_producer.detail}", file=sys.stderr)
+    # The pad-ring producer already ran before SDC construction above.  Keep
+    # using that exact result here; a second dispatch could make the SDC and
+    # die read different producer generations.
     die_um, _l9_die_note = _effective_die_um(die_um, project)
     if _l9_die_note:
         print(f"[phase3] {_l9_die_note}", file=sys.stderr)
@@ -44064,8 +44068,65 @@ def _lec_restore_aux_connections(project: Path, physical_top: str,
             raise RuntimeError(
                 "routed auxiliary signal connectivity was elided from the "
                 f"gate netlist: {stats}")
+        # OpenROAD also omits POWER/GROUND pin connections from its signal
+        # Verilog writer.  Restore only the supply-pad pins named by the same
+        # producer and independently observed on the exact regular DEF nets.
+        # (The conductor itself remains SPECIALNET geometry; this is a
+        # proof-only serialization repair, never a DEF/GDS mutation.)
+        pad_instances = rec.get("pad_instances")
+        supply_connections: List[Tuple[str, str, str]] = []
+        # Older/no-supply physical wrappers have no pad_instances map.  Their
+        # already-proven routed auxiliary signals remain valid; only a record
+        # that actually declares a supply pad enters the restoration below.
+        if not isinstance(pad_instances, dict):
+            pad_instances = {}
+        for supply_inst, item in sorted(pad_instances.items()):
+            if not isinstance(item, dict) or not item.get("is_supply_pad"):
+                continue
+            raw_connections = item.get("supply_connections")
+            if not isinstance(raw_connections, dict) or not raw_connections:
+                raise RuntimeError(
+                    f"producer supply pad {supply_inst!r} has no connections")
+            for supply_pin, supply_net in sorted(raw_connections.items()):
+                if not all(isinstance(value, str) and value for value in
+                           (supply_inst, supply_pin, supply_net)):
+                    raise RuntimeError(
+                        f"producer supply connection is incomplete: "
+                        f"{supply_inst}/{supply_pin}/{supply_net}")
+                actual = observed.get((supply_inst, supply_pin))
+                if actual != supply_net:
+                    raise RuntimeError(
+                        f"final DEF does not prove supply pad "
+                        f"{supply_inst}/{supply_pin} on {supply_net!r}; "
+                        f"observed {actual!r}")
+                supply_connections.append(
+                    (supply_inst, supply_pin, supply_net))
+        out, supply_stats, constants = gate, {
+            "top": physical_top, "requested": 0, "restored": 0,
+            "already_present": 0, "internal_wires_added": []}, {}
+        if supply_connections:
+            normalized, supply_stats = mod.restore_named_instance_connections(
+                gate_text, physical_top, supply_connections,
+                internal_wires=sorted({net for _, _, net in
+                                       supply_connections}))
+            out_dir.mkdir(parents=True, exist_ok=True)
+            out = out_dir / f"lec_post_{physical_top}_gate_supply_complete.v"
+            out.write_text(normalized)
+
+            plan = rec.get("power_pad_plan")
+            if not isinstance(plan, dict) \
+                    or plan.get("domain_topology") != "single_domain":
+                raise RuntimeError(
+                    "IO-control producer has no single-domain powered mode")
+            power, ground = plan.get("power_net"), plan.get("ground_net")
+            if not all(isinstance(value, str) and value for value in
+                       (power, ground)) or power == ground:
+                raise RuntimeError("producer power/ground identity is invalid")
+            constants = {str(power): 1, str(ground): 0}
         provenance: Dict[str, Any] = {
-            "method": "producer-declared and final-DEF-routed-signal-proven",
+            "method": (("producer-declared, final-DEF-routed-signal-and-"
+                        "supply-pad-proven") if supply_connections else
+                       "producer-declared and final-DEF-routed-signal-proven"),
             "source_gate": str(gate),
             "source_gate_sha256": _sha256_file(gate),
             "final_def": str(final_def),
@@ -44075,8 +44136,13 @@ def _lec_restore_aux_connections(project: Path, physical_top: str,
             "connections": len(signal_raw),
             "stats": stats,
             "signal_nets": sorted({str(x.get("net")) for x in signal_raw}),
+            "supply_connections": len(supply_connections),
+            "supply_stats": supply_stats,
+            "proof_gate": str(out),
+            "proof_gate_sha256": _sha256_file(out),
+            "powered_mode": constants,
         }
-        return gate, provenance, {}
+        return out, provenance, constants
     plan = rec.get("power_pad_plan")
     if not isinstance(plan, dict) or plan.get("domain_topology") != "single_domain":
         raise RuntimeError(

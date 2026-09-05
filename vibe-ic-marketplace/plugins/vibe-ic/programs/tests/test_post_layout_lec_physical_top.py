@@ -201,6 +201,63 @@ END DESIGN
             tmp_path, "chip_top", gate, final_def,
             tmp_path / "reports/phase3", L)
 
+
+def test_signal_tie_path_restores_only_producer_and_def_proven_supply_pins(
+        tmp_path):
+    gate = tmp_path / "phase3/stage3/pnr/core_pnr.v"
+    gate.parent.mkdir(parents=True, exist_ok=True)
+    gate.write_text("""module chip_top(inout VDD, inout VSS, input a, output y);
+  wire tie0;
+  TIELO u_tie(.ZN(tie0));
+  PAD u_pad(.PAD(a), .Y(y), .PU(tie0));
+  SUPPLY u_vdd();
+  SUPPLY u_vss();
+endmodule
+""")
+    final_def = gate.parent / "core.def"
+    final_def.write_text("""VERSION 5.8 ;
+DESIGN chip_top ;
+NETS 3 ;
+- tie0 ( u_tie ZN ) ( u_pad PU ) + ROUTED Metal2 ( 0 0 ) ( 100 0 ) ;
+- VDD ( u_vdd DVDD ) ( u_vss DVDD ) ( u_vss VDD ) + USE POWER ;
+- VSS ( u_vdd DVSS ) ( u_vdd VSS ) ( u_vss DVSS ) + USE GROUND ;
+END NETS
+END DESIGN
+""")
+    report = tmp_path / "reports/phase3/io_pad_chip_top.json"
+    report.parent.mkdir(parents=True, exist_ok=True)
+    report.write_text(json.dumps({
+        "verdict": "WROTE", "chip_top_module": "chip_top",
+        "power_pad_plan": {"domain_topology": "single_domain",
+                           "power_net": "VDD", "ground_net": "VSS"},
+        "aux_pin_signal_connections": [{
+            "instance": "u_pad", "pin": "PU", "level": 0, "net": "tie0",
+            "tie_instance": "u_tie", "tie_master": "TIELO",
+            "tie_pin": "ZN"}],
+        "pad_instances": {
+            "u_vdd": {"is_supply_pad": True, "supply_connections": {
+                "DVDD": "VDD", "DVSS": "VSS", "VSS": "VSS"}},
+            "u_vss": {"is_supply_pad": True, "supply_connections": {
+                "DVDD": "VDD", "DVSS": "VSS", "VDD": "VDD"}},
+        },
+    }))
+    out, provenance, constants = R._lec_restore_aux_connections(
+        tmp_path, "chip_top", gate, final_def,
+        tmp_path / "reports/phase3", L)
+    text = out.read_text()
+    assert "u_vdd(.DVDD(VDD), .DVSS(VSS), .VSS(VSS))" in text
+    assert "u_vss(.DVDD(VDD), .DVSS(VSS), .VDD(VDD))" in text
+    assert provenance["supply_stats"]["restored"] == 6
+    assert provenance["source_gate_sha256"] == _sha(gate)
+    assert constants == {"VDD": 1, "VSS": 0}
+
+    bad = final_def.read_text().replace("( u_vdd VSS )", "( u_vdd BAD )")
+    final_def.write_text(bad)
+    with pytest.raises(RuntimeError, match="does not prove supply pad u_vdd/VSS"):
+        R._lec_restore_aux_connections(
+            tmp_path, "chip_top", gate, final_def,
+            tmp_path / "reports/phase3", L)
+
 @pytest.mark.parametrize("functional", [True, False])
 def test_gold_supply_strip_is_confined_to_gold_half(functional):
     ys = L.build_yosys_equiv_script(

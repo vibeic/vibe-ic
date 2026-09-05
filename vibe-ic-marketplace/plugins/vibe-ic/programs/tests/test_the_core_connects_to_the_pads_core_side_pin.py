@@ -207,6 +207,7 @@ def _emit():
 
 def test_the_emitted_netlist_puts_the_core_on_the_core_face():
     text, chosen = _emit()
+    seen_tie_nets = set()
     for inst, rec in chosen.items():
         line = [l for l in text.splitlines() if f" {inst} (" in l][0]
         # the port net is on the terminal, and on nothing else
@@ -218,11 +219,21 @@ def test_the_emitted_netlist_puts_the_core_on_the_core_face():
         for pin, level in rec["ties"].items():
             assert f".{pin}(1'b" not in line, (
                 f"{pin} tied as a netlist constant on {inst}")
-            assert f".{pin}(_vibeic_aux_tie_{int(level)})" in line
+            match = re.search(rf"\.{pin}\((_vibeic_aux_tie_\d{{4}})\)", line)
+            assert match, line
+            tie_net = match.group(1)
+            assert tie_net not in seen_tie_nets, (
+                f"{inst}/{pin} shares tie driver net {tie_net}")
+            seen_tie_nets.add(tie_net)
             assert f".{pin}({'VDD' if level else 'VSS'})" not in line
             assert rec["tie_reasons"].get(pin), f"{pin} tied with no reason"
-    assert "fixture_tie_low _vibeic_aux_tie_cell_0 (.ZN(_vibeic_aux_tie_0))" in text
-    assert "fixture_tie_high _vibeic_aux_tie_cell_1 (.Z(_vibeic_aux_tie_1))" in text
+            tie_master = "fixture_tie_high" if level else "fixture_tie_low"
+            tie_pin = "Z" if level else "ZN"
+            suffix = tie_net.rsplit("_", 1)[1]
+            assert (f"{tie_master} _vibeic_aux_tie_cell_{suffix} "
+                    f"(.{tie_pin}({tie_net}))") in text
+    assert len(seen_tie_nets) == sum(
+        len(rec["ties"]) for rec in chosen.values())
 
 
 def test_an_auxiliary_control_without_derived_tie_cells_is_refused():

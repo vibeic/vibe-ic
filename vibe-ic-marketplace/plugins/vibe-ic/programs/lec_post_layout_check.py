@@ -285,9 +285,12 @@ def restore_named_instance_connections(
                 f"{requests[key]!r} vs {value!r}")
         requests[key] = value
 
-    edits: List[Tuple[int, int, str]] = []
+    edits: List[Tuple[int, int, str, int]] = []
     already = 0
+    by_instance: Dict[str, List[Tuple[str, str]]] = {}
     for (inst, pin), net in sorted(requests.items()):
+        by_instance.setdefault(inst, []).append((pin, net))
+    for inst, pin_nets in sorted(by_instance.items()):
         inst_token = (re.escape(inst) + r"\s+" if inst.startswith("\\")
                       else r"\b" + re.escape(inst) + r"\b\s*")
         opener = re.compile(
@@ -311,21 +314,27 @@ def restore_named_instance_connections(
         if close_idx < 0:
             raise ValueError(f"unterminated connection list for {inst!r}")
         current = body[open_idx + 1:close_idx]
-        pin_hits = list(re.finditer(
-            r"\.\s*" + re.escape(pin) + r"\s*\(\s*([^()]*)\s*\)",
-            current))
-        if pin_hits:
-            if len(pin_hits) != 1 or pin_hits[0].group(1).strip() != net:
-                observed = [x.group(1).strip() for x in pin_hits]
-                raise ValueError(
-                    f"existing {inst}/{pin} connection {observed!r} does "
-                    f"not equal DEF-proven net {net!r}")
-            already += 1
-            continue
-        prefix = ", " if current.strip() else ""
-        edits.append((close_idx, close_idx, f"{prefix}.{pin}({net})"))
+        missing: List[Tuple[str, str]] = []
+        for pin, net in pin_nets:
+            pin_hits = list(re.finditer(
+                r"\.\s*" + re.escape(pin) + r"\s*\(\s*([^()]*)\s*\)",
+                current))
+            if pin_hits:
+                if len(pin_hits) != 1 or pin_hits[0].group(1).strip() != net:
+                    observed = [x.group(1).strip() for x in pin_hits]
+                    raise ValueError(
+                        f"existing {inst}/{pin} connection {observed!r} does "
+                        f"not equal DEF-proven net {net!r}")
+                already += 1
+            else:
+                missing.append((pin, net))
+        if missing:
+            prefix = ", " if current.strip() else ""
+            replacement = prefix + ", ".join(
+                f".{pin}({net})" for pin, net in missing)
+            edits.append((close_idx, close_idx, replacement, len(missing)))
 
-    for start, end, replacement in sorted(edits, reverse=True):
+    for start, end, replacement, _count in sorted(edits, reverse=True):
         body = body[:start] + replacement + body[end:]
 
     header_ports = set(re.findall(r"\\?[A-Za-z_$][\w$]*",
@@ -349,7 +358,7 @@ def restore_named_instance_connections(
     return out, {
         "top": top,
         "requested": len(requests),
-        "restored": len(edits),
+        "restored": sum(edit[3] for edit in edits),
         "already_present": already,
         "internal_wires_added": added_wires,
     }
@@ -421,11 +430,20 @@ def build_yosys_equiv_script(gold_v: str, gate_v: str, lib: str, top: str,
 
     def _constant_block(values: Optional[Dict[str, int]]) -> str:
         lines: List[str] = []
+        if values:
+            # `prep` leaves the whole design selected.  `connect -set VDD`
+            # against that selection is ambiguous when library modules also
+            # expose a VDD wire.  Scope the producer-owned rail constants to
+            # the exact comparison top, then restore the full selection for
+            # the subsequent flatten/optimization passes.
+            lines.append(f"select -module {top}")
         for wire, level in sorted((values or {}).items()):
             if level not in (0, 1, False, True):
                 raise ValueError(
                     f"constant rail {wire!r} has non-Boolean level {level!r}")
             lines.append(f"connect -set {wire} 1'b{int(level)}")
+        if values:
+            lines.append("select -clear")
         return ("\n".join(lines) + "\nopt\n") if lines else ""
     # The physical wrapper and routed Verilog can put supply-only ports on
     # opposite sides (for example the wrapper GOLD declares VDD/VSS while
@@ -473,6 +491,7 @@ def build_yosys_equiv_script(gold_v: str, gate_v: str, lib: str, top: str,
                     f"prep -top {top}\n"
                     f"{_constant_block(constants)}"
                     f"{extra_strip}"
+                    f"tribuf -formal\n"
                     f"flatten\n"
                     f"async2sync\n"
                     f"opt -purge\n"

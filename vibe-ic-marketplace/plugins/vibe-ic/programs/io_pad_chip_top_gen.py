@@ -688,11 +688,11 @@ def _emit_verilog(top: str, core: str,
     if faced:
         lines.append("")
 
-    for level, tie in sorted(used_ties.items()):
+    for _endpoint, tie in sorted(used_ties.items()):
         lines.append("    wire %s;" % tie["net"])
     if used_ties:
         lines.append("")
-        for level, tie in sorted(used_ties.items()):
+        for _endpoint, tie in sorted(used_ties.items()):
             lines.append("    %s %s (.%s(%s));"
                          % (tie["master"], tie["instance"], tie["pin"],
                             tie["net"]))
@@ -736,54 +736,56 @@ def _emit_verilog(top: str, core: str,
 def _auxiliary_pin_signal_connections(
         chosen: Dict[str, Dict[str, object]],
         tie_cells: Dict[int, Dict[str, str]],
-        ) -> Tuple[Dict[str, Dict[str, str]], Dict[int, Dict[str, str]]]:
+        ) -> Tuple[Dict[str, Dict[str, str]],
+                   Dict[Tuple[str, str], Dict[str, object]]]:
     """Resolve every IO control onto an ordinary tie-driven signal net.
 
     ``pad_cell_faces`` owns the Boolean decision.  This helper owns its
     physical representation.  Each used Boolean level requires a concrete
-    standard-cell master and output pin derived from the active Liberty.  One
-    shared tie net per level is intentional; the normal resizer may build a
-    legal buffer tree when the design's real fanout limit requires it.
+    standard-cell master and output pin derived from the active Liberty.  Each
+    control gets its own tie-cell driver/net: that is the smallest bounded
+    legal topology (fanout one), lets placement co-locate the driver with the
+    pad load, and avoids asking the resizer to construct a chip-spanning tree
+    from one minimum-drive tie cell.
     """
     tied = {inst: dict(rec.get("ties") or {})
             for inst, rec in chosen.items() if rec.get("ties")}
     if not tied:
         return {}, {}
-    levels = set()
-    for inst, ties in tied.items():
-        for pin, level in ties.items():
+    endpoints: List[Tuple[str, str, int]] = []
+    for inst, ties in sorted(tied.items()):
+        for pin, level in sorted(ties.items()):
             if level not in (0, 1, False, True):
                 raise Refusal(
                     "AUXILIARY_PAD_LEVEL_NOT_BOOLEAN",
                     f"{inst}/{pin} requests level {level!r}; only 0 or 1 can "
                     "be represented by a derived tie-cell output")
-            levels.add(int(level))
-    used: Dict[int, Dict[str, str]] = {}
+            endpoints.append((inst, str(pin), int(level)))
+    used: Dict[Tuple[str, str], Dict[str, object]] = {}
     occupied_instances = set(chosen)
     occupied_nets = {str(rec.get("port") or "") for rec in chosen.values()}
-    for level in sorted(levels):
+    resolved: Dict[str, Dict[str, str]] = {}
+    for index, (inst, control_pin, level) in enumerate(endpoints):
         raw = tie_cells.get(level) or {}
-        master, pin = str(raw.get("master") or ""), str(raw.get("pin") or "")
-        if not master or not pin:
+        master = str(raw.get("master") or "")
+        tie_pin = str(raw.get("pin") or "")
+        if not master or not tie_pin:
             raise Refusal(
                 "AUXILIARY_PAD_TIE_CELL_ABSENT",
                 f"one or more IO pads require logic level {level}, but the "
                 "active standard-cell Liberty resolved no tie-cell master "
                 "and output pin for that level")
-        instance = f"_vibeic_aux_tie_cell_{level}"
-        net = f"_vibeic_aux_tie_{level}"
+        instance = f"_vibeic_aux_tie_cell_{index:04d}"
+        net = f"_vibeic_aux_tie_{index:04d}"
         if instance in occupied_instances or net in occupied_nets:
             raise Refusal(
                 "AUXILIARY_PAD_TIE_NAME_COLLISION",
                 f"reserved tie identity {instance}/{net} collides with a "
                 "design or pad identity")
-        used[level] = {"master": master, "pin": pin,
-                       "instance": instance, "net": net}
-    resolved: Dict[str, Dict[str, str]] = {}
-    for inst, ties in tied.items():
-        resolved[inst] = {}
-        for pin, level in ties.items():
-            resolved[inst][str(pin)] = used[int(level)]["net"]
+        key = (inst, control_pin)
+        used[key] = {"level": level, "master": master, "pin": tie_pin,
+                     "instance": instance, "net": net}
+        resolved.setdefault(inst, {})[control_pin] = net
     return resolved, used
 
 
@@ -1058,17 +1060,14 @@ def run(project: Path, pdk_root: Optional[str], pdk: Optional[str],
         {"instance": inst, "port": chosen[inst].get("port"), "pin": pin,
          "level": int(dict(chosen[inst].get("ties") or {})[pin]),
          "net": net,
-         "tie_instance": used_ties[
-             int(dict(chosen[inst].get("ties") or {})[pin])]["instance"],
-         "tie_master": used_ties[
-             int(dict(chosen[inst].get("ties") or {})[pin])]["master"],
-         "tie_pin": used_ties[
-             int(dict(chosen[inst].get("ties") or {})[pin])]["pin"]}
+         "tie_instance": used_ties[(inst, pin)]["instance"],
+         "tie_master": used_ties[(inst, pin)]["master"],
+         "tie_pin": used_ties[(inst, pin)]["pin"]}
         for inst, pins in sorted(aux_signals.items())
         for pin, net in sorted(pins.items())
     ]
     rec["aux_tie_cells"] = [
-        {"level": level, **tie} for level, tie in sorted(used_ties.items())]
+        dict(tie) for _endpoint, tie in sorted(used_ties.items())]
     if used_ties:
         liberty_path = Path(str(tie_liberty or ""))
         rec["aux_tie_cell_provenance"] = {
