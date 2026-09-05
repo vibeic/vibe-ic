@@ -295,6 +295,100 @@ endmodule
         assert 'uninit-registered-output' not in {f['rule'] for f in findings}
 
 
+class TestNonblockingInAlwaysComb:
+    """An NBA in always_comb publishes the value one scheduling region late."""
+
+    @staticmethod
+    def hits(sv):
+        return rhl.rule_nonblocking_in_always_comb(
+            rhl.strip_comments(sv), 'test.sv')
+
+    def test_detects_nested_nonblocking_assignment(self):
+        sv = """
+module m(input logic a, b, output logic y);
+  always_comb begin
+    if (a) begin
+      y <= b;
+    end else begin
+      y = 1'b0;
+    end
+  end
+endmodule
+"""
+        hits = self.hits(sv)
+        assert [(f.rule, f.symbol, f.severity) for f in hits] == [
+            ('nonblocking-in-always-comb', 'y', 'ERROR')]
+        assert hits[0].block_eligible is True
+
+    def test_cli_blocks_at_error_threshold(self, tmp_path):
+        sv = """
+module m(input logic a, output logic y);
+  always_comb y <= a;
+endmodule
+"""
+        res, findings = run_cli(tmp_path, sv, severity='ERROR')
+        assert res.returncode == 1
+        assert [f['rule'] for f in findings] == [
+            'nonblocking-in-always-comb']
+
+    def test_relational_less_equal_is_not_an_assignment(self):
+        sv = """
+module m(input logic [3:0] a, b, output logic y);
+  always_comb begin
+    if (a <= b) y = 1'b1;
+    else y = (a <= b);
+  end
+endmodule
+"""
+        assert self.hits(sv) == []
+
+    def test_detects_concat_lhs_but_ignores_for_loop_bound(self):
+        sv = """
+module m(input logic [1:0] d, output logic a, b);
+  integer i;
+  always_comb begin
+    for (i = 0; i <= 1; i = i + 1) begin
+      {a, b} <= d;
+    end
+  end
+endmodule
+"""
+        hits = self.hits(sv)
+        assert len(hits) == 1
+        assert hits[0].rule == 'nonblocking-in-always-comb'
+        assert hits[0].symbol == 'b'
+
+    def test_sequential_nba_is_not_in_scope(self):
+        sv = """
+module m(input logic clk, d, output logic q);
+  always_ff @(posedge clk) q <= d;
+endmodule
+"""
+        assert self.hits(sv) == []
+
+    def test_legacy_star_block_is_not_reclassified(self):
+        """This rule is deliberately limited to the explicit always_comb
+        contract; legacy/latch intent needs separate evidence."""
+        sv = """
+module m(input logic d, output logic q);
+  always @(*) q <= d;
+endmodule
+"""
+        assert self.hits(sv) == []
+
+    def test_comments_and_strings_do_not_create_a_finding(self):
+        sv = r'''
+module m(input logic a, output logic y);
+  always_comb begin
+    // y <= a;
+    $display("y <= a");
+    y = a;
+  end
+endmodule
+'''
+        assert self.hits(sv) == []
+
+
 if __name__ == '__main__':
     pytest.main([__file__, '-v'])
 

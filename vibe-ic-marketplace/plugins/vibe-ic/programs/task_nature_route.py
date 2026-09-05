@@ -472,7 +472,9 @@ _PROSE_HINTS = (
         r"(area|footprint|design|netlist|module|implementation|circuit|logic)\s+smaller"
         r"|lint\s+clean)\b", re.I)),
     ("completion", re.compile(
-        r"\b((?:complete|finish)\s+(?:the|this)\s+(?:following\s+|missing\s+)?"
+        r"\b((?:complete|finish)\s+(?:the|this)\s+"
+        r"(?:(?:following|given|provided|partial|incomplete|missing|"
+        r"systemverilog|verilog|sv)\s+)*"
         r"(?:code|rtl|module|implementation|function|task|stub|todo|logic)"
         r"|fill\s+in(?:\s+the)?\s+(?:missing\s+)?"
         r"(?:code|rtl|module|implementation|function|task|stub|todo|logic)"
@@ -527,6 +529,10 @@ _PROSE_HINTS = (
 # without a `;` is not a module header.
 _MODULE_HEAD = re.compile(r"^[ \t]*module\b[^;]{0,4000};", re.M)
 _ENDMODULE = re.compile(r"^[ \t]*endmodule\b", re.M)
+_PARTIAL_BODY_TOKEN = re.compile(
+    r"^[ \t]*(?:(?:wire|reg|logic|bit|integer|time|genvar|typedef|"
+    r"localparam|parameter)\b|assign\b|always(?:_ff|_comb|_latch)?\b|"
+    r"initial\b|function\b|task\b|generate\b)", re.M)
 
 
 def prompt_embeds_rtl(prompt: str) -> bool:
@@ -559,6 +565,36 @@ def prompt_embeds_rtl(prompt: str) -> bool:
     clean = _dms.strip_comments(prompt or "")
     head = _MODULE_HEAD.search(clean)
     return head is not None and _ENDMODULE.search(clean, head.end()) is not None
+
+
+def prompt_embeds_partial_rtl(prompt: str) -> bool:
+    """True for a module header followed by actual HDL body structure.
+
+    This is intentionally weaker than ``prompt_embeds_rtl`` only in the one
+    dimension a code-completion artefact needs: it may not have an ``endmodule``
+    yet.  A bare interface stub does not qualify.  The caller uses this signal
+    only after an explicit completion verb, so a quoted partial module never
+    invents a transform nature on its own.
+
+    When the module is in a Markdown code fence, body recognition is bounded at
+    that fence.  Otherwise it is bounded at the next module header.  Comments
+    are stripped before either test and all searches remain linear.
+    """
+    text = prompt or ""
+    clean = _dms.strip_comments(text)
+    head = _MODULE_HEAD.search(clean)
+    if head is None:
+        return False
+
+    body_end = len(clean)
+    if clean[:head.start()].count("```") % 2:
+        fence_end = clean.find("```", head.end())
+        if fence_end != -1:
+            body_end = fence_end
+    next_head = _MODULE_HEAD.search(clean, head.end())
+    if next_head is not None:
+        body_end = min(body_end, next_head.start())
+    return _PARTIAL_BODY_TOKEN.search(clean, head.end(), body_end) is not None
 
 
 def classify_task_nature(prompt: str,
@@ -614,6 +650,8 @@ def classify_task_nature(prompt: str,
     text = prompt or ""
     hinted = next((n for n, rx in _PROSE_HINTS if rx.search(text)), None)
     embedded = prompt_embeds_rtl(text)
+    if hinted == "completion" and not embedded:
+        embedded = prompt_embeds_partial_rtl(text)
 
     if has_context:
         n = hinted or _UNPINNED_TRANSFORM_NATURE
