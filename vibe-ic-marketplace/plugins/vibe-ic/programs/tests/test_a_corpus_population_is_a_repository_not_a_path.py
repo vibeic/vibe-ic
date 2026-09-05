@@ -49,6 +49,10 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
+pytestmark = pytest.mark.usefixtures("landing_corpus_binding_is_test_local")
+
 PROGRAMS = Path(__file__).resolve().parents[1]
 GATE = PROGRAMS / "step_internal_fail_bubble_up_check.py"
 if str(PROGRAMS) not in sys.path:

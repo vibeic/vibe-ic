@@ -118,6 +118,17 @@ def _no_leaked_dashboard_daemon(monkeypatch):
     monkeypatch.setenv("VIBE_IC_NO_DASHBOARD", "1")
     yield
 
+
+# A landing binds the production corpus with BOTH variables below.  Synthetic
+# corpus tests opt in to this fixture at module scope; production-corpus tests
+# deliberately do not.  This boundary matters: a global autouse fixture made
+# collection-time ``needs_corpus`` decisions disagree with the test body.
+@pytest.fixture
+def landing_corpus_binding_is_test_local(monkeypatch):
+    monkeypatch.delenv("GATEKEEPER_BENCHMARK_DATA_SHA", raising=False)
+    monkeypatch.delenv("VIBE_IC_BENCHMARK_DATA", raising=False)
+    yield
+
 for _p in (str(_PROGRAMS), str(_PLUGIN_ROOT)):
     if _p not in sys.path:
         sys.path.insert(0, _p)

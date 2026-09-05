@@ -24,7 +24,10 @@ ENV = "VIBE_IC_BENCHMARK_DATA"
 
 # Completion evidence decides these tests.  An elapsed-time expiry would not
 # prove either that git's index was read or that the dispatcher finished.
-pytestmark = pytest.mark.timeout(0)
+pytestmark = [
+    pytest.mark.timeout(0),
+    pytest.mark.usefixtures("landing_corpus_binding_is_test_local"),
+]
 
 
 def _git(root: Path, *args: str) -> subprocess.CompletedProcess[str]:

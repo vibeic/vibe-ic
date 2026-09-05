@@ -258,6 +258,13 @@ def _run(scheduler: str, work: Path, env: dict[str, str], *,
     (programs / "suite_write_guard.py").write_text(
         "import sys; sys.exit(%s)\n" % env.pop("_WG_RC", "0"), encoding="utf-8")
     full = dict(os.environ)
+    # The real repo-tools gate constrains each child to one hygiene worker.
+    # That outer production budget is not an input to this scheduler unit
+    # harness: every scenario below supplies its own lane shape and expects the
+    # scheduler's documented default budget.  Likewise, an aggregate-arm skip
+    # must only apply when the individual test asks for it.
+    full.pop("GATEKEEPER_HYGIENE_JOBS", None)
+    full.pop("GATEKEEPER_SKIP_TARGETED_TESTS", None)
     full.update({"WORK": str(work), "T_SEC": "1", "C_SEC": "1", "H_SEC": "1",
                  "A_SEC": "1", "T_RC": "0", "C_RC": "0", "LANE_WIDTH": "4"})
     full.update(env)
@@ -660,6 +667,18 @@ def test_the_hygiene_pool_gives_back_what_the_other_lanes_take(scheduler,
     assert pool(wide) == "pool=5", pool(wide)   # L1 + L2 + L4 live
     assert pool(arm) == "pool=6", pool(arm)     # L2 + L4 live
     assert pool(ser) == "pool=8", pool(ser)     # nothing else live
+
+
+def test_scheduler_harness_does_not_inherit_outer_gate_shape(scheduler,
+                                                              tmp_path,
+                                                              monkeypatch):
+    """The repo-tools gate's own limits are not scheduler-test inputs."""
+    monkeypatch.setenv("GATEKEEPER_HYGIENE_JOBS", "1")
+    monkeypatch.setenv("GATEKEEPER_SKIP_TARGETED_TESTS", "1")
+    work = tmp_path / "outer-gate"
+    work.mkdir()
+    _run(scheduler, work, {"LANE_WIDTH": "4"})
+    assert (work / "pool").read_text(encoding="utf-8").strip() == "pool=5"
 
 
 # ── SOURCE-LEVEL INVARIANTS THE SCHEDULER CANNOT ASSERT ABOUT ITSELF ───────

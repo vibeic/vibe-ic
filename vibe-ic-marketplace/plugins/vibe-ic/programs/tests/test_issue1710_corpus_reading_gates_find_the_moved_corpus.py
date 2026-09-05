@@ -57,6 +57,8 @@ from pathlib import Path
 
 import pytest
 
+pytestmark = pytest.mark.usefixtures("landing_corpus_binding_is_test_local")
+
 import _corpus_location as _corpus_loc
 import _pytest_progress_plugin
 import citation_routing_is_true_check as _routing_gate

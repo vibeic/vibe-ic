@@ -51,6 +51,8 @@ from pathlib import Path
 
 import pytest
 
+pytestmark = pytest.mark.usefixtures("landing_corpus_binding_is_test_local")
+
 PROGRAMS = Path(__file__).resolve().parents[1]
 REPO = PROGRAMS.parents[3]
 #: The one file that DEFINES the gate dispatchers. Read rather than

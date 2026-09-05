@@ -19,6 +19,8 @@ from pathlib import Path
 
 import pytest
 
+pytestmark = pytest.mark.usefixtures("landing_corpus_binding_is_test_local")
+
 PLUGIN = Path(__file__).resolve().parent.parent.parent
 PROGRAMS = PLUGIN / "programs"
 sys.path.insert(0, str(PROGRAMS))

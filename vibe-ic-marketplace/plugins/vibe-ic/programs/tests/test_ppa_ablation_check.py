@@ -44,6 +44,8 @@ import sys
 
 import pytest
 
+pytestmark = pytest.mark.usefixtures("landing_corpus_binding_is_test_local")
+
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import _progress_run as _pr  # noqa: E402

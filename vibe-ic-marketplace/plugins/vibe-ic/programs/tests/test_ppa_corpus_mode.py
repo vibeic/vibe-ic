@@ -45,6 +45,8 @@ import sys
 
 import pytest
 
+pytestmark = pytest.mark.usefixtures("landing_corpus_binding_is_test_local")
+
 TESTS = pathlib.Path(__file__).resolve().parent
 PROGRAMS = TESTS.parent
 sys.path.insert(0, str(PROGRAMS))
