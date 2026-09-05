@@ -659,6 +659,39 @@ def parameter_overrides(sources: Sequence[Tuple[str, str]],
     return out
 
 
+def parameter_override_conflicts(sources: Sequence[Tuple[str, str]],
+                                 dut_module: str) -> Dict[str, List[int]]:
+    """`{PARAM: [distinct values]}` for parameters overridden INCONSISTENTLY.
+
+    A design that instantiates the same module twice with different widths is
+    saying two different things. `parameter_overrides` returns a flat dict, so
+    the last site silently won and the driver was bound to whichever
+    instantiation happened to be parsed last. That is a guess, and this module
+    never guesses -- the caller refuses and names the parameter instead.
+    """
+    seen: Dict[str, List[int]] = {}
+    for _path, text in sources or []:
+        for m in re.finditer(re.escape(dut_module) + r"\s*#\s*\(", text or ""):
+            i = m.end() - 1
+            depth, j = 0, i
+            while j < len(text):
+                if text[j] == "(":
+                    depth += 1
+                elif text[j] == ")":
+                    depth -= 1
+                    if depth == 0:
+                        break
+                j += 1
+            for pm in re.finditer(r"\.\s*(\w+)\s*\(([^()]*)\)", text[i:j]):
+                val = _int_expr(pm.group(2), {})
+                if val is None:
+                    continue
+                vals = seen.setdefault(pm.group(1), [])
+                if val not in vals:
+                    vals.append(val)
+    return {k: v for k, v in seen.items() if len(v) > 1}
+
+
 def struct_field_width(sources: Sequence[Tuple[str, str]], type_name: str,
                        field: str, params: Dict[str, int]
                        ) -> Tuple[Optional[int], str]:
@@ -708,6 +741,12 @@ def resolve_bus_widths(sources: Sequence[Tuple[str, str]], rtl_text: str,
     existing behaviour and is told which symbol blocked the resolution.
     """
     defaults = dut_parameter_defaults(rtl_text, dut_module)
+    conflicts = parameter_override_conflicts(sources, dut_module)
+    if conflicts:
+        detail = "; ".join(f"{k} = {sorted(v)}" for k, v in sorted(conflicts.items()))
+        return None, (f"the design overrides the same parameter with different "
+                      f"values at different instantiations ({detail}); which one "
+                      f"the driver should bind to is not derivable from the input")
     overrides = parameter_overrides(sources, dut_module)
     params = dict(defaults)
     params.update(overrides)

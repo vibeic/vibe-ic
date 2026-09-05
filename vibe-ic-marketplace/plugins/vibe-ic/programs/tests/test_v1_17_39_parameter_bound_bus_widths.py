@@ -294,3 +294,37 @@ def test_a_descending_range_is_eight_bits_not_negative():
         DUT, "dut_mod", BUS)
     assert w is not None, why
     assert w["addr"] == 8, f"descending range gave {w['addr']}"
+
+
+# --------------------------------------------------------------------------
+# THE SAME PARAMETER OVERRIDDEN DIFFERENTLY AT TWO SITES IS AMBIGUOUS
+#
+# A design instantiating the DUT twice with different widths is saying two
+# different things. `parameter_overrides` returns a flat dict, so the LAST site
+# silently won and the driver bound to whichever happened to be parsed last --
+# a guess, in a module whose whole contract is that it never guesses.
+# --------------------------------------------------------------------------
+CONFLICT_TOP = ("module a; dut_mod #(.DW(64)) u1 (.clk(c)); endmodule\n"
+                "module b; dut_mod #(.DW(16)) u2 (.clk(c)); endmodule\n")
+AGREE_TOP = ("module a; dut_mod #(.DW(64)) u1 (.clk(c)); endmodule\n"
+             "module b; dut_mod #(.DW(64)) u2 (.clk(c)); endmodule\n")
+
+
+def test_conflicting_overrides_refuse_and_name_the_parameter():
+    w, why = D.resolve_bus_widths(_srcs(CONFLICT_TOP), DUT, "dut_mod", BUS)
+    assert w is None, f"silently picked {w}"
+    assert "DW" in why and "[16, 64]" in why
+
+
+def test_agreeing_overrides_at_two_sites_still_resolve():
+    """CONTROL: two instantiations are not themselves a problem -- only two
+    DIFFERENT values are. A design may legitimately instantiate the DUT twice."""
+    w, why = D.resolve_bus_widths(_srcs(AGREE_TOP), DUT, "dut_mod", BUS)
+    assert w is not None, why
+    assert w["data"] == 64
+
+
+def test_conflict_detection_reports_the_distinct_values():
+    c = D.parameter_override_conflicts([("t.sv", CONFLICT_TOP)], "dut_mod")
+    assert sorted(c["DW"]) == [16, 64]
+    assert D.parameter_override_conflicts([("t.sv", AGREE_TOP)], "dut_mod") == {}

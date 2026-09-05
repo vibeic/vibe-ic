@@ -374,3 +374,28 @@ def test_each_starvation_output_has_exactly_one_driver(tmp_path):
     c = subprocess.run(["iverilog", "-g2012", "-o", str(tmp_path / "s"),
                         str(tmp_path / "d.sv")], capture_output=True, text=True)
     assert c.returncode == 0, c.stderr
+
+
+# --------------------------------------------------------------------------
+# 10. an event may not take the module's OWN port name
+#
+# An event named `clk` emitted a SECOND `input clk` in the same header. iverilog
+# rejects it outright ("clk definition conflicts with definition at ..."), so the
+# generator was producing RTL that cannot elaborate instead of saying what was
+# wrong. Loud rather than silent, unlike the rest of this audit series, but still
+# the generator's job to catch.
+# --------------------------------------------------------------------------
+@pytest.mark.parametrize("name", ["clk", "rst_n", "in", "out"])
+def test_an_event_cannot_take_the_modules_own_port_name(tmp_path, name):
+    r, _ = _run(tmp_path, dict(BASE, events={name: {"kind": "level"}}))
+    assert r.returncode == 1
+    assert "collides with the module's own port" in r.stderr
+
+
+def test_an_ordinary_event_name_is_unaffected(tmp_path):
+    """CONTROL: the rule is about the module's ports, not about event names."""
+    r, rtl = _run(tmp_path, dict(BASE, events={
+        "irq": {"kind": "pulse", "ack": "ack", "deadline": 4,
+                "starvation_out": "starved"}}))
+    assert r.returncode == 0, r.stderr
+    assert rtl.count("  input        irq,") == 1

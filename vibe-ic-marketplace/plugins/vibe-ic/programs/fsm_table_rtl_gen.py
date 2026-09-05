@@ -343,11 +343,25 @@ def _validate(spec: dict) -> None:
         raise ValueError(
             "events require a clocked FSM; 'moore_comb' is combinational — "
             "state the sequential kind or drop the events contract")
+    # The module's OWN ports are reserved. An event named `clk` emitted a
+    # SECOND `input clk` in the same header -- iverilog rejects it outright
+    # ("definition conflicts with definition at ..."), so the generator was
+    # producing RTL that cannot elaborate instead of saying what was wrong.
+    _reserved = {spec.get("clk", "clk"), spec.get("input", "in"),
+                 spec.get("output", "out"), spec.get("state_in", "state"),
+                 spec.get("next_state_out", "next_state")}
+    _rst = spec.get("reset") or {}
+    if _rst.get("name"):
+        _reserved.add(_rst["name"])
     for _name, _c in evs.items():
         for _sig in (_name, _c["ack"], _c["starvation_out"]):
             if _sig and _sig in enc:
                 raise ValueError(
                     f"event signal '{_sig}' collides with a state name")
+            if _sig and _sig in _reserved:
+                raise ValueError(
+                    f"event signal '{_sig}' collides with the module's own "
+                    f"port of that name; it would be declared twice")
         if _name in state_out or (_c["starvation_out"] or "") in state_out:
             raise ValueError(
                 f"event '{_name}' collides with a state_outputs signal")
