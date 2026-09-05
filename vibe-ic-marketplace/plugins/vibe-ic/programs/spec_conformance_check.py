@@ -2057,7 +2057,24 @@ def main(argv: Optional[List[str]] = None) -> int:
     _renamed_groups: List[tuple] = []
     try:
         import l9_rtl_pin_consistency_check as _l9pin
-        _proj = Path(args.rtl_dir).resolve().parents[2] if args.rtl_dir else None
+        # Derive the project root from the RESOLVED RTL FILES, never from which
+        # ARG SHAPE the caller used. Keying on `--rtl-dir` made the verdict
+        # depend on HOW the gate was invoked: the identical tree with the
+        # identical declaration returned PASS via `--rtl-dir` and FAIL when the
+        # same directory was passed positionally — a silent, invocation-shaped
+        # difference in a conformance verdict. Walk each collected file's
+        # ancestors and accept the first that actually carries the manifest at
+        # the layout path; no match ⇒ no groups ⇒ exact-name comparison
+        # (fail-closed). chip-AGNOSTIC: path layout only, no chip literal.
+        _proj = None
+        for _f in files:
+            for _anc in Path(_f).resolve().parents:
+                if (_anc / "phase2" / "stage1" / "rtl"
+                        / "SOURCE_MANIFEST.json").is_file():
+                    _proj = _anc
+                    break
+            if _proj is not None:
+                break
         _mf = _l9pin.load_source_manifest(_proj) if _proj else None
         if _mf:
             _renamed_groups = _l9pin._manifest_renamed_groups(_mf)

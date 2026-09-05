@@ -52,12 +52,15 @@ def _project(tmp_path, rtl_src, manifest):
     return rtl, spec
 
 
-def _run(tmp_path, rtl_src, manifest):
+def _run(tmp_path, rtl_src, manifest, positional=False):
     rtl, spec = _project(tmp_path, rtl_src, manifest)
     out = tmp_path / "f.json"
+    # `positional` exercises the OTHER arg shape: the verdict must not depend on
+    # HOW the RTL was handed to the gate.
+    rtl_args = [str(rtl)] if positional else ["--rtl-dir", str(rtl)]
     rc = subprocess.run(
-        [sys.executable, str(PROG), "--rtl-dir", str(rtl),
-         "--spec", str(spec), "--json", str(out)],
+        [sys.executable, str(PROG)] + rtl_args +
+        ["--spec", str(spec), "--json", str(out)],
         capture_output=True, text=True).returncode
     findings = json.loads(out.read_text()) if out.is_file() else []
     rules = {f["rule"] for f in findings if f["severity"] == "ERROR"}
@@ -138,3 +141,31 @@ def test_rename_may_not_change_direction(tmp_path):
     rc, rules, _ = _run(tmp_path, rtl, mf)
     assert rc != 0
     assert "port-rename-direction-mismatch" in rules, rules
+
+
+def test_verdict_does_not_depend_on_the_arg_shape(tmp_path):
+    """The manifest is found from the RESOLVED FILES, not from `--rtl-dir`.
+
+    Keying the project-root derivation on the arg shape made the identical tree
+    with the identical declaration return PASS via `--rtl-dir` and FAIL when the
+    same directory was passed positionally — a silent, invocation-shaped
+    difference in a conformance verdict.
+    """
+    rc_flag, rules_flag, _ = _run(tmp_path / "a", RTL_RENAMED, _GOOD)
+    rc_pos, rules_pos, _ = _run(tmp_path / "b", RTL_RENAMED, _GOOD,
+                                positional=True)
+    assert rc_flag == rc_pos == 0, (rc_flag, rc_pos, rules_flag, rules_pos)
+    assert rules_flag == rules_pos == set()
+
+
+def test_undeclared_drop_still_errors_under_both_arg_shapes(tmp_path):
+    """The refusal must be invocation-shape independent too."""
+    rtl = RTL_RENAMED.replace(
+        "   output wire [7:0] o_mem_wdata);", "   output wire [7:0] o_unrelated);"
+    ).replace("   assign o_mem_wdata = 8'd0;", "   assign o_unrelated = 8'd0;")
+    mf = {"reused_ip": True, "renamed_interfaces": [
+        {"l9": ["o_mem_addr"], "rtl": ["o_mem_waddr", "o_mem_raddr"]}]}
+    rc_flag, rules_flag, _ = _run(tmp_path / "a", rtl, mf)
+    rc_pos, rules_pos, _ = _run(tmp_path / "b", rtl, mf, positional=True)
+    assert rc_flag != 0 and rc_pos != 0
+    assert "port-missing" in rules_flag and "port-missing" in rules_pos
