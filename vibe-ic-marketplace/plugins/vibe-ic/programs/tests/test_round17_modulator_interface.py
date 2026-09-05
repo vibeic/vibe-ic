@@ -184,20 +184,103 @@ def _expand(entry, order=2):
                                     "vref": 1.0, "vdd": 1.2})
 
 
-def test_the_dac_branch_alternates_with_the_stages_parity():
-    devices, _nets, _ex, rec = _expand(ENTRY)
-    assert rec["stages"] == 2
-    s1 = [d for d in devices if d["name"] == "mn_dacs1"][0]
-    s2 = [d for d in devices if d["name"] == "mn_dacs2"][0]
-    assert "ndac" in s1["nets"] and "ndacb" not in s1["nets"]
-    assert "ndacb" in s2["nets"]
+def _dac_selectors(entry, order=2):
+    """Which reference selector each stage's DAC branch SAMPLES — the source
+    of its sampling switch, never "the net whose name starts with ndac": the
+    bottom plate `ndacs{i}` starts with it too, and reading that instead
+    reports the same answer for every topology, which is how a derivation
+    gets mistaken for a constant."""
+    devices, _n, _e, _r = _expand(entry, order)
+    return [[d for d in devices if d["name"] == "mn_dacs%d" % i][0]["nets"][2]
+            for i in range(1, order + 1)]
+
+
+def _as_delay_free(entry):
+    """The SAME entry with its branches made delay-free / INVERTING: each
+    branch's summing-node throw moved onto the phase its bottom plate samples
+    on. Nothing else changes — same devices, same nets, same geometry."""
+    m = json.loads(json.dumps(entry))
+    st = [g for g in a2._stage_groups(m) if g.get("first_in")][0]
+    for d in st["devices"]:
+        if d["name"] in ("mn_cstv{i}", "mn_cftv{i}"):
+            d["nets"][1] = "clk"
+        elif d["name"] in ("mp_cstv{i}", "mp_cftv{i}"):
+            d["nets"][1] = "nclkb"
+        elif d["name"] in ("mn_cstc{i}", "mn_cftc{i}"):
+            d["nets"][1] = "nclkb"
+        elif d["name"] in ("mp_cstc{i}", "mp_cftc{i}"):
+            d["nets"][1] = "clk"
+    return m
+
+
+def test_the_feedback_reference_end_is_DERIVED_from_the_integrator():
+    """It used to be a fixed table justified by "each integrator INVERTS".
+    That is a CLAIM ABOUT THE EMITTED CIRCUIT, and when the branches got their
+    summing-node switches it went false: a branch that samples on one phase
+    and transfers on the other is DELAYING and NON-INVERTING, so the table put
+    stage 2's feedback in positive sign and the loop latched — density 1.0000,
+    ZERO bit transitions, at every input. Derived, the same branches converge.
+
+    A delaying cascade needs NO alternation: every stage inverts nothing, so
+    every stage feeds back the same end."""
+    assert _dac_selectors(ENTRY, 2) == ["ndac", "ndac"]
+    assert _dac_selectors(ENTRY, 1) == ["ndac"]
+
+
+def test_the_derived_parity_CHANGES_when_the_integrator_does():
+    """THE CONTROL, and the reason the previous test is not just a new
+    constant. A derivation that always lands on one value is a constant with
+    extra steps. Make the branches delay-free / INVERTING and the alternation
+    must come BACK by itself — nothing here tells it to."""
+    inverting = _as_delay_free(ENTRY)
+    assert _dac_selectors(inverting, 2) == ["ndac", "ndacb"], (
+        "a delay-free (inverting) cascade must alternate the reference end "
+        "again; if it does not, the parity is not derived from the topology")
+    # and the LATENT BUG the table hid: at order 1 the old
+    # `alternates[(i-1) % len]` gave the FIRST entry whatever the integrator
+    # was, so an entry whose integrators really did invert took the wrong end
+    # and nothing could say so.
+    assert _dac_selectors(inverting, 1) == ["ndacb"]
+    assert _dac_selectors(ENTRY, 1) == ["ndac"]
+
+
+def test_a_selector_no_stage_samples_is_not_emitted():
+    """Which selector legs are LIVE is a consequence of the same derivation,
+    so it is derived too. Otherwise the deck carries a driven-but-unloaded
+    node — MEASURED: A3 emits it and all four netlist checkers and the A3 gate
+    PASS it, so nothing downstream would have said so."""
+    def legs(entry, order):
+        devices, nets, _e, _r = _expand(entry, order)
+        return (sorted(d["name"] for d in devices
+                       if d["name"].startswith(("mn_dacb", "mp_dacb"))),
+                [n for n in nets if n == "ndacb"])
+    # delaying: no stage samples `ndacb`, so its four legs and its net go
+    assert legs(ENTRY, 2) == ([], [])
+    assert legs(ENTRY, 1) == ([], [])
+    # delay-free order 2 samples BOTH ends, so both survive
+    inv = _as_delay_free(ENTRY)
+    names, nets = legs(inv, 2)
+    assert len(names) == 4 and nets == ["ndacb"]
+    # delay-free order 1 samples ONLY `ndacb`, so it is the OTHER pair that
+    # goes — which a table of "how many legs has this entry" could not do
+    devices, _n, _e, _r = _expand(inv, 1)
+    assert not [d for d in devices
+                if d["name"] in ("mn_dac0", "mn_dac1", "mp_dac0", "mp_dac1")]
+    assert [d for d in devices if d["name"].startswith("mn_dacb")]
 
 
 def test_an_entry_that_declares_no_alternates_substitutes_nothing():
-    """The control that keeps every other entry on its old path."""
+    """The control that keeps every other entry on its old path.
+
+    Both feedback declarations are removed, because the subject of this
+    control is an entry that declares NEITHER — the shipped entries other than
+    the modulator. An entry that declares `feedback_selectors` and has no
+    switched-capacitor branch to derive from is a different case and is
+    covered by `test_an_entry_that_declares_selectors_it_cannot_derive_is_refused`."""
     entry = json.loads(json.dumps(ENTRY))
     entry["stage"] = [a2._stage_groups(entry)[0]]
     entry["stage"][0].pop("alternates")
+    entry["stage"][0].pop(a2.FEEDBACK_SELECTORS_KEY, None)
     entry["stage"][0]["devices"] = [
         {"name": "m{i}", "role": "nmos", "function": "f",
          "nets": ["a{i}", "n{alt}", "vss", "vss"], "w": 1.0, "l": 1.0}]
@@ -386,3 +469,18 @@ def test_the_behaviour_record_reaches_the_rendered_markdown():
 
 def test_an_ir_with_no_record_renders_no_section():
     assert a2._render_behaviour_section({"ports": []}) == []
+
+
+def test_an_entry_that_declares_selectors_it_cannot_derive_is_refused():
+    """DEGRADE LOUDLY, NEVER SILENTLY. An entry that asks for the derivation
+    and gives it nothing to work from must be REFUSED by name, not quietly
+    handed the old table — a silent fallback would put the tabulated claim
+    back exactly where it was, under a name that says it was derived."""
+    entry = json.loads(json.dumps(ENTRY))
+    entry["stage"] = [a2._stage_groups(entry)[0]]
+    entry["stage"][0]["devices"] = [
+        {"name": "m{i}", "role": "nmos", "function": "f",
+         "nets": ["a{i}", "n{alt}", "vss", "vss"], "w": 1.0, "l": 1.0}]
+    with pytest.raises(a2.LibraryEntryError) as e:
+        _expand(entry)
+    assert a2.FEEDBACK_SELECTORS_KEY in str(e.value)

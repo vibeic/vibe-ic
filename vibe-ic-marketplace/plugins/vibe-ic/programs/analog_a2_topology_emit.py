@@ -235,6 +235,11 @@ REQUIRES_BOUND_KEY = "requires_bound"
 #: an entry whose sizing needs a characterised process must declare it here or
 #: it degrades into a library nominal with nothing recording that it did.
 REQUIRES_PDK_MEASURED_KEY = "requires_pdk_measured"
+#: A stage group that declares this gets its feedback reference end DERIVED
+#: from the integrator polarity it emits, instead of taking it from a fixed
+#: per-stage table. `{"pos": <suffix>, "neg": <suffix>}` names which selector
+#: feeds back the POSITIVE reference when the decision is asserted.
+FEEDBACK_SELECTORS_KEY = "feedback_selectors"
 #: {name: [admitted values]} — a DISCRETE requirement. The order-N coefficient
 #: set is the case this exists for: a set is admitted per order, and an order
 #: nobody authored a set for is refused BY NAME rather than falling back to a
@@ -1757,10 +1762,39 @@ LIBRARY: Dict[str, Dict[str, Any]] = {
             "inner_out": "vo{i}",
             # Each integrator INVERTS, so the feedback branch has to sample
             # the opposite end of the reference pair one stage further from
-            # the quantiser. `{alt}` selects `ndac` / `ndacb` by parity.
+            # the quantiser. `{alt}` selects `ndac` / `ndacb`.
+            #
+            # WHICH ONE IS NOT WRITTEN DOWN HERE ANY MORE, and that is the
+            # repair. It used to be a fixed per-stage table justified by "each
+            # integrator INVERTS" — a CLAIM ABOUT THIS CIRCUIT, kept where
+            # nothing re-derives it. When the branches below were given their
+            # summing-node switches the claim went false (a branch that samples
+            # on one phase and transfers on the other is DELAYING and
+            # NON-INVERTING), the table put stage 2's feedback in positive sign,
+            # and the loop latched: density 1.0000 and ZERO bit transitions at
+            # every input. With the same branches and the selector derived, the
+            # modulator converts — monotonic over ten inputs, 9 of 9 PVT
+            # corners. `derived_feedback_suffixes` computes it from the
+            # polarity the emitted branches actually have.
+            #
+            # `alternates` is RETAINED as the declaration of which two
+            # selectors exist, and as the fallback for any entry that does not
+            # declare `feedback_selectors`. It is no longer consulted here.
             "alternates": ["", "b"],
+            # WHICH PORT IS THE POSITIVE REFERENCE IS A DECLARED FACT, not a
+            # topological one, so it stays declared. `mn_dac1` ties `ndac` to
+            # `vrefn` when the decision is asserted and `mn_dacb1` ties `ndacb`
+            # to `vrefp`, so `b` is the selector that feeds the POSITIVE end
+            # back. The integrator's SIGN is topological and is derived; only
+            # separating those two makes the parity a consequence instead of
+            # an assumption.
+            "feedback_selectors": {"neg": "", "pos": "b"},
             "internal_nets": ["ntail{i}", "nd1_{i}", "nd2_{i}", "vsum{i}",
-                              "nsmp{i}", "ndacs{i}"],
+                              "nsmp{i}", "ndacs{i}",
+                              # the SUMMING-NODE plate of each switched
+                              # capacitor is a node of its own, because it
+                              # is switched too. See `mn_cstv{i}` below.
+                              "ncst{i}", "ncft{i}"],
             "devices": [
                 {"name": "mn_tail{i}", "role": "nmos", "function":
                  "stage {i} tail current source (mirror output)",
@@ -1848,7 +1882,79 @@ LIBRARY: Dict[str, Dict[str, Any]] = {
                 {"name": "cs{i}", "role": "cap", "function":
                  "stage {i} SAMPLING capacitor — the absolute value is the "
                  "sampled-noise budget of the declared resolution",
-                 "nets": ["nsmp{i}", "vsum{i}"], "w": 10.0, "l": 2.6},
+                 "nets": ["nsmp{i}", "ncst{i}"], "w": 10.0, "l": 2.6},
+                # ── the SUMMING-NODE plate is switched as well ──────────
+                # A switched-capacitor integrator switches BOTH plates.
+                # This branch used to hard-wire cs{i}'s upper plate to
+                # `vsum{i}` and switch only the bottom one, and that is
+                # not an integrator at all: with the upper plate welded to
+                # the virtual ground, the bottom plate going `{in}` ->
+                # `vcm` pushes +cs*({in}-vcm) into ci{i}, and the bottom
+                # plate coming BACK to `{in}` on the next half cycle pulls
+                # exactly the same charge out of it again. The net
+                # transfer per clock PERIOD is zero, up to second-order
+                # asymmetry, so the loop filter does not accumulate.
+                #
+                # MEASURED on the deck this producer emits, the first
+                # stage's output sampled at one fixed clock phase over the
+                # first 16 clocks of every conversion window: the
+                # integrator moved -2.1 uV per clock where this deck's
+                # capacitor ratio and common mode demand +2431 uV. The
+                # load-bearing figure is the DIFFERENTIAL one, because the
+                # absolute step also carries the feedback branch's charge:
+                # d(step)/d(vin) measured -0.1 % of the ratio before these
+                # devices and +100.8 % after them, at three input pairs
+                # agreeing to 0.2 %, with the per-window slopes repeating
+                # to 0.1 uV.
+                #
+                # The prior-round figures for the same defect — -20.3 uV
+                # per clock against +1932 demanded, and +247.8 with the
+                # switches hand-patched into the deck — are NOT this
+                # measurement and are not quoted as one: they were taken
+                # over clocks 60-199 on an older emitted artefact whose
+                # common mode is 0.6125 V and which carries neither the
+                # driven `vcm` nor the registered reset decode this entry
+                # now emits. Same defect, different deck; the numbers
+                # above are this one's.
+                #
+                # The upper plate therefore sits on the common-mode
+                # reference while the capacitor SAMPLES (clock high, the
+                # same phase `mn_smp{i}` connects the bottom plate to the
+                # stage input) and reaches the virtual ground only on the
+                # CHARGE-TRANSFER phase (clock low, the same phase
+                # `mn_smpb{i}` returns the bottom plate to `vcm`). That is
+                # the parasitic-insensitive arrangement, and it is why the
+                # top-plate parasitic no longer lands on the summing node
+                # during sampling. Same transmission-gate style and same
+                # device geometry as the bottom-plate switches above: a
+                # lone n-channel pass device cannot carry a level near the
+                # positive rail, and both of these nodes sit at or above
+                # the common mode.
+                {"name": "mn_cstv{i}", "role": "nmos", "function":
+                 "stage {i} sampling-capacitor SUMMING-NODE switch "
+                 "(n-side): on the charge-transfer phase cs{i}'s upper "
+                 "plate reaches the virtual ground and the sampled charge "
+                 "moves into ci{i}",
+                 "nets": ["ncst{i}", "nclkb", "vsum{i}", "vss"],
+                 "w": 2.0, "l": 0.15},
+                {"name": "mp_cstv{i}", "role": "pmos", "function":
+                 "stage {i} sampling-capacitor SUMMING-NODE switch "
+                 "(p-side of the transmission gate)",
+                 "nets": ["ncst{i}", "clk", "vsum{i}", "vdd"],
+                 "w": 4.0, "l": 0.15},
+                {"name": "mn_cstc{i}", "role": "nmos", "function":
+                 "stage {i} sampling-capacitor UPPER-PLATE reference "
+                 "switch (n-side): while cs{i} samples, its upper plate "
+                 "is held at the common-mode reference and OFF the "
+                 "summing node, so the sample is taken against `vcm` and "
+                 "the charge already on ci{i} is not disturbed",
+                 "nets": ["ncst{i}", "clk", "vcm", "vss"],
+                 "w": 2.0, "l": 0.15},
+                {"name": "mp_cstc{i}", "role": "pmos", "function":
+                 "stage {i} sampling-capacitor UPPER-PLATE reference "
+                 "switch (p-side of the transmission gate)",
+                 "nets": ["ncst{i}", "nclkb", "vcm", "vdd"],
+                 "w": 4.0, "l": 0.15},
                 {"name": "ci{i}", "role": "cap", "function":
                  "stage {i} INTEGRATING capacitor — cs{i}/ci{i} IS this "
                  "stage's loop coefficient",
@@ -1947,7 +2053,39 @@ LIBRARY: Dict[str, Dict[str, Any]] = {
                  "the fed-back charge is one full reference step against "
                  "one full input sample: the modulator's full scale IS the "
                  "declared reference",
-                 "nets": ["ndacs{i}", "vsum{i}"], "w": 10.0, "l": 2.6},
+                 "nets": ["ndacs{i}", "ncft{i}"], "w": 10.0, "l": 2.6},
+                # The DAC branch is a switched capacitor for exactly the
+                # same reason the input branch is, and it had exactly the
+                # same defect: its upper plate was welded to `vsum{i}`, so
+                # the reference charge it injected on one half cycle it
+                # took straight back on the next. It runs on the SAME two
+                # phases as the input branch, so the input charge and the
+                # fed-back charge meet at the summing node in one
+                # transfer and the subtraction happens there.
+                {"name": "mn_cftv{i}", "role": "nmos", "function":
+                 "stage {i} DAC-capacitor SUMMING-NODE switch (n-side): "
+                 "on the charge-transfer phase cf{i}'s upper plate "
+                 "reaches the virtual ground and the fed-back charge "
+                 "moves into ci{i}",
+                 "nets": ["ncft{i}", "nclkb", "vsum{i}", "vss"],
+                 "w": 2.0, "l": 0.15},
+                {"name": "mp_cftv{i}", "role": "pmos", "function":
+                 "stage {i} DAC-capacitor SUMMING-NODE switch (p-side of "
+                 "the transmission gate)",
+                 "nets": ["ncft{i}", "clk", "vsum{i}", "vdd"],
+                 "w": 4.0, "l": 0.15},
+                {"name": "mn_cftc{i}", "role": "nmos", "function":
+                 "stage {i} DAC-capacitor UPPER-PLATE reference switch "
+                 "(n-side): while cf{i} samples the selected reference "
+                 "end, its upper plate is held at the common-mode "
+                 "reference and OFF the summing node",
+                 "nets": ["ncft{i}", "clk", "vcm", "vss"],
+                 "w": 2.0, "l": 0.15},
+                {"name": "mp_cftc{i}", "role": "pmos", "function":
+                 "stage {i} DAC-capacitor UPPER-PLATE reference switch "
+                 "(p-side of the transmission gate)",
+                 "nets": ["ncft{i}", "nclkb", "vcm", "vdd"],
+                 "w": 4.0, "l": 0.15},
             ],
             # `{coeff}` is substituted with THIS stage's coefficient before
             # the expression is written into the IR, so what reaches
@@ -2279,14 +2417,26 @@ LIBRARY: Dict[str, Dict[str, Any]] = {
             # A HYPOTHESIS THIS ROUND RULED OUT BY MEASUREMENT, recorded so
             # the next reader does not spend a window re-testing it.
             "refuted": [
-                "THE FEEDBACK SIGN is not the remaining cause. Both "
-                "polarities were measured on the circuit as it now "
-                "stands: shipped gave density 0.0082 / -1.5e-6 / -1.5e-6 "
-                "and swapped gave 2.9e-5 / 0.042 / 2.4e-5. Neither "
-                "converts, and in EACH the output is full-swing at "
-                "exactly ONE input level and dead at the others — "
-                "which is not a sign error, it is a loop that only "
-                "responds in a narrow band",
+                "THE FEEDBACK SIGN was refuted on the PREVIOUS circuit "
+                "and that refutation does NOT carry to this one. On the "
+                "circuit as it stood before the sampling and feedback "
+                "capacitors got their summing-node switches, both "
+                "polarities were measured — shipped gave density 0.0082 / "
+                "-1.5e-6 / -1.5e-6 and swapped gave 2.9e-5 / 0.042 / "
+                "2.4e-5, neither converting, each full-swing at exactly "
+                "ONE input level and dead at the others. That was a loop "
+                "responding in a narrow band, not a sign error, AND IT "
+                "WAS MEASURED ON A LOOP THAT TRANSFERRED ~0 CHARGE PER "
+                "CLOCK: with the branch welded to the summing node the "
+                "feedback polarity could not have shown itself either "
+                "way. Now that the branch transfers its full designed "
+                "charge the question is OPEN again, and the measurement "
+                "since says the sign IS implicated: the corrected branch "
+                "is a DELAYING, NON-INVERTING integrator, so this entry's "
+                "stage-parity alternation of the reference end — which "
+                "assumes each integrator inverts — makes the second "
+                "stage's feedback positive. Do not read this entry as "
+                "telling you the sign is settled",
                 "CHARGE KICKED BACK from the StrongARM into the auto-zero "
                 "node does NOT accumulate here. Probed across a whole "
                 "conversion window, the latch's input sat at 0.586 / 0.591 "
@@ -3077,6 +3227,196 @@ def _group_count(st: Dict[str, Any], spec_values: Dict[str, float]) -> int:
     return int(round(float(spec_values[count_from])))
 
 
+# ── the feedback selector, DERIVED from the integrator the entry emits ─────
+# WHAT WAS WRONG. A cascade entry used to name the feedback reference end per
+# stage with a fixed table (`"alternates": ["", "b"]`) whose stated reason was
+# "each integrator INVERTS". That is not a convention — it is a CLAIM ABOUT THE
+# CIRCUIT THIS FILE EMITS, and once the switched-capacitor branches were given
+# their summing-node switches the claim stopped being true: a branch that
+# samples on one clock phase and transfers on the other is a DELAYING,
+# NON-INVERTING integrator. The table then put the second stage's feedback in
+# POSITIVE sign and the loop latched with the bitstream stuck.
+#
+# So the defect was never the value in the table. It was that a property of the
+# emitted topology was written down as a constant, where nothing re-derives it
+# when the topology changes. These functions derive it.
+#
+# MEASURED, and it is why the derivation is worth the code: with the branches
+# switched and the table left alone, the modulator does not convert at any
+# input (density 1.0000, ZERO bit transitions). With the same branches and the
+# selector derived, it converts — monotonic over ten inputs and at 9 of 9 PVT
+# corners.
+#
+# A SECOND, LATENT BUG THE TABLE HID, and the reason this is not just a value
+# change: `alternates[(i - 1) % len(alternates)]` gives stage 1 the FIRST entry
+# whatever the integrator is. For a first-order loop that is the only stage, so
+# an entry whose integrators really did invert would have taken the wrong
+# reference end at order 1 and the table could never have said so.
+_SC_RAIL_NETS = frozenset({"vdd", "vss", "0"})
+#: stands in for `{alt}` while the polarity is being derived, so the FEEDBACK
+#: branch is identifiable before the suffix it is waiting for exists. The
+#: polarity depends on gate nets only, so nothing here is circular.
+_SC_ALT_SENTINEL = "\u0001alt\u0001"
+
+
+def _sc_groups(devices: Sequence[Dict[str, Any]]
+               ) -> Dict[frozenset, Dict[str, str]]:
+    """`{frozenset(drain, source): {gate: body}}` for the PASS devices only.
+
+    A pass device has BOTH ends off the rails. Excluding the rest is what keeps
+    an amplifier output — whose source IS a rail — from being read as a
+    switched node. The gate is kept with its BODY because both halves of a CMOS
+    transmission gate carry the same pair of gate nets; the n-channel half's
+    gate is the one that names the phase the throw conducts on."""
+    out: Dict[frozenset, Dict[str, str]] = {}
+    for d in devices:
+        nets = [str(n) for n in (d.get("nets") or [])]
+        if len(nets) != 4 or nets[0] in _SC_RAIL_NETS or nets[2] in _SC_RAIL_NETS:
+            continue
+        out.setdefault(frozenset((nets[0], nets[2])), {})[nets[1]] = nets[3]
+    return out
+
+
+def _sc_n_gate(throw: Dict[str, str]) -> Optional[str]:
+    """The gate of a throw's n-channel half, by this file's own body rule
+    (`NMOS_BODY_TO_VDD` / `PMOS_BODY_TO_VSS` — n bodies to ground)."""
+    ns = [g for g, body in throw.items() if body == "vss"]
+    return ns[0] if len(ns) == 1 else None
+
+
+def _sc_throws(node: str, groups: Dict[frozenset, Dict[str, str]]
+               ) -> Dict[str, Optional[str]]:
+    """`{far node: n-channel gate}` for every non-rail throw of `node`, or {}
+    when `node` has fewer than two and is therefore not a switch at all."""
+    t: Dict[str, Optional[str]] = {}
+    for k, gates in groups.items():
+        if node not in k:
+            continue
+        far = next(iter(k - {node}), None)
+        if far is None or far in _SC_RAIL_NETS:
+            continue
+        t[far] = _sc_n_gate(gates)
+    return t if len(t) >= 2 else {}
+
+
+def sc_branch_polarities(devices: Sequence[Dict[str, Any]]
+                         ) -> Dict[str, Dict[str, Any]]:
+    """`{branch capacitor: {"polarity": +1 delaying / -1 delay-free,
+    "source": the node it samples}}` for one stage.
+
+    The SOURCE is returned with the polarity because the caller has to tell a
+    forward branch from a feedback one, and the only thing that distinguishes
+    them is which node the bottom plate samples. It is not on the capacitor —
+    it is on the switch that drives the capacitor's bottom plate — which is
+    why this function reports it rather than leaving the caller to re-derive
+    it from device names.
+
+    STRUCTURAL, and it is the whole point of this function: the polarity of a
+    switched-capacitor branch is decided by WHEN its two plates move, and by
+    nothing else. If the plate that carries the input and the plate that
+    reaches the virtual ground close on the SAME phase, the branch delivers
+    `-C(V-ref)/ci` into the integrator — delay-free, INVERTING. If they close
+    on OPPOSITE phases the branch samples first and transfers after, and
+    delivers `+C(V-ref)/ci` — delaying, NON-INVERTING. Charge conservation at
+    the summing node gives both; nothing here is a convention.
+
+    A capacitor with either plate welded, or with no throw onto a summing node,
+    has NO polarity and is absent from the result rather than defaulted — a
+    branch that cannot transfer charge has no sign to get right.
+    """
+    caps = [d for d in devices if len(d.get("nets") or []) == 2]
+    mos = [d for d in devices if len(d.get("nets") or []) == 4]
+    gates = {str(d["nets"][1]) for d in mos}
+    groups = _sc_groups(devices)
+
+    # the summing node, found the same way the emitted-deck check finds it: a
+    # transistor GATE that is also a plate of a capacitor whose other plate is
+    # NOT a gate, and is shorted to that other plate by a switch — the
+    # per-conversion reset across the integrating capacitor.
+    summing = set()
+    for c in caps:
+        a, b = (str(x) for x in c["nets"])
+        for S, O in ((a, b), (b, a)):
+            if S in _SC_RAIL_NETS or O in _SC_RAIL_NETS:
+                continue
+            if S in gates and O not in gates and frozenset((S, O)) in groups:
+                summing.add(S)
+
+    pol: Dict[str, Dict[str, Any]] = {}
+    for c in caps:
+        a, b = (str(x) for x in c["nets"])
+        if a in _SC_RAIL_NETS or b in _SC_RAIL_NETS or {a, b} & summing:
+            continue
+        ta, tb = _sc_throws(a, groups), _sc_throws(b, groups)
+        if not ta or not tb:
+            continue
+        top, bot, tt, bt = ((b, a, tb, ta) if set(tb) & summing
+                            else (a, b, ta, tb))
+        reach = set(tt) & summing
+        if not reach:
+            continue
+        # the SOURCE is the bottom plate's throw that is not the reference the
+        # summing-node plate also returns to.
+        ref = set(tt) - summing
+        src = [n for n in bt if n not in ref]
+        if len(src) != 1 or len(reach) != 1:
+            continue
+        g_src = bt[src[0]]
+        g_sum = tt[next(iter(reach))]
+        if g_src is None or g_sum is None:
+            continue
+        pol[str(c["name"])] = {"polarity": (-1 if g_src == g_sum else +1),
+                               "source": src[0], "top_plate": top,
+                               "bottom_plate": bot,
+                               "summing_node": next(iter(reach))}
+    return pol
+
+
+def derived_feedback_suffixes(st: Dict[str, Any], count: int,
+                              selectors: Dict[str, str],
+                              probe: Dict[str, Any]
+                              ) -> Optional[Tuple[List[str], str]]:
+    """`([suffix per stage 1..count], the selector net template)`, or None.
+
+    The template is returned so the caller can name the selector nets without
+    re-deriving which node the feedback branch samples; it carries
+    `_SC_ALT_SENTINEL` where the suffix goes.
+
+    `selectors` names which suffix feeds back the POSITIVE reference end when
+    the decision is asserted (`"pos"`) and which feeds back the negative one
+    (`"neg"`). WHICH PORT IS THE POSITIVE REFERENCE IS A DECLARED FACT, not a
+    topological one, so it stays declared; the INTEGRATOR'S SIGN is topological
+    and is derived. Separating those two is the actual repair.
+
+    The rule: stage `i`'s fed-back charge reaches the quantiser through its own
+    branch (`q`) and then through every later stage's forward branch, so its
+    sign at the comparator is `q * prod(p_j for j > i)`. Feedback must OPPOSE
+    the decision, so the selector must carry the opposite sign to that product.
+    """
+    probe_devs = []
+    for d in st.get("devices") or []:
+        nd = dict(d)
+        nd["nets"] = [str(n).format(**probe) for n in d.get("nets") or []]
+        nd["name"] = str(d["name"]).format(**probe)
+        probe_devs.append(nd)
+    pol = sc_branch_polarities(probe_devs)
+    if not pol:
+        return None
+    # the FEEDBACK branch is the one that SAMPLES the selector net. That node
+    # carries the sentinel because `{alt}` has not been chosen yet; every other
+    # switched branch is a forward one.
+    fb = [n for n, b in pol.items() if _SC_ALT_SENTINEL in str(b["source"])]
+    fwd = [n for n in pol if n not in fb]
+    if len(fb) != 1 or len(fwd) != 1:
+        return None
+    q, p = pol[fb[0]]["polarity"], pol[fwd[0]]["polarity"]
+    out: List[str] = []
+    for i in range(1, count + 1):
+        chain = q * (p ** (count - i))
+        out.append(selectors["neg"] if chain > 0 else selectors["pos"])
+    return out, str(pol[fb[0]]["source"])
+
+
 def expand_stages(lib: Dict[str, Any], spec_values: Dict[str, float]
                   ) -> Tuple[List[Dict[str, Any]], List[str],
                              List[Dict[str, Any]], Optional[Dict[str, Any]]]:
@@ -3152,6 +3492,35 @@ def expand_stages(lib: Dict[str, Any], spec_values: Dict[str, float]
             # so, and is not asked for a set that would mean nothing.
             coeffs = [1.0] * count
         alternates = [str(x) for x in (st.get("alternates") or [""])]
+        # DERIVED, not tabulated. See `derived_feedback_suffixes`: which
+        # reference end each stage feeds back is a consequence of the
+        # integrator this entry emits, and an entry that declares its two
+        # selectors gets it computed from the topology. `alternates` remains
+        # the fallback for an entry that declares no selectors, so every other
+        # entry expands exactly as it did.
+        derived_alts = None
+        _sel = st.get(FEEDBACK_SELECTORS_KEY)
+        if isinstance(_sel, dict) and {"pos", "neg"} <= set(_sel):
+            _derived = derived_feedback_suffixes(
+                st, count, {k: str(v) for k, v in _sel.items()},
+                {"i": 1, "i1": 2, "in": "\u0001in\u0001",
+                 "out": "\u0001out\u0001", "coeff": "1.0",
+                 "alt": _SC_ALT_SENTINEL,
+                 "in2": "\u0001in2\u0001", "out2": "\u0001out2\u0001"})
+            derived_alts = None if _derived is None else _derived[0]
+            if _derived is not None:
+                _sel_template = _derived[1]
+                _sel_suffixes = sorted({str(v) for v in _sel.values()})
+            if derived_alts is None:
+                raise LibraryEntryError(
+                    "this entry declares `" + FEEDBACK_SELECTORS_KEY + "` so "
+                    "the feedback reference end is DERIVED from the integrator "
+                    "it emits — and the derivation did not resolve, which "
+                    "means the stage does not emit one forward and one "
+                    "feedback switched-capacitor branch with both plates "
+                    "switched. Falling back to a tabulated parity here would "
+                    "restore the exact defect this replaces: a claim about the "
+                    "circuit, written down where nothing re-derives it.")
         for i in range(1, count + 1):
             sub = {
                 "i": i,
@@ -3162,7 +3531,8 @@ def expand_stages(lib: Dict[str, Any], spec_values: Dict[str, float]
                         if (i == count and st.get("last_out"))
                         else st["inner_out"].format(i=i)),
                 "coeff": repr(coeffs[i - 1]),
-                "alt": alternates[(i - 1) % len(alternates)],
+                "alt": (derived_alts[i - 1] if derived_alts is not None
+                        else alternates[(i - 1) % len(alternates)]),
             }
             if st.get("inner_out2"):
                 sub["in2"] = (st["first_in2"] if i == 1
@@ -3216,6 +3586,34 @@ def expand_stages(lib: Dict[str, Any], spec_values: Dict[str, float]
                 "gives is %d clocks — greater than or equal to the declared "
                 "value, and stated because a ripple divider's period is a "
                 "power of two" % (st[COUNT_BITS_KEY], 2 ** count))
+        # A SELECTOR NO STAGE SAMPLES IS NOT EMITTED. Which reference ends the
+        # cascade actually uses is now a CONSEQUENCE of the integrator (see
+        # `derived_feedback_suffixes`), so which selector legs are live is a
+        # consequence too, and hard-coding either would put the same class of
+        # claim back. A first-order loop uses ONE end; a second-order delaying
+        # cascade uses one; a second-order delay-free cascade uses both. So the
+        # unsampled legs are pruned HERE, from what the expansion actually
+        # referenced — never from a table of which entry has how many.
+        #
+        # Without this the deck carries a driven-but-unloaded node. MEASURED:
+        # A3 emits it, all four netlist checkers PASS it and the A3 gate PASSES
+        # it, so nothing downstream would have said so.
+        if derived_alts is not None and _sel_template:
+            # LOADED, not merely mentioned. A selector's own legs name the net
+            # at their DRAIN; a stage that samples it names it at a pass
+            # device's SOURCE. Testing for any mention at all would find the
+            # net alive in its own drivers and prune nothing — which is the
+            # bug this comment exists because I wrote.
+            loaded = {str(n) for d in devices
+                      for n in (d.get("nets") or [])[1:]}
+            for suf in _sel_suffixes:
+                net = _sel_template.replace(_SC_ALT_SENTINEL, suf)
+                if net in loaded:
+                    continue
+                devices[:] = [d for d in devices
+                              if net not in (d.get("nets") or [])]
+                nets[:] = [n for n in nets if n != net]
+                rec.setdefault("pruned_selectors", []).append(net)
         records.append(rec)
 
     # The FIRST group's record stays under the old key and the old shape, so

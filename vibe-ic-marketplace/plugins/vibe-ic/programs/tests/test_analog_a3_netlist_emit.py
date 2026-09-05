@@ -336,3 +336,283 @@ def test_every_library_class_renders_a_netlist_that_actually_converges(
         assert sim["measurements"], (
             f"{name} converged and produced no measurement — a run that "
             f"measures nothing proves nothing")
+
+
+# ═══ THE SWITCHED-CAPACITOR INTEGRATOR IS ACTUALLY SWITCHED ════════════════
+# WHY THIS IS HERE AND NOT A STRING MATCH. The `delta_sigma` entry emitted an
+# integrator whose sampling and feedback capacitors were HARD-WIRED to the
+# summing node: only their far plates were switched. That is not an SC
+# integrator. Each capacitor delivers +C*(V-vcm) on one clock edge and takes
+# the same charge straight back on the next, so the NET transfer per clock
+# PERIOD is zero and the loop filter does not accumulate.
+#
+# MEASURED, ngspice, on the deck this producer emits: the last integrator's
+# output sampled at one fixed clock phase moved -2.1 uV per clock over the
+# first 16 clocks of every conversion window where the capacitor ratio demands
+# +2431 uV — one part in a thousand, and the wrong sign. With the summing-node
+# plates switched and nothing else changed, the same measurement on the same
+# deck reads thousands of uV per clock with the sign charge conservation
+# requires for this branch, repeatable to 0.1 uV across windows.
+#
+# The assertion is a property of the emitted TOPOLOGY, not of the deck's text:
+# a rename, a re-ordering, a different PDK's device names or a different stage
+# count all leave it standing, and it can only be satisfied by wiring the
+# circuit correctly.
+_SC_RAILS = frozenset({"vdd", "vss", "0"})
+
+
+def _sp_cards(sp_text):
+    """`([(name, [nets])], {ports})` for the `X` cards of one deck. Geometry
+    (`w=`/`l=`) is dropped, so the last remaining token is the model and the
+    ones before it are the nets — the same shape every PDK binding produces."""
+    ports, devs = set(), []
+    for ln in sp_text.splitlines():
+        s = ln.strip()
+        if s.lower().startswith(".subckt"):
+            ports |= set(s.split()[2:])
+        elif s.lower().startswith("x"):
+            toks = s.split()
+            devs.append((toks[0], [t for t in toks[1:] if "=" not in t][:-1]))
+    return devs, ports
+
+
+def _switch_groups(mos, excl):
+    """`{frozenset(drain, source): {gate: body}}` — one entry per switch GROUP,
+    so the two halves of a CMOS transmission gate collapse into one throw.
+
+    Only PASS devices are groups: both drain and source non-rail. That excludes
+    every amplifier device, whose source is a rail, so an output node is not
+    mistaken for a switched one.
+
+    The gate is kept PER DEVICE with its BODY, not merged into a set. That
+    distinction is the whole point: both halves of every transmission gate here
+    carry the same two gate nets, so a throw identified only by `{clk, nclkb}`
+    is indistinguishable from any other throw — including one wired to conduct
+    on the SAME phase, which shorts the summing node to the reference instead
+    of alternating with it. Keeping the body lets `_n_gate` recover which half
+    is the n-channel one, and THAT is what carries the phase."""
+    groups = {}
+    for _n, nets in mos:
+        if nets[0] in _SC_RAILS or nets[2] in _SC_RAILS:
+            continue
+        groups.setdefault(frozenset((nets[0], nets[2])), {})[nets[1]] = nets[3]
+    return groups
+
+
+def _n_gate(throw):
+    """The gate net of a throw's N-CHANNEL half, by the file's own body rule
+    (NMOS bodies to ground, PMOS bodies to the positive rail). `None` when the
+    throw is not a transmission gate whose halves sit on different bodies."""
+    ns = [g for g, body in throw.items() if body == "vss"]
+    return ns[0] if len(ns) == 1 else None
+
+
+def _two_position(node, groups):
+    """The throws of `node` if it is a TWO-POSITION switch, else `{}`.
+
+    `{far node: n-gate}` for every switch group joining `node` to a non-RAIL
+    node. Ports are throws like any other: the first stage samples the block's
+    own input pin, so excluding ports here would drop the very branch the
+    change is about. A node with fewer than two throws is not a switch at all —
+    it is welded to whatever it reaches, which is the defect this file exists
+    to catch."""
+    throws = {}
+    for k, gates in groups.items():
+        if node not in k:
+            continue
+        far = next(iter(k - {node}), None)
+        if far is None or far in _SC_RAILS:
+            continue
+        throws[far] = _n_gate(gates)
+    return throws if len(throws) >= 2 else {}
+
+
+def sc_integrator_report(sp_text):
+    """Every switched-capacitor CHARGE BRANCH in a deck, found STRUCTURALLY.
+
+    A summing node `S` is a node that is (a) a transistor GATE — the
+    amplifier's inverting input, (b) one plate of a capacitor whose other plate
+    `O` is NOT a gate — the amplifier's output, and (c) shorted to that same `O`
+    by a switch — the per-conversion reset across the integrating capacitor.
+    Nothing else in a modulator has that shape, so no device or net NAME is
+    needed to find it.
+
+    A BRANCH capacitor is then found from its BOTTOM plate, never from the
+    summing node: a capacitor one of whose plates is a two-position switched
+    node. That enumeration is the load-bearing choice. Enumerating instead the
+    capacitors that already reach `S` through a switch makes the branch whose
+    switches are MISSING invisible to the report, so the check passes exactly
+    the topology it exists to reject.
+
+    For each branch the report gives what the parasitic-insensitive
+    arrangement requires and nothing weaker:
+      * `top_throws`  — the summing-node plate must ALSO be two-position
+        switched. If it is not, the plate is welded and the branch returns its
+        charge on the next half cycle.
+      * `reaches`     — one of those throws must be a summing node.
+      * `reference`   — the other throw must be the SAME node the bottom plate
+        returns to. A plate that "samples" against an arbitrary internal node,
+        or against the capacitor's own other plate, moves no charge.
+      * `complementary` — the two throws must conduct on OPPOSITE phases,
+        compared by the n-channel half's gate. Two throws on the same phase
+        short the summing node to the reference.
+    """
+    devs, ports = _sp_cards(sp_text)
+    excl = _SC_RAILS | ports
+    caps = [(n, nets) for n, nets in devs if len(nets) == 2]
+    mos = [(n, nets) for n, nets in devs if len(nets) == 4]
+    gates = {nets[1] for _n, nets in mos}
+    groups = _switch_groups(mos, excl)
+
+    summing = {}
+    for cn, (a, b) in caps:
+        for S, O in ((a, b), (b, a)):
+            if S in excl or O in excl or S not in gates or O in gates:
+                continue
+            if frozenset((S, O)) in groups:
+                summing[S] = {"integrating_cap": cn, "amp_out": O}
+
+    # A CHARGE BRANCH is a capacitor BOTH of whose plates are two-position
+    # switched, neither of which is a summing node or an amplifier output.
+    # Enumerating branches this way — from the capacitor, never from the
+    # summing node — is the load-bearing choice in this file. Enumerating the
+    # capacitors that ALREADY reach a summing node through a switch makes the
+    # branch whose summing-node switches are MISSING invisible to the report,
+    # so the check would pass exactly the topology it exists to reject.
+    branches = {}
+    for cn, (a, b) in caps:
+        if a in excl or b in excl:
+            continue
+        if {a, b} & (set(summing) | {v["amp_out"] for v in summing.values()}):
+            continue
+        ta, tb = (_two_position(a, groups), _two_position(b, groups))
+        if not ta or not tb:
+            continue
+        # the TOP plate is the one that reaches a summing node; when neither
+        # does, the branch is broken and either orientation reports it.
+        if set(tb) & set(summing):
+            bot, top, bt, tt = a, b, ta, tb
+        else:
+            bot, top, bt, tt = b, a, tb, ta
+        gs = [tt[n] for n in tt]
+        branches[cn] = {
+            "bottom_plate": bot, "top_plate": top,
+            "bottom_throws": sorted(bt), "top_throws": sorted(tt),
+            "reaches": sorted(set(tt) & set(summing)),
+            "top_reference": sorted(set(tt) - set(summing)),
+            "shared_reference": sorted((set(tt) - set(summing)) & set(bt)),
+            "n_gates": gs,
+            "complementary": (None not in gs) and len(set(gs)) == len(gs),
+        }
+
+    for S, st in summing.items():
+        st["hard_wired_caps"] = sorted(cn for cn, nets in caps if S in nets)
+        st["branches"] = {cn: b for cn, b in branches.items()
+                          if S in b["reaches"]}
+    return summing, branches
+
+
+DS_SPEC = [{"name": "order", "target": 2.0, "unit": ""},
+           {"name": "vdd", "target": 1.2, "unit": "V"},
+           {"name": "osr", "target": 64.0, "unit": ""},
+           {"name": "enob", "target": 12.0, "unit": "bit"},
+           {"name": "vref", "target": 1.0, "unit": "V"},
+           {"name": "fclk", "target": 4.0, "unit": "MHz",
+            "min": 0.1, "max": 4.0}]
+DS_ORDER = 2
+
+# Invented process constants. The entry refuses a family it has no MEASURED
+# record for, which is correct and is not what this test is about, so the
+# fixture stages one of its own rather than reaching for a real PDK's.
+DS_PDK_RECORD = {"measured": {
+    "_schema": 1, "nominal_corner": "typ",
+    "corners": {"typ": {
+        "params": {"cap_area_ff_per_um2": 1.5, "cap_perim_ff_per_um": 0.04,
+                   "rsheet_ohm_per_sq": 260.0, "r_per_um_ohm": 520.0,
+                   "r_end_ohm": 0.0, "vth_n_extracted_v": 0.2,
+                   "vth_p_extracted_v": 0.33, "k_prime_n_ua_per_v2": 328.0,
+                   "k_prime_p_ua_per_v2": 74.0},
+        "sections": [], "devices": {}, "bias": {}, "fit": {},
+        "not_measured": {}}}}}
+
+
+def _emit_modulator(tmp_path):
+    p = make_project(tmp_path, [block("mod_alpha", "delta_sigma", DS_SPEC)])
+    rec = p / "analog/_pdk_char/analog_device_params.json"
+    rec.parent.mkdir(parents=True, exist_ok=True)
+    rec.write_text(json.dumps(DS_PDK_RECORD), encoding="utf-8")
+    run_prog(A1, p)
+    run_prog(A2, p)
+    cp = run_prog(A3, p)
+    assert cp.returncode == 0, cp.stderr
+    sp = bdir(p, "mod_alpha") / "mod_alpha.sp"
+    assert sp.is_file(), "no netlist to state a topology property about"
+    return sc_integrator_report(sp.read_text(encoding="utf-8"))
+
+
+def test_every_sampling_capacitor_reaches_the_summing_node_through_a_switch(
+        tmp_path):
+    summing, branches = _emit_modulator(tmp_path)
+
+    # The stages must be THERE. Without this the whole property is satisfiable
+    # by emitting an integrator with no summing node at all.
+    assert len(summing) == DS_ORDER, (
+        f"the declaration binds order {DS_ORDER}, so the deck must carry "
+        f"{DS_ORDER} switched-capacitor summing nodes; found {sorted(summing)}")
+
+    # And the CHARGE BRANCHES must be there — enumerated from their bottom
+    # plates, so a branch whose summing-node switches are missing is still
+    # counted here and fails below rather than vanishing from the report.
+    # Order 2 CIFB: one sampling and one DAC branch per stage.
+    assert len(branches) == 2 * DS_ORDER, (
+        f"expected {2 * DS_ORDER} switched charge branches (a sampling and a "
+        f"feedback branch per stage); found {sorted(branches)}")
+
+    for S, st in sorted(summing.items()):
+        # (1) ONLY the integrating capacitor is welded to the virtual ground.
+        assert st["hard_wired_caps"] == [st["integrating_cap"]], (
+            f"summing node {S} carries capacitors {st['hard_wired_caps']} "
+            f"wired straight onto it; only the integrating capacitor "
+            f"{st['integrating_cap']} may be. A sampling or feedback "
+            f"capacitor with its summing-node plate hard-wired hands the "
+            f"charge back on the next half cycle: net zero per clock period, "
+            f"and the loop filter never accumulates.")
+
+    for cn, b in sorted(branches.items()):
+        # (2) the summing-node plate is a SWITCH, not a weld.
+        assert len(b["top_throws"]) >= 2, (
+            f"branch capacitor {cn}: its bottom plate {b['bottom_plate']} is "
+            f"switched between {b['bottom_throws']}, but its other plate "
+            f"{b['top_plate']} has throws {b['top_throws']} — fewer than two, "
+            f"so that plate is welded and the branch cannot transfer charge.")
+
+        # (3) and one of its throws is a summing node.
+        assert b["reaches"], (
+            f"branch capacitor {cn}: plate {b['top_plate']} is switched "
+            f"between {b['top_throws']}, none of which is a summing node, so "
+            f"the sampled charge never reaches an integrator.")
+
+        # (4) the OTHER throw is the same reference the bottom plate returns
+        #     to — not merely "some internal node", and never the capacitor's
+        #     own other plate, either of which transfers nothing.
+        assert b["shared_reference"] == b["top_reference"], (
+            f"branch capacitor {cn}: its summing-node plate {b['top_plate']} "
+            f"returns to {b['top_reference']}, which its bottom plate "
+            f"{b['bottom_plate']} does not reach (that plate throws to "
+            f"{b['bottom_throws']}). BOTH plates must return to the SAME "
+            f"reference node, or the charge the branch delivers is not the "
+            f"difference the design states — a plate 'sampled' against an "
+            f"arbitrary node, or against the capacitor's own other plate, "
+            f"transfers nothing.")
+
+        # (5) and the two throws alternate. Compared by the n-channel half's
+        #     gate, because both halves of every transmission gate here carry
+        #     the same PAIR of gate nets and a set comparison cannot tell a
+        #     complementary pair from two throws that conduct together.
+        assert b["complementary"] is True, (
+            f"branch capacitor {cn}: the two throws on plate "
+            f"{b['top_plate']} do not conduct on opposite phases "
+            f"(throws {b['top_throws']}, n-side gates "
+            f"{sorted(str(g) for g in b['n_gates'])}). "
+            f"Two throws on the same phase short the summing node to the "
+            f"reference instead of alternating with it.")

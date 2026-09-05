@@ -318,3 +318,69 @@ def test_the_value_rules_still_come_first(tmp_path: Path) -> None:
     r = _run(tmp_path)
     assert r.returncode == 1
     assert _rules(tmp_path)[1] == ["A3_NETLIST_NO_SUBCKT"]
+
+
+# ── the deck must be CURRENT with the IR it says it rendered ──────────────
+# MEASURED on a real project, and it is why this rule is a FAIL and not a
+# note: the checked-in `delta_sigma.sp` carried 222 device cards while the
+# `topology.json` in the SAME directory declared 238 — the deck predated an
+# emitter fix and nothing had re-emitted since. Three lanes measured that
+# deck. Every gate in the flow passed it, because each asks whether the deck
+# is WELL FORMED and none asked whether it is CURRENT. A producer fix that a
+# measurement cannot see is indistinguishable from no fix.
+_IR = {"block": "ota", "block_type": "ldo", "devices": [], "ports": []}
+
+
+def _with_ir(project: Path, block: str, ir: dict, stamped: str) -> None:
+    """Write an IR beside the deck and stamp `stamped` into the deck header as
+    the digest it was rendered from."""
+    d = project / "phase3" / "analog" / block
+    (d / "topology.json").write_text(json.dumps(ir))
+    sp = d / f"{block}.sp"
+    sp.write_text(
+        f"* _provenance: topology_ir=phase3/analog/{block}/topology.json "
+        f"sha256={stamped}\n" + sp.read_text())
+
+
+def _good_deck(project: Path, block: str) -> None:
+    _block_list(project, [block])
+    _sp(project, block,
+        f".subckt {block} vdd vss vin vout\n"
+        + "".join(f"xm{i} a{i} b{i} vss vss nfet w=1u l=1u\n"
+                  for i in range(12))
+        + f".ends {block}\n"
+        + "* padding to clear the substance floor\n" * 6)
+
+
+def test_a_deck_rendered_from_a_superseded_topology_fails(tmp_path: Path
+                                                          ) -> None:
+    import hashlib
+    _good_deck(tmp_path, "ota")
+    # stamped with the digest of an IR that is NOT the one now on disk
+    _with_ir(tmp_path, "ota", _IR, hashlib.sha256(b"an older IR").hexdigest())
+    r = _run(tmp_path)
+    assert r.returncode == 1, (r.stdout, r.stderr)
+    assert _rules(tmp_path)[1] == ["A3_NETLIST_STALE_VS_IR"]
+
+
+def test_a_deck_current_with_its_topology_passes(tmp_path: Path) -> None:
+    """THE CONTROL. Same fixture, same rule, digest matching — so the rule is
+    firing on staleness and not on the presence of a stamp."""
+    import hashlib
+    _good_deck(tmp_path, "ota")
+    body = json.dumps(_IR).encode()
+    _with_ir(tmp_path, "ota", _IR, hashlib.sha256(body).hexdigest())
+    r = _run(tmp_path)
+    assert r.returncode == 0, (r.stdout, r.stderr)
+    assert "A3_NETLIST_STALE_VS_IR" not in _rules(tmp_path)[1]
+
+
+def test_a_deck_that_records_no_topology_digest_is_left_alone(tmp_path: Path
+                                                              ) -> None:
+    """The second control. This rule can fire only on a stamp that DISAGREES,
+    never on one that is absent — a hand-authored deck records no IR and must
+    not be failed for it."""
+    _good_deck(tmp_path, "ota")
+    (tmp_path / "phase3/analog/ota/topology.json").write_text(json.dumps(_IR))
+    r = _run(tmp_path)
+    assert "A3_NETLIST_STALE_VS_IR" not in _rules(tmp_path)[1]

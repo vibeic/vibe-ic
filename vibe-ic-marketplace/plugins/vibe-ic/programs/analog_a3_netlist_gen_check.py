@@ -67,6 +67,7 @@ chip-AGNOSTIC.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 import sys
@@ -342,6 +343,9 @@ def _check_block(project: Path, block: str
                        "netlist (a size + `.subckt` pair alone cannot tell "
                        "the two apart)"),
         }]
+    stale = _stale_vs_ir_fail(project, block, path, text)
+    if stale:
+        return "FAIL", [stale]
     ref = _provenance_ref_fail(project, block, path, text)
     if ref is not None:
         return "FAIL", [ref]
@@ -456,6 +460,56 @@ def _sidecar(project: Path, block: str) -> Optional[dict]:
         return None
     prov = doc.get("_provenance") if isinstance(doc, dict) else None
     return prov if isinstance(prov, dict) else None
+
+
+#: `* _provenance: topology_ir=<rel> sha256=<hex>` — the digest A3 stamps of
+#: the IR it rendered. Matching it against the IR ON DISK is the only way a
+#: reader can tell a current deck from one the producer has since moved past.
+_IR_STAMP_RE = re.compile(
+    r"_provenance:\s*topology_ir=(\S+)\s+sha256=([0-9a-f]{64})")
+
+
+def _stale_vs_ir_fail(project: Path, block: str, path: Path,
+                      text: str) -> Optional[dict]:
+    """FAIL when the deck records an IR digest that the IR beside it no longer
+    has — the deck describes a SUPERSEDED topology.
+
+    WHY THIS IS A GATE AND NOT A NOTE. MEASURED on a real project: the checked-in
+    `<block>.sp` carried 222 device cards while the `topology.json` in the SAME
+    directory declared 238, because the deck was written before an emitter fix
+    and the runner had not re-emitted since. Three lanes measured that deck.
+    Every gate in the flow passed it, because every one of them asks whether the
+    deck is WELL FORMED and none asked whether it is CURRENT. A producer fix a
+    measurement cannot see is indistinguishable from no fix, so the flow has to
+    be able to say which of the two it is looking at.
+
+    The comparison is between two digests the artefacts already carry — nothing
+    is re-derived, no timestamp is trusted (an mtime says when a file was
+    written, not what it was written from), and a deck that records no IR stamp
+    at all is left alone: this rule can only fire on a stamp that disagrees,
+    never on a stamp that is absent."""
+    m = _IR_STAMP_RE.search(text)
+    if not m:
+        return None
+    rel, stamped = m.group(1), m.group(2)
+    ir = project / rel
+    if not ir.is_file():
+        return None
+    try:
+        actual = hashlib.sha256(ir.read_bytes()).hexdigest()
+    except OSError:
+        return None
+    if actual == stamped:
+        return None
+    return {
+        "block": block, "rule": "A3_NETLIST_STALE_VS_IR",
+        "rel_path": str(path.relative_to(project)),
+        "detail": (f"this netlist records topology_ir sha256={stamped[:12]}… "
+                   f"but {rel} is now sha256={actual[:12]}…, so the deck was "
+                   f"rendered from a SUPERSEDED topology. Every measurement "
+                   f"taken on it describes the older circuit. Re-run "
+                   f"`analog_a3_netlist_emit` for this block."),
+    }
 
 
 def _provenance_ref_fail(project: Path, block: str, path: Path,
