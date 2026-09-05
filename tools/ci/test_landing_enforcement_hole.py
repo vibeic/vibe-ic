@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -299,3 +300,190 @@ def test_a_landing_script_that_stopped_publishing_is_caught(mutation, why, tmp_p
     sites = _publish_sites(mutated)
     assert False in sites.values() or None in sites.values(), (
         "mutation %r left the guard green; it is not observing the wiring" % why)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# THE ANNOUNCEMENT MUST NOT BE ABLE TO LOSE THE VERDICT (2026-09-05).
+#
+# MEASURED, on the v1.17.23 exact-tree landing stamp
+# (`final-stamp-v11722-b495/run.log`, repo b495bbc9d, tree cd2d7767f, image
+# ghcr.io/vibeic/vibeic-eda@sha256:66c33ff2…d01ff): after the tier printed its
+# verdict, the publisher died with
+#
+#     File ".../tools/ci/landing_status_publish.py", line 160, in publish
+#       proc = subprocess.run(argv, capture_output=True, text=True)
+#     FileNotFoundError: [Errno 2] No such file or directory: 'gh'
+#
+# `gh` is not in the pinned image — verified directly: `command -v gh` exits 1
+# there while `/usr/bin/git` and python3.12 are present. The crash did not cause
+# that run's FAIL, and `gatekeeper-land.sh` calls the publisher with `|| true`
+# so the landing's own rc was never at risk. What WAS lost is the publisher's
+# own record: `publish()` already owns an honest degradation path for a `gh`
+# that ran and failed (rc != 0 -> say so, return 2), and an exec that never
+# happened walked straight past it as an uncaught exception. A GREEN stamp
+# would have been announced the same way — i.e. not at all, and not said so.
+#
+# THE INVARIANT: the VERDICT and its PUBLICATION are two separately recorded
+# facts. `publish()` may fail; it may never crash, never claim `published`, and
+# must always name the state it was carrying so the verdict survives the
+# failure of its own announcement.
+#
+# BIDIRECTIONAL, per this file's own standard: every "gh is gone" assertion
+# below is paired with the same call against a `gh` that IS on PATH.
+# ─────────────────────────────────────────────────────────────────────────────
+
+_SHA = "1" * 40
+
+
+def _bin_dir(tmp_path: Path, name: str) -> Path:
+    d = tmp_path / name
+    d.mkdir()
+    return d
+
+
+def _fake_gh(tmp_path: Path, rc: int, err: str = "") -> Path:
+    """A PATH holding one executable named `gh` that exits `rc`.
+
+    The negative control for every absence test below: same call, same
+    arguments, one variable changed — whether `gh` can be executed at all.
+    """
+    d = _bin_dir(tmp_path, f"bin_gh_{rc}")
+    gh = d / "gh"
+    gh.write_text("#!/bin/sh\n" + (f'printf %s {err!r} >&2\n' if err else "")
+                  + f"exit {rc}\n")
+    gh.chmod(0o755)
+    return d
+
+
+def test_a_gh_that_is_absent_is_recorded_not_raised(tmp_path, monkeypatch,
+                                                    capsys):
+    """The exact recorded crash. `publish()` must return, not propagate."""
+    monkeypatch.setenv("PATH", str(_bin_dir(tmp_path, "empty")))
+    rc = PUB.publish("vibeic/vibe-ic", _SHA, "success", "", False)
+    out, err = capsys.readouterr()
+    assert rc == 2, "a status that was not published must exit non-zero"
+    assert "NOT_PUBLISHED" in err, err
+    assert "gh" in err, "the reason must name what was missing: %r" % err
+    assert "published " not in out, (
+        "nothing may be announced as published when nothing was: %r" % out)
+
+
+def test_a_gh_that_is_present_still_publishes(tmp_path, monkeypatch, capsys):
+    """NEGATIVE CONTROL for the test above — the one variable is `gh` on PATH.
+
+    Without this, a `publish()` that returned 2 unconditionally would satisfy
+    every absence assertion in this section.
+    """
+    monkeypatch.setenv("PATH", str(_fake_gh(tmp_path, 0)))
+    rc = PUB.publish("vibeic/vibe-ic", _SHA, "success", "", False)
+    out, _ = capsys.readouterr()
+    assert rc == 0
+    assert "published success" in out, out
+    assert "NOT_PUBLISHED" not in out
+
+
+def test_a_gh_that_ran_and_failed_is_recorded_the_same_way(tmp_path,
+                                                           monkeypatch,
+                                                           capsys):
+    """The pre-existing rc!=0 path keeps its meaning and gains the same token.
+
+    An API call that was refused and an exec that never happened are the same
+    fact for a reader of the status page — no status is standing — so they are
+    recorded under one name, each with its own reason.
+    """
+    monkeypatch.setenv("PATH", str(_fake_gh(tmp_path, 1, "HTTP 403")))
+    rc = PUB.publish("vibeic/vibe-ic", _SHA, "success", "", False)
+    out, err = capsys.readouterr()
+    assert rc == 2
+    assert "NOT_PUBLISHED" in err, err
+    assert "HTTP 403" in err, "the transport's own reason must survive: %r" % err
+    assert "published " not in out
+
+
+def test_the_state_survives_a_failed_announcement(tmp_path, monkeypatch,
+                                                  capsys):
+    """The verdict is the fact; publication is a separate one that may fail.
+
+    Both states are checked, because a message that named only one of them
+    would leave the other outcome's reader with a verdict and no name for it.
+    """
+    monkeypatch.setenv("PATH", str(_bin_dir(tmp_path, "empty2")))
+    for state in ("success", "failure"):
+        assert PUB.publish("vibeic/vibe-ic", _SHA, state, "", False) == 2
+        _, err = capsys.readouterr()
+        assert state in err, (
+            "the %r verdict was carried into publish() and its own record does "
+            "not name it: %r" % (state, err))
+
+
+def test_a_dry_run_needs_no_gh_at_all(tmp_path, monkeypatch, capsys):
+    """`--dry-run` prints the call and posts nothing, so absence is irrelevant.
+
+    It must not start reporting NOT_PUBLISHED: nothing was attempted.
+    """
+    monkeypatch.setenv("PATH", str(_bin_dir(tmp_path, "empty3")))
+    rc = PUB.publish("vibeic/vibe-ic", _SHA, "success", "", True)
+    out, err = capsys.readouterr()
+    assert rc == 0
+    assert out.startswith("DRY-RUN ")
+    assert "NOT_PUBLISHED" not in err
+
+
+def test_main_reaches_a_verdict_and_then_reports_it_unpublished(
+        tmp_path, monkeypatch, capsys):
+    """END TO END, in the shape the landing runs it: green stamp, no `gh`.
+
+    `decide()` must still reach `success` — the verdict is not conditional on
+    the announcement — and the process must exit non-zero having said so.
+    """
+    repo = _repo(tmp_path)
+    sha = _head(repo)
+    _stamp(repo, sha)
+    git = shutil.which("git")
+    assert git, "NOT_MEASURED: no git on PATH to build the fixture with"
+    bin_dir = _bin_dir(tmp_path, "bin_git_only")
+    (bin_dir / "git").symlink_to(git)
+    monkeypatch.setenv("PATH", str(bin_dir))
+    rc = PUB.main(["--repo", str(repo), "--sha", sha, "--failed", "0"])
+    out, err = capsys.readouterr()
+    assert rc == 2, "an unpublished status must not exit 0"
+    assert "NOT_PUBLISHED" in err, err
+    assert "success" in err, (
+        "the run reached a green verdict and the record must say which verdict "
+        "went unpublished: %r" % err)
+    assert "REFUSED" not in err, (
+        "a `gh` that is absent is not a refusal to judge — the gates judged, "
+        "and only the announcement failed: %r" % err)
+    assert "published " not in out
+
+
+def test_the_publisher_process_survives_a_pinned_image_without_gh(tmp_path):
+    """The recorded defect at PROCESS level: no traceback, no exit 1.
+
+    The unit tests above call `publish()` in-process. This one runs the program
+    the way `gatekeeper-land.sh` does, under a PATH that carries `git` and not
+    `gh` — the pinned image's exact shape (`command -v gh` -> rc 1,
+    `/usr/bin/git` present). The pre-fix program answers this with a
+    `FileNotFoundError` traceback and rc 1.
+    """
+    repo = _repo(tmp_path)
+    sha = _head(repo)
+    _stamp(repo, sha)
+    git = shutil.which("git")
+    assert git, "NOT_MEASURED: no git on PATH to build the fixture with"
+    bin_dir = _bin_dir(tmp_path, "bin_proc")
+    (bin_dir / "git").symlink_to(git)
+    proc = subprocess.run(
+        [sys.executable, str(HERE / "landing_status_publish.py"),
+         "--repo", str(repo), "--sha", sha, "--failed", "0"],
+        capture_output=True, text=True,
+        env={"PATH": str(bin_dir), "PYTHONDONTWRITEBYTECODE": "1"})
+    assert "Traceback" not in proc.stderr, (
+        "the publisher crashed instead of recording that it could not publish:"
+        "\n%s" % proc.stderr)
+    assert "FileNotFoundError" not in proc.stderr, proc.stderr
+    assert proc.returncode == 2, (
+        "expected the documented `2 = nothing was published` exit, got %d\n%s"
+        % (proc.returncode, proc.stderr))
+    assert "NOT_PUBLISHED" in proc.stderr, proc.stderr
+    assert "published " not in proc.stdout, proc.stdout

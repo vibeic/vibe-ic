@@ -55,7 +55,12 @@ actually happened.
 
 Exit codes
     0  a status was published exactly as instructed
-    2  REFUSED — nothing was published
+    2  nothing was published.  Two distinguishable shapes, both exit 2 because
+       both leave the server-side rule unsatisfied, and both are safe in that
+       one direction:
+         REFUSED       — this program declined to judge, so there is no verdict
+         NOT_PUBLISHED — a verdict WAS reached and its announcement failed; the
+                         line names the verdict, so it is not lost with it
 """
 from __future__ import annotations
 
@@ -147,6 +152,31 @@ def decide(repo: Path, failed: str, sha: str) -> str:
     return "success"
 
 
+def not_published(state: str, sha: str, reason: str) -> int:
+    """DEGRADE LOUDLY, AND IN THE SAFE DIRECTION. One name for one fact.
+
+    A status that could not be published leaves the ruleset unsatisfied, so the
+    push is refused by the server with a sentence that names the missing
+    context. Nothing is silently allowed by this failing.
+
+    THE VERDICT IS NAMED HERE ON PURPOSE. The gates reached `state` and that is
+    a fact of the run; whether anyone could be told is a SECOND fact, and this
+    line is where the second one is recorded without erasing the first. A
+    reader of a failed announcement must still be able to read what was
+    announced, so `state` appears in the message rather than only in the caller.
+
+    NOT a `Refusal`: a refusal means this program declined to judge. Here it
+    judged, and only the transport failed — the two must not arrive under one
+    word (`tools/ci/test_landing_enforcement_hole.py` asserts they do not).
+    """
+    print(f"landing-status: NOT_PUBLISHED — the {state} verdict for "
+          f"{sha[:12]} was NOT posted as {CONTEXT}: {reason}", file=sys.stderr)
+    print("          The verdict stands as the lane measured it; only its "
+          "publication failed. The `main` ruleset therefore still refuses "
+          "this push, which is the correct direction.", file=sys.stderr)
+    return 2
+
+
 def publish(repo_slug: str, sha: str, state: str, target_url: str,
             dry_run: bool) -> int:
     argv = ["gh", "api", "-X", "POST", f"repos/{repo_slug}/statuses/{sha}",
@@ -157,15 +187,33 @@ def publish(repo_slug: str, sha: str, state: str, target_url: str,
     if dry_run:
         print("DRY-RUN " + json.dumps(argv))
         return 0
-    proc = subprocess.run(argv, capture_output=True, text=True)
+    # A `gh` THAT CANNOT BE EXECUTED IS THE SAME FACT AS A `gh` THAT REFUSED —
+    # no status is standing — AND IT WAS THE UNHANDLED ONE. MEASURED on the
+    # v1.17.23 exact-tree stamp (repo b495bbc9d, tree cd2d7767f, pinned image
+    # …66c33ff2): `gh` is not installed in that image (`command -v gh` exits 1
+    # while `/usr/bin/git` is present), so this call raised
+    # `FileNotFoundError: [Errno 2] No such file or directory: 'gh'` and the
+    # program died with a traceback and rc 1. It walked past the honest
+    # degradation directly below, which had been written for the rc != 0 case
+    # only. The landing survived — `gatekeeper-land.sh` calls this program with
+    # `|| true` — but a GREEN stamp's status would have gone unpublished with
+    # nothing but a traceback to say so, which is a verdict announced as an
+    # accident.
+    try:
+        proc = subprocess.run(argv, capture_output=True, text=True)
+    except FileNotFoundError:
+        return not_published(
+            state, sha,
+            f"the `{argv[0]}` CLI is not present on PATH in this environment, "
+            f"so the Commit Statuses API was never called")
+    except OSError as exc:
+        return not_published(
+            state, sha, f"`{argv[0]}` could not be executed: {exc}")
     if proc.returncode != 0:
-        # DEGRADE LOUDLY, AND IN THE SAFE DIRECTION. A status that could not be
-        # published leaves the ruleset unsatisfied, so the push is refused by
-        # the server with a sentence that names the missing context. Nothing is
-        # silently allowed by this failing.
-        print(f"landing-status: could NOT publish {state} for {sha[:12]}: "
-              f"{proc.stderr.strip()[:300]}", file=sys.stderr)
-        return 2
+        return not_published(
+            state, sha,
+            f"`{argv[0]}` exited {proc.returncode}: "
+            f"{proc.stderr.strip()[:300] or '(no stderr)'}")
     print(f"landing-status: published {state} for {sha[:12]} "
           f"as {CONTEXT}")
     return 0
