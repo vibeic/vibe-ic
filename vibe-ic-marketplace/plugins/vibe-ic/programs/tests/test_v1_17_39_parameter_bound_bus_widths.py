@@ -651,3 +651,32 @@ def test_an_unresolved_LOW_bound_refuses_by_name():
     pkg = "package p; typedef struct packed { logic v; logic [7:LO] d_data; } d2h_t; endpackage"
     w, why = D.struct_field_width([("p.sv", pkg)], "p::d2h_t", "d_data", {})
     assert w is None and "low bound" in why and "LO" in why
+
+
+# --- N93: six refusal branches in `_int_expr` that MUTATION found unpinned.
+# Every other test here drives the evaluator through a WELL-FORMED expression or
+# an obviously huge one. These six are the malformed shapes a design file can
+# carry that no test named: each one must yield a REFUSAL, never a width, because
+# a wrong width is emitted into hardware and a refusal is not. Each was confirmed
+# to redden when its own branch is mutated to accept.
+@pytest.mark.parametrize("expr,params,why", [
+    ("8'b12",  {},               "a sized literal whose digits are illegal in its own base"),
+    ("AW(1)",  {"AW": 8},        "a call, which is not arithmetic however legal it parses"),
+    ("1.5",    {},               "a non-integer literal: a bus has a whole number of bits"),
+    ("1//0",   {},               "an expression that raises while being evaluated"),
+    ("X",      {"X": True},      "a parameter that resolves to a bool, which is not a width"),
+    ("AW*2",   {"AW": 600000},   "a COMPUTED value over the bound; the literal check cannot see it"),
+])
+def test_a_malformed_width_expression_refuses_rather_than_returning_a_width(expr, params, why):
+    import register_bus_driver_gen as D
+    assert D._int_expr(expr, params) is None, (why, expr)
+
+
+def test_the_width_evaluator_still_accepts_the_shapes_next_to_each_refusal():
+    """Over-reach control: the six refusals must not swallow legitimate neighbours."""
+    import register_bus_driver_gen as D
+    assert D._int_expr("8'b10", {}) == 2            # legal digits in the same base
+    assert D._int_expr("AW", {"AW": 8}) == 8        # a plain parameter, not a call
+    assert D._int_expr("2", {}) == 2                # an integer literal
+    assert D._int_expr("4//2", {}) == 2             # the same operator, not raising
+    assert D._int_expr("AW*2", {"AW": 8}) == 16     # the same expression, in bounds

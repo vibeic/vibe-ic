@@ -749,9 +749,11 @@ def struct_field_width(sources: Sequence[Tuple[str, str]], type_name: str,
             if lo_v is None:
                 return None, (f"{bare}.{field} low bound '{lo.strip()}' is "
                               f"unresolved")
+            # `abs(...) + 1` is >= 1 for every pair of integers, so the width
+            # check that used to sit here could never fire. A branch that cannot
+            # fire is a green light rather than a check (N93), so it is gone
+            # rather than left to look like protection.
             width = abs(hi_v - lo_v) + 1
-            if width < 1:
-                return None, f"{bare}.{field} range [{rng}] is not a width"
             found.append((_path, width, f"{bare}.{field} = [{rng}] with {params}"))
     if not found:
         return None, f"no packed struct '{bare}' declaring field '{field}'"
