@@ -518,6 +518,174 @@ def find_req_rsp_pairs(ports: Sequence[Tuple[str, str, str]],
     return out
 
 
+# --------------------------------------------------------------------------
+# PARAMETER-BOUND WIDTHS (issue #2035, family 3)
+#
+# A driver that assumes a width the DUT does not actually have is wrong in a way
+# that no waveform makes obvious: the transaction is accepted and the upper bits
+# are silently lost. The width a port really has is DECLARED in the design's own
+# input — a parameter with a default, possibly overridden where the module is
+# instantiated. So it is READ, never assumed, and when it cannot be read the
+# caller is told WHICH symbol blocked it instead of receiving a guess.
+# --------------------------------------------------------------------------
+_PARAM_DECL_RE = re.compile(
+    r"\bparameter\b(?:\s+(?:int|integer|logic|bit|byte|shortint|longint"
+    r"|unsigned|signed))*\s*(?:\[[^\]]*\]\s*)?(\w+)\s*=\s*([^,)\n]+)")
+
+
+def _int_expr(expr: str, params: Dict[str, int]) -> Optional[int]:
+    """Evaluate a width expression over integer literals and KNOWN parameters.
+
+    Returns None — never a default — when any symbol is unknown, so an
+    unresolvable width becomes a refusal rather than a silent 32.
+    """
+    import ast as _ast
+    text = str(expr).strip().rstrip(";")
+    # SystemVerilog sized literal: 8'd12 / 32'h20 / 'd7
+    m = re.fullmatch(r"(?:\d+)?'[sS]?[dDhHbBoO]?([0-9a-fA-F_]+)", text)
+    if m:
+        base = {"h": 16, "b": 2, "o": 8}.get(text.split("'")[1][0].lower(), 10)
+        try:
+            return int(m.group(1).replace("_", ""), base)
+        except ValueError:
+            return None
+    try:
+        tree = _ast.parse(text, mode="eval")
+    except SyntaxError:
+        return None
+    for node in _ast.walk(tree):
+        if isinstance(node, _ast.Name) and node.id not in params:
+            return None
+        if not isinstance(node, (_ast.Expression, _ast.BinOp, _ast.UnaryOp,
+                                 _ast.Constant, _ast.Name, _ast.Load,
+                                 _ast.Add, _ast.Sub, _ast.Mult, _ast.USub,
+                                 _ast.UAdd, _ast.FloorDiv, _ast.LShift,
+                                 _ast.RShift, _ast.Pow)):
+            return None
+    try:
+        val = eval(compile(tree, "<width>", "eval"), {"__builtins__": {}},
+                   dict(params))
+    except Exception:
+        return None
+    return int(val) if isinstance(val, int) and not isinstance(val, bool) \
+        else None
+
+
+def dut_parameter_defaults(rtl_text: str, dut_module: str) -> Dict[str, int]:
+    """`{PARAM: default}` for the DUT's own parameter header, input only."""
+    m = re.search(r"\bmodule\s+" + re.escape(dut_module) + r"\b\s*#\s*\(",
+                  rtl_text or "")
+    if not m:
+        return {}
+    i = m.end() - 1
+    depth, j = 0, i
+    while j < len(rtl_text):
+        if rtl_text[j] == "(":
+            depth += 1
+        elif rtl_text[j] == ")":
+            depth -= 1
+            if depth == 0:
+                break
+        j += 1
+    header = rtl_text[i:j]
+    out: Dict[str, int] = {}
+    for name, expr in _PARAM_DECL_RE.findall(header):
+        val = _int_expr(expr, out)
+        if val is not None:
+            out[name] = val
+    return out
+
+
+def parameter_overrides(sources: Sequence[Tuple[str, str]],
+                        dut_module: str) -> Dict[str, int]:
+    """`{PARAM: value}` from a named-port override where the DUT is instantiated.
+
+    An explicit override at the instantiation is what the design actually built,
+    so it WINS over the module's own default. A design that never overrides keeps
+    its defaults — both are legitimate architectures and neither is forced.
+    """
+    out: Dict[str, int] = {}
+    for _path, text in sources or []:
+        for m in re.finditer(re.escape(dut_module) + r"\s*#\s*\(", text or ""):
+            i = m.end() - 1
+            depth, j = 0, i
+            while j < len(text):
+                if text[j] == "(":
+                    depth += 1
+                elif text[j] == ")":
+                    depth -= 1
+                    if depth == 0:
+                        break
+                j += 1
+            for pm in re.finditer(r"\.\s*(\w+)\s*\(([^()]*)\)", text[i:j]):
+                val = _int_expr(pm.group(2), {})
+                if val is not None:
+                    out[pm.group(1)] = val
+    return out
+
+
+def struct_field_width(sources: Sequence[Tuple[str, str]], type_name: str,
+                       field: str, params: Dict[str, int]
+                       ) -> Tuple[Optional[int], str]:
+    """Width of ONE field of the design's own bus struct, parameter-resolved."""
+    if not type_name or not field:
+        return None, "no struct type or field name to resolve"
+    bare = type_name.split("::")[-1]
+    for _path, text in sources or []:
+        for m in re.finditer(
+                r"typedef\s+struct\s+packed\s*\{(.*?)\}\s*"
+                + re.escape(bare) + r"\s*;", text or "", re.S):
+            body = _hdl_code_text.strip_hdl_comments_and_strings(m.group(1))
+            fm = re.search(r"\blogic\s*(\[[^\]]*\])?\s*"
+                           + re.escape(field) + r"\s*;", body)
+            if not fm:
+                continue
+            if not fm.group(1):
+                return 1, f"{bare}.{field} is a single bit"
+            rng = fm.group(1)[1:-1]
+            if ":" not in rng:
+                return None, f"{bare}.{field} has an unparsable range [{rng}]"
+            hi, lo = rng.split(":", 1)
+            hi_v, lo_v = _int_expr(hi, params), _int_expr(lo, params)
+            if hi_v is None:
+                return None, (f"{bare}.{field} width depends on '{hi.strip()}', "
+                              f"which the design's input does not resolve")
+            if lo_v is None:
+                return None, (f"{bare}.{field} low bound '{lo.strip()}' is "
+                              f"unresolved")
+            return hi_v - lo_v + 1, f"{bare}.{field} = [{rng}] with {params}"
+    return None, f"no packed struct '{bare}' declaring field '{field}'"
+
+
+def resolve_bus_widths(sources: Sequence[Tuple[str, str]], rtl_text: str,
+                       dut_module: str, bus: dict
+                       ) -> Tuple[Optional[dict], str]:
+    """The typed width contract the driver must bind to, or a NAMED refusal.
+
+    Defaults are read from the DUT's own header; an instantiation override wins.
+    Nothing is assumed: if either width is unresolved the caller keeps its
+    existing behaviour and is told which symbol blocked the resolution.
+    """
+    defaults = dut_parameter_defaults(rtl_text, dut_module)
+    overrides = parameter_overrides(sources, dut_module)
+    params = dict(defaults)
+    params.update(overrides)
+    h, d = bus.get("h2d") or {}, bus.get("d2h") or {}
+    addr_w, addr_why = struct_field_width(sources, bus.get("h2d_type", ""),
+                                          h.get("addr", ""), params)
+    data_w, data_why = struct_field_width(sources, bus.get("d2h_type", ""),
+                                          d.get("rdata", ""), params)
+    if addr_w is None:
+        return None, f"address width unresolved: {addr_why}"
+    if data_w is None:
+        return None, f"read-data width unresolved: {data_why}"
+    return ({"addr": addr_w, "data": data_w, "params": params,
+             "overridden": sorted(overrides),
+             "evidence": f"{addr_why}; {data_why}"},
+            f"addr={addr_w} data={data_w} "
+            f"(defaults {defaults}, overrides {overrides})")
+
+
 def emit_env_responder(pair: dict, clk: str, rst: str,
                        rst_active_low: bool) -> Tuple[List[str], List[str]]:
     """`(declarations, note)` for ONE declared test-environment responder.
@@ -566,7 +734,8 @@ def emit_sequence_tb(case: dict, plan: dict, bus: dict, dut_module: str,
                      ports: Optional[Sequence[Tuple[str, str, str]]] = None,
                      intg_gen: Optional[dict] = None,
                      env_pairs: Optional[Sequence[dict]] = None,
-                     tieoffs: Optional[Dict[str, str]] = None
+                     tieoffs: Optional[Dict[str, str]] = None,
+                     widths: Optional[dict] = None
                      ) -> str:
     """The SystemVerilog testbench for one vector, driven over the design's own
     register bus.
@@ -577,6 +746,24 @@ def emit_sequence_tb(case: dict, plan: dict, bus: dict, dut_module: str,
     design's DONE bit with a bounded timeout that FAILS — there is no fixed
     settle time, because a multi-cycle block does not have one."""
     name = str(case.get("name"))
+    # PARAMETER-BOUND WIDTHS (#2035 family 3). `widths` is the typed contract
+    # `resolve_bus_widths` read out of the design's own header/package. With no
+    # contract resolved the emission is byte-identical to before: a width is
+    # never invented here, it is only ever bound to one the design DECLARED.
+    _AW = int((widths or {}).get("addr") or 32)
+    _DW = int((widths or {}).get("data") or 32)
+    _AD, _DD = (_AW + 3) // 4, (_DW + 3) // 4
+
+    def _al(v: int) -> str:
+        return f"{_AW}'h{v:0{_AD}x}"
+
+    def _dl(v: int) -> str:
+        return f"{_DW}'h{v:0{_DD}x}"
+
+    def _dz() -> str:
+        """The all-zero data word, in the same shorthand the emitter always used."""
+        return f"{_DW}'h0"
+
     order = plan["endianness"]
     key_w = _words(_kav.normalise_hex(case["inputs"]["key"]), order)
     pt_w = _words(_kav.normalise_hex(case["inputs"]["plaintext"]), order)
@@ -628,7 +815,7 @@ def emit_sequence_tb(case: dict, plan: dict, bus: dict, dut_module: str,
                  f".{intg_gen['out']}({h2d_port}));"
                  f"   // the design's own request-integrity generator")
     L.append(f"  {bus['d2h_type']} {d2h_port};")
-    L.append("  reg [31:0] rdata;")
+    L.append(f"  reg [{_DW-1}:0] rdata;")
     # EVERY port of the DUT is connected. Measured on opentitan_aes: connecting
     # only clock, reset and the bus pair left `rst_shadowed_ni` unconnected,
     # which a simulator reads as 0 — a SECOND reset held asserted forever, so
@@ -686,8 +873,8 @@ def emit_sequence_tb(case: dict, plan: dict, bus: dict, dut_module: str,
             conn.append(f".{p['req_port']}(tb_env_{p['req_port']})")
     L.append(f"  {dut_module} dut (" + ", ".join(conn) + ");")
     L.append("")
-    L.append("  task automatic bus_write(input [31:0] addr,")
-    L.append("                           input [31:0] data);")
+    L.append(f"  task automatic bus_write(input [{_AW-1}:0] addr,")
+    L.append(f"                           input [{_DW-1}:0] data);")
     L.append("    begin")
     L.append(f"      @(posedge {clk});")
     L.append(f"      {drive_sig}.{V}   <= 1'b1;")
@@ -716,8 +903,8 @@ def emit_sequence_tb(case: dict, plan: dict, bus: dict, dut_module: str,
     L.append("    end")
     L.append("  endtask")
     L.append("")
-    L.append("  task automatic bus_read(input [31:0] addr,")
-    L.append("                          output [31:0] data);")
+    L.append(f"  task automatic bus_read(input [{_AW-1}:0] addr,")
+    L.append(f"                          output [{_DW-1}:0] data);")
     L.append("    begin")
     L.append(f"      @(posedge {clk});")
     L.append(f"      {drive_sig}.{V}   <= 1'b1;")
@@ -757,10 +944,10 @@ def emit_sequence_tb(case: dict, plan: dict, bus: dict, dut_module: str,
     L.append("  endtask")
     L.append("")
     # ---- a bounded wait on one status bit, used by the sequence below -----
-    L.append("  task automatic wait_bit(input [31:0] addr, input integer b,")
+    L.append(f"  task automatic wait_bit(input [{_AW-1}:0] addr, input integer b,")
     L.append("                          input [1023:0] what);")
     L.append("    begin")
-    L.append("      rdata = 32'h0;")
+    L.append(f"      rdata = {_dz()};")
     L.append("      wait_cycles = 0;")
     L.append("      while (!rdata[b]) begin")
     L.append("        bus_read(addr, rdata);")
@@ -793,32 +980,64 @@ def emit_sequence_tb(case: dict, plan: dict, bus: dict, dut_module: str,
             L.append(f"    // {note}: the status register declares no such "
                      f"field, so there is nothing to wait on")
             return
-        L.append(f'    wait_bit(32\'h{st:08x}, {bit}, "{nm}");   // {note}')
+        L.append(f'    wait_bit({_al(st)}, {bit}, "{nm}");   // {note}')
 
     # THE SEQUENCE, in the order the design's own programmer's guide states.
     # Every wait below is there because that document says a write is IGNORED
     # or a read is invalid without it — not because a value looked unsettled.
     _wait(idle_bit, idle_name,
           "config writes are ignored while the unit is not idle")
-    L.append(f"    bus_write(32'h{plan['ctrl_addr']:08x}, "
-             f"32'h{plan['ctrl_value']:08x});   // configuration FIRST")
+    L.append(f"    bus_write({_al(plan['ctrl_addr'])}, "
+             f"{_dl(plan['ctrl_value'])});   // configuration FIRST")
     if plan.get("ctrl_shadowed"):
-        L.append(f"    bus_write(32'h{plan['ctrl_addr']:08x}, "
-                 f"32'h{plan['ctrl_value']:08x});"
+        L.append(f"    bus_write({_al(plan['ctrl_addr'])}, "
+                 f"{_dl(plan['ctrl_value'])});"
                  f"   // second write: the register's own name says shadowed")
+    # RESET UNDER ACTIVE CONTROLS (#2035 family 3). The configuration is live
+    # at this point, which is the only moment the question can be asked: does a
+    # reset asserted while the controls are ACTIVE actually return the design to
+    # the reset condition its own register map documents? A reset exercised only
+    # from an idle machine never tests that. Emitted ONLY when the design's own
+    # input resolved both the bus widths and an idle/status field to check
+    # against -- otherwise the gap is REPORTED, never papered over with a guess.
+    if widths is not None:
+        if idle_bit is None:
+            L.append("    // reset-under-active-controls NOT CHECKED: the status "
+                     "register declares no idle field to observe the reset "
+                     "condition on -- unresolved, routed to review, not guessed")
+        else:
+            _on = f"1'b{'0' if rst_active_low else '1'}"
+            _off = f"1'b{'1' if rst_active_low else '0'}"
+            L.append("    // --- reset asserted WHILE the controls are active ---")
+            L.append(f"    {rst} = {_on};")
+            for _n, _w, _is_rst, _is_clk in extra_in:
+                if _is_rst:
+                    L.append(f"    {_n} = {_on};")
+            L.append(f"    repeat (4) @(posedge {clk});")
+            L.append(f"    {rst} = {_off};")
+            for _n, _w, _is_rst, _is_clk in extra_in:
+                if _is_rst:
+                    L.append(f"    {_n} = {_off};")
+            L.append(f"    repeat (4) @(posedge {clk});")
+            L.append(f'    wait_bit({_al(st)}, {idle_bit}, "{idle_name} after '
+                     f'reset under active controls");')
+            L.append(f"    bus_write({_al(plan['ctrl_addr'])}, "
+                     f"{_dl(plan['ctrl_value'])});"
+                     f"   // reprogram: the reset was real, so the control is gone")
+            L.append("    // --- end reset-under-active-controls ---")
     _wait(idle_bit, idle_name,
           "writing the configuration may start a reseed; the key must wait")
     for i2, w in enumerate(key_w):
         if i2 in plan["key"]:
-            L.append(f"    bus_write(32'h{plan['key'][i2]:08x}, "
-                     f"32'h{w:08x});   // key word {i2}")
+            L.append(f"    bus_write({_al(plan['key'][i2])}, "
+                     f"{_dl(w)});   // key word {i2}")
     for i2 in sorted(plan["key"]):
         if i2 >= len(key_w):
-            L.append(f"    bus_write(32'h{plan['key'][i2]:08x}, 32'h0);"
+            L.append(f"    bus_write({_al(plan['key'][i2])}, {_dz()});"
                      f"   // unused key word {i2}: every register of the share "
                      f"is written at least once")
     for i2 in sorted(plan.get("key_share1") or {}):
-        L.append(f"    bus_write(32'h{plan['key_share1'][i2]:08x}, 32'h0);"
+        L.append(f"    bus_write({_al(plan['key_share1'][i2])}, {_dz()});"
                  f"   // second share word {i2}: the key in effect is the XOR "
                  f"of the shares, so this share is zero")
     if iv_w:
@@ -826,14 +1045,14 @@ def emit_sequence_tb(case: dict, plan: dict, bus: dict, dut_module: str,
               "the unit must be idle before the IV registers are written")
         for i2, w in enumerate(iv_w):
             if i2 in plan["iv"]:
-                L.append(f"    bus_write(32'h{plan['iv'][i2]:08x}, "
-                         f"32'h{w:08x});   // iv word {i2}")
+                L.append(f"    bus_write({_al(plan['iv'][i2])}, "
+                         f"{_dl(w)});   // iv word {i2}")
     _wait(inrdy_bit, inrdy_name,
           "the unit must be ready to accept an input block")
     for i2, w in enumerate(pt_w):
         if i2 in plan["data_in"]:
-            L.append(f"    bus_write(32'h{plan['data_in'][i2]:08x}, "
-                     f"32'h{w:08x});   // input word {i2}")
+            L.append(f"    bus_write({_al(plan['data_in'][i2])}, "
+                     f"{_dl(w)});   // input word {i2}")
     L.append("    // AUTOMATIC mode: the guide says the unit starts on its own")
     L.append("    // when a full input block has been written, and that the")
     L.append("    // explicit START trigger belongs to MANUAL operation. The")
@@ -844,11 +1063,11 @@ def emit_sequence_tb(case: dict, plan: dict, bus: dict, dut_module: str,
     for i2, w in enumerate(ct_w):
         if i2 not in plan["data_out"]:
             continue
-        L.append(f"    bus_read(32'h{plan['data_out'][i2]:08x}, rdata);")
-        L.append(f"    if (rdata !== 32'h{w:08x}) begin")
+        L.append(f"    bus_read({_al(plan['data_out'][i2])}, rdata);")
+        L.append(f"    if (rdata !== {_dl(w)}) begin")
         L.append("      errors = errors + 1;")
         L.append(f'      $display("[TB {name}] FAIL: output word {i2} = %h, '
-                 f'expected %h", rdata, 32\'h{w:08x});')
+                 f'expected %h", rdata, {_dl(w)});')
         L.append("    end")
     L.append("    if (errors != 0) begin")
     L.append(f'      $display("[TB {name}] FAIL: %0d mismatch(es) against '

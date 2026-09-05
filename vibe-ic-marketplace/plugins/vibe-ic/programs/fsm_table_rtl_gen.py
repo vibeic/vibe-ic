@@ -40,6 +40,32 @@ Input spec (JSON or YAML), e.g.:
       "return_money": ["RETURN_MONEY"]
     }
 
+  PULSED EVENTS that must survive until acknowledged use the additive ``events``
+  map.  Each entry declares, in the INPUT, how the request signal BEHAVES — the
+  one thing a generator must never infer:
+
+    "events": {
+      "irq_a": {"kind": "pulse", "ack": "ack_a",
+                "deadline": 16, "starvation_out": "starved_a"},
+      "irq_b": {"kind": "level"}
+    }
+
+  ``kind: "pulse"``  the source drives the request for a single cycle, so the
+    request MUST be captured into a pending bit that sets on the pulse and clears
+    only on its acknowledgment.  Set is dominant: a fresh request arriving in the
+    same cycle as the previous acknowledgment is retained, never dropped.
+  ``kind: "level"``  the source HOLDS the request until it is taken.  No pending
+    storage is emitted — a held request needs none, and adding one would force a
+    single topology onto a legitimate alternative architecture.
+  ``deadline: N`` + ``starvation_out``  a bounded wait counter per pending event;
+    the named output asserts once that event has waited N cycles without being
+    acknowledged, so a starved contender REPORTS itself instead of waiting mutely.
+
+  ``kind`` is REQUIRED and is never inferred.  A pulse with no ``ack``, a
+  ``deadline`` with no ``starvation_out`` (or the reverse), or an ``events`` map on
+  a clockless ``moore_comb`` spec are all REFUSED BY NAME so the unresolved
+  interpretation is routed to AI rather than guessed.
+
 chip-AGNOSTIC: pure table→logic transform; no IC-, bus-, or protocol-specific
 knowledge. Deterministic: same spec → byte-identical RTL.
 
@@ -122,6 +148,128 @@ def _append_state_outputs(lines: List[str], spec: dict, state_expr: str,
         lines.append(f"  assign {signal} = {cond};")
 
 
+_EVENT_KINDS = ("pulse", "level")
+
+
+def _events(spec: dict) -> Dict[str, dict]:
+    """Normalized ``event -> contract`` map extracted from the INPUT ONLY.
+
+    Every field that decides emitted structure is READ, never inferred.  Anything
+    the spec leaves unresolved raises with the event named, so the caller routes
+    that one interpretation to AI instead of receiving a guessed topology.
+    """
+    raw = spec.get("events", {}) or {}
+    if not isinstance(raw, dict):
+        raise ValueError("events must be an event-to-contract mapping")
+    out: Dict[str, dict] = {}
+    for name, contract in raw.items():
+        if not isinstance(name, str) or not re.fullmatch(r"[A-Za-z_]\w*", name):
+            raise ValueError(f"invalid event signal: {name!r}")
+        if not isinstance(contract, dict):
+            raise ValueError(f"events[{name!r}] must be a mapping")
+        kind = contract.get("kind")
+        if kind is None:
+            raise ValueError(
+                f"events[{name!r}] does not state 'kind'; pulse-vs-level is not "
+                f"inferable from the input — route to AI, do not guess")
+        if kind not in _EVENT_KINDS:
+            raise ValueError(
+                f"events[{name!r}] has unknown kind {kind!r}; "
+                f"expected one of {list(_EVENT_KINDS)}")
+        ack = contract.get("ack")
+        if kind == "pulse" and not ack:
+            raise ValueError(
+                f"events[{name!r}] is pulsed but names no 'ack'; the clearing "
+                f"event is not inferable from the input — route to AI")
+        if ack is not None and (not isinstance(ack, str)
+                                or not re.fullmatch(r"[A-Za-z_]\w*", ack)):
+            raise ValueError(f"events[{name!r}] has an invalid 'ack' signal")
+        deadline = contract.get("deadline")
+        starve = contract.get("starvation_out")
+        if deadline is not None:
+            if isinstance(deadline, bool) or not isinstance(deadline, int) \
+                    or deadline < 1:
+                raise ValueError(
+                    f"events[{name!r}] 'deadline' must be a positive integer "
+                    f"cycle count")
+            if not starve:
+                raise ValueError(
+                    f"events[{name!r}] sets a deadline but names no "
+                    f"'starvation_out'; the report signal is not inferable")
+        if starve:
+            if not isinstance(starve, str) \
+                    or not re.fullmatch(r"[A-Za-z_]\w*", starve):
+                raise ValueError(
+                    f"events[{name!r}] has an invalid 'starvation_out' signal")
+            if deadline is None:
+                raise ValueError(
+                    f"events[{name!r}] names a starvation output but no "
+                    f"'deadline'; the bound is not inferable — route to AI")
+        out[name] = {"kind": kind, "ack": ack,
+                     "deadline": deadline, "starvation_out": starve}
+    return out
+
+
+def _event_ports(spec: dict) -> List[str]:
+    """Port declarations the event contract adds, in stable input order."""
+    ports: List[str] = []
+    seen = set()
+    for name, c in _events(spec).items():
+        for sig in (name, c["ack"]):
+            if sig and sig not in seen:
+                seen.add(sig)
+                ports.append(f"  input        {sig}")
+    for name, c in _events(spec).items():
+        if c["starvation_out"] and c["starvation_out"] not in seen:
+            seen.add(c["starvation_out"])
+            ports.append(f"  output       {c['starvation_out']}")
+    return ports
+
+
+def _append_event_logic(lines: List[str], spec: dict, clk: str,
+                        reset: dict) -> None:
+    """Emit pending/ack storage and the bounded starvation report.
+
+    A ``level`` event is HELD by its source and deliberately gets no storage:
+    the rule fires on the declared behaviour, not on the word "interrupt".
+    """
+    evs = _events(spec)
+    if not evs:
+        return
+    rst_test = _reset_test(reset) if reset else None
+    for name, c in evs.items():
+        if c["kind"] != "pulse":
+            continue
+        ack = c["ack"]
+        pend = f"pending_{name}"
+        lines.append("")
+        lines.append(f"  // '{name}' is pulsed: hold it until '{ack}'. Set is")
+        lines.append(f"  // dominant so a request coincident with an ack is kept.")
+        lines.append(f"  reg {pend};")
+        lines.append(f"  always @({_reset_sensitivity(reset, clk) if reset else 'posedge ' + clk}) begin")
+        if rst_test:
+            lines.append(f"    if ({rst_test}) {pend} <= 1'b0;")
+            lines.append(f"    else {pend} <= {name} || ({pend} && !{ack});")
+        else:
+            lines.append(f"    {pend} <= {name} || ({pend} && !{ack});")
+        lines.append("  end")
+        if c["deadline"] is not None:
+            dl = c["deadline"]
+            cw = max(1, int(dl).bit_length())
+            wait = f"wait_{name}"
+            lines.append(f"  // bounded wait: report starvation after {dl} unacknowledged cycles")
+            lines.append(f"  reg [{cw-1}:0] {wait};")
+            lines.append(f"  always @({_reset_sensitivity(reset, clk) if reset else 'posedge ' + clk}) begin")
+            if rst_test:
+                lines.append(f"    if ({rst_test}) {wait} <= {cw}'d0;")
+                lines.append(f"    else if (!{pend} || {ack}) {wait} <= {cw}'d0;")
+            else:
+                lines.append(f"    if (!{pend} || {ack}) {wait} <= {cw}'d0;")
+            lines.append(f"    else if ({wait} != {cw}'d{dl}) {wait} <= {wait} + {cw}'d1;")
+            lines.append("  end")
+            lines.append(f"  assign {c['starvation_out']} = {pend} && ({wait} == {cw}'d{dl});")
+
+
 def _validate(spec: dict) -> None:
     for req in ("module", "kind", "encoding", "transitions"):
         if req not in spec:
@@ -146,6 +294,19 @@ def _validate(spec: dict) -> None:
         raise ValueError("Moore FSM requires per-state 'outputs' or 'state_outputs'")
     if spec["kind"] == "mealy_seq" and "outputs" not in spec:
         raise ValueError("Mealy FSM requires per-state/input 'outputs'")
+    evs = _events(spec)
+    if evs and spec["kind"] == "moore_comb":
+        raise ValueError(
+            "events require a clocked FSM; 'moore_comb' is combinational — "
+            "state the sequential kind or drop the events contract")
+    for _name, _c in evs.items():
+        for _sig in (_name, _c["ack"], _c["starvation_out"]):
+            if _sig and _sig in enc:
+                raise ValueError(
+                    f"event signal '{_sig}' collides with a state name")
+        if _name in state_out or (_c["starvation_out"] or "") in state_out:
+            raise ValueError(
+                f"event '{_name}' collides with a state_outputs signal")
     legacy_out = spec.get("output", "out")
     if "outputs" in spec and legacy_out in state_out:
         raise ValueError(
@@ -239,6 +400,7 @@ def _gen_seq(spec: dict) -> str:
     if mealy or "outputs" in spec:
         ports.append(f"  output       {out}")
     ports.extend(f"  output       {signal}" for signal in _state_outputs(spec))
+    ports.extend(_event_ports(spec))
     lines = [f"module {spec['module']} ("]
     lines.extend(p + ("," if i < len(ports) - 1 else "")
                  for i, p in enumerate(ports))
@@ -296,6 +458,7 @@ def _gen_seq(spec: dict) -> str:
         else:
             lines.append(f"  assign {out} = 1'b0;")
     _append_state_outputs(lines, spec, "state", enc)
+    _append_event_logic(lines, spec, clk, reset)
     lines.append("endmodule")
     return "\n".join(lines) + "\n"
 
