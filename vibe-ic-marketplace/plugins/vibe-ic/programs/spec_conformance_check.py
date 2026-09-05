@@ -1490,7 +1490,8 @@ def _ordered_phase_monitoring_early(spec_text: str, rtl_body: str):
 
 def check(spec: SpecContract, rtl_name: str, rtl_ports: List[Port],
           rtl_resets: dict, rtl_registered: Optional[bool],
-          path: str, rtl_body: str = '', spec_text: str = '') -> List[Finding]:
+          path: str, rtl_body: str = '', spec_text: str = '',
+          renamed_groups: Optional[List[tuple]] = None) -> List[Finding]:
     f: List[Finding] = []
 
     # ---- structural sanity: zero output-capable ports -----------------------
@@ -1517,7 +1518,91 @@ def check(spec: SpecContract, rtl_name: str, rtl_ports: List[Port],
     # spec snippet (0 ports) must not flag every RTL port as "extra".
     rmap = {p.name: p for p in rtl_ports}
     smap = {p.name: p for p in spec.ports} if spec.ports else {}
+
+    # ---- ORGANIC — declared interface RENAME (SOURCE_MANIFEST #711) --------
+    # The flow already HAS a way for a design to declare that an L9 illustrative
+    # interface is delivered under different RTL name(s):
+    # `phase2/stage1/rtl/SOURCE_MANIFEST.json -> renamed_interfaces`, documented
+    # in `catalog-glue-author/SKILL.md` and parsed by
+    # `l9_rtl_pin_consistency_check._manifest_renamed_groups()`. Nothing in the
+    # 44-step flow consumed it, so an author who declared a rename (as the skill
+    # instructs) still hard-ERRORed here with port-missing + port-extra. A
+    # declaration mechanism with no consumer invites the right behaviour and
+    # then punishes it. This is the SAME reconciliation this gate already
+    # performs for the L9 `optional` flag above.
+    #
+    # ACCEPTED, never SUPPRESSED. A group reconciles ONLY when every name on
+    # both sides is real and the electrical facts match:
+    #   * every `l9` name is a SPEC port that is genuinely absent from the RTL;
+    #   * every `rtl` name is an RTL port genuinely absent from the spec;
+    #   * every RTL name carries the SAME direction as the L9 port(s) it serves,
+    #     and the same width when both are literal.
+    # Any other shape is reported as a defect IN THE DECLARATION and the
+    # underlying port findings are still emitted, so the manifest can never be
+    # used to wave an arbitrary mismatch through. An UNDECLARED missing/extra
+    # port is untouched by all of this.
+    # chip-AGNOSTIC: manifest grammar only, no chip/vendor/PDK literal.
+    renamed_ok_spec: set = set()
+    renamed_ok_rtl: set = set()
+    for l9_set, rtl_set in (renamed_groups or []):
+        if not l9_set or not rtl_set:
+            continue
+        bad = False
+        for nm in sorted(l9_set):
+            if nm not in smap:
+                f.append(Finding(path, 'ERROR', 'port-rename-undeclared-spec-port', nm,
+                    f"SOURCE_MANIFEST declares a rename FROM '{nm}', but the spec "
+                    f"has no such port — a rename can only reconcile a port the "
+                    f"spec actually declares."))
+                bad = True
+            elif nm in rmap:
+                f.append(Finding(path, 'ERROR', 'port-rename-source-still-present', nm,
+                    f"SOURCE_MANIFEST declares '{nm}' renamed, but the RTL still "
+                    f"declares a port of that name — the declaration and the RTL "
+                    f"disagree."))
+                bad = True
+        for nm in sorted(rtl_set):
+            if nm not in rmap:
+                f.append(Finding(path, 'ERROR', 'port-rename-missing-rtl-port', nm,
+                    f"SOURCE_MANIFEST declares a rename TO '{nm}', but the RTL "
+                    f"has no such port."))
+                bad = True
+            elif nm in smap:
+                f.append(Finding(path, 'ERROR', 'port-rename-target-in-spec', nm,
+                    f"SOURCE_MANIFEST declares '{nm}' as a rename TARGET, but the "
+                    f"spec declares a port of that name — that is not a rename."))
+                bad = True
+        if bad:
+            continue
+        # electrical facts must survive the rename
+        for rn in sorted(rtl_set):
+            rp = rmap[rn]
+            for sn in sorted(l9_set):
+                sp = smap[sn]
+                if rp.direction != sp.direction:
+                    f.append(Finding(path, 'ERROR', 'port-rename-direction-mismatch', rn,
+                        f"renamed port '{rn}' direction RTL={rp.direction} vs spec "
+                        f"'{sn}'={sp.direction} — a rename may not change direction."))
+                    bad = True
+                if (rp.width != WIDTH_UNKNOWN and sp.width != WIDTH_UNKNOWN
+                        and rp.width != sp.width):
+                    f.append(Finding(path, 'ERROR', 'port-rename-width-mismatch', rn,
+                        f"renamed port '{rn}' width RTL={rp.width} vs spec "
+                        f"'{sn}'={sp.width} — a rename may not change width."))
+                    bad = True
+        if bad:
+            continue
+        renamed_ok_spec |= l9_set
+        renamed_ok_rtl |= rtl_set
+        f.append(Finding(path, 'INFO', 'port-renamed-by-manifest',
+            ','.join(sorted(l9_set)),
+            f"spec port(s) {sorted(l9_set)} are delivered as RTL port(s) "
+            f"{sorted(rtl_set)}, declared in SOURCE_MANIFEST.renamed_interfaces "
+            f"with matching direction and width — an accepted declared rename."))
+
     for nm, sp in smap.items():
+        if nm in renamed_ok_spec:
+            continue
         if nm not in rmap:
             # A pin the INPUT marks optional may be left out: not implementing an
             # offered pin is a declared design choice, not a conformance defect.
@@ -1548,6 +1633,8 @@ def check(spec: SpecContract, rtl_name: str, rtl_ports: List[Port],
                 f"port '{nm}' width RTL={rp.width} vs spec={sp.width}."))
     if smap:
         for nm in rmap:
+            if nm in renamed_ok_rtl:
+                continue
             if nm not in smap:
                 f.append(Finding(path, 'ERROR', 'port-extra', nm,
                     f"RTL port '{nm}' is not declared in the spec."))
@@ -1962,8 +2049,24 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     rtl_resets = classify_rtl_resets(rtl_body)
     rtl_registered = _rtl_output_is_registered(rtl_body, rtl_ports)
+    # ORGANIC — read the DECLARED interface renames (SOURCE_MANIFEST #711).
+    # Reuse `l9_rtl_pin_consistency_check`'s parser rather than re-implementing
+    # it: the two gates must not drift apart in what they accept as a
+    # declaration. Any import/read failure yields NO groups, so the gate keeps
+    # its exact-name comparison (fail-closed, no-leak).
+    _renamed_groups: List[tuple] = []
+    try:
+        import l9_rtl_pin_consistency_check as _l9pin
+        _proj = Path(args.rtl_dir).resolve().parents[2] if args.rtl_dir else None
+        _mf = _l9pin.load_source_manifest(_proj) if _proj else None
+        if _mf:
+            _renamed_groups = _l9pin._manifest_renamed_groups(_mf)
+    except Exception:  # noqa: BLE001 — no manifest ⇒ no relaxation
+        _renamed_groups = []
+
     findings = check(spec, rtl_name, rtl_ports, rtl_resets, rtl_registered, chosen,
-                     rtl_body, spec_text=spec_body)
+                     rtl_body, spec_text=spec_body,
+                     renamed_groups=_renamed_groups)
 
     # Per the semantic-confirm rule: a finding resting on a prose-inferred field that an
     # LLM has NOT confirmed is a CANDIDATE, not truth — annotate it so the agent confirms.
