@@ -58708,8 +58708,8 @@ def _post_emit_l19_constraint_tokens(project: Path) -> int:
 
     n = rep.get("emitted_count", 0)
     if n:
-        print(f"      L19 constraints: lifted {n} declaration(s) stated in "
-              f"the design's own prose")
+        print(f"      L19 prose context: lifted {n} declaration(s) stated "
+              f"in the design's own prose")
     return n
 
 

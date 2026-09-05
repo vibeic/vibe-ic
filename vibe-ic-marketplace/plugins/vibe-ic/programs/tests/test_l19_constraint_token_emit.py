@@ -111,6 +111,29 @@ No `CORE_UTIL_TARGET = 45%` is specified.
 Do not use `create_clock` for this interface.
 """
 
+_DOC_IMPLEMENTATION_CONTEXT = """# Integration brief
+
+4. **Implementation route (intended path)**: **REUSED-IP / catalog-glue**.
+   `input/vendor_rtl/{core,prim_portable,bus}/` is the staged dependency
+   closure; select **prim_portable** and author only the wrapper and tie-offs.
+
+5. **Sign-off target**
+   The translate-hdl + synth-engine flow reference is staged at
+   `input/reference_flow/prebuild/` for implementation context.
+
+6. **Functional verification oracle**
+   - SPEC-123 / PROFILE-42 standard vectors, driven through the bus interface.
+   - The named oracle is a verification contract; Phase 1 must not open it.
+"""
+
+_DOC_UNRELATED_CONTEXT_WORDS = """# Design notes
+
+The implementation discusses a route selector and a catalog index.
+Verification uses an oracle selector signal. A flow reference counter is
+also present in the datapath. None of these sentences declares an
+implementation route, reference-flow artifact, or verification oracle.
+"""
+
 _L19_SKELETON = {
     "doc_id": "L19",
     "doc_name": "L19_CONSTRAINTS_PDK",
@@ -298,6 +321,58 @@ def test_a_code_block_is_code_not_a_setting(tmp_path):
     assert "CORE_UTIL_TARGET" in got, got
     for shell in ("TOOLCHAIN_ROOT", "LIB_SEARCH_PATH", "FENCED_SETTING_KEY"):
         assert shell not in got, f"{shell} came out of a code block: {got}"
+
+
+# ───────────── 2c. explicit implementation context belongs in L19 ──
+def test_declared_implementation_context_reaches_l19_without_opening_it(
+        tmp_path, monkeypatch):
+    """Prompt-declared context is metadata; named artifacts stay unread.
+
+    RED on the pre-fix program: all three fields are absent and the helper
+    reports zero.  The read guard independently proves that recovery did not
+    come from opening the staged reference or oracle content.
+    """
+    _mk(tmp_path, _DOC_IMPLEMENTATION_CONTEXT)
+    (tmp_path / "input" / "reference_flow" / "prebuild").mkdir(
+        parents=True)
+    (tmp_path / "input" / "reference_flow" / "prebuild" /
+     "recipe.tcl").write_text("SHOULD_NOT_BE_READ", encoding="utf-8")
+    (tmp_path / "input" / "golden").mkdir(parents=True)
+    (tmp_path / "input" / "golden" / "answer.json").write_text(
+        "SHOULD_NOT_BE_READ", encoding="utf-8")
+
+    real_read_text = Path.read_text
+
+    def guarded_read_text(path, *args, **kwargs):
+        lowered = {part.lower() for part in Path(path).parts}
+        assert not lowered.intersection({"reference_flow", "golden",
+                                         "oracle", "harness"}), path
+        return real_read_text(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", guarded_read_text)
+    assert getattr(R, HELPER)(tmp_path) == 3
+
+    fields = _l19(tmp_path)["fields"]
+    reference = json.dumps(fields.get("reference_flow"), ensure_ascii=False)
+    route = json.dumps(fields.get("implementation_route"), ensure_ascii=False)
+    oracle = json.dumps(fields.get("verification_oracle"), ensure_ascii=False)
+    for token in ("translate-hdl", "synth-engine", "reference_flow"):
+        assert token in reference, (token, reference)
+    for token in ("REUSED-IP", "catalog-glue", "vendor_rtl",
+                  "prim_portable"):
+        assert token in route, (token, route)
+    for token in ("SPEC-123", "PROFILE-42"):
+        assert token in oracle, (token, oracle)
+
+
+def test_context_vocabulary_without_a_declaration_emits_nothing(tmp_path):
+    """A word hit is not a contract; explicit declaration framing is required."""
+    _mk(tmp_path, _DOC_UNRELATED_CONTEXT_WORDS)
+    assert getattr(R, HELPER)(tmp_path) == 0
+    fields = _l19(tmp_path)["fields"]
+    for key in ("reference_flow", "implementation_route",
+                "verification_oracle"):
+        assert key not in fields, (key, fields.get(key))
 
 
 # ────────────────────────────────────── 3. refuses rather than fabricates ──

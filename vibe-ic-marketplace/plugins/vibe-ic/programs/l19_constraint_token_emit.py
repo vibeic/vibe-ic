@@ -3,6 +3,9 @@
 OWN PROSE into L19, the layer that carries them.
 
 VERDICT SEMANTICS: **REPAIRS** (exit 0 unless L19 is unreadable). Not a gate.
+ENFORCEMENT: **ADVISORY producer** at the Phase-1 runner boundary.  A missing
+declaration emits zero and changes nothing; an unreadable L19 returns a named
+ERROR which the runner prints as a named fail-open adapter failure.
 
 The measured defect
 ------------------------------------------------------------------
@@ -67,6 +70,22 @@ What is emitted, and what is NOT
                 LAYER rather than by re-running the extractor.
     source/line project-relative provenance
     evidence    the document's own row
+
+Three implementation-context fields are also projected when, and only when,
+the design's own prose declares them explicitly:
+
+    fields.reference_flow[]         a NAMED reference-flow path plus the
+                                    surrounding declaration; the path is
+                                    recorded but never opened here
+    fields.implementation_route[]   a section explicitly labelled as the
+                                    implementation route / intended path
+    fields.verification_oracle[]    a section explicitly labelled as the
+                                    verification oracle; names only, never
+                                    oracle contents
+
+These are L19 implementation context, not constraints, so they do not set
+`constraints_present`.  They carry the same project-relative source, line,
+evidence and extraction-strategy provenance as constraint declarations.
 
 `constraints_present` becomes True — and ONLY on evidence. With no
 declaration found, this emitter writes nothing at all and the layer keeps
@@ -141,6 +160,25 @@ _L19_NAME = "L19_CONSTRAINTS_PDK.json"
 _DECL_KEY = "constraint_declarations"
 _PRESENCE_KEY = "constraints_present"
 
+# Explicit prose declarations that belong to L19's implementation-context
+# contract.  These are domain words, never a design, PDK, tool, standard or
+# vendor name.  A mere occurrence of "implementation", "route" or "oracle"
+# is not enough: implementation/oracle records require a labelled markdown
+# heading, numbered item or colon label.  A reference-flow record requires a
+# concrete path.  This is the same declaration-vs-mention boundary the
+# constraint half enforces for UPPER_SNAKE keys.
+_IMPLEMENTATION_ROUTE_RE = re.compile(
+    r"\bimplementation\s+(?:route|path)\b|\bintended\s+path\b|"
+    r"實作路徑|实现路径", re.IGNORECASE)
+_VERIFICATION_ORACLE_RE = re.compile(
+    r"\b(?:functional\s+)?verification\s+oracle\b|"
+    r"功能驗證\s*oracle|功能验证\s*oracle", re.IGNORECASE)
+_REFERENCE_FLOW_PATH_RE = re.compile(
+    r"(?P<path>(?:input[/\\])?(?:reference[_-]?flow|ref[_-]?flow)"
+    r"(?:[/\\][A-Za-z0-9_.{}*?\-]+)+[/\\]?)", re.IGNORECASE)
+_MARKDOWN_HEADING_RE = re.compile(r"^\s{0,3}#{1,6}\s+")
+_NUMBERED_DECL_RE = re.compile(r"^\s*\d+[.)]\s+")
+
 # ─────────────────────────────────────────────────────────────────────
 # THE DOMAIN ANCHOR — the shape rule alone is not enough, and this is the
 # correction a corpus sweep forced
@@ -210,6 +248,145 @@ def _identity(rec: Dict[str, Any]) -> tuple:
     """
     return (rec.get("kind"), rec.get("token"),
             rec.get("scope"), rec.get("value"))
+
+
+def _paragraphs(text: str):
+    """Yield ``(line, lines)`` for non-empty prose paragraphs.
+
+    Wrapped declaration lines must stay together: a path is commonly placed
+    on the line after the tools or route it qualifies.  Blank lines are the
+    conservative boundary; crossing one would let an unrelated paragraph
+    lend tokens to a declaration.
+    """
+    start: Optional[int] = None
+    block: List[str] = []
+    for line_no, line in enumerate(text.splitlines(), start=1):
+        if line.strip():
+            if start is None:
+                start = line_no
+            block.append(line.strip())
+            continue
+        if block:
+            yield start, block
+            start, block = None, []
+    if block:
+        yield start, block
+
+
+def _is_labelled_declaration(lines: List[str], pattern: re.Pattern) -> bool:
+    """True only for a heading/list/label that explicitly names a contract."""
+    if not lines:
+        return False
+    first = lines[0]
+    if not pattern.search(first):
+        return False
+    if _MARKDOWN_HEADING_RE.match(first) or _NUMBERED_DECL_RE.match(first):
+        return True
+    # Unnumbered ``Implementation route: ...`` / ``Verification oracle: ...``
+    # is the remaining declaration shape.  Ordinary sentences that merely use
+    # the words are refused.
+    m = pattern.search(first)
+    prefix = first[:m.start()].strip(" *_`") if m else "not-a-label"
+    return bool(m and not prefix and re.search(r"[:：]", first[m.start():]))
+
+
+def _heading_section(paragraphs: List[tuple], index: int) -> List[str]:
+    """A markdown heading paragraph plus its body up to the next peer.
+
+    Markdown convention places a blank line after a heading, so treating blank
+    lines as the end of every declaration recorded a title and dropped the
+    value below it.  Numbered/colon declarations keep their paragraph boundary;
+    only a real ``#`` heading owns subsequent paragraphs.
+    """
+    lines = list(paragraphs[index][1])
+    first = lines[0] if lines else ""
+    match = re.match(r"^\s{0,3}(#{1,6})\s+", first)
+    if not match:
+        return lines
+    level = len(match.group(1))
+    for _, later in paragraphs[index + 1:]:
+        later_first = later[0] if later else ""
+        next_heading = re.match(r"^\s{0,3}(#{1,6})\s+", later_first)
+        if next_heading and len(next_heading.group(1)) <= level:
+            break
+        lines.extend(later)
+    return lines
+
+
+def _declaration_has_payload(lines: List[str], pattern: re.Pattern) -> bool:
+    """A label alone is not an implementation contract."""
+    if len(lines) > 1:
+        return True
+    first = lines[0] if lines else ""
+    match = pattern.search(first)
+    if not match:
+        return False
+    suffix = first[match.end():].strip(" *_`():：.—-")
+    return bool(suffix)
+
+
+def collect_implementation_context(project: Path) -> Dict[str, List[Dict[str, Any]]]:
+    """Explicit implementation-context declarations from design prose only.
+
+    The named reference/oracle artifacts are never opened.  ``input_doc_texts``
+    limits reads to the prompt/document corpus, and this function records only
+    the declaration text and path name found there.
+    """
+    found: Dict[str, List[Dict[str, Any]]] = {
+        "reference_flow": [],
+        "implementation_route": [],
+        "verification_oracle": [],
+    }
+    seen: set = set()
+
+    def add(field: str, source_path: Path, line: int, lines: List[str],
+            **extra: Any) -> None:
+        evidence = " ".join(lines).strip()
+        if not evidence:
+            return
+        key = (field, re.sub(r"\s+", " ", evidence).casefold())
+        if key in seen:
+            return
+        seen.add(key)
+        src, outside = project_relative_source(source_path, project)
+        rec: Dict[str, Any] = {
+            "kind": field,
+            "source": src,
+            "line": line,
+            "evidence": evidence,
+            "extraction_strategy": f"{TOOL}:explicit_{field}",
+        }
+        rec.update(extra)
+        if outside:
+            rec["source_outside_project"] = True
+        found[field].append(rec)
+
+    for path, text in input_doc_texts(project):
+        paragraphs = list(_paragraphs(text))
+        for index, (line_no, lines) in enumerate(paragraphs):
+            evidence = " ".join(lines)
+            if _is_labelled_declaration(lines, _IMPLEMENTATION_ROUTE_RE):
+                declared = _heading_section(paragraphs, index)
+                positive = [line for line in declared
+                            if not _polarity.is_denied(line)]
+                if _declaration_has_payload(positive,
+                                            _IMPLEMENTATION_ROUTE_RE):
+                    add("implementation_route", path, line_no, positive)
+            if _is_labelled_declaration(lines, _VERIFICATION_ORACLE_RE):
+                declared = _heading_section(paragraphs, index)
+                positive = [line for line in declared
+                            if not _polarity.is_denied(line)]
+                if _declaration_has_payload(positive,
+                                            _VERIFICATION_ORACLE_RE):
+                    add("verification_oracle", path, line_no, positive)
+            path_match = _REFERENCE_FLOW_PATH_RE.search(evidence)
+            if path_match:
+                lo, hi = _polarity.sentence_scope(
+                    evidence, path_match.start(), path_match.end())
+                if not _polarity.is_denied(evidence[lo:hi]):
+                    add("reference_flow", path, line_no, lines,
+                        path=path_match.group("path"))
+    return found
 
 
 def collect(project: Path) -> List[Dict[str, Any]]:
@@ -291,6 +468,7 @@ def run(project: Path, dry_run: bool = False) -> Dict[str, Any]:
                 "emitted_count": 0, "emitted": []}
 
     found = collect(project)
+    context_found = collect_implementation_context(project)
     fields = doc.get("fields")
     if not isinstance(fields, dict):
         fields = {}
@@ -300,19 +478,49 @@ def run(project: Path, dry_run: bool = False) -> Dict[str, Any]:
 
     emitted = [r for r in found if _identity(r) not in known]
 
+    context_emitted: Dict[str, List[Dict[str, Any]]] = {}
+    for field, records in context_found.items():
+        current = fields.get(field)
+        # Preserve an existing non-list contract verbatim.  This emitter may
+        # enrich an absent/list field; it never silently reshapes a field some
+        # other producer already owns.
+        if current is not None and not isinstance(current, list):
+            context_emitted[field] = []
+            continue
+        current_list = current if isinstance(current, list) else []
+        current_ids = {
+            (str(r.get("kind")),
+             re.sub(r"\s+", " ", str(r.get("evidence") or "")).casefold())
+            for r in current_list if isinstance(r, dict)
+        }
+        context_emitted[field] = [
+            r for r in records
+            if (str(r.get("kind")),
+                re.sub(r"\s+", " ", str(r.get("evidence") or "")).casefold())
+            not in current_ids
+        ]
+
+    context_emitted_count = sum(len(v) for v in context_emitted.values())
+
     wrote = False
-    if emitted and not dry_run:
-        fields[_DECL_KEY] = existing + emitted
+    if (emitted or context_emitted_count) and not dry_run:
+        if emitted:
+            fields[_DECL_KEY] = existing + emitted
         # The layer now carries the design's constraints, so the presence
         # flag is no longer merely unset — it is TRUE, on evidence. This is
         # the value `spi_protocol_synth`'s `setdefault` overlay yields to,
         # which is also what suppresses its contradicting note.
-        fields[_PRESENCE_KEY] = True
+            fields[_PRESENCE_KEY] = True
+        for field, records in context_emitted.items():
+            if not records:
+                continue
+            current = fields.get(field)
+            fields[field] = (current if isinstance(current, list) else []) + records
         doc["fields"] = fields
         # Provenance the layer did not have: which inputs it was read from.
         srcs = doc.get("source_documents")
         srcs = list(srcs) if isinstance(srcs, list) else []
-        for r in emitted:
+        for r in emitted + [r for rows in context_emitted.values() for r in rows]:
             if r["source"] not in srcs:
                 srcs.append(r["source"])
         doc["source_documents"] = srcs
@@ -325,10 +533,13 @@ def run(project: Path, dry_run: bool = False) -> Dict[str, Any]:
         "tool": TOOL,
         "status": "OK",
         "dry_run": dry_run,
-        "found_count": len(found),
+        "found_count": len(found) + sum(len(v) for v in context_found.values()),
         "pre_existing": len(existing),
-        "emitted_count": len(emitted),
+        "emitted_count": len(emitted) + context_emitted_count,
+        "constraint_emitted_count": len(emitted),
+        "context_emitted_count": context_emitted_count,
         "emitted": emitted,
+        "context_emitted": context_emitted,
         "doc_written": str(l19_path) if wrote else None,
     }
 
@@ -364,9 +575,13 @@ def main(argv: Optional[List[str]] = None) -> int:
         return 1 if rep.get("status") == "ERROR" else 0
     elif n:
         detail = ", ".join(_describe(r) for r in rep["emitted"][:8])
-        more = "" if n <= 8 else f", +{n - 8} more"
-        print(f"{TOOL}: lifted {n} constraint declaration(s) from the "
-              f"design's own inputs into L19 — {detail}{more}")
+        context_n = rep.get("context_emitted_count", 0)
+        constraint_n = rep.get("constraint_emitted_count", 0)
+        if detail:
+            detail = f" — {detail}"
+        print(f"{TOOL}: lifted {constraint_n} constraint declaration(s) and "
+              f"{context_n} implementation-context declaration(s) from the "
+              f"design's own inputs into L19{detail}")
     else:
         print(f"{TOOL}: no constraint declaration to lift "
               f"({rep.get('found_count', 0)} found, "

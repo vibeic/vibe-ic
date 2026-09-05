@@ -110,9 +110,37 @@ _L10_GLOBS = (
 
 _CASE_ARRAY_KEYS = ("test_cases", "cases", "tests", "vectors")
 _HANDLE_KEYS = ("name", "id", "case_id", "test_id")
+#: Every field through which a case can carry its expectation. This roster is
+#: the CONSUMER half of a contract the producers already publish: the typed
+#: `(inputs, expected_outputs)` known-answer-vector pair is documented at
+#: `known_answer_vector.py:35` and read by `known_answer_vector_tb_gen.py`,
+#: `oracle_tb_gen.py` and `register_bus_driver_gen.py`, and the sibling gate
+#: `l10_tb_conformance_check._PINNED_ORACLE_FIELDS` already registers all of
+#: `expected_outputs / expected_hex / expected_output / golden_bytes /
+#: reference_output`. This gate knew none of them, so a case whose oracle is
+#: pinned in the sharpest available form — a typed mapping of output name to
+#: literal — was reported `NO_EXPECTED`, "a TB built from it cannot fail",
+#: while a TB generator standing next to it built exactly that comparison.
+#:
+#: NOTE the asymmetry this closes: `_STIMULUS_KEYS` below already carries the
+#: plural `inputs`, so the gate could read the stimulus half of the pair and
+#: not the answer half.
+#:
+#: MEASURED (opentitan_aes, v1.17.22): 8 of 8 executable cases — the FIPS-197
+#: C.1/C.2/C.3 and SP800-38A F.1.1/F.2.1/F.3.1/F.4.1/F.5.1 vectors — each
+#: declaring `expected_outputs: {"ciphertext": "<hex>"}`, all reported
+#: NO_EXPECTED, failing the gate and, through the Phase-1 stage compliance it
+#: feeds, Step 2 of the canonical Phase-2 audit.
+#:
+#: Widening this roster can only make the gate MORE able to find an anchor; it
+#: never lets a case with no expectation through, because a case that declares
+#: none of these still lands on NO_EXPECTED, and one that declares an
+#: alphanumeric-free value still lands on VACUOUS_EXPECTED.
 _EXPECT_KEYS = ("expected", "expected_response", "expected_result",
                 "expect", "expected_bytes", "response", "golden",
-                "expected_value", "pass_criteria")
+                "expected_value", "pass_criteria",
+                "expected_outputs", "expected_output", "expected_hex",
+                "golden_bytes", "reference_output")
 _STIMULUS_KEYS = ("stimulus", "input", "drive", "opcode_hex", "command",
                   "request", "inputs", "operands")
 _KIND_KEYS = ("kind", "test_kind", "category", "type", "class")
@@ -203,21 +231,49 @@ def _find_l10(project: Path) -> Optional[Path]:
     return None
 
 
+def _leaf_values(node, depth: int = 0) -> List[str]:
+    """Every scalar LEAF under `node`, in document order. Keys are not values.
+
+    A mapping-shaped expectation such as `{"<output name>": "<literal>"}`
+    states its answer in the VALUES; the keys are the names of the observables
+    the answer is about. Serialising the whole mapping folds those names into
+    the text, which lets a key alone satisfy the alphanumeric test that
+    `VACUOUS_EXPECTED` exists to apply -- so `{"<name>": "--"}` would read as
+    an anchor. Read the leaves, and a bullet stays a bullet.
+    """
+    if depth > 6:
+        return []
+    if isinstance(node, str):
+        return [node.strip()] if node.strip() else []
+    if isinstance(node, bool):
+        return [str(node)]
+    if isinstance(node, (int, float)):
+        return [str(node)]
+    if isinstance(node, (list, tuple)):
+        out: List[str] = []
+        for it in node:
+            out.extend(_leaf_values(it, depth + 1))
+        return out
+    if isinstance(node, dict):
+        out = []
+        for v in node.values():
+            out.extend(_leaf_values(v, depth + 1))
+        return out
+    return []
+
+
 def _first_str(case: dict, keys: Tuple[str, ...]) -> str:
-    """Concatenate every present value under `keys` into one text blob."""
+    """Concatenate every present value under `keys` into one text blob.
+
+    Applied SYMMETRICALLY to the expectation and the stimulus, so the
+    `EXPECTED_RESTATES_STIMULUS` comparison below still compares like with
+    like.
+    """
     out: List[str] = []
     for k in keys:
-        v = case.get(k)
-        if isinstance(v, str) and v.strip():
-            out.append(v.strip())
-        elif isinstance(v, (list, tuple)):
-            for it in v:
-                if isinstance(it, (str, int, float)):
-                    out.append(str(it))
-        elif isinstance(v, (int, float)):
-            out.append(str(v))
-        elif isinstance(v, dict):
-            out.append(json.dumps(v, ensure_ascii=False))
+        if k not in case:
+            continue
+        out.extend(_leaf_values(case.get(k)))
     return " ".join(out)
 
 

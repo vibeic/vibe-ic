@@ -1098,11 +1098,32 @@ def parse_equiv_output(text: str) -> Dict:
     unproven: Optional[int] = int(final.group(2)) if final else None
     total: Optional[int] = None
 
-    m = _EQUIV_SIMPLE_ENTRY_RE.search(text)
-    if m:
-        total = int(m.group(1))
+    # PRECEDENCE, and it is not cosmetic. `equiv_status` prints the CENSUS of
+    # every $equiv point in the miter ("Found N $equiv cells in equiv:"); the
+    # equiv_simple ENTRY line prints only the points still UNPROVEN when that
+    # pass started. The two coincide exactly when nothing was proven before
+    # equiv_simple ran -- which is the common small case, and is why reading
+    # the entry line as a total survived this long. As soon as any earlier
+    # pass discharges a point the entry line is SMALLER than the population,
+    # and booking it as `miter_points` publishes a denominator narrower than
+    # the proof actually covered, which makes every proven/total ratio derived
+    # from this report look better than the run earned.
+    #
+    # MEASURED (opentitan_aes x chip_top, v1.17.22 canonical LEC run): the log
+    # carried `Found 3396 unproven $equiv cells (3396 groups) in equiv:` and,
+    # from equiv_status, `Found 4072 $equiv cells in equiv:` / `Of those cells
+    # 830 are proven and 3242 are unproven.` The report published
+    # miter_points=3396 against proven=830 + unproven=3242 = 4072 -- a
+    # decomposition that does not add up, and a ratio of 24.4% where the run
+    # earned 20.4%.
+    #
+    # LAST match, not the first: equiv_status is the final pass, and a recipe
+    # that calls it more than once must be read at the state it finished in.
+    _census = _OLD_TOTAL_RE.findall(text)
+    if _census:
+        total = int(_census[-1])
     if total is None:
-        m = _OLD_TOTAL_RE.search(text)
+        m = _EQUIV_SIMPLE_ENTRY_RE.search(text)
         if m:
             total = int(m.group(1))
 
@@ -1145,6 +1166,16 @@ def parse_equiv_output(text: str) -> Dict:
         unproven = total - proven
     if total is not None and unproven is not None and proven is None:
         proven = total - unproven
+
+    # A decomposition that does not add up is a bug in THIS parser, not a
+    # property of the design, and it must never be published as if it were a
+    # census. `proven` and `unproven` are both read from the same
+    # `equiv_status` summary line, so their sum is the population that pass
+    # actually saw; if `total` came from a different line and disagrees, the
+    # sum is the one to trust. Widen only -- never narrow a denominator here.
+    if (total is not None and proven is not None and unproven is not None
+            and proven + unproven > total):
+        total = proven + unproven
 
     sat_aborts: List[Dict[str, str]] = [
         {"cell": mm.group(1), "cell_type": mm.group(2)}
