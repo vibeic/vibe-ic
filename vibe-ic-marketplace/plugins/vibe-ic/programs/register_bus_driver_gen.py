@@ -649,8 +649,13 @@ def parameter_overrides(sources: Sequence[Tuple[str, str]],
     its defaults — both are legitimate architectures and neither is forced.
     """
     out: Dict[str, int] = {}
-    for _path, text in sources or []:
-        for m in re.finditer(re.escape(dut_module) + r"\s*#\s*\(", text or ""):
+    for _path, raw in sources or []:
+        # A COMMENTED-OUT instantiation is not a build. Measured: a superseded
+        # `// dut_mod #(.DW(999)) u_old (...)` left in a file was counted, and
+        # once conflict detection existed it made that dead line REFUSE an
+        # otherwise consistent design. Blank comments first; offsets survive.
+        text = _hdl_code_text.strip_hdl_comments_and_strings(raw or "")
+        for m in re.finditer(re.escape(dut_module) + r"\s*#\s*\(", text):
             i = m.end() - 1
             depth, j = 0, i
             while j < len(text):
@@ -679,8 +684,13 @@ def parameter_override_conflicts(sources: Sequence[Tuple[str, str]],
     never guesses -- the caller refuses and names the parameter instead.
     """
     seen: Dict[str, List[int]] = {}
-    for _path, text in sources or []:
-        for m in re.finditer(re.escape(dut_module) + r"\s*#\s*\(", text or ""):
+    for _path, raw in sources or []:
+        # A COMMENTED-OUT instantiation is not a build. Measured: a superseded
+        # `// dut_mod #(.DW(999)) u_old (...)` left in a file was counted, and
+        # once conflict detection existed it made that dead line REFUSE an
+        # otherwise consistent design. Blank comments first; offsets survive.
+        text = _hdl_code_text.strip_hdl_comments_and_strings(raw or "")
+        for m in re.finditer(re.escape(dut_module) + r"\s*#\s*\(", text):
             i = m.end() - 1
             depth, j = 0, i
             while j < len(text):
@@ -708,6 +718,11 @@ def struct_field_width(sources: Sequence[Tuple[str, str]], type_name: str,
     if not type_name or not field:
         return None, "no struct type or field name to resolve"
     bare = type_name.split("::")[-1]
+    # A type declared in two packages must not resolve by FILE ORDER. Measured:
+    # the same `d2h_t` in two files gave width 8 or 32 depending which was
+    # listed first -- a silent guess in a module whose contract is never to
+    # guess. Every declaration is collected and disagreement refuses.
+    found: List[Tuple[str, int, str]] = []
     for _path, text in sources or []:
         for m in re.finditer(
                 r"typedef\s+struct\s+packed\s*\{(.*?)\}\s*"
@@ -718,7 +733,8 @@ def struct_field_width(sources: Sequence[Tuple[str, str]], type_name: str,
             if not fm:
                 continue
             if not fm.group(1):
-                return 1, f"{bare}.{field} is a single bit"
+                found.append((_path, 1, f"{bare}.{field} is a single bit"))
+                continue
             rng = fm.group(1)[1:-1]
             if ":" not in rng:
                 return None, f"{bare}.{field} has an unparsable range [{rng}]"
@@ -736,8 +752,16 @@ def struct_field_width(sources: Sequence[Tuple[str, str]], type_name: str,
             width = abs(hi_v - lo_v) + 1
             if width < 1:
                 return None, f"{bare}.{field} range [{rng}] is not a width"
-            return width, f"{bare}.{field} = [{rng}] with {params}"
-    return None, f"no packed struct '{bare}' declaring field '{field}'"
+            found.append((_path, width, f"{bare}.{field} = [{rng}] with {params}"))
+    if not found:
+        return None, f"no packed struct '{bare}' declaring field '{field}'"
+    widths = {w for _p, w, _w in found}
+    if len(widths) > 1:
+        where = ", ".join(f"{p}:{w}" for p, w, _w in found)
+        return None, (f"'{bare}.{field}' is declared with different widths in "
+                      f"more than one place ({where}); which one the driver "
+                      f"should bind to is not derivable from the input")
+    return found[0][1], found[0][2]
 
 
 def resolve_bus_widths(sources: Sequence[Tuple[str, str]], rtl_text: str,

@@ -373,3 +373,63 @@ def test_a_zero_width_refuses_rather_than_defaulting_to_32():
 def test_omitted_widths_still_default_to_32():
     """CONTROL: absent really is absent, and still means the previous behaviour."""
     assert "task automatic bus_write(input [31:0] addr," in _tb()
+
+
+# --------------------------------------------------------------------------
+# DEAD CODE MUST NOT SHAPE THE DRIVER -- and this one was a REGRESSION I ADDED
+#
+# The instantiation scanners walked raw text, so a superseded
+# `// dut_mod #(.DW(999)) u_old (...)` left in a file was counted as an
+# override. Harmless while overrides merely last-won; the moment conflict
+# detection was added, that dead line made a perfectly consistent design REFUSE.
+# A fix that turns a commented-out line into a blocking contradiction is a
+# regression wearing a fix's clothes, which is exactly what the controls here
+# are for.
+# --------------------------------------------------------------------------
+COMMENTED_OUT_TOP = (
+    "module top;\n"
+    "  // dut_mod #(.DW(999)) u_old (.clk(c));   // superseded, kept for reference\n"
+    "  dut_mod #(.DW(64)) u_new (.clk(c));\n"
+    "endmodule\n")
+
+
+def test_a_commented_out_instantiation_is_not_an_override():
+    assert D.parameter_overrides([("t.sv", COMMENTED_OUT_TOP)], "dut_mod") == {"DW": 64}
+
+
+def test_a_commented_out_instantiation_does_not_manufacture_a_conflict():
+    assert D.parameter_override_conflicts(
+        [("t.sv", COMMENTED_OUT_TOP)], "dut_mod") == {}
+
+
+def test_a_real_conflict_is_still_detected_through_the_blanker():
+    """CONTROL: blanking comments must not blind the conflict rule to live code."""
+    c = D.parameter_override_conflicts([("t.sv", CONFLICT_TOP)], "dut_mod")
+    assert sorted(c["DW"]) == [16, 64]
+
+
+# --------------------------------------------------------------------------
+# A TYPE DECLARED TWICE MUST NOT RESOLVE BY FILE ORDER
+#
+# The same `d2h_t` in two packages gave width 8 or 32 depending on which file
+# was listed first -- a silent guess, decided by argument order.
+# --------------------------------------------------------------------------
+P_NARROW = "package a_pkg; typedef struct packed { logic v; logic [7:0] d_data; } d2h_t; endpackage"
+P_WIDE = "package b_pkg; typedef struct packed { logic v; logic [31:0] d_data; } d2h_t; endpackage"
+
+
+@pytest.mark.parametrize("order", [(P_NARROW, P_WIDE), (P_WIDE, P_NARROW)])
+def test_two_declarations_of_one_type_refuse_regardless_of_order(order):
+    w, why = D.struct_field_width([("1.sv", order[0]), ("2.sv", order[1])],
+                                  "d2h_t", "d_data", {})
+    assert w is None, f"file order decided the width: {w}"
+    assert "declared with different widths" in why
+
+
+def test_the_same_width_declared_twice_still_resolves():
+    """CONTROL: duplication is not the problem -- DISAGREEMENT is. A type
+    legitimately visible through two paths must still resolve."""
+    w, why = D.struct_field_width(
+        [("1.sv", P_WIDE), ("2.sv", P_WIDE.replace("b_pkg", "c_pkg"))],
+        "d2h_t", "d_data", {})
+    assert w == 32, why
