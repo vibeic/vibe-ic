@@ -72,6 +72,8 @@ import pytest
 
 from _plugin_tree import plugin_path, repo_path_or_missing
 
+import _census_provenance as PROV
+
 from flow_matrix import substitution as SUB
 
 import test_flow_matrix_coverage as CV
@@ -118,6 +120,61 @@ def _block() -> str:
         f"hand edit is invisible to the freshness check"
     )
     return text[start:stop + len(END)]
+
+
+#: THE THIRD STATE, and the sentence every consumer of it prints. A check that
+#: could not arrange the provenance the block declares has NOT measured the block;
+#: it has to say so in the words `_published_corpus` already uses for an absent
+#: corpus, and it may never resolve to a pass or to a fail. `pytest.skip` is the
+#: only outcome pytest offers that is neither, which is why it is reached HERE, at
+#: run time, from a measured refusal — and never as a decorator on the test, which
+#: would switch the check off on every host including the ones that can measure it.
+NOT_MEASURED = "NOT_MEASURED: "
+
+
+@pytest.fixture(scope="module", autouse=True)
+def under_declared_provenance():
+    """``os.environ`` arranged to the provenance the COMMITTED BLOCK declares.
+
+    AUTOUSE AND MODULE-SCOPED, and both halves are load-bearing.
+
+    MODULE-SCOPED because the two census axes are memoised per process: the first
+    live derivation in this module decides the environment every later one is
+    served from, so the arrangement has to be older than the first of them. A
+    per-test arrangement would be correct for whichever test ran first and theatre
+    for the rest — the block would carry the declared provenance over cells derived
+    under this host's.
+
+    AUTOUSE because the ordering must not depend on which tests a caller SELECTED.
+    ``test_every_substitution_disclosure_says_what_was_substituted`` drives the same
+    axes and does not compare anything against the block; run first under `-k`, it
+    would warm the caches under this host's environment and every comparison after
+    it would be refused as unmeasurable. Autouse puts the arrangement before the
+    first test of the module whatever the selection is.
+
+    IT YIELDS THE REFUSAL RATHER THAN RAISING IT. A fixture that raised
+    ``Skipped`` would take the whole module with it, including
+    ``test_the_generator_cli_can_go_red_and_green`` — which runs the CLI over a
+    SYNTHETIC census and has no provenance to reproduce. Narrowing a population to
+    report a state is the shape this file exists to refuse, so the refusal is
+    handed to the tests that are actually about the block and to no others.
+    """
+    try:
+        cm = PROV.reproduce(_block())
+        declared = cm.__enter__()
+    except PROV.CannotReproduce as exc:
+        yield exc
+        return
+    try:
+        yield declared
+    finally:
+        cm.__exit__(None, None, None)
+
+
+def _measured_or_skip(arranged) -> None:
+    """Reach a real verdict, or report NOT_MEASURED naming what was not arranged."""
+    if isinstance(arranged, PROV.CannotReproduce):
+        pytest.skip(NOT_MEASURED + str(arranged))
 
 
 #: The bold figures in the generated ``**total**`` row, in printed order.
@@ -275,7 +332,7 @@ def _load_generator():
 #: Landing Gate supervisor.  Disable pytest-timeout for this item: continuing
 #: measured work may finish; missing semantic progress becomes NORECORD.
 @pytest.mark.timeout(0)
-def test_the_census_block_is_fresh():
+def test_the_census_block_is_fresh(under_declared_provenance):
     """Re-derive it and refuse any drift.
 
     This is `--check`, asserted directly instead of through a launch whose own
@@ -283,7 +340,23 @@ def test_the_census_block_is_fresh():
     predicate is the generator's own: `main()` computes
     `splice(text, render(*census_rows()))` and exits 1 when that differs from
     the committed text, and so does this.
+
+    RE-DERIVED UNDER THE PROVENANCE THE BLOCK DECLARES, not under this host's
+    environment. MEASURED on 2026-09-05 at main `3e3d0a46e`, ONE tree, two
+    environments::
+
+        VIBE_IC_BENCHMARK_DATA withheld              this test passed
+        VIBE_IC_BENCHMARK_DATA=<corpus @ 8c4b608a>   this test FAILED
+
+    and the difference was neither a stale block nor a defect in the corpus: 44
+    cells carry a `needs_corpus` skip that a mounted corpus lifts, so `undeclared`
+    re-derived at 449 against a block published at 405. The block itself SAYS it
+    was generated with the corpus `NOT_OFFERED`, so a corpus-present re-derivation
+    was never the same measurement — and the verdict a reader got depended on an
+    environment variable that appears in no argv and in no commit. See
+    `_census_provenance`.
     """
+    _measured_or_skip(under_declared_provenance)
     gen = _load_generator()
     prev = os.environ.get(_AUTOLOAD_ENV)
     try:
@@ -355,7 +428,7 @@ def test_the_generator_cli_can_go_red_and_green(tmp_path):
 
 
 @pytest.mark.timeout(0)
-def test_the_published_total_equals_the_live_census():
+def test_the_published_total_equals_the_live_census(under_declared_provenance):
     """Independent of the generator: the numbers on the page vs the tree.
 
     ``test_the_census_block_is_fresh`` compares the page against what the
@@ -373,7 +446,15 @@ def test_the_published_total_equals_the_live_census():
     assertion passed, because 481 was exactly what the wrong axis predicted.
     A second opinion taken from the same mistaken premise is not a second
     opinion.
+
+    AND INDEPENDENT IN SOURCE IS NOT INDEPENDENT IN ENVIRONMENT EITHER. This
+    recomputes from `CV.enforcement_census()`, which is a function of the mounted
+    corpus as well as of the commit, while the published row is a function of the
+    corpus the block DECLARES. Compared across two different environments it
+    reported `undeclared` 405 against 449 and called it a figure that does not
+    reproduce; both figures reproduce perfectly, each in its own environment.
     """
+    _measured_or_skip(under_declared_provenance)
     row = _total_row(_block())
     states = {k: v.label for k, v in CV.enforcement_census().items()}
     subs = {k: v for k, v in CV.substitution_census().items()
@@ -450,7 +531,8 @@ def test_the_published_total_equals_the_live_census():
         f"figure. Published: {row}.\nRegenerate: {REGENERATE}")
 
 
-def test_no_substituted_cell_is_inside_a_figure_presented_as_enforcement():
+def test_no_substituted_cell_is_inside_a_figure_presented_as_enforcement(
+        under_declared_provenance):
     """The finding, as an assertion. THIS is the one that fails on the old tree.
 
     Dimension 8's substituted cells were reported as plain ``ENFORCED`` and the
@@ -468,7 +550,14 @@ def test_no_substituted_cell_is_inside_a_figure_presented_as_enforcement():
     is a single number cannot satisfy the five-column total row, and a block
     that prints ``substituted`` as 0 while the tree measures 45 fails the
     equality above.
+
+    It compares a PUBLISHED figure against a LIVE one, so it is the third test in
+    this file that has to be told which environment the published half was made
+    in. It passed in both environments on 2026-09-05 — `substituted` does not move
+    with the corpus today — and it is arranged anyway, because "it happens not to
+    move" is a measurement of the tree as it is now, not a property of the check.
     """
+    _measured_or_skip(under_declared_provenance)
     subs = CV.substitution_census()
     substituted = {k for k, v in subs.items() if v == SUB.SUBSTITUTED}
     assert substituted, (

@@ -106,6 +106,49 @@ kernel releases on death however the process died, and `_crash_safe_scratch`
 reaps every sibling whose lock it can take.  A peer that is still running holds
 its lock, is skipped, and is NAMED in the output.
 
+AND THE TWO ARMS SHARED AN ENVIRONMENT, SO ONE WHOLE HALF OF THE CLASS WAS
+INVISIBLE (2026-09-05)
+======================================================================
+The probe above gives one arm a working checkout and the other a fresh worktree.
+Both inherit THIS PROCESS'S ENVIRONMENT. So a gate whose verdict is decided by an
+environment pointer rather than by the commit agrees with itself perfectly across
+the two trees, and this program prints `[PASS] ... give the same verdict` over it.
+
+MEASURED on 2026-09-05 at main `3e3d0a46e`, one tree, two values of one variable::
+
+    VIBE_IC_BENCHMARK_DATA withheld              63x8 census `--check`  rc 0 PASS
+    VIBE_IC_BENCHMARK_DATA=<corpus @ 8c4b608a>   63x8 census `--check`  rc 1 stale
+
+Same commit, same tree, same argv, opposite verdicts — and nothing in the argv,
+the commit or the report says which environment produced the one you are reading.
+That is the same defect this program was written for ("the same commit must give
+the same verdict") reached through a different door, and the two-tree comparison
+cannot see it by construction: the pointer is on both sides.
+
+THE POINTER ARM
+===============
+Each probed gate is driven ONE more time, in the fresh worktree, with
+`VIBE_IC_BENCHMARK_DATA` toggled to the opposite of whatever this run inherited,
+and a gate whose OUTCOME TIER flips between PASS and FAIL is reported
+`ENV_POINTER_DEPENDENT_VERDICT`.
+
+THE TIER, AND NOT THE BYTES, and that is the whole of the false-positive story. A
+corpus-reading gate legitimately says different things with and without a corpus —
+different counts, a different disclosure, a NOT_CHECKED it names — and requiring
+its OUTPUT to be identical would report every honest one of them. What no gate may
+do is say PASS in one environment and FAIL in the other, because those are the two
+answers a caller acts on. rc 2 on either side is the disclosed third state
+(`_vacuous_exit`: "I could not look") and is never half of a flip.
+
+NOT_CHECKED WHEN THE POINTER IS NOT BOUND. With no corpus named there is no
+"present" environment to construct, and inventing one is not available: the arm
+reports how many gates it could drive both ways, and a run that could drive none
+says so in the verdict line rather than printing the same green sentence.
+
+COST, disclosed rather than buried: one extra drive per probed gate, and a second
+pair only for the gates that flip. On the ~90-gate script that is the same order
+as the fresh arm this program already pays for.
+
 chip-AGNOSTIC: it compares process output, nothing else.
 
 FLOW CLASSIFICATION: **BLOCKING**.  A reproducible host-dependent or
@@ -272,6 +315,16 @@ class Audit(NamedTuple):
     #: because it is not a defect in the gate and must not colour the verdict:
     #: naming an innocent gate is the harm this list exists to replace.
     unattributed: Optional[List[Tuple[str, str]]] = None
+    #: The POINTER ARM's own denominator: `{"bound": <str|"">, "probed": int,
+    #: "not_probed": [(label, why)]}`, or None when the result was decided before
+    #: any gate ran. Reported rather than implied, because a run that could drive
+    #: NO gate both ways has not checked the pointer class at all and must not
+    #: print the same sentence as one that checked every gate.
+    #:
+    #: APPENDED LAST, and that is not cosmetic: every `Audit(...)` in this file is
+    #: built POSITIONALLY, so a field inserted above `unattributed` would silently
+    #: re-bind the last argument of each of them.
+    pointer: Optional[Dict] = None
 
 
 def corpus_gates(script: Path) -> List[Gate]:
@@ -499,6 +552,100 @@ def _run_gate(argv: List[str], cwd: Path,
                     "tree (output, CPU or I/O) advanced — killed as hung. This "
                     "is NOT a statement that the gate was too slow."))
     return subprocess.CompletedProcess(argv, res.rc, res.out, "")
+
+
+#: The pointer whose value must not decide a verdict. ONE name, spelled here and
+#: consumed by both `_compare_roots` (which already knew the corpus can be bound)
+#: and the arm below (which is what makes the binding verdict-visible).
+POINTER_ENV = "VIBE_IC_BENCHMARK_DATA"
+
+#: The three answers a caller ACTS on, keyed off the house exit codes. rc 2 is
+#: `_vacuous_exit`'s NOT_CHECKED and is deliberately NOT a verdict: a gate that
+#: says "I could not look" without a corpus and "PASS" with one has disclosed the
+#: difference, which is the honest shape and must never be reported as a defect.
+def _tier(rc: int) -> str:
+    return {0: "PASS", 1: "FAIL", 2: "NOT_CHECKED"}.get(rc, f"rc={rc}")
+
+
+def _flips(rc_a: int, rc_b: int) -> bool:
+    """Is this a PASS/FAIL flip — the one difference no environment may cause?"""
+    return {_tier(rc_a), _tier(rc_b)} == {"PASS", "FAIL"}
+
+
+def _run_gate_pointer_toggled(argv: List[str], cwd: Path,
+                              timeout: int) -> subprocess.CompletedProcess:
+    """Drive one arm with `POINTER_ENV` toggled to the opposite of this run's.
+
+    Restored in a `finally` because the loop that calls this keeps driving other
+    gates afterwards: a probe that leaks a changed environment into the gates it
+    measures next would BE the defect it is looking for.
+
+    The toggle is always pointer-bound -> pointer-withheld and never the reverse.
+    Constructing a "present" environment out of nothing would mean inventing a
+    corpus, and a comparison against a corpus nobody published is not evidence
+    about anything; the unbound case is reported as NOT_CHECKED instead.
+    """
+    prev = os.environ.pop(POINTER_ENV, None)
+    try:
+        return _run_gate(argv, cwd, timeout)
+    finally:
+        # No `assert` here, deliberately. An assertion raised while an exception
+        # is unwinding REPLACES that exception, so a self-check in a `finally`
+        # can only ever hide the failure a caller needed to see — and `-O`
+        # deletes it anyway. The property is pinned by
+        # `test_the_pointer_arm_restores_the_environment_it_toggled` instead.
+        if prev is not None:
+            os.environ[POINTER_ENV] = prev
+
+
+def pointer_arm_finding(label: str, argv: List[str], cwd: Path,
+                        rec_bound: Dict, repo_root: Path, wt: Path,
+                        timeout: int) -> Optional[Dict]:
+    """One gate, both values of the pointer. A finding, or None.
+
+    CONFIRMED BEFORE IT IS FILED, exactly as the two-tree disagreement above is:
+    a flip that does not reproduce is not a property of the commit, and this arm
+    drives the same nested pytest sessions the rest of this probe drives, under
+    the same load. Paid only on the flipping minority.
+    """
+    withheld = _run_gate_pointer_toggled(argv, cwd, timeout)
+    rec_withheld = _completed_attestation(label, withheld, argv, repo_root, wt,
+                                          cwd)
+    if not _flips(rec_bound["returncode"], rec_withheld["returncode"]):
+        return None
+    bound2 = _run_gate(argv, cwd, timeout)
+    withheld2 = _run_gate_pointer_toggled(argv, cwd, timeout)
+    if not _flips(bound2.returncode, withheld2.returncode):
+        # NOT folded into a pass, and NOT filed as pointer dependence either.
+        # A gate that will not reproduce its own flip is the same
+        # NON_DETERMINISTIC_VERDICT state the two-tree half already names.
+        return {
+            "gate": label, "kind": "NON_DETERMINISTIC_VERDICT",
+            "detail": ("its verdict flipped between PASS and FAIL when "
+                       f"{POINTER_ENV} was withheld, and did not flip the same "
+                       "way when re-driven, so the difference is not a property "
+                       "of the commit. NOT pointer dependence, and NOT a pass"),
+            "checkout": f"{POINTER_ENV} bound: "
+                        f"{_attestation_summary(rec_bound)}",
+            "worktree": f"{POINTER_ENV} withheld: "
+                        f"{_attestation_summary(rec_withheld)}",
+        }
+    return {
+        "gate": label, "kind": "ENV_POINTER_DEPENDENT_VERDICT",
+        "detail": (
+            f"the same commit, the same tree and the same argv give "
+            f"{_tier(rec_bound['returncode'])} with {POINTER_ENV} bound and "
+            f"{_tier(rec_withheld['returncode'])} with it withheld, on BOTH "
+            f"rounds. A caller reading this gate's verdict cannot tell which "
+            f"environment produced it, because the pointer is in no argv, in no "
+            f"commit and in no report. Either make the gate's comparison "
+            f"independent of the pointer, or make it state the provenance it "
+            f"measured under and refuse when it cannot reproduce that "
+            f"provenance — never let the answer depend on the mount"),
+        "checkout": f"{POINTER_ENV} bound: {_attestation_summary(rec_bound)}",
+        "worktree": f"{POINTER_ENV} withheld: "
+                    f"{_attestation_summary(rec_withheld)}",
+    }
 
 
 def _attestation_summary(rec: Dict, limit: int = 200) -> str:
@@ -922,7 +1069,8 @@ def audit(repo_root: Path, timeout: int = 600,
           tmp_root: Optional[Path] = None,
           checkout_attestations: Optional[Path] = None,
           only_labels: Optional[Set[str]] = None,
-          include_script_findings: bool = True) -> Audit:
+          include_script_findings: bool = True,
+          pointer_arm: bool = False) -> Audit:
     """`tmp_root` overrides where the scratch lives (default: the system temp).
 
     A caller that needs to OBSERVE what this run left behind cannot do it in
@@ -993,6 +1141,30 @@ def audit(repo_root: Path, timeout: int = 600,
 
     findings: List[Dict] = []
     not_probed: List[Tuple[str, str]] = []
+    #: THE POINTER ARM's denominator. `bound` is what this run inherited; the arm
+    #: can only toggle bound -> withheld, so an unbound run drives no pointer arm
+    #: at all and the verdict line has to say so instead of reading as coverage.
+    #: OFF BY DEFAULT AT THIS ENTRY POINT, and that is not an escape hatch: `main`
+    #: passes True, so the PROGRAM always runs it and no CLI flag turns it off. What
+    #: the default protects is `audit()`'s DRIVE COUNT, which two tests pin and which
+    #: this arm would otherwise make a function of the ambient pointer:
+    #:
+    #:   test_the_reproduce_step_costs_nothing_when_the_arms_AGREE
+    #:       "an agreeing gate was driven 3 times, not 2"
+    #:   test_the_outer_checkout_attestation_replaces_the_duplicate_arm_A
+    #:       "the host probe reran checkout Arm A instead of consuming the exact
+    #:        outer process attestation"
+    #:
+    #: MEASURED on 2026-09-06: both are green with the pointer withheld and RED with
+    #: it bound, at ONE commit, and NEITHER test mentions the pointer. Driving a third
+    #: time whenever a pointer happens to be bound would turn two
+    #: environment-INDEPENDENT tests into environment-DEPENDENT ones -- this program's
+    #: own subject, introduced by the thing that detects it. The arm is therefore
+    #: something a caller ASKS for, never something the environment switches on.
+    pointer_bound = (os.environ.get(POINTER_ENV, "").strip()
+                     if pointer_arm else "")
+    pointer_probed = 0
+    pointer_not_probed: List[Tuple[str, str]] = []
     #: Gates driven in the working checkout WITHOUT an exclusive claim on it.
     #: Their checkout-write attribution was not performed and is reported by
     #: name — "I could not look" is a state of its own, never a clean zero.
@@ -1235,6 +1407,28 @@ def audit(repo_root: Path, timeout: int = 600,
             # A REAL difference — a count, a verdict word, a finding — still
             # differs after this, so the check is not weakened.
             assert rec_a is not None and rec_b is not None
+            # THE POINTER ARM. Same tree, same argv, the OTHER value of the one
+            # variable both arms above inherited — see the module docstring. It is
+            # driven in the fresh worktree because that is the arm this program
+            # always launches itself: Arm A may be a precomputed record, and an
+            # environment toggle proves nothing against a record produced under an
+            # environment this process did not control.
+            if pointer_bound:
+                try:
+                    pf = pointer_arm_finding(label, argv_b, cb, rec_b,
+                                             repo_root, wt, timeout)
+                except (OSError, subprocess.SubprocessError) as exc:
+                    # NAMED, never counted clean, and never filed as a finding: a
+                    # gate that could not be driven a third time is not evidence
+                    # that its verdict depends on the pointer.
+                    pointer_not_probed.append(
+                        (label, f"could not be driven with {POINTER_ENV} "
+                                f"withheld: {type(exc).__name__}: "
+                                f"{str(exc)[:160]}"))
+                else:
+                    pointer_probed += 1
+                    if pf is not None:
+                        findings.append(pf)
             va, vb = rec_a["verdict_line"], rec_b["verdict_line"]
             if rec_a["semantic_sha256"] != rec_b["semantic_sha256"]:
                 # A DIFFERENCE MUST REPRODUCE TO BE EVIDENCE (vibe-ic#1029).
@@ -1355,9 +1549,11 @@ def audit(repo_root: Path, timeout: int = 600,
         _release_scratch(res, repo_root)
 
     probed = declared - len(not_probed)
+    pointer = {"bound": pointer_bound, "probed": pointer_probed,
+               "not_probed": [list(x) for x in pointer_not_probed]}
     if findings:
         return Audit("FAIL", findings, dirt, declared, probed, not_probed,
-                     scratch, unattributed)
+                     scratch, unattributed, pointer)
     # NO STIMULUS IS NOT A PASS (#539). Every gate agreeing across two trees
     # that carry the same bytes is arithmetic, not evidence: the leftovers this
     # probe detects a gate READING were absent from both sides, so the run had
@@ -1372,9 +1568,9 @@ def audit(repo_root: Path, timeout: int = 600,
     # a NOT_CHECKED out of an unknown is the mirror of inventing a pass.
     if dirt is not None and dirt.ignored_reported and dirt.stimulus == 0:
         return Audit("NO_STIMULUS", [], dirt, declared, probed, not_probed,
-                     scratch, unattributed)
+                     scratch, unattributed, pointer)
     return Audit("PASS", findings, dirt, declared, probed, not_probed,
-                 scratch, unattributed)
+                 scratch, unattributed, pointer)
 
 
 def _audit_doc(res: Audit, selected: Optional[List[str]] = None) -> Dict:
@@ -1387,6 +1583,7 @@ def _audit_doc(res: Audit, selected: Optional[List[str]] = None) -> Dict:
         "not_probed": [{"gate": g, "why": w} for g, w in res.not_probed],
         "not_attributed": [{"gate": g, "why": w}
                            for g, w in (res.unattributed or [])],
+        "pointer_arm": res.pointer,
         "scratch_sweep": res.scratch,
         "stimulus": (None if res.dirt is None else {
             "untracked": len(res.dirt.untracked),
@@ -1468,13 +1665,23 @@ def precomputed_audit(repo_root: Path, checkout_attestations: Path,
                           "evidence and is never folded into PASS",
                 "checkout": _attestation_summary(a),
                 "worktree": _attestation_summary(b)})
+    # BOTH ARMS WERE PRODUCED ELSEWHERE, so THIS process drove nothing and could
+    # toggle nothing. Named rather than left as an absence: a missing pointer-arm
+    # record and a pointer arm that drove zero gates have to reach the reader as
+    # the same NOT_CHECKED sentence, never as silence.
+    pointer = {"bound": os.environ.get(POINTER_ENV, "").strip(), "probed": 0,
+               "not_probed": [["(all)",
+                               "both arms were supplied as precomputed records, "
+                               "so this process drove no gate and could not "
+                               "toggle the pointer for any of them"]]}
     if findings:
         return Audit("FAIL", findings, dirt, declared, probed, not_probed,
-                     scratch)
+                     scratch, None, pointer)
     if dirt.ignored_reported and dirt.stimulus == 0:
         return Audit("NO_STIMULUS", [], dirt, declared, probed, not_probed,
-                     scratch)
-    return Audit("PASS", [], dirt, declared, probed, not_probed, scratch)
+                     scratch, None, pointer)
+    return Audit("PASS", [], dirt, declared, probed, not_probed, scratch,
+                 None, pointer)
 
 
 def parallel_audit(repo_root: Path, jobs: int,
@@ -1546,6 +1753,12 @@ def parallel_audit(repo_root: Path, jobs: int,
 
     scratch_rows: List[Dict] = []
     unattributed: List[Tuple[str, str]] = []
+    #: Summed across workers, never assumed. A worker that reported no pointer-arm
+    #: record has not driven one, and a parent that defaulted the missing field to
+    #: "all of them" would publish a denominator nobody measured.
+    pointer_bound = os.environ.get(POINTER_ENV, "").strip()
+    pointer_probed = 0
+    pointer_not_probed: List[Tuple[str, str]] = []
     problems: List[str] = []
     seen: List[str] = []
     probed = 0
@@ -1616,6 +1829,17 @@ def parallel_audit(repo_root: Path, jobs: int,
             for row in doc.get("not_attributed") or []:
                 unattributed.append((str(row.get("gate", "")),
                                      str(row.get("why", ""))))
+            arm = doc.get("pointer_arm")
+            if arm is None:
+                pointer_not_probed.append(
+                    (f"(worker {i})",
+                     "returned no pointer-arm record, so the gates it drove were "
+                     "not checked for a verdict that depends on "
+                     f"{POINTER_ENV}"))
+            else:
+                pointer_probed += int(arm.get("probed") or 0)
+                for row in arm.get("not_probed") or []:
+                    pointer_not_probed.append((str(row[0]), str(row[1])))
             if rc not in (0, 1, 2):
                 problems.append(f"worker {i} exited unexpected rc {rc}")
             expected_rc = {"PASS": 0, "FAIL": 1,
@@ -1625,6 +1849,8 @@ def parallel_audit(repo_root: Path, jobs: int,
                     f"worker {i} record says {doc.get('verdict')} but process "
                     f"exited {rc}, expected {expected_rc}")
 
+    pointer = {"bound": pointer_bound, "probed": pointer_probed,
+               "not_probed": [list(x) for x in pointer_not_probed]}
     duplicates = sorted({label for label in seen if seen.count(label) > 1})
     missing = sorted(set(driveable) - set(seen))
     extra = sorted(set(seen) - set(driveable))
@@ -1641,7 +1867,7 @@ def parallel_audit(repo_root: Path, jobs: int,
               "detail": p, "checkout": "-", "worktree": "-"}
              for p in problems],
             dirt, declared, probed, not_probed,
-            {"workers": scratch_rows}, unattributed)
+            {"workers": scratch_rows}, unattributed, pointer)
     if any(v not in ("PASS", "NO_STIMULUS", "FAIL") for v in verdicts):
         return Audit(
             "PARALLEL_INCOMPLETE",
@@ -1649,13 +1875,13 @@ def parallel_audit(repo_root: Path, jobs: int,
               "detail": "worker setup/refusal verdict(s): " + ", ".join(verdicts),
               "checkout": "-", "worktree": "-"}],
             dirt, declared, probed, not_probed,
-            {"workers": scratch_rows}, unattributed)
+            {"workers": scratch_rows}, unattributed, pointer)
     if findings or "FAIL" in verdicts:
         return Audit("FAIL", findings, dirt, declared, probed, not_probed,
-                     {"workers": scratch_rows}, unattributed)
+                     {"workers": scratch_rows}, unattributed, pointer)
     if verdicts and all(v == "NO_STIMULUS" for v in verdicts):
         return Audit("NO_STIMULUS", [], dirt, declared, probed, not_probed,
-                     {"workers": scratch_rows}, unattributed)
+                     {"workers": scratch_rows}, unattributed, pointer)
     if any(v == "NO_STIMULUS" for v in verdicts):
         return Audit(
             "PARALLEL_INCOMPLETE",
@@ -1663,9 +1889,9 @@ def parallel_audit(repo_root: Path, jobs: int,
               "detail": "workers disagreed about whether stimulus existed",
               "checkout": "-", "worktree": "-"}],
             dirt, declared, probed, not_probed,
-            {"workers": scratch_rows}, unattributed)
+            {"workers": scratch_rows}, unattributed, pointer)
     return Audit("PASS", [], dirt, declared, probed, not_probed,
-                 {"workers": scratch_rows}, unattributed)
+                 {"workers": scratch_rows}, unattributed, pointer)
 
 
 def main(argv: Optional[List[str]] = None) -> int:
@@ -1708,7 +1934,8 @@ def main(argv: Optional[List[str]] = None) -> int:
                          f"could not read worker label manifest: {exc}", None, 0)
         else:
             res = audit(root, checkout_attestations=a.checkout_attestations,
-                        only_labels=selected, include_script_findings=False)
+                        only_labels=selected, include_script_findings=False,
+                        pointer_arm=True)
     elif os.environ.get("VIBEIC_HOST_FRESH_ATTESTATIONS"):
         if a.checkout_attestations is None:
             res = _setup(
@@ -1723,7 +1950,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     elif a.jobs > 1:
         res = parallel_audit(root, a.jobs, a.checkout_attestations)
     else:
-        res = audit(root, checkout_attestations=a.checkout_attestations)
+        res = audit(root, checkout_attestations=a.checkout_attestations,
+                    pointer_arm=True)
 
     if a.json_out:
         Path(a.json_out).write_text(json.dumps(
@@ -1801,6 +2029,26 @@ def main(argv: Optional[List[str]] = None) -> int:
         print(f"      checkout: {f['checkout']}", file=sys.stderr)
         print(f"      worktree: {f['worktree']}", file=sys.stderr)
 
+    # THE POINTER ARM'S OWN DENOMINATOR, printed on every outcome. A verdict line
+    # that says "the same verdict in a working checkout and a fresh worktree" is
+    # true and is only half the question this program now asks; a run that could
+    # drive NO gate under the other value of the pointer has not asked the other
+    # half at all, and must say so rather than let the sentence above cover it.
+    arm = res.pointer
+    if arm is None:
+        pointer_line = (f"{POINTER_ENV} arm NOT CHECKED: this run produced no "
+                        f"pointer-arm record")
+    elif not arm.get("bound"):
+        pointer_line = (
+            f"{POINTER_ENV} arm NOT CHECKED: no corpus pointer was bound, so "
+            f"there is no second environment to compare against and inventing "
+            f"one would be a comparison against a corpus nobody published")
+    else:
+        pointer_line = (f"{POINTER_ENV} arm: {arm.get('probed', 0)} gate(s) "
+                        f"driven with the pointer bound AND withheld")
+    for label, why in (arm or {}).get("not_probed", []):
+        print(f"  [POINTER ARM NOT PROBED] {label} — {why}", file=sys.stderr)
+
     stim = res.dirt.describe() if res.dirt is not None else "unknown stimulus"
     if res.findings:
         # Split by KIND rather than totalling them. Reporting a gate that met
@@ -1813,7 +2061,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         parts = ", ".join(f"{n} {k}" for k, n in sorted(by_kind.items()))
         print(f"[FAIL] {len(res.findings)} of {res.probed} probed corpus "
               f"gate(s) ({res.declared} declared) did not give one reproducible "
-              f"verdict across two trees: {parts}.", file=sys.stderr)
+              f"verdict across two trees: {parts}. {pointer_line}.",
+              file=sys.stderr)
         return 1
     if res.verdict == "NO_STIMULUS":
         # The sentence a two-pristine-tree run has always deserved and never
@@ -1828,7 +2077,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         return 2
     print(f"[PASS] all {res.probed} probed corpus-scanning gate(s) "
           f"({res.declared} declared) give the same verdict in a working "
-          f"checkout and a fresh worktree; {stim}.", file=sys.stderr)
+          f"checkout and a fresh worktree; {stim}. {pointer_line}.",
+          file=sys.stderr)
     return 0
 
 
