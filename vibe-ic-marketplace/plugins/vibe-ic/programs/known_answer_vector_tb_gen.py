@@ -343,11 +343,19 @@ def emit_case_register_bus(project, case: dict, dut_module: str,
         # the blocking symbol NAMED in the reason string.
         _widths, _wwhy = _rbd.resolve_bus_widths(
             _staged_bus_packages(root) + _srcs, rtl_text, dut_module, bus)
-        text_out = _rbd.emit_sequence_tb(
-            case, plan, bus, dut_module, h2d_port, d2h_port, clk, rst,
-            rst_active_low=_norm(rst).endswith(("n", "ni")),
-            ports=ports, intg_gen=gen, env_pairs=env_pairs,
-            tieoffs=tieoffs, widths=_widths)
+        try:
+            text_out = _rbd.emit_sequence_tb(
+                case, plan, bus, dut_module, h2d_port, d2h_port, clk, rst,
+                rst_active_low=_norm(rst).endswith(("n", "ni")),
+                ports=ports, intg_gen=gen, env_pairs=env_pairs,
+                tieoffs=tieoffs, widths=_widths)
+        except ValueError as e:
+            # The design's register map contradicts the bus width it declares.
+            # Fail CLOSED with the conflict named, exactly like every other
+            # refusal in this module — never a testbench that silently
+            # truncates an address and reports itself green.
+            reasons.append(f"{path}: {e}")
+            continue
         _env = ", ".join(p["base"] for p in env_pairs) or "none"
         return text_out, ((f"host integrity generator: {gen['file']}"
                            if gen else f"no integrity generator ({gwhy})")

@@ -228,3 +228,15 @@ def test_testbench_gen_executes_and_emits_the_width_bound_testbench(tmp_path):
     assert "32'h00000020" not in tb, "a 32-bit address literal survived the real step"
     assert "// --- reset asserted WHILE the controls are active ---" in tb
     assert "after reset under active controls" in tb
+
+
+def test_a_register_map_that_does_not_fit_the_bus_fails_closed(tmp_path):
+    """End to end through the ordinary entry point: the design declares a 4-bit
+    address bus while its own register map needs 6, so the emitter must return
+    NOTHING with the conflict named -- never a testbench that silently addresses
+    the wrong register and reports itself green."""
+    narrow = DUT.replace("parameter int ADDR_W = 12", "parameter int ADDR_W = 4")
+    tb, why = K.emit_case_register_bus(_project(tmp_path, dut_text=narrow),
+                                       CASE, "block_cipher_core", PORTS)
+    assert tb is None, "emitted a truncated testbench instead of refusing"
+    assert "contradict" in why and "4-bit address bus" in why

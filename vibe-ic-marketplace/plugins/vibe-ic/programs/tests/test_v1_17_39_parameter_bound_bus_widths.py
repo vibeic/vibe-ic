@@ -249,3 +249,48 @@ def test_an_unreasonable_width_in_a_package_refuses_by_name():
             "an unbounded width expression -- design input can wedge the flow")
     assert r.returncode == 0, r.stderr
     assert r.stdout.strip() == "True True True", r.stdout
+
+
+# --------------------------------------------------------------------------
+# A LITERAL THAT DOES NOT FIT ITS BUS IS A SILENT TRUNCATION
+#
+# Found by auditing my own emission, not by a failing test. With a 4-bit address
+# bus the emitter produced `bus_write(4'h74, ...)`; Verilog keeps the low 4 bits,
+# so the sequence programs a DIFFERENT register and still reports itself green.
+# That is the same silent-truncation defect this width contract exists to remove,
+# reintroduced from the other direction by the fix for it. A design whose
+# register map does not fit the bus width it declares is INCONSISTENT, so the
+# emitter refuses and names the conflict.
+# --------------------------------------------------------------------------
+def test_an_address_too_wide_for_the_declared_bus_refuses():
+    with pytest.raises(ValueError) as e:
+        _tb(widths={"addr": 4, "data": 32})
+    assert "contradict" in str(e.value)
+    assert "4-bit address bus" in str(e.value)
+
+
+def test_a_data_word_too_wide_for_the_declared_bus_refuses():
+    with pytest.raises(ValueError) as e:
+        _tb(widths={"addr": 12, "data": 4})
+    assert "contradict" in str(e.value)
+
+
+def test_a_width_that_does_fit_still_emits():
+    """The CONTROL: refusing must be about not fitting, not about being narrow."""
+    body = _tb(widths={"addr": 12, "data": 32})
+    assert "bus_write(12'h074," in body
+
+
+# --------------------------------------------------------------------------
+# A DESCENDING RANGE IS A VECTOR, NOT A NEGATIVE WIDTH
+#
+# `logic [0:7]` is a legal little-endian vector of EIGHT bits. Taking hi-lo+1
+# literally produced -6, which would have emitted `reg [-7:0]`.
+# --------------------------------------------------------------------------
+def test_a_descending_range_is_eight_bits_not_negative():
+    pkg = PKG.replace("logic [AW-1:0] a_address;", "logic [0:7] a_address;")
+    w, why = D.resolve_bus_widths(
+        [("pkg.sv", pkg), ("dut.sv", DUT), ("top.sv", TOP_PLAIN)],
+        DUT, "dut_mod", BUS)
+    assert w is not None, why
+    assert w["addr"] == 8, f"descending range gave {w['addr']}"

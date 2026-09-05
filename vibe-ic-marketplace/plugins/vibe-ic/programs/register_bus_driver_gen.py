@@ -682,13 +682,19 @@ def struct_field_width(sources: Sequence[Tuple[str, str]], type_name: str,
                 return None, f"{bare}.{field} has an unparsable range [{rng}]"
             hi, lo = rng.split(":", 1)
             hi_v, lo_v = _int_expr(hi, params), _int_expr(lo, params)
+            # `[0:7]` is a legal little-endian vector of EIGHT bits, not a
+            # negative width. Taking hi-lo+1 literally produced -6 and would have
+            # emitted `reg [-7:0]`. The magnitude is the width either way.
             if hi_v is None:
                 return None, (f"{bare}.{field} width depends on '{hi.strip()}', "
                               f"which the design's input does not resolve")
             if lo_v is None:
                 return None, (f"{bare}.{field} low bound '{lo.strip()}' is "
                               f"unresolved")
-            return hi_v - lo_v + 1, f"{bare}.{field} = [{rng}] with {params}"
+            width = abs(hi_v - lo_v) + 1
+            if width < 1:
+                return None, f"{bare}.{field} range [{rng}] is not a width"
+            return width, f"{bare}.{field} = [{rng}] with {params}"
     return None, f"no packed struct '{bare}' declaring field '{field}'"
 
 
@@ -789,10 +795,29 @@ def emit_sequence_tb(case: dict, plan: dict, bus: dict, dut_module: str,
     _DW = int((widths or {}).get("data") or 32)
     _AD, _DD = (_AW + 3) // 4, (_DW + 3) // 4
 
+    def _fits(v: int, w: int, role: str) -> None:
+        """A literal wider than the bus it is driven onto is TRUNCATED SILENTLY.
+
+        Measured: with a 4-bit address bus the emitter produced
+        `bus_write(4'h74, ...)`, and Verilog keeps the low 4 bits — the sequence
+        would program a DIFFERENT register and still report itself green. That
+        is the same silent-truncation defect this width contract exists to
+        remove. A design whose register map does not fit the bus width it
+        declares is INCONSISTENT, so this refuses and names the conflict rather
+        than emitting a testbench that quietly addresses the wrong thing.
+        """
+        if v < 0 or v.bit_length() > w:
+            raise ValueError(
+                f"{role} 0x{v:x} needs {max(1, v.bit_length())} bits but the "
+                f"design declares a {w}-bit {role.split()[0]} bus; the register "
+                f"map and the bus width contradict each other")
+
     def _al(v: int) -> str:
+        _fits(v, _AW, "address")
         return f"{_AW}'h{v:0{_AD}x}"
 
     def _dl(v: int) -> str:
+        _fits(v, _DW, "data word")
         return f"{_DW}'h{v:0{_DD}x}"
 
     def _dz() -> str:
