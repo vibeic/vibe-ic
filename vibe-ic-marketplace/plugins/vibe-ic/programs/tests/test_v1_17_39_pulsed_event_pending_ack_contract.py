@@ -271,3 +271,31 @@ def test_unrelated_unknown_keys_are_still_ignored(tmp_path):
                                 revision=7))
     assert extra[0].returncode == 0, extra[0].stderr
     assert extra[1] == plain, "an unrelated key changed the emitted RTL"
+
+
+# --------------------------------------------------------------------------
+# 8. the runner step EXECUTED, not read
+#
+# The pins above assert that the wiring exists by reading source. This RUNS it:
+# `design_one_shot_runner._try_deterministic_rtl_dispatch` is the actual Phase-2
+# step, handed an ordinary project directory containing nothing but a spec, with
+# no harness, no scorer, no benchmark name and no design id. It must return PASS
+# and leave RTL carrying the contract on disk.
+# --------------------------------------------------------------------------
+def test_the_runner_step_executes_and_emits_the_contract(tmp_path):
+    sys.path.insert(0, str(SCRIPT.parent))
+    import design_one_shot_runner as R
+
+    (tmp_path / "phase2" / "stage1").mkdir(parents=True)
+    (tmp_path / "phase2" / "stage1" / "rtl_spec.json").write_text(json.dumps(PULSED))
+
+    res = R._try_deterministic_rtl_dispatch(tmp_path, 0.0)
+    assert res is not None, "the runner step did not fire on a shipped spec"
+    assert getattr(res, "status", None) == "PASS", getattr(res, "detail", res)
+
+    emitted = list(tmp_path.rglob("*.sv"))
+    assert len(emitted) == 1, emitted
+    rtl = emitted[0].read_text()
+    assert "reg pending_irq_a;" in rtl
+    assert "assign starved_a = pending_irq_a && (wait_irq_a == 5'd16);" in rtl
+    assert "pending_irq_b" not in rtl      # the level control survives the real step

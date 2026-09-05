@@ -203,3 +203,28 @@ def test_the_register_bus_emitter_binds_the_width_contract():
     """The last link: the emitter resolves widths and hands them to the driver."""
     src = (PROGRAMS / "known_answer_vector_tb_gen.py").read_text()
     assert "resolve_bus_widths(" in src and "widths=_widths" in src
+
+
+def test_testbench_gen_executes_and_emits_the_width_bound_testbench(tmp_path):
+    """The F3 chain RUN, not read. `testbench_gen._emit_case_known_answer_vector`
+    is the function the canonical `testbench_gen` step calls. Given the ordinary
+    project above and no harness, it must write a testbench addressed at the
+    width the design DECLARES and carrying the reset-under-active-controls
+    sequence, and must record the case in its own report."""
+    import testbench_gen as T
+
+    project = _project(tmp_path)
+    out = tmp_path / "phase2" / "stage1" / "sim" / "tb"
+    out.mkdir(parents=True)
+    report = {}
+    written = T._emit_case_known_answer_vector(project, CASE, "block_cipher_core",
+                                               PORTS, out, report)
+    assert written is not None, f"nothing emitted; report={report}"
+    assert "known_answer_vector_cases" in report, report
+
+    tb = Path(written).read_text()
+    assert "task automatic bus_write(input [11:0] addr," in tb
+    assert "12'h020" in tb
+    assert "32'h00000020" not in tb, "a 32-bit address literal survived the real step"
+    assert "// --- reset asserted WHILE the controls are active ---" in tb
+    assert "after reset under active controls" in tb
