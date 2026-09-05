@@ -2550,7 +2550,8 @@ def _drv_constraints_sdc_block(slew_ns: Optional[float],
                                cap_pf: Optional[float],
                                note: str = "",
                                max_fanout: Optional[int] = None,
-                               fanout_note: str = "") -> str:
+                               fanout_note: str = "",
+                               supply_ports: Sequence[str] = ()) -> str:
     """Render the DRV (`set_max_transition` / `set_max_capacitance` /
     `set_max_fanout`) SDC block.
 
@@ -2582,19 +2583,71 @@ def _drv_constraints_sdc_block(slew_ns: Optional[float],
     ]
     if note:
         lines.append(f"# {note}")
+    scope = "[current_design]"
+    supplies = tuple(dict.fromkeys(str(x) for x in supply_ports if str(x)))
+    if supplies:
+        # A design-wide constraint also grades POWER/GROUND top ports even
+        # though max_capacitance/max_transition/max_fanout are signal-load
+        # rules.  Preserve the exact numeric limits and cover every
+        # hierarchical pin plus every non-supply port.  Supply identity comes
+        # only from the chip-top producer's domain plan.  Plain Tcl iteration
+        # is deliberate: the pinned OpenSTA lacks remove_from_collection.
+        predicates = " && ".join(
+            f'$_vibeic_drv_name ne "{_tcl_puts_safe(name)}"'
+            for name in supplies)
+        lines.extend([
+            "# Signal-only DRV scope; producer-proven supply ports excluded.",
+            "set _vibeic_drv_signal_ports {}",
+            "foreach _vibeic_drv_port [get_ports *] {",
+            "  set _vibeic_drv_name [get_name $_vibeic_drv_port]",
+            f"  if {{{predicates}}} "
+            "{ lappend _vibeic_drv_signal_ports $_vibeic_drv_port }",
+            "}",
+        ])
+        scope = "[get_pins -hierarchical *]"
     if slew_ns is not None:
-        lines.append(f"set_max_transition {slew_ns} [current_design]")
+        lines.append(f"set_max_transition {slew_ns} {scope}")
+        if supplies:
+            lines.append(
+                f"set_max_transition {slew_ns} $_vibeic_drv_signal_ports")
     if cap_pf is not None:
-        lines.append(f"set_max_capacitance {cap_pf} [current_design]")
+        lines.append(f"set_max_capacitance {cap_pf} {scope}")
+        if supplies:
+            lines.append(
+                f"set_max_capacitance {cap_pf} $_vibeic_drv_signal_ports")
     if max_fanout is not None:
         if fanout_note:
             lines.append(f"# {fanout_note}")
-        lines.append(f"set_max_fanout {max_fanout} [current_design]")
+        lines.append(f"set_max_fanout {max_fanout} {scope}")
+        if supplies:
+            lines.append(
+                f"set_max_fanout {max_fanout} $_vibeic_drv_signal_ports")
     if slew_ns is None and cap_pf is None and max_fanout is None:
         lines.append("# (no PDK liberty DRV limit resolved; per-pin liberty "
                      "max_capacitance still governs the resizer — no fabricated "
                      "design-wide limit)")
     return "\n".join(lines) + "\n"
+
+
+def _producer_supply_ports_for_drv(project: Optional[Path]) -> Tuple[str, ...]:
+    """Read the chip-top producer's exact single-domain supply-port identity."""
+    if project is None:
+        return ()
+    record = project / "reports" / "phase3" / "io_pad_chip_top.json"
+    try:
+        doc = json.loads(record.read_text(errors="replace"))
+    except (OSError, ValueError):
+        return ()
+    if doc.get("verdict") != "WROTE":
+        return ()
+    plan = doc.get("power_pad_plan")
+    if not isinstance(plan, dict) or plan.get("domain_topology") != "single_domain":
+        return ()
+    power, ground = plan.get("power_net"), plan.get("ground_net")
+    if not all(isinstance(x, str) and x for x in (power, ground)) \
+            or power == ground:
+        return ()
+    return str(power), str(ground)
 
 
 def _scale_sdc_to_liberty_units(sdc_text: str, liberty_path: str) -> str:
@@ -2977,7 +3030,8 @@ def _ensure_staged_sdc_drv(sdc_text: str, active_liberty: str,
             + _LAST_FANOUT_SOURCE.get("note", "design-declared fanout cap")
             + " (not fabricated).")
     return text + _drv_constraints_sdc_block(
-        slew, cap, note, max_fanout=fanout, fanout_note=_fanout_note), info
+        slew, cap, note, max_fanout=fanout, fanout_note=_fanout_note,
+        supply_ports=_producer_supply_ports_for_drv(project)), info
 
 
 def _resolve_staged_silicon_sdc(project: Path) -> Optional[Path]:
@@ -3459,7 +3513,8 @@ def _build_auto_silicon_sdc(project: Path, top: str = "",
               "empty BY CONSTRUCTION and the violation count is UNMEASURED.")
     sdc_text += _drv_constraints_sdc_block(
         drv_slew_ns, drv_cap_pf, drv_note,
-        max_fanout=_l9_fanout, fanout_note=_fanout_note)
+        max_fanout=_l9_fanout, fanout_note=_fanout_note,
+        supply_ports=_producer_supply_ports_for_drv(project))
     return sdc_text
 
 
@@ -24618,6 +24673,22 @@ def step_io_pad_chip_top_gen(project: Path, container: Optional[str] = None,
         if len(_pad_power) == 1 and len(_pad_ground) == 1:
             extra.extend(["--power-net", sorted(_pad_power)[0],
                           "--ground-net", sorted(_pad_ground)[0]])
+        # IO auxiliary controls are SIGNAL pins.  Driving them directly from
+        # the named POWER/GROUND nets leaves them outside both pdngen (not LEF
+        # PG pins) and detailed routing (the rail nets are special), producing
+        # a physically open ring whose source netlist merely looks tied.  Use
+        # the same active-Liberty tie-cell discovery already used by synthesis
+        # and spare tie-off, then pass the concrete masters/output pins to the
+        # wrapper producer.  The producer refuses only if a level it actually
+        # needs has no derived cell; nothing is guessed or PDK-named here.
+        _pad_ties = _v1_6_596_discover_tie_cells(pdk.liberty, container or "")
+        extra.extend([
+            "--tie-high-cell", str(_pad_ties.get("hi_cell") or ""),
+            "--tie-high-pin", str(_pad_ties.get("hi_pin") or ""),
+            "--tie-low-cell", str(_pad_ties.get("lo_cell") or ""),
+            "--tie-low-pin", str(_pad_ties.get("lo_pin") or ""),
+            "--tie-liberty", str(pdk.liberty),
+        ])
     prog = PROGRAMS_DIR / "io_pad_chip_top_gen.py"
     if not prog.is_file():  # pragma: no cover - shipped tree always has it
         return StepResult("io_pad_chip_top_gen", "ENV_UNAVAILABLE",
@@ -43884,6 +43955,46 @@ def _def_specialnet_iterm_map(def_text: str) -> Dict[Tuple[str, str], str]:
     return out
 
 
+def _def_routed_signal_iterm_map(
+        def_text: str) -> Tuple[Dict[Tuple[str, str], str], Set[str]]:
+    """Return regular-NET iterms and the subset with routed geometry.
+
+    Auxiliary pad controls are LEF/Liberty SIGNAL pins.  Their legal physical
+    representation is therefore a normal routed DEF net driven by a tie-cell
+    output, not a POWER/GROUND SPECIALNET.  Keep this reader separate from the
+    rail reader above so neither evidence class can be mistaken for the other.
+    """
+    start = re.search(r"^\s*NETS\b[^;]*;", def_text, re.MULTILINE)
+    if not start:
+        raise RuntimeError("final DEF has no NETS section")
+    end = re.search(r"^\s*END\s+NETS\b", def_text[start.end():], re.MULTILINE)
+    if not end:
+        raise RuntimeError("final DEF NETS section is unterminated")
+    section = def_text[start.end():start.end() + end.start()]
+    entries = list(re.finditer(
+        r"^\s*-\s+(?P<net>\S+)\s+(?P<body>.*?);",
+        section, re.MULTILINE | re.DOTALL))
+    if not entries:
+        raise RuntimeError("final DEF NETS section has no net entries")
+    out: Dict[Tuple[str, str], str] = {}
+    routed: Set[str] = set()
+    for entry in entries:
+        net, body = entry.group("net"), entry.group("body")
+        if re.search(r"\+\s+(?:ROUTED|FIXED|COVER)\b", body):
+            routed.add(net)
+        for inst, pin in re.findall(r"\(\s+(\S+)\s+(\S+)\s*\)", body):
+            if inst.upper() == "PIN" or inst == "*" or re.fullmatch(
+                    r"[-+]?\d+(?:\.\d+)?", inst):
+                continue
+            key = (inst, pin)
+            if key in out and out[key] != net:
+                raise RuntimeError(
+                    f"final DEF assigns {inst}/{pin} to both "
+                    f"{out[key]!r} and {net!r}")
+            out[key] = net
+    return out, routed
+
+
 def _lec_restore_aux_connections(project: Path, physical_top: str,
                                  gate: Path, final_def: Path, out_dir: Path,
                                  mod: Any,
@@ -43912,6 +44023,60 @@ def _lec_restore_aux_connections(project: Path, physical_top: str,
         raise RuntimeError(
             "IO-control restoration record does not match physical top "
             f"{physical_top!r}")
+    signal_raw = rec.get("aux_pin_signal_connections")
+    if isinstance(signal_raw, list) and signal_raw:
+        try:
+            def_text = final_def.read_text(errors="replace")
+            gate_text = gate.read_text(errors="replace")
+        except OSError as exc:
+            raise RuntimeError(f"LEC signal-control input unreadable: {exc}") from exc
+        observed, routed = _def_routed_signal_iterm_map(def_text)
+        connections: List[Tuple[str, str, str]] = []
+        for index, item in enumerate(signal_raw):
+            if not isinstance(item, dict):
+                raise RuntimeError(
+                    f"aux_pin_signal_connections[{index}] is not an object")
+            inst, pin, net = (item.get("instance"), item.get("pin"),
+                              item.get("net"))
+            tie_inst, tie_pin = (item.get("tie_instance"),
+                                 item.get("tie_pin"))
+            if not all(isinstance(value, str) and value for value in
+                       (inst, pin, net, tie_inst, tie_pin)):
+                raise RuntimeError(
+                    f"aux_pin_signal_connections[{index}] is incomplete")
+            for endpoint in ((inst, pin), (tie_inst, tie_pin)):
+                actual = observed.get(endpoint)
+                if actual != net:
+                    raise RuntimeError(
+                        f"final DEF does not prove {endpoint[0]}/{endpoint[1]} "
+                        f"on routed signal {net!r}; observed {actual!r}")
+            if net not in routed:
+                raise RuntimeError(
+                    f"final DEF signal {net!r} connects {inst}/{pin} but has "
+                    "no ROUTED/FIXED/COVER geometry")
+            connections.extend(((inst, pin, net), (tie_inst, tie_pin, net)))
+        # Signal nets must survive write_verilog.  Verify that exact property;
+        # unlike the historical rail path, do not create a proof-only repair.
+        _unchanged, stats = mod.restore_named_instance_connections(
+            gate_text, physical_top, connections,
+            internal_wires=sorted({net for _, _, net in connections}))
+        if stats.get("restored") or stats.get("internal_wires_added"):
+            raise RuntimeError(
+                "routed auxiliary signal connectivity was elided from the "
+                f"gate netlist: {stats}")
+        provenance: Dict[str, Any] = {
+            "method": "producer-declared and final-DEF-routed-signal-proven",
+            "source_gate": str(gate),
+            "source_gate_sha256": _sha256_file(gate),
+            "final_def": str(final_def),
+            "final_def_sha256": _sha256_file(final_def),
+            "wrapper_record": str(rec_path),
+            "wrapper_record_sha256": _sha256_file(rec_path),
+            "connections": len(signal_raw),
+            "stats": stats,
+            "signal_nets": sorted({str(x.get("net")) for x in signal_raw}),
+        }
+        return gate, provenance, {}
     plan = rec.get("power_pad_plan")
     if not isinstance(plan, dict) or plan.get("domain_topology") != "single_domain":
         raise RuntimeError(
@@ -44121,10 +44286,17 @@ def _emit_lec_post_layout(project: Path, top: str, pdk: PdkConfig,
         gate, gate_power_normalization, supply_constant_assumptions = (
             _lec_restore_aux_connections(
                 project, physical_top, gate, primary_def, out_json.parent, mod))
-        notes.append(
-            "post-layout LEC: restored "
-            f"{gate_power_normalization['connections']} IO control-to-rail "
-            "connections from matching producer + final DEF evidence.")
+        if gate_power_normalization["method"].endswith("routed-signal-proven"):
+            notes.append(
+                "post-layout LEC: verified "
+                f"{gate_power_normalization['connections']} IO controls on "
+                "producer-declared, final-DEF-routed tie-cell signal nets; "
+                "the gate netlist required no proof-only repair.")
+        else:
+            notes.append(
+                "post-layout LEC: restored "
+                f"{gate_power_normalization['connections']} IO control-to-rail "
+                "connections from matching producer + final DEF evidence.")
     lib_c = _to_container_path(str(pdk.liberty), container)
     extra_liberties_host = [
         str(value) for value in _sta_extra_liberties(project, pdk, pdk.liberty)
@@ -47045,7 +47217,7 @@ def _emit_metal_density_report(project: Path, top: str, pdk: PdkConfig,
         # and says so in `die_area_source`.
         + (f"-rd die={_dens_slot['die_rect'][0]},{_dens_slot['die_rect'][1]},"
            f"{_dens_slot['die_rect'][2]},{_dens_slot['die_rect'][3]} "
-           if _dens_slot else "") +
+           if _dens_slot else "")
         # OMITTED rather than passed empty: `-rd deck=` with nothing after it is
         # a malformed argument, and the recipe already treats an absent `deck`
         # global as "no deck offered" and says so in the report.

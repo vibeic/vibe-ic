@@ -24,6 +24,7 @@ Two chip-AGNOSTIC gaps, both closed program-first:
 """
 from __future__ import annotations
 
+import json
 import sys
 from pathlib import Path
 
@@ -143,6 +144,32 @@ def test_drv_block_only_slew_when_cap_absent():
     block = R._drv_constraints_sdc_block(1.5, None, "slew only")
     assert "set_max_transition 1.5 [current_design]" in block
     assert "set_max_capacitance" not in block
+
+
+def test_drv_scope_excludes_only_producer_proven_supply_ports(tmp_path):
+    report = tmp_path / "reports/phase3/io_pad_chip_top.json"
+    report.parent.mkdir(parents=True)
+    report.write_text(json.dumps({
+        "verdict": "WROTE",
+        "power_pad_plan": {"domain_topology": "single_domain",
+                           "power_net": "VDD", "ground_net": "VSS"},
+    }))
+    sdc = R._build_auto_silicon_sdc(
+        tmp_path, top="chip_top", drv_slew_ns=1.5, drv_cap_pf=5.0)
+    assert "set _vibeic_drv_signal_ports {}" in sdc
+    assert '$_vibeic_drv_name ne "VDD"' in sdc
+    assert '$_vibeic_drv_name ne "VSS"' in sdc
+    assert "set_max_capacitance 5.0 [get_pins -hierarchical *]" in sdc
+    assert "set_max_capacitance 5.0 $_vibeic_drv_signal_ports" in sdc
+    assert "set_max_capacitance 5.0 [current_design]" not in sdc
+
+
+def test_drv_scope_without_matching_producer_record_keeps_legacy_design_scope(
+        tmp_path):
+    sdc = R._build_auto_silicon_sdc(
+        tmp_path, top="chip_top", drv_slew_ns=1.5, drv_cap_pf=5.0)
+    assert "set_max_capacitance 5.0 [current_design]" in sdc
+    assert "_vibeic_drv_signal_ports" not in sdc
 
 
 # ═══════════════════════════════════════════════════════════════════════════

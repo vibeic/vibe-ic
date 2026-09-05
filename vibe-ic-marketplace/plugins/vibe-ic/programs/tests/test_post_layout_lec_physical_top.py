@@ -147,7 +147,7 @@ def test_aux_control_restoration_refuses_old_record_and_wrong_def_rail(tmp_path)
             tmp_path, "chip_top", gate, final_def,
             tmp_path / "reports/phase3", L)
 
-    _gate, final_def, report = _aux_normalization_fixture(tmp_path)
+    gate, final_def, report = _aux_normalization_fixture(tmp_path)
     final_def.write_text(final_def.read_text().replace(
         "- VDD ( u_pad OE )", "- VSS2 ( u_pad OE )"))
     with pytest.raises(RuntimeError, match="does not prove u_pad/OE"):
@@ -155,6 +155,51 @@ def test_aux_control_restoration_refuses_old_record_and_wrong_def_rail(tmp_path)
             tmp_path, "chip_top", gate, final_def,
             tmp_path / "reports/phase3", L)
 
+
+def test_aux_tie_signal_requires_routed_def_and_unmodified_gate(tmp_path):
+    gate = tmp_path / "phase3/stage3/pnr/core_pnr.v"
+    gate.parent.mkdir(parents=True, exist_ok=True)
+    gate.write_text("""module chip_top(input a, output y);
+  wire _vibeic_aux_tie_0;
+  TIELO _vibeic_aux_tie_cell_0(.ZN(_vibeic_aux_tie_0));
+  PAD u_pad(.PAD(a), .Y(y), .PU(_vibeic_aux_tie_0));
+endmodule
+""")
+    final_def = gate.parent / "core.def"
+    final_def.write_text("""VERSION 5.8 ;
+DESIGN chip_top ;
+NETS 1 ;
+- _vibeic_aux_tie_0 ( _vibeic_aux_tie_cell_0 ZN ) ( u_pad PU )
+  + ROUTED Metal2 ( 0 0 ) ( 100 0 ) ;
+END NETS
+END DESIGN
+""")
+    report = tmp_path / "reports/phase3/io_pad_chip_top.json"
+    report.parent.mkdir(parents=True, exist_ok=True)
+    report.write_text(json.dumps({
+        "verdict": "WROTE", "chip_top_module": "chip_top",
+        "aux_pin_signal_connections": [{
+            "instance": "u_pad", "pin": "PU", "level": 0,
+            "net": "_vibeic_aux_tie_0",
+            "tie_instance": "_vibeic_aux_tie_cell_0",
+            "tie_master": "TIELO", "tie_pin": "ZN"}],
+    }))
+    out, provenance, constants = R._lec_restore_aux_connections(
+        tmp_path, "chip_top", gate, final_def,
+        tmp_path / "reports/phase3", L)
+    assert out == gate and out.read_text() == gate.read_text()
+    assert provenance["method"].endswith("routed-signal-proven")
+    assert provenance["stats"]["restored"] == 0
+    assert constants == {}
+    observed, routed = R._def_routed_signal_iterm_map(final_def.read_text())
+    assert observed[("u_pad", "PU")] == "_vibeic_aux_tie_0"
+    assert "_vibeic_aux_tie_0" in routed
+
+    final_def.write_text(final_def.read_text().replace("+ ROUTED", "+ USE"))
+    with pytest.raises(RuntimeError, match="no ROUTED"):
+        R._lec_restore_aux_connections(
+            tmp_path, "chip_top", gate, final_def,
+            tmp_path / "reports/phase3", L)
 
 @pytest.mark.parametrize("functional", [True, False])
 def test_gold_supply_strip_is_confined_to_gold_half(functional):

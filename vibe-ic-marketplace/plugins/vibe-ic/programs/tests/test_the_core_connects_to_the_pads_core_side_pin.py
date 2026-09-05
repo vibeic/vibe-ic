@@ -197,8 +197,12 @@ def _emit():
                         "terminal": faces.terminal, "core_pin": faces.core_pin,
                         "ties": faces.ties, "tie_reasons": faces.reasons}
         ordered["S"].append(inst)
+    tie_cells = {
+        0: {"master": "fixture_tie_low", "pin": "ZN"},
+        1: {"master": "fixture_tie_high", "pin": "Z"},
+    }
     return (G._emit_verilog("chip_top", "core", ordered, chosen, _PORTS,
-                            ("VDD", "VSS")), chosen)
+                            ("VDD", "VSS"), tie_cells), chosen)
 
 
 def test_the_emitted_netlist_puts_the_core_on_the_core_face():
@@ -209,16 +213,19 @@ def test_the_emitted_netlist_puts_the_core_on_the_core_face():
         assert f".{rec['terminal']}({rec['port']})" in line
         assert f".{rec['core_pin']}(" in line
         assert re.search(rf"\.{rec['core_pin']}\((\w+)__core", line), line
-        # The ties are not Verilog constants: they land on the real rails, so
-        # no synthetic `zero_`/`one_` net can escape PDN construction.
+        # The ties are neither constants nor direct rails: they land on routed
+        # signal nets driven by concrete PDK tie cells.
         for pin, level in rec["ties"].items():
             assert f".{pin}(1'b" not in line, (
                 f"{pin} tied as a netlist constant on {inst}")
-            assert f".{pin}({'VDD' if level else 'VSS'})" in line
+            assert f".{pin}(_vibeic_aux_tie_{int(level)})" in line
+            assert f".{pin}({'VDD' if level else 'VSS'})" not in line
             assert rec["tie_reasons"].get(pin), f"{pin} tied with no reason"
+    assert "fixture_tie_low _vibeic_aux_tie_cell_0 (.ZN(_vibeic_aux_tie_0))" in text
+    assert "fixture_tie_high _vibeic_aux_tie_cell_1 (.Z(_vibeic_aux_tie_1))" in text
 
 
-def test_an_auxiliary_control_without_real_rails_is_refused():
+def test_an_auxiliary_control_without_derived_tie_cells_is_refused():
     """Negative control: a recorded tie may not remain prose-only/floating."""
     with pytest.raises(G.Refusal) as exc:
         cells = _cells()
@@ -230,7 +237,7 @@ def test_an_auxiliary_control_without_real_rails_is_refused():
         }}
         G._emit_verilog("chip_top", "core", {"S": ["u_pad_q"]}, chosen,
                         [_PORTS[-1]])
-    assert exc.value.rule == "AUXILIARY_PAD_RAIL_PAIR_ABSENT"
+    assert exc.value.rule == "AUXILIARY_PAD_TIE_CELL_ABSENT"
 
 
 def test_the_core_instance_takes_the_internal_nets_not_the_ports():
