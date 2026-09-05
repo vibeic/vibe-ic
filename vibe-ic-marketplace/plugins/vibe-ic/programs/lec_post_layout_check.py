@@ -262,11 +262,141 @@ def _rename_block(renames: Optional[List[Tuple[str, str]]], top: str) -> str:
     out.append("cd ..")
     return "\n".join(out) + "\n"
 
+_NETLIST_MODULE_RE = re.compile(
+    r"(?P<head>\bmodule\s+(?P<name>\\?[^\s(]+)\s*"
+    r"(?P<ports>\((?P<portlist>[^;]*?)\))?\s*;)"
+    r"(?P<body>.*?)"
+    r"(?P<end>\bendmodule\b)",
+    re.DOTALL,
+)
+
+
+def restore_named_instance_connections(
+        text: str, top: str,
+        connections: List[Tuple[str, str, str]],
+        internal_wires: Optional[List[str]] = None,
+        ) -> Tuple[str, Dict[str, object]]:
+    """Restore DEF-proven connections elided by ``write_verilog``.
+
+    OpenROAD's default writer omits nets typed POWER/GROUND, even when an IO
+    macro's *functional* control pin (OE/IE/pull control) is connected to one.
+    The post-layout Boolean view then contains a floating pad control and can
+    either go vacuous or stop at ``$tribuf``.  The caller supplies only triples
+    independently verified against the final DEF SPECIALNETS; this pure helper
+    adds those named connections to a proof-only netlist and declares the
+    corresponding internal rail wires.  An absent instance, conflicting
+    existing pin, duplicate request or malformed instance refuses: no guessed
+    connection can enter the miter.
+
+    ``connections`` is ``[(instance, pin, net), ...]``.  All names come from
+    producer/DEF authority; this function applies no naming convention.
+    """
+    modules = [m for m in _NETLIST_MODULE_RE.finditer(text)
+               if (m.group("name") or "").lstrip("\\") == top.lstrip("\\")]
+    if len(modules) != 1:
+        raise ValueError(
+            f"expected exactly one module {top!r}, found {len(modules)}")
+    module = modules[0]
+    body = module.group("body")
+    requests: Dict[Tuple[str, str], str] = {}
+    for inst, pin, net in connections:
+        key = (str(inst), str(pin))
+        value = str(net)
+        if not all((*key, value)):
+            raise ValueError(f"empty instance/pin/net in connection {key!r}")
+        if key in requests and requests[key] != value:
+            raise ValueError(
+                f"conflicting restoration for {key[0]}/{key[1]}: "
+                f"{requests[key]!r} vs {value!r}")
+        requests[key] = value
+
+    edits: List[Tuple[int, int, str, int]] = []
+    already = 0
+    by_instance: Dict[str, List[Tuple[str, str]]] = {}
+    for (inst, pin), net in sorted(requests.items()):
+        by_instance.setdefault(inst, []).append((pin, net))
+    for inst, pin_nets in sorted(by_instance.items()):
+        inst_token = (re.escape(inst) + r"\s+" if inst.startswith("\\")
+                      else r"\b" + re.escape(inst) + r"\b\s*")
+        opener = re.compile(
+            r"(?P<cell>\\?[^\s();]+)\s+" + inst_token + r"\(")
+        hits = list(opener.finditer(body))
+        if len(hits) != 1:
+            raise ValueError(
+                f"expected exactly one instance {inst!r} in {top!r}, "
+                f"found {len(hits)}")
+        open_idx = hits[0].end() - 1
+        depth = 0
+        close_idx = -1
+        for idx in range(open_idx, len(body)):
+            if body[idx] == "(":
+                depth += 1
+            elif body[idx] == ")":
+                depth -= 1
+                if depth == 0:
+                    close_idx = idx
+                    break
+        if close_idx < 0:
+            raise ValueError(f"unterminated connection list for {inst!r}")
+        current = body[open_idx + 1:close_idx]
+        missing: List[Tuple[str, str]] = []
+        for pin, net in pin_nets:
+            pin_hits = list(re.finditer(
+                r"\.\s*" + re.escape(pin) + r"\s*\(\s*([^()]*)\s*\)",
+                current))
+            if pin_hits:
+                if len(pin_hits) != 1 or pin_hits[0].group(1).strip() != net:
+                    observed = [x.group(1).strip() for x in pin_hits]
+                    raise ValueError(
+                        f"existing {inst}/{pin} connection {observed!r} does "
+                        f"not equal DEF-proven net {net!r}")
+                already += 1
+            else:
+                missing.append((pin, net))
+        if missing:
+            prefix = ", " if current.strip() else ""
+            replacement = prefix + ", ".join(
+                f".{pin}({net})" for pin, net in missing)
+            edits.append((close_idx, close_idx, replacement, len(missing)))
+
+    for start, end, replacement, _count in sorted(edits, reverse=True):
+        body = body[:start] + replacement + body[end:]
+
+    header_ports = set(re.findall(r"\\?[A-Za-z_$][\w$]*",
+                                  module.group("portlist") or ""))
+    added_wires: List[str] = []
+    declarations: List[str] = []
+    for wire in dict.fromkeys(str(x) for x in (internal_wires or [])):
+        bare = wire.lstrip("\\")
+        if wire in header_ports or bare in header_ports:
+            continue
+        declared = re.search(
+            r"\b(?:input|output|inout|wire)\b[^;]*"
+            r"(?:^|[\s,])" + re.escape(wire) + r"(?:[\s,;]|$)",
+            body, re.MULTILINE)
+        if not declared:
+            declarations.append(f"\n  wire {wire};")
+            added_wires.append(wire)
+    body = "".join(declarations) + body
+    new_module = module.group("head") + body + module.group("end")
+    out = text[:module.start()] + new_module + text[module.end():]
+    return out, {
+        "top": top,
+        "requested": len(requests),
+        "restored": sum(edit[3] for edit in edits),
+        "already_present": already,
+        "internal_wires_added": added_wires,
+    }
+
 
 def build_yosys_equiv_script(gold_v: str, gate_v: str, lib: str, top: str,
                              blackbox_v: Optional[List[str]] = None,
                              seq_depths: Optional[List[int]] = None,
                              strip_gate_ports: Optional[List[str]] = None,
+                             strip_gold_ports: Optional[List[str]] = None,
+                             extra_libs: Optional[List[str]] = None,
+                             constant_gate_wires: Optional[Dict[str, int]] = None,
+                             constant_gold_wires: Optional[Dict[str, int]] = None,
                              functional_lib: bool = False,
                              blacklist: Optional[str] = None,
                              gate_renames: Optional[List[Tuple[str, str]]] = None
@@ -308,6 +438,19 @@ def build_yosys_equiv_script(gold_v: str, gate_v: str, lib: str, top: str,
                  the proof depth-adaptive so a retiming/pipeline-equivalent pair
                  proves at the depth matching its latency instead of falsely
                  failing at the shallow default. Sound: deeper only proves more.
+    strip_gold_ports / strip_gate_ports : supply-only unmatched top ports selected
+                 by the caller from the exact two interfaces.  Removing a rail
+                 absent from the other side is necessary because functional
+                 Liberty logic models omit PG pins; functional ports are never
+                 eligible and still make the proof fail closed.
+    extra_libs : additional exact-library views whose functional cells occur in
+                 the physical wrapper (for example an IO library matched to the
+                 standard-cell Liberty PVT). They are read with the same sound
+                 functional-vs-blackbox mode as ``lib`` on both arms.
+    constant_gold_wires / constant_gate_wires : exact rail nets mapped to 0/1
+                 by the caller from producer authority.  They model the powered
+                 operating condition before unmatched rail ports are deleted;
+                 no functional signal is inferred or eligible.
     functional_lib : when True, read the Liberty FUNCTIONALLY (`read_liberty`
                  WITHOUT `-lib`) so equiv proves each cell's FUNCTION instead of
                  assuming matched cells equal — the SOUND path (rejects NAND≢NOR,
@@ -321,14 +464,40 @@ def build_yosys_equiv_script(gold_v: str, gate_v: str, lib: str, top: str,
     engine shape as `eda_lvs mode=yosys_equiv`."""
     bb = "\n".join(_read_blackbox_cmd(q) for q in (blackbox_v or []))
     bb_block = (bb + "\n") if bb else ""
-    # v1.3.93 — the routed gate netlist carries top-level SUPPLY ports (VDD/VSS…
-    # added by PDN insertion) that the pre-PnR synth GOLD reference does not, so
-    # `equiv_make` aborts "Can't match gate port VDD_gate". Delete ONLY those
-    # supply ports from the gate design (they carry no logic; the Liberty cells
-    # are functional models without power pins). NEVER strip a non-supply port —
-    # a functional gate/gold port mismatch is a real defect that must surface.
-    strip = "".join(f"delete {top}/w:{p}\n" for p in (strip_gate_ports or []))
-    strip_block = (strip + "opt_clean\n") if strip else ""
+    libraries = [lib] + [x for x in (extra_libs or []) if x != lib]
+
+    def _read_liberties(functional: bool) -> str:
+        option = "" if functional else "-lib "
+        return "".join(f"read_liberty {option}{path}\n" for path in libraries)
+
+    def _constant_block(values: Optional[Dict[str, int]]) -> str:
+        lines: List[str] = []
+        if values:
+            # `prep` leaves the whole design selected.  `connect -set VDD`
+            # against that selection is ambiguous when library modules also
+            # expose a VDD wire.  Scope the producer-owned rail constants to
+            # the exact comparison top, then restore the full selection for
+            # the subsequent flatten/optimization passes.
+            lines.append(f"select -module {top}")
+        for wire, level in sorted((values or {}).items()):
+            if level not in (0, 1, False, True):
+                raise ValueError(
+                    f"constant rail {wire!r} has non-Boolean level {level!r}")
+            lines.append(f"connect -set {wire} 1'b{int(level)}")
+        if values:
+            lines.append("select -clear")
+        return ("\n".join(lines) + "\nopt\n") if lines else ""
+    # The physical wrapper and routed Verilog can put supply-only ports on
+    # opposite sides (for example the wrapper GOLD declares VDD/VSS while
+    # OpenROAD omits them from GATE). Delete ONLY caller-classified unmatched
+    # supply ports. They carry no logic in the functional Liberty models.
+    # A functional port difference is never stripped and remains a real error.
+    gold_strip = "".join(
+        f"delete {top}/w:{p}\n" for p in (strip_gold_ports or []))
+    gate_strip = "".join(
+        f"delete {top}/w:{p}\n" for p in (strip_gate_ports or []))
+    gold_strip_block = (gold_strip + "opt_clean\n") if gold_strip else ""
+    gate_strip_block = (gate_strip + "opt_clean\n") if gate_strip else ""
     depths = list(seq_depths) if seq_depths else list(DEFAULT_SEQ_DEPTHS)
     # Ascending, de-duplicated, positive; each pass only works the still-unproven
     # cells, so the shallow-first order keeps the common case cheap.
@@ -358,11 +527,14 @@ def build_yosys_equiv_script(gold_v: str, gate_v: str, lib: str, top: str,
         # antenna carry no function and stay inert blackboxes, while every cell
         # the Liberty DID model keeps its function (see _read_blackbox_cmd).
         def _func_side(read_v: str, stash: str, extra_strip: str = "",
+                       constants: Optional[Dict[str, int]] = None,
                        renames: str = "") -> str:
-            return (f"read_liberty {lib}\n"
+            return (f"{_read_liberties(True)}"
                     f"{bb_block}{read_v}\n"
                     f"prep -top {top}\n"
+                    f"{_constant_block(constants)}"
                     f"{extra_strip}"
+                    f"tribuf -formal\n"
                     f"flatten\n"
                     f"async2sync\n"
                     f"opt -purge\n"
@@ -370,9 +542,18 @@ def build_yosys_equiv_script(gold_v: str, gate_v: str, lib: str, top: str,
                     f"{renames}"
                     f"splitnets -ports\n"
                     f"design -stash {stash}\n")
-        gold_block = _func_side(f"read_verilog -sv {gold_v}", "gold")
-        gate_block = _func_side(f"read_verilog -sv {gate_v}", "gate", strip_block,
-                                _rename_block(gate_renames, top))
+        # MERGE of two independent fixes, both kept:
+        #  * v1.17.31 (main) pairs a permuted pin's cut point instead of
+        #    deleting it -> `_rename_block(gate_renames, top)`, gate side only.
+        #  * this port (next/cxspm44 32d03831b) strips unmatched supply ports on
+        #    BOTH arms, because the physical wrapper GOLD can declare rails the
+        #    routed GATE omits -- main stripped the gate arm only.
+        gold_block = _func_side(
+            f"read_verilog -sv {gold_v}", "gold", gold_strip_block,
+            constant_gold_wires)
+        gate_block = _func_side(
+            f"read_verilog -sv {gate_v}", "gate", gate_strip_block,
+            constant_gate_wires, _rename_block(gate_renames, top))
         return (
             "# Vibe-IC post-layout LEC — FUNCTIONAL (sound) Liberty cell models.\n"
             f"{gold_block}\n{gate_block}\n"
@@ -391,16 +572,18 @@ def build_yosys_equiv_script(gold_v: str, gate_v: str, lib: str, top: str,
     # blackboxes so no function is at stake, but the frontend still refuses the
     # re-definition without it (the same RUN_ERROR abort).
     return f"""# Vibe-IC post-layout LEC — gold(reference) vs gate(routed) structural equiv.
-read_liberty -lib {lib}
+{_read_liberties(False).rstrip()}
 {bb_block}read_verilog -sv {gold_v}
 prep -top {top}
-splitnets -ports
+{_constant_block(constant_gold_wires)}
+{gold_strip_block}splitnets -ports
 design -stash gold
 
-read_liberty -lib {lib}
+{_read_liberties(False).rstrip()}
 {bb_block}read_verilog -sv {gate_v}
 prep -top {top}
-{strip_block}{_rename_block(gate_renames, top)}splitnets -ports
+{_constant_block(constant_gate_wires)}
+{gate_strip_block}{_rename_block(gate_renames, top)}splitnets -ports
 design -stash gate
 
 design -copy-from gold -as gold {top}

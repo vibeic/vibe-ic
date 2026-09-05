@@ -72,6 +72,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -581,9 +582,19 @@ def io_lefs_this_run_recorded(project: Path, producer: Dict[str, Any]
             f"carry {len(absent)} of the {len(claimed)} master(s) the ring "
             f"claims ({', '.join(absent[:4])}"
             f"{'…' if len(absent) > 4 else ''}), so they corroborate nothing")
+    return lefs, io_site_declarations_for_lefs(lefs), ""
+
+
+def io_site_declarations_for_lefs(lefs: List[Path]) -> List[Path]:
+    """Site declarations from the exact PDK tree(s) carrying ``lefs``.
+
+    This is deliberately path-derived.  With an unnamed ``PDK_ROOT`` that
+    contains several installed processes, scanning the whole root can attach
+    a different process's pad-site dimensions to an otherwise exact LEF.
+    """
     # The tech view lives beside the reference view: <tree>/libs.ref/<lib>/lef
-    # -> <tree>. Derived from the path this run actually read, so no root is
-    # assumed and no tree is named here.
+    # -> <tree>. Derived from a LEF actually selected by the caller, so no root
+    # is assumed and no unrelated installed tree is consulted.
     decls: List[Path] = []
     for lef in lefs:
         for parent in lef.parents:
@@ -595,7 +606,65 @@ def io_lefs_this_run_recorded(project: Path, producer: Dict[str, Any]
     seen: Dict[str, Path] = {}
     for d in decls:
         seen.setdefault(str(d), d)
-    return lefs, list(seen.values()), ""
+    return list(seen.values())
+
+
+def resolve_io_library_views(
+        project: Path, producer: Dict[str, Any],
+        io_lef: Optional[List[str]], pdk_root: Optional[str],
+        pdk: Optional[str]) -> Tuple[List[Path], List[Path], str, str]:
+    """Resolve one identity-bound IO library for this audit.
+
+    Precedence is explicit LEFs, then an explicitly/natively named PDK.  When
+    only an unnamed root is available, the root may contain several unrelated
+    processes; in that case this run's recorded-and-reparsed LEFs are the only
+    identity-bearing choice.  A single-tree root remains discoverable for
+    backwards compatibility.  Returns ``(lefs, declarations, source, why)``.
+    """
+    if io_lef:
+        lefs = [Path(p) for p in io_lef]
+        return (lefs, io_site_declarations_for_lefs(lefs),
+                "explicit --io-lef", "")
+
+    # A CLI PDK is caller-owned identity and wins.  Ambient PDK is only a
+    # process default: the canonical gate command has no --pdk and may inherit
+    # the container's unrelated default even though this run recorded the PDK
+    # views it actually opened.
+    if pdk:
+        lefs = PR.discover_io_lefs(pdk_root, pdk)
+        decls = PR.discover_io_site_declarations(pdk_root, pdk)
+        if lefs:
+            return lefs, decls, f"explicitly named PDK {pdk}", ""
+        return [], [], "", (
+            f"named PDK {pdk!r} resolved no IO LEF; refusing to replace "
+            "an explicit PDK identity with a different run-recorded tree")
+
+    recorded, run_decls, recorded_why = io_lefs_this_run_recorded(
+        project, producer)
+    if recorded:
+        return (recorded, run_decls,
+                f"{len(recorded)} IO LEF(s) recorded by this run in "
+                f"{DERIVED_CHIP_TOP_REL}", "")
+
+    named_pdk = os.environ.get("PDK")
+    if named_pdk:
+        lefs = PR.discover_io_lefs(pdk_root, None)
+        decls = PR.discover_io_site_declarations(pdk_root, None)
+        if lefs:
+            return lefs, decls, f"ambient named PDK {named_pdk}", ""
+
+    trees = PR._pdk_trees(pdk_root, pdk)
+    if len(trees) == 1:
+        lefs = PR.discover_io_lefs(pdk_root, pdk)
+        decls = PR.discover_io_site_declarations(pdk_root, pdk)
+        if lefs:
+            return lefs, decls, f"sole PDK tree {trees[0].name}", ""
+    if len(trees) > 1:
+        return [], [], "", (
+            f"unnamed PDK root contains {len(trees)} trees; scanning unrelated "
+            f"processes is not identity resolution; run record declined: "
+            f"{recorded_why}")
+    return [], [], "", recorded_why
 
 
 def main(argv: Optional[List[str]] = None) -> int:
@@ -671,29 +740,10 @@ def main(argv: Optional[List[str]] = None) -> int:
                     else:
                         reason = findings[0]["message"]
                 else:
-                    library_source = ""
-                    library_declined = ""
-                    lefs = ([Path(p) for p in args.io_lef] if args.io_lef
-                            else PR.discover_io_lefs(args.pdk_root, args.pdk))
-                    # Both PDK views, the same two the producer reads. An
-                    # auditor that consulted only the LEF would report
-                    # PAD_SITE_NOT_FOUND against a ring the PDK had in fact
-                    # declared the site for.
-                    decls = PR.discover_io_site_declarations(
-                        args.pdk_root, args.pdk)
-                    if not lefs:
-                        # NOTHING was passed and nothing resolved from the
-                        # environment. Before reporting that no library could
-                        # be corroborated, ask the run what IT opened.
-                        lefs, run_decls, why = io_lefs_this_run_recorded(
-                            project, producer)
-                        if lefs:
-                            decls = decls or run_decls
-                            library_source = (
-                                f"{len(lefs)} IO LEF(s) recorded by this run "
-                                f"in {DERIVED_CHIP_TOP_REL}")
-                        else:
-                            library_declined = why
+                    lefs, decls, library_source, library_declined = (
+                        resolve_io_library_views(
+                            project, producer, args.io_lef,
+                            args.pdk_root, args.pdk))
                     findings.extend(
                         _audit_ring(project, producer,
                                     PR.IoLibrary(lefs, decls),

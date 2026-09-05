@@ -434,6 +434,16 @@
           ]
         ]
       },
+      "_pdn_ring_comment": "Pad-connected core ring. Layers, widths, spacings, and configured upper-bound offset are taken verbatim from this release's libs.tech/librelane/config.tcl (PDN_VERTICAL_LAYER, PDN_HORIZONTAL_LAYER, PDN_CORE_RING_V/HWIDTH, V/HSPACING, V/HOFFSET). The placed PAD-class side-cell/core gap is measured at runtime; the offset is reduced only as needed to retain the full two-rail footprint plus the Metal5 SPACING 0.46 um declared by the selected nominal tech LEF. The IO supply LEFs expose their core-facing DVDD/DVSS shapes on vertical Metal2, so the pad-direct layer and Metal2-to-horizontal-Metal5 connection are declared explicitly. No ring is emitted for a padless design; insufficient geometry refuses.",
+      "pdn_ring": {
+        "layers": ["Metal4", "Metal5"],
+        "widths": [1.6, 1.6],
+        "spacings": [1.7, 1.7],
+        "core_offset_um": 6.0,
+        "connect_to_pad_layers": ["Metal2"],
+        "connects": [["Metal2", "Metal5"]],
+        "min_clearance_um": 0.46
+      },
       "_physical_cell_comment": "Physical-cell masters read from the shipped LEF by their LEF CLASS, not by name shape: `gf180mcu_fd_sc_mcu7t5v0__filltie` is the library's only `CLASS core WELLTAP` and `gf180mcu_fd_sc_mcu7t5v0__antenna` its only `CLASS core ANTENNACELL`. Without tapcell_master the PnR step printed `TAPCELL_SKIPPED: no tapcell_master configured` and placed ZERO well taps, which is a categorical latch-up exposure. tapcell_distance_um 14.0 sits under the PDK's own 15um max-tap-distance rule for this 5V library \u2014 DF.13_MV and DF.14_MV in libs.tech/klayout/tech/drc/rule_decks/comp.rb both state 15um (the LV variants are 20um).",
       "tapcell_master": "gf180mcu_fd_sc_mcu7t5v0__filltie",
       "tapcell_distance_um": 14.0,

@@ -147,13 +147,70 @@ def test_a_path_that_is_not_on_this_host_is_declined_not_assumed(tmp_path):
     assert lefs == [] and "exists on this host" in why
 
 
-def test_the_fallback_is_last_not_first(tmp_path):
-    """An explicit --io-lef and a resolvable PDK both still win: the record is
-    consulted only where nothing else answered."""
-    src = Path(PRC.__file__).read_text()
-    body = src[src.index("lefs = ([Path(p) for p in args.io_lef]"):]
-    body = body[:body.index("findings.extend(")]
-    assert body.index("if not lefs:") > body.index("discover_io_lefs")
+def _installed_tree(root: Path, name: str, masters=_MASTERS) -> Path:
+    lef = root / name / "libs.ref" / "fixture_io" / "lef" / "io.lef"
+    lef.parent.mkdir(parents=True)
+    lef.write_text(_lef(masters, size=(99.0, 88.0)))
+    return lef
+
+
+def test_unnamed_multitree_root_uses_this_runs_exact_views(tmp_path,
+                                                           monkeypatch):
+    """The canonical flow provides only PDK_ROOT.  Other installed processes
+    must not beat the exact LEFs already recorded and reparsed by this run."""
+    proj = _project(tmp_path)
+    root = tmp_path / "installed"
+    wrong_a = _installed_tree(root, "aaa_unrelated")
+    _installed_tree(root, "zzz_unrelated")
+    monkeypatch.setenv("PDK_ROOT", str(root))
+    monkeypatch.delenv("PDK", raising=False)
+
+    lefs, _decls, source, why = PRC.resolve_io_library_views(
+        proj, _producer(), None, None, None)
+    expected = (proj / "pdk" / "libs.ref" / "fixture_io" / "lef" /
+                "io.lef")
+    assert lefs == [expected]
+    assert wrong_a not in lefs
+    assert "recorded by this run" in source and why == ""
+
+
+def test_explicit_named_pdk_still_wins_over_run_record(tmp_path, monkeypatch):
+    proj = _project(tmp_path)
+    root = tmp_path / "installed"
+    explicit = _installed_tree(root, "chosen")
+    monkeypatch.delenv("PDK", raising=False)
+    lefs, _decls, source, why = PRC.resolve_io_library_views(
+        proj, _producer(), None, str(root), "chosen")
+    assert lefs == [explicit]
+    assert source == "explicitly named PDK chosen" and why == ""
+
+
+def test_ambient_pdk_default_does_not_override_this_run(tmp_path, monkeypatch):
+    proj = _project(tmp_path)
+    root = tmp_path / "installed"
+    wrong = _installed_tree(root, "ambient_default")
+    monkeypatch.setenv("PDK_ROOT", str(root))
+    monkeypatch.setenv("PDK", "ambient_default")
+    lefs, _decls, source, why = PRC.resolve_io_library_views(
+        proj, _producer(), None, None, None)
+    expected = (proj / "pdk" / "libs.ref" / "fixture_io" / "lef" /
+                "io.lef")
+    assert lefs == [expected] and wrong not in lefs
+    assert "recorded by this run" in source and why == ""
+
+
+def test_ambiguous_root_without_valid_run_record_fails_closed(tmp_path,
+                                                              monkeypatch):
+    proj = _project(tmp_path, record=False)
+    root = tmp_path / "installed"
+    _installed_tree(root, "one")
+    _installed_tree(root, "two")
+    monkeypatch.setenv("PDK_ROOT", str(root))
+    monkeypatch.delenv("PDK", raising=False)
+    lefs, decls, source, why = PRC.resolve_io_library_views(
+        proj, _producer(), None, None, None)
+    assert lefs == [] and decls == [] and source == ""
+    assert "unnamed PDK root contains 2 trees" in why
 
 
 def test_no_pdk_or_vendor_literal_is_baked_into_the_fallback(tmp_path):

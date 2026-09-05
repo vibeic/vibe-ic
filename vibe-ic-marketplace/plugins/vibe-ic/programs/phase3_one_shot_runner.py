@@ -2549,7 +2549,8 @@ def _drv_constraints_sdc_block(slew_ns: Optional[float],
                                cap_pf: Optional[float],
                                note: str = "",
                                max_fanout: Optional[int] = None,
-                               fanout_note: str = "") -> str:
+                               fanout_note: str = "",
+                               supply_ports: Sequence[str] = ()) -> str:
     """Render the DRV (`set_max_transition` / `set_max_capacitance` /
     `set_max_fanout`) SDC block.
 
@@ -2581,19 +2582,71 @@ def _drv_constraints_sdc_block(slew_ns: Optional[float],
     ]
     if note:
         lines.append(f"# {note}")
+    scope = "[current_design]"
+    supplies = tuple(dict.fromkeys(str(x) for x in supply_ports if str(x)))
+    if supplies:
+        # A design-wide constraint also grades POWER/GROUND top ports even
+        # though max_capacitance/max_transition/max_fanout are signal-load
+        # rules.  Preserve the exact numeric limits and cover every
+        # hierarchical pin plus every non-supply port.  Supply identity comes
+        # only from the chip-top producer's domain plan.  Plain Tcl iteration
+        # is deliberate: the pinned OpenSTA lacks remove_from_collection.
+        predicates = " && ".join(
+            f'$_vibeic_drv_name ne "{_tcl_puts_safe(name)}"'
+            for name in supplies)
+        lines.extend([
+            "# Signal-only DRV scope; producer-proven supply ports excluded.",
+            "set _vibeic_drv_signal_ports {}",
+            "foreach _vibeic_drv_port [get_ports *] {",
+            "  set _vibeic_drv_name [get_name $_vibeic_drv_port]",
+            f"  if {{{predicates}}} "
+            "{ lappend _vibeic_drv_signal_ports $_vibeic_drv_port }",
+            "}",
+        ])
+        scope = "[get_pins -hierarchical *]"
     if slew_ns is not None:
-        lines.append(f"set_max_transition {slew_ns} [current_design]")
+        lines.append(f"set_max_transition {slew_ns} {scope}")
+        if supplies:
+            lines.append(
+                f"set_max_transition {slew_ns} $_vibeic_drv_signal_ports")
     if cap_pf is not None:
-        lines.append(f"set_max_capacitance {cap_pf} [current_design]")
+        lines.append(f"set_max_capacitance {cap_pf} {scope}")
+        if supplies:
+            lines.append(
+                f"set_max_capacitance {cap_pf} $_vibeic_drv_signal_ports")
     if max_fanout is not None:
         if fanout_note:
             lines.append(f"# {fanout_note}")
-        lines.append(f"set_max_fanout {max_fanout} [current_design]")
+        lines.append(f"set_max_fanout {max_fanout} {scope}")
+        if supplies:
+            lines.append(
+                f"set_max_fanout {max_fanout} $_vibeic_drv_signal_ports")
     if slew_ns is None and cap_pf is None and max_fanout is None:
         lines.append("# (no PDK liberty DRV limit resolved; per-pin liberty "
                      "max_capacitance still governs the resizer — no fabricated "
                      "design-wide limit)")
     return "\n".join(lines) + "\n"
+
+
+def _producer_supply_ports_for_drv(project: Optional[Path]) -> Tuple[str, ...]:
+    """Read the chip-top producer's exact single-domain supply-port identity."""
+    if project is None:
+        return ()
+    record = project / "reports" / "phase3" / "io_pad_chip_top.json"
+    try:
+        doc = json.loads(record.read_text(errors="replace"))
+    except (OSError, ValueError):
+        return ()
+    if doc.get("verdict") != "WROTE":
+        return ()
+    plan = doc.get("power_pad_plan")
+    if not isinstance(plan, dict) or plan.get("domain_topology") != "single_domain":
+        return ()
+    power, ground = plan.get("power_net"), plan.get("ground_net")
+    if not all(isinstance(x, str) and x for x in (power, ground)) \
+            or power == ground:
+        return ()
+    return str(power), str(ground)
 
 
 def _scale_sdc_to_liberty_units(sdc_text: str, liberty_path: str) -> str:
@@ -2976,7 +3029,8 @@ def _ensure_staged_sdc_drv(sdc_text: str, active_liberty: str,
             + _LAST_FANOUT_SOURCE.get("note", "design-declared fanout cap")
             + " (not fabricated).")
     return text + _drv_constraints_sdc_block(
-        slew, cap, note, max_fanout=fanout, fanout_note=_fanout_note), info
+        slew, cap, note, max_fanout=fanout, fanout_note=_fanout_note,
+        supply_ports=_producer_supply_ports_for_drv(project)), info
 
 
 def _resolve_staged_silicon_sdc(project: Path) -> Optional[Path]:
@@ -3481,7 +3535,8 @@ def _build_auto_silicon_sdc(project: Path, top: str = "",
               "empty BY CONSTRUCTION and the violation count is UNMEASURED.")
     sdc_text += _drv_constraints_sdc_block(
         drv_slew_ns, drv_cap_pf, drv_note,
-        max_fanout=_l9_fanout, fanout_note=_fanout_note)
+        max_fanout=_l9_fanout, fanout_note=_fanout_note,
+        supply_ports=_producer_supply_ports_for_drv(project))
     return sdc_text
 
 
@@ -6524,6 +6579,142 @@ def _io_pg_global_connect_tcl(pdk: "PdkConfig", container: Optional[str],
     return out
 
 
+def _pad_connected_ring_tcl(pdk: "PdkConfig") -> Dict[str, str]:
+    """Build a config-driven, runtime-fitted pad-connected core ring.
+
+    A configured ring is fitted to the *placed* side-pad/core gap in ODB.  The
+    configured offset is an upper bound, never a promise that ignores the
+    actual floorplan.  The remaining room must cover both rails plus the PDK's
+    declared clearance.  Corner cells do not overlap a core side and therefore
+    do not participate in the gap measurement.
+
+    No pads is an inert case: the ordinary core grid is emitted byte-for-byte
+    and no ring/connect/extension is added.  Pads with no measurable side gap,
+    or insufficient room, fail closed inside the surrounding pdngen catch via
+    both a named refusal marker and ``error``.  Pure config + ODB geometry;
+    there is no design, PDK, cell, instance, or net literal here.
+    """
+    cfg = getattr(pdk, "pdn_ring", None) or {}
+    if not cfg:
+        return {
+            "grid": "  define_pdn_grid -name grid -voltage_domains CORE\n",
+            "extend": "",
+            "connects": "",
+            "note": "",
+        }
+
+    layers = cfg.get("layers") or []
+    widths = cfg.get("widths") or []
+    spacings = cfg.get("spacings") or []
+    pad_layers = cfg.get("connect_to_pad_layers") or []
+    connects = cfg.get("connects") or []
+    try:
+        offset = float(cfg.get("core_offset_um"))
+        clearance = float(cfg.get("min_clearance_um"))
+        widths_f = [float(v) for v in widths]
+        spacings_f = [float(v) for v in spacings]
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"invalid pdn_ring numeric config: {exc}") from exc
+    names = list(layers) + list(pad_layers) + [n for pair in connects
+                                               for n in (pair or [])]
+    if (len(layers) != 2 or len(widths_f) != 2 or len(spacings_f) != 2
+            or not pad_layers or offset <= 0 or clearance < 0
+            or any(v <= 0 for v in widths_f + spacings_f)
+            or any(not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_.]*", str(n))
+                   for n in names)
+            or any(not isinstance(pair, (list, tuple)) or len(pair) != 2
+                   for pair in connects)):
+        raise ValueError("invalid pdn_ring shape or layer identifier")
+
+    layer_s = " ".join(str(v) for v in layers)
+    width_s = " ".join(str(v) for v in widths_f)
+    spacing_s = " ".join(str(v) for v in spacings_f)
+    pad_layer_s = " ".join(str(v) for v in pad_layers)
+    # Each side contains two rails on its one routing layer.  Use the larger
+    # orientation footprint so one conservative offset is valid on all sides.
+    footprint = max(2.0 * widths_f[i] + spacings_f[i] for i in range(2))
+    setup = f"""  # Pad-connected ring: fit the PDK recipe to placed ODB geometry.
+  set _vibeic_ring_extend {{}}
+  set _vibeic_pad_ring_active 0
+  set _vibeic_pr_block [ord::get_db_block]
+  set _vibeic_pr_core [$_vibeic_pr_block getCoreArea]
+  set _vibeic_pr_cx0 [$_vibeic_pr_core xMin]
+  set _vibeic_pr_cy0 [$_vibeic_pr_core yMin]
+  set _vibeic_pr_cx1 [$_vibeic_pr_core xMax]
+  set _vibeic_pr_cy1 [$_vibeic_pr_core yMax]
+  set _vibeic_pr_pad_count 0
+  set _vibeic_pr_power_pad_count 0
+  set _vibeic_pr_side_count 0
+  set _vibeic_pr_gap_dbu -1
+  foreach _vibeic_pr_inst [$_vibeic_pr_block getInsts] {{
+    set _vibeic_pr_master [$_vibeic_pr_inst getMaster]
+    if {{![string match "PAD*" [$_vibeic_pr_master getType]]}} {{ continue }}
+    if {{[$_vibeic_pr_inst getPlacementStatus] eq "NONE"}} {{ continue }}
+    incr _vibeic_pr_pad_count
+    # Only dedicated supply pads anchor a core ring. Signal and spacer pad
+    # bboxes often extend farther inward while carrying no ring-facing supply
+    # port on the declared layer; using them as the ring boundary produced a
+    # false geometric refusal on a ring that check_power_grid proved connected.
+    if {{![string match "PAD_POWER*" [$_vibeic_pr_master getType]]}} {{ continue }}
+    incr _vibeic_pr_power_pad_count
+    set _vibeic_pr_box [$_vibeic_pr_inst getBBox]
+    set _vibeic_pr_x0 [$_vibeic_pr_box xMin]
+    set _vibeic_pr_y0 [$_vibeic_pr_box yMin]
+    set _vibeic_pr_x1 [$_vibeic_pr_box xMax]
+    set _vibeic_pr_y1 [$_vibeic_pr_box yMax]
+    set _vibeic_pr_gap -1
+    if {{$_vibeic_pr_y1 <= $_vibeic_pr_cy0 && $_vibeic_pr_x1 > $_vibeic_pr_cx0 && $_vibeic_pr_x0 < $_vibeic_pr_cx1}} {{
+      set _vibeic_pr_gap [expr {{$_vibeic_pr_cy0 - $_vibeic_pr_y1}}]
+    }} elseif {{$_vibeic_pr_y0 >= $_vibeic_pr_cy1 && $_vibeic_pr_x1 > $_vibeic_pr_cx0 && $_vibeic_pr_x0 < $_vibeic_pr_cx1}} {{
+      set _vibeic_pr_gap [expr {{$_vibeic_pr_y0 - $_vibeic_pr_cy1}}]
+    }} elseif {{$_vibeic_pr_x1 <= $_vibeic_pr_cx0 && $_vibeic_pr_y1 > $_vibeic_pr_cy0 && $_vibeic_pr_y0 < $_vibeic_pr_cy1}} {{
+      set _vibeic_pr_gap [expr {{$_vibeic_pr_cx0 - $_vibeic_pr_x1}}]
+    }} elseif {{$_vibeic_pr_x0 >= $_vibeic_pr_cx1 && $_vibeic_pr_y1 > $_vibeic_pr_cy0 && $_vibeic_pr_y0 < $_vibeic_pr_cy1}} {{
+      set _vibeic_pr_gap [expr {{$_vibeic_pr_x0 - $_vibeic_pr_cx1}}]
+    }}
+    if {{$_vibeic_pr_gap >= 0}} {{
+      incr _vibeic_pr_side_count
+      if {{$_vibeic_pr_gap_dbu < 0 || $_vibeic_pr_gap < $_vibeic_pr_gap_dbu}} {{
+        set _vibeic_pr_gap_dbu $_vibeic_pr_gap
+      }}
+    }}
+  }}
+  if {{$_vibeic_pr_pad_count == 0}} {{
+    define_pdn_grid -name grid -voltage_domains CORE
+    puts "PDN_PAD_RING_INERT: no placed PAD-class masters; ordinary core grid retained"
+  }} elseif {{$_vibeic_pr_power_pad_count == 0 || $_vibeic_pr_side_count == 0 || $_vibeic_pr_gap_dbu < 0}} {{
+    puts "PDN_PAD_RING_REFUSED: placed_pads=$_vibeic_pr_pad_count power_pads=$_vibeic_pr_power_pad_count but no side supply-pad/core gap was measurable"
+    error "PDN_PAD_RING_REFUSED: no measurable side supply-pad/core gap"
+  }} else {{
+    set _vibeic_pr_tech [[ord::get_db] getTech]
+    set _vibeic_pr_dbu [$_vibeic_pr_tech getDbUnitsPerMicron]
+    set _vibeic_pr_gap_um [expr {{double($_vibeic_pr_gap_dbu) / $_vibeic_pr_dbu}}]
+    set _vibeic_pr_fit [expr {{floor(($_vibeic_pr_gap_um - {footprint} - {clearance}) * $_vibeic_pr_dbu) / $_vibeic_pr_dbu}}]
+    if {{$_vibeic_pr_fit > {offset}}} {{ set _vibeic_pr_fit {offset} }}
+    if {{$_vibeic_pr_fit <= 0}} {{
+      puts "PDN_PAD_RING_REFUSED: gap=${{_vibeic_pr_gap_um}}um footprint={footprint}um clearance={clearance}um leaves offset=${{_vibeic_pr_fit}}um"
+      error "PDN_PAD_RING_REFUSED: ring does not fit between placed pads and core"
+    }}
+    define_pdn_grid -name grid -voltage_domains CORE -connect_to_pads -connect_to_pad_layers {{{pad_layer_s}}}
+    add_pdn_ring -grid grid -layers {{{layer_s}}} -widths {{{width_s}}} -spacings {{{spacing_s}}} -core_offsets [list $_vibeic_pr_fit $_vibeic_pr_fit $_vibeic_pr_fit $_vibeic_pr_fit]
+    set _vibeic_ring_extend {{-extend_to_core_ring}}
+    set _vibeic_pad_ring_active 1
+    puts "PDN_PAD_RING_PLAN: placed_pads=$_vibeic_pr_pad_count power_pads=$_vibeic_pr_power_pad_count side_power_pads=$_vibeic_pr_side_count gap=${{_vibeic_pr_gap_um}}um configured_offset={offset}um fitted_offset=${{_vibeic_pr_fit}}um footprint={footprint}um clearance={clearance}um layers={layer_s} pad_layers={pad_layer_s}"
+  }}
+"""
+    extra = ""
+    for lower, upper in connects:
+        extra += ("  if {$_vibeic_pad_ring_active} { "
+                  f"add_pdn_connect -grid grid -layers {{{lower} {upper}}} "
+                  "}\n")
+    return {
+        "grid": setup,
+        "extend": " {*}${_vibeic_ring_extend}",
+        "connects": extra,
+        "note": f" + pad_ring({layer_s};pads={pad_layer_s};runtime-fit)",
+    }
+
+
 def _build_pdn_tcl(pdk: "PdkConfig", container: Optional[str] = None,
                    em_floor: Optional[Dict[str, Any]] = None) -> str:
     """v0.1.47 — emit OpenROAD PDN (`add_global_connection`/`define_pdn_grid`/
@@ -6621,6 +6812,7 @@ def _build_pdn_tcl(pdk: "PdkConfig", container: Optional[str] = None,
         # met1-follow-pins-only PDN below is emitted UNCHANGED.
         strap_tcl = ""
         strap_note = ""
+        ring = _pad_connected_ring_tcl(pdk)
         straps = (pdk.pdn_straps or {})
         # The registry config WINS when present (a PDK that ships tuned
         # IR-drop geometry keeps it, byte-identical). When it is ABSENT the
@@ -6692,12 +6884,13 @@ def _build_pdn_tcl(pdk: "PdkConfig", container: Optional[str] = None,
                     continue
                 _sl.append(
                     f"  add_pdn_stripe -grid grid -layer {lyr} -width {sw} "
-                    f"-pitch {sp} -offset {off}\n")
+                    f"-pitch {sp} -offset {off}{ring['extend']}\n")
             for pair in _connects:
                 if isinstance(pair, (list, tuple)) and len(pair) == 2:
                     _sl.append(
                         f"  add_pdn_connect -grid grid -layers "
                         f"{{{pair[0]} {pair[1]}}}\n")
+            _sl.append(ring["connects"])
             if _sl:
                 strap_tcl = "".join(_sl)
                 strap_note = (" + straps(" + _auto_note
@@ -6878,8 +7071,8 @@ def _build_pdn_tcl(pdk: "PdkConfig", container: Optional[str] = None,
             + _sec["enumerate"]
             + f"  set_voltage_domain -name CORE -power {pwr} -ground {gnd}"
             + _sec["domain_opt"] + "\n"
-            "  define_pdn_grid -name grid -voltage_domains CORE\n"
-            f"  add_pdn_stripe -grid grid -layer {fpl} -width {w} -followpins\n"
+            + ring["grid"]
+            + f"  add_pdn_stripe -grid grid -layer {fpl} -width {w} -followpins{ring['extend']}\n"
             + strap_tcl
             + _sec["stripes"]
             + _mg_tcl
@@ -8306,6 +8499,10 @@ class PdkConfig:
     # ABSENT -> the met1-follow-pins-only PDN is emitted unchanged (a PDK with a
     # naturally-connected followpin grid, or one not yet characterised).
     pdn_straps: Optional[Dict[str, Any]] = None
+    # Optional pad-connected core ring. Geometry is PDK-owned while the final
+    # offset is fitted at runtime to the placed PAD-class side-cell/core gap.
+    # Absence is byte-identical to the ordinary core-grid path.
+    pdn_ring: Optional[Dict[str, Any]] = None
     # v1.3.93 — static-IR sign-off budget as a PERCENT of VDD. None -> the
     # plugin's documented default (10%, matching ir_drop_budget_check); set a
     # smaller value for a stricter house rule. PSM's padless-core single-bump
@@ -10209,6 +10406,7 @@ def _pdk_config_from_registry(project: Path, reg: Dict[str, Any]
         # Optional upper-metal PDN strap plan. Absent => the adaptive PDN
         # emits follow-pin rails only (still a real, connected PDN).
         pdn_straps=reg.get("pdn_straps"),
+        pdn_ring=reg.get("pdn_ring"),
         # FEOL layer numbers for the tapless-cell latch-up VERIFICATION.
         # Absent => the PERC geometry layer stays INDETERMINATE (it never
         # fabricates a pass), which is the honest default.
@@ -10741,6 +10939,7 @@ def _detect_pdk(project: Path, override: Optional[str] = None
                     "decap_route_short_guard"),
                 tap_geom_layers=_signoff_cfg.get("tap_geom_layers"),
                 pdn_straps=_signoff_cfg.get("pdn_straps"),
+                pdn_ring=_signoff_cfg.get("pdn_ring"),
                 ir_budget_pct=_signoff_cfg.get("ir_budget_pct"),
                 cell_aware_feol=_signoff_cfg.get("cell_aware_feol"),
             )
@@ -24540,6 +24739,22 @@ def step_io_pad_chip_top_gen(project: Path, container: Optional[str] = None,
         if len(_pad_power) == 1 and len(_pad_ground) == 1:
             extra.extend(["--power-net", sorted(_pad_power)[0],
                           "--ground-net", sorted(_pad_ground)[0]])
+        # IO auxiliary controls are SIGNAL pins.  Driving them directly from
+        # the named POWER/GROUND nets leaves them outside both pdngen (not LEF
+        # PG pins) and detailed routing (the rail nets are special), producing
+        # a physically open ring whose source netlist merely looks tied.  Use
+        # the same active-Liberty tie-cell discovery already used by synthesis
+        # and spare tie-off, then pass the concrete masters/output pins to the
+        # wrapper producer.  The producer refuses only if a level it actually
+        # needs has no derived cell; nothing is guessed or PDK-named here.
+        _pad_ties = _v1_6_596_discover_tie_cells(pdk.liberty, container or "")
+        extra.extend([
+            "--tie-high-cell", str(_pad_ties.get("hi_cell") or ""),
+            "--tie-high-pin", str(_pad_ties.get("hi_pin") or ""),
+            "--tie-low-cell", str(_pad_ties.get("lo_cell") or ""),
+            "--tie-low-pin", str(_pad_ties.get("lo_pin") or ""),
+            "--tie-liberty", str(pdk.liberty),
+        ])
     prog = PROGRAMS_DIR / "io_pad_chip_top_gen.py"
     if not prog.is_file():  # pragma: no cover - shipped tree always has it
         return StepResult("io_pad_chip_top_gen", "ENV_UNAVAILABLE",
@@ -24988,6 +25203,16 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
         return StepResult("pnr", "FAIL", time.time() - t0, _ms["message"],
                           extras=_ms_extras)
 
+    # The chip-top producer must precede BOTH SDC construction and die
+    # resolution.  Its domain plan is the sole authority for excluding supply
+    # ports from signal-only DRV limits, while its die_required_um is an input
+    # to the floorplan.  The producer is idempotent and writes only its own
+    # wrapper/record; a design with no declared pad placement SKIPs.
+    _padring_producer = step_io_pad_chip_top_gen(project, container, pdk)
+    if _padring_producer.status not in ("PASS", "SKIP"):
+        print(f"[phase3] io_pad_chip_top_gen: {_padring_producer.status} — "
+              f"{_padring_producer.detail}", file=sys.stderr)
+
     # SDC: silicon top != FPGA wrapper. Project's fpga/*.sdc references
     # FPGA-only ports (CLOCK_50/KEY/GPIO_0) and may use Quartus-private
     # commands (derive_pll_clocks). For silicon synth (top=chip_top), use
@@ -25141,15 +25366,9 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
     # Resolve it BEFORE computing `_auto_die_requested` so an L9-pinned die
     # behaves EXACTLY like an explicit `--die-um` (pinned — never auto-sized
     # over, in either direction).
-    # THE PAD-RING PRODUCER RUNS BEFORE THE DIE IS RESOLVED, because its
-    # `die_required_um` is one of the inputs to that resolution and a record
-    # that appears afterwards is a record nothing read. It is idempotent and
-    # writes only its own two artefacts; on a design with no declared pad
-    # placement it SKIPs and contributes nothing, exactly as before.
-    _padring_producer = step_io_pad_chip_top_gen(project, container, pdk)
-    if _padring_producer.status not in ("PASS", "SKIP"):
-        print(f"[phase3] io_pad_chip_top_gen: {_padring_producer.status} — "
-              f"{_padring_producer.detail}", file=sys.stderr)
+    # The pad-ring producer already ran before SDC construction above.  Keep
+    # using that exact result here; a second dispatch could make the SDC and
+    # die read different producer generations.
     die_um, _l9_die_note = _effective_die_um(die_um, project)
     if _l9_die_note:
         print(f"[phase3] {_l9_die_note}", file=sys.stderr)
@@ -43708,8 +43927,23 @@ def _module_port_names(v_text: str, top: str) -> List[str]:
                   v_text, re.S)
     if not m:
         return []
-    return [p.strip().split("[")[0].strip().lstrip("\\")
-            for p in m.group(1).split(",") if p.strip()]
+    names: List[str] = []
+    for raw in m.group(1).split(","):
+        # Accept both non-ANSI ``module t(a, b)`` and ANSI
+        # ``module t(input [31:0] a, inout VDD)`` headers.  The previous
+        # split-at-"[" rule returned the keyword ``input`` for vectors and the
+        # whole string ``inout VDD`` for rails, silently defeating the exact
+        # interface comparison on generated physical wrappers.
+        decl = re.sub(r"/\*.*?\*/", " ", raw, flags=re.S)
+        decl = re.sub(r"//[^\n]*", " ", decl)
+        decl = re.sub(r"\[[^\]]*\]", " ", decl)
+        decl = decl.split("=", 1)[0].strip()
+        if not decl:
+            continue
+        name = decl.split()[-1].lstrip("\\")
+        if name:
+            names.append(name)
+    return names
 
 
 def _is_supply_name(name: str) -> bool:
@@ -43728,6 +43962,389 @@ def _gate_only_supply_ports(gate_v: Path, gold_v: Path, top: str) -> List[str]:
     except OSError:
         return []
     return sorted(p for p in (gate_ports - gold_ports) if _is_supply_name(p))
+
+
+def _gold_only_supply_ports(gate_v: Path, gold_v: Path, top: str) -> List[str]:
+    """SUPPLY-named top ports present on GOLD but absent from routed GATE.
+
+    Physical-wrapper generation can declare explicit rails even when OpenROAD
+    writes a signal-only routed module header.  As on the gate-only arm, a
+    non-supply interface difference is deliberately excluded and must surface
+    as a real equivalence error.
+    """
+    try:
+        gate_ports = set(_module_port_names(gate_v.read_text(errors="ignore"), top))
+        gold_ports = set(_module_port_names(gold_v.read_text(errors="ignore"), top))
+    except OSError:
+        return []
+    return sorted(p for p in (gold_ports - gate_ports) if _is_supply_name(p))
+
+
+def _lec_physical_top_gold(project: Path, logical_top: str,
+                           physical_top: str, core_gold: Path,
+                           out_dir: Path) -> Tuple[Path, Dict[str, Any]]:
+    """Return the exact hierarchy PnR consumed as the post-layout LEC gold.
+
+    A pad-ring flow routes a generated physical wrapper (for example
+    ``chip_top``) around the logical core.  The routed netlist keeps the
+    historical ``<logical>_pnr.v`` filename but its module is the physical
+    top.  Comparing that file as ``logical_top`` is not a hard proof: Yosys
+    stops at hierarchy with "Module '<logical>' not found".  Rebuild the gold
+    hierarchy from the exact PnR-input core plus the exact wrapper recorded by
+    ``io_pad_chip_top_gen``.  No interface is inferred and a missing or
+    contradictory record raises, so an unavailable proof remains a FAIL.
+    """
+    provenance: Dict[str, Any] = {
+        "logical_top": logical_top,
+        "physical_top": physical_top,
+        "core_gold": str(core_gold),
+        "core_gold_sha256": _sha256_file(core_gold),
+        "wrapper": None,
+        "wrapper_sha256": None,
+        "combined_gold": None,
+        "combined_gold_sha256": None,
+    }
+    if physical_top == logical_top:
+        return core_gold, provenance
+
+    rec_path = project / "reports" / "phase3" / "io_pad_chip_top.json"
+    try:
+        rec = json.loads(rec_path.read_text(errors="replace"))
+    except (OSError, ValueError) as exc:
+        raise RuntimeError(
+            f"physical LEC top is {physical_top!r}, but its wrapper record "
+            f"is unreadable: {rec_path}: {exc}") from exc
+    if (rec.get("verdict") != "WROTE"
+            or rec.get("chip_top_module") != physical_top
+            or rec.get("core_module") != logical_top):
+        raise RuntimeError(
+            "physical LEC wrapper identity does not match the routed DEF: "
+            f"record verdict={rec.get('verdict')!r}, "
+            f"chip_top_module={rec.get('chip_top_module')!r}, "
+            f"core_module={rec.get('core_module')!r}; expected "
+            f"{physical_top!r}/{logical_top!r}")
+    rel = rec.get("chip_top_verilog")
+    if not isinstance(rel, str) or not rel:
+        raise RuntimeError("physical LEC wrapper record names no Verilog view")
+    wrapper = (project / rel).resolve()
+    try:
+        wrapper.relative_to(project.resolve())
+    except ValueError as exc:
+        raise RuntimeError(
+            f"physical LEC wrapper escapes the project: {wrapper}") from exc
+    if not wrapper.is_file():
+        raise RuntimeError(f"physical LEC wrapper is absent: {wrapper}")
+    wrapper_text = wrapper.read_text(errors="replace")
+    core_text = core_gold.read_text(errors="replace")
+    if not _module_port_names(wrapper_text, physical_top):
+        raise RuntimeError(
+            f"recorded physical wrapper defines no module {physical_top!r}")
+    if not _module_port_names(core_text, logical_top):
+        raise RuntimeError(
+            f"PnR-input gold defines no module {logical_top!r}")
+
+    out_dir.mkdir(parents=True, exist_ok=True)
+    combined = out_dir / f"lec_post_{physical_top}_gold.v"
+    combined.write_text(core_text + "\n" + wrapper_text)
+    provenance.update({
+        "wrapper": str(wrapper),
+        "wrapper_sha256": _sha256_file(wrapper),
+        "combined_gold": str(combined),
+        "combined_gold_sha256": _sha256_file(combined),
+        "wrapper_record": str(rec_path),
+        "wrapper_record_sha256": _sha256_file(rec_path),
+    })
+    return combined, provenance
+
+
+def _def_specialnet_iterm_map(def_text: str) -> Dict[Tuple[str, str], str]:
+    """Return exact ``(instance, pin) -> special-net`` connectivity.
+
+    Only terminal tuples in the final DEF ``SPECIALNETS`` section are
+    authoritative here.  Route coordinate tuples are numeric and discarded;
+    top-level ``PIN`` and wildcard ``*`` tuples are not instance terminals.
+    A terminal named on two rails is contradictory and refuses instead of
+    allowing the later LEC normalization to choose one.
+    """
+    start = re.search(r"^\s*SPECIALNETS\b[^;]*;", def_text, re.MULTILINE)
+    if not start:
+        raise RuntimeError("final DEF has no SPECIALNETS section")
+    end = re.search(r"^\s*END\s+SPECIALNETS\b", def_text[start.end():],
+                    re.MULTILINE)
+    if not end:
+        raise RuntimeError("final DEF SPECIALNETS section is unterminated")
+    section = def_text[start.end():start.end() + end.start()]
+    entries = list(re.finditer(
+        r"^\s*-\s+(?P<net>\S+)\s+(?P<body>.*?);",
+        section, re.MULTILINE | re.DOTALL))
+    if not entries:
+        raise RuntimeError("final DEF SPECIALNETS section has no net entries")
+    out: Dict[Tuple[str, str], str] = {}
+    for entry in entries:
+        net = entry.group("net")
+        for inst, pin in re.findall(r"\(\s+(\S+)\s+(\S+)\s*\)",
+                                    entry.group("body")):
+            if inst.upper() == "PIN" or inst == "*":
+                continue
+            # Routed coordinates and mask tuples are numbers, not iterms.
+            if re.fullmatch(r"[-+]?\d+(?:\.\d+)?", inst):
+                continue
+            key = (inst, pin)
+            if key in out and out[key] != net:
+                raise RuntimeError(
+                    f"final DEF assigns {inst}/{pin} to both "
+                    f"{out[key]!r} and {net!r}")
+            out[key] = net
+    return out
+
+
+def _def_routed_signal_iterm_map(
+        def_text: str) -> Tuple[Dict[Tuple[str, str], str], Set[str]]:
+    """Return regular-NET iterms and the subset with routed geometry.
+
+    Auxiliary pad controls are LEF/Liberty SIGNAL pins.  Their legal physical
+    representation is therefore a normal routed DEF net driven by a tie-cell
+    output, not a POWER/GROUND SPECIALNET.  Keep this reader separate from the
+    rail reader above so neither evidence class can be mistaken for the other.
+    """
+    start = re.search(r"^\s*NETS\b[^;]*;", def_text, re.MULTILINE)
+    if not start:
+        raise RuntimeError("final DEF has no NETS section")
+    end = re.search(r"^\s*END\s+NETS\b", def_text[start.end():], re.MULTILINE)
+    if not end:
+        raise RuntimeError("final DEF NETS section is unterminated")
+    section = def_text[start.end():start.end() + end.start()]
+    entries = list(re.finditer(
+        r"^\s*-\s+(?P<net>\S+)\s+(?P<body>.*?);",
+        section, re.MULTILINE | re.DOTALL))
+    if not entries:
+        raise RuntimeError("final DEF NETS section has no net entries")
+    out: Dict[Tuple[str, str], str] = {}
+    routed: Set[str] = set()
+    for entry in entries:
+        net, body = entry.group("net"), entry.group("body")
+        if re.search(r"\+\s+(?:ROUTED|FIXED|COVER)\b", body):
+            routed.add(net)
+        for inst, pin in re.findall(r"\(\s+(\S+)\s+(\S+)\s*\)", body):
+            if inst.upper() == "PIN" or inst == "*" or re.fullmatch(
+                    r"[-+]?\d+(?:\.\d+)?", inst):
+                continue
+            key = (inst, pin)
+            if key in out and out[key] != net:
+                raise RuntimeError(
+                    f"final DEF assigns {inst}/{pin} to both "
+                    f"{out[key]!r} and {net!r}")
+            out[key] = net
+    return out, routed
+
+
+def _lec_restore_aux_connections(project: Path, physical_top: str,
+                                 gate: Path, final_def: Path, out_dir: Path,
+                                 mod: Any,
+                                 ) -> Tuple[Path, Dict[str, Any], Dict[str, int]]:
+    """Restore only producer-declared, final-DEF-proven IO control rails.
+
+    OpenROAD's signal-only ``write_verilog`` omits POWER/GROUND nets, including
+    IO control pins deliberately tied to those rails.  That is a serialization
+    loss, not a floating design.  The generated wrapper record states every
+    auxiliary control's required Boolean level and rail; the final DEF must
+    independently show the exact same instance/pin on that exact SPECIALNET.
+    Only then is a proof-only gate netlist written with those named connections.
+
+    Old records that merely chose tie values but never connected the pins are
+    refused.  Missing, ambiguous or contradictory DEF evidence is also refused.
+    No design, DEF, GDS or producer netlist is modified.
+    """
+    rec_path = project / "reports" / "phase3" / "io_pad_chip_top.json"
+    try:
+        rec = json.loads(rec_path.read_text(errors="replace"))
+    except (OSError, ValueError) as exc:
+        raise RuntimeError(
+            f"cannot restore physical-wrapper rail controls without its "
+            f"producer record: {rec_path}: {exc}") from exc
+    if rec.get("verdict") != "WROTE" or rec.get("chip_top_module") != physical_top:
+        raise RuntimeError(
+            "IO-control restoration record does not match physical top "
+            f"{physical_top!r}")
+    signal_raw = rec.get("aux_pin_signal_connections")
+    if isinstance(signal_raw, list) and signal_raw:
+        try:
+            def_text = final_def.read_text(errors="replace")
+            gate_text = gate.read_text(errors="replace")
+        except OSError as exc:
+            raise RuntimeError(f"LEC signal-control input unreadable: {exc}") from exc
+        observed, routed = _def_routed_signal_iterm_map(def_text)
+        connections: List[Tuple[str, str, str]] = []
+        for index, item in enumerate(signal_raw):
+            if not isinstance(item, dict):
+                raise RuntimeError(
+                    f"aux_pin_signal_connections[{index}] is not an object")
+            inst, pin, net = (item.get("instance"), item.get("pin"),
+                              item.get("net"))
+            tie_inst, tie_pin = (item.get("tie_instance"),
+                                 item.get("tie_pin"))
+            if not all(isinstance(value, str) and value for value in
+                       (inst, pin, net, tie_inst, tie_pin)):
+                raise RuntimeError(
+                    f"aux_pin_signal_connections[{index}] is incomplete")
+            for endpoint in ((inst, pin), (tie_inst, tie_pin)):
+                actual = observed.get(endpoint)
+                if actual != net:
+                    raise RuntimeError(
+                        f"final DEF does not prove {endpoint[0]}/{endpoint[1]} "
+                        f"on routed signal {net!r}; observed {actual!r}")
+            if net not in routed:
+                raise RuntimeError(
+                    f"final DEF signal {net!r} connects {inst}/{pin} but has "
+                    "no ROUTED/FIXED/COVER geometry")
+            connections.extend(((inst, pin, net), (tie_inst, tie_pin, net)))
+        # Signal nets must survive write_verilog.  Verify that exact property;
+        # unlike the historical rail path, do not create a proof-only repair.
+        _unchanged, stats = mod.restore_named_instance_connections(
+            gate_text, physical_top, connections,
+            internal_wires=sorted({net for _, _, net in connections}))
+        if stats.get("restored") or stats.get("internal_wires_added"):
+            raise RuntimeError(
+                "routed auxiliary signal connectivity was elided from the "
+                f"gate netlist: {stats}")
+        # OpenROAD also omits POWER/GROUND pin connections from its signal
+        # Verilog writer.  Restore only the supply-pad pins named by the same
+        # producer and independently observed on the exact regular DEF nets.
+        # (The conductor itself remains SPECIALNET geometry; this is a
+        # proof-only serialization repair, never a DEF/GDS mutation.)
+        pad_instances = rec.get("pad_instances")
+        supply_connections: List[Tuple[str, str, str]] = []
+        # Older/no-supply physical wrappers have no pad_instances map.  Their
+        # already-proven routed auxiliary signals remain valid; only a record
+        # that actually declares a supply pad enters the restoration below.
+        if not isinstance(pad_instances, dict):
+            pad_instances = {}
+        for supply_inst, item in sorted(pad_instances.items()):
+            if not isinstance(item, dict) or not item.get("is_supply_pad"):
+                continue
+            raw_connections = item.get("supply_connections")
+            if not isinstance(raw_connections, dict) or not raw_connections:
+                raise RuntimeError(
+                    f"producer supply pad {supply_inst!r} has no connections")
+            for supply_pin, supply_net in sorted(raw_connections.items()):
+                if not all(isinstance(value, str) and value for value in
+                           (supply_inst, supply_pin, supply_net)):
+                    raise RuntimeError(
+                        f"producer supply connection is incomplete: "
+                        f"{supply_inst}/{supply_pin}/{supply_net}")
+                actual = observed.get((supply_inst, supply_pin))
+                if actual != supply_net:
+                    raise RuntimeError(
+                        f"final DEF does not prove supply pad "
+                        f"{supply_inst}/{supply_pin} on {supply_net!r}; "
+                        f"observed {actual!r}")
+                supply_connections.append(
+                    (supply_inst, supply_pin, supply_net))
+        out, supply_stats, constants = gate, {
+            "top": physical_top, "requested": 0, "restored": 0,
+            "already_present": 0, "internal_wires_added": []}, {}
+        if supply_connections:
+            normalized, supply_stats = mod.restore_named_instance_connections(
+                gate_text, physical_top, supply_connections,
+                internal_wires=sorted({net for _, _, net in
+                                       supply_connections}))
+            out_dir.mkdir(parents=True, exist_ok=True)
+            out = out_dir / f"lec_post_{physical_top}_gate_supply_complete.v"
+            out.write_text(normalized)
+
+            plan = rec.get("power_pad_plan")
+            if not isinstance(plan, dict) \
+                    or plan.get("domain_topology") != "single_domain":
+                raise RuntimeError(
+                    "IO-control producer has no single-domain powered mode")
+            power, ground = plan.get("power_net"), plan.get("ground_net")
+            if not all(isinstance(value, str) and value for value in
+                       (power, ground)) or power == ground:
+                raise RuntimeError("producer power/ground identity is invalid")
+            constants = {str(power): 1, str(ground): 0}
+        provenance: Dict[str, Any] = {
+            "method": (("producer-declared, final-DEF-routed-signal-and-"
+                        "supply-pad-proven") if supply_connections else
+                       "producer-declared and final-DEF-routed-signal-proven"),
+            "source_gate": str(gate),
+            "source_gate_sha256": _sha256_file(gate),
+            "final_def": str(final_def),
+            "final_def_sha256": _sha256_file(final_def),
+            "wrapper_record": str(rec_path),
+            "wrapper_record_sha256": _sha256_file(rec_path),
+            "connections": len(signal_raw),
+            "stats": stats,
+            "signal_nets": sorted({str(x.get("net")) for x in signal_raw}),
+            "supply_connections": len(supply_connections),
+            "supply_stats": supply_stats,
+            "proof_gate": str(out),
+            "proof_gate_sha256": _sha256_file(out),
+            "powered_mode": constants,
+        }
+        return out, provenance, constants
+    plan = rec.get("power_pad_plan")
+    if not isinstance(plan, dict) or plan.get("domain_topology") != "single_domain":
+        raise RuntimeError(
+            "IO-control restoration requires a producer-owned single-domain "
+            "power_pad_plan")
+    power = plan.get("power_net")
+    ground = plan.get("ground_net")
+    if not isinstance(power, str) or not power or not isinstance(ground, str) \
+            or not ground or power == ground:
+        raise RuntimeError("power_pad_plan has no distinct power/ground rails")
+    raw = rec.get("aux_pin_rail_connections")
+    if not isinstance(raw, list) or not raw:
+        raise RuntimeError(
+            "physical-wrapper record has no aux_pin_rail_connections; old "
+            "tie decisions without connected pins cannot be normalized")
+    try:
+        def_text = final_def.read_text(errors="replace")
+        gate_text = gate.read_text(errors="replace")
+    except OSError as exc:
+        raise RuntimeError(f"LEC normalization input unreadable: {exc}") from exc
+    observed = _def_specialnet_iterm_map(def_text)
+    connections: List[Tuple[str, str, str]] = []
+    for index, item in enumerate(raw):
+        if not isinstance(item, dict):
+            raise RuntimeError(
+                f"aux_pin_rail_connections[{index}] is not an object")
+        inst, pin, rail, level = (item.get("instance"), item.get("pin"),
+                                  item.get("rail"), item.get("level"))
+        if not all(isinstance(value, str) and value
+                   for value in (inst, pin, rail)) or level not in (0, 1):
+            raise RuntimeError(
+                f"aux_pin_rail_connections[{index}] is incomplete/non-Boolean")
+        expected = power if int(level) == 1 else ground
+        if rail != expected:
+            raise RuntimeError(
+                f"producer record contradicts its rail plan for {inst}/{pin}: "
+                f"level {level} requires {expected!r}, records {rail!r}")
+        actual = observed.get((inst, pin))
+        if actual != rail:
+            raise RuntimeError(
+                f"final DEF does not prove {inst}/{pin} on {rail!r}; "
+                f"observed {actual!r}")
+        connections.append((inst, pin, rail))
+    normalized, stats = mod.restore_named_instance_connections(
+        gate_text, physical_top, connections, internal_wires=[power, ground])
+    out_dir.mkdir(parents=True, exist_ok=True)
+    out = out_dir / f"lec_post_{physical_top}_gate_power_complete.v"
+    out.write_text(normalized)
+    provenance: Dict[str, Any] = {
+        "method": "producer-declared and final-DEF-SPECIALNET-proven",
+        "source_gate": str(gate),
+        "source_gate_sha256": _sha256_file(gate),
+        "final_def": str(final_def),
+        "final_def_sha256": _sha256_file(final_def),
+        "wrapper_record": str(rec_path),
+        "wrapper_record_sha256": _sha256_file(rec_path),
+        "normalized_gate": str(out),
+        "normalized_gate_sha256": _sha256_file(out),
+        "connections": len(connections),
+        "stats": stats,
+        "rails": {"power": power, "ground": ground},
+    }
+    return out, provenance, {power: 1, ground: 0}
 
 
 def lec_post_layout_scope(gate_kind: str, gold_kind: str, top: str) -> str:
@@ -43778,6 +44395,18 @@ def _emit_lec_post_layout(project: Path, top: str, pdk: PdkConfig,
                      "unavailable — skipping.")
         return "SKIP"
     pnr_out = _pl.pnr_dir(project)
+    logical_top = top
+    primary_def = pnr_out / f"{logical_top}.def"
+    # PORTED from next/cxspm44 32d03831b. That branch resolved this through its
+    # own `_def_reopen_resolution(...).design`; this tree resolves the DEF-owned
+    # physical top through `_streamout_top`, which main already owns and which
+    # every other fresh-session consumer here uses. Value-identical: both yield
+    # the DEF's `DESIGN` name when it has one and `logical_top` otherwise --
+    # `_streamout_top` returns `top` for a missing, unreadable, headerless or
+    # agreeing DEF. `[0]` (dropping the disclosure) matches the three sibling
+    # call sites in this file that also take the name only.
+    physical_top = (_streamout_top(primary_def, logical_top)[0]
+                    if primary_def.is_file() else logical_top)
     postroute_timing_repair_out = _pl.postroute_timing_repair_dir(project)
     synth_out = _pl.synth_dir(project)
     # GATE (under test): the FINAL netlist — prefer post-repair, else routed PnR.
@@ -43796,9 +44425,9 @@ def _emit_lec_post_layout(project: Path, top: str, pdk: PdkConfig,
     # prevent, so it is derived from the arm rather than asserted.
     gate = None
     gate_kind = None
-    for cand, kind in ((postroute_timing_repair_out / f"{top}_timing_repaired.v",
+    for cand, kind in ((postroute_timing_repair_out / f"{logical_top}_timing_repaired.v",
                         "postroute_timing_repaired"),
-                       (pnr_out / f"{top}_pnr.v", "pnr_routed")):
+                       (pnr_out / f"{logical_top}_pnr.v", "pnr_routed")):
         if cand.is_file():
             gate = cand
             gate_kind = kind
@@ -43807,7 +44436,9 @@ def _emit_lec_post_layout(project: Path, top: str, pdk: PdkConfig,
         # honest SKIP: no routed/post-route repair netlist -> design not placed-and-routed.
         out_json.parent.mkdir(parents=True, exist_ok=True)
         out_json.write_text(json.dumps({
-            "tool": "yosys-equiv", "top": top, "verdict": "SKIP",
+            "tool": "yosys-equiv", "top": physical_top,
+            "logical_top": logical_top, "physical_top": physical_top,
+            "verdict": "SKIP",
             "skipped": True,
             "skip_reason": "no routed/post-route repair netlist (design not placed-and-routed)",
         }, indent=2) + "\n")
@@ -43825,27 +44456,69 @@ def _emit_lec_post_layout(project: Path, top: str, pdk: PdkConfig,
     # RTL == (step 13) == PnR input == (this gate) == routed with no gap. On a
     # design with no scan chain `pnr_input_netlist` returns `<top>_synth.v` and
     # the selection is unchanged.
-    gold, _gold_note, _gold_is_scan = pnr_input_netlist(project, top)
+    gold, _gold_note, _gold_is_scan = pnr_input_netlist(project, logical_top)
     gold_kind = "post_dft" if _gold_is_scan else "synth"
     if not gold.is_file():
-        gold = synth_out / f"{top}_synth.v"
+        gold = synth_out / f"{logical_top}_synth.v"
         gold_kind = "synth"
     if not gold.is_file():
-        rtl_candidates = [_pl.rtl_dir(project) / f"{top}.v",
-                          _pl.rtl_dir(project) / f"{top}.sv"]
+        rtl_candidates = [_pl.rtl_dir(project) / f"{logical_top}.v",
+                          _pl.rtl_dir(project) / f"{logical_top}.sv"]
         gold = next((c for c in rtl_candidates if c.is_file()), None)
         gold_kind = "rtl"
     if gold is None:
         out_json.parent.mkdir(parents=True, exist_ok=True)
         out_json.write_text(json.dumps({
-            "tool": "yosys-equiv", "top": top, "verdict": "SKIP",
+            "tool": "yosys-equiv", "top": physical_top,
+            "logical_top": logical_top, "physical_top": physical_top,
+            "verdict": "SKIP",
             "skipped": True,
             "skip_reason": "no golden reference (synth netlist / RTL) found",
         }, indent=2) + "\n")
         notes.append("post-layout LEC: SKIP — no golden reference netlist/RTL.")
         return "SKIP"
     notes.append(f"post-layout LEC: gold = {_gold_note}")
+    core_gold = gold
+    gold, physical_gold = _lec_physical_top_gold(
+        project, logical_top, physical_top, core_gold, out_json.parent)
+    if physical_top != logical_top:
+        notes.append(
+            "post-layout LEC: physical top resolved from routed DEF as "
+            f"{physical_top}; gold hierarchy is exact PnR-input "
+            f"{core_gold.name} + recorded wrapper "
+            f"{Path(str(physical_gold['wrapper'])).name}.")
+    top = physical_top
+    gate_original = gate
+    gate_power_normalization: Optional[Dict[str, Any]] = None
+    supply_constant_assumptions: Dict[str, int] = {}
+    if physical_top != logical_top:
+        # The physical wrapper's IO controls are deliberately tied to rails.
+        # OpenROAD's default writer elides those POWER/GROUND connections from
+        # Verilog, so recover them only from the producer record AND the exact
+        # final DEF.  Any old/floating or contradictory design refuses here.
+        gate, gate_power_normalization, supply_constant_assumptions = (
+            _lec_restore_aux_connections(
+                project, physical_top, gate, primary_def, out_json.parent, mod))
+        if gate_power_normalization["method"].endswith("routed-signal-proven"):
+            notes.append(
+                "post-layout LEC: verified "
+                f"{gate_power_normalization['connections']} IO controls on "
+                "producer-declared, final-DEF-routed tie-cell signal nets; "
+                "the gate netlist required no proof-only repair.")
+        else:
+            notes.append(
+                "post-layout LEC: restored "
+                f"{gate_power_normalization['connections']} IO control-to-rail "
+                "connections from matching producer + final DEF evidence.")
     lib_c = _to_container_path(str(pdk.liberty), container)
+    extra_liberties_host = [
+        str(value) for value in _sta_extra_liberties(project, pdk, pdk.liberty)
+        if str(value) != str(pdk.liberty)]
+    extra_liberties_c: List[str] = []
+    for value in extra_liberties_host:
+        translated = _to_container_path(value, container)
+        if translated != lib_c and translated not in extra_liberties_c:
+            extra_liberties_c.append(translated)
     gold_c = _to_container_path(str(gold), container)
     gate_c = _to_container_path(str(gate), container)
     # v?.?.? — scope the PDK blackbox set to the cells these two netlists
@@ -43860,16 +44533,29 @@ def _emit_lec_post_layout(project: Path, top: str, pdk: PdkConfig,
     stub_c = _synthesize_physical_cell_stubs(pdk, top, gate, container,
                                              out_json.parent)
     if stub_c and stub_c not in blackbox:
-        blackbox = blackbox + [stub_c]
+        # `-nooverwrite` means the first blackbox interface wins.  The
+        # netlist-derived stub carries the exact ports used by this routed
+        # artefact; a distribution-wide generic IO stub can be narrower (the
+        # measured gf180 supply pads omit one rail there) and otherwise abort
+        # hierarchy before any equivalence point exists.  The stub generator
+        # already excludes every Liberty-modelled functional cell, so putting
+        # it first cannot replace cell semantics.
+        blackbox = [stub_c] + blackbox
         notes.append("post-layout LEC: synthesized blackbox stubs for "
                      "physical-only LEF cells (no Liberty model).")
-    # v1.3.93 — strip PDN-added supply ports (VDD/VSS…) present on the routed
-    # gate netlist but absent from the synth gold, else equiv_make can't match
-    # the port lists. Supply-named only; a functional mismatch still surfaces.
-    strip_ports = _gate_only_supply_ports(gate, gold, top)
-    if strip_ports:
+    # Normalize only unmatched supply rails on either exact physical-top
+    # interface.  The wrapper GOLD can declare VDD/VSS while OpenROAD emits a
+    # signal-only GATE header, or PDN insertion can create the inverse.  The
+    # Liberty models omit PG pins, so those unmatched rails carry no logic;
+    # every non-supply mismatch remains in the proof and fails closed.
+    strip_gate_ports = _gate_only_supply_ports(gate, gold, top)
+    strip_gold_ports = _gold_only_supply_ports(gate, gold, top)
+    if strip_gate_ports:
         notes.append("post-layout LEC: stripping gate-only supply ports "
-                     f"{','.join(strip_ports)} before equiv_make.")
+                     f"{','.join(strip_gate_ports)} before equiv_make.")
+    if strip_gold_ports:
+        notes.append("post-layout LEC: stripping gold-only supply ports "
+                     f"{','.join(strip_gold_ports)} before equiv_make.")
     out_json.parent.mkdir(parents=True, exist_ok=True)
     ys_path = out_json.parent / f"lec_post_{top}.ys"
     ys_c = _to_container_path(str(ys_path), container)
@@ -43892,7 +44578,13 @@ def _emit_lec_post_layout(project: Path, top: str, pdk: PdkConfig,
             _kw["gate_renames"] = gate_renames
         ys = mod.build_yosys_equiv_script(gold_c, gate_c, lib_c, top,
                                           blackbox_v=blackbox,
-                                          strip_gate_ports=strip_ports,
+                                          strip_gate_ports=strip_gate_ports,
+                                          strip_gold_ports=strip_gold_ports,
+                                          extra_libs=extra_liberties_c,
+                                          constant_gate_wires=(
+                                              supply_constant_assumptions),
+                                          constant_gold_wires=(
+                                              supply_constant_assumptions),
                                           functional_lib=functional_lib,
                                           **_kw)
         ys_path.write_text(ys)
@@ -43916,7 +44608,9 @@ def _emit_lec_post_layout(project: Path, top: str, pdk: PdkConfig,
     # equivalence OUTCOME can never select the unsound -lib recipe — a §4.05
     # tightening, since that recipe can false-PASS NAND≡NOR.
     _probe_ys = out_json.parent / f"lec_post_{top}_libprobe.ys"
-    _probe_ys.write_text(mod.build_functional_probe_script(lib_c))
+    _probe_ys.write_text("".join(
+        mod.build_functional_probe_script(value)
+        for value in [lib_c] + extra_liberties_c))
     _probe_rc, _po, _pe = _docker_exec(
         container,
         (f"export PATH={TOOLS_IN_CONTAINER}/yosys/bin:"
@@ -43933,9 +44627,12 @@ def _emit_lec_post_layout(project: Path, top: str, pdk: PdkConfig,
     # detail field — so LEC never ran and the violation was never surfaced.
     _liberty_host_str = str(pdk.liberty) if getattr(pdk, "liberty", None) else ""
     try:
-        _lib_host = Path(_liberty_host_str) if _liberty_host_str else None
-        _lib_exists = bool(_lib_host and _lib_host.is_file())
-        _lib_nonempty = bool(_lib_exists and _lib_host.stat().st_size > 0)
+        _lib_hosts = ([Path(_liberty_host_str)] if _liberty_host_str else [])
+        _lib_hosts.extend(Path(value) for value in extra_liberties_host)
+        _lib_exists = bool(_lib_hosts) and all(path.is_file()
+                                               for path in _lib_hosts)
+        _lib_nonempty = bool(_lib_exists) and all(
+            path.stat().st_size > 0 for path in _lib_hosts)
     except OSError:
         _lib_exists = _lib_nonempty = False
     _func_ok, _func_reason = mod.functional_read_liberty_supported(
@@ -44110,10 +44807,22 @@ def _emit_lec_post_layout(project: Path, top: str, pdk: PdkConfig,
     doc = {
         "tool": "yosys-equiv",
         "top": top,
+        "logical_top": logical_top,
+        "physical_top": physical_top,
         "gold": str(gold), "gold_kind": gold_kind,
+        "gold_core": str(core_gold),
+        "physical_gold_provenance": physical_gold,
         "gold_provenance": _gold_note,
         "gate": str(gate),
+        "gate_original": str(gate_original),
+        "gate_power_normalization": gate_power_normalization,
+        "extra_liberties": extra_liberties_host,
+        "supply_constant_assumptions": supply_constant_assumptions,
         "blackbox_verilog": blackbox,
+        "stripped_unmatched_supply_ports": {
+            "gold": strip_gold_ports,
+            "gate": strip_gate_ports,
+        },
         "proven_points": parsed.get("proven"),
         "unproven_points": parsed.get("unproven"),
         "total_points": parsed.get("total"),
@@ -44133,7 +44842,7 @@ def _emit_lec_post_layout(project: Path, top: str, pdk: PdkConfig,
         # WHICH netlist this record is about, as a field a machine can read
         # instead of a path a reader has to recognise.
         "gate_kind": gate_kind,
-        "scope": lec_post_layout_scope(gate_kind, gold_kind, top),
+        "scope": lec_post_layout_scope(gate_kind, gold_kind, logical_top),
         # None when the first pass did not leave UNPROVEN points; otherwise
         # the classification and, when it ran, the re-proof record.
         "pin_permutation_reproof": pin_perm,
@@ -46800,7 +47509,7 @@ def _emit_metal_density_report(project: Path, top: str, pdk: PdkConfig,
         # and says so in `die_area_source`.
         + (f"-rd die={_dens_slot['die_rect'][0]},{_dens_slot['die_rect'][1]},"
            f"{_dens_slot['die_rect'][2]},{_dens_slot['die_rect'][3]} "
-           if _dens_slot else "") +
+           if _dens_slot else "")
         # OMITTED rather than passed empty: `-rd deck=` with nothing after it is
         # a malformed argument, and the recipe already treats an absent `deck`
         # global as "no deck offered" and says so in the report.

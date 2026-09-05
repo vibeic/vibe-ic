@@ -199,6 +199,20 @@ _NOT_PROSE: Dict[str, str] = {
         "Generated Verilog named-port connection syntax is parsed from the "
         "runner-owned testbench skeleton. The matched `.name(` token is an HDL "
         "grammar production and Verilog has no prose form that denies it.",
+    "phase3_one_shot_runner::_def_specialnet_iterm_map":
+        "Routed DEF SPECIALNETS terminal tuples, `- <net> ... ( <inst> <pin> ) "
+        "... ;` productions written by the router. DEF has no form that DENIES a "
+        "connection: a terminal is listed on a special net or it is not, and "
+        "there is no neighbouring sentence that could take it back. Direct "
+        "precedent, the SAME grammar exempted for the SAME stated reason: "
+        "`digital_hardmacro_gen::_specialnet_entries` (DEF SPECIALNETS) and "
+        "`macro_obs_geometry_intersect_check::parse_via_layers` (DEF VIAS). "
+        "This function is if anything the stricter reader of the two: it "
+        "DISCARDS numeric route-coordinate tuples and top-level PIN/`*` tuples "
+        "rather than guessing, and a terminal named on two rails RAISES instead "
+        "of letting the later LEC normalization pick one. Consulting "
+        "`_prose_polarity` here would add a branch that can never fire, and a "
+        "branch that can never fire is a green light rather than a check.",
     "digital_hardmacro_gen::_specialnet_entries":
         "Routed DEF SPECIALNETS entries and USE attributes are machine-written "
         "grammar. A special-net entry either exists or does not; DEF provides no "

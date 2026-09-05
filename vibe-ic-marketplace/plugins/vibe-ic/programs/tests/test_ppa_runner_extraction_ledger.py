@@ -213,7 +213,33 @@ _LEDGER = frozenset({
     "_emit_spef_coupling_augment", "_emit_spef_sta",
     "_ensure_staged_sdc_drv", "_ensure_staged_sdc_io_delay",
     "_extract_overutil_pct", "_flat_ocv_derate_tcl",
-    "_gate_only_supply_ports", "_ir_supply_from_psm_log",
+    "_gate_only_supply_ports",
+    # RECORDED with the commit that adds it (ported from next/cxspm44 ae4e0f4cb,
+    # "localize pad ties and reprove powered wrapper"). `_gold_only_supply_ports`
+    # returns a LIST OF PORT NAMES -- the SUPPLY-named top ports present on the
+    # GOLD netlist and absent from the routed GATE netlist -- by comparing two
+    # Verilog module headers. It returns no power figure, no activity basis, no
+    # row and no verdict; a non-supply interface difference is deliberately
+    # EXCLUDED so that it still surfaces as a real equivalence error.
+    #
+    # It is the MIRROR ARM of `_gate_only_supply_ports`, thirteen lines above it
+    # in the runner and already ledgered here; the two are called on CONSECUTIVE
+    # lines to reconcile the post-layout LEC port sets. Its own docstring says
+    # so: "As on the gate-only arm, a non-supply interface difference is
+    # deliberately excluded." Ledgering one arm of a two-arm reconciliation and
+    # not the other would split one decision across two places, which is the
+    # reviewing cost this ledger exists to prevent.
+    #
+    # WHY NOT `_ppa/power.py`, from that module's own rules: it owns exactly one
+    # question -- "given a power ARTEFACT, what are the internal / switching /
+    # leakage / total figures, and on what ACTIVITY BASIS were they computed".
+    # Measured over the file: `verilog`, `Verilog` and `.v` return ZERO hits, as
+    # do `io_pad_chip_top` and `subprocess`. It cannot read a Verilog module
+    # header, which is this function's only input. `_is_supply_name`, the
+    # predicate this function shares with the gate-only arm, is ledgered here
+    # for the same reason.
+    "_gold_only_supply_ports",
+    "_ir_supply_from_psm_log",
     "_is_supply_name", "_klayout_dummy_fill", "_l19_declared_die_area",
     "_l9_declared_die_area", "_l9_declared_die_util",
     "_liberty_drv_limits", "_load_sparse_die_skip",
@@ -238,7 +264,32 @@ _LEDGER = frozenset({
     "_postroute_timing_repair_log_verdict",
     "_postroute_timing_repair_resizer_bounds",
     "_run_postroute_timing_repair",
-    "_power_domain_family", "_propagated_clock_tcl",
+    "_power_domain_family",
+    # RECORDED with the commit that adds it (ported from next/cxspm44 2100a24de,
+    # "route pad controls from tie cells"). `_producer_supply_ports_for_drv`
+    # returns a TUPLE OF TWO PORT NAMES -- the power and ground net names the
+    # chip-top producer ALREADY recorded in `reports/phase3/io_pad_chip_top.json`
+    # -- and `()` on any doubt whatever: unreadable record, `verdict` not WROTE,
+    # a plan that is not `single_domain`, a missing name, or power == ground. It
+    # returns no current, no IR drop, no leakage, no slack, no row and no
+    # verdict. It does not MEASURE a supply; it NAMES one the producer chose.
+    #
+    # It is SDC CONSTRUCTION and runs before OpenSTA is invoked. Its only two
+    # callers pass it straight into `_drv_constraints_sdc_block(...,
+    # supply_ports=...)`, which is ALREADY LEDGERED here -- so the argument and
+    # the function it is an argument to would otherwise sit in different modules.
+    # The token that reaches this gate is vocabulary only (`supply`, `drv`), and
+    # the gate's own docstring says it "says nothing about what the function does".
+    #
+    # Precedent, not a one-off: the pre-invocation SDC/DRV construction chain is
+    # ledgered here in full -- `_drv_constraints_sdc_block`, `_staged_sdc_survey`,
+    # `_scale_sdc_to_liberty_units`, `_staged_timing_exceptions`, and
+    # `_clock_port_against_the_design` (recorded as "SDC CONSTRUCTION, not timing
+    # extraction: it runs before OpenSTA is invoked"). This is the SUPPLY-PORT
+    # rung of that same chain, and it exists so that a DRV check does not treat a
+    # rail as a signal.
+    "_producer_supply_ports_for_drv",
+    "_propagated_clock_tcl",
     "_reconcile_staged_sdc_driving_cell", "_reconcile_staged_sdc_drv",
     "_recover_power_tcl", "_reference_flow_declared_die_util",
     # ADDED v1.11.57+ ON THE RECORD, which is what this ledger is for.

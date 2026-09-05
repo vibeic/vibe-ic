@@ -38,6 +38,8 @@ from __future__ import annotations
 
 import re
 
+import pytest
+
 import _pad_ring as PR
 import io_pad_chip_top_gen as G
 
@@ -195,25 +197,101 @@ def _emit():
                         "terminal": faces.terminal, "core_pin": faces.core_pin,
                         "ties": faces.ties, "tie_reasons": faces.reasons}
         ordered["S"].append(inst)
-    return G._emit_verilog("chip_top", "core", ordered, chosen, _PORTS), chosen
+    tie_cells = {
+        0: {"master": "fixture_tie_low", "pin": "ZN"},
+        1: {"master": "fixture_tie_high", "pin": "Z"},
+    }
+    return (G._emit_verilog("chip_top", "core", ordered, chosen, _PORTS,
+                            ("VDD", "VSS"), tie_cells), chosen)
 
 
 def test_the_emitted_netlist_puts_the_core_on_the_core_face():
     text, chosen = _emit()
+    seen_tie_nets = set()
     for inst, rec in chosen.items():
         line = [l for l in text.splitlines() if f" {inst} (" in l][0]
         # the port net is on the terminal, and on nothing else
         assert f".{rec['terminal']}({rec['port']})" in line
         assert f".{rec['core_pin']}(" in line
         assert re.search(rf"\.{rec['core_pin']}\((\w+)__core", line), line
-        # The ties are NOT Verilog constants — see the emitter's own note:
-        # `1'b0` on 75 pad pins materialised one `zero_` net that the flow
-        # types GROUND and pdngen never builds. What is asserted is that the
-        # decision exists, per pin, with a reason.
+        # The ties are neither constants nor direct rails: they land on routed
+        # signal nets driven by concrete PDK tie cells.
         for pin, level in rec["ties"].items():
             assert f".{pin}(1'b" not in line, (
                 f"{pin} tied as a netlist constant on {inst}")
+            match = re.search(rf"\.{pin}\((_vibeic_aux_tie_\d{{4}})\)", line)
+            assert match, line
+            tie_net = match.group(1)
+            assert tie_net not in seen_tie_nets, (
+                f"{inst}/{pin} shares tie driver net {tie_net}")
+            seen_tie_nets.add(tie_net)
+            assert f".{pin}({'VDD' if level else 'VSS'})" not in line
             assert rec["tie_reasons"].get(pin), f"{pin} tied with no reason"
+            tie_master = "fixture_tie_high" if level else "fixture_tie_low"
+            tie_pin = "Z" if level else "ZN"
+            suffix = tie_net.rsplit("_", 1)[1]
+            assert (f"{tie_master} _vibeic_aux_tie_cell_{suffix} "
+                    f"(.{tie_pin}({tie_net}))") in text
+    assert len(seen_tie_nets) == sum(
+        len(rec["ties"]) for rec in chosen.values())
+
+
+def test_an_auxiliary_control_without_derived_tie_cells_is_refused():
+    """Negative control: a recorded tie may not remain prose-only/floating."""
+    with pytest.raises(G.Refusal) as exc:
+        cells = _cells()
+        faces = PR.pad_cell_faces(cells["fixture_io__bi"], "output")
+        chosen = {"u_pad_q": {
+            "port": "q", "master": "fixture_io__bi", "direction": "output",
+            "terminal": faces.terminal, "core_pin": faces.core_pin,
+            "ties": faces.ties, "tie_reasons": faces.reasons,
+        }}
+        G._emit_verilog("chip_top", "core", {"S": ["u_pad_q"]}, chosen,
+                        [_PORTS[-1]])
+    assert exc.value.rule == "AUXILIARY_PAD_TIE_CELL_ABSENT"
+
+
+def _tie_refusal(liberty):
+    """Drive the tie-cell refusal with `liberty` and return its message."""
+    cells = _cells()
+    faces = PR.pad_cell_faces(cells["fixture_io__bi"], "output")
+    chosen = {"u_pad_q": {
+        "port": "q", "master": "fixture_io__bi", "direction": "output",
+        "terminal": faces.terminal, "core_pin": faces.core_pin,
+        "ties": faces.ties, "tie_reasons": faces.reasons,
+    }}
+    with pytest.raises(G.Refusal) as exc:
+        G._emit_verilog("chip_top", "core", {"S": ["u_pad_q"]}, chosen,
+                        [_PORTS[-1]], tie_liberty=liberty)
+    assert exc.value.rule == "AUXILIARY_PAD_TIE_CELL_ABSENT"
+    return exc.value.message
+
+
+def test_the_tie_cell_refusal_names_the_search_space_it_read():
+    """An absence verdict must say WHERE it looked.
+
+    "this Liberty has no tie cell for that level" and "no Liberty was consulted
+    at all" are DIFFERENT facts, and a reader who cannot tell them apart cannot
+    tell a real library gap from a mis-wired producer. Chip/PDK-AGNOSTIC: the
+    path below is a fixture string, not a vendor library.
+    """
+    lib = "/fixture/libs.ref/fixture_std/lib/fixture_std__tt_025C_1v80.lib"
+    named = _tie_refusal(lib)
+    # VALUE-observing: the message carries the exact path it was handed.
+    assert lib in named
+    assert "resolved no tie-cell master" in named
+
+    # The other arm is a DIFFERENT sentence, not the same one with a blank in it.
+    silent = _tie_refusal("")
+    assert lib not in silent
+    assert "NO standard-cell Liberty path was supplied" in silent
+    assert "tie_liberty was empty" in silent
+    assert named != silent
+
+    # Both arms name the empty master/pin they actually got, so "absent" is
+    # reported as a measured value rather than left to inference.
+    for msg in (named, silent):
+        assert "master=''" in msg and "pin=''" in msg
 
 
 def test_the_core_instance_takes_the_internal_nets_not_the_ports():
