@@ -835,7 +835,14 @@ def _make_ai_review_task(problem_id: str, project: Path, got: dict,
                     "_optional_when": (
                         "a fresh semantic PASS proves that an inherited "
                         "challenge contradicts the prompt; verification_test "
-                        "must be a replacement test that PASSES this candidate"),
+                        "must be a replacement test that PASSES this candidate. "
+                        "The named challenge must ALSO validly FAIL, or be "
+                        "structurally INVALID on, THIS candidate: a challenge "
+                        "that still PASSES is not blocking acceptance, so it "
+                        "must not be named here, and naming one rejects the "
+                        "whole review. Name each inherited challenge at most "
+                        "once, and the replacement must be a DIFFERENT test "
+                        "from the one it replaces"),
                     "schema": _CHALLENGE_SUPERSESSION_SCHEMA,
                     "challenge_sha256": "<exact inherited challenge sha256>",
                     "rationale": (
@@ -1619,7 +1626,9 @@ def _validate_ai_review(task: dict) -> dict:
                 reasons.append(
                     "a challenge named for supersession must validly FAIL or "
                     "be structurally INVALID on the current candidate before "
-                    "it can be corrected")
+                    "it can be corrected; this one still PASSES, which means "
+                    "it is not blocking acceptance and does not need to be "
+                    "named -- drop it from challenge_supersessions")
             inherited_challenge_results.append(result)
             continue
         inherited_challenge_results.append(result)

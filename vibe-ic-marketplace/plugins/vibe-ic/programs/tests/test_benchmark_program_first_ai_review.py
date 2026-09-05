@@ -753,6 +753,222 @@ endmodule
 """ % cycles
 
 
+def test_the_supersession_contract_publishes_the_precondition_it_enforces(
+        tmp_path):
+    """The reviewer is told the rule BEFORE it is used to reject them.
+
+    Issue #2033 was filed because the published contract said only that a
+    supersession target must "contradict the prompt". The precondition the gate
+    actually enforces -- that the target must currently FAIL or be structurally
+    INVALID on THIS candidate -- lived in one place: the refusal message, which
+    you only read once you have already lost the run. A reviewer following the
+    contract exactly could therefore name a still-passing challenge and be
+    rejected on a criterion that was never advertised.
+    """
+    _, task, _ = _task(tmp_path)
+    shape = task["review_requirements"]["required_envelope"][
+        "challenge_supersessions"][0]
+    published = shape["_optional_when"]
+    #: The old contract already said this much, and it is not enough on its own.
+    assert "contradicts the prompt" in published
+    #: The precondition the gate enforces must be visible BEFORE the rejection.
+    assert "validly FAIL" in published
+    assert "structurally INVALID" in published
+    #: And the remedy, so a reviewer is not left guessing what to change.
+    assert "still PASSES" in published
+    assert "must not be named" in published
+    #: Every refusal this feature can emit is now published, not just that one.
+    #: Audited against the reasons in _challenge_supersessions_from_review:
+    #: object shape, schema, naming an inherited sha256, rationale length and
+    #: prompt evidence were already published; these two were not.
+    assert "at most once" in published
+    assert "DIFFERENT test" in published
+
+
+@_NEEDS_SIMULATOR
+def test_the_passing_target_refusal_names_the_remedy(tmp_path):
+    """A refusal that does not say what to change is a trap, not a gate."""
+    _, task, _ = _task(tmp_path)
+    inherited = _write_challenge(
+        task, "inherited-supported-passing-test.sv",
+        Path(_write_direct_assignment_challenge(task)["path"]).read_text()
+        .replace("module vibeic_ai_challenge_tb;",
+                 "// inherited passing proof\nmodule vibeic_ai_challenge_tb;", 1),
+        [{"excerpt": "assign y = a",
+          "supports": "The inherited test checks the stated equality."}],
+        "Output y must equal input a.",
+        ("This inherited challenge checks exactly the direct assignment the "
+         "prompt states, so its expectation is supported by the public input."),
+        inherited=True)
+    task["verification_challenges"] = [inherited]
+    review = _valid_review(task)
+    review["verification_test"] = _write_direct_assignment_challenge(task)
+    review["challenge_supersessions"] = [_supersession(
+        inherited,
+        ("This attempted retirement is illegitimate: the inherited test still "
+         "passes and its expectation is supported by the same public input the "
+         "replacement cites, so nothing about it is contradicted."),
+        [{"excerpt": "assign y = a",
+          "supports": "The inherited and replacement tests check equality."}])]
+    _write_review(task, review)
+
+    verdict = bd._validate_ai_review(task)
+    assert verdict["status"] == "REJECTED", verdict
+    reason = next(r for r in verdict["reasons"]
+                  if "named for supersession" in r)
+    #: The rule, then what is true of THIS target, then the action to take.
+    assert "still PASSES" in reason
+    assert "not blocking acceptance" in reason
+    assert "drop it from challenge_supersessions" in reason
+
+
+def _row_challenge_source(rows: list[tuple[str, str]]) -> str:
+    body = "".join(
+        "    code = 8'h%s; #1;\n"
+        "    if (value !== 8'h%s) begin\n"
+        "      $display(\"VIBEIC_AI_CHALLENGE=FAIL\"); $fatal(1);\n"
+        "    end\n" % row for row in rows)
+    return ("\nmodule vibeic_ai_challenge_tb;\n"
+            "  reg [7:0] code; wire [7:0] value;\n"
+            "  dut candidate(.code(code), .value(value));\n"
+            "  initial begin\n" + body +
+            "    $display(\"VIBEIC_AI_CHALLENGE=PASS\");\n"
+            "    $finish;\n  end\nendmodule\n")
+
+
+_ROW1_EVIDENCE = [{"excerpt": "| 8'hA5 | 8'h11 |",
+                   "supports": "The test exercises the first truth-table row."}]
+_ROW2_EVIDENCE = [{"excerpt": "| 8'h3C | 8'hE7 |",
+                   "supports": "The test exercises the second truth-table row."}]
+
+
+@pytest.mark.parametrize("rows, evidence, expected", [
+    ([("A5", "11")], _ROW1_EVIDENCE, "REJECTED"),
+    ([("3C", "E7")], _ROW2_EVIDENCE, "REJECTED"),
+    ([("A5", "11"), ("3C", "E7")], _ROW1_EVIDENCE + _ROW2_EVIDENCE, "ACCEPTED"),
+])
+@_NEEDS_SIMULATOR
+def test_supersession_cannot_be_used_to_shrink_coverage(
+        tmp_path, rows, evidence, expected):
+    """Retiring a refuted test does not retire the obligation it carried.
+
+    A superseded challenge leaves the ACTIVE set the structural-obligation gate
+    measures, so retirement is the one move that could quietly reduce what a
+    candidate must satisfy. It cannot: the replacement must carry every
+    obligation forward, including the one the retired test used to cover and
+    the ones it never did. Discriminated three ways so the ACCEPTED arm proves
+    the two REJECTED arms are about coverage and not about supersession.
+    """
+    run, task = _truth_table_task(tmp_path)
+    wrong = _write_challenge(
+        task, "inherited-wrong-row2.sv",
+        _row_challenge_source([("3C", "AA")]), _ROW2_EVIDENCE,
+        "The old test expects 8'h3C to produce 8'hAA.",
+        ("This inherited challenge claims to check the second truth-table row "
+         "but requires 8'hAA where the public table states 8'hE7, so its "
+         "expectation is refuted by the public input it cites."),
+        inherited=True)
+    task["verification_challenges"] = [wrong]
+    review = _valid_review(task)
+    review["verification_test"] = _write_challenge(
+        task, "replacement.sv", _row_challenge_source(rows), evidence,
+        "The declared truth-table rows must decode as the public table states.",
+        ("The public truth table supplies both the stimulus and the expected "
+         "value for each row, so this test checks them without any oracle."))
+    review["challenge_supersessions"] = [_supersession(
+        wrong,
+        ("The inherited test requires 8'hAA for input 8'h3C while the public "
+         "table states 8'hE7, so its expectation is refuted by the declared "
+         "public contract it claims to check."),
+        _ROW2_EVIDENCE)]
+    _write_review(task, review)
+
+    verdict = bd._validate_ai_review(task)
+    assert verdict["status"] == expected, verdict
+    #: The retirement itself is legitimate in all three arms; only coverage differs.
+    assert verdict["inherited_challenge_results"][0]["status"] == "SUPERSEDED"
+    coverage = (verdict.get("program_review_coverage") or {}).get("status")
+    if expected == "REJECTED":
+        assert coverage == "FAIL", verdict
+        assert any("leaves structural prompt obligation" in reason
+                   for reason in verdict["reasons"]), verdict
+    else:
+        assert coverage == "PASS", verdict
+        assert not verdict["reasons"], verdict
+
+
+@pytest.mark.parametrize("greedy, expected", [(False, 0), (True, 2)])
+@_NEEDS_SIMULATOR
+def test_the_two_challenge_repair_shape_retires_only_the_refuted_test(
+        tmp_path, greedy, expected):
+    """The shape the dispatcher actually produces, through the real resume.
+
+    After one repair round a task carries the OLD inherited challenges AND the
+    fresh challenge that proved the parent wrong, so the issue's own wording --
+    "passes the first inherited test but fails this second inherited test" --
+    is a TWO-challenge task. Only the refuted one is retirable, and a review
+    that greedily names both loses the whole run rather than the extra target.
+    Written through `cmd_resume` so the audit record is read back off disk.
+    """
+    run, task = _task_with(tmp_path, _LATENCY_PROMPT, _latency_rtl(3))
+    wrong = _write_challenge(
+        task, "inherited-six-cycle-test.sv", _latency_test(6),
+        _LATENCY_EVIDENCE, "The old test accepts a six-cycle decode latency.",
+        ("This inherited challenge waits six clock cycles for the decoded "
+         "output even though the public description states three."),
+        inherited=True)
+    proving = _write_challenge(
+        task, "inherited-proving-three-cycle.sv",
+        "// the challenge that proved the parent candidate wrong\n"
+        + _latency_test(3),
+        _LATENCY_EVIDENCE,
+        "Raw command 0 must produce output 1 exactly three cycles later.",
+        ("This inherited challenge is the prompt-derived test that proved the "
+         "parent candidate wrong, carried onto the repair by the dispatcher."),
+        inherited=True)
+    task["verification_challenges"] = [proving, wrong]
+    review = _valid_review(task)
+    review["verification_test"] = _write_challenge(
+        task, "replacement.sv", _latency_test(3), _LATENCY_EVIDENCE,
+        "Raw command 0 must produce output 1 exactly three cycles later.",
+        ("The public description states a three-cycle decode latency, so this "
+         "test drives raw command 0 and checks the output is invalid before, "
+         "and correct at, the third cycle."))
+    review["challenge_supersessions"] = [
+        _supersession(
+            target,
+            ("The inherited test waits six cycles for the decoded output while "
+             "the public description states exactly three, so its expectation "
+             "is refuted by the declared public contract it claims to check."),
+            _LATENCY_EVIDENCE)
+        for target in ([wrong, proving] if greedy else [wrong])]
+    _write_review(task, review)
+    _solve_report(run, task)
+
+    assert bd.cmd_resume("rtllm", "/unused", str(run)) == expected
+    acceptance = json.loads((run / bd._ACCEPTANCE_REPORT).read_text())
+    outcome = acceptance["review_outcomes"][0]
+    results = outcome["inherited_challenge_results"]
+    if greedy:
+        assert acceptance["status"] == "PENDING"
+        assert acceptance["accepted_ids"] == []
+        assert outcome["status"] == "REJECTED"
+        assert any("must validly FAIL or be structurally INVALID" in reason
+                   for reason in outcome["reasons"]), outcome
+    else:
+        assert acceptance["status"] == "COMPLETE"
+        assert acceptance["accepted_ids"] == ["p1"]
+        assert outcome["status"] == "ACCEPTED"
+        #: The proof that still holds is untouched; only the refuted one moves.
+        assert [r["status"] for r in results] == ["PASS", "SUPERSEDED"]
+        assert results[1]["original_status"] == "FAIL"
+        assert results[1]["supersession"]["rationale"]
+        assert results[1]["supersession"]["prompt_evidence"]
+    #: Superseded is not deleted: the bytes and the hash both survive on disk.
+    assert Path(wrong["path"]).read_text() == _latency_test(6)
+    assert bd._sha256_text(Path(wrong["path"]).read_text()) == wrong["sha256"]
+
+
 @_NEEDS_SIMULATOR
 def test_a_passing_inherited_proof_does_not_block_the_repair_handoff(tmp_path):
     """The entry to the same loop, on the wrong candidate.
