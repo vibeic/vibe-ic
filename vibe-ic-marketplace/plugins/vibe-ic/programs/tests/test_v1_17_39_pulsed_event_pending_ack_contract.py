@@ -177,7 +177,12 @@ endmodule
 '''
 
 
-@pytest.mark.skipif(not shutil.which("iverilog"), reason="iverilog not installed")
+@pytest.mark.skipif(not shutil.which("iverilog"), reason=(
+    "NOT MEASURED HERE: no iverilog on PATH, so the ONLY executable proof that the "
+    "pulse survives unacked, that starvation asserts at the declared deadline, that "
+    "ack clears both, and that a request coincident with an ack is not dropped did "
+    "NOT run. Everything else in this file is textual. Measured in the pinned image, "
+    "where it passes -- a green run WITHOUT this line is weaker evidence than it looks."))
 def test_emitted_rtl_holds_the_pulse_and_reports_starvation(tmp_path):
     _, rtl = _run(tmp_path, PULSED)
     (tmp_path / "dut.sv").write_text(rtl)
@@ -362,7 +367,9 @@ def test_a_shared_acknowledgment_is_still_allowed(tmp_path):
     assert rtl.count("  input        ack,") == 1, "the shared ack is declared twice"
 
 
-@pytest.mark.skipif(not shutil.which("iverilog"), reason="iverilog not installed")
+@pytest.mark.skipif(not shutil.which("iverilog"), reason=(
+    "NOT MEASURED HERE: no iverilog on PATH, so the elaboration half of the one-driver-per-starvation-output check did NOT run; only the textual assert-count "
+    "half did. Measured in the pinned image, where it passes."))
 def test_each_starvation_output_has_exactly_one_driver(tmp_path):
     """Structural guarantee, checked on emitted RTL that actually elaborates."""
     _, rtl = _run(tmp_path, dict(BASE, events={
