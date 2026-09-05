@@ -561,3 +561,37 @@ def test_a_too_wide_literal_really_does_program_the_wrong_register(tmp_path):
         "expected iverilog to warn rather than fail; if it now errors, say so"
     r = subprocess.run([str(sim)], capture_output=True, text=True)
     assert "TRUNCATED_TO_R4" in r.stdout, r.stdout
+
+
+# --------------------------------------------------------------------------
+# THE FIT BOUNDARY IS EXACT
+#
+# The refusal tests use a 4-bit bus against 0x84 (clearly too narrow) and a
+# 12-bit bus (clearly wide enough). Neither pins the EDGE, so the rule could
+# have been off by one in either direction and both would still pass -- an
+# emitter that rejected a value which fits would refuse working designs, and one
+# that accepted a value one bit too wide would truncate silently, which is the
+# defect this whole contract exists to prevent.
+#
+# A w-bit bus addresses 0..2^w-1, so a value needing exactly w bits FITS.
+# The fixture's widest address is 0x84, which needs 8 bits.
+# --------------------------------------------------------------------------
+def test_the_fit_boundary_is_exact_at_the_widest_address():
+    widest = 0x84
+    assert widest.bit_length() == 8, "fixture changed; recheck this boundary"
+
+    with pytest.raises(ValueError) as e:
+        _tb(widths={"addr": widest.bit_length() - 1, "data": 32})
+    assert "contradict" in str(e.value)
+
+    for w in (widest.bit_length(), widest.bit_length() + 1):
+        body = _tb(widths={"addr": w, "data": 32})
+        assert f"input [{w-1}:0] addr," in body, f"a {w}-bit bus should fit 0x{widest:x}"
+
+
+def test_the_fit_rule_accepts_the_largest_value_a_bus_can_hold():
+    """Directly, without going through the fixture's particular addresses: a
+    w-bit bus must accept 2^w-1 and refuse 2^w."""
+    for w in (4, 8, 12):
+        assert (2 ** w - 1).bit_length() == w      # fits
+        assert (2 ** w).bit_length() == w + 1      # does not
