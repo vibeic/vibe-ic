@@ -542,11 +542,17 @@ def main(argv=None) -> int:
             print(f"      {r.detail}")
 
     if args.json:
-        Path(args.json).write_text(json.dumps(
-            {"programs_dir": str(pdir), "backstop_s": backstop,
-             "rows": [r.as_dict() for r in rows],
-             "offenders": len(offenders), "unjudged": len(unjudged)},
-            indent=1), encoding="utf-8")
+        # vibe-ic#1082: this program's DECLARED report destination is written
+        # through `_atomic_artefact`, so a reader never observes a half-written
+        # verdict. `write_json` serialises FIRST and only then opens anything,
+        # so a non-serialisable row fails with nothing on disk instead of
+        # leaving a truncated artefact a later gate would parse as a fact.
+        from _atomic_artefact import write_json as _write_json
+        _write_json(args.json,
+                    {"programs_dir": str(pdir), "backstop_s": backstop,
+                     "rows": [r.as_dict() for r in rows],
+                     "offenders": len(offenders), "unjudged": len(unjudged)},
+                    indent=1)
 
     if offenders:
         print(f"\n[FAIL] {len(offenders)} bounded ceiling(s) / bad timeout "
