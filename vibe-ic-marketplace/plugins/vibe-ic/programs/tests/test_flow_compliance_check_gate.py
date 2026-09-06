@@ -255,12 +255,43 @@ def _satisfy_p0_ancestry(project: Path) -> Path:
     (gd / "L21_POWER_INTENT.json").write_text(
         json.dumps({"schema": "L21_POWER_INTENT", "generated_by": "test fixture",
                     "supply_pins": [], "external_supplies": [], "pads": []}))
+    # The 20th declared output, and the FOURTH time this helper has gone stale
+    # the same way (#1159 staged the 18th, #1348 the 19th, both recorded above).
+    # v1.17.18 (340998c69) added `phase1/generated_docs/L19_CONSTRAINTS_PDK.json`
+    # to D1's `required_outputs`, so the helper closed 19 of 20 and
+    # `assert_p0_ancestry_closed` reddened NAMING the missing entry. That is the
+    # guard doing its job — the whole reason it was written instead of trusting
+    # the docstring — so the fixture is the side that moves. Like L21 above this
+    # is NOT one of `_L_DOCS`: it is a D1 `required_outputs` entry, a different
+    # contract enforced by a different rule, and the two must not be merged.
+    (gd / "L19_CONSTRAINTS_PDK.json").write_text(
+        json.dumps({"schema": "L19_CONSTRAINTS_PDK",
+                    "generated_by": "test fixture", "notes": []}))
     rp = project / "reports" / "phase1"
     rp.mkdir(parents=True, exist_ok=True)
     (rp / "extraction_coverage_report.md").write_text(
         "# extraction coverage\n\n100%\n")
+    # A report that carries a MEASUREMENT, not just a number-shaped key.
+    # `phase1_coverage_report_present_check` reads `overall.pct` together with
+    # the (hit, total) pair that pct was computed from, and returns rc=2
+    # "VACUOUS_PASS: report present but coverage NOT measured (hit=None,
+    # total=None)" for anything else — a `{"coverage_pct": 100}` body reaches
+    # that branch, because the gate refuses to certify a percentage it cannot
+    # see a denominator for.
+    #
+    # That branch is why this helper stopped closing the chain at v1.17.18
+    # (340998c69), which added the vacuity classification to
+    # `flow_compliance_check` — a gate that examined nothing is now reported as
+    # INCOMPLETE ("its input was applicable and was NOT examined") instead of
+    # counting as a quiet pass, so D1 goes MISSING and every P0 ancestry claim
+    # built on this fixture is voided. The gate and the classification are both
+    # right; the fixture was the stale side, exactly as it was for #1159 and
+    # #1348 above. Same lesson, third time: staged evidence has to be evidence.
     (rp / "extraction_coverage_report.json").write_text(
-        json.dumps({"coverage_pct": 100}))
+        json.dumps({"overall": {"pct": 100.0, "hit": 1, "total": 1},
+                    "per_doc": [{"doc": "L1_DATASHEET", "hit": 1,
+                                 "total": 1, "pct": 100.0}],
+                    "generated_by": "test fixture"}))
     # The 18th declared output. `phase1_expert_parse_track` writes this itself
     # when it runs for real. Issue #1973 requires a non-empty expert answer
     # before that execution is credited, so this closed-chain fixture stages

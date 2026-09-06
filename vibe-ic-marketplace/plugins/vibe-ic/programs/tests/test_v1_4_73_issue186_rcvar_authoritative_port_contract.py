@@ -132,15 +132,36 @@ def test_step_authoritative_l3_suppresses_additive_9th_port(tmp_path):
     _stage_l3_json(tmp_path)
     res = R.step_reset_clock_variant_aliases(tmp_path, "sha256")
     assert res.status == "SKIP", (res.status, res.detail)
+    # Pinned by its REASON since v1.17.48 (76e5960ee) made SKIP the answer for
+    # an unstaged project too: without this line the case below — a project with
+    # no documents at all — satisfies every other assertion in this test, and
+    # the #186 suppression would stop being what is measured here.
+    assert "authoritative L3/L9 top-port enumeration" in res.detail, res.detail
     body = f.read_text()
     assert "__rcvar_inner" not in body
     assert "rst_n" not in body      # the 9th port was NOT grafted on
 
 
 def test_step_prose_only_keeps_792_additive(tmp_path):
-    # NO-LEAK: without a STRUCTURED L3/L9 (only a prose/table contract) the #792
-    # additive dual-spelling wrapper STILL fires — a hidden TB may bind either
-    # spelling. Proves the #186 suppression is scoped to authoritative docs.
+    """RULED by v1.17.48 (76e5960ee, "fix(flow): require a requested interface
+    before aliasing reset/clock names", carried from PR #2041): a prose/table
+    contract that DECLARES the authored reset spelling is authority to KEEP that
+    spelling, never authority to graft a synonym beside it. The automatic flow
+    no longer constructs additive aliases at all — the #792 dual-spelling
+    wrapper this case was written for now lives only behind the explicit
+    `emit_variant_alias_wrapper(additive_reset_map=...)` API, which the ruling
+    deliberately retained for intentional compatibility callers.
+
+    So the pinned value moves PASS -> SKIP. It is NOT weakened to a bare
+    `status == "SKIP"`: this file has three cases that all SKIP with an
+    unchanged RTL (no contract, prose contract, authoritative enumeration), and
+    a bare SKIP assertion would be satisfied by any of them. Each is therefore
+    pinned by the REASON the ruling gives it, so the three stay distinguishable
+    and none of them can go green by accident.
+
+    The node ID is deliberately unchanged so the main-red census compares by
+    membership; the name still describes the pre-v1.17.48 contract.
+    """
     f = _stage_rtl(tmp_path)
     docs = tmp_path / "input" / "docs"
     docs.mkdir(parents=True)
@@ -148,20 +169,67 @@ def test_step_prose_only_keeps_792_additive(tmp_path):
         "| Signal | Dir |\n|---|---|\n| clk | input |\n"
         "| reset_n | input |\n| cs | input |\n")
     res = R.step_reset_clock_variant_aliases(tmp_path, "sha256")
-    assert res.status == "PASS", (res.status, res.detail)
-    assert "additive" in res.detail.lower()
+    assert res.status == "SKIP", (res.status, res.detail)
+    # THE DISCRIMINATOR: the design's own contract declared the spelling, so the
+    # refusal is the #689 one — not the "nobody asked" refusal below.
+    assert "#689" in res.detail, res.detail
     body = f.read_text()
-    assert "__rcvar_inner" in body and "rst_n" in body
+    assert "__rcvar_inner" not in body, "the authored RTL must be left unchanged"
+    assert "rst_n" not in body, "no synonym may be grafted onto a declared reset"
 
 
 def test_step_no_contract_still_renames_518(tmp_path):
-    # NO-LEAK: a design that ships NO contract at all STILL gets the #518
-    # canonical rename (reset_n -> rst_n) — the field-verified hidden-TB doctrine.
+    """RULED by v1.17.48 (76e5960ee), same ruling as the case above: the #518
+    hidden-TB doctrine was a GUESS at a binding nobody stated, and guessing it
+    could rename the delivered interface out from under a design that was
+    already passing. With no contract at all there is no authority to rename,
+    so the authored ports are preserved and the step reports an advisory SKIP.
+    SKIP is not semantic acceptance — it is the refusal to act unasked.
+
+    Pinned by its own reason ("no authoritative interface requests ...") so this
+    case cannot be satisfied by the #689 refusal above, nor by the authoritative
+    -enumeration refusal in the #186 repro.
+
+    The node ID is deliberately unchanged so the census compares by membership;
+    the name still describes the pre-v1.17.48 contract.
+    """
     f = _stage_rtl(tmp_path)
+    res = R.step_reset_clock_variant_aliases(tmp_path, "sha256")
+    assert res.status == "SKIP", (res.status, res.detail)
+    assert "no authoritative interface requests" in res.detail, res.detail
+    body = f.read_text()
+    assert "__rcvar_inner" not in body, "the authored RTL must be left unchanged"
+    assert "rst_n" not in body, "no rename may happen without a requested interface"
+
+
+def test_step_requested_l9_destination_does_alias(tmp_path):
+    """THE POSITIVE ARM v1.17.48 left this file without, and the reason the
+    three SKIPs above are not vacuous.
+
+    After the ruling, every case this file staged returns SKIP with the RTL
+    untouched — including the #186 repro. Measured on e1814e28d: a project with
+    NO documents whatsoever produces exactly the observable end state the #186
+    test asserts (SKIP, no `__rcvar_inner`, no `rst_n`), so that test could no
+    longer tell the #186 suppression apart from an empty directory.
+
+    This case supplies what the ruling asks for — an authoritative interface
+    that REQUESTS the destination spelling (`rst_n`) and does NOT require the
+    source spelling (`reset_n`) — and pins that the rename then DOES fire. It is
+    the direction that fails if the aliaser is disabled outright, which is what
+    makes the SKIPs above evidence rather than a description of a dead step.
+    """
+    f = _stage_rtl(tmp_path)
+    requested = ["clk", "rst_n", "cs", "we", "address",
+                 "write_data", "read_data", "error"]
+    gd = tmp_path / "phase1" / "generated_docs"
+    gd.mkdir(parents=True, exist_ok=True)
+    (gd / "L9_INTEGRATION_SPEC.json").write_text(json.dumps(
+        {"top_module": "sha256", "top_ports": requested}))
     res = R.step_reset_clock_variant_aliases(tmp_path, "sha256")
     assert res.status == "PASS", (res.status, res.detail)
     body = f.read_text()
-    assert "__rcvar_inner" in body and "rst_n" in body
+    assert "__rcvar_inner" in body, res.detail
+    assert "rst_n" in body, res.detail
 
 
 # ════════════════════════════════════════════════════════════════════════
