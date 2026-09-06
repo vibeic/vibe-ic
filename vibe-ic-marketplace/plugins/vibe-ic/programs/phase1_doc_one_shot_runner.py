@@ -118,6 +118,12 @@ import floorplan_contract as _fpc
 from l_doc_consumer_contract import project_relative_source
 from _prose_polarity import is_denied as _prose_is_denied
 from _prose_polarity import sentence_scope as _prose_sentence_scope
+# ORGANIC #2055 — the two TIERS, which are not interchangeable: a bare
+# "no"/"not" DENIES the proposition, while "n/a"/"removed"/"superseded"
+# RETIRES a row the document still prints. `_harvest_test_cases_from_input_
+# tables` acts differently on each; see `_v2055_oracle_cell_polarity`.
+from _prose_polarity import DENIAL_CORE_RE as _PROSE_DENIAL_CORE_RE
+from _prose_polarity import blank_bracketed as _prose_blank_bracketed
 from _specrtl_common import strip_comments as _strip_hdl_comments
 # THE L-document write chokepoint. Every path in this file that writes a
 # `generated_docs/*.json` goes through `_stamp.dump`, which records the
@@ -51193,6 +51199,82 @@ _L10_TC_AFFIRM_LED = re.compile(
 _L10_TC_SUBSTANTIVE_TAIL = re.compile(r'[0-9]|[<>≤≥]|<=|>=|==')
 
 
+# ORGANIC #2055 — THE ORACLE CELL'S POLARITY, ASKED BEFORE IT IS BELIEVED.
+#
+# `prose_polarity_consulted_check` has named
+# `phase1_doc_one_shot_runner::_harvest_test_cases_from_input_tables` since
+# v1.17.79: it reads a value out of a verification-plan table cell and writes it
+# into `L10.test_cases[].expected` as a declaration, without ever asking whether
+# that cell DENIES the proposition it is about. That is the #706 / #711 shape —
+# "This block is NOT targeted at <PDK>" publishing the PDK — one layer over.
+#
+# The concrete instance in this function is the ASSERTION ROW. A
+# `| scenario | expected |` table whose oracle cell carries only an affirmation
+# ("OK", "Yes", a tick) states that the SCENARIO holds, and the harvester emits
+# `expected = "holds: <scenario>"`. `_L10_TC_AFFIRM_LED` is a one-sided
+# vocabulary: it recognises the word that says YES and nothing that says NO. So
+# a cell reading `OK — not required for this revision` is affirmation-led, has
+# no digit and no relation in its tail, and is published as `holds: <scenario>`
+# — the design's own table says the scenario is NOT required and L10 declares it
+# must hold. Nothing downstream can recover that; the anchor gate sees a
+# well-formed predicate.
+#
+# So the affirmation is asked. THE VOCABULARY IS NOT COPIED HERE: `_prose_
+# polarity` owns the list of words that mean "no", and this function imports it,
+# because three private copies of it is how #712 happened.
+#
+# The two tiers are used as the module says they must be:
+#   * CORE  ("no", "not", "none", "never", 不/否/非/无/無) DENIES the
+#     proposition. On a cell that is NOTHING BUT that denial, the row states a
+#     real negative and is emitted as `does not hold: <scenario>` — the exact
+#     mirror of the affirmation branch, so the input's stated NO becomes a
+#     checkable predicate instead of a bare marker the anchor gate refuses.
+#   * RETIRED ("n/a", "removed", "superseded", "deprecated", "no longer") says
+#     the row DOES NOT APPLY. That is not a false proposition and must not be
+#     emitted as one; the row keeps the cell verbatim and is marked
+#     `oracle_retired_by_input`, beside the existing `oracle_absent`, so the
+#     absence is visible rather than graded.
+#
+# THE BOUND THAT KEEPS A REAL ORACLE SAFE. A denial word inside a SUBSTANTIVE
+# oracle is part of the answer, not its polarity — `expected = "no response
+# frame"` is a perfectly good golden value and must survive byte-identical. So
+# the denial branches fire ONLY when the cell is nothing but the marker: with
+# bracketed qualifiers blanked (per #711) and the denial word removed, no
+# alphanumeric character is left. `no response frame` leaves `response frame`
+# and is untouched; `N/A` and `No` leave nothing and are claimed.
+#
+# NOT CLAIMED, AND DELIBERATELY. A cell reading only `X` or a cross glyph is a
+# denial to a human and is NOT in `_prose_polarity`'s vocabulary, which is
+# WORDS. Adding a private symbol roster here is precisely the divergence #712
+# exists to end, so those cells fall through unchanged and are reported by the
+# oracle-anchor gate as it already reports them.
+#
+# chip-AGNOSTIC: one imported negation vocabulary and pure cell structure.
+_V2055_ORACLE_RESIDUE_RE = re.compile(r"[0-9A-Za-z\u4e00-\u9fff]")
+
+
+def _v2055_oracle_denial_tier(cell, word):
+    """"denied" | "retired" | None, given the denial `word` the CALLER found.
+
+    The question — "does this cell deny?" — is asked BY THE EXTRACTOR, with
+    `_prose_is_denied`, at the site where the value is read. This function only
+    classifies the answer into the module's two tiers, and applies the bound
+    that keeps a substantive oracle safe: a verdict is returned only when the
+    cell is NOTHING BUT that denial. `expected = "no response frame"` leaves
+    `response frame` behind and is left exactly as it is.
+    """
+    text = (cell or "").strip()
+    if not text or not word:
+        return None
+    # Blank the bracketed qualifiers (#711), drop the denial word itself, and
+    # ask whether any substance is left. Anything left means the denial was
+    # part of an answer, not the whole of it.
+    residue = _prose_blank_bracketed(text).replace(word, " ")
+    if _V2055_ORACLE_RESIDUE_RE.search(residue):
+        return None
+    return "denied" if _PROSE_DENIAL_CORE_RE.search(word) else "retired"
+
+
 def _harvest_test_cases_from_input_tables(
         extracted: Dict[str, str]) -> List[Dict[str, Any]]:
     """Harvest typed test cases from verification-plan tables in the input
@@ -51349,13 +51431,50 @@ def _harvest_test_cases_from_input_tables(
                         _expected = last
                         _affirm_led = bool(
                             last and _L10_TC_AFFIRM_LED.match(last))
+                        # ORGANIC #2055 — ASK THE CELL'S POLARITY BEFORE
+                        # BELIEVING IT. The question is asked HERE, at the site
+                        # that reads the value, with the ONE shared vocabulary;
+                        # `_v2055_oracle_denial_tier` only classifies the answer.
+                        _polarity_word = _prose_is_denied(last) or ""
+                        _polarity = _v2055_oracle_denial_tier(
+                            last, _polarity_word)
+                        _no_substantive_tail = not (
+                            _L10_TC_SUBSTANTIVE_TAIL.search(
+                                _L10_TC_AFFIRM_LED.sub('', last, count=1)))
+                        _scenario_usable = bool(
+                            re.search(r'[0-9A-Za-z]', first))
                         _assertion_row = bool(
                             _affirm_led
-                            and not _L10_TC_SUBSTANTIVE_TAIL.search(
-                                _L10_TC_AFFIRM_LED.sub('', last, count=1))
-                            and re.search(r'[0-9A-Za-z]', first))
+                            # An affirmation that carries a denial ANYWHERE in
+                            # the same cell ("OK - not required for this
+                            # revision") affirms nothing, and this guard takes
+                            # the RAW question, not the bare-cell tier below:
+                            # the tier's bound exists to protect a substantive
+                            # ORACLE from being rewritten, and using it here
+                            # would let exactly the substantive denial through
+                            # — measured, this branch published
+                            # `holds: <scenario>` for that cell. When a cell
+                            # both affirms and denies, nothing is published:
+                            # the cell is kept verbatim and the oracle-anchor
+                            # gate judges it, which is the conservative half.
+                            and not _polarity_word
+                            and _no_substantive_tail
+                            and _scenario_usable)
+                        # The mirror of the affirmation branch: a cell that is
+                        # nothing but a CORE denial states that the scenario
+                        # does NOT hold, which is a predicate a testbench can
+                        # check.
+                        _denial_row = bool(
+                            _polarity == "denied"
+                            and not _affirm_led
+                            and _scenario_usable)
+                        # RETIRED is not a false proposition — the row does not
+                        # apply. Kept verbatim and MARKED, never graded.
+                        _oracle_retired = bool(_polarity == "retired")
                         if _assertion_row:
                             _expected = f"holds: {first}"
+                        elif _denial_row:
+                            _expected = f"does not hold: {first}"
                         _case = {
                             "name": name,
                             "kind": "functional_vector",
@@ -51368,6 +51487,14 @@ def _harvest_test_cases_from_input_tables(
                         if _assertion_row:
                             _case["oracle_from_assertion_row"] = True
                             _case["assertion_affirmation"] = last
+                        if _denial_row:
+                            # ORGANIC #2055 — a refusal that names its evidence
+                            # is checkable; a bare flag is not.
+                            _case["oracle_from_denial_row"] = True
+                            _case["denial_word"] = _polarity_word
+                        if _oracle_retired:
+                            _case["oracle_retired_by_input"] = True
+                            _case["denial_word"] = _polarity_word
                         if _oracle_absent:
                             _case["oracle_absent"] = True
                         out.append(_case)

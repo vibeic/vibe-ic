@@ -342,3 +342,139 @@ def test_step4_denominator_publishes_the_same_two_facts():
     assert denom["declared_row_kinds"] == {"verification_intent": 1}
     assert denom["rows_inside_tb_producer_scaffold_scope"] == 0
     assert denom["tb_producer_scaffold_scope"] == sorted(TB.SCAFFOLD_KINDS)
+
+
+# ---------------------------------------------------------------------------
+# 5. the oracle CELL's polarity is asked before the cell is believed
+#
+# `prose_polarity_consulted_check` named
+# `phase1_doc_one_shot_runner::_harvest_test_cases_from_input_tables` from
+# v1.17.79: it reads a value out of a verification-plan table cell and writes it
+# into `expected` as a declaration without asking whether that cell DENIES the
+# proposition it is about — the #706 `pdk_target` / #711 `die_area_budget_um`
+# shape one layer over.
+#
+# The instance is the ASSERTION ROW. `_L10_TC_AFFIRM_LED` is a one-sided
+# vocabulary: it knows the word that says YES and nothing that says NO, so a
+# cell reading `OK - not required for this revision` was affirmation-led, had no
+# digit and no relation in its tail, and was published as `holds: <scenario>` —
+# the design's own table saying NOT REQUIRED and L10 declaring it must hold.
+# ---------------------------------------------------------------------------
+def _table(rows) -> str:
+    body = "\n".join(f"| {a} | {b} |" for a, b in rows)
+    return "| scenario | expected |\n|---|---|\n" + body + "\n"
+
+
+def _harvest(rows):
+    """{name-prefix: case} for one `| scenario | expected |` table."""
+    cases = P._harvest_test_cases_from_input_tables({"L7_TEST_DEBUG.md":
+                                                     _table(rows)})
+    return {c["stimulus"]: c for c in cases}
+
+
+def test_an_affirmation_that_also_denies_is_not_an_affirmation():
+    """THE DEFECT. The cell says NOT REQUIRED; nothing may declare it holds."""
+    scenario = "the core stays in reset while cfg_en is low"
+    cell = "OK - not required for this revision"
+    case = _harvest([(scenario, cell)])[scenario]
+    assert case["expected"] != f"holds: {scenario}", (
+        "a cell that affirms AND denies was published as an affirmation — the "
+        "polarity of the sentence was never asked")
+    assert case["expected"] == cell, (
+        "when a cell both affirms and denies, the conservative half is to keep "
+        "it verbatim and let the oracle-anchor gate judge it")
+    assert "oracle_from_assertion_row" not in case
+
+
+def test_a_plain_affirmation_row_is_byte_identical():
+    """NO-LEAK. The affirmation branch is unchanged where nothing denies."""
+    scenario = "the core stays in reset while cfg_en is low"
+    case = _harvest([(scenario, "OK")])[scenario]
+    assert case["expected"] == f"holds: {scenario}"
+    assert case["oracle_from_assertion_row"] is True
+    assert case["assertion_affirmation"] == "OK"
+
+
+def test_a_substantive_oracle_carrying_a_denial_word_survives_untouched():
+    """NO-LEAK, and the bound that makes the denial branches safe.
+
+    `expected = "no response frame"` is a perfectly good golden value that
+    happens to contain "no".  Rewriting it would destroy a real oracle, so a
+    denial verdict is returned only when the cell is NOTHING BUT the denial.
+    """
+    scenario = "the bus goes silent on a bad address"
+    case = _harvest([(scenario, "no response frame")])[scenario]
+    assert case["expected"] == "no response frame"
+    assert "oracle_from_denial_row" not in case
+    assert "oracle_retired_by_input" not in case
+
+
+@pytest.mark.parametrize("cell", ["No", "not", "否"])
+def test_a_bare_CORE_denial_states_a_predicate(cell):
+    """A stated NO becomes something a testbench can check, not a bare marker."""
+    scenario = "the fifo overflows on the 9th write"
+    case = _harvest([(scenario, cell)])[scenario]
+    assert case["expected"] == f"does not hold: {scenario}"
+    assert case["oracle_from_denial_row"] is True
+    # A refusal that names its evidence is checkable; a bare flag is not.
+    assert case["denial_word"] == cell
+
+
+@pytest.mark.parametrize("cell", ["N/A", "superseded", "deprecated"])
+def test_a_RETIRED_denial_is_marked_not_graded(cell):
+    """The two tiers are NOT interchangeable.
+
+    "n/a" says the row DOES NOT APPLY.  That is not a false proposition and
+    must not be emitted as one — emitting `does not hold:` here would fabricate
+    a requirement the input never stated.
+    """
+    scenario = "the legacy wake pulse is honoured"
+    case = _harvest([(scenario, cell)])[scenario]
+    assert case["expected"] == cell, "a retired row keeps its cell verbatim"
+    assert case["oracle_retired_by_input"] is True
+    assert "oracle_from_denial_row" not in case
+
+
+def test_the_gate_no_longer_names_this_function():
+    """`prose_polarity_consulted_check` must not name it — and must have LOOKED.
+
+    A zero from an instrument that scanned nothing is not a pass, so the run is
+    required to have found a real population first.
+    """
+    import subprocess
+    plugin = _PROGRAMS.parent
+    proc = subprocess.run(
+        [sys.executable, str(_PROGRAMS / "prose_polarity_consulted_check.py"),
+         "--root", str(plugin)],
+        capture_output=True, text=True, timeout=900)
+    out = proc.stdout + proc.stderr
+    assert "CANNOT DETERMINE" not in out, (
+        f"the gate could not scan; that is NOT_MEASURED, not a pass: {out[:400]}")
+    assert "polarity-blind" in out or "prose extractor" in out, (
+        f"the gate produced no population to judge: {out[:400]}")
+    assert "_harvest_test_cases_from_input_tables" not in out, (
+        "the offender is still named by the gate:\n"
+        + "\n".join(l for l in out.splitlines() if "::" in l)[:800])
+
+
+def test_the_function_is_clean_by_CONSULTING_not_by_EXEMPTION():
+    """It must go to zero, not into a register.
+
+    Neither the accepted-debt baseline nor the `_NOT_PROSE` exempt set may
+    name it: both would record the debt rather than pay it.
+    """
+    import prose_polarity_consulted_check as G  # noqa: WPS433
+    name = "phase1_doc_one_shot_runner::_harvest_test_cases_from_input_tables"
+    assert name not in G._NOT_PROSE, (
+        "the function was exempted as NOT PROSE — it reads hand-written "
+        "verification-plan prose, in which 'not' is spellable and was spelled")
+    baseline = json.loads(
+        (_PROGRAMS / G._BASELINE_NAME).read_text(errors="replace"))
+    entries = baseline.get("polarity_blind", baseline) if isinstance(
+        baseline, dict) else baseline
+    assert entries, (
+        "the baseline could not be read as a population — NOT_MEASURED, not a "
+        "pass")
+    assert name not in entries, (
+        "the function was recorded as accepted debt in "
+        f"{G._BASELINE_NAME} instead of being fixed")
