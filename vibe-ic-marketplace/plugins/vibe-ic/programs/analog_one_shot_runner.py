@@ -946,6 +946,17 @@ def step_for_block(project: Path, block: Dict[str, Any], step_name: str,
                      (getattr(args, "container", None)
                       or os.environ.get("VIBEIC_ANALOG_CONTAINER",
                                         "vibeic-eda"))],
+                    # NO `timeout=` HERE, AND IT WAS FIXED TWICE. v1.17.49
+                    # (lane icadcf3, 975321e641) removed it first; this lane
+                    # found the same site independently while enumerating
+                    # wall-clock ceilings, which is itself the finding —
+                    # `_progress_run.run` has no `timeout` parameter by design
+                    # ("convert a call site by deleting the argument"), and the
+                    # TypeError it raised is neither OSError nor
+                    # SubprocessError, so the `except` below could not catch
+                    # it: the A6 advisory did not degrade, it took the whole
+                    # A6_block_pv step down. v1.17.49's code stands; this note
+                    # records the class so the next reader does not re-add it.
                     capture_output=True, text=True)
                 for _ln in (_acp.stdout or "").splitlines():
                     if _ln.startswith("A6 DRC ATTRIBUTION") or \

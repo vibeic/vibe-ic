@@ -71,14 +71,81 @@ def _find_source_netlist(bdir: Path, block: str) -> Optional[Path]:
 
 # ── minimal container helpers (self-contained; real-run only) ───────────────
 
-def _docker_exec(container: str, cmd: str, timeout: int = 600
-                 ) -> Tuple[int, str, str]:
+def _docker_exec_raw(container: str, cmd: str, timeout: int = 60
+                     ) -> Tuple[int, str, str]:
+    """A SHORT, bounded probe inside the container. Correct for `test -e` and
+    `command -v`: a probe that cannot answer in a minute IS broken, and its
+    failure decides nothing about a design. Also the callback the progress
+    watchdog uses for its own CPU / identity / reap probes, which must never
+    recurse back through the supervisor they are measuring.
+
+    A TIMEOUT IS NOT rc 127. That collapse is the whole reason this helper was
+    rewritten: `except Exception: return 127` mapped a SLOW tool onto the POSIX
+    "command not found" code, and this file's own note at `_tool_on_path`
+    records what A6 then reports for `rc=127, no report` -- "no parseable DRC
+    result". A slow engine and an ABSENT engine were byte-identical to every
+    reader. They are now 124 and 127.
+    """
     try:
         r = subprocess.run(["docker", "exec", container, "bash", "-lc", cmd],
                            capture_output=True, text=True, timeout=timeout)
         return r.returncode, r.stdout or "", r.stderr or ""
+    except subprocess.TimeoutExpired as exc:
+        out = exc.stdout or ""
+        if isinstance(out, bytes):
+            out = out.decode("utf-8", errors="replace")
+        return 124, out, f"PROBE TIMEOUT after {timeout}s: {exc}"
     except Exception as exc:                        # noqa: BLE001
         return 127, "", str(exc)
+
+
+def _docker_exec(container: str, cmd: str, timeout: int = 600, *,
+                 marker: Optional[str] = None,
+                 log_path: Optional[Path] = None) -> Tuple[int, str, str]:
+    """Run `cmd` in the container.
+
+    marker=None -> `_docker_exec_raw`: the SHORT bounded probe path.
+    marker set  -> the plugin-wide PROGRESS-STALL WATCHDOG
+    (`_docker_watchdog.run_docker_supervised`), with NO wall-clock ceiling: a
+    physical-verification run that is still making forward progress runs to
+    completion however long that legitimately takes, and only one that has
+    STOPPED moving is killed (rc `_watchdog.RC_STALLED`).
+
+    WHY THIS FILE NEEDED ITS OWN FIX. It rolled a private `docker exec` helper
+    -- a bare `subprocess.run(timeout=600)` with no supervision, no
+    container-side backstop (so a fired timeout ORPHANED the klayout inside the
+    container) and an `except Exception` that returned 127. `loop_watchdog_
+    compliance_check` could not see it: the binary name comes from a runtime
+    `_tool_on_path` lookup, so the argv carries no static long-tool literal for
+    its class-(a) scan to match. The engine's own ABSENCE is still detected the
+    way it always was, by `_tool_on_path` returning None BEFORE the run.
+    chip/tool-AGNOSTIC.
+    """
+    if marker is None:
+        return _docker_exec_raw(container, cmd, timeout)
+    try:
+        import sys as _sys
+        if str(PROGRAMS_DIR) not in _sys.path:
+            _sys.path.insert(0, str(PROGRAMS_DIR))
+        import _docker_watchdog as _dw
+    except Exception:                               # noqa: BLE001
+        # DEGRADE LOUDLY, NEVER SILENTLY: if the supervisor cannot be imported
+        # the run still happens, on the bounded path, and the caller can see
+        # from the rc which path it took.
+        return _docker_exec_raw(container, cmd, timeout)
+    try:
+        return _dw.run_docker_supervised(
+            container, cmd, marker, docker_exec_raw=_docker_exec_raw,
+            log_path=log_path)
+    except Exception as exc:                        # noqa: BLE001
+        # THE OLD HELPER SWALLOWED EVERYTHING INTO rc 127, and removing that
+        # must not silently turn an unexpected launch error into a traceback
+        # out of a physical-verification step. `run_supervised` maps a missing
+        # binary to 127 itself; what can still escape is an OSError from the
+        # spawn (permissions, no fds). Those ARE "the tool could not be run",
+        # so 127 is the right code for them and the exception text says which.
+        # A TIMEOUT can no longer arrive here at all — that was the defect.
+        return 127, "", f"supervised launch failed: {exc!r}"
 
 
 def _to_container_path(container: str, host_path: str) -> str:
@@ -209,7 +276,11 @@ def _klayout_drc_runner(deck: str, gds: str, block: str, container: str,
            f"-rd input={shlex.quote(gds_c)} "
            f"-rd report={shlex.quote(rpt_c)} "
            f"-rd topcell={shlex.quote(block)}")
-    rc, out, err = _docker_exec(container, cmd)
+    # SUPERVISED BY PROGRESS. The marker is the deck path, which is already in
+    # the argv, so the watchdog can find this job's process tree in the
+    # container and read its CPU. No ceiling: a DRC that is still working is
+    # never cut off, and one that has stopped moving is.
+    rc, out, err = _docker_exec(container, cmd, marker=deck_c)
     if not report_host.is_file():
         return None, {"reason": f"klayout produced no report (rc={rc})",
                       "tail": (out + err)[-300:]}
@@ -269,7 +340,8 @@ def _default_drc_runner(deck: str, gds: str, block: str, container: str,
     rpt_c = _to_container_path(container, str(report_host))
     cmd = f"{shlex.quote(binc)} {shlex.quote(deck_c)} {shlex.quote(gds_c)} " \
           f"{shlex.quote(rpt_c)} --cell={shlex.quote(block)}"
-    rc, out, err = _docker_exec(container, cmd)
+    rc, out, err = _docker_exec(container, cmd, marker=deck_c,
+                                log_path=report_host)
     if not report_host.is_file():
         return None, {"reason": f"svrfdrc produced no report (rc={rc})",
                       "tail": (out + err)[-300:]}
@@ -407,7 +479,8 @@ def _klayout_lvs_runset_runner(deck: str, gds: str, netlist: str, block: str,
     script.write_text(_prep.PORT_ONLY_LAYOUT_SCRIPT)
     rc_p, out_p, err_p = _docker_exec(
         container,
-        f"{shlex.quote(binc)} -b -r "
+        marker=_to_container_path(container, str(script)),
+        cmd=f"{shlex.quote(binc)} -b -r "
         f"{shlex.quote(_to_container_path(container, str(script)))} "
         f"-rd gds={shlex.quote(_to_container_path(container, gds))} "
         f"-rd out={shlex.quote(_to_container_path(container, str(cmp_gds)))} "
@@ -419,7 +492,8 @@ def _klayout_lvs_runset_runner(deck: str, gds: str, netlist: str, block: str,
     db = work / f"{block}.lvsdb"
     rc, out, err = _docker_exec(
         container,
-        f"{shlex.quote(binc)} -b -r "
+        marker=_to_container_path(container, str(db)),
+        cmd=f"{shlex.quote(binc)} -b -r "
         f"{shlex.quote(_to_container_path(container, deck))} "
         f"-rd input={shlex.quote(_to_container_path(container, str(cmp_gds)))} "
         f"-rd topcell={shlex.quote(block)} "
@@ -483,14 +557,14 @@ def _default_lvs_runner(gds: str, netlist: str, block: str, container: str,
     power = os.environ.get("VIBE_IC_ANALOG_LVS_POWER", "VDD")
     ground = os.environ.get("VIBE_IC_ANALOG_LVS_GROUND", "VSS")
     _rc_e, _out_e, _err_e = _docker_exec(
-        container, base + f"python3 {shlex.quote(klvs_c)} extract "
+        container, marker=klvs_c, cmd=base + f"python3 {shlex.quote(klvs_c)} extract "
         f"{shlex.quote(gds_c)} --out {shlex.quote(layout_c)} "
         f"--threads {threads}{lm}")
     if not layout_sp.is_file() or layout_sp.stat().st_size == 0:
         return None, {"reason": f"klayout extraction produced no netlist "
                                 f"(rc={_rc_e})", "tail": (_out_e + _err_e)[-300:]}
     rc_c, out_c, err_c = _docker_exec(
-        container, base + f"python3 {shlex.quote(klvs_c)} compare "
+        container, marker=klvs_c, cmd=base + f"python3 {shlex.quote(klvs_c)} compare "
         f"{shlex.quote(layout_c)} --source {shlex.quote(src_c)} "
         f"--top {shlex.quote(block)} --power {shlex.quote(power)} "
         f"--ground {shlex.quote(ground)} --out {shlex.quote(cmp_c)}")

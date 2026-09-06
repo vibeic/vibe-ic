@@ -18,6 +18,8 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
+import pytest
+
 PROG = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROG))
 import phase3_one_shot_runner as R  # noqa: E402
@@ -202,21 +204,16 @@ def test_drc_wall_budget_default_and_env(monkeypatch):
     assert R._drc_wall_budget_s() == 7200.0          # non-positive -> default
 
 
-def test_try_svrf_native_drc_timeout_is_blocked_not_excused(tmp_path,
-                                                            monkeypatch):
-    # rc 124 (wall-clock ceiling) -> BLOCKED + SVRFDRC_PERF_CEILING, and the DRC
-    # step passes a BOUNDED hard_ceiling_s (not the 24h default). BLOCKED is
-    # this runner's own word for "the check could not be completed, so NOTHING
-    # is known about the design", and `_aggregate_verdict` names it explicitly
-    # in the non-green bucket.
+def _drc_probe_harness(tmp_path, monkeypatch, rc):
+    """Drive `_try_svrf_native_drc` with a faked exec and hand back what the
+    step passed to the supervisor, plus the StepResult."""
     monkeypatch.setattr(R, "_svrfdrc_bin_container", lambda c: "svrfdrc")
     monkeypatch.setattr(R, "_to_container_path", lambda p, c: p)
-    monkeypatch.delenv("VIBE_IC_DRC_BUDGET_S", raising=False)
     seen = {}
 
     def _fake_exec(c, cmd, **k):
-        seen["hard_ceiling_s"] = k.get("hard_ceiling_s")
-        return (124, "", "")                         # wall-clock ceiling hit
+        seen.update(k)
+        return (rc, "", "")
     monkeypatch.setattr(R, "_docker_exec", _fake_exec)
     gds = R._pl.pnr_dir(tmp_path) / "spm.gds"
     gds.parent.mkdir(parents=True, exist_ok=True)
@@ -227,9 +224,199 @@ def test_try_svrf_native_drc_timeout_is_blocked_not_excused(tmp_path,
                     cell_lef="x", cell_gds=None, site="unit", drc_deck=None,
                     calibre_drc="/x/DRC.rule"),
         "vibeic-eda")
+    return res, seen
+
+
+@pytest.mark.parametrize("rc,expect", [
+    (R._RC_ABORTED, "ABORTED_NO_OUTPUT"),
+    (R._RC_STALLED, "STALLED"),
+    (124, "CEILING"),
+])
+def test_try_svrf_native_drc_stop_is_blocked_not_excused_and_says_which(
+        tmp_path, monkeypatch, rc, expect):
+    """Every way this step can be STOPPED is BLOCKED, and the record says WHICH.
+
+    BLOCKED is this runner's own word for "the check could not be completed, so
+    NOTHING is known about the design", and `_aggregate_verdict` names it
+    explicitly in the non-green bucket. Three stop states, three distinct
+    labels — a reader must never have to guess whether the engine hung, was
+    deliberately stopped, or hit the pathological backstop.
+    """
+    monkeypatch.delenv("VIBE_IC_DRC_BUDGET_S", raising=False)
+    res, _seen = _drc_probe_harness(tmp_path, monkeypatch, rc)
     assert res.status == "BLOCKED"
     assert res.extras.get("finding") == "SVRFDRC_PERF_CEILING"
-    assert seen["hard_ceiling_s"] == 7200.0          # bounded, not the 24h ceiling
+    assert res.extras.get("stopped_as") == expect
+
+
+@pytest.mark.parametrize("rc,expect", [
+    (R._RC_STALLED, "STALLED"),
+    (R._RC_ABORTED, "ABORTED"),
+    (124, "CEILING"),
+])
+def test_a_killed_open_source_drc_is_blocked_not_a_claimed_violation(
+        tmp_path, monkeypatch, rc, expect):
+    """ARM 1. `step_drc`'s KLayout branch booked a stall/ceiling as FAIL — a
+    violation the deck never found. Its SIBLING branch had this corrected by
+    vibe-ic#925; this one was left behind, so one step gave two different words
+    for one event."""
+    # REACH THE BRANCH. `step_drc` returns SKIP long before the deck runs when
+    # the GDS is absent, and ENV_UNAVAILABLE when klayout is not on the
+    # container PATH. A fixture that does not get past those is a test of the
+    # guards, not of the kill path — it would have passed on the unfixed
+    # program for the wrong reason.
+    gds = R._pl.pnr_dir(tmp_path) / "spm.gds"
+    gds.parent.mkdir(parents=True, exist_ok=True)
+    gds.write_text("gds")
+    monkeypatch.setattr(R, "_tool_in_path", lambda c, t: True)
+    monkeypatch.setattr(R, "_klayout_deck_exec",
+                        lambda *a, **k: (rc, "", ""))
+    seen = {}
+    monkeypatch.setattr(R, "_docker_timeout_isolate",
+                        lambda paths: seen.update(isolated=list(paths)))
+    res = R.step_drc(
+        tmp_path, "spm",
+        R.PdkConfig(name="sky130A", liberty="x", tech_lef="x", cell_lef="x",
+                    cell_gds=None, site="unit", drc_deck="/x/deck.lydrc",
+                    calibre_drc=None),
+        "vibeic-eda")
+    assert res.status == "BLOCKED", (
+        f"a DRC that never finished looking is booked {res.status!r} — that "
+        f"asserts a violation the deck never found")
+    assert res.extras.get("stopped_as") == expect
+    assert seen.get("isolated"), (
+        "the partial report was left at the canonical path, where the comment "
+        "above the branch says it 'could parse as 0 violations = false "
+        "DRC-clean'")
+
+
+def test_blocked_is_not_a_softening_the_run_verdict_is_identical():
+    """ARM 2a. The whole safety of ARM 1 rests on this: `_aggregate_verdict`
+    must treat BLOCKED exactly as FAIL, so the change moves a STEP's word and
+    not a RUN's verdict. Asked of the real function, never recomputed."""
+    mk = lambda st: R.StepResult("drc", st, 0.0, "")      # noqa: E731
+    ok = R.StepResult("pnr", "PASS", 0.0, "")
+    assert R._aggregate_verdict([ok, mk("BLOCKED")]) == "FAIL"
+    assert R._aggregate_verdict([ok, mk("FAIL")]) == "FAIL"
+    assert R._aggregate_verdict([ok, mk("PASS")]) != "FAIL"
+
+
+def test_a_drc_that_found_violations_is_still_a_fail(tmp_path, monkeypatch):
+    """ARM 2b. The guard that stops the fix being satisfied by relabelling
+    every failure. A deck that RAN and found violations must keep FAIL — the
+    distinction being restored is 'could not look' vs 'looked and found', and a
+    fix that erased the second would be strictly worse than the defect."""
+    rpt = tmp_path / "phase3" / "reports" / "drc.rpt"
+    rpt.parent.mkdir(parents=True, exist_ok=True)
+    rpt.write_text("<items><item/><item/></items>")
+    gds = R._pl.pnr_dir(tmp_path) / "spm.gds"
+    gds.parent.mkdir(parents=True, exist_ok=True)
+    gds.write_text("gds")
+    monkeypatch.setattr(R, "_tool_in_path", lambda c, t: True)
+    monkeypatch.setattr(R, "_klayout_deck_exec", lambda *a, **k: (0, "", ""))
+    res = R.step_drc(
+        tmp_path, "spm",
+        R.PdkConfig(name="sky130A", liberty="x", tech_lef="x", cell_lef="x",
+                    cell_gds=None, site="unit", drc_deck="/x/deck.lydrc",
+                    calibre_drc=None),
+        "vibeic-eda")
+    assert res.status != "BLOCKED", (
+        "a deck that RAN and found violations was relabelled as 'could not "
+        "look' — that is the weakening this arm exists to refuse")
+
+
+def test_the_drc_budget_is_a_no_output_predicate_not_a_wall_clock_ceiling(
+        tmp_path, monkeypatch):
+    """THE ASSERTION HERE WAS CORRECTED, NOT RELAXED.
+
+    It used to read ``seen["hard_ceiling_s"] == 7200.0  # bounded, not the 24h
+    ceiling`` — i.e. it required the step to hand its budget to the parameter
+    `_watchdog`'s own docstring reserves for "a pathological-infinite-loop
+    backstop ONLY ... NOT the primary control". Under that pin a DRC that was
+    STREAMING violations into its report was killed at the same second as one
+    stuck in the silent derived-layer build, because a clock cannot tell them
+    apart.
+
+    The budget is still 7200 s and still honours VIBE_IC_DRC_BUDGET_S; what
+    changed is the QUESTION it answers. It is now spent only while the report
+    has NOT grown, expressed through `abort_probe` — the primitive written for
+    a job that is progressing and going nowhere. This test is strictly stronger
+    than the line it replaces: it pins the budget value AND both directions of
+    the predicate, neither of which the old single-number assertion could see.
+    """
+    monkeypatch.delenv("VIBE_IC_DRC_BUDGET_S", raising=False)
+    res, seen = _drc_probe_harness(tmp_path, monkeypatch, R._RC_ABORTED)
+    assert seen.get("hard_ceiling_s") is None, (
+        "the DRC budget is back on the watchdog's pathological backstop — a "
+        "wall-clock deadline wearing the watchdog's clothes")
+    assert seen.get("log_path") is not None, (
+        "the report is the only real progress signal this step has; it must be "
+        "wired")
+    probe = seen.get("abort_probe")
+    assert callable(probe), "the DRC budget must be expressed as a predicate"
+
+    # DIRECTION 1 — a report that is GROWING is never aborted, however long.
+    rpt = tmp_path / "phase3" / "reports" / "drc_svrf_calibre.rpt"
+    rpt.parent.mkdir(parents=True, exist_ok=True)
+    fake_now = [0.0]
+    monkeypatch.setattr(R.time, "monotonic", lambda: fake_now[0])
+    for i in range(1, 6):
+        rpt.write_text("x" * (i * 1000))
+        fake_now[0] += 100_000.0            # a full day between looks
+        assert probe() is None, (
+            "a DRC that is still emitting report bytes was aborted")
+
+    # DIRECTION 2 — a report that has STOPPED growing is aborted past the
+    # budget, and the reason names the measurement rather than the clock.
+    fake_now[0] += 7201.0
+    reason = probe()
+    assert reason, "a DRC that produced nothing for the whole budget ran on"
+    assert "no new report bytes" in reason
+    assert "7200" in reason
+
+
+def test_docker_exec_forwards_the_abort_probe_to_the_supervisor(monkeypatch):
+    """THE MIDDLE LINK OF THE CHAIN, which neither neighbour covers.
+
+    `test_the_drc_budget_is_a_no_output_predicate_not_a_wall_clock_ceiling`
+    proves the DRC step HANDS an `abort_probe` to `_docker_exec`, and
+    `test_progress_supervision_over_wallclock` proves `run_supervised` ACTS on
+    one over a real child. Between them sits a one-line pass-through, and a
+    one-line pass-through is exactly the kind of thing that is deleted by an
+    unrelated edit and noticed by nobody, because both neighbours stay green.
+    """
+    seen = {}
+
+    def fake_supervised(cmd, **kw):
+        seen.update(kw)
+        return R._wd.SupervisedResult(0, "", "", "natural", 0.0)
+
+    monkeypatch.setattr(R._wd, "run_supervised", fake_supervised)
+    monkeypatch.setattr(R._dwd, "new_job_pidfile", lambda: "/tmp/x.pid")
+    monkeypatch.setattr(R._dwd, "cleanup_job_pidfile", lambda *a, **k: None)
+    probe = lambda: None                                    # noqa: E731
+    R._docker_exec("vibeic-eda", "svrfdrc deck.rule a.gds a.rpt",
+                   marker="a.gds", abort_probe=probe)
+    assert seen.get("abort_probe") is probe, (
+        "_docker_exec dropped the caller's convergence predicate on the floor; "
+        "the DRC budget would then never fire and a going-nowhere run would "
+        "hold a core until the 24h backstop")
+
+
+def test_drc_budget_env_override_still_governs_the_predicate(tmp_path,
+                                                             monkeypatch):
+    """The knob keeps working, on the predicate instead of on a clock."""
+    monkeypatch.setenv("VIBE_IC_DRC_BUDGET_S", "60")
+    _res, seen = _drc_probe_harness(tmp_path, monkeypatch, R._RC_ABORTED)
+    probe = seen["abort_probe"]
+    fake_now = [0.0]
+    monkeypatch.setattr(R.time, "monotonic", lambda: fake_now[0])
+    (tmp_path / "phase3" / "reports").mkdir(parents=True, exist_ok=True)
+    assert probe() is None                  # first look establishes the baseline
+    fake_now[0] += 30.0
+    assert probe() is None                  # inside the 60 s budget
+    fake_now[0] += 40.0
+    assert probe()                          # past it, with nothing written
 
 
 # --------------------------------------------------------------------------

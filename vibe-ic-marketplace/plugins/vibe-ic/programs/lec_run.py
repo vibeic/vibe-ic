@@ -332,6 +332,50 @@ def lec_stage_from_output(raw: str) -> str:
     return "setup"
 
 
+def lec_proved_points_from_output(raw: str) -> Optional[Dict[str, int]]:
+    """The proof's OWN measure of how far it has got: proved / unproven points.
+
+    WHY THIS EXISTS (measured 2026-09-06, an open benchmark IC on 8HD-8). A
+    post-layout LEC was killed by a wall-clock ceiling at 7195 s of a 7200 s
+    budget. Its telemetry sidecar recorded `status: "hard_ceiling"`,
+    `returncode: 124`, and 239 samples whose `cpu_seconds` tracked `elapsed_sec`
+    at 99.99 % to the very last look -- so the artefact PROVED the job was
+    working at a full core when it died. What the artefact could NOT say is how
+    far the proof had got, because nothing in it records a proved-point count:
+    `proved`, `unproven`, `points` and `equiv_status` appear nowhere in the
+    file. A reader could see that it was busy, never that it was CONVERGING.
+
+    That gap is the difference between "we killed something busy" and "we killed
+    something 1374 points into a proof". This parser closes it, and it is
+    EVIDENCE ONLY -- it never reaches a verdict. `parse_equiv_output` remains
+    the sole authority on PASS/FAIL/INCONCLUSIVE.
+
+    Returns None when the log carries no count yet (the honest answer during
+    `equiv_make`), never a fabricated zero. PURE.
+
+    It REUSES the parser's own patterns (`_FINAL_RE`, `_PROVED_SIMPLE_RE`,
+    `_INDUCT_FOUND_RE`), which are defined below this function and resolve at
+    call time -- deliberately, so this probe sits beside its sibling
+    `lec_stage_from_output` and can never drift into a SECOND spelling of how a
+    Yosys count is read.
+    """
+    if not raw:
+        return None
+    out: Dict[str, int] = {}
+    m = list(_FINAL_RE.finditer(raw))
+    if m:
+        out["proved"] = int(m[-1].group(1))
+        out["unproven"] = int(m[-1].group(2))
+        return out
+    p = list(_PROVED_SIMPLE_RE.finditer(raw))
+    if p:
+        out["proved"] = int(p[-1].group(1))
+    u = list(_INDUCT_FOUND_RE.finditer(raw))
+    if u:
+        out["unproven"] = int(u[-1].group(1))
+    return out or None
+
+
 def attach_telemetry(report: Dict, sidecar: Path, project: Path) -> Dict:
     """Hash-bind the exact telemetry bytes into the final verdict report."""
     try:
@@ -356,13 +400,47 @@ def attach_telemetry(report: Dict, sidecar: Path, project: Path) -> Dict:
     return report
 
 
+#: Statuses the SUPERVISOR writes to say a run was STOPPED rather than finishing.
+#: `_docker_watchdog.run_docker_supervised` owns them; nothing else may spell a
+#: stop, and nothing else may unspell one.
+_SUPERVISOR_STOP_STATUSES = ("hard_ceiling", "progress_stalled")
+
+
 def _finish_telemetry_sidecar(sidecar: Path, status: str, **extra: Any) -> None:
+    """Close the telemetry sidecar for the step.
+
+    A STOP RECORDED BY THE SUPERVISOR IS NOT OVERWRITTEN. Measured on a real
+    production sidecar: a proof SIGKILLed by its container ceiling carried
+
+        telemetry["status"]              = "complete"      <- the field a
+                                                              consumer reads
+        telemetry["returncode"]          = 124
+        telemetry["attempts"][-1].status = "hard_ceiling"  <- the truth, one
+                                                              level down
+
+    because `run_docker_supervised` had written `hard_ceiling` and this function
+    then wrote `complete` over it at step end. Two writers of one field with two
+    vocabularies — "the tool exited naturally" and "the step is done" — and the
+    later one won. The kill survived only in the nested attempt record, which is
+    written before the overwrite and which no consumer looks at first.
+
+    The supervisor is the authority on HOW A RUN ENDED, so a recorded stop now
+    stands. `step_status` carries what this function would have written, so the
+    step-completion fact is not lost — it is just no longer allowed to
+    impersonate the run's outcome. Every other status (`complete`, `cache_hit`,
+    `tool_unavailable`) is written exactly as before, and a sidecar that carries
+    no supervisor stop is byte-identical to the previous behaviour.
+    """
     try:
         doc = json.loads(Path(sidecar).read_text(encoding="utf-8"))
     except (OSError, ValueError):
         doc = {"schema_version": LEC_TELEMETRY_SCHEMA_VERSION,
                "samples": [], "attempts": []}
-    doc["status"] = status
+    _recorded = str(doc.get("status") or "")
+    if _recorded in _SUPERVISOR_STOP_STATUSES:
+        doc["step_status"] = status
+    else:
+        doc["status"] = status
     doc["finished_timestamp"] = _utc_now()
     doc.update(extra)
     _atomic_write_json(Path(sidecar), doc)
@@ -1513,19 +1591,62 @@ def parse_equiv_output(text: str) -> Dict:
         elif _noconv and not _has_ctrex and (unproven or 0) > 0:
             equivalent = False
             verdict = "INCONCLUSIVE"
-            verdict_explanation = (
-                f"{proven if proven is not None else 0}/"
-                f"{total if total is not None else '?'} proven, "
-                f"{unproven if unproven is not None else '?'} unproven — but "
-                "equiv_induct did NOT converge "
-                f"({_noconv_ev}) and NO counterexample was recorded "
-                "(non_equivalent_points=0). Non-convergence is NOT "
-                "non-equivalence: a real difference produces a counterexample. "
-                "→ INCONCLUSIVE (a disclosed sequential-depth capability gap), "
-                "never a false NOT_EQUIVALENT. Close the remainder with sign-off "
-                "LEC (Conformal/VC LEC), which handles deep sequential "
-                "induction. Visible non-PASS (equivalent:false) — never a "
-                "vacuous PASS a regression could hide behind.")
+            # A TIMEOUT IS A BUDGET OUTCOME, NOT A CAPABILITY GAP — vibe-ic#581,
+            # and this branch was asserting the opposite on a real run.
+            #
+            # MEASURED 2026-09-06 on an open benchmark IC (reports/lec.json,
+            # captured read-only): a proof holding a full core for the whole
+            # budget was killed at 7195.77 s of 7200 s with
+            # `killed_by_budget: true`, and this branch booked it
+            # "1060/2130 proven, 1070 unproven — but equiv_induct did NOT
+            # converge (THE WALL-CLOCK BUDGET STOPPED YOSYS MID-PROOF, before
+            # equiv_induct ran) ... → INCONCLUSIVE (A DISCLOSED
+            # SEQUENTIAL-DEPTH CAPABILITY GAP) ... Close the remainder with
+            # sign-off LEC, which handles deep sequential induction."
+            #
+            # THE RECORD CONTRADICTED ITSELF IN ONE SENTENCE. Its own evidence
+            # string said the clock stopped the proof; the label beside it
+            # blamed the engine's depth, and the remedy it recommended was a
+            # commercial tool. equiv_induct had not failed to converge — by the
+            # same sentence's admission it had NOT YET RUN.
+            #
+            # So the label now follows the evidence. `_execution_stopped` is
+            # already computed above from `_EXECUTION_STOP_RE`, which only this
+            # producer's kill paths write, and `_stop_kind` already says WHICH
+            # kill it was. A run that was STOPPED gets the stopped wording; a
+            # run that genuinely walked the induction ladder to exhaustion keeps
+            # the capability-gap wording, because for that run it is TRUE.
+            if _execution_stopped:
+                verdict_explanation = (
+                    f"{proven if proven is not None else 0}/"
+                    f"{total if total is not None else '?'} proven, "
+                    f"{unproven if unproven is not None else '?'} unproven — "
+                    f"and the proof was STOPPED before it could finish "
+                    f"({_noconv_ev}), with NO counterexample recorded "
+                    "(non_equivalent_points=0). This is NOT a statement about "
+                    "the engine's sequential depth and NOT a capability gap: "
+                    "the remainder was never attempted, so nothing about it was "
+                    "learned. → INCONCLUSIVE (the run was cut off), never a "
+                    "false NOT_EQUIVALENT. The remedy is to let the proof RUN "
+                    "— it was making forward progress when it was stopped; "
+                    "reach for sign-off LEC only if it is allowed to finish and "
+                    "then genuinely does not converge. Visible non-PASS "
+                    "(equivalent:false) — never a vacuous PASS a regression "
+                    "could hide behind.")
+            else:
+                verdict_explanation = (
+                    f"{proven if proven is not None else 0}/"
+                    f"{total if total is not None else '?'} proven, "
+                    f"{unproven if unproven is not None else '?'} unproven — but "
+                    "equiv_induct did NOT converge "
+                    f"({_noconv_ev}) and NO counterexample was recorded "
+                    "(non_equivalent_points=0). Non-convergence is NOT "
+                    "non-equivalence: a real difference produces a counterexample. "
+                    "→ INCONCLUSIVE (a disclosed sequential-depth capability gap), "
+                    "never a false NOT_EQUIVALENT. Close the remainder with sign-off "
+                    "LEC (Conformal/VC LEC), which handles deep sequential "
+                    "induction. Visible non-PASS (equivalent:false) — never a "
+                    "vacuous PASS a regression could hide behind.")
         else:
             equivalent = False
             verdict = "FAIL"
@@ -1671,11 +1792,42 @@ def _docker(container: str, cmd: str, timeout: int = 120,
             log_path=log_path,
             telemetry_path=telemetry_path,
             telemetry_stage_probe=lec_stage_from_output,
+            # HOW FAR THE PROOF GOT, into the sidecar. Measured 2026-09-06 on a
+            # real ceiling kill: the sidecar recorded status "hard_ceiling",
+            # rc 124, and 239 samples whose cpu_seconds tracked elapsed at
+            # 99.99 % to the last look -- so it proved the job was WORKING and
+            # could not say it was CONVERGING, because no proved-point count
+            # was anywhere in the file. Evidence only; never a verdict input.
+            telemetry_metric_probe=lec_proved_points_from_output,
             telemetry_context=telemetry_context,
-            # The producer's declared attempt budget is the absolute backstop.
-            # wrap_with_container_timeout fires five seconds earlier, normally
-            # returning GNU timeout's rc=124/137 for the existing classifier.
-            hard_ceiling_s=float(timeout),
+            # THE ATTEMPT BUDGET IS NOT A CEILING, and handing it to
+            # `hard_ceiling_s` was a wall-clock deadline wearing the watchdog's
+            # clothes. `_watchdog` says what that parameter is for in one line:
+            # "a pathological-infinite-loop backstop ONLY ... NOT the primary
+            # control". Pinned to the budget it also became the container-side
+            # GNU `timeout` (`wrap_with_container_timeout`), so a Yosys proof
+            # that was emitting output and holding a full core was SIGKILLed at
+            # budget-5s with no verdict -- and the flow then recorded a design
+            # it never compared. MEASURED 2026-09-06 on an open benchmark IC: a
+            # post-layout LEC at 5360 s of a 7195 s budget, 1374 points proved,
+            # 0 failed, 99.9 % CPU, still advancing.
+            #
+            # WHAT STILL BOUNDS THE STEP. `timeout` keeps its ORIGINAL job --
+            # `StepBudget.next_attempt_budget()` returns 0 once the step
+            # deadline has passed and the next attempt is NOT LAUNCHED. That is
+            # the anti-re-arm property the budget was written for on
+            # 2026-08-27 (three attempts x 7200 s against a nominal "7200 s
+            # budget"), and it is a decision taken BETWEEN attempts, so it
+            # stops nothing that is running. A RUNNING attempt is now bounded
+            # by FORWARD PROGRESS alone: still moving -> runs to completion,
+            # however long that legitimately takes; stopped moving -> killed
+            # and recorded as STALLED (`_STALL_MARKER`, rc RC_STALLED), which
+            # this file already keeps distinct from `_TIMEOUT_MARKER`.
+            #
+            # A BIGGER NUMBER WOULD BE THE SAME DEFECT WITH A LATER DATE, so
+            # there is no number here at all: the ceiling falls back to the
+            # primitive's own pathological backstop, exactly as
+            # `design_one_shot_runner._run` already does after the same repair.
         )
         return subprocess.CompletedProcess(
             ["docker", "exec", container, "bash", "-lc", cmd],
@@ -2262,15 +2414,39 @@ def annotate_step_budget(report: Dict, budget: "StepBudget") -> Dict:
     report["exhausted_resource"] = (
         "wall_clock_seconds" if budget.exhausted() else None)
     if budget.exhausted():
-        report["verdict_explanation"] = (
-            (report.get("verdict_explanation") or "").rstrip()
-            + f" STEP BUDGET: exhausted the TOTAL {budget.total_s}s wall-clock "
-              f"budget for this step after {len(launched)} attempt(s), "
-              f"{report['step_elapsed_sec']}s elapsed. The resource that ran "
-              "out is WALL-CLOCK TIME, not equivalence evidence: the designs "
-              "are neither proven equivalent nor proven different. Raise "
-              "--timeout / VIBEIC_LEC_YOSYS_TIMEOUT_S, or close the remainder "
-              "with sign-off LEC.")
+        # THE BUDGET NO LONGER STOPS A RUNNING PROOF, so "exhausted" no longer
+        # implies "produced nothing". It governs ATTEMPT ADMISSION: past the
+        # deadline no FURTHER attempt is launched. A proof that legitimately ran
+        # long and then DECIDED is the case this branch could not previously
+        # reach, and appending "neither proven equivalent nor proven different"
+        # to a PASS would be a contradiction inside one report -- introduced by
+        # the very change that made the long run possible.
+        #
+        # The machine-readable fields above are unchanged and still true (the
+        # budget IS spent). Only the sentence splits, and only on whether the
+        # producer actually reached a verdict.
+        _decided = str(report.get("verdict", "")).strip().upper() in (
+            "PASS", "FAIL")
+        if _decided:
+            report["verdict_explanation"] = (
+                (report.get("verdict_explanation") or "").rstrip()
+                + f" STEP BUDGET: the {budget.total_s}s admission budget was "
+                  f"spent ({len(launched)} attempt(s), "
+                  f"{report['step_elapsed_sec']}s elapsed), so no FURTHER "
+                  "attempt would have been launched. It did not stop this one "
+                  "-- the budget bounds attempts, not runtime -- and the "
+                  "verdict above is the proof's own.")
+        else:
+            report["verdict_explanation"] = (
+                (report.get("verdict_explanation") or "").rstrip()
+                + f" STEP BUDGET: exhausted the TOTAL {budget.total_s}s "
+                  f"admission budget for this step after {len(launched)} "
+                  f"attempt(s), {report['step_elapsed_sec']}s elapsed, and no "
+                  "attempt reached a verdict. The resource that ran out is "
+                  "WALL-CLOCK TIME, not equivalence evidence: the designs are "
+                  "neither proven equivalent nor proven different. Raise "
+                  "--timeout / VIBEIC_LEC_YOSYS_TIMEOUT_S, or close the "
+                  "remainder with sign-off LEC.")
     return report
 
 
@@ -2345,9 +2521,39 @@ def run_yosys_equiv(container: str, ys_path_in_container: str,
     # both keep their real FAIL — so this can neither fabricate a PASS nor hide a
     # real mismatch (proven on opentitan_aes × sky130A and covered by the tests).
     if launched and getattr(r, "returncode", 0) in _CONTAINER_TIMEOUT_RCS:
-        out = out.rstrip("\n") + f"\n{_TIMEOUT_MARKER} after {timeout}s"
+        # THE DURATION WAS NEVER MEASURED, so it is no longer stated. `timeout`
+        # is the step's ATTEMPT-ADMISSION budget and no kind of deadline, so
+        # "after {timeout}s" would name a wall this run did not hit. And rc 137
+        # is AMBIGUOUS by construction -- the comment on
+        # `_CONTAINER_TIMEOUT_RCS` says so itself: it is GNU `timeout`'s SIGKILL
+        # escalation AND a container OOM-kill. An OOM at ten minutes used to be
+        # recorded as "exceeded its time budget after 7200s"; with the ceiling
+        # back at the pathological backstop the same sentence would read
+        # 86400s, which is the same lie with a bigger number.
+        #
+        # The MARKER itself is kept verbatim: `_TIMEOUT_RE`,
+        # `_EXECUTION_STOP_RE` and `budget_kill_blocks_frontend_retry` key on
+        # it, and renaming it is a separate change with its own blast radius.
+        # Only the fabricated duration goes, replaced by the observable rc.
+        out = out.rstrip("\n") + (
+            "\n" + _TIMEOUT_MARKER
+            + f" (rc={getattr(r, 'returncode', 0)}: the container-side "
+            f"backstop, or an OOM kill -- rc 137 does not distinguish them). "
+            f"No equivalence verdict was reached. The {timeout}s step budget "
+            f"governs ATTEMPT ADMISSION, not runtime, so no wall-clock "
+            f"duration is claimed here.")
     elif launched and getattr(r, "returncode", 0) in _PROGRESS_STALL_RCS:
-        out = out.rstrip("\n") + f"\n{_STALL_MARKER}"
+        # SAY HOW FAR IT GOT. "It stopped making forward progress" is a claim a
+        # reader cannot size without the proof's own count -- a job stopped at 0
+        # points and one stopped at 1374 of 1760 are different findings and the
+        # remedy differs too. Read from THIS run's log, so it is a measurement
+        # and not a default; absent when the log carries no count yet.
+        _pts = lec_proved_points_from_output(out)
+        out = out.rstrip("\n") + f"\n{_STALL_MARKER}" + (
+            f" — last measured position: {_pts.get('proved')} proved"
+            + (f", {_pts.get('unproven')} still unproven" 
+               if _pts.get("unproven") is not None else "")
+            if _pts else " — no proved-point count had been emitted yet")
     return launched, out
 
 

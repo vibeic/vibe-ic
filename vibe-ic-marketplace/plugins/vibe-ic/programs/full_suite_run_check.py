@@ -364,10 +364,19 @@ def runner_tiers(script: Path) -> Optional[List[str]]:
     # this tree has, so its discipline is the same as every other sub-process's
     # and its outcome is a VALUE rather than an exception thrown past a child.
     #
-    # Two numbers are set rather than defaulted. The hard ceiling is the SAME
-    # number the timeout was, so nothing about the deadline changes; the stall
-    # grace is set to it as well, because the 30-minute default would let a
-    # silent listing sit for the whole grace before the ceiling could fire.
+    # ONE number is set rather than defaulted: the STALL GRACE, because the
+    # 30-minute default would let a silent listing sit for half an hour. That
+    # grace is the whole control, and it is the one this file's own
+    # `test_a_hanging_candidate_is_killed_at_the_deadline` exercises -- its
+    # planted `sleep 600` emits nothing and burns no CPU, so the grace is what
+    # stops it.
+    #
+    # THE HARD CEILING WAS SET TO THE SAME NUMBER AND IS NOW GONE. Beside an
+    # equal grace it could add exactly one behaviour: killing a listing that
+    # was still PRINTING at 30 s, which is a slow host reported as "this
+    # candidate is not a runner" -- a false negative manufactured by the
+    # machine. `_watchdog`'s own contract reserves that parameter for a
+    # pathological non-idle loop, and this is not one.
     # THE ORPHAN GAP RECORDED HERE IS CLOSED. This comment used to read
     # "neither this call nor the timeout-bounded `subprocess` launch it
     # replaces kills a process GROUP (`_watchdog._default_kill` is
@@ -383,13 +392,11 @@ def runner_tiers(script: Path) -> Optional[List[str]]:
         ["bash", str(script), _LIST_TIERS_FLAG],
         cwd=str(plugin), merge_stderr=False, output_progress=True,
         stall_grace_s=_LIST_TIERS_TIMEOUT,
-        hard_ceiling_s=_LIST_TIERS_TIMEOUT,
         poll_s=_LIST_TIERS_POLL,
     )
-    # Every non-zero outcome — a natural failure, a launch error (rc 127), a
-    # stall kill (199) and the ceiling kill (124) — reads the same here as it
-    # did before: this candidate is not a runner. That is the safe direction and
-    # also the true one.
+    # Every non-zero outcome — a natural failure, a launch error (rc 127) and a
+    # stall kill (199) — reads the same here as it did before: this candidate is
+    # not a runner. That is the safe direction and also the true one.
     if proc.rc != 0:
         return None
     lines = [ln.strip() for ln in proc.out.splitlines() if ln.strip()]

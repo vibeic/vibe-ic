@@ -60,8 +60,8 @@ import tempfile
 import time
 from dataclasses import dataclass, field, asdict
 from pathlib import Path, PurePosixPath
-from typing import (Any, Dict, FrozenSet, Iterable, List, Optional, Sequence,
-                    Set, Tuple)
+from typing import (Any, Callable, Dict, FrozenSet, Iterable, List, Optional,
+                    Sequence, Set, Tuple)
 import _path_layout as _pl
 import _runner_measurement as _rmeas
 import _reference_flow_boundary as _rfb
@@ -1057,6 +1057,7 @@ def _docker_exec(container: str, cmd: str, timeout: int = 1800, *,
                  stall_grace_s: Optional[float] = None,
                  hard_ceiling_s: Optional[float] = None,
                  poll_s: Optional[float] = None,
+                 abort_probe: Optional[Callable[[], Optional[str]]] = None,
                  outputs: Optional[List[str]] = None) -> Tuple[int, str, str]:
     """Run shell cmd inside a Docker container.
 
@@ -1075,6 +1076,16 @@ def _docker_exec(container: str, cmd: str, timeout: int = 1800, *,
         (pid, /proc starttime), never by argv.
         rc=_wd.RC_STALLED on a stall kill, 124 on the
         24h+ pathological ceiling. chip/tool-AGNOSTIC.
+
+    `abort_probe` (optional) is the CALLER'S OWN DOMAIN read of "this job is
+    progressing but going NOWHERE" -- the third kill `_watchdog` already
+    implements and that nothing in this file used. It exists for the one shape
+    the stall watchdog cannot see: a tool that burns a full core and emits
+    NOTHING, which every generic signal reads as healthy forever. The honest
+    answer for that shape is a predicate over the tool's OWN output, not a
+    clock: returning a reason stops the job with rc=_wd.RC_ABORTED and the
+    reason on `.err`, which is a THIRD state a reader can tell apart from both
+    a hang and a natural exit. Passing nothing is byte-identical to before.
     """
     if marker is None:
         return _docker_exec_raw(container, cmd, timeout)
@@ -1130,7 +1141,8 @@ def _docker_exec(container: str, cmd: str, timeout: int = 1800, *,
     try:
         res = _wd.run_supervised(
             full, log_path=log_path, cpu_probe=_cpu_probe, kill=_kill,
-            stall_grace_s=grace, poll_s=poll, hard_ceiling_s=ceiling)
+            stall_grace_s=grace, poll_s=poll, hard_ceiling_s=ceiling,
+            abort_probe=abort_probe)
     finally:
         _dwd.cleanup_job_pidfile(container, _pidfile, _docker_exec_raw)
     _log_invocation(cmd, res.rc if res.rc is not None else -1,
@@ -1181,6 +1193,10 @@ _WATCHDOG_TERM_GRACE_S = 10        # SIGTERM → SIGKILL escalation window
 # _docker_timeout_isolate can tell a "hung, no forward progress" kill apart from
 # a real tool failure or the ceiling backstop (which keeps rc=124).
 _RC_STALLED = _wd.RC_STALLED
+# The THIRD stop state: the caller's own domain predicate said the job
+# was going nowhere. Distinct from a hang and from the clock backstop,
+# and it must stay distinct all the way to the step record.
+_RC_ABORTED = _wd.RC_ABORTED
 # Multiplier turning the (retired) size-estimate into a HIGH ceiling FLOOR for
 # very large designs — the ceiling only ever rises above the 24h floor, never
 # below it, so it can never wall-clock-kill a live job.
@@ -24805,9 +24821,14 @@ def _discover_padring_io_views(pdk: PdkConfig,
         "(pathlib.Path(l).parent.parent/'gds').glob('*.gds')}); "
         "print('PADRING_IO_VIEWS '+json.dumps("
         "{'lefs':[str(x) for x in lefs],'gds':gds}))")
+    # NO CEILING. This glob walks a PDK tree that may be on slow or contended
+    # storage, and when the ceiling fired the caller raised
+    # PADRING_IO_VIEW_DISCOVERY_FAILED and `pad_ring_gen` was recorded FAIL --
+    # a statement about the HOST recorded as a statement about the design.
+    # `marker=` already routes this through the progress-stall supervisor, so a
+    # genuinely hung probe is still stopped; a slow one now finishes.
     rc, out, err = _docker_exec(
-        container, "python3 -c " + shlex.quote(code), marker=programs_c,
-        hard_ceiling_s=300)
+        container, "python3 -c " + shlex.quote(code), marker=programs_c)
     match = re.search(r"PADRING_IO_VIEWS\s+(\{.*\})", out or "")
     if rc != 0 or match is None:
         raise ValueError("PADRING_IO_VIEW_DISCOVERY_FAILED: "
@@ -25086,8 +25107,15 @@ def _prepare_padring_for_route(
     cmd = (f"export PATH={TOOLS_IN_CONTAINER}/openroad/bin:"
            f"{TOOLS_IN_CONTAINER}/bin:$PATH && "
            f"openroad -no_init -exit {seed_c} 2>&1 | tee {seed_log_c}")
+    # NO CEILING. This call already wires BOTH progress signals -- `marker=`
+    # (in-container CPU) and `log_path=` (the OpenROAD log it tees to) -- so a
+    # floorplan that is still working is visibly working. The 1800 s ceiling
+    # beside them could only ever kill a LEGITIMATELY LONG one, and its rc then
+    # arrived at the branch below as `pad_ring_gen` FAIL: a big die recorded as
+    # a broken seam. A still-progressing seed now runs to completion; one that
+    # stops moving is still killed by the stall grace and reported as such.
     rc, out, err = _docker_exec(container, cmd, marker=seed_c,
-                                log_path=seed_log, hard_ceiling_s=1800)
+                                log_path=seed_log)
     floorplan = out_dir / "floorplan.def"
     if rc != 0 or not floorplan.is_file():
         return (StepResult(
@@ -33419,13 +33447,58 @@ def _try_svrf_native_drc(project: Path, top: str, pdk: PdkConfig,
         if caf_res is not None and getattr(caf_res, "written", False):
             cfg_c = _to_container_path(str(caf_res.cfg_path), container)
             cmd += f" --cell-aware-feol={cfg_c}"
-    # v1.4.38 — bound the DRC step at a WALL-CLOCK budget (the stall watchdog never
-    # kills a 100%-CPU tool; the default ceiling is ~24h). A non-completing DRC is
-    # NOT a proven violation, and it is NOT a sign-off either — see the kill path
-    # below for the tier it takes and why, never a silent multi-hour hang.
+    # THE ONE STEP IN THIS RUNNER WITH NO OBSERVABLE PROGRESS SIGNAL, and the
+    # reason it is named here rather than left to a clock. svrfdrc's
+    # single-thread derived-layer build (SHRINK/boolean/merge) runs at 100 % CPU
+    # and emits NOTHING for hours on dense geometry (measured: 4.4 h, zero
+    # output). Every signal `_watchdog` fuses — captured output, log growth,
+    # in-container CPU — therefore reads HEALTHY forever, so the stall grace can
+    # never fire and the step used to be stopped by `hard_ceiling_s=_drc_budget`.
+    #
+    # That was the wrong instrument twice over. `_watchdog`'s own contract says
+    # the ceiling is "a pathological-infinite-loop backstop ONLY ... NOT the
+    # primary control", and a wall clock cannot tell a DRC that is streaming
+    # violations into its report from one that is stuck in derivation: both are
+    # killed at the same second on the same host, and a bigger constant only
+    # moves the date.
+    #
+    # `abort_probe` is the primitive written for exactly this shape — a job that
+    # IS progressing and is going NOWHERE — and the predicate is over the tool's
+    # OWN output, not the clock: the budget is spent only while the report has
+    # not grown. A DRC that is emitting results is now never stopped by it, and
+    # one that has produced nothing for the budget is stopped with a stated
+    # REASON and rc=_wd.RC_ABORTED. THIS IS NOT A NEW IDEA IN THIS TREE:
+    # `gate_discloses_denominator_check` already expresses its own aggregate
+    # budget as an `abort_probe` beside a progress-derived stall grace, for
+    # exactly this reason — a third state, distinguishable from both a
+    # hang (RC_STALLED) and a natural exit. `log_path=rpt` wires the report as a
+    # real progress signal at the same time, so the generic fusion can see it too.
+    # chip/tool-AGNOSTIC: a file-size read and a monotonic clock.
     _drc_budget = _drc_wall_budget_s()
-    rc, out, err = _docker_exec(container, cmd, marker=gds_c,
-                                hard_ceiling_s=_drc_budget)
+    _drc_seen = {"size": -1, "grew_at": time.monotonic()}
+
+    def _drc_produced_nothing() -> Optional[str]:
+        now = time.monotonic()
+        try:
+            size = rpt.stat().st_size
+        except OSError:
+            size = 0
+        if size > _drc_seen["size"]:
+            _drc_seen["size"] = size
+            _drc_seen["grew_at"] = now
+            return None
+        idle = now - _drc_seen["grew_at"]
+        if idle <= _drc_budget:
+            return None
+        return (f"svrfdrc has written no new report bytes for {idle:.0f}s "
+                f"(budget {_drc_budget:.0f}s, VIBE_IC_DRC_BUDGET_S); the "
+                f"engine is burning CPU inside a phase that emits nothing, so "
+                f"no progress signal can distinguish it from a hang. Stopped "
+                f"deliberately — this is NOT a proven violation and NOT a "
+                f"sign-off.")
+
+    rc, out, err = _docker_exec(container, cmd, marker=gds_c, log_path=rpt,
+                                abort_probe=_drc_produced_nothing)
     # v1.4.62 — svrfdrc has a rare, NON-DETERMINISTIC heap-corruption abort
     # (`malloc(): unaligned tcache chunk` / SIGABRT|SIGSEGV -> rc 134/139, core
     # dump, NO report) in the parallel measurement-rule path. It is a memory-state
@@ -33440,9 +33513,11 @@ def _try_svrf_native_drc(project: Path, top: str, pdk: PdkConfig,
                  or re.search(r"malloc\(\):|free\(\):|tcache|corrupted|"
                               r"core dumped|Segmentation fault|double free",
                               (out or "") + (err or ""), re.I))):
-        rc, out, err = _docker_exec(container, cmd, marker=gds_c,
-                                    hard_ceiling_s=_drc_budget)
-    if rc in (_RC_STALLED, 124):
+        _drc_seen["size"] = -1
+        _drc_seen["grew_at"] = time.monotonic()
+        rc, out, err = _docker_exec(container, cmd, marker=gds_c, log_path=rpt,
+                                    abort_probe=_drc_produced_nothing)
+    if rc in (_RC_STALLED, _RC_ABORTED, 124):
         _mins = int(_drc_budget // 60)
         # vibe-ic#925 — THE TIER, not the prose. The message below was already
         # honest: it refuses to call a timeout a violation and refuses to sign
@@ -33481,10 +33556,14 @@ def _try_svrf_native_drc(project: Path, top: str, pdk: PdkConfig,
         # one. Rename it away exactly as the PnR and LVS stall paths do, so no
         # verdict can be read from an artefact this run never finished writing.
         _docker_timeout_isolate([rpt])
+        _why = {_RC_ABORTED: ("produced no report bytes for the whole "
+                              f"{_mins}-minute budget"),
+                _RC_STALLED: "stopped making forward progress",
+                124: "hit the pathological-loop backstop"}.get(
+                    rc, f"was stopped (rc={rc})")
         return StepResult(
             "drc", "BLOCKED", time.time() - t0,
-            f"svrf-native commercial DRC did not complete within the "
-            f"{_mins}-minute wall-clock budget (rc={rc}) — a svrfdrc performance "
+            f"svrf-native commercial DRC {_why} (rc={rc}) — a svrfdrc performance "
             f"ceiling on large/dense geometry (single-thread derived-layer "
             f"build), NOT a proven violation. No sign-off from a partial report; "
             f"the partial report (if any) was isolated to *.timeout.partial. "
@@ -33493,7 +33572,13 @@ def _try_svrf_native_drc(project: Path, top: str, pdk: PdkConfig,
             f"excused skip. Re-run under a fixed/parallelised engine or raise "
             f"VIBE_IC_DRC_BUDGET_S.",
             extras={"finding": "SVRFDRC_PERF_CEILING",
-                    "drc_budget_s": _drc_budget})
+                    "drc_budget_s": _drc_budget,
+                    # WHICH of the three stop states this was, so a reader
+                    # never has to infer it from the rc alone.
+                    "stopped_as": {_RC_ABORTED: "ABORTED_NO_OUTPUT",
+                                   _RC_STALLED: "STALLED",
+                                   124: "CEILING"}.get(rc, f"rc={rc}"),
+                    "abort_reason_tail": (err or "")[-300:]})
     if not rpt.is_file():
         return StepResult("drc", "FAIL", time.time() - t0,
                           f"svrf-native commercial DRC produced no report; "
@@ -33671,10 +33756,38 @@ def step_drc(project: Path, top: str, pdk: PdkConfig,
         gds, rpt, physical_top, pdk, container)
     # v1.3.47 — a stall/ceiling kill must NOT be scored from a partial or stale
     # report (a half-written RDB could parse as 0 violations = false DRC-clean).
-    if rc in (_RC_STALLED, 124):
-        return StepResult("drc", "FAIL", time.time() - t0,
-                          f"DRC killed as hung/ceiling (rc={rc}) — no sign-off "
-                          f"from a partial report; log_tail={(out+err)[-800:]}")
+    if rc in (_RC_STALLED, _RC_ABORTED, 124):
+        # BLOCKED, NOT FAIL — the same correction vibe-ic#925 made to this
+        # step's OTHER branch (`_try_svrf_native_drc`), which this one did not
+        # receive. The deck never finished looking at the layout, so nothing is
+        # known about it; `FAIL` asserts a violation the deck never found.
+        # BLOCKED is this runner's own word for that state and it is NOT a
+        # softening: `_aggregate_verdict` reads
+        # `any(s.status in ("FAIL", "BLOCKED"))` and returns "FAIL" for either,
+        # so the run-level verdict is byte-identical. Only the step's own word
+        # changes, from a claim about the design to a statement about the check.
+        #
+        # #570 — and isolate the partial report, which this branch also did not
+        # do. The comment above already says a half-written RDB "could parse as
+        # 0 violations = false DRC-clean"; leaving it at the canonical path
+        # meant the next reader could not tell it from a finished one.
+        _docker_timeout_isolate([rpt])
+        _why = {_RC_ABORTED: "was stopped as going nowhere",
+                _RC_STALLED: "stopped making forward progress",
+                124: "hit the pathological-loop backstop"}.get(
+                    rc, f"was stopped (rc={rc})")
+        return StepResult(
+            "drc", "BLOCKED", time.time() - t0,
+            f"open-source DRC {_why} (rc={rc}) — no sign-off from a partial "
+            f"report, and the partial report (if any) was isolated to "
+            f"*.timeout.partial. NOTHING is known about the layout's DRC "
+            f"state, so this step is BLOCKED (never green) and still owes an "
+            f"answer; it is NOT a proven violation. "
+            f"log_tail={(out+err)[-800:]}",
+            extras={"finding": "DRC_RUN_INCOMPLETE",
+                    "stopped_as": {_RC_ABORTED: "ABORTED",
+                                   _RC_STALLED: "STALLED",
+                                   124: "CEILING"}.get(rc, f"rc={rc}")})
     if not rpt.is_file():
         return StepResult("drc", "FAIL", time.time() - t0,
                           f"rc={rc} log_tail={(out+err)[-1000:]}")
