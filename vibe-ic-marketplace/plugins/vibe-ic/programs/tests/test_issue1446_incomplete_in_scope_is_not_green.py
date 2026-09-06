@@ -199,6 +199,18 @@ def _status(out: str, step_id: str) -> str:
     return m.group(1)
 
 
+def _no_verdict_word(status):
+    """RB2-03 (#2063) — "the step measured nothing in its own scope", asked of
+    the TIER rather than of one spelling. `_flow_verdict_tiers` owns the set;
+    `INCOMPLETE` and `NOT-MEASURED` are both in it and are adjudicated
+    identically, so every property this module tests holds of either."""
+    import sys as _sys
+    from pathlib import Path as _P
+    _sys.path.insert(0, str(_P(__file__).resolve().parent.parent))
+    import _flow_verdict_tiers as _T
+    return _T.says_nothing_was_measured(status)
+
+
 def _audit(mod, project, *flags):
     return mod.main([str(project), "--phase", "2", "--strict-structural",
                      *flags])
@@ -217,7 +229,12 @@ def test_a_no_verdict_p0_over_a_broken_chain_is_not_green(
 
     # PRECONDITIONS: both halves must actually be present, or this case is
     # passing for a reason it does not name.
-    assert _status(out, "P0") == "INCOMPLETE", out
+    # RB2-03 (#2063): the P0 word for a 0-of-N population is now
+    # `NOT-MEASURED`, a sibling of `INCOMPLETE` in
+    # `_flow_verdict_tiers.NO_VERDICT_IN_SCOPE` and adjudicated identically.
+    # The precondition is asked of the TIER, not of one spelling, so a future
+    # word in that set cannot walk past this case the way NOT-MEASURED did.
+    assert _no_verdict_word(_status(out, "P0")), out
     assert re.search(r"\[P0\].*marked done while dependency", out), out
 
     assert rc == 1, out
@@ -258,9 +275,9 @@ def test_an_incomplete_p0_over_a_closed_chain_stays_green(
     rc = _audit(mod, project)
     out = capsys.readouterr().out
 
-    assert _status(out, "P0") == "INCOMPLETE", (
-        "PRECONDITION: this control is only meaningful while P0 is still "
-        "INCOMPLETE — it is the OTHER condition that is supposed to have "
+    assert _no_verdict_word(_status(out, "P0")), (
+        "PRECONDITION: this control is only meaningful while P0 still "
+        "measured nothing — it is the OTHER condition that is supposed to have "
         "changed:\n" + out)
     assert rc == 0, (
         "INCOMPLETE alone must not turn a run red — #599's tier is a "

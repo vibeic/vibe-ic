@@ -45,9 +45,46 @@ def test_wide_ripple_is_high_and_advisory(tmp_path):
         capture_output=True, text=True).stdout
 
 
-def test_strict_fails_on_high(tmp_path):
-    res, _ = run(tmp_path, WIDE_RIPPLE, '--strict')
-    assert res.returncode == 1
+def test_strict_does_not_fail_on_a_PREDICTED_high(tmp_path):
+    """RB2-05 (#2063). `--strict` used to exit 1 here. The row it exited on
+    says, in its own message, "Predicted from RTL STRUCTURE, not measured" —
+    so rc=1 published a guess in the grammar of a slow-corner STA result. The
+    row must still be produced, in full, with its risk tier intact; only the
+    EXIT CODE stops claiming it was measured."""
+    res, f = run(tmp_path, WIDE_RIPPLE, '--strict')
+    assert res.returncode == 0, res.stdout
+    high = [x for x in f if x['risk'] == 'HIGH']
+    assert high, f                      # the prediction is NOT suppressed
+    for x in high:
+        assert x['measured'] is False
+        assert x['basis'] == 'predicted-from-rtl-structure'
+        assert x['severity'] == 'INFO'  # a prediction may not outrank a measurement
+    assert 'PREDICTED from RTL structure' in res.stdout
+
+
+def test_strict_DOES_fail_on_a_measured_high_row():
+    """The other direction, so the rule is a rule and not a silencer: a row a
+    MEASURING producer marks `measured=True` at HIGH risk is exactly what
+    `--strict` exists to exit 1 on."""
+    import importlib.util
+    spec = importlib.util.spec_from_file_location('_ass', SCRIPT)
+    mod = importlib.util.module_from_spec(spec)
+    sys.path.insert(0, str(SCRIPT.parent))
+    # 3.10 dataclasses resolves the string annotations of a `from __future__
+    # import annotations` module through sys.modules[cls.__module__].
+    sys.modules['_ass'] = mod
+    spec.loader.exec_module(mod)
+    predicted = mod.Finding('f.v', 1, 'INFO', 'wide-ripple-add', 'sum',
+                            'HIGH', 32, 3, 'msg')
+    measured = mod.Finding('f.v', 1, 'WARN', 'wide-ripple-add', 'sum',
+                           'HIGH', 32, 3, 'msg', measured=True,
+                           basis='measured-slow-corner-sta')
+    med_measured = mod.Finding('f.v', 1, 'INFO', 'ripple-add', 'x',
+                               'MED', 16, 1, 'msg', measured=True,
+                               basis='measured-slow-corner-sta')
+    assert mod.strict_failing_rows([predicted]) == []
+    assert mod.strict_failing_rows([med_measured]) == []
+    assert mod.strict_failing_rows([predicted, measured]) == [measured]
 
 
 def test_documented_carry_save_is_quiet(tmp_path):
@@ -179,9 +216,13 @@ def test_shift_amount_math_is_not_a_carry_chain(tmp_path):
 
 
 def test_the_real_wide_adder_still_fires_under_strict(tmp_path):
-    """The two repairs above must not silence the thing the gate is for."""
+    """The two repairs above must not silence the thing the gate is for.
+
+    RB2-05 (#2063) moved the exit code, not the finding: what this test
+    guards — that the real wide adder is still REPORTED, by rule name, under
+    `--strict` — is asserted on the finding itself rather than on rc, which
+    now says only whether anything was MEASURED."""
     res, f = run(tmp_path, WIDE_RIPPLE, '--strict')
-    assert res.returncode == 1, res.stdout
     assert any(x['risk'] == 'HIGH' for x in f)
     assert 'wide-ripple-add' in res.stdout
 

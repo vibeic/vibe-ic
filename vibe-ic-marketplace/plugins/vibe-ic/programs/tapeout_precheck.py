@@ -220,7 +220,28 @@ class Finding:
     detail: Dict[str, Any] = field(default_factory=dict)
 
     def as_dict(self) -> Dict[str, Any]:
-        return asdict(self)
+        d = asdict(self)
+        # RB2-08 (#2063) — NAME THE ARM. Every generic report reader in this
+        # repo renders a finding as `f["rule"]: f["message"]` (see
+        # `phase3_one_shot_runner._gate_detail`, `f.get('rule', '?')`), and this
+        # gate's findings carry no `rule` key at all. MEASURED on the
+        # subservient cell (lane rbsub2, 8HD-8, 2026-09-06), the step line read
+        #
+        #   FAIL tapeout_precheck ?: the arm reported NOT_DETERMINED with no
+        #   evidence line; ?: ... (x6)
+        #
+        # — six undetermined arms and not one of them named. The information
+        # was never missing; it was in `authority` / `kind` / `step_id`, in
+        # fields no generic reader looks at. `rule` is DERIVED from those three
+        # so it cannot drift from them, and it says which authority and which
+        # ladder step the line is about.
+        d["rule"] = self.rule
+        return d
+
+    @property
+    def rule(self) -> str:
+        """`<kind>/<ladder step or authority>` — the generic reader's key."""
+        return f"{self.kind}/{self.step_id or self.authority or 'unattributed'}"
 
 
 @dataclass
@@ -602,6 +623,23 @@ def _steps_of(doc: Dict[str, Any]) -> List[Dict[str, Any]]:
         steps, list) else []
 
 
+def _unattributed_message(authority: str, verdict: str,
+                          st: Dict[str, Any]) -> str:
+    """The sentence for a non-passing ladder step whose arm wrote no evidence.
+
+    RB2-08 (#2063). It used to read "the arm reported NOT_DETERMINED with no
+    evidence line" — about a report that knows exactly which arm and which
+    ladder step it just read. Six such lines, all identical, were the whole
+    reason this gate FAILed on the subservient cell.
+    """
+    step = st.get("step_id") or "<the arm report names no step_id>"
+    label = st.get("label")
+    where = f"{step} ({label})" if label else f"{step}"
+    return (f"arm {authority or 'unattributed'} reported "
+            f"{verdict or 'no verdict'} for ladder step {where} "
+            f"with no evidence line")
+
+
 def _findings_from_arm(doc: Dict[str, Any], authority: str,
                        is_ours: bool) -> List[Finding]:
     """Every non-passing ladder step of one arm, as one labelled line each.
@@ -621,8 +659,10 @@ def _findings_from_arm(doc: Dict[str, Any], authority: str,
             step_id=str(st.get("step_id") or "") or None,
             verdict=verdict or NOT_DETERMINED,
             message=str(st.get("evidence") or "")
-                    or f"the arm reported {verdict or 'no verdict'} with no "
-                       f"evidence line",
+                    # RB2-08 (#2063) — the arm, and the step, by name. The old
+                    # sentence said "the arm" about a report that knows exactly
+                    # which arm it read.
+                    or _unattributed_message(authority, verdict, st),
             detail={"label": st.get("label"),
                     "refuses_on": st.get("refuses_on"),
                     "source": st.get("source")}))

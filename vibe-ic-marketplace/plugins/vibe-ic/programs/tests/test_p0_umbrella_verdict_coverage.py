@@ -423,10 +423,18 @@ def test_real_gates_a_fully_invoked_clean_registry_is_PASS(
     # invariant that makes it unreachable. Pinned as INCOMPLETE so a future
     # caller that holds its own records list cannot inherit a certification
     # over nothing.
-    (True, [], "INCOMPLETE"),
+    #
+    # RB2-03 (#2063) moved the two ZERO-population rows from `INCOMPLETE` to
+    # `NOT-MEASURED`: both are adjudicated identically (a qualified done-claim,
+    # in neither EXCUSED nor NON_GREEN — see `_flow_verdict_tiers`), so no run's
+    # greenness moves, and the word now distinguishes "nothing answered" from
+    # "some did not". The MIXED row below keeps `INCOMPLETE` and is what proves
+    # the two cases have not been collapsed the other way.
+    (True, [], "NOT-MEASURED"),
     (True, [_pass("g")], "PASS"),
     (True, [_pass("g"), _skip("h")], "PASS"),
-    (True, [_not_invocable("g")], "INCOMPLETE"),
+    (True, [_not_invocable("g")], "NOT-MEASURED"),
+    (True, [_not_invocable("g"), _not_invocable("h")], "NOT-MEASURED"),
     (True, [_pass("g"), _not_invocable("h")], "INCOMPLETE"),
 ])
 def test_umbrella_status_truth_table(executed, records, expected):

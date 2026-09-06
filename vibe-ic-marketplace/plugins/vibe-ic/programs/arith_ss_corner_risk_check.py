@@ -34,6 +34,16 @@ therefore the RECORDING channel here, not a tightening: rc=1 is the only way the
 findings reach the compliance report, and the advisory slot still cannot fail
 the step.
 
+CORRECTED 2026-09-06 (RB2-05, #2063). That paragraph justified exiting 1 on
+rows this analyser itself labels "Predicted from RTL STRUCTURE, not measured" —
+i.e. it made a prediction wear the exit code of a measurement, because the
+recording channel it wanted was rc. It is no longer true that rc is the only
+channel: the flow's own step command already passes `--json`, every row is
+written there with `measured` and `basis` fields, and the rows are printed in
+full on stdout. `--strict` now exits 1 only on a MEASURED HIGH row (see
+`strict_failing_rows`), so today, with no measuring producer wired, this
+program exits 0 and says in its headline how many rows are predictions.
+
 Heuristic, per module (chip-AGNOSTIC, purely structural):
   1. Build a width table from `reg/wire/logic [H:L] name` declarations.
   2. Scan every combinational arithmetic expression that feeds state —
@@ -58,7 +68,9 @@ CLI (dual interface):
     python3 arith_ss_corner_risk_check.py --rtl-dir <dir> [--strict]
 
 Exit codes:
-    0 = PASS (no findings, or advisory only)   1 = FAIL (HIGH risk + --strict)
+    0 = PASS (no findings, or predictions only)
+    1 = FAIL (a MEASURED HIGH-risk row + --strict; a PREDICTED row never
+        exits 1 — RB2-05, see `strict_failing_rows`)
     2 = no RTL found / parse error
 """
 from __future__ import annotations
@@ -121,6 +133,12 @@ MITIGATIONS = re.compile(
     r'pipelin|dsp|wallace|dadda|compressor|ladner|fischer|3:2|3to2)', re.I)
 
 
+#: The basis word for a row derived from RTL structure with no timing run
+#: behind it. RB2-05 (#2063).
+_PREDICTED_BASIS = "predicted-from-rtl-structure"
+_MEASURED_BASIS = "measured-slow-corner-sta"
+
+
 @dataclass
 class Finding:
     file: str
@@ -132,6 +150,14 @@ class Finding:
     width: int
     depth: int
     message: str
+    #: RB2-05 (#2063). Is this row a MEASUREMENT of the design, or a PREDICTION
+    #: about it? Every row this module produces today is a prediction: it is
+    #: derived from RTL STRUCTURE alone, and the row's own message says so.
+    #: The field is written on the row rather than inferred from its text so
+    #: the distinction survives the JSON artefact and can never be recovered by
+    #: grepping a sentence.
+    measured: bool = False
+    basis: str = _PREDICTED_BASIS
 
 
 def _width_table(src: str) -> Dict[str, int]:
@@ -296,7 +322,14 @@ def analyse_module(name: str, body: str, base_line: int, path: str,
             why = f"{width}-bit add/compare chain (depth {add_depth})"
         if not risk:
             continue
-        sev = 'WARN' if risk == 'HIGH' else 'INFO'
+        # RB2-05 (#2063) — A PREDICTION IS NOT A MEASUREMENT, AND ITS
+        # SEVERITY MAY NOT OUTRANK ONE. Every row this analyser emits is
+        # structural: it has read declarations and operators, and no timing
+        # tool has run. `risk` keeps the HIGH/MED tier (that is the
+        # prediction's own strength and is what a reader sorts on); the
+        # SEVERITY of a predicted row is INFO, because severity is what the
+        # rest of the flow escalates on.
+        sev = 'INFO'
         findings.append(Finding(
             path, line, sev, kind, lhs, risk, width, add_depth,
             # SAY ONLY WHAT IS DEMONSTRABLE. This sentence used to end
@@ -329,6 +362,37 @@ def lint_file(path: Path, warn_w: int, high_w: int) -> List[Finding]:
     return out
 
 
+def strict_failing_rows(findings: List[Finding]) -> List[Finding]:
+    """The rows `--strict` may exit 1 on. RB2-05 (#2063).
+
+    THE RULE: a row whose own label says it was PREDICTED, not measured, never
+    sets rc=1. The gate's verdict is a function of MEASURED rows only.
+
+    WHY. `--strict` returned 1 on three rows that were all severity WARN and
+    all carried the sentence "Predicted from RTL STRUCTURE, not measured:
+    confirm on a slow-corner STA run" (MEASURED on the subservient cell, lane
+    rbsub2, 2026-09-06). A gate that FAILs on its own admitted guess makes the
+    guess indistinguishable, to every downstream reader, from a slow-corner
+    STA result — and on that cell the prediction happened to be right, which
+    is the worst version: a right guess published in the grammar of a
+    measurement teaches everyone to read the next wrong one the same way.
+
+    WHAT IS NOT LOST. The rows are still emitted on stdout with their full
+    text, and still written to the `--json` artefact the flow's own step
+    command already requests, with `measured` and `basis` on every row. The
+    docstring above claims rc=1 is "the only way the findings reach the
+    compliance report"; that was true of the report PROSE and never of the
+    JSON. Disclosure moves to the channel that can carry a prediction without
+    dressing it as a verdict.
+
+    A row a MEASURING producer marks `measured=True` at HIGH risk is a
+    slow-corner violation and does set rc=1 under `--strict` — this function
+    is where that adjudication lives, so the first such producer is judged by
+    a rule that already exists rather than by whoever writes it.
+    """
+    return [f for f in findings if f.measured and f.risk == 'HIGH']
+
+
 def main(argv: List[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description='Slow-corner arithmetic risk advisor.')
     ap.add_argument('paths', nargs='*', help='RTL files or directories')
@@ -338,7 +402,9 @@ def main(argv: List[str] | None = None) -> int:
     ap.add_argument('--high-width', type=int, default=32,
                     help='Width at/above which a ripple chain is HIGH risk')
     ap.add_argument('--strict', action='store_true',
-                    help='Exit 1 if any HIGH-risk finding (default: advisory, exit 0)')
+                    help='Exit 1 if any MEASURED HIGH-risk finding (a '
+                         'PREDICTED row never sets rc=1 — see '
+                         'strict_failing_rows; default: advisory, exit 0)')
     ap.add_argument('--json', help='Write findings as JSON')
     args = ap.parse_args(argv)
 
@@ -358,12 +424,16 @@ def main(argv: List[str] | None = None) -> int:
 
     high = [f for f in findings if f.risk == 'HIGH']
     med = [f for f in findings if f.risk == 'MED']
-    fail = args.strict and bool(high)
+    predicted = [f for f in findings if not f.measured]
+    strict_rows = strict_failing_rows(findings)
+    fail = args.strict and bool(strict_rows)
     # Advisory default never prints the token FAIL (keeps the MCP PASS contract).
     verdict = 'FAIL' if fail else 'PASS'
     note = '' if fail else ' (advisory)'
     print(f"arith_ss_corner_risk_check: {verdict}{note} — findings: "
-          f"{len(findings)} ({len(high)} HIGH, {len(med)} MED)")
+          f"{len(findings)} ({len(high)} HIGH, {len(med)} MED; "
+          f"{len(predicted)} PREDICTED from RTL structure, "
+          f"{len(findings) - len(predicted)} MEASURED)")
     for fd in sorted(findings, key=lambda x: (x.file, x.line)):
         print(f"  {fd.file}:{fd.line}: [{fd.risk}] {fd.rule}: {fd.message}")
     if args.json:

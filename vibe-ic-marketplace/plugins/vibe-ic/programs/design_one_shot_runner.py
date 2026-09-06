@@ -6530,9 +6530,16 @@ def _step_rtl_gen_bound(
                         "matched_pattern": m.matched_pattern,
                         "manifest_path": m.manifest_path,
                     })
+                # RB2-01 (#2063) — this header used to instruct the reader to
+                # run `catalog-glue-author`, in the same message whose next
+                # sentence may recommend a different skill. The matches are
+                # EVIDENCE; the recommended action is stated once, in the
+                # "Recommended action:" sentence, and is decided below.
                 catalog_hint = (
-                    "\nIP catalog matches found (use catalog-glue-author "
-                    "skill to pull + author wrapper):\n"
+                    "\nIP catalog matches found (evidence — the recommended "
+                    "skill is the one named in `Recommended action` above; a "
+                    "match only redirects the hand-off when the input docs "
+                    "name that IP as this design's own reuse):\n"
                     + "\n".join(lines)
                 )
         except Exception as _e:
@@ -6601,7 +6608,39 @@ def _step_rtl_gen_bound(
         # authoring. Best-effort: a render failure never blocks the WAIVE.
         lessons_hint, _hint_extras = _stage_author_knowledge_digests(project)
         skill = config.get("fallback_skill") or "spec-to-rtl"
+        # RB2-01 (#2063) — A CATALOG MATCH IS NOT AN INSTRUCTION.
+        #
+        # This line used to read `if catalog_matches_summary: skill =
+        # "catalog-glue-author"`, which replaced the class registry's OWN
+        # declared hand-off with a glue path whenever ANY match survived the
+        # query. The registry states `fallback_skill` per IC class precisely to
+        # say who authors this class; a `matches_when` predicate firing at
+        # confidence 0.4 is a GUESS about what the design might contain, and a
+        # guess was overriding a declaration.
+        #
+        # MEASURED on the subservient cell (lane rbsub2, 2026-09-06): class
+        # `processor_cpu` declares `fallback_skill=spec-to-rtl`, one catalog
+        # entry survived, and the WAIVE told the agent to run
+        # `catalog-glue-author` — for an IP that same query should not have
+        # returned at all (RB2-02).
+        #
+        # THE RULE: the registry's hand-off stands unless the surviving match
+        # is the cell's DECLARED REUSE — an IP the INPUT docs themselves name.
+        # That is the design saying "this IP is part of me"; anything else is
+        # the catalog guessing, and a guess may inform the author (the matches
+        # are still printed in `catalog_hint` and still carried in
+        # `ip_catalog_matches`) without redirecting them.
+        _declared_reuse: List[str] = []
         if catalog_matches_summary:
+            try:
+                from ip_catalog_query import declared_reuse_idents as _dri
+                _named = _dri(project)
+                _declared_reuse = [
+                    m["ip_name"] for m in catalog_matches_summary
+                    if str(m.get("ip_name", "")).strip().lower() in _named]
+            except Exception as _e:      # no docs / no reader ⇒ no override
+                _declared_reuse = []
+        if _declared_reuse:
             skill = "catalog-glue-author"
         return StepResult(
             "rtl_gen", "WAIVED",
@@ -6612,6 +6651,11 @@ def _step_rtl_gen_bound(
             extras={"fallback_skill": skill,
                     "class_config": config,
                     "ip_catalog_matches": catalog_matches_summary,
+                    # RB2-01 — WHICH matches (if any) the input docs name as
+                    # this cell's own reuse, i.e. what justified the hand-off
+                    # actually recommended. Empty ⇒ the registry's own
+                    # fallback_skill stands.
+                    "ip_catalog_declared_reuse": _declared_reuse,
                     **_hint_extras})
 
     gen = PROGRAMS_DIR / gen_name

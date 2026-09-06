@@ -11,10 +11,19 @@ When `design_one_shot_runner.step_rtl_gen` returns:
 ```
 WAIVED rtl_gen — IC class registered but rtl_gen=null.
                  Recommended action: AI invokes skill `catalog-glue-author`.
-IP catalog matches found (use catalog-glue-author skill...):
+IP catalog matches found (evidence — the recommended skill is the one named in
+`Recommended action` above; ...):
   - cpu/serv v1.4.0 (ISC) confidence=0.5; matched: ...
   - cpu/picorv32 v1.0.0 (ISC) confidence=0.5; matched: ...
 ```
+
+RB2-01 (#2063): a catalog match on its own does NOT hand the design to this
+skill. The IC class registry's own `fallback_skill` stands unless the INPUT
+docs name the matched IP as this design's reuse; when they do not, the WAIVE
+names `spec-to-rtl` and the matches are printed as evidence only. The match
+list a run acted on is in
+`...extras.ip_catalog_declared_reuse` (which matches were declared reuse) beside
+`extras.ip_catalog_matches` (everything the query returned).
 
 Plus `phase2_one_shot.json.steps[name=rtl_gen].extras.ip_catalog_matches` carries the structured match list.
 

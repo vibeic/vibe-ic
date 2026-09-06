@@ -136,6 +136,16 @@ def test_the_producers_vocabulary_is_pinned():
     src = pathlib.Path(F.__file__).read_text(encoding="utf-8")
     found = {T.normalize(m) for m in
              re.findall(r'\.status = "([A-Z][A-Z_-]+)"', src)}
+    # RB2-03 (#2063) — THE PIN WAS BLIND TO ONE PRODUCER. The P0 umbrella's
+    # word reaches the step as `status=_p0_umbrella_status(...)`, a keyword
+    # argument, so none of its literals ever matched the `.status = "..."`
+    # pattern above; `INCOMPLETE` only appeared in `found` because an unrelated
+    # site happens to assign it literally. A word this function can return and
+    # no other site assigns would have escaped the pin entirely — which is the
+    # exact escape this test exists to close. Read that function's own returns.
+    import inspect
+    found |= {T.normalize(m) for m in re.findall(
+        r'return "([A-Z][A-Z_-]+)"', inspect.getsource(F._p0_umbrella_status))}
     assert found == T.PRODUCER_STATUSES, (
         "flow_compliance_check's verdict vocabulary changed. Add the new word "
         "to EXCUSED or NON_GREEN in _flow_verdict_tiers.py, or confirm it is a "
