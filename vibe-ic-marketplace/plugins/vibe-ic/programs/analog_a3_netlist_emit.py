@@ -111,6 +111,7 @@ import ast as _ast
 import hashlib
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -877,12 +878,12 @@ def render_netlist(ir: Dict[str, Any], pdkctx: Dict[str, Any],
                    prov_lines: List[str],
                    overrides: Dict[str, Dict[str, float]],
                    deck_dir: Optional[Path] = None) -> str:
-    # `deck_dir` is the directory the deck will be written to. It is passed
-    # and deliberately NOT used for the `.lib` card — see `_portable_lib_path`
-    # for the two staging sites that make a deck-relative path unemittable
-    # today. It stays a parameter so the day those sites are fixed the change
-    # is one line here, and so the test that pins the revert can call this
-    # function the way the fixed version would.
+    # `deck_dir` is the directory the deck will be written to, and the `.lib`
+    # card is written RELATIVE to it for a library the project itself
+    # carries — see `_portable_lib_path` for the measured ngspice behaviour
+    # and `stage_deck_inputs` for the two staging sites that had to reproduce
+    # the project's shape before this was emittable. A library outside the
+    # project is a host installation and keeps its absolute path.
     block = ir["block"]
     metric = any(u == "metric" for u in
                  (pdkctx.get("geometry_units") or {}).values())
@@ -911,9 +912,11 @@ def render_netlist(ir: Dict[str, Any], pdkctx: Dict[str, Any],
                   if len(tuple(dl)) == 2]
     if deck_loads:
         for lib, sec in deck_loads:
-            L.append(f".lib {lib} {sec}".rstrip())
+            L.append(f".lib {_portable_lib_path(lib, deck_dir)} "
+                     f"{sec}".rstrip())
     else:
-        L.append(f".lib {pdkctx['model_lib']} {section}".rstrip())
+        L.append(f".lib {_portable_lib_path(pdkctx['model_lib'], deck_dir)} "
+                 f"{section}".rstrip())
     L.append("")
     L.append(f".subckt {block} {' '.join(ir['ports'])}")
     for d in ir["devices"]:
@@ -1008,6 +1011,97 @@ _CHECKERS = (
 )
 
 
+#: A `.lib <path> [section]` card, as this emitter writes it.
+_LIB_CARD_RE = re.compile(r"(?im)^\s*\.lib\s+(\S+)")
+
+
+def deck_libs(sp_text: str) -> List[str]:
+    """Every library path the deck names, in the order it names them."""
+    return _LIB_CARD_RE.findall(sp_text or "")
+
+
+def stage_deck_inputs(sp_text: str, real_project: Optional[Path],
+                      root: Path, deck_dir_rel: str,
+                      real_deck_dir: Optional[Path] = None
+                      ) -> Tuple[List[str], List[Dict[str, str]]]:
+    """Reproduce, under `root`, the directory relationship the deck NAMES.
+
+    THE DEFECT THIS CLOSES, MEASURED (czadc28, 2026-09-06, and re-measured
+    here). A3 verifies its deck in two staging sites and NEITHER carried the
+    project's `input/`: a host TemporaryDirectory holding only the deck, its
+    sidecar and a block list, and a FLAT `/tmp/a3emit_<block>_<ts>` in the
+    container holding exactly two files. An ABSOLUTE `.lib` path resolves
+    from both by accident, so both had been getting the right answer for the
+    wrong reason for as long as the defect existed — and a staging tree that
+    omits an input the artefact depends on cannot detect ANY defect in how
+    that dependency is expressed. With the path made deck-relative and the
+    staging left as it was, A3 refused to emit either block and A4-A7 went
+    BLOCKED behind it.
+
+    So the staging site reproduces the shape: every library the deck names
+    that lives INSIDE the project is materialised at the SAME path relative
+    to the project root, which is what makes `input/` exist in the staging
+    tree and a relative `.lib` resolvable there. A library OUTSIDE the
+    project is a host INSTALLATION and is left alone — it is not the
+    project's to carry, and relativising it would be the same defect pointed
+    the other way.
+
+    Returns (staged relative paths, unstageable entries). An entry this
+    function cannot stage is NAMED and returned, never dropped: "I could not
+    put it there" is not "it did not need to be there".
+    """
+    staged: List[str] = []
+    missing: List[Dict[str, str]] = []
+    deck_dir = root / deck_dir_rel
+    if real_deck_dir is None and real_project is not None:
+        real_deck_dir = real_project / deck_dir_rel
+    for lib in deck_libs(sp_text):
+        libp = Path(lib)
+        if not libp.is_absolute():
+            # DECK-RELATIVE, which is what this emitter now writes for a
+            # library the project carries. Its SOURCE is that path resolved
+            # against the deck's directory in the REAL project; it is staged
+            # at the same place relative to this root, so the deck resolves
+            # here exactly as it will on disk. Already resolvable (a caller
+            # that staged it itself) is fine and is not re-staged.
+            if (deck_dir / lib).is_file():
+                continue
+            src = ((real_deck_dir / lib).resolve()
+                   if real_deck_dir is not None else None)
+            if src is None or not src.is_file():
+                missing.append({"lib": lib, "why": (
+                    f"a deck-relative library that does not resolve from the "
+                    f"deck's own directory"
+                    + (f" in the project ({src})" if src is not None
+                       else " and no project root was given to resolve it "
+                            "against"))})
+                continue
+            libp = src
+        if real_project is None:
+            continue
+        try:
+            rel = libp.relative_to(real_project)
+        except ValueError:
+            continue            # a host installation, not the project's
+        dst = root / rel
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        if dst.exists():
+            staged.append(str(rel))
+            continue
+        try:
+            os.link(str(libp), str(dst))
+        except OSError:
+            try:
+                shutil.copyfile(str(libp), str(dst))
+            except OSError as exc:
+                missing.append({"lib": lib, "why": (
+                    f"the project carries this library but it could not be "
+                    f"staged: {exc}")})
+                continue
+        staged.append(str(rel))
+    return staged, missing
+
+
 def verify_with_checkers(block: str, sp_text: str, tb_text: Optional[str],
                          design_content: Optional[str] = None,
                          real_project: Optional[Path] = None
@@ -1047,7 +1141,25 @@ def verify_with_checkers(block: str, sp_text: str, tb_text: Optional[str],
                 encoding="utf-8")
         if tb_text:
             (bdir / f"tb_{block}.sp").write_text(tb_text, encoding="utf-8")
+        # THE SHAPE THE DECK NAMES, not a subset of it. See
+        # `stage_deck_inputs`: without the project's own `input/` under this
+        # root, a deck-relative `.lib` cannot be resolved here and this site
+        # cannot tell a portable deck from an unportable one.
+        staged, unstageable = stage_deck_inputs(
+            sp_text, real_project, proj,
+            f"{_CANONICAL_ANALOG}/{block}",
+            real_deck_dir=(real_project / _CANONICAL_ANALOG / block
+                           if real_project is not None else None))
         ok = True
+        if staged:
+            findings.append({"checker": "deck_inputs_staged", "rc": 0,
+                             "detail": "staged " + ", ".join(sorted(staged))})
+        for entry in unstageable:
+            ok = False
+            findings.append({
+                "checker": "deck_inputs_staged", "rc": 1,
+                "detail": (f"`.lib {entry['lib']}` cannot be resolved from "
+                           f"the staged deck: {entry['why']}")})
         for label, prog, per_block in _CHECKERS:
             path = _HERE / prog
             if not path.is_file():
@@ -1092,24 +1204,50 @@ def _docker_ok(container: str) -> bool:
 
 
 def verify_with_ngspice(container: str, block: str, sp_text: str,
-                        tb_text: str) -> Dict[str, Any]:
+                        tb_text: str,
+                        real_project: Optional[Path] = None) -> Dict[str, Any]:
     """Run the testbench in the EDA container. An unreachable container is a
     CAPABILITY gap (`NOT_VERIFIED_NO_SIMULATOR`), never a netlist defect."""
     if shutil.which("docker") is None or not _docker_ok(container):
         return {"simulation_verified": False,
                 "simulation_status": "NOT_VERIFIED_NO_SIMULATOR",
                 "detail": f"container `{container}` is not reachable"}
-    stage = f"/tmp/a3emit_{block}_{int(time.time())}"
+    # THE SAME SHAPE AS THE OTHER STAGING SITE. The deck used to be dropped
+    # into a FLAT directory here, so an absolute `.lib` resolved by accident
+    # and a deck-relative one could not resolve at all. The deck now sits at
+    # the path it sits at in the project, and every library the project
+    # itself carries is copied in at the same relative path — see
+    # `stage_deck_inputs`, and the measured ngspice behaviour in
+    # `_portable_lib_path` (a relative `.lib` resolves against the directory
+    # of the FILE carrying the directive, not the process CWD).
+    root = f"/tmp/a3emit_{block}_{int(time.time())}"
+    deck_rel = f"{_CANONICAL_ANALOG}/{block}"
+    stage = f"{root}/{deck_rel}"
     try:
         subprocess.run(["docker", "exec", container, "mkdir", "-p", stage],
                        capture_output=True, text=True, timeout=120)
         with tempfile.TemporaryDirectory(prefix="a3sim_") as td:
             local = Path(td)
-            (local / f"{block}.sp").write_text(sp_text, encoding="utf-8")
-            (local / f"tb_{block}.sp").write_text(tb_text, encoding="utf-8")
+            (local / deck_rel).mkdir(parents=True, exist_ok=True)
+            (local / deck_rel / f"{block}.sp").write_text(sp_text,
+                                                          encoding="utf-8")
+            (local / deck_rel / f"tb_{block}.sp").write_text(tb_text,
+                                                             encoding="utf-8")
+            staged, _unstageable = stage_deck_inputs(
+                sp_text, real_project, local, deck_rel,
+                real_deck_dir=(real_project / deck_rel
+                               if real_project is not None else None))
             for f in (f"{block}.sp", f"tb_{block}.sp"):
-                subprocess.run(["docker", "cp", str(local / f),
+                subprocess.run(["docker", "cp", str(local / deck_rel / f),
                                 f"{container}:{stage}/{f}"],
+                               capture_output=True, text=True, timeout=300)
+            for rel in staged:
+                subprocess.run(
+                    ["docker", "exec", container, "mkdir", "-p",
+                     f"{root}/{str(Path(rel).parent)}"],
+                    capture_output=True, text=True, timeout=120)
+                subprocess.run(["docker", "cp", str(local / rel),
+                                f"{container}:{root}/{rel}"],
                                capture_output=True, text=True, timeout=300)
         # `sh -lc` is deliberately NOT used: a login shell sources the EDA
         # image's profile, which was measured to abort with a syntax error
@@ -1410,7 +1548,8 @@ def emit_for_block(project: Path, entry: Dict[str, Any], pdk: str,
     sim: Dict[str, Any] = {"simulation_verified": False,
                            "simulation_status": "NOT_ATTEMPTED"}
     if verify_sim and tb_text:
-        sim = verify_with_ngspice(container, name, sp_text, tb_text)
+        sim = verify_with_ngspice(container, name, sp_text, tb_text,
+                                  real_project=project)
         if sim.get("simulation_status") == "DID_NOT_CONVERGE":
             _drop_stale(bdir, name)
             gap = write_gap(bdir, project, name, btype,

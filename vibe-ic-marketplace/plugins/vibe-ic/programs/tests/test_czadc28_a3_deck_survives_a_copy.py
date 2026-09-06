@@ -247,9 +247,16 @@ def test_every_split_corner_lib_is_checked_not_just_the_first(tmp_path):
 # relationship the deck names — larger than this lane, and not half-landed.
 
 
-def test_the_emitter_still_writes_the_path_the_resolver_gave_it(tmp_path):
-    """The rewrite is NOT wired in. This pins that, so the revert cannot be
-    undone by accident and so the report above cannot silently go stale."""
+# THE MOMENT THE NOTE ABOVE PREDICTED. Both staging sites now reproduce the
+# project's own shape (`stage_deck_inputs`), so a deck-relative `.lib` can be
+# resolved where the deck is verified, and the rewrite is wired in. The two
+# tests below are the same two subjects, now asserting the state that makes
+# the deck survive a copy instead of the state that made it unemittable.
+
+
+def test_the_emitter_writes_a_project_internal_library_relatively(tmp_path):
+    """A library the PROJECT carries is named relative to the deck, so the
+    deck resolves after the project is copied anywhere."""
     proj = _project(tmp_path)
     deck_dir = proj / "phase3" / "analog" / "ldo"
     lib = str(proj / "input" / "pdk" / "models" / "cornerMOS.lib")
@@ -260,24 +267,72 @@ def test_the_emitter_still_writes_the_path_the_resolver_gave_it(tmp_path):
     text = _render(ir, ctx, [], {}, deck_dir)
     card = [ln for ln in text.splitlines() if ln.startswith(".lib ")]
     assert len(card) == 1, text
-    assert card[0].split()[1] == lib, (
-        "the emitter is writing a rewritten path; the two staging sites "
-        "named above cannot resolve one, and A3 will refuse to emit")
+    got = card[0].split()[1]
+    assert not Path(got).is_absolute(), got
+    assert (deck_dir / got).resolve() == Path(lib).resolve(), got
 
 
-def test_neither_staging_site_carries_the_projects_input(tmp_path):
-    """THE FINDING, asserted rather than described. If either staging site
-    ever does stage `input/`, this test reddens — and that is the moment the
-    portable path above becomes wirable."""
+def test_a_library_outside_the_project_keeps_its_absolute_path(tmp_path):
+    """THE CONTROL. An installed PDK is not part of the design; relativising
+    it would make the deck depend on where the project sits relative to the
+    install root, which is the same defect pointed the other way."""
+    proj = _project(tmp_path)
+    deck_dir = proj / "phase3" / "analog" / "ldo"
+    lib = "/foss/pdks/ihp-sg13g2/libs.tech/ngspice/models/cornerMOS.lib"
+    ir = dict(_IR)
+    ir["ports"] = ["vin", "vout", "vss"]
+    ctx = _ctx(lib)
+    ctx["geometry_units"] = {}
+    text = _render(ir, ctx, [], {}, deck_dir)
+    card = [ln for ln in text.splitlines() if ln.startswith(".lib ")]
+    assert card[0].split()[1] == lib, card
+
+
+def test_both_staging_sites_reproduce_the_projects_own_shape(tmp_path):
+    """THE FINDING, inverted. Both sites now put the deck where the project
+    puts it and carry the libraries the project carries."""
     src = Path(A3.__file__).read_text()
     verify = src[src.index("def verify_with_checkers("):
-                 src.index("def verify_with_ngspice(")]
+                 src.index("def _docker_ok(")]
     ngspice = src[src.index("def verify_with_ngspice("):]
     ngspice = ngspice[:ngspice.index("\ndef ", 10)]
     for name, body in (("verify_with_checkers", verify),
                        ("verify_with_ngspice", ngspice)):
-        assert "TemporaryDirectory" in body or "/tmp/a3emit_" in body, name
-        assert '"input"' not in body and "'input'" not in body, (
-            f"{name} now stages something called `input`; if it stages the "
-            f"project's own, re-read the note above — the portable `.lib` "
-            f"path may now be wirable")
+        assert "stage_deck_inputs(" in body, (
+            f"{name} no longer reproduces the project shape the deck names; "
+            f"a deck-relative `.lib` cannot be verified there")
+
+
+def test_a_deck_relative_library_that_is_not_staged_is_refused_by_name(
+        tmp_path):
+    """THE MUTATION ARM. A deck naming a library that is NOT under the root
+    being staged is refused, with the path in the finding — which is the
+    whole point of staging the shape: a site that cannot see the dependency
+    cannot find a defect in it."""
+    root = tmp_path / "stage"
+    (root / "phase3" / "analog" / "ldo").mkdir(parents=True)
+    staged, missing = A3.stage_deck_inputs(
+        ".lib ../../../input/pdk/models/nowhere.lib mos_tt\n",
+        None, root, "phase3/analog/ldo")
+    assert staged == []
+    assert len(missing) == 1
+    assert "nowhere.lib" in missing[0]["lib"]
+    assert "does not resolve" in missing[0]["why"]
+
+
+def test_a_project_internal_library_is_materialised_at_its_own_relpath(
+        tmp_path):
+    """GREEN, and the reason the mutation above can fail: the same call with
+    the project's library present stages it at the SAME relative path, which
+    is what makes `input/` exist in the staging tree."""
+    proj = _project(tmp_path)
+    lib = proj / "input" / "pdk" / "models" / "cornerMOS.lib"
+    lib.parent.mkdir(parents=True, exist_ok=True)
+    lib.write_text("* a library\n")
+    root = tmp_path / "stage"
+    (root / "phase3" / "analog" / "ldo").mkdir(parents=True)
+    staged, missing = A3.stage_deck_inputs(
+        f".lib {lib} mos_tt\n", proj, root, "phase3/analog/ldo")
+    assert missing == []
+    assert staged == ["input/pdk/models/cornerMOS.lib"]
+    assert (root / "input" / "pdk" / "models" / "cornerMOS.lib").is_file()

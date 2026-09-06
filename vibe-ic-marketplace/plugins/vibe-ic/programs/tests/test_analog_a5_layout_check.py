@@ -683,3 +683,47 @@ def test_no_record_at_all_is_not_read_as_a_clean_one(tmp_path: Path) -> None:
              json.loads((tmp_path / "report.json").read_text())
              .get("findings", [])]
     assert "A5_LAYOUT_DRAWN_SHORT" not in rules
+
+
+# ── A DEVICE THE PDK'S GENCELL CLAMPED IS BLOCKING TOO ──────────────────
+def test_device_above_the_pdk_maximum_fails_the_gate(tmp_path: Path) -> None:
+    """MEASURED: eight `delta_sigma` capacitors asked for at l = 34.75 ..
+    629.08 um against a gencell `lmax 30.0` were all drawn at 30 um, and the
+    LVS cross-reference named those eight and only those eight."""
+    _block_list(tmp_path, ["ldo"])
+    _layout_full(tmp_path, "ldo")
+    _provenance(tmp_path, "ldo", [
+        {"quantity": "bulk_tap_clearance_lambda", "required": 21,
+         "achieved": 9, "detail": "a clearance A6's deck adjudicates"},
+        {"quantity": "device_geometry_above_pdk_maximum", "required": 30.0,
+         "achieved": 629.081,
+         "detail": ("ci1 (cap_cmim): l=629.081u is above the PDK maximum "
+                    "lmax=30.0u (/pdk/x-cap.tcl). The gencell does not "
+                    "refuse it — it CLAMPS to 30.0u and draws")},
+    ])
+    r = _run(tmp_path)
+    assert r.returncode == 1, r.stdout
+    rpt = json.loads((tmp_path / "report.json").read_text())
+    assert rpt["verdict"] == "FAIL"
+    hits = [f for f in rpt["findings"]
+            if f["rule"] == "A5_DEVICE_ABOVE_PDK_MAXIMUM"]
+    assert len(hits) == 1, rpt["findings"]
+    assert "lmax=30.0u" in hits[0]["detail"] and "/pdk/x-cap.tcl" in hits[0]["detail"]
+    # and the clearance beside it is still A6's, not this gate's
+    assert [f["rule"] for f in rpt["findings"]] == ["A5_DEVICE_ABOVE_PDK_MAXIMUM"]
+
+
+def test_the_two_blocking_rules_are_reported_separately(tmp_path: Path) -> None:
+    """A record carrying both says both, under their own names — a reader
+    repairing a short must not be told it is a geometry problem."""
+    _block_list(tmp_path, ["ldo"])
+    _layout_full(tmp_path, "ldo")
+    _provenance(tmp_path, "ldo", [
+        {"quantity": "routed_nets_per_conductor", "detail": _WITNESS},
+        {"quantity": "device_geometry_above_pdk_maximum",
+         "detail": "ci1 (cap_cmim): l above lmax"},
+    ])
+    assert _run(tmp_path).returncode == 1
+    rules = sorted(f["rule"] for f in
+                   json.loads((tmp_path / "report.json").read_text())["findings"])
+    assert rules == ["A5_DEVICE_ABOVE_PDK_MAXIMUM", "A5_LAYOUT_DRAWN_SHORT"]

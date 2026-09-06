@@ -187,9 +187,10 @@ def gencell_defaults(text: str, source: str = "") -> Dict[str, dict]:
 
     `params` is the set of parameter NAMES the gencell declares, which is
     what a caller must respect when it builds the `magic::gencell` command.
-    `lmin`/`wmin` are the same PDK-stated minima `fet_limits` reads, and
-    `class` is the PDK's OWN device classification (mosfet / resistor /
-    capacitor), so a caller never has to infer a device class from a name.
+    `lmin`/`wmin` are the same PDK-stated minima `fet_limits` reads,
+    `lmax`/`wmax` are the maxima the SAME proc states, and `class` is the
+    PDK's OWN device classification (mosfet / resistor / capacitor), so a
+    caller never has to infer a device class from a name.
     """
     out: Dict[str, dict] = {}
     for m in _DEFAULTS_RE.finditer(text):
@@ -204,7 +205,15 @@ def gencell_defaults(text: str, source: str = "") -> Dict[str, dict]:
         rec = {"namespace": ns, "source": source,
                "params": sorted(pairs.keys()),
                "class": pairs.get("class")}
-        for k in ("lmin", "wmin"):
+        # BOTH ENDS OF THE PDK's OWN STATEMENT. `lmin`/`wmin` were read and
+        # `lmax`/`wmax` were not, although the same `_defaults` proc states
+        # all four. MEASURED on ihp-sg13g2's MiM capacitor gencell
+        # (`lmax 30.0 wmax 30.0`): asked for a 629.081 um long capacitor the
+        # gencell CLAMPS to 30 and draws it, so the drawn device is 21x
+        # smaller than the netlist's and nothing in the flow says so. Eight
+        # of u_hawaii_adc's `delta_sigma` capacitors were drawn that way and
+        # the per-block LVS answered `mismatch` six steps later.
+        for k in ("lmin", "wmin", "lmax", "wmax"):
             try:
                 rec[k] = float(pairs[k])
             except (KeyError, ValueError):
