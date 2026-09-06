@@ -2104,13 +2104,35 @@ def parse_sta_corner_basis(text: str) -> dict:
 
     Returns an empty `liberty` when the report declares none -- the caller must
     then decline to correlate rather than assume the active corner.
+
+    AND WHEN IT DECLARES MORE THAN ONE (SPM-12, lane spmspice, measured over the
+    landed v1.17.52 code). A multi-corner writer can stamp TWO distinct
+    libraries into ONE report. This function used to take the FIRST match of the
+    FIRST regex that hit and say nothing, so which corner the deck was built at
+    was decided by regex order and by where in the file the writer happened to
+    put its header. MEASURED: one report stamping both `ss_125C_4v50` and
+    `ff_n40C_5v50` gave cone 5.3238 ns / SPICE 4.1188 ns = -22.63 % against
+    20.03 %, MISMATCH; the SAME design whose report stamps `ss` alone measures
+    7.4884 ns. A 1.8x swing in the number that gets the verdict, decided by
+    which of two stamped corners was silently picked.
+
+    Two declared corners is not a corner. `declared_liberties` carries the whole
+    SET -- membership, so the caller can name both in its refusal -- and
+    `liberty` is answered ONLY when exactly one was declared. This is the third
+    refusal of the same shape, beside "declared none" and "declared one that
+    cannot be read": in all three the honest answer is that the corner the deck
+    must be built at is unknown.
     """
-    out = {"liberty": "", "ocv_late_derate": None}
+    out = {"liberty": "", "ocv_late_derate": None, "declared_liberties": []}
+    declared: List[str] = []
     for rx in _STA_CORNER_LIBERTY_RES:
-        m = rx.search(text or "")
-        if m:
-            out["liberty"] = m.group(1).strip()
-            break
+        for m in rx.finditer(text or ""):
+            value = m.group(1).strip()
+            if value and value not in declared:
+                declared.append(value)
+    out["declared_liberties"] = sorted(declared)
+    if len(declared) == 1:
+        out["liberty"] = declared[0]
     m = _STA_OCV_LATE_RE.search(text or "")
     if m:
         try:
@@ -2370,6 +2392,17 @@ def run_installed_pdk_path_correlation(
     # to fall back on the active corner: the comparison would then be between
     # two different PVT points and the number would be an artefact of the gate.
     basis = parse_sta_corner_basis(sta_text)
+    declared_corners = basis["declared_liberties"]
+    if len(declared_corners) > 1:
+        # SPM-12. Picking one of two stamped corners is not a measurement of
+        # this design; it is a measurement of regex order.
+        return {"status": "ERROR",
+                "reason": f"{sta_report.name} declares "
+                          f"{len(declared_corners)} DIFFERENT corner libraries "
+                          f"({', '.join(Path(c).name for c in declared_corners)})"
+                          f", so the corner the SPICE deck must be built at is "
+                          f"unknown; refusing a cross-corner correlation rather "
+                          f"than picking one of them"}
     corner_liberty = basis["liberty"] or ""
     if not corner_liberty:
         return {"status": "ERROR",

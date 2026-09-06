@@ -448,3 +448,115 @@ def test_a_log_with_no_loop_trace_reports_none_not_a_default():
     assert trace["best_net_violations"] is None
     assert trace["best_not_restored"] is False
     assert trace["membership_available"] is None
+
+
+# ───────── SPM-12: one report, two stamped corners (lane spmspice) ─────────
+#
+# MEASURED by lane spmspice over the LANDED v1.17.52 code: a report stamping
+# BOTH `ss_125C_4v50` and `ff_n40C_5v50` was accepted, and `parse_sta_corner_basis`
+# silently answered with whichever of them the first matching regex found first
+# — cone 5.3238 ns / SPICE 4.1188 ns = -22.63 % against 20.03 %, MISMATCH. The
+# SAME design whose report stamps `ss` alone measures 7.4884 ns. A 1.8x swing in
+# the number that gets the verdict, decided by regex order.
+
+_ONE_CORNER = ("STA_BASIS_LIBERTY: /pdk/lib/x__ss_125C_4v50.lib\n"
+               "OCV_DERATE_APPLIED early=0.95 late=1.05\n")
+_TWO_CORNERS = (_ONE_CORNER +
+                "# corner_liberty: ff=/pdk/lib/x__ff_n40C_5v50.lib\n")
+
+
+def test_two_stamped_corners_is_not_a_corner():
+    got = scc.parse_sta_corner_basis(_TWO_CORNERS)
+    assert got["liberty"] == ""                       # no answer is given
+    assert got["declared_liberties"] == [             # MEMBERSHIP, both named
+        "/pdk/lib/x__ff_n40C_5v50.lib", "/pdk/lib/x__ss_125C_4v50.lib"]
+    assert got["ocv_late_derate"] == 1.05             # the rest still parses
+
+
+def test_one_corner_stamped_twice_is_still_one_corner():
+    """THE FALSE-REFUSAL CONTROL. A writer that repeats its own stamp has not
+    declared two corners, and must not be refused."""
+    got = scc.parse_sta_corner_basis(_ONE_CORNER + _ONE_CORNER)
+    assert got["liberty"] == "/pdk/lib/x__ss_125C_4v50.lib"
+    assert got["declared_liberties"] == ["/pdk/lib/x__ss_125C_4v50.lib"]
+
+
+def test_one_corner_still_answers_and_none_still_refuses():
+    assert scc.parse_sta_corner_basis(_ONE_CORNER)["liberty"] == \
+        "/pdk/lib/x__ss_125C_4v50.lib"
+    none = scc.parse_sta_corner_basis("no header here\n")
+    assert none["liberty"] == "" and none["declared_liberties"] == []
+
+
+_STA_BODY = """\
+Startpoint: test (input port clocked by clk)
+Endpoint: ep (rising edge-triggered flip-flop clocked by clk)
+Path Group: clk
+Path Type: max
+
+  Slew    Load    Delay    Time   Description
+------------------------------------------------------------
+                   0.00    0.00   clock clk (rise edge)
+                   4.80    4.80 v input external delay
+   0.08    0.00    0.00    4.80 v test (in)
+   0.04    0.33    0.55    5.35 v u1/Z (BUF)
+           0.33    0.00    5.35 ^ ep/D (DFF)
+                           5.35   data arrival time
+"""
+
+
+def _spm12_project(tmp_path, corner_header):
+    p = tmp_path / "proj"
+    (p / "phase3" / "stage3" / "pnr").mkdir(parents=True)
+    (p / "phase3" / "stage3" / "extracted").mkdir(parents=True)
+    (p / "phase3" / "stage3" / "sta").mkdir(parents=True)
+    (p / "phase3" / "stage3" / "pnr" / "x_pnr.v").write_text(
+        "module x(); BUF u1 (.A(test), .Z(n1)); DFF ep (.D(n1)); endmodule\n")
+    (p / "phase3" / "stage3" / "extracted" / "x.spef").write_text(
+        '*SPEF "ieee 1481-1999"\n*C_UNIT 1 PF\n*NAME_MAP\n*1 n1\n'
+        '*D_NET *1 0.001\n*END\n')
+    rpt = p / "phase3" / "stage3" / "sta" / "sta_mcorner_ocv.rpt"
+    rpt.write_text(corner_header + _STA_BODY)
+    return p, rpt
+
+
+def test_the_driver_refuses_a_report_that_stamps_two_corners(tmp_path,
+                                                             monkeypatch):
+    """The refusal is WIRED, not merely present: the driver returns ERROR and
+    NAMES both corners rather than correlating against one of them."""
+    p, rpt = _spm12_project(tmp_path, _TWO_CORNERS)
+    monkeypatch.setattr(scc, "_resolve_ngspice", lambda c: "/usr/bin/true")
+    monkeypatch.setattr(scc, "_read_container_text",
+                        lambda c, path: "library(x) { }\n")
+    monkeypatch.setattr(scc, "discover_installed_pdk_sources",
+                        lambda c, lib, cells: {"subckt_names": {"BUF", "DFF"},
+                                               "cell_text": "", "cell_spice": "",
+                                               "model_file": "/m", "model_section": "ss",
+                                               "model_preludes": []})
+    monkeypatch.setattr(scc, "_pick_sta_report", lambda proj, names: rpt)
+    got = scc.run_installed_pdk_path_correlation(p, "/pdk/lib/x__tt.lib",
+                                                 container="none")
+    assert got["status"] == "ERROR", got
+    assert "2 DIFFERENT corner libraries" in got["reason"], got["reason"]
+    assert "x__ss_125C_4v50.lib" in got["reason"]
+    assert "x__ff_n40C_5v50.lib" in got["reason"]
+
+
+def test_the_driver_still_proceeds_past_a_single_declared_corner(tmp_path,
+                                                                monkeypatch):
+    """THE OTHER DIRECTION. One stamped corner must NOT be refused by the new
+    predicate — it must get past it and fail (or pass) further down on its own
+    merits, never on the corner count."""
+    p, rpt = _spm12_project(tmp_path, _ONE_CORNER)
+    monkeypatch.setattr(scc, "_resolve_ngspice", lambda c: "/usr/bin/true")
+    monkeypatch.setattr(scc, "_read_container_text",
+                        lambda c, path: "library(x) { }\n")
+    monkeypatch.setattr(scc, "discover_installed_pdk_sources",
+                        lambda c, lib, cells: {"subckt_names": {"BUF", "DFF"},
+                                               "cell_text": "", "cell_spice": "",
+                                               "model_file": "/m", "model_section": "ss",
+                                               "model_preludes": []})
+    monkeypatch.setattr(scc, "_pick_sta_report", lambda proj, names: rpt)
+    got = scc.run_installed_pdk_path_correlation(p, "/pdk/lib/x__tt.lib",
+                                                 container="none")
+    assert "DIFFERENT corner libraries" not in (got.get("reason") or ""), got
