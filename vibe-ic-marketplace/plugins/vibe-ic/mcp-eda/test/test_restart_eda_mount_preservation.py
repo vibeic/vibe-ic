@@ -365,3 +365,74 @@ def test_failed_docker_run_restores_the_previous_container(tmp_path):
     r = h.run(MOCK_RUN_RC="1")
     assert r.returncode == 6, (r.returncode, r.stderr)
     assert "rolled back" in r.stderr
+
+
+# --- the FRESH-container branch: no existing container to clone ------------
+#
+# This is the FIRST-INSTALL path, and it was rewritten by the same change (its
+# two canonical binds now go through `add_mount` like every other declaration).
+# Nothing exercised it: every case above sets `exists=True`, and the older
+# pinned-default test file never mentions DESIGNS_DIR at all. A break here
+# would land on a new user's very first run, which is the worst place to find
+# out, so the branch gets the same treatment as the clone path.
+
+class TestFreshContainerBranch:
+    def _fresh(self, tmp_path, designs=None, **env):
+        h = Harness(tmp_path, _state(exists=False))
+        if designs is not None:
+            env["DESIGNS_DIR"] = str(designs)
+        return h, h.run(**env)
+
+    def test_canonical_designs_binds_are_emitted(self, tmp_path):
+        designs = tmp_path / "designs"
+        designs.mkdir()
+        h, r = self._fresh(tmp_path, designs)
+        assert r.returncode == 0, r.stderr
+        assert h.mount_args() == [f"{designs}:{designs}", f"{designs}:/foss/designs"]
+
+    def test_canonical_user_workdir_and_cmd(self, tmp_path):
+        designs = tmp_path / "designs"
+        designs.mkdir()
+        h, r = self._fresh(tmp_path, designs)
+        assert r.returncode == 0, r.stderr
+        a = h.run_argv()
+        assert a[a.index("-w") + 1] == "/foss/designs"
+        assert a[-3:] == ["--skip", "sleep", "infinity"]
+
+    def test_readback_still_checks_the_fresh_mounts(self, tmp_path):
+        """The fresh branch must not be exempt from the mount readback."""
+        designs = tmp_path / "designs"
+        designs.mkdir()
+        h, r = self._fresh(tmp_path, designs, MOCK_DROP_MOUNTS="1")
+        assert r.returncode == 3, (r.returncode, r.stdout, r.stderr)
+        assert "readback failed" in r.stderr
+
+    def test_no_rollback_rename_when_there_was_nothing_to_roll_back(self, tmp_path):
+        designs = tmp_path / "designs"
+        designs.mkdir()
+        h, r = self._fresh(tmp_path, designs)
+        assert r.returncode == 0, r.stderr
+        assert not any(c[0] == "rename" for c in h.calls()), h.calls()
+
+    def test_missing_designs_dir_is_refused(self, tmp_path):
+        h, r = self._fresh(tmp_path)          # neither env var set
+        assert r.returncode == 1, (r.returncode, r.stderr)
+        assert "DESIGNS_DIR" in r.stderr
+        assert h.run_argv() is None
+
+    def test_relative_designs_dir_is_refused(self, tmp_path):
+        h = Harness(tmp_path, _state(exists=False))
+        r = h.run(DESIGNS_DIR="relative/path")
+        assert r.returncode == 1, (r.returncode, r.stderr)
+        assert "absolute path" in r.stderr
+        assert h.run_argv() is None
+
+    def test_nonexistent_designs_dir_is_refused_and_never_created(self, tmp_path):
+        """docker would create a missing bind source root-owned — the phantom
+        directory bug. The refusal must come first, and must not mkdir it."""
+        absent = tmp_path / "not_there"
+        h, r = self._fresh(tmp_path, absent)
+        assert r.returncode == 1, (r.returncode, r.stderr)
+        assert "does not exist" in r.stderr
+        assert not absent.exists(), "the refusal created the directory it refused"
+        assert h.run_argv() is None
