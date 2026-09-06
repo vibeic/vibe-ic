@@ -105,7 +105,9 @@ they are recorded in the provenance.
                              [--magicrc PATH] [--pdk-root P] [--family F]
 
 exit 0 → LAYOUT: OK          (layout.mag + <block>.gds + provenance written)
-exit 1 → FORBIDDEN           (the PDK refuses this geometry, named)
+exit 1 → FORBIDDEN           (the PDK refuses this geometry, named) — OR the
+                             layout this emitter drew SHORTS two routed nets,
+                             with the witness path in the provenance
 exit 2 → ENV_UNAVAILABLE     (PDK unreadable or tool unreachable, named)
 exit 3 → REFUSED             (drawn structure cannot host the connection)
 chip-AGNOSTIC.
@@ -225,6 +227,10 @@ class PdkFacts:
         self.m1_space_um: Optional[float] = None
         self.deck: Dict[str, Dict] = {}
         self.sources: Dict[str, str] = {}
+        # WHAT A DRAWN TYPE IS, out of the technology file that declares it.
+        # See `analog_a5_pdk_device_limits.layer_identity` for the defect
+        # this closes; `read_pdk` refuses rather than leave it None.
+        self.layers: Optional["_lim.LayerIdentity"] = None
 
     def limits_for(self, model: str) -> Tuple[Optional[float], Optional[float],
                                               Optional[str]]:
@@ -245,17 +251,20 @@ class PdkFacts:
 
 
 def read_pdk(stage: Stage, pdk_root: str, family: str,
-             gencell_tcl: Optional[str], drc_tech: Optional[str]
+             gencell_tcl: Optional[str], drc_tech: Optional[str],
+             magic_tech: Optional[str] = None
              ) -> Tuple[Optional[PdkFacts], str]:
     """Read every PDK fact this emitter needs, or say which file was
     unreadable. Never a default: a limit that cannot be read is ABSENT."""
     gp = gencell_tcl or _lim.GENCELL_TCL.format(root=pdk_root, family=family)
     dp = drc_tech or _lim.DRC_TECH.format(root=pdk_root, family=family)
+    tp = magic_tech or _lim.MAGIC_TECH.format(root=pdk_root, family=family)
     tech_dir = str(Path(gp).parent)
 
     facts = PdkFacts()
     facts.sources["gencell_tcl"] = gp
     facts.sources["drc_tech"] = dp
+    facts.sources["magic_tech"] = tp
 
     rc, out, err = stage.sh(f"cat {shlex.quote(gp)}", timeout=120)
     if rc != 0 or not out.strip():
@@ -277,6 +286,26 @@ def read_pdk(stage: Stage, pdk_root: str, family: str,
         return None, (f"ENV_UNAVAILABLE: {dp} states no Metal1 minimum-space "
                       f"rule this program can read. The bulk-tap clearance "
                       f"floor is built on it and is not guessed.")
+
+    # THE LAYER TABLE. Which conductor a gencell delivered a terminal on is
+    # a question about what the drawn type IS, and the technology file is
+    # the only thing that knows. It is required for the same reason the two
+    # files above are: without it this emitter reads a TYPE NAME, and a PDK
+    # that spells a capacitor's top plate `mimcapcontact` gets both of that
+    # device's terminals painted onto its bottom plate.
+    rc, out, err = stage.sh(f"cat {shlex.quote(tp)}", timeout=120)
+    if rc != 0 or not out.strip():
+        return None, (f"ENV_UNAVAILABLE: the PDK technology file is "
+                      f"unreadable at {tp} ({(err or out).strip()[:160]}). "
+                      f"Which conductor plane each drawn type occupies is "
+                      f"DERIVED from it; reading the type's NAME instead is "
+                      f"what shorts a capacitor whose plates are not spelled "
+                      f"metalN.")
+    facts.layers = _lim.layer_identity(out, tp)
+    if not facts.layers.plane_of:
+        return None, (f"ENV_UNAVAILABLE: {tp} declares no `types` section "
+                      f"this program can read, so no drawn type has a plane. "
+                      f"A conductor level is DERIVED, never assumed.")
 
     # Every OTHER gencell file the same technology directory ships — the
     # resistors and capacitors live there, and their `_defaults` procs state
@@ -324,7 +353,8 @@ _FIXED_BBOX_RE = re.compile(
 _MAG_NAME_RE = re.compile(r"(?m)^([A-Za-z0-9_.+-]+\.mag)$")
 
 
-def parse_cell(text: str) -> dict:
+def parse_cell(text: str, layers: Optional["_lim.LayerIdentity"] = None
+               ) -> dict:
     """Geometry of one gencell child, in LAMBDA.
 
     The two coordinate spaces inside a `.mag` — `rect`/`use` following the
@@ -359,10 +389,29 @@ def parse_cell(text: str) -> dict:
         """The HIGHEST metal the gencell itself already delivers at this
         label, read out of the gencell's own output.
 
-        A terminal either sits on a named metal plane, or on a CONTACT type
-        (which in Magic carries the lowest metal by construction), or under a
-        VIA the gencell drew — and a via `k` covering the label means the
-        gencell has already carried that terminal up to metal `k+1`.
+        A terminal either sits on a conductor plane, or on a CONTACT type —
+        and in Magic a contact IS its two residues plus the cut, so a
+        contact carries the terminal up to the HIGHER of the two planes it
+        joins.
+
+        WHICH IS WHICH IS THE **PDK'S** ANSWER, not this file's. `layers` is
+        the technology file's own `types`/`contact` table
+        (`_lim.layer_identity`), and asking it is the whole repair: reading
+        the section NAME instead gave every type this PDK does not spell
+        `metalN`/`viaN` no level at all, so a MiM capacitor's top plate —
+        delivered on `mimcapcontact`, a contact from the cap plate to metal6
+        — read as the metal5 plane its BOTTOM plate occupies. Both terminals
+        then landed on one conductor and the capacitor was shorted: 13 of
+        them across u_hawaii_adc's two blocks, and the sign-off LVS answered
+        `mismatch` with nothing in the flow able to say why. The same table
+        answers `via4 metal4 metal5` -> 5, which is what the name-reading
+        code already returned, so a PDK that does spell its conductors that
+        way is unchanged.
+
+        WITHOUT a table the NAMES are read, exactly as before. That path is
+        unreachable from the producer — `read_pdk` refuses ENV_UNAVAILABLE
+        when the technology file cannot be read — and exists so that the
+        parser stays a pure function of one `.mag`.
 
         MEASURED, and the reason this takes the HIGHEST rather than the
         lowest: the PDK's own MOS gencell brings drain, source and gate up to
@@ -376,6 +425,11 @@ def parse_cell(text: str) -> dict:
         for name, rects in sections.items():
             if not any(r[0] <= x <= r[2] and r[1] <= y <= r[3]
                        for r in rects):
+                continue
+            if layers is not None and layers.knows(name):
+                lvl = layers.level(name)
+                if lvl is not None:
+                    levels.append(lvl)
                 continue
             mm = _METAL_RE.match(name)
             if mm:
@@ -402,7 +456,8 @@ def parse_cell(text: str) -> dict:
         f = [int(_gl.to_lambda(int(v), scale)) for v in fb.groups()]
         bbox = (min(bbox[0], f[0]), min(bbox[1], f[1]),
                 max(bbox[2], f[2]), max(bbox[3], f[3]))
-    return {"labels": labels, "bbox": bbox, "sections": sections}
+    return {"labels": labels, "bbox": bbox, "sections": sections,
+            "layers": layers}
 
 
 def config_key(dev: dict) -> tuple:
@@ -484,6 +539,7 @@ def probe(stage: Stage, magicrc: str, devs: Sequence[dict], facts: PdkFacts
     placement DELTA — the offset between the box position a gencell is
     invoked at and where the child actually lands — MEASURED from the probe
     block's own transforms rather than assumed."""
+    layers = facts.layers
     order: List[tuple] = []
     seen = set()
     for dev in devs:
@@ -540,7 +596,7 @@ def probe(stage: Stage, magicrc: str, devs: Sequence[dict], facts: PdkFacts
         if not ok:
             raise MagicError(f"gencell child {name}.mag did not come "
                              f"back: {err}")
-        rec = parse_cell(dst.read_text(errors="replace"))
+        rec = parse_cell(dst.read_text(errors="replace"), layers)
         rec["cell"] = name
         rec["delta"] = (int(tx) - i * pitch_um * lam, int(ty))
         cells[key] = rec
@@ -561,6 +617,12 @@ def _base(name: str) -> str:
 # subcircuit call `x<name> d g s b <model>` names them in this order and the
 # gencell labels them with these letters.
 _MOS_LETTERS = ("D", "G", "S", "B")
+
+#: A terminal the gencell numbered — `R1`, `R2`, `C1`, `C2`. It is the
+#: gencell saying "this one is in the sequence"; a label WITHOUT a number,
+#: where every other label has one, is the terminal outside it. See
+#: `terminal_map`.
+_ORDINAL_TERMINAL_RE = re.compile(r"\d$")
 
 
 def ring_layer_of(cell: dict) -> Optional[str]:
@@ -603,6 +665,36 @@ def terminal_map(dev: dict, cell: dict
       * every other device's gencell emits its ports in the netlist's own
         terminal order, with the guard-ring terminal last — which is what the
         PDK's resistor and capacitor gencells were measured to do.
+
+    WHICH LABEL IS THE TRAILING ONE, and the defect that rule had. It was
+    found by asking `ring_layer_of` which layer the guard ring is on and
+    taking the label sitting there. On this PDK's own gencell children that
+    answer is NONE — the ring is inside a WELL rectangle wider than itself,
+    so the ring fails the "encloses the cell" test it is judged by — and with
+    no trailing label the netlist's terminals were zipped against the labels
+    in the order the `.mag` happens to list them. The PDK's resistor lists
+    them B, R1, R2 while SPICE calls it R1, R2, B, so every resistor's
+    SUBSTRATE TAP was wired to a signal net and its two body terminals were
+    each one position out.
+
+    MEASURED on u_hawaii_adc (ihp-sg13g2, image 0.3.46). `xr1 vout vfb vss`
+    mapped B->vout, R1->vfb, R2->vss, and `xr_bias vin nbias vss` mapped
+    B->vin: the substrate is ONE node, so vin, vout, vfb and vss extracted
+    as a single net carrying 20 device terminals — exactly |vin|+|vout|+|vss|
+    of the source netlist — with a block-spanning substrate polygon on it.
+    `ldo` extracted 6 nets and 10 devices for a netlist of 9 and 11, and the
+    per-block LVS answered `mismatch`.
+
+    So the trailing terminal is identified from the LABELS THEMSELVES, which
+    is where the gencell already says it: a device whose terminals are named
+    with an ORDINAL (`R1`, `R2`, `C1`, `C2`) and which has exactly ONE label
+    without one has named that odd label as the terminal outside the
+    sequence, and SPICE puts it last. A gencell whose labels are all ordinal
+    (the capacitor's `C1`/`C2`) has no such label and is unchanged; a device
+    whose ring `ring_layer_of` DOES find is unchanged; a mosfet never reaches
+    here. After it: `ldo` extracts 9 nets and 11 devices and the LVS says
+    `match`; `delta_sigma` goes 119 nets -> 122 for a netlist of 122, with
+    294 devices on both sides and no merged net left.
     """
     ring = ring_layer_of(cell)
     labels = cell["labels"]
@@ -620,6 +712,10 @@ def terminal_map(dev: dict, cell: dict
         return out, ring, unmapped
 
     ring_labels = [l for l in labels if ring and l["layer"] == ring]
+    if not ring_labels:
+        odd = [l for l in labels if not _ORDINAL_TERMINAL_RE.search(l["name"])]
+        if len(odd) == 1 and len(labels) == len(nets) > 1:
+            ring_labels = odd
     rest = [l for l in labels if l not in ring_labels]
     order = list(nets)
     if ring_labels and len(order) == len(rest) + 1:
@@ -919,7 +1015,9 @@ class Plan:
 _CONTACT_SECTION = re.compile(r"cont|c$")
 
 
-def carried_planes(section: str) -> List[str]:
+def carried_planes(section: str,
+                   layers: Optional["_lim.LayerIdentity"] = None
+                   ) -> List[str]:
     """Which CONDUCTOR planes a gencell section's tiles actually occupy.
 
     In Magic a contact type IS its two conductors plus the cut, so the metal
@@ -937,6 +1035,17 @@ def carried_planes(section: str) -> List[str]:
     metal2 rectangle it could see: 80 M2.b violations left, all of them
     against device metal2 that exists only in the GDS a via1 tile writes.
     """
+    if layers is not None and layers.knows(section):
+        # THE PDK'S OWN ANSWER. A contact carries the planes of BOTH its
+        # residues; a plain type carries its own. The heuristics below
+        # reproduce this for a PDK that spells its conductors `metalN` /
+        # `viaN` and get it WRONG for one that does not: on ihp-sg13g2 the
+        # `mimcapcontact` a MiM capacitor's top plate is drawn on ends in
+        # `cont`, so the guess below registered a metal6 plate as metal1
+        # geometry — 960x960 lambda of conductor in the wrong place, and
+        # the island placer could not see the plate it had to clear.
+        return [section] + [p for p in layers.conductor_planes(section)
+                            if p != section]
     out = [section]
     vm = _VIA_RE.match(section)
     if vm and not _METAL_RE.match(section):
@@ -952,7 +1061,7 @@ def device_planes(cell: dict) -> Dict[str, List[Tuple[int, ...]]]:
     conductor plane, with every contact's implied metal folded in."""
     planes: Dict[str, List[Tuple[int, ...]]] = {}
     for section, rects in cell["sections"].items():
-        for layer in carried_planes(section):
+        for layer in carried_planes(section, cell.get("layers")):
             if not (_METAL_RE.match(layer) or _VIA_RE.match(layer)):
                 continue
             planes.setdefault(layer, []).extend(rects)
@@ -1201,6 +1310,11 @@ class Sites:
 #: stops looking. A stack that needs more than this is reported as a
 #: deviation and DRAWN where it was asked for — the deck adjudicates.
 ISLAND_SEARCH_LAMBDA = 120
+
+#: The plane this generator runs its lanes and rails on. A terminal handed
+#: over ABOVE it has to come down, and where it comes down is the question
+#: `build_plan` answers.
+ROUTE_LEVEL = 3
 
 
 def _island_candidates(span: int):
@@ -1576,11 +1690,76 @@ def build_plan(devs: Sequence[dict], ports: Sequence[str],
                            max(xs) + hw2, ey + hw2)
                 joint = max(xs) if g["side"] == "right" else min(xs)
                 _via_stack(plan, net, joint, ey, 2, geo, top=3, sites=sites)
+            elif g["level"] > ROUTE_LEVEL:
+                # THE TERMINAL IS DELIVERED ABOVE THE ROUTING LAYER, and
+                # every plane between the two is the DEVICE'S OWN.
+                #
+                # MEASURED on u_hawaii_adc (ihp-sg13g2, image 0.3.46). A MiM
+                # capacitor hands its top plate over on metal6 and its
+                # bottom plate on metal5, and the bottom plate is one
+                # rectangle covering the WHOLE device. A stack dropped at
+                # the top-plate terminal to come down to metal3 therefore
+                # paints this net's metal5 island directly onto the other
+                # terminal's plate: the two plates become one conductor, the
+                # capacitor is shorted, and the sign-off LVS answers
+                # `mismatch`. The island placer cannot rescue it — the plate
+                # is 1120 lambda across and no position within
+                # `ISLAND_SEARCH_LAMBDA` of the terminal is off it. The same
+                # descent puts a via4 on the plate, which this PDK's deck
+                # forbids outright (`spacing mimcap via4/m5`, 8 of them on
+                # `delta_sigma` under Magic).
+                #
+                # So a terminal delivered above the routing layer LEAVES on
+                # its own plane first and comes down at its lane, which is
+                # outside the device by construction. Nothing here names a
+                # device, a layer or a PDK: the level is the one the PDK's
+                # layer table reported for the type the label sits on, and a
+                # terminal at or below the routing layer is untouched.
+                lx, ly, level = g["abs_labels"][0]
+                esc, ex, ey0 = level, lx, ly
+                sect = g["labels"][0].get("layer", "")
+                if facts.layers is not None \
+                        and facts.layers.device_electrode_contact(sect) \
+                        and (level + 1) in geo.wire:
+                    # AND WHEN THE PLANE IT ARRIVES ON IS THE DEVICE'S OWN
+                    # ELECTRODE, IT GOES UP ONE MORE BEFORE IT LEAVES.
+                    #
+                    # A contact IS its residues, so this terminal's metal
+                    # has exactly the electrode's footprint; a wire on that
+                    # plane taken out of the contact crosses the
+                    # electrode's edge, and that is the geometry a PDK
+                    # writes an electrode-spacing rule about. MEASURED on a
+                    # two-cell fixture (the PDK's own gencell child plus one
+                    # painted stub, magic `drc style drc(full)`): the child
+                    # alone 0, the contact covered but not left 0, a stub
+                    # from the contact's own edge 1, from the plate centre
+                    # 1, over the whole plate 4 — and the contact-sized pad
+                    # plus one via up plus a stub on the plane ABOVE, 0. The
+                    # rule is `analog_a5_pdk_device_limits.LayerIdentity.
+                    # device_electrode_contact` and it names no device.
+                    esc = level + 1
+                    fr = friendly_conductor(d["rows"], f"metal{level}",
+                                            lx, ly, reach=geo.default_space)
+                    ex, ey0 = _via_stack(plan, net, lx, ly, level, geo,
+                                         top=esc, sites=sites, friendly=fr,
+                                         dev=d["dev"])
+                hwt = max(geo.wire[esc] // 2, 1)
+                plan.paint(net, f"metal{esc}",
+                           min(ex, lane) - hwt, ey0 - hwt,
+                           max(ex, lane) + hwt, ey0 + hwt)
+                cx, cy = _via_stack(plan, net, lane, ey0, esc, geo,
+                                    top=ROUTE_LEVEL, sites=sites,
+                                    dev=d["dev"])
+                joint = cx
+                if cy != ey:
+                    plan.paint(net, "metal3", cx - hw3, min(cy, ey) - hw3,
+                               cx + hw3, max(cy, ey) + hw3)
             else:
                 lx, ly, level = g["abs_labels"][0]
                 fr = friendly_conductor(d["rows"], f"metal{level}", lx, ly,
                                         reach=geo.default_space)
-                cx, cy = _via_stack(plan, net, lx, ly, level, geo, top=3,
+                cx, cy = _via_stack(plan, net, lx, ly, level, geo,
+                                    top=ROUTE_LEVEL,
                                     sites=sites, friendly=fr, dev=d["dev"])
                 joint = cx
                 if cy != ey:
@@ -2046,7 +2225,51 @@ def emit_block(project: Path, block: str, stage: Stage, magicrc: str,
     report["deviation_summary"] = _summarise(plan.deviations)
     report["layout_mag"] = str(bdir / "layout.mag")
     report["layout_gds"] = str(bdir / f"{block}.gds") if ok_gds else None
+
+    # A DRAWN SHORT IS BLOCKING. The layout is still written and still
+    # reported — a reader repairing this needs the geometry — but the exit
+    # code says the emitter did not draw this netlist. See `blocking_shorts`.
+    shorts = blocking_shorts(plan.deviations)
+    if shorts:
+        report["result"] = "SHORTED"
+        report["shorts"] = shorts
+        report["reason"] = (
+            f"{len(shorts)} pair(s) of routed nets are ONE conductor in the "
+            f"layout this emitter drew; each is recorded above with the "
+            f"chain of rectangles that joins them. The layout and its GDS "
+            f"are written so the geometry can be read, and the exit code is "
+            f"non-zero because the netlist was not drawn.")
+        return RC_FORBIDDEN, report
     return RC_OK, report
+
+
+#: The deviation quantity `clearance_deviations` writes for a drawn short.
+#: One name, used by the producer's exit code and by the A5 gate, so the two
+#: cannot drift apart.
+SHORT_QUANTITY = "routed_nets_per_conductor"
+
+
+def blocking_shorts(deviations: Sequence[dict]) -> List[dict]:
+    """The deviations that say this layout JOINS TWO ROUTED NETS.
+
+    WHY THIS ONE IS NOT A DEVIATION LIKE THE OTHERS. Everything else this
+    emitter records is a CLEARANCE it predicts and the sign-off deck
+    adjudicates: drawn, recorded, and left to the deck, because the deck is
+    the authority on whether 0.205 um is far enough. A short is not that
+    kind of statement. It is not a distance the deck might yet permit; it is
+    two nets of the netlist being one conductor in the layout, measured by
+    union-find over this emitter's OWN manifest plus the placed gencells'
+    own geometry, with the chain of rectangles that joins them printed
+    beside it. No deck adjudicates it away, and the sign-off LVS that
+    eventually says `mismatch` is telling the reader the symptom of a defect
+    this emitter could already name.
+
+    MEASURED on u_hawaii_adc (ihp-sg13g2, image 0.3.46): 13 of these — 1 on
+    `ldo`, 12 on `delta_sigma` — while A5 exited 0 on both blocks and the
+    per-block LVS answered `mismatch` with nothing in the flow able to say
+    why. A design that carries none is untouched: this is the whole
+    difference the rule makes to a clean block's exit code."""
+    return [d for d in deviations if d.get("quantity") == SHORT_QUANTITY]
 
 
 def _summarise(devs: Sequence[dict]) -> Dict[str, dict]:
@@ -2092,6 +2315,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     ap.add_argument("--family", default="ihp-sg13g2")
     ap.add_argument("--gencell-tcl")
     ap.add_argument("--drc-tech")
+    ap.add_argument("--magic-tech")
     ap.add_argument("--wire-width-um", type=float,
                     default=DEFAULT_WIRE_W_UM)
     ap.add_argument("--via-pad-half-um", type=float,
@@ -2136,7 +2360,8 @@ def main(argv: Optional[List[str]] = None) -> int:
             return _finish(out, args, RC_ENV_UNAVAILABLE)
 
         facts, why = read_pdk(stage, args.pdk_root, args.family,
-                              args.gencell_tcl, args.drc_tech)
+                              args.gencell_tcl, args.drc_tech,
+                              args.magic_tech)
         if facts is None:
             out["result"] = "ENV_UNAVAILABLE"
             out["tool"] = "pdk"

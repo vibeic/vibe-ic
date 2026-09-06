@@ -605,3 +605,81 @@ def test_ownership_a6_still_skips_a_project_with_no_block_list(
     r = _run_a6(tmp_path)
     assert r.returncode == 2, (r.returncode, r.stdout, r.stderr)
     assert _a6_report(tmp_path)["verdict"] == "SKIP"
+
+
+# ── A DRAWN SHORT IS BLOCKING ───────────────────────────────────────────
+#
+# MEASURED on u_hawaii_adc (ihp-sg13g2, image 0.3.46): 13 pairs of routed
+# nets were one conductor in the drawn layout — 1 on `ldo`, 12 on
+# `delta_sigma` — while this gate reported PASS and A6's per-block LVS
+# reported `mismatch` with nothing between the two able to say why. Every
+# other number in `layout_provenance.json` is a clearance A6's deck
+# adjudicates; this one is not a distance at all.
+_WITNESS = ("nets vg and vout are ONE conductor in this layout: "
+            "vg:metal5[46250, 13744, 46298, 13776] -> "
+            "<device cc>:metal5[45714, 13200, 46834, 14320] -> "
+            "vout:metal5[46505, 13744, 46553, 13776]")
+
+
+def _provenance(project: Path, block: str, deviations: list) -> None:
+    d = project / "phase3" / "analog" / block
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "layout_provenance.json").write_text(json.dumps(
+        {"producer": "analog_a5_layout_emit", "result": "OK",
+         "deviations": deviations}, indent=2))
+
+
+def test_drawn_short_in_the_producers_record_fails_the_gate(
+        tmp_path: Path) -> None:
+    _block_list(tmp_path, ["ldo"])
+    _layout_full(tmp_path, "ldo")
+    _provenance(tmp_path, "ldo", [
+        {"quantity": "bulk_tap_clearance_lambda", "required": 21,
+         "achieved": 9, "detail": "a clearance A6's deck adjudicates"},
+        {"quantity": "routed_nets_per_conductor", "required": 1,
+         "achieved": 2, "detail": _WITNESS},
+    ])
+    r = _run(tmp_path)
+    assert r.returncode == 1, r.stdout
+    rpt = json.loads((tmp_path / "report.json").read_text())
+    assert rpt["verdict"] == "FAIL"
+    rules = [f["rule"] for f in rpt["findings"]]
+    assert "A5_LAYOUT_DRAWN_SHORT" in rules, rpt["findings"]
+    hit = [f for f in rpt["findings"]
+           if f["rule"] == "A5_LAYOUT_DRAWN_SHORT"][0]
+    assert "<device cc>" in hit["detail"], (
+        "the finding must carry the WITNESS PATH; a reader told only that "
+        "two nets are one has been told the symptom")
+
+
+def test_the_clearance_deviations_beside_it_do_not_fail_the_gate(
+        tmp_path: Path) -> None:
+    """THE CONTROL, and it is the one that matters: the SAME record with the
+    short removed and every other deviation left in place is a PASS. This
+    gate did not start judging clearances — A6 still owns those."""
+    _block_list(tmp_path, ["ldo"])
+    _layout_full(tmp_path, "ldo")
+    _provenance(tmp_path, "ldo", [
+        {"quantity": "bulk_tap_clearance_lambda", "required": 21,
+         "achieved": 9, "detail": "a clearance A6's deck adjudicates"},
+        {"quantity": "metal2_space_to_device_lambda", "required": 21,
+         "achieved": 2, "detail": "another one"},
+    ])
+    r = _run(tmp_path)
+    assert r.returncode == 0, r.stdout
+    rpt = json.loads((tmp_path / "report.json").read_text())
+    assert rpt["verdict"] == "PASS"
+
+
+def test_no_record_at_all_is_not_read_as_a_clean_one(tmp_path: Path) -> None:
+    """"Could not read it" is not "read it and it was clean". A block with
+    no producer record is not asked — and is not failed for it either; the
+    producer's own non-zero exit is the enforcement."""
+    _block_list(tmp_path, ["ldo"])
+    _layout_full(tmp_path, "ldo")
+    r = _run(tmp_path)
+    assert r.returncode == 0, r.stdout
+    rules = [f["rule"] for f in
+             json.loads((tmp_path / "report.json").read_text())
+             .get("findings", [])]
+    assert "A5_LAYOUT_DRAWN_SHORT" not in rules

@@ -49,12 +49,21 @@ def test_half_lambda_survives_as_float():
     assert x == 2259.5
 
 
-def test_rlabels_always_internal():
-    # same rlabel line must decode identically in both file kinds
+def test_rlabels_follow_the_files_own_magscale():
+    # THE CORRECTED LAW, and the arm that catches the old one. An rlabel is
+    # in the FILE's units like every other coordinate, so the SAME line
+    # decodes DIFFERENTLY in the two kinds of file — which is the opposite
+    # of what this test used to assert. Magic's own streamed GDS settled it:
+    # a header-less ihp-sg13g2 cap child's `rlabel metal5 510 ...` is at
+    # 5.10 um = 510 lambda, not 255, and 255 is the middle of the top plate
+    # the label is NOT on. The `magscale 1 2` arm is unchanged, which is why
+    # the old halving looked measured.
     lbl = "rlabel metal2 100 200 100 200 0 D\n"
-    for base in (MAG_SCALED, MAG_PLAIN):
-        out = M.parse_rlabels(base + lbl)
-        assert out[0]["x"] == 50 and out[0]["y"] == 100
+    scaled = M.parse_rlabels(MAG_SCALED + lbl)[0]
+    plain = M.parse_rlabels(MAG_PLAIN + lbl)[0]
+    assert (scaled["x"], scaled["y"]) == (50, 100)
+    assert (plain["x"], plain["y"]) == (100, 200)
+    assert M.mag_scale(MAG_PLAIN) == (1, 1)
 
 
 # ── LAW #23 ───────────────────────────────────────────────────────────────

@@ -231,3 +231,291 @@ def test_f2_two_nets_that_are_genuinely_apart_are_not_reported():
     plan.device_shapes.append(
         {"net": "<device cc>", "layer": "metal5", "box": (-50, -50, 60, 90)})
     assert A5E.net_shorts(plan) == []
+
+
+# ── 7. the PDK's own layer table, not the section's spelling ────────────
+#
+# MEASURED, u_hawaii_adc / ihp-sg13g2 / image 0.3.46, both blocks through the
+# real producer:
+#
+#                     drawn shorts   magic MIM.i "Via4 cannot contact MiM cap
+#                     (union-find)    bottom plate"   magic LAYOUT-class rc
+#   ldo          base       1                 0              0
+#   ldo          fix        0                 0              0
+#   delta_sigma  base      12                 8              1
+#   delta_sigma  fix        0                 0              0
+#
+# and the KLayout per-block sign-off deck reports 0 violations over the same
+# 560 rules on both blocks on both sides.
+
+# The three sections a magic technology file needs to answer "what is this
+# type?", in the shape a magic PDK ships them. Real names from an open PDK.
+TECH = """
+planes
+  metal4,m4
+  metal5,m5
+  cap1,c1
+  metal6,m6
+end
+
+types
+  metal4 metal4,m4,met4
+  metal4 via4,v4
+  metal5 metal5,m5,met5
+ -metal5 m5fill
+  cap1 mimcap,mim,capm
+  cap1 mimcapcontact,mimcapc,mimcc,capmc
+  metal6 metal6,m6,met6
+end
+
+contact
+  via4   metal4 metal5
+  mimcc  mimcap metal6
+  stackable
+end
+"""
+
+# The gencell child a MiM capacitor comes back as: ONE metal5 rectangle for
+# the bottom plate covering the whole device, a cap-plate ring, a contact
+# square in the middle, and the two terminal labels. No `magscale` header —
+# this kind of child ships without one, which is the other half of the
+# defect below.
+CAP_CHILD = """magic
+tech pdktech
+timestamp 1
+<< metal5 >>
+rect -560 -560 560 560
+<< mimcap >>
+rect -500 480 500 500
+rect -500 -480 -480 480
+rect 480 -480 500 480
+rect -500 -500 500 -480
+<< mimcapcontact >>
+rect -480 -480 480 480
+<< labels >>
+rlabel mimcapcontact 0 0 0 0 0 C1
+port 1 nsew
+rlabel metal5 510 0 510 0 0 C2
+port 2 nsew
+<< properties >>
+string FIXED_BBOX -560 -560 560 560
+<< end >>
+"""
+
+
+def _table():
+    return A5L.layer_identity(TECH, "/pdk/x.tech")
+
+
+def test_g_the_table_answers_what_a_type_is():
+    li = _table()
+    # a contact IS its two residues, so it carries the HIGHER conductor
+    assert li.level("mimcapcontact") == 6
+    assert li.conductor_planes("mimcapcontact") == ["cap1", "metal6"]
+    # the alias the contact section spells it with resolves to the same type
+    assert li.level("mimcc") == 6
+    # the cap plate itself is on no plane this generator routes on
+    assert li.level("mimcap") is None
+    # a NON-CONNECTING type (`-plane` in the file) is not a conductor at all
+    assert li.conductor_planes("m5fill") == []
+    # and a type the file does not declare is UNKNOWN, never defaulted
+    assert not li.knows("nosuchlayer")
+    assert li.level("nosuchlayer") is None
+
+
+def test_g_a_named_metal_section_is_unchanged_by_the_table():
+    """THE CONTROL. A PDK that does spell its conductors `metalN` / `viaN`
+    gets the same answer from the table as from the names, which is why the
+    repair is a generalisation and not a change of behaviour."""
+    li = _table()
+    for name, want in (("metal4", 4), ("metal5", 5), ("via4", 5)):
+        assert li.level(name) == want
+    assert A5E.carried_planes("via4") == ["via4", "metal4", "metal5"]
+    assert A5E.carried_planes("via4", li) == ["via4", "metal4", "metal5"]
+    assert A5E.carried_planes("metal5") == A5E.carried_planes("metal5", li)
+
+
+def test_g_both_cap_terminals_read_as_one_plane_without_the_table():
+    """RED. This is the defect, reproduced on the PDK's own gencell output:
+    with no layer table the top-plate label on `mimcapcontact` matches
+    neither `metalN` nor `viaN`, so the only section covering it that DOES
+    is the metal5 the BOTTOM plate occupies, and both terminals come back on
+    metal5. The emitter then drops a via stack for each onto one plate."""
+    cell = A5E.parse_cell(CAP_CHILD)
+    levels = {lab["name"]: lab["level"] for lab in cell["labels"]}
+    assert levels == {"C1": 5, "C2": 5}
+    # and the contact's 960x960 conductor is registered as metal1 — the
+    # `cont`-in-the-name guess — so nothing sees a metal6 plate at all
+    planes = A5E.device_planes(cell)
+    assert "metal6" not in planes
+    assert "metal1" in planes
+
+
+def test_g_the_table_separates_the_two_cap_terminals():
+    """GREEN, on the same bytes."""
+    cell = A5E.parse_cell(CAP_CHILD, _table())
+    levels = {lab["name"]: lab["level"] for lab in cell["labels"]}
+    assert levels == {"C1": 6, "C2": 5}
+    planes = A5E.device_planes(cell)
+    assert planes["metal6"] == [(-480, -480, 480, 480)]
+    assert planes["metal5"] == [(-560, -560, 560, 560)]
+    assert "metal1" not in planes
+
+
+def test_g_reading_the_section_name_again_re_reddens_the_cap(monkeypatch):
+    """MUTATION. Put the name-reading answer back INSIDE the table — the one
+    line the repair is — and exactly the MiM case returns; the named-metal
+    control does not move."""
+    li = _table()
+    monkeypatch.setattr(li, "knows", lambda name: False)
+    cell = A5E.parse_cell(CAP_CHILD, li)
+    levels = {lab["name"]: lab["level"] for lab in cell["labels"]}
+    assert levels == {"C1": 5, "C2": 5}, (
+        "the mutation must restore the defect, or the table is not what is "
+        "answering the question")
+
+
+def test_g_the_cap_terminals_are_where_the_streamed_gds_puts_them():
+    """The second half of the same defect, and the reason the table alone
+    was not enough. A header-less `.mag` states its rlabel coordinates in the
+    FILE's units; halving them put this cap's BOTTOM-plate terminal at 255 —
+    the dead centre of the TOP plate — instead of 510, just outside it.
+    Magic's own streamed GDS for this child puts C2 at 5.10 um, and this
+    child is drawn at 100 lambda per micron."""
+    cell = A5E.parse_cell(CAP_CHILD, _table())
+    xs = {lab["name"]: lab["x"] for lab in cell["labels"]}
+    assert xs == {"C1": 0, "C2": 510}
+    top = [r for r in cell["sections"]["mimcapcontact"]][0]
+    assert not (top[0] <= xs["C2"] <= top[2]), (
+        "the bottom-plate terminal must not land inside the top plate")
+
+
+# ── 8. a drawn short is BLOCKING ────────────────────────────────────────
+def test_h_a_drawn_short_is_a_blocking_deviation():
+    """The short audit's finding is the one deviation that is not a
+    clearance prediction, so it is the one that changes the exit code."""
+    plan = A5E.Plan()
+    plan.paint("vg", "metal5", 0, 0, 40, 40)
+    plan.paint("vout", "metal5", 200, 0, 240, 40)
+    plan.device_shapes.append(
+        {"net": "<device cc>", "layer": "metal5", "box": (-50, -50, 300, 90)})
+    geo = _geo()
+    A5E.clearance_deviations(plan, geo, [])
+    blocking = A5E.blocking_shorts(plan.deviations)
+    assert len(blocking) == 1, plan.deviations
+    assert "ONE conductor" in blocking[0]["detail"]
+    assert "<device cc>" in blocking[0]["detail"], (
+        "the blocking record must carry the witness path, not just a verdict")
+
+
+def test_h2_nets_that_are_genuinely_apart_block_nothing():
+    """THE ANTI-CHEAT ARM. Same fixture, same deck, the device rectangle
+    short of the second net: no short, nothing blocking, and every other
+    deviation the run produces is untouched."""
+    plan = A5E.Plan()
+    plan.paint("vg", "metal5", 0, 0, 40, 40)
+    plan.paint("vout", "metal5", 200, 0, 240, 40)
+    plan.device_shapes.append(
+        {"net": "<device cc>", "layer": "metal5", "box": (-50, -50, 60, 90)})
+    geo = _geo()
+    A5E.clearance_deviations(plan, geo, [])
+    assert A5E.blocking_shorts(plan.deviations) == []
+
+
+# ── 9. which terminal is the one outside the sequence ───────────────────
+#
+# MEASURED on u_hawaii_adc (ihp-sg13g2, image 0.3.46), per-block LVS through
+# the PDK's own KLayout runset:
+#
+#                          extracted nets   devices   merged nets   LVS
+#   ldo          netlist          9            11          -         -
+#   ldo          before           6            10          1      mismatch
+#   ldo          after            9            11          0      match
+#   delta_sigma  netlist        122           294          -         -
+#   delta_sigma  before         119           294          1      mismatch
+#   delta_sigma  after          122           294          0      mismatch
+#
+# The one merged net carried a block-spanning substrate polygon and, on
+# `ldo`, 20 device terminals — exactly |vin| + |vout| + |vss| of the source.
+
+# The PDK's own resistor child: a substrate guard ring, a poly body, and the
+# three labels in the order the `.mag` lists them — B FIRST, which is not the
+# order SPICE calls it in. Trimmed to the sections this question needs.
+RES_CHILD = """magic
+tech pdktech
+magscale 1 2
+timestamp 1
+<< pwell >>
+rect -254 -6290 254 6290
+<< psubdiff >>
+rect -192 6182 192 6228
+rect -192 -6136 -178 6136
+rect 178 -6136 192 6136
+rect -192 -6228 192 -6182
+<< psubdiffcont >>
+rect -100 6182 100 6214
+rect -178 -6136 -146 6136
+rect 146 -6136 178 6136
+rect -100 -6214 100 -6182
+<< polycont >>
+rect -36 6040 36 6072
+rect -36 -6072 36 -6040
+<< ppolyres >>
+rect -50 -6000 50 6000
+<< labels >>
+rlabel psubdiffcont 0 -6198 0 -6198 0 B
+port 1 nsew
+rlabel polycont 0 6056 0 6056 0 R1
+port 2 nsew
+rlabel polycont 0 -6056 0 -6056 0 R2
+port 3 nsew
+<< properties >>
+string FIXED_BBOX -162 -6198 162 6198
+<< end >>
+"""
+
+
+def _map(child, nets, cls):
+    cell = A5E.parse_cell(child, _table())
+    dev = {"name": "x", "model": "m", "pars": {}, "nets": nets, "class": cls}
+    tmap, ring, unmapped = A5E.terminal_map(dev, cell)
+    return ({net: sorted(l["name"] for l in labs)
+             for net, labs in tmap.items()}, ring, unmapped)
+
+
+def test_i_the_ring_layer_is_not_found_on_the_pdks_own_resistor():
+    """The premise the old rule rested on, measured: `ring_layer_of` answers
+    NONE here. The ring is real and four bars wide; it fails the "encloses
+    the cell" test because the WELL rectangle it sits in is wider than it."""
+    cell = A5E.parse_cell(RES_CHILD, _table())
+    assert A5E.ring_layer_of(cell) is None
+    assert [l["name"] for l in cell["labels"]] == ["B", "R1", "R2"], (
+        "and the gencell lists the substrate tap FIRST, which is not the "
+        "order SPICE calls the device in")
+
+
+def test_i_the_substrate_tap_goes_to_the_trailing_net():
+    """GREEN. `xr1 vout vfb vss` — B is the tap, and SPICE puts it last."""
+    got, ring, unmapped = _map(RES_CHILD, ["vout", "vfb", "vss"], "resistor")
+    assert got == {"vss": ["B"], "vout": ["R1"], "vfb": ["R2"]}
+    assert unmapped == []
+
+
+def test_i_an_all_ordinal_gencell_is_untouched():
+    """THE CONTROL. Every label numbered — the capacitor — so there is no
+    label outside the sequence and the file order stands, exactly as before.
+    This is the arm that says the rule fires on a PROPERTY, not on a class."""
+    got, _ring, unmapped = _map(CAP_CHILD, ["vg", "vout"], "capacitor")
+    assert got == {"vg": ["C1"], "vout": ["C2"]}
+    assert unmapped == []
+
+
+def test_i_a_mosfet_is_matched_by_letter_and_never_reaches_this_rule():
+    """The second control: a device the PDK classifies as a mosfet is mapped
+    by the SPICE terminal letters, whatever order its labels are listed in."""
+    mos = RES_CHILD.replace("0 B\n", "0 B\n").replace(
+        "0 R1\n", "0 D\n").replace("0 R2\n", "0 S\n")
+    got, _ring, unmapped = _map(mos, ["d", "g", "s", "b"], "mosfet")
+    assert got == {"d": ["D"], "s": ["S"], "b": ["B"]}
+    assert unmapped == ["G->g"], (
+        "an absent label is named as unmapped, never silently dropped")
