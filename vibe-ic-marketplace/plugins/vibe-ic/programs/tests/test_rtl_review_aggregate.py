@@ -449,3 +449,60 @@ class TestEndToEndOnANeutralModule:
         assert r.returncode == 3, (r.returncode, r.stdout, r.stderr)
         assert "REFUSING" in r.stderr and "rtl_hygiene_lint" in r.stderr
         assert not out_md.exists() and not out_json.exists()
+
+    def test_findings_from_the_real_producers_reach_the_report(self, tmp_path):
+        """The NON-EMPTY arm, driven by the REAL sub-programs.
+
+        Every other field-preservation test in this file feeds the loaders
+        SYNTHETIC records. If the real producers named their fields differently,
+        those tests would all still pass while the aggregate silently dropped
+        the data. This one runs the actual chain on RTL that really does trip
+        the linters, and asserts the findings arrive populated.
+
+        Measured on the base code, this same directory raised
+        `AttributeError` and produced no report at all, so nothing below was
+        reachable before the fix.
+
+        Deliberately NOT pinned to specific rule names — those are the linters'
+        business and may change. What is pinned is that findings survive the
+        loaders with their fields intact, that more than one producer
+        contributes, and that the score responds.
+        """
+        d = tmp_path / "rtl"
+        d.mkdir()
+        (d / "dirty_block.v").write_text(
+            "module dirty_block(input clk, input rst, input [3:0] a,\n"
+            "                   output reg [3:0] y, output reg z);\n"
+            "  reg [3:0] tmp;\n"
+            "  always @(posedge clk) begin\n"
+            "    tmp = a + 1;\n"
+            "    y <= tmp;\n"
+            "  end\n"
+            "  always @(*) begin\n"
+            "    if (a[0]) z = 1'b1;\n"
+            "  end\n"
+            "endmodule\n")
+        rep = mod.review_rtl_dir(d, tmp_path / "ev")
+
+        got = [f for cat in rep.per_category.values() for f in cat.findings]
+        assert got, "the real producers reported nothing on RTL that trips them"
+
+        # the producer really did emit a non-empty array — otherwise this test
+        # would pass on a chain that reported nothing
+        produced = json.loads((tmp_path / "ev" / "hygiene.json").read_text())
+        assert isinstance(produced, list) and produced, produced
+
+        for f in got:
+            assert f.rule_id and f.severity and f.message and f.source, f.as_dict()
+        # EACH of the three loaders must contribute by NAME. A bare
+        # "at least two distinct sources" assertion is too weak and I proved
+        # it: neutering `_load_reset_findings` to `return []` left two sources
+        # standing (hygiene + precheck) and the test still passed. All three
+        # loaders were broken, so all three are named here.
+        sources = {f.source.split(".")[0] for f in got}
+        for producer in ("rtl_hygiene_lint", "reset_discipline_check",
+                         "rtl_precheck_gate"):
+            assert producer in sources, (producer, sorted(sources))
+        # and the score responds to them rather than staying at the clean value
+        assert rep.score < 9, rep.score
+        assert rep.total_errors + rep.total_warns >= 1
