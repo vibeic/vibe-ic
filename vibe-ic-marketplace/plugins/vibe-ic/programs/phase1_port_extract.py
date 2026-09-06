@@ -354,6 +354,14 @@ _PROSE_SIG = re.compile(
     r'([A-Za-z_]\w*)\s*'
     r'(?:\[\s*([^\]]*?)\s*\])?\**`?\**\s*:',
 )
+# The same definition shape with the bullet made optional, used ONLY while a
+# port-section header is in force (see `extract_prose_ports`). Groups match
+# `_PROSE_SIG`'s: (leading-range, name, trailing-range).
+_PROSE_SIG_UNBULLETED = re.compile(
+    r'^[ \t]*(?:\[\s*([^\]]*?)\s*\]\s*)?`?\**\s*'
+    r'([A-Za-z_]\w*)\s*'
+    r'(?:\[\s*([^\]]*?)\s*\])?\**`?\**\s*:',
+)
 _INPUTS_HDR = re.compile(r'\binputs?\b', re.I)
 _OUTPUTS_HDR = re.compile(r'\boutputs?\b', re.I)
 # TitleCase English labels that head a descriptor bullet, never a real signal name.
@@ -363,6 +371,22 @@ _PROSE_STOP = frozenset((
     "behavior", "behaviour", "overview", "constraints", "interface", "ports",
     "parameters", "parameter", "registers", "example", "examples", "summary",
     "default", "state", "states", "operation", "functionality:", "general",
+))
+
+
+# The stop-list above rejects DESCRIPTOR bullets, and it pays for that by also
+# rejecting the handful of English words that are real signal names — `clock`,
+# `reset`, `data`, `state`, `signal`. Under an explicit `Input ports:` heading
+# that trade is wrong: `reset: Reset signal to initialize the counter` IS the
+# port, and dropping it publishes an interface that is missing a pin. Inside a
+# declared port section only the META words — the ones that can only ever be a
+# heading or an annotation — are rejected; the TitleCase-word rule still throws
+# out `Reset:` written as a descriptor.
+_PROSE_STOP_META = frozenset((
+    "inputs", "outputs", "input", "output", "note", "notes", "description",
+    "functionality", "behavior", "behaviour", "overview", "constraints",
+    "interface", "ports", "parameters", "parameter", "registers", "example",
+    "examples", "summary", "general", "operation", "functionality:",
 ))
 
 
@@ -395,13 +419,29 @@ def extract_prose_ports(prompt: str) -> List[Dict]:
                     "output interface"):
             section = "output"; continue
         m = _PROSE_SIG.match(line)
+        unbulleted = False
+        if m is None and section is not None:
+            # INSIDE a declared port section the definition lines often carry NO
+            # bullet at all — `\tclk: Clock signal.`, `out [7:0]: 8-bit output`.
+            # The bullet is a markdown habit, not the anchor; the anchor is
+            # "a bare identifier, optionally a range, then a colon, on a line
+            # under a header that already said these are the ports".
+            m = _PROSE_SIG_UNBULLETED.match(line)
+            unbulleted = m is not None
+            if m is None:
+                # The RUN of definition lines IS the list. Anything else — a
+                # blank line, the next heading, a sentence — ends it, so a
+                # later `Implementation:` paragraph cannot inherit `section`
+                # and turn its prose into ports.
+                section = None
+                continue
         if not m:
             continue
         name = m.group(2)
         # section-DESCRIPTOR bullets ("- **Clock:** the `clk` signal is …",
         # "- Reset: …", "- Inputs:") use a TitleCase English label, not the real
         # signal name (which is the backtick token in the description). Skip them.
-        if name.lower() in _PROSE_STOP:
+        if name.lower() in (_PROSE_STOP_META if unbulleted else _PROSE_STOP):
             continue
         # A `[A-Z][a-z]{2,}` TitleCase English WORD (Address, Operation, Result,
         # Default, Status…) heads a descriptor bullet — never a real port. Real
