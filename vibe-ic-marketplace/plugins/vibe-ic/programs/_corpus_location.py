@@ -88,6 +88,16 @@ import _progress_run as _pr  # noqa: E402
 CORPUS_ENV = "VIBE_IC_BENCHMARK_DATA"
 BOUND_SHA_ENV = "GATEKEEPER_BENCHMARK_DATA_SHA"
 
+#: Where a TRUSTED PARENT declares which tree this gate is judging.
+#:
+#: `tools/ci/gate_mutation_fixtures.py` sets it to the fixture subject and
+#: `tools/gatekeeper-land.sh` sets it to the candidate; `repo_hygiene_gates.sh`
+#: has read it since it was introduced. No PROGRAM read it, which is the whole
+#: of vibe-ic#2066 for this seam: a gate that resolves its population from its
+#: OWN location answers about the instrument and not about the subject it was
+#: handed. Spelled once here so the two seams cannot disagree.
+SUBJECT_ENV = "VIBEIC_SUBJECT_ROOT"
+
 #: What the published corpus tree was CALLED while it lived in this repository.
 #: The pointer names a clone whose ROOT is that tree, so a population recorded
 #: as `benchmark-data/ic` before v1.10.56 is `ic` inside the clone. Baselines
@@ -137,6 +147,28 @@ def repo_root(start: Path) -> Optional[Path]:
     return None
 
 
+def subject_root() -> Optional[Path]:
+    """The tree a trusted parent DECLARED this gate is judging, or None.
+
+    Only an ABSOLUTE path to an existing directory is honoured — the same two
+    conditions `tools/ci/repo_hygiene_gates.sh` puts on it, which refuses a
+    relative one by name rather than resolving it against a cwd nobody chose.
+    An unset, empty, relative or missing value is None, which means "nobody
+    declared one" and leaves every caller exactly where it was.
+    """
+    raw = os.environ.get(SUBJECT_ENV) or ""
+    if not raw:
+        return None
+    cand = Path(raw)
+    if not cand.is_absolute():
+        return None
+    try:
+        cand = cand.resolve(strict=True)
+    except OSError:
+        return None
+    return cand if cand.is_dir() else None
+
+
 def default_named(start: Path, rel: str) -> Path:
     """The in-repo path `rel`, or the LITERAL `rel` when the repo has no such tree.
 
@@ -180,6 +212,21 @@ def default_named(start: Path, rel: str) -> Path:
         directory, so `resolve()` follows the pointer and `refuse()` names the
         path that was looked for. Nothing silently becomes a pass.
     """
+    subject = subject_root()
+    if subject is not None:
+        # A DECLARED SUBJECT IS NOT A HINT, IT IS THE QUESTION. When a parent
+        # has named the tree under judgement, the answer is about THAT tree and
+        # there is no fallback to the tree this file happens to live in: a
+        # fallback is how a gate ends up scanning the instrument and reporting
+        # it as the candidate. If the subject carries no `rel`, the literal
+        # relative path is returned exactly as it is below, so `resolve()`
+        # follows the pointer and `refuse()` names what was looked for.
+        # MEASURED 2026-09-07 on 8HD-9: with a published corpus present at the
+        # repository root, `gate_fixture_discrimination_check` went from 0 to 1
+        # non-discriminating pair — `l_doc_field_producer` read the 48 in-tree
+        # L-docs in BOTH arms and never opened either subject.
+        candidate = subject / rel
+        return candidate if candidate.is_dir() else Path(rel)
     root = repo_root(start)
     if root is not None:
         candidate = root / rel
