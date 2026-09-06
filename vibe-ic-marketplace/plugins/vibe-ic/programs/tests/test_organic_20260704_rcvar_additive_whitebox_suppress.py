@@ -67,35 +67,67 @@ def _stage(tmp_path):
     return f
 
 
-def test_additive_suppressed_under_whitebox_optin(tmp_path, monkeypatch):
-    """POSITIVE: opt-in → additive synonym suppressed, flat original delivered."""
+def _run(tmp_path, monkeypatch, optin):
+    """Run the step on the SAME pure-additive shape, opt-in on or off."""
     f = _stage(tmp_path)
-    monkeypatch.setenv("VIBE_IC_RCVAR_WHITEBOX_FLAT", "1")
+    before = f.read_text()
+    if optin:
+        monkeypatch.setenv("VIBE_IC_RCVAR_WHITEBOX_FLAT", "1")
+    else:
+        monkeypatch.delenv("VIBE_IC_RCVAR_WHITEBOX_FLAT", raising=False)
     res = D.step_reset_clock_variant_aliases(tmp_path, "axis_upscale")
-    body = f.read_text()
-    # No harness-breaking wrapper and no undriven synonym port.
+    return res, before, f.read_text()
+
+
+def _assert_untouched(res, before, body):
+    """The ruled end state for this shape, asserted on the BYTES.
+
+    RULED by v1.17.48 (76e5960ee): "Automatic flow never constructs additive
+    aliases. Retain the emitter's explicit `additive_reset_map` API for
+    intentional compatibility callers." This DUT documents its own `resetn`, so
+    the step refuses under #689 and leaves the file alone.
+    """
+    assert res.status == "SKIP", (res.status, res.detail)
+    assert "#689" in res.detail, res.detail
+    assert body == before, "the ruling promises the RTL is left UNCHANGED"
+    # the harness-breaking shapes this file was written about, still absent
     assert "__rcvar_inner" not in body
     assert body.count("module axis_upscale") == 1
-    assert "rst_n" not in body                 # additive synonym NOT emitted
+    assert "rst_n" not in body                 # no synonym port
     assert "resetn__rcvar_net" not in body     # no AND-combine that freezes
     assert "input        resetn" in body       # design's own reset intact
-    # Either SKIP (pure-additive → deliver original) or a flat PASS with no
-    # additive; for this pure-additive shape it is the SKIP suppression path.
-    assert res.status in ("SKIP", "PASS")
-    if res.status == "SKIP":
-        assert "additive" in res.detail.lower() and "suppress" in res.detail.lower()
+
+
+def test_additive_suppressed_under_whitebox_optin(tmp_path, monkeypatch):
+    """POSITIVE: opt-in -> no additive synonym, the original is delivered."""
+    _assert_untouched(*_run(tmp_path, monkeypatch, optin=True))
 
 
 def test_default_off_keeps_additive_wrapper(tmp_path, monkeypatch):
-    """§4.05 NO-LEAK negative: WITHOUT the opt-in the shipped additive wrapper
-    path is unchanged — the suppression must NOT leak into the general flow."""
-    f = _stage(tmp_path)
-    monkeypatch.delenv("VIBE_IC_RCVAR_WHITEBOX_FLAT", raising=False)
-    res = D.step_reset_clock_variant_aliases(tmp_path, "axis_upscale")
-    assert res.status == "PASS", (res.status, res.detail)
-    body = f.read_text()
-    # Default behavior: the additive dual-spelling wrapper is emitted (both the
-    # design's own `resetn` AND the canonical `rst_n` synonym), inner submodule
-    # present — exactly the shipped v1.3.32 behavior, untouched.
-    assert "__rcvar_inner" in body
-    assert "rst_n" in body
+    """RULED by v1.17.48 (76e5960ee). This case pinned the OPPOSITE: without the
+    opt-in the shipped ADDITIVE dual-spelling wrapper was emitted, and the
+    suppression must not leak into the general flow. The ruling removed the
+    automatic additive path outright, so there is no longer a shipped additive
+    wrapper for the opt-in to differ from — MEASURED on e1814e28d, this case and
+    the one above return the same #689 SKIP on the same bytes.
+
+    The node ID is kept so the census compares by membership; the name still
+    describes the pre-v1.17.48 contract.
+    """
+    _assert_untouched(*_run(tmp_path, monkeypatch, optin=False))
+
+
+def test_the_optin_changes_nothing_for_a_shape_the_ruling_already_refuses(
+        tmp_path, monkeypatch):
+    """And this is why the two cases above are not one assertion written twice.
+
+    Their point was that the opt-in and the default DIFFER. Since v1.17.48 they
+    do not, for this shape — so the claim worth pinning is the one that can
+    still fail: the opt-in must not start mutating a design the automatic flow
+    has refused. Compared on the BYTES, not on a status word.
+    """
+    _, before_on, after_on = _run(tmp_path, monkeypatch, optin=True)
+    _, before_off, after_off = _run(tmp_path, monkeypatch, optin=False)
+    assert before_on == before_off, "precondition: the same staged DUT"
+    assert after_on == after_off == before_on, (
+        "the whitebox opt-in must not mutate a shape #689 refuses")

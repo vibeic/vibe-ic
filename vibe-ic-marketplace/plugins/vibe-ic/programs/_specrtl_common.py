@@ -199,15 +199,50 @@ class Port:
 #
 # A SystemVerilog port may also put a user/package type between the direction and
 # the port name (`output pkg::word_t result_o`).  Without consuming that type,
-# the name group returns `pkg` and loses `result_o`.  Accept one ordinary or
-# package-scoped type token before the optional packed dimension.  The trailing
-# whitespace is intentional: in an untyped declaration (`input a, b`) the first
-# identifier is followed by a comma, so it cannot be consumed as a type.
+# the name group returns `pkg` and loses `result_o`.  Accept a PACKAGE-SCOPED
+# type token before the optional packed dimension.
+#
+# The scope qualifier is REQUIRED (`::`), and that is the whole §4.05 argument.
+# v1.17.18 accepted a bare identifier as the type and reasoned that "in an
+# untyped declaration (`input a, b`) the first identifier is followed by a
+# comma, so it cannot be consumed as a type".  That holds for a well-formed
+# port list and fails for the one this file exists to survive: a TRUNCATED
+# header with prose inside it.  MEASURED on 340998c69 — `input clk the clock,`
+# parses as type `clk`, name `the`, so a REAL direction-declared port is DROPPED
+# and a prose noun is published in its place.  That is the false-SKIP direction
+# (PR #28: an invisible missed defect, the worst one), because the downstream
+# conformance gate then false-SKIPs a genuinely-missing RTL port.
+#
+# Requiring `::` keeps every typed-port case anything pins — #710's
+# `output tlul_pkg::tl_d2h_t tl_o` and the rest are all package-qualified, and
+# every bare case pinned in the suite uses a built-in keyword already listed
+# above — while making it impossible for an unqualified prose word to be eaten
+# as a type.  It is strictly narrower than v1.17.18, so it cannot introduce a
+# new false-FIRE either.
+#
+# WHAT THIS GIVES UP, SAID PLAINLY.  v1.17.18 DID read a bare user-defined type
+# correctly, and this narrowing hands that back.  MEASURED, the three regexes
+# over the same five declarations (group 3, the name):
+#
+#     declaration                        pre-1.17.18   v1.17.18    here
+#     output word_t result_o             word_t        result_o    word_t
+#     output tlul_pkg::tl_d2h_t tl_o     tlul_pkg      tl_o        tl_o
+#     input clk the clock,               clk           the         clk
+#     input logic [7:0] data_i           data_i        data_i      data_i
+#     input a, b                         a, b          a, b        a, b
+#
+# So this is pre-1.17.18 behaviour PLUS v1.17.18's package-qualified fix, and
+# the bare-type row is the price.  It is the right way round: nothing in the
+# suite pins a bare user type, every typed-port case that IS pinned carries
+# `::`, and the row it buys back (`input clk the clock,`) is a REAL port being
+# dropped in favour of a prose word — the false-SKIP direction.  Reading a bare
+# type safely needs the port name anchored by a following terminator, which a
+# truncated header does not have; that is a separate change and not this one.
 # chip-AGNOSTIC: SystemVerilog declaration grammar only.
 _PORT_DECL = re.compile(
     r'\b(input|output|inout)\b\s*'
     r'(?:(?:reg|wire|logic|signed|unsigned|var|bit|byte|shortint|int|longint|integer|time)\b\s*)*'
-    r'(?:(?:[A-Za-z_]\w*::)*[A-Za-z_]\w*\s+)?'
+    r'(?:(?:[A-Za-z_]\w*::)+[A-Za-z_]\w*\s+)?'
     r'(?:(\[[^\]]*\])\s*)?'
     r'([A-Za-z_]\w*(?:\s*,\s*(?!(?:input|output|inout)\b)[A-Za-z_]\w*)*)')
 _LITERAL_RANGE = re.compile(r'\[\s*(\d+)\s*:\s*(\d+)\s*\]')

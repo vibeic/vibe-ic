@@ -740,8 +740,23 @@ def _emit_with(mod, **kw):
                                 "clk_i", "rst_ni", ports=ports, **kw)
 
 
+#: THE BASE THIS CONTROL MEANS, NAMED AS AN OBJECT AND NOT AS A BRANCH.
+#:
+#: v1.17.46, the PARENT of v1.17.47 (35bc1d1ab), which is the landing that added
+#: this file and rewrote `register_bus_driver_gen.py` (+383/-24). "Byte-identical
+#: to the emission before that change" is a claim about THAT tree and no other.
+#:
+#: It used to say `origin/main`, and `reference_control_resolved_through_a_mutable
+#: _ref` is the gate that caught it: "Name the object, not the branch. A control
+#: built on a moving name stops discriminating the moment the fix lands there,
+#: and reads as merely wrong." That is not a hypothetical here — the change DID
+#: land, so `origin/main` had become the changed program and this control was
+#: comparing the emission to ITSELF. It could no longer fail.
+_BASE_REV = "2148f28ad214edbeb82c76d8dcfa5ba45a4282bc"
+
+
 def _base_module():
-    """register_bus_driver_gen as it stands on origin/main, loaded from git."""
+    """register_bus_driver_gen as it stood at `_BASE_REV`, loaded from git."""
     import types
     rel = ("vibe-ic-marketplace/plugins/vibe-ic/programs/"
            "register_bus_driver_gen.py")
@@ -750,14 +765,15 @@ def _base_module():
     if not root:
         pytest.skip("NOT MEASURED HERE: not a git checkout, so the base program "
                     "cannot be loaded — byte-identity is UNVERIFIED, not proven")
-    src = subprocess.run(["git", "show", f"origin/main:{rel}"], text=True,
+    src = subprocess.run(["git", "show", f"{_BASE_REV}:{rel}"], text=True,
                          capture_output=True, cwd=root).stdout
     if not src.strip():
-        pytest.skip("NOT MEASURED HERE: origin/main does not carry the program — "
-                    "byte-identity is UNVERIFIED, not proven")
+        pytest.skip(f"NOT MEASURED HERE: {_BASE_REV[:12]} is not in this "
+                    f"checkout, so the base program cannot be loaded — "
+                    f"byte-identity is UNVERIFIED, not proven")
     mod = types.ModuleType("rbd_base_for_identity")
     mod.__file__ = str(PROGRAMS / "register_bus_driver_gen.py")
-    exec(compile(src, "<origin/main>", "exec"), mod.__dict__)
+    exec(compile(src, f"<{_BASE_REV[:12]}>", "exec"), mod.__dict__)
     return mod
 
 

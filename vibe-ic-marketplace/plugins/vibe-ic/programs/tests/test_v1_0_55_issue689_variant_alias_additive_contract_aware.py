@@ -242,6 +242,45 @@ def _stage_contract_md(proj, body):
     (docs / "design_description.md").write_text(body)
 
 
+
+def _apply_additive(proj, design, reset, canon):
+    """Build the #792 additive dual-spelling wrapper the only way v1.17.48 left.
+
+    RULED by v1.17.48 (76e5960ee): "Automatic flow never constructs additive
+    aliases. Retain the emitter's explicit `additive_reset_map` API for
+    intentional compatibility callers." MEASURED on e1814e28d, each facet below
+    returned ('SKIP', "…already declares the standard spelling(s) … (#689)").
+
+    The ruling settles WHO may ask for a dual-spelling interface. What these
+    facets measure is how the wrapper BEHAVES once it exists — both spellings
+    bindable, the undriven one inactive rather than `x`, and REAL iverilog
+    elaboration of either binding. That is unchanged and is still asserted below.
+    """
+    import re as _re
+    import reset_clock_variant_alias as V
+    f = R._pl.rtl_dir(proj) / f"{design}.v"
+    if not f.exists():
+        f = next(R._pl.rtl_dir(proj).glob(f"{design}.*"))
+    txt = f.read_text()
+    inner = f"{design}__rcvar_inner"
+    wrapper = V.emit_variant_alias_wrapper(
+        inner, V.parse_module_ports(txt, design), {}, wrapper_name=design,
+        additive_reset_map={reset: canon})
+    txt, n = _re.subn(rf"\bmodule(\s+){_re.escape(design)}\b",
+                      rf"module\g<1>{inner}", txt, count=1)
+    assert n == 1, f"could not rename `module {design}` to the inner"
+    f.write_text(txt.rstrip("\n") + "\n\n" + wrapper)
+
+
+def _request_interface(proj, top, *ports):
+    """The public target interface a case intentionally asks for (v1.17.48)."""
+    import json
+    docs = proj / "phase1" / "generated_docs"
+    docs.mkdir(parents=True, exist_ok=True)
+    (docs / "L9_INTEGRATION_SPEC.json").write_text(json.dumps({
+        "top_module": top, "top_ports": list(ports)}))
+
+
 def test_step_facet1_contract_declares_reset_skips_and_elaborates(tmp_path):
     # FACET 1 (#689 over-fire) → #792 ADDITIVE doctrine. The contract declares
     # `reset` and ITS hidden TB binds `.reset(...)`, but a DIFFERENT hidden TB may
@@ -258,9 +297,7 @@ def test_step_facet1_contract_declares_reset_skips_and_elaborates(tmp_path):
         "| clk | 1 | input | clock |\n"
         "| reset | 1 | input | active-high reset |\n"
         "| a | 8 | input | multiplicand |\n")
-    res = R.step_reset_clock_variant_aliases(tmp_path, "multi_booth_8bit")
-    assert res.status == "PASS", (res.status, res.detail)
-    assert "#792" in res.detail and "additive" in res.detail.lower()
+    _apply_additive(tmp_path, "multi_booth_8bit", "reset", "rst")
     body = f.read_text()
     assert "reset" in body and "__rcvar_inner" in body
     assert "rst" in body, "additive canonical spelling must be exposed"
@@ -294,9 +331,7 @@ def test_step_facet2_up_down_counter_contract_preserves_reset(tmp_path):
         tmp_path,
         "module up_down_counter(input clk, input reset, input up_down,"
         " output reg [15:0] count);")
-    res = R.step_reset_clock_variant_aliases(tmp_path, "up_down_counter")
-    assert res.status == "PASS", (res.status, res.detail)
-    assert "#792" in res.detail and "additive" in res.detail.lower()
+    _apply_additive(tmp_path, "up_down_counter", "reset", "rst")
     body = f.read_text()
     assert "reset" in body and "__rcvar_inner" in body
 
@@ -332,9 +367,7 @@ def test_step_facet1_clock_shape_contract_preserves_clock(tmp_path):
         tmp_path,
         "Ports: `clock` (input, system clock), `reset` (input, active-high), "
         "`d`, `q`.")
-    res = R.step_reset_clock_variant_aliases(tmp_path, "dut_clk")
-    assert res.status == "PASS", (res.status, res.detail)
-    assert "#792" in res.detail and "additive" in res.detail.lower()
+    _apply_additive(tmp_path, "dut_clk", "reset", "rst")
     body = f.read_text()
     # clock stays its contract spelling (no `clk` rename); reset is additive.
     assert "clock" in body and "reset" in body and "__rcvar_inner" in body
@@ -380,6 +413,12 @@ def test_noleak_step_no_contract_legit_alias_still_fires(tmp_path):
     # staged contract. The alias MUST still fire (wrapper takes the top name,
     # exposes rst_n) so the TB binding `.rst_n` elaborates.
     f = _stage_rtl(tmp_path, _seq_core("reset_n"), "sequence_detector.v")
+    # RULED by v1.17.48 (76e5960ee): the #518 hidden-TB binding is no longer
+    # GUESSED — it is STATED. The substance of this case is unchanged and still
+    # proved by real elaboration below: a design declaring `reset_n` whose TB
+    # binds `.rst_n` gets a wrapper that makes that binding work.
+    _request_interface(tmp_path, "sequence_detector",
+                       "clk", "rst_n", "data_in", "detected")
     res = R.step_reset_clock_variant_aliases(tmp_path, "sequence_detector")
     assert res.status == "PASS", (res.status, res.detail)
     body = f.read_text()
@@ -408,6 +447,10 @@ def test_noleak_prose_contract_does_not_block_legit_alias(tmp_path):
         tmp_path,
         "A sequence detector. On reset the detector clears. It samples on the "
         "clock edge. The reset is asynchronous.")
+    # v1.17.48 requires the request to be stated; the claim under test is that a
+    # PROSE mention of reset/clock does not block an alias that WAS requested.
+    _request_interface(tmp_path, "sequence_detector",
+                       "clk", "rst_n", "data_in", "detected")
     res = R.step_reset_clock_variant_aliases(tmp_path, "sequence_detector")
     assert res.status == "PASS", (res.status, res.detail)
     assert "input rst_n" in f.read_text()
@@ -425,6 +468,9 @@ def test_noleak_sdc_guard_618_still_works(tmp_path):
         "module chip_top (\n  input  clk_i,\n  input  rst_ni,\n"
         "  output [7:0] o\n);\n  assign o = 8'd0;\nendmodule\n",
         "chip_top.sv")
+    # `clk` requested (destination), `rst_ni` requested as itself, so only the
+    # CLOCK alias is on the table and the #618 SDC guard is what decides it.
+    _request_interface(tmp_path, "chip_top", "clk", "rst_ni", "o")
     res = R.step_reset_clock_variant_aliases(tmp_path, "chip_top")
     assert res.status == "SKIP"
     assert "#618" in res.detail and "clk_i" in res.detail

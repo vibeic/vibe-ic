@@ -246,12 +246,19 @@ def test_free_text_prompt_still_gets_792_additive(tmp_path):
     f = _stage_rtl(tmp_path)
     _write(tmp_path, "input/phase1_prompt.md",
            "Design a register file with a `clk` and an active-low `reset_n`.")
+    # RULED by v1.17.48 (76e5960ee, "require a requested interface before
+    # aliasing reset/clock names"): the automatic flow never constructs additive
+    # aliases, and a contract that DECLARES the authored spelling is authority
+    # to KEEP it, not to graft a synonym beside it. Pinned by its REASON, because
+    # after the ruling every case in this file SKIPs on unchanged bytes and a
+    # bare status assertion would no longer tell them apart.
     res = R.step_reset_clock_variant_aliases(tmp_path, "dut")
-    assert res.status == "PASS", (res.status, res.detail)
+    assert res.status == "SKIP", (res.status, res.detail)
+    assert "#689" in res.detail, res.detail
     body = f.read_text()
-    assert "__rcvar_inner" in body and "rst_n" in body
+    assert "__rcvar_inner" not in body and "rst_n" not in body
     got = _emitted_top_ports(f)
-    assert "reset_n" in got and "rst_n" in got
+    assert "reset_n" in got and "rst_n" not in got
 
 
 def test_bridged_description_table_still_gets_792_additive(tmp_path):
@@ -262,20 +269,33 @@ def test_bridged_description_table_still_gets_792_additive(tmp_path):
     _write(tmp_path, "input/docs/design_description.md",
            "| Signal | Dir |\n|---|---|\n| clk | input |\n"
            "| reset_n | input |\n| cs | input |\n")
+    # RULED by v1.17.48 (76e5960ee, "require a requested interface before
+    # aliasing reset/clock names"): the automatic flow never constructs additive
+    # aliases, and a contract that DECLARES the authored spelling is authority
+    # to KEEP it, not to graft a synonym beside it. Pinned by its REASON, because
+    # after the ruling every case in this file SKIPs on unchanged bytes and a
+    # bare status assertion would no longer tell them apart.
     res = R.step_reset_clock_variant_aliases(tmp_path, "dut")
-    assert res.status == "PASS", (res.status, res.detail)
+    assert res.status == "SKIP", (res.status, res.detail)
+    assert "#689" in res.detail, res.detail
     body = f.read_text()
-    assert "__rcvar_inner" in body and "rst_n" in body
+    assert "__rcvar_inner" not in body and "rst_n" not in body
 
 
 def test_no_contract_at_all_still_gets_518_canonical_rename(tmp_path):
     # NO-LEAK: a design shipping NO contract still gets the #518 canonical
     # rename — the field-verified hidden-TB doctrine is untouched.
     f = _stage_rtl(tmp_path)
+    before = f.read_text()
+    # RULED by v1.17.48 (76e5960ee): the #518 hidden-TB doctrine was a GUESS at a
+    # binding nobody stated. No contract is no authority to rename. Pinned by its
+    # own reason so it stays distinguishable from the #689 refusals above.
     res = R.step_reset_clock_variant_aliases(tmp_path, "dut")
-    assert res.status == "PASS", (res.status, res.detail)
+    assert res.status == "SKIP", (res.status, res.detail)
+    assert "no authoritative interface requests" in res.detail, res.detail
     body = f.read_text()
-    assert "__rcvar_inner" in body and "rst_n" in body
+    assert body == before, "the ruling promises the authored RTL is unchanged"
+    assert "__rcvar_inner" not in body and "rst_n" not in body
 
 
 def test_authored_doc_that_documents_both_spellings_keeps_alias(tmp_path):
@@ -293,9 +313,42 @@ def test_authored_doc_that_documents_both_spellings_keeps_alias(tmp_path):
            "# L3\n\n| sig | dir |\n|---|---|\n"
            "| `clk` | input |\n| `reset_n` | input |\n| `rst_n` | input |\n"
            "| `data_in` | input |\n| `data_out` | output |\n")
+    # RULED by v1.17.48 (76e5960ee): adaptation needs an interface that names
+    # the DESTINATION and does NOT require the SOURCE. A document enumerating
+    # BOTH spellings requires `reset_n`, so there is nothing to adapt — the
+    # gap between a documented `rst_n` and an RTL that lacks it is the
+    # conformance gate's finding, not something the aliaser may paper over.
+    res = R.step_reset_clock_variant_aliases(tmp_path, "dut")
+    assert res.status == "SKIP", (res.status, res.detail)
+    assert "#689" in res.detail, res.detail
+    body = f.read_text()
+    assert "__rcvar_inner" not in body
+    got = _emitted_top_ports(f)
+    # the authored interface survives verbatim: `reset_n` kept, no `rst_n` added
+    assert "reset_n" in got and "rst_n" not in got
+
+
+def test_authored_doc_naming_only_the_canonical_spelling_does_alias(tmp_path):
+    """THE POSITIVE ARM, and the reason the four SKIPs above are not vacuous.
+
+    After v1.17.48 every previously-PASSing case in this file returns SKIP on
+    unchanged bytes, so nothing here would fail against an aliaser that had been
+    disabled outright. This is the shape the ruling asks for: an authoritative
+    document that names the DESTINATION spelling (`rst_n`) and does NOT require
+    the SOURCE one (`reset_n`), which is exactly when adaptation is authorised.
+    """
+    rtl = R._pl.rtl_dir(tmp_path)
+    rtl.mkdir(parents=True, exist_ok=True)
+    f = rtl / "dut.v"
+    f.write_text("module dut(input clk, input reset_n,\n"
+                 "  input [7:0] data_in, output [7:0] data_out);\n"
+                 "  reg [7:0] q; assign data_out = q;\n"
+                 "  always @(posedge clk) q <= data_in;\nendmodule\n")
+    _write(tmp_path, "input/docs/L3_external_interface.md",
+           "# L3\n\n| sig | dir |\n|---|---|\n"
+           "| `clk` | input |\n| `rst_n` | input |\n"
+           "| `data_in` | input |\n| `data_out` | output |\n")
     res = R.step_reset_clock_variant_aliases(tmp_path, "dut")
     assert res.status == "PASS", (res.status, res.detail)
     body = f.read_text()
-    assert "__rcvar_inner" in body
-    got = _emitted_top_ports(f)
-    assert "reset_n" in got and "rst_n" in got
+    assert "__rcvar_inner" in body and "rst_n" in body

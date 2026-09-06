@@ -689,14 +689,76 @@ def test_the_source_mutator_needs_NO_exemption_because_it_publishes_nothing(
 
 
 def test_the_gate_is_GREEN_on_the_tree_that_ships():
-    """The end of it. Read on the pristine base this exits 1 naming two
-    functions of `policy_direction_pin_check`; a verdict nobody can reproduce
-    green is the thing this repo is closing."""
+    """The end of it — and what "green" HONESTLY means here is a RATCHET.
+
+    Read on the pristine base this exited 1 naming functions nobody had claimed;
+    a verdict nobody can reproduce green is the thing this repo is closing. But
+    the honest statement is not "there are no polarity-blind extractors" — there
+    is one, `lec_run::lec_proved_points_from_output`, and it belongs to another
+    lane. The statement that IS true and IS worth blocking a landing on is
+    `offenders == the register`: nobody may ADD one, and an entry that outlives
+    its offender must be deleted with the fix.
+
+    The count was never the instrument: MEASURED across v1.17.51..v1.17.83 the
+    population went 212 -> 213 -> 214 -> 213 -> 214 -> 215 because entries both
+    enter and leave. Membership names each one.
+    """
     r = _pr.run(
-        [sys.executable, str(PROGRAMS / "prose_polarity_consulted_check.py")],
+        [sys.executable, str(PROGRAMS / "prose_polarity_consulted_check.py"),
+         "--ratchet"],
         capture_output=True, text=True)
     assert r.returncode == 0, r.stdout + r.stderr
     assert "[PASS]" in r.stdout
+
+
+def test_the_ratchet_blocks_a_landing_that_ADDS_an_offender(tmp_path):
+    """DIRECTION 1: an offender that is not in the register fails the gate."""
+    import importlib
+    G2 = importlib.import_module("prose_polarity_consulted_check")
+    root = PROGRAMS.parent
+    kept = dict(G2._OFFENDER_REGISTER)
+    try:
+        G2._OFFENDER_REGISTER.clear()          # as if the entry were never added
+        rc = G2._ratchet_verdict(sorted(kept), root)
+    finally:
+        G2._OFFENDER_REGISTER.update(kept)
+    assert rc == 1, "an unregistered offender must BLOCK"
+
+
+def test_the_ratchet_refuses_an_entry_that_outlived_its_offender():
+    """DIRECTION 2: a register entry whose offender is gone is itself an
+    offender — otherwise the register rots into a list of things that used to be
+    true, and a later addition hides behind a name nobody re-reads."""
+    import importlib
+    G2 = importlib.import_module("prose_polarity_consulted_check")
+    root = PROGRAMS.parent
+    kept = dict(G2._OFFENDER_REGISTER)
+    try:
+        # a module that IS in this tree and is NOT an offender
+        G2._OFFENDER_REGISTER["spec_conformance_check::_frame_contract_findings"] = (
+            "planted for this test")
+        rc = G2._ratchet_verdict(sorted(kept), root)
+    finally:
+        G2._OFFENDER_REGISTER.clear()
+        G2._OFFENDER_REGISTER.update(kept)
+    assert rc == 1, "a stale register entry must BLOCK"
+
+
+def test_the_ratchet_is_scoped_to_the_tree_it_is_aimed_at(tmp_path):
+    """An entry whose module is not in THIS checkout is out of scope, not stale.
+    Without this the verdict would depend on which tree the gate was aimed at,
+    which is the one property a gate must not have — `exemption_audit` carries
+    the same scoping for the same reason."""
+    import importlib
+    G2 = importlib.import_module("prose_polarity_consulted_check")
+    (tmp_path / "programs").mkdir()
+    kept = dict(G2._OFFENDER_REGISTER)
+    try:
+        rc = G2._ratchet_verdict([], tmp_path)   # empty tree: nothing is in it
+    finally:
+        G2._OFFENDER_REGISTER.clear()
+        G2._OFFENDER_REGISTER.update(kept)
+    assert rc == 0, "an out-of-tree entry is not stale"
 
 
 # ---------------------------------------------------------------------------
@@ -717,3 +779,67 @@ def test_the_via_legalizer_lef_readers_are_flagged_and_exempted_as_formal_gramma
     for n in names:
         assert len(G._NOT_PROSE[n]) >= G._EXEMPT_REASON_MIN
         assert "LEF" in G._NOT_PROSE[n]        # the argument names the grammar
+
+
+# ---------------------------------------------------------------------------
+# vibe-ic#712 — the frame contract reads a denial SCOPED TO THE CLAUSE IT
+# GOVERNS. Both directions, because a blanket sentence-wide check passes the
+# first of these and FAILS the second, and the second is #2035's own fixture.
+# ---------------------------------------------------------------------------
+def _frame_latency(text, ins=("frame",), outs=("valid",)):
+    import importlib
+    fc = importlib.import_module("_frame_contract")
+    return fc.extract_frame_contract(text, list(ins), list(outs), []).latency
+
+
+def _frame_interframe(text, ins=("rx",), outs=("frame_done",)):
+    import importlib
+    fc = importlib.import_module("_frame_contract")
+    return fc.extract_frame_contract(text, list(ins), list(outs), []).interframe
+
+
+def test_a_denial_in_the_bounds_own_clause_publishes_no_bound():
+    """DIRECTION 1. The denial is IN the clause that carries the number, so the
+    clause states no bound and none may be published.
+
+    MEASURED on e1814e28d, before this: all three of these returned the SAME
+    `exactly 3 cycles, frame -> valid` as the affirmation, and
+    `spec_conformance_check._frame_contract_findings` then reported an ERROR
+    against RTL for violating a bound the document had denied.
+    """
+    assert _frame_latency(
+        "The output valid is asserted exactly 3 cycles after the input frame "
+        "is accepted.") is not None, "precondition: the affirmed form IS read"
+
+    for denied in (
+            "There is no 3 cycle latency between the input frame and the "
+            "output valid.",
+            "The output valid is NOT asserted 3 cycles after the input frame "
+            "is accepted; it is combinational.",
+            "The 3 cycle latency from frame to valid is removed; nothing "
+            "replaces it.",
+    ):
+        assert _frame_latency(denied) is None, denied
+
+
+def test_a_denial_qualifying_a_DIFFERENT_clause_keeps_the_stated_bound():
+    """DIRECTION 2, and the one a blanket check gets wrong.
+
+    This sentence is #2035's own fixture, verbatim. It STATES an interframe
+    bound and then qualifies it in a semicolon-joined clause that happens to
+    contain "is not". The denial governs the qualifier, not the number, so the
+    bound stands. A sentence-wide denial check withdraws it and turns a false
+    negative into a false positive — which is precisely what
+    `_prose_polarity.concept_is_constitutive` warns a blanket check does.
+    """
+    kept = _frame_interframe(
+        "Consecutive frames must be separated by at least 3 idle bit periods; "
+        "a start bit seen sooner is not the start of a frame.")
+    assert kept is not None, "the affirmed interframe bound must survive"
+    assert kept.value == 3, kept
+
+    # and the same shape for a latency, so the rule is not pinned to one field
+    assert _frame_latency(
+        "The output valid is asserted exactly 3 cycles after the input frame "
+        "is accepted. No DRC errors were found.") is not None
+

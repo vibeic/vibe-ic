@@ -202,18 +202,54 @@ def test_no_engine_declares_itself_as_the_control_it_is():
     assert "a green result would mean the control stopped checking" in text
 
 
+def _pinned_image() -> str:
+    """The digest the harness will use — READ from the single pin, as it does."""
+    import ast
+    src = (_REPO / "tools/ci/hermetic_candidate_runner.py").read_text(
+        encoding="utf-8")
+    for node in ast.parse(src).body:
+        if isinstance(node, ast.Assign) and any(
+                getattr(t, "id", "") == "IMAGE" for t in node.targets):
+            return ast.literal_eval(node.value)
+    raise AssertionError("hermetic_candidate_runner.py pins no IMAGE")
+
+
+def test_the_harness_keeps_no_literal_copy_of_the_pinned_digest():
+    """The digest is READ from the one place the repo pins it, never copied.
+
+    This file used to assert that `IMAGE_DEFAULT` WAS a digest literal, which is
+    the property that let the two drift: measured 2026-09-06, the owner had
+    ruled the runtime image forward to the 0.3.47-era build while this harness's
+    own literal still named 0.3.6 — forty patch releases behind — so every
+    operator who did not pass `--image` silently measured a toolchain nobody had
+    pinned. A second copy of a pinned value is a second definition of it.
+    """
+    text = _HARNESS.read_text(encoding="utf-8")
+    assert not re.search(r'IMAGE_DEFAULT="[^"]*@sha256:[0-9a-f]', text), (
+        "the harness has grown a literal digest again; read the pin instead")
+    assert "hermetic_candidate_runner.py" in text, (
+        "the harness must name the pin it reads")
+
+
 def test_the_pinned_image_is_a_digest_and_matches_the_landing_preflight():
     """A floating tag is how a host ends up with a runtime nobody pinned."""
-    text = _HARNESS.read_text(encoding="utf-8")
-    m = re.search(r'IMAGE_DEFAULT="([^"]+)"', text)
-    assert m, "the harness declares no default image"
-    assert "@sha256:" in m.group(1), m.group(1)
+    image = _pinned_image()
+    assert "@sha256:" in image, image
     preflight = (_REPO / "vibe-ic-marketplace/plugins/vibe-ic/programs"
                  / "landing_pytest_runtime_preflight.py").read_text(
                      encoding="utf-8")
-    digest = m.group(1).split("@sha256:")[1]
+    digest = image.split("@sha256:")[1]
     assert digest in preflight, (
-        "the harness and the landing runtime preflight name different images")
+        "the pinned runtime and the landing runtime preflight name different "
+        "images")
+
+
+def test_the_harness_refuses_when_the_pin_cannot_be_read():
+    """A read that fails must REFUSE, never fall back to a literal — a fallback
+    is exactly how the second copy comes back."""
+    text = _HARNESS.read_text(encoding="utf-8")
+    assert "cannot read the pinned runtime image" in text
+    assert "there is deliberately no fallback literal here" in text
 
 
 if __name__ == "__main__":

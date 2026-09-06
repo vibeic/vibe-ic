@@ -105,9 +105,32 @@ def _stage(tmp_path, txt, name):
     return f
 
 
+def _request_interface(proj, top, *ports):
+    """The public target interface these cases intentionally ask for.
+
+    RULED by v1.17.48 (76e5960ee): automatic reset/clock adaptation now requires
+    an authoritative interface naming the DESTINATION spelling and not requiring
+    the SOURCE one. Without it the step refuses before either branch below is
+    reached — MEASURED on e1814e28d, both cases returned the same "no
+    authoritative interface requests an equivalent reset/clock spelling" SKIP,
+    so the FLAT-vs-wrapper choice this file exists to pin decided nothing.
+
+    The opt-in is about WHICH SHAPE the transform emits; the ruling is about
+    WHETHER it may run at all. Staging the request restores the first question,
+    which is the one these two cases ask.
+    """
+    import json
+    docs = proj / "phase1" / "generated_docs"
+    docs.mkdir(parents=True, exist_ok=True)
+    (docs / "L9_INTEGRATION_SPEC.json").write_text(json.dumps({
+        "top_module": top, "top_ports": list(ports)}))
+
+
 def test_step_flat_optin_produces_flat_module(tmp_path, monkeypatch):
     # design ships active-low `reset_n`; hidden whitebox TB needs canonical `rst_n`.
     f = _stage(tmp_path, _SEQ, "sequence_detector.v")
+    _request_interface(tmp_path, "sequence_detector",
+                       "clk", "rst_n", "data_in", "detected")
     monkeypatch.setenv("VIBE_IC_RCVAR_WHITEBOX_FLAT", "1")
     res = D.step_reset_clock_variant_aliases(tmp_path, "sequence_detector")
     assert res.status == "PASS", (res.status, res.detail)
@@ -122,6 +145,8 @@ def test_step_flat_optin_produces_flat_module(tmp_path, monkeypatch):
 def test_step_default_off_keeps_wrapper(tmp_path, monkeypatch):
     # WITHOUT the opt-in the shipped wrapper path is used (inner submodule present).
     f = _stage(tmp_path, _SEQ, "sequence_detector.v")
+    _request_interface(tmp_path, "sequence_detector",
+                       "clk", "rst_n", "data_in", "detected")
     monkeypatch.delenv("VIBE_IC_RCVAR_WHITEBOX_FLAT", raising=False)
     res = D.step_reset_clock_variant_aliases(tmp_path, "sequence_detector")
     assert res.status == "PASS", (res.status, res.detail)

@@ -97,6 +97,38 @@ def _run_step(proj):
     return R.step_reset_clock_variant_aliases(proj, "chip_top")
 
 
+def _apply_additive(proj, design, reset, canon):
+    """Build the #792 additive dual-spelling wrapper the only way v1.17.48 left.
+
+    RULED by v1.17.48 (76e5960ee, "require a requested interface before aliasing
+    reset/clock names"): "Automatic flow never constructs additive aliases.
+    Retain the emitter's explicit `additive_reset_map` API for intentional
+    compatibility callers." MEASURED on e1814e28d, every case below returned
+    ('SKIP', "…already declares the standard spelling(s) … (#689)") — the specs
+    these designs ship DECLARE their reset, which is now authority to keep it.
+
+    That ruling settles WHO may ask for a dual-spelling interface. It says
+    nothing about what #792 measures here, which is how the wrapper BEHAVES once
+    it exists: both spellings exposed, the undriven one defaulting INACTIVE
+    rather than to `x`, and a TB binding EITHER spelling elaborating and
+    functioning. So the wrapper is now built through the retained API —
+    production code, not a hand-written copy — and every elaboration assertion
+    below is measured exactly as before.
+    """
+    import re as _re
+    import reset_clock_variant_alias as V
+    f = PL.rtl_dir(proj) / f"{design}.v"
+    txt = f.read_text()
+    inner = f"{design}__rcvar_inner"
+    wrapper = V.emit_variant_alias_wrapper(
+        inner, V.parse_module_ports(txt, design), {}, wrapper_name=design,
+        additive_reset_map={reset: canon})
+    txt, n = _re.subn(rf"\bmodule(\s+){_re.escape(design)}\b",
+                      rf"module\g<1>{inner}", txt, count=1)
+    assert n == 1, f"could not rename `module {design}` to the inner"
+    f.write_text(txt.rstrip("\n") + "\n\n" + wrapper)
+
+
 def _elaborate(rtl_file, top, ports_bind):
     """Elaborate `top` against a TB that binds exactly `ports_bind` (dict of
     port→reg) plus clk; return iverilog returncode."""
@@ -117,10 +149,7 @@ def test_792_rescue_sequence_detector_canonical_binding_now_elaborates(tmp_path)
     proj, f = _stage(tmp_path, "sequence_detector",
                      _al_spec("sequence_detector", "reset_n"),
                      _al_core("sequence_detector", "reset_n"))
-    res = _run_step(proj)
-    # The gate PASSes with an additive dual-spelling reset wrapper (was SKIP).
-    assert res.status == "PASS", (res.status, res.detail)
-    assert "additive" in res.detail.lower()
+    _apply_additive(proj, "sequence_detector", "reset_n", "rst_n")
     body = f.read_text()
     assert "reset_n" in body and "rst_n" in body          # BOTH spellings exposed
     assert "sequence_detector__rcvar_inner" in body
@@ -157,9 +186,7 @@ def test_792_rescue_sequence_detector_canonical_binding_now_elaborates(tmp_path)
 def test_792_noregression_spec_binding_and_canon_rescue(
         tmp_path, design, reset, canon, core, spec):
     proj, f = _stage(tmp_path, design, spec(design, reset), core(design, reset))
-    res = _run_step(proj)
-    assert res.status == "PASS", (res.status, res.detail)
-    assert "additive" in res.detail.lower()
+    _apply_additive(proj, design, reset, canon)
     body = f.read_text()
     assert reset in body and canon in body
 
@@ -201,14 +228,25 @@ def test_792_noleak_no_contract_still_destructive_rename(tmp_path):
     # blank the description so nothing registers as a contract port.
     (proj / "phase1" / "input_doc" / "design_description.txt").write_text(
         "A design with a reset. (no Input ports: section)\n")
+    before = f.read_text()
     res = _run_step(proj)
-    assert res.status == "PASS", (res.status, res.detail)
-    assert "additive" not in res.detail.lower(), res.detail   # destructive rename
+    # RULED by v1.17.48 (76e5960ee): the #518 doctrine was a GUESS at a hidden
+    # binding. With no contract there is no authority to rename at all, so the
+    # authored ports are preserved and the step reports an advisory SKIP —
+    # "SKIP is not semantic acceptance", it is the refusal to act unasked.
+    # Pinned by its reason so it cannot be satisfied by the #689 refusal that
+    # every OTHER case in this file now returns.
+    assert res.status == "SKIP", (res.status, res.detail)
+    assert "no authoritative interface requests" in res.detail, res.detail
+    assert f.read_text() == before, "the authored RTL must be left unchanged"
     body = f.read_text()
-    assert "input rst_n" in body or " rst_n" in body
-    # the destructive rename leaves the wrapper exposing the canonical; the spec
-    # spelling reset_n is no longer a wrapper PORT (it is the inner's port only).
-    assert "seqd__rcvar_inner" in body
+    # The destructive rename this case pinned is exactly what the ruling
+    # withdrew: an unrequested rename changes the delivered interface and can
+    # break an otherwise passing design. So the canonical is NOT introduced and
+    # no wrapper is emitted — the authored `reset_n` stays the design's port.
+    assert "rst_n" not in body, body
+    assert "seqd__rcvar_inner" not in body, body
+    assert "input reset_n" in body or " reset_n" in body, body
 
 
 def test_792_clock_is_never_additive(tmp_path):

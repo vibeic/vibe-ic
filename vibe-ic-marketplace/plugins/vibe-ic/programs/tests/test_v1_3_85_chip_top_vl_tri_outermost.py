@@ -176,6 +176,59 @@ def _stage(tmp_path):
     return proj
 
 
+def _apply_additive_alias(proj, core="counter", src="resetn", dst="rst_n"):
+    """Build the #792 additive dual-spelling wrapper the way v1.17.48 leaves as
+    the ONLY way to build it.
+
+    RULED by v1.17.48 (76e5960ee, "require a requested interface before aliasing
+    reset/clock names"): "Automatic flow never constructs additive aliases.
+    Retain the emitter's explicit `additive_reset_map` API for intentional
+    compatibility callers." So `step_reset_clock_variant_aliases` can no longer
+    produce this wrapper from any staged document — measured on e1814e28d, the
+    fixture below returns SKIP (#689) whatever L3/L9 authority is added, because
+    the design's own contract already declares `resetn`.
+
+    That ruling is about WHO may ask for a dual-spelling interface. It says
+    nothing about #115, which is what these two tests measure: given that such a
+    wrapper exists, the VERILATOR `tri` pull must end up on the OUTERMOST
+    chip_top face and the inner faces must be plain, or the driven reset never
+    transfers through the two-level chain. So the wrapper is now built through
+    the retained API — production code, not a hand-written copy — and everything
+    the two tests actually assert is measured unchanged from there on.
+    """
+    import reset_clock_variant_alias as V
+    f = proj / "phase2" / "stage1" / "rtl" / f"{core}.v"
+    txt = f.read_text()
+    inner = f"{core}__rcvar_inner"
+    wrapper = V.emit_variant_alias_wrapper(
+        inner, V.parse_module_ports(txt, core), {}, wrapper_name=core,
+        additive_reset_map={src: dst})
+    txt, n = re.subn(rf"\bmodule(\s+){re.escape(core)}\b",
+                     rf"module\g<1>{inner}", txt, count=1)
+    assert n == 1, f"could not rename `module {core}` to the inner"
+    f.write_text(txt.rstrip("\n") + "\n\n" + wrapper)
+    # The runner does not stop at the target file: it rewires every staged
+    # instantiation of the target to the inner, so the wrapper that TOOK the
+    # target's name is left uninstantiated. That is load-bearing here and not a
+    # detail — it is what makes `counter` a second instantiation-graph root, so
+    # #683 adoption declines and the chip_top auto-emit path under test fires.
+    # MEASURED at v1.17.47 (35bc1d1ab), where these two tests were last green:
+    # rewiring only `counter.v` leaves `counter_sync` instantiating the wrapper,
+    # no chip_top is emitted, and synth returns FAIL with cells=2 instead of 55.
+    # Uses the runner's own code-masked, label-guarded substitution rather than
+    # a second copy of it.
+    d = _load_runner()
+    pat = d._rcvar_inst_pat(core)
+    for other in sorted((proj / "phase2" / "stage1" / "rtl").glob("*.v")):
+        if other == f:
+            continue
+        txt2, n2 = d._rcvar_sub_code_only(other.read_text(), pat,
+                                          rf"{inner}\g<1>", label_guard=True)
+        if n2:
+            other.write_text(txt2)
+    return f
+
+
 @pytest.mark.skipif(not shutil.which("docker"), reason="docker unavailable")
 def test_autoemit_moves_pull_to_outermost_face_end_to_end(tmp_path):
     """Runner-level end state: after alias + synth (chip_top auto-emit), the
@@ -190,8 +243,7 @@ def test_autoemit_moves_pull_to_outermost_face_end_to_end(tmp_path):
     if probe.returncode != 0:
         pytest.skip(f"container {container!r} not running")
     proj = _stage(tmp_path)
-    r1 = d.step_reset_clock_variant_aliases(proj, "chip_top")
-    assert r1.status == "PASS", r1.detail
+    _apply_additive_alias(proj)
     r2 = d.step_yosys_synth(proj, "chip_top")
     assert r2.status == "PASS", r2.detail
     ct = (proj / "phase2" / "stage1" / "rtl" / "chip_top.v").read_text()
@@ -243,7 +295,7 @@ def test_two_level_chain_resets_under_verilator(tmp_path):
     if probe.returncode != 0:
         pytest.skip(f"container {container!r} with verilator not running")
     proj = _stage(tmp_path)
-    assert d.step_reset_clock_variant_aliases(proj, "chip_top").status == "PASS"
+    _apply_additive_alias(proj)
     assert d.step_yosys_synth(proj, "chip_top").status == "PASS"
     tag = f"/tmp/vibeic_t115ct_{os.getpid()}"
     try:

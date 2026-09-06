@@ -373,6 +373,11 @@ WHICH_GATES = (
     # this definition — the row was never written. `shutil.which("openroad")`
     # is the whole discriminator, so it belongs here and not in a carve-out.
     ("test_pad_ring", "_HAVE_OPENROAD"),
+    # Added by v1.17.64 (53d5235e0) and never registered, so its two skipif
+    # arms had no proof they could OPEN. `shutil.which("iverilog") is not None`
+    # — the same shape as `test_cvdp_gate::_HAS_IVERILOG` above, so it is a
+    # WHICH gate and both probe arms below now cover it.
+    ("test_port_width_resolved_or_refused", "_HAS_IVERILOG"),
     ("test_prompt_example_selftest", "_HAVE_IVERILOG"),
     ("test_ramp_waveform_oracle_check", "_HAS_IVERILOG"),
     ("test_round15_rs232_clear_control", "_HAVE_IVERILOG"),

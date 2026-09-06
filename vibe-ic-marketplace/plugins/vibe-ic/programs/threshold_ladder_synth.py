@@ -322,7 +322,14 @@ def main(argv: Optional[List[str]] = None) -> int:
               "threshold-ladder spec", file=sys.stderr)
         return 2
     if a.out:
-        Path(a.out).write_text(rtl)
+        # vibe-ic#1082. The hazard this gate names is a reader observing a
+        # HALF-WRITTEN declared output, and emitted RTL is squarely that: a
+        # downstream elaboration handed a truncated `.v` fails for a reason that
+        # has nothing to do with the design. `_atomic_artefact.write_text` is
+        # signature-compatible on purpose — the payload is unchanged, only the
+        # moment the final name appears.
+        from _atomic_artefact import write_text as _write_text
+        _write_text(a.out, rtl)
     else:
         sys.stdout.write(rtl)
     return 0

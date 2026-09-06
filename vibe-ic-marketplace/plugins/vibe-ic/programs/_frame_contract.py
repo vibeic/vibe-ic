@@ -385,13 +385,91 @@ def _named_signals(sentence: str, known: Sequence[str]) -> List[str]:
     return out
 
 
-def _sentences(text: str) -> List[str]:
-    parts: List[str] = []
-    for chunk in re.split(r"(?<=[.;!?])\s+|\n", text):
+_SENT_SPLIT_RE = re.compile(r"(?<=[.;!?])\s+|\n")
+
+#: What ends the CLAUSE a stated bound belongs to. A semicolon ends one; so does
+#: a sentence terminator followed by whitespace or end of text; so does a blank
+#: line. A BARE single newline does NOT — that is a soft wrap in a written spec,
+#: and stopping there would cut a clause in half and lose a denial written
+#: across two lines.
+_CLAUSE_END_RE = re.compile(r";|[.!?](?=\s|$)|\n[ \t]*\n")
+
+
+def _sentences_pos(text: str) -> List[Tuple[str, int]]:
+    """`_sentences` with each fragment's OFFSET into `text`."""
+    out: List[Tuple[str, int]] = []
+    pos = 0
+    for m in _SENT_SPLIT_RE.finditer(text):
+        chunk = text[pos:m.start()]
         c = chunk.strip()
         if c:
-            parts.append(c)
-    return parts
+            out.append((c, pos + (len(chunk) - len(chunk.lstrip()))))
+        pos = m.end()
+    chunk = text[pos:]
+    c = chunk.strip()
+    if c:
+        out.append((c, pos + (len(chunk) - len(chunk.lstrip()))))
+    return out
+
+
+def _sentences(text: str) -> List[str]:
+    return [s for s, _ in _sentences_pos(text)]
+
+
+def _clause_span(text: str, start: int, end: int) -> Tuple[int, int]:
+    """The CLAUSE containing [start, end) — the unit a denial governs.
+
+    Boundaries are located on BRACKET-BLANKED text (length-preserving, so the
+    offsets index the original), the way `_prose_polarity` locates its own.
+    """
+    import _prose_polarity as _pp
+    hay = _pp.blank_bracketed(text)
+    lo = 0
+    for m in _CLAUSE_END_RE.finditer(hay[:start]):
+        lo = m.end()
+    m = _CLAUSE_END_RE.search(hay, end)
+    return lo, (m.start() if m else len(text))
+
+
+def _denied(concept: str, text: str, frag: str, off: int) -> Optional[str]:
+    """The denial word governing `frag`'s CLAUSE, or None. vibe-ic#712.
+
+    WHY A CLAUSE AND NOT A SENTENCE. Measured on e1814e28d, before this guard,
+    all three of these published the IDENTICAL contract
+    `latency = exactly 3 cycles, frame -> valid`:
+
+        "The output valid is asserted exactly 3 cycles after the input frame."
+        "There is no 3 cycle latency between the input frame and the output valid."
+        "The 3 cycle latency from frame to valid is removed; nothing replaces it."
+
+    `spec_conformance_check._frame_contract_findings` then reports an ERROR per
+    violated element, so a sentence saying the bound does NOT exist became a
+    mandate the RTL was failed against — #706 (`pdk_target`) and #711
+    (`die_area_budget_um`) in a third field.
+
+    But the scope must be the clause the denial GOVERNS, not the sentence it
+    sits in. #2035's own fixture says why:
+
+        "Consecutive frames must be separated by at least 3 idle bit periods;
+         a start bit seen sooner is not the start of a frame."
+
+    That STATES an interframe bound and then qualifies it. A sentence-wide check
+    reads the qualifier's "is not" and withdraws the bound the same sentence
+    just declared — converting a false negative into a false positive, which is
+    exactly what `_prose_polarity.concept_is_constitutive` warns a blanket check
+    does. A clause-scoped one keeps it, and still catches "…is removed; nothing
+    replaces it", where the denial is IN the clause that carries the number.
+
+    `classify_denial` is used rather than a bare `is_denied` so a concept whose
+    value a denial CONSTITUTES is never converted into a false suppression.
+    """
+    try:
+        import _prose_polarity as _pp
+    except ImportError:                       # noqa: BLE001 — library absent
+        return None
+    lo, hi = _clause_span(text, off, off + len(frag.rstrip(".;!?")))
+    kind, word = _pp.classify_denial(concept, text[lo:hi])
+    return word if kind == "negating" else None
 
 
 def extract_latency_bound(text: str, inputs: Sequence[str],
@@ -400,7 +478,7 @@ def extract_latency_bound(text: str, inputs: Sequence[str],
     """Extract a declared output latency, with every unresolved element NAMED."""
     known = list(inputs) + list(outputs) + list(internals)
     best: Optional[TemporalBound] = None
-    for s in _sentences(text):
+    for s, _off in _sentences_pos(text):
         if _INTERFRAME_CUE_RE.search(s):
             continue                        # that is the other bound
         um = _UNIT_RE.search(s)
@@ -419,6 +497,8 @@ def extract_latency_bound(text: str, inputs: Sequence[str],
         if not (same or (um and _value_of(s, um) is not None)
                 or _states_a_bound(s)):
             continue
+        if _denied("frame_latency", text, s, _off):
+            continue                        # this CLAUSE denies the bound
         names = _named_signals(s, known)
         dsts = [n for n in names if n in set(outputs)]
         if not dsts:
@@ -451,11 +531,13 @@ def extract_interframe_bound(text: str,
                              inputs: Sequence[str] = (),
                              outputs: Sequence[str] = ()) -> Optional[TemporalBound]:
     """Extract a declared minimum inter-frame space, elements kept separate."""
-    for s in _sentences(text):
+    for s, _off in _sentences_pos(text):
         if not _INTERFRAME_CUE_RE.search(s):
             continue
         if not _states_a_bound(s):
             continue
+        if _denied("frame_interframe", text, s, _off):
+            continue                        # this CLAUSE denies the bound
         um = _UNIT_RE.search(s)
         tb = TemporalBound(kind="interframe", raw=s)
         tb.unit = _unit_of(s)

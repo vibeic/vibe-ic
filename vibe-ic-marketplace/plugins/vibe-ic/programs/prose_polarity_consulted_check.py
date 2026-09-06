@@ -118,6 +118,52 @@ _SEARCH_ATTRS = {"search", "findall", "finditer", "match", "fullmatch"}
 #: The count is printed on every run, clean or not.
 _EXEMPT_REASON_MIN = 80
 _NOT_PROSE: Dict[str, str] = {
+    "spec_conformance_check::_frame_contract_findings":
+        "VERILOG DECLARATION grammar. The only text this function searches "
+        "ITSELF is `rtl_body`, with one `re.findall` over "
+        "`\\b(?:reg|wire|logic)\\b ... (name)` to collect the design's internal "
+        "signal names -- HDL declaration syntax, in which there is no form that "
+        "DENIES a declaration: SystemVerilog gives no way to write `not wire "
+        "x;`. A signal is declared or it is absent, and absent is already how "
+        "this function reports it (the name never enters `internals`). "
+        "THE PROSE IS NOT READ HERE. Every prose read is delegated to "
+        "`_frame_contract.extract_frame_contract`, and THAT is where the real "
+        "polarity defect lived and is fixed: measured on e1814e28d, `There is "
+        "no 3 cycle latency between the input frame and the output valid` "
+        "published `latency = exactly 3 cycles`, byte-identical to the "
+        "affirmation, and this function then reported an ERROR against RTL for "
+        "violating a bound the document had DENIED. `_frame_contract._denied` "
+        "now consults `_prose_polarity.classify_denial` over the CLAUSE a bound "
+        "belongs to -- not the sentence, because #2035's own fixture states a "
+        "bound and then qualifies it in a semicolon-joined clause containing "
+        "`is not`, and a sentence-wide check withdraws the bound that sentence "
+        "just declared. Both directions are pinned by "
+        "`test_a_denial_in_the_bounds_own_clause_publishes_no_bound` and "
+        "`test_a_denial_qualifying_a_DIFFERENT_clause_keeps_the_stated_bound`. "
+        "This entry records that the SCANNER's per-function question has no "
+        "referent here, not that the question was waived.",
+    "spice_correlation_check::parse_sta_corner_basis":
+        "STA REPORT HEADER syntax, machine-written by the timing tool and read "
+        "to learn which corner the path being correlated was produced at. Two "
+        "productions are parsed and both are stamps, not sentences: the "
+        "sectioning marker `=== SETUP corner: process=SS "
+        "liberty=<path>.lib ===`, and the `OCV_DERATE_APPLIED early=<f> "
+        "late=<f>` line. There is no form in that grammar that DENIES a value "
+        "-- a report has no way to write `liberty is NOT ..._ss_125C_4v50.lib`. "
+        "A stamp is emitted or it is absent, and ABSENT IS ALREADY HOW THIS "
+        "FUNCTION REPORTS IT: `liberty` stays the empty string and "
+        "`ocv_late_derate` stays None, which its own docstring binds the caller "
+        "to treat as `decline to correlate rather than assume the active "
+        "corner`. The one genuinely ambiguous input -- a multi-corner writer "
+        "stamping TWO liberties into one section -- is likewise answered by "
+        "REFUSAL and not by a guess: `declared_liberties` carries the whole set "
+        "and `liberty` is answered only when exactly one was declared. So the "
+        "polarity question has no referent here, and the failure mode it "
+        "guards against (a denied value published as a declaration) cannot "
+        "arise from a grammar whose only alternative to a value is silence. "
+        "The direct precedents are the other tool-artefact readers in this "
+        "register: `lec_post_layout_check::_parse_liberty_pins` and "
+        "`phase3_one_shot_runner::_pdk_declared_routing_layers`.",
     "phase3_one_shot_runner::_pdk_declared_routing_layers":
         "Tcl `set ::env(NAME) \"value\"` productions, read out of the PDK's "
         "OWN shipped librelane/OpenLane flow config to learn the routing "
@@ -872,6 +918,46 @@ def _consults_polarity(fn: ast.AST, aliases: Set[str]) -> bool:
     return False
 
 
+#: THE OFFENDER REGISTER — a RATCHET BY MEMBERSHIP, and it is SOURCE.
+#:
+#: The count was never the instrument. MEASURED across v1.17.51..v1.17.83 the
+#: polarity-blind population went 212 -> 213 -> 214 -> 213 -> 214 -> 215, because
+#: entries both ENTER and LEAVE; bisecting that number names the wrong landing,
+#: while reading the SET named every offender in one pass. So what is pinned here
+#: is membership.
+#:
+#: THE RULE (`--ratchet`): the gate fails when an offender is NOT in this
+#: register — that is a landing ADDING one, and it is blocked. Shrinking is
+#: welcome: the entry is DELETED IN THE SAME COMMIT that fixes the offender, and
+#: an entry left behind after its offender is gone is itself an offender, so the
+#: register cannot rot into a list of things that used to be true.
+#:
+#: THIS IS NOT A BASELINE AND THERE IS NO FLAG THAT WRITES IT. `--write-baseline`
+#: and `--record-shrink` write files; this is reviewed like any other source, in
+#: the diff, with the owner of each entry named so a reader knows who to ask.
+#: The gate printing an errand that points at a write flag is what made the
+#: previous shape unusable — a lane fixing one offender was invited to record
+#: every other offender that run happened to see as accepted debt.
+_OFFENDER_REGISTER: Dict[str, str] = {
+    "design_one_shot_runner::_chip_top_resolve_excluded_variant_params":
+        "OWNER: lane czaes1. ADDED BY v1.17.85 (af94a508b, 'a wrapper default "
+        "naming an excluded variant is derived or refused'). Delete this entry "
+        "in the commit that fixes it -- an entry that outlives its offender is "
+        "itself an offender and this gate refuses it.",
+    "phase1_doc_one_shot_runner::_harvest_test_cases_from_input_tables":
+        "OWNER: lane czadcl10, which owns the L10 path. ADDED BY v1.17.79 "
+        "(8982e2646); the function itself dates from v1.0.0, so that landing "
+        "changed what it DOES with what it reads rather than introducing new "
+        "code. Delete this entry in the commit that fixes it -- an entry that "
+        "outlives its offender is itself an offender and this gate refuses it.",
+    "lec_run::lec_proved_points_from_output":
+        "OWNER: lane czlecresume (landed v1.17.62, 364d3cc75). Reads the LEC "
+        "tool's own output to decide which proof points were proved, and writes "
+        "that as a declaration. Out of scope for czmainred by brief; routed to "
+        "its owning lane rather than guessed at from outside.",
+}
+
+
 def scan(root: Path) -> List[str]:
     """`module::function` for every polarity-blind prose extractor."""
     found: List[str] = []
@@ -892,6 +978,75 @@ def scan(root: Path) -> List[str]:
                 continue
             found.append(f"{p.stem}::{n.name}")
     return sorted(set(found))
+
+
+def _defines_function(root: Path, name: str) -> bool:
+    """Does THIS tree define `module::function`? Parsed, never imported.
+
+    A `def` inside a class or a nested scope still counts: the scanner walks the
+    whole module with `ast.walk`, so this must ask the same question the same
+    way or the two could disagree about the same name.
+    """
+    module, _, fn = name.partition("::")
+    src = root / "programs" / f"{module}.py"
+    if not src.is_file():
+        return False
+    try:
+        tree = ast.parse(src.read_text(errors="replace"))
+    except (OSError, SyntaxError):
+        return False
+    return any(isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))
+               and n.name == fn for n in ast.walk(tree))
+
+
+def _ratchet_verdict(new: List[str], root: Path) -> int:
+    """`offenders == register`, by MEMBERSHIP. The landing gate's question.
+
+    Two ways to fail, and they are the two directions of one rule:
+      * an offender NOT in the register — a landing ADDED one;
+      * a register entry whose module is in this tree and which is no longer an
+        offender — it was fixed and the entry was not deleted with the fix.
+
+    SCOPED TO THE TREE BEING SCANNED, the same way `exemption_audit` is: an
+    entry whose module is simply not in this checkout is out of scope, not
+    stale, or the verdict would depend on which tree the gate was aimed at.
+
+    AND THE SAME ARGUMENT REACHES THE FUNCTION, which is where scoping at the
+    module alone breaks. MEASURED 2026-09-06: `design_one_shot_runner::_chip_top
+    _resolve_excluded_variant_params` became an offender at v1.17.85, and
+    `design_one_shot_runner.py` is in every checkout — so on any tree older than
+    that landing a correct entry for it was reported STALE, purely because the
+    module file exists and the function does not. That is the same
+    tree-dependence the paragraph above forbids, one level down: an entry naming
+    a function this tree does not define is a claim about a different tree, not
+    a claim that has expired.
+    """
+    registered = set(_OFFENDER_REGISTER)
+    offenders = set(new)
+    unregistered = sorted(offenders - registered)
+    stale = sorted(n for n in registered - offenders
+                   if _defines_function(root, n))
+
+    if unregistered:
+        print(f"[FAIL] {len(unregistered)} prose extractor(s) read a value out "
+              f"of a sentence and write it as a declaration without asking "
+              f"whether the sentence DENIES it, and are NOT in the offender "
+              f"register:")
+        for n in unregistered:
+            print(f"   {n}")
+        print(f"\n  Consult `{_POLARITY_MODULE}` — one vocabulary. If this is a "
+              f"formal grammar with no negation form, the claim is a "
+              f"`_NOT_PROSE` entry carrying its argument, not a register entry.")
+        return 1
+    if stale:
+        print(f"[FAIL] {len(stale)} offender-register entry(ies) no longer name "
+              f"an offender — delete the entry in the commit that fixed it:")
+        for n in stale:
+            print(f"   {n}")
+        return 1
+    print(f"[PASS] prose_polarity_consulted: offenders are exactly the "
+          f"{len(registered)} in the register; no landing added one.")
+    return 0
 
 
 def exemption_audit(blind_incl_exempt: List[str], root: Path) -> List[str]:
@@ -944,6 +1099,10 @@ def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--root", default=None)
     ap.add_argument("--json", dest="json_out")
+    ap.add_argument("--ratchet", action="store_true",
+                    help="verdict by MEMBERSHIP against the offender register: "
+                         "fail when an offender is unregistered (a landing "
+                         "added one) or when an entry outlived its offender")
     ap.add_argument("--baseline", default=None)
     ap.add_argument("--write-baseline", action="store_true",
                     help="record the CURRENT set. Refused if that would ADD "
@@ -1011,6 +1170,8 @@ def main(argv=None) -> int:
 
     new = sorted(set(now) - set(base))
     gone = sorted(set(base) - set(now))
+    if a.ratchet:
+        return _ratchet_verdict(new, root)
     print(f"  prose extractors that write a declared value: polarity-blind "
           f"{len(now)} (baseline {len(base)}); "
           f"{len(exempted)} exempted as formal grammar, not prose")
