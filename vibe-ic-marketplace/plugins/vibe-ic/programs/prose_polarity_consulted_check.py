@@ -118,6 +118,35 @@ _SEARCH_ATTRS = {"search", "findall", "finditer", "match", "fullmatch"}
 #: The count is printed on every run, clean or not.
 _EXEMPT_REASON_MIN = 80
 _NOT_PROSE: Dict[str, str] = {
+    "analog_a3_netlist_emit::dc_op_rail_excursions":
+        "NGSPICE OPERATING-POINT TABLE, the `<node> <voltage>` block the "
+        "simulator prints on every `-b` run under `Initial Transient "
+        "Solution` / `op`, read to learn whether the block's own nodes sit "
+        "inside its own supply rails. This is machine-written report syntax "
+        "and there is no form in it that DENIES a value: ngspice gives no way "
+        "to write `xdut.nn1 is NOT 3.33717`. A row is printed or it is absent, "
+        "and ABSENT IS ALREADY HOW THIS FUNCTION REPORTS IT -- the node never "
+        "enters `worst`, no pair is returned, and the CALLER does not read "
+        "that emptiness as a clean bill: `rail_invariant` records `CHECKED` "
+        "against `NOT_MEASURED_NO_SUPPLY` precisely so `checked and clean` and "
+        "`could not check` stay different answers. MEASURED, not asserted: all "
+        "14 denial tokens of `_prose_polarity`'s own vocabulary, placed in 10 "
+        "positions reachable in this production, INVERTED 0 values over 140 "
+        "trials -- 129 REFUSE the row rather than flipping it, and the other "
+        "11 are the token appearing INSIDE a node name (`xdut.never`), where "
+        "the voltage is carried through unchanged and a node so named really "
+        "is a node so named -- while the IDENTICAL strings read as PROSE carry "
+        "140 denials. The grammar is inert, not the vocabulary. The one "
+        "natural-language text anywhere near this reader is the `* condition:` "
+        "commentary the A3 producer writes into the testbench it emits, and "
+        "that never reaches here: this function is handed the SIMULATOR'S "
+        "STDOUT, not the deck. The direct precedents are the other "
+        "tool-artefact readers in this register: "
+        "`spice_correlation_check::parse_sta_corner_basis`, "
+        "`lec_post_layout_check::_parse_liberty_pins` and "
+        "`phase3_one_shot_runner::_pdk_declared_routing_layers`. Falsifier: "
+        "`test_a3_no_wall_clock_rail_invariant_and_pdk_request.py"
+        "::test_the_not_prose_claim_for_the_op_table_reader_is_falsifiable`.",
     "submission_template_fetch::technology_facts":
         "LEF `DATABASE MICRONS <n> ;` — the UNITS production of a PDK's own "
         "tech LEF, read inside the digest-pinned image to transcribe the "

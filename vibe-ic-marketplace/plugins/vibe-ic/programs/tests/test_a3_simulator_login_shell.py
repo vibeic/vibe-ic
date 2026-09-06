@@ -66,6 +66,22 @@ def _run_verify(monkeypatch) -> list:
         return _Result()
 
     monkeypatch.setattr(A3.subprocess, "run", _fake_run)
+    # The staging copies and the `command -v` probe moved to the progress
+    # supervisor at the same time; without this the probe answers "no ngspice"
+    # and the function returns before the simulator is ever launched.
+    monkeypatch.setattr(A3._pr, "run_best_effort", _fake_run)
+    # THE SIMULATOR CALL MOVED, THE ASSERTION DID NOT. It no longer goes
+    # through `subprocess.run` at all: it goes through `_container_exec`, over
+    # the repo's progress supervisor, which launches with `Popen` — so this
+    # collector saw an EMPTY list and the shell assertion below stopped being
+    # checked at all. Collect the argv where it is actually built now, which is
+    # the ONE function `_container_exec` exposes for exactly this reason ("a
+    # re-typed argv agrees with the implementation by coincidence").
+    def _fake_pr_run(argv, *a, **k):
+        calls.append(list(argv))
+        return _Result(stdout='MEAS vout= 1.0\n')
+
+    monkeypatch.setattr(A3._pr, "run", _fake_pr_run)
     monkeypatch.setattr(A3.shutil, "which", lambda _n: "/usr/bin/docker")
     monkeypatch.setattr(A3, "_docker_ok", lambda _c: True)
     A3.verify_with_ngspice("c", "blk", "* netlist\n", "* tb\n")
@@ -83,7 +99,11 @@ def test_the_simulator_is_launched_through_a_login_shell(monkeypatch):
     """Not `sh -c`: that shell never exports the PDK init-file variable."""
     argv = _simulator_argv(_run_verify(monkeypatch))
     assert argv[:3] == ["docker", "exec", "c"]
-    shell, flag = argv[3], argv[4]
+    # `docker exec <c> timeout -k <g> <d> <shell> <flag> <cmd>` — the container
+    # -side deadline sits between the exec and the shell now. The shell is
+    # found by position from the END, so this stays true whatever the deadline
+    # machinery in front of it looks like.
+    shell, flag = argv[-3], argv[-2]
     assert "l" in flag.lstrip("-"), (
         f"simulator started through a NON-login shell ({shell} {flag}); the "
         "PDK's ngspice init file is found only via a variable the login "
@@ -95,7 +115,7 @@ def test_the_login_shell_is_bash_because_the_profile_is_not_dash_safe(
         monkeypatch):
     """`sh -lc` was measured to abort on the image profile under dash."""
     argv = _simulator_argv(_run_verify(monkeypatch))
-    assert argv[3] == "bash", (
-        f"login shell is {argv[3]!r}; the EDA image profile is bash syntax "
+    assert argv[-3] == "bash", (
+        f"login shell is {argv[-3]!r}; the EDA image profile is bash syntax "
         "and aborts under dash, which is what made an earlier fix drop the "
         "login shell entirely")

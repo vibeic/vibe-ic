@@ -149,6 +149,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import _container_exec as _ce  # noqa: E402 — the ONE guarded docker-exec argv
 import _eda_pin as _pin  # noqa: E402 — the ONE place the pin is stated
 import _progress_run as _pr  # noqa: E402
+import _container_exec as _ce  # noqa: E402 — the ONE container-side deadline primitive
 
 PRODUCER = "analog_a3_netlist_emit"
 
@@ -174,6 +175,11 @@ _CANONICAL_ANALOG = "phase3/analog"
 _DECLARED_ANALOG = "phase1/analog"
 _REGISTRY = _HERE / "pdk_registry.json"
 DEFAULT_CONTAINER = os.environ.get("VIBEIC_ANALOG_CONTAINER") or _pin.default_container_name()
+#: The family this producer falls back to when NOBODY named one. It is
+#: the historical `--pdk` default, moved out of the argparse default so
+#: that "the caller asked for this" and "nobody asked for anything" stop
+#: being the same string — see `pdk_request_is_bound`.
+DEFAULT_PDK = "sky130"
 
 # Role -> the device-class tokens a foundry SPICE lib spells its subcircuits
 # with. Structural, not a vendor literal — the same vocabulary
@@ -408,6 +414,53 @@ def _registry_entry(selector: str) -> Tuple[Optional[str], Dict[str, Any]]:
                      or sel.startswith(name.lower())):
             return name, ent
     return None, {}
+
+
+def _pdk_token(selector: Optional[str]) -> str:
+    """The family a PDK selector names, canonicalised through the registry."""
+    raw = str(selector or "").strip().lower()
+    if not raw:
+        return ""
+    canon, _ = _registry_entry(raw)
+    return (canon or raw).lower()
+
+
+def pdk_request_is_bound(requested: Optional[str], bound_family: Optional[str],
+                         registry_family: Optional[str]) -> bool:
+    """Did an EXPLICIT `--pdk` request name the family the block actually bound?
+
+    A block's family is discovered from the DESIGN (its L19 `pdk_target`, then
+    the deck resolver), not from this argument, so `--pdk` is a request and not
+    a setting. MEASURED on this repo, 2026-09-07 (czdsm3): a project declaring
+    `sg13g2`, emitted twice — once `--pdk sg13g2` and once `--pdk sky130` —
+    produced netlists with the SAME content sha (`@3690cae39ff3`), and the
+    string `sky130` appeared ZERO times in the JSON report. The requested PDK
+    was not honoured, not warned about, and not recorded: the run said EMITTED,
+    rc 0, and the reader had no way to learn their request had been dropped.
+
+    Prefix-tolerant on BOTH sides, matching `_registry_entry`'s own matching
+    rule, and tolerant of a vendor prefix on one side only (a registry name
+    like `ihp-sg13g2` and a bare family `sg13g2` are one family), because the
+    point of the predicate is to catch a request for a DIFFERENT FOUNDRY, not
+    to police spelling. Chip/PDK-AGNOSTIC: no family literal appears here."""
+    req = _pdk_token(requested)
+    if not req:
+        return True                      # nothing was requested; nothing to check
+    seen = False
+    for cand in (bound_family, registry_family):
+        got = _pdk_token(cand)
+        if not got:
+            continue
+        seen = True
+        if req == got or req.startswith(got) or got.startswith(req):
+            return True
+        if req.rsplit("-", 1)[-1] == got.rsplit("-", 1)[-1]:
+            return True
+    # NOTHING WAS BOUND, so nothing DISAGREES with the request. Refusing on an
+    # unresolved binding would charge the caller for a resolver that could not
+    # answer — and the resolver's own `status != OK` branch, three lines below
+    # the call site, is what owns that outcome.
+    return not seen
 
 
 # vibe-ic#903 — the two paths a role's model can be bound by. Named so the
@@ -1267,11 +1320,90 @@ def _docker_ok(container: str) -> bool:
         return False
 
 
+#: How far outside a rail a node may sit before the operating point is called
+#: wrong. A junction that is genuinely forward-biased on a diode-connected tap
+#: sits a few hundred millivolts up; a node the solver put outside the rails
+#: because nothing in the circuit holds it there is out by VOLTS. The margin is
+#: a FRACTION of the block's own supply, not a millivolt constant, so the same
+#: rule reads a 1.2 V core and a 5 V I/O domain the same way. Tool/PDK/chip-
+#: AGNOSTIC.
+DC_OP_RAIL_MARGIN_FRACTION = 0.25
+
+#: `<name> <value>` rows of the operating-point table ngspice prints on every
+#: `-b` run ("Initial Transient Solution" / the `op` node table). A branch
+#: current row (`v_vdd#branch`) is NOT a node voltage and is excluded by name.
+_OP_ROW_RE = re.compile(
+    r"^\s*([A-Za-z_][\w.:\[\]]*)\s*=?\s+"
+    r"(-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?)\s*$")
+
+
+def dc_op_rail_excursions(log_text: str, supply_v: Optional[float]
+                          ) -> List[Tuple[str, float]]:
+    """INTERNAL node voltages the OPERATING POINT put outside the block's rails.
+
+    THE INVARIANT: a node of a block powered between 0 and `supply_v` cannot
+    sit meaningfully above `supply_v` or below 0 at DC. Nothing in the circuit
+    can hold it there, so a solution that says it does is a solution about
+    nothing -- and it is a solution every downstream number was then computed
+    from. Until now no gate in this flow ever looked: the emitted testbench
+    measures the block's OUTPUT, and the operating point the simulator prints
+    immediately above those measurements was read by nobody.
+
+    READS THE SIMULATOR'S OWN OUTPUT, ADDS NO CARD. The table is printed
+    unconditionally by `ngspice -b`, so this costs no simulator time and --
+    the load-bearing part -- every emitted deck stays byte-identical, which a
+    `.meas`-card implementation could not have promised.
+
+    Returns [(node, volts), ...] sorted worst-first; empty when the operating
+    point is inside the rails OR when there is nothing to judge against
+    (`supply_v is None`, no table in the log). The caller distinguishes those
+    two -- see `rail_invariant` in the sidecar -- because "checked and clean"
+    and "could not check" are different answers and this list cannot tell them
+    apart on its own."""
+    if not isinstance(supply_v, (int, float)) or supply_v <= 0:
+        return []
+    margin = abs(float(supply_v)) * DC_OP_RAIL_MARGIN_FRACTION
+    hi, lo = float(supply_v) + margin, -margin
+    worst: Dict[str, float] = {}
+    for raw in (log_text or "").splitlines():
+        m = _OP_ROW_RE.match(raw)
+        if not m:
+            continue
+        name = m.group(1)
+        if "#branch" in name or name.lower() in ("temp", "tnom"):
+            continue
+        # INTERNAL TO THE BLOCK, which is what the invariant is about. A node
+        # inside the device under test is printed with its instance prefix
+        # (`xdut.…`); a bare name is a TESTBENCH node. Judging those against
+        # the block's core supply would refuse every design whose stimulus
+        # legitimately sits in another domain — an I/O rail, a boost node, a
+        # reference above the core — and MEASURED here, the one node a raised
+        # reference puts out of range first is the testbench source itself.
+        if "." not in name:
+            continue
+        try:
+            v = float(m.group(2))
+        except ValueError:
+            continue
+        if v > hi or v < lo:
+            # The same node appears once per printed operating point (a run
+            # with several analyses prints several); keep the worst.
+            if abs(v) > abs(worst.get(name, 0.0)):
+                worst[name] = v
+    return sorted(worst.items(), key=lambda kv: -abs(kv[1]))
+
+
 def verify_with_ngspice(container: str, block: str, sp_text: str,
                         tb_text: str,
-                        real_project: Optional[Path] = None) -> Dict[str, Any]:
+                        real_project: Optional[Path] = None,
+                        supply_v: Optional[float] = None) -> Dict[str, Any]:
     """Run the testbench in the EDA container. An unreachable container is a
-    CAPABILITY gap (`NOT_VERIFIED_NO_SIMULATOR`), never a netlist defect."""
+    CAPABILITY gap (`NOT_VERIFIED_NO_SIMULATOR`), never a netlist defect.
+
+    `supply_v` is the rail the emitted testbench drives, used ONLY by
+    `dc_op_rail_excursions`. `None` leaves the rail invariant unevaluated and
+    says so (an empty `rail_excursions` list is then NOT a claim that the
+    operating point was checked -- `rail_invariant` records which it was)."""
     if shutil.which("docker") is None or not _docker_ok(container):
         return {"simulation_verified": False,
                 "simulation_status": "NOT_VERIFIED_NO_SIMULATOR",
@@ -1288,8 +1420,9 @@ def verify_with_ngspice(container: str, block: str, sp_text: str,
     deck_rel = f"{_CANONICAL_ANALOG}/{block}"
     stage = f"{root}/{deck_rel}"
     try:
-        subprocess.run(_ce.docker_exec_argv(container, "mkdir", "-p", stage),
-                       capture_output=True, text=True, timeout=120)
+        _pr.run_best_effort(
+            _ce.docker_exec_argv(container, "mkdir", "-p", stage),
+            capture_output=True, text=True)
         with tempfile.TemporaryDirectory(prefix="a3sim_") as td:
             local = Path(td)
             (local / deck_rel).mkdir(parents=True, exist_ok=True)
@@ -1302,25 +1435,30 @@ def verify_with_ngspice(container: str, block: str, sp_text: str,
                 real_deck_dir=(real_project / deck_rel
                                if real_project is not None else None))
             for f in (f"{block}.sp", f"tb_{block}.sp"):
-                subprocess.run(["docker", "cp", str(local / deck_rel / f),
-                                f"{container}:{stage}/{f}"],
-                               capture_output=True, text=True, timeout=300)
+                _pr.run_best_effort(
+                    ["docker", "cp", str(local / deck_rel / f),
+                     f"{container}:{stage}/{f}"],
+                    capture_output=True, text=True)
             for rel in staged:
-                subprocess.run(
-                    _ce.docker_exec_argv(container, "mkdir", "-p", f"{root}/{str(Path(rel).parent)}"),
-                    capture_output=True, text=True, timeout=120)
-                subprocess.run(["docker", "cp", str(local / rel),
-                                f"{container}:{root}/{rel}"],
-                               capture_output=True, text=True, timeout=300)
+                _pr.run_best_effort(
+                    _ce.docker_exec_argv(
+                        container, "mkdir", "-p",
+                        f"{root}/{str(Path(rel).parent)}"),
+                    capture_output=True, text=True)
+                _pr.run_best_effort(["docker", "cp", str(local / rel),
+                                     f"{container}:{root}/{rel}"],
+                                    capture_output=True, text=True)
         # `sh -lc` is deliberately NOT used: a login shell sources the EDA
         # image's profile, which was measured to abort with a syntax error
         # under dash and swallow the probe's answer, so every block came back
         # NOT_VERIFIED_NO_SIMULATOR on a container that had ngspice.
         ng = None
         for cand in ("ngspice", "/foss/tools/bin/ngspice"):
-            probe = subprocess.run(
-                _ce.docker_exec_argv(container, "sh", "-c", f"command -v {cand} >/dev/null 2>&1 && echo yes || echo no"),
-                capture_output=True, text=True, timeout=120)
+            probe = _pr.run_best_effort(
+                _ce.docker_exec_argv(
+                    container, "sh", "-c",
+                    f"command -v {cand} >/dev/null 2>&1 && echo yes || echo no"),
+                capture_output=True, text=True)
             if "yes" in (probe.stdout or ""):
                 ng = cand
                 break
@@ -1345,10 +1483,82 @@ def verify_with_ngspice(container: str, block: str, sp_text: str,
         # Dropping the login shell was the wrong half of that fix.
         # `analog_real_corner_sweep` and `analog_a6_native_pv` already invoke
         # the container through `bash -lc` for exactly this reason.
-        cp = subprocess.run(
-            _ce.docker_exec_argv(container, "bash", "-lc", f"cd {stage} && {ng} -b tb_{block}.sp 2>&1"),
-            capture_output=True, text=True, timeout=900)
+        # NO WALL CLOCK. This call carried `timeout=900`, and a 900 s clock on
+        # a simulator is the defect vibe-ic#2051 removed everywhere else --
+        # restated here in the worst possible place, because of WHERE its
+        # expiry landed. `subprocess.TimeoutExpired` is a
+        # `subprocess.SubprocessError`, so the deadline firing fell into the
+        # handler below and this function answered
+        # `NOT_VERIFIED_NO_SIMULATOR`: the ONE status that means the binary is
+        # not there. MEASURED on this block: the delta-sigma testbench asks for
+        # a 399251 ns transient and takes ~14 m 50 s on a loaded host, i.e. the
+        # verdict was a coin toss against a 15 m clock, and losing the toss
+        # reported a simulator that RAN as a simulator that was ABSENT.
+        #
+        # `deadline_s=0` is GNU `timeout`'s documented "disable the associated
+        # timeout" -- the same expression `analog_real_corner_sweep._run_ngspice`
+        # uses for its `run_to_completion` (A4), built by the same
+        # `_container_exec` argv function, so there is one container-entry
+        # shape and not two. `_progress_run.run` supervises the child on
+        # output / CPU / I/O and reaps only a job that has STOPPED moving:
+        # a run that is legitimately slow is never cut off, and a run that is
+        # genuinely wedged raises `Stalled`, which is a finding about the child.
+        #
+        # `container_deadline_argv` + `_pr.run`, NOT `run_in_container`, and the
+        # difference is deliberate: the wrapper ALSO refuses a container whose
+        # image is not the pin. That refusal is correct and A4/A6 already carry
+        # it, but it is a DIFFERENT change with a fleet-wide blast radius --
+        # MEASURED on 8HD-6, the shared `vibeic-eda` container holds
+        # `sha256:06537f7e` (0.3.46) while the pin names `sha256:8da785a8`
+        # (0.3.47), so adopting it here turns `test_analog_a3_netlist_emit::
+        # test_every_library_class_renders_a_netlist_that_actually_converges`
+        # red on this host. Removing the wall clock does not require it, and
+        # smuggling it in under this change would hide it.
+        try:
+            cp = _pr.run(
+                _ce.container_deadline_argv(
+                    container, f"cd {stage} && {ng} -b tb_{block}.sp 2>&1",
+                    deadline_s=0, shell=("bash", "-lc")),
+                capture_output=True, text=True, errors="replace")
+        except _pr.Stalled as exc:
+            # A STOPPED JOB HAS ITS OWN NAME. It is not an absent simulator and
+            # it is not a netlist that did not converge -- every readable
+            # progress signal sat still while we looked. Naming it anything
+            # else charges the design for a host condition.
+            return {"simulation_verified": False,
+                    "simulation_status": "SIMULATION_STALLED",
+                    "detail": f"the simulator stopped making progress: {exc}"}
         out = (cp.stdout or "") + (cp.stderr or "")
+        # A RUN THAT WAS STOPPED IS NOT A RUN THAT ANSWERED. `_container_exec`
+        # returns 124 when a deadline fires -- which cannot happen here, since
+        # this call sets none -- so a 124 means something OUTSIDE the flow ended
+        # the simulator, and 127 means `timeout` itself was missing from the
+        # image. Both are statements about the machine, so neither may be
+        # recorded as the netlist's verdict.
+        if cp.returncode == _ce.TIMEOUT_EXPIRED_RC:
+            # `describe_result` would say "the container-side deadline of 0s
+            # expired", which is exactly backwards: this call sets NO deadline,
+            # so a 124 means something OUTSIDE the flow ended the simulator.
+            # Same wording as `analog_real_corner_sweep._run_ngspice` gives its
+            # own no-deadline case, for the same reason.
+            not_a_verdict = (
+                "SIMULATION_STOPPED_EXTERNALLY",
+                "this run was given NO deadline by the flow and was stopped "
+                "anyway (rc 124). Something outside the flow ended the "
+                "simulator: this is a run that was STOPPED, not a measurement "
+                "that came back empty")
+        elif cp.returncode == _ce.TIMEOUT_UNAVAILABLE_RC:
+            not_a_verdict = ("SIMULATION_INVOCATION_FAILED",
+                             _ce.describe_result(cp, 0))
+        else:
+            not_a_verdict = None
+        if not_a_verdict is not None:
+            status, why = not_a_verdict
+            return {"simulation_verified": False,
+                    "simulation_status": status,
+                    "ngspice_rc": cp.returncode,
+                    "detail": why,
+                    "log_tail": out.strip().splitlines()[-25:]}
         tail = out.strip().splitlines()[-25:]
         bad = ("doAnalyses: iteration limit reached" in out
                or "singular matrix" in out.lower()
@@ -1356,6 +1566,23 @@ def verify_with_ngspice(container: str, block: str, sp_text: str,
                or "aborted" in out.lower()
                or "MEAS" not in out)
         meas = [ln.strip() for ln in out.splitlines() if "MEAS" in ln]
+        # THE RAIL INVARIANT. The simulator prints an operating-point node
+        # table on every `-b` run; reading it costs nothing and answers a
+        # question no other gate asks -- see `dc_op_rail_excursions`.
+        rails = dc_op_rail_excursions(out, supply_v)
+        if cp.returncode == 0 and not bad and rails:
+            return {
+                "simulation_verified": False,
+                "simulation_status": "DC_OP_NODE_ABOVE_RAIL",
+                "ngspice_rc": cp.returncode,
+                "measurements": meas,
+                "rail_excursions": rails,
+                "rail_invariant": "CHECKED",
+                "detail": ("the operating point puts " + str(len(rails)) +
+                           " node(s) outside the supply rails: " +
+                           ", ".join(f"{n}={v:.6g}V" for n, v in rails[:8])),
+                "log_tail": tail,
+            }
         return {
             "simulation_verified": (cp.returncode == 0 and not bad),
             "simulation_status": ("CONVERGED" if (cp.returncode == 0 and
@@ -1363,16 +1590,25 @@ def verify_with_ngspice(container: str, block: str, sp_text: str,
                                   else "DID_NOT_CONVERGE"),
             "ngspice_rc": cp.returncode,
             "measurements": meas,
+            "rail_excursions": rails,
+            "rail_invariant": ("CHECKED" if isinstance(supply_v, (int, float))
+                               else "NOT_MEASURED_NO_SUPPLY"),
             "log_tail": tail,
         }
     except (OSError, subprocess.SubprocessError) as exc:
+        # NOT_VERIFIED_NO_SIMULATOR IS OWED ONLY WHEN THE BINARY IS ABSENT --
+        # the two returns above this `try` are the only places that can say it.
+        # Anything that goes wrong once the run has started is a failure of THIS
+        # invocation, and it gets its own name so a reader is never told a
+        # simulator was missing when one was running.
         return {"simulation_verified": False,
-                "simulation_status": "NOT_VERIFIED_NO_SIMULATOR",
+                "simulation_status": "SIMULATION_INVOCATION_FAILED",
                 "detail": f"container invocation failed: {exc}"}
     finally:
         try:
-            subprocess.run(_ce.docker_exec_argv(container, "rm", "-rf", stage),
-                           capture_output=True, text=True, timeout=120)
+            _pr.run_best_effort(
+                _ce.docker_exec_argv(container, "rm", "-rf", stage),
+                capture_output=True, text=True)
         except (OSError, subprocess.SubprocessError):
             pass
 
@@ -1428,9 +1664,17 @@ def _drop_stale(bdir: Path, block: str) -> List[str]:
 
 
 # ── per-block driver ──────────────────────────────────────────────────────
+#: The refusal a block owes a caller whose explicit `--pdk` it does not bind.
+#: Named, because "the PDK you asked for is not the PDK this block uses" is a
+#: different fact from every other reason this producer declines, and a reader
+#: who is only told "no netlist" will re-run the same command.
+PDK_NOT_BOUND_BY_BLOCK = "PDK_NOT_BOUND_BY_BLOCK"
+
+
 def emit_for_block(project: Path, entry: Dict[str, Any], pdk: str,
                    container: str, verify_sim: bool,
-                   domain: Optional[Any] = None) -> Dict[str, Any]:
+                   domain: Optional[Any] = None,
+                   pdk_explicit: bool = False) -> Dict[str, Any]:
     name = str(entry.get("name") or entry.get("block") or entry.get("type"))
     bdir = project / _CANONICAL_ANALOG / name
     sp_path = bdir / f"{name}.sp"
@@ -1491,6 +1735,25 @@ def emit_for_block(project: Path, entry: Dict[str, Any], pdk: str,
     sv = spec_values(spec)
     roles = sorted({d["role"] for d in ir.get("devices") or []})
     pdkctx = resolve_pdk_context(project, pdk, container, roles, domain)
+    # AN EXPLICIT REQUEST THE BLOCK DOES NOT BIND IS A REFUSAL, NEVER SILENCE.
+    # NOTHING IS WRITTEN AND NOTHING IS DROPPED: the block's artefacts are not
+    # wrong — the REQUEST is — and deleting a correct netlist because a caller
+    # typed the wrong `--pdk` would turn a caller's mistake into data loss.
+    if pdk_explicit and not pdk_request_is_bound(
+            pdk, pdkctx.get("family"), pdkctx.get("registry_family")):
+        rec.update(action="refused", emitted=False,
+                   status=PDK_NOT_BOUND_BY_BLOCK,
+                   requested_pdk=str(pdk),
+                   bound_pdk=(pdkctx.get("registry_family")
+                              or pdkctx.get("family")),
+                   reason=(f"`--pdk {pdk}` was given explicitly, but this "
+                           f"block binds "
+                           f"`{pdkctx.get('registry_family') or pdkctx.get('family')}`"
+                           f" — the family its own design declares. A PDK is "
+                           f"discovered from the design, so this argument is a "
+                           f"request; it was not honoured and nothing was "
+                           f"emitted for it."))
+        return rec
     if pdkctx["status"] != "OK":
         _drop_stale(bdir, name)
         gap = write_gap(bdir, project, name, btype, "NEEDS_NATIVE_TEMPLATE",
@@ -1647,8 +1910,11 @@ def emit_for_block(project: Path, entry: Dict[str, Any], pdk: str,
     sim: Dict[str, Any] = {"simulation_verified": False,
                            "simulation_status": "NOT_ATTEMPTED"}
     if verify_sim and tb_text:
-        sim = verify_with_ngspice(container, name, sp_text, tb_text,
-                                  real_project=project)
+        _supply = (tb_env or {}).get("supply")
+        sim = verify_with_ngspice(
+            container, name, sp_text, tb_text, real_project=project,
+            supply_v=(float(_supply) if isinstance(_supply, (int, float))
+                      else None))
         if sim.get("simulation_status") == "DID_NOT_CONVERGE":
             _drop_stale(bdir, name)
             gap = write_gap(bdir, project, name, btype,
@@ -1660,6 +1926,28 @@ def emit_for_block(project: Path, entry: Dict[str, Any], pdk: str,
             rec.update(action="gap", emitted=False,
                        status="NETLIST_NOT_SIMULATABLE",
                        gap_path=str(gap.relative_to(project)))
+            return rec
+        # BLOCKING, and deliberately the same tier as non-convergence. A run
+        # that converged onto an operating point putting the block's own nodes
+        # outside its own rails has not verified the netlist -- it has produced
+        # a solution the circuit does not hold -- and every measurement in the
+        # same log was computed from it. Emitting on it would publish a deck
+        # whose sidecar says `simulation_verified: false` while every reader
+        # downstream sees a `.sp` that exists.
+        if sim.get("simulation_status") == "DC_OP_NODE_ABOVE_RAIL":
+            _drop_stale(bdir, name)
+            gap = write_gap(bdir, project, name, btype,
+                            "NETLIST_DC_OP_OUTSIDE_RAILS",
+                            ("the rendered netlist passed every static check "
+                             "and the simulator converged, but the operating "
+                             "point puts node(s) of the block outside its own "
+                             "supply rails, so the solution every measurement "
+                             "was taken from is not one the circuit holds"),
+                            checker_findings=findings, simulation=sim)
+            rec.update(action="gap", emitted=False,
+                       status="NETLIST_DC_OP_OUTSIDE_RAILS",
+                       gap_path=str(gap.relative_to(project)),
+                       rail_excursions=sim.get("rail_excursions"))
             return rec
     elif verify_sim and not tb_text:
         sim = {"simulation_verified": False,
@@ -1786,7 +2074,8 @@ def emit_for_block(project: Path, entry: Dict[str, Any], pdk: str,
 
 
 def run(project: Path, only: Optional[str], pdk: str, container: str,
-        verify_sim: bool) -> Tuple[int, Dict[str, Any]]:
+        verify_sim: bool, pdk_explicit: bool = False
+        ) -> Tuple[int, Dict[str, Any]]:
     entries, src = block_entries(project)
     if not entries:
         return 1, {"producer": PRODUCER,
@@ -1811,11 +2100,31 @@ def run(project: Path, only: Optional[str], pdk: str, container: str,
     domains = block_voltage_domains(project, all_entries)
     records = [emit_for_block(
         project, e, pdk, container, verify_sim,
-        domains.get(str(e.get("name") or e.get("block") or e.get("type"))))
+        domains.get(str(e.get("name") or e.get("block") or e.get("type"))),
+        pdk_explicit=pdk_explicit)
         for e in entries]
     emitted = [r for r in records if r.get("emitted")]
     kept = [r for r in records if r.get("action") == "kept_preexisting"]
     gaps = [r for r in records if r.get("action") == "gap"]
+    refused = [r for r in records if r.get("action") == "refused"]
+    # A REFUSED REQUEST OUTRANKS EVERY OTHER VERDICT IN THIS REPORT. The other
+    # blocks of the same invocation may have emitted perfectly well, and saying
+    # EMITTED because they did would let the one refusal be read as noise on a
+    # successful run — which is the silence this refusal exists to end.
+    if refused:
+        return 1, {
+            "producer": PRODUCER,
+            "producer_fingerprint": producer_fingerprint(),
+            "block_list_source": src,
+            "verdict": PDK_NOT_BOUND_BY_BLOCK,
+            "reason": "; ".join(str(r.get("reason")) for r in refused),
+            "requested_pdk": str(pdk),
+            "blocks_refused": [r["block"] for r in refused],
+            "bound_pdk": {r["block"]: r.get("bound_pdk") for r in refused},
+            "blocks_total": len(records),
+            "blocks_emitted": len(emitted),
+            "records": records,
+        }
     report = {
         "producer": PRODUCER,
             "producer_fingerprint": producer_fingerprint(),
@@ -1852,8 +2161,12 @@ def main(argv: Optional[List[str]] = None) -> int:
                                     formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("project", type=Path)
     ap.add_argument("--block", default=None)
-    ap.add_argument("--pdk", default=os.environ.get("VIBEIC_ANALOG_PDK",
-                                                    "sky130"))
+    # DEFAULT `None`, NOT the family name. `--pdk` is a REQUEST (the family is
+    # discovered from the design), so the refusal below has to tell a caller who
+    # ASKED for a family from a caller who asked for nothing and got this
+    # producer's historical default. With `default="sky130"` the two are the
+    # same string and every sg13g2/gf180 project in the repo would refuse.
+    ap.add_argument("--pdk", default=None)
     ap.add_argument("--container", default=DEFAULT_CONTAINER)
     ap.add_argument("--verify-sim", action="store_true",
                     help="additionally run the generated testbench through "
@@ -1865,8 +2178,13 @@ def main(argv: Optional[List[str]] = None) -> int:
     if not project.is_dir():
         print(f"error: not a directory: {project}", file=sys.stderr)
         return 1
-    rc, report = run(project, args.block, args.pdk, args.container,
-                     args.verify_sim)
+    env_pdk = os.environ.get("VIBEIC_ANALOG_PDK")
+    # An env var IS an explicit request — somebody typed it — and it is the one
+    # `--pdk` has always read, so it keeps that meaning here.
+    pdk = args.pdk or env_pdk or DEFAULT_PDK
+    rc, report = run(project, args.block, pdk, args.container,
+                     args.verify_sim,
+                     pdk_explicit=bool(args.pdk or env_pdk))
     if args.json:
         out = Path(args.json)
         out.parent.mkdir(parents=True, exist_ok=True)
@@ -1882,6 +2200,11 @@ def main(argv: Optional[List[str]] = None) -> int:
             f"NO netlist emitted — {report['blocks_gap']} netlist_gap.json "
             f"written ({report['gap_status']}); invoke skill `{SKILL}`"),
             file=sys.stderr)
+    elif report.get("verdict") == PDK_NOT_BOUND_BY_BLOCK:
+        print(f"{PRODUCER}: {PDK_NOT_BOUND_BY_BLOCK} — requested "
+              f"`{report.get('requested_pdk')}`, "
+              f"bound {report.get('bound_pdk')}; nothing was emitted. "
+              f"{report.get('reason')}", file=sys.stderr)
     else:
         print(f"{PRODUCER}: {report.get('verdict')} — "
               f"{report.get('reason')}", file=sys.stderr)
