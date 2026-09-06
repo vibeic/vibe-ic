@@ -58,6 +58,7 @@ import vector_ops_synth as _vec                 # noqa: E402  bit/byte reverse /
 import waveform_ext_synth as _wfx               # noqa: E402  waveform-table envelope extension -> RTL
 import comb_gate_synth as _cg                   # noqa: E402  single gate / wire / boolean equation -> RTL
 import residual_combinational_synth as _rc      # noqa: E402  constant output / equality comparator -> RTL
+import threshold_ladder_synth as _tl          # noqa: E402  sensor threshold ladder + direction -> RTL
 # --- v1.1.76 extraction-completeness families (wave-3: aggressive remainder) ---
 import arithmetic_synth as _arith               # noqa: E402  half/full/N-bit/2's-comp adder + add-sub -> RTL
 import counter_advanced_synth as _cadv          # noqa: E402  BCD/saturating/down/clock counter -> RTL
@@ -241,6 +242,10 @@ def _rec_vector_ops(text: str):
 
 def _rec_waveform_ext(text: str):
     return {"present": True} if _wfx.synth(text, "TopModule") else None
+
+
+def _rec_threshold_ladder(text: str):
+    return {"present": True} if _tl.synth(text, "TopModule") else None
 
 
 def _rec_comb_gate(text: str):
@@ -557,6 +562,11 @@ REGISTRY: Tuple[ArtifactType, ...] = (
                  _rec_waveform_ext, _wfx.synth,
                  "Waveform variants the base timing_waveform skips: combinational-by-"
                  "consistency (no clock col) and general posedge-1FF; host-verified."),
+    ArtifactType("threshold_ladder", "Sensor Threshold Ladder + Change-Direction Output",
+                 ("L6", "L15", "L4"), _rec_threshold_ladder, _tl.synth,
+                 "Monotonic threshold ladder: a zone table over ONE thermometer-coded "
+                 "sensor bus plus one output asserted by the DIRECTION of the last zone "
+                 "change, whose sense the prompt pins in the bottom zone."),
     ArtifactType("comb_gate", "Combinational Gate / Wire / Boolean Equation", ("L4", "L15"),
                  _rec_comb_gate, _cg.synth,
                  "Single named logic gate, wire pass-through, per-output reduction/"
