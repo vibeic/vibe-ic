@@ -177,9 +177,14 @@ def _capture_pdk_revision(project: Path, container: str) -> Dict[str, Any]:
                 f"implementation is in this state legitimately; a run that "
                 f"placed and routed is not.")
     except Exception as exc:                                # noqa: BLE001
+        # #2069 — the refusal token is spelled literally on THIS path and only
+        # here, because the import that owns it is what just failed. It is the
+        # same string as `pdk_revision_resolve.REFUSAL_NOT_RECORDED`, and the
+        # test that pins them equal is the thing that keeps it so.
         rec = {"schema": 1,
                "resolved": False,
                "revision": None,
+               "refusal": "PDK_REVISION_NOT_RECORDED",
                "trees": [],
                "read_in": f"container:{container}",
                "derived_from": "run tool logs",
@@ -1143,9 +1148,14 @@ def main() -> int:
     # Taken here rather than beside the image capture because it reads the
     # run's own tool logs, which do not exist until the phases have run.
     _pdk_rec = _capture_pdk_revision(project, args.container)
-    if not _pdk_rec.get("resolved"):
+    if _pdk_rec.get("refusal"):
+        # #2069 — the advisory leads with the SAME token the record carries and
+        # the publish gate raises, so "this run was refused for a missing PDK
+        # revision" is one greppable string across the three places it is said.
+        # Keyed on the record's own `refusal` rather than on `not resolved`, so
+        # the runner cannot advise one thing while the record says another.
         advisories.append(
-            f"PDK revision NOT RECORDED: {_pdk_rec.get('reason')} — this run's "
+            f"{_pdk_rec['refusal']}: {_pdk_rec.get('reason')} — this run's "
             f"sign-off cannot be re-derived, and benchmark_evidence_publish "
             f"will REFUSE to stage it (see reports/pdk_revision.json)")
 

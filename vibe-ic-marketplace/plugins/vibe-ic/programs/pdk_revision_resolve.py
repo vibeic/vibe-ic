@@ -156,6 +156,27 @@ if str(_HERE) not in sys.path:                      # pragma: no cover - path se
 #: different notions of where the run's PDK record lives.
 RECORD_REL = "reports/pdk_revision.json"
 
+#: THE NAME THIS REFUSAL HAS — vibe-ic#2069.
+#:
+#: The refusal itself already existed and was already blocking; what it did not
+#: have was a NAME. `benchmark_evidence_publish` raised prose, the one-shot
+#: runner appended different prose to its advisory list, and this program
+#: printed a third wording to stderr. Three renderings of one fact, none of
+#: them greppable, so a consumer could not key on "this run was refused for a
+#: missing PDK revision" without matching English — and a reader of the record
+#: FILE alone saw `resolved: false` and no statement at all about what that
+#: costs.
+#:
+#: Defined HERE, in the program that writes the record, and imported by every
+#: reader that refuses on it, for the same reason `record_gaps` is: a token
+#: spelled in three places is three tokens.
+#:
+#: It is a REFUSAL, never a verdict about a design, and never a default. The
+#: record's `revision` stays `None` when nothing could be read — the token
+#: names the absence, it does not fill it. An `unknown` in `revision` would
+#: re-create the exact gap while looking like it had been closed.
+REFUSAL_NOT_RECORDED = "PDK_REVISION_NOT_RECORDED"
+
 SCHEMA = 1
 
 # --- source ids -------------------------------------------------------------
@@ -189,8 +210,16 @@ _VERSIONS_SEGMENT = "versions"
 
 #: A revision token: a hex identifier of at least 12 characters, or a dotted
 #: release number. See the docstring for the two placeholders this rejects.
-_HEX_TOKEN = re.compile(r"^[0-9a-fA-F]{12,64}$")
-_DOTTED_TOKEN = re.compile(r"^[vV]?\d+(?:\.\d+)+(?:[-+.][0-9A-Za-z]+)*$")
+#:
+#: `\\A`/`\\Z`, NOT `^`/`$` — vibe-ic#2069. `$` matches BEFORE a final
+#: newline, so `re.match(r"...$", "2.5\\n")` succeeds and a value read
+#: straight out of a file kept its framing and was accepted anyway. That
+#: defeats the point of making `is_revision_token` exact: the framing is the
+#: evidence that the token was not declared as itself. Caught by this lane's
+#: own test rather than reasoned about, which is why that test drives every
+#: framing form.
+_HEX_TOKEN = re.compile(r"\A[0-9a-fA-F]{12,64}\Z")
+_DOTTED_TOKEN = re.compile(r"\A[vV]?\d+(?:\.\d+)+(?:[-+.][0-9A-Za-z]+)*\Z")
 
 #: When a source names no component (a bare token file, or a path segment),
 #: the record still needs a key to corroborate on. This is that key. It is not
@@ -213,13 +242,37 @@ def is_revision_token(tok: Any) -> bool:
     """Is *tok* something that identifies a source state, or a placeholder?
 
     Pure, and deliberately narrow — see the docstring's PLACEHOLDERS note.
+
+    EXACT, NOT STRIPPED — vibe-ic#2069. This used to `tok.strip()` first, and
+    that one call is what let a slice of PROSE be accepted as a revision.
+    MEASURED on `pdk_registry.json` at v1.17.98: sweeping every string in the
+    registry and every `/`-separated segment of every string, ONE token was
+    accepted —
+
+        ' 2.5 '
+
+    — a fragment of an explanatory `_note` reading ``lmax 0.9 / 2.5 / 5.0``,
+    split on its slashes. Stripped it is `2.5`, which matches the dotted
+    release form and is a perfectly good revision-SHAPED string. It declares
+    nothing. A revision is what a PDK tree DECLARES — its revision file, its
+    tag, its install path — never a string that happens to look like one, and
+    a token arriving with whitespace around it was cut out of something else
+    rather than declared.
+
+    So the framing is the evidence, and it is not thrown away here. Every
+    caller that reads a DECLARATION already hands this an exact token —
+    `ln.split()` / `text.split()` / `Path(...).parts` all yield
+    whitespace-free fields — and the one caller that reads a value out of a
+    JSON document (`_parse_node_info`) strips it THERE, deliberately, where
+    "the surrounding whitespace is framing in this file format" is a statement
+    somebody made about that format rather than a blanket rule applied to
+    every string in the repo.
     """
     if not isinstance(tok, str):
         return False
-    t = tok.strip()
-    if not t:
+    if not tok:
         return False
-    return bool(_HEX_TOKEN.match(t) or _DOTTED_TOKEN.match(t))
+    return bool(_HEX_TOKEN.match(tok) or _DOTTED_TOKEN.match(tok))
 
 
 # ---------------------------------------------------------------------------
@@ -345,8 +398,20 @@ def _parse_node_info(text: str) -> Dict[str, str]:
     commit = doc.get(_NODE_INFO_KEY)
     if not isinstance(commit, dict):
         return {}
-    return {str(k): v.strip() for k, v in commit.items()
-            if is_revision_token(v)}
+    # The ONE place a DECLARED value may legitimately arrive with framing
+    # whitespace: a JSON string field. Stripped here, at the reader, because
+    # this is a statement about THIS file format — not by `is_revision_token`,
+    # which since #2069 is exact so that a fragment cut out of prose cannot
+    # pass as a declaration. Both halves use the same stripped value, so the
+    # token that is TESTED is the token that is STORED.
+    out: Dict[str, str] = {}
+    for k, v in commit.items():
+        if not isinstance(v, str):
+            continue
+        t = v.strip()
+        if is_revision_token(t):
+            out[str(k)] = t
+    return out
 
 
 def _sha256_text(text: str) -> str:
@@ -623,6 +688,11 @@ def build_record(trees: Sequence[Dict[str, Any]], read_in: str,
         rec["reason"] = ("; ".join(
             f"{t.get('tree')}: {t.get('reason')}" for t in unresolved)
             or "no PDK tree could be identified for this run")
+    # #2069 — the record states its own refusal, by name, so the file is
+    # legible without re-deriving the gap list from it. `None` on a complete
+    # record; the key is ALWAYS present so its absence cannot be read as
+    # "recorded".
+    rec["refusal"] = record_refusal(rec)
     return rec
 
 
@@ -658,6 +728,24 @@ def record_gaps(rec: Any) -> List[str]:
     if not rec.get("trees"):
         gaps.append("trees: the record names no PDK tree it read")
     return gaps
+
+
+def record_refusal(rec: Any) -> Optional[str]:
+    """`REFUSAL_NOT_RECORDED` when this record does not name a revision, else
+    `None`. vibe-ic#2069.
+
+    The one place the answer "is this run publishable on the PDK axis" is
+    decided, so the writer, this program's own exit code, the runner's advisory
+    and the publish gate all refuse by the SAME name for the SAME set of
+    records. `record_gaps` stays the place that says WHICH field is missing;
+    this says what the refusal is CALLED.
+
+    A record that could not be read at all is refused too: `None` reaching here
+    is "no record", which is the strongest form of not-recorded, and returning
+    `None` for it would make an absent record indistinguishable from a complete
+    one — the substitution this whole program exists to stop.
+    """
+    return REFUSAL_NOT_RECORDED if record_gaps(rec) else None
 
 
 def load_record(run: Path) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
@@ -737,8 +825,9 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     gaps = record_gaps(rec)
     if gaps:
-        print("pdk_revision_resolve: FAIL — the run's PDK revision is not "
-              "recorded:\n  - " + "\n  - ".join(gaps), file=sys.stderr)
+        print(f"pdk_revision_resolve: FAIL {REFUSAL_NOT_RECORDED} — the run's "
+              f"PDK revision is not recorded:\n  - " + "\n  - ".join(gaps),
+              file=sys.stderr)
         return 1
     print(f"pdk_revision_resolve: PASS — revision {rec['revision']}")
     return 0

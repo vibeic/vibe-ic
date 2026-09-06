@@ -135,18 +135,64 @@ def test_the_gate_actually_accepts_the_flag():
     assert 'add_argument("--pdk"' in src
 
 
-def test_the_call_site_passes_the_runs_pdk():
-    """The forwarding must be WIRED; a parameter nobody supplies is the same
-    empty argv with more code."""
+#: The ARGUMENT LIST the wired call site must pass, in order — the MEMBERS,
+#: not their number. `len(calls[0].args) == 2` stood here alone and is a count
+#: pinned against a live re-derivation of the checkout with nothing pinning the
+#: identities: `population_pin_without_its_member_set` names it, and it is
+#: right to. One departure and one arrival in the same edit leave the count at
+#: 2 and change what is forwarded — `step_declared_signoff_gates(project,
+#: pdk.name)` becoming `step_declared_signoff_gates(project, args.pdk)` is
+#: exactly that shape, and it is the defect this file exists to catch: what the
+#: gate is told must be the pdk the RUN BUILT, never the word the operator
+#: typed.
+_EXPECTED_CALL_ARGS = ("project", "pdk.name")
+
+
+def _signoff_gate_call_args():
+    """The wired call's argument expressions, re-derived from the checkout."""
     src = (PROGRAMS / "phase3_one_shot_runner.py").read_text()
-    tree = ast.parse(src)
-    calls = [n for n in ast.walk(tree)
+    calls = [n for n in ast.walk(ast.parse(src))
              if isinstance(n, ast.Call)
              and isinstance(n.func, ast.Name)
              and n.func.id == "step_declared_signoff_gates"]
-    assert len(calls) == 1, calls
-    assert len(calls[0].args) == 2, ast.unparse(calls[0])
-    assert ast.unparse(calls[0].args[1]) == "pdk.name"
+    assert len(calls) == 1, [ast.unparse(c) for c in calls]
+    return tuple(ast.unparse(a) for a in calls[0].args)
+
+
+def test_the_call_site_passes_the_runs_pdk():
+    """The forwarding must be WIRED; a parameter nobody supplies is the same
+    empty argv with more code.
+
+    The MEMBER SET first, then the count as `len()` of it. Comparing the whole
+    tuple in one assertion is what makes a same-count substitution visible:
+    a positional swap, a renamed source, or a second argument replaced by
+    another expression all leave `len(...) == 2` true and this assertion false.
+    """
+    got = _signoff_gate_call_args()
+    assert got == _EXPECTED_CALL_ARGS, (
+        f"the wired call forwards {got!r}, expected {_EXPECTED_CALL_ARGS!r}")
+    assert len(got) == len(_EXPECTED_CALL_ARGS)
+    # Kept explicitly: the SECOND argument is the load-bearing one, and a
+    # reader of a failure should not have to count tuple positions to see it.
+    assert got[1] == "pdk.name"
+
+
+def test_a_same_count_substitution_is_caught():
+    """MUTATION — the control the count pin could not have.
+
+    Swap one member for another of the SAME COUNT and require the comparison
+    to go red. `len(...) == 2` is true of every tuple below; only the member
+    comparison separates them, which is the entire claim of the rule this
+    repairs.
+    """
+    real = _signoff_gate_call_args()
+    assert real == _EXPECTED_CALL_ARGS, "the fixture must start from the truth"
+    for mutant in (("project", "args.pdk"),      # the REQUEST, not the build
+                   ("project", "pdk"),           # the object, not its name
+                   ("pdk.name", "project"),      # positions swapped
+                   ("run_dir", "pdk.name")):     # the first member replaced
+        assert len(mutant) == len(_EXPECTED_CALL_ARGS), mutant
+        assert mutant != _EXPECTED_CALL_ARGS, mutant
 
 
 def _code_of(module_name: str, func_name: str) -> str:

@@ -440,6 +440,15 @@ def _pdk_revision(run_dir: Path) -> Dict[str, object]:
     """The run's resolved PDK revision, or REFUSE. **BLOCKING** — a failure
     here stops the publish and stages nothing.
 
+    THE REFUSAL HAS A NAME — `pdk_revision_resolve.REFUSAL_NOT_RECORDED`
+    (`PDK_REVISION_NOT_RECORDED`), vibe-ic#2069. It is IMPORTED, not spelled,
+    for the same reason `record_gaps` is imported below: this refusal is
+    rendered in three places (here, the resolver's own stderr, the one-shot
+    runner's advisory) and until it had a name those were three different
+    English sentences about one fact, none of which a consumer could key on.
+    Every refusal raised here leads with the token and then names the field
+    that is missing.
+
     The record is READ, never re-derived: at publish time the tree that ran may
     be on another host, another image, or gone, so anything computed here would
     describe the PUBLISHER's PDK rather than the run's. That substitution is
@@ -469,7 +478,9 @@ def _pdk_revision(run_dir: Path) -> Dict[str, object]:
     rec, err = _prr.load_record(run_dir)
     if rec is None:
         raise Refuse(
-            f"the run records no PDK revision ({err} under {run_dir}). A "
+            f"{_prr.REFUSAL_NOT_RECORDED}: {_prr.RECORD_REL} is the missing "
+            f"field — the run records no PDK revision ({err} under "
+            f"{run_dir}). A "
             f"sign-off is a claim about a design measured against a PROCESS, "
             f"and this run names the process only by the word passed on the "
             f"command line — so the numbers in it cannot be re-derived later. "
@@ -481,7 +492,8 @@ def _pdk_revision(run_dir: Path) -> Dict[str, object]:
     gaps = _prr.record_gaps(rec)
     if gaps:
         raise Refuse(
-            f"{run_dir}/{_prr.RECORD_REL} does not name a PDK revision:\n  - "
+            f"{_prr.REFUSAL_NOT_RECORDED}: {run_dir}/{_prr.RECORD_REL} does "
+            f"not name a PDK revision. The missing field(s):\n  - "
             + "\n  - ".join(gaps)
             + "\n  This is NOT waivable by writing 'unknown' into the field: "
               "an unnamed process revision makes every sign-off number in this "
