@@ -44672,6 +44672,54 @@ _RE_DOC_TOP_MODULE_NAME_LABEL = re.compile(
 _RE_DOC_TOP_MODULE_INLINE_BACKTICK = re.compile(
     r"(?i)\bmodule\s+[`'\"](?P<name>[A-Za-z_][A-Za-z0-9_]{1,39})\s*[`'\"]"
 )
+# #2052 — the THIRD explicit prose convention, and the one measured absent on
+# BOTH Phase-1 front doors (#2049 O2): the author STATES what the top module is,
+# in a sentence, instead of labelling it.
+#
+#     The top module is `foo_top`.
+#     The top-level module is named foo_top.
+#     top-level module: foo_top
+#     top module `foo_top`
+#
+# Measured on v1.17.80 before this: `_doc_module_name_label_or_inline` returned
+# None for every copula form above, and so did the full
+# `_extract_top_module_from_docs` chain for the unquoted ones — the design's own
+# statement of its top was not read, and the run then published the
+# `chip_top` placeholder.
+#
+# GRAMMAR, NOT A BARE TOKEN. The identifier must be ADJACENT to a top-module
+# phrase — `top module` / `top-level module` — joined by a copula (`is`,
+# `shall be`, `must be`, `will be`) or a `:`/`=` label separator, optionally
+# through `named` / `called`. An identifier that merely appears somewhere in
+# the document is not a declaration and cannot match this.
+#
+# The value is captured in TWO shapes, deliberately filtered differently at the
+# call site:
+#   * `q` — the value the author wrote in code markup (backtick / quote / bold).
+#     Writing the name AS CODE is itself the explicit-naming act, so this shape
+#     takes the explicit-name filter and an exact alphabetic identifier
+#     (`RAM`, `LFSR`) survives.
+#   * `b` — a BARE value, accepted only when it closes the clause (end of line
+#     or `. , ; : ) ]`). A bare word after a copula is as likely to be an
+#     English predicate as an identifier — "the top module is instantiated
+#     twice." — so the call site additionally requires RTL identifier SHAPE for
+#     this branch. That is what keeps a sentence from naming a design.
+#
+# Chip-AGNOSTIC: English documentation grammar plus Verilog identifier grammar.
+# No chip, vendor, PDK or benchmark literal.
+_RE_DOC_TOP_MODULE_TOP_IS_NAMED = re.compile(
+    r"(?im)\b(?:the\s+)?top(?:[-_\s]+level)?[-_\s]+module\s*"
+    r"(?:"
+    r"(?:is|shall\s+be|must\s+be|will\s+be|should\s+be)\s+"
+    r"|[:=]\s*"
+    r")"
+    r"(?:(?:the|a|an)\s+)?"
+    r"(?:(?:named|called|titled)\s+)?"
+    r"(?:"
+    r"[`'\"*]{1,2}(?P<q>[A-Za-z_][A-Za-z0-9_]{1,39})[`'\"*]{1,2}"
+    r"|(?P<b>[A-Za-z_][A-Za-z0-9_]{1,39})[ \t]*(?=[.,;:)\]]|$)"
+    r")"
+)
 # #1900 — public benchmark prompts often state the required interface using an
 # imperative request rather than a ``Module Name:`` label, for example:
 #
@@ -44707,16 +44755,104 @@ _RE_DOC_TOP_MODULE_CONTRASTIVE_EXCLUSION = re.compile(
 )
 
 
+# ── ONE top-module vocabulary, shared by both Phase-1 front doors (#2052) ──
+#
+# `tools/phase1_engine/cli.py:_docs_door_top_module` publishes exactly these
+# strings, and imports them from here so the two doors cannot drift into two
+# spellings of one fact. A fact spelt in two places is a fact that will
+# disagree — that is what #2049 measured and what #2052 closes.
+
+#: The design's own input declared the top module.
+TOP_MODULE_STATUS_DECLARED = "declared_in_input"
+
+#: No extractor found a declaration. `top_module` is null. NOT an invitation to
+#: invent a name — that is what the `chip_top` sentinel used to do here.
+TOP_MODULE_STATUS_UNDECLARED = "top_undeclared"
+
+#: The question could not be ASKED (the docs door was unimportable). "Could not
+#: read it" is not "read it and there was nothing", and neither licenses a name.
+TOP_MODULE_STATUS_UNAVAILABLE = "docs_door_unavailable"
+
+#: The name exists but was DERIVED from the chip name rather than declared as a
+#: top module — `l1_ic_name_fallback`. Reported distinctly because a consumer
+#: that wants "the identifier the design declared" must not read this as one.
+TOP_MODULE_STATUS_DERIVED = "derived_from_chip_name"
+
+#: The `top_module_extraction_strategy` value that goes with
+#: TOP_MODULE_STATUS_UNDECLARED. It REPLACES `canonical_chip_top_sentinel`.
+TOP_MODULE_UNDECLARED_STRATEGY = "top_undeclared"
+
+#: `top_module_extraction_strategy` values that mean the DESIGN'S OWN input
+#: named the top. Kept in step with `_pack_top_module.DESIGN_OWNED_STRATEGIES`
+#: by `_top_module_status_for` reading that module's set when it is importable,
+#: so the two lists cannot fall out of step silently.
+_DESIGN_OWNED_TOP_STRATEGIES_FALLBACK = frozenset({
+    "rtl_filesystem_scan",
+    "staged_rtl_structural_top",
+    "doc_module_decl_or_heading",
+    "rtl_top_prose_v1_6_545",
+    "doc_prose_top_cell_v1_6_398",
+    "doc_prose_top_module_v1_6_409",
+})
+
+
+def _top_module_status_for(strategy: Optional[str]) -> str:
+    """The status that goes with a `top_module_extraction_strategy`.
+
+    A strategy is a record of WHICH extractor won. A status is a record of what
+    that means for a reader: did the DESIGN name its top, or did the flow derive
+    a label. Both are published, because a consumer that only reads the status
+    should not have to know the strategy vocabulary to be right.
+    """
+    strat = (strategy or "").strip()
+    if strat == TOP_MODULE_UNDECLARED_STRATEGY or not strat:
+        return TOP_MODULE_STATUS_UNDECLARED
+    if strat == "l1_ic_name_fallback":
+        return TOP_MODULE_STATUS_DERIVED
+    try:
+        import _pack_top_module as _ptm
+        owned = _ptm.DESIGN_OWNED_STRATEGIES
+    except Exception:
+        owned = _DESIGN_OWNED_TOP_STRATEGIES_FALLBACK
+    if strat in owned:
+        return TOP_MODULE_STATUS_DECLARED
+    # An unrecognised strategy is NOT read as a declaration. A value nobody
+    # classified is a value nobody vouched for.
+    return TOP_MODULE_STATUS_DERIVED
+
+
 def _doc_module_name_label_or_inline(extracted: Dict[str, str]) -> Optional[str]:
     """Return a module identifier stated by an explicit prose convention.
 
-    Recognizes a formal ``Module Name:`` label or an inline
-    ``module `<name>` `` reference. Returns the most-frequent valid candidate
-    from the strongest convention, or None. Chip-AGNOSTIC.
+    Recognizes, in descending strength:
+
+    1. a formal ``Module Name:`` label;
+    2. #2052 — a sentence that STATES the top module: the identifier adjacent
+       to a ``top module`` / ``top-level module`` phrase through a copula or a
+       ``:`` separator ("The top module is `foo_top`", "top-level module:
+       foo_top", "The top-level module is named foo_top");
+    3. an inline ``module `<name>` `` reference in running prose.
+
+    (2) outranks (3) because it is a statement about THE TOP of this design,
+    while (3) is a passing reference to some module. It sits below (1) because
+    a ``Module Name:`` field is a field, not a sentence.
+
+    A BARE (unmarked-up) value in convention (2) must additionally have RTL
+    identifier SHAPE — `_is_valid_top_module_candidate`, i.e. an underscore, a
+    digit or a canonical RTL suffix. Without that guard "the top module is
+    instantiated." would name a design ``instantiated``: a copula's object is
+    an English word until something says otherwise. A value the author wrote in
+    code markup has already said otherwise, so it takes the same
+    explicit-name filter as the other two conventions and an exact alphabetic
+    identifier (``RAM``, ``LFSR``) survives.
+
+    Returns the most-frequent valid candidate from the strongest convention
+    present, or None. Chip-AGNOSTIC.
     """
     if not extracted:
         return None
     label_counts: Dict[str, int] = {}
+    stated_counts: Dict[str, int] = {}
     inline_counts: Dict[str, int] = {}
     for _src, text in extracted.items():
         if not text:
@@ -44725,12 +44861,23 @@ def _doc_module_name_label_or_inline(extracted: Dict[str, str]) -> Optional[str]
             nm = (m.group("n1") or m.group("n2") or m.group("n3") or "").strip()
             if nm and _is_valid_explicit_module_name_candidate(nm):
                 label_counts[nm] = label_counts.get(nm, 0) + 1
+        for m in _RE_DOC_TOP_MODULE_TOP_IS_NAMED.finditer(text):
+            quoted = (m.group("q") or "").strip()
+            bare = (m.group("b") or "").strip()
+            # The two shapes are filtered differently ON PURPOSE — see the
+            # docstring. `quoted` is markup the author chose; `bare` is a word
+            # in a sentence and must look like an RTL identifier.
+            if quoted and _is_valid_explicit_module_name_candidate(quoted):
+                stated_counts[quoted] = stated_counts.get(quoted, 0) + 1
+            elif bare and _is_valid_top_module_candidate(bare):
+                stated_counts[bare] = stated_counts.get(bare, 0) + 1
         for m in _RE_DOC_TOP_MODULE_INLINE_BACKTICK.finditer(text):
             nm = (m.group("name") or "").strip()
             if nm and _is_valid_explicit_module_name_candidate(nm):
                 inline_counts[nm] = inline_counts.get(nm, 0) + 1
-    # A formal label is stronger than a passing inline module reference.
-    for counts in (label_counts, inline_counts):
+    # A formal label is stronger than a stated top, which is stronger than a
+    # passing inline module reference.
+    for counts in (label_counts, stated_counts, inline_counts):
         if counts:
             return sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))[0][0]
     return None
@@ -49960,21 +50107,37 @@ def gen_l9_integration_spec(project: Path,
                         _stamp.dump(_v1_6_405_l1_path, _v1_6_405_l1)
             except Exception:
                 pass
-    # v1.6.189 (#76 P1) — fall back to the runner's canonical
-    # `chip_top` default so L9.top_module is NEVER null when the
-    # phase2 emitter is known to produce `chip_top.sv`. Pre-v1.6.189
-    # null L9.top_module cascaded into `foundry_handoff_package_check`
-    # via v1.6.174 (the bracket-variant matrix degenerated to
-    # L1.ic_name-only), so PnR's `chip_top_asic.gds` didn't match
-    # `<L1.ic_name>.gds`. Defaulting top_module to `chip_top` makes
-    # the downstream variant set include the canonical PnR filename
-    # family. chip-AGNOSTIC: the default is the structural canonical
-    # name used by aid_class_rtl_gen for ALL chips, not a chip literal.
+    # v1.6.189 (#76 P1) fell back to the canonical `chip_top` default here so
+    # `L9.top_module` was NEVER null, because a null cascaded into
+    # `foundry_handoff_package_check` via v1.6.174 (the bracket-variant matrix
+    # degenerated to L1.ic_name-only) and PnR's `chip_top_asic.gds` then did
+    # not match `<L1.ic_name>.gds`.
+    #
+    # #2052 — THAT NAME IS INVENTED, and this door is the only place in Phase 1
+    # that still invents one. The other front door (`tools/phase1_engine`, fixed
+    # in v1.17.80 for #2049) answers the same question about the same bytes with
+    # `top_module: null` + `top_module_status: "top_undeclared"`, on the stated
+    # principle that a name nobody declared is not a name. Measured on this host
+    # over 283 published L9 documents: 51 of them carry
+    # `canonical_chip_top_sentinel`, i.e. 51 real designs whose published top
+    # module is a placeholder that reads exactly like an extracted identifier.
+    # The two doors are now ONE derivation and ONE refusal.
+    #
+    # The v1.6.189 cascade is NOT reopened by this: the honest signal it needed
+    # already exists and already fires here — `no_top_module_in_input` is stamped
+    # True on this branch (below), the strategy names the branch, and
+    # `top_module_status` states it in the SAME vocabulary the other door uses.
+    # A downstream consumer that needs a filename family applies its own
+    # documented default to a declared absence; what it must not do is read a
+    # placeholder as an extracted name, which is what it did before.
     top_module_default_applied = False
     if top_module is None:
-        top_module = "chip_top"
         top_module_default_applied = True
-        top_module_extraction_strategy = "canonical_chip_top_sentinel"
+        top_module_extraction_strategy = TOP_MODULE_UNDECLARED_STRATEGY
+    top_module_status = (TOP_MODULE_STATUS_UNDECLARED
+                         if top_module_default_applied
+                         else _top_module_status_for(
+                             top_module_extraction_strategy))
     no_top_module_in_input = _flag_no_X_in_input(
         top_module if not top_module_default_applied else None,
         evidence, "top_module")
@@ -50374,10 +50537,30 @@ def gen_l9_integration_spec(project: Path,
         #                                 heading, or intro `<X> is a CPU/...`.
         #   l1_ic_name_fallback         — L1.ic_name normalised to canonical
         #                                 Verilog identifier.
-        #   canonical_chip_top_sentinel — all extractors exhausted; default
-        #                                 to `chip_top` (last-resort, downstream
-        #                                 fixtures know this name).
+        #   top_undeclared              — #2052. All extractors exhausted.
+        #                                 `top_module` is null and
+        #                                 `top_module_status` says so. This
+        #                                 REPLACED `canonical_chip_top_sentinel`,
+        #                                 which published the invented name
+        #                                 `chip_top` in this same case.
         "top_module_extraction_strategy": top_module_extraction_strategy,
+        # #2052 — the SAME vocabulary the other Phase-1 front door
+        # (`tools/phase1_engine/cli.py:_docs_door_top_module`) publishes, so a
+        # reader comparing the two doors' L9 sees one fact, not two spellings.
+        #
+        # WHAT THIS FIELD IS A STATEMENT ABOUT. It is a statement about the
+        # design INPUT — did the input DECLARE a top module — exactly like
+        # `no_top_module_in_input` on the next line, and NOT a claim about
+        # whatever `top_module` currently holds. A later writer may legitimately
+        # put a value in `top_module` that Phase 1 never read out of the input:
+        # `_pack_top_module.apply` does precisely that, and it records the
+        # displacement in its own `protocol_reference_top_module` field and
+        # restamps `top_module_extraction_strategy`. Such a writer updates
+        # neither this field nor `no_top_module_in_input`, and that is correct
+        # for both: what the INPUT declared did not change because someone else
+        # wrote the field. Read this together with
+        # `top_module_extraction_strategy`, which is the record of who wrote it.
+        "top_module_status": top_module_status,
         "no_top_module_in_input": no_top_module_in_input,
         # ORGANIC-20260606 #490 — L9 port-key fragmentation. CANONICAL
         # key = `top_ports` (the key full_stack_tb_gen, the RTL/SDC/QSF/

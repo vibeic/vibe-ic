@@ -226,10 +226,17 @@ def _docs_door_top_module(text: str, source_name: str = "prose"):
     except Exception as exc:  # degrade LOUDLY — never silently
         print(f"[stub] WARN docs-door top-module derivation unavailable: "
               f"{type(exc).__name__}: {exc}", file=sys.stderr)
+        # The docs door is what DEFINES this vocabulary (#2052). If it could
+        # not be imported, this literal is the only spelling available, and it
+        # is the one case where the two sides cannot be compared anyway.
         return None, "docs_door_unavailable"
+    # #2052 — the status strings come FROM the docs door, not from a second
+    # copy typed here. `test_cz2052_one_front_door.py` pins that the two doors
+    # publish the same spellings; reading the constants is what makes that
+    # true by construction rather than by review.
     if cand:
-        return cand, "declared_in_input"
-    return None, "top_undeclared"
+        return cand, _docs.TOP_MODULE_STATUS_DECLARED
+    return None, _docs.TOP_MODULE_STATUS_UNDECLARED
 
 
 def _stub_l_docs_from_prose(docs_dir: Path, out_dir: Path,

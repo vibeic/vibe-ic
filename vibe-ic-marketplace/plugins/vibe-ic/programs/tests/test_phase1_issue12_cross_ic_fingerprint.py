@@ -207,11 +207,20 @@ def test_no_identical_non_empty_sibling_fields_between_aes_and_dram(tmp_path_fac
                            # marker for the top_module extraction strategy.
                            # Strategy enum values (`rtl_filesystem_scan`,
                            # `doc_module_decl_or_heading`, `l1_ic_name_fallback`,
-                           # `canonical_chip_top_sentinel`) are by design
+                           # `top_undeclared`) are by design
                            # the same string across chips that share the
                            # same extraction path. Not a chip-class
                            # scaffold leak.
                            "top_module_extraction_strategy",
+                           # #2052 — `top_module_status` is DERIVED FROM
+                           # `top_module_extraction_strategy` (see
+                           # `phase1_doc_one_shot_runner._top_module_status_for`)
+                           # and is the same enum family: it records which
+                           # extraction path ran, not anything about the chip.
+                           # Two chips that share a path share the marker, by
+                           # construction, exactly as the line above says of
+                           # the strategy it is computed from.
+                           "top_module_status",
                            # v1.6.273 — for #138 ORGANIC. L1.description
                            # extraction evidence dict carries the source
                            # path and extraction strategy. When both

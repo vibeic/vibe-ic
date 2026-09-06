@@ -44,7 +44,10 @@ Per-L-doc minimums (chip-AGNOSTIC, derived from semantic role):
   L7  (test debug)           ≥3 typed test scenarios
   L8  (timing)               ≥10 timing constants typed
   L9  (integration)          ≥3 typed (top_module + fsm_states[]
-                              + port list)
+                              + port list). #2052 — the top_module SLOT is
+                              filled by a DECLARED NAME or by an explicit
+                              `no_top_module_in_input == True`; see
+                              `_has_honest_no_top_module`.
   L10 (test cases)           ≥5 typed test cases
   L11 (behavioral + cal)     ≥3 typed fields counted across
                               behavioral_sequences and calibration_tables
@@ -425,6 +428,30 @@ def _has_honest_no_fsm(data: dict) -> bool:
         if k.lower().startswith("no_fsm") and _explicit_true(v):
             return True
     return False
+
+
+def _has_honest_no_top_module(data: dict) -> bool:
+    """L9 (#2052): doc explicitly declares the design INPUT named no top module.
+
+    Accepts ONLY an explicit `no_top_module_in_input == true` — a bare
+    missing/empty flag, or `false` (a design whose input DID name a top), keeps
+    the top-module slot unfilled (HONESTY GUARD (a)/(b)). Mirrors the L3 no-CRC
+    / L6 no-FSM / L7 no-test-debug / L11 no-OTP escapes and the
+    `L5.no_analog == True` clause this file's own header records.
+
+    WHY THIS IS NOT A LOOSENING, MEASURED. Before #2052 the docs front door
+    could not emit a null `top_module`: when every extractor came up empty it
+    wrote the placeholder `chip_top` (v1.6.189's `canonical_chip_top_sentinel`).
+    So this slot was filled for EVERY document that door produced, including
+    every document that had no name to give — the slot was already credited for
+    exactly the population this flag identifies, just credited to an invented
+    string instead of to a stated fact. #2052 stopped the invention; this keeps
+    the arithmetic identical rather than turning a vocabulary fix into a new red
+    on 51 real L9 documents (census on 8HD-6, 283 published L9s). A document
+    that carries NEITHER a name NOR this explicit flag still scores 0 here, on
+    both sides of the change.
+    """
+    return _explicit_true(data.get("no_top_module_in_input"))
 
 
 def _has_honest_no_test_debug(data: dict) -> bool:
@@ -1546,7 +1573,12 @@ def _check_l_doc(layer: int, data: dict,
                 f"tSRS_min_us / wake_pulse_us / etc.); have {n}.")
     elif layer == 9:
         n = 0
-        if isinstance(data.get("top_module"), str) and data["top_module"]:
+        # #2052 — the top-module SLOT: a name the design declared, or the
+        # design's own explicit statement that its input declared none. See
+        # `_has_honest_no_top_module` for why the second clause credits exactly
+        # the population the `chip_top` placeholder used to credit.
+        if (isinstance(data.get("top_module"), str) and data["top_module"]) \
+                or _has_honest_no_top_module(data):
             n += 1
         fsm_states = data.get("fsm_states") or data.get("states")
         if _list_len_of_dicts(fsm_states) > 0:
@@ -1589,8 +1621,11 @@ def _check_l_doc(layer: int, data: dict,
             if _n_ports == 0 and isinstance(_ports, list):
                 # port entries may be plain scalars/strings, not dicts
                 _n_ports = sum(1 for p in _ports if p not in (None, "", {}, []))
-            _has_top = (isinstance(data.get("top_module"), str)
-                        and bool(data.get("top_module")))
+            # #2052 — same slot, same reason: a declared name, or the
+            # design's explicit statement that its input declared none.
+            _has_top = ((isinstance(data.get("top_module"), str)
+                         and bool(data.get("top_module")))
+                        or _has_honest_no_top_module(data))
             _submods_explicit_empty = any(
                 isinstance(data.get(k), list) and len(data.get(k)) == 0
                 for k in ("submodules", "submodule_instances",

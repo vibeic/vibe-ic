@@ -479,8 +479,13 @@ stages:
       # THE FLOW'S OWN WRAPPER NAME, declared here rather than assumed in the
       # program. A die's hierarchy root is legitimately either the module the
       # intent names or this wrapper -- the module `design_one_shot_runner`
-      # auto-emits around a design, and the placeholder the
-      # `canonical_chip_top_sentinel` strategy publishes. Measured over the 10
+      # auto-emits around a design. (It was ALSO the placeholder the
+      # `canonical_chip_top_sentinel` strategy published until #2052 stopped
+      # Phase 1 inventing a name: the docs door now publishes `top_module:
+      # null` + `top_module_status: top_undeclared`. This declaration is
+      # unaffected — it names the WRAPPER the flow emits, which is a fact about
+      # the flow, not a fact Phase 1 was asserting about the design.) Measured
+      # over the 10
       # published cells that carry a stage-4 die: 3 roots equal the intent's
       # `top_module`, 6 are this wrapper, 1 is neither. Dropping this line would
       # reject 5 of 10, four of them ordinary flattened runs.
