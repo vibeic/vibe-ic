@@ -27,6 +27,8 @@ from typing import Any, Dict, List
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from _specrtl_common import (  # noqa: E402
     parse_verilog_ports, _parse_md_table_ports, Port, strip_comments,
+    _strip_subprograms, _PORT_DECL as _PORT_DECL_SPAN, _parse_module_params,
+    WIDTH_UNKNOWN,
 )
 
 # `parameter NAME = VALUE` / `localparam NAME = VALUE` (Verilog form).
@@ -53,7 +55,23 @@ def _dedup_ports(ports: List[Port]) -> List[Dict]:
 # (`input data vector` -> 'data'/'vector'); the markdown-table parser is precise
 # on its own and needs no such region gating.
 _FENCE = re.compile(r'```[a-zA-Z]*\n(.*?)```', re.S)
-_MODULE_SPAN = re.compile(r'\bmodule\b.*?\bendmodule\b', re.S)
+# vibe-ic#2060 — the span must OPEN on a real module HEADER, not on the English
+# word "module". Measured on the 18 real prompt-entry design inputs: every one of
+# these prompts says "module" in its first prose sentence ("Complete the given
+# partial System Verilog module `binary_to_bcd`", "Perform a LINT code review on
+# the `image_rotate` module") and closes a code fence with `endmodule`, so
+# `\bmodule\b.*?\bendmodule\b` spanned the WHOLE DOCUMENT. `_looks_like_verilog`
+# then said yes — correctly, there IS a real module header inside that span — and
+# `parse_verilog_ports` ran over running English, publishing `a`, `and`, `be`,
+# `been`, `bit`, `changes`, `combinational`, `managing`, `matches`, `signal`,
+# `the`, `to`, `until`, `whether` as ports of real designs. The anti-phantom
+# contract this module states in its own docstring was defeated by its own
+# region finder. A Verilog module header is `module <name>` immediately followed
+# by `(` (ANSI port list), `#(` (parameter list) or `;` (non-ANSI header) — a
+# prose mention is followed by a backtick, a verb or a full stop and no longer
+# opens a region.
+_MODULE_SPAN = re.compile(
+    r'\bmodule\s+[A-Za-z_]\w*\s*[#(;].*?\bendmodule\b', re.S)
 
 # Step-2.7 §4.05 — a candidate region (fence or module-span) is only fed to
 # parse_verilog_ports when it ACTUALLY LOOKS LIKE Verilog. A markdown code fence
@@ -88,27 +106,239 @@ def _looks_like_verilog(region: str) -> bool:
                 or _VERILOG_PARAM_DECL.search(region))
 
 
-def _verilog_regions(text: str) -> str:
-    cand = [m.group(1) for m in _FENCE.finditer(text)]
-    cand += [m.group(0) for m in _MODULE_SPAN.finditer(text)]
+def _verilog_region_spans(text: str) -> List[tuple]:
+    """The `(start, end)` offsets into `text` of every region that actually IS
+    Verilog. Split out of `_verilog_regions` for vibe-ic#2060 so a caller can
+    quote the SOURCE LINE a port was read from — evidence a reader can check
+    against the input document, which a joined region string cannot give."""
+    cand = [(m.start(1), m.end(1)) for m in _FENCE.finditer(text)]
+    cand += [m.span() for m in _MODULE_SPAN.finditer(text)]
     # Only KEEP regions whose content is actually Verilog (see above) — a fence
     # holding logs/pseudo-code or a prose module…endmodule span is dropped, so a
     # non-Verilog region can never inject a phantom port.
-    regions = [r for r in cand if _looks_like_verilog(r)]
+    return [(a, b) for a, b in cand if _looks_like_verilog(text[a:b])]
+
+
+def _verilog_regions(text: str) -> str:
     # strip comments so an inline `// the reset …` comment after a port decl
     # cannot scrape its first word as a phantom port.
-    return strip_comments("\n".join(regions))
+    return strip_comments(
+        "\n".join(text[a:b] for a, b in _verilog_region_spans(text)))
+
+
+#: vibe-ic#2060 — the strategy tags a consumer records so a published port can
+#: be traced back to the SHAPE it was read from. One spelling, in the module
+#: that owns the grammar, so the two Phase-1 front doors cannot drift apart on
+#: the label the way they drifted on the top-module status vocabulary (#2052).
+CODE_REGION_PORT_STRATEGY = "verilog_code_region_port_decl_issue2060"
+SIGNAL_TABLE_PORT_STRATEGY = "markdown_signal_table_port_row_issue2060"
+
+
+def _source_line(text: str, offset: int) -> str:
+    """The whole line of `text` that `offset` falls on, stripped."""
+    start = text.rfind("\n", 0, offset) + 1
+    end = text.find("\n", offset)
+    if end < 0:
+        end = len(text)
+    return text[start:end].strip()
+
+
+#: A width cell states a width only when it states a NUMBER. `NUM_INTERRUPTS`,
+#: `$clog2(NUM_INTERRUPTS)` and `NUM_INTERRUPTS x ADDR_WIDTH` are real width
+#: cells from one real design input and none of them is 1.
+_INT_WIDTH_CELL = re.compile(r'^\s*(\d+)\s*(?:[- ]?bits?)?\s*$', re.I)
+#: A width cell that STATES a number without being only that number:
+#: `24-bit (`[23:0]`)` is a real cell from a real interface table and it
+#: declares 24. Measured: returning WIDTH_UNKNOWN for it loses a width the
+#: document gives, which is the same failure as inventing one, in the other
+#: direction. `N-bit (`[DEPTH-1:0]`)` matches NEITHER and stays UNKNOWN, which
+#: is the honest answer for a symbolic bound.
+_LEADING_BIT_COUNT = re.compile(r'^\s*(\d+)\s*[- ]?bits?\b', re.I)
+_EMBEDDED_RANGE = re.compile(r'\[\s*(\d+)\s*:\s*(\d+)\s*\]')
+#: Description-column header vocabulary. `_specrtl_common` defines the name /
+#: direction / width header vocabularies (a port table is identified by the
+#: first two); it has no description column because `Port` has no description
+#: field. This is the only cell this module needs that it does not.
+_DESC_HDR = re.compile(r'^\s*(desc|description|comment|notes?|function|'
+                       r'meaning|purpose)\s*$', re.I)
+_BRACKET_WIDTH_CELL = re.compile(r'^\s*\[\s*(\d+)\s*:\s*(\d+)\s*\]\s*$')
+
+
+def _signal_table_rows(text: str) -> Dict[str, Dict[str, Any]]:
+    """Row CONTEXT for every port a markdown signal table states, by name:
+    the row line itself, the raw width cell and the description cell.
+
+    `_parse_md_table_ports` stays the authority on WHICH ports a table
+    declares — this walker adds no port and drops none; it only recovers the
+    cells that the `Port` record cannot carry. It is here because
+    `_specrtl_common.Port.width` is 1 for a width cell it could not parse, so
+    forwarding that number would publish `width: 1` for a port the document
+    declares as `NUM_INTERRUPTS` wide. A width the document does not state is
+    WIDTH_UNKNOWN, exactly as `parse_verilog_ports` already documents for a
+    symbolic packed dimension — never a literal 1.
+    """
+    out: Dict[str, Dict[str, Any]] = {}
+    lines = text.splitlines()
+    i, n = 0, len(lines)
+    while i < n - 1:
+        header = _split_md_row(lines[i])
+        delim = _split_md_row(lines[i + 1])
+        if (lines[i].count("|") < 2 or not _is_md_delim_row(delim)
+                or len(delim) != len(header)):
+            i += 1
+            continue
+        name_col = next((k for k, h in enumerate(header)
+                         if _NAME_HDR.match(h)), None)
+        dir_col = next((k for k, h in enumerate(header)
+                        if _DIR_HDR.match(h)), None)
+        if name_col is None or dir_col is None:
+            i += 1
+            continue
+        width_col = next((k for k, h in enumerate(header)
+                          if _WIDTH_HDR.match(h)), None)
+        desc_col = next((k for k, h in enumerate(header)
+                         if _DESC_HDR.match(h)), None)
+        j = i + 2
+        while j < n and lines[j].count("|") >= 2:
+            cells = _split_md_row(lines[j])
+            if len(cells) == len(header):
+                nm = _strip_md_emphasis(cells[name_col])
+                if nm and nm not in out:
+                    out[nm] = {
+                        "row": lines[j].strip(),
+                        "width_cell": (cells[width_col].strip()
+                                       if width_col is not None
+                                       and width_col < len(cells) else ""),
+                        "description": (_strip_md_emphasis(cells[desc_col])
+                                        if desc_col is not None
+                                        and desc_col < len(cells) else ""),
+                    }
+            j += 1
+        i = j
+    return out
+
+
+def _stated_width(cell: str) -> int:
+    """The width a table cell STATES.
+
+    THREE answers, not two, and conflating the last two is a regression rather
+    than a tightening — measured on 162 port widths across 41 real design-input
+    documents before this distinction existed:
+
+      a NUMBER (`8`, `8 bits`, `[7:0]`)  -> that width
+      a cell that is NOT a number (`NUM_INTERRUPTS`, `$clog2(N)`, `N x M`)
+                                         -> WIDTH_UNKNOWN; the document states
+                                            a width and this reader cannot
+                                            resolve it, so it must not invent 1
+      NO width cell at all (the table has no Width column, or the row has no
+      cell for it)                       -> 1, a genuine 1-bit scalar
+
+    The last case is not ignorance, it is a DECLARATION: a port with no packed
+    dimension is 1 bit, which is the contract `parse_verilog_ports` states in
+    this same package ("no packed dimension -> genuine 1-bit scalar"). Reading
+    `| clk | input |` as an unknown width would lose a fact the document does
+    give, and `clk`/`reset_n`/`cs` in a two-column signal table are exactly the
+    rows that shape occurs on.
+    """
+    if not (cell or "").strip():
+        return 1
+    m = _INT_WIDTH_CELL.match(cell)
+    if m:
+        return int(m.group(1))
+    m = _BRACKET_WIDTH_CELL.match(cell)
+    if m:
+        return abs(int(m.group(1)) - int(m.group(2))) + 1
+    m = _LEADING_BIT_COUNT.match(cell)
+    if m:
+        return int(m.group(1))
+    m = _EMBEDDED_RANGE.search(cell)
+    if m:
+        return abs(int(m.group(1)) - int(m.group(2))) + 1
+    return WIDTH_UNKNOWN
+
+
+def extract_code_block_ports(text: str) -> List[Dict[str, Any]]:
+    """Every port a document DECLARES in a Verilog/SystemVerilog code region or
+    in a markdown signal table, each carrying the source line it was read from.
+
+    vibe-ic#2060. GRAMMAR, never a token match: an entry needs a DIRECTION
+    keyword (`input`/`output`/`inout`), an optional packed width, and an
+    identifier, standing where Verilog declares a port — inside a region that
+    `_looks_like_verilog` accepts, with comments and subprogram bodies blanked
+    — or standing in a table row under a header that carries BOTH a name column
+    and a DIRECTION column. A prose sentence ("the input signal is sampled") is
+    in neither position and yields nothing; a waveform table
+    (`| Clock Cycle | clk | rst_n | data_in |`) has no direction column and
+    yields nothing.
+
+    Returns entries `{name, dir, width, source, source_line,
+    extraction_strategy}`; `width` is the integer width
+    `parse_verilog_ports` derives (`_specrtl_common.WIDTH_UNKNOWN` when a
+    symbolic bound cannot be resolved), never a made-up 1.
+    """
+    out: List[Dict[str, Any]] = []
+    seen: set = set()
+    # Tables first: they are precise on the whole text and are the shape a spec
+    # writes its interface in when it writes one at all, so on a name both
+    # shapes carry, the table's entry is the one kept.
+    table, _notes = _parse_md_table_ports(text, union=True)
+    rows = _signal_table_rows(text)
+    for prt in table:
+        if prt.name in seen:
+            continue
+        seen.add(prt.name)
+        ctx = rows.get(prt.name, {})
+        out.append({"name": prt.name, "dir": prt.direction,
+                    "width": _stated_width(ctx.get("width_cell", "")),
+                    "width_cell": ctx.get("width_cell", ""),
+                    "source": "markdown_signal_table",
+                    "source_line": ctx.get("row", ""),
+                    "description": ctx.get("description") or None,
+                    "extraction_strategy": SIGNAL_TABLE_PORT_STRATEGY})
+    for a, b in _verilog_region_spans(text):
+        raw = text[a:b]
+        # Both blank in place (comment / subprogram characters become spaces and
+        # newlines), so an offset in `clean` is the SAME offset in `raw` and the
+        # quoted source line is the document's own line, comment included.
+        clean = _strip_subprograms(strip_comments(raw))
+        # The region's OWN parameters, so `[DATA_WIDTH-1:0]` resolves to a real
+        # width exactly as it does when `parse_verilog_ports` is handed the
+        # whole region — matching one declaration at a time must not cost the
+        # width that only the region can supply.
+        params = _parse_module_params(clean)
+        for m in _PORT_DECL_SPAN.finditer(clean):
+            names = [nm.strip() for nm in re.split(r"\s*,\s*", m.group(3))]
+            for prt in parse_verilog_ports(m.group(0), params):
+                if prt.name in seen or prt.name not in names:
+                    continue
+                seen.add(prt.name)
+                line = _source_line(raw, m.start())
+                out.append({
+                    "name": prt.name, "dir": prt.direction, "width": prt.width,
+                    "width_cell": "",
+                    "source": "verilog_code_region",
+                    "source_line": line,
+                    # the declaration IS the best description this shape has,
+                    # and quoting it is what makes the port checkable against
+                    # the document that stated it.
+                    "description": line,
+                    "extraction_strategy": CODE_REGION_PORT_STRATEGY})
+    return out
 
 
 def extract_ports(prompt: str) -> List[Dict]:
     """Union of markdown-interface-table ports (precise on the whole text) and
     inline-Verilog-declared ports — the latter parsed ONLY from real Verilog code
     regions so a prose sentence can never inject a phantom port."""
-    # union=True: a spec often splits its interface across separate clock/reset,
-    # input and output tables — Phase 1 needs every port, not just the largest table.
-    table, _notes = _parse_md_table_ports(prompt, union=True)
-    inline = parse_verilog_ports(_verilog_regions(prompt))
-    table_inline = _dedup_ports(list(table) + list(inline))
+    # vibe-ic#2060 — ONE implementation of the code-region + signal-table
+    # grammar, in `extract_code_block_ports`, which the DOCS front door also
+    # calls. Before this, each door ran its own regex over its own idea of a
+    # code region and they disagreed: the docs door's `_RE_VERILOG_PORT_DECL`
+    # dropped every declaration carrying a symbolic width (`[WIDTH-1:0]`) or a
+    # trailing `// comment`, which is most of them, and this one read whole
+    # documents as Verilog. Same file: same answer.
+    table_inline = [{"name": e["name"], "dir": e["dir"], "width": e["width"]}
+                    for e in extract_code_block_ports(prompt)]
     if table_inline:
         return table_inline
     # only fall back to the structured-prose signal-definition list when no table
@@ -164,7 +394,8 @@ _REGNAME_HDR = re.compile(r'^\s*(register|reg|field|name)\s*$', re.I)
 _OFFSET_HDR = re.compile(r'^\s*(offset|address|addr|adr|location)\s*$', re.I)
 _ACCESS_HDR = re.compile(r'^\s*(access|type|mode|r\s*/\s*w|rw|permission)\s*$', re.I)
 from _specrtl_common import (  # noqa: E402
-    _split_md_row, _is_md_delim_row, _strip_md_emphasis)
+    _split_md_row, _is_md_delim_row, _strip_md_emphasis,
+    _NAME_HDR, _DIR_HDR, _WIDTH_HDR)
 
 
 #: `aes.[`CTRL_SHADOWED`](#ctrl_shadowed)` -> `CTRL_SHADOWED`.
@@ -659,7 +890,74 @@ def extract_inline_direction_bullet_ports(text: str) -> List[Dict[str, Any]]:
 # are; no chip, vendor, protocol or signal-name literal participates.
 MAX_INTERFACE_PROSE_BLOCK_CHARS = 600
 MAX_INTERFACE_PROSE_TOTAL_CHARS = 4000
-_RE_BULLET_ONLY = re.compile(r"(?m)\A(?:\s*(?:[-*+]\s+[^\n]*)?\n?)+\Z")
+# vibe-ic#2060 item 3 (from #2059's measurement) — THIS PATTERN DOES NOT RETURN.
+#
+#   (?m)\A(?:\s*(?:[-*+]\s+[^\n]*)?\n?)+\Z
+#
+# The outer `+` quantifies a body that can match the EMPTY string, and `\s*`
+# (which spans newlines) competes with `\n?` for every line separator, so on a
+# block that FAILS the engine enumerates every way to split the text between
+# them. Measured on 8HD-6 over
+# `"- item i with some ordinary text" * n + "\n---"` — an ordinary nested
+# bullet list closed by a horizontal rule, which is block 4 of a real corpus
+# input prompt:
+#
+#     indent 0:   4 lines 0.5 ms  ->  11 lines 8458 ms   (x4.0 per added line)
+#     indent 2:   4 lines 107 ms  ->   6 lines 27234 ms  (x16.0 per added line)
+#     indent 4:   4 lines 26267 ms
+#
+# A 21-line nested list never returns, and NOTHING LOOKS EXPENSIVE: the same
+# text without the closing `---` MATCHES, instantly, on the first greedy path.
+# `emit_interface_prose` runs this over blocks of a document the caller hands
+# it, so that is a hang in the Phase-1 front door.
+#
+# The answer is the SAME LANGUAGE read by a linear scanner, not a timeout and
+# not a size cap: a block is bullet-only when every NON-BLANK line of it is a
+# bullet line. A line is a bullet line when a `-`/`*`/`+` marker, after
+# optional indent, is followed by whitespace OR by the end of the line — the
+# marker is followed by whitespace ON ITS OWN LINE. `---` is not a bullet line:
+# the marker is followed by another marker. That is precisely why the real
+# block fails, and why it used to fail so expensively.
+#
+# THE ONE PLACE THE TWO DISAGREE, stated rather than discovered later. In the
+# old pattern `\s+` could match the LINE SEPARATOR, so a bare marker alone on a
+# line swallowed the NEXT line as its own text: `"-\n---"`, `"-\nprose line"`
+# and `"-\n  continued"` all read as bullet-only, and the call site DROPS a
+# bullet-only block ("the port table itself — L9 already carries it
+# structurally"). A block whose first line is a bare `-` therefore lost its
+# prose silently. Found by an exhaustive sweep of every block over a 9-symbol
+# line alphabet up to 4 lines (7381 cases), not by review — my own written
+# prediction said the two languages were identical and it was wrong. The
+# shapes are absent from all 4787 real design-input documents (corpus control
+# in the lane record), so no published document moves; where they do occur the
+# new answer keeps the prose the old one dropped.
+_RE_BULLET_LINE = re.compile(r"[ \t]*[-*+][ \t]")
+
+
+def is_bullet_only_block(text: str) -> bool:
+    """Is every non-blank line of `text` a bullet line?
+
+    The linear replacement for `_RE_BULLET_ONLY`. Cost is one application of
+    `_RE_BULLET_LINE` per non-blank line — a bound in STEPS, which is what
+    makes it a property of the code rather than of how busy the host is.
+    """
+    for line in text.splitlines():
+        if not line.strip():
+            continue
+        if not _RE_BULLET_LINE.match(line):
+            return False
+    return True
+
+
+#: BACK-COMPATIBLE NAME, and the reason it is a name and not a pattern.
+#: `phase1_doc_one_shot_runner` re-exports this symbol
+#: (`_RE_CZL9_BULLET_ONLY = _ppx._RE_BULLET_ONLY`) and that file is held by
+#: another lane, so the name must keep resolving or the docs door does not
+#: import at all. It now names the PREDICATE: the non-returning pattern is gone
+#: from the tree, not kept alive behind an alias, and there is exactly one
+#: implementation of this question. The one-line hunk that renames the
+#: re-export is written out in the lane's LAND.md.
+_RE_BULLET_ONLY = is_bullet_only_block
 
 
 def declared_port_names(content: Dict[str, Any]) -> List[str]:
@@ -776,7 +1074,7 @@ def emit_interface_prose(content: Dict[str, Any],
             take_next = wanted and body.rstrip().endswith(":")
             if not wanted:
                 continue
-            if _RE_BULLET_ONLY.match(body):
+            if is_bullet_only_block(body):
                 # the port table itself — L9 already carries it structurally.
                 continue
             if len(body) > MAX_INTERFACE_PROSE_BLOCK_CHARS:
