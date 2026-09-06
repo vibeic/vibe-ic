@@ -351,15 +351,32 @@ def test_a_converging_loop_is_unchanged_and_says_so():
 
 
 @needs_tclsh
-def test_a_plateau_is_non_convergence_and_the_loop_stops_there():
-    """spm window 1's tail. Six turns of the same set is not a fixed point
-    being reached; it is a repair that has stopped repairing."""
-    out = _drive("{a b} {a b} {a b} {a b} {a b} {a b} {a b} {a b}")
+def test_progress_is_a_smaller_count_even_when_the_set_is_not_nested():
+    """spm window 1, MEASURED: 22 -> 7 with `x[10]` and `x[17]` NEWLY
+    violating. That turn repaired fifteen nets; a rule that demanded the new
+    set be a SUBSET would have called it non-progress and stopped there. The
+    loop must run the whole cap and reach 2, exactly as it did before."""
+    out = _drive("{a b c d e f g h i j k l m n o p q r s t u v} "
+                 "{x1 x2 x3 x4 x5 x6 x7} {y1 y2 y3 y4 y5 y6} "
+                 "{z1 z2 z3 z4 z5} {p1 p2 p3 p4} {q1 q2} {q1 q2}")
+    assert "ANTENNA_LOOP_SEQUENCE: 22 7 6 5 4 2 2" in out
+    assert "stop=CAP" in out
+    assert out.count("REPAIR_ANTENNA_DONE") == 6
+    assert "ANTENNA_LOOP_BEST: iter=5 nets=2" in out
+
+
+@needs_tclsh
+def test_a_fixed_point_is_non_convergence_and_the_loop_stops_there():
+    """spm window 2: it held 2 for four turns and shipped 3. The same set
+    twice is a fixed point of the repair, not a fixed point being reached."""
+    out = _drive("{a b} {a b} {a b} {a b} {a b c} {a b} {a b c}")
     assert "ANTENNA_LOOP_SEQUENCE: 2 2" in out
-    assert "stop=NOT_SHRINKING" in out
+    assert "stop=FIXED_POINT" in out
     assert "ANTENNA_LOOP_NOT_CONVERGED" in out
-    # ONE wasted repair, not five: the old loop ran the whole cap.
+    # ONE wasted repair, and it leaves 2 — the old loop ran the whole cap and
+    # left 3.
     assert out.count("REPAIR_ANTENNA_DONE") == 1
+    assert "best=2@iter0 last=2" in out
 
 
 @needs_tclsh
@@ -368,7 +385,7 @@ def test_the_same_count_with_different_nets_is_caught():
     2, and the old stop rule had no way to notice."""
     out = _drive("{a b} {a c} {a b} {a c}")
     assert "violating={a b}" in out and "violating={a c}" in out
-    assert "stop=NOT_SHRINKING" in out
+    assert "stop=OSCILLATING" in out          # not FIXED_POINT: the nets moved
 
 
 @needs_tclsh
@@ -378,6 +395,7 @@ def test_walking_past_the_best_is_reported_not_silent():
     out = _drive("{a b c} {a b} {a b d} {a b} {a b d}")
     assert "ANTENNA_LOOP_BEST: iter=1 nets=2" in out
     assert "ANTENNA_LOOP_SEQUENCE: 3 2 3" in out
+    assert "stop=REGRESSED" in out
     assert "ANTENNA_LOOP_BEST_NOT_RESTORED" in out
     assert "ORD-2008" in out          # WHY it cannot be restored, in the log
 
@@ -395,6 +413,7 @@ def test_without_membership_the_old_count_rule_is_kept_byte_for_byte():
     assert "ANTENNA_LOOP_MEMBERSHIP_UNAVAILABLE" in out
     assert "margin=0" in out and "margin=20" in out and "margin=40" in out
     assert "membership=0" in out
+    assert "stop=CAP" in out
     assert out.count("REPAIR_ANTENNA_DONE") == 6      # the whole cap, as before
 
 
@@ -402,7 +421,7 @@ def test_the_report_carries_what_the_loop_did_not_just_where_it_stopped():
     trace = r.antenna_loop_trace(
         "ANTENNA_LOOP_SEQUENCE: 3 2 3\n"
         "ANTENNA_LOOP_BEST: iter=1 nets=2\n"
-        "ANTENNA_LOOP_NOT_CONVERGED: stop=NOT_SHRINKING membership=1 "
+        "ANTENNA_LOOP_NOT_CONVERGED: stop=REGRESSED membership=1 "
         "sequence={3 2 3} best=2@iter1 last=3 remaining={a b d}\n"
         "ANTENNA_PIN_FEEDER_OUTSIDE_ROWS: net=x[16] pin_y=3161.74 um "
         "rows_y=384.16..2399.04 um gap=762.70 um -- because\n")
@@ -412,6 +431,7 @@ def test_the_report_carries_what_the_loop_did_not_just_where_it_stopped():
     assert trace["converged"] is False
     assert trace["best_not_restored"] is True
     assert trace["membership_available"] is True
+    assert trace["stop_reason"] == "REGRESSED"
     assert trace["pins_outside_cell_rows"] == [
         {"net": "x[16]", "pin_y_um": 3161.74,
          "rows_y_um": [384.16, 2399.04], "gap_um": 762.70}]
