@@ -470,10 +470,28 @@ def test_the_front_door_re_evaluates_after_the_analog_track():
     """Step 4 runs BEFORE the A-track, so on a cold project every clause is
     honestly NOT_MEASURED. The front door must refresh the JUnit once A4 has
     written its records, or the whole-flow audit reads a stale verdict."""
+    import ast as _ast
     src = (PROGRAMS / "vibe_ic_one_shot_runner.py").read_text()
     assert "analog_acceptance_tb_gen.py" in src
-    assert src.index("ANALOG A1..A8") < src.index(
-        "ANALOG ACCEPTANCE (re-evaluated after A4)")
+    # ORDER IS READ OFF THE AST, NOT OFF `src.index`. A `str.index` anchor
+    # moves the moment anyone writes a COMMENT containing the same words, and
+    # then a green code order reads red (or the reverse) for a reason that has
+    # nothing to do with the order.
+    dispatch = {}
+    for node in _ast.walk(_ast.parse(src)):
+        if (isinstance(node, _ast.Call)
+                and isinstance(node.func, _ast.Name)
+                and node.func.id == "_run_phase"
+                and node.args
+                and isinstance(node.args[0], _ast.Constant)
+                and isinstance(node.args[0].value, str)):
+            dispatch.setdefault(node.args[0].value, node.lineno)
+    a_track = [v for k, v in dispatch.items() if k.startswith("ANALOG A1")]
+    accept = [v for k, v in dispatch.items() if "ACCEPTANCE" in k]
+    assert a_track and accept, sorted(dispatch)
+    assert min(a_track) < min(accept), (
+        "the acceptance re-evaluation is dispatched BEFORE the A-track, so it "
+        "would re-read the same absent records Step 4 already read")
 
 
 def test_verification_intent_stays_out_of_the_non_executable_kinds():
