@@ -570,7 +570,7 @@ def test_generated_scoreboards_come_from_the_same_contract():
     assert "accepted transfers lost" in tb6
     tb7 = rcs.emit_scoreboard_tb(rcs.extract_handshake_contract(_F7_DESC))
     assert "module tb_pulse_divider;" in tb7
-    assert "if (n_out * 1 != n_in)" in tb7
+    assert "if (n_out != n_in / 1)" in tb7
     for tb in (tb6, tb7):
         assert tb.isascii()
 
@@ -1179,3 +1179,31 @@ def test_ordinary_clock_and_reset_spellings_are_recognised(clk, rst):
     assert c.up["data"] == "up_data"
     rtl = rcs.emit_rtl(rcs.detect_shape(desc), desc)
     assert f"input  wire {clk}," in rtl and f"input  wire {rst}," in rtl
+
+
+def test_the_ratio_check_does_not_fail_a_ratio_that_divides_unevenly():
+    """The generated ratio check compared n_out * RATIO with n_in, which is only
+    true when the stimulus count is a multiple of RATIO. Measured: a composed
+    divider at ratio 3 driven with 64 events reported
+    `FAIL: 64 in 21 out, expected 21` -- the checker contradicting itself in its
+    own message, and a correct DUT failing. Integer division is the right
+    comparison."""
+    tb = rcs.emit_scoreboard_tb(rcs.extract_handshake_contract(
+        _F7_DESC.replace("for every 1 input events", "for every 3 input events")))
+    assert "n_out != n_in / 3" in tb
+    assert "n_out * 3" not in tb
+
+
+def test_the_ratio_counter_is_sized_from_its_own_parameter():
+    """`RATIO` is a parameter, so a caller may override it. The counter used to be
+    sized from the ratio STATED IN THE DESCRIPTION, so a module composed for 2 and
+    instantiated at 8 counted to 1 and emitted NOTHING -- measured, 0 outputs for
+    64 inputs. A parameter that cannot be overridden is not a parameter."""
+    for stated in (1, 2, 4):
+        rtl = rcs.emit_from_contract(rcs.extract_handshake_contract(
+            _F7_DESC.replace("for every 1 input events",
+                             f"for every {stated} input events")))
+        assert f"parameter RATIO = {stated}" in rtl
+        assert "reg [$clog2(RATIO + 1) - 1:0] count;" in rtl
+        # no width literal derived from the stated ratio survives in the counter
+        assert "count <= 0;" in rtl
