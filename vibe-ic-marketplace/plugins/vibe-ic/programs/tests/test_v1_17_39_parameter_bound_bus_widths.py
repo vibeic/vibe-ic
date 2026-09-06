@@ -680,3 +680,51 @@ def test_the_width_evaluator_still_accepts_the_shapes_next_to_each_refusal():
     assert D._int_expr("2", {}) == 2                # an integer literal
     assert D._int_expr("4//2", {}) == 2             # the same operator, not raising
     assert D._int_expr("AW*2", {"AW": 8}) == 16     # the same expression, in bounds
+
+
+# --- N100: "byte-identical" was a NAME, not an assertion.
+# `test_no_resolved_contract_leaves_the_emission_byte_identical` above checks
+# that three MARKERS are absent. That is weaker than what its name, this
+# module's docstring and the commit message all claim, and it is the control a
+# reader leans on hardest: the promise that a design whose widths cannot be read
+# is driven EXACTLY as before. "Before" can only mean the program on origin/main,
+# so this compares the actual bytes against it.
+def _emit_with(mod, **kw):
+    from test_v1_16_32_register_bus_vector_driver import (
+        BUS_PKG, CASE, DOCS, _l4, _l15)
+    ports = [("input", "", "clk_i"), ("input", "", "rst_ni"),
+             ("input", "", "tl_i"), ("output", "", "tl_o")]
+    plan, why = mod.resolve_register_plan(CASE, _l4(), _l15(), DOCS)
+    assert plan, why
+    bus, _ = mod.bus_contract(BUS_PKG)
+    return mod.emit_sequence_tb(CASE, plan, bus, "chip_top", "tl_i", "tl_o",
+                                "clk_i", "rst_ni", ports=ports, **kw)
+
+
+def _base_module():
+    """register_bus_driver_gen as it stands on origin/main, loaded from git."""
+    import types
+    rel = ("vibe-ic-marketplace/plugins/vibe-ic/programs/"
+           "register_bus_driver_gen.py")
+    root = subprocess.run(["git", "rev-parse", "--show-toplevel"], text=True,
+                          capture_output=True, cwd=str(PROGRAMS)).stdout.strip()
+    if not root:
+        pytest.skip("NOT MEASURED HERE: not a git checkout, so the base program "
+                    "cannot be loaded — byte-identity is UNVERIFIED, not proven")
+    src = subprocess.run(["git", "show", f"origin/main:{rel}"], text=True,
+                         capture_output=True, cwd=root).stdout
+    if not src.strip():
+        pytest.skip("NOT MEASURED HERE: origin/main does not carry the program — "
+                    "byte-identity is UNVERIFIED, not proven")
+    mod = types.ModuleType("rbd_base_for_identity")
+    mod.__file__ = str(PROGRAMS / "register_bus_driver_gen.py")
+    exec(compile(src, "<origin/main>", "exec"), mod.__dict__)
+    return mod
+
+
+def test_the_no_contract_emission_is_byte_identical_to_origin_main():
+    before = _emit_with(_base_module())
+    after = _emit_with(D, widths=None)
+    assert after == before, (
+        "a design whose widths do not resolve is no longer driven as it was "
+        f"before this change: {len(before)} bytes -> {len(after)} bytes")
