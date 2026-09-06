@@ -77,7 +77,6 @@ inside an import::
 from __future__ import annotations
 
 import os
-import shutil
 import sys
 from pathlib import Path
 
@@ -264,58 +263,3 @@ def skip_if_missing(p: Path, reason: str = "") -> Path:
     if not p.exists():
         pytest.skip(reason or f"required path not present: {p}")
     return p
-
-
-# ── "I could not run it" is not "it ran" ───────────────────────────────────
-#: The entrypoint sentinel of `ghcr.io/vibeic/vibeic-eda`. Set by
-#: `/dockerstartup/scripts/ui_startup.sh` before it execs the command, so it is
-#: present for every session started the way `tools/ci/run_suite_in_eda_image.sh`
-#: starts one and absent on a host.
-_IMAGE_SENTINEL_ENV = "FOSS_INIT_DONE"
-
-#: The tool root the image ships. Checked as well as the sentinel so a session
-#: started some other way inside the image is still recognised.
-_IMAGE_TOOL_ROOT = Path("/foss/tools/bin")
-
-
-def in_the_eda_image() -> bool:
-    """Is this pytest session running INSIDE the pinned EDA image?"""
-    return (os.environ.get(_IMAGE_SENTINEL_ENV) == "1"
-            or _IMAGE_TOOL_ROOT.is_dir())
-
-
-def require_docker_cli(what: str) -> str:
-    """The `docker` CLI path — or the right refusal for where we are.
-
-    THE TWO CASES ARE NOT THE SAME AND MUST NOT PRINT THE SAME.
-
-    On a host with no Docker installed, a test that drives a container has
-    nothing to measure and SKIP is honest: the operator can install Docker.
-
-    Inside the pinned image there is no `docker` CLI and there is no way for the
-    operator to get one — the image does not ship it. A test guarded by
-    `skipif(not shutil.which("docker"))` therefore reports SKIPPED on every
-    in-image run, for ever, and a census that counts skips as "fine" records a
-    test that CANNOT RUN as a test that had nothing to do. That is
-    [[an-empty-check-and-a-clean-check-print-the-same]] with a container around
-    it.
-
-    So in-image this FAILS, by name, as NOT_MEASURED. It is not a defect in the
-    subject and the message says so; it is a hole in the coverage the in-image
-    suite claims, and the only way it gets closed is by someone seeing it.
-    """
-    found = shutil.which("docker")
-    if found:
-        return found
-    if in_the_eda_image():
-        pytest.fail(
-            f"NOT_MEASURED in-image: {what} drives a container through the "
-            f"`docker` CLI, and the pinned EDA image ships none. This is not a "
-            f"finding about the subject — the subject was never exercised. It "
-            f"must NOT be a skip: an in-image census reads a skip as a test "
-            f"with nothing to do, and this is a test that cannot run at all. "
-            f"Close it by routing through the in-image exec path, or by moving "
-            f"this arm to a host lane and saying so.")
-    pytest.skip(f"docker unavailable on this host; {what} needs it")
-    raise AssertionError("unreachable")          # pragma: no cover
-

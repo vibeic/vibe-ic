@@ -28,7 +28,8 @@ import pytest
 import sys
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from _hostpaths import require_docker_cli  # noqa: E402
+from not_verified_tier import not_verified_reason  # noqa: E402
+
 import _progress_run as _pr  # noqa: E402
 
 PROG = Path(__file__).resolve().parents[1]
@@ -231,12 +232,17 @@ def _apply_additive_alias(proj, core="counter", src="resetn", dst="rst_n"):
     return f
 
 
+@pytest.mark.skipif(
+    not shutil.which("docker"),
+    reason=not_verified_reason(
+        "docker engine not bound in this run",
+        remedy="run through tools/ci/run_suite_in_eda_image.sh, which "
+               "binds the host docker CLI and socket into the container"))
 def test_autoemit_moves_pull_to_outermost_face_end_to_end(tmp_path):
     """Runner-level end state: after alias + synth (chip_top auto-emit), the
     OUTERMOST chip_top faces carry the VERILATOR tri pull and the inner
     wrapper's port list is plain; the reset actually works under host
     iverilog through the two-level chain."""
-    require_docker_cli("test_autoemit_moves_pull_to_outermost_face_end_to_end")
     d = _load_runner()
     import os
     container = os.environ.get("VIBEIC_IVERILOG13_CONTAINER", "vibeic-eda")
@@ -282,11 +288,16 @@ def test_autoemit_moves_pull_to_outermost_face_end_to_end(tmp_path):
             assert "RESET_OK" in r.stdout, (sp, r.stdout)
 
 
+@pytest.mark.skipif(
+    not shutil.which("docker"),
+    reason=not_verified_reason(
+        "docker engine not bound in this run",
+        remedy="run through tools/ci/run_suite_in_eda_image.sh, which "
+               "binds the host docker CLI and socket into the container"))
 def test_two_level_chain_resets_under_verilator(tmp_path):
     """The DISCRIMINATING pin (pre-fix: RESET_DEAD): under Verilator the
     driven value must transfer through chip_top into the wrapper and reset
     the design — for BOTH spellings."""
-    require_docker_cli("test_two_level_chain_resets_under_verilator")
     d = _load_runner()
     import os
     container = os.environ.get("VIBEIC_IVERILOG13_CONTAINER", "vibeic-eda")

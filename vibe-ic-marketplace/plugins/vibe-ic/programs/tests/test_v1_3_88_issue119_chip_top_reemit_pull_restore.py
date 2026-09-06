@@ -28,7 +28,8 @@ import pytest
 _PROGRAMS = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_PROGRAMS))
 
-from _hostpaths import require_docker_cli  # noqa: E402
+from not_verified_tier import not_verified_reason  # noqa: E402
+
 
 import design_one_shot_runner as R          # noqa: E402
 
@@ -109,12 +110,17 @@ def _stage_neutralized(tmp_path):
     return proj
 
 
+@pytest.mark.skipif(
+    not shutil.which("docker"),
+    reason=not_verified_reason(
+        "docker engine not bound in this run",
+        remedy="run through tools/ci/run_suite_in_eda_image.sh, which "
+               "binds the host docker CLI and socket into the container"))
 def test_reemit_restores_pull_and_design_resets(tmp_path):
     """The #119 artifact repro as the end state: a project whose inner wrapper
     is ALREADY neutralized, chip_top absent -> synth re-emits chip_top -> the
     outermost faces must carry the restored VERILATOR pull, and the design
     must actually reset through the two-level chain on the host simulator."""
-    require_docker_cli("test_reemit_restores_pull_and_design_resets")
     import os
     container = os.environ.get("VIBEIC_IVERILOG13_CONTAINER", "vibeic-eda")
     probe = subprocess.run(["docker", "exec", container, "sh", "-c", "true"],

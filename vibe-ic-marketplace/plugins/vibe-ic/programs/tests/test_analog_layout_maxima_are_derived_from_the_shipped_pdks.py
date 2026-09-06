@@ -23,17 +23,26 @@ import pytest
 
 import _plugin_tree  # noqa: F401  — puts programs/ on sys.path
 
+from not_verified_tier import not_verified_reason  # noqa: E402
+
 import analog_a5_pdk_device_limits as LIM
 import pdk_analog_layout_minima as M
 
 PDK_ROOT = Path("/foss/pdks")
 CAP_CLASS = "capacitor"
 
+# The sentinel is BUILT, not typed. The reason below said `NOT_VERIFIED: ... —
+# remedy: ...` by hand, which reads as declared and is not: the tier's detector
+# asks for a CALL to a declarer, precisely so the format cannot drift away from
+# the reader that parses it. Measured on 9cf22c191c, this was the one file
+# `test_no_new_undeclared_infrastructure_skip_appears` named, and it has been
+# named since v1.17.98 (18cb660e3b) — the text is unchanged, only its author is.
 pytestmark = pytest.mark.skipif(
     not PDK_ROOT.is_dir(),
-    reason=("NOT_VERIFIED: the shipped PDKs are not on this host, so what "
-            "each family's gencell states cannot be read — remedy: run inside "
-            "the shipped EDA image"))
+    reason=not_verified_reason(
+        "the shipped PDKs are not on this host, so what each family's gencell "
+        "states cannot be read",
+        remedy="run inside the shipped EDA image"))
 
 
 def _capacitor_maxima(family: str):
