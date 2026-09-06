@@ -467,8 +467,16 @@ def main(argv=None) -> int:
     print(f"  declaration scans over unstripped text: {len(now)} "
           f"(baseline {len(base)})")
     if gone:
-        print(f"  [NOTE] baseline shrank by {len(gone)}. Re-run with "
-              f"--write-baseline.")
+        # AN ERRAND IS NOT A FINDING (hygiene census #2066, CZH-12). This line
+        # used to read "Re-run with --write-baseline", which invites the next
+        # lane to bank every offender THIS run happened to see as accepted debt
+        # — the shrink and the arrivals are written by one flag. The shrink is
+        # reported, and the remedy is a reviewed deletion.
+        print(f"  [NOTE] the recorded set shrank by {len(gone)}: "
+              f"{', '.join(gone[:3])}{' …' if len(gone) > 3 else ''}")
+        print(f"         DELETE those lines from programs/{_BASELINE_NAME} as "
+              f"source, in the commit\n"
+              f"         that fixed them. Reviewed like code, in the diff.")
     if new:
         print(f"\n[FAIL] {len(new)} declaration regex(es) newly scan text no "
               f"stripper touched:")

@@ -1259,9 +1259,10 @@ def main(argv=None) -> int:
         print(_ratchet.report_line("known", gone,
                                    len(base), len(base) - len(gone)))
         print(f"           now polarity-aware, so they no longer belong in the "
-              f"register. Record it with:\n"
-              f"           prose_polarity_consulted_check.py "
-              f"{_ratchet.RECORD_FLAG}")
+              f"register. DELETE those lines from "
+              f"programs/{_BASELINE_NAME} as source,\n"
+              f"           in the commit that made them polarity-aware. "
+              f"Reviewed like code, in the diff.")
     if new:
         print(f"\n[FAIL] {len(new)} prose extractor(s) read a value out of a "
               f"sentence and write it as a declaration without asking whether "
