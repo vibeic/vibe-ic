@@ -156,3 +156,52 @@ def test_no_required_top_carries_no_instruction(tmp_path):
     task = _backup_task(tmp_path, None)
     assert task["required_top_module"] is None
     assert task["required_top_module_note"] is None
+
+
+# ── the miswiring that made the guard inert, and cost a whole run ────────────
+# `entry` is overloaded in benchmark_dispatch: inside the solve/resume workers a
+# local `entry` is the runner's ENTRY STEP, not the registry entry. Passing that
+# to _required_scorer_top raised a bare AttributeError inside the per-problem
+# worker, which caught it and reported NOT_MEASURED -- so the whole run came back
+# "0/156 produced a gated candidate" with no message naming the cause.
+
+import re as _re  # noqa: E402
+
+
+def test_passing_the_entry_step_raises_a_named_error_not_attributeerror():
+    """Loud and self-identifying beats a generic AttributeError swallowed by a
+    worker."""
+    import pytest as _pytest
+    for wrong in ("2", 2, ["2"]):
+        with _pytest.raises(TypeError) as exc:
+            BD._required_scorer_top(wrong)
+        assert "REGISTRY ENTRY" in str(exc.value)
+        assert "_entry(bench)" in str(exc.value)
+
+
+def test_none_is_still_tolerated():
+    assert BD._required_scorer_top(None) is None
+
+
+def test_every_call_site_passes_the_registry_entry_not_a_local():
+    """Structural pin: every call must go through the registry helper. A bare
+    `_required_scorer_top(entry)` is the exact miswiring that broke the run, and
+    it is invisible to a scope check because the NAME is bound in both cases."""
+    src = (Path(BD.__file__)).read_text(errors="replace")
+    call_lines = [ln.strip() for ln in src.splitlines()
+                  if "_required_scorer_top(" in ln
+                  and "def _required_scorer_top" not in ln]
+    assert call_lines, "no call sites found — re-anchor this test"
+    good = "_required_scorer_top(_entry(bench))"
+    for ln in call_lines:
+        assert good in ln, (
+            f"_required_scorer_top called as {ln!r}; it must be passed the "
+            "registry entry via _entry(bench), never a local named `entry` "
+            "(which is the runner's entry STEP inside the workers)")
+
+
+def test_the_structural_pin_would_catch_the_original_miswiring():
+    """Negative control: the pin must REJECT the bare-`entry` form. Without this
+    the test above could be vacuous."""
+    bad_line = "got = bio.collect(fmt, pid, proj, required_top=_required_scorer_top(entry))"
+    assert "_required_scorer_top(_entry(bench))" not in bad_line
