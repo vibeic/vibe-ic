@@ -595,6 +595,43 @@ $sop $macc $macc_v2 $alu $lcu $fa $concat $slice $buf $equiv
 # the first one `equiv_induct` can answer.
 # The miter module name `build_equiv_script` always uses.
 _MITER_MODULE = "equiv"
+
+# #2050 — THE FSM ENCODING TRANSLATION FILE.
+#
+# `synth` runs `fsm`, whose `fsm_recode` pass re-assigns the state encoding of
+# every FSM it extracts.  `synth -encfile <f>` (passed through to `fsm_recode`)
+# writes the old->new table; `equiv_make -encfile <f>` reads it back and builds
+# the encoder/decoder that matches the two encodings.  This constant is the
+# SINGLE source of truth for the file's name: the producer
+# (design_one_shot_runner's two synth call-sites) imports it from here, and
+# `fsm_encfile_beside_netlist` below is the consumer.  One definition is what
+# stops a producer rename from silently disabling the LEC fix — a missing file
+# is not an error anywhere, it just quietly restores the old, name-positional
+# matching.
+FSM_ENCFILE_NAME = "fsm_encoding.enc"
+
+
+def fsm_encfile_beside_netlist(gate_netlist: str) -> Optional[str]:
+    """Path of the FSM encoding table synth wrote next to this gate netlist, or
+    None when there is none.  PURE apart from one existence probe.
+
+    None is the correct answer for every netlist produced before the synth step
+    started writing the file, and for every non-yosys netlist: the caller then
+    emits the pre-change recipe byte-for-byte.  An absent table means "no
+    translation is known", which is exactly the pre-#2050 situation; what the
+    fix removes is the case where a translation EXISTS and was ignored."""
+    if not gate_netlist:
+        return None
+    try:
+        # NOT `.resolve()`: the string returned here is written verbatim into
+        # the Yosys script, which runs inside the container against the SAME
+        # path the rest of the script uses for the netlist. Canonicalising
+        # would follow host symlinks and could emit a path the container has
+        # not mounted, which yosys reports as "Can't open encfile".
+        cand = Path(gate_netlist).parent / FSM_ENCFILE_NAME
+    except (OSError, ValueError):
+        return None
+    return str(cand) if cand.is_file() else None
 _STAT_MODULE_RE = re.compile(r"(?m)^\s*===\s+(\S+)\s+===\s*$")
 # yosys prints the per-type histogram as "count", then 2+ spaces, then the
 # cell type, indented under the module header; the SUMMARY lines above it
@@ -689,6 +726,51 @@ def induction_did_not_converge(text: str):
         return True, ("equiv_induct proved 0 previously-unproven cells across "
                       "the escalating -seq sweep (a flat induction wall)")
     return False, ""
+
+
+# #2050 — THE TWO FLAT WALLS ARE NOT THE SAME WALL, AND ONLY ONE OF THEM IS
+# ABOUT DEPTH.  `induction_did_not_converge` above answers "did equiv_induct
+# make progress?" — one bit, and both of its signatures were then reported with
+# the same sentence ("a disclosed sequential-depth capability gap ... close with
+# sign-off LEC, which handles deep sequential induction").  Read yosys's own
+# `passes/equiv/equiv_induct.cc` and the two signatures are opposite findings:
+#
+#   * `Proved 0 previously unproven $equiv cells` — the base case HELD, the
+#     induction step could not be closed within `-seq N`.  That IS a depth
+#     statement: a deeper N, or an engine with stronger induction, can help.
+#
+#   * `Circuit inherently diverges!` — the BASE CASE went UNSAT.  The base case
+#     is `ez->assume(all unproven key points equal at steps 1..k); ez->solve()`.
+#     UNSAT means there is NO trace at all in which those points are
+#     simultaneously equal for k consecutive cycles.  That is a statement about
+#     the MITER, not about depth, and a deeper `-seq` provably cannot help: each
+#     rung only ADDS assumed-equal terms, and adding clauses preserves UNSAT.
+#     MEASURED on opentitan_aes: `-seq 4`, `-seq 16` and `-seq 64` printed
+#     byte-identical output, all three aborting at base-case step 2.
+#
+# The usual cause is a key point that is not the same signal on the two sides —
+# e.g. `synth`'s `fsm_recode` re-encoded an FSM state register and the recipe
+# matched the old and new encodings positionally by name.  Prescribing a
+# commercial sequential-LEC engine for that would buy nothing: the inconsistency
+# is in the miter handed to the engine.
+_WALL_MITER_INCONSISTENT = "miter_inconsistent"
+_WALL_INDUCTION_DEPTH = "induction_depth"
+
+
+def induction_wall_kind(text: str) -> str:
+    """WHICH flat wall the log shows: `miter_inconsistent`, `induction_depth`,
+    or "" when neither signature is present. PURE.
+
+    Precedence is deliberate and load-bearing: a run that reached
+    `Circuit inherently diverges!` ALSO prints `Proved 0 previously unproven
+    $equiv cells` for the same pass (equiv_induct returns without proving
+    anything), so the depth signature is present on both shapes and only the
+    base-case signature separates them."""
+    if _INDUCT_DIVERGE_RE.search(text or ""):
+        return _WALL_MITER_INCONSISTENT
+    if _PROVED_ZERO_RE.search(text or ""):
+        return _WALL_INDUCTION_DEPTH
+    return ""
 
 
 # #778 / round-2 subservient×sky130A — the escalating `-seq 4/16/64` induction
@@ -1669,6 +1751,14 @@ def parse_equiv_output(text: str) -> Dict:
         "equivalent": equivalent,
         "verdict": verdict,
         "verdict_explanation": verdict_explanation,
+        # #2050: WHICH flat wall, when there is one — `miter_inconsistent`
+        # (equiv_induct's base case went UNSAT: the key-point set the recipe
+        # handed the engine cannot all hold at once) vs `induction_depth`
+        # (the base case held; the induction step did not close within -seq).
+        # "" when neither signature is in the log. The gate needs the two
+        # apart because only the second one is a depth gap that a stronger
+        # sequential engine could close.
+        "induction_wall_kind": induction_wall_kind(text),
         # #192: hard macro(s) the run could not resolve (empty unless a
         # `hierarchy -check` abort on an unstaged module drove the INCONCLUSIVE
         # classification above).
@@ -1721,6 +1811,11 @@ def build_report(parsed: Dict, top: str, gate_netlist: str,
         "sat_model_unsupported_cells": parsed["sat_model_unsupported_cells"],
         "unproven_cells": parsed["unproven_cells"],
         "verdict_explanation": parsed["verdict_explanation"],
+        # #2050 — carried through so the gate can name the RIGHT cause. See
+        # `induction_wall_kind`. "" on every log with no flat-wall signature,
+        # which is every PASS and every counterexample FAIL, so no existing
+        # verdict moves.
+        "induction_wall_kind": parsed.get("induction_wall_kind", ""),
         "liberty": liberty,
         # WHICH of the four resolution paths produced that library. Recorded so
         # a reader never has to infer it: "default" means the built-in constant,
@@ -2090,7 +2185,8 @@ def build_equiv_script(gold_files: List[str], gate_netlist: str, top: str,
                        gold_defines: str = "-DSIMULATION -DYOSYS",
                        scan_mode: Optional[Dict] = None,
                        gate_wrapper_v: str = "",
-                       gold_wrapper_v: str = "") -> str:
+                       gold_wrapper_v: str = "",
+                       fsm_encfile: Optional[str] = None) -> str:
     """Build the Yosys RTL(gold)≡synth-netlist(gate) equiv script.
 
     v1.3.85 — APPROACH C (satgen-modelable BOTH sides). Step-13 compares an RTL
@@ -2204,6 +2300,46 @@ def build_equiv_script(gold_files: List[str], gate_netlist: str, top: str,
         gold_wrap_read = f"read_verilog -sv {gold_wrapper_v}\n"
         gate_rename = f"rename {top} {top}__scan\n"
         gate_wrap_read = f"read_verilog -sv {gate_wrapper_v}\n"
+    # FSM RE-ENCODING (#2050) — `synth` runs `fsm`, whose `fsm_recode` pass
+    # RE-ASSIGNS the state encoding of every FSM it extracts. The gate then
+    # holds the SAME state register under the SAME hierarchical name with a
+    # DIFFERENT code and usually a DIFFERENT WIDTH (measured on opentitan_aes:
+    # 19 of 19 extracted FSMs recoded to one-hot; e.g. a 3-bit sparse
+    # `...u_prim_alert_sender.state_q` became a 7-bit one-hot register).
+    # `equiv_make` matches key points BY NAME and has its own guard for this:
+    # it SKIPS a signal whose gold and gate widths differ (equiv_make.cc,
+    # `if (... gold_wire->width != gate_wire->width) continue;`).
+    #
+    # `splitnets -ports` DEFEATS that guard. Contrary to what its name
+    # suggests, `-ports` means "internal signals AND ports" (internal-only is
+    # the default), so it bit-blasts the state register on BOTH sides FIRST.
+    # equiv_make then no longer sees one 3-bit wire against one 7-bit wire; it
+    # sees `state_q[0..2]` on each side and matches them POSITIONALLY. Those
+    # pairs are not the same signal. Forcing them equal makes the miter's
+    # key-point set INCONSISTENT, and `equiv_induct`'s base case — which asks
+    # whether ALL unproven key points CAN be simultaneously equal for k
+    # consecutive cycles — goes UNSAT and prints `Circuit inherently
+    # diverges!`. One poisoned pair aborts the induction for the WHOLE design:
+    # measured on opentitan_aes, 3242 points across every block were left
+    # unproven by 3 recoded registers in one alert sender.
+    #
+    # The remedy is yosys's own, and it needs BOTH ends: `synth -encfile <f>`
+    # (passed to `fsm_recode` via `fsm`) WRITES the old->new encoding table,
+    # and `equiv_make -encfile <f>` READS it and builds the encoder/decoder
+    # that matches the two encodings correctly. MEASURED: adding `-encfile` to
+    # synth leaves the netlist BYTE-IDENTICAL (same sha256 on opentitan_aes and
+    # on the fsmtop reproducer) — it only records the translation.
+    #
+    # `splitnets` is dropped on the encfile path because `-encfile` is keyed on
+    # the WHOLE signal name (`.fsm <module> <signal>`), which a bit-blasted
+    # design no longer has; equiv_make already emits one `$equiv` per BIT for a
+    # multi-bit signal, so no key point is lost by not splitting.
+    #
+    # NO-LEAK: with `fsm_encfile=None` — every caller until the synth step
+    # starts writing one — both strings below are the pre-change literals and
+    # the script is BYTE-IDENTICAL, so no design's verdict can move.
+    _splitnets = "splitnets -ports\n" if not fsm_encfile else ""
+    _encopt = f" -encfile {fsm_encfile}" if fsm_encfile else ""
     return (
         # --- gold = RTL, kept as generic satgen-modelable Yosys cells ---
         f"{gold_read_cmd}\n"
@@ -2237,7 +2373,7 @@ def build_equiv_script(gold_files: List[str], gate_netlist: str, top: str,
         # proves "4/4, Equivalence successfully proven!" WITH it.
         f"async2sync\n"
         f"opt_clean\n"
-        f"splitnets -ports\n"
+        f"{_splitnets}"
         f"design -stash gold\n"
         # --- gate = synth netlist; Liberty cells EXPANDED to $_ logic then
         #     flattened in so the SAT engine can model every point ---
@@ -2256,11 +2392,11 @@ def build_equiv_script(gold_files: List[str], gate_netlist: str, top: str,
         f"flatten\n"
         f"async2sync\n"   # async-FF legalization (see the gold side) — both sides
         f"opt_clean\n"
-        f"splitnets -ports\n"
+        f"{_splitnets}"
         f"design -stash gate\n"
         f"design -copy-from gold -as gold {top}\n"
         f"design -copy-from gate -as gate {top}\n"
-        f"equiv_make gold gate {_MITER_MODULE}\n"
+        f"equiv_make{_encopt} gold gate {_MITER_MODULE}\n"
         f"hierarchy -top {_MITER_MODULE}\n"
         # READ-ONLY report pass. It prints the miter's cell histogram, which is
         # the OBSERVABLE `miter_is_stateless` reads to decide whether temporal
@@ -3254,7 +3390,14 @@ def main(argv: Optional[List[str]] = None) -> int:
             gold_frontend=frontend, slang_prefix=slang_prefix,
             gold_defines=defines, scan_mode=scan_mode,
             gate_wrapper_v=gate_wrapper_v,
-            gold_wrapper_v=gold_wrapper_v)
+            gold_wrapper_v=gold_wrapper_v,
+            # #2050 — the FSM encoding table synth wrote beside THIS netlist,
+            # or None when there is none (every netlist produced before the
+            # synth step started writing it), in which case the recipe below
+            # is byte-identical to the pre-change one. It flows through
+            # `_identity_for` -> script_sha256, so a run WITH a translation and
+            # a run WITHOUT one can never share a PASS-cache entry.
+            fsm_encfile=fsm_encfile_beside_netlist(gate_abs))
 
     def _identity_for(script: str, frontend: str, defines: str,
                       slang_prefix: str) -> Dict:
