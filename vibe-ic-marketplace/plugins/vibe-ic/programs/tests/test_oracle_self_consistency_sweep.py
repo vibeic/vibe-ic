@@ -63,7 +63,7 @@ class _FixtureAdapter:
 
 def _make_dataset(tmp_path, verdicts, golden_body=None):
     ds = tmp_path / "ds"
-    ds.mkdir()
+    ds.mkdir(parents=True)
     for pid in verdicts:
         (ds / f"{pid}_prompt.txt").write_text("do a thing\n")
         (ds / f"{pid}_ref.sv").write_text(
@@ -248,3 +248,97 @@ def test_the_report_carries_ids_and_scorer_lines_but_no_golden_content(
     # …and it does carry what the reader came for.
     assert "P1" in rendered and "P2" in rendered
     assert "functional_mismatch" in rendered
+
+
+# ───────────────── the record the fleet acceptance check will read ─────────────────
+def test_every_broken_entry_carries_evidence_even_when_the_scorer_said_nothing(
+        tmp_path, monkeypatch):
+    """`bench_eval_max_check.py` honours this file only when EVERY broken entry
+    has `id` and `evidence`; one blank field voids the whole record. So a
+    scorer that reported a bare FAIL with no reason must still yield evidence —
+    the arm verdicts themselves."""
+    registry, scorer = _install_fixture_bench(monkeypatch, tmp_path)
+    ds = _make_dataset(tmp_path, {"P1": {"G": {"verdict": "FAIL"},
+                                         "S0": _fail(), "S1": _fail()}})
+    res = S.sweep(_FAKE_BENCH, ds, tmp_path / "out", work_root=tmp_path / "w",
+                  scorer=scorer, registry=registry)
+    broken = res["theoretical_max"]["broken"]
+    assert [b["id"] for b in broken] == ["P1"]
+    assert all(b["id"] and b["evidence"] for b in broken)
+    assert "ARM G=FAIL" in broken[0]["evidence"]
+
+
+def test_from_work_re_derives_the_same_record_without_re_running(tmp_path, monkeypatch):
+    registry, scorer = _install_fixture_bench(monkeypatch, tmp_path)
+    ds = _make_dataset(tmp_path, {"P1": {"G": _PASS, "S0": _fail(), "S1": _fail()},
+                                  "P2": {"G": _fail(), "S0": _fail(), "S1": _fail()}})
+    work = tmp_path / "w"
+    first = S.sweep(_FAKE_BENCH, ds, tmp_path / "out", work_root=work,
+                    scorer=scorer, registry=registry)
+    # A scorer that can no longer run: if --from-work re-ran anything, this red.
+    scorer.write_text("import sys; sys.exit(9)\n")
+    again = S.sweep(_FAKE_BENCH, ds, tmp_path / "out2", work_root=work,
+                    scorer=scorer, registry=registry, from_work=True)
+    assert again["theoretical_max"] == first["theoretical_max"]
+    assert all(a["reread"] for a in again["arms"].values())
+
+
+def test_from_work_refuses_a_work_dir_with_a_missing_arm(tmp_path, monkeypatch):
+    registry, scorer = _install_fixture_bench(monkeypatch, tmp_path)
+    ds = _make_dataset(tmp_path, {"P1": {"G": _PASS, "S0": _fail(), "S1": _fail()}})
+    work = tmp_path / "w"
+    S.sweep(_FAKE_BENCH, ds, tmp_path / "out", work_root=work,
+            scorer=scorer, registry=registry)
+    (work / f"arm_{S.ARM_S1}" / "pass_at_1.json").unlink()
+    with pytest.raises(S.SweepError, match="does not hold a completed arm"):
+        S.sweep(_FAKE_BENCH, ds, tmp_path / "out2", work_root=work,
+                scorer=scorer, registry=registry, from_work=True)
+
+
+# ─────────────── a timeout is a statement about the machine ───────────────
+def test_a_simulation_timeout_is_not_charged_to_the_golden(tmp_path, monkeypatch):
+    """The scorer reports a loaded host's `sim_timeout` through the same FAIL
+    channel as a real mismatch. Charging it would manufacture a dataset defect
+    out of a busy afternoon, so it reads NOT_MEASURED and is not subtracted."""
+    registry, scorer = _install_fixture_bench(monkeypatch, tmp_path)
+    ds = _make_dataset(tmp_path, {"P1": {"G": _fail("sim_timeout"),
+                                         "S0": _fail(), "S1": _fail()}})
+    res = S.sweep(_FAKE_BENCH, ds, tmp_path / "out", work_root=tmp_path / "w",
+                  scorer=scorer, registry=registry)
+    v = res["per_problem"]["P1"]
+    assert v["verdict"] == S.NOT_MEASURED and "sim_timeout" in v["reason"]
+    assert res["theoretical_max"]["broken"] == []
+    assert res["theoretical_max"]["max"] == 1
+    # …and the other direction: a real mismatch on the same channel IS charged.
+    ds2 = _make_dataset(tmp_path / "b", {"P1": {"G": _fail("functional_mismatch"),
+                                                "S0": _fail(), "S1": _fail()}})
+    res2 = S.sweep(_FAKE_BENCH, ds2, tmp_path / "out2", work_root=tmp_path / "w2",
+                   scorer=scorer, registry=registry)
+    assert res2["per_problem"]["P1"]["verdict"] == S.BROKEN_GOLDEN
+
+
+def test_a_stub_arm_that_timed_out_leaves_vacuity_undecided(tmp_path, monkeypatch):
+    registry, scorer = _install_fixture_bench(monkeypatch, tmp_path)
+    ds = _make_dataset(tmp_path, {"P1": {"G": _PASS, "S0": _fail("sim_timeout"),
+                                         "S1": _PASS}})
+    res = S.sweep(_FAKE_BENCH, ds, tmp_path / "out", work_root=tmp_path / "w",
+                  scorer=scorer, registry=registry)
+    v = res["per_problem"]["P1"]
+    assert v["verdict"] == S.NOT_MEASURED and "S0" in v["reason"]
+
+
+def test_the_record_says_its_max_is_only_the_self_consistency_bound(
+        tmp_path, monkeypatch):
+    """A SEMANTIC defect — a golden that passes its own testbench and
+    contradicts the prompt — is invisible to this sweep by construction. The
+    record must say so, or a `max` of 156 here reads as a refutation of a
+    published 154 that it is not."""
+    registry, scorer = _install_fixture_bench(monkeypatch, tmp_path)
+    ds = _make_dataset(tmp_path, {"P1": {"G": _PASS, "S0": _fail(), "S1": _fail()}})
+    res = S.sweep(_FAKE_BENCH, ds, tmp_path / "out", work_root=tmp_path / "w",
+                  scorer=scorer, registry=registry, semantic_elsewhere=["P9"])
+    tm = res["theoretical_max"]
+    assert "UPPER BOUND" in tm["max_scope"]
+    assert tm["semantic_defects_documented_elsewhere"] == ["P9"]
+    assert "P9" in S.render_markdown(_FAKE_BENCH, res, ds,
+                                     semantic_elsewhere=["P9"])

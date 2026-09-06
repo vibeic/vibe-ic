@@ -342,6 +342,27 @@ def _evidence_line(res: dict | None) -> str:
     return (reason + (f" | {log}" if log else "")).strip()
 
 
+# A verdict that is a statement about the MACHINE, not about the dataset. The
+# scorer reports both through the same FAIL/SKIP channel, and charging a
+# loaded host's simulation timeout to a benchmark's golden would manufacture a
+# dataset defect out of a busy afternoon. Measured on this host at load 44.
+_MACHINE_REASONS = ("sim_timeout", "iverilog_absent", "COMMAND_NOT_FOUND")
+
+
+def _is_machine_statement(res: dict | None) -> str:
+    """The reason this arm says nothing about the dataset, or ""."""
+    if not res:
+        return ""
+    if res.get("verdict") == "SKIP":
+        return f"scorer SKIPped this arm: {res.get('reason', '')}"
+    blob = f"{res.get('reason', '')} {res.get('log', '')}"
+    for marker in _MACHINE_REASONS:
+        if marker in blob:
+            return (f"the scorer reported {marker!r}, which is a statement "
+                    "about the machine, not about the dataset")
+    return ""
+
+
 def classify(golden: dict | None, stub0: dict | None, stub1: dict | None,
              *, golden_missing: str = "", stub_missing: str = "") -> dict:
     """The whole judgement of this program, in one pure function.
@@ -358,12 +379,11 @@ def classify(golden: dict | None, stub0: dict | None, stub1: dict | None,
                 "reason": "the scorer produced no record for this problem "
                           "(ARM G); see the arm's pass_at_1.json",
                 "evidence": ""}
-    gverdict = golden.get("verdict")
-    if gverdict == "SKIP":
-        return {"verdict": NOT_MEASURED,
-                "reason": f"scorer SKIPped ARM G: {golden.get('reason', '')}",
+    machine = _is_machine_statement(golden)
+    if machine:
+        return {"verdict": NOT_MEASURED, "reason": "ARM G: " + machine,
                 "evidence": _evidence_line(golden)}
-    if gverdict != "PASS":
+    if golden.get("verdict") != "PASS":
         return {"verdict": BROKEN_GOLDEN,
                 "reason": "the problem's own golden does not pass its own "
                           "official scoring",
@@ -376,11 +396,13 @@ def classify(golden: dict | None, stub0: dict | None, stub1: dict | None,
                            "arms, so vacuity could not be decided"),
                 "evidence": ""}
     s0, s1 = stub0.get("verdict"), stub1.get("verdict")
-    if "SKIP" in (s0, s1):
-        return {"verdict": NOT_MEASURED,
-                "reason": "scorer SKIPped a stub arm, so vacuity could not be "
-                          "decided",
-                "evidence": f"S0={s0} S1={s1}"}
+    for arm, res in ((ARM_S0, stub0), (ARM_S1, stub1)):
+        machine = _is_machine_statement(res)
+        if machine:
+            return {"verdict": NOT_MEASURED,
+                    "reason": f"ARM {arm}: {machine}, so vacuity could not be "
+                              "decided",
+                    "evidence": f"S0={s0} S1={s1}"}
     if s0 == "PASS" and s1 == "PASS":
         return {"verdict": VACUOUS_TB,
                 "reason": "both the all-zero and the all-one constant stub pass "
@@ -400,7 +422,13 @@ def classify(golden: dict | None, stub0: dict | None, stub1: dict | None,
 def sweep(bench: str, dataset: Path, out_dir: Path, *, work_root: Path | None = None,
           scorer: Path = _SCORER, registry: Path = _REGISTRY,
           ids: list[str] | None = None, python: str | None = None,
-          keep_work: bool = False) -> dict:
+          keep_work: bool = False, from_work: bool = False,
+          provenance: dict | None = None,
+          semantic_elsewhere: list[str] | None = None) -> dict:
+    """Run the arms and classify. `from_work` re-reads the arm records a previous
+    run left under `work_root` and re-derives the outputs WITHOUT re-simulating:
+    a report regeneration must never need a fresh sweep, and a re-run would be a
+    different measurement wearing the same name."""
     dataset, out_dir = Path(dataset).resolve(), Path(out_dir).resolve()
     why = refuse_reason(out_dir, dataset)
     if why:
@@ -436,13 +464,31 @@ def sweep(bench: str, dataset: Path, out_dir: Path, *, work_root: Path | None = 
                 continue
             bucket[pid] = (rel, st)
 
-    work_root = Path(work_root) if work_root else Path(
-        tempfile.mkdtemp(prefix="oracle_sweep_"))
-    work_root.mkdir(parents=True, exist_ok=True)
-    arms = {}
-    for name, cands in ((ARM_G, golden), (ARM_S0, stub0), (ARM_S1, stub1)):
-        arms[name] = run_arm(bench, dataset, all_ids, cands, ident,
-                             work_root / f"arm_{name}", scorer, python=python)
+    if from_work:
+        if work_root is None:
+            raise SweepError("--from-work needs the --work directory of the run "
+                             "whose arms are being re-read")
+        work_root = Path(work_root)
+        arms = {}
+        for name in (ARM_G, ARM_S0, ARM_S1):
+            arm_dir = work_root / f"arm_{name}"
+            if not (arm_dir / "pass_at_1.json").is_file():
+                raise SweepError(
+                    f"{arm_dir}/pass_at_1.json is absent: this work directory "
+                    "does not hold a completed arm, and a missing arm is not an "
+                    "empty one")
+            recs = _verdicts_from_record(arm_dir, ident)
+            arms[name] = {"results": {pid: recs.get(pid) for pid in all_ids},
+                          "rc": 0, "run": str(arm_dir),
+                          "scored": sorted(recs), "reread": True}
+    else:
+        work_root = Path(work_root) if work_root else Path(
+            tempfile.mkdtemp(prefix="oracle_sweep_"))
+        work_root.mkdir(parents=True, exist_ok=True)
+        arms = {}
+        for name, cands in ((ARM_G, golden), (ARM_S0, stub0), (ARM_S1, stub1)):
+            arms[name] = run_arm(bench, dataset, all_ids, cands, ident,
+                                 work_root / f"arm_{name}", scorer, python=python)
 
     per = {}
     for pid in all_ids:
@@ -451,9 +497,19 @@ def sweep(bench: str, dataset: Path, out_dir: Path, *, work_root: Path | None = 
                             arms[ARM_S1]["results"].get(pid),
                             golden_missing=gmiss.get(pid, ""),
                             stub_missing=smiss.get(pid, ""))
-    broken = [{"id": p, "reason": v["reason"], "evidence": v["evidence"]}
-              for p, v in per.items()
-              if v["verdict"] in (BROKEN_GOLDEN, VACUOUS_TB)]
+    # Every broken entry MUST carry evidence: `bench_eval_max_check.py` honours
+    # this file only when each one does, so an entry whose scorer printed no
+    # reason would silently void the WHOLE record. When the scorer said nothing,
+    # the evidence is the arm verdicts themselves — still measured, never blank.
+    broken = []
+    for p, v in per.items():
+        if v["verdict"] not in (BROKEN_GOLDEN, VACUOUS_TB):
+            continue
+        ev = v["evidence"] or (
+            "ARM G=" + str((arms[ARM_G]["results"].get(p) or {}).get("verdict"))
+            + " S0=" + str((arms[ARM_S0]["results"].get(p) or {}).get("verdict"))
+            + " S1=" + str((arms[ARM_S1]["results"].get(p) or {}).get("verdict")))
+        broken.append({"id": p, "reason": v["reason"], "evidence": ev})
     not_measured = [{"id": p, "reason": v["reason"]}
                     for p, v in per.items() if v["verdict"] == NOT_MEASURED]
     theoretical_max = {
@@ -463,7 +519,42 @@ def sweep(bench: str, dataset: Path, out_dir: Path, *, work_root: Path | None = 
         "broken": sorted(broken, key=lambda b: b["id"]),
         "max": len(all_ids) - len(broken),
         "not_measured": sorted(not_measured, key=lambda b: b["id"]),
+        "max_scope": (
+            "SELF-CONSISTENCY ONLY. `max` subtracts the problems this sweep "
+            "can PROVE broken by running them: a golden that fails its own "
+            "testbench, and a testbench both constant stubs pass. It cannot "
+            "see a SEMANTIC (Category A2) defect — a golden that passes its "
+            "own testbench and contradicts the prompt — so this `max` is an "
+            "UPPER BOUND on the true theoretical maximum, never a refutation "
+            "of a lower one published elsewhere."),
+        "presentation_rule": (
+            "Every published number keeps the ORIGINAL denominator. This file "
+            "is bookkeeping: its only consequence is that NO enhancement is "
+            "owed on a problem listed in `broken`."),
+        "oracle_use": (
+            "HARNESS-SIDE DATASET AUDIT, DECLARED. Each verdict comes from "
+            "running the problem's own golden, and two constant stubs, through "
+            "the benchmark's own official scorer. No authoring path reads this "
+            "file's inputs, and the file itself carries no golden content."),
+        "method": {
+            "arm_G": "the problem's own golden as the candidate",
+            "arm_S0": "a constant stub, every output tied 0",
+            "arm_S1": "a constant stub, every output tied 1",
+            "broken_rule": ("BROKEN_GOLDEN when ARM G fails; VACUOUS_TB when "
+                            "BOTH stubs pass. One stub passing is reported as "
+                            "advisory and never charged — a problem whose "
+                            "correct answer IS that constant passes it "
+                            "legitimately."),
+            "not_measured_rule": ("named, with a reason, and NOT subtracted "
+                                  "from `max`: an unmeasured problem is not a "
+                                  "proven-broken one"),
+        },
     }
+    if semantic_elsewhere:
+        theoretical_max["semantic_defects_documented_elsewhere"] = list(
+            semantic_elsewhere)
+    if provenance:
+        theoretical_max.update(provenance)
     if not keep_work:
         for a in arms.values():
             a.pop("stdout", None), a.pop("stderr", None)
@@ -566,12 +657,28 @@ def main(argv=None) -> int:
                     help="comma-separated ids documented as Category A2 semantic "
                          "defects; listed in the report, never re-derived here")
     ap.add_argument("--keep-work", action="store_true")
+    ap.add_argument("--from-work", action="store_true",
+                    help="re-read the arm records under --work and re-derive the "
+                         "outputs without re-simulating")
+    ap.add_argument("--dataset-repo", default="")
+    ap.add_argument("--dataset-subdir", default="")
     a = ap.parse_args(argv)
+    semantic = [i for i in a.semantic_elsewhere.split(",") if i]
     try:
+        prov = {"dataset_commit": _git_sha(Path(a.dataset)),
+                "measured_on": {"host": a.host or "NOT_MEASURED (not stated)",
+                                "image": a.image or "NOT_MEASURED (not stated)",
+                                "date": datetime.now(timezone.utc).date().isoformat(),
+                                "tools": _tool_versions()}}
+        if a.dataset_repo:
+            prov["dataset_repository"] = a.dataset_repo
+        if a.dataset_subdir:
+            prov["dataset_subdir"] = a.dataset_subdir
         res = sweep(a.bench, Path(a.dataset), Path(a.out),
                     work_root=Path(a.work) if a.work else None,
                     ids=[i for i in a.ids.split(",") if i] or None,
-                    keep_work=a.keep_work)
+                    keep_work=a.keep_work, from_work=a.from_work,
+                    provenance=prov, semantic_elsewhere=semantic)
     except SweepError as exc:
         print(f"[oracle-sweep] {exc}", file=sys.stderr)
         return 2
@@ -581,7 +688,7 @@ def main(argv=None) -> int:
         json.dumps(res["theoretical_max"], indent=2) + "\n")
     (out / "ORACLE_SWEEP.md").write_text(render_markdown(
         a.bench, res, Path(a.dataset), image=a.image, host=a.host,
-        semantic_elsewhere=[i for i in a.semantic_elsewhere.split(",") if i]))
+        semantic_elsewhere=semantic))
     tm = res["theoretical_max"]
     print(f"{a.bench}: total={tm['total']} broken={len(tm['broken'])} "
           f"not_measured={len(tm['not_measured'])} max={tm['max']}")
