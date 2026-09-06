@@ -712,7 +712,8 @@ def _resolve_params(ir: Dict[str, Any], sv: Dict[str, float]
     return overrides, sorted(set(spec_bound)), sorted(nominal), env
 
 
-def _validate_ir(ir: Dict[str, Any], pdkctx: Dict[str, Any]) -> List[str]:
+def _validate_ir(ir: Dict[str, Any], pdkctx: Dict[str, Any],
+                 project: Optional[Path] = None) -> List[str]:
     """Structural problems that must stop emission. Every one of these was a
     real failure mode measured on a hand-built fixture."""
     problems: List[str] = []
@@ -771,12 +772,117 @@ def _validate_ir(ir: Dict[str, Any], pdkctx: Dict[str, Any]) -> List[str]:
     if not pdkctx.get("model_lib"):
         problems.append("no model library resolves for the requested PDK; a "
                         "netlist with no `.lib` is NO_MODEL_INCLUDE")
+    elif project is not None:
+        # A path that resolves to nothing is NOT the same as no path. Writing
+        # a `.lib` line for a file that is not there produces a deck whose
+        # only failure mode is ngspice's own `Could not find library file`,
+        # 200 lines into a sweep log — and that sentence reads as a defect of
+        # the design. Named here instead, at emission, with the path in it.
+        #
+        # ONLY for a library the PROJECT itself carries. This producer runs on
+        # the HOST and the deck runs in a CONTAINER, so an installed PDK under
+        # `/foss/pdks/...` is legitimately absent here and present at
+        # simulation time. MEASURED: checking every path refused 9 of the
+        # emitter's own fixtures, which name exactly such a path. "I cannot
+        # see it" is not "it is not there" — the check is confined to the one
+        # tree this process can actually speak about.
+        for _lib in ([dl[0] for dl in (pdkctx.get("deck_loads") or [])
+                      if len(tuple(dl)) == 2]
+                     or [pdkctx["model_lib"]]):
+            _lp = Path(str(_lib))
+            if not _lp.is_absolute():
+                continue
+            try:
+                _lp.relative_to(project)
+            except ValueError:
+                continue        # outside the project — not ours to judge
+            if not _lp.is_file():
+                problems.append(
+                    f"model library `{_lib}` is inside this project but no "
+                    f"such file exists; a `.lib` line pointing at nothing "
+                    f"is MODEL_LIB_ABSENT")
     return problems
+
+
+def _portable_lib_path(lib: str, deck_dir: Optional[Path]) -> str:
+    """The `.lib` path a COPIED project can still resolve.
+
+    NOT WIRED INTO THE EMITTER, AND THE REASON IS THE FINDING. Measured
+    2026-09-06 on the front door, twice: with the deck's `.lib` made
+    project-relative, A3 refuses to emit either block and A4-A7 go BLOCKED
+    behind it, because the deck is verified in TWO staging locations that
+    carry no `input/` -
+
+      * `verify_with_checkers` - a host `tempfile.TemporaryDirectory()`
+        holding only the deck, its sidecar and a block list;
+      * `verify_with_ngspice` - a FLAT `/tmp/a3emit_<block>_<ts>` INSIDE the
+        container, into which exactly two files are `docker cp`'d.
+
+    An absolute path resolves from both by accident, so both staging sites had
+    been getting the right answer for the wrong reason for as long as the
+    defect existed - and a staging tree that omits an input the artefact
+    depends on cannot detect any defect in how that dependency is expressed.
+    Making the emitted deck portable therefore requires making BOTH staging
+    sites reproduce the directory relationship the deck names, which is a
+    larger change than this function; it is reported rather than half-landed.
+    This helper and its test stay so the next author starts from the measured
+    ngspice behaviour instead of re-deriving it.
+
+    The deck used to carry the emitting host's ABSOLUTE path
+    (`/home/<user>/<lane>/proj/input/pdk/models/cornerCAP.lib`). Copy the
+    project anywhere — another lane, another host, a container with a
+    different mount — and every deck in it names a file that is not there.
+    MEASURED 2026-09-06: a probe on a copy of another lane's project died
+    with `Could not find library file .../cornerCAP.lib`, and the failure
+    reads as "this design has no models", not as "this path was baked in".
+
+    MEASURED in ngspice-47 (image 0.3.46, same day): a RELATIVE `.lib` path
+    is resolved against the directory of the FILE carrying the directive,
+    not the process CWD — `ngspice -b /abs/deck.sp` run from `/tmp` still
+    resolved `../models/tiny.lib`. So a project-internal library can be
+    named relatively and the deck stays runnable wherever it is copied.
+
+    A library OUTSIDE the project is a host INSTALLATION, not part of the
+    design. Relativising that would make the deck depend on where the
+    project happens to sit relative to the install root, which is the same
+    defect pointed the other way, so those keep their absolute path.
+    """
+    if not lib or deck_dir is None:
+        return lib
+    try:
+        libp = Path(lib)
+        if not libp.is_absolute():
+            return lib
+        project = _project_root_of(deck_dir)
+        if project is None:
+            return lib
+        libp.relative_to(project)          # raises when outside the project
+        return os.path.relpath(str(libp), str(deck_dir))
+    except (ValueError, OSError):
+        return lib
+
+
+def _project_root_of(deck_dir: Path) -> Optional[Path]:
+    """The project root a per-block deck directory sits under, i.e. the
+    parent of the `phase3/analog/<block>[/sizing_loop]` chain. Derived by
+    walking up to the directory that holds `input/`, so it does not depend
+    on how deep the deck is nested."""
+    for cand in [deck_dir, *deck_dir.parents]:
+        if (cand / "input").is_dir() and (cand / "phase3").is_dir():
+            return cand
+    return None
 
 
 def render_netlist(ir: Dict[str, Any], pdkctx: Dict[str, Any],
                    prov_lines: List[str],
-                   overrides: Dict[str, Dict[str, float]]) -> str:
+                   overrides: Dict[str, Dict[str, float]],
+                   deck_dir: Optional[Path] = None) -> str:
+    # `deck_dir` is the directory the deck will be written to. It is passed
+    # and deliberately NOT used for the `.lib` card — see `_portable_lib_path`
+    # for the two staging sites that make a deck-relative path unemittable
+    # today. It stays a parameter so the day those sites are fixed the change
+    # is one line here, and so the test that pins the revert can call this
+    # function the way the fixed version would.
     block = ir["block"]
     metric = any(u == "metric" for u in
                  (pdkctx.get("geometry_units") or {}).values())
@@ -1200,7 +1306,7 @@ def emit_for_block(project: Path, entry: Dict[str, Any], pdk: str,
                    gap_path=str(gap.relative_to(project)))
         return rec
 
-    problems = _validate_ir(ir, pdkctx)
+    problems = _validate_ir(ir, pdkctx, project)
     if problems:
         _drop_stale(bdir, name)
         gap = write_gap(bdir, project, name, btype, "IR_NOT_RENDERABLE",
@@ -1281,7 +1387,7 @@ def emit_for_block(project: Path, entry: Dict[str, Any], pdk: str,
         "EXCEPT the spec_bound_params listed; sizing to the bound spec is "
         "skill `analog-sizing`, not this producer")
 
-    sp_text = render_netlist(ir, pdkctx, prov_lines, overrides)
+    sp_text = render_netlist(ir, pdkctx, prov_lines, overrides, bdir)
     tb_text, tb_env, tb_notes = render_testbench(ir, pdkctx, env, prov_lines)
 
     ok, findings = verify_with_checkers(name, sp_text, tb_text,

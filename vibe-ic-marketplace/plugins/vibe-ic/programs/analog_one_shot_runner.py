@@ -1680,9 +1680,20 @@ def step_for_block(project: Path, block: Dict[str, Any], step_name: str,
         # comp.json, then re-run the A6 gate on that evidence. A violating block
         # FAILs A6 honestly (no false-clean); a clean+match PASSes for real.
         if step_name == "A6_block_pv":
+            # v1.17.71+ — the SAME three rungs its seven siblings use:
+            # the run's own --container, then VIBEIC_ANALOG_CONTAINER, then
+            # the default. This site consulted `args` and then jumped
+            # straight to the literal, so an orchestrated run that names its
+            # container only through the environment — which is how the
+            # analog track is driven when the flag is not threaded through —
+            # ran native per-block PV against `vibeic-eda` and reported the
+            # result as this project's. MEASURED 2026-09-06: with
+            # VIBEIC_ANALOG_CONTAINER set and no flag, the container handed
+            # to `_try_native_a6_pv` was `vibeic-eda`.
             native = _try_native_a6_pv(
                 project, bname,
-                getattr(args, "container", None) or "vibeic-eda")
+                getattr(args, "container", None)
+                or os.environ.get("VIBEIC_ANALOG_CONTAINER", "vibeic-eda"))
             if native and native.get("ran"):
                 cp2 = _pr.run(cmd, capture_output=True,
                                       text=True)

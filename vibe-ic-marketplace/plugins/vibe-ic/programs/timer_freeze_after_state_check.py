@@ -7,12 +7,36 @@
 A module declares a one-shot state-bit input/wire (typical names: `awake`,
 `active`, `enable`, `started`, `live`, `on`, `running`) AND has a
 free-running counter (`cnt <= cnt + ...`, `count <= count + ...`,
-`timer <= timer + ...`, ...). Once the state bit goes high, the counter
-MUST freeze — either by gating the increment with `if (!<state>)` or by
-a sibling `else if (<state>)` branch that holds the counter at zero.
+`timer <= timer + ...`, ...). The state bit MUST have control over whether
+that counter advances: there must be some value of it in which the counter
+does not move. Either polarity satisfies that — `if (!<state>)` gating the
+increment, or a `<state>`-keyed branch in which the counter holds or is
+reset while the increment sits in a sibling branch.
 
 If the counter increments unconditionally inside an `always` block whose
 module imports a state bit, this checker FLAGs the site for review.
+
+v1.17.71+ — TWO MEASURED DEFECTS FIXED, both false positives on correct RTL:
+
+  1. The freeze had to be an ASSIGNMENT (`<counter> <= <const>`). A freeze
+     implemented as a HOLD — the counter simply not assigned in the
+     state-keyed branch — is the same freeze and was unrecognised. The
+     finding message named `if (!<state>)` as a remedy that the code then
+     rejected.
+  2. `_enclosing_block_text` searched back a fixed 1500 characters for the
+     enclosing `always` and, failing to find one, analysed the 1500-character
+     slice as if it were a block. MEASURED on `u_hawaii_adc_readout.v`: for
+     both flagged counters the slice began mid-statement and did not contain
+     the freeze branch at all. The block is now bounded by its own `always`
+     and its own `end`, at any distance.
+
+Fixing (1) means the check no longer asserts that ASSERTION means freeze.
+It cannot: the token list holds both `awake` (assert = stop the idle timer)
+and `enable` (assert = run), whose polarities are opposite, and the two
+shapes are structurally identical. What it asserts now is the property the
+v052 specimen actually violated — a counter free-running with respect to a
+state bit its module imports. That specimen is still flagged; see
+`tests/test_timer_freeze_after_state_check.py`.
 
 # Why this matters
 
@@ -209,62 +233,268 @@ def _module_imports_state(mod_text: str) -> Optional[str]:
     return m.group(1) if m else None
 
 
-def _enclosing_block_text(
-    text: str, inc_offset: int, search_back: int = 1500,
-) -> str:
-    """Return the text from the start of the enclosing `always` block (or
-    `inc_offset - search_back`, whichever is later) up to the increment's
-    statement end."""
-    start = max(0, inc_offset - search_back)
-    block_start_re = re.compile(r"\balways\b")
-    candidates = list(block_start_re.finditer(text, start, inc_offset))
-    blk_start = candidates[-1].start() if candidates else start
-    return text[blk_start:inc_offset + 200]
+def _match_paren(text: str, i: int) -> int:
+    """`text[i]` is `(`; return the offset just past its matching `)`,
+    or -1 if unbalanced."""
+    depth = 0
+    for j in range(i, len(text)):
+        if text[j] == "(":
+            depth += 1
+        elif text[j] == ")":
+            depth -= 1
+            if depth == 0:
+                return j + 1
+    return -1
+
+
+_WS_RE = re.compile(r"\s*")
+_KW_IF = re.compile(r"\bif\b")
+_KW_ELSE = re.compile(r"\belse\b")
+_KW_BEGIN = re.compile(r"\bbegin\b")
+_KW_END = re.compile(r"\bend\b")
+_KW_CASE = re.compile(r"\bcase[xz]?\b")
+_KW_ENDCASE = re.compile(r"\bendcase\b")
+_KW_FORK = re.compile(r"\bfork\b")
+_KW_JOIN = re.compile(r"\bjoin(?:_any|_none)?\b")
+_KW_ALWAYS = re.compile(r"\balways(?:_ff|_comb|_latch)?\b")
+
+
+def _skip_ws(text: str, i: int) -> int:
+    return _WS_RE.match(text, i).end()
+
+
+def _block_end(text: str, i: int, opener: re.Pattern, closer: re.Pattern) -> int:
+    """`i` is the offset of an opening keyword match (`begin`, `case`, `fork`).
+    Return the offset just past its matching closer, counting nesting."""
+    depth = 0
+    pos = i
+    while pos < len(text):
+        mo = opener.search(text, pos)
+        mc = closer.search(text, pos)
+        if mc is None:
+            return len(text)
+        if mo is not None and mo.start() < mc.start():
+            depth += 1
+            pos = mo.end()
+            continue
+        depth -= 1
+        pos = mc.end()
+        if depth == 0:
+            return pos
+    return len(text)
+
+
+def _statement_span(text: str, i: int) -> int:
+    """`i` is the first offset of a statement. Return the offset just past it.
+
+    Understands `begin`/`end`, `case`/`endcase`, `fork`/`join`, a nested
+    if/else chain (dangling `else` binds to the nearest `if`, as in Verilog),
+    and otherwise runs to the next `;` outside parentheses.
+    """
+    i = _skip_ws(text, i)
+    if i >= len(text):
+        return len(text)
+    if _KW_BEGIN.match(text, i):
+        return _block_end(text, i, _KW_BEGIN, _KW_END)
+    if _KW_CASE.match(text, i):
+        return _block_end(text, i, _KW_CASE, _KW_ENDCASE)
+    if _KW_FORK.match(text, i):
+        return _block_end(text, i, _KW_FORK, _KW_JOIN)
+    if _KW_IF.match(text, i):
+        _branches, end = _parse_chain(text, i)
+        return end
+    depth = 0
+    for j in range(i, len(text)):
+        c = text[j]
+        if c == "(":
+            depth += 1
+        elif c == ")":
+            depth -= 1
+        elif c == ";" and depth <= 0:
+            return j + 1
+    return len(text)
+
+
+def _parse_chain(text: str, i: int) -> Tuple[List[Tuple[Optional[str], int, int]], int]:
+    """Parse the if/else-if/else chain whose leading `if` starts at `i`.
+
+    Returns `([(condition_or_None, body_start, body_end), ...], chain_end)`.
+    A chain with no explicit final `else` is given a VIRTUAL empty final
+    branch: reaching it means every condition was false, and in it the
+    counter provably does not advance. That virtual branch is what makes
+    `if (!<state>) <increment>` — the remedy this checker's own finding
+    message has always named — recognisable as a freeze.
+    """
+    branches: List[Tuple[Optional[str], int, int]] = []
+    pos = i
+    end = i
+    while True:
+        mi = _KW_IF.match(text, pos)
+        if not mi:
+            break
+        p = _skip_ws(text, mi.end())
+        if p >= len(text) or text[p] != "(":
+            break
+        k = _match_paren(text, p)
+        if k < 0:
+            break
+        cond = text[p + 1:k - 1]
+        bs = _skip_ws(text, k)
+        be = _statement_span(text, bs)
+        branches.append((cond, bs, be))
+        end = be
+        p2 = _skip_ws(text, be)
+        me = _KW_ELSE.match(text, p2)
+        if not me:
+            break
+        p3 = _skip_ws(text, me.end())
+        if _KW_IF.match(text, p3):
+            pos = p3
+            continue
+        b2 = _statement_span(text, p3)
+        branches.append((None, p3, b2))
+        end = b2
+        break
+    if branches and branches[-1][0] is not None:
+        branches.append((None, end, end))   # virtual empty `else`
+    return branches, end
+
+
+def _chains_in(text: str) -> List[List[Tuple[Optional[str], int, int]]]:
+    """Every if/else chain in `text`, at any nesting depth.
+
+    A chain HEAD is an `if` that is not itself the `if` of an `else if`;
+    scanning every head therefore reaches nested chains too, without
+    recursion.
+    """
+    out: List[List[Tuple[Optional[str], int, int]]] = []
+    for m in _KW_IF.finditer(text):
+        before = text[:m.start()].rstrip()
+        if _KW_ELSE.search(before[-6:]) and before.endswith("else"):
+            continue
+        branches, _end = _parse_chain(text, m.start())
+        if branches:
+            out.append(branches)
+    return out
+
+
+def _advances_counter(body: str, counter: str) -> bool:
+    """True if `body` contains a self-increment of `counter` anywhere."""
+    pat = re.compile(
+        rf"\b{re.escape(counter)}\s*(?:<=|=)\s*{re.escape(counter)}\s*\+"
+    )
+    return bool(pat.search(body))
+
+
+def _enclosing_always_block(text: str, inc_offset: int) -> Tuple[str, int]:
+    """Return `(block_text, offset_of_inc_within_block)` for the `always`
+    block that encloses `inc_offset`.
+
+    The previous implementation searched back a FIXED 1500 characters and,
+    when no `always` was found inside that window, used the 1500-character
+    point itself as the block start. MEASURED on `u_hawaii_adc_readout.v`:
+    for both counters the window began mid-statement, so the slice handed to
+    the gating test was not a block at all and did not contain the freeze
+    branch. A truncated block can only ever produce a verdict about the
+    truncation. There is no cap now: the enclosing `always` is found however
+    far back it is, and the block runs to its own `end`, so a freeze branch
+    that sits after the increment is visible too.
+    """
+    starts = [m.start() for m in _KW_ALWAYS.finditer(text, 0, inc_offset)]
+    if not starts:
+        return text, inc_offset
+    bs = starts[-1]
+    be = _statement_span(text, _skip_ws(text, _KW_ALWAYS.match(text, bs).end()))
+    # The always header may carry a sensitivity list before the statement.
+    hdr = _skip_ws(text, _KW_ALWAYS.match(text, bs).end())
+    if hdr < len(text) and text[hdr] == "@":
+        p = _skip_ws(text, hdr + 1)
+        if p < len(text) and text[p] == "(":
+            p = _match_paren(text, p)
+            if p > 0:
+                be = _statement_span(text, p)
+        elif p < len(text) and text[p] == "*":
+            be = _statement_span(text, p + 1)
+    if be <= inc_offset:
+        be = min(len(text), inc_offset + 200)
+    return text[bs:be], inc_offset - bs
 
 
 def _counter_is_gated_by_state(
-    block_text: str, state_token: str, counter_name: str,
+    block_text: str, state_token: str, counter_name: str, inc_offset: int,
 ) -> bool:
-    """True only if the enclosing always block has an EXPLICIT freeze
-    branch for `counter_name` keyed on `state_token`:
+    """True when the state bit has CONTROL over whether `counter_name`
+    advances at `inc_offset`.
 
-        else if (<state>...) ... <counter> <= <constant>;
+    The property, stated once: there is an if/else chain in the enclosing
+    `always` block that contains the increment, and that chain has ANOTHER
+    branch which (a) can only be reached once the state token has been
+    tested, and (b) does not advance the counter. In that branch the counter
+    is frozen — whether it is frozen by being assigned a constant, or frozen
+    by simply not being assigned at all.
 
-    The branch may include intermediate begin/end + statements, but the
-    counter-reset must appear within the same `else if` chain.
+    Reaching branch *i* of a chain requires `!c1 && ... && !c(i-1) && ci`, so
+    branch *i* is state-constrained as soon as ANY condition up to and
+    including its own names the token. The chain always ends in an explicit
+    or virtual `else`, so a lone `if (!<state>) <increment>` is recognised:
+    its virtual else is state-constrained and cannot advance the counter.
 
-    Why this strict shape: v052 wake_ctrl.v had `if (!awake && cmd_op !=
-    CMD_74)` in the OUTER conditional but the counter `cnt + 1` was
-    inside a nested `else`, unprotected. A loose "block contains
-    `!<state>`" check would have called that gated and missed the bug.
-    Requiring an explicit freeze branch catches the right pattern at the
-    cost of false-flagging single-line `if (!<state>) cnt <= cnt+1;`
-    designs (those need to add the branch or whitelist with the
-    `// timer_freeze_check: ok-unconditional` comment)."""
-    # v0.119.29: also accept the freeze branch as a PRIMARY `if (state)`
-    # (not just `else if (state)`). The agent on v0.119.27 vendor wrote
-    # ```
-    #   if (state) cnt <= '0;
-    #   else cnt <= cnt + 1;
-    # ```
-    # which is logically equivalent to the `else if (state)` form the
-    # earlier strict regex required. Both shapes correctly freeze the
-    # counter in the named state.
-    pat_freeze_else = (
-        rf"else\s+if\s*\(\s*{state_token}\b[^)]*\)\s*"
-        r"(?:begin\s*)?"
-        rf"(?:[^;{{}}]*;)*?\s*\b{counter_name}\s*<=\s*[0-9'hbd_]+\s*;"
-    )
-    pat_freeze_primary = (
-        rf"\bif\s*\(\s*{state_token}\b[^)]*\)\s*"
-        r"(?:begin\s*)?"
-        rf"(?:[^;{{}}]*;)*?\s*\b{counter_name}\s*<=\s*[0-9'hbd_]+\s*;"
-    )
-    flags = re.IGNORECASE | re.DOTALL
-    if re.search(pat_freeze_else, block_text, flags):
-        return True
-    if re.search(pat_freeze_primary, block_text, flags):
-        return True
+    This subsumes both shapes the check accepted before —
+
+        else if (<state>) ... <counter> <= <const>;      (v0.64)
+        if      (<state>) ... <counter> <= <const>;      (v0.119.29)
+
+    — because in each the state-keyed branch does not advance the counter.
+    It additionally recognises the FREEZE-BY-HOLD form, in which the
+    state-keyed branch assigns the counter nothing at all:
+
+        end else if (!enable) begin
+            dout_valid <= 1'b0;          // counters simply HOLD
+        end else begin
+            ... <counter> <= <counter> + 1'b1; ...
+        end
+
+    MEASURED on `u_hawaii_adc_readout.v` (ihp-sg13g2, 2026-09-06): the hold
+    form above freezes `bit_count` and `ch_count` correctly — proven by
+    simulation, not by assertion: with the branch removed a testbench that
+    drops `enable` mid-frame sees `bit_count` run 4 -> 12; with the branch
+    present it holds at 4 and no payload bit is emitted. The check flagged
+    the CORRECT design and named, as its remedy, the `if (!<state>)` guard
+    the code had never implemented.
+
+    WHAT THIS GIVES UP, stated plainly. The old shapes required the freeze
+    branch to be keyed POSITIVELY on the token, which encodes "assertion
+    means freeze" — true of the `awake` specimen this check was born from,
+    and false of `enable`, which is in the same token list and conventionally
+    means the opposite. No STRUCTURAL discriminator between the two exists:
+    `if (!awake) X; else cnt <= cnt+1;` and the ADC's hold form are the same
+    shape, so no rule can accept one and reject the other. This check
+    therefore no longer asserts a polarity; it asserts that the counter is
+    not free-running with respect to a state bit the module imports, which is
+    what the v052 specimen actually violated — its increment is control-
+    INDEPENDENT of `awake` and is still flagged.
+    """
+    tok_re = re.compile(rf"\b{re.escape(state_token)}\b", re.IGNORECASE)
+    for branches in _chains_in(block_text):
+        constrained: List[bool] = []
+        seen = False
+        for cond, _bs, _be in branches:
+            if cond is not None and tok_re.search(cond):
+                seen = True
+            constrained.append(seen)
+        holder = None
+        for idx, (_cond, bs, be) in enumerate(branches):
+            if bs <= inc_offset < be:
+                holder = idx
+                break
+        if holder is None:
+            continue
+        for idx, (_cond, bs, be) in enumerate(branches):
+            if idx == holder or not constrained[idx]:
+                continue
+            if _advances_counter(block_text[bs:be], counter_name):
+                continue
+            return True
     return False
 
 
@@ -309,8 +539,9 @@ def audit(rtl_dir: Path) -> List[Finding]:
                     if _WHITELIST_COMMENT in raw_line:
                         continue
 
-                    block = _enclosing_block_text(mod_text, m.start())
-                    if _counter_is_gated_by_state(block, state_tok, counter):
+                    block, rel = _enclosing_always_block(mod_text, m.start())
+                    if _counter_is_gated_by_state(
+                            block, state_tok, counter, rel):
                         continue
 
                     findings.append(Finding(
@@ -322,9 +553,14 @@ def audit(rtl_dir: Path) -> List[Finding]:
                         snippet=raw_line.strip(),
                         reason=(
                             f"module imports `{state_tok}` but counter "
-                            f"`{counter}` self-increments without an "
-                            f"`if (!{state_tok})` guard or sibling "
-                            f"`else if ({state_tok})` freeze branch"
+                            f"`{counter}` advances in EVERY state of "
+                            f"`{state_tok}`: no branch of the if/else chain "
+                            f"holding the increment is keyed on it, so "
+                            f"nothing freezes the counter. Gate the "
+                            f"increment on `{state_tok}`, or freeze the "
+                            f"counter in a `{state_tok}`-keyed branch — "
+                            f"holding it there counts, it need not be "
+                            f"assigned a constant"
                         ),
                     ))
     return findings
@@ -342,7 +578,7 @@ def _build_report(findings: List[Finding], rtl_dir: Path) -> dict:
     readable, unreadable = _read_rtl_files(rtl_dir)
     return {
         "program": "timer_freeze_after_state_check",
-        "version": "1.0.0",
+        "version": "1.1.0",
         "rtl_dir": str(rtl_dir),
         "summary": {
             "files_scanned": len(readable),
