@@ -104,7 +104,7 @@ from _analog_a_check_common import (
     content_class_of_artefact, content_disclosed,
     load_block_list, select_blocks, make_argparser, vacuous_pass,
     artefact_missing_for_block, emit_pass, emit_fail, emit_incomplete,
-    resolve_block_artefact, structure_only_disclosure,
+    resolve_block_artefact, structure_only_disclosure, write_report,
 )
 
 GATE = "analog_a4_corner_sweep_check"
@@ -604,6 +604,99 @@ def _sha_claim_fail(project: Path, block: str, data: dict, rel: str
     return None
 
 
+def _corner_accounted(c: dict) -> bool:
+    """Did this corner reach a determinate outcome? Executed, or attempted and
+    reported not-completed WITH A CAUSE. A `not_completed` record with no cause
+    is not an account of anything — it is the same silence one field deeper."""
+    if not isinstance(c, dict):
+        return False
+    if c.get("simulator_run") is True:
+        return True
+    nc = c.get("not_completed")
+    if isinstance(nc, dict) and (nc.get("cause") or nc.get("reason_class")):
+        return True
+    return c.get("_provenance") == "NOT_COMPLETED" and bool(
+        c.get("not_completed_cause"))
+
+
+def _pvt_not_measured(data: dict, corners: list, rel: str,
+                      block: str) -> Optional[dict]:
+    """The record's own account of its PVT sweep, graded. None when the sweep
+    is fully accounted for and claims nothing it did not do."""
+    unaccounted = [c.get("name") for c in corners
+                   if isinstance(c, dict) and not _corner_accounted(c)]
+    claim = data.get("full_pvt_sweep_executed")
+    claim_broken = ("full_pvt_sweep_executed" in data and claim is not True)
+    if not unaccounted and not claim_broken:
+        return None
+    executed = sum(1 for c in corners
+                   if isinstance(c, dict) and c.get("simulator_run") is True)
+    total = data.get("total_corners")
+    if not isinstance(total, int):
+        total = len(corners)
+    tgt = None
+    for sp in (data.get("spec_results") or []):
+        if isinstance(sp, dict):
+            tgt = sp.get("target")
+            break
+    bits = []
+    if claim_broken:
+        bits.append(f"`full_pvt_sweep_executed: {claim!r}`")
+    bits.append(f"corners_executed {executed}/{total}")
+    if unaccounted:
+        bits.append(f"{len(unaccounted)} corner(s) neither executed nor "
+                    f"reported NOT_COMPLETED with a cause: "
+                    f"{', '.join(str(u) for u in unaccounted[:9])}")
+    if tgt is None:
+        bits.append("and the graded spec carries `target: null`")
+    return {
+        "block": block, "rule": "A4_PVT_SWEEP_NOT_MEASURED",
+        "rel_path": rel,
+        "reason_class": "NOT_MEASURED",
+        "corners_executed": executed,
+        "total_corners": total,
+        "unaccounted_corners": unaccounted,
+        "full_pvt_sweep_executed": claim,
+        "detail": ("this record's own fields say the PVT sweep was not "
+                   "measured: " + "; ".join(bits)
+                   + ". A corner that was not run and carries no cause is an "
+                     "arithmetic spread off the nominal, not a measurement, "
+                     "and A4 cannot certify a sweep over one. Run the sweep "
+                     "to completion (no deadline), or report each corner that "
+                     "did not complete with the simulator's own cause."),
+    }
+
+
+def _emit_not_measured(gate: str, args, findings: List[dict],
+                       summary: dict) -> int:
+    """NOT_MEASURED — the artefact is present and says, in its own fields, that
+    the thing this gate certifies was not measured. INCOMPLETE tier (rc 1),
+    beside `emit_incomplete`: not a pass, and not a measured defect either."""
+    blocks = []
+    for f in findings:
+        b = f.get("block")
+        if b and b not in blocks:
+            blocks.append(b)
+    report = {
+        "gate": gate, "verdict": "INCOMPLETE",
+        "reason_class": "NOT_MEASURED",
+        **summary,
+        "not_measured_blocks": blocks,
+        "suggested_skill": SKILL,
+        "reason": (f"{len(blocks)} of {summary.get('blocks_checked', 0)} "
+                   f"declared analog block(s) have a corner_results.json whose "
+                   f"OWN fields say the PVT sweep was not measured"),
+        "findings": findings,
+    }
+    write_report(args.json, report)
+    print(f"INCOMPLETE: {gate} — NOT_MEASURED for: "
+          f"{', '.join(blocks) or '?'}", file=sys.stderr)
+    for f in findings[:8]:
+        print(f"  [{f.get('block', '?')}] {f.get('rule', '?')}: "
+              f"{f.get('detail', '')}", file=sys.stderr)
+    return 1
+
+
 def _check_block(project: Path, block: str
                  ) -> tuple[Optional[str], List[dict]]:
     path, found = resolve_block_artefact(
@@ -676,6 +769,38 @@ def _check_block(project: Path, block: str
                        f"`simulator_run: false`; SPICE never ran "
                        f"(v10632 escape pattern)"),
         }]
+    # ── A4_PVT_SWEEP_NOT_MEASURED ─────────────────────────────────────────
+    #
+    # MEASURED (vibe-ic#2062). This gate returned PASS over a record whose own
+    # fields read `corners_executed: 1`, `total_corners: 9`,
+    # `full_pvt_sweep_executed: false` and a spec `target: null`. Every one of
+    # those facts was IN THE ARTEFACT the gate had already parsed. Eight of the
+    # nine cells held an arithmetic spread off the tt/27C base — the sweep was
+    # a measurement of one corner and a multiplication of eight — and the step
+    # was certified done. A gate that passes over its own record's
+    # NOT_MEASURED is not a gate.
+    #
+    # TWO conditions, both required, and the second is the one that cannot be
+    # evaded by omitting a field:
+    #
+    #   (a) if the record makes a full-sweep CLAIM at all, the claim must be
+    #       true — `full_pvt_sweep_executed` present and not True blocks.
+    #
+    #   (b) EVERY corner in `corners[]` must have reached a determinate
+    #       outcome: executed (`simulator_run: true`), or attempted and
+    #       reported NOT COMPLETED WITH A CAUSE. A corner that is neither is a
+    #       cell of arithmetic wearing the same column as a measurement, and it
+    #       is decided here by the corners array itself — which
+    #       `A4_NO_CORNERS` already makes mandatory — so dropping the summary
+    #       fields does not help a producer past it.
+    #
+    # This BLOCKS as NOT_MEASURED (INCOMPLETE, rc 1), not as FAIL: an
+    # unmeasured corner is unmeasured work, not a measured defect. Same tier
+    # `emit_incomplete` already uses, and deliberately not a pass.
+    nm = _pvt_not_measured(data, corners, rel, block)
+    if nm is not None:
+        return "NOT_MEASURED", [nm]
+
     # Spec results → at least one PASS, no FAIL allowed.
     # v1.6.223 (#96) — accept `status: PASS_INFORMATIONAL` as
     # PASS-equivalent when the runner produced a real ngspice
@@ -841,12 +966,15 @@ def main(argv: Optional[List[str]] = None) -> int:
     findings: List[dict] = []
     blocks_pass = 0
     missing_seen: List[dict] = []
+    not_measured: List[dict] = []
     for block in blocks:
         status, fs = _check_block(project, block)
         if status == "PASS":
             blocks_pass += 1
         elif status == "MISSING":
             missing_seen.extend(fs)
+        elif status == "NOT_MEASURED":
+            not_measured.extend(fs)
         else:
             findings.extend(fs)
 
@@ -861,8 +989,10 @@ def main(argv: Optional[List[str]] = None) -> int:
         "blocks_fail": len(findings),
         "blocks_structure_only": len(structure_only),
         "structure_only_blocks": structure_only,
+        "blocks_not_measured": len(not_measured),
     }
-    rc = _verdict(project, args, findings, missing_seen, blocks_pass, summary)
+    rc = _verdict(project, args, findings, missing_seen, blocks_pass, summary,
+                  not_measured)
     # LAST, and on every path — see `structure_only_disclosure` for why the
     # position is part of the contract.
     structure_only_disclosure(GATE, structure_only, "corner_results.json")
@@ -870,10 +1000,16 @@ def main(argv: Optional[List[str]] = None) -> int:
 
 
 def _verdict(project: Path, args, findings: List[dict],
-             missing_seen: List[dict], blocks_pass: int, summary: dict) -> int:
+             missing_seen: List[dict], blocks_pass: int, summary: dict,
+             not_measured: Optional[List[dict]] = None) -> int:
+    not_measured = not_measured or []
     if args.block:
         if findings:
             return emit_fail(GATE, args, findings, summary)
+        # A measured defect outranks an unmeasured one; with no defect, a
+        # record that says it was not measured BLOCKS rather than passing.
+        if not_measured:
+            return _emit_not_measured(GATE, args, not_measured, summary)
         if missing_seen:
             return artefact_missing_for_block(
                 GATE, args, args.block,
@@ -882,6 +1018,8 @@ def _verdict(project: Path, args, findings: List[dict],
 
     if findings:
         return emit_fail(GATE, args, findings, summary)
+    if not_measured:
+        return _emit_not_measured(GATE, args, not_measured, summary)
     if missing_seen and blocks_pass == 0:
         return vacuous_pass(GATE, args,
                             f"all {len(missing_seen)} block(s) missing "

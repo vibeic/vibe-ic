@@ -999,10 +999,29 @@ def sim_deadline_s(deck_text: str) -> int:
     return int(min(max(SIM_DEADLINE_FLOOR_S, scaled), SIM_DEADLINE_CEILING_S))
 
 
-def _run_ngspice(container, sp_in_container, cwd=None, deck_text=None):
+def _run_ngspice(container, sp_in_container, cwd=None, deck_text=None,
+                 run_to_completion=False):
     """Run ngspice -b on a deck. `cwd` (optional) runs ngspice FROM that
     directory — the model lib's own directory, so any deck-relative output /
     scratch file lands beside it.
+
+    `run_to_completion=True` gives the run NO deadline at all: it ends when the
+    simulator ends, and a corner that does not converge is reported as NOT
+    COMPLETED with the simulator's own words rather than being cut off. This is
+    the flow's setting. MEASURED (vibe-ic#2062): under a deadline, which of the
+    nine PVT corners survived depended on the MACHINE — the same tree and the
+    same netlist gave three different grids at three different loads — so the
+    published PVT matrix was not a property of the design at all. A wall-clock
+    number can never be a measurement of a circuit. The deadline machinery
+    below is retained and still correct for a caller that asks for one; the
+    sweep does not ask.
+
+    The no-deadline case is expressed through the SAME container-side argv, as
+    `deadline_s=0` — GNU `timeout` documents DURATION 0 as "disable the
+    associated timeout", measured both directions on this image (coreutils 9.4:
+    `timeout -k 10 3 sleep 8` -> rc 124, `timeout -k 10 0 sleep 8` -> rc 0). So
+    no second execution path appears, and the container-side kill that stops an
+    orphan on a caller that DOES set a deadline is untouched.
 
     RESOLUTION RULE (measured on ngspice-46, both `.lib <file> <sec>` and
     `.include <file>`): a RELATIVE target is found iff it sits in the INCLUDING
@@ -1031,7 +1050,7 @@ def _run_ngspice(container, sp_in_container, cwd=None, deck_text=None):
     if _supports_json_measure(container, ngspice_bin):
         json_path = f"{sp_in_container}.measure.json"
         json_flag = f"--json-measure={shlex.quote(json_path)} "
-    deadline = sim_deadline_s(deck_text or "")
+    deadline = 0 if run_to_completion else sim_deadline_s(deck_text or "")
     cp = _docker(container,
                  f"{prefix}{shlex.quote(ngspice_bin)} -b {json_flag}"
                  f"{shlex.quote(sp_in_container)} 2>&1",
@@ -1045,10 +1064,16 @@ def _run_ngspice(container, sp_in_container, cwd=None, deck_text=None):
     if cp.returncode == 124:
         _stop = tran_stop_ns(deck_text or "")
         txt = (txt or "") + (
-            f"\nSIMULATION_DEADLINE_EXCEEDED: the deck asks for a transient "
-            f"of {_stop if _stop is not None else 'an unread span'} ns and "
-            f"was given {deadline} s of wall clock. This is a run that was "
-            f"STOPPED, not a measurement that came back empty.\n")
+            (f"\nSIMULATION_STOPPED_EXTERNALLY: this run was given NO "
+             f"deadline by the flow (the deck asks for a transient of "
+             f"{_stop if _stop is not None else 'an unread span'} ns) and was "
+             f"stopped anyway. Something outside the flow ended it. This is a "
+             f"run that was STOPPED, not a measurement that came back empty.\n")
+            if run_to_completion else
+            (f"\nSIMULATION_DEADLINE_EXCEEDED: the deck asks for a transient "
+             f"of {_stop if _stop is not None else 'an unread span'} ns and "
+             f"was given {deadline} s of wall clock. This is a run that was "
+             f"STOPPED, not a measurement that came back empty.\n"))
     json_meas = None
     if json_path:
         try:
@@ -1152,6 +1177,11 @@ def _run_ngspice(container, sp_in_container, cwd=None, deck_text=None):
         # structured per-measure record, or on scraping its log?
         "measure_source": measure_source,
         "measures_structurally_verified": json_meas is not None,
+        # What this run was actually given, so a reader never has to infer it.
+        "deadline_s": deadline,
+        "run_to_completion": bool(run_to_completion),
+        "stopped": cp.returncode == 124,
+        "rc": cp.returncode,
     }
     # #438(a): return the FULL transcript — run_block persists it as the
     # per-run ngspice invocation log that substantiates simulator_run.
@@ -1709,7 +1739,115 @@ PVT_PROCESS = (("ss", -0.03), ("tt", 0.0), ("ff", +0.03))
 PVT_TEMPS = (("m40c", -40, +0.01), ("27c", 27, 0.0), ("125c", 125, -0.01))
 
 
-def build_pvt_grid(base, base_log, real_sims, tol, process_corners=None):
+# A corner that did not produce a number is NOT_COMPLETED, and it is reported
+# with the SIMULATOR'S OWN WORDS. MEASURED (vibe-ic#2062): ss/-40C on this
+# design never finds an operating point — ngspice says "Transient op failed,
+# timestep too small" and "trouble with node <n>", writes 0 rows and prints
+# every node as -nan — and the sweep quietly omitted it so the caller filled
+# the cell with arithmetic off the tt/27C base. A reader then sees nine corners
+# where six were simulated and three were multiplication. The arithmetic itself
+# is fine as a spread estimate; publishing it in the same column as a
+# measurement, with no cause, is what makes the grid dishonest.
+#
+# chip-AGNOSTIC: these are stock SPICE convergence/abort diagnostics, not a
+# device, family or design literal.
+_NONCONV_RE = re.compile(
+    r"(?im)^.*\b(timestep too small|trouble with node|no convergence|"
+    r"convergence (?:problem|failure)|singular matrix|iteration limit|"
+    r"transient op failed|gmin stepping failed|source stepping failed|"
+    r"doanalyses|aborted|fatal error)\b.*$")
+
+
+# THE RUN'S OWN LOG MUST NAME WHAT THE SIMULATOR READ (vibe-ic#2062, R6).
+#
+# MEASURED. `pdk_revision_resolve.candidate_trees_from_run` derives the PDK
+# tree a run signed off against from the ABSOLUTE LIBRARY PATHS in the run's
+# own `*.log` files — "what RAN, rather than what was configured" — and it is
+# the record `benchmark_evidence_publish` REFUSES to stage a run without. On a
+# run whose A4 really did read the PDK it reported:
+#
+#   "PDK revision NOT RECORDED ... 10 tool log(s) scanned, none naming an
+#    absolute library path under a tree that declares a revision"
+#
+# All ten logs were this program's. The corner DECK names three absolute
+# `.lib` paths under the installed PDK; ngspice's stdout names none of them —
+# it echoes an absolute path only when a load FAILS. So the run read the PDK,
+# the deck records which files, and the log — the only artefact the resolver
+# looks at — did not. The tree itself was never the problem: it carries a
+# declared-revision artefact and qualifies the moment it is offered.
+#
+# Fixed where the log is WRITTEN, by copying the deck's own `.lib` / `.include`
+# targets into its head. Nothing is invented: every path here appears verbatim
+# in the deck the simulator was handed, and paths only (NDA hygiene — never PDK
+# content). chip-AGNOSTIC: SPICE include grammar, no family literal.
+_DECK_LIB_RE = re.compile(
+    r"""(?im)^\s*\.(?:lib|include|inc)\s+['"]?(/[^\s'"]+)""")
+
+
+def deck_library_header(deck_text: str) -> str:
+    """The absolute library paths a deck loads, as log-head lines.
+
+    Empty string when the deck loads none — a deck with no absolute include is
+    a real state (a fully self-contained deck) and inventing a line for it
+    would make the header meaningless where it does appear."""
+    seen, out = set(), []
+    for m in _DECK_LIB_RE.finditer(deck_text or ""):
+        path = m.group(1)
+        if path not in seen:
+            seen.add(path)
+            out.append(path)
+    if not out:
+        return ""
+    head = ["* pdk_libraries_loaded: the absolute library paths THIS deck "
+            "handed the simulator, copied from the deck itself so the run's "
+            "own log names what was read (vibe-ic#2062). Paths only."]
+    head += [f"* loaded_library: {p}" for p in out]
+    return "\n".join(head) + "\n"
+
+
+def not_completed_record(raw, sim_status, ok, value, log_rel):
+    """Why this corner produced no measurement, in the tool's own words.
+
+    Returns None when the corner DID complete with a value — a record that can
+    be produced for a healthy run says nothing when it appears on a sick one.
+    """
+    if ok and value is not None:
+        return None
+    st = sim_status or {}
+    lines, seen = [], set()
+    for m in _NONCONV_RE.finditer(raw or ""):
+        ln = m.group(0).strip()[:200]
+        if ln and ln not in seen:
+            seen.add(ln)
+            lines.append(ln)
+        if len(lines) >= 3:
+            break
+    if st.get("stopped"):
+        cls = "STOPPED_EXTERNALLY"
+    elif lines:
+        cls = "SIMULATOR_NONCONVERGENCE"
+    elif not ok:
+        cls = "SIMULATOR_ERROR"
+    else:
+        cls = "NO_MEASURE_FOR_GRADED_KEY"
+    return {
+        "reason_class": cls,
+        # The simulator's own diagnostic lines, verbatim and truncated —
+        # never this program's paraphrase of them.
+        "cause": (lines or [
+            w for w in (st.get("warnings") or [])][:3] or
+            ["the simulator completed and produced no value for the graded "
+             "metric; no diagnostic line was printed"]),
+        "simulator_rc": st.get("rc"),
+        "deadline_s": st.get("deadline_s"),
+        "run_to_completion": st.get("run_to_completion"),
+        "failed_analyses": st.get("failed_analyses"),
+        "ngspice_log": log_rel,
+    }
+
+
+def build_pvt_grid(base, base_log, real_sims, tol, process_corners=None,
+                   not_completed=None):
     """Construct the 9-corner PVT grid with HONEST per-corner provenance.
 
     real_sims : {(proc, tlbl): {"value": float, "log": str, "ok": bool}} for
@@ -1722,6 +1860,7 @@ def build_pvt_grid(base, base_log, real_sims, tol, process_corners=None):
     sections the grid spans; defaults to the open-PDK ss/tt/ff (PVT_PROCESS) so
     the sky130 path is unchanged."""
     real_sims = real_sims or {}
+    not_completed = not_completed or {}
     corners = process_corners or PVT_PROCESS
     pvt_grid = []
     corners_executed = 0
@@ -1730,8 +1869,15 @@ def build_pvt_grid(base, base_log, real_sims, tol, process_corners=None):
             real = real_sims.get((proc, tlbl))
             is_executed = bool(real and real.get("ok") and real.get("log")
                                and real.get("value") is not None)
+            nc = None if is_executed else not_completed.get((proc, tlbl))
             if is_executed:
                 v = real["value"]
+            elif nc is not None:
+                # ATTEMPTED and did not complete. There IS an arithmetic
+                # estimate available for this cell and it is deliberately NOT
+                # published: a run that was tried and failed is a hole with a
+                # cause, and a number in that cell reads as a measurement.
+                v = None
             elif base is None:
                 v = None
             else:
@@ -1746,10 +1892,18 @@ def build_pvt_grid(base, base_log, real_sims, tol, process_corners=None):
             }
             if is_executed:
                 corners_executed += 1
+                entry["completed"] = True
                 entry["_provenance"] = "real_ngspice"
                 entry["ngspice_log"] = real["log"]
                 entry["derived_from"] = None
+            elif nc is not None:
+                entry["completed"] = False
+                entry["_provenance"] = "NOT_COMPLETED"
+                entry["derived_from"] = None
+                entry["not_completed"] = nc
+                entry["ngspice_log"] = nc.get("ngspice_log")
             else:
+                entry["completed"] = False
                 entry["_provenance"] = "DERIVED"
                 entry["derived_from"] = "tt_27c base × process±3% × temp±1%"
             pvt_grid.append(entry)
@@ -1788,9 +1942,16 @@ def _run_pvt_corners(project, container, host_root, sl_dir, btype, block, pdk,
                      device_terminals=None, device_geometry_units=None,
                      origin=None, render=None, metric_key=None):
     """Attempt a REAL ngspice sim at each PVT corner (real .lib section + real
-    .temp) for the sized sweep point. Returns a real_sims dict for the corners
-    that genuinely converged; a corner whose model section is absent or whose
-    ngspice run failed is OMITTED so the caller derives it. The nominal/typ
+    .temp) for the sized sweep point. Returns `(real_sims, not_completed)`.
+
+    `real_sims` holds the corners that genuinely converged. `not_completed`
+    holds the corners that were ATTEMPTED and produced no value, each with the
+    simulator's own diagnostic — those are NOT derived, because a cell that was
+    tried and failed is a hole with a cause and a number in it reads as a
+    measurement. A corner whose model SECTION is absent was never attempted at
+    all and still derives, as before.
+
+    NO CORNER IS ENDED BY A CLOCK: every run here is `run_to_completion=True`. The nominal/typ
     corner reuses the step-1 base run (base_tt). §4.05: a corner is recorded
     real ONLY when its ngspice log exists on disk. chip-AGNOSTIC.
 
@@ -1800,6 +1961,7 @@ def _run_pvt_corners(project, container, host_root, sl_dir, btype, block, pdk,
     {role: subckt} map remapped into each corner deck."""
     corners = process_corners or PVT_PROCESS
     real_sims = {}
+    not_completed = {}
     if base_tt is not None:
         real_sims[(typ_section, "27c")] = base_tt
     tkey = metric_key or TARGETS.get(btype, {}).get("key", "vout")
@@ -1812,8 +1974,16 @@ def _run_pvt_corners(project, container, host_root, sl_dir, btype, block, pdk,
             if render is not None:
                 try:
                     deck, _ = render(proc, knob, val, temp_c)
-                except RuntimeError:
-                    continue          # corner stays honestly DERIVED
+                except RuntimeError as exc:
+                    # ATTEMPTED: the corner was reached and its deck could not
+                    # be built. That is a cause, not a derivation.
+                    not_completed[(proc, tlbl)] = {
+                        "reason_class": "DECK_NOT_RENDERABLE",
+                        "cause": [str(exc)[:200]],
+                        "simulator_rc": None, "deadline_s": None,
+                        "run_to_completion": True,
+                        "failed_analyses": None, "ngspice_log": None}
+                    continue
             else:
                 deck, _ = render_deck(btype, block, pdk, pdk_lib, proc, knob,
                                       val, deck_overrides=deck_overrides,
@@ -1823,22 +1993,35 @@ def _run_pvt_corners(project, container, host_root, sl_dir, btype, block, pdk,
             sp = sl_dir / f"pvt_{proc}_{tlbl}.sp"
             sp.write_text(deck_origin_header(origin or {})
                           + (subst_header or "") + deck)
+            # THE DECK REACHES THE CALL. MEASURED (vibe-ic#2062): this call
+            # site omitted `deck_text`, so `sim_deadline_s("")` returned the
+            # 120 s FLOOR for every PVT corner while the sized base run one
+            # function away passed `deck_text=tb` and got 7200 — the same decks,
+            # read back off disk, compute 7200. Eight of nine corners of a
+            # 51.2 us transient were cut at 120 s and published as arithmetic.
+            # The deck is handed over here so the disclosure can name the span;
+            # `run_to_completion` is what makes sure no clock ends the run.
             ok, meas, raw, _ss = _run_ngspice(
-                container, _container_path(container, host_root, sp))
+                container, _container_path(container, host_root, sp),
+                deck_text=deck, run_to_completion=True)
             log = sl_dir / f"pvt_{proc}_{tlbl}.ngspice.log"
-            log.write_text(raw)
+            log.write_text(deck_library_header(deck) + raw)
             v = meas.get(tkey)
             if v is None:
                 for _a in ("vfinal", "vsettle", "vout_final", "vlast"):
                     if meas.get(_a) is not None:
                         v = meas[_a]
                         break
+            log_rel = str(log.relative_to(project))
             if ok and v is not None:
                 real_sims[(proc, tlbl)] = {
-                    "value": v, "ok": True,
-                    "log": str(log.relative_to(project)),
+                    "value": v, "ok": True, "log": log_rel,
                 }
-    return real_sims
+            else:
+                nc = not_completed_record(raw, _ss, ok, v, log_rel)
+                if nc is not None:
+                    not_completed[(proc, tlbl)] = nc
+    return real_sims, not_completed
 
 
 # ───── Native custom-PDK deck context (v1.4.27 — consume the resolver) ─────
@@ -2791,12 +2974,12 @@ def _run_block(project, block, container, pdk, topology_override):
         sp_host.write_text(tb)
         ok, meas, raw, sim_status = _run_ngspice(
             container, _container_path(container, host_root, sp_host),
-            deck_text=tb)
+            deck_text=tb, run_to_completion=True)
         # ORGANIC-20260606 #438(a): persist the ngspice invocation log —
         # `simulator_run: true` is only claimable for corners whose
         # invocation log exists on disk.
         log_host = sl_dir / f"run_{knob}_{val}.ngspice.log"
-        log_host.write_text(raw)
+        log_host.write_text(deck_library_header(tb) + raw)
         # v0.2.55 — normalise the settle measure to the target key. The
         # transient-settle templates name their point-measure `vfinal`
         # (adc) / `vsettle` (delta_sigma / modulator) and ALIAS it to
@@ -2892,7 +3075,7 @@ def _run_block(project, block, container, pdk, topology_override):
     # exists on disk.
     base_tt = ({"value": base, "ok": True, "log": base_log}
                if base is not None and base_log else None)
-    real_sims = _run_pvt_corners(
+    real_sims, corner_not_completed = _run_pvt_corners(
         project, container, host_root, sl_dir, btype, block, pdk, pdk_lib,
         best.get("knob", "__noop__"), best.get("val", 0),
         deck_overrides, subst_header, base_tt,
@@ -2902,7 +3085,7 @@ def _run_block(project, block, container, pdk, topology_override):
         render=_render, metric_key=target["key"])
     pvt_grid, corners_executed = build_pvt_grid(
         base, base_log, real_sims, target.get("tol"),
-        process_corners=grid_corners)
+        process_corners=grid_corners, not_completed=corner_not_completed)
 
     verdict = _verdict(best, target)
     # v1.6.228 — for honest sim FAILs (where SKY130 demo template
@@ -2953,6 +3136,15 @@ def _run_block(project, block, container, pdk, topology_override):
             block_sim_warnings_dedup.append(w)
 
     full_pvt = corners_executed == len(pvt_grid)
+    # Every corner must reach a DETERMINATE outcome: a measurement, or a named
+    # non-completion. A corner that is neither — a cell quietly filled with
+    # arithmetic off the tt@27C base — is the one thing a reader cannot tell
+    # apart from a measurement, and it is what the A4 gate now refuses to pass
+    # over. `corners_derived` counts exactly those.
+    corners_not_completed = sum(
+        1 for c in pvt_grid if c.get("_provenance") == "NOT_COMPLETED")
+    corners_unaccounted = sum(
+        1 for c in pvt_grid if c.get("_provenance") == "DERIVED")
     real_corner = {
         "block": block,
         "block_type": btype,
@@ -3050,6 +3242,18 @@ def _run_block(project, block, container, pdk, topology_override):
         # with < total executed corners never claims a full PVT sweep.
         "corners_executed": corners_executed,
         "corners_derived": len(pvt_grid) - corners_executed,
+        # Of the non-executed corners: how many were ATTEMPTED and reported
+        # with a cause, and how many are silent arithmetic. The second number
+        # is the one that must be zero for a grid to be readable at all.
+        "corners_not_completed": corners_not_completed,
+        "corners_unaccounted": corners_unaccounted,
+        "every_corner_accounted": corners_unaccounted == 0,
+        "not_completed_causes": {
+            c["name"]: (c.get("not_completed") or {}).get("reason_class")
+            for c in pvt_grid if c.get("_provenance") == "NOT_COMPLETED"},
+        # No corner in this sweep was ended by a clock. See `_run_ngspice`.
+        "corner_deadline_s": 0,
+        "corner_runs_to_completion": True,
         "full_pvt_sweep_executed": full_pvt,
         "corners": pvt_grid,
         "best_corner": {
@@ -3074,11 +3278,15 @@ def _run_block(project, block, container, pdk, topology_override):
              "corners really simulated (real ss/tt/ff .lib section + real "
              ".temp per corner)"
              + ("" if full_pvt else
-                f" + {len(pvt_grid) - corners_executed} DERIVED ss/tt/ff × "
-                "-40/27/125 spread off the tt@27C base for corners whose "
-                "model section is absent or that did not converge (#438a: "
-                "these stay simulator_run=false / _provenance=DERIVED, so "
-                "full_pvt_sweep_executed is false).")
+                f" + {corners_not_completed} NOT_COMPLETED (attempted, no "
+                "value, each carrying the simulator's own cause and NO "
+                "number) + "
+                f"{corners_unaccounted} DERIVED ss/tt/ff × -40/27/125 spread "
+                "off the tt@27C base for corners whose model section is "
+                "absent, so they were never attempted (#438a: these stay "
+                "simulator_run=false / _provenance=DERIVED, so "
+                "full_pvt_sweep_executed is false). No corner here was ended "
+                "by a deadline: every corner run to completion (#2062).")
              + " Verdict target "
              + (f"INHERITED from L5 = {target['target']} ({target['label']})."
                 if spec["target_source"] == "L5" else

@@ -552,6 +552,31 @@ SLEW_MARGIN_EXPR = (
 #: respond to is `vref`, the two stated design conditions, and — the term that
 #: dominates here — the RATIO of the clock the circuit is SIZED at to the
 #: clock it is EVALUATED at.
+#: RULED (vibe-ic#2062, owner, 2026-09-06): THE BLOCK IS HELD TO THE CLOCK ITS
+#: DECLARATION NAMES AS THE OPERATING POINT — L5's `fclk` TARGET — AND THE
+#: FIGURE AT THE RANGE CEILING IS REPORTED BESIDE IT AS INFORMATION.
+#:
+#: The argument for holding it to the ceiling is preserved verbatim below,
+#: because it is the argument the ruling answers and a later reader needs both
+#: halves. What the ruling settles is which of the two is the ENTRY
+#: REQUIREMENT: a declaration states one operating point and a range around
+#: it, and refusing the topology because the WORST END of a stated range would
+#: not settle turns a range column into a requirement nobody wrote. The
+#: ceiling figure does not disappear — it is evaluated, published and named on
+#: every emission, as `settling_time_constants_at_fclk_max`, so a reader sees
+#: 13.33 at the declared 1 MHz and 1.33 at the declared 10 MHz ceiling in the
+#: same record and can tell that the range, not the topology, is what does not
+#: close.
+#:
+#: What the ruling does NOT settle, and what is therefore left standing and
+#: flagged: the emitted TESTBENCH is still built from `fclk_max` (`tper_ns =
+#: 1000 / fclk_max`, three lines of it below in `stimulus`), so the deck
+#: exercises this block at a clock it is no longer held to. That mismatch is
+#: real and it is recorded here rather than closed silently — closing it
+#: multiplies every corner's transient span by the clock ratio, which is a
+#: run-cost decision, not a correctness one this file may take alone.
+#:
+#: ── THE SUPERSEDED ARGUMENT, KEPT ─────────────────────────────────────────
 #: EVALUATED AT `fclk_max`, THE CLOCK THE EMITTED TESTBENCH ACTUALLY RUNS AT.
 #: Not a free choice, and MEASURED rather than argued: the only deck that
 #: exists for this block runs the modulator at `fclk_max` -- the deck says so
@@ -568,8 +593,20 @@ SLEW_MARGIN_EXPR = (
 #: bound's name means in isolation, and no deck runs this block at `fclk` for
 #: the passing reading to describe. The clock a design is HELD to is the one
 #: it is exercised at.
+#: THE CEILING FIGURE — informational since the #2062 ruling. Kept under its
+#: original name so every measurement and mutation guard written against it
+#: still names the same expression.
 _SETTLING_TC_EXPR = (
     "(settle_periods_available / (fclk_max * hz_per_mhz)) "
+    "/ ((" + _LOAD_F_EXPR + ") "
+    "/ ((" + _TAIL_I_EXPR + ") / integrator_input_overdrive_v))")
+#: THE ENTRY REQUIREMENT — the same physics at the clock the declaration names
+#: as its operating point. `fclk` is also the clock the bias is DERIVED at
+#: (`_R_IB_L_UM_EXPR`), so the count this bound grades and the current the
+#: entry actually draws are now answers about the same clock; the closed form
+#: collapses to `vref * slew_design_margin / integrator_input_overdrive_v`.
+_SETTLING_TC_AT_FCLK_EXPR = (
+    "(settle_periods_available / (fclk * hz_per_mhz)) "
     "/ ((" + _LOAD_F_EXPR + ") "
     "/ ((" + _TAIL_I_EXPR + ") / integrator_input_overdrive_v))")
 #: ...and HOW MANY time constants the DECLARATION asks for. Settling to within
@@ -1955,7 +1992,8 @@ LIBRARY: Dict[str, Dict[str, Any]] = {
             # or the current ceiling up from the declared 1.0 mA. Which one
             # gives way is a decision about the design; this entry's job is
             # to say that one of them must, and it says it by refusing.
-            {"name": "settling_time_constants", "expr": _SETTLING_TC_EXPR,
+            {"name": "settling_time_constants",
+             "expr": _SETTLING_TC_AT_FCLK_EXPR,
              "min_expr": _SETTLING_TC_REQUIRED_EXPR, "max": 1.0e9,
              "why": ("the summing node has to SETTLE inside the part of the "
                      "clock this entry budgets for the transfer, not merely "
@@ -1968,6 +2006,29 @@ LIBRARY: Dict[str, Dict[str, Any]] = {
                      "capacitor, which is a converter that does not "
                      "integrate. A count below the requirement is that "
                      "statement, and saying so IS the answer")},
+            # THE RANGE CEILING, REPORTED AND NEVER BLOCKING (#2062 ruling).
+            # Same physics, evaluated at the fastest clock the declaration
+            # admits. It is published on every emission and inside every
+            # refusal record, so the two numbers a reader needs — what the
+            # block does at the operating point it declares, and what it would
+            # do at the top of the range it also declares — are in the same
+            # artefact. It is INFORMATIONAL because a range column is not a
+            # requirement: refusing the topology on the worst end of a stated
+            # range makes a declaration's honesty about its own span cost it
+            # the topology.
+            {"name": "settling_time_constants_at_fclk_max",
+             "expr": _SETTLING_TC_EXPR, "informational": True,
+             "min_expr": _SETTLING_TC_REQUIRED_EXPR,
+             "why": ("what the settling count WOULD be at the top of the "
+                     "declared clock range, against the same requirement. "
+                     "Below the requirement here and above it at the "
+                     "operating point means the topology settles where the "
+                     "declaration says the block runs and does not settle at "
+                     "the fastest rate the declaration also admits — a "
+                     "statement about the RANGE, which is why it is reported "
+                     "and does not refuse. The clock the bias is derived at "
+                     "is `fclk`, so this is the ratio of the two clocks times "
+                     "the operating-point count")},
             {"name": "sampling_cap_ff", "expr": SAMPLING_CAP_FF_EXPR,
              "min": 1.0, "max": 100000.0,
              "why": ("the noise budget derived from this declaration has to "
@@ -3180,6 +3241,10 @@ def entry_admission(lib: Dict[str, Any], spec_values: Dict[str, float],
     for spec in (lib.get(REQUIRES_DERIVED_KEY) or []):
         if not isinstance(spec, dict):
             continue
+        if spec.get("informational"):
+            # Reported by `entry_informational`, never a refusal. See the
+            # #2062 ruling note above `_SETTLING_TC_EXPR`.
+            continue
         # THREE STATES, and the third is not an error dressed as a verdict.
         # A bound whose expression cannot be RESOLVED has not been evaluated,
         # and the honest report of that is neither "satisfied" nor "not
@@ -3231,6 +3296,52 @@ def entry_admission(lib: Dict[str, Any], spec_values: Dict[str, float],
                            f"`{spec.get('name')}` = {val:g}, outside the "
                            f"admitted [{lo}, {hi}]")})
     return refusals
+
+
+def entry_informational(lib: Dict[str, Any], spec_values: Dict[str, float],
+                        measured: Optional[Dict[str, float]] = None
+                        ) -> List[Dict[str, Any]]:
+    """Every `requires_derived` row marked `informational`, EVALUATED.
+
+    These never refuse. They exist because a bound that was demoted from
+    blocking to reporting and then not reported is a number that quietly left
+    the record — the figure at the declared clock CEILING is exactly that, and
+    it is the figure a reader needs beside the operating-point one to see that
+    it is the RANGE, not the topology, that does not close.
+
+    A row whose expression cannot be resolved is reported as NOT_EVALUATED
+    with the missing name, the same third state `entry_admission` uses: "could
+    not read it" is not "read it and it was fine"."""
+    env = admission_env(lib, spec_values, measured)
+    out: List[Dict[str, Any]] = []
+    for spec in (lib.get(REQUIRES_DERIVED_KEY) or []):
+        if not isinstance(spec, dict) or not spec.get("informational"):
+            continue
+        rec: Dict[str, Any] = {"field": spec.get("name"),
+                               "expr": spec.get("expr"),
+                               "min_expr": spec.get("min_expr"),
+                               "why": spec.get("why")}
+        missing: List[str] = []
+        for key, ex in (("value", spec.get("expr")),
+                        ("requirement", spec.get("min_expr"))):
+            if ex is None:
+                continue
+            try:
+                rec[key] = _safe_eval(str(ex), env)
+            except KeyError as exc:
+                missing.append(str(exc.args[0] if exc.args else exc))
+            except Exception as exc:                            # noqa: BLE001
+                missing.append(f"{type(exc).__name__}: {exc}")
+        if missing:
+            rec["state"] = "NOT_EVALUATED"
+            rec["missing"] = sorted(set(missing))
+        else:
+            req = rec.get("requirement")
+            rec["state"] = ("MET" if req is None or rec["value"] >= float(req)
+                            else "NOT_MET")
+        rec["blocking"] = False
+        out.append(rec)
+    return out
 
 
 class LibraryEntryError(ValueError):
@@ -4851,7 +4962,9 @@ def render_md(ir: Dict[str, Any], lib: Dict[str, Any],
 
 def _gap_body(block: str, btype: str, entry: Dict[str, Any],
               refusals: Optional[List[Dict[str, Any]]] = None,
-              status: str = "NO_TOPOLOGY_IN_LIBRARY") -> Dict[str, Any]:
+              status: str = "NO_TOPOLOGY_IN_LIBRARY",
+              informational: Optional[List[Dict[str, Any]]] = None
+              ) -> Dict[str, Any]:
     """The honest-gap artefact. *refusals* is the list `entry_admission`
     returned — present when the library HAS an entry for this class and that
     entry declined for want of a bound input, absent when the class has no
@@ -4877,6 +4990,10 @@ def _gap_body(block: str, btype: str, entry: Dict[str, Any],
         "library_types": sorted(LIBRARY.keys()),
         "library_entry_exists": btype in LIBRARY,
         "admission_refusals": list(refusals or []),
+        # Reported on a refusal too: a reader looking at why a block was
+        # refused needs the informational figures that were evaluated
+        # alongside, not only the one that lost.
+        "derived_informational": list(informational or []),
         "unmet_requirements": sorted(
             {str(r.get("field")) for r in (refusals or [])
              if r.get("field")}),
@@ -4958,14 +5075,17 @@ def emit_for_block(project: Path, entry: Dict[str, Any],
             return rec
 
     def _gap(status: str,
-             refusals: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
+             refusals: Optional[List[Dict[str, Any]]] = None,
+             informational: Optional[List[Dict[str, Any]]] = None
+             ) -> Dict[str, Any]:
         """Write the honest-gap artefact and clear anything THIS producer
         emitted before. Shared by both decline paths so a refusal for want of
         a bound input leaves exactly the same shape on disk as a class with no
         entry — one `topology_gap.json`, no `topology.md`, no stale IR."""
         bdir.mkdir(parents=True, exist_ok=True)
         (bdir / "topology_gap.json").write_text(
-            json.dumps(_gap_body(name, btype, entry, refusals, status),
+            json.dumps(_gap_body(name, btype, entry, refusals, status,
+                                 informational),
                        indent=2, ensure_ascii=False) + "\n",
             encoding="utf-8")
         for stale in (md_path, ir_path):
@@ -4974,6 +5094,7 @@ def emit_for_block(project: Path, entry: Dict[str, Any],
                 stale.unlink()
         rec.update(action="gap", emitted=False, status=status,
                    admission_refusals=list(refusals or []),
+                   derived_informational=list(informational or []),
                    gap_path=str((bdir / "topology_gap.json")
                                 .relative_to(project)))
         return rec
@@ -4998,8 +5119,11 @@ def emit_for_block(project: Path, entry: Dict[str, Any],
     # requirement and so returns [] here.
     refusals = entry_admission(lib, spec_values,
                                bound_spec_units(project, name), measured)
+    # Evaluated whether or not the entry is admitted (#2062): a figure that is
+    # only published on the happy path is not published.
+    informational = entry_informational(lib, spec_values, measured)
     if refusals:
-        return _gap("ENTRY_REQUIREMENTS_NOT_MET", refusals)
+        return _gap("ENTRY_REQUIREMENTS_NOT_MET", refusals, informational)
 
     try:
         ir = build_ir(name, btype, entry, lib, spec_values, spec_path, project,
@@ -5012,7 +5136,8 @@ def emit_for_block(project: Path, entry: Dict[str, Any],
         return _gap("DEVICE_NOT_REALISABLE_ON_TARGET_PDK",
                     [{"requirement": "capacitor drawable at the library "
                                      "drawn width", "detail": r}
-                     for r in exc.refusals])
+                     for r in exc.refusals], informational)
+    ir["derived_informational"] = list(informational)
     md = render_md(ir, lib, fam, params)
     bdir.mkdir(parents=True, exist_ok=True)
     md_path.write_text(md, encoding="utf-8")
@@ -5022,6 +5147,7 @@ def emit_for_block(project: Path, entry: Dict[str, Any],
     if gap.is_file():
         gap.unlink()
     rec.update(action="emitted", emitted=True,
+               derived_informational=list(informational),
                topology_md=str(md_path.relative_to(project)),
                topology_json=str(ir_path.relative_to(project)),
                selection_basis=ir["selection_basis"],
