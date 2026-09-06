@@ -13055,6 +13055,28 @@ def _phase2_sv_synth_fallback(project: Path, container: str,
     # decision, so no PPA, timing or downstream artefact can move.
     from lec_run import FSM_ENCFILE_NAME  # noqa: E402 — consumer owns the name
     fsm_enc_c = f"{workdir}/{FSM_ENCFILE_NAME}"
+    # #2067 — KEEP the design's SPARSE FSM encodings. `fsm_recode` (run by
+    # `synth`) re-assigns the state encoding of every FSM it extracts, so an
+    # OpenTitan-style Hamming-separated encoding comes out one-hot and the
+    # fault-injection property it exists for is gone — invisibly, because the
+    # netlist stays functionally equivalent and LEC proves the key points.
+    # `(* fsm_encoding = "none" *)` on exactly the detected state registers is
+    # a PER-REGISTER opt-out, so every other FSM keeps its optimisation
+    # (`synth -nofsm` would disable the pass design-wide). Detection reads the
+    # design INPUT only (§4.05). NO-LEAK: no sparse FSM -> empty string ->
+    # byte-identical script.
+    try:
+        import sparse_fsm_detect as _sfd  # noqa: E402
+        _sparse_rep = _sfd.detect_paths([Path(f) for f in rtl_file_strs])
+        _sparse_cmd = _sfd.yosys_setattr_cmd(
+            _sparse_rep["register_names"], _sparse_rep["flop_instances"])
+        # This script already runs `proc; flatten` before the synth tail, and
+        # the attribute has to land AFTER the flatten (the wire that is really
+        # re-encoded lives inside the sparse flop and only carries its
+        # instance-path name once the design is flat).
+        _sparse_post = (_sparse_cmd + "; ") if _sparse_cmd else ""
+    except Exception:  # nosec — detection never blocks synthesis
+        _sparse_post = ""
     synth_tail = (f"synth -top {synth_top} -flatten -encfile {fsm_enc_c}; "
                   f"techmap; opt; dffunmap; abc -g cmos2; "
                   f"write_verilog -noexpr -nostr -noattr {netlist_c}; stat")
@@ -13079,7 +13101,8 @@ def _phase2_sv_synth_fallback(project: Path, container: str,
             f"yosys -p '{_slang_prefix}"
             f"read_slang {reads_join} --top {synth_top} "
             f"-DSYNTHESIS -DYOSYS {inc_flag}; "
-            f"hierarchy -top {synth_top}; proc; flatten; {synth_tail}'")
+            f"hierarchy -top {synth_top}; proc; flatten; {_sparse_post}"
+            f"{synth_tail}'")
         rc, out, err = _docker_exec(container, slang_cmd, marker=netlist_c)
         _append_log(log, f"SLANG FALLBACK FRONTEND ({fe_reason})", out, err)
         if rc == 0 and _phase2_retrieve_netlist(
@@ -13125,6 +13148,7 @@ def _phase2_sv_synth_fallback(project: Path, container: str,
                 f"cd {workdir} && {yosys_path} && "
                 f"yosys -p 'read_verilog {sv2v_out}; "
                 f"hierarchy -check -top {synth_top}; proc; flatten; "
+                f"{_sparse_post}"
                 f"{synth_tail}'")
             rc2, out2, err2 = _docker_exec(container, yosys_cmd,
                                            marker=netlist_c)
@@ -14717,7 +14741,41 @@ def step_yosys_synth(project: Path, top_name: str = "chip_top",
         from lec_run import FSM_ENCFILE_NAME  # noqa: E402
         return FSM_ENCFILE_NAME
 
-    cmds = [f"read_verilog -sv -DSIMULATION {f}" for f in rtl_files] + [
+    def _sparse_fsm_preserve_cmds(sources) -> list:
+        """#2067 — the yosys commands that stop `fsm_recode` re-encoding the
+        design's SPARSE FSMs.
+
+        `synth` runs `fsm`, whose `fsm_recode` sub-pass re-assigns the state
+        encoding of every FSM it extracts — by default to one-hot. A design
+        that deliberately chose a Hamming-distance-separated encoding for
+        fault-injection resistance (OpenTitan's `prim_sparse_fsm_flop`) loses
+        exactly the property the encoding exists for. The netlist stays
+        functionally EQUIVALENT, so LEC cannot see it: port equivalence says
+        the function is preserved, not the fault-injection property.
+
+        We inject `(* fsm_encoding = "none" *)` on exactly the detected state
+        registers rather than passing `synth -nofsm`, so every OTHER FSM in
+        the design keeps its normal optimisation. MEASURED on the
+        opentitan_aes `aes_ctr_fsm` block with the shipped image:
+
+            without   `wire [2:0] u_state_regs.u_state_flop.q_o`  (one-hot)
+            with      `wire [4:0] ...q_o`, reset 5'b01110 = CTR_IDLE, the
+                      RTL constant, and an EMPTY encoding table
+
+        Detection reads the design INPUT only (§4.05). NO-LEAK: a design with
+        no sparse FSM yields [], so its yosys script is byte-identical to
+        before this change; best-effort, and a detector failure never blocks
+        synthesis."""
+        try:
+            import sparse_fsm_detect as _sfd  # noqa: E402
+            rep = _sfd.detect_paths([Path(f) for f in sources])
+            return _sfd.yosys_encoding_preserve_cmds(
+                rep["register_names"], rep["flop_instances"], top=synth_top)
+        except Exception:  # nosec — never let detection break synth
+            return []
+
+    cmds = [f"read_verilog -sv -DSIMULATION {f}" for f in rtl_files] + \
+        _sparse_fsm_preserve_cmds(rtl_files) + [
         # v1.6.191 (#78 P0) — synth_top auto-selected ASIC-core
         # when available; falls back to caller's top_name.
         # #2050 — record the FSM encoding translation `fsm_recode` applies,
@@ -14920,6 +14978,32 @@ def step_yosys_synth(project: Path, top_name: str = "chip_top",
         try:
             canon_v.write_text(out_v.read_text())
         except OSError:
+            pass
+
+        # #2067 — REPORT whether the design's sparse FSM encodings survived.
+        # An audit nothing runs is inert, so the producer runs it here, next
+        # to the netlist it judges, and writes the report the flow can read:
+        #   fsm_recoded: []            nothing declared sparse was re-encoded
+        #   FSM_SPARSE_ENCODING_LOST   named refusal, listing the registers
+        # It is a REPORTER at this call-site and never changes the synth
+        # verdict — the standalone `sparse_fsm_encoding_check.py` is the gate
+        # (exit 1 on the refusal, exit 2 when neither observable was readable,
+        # which is NOT_MEASURED and never a PASS). Best-effort: a design with
+        # no sparse FSM writes a PASS report and nothing else moves.
+        try:
+            import sparse_fsm_encoding_check as _sfec  # noqa: E402
+            _enc_p = out_v.parent / _fsm_encfile_name()
+            _sfsm_rep = _sfec.check(
+                [_pl.rtl_dir(project)],
+                _enc_p if _enc_p.is_file() else None,
+                canon_v if canon_v.is_file() else None)
+            _sfsm_out = project / "reports" / "sparse_fsm_encoding.json"
+            _sfsm_out.parent.mkdir(parents=True, exist_ok=True)
+            _aa.write_text(
+                _sfsm_out, json.dumps(_sfsm_rep, indent=2, sort_keys=True))
+            if _sfsm_rep.get("refusal"):
+                print(f"[phase2:synth] {_sfsm_rep['detail']}", file=sys.stderr)
+        except Exception:  # nosec — the report never blocks synthesis
             pass
 
         # v1.6.196 (#83 P0-A) — append a provenance.jsonl entry
