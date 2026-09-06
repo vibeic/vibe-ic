@@ -15572,6 +15572,30 @@ def _drt_final_violations(log_text: str) -> Optional[int]:
 _KEY_DRT = "detailedroute__route__drc_errors"
 
 
+def _route_verdict(rec, final_verified: Optional[int]) -> Tuple[Optional[int], Optional[str], bool]:
+    """(published count, disagreement note, refuse) — the CZD-17 ruling, PURE.
+
+    The in-loop metric and the post-route prose are readings at DIFFERENT
+    POINTS IN TIME (FlexDR::end vs verifyRoute), so their difference is
+    structural. The FINAL verified count decides; a difference is a NOTE; and
+    the absence of ANY final reading, when the two do disagree, is still a
+    refusal — an unmeasured route must not read as a clean one.
+
+    Pure so the three cases can be driven directly instead of inferred from a
+    full PnR, and so a mutation that restores the old refusal CHANGES AN ANSWER
+    rather than merely moving a line of source."""
+    if rec.ok:
+        return (final_verified if final_verified is not None else rec.value,
+                None, False)
+    if final_verified is None:
+        return None, None, True
+    note = (f"ROUTE_DRC_METRIC_DISAGREEMENT (recorded, not a refusal): "
+            f"{rec.detail} The in-loop metric is read before the repair passes "
+            f"and before verifyRoute; the published verdict is the FINAL "
+            f"post-route verified count {final_verified!r} (DRT-0701/0702).")
+    return final_verified, note, False
+
+
 def _drt_reading(out_dir: Path, log_text: str):
     """(reconciliation, raw tool metrics) for the route DRC count.
 
@@ -28004,18 +28028,57 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
     if _drt_rec.status in (_sm.NO_METRIC, _sm.NEITHER, _sm.PROSE_BLIND):
         print(f"[pnr] ROUTE_DRC {_drt_rec.status}: {_drt_rec.detail}",
               file=sys.stderr)
-    if not _drt_rec.ok:
+    # CZD-17 / ordrv5 — THE VERDICT IS THE FINAL COUNT, NOT THE IN-LOOP ONE.
+    #
+    # The two quantities this step used to demand agreement from are readings
+    # taken at DIFFERENT POINTS IN TIME, so a "disagreement" between them is
+    # structural rather than evidence of a broken tool:
+    #
+    #   metric  `route__drc_errors`  OpenROAD emits it in FlexDR::end, BEFORE
+    #           the repair passes and before verifyRoute (FlexDR.cpp:1714).
+    #           It is the state of the route mid-loop.
+    #   prose   `[INFO DRT-0702] Post-route verification: N violation(s).`
+    #           the whole-design verifyRoute — the FINAL state, the geometry
+    #           that actually ships.
+    #
+    # MEASURED on this lane's own RUN A (subservient x gf180mcuD, image 0.3.46):
+    # thirteen `[INFO DRT-0199] Number of violations = 1.` lines and then
+    # `[INFO DRT-0702] Post-route verification: 0 violation(s).` — the repair
+    # cleared the last junction. The route CONVERGED and the step refused
+    # anyway, recording route convergence as UNKNOWN for a design that had
+    # none left. Contrast rbsub2's run, loop 0 and final 5: a REAL
+    # non-convergence that the same comparison would have called a
+    # disagreement rather than the failure it is.
+    #
+    # So: the FINAL count decides, the in-loop count is DIAGNOSTIC and is
+    # recorded beside it, and a difference between them is a NOTE. What is
+    # still refused is the absence of any final reading — an unmeasured route
+    # must never read as a clean one.
+    _drt_final = _sdf.router_post_route_final_count(out + err)
+    if _drt_final is None:
+        _lp = out_dir / "openroad.log"
+        if _lp.is_file():
+            _drt_final = _sdf.router_post_route_final_count(
+                _lp.read_text(errors="ignore"))
+    _drt_extras["drt_in_loop_metric"] = _drt_metrics.get(_KEY_DRT)
+    _drt_extras["drt_final_verified"] = _drt_final
+    _drt_published, _note, _refuse = _route_verdict(_drt_rec, _drt_final)
+    if _note is not None:
+        print(f"[pnr] {_note}", file=sys.stderr)
+        _drt_extras["drt_metric_disagreement_note"] = _note
+    if _refuse:
         return StepResult(
             "pnr", "FAIL", time.time() - t0,
-            (f"ROUTE_DRC_METRIC_DISAGREEMENT: {_drt_rec.detail} No "
-             f"route-convergence verdict is issued while the two disagree. "
-             f"Emitted DEF/GDS are kept for debugging but are NOT sign-off "
-             f"artifacts."),
+            (f"ROUTE_DRC_NOT_MEASURED: {_drt_rec.detail} The in-loop metric "
+             f"and the log disagree AND no final post-route verification "
+             f"(DRT-0701/0702) is present, so there is no final count to "
+             f"publish. Emitted DEF/GDS are kept for debugging but are NOT "
+             f"sign-off artifacts."),
             [str(out_dir / "openroad.log"), str(out_dir / _PNR_METRICS)],
-            extras={"finding": "ROUTE_DRC_METRIC_DISAGREEMENT",
+            extras={"finding": "ROUTE_DRC_NOT_MEASURED",
                     "resize_history": resize_history,
                     "loosen_declines": loosen_declines, **_drt_extras})
-    _drt_viol = _drt_rec.value
+    _drt_viol = _drt_published
     if _drt_viol is not None and _drt_viol > 0:
         # #914 — this verdict used to hand the operator a remedy ("increase
         # --die-um, lower --util") that the automatic ladder had just declined
