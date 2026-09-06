@@ -402,3 +402,30 @@ def test_the_runner_asks_for_the_attribution_at_a6_and_only_there(
         seen.clear()
         AOSR.step_for_block(proj, {"name": "b"}, other, None)
         assert "analog_a6_drc_attribute.py" not in seen, (other, seen)
+
+
+def test_the_deviation_annotation_can_actually_match_what_a5_writes(tmp_path):
+    """`covered_by_deviation` was false on every violation of every block.
+
+    The producer writes its boxes with `list(...)`, so each detail reads
+    `... at [43039, 58469, 43920, 58499] / [42639, 58516, 43964, 58546]`, and
+    this reader's pattern accepted only `(...)`. It matched NOTHING A5 has
+    ever written, so a violation A5 had recorded in the same run read as one
+    A5 did not know about. Measured on the real `layout_provenance.json` of a
+    294-device block: 0 boxes recovered before, 5788 after.
+    """
+    import json
+
+    prov = {"deviations": [
+        {"quantity": "metal3_space_lambda",
+         "detail": "nets a and b are 17 lambda apart on metal3 at "
+                   "[43039, 58469, 43920, 58499] / "
+                   "[42639, 58516, 43964, 58546]"},
+        {"quantity": "bulk_tap_clearance_lambda",
+         "detail": "the best position clears by 7 lambda"},
+    ]}
+    (tmp_path / "layout_provenance.json").write_text(json.dumps(prov))
+    got = A6A.recorded_deviation_boxes(tmp_path, 100)
+    assert ("metal3_space_lambda", (43039, 58469, 43920, 58499)) in got
+    assert ("metal3_space_lambda", (42639, 58516, 43964, 58546)) in got
+    assert len(got) == 2, got

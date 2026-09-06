@@ -290,8 +290,16 @@ def recorded_deviation_boxes(bdir: Path, lam: int
         return []
     out = []
     for dev in doc.get("deviations", []) or []:
-        for box in re.findall(r"\((-?\d+), (-?\d+), (-?\d+), (-?\d+)\)",
-                              str(dev.get("detail", ""))):
+        # BOTH BRACKETS. The producer writes its boxes with `list(...)`, so
+        # every one of them reads `[43039, 58469, 43920, 58499]`; this
+        # pattern accepted only `(...)`, so it matched NOTHING that A5 has
+        # ever written and `covered_by_deviation` was false on every
+        # violation of every block. A dead annotation is worse than none: it
+        # reads as "A5 did not know about this" for geometry A5 recorded in
+        # the same run.
+        for box in re.findall(
+                r"[\[(](-?\d+),\s*(-?\d+),\s*(-?\d+),\s*(-?\d+)[\])]",
+                str(dev.get("detail", ""))):
             out.append((str(dev.get("quantity")),
                         tuple(int(v) for v in box)))
     return out

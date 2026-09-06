@@ -490,6 +490,19 @@ def _klayout_lvs_runset_runner(deck: str, gds: str, netlist: str, block: str,
                       "tail": (out_p + err_p)[-300:]}
 
     db = work / f"{block}.lvsdb"
+    # WHERE THE EXTRACTED NETLIST GOES, SAID OUT LOUD. Unset, the runset
+    # derives the path from the active cellview's filename — which in batch
+    # mode is empty, so it lands beside the process's own working directory
+    # and the write is refused. MEASURED on this campaign's blocks:
+    #
+    #   ERROR: RuntimeError: Unable to open file: /home/reyerchu//ldo_extracted.cir
+    #          (errno=13) in Netlist::write in Executable::cleanup
+    #
+    # That exception is raised in the runset's CLEANUP, after the verdict is
+    # printed and before the LVS database is written — so the arm reported
+    # `mismatch` and named an `.lvsdb` that does not exist. The verdict was
+    # right and the only artefact that could say WHY was never created.
+    ext_cir = work / f"{block}_extracted.cir"
     rc, out, err = _docker_exec(
         container,
         marker=_to_container_path(container, str(db)),
@@ -499,6 +512,8 @@ def _klayout_lvs_runset_runner(deck: str, gds: str, netlist: str, block: str,
         f"-rd topcell={shlex.quote(block)} "
         f"-rd schematic={shlex.quote(_to_container_path(container, str(cmp_sp)))} "
         f"-rd report={shlex.quote(_to_container_path(container, str(db)))} "
+        f"-rd target_netlist="
+        f"{shlex.quote(_to_container_path(container, str(ext_cir)))} "
         f"-rd run_mode=deep")
     verdict = lvs_runset_verdict((out or "") + (err or ""))
     if verdict is None:
@@ -517,6 +532,8 @@ def _klayout_lvs_runset_runner(deck: str, gds: str, netlist: str, block: str,
                      "declared_ports": len(ports),
                      "device_calls_rewritten": stats["device_calls_rewritten"],
                      "source_devices": source_device_count(prepared, block),
+                     "extracted_netlist": (str(ext_cir) if ext_cir.is_file()
+                                           else None),
                      "layout_devices": None,
                      "layout_devices_absent_because": (
                          "the klayout LVS runset reports a verdict and an "
@@ -590,10 +607,20 @@ def _write_drc_report(bdir: Path, block: str, violations: int,
     violation count + pass/skip tallies, never rule names / geometry."""
     rpt = bdir / "drc.report"
     verdict = "PASS" if violations == 0 else "FAIL"
+    # THE HEADER NAMED ONE ENGINE WHATEVER RAN. Every report this function
+    # has ever written opens "native svrfdrc (staged foundry .rule deck)" —
+    # including the ones the KLayout branch produced, whose own `method:`
+    # line two lines down says `klayout_runset`. A reader who takes the first
+    # line at face value attributes the number to an engine and a deck format
+    # that were not used. The engine is `meta['method']`, so the header says
+    # that and nothing else.
+    method = meta.get("method", "svrf_native")
     lines = [
-        f"# {block} per-block DRC — native svrfdrc (staged foundry .rule deck)",
-        f"# method: {meta.get('method', 'svrf_native')} "
-        f"(numbers only — NDA hygiene; no rule names / geometry)",
+        f"# {block} per-block DRC — engine: {method} "
+        f"(the staged sign-off deck this engine reads)",
+        f"# numbers only — NDA hygiene; no rule names / geometry. The "
+        f"engine's own per-rule report is kept beside this file"
+        + (f" as {meta['raw_report']}" if meta.get("raw_report") else ""),
         f"rules_pass: {meta.get('rules_pass', 0)}",
         f"rules_skip: {meta.get('rules_skip', 0)}",
         f"violations: {violations}",
@@ -623,6 +650,15 @@ def _write_lvs_report(bdir: Path, block: str, verdict: str,
         **({"counts_absent_because": meta["layout_devices_absent_because"]}
            if meta.get("layout_devices") is None
            and meta.get("layout_devices_absent_because") else {}),
+        # A MISMATCH VERDICT WITH NO PATH TO ITS EVIDENCE IS A DEAD END. The
+        # engine's own database and extracted netlist are where the next
+        # reader finds WHICH nets and devices did not pair; both are named
+        # here, and each is named only when it is actually on disk.
+        **({"lvs_database": meta["report"]}
+           if meta.get("report") and Path(str(meta["report"])).is_file()
+           else {}),
+        **({"extracted_netlist": meta["extracted_netlist"]}
+           if meta.get("extracted_netlist") else {}),
         "note": ("device-level LVS (bulk-normalize + pin-fix); numbers only — "
                  "NDA hygiene, no netlist content"),
     }, indent=2) + "\n")
@@ -671,18 +707,33 @@ def run_block_pv(project: Path, block: str, res: Dict[str, Any],
     elif gds is None:
         reasons.append("no block GDS for DRC")
     else:
+        # THE ENGINE'S OWN REPORT AND THE SUMMARY ARE TWO ARTEFACTS. They
+        # were one path: the KLayout branch writes its RDB to the file it is
+        # handed, and `_write_drc_report` then overwrote that file with the
+        # six-line tally. The RDB is the ONLY per-rule evidence either engine
+        # produces — which rule, how many, where — and every run destroyed it
+        # the moment it was read. Measured on this campaign's two blocks: the
+        # numbers 2780 and 264 survived, and the four rule names under them
+        # had to be recovered by re-running the deck by hand. The raw report
+        # keeps its own name beside the summary; nothing overwrites it.
+        raw = bdir / ("drc.lyrdb" if deck_kind(str(drc_deck)) == "klayout"
+                      else "drc.rawreport")
         runner = drc_runner or (
             lambda deck, g, blk, ctn: _default_drc_runner(
-                deck, g, blk, ctn, bdir / "drc.report"))
+                deck, g, blk, ctn, raw))
         violations, meta = runner(str(drc_deck), str(gds), block, container)
         if violations is None:
             reasons.append(f"DRC engine unavailable: {meta.get('reason', '?')}")
         else:
-            _write_drc_report(bdir, block, int(violations), meta or {})
+            meta = dict(meta or {})
+            if raw.is_file():
+                meta["raw_report"] = str(raw.relative_to(project))
+            _write_drc_report(bdir, block, int(violations), meta)
             ran = True
             drc_result = {"executed": True, "violations": int(violations),
                           "verdict": "PASS" if violations == 0 else "FAIL",
-                          "report": str((bdir / "drc.report").relative_to(project))}
+                          "report": str((bdir / "drc.report").relative_to(project)),
+                          "raw_report": meta.get("raw_report")}
 
     # ── LVS: block source netlist vs block GDS → klayout_pdk_lvs compare ──
     lvs_deck = res.get("lvs_deck")

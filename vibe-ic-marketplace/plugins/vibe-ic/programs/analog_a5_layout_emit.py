@@ -340,7 +340,19 @@ def parse_cell(text: str) -> dict:
         name = sm.group(1)
         if name in ("checkpaint", "labels", "properties"):
             continue          # bookkeeping, not geometry
-        sections[name] = [tuple(int(v) for v in r)
+        # OUTWARD, never toward zero. A `magscale 1 2` gencell puts edges on
+        # the HALF lambda, and `int()` pulls both of them toward zero: the
+        # low edge rises, the high edge falls, and every rectangle this
+        # emitter reads is up to a lambda SMALLER than the one the deck will
+        # grade. That is the wrong direction for a number used as an
+        # obstacle. MEASURED, after the island placer was already clearing
+        # everything it could see: 30 M2.b violations left on one block, all
+        # of them at a gap of 0.205 um against a 0.21 um rule — one half
+        # lambda, and the placer had computed 0.21 and was satisfied. The
+        # same law as `Geo.L`: a minimum is never rounded down, and neither
+        # is the size of the thing you have to stay away from.
+        sections[name] = [(int(math.floor(r[0])), int(math.floor(r[1])),
+                           int(math.ceil(r[2])), int(math.ceil(r[3])))
                           for r in _gl.parse_rects_lambda(sm.group(2), scale)]
 
     def metal_level_at(x: int, y: int) -> int:
@@ -737,24 +749,74 @@ class Geo:
             self.wire[n] = max(L(wire_w_um), L(need) if need else 1)
         self.via_pad = {}
         self.patch = {}
+        self.short_half: Dict[int, int] = {}
+        self.long_half: Dict[int, int] = {}
+        self.enc_half: Dict[int, int] = {}
+        self.via_pad_min: Dict[int, int] = {}
+        self.area_lam2: Dict[int, int] = {}
         for k in range(1, 8):
             side = max(2 * pad_half_um, rules["via_width_um"].get(k, 0.0))
             half = max(1, int(round(side * lam / 2)))
             self.via_pad[k] = half
             enc = max(rules["via_surround_um"].get((k, k), 0.0),
                       rules["via_surround_um"].get((k, k + 1), 0.0))
+            enc_dir = max(rules.get("via_surround_dir_um", {}).get((k, k), 0.0),
+                          rules.get("via_surround_dir_um", {}).get((k, k + 1),
+                                                                   0.0))
             area = max(rules["metal_area_um2"].get(k, 0.0),
                        rules["metal_area_um2"].get(k + 1, 0.0))
-            # a via island must be wide enough for the enclosure the deck
-            # demands AND large enough for the minimum-area rule, because an
-            # island connected to nothing else is its own area region
-            by_enc = half + L(enc) if enc else half
+            # A via island must clear the cut by the surround the deck
+            # demands AND be large enough for the minimum-area rule, because
+            # an island connected to nothing else is its own area region.
+            #
+            # THE TWO SURROUNDS ARE NOT ONE. This PDK states an ALL-AROUND
+            # surround of 0.005 um and a DIRECTIONAL one of 0.045 um, and
+            # `deck_rules` now hands them over separately. Applying the
+            # directional distance on every side is not caution: it is a
+            # different rule, nine times the stated all-around one, and it
+            # is what made every island a 0.4 um square. MEASURED on
+            # ihp-sg13g2: the square is wider than the 0.16 um terminal
+            # metal a device gencell offers, so it overhangs into the
+            # 0.185 um gap the gencell leaves above that terminal, and the
+            # sign-off deck answers M1.b / M2.b / V1.b — 2242 of them across
+            # two blocks, every one of them this island's own edge.
+            #
+            # So the island is ANISOTROPIC by construction: the all-around
+            # surround on the SHORT axis, the directional one on the LONG
+            # axis, and the minimum area met by lengthening the long axis
+            # rather than by growing both. Which axis is long is decided per
+            # site, by where the neighbouring geometry leaves room.
+            # At least ONE lambda of metal past the cut on every side even
+            # where the deck states no all-around surround at all: a metal
+            # island exactly the size of the cut it covers is a drawing this
+            # generator will not make, and saying so here is cheaper than a
+            # rule nobody wrote down. It is the generator's choice, like the
+            # wire width, and it is recorded with the rest of them.
+            short = half + max(L(enc) if enc else 0, 1)
+            long_by_enc = half + (L(enc_dir) if enc_dir else 0)
             # one lambda of margin on the area island: the rule is an
             # inequality on a quantised grid, and a patch drawn at exactly
             # the minimum has nowhere to lose a half-lambda
-            by_area = (int(math.ceil((area ** 0.5) * lam / 2)) + 1
-                       if area else 0)
-            self.patch[k] = max(by_enc, by_area)
+            long_by_area = (int(math.ceil(area * lam * lam
+                                          / (4.0 * short))) + 1
+                            if area else 0)
+            self.short_half[k] = short
+            self.long_half[k] = max(long_by_enc, long_by_area, short)
+            self.enc_half[k] = max(long_by_enc, short)
+            # The painted via is the GENERATOR's size; the deck's own via
+            # width is the FLOOR. Where the preferred pad leaves no legal
+            # island, the floor is what the deck actually asks for, and
+            # falling back to it is reading the deck rather than overruling
+            # it. Recorded per site in the provenance when it is used.
+            floor = max(1, int(math.ceil(
+                rules["via_width_um"].get(k, 0.0) * lam / 2 - 1e-9))) \
+                if rules["via_width_um"].get(k) else half
+            self.via_pad_min[k] = min(half, floor)
+            self.area_lam2[k] = int(round(
+                rules["metal_area_um2"].get(k, 0.0) * lam * lam))
+            # `patch` stays the widest half this generator can paint at a
+            # via, because `pitch()` sizes its corridors from it.
+            self.patch[k] = self.long_half[k]
 
     def metal_space(self, layer: str) -> int:
         m = _METAL_RE.match(layer) or _VIA_RE.match(layer)
@@ -811,6 +873,7 @@ class Plan:
 
     def __init__(self) -> None:
         self.shapes: List[dict] = []      # {net, layer, box}
+        self.sites: Optional["Sites"] = None
         self.tcl: List[str] = []
         self.deviations: List[dict] = []
         self.ports: List[Tuple[str, int, int]] = []
@@ -826,8 +889,10 @@ class Plan:
               ) -> None:
         x1, x2 = min(x1, x2), max(x1, x2)
         y1, y2 = min(y1, y2), max(y1, y2)
-        self.shapes.append({"net": net, "layer": layer,
-                            "box": (x1, y1, x2, y2)})
+        row = {"net": net, "layer": layer, "box": (x1, y1, x2, y2)}
+        self.shapes.append(row)
+        if self.sites is not None:
+            self.sites.add(row)
         self.tcl.append(f"box {x1} {y1} {x2} {y2}")
         self.tcl.append(f"paint {layer}")
 
@@ -851,8 +916,318 @@ class Plan:
         self.deviations.append(rec)
 
 
+_CONTACT_SECTION = re.compile(r"cont|c$")
+
+
+def carried_planes(section: str) -> List[str]:
+    """Which CONDUCTOR planes a gencell section's tiles actually occupy.
+
+    In Magic a contact type IS its two conductors plus the cut, so the metal
+    a contact carries is NOT in the metal section — the tiles there stop at
+    the contact's edge, and the GDS the sign-off deck grades has metal
+    everywhere the contact is. A reader that takes `<< metal2 >>` at face
+    value is blind to every metal2 rectangle a via1 tile generates.
+    `magic_gencell_layout_lib.implicit_metal_sections` measured the same law
+    for metal1 (a `psubdiffcont` neighbour a metal1-only reader could not
+    see, and 30 notch violations from not seeing it); this is that law
+    applied to every level, from the section NAME, so no PDK layer is
+    named here.
+
+    MEASURED on delta_sigma, with the island placer already clearing every
+    metal2 rectangle it could see: 80 M2.b violations left, all of them
+    against device metal2 that exists only in the GDS a via1 tile writes.
+    """
+    out = [section]
+    vm = _VIA_RE.match(section)
+    if vm and not _METAL_RE.match(section):
+        k = int(vm.group(1))
+        out += [f"metal{k}", f"metal{k + 1}"]
+    elif not _METAL_RE.match(section) and _CONTACT_SECTION.search(section):
+        out.append("metal1")
+    return out
+
+
+def device_planes(cell: dict) -> Dict[str, List[Tuple[int, ...]]]:
+    """The gencell's geometry as the DECK will see it: one entry per
+    conductor plane, with every contact's implied metal folded in."""
+    planes: Dict[str, List[Tuple[int, ...]]] = {}
+    for section, rects in cell["sections"].items():
+        for layer in carried_planes(section):
+            if not (_METAL_RE.match(layer) or _VIA_RE.match(layer)):
+                continue
+            planes.setdefault(layer, []).extend(rects)
+    return planes
+
+
+def _linked(a: str, b: str) -> bool:
+    """Two layers a current can cross between: the same metal, the same via,
+    or a via and either metal it joins. Derived from the layer NAMES, so a
+    PDK with more or fewer levels needs no entry anywhere."""
+    if a == b:
+        return True
+    va, vb = _VIA_RE.match(a), _VIA_RE.match(b)
+    ma, mb = _METAL_RE.match(a), _METAL_RE.match(b)
+    if va and mb and not _VIA_RE.match(b):
+        k = int(va.group(1))
+        return int(mb.group(1)) in (k, k + 1)
+    if vb and ma and not _VIA_RE.match(a):
+        k = int(vb.group(1))
+        return int(ma.group(1)) in (k, k + 1)
+    return False
+
+
+def cell_components(cell: dict) -> Dict[Tuple[str, int], int]:
+    """Two ids per rectangle: (conductor, same-layer polygon).
+
+    Union-find over the cell's metal and via rectangles: two that touch or
+    overlap on electrically linked layers are the same conductor. Magic
+    writes a conductor as a TILE DECOMPOSITION, so a terminal's metal is
+    many abutting rectangles and a scan that treats each rectangle as its
+    own obstacle would call a terminal's own metal foreign to itself."""
+    items: List[Tuple[str, int, Tuple[int, ...]]] = []
+    for layer, rects in sorted(device_planes(cell).items()):
+        for j, r in enumerate(rects):
+            items.append((layer, j, tuple(r)))
+    parent = list(range(len(items)))
+
+    def find(i: int) -> int:
+        while parent[i] != i:
+            parent[i] = parent[parent[i]]
+            i = parent[i]
+        return i
+
+    for i in range(len(items)):
+        la, _ja, ra = items[i]
+        for j in range(i + 1, len(items)):
+            lb, _jb, rb = items[j]
+            if not _linked(la, lb):
+                continue
+            if ra[0] > rb[2] or rb[0] > ra[2] or ra[1] > rb[3] or rb[1] > ra[3]:
+                continue
+            a, b = find(i), find(j)
+            if a != b:
+                parent[a] = b
+    # A SECOND partition, on ONE layer at a time. The first says what is
+    # electrically the same conductor; this one says what MERGES INTO ONE
+    # POLYGON on the layer the deck is grading. They are not the same
+    # question and the deck only ever asks the second: two rectangles of one
+    # conductor that meet only through a via are still two polygons on the
+    # metal between them, and the spacing rule applies between them exactly
+    # as it does between strangers. Exempting a whole conductor from spacing
+    # because the island touched it SOMEWHERE is how an island lands two
+    # lambda from its own terminal's other metal and the deck answers M2.b.
+    lparent = list(range(len(items)))
+
+    def lfind(i: int) -> int:
+        while lparent[i] != i:
+            lparent[i] = lparent[lparent[i]]
+            i = lparent[i]
+        return i
+
+    for i in range(len(items)):
+        la, _ja, ra = items[i]
+        for j in range(i + 1, len(items)):
+            lb, _jb, rb = items[j]
+            if la != lb:
+                continue
+            if ra[0] > rb[2] or rb[0] > ra[2] or ra[1] > rb[3] or rb[1] > ra[3]:
+                continue
+            a, b = lfind(i), lfind(j)
+            if a != b:
+                lparent[a] = b
+
+    return {(la, ja): (find(i), lfind(i))
+            for i, (la, ja, _r) in enumerate(items)}
+
+
+def friendly_conductor(rows: Sequence[dict], layer: str, x: int, y: int,
+                       reach: int = 0):
+    """Which conductor a terminal at (x, y) belongs to.
+
+    The label's own layer first, by containment; then, because a gencell may
+    put a label on a contact layer whose metal begins a lambda away, the
+    NEAREST conductor on that layer within `reach`. None when neither
+    answers — and None means "no conductor claimed here", which the caller
+    treats as "clear everything", never as "clear nothing"."""
+    best = None
+    for r in rows:
+        if r["layer"] != layer:
+            continue
+        b = r["box"]
+        if b[0] <= x <= b[2] and b[1] <= y <= b[3]:
+            return r.get("comp")
+        if reach:
+            dx = max(b[0] - x, x - b[2], 0)
+            dy = max(b[1] - y, y - b[3], 0)
+            d = max(dx, dy)
+            if d <= reach and (best is None or d < best[0]):
+                best = (d, r.get("comp"))
+    return best[1] if best else None
+
+
+# ── where a via island may stand ────────────────────────────────────────
+#
+# THE DEFECT THIS CLOSES, MEASURED (ihp-sg13g2, u_hawaii_adc, image 0.3.46,
+# the PDK's own KLayout sign-off deck, 560 rules graded):
+#
+#   delta_sigma  2780 violations   M2.b 1504  M3.b 654  V1.b 326  M1.b 296
+#   ldo           264 violations   M2.b  210  V1.b  42  M1.b  12
+#
+# and, with the flow's own top-level paint stripped and the gencells left
+# exactly where this emitter placed them, the SAME deck on the SAME
+# placement reports ZERO. Not one violation on either block is the PDK's
+# gencell or this emitter's placement of it; every one is this emitter's
+# own paint, and every one is a MINIMUM-SPACING rule on a layer it routes
+# on. Of the 2242 that involve a device, every single one has a via island
+# as one of its two edges.
+#
+# The cause is that the island was drawn as a fixed square centred on the
+# terminal label, with nothing consulted about what the label sits next to.
+# A gencell hands over a terminal on a metal strip 0.16 um tall and leaves
+# 0.185 um of legal space above it; a 0.4 um square centred on that strip
+# overhangs 0.12 um into the gap at both ends. The emitter already HELD the
+# geometry it needed — `Plan.device_shapes` is built before a single wire is
+# drawn — and used it only to write the shortfall down afterwards.
+#
+# So the island is placed, not assumed: this index answers "may a box of
+# this size stand here?" for the device geometry, and the search below takes
+# the nearest position to the terminal where the answer is yes.
+class Sites:
+    """The device geometry an island must clear, indexed by layer and cell.
+
+    A device is not ONE obstacle. It is one obstacle per CONDUCTOR, and the
+    conductor the terminal sits on is the one the island must OVERLAP
+    rather than clear — otherwise the only legal position for a terminal's
+    island is off its own terminal. Conductors are found by union-find over
+    the gencell's own rectangles on electrically linked layers, so nothing
+    here names a device, a net or a PDK.
+    """
+
+    CELL = 400            # lambda per bucket side
+
+    def __init__(self, rows: Sequence[dict], geo: Geo) -> None:
+        self.geo = geo
+        self.grid: Dict[tuple, List[dict]] = {}
+        for r in rows:
+            self.add(r)
+
+    def add(self, r: dict) -> None:
+        """Index one more rectangle. The emitter's OWN paint goes in here as
+        it is drawn: an island placed clear of every device and into the
+        island of the terminal next door has not been placed either, and
+        that is what a wider island makes possible where a narrower one
+        could not reach."""
+        b = r["box"]
+        for gx in range(b[0] // self.CELL, b[2] // self.CELL + 1):
+            for gy in range(b[1] // self.CELL, b[3] // self.CELL + 1):
+                self.grid.setdefault((r["layer"], gx, gy), []).append(r)
+
+    def near(self, layer: str, box: Sequence[int], m: int) -> List[dict]:
+        out: List[dict] = []
+        seen: set = set()
+        for gx in range((box[0] - m) // self.CELL, (box[2] + m) // self.CELL + 1):
+            for gy in range((box[1] - m) // self.CELL,
+                            (box[3] + m) // self.CELL + 1):
+                for r in self.grid.get((layer, gx, gy), ()):
+                    if id(r) not in seen:
+                        seen.add(id(r))
+                        out.append(r)
+        return out
+
+    def clear(self, box: Sequence[int], layers: Sequence[str],
+              friendly, net: Optional[str] = None) -> bool:
+        """True when a box on `layers` keeps the deck's space from every
+        conductor but `friendly`, and touches none of them.
+
+        The test is per-axis (`dx < s and dy < s`), which is the CONSERVATIVE
+        reading of a Euclidean spacing rule: every pair the deck would call a
+        violation is rejected here, and a few diagonal pairs it would allow
+        are rejected too. Refusing a legal position costs a lambda of travel;
+        accepting an illegal one costs a violation."""
+        for layer in layers:
+            s = self.geo.metal_space(layer)
+            rows = self.near(layer, box, s)
+            merged = set()
+            for r in rows:
+                if "lcomp" not in r:
+                    continue
+                b = r["box"]
+                if b[0] <= box[2] and box[0] <= b[2] \
+                        and b[1] <= box[3] and box[1] <= b[3]:
+                    merged.add(r["lcomp"])
+            for r in rows:
+                if "lcomp" not in r:
+                    # this emitter's own paint. One conductor is one net
+                    # here, so a same-net rectangle is skipped and every
+                    # other one is an obstacle like any device's.
+                    if net is not None and r["net"] == net:
+                        continue
+                    b = r["box"]
+                    dx = max(b[0] - box[2], box[0] - b[2], 0)
+                    dy = max(b[1] - box[3], box[1] - b[3], 0)
+                    if dx < s and dy < s:
+                        return False
+                    continue
+                if r["lcomp"] in merged:
+                    # one polygon with this island: no spacing rule applies
+                    # between the parts of a single polygon — but a polygon
+                    # this island has no business joining is a SHORT.
+                    if friendly is None or r.get("comp") != friendly:
+                        return False
+                    continue
+                b = r["box"]
+                dx = max(b[0] - box[2], box[0] - b[2], 0)
+                dy = max(b[1] - box[3], box[1] - b[3], 0)
+                if dx < s and dy < s:
+                    return False
+        return True
+
+    def touches(self, box: Sequence[int], layer: str, friendly) -> bool:
+        """True when the box actually OVERLAPS the conductor it is there to
+        connect to. A stack that clears everything by moving off its own
+        terminal has not been placed; it has been lost."""
+        if friendly is None:
+            return True
+        for r in self.near(layer, box, 0):
+            if "lcomp" not in r or r.get("comp") != friendly:
+                continue
+            if (r["box"][0] < box[2] and box[0] < r["box"][2]
+                    and r["box"][1] < box[3] and box[1] < r["box"][3]):
+                return True
+        return False
+
+
+#: How far from its terminal an island may be moved before this emitter
+#: stops looking. A stack that needs more than this is reported as a
+#: deviation and DRAWN where it was asked for — the deck adjudicates.
+ISLAND_SEARCH_LAMBDA = 120
+
+
+def _island_candidates(span: int):
+    """Displacements, nearest first: along one axis, then the other, then
+    the Manhattan rings. The one-axis passes come first because a terminal
+    on a gencell's metal strip has room along that strip and none across
+    it, and finding that with two scans instead of a ring saves the search
+    from being quadratic in the span for the common case."""
+    yield (0, 0)
+    for d in range(1, span + 1):
+        yield (0, -d)
+        yield (0, d)
+    for d in range(1, span + 1):
+        yield (-d, 0)
+        yield (d, 0)
+    for r in range(2, span // 4 + 1):
+        for dx in range(-r, r + 1):
+            rest = r - abs(dx)
+            if rest == 0 or dx == 0:
+                continue
+            yield (dx, rest)
+            yield (dx, -rest)
+
+
 def _via_stack(plan: Plan, net: str, x: int, y: int, level: int, geo: Geo,
-               top: int = 3) -> None:
+               top: int = 3, sites: Optional["Sites"] = None,
+               friendly=None, dev: Optional[dict] = None) -> Tuple[int, int]:
     """Carry a terminal from the metal the gencell delivered it on to the
     routing layer, and give every cut the metal the deck demands around it.
 
@@ -862,12 +1237,100 @@ def _via_stack(plan: Plan, net: str, x: int, y: int, level: int, geo: Geo,
     comes down to it without this file naming the device that put it there.
     The enclosing metal is painted explicitly because the cut alone does not
     satisfy `surround`, and it is sized to the deck's surround AND
-    minimum-area rules, both read from the deck."""
-    for k in range(min(level, top), max(level, top)):
-        ph, pt = geo.via_pad[k], geo.patch[k]
-        plan.paint(net, f"metal{k}", x - pt, y - pt, x + pt, y + pt)
-        plan.paint(net, f"metal{k + 1}", x - pt, y - pt, x + pt, y + pt)
-        plan.paint(net, f"via{k}", x - ph, y - ph, x + ph, y + ph)
+    minimum-area rules, both read from the deck.
+
+    The island is ANISOTROPIC (`Geo.short_half` / `Geo.long_half`) and it is
+    PLACED: when a `Sites` index is supplied, both orientations are tried at
+    the nearest displacement that clears every foreign conductor and still
+    overlaps the terminal's own. When no such position exists the island is
+    drawn where it was asked for and a deviation is written — this emitter
+    records shortfalls, it does not refuse to draw.
+
+    Returns the centre the stack was actually placed at, so the wire that
+    leaves it starts where it is rather than where it was asked for."""
+    lo, hi = min(level, top), max(level, top)
+    if lo == hi:
+        return x, y
+    metals = list(range(lo, hi + 1))
+    vias = list(range(lo, hi))
+    layers = [f"metal{k}" for k in metals] + [f"via{k}" for k in vias]
+    term_layer = f"metal{level}"
+
+    pad = max(geo.via_pad[k] for k in vias)
+    pad_min = max(geo.via_pad_min[k] for k in vias)
+    enc_short = max(geo.short_half[k] - geo.via_pad[k] for k in vias)
+    enc_long = max(geo.enc_half[k] - geo.via_pad[k] for k in vias)
+
+    # WHICH METAL OF THE STACK MUST CARRY THE MINIMUM AREA ON ITS OWN. The
+    # rule is about a REGION, not about a rectangle, so an island that
+    # merges into something bigger is not the region the rule grades:
+    #   * the terminal metal merges with the conductor it lands on — that is
+    #     what `touches` below is made to guarantee;
+    #   * the top metal merges with the wire that leaves the stack, which is
+    #     painted a few lines after this call and is never small;
+    #   * a metal in BETWEEN merges with neither, so it is an island in the
+    #     rule's own sense and must meet the area by itself.
+    # Claiming the merge for the first two is not a waiver: if the merge does
+    # not happen the deck says so, on the same layer, in the same run.
+    inter = [k for k in metals if k not in (level, top)]
+    area_full = max([geo.area_lam2.get(k, 0) for k in metals] or [0])
+    area_min = max([geo.area_lam2.get(k, 0) for k in inter] or [0])
+
+    def halves(p: int, area: int) -> Tuple[int, int]:
+        hs = p + enc_short
+        by_area = (int(math.ceil(area / (4.0 * hs))) + 1) if area else 0
+        return hs, max(p + enc_long, by_area, hs)
+
+    shapes: List[Tuple[int, int, int]] = []
+    seen_shapes = set()
+    ladder = [(pad, area_full)]
+    if friendly is not None and area_min < area_full:
+        ladder.append((pad, area_min))
+    if pad_min < pad:
+        ladder.append((pad_min, area_full))
+        if friendly is not None and area_min < area_full:
+            ladder.append((pad_min, area_min))
+    for p, area in ladder:
+        hs, hl = halves(p, area)
+        for ax, ay in ((hl, hs), (hs, hl)):
+            if (ax, ay, p) not in seen_shapes:
+                seen_shapes.add((ax, ay, p))
+                shapes.append((ax, ay, p))
+
+    hx, hy, ph = shapes[0]
+    cx, cy = x, y
+    if sites is not None:
+        placed = None
+        for (ax, ay, p) in shapes:
+            for (dx, dy) in _island_candidates(ISLAND_SEARCH_LAMBDA):
+                box = (x + dx - ax, y + dy - ay, x + dx + ax, y + dy + ay)
+                if not sites.clear(box, layers, friendly, net):
+                    continue
+                if not sites.touches(box, term_layer, friendly):
+                    continue
+                placed = (x + dx, y + dy, ax, ay, p)
+                break
+            if placed is not None:
+                break
+        if placed is None:
+            plan.deviate(dev or {}, "via_island_clearance_lambda",
+                         geo.metal_space(term_layer), 0,
+                         f"no position within {ISLAND_SEARCH_LAMBDA} lambda "
+                         f"of ({x}, {y}) hosts any of the "
+                         f"{len(shapes)} island shapes this deck permits "
+                         f"(smallest {2 * shapes[-1][0]}x{2 * shapes[-1][1]} "
+                         f"lambda) clear of the neighbouring device geometry "
+                         f"while still overlapping this terminal's own "
+                         f"metal; DRAWN at the terminal and recorded, never "
+                         f"moved off it")
+        else:
+            cx, cy, hx, hy, ph = placed
+
+    for k in vias:
+        plan.paint(net, f"metal{k}", cx - hx, cy - hy, cx + hx, cy + hy)
+        plan.paint(net, f"metal{k + 1}", cx - hx, cy - hy, cx + hx, cy + hy)
+        plan.paint(net, f"via{k}", cx - ph, cy - ph, cx + ph, cy + ph)
+    return cx, cy
 
 
 def build_plan(devs: Sequence[dict], ports: Sequence[str],
@@ -988,6 +1451,39 @@ def build_plan(devs: Sequence[dict], ports: Sequence[str],
                         dev, "escape_sides_available", 2, idx + 1,
                         f"{idx + 1} nets escape at height {y}; only two "
                         f"sides exist, so this group shares a side")
+
+        # SAME SIDE, DIFFERENT HEIGHT IS NOT AUTOMATICALLY CLEAR. Opposite
+        # sides were the only separation this plan had, and it was applied
+        # only to groups at the SAME height. A group of one contact escapes
+        # at its own label's height, and a gencell's label rows are on the
+        # gencell's grid, not on this generator's: two nets whose contacts
+        # sit 47 lambda apart both went left, and their escape wires ran
+        # parallel 17 lambda apart against a 21 lambda rule.
+        #
+        # MEASURED on delta_sigma with the island placer already in: 246
+        # M3.b and 125 M2.b left, every one of them two escapes of one
+        # device on one side. So the heights on a side are SPREAD to the
+        # pitch the deck's own width and spacing require, upward, in the
+        # order they already had — an escape never crosses one that started
+        # below it, which is the property the lane allocation below rests on.
+        # THE WIRE IS NOT THE TALLEST THING AT AN ESCAPE HEIGHT. Spacing the
+        # heights by wire-width-plus-space left exactly 20 lambda against a
+        # 21 lambda rule wherever the neighbour was a via ISLAND rather than
+        # a wire — the island is 48 lambda across its long axis, the wire is
+        # 30, and the placer may point either axis along the escape. So the
+        # pitch is built from the WIDEST thing this generator paints at a
+        # height, which is the island's long side. Measured: the last 18
+        # M3.b on delta_sigma, every one of them an island against the
+        # escape one slot above it.
+        esc_pitch = max(max(geo.wire[k], 2 * geo.long_half[k])
+                        + geo.metal_space(f"metal{k}") for k in (2, 3))
+        for side in ("left", "right"):
+            prev = None
+            for g in sorted([g for g in groups if g["side"] == side],
+                            key=lambda g: g["escape_y"]):
+                if prev is not None and g["escape_y"] - prev < esc_pitch:
+                    g["escape_y"] = prev + esc_pitch
+                prev = g["escape_y"]
         per_dev.append({"dev": dev, "cell": cell, "groups": groups,
                         "bbox": cell["bbox"]})
 
@@ -1018,19 +1514,34 @@ def build_plan(devs: Sequence[dict], ports: Sequence[str],
         d["origin"] = (d["box_x"] + d["cell"]["delta"][0],
                        row_base + d["cell"]["delta"][1])
 
+    comp_cache: Dict[int, Dict[Tuple[str, int], int]] = {}
     for d in per_dev:
         ox, oy = d["origin"]
-        for layer, rects in d["cell"]["sections"].items():
-            if not (_METAL_RE.match(layer) or _VIA_RE.match(layer)):
-                continue
-            for r in rects:
-                plan.device_shapes.append(
-                    {"net": f"<device {d['dev']['name']}>", "layer": layer,
+        cell = d["cell"]
+        if id(cell) not in comp_cache:
+            comp_cache[id(cell)] = cell_components(cell)
+        comps = comp_cache[id(cell)]
+        name = d["dev"]["name"]
+        rows: List[dict] = []
+        for layer, rects in sorted(device_planes(cell).items()):
+            for j, r in enumerate(rects):
+                c, lc = comps.get((layer, j), (-1, -1))
+                rows.append(
+                    {"net": f"<device {name}>", "layer": layer,
+                     "comp": (name, c), "lcomp": (name, layer, lc),
                      "box": (ox + r[0], oy + r[1], ox + r[2], oy + r[3])})
+        d["rows"] = rows
+        plan.device_shapes.extend(rows)
         for g in d["groups"]:
             g["abs_labels"] = [(ox + l["x"], oy + l["y"], l["level"])
                                for l in g["labels"]]
             g["abs_escape_y"] = oy + g["escape_y"]
+
+    # The index is built ONCE, after every device is placed and before a
+    # single wire is drawn: the routing runs closest to the devices, and a
+    # placer that cannot see them places into them.
+    sites = Sites(plan.device_shapes, geo)
+    plan.sites = sites
 
     # Lanes are handed out in order of the height they come from: the lane
     # nearest the device serves the LOWEST escape. An escape therefore never
@@ -1047,25 +1558,45 @@ def build_plan(devs: Sequence[dict], ports: Sequence[str],
     for d in per_dev:
         for g in d["groups"]:
             net, ey, lane = g["net"], g["abs_escape_y"], g["lane_x"]
-            xs = [p[0] for p in g["abs_labels"]]
             if g["strapped"]:
+                # THE STUB STARTS WHERE THE STACK ENDED UP. An island that
+                # was moved a lambda off its label and then wired from the
+                # label is not connected to itself.
+                xs = []
                 for (lx, ly, level) in g["abs_labels"]:
-                    _via_stack(plan, net, lx, ly, level, geo, top=2)
-                    plan.paint(net, "metal2", lx - hw2, min(ly, ey),
-                               lx + hw2, max(ly, ey))
+                    fr = friendly_conductor(d["rows"], f"metal{level}", lx, ly,
+                                            reach=geo.default_space)
+                    cx, cy = _via_stack(plan, net, lx, ly, level, geo, top=2,
+                                        sites=sites, friendly=fr,
+                                        dev=d["dev"])
+                    xs.append(cx)
+                    plan.paint(net, "metal2", cx - hw2, min(cy, ey),
+                               cx + hw2, max(cy, ey))
                 plan.paint(net, "metal2", min(xs) - hw2, ey - hw2,
                            max(xs) + hw2, ey + hw2)
                 joint = max(xs) if g["side"] == "right" else min(xs)
-                _via_stack(plan, net, joint, ey, 2, geo, top=3)
+                _via_stack(plan, net, joint, ey, 2, geo, top=3, sites=sites)
             else:
                 lx, ly, level = g["abs_labels"][0]
-                _via_stack(plan, net, lx, ly, level, geo, top=3)
-                joint = lx
+                fr = friendly_conductor(d["rows"], f"metal{level}", lx, ly,
+                                        reach=geo.default_space)
+                cx, cy = _via_stack(plan, net, lx, ly, level, geo, top=3,
+                                    sites=sites, friendly=fr, dev=d["dev"])
+                joint = cx
+                if cy != ey:
+                    # a metal3 jog back to the escape height. Metal3 is the
+                    # one routed layer no gencell in this PDK paints, so the
+                    # jog is free of the geometry the island had to leave —
+                    # and keeping the escape at its own height is what stops
+                    # one moved island from re-ordering every lane.
+                    plan.paint(net, "metal3", cx - hw3, min(cy, ey) - hw3,
+                               cx + hw3, max(cy, ey) + hw3)
             # across to the lane on metal3, then straight down to the rail
             plan.paint(net, "metal3", min(joint, lane) - hw3, ey - hw3,
                        max(joint, lane) + hw3, ey + hw3)
             plan.paint(net, "metal3", lane - hw3, rail_y[net], lane + hw3, ey)
-            _via_stack(plan, net, lane, rail_y[net], 2, geo, top=3)
+            _via_stack(plan, net, lane, rail_y[net], 2, geo, top=3,
+                       sites=sites)
 
     # ── one metal2 rail per net, and a label on each declared port ──────
     for net in nets:
@@ -1187,6 +1718,151 @@ def clearance_deviations(plan: Plan, geo: Geo,
                          f"net {(nb if dev_a else na)} runs {gap:.3g} lambda "
                          f"from {who}'s own {layer} at {list(ba)} / "
                          f"{list(bb)}")
+
+    # THE SHORT AUDIT, TRANSITIVE AND OVER THE DEVICES. See `net_shorts`.
+    for short in net_shorts(plan):
+        na, nb = short["nets"]
+        chain = " -> ".join(
+            f"{s['net']}:{s['layer']}{s['box']}" for s in short["path"]) \
+            or "(no path recovered)"
+        plan.deviate(anon, "routed_nets_per_conductor", 1, 2,
+                     f"nets {na} and {nb} are ONE conductor in this layout: "
+                     f"{chain}")
+
+
+# ── the short audit, run TRANSITIVELY and over the devices too ──────────
+#
+# THE DEFECT THIS CLOSES, MEASURED. `clearance_deviations` above asks
+# `cross_net_overlaps` "is it shorted?" — PAIRWISE, and over `plan.shapes`
+# ONLY. Both halves of that are holes:
+#
+#   * a short does not need two of THIS emitter's rectangles to touch. It
+#     needs a PATH. On u_hawaii_adc's `ldo` the path is three shapes long —
+#     our metal5 island on `vg`, the MiM capacitor's own metal5 plate, our
+#     metal5 island on `vout` — and no PAIR in it is two routing rectangles
+#     of different nets, so the pairwise scan over the routing manifest saw
+#     nothing and the producer reported a clean sheet.
+#   * the deck's own LVS then reported `mismatch` on that block and on its
+#     sibling, five schematic nets extracting as ONE, and nothing in the
+#     flow could say why.
+#
+# The cause, once the path is printed, is one line of `parse_cell`:
+# `metal_level_at` recognises a conductor only if its section is called
+# `metalN` or `viaN`, and this PDK delivers a MiM capacitor's TOP plate on a
+# section called `mimcapcontact`. Both of that device's terminal labels
+# therefore read as the metal5 plane the BOTTOM plate occupies, and the
+# emitter drops a via stack for each of them onto the same plate. The
+# capacitor is shorted, and every net downstream of it collapses.
+#
+# This scan does not fix that. It makes the producer SAY it, in the record
+# it owns, with the path — which is what I4 already requires of every other
+# thing this emitter cannot make clear.
+def net_shorts(plan: Plan, limit: int = 8) -> List[dict]:
+    """Every pair of routed nets that share one conductor, with a WITNESS.
+
+    Union-find over the routing manifest AND the placed gencells' own
+    geometry, joined wherever two rectangles on electrically linked layers
+    touch or overlap. A component carrying two routed nets is a short, and
+    the shortest chain of rectangles between them is reported with it: a
+    reader who is told "vg and vout are one net" and not WHERE has been told
+    the symptom, which is what the sign-off LVS already said.
+    """
+    rows = [dict(r, _own=True) for r in plan.shapes] \
+        + [dict(r, _own=False) for r in plan.device_shapes]
+    if not rows:
+        return []
+    cell = max(64, geo_bucket(rows))
+    grid: Dict[tuple, List[int]] = {}
+    for i, r in enumerate(rows):
+        b = r["box"]
+        for gx in range(b[0] // cell, b[2] // cell + 1):
+            for gy in range(b[1] // cell, b[3] // cell + 1):
+                grid.setdefault((gx, gy), []).append(i)
+
+    parent = list(range(len(rows)))
+
+    def find(i: int) -> int:
+        while parent[i] != i:
+            parent[i] = parent[parent[i]]
+            i = parent[i]
+        return i
+
+    adj: Dict[int, List[int]] = {}
+    for i, r in enumerate(rows):
+        b = r["box"]
+        seen: set = set()
+        for gx in range(b[0] // cell, b[2] // cell + 1):
+            for gy in range(b[1] // cell, b[3] // cell + 1):
+                for j in grid.get((gx, gy), ()):
+                    if j <= i or j in seen:
+                        continue
+                    seen.add(j)
+                    o = rows[j]
+                    if not _linked(r["layer"], o["layer"]):
+                        continue
+                    ob = o["box"]
+                    if b[0] > ob[2] or ob[0] > b[2] \
+                            or b[1] > ob[3] or ob[1] > b[3]:
+                        continue
+                    adj.setdefault(i, []).append(j)
+                    adj.setdefault(j, []).append(i)
+                    a, c = find(i), find(j)
+                    if a != c:
+                        parent[a] = c
+
+    by_comp: Dict[int, Dict[str, List[int]]] = {}
+    for i, r in enumerate(rows):
+        if not r["_own"]:
+            continue
+        by_comp.setdefault(find(i), {}).setdefault(r["net"], []).append(i)
+
+    out: List[dict] = []
+    for comp, nets in sorted(by_comp.items()):
+        if len(nets) < 2:
+            continue
+        order = sorted(nets)
+        for k in range(1, len(order)):
+            a, b_net = order[0], order[k]
+            out.append({"nets": (a, b_net),
+                        "path": _short_path(rows, adj, nets[a], set(nets[b_net]),
+                                            limit)})
+    return out
+
+
+def geo_bucket(rows: Sequence[dict]) -> int:
+    """A bucket side that keeps the neighbour lists short without making the
+    grid itself the cost: the median rectangle's larger side, floored."""
+    sides = sorted(max(r["box"][2] - r["box"][0], r["box"][3] - r["box"][1])
+                   for r in rows)
+    return max(1, sides[len(sides) // 2])
+
+
+def _short_path(rows: Sequence[dict], adj: Dict[int, List[int]],
+                src: Sequence[int], dst: set, limit: int) -> List[dict]:
+    """The shortest chain of rectangles joining two nets, breadth-first."""
+    prev: Dict[int, int] = {}
+    seen = set(src)
+    queue = list(src)
+    hit = None
+    while queue:
+        u = queue.pop(0)
+        if u in dst:
+            hit = u
+            break
+        for v in adj.get(u, ()):
+            if v in seen:
+                continue
+            seen.add(v)
+            prev[v] = u
+            queue.append(v)
+    if hit is None:
+        return []
+    chain = [hit]
+    while chain[-1] in prev:
+        chain.append(prev[chain[-1]])
+    chain.reverse()
+    return [{"net": rows[i]["net"], "layer": rows[i]["layer"],
+             "box": list(rows[i]["box"])} for i in chain[:limit]]
 
 
 def layout_tcl(block: str, plan: Plan, out_dir: str) -> str:
