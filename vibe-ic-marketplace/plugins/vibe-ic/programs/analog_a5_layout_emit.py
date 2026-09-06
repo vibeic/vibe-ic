@@ -1302,20 +1302,15 @@ def _via_stack(plan: Plan, net: str, x: int, y: int, level: int, geo: Geo,
     if sites is not None:
         placed = None
         for (ax, ay, p) in shapes:
-            best = None
             for (dx, dy) in _island_candidates(ISLAND_SEARCH_LAMBDA):
-                cost = abs(dx) + abs(dy)
-                if best is not None and cost >= best[0]:
-                    break
                 box = (x + dx - ax, y + dy - ay, x + dx + ax, y + dy + ay)
                 if not sites.clear(box, layers, friendly, net):
                     continue
                 if not sites.touches(box, term_layer, friendly):
                     continue
-                best = (cost, x + dx, y + dy, ax, ay, p)
+                placed = (x + dx, y + dy, ax, ay, p)
                 break
-            if best is not None:
-                placed = best
+            if placed is not None:
                 break
         if placed is None:
             plan.deviate(dev or {}, "via_island_clearance_lambda",
@@ -1329,7 +1324,7 @@ def _via_stack(plan: Plan, net: str, x: int, y: int, level: int, geo: Geo,
                          f"metal; DRAWN at the terminal and recorded, never "
                          f"moved off it")
         else:
-            _cost, cx, cy, hx, hy, ph = placed
+            cx, cy, hx, hy, ph = placed
 
     for k in vias:
         plan.paint(net, f"metal{k}", cx - hx, cy - hy, cx + hx, cy + hy)
