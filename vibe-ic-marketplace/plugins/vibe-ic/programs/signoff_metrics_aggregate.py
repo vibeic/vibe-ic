@@ -224,6 +224,43 @@ def _density(project: Path) -> Cell:
 
 
 # ── LVS: the audited terminal verdict, and the four counts it implies ────────
+def _lvs_from_runner_verdict(project: Path, key: str, missing: str) -> Cell:
+    """Fall back to the runner's OWN canonical LVS verdict file.
+
+    `lvs.json` is netgen's `-json` triage sidecar, and netgen derives its name
+    from the LOGFILE stem. The flow has a second LVS arm -- the POWER-AWARE
+    compare, which writes `lvs_power_aware.rpt` -- and when that arm is the one
+    that matches, no `lvs.json` is written at all.
+
+    MEASURED on `spm` (gf180mcuD, image 0.3.46): once the well ties the #684
+    prune had removed were restored, the power-aware compare stopped reporting
+    a conclusive non-match and became the ACCEPTED arm on its first attempt
+    (`LVS_MATCH_POWER_VERIFIED`, per-cell PG connectivity on 15690 instances,
+    a STRONGER result than the plain compare). `reports/phase3/lvs.json`
+    vanished with it and all four LVS keys went NOT_MEASURED on a run whose
+    LVS is better than the one that measured them. `lvs_verdict.json` is
+    written by `phase3_one_shot_runner:_run_extraction_lvs` on EVERY arm and is
+    the verdict of record; read it. A non-PASS is still not a count.
+    """
+    rel = "reports/phase3/lvs_verdict.json"
+    d = _json(project, rel)
+    if not d:
+        return unmeasured(
+            f"{missing} and {rel}: neither is present, so this run recorded no "
+            f"LVS verdict under any of the three files its own producers write")
+    status = str(d.get("status") or d.get("result") or "").strip().upper()
+    finding = str(d.get("finding") or "").strip().upper()
+    if status == "PASS" and finding.startswith("LVS_MATCH"):
+        return Cell(0, rel, basis=f"status=PASS finding={finding} "
+                                  f"(netgen: circuits match uniquely)")
+    if not status:
+        return unmeasured(f"{rel}: carries no LVS status", rel)
+    return unmeasured(
+        f"{rel}: the recorded LVS status is {status!r} (finding {finding!r}), "
+        f"not a match. A non-match is not a count: this record states THAT the "
+        f"netlists differ and carries no per-class total for {key}", rel)
+
+
 def _lvs(project: Path, key: str) -> Cell:
     """The netgen LVS verdict this flow already recorded.
 
@@ -250,8 +287,7 @@ def _lvs(project: Path, key: str) -> Cell:
     rel = "reports/phase3/lvs.json"
     d = _json(project, rel)
     if not d:
-        return unmeasured(f"{rel}: absent or unreadable, so this run recorded "
-                          f"no audited LVS verdict")
+        return _lvs_from_runner_verdict(project, key, rel)
     summary = d.get("summary")
     summary = summary if isinstance(summary, dict) else {}
     raw = summary.get("terminal_verdict")

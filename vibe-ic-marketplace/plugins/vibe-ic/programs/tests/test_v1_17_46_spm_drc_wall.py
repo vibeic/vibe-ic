@@ -224,6 +224,56 @@ def test_lvs_no_verdict_at_all_names_both_spellings(tmp_path):
     assert "verdict" in cell.reason
 
 
+def _write_lvs_verdict(tmp_path: Path, payload: dict) -> Path:
+    p = tmp_path / "reports" / "phase3"
+    p.mkdir(parents=True, exist_ok=True)
+    (p / "lvs_verdict.json").write_text(json.dumps(payload))
+    return tmp_path
+
+
+def test_lvs_falls_back_to_the_runners_own_verdict_file(tmp_path):
+    """MEASURED: once the ties were restored, the POWER-AWARE compare became
+    the accepted arm on its first attempt -- a STRONGER result -- and netgen's
+    `lvs.json` sidecar (named from the plain arm's logfile stem) vanished with
+    it. All four LVS keys went NOT_MEASURED on a run whose LVS is better.
+    Control on the real run tree: 6 NOT_MEASURED without this, 2 with it, and
+    the delta is exactly the four LVS keys."""
+    proj = _write_lvs_verdict(tmp_path, {
+        "status": "PASS", "result": "PASS",
+        "finding": "LVS_MATCH_POWER_VERIFIED",
+        "message": "circuits match uniquely with a POWER-AWARE gate netlist"})
+    for key in LVS_KEYS:
+        cell = sma._lvs(proj, key)
+        assert cell.value == 0, key
+        assert "LVS_MATCH_POWER_VERIFIED" in cell.basis
+
+
+def test_lvs_verdict_file_is_only_consulted_when_the_sidecar_is_absent(
+        tmp_path):
+    """The sidecar stays the first authority: a MISMATCH there is not
+    overridden by a PASS in the verdict file."""
+    proj = _write_lvs(tmp_path, {"verdict": "mismatch"})
+    _write_lvs_verdict(tmp_path, {"status": "PASS", "finding": "LVS_MATCH"})
+    cell = sma._lvs(proj, LVS_KEYS[0])
+    assert cell.value == "NOT_MEASURED"
+    assert "not MATCH" in cell.reason
+
+
+def test_lvs_verdict_file_non_pass_is_still_not_a_count(tmp_path):
+    proj = _write_lvs_verdict(tmp_path, {"status": "FAIL",
+                                         "finding": "LVS_MISMATCH"})
+    cell = sma._lvs(proj, LVS_KEYS[2])
+    assert cell.value == "NOT_MEASURED"
+    assert "'FAIL'" in cell.reason and "not a match" in cell.reason
+
+
+def test_lvs_neither_file_names_all_three(tmp_path):
+    (tmp_path / "reports" / "phase3").mkdir(parents=True)
+    cell = sma._lvs(tmp_path, LVS_KEYS[0])
+    assert cell.value == "NOT_MEASURED"
+    assert "three files" in cell.reason
+
+
 # ── RB-15: the correlation must not cross corners ────────────────────────────
 _OCV_REPORT = """\
 === SETUP corner: process=SS liberty=/pdk/lib/cell__ss_125C_4v50.lib, SPEF=x ===
