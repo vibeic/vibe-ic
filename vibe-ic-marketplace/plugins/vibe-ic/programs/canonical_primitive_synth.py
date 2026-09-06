@@ -2679,24 +2679,73 @@ def emit_scoreboard_tb(c: HandshakeContract) -> str:
         idat, odat = c.up.get("data"), c.down.get("data")
         w = c.width or 1
         rng = f"[{w - 1}:0] " if w > 1 else ""
-        tn = _internals(c, "n_in", "n_out", "i")
+        tn = _internals(c, "n_in", "n_out", "i", "grp", "g_n", "g_i",
+                        "seen", "data_errs")
         n_in, n_out, i = tn["n_in"], tn["n_out"], tn["i"]
+        grp, g_n, g_i = tn["grp"], tn["g_n"], tn["g_i"]
+        seen, data_errs = tn["seen"], tn["data_errs"]
         decl = f"    reg {rng}{idat}; wire {rng}{odat};\n" if (idat and odat) else ""
         conn = (f", .{idat}({idat}), .{odat}({odat})" if (idat and odat) else "")
         drive = f"        {idat} = {i}[{w - 1}:0];\n" if idat else ""
+        # PAYLOAD. Counting events alone cannot see a payload that is never
+        # forwarded: measured 2026-09-06 by replacing the whole data path with a
+        # constant, which this TB still reported as PASS at every ratio. The
+        # contract names the output port as the forwarded payload, so a value
+        # that no input offered is a contract violation and must be caught.
+        #
+        # What it must NOT do is decide WHICH of the N inputs is forwarded. The
+        # description states the ratio and states that the payload is forwarded;
+        # it does not state whether the first or the last of a group is the one
+        # that travels, and issue #2035 forbids guessing a hidden expected value.
+        # So the check is MEMBERSHIP in the group that produced the event --
+        # exact at a unit ratio, where there is only one member and no
+        # interpretation is left open.
+        pay_decl = ""
+        pay_check = ""
+        pay_record = ""
+        pay_verdict = ""
+        if idat and odat:
+            pay_decl = (f"    reg [{w - 1}:0] {grp} [0:{max(n - 1, 0)}];\n"
+                        f"    integer {g_n} = 0, {g_i}, {data_errs} = 0;\n"
+                        f"    reg {seen};\n")
+            pay_check = (
+                f"        if ({ov}) begin\n"
+                f"            {seen} = 1'b0;\n"
+                f"            for ({g_i} = 0; {g_i} < {g_n}; {g_i} = {g_i} + 1)\n"
+                f"                if ({odat} === {grp}[{g_i}]) {seen} = 1'b1;\n"
+                f"            if (!{seen}) begin\n"
+                f"                {data_errs} = {data_errs} + 1;\n"
+                f"                $display(\"FAIL: output event carried %0d,"
+                f" which no input of its group offered\", {odat});\n"
+                f"            end\n"
+                f"            {g_n} = 0;\n"
+                f"        end\n")
+            pay_record = (f"        if ({iv}) begin\n"
+                          f"            if ({g_n} < {n}) {grp}[{g_n}] = {idat};\n"
+                          f"            {g_n} = {g_n} + 1;\n"
+                          f"        end\n")
+            pay_verdict = (
+                f"        else if ({data_errs} != 0)\n"
+                f"            $display(\"FAIL: %0d output event(s) carried a"
+                f" payload no input offered\", {data_errs});\n")
         return (f"// Ratio/latency TB for {c.module}: counts input events and\n"
                 f"// output events and checks the stated {n}:1 ratio - the check\n"
-                f"// that catches every-other-input being dropped.\n"
+                f"// that catches every-other-input being dropped - and checks\n"
+                f"// that each output event carries a payload its own group of\n"
+                f"// input events actually offered.\n"
                 f"`timescale 1ns/1ps\n"
                 f"module tb_{c.module};\n"
                 f"    reg {c.clock} = 1'b0; always #5 {c.clock} = ~{c.clock};\n"
                 f"    reg {c.reset}; reg {iv}; wire {ov};\n" + decl +
                 f"    {c.module} dut (.{c.clock}({c.clock}), .{c.reset}({c.reset}),\n"
                 f"        .{iv}({iv}), .{ov}({ov}){conn});\n"
-                f"    integer {n_in} = 0, {n_out} = 0, {i};\n"
+                f"    integer {n_in} = 0, {n_out} = 0, {i};\n" + pay_decl +
                 f"    always @(posedge {c.clock}) if ({c.reset} == {rst_off}) begin\n"
                 f"        if ({iv}) {n_in}  = {n_in}  + 1;\n"
                 f"        if ({ov}) {n_out} = {n_out} + 1;\n"
+                # the group that produced THIS output is the inputs BEFORE this
+                # cycle, so the check runs before this cycle's input is recorded
+                + pay_check + pay_record +
                 f"    end\n"
                 f"    initial begin\n"
                 f"        {c.reset} = {rst_on}; {iv} = 0;\n"
@@ -2712,7 +2761,7 @@ def emit_scoreboard_tb(c: HandshakeContract) -> str:
                 f"            $display(\"FAIL: no input events were driven - vacuous\");\n"
                 f"        end else if ({n_out} != {n_in} / {n})\n"
                 f"            $display(\"FAIL: %0d in %0d out, expected %0d\","
-                f" {n_in}, {n_out}, {n_in} / {n});\n"
+                f" {n_in}, {n_out}, {n_in} / {n});\n" + pay_verdict +
                 f"        else $display(\"PASS %0d in %0d out\", {n_in}, {n_out});\n"
                 f"        $finish;\n"
                 f"    end\n"
