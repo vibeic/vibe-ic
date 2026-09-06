@@ -43,6 +43,16 @@ LANDING_PROGRESS_UNITS = (
     "cheap:collateral-revert",
     "cheap:base-ancestry",
     "cheap:version-sync",
+    # vibe-ic#712, added with the `run` line the cheap tier now carries
+    # beside version-sync. THE POSITION IS THE CONTRACT, not a listing:
+    # `:200` refuses any label that is not `LANDING_PROGRESS_UNITS[len(
+    # gates)]`, so a unit emitted at index 10 and declared anywhere else
+    # refuses EVERY landing with `landing completion record is
+    # incomplete`. Emitted at 10 in `gatekeeper-land.sh`; declared at 10
+    # here; the two orders are compared by
+    # `test_the_script_emits_exactly_the_declared_units_in_declared_order`,
+    # which is what caught this entry being missing.
+    "cheap:prose-polarity",
     "cheap:landing-shape",
     "cheap:competing-claims-report",
     "cheap:worktree-clean",
