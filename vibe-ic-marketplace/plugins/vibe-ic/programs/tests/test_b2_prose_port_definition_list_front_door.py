@@ -140,7 +140,14 @@ def test_a_titlecase_name_with_a_width_OUTSIDE_a_section_is_still_rejected():
     # bullet keeps the old answer even when it happens to state a bit width —
     # this is the control for the `unbulleted` half of the condition, and it
     # fails if that half is dropped.
-    spec = "- Address: the 8-bit address bus is driven by the master\n"
+    #
+    # The description MUST carry a direction word. Measured: with
+    # "the 8-bit address bus is driven by the master" this test passes under the
+    # mutation that drops `unbulleted` too, because the row is then discarded one
+    # step later by the direction gate (no section, no input/output word, so
+    # `d is None`) — the assertion held for a reason that had nothing to do with
+    # the rule it names. A control that cannot fail is not a control.
+    spec = "- Address: the 8-bit input address bus is driven by the master\n"
     got = _by_name(E.extract_prose_ports(spec))
     assert "Address" not in got, got
 
