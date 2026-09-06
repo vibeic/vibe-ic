@@ -43,6 +43,8 @@ PLUGIN = Path(__file__).resolve().parents[1]
 ATPG_HARMONIZE = PLUGIN / "programs" / "fix_fault_cut_names.py"
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import _container_exec as _ce  # noqa: E402 — the ONE guarded docker-exec argv
+import _eda_pin as _pin  # noqa: E402 — the ONE place the pin is stated
 import _designs_root as _dr  # noqa: E402  (host mount root, measured)
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -76,7 +78,7 @@ def _main():
     p.add_argument("--pdk-shim",      type=Path, required=True)
     p.add_argument("--top",           required=True)
     p.add_argument("--output",        type=Path, required=True)
-    p.add_argument("--container",     default="vibeic-eda",
+    p.add_argument("--container",     default=_pin.default_container_name(),
                     help="docker container that has yosys 0.62+")
     p.add_argument("--keep-tmp",      action="store_true")
     args = p.parse_args()
@@ -123,8 +125,7 @@ def _main():
     ys_path.write_text(ys_text)
 
     # Run Yosys in container
-    cmd = ["docker", "exec", args.container, "bash", "-lc",
-           f"yosys -s {_docker_path(ys_path)} 2>&1 | tail -30"]
+    cmd = _ce.docker_exec_argv(args.container, "bash", "-lc", f"yosys -s {_docker_path(ys_path)} 2>&1 | tail -30")
     cp = _pr.run(cmd, capture_output=True, text=True)
     if cp.returncode != 0 or "ERROR" in cp.stdout:
         print(f"[flatten] yosys FAILED:\n{cp.stdout}{cp.stderr}",

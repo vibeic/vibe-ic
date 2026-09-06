@@ -87,9 +87,11 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import _container_exec as _ce  # noqa: E402 — the ONE guarded docker-exec argv
+import _eda_pin as _pin  # noqa: E402 — the ONE place the pin is stated
 import _progress_run as _pr  # noqa: E402
 
-_DEFAULT_CONTAINER = "vibeic-eda"
+_DEFAULT_CONTAINER = _pin.default_container_name()
 _TOOLS = "/foss/tools"
 # Dynamic tier default budget (%-of-Vdd). LOOSER than the static tier: a
 # quasi-static transient droop is ≈2x the static drop, so a design passing static
@@ -582,7 +584,7 @@ def _docker_exec_raw(container: str, cmd: str, timeout: int = 15
     never for the openroad run itself. `_docker_watchdog.run_docker_supervised`
     is the only caller; this is its injected `docker_exec_raw`."""
     try:
-        cp = subprocess.run(["docker", "exec", container, "bash", "-lc", cmd],
+        cp = subprocess.run(_ce.docker_exec_argv(container, "bash", "-lc", cmd),
                             capture_output=True, text=True, timeout=timeout)
         return cp.returncode, cp.stdout or "", cp.stderr or ""
     except subprocess.TimeoutExpired:

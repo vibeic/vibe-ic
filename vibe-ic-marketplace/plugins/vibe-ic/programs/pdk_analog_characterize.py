@@ -112,6 +112,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import _eda_pin as _pin  # noqa: E402 — the ONE place the pin is stated
 
 import analog_pdk_availability as _apa           # noqa: E402
 import analog_pdk_deck_context as _apdc          # noqa: E402
@@ -166,7 +167,7 @@ CAP_S1_UM = 10.0
 CAP_S2_UM = 20.0
 CAP_PROBE_HZ = 1000.0
 DEFAULT_TEMP_C = 27.0
-DEFAULT_CONTAINER = "vibeic-eda"
+DEFAULT_CONTAINER = _pin.default_container_name()
 DECK_DEADLINE_S = 300
 
 # A width the resolved primitive ignores cannot carry a sheet resistance. The

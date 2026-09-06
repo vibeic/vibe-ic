@@ -125,6 +125,7 @@ import tempfile
 from dataclasses import dataclass, field, asdict
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import _container_exec as _ce  # noqa: E402 — the ONE guarded docker-exec argv
 import _eda_pin as _pin  # noqa: E402 — the ONE place the pin is stated
 from typing import Dict, List, Optional, Tuple
 
@@ -867,7 +868,7 @@ class MagicSite:
             host_tmp.mkdir(parents=True, exist_ok=True)
             self.path = str(host_tmp)
             return True, ""
-        rc, out, err = _sh(["docker", "exec", self.container, "mktemp", "-d"],
+        rc, out, err = _sh(_ce.docker_exec_argv(self.container, "mktemp", "-d"),
                            timeout=60)
         if rc != 0 or not out.strip():
             return False, (f"cannot open a working directory in "
@@ -925,7 +926,7 @@ class MagicSite:
 
     def close(self) -> None:
         if self.path and self.in_container:
-            _sh(["docker", "exec", self.container, "rm", "-rf", self.path],
+            _sh(_ce.docker_exec_argv(self.container, "rm", "-rf", self.path),
                 timeout=60)
             self.path = None
 

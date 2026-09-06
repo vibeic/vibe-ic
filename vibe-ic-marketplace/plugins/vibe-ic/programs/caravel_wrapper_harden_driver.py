@@ -74,6 +74,8 @@ import sys
 from dataclasses import dataclass, field, asdict
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import _container_exec as _ce  # noqa: E402 — the ONE guarded docker-exec argv
 try:  # sibling module; programs/ is on sys.path when run as a script
     import _watchdog as _wd
 except ImportError:  # pragma: no cover - packaged/flattened layouts
@@ -154,8 +156,7 @@ def default_runner(cmd, timeout: int = 3600) -> Tuple[int, str, str]:
             def cpu_probe(_proc, _cname=cname):  # noqa: E731
                 try:
                     r = subprocess.run(
-                        ["docker", "exec", _cname, "sh", "-c",
-                         "cat /proc/[0-9]*/stat 2>/dev/null"],
+                        _ce.docker_exec_argv(_cname, "sh", "-c", "cat /proc/[0-9]*/stat 2>/dev/null"),
                         capture_output=True, text=True, timeout=15)
                 except Exception:  # nosec — a probe failure is just "no reading"
                     return None

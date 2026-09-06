@@ -146,6 +146,8 @@ import analog_a2_topology_emit as _a2  # noqa: E402
 import pdk_analog_device_params as _pdp  # noqa: E402
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import _container_exec as _ce  # noqa: E402 — the ONE guarded docker-exec argv
+import _eda_pin as _pin  # noqa: E402 — the ONE place the pin is stated
 import _progress_run as _pr  # noqa: E402
 
 PRODUCER = "analog_a3_netlist_emit"
@@ -171,7 +173,7 @@ SKILL = "analog-netlist-gen"
 _CANONICAL_ANALOG = "phase3/analog"
 _DECLARED_ANALOG = "phase1/analog"
 _REGISTRY = _HERE / "pdk_registry.json"
-DEFAULT_CONTAINER = os.environ.get("VIBEIC_ANALOG_CONTAINER", "vibeic-eda")
+DEFAULT_CONTAINER = os.environ.get("VIBEIC_ANALOG_CONTAINER") or _pin.default_container_name()
 
 # Role -> the device-class tokens a foundry SPICE lib spells its subcircuits
 # with. Structural, not a vendor literal — the same vocabulary
@@ -1196,7 +1198,7 @@ def verify_with_checkers(block: str, sp_text: str, tb_text: Optional[str],
 
 def _docker_ok(container: str) -> bool:
     try:
-        cp = _pr.run_best_effort(["docker", "exec", container, "true"],
+        cp = _pr.run_best_effort(_ce.docker_exec_argv(container, "true"),
                             capture_output=True, text=True)
         return cp.returncode == 0
     except (OSError, subprocess.SubprocessError):
@@ -1224,7 +1226,7 @@ def verify_with_ngspice(container: str, block: str, sp_text: str,
     deck_rel = f"{_CANONICAL_ANALOG}/{block}"
     stage = f"{root}/{deck_rel}"
     try:
-        subprocess.run(["docker", "exec", container, "mkdir", "-p", stage],
+        subprocess.run(_ce.docker_exec_argv(container, "mkdir", "-p", stage),
                        capture_output=True, text=True, timeout=120)
         with tempfile.TemporaryDirectory(prefix="a3sim_") as td:
             local = Path(td)
@@ -1243,8 +1245,7 @@ def verify_with_ngspice(container: str, block: str, sp_text: str,
                                capture_output=True, text=True, timeout=300)
             for rel in staged:
                 subprocess.run(
-                    ["docker", "exec", container, "mkdir", "-p",
-                     f"{root}/{str(Path(rel).parent)}"],
+                    _ce.docker_exec_argv(container, "mkdir", "-p", f"{root}/{str(Path(rel).parent)}"),
                     capture_output=True, text=True, timeout=120)
                 subprocess.run(["docker", "cp", str(local / rel),
                                 f"{container}:{root}/{rel}"],
@@ -1256,8 +1257,7 @@ def verify_with_ngspice(container: str, block: str, sp_text: str,
         ng = None
         for cand in ("ngspice", "/foss/tools/bin/ngspice"):
             probe = subprocess.run(
-                ["docker", "exec", container, "sh", "-c",
-                 f"command -v {cand} >/dev/null 2>&1 && echo yes || echo no"],
+                _ce.docker_exec_argv(container, "sh", "-c", f"command -v {cand} >/dev/null 2>&1 && echo yes || echo no"),
                 capture_output=True, text=True, timeout=120)
             if "yes" in (probe.stdout or ""):
                 ng = cand
@@ -1284,8 +1284,7 @@ def verify_with_ngspice(container: str, block: str, sp_text: str,
         # `analog_real_corner_sweep` and `analog_a6_native_pv` already invoke
         # the container through `bash -lc` for exactly this reason.
         cp = subprocess.run(
-            ["docker", "exec", container, "bash", "-lc",
-             f"cd {stage} && {ng} -b tb_{block}.sp 2>&1"],
+            _ce.docker_exec_argv(container, "bash", "-lc", f"cd {stage} && {ng} -b tb_{block}.sp 2>&1"),
             capture_output=True, text=True, timeout=900)
         out = (cp.stdout or "") + (cp.stderr or "")
         tail = out.strip().splitlines()[-25:]
@@ -1310,7 +1309,7 @@ def verify_with_ngspice(container: str, block: str, sp_text: str,
                 "detail": f"container invocation failed: {exc}"}
     finally:
         try:
-            subprocess.run(["docker", "exec", container, "rm", "-rf", stage],
+            subprocess.run(_ce.docker_exec_argv(container, "rm", "-rf", stage),
                            capture_output=True, text=True, timeout=120)
         except (OSError, subprocess.SubprocessError):
             pass

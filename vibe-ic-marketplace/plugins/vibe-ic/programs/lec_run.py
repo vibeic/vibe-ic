@@ -64,6 +64,8 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import _container_exec as _ce  # noqa: E402 — the ONE guarded docker-exec argv
+import _eda_pin as _pin  # noqa: E402 — the ONE place the pin is stated
 from _rtl_include_hub import (  # noqa: E402
     drop_include_hubs as _drop_include_hubs,
     macro_headers_first as _macro_headers_first,
@@ -76,7 +78,7 @@ from _prose_polarity import is_denied, sentence_scope  # noqa: E402
 
 PROGRAM = "lec_run"
 
-DEFAULT_CONTAINER = "vibeic-eda"
+DEFAULT_CONTAINER = _pin.default_container_name()
 DEFAULT_LIBERTY = (
     "/foss/pdks/sky130A/libs.ref/sky130_fd_sc_hd/lib/"
     "sky130_fd_sc_hd__tt_025C_1v80.lib"
@@ -2350,7 +2352,7 @@ def _docker_exec_raw(container: str, cmd: str, timeout: int = 120):
     must not recursively enter the long-tool supervisor they are measuring.
     """
     argv = (["bash", "-lc", cmd] if container in ("", "host") else
-            ["docker", "exec", container, "bash", "-lc", cmd])
+            _ce.docker_exec_argv(container, "bash", "-lc", cmd))
     try:
         r = subprocess.run(argv, capture_output=True, text=True,
                            timeout=timeout)
@@ -2439,14 +2441,14 @@ def _docker(container: str, cmd: str, timeout: int = 120,
             # `design_one_shot_runner._run` already does after the same repair.
         )
         return subprocess.CompletedProcess(
-            ["docker", "exec", container, "bash", "-lc", cmd],
+            _ce.docker_exec_argv(container, "bash", "-lc", cmd),
             rc, out, err)
 
     if _dw is not None:
         cmd = _dw.wrap_with_container_timeout(cmd, timeout)
     return _pr.run(
         (["bash", "-lc", cmd] if container in ("", "host") else
-         ["docker", "exec", container, "bash", "-lc", cmd]),
+         _ce.docker_exec_argv(container, "bash", "-lc", cmd)),
         capture_output=True, text=True)
 
 

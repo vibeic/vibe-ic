@@ -79,6 +79,8 @@ import _eda_pin as _pin  # noqa: E402 — the ONE place the pin is stated
 __all__ = [
     "run_in_container",
     "container_deadline_argv",
+    "docker_exec_argv",
+    "ContainerImageMismatch",
     "TIMEOUT_EXPIRED_RC",
     "TIMEOUT_UNAVAILABLE_RC",
     "IMAGE_MISMATCH_RC",
@@ -111,6 +113,59 @@ DEFAULT_KILL_GRACE_S = 5
 CLIENT_GRACE_S = 15
 
 
+class ContainerImageMismatch(RuntimeError):
+    """`docker exec` was about to address a container running the wrong bytes.
+
+    Carries the refusal `_eda_pin` composed, which names BOTH digests.
+    """
+
+
+def docker_exec_argv(container: str, *rest: str,
+                     opts: Sequence[str] = ()) -> list:
+    """``["docker", "exec", *opts, container, *rest]`` — with the attach check.
+
+    THE ONE PLACE A `docker exec` ARGV IS BUILT, and that is the whole point.
+    `run_in_container` already refused to attach to a container running bytes
+    other than the pinned ones, but it is not the only way into a container:
+    MEASURED 2026-09-07, sixty-five argv constructions in thirty shipped files
+    spelled ``["docker", "exec", …]`` by hand, and every one of them was a path
+    on which the guarantee did not hold. A guard each caller must remember to
+    invoke is a guard that decays; a guard in the constructor cannot be
+    forgotten, because there is nothing else to call.
+
+    ``opts`` are the flags that must precede the container name — ``-w``, ``-e``
+    and friends. They are a separate parameter rather than leading positionals
+    precisely so the CONTAINER is always an identified argument and can always
+    be checked; a builder that took one flat argv would have to guess which
+    element was the container, and guessing is what this module exists to stop.
+
+    RAISES on a MEASURED MISMATCH, and only then. A digest that could not be
+    read is NOT_MEASURED, never a mismatch (see `_eda_pin.container_pin_state`):
+    the command is built and docker reports its own failure, as it always did.
+    Raising rather than returning a marker argv is deliberate — an argv that
+    looks runnable and is not would be discovered inside the tool's own output,
+    which is the class of confusion this change removes.
+    """
+    why = _pin.container_attach_refusal(container)
+    if why:
+        raise ContainerImageMismatch(why)
+    return _unguarded_exec_argv(container, *rest, opts=opts)
+
+
+def _unguarded_exec_argv(container: str, *rest: str,
+                         opts: Sequence[str] = ()) -> list:
+    """The argv shape alone, with NO attach check.
+
+    Exactly one caller is entitled to this: the refusal path below, which has
+    the refusal in hand already and needs the argv only to RECORD what it
+    declined to run. Asking the guard a second time there would raise out of the
+    very branch whose contract is to RETURN `IMAGE_MISMATCH_RC` — measured while
+    writing this: routing `container_deadline_argv` through the guard turned the
+    landed rc-125 refusal into an exception.
+    """
+    return ["docker", "exec", *opts, container, *rest]
+
+
 def container_deadline_argv(container: str,
                             cmd: str,
                             deadline_s: int,
@@ -122,9 +177,9 @@ def container_deadline_argv(container: str,
     caller runs rather than re-typing it — a re-typed argv agrees with the
     implementation by coincidence, which is how this class of defect returns.
     """
-    return (["docker", "exec", container,
-             "timeout", "-k", str(int(kill_grace_s)), str(int(deadline_s))]
-            + list(shell) + [cmd])
+    return docker_exec_argv(
+        container, "timeout", "-k", str(int(kill_grace_s)),
+        str(int(deadline_s)), *shell, cmd)
 
 
 def run_in_container(container: str,
@@ -164,8 +219,9 @@ def run_in_container(container: str,
     why = _pin.container_attach_refusal(container)
     if why:
         return subprocess.CompletedProcess(
-            args=container_deadline_argv(container, cmd, deadline_s,
-                                         kill_grace_s, shell),
+            args=_unguarded_exec_argv(
+                container, "timeout", "-k", str(int(kill_grace_s)),
+                str(int(deadline_s)), *shell, cmd),
             returncode=IMAGE_MISMATCH_RC, stdout="",
             stderr=f"_container_exec: refused, nothing was run: {why}\n")
     return _pr.run(

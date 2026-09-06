@@ -77,6 +77,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import _eda_pin as _pin  # noqa: E402 — the ONE place the pin is stated
 import _atomic_artefact as _aa                      # noqa: E402
 import _analog_producer_common as _pc               # noqa: E402
 import analog_a2_topology_emit as _a2               # noqa: E402
@@ -440,7 +441,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("project", type=Path)
     ap.add_argument("--block", required=True)
-    ap.add_argument("--container", default="vibeic-eda")
+    ap.add_argument("--container", default=_pin.default_container_name())
     ap.add_argument("--deck", type=Path, default=None,
                     help="the transient deck to export from. Default: the "
                          "one analog_real_corner_sweep wrote AND ran.")

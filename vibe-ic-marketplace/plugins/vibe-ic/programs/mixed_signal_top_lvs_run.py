@@ -80,6 +80,8 @@ from def_gds_port_power_restore import (  # noqa: E402
     def_rank,
 )
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import _container_exec as _ce  # noqa: E402 — the ONE guarded docker-exec argv
+import _eda_pin as _pin  # noqa: E402 — the ONE place the pin is stated
 import _atomic_artefact as _aa  # noqa: E402  (vibe-ic#1082)
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -430,8 +432,7 @@ def _docker_exec_raw(container, cmd, timeout=600):
         # `docker exec` CLIENT and ORPHANS the tool inside the container
         # (see `_docker_watchdog.wrap_with_container_timeout`).
         import _docker_watchdog as _dw
-        full = ["docker", "exec", container, "bash", "-lc",
-                _dw.wrap_with_container_timeout(cmd, timeout)]
+        full = _ce.docker_exec_argv(container, "bash", "-lc", _dw.wrap_with_container_timeout(cmd, timeout))
     else:
         full = ["bash", "-lc", cmd]
     try:
@@ -943,7 +944,7 @@ def main(argv=None) -> int:
     # C5: default None, NOT a design-specific literal. An omitted value is
     # resolved from the project; an unresolvable one SKIPs saying so.
     ap.add_argument("--top", default=None)
-    ap.add_argument("--container", default="vibeic-eda")
+    ap.add_argument("--container", default=_pin.default_container_name())
     ap.add_argument("--pdk", default=None)
     ap.add_argument("--json", default=None)
     args = ap.parse_args(argv)

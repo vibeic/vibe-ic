@@ -68,6 +68,10 @@ if _PROGRAMS_DIR.is_dir() and str(_PROGRAMS_DIR) not in sys.path:
 # the programs that need the same host mount root; it lives in programs/ so
 # there is exactly one implementation of it in the plugin.
 import _designs_root as _dr  # noqa: E402
+import sys
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import _container_exec as _ce  # noqa: E402 — the ONE guarded docker-exec argv
+import _eda_pin as _pin  # noqa: E402 — the ONE place the pin is stated
 
 
 def _registry_path() -> Path:
@@ -494,7 +498,7 @@ def _resolve_sample_b(design: str, samples: Path, dataset: Path,
 # while asyn_fifo FAILs under Verilator (a real functional bug, NOT a TB-side gap).
 # So: iverilog "sorry"/"internal error" → escalate to Verilator, whose verdict is
 # authoritative; only a Verilator *build* failure stays a hard tool-gap → SKIP.
-_IV13_CONTAINER = os.environ.get("VIBEIC_IVERILOG13_CONTAINER", "vibeic-eda")
+_IV13_CONTAINER = os.environ.get("VIBEIC_IVERILOG13_CONTAINER") or _pin.default_container_name()
 _CONT_DESIGNS_ROOT = os.environ.get("VIBEIC_DESIGNS_CONT_ROOT", "/foss/designs")
 
 # PORTABILITY — the designs-root resolution LADDER.
@@ -753,8 +757,7 @@ def _container_has_timeout(container: str) -> bool:
     before this fix, never worse."""
     if container not in _CONTAINER_HAS_TIMEOUT:
         try:
-            ok = subprocess.run(["docker", "exec", container,
-                                 "timeout", "--version"],
+            ok = subprocess.run(_ce.docker_exec_argv(container, "timeout", "--version"),
                                 capture_output=True, timeout=30).returncode == 0
         except (OSError, subprocess.SubprocessError):
             ok = False
@@ -788,7 +791,7 @@ def _bounded_vvp(binp, *, timeout, cwd, route=None):
         return subprocess.run(["vvp", str(binp)], capture_output=True, text=True,
                               timeout=timeout, cwd=cwd)
     container, remote = route
-    argv = ["docker", "exec", "-w", str(cwd), container]
+    argv = _ce.docker_exec_argv(container, opts=("-w", str(cwd)))
     if _container_has_timeout(container):
         argv += ["timeout", "--kill-after=5", str(max(1, int(timeout) - 5))]
     argv += [remote, str(binp)]
@@ -836,10 +839,9 @@ def _fork_iverilog_compile_run(sources, top: str, preserve=()):
     try:
         # opportunistic sweep of stale sibling dirs (a SIGKILLed scorer never
         # reaches its finally) before creating this invocation's dir
-        if subprocess.run(["docker", "exec", container, "bash", "-lc",
-                           f"find /tmp -maxdepth 1 -name 'vibeic_forkiv_*' "
+        if subprocess.run(_ce.docker_exec_argv(container, "bash", "-lc", f"find /tmp -maxdepth 1 -name 'vibeic_forkiv_*' "
                            f"-mmin +240 -exec rm -rf {{}} + 2>/dev/null; "
-                           f"rm -rf {tagdir} && mkdir -p {tagdir}"],
+                           f"rm -rf {tagdir} && mkdir -p {tagdir}"),
                           capture_output=True, timeout=60).returncode != 0:
             return None
         cont_srcs = []
@@ -859,7 +861,7 @@ def _fork_iverilog_compile_run(sources, top: str, preserve=()):
                  f"|| iverilog -g2012 -o bin {srcs} 2>err) && echo __FBUILT__ "
                  f"&& {{ timeout {int(_FORK_VVP_TIMEOUT)} vvp bin 2>&1; "
                  f"echo __FORKRC=$?; }}")
-        r = subprocess.run(["docker", "exec", container, "bash", "-lc", build],
+        r = subprocess.run(_ce.docker_exec_argv(container, "bash", "-lc", build),
                            capture_output=True, text=True,
                            timeout=int(_FORK_VVP_TIMEOUT) + 180)
         out = r.stdout + r.stderr
@@ -882,8 +884,7 @@ def _fork_iverilog_compile_run(sources, top: str, preserve=()):
             # cleanup must never raise past the verdict (a docker-less host would
             # otherwise crash the WHOLE scoring run with FileNotFoundError here —
             # Step-2.7 reproduced finding)
-            subprocess.run(["docker", "exec", container, "bash", "-lc",
-                            f"rm -rf {tagdir}"],
+            subprocess.run(_ce.docker_exec_argv(container, "bash", "-lc", f"rm -rf {tagdir}"),
                            capture_output=True, timeout=30)
         except Exception:
             pass
@@ -1006,7 +1007,7 @@ def _verilator_run_text(text: str, design: str, tb: Path, design_dir: Path,
                f"verilator --binary --timing -Wno-fatal -Wno-WIDTH -Wno-CASEINCOMPLETE "
                f"-Mdir {mdir} '{cs}' '{ctb}' 2>&1 && echo __VBUILT__ && "
                f"timeout 90 {mdir}/V* 2>&1")
-        r = subprocess.run(["docker", "exec", _IV13_CONTAINER, "bash", "-lc", cmd],
+        r = subprocess.run(_ce.docker_exec_argv(_IV13_CONTAINER, "bash", "-lc", cmd),
                            capture_output=True, text=True, timeout=300)
         out = "\n".join(l for l in (r.stdout + r.stderr).splitlines()
                         if not l.startswith("[INFO]"))
@@ -1103,7 +1104,7 @@ def _verilator_compile_run(design: str, sample_c: str, tb: Path, design_dir: Pat
                f"verilator --binary --timing -Wno-fatal -Wno-WIDTH -Wno-CASEINCOMPLETE "
                f"-Mdir {mdir} '{cs}' '{ctb}' 2>&1 && echo __VBUILT__ && "
                f"timeout 90 {mdir}/V* 2>&1")
-        r = subprocess.run(["docker", "exec", _IV13_CONTAINER, "bash", "-lc", cmd],
+        r = subprocess.run(_ce.docker_exec_argv(_IV13_CONTAINER, "bash", "-lc", cmd),
                            capture_output=True, text=True, timeout=300)
         out = "\n".join(l for l in (r.stdout + r.stderr).splitlines()
                         if not l.startswith("[INFO]"))

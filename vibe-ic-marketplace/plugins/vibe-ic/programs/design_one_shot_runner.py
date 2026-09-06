@@ -130,6 +130,8 @@ import _yosys_stat as _ystat  # shared yosys `stat` parser (step 9 stats.json)
 import quartus_map_audit as _qma  # step 6 .map.rpt silent-failure scanner
 import _hardmacro_stage as _hms  # staged SRAM/IP macro discovery + blackbox
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import _container_exec as _ce  # noqa: E402 — the ONE guarded docker-exec argv
+import _eda_pin as _pin  # noqa: E402 — the ONE place the pin is stated
 import _atomic_artefact as _aa  # noqa: E402  (vibe-ic#1082)
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -608,23 +610,7 @@ def _docker_exec_raw(container: str, cmd: str, timeout: int = 600
     still able to overwrite that step's output netlist. Chip-AGNOSTIC."""
     import _docker_watchdog as _dw
     _wrapped = _dw.wrap_with_container_timeout(cmd, timeout)
-    full = ["docker", "exec",
-            # The vibeic-eda image is entered through a LOGIN shell, whose
-            # profile prints a two-line banner ("[INFO] Final PATH variable:
-            # ...") to STDOUT AHEAD of the command output.
-            # `IIC_OSIC_TOOLS_QUIET` is the image's OWN documented knob for
-            # it (/etc/profile.d/iic-osic-tools-setup.sh guards both echoes
-            # on it), and `phase3_one_shot_runner` already passes it here.
-            #
-            # This path was cold for simulation until #902 moved iverilog/vvp
-            # dispatch INTO the container: MEASURED on a converged cell, the
-            # banner then landed at the TOP of the sim transcript
-            # (`sim_full_stack/oracle_run/oracle.log` grew from 4 lines to 6),
-            # which is the same stdout-contamination the repo already refuses
-            # at source elsewhere. Suppressing it HERE keeps every consumer
-            # clean instead of asking each one to remember to filter.
-            "-e", "IIC_OSIC_TOOLS_QUIET=1",
-            container, "bash", "-lc", _wrapped]
+    full = _ce.docker_exec_argv(container, "bash", "-lc", _wrapped, opts=("-e", "IIC_OSIC_TOOLS_QUIET=1"))
     try:
         cp = subprocess.run(full, capture_output=True, text=True,
                             timeout=timeout)
@@ -1482,8 +1468,7 @@ def _container_has_quartus_sh(container: str) -> bool:
     if container in _CONTAINER_QUARTUS_CACHE:
         return _CONTAINER_QUARTUS_CACHE[container]
     rc, out, _ = _run(
-        ["docker", "exec", container, "sh", "-c",
-         "command -v quartus_sh"],
+        _ce.docker_exec_argv(container, "sh", "-c", "command -v quartus_sh"),
         timeout=10,
     )
     ok = (rc == 0) and bool(out.strip())
@@ -7643,7 +7628,7 @@ def _cocotb_xml_summary(out_dir: Path) -> Optional[Dict[str, int]]:
 
 
 def step_professional_tb_gen(project: Path, top_name: str = "",
-                             container: str = "vibeic-eda") -> StepResult:
+                             container: str = _pin.default_container_name()) -> StepResult:
     """NEW TB PATH (professional_tb_gen, 2026-07-11) wired into Phase-2.
 
     Deterministically DERIVES a professional cocotb testbench from the design's
@@ -10996,7 +10981,7 @@ def _run_oracle_tb(project: Path, top_name: str, tb_path: Path,
 def _reference_tb_generic_full_stack(project: Path, top_name: str,
                                      track_reason: str,
                                      t0: float,
-                                     container: str = "vibeic-eda",
+                                     container: str = _pin.default_container_name(),
                                      ic_class: Optional[str] = None
                                      ) -> StepResult:
     """v1.6.523 — functional gate for generic_full_stack classes.
@@ -12056,7 +12041,7 @@ def _rtl_absent_refusal_detail(project: Path,
 
 def step_reference_tb(project: Path, top_name: str = "chip_top",
                       ic_class: Optional[str] = None,
-                      container: str = "vibeic-eda") -> StepResult:
+                      container: str = _pin.default_container_name()) -> StepResult:
     t0 = time.time()
     rtl_dir = _pl.rtl_dir(project)
     if not rtl_dir.is_dir():
@@ -14505,7 +14490,7 @@ def _phase2_synth_timeout_s() -> int:
 
 
 def step_yosys_synth(project: Path, top_name: str = "chip_top",
-                     container: str = "vibeic-eda",
+                     container: str = _pin.default_container_name(),
                      ic_class: Optional[str] = None) -> StepResult:
     t0 = time.time()
     rtl_dir = _pl.rtl_dir(project)
@@ -14979,8 +14964,7 @@ def step_yosys_synth(project: Path, top_name: str = "chip_top",
         # opaque OCI "chdir to cwd ... no such file or directory".
         if _path_in_container(str(synth_dir), container):
             rc, out, err = _run(
-                ["docker", "exec", "-w", str(synth_dir), container,
-                 "bash", "-lc", f"yosys -p '{script}'"],
+                _ce.docker_exec_argv(container, "bash", "-lc", f"yosys -p '{script}'", opts=("-w", str(synth_dir))),
                 timeout=_synth_to)
         else:
             cont_wd, _needs = _phase2_container_workdir(
@@ -15025,8 +15009,7 @@ def step_yosys_synth(project: Path, top_name: str = "chip_top",
                         script_c = script_c.replace(hp, stage_map[hp])
                     script_c = script_c.replace(str(out_v), netlist_c)
                     rc, out, err = _run(
-                        ["docker", "exec", "-w", cont_wd, container,
-                         "bash", "-lc", f"yosys -p '{script_c}'"],
+                        _ce.docker_exec_argv(container, "bash", "-lc", f"yosys -p '{script_c}'", opts=("-w", cont_wd)),
                         timeout=_synth_to)
                     if rc == 0:
                         if not _phase2_retrieve_netlist(
@@ -15034,8 +15017,7 @@ def step_yosys_synth(project: Path, top_name: str = "chip_top",
                             rc = 1
                             err += ("\nyosys docker fallback: netlist "
                                     "retrieval from staging failed")
-                    _run(["docker", "exec", container, "bash", "-lc",
-                          f"rm -rf {cont_wd}"], timeout=30)
+                    _run(_ce.docker_exec_argv(container, "bash", "-lc", f"rm -rf {cont_wd}"), timeout=30)
     log = synth_dir / "yosys.log"
     log.write_text(out + "\n" + err)
 
@@ -15644,9 +15626,8 @@ def step_fpga_compile(project: Path, top_name: str,
                f"cd {fpga_dir} && {host_quartus_sh} --flow compile {base} "
                f"2>&1 | tee compile.log"]
     elif _container_has_quartus_sh(container):
-        cmd = ["docker", "exec", container, "bash", "-lc",
-               f"cd {project.as_posix()}/fpga && "
-               f"quartus_sh --flow compile {base} 2>&1 | tee compile.log"]
+        cmd = _ce.docker_exec_argv(container, "bash", "-lc", f"cd {project.as_posix()}/fpga && "
+               f"quartus_sh --flow compile {base} 2>&1 | tee compile.log")
     else:
         return StepResult(
             "fpga_compile", "SKIP",
@@ -18206,7 +18187,7 @@ def step_arith_declaration_emit(project: Path) -> StepResult:
 def step_emit_phase2_manifests(project: Path,
                                 plan: List[StepResult],
                                 top_name: Optional[str] = None,
-                                container: str = "vibeic-eda") -> StepResult:
+                                container: str = _pin.default_container_name()) -> StepResult:
     """Write canonical Phase 2 step-artifact manifests so flow_compliance_check
     --strict (--phase 2) sees the evidence the runner has already produced.
 
@@ -19361,7 +19342,7 @@ def main() -> int:
                         "reads.")
     p.add_argument("--max-rtl-repair-retries", type=int, default=3)
     p.add_argument("--top-name", default="chip_top")
-    p.add_argument("--container", default="vibeic-eda")
+    p.add_argument("--container", default=_pin.default_container_name())
     p.add_argument("--skip-phase3", action="store_true",
                    help="Lightweight/RTL-only flow (no silicon target). Gates "
                         "the heavy Fault ATPG (steps 11/12 DFT) OFF so an atomic "

@@ -105,6 +105,9 @@ PathLike = Union[str, Path]
 from si_signoff_timing_aware import parse_spef  # noqa: E402
 import _watchdog as _wd  # noqa: E402  progress-stall process supervision
 import _docker_watchdog as _dw  # noqa: E402  the canonical docker-exec-
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import _container_exec as _ce  # noqa: E402 — the ONE guarded docker-exec argv
+import _eda_pin as _pin  # noqa: E402 — the ONE place the pin is stated
 # supervised primitive (identity-stamped reap, in-container CPU probe)
 
 # ---------------------------------------------------------------------------
@@ -765,7 +768,7 @@ def _docker_exec_raw(container: str, cmd: str, timeout: int = 15
     never for the tool run itself. `_docker_watchdog.run_docker_supervised`
     is the caller; this is its injected `docker_exec_raw`."""
     try:
-        cp = subprocess.run(["docker", "exec", container, "bash", "-lc", cmd],
+        cp = subprocess.run(_ce.docker_exec_argv(container, "bash", "-lc", cmd),
                             capture_output=True, text=True, timeout=timeout)
         return cp.returncode, cp.stdout or "", cp.stderr or ""
     except subprocess.TimeoutExpired:
@@ -928,7 +931,7 @@ def _pl_import():
     return _pl
 
 
-def run(project: PathLike, *, container: str = "vibeic-eda",
+def run(project: PathLike, *, container: str = _pin.default_container_name(),
         spef: Optional[str] = None, netlist: Optional[str] = None,
         sdc: Optional[str] = None, liberty: Optional[str] = None,
         top: Optional[str] = None, macro_libs: Optional[List[str]] = None,
@@ -1193,7 +1196,7 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     r = sub.add_parser("run", help="OpenSTA windows -> MCF fold -> re-STA report")
     r.add_argument("project")
-    r.add_argument("--container", default="vibeic-eda")
+    r.add_argument("--container", default=_pin.default_container_name())
     r.add_argument("--spef", default=None)
     r.add_argument("--netlist", default=None)
     r.add_argument("--sdc", default=None)

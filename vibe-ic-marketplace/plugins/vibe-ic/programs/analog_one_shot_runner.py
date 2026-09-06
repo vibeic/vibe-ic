@@ -45,6 +45,7 @@ import _analog_a_check_common as _acc
 import step_preflight as _spf  # required_inputs PRE-FLIGHT at every dispatch site
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import _eda_pin as _pin  # noqa: E402 — the ONE place the pin is stated
 import _progress_run as _pr  # noqa: E402
 
 PROGRAMS_DIR = Path(__file__).resolve().parent
@@ -1032,8 +1033,7 @@ def step_for_block(project: Path, block: Dict[str, Any], step_name: str,
                     [sys.executable, str(_attr), str(project),
                      "--block", bname, "--container",
                      (getattr(args, "container", None)
-                      or os.environ.get("VIBEIC_ANALOG_CONTAINER",
-                                        "vibeic-eda"))],
+                      or os.environ.get("VIBEIC_ANALOG_CONTAINER") or _pin.default_container_name())],
                     # NO `timeout=` HERE, AND IT WAS FIXED TWICE. v1.17.49
                     # (lane icadcf3, 975321e641) removed it first; this lane
                     # found the same site independently while enumerating
@@ -1068,8 +1068,7 @@ def step_for_block(project: Path, block: Dict[str, Any], step_name: str,
                      "--block", bname,
                      "--container",
                      (getattr(args, "container", None)
-                      or os.environ.get("VIBEIC_ANALOG_CONTAINER",
-                                        "vibeic-eda"))],
+                      or os.environ.get("VIBEIC_ANALOG_CONTAINER") or _pin.default_container_name())],
                     capture_output=True, text=True)
             except (OSError, subprocess.SubprocessError, _pr.Stalled):
                 # Producing is not a verdict; the A8 gate below still reports
@@ -1177,8 +1176,7 @@ def step_for_block(project: Path, block: Dict[str, Any], step_name: str,
                 if _prod.get("takes_container"):
                     _pcmd += ["--container",
                               (getattr(args, "container", None)
-                               or os.environ.get("VIBEIC_ANALOG_CONTAINER",
-                                                 "vibeic-eda"))]
+                               or os.environ.get("VIBEIC_ANALOG_CONTAINER") or _pin.default_container_name())]
                 _pcmd += list(_prod.get("extra_args") or [])
                 try:
                     # CZT-11 — the producer one line below was already
@@ -1349,9 +1347,7 @@ def step_for_block(project: Path, block: Dict[str, Any], step_name: str,
                     if prod.get("takes_container"):
                         pcmd += ["--container",
                                  (getattr(args, "container", None)
-                                  or os.environ.get(
-                                      "VIBEIC_ANALOG_CONTAINER",
-                                      "vibeic-eda"))]
+                                  or os.environ.get("VIBEIC_ANALOG_CONTAINER") or _pin.default_container_name())]
                     pcmd += list(prod.get("extra_args") or [])
                     try:
                         # CZT-11 — same shape as the pre-producer above.
@@ -1435,8 +1431,7 @@ def step_for_block(project: Path, block: Dict[str, Any], step_name: str,
                               "--block", bname,
                               "--container",
                               (getattr(args, "container", None)
-                               or os.environ.get("VIBEIC_ANALOG_CONTAINER",
-                                                 "vibeic-eda"))]
+                               or os.environ.get("VIBEIC_ANALOG_CONTAINER") or _pin.default_container_name())]
                     em_cp = _pr.run(em_cmd, capture_output=True, text=True)
                     lay = (project / "phase3" / "analog" / bname
                            / "layout.mag")
@@ -1486,9 +1481,7 @@ def step_for_block(project: Path, block: Dict[str, Any], step_name: str,
                     # the A-track's only real simulation step — had never once
                     # run under the orchestrator, on any design.
                     _a4_container = (getattr(args, "container", None)
-                                     or os.environ.get(
-                                         "VIBEIC_ANALOG_CONTAINER",
-                                         "vibeic-eda"))
+                                     or os.environ.get("VIBEIC_ANALOG_CONTAINER") or _pin.default_container_name())
                     # NO LITERAL PDK DEFAULT — AND NOTHING INVENTED IN ITS
                     # PLACE. The default this replaces was a bare open-PDK
                     # family name that is not an installed directory on any
@@ -1596,9 +1589,7 @@ def step_for_block(project: Path, block: Dict[str, Any], step_name: str,
                             _live = _loop_liveness(
                                 project, bname,
                                 (getattr(args, "container", None)
-                                 or os.environ.get(
-                                     "VIBEIC_ANALOG_CONTAINER",
-                                     "vibeic-eda")))
+                                 or os.environ.get("VIBEIC_ANALOG_CONTAINER") or _pin.default_container_name()))
                             if _live and _live.get("result") not in (
                                     None, "LIVE", "NOT_DECLARED"):
                                 _on = (f"loop liveness "
@@ -1693,7 +1684,7 @@ def step_for_block(project: Path, block: Dict[str, Any], step_name: str,
             native = _try_native_a6_pv(
                 project, bname,
                 getattr(args, "container", None)
-                or os.environ.get("VIBEIC_ANALOG_CONTAINER", "vibeic-eda"))
+                or os.environ.get("VIBEIC_ANALOG_CONTAINER") or _pin.default_container_name())
             if native and native.get("ran"):
                 cp2 = _pr.run(cmd, capture_output=True,
                                       text=True)
@@ -1787,7 +1778,7 @@ def _aggregate_verdict(plan: List[StepResult]) -> str:
 def main() -> int:
     p = argparse.ArgumentParser()
     p.add_argument("project", type=Path)
-    p.add_argument("--container", default="vibeic-eda")
+    p.add_argument("--container", default=_pin.default_container_name())
     p.add_argument("--allow-deterministic-stubs",
                    action="store_true",
                    dest="allow_deterministic_stubs",

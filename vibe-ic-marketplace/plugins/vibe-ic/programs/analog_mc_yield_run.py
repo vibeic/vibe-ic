@@ -43,6 +43,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 import analog_real_corner_sweep as _ars  # noqa: E402  (docker/ngspice helpers)
 import _designs_root as _dr  # noqa: E402  (host mount root, measured)
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import _eda_pin as _pin  # noqa: E402 — the ONE place the pin is stated
 
 # PDK Monte-Carlo model sections — the corner section that ENABLES device
 # MISMATCH resampling (the foundry's own mismatch distribution). ORGANIC #142
@@ -490,7 +492,7 @@ def main(argv=None) -> int:
     ap.add_argument("project", type=Path)
     ap.add_argument("--block", required=True)
     ap.add_argument("--n", type=int, default=100)
-    ap.add_argument("--container", default="vibeic-eda")
+    ap.add_argument("--container", default=_pin.default_container_name())
     ap.add_argument("--pdk", default="sky130",
                     choices=sorted(_ars.PDK_LIB.keys()))
     ap.add_argument("--json", default=None)

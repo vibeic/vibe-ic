@@ -309,6 +309,47 @@ def test_the_harness_composes_the_pin_from_digest_and_configured_repository():
     assert re.fullmatch(r"sha256:[0-9a-f]{64}", _pinned_parts()["IMAGE_DIGEST"])
 
 
+def test_the_harness_FORWARDS_the_one_config_point_into_the_container():
+    """Resolving the repository on the HOST is half a config point.
+
+    MEASURED 2026-09-07 on 8hd-3 (lane czto12, reproduced through this script):
+    the harness resolved the pin with `${VIBEIC_EDA_IMAGE_REPO:-…}` on the host,
+    started a container that could not see the variable, and a NESTED resolve
+    inside it reported
+
+        VIBEIC_EDA_IMAGE_REPO = None
+        ghcr.io/vibeic/vibeic-eda@sha256:8da785a8… -> IMAGE_NOT_PRESENT
+
+    while the identical resolve on the host names the fleet registry and finds
+    the image. A deployment serving the pinned bytes from elsewhere could
+    configure the host correctly and still have everything inside the harness
+    fall back to a repository it cannot reach.
+
+    The BARE `-e NAME` form is required, not `-e NAME=value`: docker copies the
+    value when the variable is set and does NOT create it when unset, so an
+    unset host env cannot inject an empty value that shadows the default. A
+    literal address here would also be exactly the thing this repo forbids —
+    the registry is CONFIGURATION and never belongs in the tree.
+    """
+    text = _HARNESS.read_text(encoding="utf-8")
+    assert re.search(r"^\s*-e VIBEIC_EDA_IMAGE_REPO\s*$", text, re.M), (
+        "the harness resolves VIBEIC_EDA_IMAGE_REPO on the host but does not "
+        "forward it into the container; a nested resolve there falls back to "
+        "the published repository and reports IMAGE_NOT_PRESENT")
+    assert not re.search(r"-e VIBEIC_EDA_IMAGE_REPO=", text), (
+        "forward the VARIABLE, never a value: `-e NAME=` would inject an empty "
+        "string when the host env is unset and shadow the default")
+
+
+def test_the_harness_writes_no_registry_address_into_the_tree():
+    """The digest is the identity; the repository is deployment configuration.
+    Configuration does not get committed."""
+    text = _HARNESS.read_text(encoding="utf-8")
+    assert not re.search(r"\b\d{1,3}(?:\.\d{1,3}){3}\b", text), (
+        "a literal host address appears in the harness; the repository belongs "
+        "in VIBEIC_EDA_IMAGE_REPO, not in the tree")
+
+
 def test_the_harness_refuses_when_the_pin_cannot_be_read():
     """A read that fails must REFUSE, never fall back to a literal — a fallback
     is exactly how the second copy comes back."""

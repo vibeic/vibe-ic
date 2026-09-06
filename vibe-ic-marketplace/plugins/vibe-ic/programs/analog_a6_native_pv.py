@@ -38,6 +38,11 @@ import subprocess
 import time
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
+import sys
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import _container_exec as _ce  # noqa: E402 — the ONE guarded docker-exec argv
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import _eda_pin as _pin  # noqa: E402 — the ONE place the pin is stated
 
 PROGRAMS_DIR = Path(__file__).resolve().parent
 _SVRFDRC_BIN = "svrfdrc"
@@ -88,7 +93,7 @@ def _docker_exec_raw(container: str, cmd: str, timeout: int = 60
     reader. They are now 124 and 127.
     """
     try:
-        r = subprocess.run(["docker", "exec", container, "bash", "-lc", cmd],
+        r = subprocess.run(_ce.docker_exec_argv(container, "bash", "-lc", cmd),
                            capture_output=True, text=True, timeout=timeout)
         return r.returncode, r.stdout or "", r.stderr or ""
     except subprocess.TimeoutExpired as exc:
@@ -867,7 +872,7 @@ def second_engine_drc(project: Path, block: str, container: str,
 
 
 def run_block_pv(project: Path, block: str, res: Dict[str, Any],
-                 container: str = "vibeic-eda", *,
+                 container: str = _pin.default_container_name(), *,
                  drc_runner: Optional[Callable] = None,
                  lvs_runner: Optional[Callable] = None,
                  gds_finder: Optional[Callable] = None,

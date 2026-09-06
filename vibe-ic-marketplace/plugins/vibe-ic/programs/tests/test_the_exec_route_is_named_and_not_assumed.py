@@ -182,8 +182,25 @@ def test_both_exec_entry_points_share_one_seam():
         "both exec entry points must build their argv through the one seam")
     # Neither of them may rebuild the argv itself: a second copy is how the
     # two came to disagree about `-e IIC_OSIC_TOOLS_QUIET=1` before the seam
-    # existed. The ONE literal `docker exec` argv in a *tool-running* path is
-    # inside `_exec_argv`; the remaining ones are short helpers that read a
-    # file or a mount table, not the two supervised entry points.
+    # existed.
+    #
+    # THIS ASSERTION'S MECHANISM MOVED AND ITS PROPERTY DID NOT. It used to
+    # require exactly ONE literal `"docker", "exec",` inside `_exec_argv` --
+    # correct while this file was the only place that spelled the argv. The
+    # argv is now built by `_container_exec.docker_exec_argv`, the one
+    # constructor in the repo, which also carries the attach check that keeps a
+    # run from addressing a container holding other bytes. So "exactly one place
+    # spells it" is not weakened here, it is widened from one place PER FILE to
+    # one place REPO-WIDE, and the seam is required to use it.
+    #
+    # The two questions stay separate and neither answers the other: this seam
+    # decides WHERE a tool runs (in this image, or in a container) and the
+    # constructor decides HOW a container is addressed. Local mode reaches no
+    # constructor at all, which is right -- nothing is being attached to there.
     body = src.split("def _exec_argv(")[1].split("\ndef ")[0]
-    assert body.count('"docker", "exec",') == 1
+    assert body.count('"docker", "exec",') == 0, (
+        "the seam spells a `docker exec` argv itself again; it must build it "
+        "through _container_exec.docker_exec_argv")
+    assert "docker_exec_argv(" in body, (
+        "the seam must build its container argv through the ONE guarded "
+        "constructor, not by hand")

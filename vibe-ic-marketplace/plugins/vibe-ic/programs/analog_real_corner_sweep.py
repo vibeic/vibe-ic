@@ -62,6 +62,7 @@ from __future__ import annotations
 import argparse, hashlib, json, os, re, shlex, subprocess, sys, time
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import _eda_pin as _pin  # noqa: E402 — the ONE place the pin is stated
 import _atomic_artefact as _aa  # noqa: E402  (vibe-ic#1082)
 import _designs_root as _dr  # noqa: E402  (host mount root, measured)
 
@@ -3328,7 +3329,7 @@ def main():
     p = argparse.ArgumentParser()
     p.add_argument("project", type=Path)
     p.add_argument("--block", required=True)
-    p.add_argument("--container", default="vibeic-eda")
+    p.add_argument("--container", default=_pin.default_container_name())
     # #185 — do NOT hard-restrict to the two open-PDK keys: a native analog PDK
     # (e.g. a project custom / container-installed family) must be EXPRESSIBLE on
     # the CLI so the truth can be stated, not just resolved silently. Any selector

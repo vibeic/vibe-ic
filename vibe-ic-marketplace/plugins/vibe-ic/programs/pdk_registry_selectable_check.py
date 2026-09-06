@@ -100,6 +100,8 @@ import subprocess
 import sys
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import _container_exec as _ce  # noqa: E402 — the ONE guarded docker-exec argv
+import _eda_pin as _pin  # noqa: E402 — the ONE place the pin is stated
 import _docker_memory as _dmem  # noqa: E402 — every `docker run` carries the ceiling
 from typing import Any, Dict, List
 
@@ -343,7 +345,7 @@ def _sh(target, script: str):
     # landing check before reporting anything. `_image_tag()` only ever names an
     # image this host already has, so the flag changes no reachable answer — it
     # is the guard for the day something else names one it does not.
-    cmd = (["docker", "exec", ref, "bash", "-lc", script] if kind == "exec"
+    cmd = (_ce.docker_exec_argv(ref, "bash", "-lc", script) if kind == "exec"
            else ["docker", "run", "--rm", *_dmem.docker_memory_flags(),
                  "--pull", "never",
                  "--entrypoint", "bash", ref,
@@ -511,7 +513,7 @@ def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n", 1)[0])
     ap.add_argument("--registry", default=str(here / "pdk_registry.json"))
     ap.add_argument("--container",
-                    default=os.environ.get("EDA_CONTAINER", "vibeic-eda"))
+                    default=os.environ.get("EDA_CONTAINER") or _pin.default_container_name())
     ap.add_argument("--json", dest="json_out")
     ap.add_argument("--baseline", default=None)
     ap.add_argument("--write-baseline", action="store_true")

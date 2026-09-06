@@ -43,6 +43,8 @@ import subprocess
 import sys
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import _container_exec as _ce  # noqa: E402 — the ONE guarded docker-exec argv
 
 DEFAULT_PDKS_ROOT = "/foss/pdks"
 
@@ -117,8 +119,7 @@ def _docker_lister(container: str) -> Callable[[str], List[str]]:
     def L(path: str) -> List[str]:
         try:
             r = subprocess.run(
-                ["docker", "exec", container, "bash", "-lc",
-                 f"ls -1 {shlex.quote(path)} 2>/dev/null"],
+                _ce.docker_exec_argv(container, "bash", "-lc", f"ls -1 {shlex.quote(path)} 2>/dev/null"),
                 capture_output=True, text=True, timeout=60)
         except Exception:
             return []

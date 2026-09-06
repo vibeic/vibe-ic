@@ -102,6 +102,8 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import _container_exec as _ce  # noqa: E402 — the ONE guarded docker-exec argv
+import _eda_pin as _pin  # noqa: E402 — the ONE place the pin is stated
 
 import _path_layout as _pl  # noqa: E402
 from _analog_a_check_common import load_block_list  # noqa: E402
@@ -133,7 +135,7 @@ import _progress_run as _pr  # noqa: E402
 
 PROGRAM = "analog_hardmacro_gds_emit"
 
-DEFAULT_CONTAINER = "vibeic-eda"
+DEFAULT_CONTAINER = _pin.default_container_name()
 DEFAULT_PDK_ROOT = "/foss/pdks"
 
 #: Magic writes the technology it was built against on the second line of a
@@ -234,7 +236,7 @@ class Stage:
             self.path = str(self.host_tmp)
             return True, ""
         rc, out, err = _run(
-            ["docker", "exec", self.container, "mktemp", "-d"], timeout=60)
+            _ce.docker_exec_argv(self.container, "mktemp", "-d"), timeout=60)
         if rc != 0 or not out.strip():
             return False, (f"cannot open a staging dir in container "
                            f"{self.container!r}: {(err or out).strip()[:200]}")
@@ -278,7 +280,7 @@ class Stage:
     def sh(self, cmd: str, timeout: int = 900) -> Tuple[int, str, str]:
         if not self.in_container:
             return _run(["bash", "-lc", cmd], timeout=timeout)
-        return _run(["docker", "exec", self.container, "bash", "-lc", cmd],
+        return _run(_ce.docker_exec_argv(self.container, "bash", "-lc", cmd),
                     timeout=timeout)
 
     def exists(self, path: str) -> bool:
@@ -286,7 +288,7 @@ class Stage:
 
     def close(self) -> None:
         if self.path and self.in_container:
-            _run(["docker", "exec", self.container, "rm", "-rf", self.path],
+            _run(_ce.docker_exec_argv(self.container, "rm", "-rf", self.path),
                  timeout=60)
 
 

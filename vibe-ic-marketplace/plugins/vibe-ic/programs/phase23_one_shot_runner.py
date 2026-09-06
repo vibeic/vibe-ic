@@ -34,6 +34,8 @@ import time
 from pathlib import Path
 from typing import Any, Dict
 import _path_layout as _pl
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import _eda_pin as _pin  # noqa: E402 — the ONE place the pin is stated
 
 
 PROGRAMS_DIR = Path(__file__).resolve().parent
@@ -63,7 +65,7 @@ def main() -> int:
     p = argparse.ArgumentParser()
     p.add_argument("project", type=Path)
     p.add_argument("--top-name", default="chip_top")
-    p.add_argument("--container", default="vibeic-eda")
+    p.add_argument("--container", default=_pin.default_container_name())
     p.add_argument("--max-rtl-repair-retries", type=int, default=3)
     p.add_argument("--skip-hardware", action="store_true")
     p.add_argument("--force-rtl-regen", action="store_true",

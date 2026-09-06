@@ -72,6 +72,8 @@ from _atomic_artefact import write_text as atomic_write_text  # vibe-ic#1082 (he
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import _progress_run as _pr  # noqa: E402
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import _eda_pin as _pin  # noqa: E402 — the ONE place the pin is stated
 
 HERE = Path(__file__).resolve().parent
 PLUGIN = HERE.parent
@@ -85,7 +87,8 @@ RC_OK, RC_NOT_CHECKED, RC_UNRUNNABLE = 0, 2, 2
 
 #: A skip reason that names the image or the container. Matched against the
 #: literal text of the `pytest.skip(...)` argument, never against the file.
-_IMAGE_WORDS = ("image", "container", "vibeic-eda", "reachable")
+_IMAGE_WORDS = ("image", "container", _pin.CONTAINER_NAME_PREFIX,
+                "reachable")
 
 #: A path inside the image that every arm of #1128's measurement reads. Chosen
 #: because the gated tests read it themselves; a probe reading something else

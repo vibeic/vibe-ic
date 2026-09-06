@@ -21,6 +21,9 @@ Usage:
 from __future__ import annotations
 import argparse, sys
 from pathlib import Path
+import sys
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import _eda_pin as _pin  # noqa: E402 — the ONE place the pin is stated
 
 
 _VALID_STEPS = {
@@ -41,7 +44,7 @@ def main() -> int:
     p = argparse.ArgumentParser()
     p.add_argument("project", type=Path)
     p.add_argument("step", choices=sorted(_VALID_STEPS.keys()))
-    p.add_argument("--container", default="vibeic-eda")
+    p.add_argument("--container", default=_pin.default_container_name())
     p.add_argument("--top-name", default="chip_top")
     args = p.parse_args()
     project = args.project.resolve()

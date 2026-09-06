@@ -68,6 +68,8 @@ from typing import Dict, List, Optional
 import _container_exec as _CE  # vibe-ic#628 — bound the solver, not the client
 
 sys.path.insert(0, str(Path(__file__).parent))
+import _eda_pin as _pin  # noqa: E402 — the ONE place the pin is stated
+import _container_exec as _ce  # noqa: E402 — the ONE guarded docker-exec argv
 import _path_layout as _pl  # noqa: E402
 import _rtl_include_hub as _hub  # noqa: E402  (include-hub aggregator predicate)
 import _atomic_artefact as _aa  # noqa: E402  (vibe-ic#1082)
@@ -984,7 +986,7 @@ def detect_engines(container: Optional[str]) -> Dict[str, bool]:
     reachable = True
     try:
         if container:
-            cmd = ["docker", "exec", container, "bash", "-lc", probe]
+            cmd = _ce.docker_exec_argv(container, "bash", "-lc", probe)
         else:
             cmd = ["bash", "-lc", probe]
         p = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
@@ -1297,9 +1299,7 @@ def _run_sby(sby_path: Path, formal_dir: Path, container: Optional[str],
     _ul = f"ulimit -v {_lim}; " if _lim else ""
     inner = (f"{_ul}{path_export}; cd {formal_dir} && rm -rf {sby_path.stem} "
              f"&& sby -f {name}")
-    cmd = ["docker", "exec", container,
-           "timeout", "-k", str(_CE.DEFAULT_KILL_GRACE_S), str(int(timeout)),
-           "bash", "-lc", inner]
+    cmd = _ce.docker_exec_argv(container, "timeout", "-k", str(_CE.DEFAULT_KILL_GRACE_S), str(int(timeout)), "bash", "-lc", inner)
     timeout = int(timeout) + _CE.CLIENT_GRACE_S
     try:
         p = _pr.run(cmd, cwd=str(formal_dir), capture_output=True,
@@ -1525,7 +1525,7 @@ def _stage_include_headers(rtl: List[Path], formal_dir: Path,
 
 def run(project: Path, harness: Optional[Path] = None,
         rtl: Optional[List[Path]] = None, top: Optional[str] = None,
-        sby: Optional[Path] = None, container: Optional[str] = "vibeic-eda",
+        sby: Optional[Path] = None, container: Optional[str] = _pin.default_container_name(),
         bmc_depth: int = 12, safety_depth: int = 20,
         timeout: int = 900,
         invariant_harness: Optional[Path] = None,
@@ -2046,7 +2046,7 @@ def main(argv=None) -> int:
     ap.add_argument("--top", default=None, help="formal top module name")
     ap.add_argument("--sby", type=Path, default=None,
                     help="pre-authored .sby (overrides emit)")
-    ap.add_argument("--container", default="vibeic-eda",
+    ap.add_argument("--container", default=_pin.default_container_name(),
                     help="docker container running SymbiYosys ('' = local)")
     ap.add_argument("--bmc-depth", type=int, default=12)
     ap.add_argument("--safety-depth", type=int, default=20)
