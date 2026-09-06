@@ -13712,8 +13712,15 @@ def _chip_top_resolve_excluded_variant_params(project, rtl_dir, param_block,
     for _t in files.values():
         defined |= set(_pf._MODULE_DEF_RE.findall(_t))
     universe = defined | set(excluded)
-    wrapper_defaults = {m.group(1): m.group(2).strip()
-                        for m in _pf._PARAM_RE.finditer(param_block)}
+    # vibe-ic#731 — read the wrapper header's parameters out of its CODE, not
+    # out of its comments: `// parameter USE_FOO = 1` is documentation, and
+    # taking it as a default (or, below, rewriting it) edits a sentence and
+    # leaves the real declaration untouched. BLANKED, not deleted, and the
+    # ORIGINAL is what gets sliced — `param_block` is RETURNED as the emitted
+    # wrapper text, so its comments must survive this function byte for byte.
+    param_code = _hdl_code_text.strip_hdl_comments_and_strings(param_block)
+    wrapper_defaults = {m.group(1): param_block[m.start(2):m.end(2)].strip()
+                        for m in _pf._PARAM_RE.finditer(param_code)}
     declared_names = sorted(declared or {})
 
     for path, text in sorted(files.items()):
@@ -13924,8 +13931,16 @@ def _chip_top_resolve_excluded_variant_params(project, rtl_dir, param_block,
         pat = re.compile(
             r"(\bparameter\b[^;,=()]*?\b" + re.escape(name) +
             r"\s*=\s*)([^,;)\n]+)")
-        param_block = pat.sub(lambda m: m.group(1) + info["value"],
-                              param_block, count=1)
+        # Locate on the blanked text, splice into the original at the SAME
+        # offsets, then re-blank because the splice moved them. A `.sub` over
+        # the raw block would happily rewrite the first COMMENTED occurrence
+        # and report success while the live default kept the vendor's value.
+        m = pat.search(param_code)
+        if m is None:
+            continue
+        param_block = param_block[:m.end(1)] + info["value"] \
+            + param_block[m.end(2):]
+        param_code = _hdl_code_text.strip_hdl_comments_and_strings(param_block)
     return param_block, resolved, refusals
 
 

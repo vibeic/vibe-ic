@@ -49,10 +49,14 @@ was wrong twice in one run.
 from __future__ import annotations
 
 import argparse
-import json
 import re
 import sys
 from pathlib import Path
+
+PROGRAMS_DIR = Path(__file__).resolve().parent
+sys.path.insert(0, str(PROGRAMS_DIR))
+
+from _atomic_artefact import write_json  # noqa: E402 - vibe-ic#1082
 
 #: `// …` to end of line, and `/* … */` across newlines. Stripped before any
 #: structural scan: a comment naming a pattern must never decide a verdict.
@@ -189,8 +193,11 @@ def main() -> int:
         "verdict": "FINDING" if rows else "PASS",
     }
     if args.json:
-        Path(args.json).write_text(json.dumps(result, indent=2) + "\n",
-                                   encoding="utf-8")
+        # vibe-ic#1082: the declared report appears under its final name only
+        # once it is complete. `write_text` truncates first, so a death
+        # mid-write leaves a short file that `required_outputs` cannot tell
+        # from a finished one.
+        write_json(args.json, result)
 
     if not rows:
         print("PASS: no level decoded from a counter lookahead on the counter's "

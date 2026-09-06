@@ -45199,6 +45199,13 @@ def _doc_module_name_label_or_inline(extracted: Dict[str, str]) -> Optional[str]
     for _src, text in extracted.items():
         if not text:
             continue
+        # vibe-ic#731 — convention (2) reads a SENTENCE, so it must not read a
+        # commented-out one: `// the top module is foo_top` inside a fenced RTL
+        # snippet is the author showing code, not naming this design's top.
+        # `_doc_design_request_module_name` below already strips the same
+        # values for the same reason; this makes the property hold per-scan
+        # rather than per-caller.
+        text = _strip_hdl_comments(text)
         for m in _RE_DOC_TOP_MODULE_NAME_LABEL.finditer(text):
             nm = (m.group("n1") or m.group("n2") or m.group("n3") or "").strip()
             if nm and _is_valid_explicit_module_name_candidate(nm):
