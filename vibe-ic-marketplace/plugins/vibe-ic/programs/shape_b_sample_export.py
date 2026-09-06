@@ -299,10 +299,11 @@ def guard_export(sample: Path, prompt_text: str = "") -> Tuple[bool, List[str]]:
     #    When the spec discloses a cycle-by-cycle input→output worked example
     #    (e.g. pulse_detect "if data_in is 01010, the data_out is 00101"), build a
     #    deterministic self-TB from THAT example and host the authored RTL against
-    #    it. Clocked-output prose is measured at both pre-edge and post-edge phases;
-    #    a single-phase match SKIPs, and only an all-phase mismatch BLOCKs. The
-    #    oracle also SKIPs unless a complete unambiguous example parses + all ports
-    #    map, so it never false-blocks a correct design.
+    #    it. The verdict is read at the EXAMPLE'S OWN index alignment (in[i] and
+    #    out[i] with no active clock edge between them), so prose about where the
+    #    output is assigned cannot move it; a one-cycle-shifted replay is kept as
+    #    diagnostics only. The oracle SKIPs unless a complete unambiguous example
+    #    parses + all ports map, so it never false-blocks a correct design.
     if prompt_text:
         try:
             import worked_example_sequence_oracle_check as _wex  # noqa: E402
@@ -311,8 +312,8 @@ def guard_export(sample: Path, prompt_text: str = "") -> Tuple[bool, List[str]]:
                 problems.append(
                     f"worked-example oracle: authored RTL mismatches the spec's disclosed "
                     f"example ({_o['inport']}={_o['in_bits']} → {_o['outport']} expected "
-                    f"{_o['out_bits']}) in every supported sampling phase — check the "
-                    f"cycle-by-cycle output timing and logic. {_o.get('log','')}")
+                    f"{_o['out_bits']}) at the example's own cycle alignment — check "
+                    f"the cycle-by-cycle output timing and logic. {_o.get('log','')}")
             elif _o.get("applicable") and _o.get("verdict") == "SKIP":
                 notes.append(
                     "NOTE: worked-example oracle SKIP (applicable, non-blocking) — "

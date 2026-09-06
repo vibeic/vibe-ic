@@ -4841,8 +4841,8 @@ def step_determinism_gates(project: Path, top_name: str = "") -> StepResult:
                             f"{o.get('module', 'top')}: worked-example oracle — RTL "
                             f"mismatches the spec's disclosed example "
                             f"({o['inport']}={o['in_bits']} → {o['outport']} expected "
-                            f"{o['out_bits']}) in every supported sampling phase; check "
-                            f"the cycle-by-cycle output timing and logic. "
+                            f"{o['out_bits']}) at the example's own cycle alignment; "
+                            f"check the cycle-by-cycle output timing and logic. "
                             f"{o.get('log', '')}")
                 elif o.get("applicable") and o.get("verdict") == "SKIP":
                     worked_example_skip = {

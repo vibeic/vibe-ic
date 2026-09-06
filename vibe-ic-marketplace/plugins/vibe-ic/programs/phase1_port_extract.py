@@ -624,6 +624,26 @@ _PROSE_SIG = re.compile(
     r'([A-Za-z_]\w*)\s*'
     r'(?:\[\s*([^\]]*?)\s*\])?\**`?\**\s*:',
 )
+# The same definition shape with the bullet made optional, used ONLY while a
+# port-section header is in force (see `extract_prose_ports`). Groups match
+# `_PROSE_SIG`'s: (leading-range, name, trailing-range).
+_PROSE_SIG_UNBULLETED = re.compile(
+    r'^[ \t]*(?:\[\s*([^\]]*?)\s*\]\s*)?`?\**\s*'
+    r'([A-Za-z_]\w*)\s*'
+    r'(?:\[\s*([^\]]*?)\s*\])?\**`?\**\s*'
+    # an optional parenthesised type/direction group: `clk (input)`,
+    # `a (input [31:0])`, `z (output reg [31:0])`. It is where a spec that
+    # annotates its own list puts BOTH the direction and the range.
+    r'(?:\(\s*([^)]*?)\s*\)\s*)?:',
+)
+
+#: a declared range inside that parenthetical / anywhere a port is dimensioned.
+_RANGE = re.compile(r'\[\s*(\d+)\s*:\s*(\d+)\s*\]')
+#: a bare index of a named signal, `q[7]` — the design's own lower bound on it.
+_INDEXED = r'(?<![A-Za-z0-9_])%s\s*\[\s*(\d+)\s*\]'
+#: a dimensioned declaration of a named signal anywhere in the prompt,
+#: `reg [7:0] q`, `input [31:0] a` — the width the design itself states.
+_DECLARED = r'\[\s*(\d+)\s*:\s*(\d+)\s*\]\s*(?:\w+\s+)*%s(?![A-Za-z0-9_])'
 _INPUTS_HDR = re.compile(r'\binputs?\b', re.I)
 _OUTPUTS_HDR = re.compile(r'\boutputs?\b', re.I)
 # TitleCase English labels that head a descriptor bullet, never a real signal name.
@@ -633,6 +653,22 @@ _PROSE_STOP = frozenset((
     "behavior", "behaviour", "overview", "constraints", "interface", "ports",
     "parameters", "parameter", "registers", "example", "examples", "summary",
     "default", "state", "states", "operation", "functionality:", "general",
+))
+
+
+# The stop-list above rejects DESCRIPTOR bullets, and it pays for that by also
+# rejecting the handful of English words that are real signal names — `clock`,
+# `reset`, `data`, `state`, `signal`. Under an explicit `Input ports:` heading
+# that trade is wrong: `reset: Reset signal to initialize the counter` IS the
+# port, and dropping it publishes an interface that is missing a pin. Inside a
+# declared port section only the META words — the ones that can only ever be a
+# heading or an annotation — are rejected; the TitleCase-word rule still throws
+# out `Reset:` written as a descriptor.
+_PROSE_STOP_META = frozenset((
+    "inputs", "outputs", "input", "output", "note", "notes", "description",
+    "functionality", "behavior", "behaviour", "overview", "constraints",
+    "interface", "ports", "parameters", "parameter", "registers", "example",
+    "examples", "summary", "general", "operation", "functionality:",
 ))
 
 
@@ -665,25 +701,76 @@ def extract_prose_ports(prompt: str) -> List[Dict]:
                     "output interface"):
             section = "output"; continue
         m = _PROSE_SIG.match(line)
+        unbulleted = False
+        if m is None and section is not None:
+            # INSIDE a declared port section the definition lines often carry NO
+            # bullet at all — `\tclk: Clock signal.`, `out [7:0]: 8-bit output`.
+            # The bullet is a markdown habit, not the anchor; the anchor is
+            # "a bare identifier, optionally a range, then a colon, on a line
+            # under a header that already said these are the ports".
+            m = _PROSE_SIG_UNBULLETED.match(line)
+            unbulleted = m is not None
+            if m is None:
+                # The RUN of definition lines IS the list. Anything else — a
+                # blank line, the next heading, a sentence — ends it, so a
+                # later `Implementation:` paragraph cannot inherit `section`
+                # and turn its prose into ports.
+                section = None
+                continue
         if not m:
             continue
         name = m.group(2)
         # section-DESCRIPTOR bullets ("- **Clock:** the `clk` signal is …",
         # "- Reset: …", "- Inputs:") use a TitleCase English label, not the real
         # signal name (which is the backtick token in the description). Skip them.
-        if name.lower() in _PROSE_STOP:
+        if name.lower() in (_PROSE_STOP_META if unbulleted else _PROSE_STOP):
             continue
         # A `[A-Z][a-z]{2,}` TitleCase English WORD (Address, Operation, Result,
         # Default, Status…) heads a descriptor bullet — never a real port. Real
         # ports are lowercase/snake_case (clk, coin_input) or short all-caps
         # acronyms (A, B, OUT), which this does NOT match.
+        #
+        # EXCEPT when the line DIMENSIONS the name. MEASURED on the RTLLM
+        # `calendar` prompt: its three outputs are literally
+        #     Hours: 6-bit output representing the current hours
+        #     Mins:  6-bit output representing the current minutes
+        #     Secs:  6-bit output representing the current seconds
+        # under an explicit `Output ports:` heading, and all three match
+        # `[A-Z][a-z]{2,}`. Dropping them published a calendar whose interface
+        # was CLK and RST and nothing else — and that is worse than publishing
+        # nothing, because a non-empty port list walks past the extraction-gap
+        # halt and the design is emitted against an interface missing every
+        # output it has.
+        #
+        # The separator is EVIDENCE ON THE LINE, not a longer word list: a
+        # descriptor sentence ("Latency: one cycle from sample to output")
+        # states no bit width, while a port line that needs this exception
+        # states one — a bracket range on the name, a range in a parenthetical,
+        # or an `N-bit` phrase in the description. A descriptor that does state
+        # a bit width is indistinguishable from a port declaration by any
+        # evidence the document carries, and reading it as a port is then the
+        # honest reading. Only inside an EXPLICIT port section, where the
+        # heading has already said these lines are the interface.
         if re.fullmatch(r'[A-Z][a-z]{2,}', name):
-            continue
+            _dims = (m.group(1) or m.group(3)
+                     or (_RANGE.search(m.group(4)) if (
+                         m.lastindex and m.lastindex >= 4 and m.group(4))
+                         else None)
+                     or re.search(r'\b\d+\s*-?\s*bits?\b',
+                                  line.split(':', 1)[1] if ':' in line else '',
+                                  re.I))
+            if not (unbulleted and _dims):
+                continue
         desc = line.split(':', 1)[1] if ':' in line else ""
         # direction: explicit N-bit input/output in the description wins, else section
         d = None
+        _paren = m.group(4) if m.lastindex and m.lastindex >= 4 else None
+        _pd = (re.search(r'\b(input|output|inout)\b', _paren, re.I)
+               if _paren else None)
         dm = re.search(r'\b(\d+\s*-?\s*bit\s+)?(input|output|inout)\b', desc, re.I)
-        if dm:
+        if _pd:
+            d = _pd.group(1).lower()
+        elif dm:
             d = dm.group(2).lower()
         elif re.search(r'\bclock\b|\breset\b|\bclk\b', desc, re.I) and section is None:
             d = "input"
@@ -691,14 +778,47 @@ def extract_prose_ports(prompt: str) -> List[Dict]:
             d = section
         if d is None:
             continue
-        width = _width_from(m.group(1) or m.group(3))
-        if width == 1:
+        # KEEP THE DECLARED BOUNDS. `A[32:1]` is 32 bits wide AND indexes bit 32;
+        # normalising it to msb=31/lsb=0 loses the second fact, and the gate that
+        # reads it (`l1_pin_bus_width_actionable_check`) then reports "the design's
+        # own inputs index bit 32 of A but L1 declares 32 bits" against a row this
+        # very sentence could have satisfied.
+        rng = m.group(1) or m.group(3)
+        paren = m.group(4) if m.lastindex and m.lastindex >= 4 else None
+        if not rng and paren:
+            pm = _RANGE.search(paren)
+            if pm:
+                rng = f"{pm.group(1)}:{pm.group(2)}"
+        msb = lsb = None
+        if rng:
+            rm = re.fullmatch(r'\s*(\d+)\s*:\s*(\d+)\s*', rng)
+            if rm:
+                msb, lsb = int(rm.group(1)), int(rm.group(2))
+        width = _width_from(rng)
+        if width == 1 and msb is None:
             bm = re.search(r'(\d+)\s*-?\s*bit', desc)
             if bm:
                 width = int(bm.group(1))
+        if width == 1 and msb is None:
+            # STILL unstated on its own line — read the width the design states
+            # for this identifier ELSEWHERE in the prompt. `reg [7:0] q` and
+            # `q[7]` are the same evidence the width gate derives its bound from,
+            # so reading them here is agreeing with the design, not guessing.
+            dm2 = re.search(_DECLARED % re.escape(name), prompt)
+            if dm2:
+                msb, lsb = int(dm2.group(1)), int(dm2.group(2))
+                width = abs(msb - lsb) + 1
+            else:
+                im = re.findall(_INDEXED % re.escape(name), prompt)
+                if im:
+                    msb, lsb = max(int(x) for x in im), 0
+                    width = msb + 1
         if name not in seen:
             seen.add(name)
-            out.append({"name": name, "dir": d, "width": width})
+            row = {"name": name, "dir": d, "width": width}
+            if msb is not None:
+                row["msb"], row["lsb"] = msb, lsb
+            out.append(row)
     return out
 
 

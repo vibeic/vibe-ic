@@ -49390,6 +49390,73 @@ def _v2060_mirror_top_cell(project, top_module, top_module_status) -> bool:
         return True
     except Exception:
         return False
+def _czl9_prose_port_fallback(content: Dict[str, Any],
+                              extracted: Dict[str, str]) -> None:
+    """Fill an EMPTY L9 port list from the input's own port-definition list.
+
+    #czl9docs made the extraction gap — "the input declares ports and the L
+    documents carry none" — halt this front door, which is right: an empty
+    interface passed downstream makes every port-reading gate answer over zero
+    ports. But the gap it exposed is that the docs front door reads ports from
+    interface TABLES and inline Verilog declarations only, and the commonest
+    plain-text spec shape declares them as an un-bulleted definition list under
+    an `Input ports:` / `Output ports:` heading:
+
+        Input ports:
+            clk: Clock signal.
+            data_in[7:0]: 8-bit input data.
+
+    `phase1_port_extract.extract_prose_ports` reads exactly that shape; nothing
+    on this branch called it, so the whole class reached the gate with zero
+    ports and halted at the front door.
+
+    STRICTLY ADDITIVE, and that is the load-bearing property: this runs ONLY
+    when the document has produced NO port at all — the exact state the gate
+    calls an extraction gap. A design whose ports were found structurally is
+    never touched, so this cannot overwrite, reorder or contaminate a real
+    interface. The list is mutated IN PLACE because `ports` / `top_ports` /
+    `top_module_pins` are the same list object (see the emit dict): rebinding
+    one would silently split the three aliases apart.
+    chip-AGNOSTIC: a heading grammar and an identifier-colon shape; no design,
+    vendor or signal-name literal.
+    """
+    if _czl9_declared_port_names(content):
+        return
+    target = content.get("top_ports")
+    if not isinstance(target, list) or target:
+        return
+    text = "\n\n".join(v for v in (extracted or {}).values()
+                        if isinstance(v, str))
+    if not text.strip():
+        return
+    try:
+        found = _ppx.extract_prose_ports(text)
+    except Exception:                       # never let a fallback break the emit
+        return
+    if not found:
+        return
+    evidence = sorted(extracted)[0] if extracted else None
+    for row in found:
+        # The SAME row shape the prompt door's own L9 backfill writes
+        # (`phase1_one_shot_runner`, #czl9prompt) — `mode` included. A row that
+        # carried only `dir` counted as "structured" for that backfill's
+        # not-structured guard, so it suppressed the richer producer and left
+        # every consumer reading `mode` with None. Two doors, one schema.
+        entry = {
+            "name": row["name"],
+            "mode": row["dir"],
+            "direction": row["dir"],
+            "io": None,
+            "width": row["width"],
+            "evidence": evidence,
+            "extraction_strategy": "phase1_port_extract",
+        }
+        # the DECLARED bounds when the input stated them — `A[32:1]` is 32 bits
+        # AND indexes bit 32, and the width gate downstream reads the second fact
+        if "msb" in row:
+            entry["msb"], entry["lsb"] = row["msb"], row["lsb"]
+        target.append(entry)
+    content["top_module_pins_source"] = "prose_port_definition_list"
 
 
 def gen_l9_integration_spec(project: Path,
@@ -51096,6 +51163,10 @@ def gen_l9_integration_spec(project: Path,
     # fallback route above can clear `top_module_pins`, and a rule anchored on
     # a list that is about to be emptied would carry prose about ports the
     # emitted document does not declare).
+    # BEFORE the prose channel: that channel anchors on the design's OWN
+    # declared port names, so a list filled here is anchorable, and a list
+    # left empty would send it down the un-anchored branch.
+    _czl9_prose_port_fallback(content, extracted)
     _czl9_emit_interface_prose(content, extracted)
 
     return _write_l_doc(
@@ -61019,14 +61090,37 @@ def _v1_6_555_crosswalk_l9_ports_to_l1_pin_table(
             port.get("evidence_file")
             or port.get("evidence")
             or "synthesised-from-L9.ports")
-        new_rows.append({
+        row = {
             "name": name,
             "mode": mode_norm,
             "io_standard": None,
             "evidence": evidence,
             "extraction_strategy":
                 "cross_walk_from_l9_ports_v1_6_555",
-        })
+        }
+        # CARRY THE WIDTH. The cross-walk copied name + mode and dropped the
+        # bus width, so `l1_pin_bus_width_actionable_check` read width=None for
+        # a pin L9 had already resolved and refused the run: "the design's own
+        # inputs index bit 7 of `data_in` ... a conforming phase 2 would emit a
+        # 1-bit port". The width was known one document away. Copied only when
+        # L9 states a usable one — an absent or unusable width still lands as
+        # the honest None the gate is entitled to refuse.
+        # DECLARED bounds win over a bare width: a 0-based msb synthesised from
+        # a width is a DIFFERENT claim about a `[32:1]` port, and it is the one
+        # the width gate rejects.
+        _msb, _lsb = port.get("msb"), port.get("lsb")
+        _w = port.get("width")
+        if isinstance(_w, bool):
+            _w = None
+        if (isinstance(_msb, int) and isinstance(_lsb, int)
+                and not isinstance(_msb, bool) and not isinstance(_lsb, bool)):
+            row["msb"], row["lsb"] = _msb, _lsb
+            row["width"] = abs(_msb - _lsb) + 1
+        elif isinstance(_w, int) and _w >= 1:
+            row["width"] = _w
+            row["msb"] = _w - 1
+            row["lsb"] = 0
+        new_rows.append(row)
     if not new_rows:
         return False
     l1["pin_table"] = new_rows

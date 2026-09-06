@@ -139,26 +139,53 @@ def test_registered_moore_design_is_blocked():
     assert r["verdict"] == "BLOCK", r  # the one-cycle-lag error the example forbids
 
 
+# The SAME worked example, shifted one cycle later. It is the control that proves
+# the aligned replay is TRACE-faithful and not "Mealy-preferring": with this trace
+# the registered design is the CORRECT one and must PASS, while the same-cycle
+# design must BLOCK. A harness that hard-codes a sampling convention cannot get
+# all four cells of this 2x2 right; reading the verdict at the example's own index
+# alignment does.
+SPEC_CLOCKED_ONE_CYCLE_LATE = SPEC_CLOCKED_OUTPUT.replace(
+    "the data_out is 00101", "the data_out is 00010")
+
+
 @pytest.mark.skipif(not _HAS_IVERILOG, reason="iverilog unavailable")
 @pytest.mark.parametrize(
-    ("rtl", "pre_edge", "post_edge"),
+    ("spec", "rtl", "verdict", "pre_edge", "post_edge"),
     [
-        pytest.param(RTL_MEALY, "PASS", "BLOCK", id="mealy"),
-        pytest.param(RTL_MOORE, "BLOCK", "PASS", id="registered"),
+        pytest.param(SPEC_CLOCKED_OUTPUT, RTL_MEALY, "PASS", "PASS", "BLOCK",
+                     id="same-cycle-trace/mealy-is-correct"),
+        pytest.param(SPEC_CLOCKED_OUTPUT, RTL_MOORE, "BLOCK", "BLOCK", "PASS",
+                     id="same-cycle-trace/registered-is-one-cycle-late"),
+        pytest.param(SPEC_CLOCKED_ONE_CYCLE_LATE, RTL_MOORE, "PASS", "PASS",
+                     "BLOCK", id="one-late-trace/registered-is-correct"),
+        pytest.param(SPEC_CLOCKED_ONE_CYCLE_LATE, RTL_MEALY, "BLOCK", "BLOCK",
+                     "BLOCK", id="one-late-trace/mealy-is-one-cycle-early"),
     ],
 )
-def test_clocked_worked_example_phase_ambiguity_skips(
-        rtl, pre_edge, post_edge):
-    result = g.analyze(rtl, SPEC_CLOCKED_OUTPUT)
-    # A single-phase match cannot authorize this never-false-block oracle to
-    # choose Mealy or registered timing on behalf of the dataset testbench.
-    assert result["verdict"] == "SKIP", result
-    assert result["sampling_semantics"] == "dual-phase-pre-and-post-edge"
+def test_clocked_verdict_is_read_at_the_examples_own_alignment(
+        spec, rtl, verdict, pre_edge, post_edge):
+    """Prose about WHERE the output is assigned ("inside an always block ...
+    output generation") selects the TB's drive style; it may NEVER decide whether
+    a one-cycle-late trace is acceptable. That is what the example itself says."""
+    result = g.analyze(rtl, spec)
+    assert result["verdict"] == verdict, result
+    assert result["sampling_semantics"] == "index-aligned-replay-clocked-drive"
+    # both replays stay RECORDED — the shifted one is the diagnostic that names
+    # the repair direction, never an escape from the verdict.
     assert result["phase_verdicts"] == {
         "pre-edge": pre_edge,
         "post-edge": post_edge,
     }
-    assert "phase-ambiguous" in result["reason"]
+
+
+@pytest.mark.skipif(not _HAS_IVERILOG, reason="iverilog unavailable")
+def test_one_cycle_late_diagnostic_separates_a_shift_from_a_wrong_trace():
+    late = g.analyze(RTL_MOORE, SPEC_CLOCKED_OUTPUT)
+    assert late["verdict"] == "BLOCK" and late["one_cycle_late"] is True
+    assert "ONE CYCLE LATE" in late["reason"]
+    wrong = g.analyze(RTL_ALWAYS_ZERO, SPEC_CLOCKED_OUTPUT)
+    assert wrong["verdict"] == "BLOCK" and wrong["one_cycle_late"] is False
 
 
 @pytest.mark.skipif(not _HAS_IVERILOG, reason="iverilog unavailable")
@@ -173,13 +200,15 @@ def test_clocked_worked_example_wrong_in_both_sampling_phases_blocks():
 
 @pytest.mark.skipif(not _HAS_IVERILOG, reason="iverilog unavailable")
 def test_clocked_sampling_drives_first_vector_when_reset_releases():
+    # A CORRECT rise detector whose first vector must be present the moment reset
+    # releases: the aligned replay PASSes it (it used to be lost to the ambiguity
+    # SKIP), so this is a strengthening and not a new false-block risk.
     result = g.analyze(RTL_RESET_RELEASE_SENSITIVE, SPEC_RESET_RELEASE)
-    assert result["verdict"] == "SKIP", result
+    assert result["verdict"] == "PASS", result
     assert result["phase_verdicts"] == {
         "pre-edge": "PASS",
         "post-edge": "BLOCK",
     }
-    assert "phase-ambiguous" in result["reason"]
 
 
 @pytest.mark.skipif(not _HAS_IVERILOG, reason="iverilog unavailable")
@@ -190,7 +219,7 @@ def test_clocked_sampling_nonzero_vvp_exit_skips():
         "pre-edge": "SKIP",
         "post-edge": "SKIP",
     }
-    assert "sim exited 1" in result["reason"]
+    assert "sim exited 1" in result["reason"]  # tool failure is fail-safe SKIP
 
 
 @pytest.mark.skipif(not _HAS_IVERILOG, reason="iverilog unavailable")
@@ -200,8 +229,21 @@ def test_shape_b_clocked_mealy_is_not_blocked_by_sampling_phase(tmp_path):
     path.write_text(RTL_MEALY)
     ok, findings = sb.guard_export(path, SPEC_CLOCKED_OUTPUT)
     assert ok is True
-    assert any(item.startswith("NOTE: worked-example oracle SKIP")
-               and "phase-ambiguous" in item for item in findings), findings
+    # It now PASSes outright rather than being excused by an ambiguity SKIP.
+    assert not any("worked-example oracle" in item for item in findings), findings
+
+
+@pytest.mark.skipif(not _HAS_IVERILOG, reason="iverilog unavailable")
+def test_shape_b_clocked_registered_output_is_refused_at_export(tmp_path):
+    """The direction that was un-gated: a registered output one cycle late used
+    to leave the export path with only a SKIP note."""
+    import shape_b_sample_export as sb
+    path = tmp_path / "pulse_detect.v"
+    path.write_text(RTL_MOORE)
+    ok, findings = sb.guard_export(path, SPEC_CLOCKED_OUTPUT)
+    assert ok is False
+    assert any("worked-example oracle" in item
+               and "MISMATCH cycle=" in item for item in findings), findings
 
 
 @pytest.mark.skipif(not _HAS_IVERILOG, reason="iverilog unavailable")
