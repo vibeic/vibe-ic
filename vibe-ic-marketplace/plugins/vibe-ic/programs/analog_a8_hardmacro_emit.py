@@ -61,8 +61,19 @@ def _docker_exec_raw(container: str, cmd: str, timeout: int = 900
                      ) -> Tuple[int, str, str]:
     """A SHORT probe under a plain wall-clock bound (`ls`, `test -e`). Long
     tool runs go through `_docker_exec(..., marker=...)` below."""
+    # The CONTAINER branch keeps `-l`: the EDA image puts its tools on PATH from
+    # the login profile, so a non-login shell there would not find `magic`.
+    #
+    # The HOST branch must NOT. A login shell sources that same profile, and in
+    # this image the profile PRINTS — `[INFO] Final PYTHONPATH variable: ...` —
+    # straight onto the stdout this function returns for the caller to parse.
+    # MEASURED through `tools/ci/run_suite_in_eda_image.sh`, the harness the
+    # landing gate uses, with the probe `echo probe`:
+    #     '[INFO] Final ...python\nprobe'   !=   'probe'
+    # A short probe (`ls`, `test -e`, `echo`) needs no profile, and a reader of
+    # its output must not have to know which banner today's image prints.
     argv = (["docker", "exec", container, "bash", "-lc", cmd] if container
-            else ["bash", "-lc", cmd])
+            else ["bash", "-c", cmd])
     try:
         cp = subprocess.run(argv, capture_output=True, text=True,
                             timeout=timeout)

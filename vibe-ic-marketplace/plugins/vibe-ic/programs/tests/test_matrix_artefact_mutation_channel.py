@@ -513,6 +513,7 @@ def test_the_replay_ran_and_is_not_starved(record_property):
     assert all(r.as_recorded for r in results.values())
 
 
+@needs_corpus
 def test_the_replay_never_mutates_the_published_run():
     """CONTROL: the corpus is byte-identical after every replay above.
 
