@@ -38751,6 +38751,165 @@ def _v634_harvest_verification_intent(
     return out
 
 
+# ORGANIC #2055 — A VERIFICATION-INTENT SENTENCE IS NOT A FUNCTIONAL-TEST ROW.
+#
+# MEASURED, u_hawaii_adc at v1.17.83 (lane czadc28, front door, image 0.3.46):
+# Phase 2 halted at `step4_functional_evidence` on "0 functional tests ran for
+# 4 declared L10/L12 row(s)". All four rows were `kind: verification_intent`,
+# promoted here from the input's `## Verification intent` bullet list, and two
+# of them were not verification statements at all:
+#
+#   * a TOOL-DISCLOSURE paragraph — which corner libraries the PDK ships and
+#     that the results are simulated, not silicon;
+#   * a GOLDEN CROSS-CHECK note — compare the design against a fabricated part
+#     and its extracted netlist, which §4.05 forbids reading at DESIGN time.
+#
+# Neither testbench producer could author them (`l10_unit_tb_gen`: "0 in
+# scope, 4 out of scope"), so Step 4 demanded execution of four things, two of
+# which can never be executed by construction, and reported the shortfall as
+# though the RTL had failed. Three lanes read that wall as an RTL defect.
+#
+# The rule, stated positively: a bullet becomes an L10 test row only when it
+# states something FALSIFIABLE about the design. It is refused when it is
+#   (1) an ORACLE CROSS-CHECK — a comparison verb bound to a golden / oracle /
+#       fabricated-part / silicon / sign-off artefact. Refused with §4.05
+#       NAMED, because the artefact is the oracle and design time may not read
+#       it; or
+#   (2) a DISCLOSURE or METHOD NOTE — the bullet opens with a `<Label>:`
+#       prefix whose label carries a documentation-role word (disclosure,
+#       note, caveat, assumption, limitation, correction, methodology, …).
+#
+# Both families are POSITIVE evidence: the sentence says what it is. There is
+# deliberately no absence-based family — see the note inside the predicate for
+# the round-1 attempt at one and the two real acceptance rows it deleted.
+#
+# A refused sentence is RECORDED, never silently dropped: it lands in
+# `L10.verification_intent_refusals` with the sentence, the reason code and the
+# reason, so a reader sees what the input declared and why it is not a test.
+# The L7 `verification_strategy` harvest (the same helper, a different reader)
+# is untouched — the sentence is still verification INTENT, it is just not a
+# test CASE, and L7 is where intent belongs.
+#
+# chip-AGNOSTIC: documentation-role English, comparison verbs and oracle-role
+# nouns; no chip, vendor, SKU, PDK or process literal anywhere below.
+
+#: Words that make a `<Label>:` prefix a DOCUMENTATION role rather than a test
+#: name. Matched word-wise against the label, so `**Tool disclosure:**` is
+#: refused on `disclosure` while `Multi-corner:` (a real corner campaign) is
+#: not. Documentation English only.
+_V2055_DOC_ROLE_WORDS = frozenset({
+    "disclosure", "disclosures", "disclaimer", "disclaimers",
+    "note", "notes", "caveat", "caveats", "caution", "warning",
+    "assumption", "assumptions", "limitation", "limitations",
+    "correction", "corrected", "errata", "erratum",
+    "methodology", "method", "rationale", "background", "context",
+    "convention", "conventions", "terminology", "glossary", "definition",
+    "definitions", "provenance", "attribution", "reference", "references",
+    "remark", "remarks", "comment", "aside", "policy", "scope",
+})
+#: A leading `<Label>: <rest>` prefix on the bullet's own line. Bounded to 64
+#: characters so a prose sentence that merely contains a colon later on is not
+#: read as a label.
+_V2055_LABEL_RE = re.compile(r"^\s*([^:;.]{1,64}?)\s*:\s+\S")
+#: A COMPARISON act — the verb half of a cross-check instruction.
+_V2055_COMPARE_RE = re.compile(
+    r"(?i)\b(?:cross[-\s]?check(?:ed|s|ing)?|compare[sd]?|comparing|"
+    r"comparison|correlat(?:e|ed|es|ion)|"
+    r"verif(?:y|ied|ies|ication)\s+(?:against|with|versus|vs\.?)|"
+    r"check(?:ed|s)?\s+against|match(?:ed|es)?\s+against|"
+    r"diff(?:ed|s)?\s+against|back[-\s]?annotat\w*)\b")
+#: The ORACLE half — an artefact that IS the answer. §4.05 forbids reading any
+#: of these at design time, which is why a comparison bound to one can never
+#: become a design-time test row.
+_V2055_ORACLE_ARTEFACT_RE = re.compile(
+    r"(?i)\b(?:golden|oracle|harness|"
+    r"reference\s+(?:model|netlist|design|output|outputs|result|results|"
+    r"implementation|waveform|waveforms|layout|gds)|"
+    r"fabricat(?:ed|ion)|silicon|taped?[-\s]?out|sign[-\s]?off|"
+    r"expected[-\s]?output\s+file)\b")
+
+
+def _v2055_refuse_verification_intent(desc, observables):
+    """Why this `Verification intent` bullet is NOT an L10 test row, or None.
+
+    Returns ``(reason_code, reason)`` when the sentence must be refused and
+    ``None`` when it may become a row. See the block comment above for the
+    three refusal families and why each exists. Pure function; `observables`
+    is the design's own name vocabulary (see
+    `l10_test_case_oracle_anchor_check.harvest_observables`).
+    """
+    text = (desc or "").strip()
+    if not text:
+        return ("EMPTY_SENTENCE", "the bullet carries no text")
+    # (1) An ORACLE CROSS-CHECK. Both halves must be present — a comparison
+    # act AND the artefact it compares against — so an ordinary analog
+    # acceptance that merely says "compare to the declared limit" is not
+    # swept up, and a bare mention of the word "golden" is not either.
+    if _V2055_COMPARE_RE.search(text) and _V2055_ORACLE_ARTEFACT_RE.search(
+            text):
+        return ("ORACLE_CROSS_CHECK_4_05",
+                "REFUSED at extraction under §4.05: the sentence instructs a "
+                "comparison against an ORACLE artefact (a golden / reference "
+                "/ fabricated-part / sign-off result). Design time reads only "
+                "the design INPUT, never the oracle, so this can never be a "
+                "design-time functional-test row. It stays declared here as "
+                "verification INTENT for the verify stage.")
+    # (2) A DISCLOSURE or METHOD NOTE, recognised by its own `<Label>:`
+    # prefix. The label states the sentence's documentation ROLE; nothing
+    # about the design is asserted, so there is nothing to drive or observe.
+    m = _V2055_LABEL_RE.match(text)
+    if m:
+        label = m.group(1)
+        words = {w for w in re.split(r"[^A-Za-z]+", label.lower()) if w}
+        hit = sorted(words & _V2055_DOC_ROLE_WORDS)
+        if hit:
+            return ("DISCLOSURE_OR_METHOD_NOTE",
+                    f"REFUSED at extraction: the bullet declares its own "
+                    f"documentation role in its label ({label.strip()!r}, on "
+                    f"{', '.join(hit)}). It records how the work is done or "
+                    f"what a tool provides; it asserts nothing about the "
+                    f"design that a testbench could drive or observe.")
+    # THERE IS NO THIRD, ABSENCE-BASED FAMILY, AND THE ATTEMPT IS RECORDED HERE
+    # BECAUSE IT WAS MEASURED WRONG.
+    #
+    # Round 1 of this fix carried a third refusal: a bullet with no literal, no
+    # relation and no name from the design's own L-docs — `classify_anchor`
+    # returning None — was refused as UNANCHORED. It found nothing on the
+    # corpus (0 of 853 harvested row instances) and it deleted two GENUINE
+    # acceptance rows from this repo's own #634 converter fixture:
+    #
+    #     "DC operating-point check across the analog front-end (bias, ...)"
+    #     "SNDR / ENOB transient with an input sine sweep at multiple ..."
+    #
+    # Both are real analog acceptances. They carry no digital literal and name
+    # no port, because that is how an analog acceptance is written — and
+    # `test_v1_0_34_issue634_generation_side_extract` then failed on the L10
+    # floor ("must carry >=2 typed test cases; have 1"), which is the same wall
+    # this fix exists to move, one layer earlier.
+    #
+    # So the refusal is POSITIVE EVIDENCE ONLY. A sentence is refused when it
+    # says what it is — a documentation role in its own label, or a comparison
+    # against an oracle — never merely because nothing in it was recognised.
+    # Absence of a recognised anchor is a statement about the recogniser.
+    return None
+
+
+def _v2055_observables(project):
+    """The design's own name vocabulary, from its already-emitted L-docs.
+
+    Kept beside the predicate because the refusal reasons are read by a human
+    who may want to know what the design DID declare; the predicate itself no
+    longer decides anything on absence. See the note in
+    `_v2055_refuse_verification_intent`.
+    """
+    try:
+        import l10_test_case_oracle_anchor_check as _anchor
+        return _anchor.harvest_observables(
+            Path(project) / "phase1" / "generated_docs")
+    except Exception:
+        return set()
+
+
 # v1.0.44 — for #670 ORGANIC. DV / verification CHECKLIST table harvester.
 # A no-command-protocol / sparse-control REUSED-IP class (crypto accelerator,
 # CPU core, …) carries NO chip-level command/test-vector table, so the
@@ -51359,8 +51518,32 @@ def gen_l10_test_cases(project: Path,
     # as a prose bullet list, not a verification-plan TABLE, so the
     # table harvester above never reaches it. No-fabrication: empty when
     # no Verification-intent section exists. chip-AGNOSTIC.
+    # ORGANIC #2055 — a verification-INTENT sentence is never a functional-test
+    # row. See `_v2055_refuse_verification_intent` for the three refusal
+    # families and the measurement that produced them. A refused sentence is
+    # RECORDED below, never silently dropped.
+    _v2055_observable_vocab = _v2055_observables(project)
+    _v2055_refusals: List[Dict[str, Any]] = []
     for _vi in _v634_harvest_verification_intent(extracted):
         if _vi["name"] in _existing_names:
+            continue
+        _v2055_refused = _v2055_refuse_verification_intent(
+            _vi["description"], _v2055_observable_vocab)
+        if _v2055_refused is not None:
+            _code, _why = _v2055_refused
+            _v2055_refusals.append({
+                "name": _vi["name"],
+                "sentence": _vi["description"],
+                "reason_code": _code,
+                "reason": _why,
+                "evidence": _vi["evidence"],
+                "extraction_strategy": _vi["extraction_strategy"],
+            })
+            evidence.setdefault("refused_verification_intent", []).append({
+                "literal": _vi["description"][:120],
+                "label": (f"{_code}: verification intent, NOT a "
+                          f"functional test case"),
+            })
             continue
         _existing_names.add(_vi["name"])
         cases.append({
@@ -51549,6 +51732,18 @@ def gen_l10_test_cases(project: Path,
              "rows_refused", "transport", "error")
             if _kav_census.get(k) is not None},
         "known_answer_vector_count": len(_kav_vectors),
+        # ORGANIC #2055 — the `## Verification intent` sentences that were
+        # REFUSED as test rows, each with the reason. Published whether or not
+        # any were refused, so a reader can tell "the input declared none"
+        # from "one was declared and something dropped it", exactly as
+        # `known_answer_vector_census.rows_refused` does one field up.
+        # A LIST, and no scalar count beside it. A count is `len()` of the
+        # list, and a redundant scalar is a second place for the same fact to
+        # be wrong; it also reads as a cross-design fingerprint when it is 0 on
+        # two unrelated thin-input projects (`test_phase1_issue12_cross_ic_
+        # fingerprint`), which is a true statement about a redundant field, not
+        # something to exempt.
+        "verification_intent_refusals": _v2055_refusals,
     }
     return _write_l_doc(
         project, "L10_TEST_CASES", content, evidence,
