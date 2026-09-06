@@ -15,11 +15,12 @@ Usage:
     python3 benchmark_dispatch.py --list                         # list all known benchmarks
 """
 from __future__ import annotations
-import argparse, hashlib, json, os, shutil, subprocess, sys, tempfile
+import argparse, atexit, hashlib, json, os, shutil, subprocess, sys, tempfile
 import concurrent.futures
 import contextlib
 import fcntl
 import re
+import signal
 import threading
 from dataclasses import dataclass
 from pathlib import Path
@@ -102,6 +103,110 @@ class _ProcessOutcome:
     error: str | None = None
 
 
+def _own_child_pids() -> list[int]:
+    """This process's DIRECT children, from /proc. Never a name pattern.
+
+    Every lane on this fleet runs the same script names, so matching by name
+    is how one run kills another's work. Kernel-reported children of THIS pid
+    are the only honest population.
+    """
+    pids: list[int] = []
+    try:
+        tasks = list(Path(f"/proc/{os.getpid()}/task").iterdir())
+    except OSError:
+        return pids
+    for task in tasks:
+        try:
+            raw = (task / "children").read_text()
+        except OSError:
+            continue
+        pids.extend(int(tok) for tok in raw.split() if tok.isdigit())
+    return sorted(set(pids))
+
+
+def _kill_live_runner_groups(sig: int = signal.SIGTERM) -> int:
+    """Signal each live runner's process GROUP. Returns how many were signalled.
+
+    MEASURED 2026-09-06 (RTLLM run, finding BR-07): killing
+    `benchmark_dispatch --solve` left 21 runner processes running for about 15
+    minutes against an abandoned run dir, at host load 22+. A pool that
+    outlives the run it belongs to burns a shared machine on work nobody will
+    read.
+
+    The GROUP, not the child: the runner spawns its own tools, and signalling
+    only the direct child leaves exactly the grandchildren BR-07 observed.
+    Every runner is started with `start_new_session=True`, so each child is
+    its own group leader and `killpg(child_pid)` reaches its whole subtree.
+    """
+    own = os.getpgrp()
+    signalled = 0
+    for pid in _own_child_pids():
+        try:
+            pgid = os.getpgid(pid)
+        except OSError:
+            continue
+        # NEVER our own group. If a child ever failed to get a session of its
+        # own, its "group" is the coordinator's, and signalling it would kill
+        # the coordinator and everything sharing its terminal -- turning a
+        # cleanup into the outage it exists to prevent.
+        if pgid == own:
+            continue
+        try:
+            os.killpg(pgid, sig)
+            signalled += 1
+        except (ProcessLookupError, PermissionError, OSError):
+            continue
+    return signalled
+
+
+_ORPHAN_GUARD_INSTALLED = False
+
+
+def _install_orphan_guard() -> None:
+    """Take the worker pool down with the coordinator. Idempotent.
+
+    Covers SIGTERM, SIGINT and SIGHUP, and normal or exceptional exit. It does
+    NOT cover SIGKILL, which runs no handler: surviving `kill -9` needs
+    PR_SET_PDEATHSIG on each child, and the only way to set it from CPython is
+    `preexec_fn`, which the standard library documents as unsafe in the
+    presence of threads -- and this pool IS threads. Trading a possible
+    fork-time deadlock in every solve for the -9 case is not a trade this
+    makes silently; the limit is stated instead.
+
+    Call it from the MAIN THREAD. `signal.signal` refuses anywhere else, and
+    the pool's workers are threads -- installing it only from `run()` would
+    leave the atexit half alone, which SIGTERM does not reach. MEASURED: with
+    the thread-only install, SIGINT took the pool down (CPython turns it into
+    KeyboardInterrupt, so atexit runs) and SIGTERM did not.
+    """
+    global _ORPHAN_GUARD_INSTALLED                       # noqa: PLW0603
+    if _ORPHAN_GUARD_INSTALLED:
+        return
+    _ORPHAN_GUARD_INSTALLED = True
+    atexit.register(_kill_live_runner_groups)
+    for sig in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP):
+        try:
+            previous = signal.getsignal(sig)
+        except (ValueError, OSError):
+            continue
+
+        def handler(signum, frame, _previous=previous):
+            _kill_live_runner_groups()
+            if callable(_previous) and _previous not in (
+                    signal.SIG_IGN, signal.SIG_DFL):
+                return _previous(signum, frame)
+            signal.signal(signum, signal.SIG_DFL)
+            os.kill(os.getpid(), signum)
+            return None
+
+        try:
+            signal.signal(sig, handler)
+        except (ValueError, OSError):
+            # Not the main thread, or the platform refuses: the atexit half
+            # still stands, and nothing is claimed that is not installed.
+            continue
+
+
 class _RunnerBudget:
     """Bound runner-heavy concurrency and per-worker tool thread budgets.
 
@@ -152,7 +257,22 @@ class _RunnerBudget:
                 self._env[name] = str(threads)
 
     def run(self, argv: list[str]) -> _ProcessOutcome:
-        kwargs = {"capture_output": True, "text": True}
+        """Run ONE runner invocation in its own SESSION.
+
+        `start_new_session` is what lets the coordinator take the whole pool
+        with it: each child becomes its own process-group leader, so
+        `killpg(child_pid)` reaches the tools the runner started rather than
+        just the runner. Without it, killing the coordinator leaves the pool
+        running -- the orphaned 21 processes measured in BR-07.
+
+        This stays `subprocess.run`, deliberately. It is the seam the existing
+        suite fakes the runner at; moving to `Popen` silently bypassed every
+        one of those fakes and invoked the real runner, which is a far worse
+        failure than the one being fixed.
+        """
+        _install_orphan_guard()
+        kwargs = {"capture_output": True, "text": True,
+                  "start_new_session": True}
         if self._env is not None:
             kwargs["env"] = self._env
         if self.timeout_s is not None:
@@ -1333,6 +1453,10 @@ _CHALLENGE_FORBIDDEN = re.compile(
 _CHALLENGE_COMMENT = re.compile(r"//[^\n]*|/\*.*?\*/", re.S)
 
 
+_TIMESCALE = re.compile(
+    r"`timescale\s*(\d+)\s*([munpf]?s)\s*/\s*(\d+)\s*([munpf]?s)")
+
+
 def _challenge_forbidden_hit(source: str):
     """The forbidden-construct scan, run on CODE rather than on raw text.
 
@@ -1530,6 +1654,41 @@ def _joint_compile_attribution(errors: str, rtl_paths: list[str],
     return cites_candidate, cites_challenge
 
 
+def _declared_timescale(source: str) -> str | None:
+    """The `timescale a source DECLARES, normalized, or None.
+
+    Read from the source text, never guessed. Comments are stripped first, for
+    the same reason `_challenge_forbidden_hit` strips them: a directive that is
+    commented out is prose, and prose must not decide a verdict about code.
+    The FIRST declaration is the one in force at the top of the file, which is
+    what "the declared unit" means for the modules that follow it.
+    """
+    match = _TIMESCALE.search(_CHALLENGE_COMMENT.sub(" ", source or ""))
+    if match is None:
+        return None
+    return f"{match.group(1)}{match.group(2)}/{match.group(3)}{match.group(4)}"
+
+
+def _timescale_disagreement(rtl_paths: list[str], declared: str | None) -> str | None:
+    """A candidate/challenge pair whose declared timescales DISAGREE.
+
+    With one declared unit the prelude makes every module share it. With two
+    different ones there is no single answer to impose, and which one wins
+    would go back to depending on compile order -- so this is refused by name
+    rather than decided silently.
+    """
+    for path in rtl_paths:
+        try:
+            found = _declared_timescale(Path(path).read_text(errors="replace"))
+        except OSError:
+            continue
+        if found is not None and declared is not None and found != declared:
+            return (f"candidate and challenge declare different timescales: "
+                    f"{Path(path).name} declares {found}, the challenge "
+                    f"declares {declared}")
+    return None
+
+
 def _run_verification_challenge(candidate: dict, challenge: dict) -> dict:
     """Compile/run one immutable test against one immutable candidate."""
     reasons = _validate_candidate_snapshot(candidate, str(candidate.get("id")))
@@ -1549,12 +1708,35 @@ def _run_verification_challenge(candidate: dict, challenge: dict) -> dict:
     if not iverilog or not vvp:
         return {"status": "UNAVAILABLE", "reasons": ["iverilog/vvp unavailable"]}
     rtl_paths = [str(Path(p)) for p in candidate.get("rtl_paths") or []]
+    # ARGUMENT ORDER IS NOT A VERDICT INPUT. `timescale is a compiler
+    # directive that applies from its point of appearance FORWARD, across
+    # files, in compile order. A candidate with no `timescale of its own
+    # therefore inherits the challenge's unit when the challenge is compiled
+    # first, and iverilog's default when it is compiled first -- MEASURED
+    # 2026-09-06 on a correct clkgenerator candidate: RTL-first FAIL,
+    # TB-first PASS, and the runner reported "the frozen candidate must pass
+    # its required test" about a candidate that was right. A verdict that
+    # argument order can flip is not a verdict.
+    #
+    # The fix states the DECLARED unit once, ahead of every source, so all of
+    # them share it whatever order they are given in. It is never guessed:
+    # with no declaration anywhere there is no prelude and every file keeps
+    # the same default, which is already order-independent.
+    declared = _declared_timescale(source)
+    disagreement = _timescale_disagreement(rtl_paths, declared)
+    if disagreement is not None:
+        return {"status": "INVALID", "reasons": [disagreement]}
     with tempfile.TemporaryDirectory(prefix="vibeic-ai-challenge-") as td:
         out = Path(td) / "simv"
+        prelude = []
+        if declared is not None:
+            prelude_path = Path(td) / "_vibeic_timescale.v"
+            prelude_path.write_text(f"`timescale {declared}\n")
+            prelude = [str(prelude_path)]
         try:
             comp = subprocess.run(
                 [iverilog, "-g2012", "-s", "vibeic_ai_challenge_tb",
-                 "-o", str(out), *rtl_paths, str(test_path)],
+                 "-o", str(out), *prelude, *rtl_paths, str(test_path)],
                 cwd=td, capture_output=True, text=True, timeout=30)
         except subprocess.TimeoutExpired:
             return {"status": "INVALID", "reasons": ["challenge compile timed out"]}
@@ -5444,6 +5626,9 @@ def main():
                   scorer_root=a.scorer_root,
                   threads=a.threads)
         return
+    if a.resume or a.solve:
+        # Main thread, before any worker exists: see `_install_orphan_guard`.
+        _install_orphan_guard()
     if a.resume:
         if not (a.dataset and a.run):
             raise SystemExit("--resume requires --dataset and --run")
