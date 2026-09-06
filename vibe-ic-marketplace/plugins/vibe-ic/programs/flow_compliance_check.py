@@ -13802,14 +13802,17 @@ def published_failed_gate_names(
     strict subset of the run's failures and still be internally consistent.
 
     MEASURED on one opentitan_aes run (lane rbaes2, v1.17.96, 8HD-8, read
-    read-only from its committed `phase23_completion_audit.json`): the file
-    published
+    read-only from its committed `phase23_completion_audit.json`) and on a
+    second run (lane czadcfd, v1.17.98, 8HD-6). The first published
 
         failed_gate_count 1   failed_gates ['l8_clock_domains_typed_check']
 
     beside a `gate_execution_ledger` holding ELEVEN further FAILs — none of
     them in the registry, so none of them in any count in the file. Twelve
-    gates returned FAIL and the census said one. Both numbers were right about
+    gates returned FAIL and the census said one. The second published
+    `failed_gate_count: 0` over a ledger holding TEN — its P0 step ran and
+    recorded no gates, so the registry projection was legitimately empty and
+    the census was byte-identical to a genuinely clean run's. Both numbers were right about
     different things, and the field a reader keys on answered the narrower
     question without saying so.
 
