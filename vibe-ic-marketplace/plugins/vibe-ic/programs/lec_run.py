@@ -72,6 +72,7 @@ import _hardmacro_stage as _hms  # noqa: E402 — staged SRAM/IP macro blackbox
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import _progress_run as _pr  # noqa: E402
+from _prose_polarity import is_denied, sentence_scope  # noqa: E402
 
 PROGRAM = "lec_run"
 
@@ -768,16 +769,44 @@ def lec_proved_points_from_output(raw: str) -> Optional[Dict[str, int]]:
     # text, so the probe cannot report a `proved` from one text and an
     # `unproven` from another.
     scanned = strip_echoed_hdl_comments(raw)
+
+    # AND THEN ASKED WHETHER THE LINE DENIES ITS OWN NUMBER.
+    #
+    # Stripping closes `//` comments. It does not close a /* block comment */,
+    # and it cannot close an echoed English sentence that is not a comment at
+    # all. Anchoring closed `_INDUCT_FOUND_RE`, and anchoring is NOT AVAILABLE
+    # to the other two -- MEASURED, not assumed: the real yosys line is
+    #     "  Of those cells 798 are proven and 1039 are unproven."
+    # which carries leading text, so `(?m)^` would stop matching the very
+    # output this probe exists to read. Polarity is what generalises, and
+    # `_FINAL_RE` is consulted FIRST and returns immediately, so it is the one
+    # that decides.
+    #
+    # `extra_breaks=("\n",)` because a yosys log is a machine-generated report
+    # whose consecutive lines are unrelated RECORDS. `sentence_scope`'s own
+    # docstring (vibe-ic#790) records what a caller that does not say so
+    # inherits: a denial in a LATER, UNRELATED line retracts this line's
+    # number -- quietly, with nothing going red.
+    def _asserted(matches):
+        """The matches whose own log line does not DENY the number in them."""
+        kept = []
+        for mo in matches:
+            lo, hi = sentence_scope(scanned, mo.start(), mo.end(),
+                                    extra_breaks=("\n",))
+            if is_denied(scanned[lo:hi]) is None:
+                kept.append(mo)
+        return kept
+
     out: Dict[str, int] = {}
-    m = list(_FINAL_RE.finditer(scanned))
+    m = _asserted(list(_FINAL_RE.finditer(scanned)))
     if m:
         out["proved"] = int(m[-1].group(1))
         out["unproven"] = int(m[-1].group(2))
         return out
-    p = list(_PROVED_SIMPLE_RE.finditer(scanned))
+    p = _asserted(list(_PROVED_SIMPLE_RE.finditer(scanned)))
     if p:
         out["proved"] = int(p[-1].group(1))
-    u = list(_INDUCT_FOUND_RE.finditer(scanned))
+    u = _asserted(list(_INDUCT_FOUND_RE.finditer(scanned)))
     if u:
         out["unproven"] = int(u[-1].group(1))
     return out or None

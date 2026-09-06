@@ -968,11 +968,6 @@ _OFFENDER_REGISTER: Dict[str, str] = {
         "naming an excluded variant is derived or refused'). Delete this entry "
         "in the commit that fixes it -- an entry that outlives its offender is "
         "itself an offender and this gate refuses it.",
-    "lec_run::lec_proved_points_from_output":
-        "OWNER: lane czlecresume (landed v1.17.62, 364d3cc75). Reads the LEC "
-        "tool's own output to decide which proof points were proved, and writes "
-        "that as a declaration. Out of scope for czmainred by brief; routed to "
-        "its owning lane rather than guessed at from outside.",
 }
 
 

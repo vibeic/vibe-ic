@@ -104,14 +104,106 @@ def test_the_stripper_keeps_paths_and_mid_line_slashes():
     assert lec_run.strip_echoed_hdl_comments("") == ""
 
 
-def test_the_flow_gate_that_found_this_is_green_on_this_tree():
-    """The gate itself, run as the flow runs it. RED on origin/main naming
-    exactly one regex; this asserts it is green here — and it is the gate, not
-    this file, that decides."""
+def _declaration_scan_offenders():
+    """The offender NAMES the declaration-scan gate reports on this tree.
+
+    Returns a list. Raises if the gate did not actually answer — an empty check
+    and a clean check print the same, and this helper refuses to confuse them.
+    """
+    import re as _re
     import subprocess
     proc = subprocess.run(
         [sys.executable,
          str(SCRIPT.parent / "hdl_declaration_scan_strips_comments_check.py")],
         capture_output=True, text=True, timeout=900)
-    assert proc.returncode == 0, proc.stdout + proc.stderr
-    assert "newly scan text no stripper touched" not in proc.stdout
+    assert proc.returncode in (0, 1), (
+        "the gate did not reach a verdict (rc=%s); that is NOT a clean tree\n%s"
+        % (proc.returncode, proc.stdout + proc.stderr))
+    if proc.returncode == 0:
+        assert "newly scan text no stripper touched" not in proc.stdout
+        return []
+    m = _re.search(r"newly scan text no stripper touched:\n((?:\s+\S+\n)+)",
+                   proc.stdout)
+    assert m, ("the gate exited 1 but printed no offender block; nothing was "
+               "parsed, so nothing may be concluded\n" + proc.stdout)
+    return [ln.strip() for ln in m.group(1).splitlines() if ln.strip()]
+
+
+def test_this_regex_is_not_among_the_declaration_scan_offenders():
+    """THE PROPERTY THIS FILE OWNS, asserted as MEMBERSHIP.
+
+    It used to assert `returncode == 0` — that the WHOLE tree was clean. That is
+    a claim about every regex in the repo, and it was true when written: the gate
+    exited 0 at dd85b42cee. At e812321b0f it exits 1 because FOUR offenders
+    landed that are not mine and are not in this file's power to fix:
+    canonical_primitive_synth (x2), design_one_shot_runner,
+    phase1_doc_one_shot_runner. Measured on both trees: base names 5 including
+    mine, this branch names the same list MINUS mine and adds none.
+
+    So the assertion is re-aimed at what this change actually did, and it is
+    aimed WIDER than the one line it fixed, not narrower — the ratchet is on
+    MEMBERSHIP, not on a count (vibe-ic#900):
+      * the regex this file exists for must be ABSENT, and
+      * NO lec_run offender of ANY name may be present, so a different one of
+        mine cannot arrive unnoticed, and
+      * `_declaration_scan_offenders` fails if the gate did not answer at all.
+    """
+    offenders = _declaration_scan_offenders()
+    assert "lec_run::lec_proved_points_from_output::_INDUCT_FOUND_RE(raw)" \
+        not in offenders, offenders
+    assert [o for o in offenders if o.startswith("lec_run::")] == [], offenders
+
+
+def test_the_polarity_of_the_line_is_consulted_for_all_three_patterns():
+    """THE HALF THE ANCHORING DID NOT REACH.
+
+    Anchoring closed `_INDUCT_FOUND_RE`. It is NOT available to the other two:
+    the real yosys line is "  Of those cells 798 are proven and 1039 are
+    unproven." and carries leading text, so `(?m)^` would stop matching the very
+    output this probe exists to read. And the stripper strips `//` line comments
+    only — a /* block comment */ reaches the counter untouched.
+
+    Both were live on the shipped code: the first case below returned
+    {'proved': 100, 'unproven': 5} and the second {'proved': 42}.
+    """
+    denied_final = ("Executing EQUIV_STATUS pass.\n"
+                    "/* the netlist is not equivalent: "
+                    "100 are proven and 5 are unproven */\n")
+    denied_simple = ("Executing EQUIV_SIMPLE pass.\n"
+                     "/* no cells were proved: "
+                     "Proved 42 previously unproven $equiv cells */\n")
+    denied_induct = ("Found 777 unproven $equiv cells in module equiv: "
+                     "none of these are real\n")
+    for raw in (denied_final, denied_simple, denied_induct):
+        assert lec_run.lec_proved_points_from_output(raw) is None, raw
+
+
+def test_the_polarity_check_does_not_touch_a_real_log():
+    """The other direction, on the shape the tool really emits.
+
+    Measured across nine real yosys logs from the sha256 proof on 8HD-9: all
+    three patterns, 60 real matches, ZERO suppressed. A check that fired on real
+    output would be worse than the hole it closes.
+    """
+    real = ("Executing EQUIV_STATUS pass.\n"
+            "  Of those cells 798 are proven and 1039 are unproven.\n")
+    assert lec_run.lec_proved_points_from_output(real) == {
+        "proved": 798, "unproven": 1039}
+    assert lec_run.lec_proved_points_from_output(
+        "Proved 5 previously unproven $equiv cells\n") == {"proved": 5}
+    assert lec_run.lec_proved_points_from_output(_REAL) == {"unproven": 35}
+
+
+def test_the_denial_reaches_only_its_own_line():
+    """`extra_breaks=("\n",)`, and why it is not a detail.
+
+    A yosys log is a machine-generated report whose consecutive lines are
+    unrelated RECORDS. Without the caller saying so, `sentence_scope` lets a
+    denial in a LATER line retract this line's number (vibe-ic#790) — the quiet
+    direction, where nothing goes red and the probe simply publishes less than it
+    read. A neighbouring denial must NOT reach this count.
+    """
+    neighbour = ("  Of those cells 798 are proven and 1039 are unproven.\n"
+                 "  No counterexample was found.\n")
+    assert lec_run.lec_proved_points_from_output(neighbour) == {
+        "proved": 798, "unproven": 1039}
