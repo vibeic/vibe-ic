@@ -691,7 +691,23 @@ def _validate_candidate_snapshot(candidate: dict, problem_id: str) -> list[str]:
 def _required_scorer_top(entry: dict) -> str | None:
     """The one module name this benchmark's scorer will instantiate, if it
     fixes one. Driven by the registry's `module_name_strategy`; no per-benchmark
-    branch and no problem-specific knowledge."""
+    branch and no problem-specific knowledge.
+
+    Takes the REGISTRY ENTRY, and says so loudly if handed anything else. The
+    name `entry` is overloaded in this module: inside the solve/resume workers a
+    local `entry` is the runner's ENTRY STEP (a str/int), not the registry
+    entry. Passing that here used to raise a bare AttributeError inside the
+    per-problem worker, which caught it, reported NOT_MEASURED for that problem,
+    and carried on -- so a miswiring produced a full run of 156 NOT_MEASURED
+    rows and "0/156 produced a gated candidate" with no single message naming
+    the cause. A named TypeError makes the same mistake self-identifying.
+    Call it as `_required_scorer_top(_entry(bench))`."""
+    if entry is not None and not isinstance(entry, dict):
+        raise TypeError(
+            "_required_scorer_top expects the REGISTRY ENTRY dict, got "
+            f"{type(entry).__name__} {entry!r}. Inside the solve/resume workers "
+            "the local `entry` is the runner's entry STEP; pass "
+            "_entry(bench) instead.")
     strategy = ((entry or {}).get("layout") or {}).get("module_name_strategy")
     return "TopModule" if strategy == "always_TopModule" else None
 
@@ -3201,7 +3217,7 @@ def _cmd_solve_locked(bench: str, dataset: str, run: str, limit: int = 0,
                 raise RuntimeError(process.error)
             rc = int(process.rc)
             got = bio.collect(fmt, pid, proj,
-                              required_top=_required_scorer_top(entry))
+                              required_top=_required_scorer_top(_entry(bench)))
             waive = _rtl_gen_waive(proj)
             backup_source = None
             backup_skills: list[str] = []
@@ -3255,7 +3271,7 @@ def _cmd_solve_locked(bench: str, dataset: str, run: str, limit: int = 0,
                 backup_task = _make_ai_backup_task(
                     pid, proj, backup_skills, str(backup_source),
                     backup_detail, bench, ds, run_p,
-                    required_top=_required_scorer_top(entry))
+                    required_top=_required_scorer_top(_entry(bench)))
             state = ("candidate->AI-review" if got.get("ok")
                      else ("WAIVE->AI" if backup_source == "rtl_gen_waive"
                            else ("route-declared->AI" if awaiting_backup
@@ -3544,7 +3560,7 @@ def _cmd_resume_locked(bench: str, dataset: str, run: str,
                 error=process.error)
         try:
             got = bio.collect(fmt, pid, proj, supplied_rtl=supplied_rtl,
-                              required_top=_required_scorer_top(entry))
+                              required_top=_required_scorer_top(_entry(bench)))
             payload = json.dumps(got)
         except Exception as exc:                          # noqa: BLE001
             return _ResumeRunnerOutcome(
@@ -3663,7 +3679,7 @@ def _cmd_resume_locked(bench: str, dataset: str, run: str,
             backup.append(_make_ai_backup_task(
                 pid, proj, backup_skills, str(backup_source), backup_detail,
                 bench, Path(dataset).resolve(), run_p,
-                required_top=_required_scorer_top(entry)))
+                required_top=_required_scorer_top(_entry(bench))))
             existing_backup_ids.add(pid)
         print(f"  {pid:44s} Program worker retry completed (rc={rc})")
 
@@ -4114,7 +4130,7 @@ def _cmd_resume_locked(bench: str, dataset: str, run: str,
         got = bio.collect(
             fmt, pid, Path(str(task.get("project") or "")),
             supplied_rtl=supplied_rtl,
-            required_top=_required_scorer_top(entry))
+            required_top=_required_scorer_top(_entry(bench)))
         if (not got.get("ok")
                 or _sha256_text(str(got.get("completion") or ""))
                 != task.get("rtl_sha256")):
