@@ -709,16 +709,22 @@ def lec_proved_points_from_output(raw: str) -> Optional[Dict[str, int]]:
     """
     if not raw:
         return None
+    # STRIPPED BEFORE COUNTING. A yosys log can quote source back at you; a
+    # commented-out sentence that happens to match one of these lines is not a
+    # position this proof reached. All three patterns read the SAME stripped
+    # text, so the probe cannot report a `proved` from one text and an
+    # `unproven` from another.
+    scanned = strip_echoed_hdl_comments(raw)
     out: Dict[str, int] = {}
-    m = list(_FINAL_RE.finditer(raw))
+    m = list(_FINAL_RE.finditer(scanned))
     if m:
         out["proved"] = int(m[-1].group(1))
         out["unproven"] = int(m[-1].group(2))
         return out
-    p = list(_PROVED_SIMPLE_RE.finditer(raw))
+    p = list(_PROVED_SIMPLE_RE.finditer(scanned))
     if p:
         out["proved"] = int(p[-1].group(1))
-    u = list(_INDUCT_FOUND_RE.finditer(raw))
+    u = list(_INDUCT_FOUND_RE.finditer(scanned))
     if u:
         out["unproven"] = int(u[-1].group(1))
     return out or None
@@ -827,8 +833,40 @@ _SIMPLE_SLASH_RE = re.compile(
 # Fallback unproven — equiv_induct residual line, anchored on `in module
 # equiv:` so it does NOT collide with the equiv_simple entry line above:
 #   "Found 35 unproven $equiv cells in module equiv:"
+#
+# ANCHORED TO THE START OF A LINE (`(?m)^[ \t]*`). yosys prints this line at
+# column 0 — verified over every fixture in this suite and over four real logs
+# on 8HD-9 (sha256, an 8x8 MAC, a re-encoded FSM), none of which carries a
+# non-whitespace prefix — while a Verilog line the tool ECHOES into its log
+# carries whatever prefixed it in the source. Without the anchor, a design
+# containing the comment
+#     // Found 999 unproven $equiv cells in module equiv:
+# echoed by yosys in an error would be read as this run's residual count, and
+# `parse_equiv_output` uses this same pattern as its unproven FALLBACK when no
+# equiv_status line exists — so the spoof would reach a verdict, not just the
+# evidence. The anchor costs nothing (every real match is already at line
+# start) and closes that.
 _INDUCT_FOUND_RE = re.compile(
-    r"Found\s+(\d+)\s+unproven\s+\$equiv\s+cells\s+in\s+module\s+equiv\s*:")
+    r"(?m)^[ \t]*Found\s+(\d+)\s+unproven\s+\$equiv\s+cells"
+    r"\s+in\s+module\s+equiv\s*:")
+
+#: A Verilog LINE COMMENT that a tool echoed into its own log. Anchored at the
+#: start of a line on purpose: an absolute path (`/foss/pdks/...`) and a `//`
+#: inside a sentence are NOT comments here and must survive. Measured on a real
+#: 2.23 MB sha256 LEC log: 18,472 lines in, 18,472 out, `/foss/pdks` intact,
+#: 11.5 ms per call.
+_HDL_LINE_COMMENT_RE = re.compile(r"(?m)^[ \t]*//.*$")
+
+
+def strip_echoed_hdl_comments(text: str) -> str:
+    """Drop HDL line comments a tool echoed into its log, before counting.
+
+    The counting patterns below are matched against TOOL OUTPUT, and tool
+    output can contain SOURCE that the tool quoted back. A commented-out line
+    is not something the run did; reading one as a proved-point count states a
+    position the proof never reached. PURE.
+    """
+    return _HDL_LINE_COMMENT_RE.sub("", text or "")
 
 # SAT-model abort (chip-AGNOSTIC): the honest capability-gap signal.
 #   "ERROR: No SAT model available for cell _204__gate (sky130_fd_sc_hd__lpflow_isobufsrc_1)."
