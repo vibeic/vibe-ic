@@ -843,6 +843,11 @@ def _log_invocation(cmd: str, rc: int, duration_ms: int,
                             "NOT CAPTURED — no version flag answered, or no "
                             "container was supplied to the logger"),
         "command": cmd[:400],
+        # WHERE IT RAN. A ledger that names a container the run never entered
+        # is a false provenance record, and this file learned that the hard
+        # way when Phase 3 began running its tools locally (see
+        # `_local_exec_mode`). One field, two values, never absent.
+        "exec_route": "local" if _local_exec_mode() else "container",
         "exit_code": int(rc),
         "duration_ms": int(duration_ms),   # MEASURED, not a placeholder
         "duration_s": round(int(duration_ms) / 1000.0, 3),
@@ -1029,26 +1034,39 @@ def _local_exec_mode() -> bool:
     v1.17.79, `_registry_glob_one_local`. Those two taught the PDK to resolve
     in-image; this one teaches the TOOLS to run there.
 
-    THE PREDICATE IS "NO ROUTE", NOT "IN AN IMAGE".  Local mode is taken only
-    when BOTH hold:
-      * `$EDA_CONTAINER` is unset/empty — nobody NAMED a container. When an
-        operator names one, that naming is the instruction and it is obeyed
-        even if the exec then fails; the failure is about the container they
-        asked for, which is the honest answer.
-      * `docker` is not on PATH — there is no client that could reach one.
-    On every host that has docker, and in every run that names a container,
-    this returns False and the argv below is BYTE-IDENTICAL to what it has
-    always been. There is no host-side behaviour change by construction.
+    THE PREDICATE IS "NO ROUTE EXISTS", AND IT IS EXACTLY ONE QUESTION:
+    is there a `docker` client on PATH? With no client there is no route to
+    ANY container, whoever named it, so there is no second toolchain this
+    could be choosing between — the local one is the only one that exists.
 
-    DEGRADES LOUDLY. In local mode a tool that is genuinely absent is not
-    silently substituted: `bash` reports `<tool>: command not found` and
-    `_annotate_local_exec` names the route that was taken, so a reader can
-    tell "the tool is missing here" apart from "the flow could not reach a
-    tool". Tool/PDK/chip-AGNOSTIC: nothing here names a tool or a PDK."""
+    IT IS DELIBERATELY NOT "AND NOBODY NAMED A CONTAINER". That was this
+    function's first predicate and it was WRONG, measured before it shipped:
+    `phase3_one_shot_runner`'s own `--container` argument DEFAULTS to
+    "vibeic-eda" and `main()` publishes it unconditionally
+    (`os.environ["EDA_CONTAINER"] = args.container`), so `$EDA_CONTAINER` is
+    ALWAYS set by the time any step runs and the env test could never fire
+    through the real front door. A default is not an operator's choice. What
+    the operator's naming buys is a NAME IN THE DIAGNOSTIC, not a route —
+    see `_annotate_local_exec`.
+
+    HOST-SIDE IS UNCHANGED BY CONSTRUCTION. Every host that runs this flow
+    beside a container has a docker client; there, this returns False and the
+    argv below is byte-identical to what it has always been.
+
+    DEGRADES LOUDLY, NEVER SILENTLY. The route is announced ONCE on stderr the
+    first time it is decided, so every transcript records which one this run
+    took; and a tool that is genuinely absent is not silently substituted —
+    `bash` reports `<tool>: command not found` and `_annotate_local_exec`
+    names the route. Tool/PDK/chip-AGNOSTIC: nothing here names either."""
     global _LOCAL_EXEC_MODE
     if _LOCAL_EXEC_MODE is None:
-        _LOCAL_EXEC_MODE = (not os.environ.get("EDA_CONTAINER")
-                            and shutil.which("docker") is None)
+        _LOCAL_EXEC_MODE = shutil.which("docker") is None
+        if _LOCAL_EXEC_MODE:
+            _named = os.environ.get("EDA_CONTAINER") or "<none named>"
+            print("[phase3] EXEC ROUTE = LOCAL: no docker client on PATH, so "
+                  "every tool command runs on THIS filesystem. The container "
+                  "named for this run (%s) was not entered and nothing was "
+                  "executed in it." % _named, file=sys.stderr)
     return bool(_LOCAL_EXEC_MODE)
 
 
@@ -1090,9 +1108,11 @@ def _annotate_local_exec(rc: int, err: str) -> str:
     said. A no-op outside local mode and for every rc but 127."""
     if rc != 127 or not _local_exec_mode():
         return err
-    note = ("LOCAL_EXEC: no $EDA_CONTAINER named and no docker on PATH, so "
-            "this ran on THIS filesystem; 127 means the tool is not on PATH "
-            "here either (it does NOT mean a container was unreachable).")
+    note = ("LOCAL_EXEC: no docker client on PATH, so this ran on THIS "
+            "filesystem (container named for the run: %s, not entered); 127 "
+            "means the tool is not on PATH here either — it does NOT mean a "
+            "container was unreachable."
+            % (os.environ.get("EDA_CONTAINER") or "<none named>"))
     return (err + ("\n" if err and not err.endswith("\n") else "") + note)
 
 
