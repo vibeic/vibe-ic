@@ -1438,8 +1438,27 @@ def test_witness_replay_relays_the_exact_frozen_plan_denominator(monkeypatch):
 
 @lru_cache(maxsize=1)
 def replay_results() -> Tuple[L.ReplayResult, ...]:
-    """Run the current mode's replay plan once, in parallel, and cache it."""
+    """Run the current mode's replay plan once, in parallel, and cache it.
+
+    NOT_VERIFIED when no hardlink mirror can be built. LOCK 2's whole method is
+    to apply an edit to an ISOLATED `cp -al` mirror and watch the cell go
+    PASS -> FAIL. Where no scratch parent accepts a hardlink FROM the checkout,
+    there is no mirror, no arm runs, and a red here would say "this mutation
+    stopped reddening its witness" about a replay that never happened.
+
+    MEASURED under `tools/ci/run_suite_in_eda_image.sh`, the harness the landing
+    gate uses: it binds `$REPO_ROOT` at its own path and `/tmp` separately, so
+    the checkout's PARENT is unwritable and `/tmp` is a different MOUNT —
+    hardlinks do not cross a mount point even on one device. Every one of this
+    file's replays failed there, and read as seventeen dead mutations.
+    """
     plan = L.replay_plan()
+    try:
+        L._mirror_scratch_parent()
+    except L.MirrorUnavailable as exc:
+        pytest.skip(f"NOT_VERIFIED: {exc} — remedy: run where the checkout's "
+                    f"parent is writable, or where the scratch shares the "
+                    f"checkout's mount")
     return L.replay_many(
         plan, jobs=8, timeout=REPLAY_TIMEOUT,
         progress_callback=lambda completed, total: _domain_progress(
