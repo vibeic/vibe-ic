@@ -135,6 +135,7 @@ EMIT_BLOCKING_CONFORMANCE_RULES = frozenset({
     "fsm-onehot-missing-transition",
     "sync-reset-next-state-redundant-gate",
     "ordered-phase-monitoring-early",
+    "spec-interface-empty-but-declared",
 })
 
 
@@ -2012,6 +2013,114 @@ def check(spec: SpecContract, rtl_name: str, rtl_ports: List[Port],
             "prompt typo (the hidden testbench is the port-direction "
             "authority); flip the mis-read pin to an output."))
 
+    # ---- the port comparison's own DENOMINATOR -----------------------------
+    # (#2049 item 4) A zero denominator is NOT_MEASURED, never PASS. This is the
+    # house rule of `gate_zero_denominator_refuses_check` (#564): "an empty scan
+    # is not a result at all". Measured on this base: driven with an L9 whose
+    # `ports` is empty, this program printed
+    #     spec_conformance_check: PASS — findings: 0 (0 error, 0 warn, 0 info)
+    #     [spec ports=0(json), rtl ports=5, spec reset=-/-]
+    # and returned rc 0. Every port rule below had compared the RTL against an
+    # empty interface. The zero WAS disclosed — `spec ports=0` — but in a shape
+    # the house prober cannot read: its predicate wants `0 ports read`, and
+    # `ports=0` matches nothing. So the disclosure existed and no instrument in
+    # the repo could see it, and neither could a reader who reads the verdict
+    # word. This says it in words, in both output channels.
+    #
+    # INFO, never ERROR, and that is deliberate: 110 of the 142 JSON contracts
+    # carrying a `ports` key in the corpus on this base carry it EMPTY. A
+    # port-less spec snippet is a legitimate input and must not be blocked. What
+    # is NOT legitimate is calling the resulting silence conformance.
+    if not spec.ports:
+        f.append(Finding(path, 'INFO', 'spec-port-comparison-not-measured',
+            rtl_name or '<module>',
+            "port conformance: 0 port(s) read from the spec contract — "
+            "NOT_MEASURED, not PASS. "
+            f"The RTL declares {len(rtl_ports)} port(s) and the spec contract "
+            "declares none, so every port rule below (name, direction, width, "
+            "reset polarity) compared this RTL against an empty interface and "
+            "could not have found anything. A clean verdict here states nothing "
+            "about the interface."))
+
+    # ---- structural sanity: a verdict over an EMPTY spec interface ----------
+    # (#2049 item 4; czl9docs O5) "0 spec ports" has two causes and only one of
+    # them is legitimate, exactly as `phase1_sufficiency_check` distinguishes
+    # them one layer earlier:
+    #   * the spec text declares no interface  -> a reset/latency-only snippet.
+    #     Legitimate; port conformance stays silent, as it always has.
+    #   * the spec text DOES declare an interface and the contract carries none
+    #     -> an EXTRACTION GAP. Every port rule below then compares the RTL
+    #     against nothing and this gate reports PASS with 0 findings — a verdict
+    #     over an empty population.
+    # The protection against the second case is currently the Phase-1 HALT, not
+    # this step, so the clause stays reachable BY HAND (a hand-run of this
+    # program over a blind L9) and by any caller that reaches step 2 without the
+    # Phase-1 gate. This makes the step refuse it on its own evidence.
+    #
+    # The two causes are told apart by RE-READING THE SPEC TEXT with the SAME
+    # grammars Phase 1 uses, so this cannot disagree with Phase 1 about what the
+    # document declares. chip-AGNOSTIC: pure structural extraction, no
+    # design/class literal.
+    #
+    # ONLY THE HIGH-CONFIDENCE TIERS OF THAT RE-READ ARM THIS RULE, and that
+    # narrowing is measured, not assumed. `phase1_port_extract.extract_ports`
+    # has two tiers: a markdown interface TABLE plus ports parsed out of real
+    # Verilog regions (high confidence), and — reached only when those come back
+    # empty — a PROSE fallback that reads heading-anchored and direction-keyword
+    # bullets. Swept over 9064 documents on this base (benchmark-data +
+    # benchmark_external, oracle/golden/solution paths excluded), the whole
+    # re-read fires on 82 documents, of which 74 are PROSE-tier and 8 are
+    # high-tier. EVERY ONE of the 16 fires on a genuine INPUT document is
+    # PROSE-tier, and they are phantoms: a FlexRay state name (`DEFAULT_CONFIG`),
+    # a SAS primitive (`ALIGN`, `HARD_RESET`), and two of a protocol narrative's
+    # twenty-odd signals (`ACLK`, `ARESETn`) — narrative prose, not a module
+    # interface. Firing an EMIT-BLOCKING ERROR on those would block legitimate
+    # designs, so the prose tier is refused here. The high tier is principled as
+    # well as clean: `extract_spec_contract` has those SAME two tiers, so a
+    # high-tier disagreement means the two extractors read the same kind of
+    # structured evidence and disagreed — which is an extraction gap by
+    # construction. A prose-only hit means only the looser grammar saw anything.
+    #
+    # MEASURED COST, recorded rather than hidden: one real gap in that corpus
+    # (a prompt declaring its pins as `- **`clk`** (1-bit): ...` bullets under an
+    # `#### Inputs:` heading) is a PROSE-tier hit and is therefore NOT flagged
+    # here. It is not flagged because the identical grammar produced
+    # `DEFAULT_CONFIG` and `ALIGN` as ports on other inputs; a rule that cannot
+    # tell those apart is a style rule, not a conformance check.
+    if not spec.ports and (spec_text or input_prose):
+        _spec_txt = spec_text or input_prose
+        _declared = None
+        try:
+            import phase1_port_extract as _ppe
+            from _specrtl_common import (_parse_md_table_ports as _mdt,
+                                         parse_verilog_ports as _pvp)
+            # The high-confidence tiers, in the same order and with the same
+            # dedup `extract_ports` itself uses — reached through that module's
+            # own helpers so the two cannot drift apart in what they accept as a
+            # declaration (the same reason this file reuses
+            # `l9_rtl_pin_consistency_check`'s manifest parser below).
+            _tbl, _ = _mdt(_spec_txt, union=True)
+            _inl = _pvp(_ppe._verilog_regions(_spec_txt))
+            _declared = _ppe._dedup_ports(list(_tbl) + list(_inl))
+        except Exception:  # noqa: BLE001 — degrade LOUDLY, never silently
+            _declared = None
+            print("spec_conformance_check: WARN could not re-read the spec "
+                  "interface (phase1_port_extract unavailable) — the empty-"
+                  "interface check is NOT_MEASURED for this file",
+                  file=sys.stderr)
+        if _declared:
+            _names = sorted({(p.get("name") if isinstance(p, dict) else p)
+                             for p in _declared})
+            f.append(Finding(path, 'ERROR', 'spec-interface-empty-but-declared',
+                rtl_name or '<module>',
+                f"the spec contract carries ZERO ports, but the spec text "
+                f"declares {len(_names)} in a structured interface "
+                f"({', '.join(_names)}) — an extraction gap, not a port-less "
+                "specification. Every port rule below compares this RTL against "
+                "an empty interface, so a PASS here measures nothing. Fix the "
+                "Phase-1 extraction (L9 interface) and re-run; do not read this "
+                "verdict as conformance."))
+
     # ---- port conformance --------------------------------------------------
     # Only when the spec actually declares an interface — a reset/latency-only
     # spec snippet (0 ports) must not flag every RTL port as "extra".
@@ -2630,6 +2739,11 @@ def main(argv: Optional[List[str]] = None) -> int:
     if args.semantic_manifest:
         Path(args.semantic_manifest).write_text(json.dumps(spec.semantic_confirmations, indent=2))
 
+    # The zero denominator said in the shape the house prober reads (#564):
+    # `0 spec port(s) read`, not `ports=0`.
+    _zero_ports_note = ('' if spec.ports else
+                        ' — spec contract: 0 port(s) read,'
+                        ' port comparison NOT_MEASURED')
     errs = [x for x in findings if x.severity == 'ERROR']
     warns = [x for x in findings if x.severity == 'WARN']
     infos = [x for x in findings if x.severity == 'INFO']
@@ -2637,7 +2751,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     verdict = 'FAIL' if fail else 'PASS'
     print(f"spec_conformance_check: {verdict} — findings: {len(findings)} "
           f"({len(errs)} error, {len(warns)} warn, {len(infos)} info) "
-          f"[spec ports={len(spec.ports)}({spec.source}), rtl ports={len(rtl_ports)}, "
+          f"[spec ports={len(spec.ports)}({spec.source})"
+          f"{_zero_ports_note}, rtl ports={len(rtl_ports)}, "
           f"spec reset={spec.reset_mode or '-'}/{spec.reset_polarity or '-'}]")
     for fd in sorted(findings, key=lambda x: (x.severity, x.rule, x.symbol)):
         print(f"  [{fd.severity}] {fd.rule}: {fd.message}")
