@@ -179,3 +179,113 @@ def test_crosswalk_carries_the_bus_width_into_l1():
     assert rows["bus"]["width"] == 10
     # an unstated width stays the honest absence the gate is entitled to refuse
     assert "width" not in rows["unknown_width"]
+
+
+# ---- the three shapes the first pass still read as width 1 -----------------
+# Measured on the same 50-design blind run: with the list read but its WIDTHS
+# lost, three designs still failed the front door on
+# `l1_pin_bus_width_actionable_check` — adder_32bit, right_shifter, float_multi.
+# Each is a different way of stating the width, and none of them is a guess:
+# the number is in the prompt.
+
+def test_parenthesised_direction_and_range_are_read():
+    # float_multi's shape: the direction and the range live in a parenthetical
+    # between the name and the colon, so the name-then-colon anchor missed it
+    # entirely and the design reached the gate with ZERO ports.
+    spec = ("Input ports:\n"
+            "    clk (input): Clock signal for synchronization.\n"
+            "    a (input [31:0]): First operand in IEEE 754 format.\n"
+            "\nOutput ports:\n"
+            "    z (output reg [31:0]): Result of the multiplication.\n")
+    got = _by_name(E.extract_prose_ports(spec))
+    assert set(got) == {"clk", "a", "z"}, got
+    assert got["clk"]["dir"] == "input" and got["clk"]["width"] == 1
+    assert got["a"]["dir"] == "input" and got["a"]["width"] == 32
+    assert (got["a"]["msb"], got["a"]["lsb"]) == (31, 0)
+    assert got["z"]["dir"] == "output" and got["z"]["width"] == 32
+
+
+def test_a_one_based_range_keeps_its_declared_bounds():
+    # adder_32bit's shape. `A[32:1]` is 32 bits wide AND indexes bit 32.
+    # Normalising it to msb=31/lsb=0 keeps the width and loses the index, and
+    # the width gate then reports "the design's own inputs index bit 32 of A
+    # (>= 33 bits) but L1 declares 32 bits" about a row that came from this
+    # very sentence.
+    spec = ("Input ports:\n"
+            "    A[32:1]: 32-bit input operand A.\n"
+            "\nOutput ports:\n"
+            "    C32: Carry-out output.\n")
+    got = _by_name(E.extract_prose_ports(spec))
+    assert got["A"]["width"] == 32
+    assert (got["A"]["msb"], got["A"]["lsb"]) == (32, 1)
+    assert "msb" not in got["C32"] and got["C32"]["width"] == 1
+
+
+def test_a_width_stated_elsewhere_in_the_prompt_is_read():
+    # right_shifter's shape: the definition line says nothing about width, and
+    # the implementation paragraph declares `reg [7:0] q` and indexes `q[7]`.
+    # That is the SAME evidence the width gate derives its own bound from, so
+    # reading it here is agreeing with the design rather than guessing.
+    spec = ("Input ports:\n"
+            "    clk: Clock signal.\n"
+            "    d: Input signal to be right-shifted.\n"
+            "\nOutput ports:\n"
+            "    q: Output signal representing the result.\n"
+            "\nImplementation:\n"
+            "The register is defined as reg [7:0] q and initialized to 0.\n")
+    got = _by_name(E.extract_prose_ports(spec))
+    assert got["q"]["width"] == 8 and (got["q"]["msb"], got["q"]["lsb"]) == (7, 0)
+    assert got["d"]["width"] == 1 and "msb" not in got["d"]
+
+
+def test_a_bare_index_elsewhere_bounds_the_width():
+    spec = ("Output ports:\n"
+            "    q: the shift register output.\n"
+            "\nImplementation:\n"
+            "The most significant bit q[7] is assigned the input bit.\n")
+    got = _by_name(E.extract_prose_ports(spec))
+    assert got["q"]["width"] == 8 and got["q"]["msb"] == 7
+
+
+def test_a_port_the_prompt_never_dimensions_stays_one_bit_and_undeclared():
+    # The no-leak direction: no range, no N-bit phrase, no index anywhere ->
+    # width 1 and NO msb/lsb, so nothing downstream reads an invented bound.
+    spec = ("Input ports:\n"
+            "    clk: Clock signal.\n"
+            "    enable: Enable signal.\n")
+    got = _by_name(E.extract_prose_ports(spec))
+    assert got["enable"]["width"] == 1 and "msb" not in got["enable"]
+
+
+def test_crosswalk_prefers_declared_bounds_over_a_bare_width():
+    D = _runner()
+    l1 = {}
+    D._v1_6_555_crosswalk_l9_ports_to_l1_pin_table(l1, [
+        {"name": "A", "direction": "input", "width": 32, "msb": 32, "lsb": 1},
+    ])
+    row = l1["pin_table"][0]
+    assert (row["msb"], row["lsb"], row["width"]) == (32, 1, 32)
+
+
+# ---- the width gate reads an INDEX bound against a DECLARED range ----------
+
+def _gate():
+    import l1_pin_bus_width_actionable_check as G
+    return G
+
+
+def test_width_gate_accepts_a_declared_range_that_covers_the_index():
+    G = _gate()
+    # `A[32:1]` is 32 bits and reaches bit 32; the 0-based width bound (33) is
+    # the wrong question to ask of it.
+    assert G._declared_range_covers({"msb": 32, "lsb": 1, "width": 32}, 32)
+
+
+def test_width_gate_still_rejects_a_declared_range_that_does_not_reach():
+    G = _gate()
+    assert not G._declared_range_covers({"msb": 30, "lsb": 1, "width": 30}, 32)
+    # and a row with no declared range falls through to the width test
+    assert not G._declared_range_covers({"width": 32}, 32)
+    assert not G._declared_range_covers({"msb": None, "lsb": 0}, 32)
+    # booleans are not bit indices
+    assert not G._declared_range_covers({"msb": True, "lsb": False}, 0)

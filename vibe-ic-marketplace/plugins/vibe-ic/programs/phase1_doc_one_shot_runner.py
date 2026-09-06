@@ -48861,7 +48861,7 @@ def _czl9_prose_port_fallback(content: Dict[str, Any],
         # carried only `dir` counted as "structured" for that backfill's
         # not-structured guard, so it suppressed the richer producer and left
         # every consumer reading `mode` with None. Two doors, one schema.
-        target.append({
+        entry = {
             "name": row["name"],
             "mode": row["dir"],
             "direction": row["dir"],
@@ -48869,7 +48869,12 @@ def _czl9_prose_port_fallback(content: Dict[str, Any],
             "width": row["width"],
             "evidence": evidence,
             "extraction_strategy": "phase1_port_extract",
-        })
+        }
+        # the DECLARED bounds when the input stated them — `A[32:1]` is 32 bits
+        # AND indexes bit 32, and the width gate downstream reads the second fact
+        if "msb" in row:
+            entry["msb"], entry["lsb"] = row["msb"], row["lsb"]
+        target.append(entry)
     content["top_module_pins_source"] = "prose_port_definition_list"
 
 
@@ -60404,18 +60409,21 @@ def _v1_6_555_crosswalk_l9_ports_to_l1_pin_table(
         # 1-bit port". The width was known one document away. Copied only when
         # L9 states a usable one — an absent or unusable width still lands as
         # the honest None the gate is entitled to refuse.
+        # DECLARED bounds win over a bare width: a 0-based msb synthesised from
+        # a width is a DIFFERENT claim about a `[32:1]` port, and it is the one
+        # the width gate rejects.
+        _msb, _lsb = port.get("msb"), port.get("lsb")
         _w = port.get("width")
         if isinstance(_w, bool):
             _w = None
-        if isinstance(_w, int) and _w >= 1:
+        if (isinstance(_msb, int) and isinstance(_lsb, int)
+                and not isinstance(_msb, bool) and not isinstance(_lsb, bool)):
+            row["msb"], row["lsb"] = _msb, _lsb
+            row["width"] = abs(_msb - _lsb) + 1
+        elif isinstance(_w, int) and _w >= 1:
             row["width"] = _w
             row["msb"] = _w - 1
             row["lsb"] = 0
-        else:
-            _msb, _lsb = port.get("msb"), port.get("lsb")
-            if isinstance(_msb, int) and isinstance(_lsb, int):
-                row["msb"], row["lsb"] = _msb, _lsb
-                row["width"] = abs(_msb - _lsb) + 1
         new_rows.append(row)
     if not new_rows:
         return False
