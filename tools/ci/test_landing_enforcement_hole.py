@@ -305,7 +305,7 @@ def test_a_landing_script_that_stopped_publishing_is_caught(mutation, why, tmp_p
 # ─────────────────────────────────────────────────────────────────────────────
 # THE ANNOUNCEMENT MUST NOT BE ABLE TO LOSE THE VERDICT (2026-09-05).
 #
-# MEASURED, on the v1.17.97 exact-tree landing stamp
+# MEASURED, on the v1.17.98 exact-tree landing stamp
 # (`final-stamp-v11722-b495/run.log`, repo b495bbc9d, tree cd2d7767f, image
 # ghcr.io/vibeic/vibeic-eda@sha256:66c33ff2…d01ff): after the tier printed its
 # verdict, the publisher died with
