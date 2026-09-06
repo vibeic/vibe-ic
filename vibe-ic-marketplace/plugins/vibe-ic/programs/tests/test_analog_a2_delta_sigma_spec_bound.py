@@ -66,8 +66,22 @@ CONNECTIVITY = PROGRAMS / "analog_netlist_connectivity_check.py"
 BLK = "mod_alpha"
 
 
+# ROUND 34 — `fclk_max` DEFAULTS TO 1.0, NOT 10.0, and the decade of range it
+# used to declare is now asserted as a REFUSAL instead of silently carried.
+# `settling_time_constants` is evaluated at the clock the emitted testbench
+# runs at (`fclk_max`), and this topology's settling count is
+# (fclk/fclk_max) * vref * slew_design_margin / integrator_input_overdrive_v
+# = (fclk/fclk_max) * 13.33 against (enob+1)*ln2 = 10.40 -- so it tolerates a
+# stated clock range of only 1.28x. A fixture declaring 0.1-10 MHz declares a
+# converter this entry cannot serve, and the capability tests below cannot
+# exercise a capability through a declaration that is refused.
+#
+# This is a SPLIT, not a narrowing: the refused declaration is asserted by
+# name in `test_a_decade_of_clock_range_is_refused_because_it_cannot_settle`,
+# and the measured evidence that it genuinely does not work is in that test's
+# docstring. Nothing that used to be checked stopped being checked.
 def ds_specs(order=2.0, osr=256.0, enob=14.0, vref=1.0, vref_unit="V",
-             fclk=1.0, fclk_max=10.0, drop=()):
+             fclk=1.0, fclk_max=1.0, drop=()):
     rows = [
         {"name": "Order", "target": order, "unit": "—"},
         {"name": "OSR", "target": osr, "unit": "—"},
@@ -225,11 +239,66 @@ def test_the_sampling_capacitor_follows_the_declared_oversampling(tmp_path):
 
 def test_the_sampling_capacitor_follows_the_declared_reference(tmp_path):
     """The LSB is measured against the reference, so the budget goes as
-    1/Vref**2."""
-    d1, _, r1 = a2(tmp_path, "v10", vref=1.0)
-    d2, _, r2 = a2(tmp_path, "v05", vref=0.5)
+    1/Vref**2.
+
+    SWEPT ACROSS THE DECLARED Vref RANGE (0.8-1.2), not across 1.0/0.5 as it
+    was. `settling_time_constants` refuses vref 0.5 at enob 14 -- the
+    slew-derived bias delivers 6.67 time constants against the 10.40 that
+    resolution needs -- so the old low point declared a converter that does
+    not settle, and the capability could not be exercised through it. The
+    ASSERTION is unchanged in kind and the ratio is still exact: (1.2/0.8)**2
+    = 2.25. The refused point is not dropped, it is asserted as a refusal in
+    `test_a_reference_too_small_to_settle_the_declared_resolution_is_refused`
+    below, so the population is split rather than narrowed.
+    """
+    d1, _, r1 = a2(tmp_path, "v12", vref=1.2)
+    d2, _, r2 = a2(tmp_path, "v08", vref=0.8)
     c1, c2 = _cap_lengths(r1, d1), _cap_lengths(r2, d2)
-    assert c2["cs1"] == pytest.approx(c1["cs1"] * 4.0, rel=1e-3)
+    assert c2["cs1"] == pytest.approx(c1["cs1"] * 2.25, rel=1e-3)
+
+
+def test_a_decade_of_clock_range_is_refused_because_it_cannot_settle(tmp_path):
+    """The declaration this fixture used to carry by default: fclk 1.0 MHz over
+    a stated 0.1-10 MHz range.
+
+    MEASURED end to end, on the real block and reproduced to six decimals on
+    two hosts by two independent lanes: the emitted deck runs the modulator at
+    `fclk_max` (100 ns period -- the deck's own condition line calls it "the
+    binding settling corner"), holds the input one tenth of the reference above
+    mid-scale, and states that the mean of the 1-bit output "must be 0.5 plus
+    the input's fraction of the reference span -- 0.6 here". It measures
+    density 0.462028 with swing 1.04976: below mid-scale for an input above it,
+    with the quantiser toggling rather than latched. The converter does not
+    carry its input code.
+
+    The settling count at that clock is (1/10) * 13.33 = 1.33 against the 10.40
+    that enob 14 needs. Emitting a topology here would render a modulator whose
+    bitstream carries no code, so the entry refuses instead.
+    """
+    d, res, _ = a2(tmp_path, "decade", fclk=1.0, fclk_max=10.0)
+    assert res.returncode == 2
+    g = _gap(d)
+    bad = [r for r in g["admission_refusals"]
+           if r.get("field") == "settling_time_constants"]
+    assert bad, g["admission_refusals"]
+    assert bad[0]["value"] == pytest.approx(1.3333333, rel=1e-5)
+    assert float(bad[0]["min"]) == pytest.approx(10.3972077, rel=1e-6)
+
+
+def test_a_reference_too_small_to_settle_the_declared_resolution_is_refused(
+        tmp_path):
+    """The low point the sweep above used to run at, kept as a REFUSAL rather
+    than dropped. At vref 0.5 the slew-derived bias delivers 6.67 settling
+    time constants against the 10.40 that enob 14 needs, so the converter
+    slews to the answer and never settles on it. Emitting a topology here
+    would render a modulator whose bitstream carries no code."""
+    d, res, _ = a2(tmp_path, "v05", vref=0.5)
+    assert res.returncode == 2
+    g = _gap(d)
+    bad = [r for r in g["admission_refusals"]
+           if r.get("field") == "settling_time_constants"]
+    assert bad, g["admission_refusals"]
+    assert bad[0]["value"] < float(bad[0]["min"])
 
 
 def test_the_capacitor_ratio_is_the_loop_coefficient(tmp_path):
