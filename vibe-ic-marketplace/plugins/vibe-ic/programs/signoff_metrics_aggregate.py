@@ -225,32 +225,52 @@ def _density(project: Path) -> Cell:
 
 # ── LVS: the audited terminal verdict, and the four counts it implies ────────
 def _lvs(project: Path, key: str) -> Cell:
-    """The netgen LVS verdict this flow already audited.
+    """The netgen LVS verdict this flow already recorded.
 
-    `lvs.json` is the audit `eda_report_audit:lvs` wrote over netgen's own
-    report; its `summary.terminal_verdict` is the verdict of record. A MATCH is
-    netgen stating the circuits match uniquely, which is zero errors and zero
-    unmatched devices, nets and pins -- that is what the verdict MEANS, not an
-    inference over it. Anything else is NOT a licence to write a count: a
-    mismatched run states THAT it mismatched, and the per-class totals are not
-    in the record, so they stay NOT_MEASURED and the reader sees the mismatch.
+    A MATCH is netgen stating the circuits match uniquely, which is zero errors
+    and zero unmatched devices, nets and pins -- that is what the verdict
+    MEANS, not an inference over it. Anything else is NOT a licence to write a
+    count: a mismatched run states THAT it mismatched, and the per-class totals
+    are not in the record, so they stay NOT_MEASURED and the reader sees the
+    mismatch.
+
+    TWO PRODUCERS WRITE THIS FILE AND THEY DO NOT AGREE ON WHERE THE VERDICT
+    LIVES.  `eda_report_audit:lvs` / `lvs_report_check` put it at
+    `summary.terminal_verdict`; the netgen-report parser puts it at the TOP
+    LEVEL as `verdict` with `summary` holding the per-class counts instead.
+    This reader used to know only the first spelling, so on a run whose
+    `lvs.json` came from the second one it saw `summary.terminal_verdict`
+    missing and reported all four LVS keys NOT_MEASURED with the reason "the
+    LVS audit recorded no terminal verdict" -- while the same file said
+    `verdict: "match"`, `unmatched_devices 0/0`, `unmatched_nets 0/0` two lines
+    up.  MEASURED on `spm` (image 0.3.46, plugin v1.17.42): 4 of the 18 keys
+    unmeasured under a reason the record contradicts.  Read BOTH spellings; the
+    reason for an honest miss now names both.
     """
     rel = "reports/phase3/lvs.json"
     d = _json(project, rel)
     if not d:
         return unmeasured(f"{rel}: absent or unreadable, so this run recorded "
                           f"no audited LVS verdict")
-    verdict = ((d.get("summary") or {}).get("terminal_verdict") or "").upper()
+    summary = d.get("summary")
+    summary = summary if isinstance(summary, dict) else {}
+    raw = summary.get("terminal_verdict")
+    where = "summary.terminal_verdict"
+    if not isinstance(raw, str) or not raw.strip():
+        raw = d.get("verdict")
+        where = "verdict"
+    verdict = (raw or "").strip().upper() if isinstance(raw, str) else ""
     if verdict == "MATCH":
-        return Cell(0, rel, basis="summary.terminal_verdict=MATCH "
+        return Cell(0, rel, basis=f"{where}=MATCH "
                                   "(netgen: circuits match uniquely)")
     if not verdict:
-        return unmeasured(f"{rel}: the LVS audit recorded no terminal verdict",
-                          rel)
+        return unmeasured(
+            f"{rel}: carries no LVS verdict under either spelling this flow's "
+            f"producers use (summary.terminal_verdict or verdict)", rel)
     return unmeasured(
-        f"{rel}: the audited LVS verdict is {verdict!r}, not MATCH. A non-match "
-        f"is not a count: this record states THAT the netlists differ and "
-        f"carries no per-class total for {key}", rel)
+        f"{rel}: the recorded LVS verdict ({where}) is {verdict!r}, not MATCH. "
+        f"A non-match is not a count: this record states THAT the netlists "
+        f"differ and carries no per-class total for {key}", rel)
 
 
 # ── antenna ─────────────────────────────────────────────────────────────────
