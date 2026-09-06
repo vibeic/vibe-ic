@@ -183,9 +183,16 @@ def test_a_failing_gate_named_only_in_the_prose_reaches_no_consumer(
 
     # consumer 2 — the audit `gates` array
     assert [g["name"] for g in audit["gates"]] == [real]
-    # consumer 1 — the canonical failed-gate name list
-    assert audit["failed_gates"] == [real]
-    assert audit["failed_gate_count"] == 1
+    # consumer 1 — the P0 REGISTRY projection. Since vibe-ic#2069 this is
+    # `failed_gates_p0_registry`; `failed_gates` became the UNION of the
+    # registry's FAILs and the execution ledger's, so it is no longer the
+    # field that answers "what did the umbrella's records say". Re-aimed at
+    # the field that carries the property, and the union is asserted BESIDE
+    # it rather than instead of it — a phantom must reach neither.
+    assert audit["failed_gates_p0_registry"] == [real]
+    assert len(audit["failed_gates_p0_registry"]) == 1
+    assert real in audit["failed_gates"]
+    assert audit["failed_gate_count"] == len(audit["failed_gates"])
     # consumer 3 — the strict-structural listing that sets forced_fail
     assert audit["structural_fail_lines"] == [f"{real} — the real first line"]
     # consumer 4 — the PASS population, which contributes no prose at all
@@ -211,7 +218,8 @@ def test_a_failing_gate_named_only_in_the_records_is_reported(
         skips=[])
     rc, _report, audit = _run(tmp_path)
     capsys.readouterr()
-    assert audit["failed_gates"] == [real]
+    assert audit["failed_gates_p0_registry"] == [real]     # #2069, see above
+    assert real in audit["failed_gates"]
     assert [g["name"] for g in audit["gates"]] == [real]
     assert audit["structural_fail_lines"] == [f"{real} — boom"]
     assert rc == 1
@@ -449,12 +457,23 @@ def test_every_published_field_is_the_projection_of_the_published_records(
     recs = p0["gate_records"]
     assert recs and len(recs) == len(F._STRUCTURAL_RTL_GATES)
     assert audit["gates"] == F._p0_audit_gate_records(recs)
-    assert audit["failed_gates"] == F._p0_failing_gate_names(recs)
+    # vibe-ic#2069 — TWO projections now, of two populations, and each is
+    # checked against the function that produces it. `failed_gates` projects
+    # the records AND the execution ledger; `failed_gates_p0_registry` is the
+    # records-only projection this line used to be about.
+    assert audit["failed_gates_p0_registry"] == F._p0_failing_gate_names(recs)
+    assert audit["failed_gates"] == F.published_failed_gate_names(
+        recs, audit["gate_execution_ledger"])
     assert audit["failed_gate_count"] == len(audit["failed_gates"])
+    assert set(audit["failed_gates_p0_registry"]) <= set(
+        audit["failed_gates"]), "the union must contain the registry view"
     assert audit["passed_gate_count"] == F._p0_passed_count(recs)
     assert audit["structural_fail_lines"] == F._p0_structural_fail_lines(recs)
     # non-trivial on all four axes, or the assertions above are vacuous
     assert audit["failed_gates"], "fixture must reach the FAIL population"
+    assert audit["failed_gates_p0_registry"], (
+        "the fixture must reach the REGISTRY FAIL population too, or the "
+        "two-projection assertion above collapses into one")
     assert audit["passed_gate_count"] > 0
     assert not any(r["verdict"] == "NOT_INVOCABLE" for r in recs)
     assert any(r["verdict"] == "SKIP"
@@ -470,7 +489,16 @@ def test_the_failing_gate_names_are_gate_names_not_sentences(real_run):
     any of them."""
     import re
     _rc, _report, audit = real_run
+    # The NAME SHAPE invariant holds over the whole published census — a
+    # sentence must not appear as a gate name in either population.
     for name in audit["failed_gates"]:
         assert re.fullmatch(r"[A-Za-z_][\w.]*", name), name
+    # REGISTRY MEMBERSHIP is a claim about the registry projection only:
+    # since vibe-ic#2069 `failed_gates` is the union, and a ledger FAIL is
+    # legitimately not a registered structural-RTL gate. Asserting membership
+    # over the union would not be a stronger test, it would be a wrong one.
+    for name in audit["failed_gates_p0_registry"]:
         assert name in F._STRUCTURAL_RTL_GATES, (
-            f"{name} is reported as a failing gate but is not registered")
+            f"{name} is reported as a failing REGISTRY gate but is not "
+            f"registered")
+    assert audit["failed_gates_p0_registry"], "the registry arm must be live"

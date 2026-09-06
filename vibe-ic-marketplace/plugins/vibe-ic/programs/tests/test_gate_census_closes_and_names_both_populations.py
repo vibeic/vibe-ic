@@ -31,9 +31,17 @@ WHAT IS BLOCKING AND WHAT IS NOT — declared, not implied
   projection is correct, so it costs nothing today and catches the day one of
   them drifts. It is a defect in the AUDIT, and it forces the verdict through
   the existing `structural_fail_lines` -> `forced_fail` path.
-* the population reconciliation is ADVISORY. Making a ledger FAIL blocking
-  would redden runs whose gates are advisory by design; that is a ruling about
-  policy, not a defect in arithmetic.
+* the population reconciliation was ADVISORY, and is BLOCKING since
+  vibe-ic#2069. The objection recorded here — "making a ledger FAIL blocking
+  would redden runs whose gates are advisory by design" — was answered by
+  making the enforced thing NARROWER than what it objected to: not "a ledger
+  FAIL fails the run", but "the published census names every failure it
+  holds". `failed_gates` is now the UNION
+  (`published_failed_gate_names`), so on a census built the house way the
+  refusal cannot fire, whatever the gates returned. See
+  `test_issue2069_gate_census_publishes_the_union.py`, which owns that
+  behaviour and its controls; what stays here is the CENSUS CLOSURE and the
+  two-populations naming this file was written for.
 """
 import sys
 from pathlib import Path
@@ -118,7 +126,15 @@ def test_the_two_populations_are_told_apart_by_name():
     assert r["ledger_failed_gates"] == ["outside_a_check", "outside_b_check"]
     assert r["ledger_failures_outside_the_published_census"] == [
         "outside_a_check", "outside_b_check"]
-    assert r["declared"].startswith("ADVISORY")
+    # vibe-ic#2069 — the declaration moved from ADVISORY to BLOCKING. Asserted
+    # on the exact word rather than relaxed to "either", because a declaration
+    # that could read either way is the thing this file exists to prevent.
+    assert r["declared"].startswith("BLOCKING")
+    # ... and this two-argument call is the NOT_MEASURED arm: a caller that
+    # did not say what it published gets the populations named and no verdict
+    # about the census. `None`, never `True`.
+    assert r["census_names_every_failure"] is None
+    assert r["refusal"] is None
 
 
 def test_the_reconciliation_survives_an_absent_umbrella():
