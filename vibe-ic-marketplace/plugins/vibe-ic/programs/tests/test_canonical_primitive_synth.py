@@ -1275,3 +1275,60 @@ def test_a_one_bit_width_stated_in_words_is_a_stated_width():
         "up_data: The word", "up_data: Four-bit word")
     c4 = rcs.extract_handshake_contract(four)
     assert c4.width is None and any("width" in u for u in c4.unresolved)
+
+
+_COLLIDING_PORTS = {
+    "a divider whose payload port is named count": (
+        "Module name:\n    pulse_divider\nAn event ratio divider.\n"
+        "Input ports:\n clk: Clock.\n rst_n: Active low reset.\n"
+        " count [7:0]: The 8-bit payload accompanying an input event.\n"
+        " in_valid: Pulses on each input event.\n"
+        "Output ports:\n out_data [7:0]: The forwarded payload.\n"
+        " out_valid: Pulses on each output event.\n"
+        "Implementation:\nThe divider emits one output event for every 1 input "
+        "events.\n", "count"),
+    "a stage whose data ports are named held_data / skid_data": (
+        "Module name:\n    elastic_stage\nAn elastic pipeline stage.\n"
+        "Input ports:\n clk: Clock.\n rst_n: Active low reset.\n"
+        " held_data [7:0]: The word offered by the producer.\n"
+        " up_valid: Offered.\n dn_ready: The consumer can take a word.\n"
+        "Output ports:\n up_ready: This stage can take a word.\n"
+        " skid_data [7:0]: The word offered on.\n dn_valid: Offered.\n"
+        "Implementation:\nA transfer happens when valid and ready are both high. "
+        "The stage must register the output and buffer one additional transfer "
+        "so the producer is only stalled when no slot is free.\n", "held_data"),
+}
+
+
+@pytest.mark.parametrize("label,case", _COLLIDING_PORTS.items())
+def test_internal_names_give_way_to_the_designs_own_port_names(label, case):
+    """Ports come from the INPUT; internal signals are the generator's choice, so
+    the internals must give way. Measured before this: a divider whose payload is
+    named `count` and a stage whose data is named `held_data` both emitted RTL
+    that DOES NOT COMPILE -- "'count' has already been declared in this scope"
+    -- because the internal names were fixed literals."""
+    desc, port = case
+    rtl = rcs.emit_rtl(rcs.detect_shape(desc), desc)
+    # the port keeps its name, declared exactly once
+    assert len(re.findall(r"\b" + port + r"\b\s*[,;)]", rtl)) >= 1
+    decls = re.findall(r"^\s*(?:input|output|reg|wire)[^;\n]*\b" + port
+                       + r"\b", rtl, re.M)
+    assert len(decls) == 1, (label, decls)
+    # and every generated identifier that would have collided was renamed
+    for taken in ("count", "held_data", "skid_data", "up_fire", "dn_fire"):
+        if taken == port:
+            assert f"{taken}_2" in rtl or taken not in _INTERNAL_OF(rtl)
+
+
+def _INTERNAL_OF(rtl):
+    """Identifiers this module DECLARES (as reg/wire), for the check above."""
+    return set(re.findall(r"^\s*(?:reg|wire)[^;\n]*?(\w+)\s*[;=\[]", rtl, re.M))
+
+
+def test_the_scoreboard_locals_also_give_way():
+    """The generated TB declares q/wr/rd/errors/i and n_in/n_out/i; a design with
+    a port of one of those names would make the TB uncompilable too."""
+    desc = _F7_DESC.replace("in_data", "n_in").replace("out_data", "n_out")
+    c = rcs.extract_handshake_contract(desc)
+    tb = rcs.emit_scoreboard_tb(c)
+    assert "integer n_in_2 = 0, n_out_2 = 0, i;" in tb

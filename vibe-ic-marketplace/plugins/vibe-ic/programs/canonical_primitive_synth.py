@@ -2224,6 +2224,36 @@ def extract_handshake_contract(desc_text: str) -> Optional[HandshakeContract]:
     return c
 
 
+def _reserved_names(c: HandshakeContract) -> set:
+    """Every identifier the emitted module already owes to the INPUT."""
+    names = {c.module, c.clock, c.reset}
+    for side in (c.up, c.down):
+        names |= {v for v in side.values() if v}
+    return {n for n in names if n}
+
+
+def _internals(c: HandshakeContract, *wanted: str) -> Dict[str, str]:
+    """Internal signal names that cannot collide with the design's own ports.
+
+    Measured 2026-09-06: a divider whose payload port is named `count` and a
+    stage whose data port is named `held_data` both emitted RTL that DOES NOT
+    COMPILE -- "'count' has already been declared in this scope" -- because the
+    internal names were fixed literals. Ports come from the input, so the
+    internals must give way, deterministically and in the same order every time.
+    """
+    taken = {n.lower() for n in _reserved_names(c)}
+    out: Dict[str, str] = {}
+    for want in wanted:
+        name = want
+        n = 1
+        while name.lower() in taken:
+            n += 1
+            name = f"{want}_{n}"
+        taken.add(name.lower())
+        out[want] = name
+    return out
+
+
 def _rst_edge(c: HandshakeContract) -> str:
     if c.reset_sync:
         return f"@(posedge {c.clock})"
@@ -2247,6 +2277,11 @@ def _emit_elastic_stage(c: HandshakeContract) -> str:
     rng = f"[{w - 1}:0] " if w > 1 else ""
     uv, ur, ud = c.up["valid"], c.up["ready"], c.up["data"]
     dv, dr, dd = c.down["valid"], c.down["ready"], c.down["data"]
+    nm = _internals(c, "held_data", "held_valid", "skid_data", "skid_valid",
+                    "up_fire", "dn_fire")
+    hd, hv, sd, sv = (nm["held_data"], nm["held_valid"],
+                      nm["skid_data"], nm["skid_valid"])
+    uf, df = nm["up_fire"], nm["dn_fire"]
     hdr = (f"// {c.module}: elastic handshake stage composed from the stated\n"
            f"// acceptance contract (issue #2035, F6). Invariants held:\n"
            + "".join(f"//   - {i}\n" for i in HandshakeContract.INVARIANTS))
@@ -2277,37 +2312,37 @@ def _emit_elastic_stage(c: HandshakeContract) -> str:
             f"    output wire {dv},\n"
             f"    input  wire {dr}\n"
             f");\n"
-            f"    reg  {rng}held_data;\n"
-            f"    reg        held_valid;\n"
-            f"    reg  {rng}skid_data;\n"
-            f"    reg        skid_valid;\n\n"
+            f"    reg  {rng}{hd};\n"
+            f"    reg        {hv};\n"
+            f"    reg  {rng}{sd};\n"
+            f"    reg        {sv};\n\n"
             f"    // ACCEPTANCE: a transfer happens iff valid && ready.\n"
-            f"    wire up_fire = {uv} && {ur};\n"
-            f"    wire dn_fire = {dv} && {dr};\n\n"
-            f"    assign {ur} = !skid_valid;\n"
-            f"    assign {dv} = held_valid;\n"
-            f"    assign {dd} = held_data;\n\n"
+            f"    wire {uf} = {uv} && {ur};\n"
+            f"    wire {df} = {dv} && {dr};\n\n"
+            f"    assign {ur} = !{sv};\n"
+            f"    assign {dv} = {hv};\n"
+            f"    assign {dd} = {hd};\n\n"
             f"    always {_rst_edge(c)} begin\n"
             f"        if ({_rst_test(c)}) begin\n"
-            f"            held_valid <= 1'b0;\n"
-            f"            skid_valid <= 1'b0;\n"
-            f"            held_data  <= {w}'d0;\n"
-            f"            skid_data  <= {w}'d0;\n"
-            f"        end else if (dn_fire || !held_valid) begin\n"
-            f"            if (skid_valid) begin\n"
+            f"            {hv} <= 1'b0;\n"
+            f"            {sv} <= 1'b0;\n"
+            f"            {hd}  <= {w}'d0;\n"
+            f"            {sd}  <= {w}'d0;\n"
+            f"        end else if ({df} || !{hv}) begin\n"
+            f"            if ({sv}) begin\n"
             f"                // ORDERING: the older skid entry drains first.\n"
-            f"                held_data  <= skid_data;\n"
-            f"                held_valid <= 1'b1;\n"
-            f"                skid_valid <= 1'b0;\n"
+            f"                {hd}  <= {sd};\n"
+            f"                {hv} <= 1'b1;\n"
+            f"                {sv} <= 1'b0;\n"
             f"            end else begin\n"
-            f"                held_valid <= up_fire;\n"
-            f"                if (up_fire) held_data <= {ud};\n"
+            f"                {hv} <= {uf};\n"
+            f"                if ({uf}) {hd} <= {ud};\n"
             f"            end\n"
-            f"        end else if (up_fire) begin\n"
+            f"        end else if ({uf}) begin\n"
             f"            // Stalled downstream: an ACCEPTED transfer still has a\n"
             f"            // slot, so it is never lost.\n"
-            f"            skid_data  <= {ud};\n"
-            f"            skid_valid <= 1'b1;\n"
+            f"            {sd}  <= {ud};\n"
+            f"            {sv} <= 1'b1;\n"
             f"        end\n"
             f"    end\n"
             f"endmodule\n")
@@ -2324,6 +2359,8 @@ def _emit_ratio_divider(c: HandshakeContract) -> str:
     cw = max(1, (n - 1).bit_length()) if n > 1 else 1
     iv, ov = c.up["valid"], c.down["valid"]
     idat, odat = c.up.get("data"), c.down.get("data")
+    nm = _internals(c, "count", "consume", "emit_now")
+    cnt, consume, emit_now = nm["count"], nm["consume"], nm["emit_now"]
     w = c.width or 1
     rng = f"[{w - 1}:0] " if w > 1 else ""
     ports = [f"    input  wire {c.clock},", f"    input  wire {c.reset},"]
@@ -2346,18 +2383,18 @@ def _emit_ratio_divider(c: HandshakeContract) -> str:
             f"    // Sized from RATIO itself: a counter sized from the ratio\n"
             f"    // stated in the description would silently wrap the moment a\n"
             f"    // caller overrode the parameter it is declared with.\n"
-            f"    reg [$clog2(RATIO + 1) - 1:0] count;\n\n"
+            f"    reg [$clog2(RATIO + 1) - 1:0] {cnt};\n\n"
             f"    // Both happen on the same cycle; neither excludes the other.\n"
-            f"    wire consume  = {iv};\n"
-            f"    wire emit_now = {iv} && (count == RATIO - 1);\n\n"
+            f"    wire {consume}  = {iv};\n"
+            f"    wire {emit_now} = {iv} && ({cnt} == RATIO - 1);\n\n"
             f"    always {_rst_edge(c)} begin\n"
             f"        if ({_rst_test(c)}) begin\n"
-            f"            count <= 0;\n"
+            f"            {cnt} <= 0;\n"
             f"            {ov} <= 1'b0;\n" + body_data_rst +
             f"        end else begin\n"
-            f"            {ov} <= emit_now;\n" + body_data +
-            f"            if (consume)\n"
-            f"                count <= emit_now ? 0 : (count + 1'b1);\n"
+            f"            {ov} <= {emit_now};\n" + body_data +
+            f"            if ({consume})\n"
+            f"                {cnt} <= {emit_now} ? 0 : ({cnt} + 1'b1);\n"
             f"        end\n"
             f"    end\n"
             f"endmodule\n")
@@ -2389,6 +2426,9 @@ def emit_scoreboard_tb(c: HandshakeContract) -> str:
         rng = f"[{w - 1}:0] " if w > 1 else ""
         rst_on = "1'b0" if c.reset_active_low else "1'b1"
         rst_off = "1'b1" if c.reset_active_low else "1'b0"
+        tn = _internals(c, "q", "wr", "rd", "errors", "i")
+        q, wr, rd, errors, i = (tn["q"], tn["wr"], tn["rd"], tn["errors"],
+                                tn["i"])
         return (f"// Scoreboard TB for {c.module}: pushes a stream through random\n"
                 f"// backpressure and checks the contract's four invariants.\n"
                 f"`timescale 1ns/1ps\n"
@@ -2400,61 +2440,61 @@ def emit_scoreboard_tb(c: HandshakeContract) -> str:
                 f"    {c.module} dut (.{c.clock}({c.clock}), .{c.reset}({c.reset}),\n"
                 f"        .{ud}({ud}), .{uv}({uv}), .{ur}({ur}),\n"
                 f"        .{dd}({dd}), .{dv}({dv}), .{dr}({dr}));\n"
-                f"    reg [{w - 1}:0] q [0:1023];\n"
-                f"    integer wr = 0, rd = 0, errors = 0, i;\n"
+                f"    reg [{w - 1}:0] {q} [0:1023];\n"
+                f"    integer {wr} = 0, {rd} = 0, {errors} = 0, {i};\n"
                 f"    always @(posedge {c.clock}) if ({rst_off} == {c.reset}) begin\n"
-                f"        if ({uv} && {ur}) begin q[wr] = {ud}; wr = wr + 1; end\n"
+                f"        if ({uv} && {ur}) begin {q}[{wr}] = {ud}; {wr} = {wr} + 1; end\n"
                 f"        if ({dv} && {dr}) begin\n"
-                f"            if (rd >= wr) begin\n"
-                f"                errors = errors + 1;\n"
+                f"            if ({rd} >= {wr}) begin\n"
+                f"                {errors} = {errors} + 1;\n"
                 f"                $display(\"FAIL: output with no accepted input\");\n"
-                f"            end else if ({dd} !== q[rd]) begin\n"
-                f"                errors = errors + 1;\n"
+                f"            end else if ({dd} !== {q}[{rd}]) begin\n"
+                f"                {errors} = {errors} + 1;\n"
                 f"                $display(\"FAIL: got %0d expected %0d (order)\",\n"
-                f"                         {dd}, q[rd]);\n"
+                f"                         {dd}, {q}[{rd}]);\n"
                 f"            end\n"
-                f"            rd = rd + 1;\n"
+                f"            {rd} = {rd} + 1;\n"
                 f"        end\n"
                 f"    end\n"
                 f"    initial begin\n"
                 f"        {c.reset} = {rst_on}; {uv} = 0; {dr} = 0; {ud} = 0;\n"
                 f"        @(posedge {c.clock}); @(posedge {c.clock});\n"
                 f"        {c.reset} = {rst_off};\n"
-                f"        for (i = 0; i < 200; i = i + 1) begin\n"
+                f"        for ({i} = 0; {i} < 200; {i} = {i} + 1) begin\n"
                 f"            @(negedge {c.clock});\n"
                 f"            {uv} = ($random % 3) != 0;\n"
-                f"            {ud} = i[{w - 1}:0];\n"
+                f"            {ud} = {i}[{w - 1}:0];\n"
                 f"            {dr} = ($random % 2) != 0;\n"
                 f"            @(posedge {c.clock});\n"
                 f"            if ({uv} && {ur}) {ud} = {ud};\n"
                 f"        end\n"
                 f"        @(negedge {c.clock}); {uv} = 0; {dr} = 1;\n"
-                f"        for (i = 0; i < 20; i = i + 1) @(posedge {c.clock});\n"
-                f"        if (wr - rd != 0) begin\n"
-                f"            errors = errors + 1;\n"
-                f"            $display(\"FAIL: %0d accepted transfers lost\", wr - rd);\n"
+                f"        for ({i} = 0; {i} < 20; {i} = {i} + 1) @(posedge {c.clock});\n"
+                f"        if ({wr} - {rd} != 0) begin\n"
+                f"            {errors} = {errors} + 1;\n"
+                f"            $display(\"FAIL: %0d accepted transfers lost\", {wr} - {rd});\n"
                 f"        end\n"
                 f"        // The contract says the producer is stalled only when no\n"
                 f"        // slot is free, so with the consumer always ready every\n"
                 f"        // offered word must be accepted on the cycle it is offered.\n"
                 f"        {dr} = 1;\n"
-                f"        for (i = 0; i < 32; i = i + 1) begin\n"
-                f"            @(negedge {c.clock}); {uv} = 1; {ud} = i[{w - 1}:0];\n"
+                f"        for ({i} = 0; {i} < 32; {i} = {i} + 1) begin\n"
+                f"            @(negedge {c.clock}); {uv} = 1; {ud} = {i}[{w - 1}:0];\n"
                 f"            @(posedge {c.clock});\n"
                 f"            if (!{ur}) begin\n"
-                f"                errors = errors + 1;\n"
-                f"                $display(\"FAIL: stalled at cycle %0d with a free slot\", i);\n"
+                f"                {errors} = {errors} + 1;\n"
+                f"                $display(\"FAIL: stalled at cycle %0d with a free slot\", {i});\n"
                 f"            end\n"
                 f"        end\n"
                 f"        @(negedge {c.clock}); {uv} = 0;\n"
-                f"        for (i = 0; i < 8; i = i + 1) @(posedge {c.clock});\n"
+                f"        for ({i} = 0; {i} < 8; {i} = {i} + 1) @(posedge {c.clock});\n"
                 f"        // A run that observed nothing is not a pass.\n"
-                f"        if (rd < 32) begin\n"
-                f"            errors = errors + 1;\n"
-                f"            $display(\"FAIL: only %0d transfers observed\", rd);\n"
+                f"        if ({rd} < 32) begin\n"
+                f"            {errors} = {errors} + 1;\n"
+                f"            $display(\"FAIL: only %0d transfers observed\", {rd});\n"
                 f"        end\n"
-                f"        if (errors == 0) $display(\"PASS %0d transfers\", rd);\n"
-                f"        else $display(\"ERRORS %0d\", errors);\n"
+                f"        if ({errors} == 0) $display(\"PASS %0d transfers\", {rd});\n"
+                f"        else $display(\"ERRORS %0d\", {errors});\n"
                 f"        $finish;\n"
                 f"    end\n"
                 f"endmodule\n")
@@ -2466,9 +2506,11 @@ def emit_scoreboard_tb(c: HandshakeContract) -> str:
         idat, odat = c.up.get("data"), c.down.get("data")
         w = c.width or 1
         rng = f"[{w - 1}:0] " if w > 1 else ""
+        tn = _internals(c, "n_in", "n_out", "i")
+        n_in, n_out, i = tn["n_in"], tn["n_out"], tn["i"]
         decl = f"    reg {rng}{idat}; wire {rng}{odat};\n" if (idat and odat) else ""
         conn = (f", .{idat}({idat}), .{odat}({odat})" if (idat and odat) else "")
-        drive = f"        {idat} = i[{w - 1}:0];\n" if idat else ""
+        drive = f"        {idat} = {i}[{w - 1}:0];\n" if idat else ""
         return (f"// Ratio/latency TB for {c.module}: counts input events and\n"
                 f"// output events and checks the stated {n}:1 ratio - the check\n"
                 f"// that catches every-other-input being dropped.\n"
@@ -2478,27 +2520,27 @@ def emit_scoreboard_tb(c: HandshakeContract) -> str:
                 f"    reg {c.reset}; reg {iv}; wire {ov};\n" + decl +
                 f"    {c.module} dut (.{c.clock}({c.clock}), .{c.reset}({c.reset}),\n"
                 f"        .{iv}({iv}), .{ov}({ov}){conn});\n"
-                f"    integer n_in = 0, n_out = 0, i;\n"
+                f"    integer {n_in} = 0, {n_out} = 0, {i};\n"
                 f"    always @(posedge {c.clock}) if ({c.reset} == {rst_off}) begin\n"
-                f"        if ({iv}) n_in  = n_in  + 1;\n"
-                f"        if ({ov}) n_out = n_out + 1;\n"
+                f"        if ({iv}) {n_in}  = {n_in}  + 1;\n"
+                f"        if ({ov}) {n_out} = {n_out} + 1;\n"
                 f"    end\n"
                 f"    initial begin\n"
                 f"        {c.reset} = {rst_on}; {iv} = 0;\n"
                 f"        @(posedge {c.clock}); @(posedge {c.clock});\n"
                 f"        {c.reset} = {rst_off};\n"
-                f"        for (i = 0; i < 64; i = i + 1) begin\n"
+                f"        for ({i} = 0; {i} < 64; {i} = {i} + 1) begin\n"
                 f"            @(negedge {c.clock}); {iv} = 1;\n" + drive +
                 f"            @(posedge {c.clock});\n"
                 f"        end\n"
                 f"        @(negedge {c.clock}); {iv} = 0;\n"
-                f"        for (i = 0; i < 4; i = i + 1) @(posedge {c.clock});\n"
-                f"        if (n_in == 0) begin\n"
+                f"        for ({i} = 0; {i} < 4; {i} = {i} + 1) @(posedge {c.clock});\n"
+                f"        if ({n_in} == 0) begin\n"
                 f"            $display(\"FAIL: no input events were driven - vacuous\");\n"
-                f"        end else if (n_out != n_in / {n})\n"
+                f"        end else if ({n_out} != {n_in} / {n})\n"
                 f"            $display(\"FAIL: %0d in %0d out, expected %0d\","
-                f" n_in, n_out, n_in / {n});\n"
-                f"        else $display(\"PASS %0d in %0d out\", n_in, n_out);\n"
+                f" {n_in}, {n_out}, {n_in} / {n});\n"
+                f"        else $display(\"PASS %0d in %0d out\", {n_in}, {n_out});\n"
                 f"        $finish;\n"
                 f"    end\n"
                 f"endmodule\n")
