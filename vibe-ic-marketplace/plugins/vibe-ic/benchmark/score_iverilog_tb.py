@@ -178,6 +178,73 @@ def _power_up_fixed(sample: Path, td: str) -> str:
 # invisibly.
 # ---------------------------------------------------------------------------
 
+# ── which VIEW is this score? (vibe-ic lane bvev2) ───────────────────────────
+_VIEW_SINGLE = "single-shot-first-candidate"
+_VIEW_CONVERGED = "converged-composed"
+
+
+def scored_view(run) -> dict:
+    """Say whether this score describes FIRST candidates or POST-REPAIR ones.
+
+    A pass@1 number and a terminal loop2converge number are different metrics,
+    and until now `pass_at_1.json` carried neither label -- so a converged score
+    and a single-shot score could be, and were, compared as if they were the
+    same measurement.
+
+    The run already knows. Every accepted review is filed under a key built as
+    ``{candidate_origin}-r{round}-{rtl_sha256}`` (benchmark_dispatch), so a
+    first candidate is round 0 with a PROGRAM/AI_BACKUP origin, and anything
+    with a higher round, or an AI_REPAIR origin, was recovered by the repair
+    loop. We read that record and report it.
+
+    Degrades LOUDLY: if the acceptance record is absent or unreadable the view
+    is NOT_MEASURED with the reason named. It is never defaulted to
+    single-shot -- claiming a stricter view than was measured is the exact
+    error this field exists to prevent.
+    """
+    from pathlib import Path as _P
+    rec = _P(str(run)) / "program_first_ai_review_acceptance.json"
+    if not rec.is_file():
+        return {"view": "NOT_MEASURED",
+                "view_basis": f"no acceptance record at {rec}",
+                "recovered_ids": [], "candidate_rounds": {}}
+    try:
+        data = json.loads(rec.read_text(errors="replace"))
+    except (OSError, ValueError) as exc:
+        return {"view": "NOT_MEASURED",
+                "view_basis": f"acceptance record unreadable: {exc}",
+                "recovered_ids": [], "candidate_rounds": {}}
+    rounds, recovered, unparsed = {}, [], []
+    for o in data.get("review_outcomes") or []:
+        if o.get("status") != "ACCEPTED":
+            continue
+        pid = str(o.get("id"))
+        stem = os.path.basename(str(o.get("review_path") or "")).rsplit(".", 1)[0]
+        m = re.match(r"^(?P<origin>[a-z_]+)-r(?P<round>\d+)-", stem)
+        if not m:
+            unparsed.append(pid)
+            continue
+        origin, rnd = m.group("origin"), int(m.group("round"))
+        rounds[pid] = {"origin": origin, "round": rnd}
+        if rnd > 0 or origin == "ai_repair":
+            recovered.append(pid)
+    if unparsed:
+        return {"view": "NOT_MEASURED",
+                "view_basis": ("accepted review key(s) did not carry a parseable "
+                               f"origin-round: {sorted(unparsed)}"),
+                "recovered_ids": sorted(recovered), "candidate_rounds": rounds}
+    if not rounds:
+        return {"view": "NOT_MEASURED",
+                "view_basis": "acceptance record contains no ACCEPTED outcome",
+                "recovered_ids": [], "candidate_rounds": {}}
+    view = _VIEW_CONVERGED if recovered else _VIEW_SINGLE
+    basis = (f"{len(rounds)} accepted candidate(s); "
+             + (f"{len(recovered)} recovered by the repair loop"
+                if recovered else "every one is a round-0 first candidate"))
+    return {"view": view, "view_basis": basis,
+            "recovered_ids": sorted(recovered), "candidate_rounds": rounds}
+
+
 def samples_provenance(samples: Path) -> dict:
     """Digest every candidate RTL file in `samples/`, shape-agnostically.
 
@@ -2491,6 +2558,9 @@ def main():
         # WHAT THIS RATE STANDS ON. Without it a record and a sample set can sit
         # in one directory describing different runs and nothing can tell.
         "scored_samples": provenance,
+        # WHICH METRIC THIS IS. A pass@1 number and a terminal converged number
+        # are not comparable, and this file used to carry neither label.
+        **scored_view(run),
         "results": results,
     }
     if delta is not None:
