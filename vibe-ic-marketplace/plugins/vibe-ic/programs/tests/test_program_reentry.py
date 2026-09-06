@@ -1300,11 +1300,31 @@ def test_the_two_pre_merge_modules_are_gone():
 #
 # `_apply_program_regate` (plus `_regate_project_tree`,
 # `_guard_program_regate_journals` and `_regate_request_field`) declares 66
-# refusal sites.  The tests above reach 38 of them; the 28 below reach the
-# rest, so the census closes at ZERO unreached.  Each was confirmed by
-# DELETING its refusal and observing this module go red -- an unreached
-# refusal is not a bug today, it is a refusal that stops refusing silently on
-# the first change that touches it with a green suite.
+# refusal sites: 62 `refuse()` calls and 4 direct `raise`.  That is the
+# COMPLETE population -- the file defines exactly one `def refuse`, inside the
+# operation itself, so no refusal hides behind a helper the enumerator does not
+# follow.  Each is confirmed by DELETING its refusal and observing this module
+# go red: an unreached refusal is not a bug today, it is a refusal that stops
+# refusing silently on the first change that touches it with a green suite.
+#
+# THE FIGURE THIS COMMENT ORIGINALLY CARRIED WAS WRONG, and how it was wrong is
+# the reason to state it here rather than quietly correct it.  It read "the
+# tests above reach 38 of them; the 28 below reach the rest, so the census
+# closes at ZERO unreached".  That came from a mutation sweep run FOUR-WAY
+# PARALLEL at host load 20-30.  Re-run SEQUENTIALLY at load ~3, six of those
+# REACHED verdicts do not reproduce: the real figure was 60/66, and these six
+# were pinned by nothing --
+#     unsupported project file, expected a JSON object, wrong task schema,
+#     project is not the runner-owned project, Phase-1 provenance drift,
+#     task lacks its AI repair provenance.
+# In a mutation census the usual polarity is inverted: a test failing for ANY
+# reason, load flake included, scores its site REACHED.  Noise therefore does
+# not raise a false alarm, it MANUFACTURES coverage -- and "0 unreached" is the
+# summary everyone downstream reads.  Measure a census SEQUENTIALLY, and re-run
+# a candidate REACHED alone, not only a candidate red.
+#
+# The six are pinned at the end of this module and each is mutation-proven
+# individually.  The census is now 66/66 with 0 unreached, measured that way.
 #
 # Every test here asserts the refusal by its OWN MESSAGE.  This operation
 # checks in a fixed order, so a test that merely asserted "something was
