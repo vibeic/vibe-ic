@@ -271,7 +271,89 @@ def note_worker_progress(event: str) -> None:
 #: never gives up on the DRIVE: the verdict is this gate's job and the
 #: attribution is a side observation, so a busy checkout must cost the second,
 #: never the first.
+#:
+#: SINCE THE CLAIM BECAME READER/WRITER (owner ruling R5) THIS IS ALMOST NEVER
+#: SPENT. A shared claim is granted while only shared holders are present, so
+#: the wait is paid by a WRITER — a gate that declares a write, or a reader
+#: caught writing and re-driven alone. It is kept, at the same number, because
+#: an escalation still has to give up on attribution rather than on the drive.
 _CLAIM_WAIT_S = 600
+
+#: WHAT THE CLAIM COSTS, COUNTED RATHER THAN ARGUED. Every acquisition adds its
+#: queued seconds here and the worker publishes the total in its machine
+#: record, so "the claim no longer queues seven of eight workers" is a number a
+#: reader can check against a run rather than a sentence about a design.
+_CLAIM_CENSUS: Dict[str, float] = {
+    "claims": 0.0, "shared": 0.0, "exclusive": 0.0, "escalations": 0.0,
+    "waited_s": 0.0, "max_wait_s": 0.0, "gave_up": 0.0}
+
+
+def claim_census() -> Dict[str, float]:
+    """A copy of the running claim census. Never the live dict: a caller that
+    mutated it would rewrite the measurement it is reading."""
+    return dict(_CLAIM_CENSUS)
+
+
+def reset_claim_census() -> None:
+    """For a test that measures ONE drive. Production never calls it."""
+    for k in _CLAIM_CENSUS:
+        _CLAIM_CENSUS[k] = 0.0
+
+
+#: A TOKEN THAT DECLARES A WRITE, matched on the gate's OWN declared command.
+#: NOT A LIST OF GATES: a hand list of "the ones that write" is a second
+#: declaration that drifts from the script, and the whole point of reading the
+#: script is that the gate says what it does. These are the flag spellings this
+#: repo's programs use for "and change the tree while you are there"; anything
+#: a gate declares that starts with one of them is a WRITER.
+_WRITE_INTENT_PREFIXES = (
+    "--fix", "--write", "--update", "--regen", "--emit", "--out",
+    "--in-place", "--rewrite", "--apply", "--save", "--set", "--repair",
+    "--bless", "--record", "--refresh")
+
+
+#: THE A/B SEAM FOR THIS RULING'S OWN MEASUREMENT, and the reason it is an
+#: ENV VAR and not an argument: the claim is taken in the WORKER, which is a
+#: separate process this program launches, so a switch the parent flips reaches
+#: nothing. Unset (production) = the reader/writer claim. Set to "1" = every
+#: claim is exclusive, which IS the single-holder claim this ruling replaced,
+#: with every other byte identical. Two arms that differ in one thing is the
+#: only shape in which "the claim no longer queues seven of eight" is a
+#: measurement rather than an assertion.
+_SINGLE_HOLDER_ENV = "VIBEIC_HOSTINDEP_SINGLE_HOLDER_CLAIM"
+
+#: THE NEGATIVE CONTROL FOR THE ESCALATION, and nothing else. Production never
+#: sets it False; `test_the_shipped_default_escalates` pins that. It exists
+#: because the escalation is what keeps `GATE_CORRUPTED_CHECKOUT` reachable
+#: once readers share the checkout, and a mechanism whose removal changes
+#: nothing observable has not been shown to do anything.
+_ESCALATE_ON_SHARED_WRITE = True
+
+
+def declares_a_checkout_write(cmd: str) -> bool:
+    """Does this declared command say it will WRITE? Derived, never listed.
+
+    THE FAIL-SAFE DIRECTION IS EXCLUSIVE. A command this function cannot parse
+    is answered `True`: the cost of a wrong `True` is one gate driven under an
+    exclusive claim it did not need, and the cost of a wrong `False` would be
+    an unattributable write — one is a delay and the other is a lost finding.
+
+    A READER THAT WRITES ANYWAY IS STILL CAUGHT. This function decides which
+    claim to TAKE, not whether the tree is watched: a shared window is still
+    bracketed by two `git status` snapshots, and a delta escalates to the
+    exclusive claim and re-drives the gate alone (see `audit`). MEASURED on
+    `repo_hygiene_gates.sh` at v1.18.40: 0 of 153 declared gates carry a write
+    flag, so on today's script every gate is a declared reader — which is
+    exactly why the escalation, and not this predicate, is what keeps
+    `GATE_CORRUPTED_CHECKOUT` reachable.
+    """
+    if os.environ.get(_SINGLE_HOLDER_ENV, "").strip() == "1":
+        return True
+    try:
+        tokens = shlex.split(cmd)
+    except ValueError:
+        return True
+    return any(t.startswith(_WRITE_INTENT_PREFIXES) for t in tokens)
 
 #: How much queued time earns one line on the progress channel. NOT a heartbeat
 #: cadence dressed up: the event is "this worker is still queued", it is only
@@ -906,7 +988,30 @@ def declared_concurrent_lanes() -> int:
 
 
 class _CheckoutClaim:
-    """An EXCLUSIVE claim on writing to one working checkout — or an honest no.
+    """A READER/WRITER claim on one working checkout — or an honest no.
+
+    THE SINGLE-HOLDER CLAIM WAS THE STRUCTURAL CAUSE (owner ruling R5, from
+    CZS-11/CZS-14). This was an unconditional `LOCK_EX` polled every 0.25 s, and
+    the shipped wiring is `--jobs 8`: seven of eight workers were queued on it
+    AT ALL TIMES, by construction and not by contention. It cost attribution
+    only, never the drive — but a process correctly waiting on a lock is
+    indistinguishable from a wedged one to every generic progress signal, which
+    is what made three healthy workers reapable, and it is why the queued half
+    of a worker's life had to be given its own semantic channel.
+
+    A READER DOES NOT NEED TO EXCLUDE ANOTHER READER. What the bracket needs is
+    that no OTHER WRITER is inside it, so:
+
+      * a gate that DECLARES a write (`declares_a_checkout_write` on its own
+        command) takes `LOCK_EX`, exactly as every gate used to;
+      * every other gate takes `LOCK_SH`, and any number of them hold it at
+        once. While a shared holder is inside, every other holder is a declared
+        reader — that is what the lock means — so "nothing changed in the tree"
+        remains a sound observation about all of them together;
+      * and a reader that writes ANYWAY is still caught and still attributed:
+        the caller escalates to an exclusive claim and re-drives that one gate
+        alone. `_repair_checkout` is never called from a shared window.
+
 
     `_repair_checkout` below attributes a write to a gate and then UNDOES it.
     Both halves are sound only inside a window where this process is the only
@@ -943,14 +1048,21 @@ class _CheckoutClaim:
 
     def __init__(self, repo_root: Path, want: bool,
                  wait_s: float = _CLAIM_WAIT_S,
-                 lock_root: Optional[Path] = None) -> None:
+                 lock_root: Optional[Path] = None,
+                 exclusive: bool = True) -> None:
         self.repo_root = Path(repo_root)
         self.want = bool(want)
         self.wait_s = wait_s
         self.lock_root = (Path(lock_root) if lock_root is not None
                           else Path(tempfile.gettempdir()))
+        #: `True` = this drive may WRITE and takes `LOCK_EX`; `False` = it
+        #: declared itself a reader and takes `LOCK_SH`. DEFAULT True, so a
+        #: call site that has not thought about it keeps the old behaviour.
+        self.exclusive = bool(exclusive)
         self.held = False
         self.why = "not requested"
+        #: Seconds this claim spent QUEUED, whether or not it was granted.
+        self.waited_s = 0.0
         self._fh = None
 
     def _path(self) -> Path:
@@ -976,32 +1088,50 @@ class _CheckoutClaim:
         except OSError as exc:
             self.why = f"the claim file could not be opened: {exc}"
             return self
-        deadline = time.monotonic() + self.wait_s
-        waited = 0.0
+        mode = fcntl.LOCK_EX if self.exclusive else fcntl.LOCK_SH
+        word = "exclusive" if self.exclusive else "shared"
+        started = time.monotonic()
+        deadline = started + self.wait_s
+        since_note = 0.0
         while True:
             try:
-                fcntl.flock(fh.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                fcntl.flock(fh.fileno(), mode | fcntl.LOCK_NB)
             except OSError:
                 if time.monotonic() >= deadline:
                     fh.close()
-                    self.why = (f"another driver held the claim on this "
-                                f"checkout for {self.wait_s:g}s")
+                    self.waited_s = time.monotonic() - started
+                    _CLAIM_CENSUS["claims"] += 1
+                    _CLAIM_CENSUS["gave_up"] += 1
+                    _CLAIM_CENSUS["waited_s"] += self.waited_s
+                    _CLAIM_CENSUS["max_wait_s"] = max(
+                        _CLAIM_CENSUS["max_wait_s"], self.waited_s)
+                    self.why = (f"another driver held a conflicting claim on "
+                                f"this checkout for {self.wait_s:g}s")
                     return self
                 # STILL QUEUED, and that is a real event: this worker is
-                # alive, correctly blocked, and has not stopped. Without it the
-                # seven workers that are not holding the claim look frozen to
-                # any generic progress signal.
-                waited += 0.25
-                if waited >= _CLAIM_NOTE_EVERY_S:
-                    waited = 0.0
+                # alive, correctly blocked, and has not stopped. Without it a
+                # worker that is not holding the claim looks frozen to any
+                # generic progress signal.
+                since_note += 0.25
+                if since_note >= _CLAIM_NOTE_EVERY_S:
+                    since_note = 0.0
                     note_worker_progress(
-                        f"claim: still queued for {self.repo_root.name}")
+                        f"claim: still queued ({word}) for "
+                        f"{self.repo_root.name}")
                 time.sleep(0.25)
                 continue
             self._fh = fh
             self.held = True
             self.why = "held"
-            note_worker_progress(f"claim: held for {self.repo_root.name}")
+            self.waited_s = time.monotonic() - started
+            _CLAIM_CENSUS["claims"] += 1
+            _CLAIM_CENSUS[word] += 1
+            _CLAIM_CENSUS["waited_s"] += self.waited_s
+            _CLAIM_CENSUS["max_wait_s"] = max(_CLAIM_CENSUS["max_wait_s"],
+                                              self.waited_s)
+            note_worker_progress(
+                f"claim: held ({word}) for {self.repo_root.name} after "
+                f"{self.waited_s:.2f}s queued")
             return self
 
     def __exit__(self, *exc) -> bool:
@@ -1066,7 +1196,12 @@ def _repair_checkout(repo_root: Path, before: Dict[str, str],
     an author, so the difference between two snapshots is this drive's ONLY
     while this process was the only one writing to the tree between them.
     `_CheckoutClaim` is what establishes that, and this function must not be
-    called without it — see the two call sites in `audit`.
+    called without an EXCLUSIVE one — see the call sites in `audit`. Since the
+    claim became reader/writer (ruling R5) that is a live rule and not a
+    restatement: a SHARED window has other holders inside it, so a delta seen
+    there is not attributable and must not be repaired from there. Such a
+    window escalates — exclusive claim, tree restored, the gate re-driven
+    ALONE — and it is that second bracket, not the shared one, that calls this.
 
     AND THE REPAIR IS DESTRUCTIVE, which is why the premise is not optional.
     ``git checkout -- <path>`` on a file this process did not write DISCARDS
@@ -1407,7 +1542,25 @@ def audit(repo_root: Path, timeout: int = 600,
             # untouched — and the run names the gates whose checkout-write
             # attribution was skipped instead of filing an author it cannot
             # support.
-            with _CheckoutClaim(repo_root, want=rec_a is None) as claim:
+            # WHICH CLAIM, DERIVED FROM WHAT THE GATE DECLARES (ruling R5).
+            # A declared writer takes the exclusive claim and is attributed
+            # inside it, exactly as every gate used to be. A declared reader
+            # takes the SHARED claim, so eight workers no longer queue seven
+            # deep on one lock — and is still bracketed, because the claim
+            # decides who may be inside the window, never whether the window
+            # is watched.
+            wants_write = declares_a_checkout_write(cmd)
+            escalate: List[str] = []
+            # BOUND BEFORE THE WINDOW, because there are now four ways out of
+            # it: exclusive-and-repaired, shared-and-clean, shared-and-
+            # escalated, and shared-and-escalation-refused. Three of those
+            # never reach `_repair_checkout`, and a name that is bound on only
+            # one path is an UnboundLocalError on the others — which is a
+            # traceback in the middle of a 144-gate probe, not a finding.
+            repaired: List[str] = []
+            refused: List[str] = []
+            with _CheckoutClaim(repo_root, want=rec_a is None,
+                                exclusive=wants_write) as claim:
                 before_dirty = (_checkout_dirty_paths(repo_root)
                                 if claim.held else None)
                 try:
@@ -1424,9 +1577,54 @@ def audit(repo_root: Path, timeout: int = 600,
                 # into the checkout while EXITING CLEANLY corrupts the
                 # comparison just as thoroughly, and would otherwise be
                 # invisible here.
-                repaired, refused = (
-                    _repair_checkout(repo_root, before_dirty, label)
-                    if before_dirty is not None else ([], []))
+                if before_dirty is not None and claim.exclusive:
+                    repaired, refused = _repair_checkout(
+                        repo_root, before_dirty, label)
+                elif before_dirty is not None:
+                    # A SHARED WINDOW MAY NOT REPAIR, AND MAY NOT ACCUSE.
+                    # `_repair_checkout` is destructive and its whole premise is
+                    # that this process was the only writer between the two
+                    # snapshots; inside a shared window that premise belongs to
+                    # nobody, because the other holders are other workers. So
+                    # the delta is only OBSERVED here and settled below.
+                    escalate = sorted(
+                        set(_checkout_dirty_paths(repo_root)) - set(before_dirty))
+            if escalate and _ESCALATE_ON_SHARED_WRITE:
+                # THE ESCALATION. The repo already settled this exact question
+                # one level up — `gatekeeper-land.sh:1556` re-runs a concurrent
+                # window SERIALLY "so the write is attributed to a stage rather
+                # than to an overlap" — and this is the same answer at this
+                # level: take the EXCLUSIVE claim (which waits for every reader
+                # to leave), put the tree back, drive THIS gate alone, and let
+                # the second bracket decide. Reproduced -> the gate is named,
+                # with evidence. Not reproduced -> it is NOT named, and the
+                # overlap is reported instead: naming an innocent gate is the
+                # harm this whole mechanism exists to replace.
+                _CLAIM_CENSUS["escalations"] += 1
+                with _CheckoutClaim(repo_root, want=True,
+                                    exclusive=True) as ex_claim:
+                    if not ex_claim.held:
+                        unattributed.append((label, (
+                            f"{len(escalate)} path(s) changed while this gate "
+                            f"shared the checkout with other readers, and the "
+                            f"exclusive claim needed to attribute the write "
+                            f"could not be taken: {ex_claim.why}")))
+                    else:
+                        _repair_checkout(repo_root, before_dirty or {}, label)
+                        alone_before = _checkout_dirty_paths(repo_root)
+                        try:
+                            _run_gate(argv_a, ca, timeout)
+                        except (OSError, subprocess.SubprocessError):
+                            pass
+                        repaired, refused = _repair_checkout(
+                            repo_root, alone_before, label)
+                        if not (repaired or refused):
+                            unattributed.append((label, (
+                                f"{len(escalate)} path(s) changed while this "
+                                f"gate shared the checkout with other readers "
+                                f"({', '.join(escalate[:4])}); re-driven ALONE "
+                                f"under an exclusive claim it wrote nothing, "
+                                f"so the write is not attributed to it")))
             if claim.want and not claim.held:
                 unattributed.append((label, claim.why))
             if repaired or refused:
@@ -1532,7 +1730,14 @@ def audit(repo_root: Path, timeout: int = 600,
                 # is a real bracket to open here — but only while this process
                 # is the only one writing to the tree.
                 retry_exc: Optional[BaseException] = None
-                with _CheckoutClaim(repo_root, want=True) as retry_claim:
+                # The confirmation drive uses the SAME derivation: a declared
+                # reader shares, a declared writer excludes. It does not carry
+                # the escalation, and that is deliberate — this path exists to
+                # decide whether a DISAGREEMENT reproduces, and a write it saw
+                # here would already have escalated on the first round.
+                with _CheckoutClaim(repo_root, want=True,
+                                    exclusive=declares_a_checkout_write(cmd)
+                                    ) as retry_claim:
                     retry_before = (_checkout_dirty_paths(repo_root)
                                     if retry_claim.held else None)
                     try:
@@ -1542,7 +1747,17 @@ def audit(repo_root: Path, timeout: int = 600,
                         retry_exc = exc
                     retry_repaired, retry_refused = (
                         _repair_checkout(repo_root, retry_before, label)
-                        if retry_before is not None else ([], []))
+                        if (retry_before is not None and retry_claim.exclusive)
+                        else ([], []))
+                if (retry_before is not None and not retry_claim.exclusive
+                        and sorted(set(_checkout_dirty_paths(repo_root))
+                                   - set(retry_before))):
+                    # Same rule as the main window: a shared bracket observes,
+                    # it does not repair and it does not accuse.
+                    unattributed.append((label, (
+                        "the confirmation drive shared the checkout with other "
+                        "readers and the tree changed inside its window, so "
+                        "the write is not attributed to this gate")))
                 if not retry_claim.held:
                     unattributed.append((label, retry_claim.why))
                 if retry_repaired or retry_refused:
@@ -1652,6 +1867,10 @@ def _audit_doc(res: Audit, selected: Optional[List[str]] = None) -> Dict:
         "not_attributed": [{"gate": g, "why": w}
                            for g, w in (res.unattributed or [])],
         "pointer_arm": res.pointer,
+        #: WHAT THE CLAIM COST THIS DRIVE. Published so "the reader/writer
+        #: claim no longer queues seven of eight workers" is a number in the
+        #: record rather than a sentence in a commit message.
+        "claim_wait": claim_census(),
         "scratch_sweep": res.scratch,
         "stimulus": (None if res.dirt is None else {
             "untracked": len(res.dirt.untracked),
@@ -1974,6 +2193,13 @@ def parallel_audit(repo_root: Path, jobs: int,
     seen: List[str] = []
     probed = 0
     verdicts: List[str] = []
+    #: Summed from the workers' own records, never from this process: the
+    #: parent takes no claim, so a number it computed here would describe
+    #: nothing.
+    claim_totals: Dict[str, float] = {
+        "claims": 0.0, "shared": 0.0, "exclusive": 0.0, "escalations": 0.0,
+        "waited_s": 0.0, "max_wait_s": 0.0, "gave_up": 0.0}
+    claim_by_worker: List[Tuple[int, float, int]] = []
     with tempfile.TemporaryDirectory(prefix="hostindep-plan-") as td:
         tmp = Path(td)
         specs = []
@@ -2033,6 +2259,14 @@ def parallel_audit(repo_root: Path, jobs: int,
             for row in doc.get("not_attributed") or []:
                 unattributed.append((str(row.get("gate", "")),
                                      str(row.get("why", ""))))
+            cw = doc.get("claim_wait") or {}
+            for key in claim_totals:
+                claim_totals[key] += float(cw.get(key) or 0.0)
+            claim_totals["max_wait_s"] = max(
+                claim_totals["max_wait_s"], float(cw.get("max_wait_s") or 0.0))
+            if cw:
+                claim_by_worker.append((i, float(cw.get("waited_s") or 0.0),
+                                        int(float(cw.get("claims") or 0))))
             arm = doc.get("pointer_arm")
             if arm is None:
                 pointer_not_probed.append(
@@ -2055,6 +2289,21 @@ def parallel_audit(repo_root: Path, jobs: int,
 
     pointer = {"bound": pointer_bound, "probed": pointer_probed,
                "not_probed": [list(x) for x in pointer_not_probed]}
+    # THE CLAIM CENSUS, PRINTED WHATEVER THE VERDICT. It is not a finding and
+    # it must not colour one: it is the cost of the mechanism, and it is
+    # printed here rather than folded into the Audit because every `Audit(...)`
+    # below is built POSITIONALLY and a tenth field would have to be threaded
+    # through eight of them to say one sentence. A run that queues its workers
+    # again says so on this line, in seconds, per worker.
+    print(f"  checkout claim: {int(claim_totals['claims'])} taken "
+          f"({int(claim_totals['shared'])} shared, "
+          f"{int(claim_totals['exclusive'])} exclusive, "
+          f"{int(claim_totals['escalations'])} escalated, "
+          f"{int(claim_totals['gave_up'])} gave up); "
+          f"queued {claim_totals['waited_s']:.1f}s in total, "
+          f"worst single wait {claim_totals['max_wait_s']:.1f}s")
+    for wi, waited, count in sorted(claim_by_worker):
+        print(f"    worker {wi}: {waited:.1f}s queued over {count} claim(s)")
     duplicates = sorted({label for label in seen if seen.count(label) > 1})
     missing = sorted(set(driveable) - set(seen))
     extra = sorted(set(seen) - set(driveable))
