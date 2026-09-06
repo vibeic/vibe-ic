@@ -3448,7 +3448,9 @@ def __check_program_exit_zero(project: Path, cmd_str: str) -> _ProgramCheckOutco
                  f"perform itself has not happened: {cmd_str}\n{snippet}"),
                 r.returncode)
         if (r.returncode == _WAIVER_EXIT_CODE
-                and _stdout_signals_waiver(r.stdout)):
+                and _stdout_signals_waiver(r.stdout)
+                and not _stdout_signals_token(r.stdout,
+                                              _NON_WAIVABLE_STDOUT_TOKEN)):
             # #651 — PASS_WITH_WAIVERS: the gate passed its threshold but a
             # slot was credited via a waiver. Promote to WAIVED-DEFERRED (not
             # bare PASS) so the WITH_WAIVERS distinction survives the rc-only
@@ -3610,6 +3612,25 @@ _SELF_SKIP_VERDICTS = frozenset({"SKIP", "SKIPPED", "SKIPPED-CONDITION"})
 _WAIVER_HINT_PREFIX = "__WAIVER_HINT__: "
 _WAIVER_EXIT_CODE = 3
 _WAIVER_STDOUT_SENTINEL = "PASS_WITH_WAIVERS"
+
+# #2068 — the one state a waiver cannot cover: the gate's measurement did not
+# FINISH. A gate that exhausted a declared budget and reached NO verdict has
+# decided nothing, and a waiver is a decision to accept a KNOWN outcome — so
+# there is nothing here to accept. A gate says so by printing this token at
+# line-start; when it is present the rc-3 promotion above is REFUSED and the
+# step is recorded as a failing, named, non-waivable state instead.
+#
+# Measured cause (opentitan_aes, lane rbaes2, 8HD-8, image 0.3.46): step 13's
+# LEC ran 8553.69 s against a 7200 s budget, proved 830 of 4072 points,
+# established no base case and produced no counterexample. It was promoted to
+# WAIVED-DEFERRED here and credited by the completion audit, and the IC came
+# out PASS_WITH_WAIVERS on a step that decided nothing.
+#
+# It is a SEPARATE token from the waiver sentinel, not an absence of it,
+# because the refusal has to be something a gate can STATE. The producer that
+# knows its budget ran out is the only party that can name the resource, and a
+# consumer inferring "no verdict" from an rc would be guessing.
+_NON_WAIVABLE_STDOUT_TOKEN = "NOT_MEASURED_NON_WAIVABLE"
 
 # #2014 D1 — AWAITING. Exit code a gate uses to say "pass one of a two-pass
 # protocol completed; pass two is not mine to make". It is a STATE, not a
