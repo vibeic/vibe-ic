@@ -1567,3 +1567,123 @@ def test_the_front_door_still_emits_the_agreeing_shape(tmp_path):
     emitted = sorted((proj / "phase2" / "stage1" / "rtl").glob("*.v"))
     assert [p.name for p in emitted] == ["barrel_shifter.v"]
     assert emitted[0].read_text() == rcs._TEMPLATES["barrel_shifter_right_8"]
+
+
+# ============================================================================
+# COUNTING EVENTS CANNOT SEE A PAYLOAD THAT IS NEVER FORWARDED.
+#
+# Measured 2026-09-06 on v1.17.83, by composing F7 at four ratios and mutating
+# the composed RTL eight ways: five mutants were killed and one was NOT --
+# replacing the WHOLE payload path with a constant (`out_data <= 8'd0`) still
+# reported `PASS 64 in 21 out` at every ratio. The generated ratio TB declared
+# `out_data` and wired it to the DUT and then never compared it, so every
+# payload defect in the family was invisible to the check that ships beside it.
+#
+# (Two other survivors of that sweep were MY mutants and not holes: an
+# unconditional capture where `held_valid` is being cleared anyway, and a
+# `skid_valid && !up_fire` guard that is dead because `up_ready = !skid_valid`.
+# Both are PROVED EQUIVALENT on the observable interface by yosys
+# `miter -equiv` + `sat -seq 24 -set-init-zero -prove-asserts`, with a mutant
+# that genuinely loses a transfer as the control that correctly does NOT prove.)
+#
+# The check does NOT decide WHICH of the N inputs travels. The description
+# states the ratio and states that the payload is forwarded; it does not say
+# whether the first or the last of a group is the one that arrives, and issue
+# #2035 forbids guessing a hidden expected value. So it checks MEMBERSHIP in the
+# group that produced the event -- which is exact at a unit ratio, where the
+# group has one member and nothing is left open.
+# ============================================================================
+
+# `ORACLE_MISSING` is `_sim_tools`' name for the (iverilog, vvp) pair -- the two
+# binaries a test needs to COMPILE AND RUN something. It has nothing to do with
+# reading an oracle output, which the read-only-input rule forbids and which nothing here does:
+# every value compared below is generated from the design INPUT.
+import _sim_tools  # noqa: E402
+
+_NEEDS_VVP = pytest.mark.skipif(
+    bool(_sim_tools.ORACLE_MISSING),
+    reason="this check COMPILES AND RUNS the generated scoreboard; missing on "
+           "this host: " + ", ".join(_sim_tools.ORACLE_MISSING or ("-",)))
+
+
+def _ratio_desc(n):
+    return _F7_DESC.replace("for every 1 input events", f"for every {n} input events")
+
+
+def _simulate(workdir, rtl, tb):
+    """Compile and run one composed design against its own generated scoreboard."""
+    workdir.mkdir(parents=True, exist_ok=True)
+    (workdir / "dut.v").write_text(rtl)
+    (workdir / "tb.v").write_text(tb)
+    c = subprocess.run(["iverilog", "-g2012", "-o", str(workdir / "a.vvp"),
+                        str(workdir / "dut.v"), str(workdir / "tb.v")],
+                       capture_output=True, text=True)
+    assert c.returncode == 0, f"the GENERATED sources must compile:\n{c.stderr}"
+    r = subprocess.run(["vvp", str(workdir / "a.vvp")], capture_output=True,
+                       text=True)
+    return r.stdout + r.stderr
+
+
+@_NEEDS_VVP
+@pytest.mark.parametrize("ratio", [1, 3])
+def test_the_ratio_scoreboard_catches_a_payload_no_input_offered(tmp_path, ratio):
+    """THE KILL, both directions. The correct design must PASS -- a check that
+    reddens on everything is no better than one that reddens on nothing -- and
+    the constant-payload design must go RED."""
+    desc = _ratio_desc(ratio)
+    c = rcs.extract_handshake_contract(desc)
+    rtl = rcs.emit_rtl(rcs.detect_shape(desc), desc)
+    tb = rcs.emit_scoreboard_tb(c)
+
+    good = _simulate(tmp_path / "good", rtl, tb)
+    assert "PASS" in good and "FAIL" not in good, good
+
+    broken = rtl.replace("if (in_valid) out_data <= in_data;",
+                         "out_data <= 8'd0;")
+    assert broken != rtl, "the payload mutation did not apply"
+    bad = _simulate(tmp_path / "bad", broken, tb)
+    assert "FAIL" in bad and "PASS" not in bad, bad
+
+
+@_NEEDS_VVP
+def test_the_ratio_scoreboard_still_passes_every_ratio_it_composes(tmp_path):
+    """The control for the check above: adding a payload check must not cost the
+    family the ratios it already served. Compared by MEMBERSHIP of the ratio set."""
+    served = set()
+    for ratio in (1, 2, 3, 5):
+        desc = _ratio_desc(ratio)
+        c = rcs.extract_handshake_contract(desc)
+        out = _simulate(tmp_path / f"r{ratio}",
+                        rcs.emit_rtl(rcs.detect_shape(desc), desc),
+                        rcs.emit_scoreboard_tb(c))
+        if "PASS" in out and "FAIL" not in out:
+            served.add(ratio)
+    assert served == {1, 2, 3, 5}
+
+
+def test_the_ratio_scoreboard_compares_the_output_payload_at_all(tmp_path):
+    """Runs everywhere, simulator or not. Before this layer `out_data` appeared
+    in the generated TB exactly twice -- a declaration and a port connection --
+    and in no comparison, which is precisely how a payload defect stayed
+    invisible. It must now be READ, and the summary must not be able to print
+    PASS while a payload error stands."""
+    tb = rcs.emit_scoreboard_tb(rcs.extract_handshake_contract(_ratio_desc(3)))
+    assert "out_data ===" in tb
+    assert "grp[" in tb
+    # the PASS line must come AFTER the payload branch, so it cannot be reached
+    # while data errors stand
+    assert tb.index("carried a payload no input offered") < tb.index("$display(\"PASS")
+
+
+def test_the_payload_check_is_absent_when_the_contract_declares_no_data_port():
+    """Fail-closed the other way: a ratio contract with no data ports must not
+    grow a check for a payload that does not exist."""
+    desc = _ratio_desc(2)
+    for line in (" in_data [7:0]: The 8-bit payload accompanying an input event.\n",
+                 " out_data [7:0]: The forwarded payload.\n"):
+        desc = desc.replace(line, "")
+    c = rcs.extract_handshake_contract(desc)
+    if c is None or c.kind != "ratio_divider":
+        pytest.skip("the trimmed description no longer states a ratio contract")
+    tb = rcs.emit_scoreboard_tb(c)
+    assert "grp[" not in tb and "===" not in tb
