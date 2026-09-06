@@ -249,6 +249,82 @@ def test_try_svrf_native_drc_stop_is_blocked_not_excused_and_says_which(
     assert res.extras.get("stopped_as") == expect
 
 
+@pytest.mark.parametrize("rc,expect", [
+    (R._RC_STALLED, "STALLED"),
+    (R._RC_ABORTED, "ABORTED"),
+    (124, "CEILING"),
+])
+def test_a_killed_open_source_drc_is_blocked_not_a_claimed_violation(
+        tmp_path, monkeypatch, rc, expect):
+    """ARM 1. `step_drc`'s KLayout branch booked a stall/ceiling as FAIL — a
+    violation the deck never found. Its SIBLING branch had this corrected by
+    vibe-ic#925; this one was left behind, so one step gave two different words
+    for one event."""
+    # REACH THE BRANCH. `step_drc` returns SKIP long before the deck runs when
+    # the GDS is absent, and ENV_UNAVAILABLE when klayout is not on the
+    # container PATH. A fixture that does not get past those is a test of the
+    # guards, not of the kill path — it would have passed on the unfixed
+    # program for the wrong reason.
+    gds = R._pl.pnr_dir(tmp_path) / "spm.gds"
+    gds.parent.mkdir(parents=True, exist_ok=True)
+    gds.write_text("gds")
+    monkeypatch.setattr(R, "_tool_in_path", lambda c, t: True)
+    monkeypatch.setattr(R, "_klayout_deck_exec",
+                        lambda *a, **k: (rc, "", ""))
+    seen = {}
+    monkeypatch.setattr(R, "_docker_timeout_isolate",
+                        lambda paths: seen.update(isolated=list(paths)))
+    res = R.step_drc(
+        tmp_path, "spm",
+        R.PdkConfig(name="sky130A", liberty="x", tech_lef="x", cell_lef="x",
+                    cell_gds=None, site="unit", drc_deck="/x/deck.lydrc",
+                    calibre_drc=None),
+        "vibeic-eda")
+    assert res.status == "BLOCKED", (
+        f"a DRC that never finished looking is booked {res.status!r} — that "
+        f"asserts a violation the deck never found")
+    assert res.extras.get("stopped_as") == expect
+    assert seen.get("isolated"), (
+        "the partial report was left at the canonical path, where the comment "
+        "above the branch says it 'could parse as 0 violations = false "
+        "DRC-clean'")
+
+
+def test_blocked_is_not_a_softening_the_run_verdict_is_identical():
+    """ARM 2a. The whole safety of ARM 1 rests on this: `_aggregate_verdict`
+    must treat BLOCKED exactly as FAIL, so the change moves a STEP's word and
+    not a RUN's verdict. Asked of the real function, never recomputed."""
+    mk = lambda st: R.StepResult("drc", st, 0.0, "")      # noqa: E731
+    ok = R.StepResult("pnr", "PASS", 0.0, "")
+    assert R._aggregate_verdict([ok, mk("BLOCKED")]) == "FAIL"
+    assert R._aggregate_verdict([ok, mk("FAIL")]) == "FAIL"
+    assert R._aggregate_verdict([ok, mk("PASS")]) != "FAIL"
+
+
+def test_a_drc_that_found_violations_is_still_a_fail(tmp_path, monkeypatch):
+    """ARM 2b. The guard that stops the fix being satisfied by relabelling
+    every failure. A deck that RAN and found violations must keep FAIL — the
+    distinction being restored is 'could not look' vs 'looked and found', and a
+    fix that erased the second would be strictly worse than the defect."""
+    rpt = tmp_path / "phase3" / "reports" / "drc.rpt"
+    rpt.parent.mkdir(parents=True, exist_ok=True)
+    rpt.write_text("<items><item/><item/></items>")
+    gds = R._pl.pnr_dir(tmp_path) / "spm.gds"
+    gds.parent.mkdir(parents=True, exist_ok=True)
+    gds.write_text("gds")
+    monkeypatch.setattr(R, "_tool_in_path", lambda c, t: True)
+    monkeypatch.setattr(R, "_klayout_deck_exec", lambda *a, **k: (0, "", ""))
+    res = R.step_drc(
+        tmp_path, "spm",
+        R.PdkConfig(name="sky130A", liberty="x", tech_lef="x", cell_lef="x",
+                    cell_gds=None, site="unit", drc_deck="/x/deck.lydrc",
+                    calibre_drc=None),
+        "vibeic-eda")
+    assert res.status != "BLOCKED", (
+        "a deck that RAN and found violations was relabelled as 'could not "
+        "look' — that is the weakening this arm exists to refuse")
+
+
 def test_the_drc_budget_is_a_no_output_predicate_not_a_wall_clock_ceiling(
         tmp_path, monkeypatch):
     """THE ASSERTION HERE WAS CORRECTED, NOT RELAXED.

@@ -13412,10 +13412,24 @@ def _autoemit_chip_top_wrapper(project: Path, rtl_dir: Path,
 
 
 def _phase2_synth_timeout_s() -> int:
-    """Phase-2 generic-synth wall cap. Default 300 s (historic behavior);
-    VIBEIC_PHASE2_SYNTH_TIMEOUT_S overrides for very large (>1M-cell)
-    designs whose technology-independent flatten+ABC pass legitimately
-    needs more — a machine/scale property, chip-AGNOSTIC."""
+    """Phase-2 generic-synth IDLE TOLERANCE. Default 300 s;
+    VIBEIC_PHASE2_SYNTH_TIMEOUT_S overrides it.
+
+    IT IS NOT A WALL CAP, AND THE WORD MATTERED. This number is handed to
+    `_run`, which stopped treating its `timeout` argument as a deadline: it is
+    the caller's declared tolerance for the job showing NO forward progress at
+    all — no output, no CPU, no I/O anywhere in its process tree — and a
+    synth that is still moving now runs to completion however long that
+    legitimately takes. Read as a deadline, 300 s was a number people
+    reasonably wanted to RAISE for a large design; read as an idle tolerance
+    it already covers one, because a flatten+ABC pass on a 1M-cell netlist is
+    slow, not silent. `_run`'s own note records the measurement behind that:
+    a fixed 300 s "killed flow_compliance mid-run on large SoCs (155k+ filler
+    projects legitimately need 8-9 min)".
+
+    Kept as a knob because "how long may THIS job be completely still" is a
+    question about the job, and an operator may know their tool better than we
+    do. chip-AGNOSTIC — a machine/scale property, no design literal."""
     try:
         v = int(os.environ.get("VIBEIC_PHASE2_SYNTH_TIMEOUT_S", "300"))
         return v if v > 0 else 300

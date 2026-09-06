@@ -501,6 +501,8 @@ def run_docker_supervised(container: str, cmd: str, marker: str, *,
                           log_path: Optional[Path] = None,
                           telemetry_path: Optional[Path] = None,
                           telemetry_stage_probe: Optional[Callable[[str], str]] = None,
+                          telemetry_metric_probe: Optional[
+                              Callable[[str], Optional[Dict[str, Any]]]] = None,
                           telemetry_context: Optional[Dict[str, Any]] = None,
                           stall_grace_s: float = DEFAULT_STALL_GRACE_S,
                           poll_s: float = DEFAULT_POLL_S,
@@ -566,19 +568,53 @@ def run_docker_supervised(container: str, cmd: str, marker: str, *,
 
     stage_log_offset = 0
     stage_evidence = ""
+    metric_evidence = ""
+
+    def _read_added() -> str:
+        nonlocal stage_log_offset
+        added, stage_log_offset = _read_log_since(log_path, stage_log_offset)
+        return added
+
+    def _observe(added: str) -> None:
+        """Fan the newly-appended log bytes out to BOTH accumulators.
+
+        They keep DIFFERENT lines and neither can be derived from the other:
+        the stage probe keeps only `executing ` lines (a tiny, bounded rung
+        history), and a metric line such as Yosys's
+        `Proved 1374 previously unproven $equiv cells.` is not one of them.
+        Reading the log once and splitting here is what stops the second probe
+        needing a second offset -- two offsets over one growing file is how a
+        reader ends up with two disagreeing views of the same bytes."""
+        nonlocal stage_evidence, metric_evidence
+        if telemetry_stage_probe is not None:
+            stage_evidence += "\n".join(
+                line for line in added.splitlines()
+                if "executing " in line.lower()) + "\n"
+            stage_evidence = stage_evidence[-65536:]
+        if telemetry_metric_probe is not None:
+            metric_evidence += added
+            metric_evidence = metric_evidence[-65536:]
 
     def _current_stage() -> Optional[str]:
-        nonlocal stage_log_offset, stage_evidence
+        if telemetry_stage_probe is None and telemetry_metric_probe is None:
+            return None
+        _observe(_read_added())
         if telemetry_stage_probe is None:
             return None
-        added, stage_log_offset = _read_log_since(log_path, stage_log_offset)
-        # Yosys's pass-entry lines are enough to recover the current rung and
-        # stay tiny even when a SAT pass emits a very large detailed log.
-        stage_evidence += "\n".join(
-            line for line in added.splitlines()
-            if "executing " in line.lower()) + "\n"
-        stage_evidence = stage_evidence[-65536:]
         return telemetry_stage_probe(stage_evidence)
+
+    def _current_metrics() -> Dict[str, Any]:
+        """The subject's OWN measure of progress, for the RECORD.
+
+        Never a supervision input: the stall decision stays on the generic
+        signals, so a domain probe that goes wrong can neither kill a healthy
+        job nor keep a hung one alive. A probe that raises is 'no reading'."""
+        if telemetry_metric_probe is None:
+            return {}
+        try:
+            return dict(telemetry_metric_probe(metric_evidence) or {})
+        except Exception:  # nosec - instrumentation must never fail a run
+            return {}
 
     def _cpu_probe(_proc):
         if telemetry_path is None:
@@ -601,6 +637,7 @@ def run_docker_supervised(container: str, cmd: str, marker: str, *,
                 "threads": None, "process_count": None, "root_pid": None,
                 "current_pass": _current_stage(),
                 "resource_probe_degraded": True,
+                **_current_metrics(),
             }
             telemetry["samples"].append(sample)
             telemetry["latest"] = sample
@@ -616,6 +653,12 @@ def run_docker_supervised(container: str, cmd: str, marker: str, *,
             **metrics,
             "peak_rss_kib": telemetry["peak_rss_kib"],
             "current_pass": _current_stage(),
+            # The SUBJECT'S OWN measure of how far it has got. Without it a
+            # reader of a killed run can see that it was busy and never that it
+            # was CONVERGING -- measured on a real ceiling kill whose sidecar
+            # proved 99.99 % CPU to the last look and could not say the proof
+            # was 1374 points in.
+            **_current_metrics(),
         }
         telemetry["samples"].append(sample)
         telemetry["latest"] = sample
@@ -645,6 +688,9 @@ def run_docker_supervised(container: str, cmd: str, marker: str, *,
             telemetry["elapsed_sec"] = round(
                 prior_elapsed_s + attempt_elapsed_s, 3)
             telemetry["current_pass"] = _current_stage()
+            # HOW FAR IT GOT, on the terminal record and not only in the sample
+            # stream, so a reader does not have to reconstruct it from 239 rows.
+            telemetry.update(_current_metrics())
             if telemetry.get("attempts"):
                 telemetry["attempts"][-1].update({
                     "returncode": res.rc,

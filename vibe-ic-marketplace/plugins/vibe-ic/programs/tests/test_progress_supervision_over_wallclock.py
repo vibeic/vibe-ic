@@ -175,6 +175,130 @@ def test_a_stalled_job_is_stopped_and_recorded_as_stalled_not_as_a_timeout():
     assert rc not in (124, 137), "a stall must never be reported as a timeout"
 
 
+_PARTIAL_LEC_LOG = (
+    "Yosys 0.68\n"
+    "9.2. Executing EQUIV_SIMPLE pass.\n"
+    "Proved 1374 previously unproven $equiv cells.\n"
+    "9.3. Executing EQUIV_INDUCT pass.\n"
+    "Found 386 unproven $equiv cells in module equiv:\n")
+
+
+class _StalledProc:
+    returncode = None
+    stdout = _PARTIAL_LEC_LOG
+    stderr = ""
+
+
+def test_a_stalled_lec_is_marked_so_it_cannot_read_as_a_non_equivalence(
+        monkeypatch):
+    """THE DIRECTION THE BRIEF NAMES: a stall must reach the report AS a stall.
+
+    `run_yosys_equiv` re-attaches `_STALL_MARKER` when the supervisor returns
+    RC_STALLED. Without it the partial log — which carries a real
+    `Proved N` and a real `Found M unproven` — parses as a completed miter with
+    unproven points, i.e. a FAIL that says "the RTL and gate netlist may
+    genuinely differ". The designs were never compared.
+    """
+    proc = _StalledProc()
+    proc.returncode = lec_run._pr.RC_STALLED
+    monkeypatch.setattr(lec_run, "_docker",
+                        lambda *a, **k: proc)
+    launched, out = lec_run.run_yosys_equiv(
+        "vibeic-eda", "/work/equiv.ys", timeout=7200)
+    assert launched
+    assert lec_run._STALL_MARKER in out, (
+        "a progress-stall kill reached the parser unmarked")
+    assert lec_run._TIMEOUT_MARKER not in out, (
+        "a stall must not be relabelled as a wall-clock budget kill — they are "
+        "different findings and the report must say which")
+
+    verdict = lec_run.parse_equiv_output(out).get("verdict")
+    assert verdict != "FAIL", (
+        f"a proof that STOPPED MOVING was booked as a non-equivalence "
+        f"({verdict}); nothing was compared")
+    assert verdict in ("INCONCLUSIVE", "SKIPPED-CONDITION"), verdict
+
+
+def test_the_stall_marker_is_the_only_thing_stopping_a_false_non_equivalence():
+    """The mutation, as an assertion rather than a hand edit: the SAME log
+    without the marker is a hard FAIL. If this ever stops being true the test
+    above has gone vacuous — it would pass on a log that was never marked."""
+    assert lec_run.parse_equiv_output(_PARTIAL_LEC_LOG)["verdict"] == "FAIL"
+    assert lec_run.parse_equiv_output(
+        _PARTIAL_LEC_LOG + lec_run._STALL_MARKER)["verdict"] == "INCONCLUSIVE"
+
+
+def test_rc_stalled_is_wired_into_the_producers_stall_set(monkeypatch):
+    """And the wiring the two tests above rest on, pinned directly: drop
+    RC_STALLED from `_PROGRESS_STALL_RCS` and the marker is never attached."""
+    assert lec_run._pr.RC_STALLED in lec_run._PROGRESS_STALL_RCS
+    monkeypatch.setattr(lec_run, "_PROGRESS_STALL_RCS", ())
+    proc = _StalledProc()
+    proc.returncode = lec_run._pr.RC_STALLED
+    monkeypatch.setattr(lec_run, "_docker", lambda *a, **k: proc)
+    _launched, out = lec_run.run_yosys_equiv(
+        "vibeic-eda", "/work/equiv.ys", timeout=7200)
+    assert lec_run._STALL_MARKER not in out
+    assert lec_run.parse_equiv_output(out)["verdict"] == "FAIL", (
+        "the mutation must re-redden: with RC_STALLED out of the stall set a "
+        "stalled proof is booked as a non-equivalence")
+
+
+def test_a_stalled_lec_says_how_far_the_proof_had_got(monkeypatch):
+    """MEASURED ON A REAL KILL, 2026-09-06, an open benchmark IC on 8HD-8.
+
+    The sidecar of a LEC killed by a wall-clock ceiling recorded
+    `status: "hard_ceiling"`, `returncode: 124`, and 239 samples whose
+    `cpu_seconds` tracked `elapsed_sec` at 99.99 % right up to the last look —
+    so the artefact PROVED the job was working at a full core. What it could
+    not say is how far it had got: `proved`, `unproven`, `points` and
+    `equiv_status` appear NOWHERE in the file. A reader could see that it was
+    busy; never that it was converging.
+
+    "It stopped making forward progress" is not a claim a reader can size
+    without the proof's own count. A job stopped at 0 points and one stopped at
+    1374 of 1760 are different findings with different remedies.
+    """
+    proc = _StalledProc()
+    proc.returncode = lec_run._pr.RC_STALLED
+    proc.stdout = _PARTIAL_LEC_LOG
+    monkeypatch.setattr(lec_run, "_docker", lambda *a, **k: proc)
+    _launched, out = lec_run.run_yosys_equiv(
+        "vibeic-eda", "/work/equiv.ys", timeout=7200)
+    assert lec_run._STALL_MARKER in out
+    assert "1374 proved" in out, (
+        "the stall record does not say where the proof had reached:\n"
+        + out[-300:])
+    assert "386 still unproven" in out
+
+
+def test_a_stall_with_no_count_yet_says_so_rather_than_reporting_zero(
+        monkeypatch):
+    """The other direction, and the one that matters more: a proof killed
+    during `equiv_make` has emitted NO count, and the record must say that
+    rather than supply a 0 that reads as "proved nothing"."""
+    proc = _StalledProc()
+    proc.returncode = lec_run._pr.RC_STALLED
+    proc.stdout = "Yosys 0.68\n9.1. Executing EQUIV_MAKE pass.\n"
+    monkeypatch.setattr(lec_run, "_docker", lambda *a, **k: proc)
+    _launched, out = lec_run.run_yosys_equiv(
+        "vibeic-eda", "/work/equiv.ys", timeout=7200)
+    assert "no proved-point count had been emitted yet" in out
+    assert "0 proved" not in out, (
+        "an absent measurement was reported as a measured zero")
+
+
+def test_the_proved_point_probe_is_evidence_only_never_a_verdict():
+    """It must not be able to move a verdict. `parse_equiv_output` stays the
+    sole authority; this probe only describes."""
+    log = _PARTIAL_LEC_LOG + lec_run._STALL_MARKER
+    assert lec_run.lec_proved_points_from_output(log) == {
+        "proved": 1374, "unproven": 386}
+    # the same log, with and without the probe having been consulted, parses
+    # to the same verdict — the probe has no path into the classifier
+    assert lec_run.parse_equiv_output(log)["verdict"] == "INCONCLUSIVE"
+
+
 def test_a_stall_carries_the_evidence_a_reader_needs_to_check_it():
     """"Killed as hung" is an assertion until it says what was watched and when
     the job was last seen moving. Both must be on the record."""

@@ -332,6 +332,50 @@ def lec_stage_from_output(raw: str) -> str:
     return "setup"
 
 
+def lec_proved_points_from_output(raw: str) -> Optional[Dict[str, int]]:
+    """The proof's OWN measure of how far it has got: proved / unproven points.
+
+    WHY THIS EXISTS (measured 2026-09-06, an open benchmark IC on 8HD-8). A
+    post-layout LEC was killed by a wall-clock ceiling at 7195 s of a 7200 s
+    budget. Its telemetry sidecar recorded `status: "hard_ceiling"`,
+    `returncode: 124`, and 239 samples whose `cpu_seconds` tracked `elapsed_sec`
+    at 99.99 % to the very last look -- so the artefact PROVED the job was
+    working at a full core when it died. What the artefact could NOT say is how
+    far the proof had got, because nothing in it records a proved-point count:
+    `proved`, `unproven`, `points` and `equiv_status` appear nowhere in the
+    file. A reader could see that it was busy, never that it was CONVERGING.
+
+    That gap is the difference between "we killed something busy" and "we killed
+    something 1374 points into a proof". This parser closes it, and it is
+    EVIDENCE ONLY -- it never reaches a verdict. `parse_equiv_output` remains
+    the sole authority on PASS/FAIL/INCONCLUSIVE.
+
+    Returns None when the log carries no count yet (the honest answer during
+    `equiv_make`), never a fabricated zero. PURE.
+
+    It REUSES the parser's own patterns (`_FINAL_RE`, `_PROVED_SIMPLE_RE`,
+    `_INDUCT_FOUND_RE`), which are defined below this function and resolve at
+    call time -- deliberately, so this probe sits beside its sibling
+    `lec_stage_from_output` and can never drift into a SECOND spelling of how a
+    Yosys count is read.
+    """
+    if not raw:
+        return None
+    out: Dict[str, int] = {}
+    m = list(_FINAL_RE.finditer(raw))
+    if m:
+        out["proved"] = int(m[-1].group(1))
+        out["unproven"] = int(m[-1].group(2))
+        return out
+    p = list(_PROVED_SIMPLE_RE.finditer(raw))
+    if p:
+        out["proved"] = int(p[-1].group(1))
+    u = list(_INDUCT_FOUND_RE.finditer(raw))
+    if u:
+        out["unproven"] = int(u[-1].group(1))
+    return out or None
+
+
 def attach_telemetry(report: Dict, sidecar: Path, project: Path) -> Dict:
     """Hash-bind the exact telemetry bytes into the final verdict report."""
     try:
@@ -1671,6 +1715,13 @@ def _docker(container: str, cmd: str, timeout: int = 120,
             log_path=log_path,
             telemetry_path=telemetry_path,
             telemetry_stage_probe=lec_stage_from_output,
+            # HOW FAR THE PROOF GOT, into the sidecar. Measured 2026-09-06 on a
+            # real ceiling kill: the sidecar recorded status "hard_ceiling",
+            # rc 124, and 239 samples whose cpu_seconds tracked elapsed at
+            # 99.99 % to the last look -- so it proved the job was WORKING and
+            # could not say it was CONVERGING, because no proved-point count
+            # was anywhere in the file. Evidence only; never a verdict input.
+            telemetry_metric_probe=lec_proved_points_from_output,
             telemetry_context=telemetry_context,
             # THE ATTEMPT BUDGET IS NOT A CEILING, and handing it to
             # `hard_ceiling_s` was a wall-clock deadline wearing the watchdog's
@@ -2415,7 +2466,17 @@ def run_yosys_equiv(container: str, ys_path_in_container: str,
             f"governs ATTEMPT ADMISSION, not runtime, so no wall-clock "
             f"duration is claimed here.")
     elif launched and getattr(r, "returncode", 0) in _PROGRESS_STALL_RCS:
-        out = out.rstrip("\n") + f"\n{_STALL_MARKER}"
+        # SAY HOW FAR IT GOT. "It stopped making forward progress" is a claim a
+        # reader cannot size without the proof's own count -- a job stopped at 0
+        # points and one stopped at 1374 of 1760 are different findings and the
+        # remedy differs too. Read from THIS run's log, so it is a measurement
+        # and not a default; absent when the log carries no count yet.
+        _pts = lec_proved_points_from_output(out)
+        out = out.rstrip("\n") + f"\n{_STALL_MARKER}" + (
+            f" — last measured position: {_pts.get('proved')} proved"
+            + (f", {_pts.get('unproven')} still unproven" 
+               if _pts.get("unproven") is not None else "")
+            if _pts else " — no proved-point count had been emitted yet")
     return launched, out
 
 

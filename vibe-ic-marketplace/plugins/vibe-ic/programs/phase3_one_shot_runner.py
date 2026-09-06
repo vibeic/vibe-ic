@@ -33756,10 +33756,38 @@ def step_drc(project: Path, top: str, pdk: PdkConfig,
         gds, rpt, physical_top, pdk, container)
     # v1.3.47 — a stall/ceiling kill must NOT be scored from a partial or stale
     # report (a half-written RDB could parse as 0 violations = false DRC-clean).
-    if rc in (_RC_STALLED, 124):
-        return StepResult("drc", "FAIL", time.time() - t0,
-                          f"DRC killed as hung/ceiling (rc={rc}) — no sign-off "
-                          f"from a partial report; log_tail={(out+err)[-800:]}")
+    if rc in (_RC_STALLED, _RC_ABORTED, 124):
+        # BLOCKED, NOT FAIL — the same correction vibe-ic#925 made to this
+        # step's OTHER branch (`_try_svrf_native_drc`), which this one did not
+        # receive. The deck never finished looking at the layout, so nothing is
+        # known about it; `FAIL` asserts a violation the deck never found.
+        # BLOCKED is this runner's own word for that state and it is NOT a
+        # softening: `_aggregate_verdict` reads
+        # `any(s.status in ("FAIL", "BLOCKED"))` and returns "FAIL" for either,
+        # so the run-level verdict is byte-identical. Only the step's own word
+        # changes, from a claim about the design to a statement about the check.
+        #
+        # #570 — and isolate the partial report, which this branch also did not
+        # do. The comment above already says a half-written RDB "could parse as
+        # 0 violations = false DRC-clean"; leaving it at the canonical path
+        # meant the next reader could not tell it from a finished one.
+        _docker_timeout_isolate([rpt])
+        _why = {_RC_ABORTED: "was stopped as going nowhere",
+                _RC_STALLED: "stopped making forward progress",
+                124: "hit the pathological-loop backstop"}.get(
+                    rc, f"was stopped (rc={rc})")
+        return StepResult(
+            "drc", "BLOCKED", time.time() - t0,
+            f"open-source DRC {_why} (rc={rc}) — no sign-off from a partial "
+            f"report, and the partial report (if any) was isolated to "
+            f"*.timeout.partial. NOTHING is known about the layout's DRC "
+            f"state, so this step is BLOCKED (never green) and still owes an "
+            f"answer; it is NOT a proven violation. "
+            f"log_tail={(out+err)[-800:]}",
+            extras={"finding": "DRC_RUN_INCOMPLETE",
+                    "stopped_as": {_RC_ABORTED: "ABORTED",
+                                   _RC_STALLED: "STALLED",
+                                   124: "CEILING"}.get(rc, f"rc={rc}")})
     if not rpt.is_file():
         return StepResult("drc", "FAIL", time.time() - t0,
                           f"rc={rc} log_tail={(out+err)[-1000:]}")
