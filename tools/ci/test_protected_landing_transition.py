@@ -8,6 +8,7 @@ import shutil
 import subprocess
 import sys
 from pathlib import Path
+from unittest import mock
 
 import pytest
 
@@ -50,14 +51,114 @@ _RUNNER = {
 }
 
 
+def _load_transition(env: dict[str, str]):
+    """`protected_landing_transition` imported under an EXACT environment.
+
+    The repository half of the pin is read at import time, so an assertion about
+    how it is read has to import the module again under the environment it is
+    asserting about. Nothing here is stubbed: it is the real file, executed.
+    """
+    with mock.patch.dict(os.environ, env, clear=True):
+        spec = importlib.util.spec_from_file_location(
+            "_tested_protected_landing_transition",
+            _HERE / "protected_landing_transition.py")
+        assert spec and spec.loader
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[spec.name] = module
+        spec.loader.exec_module(module)
+    return module
+
+
+#: A repository that is syntactically a `host:port` registry and reaches nothing.
+#: `.invalid` is reserved by RFC 2606 and it is NOT an address, which is the
+#: point: the value under test is deployment CONFIGURATION and no real one may
+#: ever be written into this tree.
+_CONFIGURED_REPO = "registry.invalid:5000/vibeic-eda"
+
+
 def test_manifest_and_runtime_use_one_exact_base_owned_image() -> None:
+    """Every copy of the pin is ONE image, and which of them is COMMITTED is
+    itself one of the facts.
+
+    The previous form asserted a single three-way string equality across the
+    committed manifest, this file's constant and the runner module's. That held
+    only while no host configured a repository. It is kept here where it is
+    still exactly true — between the two COMMITTED copies — and the binding it
+    could not express is added: the runtime copy is byte-for-byte the reference
+    the runner will start, and all four share the one digest that is the image's
+    identity.
+    """
     runner_spec = importlib.util.spec_from_file_location(
         "_tested_hermetic_runner_profile", _HERE / "hermetic_candidate_runner.py")
     assert runner_spec and runner_spec.loader
     runner = importlib.util.module_from_spec(runner_spec)
     sys.modules[runner_spec.name] = runner
     runner_spec.loader.exec_module(runner)
-    assert P.RUNNER_IMAGE == runner.IMAGE == _RUNNER["image"]
+    # The two COMMITTED copies, byte for byte, as before.
+    assert P.RUNNER_IMAGE == _RUNNER["image"]
+    # ...and they are the CANONICAL reference — never a configured address.
+    assert P.RUNNER_IMAGE == (
+        f"{P.RUNNER_IMAGE_REPO_DEFAULT}@{P.RUNNER_IMAGE_DIGEST}")
+    # The runtime copy is exactly what `hermetic_candidate_runner` will start.
+    assert P.RUNNER_IMAGE_RUNTIME == runner.IMAGE
+    # ...and every copy is the SAME IMAGE, because the digest is the identity.
+    for ref in (P.RUNNER_IMAGE, P.RUNNER_IMAGE_RUNTIME, runner.IMAGE,
+                _RUNNER["image"]):
+        assert ref.endswith("@" + P.RUNNER_IMAGE_DIGEST), ref
+
+
+def test_the_shipped_register_still_parses_when_a_repository_is_configured():
+    """MEASURED RED on e55c93d36e (v1.18.44), 8hd-9, in that base's pinned image.
+
+    `VIBEIC_EDA_IMAGE_REPO` is exported on every host of this fleet, and
+    `tools/ci/run_suite_in_eda_image.sh` forwards it into the container as of
+    460a0ffc37. With it set, the pin resolved to the configured registry while
+    the register this repository SHIPS records the default one, and
+    `_runner_profile` refused the repository's own register — 29 tests red for
+    that reason alone, none of them about the property they were written to
+    guard.
+
+    Both directions are asserted in the one test: unconfigured and configured
+    must reach the SAME verdict about the SAME shipped bytes, because the bytes
+    are the same bytes.
+    """
+    live = json.loads(
+        (_HERE / "protected_landing_transition.json").read_text(
+            encoding="utf-8"))
+    for env in ({}, {P.RUNNER_IMAGE_REPO_ENV: _CONFIGURED_REPO}):
+        module = _load_transition(env)
+        # The shipped register parses. `parse_manifest` reaches
+        # `_runner_profile`, so this is the refusal under test and not a proxy.
+        # The oid width is READ OFF the register rather than restated, so this
+        # test does not carry a second opinion about the object format.
+        module.parse_manifest(live, len(live["current"]["files"][0]["blob_oid"]))
+        # The committed reference does not move with the environment...
+        assert module.RUNNER_IMAGE == (
+            f"{module.RUNNER_IMAGE_REPO_DEFAULT}@{module.RUNNER_IMAGE_DIGEST}")
+        assert _CONFIGURED_REPO not in module.RUNNER_IMAGE
+        # ...and the runtime reference does, keeping the same identity.
+        expected_repo = env.get(module.RUNNER_IMAGE_REPO_ENV,
+                                module.RUNNER_IMAGE_REPO_DEFAULT)
+        assert module.RUNNER_IMAGE_RUNTIME == (
+            f"{expected_repo}@{module.RUNNER_IMAGE_DIGEST}")
+
+
+def test_the_authored_register_never_carries_a_deployment_address():
+    """`protected_landing_manifest_author.render` writes `derived_runner()`.
+
+    Under the previous single pin, authoring a manifest on a host that
+    configures a registry would have written that host's ADDRESS into
+    `tools/ci/protected_landing_transition.json` — a deployment address
+    committed to the tree, and a register no differently-configured host could
+    then read.
+    """
+    module = _load_transition({P.RUNNER_IMAGE_REPO_ENV: _CONFIGURED_REPO})
+    runner = module.derived_runner()
+    assert runner["image"] == module.RUNNER_IMAGE
+    assert _CONFIGURED_REPO not in runner["image"]
+    # It is also a runner THIS verifier accepts, which is the only reason the
+    # author is allowed to emit it at all.
+    assert module._runner_profile(runner) == runner
 
 
 def _git(repo: Path, *args: str, input_bytes: bytes | None = None) -> str:

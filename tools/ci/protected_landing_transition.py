@@ -102,13 +102,60 @@ IMAGE_RE = re.compile(
     r"(?:[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?(?::[0-9]{1,5})?/)?"
     r"[a-z0-9._-]+(?:/[a-z0-9._-]+)*@sha256:[0-9a-f]{64}\Z")
 
-#: The runner image, resolved exactly the way `hermetic_candidate_runner` does:
-#: pinned digest, configurable repository, one env, same default.  The digest is
-#: the identity; `test_manifest_and_runtime_use_one_exact_base_owned_image`
-#: enforces that this string, the runner module's, and the manifest's are one.
-RUNNER_IMAGE = (
-    (os.environ.get("VIBEIC_EDA_IMAGE_REPO") or "ghcr.io/vibeic/vibeic-eda")
-    + "@sha256:8c5694abdf5c269c1d9def5368704e0c4b51c869d1d9c9380e123e07657fe9eb"
+#: THE PINNED RUNNER, AS THE THREE FACTS IT ACTUALLY IS.
+#:
+#: The digest is the IDENTITY.  The repository is DEPLOYMENT CONFIGURATION, read
+#: from one env with one default.  Those two compose two different references and
+#: this file needs BOTH of them, for two different readers:
+#:
+#:   * `RUNNER_IMAGE` — what a MANIFEST records, and what `_runner_profile`
+#:     requires it to record.  A manifest is a COMMITTED artefact, so the only
+#:     reference it can carry is the CANONICAL one: a deployment address in the
+#:     tree is precisely what this repository forbids, and `derived_runner()`
+#:     below is what `protected_landing_manifest_author.render` writes into the
+#:     register.  NEVER env-resolved.
+#:   * `RUNNER_IMAGE_RUNTIME` — what THIS deployment will actually start,
+#:     resolved exactly the way `hermetic_candidate_runner` resolves it.
+#:
+#: THEY WERE ONE NAME, AND THE VERIFIER THEN REFUSED ITS OWN REGISTER.  MEASURED
+#: 2026-09-07 on 8hd-9 (lane czjudgekill), on e55c93d36e (v1.18.44) and in that
+#: base's own pinned image (vibeic-eda 0.3.47):
+#: with `VIBEIC_EDA_IMAGE_REPO` exported — the documented configuration on every
+#: host of this fleet, and a value `tools/ci/run_suite_in_eda_image.sh` began
+#: forwarding INTO the container at 460a0ffc37 — this constant resolved to
+#: `<configured-registry>@sha256:8c569…` while the manifest this repository
+#: ships records `ghcr.io/vibeic/vibeic-eda@sha256:8c569…`, and `_runner_profile`
+#: refused it: "manifest.runner.image is not the BASE-owned runner image".
+#: Over this repository's own `tools/` corpus, one aggregate session each way:
+#: 95 red with a repository configured, 1 red without it.  FORTY of those 95 are
+#: this refusal and nothing else — 28 in `test_protected_landing_transition.py`,
+#: 10 in `test_protected_landing_rename.py`, 1 in
+#: `test_protected_landing_manifest_author.py`, and
+#: `tools/test_gatekeeper_land_lanes.py::test_the_judge_refuses_the_log_a_killed
+#: _stage_leaves`, whose killed-stage guard was intact and whose judge still
+#: named the killed gate, but whose exit status went 1 -> 2 because a SECOND,
+#: unrelated refusal fired beside it.  (The other 55 are a DIFFERENT cause in a
+#: different file and are untouched here: the hermetic-runner fixtures answer a
+#: fixed image inspection that binds the DEFAULT repository's digest.)
+#: A verifier that refuses its own committed register on every configured host
+#: has not become stricter — it has become unmeasurable, which is the one
+#: failure this file exists to prevent.
+#:
+#: `test_manifest_and_runtime_use_one_exact_base_owned_image` binds every copy —
+#: this one, the runtime one, the runner module's, and the manifest's — to ONE
+#: digest, and binds the two COMMITTED ones byte for byte.
+RUNNER_IMAGE_DIGEST = (
+    "sha256:8c5694abdf5c269c1d9def5368704e0c4b51c869d1d9c9380e123e07657fe9eb")
+#: The one env, and the one default. Same names `hermetic_candidate_runner` uses.
+RUNNER_IMAGE_REPO_ENV = "VIBEIC_EDA_IMAGE_REPO"
+RUNNER_IMAGE_REPO_DEFAULT = "ghcr.io/vibeic/vibeic-eda"
+#: THE COMMITTED reference — what a register carries and what this file accepts.
+RUNNER_IMAGE = f"{RUNNER_IMAGE_REPO_DEFAULT}@{RUNNER_IMAGE_DIGEST}"
+#: THE RUNTIME reference — same digest, whatever repository this host is told to
+#: serve those bytes from.
+RUNNER_IMAGE_RUNTIME = (
+    (os.environ.get(RUNNER_IMAGE_REPO_ENV) or RUNNER_IMAGE_REPO_DEFAULT)
+    + "@" + RUNNER_IMAGE_DIGEST
 )
 
 #: THE RUNNER PROFILE, ONCE.  `_runner_profile` VALIDATES against this and
@@ -430,6 +477,11 @@ def _runner_profile(value: Any, what: str = "manifest.runner"
     image = row["image"]
     if not isinstance(image, str) or IMAGE_RE.fullmatch(image) is None:
         raise Refusal(f"{what}.image is not an immutable digest reference")
+    # AGAINST THE COMMITTED REFERENCE, never the runtime one: a register is a
+    # committed artefact and can only carry `RUNNER_IMAGE`. The identity it
+    # pins — the digest — is the same digest `RUNNER_IMAGE_RUNTIME` starts, and
+    # that binding is asserted where all four copies are in one place rather
+    # than re-derived here.
     if image != RUNNER_IMAGE:
         raise Refusal(f"{what}.image is not the BASE-owned runner image")
     expected = RUNNER_PROFILE_EXPECTED
