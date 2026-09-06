@@ -281,7 +281,8 @@ def _collect_clauses(run_dir: Path) -> tuple[list[dict], list[dict]]:
 #
 # WHY PRESENCE IS NOT ENOUGH.  This gate used to ask two questions of a
 # spec-declared artifact: does the path exist, and is `st_size > 0`.  `{}` is
-# three bytes.  A declaration file containing `{}` therefore satisfied a clause
+# two bytes on disk, three with the trailing newline an emitter would add;
+# either way it clears `> 0`.  A declaration file containing `{}` satisfied a clause
 # that says the plugin MUST DECLARE these choices, while declaring none of
 # them — and the program that CAN tell the difference has existed the whole
 # time.  `spec_declaration_emit --verify`'s own help text says so verbatim:
@@ -387,7 +388,13 @@ def _check_artifact(run_dir: Path, artifact_path: str) -> dict:
     asked of it — there is nothing to read."""
     resolved = run_dir / artifact_path
     exists = resolved.exists()
-    non_empty = exists and resolved.is_file() and resolved.stat().st_size > 0
+    # UNCHANGED from the presence-only version, deliberately: adding an
+    # `is_file()` here would relabel a DIRECTORY artifact (st_size 4096, so it
+    # passed before) as FAIL_EMPTY, which is both a new refusal and a wrong
+    # word for it. A directory falls through to the substance test and, having
+    # no contract and no `.json` suffix, comes back NOT_MEASURED — i.e. it
+    # keeps exactly the verdict it had.
+    non_empty = exists and resolved.stat().st_size > 0
     out = {
         "artifact_path": artifact_path,
         "resolved": str(resolved),
