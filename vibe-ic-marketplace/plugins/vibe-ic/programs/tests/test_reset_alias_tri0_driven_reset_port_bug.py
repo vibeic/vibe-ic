@@ -32,6 +32,8 @@ import pytest
 
 import sys
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from _hostpaths import require_docker_cli  # noqa: E402
 import _progress_run as _pr  # noqa: E402
 
 SCRIPT = Path(__file__).resolve().parents[1] / "reset_clock_variant_alias.py"
@@ -213,8 +215,7 @@ def test_sv2v_with_dyosys_strips_tri_from_wrapper(tmp_path):
     """Docker-gated behavior pin: sv2v resolving the wrapper WITH -DYOSYS
     emits NO tri0/tri1 token (yosys-safe); WITHOUT it the tri survives
     (the defect shape) — stay-effective both ways."""
-    if not shutil.which("docker"):
-        pytest.skip("docker not available")
+    require_docker_cli("test_sv2v_with_dyosys_strips_tri_from_wrapper")
     import os
     container = os.environ.get("VIBEIC_IVERILOG13_CONTAINER", "vibeic-eda")
     probe = subprocess.run(["docker", "exec", container, "sh", "-c",
