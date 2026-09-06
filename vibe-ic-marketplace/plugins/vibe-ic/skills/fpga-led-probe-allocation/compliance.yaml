@@ -1,6 +1,22 @@
 # Testability level (v0.50 hybrid strategy)
 testability: full_markdown
 
+# #2048, same class as skills/rtl-review/compliance.yaml. Every cross-check
+# below names a specific audit or artefact obligation, and every one of them
+# selected `postcheck_pass_only` — a rule that reads a single RTL
+# `// Post-checks:` header naming rtl_hygiene_lint and fsm_error_invariant,
+# which is evidence from none of the audits named here. The deliverable of
+# this skill is a document, so that header can only be typed into it.
+# Declaring the output type makes the misbinding a reported configuration
+# error instead of a silent string match, so these IDs can no longer be
+# discharged by pasting a header nobody measured. Both are repointed to the
+# auditor they name. `fpga_pullup_lint` writes a fixed
+# `fpga_pullup_lint.json`, so its receipt contract is registered;
+# `fpga_async_input_synchronizer_check` writes to a caller-chosen
+# `--json PATH`, so it has none yet and the check says so rather than
+# guessing a filename.
+output_type: report
+
 # Compliance spec for skill 'fpga-led-probe-allocation' (v0.99)
 skill: fpga-led-probe-allocation
 
@@ -29,7 +45,12 @@ requirements:
 cross_checks:
   - id: X_fpga_async_input_synchronizer_check
     description: "Cross-reference with input synchroniser gate"
-    rule: postcheck_pass_only
+    rule: audit_receipt_evidence
+    auditor: fpga_async_input_synchronizer_check
   - id: X_fpga_pullup_lint
     description: "Cross-reference with pull-up lint"
-    rule: postcheck_pass_only
+    rule: audit_receipt_evidence
+    auditor: fpga_pullup_lint
+  - id: X_text_only_skill
+    description: "fpga-led-probe-allocation emits a probe-allocation document, not RTL."
+    rule: text_only_report

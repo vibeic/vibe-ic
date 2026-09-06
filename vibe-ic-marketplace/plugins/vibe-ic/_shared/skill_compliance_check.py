@@ -38,24 +38,72 @@ Implemented cross-check rules:
   score_formula           — counts + closed-form score must be consistent
   row_count_vs_counts     — number of rows in each findings table matches Counts line
   crc_gen_if_declared     — if Phase-1 JSON declares CRC sub-block, generator must be invoked
-  postcheck_pass_only     — RTL header must record post-checks = PASS
+  postcheck_pass_only     — RTL header must record post-checks = PASS.
+                            LEGITIMATE ONLY on `output_type: rtl` (see below)
   text_only_report        — prose-report skill: must NOT claim an RTL
                             post-check verdict it never measured
+  audit_receipt_evidence  — a named audit's own measured receipt must exist,
+                            name the right subject, and carry a PASS verdict
+    (takes `auditor: <program name>`, optional `receipt_dir:`, optional
+     `subject: {key: value}`)
   no_forbidden_patterns   — reject certain regex matches
     (takes `patterns: [list]`)
   pattern_requires_tool   — if a phrase appears, a tool invocation must also appear
     (takes `if_phrase_matches: regex`, `tool_must_match: regex`)
 
+OUTPUT TYPE — why two rules that look contradictory are not (#2048):
+
+    output_type: rtl | report     # optional top-level field
+
+`postcheck_pass_only` DEMANDS a `// Post-checks:` header; `text_only_report`
+REJECTS the same header. Read as free-floating rules they contradict each
+other, and the contradiction is what let a defect live: three named audit
+checks in `skills/rtl-review/compliance.yaml` selected `postcheck_pass_only`
+on a Markdown review report, so the report PASSED all three by carrying a
+header nobody had measured and FAILED all three without it — while inspecting
+evidence from none of the three audits it named.
+
+The two rules stop contradicting each other because each is bound to an
+output type, and the types are disjoint:
+
+  * `output_type: rtl`    — the deliverable is RTL source that carries the
+                            header. `postcheck_pass_only` is the contract.
+  * `output_type: report` — the deliverable is a document. The header cannot
+                            legitimately appear (`text_only_report`), and an
+                            obligation to run a named audit is discharged by
+                            that audit's OWN receipt (`audit_receipt_evidence`),
+                            never by a string in the prose.
+
+Selecting `postcheck_pass_only` under `output_type: report` is a configuration
+error and is reported as one, so the misbinding cannot silently return to
+checking a string. An ABSENT `output_type` is undeclared, not assumed: the
+rules behave exactly as they did before, because guessing a skill's output
+type is the same class of unmeasured claim this field exists to stop.
+
+EVIDENCE STATES — a check that did not run is reported, never counted as a
+pass. `audit_receipt_evidence` reports three, mirroring ruling F2036-H in
+`docs/decisions/2026-09-06-rtl-review-producer-json.md`:
+
+  PASS          receipt present, is this auditor's report, examined something,
+                subject matches, verdict PASS.        (INFO finding, carries
+                the receipt path + sha256 so the verdict is traceable)
+  FAIL          receipt present and says FAIL, or names a different subject.
+  NOT_MEASURED  no receipt, unreadable receipt, a receipt belonging to another
+                producer, a SKIP, or a receipt that examined nothing. Named,
+                and BLOCKING — absence of evidence is not evidence of a pass.
+
 EXIT CODES: 0 = PASS, 1 = FAIL, 2 = ERROR
 """
 from __future__ import annotations
 import argparse
+import inspect
 import json
 import re
 import sys
 from dataclasses import dataclass, asdict, field
+from hashlib import sha256
 from pathlib import Path
-from typing import List, Dict, Any, Callable
+from typing import List, Dict, Any, Callable, Optional
 
 
 # ---------------------------------------------------------------------------
@@ -231,6 +279,67 @@ class Finding:
     severity: str   # FAIL / WARN / INFO
     description: str
     detail: str = ''
+    # Evidence state for rules that resolve a measured receipt (#2048).
+    # '' for pattern findings and configuration errors; otherwise exactly one
+    # of PASS / FAIL / NOT_MEASURED. `severity` stays the blocking axis:
+    # NOT_MEASURED is severity FAIL because a check that did not run is
+    # reported, never counted as a pass.
+    state: str = ''
+
+
+OUTPUT_TYPE_RTL = 'rtl'
+OUTPUT_TYPE_REPORT = 'report'
+_KNOWN_OUTPUT_TYPES = (OUTPUT_TYPE_RTL, OUTPUT_TYPE_REPORT)
+
+STATE_PASS = 'PASS'
+STATE_FAIL = 'FAIL'
+STATE_NOT_MEASURED = 'NOT_MEASURED'
+
+
+@dataclass
+class CheckContext:
+    """What a cross-check may know about the artefact beyond its text.
+
+    Every cross-check rule takes this as an OPTIONAL third argument. Rules
+    that only read text ignore it, and calling any rule with two arguments
+    keeps working — which is deliberate: the two-argument shape is how the
+    #2048 reproducer probes the handlers directly, and it must keep
+    reproducing rather than raise a TypeError that hides the behaviour.
+
+    `output_path` is the audited document. It is the anchor for the default
+    receipt search roots, so a receipt is looked for beside the report that
+    claims it rather than anywhere on the filesystem.
+    """
+    output_type: str = ''
+    output_path: Optional[Path] = None
+    evidence_dirs: List[Path] = field(default_factory=list)
+
+    def receipt_roots(self, extra: Optional[str] = None) -> List[Path]:
+        """Ordered, de-duplicated directories to look for a receipt in.
+
+        Explicit beats derived: a `receipt_dir` on the check itself, then
+        `--evidence-dir` from the caller, then the report's own directory and
+        the conventional `reports/` beside it. Nothing outside this list is
+        searched — a receipt found by wandering the filesystem is not
+        evidence that THIS report is backed.
+        """
+        roots: List[Path] = []
+        base = self.output_path.parent if self.output_path else None
+        if extra:
+            e = Path(extra)
+            roots.append(e if e.is_absolute() else ((base / e) if base else e))
+        roots.extend(self.evidence_dirs)
+        if base is not None:
+            roots.extend([base, base / 'reports', base.parent / 'reports'])
+        seen: List[Path] = []
+        for r in roots:
+            try:
+                rr = r.resolve()
+            except OSError:
+                continue
+            if rr not in seen:
+                seen.append(rr)
+        return seen
 
 
 @dataclass
@@ -321,14 +430,36 @@ def _cc_crc_gen_if_declared(spec: Dict[str, Any], text: str) -> List[Finding]:
         '')]
 
 
-def _cc_postcheck_pass_only(spec: Dict[str, Any], text: str) -> List[Finding]:
+def _cc_postcheck_pass_only(spec: Dict[str, Any], text: str,
+                            ctx: Optional[CheckContext] = None
+                            ) -> List[Finding]:
     """Strictly require an `// Post-checks:` header reporting PASS for both
     rtl_hygiene_lint and fsm_error_invariant.
 
     Earlier versions silently returned [] when the header was absent, which
     let agents bypass the check by simply omitting the comment. The fix
     treats a missing header as the failure state it always should have been.
+
+    BOUND TO `output_type: rtl` (#2048). This rule and `text_only_report` are
+    exact opposites about the same string — one demands the header, the other
+    rejects it — and they are both correct, because they apply to different
+    deliverables. RTL source can carry a header that two tools really wrote;
+    a Markdown document cannot, so on a document the only way to satisfy this
+    rule is to type the header, which measures nothing. Under a declared
+    `output_type: report` the misbinding is reported as the configuration
+    error it is, rather than quietly checking a string. An UNDECLARED
+    output_type keeps the historical behaviour: the field is a statement, and
+    its absence is not one.
     """
+    if ctx is not None and ctx.output_type == OUTPUT_TYPE_REPORT:
+        return [Finding(
+            f"{spec.get('id', 'postcheck')}_rule_misbound", 'FAIL',
+            'Rule `postcheck_pass_only` is selected on a spec declaring '
+            '`output_type: report`, where the RTL `// Post-checks:` header '
+            'it looks for can only ever be typed, not measured.',
+            f"{spec.get('description', '')} — bind this check to the "
+            'evidence it names: `rule: audit_receipt_evidence` with an '
+            '`auditor:`, or move it to a spec whose `output_type` is rtl.')]
     m = re.search(
         r'//\s*Post-checks:\s*rtl_hygiene_lint=(PASS|FAIL),\s*'
         r'fsm_error_invariant=(PASS|FAIL)', text)
@@ -346,6 +477,329 @@ def _cc_postcheck_pass_only(spec: Dict[str, Any], text: str) -> List[Finding]:
         spec.get('id', 'postcheck_not_passed'), 'FAIL',
         'Post-checks did not PASS before shipping',
         f'Header says: lint={m.group(1)}, fei={m.group(2)}')]
+
+
+# ---------------------------------------------------------------------------
+# #2048 — audit receipts. A named audit obligation is discharged by that
+# audit's OWN report artefact, not by a sentence in the report that claims it.
+#
+# Each entry below is READ OFF the producing program's emission, not invented
+# here; the `emitted_by` line names the source line so a drifting contract is
+# a diff, not a mystery. A producer NOT in this table is reported as unknown —
+# never assumed to have passed, and never guessed at from a filename alone.
+# ---------------------------------------------------------------------------
+@dataclass(frozen=True)
+class ReceiptSpec:
+    auditor: str
+    filename: str
+    emitted_by: str
+    # Is this payload THIS producer's report? Guards against a receipt that
+    # merely has the right filename (§1 of the producer-contract decision:
+    # "the payload is not this producer's report at all" is NO EVIDENCE).
+    identify: Callable[[Dict[str, Any]], bool]
+    # The producer's own verdict, in the producer's own terms.
+    verdict: Callable[[Dict[str, Any]], str]
+    # What the audit was about, so a stale receipt from another subject is
+    # not read as backing for this one.
+    subject: Callable[[Dict[str, Any]], Dict[str, Any]]
+    # How many things the audit actually looked at. Zero is not a clean
+    # audit; it is an audit that examined nothing.
+    examined: Callable[[Dict[str, Any]], int]
+
+
+def _d(obj: Any, *keys: str, default: Any = None) -> Any:
+    """Nested .get that never raises on a wrong-shaped payload."""
+    cur = obj
+    for k in keys:
+        if not isinstance(cur, dict):
+            return default
+        cur = cur.get(k)
+    return default if cur is None else cur
+
+
+AUDIT_RECEIPTS: Dict[str, ReceiptSpec] = {
+    # programs/interface_encoding_audit.py — main() writes
+    #   out_dir/'encoding_audit_report.json' with {'summary': {...},
+    #   'interfaces': [...]} and exits 1 when mismatches > 0.
+    'interface_encoding_audit': ReceiptSpec(
+        auditor='interface_encoding_audit',
+        filename='encoding_audit_report.json',
+        emitted_by="programs/interface_encoding_audit.py::main",
+        identify=lambda d: (isinstance(d.get('summary'), dict)
+                            and 'mismatches' in d['summary']
+                            and isinstance(d.get('interfaces'), list)),
+        verdict=lambda d: (STATE_FAIL if _d(d, 'summary', 'mismatches',
+                                            default=0) else STATE_PASS),
+        subject=lambda d: {
+            'top_module': _d(d, 'summary', 'top_module', default=''),
+            'rtl_dir': _d(d, 'summary', 'rtl_dir', default=''),
+        },
+        examined=lambda d: int(_d(d, 'summary', 'total_interfaces',
+                                  default=0) or 0),
+    ),
+    # programs/crc_bitorder_check.py — main() writes
+    #   out_dir/'crc_bitorder_report.json' = asdict(AuditReport). Its
+    #   summary_status is PASS | WARN | INFO, and INFO is the "no CRC loading
+    #   pattern found" case, which build_report() reaches with zero findings —
+    #   examined nothing, so it is NOT_MEASURED here rather than a pass.
+    'crc_bitorder_check': ReceiptSpec(
+        auditor='crc_bitorder_check',
+        filename='crc_bitorder_report.json',
+        emitted_by="programs/crc_bitorder_check.py::main",
+        identify=lambda d: ('crc_signal' in d
+                            and isinstance(d.get('files_scanned'), list)
+                            and 'summary_status' in d),
+        verdict=lambda d: (STATE_PASS if d.get('summary_status') == 'PASS'
+                           else STATE_FAIL),
+        subject=lambda d: {
+            'crc_signal': d.get('crc_signal', ''),
+            'files_scanned': sorted(d.get('files_scanned') or []),
+        },
+        examined=lambda d: len(d.get('findings') or []),
+    ),
+    # programs/phy_counter_audit.py — main() writes
+    #   out_dir/'phy_counter_audit_report.json' = generate_report(), which
+    #   stamps {'tool': 'phy_counter_audit', 'summary': {'verdict': ...}}.
+    'phy_counter_audit': ReceiptSpec(
+        auditor='phy_counter_audit',
+        filename='phy_counter_audit_report.json',
+        emitted_by="programs/phy_counter_audit.py::generate_report",
+        identify=lambda d: (d.get('tool') == 'phy_counter_audit'
+                            and isinstance(d.get('summary'), dict)
+                            and 'verdict' in d['summary']),
+        verdict=lambda d: (STATE_PASS
+                           if _d(d, 'summary', 'verdict') == 'PASS'
+                           else STATE_FAIL),
+        subject=lambda d: {
+            'files': sorted({f['file'] for f in (d.get('findings') or [])
+                             if isinstance(f, dict) and 'file' in f}),
+        },
+        examined=lambda d: int(_d(d, 'summary', 'total_counters_analyzed',
+                                  default=0) or 0),
+    ),
+    # programs/mcp_execution_verify.py — main() writes
+    #   out_dir/'mcp_execution_verify_report.json' with
+    #   {'program': 'mcp_execution_verify', 'summary': {'verdict': ...}}.
+    #   Its verdict is already three-state; INCONCLUSIVE is not a pass and is
+    #   not a finding about the design either, so it lands as NOT_MEASURED.
+    'mcp_execution_verify': ReceiptSpec(
+        auditor='mcp_execution_verify',
+        filename='mcp_execution_verify_report.json',
+        emitted_by="programs/mcp_execution_verify.py::main",
+        identify=lambda d: (d.get('program') == 'mcp_execution_verify'
+                            and isinstance(d.get('summary'), dict)
+                            and 'verdict' in d['summary']),
+        verdict=lambda d: (STATE_PASS
+                           if _d(d, 'summary', 'verdict') == 'PASS'
+                           else STATE_FAIL),
+        subject=lambda d: {
+            'steps': sorted({r['step'] for r in (d.get('steps') or [])
+                             if isinstance(r, dict) and 'step' in r}),
+        },
+        examined=lambda d: (0 if _d(d, 'summary', 'verdict') == 'INCONCLUSIVE'
+                            else int(_d(d, 'summary', 'total_required',
+                                        default=0) or 0)),
+    ),
+    # programs/fpga_pullup_lint.py — both write sites emit
+    #   out_dir/'fpga_pullup_lint.json' = asdict(Result). The early-return
+    #   site at "no inout ports in top module" emits status PASS with an EMPTY
+    #   inout_signals, which is a pass over an empty population; counting the
+    #   signals it actually examined is what separates the two.
+    'fpga_pullup_lint': ReceiptSpec(
+        auditor='fpga_pullup_lint',
+        filename='fpga_pullup_lint.json',
+        emitted_by="programs/fpga_pullup_lint.py::main",
+        identify=lambda d: ('status' in d
+                            and isinstance(d.get('findings'), list)
+                            and isinstance(d.get('inout_signals'), list)),
+        verdict=lambda d: (STATE_PASS if d.get('status') == 'PASS'
+                           else STATE_FAIL),
+        subject=lambda d: {'inout_signals': sorted(d.get('inout_signals') or [])},
+        examined=lambda d: len(d.get('inout_signals') or []),
+    ),
+}
+
+# Auditors that a compliance.yaml legitimately names but whose receipt
+# contract cannot be registered yet, with the measured reason. They are NOT
+# given a guessed entry above: `audit_receipt_evidence` reports an
+# unregistered auditor as a blocking configuration error that says what is
+# missing, which is the honest state. Inventing a receipt filename here would
+# be the same unmeasured claim this module exists to remove.
+#
+#   gds_size_check                       --json PATH, caller-chosen; no
+#   synth_netlist_check                    filename convention exists in this
+#   fpga_async_input_synchronizer_check    tree to read off.
+#   tapeout_signoff_check                22-line shim over `signoff_audit
+#                                          --mode tapeout`; the receipt is
+#                                          whatever the caller's --json says.
+UNREGISTERED_AUDITORS = (
+    'gds_size_check',
+    'synth_netlist_check',
+    'fpga_async_input_synchronizer_check',
+    'tapeout_signoff_check',
+)
+
+
+def _receipt_digest(path: Path) -> str:
+    return sha256(path.read_bytes()).hexdigest()
+
+
+def _cc_audit_receipt_evidence(spec: Dict[str, Any], text: str,
+                               ctx: Optional[CheckContext] = None
+                               ) -> List[Finding]:
+    """Bind ONE named audit obligation to that audit's OWN measured receipt.
+
+    THIS RULE NEVER READS THE `// Post-checks:` HEADER, and never reads the
+    report text at all. That is the whole point of it. Before #2048 the three
+    named audits in `skills/rtl-review/compliance.yaml` were bound to
+    `postcheck_pass_only`, so the sentence
+
+        // Post-checks: rtl_hygiene_lint=PASS, fsm_error_invariant=PASS
+
+    pasted into a Markdown review made `X_interface_encoding_audit`,
+    `X_crc_bitorder_check` and `X_phy_counter_audit` all PASS — three audits
+    discharged by a string naming two OTHER tools, with no receipt from any of
+    the three anywhere on disk. Removing the string made all three FAIL. A
+    check that passes on a header nobody measured, and fails on the absence of
+    that header, is checking the header.
+
+    The obligation is now discharged the only way it can be: the audit's
+    report artefact is located, confirmed to be that producer's report,
+    confirmed to have examined something, its subject is compared against what
+    the check declares it should be, and its own verdict is read.
+
+    Returns exactly one finding, always, so the state is visible in the JSON
+    report whichever way it went:
+
+      * PASS         -> severity INFO, state PASS. Non-blocking, and it
+                        carries the receipt path and sha256 so a reader can
+                        check which bytes the verdict came from.
+      * FAIL         -> severity FAIL, state FAIL.
+      * NOT_MEASURED -> severity FAIL, state NOT_MEASURED, naming the auditor,
+                        the receipt filename and every directory searched.
+                        Blocking, because absence of evidence is not a pass.
+
+    A configuration error (no `auditor:`, or an auditor with no known receipt
+    contract) is severity FAIL with an empty state: nothing was measured and
+    nothing CAN be measured until the yaml is fixed. It is never a pass.
+    """
+    cid = spec.get('id', 'audit_receipt_evidence')
+    desc = spec.get('description', '')
+    auditor = spec.get('auditor')
+
+    if not auditor:
+        return [Finding(
+            f'{cid}_no_auditor', 'FAIL',
+            'Cross-check uses rule `audit_receipt_evidence` but declares no '
+            '`auditor:` field, so no receipt can be resolved.',
+            f'{desc} — add `auditor: <program name>` to this cross-check.')]
+
+    rs = AUDIT_RECEIPTS.get(auditor)
+    if rs is None:
+        return [Finding(
+            f'{cid}_unknown_auditor', 'FAIL',
+            f'No receipt contract is registered for auditor `{auditor}`.',
+            'Add its emission to AUDIT_RECEIPTS in '
+            '_shared/skill_compliance_check.py, read off the producing '
+            'program. An unregistered auditor is not assumed to have passed.')]
+
+    ctx = ctx or CheckContext()
+    roots = ctx.receipt_roots(spec.get('receipt_dir'))
+    searched = ', '.join(str(r) for r in roots) or '(no evidence root available)'
+
+    found: Optional[Path] = None
+    for r in roots:
+        cand = r / rs.filename
+        if cand.is_file():
+            found = cand
+            break
+
+    if found is None:
+        return [Finding(
+            cid, 'FAIL',
+            f'NOT_MEASURED: no receipt from `{auditor}` for this report.',
+            f'{desc} — looked for `{rs.filename}` (emitted by '
+            f'{rs.emitted_by}) in: {searched}. Run the audit and place its '
+            'report where this check can read it; do not assert the verdict '
+            'in prose.',
+            state=STATE_NOT_MEASURED)]
+
+    try:
+        payload = json.loads(found.read_text(errors='replace'))
+    except (OSError, ValueError) as e:
+        return [Finding(
+            cid, 'FAIL',
+            f'NOT_MEASURED: receipt from `{auditor}` could not be read.',
+            f'{found}: {e.__class__.__name__}: {e}. Unreadable is not empty '
+            'and not clean.',
+            state=STATE_NOT_MEASURED)]
+
+    digest = _receipt_digest(found)
+    trace = f'receipt={found} sha256={digest[:16]}'
+
+    if not isinstance(payload, dict):
+        return [Finding(
+            cid, 'FAIL',
+            f'NOT_MEASURED: receipt at `{rs.filename}` is not an object.',
+            f'{trace} — got {type(payload).__name__}. This is not '
+            f'{auditor}\'s report.',
+            state=STATE_NOT_MEASURED)]
+
+    if payload.get('verdict') == 'SKIP':
+        return [Finding(
+            cid, 'FAIL',
+            f'NOT_MEASURED: `{auditor}` reported SKIP.',
+            f'{trace} — reason: {payload.get("reason", "(none given)")}. '
+            'A skipped auditor is a fact about the invocation, not a pass.',
+            state=STATE_NOT_MEASURED)]
+
+    if not rs.identify(payload):
+        return [Finding(
+            cid, 'FAIL',
+            f'NOT_MEASURED: the file at `{rs.filename}` is not '
+            f'`{auditor}`\'s report.',
+            f'{trace} — it does not carry the shape {rs.emitted_by} emits. '
+            'A payload from another producer is no evidence at all.',
+            state=STATE_NOT_MEASURED)]
+
+    examined = rs.examined(payload)
+    if examined <= 0:
+        return [Finding(
+            cid, 'FAIL',
+            f'NOT_MEASURED: `{auditor}` examined nothing.',
+            f'{trace} — the receipt records 0 examined items, so its verdict '
+            'is about an empty population. A vacuous pass is not a pass.',
+            state=STATE_NOT_MEASURED)]
+
+    actual_subject = rs.subject(payload)
+    declared = spec.get('subject')
+    if isinstance(declared, dict):
+        mismatched = {k: (v, actual_subject.get(k))
+                      for k, v in declared.items()
+                      if actual_subject.get(k) != v}
+        if mismatched:
+            return [Finding(
+                cid, 'FAIL',
+                f'`{auditor}` receipt names a different subject than this '
+                'check declares.',
+                f'{trace} — ' + '; '.join(
+                    f'{k}: declared {d!r}, receipt has {a!r}'
+                    for k, (d, a) in sorted(mismatched.items())),
+                state=STATE_FAIL)]
+
+    v = rs.verdict(payload)
+    if v == STATE_PASS:
+        return [Finding(
+            cid, 'INFO',
+            f'PASS: `{auditor}` receipt verdict PASS over {examined} '
+            'examined item(s).',
+            f'{trace} subject={actual_subject}',
+            state=STATE_PASS)]
+    return [Finding(
+        cid, 'FAIL',
+        f'`{auditor}` receipt verdict is {v}.',
+        f'{trace} subject={actual_subject} — {desc}',
+        state=STATE_FAIL)]
 
 
 def _cc_no_forbidden_patterns(spec: Dict[str, Any], text: str) -> List[Finding]:
@@ -418,8 +872,16 @@ def _cc_no_volatile_paths(spec: Dict[str, Any], text: str) -> List[Finding]:
          'a real file. Offending paths: ' + ', '.join(seen)))]
 
 
-def _cc_text_only_report(spec: Dict[str, Any], text: str) -> List[Finding]:
+def _cc_text_only_report(spec: Dict[str, Any], text: str,
+                        ctx: Optional[CheckContext] = None) -> List[Finding]:
     """For a skill whose deliverable is a PROSE REPORT, not RTL.
+
+    The other half of the `output_type` pairing described in the module
+    docstring and in `postcheck_pass_only`: this rule holds under
+    `output_type: report`, that one holds under `output_type: rtl`, and they
+    only look contradictory when read without the type they are bound to.
+    Keeping this contract unchanged is deliberate — a fabricated RTL header
+    in a Markdown report stays a failure (#2048).
 
     Such a skill emits markdown, so the `// Post-checks:` RTL header that
     `postcheck_pass_only` demands can never legitimately appear in its
@@ -455,6 +917,7 @@ CROSS_CHECK_RULES: Dict[str, Callable[[Dict[str, Any], str], List[Finding]]] = {
     'crc_gen_if_declared':   _cc_crc_gen_if_declared,
     'postcheck_pass_only':   _cc_postcheck_pass_only,
     'text_only_report':      _cc_text_only_report,
+    'audit_receipt_evidence': _cc_audit_receipt_evidence,
     'no_forbidden_patterns': _cc_no_forbidden_patterns,
     'pattern_requires_tool': _cc_pattern_requires_tool,
     'no_volatile_paths':     _cc_no_volatile_paths,
@@ -464,8 +927,42 @@ CROSS_CHECK_RULES: Dict[str, Callable[[Dict[str, Any], str], List[Finding]]] = {
 # ---------------------------------------------------------------------------
 # Main audit function
 # ---------------------------------------------------------------------------
-def audit(text: str, compliance: Dict[str, Any]) -> List[Finding]:
+def _dispatch(fn: Callable[..., List[Finding]], cc: Dict[str, Any],
+              text: str, ctx: CheckContext) -> List[Finding]:
+    """Call a cross-check rule, passing `ctx` only to rules that accept it.
+
+    Rules keep their two-argument shape as a supported call: a rule is a
+    plain function, and third-party probes (the #2048 reproducer among them)
+    call them directly with `(spec, text)`. Widening every signature at once
+    would have turned that probe into a TypeError, which hides behaviour
+    instead of measuring it.
+    """
+    try:
+        params = inspect.signature(fn).parameters
+    except (TypeError, ValueError):
+        return fn(cc, text)
+    if len(params) >= 3:
+        return fn(cc, text, ctx)
+    return fn(cc, text)
+
+
+def audit(text: str, compliance: Dict[str, Any],
+          ctx: Optional[CheckContext] = None) -> List[Finding]:
+    if ctx is None:
+        ctx = CheckContext()
+    declared = compliance.get('output_type')
+    if declared is not None:
+        declared = str(declared).strip().lower()
+    if not ctx.output_type and declared:
+        ctx.output_type = declared
     findings: List[Finding] = []
+    if declared and declared not in _KNOWN_OUTPUT_TYPES:
+        findings.append(Finding(
+            'output_type_unknown', 'FAIL',
+            f'compliance.yaml declares output_type: {declared!r}, which is '
+            f'not one of {list(_KNOWN_OUTPUT_TYPES)}.',
+            'An output type the engine does not know binds no rule to '
+            'anything; fix the yaml rather than let the rules float free.'))
     for r in compliance.get('requirements', []) or []:
         req = Requirement(
             id=r['id'],
@@ -482,7 +979,7 @@ def audit(text: str, compliance: Dict[str, Any]) -> List[Finding]:
                 'WARN',
                 f"Unknown cross-check rule: {rule}"))
             continue
-        findings += CROSS_CHECK_RULES[rule](cc, text)
+        findings += _dispatch(CROSS_CHECK_RULES[rule], cc, text, ctx)
     return findings
 
 
@@ -492,6 +989,11 @@ def main():
     ap.add_argument('--requirements', required=True,
                     help='Path to compliance.yaml for this skill')
     ap.add_argument('--json', help='Write JSON audit report here')
+    ap.add_argument('--evidence-dir', action='append', default=[],
+                    metavar='DIR',
+                    help='Directory to search for audit receipts (repeatable). '
+                         'Searched before the report-relative defaults. '
+                         'Receipts are never looked for outside these roots.')
     args = ap.parse_args()
 
     out_path = Path(args.output_file)
@@ -505,7 +1007,10 @@ def main():
 
     compliance = _load_yaml(req_path)
     text = out_path.read_text(errors='replace')
-    findings = audit(text, compliance)
+    ctx = CheckContext(
+        output_path=out_path.resolve(),
+        evidence_dirs=[Path(d) for d in args.evidence_dir])
+    findings = audit(text, compliance, ctx)
 
     total = len(compliance.get('requirements', []) or [])
     fails = [f for f in findings if f.severity == 'FAIL']
@@ -515,13 +1020,21 @@ def main():
     passed = total - len(req_fails)
     verdict = 'PASS' if not fails else 'FAIL'
 
+    not_measured = [f for f in findings if f.state == STATE_NOT_MEASURED]
+
     skill = compliance.get('skill', 'unknown')
     print(f"skill_compliance_check ({skill}): {verdict}")
     print(f"  Required elements: {passed}/{total} present")
     print(f"  Failures: {len(fails)}")
+    if not_measured:
+        # Printed beside the verdict, never folded into it: a reader must not
+        # be able to quote the number without its coverage (ruling F2036-H).
+        print(f"  Not measured: {len(not_measured)} — "
+              + ', '.join(f.id for f in not_measured))
     print('-' * 70)
     for f in findings:
-        print(f"  [{f.severity}] {f.id}: {f.description}")
+        tag = f' <{f.state}>' if f.state else ''
+        print(f"  [{f.severity}]{tag} {f.id}: {f.description}")
         if f.detail:
             print(f"           ↳ {f.detail}")
 
@@ -531,6 +1044,7 @@ def main():
             'verdict': verdict,
             'total_requirements': total,
             'passed': passed,
+            'not_measured': [f.id for f in not_measured],
             'findings': [asdict(f) for f in findings],
         }, indent=2))
 
