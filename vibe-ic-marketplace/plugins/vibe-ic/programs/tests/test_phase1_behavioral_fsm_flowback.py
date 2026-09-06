@@ -155,6 +155,13 @@ def test_plain_phase1_prose_emits_behavioral_fsm(tmp_path, source):
     result = runner._try_phase1_behavioral_fsm_rtl(project, 0.0)
 
     assert result is not None and result.status == "PASS"
+    # `timescale_refusal` joined this record when #2053's emitter half reached
+    # this path: the fixture project ships no testbench, so nothing declares a
+    # simulation unit, and the emitter says so BY NAME rather than inventing one.
+    # The RTL is unaffected — the assertions below are unchanged and the emitted
+    # bytes are byte-identical — but the record now discloses the decision, and
+    # this assertion stays EXHAUSTIVE (`==`) so a future key cannot slip in
+    # unnoticed either.
     assert result.extras == {
         "deterministic_generator": "spec_artifact_registry",
         "artifact_type": "behavioral_fsm",
@@ -164,6 +171,9 @@ def test_plain_phase1_prose_emits_behavioral_fsm(tmp_path, source):
         "spec_sources": [f"phase1/{source}/design.md"],
         "spec_deduped_sources": [],
         "rtl_provenance": "generated",
+        "timescale_refusal": (
+            "RTL_TIMESCALE_NOT_DECLARED: no testbench/harness source declares "
+            "a `timescale (0 scanned); the emitted candidate states no unit"),
     }
     out = project / "phase2" / "stage1" / "rtl" / "TopModule.v"
     assert result.output_files == [str(out)]

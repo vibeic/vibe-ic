@@ -1971,6 +1971,37 @@ def _state_declared_timescale(rtl: str, unit: Optional[str]) -> str:
     return f"`timescale {unit}\n{rtl}"
 
 
+def _emit_states_declared_timescale(
+        project: Path, rtl: str) -> Tuple[str, str, Dict[str, str]]:
+    """(candidate text, evidence fragment, extras fragment) for ONE emit.
+
+    #2053, the emitter half, at EVERY deterministic emit rather than one of them.
+    v1.18.7 landed the rule at `_try_spec_artifact_registry_rtl` alone; the other
+    four deterministic paths published candidates that stated no unit at all, so
+    the defect #2053 exists to close — a candidate inheriting the time unit of
+    whichever source the simulator compiled first, and passing or failing on
+    iverilog's argument order — was still reachable through four of five doors.
+
+    THE STATEMENT IS PART OF THE EMITTED TEXT, made HERE, at emission. Every
+    caller hands the publisher bytes that already state the unit, so
+    `_publish_phase1_rtl_no_clobber` stays a pure fd-bound byte-mover and the
+    digest it records is the digest OF THE STAMPED BYTES — which is what keeps
+    the restore-a-removed-file digest match meaning what it says.
+
+    This is PLUMBING, not a second implementation: the unit is resolved by
+    `_project_declared_timescale` and stated by `_state_declared_timescale`,
+    v1.18.7's own functions, which stay the only implementations. A unit is never
+    invented — nothing declared, or two declarations that disagree, returns the
+    text BYTE-IDENTICAL and names the refusal for the caller to publish.
+    """
+    unit, refusal = _project_declared_timescale(project)
+    if unit:
+        return (_state_declared_timescale(rtl, unit),
+                f"; states the declared `timescale {unit}",
+                {"declared_timescale": unit})
+    return rtl, f"; {refusal}", {"timescale_refusal": refusal}
+
+
 def _evidence_head(text: str, limit: int = 200) -> str:
     """A window that starts and ends on a TOKEN, never mid-token.
 
@@ -2080,18 +2111,14 @@ def _try_spec_artifact_registry_rtl(
     # #2053 — STATE the simulation unit. A candidate with no `timescale of its
     # own inherits the unit of whatever the compiler read first, which made the
     # verdict on a correct candidate depend on iverilog's argument order.
-    unit, ts_refusal = _project_declared_timescale(project)
-    out.write_text(_state_declared_timescale(rtl, unit))
+    rtl, ts_ev, ts_extras = _emit_states_declared_timescale(project, rtl)
+    out.write_text(rtl)
     ev = (f"deterministic emit from a parse-complete prompt via "
-          f"deterministic_emit_chain[{kind}] -> {out.relative_to(project)}")
+          f"deterministic_emit_chain[{kind}] -> {out.relative_to(project)}"
+          + ts_ev)
     extras = {"deterministic_generator": kind,
               "chain": _chain.which_emitters(), "source": "phase1_plain_text"}
-    if unit:
-        extras["declared_timescale"] = unit
-        ev += f"; states the declared `timescale {unit}"
-    else:
-        extras["timescale_refusal"] = ts_refusal
-        ev += f"; {ts_refusal}"
+    extras.update(ts_extras)
     return StepResult(
         "rtl_gen", "PASS", time.time() - t0, ev,
         output_files=[str(out)], extras=extras)
@@ -2213,18 +2240,22 @@ def _try_deterministic_rtl_dispatch(project: Path, t0: float) -> Optional[StepRe
     blob = (r.stdout or "") + (r.stderr or "")
     m = re.search(r"route . (\w+)", blob) or re.search(r":\s*([\w-]+)\s*. wrote", blob)
     gen = m.group(1) if m else "deterministic"
+    # #2053 — the candidate STATES its time unit before it is published.
+    rtl, ts_ev, ts_extras = _emit_states_declared_timescale(project, rtl)
     publication = None
     try:
         publication = _publish_phase1_rtl_no_clobber(project, out, rtl)
         publication.require_current_chain()
+        _extras = {"deterministic_generator": gen,
+                   "rtl_spec": str(spec.relative_to(project)),
+                   "program_first": True}
+        _extras.update(ts_extras)
         result = StepResult(
             "rtl_gen", "PASS", time.time() - t0,
             f"deterministic RTL via {gen} (program-first; no LLM) → "
-            f"{out.relative_to(project)}",
+            f"{out.relative_to(project)}" + ts_ev,
             output_files=[str(out)],
-            extras={"deterministic_generator": gen,
-                    "rtl_spec": str(spec.relative_to(project)),
-                    "program_first": True})
+            extras=_extras)
         publication.require_current_chain()
         return result
     except Exception:
@@ -2347,6 +2378,8 @@ def _try_canonical_primitive_rtl(
                           f"canonical_primitive_synth emit failed for {shape}: {e}")
     _phase1_project_checkpoint(project)
     out = rtl_dir / f"{module}.v"
+    # #2053 — the candidate STATES its time unit before it is published.
+    rtl, ts_ev, ts_extras = _emit_states_declared_timescale(project, rtl)
     publication = None
     try:
         # Use the same held-root, fd-bound no-clobber publisher as behavioral
@@ -2376,15 +2409,17 @@ def _try_canonical_primitive_rtl(
                     tb_written = str(tb_path)
             except Exception as e:
                 tb_note = f"scoreboard not published: {type(e).__name__}: {e}"
+        _extras = {"deterministic_generator": "canonical_primitive_synth",
+                   "shape": shape, "module": module,
+                   "program_first": True,
+                   "scoreboard_tb": tb_written or tb_note}
+        _extras.update(ts_extras)
         result = StepResult(
             "rtl_gen", "PASS", time.time() - t0,
             f"deterministic RTL via canonical_primitive_synth[{shape}] "
-            f"(program-first; no LLM) -> {out.relative_to(project)}",
+            f"(program-first; no LLM) -> {out.relative_to(project)}" + ts_ev,
             output_files=[str(out)] + ([tb_written] if tb_written else []),
-            extras={"deterministic_generator": "canonical_primitive_synth",
-                    "shape": shape, "module": module,
-                    "program_first": True,
-                    "scoreboard_tb": tb_written or tb_note})
+            extras=_extras)
         publication.require_current_chain()
         return result
     except Exception:
@@ -4330,6 +4365,19 @@ def _try_phase1_behavioral_fsm_rtl_bound(
     # touching the project so a future generator regression remains a DEFER.
     if not re.search(r"(?m)^\s*module\s+" + re.escape(module) + r"\b", rtl):
         return None
+    # #2053 — the candidate STATES its time unit HERE, once, before anything in
+    # this function reads `rtl`. Three things downstream depend on it being the
+    # same bytes throughout:
+    #   * the re-entry equality check below compares this text against the file
+    #     already on disk, which is stamped, so an unstamped `rtl` would read as
+    #     a DIFFERENT candidate and take the wrong branch;
+    #   * the restore path matches `sha256(rtl)` against the digest the ledger
+    #     RECORDED for the removed file — a digest of stamped bytes — so a
+    #     removed file is restored byte-identical to what was recorded;
+    #   * the publisher writes these bytes and records their digest.
+    # The generator's own output is what the module check above is about, so the
+    # statement is made after it: a registry regression stays a DEFER.
+    rtl, ts_ev, ts_extras = _emit_states_declared_timescale(project, rtl)
     rtl_dir = _pl.rtl_dir(project)
     out = rtl_dir / f"{module}.v"
     project_binding.require_current()
@@ -4410,23 +4458,25 @@ def _try_phase1_behavioral_fsm_rtl_bound(
                     publication.require_existing_ledger_digest(
                         primary_rel, recorded_digest)
                     publication.require_current_chain()
+                    _extras = {"deterministic_generator":
+                               "spec_artifact_registry",
+                               "artifact_type": kind, "module": module,
+                               "program_first": True,
+                               "spec_source": "phase1_plain_prose",
+                               "spec_sources": sources,
+                               "spec_deduped_sources": deduped_sources,
+                               "restored_missing_primary": True,
+                               "rtl_provenance": verdict,
+                               "rtl_provenance_evidence": evidence}
+                    _extras.update(ts_extras)
                     result = StepResult(
                         "rtl_gen", "PASS", time.time() - t0,
                         f"restored missing provenance-stamped behavioral FSM "
                         f"primary from spec_artifact_registry[{kind}] -> "
                         f"{out.relative_to(project)}; remaining runner-owned "
-                        f"RTL was retained unchanged",
+                        f"RTL was retained unchanged" + ts_ev,
                         output_files=[str(out)],
-                        extras={"deterministic_generator":
-                                "spec_artifact_registry",
-                                "artifact_type": kind, "module": module,
-                                "program_first": True,
-                                "spec_source": "phase1_plain_prose",
-                                "spec_sources": sources,
-                    "spec_deduped_sources": deduped_sources,
-                                "restored_missing_primary": True,
-                                "rtl_provenance": verdict,
-                                "rtl_provenance_evidence": evidence})
+                        extras=_extras)
                     # Construct the complete result while the same trusted fds
                     # still bind output and ledger, then make the final namespace
                     # identity/digest check immediately before accepting it.
@@ -4504,19 +4554,21 @@ def _try_phase1_behavioral_fsm_rtl_bound(
         generator = "spec_artifact_registry[behavioral_fsm]"
         _stamp_phase1_rtl_publication(publication, generator)
         publication.require_current_chain()
+        _extras = {"deterministic_generator": "spec_artifact_registry",
+                   "artifact_type": kind, "module": module,
+                   "program_first": True,
+                   "spec_source": "phase1_plain_prose",
+                   "spec_sources": sources,
+                   "spec_deduped_sources": deduped_sources,
+                   "rtl_provenance": _rtl_prov.GENERATED}
+        _extras.update(ts_extras)
         result = StepResult(
             "rtl_gen", "PASS", time.time() - t0,
             f"deterministic RTL via spec_artifact_registry[{kind}] from "
             f"Phase-1 prose (program-first; no LLM) -> "
-            f"{out.relative_to(project)}{preserved_note}",
+            f"{out.relative_to(project)}{preserved_note}" + ts_ev,
             output_files=[str(out)],
-            extras={"deterministic_generator": "spec_artifact_registry",
-                    "artifact_type": kind, "module": module,
-                    "program_first": True,
-                    "spec_source": "phase1_plain_prose",
-                    "spec_sources": sources,
-                    "spec_deduped_sources": deduped_sources,
-                    "rtl_provenance": _rtl_prov.GENERATED})
+            extras=_extras)
         publication.require_current_chain()
         _claim_rtl_session(project)
         return result
