@@ -1,6 +1,23 @@
 # Testability level (v0.50 hybrid strategy — see _shared/TESTING_STRATEGY.md)
 testability: full_markdown
 
+# #2048, same class as skills/rtl-review/compliance.yaml. Every cross-check
+# below names a specific audit or artefact obligation, and every one of them
+# selected `postcheck_pass_only` — a rule that reads a single RTL
+# `// Post-checks:` header naming rtl_hygiene_lint and fsm_error_invariant,
+# which is evidence from none of the audits named here. The deliverable of
+# this skill is a document, so that header can only be typed into it.
+# Declaring the output type makes the misbinding a reported configuration
+# error instead of a silent string match, so these IDs can no longer be
+# discharged by pasting a header nobody measured. Each is repointed to the
+# auditor it names. Three of the four producers below write their receipt to a
+# caller-chosen `--json PATH` with no filename convention in this tree, so
+# they have no registered receipt contract yet and the check reports that as a
+# blocking configuration error naming what is missing — the honest state, and
+# louder than the string match it replaces. Guessing a filename for them would
+# be the same unmeasured claim this change removes.
+output_type: report
+
 # Compliance spec for skill 'tapeout-checklist' (v0.40)
 # Enhanced: must cover 8 signoff categories with status and waiver documentation
 skill: tapeout-checklist
@@ -34,13 +51,20 @@ requirements:
 cross_checks:
   - id: X_gds_size_check
     description: "Run gds_size_check.py to verify GDS file exists and is reasonable size"
-    rule: postcheck_pass_only
+    rule: audit_receipt_evidence
+    auditor: gds_size_check
   - id: X_synth_netlist_check
     description: "Run synth_netlist_check.py to verify synthesis completed"
-    rule: postcheck_pass_only
+    rule: audit_receipt_evidence
+    auditor: synth_netlist_check
   - id: X_mcp_execution_verify
     description: "Verify required MCP tools were actually executed (not just reported)"
-    rule: postcheck_pass_only
+    rule: audit_receipt_evidence
+    auditor: mcp_execution_verify
   - id: X_tapeout_signoff_check
     description: "Verify tapeout has GDS, netlist, timing report, DRC evidence"
-    rule: postcheck_pass_only
+    rule: audit_receipt_evidence
+    auditor: tapeout_signoff_check
+  - id: X_text_only_skill
+    description: "tapeout-checklist emits a signoff document, not RTL."
+    rule: text_only_report

@@ -91,12 +91,22 @@ def build_fixture(skill: str) -> tuple[str, list[str], list[str]]:
              ""]
     expected_ids = []
     missing_pos = []
+    # #2048. This generator used to append the RTL post-check header to ANY
+    # fixture whose yaml selected `postcheck_pass_only`, which meant the
+    # repo's own tooling manufactured the unmeasured claim that made those
+    # cross-checks green. Measured on origin/main: regenerating the
+    # `rtl-review` and `tapeout-checklist` fixtures turned all seven of their
+    # named audit cross-checks from FAIL to PASS with zero receipts on disk.
+    # A fixture for an `output_type: report` skill must not carry a header
+    # that document could never have earned.
+    output_type = str(data.get("output_type") or "").strip().lower()
     needs_postcheck_header = False
     for section in ("requirements", "cross_checks", "postchecks"):
         for req in data.get(section) or []:
             if not isinstance(req, dict):
                 continue
-            if req.get("rule") == "postcheck_pass_only":
+            if (req.get("rule") == "postcheck_pass_only"
+                    and output_type != "report"):
                 needs_postcheck_header = True
             if "pattern" not in req:
                 continue

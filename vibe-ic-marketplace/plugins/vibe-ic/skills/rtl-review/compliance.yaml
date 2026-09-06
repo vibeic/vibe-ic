@@ -1,6 +1,12 @@
 # Testability level (v0.50 hybrid strategy — see _shared/TESTING_STRATEGY.md)
 testability: full_markdown
 
+# #2048. The deliverable of this skill is a Markdown review report, so the RTL
+# `// Post-checks:` header can only ever be typed into it, never measured on
+# it. Declaring the output type binds `postcheck_pass_only` away from this
+# spec and binds the three named audits below to their own receipts instead.
+output_type: report
+
 # Auto-generated compliance spec for skill 'rtl-review'
 # Refines vibe-ic/skills/rtl-review/SKILL.md output requirements.
 skill: rtl-review
@@ -37,12 +43,31 @@ requirements:
     skill_section: 'Counter Logic Review'
 
 cross_checks:
+  # MEASURED on origin/main before this change (#2048): all three IDs below
+  # selected `postcheck_pass_only`, which reads one `// Post-checks:` header
+  # naming rtl_hygiene_lint and fsm_error_invariant — evidence from NONE of
+  # the three audits named here. With zero receipts on disk, a prose report
+  # FAILED all three, and the SAME report plus that pasted header PASSED all
+  # three. Each ID now resolves its OWN audit's report artefact; a missing
+  # receipt is NOT_MEASURED and blocking, never a pass.
   - id: X_interface_encoding_audit
     description: "Run interface_encoding_audit.py on multi-module design"
-    rule: postcheck_pass_only
+    rule: audit_receipt_evidence
+    auditor: interface_encoding_audit
   - id: X_crc_bitorder_check
     description: "Run crc_bitorder_check.py on TX modules"
-    rule: postcheck_pass_only
+    rule: audit_receipt_evidence
+    auditor: crc_bitorder_check
   - id: X_phy_counter_audit
     description: "Verify TX/RX counters use time-based approach (not bus-sampling)"
-    rule: postcheck_pass_only
+    rule: audit_receipt_evidence
+    auditor: phy_counter_audit
+  # The other half of the output_type pairing. Repointing the three audits
+  # above to their receipts removes the reason to paste the RTL header, but on
+  # its own it also removes the only thing that ever reacted to the header
+  # here — so a fabricated `// Post-checks:` line in a review report would
+  # have become unremarked. This keeps it a failure, as it already is for the
+  # other prose-report skills.
+  - id: X_text_only_skill
+    description: "rtl-review emits a Markdown review, not RTL."
+    rule: text_only_report
