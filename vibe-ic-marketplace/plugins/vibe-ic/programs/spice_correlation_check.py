@@ -1872,6 +1872,34 @@ def _installed_pin_node(pin: str, stage: dict, input_node: str,
     return tie_value_for_cell(stage["cell"])
 
 
+def stagewise_stage_load_pf(stage: dict, is_last: bool,
+                            endpoint_load_pf: float) -> Tuple[float, str]:
+    """(load in pF, WHERE it came from) for one stage of the per-stage deck.
+
+    ONE function, called by the deck builder AND by the report, because a load
+    spelled in two places is two places to get wrong.
+
+    THE SOURCE IS THE POINT. MEASURED (spm x gf180mcuD, image 0.3.46): scaling
+    EVERY `*D_NET` total capacitance in the design's own SPEF by 10 -- 673
+    records -- moved this gate's numbers by NOTHING. Byte-identical
+    `pct_error`, `spice_path_delay_ns` and every per-cell PDK ratio. The reason
+    is here: when the STA report states a load for a stage, the deck uses THAT,
+    and the SPEF is never read for it. That is the right operating point (it is
+    what the tolerance is derived at) and it is not being changed -- but a
+    reader must not be able to believe that a parasitic-annotation error is on
+    the design side of this comparison when it is not. The report now says,
+    per stage, which artefact the load came from.
+    """
+    load = stage.get("sta_load_pf")
+    if isinstance(load, (int, float)) and load > 0:
+        return float(load), "sta_report"
+    load = float(stage.get("wire_cap_pf") or 0.0)
+    source = "spef" if load > 0 else "none"
+    if is_last and endpoint_load_pf > load:
+        load, source = endpoint_load_pf, "endpoint_receiver"
+    return max(float(load), 1e-4), source
+
+
 def build_installed_stagewise_deck(
         model_file: str, model_section: str, model_preludes: List[str],
         cell_spice: str, stages: List[dict], subckts: dict, vdd: float,
@@ -1918,12 +1946,8 @@ def build_installed_stagewise_deck(
     for i, stage in enumerate(stages):
         pins, _raw = subckts[stage["cell"]]
         tr = max(float(slew_tr[i]), 0.001)
-        load = stage.get("sta_load_pf")
-        if not isinstance(load, (int, float)) or load <= 0:
-            load = float(stage.get("wire_cap_pf") or 0.0)
-            if i == n - 1:
-                load = max(load, endpoint_load_pf)
-        load = max(float(load), 1e-4)
+        load, _src = stagewise_stage_load_pf(stage, i == n - 1,
+                                             endpoint_load_pf)
         out_tr = "FALL" if stage["transition"] == "fall" else "RISE"
         for var, v_from, v_to, in_tr in (("r", 0.0, vdd, "RISE"),
                                          ("f", vdd, 0.0, "FALL")):
@@ -2080,6 +2104,10 @@ _STA_CORNER_LIBERTY_RES = (
     re.compile(r"(?m)^===\s*SETUP\s+corner:[^\n]*?\bliberty=([^\s,]+)"),
     re.compile(r"(?m)^#\s*corner_liberty:\s*\w+=(\S+)\s*$"),
 )
+#: The per-corner section marker this flow's own multi-corner STA writer emits:
+#: `=== SETUP corner: ... ===` / `=== HOLD corner: ... ===`. A report with none
+#: of these is ONE section, which is the whole file.
+_STA_CORNER_SECTION_RE = re.compile(r"(?m)^===\s+\S+\s+corner:")
 _STA_OCV_LATE_RE = re.compile(
     r"(?m)^\s*OCV_DERATE_APPLIED\b[^\n]*?\blate=([0-9.]+)")
 
@@ -2123,17 +2151,51 @@ def parse_sta_corner_basis(text: str) -> dict:
     cannot be read": in all three the honest answer is that the corner the deck
     must be built at is unknown.
     """
-    out = {"liberty": "", "ocv_late_derate": None, "declared_liberties": []}
-    declared: List[str] = []
-    for rx in _STA_CORNER_LIBERTY_RES:
-        for m in rx.finditer(text or ""):
-            value = m.group(1).strip()
-            if value and value not in declared:
-                declared.append(value)
-    out["declared_liberties"] = sorted(declared)
+    whole = text or ""
+    # SCOPE FIRST. This flow's OWN canonical multi-corner report is SECTIONED:
+    # spm's `sta_mcorner_ocv.rpt` opens `=== SETUP corner: process=SS
+    # liberty=..._ss_125C_4v50.lib ===` at line 1 and `=== HOLD corner:
+    # process=FF liberty=..._ff_n40C_5v50.lib ===` at line 133. `parse_sta_path`
+    # takes the FIRST path block, which is inside the FIRST section, so the
+    # corner that path was produced at is the one THAT SECTION declares --
+    # never "some corner this file mentions somewhere". A file-wide set would
+    # refuse every run of a design whose STA writes both corners into one
+    # report, which is a refusal about the report's SHAPE and not about
+    # anything that can be wrong.
+    #
+    # The ambiguity SPM-12 measured is inside the scope, not across sections:
+    # the old code took the first match of the first regex that hit, so a
+    # report whose HOLD stamp came first handed the deck the FF corner and the
+    # gate charged a 1.8x delay swing to the design. Scoped, that is exactly
+    # the case that still refuses.
+    scope = whole
+    marks = [m.start() for m in _STA_CORNER_SECTION_RE.finditer(whole)]
+    if marks:
+        first_path = whole.find("Startpoint:")
+        starts = [i for i in marks if first_path < 0 or i <= first_path]
+        begin = starts[-1] if starts else marks[0]
+        after = [i for i in marks if i > begin]
+        scope = whole[begin:after[0]] if after else whole[begin:]
+    out = {"liberty": "", "ocv_late_derate": None, "declared_liberties": [],
+           "declared_liberties_in_file": [], "sections": len(marks)}
+
+    def _declared(chunk: str) -> List[str]:
+        found: List[str] = []
+        for rx in _STA_CORNER_LIBERTY_RES:
+            for m in rx.finditer(chunk):
+                value = m.group(1).strip()
+                if value and value not in found:
+                    found.append(value)
+        return sorted(found)
+
+    declared = _declared(scope)
+    out["declared_liberties"] = declared
+    # Kept so a reader can still see that the report carried more than one --
+    # the refusal is scoped, the DISCLOSURE is not.
+    out["declared_liberties_in_file"] = _declared(whole) if marks else declared
     if len(declared) == 1:
         out["liberty"] = declared[0]
-    m = _STA_OCV_LATE_RE.search(text or "")
+    m = _STA_OCV_LATE_RE.search(scope)
     if m:
         try:
             v = float(m.group(1))
@@ -2606,6 +2668,15 @@ def run_installed_pdk_path_correlation(
             "per_stage_sta_ns": [
                 round(float(s.get("sta_delay_ns") or 0.0), 6)
                 for s in resolved["stages"]],
+            # WHICH ARTEFACT EACH STAGE'S LOAD CAME FROM. See
+            # `stagewise_stage_load_pf`: a x10 scaling of every SPEF *D_NET
+            # record moved this gate by nothing, because the STA report's own
+            # stated load wins wherever it exists.
+            "per_stage_load_source": [
+                stagewise_stage_load_pf(
+                    s, i == len(resolved["stages"]) - 1,
+                    resolved["endpoint_load_pf"])[1]
+                for i, s in enumerate(resolved["stages"])],
             # MEMBERSHIP. A stage the SPEF never named carried NO wire load.
             "path_nets_absent_from_spef":
                 resolved.get("nets_absent_from_spef", []),

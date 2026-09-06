@@ -560,3 +560,95 @@ def test_the_driver_still_proceeds_past_a_single_declared_corner(tmp_path,
     got = scc.run_installed_pdk_path_correlation(p, "/pdk/lib/x__tt.lib",
                                                  container="none")
     assert "DIFFERENT corner libraries" not in (got.get("reason") or ""), got
+
+
+#: spm's OWN canonical multi-corner report, in miniature: a SETUP/ss section
+#: carrying the path, and a HOLD/ff section after it. MEASURED on the real
+#: `sta_mcorner_ocv.rpt`: 2 sections, `ss_125C_4v50` at line 4 and
+#: `ff_n40C_5v50` at line 136, and `parse_sta_path` takes the first path block —
+#: which is in the SETUP section. A file-wide refusal would refuse EVERY run of
+#: this design, for the report's shape rather than for anything wrong with it.
+_SECTIONED = (
+    "=== SETUP corner: process=SS liberty=/pdk/x__ss_125C_4v50.lib, SPEF=a ===\n"
+    "OCV_DERATE_APPLIED early=0.95 late=1.05 flat-OCV\n"
+    "STA_BASIS_LIBERTY: /pdk/x__ss_125C_4v50.lib\n"
+    + _STA_BODY +
+    "=== HOLD corner: process=FF liberty=/pdk/x__ff_n40C_5v50.lib, SPEF=b ===\n"
+    "OCV_DERATE_APPLIED early=0.95 late=1.10 flat-OCV\n"
+    "STA_BASIS_LIBERTY: /pdk/x__ff_n40C_5v50.lib\n"
+    + _STA_BODY)
+
+
+def test_a_sectioned_report_is_answered_by_the_paths_own_section():
+    got = scc.parse_sta_corner_basis(_SECTIONED)
+    assert got["sections"] == 2
+    assert got["liberty"] == "/pdk/x__ss_125C_4v50.lib"
+    assert got["declared_liberties"] == ["/pdk/x__ss_125C_4v50.lib"]
+    # …and the OTHER corner is still DISCLOSED. The refusal is scoped; the
+    # disclosure is not.
+    assert got["declared_liberties_in_file"] == [
+        "/pdk/x__ff_n40C_5v50.lib", "/pdk/x__ss_125C_4v50.lib"]
+    # the derate comes from the same section, not from the other one
+    assert got["ocv_late_derate"] == 1.05
+
+
+def test_the_hold_section_first_does_not_hand_the_deck_the_fast_corner():
+    """THE ORDERING HAZARD SPM-12 MEASURED. The old rule took the first match
+    of the first regex that hit, so a report whose FF stamp came first built
+    the deck at FF and charged a 1.8x delay swing to the design."""
+    hold_first = (
+        "=== HOLD corner: process=FF liberty=/pdk/x__ff_n40C_5v50.lib ===\n"
+        "STA_BASIS_LIBERTY: /pdk/x__ff_n40C_5v50.lib\n"
+        "=== SETUP corner: process=SS liberty=/pdk/x__ss_125C_4v50.lib ===\n"
+        "STA_BASIS_LIBERTY: /pdk/x__ss_125C_4v50.lib\n" + _STA_BODY)
+    got = scc.parse_sta_corner_basis(hold_first)
+    assert got["liberty"] == "/pdk/x__ss_125C_4v50.lib"   # the PATH's corner
+
+
+def test_two_corners_inside_the_paths_own_section_is_still_refused():
+    """The scope narrows WHERE the ambiguity is looked for; it does not
+    forgive one."""
+    ambiguous = (
+        "=== SETUP corner: process=SS liberty=/pdk/x__ss_125C_4v50.lib ===\n"
+        "STA_BASIS_LIBERTY: /pdk/x__ss_125C_4v50.lib\n"
+        "# corner_liberty: ff=/pdk/x__ff_n40C_5v50.lib\n" + _STA_BODY)
+    got = scc.parse_sta_corner_basis(ambiguous)
+    assert got["liberty"] == ""
+    assert len(got["declared_liberties"]) == 2
+
+
+# ── the SPEF is not on the design side when the STA states a load ──────────
+#
+# MEASURED (spm x gf180mcuD, image 0.3.46): scaling EVERY `*D_NET` total
+# capacitance in the design's own SPEF by 10 — 673 records — moved this gate by
+# NOTHING. `pct_error` -15.936758 both arms, `spice_path_delay_ns` 9.901463
+# both arms, every per-cell PDK ratio byte-identical. Lane spmspice measured
+# +153.6 % CRITICAL_MISMATCH for the same injection on ITS OWN replay, so the
+# sensitivity is real for a report shape that does NOT state a load — and
+# absent for one that does. That difference was invisible; it is now published
+# per stage.
+
+def test_the_load_source_is_named_per_stage():
+    sta_stated = {"sta_load_pf": 0.04, "wire_cap_pf": 0.0361}
+    assert scc.stagewise_stage_load_pf(sta_stated, False, 0.0) == (0.04, "sta_report")
+    # …the SPEF only when the STA states nothing
+    spef_only = {"sta_load_pf": None, "wire_cap_pf": 0.0361}
+    assert scc.stagewise_stage_load_pf(spef_only, False, 0.0) == (0.0361, "spef")
+    # …and the endpoint receiver on the last stage when it is the larger
+    load, src = scc.stagewise_stage_load_pf(spef_only, True, 0.12)
+    assert (round(load, 6), src) == (0.12, "endpoint_receiver")
+    # NOTHING is not zero: a stage with neither still gets a floor, and says so
+    load, src = scc.stagewise_stage_load_pf({}, False, 0.0)
+    assert src == "none" and load == 1e-4
+
+
+def test_the_deck_and_the_report_read_the_load_from_one_function():
+    """A load spelled in two places is two places to get wrong. The deck the
+    simulator runs and the number the report publishes must come from the SAME
+    call."""
+    import inspect
+    body = inspect.getsource(scc.build_installed_stagewise_deck)
+    assert "stagewise_stage_load_pf(" in body
+    driver = inspect.getsource(scc.run_installed_pdk_path_correlation)
+    assert "per_stage_load_source" in driver
+    assert "stagewise_stage_load_pf(" in driver
