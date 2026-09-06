@@ -2339,10 +2339,28 @@ def _container_dir_writable(container: str, path: str) -> Tuple[bool, str]:
 
 
 def _container_file_sha256(container: str, path: str) -> Optional[str]:
-    """Hash a container-only input; absence disables cache, never the proof."""
+    """Hash a container-only input; absence disables cache, never the proof.
+
+    THE BANNER IS NOT THE OUTPUT (measured 2026-09-06 on 8HD-9, image 0.3.46).
+    The EDA image's login profile prints `[INFO] Final PATH variable: ...`
+    lines on stdout before the command runs, so the FIRST token of `out` is
+    `[INFO]`, never the digest -- `sha256sum` exited 0 and its digest was three
+    lines down. The 64-hex match then failed, this returned None, the Liberty
+    fingerprint was recorded as `{"state": "unreadable"}`, `_has_fingerprint`
+    said no, `proof_identity_complete` said no, and the LEC PASS CACHE WAS
+    SILENTLY OFF for every design whose Liberty lives in the container -- which
+    is every Liberty-mapped LEC on this fleet. Measured on a real run: the
+    report said `cache: {enabled: false, reason: "one or more required proof
+    fingerprints unavailable"}` while `sha256sum` had in fact succeeded.
+
+    `_strip_login_banner` is the file's OWN remedy for this exact banner and
+    `_yosys_version` beside it already applies it; only this reader did not.
+    Nothing else changes: a genuinely absent or unreadable file still yields
+    None, and None still disables reuse rather than blocking a fresh proof.
+    """
     rc, out, _ = _docker_exec_raw(
         container, f"sha256sum -- {shlex.quote(path)} 2>/dev/null", timeout=60)
-    token = (out or "").strip().split()
+    token = _strip_login_banner(out or "").strip().split()
     if rc == 0 and token and re.fullmatch(r"[0-9a-fA-F]{64}", token[0]):
         return "sha256:" + token[0].lower()
     return None
