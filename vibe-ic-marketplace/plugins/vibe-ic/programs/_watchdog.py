@@ -61,11 +61,13 @@ outcome/rc, never dressed up as a natural exit or as a hang.
 
 Public API (stable — an enforcement gate builds against it):
   RC_STALLED, RC_CEILING, RC_ABORTED  — distinct return codes for the 3 kills
-  SupervisedResult(rc,out,err,outcome,elapsed_s,abort_reason)
+  SupervisedResult(rc,out,err,outcome,elapsed_s,abort_reason,scope,
+                   supervision)   # supervision = what was watched + when it
+                                  # last moved, so a kill is EVIDENCE not a word
   ProgressMeter(size_fn, log_fn, cpu_fn)      — signal fusion → monotonic score
   supervise(proc, progress_probe, kill_fn, *, poll_s, stall_grace_s,
             hard_ceiling_s, wait_fn=None, clock=time.monotonic,
-            abort_probe=None) -> (outcome, rc)
+            abort_probe=None, observations=None) -> (outcome, rc)
   run_supervised(cmd, *, log_path=None, output_progress=True,
                  domain_progress_probe=None,
                  stall_grace_s=1800, poll_s=30,
@@ -122,6 +124,12 @@ class SupervisedResult:
     # or why nothing was. Always present, so "was it enforced?" is answerable
     # from the result rather than from the absence of a complaint.
     scope: dict = field(default_factory=dict)
+    # What the supervisor SAW. `watched` names the progress signals that were
+    # wired; `since_last_progress_s` is how long the job had shown none of
+    # them when the loop returned. A stop that cannot answer either question
+    # is an assertion, not a measurement -- and this repo's own rule is that a
+    # kill must be told apart from a slow host by EVIDENCE, not by wording.
+    supervision: dict = field(default_factory=dict)
 
     @property
     def stalled(self) -> bool:
@@ -159,6 +167,20 @@ class ProgressMeter:
         self._log_events = 0.0
         self._last_log = None
         self._last_cpu = 0.0
+
+    def watched(self) -> str:
+        """The signals this meter was actually WIRED to, as a stable string.
+
+        "killed as hung" is not a finding a reader can check unless it also
+        says what was looked at. A meter with only `size_fn` supervises a job
+        on OUTPUT alone -- so a CPU-bound silent phase is a stall by
+        CONSTRUCTION, and that is a property of the WIRING, not of the job.
+        Naming it turns "we watched nothing useful" from an invisible default
+        into a readable one. PURE."""
+        names = [n for n, fn in (("output", self._size_fn),
+                                 ("log", self._log_fn),
+                                 ("cpu", self._cpu_fn)) if fn is not None]
+        return "+".join(names) if names else "NOTHING"
 
     def sample(self) -> float:
         score = 0.0
@@ -251,7 +273,8 @@ def supervise(proc, progress_probe: Callable[[], object],
               poll_s: float, stall_grace_s: float, hard_ceiling_s: float,
               wait_fn: Optional[Callable[[object, float], Optional[int]]] = None,
               clock: Callable[[], float] = time.monotonic,
-              abort_probe: Optional[Callable[[], Optional[str]]] = None
+              abort_probe: Optional[Callable[[], Optional[str]]] = None,
+              observations: Optional[dict] = None
               ) -> Tuple[str, Optional[int]]:
     """Generic progress-stall control loop over an already-launched process.
 
@@ -263,6 +286,14 @@ def supervise(proc, progress_probe: Callable[[], object],
     Kills ONLY after NO progress for `stall_grace_s`; `hard_ceiling_s` is a
     pathological backstop only. `wait_fn`/`clock` are injectable for tests.
 
+    `observations` (optional dict) is FILLED IN as the loop runs:
+    ``since_last_progress_s`` (how long the job had been showing nothing when
+    the loop returned), ``elapsed_s`` and ``polls``. A stop must be able to say
+    WHEN the job was last seen moving; without that number "killed as hung" is
+    an assertion a reader cannot check. Passing nothing keeps the previous
+    behaviour byte-for-byte -- the dict is the only new state and this function
+    only ever WRITES it.
+
     `abort_probe()` (optional) is the caller's DOMAIN convergence read, polled
     on the same cadence: returning a non-empty reason kills the job as
     'aborted'. It is checked LAST, so a job that exits on its own in this poll
@@ -272,6 +303,15 @@ def supervise(proc, progress_probe: Callable[[], object],
     wait_fn = wait_fn or _default_wait
     start = clock()
     last_progress = start
+    polls = 0
+
+    def _record(now: float) -> None:
+        if observations is None:
+            return
+        observations["since_last_progress_s"] = round(now - last_progress, 3)
+        observations["elapsed_s"] = round(now - start, 3)
+        observations["polls"] = polls
+
     try:
         last_token = progress_probe()
     except Exception:  # nosec — probe error ⇒ no signal this poll
@@ -279,8 +319,10 @@ def supervise(proc, progress_probe: Callable[[], object],
     while True:
         rc = wait_fn(proc, poll_s)
         if rc is not None:
+            _record(clock())
             return "natural", rc
         now = clock()
+        polls += 1
         try:
             token = progress_probe()
         except Exception:  # nosec
@@ -290,9 +332,11 @@ def supervise(proc, progress_probe: Callable[[], object],
         if token is not None:
             last_token = token
         if now - last_progress > stall_grace_s:
+            _record(now)
             kill_fn(proc, "stalled")
             return "stalled", None
         if now - start > hard_ceiling_s:
+            _record(now)
             kill_fn(proc, "ceiling")
             return "ceiling", None
         if abort_probe is not None:
@@ -301,6 +345,7 @@ def supervise(proc, progress_probe: Callable[[], object],
             except Exception:  # nosec — a probe bug must never kill a job
                 reason = None
             if reason:
+                _record(now)
                 kill_fn(proc, "aborted")
                 return "aborted", None
 
@@ -466,11 +511,16 @@ def run_supervised(cmd, *, log_path=None, output_progress: bool = True,
             _abort_reason = str(reason)
         return reason
 
+    _obs: dict = {}
     outcome, rc = supervise(
         proc, meter.sample, kill,
         poll_s=poll_s, stall_grace_s=stall_grace_s,
         hard_ceiling_s=hard_ceiling_s, wait_fn=wait_fn, clock=clock,
-        abort_probe=(_abort_capture if abort_probe is not None else None))
+        abort_probe=(_abort_capture if abort_probe is not None else None),
+        observations=_obs)
+    _obs["watched"] = meter.watched()
+    _obs["stall_grace_s"] = stall_grace_s
+    _obs["hard_ceiling_s"] = hard_ceiling_s
 
     # Reap and collect whatever partial output exists.
     try:
@@ -523,22 +573,31 @@ def run_supervised(cmd, *, log_path=None, output_progress: bool = True,
             RC_STALLED, out,
             err + _note(f"\nWATCHDOG_STALLED: configured forward-progress "
                         f"signals did not advance for > {stall_grace_s:g}s — "
-                        f"killed as hung, not slow."),
-            "stalled", elapsed, scope=scope_meta)
+                        f"killed as hung, not slow. "
+                        f"watched={_obs.get('watched')} "
+                        f"since_last_progress_s="
+                        f"{_obs.get('since_last_progress_s')} "
+                        f"elapsed_s={_obs.get('elapsed_s')}"),
+            "stalled", elapsed, scope=scope_meta, supervision=_obs)
     if outcome == "ceiling":
         return SupervisedResult(
             RC_CEILING, out,
             err + _note(f"\nWATCHDOG_CEILING: hard backstop "
                         f"{hard_ceiling_s:g}s exceeded (pathological non-idle "
-                        f"loop) — killed."),
-            "ceiling", elapsed, scope=scope_meta)
+                        f"loop) — killed. "
+                        f"watched={_obs.get('watched')} "
+                        f"since_last_progress_s="
+                        f"{_obs.get('since_last_progress_s')}"),
+            "ceiling", elapsed, scope=scope_meta, supervision=_obs)
     if outcome == "aborted":
         return SupervisedResult(
             RC_ABORTED, out,
             err + _note(f"\nWATCHDOG_ABORTED: {_abort_reason}"),
-            "aborted", elapsed, _abort_reason, scope=scope_meta)
+            "aborted", elapsed, _abort_reason, scope=scope_meta,
+            supervision=_obs)
     return SupervisedResult(rc if rc is not None else 0, out, err,
-                            "natural", elapsed, scope=scope_meta)
+                            "natural", elapsed, scope=scope_meta,
+                            supervision=_obs)
 
 
 # ===========================================================================

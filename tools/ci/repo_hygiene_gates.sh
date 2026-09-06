@@ -624,6 +624,17 @@ run "severity=ERROR is consumed" "$PLUGIN" python3 programs/error_diagnostic_con
 # side's gate list are exactly what #538 is about, so this one no longer
 # states a number it cannot keep true.)
 run "watchdog compliance"           "$PLUGIN" python3 programs/loop_watchdog_compliance_check.py
+# THE SEMANTIC HALF OF THE LINE ABOVE. `loop_watchdog_compliance_check` reads
+# the SHAPE of a launch -- is there a `marker=`, is the callee a
+# `run_supervised` -- and nothing read what the call then DID with the
+# supervisor. A site could satisfy it in full and pin `hard_ceiling_s` to its
+# own step budget, which is a wall-clock deadline wearing the watchdog's
+# clothes: the supervisor kills at the ceiling regardless of forward progress,
+# and both docker paths wrap the container command in a GNU `timeout` at the
+# same number. Seven sites did, and one of them was about to SIGKILL a live
+# post-layout LEC at 5360 s of a 7195 s budget with 1374 points proved and
+# 99.9 % CPU. Measured: 12s.
+run "watchdog ceiling semantics"    "$PLUGIN" python3 programs/watchdog_ceiling_semantics_check.py
 run "marketplace version sync"      "$PLUGIN" python3 programs/marketplace_version_sync_check.py
 run "plugin full audit"             "$PLUGIN" python3 programs/plugin_full_audit.py
 
