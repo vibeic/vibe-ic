@@ -423,6 +423,72 @@ def test_the_kill_record_does_not_name_a_duration_it_never_measured():
 
 
 # ---------------------------------------------------------------------------
+# 3d. A WALL CLOCK PRODUCING A CAPABILITY VERDICT. The analog A6 physical-
+#     verification producer rolled its own `docker exec` helper: a bare
+#     `subprocess.run(timeout=600)` under `except Exception`, so a klayout DRC
+#     that merely ran LONG came back as rc 127 -- the POSIX "command not
+#     found" code -- with empty stdout. That file's own comment records what
+#     A6 then reports for `rc=127, no report`: "no parseable DRC result".
+#     A slow run and an ABSENT ENGINE were byte-identical to every reader.
+#
+#     This is vibe-ic#581's shape ("A TIMEOUT IS A BUDGET OUTCOME, NOT A
+#     CAPABILITY GAP") reappearing one track over, and `loop_watchdog_
+#     compliance_check` cannot see it: the tool name comes from a runtime
+#     `_tool_on_path` lookup, so the argv carries no static long-tool literal.
+# ---------------------------------------------------------------------------
+def test_a_slow_analog_pv_tool_is_not_reported_as_a_missing_one():
+    """RED before: rc 127. The distinction is the whole difference between
+    "could not measure" and "the engine is not installed"."""
+    import subprocess as _sp
+    import analog_a6_native_pv as A6
+
+    real = A6.subprocess.run
+
+    def _always_times_out(*a, **k):
+        raise _sp.TimeoutExpired(cmd=a[0] if a else "x", timeout=k.get("timeout"))
+
+    A6.subprocess.run = _always_times_out
+    try:
+        rc, out, err = A6._docker_exec("vibeic-eda", "klayout -b -r drc.lydrc")
+    finally:
+        A6.subprocess.run = real
+
+    assert rc != 127, (
+        "a tool that ran LONG is reported with the 'command not found' code; "
+        "A6 books that as 'no parseable DRC result', i.e. a capability gap")
+    assert rc in (124, _wd.RC_STALLED), rc
+    assert "not found" not in (err or "").lower()
+
+
+def test_the_analog_pv_long_tools_are_supervised_not_wall_clocked():
+    """Every LONG call in that producer must carry a progress marker; the SHORT
+    probes (`test -e`, `command -v`) must keep the bounded raw path, because a
+    probe that does not answer in 30 s IS broken and decides nothing about a
+    design. Read with `ast` so a call cannot hide behind formatting.
+    """
+    import ast
+    src = (PROGRAMS / "analog_a6_native_pv.py").read_text(
+        encoding="utf-8", errors="replace")
+    tree = ast.parse(src)
+    unsupervised = []
+    for node in ast.walk(tree):
+        if not (isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Name)
+                and node.func.id == "_docker_exec"):
+            continue
+        if any(k.arg == "marker" for k in node.keywords):
+            continue
+        flat = ast.unparse(node)
+        # the two SHORT probes are named by the command they run
+        if "test -e" in flat or "command -v" in flat:
+            continue
+        unsupervised.append(f"analog_a6_native_pv.py:{node.lineno}")
+    assert unsupervised == [], (
+        "these physical-verification runs are bounded by a wall clock with no "
+        "progress supervision: " + ", ".join(unsupervised))
+
+
+# ---------------------------------------------------------------------------
 # 4. THE MIGRATION LEFTOVER. `_progress_run.run` has no `timeout=` parameter,
 #    deliberately — "convert a call site by deleting the argument". One call
 #    site kept the argument, and the TypeError it raises is not a
