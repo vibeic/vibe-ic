@@ -24183,22 +24183,17 @@ def _padring_def_components(padring_def_text: str) -> "list[tuple[str, str]]":
     A DEF COMPONENTS entry opens with ``- <instance> <master>``; the placement
     that follows may be on the same line or the next. Only the first two tokens
     are read, so the placement syntax is irrelevant here.
+
+    #2044 — this used to be a line state machine of its own, keyed on the
+    two-byte literals ``"COMPONENTS "`` and ``"- "``. DEF separates tokens with
+    whitespace, not with one specific space, so a TAB in either position made
+    this reader disagree with the other two about the ring's population — a
+    dropped entry here is an instance `_padring_physical_only_instance_tcl`
+    then never creates in odb, and a missed section header emptied the ring
+    entirely. It now reads the SHARED resolution; the value is unchanged for
+    every DEF the old state machine could already read.
     """
-    out: "list[tuple[str, str]]" = []
-    inside = False
-    for line in padring_def_text.splitlines():
-        t = line.strip()
-        if not inside:
-            if t.startswith("COMPONENTS "):
-                inside = True
-            continue
-        if t.startswith("END COMPONENTS"):
-            break
-        if t.startswith("- "):
-            parts = t[2:].split()
-            if len(parts) >= 2:
-                out.append((parts[0], parts[1]))
-    return out
+    return list(_def_resolution_from_text(padring_def_text).components)
 
 
 def _padring_bterm_exclusion_tcl(report_text: str) -> Tuple[str, List[str]]:
@@ -28953,8 +28948,15 @@ def _def_net_orphan_instances(project: Path) -> Tuple[int, str]:
                       txt, re.MULTILINE | re.DOTALL)
         return m.group(1) if m else ""
 
-    comps = dict(re.findall(r"^\s*-\s+(\S+)\s+(\S+)",
-                            _sect("COMPONENTS"), re.MULTILINE))
+    # #2044 — the COMPONENTS population comes from the SHARED resolution, not
+    # from a section regex of this function's own. The regex that stood here
+    # anchored `^COMPONENTS\s+\d+\s*;` and `^END COMPONENTS\s*$`, so a DEF
+    # that terminated the section with a `;` — legal, and read fine by the
+    # other two readers — produced "no COMPONENTS section in DEF" and a count
+    # of 0. That zero is this precondition's SAFE answer, and it was being
+    # returned for a file it had not read: the heal's whole argument is that
+    # net-less metal does not exist here, and an unread DEF cannot say so.
+    comps = dict(_def_resolution_from_text(txt).components)
     if not comps:
         return 0, "no COMPONENTS section in DEF"
     refs = set()
@@ -48124,29 +48126,140 @@ _PAD_CELL_HINTS = _IO_FAMILY_HINTS
 
 _DEF_COMPONENT_RE = re.compile(
     r"^\s*-\s+(\S+)\s+(\S+)", re.MULTILINE)
+_DEF_COMPONENTS_SECTION_RE = re.compile(
+    r"^COMPONENTS\b.*?^END COMPONENTS", re.MULTILINE | re.DOTALL)
 
 
-def _parse_def_components(def_file: Path) -> List[Tuple[str, str]]:
-    """Parse the DEF COMPONENTS block into [(instance, master), ...].
+# ===========================================================================
+# ORGANIC #2044 — ONE resolution of ONE DEF's physical facts.
+#
+# WHAT WAS TRUE BEFORE. Three places in this file read a DEF's COMPONENTS
+# block, each with its own accepted grammar, and one place reads its DESIGN
+# line:
+#
+#   `_parse_def_components`      `^COMPONENTS\b .*? ^END COMPONENTS`, then
+#                                `^\s*-\s+(\S+)\s+(\S+)` over the match
+#   `_padring_def_components`    a line state machine keyed on the literal
+#                                prefixes `"COMPONENTS "` and `"- "`
+#   `_def_net_orphan_instances`  `^COMPONENTS\s+\d+\s*;(.*?)^END COMPONENTS\s*$`
+#   `_def_design_name`           `^\s*DESIGN\s+(\S+)\s*;`  (THE authority)
+#
+# DEF is a TOKEN language. The whitespace between two tokens is not
+# significant, and a statement may carry a terminator the next reader does
+# not expect. Each COMPONENTS grammar above is significant about a DIFFERENT
+# piece of that whitespace, so the three CAN return different component sets
+# for one file — and nothing said so.
+#
+# MEASURED on d5be9124d9 (8HD-9), ONE DEF, three readers. The DEF declares
+# two instances; the only perturbations are a TAB after the entry dash and a
+# `;` after `END COMPONENTS`, both legal DEF:
+#
+#     _parse_def_components      -> [(u_a, MASTER_A), (u_b, MASTER_B)]
+#     _padring_def_components    -> [(u_b, MASTER_B)]      # u_a DROPPED
+#     _def_net_orphan_instances  -> []  "no COMPONENTS section in DEF"
+#
+# Three answers to one question. Neither wrong answer is loud: the dropped
+# entry is an instance `_padring_physical_only_instance_tcl` then never
+# creates in odb, and the empty read is the same-net heal's orphan
+# PRECONDITION reporting a measured-looking zero for a population it could
+# not read at all — the precondition whose entire job is to refuse the heal
+# when net-less metal exists.
+#
+# WHAT IS TRUE NOW. `_def_reopen_resolution(def_file)` resolves one DEF ONCE
+# into one frozen `_DefReopenResolution(design, components)`, and every reader
+# above is a wrapper over it. The design half is unchanged: `_def_design_name`
+# stays THE authority and the resolver CALLS it — there is no second
+# DESIGN-line parser, and `_streamout_top` keeps returning exactly what it
+# returned before for every DEF whose header it could already read.
+#
+# WHICH ANSWER THE ONE ANSWER IS: `_parse_def_components`' grammar, unchanged.
+# It is the most permissive of the three and it was already right on every
+# fixture above, so the other two readers move ONTO the shipped reader's
+# answer and no third answer is invented. A DEF with one unambiguous reading
+# is handled byte-identically by all four.
+#
+# COST, measured on this host at the largest DEF this flow has produced
+# (2.87 MB routed.def; the synthetic probe used 2.97 MB): a full COMPONENTS
+# parse is ~50 ms and a full read ~3 ms. `_streamout_top` now pays that once
+# per call and has 7 call sites, none in a loop — ~0.35 s per phase-3 run,
+# against a run measured in hours. The alternative (a per-path memo) buys
+# that back and adds a staleness mode against a DEF the flow rewrites in
+# place, so it is deliberately not taken.
+#
+# chip/PDK-AGNOSTIC: DEF grammar only; no design, vendor, PDK or cell literal.
+# ===========================================================================
 
-    chip-AGNOSTIC structural parse: no literal names. Returns [] if the DEF
-    has no COMPONENTS block. Each component line is `- <inst> <master> + ...`."""
-    out: List[Tuple[str, str]] = []
-    try:
-        text = def_file.read_text(errors="ignore")
-    except OSError:
-        return out
-    m = re.search(r"^COMPONENTS\b.*?^END COMPONENTS",
-                  text, re.MULTILINE | re.DOTALL)
+@dataclass(frozen=True)
+class _DefReopenResolution:
+    """The DEF-owned physical facts every consumer of one DEF must agree on.
+
+    `design` is the cell name the DEF declares for itself (`None` when the DEF
+    is missing, unreadable or headerless — never a guess). `components` is the
+    instantiated `(instance, master)` population, in file order.
+
+    FROZEN, and a tuple rather than a list, because the point of the record is
+    that two consumers handed it cannot end up describing different files: a
+    consumer that could edit it could re-introduce by mutation exactly the
+    divergence this removes."""
+
+    design: Optional[str]
+    components: Tuple[Tuple[str, str], ...]
+
+
+def _def_components_from_text(def_text: str) -> Tuple[Tuple[str, str], ...]:
+    """The ONE COMPONENTS parse. `()` when the DEF declares no such block.
+
+    chip-AGNOSTIC structural parse: no literal names. Each component entry
+    opens `- <inst> <master>`; only those two tokens are read, so the
+    placement syntax that follows is irrelevant here."""
+    m = _DEF_COMPONENTS_SECTION_RE.search(def_text or "")
     if not m:
-        return out
+        return ()
+    out: List[Tuple[str, str]] = []
     for cm in _DEF_COMPONENT_RE.finditer(m.group(0)):
         inst, master = cm.group(1), cm.group(2)
         # Skip the COMPONENTS header artefact and section keywords.
         if master in (";", "+"):
             continue
         out.append((inst, master))
-    return out
+    return tuple(out)
+
+
+def _def_resolution_from_text(def_text: str,
+                              design: Optional[str] = None
+                              ) -> _DefReopenResolution:
+    """The resolution for a DEF whose text a caller has ALREADY read.
+
+    `design` is passed in rather than re-derived: the design authority is
+    `_def_design_name`, which takes a path, and a consumer holding only text
+    (the pad-ring deck, the orphan precondition) is asking about the component
+    population and has no design question to answer. It is `None` there, and
+    `None` here means NOT ASKED — never "the DEF declares no design"."""
+    return _DefReopenResolution(design=design,
+                                components=_def_components_from_text(def_text))
+
+
+def _def_reopen_resolution(def_file: Path) -> _DefReopenResolution:
+    """Resolve one DEF's physical facts once, for every consumer of that file.
+
+    Unreadable or absent: `design=None, components=()` — the same answer every
+    reader below gave before, and never an exception."""
+    try:
+        text = def_file.read_text(errors="ignore")
+    except OSError:
+        text = ""
+    return _def_resolution_from_text(text, design=_def_design_name(def_file))
+
+
+def _parse_def_components(def_file: Path) -> List[Tuple[str, str]]:
+    """Parse the DEF COMPONENTS block into [(instance, master), ...].
+
+    chip-AGNOSTIC structural parse: no literal names. Returns [] if the DEF
+    has no COMPONENTS block. Each component line is `- <inst> <master> + ...`.
+
+    Now a wrapper over `_def_reopen_resolution` (#2044) so this reader and the
+    two others cannot answer differently; the value returned is unchanged."""
+    return list(_def_reopen_resolution(def_file).components)
 
 
 _LEF_MACRO_NAME_RE = re.compile(r"^\s*MACRO\s+(\S+)", re.MULTILINE)
@@ -48196,7 +48309,11 @@ def _def_reopen_extra_lefs_c(def_path: Path, pdk: "PdkConfig",
     literal anywhere -- the DEF names the masters and the LEFs name themselves.
     """
     try:
-        masters = {m for _, m in _parse_def_components(def_path)}
+        # #2044 — the masters come from the SAME frozen resolution of this DEF
+        # that every other consumer of it reads, so a deck's LEF list and the
+        # streamout's cell name cannot be derived from two different readings
+        # of one file.
+        masters = {m for _, m in _def_reopen_resolution(def_path).components}
     except Exception:
         return []
     if not masters:
@@ -48302,7 +48419,12 @@ def _streamout_top(def_file: Path, top: str) -> Tuple[str, str]:
     NAMED in the step's own detail, because a run that silently streams a
     different cell than the one its record says is exactly the shape that hid
     this for a release."""
-    design = _def_design_name(def_file)
+    # #2044 — the name comes out of the SAME frozen resolution of this DEF that
+    # the fresh-session re-open path reads for its master list. `_def_design_name`
+    # is still THE design-name authority and is still the only DESIGN-line
+    # parser in this file; the resolver calls it. Value-identical to the
+    # previous direct call for every DEF.
+    design = _def_reopen_resolution(def_file).design
     if not design or design == top:
         return top, ""
     return design, (f"top cell taken from the DEF's own `DESIGN {design}` "
