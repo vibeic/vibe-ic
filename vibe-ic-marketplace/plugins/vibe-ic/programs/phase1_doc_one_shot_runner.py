@@ -32258,10 +32258,29 @@ def gen_l4_regmap(project: Path,
     # folds element rows into one structured array record. Length
     # cap raised to 40 (was 30) to absorb the bracket characters.
     # Chip-AGNOSTIC: pure structural relaxation.
+    # czregmap — bare `R` / `W` access cells. The alternation accepted
+    # every COMPOUND access token (`R/W`, `RW`, `RW1C`, `RO`, `WO`,
+    # `WARL`, `WLRL`, `R-W`, `N/A`, each with an optional `[MDUSH]`
+    # privilege prefix) and no SINGLE-LETTER one. A register summary
+    # table whose access column reads `R` for a read-only row and `W`
+    # for a write-only row — ordinary register documentation, and the
+    # spelling a `| addr | name | R/W | width | description |` header
+    # invites, since the header itself names the column `R/W` — matched
+    # NOTHING, and every such row was dropped from L4.registers[] with
+    # no diagnostic. Measured on a 7-row summary table: 1 row carried,
+    # 6 dropped, and the run reported coverage 100.0% and
+    # `input_declared_registers.declared = 0`.
+    # `R` and `W` are placed LAST in the alternation so the longer
+    # compound tokens are still preferred; the trailing `\s*\|` anchor
+    # keeps a prose cell that merely STARTS with R or W (`Read`,
+    # `Write`) from matching, because the cell must be the token and
+    # nothing else.
+    # Chip-AGNOSTIC: single-letter read/write notation is generic
+    # register-documentation vocabulary, not any design's spelling.
     _reg_row_re_rst_grid = re.compile(
         r"^[ \t]*\|\s*[`]{0,2}(?P<addr>0x[0-9A-Fa-f][0-9A-Fa-f_]{0,7})[`]{0,2}\s*\|"
         r"\s*[`]{0,2}(?P<name>[a-zA-Z_][\w\[\]]{0,40})[`]{0,2}\s*\|"
-        r"\s*(?P<access>(?:[MDUSH])?(?:R/?W1C|R/?W|RW|RO|WO|WARL|WLRL|R-W|N/A))\s*\|"
+        r"\s*(?P<access>(?:[MDUSH])?(?:R/?W1C|R/?W|RW|RO|WO|WARL|WLRL|R-W|N/A|R|W))\s*\|"
         r"\s*(?P<desc>[^|]+?)\s*\|",
         re.MULTILINE,
     )
@@ -52255,12 +52274,35 @@ def emit_coverage_report(project: Path,
         + "".join(f"  - UNREAD: `{d['path']}` — {d['reason']}\n"
                   for d in _unread_docs[:10])
     )
+    # czregmap — the number and its own disclaimer are emitted TOGETHER.
+    #
+    # `overall.measures` says, in the producer's own words, that a literal is
+    # credited when it appears ANYWHERE in the union of the L docs — so the
+    # ratio cannot tell a fact that reached its CONSUMING layer from one that
+    # only reached a prose layer. That sentence lived in the JSON alone, and
+    # the markdown a human reads published `overall.pct = 100.0%` under a
+    # disclaimer about a different limitation entirely (documents that did not
+    # extract). Measured on a docs-only project: 100.0% while L4_REGMAP had
+    # lost six of the seven register rows its input declares — every one of
+    # those register names does appear SOMEWHERE in the union, so the ratio
+    # was correct and unquotable at the same time.
+    #
+    # The number is NOT narrowed. Narrowing it would redefine what the metric
+    # counts without anyone deciding the union-wide question is the wrong one
+    # — and the union-wide question is real: it answers "did this literal land
+    # anywhere at all". What was wrong is that the answer travelled without
+    # its scope. So the scope travels with it, on the SAME bullet, sourced
+    # from the producer's own field so the two cannot drift apart.
+    _measures_md = str((report.get("overall") or {}).get("measures") or "")
+    _measures_bullet = (f"  - what this percentage measures: {_measures_md}\n"
+                        if _measures_md else "")
     out_md.write_text(
         f"# Extraction coverage report\n\n"
         f"- denominator (unique literals in input_doc/): **{denom}**\n"
         f"- numerator (cited in L*.json extraction_evidence): **{numer}**\n"
         f"- **overall.pct = {pct:.1f}%**\n"
-        f"- status: **{report['overall']['status']}** (target ≥80%)\n"
+        + _measures_bullet
+        + f"- status: **{report['overall']['status']}** (target ≥80%)\n"
         f"- curated: **{gate_hits}/{gate_total} = {gate_pct:.1f}%**\n"
         f"- hands_on: **{handson_hits}/{handson_total} = {handson_pct:.1f}%**"
         f"\n"
@@ -65821,6 +65863,14 @@ def main() -> int:
               f"{ho.get('numerator',0)}/{ho.get('denominator',0)} = "
               f"{ho.get('pct', 0.0):.1f}%")
     print(f"Coverage (overall):  {pct:.1f}%")
+    # czregmap — the scope travels with the number here too. This SUMMARY line
+    # is the one a reader quotes, and on its own `100.0%` reads as a
+    # completeness claim the metric does not make. Sourced from the producer's
+    # own `overall.measures` so there is exactly one place the sentence is
+    # written down.
+    _measures_txt = str((report.get("overall") or {}).get("measures") or "")
+    if _measures_txt:
+        print(f"  what this percentage measures: {_measures_txt}")
     # v1.7.72 — for #499 defect 4. The three percentages above are
     # computed over documents that EXTRACTED, so a document the
     # ingester could not render cannot lower any of them. Measured on a

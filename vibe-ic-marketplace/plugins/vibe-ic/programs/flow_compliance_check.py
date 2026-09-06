@@ -8053,7 +8053,24 @@ def _p0_audit_gate_records(records: List[Dict[str, Any]]
 # never the reason itself, and fall back to the raw line if stripping would
 # leave nothing — an empty message is how a genuinely silent gate is recorded,
 # and a normalising step must not manufacture one.
-_P0_SKIP_MARKER = re.compile(r"^\[(?:skip|n/?a|vacuous|info)\]\s*", re.I)
+# czregmap — `not_measured` joins the house prefixes. A gate that distinguishes
+# "the rule was not applied to a population that EXISTS" from "there was
+# nothing to check" announces the first as `[NOT_MEASURED] <gate>: <reason>`,
+# the same shape the other four use. Unrecognised, the marker AND the repeated
+# gate name both survive into the 200-character operator line and truncate the
+# reason — MEASURED at 56 characters of payload lost, which on that gate is
+# exactly the row and register counts it exists to publish.
+#
+# COSMETIC AND ADVISORY, measured rather than asserted: this function has ONE
+# caller, which uses it for the record's MESSAGE only ("the VERDICT is
+# unchanged, only what the record is able to say about it"). Its output is also
+# fed to `_flow_reason_taxonomy.infer_nonverdict_reason`, so that was measured
+# too — `EXECUTION_ERROR` before and after, on both the NOT_MEASURED and the
+# NOT_APPLICABLE path. No verdict, no exit code and no reason_class moves.
+# NO-LEAK: a line that does NOT begin with the marker renders byte-identically
+# (verified on the same gate's NOT_APPLICABLE output).
+_P0_SKIP_MARKER = re.compile(
+    r"^\[(?:skip|n/?a|vacuous|info|not[_ ]?measured)\]\s*", re.I)
 
 
 def _p0_skip_reason_from_output(gate_name: str, stdout: str,
