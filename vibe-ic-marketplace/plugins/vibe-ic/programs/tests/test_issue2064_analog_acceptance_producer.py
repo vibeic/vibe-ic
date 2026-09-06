@@ -277,22 +277,148 @@ def test_a_derived_but_unexecuted_corner_is_not_credited(tmp_path):
 # --------------------------------------------------------------------------
 # 4. Refusals, each NAMED. A refusal is never a pass and never silent.
 # --------------------------------------------------------------------------
-def test_a_named_quantity_the_input_does_not_bound_is_refused_by_name(tmp_path):
+#: The SAME quantity in the two states the J1 ruling separates. `_UNBOUNDED_REG`
+#: above is the design SPEAKING ("best-effort"); this one is the input saying
+#: nothing at all about the bound, in the spellings a spec table uses for an
+#: empty cell.
+_ABSENT_BOUND_REG = {"name": "Load reg", "target_raw": "—",
+                     "range_raw": "", "unit": "-"}
+_TBD_BOUND_REG = {"name": "Load reg", "target_raw": "TBD",
+                  "range_raw": "—", "unit": "-"}
+
+
+def _one_quantity_project(tmp_path: Path, spec: dict) -> Path:
     project = tmp_path / "proj"
     method = "Check the load reg of the block"
     _l10(project, [(_ROW_VALUE, method)])
-    _l22(project, block_a_specs=[_UNBOUNDED_REG],
+    _l22(project, block_a_specs=[spec],
+         scoped_intent=[{"phase": _ROW_VALUE, "method": method,
+                         "evidence": "input/docs/spec.md"}])
+    _a4(project, "block_a")
+    return project
+
+
+def test_a_quantity_the_input_declares_unbounded_is_disclosed_not_refused(
+        tmp_path):
+    """J1 RULING (2026-09-07). `best-effort` is the DESIGN'S OWN statement that
+    no acceptance bound exists. The first revision refused it and emitted a
+    JUnit `<error>`, which made an honest declaration a permanent red: nothing
+    anyone could do to the design or the sweep would ever clear it."""
+    project = _one_quantity_project(tmp_path, _UNBOUNDED_REG)
+    rep = {}
+    A.emit_acceptance_checks(project, rep)
+    assert rep["refusals"] == [], rep["refusals"]
+    disc = rep["disclosures"]
+    assert len(disc) == 1, disc
+    assert disc[0]["verdict"] == A.DISCLOSED
+    assert disc[0]["reason_class"] == "NO_BOUND_DECLARED"
+    # The input's OWN WORDS are carried, not paraphrased.
+    assert disc[0]["declared_value"] == "best-effort"
+    assert "Load reg" in disc[0]["detail"] and "best-effort" in disc[0]["detail"]
+
+
+def test_a_quantity_whose_bound_is_absent_is_still_refused(tmp_path):
+    """The other half of the ruling, and the reason the two must not collapse:
+    a bound the input never declared EITHER WAY is a bound withheld, and it
+    still blocks."""
+    project = _one_quantity_project(tmp_path, _ABSENT_BOUND_REG)
+    rep = {}
+    A.emit_acceptance_checks(project, rep)
+    assert rep["disclosures"] == [], rep["disclosures"]
+    assert len(rep["refusals"]) == 1, rep["refusals"]
+    assert rep["refusals"][0]["reason_class"] == "NO_DECLARED_BOUND"
+    assert rep["refusals"][0]["verdict"] == A.REFUSED
+    assert "declares NOTHING" in rep["refusals"][0]["detail"]
+    assert rep["rows"][0]["authorable"] is False
+
+
+def test_a_bound_still_to_be_determined_is_absent_not_declared(tmp_path):
+    """`TBD` is a bound that has not been determined — the ABSENT case. Reading
+    it as a declaration that no bound applies would let a placeholder buy the
+    non-blocking treatment the ruling reserves for a real statement."""
+    project = _one_quantity_project(tmp_path, _TBD_BOUND_REG)
+    rep = {}
+    A.emit_acceptance_checks(project, rep)
+    assert rep["disclosures"] == []
+    assert [r["reason_class"] for r in rep["refusals"]] == ["NO_DECLARED_BOUND"]
+
+
+def test_a_disclosed_non_acceptance_blocks_nothing(tmp_path):
+    """VISIBLE and NON-BLOCKING, measured on all four consumers at once: the
+    JUnit element, the suite counters, the run report, and the predicate the
+    runner step's status is computed from."""
+    project = tmp_path / "proj"
+    method = "DC operating point (Vout) and the load reg of the block"
+    _l10(project, [(_ROW_VALUE, method)])
+    _l22(project, block_a_specs=[_BOUNDED_VOUT, _UNBOUNDED_REG],
          scoped_intent=[{"phase": _ROW_VALUE, "method": method,
                          "evidence": "input/docs/spec.md"}])
     _a4(project, "block_a")
     rep = {}
     A.emit_acceptance_checks(project, rep)
-    refusals = {r["id"]: r for r in rep["refusals"]}
-    hit = [r for r in refusals.values()
-           if r["reason_class"] == "NO_DECLARED_BOUND"]
-    assert hit, rep["refusals"]
-    assert "Load reg" in hit[0]["detail"] and "best-effort" in hit[0]["detail"]
-    assert rep["rows"][0]["authorable"] is False
+    A.run_acceptance_checks(project, rep)
+
+    assert rep["failed"] == 0 and rep["not_measured"] == 0
+    assert rep["refused"] == 0 and rep["disclosed"] == 1
+    assert rep["passed"] == 1
+    # THE STEP'S OWN PREDICATE. `disclosed` is deliberately not in it.
+    blocking = (rep["failed"] or rep["not_measured"] or rep["refused"])
+    assert not blocking and rep["passed"] > 0, rep["cases"]
+
+    xml = (A.result_dir(project) / "results.xml").read_text()
+    assert '<skipped type="DISCLOSED"' in xml and 'skipped="1"' in xml
+    assert 'errors="0"' in xml and 'failures="0"' in xml
+    # ... and it is VISIBLE: a testcase, by name, carrying the input's words.
+    assert "__loadreg" in xml and "best-effort" in xml
+
+    ledger = json.loads((project / A.RECORD_REL).read_text())
+    assert [d["declared_value"] for d in ledger["disclosures"]] == ["best-effort"]
+    assert ledger["rows"][0]["disclosures"], ledger["rows"][0]
+
+
+def test_a_disclosure_never_credits_a_suite_either(tmp_path):
+    """It blocks nothing AND it passes nothing. A suite whose only content is a
+    disclosure must not read as a functional PASS — `passed` is 0, so the
+    Step-4 professional-pass reader still returns None."""
+    project = _one_quantity_project(tmp_path, _UNBOUNDED_REG)
+    rep = {}
+    A.emit_acceptance_checks(project, rep)
+    A.run_acceptance_checks(project, rep)
+    summary = SRB.parse_junit(A.result_dir(project) / "results.xml")
+    assert summary["tests"] == 1 and summary["skipped"] == 1
+    assert summary["passed"] == 0 and summary["errors"] == 0
+    assert SRB.find_professional_tb_pass(project) is None
+
+
+def test_a_row_whose_only_outcome_is_a_disclosure_is_not_re_refused(tmp_path):
+    """The `NO_ACCEPTANCE_DERIVABLE` fallback must not fire on a row the input
+    DID speak about — that would re-erect the wall the ruling removed."""
+    project = _one_quantity_project(tmp_path, _UNBOUNDED_REG)
+    rep = {}
+    A.emit_acceptance_checks(project, rep)
+    assert rep["refusals"] == []
+    assert rep["rows"][0]["disclosures"] and not rep["rows"][0]["clauses"]
+
+
+def test_the_runner_status_predicate_excludes_the_disclosure(tmp_path):
+    """Read off the SOURCE, so a future edit that folds `disclosed` back into
+    the blocking predicate is refused here and not only on a live run."""
+    import ast as _ast
+    src = (PROGRAMS / "design_one_shot_runner.py").read_text()
+    fn = [n for n in _ast.walk(_ast.parse(src))
+          if isinstance(n, _ast.FunctionDef)
+          and n.name == "step_analog_acceptance_tb_run"]
+    assert fn, "the runner step is gone"
+    status = [n for n in _ast.walk(fn[0]) if isinstance(n, _ast.Assign)
+              and any(isinstance(t, _ast.Name) and t.id == "status"
+                      for t in n.targets)]
+    assert status, "no `status = ...` in the step"
+    text = _ast.get_source_segment(src, status[0]) or ""
+    for key in ("failed", "not_measured", "refused", "passed"):
+        assert f'"{key}"' in text, (key, text)
+    assert '"disclosed"' not in text, (
+        "a disclosed non-acceptance is back in the blocking predicate; the "
+        "input's own words say no bound exists, so nothing could ever clear it")
 
 
 def test_a_target_without_a_tolerance_is_not_a_bound(tmp_path):
