@@ -13,9 +13,15 @@ wrapper clean-room, 7th benchmark IC):
      `reg ..._drive` + `assign`ed, instead of tied for `USE_POWER_PINS`.
 
 Fix (in step_full_stack_tb_gen): skip illegal identifiers; declare every port
-at its REAL width (from the parsed RTL surface / L9, CONSTANT widths only — a
-parameterized `[size-1:0]` falls back to 1-bit so it stays elaboratable); tie
-(not drive) POWER/ground inout pins.
+at its REAL width (from the parsed RTL surface / L9); tie (not drive)
+POWER/ground inout pins.
+
+SUPERSEDED CLAUSE, kept visible on purpose: this file used to say that a
+parameterized `[size-1:0]` "falls back to 1-bit so it stays elaboratable". It
+did stay elaboratable, and it was WRONG — a wide bus declared one bit binds
+bit 0 and floats the rest, and the step reported CONNECTIVITY_PASS over it. The
+width cell is now EVALUATED over the DUT's own parameter defaults, and a cell
+that cannot be evaluated REFUSES BY NAME instead of being narrowed.
 
 ACCEPTANCE (issue): an SoC-wrapper L9 with a multi-bit bus + a POWER inout →
 the generated TB compiles under iverilog.
@@ -123,8 +129,11 @@ def test_soc_wrapper_tb_structure(tmp_path):
 @pytest.mark.skipif(not _HAS_IVERILOG, reason="iverilog not on this host")
 def test_parameterized_width_still_compiles_NOLEAK(tmp_path):
     """A parameterized-width datapath top (`[size-1:0]`) must still compile —
-    the width falls back to 1-bit (a benign padding warning), never a
-    non-constant dimension that fails elaboration."""
+    and must now compile AT ITS REAL WIDTH, not narrowed to one bit.
+
+    Compiling was never the property that mattered here: the 1-bit declaration
+    compiled too. `test_parameterized_width_is_resolved_not_narrowed` below
+    asserts the part this test cannot see."""
     l9 = {"top_module": "mul_top", "top_ports": [
         {"name": "x", "direction": "input"},
         {"name": "p", "direction": "output"}]}
@@ -138,6 +147,28 @@ def test_parameterized_width_still_compiles_NOLEAK(tmp_path):
         ["iverilog", "-g2012", "-o", str(tmp_path / "a.out"),
          str(tb), str(rd / "mul_top.v")], capture_output=True, text=True)
     assert r.returncode == 0, r.stderr
+
+
+def test_parameterized_width_is_resolved_not_narrowed(tmp_path):
+    """`[size-1:0]` with `size = 8` is EIGHT bits in the TB, not one.
+
+    This is the assertion the compile test above structurally cannot make: the
+    1-bit declaration this generator used to emit compiled perfectly well. What
+    it did not do was connect the bus.
+    """
+    l9 = {"top_module": "mul_top", "top_ports": [
+        {"name": "x", "direction": "input"},
+        {"name": "p", "direction": "output"}]}
+    rtl = ("module mul_top #(parameter size = 8) "
+           "(input [size-1:0] x, output [2*size-1:0] p);\n"
+           " assign p = x;\nendmodule\n")
+    proj, _rd = _seed(tmp_path, l9, rtl, top="mul_top")
+    P2.step_full_stack_tb_gen(proj, "chip_top")
+    body = _tb(proj).read_text()
+    assert "reg [7:0] x = 0;" in body, body
+    assert "wire [15:0] p;" in body, body
+    # the pre-fix text, which compiled and said CONNECTIVITY_PASS:
+    assert "reg x = 0;" not in body
 
 
 # ── (3) helper units ─────────────────────────────────────────────────────────
@@ -159,13 +190,67 @@ def test_is_power_pin(nm, io, is_pwr):
 
 @pytest.mark.parametrize("p,expect", [
     ({"width_decl": "[31:0]"}, " [31:0]"),
-    ({"width_decl": "[size-1:0]"}, ""),          # parameterized → 1-bit
     ({"msb": 127, "lsb": 0}, " [127:0]"),
     ({"width": 38}, " [37:0]"),
     ({"width": 1}, ""),
     ({}, "")])
 def test_width_decl(p, expect):
     assert P2._v643_width_decl(p) == expect
+
+
+# ── the parameterized width cell ─────────────────────────────────────────────
+# This case used to assert `""`, i.e. "declare the bus as ONE BIT and carry on".
+# That is not a narrower answer, it is a WRONG one: `reg adr = 0;` binds bit 0
+# of a wide port, leaves the rest floating, compiles with only a port-width
+# padding warning, and the step then reports CONNECTIVITY_PASS over a bus that
+# is not connected. The assertion is not relaxed here, it is REPLACED by a
+# stronger one -- resolve it, or refuse it by name. Nothing may still be "".
+
+def test_parameterized_width_resolves_over_the_dut_params():
+    """A cell that EVALUATES over the DUT's own defaults gives literal bounds."""
+    assert P2._v643_width_decl({"width_decl": "[size-1:0]"},
+                               {"size": 32}) == " [31:0]"
+    assert P2._v643_width_decl({"width_decl": "[2*size-1:0]"},
+                               {"size": 8}) == " [15:0]"
+
+
+def test_parameterized_width_refuses_by_name_when_unresolvable():
+    """No params, no L9 numbers -> REFUSE, and say which symbol blocked it."""
+    p = {"width_decl": "[size-1:0]"}
+    assert P2._v643_width_decl(p) is None
+    why = P2._v643_width_refusal(p)
+    assert "size" in why, why
+    # It must never come back as a width, least of all as one bit.
+    assert P2._v643_width_decl(p) != ""
+
+
+def test_width_decl_is_monotone_in_its_input():
+    """#RB-18 THE BOTH CASE -- the case the table above could not express.
+
+    Every row of the old table supplied EITHER a `width_decl` OR the L9
+    `msb`/`lsb` numbers, never both, so the table could not see that the
+    `width_decl` branch RETURNED EARLY and threw the L9 numbers away. The
+    function was therefore non-monotone in its input: given both, it answered
+    one bit; given strictly LESS (the same port with `width_decl` deleted) it
+    answered `[9:0]` correctly. Deleting evidence improved the answer.
+
+    Both directions must now give the SAME answer.
+    """
+    both = {"width_decl": "[aw-1:0]", "msb": 9, "lsb": 0}
+    less = {"msb": 9, "lsb": 0}                      # the same port, width cell deleted
+    assert P2._v643_width_decl(less) == " [9:0]"
+    assert P2._v643_width_decl(both) == " [9:0]"
+    assert P2._v643_width_decl(both) == P2._v643_width_decl(less)
+
+
+def test_width_decl_prefers_the_dut_params_over_the_l9_numbers():
+    """When the cell DOES evaluate, the RTL is the authority.
+
+    The L9 numbers are a second, independent extraction; they are the fallback
+    for a cell that cannot be evaluated, never an override of one that can.
+    """
+    p = {"width_decl": "[aw-1:0]", "msb": 3, "lsb": 0}
+    assert P2._v643_width_decl(p, {"aw": 10}) == " [9:0]"
 
 
 if __name__ == "__main__":

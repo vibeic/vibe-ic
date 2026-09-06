@@ -174,17 +174,56 @@ def test_extraction_is_deterministic():
 
 
 def test_unparsable_width_expression_refuses_rather_than_guessing():
-    """A SystemVerilog width expression the resolver cannot evaluate (here
-    `$clog2(...)`) must REFUSE. Added because a mutation that returned 32 for an
-    unparsable expression survived the first version of this file — the tests
-    covered the unknown-symbol path but not the unparsable-expression path."""
+    """A SystemVerilog width expression the resolver cannot evaluate must
+    REFUSE. Added because a mutation that returned 32 for an unparsable
+    expression survived the first version of this file — the tests covered the
+    unknown-symbol path but not the unparsable-expression path.
+
+    THE STIMULUS MOVED, and the assertion did not. This case used `$clog2(AW)`,
+    which the evaluator has since learned to compute exactly (see the test
+    below). A guard whose stimulus stops being an example of the thing it
+    guards is not a weaker guard, it is a VACUOUS one — so the stimulus is now
+    `$bits(...)`, which needs type information no width evaluator has and is
+    therefore still genuinely unevaluable. If `$bits` is ever supported, this
+    stimulus must move again rather than the assertion being dropped.
+    """
     pkg = PKG.replace("logic [AW-1:0] a_address;",
-                      "logic [$clog2(AW)-1:0] a_address;")
+                      "logic [$bits(tl_h2d_t)-1:0] a_address;")
     w, why = D.resolve_bus_widths(
         [("pkg.sv", pkg), ("dut.sv", DUT), ("top.sv", TOP_PLAIN)],
         DUT, "dut_mod", BUS)
     assert w is None, f"guessed a width instead of refusing: {w}"
     assert "unresolved" in why and "a_address" in why
+
+
+def test_clog2_is_evaluated_exactly_not_refused():
+    """`$clog2` is a pure integer function of one integer, so a width written
+    over it is fully stated by the design and must RESOLVE, not refuse.
+
+    Measured: the entire residual of unresolvable port widths across the corpus
+    roots was this one form — `localparam int IdxW = $clog2(N)` used as a port's
+    declared width.
+    """
+    assert D._clog2(0) == 0 and D._clog2(1) == 0      # IEEE 1800
+    assert D._clog2(2) == 1 and D._clog2(8) == 3
+    assert D._clog2(9) == 4 and D._clog2(16) == 4
+    pkg = PKG.replace("logic [AW-1:0] a_address;",
+                      "logic [$clog2(AW)-1:0] a_address;")
+    w, why = D.resolve_bus_widths(
+        [("pkg.sv", pkg), ("dut.sv", DUT), ("top.sv", TOP_PLAIN)],
+        DUT, "dut_mod", BUS)
+    assert w is not None, f"refused a width the design fully states: {why}"
+    assert w["addr"] == 4, w          # AW = 12 -> clog2(12) = 4
+    assert w["data"] == 32, w
+
+
+def test_only_clog2_is_admitted_no_other_system_function():
+    """NO-LEAK. Admitting one system function must not admit calls in general —
+    an evaluator that will call anything is not an arithmetic evaluator."""
+    assert D._int_expr("$clog2(N)", {"N": 8}) == 3
+    for expr in ("$bits(t)", "$onehot(N)", "$countones(N)", "len(N)",
+                 "N.bit_length()", "__import__('os')"):
+        assert D._int_expr(expr, {"N": 8}) is None, expr
 
 
 # --------------------------------------------------------------------------

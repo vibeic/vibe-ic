@@ -2610,18 +2610,37 @@ def _drv_constraints_sdc_block(slew_ns: Optional[float],
         predicates = " && ".join(
             f'$_vibeic_drv_name ne "{_tcl_puts_safe(name)}"'
             for name in supplies)
+        # TWO lists, because the three DRV commands do not accept the same
+        # objects. Measured against the pinned OpenSTA 2.7.0:
+        #   set_max_capacitance  pins OK   ports OK (in AND out)
+        #   set_max_transition   pins ERR  ports OK (in AND out)   <- Error 100
+        #   set_max_fanout       pins ERR  INPUT ports only        <- Error 100 / 467
+        # `_vibeic_drv_signal_ports` is every non-supply port; the `_in` list is
+        # the INPUT subset, which is the only object list set_max_fanout takes.
         lines.extend([
             "# Signal-only DRV scope; producer-proven supply ports excluded.",
+            "# Two lists: set_max_fanout accepts INPUT ports only (STA Error",
+            "# 467 on an output), the others accept every signal port.",
             "set _vibeic_drv_signal_ports {}",
+            "set _vibeic_drv_signal_in_ports {}",
             "foreach _vibeic_drv_port [get_ports *] {",
             "  set _vibeic_drv_name [get_name $_vibeic_drv_port]",
             f"  if {{{predicates}}} "
-            "{ lappend _vibeic_drv_signal_ports $_vibeic_drv_port }",
+            "{",
+            "    lappend _vibeic_drv_signal_ports $_vibeic_drv_port",
+            '    if {[get_property $_vibeic_drv_port direction] eq "input"} '
+            "{ lappend _vibeic_drv_signal_in_ports $_vibeic_drv_port }",
+            "  }",
             "}",
         ])
+        # Only set_max_capacitance may take the hierarchical-pin scope. The
+        # other two get [current_design], which every DRV command accepts.
         scope = "[get_pins -hierarchical *]"
     if slew_ns is not None:
-        lines.append(f"set_max_transition {slew_ns} {scope}")
+        # NOT `scope`: set_max_transition REFUSES a Pin ("Error 100:
+        # unsupported object type Pin"), so the hierarchical-pin scope that
+        # set_max_capacitance takes would abort the SDC here.
+        lines.append(f"set_max_transition {slew_ns} [current_design]")
         if supplies:
             lines.append(
                 f"set_max_transition {slew_ns} $_vibeic_drv_signal_ports")
@@ -2633,10 +2652,20 @@ def _drv_constraints_sdc_block(slew_ns: Optional[float],
     if max_fanout is not None:
         if fanout_note:
             lines.append(f"# {fanout_note}")
-        lines.append(f"set_max_fanout {max_fanout} {scope}")
+        # TWO defects were stacked on this one constraint, and the first HID
+        # the second — fixing either alone just relocates the failure:
+        #   D1  `set_max_fanout <n> [get_pins -hierarchical *]`
+        #       -> "Error 100: unsupported object type Pin."
+        #   D2  `set_max_fanout <n> $_vibeic_drv_signal_ports`, a list built
+        #       from `get_ports *` and therefore containing OUTPUT ports
+        #       -> "Error 467: port '<out>' is not an input."
+        # set_max_fanout is defined over input ports and designs only, so the
+        # design-wide line takes [current_design] and the per-port line takes
+        # the INPUT subset.
+        lines.append(f"set_max_fanout {max_fanout} [current_design]")
         if supplies:
             lines.append(
-                f"set_max_fanout {max_fanout} $_vibeic_drv_signal_ports")
+                f"set_max_fanout {max_fanout} $_vibeic_drv_signal_in_ports")
     if slew_ns is None and cap_pf is None and max_fanout is None:
         lines.append("# (no PDK liberty DRV limit resolved; per-pin liberty "
                      "max_capacitance still governs the resizer — no fabricated "

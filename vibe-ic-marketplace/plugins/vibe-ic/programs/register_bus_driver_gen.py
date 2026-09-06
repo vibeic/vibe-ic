@@ -536,7 +536,35 @@ _WIDTH_EXPR_EXP_MAX = 64
 
 _PARAM_DECL_RE = re.compile(
     r"\bparameter\b(?:\s+(?:int|integer|logic|bit|byte|shortint|longint"
-    r"|unsigned|signed))*\s*(?:\[[^\]]*\]\s*)?(\w+)\s*=\s*([^,)\n]+)")
+    r"|unsigned|signed))*\s*(?:\[[^\]]*\]\s*)?(\w+)\s*=\s*([^,\n]+)")
+
+#: The same shape for a LOCALPARAM. SystemVerilog allows one in the parameter
+#: PORT LIST, and that is where a design puts a width it derives from its own
+#: parameters -- `localparam int IdxW = $clog2(N)` -- which is then the declared
+#: width of a real port. Reading only `parameter` left every such port
+#: unresolvable even though the design states the value one line above it.
+#: A localparam is NOT overridable at instantiation, which is why it is kept in
+#: a separate harvest (`dut_header_constants`) rather than folded into
+#: `dut_parameter_defaults`, whose result is merged with instantiation
+#: overrides by `resolve_bus_widths`.
+_LOCALPARAM_DECL_RE = re.compile(
+    r"\blocalparam\b(?:\s+(?:int|integer|logic|bit|byte|shortint|longint"
+    r"|unsigned|signed))*\s*(?:\[[^\]]*\]\s*)?(\w+)\s*=\s*([^,\n]+)")
+
+#: `$clog2` is the one system function that appears in a width expression often
+#: enough to matter, and it is a pure integer function of one integer, so it can
+#: be evaluated exactly. Every other `$...` stays unresolvable and refuses.
+_CLOG2_RE = re.compile(r"\$clog2\s*\(")
+
+
+def _clog2(n: int) -> int:
+    """IEEE 1800 `$clog2`: the number of bits needed to index `n` values.
+
+    $clog2(0) and $clog2(1) are 0; $clog2(2) is 1; $clog2(9) is 4.
+    """
+    if not isinstance(n, int) or isinstance(n, bool) or n < 0:
+        raise ValueError("clog2 of a non-negative integer only")
+    return 0 if n <= 1 else (n - 1).bit_length()
 
 
 def _int_expr(expr: str, params: Dict[str, int]) -> Optional[int]:
@@ -555,19 +583,33 @@ def _int_expr(expr: str, params: Dict[str, int]) -> Optional[int]:
             return int(m.group(1).replace("_", ""), base)
         except ValueError:
             return None
+    # `$clog2(N)` is not Python. Rewrite ONLY that one system function to a
+    # plain call; any other `$...` is left alone and fails to parse, which is
+    # the refusal we want.
+    text = _CLOG2_RE.sub("clog2(", text)
     try:
         tree = _ast.parse(text, mode="eval")
     except SyntaxError:
         return None
     for node in _ast.walk(tree):
-        if isinstance(node, _ast.Name) and node.id not in params:
+        if isinstance(node, _ast.Name) and node.id not in params \
+                and node.id != "clog2":
             return None
         if not isinstance(node, (_ast.Expression, _ast.BinOp, _ast.UnaryOp,
                                  _ast.Constant, _ast.Name, _ast.Load,
                                  _ast.Add, _ast.Sub, _ast.Mult, _ast.USub,
                                  _ast.UAdd, _ast.FloorDiv, _ast.LShift,
-                                 _ast.RShift, _ast.Pow)):
+                                 _ast.RShift, _ast.Pow, _ast.Call)):
             return None
+        # A CALL is allowed for exactly one name, with exactly one argument.
+        # Anything else -- another function, a method, a keyword or starred
+        # argument -- refuses. This stays an arithmetic evaluator.
+        if isinstance(node, _ast.Call):
+            if (not isinstance(node.func, _ast.Name)
+                    or node.func.id != "clog2"
+                    or len(node.args) != 1
+                    or node.keywords):
+                return None
         # BOUNDED. A width expression comes out of the DESIGN'S OWN FILE, so it
         # is input, and input must never be able to wedge the flow. `9**9**9`
         # parses to a legal tree of allowed nodes and then computes forever with
@@ -595,8 +637,9 @@ def _int_expr(expr: str, params: Dict[str, int]) -> Optional[int]:
                     or not 0 <= rv <= _WIDTH_EXPR_EXP_MAX:
                 return None
     try:
-        val = eval(compile(tree, "<width>", "eval"), {"__builtins__": {}},
-                   dict(params))
+        _ns = dict(params)
+        _ns["clog2"] = _clog2
+        val = eval(compile(tree, "<width>", "eval"), {"__builtins__": {}}, _ns)
     except Exception:
         return None
     if not isinstance(val, int) or isinstance(val, bool):
@@ -606,15 +649,27 @@ def _int_expr(expr: str, params: Dict[str, int]) -> Optional[int]:
     return int(val)
 
 
-def dut_parameter_defaults(rtl_text: str, dut_module: str) -> Dict[str, int]:
-    """`{PARAM: default}` for the DUT's own parameter header, input only."""
+def _dut_header_text(rtl_text: str, dut_module: str) -> str:
+    """The text INSIDE `dut_module`'s `#( ... )` parameter header, or "".
+
+    Split out so the parameter harvest and the parameter+localparam harvest
+    below cannot drift apart: they are the same slice of the same file, read
+    once, and only the declaration keyword differs.
+    """
     # Comments are blanked FIRST. A `)` inside a comment -- "no ')' ever" is
     # enough -- closed the header early and truncated the parameter list, and a
     # `(` inside one held it open. Offsets are preserved by the blanker.
     code = _hdl_code_text.strip_hdl_comments_and_strings(rtl_text or "")
-    m = re.search(r"\bmodule\s+" + re.escape(dut_module) + r"\b\s*#\s*\(", code)
+    # A package IMPORT may sit between the module name and its parameter
+    # header:  `module prim_count\n  import prim_count_pkg::*;\n#(`.
+    # Requiring only whitespace there made this slicer find nothing for every
+    # such module, so every width declared over those parameters became
+    # unresolvable -- the SAME header-import blindness ORGANIC #701 fixed in the
+    # module ENUMERATOR, one regex later in the same file set.
+    m = re.search(r"\bmodule\s+" + re.escape(dut_module)
+                  + r"\b\s*(?:import\s+[^;]+;\s*)*#\s*\(", code)
     if not m:
-        return {}
+        return ""
     i = m.end() - 1
     depth, j = 0, i
     while j < len(code):
@@ -630,14 +685,82 @@ def dut_parameter_defaults(rtl_text: str, dut_module: str) -> Dict[str, int]:
         # spans other modules. Measured: an unterminated `#(` harvested `ZZ` out
         # of the NEXT module's header and offered it as this DUT's parameter.
         # An unparsable header yields NO parameters rather than someone else's.
-        return {}
-    header = code[i:j]
+        return ""
+    return code[i:j]
+
+
+def _trim_value(text: str) -> str:
+    """A declaration's value, cut at the `)` that closes the header rather than
+    at the first `)` in the text.
+
+    The value pattern cannot simply stop at `)`: the last declaration in a
+    parameter header is followed by the header's own `)`, but a value may
+    legitimately CONTAIN one -- `localparam int IdxW = $clog2(N)`. Stopping at
+    the first `)` truncated that to `$clog2(N`, which then failed to parse, so
+    the constant was silently absent and every port declared over it refused.
+    Walk the text instead and stop at the first `)` that has no `(` of its own.
+    """
+    depth = 0
+    for i, ch in enumerate(text):
+        if ch == "(":
+            depth += 1
+        elif ch == ")":
+            if depth == 0:
+                return text[:i].strip()
+            depth -= 1
+    return text.strip()
+
+
+def _harvest(header: str, *regexes) -> Dict[str, int]:
+    """`{NAME: value}` for every declaration `regexes` match, IN SOURCE ORDER.
+
+    Order is the point: a derived constant is written after the things it is
+    derived from (`localparam int IdxW = $clog2(N)` after `parameter int N`),
+    so feeding the accumulated map back in as it grows resolves the chain in
+    one pass. A declaration that does not resolve is simply absent -- never a
+    default -- so a width over it refuses by name.
+    """
+    hits = []
+    for rx in regexes:
+        for m in rx.finditer(header):
+            hits.append((m.start(), m.group(1), _trim_value(m.group(2))))
     out: Dict[str, int] = {}
-    for name, expr in _PARAM_DECL_RE.findall(header):
+    for _pos, name, expr in sorted(hits):
         val = _int_expr(expr, out)
         if val is not None:
             out[name] = val
     return out
+
+
+def dut_parameter_defaults(rtl_text: str, dut_module: str) -> Dict[str, int]:
+    """`{PARAM: default}` for the DUT's own parameter header, input only.
+
+    PARAMETERS ONLY. `resolve_bus_widths` merges instantiation OVERRIDES over
+    this map, and a localparam cannot be overridden, so localparams are kept out
+    of it and offered separately by `dut_header_constants`.
+    """
+    return _harvest(_dut_header_text(rtl_text, dut_module), _PARAM_DECL_RE)
+
+
+def dut_header_constants(rtl_text: str, dut_module: str) -> Dict[str, int]:
+    """`{NAME: value}` for the DUT header's parameters AND its localparams.
+
+    This is what a port declaration is actually written against. A design that
+    derives its index width once and uses it on a port --
+
+        parameter  int N    = 8,
+        localparam int IdxW = $clog2(N)
+        ) ( ... output logic [IdxW-1:0] idx_o ... )
+
+    -- states that width completely; reading only `parameter` left `IdxW`
+    unknown and the port unresolvable. Measured over the corpus, this shape is
+    the ENTIRE residual: 17 instantiation-graph roots in one vendor tree.
+
+    Not merged into `dut_parameter_defaults` because that map is merged with
+    instantiation overrides, and overriding a localparam is not a thing.
+    """
+    return _harvest(_dut_header_text(rtl_text, dut_module),
+                    _PARAM_DECL_RE, _LOCALPARAM_DECL_RE)
 
 
 def parameter_overrides(sources: Sequence[Tuple[str, str]],
