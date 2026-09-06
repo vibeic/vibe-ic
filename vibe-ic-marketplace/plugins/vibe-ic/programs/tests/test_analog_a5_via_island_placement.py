@@ -182,3 +182,52 @@ def test_e_the_escape_pitch_clears_an_island_not_only_a_wire():
     # the deck's spacing
     gap = island_pitch - geo.long_half[3] - geo.wire[3] // 2
     assert gap >= geo.metal_space("metal3")
+
+
+# ── 6. a short needs a PATH, not a touching pair ────────────────────────
+def test_f_the_short_audit_is_transitive_and_sees_the_devices():
+    """The pairwise scan over the routing manifest cannot see this shape.
+
+    MEASURED on u_hawaii_adc: the sign-off LVS reported `mismatch` on both
+    analog blocks — five schematic nets extracting as ONE — and A5's own
+    record said the layout was clean. The path is three rectangles long and
+    the middle one is a DEVICE's: our metal5 island on one net, the MiM
+    capacitor's own metal5 plate, our metal5 island on the other. No PAIR in
+    it is two routing rectangles of different nets.
+
+    12 such shorts on delta_sigma and 1 on ldo, every one of them a MiM
+    capacitor whose two terminal labels both resolve to the plane its BOTTOM
+    plate occupies — `metal_level_at` recognises a conductor only when its
+    section is named `metalN`/`viaN`, and this PDK delivers the TOP plate on
+    `mimcapcontact`.
+    """
+    plan = A5E.Plan()
+    plan.paint("vg", "metal5", 0, 0, 40, 40)
+    plan.paint("vout", "metal5", 200, 0, 240, 40)
+    # the device plate that joins them — nothing this emitter painted
+    plan.device_shapes.append(
+        {"net": "<device cc>", "layer": "metal5", "box": (-50, -50, 300, 90)})
+
+    import magic_gencell_layout_lib as _gl
+    assert _gl.cross_net_overlaps(plan.shapes) == [], (
+        "the pairwise scan over the routing manifest sees nothing here — "
+        "which is exactly why it reported a clean sheet on a shorted block")
+
+    shorts = A5E.net_shorts(plan)
+    assert len(shorts) == 1, shorts
+    assert set(shorts[0]["nets"]) == {"vg", "vout"}
+    path = shorts[0]["path"]
+    assert len(path) == 3, path
+    assert path[1]["net"].startswith("<device "), (
+        "the witness must NAME the device rectangle in the middle; a reader "
+        "told only that two nets are one has been told the symptom")
+
+
+def test_f2_two_nets_that_are_genuinely_apart_are_not_reported():
+    """A check that cannot pass is not a check either."""
+    plan = A5E.Plan()
+    plan.paint("vg", "metal5", 0, 0, 40, 40)
+    plan.paint("vout", "metal5", 200, 0, 240, 40)
+    plan.device_shapes.append(
+        {"net": "<device cc>", "layer": "metal5", "box": (-50, -50, 60, 90)})
+    assert A5E.net_shorts(plan) == []

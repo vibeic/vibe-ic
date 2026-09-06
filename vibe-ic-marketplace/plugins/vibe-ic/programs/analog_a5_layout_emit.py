@@ -1724,6 +1724,151 @@ def clearance_deviations(plan: Plan, geo: Geo,
                          f"from {who}'s own {layer} at {list(ba)} / "
                          f"{list(bb)}")
 
+    # THE SHORT AUDIT, TRANSITIVE AND OVER THE DEVICES. See `net_shorts`.
+    for short in net_shorts(plan):
+        na, nb = short["nets"]
+        chain = " -> ".join(
+            f"{s['net']}:{s['layer']}{s['box']}" for s in short["path"]) \
+            or "(no path recovered)"
+        plan.deviate(anon, "routed_nets_per_conductor", 1, 2,
+                     f"nets {na} and {nb} are ONE conductor in this layout: "
+                     f"{chain}")
+
+
+# ── the short audit, run TRANSITIVELY and over the devices too ──────────
+#
+# THE DEFECT THIS CLOSES, MEASURED. `clearance_deviations` above asks
+# `cross_net_overlaps` "is it shorted?" — PAIRWISE, and over `plan.shapes`
+# ONLY. Both halves of that are holes:
+#
+#   * a short does not need two of THIS emitter's rectangles to touch. It
+#     needs a PATH. On u_hawaii_adc's `ldo` the path is three shapes long —
+#     our metal5 island on `vg`, the MiM capacitor's own metal5 plate, our
+#     metal5 island on `vout` — and no PAIR in it is two routing rectangles
+#     of different nets, so the pairwise scan over the routing manifest saw
+#     nothing and the producer reported a clean sheet.
+#   * the deck's own LVS then reported `mismatch` on that block and on its
+#     sibling, five schematic nets extracting as ONE, and nothing in the
+#     flow could say why.
+#
+# The cause, once the path is printed, is one line of `parse_cell`:
+# `metal_level_at` recognises a conductor only if its section is called
+# `metalN` or `viaN`, and this PDK delivers a MiM capacitor's TOP plate on a
+# section called `mimcapcontact`. Both of that device's terminal labels
+# therefore read as the metal5 plane the BOTTOM plate occupies, and the
+# emitter drops a via stack for each of them onto the same plate. The
+# capacitor is shorted, and every net downstream of it collapses.
+#
+# This scan does not fix that. It makes the producer SAY it, in the record
+# it owns, with the path — which is what I4 already requires of every other
+# thing this emitter cannot make clear.
+def net_shorts(plan: Plan, limit: int = 8) -> List[dict]:
+    """Every pair of routed nets that share one conductor, with a WITNESS.
+
+    Union-find over the routing manifest AND the placed gencells' own
+    geometry, joined wherever two rectangles on electrically linked layers
+    touch or overlap. A component carrying two routed nets is a short, and
+    the shortest chain of rectangles between them is reported with it: a
+    reader who is told "vg and vout are one net" and not WHERE has been told
+    the symptom, which is what the sign-off LVS already said.
+    """
+    rows = [dict(r, _own=True) for r in plan.shapes] \
+        + [dict(r, _own=False) for r in plan.device_shapes]
+    if not rows:
+        return []
+    cell = max(64, geo_bucket(rows))
+    grid: Dict[tuple, List[int]] = {}
+    for i, r in enumerate(rows):
+        b = r["box"]
+        for gx in range(b[0] // cell, b[2] // cell + 1):
+            for gy in range(b[1] // cell, b[3] // cell + 1):
+                grid.setdefault((gx, gy), []).append(i)
+
+    parent = list(range(len(rows)))
+
+    def find(i: int) -> int:
+        while parent[i] != i:
+            parent[i] = parent[parent[i]]
+            i = parent[i]
+        return i
+
+    adj: Dict[int, List[int]] = {}
+    for i, r in enumerate(rows):
+        b = r["box"]
+        seen: set = set()
+        for gx in range(b[0] // cell, b[2] // cell + 1):
+            for gy in range(b[1] // cell, b[3] // cell + 1):
+                for j in grid.get((gx, gy), ()):
+                    if j <= i or j in seen:
+                        continue
+                    seen.add(j)
+                    o = rows[j]
+                    if not _linked(r["layer"], o["layer"]):
+                        continue
+                    ob = o["box"]
+                    if b[0] > ob[2] or ob[0] > b[2] \
+                            or b[1] > ob[3] or ob[1] > b[3]:
+                        continue
+                    adj.setdefault(i, []).append(j)
+                    adj.setdefault(j, []).append(i)
+                    a, c = find(i), find(j)
+                    if a != c:
+                        parent[a] = c
+
+    by_comp: Dict[int, Dict[str, List[int]]] = {}
+    for i, r in enumerate(rows):
+        if not r["_own"]:
+            continue
+        by_comp.setdefault(find(i), {}).setdefault(r["net"], []).append(i)
+
+    out: List[dict] = []
+    for comp, nets in sorted(by_comp.items()):
+        if len(nets) < 2:
+            continue
+        order = sorted(nets)
+        for k in range(1, len(order)):
+            a, b_net = order[0], order[k]
+            out.append({"nets": (a, b_net),
+                        "path": _short_path(rows, adj, nets[a], set(nets[b_net]),
+                                            limit)})
+    return out
+
+
+def geo_bucket(rows: Sequence[dict]) -> int:
+    """A bucket side that keeps the neighbour lists short without making the
+    grid itself the cost: the median rectangle's larger side, floored."""
+    sides = sorted(max(r["box"][2] - r["box"][0], r["box"][3] - r["box"][1])
+                   for r in rows)
+    return max(1, sides[len(sides) // 2])
+
+
+def _short_path(rows: Sequence[dict], adj: Dict[int, List[int]],
+                src: Sequence[int], dst: set, limit: int) -> List[dict]:
+    """The shortest chain of rectangles joining two nets, breadth-first."""
+    prev: Dict[int, int] = {}
+    seen = set(src)
+    queue = list(src)
+    hit = None
+    while queue:
+        u = queue.pop(0)
+        if u in dst:
+            hit = u
+            break
+        for v in adj.get(u, ()):
+            if v in seen:
+                continue
+            seen.add(v)
+            prev[v] = u
+            queue.append(v)
+    if hit is None:
+        return []
+    chain = [hit]
+    while chain[-1] in prev:
+        chain.append(prev[chain[-1]])
+    chain.reverse()
+    return [{"net": rows[i]["net"], "layer": rows[i]["layer"],
+             "box": list(rows[i]["box"])} for i in chain[:limit]]
+
 
 def layout_tcl(block: str, plan: Plan, out_dir: str) -> str:
     """The Magic script that draws the block, streams it, and says so.
